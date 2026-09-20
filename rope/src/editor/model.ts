@@ -501,12 +501,6 @@ export interface EdItem {
   // spelled in a model whose fields are always present.
   pivotFreq: number;
   pivotDamping: number;
-  // Pivot bodies only: this body is the level's end bell (see
-  // `LevelBodyData.bell`). Per BODY like `pivot` itself, so `syncBodyProps`
-  // carries it across a compound one - half a bell is not a thing a level can
-  // mean, and the ring is measured on the body's rotation, which its pieces
-  // share.
-  bell: boolean;
   // Rigid bodies only: held at the authored position by a two-axis
   // spring-damper - sags under load, springs back (see
   // `LevelBodyData.springFreqX`). Frequencies in Hz, 0 = that axis pinned; a
@@ -1257,7 +1251,6 @@ function fromLevelData(data: LevelData): EdModel {
       pivotAt,
       pivotFreq: b.pivotFreq ?? 0,
       pivotDamping: b.pivotDamping ?? DEFAULT_SPRING_DAMPING,
-      bell: b.bell === true,
       springFreqX: b.springFreqX ?? 0,
       springFreqY: b.springFreqY ?? 0,
       springDamping: b.springDamping ?? DEFAULT_SPRING_DAMPING,
@@ -1410,7 +1403,6 @@ function fromLevelData(data: LevelData): EdModel {
     pivotAt: null,
     pivotFreq: 0,
     pivotDamping: DEFAULT_SPRING_DAMPING,
-    bell: false,
     springFreqX: 0,
     springFreqY: 0,
     springDamping: DEFAULT_SPRING_DAMPING,
@@ -1507,7 +1499,6 @@ function fromLevelData(data: LevelData): EdModel {
     pivotAt: null,
     pivotFreq: 0,
     pivotDamping: DEFAULT_SPRING_DAMPING,
-    bell: false,
     springFreqX: 0,
     springFreqY: 0,
     springDamping: DEFAULT_SPRING_DAMPING,
@@ -1600,7 +1591,6 @@ function lightItem(
     pivotAt: null,
     pivotFreq: 0,
     pivotDamping: DEFAULT_SPRING_DAMPING,
-    bell: false,
     springFreqX: 0,
     springFreqY: 0,
     springDamping: DEFAULT_SPRING_DAMPING,
@@ -1672,7 +1662,6 @@ function lightItem(
     pivotAt: null,
     pivotFreq: 0,
     pivotDamping: DEFAULT_SPRING_DAMPING,
-    bell: false,
     springFreqX: 0,
     springFreqY: 0,
     springDamping: DEFAULT_SPRING_DAMPING,
@@ -2158,11 +2147,6 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
                   ...(lead.pivotFreq > 0
                     ? { pivotFreq: lead.pivotFreq, pivotDamping: lead.pivotDamping }
                     : {}),
-                  // The end bell, and only on the mounting that can be one (see
-                  // `LevelBodyData.bell`): a `bell` on a body whose `pivot` has
-                  // since been cleared is a flag nothing reads, and writing it
-                  // would be a file that says a wall is a bell.
-                  ...(lead.bell ? { bell: true } : {}),
                 }
               : {}),
             // The kinematic pendulum, on a static body and only where it
@@ -3245,7 +3229,6 @@ export function syncBodyProps(members: readonly EdItem[]): void {
     m.pivotAt = lead.pivotAt;
     m.pivotFreq = lead.pivotFreq;
     m.pivotDamping = lead.pivotDamping;
-    m.bell = lead.bell;
     m.springFreqX = lead.springFreqX;
     m.springFreqY = lead.springFreqY;
     m.springDamping = lead.springDamping;
@@ -3764,8 +3747,7 @@ export function emptyModel(): EdModel {
         pivotAt: null,
         pivotFreq: 0,
         pivotDamping: DEFAULT_SPRING_DAMPING,
-        bell: false,
-        springFreqX: 0,
+            springFreqX: 0,
         springFreqY: 0,
         springDamping: DEFAULT_SPRING_DAMPING,
         swingAmp: 0,

@@ -70,12 +70,12 @@ A test run from the editor has no loading screen and no gate - it is the editor'
 
 ## Ending one
 
-A listed level ends at a **bell** (see [**The bell**](levels.md#the-bell)): hook the sally on the end of its toll rope, pull down, and the bell swings past the threshold and rings.
-The sim then runs a second more so the swing is seen and **freezes** - nothing reaches into the level, so a **P** download taken afterwards still replays and rings on the same frame - the pointer comes back, and a form appears over the frozen scene: five stars and a comment, both optional, **Submit** or **Skip**.
+A listed level ends at a **finish line** (see [**The finish line**](levels.md#the-finish-line)): a chequered gantry across the way out, which finishes the level the moment you touch it, swinging through or rolling into it.
+The sim then runs half a second more so the ball carries out the far side and **freezes** - nothing reaches into the level, so a **P** download taken afterwards still replays and finishes on the same frame - the pointer comes back, and a form appears over the frozen scene: five stars and a comment, both optional, **Submit** or **Skip**.
 Either way the level is marked as finished on this browser and the page returns to the level select, where a finished row can be re-rated from its `rate` link.
 The run is sealed with the end reason `complete`, which is its own reason because it is neither a failure nor an interruption.
 
-In the editor's ▶ Test a ring raises a toast and the test carries on: what is being judged there is the swing.
+In the editor's ▶ Test a crossing raises a toast and the test carries on: what is being judged there is where the line is.
 
 ## Watching a replay
 

@@ -1,0 +1,121 @@
+{
+  "meta": {
+    "unlisted": true
+  },
+  "environment": {
+    "envIntensity": 0.6,
+    "hdri": "golden-gate-hills"
+  },
+  "notes": [
+    {
+      "kind": "text",
+      "x": -820,
+      "y": -420,
+      "rot": 0,
+      "w": 620,
+      "h": 180,
+      "text": "FINISH SANDBOX. Hook the beam, swing right and go through the gantry - touching the chequered region at all ends the level, however you arrive. Roll into it along the ground and it ends just the same. ?checkpoint=gate drops you straight onto it.",
+      "size": 22
+    }
+  ],
+  "checkpoints": [
+    {
+      "name": "gate",
+      "x": 700,
+      "y": -520
+    }
+  ],
+  "player": {
+    "x": -900,
+    "y": -20,
+    "radius": 8
+  },
+  "bodies": [
+    {
+      "kind": "static",
+      "x": 0,
+      "y": 20,
+      "rot": 0,
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 0.8,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 2400,
+            "h": 40
+          }
+        },
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 2400,
+            "h": 40
+          },
+          "matchCollision": true,
+          "texture": "rock wall"
+        }
+      ]
+    },
+    {
+      "kind": "static",
+      "x": -200,
+      "y": -520,
+      "rot": 0,
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 600,
+            "h": 40
+          }
+        },
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 600,
+            "h": 40
+          },
+          "matchCollision": true,
+          "texture": "rock wall"
+        }
+      ]
+    },
+    {
+      "kind": "finish",
+      "x": 700,
+      "y": 0,
+      "rot": 0,
+      "objects": [
+        {
+          "type": "collision",
+          "y": -120,
+          "shape": {
+            "kind": "rect",
+            "w": 210,
+            "h": 240
+          }
+        },
+        {
+          "type": "geometry",
+          "kind": "mesh",
+          "mesh": "finish-line",
+          "shape": {
+            "kind": "rect",
+            "w": 259,
+            "h": 247
+          },
+          "scale": 0.4
+        }
+      ]
+    }
+  ]
+}

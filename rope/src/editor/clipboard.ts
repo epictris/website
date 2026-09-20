@@ -6,7 +6,7 @@
 //
 // The system clipboard is the only thing two browser tabs share without a
 // server round trip, and two tabs is the case that matters: an assembly built
-// once - the bell and its toll rope, a lamp, a rail rig - has to reach the other
+// once - a finish gantry, a lamp, a rail rig - has to reach the other
 // levels, and until now it could not leave the tab it was built in. The editor
 // held three in-memory arrays instead (`clipboard`, `clipboardChains`,
 // `clipboardVines`), which a reload emptied and a second tab never saw.

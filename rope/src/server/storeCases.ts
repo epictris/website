@@ -181,7 +181,7 @@ const CASES: Record<string, Case> = {
   // thing worth reading. A store that kept only the latest would have thrown it
   // away, and nothing on the page would say so.
   "feedback is appended, never overwritten": (h) => {
-    h.rate({ stars: 3, comment: "the bell is stiff" });
+    h.rate({ stars: 3, comment: "the gate is hard to reach" });
     h.t += 60_000;
     h.rate({ stars: 5, comment: "rang it, much better" });
     const lines = h.feedbackLines();
@@ -291,7 +291,7 @@ const CASES: Record<string, Case> = {
     return "2 rows, newest first, with their player";
   },
 
-  // The level was FINISHED, which is a reason of its own and the one the bell
+  // The level was FINISHED, which is a reason of its own and the one a crossing
   // seals a run with (see `EndReason`). It has to be known at BOTH ends in the
   // same deploy: the store refuses a reason it does not have, and a refusal is
   // a 400 the client goes dead on.

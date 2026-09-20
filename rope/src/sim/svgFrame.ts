@@ -15,8 +15,10 @@ import { PIXELS_PER_METER } from "../engine/units";
 import type { Rope } from "../classes/rope";
 import type { CollisionShape2D, PhysicsBody2D } from "../engine/body";
 import { Vec2 } from "../engine/vec2";
+import { FinishLine } from "../classes/finishLine";
 import {
   anchorGlyphs,
+  finishGlyphs,
   forceAreaGlyphs,
   waterAreaGlyphs,
   killZoneGlyphs,
@@ -204,7 +206,7 @@ export function renderFrameSVG(level: Level | BallLevel): string {
     }
   }
 
-  // Areas (killzones, force areas, water). Drawn after geometry so their glyphs read
+  // Areas (killzones, force areas, water, finish lines). Drawn after geometry so their glyphs read
   // over anything they overlap, and with the same even-odd cutout the canvas
   // uses, so a snapshot and the running game agree.
   const areaEls: string[] = [];
@@ -226,10 +228,13 @@ export function renderFrameSVG(level: Level | BallLevel): string {
     const glyphs = new SvgPolyPath();
     // Pin the phase on anything that drifts: a snapshot of a frame must not
     // depend on the wall clock.
+    const isFinish = area instanceof FinishLine;
     if (area instanceof ForceArea) {
       forceAreaGlyphs(glyphs, half, circle, area.magnitude, 0);
     } else if (area instanceof WaterArea) {
       waterAreaGlyphs(glyphs, half, circle, area.flow, 0);
+    } else if (isFinish) {
+      finishGlyphs(glyphs, half, circle);
     } else {
       killZoneGlyphs(glyphs, half, circle);
     }
@@ -237,8 +242,18 @@ export function renderFrameSVG(level: Level | BallLevel): string {
     const outline = outlinePath(shape);
     const isForce = area instanceof ForceArea;
     const isWater = area instanceof WaterArea;
-    const fill = area.fillColor ?? (isForce ? "#65bddb" : isWater ? "#3a5e4a" : "#dc3c50");
-    const op = area.fillColor ? area.fillOpacity : isForce ? 0.2 : isWater ? 0.55 : 0.4;
+    const fill =
+      area.fillColor ??
+      (isForce ? "#65bddb" : isWater ? "#3a5e4a" : isFinish ? "#eceef0" : "#dc3c50");
+    const op = area.fillColor
+      ? area.fillOpacity
+      : isForce
+        ? 0.2
+        : isWater
+          ? 0.55
+          : isFinish
+            ? 0.22
+            : 0.4;
     const deg = (s.globalRotation * 180) / Math.PI;
     const rot = deg !== 0 ? ` rotate(${deg.toFixed(2)})` : "";
     const clipId = `area${area.id}`;

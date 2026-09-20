@@ -20,7 +20,8 @@ bun run src/tools/cli.ts breaks               # breakable-geometry cases (the fo
 bun run src/tools/cli.ts camera               # camera-path geometry, the rule set, and the editor's path round trip
 bun run src/tools/cli.ts render3d             # 3D camera correspondence, extrusion winding, depth order, surface resolution, `visual` round trips
 bun run src/tools/cli.ts assets               # prop + texture budget, stale bytes, orphans, licences (see The asset store)
-bun run src/tools/cli.ts levels               # the level-file lint: the menu's list, one intro, and each listed level's bell (see Levels)
+bun run src/tools/cli.ts levels               # the level-file lint: the menu's list, one intro, and each listed level's finish line (see Levels)
+bun run src/tools/cli.ts finish               # the finish-line mechanic: crossed once, missed, and the region moving nothing (see Levels)
 bun run src/tools/cli.ts latch                # the button latch that carries a sub-step click into the next sample, and the click audit
 bun run src/tools/cli.ts clicks session.json  # the DOM button story a P bundle carries, laid against its frames (see The input latch)
 bun run src/tools/cli.ts transport            # the replay transport: play, pause, speed, and which frame a seek lands on (see Watching a replay)
@@ -66,9 +67,9 @@ remove the marker in the same change.
 
 Playtest scripts are frame-indexed held-button ranges + aim waypoints with
 asserts (`reachState`, per-frame `state`/`maxSpeed`/`hasRope`/position bounds,
-`window` asserts over a frame range, and `ringsBy` - the frame the level's bell
-was rung on, which is the one assertion that is about the LEVEL being finishable
-rather than about the avatar).
+`window` asserts over a frame range, and `finishesBy` - the frame the level's
+finish line was crossed on, which is the one assertion that is about the LEVEL
+being finishable rather than about the avatar).
 They drive **either controller**: the ball's actions are the same FrameInput
 fields under its own names (`deploy`, `restart`, `aim`), and a script may carry
 its own `data` (an arena authored inline, as a bundle does) and a `spawn`

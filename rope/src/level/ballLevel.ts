@@ -19,6 +19,7 @@ import { GRAVITY, PUSH_OUT_MIN_DEPTH, World, isRealPush, type PushOut } from "..
 import { circleOverlap } from "../engine/collision";
 import { BallPlayer } from "../classes/ballPlayer";
 import { BallHook } from "../classes/ballHook";
+import { FinishLine } from "../classes/finishLine";
 import type { FrameInput } from "../input/frameInput";
 import {
   scaleLevelData,
@@ -64,42 +65,15 @@ import {
 import { PX } from "../engine/units";
 import { Mathf } from "../engine/mathf";
 
-// HOW FAR THE BELL HAS TO SWING TO RING (see `LevelBodyData.bell`): the
-// magnitude of the angle between the bell body's rotation now and the rotation
-// it settled at when the level was built.
+// How long the level carries on being stepped after the player crosses the
+// finish line, before the page freezes it (see `main.ts`).
 //
-// An ANGLE, in radians, dimensionless and unscaled - it crosses
-// `scaleLevelData` the way `swingAmp` does, and for the same reason. It is code
-// rather than level for now: one number for every bell in the game is what
-// makes "ringing" mean the same act in all of them, and the thing an author
-// tunes per bell is the spring and the arm, which are on the body.
-//
-// 0.25 rad, about 14 degrees, and it is one end of a MARGIN rather than a
-// number on its own: pulling DOWN on the toll rope is what rings a bell (Tris,
-// 2026-09-20), so what this has to sit between is the swing the rope's own
-// hanging weight puts on the bell and the swing the player's does.
-//
-// Measured on the sandbox assembly (`levels/bell-test.json`), as a fraction of
-// the ball's own 511 N leaned on the rope:
-//
-//     0%  (the sally alone)  0.035 rad     <- must NOT ring
-//    10%   51 N              0.216
-//    20%  102 N              0.337         <- rings
-//    50%  256 N              0.529
-//   100%  511 N              0.652
-//
-// So a seventh of the player's weight rings it and the rope hanging there for
-// ever does not, which is a seven-fold margin either side. The other half of
-// that margin is the assembly - the rope leaves the bell OFF its centreline so
-// a straight pull has a lever at all, and the bell's collision circle carries
-// enough inertia that the pull swings it rather than whipping it round.
-export const BELL_RING_ANGLE = 0.25;
-
-// How long the swing is watched after the ring before the page freezes it (see
-// `main.ts`). A second, which is one full swing of a 0.6 Hz bell: the ring is
-// the end of the level, and ending it on the frame the threshold was crossed
-// would cut the bell off mid-travel.
-export const BELL_LINGER_FRAMES = 60;
+// Half a second. Crossing a line takes no time at all, but freezing on the
+// frame the ball first touched the chequers would stop it INSIDE the gate,
+// which reads as having been caught by it rather than as having gone through:
+// the linger is what carries the ball out the far side and lets the camera
+// catch up before the form is laid over it.
+export const FINISH_LINGER_FRAMES = 30;
 
 export class BallLevel {
   readonly world = new World();
@@ -182,30 +156,21 @@ export class BallLevel {
   // accounting that decides when a load is a fresh hit.
   private readonly breaker = new BreakTracker();
 
-  // THE FRAME THE BELL RANG, once, or null on a level with no bell and on one
-  // whose bell has not been rung (see `LevelBodyData.bell`).
+  // THE FRAME THE PLAYER CROSSED THE FINISH LINE, once, or null on a level with
+  // no finish line and on one that has not been finished (see the `finish` body
+  // kind and `classes/finishLine.ts`).
   //
   // Sim state rather than a render-side flag: it is a fact about the run, so it
   // is read by the page, digested into every bundle and asserted by the
-  // invariants, and a replay of a run that rang has to ring on the same frame.
-  // It never goes back to null - a bell that has been rung has been rung, and a
-  // RESET builds a fresh level, which is what starts it over.
+  // invariants, and a replay of a run that finished has to finish on the same
+  // frame. It never goes back to null - a line that has been crossed has been
+  // crossed, and a RESET builds a fresh level, which is what starts it over.
   completedFrame: number | null = null;
-  // The bell body, and the rotation it settled at during the build, which is
-  // the angle a ring is measured FROM. Both null on a level with no bell, and
-  // that is what makes such a level run no ring arithmetic at all - every
-  // recording of one is bit-identical.
-  private readonly bellBody: RigidBody2D | null;
-  private readonly bellRest: number;
-
-  // How far the bell stands off the angle it settled at, signed, or null on a
-  // level with no bell. This is the quantity the ring is measured on
-  // (`BELL_RING_ANGLE`), and it is what the digest carries: the bell BODY's own
-  // rotation is already in the digest's body list, and what is not anywhere
-  // else is the rest angle it is measured from, which is build state.
-  get bellSwing(): number | null {
-    return this.bellBody === null ? null : this.bellBody.globalRotation - this.bellRest;
-  }
+  // Whether this level has a finish line at all, which is a fact about the FILE
+  // rather than about the run. It is what the digest asks before writing
+  // `finished`: a level with no finish line digests exactly what it always did,
+  // so every bundle of one compares as it always did (see `WorldDigest`).
+  readonly hasFinish: boolean;
 
   // Diagnostic for the anchor-kick invariant. On the frame the chain first
   // anchors to a fixed body, this holds the speed the length solve added to
@@ -361,7 +326,13 @@ export class BallLevel {
     this.world.add(this.ball);
     this.bodies.push(this.ball);
 
-    const built = buildLevelBodies(this.world, data, () => this.onReset?.());
+    const built = buildLevelBodies(
+      this.world,
+      data,
+      () => this.onReset?.(),
+      () => this.finish(),
+    );
+    this.hasFinish = built.bodies.some((b) => b.body instanceof FinishLine);
     this.bodies.push(...built.wrapBodies);
     this.movers.push(...built.movers);
     this.sceneChains = buildSceneChains(data, built);
@@ -410,31 +381,6 @@ export class BallLevel {
         );
       }
     }
-
-    // THE END BELL, and the angle it settled at (see `LevelBodyData.bell`).
-    //
-    // LAST of the build, after `settleChainsAtBuild` and after the spawn
-    // anchor, because the rest angle a ring is measured from has to be the one
-    // the first frame of play opens on: a bell hung among scene chains has
-    // come to rest by now, and a level measured before that settle would start
-    // part-rung.
-    //
-    // Two bells is a build error rather than a silent first-wins, and that is
-    // the direction a level survives being wrong in: a level with two is one an
-    // author has half-finished, and quietly ringing at whichever body came
-    // first would leave the OTHER inert with nothing to say so. `cli levels`
-    // catches it earlier, on the file, where it is a line of output rather than
-    // a page that will not open.
-    const bells = built.bodies.filter((b) => b.data.bell === true);
-    if (bells.length > 1) {
-      throw new Error(`this level has ${bells.length} bodies marked \`bell\`; a level ends at one`);
-    }
-    const bell = bells[0]?.body ?? null;
-    if (bells.length === 1 && !(bell instanceof RigidBody2D)) {
-      throw new Error("the body marked `bell` is not a rigid body; a bell swings about a bearing");
-    }
-    this.bellBody = bell instanceof RigidBody2D ? bell : null;
-    this.bellRest = this.bellBody?.globalRotation ?? 0;
 
     this.cameraPosition = this.ball.globalPosition;
   }
@@ -535,6 +481,23 @@ export class BallLevel {
     const chain = this.ball.chain;
     if (chain === null || !this.ball.chainAnchored) return null;
     return { pull: chain.startPull() ?? Vec2.ZERO, length: chain.hangingLength() };
+  }
+
+  // The player has entered a finish line (see `classes/finishLine.ts`), fired
+  // from inside the world's own overlap pass - so the frame it names is the one
+  // being stepped, `this.frame` having been taken at the top of it.
+  //
+  // ONCE, and this is where that is enforced rather than in the area: a level
+  // may hold several finish lines (a course with two ways down ends at either),
+  // the ball may enter and leave one over several frames, and what any of that
+  // means is the FIRST crossing. Nothing here clears it and nothing moves it,
+  // which is what `finish-once` asserts.
+  //
+  // What the page does about it - linger, freeze, and the form - is the page's
+  // (see main.ts). The sim carries on stepping exactly as it would have, so a
+  // bundle of a run that finished replays and finishes on the same frame.
+  private finish(): void {
+    if (this.completedFrame === null) this.completedFrame = this.frame;
   }
 
   physicsProcess(input: FrameInput, delta: number): void {
@@ -1913,25 +1876,6 @@ export class BallLevel {
     // own and nothing above touches them, so waiting costs the measurement
     // nothing and costs the reader one frame of scenery that was already broken.
     this.breakBodies(delta);
-
-    // THE RING (see `LevelBodyData.bell`). Last, on the frame's final poses, so
-    // the angle asked about is the one the renderer is about to draw.
-    //
-    // A comparison on a rotation the sim already owns, and `Mathf.abs` is not a
-    // transcendental - so nothing here reaches for a platform `Math` and `cli
-    // dmath` has nothing to find. A level with NO bell does not run it at all,
-    // which is what keeps every recording of every other level bit-identical.
-    //
-    // Once: `completedFrame` never clears and never moves, which is what
-    // `bell-rung-once` asserts. What the page does about it - linger, freeze,
-    // and the form - is the page's (see main.ts); the sim carries on stepping
-    // exactly as it would have, so a bundle of a run that rang replays and
-    // rings on the same frame.
-    if (this.completedFrame === null && this.bellBody !== null) {
-      if (Mathf.abs(this.bellBody.globalRotation - this.bellRest) >= BELL_RING_ANGLE) {
-        this.completedFrame = this.frame;
-      }
-    }
 
     this.cameraPosition = this.ball.globalPosition;
   }

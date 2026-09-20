@@ -223,15 +223,20 @@ export interface WorldDigest {
   frame: number;
   bodies: BodyDigest[];
   chain: ChainDigest | null;
-  // THE END BELL, on a level that has one (see `LevelBodyData.bell`): the angle
-  // it stands at, and whether it has rung.
+  // THE FINISH LINE, on a level that has one (see the `finish` body kind):
+  // whether it has been crossed.
   //
-  // Absent rather than nulled on a level with no bell, which is the rule
+  // A boolean rather than a frame number, because the frame is already the
+  // digest's own: a run that finished a frame late is one whose `finished` is
+  // false on a frame the recording says it is true, which is the divergence,
+  // stated where it happens.
+  //
+  // Absent rather than nulled on a level with no finish line, which is the rule
   // `hits` follows on a body: a bundle recorded before the field existed has no
-  // opinion about it, and comparing a replay against an invented zero would
+  // opinion about it, and comparing a replay against an invented `false` would
   // report a divergence the recording never made. Absent on BOTH sides compares
   // equal; absent on one is a different scene.
-  bell?: { rot: number; rung: boolean };
+  finished?: boolean;
 }
 
 // What the level driver decided about its chain this frame. Passed in rather
@@ -273,7 +278,7 @@ function worldDigestOf(
   world: World,
   rope: Rope | null,
   phase: ChainPhaseState | null,
-  bell?: { rot: number; rung: boolean },
+  finished?: boolean,
 ): WorldDigest {
   const bodies: BodyDigest[] = [];
   const contacts = world.frameContacts;
@@ -347,7 +352,7 @@ function worldDigestOf(
           braced: phase?.braced ? 1 : 0,
         }
       : null,
-    ...(bell ? { bell } : {}),
+    ...(finished !== undefined ? { finished } : {}),
   };
 }
 
@@ -365,7 +370,6 @@ export function worldDigest(level: Level): WorldDigest {
 }
 
 export function worldDigestBall(level: BallLevel): WorldDigest {
-  const swing = level.bellSwing;
   return worldDigestOf(
     level.frame,
     level.world,
@@ -377,10 +381,10 @@ export function worldDigestBall(level: BallLevel): WorldDigest {
       pushCredit: level.chainPushOutCredit,
       braced: level.chainBraced,
     },
-    // Written only on a level that HAS a bell, so every level without one
-    // digests exactly what it always did and every bundle of one compares as
-    // it always did (see `WorldDigest.bell`).
-    swing === null ? undefined : { rot: swing, rung: level.completedFrame !== null },
+    // Written only on a level that HAS a finish line, so every level without
+    // one digests exactly what it always did and every bundle of one compares
+    // as it always did (see `WorldDigest.finished`).
+    level.hasFinish ? level.completedFrame !== null : undefined,
   );
 }
 
@@ -417,15 +421,15 @@ export function worldDigestDrift(a: WorldDigest, b: WorldDigest): WorldDrift {
     if (a.chain.nodes !== b.chain.nodes) consider(Infinity, "chain (different wrap topology)");
     consider(Math.abs(a.chain.pathLen - b.chain.pathLen), "chain length");
   }
-  // The bell follows the chain's rule exactly: absent on both is two levels
-  // with no bell and compares equal, present on one alone is a different scene,
-  // and a ring in one run and not the other is a different run rather than a
-  // drifted one - it is the level having been finished or not.
-  if ((a.bell === undefined) !== (b.bell === undefined)) {
-    consider(Infinity, "bell (present in one run only)");
-  } else if (a.bell && b.bell) {
-    if (a.bell.rung !== b.bell.rung) consider(Infinity, "bell (rung in one run only)");
-    consider(Math.abs(a.bell.rot - b.bell.rot), "bell swing");
+  // The finish line follows the chain's rule exactly: absent on both is two
+  // levels with no finish line and compares equal, present on one alone is a
+  // different scene, and finished in one run and not the other is a different
+  // run rather than a drifted one - it is the level having been completed or
+  // not, which has no magnitude.
+  if ((a.finished === undefined) !== (b.finished === undefined)) {
+    consider(Infinity, "finish (present in one run only)");
+  } else if (a.finished !== b.finished) {
+    consider(Infinity, "finish (crossed in one run only)");
   }
   return worst;
 }
@@ -534,20 +538,14 @@ export function worldDigestDeltas(
     }
     compareIdentity(out, "chain.anchorBody", recorded.chain.anchorBody, replayed.chain.anchorBody);
   }
-  // A bundle from before the field carries no `bell` and is not compared on it
-  // (`compareNumber`'s rule, applied to the block as a whole): measuring a
-  // replay against an invented zero would report a divergence its recording
+  // A bundle from before the field carries no `finished` and is not compared on
+  // it (`compareNumber`'s rule, applied to the field as a whole): measuring a
+  // replay against an invented `false` would report a divergence its recording
   // never made.
-  if (recorded.bell && replayed.bell) {
-    compareNumber(out, "bell.rot", recorded.bell.rot, replayed.bell.rot, tolerance);
-    compareIdentity(
-      out,
-      "bell.rung",
-      Number(recorded.bell.rung),
-      Number(replayed.bell.rung),
-    );
-  } else if ((recorded.bell === undefined) !== (replayed.bell === undefined)) {
-    out.push({ name: "bell", recorded: null, replayed: null, delta: Infinity });
+  if (recorded.finished !== undefined && replayed.finished !== undefined) {
+    compareIdentity(out, "finished", Number(recorded.finished), Number(replayed.finished));
+  } else if ((recorded.finished === undefined) !== (replayed.finished === undefined)) {
+    out.push({ name: "finished", recorded: null, replayed: null, delta: Infinity });
   }
   return out;
 }
@@ -1656,15 +1654,15 @@ function checkBreakables(
   return out;
 }
 
-// What each level's bell was LAST seen to have rung on, so the one thing that
-// cannot be asked about a single frame - that the ring never clears and never
-// moves - can be (see `bell-rung-once`).
+// What frame each level was LAST seen to have been finished on, so the one
+// thing that cannot be asked about a single frame - that the crossing never
+// clears and never moves - can be (see `finish-once`).
 //
 // A WeakMap on the level instance rather than a field: a reset builds a fresh
 // `BallLevel`, so a fresh key is exactly "this is a new run" with nothing to
 // clear, and the detector stays read-only against the sim. Weak, so a level
 // dropped by a replay's rebuild is not held alive by its own watchdog.
-const bellRungAt = new WeakMap<BallLevel, number>();
+const finishedAt = new WeakMap<BallLevel, number>();
 
 export function checkBallInvariants(level: BallLevel): Violation[] {
   const out: Violation[] = [];
@@ -1672,28 +1670,30 @@ export function checkBallInvariants(level: BallLevel): Violation[] {
   const frame = level.frame;
   out.push(...checkBreakables(frame, level.world, b.anchoredTo));
 
-  // THE RING IS FINAL. `completedFrame` is written once, on the frame the bell
-  // crossed the threshold, and a level that has been finished stays finished -
-  // the page freezes the run on it, the recorder seals it, and a bundle that
-  // replays has to ring on the same frame or the replay is of a different run.
-  // A value that clears or moves is the one shape of bug the per-frame checks
-  // cannot see, since each frame on its own looks perfectly reasonable.
+  // THE CROSSING IS FINAL. `completedFrame` is written once, on the frame the
+  // player entered the finish line, and a level that has been finished stays
+  // finished - the page freezes the run on it, the recorder seals it, and a
+  // bundle that replays has to finish on the same frame or the replay is of a
+  // different run. A value that clears or moves is the one shape of bug the
+  // per-frame checks cannot see, since each frame on its own looks perfectly
+  // reasonable - and it is a live risk rather than a theoretical one, because
+  // the ball can leave a finish area it has entered and enter it again.
   if (level.completedFrame !== null) {
-    const seen = bellRungAt.get(level);
+    const seen = finishedAt.get(level);
     if (seen === undefined) {
-      bellRungAt.set(level, level.completedFrame);
+      finishedAt.set(level, level.completedFrame);
     } else if (level.completedFrame !== seen) {
       out.push({
         frame,
-        kind: "bell-rung-once",
-        detail: `the bell rang on f${seen} and now says f${level.completedFrame}`,
+        kind: "finish-once",
+        detail: `the level was finished on f${seen} and now says f${level.completedFrame}`,
       });
     }
-  } else if (bellRungAt.has(level)) {
+  } else if (finishedAt.has(level)) {
     out.push({
       frame,
-      kind: "bell-rung-once",
-      detail: `the bell rang on f${bellRungAt.get(level)} and has un-rung`,
+      kind: "finish-once",
+      detail: `the level was finished on f${finishedAt.get(level)} and is no longer finished`,
     });
   }
 

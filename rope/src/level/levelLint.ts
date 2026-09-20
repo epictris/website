@@ -1,28 +1,21 @@
-// The LEVEL FILES held to what the level select and the bell mechanic assume
+// The LEVEL FILES held to what the level select and the finish line assume
 // about them (see `docs/levels.md`).
 //
 // Everything checked here is silent when it breaks, and every one of the
 // failures is a level that looks finished and cannot be finished:
 //
-//   NO BELL      - a listed level with nothing to ring. It plays, the player
+//   NO FINISH    - a listed level with nothing to cross. It plays, the player
 //                  swings to the end of it, and there is no way to complete it
 //                  and no way to say so.
-//   TWO BELLS    - the build throws (`BallLevel` refuses a second), so the level
-//                  does not open at all. Caught here, where it is a line of
-//                  output rather than a blank page.
-//   NOT A PIVOT  - a `bell` on a body with no bearing. The ring is measured as
-//                  a swing about one, so a bell that cannot turn can never be
-//                  rung however hard it is hauled on.
-//   NO ROPE      - a bell with no toll rope: a scene chain from an anchor on
-//                  the bell to a SALLY, the rigid grip on the end of it that the
-//                  player hooks and hauls on. The rope is the whole interface,
-//                  and the bell itself is in nothing's way, so a bell with no
-//                  chain on it is a bell nothing can reach.
-//   IN THE WAY   - a bell whose collision shapes stop the player, the hook or
-//                  the chain. The body has to exist in the world for the vine's
-//                  load rope to have something to load, and it must be in the
-//                  way of nothing, or the level is finished by rolling into the
-//                  bell rather than by ringing it.
+//   NO SHAPE     - a finish body carrying only decoration. An area with no
+//                  collision object builds nothing at all (see
+//                  `buildLevelBodies`), so the gantry is drawn and the level
+//                  cannot be finished - the one failure that looks exactly like
+//                  success right up until the player reaches it.
+//   TOO SMALL    - a finish line the ball can pass without touching. The
+//                  crossing is an overlap test, so a region thinner than the
+//                  ball travels in a frame is one a fast run tunnels through
+//                  (see `MIN_FINISH_SPAN`).
 //   TWO INTROS   - or none. The menu shows the intro first and the rest after a
 //                  rule, so the set has to have exactly one.
 //   TWIN TITLES  - two listed levels reading the same in the list, which is a
@@ -34,16 +27,14 @@
 // its JSON import.
 
 import {
-  COLLISION_CATEGORIES,
-  isAnchorObject,
+  collides,
   isCollisionObject,
-  maskFromPasses,
   normalizeLevelData,
   type LevelBodyData,
   type LevelData,
+  type ShapeData,
 } from "./levelFormat";
 import { LEVELS, listedLevels } from "./registry";
-import { MASK_ALL } from "../engine/body";
 
 export interface LevelCheck {
   name: string;
@@ -51,88 +42,92 @@ export interface LevelCheck {
   detail: string;
 }
 
-// Every anchor id in a body, so "is this vine hanging off the bell" is a
-// question about the anchor it names rather than about a body index.
-function anchorIdsOf(body: LevelBodyData): number[] {
-  return body.objects.filter(isAnchorObject).map((o) => o.id);
+// The smallest a finish line may be across its narrow axis, in SCENE PIXELS
+// (the unit the files are authored in), which is 60 cm.
+//
+// The crossing is an overlap test run once a frame, so a region the ball can be
+// on both sides of within one step is one it can pass through untouched. The
+// ball is 24 cm across and the fastest thing in the game is the ball itself: at
+// the ~14 m/s a long hang reaches it travels 23 cm in a frame, so 60 cm is the
+// ball plus a frame of its own travel and a little over. It is a floor on the
+// AUTHORING rather than a fix for tunnelling - a gate is drawn to be swung
+// through and is metres across in both directions - and what it actually
+// catches is a line drawn as a line: a 2-pixel strip laid on the floor, which
+// looks right in the editor and is not there at 14 m/s.
+export const MIN_FINISH_SPAN = 60;
+
+// How wide and how tall a shape is in its own frame, in the units it is
+// authored in. A curve's `width` is its THICKNESS rather than a span, so it is
+// measured across its own stroke and along its vertices like a polyline.
+function shapeSpan(s: ShapeData): { w: number; h: number } {
+  if (s.kind === "rect") return { w: s.w, h: s.h };
+  if (s.kind === "circle") return { w: s.r * 2, h: s.r * 2 };
+  const verts = s.verts;
+  const xs = verts.map((v) => v.x);
+  const ys = verts.map((v) => v.y);
+  const pad = s.kind === "curve" ? s.width : 0;
+  return {
+    w: Math.max(...xs) - Math.min(...xs) + pad,
+    h: Math.max(...ys) - Math.min(...ys) + pad,
+  };
 }
 
-// What a bell's collision shapes must NOT be in the way of: all three of them.
-// The body is in the world so the vine has something with inertia to load, and
-// it is in the way of nothing so the rope is the only handle (see
-// `docs/collision-layers.md`).
-function blocksAnything(body: LevelBodyData): boolean {
-  const clear = maskFromPasses(COLLISION_CATEGORIES);
-  return body.objects
-    .filter(isCollisionObject)
-    .some((o) => (maskFromPasses(o.passes) & ~clear & MASK_ALL) !== 0);
+// The narrowest axis of the WIDEST collision shape a body carries: the piece
+// the player is meant to cross is the one that has to be thick enough to catch
+// them, and a gate may also carry small pieces (a post's footing) that have
+// nothing to do with it.
+function narrowestSpanOf(body: LevelBodyData): number {
+  let best = 0;
+  for (const o of body.objects) {
+    if (!isCollisionObject(o)) continue;
+    const { w, h } = shapeSpan(o.shape);
+    best = Math.max(best, Math.min(w, h));
+  }
+  return best;
 }
 
 // The checks one listed level answers for itself.
 function checkLevel(id: string, title: string, data: LevelData): LevelCheck[] {
   const where = `${id} ("${title}")`;
-  const bells = data.bodies.filter((b) => b.bell === true);
-  if (bells.length !== 1) {
+  const lines = data.bodies.filter((b) => b.kind === "finish");
+  if (lines.length === 0) {
     return [
       {
-        name: `levels: ${where} has exactly one bell`,
+        name: `levels: ${where} has a finish line`,
         pass: false,
         detail:
-          bells.length === 0
-            ? "no body carries `bell`. A listed level ends at a bell; author one (or mark the level `unlisted`)."
-            : `${bells.length} bodies carry \`bell\`. The build refuses a second, so this level does not open.`,
+          "no body has the `finish` kind. A listed level ends at a finish line; author one (or mark the level `unlisted`).",
       },
     ];
   }
-  const bell = bells[0]!;
-  const ids = anchorIdsOf(bell);
-  // The toll rope: a scene chain with one end bolted to the bell. Its other end
-  // is the sally, and that end has to be on something that MOVES - a chain
-  // between the bell and a static is a rope nailed to the wall.
-  const ropes = (data.chains ?? []).filter((c) => ids.includes(c.a) || ids.includes(c.b));
-  const sallyOf = (rope: (typeof ropes)[number]): LevelBodyData | undefined => {
-    const far = ids.includes(rope.a) ? rope.b : rope.a;
-    return data.bodies.find((b) => anchorIdsOf(b).includes(far));
-  };
-  const sally = ropes.length === 1 ? sallyOf(ropes[0]!) : undefined;
+  // SEVERAL is allowed, and deliberately: a course with two ways down ends at
+  // either of them, and the first crossing is the one that counts (see
+  // `BallLevel.finish`). What is not allowed is none.
+  const built = lines.filter(collides);
+  const narrow = built.filter((b) => narrowestSpanOf(b) < MIN_FINISH_SPAN);
   return [
     {
-      name: `levels: ${where} has exactly one bell`,
+      name: `levels: ${where} has a finish line`,
       pass: true,
-      detail: "one bell body",
+      detail: lines.length === 1 ? "one finish line" : `${lines.length} finish lines`,
     },
     {
-      name: `levels: ${where}'s bell is a pivot rigid body`,
-      pass: bell.kind === "rigid" && bell.pivot === true,
+      name: `levels: ${where}'s finish line is a region, not a drawing`,
+      pass: built.length === lines.length,
       detail:
-        bell.kind === "rigid" && bell.pivot === true
-          ? "rigid, on a bearing"
-          : `kind ${bell.kind}, pivot ${bell.pivot === true}. The ring is a swing about a bearing; a bell without one can never be rung.`,
+        built.length === lines.length
+          ? `${built.length} with collision geometry`
+          : `${lines.length - built.length} of ${lines.length} carry no collision object, so they build no area at all and can never be entered.`,
     },
     {
-      name: `levels: ${where}'s bell has exactly one toll rope`,
-      pass: ropes.length === 1,
+      name: `levels: ${where}'s finish line is thick enough to catch the ball`,
+      pass: narrow.length === 0,
       detail:
-        ropes.length === 1
-          ? `chain ${ropes[0]!.a} -> ${ropes[0]!.b}`
-          : `${ropes.length} chains anchored to the bell (anchors ${ids.join(", ") || "none"}). The rope is the only handle: the bell itself is in nothing's way.`,
-    },
-    {
-      name: `levels: ${where}'s toll rope ends at a sally the player can hook`,
-      pass: sally !== undefined && sally.kind === "rigid" && sally.pivot !== true,
-      detail:
-        sally === undefined
-          ? "the rope's far end is on no body this level contains"
-          : sally.kind === "rigid" && sally.pivot !== true
-            ? "a free rigid body on the end of the rope"
-            : `the rope ends on a ${sally.pivot ? "pivot" : sally.kind} body. A sally has to hang and be hauled, so it is a free rigid body.`,
-    },
-    {
-      name: `levels: ${where}'s bell is in nothing's way`,
-      pass: !blocksAnything(bell),
-      detail: blocksAnything(bell)
-        ? "a collision shape still collides. Clear player, hook and chain on every shape of the bell, or the level is finished by rolling into it."
-        : "player, hook and chain all pass through",
+        narrow.length === 0
+          ? `every piece is at least ${MIN_FINISH_SPAN} px across`
+          : `${narrow.length} finish line(s) are under ${MIN_FINISH_SPAN} px across their narrow axis (${narrow
+              .map((b) => `${Math.round(narrowestSpanOf(b))} px`)
+              .join(", ")}). A fast run passes through one in a single frame.`,
     },
   ];
 }

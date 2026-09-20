@@ -43,9 +43,9 @@ The **`meta`** block is what the level select reads: a `title` to show, `intro` 
 Nothing in it is a length, so it crosses `scaleLevelData` whole; everything in it is optional, so a level that authors no block is a listed level named after its registry id.
 The editor carries it through `EdModel.meta` and offers it as the **Level** panel, for the reason `hang` and the environment block are carried: a block the model does not know about is a block the first autosave deletes.
 
-A body may state that it is the level's **end bell**: `bell: true`, on a `pivot` rigid body, which is the body the player rings to complete the level - see [**The bell**](levels.md#the-bell).
-Like `pivot` itself it is a flag rather than a kind, and it is written only on a body that still has a bearing, since the ring is measured as a swing about one.
-`BELL_RING_ANGLE` (`level/ballLevel.ts`) is how far off the settled angle counts as a ring; it is an angle, so `scaleLevelData` leaves it - and every other field of the block - alone.
+A body may be the level's **finish line**: `kind: "finish"`, the region the player crosses to complete the level - see [**The finish line**](levels.md#the-finish-line).
+A KIND rather than a flag, because it is what the body is: a `finish` body builds an `Area2D` and nothing else, exactly as a `killzone` does, and there is no body a finish line and a wall could both be pieces of (`isAreaKind`).
+The gantry that marks it is an ordinary geometry object on the same body (`mesh: "finish-line"`), so what is drawn and what is crossed are one thing to place.
 
 A body may also state what it takes to DESTROY it: **`breakForce`** (newtons) and **`durability`** (hits), the breakable pair - see [**Breakable geometry**](breakable.md).
 Both are stated in the sim's own units and `scaleLevelData` leaves them alone, for the reason `drag` is left alone: the file's lengths are pixels because the editor draws in pixels, and neither a force nor a count is a length.
@@ -54,8 +54,8 @@ The canonical, hand-editable schema now lives in `src/level/levelFormat.ts` (sup
 the generated one — adds the `rigid` and `force` kinds, the `cameraRegions` and
 `chains` lists, and bodies made of scene objects); `levelData.ts` stays
 auto-generated and is structurally assignable to it. Both level drivers construct geometry
-through the shared `src/level/buildBodies.ts` (statics, killzones,
-force areas, and rigid bodies), so the grapple and ball controllers load identical scenes.
+through the shared `src/level/buildBodies.ts` (statics, killzones, force areas,
+water, finish lines and rigid bodies), so the grapple and ball controllers load identical scenes.
 `rigid` bodies get mass/inertia from `ShapeGeometry` and fall under gravity.
 
 ## Regenerating level geometry

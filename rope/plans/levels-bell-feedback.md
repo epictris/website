@@ -1,5 +1,20 @@
 # Levels, the bell, and feedback
 
+> **SUPERSEDED IN PART, 2026-09-20.** This was built as written and then the bell
+> was scrapped the same day (Tris): *"scrap the finish bell implementation -
+> instead I want a much simpler finish where you just add a finish line and if
+> the player collides with the finish line they finish the level"*.
+>
+> Everything else shipped and stands - the level select, `LevelData.meta`, the
+> level hash, the completion flow, the `complete` end reason, the feedback form
+> and its append-only store, the cross-tab clipboard. What changed is the TRIGGER:
+> a `finish` body kind building an `Area2D` the player crosses, in place of a
+> pivot bell on a toll rope with a threshold angle.
+>
+> What shipped is documented in [**Levels**](../docs/levels.md), which is the
+> thing to read; the bell sections below are kept for the reasoning that led
+> there, and for the measurements, which were real.
+
 Written 2026-09-20 for an implementing agent.
 It is a plan, not a spec of the finished thing: every number in it is a starting point to be played and then pinned, per the working practices in `rope/CLAUDE.md`.
 Read the doc for each area before editing it (`docs/level-format.md`, `docs/editor.md`, `docs/editor-model.md`, `docs/production-recording.md`, `docs/loading-screen.md`, `docs/pivot-and-spring-bodies.md`, `docs/vines.md`, `docs/collision-layers.md`, `docs/asset-store.md`), and update it in the same change.

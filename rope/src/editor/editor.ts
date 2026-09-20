@@ -46,6 +46,7 @@ import {
   type BodyKind,
   COLLISION_CATEGORIES,
   COLLISION_CATEGORY_BITS,
+  isAreaKind,
   MOVE_EASES,
   MOVE_MODES,
   moveModeCloses,
@@ -320,7 +321,7 @@ const EMPTY_HINTS: Record<EdLayer, string> = {
 
 // Kinds offered by both kind pickers (toolbar + inspector), in one place so
 // they can't drift apart.
-const BODY_KINDS: BodyKind[] = ["static", "rigid", "killzone", "force", "water"];
+const BODY_KINDS: BodyKind[] = ["static", "rigid", "killzone", "force", "water", "finish"];
 
 // How far the pointer must travel before a press that could mean either becomes
 // a drag rather than a click, in screen pixels. Small enough that a deliberate
@@ -1511,10 +1512,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // The game's debug overlay (L) inside ▶ Test. Off at the start of every test:
   // it is an instrument, and a test opens as the picture the player gets.
   let testShowDebug = false;
-  // Has this test already said the bell rang? The sim's `completedFrame` is
-  // true for every frame after it, so without this the toast would be raised
-  // sixty times a second for the rest of the run.
-  let testRang = false;
+  // Has this test already said the line was crossed? The sim's
+  // `completedFrame` is set for every frame after it, so without this the toast
+  // would be raised sixty times a second for the rest of the run.
+  let testFinished = false;
   let testData: LevelData | null = null;
   const recFrames: SerializedFrame[] = [];
   const recDigests: Digest[] = [];
@@ -1552,7 +1553,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       pixelData.player = { ...pixelData.player, x: spawn.x * M2PX, y: spawn.y * M2PX };
     }
     testShowDebug = false;
-    testRang = false;
+    testFinished = false;
     savedCam = { pos: camera.position, zoom: camera.zoom };
     // The test is played in the game's fixed 16:9 frame, so the camera is given
     // the frame's dimensions rather than the editor window's: `viewportScale`,
@@ -2421,22 +2422,22 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     return bodies.every((b) => get(b) === first) ? first : null;
   }
 
-  // Nothing rests on a region or on hook-only scenery, so neither carries a
-  // friction - and hook-only is a flag rather than a kind, so it is asked of the
-  // body rather than of its kind. A force area and a body of water both carry a direction, hence a
-  // rot° even when they are circles (whose rotation is otherwise invisible).
+  // Nothing rests on a region (see `isAreaKind`) or on hook-only scenery, so
+  // neither carries a friction - and hook-only is a flag rather than a kind, so
+  // it is asked of the body rather than of its kind. A force area and a body of
+  // water both carry a direction, hence a rot° even when they are circles
+  // (whose rotation is otherwise invisible).
   //
   // Water's own effect on friction is not this: it scales the friction of
   // whatever is INSIDE it (see `WATER_TRACTION_LOSS`), which is a property of
   // the submerged body rather than a number the water authors.
-  const frictionless = (b: EdItem) =>
-    b.kind === "killzone" || b.kind === "force" || b.kind === "water" || b.passable;
+  const frictionless = (b: EdItem) => isAreaKind(b.kind) || b.passable;
 
   // May this item be welded into one body? Geometry that is not an area,
   // decoration included - it rides the body rather than adding a piece to it -
-  // and lights. An area is refused because a body has ONE kind: killzone, water
-  // and force are what a body IS rather than something a piece of it can be, so
-  // there is no body a killzone and a wall could both be pieces of. (An area
+  // and lights. An area is refused because a body has ONE kind: a region is what
+  // a body IS rather than something a piece of it can be, so there is no body a
+  // killzone and a wall could both be pieces of. (An area
   // with a notch in it is a different matter and perfectly ordinary - it is one
   // authored outline, cut into pieces at load.) Camera regions and notes are
   // never drawn in play and have nothing to ride.
@@ -2447,17 +2448,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // they are the same body, which is the thing that used to have to be faked by
   // deriving a light out of the fitting's emissive colour.
   const canShareBody = (b: EdItem) =>
-    b.layer === "scene" &&
-    (b.object !== "collision" ||
-      (b.kind !== "killzone" && b.kind !== "force" && b.kind !== "water"));
+    b.layer === "scene" && (b.object !== "collision" || !isAreaKind(b.kind));
 
   // An area is a region of space rather than a piece of stuff, so it is made of
   // nothing and carries no density. Every other kind does, `anchor` included:
   // a grate is a real object, and its material fixes the centre of mass a
   // compound one is built and rotated about even though nothing collides with
   // it.
-  const massless = (b: EdItem) =>
-    b.kind === "killzone" || b.kind === "force" || b.kind === "water";
+  const massless = (b: EdItem) => isAreaKind(b.kind);
 
   // A number field bound to one panel and one selection: it shows the value the
   // group agrees on (blank if they differ) and writes to every member. `after`
@@ -3225,31 +3223,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         { disabled: !leads.some((b) => b.pivotFreq > 0) },
       );
 
-      // THE LEVEL'S END BELL (see `LevelBodyData.bell`), offered only on the
-      // mounting that can be one: the ring is a swing about the bearing, so a
-      // body with no bearing has nothing to measure. Inside the `pivot` branch
-      // rather than greyed beside it, which is the same answer the bearing's
-      // own fields give - a control for a mounting that is not on is a control
-      // with nothing behind it.
-      const bellBox = document.createElement("input");
-      bellBox.type = "checkbox";
-      bellBox.checked = leads.every((b) => b.bell);
-      bellBox.indeterminate = !bellBox.checked && leads.some((b) => b.bell);
-      bellBox.addEventListener("change", () => {
-        beginAction();
-        for (const b of leads) b.bell = bellBox.checked;
-        syncEditedBodies(leads);
-        markDirty();
-        rebuildInspector();
-      });
-      const bellWrap = el("label", "ed-field");
-      bellWrap.textContent = "end bell";
-      bellWrap.appendChild(bellBox);
-      g.appendChild(bellWrap);
-      const bellHint = el("div", "ed-hint");
-      bellHint.textContent =
-        "This body is the level's bell: swinging it far enough off the angle it settles at rings it and completes the level. Hang a vine from it for the player to hook and haul on, and keep the bell itself out of everything's way (clear player, hook and chain on its shapes) so the rope is the only handle. One per level.";
-      g.appendChild(bellHint);
     }
 
     const hint = el("div", "ed-hint");
@@ -4696,6 +4669,15 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           },
         );
       }
+      // The finish line has nothing to tune - being entered IS the whole of it
+      // - so what its panel carries is the one thing that is not on the canvas:
+      // what happens when the player gets there.
+      if (leads.every((b) => b.kind === "finish")) {
+        const fin = el("div", "ed-hint");
+        fin.textContent =
+          "The end of the level: the run is over the moment the player touches this region, however they arrive. Draw it across the way out - wide enough that a swing cannot miss it - and put a finish-line prop on the same body so it can be seen. A listed level needs exactly one.";
+        g.appendChild(fin);
+      }
       // Offered for the kinds that build a BODY: an area is a region the sim
       // walks through already, so "the hook is the only thing that finds it"
       // says nothing about one.
@@ -6005,7 +5987,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         if (on) model.meta.unlisted = true;
         else delete model.meta.unlisted;
       },
-      "Keep this level off the level select. It is still played by ?level=ID - which is what the sandboxes are, and what a level that has no bell yet wants to be.",
+      "Keep this level off the level select. It is still played by ?level=ID - which is what the sandboxes are, and what a level that has no finish line yet wants to be.",
     );
 
     const hint = el("div", "ed-hint");
@@ -6013,7 +5995,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       ? "Off the level select, reachable by ?level= only."
       : model.meta.intro
         ? "The first level on the level select."
-        : "On the level select, in alphabetical order of title. A listed level needs a bell to end at.";
+        : "On the level select, in alphabetical order of title. A listed level needs a finish line to end at.";
     g.appendChild(hint);
     inspector.appendChild(g);
   }
@@ -6853,9 +6835,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       pivotAt: null,
       pivotFreq: 0,
       pivotDamping: DEFAULT_SPRING_DAMPING,
-      // ...and a fresh body is not the level's bell; that is opted into on the
-      // pivot's own panel.
-      bell: false,
       springFreqX: 0,
       springFreqY: 0,
       springDamping: DEFAULT_SPRING_DAMPING,
@@ -7278,8 +7257,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // THE CLIPBOARD IS TEXT, and its text is a fragment of a LEVEL FILE (see
   // `editor/clipboard.ts`). That is what makes Ctrl+C in one tab and Ctrl+V in
   // another work at all: the system clipboard is the only thing two tabs share
-  // without a server, and an assembly built once - the bell and its toll rope,
-  // a lamp, a rail rig - has to be able to reach the other levels.
+  // without a server, and an assembly built once - a finish gantry, a lamp, a
+  // rail rig - has to be able to reach the other levels.
   //
   // What was here before was three arrays of live `EdItem`s, which a reload
   // emptied and a second tab never saw.
@@ -9219,15 +9198,15 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         recWorldDigests.push(
           testLevel instanceof BallLevel ? worldDigestBall(testLevel) : worldDigest(testLevel),
         );
-        // The bell RANG. A test is an authoring instrument, so it says so and
-        // carries on: what an author is judging here is the swing - how hard
-        // the haul has to be and how far the bell travels - and a test that
-        // froze and asked for a star rating would be answering a question
-        // nobody in the editor is asking. The game's own completion flow is in
-        // main.ts (see `checkCompletion`).
-        if (testLevel instanceof BallLevel && testLevel.completedFrame !== null && !testRang) {
-          testRang = true;
-          showToast(`bell rung at frame ${testLevel.completedFrame}`, "ok");
+        // The LINE WAS CROSSED. A test is an authoring instrument, so it says
+        // so and carries on: what an author is judging here is where the line
+        // is and whether the run arrives at it, and a test that froze and asked
+        // for a star rating would be answering a question nobody in the editor
+        // is asking. The game's own completion flow is in main.ts (see
+        // `checkCompletion`).
+        if (testLevel instanceof BallLevel && testLevel.completedFrame !== null && !testFinished) {
+          testFinished = true;
+          showToast(`finished at frame ${testLevel.completedFrame}`, "ok");
         }
         accumulator -= STEP;
         steps++;

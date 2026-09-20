@@ -35,8 +35,8 @@ Two panels sit above the selection and are always shown, because what they edit 
 Both are carried through the model for the same reason the spawn's `hang` flag is: the editor rewrites the whole file, so a block the model does not know about is a block the first autosave deletes, and nothing about that loss is visible in the editor - the scene is rebuilt from the model, so it goes on looking however the model says.
 A level that touches neither panel writes neither block, which is what keeps every level from before them byte-identical through a save.
 
-A pivot rigid body's panel carries **`end bell`** beside the bearing's own fields, and only while `pivot` is ticked - the ring is a swing about a bearing, so a control for a body with none would be a control with nothing behind it (see [**The bell**](levels.md#the-bell)).
-A bell is marked on the canvas the way its bearing is: an arc about the axle at ±`BELL_RING_ANGLE`, drawn at the distance the body's own mass sits from it, so what the author sees is how far *this* bell has to swing.
+The level's **finish line** is a body `kind` (see [**The finish line**](levels.md#the-finish-line)), picked like any other, and its panel carries no fields at all - being entered is the whole of it - only a line saying what happens when the player gets there, which is the one thing about it that is not on the canvas.
+On the canvas it is an area like the others, filled with its own glyph: a chequerboard, cut out of a near-white wash thin enough to see the gantry through (a killzone is drawn to be avoided and can shout; a finish line is drawn around the prop the player is aiming at).
 
 The camera panel carries `off x`/`off y`, `view ×`, `lock x`/`lock y`, `blend s`, `buffer`, `falloff` and `priority`, plus `buf left`/`buf right`/`buf top`/`buf bottom` on a rect region.
 A lock is a checkbox plus a value: ticking it seeds the lock from the region's own centre (the sane start for "frame this room"), unticking shows `follow`; a blank `blend s` or `buffer` means the controller default, and a blank per-side buffer means the `buffer` above it.

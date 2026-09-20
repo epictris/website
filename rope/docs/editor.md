@@ -84,7 +84,7 @@ Selected bodies draw an orange halo *under* their own border,
 so a hook-proof piece's dashed steel edge stays legible while selected.
 **Ctrl+C / Ctrl+V** copy the selection and paste it at the cursor, and they go through the
 **system clipboard**, so a copy in one tab pastes into another - and into another LEVEL, which is
-how an assembly built once (the end bell and its toll rope, a lamp, a rail rig) reaches the rest
+how an assembly built once (a finish gantry, a lamp, a rail rig) reaches the rest
 of the game. What is on the clipboard is a fragment of a level file in the on-disk pixel form
 (`src/editor/clipboard.ts`), produced by the same `toLevelData` a save runs, so the round-trip
 cases that hold a save lossless hold a copy lossless too - and a payload can be read, edited or

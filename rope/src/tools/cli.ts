@@ -2249,9 +2249,12 @@ switch (cmd) {
   case "levels":
     void cmdLevels();
     break;
+  case "finish":
+    void cmdFinish();
+    break;
   default:
     fail(
-      "usage: cli <play|record|replay|dump|query|scan|trace|settle|compare|continue|render|shot|chainpath|fork|bundles|pull|playtest|restamp|selftest|latch|transport|clicks|ledges|corners|tangents|decompose|dmath|contacts|spring|movers|vines|rails|viscous|breaks|render3d|camera|assets|levels> [file] [options]",
+      "usage: cli <play|record|replay|dump|query|scan|trace|settle|compare|continue|render|shot|chainpath|fork|bundles|pull|playtest|restamp|selftest|latch|transport|clicks|ledges|corners|tangents|decompose|dmath|contacts|spring|movers|vines|rails|viscous|breaks|render3d|camera|assets|levels|finish> [file] [options]",
     );
 }
 
@@ -2471,10 +2474,10 @@ async function cmdAssets(): Promise<void> {
   process.exit(failed > 0 ? 1 : 0);
 }
 
-// The level FILES held to what the menu and the bell assume (src/level/levelLint.ts):
-// one bell per listed level, on a bearing, with a toll rope, in nothing's way,
-// one introduction, and no two titles the same. Pure and fast - no world is
-// built and no frame is stepped.
+// The level FILES held to what the menu and the finish line assume
+// (src/level/levelLint.ts): a finish line per listed level, thick enough to
+// catch the ball, one introduction, and no two titles the same. Pure and fast -
+// no world is built and no frame is stepped, which is what `cli finish` is for.
 async function cmdLevels(): Promise<void> {
   const { runLevelChecks } = await import("../level/levelLint");
   const { listedLevels } = await import("../level/registry");
@@ -2489,6 +2492,24 @@ async function cmdLevels(): Promise<void> {
     if (!r.pass) failed++;
   }
   console.log(`[levels] ${results.length - failed}/${results.length} checks passed`);
+  process.exit(failed > 0 ? 1 : 0);
+}
+
+// Finish-line cases (src/sim/finishCases.ts). `cli levels` reads the FILES and
+// this steps the mechanic they are checked against: a ball dropped through a
+// gate finishes the level on the frame it touches it, a second crossing does
+// not re-date the finish, a gate moved aside finishes nothing, and the region
+// leaves the ball's path bit-identical.
+async function cmdFinish(): Promise<void> {
+  const { runFinishCases } = await import("../sim/finishCases");
+  const results = runFinishCases();
+  let failed = 0;
+  for (const r of results) {
+    console.log(`  ${r.passed ? "PASS " : "FAIL "} ${r.name}`);
+    for (const d of r.details) console.log(`        ${d}`);
+    if (!r.passed) failed++;
+  }
+  console.log(`[finish] ${results.length - failed}/${results.length} cases passed`);
   process.exit(failed > 0 ? 1 : 0);
 }
 

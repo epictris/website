@@ -73,7 +73,7 @@ export interface SessionMeta {
 }
 
 // Why a run ended. `complete` is the one that is not a failure or an
-// interruption: the player rang the level's bell and finished it (see
+// interruption: the player crossed the level's finish line (see
 // `BallLevel.completedFrame`), and a run sealed as `reset` or `kill` instead
 // would read as their having failed at the thing they just did.
 //

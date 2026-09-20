@@ -23,6 +23,7 @@ import { BallPlayer } from "../classes/ballPlayer";
 import { BallHook } from "../classes/ballHook";
 import { Hook } from "../classes/hook";
 import { KillZone } from "../classes/killZone";
+import { FinishLine } from "../classes/finishLine";
 import type { Level } from "../level/level";
 import type { BallLevel } from "../level/ballLevel";
 import type { SceneChain } from "../level/chains";
@@ -36,7 +37,7 @@ import { railPolyline } from "../lib/rail";
 import { drawTrainingGrid } from "./trainingGrid";
 import { drawDecor } from "./decor";
 import { drawVines } from "./vines";
-import { fillAnchor, fillForceArea, fillKillZone, fillWaterArea } from "./areaFill";
+import { fillAnchor, fillFinish, fillForceArea, fillKillZone, fillWaterArea } from "./areaFill";
 import {
   outlineHalfExtents,
   outlineOfShape,
@@ -67,6 +68,15 @@ const CHAIN_DARK = "#4e555e"; // shadowed / narrow link
 const MANACLE = "#7c848e"; // steel cuff band
 const MANACLE_DARK = "#454c55"; // lock housing / hinge shadow
 const KILLZONE = "rgba(220,60,80,0.35)";
+// A finish line with no authored colour: near-white, so the cells left standing
+// between the cut chequers are the white squares of the flag and the cutouts
+// are the dark ones (see `finishGlyphs`).
+//
+// Thinner than the killzone's red, and for the opposite reason. A killzone is
+// drawn to be avoided and can afford to shout; a finish line is drawn AROUND
+// the gantry that marks it, and an opaque chequerboard over a gate the player
+// is aiming at hides the thing they are aiming at.
+const FINISH_FILL = "rgba(236,238,240,0.22)";
 const IMPERMEABLE_EDGE = "#9db8c6"; // hook-proof surfaces: dashed steel border
 const VISCOUS_EDGE = "#c9a066"; // viscous (mud) surfaces: dash-dot ochre border
 const VISCOUS_DASH = [8 * PX, 3 * PX, 2 * PX, 3 * PX];
@@ -487,6 +497,21 @@ function drawGeometryShape(
       t.globalRotation,
       outlineOfShape(t.shape),
       body.fillColor ? hexToRgba(body.fillColor, body.fillOpacity) : KILLZONE,
+    );
+    return;
+  }
+
+  // Finish lines: authored fill (or a translucent white) stamped with chequers,
+  // on the same rule the killzone above follows - an area whose meaning is the
+  // end of the level has to read as an area, and the chequer is the one mark
+  // everybody already knows means exactly that.
+  if (body instanceof FinishLine) {
+    fillFinish(
+      ctx,
+      t.globalPosition,
+      t.globalRotation,
+      outlineOfShape(t.shape),
+      body.fillColor ? hexToRgba(body.fillColor, body.fillOpacity) : FINISH_FILL,
     );
     return;
   }

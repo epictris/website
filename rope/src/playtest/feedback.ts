@@ -42,9 +42,9 @@ export interface FeedbackSubmission {
   // is a real answer rather than a missing one.
   stars: Stars | null;
   comment: string | null;
-  // The run that rang the bell, when the form came from a ring rather than from
-  // the level select's `rate`. Absent from a re-rating, which is about the
-  // level rather than about a run.
+  // The run that finished the level, when the form came from a crossing rather
+  // than from the level select's `rate`. Absent from a re-rating, which is
+  // about the level rather than about a run.
   session?: string;
   run?: number;
   completedFrame?: number;

@@ -1,7 +1,7 @@
 // The form a level ends at: five stars, a comment, Submit and Skip.
 //
 // It appears twice and from two pages, which is what shapes it. On the GAME
-// page it comes up over the frozen level when the bell has rung (see
+// page it comes up over the frozen level when the line has been crossed (see
 // `completeLevel` in main.ts); on the LEVEL SELECT it comes up from a row's
 // `rate` link. The level select never loads the app at all, so this file has to
 // run without it - no three.js, no level, no renderer, nothing from `main.ts`.
@@ -19,10 +19,10 @@ export interface FeedbackFormOptions {
   // What the heading names. The TITLE rather than the id: the player is being
   // asked about the thing they just played, not about a registry key.
   title: string;
-  // The line above it, which is WHY the form is here: "Rung" from a bell that
-  // has just been rung, and something else from the level select's `rate`,
-  // where nothing was rung and saying so would be a lie about what just
-  // happened.
+  // The line above it, which is WHY the form is here: "Finished" from a run
+  // that has just crossed the line, and something else from the level select's
+  // `rate`, where nothing was played and saying so would be a lie about what
+  // just happened.
   eyebrow: string;
   // The last thing this player said about this level, to open on. A re-rating
   // that started blank would read as the old one having been lost.
@@ -39,7 +39,7 @@ export interface FeedbackFormOptions {
 // Resolves when the form is dismissed, either way.
 export function showFeedbackForm(opts: FeedbackFormOptions): Promise<void> {
   const root = document.getElementById("complete");
-  const eyebrow = document.getElementById("complete-rung");
+  const eyebrow = document.getElementById("complete-eyebrow");
   const heading = document.getElementById("complete-heading");
   const starsEl = document.getElementById("complete-stars");
   const commentEl = document.getElementById("complete-comment") as HTMLTextAreaElement | null;

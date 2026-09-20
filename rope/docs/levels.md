@@ -1,8 +1,8 @@
-# Levels, the bell, and finishing one
+# Levels, the finish line, and finishing one
 
 The game is a set of levels rather than one arena.
 `/` is the **level select**; `?level=ID` plays one.
-Every listed level ends at a **bell**, and ringing it completes the level.
+Every listed level ends at a **finish line**, and touching it completes the level.
 
 ## What a level says about itself
 
@@ -21,89 +21,85 @@ That is not a convenience: the editor rewrites the whole file every 750 ms, so a
 It is the lesson `SpawnData.hang` and the `environment` block each paid for separately.
 
 `listedLevels()` in `level/registry.ts` derives the menu's list: file-backed ball levels whose `meta` does not say `unlisted`, the intro first and then by title, case-insensitively.
-File-backed and ball-driven are both deliberate - the hand-written `TEST_*` specs are rigs with no file to hash and no bell to ring, and the grapple levels are a controller the completion flow has never been through.
+File-backed and ball-driven are both deliberate - the hand-written `TEST_*` specs are rigs with no file to hash and no finish line to cross, and the grapple levels are a controller the completion flow has never been through.
 Both stay reachable by `?level=`.
 
-`cli levels` is the lint over all of it, and every failure it names is one that is silent in play: a listed level with no bell (or two), a bell that is not on a bearing, a bell with no toll rope, a bell that is in something's way, no introduction or two, and two levels the player cannot tell apart in the list.
+`cli levels` is the lint over all of it, and every failure it names is one that is silent in play: a listed level with no finish line, a finish body carrying only decoration and so building no region at all, a region too thin to catch a fast ball, no introduction or two, and two levels the player cannot tell apart in the list.
 It is pure and fast - no world is built and no frame is stepped - in the spirit of `cli assets`.
+The mechanic those files are checked against is stepped by `cli finish` instead.
 
-## The bell
+## The finish line
 
-A level ends at a bell, and ringing it is the level's win condition.
+A level ends at a finish line, and touching it is the level's win condition.
 
-The assembly is three things:
+It is **one body**: `kind: "finish"`, with a collision object for the region the player crosses and a geometry object carrying the gantry that marks it.
+A `finish` body builds an `Area2D` (`classes/finishLine.ts`), and the crossing is decided by the same overlap test in the same place as a killzone's (`World.notifyAreas`, an exact SAT test rather than a bounding circle).
+It is the killzone's mirror: the same volume, entered, with the opposite meaning.
 
-- **The bell**: a `rigid` body with `pivot: true`, its bearing (`pivotX`/`pivotY`) at its yoke, a torsion return spring (`pivotFreq`, `pivotDamping`), and `bell: true`.
-  Its collision shapes **pass everything** (`passes: ["player", "hook", "chain"]`): the body is in the world so the rope has something with inertia to pull on, and it is in the way of nothing, so the rope is the only handle.
-  Without that a level is finished by rolling into the bell.
-- **The toll rope**: a scene chain (`ChainData`) from an anchor **on the bell's rim**, not under its bearing.
-  That is a bell WHEEL and it is the whole of why a straight pull rings it: a rope hanging directly below the bearing has no lever arm at all, so it can only be rung by swinging the rope about, which is not what hauling on a bell rope means.
-- **The sally**: a free `rigid` body on the other end of that chain - the grip the player hooks and pulls down on.
+That is the whole mechanic, and the plainness is the point.
+What it replaced (2026-09-20) was a **bell**: a pivot body on a torsion spring, a toll rope strung from its rim, and a sally on the end of that for the player to hook and haul down, rung by swinging it past a threshold angle.
+It worked, and it was three authored bodies, a scene chain, a mass tuned through `thickness` and an angle with a measured margin either side of it - all of it standing between the player and "you have reached the end".
+A line you touch needs none of it, reads from across the level, and cannot be arrived at and then missed.
 
-### Sizing it
+### Authoring one
 
-The bell is a **5.3 cm hand bell** (`MESH_ASSETS.bell`, `scale: 0.00015`), and that raises the one problem the assembly has to solve: a 5 cm casting weighs a couple of hundred grams, and a 52 kg ball hanging off its rope would whip it round and round for ever.
+- The **region** is the piece the player crosses, and it is drawn across the way out: wide enough that a swing cannot miss it, and tall enough that a run along the ground and a run through the air both meet it.
+  `cli levels` holds it to at least `MIN_FINISH_SPAN` (60 px) across its narrow axis.
+  The crossing is an overlap test run once a frame and the ball travels 23 cm in a frame at the ~14 m/s a long hang reaches, so a line drawn as a *line* - a 2 px strip on the floor - is one a fast run passes clean through, and it looks perfectly right in the editor.
+- The **gantry** is a geometry object on the same body: `mesh: "finish-line"`, a chequered arch whose origin sits on the ground between its posts, so the body is placed where the gate stands.
+  It is 6.5 x 6.2 m in the file's own metres - a real gantry beside real people, and enormous beside a 24 cm ball - so a level states its own `scale`; the sandbox uses 0.4, a 2.6 m arch.
+- Nothing about the region collides.
+  An area is not a `PhysicsBody2D` at all, so the player, the hook and the chain pass through it with no mask to author and nothing to get wrong - which is what `cli finish`'s `finish-inert` holds to, bit for bit.
 
-So the bell's **collision circle is its mass, not its outline**, and the mass knob is `thickness`.
-The circle still MATCHES the bell (2.6 px, the bell's own radius), because an anchor is snapped to its body's surface - a circle bigger than the bell would hang the rope in mid-air beside it, which is exactly what a 10 px circle looked like.
-`thickness` is what a piece's mass is computed from and is never read for the look (see `CollisionObjectData.thickness`), so 200 px through z on a 5 cm bell is invisible everywhere and is what buys the 48 kg that makes a pull **swing** the bell.
+A level may carry **several**, and the first crossing is the one that counts: a course with two ways down ends at either of them.
+(Two bells could not be allowed, because the second was inert with nothing to say so. Two lines are two ways to finish.)
 
-The numbers, measured on `levels/bell-test.json` as a fraction of the ball's own 511 N leaned on the rope:
+`levels/finish-test.json` (`?level=FINISH_TEST`) is the sandbox: a floor, a beam to swing from, and the gantry at the end of it.
 
-| Pull | | Swing |
-|---|---|---|
-| the sally hanging on its own | 0 N | 0.018 rad |
-| a tenth of the player's weight | 51 N | 0.158 |
-| a fifth | 102 N | 0.270 |
-| half | 256 N | 0.477 |
-| the whole of it | 511 N | 0.557 |
+### The crossing
 
-`BELL_RING_ANGLE` sits at 0.25 in the middle of that: about a fifth of the player's weight rings it, and the rope hanging there for ever does not.
-
-A **scene chain and a rigid sally**, rather than a vine.
-A vine is the thing the hook grabs anywhere along its length, which reads like the better fit, and it is the wrong one twice over: a vine's load rope pulls on its anchor body only through the link that is held, and the anchor body a vine hangs from is not on the chain's path, so nothing keeps it awake - a sleeping body is not integrated, and the whole of a 500 N haul moved a bell hung on a vine 4e-4 rad.
-(That is a real gap in the vine load rope rather than a fact about bells: `docs/vines.md` says the load rope loads the body it is anchored to "a pivot body included", and while that body is asleep it does not. Nothing in the tree hangs a vine from a rigid body, so nothing is red; it wants a fix and a `cli vines` case of its own.)
-A scene chain holds both its bodies awake by construction (`SceneChain`), carries tension straight down the rope, and ends on a body the hook bites like any other.
-
-`bell: true` is a flag on the body rather than a kind, for the reason `pivot` itself is one: a bell **is** a pivot body with a meaning.
-It is written only on a body that still has a bearing (`toLevelData`), since the ring is measured as a swing about one, and the build refuses a second bell outright - a level with two is one an author has half-finished, and quietly ringing at whichever came first would leave the other inert with nothing to say so.
-
-### The ring
-
-`BallLevel` records the bell's rotation **after the build's settle** (`bellRest`), which is the angle the first frame of play opens on, and at the end of every `physicsProcess`:
+`FinishLine` reports the avatar entering, `BallLevel.finish()` takes it, and that is the arithmetic in full:
 
 ```
-if (completedFrame === null && |bell.globalRotation - bellRest| >= BELL_RING_ANGLE) completedFrame = frame;
+if (completedFrame === null) completedFrame = frame;
 ```
 
-`BELL_RING_ANGLE` is 0.25 rad, about 14 degrees, and it is one end of the margin the table above sets out rather than a number on its own.
-It is an ANGLE - dimensionless, unscaled - so it crosses `scaleLevelData` the way `swingAmp` does.
+The frame it names is the one being stepped: `this.frame` is taken at the top of `physicsProcess`, and the areas are notified inside `World.integrate`.
 
 Three properties hold it together:
 
-- **A level with no bell runs none of it.** `bellBody` is null, the branch is not entered, and every recording of every level without a bell is bit-identical.
-- **`Mathf.abs` is not a transcendental**, so nothing here reaches for a platform `Math` and `cli dmath` has nothing to find. The ring is a comparison on a rotation the sim already owns.
-- **The ring is final.** `completedFrame` is written once and never clears; a reset builds a fresh level, which is what starts it over.
+- **A level with no finish line runs none of it.** There is no area, so nothing is entered, and every recording of every level without one is bit-identical.
+- **There is no arithmetic to be non-deterministic about.** The overlap test is the one every area already runs, so nothing new reaches for a platform `Math` and `cli dmath` has nothing to find.
+- **The crossing is final.** `completedFrame` is written once and never clears - which matters here in a way it did not for a bell, because a ball can leave a region it has entered and enter it again. A reset builds a fresh level, which is what starts it over.
 
-Its detectors ship with it: `WorldDigest.bell` carries the swing off rest and whether it has rung (written only on a level that has a bell, so every older bundle compares exactly as it did), `worldDigestDrift` treats absent-on-both as equal and absent-on-one as a different scene, and `bell-rung-once` is the invariant that the ring never moves and never un-fires - the one shape of bug a per-frame check cannot see.
-`cli spring`'s `bell-ring` asserts the mechanism and both ends of the margin: a pull DOWN on the rope turns the bell and rings it once, the same rig with the rope cut never rings however long it is hauled on, and the rope hanging there on its own never rings it either.
-It hauls the sally directly rather than throwing a scripted hook at it, because whether a pull on the rope rings the bell is a fact about the assembly and whether a player can land a hook on the sally is a fact about the arena - and only the first belongs in a unit case.
+Its detectors ship with it.
+`WorldDigest.finished` carries whether the level has been finished, written only on a level that has a finish line, so every older bundle compares exactly as it did; `worldDigestDrift` treats absent-on-both as equal, absent-on-one as a different scene, and finished-in-one-run-only as a different run rather than a drifted one.
+`finish-once` is the invariant that the crossing never moves and never un-fires - the one shape of bug a per-frame check cannot see.
 
-The arena's half is `playtests/bell-ring.json`, which plays the real level file through the real input stream - a throw at the sally and then the wind-up, which hauls the ball up the rope and the rope down with it - and asserts `ringsBy`.
-And the BROWSER's half is `playtests/regressions/bell-ring-376f.json.gz`: the same run replayed through the page's own frame loop and exported with **P**, which rings on the same frame 77 and diverges from bun by nothing.
-That last one is the rule in `rope/CLAUDE.md` being paid rather than a nicety - headless validation cannot see the browser.
+`cli finish` (`sim/finishCases.ts`) steps the mechanic itself, on a rig whose floor is a **trampoline**, so the ball falls through the gate and is thrown back up through it:
+
+| Case | Holds |
+|---|---|
+| `finish-crossed` | entering the region finishes the level, on the frame it is entered |
+| `finish-once` | a second crossing does not re-date the finish, and the invariant stays silent |
+| `finish-missed` | the same gate moved aside finishes nothing, however long the run |
+| `finish-inert` | the ball's whole path is identical with and without the gate in the level |
+
+The player's own half is `playtests/finish-roll.json`, which drives the ball along the ground into a gate through the real input stream and asserts `finishesBy`.
 
 ### Finishing a level
 
-On the ring the page (`main.ts`) lets the sim run `BELL_LINGER_FRAMES` (60) more steps on live input so the swing is seen, and then **stops stepping**.
-Nothing reaches into the level: it carries on being exactly the level it was, so a P download taken afterwards replays and rings on the same frame, and the recorder's sealed run is the frames that were actually played.
-Rendering carries on, so the bell is still swinging behind whatever is put over it.
+On the crossing the page (`main.ts`) lets the sim run `FINISH_LINGER_FRAMES` (30) more steps on live input, and then **stops stepping**.
+The linger is what carries the ball out the far side: freezing on the frame it first touched the chequers stops it inside the gate, which reads as having been caught by it rather than as having gone through.
+
+Nothing reaches into the level: it carries on being exactly the level it was, so a P download taken afterwards replays and finishes on the same frame, and the recorder's sealed run is the frames that were actually played.
+Rendering carries on, so the level is still there behind whatever is put over it.
 
 The run is sealed with the end reason **`complete`**, which is its own reason because it is neither a failure nor an interruption - a run sealed as `reset` or `kill` would read as the player having failed at the thing they just did.
 A reason has to land on `EndReason` (`playtest/protocol.ts`) and on `END_REASONS` (`server/store.ts`) **in the same deploy**: the store refuses one it does not know and the client goes dead on the first 400.
 
-In the editor's ▶ Test a ring raises a toast and the test carries on.
-A test is an authoring instrument - what is being judged there is the swing - and one that froze and asked for a rating would be answering a question nobody in the editor is asking.
+In the editor's ▶ Test a crossing raises a toast and the test carries on.
+A test is an authoring instrument - what is being judged there is where the line is and whether the run arrives at it - and one that froze and asked for a rating would be answering a question nobody in the editor is asking.
 
 ## The level select
 
@@ -130,7 +126,7 @@ Both fields are optional and that is the point rather than a convenience - a for
 Skip is a first-class outcome: the level was finished and nothing was said.
 Esc is Skip, the first star takes the focus so the keyboard works without a click, and pressing the star that is already the rating clears it.
 
-It comes up from two places and says which: **Rung** from a bell that has just been rung, **Rate** from a completed row's `rate` link on the menu, where nothing was rung.
+It comes up from two places and says which: **Finished** from a run that has just crossed the line, **Rate** from a completed row's `rate` link on the menu, where nothing was played.
 A re-rating opens **pre-filled** from the last thing this player said about this level, since one that opened blank would read as the old one having been lost.
 
 **Progress is written locally BEFORE the POST.** A dev page with no `serve.ts` beside it and a flaky network are the same case, and in both the level has still been finished: writing progress only on a successful send would lose the completion along with the rating.

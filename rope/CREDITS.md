@@ -6,11 +6,11 @@ asset to its manifest and regenerate, which is what `cli assets` checks.
 
 ## 3D models
 
-- **bell** - "jQueary", [source](https://sketchfab.com/3d-models/bell-897bc8230df54a1cad474492771880d8), CC BY 4.0
 - **bulkhead-lamp** - "andersonmat", [source](https://sketchfab.com/3d-models/bulkhead-lamp-game-ready-c7ecba33758a46c78537c1c9e6161aeb), CC BY 4.0
 - **cage** - "AAA (@BitoRaccoon)", [source](https://sketchfab.com/3d-models/cage-7f86e8c4f839424fab8a6d43cdf2b4fc), CC BY 4.0
 - **cage-dungeon** - "Samuel F. Angrick-Johanns (@oneironauticus)", [source](https://sketchfab.com/3d-models/dungeon-cage-34dcb15847ef439eb9f0c991ae1078f8), CC BY 4.0
 - **cage-rusty** - "Samuel F. Angrick-Johanns (@oneironauticus)", [source](https://sketchfab.com/3d-models/rusty-dungeon-cage-3e404a7e3fec4340b52519942ff229e0), CC BY 4.0
+- **finish-line** - "hyd (@hydroh)", [source](https://sketchfab.com/3d-models/finish-line-7ec1d8194ddf46e6b398d336df0b5d7a), Sketchfab Standard
 - **iron-gate** - "Yukitsu-Senpai", [source](https://sketchfab.com/3d-models/dungeonprison-bars-door-410e6acfc4c448d3835929e1b6d6df3a), CC BY 4.0
 - **lantern** - "Mandrake (@mandrake_3d)", [source](https://sketchfab.com/3d-models/lantern-f0b0ea89f20b4f10bb583c449ae04d9c), CC BY 4.0
 - **lantern-rusty** - "lhaegy.fu", [source](https://sketchfab.com/3d-models/old-rusty-lantern-c11fd480023d485f9bbeaae633c868d7), CC BY-NC 4.0

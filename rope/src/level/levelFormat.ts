@@ -52,6 +52,11 @@
 //                terminal speed; water has a speed it carries things at, and
 //                being slowed to it and being pushed by it are the same act.
 //                See `WaterArea`.
+// - finish:      an Area2D that FINISHES the level when the avatar enters it -
+//                the line at the end of the course (see `FinishLine`,
+//                `BallLevel.completedFrame` and docs/levels.md). The mirror of
+//                `killzone`, down to the overlap test it is decided by: the
+//                same volume, entered, with the opposite meaning.
 //
 // Hook-only scenery is not among them, and used to be (`anchor`): a body
 // nothing but the hook can find is now the `passable` flag below, for the reason
@@ -79,7 +84,20 @@
 import { dmath } from "../engine/dmath";
 import { LAYER_HOOK, LAYER_PLAYER, LAYER_ROPE, MASK_ALL } from "../engine/body";
 
-export type BodyKind = "static" | "killzone" | "rigid" | "force" | "water";
+export type BodyKind = "static" | "killzone" | "rigid" | "force" | "water" | "finish";
+
+// Which of them are REGIONS: built as an `Area2D`, made of nothing, in nothing's
+// way, and known by what happens to whatever is inside them rather than by a
+// surface.
+//
+// One predicate rather than the four-way `||` it replaces, because the editor
+// asks this question three times over (friction, mass and whether a piece may
+// be welded into a compound body) and a kind missing from one of those lists is
+// a region that quietly authors a density, or a wall that can be welded to a
+// killzone. `finish` was the fourth region and it is the reason this exists.
+export function isAreaKind(kind: BodyKind): boolean {
+  return kind === "killzone" || kind === "force" || kind === "water" || kind === "finish";
+}
 
 // The collision categories a LEVEL may name (`CollisionObjectData.passes`).
 //
@@ -1032,21 +1050,6 @@ export interface LevelBodyData {
   // spring's own default.
   pivotFreq?: number;
   pivotDamping?: number;
-  // THE LEVEL'S END BELL. Swinging this body past `BELL_RING_ANGLE` from the
-  // angle it settled at, at build, rings it and completes the level (see
-  // `BallLevel.completedFrame` and `docs/levels.md`). At most one per level, and
-  // `cli levels` is what holds a listed level to having exactly one.
-  //
-  // Pivot rigid bodies only, because the mechanic IS the bearing: what the
-  // player hauls on is a vine anchored to the bell, and what that haul does is
-  // turn the body about its yoke against the torsion spring. A flag on the body
-  // rather than a kind, for the reason `pivot` itself is one - a bell is a
-  // pivot body with a meaning, not a different sort of thing.
-  //
-  // Absent = an ordinary body, which is every body in every level authored
-  // before the field, and a level with no bell runs no ring arithmetic at all
-  // (see `BallLevel.physicsProcess`), so every recording of one is unchanged.
-  bell?: boolean;
   // Rigid bodies only: anchor the body to its authored position through a
   // two-axis spring-damper. It sags under its own weight, sags further under a
   // load - a hanging player, a resting rock, rope tension - and springs back
@@ -2049,7 +2052,7 @@ export interface LevelMetaData {
   // is simply not on the list to be first on.
   intro?: boolean;
   // Off the level select; still playable by `?level=`. The sandboxes set it:
-  // they are instruments rather than levels, and none of them has a bell.
+  // they are instruments rather than levels, and none of them has a finish.
   unlisted?: boolean;
 }
 
@@ -3171,8 +3174,6 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
       ...(b.pivotY !== undefined ? { pivotY: b.pivotY * factor } : {}),
       ...(b.pivotFreq !== undefined ? { pivotFreq: b.pivotFreq } : {}),
       ...(b.pivotDamping !== undefined ? { pivotDamping: b.pivotDamping } : {}),
-      // A flag, not a length (see `LevelBodyData.bell`).
-      ...(b.bell !== undefined ? { bell: b.bell } : {}),
       // A spring frequency is a rate and a damping ratio is a ratio, so neither
       // is a length and neither scales - the same rule `drag` follows above,
       // and the reason `LevelBodyData.springFreqX` is authored as a frequency

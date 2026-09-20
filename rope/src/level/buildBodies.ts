@@ -31,6 +31,7 @@ import {
   ShapeGeometry,
 } from "../lib/shapeGeometry";
 import { KillZone } from "../classes/killZone";
+import { FinishLine } from "../classes/finishLine";
 import {
   collides,
   isMover,
@@ -649,11 +650,19 @@ function authoredRoute(b: LevelBodyData): {
 }
 
 // `data` must already be in metres (scaleLevelData(_, PX)). `onReset` fires when
-// the avatar enters a killzone.
+// the avatar enters a killzone, and `onFinish` when it enters a finish line.
+//
+// `onFinish` is optional where `onReset` is not, and the asymmetry is the two
+// callers: every level driver has somewhere to put a reset, and a case rig that
+// builds bodies only to measure them has nothing a finished level would mean.
+// Absent, a finish area is built and tested exactly as it always is and its
+// entry goes nowhere - which is what a rig wants and what a grapple level, an
+// instrument with no end (see `LevelMetaData.unlisted`), gets.
 export function buildLevelBodies(
   world: World,
   data: LevelData,
   onReset: () => void,
+  onFinish: () => void = () => {},
 ): BuiltBodies {
   const wrapBodies: PhysicsBody2D[] = [];
   const bodies: BuiltBody[] = [];
@@ -669,7 +678,7 @@ export function buildLevelBodies(
       continue;
     }
     const pieces = b.objects.filter(isCollisionObject).flatMap((o) => makePieces(b, o));
-    const built = buildOne(world, b, pieces, onReset);
+    const built = buildOne(world, b, pieces, onReset, onFinish);
     attachRails(built, pieces);
     bodies.push({
       data: b,
@@ -714,6 +723,7 @@ function buildOne(
   b: LevelBodyData,
   pieces: Piece[],
   onReset: () => void,
+  onFinish: () => void,
 ): CollisionObject2D {
   if (b.kind === "killzone") {
     const kz = new KillZone(onReset);
@@ -721,6 +731,16 @@ function buildOne(
     applyStyle(kz, b);
     world.add(kz);
     return kz;
+  }
+
+  // The line at the end of the course: the same area, entered, with the
+  // opposite meaning (see `classes/finishLine.ts`).
+  if (b.kind === "finish") {
+    const fin = new FinishLine(onFinish);
+    mountPieces(fin, pieces);
+    applyStyle(fin, b);
+    world.add(fin);
+    return fin;
   }
 
   if (b.kind === "force") {

@@ -2,7 +2,7 @@
 
 import { Vec2 } from "./engine/vec2";
 import { Level } from "./level/level";
-import { BallLevel, BELL_LINGER_FRAMES } from "./level/ballLevel";
+import { BallLevel, FINISH_LINGER_FRAMES } from "./level/ballLevel";
 import { SlackChain } from "./classes/slackChain";
 import { LiveInputSource } from "./input/liveInput";
 import { BallInputSource } from "./input/ballInput";
@@ -482,7 +482,7 @@ function downloadRecording(): void {
     // self-contained bundle builds from its embedded geometry and `controller`
     // is what says which driver to build it with (see `Recording.controller`).
     // Carrying the geometry without it re-exported a ball run as a grapple one,
-    // which diverges on frame 1 with no ball to steer and no bell to ring.
+    // which diverges on frame 1 with no ball to steer and no line to cross.
     ...(replayRec?.data ? { data: replayRec.data } : {}),
     ...(replayRec?.controller ? { controller: replayRec.controller } : {}),
     // A bundle names its level rather than embedding it, so a run from a named
@@ -764,22 +764,22 @@ function stepLevel(frameInput: FrameInput, seeking: boolean): void {
 // Finishing a level
 // ---------------------------------------------------------------------------
 //
-// The bell has been rung (`BallLevel.completedFrame`), the swing has been
-// watched for `BELL_LINGER_FRAMES` more steps, and the level is over: the loop
-// stops stepping, the pointer comes back, and the form appears over a scene
-// that is still being drawn.
+// The player has crossed the finish line (`BallLevel.completedFrame`), the run
+// has carried on for `FINISH_LINGER_FRAMES` more steps, and the level is over:
+// the loop stops stepping, the pointer comes back, and the form appears over a
+// scene that is still being drawn.
 //
 // STOPPING IS THE PAGE'S, not the sim's. Nothing here reaches into the level:
 // it carries on being exactly the level it was, so a P download taken now is a
-// bundle that replays and rings on the same frame, and the recorder's sealed
+// bundle that replays and finishes on the same frame, and the recorder's sealed
 // run is the frames that were actually played. What changes is that no more of
 // them are stepped.
 //
 // Rendering carries on, which is the point of freezing rather than tearing the
 // page down: the form is a panel over the level the player has just finished,
-// with the bell still swinging behind it at the pose the last step left.
+// with the chequers behind it at the pose the last step left.
 let frozen = false;
-// Null until the ring. Then the frame the linger ends on, so the check is a
+// Null until the crossing. Then the frame the linger ends on, so the check is a
 // comparison rather than a second counter to keep in step with the sim's.
 let lingerUntil: number | null = null;
 
@@ -787,7 +787,7 @@ let lingerUntil: number | null = null;
 function checkCompletion(): boolean {
   if (frozen) return true;
   if (!(level instanceof BallLevel) || level.completedFrame === null) return false;
-  if (lingerUntil === null) lingerUntil = level.completedFrame + BELL_LINGER_FRAMES;
+  if (lingerUntil === null) lingerUntil = level.completedFrame + FINISH_LINGER_FRAMES;
   if (level.frame < lingerUntil) return false;
   frozen = true;
   completeLevel();
@@ -810,7 +810,7 @@ function completeLevel(): void {
   const stars = (was?.stars ?? null) as Stars | null;
 
   void showFeedbackForm({
-    eyebrow: "Rung",
+    eyebrow: "Finished",
     title: levelTitle,
     // Pre-filled from the last thing this player said about this level: a
     // re-rating that opened blank would read as the old one having been lost.
@@ -835,8 +835,8 @@ function completeLevel(): void {
         srcHash,
         stars: gave,
         comment,
-        // The run that rang it, so a rating can be read beside the play it came
-        // out of. A re-rating from the level select carries neither.
+        // The run that finished it, so a rating can be read beside the play it
+        // came out of. A re-rating from the level select carries neither.
         ...(recorder?.session ? { session: recorder.session, run: resets } : {}),
         completedFrame,
       }).then((ok) => {
@@ -893,8 +893,8 @@ function frame(now: number): void {
     while (accumulator >= STEP && frameSteps < MAX_STEPS_PER_FRAME) {
       stepLevel(input.sample(), false);
       accumulator -= STEP;
-      // The bell has rung: the run's remaining steps are the LINGER, and when
-      // it is spent the loop stops stepping (see `completeLevel`). Checked
+      // The line has been crossed: the run's remaining steps are the LINGER,
+      // and when it is spent the loop stops stepping (see `completeLevel`). Checked
       // inside the catch-up loop rather than after it, so a frame that runs
       // several steps cannot overshoot the linger by the rest of them.
       if (checkCompletion()) break;

@@ -13,6 +13,7 @@
 import { Vec2 } from "../engine/vec2";
 import {
   anchorGlyphs,
+  finishGlyphs,
   forceAreaGlyphs,
   killZoneGlyphs,
   waterAreaGlyphs,
@@ -108,6 +109,20 @@ export function fillAnchor(
   const half = outlineHalfExtents(shape);
   fillWithCutouts(ctx, center, rotation, shape, fillStyle, (p) =>
     anchorGlyphs(p, half, outlineIsRound(shape)),
+  );
+}
+
+// A finish line: static chequers.
+export function fillFinish(
+  ctx: CanvasRenderingContext2D,
+  center: Vec2,
+  rotation: number,
+  shape: Outline,
+  fillStyle: string,
+): void {
+  const half = outlineHalfExtents(shape);
+  fillWithCutouts(ctx, center, rotation, shape, fillStyle, (p) =>
+    finishGlyphs(p, half, outlineIsRound(shape)),
   );
 }
 

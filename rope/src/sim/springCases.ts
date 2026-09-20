@@ -38,7 +38,7 @@ import { scaleLevelData } from "../level/levelFormat";
 import { buildSceneChains } from "../level/chains";
 import { PX as PX_FACTOR } from "../engine/units";
 import { modelFromDisk, modelToDisk, settledGhosts } from "../editor/model";
-import { BallLevel, BELL_RING_ANGLE } from "../level/ballLevel";
+import { BallLevel } from "../level/ballLevel";
 import { button, emptyFrameInput, type FrameInput } from "../input/frameInput";
 import type { LevelBodyData, RawLevelData, SceneObjectData } from "../level/levelFormat";
 
@@ -2277,170 +2277,6 @@ function caseYankCatch(): SpringResult {
   return ok("yank-catch — a radial catch pays the sprung pivot its momentum", passed, details);
 }
 
-// ---------------------------------------------------------------------------
-// bell-ring: the level's END BELL (see `LevelBodyData.bell`). A pivot body on a
-// torsion spring, a toll rope - a scene chain - and a SALLY, the grip on the end
-// of it that the player hooks and hauls on.
-//
-// What is asserted here is the MECHANISM and not the feel. The haul is applied
-// to the sally directly rather than thrown at it by a scripted ball, because
-// the two questions are separable and only one of them belongs in a unit case:
-// whether a pull on the rope turns the bell and rings it exactly once is a fact
-// about the assembly, and whether a player can land a hook on the sally is a
-// fact about the arena it is placed in, which `playtests/` is for.
-//
-// The numbers it does NOT pin are the ones `rope/CLAUDE.md` says to play first:
-// the frame the ring lands on, the spring, the damping and the threshold. What
-// it holds is structural and survives all of them being re-tuned - the bell
-// turns under a haul, the ring fires once and never un-fires, and the same rig
-// with the rope CUT never rings however long it is hauled on, which is what
-// says the ring is the rope's doing rather than the bell settling.
-// ---------------------------------------------------------------------------
-function caseBellRing(): SpringResult {
-  const details: string[] = [];
-  let passed = true;
-  const check = (line: string, cond: boolean): void => {
-    details.push(`${cond ? "ok  " : "BAD "} ${line}`);
-    if (!cond) passed = false;
-  };
-
-  // Scene pixels, as a level file is. The bell hangs from a beam, its bearing
-  // at its yoke, and the sally hangs 1.6 m under it on the toll rope.
-  const rig = (roped: boolean): RawLevelData => ({
-    player: { x: -400, y: -20, radius: 8 },
-    bodies: [
-      {
-        kind: "static",
-        x: 0,
-        y: 20,
-        rot: 0,
-        objects: [{ type: "collision", shape: { kind: "rect", w: 2000, h: 40 } }],
-      },
-      {
-        kind: "rigid",
-        pivot: true,
-        // The bearing at the yoke, 2.3 px above the mesh's own centre.
-        pivotX: 0,
-        pivotY: -2.3,
-        pivotFreq: 0.5,
-        pivotDamping: 0.25,
-        bell: true,
-        x: 0,
-        y: -406.7,
-        rot: 0,
-        objects: [
-          // The circle matches the bell's own 5.3 cm outline, because the rope
-          // is bolted to its RIM (an anchor is snapped to the surface) and a
-          // circle bigger than the bell would hang the rope in mid-air.
-          //
-          // In nothing's way: the body is in the world so the rope has
-          // something with inertia to pull on, and the rope is the only handle.
-          //
-          // `thickness` is the bell's MASS, and it is the one knob the format
-          // offers for it: 200 px through z is a lie about the depth of a 5 cm
-          // casting and it is never drawn (see `CollisionObjectData.thickness`),
-          // and 48 kg is what makes the pull SWING the bell rather than whip it
-          // round and round (see docs/levels.md).
-          {
-            type: "collision",
-            shape: { kind: "circle", r: 2.6 },
-            material: "lead",
-            thickness: 200,
-            passes: ["player", "hook", "chain"],
-          },
-          // ON THE RIM rather than under the bearing, which is the whole of why
-          // a straight pull turns it: a rope hanging directly below the bearing
-          // has no lever at all, and the bell can only be rung by swinging the
-          // rope about. This is a bell WHEEL, one radius across.
-          { type: "anchor", id: 1, x: 2.6, y: 0 },
-        ],
-      },
-      {
-        kind: "rigid",
-        x: 0,
-        y: -119.4,
-        rot: 0,
-        objects: [
-          { type: "collision", shape: { kind: "rect", w: 4, h: 14 }, material: "wood" },
-          { type: "anchor", id: 2, x: 0, y: -7 },
-        ],
-      },
-    ],
-    // The CUT rig authors no chain at all, so the sally simply falls: a bell
-    // left alone must not ring, however hard the thing that was hanging off it
-    // is hauled about.
-    ...(roped ? { chains: [{ a: 1, b: 2, length: 278 }] } : {}),
-  });
-
-  // The haul, in newtons, applied DOWNWARD to the sally for the whole run:
-  // the ball's own weight, which is what a player hanging off the rope leans on
-  // it. Down rather than sideways because pulling down is the verb - a bell is
-  // rung by hauling on its rope, not by swinging the rope about.
-  const HAUL = 511;
-
-  const run = (roped: boolean): { rang: number | null; peak: number; rings: number } => {
-    const level = new BallLevel(rig(roped));
-    // The sally is the last rigid body built and the only one under the bell.
-    const sally = level.world.bodies.find(
-      (b) => b instanceof RigidBody2D && b !== (level.ball as unknown as RigidBody2D) && b.globalPosition.y > -2,
-    ) as RigidBody2D | undefined;
-    let peak = 0;
-    let rings = 0;
-    let last: number | null = null;
-    for (let f = 0; f < 400; f++) {
-      if (sally) {
-        sally.keepAwake();
-        sally.linearVelocity = sally.linearVelocity.add(
-          new Vec2(0, (HAUL / sally.mass) * DT),
-        );
-      }
-      level.physicsProcess(emptyFrameInput(), DT);
-      peak = Math.max(peak, Math.abs(level.bellSwing ?? 0));
-      if (level.completedFrame !== last) {
-        if (level.completedFrame !== null) rings++;
-        last = level.completedFrame;
-      }
-    }
-    return { rang: level.completedFrame, peak, rings };
-  };
-
-  const roped = run(true);
-  const cut = run(false);
-
-  check(
-    `a pull DOWN on the toll rope turns the bell: ${roped.peak.toFixed(3)} rad off its settled angle`,
-    roped.peak >= BELL_RING_ANGLE,
-  );
-  check(`...and rings it (frame ${roped.rang})`, roped.rang !== null);
-  check(
-    `...exactly once - the ring never moves and never clears (${roped.rings} transition)`,
-    roped.rings === 1,
-  );
-  check(
-    `the same bell with its rope cut never rings (peak ${cut.peak.toFixed(3)} rad)`,
-    cut.rang === null && cut.peak < BELL_RING_ANGLE,
-  );
-
-  // ...and the OTHER end of the margin: the rope's own hanging weight must not
-  // ring it, or the level opens already finished. Measured over a settle with
-  // nothing touching the sally at all.
-  const idle = (() => {
-    const level = new BallLevel(rig(true));
-    let peak = 0;
-    for (let f = 0; f < 400; f++) {
-      level.physicsProcess(emptyFrameInput(), DT);
-      peak = Math.max(peak, Math.abs(level.bellSwing ?? 0));
-    }
-    return { peak, rang: level.completedFrame };
-  })();
-  check(
-    `the rope hanging there on its own does not: ${idle.peak.toFixed(3)} rad, under the ${BELL_RING_ANGLE} threshold`,
-    idle.rang === null && idle.peak < BELL_RING_ANGLE,
-  );
-
-  return ok("bell-ring — a pull down on the toll rope swings the bell past the threshold, once", passed, details);
-}
-
 export function runSpringCases(): SpringResult[] {
   return [
     caseDroop(),
@@ -2465,6 +2301,5 @@ export function runSpringCases(): SpringResult[] {
     caseWhirlAnchor(),
     caseYankCatch(),
     caseHangSettle(),
-    caseBellRing(),
   ];
 }

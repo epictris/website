@@ -242,8 +242,8 @@ function paintMenu(manifest: PreloadManifest, note: string): void {
       rate.textContent = "rate";
       const open = (): void => {
         void showFeedbackForm({
-          // Nothing was rung: this is a level the player finished earlier and
-          // is saying something about now.
+          // Nothing was just played: this is a level the player finished
+          // earlier and is saying something about now.
           eyebrow: "Rate",
           title: level.t,
           stars: done.stars as Stars | null,

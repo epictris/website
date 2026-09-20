@@ -149,13 +149,13 @@ the wrong trade in the one place a runaway is still cheap to catch.
 Anything the player passes through must never be mistakable for solid geometry in a still
 frame — see **"Pass-through geometry must read as pass-through"** in `docs/game-design.md`
 for the rule and its rationale. Each such type is stamped with a glyph naming what it does:
-`killzone` → **skulls**, `force` → **flow arrows**, `anchor` → a **grate mesh**.
+`killzone` → **skulls**, `force` → **flow arrows**, `water` → **streaks**, `finish` → **chequers**, `anchor` → a **grate mesh**.
 
 `render/areaGlyphs.ts` holds the glyph geometry as plain closed polygons emitted into an
 abstract `PolyPath` sink, so the game canvas, the level editor and the headless SVG snapshot
 stamp identical marks from one source (`CanvasRenderingContext2D` satisfies the sink as-is;
 `svgFrame.ts` has a small writer that turns it into path data). `render/areaFill.ts` wraps it
-for canvas as `fillForceArea` / `fillKillZone` / `fillAnchor`.
+for canvas as `fillForceArea` / `fillKillZone` / `fillWaterArea` / `fillFinish` / `fillAnchor`.
 
 The fill is one **even-odd** path — outline plus glyph polygons, clipped to the outline — so
 glyphs are **cutouts** showing whatever is behind, legible against any authored colour
@@ -170,3 +170,10 @@ snapshot pins the phase at 0 so a frame render never depends on the wall clock. 
 grate is the same machinery on a much finer pitch (7 cm holes on a 10 cm lattice, so 3 cm
 bars) and static —
 its holes are literally holes, so the backdrop shows through the body.
+
+A **finish line**'s chequer is the one glyph that fills its cell rather than sitting as a mark
+inside it: a chequer is only a chequer if the squares meet, so the cut square *is* the cell
+(20 cm, about one ball across) and what is left standing is the cells beside it. It is static
+for the reason the skulls are, and its wash is much thinner than theirs — a killzone is drawn
+to be avoided and can afford to shout, while a finish line is drawn around the gantry the
+player is aiming at, and an opaque chequerboard over a gate hides the thing being aimed at.

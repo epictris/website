@@ -5,9 +5,10 @@
 // through — so they must never be mistakable for geometry in a screenshot (see
 // docs/game-design.md, "Areas must read as areas"). Each area type carries a
 // glyph saying what it does: a force area flows arrows along its push, a
-// killzone is stamped with skulls. Hook-only anchor geometry is pass-through in
-// the same way (only the hook touches it) and falls under the same rule: it is
-// punched with a grate lattice so it never reads as something to stand on.
+// killzone is stamped with skulls, a finish line with chequers. Hook-only
+// anchor geometry is pass-through in the same way (only the hook touches it)
+// and falls under the same rule: it is punched with a grate lattice so it never
+// reads as something to stand on.
 //
 // The glyphs are emitted as polygons into a `PolyPath` sink rather than drawn,
 // so the canvas renderer, the level editor and the headless SVG snapshot all
@@ -44,6 +45,11 @@ const STREAK_THICKNESS = 0.035;
 // holes on a 10 cm lattice leave 3 cm of bar between them.
 const GRATE_SPACING = 0.1;
 const GRATE_BAR = 0.03;
+// One square of a finish line's chequer, in metres. It is both the mark and the
+// lattice pitch (see `finishGlyphs`), and at 20 cm the 24 cm ball is about one
+// square across - so the chequer reads as a chequer rather than as stripes at
+// the size a gate the ball fits through is actually authored at.
+const CHEQUER = 0.2;
 // Perf guard for a level-sized area. Past this the lattice is thinned (glyphs
 // keep their size); it only bites well beyond a screenful.
 const MAX_GLYPHS = 1200;
@@ -255,5 +261,26 @@ export function anchorGlyphs(p: PolyPath, half: Vec2, circle: boolean): void {
     0,
     (x, y) => holeGlyph(p, x, y, GRATE_SPACING - GRATE_BAR),
     GRATE_SPACING,
+  );
+}
+
+// The chequers of a finish line, in its local frame: every other cell of the
+// lattice cut out, so the even-odd fill leaves a chequerboard standing. Static,
+// for the reason the skulls are - a finish line does not flow.
+//
+// The one glyph that FILLS its cell rather than sitting as a mark inside it: a
+// chequer is only a chequer if the squares meet, so the cut square IS the cell
+// and what is left is the cells beside it. It is the same mark the 3D prop
+// carries (see `finish-line` in `MESH_ASSETS`), so the 2D renderer and the
+// dressed level say the same thing about the same body.
+export function finishGlyphs(p: PolyPath, half: Vec2, circle: boolean): void {
+  lattice(
+    half,
+    circle,
+    0,
+    (x, y, ix, iy) => {
+      if ((ix + iy) % 2 === 0) holeGlyph(p, x, y, CHEQUER);
+    },
+    CHEQUER,
   );
 }

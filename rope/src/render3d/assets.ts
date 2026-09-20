@@ -2351,39 +2351,27 @@ function rock(node: string): MeshAsset {
 }
 
 export const MESH_ASSETS: Record<string, MeshAsset> = {
-  // A rusty cast bell on a yoke - the thing a level ENDS at (see
-  // `LevelBodyData.bell` and docs/levels.md). One material with a base, a
-  // normal and a metallic-roughness map, all 1k; no emission, so `wakeEmission`
-  // has nothing to do here.
+  // A chequered gantry: two posts, a banner across the top and a band of
+  // chequers at the bottom - the thing a level ENDS at (see the `finish` body
+  // kind and docs/levels.md). UNTEXTURED, which is why it is 6 KB: the chequers
+  // are geometry with two flat materials on them, so there is nothing to
+  // download but the mesh and nothing to bake.
   //
-  // 333 x 350 x 333 of the file's own units, which are centimetres, and
-  // `--center` re-origined it on that box because the export put the origin a
-  // bell's height below the geometry - a prop placed by a point that is not on
-  // it is a prop that appears to hang in the wrong place.
+  // 6.47 x 6.18 x 1.43 of the file's own units, which are metres, and the
+  // origin is on the ground between the posts - the point a gantry is placed
+  // by - so it keeps its own (no `--center`).
   //
-  // `scale` is a LEVEL-DESIGN number rather than a conversion, and it was
-  // chosen by eye in the level (Tris, 2026-09-20): 0.01 would be the file's own
-  // 3.5 m, a cathedral bell; 0.003 was a metre of bell and read as far too big
-  // beside a 24 cm ball. 0.00015 is 5.3 cm - a hand bell hung from a beam,
-  // which is what the end of a level wants.
+  // `scale` is a LEVEL-DESIGN number rather than a conversion: the file's own
+  // 6.2 m is a real gantry beside real people, and the ball is 24 cm.
   //
-  // WHAT IT IS NOT is the bell's MASS. A 5 cm casting weighs a couple of
-  // hundred grams, and a 52 kg ball hanging off its rope would whip it round
-  // and round; the bell body's collision circle is what carries the inertia
-  // instead, and it is sized for the swing rather than for the outline (see
-  // docs/levels.md). The circle is in nothing's way, so nothing but the mass
-  // sum ever reads it.
-  //
-  // 3,553 triangles is already a prop's count, so it wears no `simplify`.
-  bell: {
-    file: "/meshes/bell.glb",
-    sha256: "26519a55fc3ac58ba851fa66f173fc24872a989450868b1b844f45e21afdae6c",
-    bytes: 415096,
-    center: true,
-    scale: 0.00015,
-    source: "https://sketchfab.com/3d-models/bell-897bc8230df54a1cad474492771880d8",
-    author: "jQueary",
-    license: "CC BY 4.0",
+  // 320 triangles, so it wears no `simplify` - there is nothing to take off it.
+  "finish-line": {
+    file: "/meshes/finish-line.glb",
+    sha256: "b286b923ede9778f5a0e4382aebc812d91786c28ab54a6a3057fc1b083b297ca",
+    bytes: 6156,
+    source: "https://sketchfab.com/3d-models/finish-line-7ec1d8194ddf46e6b398d336df0b5d7a",
+    author: "hyd (@hydroh)",
+    license: "Sketchfab Standard",
   },
   // A wall-mounted bulkhead lamp. Its material ships an EMISSION MAP, so the
   // glass reads as lit on its own (via `wakeEmission` - the export carries no

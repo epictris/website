@@ -224,7 +224,7 @@
         align-items: center;
         justify-content: center;
         /* Over the level rather than instead of it: the scene is still being
-           drawn behind this, with the bell still swinging. */
+           drawn behind this, at the pose the last step left. */
         background: rgba(31, 36, 48, 0.88);
         color: #cbccc6;
         font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -240,7 +240,7 @@
         padding: 1.5rem;
         box-sizing: border-box;
       }
-      #complete-rung { color: #65bddb; letter-spacing: 0.22em; margin: 0 0 0.35rem; }
+      #complete-eyebrow { color: #65bddb; letter-spacing: 0.22em; margin: 0 0 0.35rem; }
       #complete-heading { margin: 0 0 1.25rem; font: inherit; font-weight: normal; }
       #complete-stars { display: flex; gap: 0.5ch; margin-bottom: 1.25rem; }
       .complete-star {
@@ -307,7 +307,7 @@
     </div>
     <div id="complete" hidden>
       <div id="complete-panel">
-        <p id="complete-rung">Rung</p>
+        <p id="complete-eyebrow">Finished</p>
         <h2 id="complete-heading"></h2>
         <div id="complete-stars" role="group" aria-label="Rating"></div>
         <textarea id="complete-comment" placeholder="Anything to say about it? (optional)"></textarea>

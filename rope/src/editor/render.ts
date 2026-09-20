@@ -7,7 +7,7 @@ import { PIXELS_PER_METER, PX } from "../engine/units";
 import { worldToScreen, type Camera } from "../render/camera";
 import { drawTrainingGrid } from "../render/trainingGrid";
 import { fillDecor } from "../render/decor";
-import { fillAnchor, fillForceArea, fillKillZone, fillWaterArea } from "../render/areaFill";
+import { fillAnchor, fillFinish, fillForceArea, fillKillZone, fillWaterArea } from "../render/areaFill";
 import { hexToRgba } from "../render/color";
 import {
   arrowEnds,
@@ -58,7 +58,6 @@ import {
   DEFAULT_VIEWPORT_SCALE,
   moveModeCloses,
 } from "../level/levelFormat";
-import { BELL_RING_ANGLE } from "../level/ballLevel";
 import { MASK_ALL } from "../engine/body";
 import {
   pathOutline,
@@ -1403,29 +1402,6 @@ function drawGroupMarks(
       ctx.arc(axle.x, axle.y, ar / 3, 0, Math.PI * 2);
       ctx.fillStyle = GROUP_MARK;
       ctx.fill();
-      // THE END BELL (see `LevelBodyData.bell`), marked on the canvas the way
-      // the bearing under it is and for the same reason: a level's one bell
-      // looks exactly like every other pivot body, and which one it is decides
-      // whether the level can be finished. The threshold arcs are the mark -
-      // two ticks at ±BELL_RING_ANGLE about the bearing, at the distance the
-      // body's own mass sits from it, so what is drawn is how far this bell
-      // actually has to swing.
-      if (leadCollision.bell) {
-        const arm = bodyCentroid(allMembers).sub(axle);
-        const r = Math.max(arm.length(), ar * 2);
-        const rest = arm.lengthSquared() > 1e-12 ? Math.atan2(arm.y, arm.x) : Math.PI / 2;
-        ctx.lineWidth = worldLine * 1.5;
-        for (const side of [-1, 1]) {
-          const a = rest + side * BELL_RING_ANGLE;
-          ctx.beginPath();
-          ctx.moveTo(axle.x + Math.cos(a) * r * 0.8, axle.y + Math.sin(a) * r * 0.8);
-          ctx.lineTo(axle.x + Math.cos(a) * r * 1.15, axle.y + Math.sin(a) * r * 1.15);
-          ctx.stroke();
-        }
-        ctx.beginPath();
-        ctx.arc(axle.x, axle.y, r, rest - BELL_RING_ANGLE, rest + BELL_RING_ANGLE);
-        ctx.stroke();
-      }
     }
     // A spring body's mounting, always, and for the same reason the axle is
     // drawn: being spring-mounted is invisible on the geometry itself, so
@@ -2021,6 +1997,14 @@ export function drawEditor(
       );
     } else if (body.kind === "killzone") {
       fillKillZone(
+        ctx,
+        body.pos,
+        body.rot,
+        outlineOf(body),
+        paint(hexToRgba(body.color, body.opacity)),
+      );
+    } else if (body.kind === "finish") {
+      fillFinish(
         ctx,
         body.pos,
         body.rot,

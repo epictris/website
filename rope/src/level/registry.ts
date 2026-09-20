@@ -42,14 +42,13 @@ import cameraTestJson from "../../levels/camera-test.json";
 // to the stone floor (see `level/breakable.ts`). Hand-authored, like the rail,
 // mud and camera sandboxes.
 import breakTestJson from "../../levels/break-test.json";
-// The bell sandbox: a floor, a beam, and the end bell hanging off it with its
-// toll rope, and nothing else in the level to be distracted by (see
-// `LevelBodyData.bell` and docs/levels.md). It exists so the swing can be
-// PLAYED before its numbers are pinned - the spring, the damping, the bell's
-// mass and the ring threshold - which is what the working practice in
-// `rope/CLAUDE.md` asks for and what a bell placed straight into `ball.json`
-// would have skipped.
-import bellTestJson from "../../levels/bell-test.json";
+// The finish sandbox: a floor, a beam to swing from, and the finish gantry at
+// the end of it, with nothing else in the level to be distracted by (see the
+// `finish` body kind and docs/levels.md). It exists so the gate can be PLAYED
+// before it is placed - how big it wants to be, and whether a swing can miss it
+// - which is what the working practice in `rope/CLAUDE.md` asks for and what a
+// gantry dropped straight into `ball.json` would have skipped.
+import finishTestJson from "../../levels/finish-test.json";
 
 export const LEVELS: Record<string, LevelSpec> = {
   LEVEL_2: {
@@ -101,9 +100,9 @@ export const LEVELS: Record<string, LevelSpec> = {
   // Camera regions that blend, and a priority island that does not (see
   // `docs/camera.md`). Nothing to grapple: roll right and watch the framing.
   CAMERA_TEST: { data: cameraTestJson as RawLevelData, controller: "ball", file: "camera-test" },
-  // The end bell on its own, to hook the toll rope and haul (see
+  // The finish gantry on its own, to swing through and to roll into (see
   // `docs/levels.md`). Unlisted like every other sandbox.
-  BELL_TEST: { data: bellTestJson as RawLevelData, controller: "ball", file: "bell-test" },
+  FINISH_TEST: { data: finishTestJson as RawLevelData, controller: "ball", file: "finish-test" },
   // The ball & chain controller in the grapple arena, kept for A/B comparison.
   BALL_LEVEL_2: { data: LEVEL_2, controller: "ball" },
 };
@@ -128,8 +127,8 @@ export interface ListedLevel {
 //
 // FILE-BACKED BALL LEVELS ONLY, and both halves of that are deliberate. The
 // hand-written `TEST_*` specs in `testLevel.ts` are rigs with no geometry an
-// author owns, no bell to ring and no file to hash; the grapple levels are a
-// different controller that the completion flow has never been through. Both
+// author owns, no finish line to cross and no file to hash; the grapple levels
+// are a different controller the completion flow has never been through. Both
 // stay reachable by `?level=`, which is what `unlisted` says for a level file.
 //
 // Derived rather than a second list, so a level added to `LEVELS` is on the
