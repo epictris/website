@@ -242,6 +242,11 @@
       }
       #complete-eyebrow { color: #65bddb; letter-spacing: 0.22em; margin: 0 0 0.35rem; }
       #complete-heading { margin: 0 0 1.25rem; font: inherit; font-weight: normal; }
+      /* The question the stars are the answer to. Without it a row of stars is
+         a rating of something unstated - the level, the run, the game - and
+         five stars for "how fun" is a different answer from five stars for
+         "how hard". */
+      #complete-ask { margin: 0 0 0.5rem; color: #8a8f98; }
       #complete-stars { display: flex; gap: 0.5ch; margin-bottom: 1.25rem; }
       .complete-star {
         /* A star is bigger than the body text on purpose - it is the one thing
@@ -289,6 +294,16 @@
         outline: none;
       }
       #complete-skip { color: #8a8f98 !important; border-color: #313244 !important; }
+      /* Submit with nothing said is Skip under another name, so it is OFF until
+         there is something to send (see `render/feedbackForm.ts`). Dimmed and
+         `not-allowed` rather than hidden: a button that appears when you type
+         is a button nobody knew was coming. */
+      #complete-buttons button:disabled {
+        color: #5b6068;
+        border-color: #2a2f3c;
+        cursor: not-allowed;
+      }
+      #complete-buttons button:disabled:hover { background: transparent; border-color: #2a2f3c; }
     </style>
   </head>
   <body>
@@ -309,7 +324,8 @@
       <div id="complete-panel">
         <p id="complete-eyebrow">Finished</p>
         <h2 id="complete-heading"></h2>
-        <div id="complete-stars" role="group" aria-label="Rating"></div>
+        <p id="complete-ask">How fun was this level?</p>
+        <div id="complete-stars" role="group" aria-label="How fun was this level?"></div>
         <textarea id="complete-comment" placeholder="Anything to say about it? (optional)"></textarea>
         <div id="complete-buttons">
           <button id="complete-submit" type="button">Submit</button>

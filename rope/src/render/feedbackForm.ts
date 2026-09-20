@@ -11,7 +11,8 @@
 // Both optional, and that is the point rather than a convenience: a form that
 // insists on a rating collects a rating from people who did not have one, which
 // is worse than no answer. Skip is a first-class outcome and is recorded as a
-// completion with nothing said.
+// completion with nothing said - which is why SUBMIT is dark until one of the
+// two has been filled in: an empty submission is a skip that cost a round trip.
 
 import { MAX_COMMENT, type Stars } from "../playtest/feedback";
 
@@ -43,7 +44,7 @@ export function showFeedbackForm(opts: FeedbackFormOptions): Promise<void> {
   const heading = document.getElementById("complete-heading");
   const starsEl = document.getElementById("complete-stars");
   const commentEl = document.getElementById("complete-comment") as HTMLTextAreaElement | null;
-  const submitEl = document.getElementById("complete-submit");
+  const submitEl = document.getElementById("complete-submit") as HTMLButtonElement | null;
   const skipEl = document.getElementById("complete-skip");
   // A page whose markup has no form in it (the editor, `shot.html`) resolves
   // rather than throwing - the same courtesy `LoadingScreen` extends to a page
@@ -63,6 +64,15 @@ export function showFeedbackForm(opts: FeedbackFormOptions): Promise<void> {
   // which `<button>` gives outright.
   starsEl.innerHTML = "";
   const buttons: HTMLButtonElement[] = [];
+  // SUBMIT IS OFF UNTIL THERE IS SOMETHING TO SEND. An empty submission and a
+  // skip are the same act - the level was finished and nothing was said - so
+  // offering both was offering the same button twice, and the one that POSTs a
+  // blank rating is the one that costs a round trip to say nothing.
+  //
+  // Disabled rather than hidden, and Skip stays lit beside it, so the way out
+  // of an empty form is always visible (see `#complete-buttons button:disabled`
+  // in index.html).
+  const said = (): boolean => stars !== null || commentEl.value.trim() !== "";
   const paint = (): void => {
     for (const [i, b] of buttons.entries()) {
       const on = stars !== null && i < stars;
@@ -70,6 +80,7 @@ export function showFeedbackForm(opts: FeedbackFormOptions): Promise<void> {
       b.dataset.on = on ? "1" : "0";
       b.setAttribute("aria-pressed", on ? "true" : "false");
     }
+    submitEl.disabled = !said();
   };
   for (let i = 1; i <= 5; i++) {
     const b = document.createElement("button");
@@ -95,6 +106,7 @@ export function showFeedbackForm(opts: FeedbackFormOptions): Promise<void> {
       done = true;
       root.setAttribute("hidden", "");
       document.removeEventListener("keydown", onKey, true);
+      commentEl.removeEventListener("input", paint);
       resolve();
     };
     const onSubmit = (): void => {
@@ -114,6 +126,9 @@ export function showFeedbackForm(opts: FeedbackFormOptions): Promise<void> {
         onSkip();
       }
     };
+    // Typing is the other half of what turns Submit on, so the comment drives
+    // the same repaint the stars do.
+    commentEl.addEventListener("input", paint);
     submitEl.addEventListener("click", onSubmit, { once: true });
     skipEl.addEventListener("click", onSkip, { once: true });
     document.addEventListener("keydown", onKey, true);
