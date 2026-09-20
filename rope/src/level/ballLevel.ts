@@ -74,9 +74,26 @@ import { Mathf } from "../engine/mathf";
 // makes "ringing" mean the same act in all of them, and the thing an author
 // tunes per bell is the spring and the arm, which are on the body.
 //
-// 0.35 rad is about 20 degrees: past the swing a hanging bell takes from being
-// brushed, and comfortably inside what one haul on the toll rope buys.
-export const BELL_RING_ANGLE = 0.35;
+// 0.25 rad, about 14 degrees, and it is one end of a MARGIN rather than a
+// number on its own: pulling DOWN on the toll rope is what rings a bell (Tris,
+// 2026-09-20), so what this has to sit between is the swing the rope's own
+// hanging weight puts on the bell and the swing the player's does.
+//
+// Measured on the sandbox assembly (`levels/bell-test.json`), as a fraction of
+// the ball's own 511 N leaned on the rope:
+//
+//     0%  (the sally alone)  0.035 rad     <- must NOT ring
+//    10%   51 N              0.216
+//    20%  102 N              0.337         <- rings
+//    50%  256 N              0.529
+//   100%  511 N              0.652
+//
+// So a seventh of the player's weight rings it and the rope hanging there for
+// ever does not, which is a seven-fold margin either side. The other half of
+// that margin is the assembly - the rope leaves the bell OFF its centreline so
+// a straight pull has a lever at all, and the bell's collision circle carries
+// enough inertia that the pull swings it rather than whipping it round.
+export const BELL_RING_ANGLE = 0.25;
 
 // How long the swing is watched after the ring before the page freezes it (see
 // `main.ts`). A second, which is one full swing of a 0.6 Hz bell: the ring is

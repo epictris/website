@@ -36,11 +36,33 @@ The assembly is three things:
 - **The bell**: a `rigid` body with `pivot: true`, its bearing (`pivotX`/`pivotY`) at its yoke, a torsion return spring (`pivotFreq`, `pivotDamping`), and `bell: true`.
   Its collision shapes **pass everything** (`passes: ["player", "hook", "chain"]`): the body is in the world so the rope has something with inertia to pull on, and it is in the way of nothing, so the rope is the only handle.
   Without that a level is finished by rolling into the bell.
-- **The toll rope**: a scene chain (`ChainData`) from an anchor on the bell.
-- **The sally**: a free `rigid` body on the other end of that chain - the grip the player hooks and hauls on.
+- **The toll rope**: a scene chain (`ChainData`) from an anchor **on the bell's rim**, not under its bearing.
+  That is a bell WHEEL and it is the whole of why a straight pull rings it: a rope hanging directly below the bearing has no lever arm at all, so it can only be rung by swinging the rope about, which is not what hauling on a bell rope means.
+- **The sally**: a free `rigid` body on the other end of that chain - the grip the player hooks and pulls down on.
+
+### Sizing it
+
+The bell is a **5.3 cm hand bell** (`MESH_ASSETS.bell`, `scale: 0.00015`), and that raises the one problem the assembly has to solve: a 5 cm casting weighs a couple of hundred grams, and a 52 kg ball hanging off its rope would whip it round and round for ever.
+
+So the bell's **collision circle is its mass, not its outline**, and the mass knob is `thickness`.
+The circle still MATCHES the bell (2.6 px, the bell's own radius), because an anchor is snapped to its body's surface - a circle bigger than the bell would hang the rope in mid-air beside it, which is exactly what a 10 px circle looked like.
+`thickness` is what a piece's mass is computed from and is never read for the look (see `CollisionObjectData.thickness`), so 200 px through z on a 5 cm bell is invisible everywhere and is what buys the 48 kg that makes a pull **swing** the bell.
+
+The numbers, measured on `levels/bell-test.json` as a fraction of the ball's own 511 N leaned on the rope:
+
+| Pull | | Swing |
+|---|---|---|
+| the sally hanging on its own | 0 N | 0.018 rad |
+| a tenth of the player's weight | 51 N | 0.158 |
+| a fifth | 102 N | 0.270 |
+| half | 256 N | 0.477 |
+| the whole of it | 511 N | 0.557 |
+
+`BELL_RING_ANGLE` sits at 0.25 in the middle of that: about a fifth of the player's weight rings it, and the rope hanging there for ever does not.
 
 A **scene chain and a rigid sally**, rather than a vine.
-A vine is the thing the hook grabs anywhere along its length, which reads like the better fit, and it is the wrong one twice over: a vine's load rope pulls on its anchor body only through the link that is held, and the anchor body a vine hangs from is not on the chain's path, so nothing keeps it awake - a sleeping body is not integrated, and the whole of a haul moved a bell hung on a vine 4e-4 rad.
+A vine is the thing the hook grabs anywhere along its length, which reads like the better fit, and it is the wrong one twice over: a vine's load rope pulls on its anchor body only through the link that is held, and the anchor body a vine hangs from is not on the chain's path, so nothing keeps it awake - a sleeping body is not integrated, and the whole of a 500 N haul moved a bell hung on a vine 4e-4 rad.
+(That is a real gap in the vine load rope rather than a fact about bells: `docs/vines.md` says the load rope loads the body it is anchored to "a pivot body included", and while that body is asleep it does not. Nothing in the tree hangs a vine from a rigid body, so nothing is red; it wants a fix and a `cli vines` case of its own.)
 A scene chain holds both its bodies awake by construction (`SceneChain`), carries tension straight down the rope, and ends on a body the hook bites like any other.
 
 `bell: true` is a flag on the body rather than a kind, for the reason `pivot` itself is one: a bell **is** a pivot body with a meaning.
@@ -54,7 +76,7 @@ It is written only on a body that still has a bearing (`toLevelData`), since the
 if (completedFrame === null && |bell.globalRotation - bellRest| >= BELL_RING_ANGLE) completedFrame = frame;
 ```
 
-`BELL_RING_ANGLE` is 0.35 rad, about 20 degrees: past the swing a hanging bell takes from being brushed, and inside what one haul on the rope buys.
+`BELL_RING_ANGLE` is 0.25 rad, about 14 degrees, and it is one end of the margin the table above sets out rather than a number on its own.
 It is an ANGLE - dimensionless, unscaled - so it crosses `scaleLevelData` the way `swingAmp` does.
 
 Three properties hold it together:
@@ -64,7 +86,7 @@ Three properties hold it together:
 - **The ring is final.** `completedFrame` is written once and never clears; a reset builds a fresh level, which is what starts it over.
 
 Its detectors ship with it: `WorldDigest.bell` carries the swing off rest and whether it has rung (written only on a level that has a bell, so every older bundle compares exactly as it did), `worldDigestDrift` treats absent-on-both as equal and absent-on-one as a different scene, and `bell-rung-once` is the invariant that the ring never moves and never un-fires - the one shape of bug a per-frame check cannot see.
-`cli spring`'s `bell-ring` asserts the mechanism: a haul on the rope turns the bell and rings it once, and the same rig with the rope cut never rings however long it is hauled on.
+`cli spring`'s `bell-ring` asserts the mechanism and both ends of the margin: a pull DOWN on the rope turns the bell and rings it once, the same rig with the rope cut never rings however long it is hauled on, and the rope hanging there on its own never rings it either.
 It hauls the sally directly rather than throwing a scripted hook at it, because whether a pull on the rope rings the bell is a fact about the assembly and whether a player can land a hook on the sally is a fact about the arena - and only the first belongs in a unit case.
 
 ### Finishing a level

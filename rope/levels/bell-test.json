@@ -11,6 +11,13 @@
     "y": -20,
     "radius": 8
   },
+  "chains": [
+    {
+      "a": 1,
+      "b": 2,
+      "length": 278
+    }
+  ],
   "bodies": [
     {
       "kind": "static",
@@ -69,21 +76,22 @@
       "kind": "rigid",
       "pivot": true,
       "pivotX": 0,
-      "pivotY": -45,
+      "pivotY": -2.3,
       "pivotFreq": 0.5,
       "pivotDamping": 0.25,
       "bell": true,
       "x": 0,
-      "y": -355,
+      "y": -406.7,
       "rot": 0,
       "objects": [
         {
           "type": "collision",
           "shape": {
             "kind": "circle",
-            "r": 35
+            "r": 2.6
           },
-          "material": "brick",
+          "material": "lead",
+          "thickness": 200,
           "passes": [
             "player",
             "hook",
@@ -98,23 +106,23 @@
         {
           "type": "anchor",
           "id": 1,
-          "x": 0,
-          "y": 45
+          "x": 2.6,
+          "y": 0
         }
       ]
     },
     {
       "kind": "rigid",
       "x": 0,
-      "y": -120,
+      "y": -119.39999999999998,
       "rot": 0,
       "objects": [
         {
           "type": "collision",
           "shape": {
             "kind": "rect",
-            "w": 20,
-            "h": 60
+            "w": 4,
+            "h": 14
           },
           "material": "wood"
         },
@@ -122,8 +130,8 @@
           "type": "geometry",
           "shape": {
             "kind": "rect",
-            "w": 20,
-            "h": 60
+            "w": 4,
+            "h": 14
           },
           "matchCollision": true,
           "texture": "rusted iron"
@@ -132,7 +140,7 @@
           "type": "anchor",
           "id": 2,
           "x": 0,
-          "y": -30
+          "y": -7
         }
       ]
     }
@@ -140,20 +148,13 @@
   "notes": [
     {
       "kind": "text",
-      "x": -620,
-      "y": -220,
+      "x": -700,
+      "y": -250,
       "rot": 0,
-      "w": 520,
-      "h": 160,
+      "w": 580,
+      "h": 200,
       "size": 22,
-      "text": "BELL SANDBOX. The toll rope is a scene chain with a sally on the end of it - hook the sally and haul. The bell rings at 0.35 rad (20 deg) off where it settled. Numbers to judge: pivotFreq 0.5 Hz, pivotDamping 0.25, the brick disc's 146 kg, the 2.25 m chain, the sally's 11 kg."
-    }
-  ],
-  "chains": [
-    {
-      "a": 1,
-      "b": 2,
-      "length": 160
+      "text": "BELL SANDBOX. Hook the sally on the end of the toll rope and pull DOWN. The rope leaves the bell at its rim, like a bell wheel, so a straight pull turns it - about a fifth of your own weight is enough. The rope hanging there on its own is not. Rings at 0.25 rad off where it settled."
     }
   ]
 }

@@ -2361,10 +2361,18 @@ export const MESH_ASSETS: Record<string, MeshAsset> = {
   // bell's height below the geometry - a prop placed by a point that is not on
   // it is a prop that appears to hang in the wrong place.
   //
-  // `scale` is a LEVEL-DESIGN number rather than a conversion: 0.01 would be
-  // the file's own 3.5 m, which is a cathedral bell beside a 24 cm ball. 0.003
-  // is a metre of bell, about four ball-widths and a landmark at the end of a
-  // level without filling the frame.
+  // `scale` is a LEVEL-DESIGN number rather than a conversion, and it was
+  // chosen by eye in the level (Tris, 2026-09-20): 0.01 would be the file's own
+  // 3.5 m, a cathedral bell; 0.003 was a metre of bell and read as far too big
+  // beside a 24 cm ball. 0.00015 is 5.3 cm - a hand bell hung from a beam,
+  // which is what the end of a level wants.
+  //
+  // WHAT IT IS NOT is the bell's MASS. A 5 cm casting weighs a couple of
+  // hundred grams, and a 52 kg ball hanging off its rope would whip it round
+  // and round; the bell body's collision circle is what carries the inertia
+  // instead, and it is sized for the swing rather than for the outline (see
+  // docs/levels.md). The circle is in nothing's way, so nothing but the mass
+  // sum ever reads it.
   //
   // 3,553 triangles is already a prop's count, so it wears no `simplify`.
   bell: {
@@ -2372,7 +2380,7 @@ export const MESH_ASSETS: Record<string, MeshAsset> = {
     sha256: "26519a55fc3ac58ba851fa66f173fc24872a989450868b1b844f45e21afdae6c",
     bytes: 415096,
     center: true,
-    scale: 0.003,
+    scale: 0.00015,
     source: "https://sketchfab.com/3d-models/bell-897bc8230df54a1cad474492771880d8",
     author: "jQueary",
     license: "CC BY 4.0",
