@@ -1,4 +1,8 @@
 {
+  "meta": {
+    "title": "Introduction",
+    "intro": true
+  },
   "cameraRegions": [
     {
       "x": 1660.0000000000005,

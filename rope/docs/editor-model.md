@@ -31,6 +31,13 @@ The draw tools are per-layer too (`LAYER_TOOLS`): `scene` offers `+Rect`/`+Circl
 It is placed with a click at a reach worth having and a drag overrides that - the rule a note is placed under, and for the same reason: dropping a lamp that reaches nowhere until a field is typed into is a lamp that looks broken.
 A fresh item's appearance comes from `newItemStyle`, keyed by what is being DRAWN rather than by the layer alone (the scene layer draws two different things): a shape starts at the body defaults, a light at a warm flame it then authors away from, and camera regions and notes at their fixed editor-furniture colours.
 
+Two panels sit above the selection and are always shown, because what they edit is the **level** rather than anything in it: **Level** (the title, `intro` and `unlisted` - see [**Levels**](levels.md)) and **Environment** (the light and air).
+Both are carried through the model for the same reason the spawn's `hang` flag is: the editor rewrites the whole file, so a block the model does not know about is a block the first autosave deletes, and nothing about that loss is visible in the editor - the scene is rebuilt from the model, so it goes on looking however the model says.
+A level that touches neither panel writes neither block, which is what keeps every level from before them byte-identical through a save.
+
+A pivot rigid body's panel carries **`end bell`** beside the bearing's own fields, and only while `pivot` is ticked - the ring is a swing about a bearing, so a control for a body with none would be a control with nothing behind it (see [**The bell**](levels.md#the-bell)).
+A bell is marked on the canvas the way its bearing is: an arc about the axle at ±`BELL_RING_ANGLE`, drawn at the distance the body's own mass sits from it, so what the author sees is how far *this* bell has to swing.
+
 The camera panel carries `off x`/`off y`, `view ×`, `lock x`/`lock y`, `blend s`, `buffer`, `falloff` and `priority`, plus `buf left`/`buf right`/`buf top`/`buf bottom` on a rect region.
 A lock is a checkbox plus a value: ticking it seeds the lock from the region's own centre (the sane start for "frame this room"), unticking shows `follow`; a blank `blend s` or `buffer` means the controller default, and a blank per-side buffer means the `buffer` above it.
 A region draws as a dashed violet volume labelled with what it does (`cam · off 0,-250 · view ×1.8 · lock xy · buf 200`), and a locked axis draws a gold guide — a line across the region for one axis, a crosshair at the pinned point for both.

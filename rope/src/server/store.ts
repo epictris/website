@@ -178,6 +178,9 @@ function validateMeta(m: unknown): SessionMeta {
     // Absent on every page that did not ask for a named spawn, which is most of
     // them and every one from before checkpoints existed.
     !(m.checkpoint === undefined || m.checkpoint === null || isStr(m.checkpoint, 64)) ||
+    // Absent on every page from before the field, and on every level that is
+    // not a file - the same rule the checkpoint above follows.
+    !(m.levelHash === undefined || m.levelHash === null || isStr(m.levelHash, 64)) ||
     !(m.nick === null || isStr(m.nick, 40)) ||
     !(m.device === "mouse" || m.device === "gamepad" || m.device === "touch") ||
     !isStr(m.ua, 1000) ||
@@ -195,6 +198,7 @@ function validateMeta(m: unknown): SessionMeta {
     srcHash: m.srcHash,
     level: m.level,
     ...(typeof m.checkpoint === "string" ? { checkpoint: m.checkpoint } : {}),
+    ...(typeof m.levelHash === "string" ? { levelHash: m.levelHash } : {}),
     nick: m.nick,
     device: m.device,
     ua: m.ua,

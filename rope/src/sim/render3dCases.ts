@@ -2862,6 +2862,121 @@ function checkpointFormat(): CaseResult[] {
   ];
 }
 
+// THE LEVEL BLOCK and the BELL FLAG (see `LevelMetaData` and
+// `LevelBodyData.bell`), held to the two things that carry them.
+//
+// Neither is a length, so both have to cross `scaleLevelData` untouched - the
+// units trap the trampoline's `bounce`/`launch` pair sets, and the same silent
+// failure: a title is not a number, but a field the scaler does not enumerate is
+// DROPPED rather than reported, and the loss shows up as a level that has fallen
+// off the menu with nothing to say why.
+//
+// And the editor rewrites the whole file every 750 ms, so a block it does not
+// carry is a block deleted the first time the level is opened. That is what the
+// `hang` flag and the `environment` block each cost an afternoon to learn, and
+// it is what `EdModel.meta` exists for.
+function levelMetaFormat(): CaseResult[] {
+  const authored: RawLevelData = {
+    meta: { title: "The Long Fall", intro: true },
+    player: { x: 0, y: 0, radius: 8 },
+    bodies: [
+      {
+        kind: "static",
+        x: 0,
+        y: 300,
+        rot: 0,
+        objects: [{ type: "collision", shape: { kind: "rect", w: 300, h: 40 } }],
+      },
+      {
+        // The bell: a pivot rigid body on a bearing at its yoke, in nothing's
+        // way, with an anchor at the clapper for the toll rope to hang from.
+        kind: "rigid",
+        pivot: true,
+        pivotX: 0,
+        pivotY: -20,
+        pivotFreq: 0.6,
+        pivotDamping: 0.25,
+        bell: true,
+        x: 100,
+        y: -100,
+        rot: 0,
+        objects: [
+          { type: "collision", shape: { kind: "circle", r: 18 }, passes: ["player", "hook", "chain"] },
+          { type: "anchor", id: 7, x: 0, y: 18 },
+        ],
+      },
+    ],
+    vines: [{ anchor: 7, length: 250 }],
+  };
+
+  const meta = (d: LevelData): string => JSON.stringify(d.meta);
+  const a = meta(scaleLevelData(normalizeLevelData(authored), 1));
+  const b = meta(scaleLevelData(scaleLevelData(normalizeLevelData(authored), PX), PIXELS_PER_METER));
+  const scaled = scaleLevelData(normalizeLevelData(authored), PX);
+  // A title is not a length and a bearing is: the block crosses whole while the
+  // geometry beside it converts, which is the split that says the scaler read
+  // both and mixed neither up.
+  const units =
+    scaled.meta?.title === "The Long Fall" &&
+    scaled.meta.intro === true &&
+    scaled.bodies[1]!.bell === true &&
+    scaled.bodies[1]!.pivotY === -0.2;
+
+  const saved = modelToDisk(modelFromDisk(authored));
+  const kept =
+    saved.meta?.title === "The Long Fall" &&
+    saved.meta.intro === true &&
+    saved.meta.unlisted === undefined &&
+    saved.bodies[1]!.bell === true;
+  // ...and a level that authors NO block writes none, which is what keeps every
+  // level from before the field byte-identical through a save.
+  const { meta: _dropped, ...bare } = authored;
+  const bareSaved = modelToDisk(modelFromDisk(bare as RawLevelData));
+  const silent = bareSaved.meta === undefined;
+
+  // A `bell` on a body whose bearing has been cleared is a flag nothing reads,
+  // so it is not written: a file saying a wall is a bell is a file the lint
+  // would then have to argue with.
+  const unpivoted: RawLevelData = {
+    ...authored,
+    bodies: [
+      authored.bodies[0]!,
+      { ...(authored.bodies[1] as LevelBodyData), pivot: false },
+    ],
+  };
+  const dropped = modelToDisk(modelFromDisk(unpivoted)).bodies[1]!.bell === undefined;
+
+  return [
+    {
+      name: "level format: the level block round-trips px -> m -> px",
+      pass: a === b,
+      detail: a === b ? "byte-identical" : `\n  authored ${a}\n  round    ${b}`,
+    },
+    {
+      name: "level format: a title and the bell flag are not lengths, and the bearing beside them is",
+      pass: units,
+      detail: units
+        ? "title and `bell` unchanged, pivotY -20 px -> -0.2 m"
+        : JSON.stringify({ meta: scaled.meta, bell: scaled.bodies[1]!.bell, pivotY: scaled.bodies[1]!.pivotY }),
+    },
+    {
+      name: "editor: the level block and the bell survive a save",
+      pass: kept,
+      detail: kept ? "title, intro and `bell` all written back" : JSON.stringify({ meta: saved.meta, bell: saved.bodies[1]!.bell }),
+    },
+    {
+      name: "editor: a level that authors no level block still writes none",
+      pass: silent,
+      detail: silent ? "no `meta` key" : JSON.stringify(bareSaved.meta),
+    },
+    {
+      name: "editor: `bell` is not written on a body that is no longer a pivot",
+      pass: dropped,
+      detail: dropped ? "flag dropped with the bearing" : "a body with no bearing was saved as the bell",
+    },
+  ];
+}
+
 export function runRender3dCases(): CaseResult[] {
   return [
     ...renderNeedsGeometry(),
@@ -2892,5 +3007,6 @@ export function runRender3dCases(): CaseResult[] {
     ...waterFormat(),
     ...bounceFormat(),
     ...checkpointFormat(),
+    ...levelMetaFormat(),
   ];
 }

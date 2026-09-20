@@ -2246,9 +2246,12 @@ switch (cmd) {
   case "assets":
     void cmdAssets();
     break;
+  case "levels":
+    void cmdLevels();
+    break;
   default:
     fail(
-      "usage: cli <play|record|replay|dump|query|scan|trace|settle|compare|continue|render|shot|chainpath|fork|bundles|pull|playtest|restamp|selftest|latch|transport|clicks|ledges|corners|tangents|decompose|dmath|contacts|spring|movers|vines|rails|viscous|breaks|render3d|camera|assets> [file] [options]",
+      "usage: cli <play|record|replay|dump|query|scan|trace|settle|compare|continue|render|shot|chainpath|fork|bundles|pull|playtest|restamp|selftest|latch|transport|clicks|ledges|corners|tangents|decompose|dmath|contacts|spring|movers|vines|rails|viscous|breaks|render3d|camera|assets|levels> [file] [options]",
     );
 }
 
@@ -2425,6 +2428,27 @@ async function cmdAssets(): Promise<void> {
     if (!r.pass) failed++;
   }
   console.log(`[assets] ${results.length - failed}/${results.length} checks passed`);
+  process.exit(failed > 0 ? 1 : 0);
+}
+
+// The level FILES held to what the menu and the bell assume (src/level/levelLint.ts):
+// one bell per listed level, on a bearing, with a toll rope, in nothing's way,
+// one introduction, and no two titles the same. Pure and fast - no world is
+// built and no frame is stepped.
+async function cmdLevels(): Promise<void> {
+  const { runLevelChecks } = await import("../level/levelLint");
+  const { listedLevels } = await import("../level/registry");
+  for (const l of listedLevels()) {
+    console.log(`  ${l.intro ? "*" : " "} ${l.title}  (?level=${l.id})`);
+  }
+  const results = runLevelChecks();
+  let failed = 0;
+  for (const r of results) {
+    console.log(`  ${r.pass ? "PASS" : "FAIL"}  ${r.name}`);
+    if (!r.pass || process.env.VERBOSE) console.log(`        ${r.detail}`);
+    if (!r.pass) failed++;
+  }
+  console.log(`[levels] ${results.length - failed}/${results.length} checks passed`);
   process.exit(failed > 0 ? 1 : 0);
 }
 

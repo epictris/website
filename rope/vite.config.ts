@@ -12,7 +12,7 @@ import {
 import { execSync } from "node:child_process";
 import { gunzipSync } from "node:zlib";
 import { join } from "node:path";
-import { treeStamp, type TreeStamp } from "./src/sim/treeStamp";
+import { levelFileHash, treeStamp, type TreeStamp } from "./src/sim/treeStamp";
 import { DEFAULT_LEVEL, LEVELS } from "./src/level/registry";
 import type { RawLevelData } from "./src/level/levelFormat";
 import { levelStoredFiles } from "./src/render3d/levelAssets";
@@ -68,6 +68,66 @@ function treeStampPlugin(): Plugin {
   };
 }
 
+// The hash of each file-backed level's own bytes, exposed to the app as
+// `virtual:level-hashes` (see `levelFileHash` in src/sim/treeStamp.ts).
+//
+// A second stamp beside `virtual:tree-stamp` rather than a field on it, because
+// it answers a different question: `srcHash` says which TREE a run was played
+// on and moves when anything moves, and this says which LEVEL FILE a piece of
+// feedback is about and moves only when that file does. Two ratings of an
+// untouched level either side of a renderer edit carry different tree stamps
+// and the same level hash, which is exactly what makes them comparable.
+//
+// INVALIDATION IS THE LEVEL API'S, not the watcher's: `levels/*.json` is
+// deliberately outside vite's watcher (see `server.watch.ignored`), so
+// `handleHotUpdate` never fires for a level write. The level API's own watcher
+// is what sees those, and it calls `invalidateLevelHashes` below.
+const LEVEL_HASHES_ID = "virtual:level-hashes";
+const LEVEL_HASHES_RESOLVED = "\0" + LEVEL_HASHES_ID;
+
+// Set by the plugin so the level API's watcher can reach it. A module-level
+// hook rather than a shared object because the two plugins are constructed
+// independently and the config is loaded once.
+let invalidateLevelHashes: () => void = () => undefined;
+
+function levelHashesPlugin(): Plugin {
+  const root = import.meta.dirname;
+  let cached: Record<string, string> | null = null;
+
+  const build = (): Record<string, string> => {
+    const out: Record<string, string> = {};
+    for (const [id, spec] of Object.entries(LEVELS)) {
+      if (spec.file) out[id] = levelFileHash(root, spec.file);
+    }
+    return out;
+  };
+
+  return {
+    name: "level-hashes",
+    configResolved() {
+      invalidateLevelHashes = () => (cached = null);
+    },
+    resolveId(id) {
+      return id === LEVEL_HASHES_ID ? LEVEL_HASHES_RESOLVED : null;
+    },
+    load(id) {
+      if (id !== LEVEL_HASHES_RESOLVED) return null;
+      cached ??= build();
+      return `export const levelHashes = ${JSON.stringify(cached)};\n`;
+    },
+    configureServer(server) {
+      // The module graph has to be told as well as the cache: a page loaded
+      // after a level write must not be served the hash of the file as it was
+      // when the server started.
+      invalidateLevelHashes = () => {
+        cached = null;
+        const mod = server.moduleGraph.getModuleById(LEVEL_HASHES_RESOLVED);
+        if (mod) server.moduleGraph.invalidateModule(mod);
+      };
+    },
+  };
+}
+
 // Dev-only REST API backing the level editor's save/load-from-disk. Levels live
 // as JSON files under rope/levels/. Only reachable via `bun run dev`; the built
 // app has no server (the editor is a dev tool).
@@ -115,6 +175,9 @@ function levelApi(): Plugin {
       watch(dir, (_event, name) => {
         if (typeof name !== "string" || !name.endsWith(".json")) return;
         invalidate(join(dir, name));
+        // ...and the level-hash table, which is derived from these same bytes
+        // and has no watcher of its own for exactly the reason this one exists.
+        invalidateLevelHashes();
       });
 
       server.middlewares.use("/api/levels", (req, res) => {
@@ -398,5 +461,12 @@ export default defineConfig({
       },
     },
   },
-  plugins: [treeStampPlugin(), storeScript(), levelApi(), prodReplays(), editorRoute()],
+  plugins: [
+    treeStampPlugin(),
+    levelHashesPlugin(),
+    storeScript(),
+    levelApi(),
+    prodReplays(),
+    editorRoute(),
+  ],
 });

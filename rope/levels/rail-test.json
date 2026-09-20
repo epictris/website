@@ -1,4 +1,7 @@
 {
+  "meta": {
+    "unlisted": true
+  },
   "environment": {
     "envIntensity": 0.6
   },

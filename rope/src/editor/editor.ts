@@ -753,6 +753,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // Mutated in place by the environment panel exactly as `cam` and `light`
     // are, so a snapshot sharing it would alias the state it restores.
     environment: m.environment ? { ...m.environment } : undefined,
+    // Mutated in place by the Level panel, exactly as the environment block is
+    // and for the same reason: a shared reference would alias the state the
+    // undo is meant to be restoring.
+    meta: { ...m.meta },
   });
   const resetHistory = (): void => {
     history.length = 0;
@@ -3214,6 +3218,32 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         leads.length > 1,
         { disabled: !leads.some((b) => b.pivotFreq > 0) },
       );
+
+      // THE LEVEL'S END BELL (see `LevelBodyData.bell`), offered only on the
+      // mounting that can be one: the ring is a swing about the bearing, so a
+      // body with no bearing has nothing to measure. Inside the `pivot` branch
+      // rather than greyed beside it, which is the same answer the bearing's
+      // own fields give - a control for a mounting that is not on is a control
+      // with nothing behind it.
+      const bellBox = document.createElement("input");
+      bellBox.type = "checkbox";
+      bellBox.checked = leads.every((b) => b.bell);
+      bellBox.indeterminate = !bellBox.checked && leads.some((b) => b.bell);
+      bellBox.addEventListener("change", () => {
+        beginAction();
+        for (const b of leads) b.bell = bellBox.checked;
+        syncEditedBodies(leads);
+        markDirty();
+        rebuildInspector();
+      });
+      const bellWrap = el("label", "ed-field");
+      bellWrap.textContent = "end bell";
+      bellWrap.appendChild(bellBox);
+      g.appendChild(bellWrap);
+      const bellHint = el("div", "ed-hint");
+      bellHint.textContent =
+        "This body is the level's bell: swinging it far enough off the angle it settles at rings it and completes the level. Hang a vine from it for the player to hook and haul on, and keep the bell itself out of everything's way (clear player, hook and chain on its shapes) so the rope is the only handle. One per level.";
+      g.appendChild(bellHint);
     }
 
     const hint = el("div", "ed-hint");
@@ -5894,6 +5924,94 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     inspector.appendChild(g);
   }
 
+  // WHAT THIS LEVEL IS (`LevelMetaData`): its name on the level select, whether
+  // it is the introduction, and whether it is on the list at all. Level-wide
+  // like the environment block below, so it sits at the top of the inspector and
+  // is always shown.
+  //
+  // Authored here rather than hand-edited for the reason every other level-wide
+  // block is: the editor rewrites the whole file, so the only way to keep a
+  // field is to know about it, and a field the editor knows about is a field it
+  // may as well offer. A level that touches nothing here writes no block, which
+  // is what keeps every level from before the field byte-identical.
+  function buildLevelGroup(): void {
+    const g = el("div", "ed-group");
+    g.appendChild(heading("Level"));
+
+    const title = document.createElement("input");
+    title.className = "ed-text";
+    title.value = model.meta.title ?? "";
+    title.placeholder = currentName ?? "the file name";
+    title.title = "What the level select shows. Blank = the level's own id.";
+    // One undo step per editing session, snapshotted on the first keystroke -
+    // the rule the checkpoint name field and the note textarea both follow.
+    let edited = false;
+    title.addEventListener("blur", () => (edited = false));
+    title.addEventListener("input", () => {
+      if (!edited) {
+        beginAction();
+        edited = true;
+      }
+      // A title is one line, cleaned the way a checkpoint name is: it is shown
+      // in a list, and a pasted newline is a row that breaks the rule under it.
+      const text = title.value.replace(/\s+/g, " ").trim();
+      if (text) model.meta.title = text;
+      else delete model.meta.title;
+      markDirty();
+    });
+    g.appendChild(title);
+
+    const flag = (
+      label: string,
+      get: () => boolean,
+      set: (on: boolean) => void,
+      tip: string,
+    ): void => {
+      const wrap = el("label", "ed-field");
+      wrap.textContent = label;
+      const box = document.createElement("input");
+      box.type = "checkbox";
+      box.checked = get();
+      box.title = tip;
+      box.addEventListener("change", () => {
+        beginAction();
+        set(box.checked);
+        markDirty();
+        rebuildInspector();
+      });
+      wrap.appendChild(box);
+      g.appendChild(wrap);
+    };
+
+    flag(
+      "intro",
+      () => model.meta.intro === true,
+      (on) => {
+        if (on) model.meta.intro = true;
+        else delete model.meta.intro;
+      },
+      "Show this level first on the level select, above the rule. Exactly one listed level may be the introduction; `cli levels` is what says so.",
+    );
+    flag(
+      "unlisted",
+      () => model.meta.unlisted === true,
+      (on) => {
+        if (on) model.meta.unlisted = true;
+        else delete model.meta.unlisted;
+      },
+      "Keep this level off the level select. It is still played by ?level=ID - which is what the sandboxes are, and what a level that has no bell yet wants to be.",
+    );
+
+    const hint = el("div", "ed-hint");
+    hint.textContent = model.meta.unlisted
+      ? "Off the level select, reachable by ?level= only."
+      : model.meta.intro
+        ? "The first level on the level select."
+        : "On the level select, in alphabetical order of title. A listed level needs a bell to end at.";
+    g.appendChild(hint);
+    inspector.appendChild(g);
+  }
+
   // The level's light and air (`EnvironmentData`). Level-wide rather than
   // per-selection, so it sits with the player spawn at the top of the inspector
   // and is always shown.
@@ -6063,6 +6181,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     readouts.length = 0;
     noteText = null;
     inspector.innerHTML = "";
+
+    buildLevelGroup();
 
     const player = el("div", "ed-group");
     player.appendChild(heading("Player spawn"));
@@ -6705,6 +6825,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       pivotAt: null,
       pivotFreq: 0,
       pivotDamping: DEFAULT_SPRING_DAMPING,
+      // ...and a fresh body is not the level's bell; that is opted into on the
+      // pivot's own panel.
+      bell: false,
       springFreqX: 0,
       springFreqY: 0,
       springDamping: DEFAULT_SPRING_DAMPING,

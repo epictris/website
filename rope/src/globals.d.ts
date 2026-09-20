@@ -8,6 +8,15 @@ declare module "virtual:tree-stamp" {
   export const srcHash: string;
 }
 
+// The hash of each FILE-BACKED LEVEL's own bytes, by registry id, provided by
+// the `level-hashes` Vite plugin (see vite.config.ts and
+// `levelFileHash` in src/sim/treeStamp.ts). A narrower stamp than `srcHash`:
+// feedback about a level says which authored level it is about, and a rating is
+// still about the same level after a renderer edit has moved the tree.
+declare module "virtual:level-hashes" {
+  export const levelHashes: Record<string, string>;
+}
+
 // The byte store, inlined into every page as a plain script ahead of the module
 // graph so the level's download starts at first paint (see
 // `src/render3d/store.ts` for why it is a global rather than an export, and

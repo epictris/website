@@ -1032,6 +1032,21 @@ export interface LevelBodyData {
   // spring's own default.
   pivotFreq?: number;
   pivotDamping?: number;
+  // THE LEVEL'S END BELL. Swinging this body past `BELL_RING_ANGLE` from the
+  // angle it settled at, at build, rings it and completes the level (see
+  // `BallLevel.completedFrame` and `docs/levels.md`). At most one per level, and
+  // `cli levels` is what holds a listed level to having exactly one.
+  //
+  // Pivot rigid bodies only, because the mechanic IS the bearing: what the
+  // player hauls on is a vine anchored to the bell, and what that haul does is
+  // turn the body about its yoke against the torsion spring. A flag on the body
+  // rather than a kind, for the reason `pivot` itself is one - a bell is a
+  // pivot body with a meaning, not a different sort of thing.
+  //
+  // Absent = an ordinary body, which is every body in every level authored
+  // before the field, and a level with no bell runs no ring arithmetic at all
+  // (see `BallLevel.physicsProcess`), so every recording of one is unchanged.
+  bell?: boolean;
   // Rigid bodies only: anchor the body to its authored position through a
   // two-axis spring-damper. It sags under its own weight, sags further under a
   // load - a hanging player, a resting rock, rope tension - and springs back
@@ -2017,9 +2032,33 @@ export interface SpawnData {
   hang?: boolean;
 }
 
+// WHAT A LEVEL IS, as the level select needs to know it: a name to show, and
+// whether it is on the list at all.
+//
+// It is a block of its own rather than three fields on `LevelData` for the
+// reason `environment` is: these say nothing about the geometry, nothing scales,
+// and grouping them means the editor's Level panel, the registry's listing and
+// the lint are all reading one object. Everything in it is optional, so every
+// level authored before the block is a listed level named after its file.
+export interface LevelMetaData {
+  // What the level select shows. Absent = the registry id, which is what a
+  // level that has not been named yet reads as.
+  title?: string;
+  // The one level shown first, above the rule. Exactly one LISTED level may
+  // set it (`cli levels` is what holds that), and an unlisted level setting it
+  // is simply not on the list to be first on.
+  intro?: boolean;
+  // Off the level select; still playable by `?level=`. The sandboxes set it:
+  // they are instruments rather than levels, and none of them has a bell.
+  unlisted?: boolean;
+}
+
 export interface LevelData {
   player: SpawnData;
   bodies: LevelBodyData[];
+  // What the level select shows (see `LevelMetaData`). Absent = a listed level
+  // named after its file, which is every level authored before the block.
+  meta?: LevelMetaData;
   // Camera-behaviour volumes (see CameraRegionData). Absent = the camera just
   // follows the avatar, which is what every level authored before this field did.
   cameraRegions?: CameraRegionData[];
@@ -2163,6 +2202,7 @@ export const LEGACY_BACKGROUND_OPACITY = 1;
 export interface RawLevelData {
   player: SpawnData;
   bodies: (LevelBodyData | LegacyBodyData)[];
+  meta?: LevelMetaData;
   backgrounds?: LegacyBackgroundData[];
   lights?: LegacyLightData[];
   cameraRegions?: CameraRegionData[];
@@ -3073,6 +3113,10 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
     ...(v.color !== undefined ? { color: v.color } : {}),
   }));
   return {
+    // A title and two flags: nothing in the block is a length, so it crosses
+    // the conversion whole - copied rather than shared, like the environment
+    // below and for the same reason.
+    ...(data.meta ? { meta: { ...data.meta } } : {}),
     ...(regions ? { cameraRegions: regions } : {}),
     ...(paths ? { cameraPaths: paths } : {}),
     // Nothing in the environment block is a length (see EnvironmentData), so it
@@ -3127,6 +3171,8 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
       ...(b.pivotY !== undefined ? { pivotY: b.pivotY * factor } : {}),
       ...(b.pivotFreq !== undefined ? { pivotFreq: b.pivotFreq } : {}),
       ...(b.pivotDamping !== undefined ? { pivotDamping: b.pivotDamping } : {}),
+      // A flag, not a length (see `LevelBodyData.bell`).
+      ...(b.bell !== undefined ? { bell: b.bell } : {}),
       // A spring frequency is a rate and a damping ratio is a ratio, so neither
       // is a length and neither scales - the same rule `drag` follows above,
       // and the reason `LevelBodyData.springFreqX` is authored as a frequency

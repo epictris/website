@@ -39,6 +39,14 @@ A spawn with `hang: true` opens the ball & chain run already on its anchor - see
 It anchors the chain; it does not lift the ball, so a level that starts hanging is authored by putting the spawn where the ball should *hang*, under something to hang from.
 The editor offers it as `hang` in the Player spawn group, and carries it through the model for the reason the environment block is carried: the editor writes the whole file back, so a field the model does not know about is a field the first autosave *deletes*.
 
+The **`meta`** block is what the level select reads: a `title` to show, `intro` for the one level shown first, and `unlisted` for a level that is off the menu but still played by `?level=` - see [**Levels**](levels.md).
+Nothing in it is a length, so it crosses `scaleLevelData` whole; everything in it is optional, so a level that authors no block is a listed level named after its registry id.
+The editor carries it through `EdModel.meta` and offers it as the **Level** panel, for the reason `hang` and the environment block are carried: a block the model does not know about is a block the first autosave deletes.
+
+A body may state that it is the level's **end bell**: `bell: true`, on a `pivot` rigid body, which is the body the player rings to complete the level - see [**The bell**](levels.md#the-bell).
+Like `pivot` itself it is a flag rather than a kind, and it is written only on a body that still has a bearing, since the ring is measured as a swing about one.
+`BELL_RING_ANGLE` (`level/ballLevel.ts`) is how far off the settled angle counts as a ring; it is an angle, so `scaleLevelData` leaves it - and every other field of the block - alone.
+
 A body may also state what it takes to DESTROY it: **`breakForce`** (newtons) and **`durability`** (hits), the breakable pair - see [**Breakable geometry**](breakable.md).
 Both are stated in the sim's own units and `scaleLevelData` leaves them alone, for the reason `drag` is left alone: the file's lengths are pixels because the editor draws in pixels, and neither a force nor a count is a length.
 

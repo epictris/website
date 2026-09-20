@@ -52,6 +52,9 @@ import { LoadingScreen } from "./render/loadingScreen";
 // The tree this page was served from, not the commit the dev server booted at
 // (see src/sim/treeStamp.ts).
 import { commit, dirty, srcHash } from "virtual:tree-stamp";
+// ...and the bytes of each authored LEVEL file, which is the narrower stamp a
+// piece of feedback is about (see src/sim/treeStamp.ts).
+import { levelHashes } from "virtual:level-hashes";
 
 const STEP = 1 / 60;
 // One real-time step plus at most one step of catch-up per rendered frame, and
@@ -99,6 +102,10 @@ const levelId = ((): string => {
   return LEVELS[requested] ? requested : DEFAULT_LEVEL;
 })();
 const levelSpec = LEVELS[levelId]!;
+// The bytes of the level FILE this page is playing, when it has one (see
+// `virtual:level-hashes`). "" for a level compiled in rather than authored on
+// disk, which is every `TEST_*` rig.
+const levelHash = levelHashes[levelId] ?? "";
 const isBall = levelSpec.controller === "ball";
 const baseZoom = isBall ? BALL_ZOOM : GRAPPLE_ZOOM;
 
@@ -406,6 +413,9 @@ const recorder = recordWanted
       // The named spawn this page was opened at, so a run streamed from an
       // invite link with `?checkpoint=` replays from where it was played.
       ...(checkpoint ? { checkpoint } : {}),
+      // The authored level's own bytes, so a run can be joined to the feedback
+      // about the same level file (see `SessionMeta.levelHash`).
+      ...(levelHash ? { levelHash } : {}),
       nick: playerNick(),
       device: detectDevice(),
       ua: navigator.userAgent,

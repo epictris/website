@@ -73,6 +73,7 @@ import {
   type ChainData,
   type VineData,
   type EnvironmentData,
+  type LevelMetaData,
   type LevelData,
   type RawLevelData,
   type LevelBodyData,
@@ -500,6 +501,12 @@ export interface EdItem {
   // spelled in a model whose fields are always present.
   pivotFreq: number;
   pivotDamping: number;
+  // Pivot bodies only: this body is the level's end bell (see
+  // `LevelBodyData.bell`). Per BODY like `pivot` itself, so `syncBodyProps`
+  // carries it across a compound one - half a bell is not a thing a level can
+  // mean, and the ring is measured on the body's rotation, which its pieces
+  // share.
+  bell: boolean;
   // Rigid bodies only: held at the authored position by a two-axis
   // spring-damper - sags under load, springs back (see
   // `LevelBodyData.springFreqX`). Frequencies in Hz, 0 = that axis pinned; a
@@ -832,6 +839,22 @@ export interface EdModel {
   // editor: the scene is rebuilt from the model, so it goes on looking however
   // the model says, and the loss only shows up next time the game loads the file.
   environment: EnvironmentData | undefined;
+  // What the level select shows (see `LevelMetaData`): the title, and whether
+  // this level is the introduction or off the list entirely.
+  //
+  // Carried here for the reason `environment` and `player.hang` are: the editor
+  // rewrites the whole file every 750 ms, so a block it does not know about is
+  // a block DELETED from disk the first time the level is opened - and nothing
+  // about that loss is visible in the editor, since the scene is rebuilt from
+  // the model. It only shows up as a level that has silently fallen off the
+  // menu.
+  //
+  // Always an object rather than `undefined`, unlike `environment`: its three
+  // fields are what the Level panel edits, and a panel that has to mint the
+  // block before it can write a title is a panel with a state to get wrong.
+  // Empty is what a level that authors nothing has, and an empty block is
+  // written back as no block at all (see `toLevelData`).
+  meta: LevelMetaData;
 }
 
 // Every field of the environment block, in the order the inspector shows them,
@@ -1234,6 +1257,7 @@ function fromLevelData(data: LevelData): EdModel {
       pivotAt,
       pivotFreq: b.pivotFreq ?? 0,
       pivotDamping: b.pivotDamping ?? DEFAULT_SPRING_DAMPING,
+      bell: b.bell === true,
       springFreqX: b.springFreqX ?? 0,
       springFreqY: b.springFreqY ?? 0,
       springDamping: b.springDamping ?? DEFAULT_SPRING_DAMPING,
@@ -1386,6 +1410,7 @@ function fromLevelData(data: LevelData): EdModel {
     pivotAt: null,
     pivotFreq: 0,
     pivotDamping: DEFAULT_SPRING_DAMPING,
+    bell: false,
     springFreqX: 0,
     springFreqY: 0,
     springDamping: DEFAULT_SPRING_DAMPING,
@@ -1482,6 +1507,7 @@ function fromLevelData(data: LevelData): EdModel {
     pivotAt: null,
     pivotFreq: 0,
     pivotDamping: DEFAULT_SPRING_DAMPING,
+    bell: false,
     springFreqX: 0,
     springFreqY: 0,
     springDamping: DEFAULT_SPRING_DAMPING,
@@ -1574,6 +1600,7 @@ function lightItem(
     pivotAt: null,
     pivotFreq: 0,
     pivotDamping: DEFAULT_SPRING_DAMPING,
+    bell: false,
     springFreqX: 0,
     springFreqY: 0,
     springDamping: DEFAULT_SPRING_DAMPING,
@@ -1645,6 +1672,7 @@ function lightItem(
     pivotAt: null,
     pivotFreq: 0,
     pivotDamping: DEFAULT_SPRING_DAMPING,
+    bell: false,
     springFreqX: 0,
     springFreqY: 0,
     springDamping: DEFAULT_SPRING_DAMPING,
@@ -1755,6 +1783,7 @@ function lightItem(
     // Copied rather than shared, since everything else here hands the caller a
     // fresh object, and undo snapshots this by value.
     environment: data.environment ? { ...data.environment } : undefined,
+    meta: { ...data.meta },
   };
 }
 
@@ -2129,6 +2158,11 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
                   ...(lead.pivotFreq > 0
                     ? { pivotFreq: lead.pivotFreq, pivotDamping: lead.pivotDamping }
                     : {}),
+                  // The end bell, and only on the mounting that can be one (see
+                  // `LevelBodyData.bell`): a `bell` on a body whose `pivot` has
+                  // since been cleared is a flag nothing reads, and writing it
+                  // would be a file that says a wall is a bell.
+                  ...(lead.bell ? { bell: true } : {}),
                 }
               : {}),
             // The kinematic pendulum, on a static body and only where it
@@ -2266,7 +2300,17 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
     });
   }
 
+  // Only what was actually authored. A title left blank, a flag left off and a
+  // level that has never opened the panel all write no block at all, which is
+  // what keeps every level from before the field byte-stable through a save.
+  const meta: LevelMetaData = {
+    ...(model.meta.title ? { title: model.meta.title } : {}),
+    ...(model.meta.intro ? { intro: true } : {}),
+    ...(model.meta.unlisted ? { unlisted: true } : {}),
+  };
+
   return {
+    ...(Object.keys(meta).length ? { meta } : {}),
     player: {
       x: model.player.pos.x,
       y: model.player.pos.y,
@@ -3201,6 +3245,7 @@ export function syncBodyProps(members: readonly EdItem[]): void {
     m.pivotAt = lead.pivotAt;
     m.pivotFreq = lead.pivotFreq;
     m.pivotDamping = lead.pivotDamping;
+    m.bell = lead.bell;
     m.springFreqX = lead.springFreqX;
     m.springFreqY = lead.springFreqY;
     m.springDamping = lead.springDamping;
@@ -3682,6 +3727,9 @@ export function emptyModel(): EdModel {
     // A fresh level authors none, which is every level authored before the
     // block and is what the renderer's own defaults are for.
     environment: undefined,
+    // Unnamed and listed: a new level belongs on the menu, and the Level panel
+    // is where it is given a title.
+    meta: {},
     items: [
       {
         id: newBodyId(),
@@ -3716,6 +3764,7 @@ export function emptyModel(): EdModel {
         pivotAt: null,
         pivotFreq: 0,
         pivotDamping: DEFAULT_SPRING_DAMPING,
+        bell: false,
         springFreqX: 0,
         springFreqY: 0,
         springDamping: DEFAULT_SPRING_DAMPING,

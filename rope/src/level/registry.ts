@@ -98,3 +98,47 @@ export const LEVELS: Record<string, LevelSpec> = {
 };
 
 export const DEFAULT_LEVEL = "BALL";
+
+// ---------------------------------------------------------------------------
+// The level select's list
+// ---------------------------------------------------------------------------
+
+// One row of the level select (see `docs/levels.md`).
+export interface ListedLevel {
+  id: string;
+  title: string;
+  intro: boolean;
+  // The `levels/<file>.json` stem, which is what the level hash is taken over.
+  file: string;
+}
+
+// The levels `/` offers, in the order it offers them: the introduction first,
+// then the rest by title, case-insensitively.
+//
+// FILE-BACKED BALL LEVELS ONLY, and both halves of that are deliberate. The
+// hand-written `TEST_*` specs in `testLevel.ts` are rigs with no geometry an
+// author owns, no bell to ring and no file to hash; the grapple levels are a
+// different controller that the completion flow has never been through. Both
+// stay reachable by `?level=`, which is what `unlisted` says for a level file.
+//
+// Derived rather than a second list, so a level added to `LEVELS` is on the
+// menu by existing. What an author writes is `meta` in the file itself (see
+// `LevelMetaData`), and `cli levels` is what holds the set to one intro and to
+// titles that do not collide.
+export function listedLevels(): ListedLevel[] {
+  const rows: ListedLevel[] = [];
+  for (const [id, spec] of Object.entries(LEVELS)) {
+    if (spec.controller !== "ball" || !spec.file) continue;
+    const meta = spec.data.meta;
+    if (meta?.unlisted) continue;
+    rows.push({ id, title: meta?.title ?? id, intro: meta?.intro === true, file: spec.file });
+  }
+  // The intro is FIRST rather than sorted into place, which is the whole of the
+  // flag: a level called "Zither" that is the introduction is still the first
+  // thing a new player is offered.
+  return rows.sort((a, b) =>
+    a.intro !== b.intro
+      ? Number(b.intro) - Number(a.intro)
+      : a.title.localeCompare(b.title, undefined, { sensitivity: "base" }),
+  );
+}

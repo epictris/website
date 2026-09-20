@@ -51,6 +51,17 @@ export interface SessionMeta {
   // the level's own spawn when the page started elsewhere diverges on its first
   // frame (see `Recording.checkpoint`).
   checkpoint?: string | null;
+  // The hash of the LEVEL FILE this session was played on (see `levelFileHash`
+  // in sim/treeStamp.ts), when the level is one that has a file.
+  //
+  // `srcHash` above already identifies the tree, so this is not about replaying
+  // - it is what joins a run to the FEEDBACK about the same authored level: a
+  // rating carries the same field, and the two are comparable across every
+  // change to the tree that was not a change to the level.
+  //
+  // Absent on every page from before the field and on every level compiled in
+  // rather than authored on disk, which is what `validateMeta` accepts.
+  levelHash?: string | null;
   // From `?player=NAME` on the invite link, if any. The admin assigns the name
   // that sticks; this only pre-fills it.
   nick: string | null;

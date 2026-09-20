@@ -64,6 +64,26 @@ import {
 import { PX } from "../engine/units";
 import { Mathf } from "../engine/mathf";
 
+// HOW FAR THE BELL HAS TO SWING TO RING (see `LevelBodyData.bell`): the
+// magnitude of the angle between the bell body's rotation now and the rotation
+// it settled at when the level was built.
+//
+// An ANGLE, in radians, dimensionless and unscaled - it crosses
+// `scaleLevelData` the way `swingAmp` does, and for the same reason. It is code
+// rather than level for now: one number for every bell in the game is what
+// makes "ringing" mean the same act in all of them, and the thing an author
+// tunes per bell is the spring and the arm, which are on the body.
+//
+// 0.35 rad is about 20 degrees: past the swing a hanging bell takes from being
+// brushed, and comfortably inside what one haul on the toll rope buys.
+export const BELL_RING_ANGLE = 0.35;
+
+// How long the swing is watched after the ring before the page freezes it (see
+// `main.ts`). A second, which is one full swing of a 0.6 Hz bell: the ring is
+// the end of the level, and ending it on the frame the threshold was crossed
+// would cut the bell off mid-travel.
+export const BELL_LINGER_FRAMES = 60;
+
 export class BallLevel {
   readonly world = new World();
   readonly ball: BallPlayer;

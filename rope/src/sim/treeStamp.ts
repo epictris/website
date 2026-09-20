@@ -83,6 +83,34 @@ export function sourceHash(root: string): string {
   return h.digest("hex").slice(0, 12);
 }
 
+// 12 hex over the bytes of ONE level file, so a piece of feedback says which
+// authored level it is about independently of the rest of the tree.
+//
+// `srcHash` above cannot answer that: it moves when any source file moves, so
+// two ratings of the same untouched level recorded either side of a renderer
+// edit carry different stamps and nothing says the level was the same. This
+// moves exactly when the level does.
+//
+// The FILE's bytes rather than its parsed contents, which is the same choice
+// `sourceHash` makes: what is hashed is what the editor wrote and what the
+// server serves, so the two ends can compare without agreeing about a
+// canonical serialisation. Named by `file` (the `LevelSpec.file` stem) rather
+// than by registry id, since only a file-backed level has one.
+//
+// Returns "" for a level file that is not there, which is a level compiled in
+// rather than on disk: absent is the honest answer, and it is what a caller
+// writes when it has nothing to stamp.
+export function levelFileHash(root: string, file: string): string {
+  try {
+    return createHash("sha1")
+      .update(readFileSync(join(root, "levels", `${file}.json`)))
+      .digest("hex")
+      .slice(0, 12);
+  } catch {
+    return "";
+  }
+}
+
 // `git` is called through a callback rather than imported, because the two
 // callers already have one: the CLI's `git()` fails loudly on a broken repo, and
 // the Vite plugin must not take the dev server down over one.
