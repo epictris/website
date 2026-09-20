@@ -41,6 +41,13 @@ interface Window {
   // lock are granted to that press and neither survives a navigation (see
   // `startOnClick` in src/render3d/store.ts).
   __ropeBoot?: () => void;
+  // Where the desktop pointer last was, in CLIENT pixels, noted by the inlined
+  // store script from the moment the page parses (`watchPointer` in
+  // src/render3d/store.ts). Read by `AimPointer` for where an UNLOCKED cursor is
+  // born, which is the aim a run opens on windowed; unset on a page nobody has
+  // touched. A global for the same reason the store is one: the script that can
+  // see the press is outside the module graph.
+  __ropePointer?: { x: number; y: number };
   __ropeStore?: {
     // The bytes of `url`, adopting the download the preloader already started
     // for it. `bytes` is the manifest's size for the file.

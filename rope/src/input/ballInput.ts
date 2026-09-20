@@ -252,6 +252,37 @@ export class BallInputSource implements IInputSource {
     }
   }
 
+  // THE RUN OPENS AIMING, at wherever this player's cursor is born (see
+  // `AimPointer.park` and `birthplace`): under their hand windowed, straight
+  // above the ball under the lock.
+  //
+  // Before this, a run opened with no aim at all - the cursor has no position
+  // until a mouse event carries one, and a ball with no aim is a ball whose
+  // rotation belongs to the physics. On a level that opens with the ball rolling
+  // off a ledge that is two and a third revolutions of tumbling loop before the
+  // player's first mouse move catches it (`BALL`, measured over the opening 100
+  // frames: rotation 0 to 14.5 rad, `kinematicRotation` false throughout), and
+  // the ball the mouse move then catches snaps to face it.
+  //
+  // PARKED rather than simply written, so the aim goes on being the birthplace
+  // while the camera eases and the ball rolls on, and so the first move or press
+  // hands it over for good (see `handOver`). Drawn where the ball is already the
+  // player's, hidden while a level's opening is still running - there the
+  // hand-over is what shows it.
+  //
+  // CALLED WHEN THE RUN STARTS, which is not when this source is built: the
+  // source exists from the moment the page's module graph runs, and the level
+  // does not start until the loading screen comes off (`boot` in main.ts).
+  // Parked at construction instead, everything the hand did in between landed
+  // ON TOP of the park - the level opened aimed at wherever the mouse had
+  // wandered to under an opaque rectangle, and locked it opened that far off
+  // the seed, since `moved` was set and the lock's own re-seed then refused to
+  // touch what it took for the player's aim. Nothing done while a level is
+  // loading is aiming: there is nothing on screen to aim at.
+  openRun(): void {
+    this.park(!this.handsOff());
+  }
+
   // A button edge is queued for the next sample only while this source is the
   // one driving the game; otherwise it is the level and nothing more, so a
   // click made between the editor's tests is not replayed into the next one.
@@ -497,17 +528,25 @@ export class BallInputSource implements IInputSource {
     return this.aimOrigin().add(local);
   }
 
-  // WHERE THE RETICLE IS DRAWN, which is the aim point unless the cursor is
-  // being held off the screen: parked at its seed by a rolling entry's
-  // hand-over, with nothing moved or pressed since (see `handOver` and
-  // `AimPointer.park`).
+  // WHERE THE RETICLE IS DRAWN, which is the aim point except in the two cases
+  // where the mark would be about nothing.
   //
-  // Two accessors rather than one because the two questions came apart there
-  // for the first time: the sim is aiming at a point the player has not been
-  // shown. Everywhere else they are the same answer, and the pad and the
-  // on-screen joystick are not this cursor at all - their reticle is drawn
-  // whenever they are aiming.
+  // While the level's opening is still running there is no cursor at all: the
+  // sim drops the player's aim until it hands over (`BallLevel.handsOff`), so a
+  // reticle there is a mark that steers nothing, drawn over a ball moving
+  // without them. It used to take one stray mouse move to put one on screen -
+  // the park at the opening is hidden, but a move un-parks it - and the mark
+  // that arrives at the hand-over is the announcement that the ball is theirs,
+  // which is spent if one has been sitting there through the entry.
+  //
+  // And the cursor may be held off the screen while still being aimed at (see
+  // `handOver` and `AimPointer.park`). Two accessors rather than one because
+  // those two questions came apart there for the first time: the sim is aiming
+  // at a point the player has not been shown. Everywhere else they are the same
+  // answer, and the pad and the on-screen joystick are not this cursor at all -
+  // their reticle is drawn whenever they are aiming.
   reticlePoint(): Vec2 | null {
+    if (this.handsOff()) return null;
     if (this.aimSource === "mouse" && this.pointer.isHidden()) return null;
     return this.aimPoint();
   }
@@ -542,8 +581,9 @@ export class BallInputSource implements IInputSource {
   // the physics frame.
   // The frame the level's opening hands the ball over - the rolling entry
   // arriving, or the recorded arrival running out - THE AIM IS PUT WHERE THE
-  // PLAYER'S OWN CURSOR IS BORN: directly above the ball (`aimSeed`), held
-  // there, and not drawn until they move the mouse.
+  // PLAYER'S OWN CURSOR IS BORN, which is where a run with no opening at all
+  // starts it (see the constructor): under their hand windowed, and directly
+  // above the ball under the lock (`aimSeed`).
   //
   // An opening drops the player's aim in the sim (`BallLevel.playerInput`), so
   // nothing they did with the mouse while it played steered anything -
@@ -579,7 +619,8 @@ export class BallInputSource implements IInputSource {
       // listening is to move the mouse and see whether anything answers.
       this.park(true);
     } else if (this.pointer.isParked()) {
-      // A PARKED CURSOR RIDES ABOVE THE BALL until the player takes it over.
+      // A PARKED CURSOR RIDES AT ITS BIRTHPLACE until the player takes it over -
+      // above the ball under the lock, and over the desktop pointer windowed.
       //
       // It is a screen position like any other cursor, so left where it was put
       // it slides out from over the avatar the moment the camera moves - and
@@ -588,10 +629,14 @@ export class BallInputSource implements IInputSource {
       // `CAVE`, 26 cm of ease put the aim 22 degrees off vertical and the ball
       // settled with its loop leaning that way.
       //
-      // Re-seeding it every poll is what "directly above the ball" means while
+      // Re-taking it every poll is what "directly above the ball" means while
       // nobody is holding it: the camera can ease and the ball can roll on, and
-      // the pose the player is handed is the same either way. From the first
-      // move (or press) it is theirs, and nothing re-seeds it again.
+      // the pose the player is handed is the same either way. Windowed it is
+      // what keeps the reticle under a hand that moved across the page rather
+      // than across the canvas - a letterbox bar reports its moves to the page
+      // and not to us (see `watchPointer`) - so the mark stays where the OS
+      // pointer it replaced would be. From the first move (or press) on the
+      // canvas it is theirs, and nothing re-seeds it again.
       //
       // It carries its VISIBILITY across the re-seed rather than being handed
       // one here: a reticle shown at the hand-over goes on being shown while it
@@ -601,8 +646,8 @@ export class BallInputSource implements IInputSource {
     this.wasHandsOff = handsOff;
   }
 
-  // Put the cursor at its seed - drawn or not (see `AimPointer.park`) - and
-  // write the aim that follows from it.
+  // Put the cursor where it is born - drawn or not (see `AimPointer.park`) -
+  // and write the aim that follows from it.
   private park(show = false): void {
     this.pointer.park(show);
     // Modes that hold the aim as state rather than re-reading the cursor

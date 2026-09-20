@@ -341,7 +341,8 @@ A spent entry hands over where it stands, because the alternative is a level tha
 A button **held** through the hand-over throws nothing: `pressed` is an edge the input source measures against its own last frame, and that edge happened while the ball was not the player's.
 The throw costs a fresh press, which is the right price - the alternative is a chain thrown by a hand that was only resting on the mouse.
 
-**The cursor is handed over PARKED**, for the same reason: at its seed, `AIM_SEED_ABOVE` straight above the ball, aimed at and - since 2026-09-20 - drawn there (`BallInputSource.handOver` → `AimPointer.park(true)`, and [the recorded arrival](#the-recorded-arrival) for why it is shown).
+**The cursor is handed over PARKED**, for the same reason: at its birthplace - `AIM_SEED_ABOVE` straight above the ball under the lock, and the desktop pointer's own position windowed - aimed at and, since 2026-09-20, drawn there (`BallInputSource.handOver` → `AimPointer.park(true)`, and [the recorded arrival](#the-recorded-arrival) for why it is shown).
+A run with no opening at all is parked the same way on its first frame, so the ball faces the cursor from frame 1 rather than tumbling until the first mouse move catches it ([running](running.md#ball-controls-and-aim)).
 The entry drops the aim in the sim, but the input source goes on tracking the mouse through it, and at the hand-over that tracked position would become an aim the player never made - the reticle appearing wherever their hand was resting, with the ball turning to face it on the first frame it was theirs.
 
 It is moved rather than forgotten because **the ball is handed over aiming**.
@@ -350,7 +351,7 @@ Aimed at the seed, the loop is already pointing where the aim is, so nothing sna
 While it is parked the seed is re-taken every poll, so the cursor rides above the ball instead of sliding out from over it as the camera eases off the spawn onto the avatar (26 cm of ease put the aim 22 degrees off vertical before it did).
 The first mouse move, or the first press, takes it over and nothing re-seeds it again.
 
-Windowed there is no virtual cursor to keep - the reticle is the real pointer and is drawn under it on the next move - and what the park buys there is the frames up to that move, which is where the reticle the hand-over shows is standing.
+Windowed there is no virtual cursor to keep - the reticle is the real pointer and is drawn under it on the next move - and what the park buys there is the frames up to that move, which is where the reticle the hand-over shows is standing, over the last position the page saw the pointer at (`watchPointer` in `render3d/store.ts`).
 
 **Four ways a level has no entry**, and the last two are the same thought: no field, a `hang` beside it (a hanging ball has nothing to roll on), a start from a **checkpoint**, and a **▶ Test in the editor**.
 Both of those last are places the run is deliberately not being opened - a checkpoint is a place to be dropped into ready to play, and a test is a spot-check of the geometry being edited - and both drop `roll` from the data rather than skipping it in the driver, so the bundle either one exports describes the run that was played (`spawnAtCheckpoint`, `startTest` in `editor/editor.ts`).

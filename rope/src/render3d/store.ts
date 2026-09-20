@@ -558,7 +558,55 @@ window.__ropeStore = {
   },
 };
 
+// WHERE THE DESKTOP POINTER LAST WAS, in client pixels, noted from the earliest
+// moment anything on this page could note it (read by `AimPointer.birthplace`).
+//
+// A level opens with the ball already facing the cursor, and windowed the cursor
+// IS the desktop pointer - so the aim needs a position before the player has
+// moved the mouse, and a mouse event is the only thing that ever reports one.
+// The app cannot catch the one that matters: picking a level is the last press
+// before the run starts, and the app's own listeners are built from inside that
+// press's handler (`startOnClick` below boots it), so the position it carried is
+// already history by the time there is anything listening.
+//
+// This script runs in the head of every page, which is as early as there is, so
+// what it catches is the pointer crossing the menu and the press that started
+// the level. A page nobody has touched - one loaded straight at `?level=`, with
+// the mouse outside the window - leaves it unset, which is the honest answer:
+// there is no position to face, and `AimPointer` falls back to its seed.
+// A MOVE RIGHT AFTER A PRESS IS A WARP, not a hand: chromium re-bases the
+// cursor position it reports whenever a button, a lock change or a fullscreen
+// change goes through, and delivers the difference as an ordinary `mousemove`
+// (see the trace in input/aimPointer.ts, which counts the same events for the
+// same reason). Measured here on the level select: a press on a row at
+// (640, 412) is followed one event later by `move 0,0 m=-650,-509`, and taking
+// that at face value opens the level aiming at the top-left corner of the page.
+//
+// So a press is recorded - it is live, and it is the point the browser
+// hit-tested the click at - and it makes the next move suspect, which is
+// dropped. The move after that carries the warp's inverse and lands where the
+// hand really is.
+function watchPointer(): void {
+  let suspect = 0;
+  const moved = (e: MouseEvent): void => {
+    if (suspect > 0) {
+      suspect--;
+      return;
+    }
+    window.__ropePointer = { x: e.clientX, y: e.clientY };
+  };
+  const pressed = (e: MouseEvent): void => {
+    suspect++;
+    window.__ropePointer = { x: e.clientX, y: e.clientY };
+  };
+  // Capture, so a handler that stops the event travelling cannot hide the
+  // position from this; passive, because it is a note and never a preventable.
+  addEventListener("mousemove", moved, { capture: true, passive: true });
+  addEventListener("mousedown", pressed, { capture: true, passive: true });
+}
+
 preload();
+watchPointer();
 // Only a page with a preload list has a loading screen on it; the editor has
 // neither, and the MENU has taken it off the page. An animation frame a second
 // forever is not something to leave running on either.

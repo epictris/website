@@ -1235,6 +1235,11 @@ async function boot(): Promise<void> {
   // `AimPointer.reveal`).
   hidePointer();
   armFirstClick();
+  // The aim starts HERE, with the run, rather than when the input source was
+  // built: the ball opens facing the cursor's birthplace, and whatever the hand
+  // did while the loading screen was up is dropped (see
+  // `BallInputSource.openRun`). Nothing done under an opaque rectangle is aiming.
+  ballInput?.openRun();
   requestAnimationFrame(frame);
 }
 void boot();

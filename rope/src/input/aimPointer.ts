@@ -493,35 +493,70 @@ export class AimPointer {
     return this.view;
   }
 
+  // WHERE THE CURSOR IS BORN, in view pixels, for a run nobody has aimed yet:
+  // the virtual one under the lock, and the desktop one without it.
+  //
+  // LOCKED there is no desktop pointer left to be under - `clientX/clientY` is
+  // frozen at the capture point - so the seed is the whole answer, which for the
+  // ball controller is straight above the avatar (see `seed`).
+  //
+  // UNLOCKED the cursor IS the desktop pointer, and where that is is a fact
+  // about the desktop rather than ours to choose: born anywhere else, the aim
+  // would sit somewhere the player's hand is not, and the reticle standing in
+  // for a hidden OS pointer would be lying about where their clicks will land.
+  // The page has been noting it since it parsed (`watchPointer` in
+  // render3d/store.ts) because nothing in the app is listening early enough -
+  // the press that picks a level is the last one before the run opens, and the
+  // app is booted from inside its handler.
+  //
+  // The seed stands in where the page has never seen a pointer at all - loaded
+  // straight at `?level=`, the mouse outside the window - so the ball opens
+  // facing up rather than facing nowhere. Null only where there is no seed
+  // either (the grapple controller, a test in the editor): there the desktop
+  // cursor is on screen and is its own mark, and nothing here may move it.
+  private birthplace(): Vec2 | null {
+    if (this.seed === null) return null;
+    if (this.locked()) return this.seed();
+    const last = typeof window === "undefined" ? undefined : window.__ropePointer;
+    return last ? clientToView(this.canvas, last.x, last.y) : this.seed();
+  }
+
   // PUT THE CURSOR BACK WHERE IT IS BORN, and hold it there until the player
   // moves the mouse - drawn or not, as the caller says.
   //
-  // What asks for this is a level's opening handing the ball over (see
-  // `BallInputSource`): the player has been watching a ball they could not aim,
-  // and wherever their hand happened to be resting through it is not an aim they
-  // made. Left alone, the reticle appears at the hand-over already somewhere -
-  // over the level, off to one side - and the ball turns to face it before the
-  // player has touched anything.
+  // Two callers, and both are a run that has not been aimed yet (see
+  // `BallInputSource`). One is the OPENING of every run: the page has hidden the
+  // OS pointer and this reticle replaces it, so the level opens with the ball
+  // facing the cursor rather than with no aim at all. The other is a level's
+  // opening HANDING THE BALL OVER: the player has been watching a ball they
+  // could not aim, and wherever their hand happened to be resting through it is
+  // not an aim they made. Left alone, the reticle appears at the hand-over
+  // already somewhere - over the level, off to one side - and the ball turns to
+  // face it before the player has touched anything.
   //
   // The cursor is MOVED rather than forgotten, and that is the difference
-  // between this and a run that has not been aimed yet. The aim is the cursor's
+  // between this and a cursor nothing has put anywhere. The aim is the cursor's
   // position, so a cursor with no position is a ball with no aim at all -
-  // rotation left to the physics, the loop wherever the roll left it. Put at the
-  // seed instead, the ball is handed over aiming at the one place the player's
-  // own cursor would be born: straight above it, where the loop already points.
+  // rotation left to the physics, the loop wherever the roll left it. Put at its
+  // birthplace instead, the ball is aiming at the one place the player's own
+  // cursor would be: under their hand windowed, and straight above the avatar
+  // under the lock, where the loop already points.
   //
-  // `show` is whether it is DRAWN while it sits there, and the two callers want
-  // opposite answers for the same reason.
+  // `show` is whether it is DRAWN while it sits there, and what decides it is
+  // whether the ball is the player's on the frame it is parked.
   //
-  // At a HAND-OVER it is shown: the player has just watched an opening they had
-  // no hand in, and the reticle appearing where their aim now is is how they are
-  // told the ball is theirs. Left undrawn, the game's first second is a player
-  // moving the mouse to find out whether anything is listening.
+  // In their hands it is shown, which is a run opening with nothing in front of
+  // it and a hand-over at the end of an opening alike: the page has taken the OS
+  // pointer away, so a cursor that is aiming and not drawn is a game whose only
+  // way of saying it is listening is to be moved and watched. At a hand-over
+  // that mark is also the message - the reticle appearing is how the player is
+  // told the ball is theirs.
   //
-  // Everywhere else it is hidden, because a mark the player did not put there is
-  // a mark they did not ask for; the aim is held at it until the first mouse
-  // move, which is the player taking the cursor over, or the first press, which
-  // is them saying something about where they are aiming (see `reveal`).
+  // While the ball is NOT theirs it is hidden: an opening is watched rather than
+  // aimed (`BallLevel.handsOff` drops the aim in the sim), and a reticle over it
+  // would be a mark the player cannot use. The aim is held at it until the first
+  // mouse move, which is the player taking the cursor over, or the first press,
+  // which is them saying something about where they are aiming (see `reveal`).
   //
   // `moved` goes back either way, and that is the point rather than
   // housekeeping: it is what says the cursor is still this class's own, so a
@@ -530,7 +565,7 @@ export class AimPointer {
   // A pointer with no seed (the grapple controller, a test in the editor) has
   // nowhere of its own to be put and is left exactly as it was.
   park(show = false): void {
-    const at = this.seed?.();
+    const at = this.birthplace();
     if (!at) return;
     this.view = clampToFrame(at);
     this.moved = false;
