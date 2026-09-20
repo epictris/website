@@ -145,7 +145,7 @@ const RIDE: CameraPathData = {
   falloffX: 0,
   falloffY: 0,
   // Equal on both axes, so the cases about LEADING are not also cases about the
-  // ellipse; `rule-path-lookahead-is-per-axis` is where that is asserted.
+  // per-axis blend; `rule-path-lookahead-is-per-axis` is where that is asserted.
   lookaheadX: 2.5,
   lookaheadY: 2.5,
 };
@@ -1931,10 +1931,11 @@ export function runCameraCases(): CameraResult[] {
 
     run("rule-path-lookahead-is-per-axis", () => {
       // A 16:9 frame has far less screen above and below the player than either
-      // side of them, so the lead is an ELLIPSE: a horizontal route leads by
-      // `lookaheadX`, a vertical one by `lookaheadY`, and a diagonal by what
-      // fits between. Asserted through the target the camera actually takes,
-      // which is what makes it a statement about the framing.
+      // side of them, so the lead is a PAIR, blended by the heading the route
+      // runs in: a horizontal route leads by `lookaheadX`, a vertical one by
+      // `lookaheadY`, and a diagonal by what fits between. Asserted through the
+      // target the camera actually takes, which is what makes it a statement
+      // about the framing.
       const lead = { lookaheadX: 4, lookaheadY: 1 };
       const across: CameraPathData = {
         x: 0,
@@ -1968,29 +1969,71 @@ export function runCameraCases(): CameraResult[] {
       };
       // With the frame guarantee OFF, which is exactly what that switch is for:
       // a 4 m lead on a 9.6 m frame puts the avatar inside the override's soft
-      // band, and this case is about the framing the ellipse ASKS for rather
-      // than the one the backstop allows (see `edge-eases-in-over-the-soft-band`).
+      // band, and this case is about the framing the lead ASKS for rather than
+      // the one the backstop allows (see `edge-eases-in-over-the-soft-band`).
       const at = (p: CameraPathData, follow: Vec2): Vec2 => {
         const rules = buildCameraRules([], [p]);
         return ride(rules, [follow], false)[0]!.pos;
       };
       const diag = at(diagonal, new Vec2(5, 5));
-      // 1 / hypot(cos45/4, sin45/1) = 0.9701, so the target is that far along a
-      // 45-degree route: 0.686 on each axis.
-      const want = 1 / Math.hypot(Math.SQRT1_2 / 4, Math.SQRT1_2 / 1);
+      // 4 cos^2(45) + 1 sin^2(45) = 2.5, so the target is that far along a
+      // 45-degree route: 1.768 on each axis.
+      const want = 4 * 0.5 + 1 * 0.5;
       return [
         { label: "horizontal lead", got: at(across, new Vec2(5, 0)).x - 5, want: 4 },
         { label: "vertical lead", got: at(down, new Vec2(0, 5)).y - 5, want: 1 },
         { label: "diagonal lead x", got: diag.x - 5, want: want * Math.SQRT1_2 },
         { label: "diagonal lead y", got: diag.y - 5, want: want * Math.SQRT1_2 },
         // ...and the ARC LENGTH it leads by sits between the two axes' own,
-        // which is what "the diagonal takes what fits between them" means. Per
-        // axis the displacement is inside both: the ellipse binds on whichever
-        // axis is tighter, and here that is y.
+        // which is what "the diagonal takes what fits between them" means. It
+        // is the arc length the pair bounds and NOT the displacement it lands
+        // at: a diagonal's vertical reach is over `lookaheadY`, which is the
+        // price of a zero axis meaning what an author means by it (see
+        // `axisBlend` and `rule-path-lead-axis-zero-drops-only-that-axis`).
         { label: "arc lead is over the vertical", got: want > 1 ? 1 : 0, want: 1 },
         { label: "arc lead is under the horizontal", got: want < 4 ? 1 : 0, want: 1 },
-        { label: "y displacement is within the vertical lead", got: diag.y - 5 <= 1 ? 1 : 0, want: 1 },
         { label: "x displacement is well under the horizontal", got: diag.x - 5 < 4 ? 1 : 0, want: 1 },
+      ];
+    }),
+
+    run("rule-path-lead-axis-zero-drops-only-that-axis", () => {
+      // `session-131f`: a cave corridor authored `lookaheadX: 2, lookaheadY: 0`
+      // led the camera by microns. Read as the semi-axes of an ellipse the
+      // pair is a flat line SEGMENT, so every heading but the exactly
+      // horizontal one collapses to nothing - and a flattened Bezier is never
+      // exactly horizontal, so the author got no lead anywhere.
+      //
+      // Blended by heading instead, a zero axis costs the lead only what that
+      // axis was worth: the whole of it along the flat, nearly the whole of it
+      // over the gentle slope the corridor actually has, and none of it up the
+      // shaft the route turns into - which is what a zero was typed to ask for.
+      const lead = { lookaheadX: 2, lookaheadY: 0 };
+      const path = (to: Vec2): CameraPathData => ({
+        x: 0,
+        y: 0,
+        rot: 0,
+        verts: [{ x: 0, y: 0 }, { x: to.x, y: to.y }],
+        ...lead,
+      });
+      // The arc length the camera is actually led by, from a follow point ON
+      // the route: the distance from the projection to the target. With the
+      // frame guarantee off, for the reason the case above says.
+      const ledBy = (to: Vec2, at: number): number => {
+        const dir = to.normalized();
+        const follow = dir.mul(at);
+        const rules = buildCameraRules([], [path(to)]);
+        return ride(rules, [follow], false)[0]!.pos.sub(follow).length();
+      };
+      // 11.3 degrees off the flat, which is the slope of the corridor the
+      // session was recorded on. cos^2 of it is 0.9615.
+      const slope = ledBy(new Vec2(20, 4), 5);
+      return [
+        { label: "flat route takes the whole lead", got: ledBy(new Vec2(20, 0), 5), want: 2 },
+        { label: "shaft takes none of it", got: ledBy(new Vec2(0, 20), 5), want: 0 },
+        { label: "the corridor's own slope", got: slope, want: 2 * 0.96153846153846156 },
+        // The number the session was reported on: the ellipse gave 5 microns
+        // here, so anything of the same order is the bug back again.
+        { label: "and that is most of the flat lead", got: slope > 1.9 ? 1 : 0, want: 1 },
       ];
     }),
 

@@ -1556,9 +1556,11 @@ export const DEFAULT_PATH_FALLOFF_Y = 1.125;
 // Two numbers and not one because the frame is 16:9: there is far less screen
 // above and below the player than there is either side of them, so a lead that
 // is right along a corridor throws the player off the bottom of a shaft. The
-// two are read as the semi-axes of an ELLIPSE the lead is taken along (see
-// `pathLookahead`), so a horizontal route leads by the first, a vertical one by
-// the second, and a diagonal by what fits between them.
+// two are BLENDED by the heading the route runs in where the lead is taken
+// (`axisBlend`, via `pathLookahead`), so a horizontal route leads by the first,
+// a vertical one by the second, and a diagonal by what fits between them - and
+// zeroing one axis is how an author says a route running that way leads by
+// nothing, the other axis carrying on regardless.
 export const DEFAULT_PATH_LOOKAHEAD_X = 2.5;
 export const DEFAULT_PATH_LOOKAHEAD_Y = 1.4;
 
@@ -1579,7 +1581,7 @@ export const DEFAULT_PATH_LOOKAHEAD_Y = 1.4;
 //
 // Per axis for the same reason the lookahead is (see above): the frame is 16:9,
 // so a band that reads well along a corridor is most of the vertical screen in
-// a shaft. The pair is resolved through the same ellipse, against the direction
+// a shaft. The pair is resolved through the same blend, against the direction
 // the route runs where the band currently sits.
 export const DEFAULT_PATH_LOOKAHEAD_BUFFER_X = 1;
 export const DEFAULT_PATH_LOOKAHEAD_BUFFER_Y = 0.55;
@@ -1684,8 +1686,8 @@ export interface CameraRegionData {
 
 // A camera path: an authored polyline the camera rides. The player's position
 // is projected onto it, the camera targets a point FURTHER ALONG it - by
-// `lookaheadX` / `lookaheadY`, read as the semi-axes of an ellipse - and so the
-// screen leads the player toward where they are expected to go.
+// `lookaheadX` / `lookaheadY`, blended by the heading the route runs in - and so
+// the screen leads the player toward where they are expected to go.
 //
 // Deliberately NOT a region with a funny shape. A region is a closed volume
 // tested by containment and a path is an open directed polyline tested by

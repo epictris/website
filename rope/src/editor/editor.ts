@@ -5413,11 +5413,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     };
     // Every per-axis pair below is two numbers for the one reason: the frame is
     // 16:9, so there is far less screen above and below the player than there
-    // is either side of them. Each pair is read as the semi-axes of an ellipse -
-    // the range and falloff around the route (so the corridor is
-    // screen-shaped), the lead and its slack along it (see `pathLookahead`).
-    // Blank = the format's default, which is what every path authored before a
-    // number was typed into it has.
+    // is either side of them. The pairs measured OFF the route - the range and
+    // the falloff - are the semi-axes of an ellipse, so the corridor is
+    // screen-shaped; the pairs measured ALONG it - the lead and its slack - are
+    // blended by the heading the route runs in (see `axisBlend`), so zeroing
+    // one of those axes means a route running that way leads by nothing while
+    // the other axis carries on. Blank = the format's default, which is what
+    // every path authored before a number was typed into it has.
     const axisField = (
       label: string,
       key: "rangeX" | "rangeY" | "falloffX" | "falloffY" | "lookaheadX" | "lookaheadY" | "lookaheadBufferX" | "lookaheadBufferY",

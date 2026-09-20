@@ -16,12 +16,23 @@ The path is directed by its vert order and always leads toward increasing arc le
 Smart direction inference was rejected rather than deferred - the whole point is that the camera argues.
 Clamping at the ends is the correct degenerate behaviour: near the goal the camera comes to rest centred on the path's end rather than staring past it.
 
-## The lead is an ellipse
+## The lead is a per-axis pair
 
 `lookaheadX` and `lookaheadY` are how far ahead the camera looks per axis, and they are two numbers because the frame is **16:9**: there is far less screen above and below the avatar than either side of them, so one lead that frames a corridor well throws the player off the bottom of a shaft.
-`pathLookahead` reads the pair through `ellipseReach` - as the semi-axes of an ellipse - and answers the arc length whose displacement lands on it - `lookaheadX` along a horizontal route, `lookaheadY` along a vertical one, and what fits between for anything diagonal.
-It is resolved against the direction the route actually goes over that lead: the local tangent first, then one refinement against the chord to the point it lands on, since on a bend those are different answers and the ellipse is a statement about the DISPLACEMENT.
+`pathLookahead` reads the pair through `axisBlend`, which blends them by the heading the route runs in - `lookaheadX` along a horizontal route, `lookaheadY` along a vertical one, and `lookaheadX·cos²θ + lookaheadY·sin²θ` for anything diagonal - the one convex combination the direction itself hands over, its squared components already summing to one.
+It is resolved against the direction the route actually goes over that lead: the local tangent first, then one refinement against the chord to the point it lands on, since on a bend those are different answers and the blend is a statement about the heading the lead SPANS rather than the one it starts at.
 One refinement rather than iterating to a tolerance, because the correction is second order in the curvature and a fixed step is deterministic.
+
+The pair is **not** an ellipse the lead has to land inside, and that is a deliberate break from every other per-axis pair on a path.
+A pair measured OFF the route - the corridor, its falloff band, the release - is a containment test and stays `ellipseReach`, because a displacement is inside that ellipse or it is not, and the editor draws exactly that ellipse.
+A pair measured ALONG the route is two amounts, and `axisBlend` is what makes a **zero axis** mean what an author means by it.
+Read as an ellipse, a zero axis is a flat line segment: `session-131f` authored a cave corridor `lookaheadX: 200, lookaheadY: 0` and got a lead of **microns** - 38 of them at the flattest point of the route and one by the end of it - because a degenerate ellipse collapses for every heading but the exactly horizontal one, and a flattened Bézier is never exactly horizontal.
+Blended, that corridor keeps 96% of its lead over its own 11-degree slope and still leads by nothing up the shaft it turns into.
+
+The price is that the pair bounds the **arc length** and no longer the displacement it lands at, so a 45-degree route reaches a little past the tighter axis - with `(4, 1)` it leads 2.5 m, which is 1.77 m of vertical where the author wrote 1.
+The two cannot both hold: if the vertical displacement may never exceed `lookaheadY`, then `lookaheadY: 0` forbids leading on anything but a perfectly flat route, which is the behaviour the zero was typed to ask for the opposite of.
+Isotropic pairs are identical under both readings, so this only ever differs where the two axes do.
+`rule-path-lookahead-is-per-axis` and `rule-path-lead-axis-zero-drops-only-that-axis` are the pair of cases.
 
 ## The lookahead buffer
 
@@ -34,7 +45,8 @@ Clamping rather than "hold, then jump to the avatar" is what keeps it CONTINUOUS
 The price is that on genuine forward travel the lead is short by the band, which is what the buffer MEANS and what an author is choosing when they widen it.
 It is centred on the avatar on acquisition, like the projection itself: entering is history-free, so the band never carries an offset earned somewhere else on the route.
 
-The pair is resolved through `ellipseReach` - the same helper `pathLookahead` uses, and for the same 16:9 reason - against the direction the route runs where the BAND currently sits, which on a bend is not where the avatar is.
+The pair is resolved through `axisBlend` - the same helper `pathLookahead` uses, and for the same 16:9 reason - against the direction the route runs where the BAND currently sits, which on a bend is not where the avatar is.
+It is measured along the route, so it reads its zeroes the same way the lead does: one zeroed axis costs the band what that axis was worth and nothing more, and both zeroed is no band at all.
 
 `cli camera` asserts the pair that makes the claim: the same swing with the band absorbs it (the committed point's range is exactly 0 and the camera's travel over the last second is 0) and without it does not (the camera keeps moving), plus that a swing WIDER than the band is dragged by exactly its excursion less the band on each side, and that the same swing is absorbed along a horizontal route and not along a vertical one when the two axes differ.
 
@@ -114,7 +126,7 @@ The editor draws every corridor through the rule the game builds (`pathDataOf` -
 The frame is 16:9 - half of it is 4.8 m across and only 2.7 m down at `view × 1` - so with the old single circular `range` of 4 a player could be fully inside the corridor, the camera still centred on the route, and the ball past the bottom edge of the frame with the falloff not even started: the edge clamp was load-bearing for ordinary vertical excursions, and it is meant to be a backstop.
 The defaults are the frame's own ratio (`DEFAULT_PATH_RANGE_Y` = 4 × 9/16 = 2.25), which puts the worst-case vertical offset the band ever asks for (~2.3 m) inside the 2.7 m half-height.
 
-Unlike the lookahead's ellipse - resolved against the direction the ROUTE runs - these are resolved against the direction the player actually left the route in (`pathOffset`, the displacement from their projection), because that is the displacement the screen has to hold.
+Unlike the lead's pair - blended against the direction the ROUTE runs, and no boundary at all (see [**The lead is a per-axis pair**](#the-lead-is-a-per-axis-pair)) - these are a true ellipse, resolved against the direction the player actually left the route in (`pathOffset`, the displacement from their projection), because that is the displacement the screen has to hold.
 `pathRange`, `pathBand` and `pathRelease` answer the reach along that direction; `pathReleaseAxes` grows both semi-axes by `buffer`, so the release boundary stays an ellipse and the editor and overlay draw EXACTLY the zone tested - through `pathCorridorSweepInto`, which sweeps the route with the ellipse it carries at each sample (see [**Keys**](movers.md#keys) below for why it is a sweep and how it is held to the predicate).
 The retired scalar `range` / `falloff` are folded into both axes by `scaleLevelData` at the one gate, so a level that authored a circle keeps exactly that circle; `cli camera` asserts the fold, the per-axis reaches, and - on the rule set - that acquisition is screen-shaped: 2 m below a 1 m vertical range does not take the path while 3 m past its end inside the horizontal range does, which a circular implementation cannot split.
 

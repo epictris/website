@@ -63,6 +63,7 @@ import {
 } from "../level/levelFormat";
 import type { Camera } from "./camera";
 import {
+  axisBlend,
   buildPolylineIndex,
   ellipseReach,
   flattenPathNodes,
@@ -746,19 +747,21 @@ function sameRules(a: readonly CameraRule[], b: readonly CameraRule[]): boolean 
 }
 
 // How far along the path the camera leads, for a route heading in `dir`.
+//
+// The pair is blended by that heading rather than read as an ellipse the lead
+// must land inside (see `axisBlend`), which is what lets an author zero one
+// axis: `lookaheadY: 0` is no lead up a shaft and the full `lookaheadX` down a
+// corridor that is a few degrees off the flat, where the ellipse gave neither.
 export function pathLookahead(p: PathParams, dir: Vec2): number {
-  return ellipseReach(p.lookaheadX, p.lookaheadY, dir);
+  return axisBlend(p.lookaheadX, p.lookaheadY, dir);
 }
 
 // The width of the lead's deadband, for a route heading in `dir` - the same
-// ellipse, so a band authored for a corridor is not most of the vertical screen
-// in a shaft. Both axes zero means no band at all, which `ellipseReach`'s floor
-// would otherwise turn into a micron of one.
+// blend, so a band authored for a corridor is not most of the vertical screen
+// in a shaft, and a zero axis costs the band exactly what that axis was worth
+// and nothing more. Both axes zero means no band at all, which falls out.
 export function pathLookaheadBuffer(p: PathParams, dir: Vec2): number {
-  const bx = Math.max(0, p.lookaheadBufferX);
-  const by = Math.max(0, p.lookaheadBufferY);
-  if (bx === 0 && by === 0) return 0;
-  return ellipseReach(bx, by, dir);
+  return axisBlend(p.lookaheadBufferX, p.lookaheadBufferY, dir);
 }
 
 // The arc length the lookahead is measured from, held in a deadband around the
@@ -805,9 +808,10 @@ export function committedLeadS(
 // is 16:9, and a circular corridor wide enough to mean anything horizontally
 // is off the bottom of the screen vertically (see DEFAULT_PATH_RANGE_X/_Y).
 //
-// Unlike the lookahead's ellipse - which is resolved against the direction the
-// ROUTE runs - these are resolved against the direction the player actually
-// left the route in, because that is the displacement the screen has to hold.
+// Unlike the lead's pair - blended against the direction the ROUTE runs, and
+// not a boundary at all (see `axisBlend`) - these are a true ellipse, resolved
+// against the direction the player actually left the route in, because that is
+// the displacement the screen has to hold and the zone the editor draws.
 //
 // All of them take the path's fields RESOLVED at the player's projection
 // (`pathParamsAt`), since the grip fields are keyable along the route.

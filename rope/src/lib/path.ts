@@ -123,12 +123,17 @@ export function cubicAt(p0: Vec2, p1: Vec2, p2: Vec2, p3: Vec2, t: number): Vec2
 
 // The distance along `dir` that lands on the ellipse with semi-axes `ax`, `ay`.
 //
-// This is how every per-axis distance on a path is resolved into the one arc
-// length the geometry deals in: moving by `L` along `dir` displaces by
+// This is how every per-axis distance measured OFF a path is resolved into the
+// one reach the geometry deals in: moving by `L` along `dir` displaces by
 // `L * dir`, and this is the `L` that puts that displacement on the ellipse. So
-// a horizontal route takes `ax`, a vertical one `ay`, and a diagonal what fits
-// between - which is the whole point of the pairs, since a 16:9 frame has far
-// less screen above and below the player than either side of them.
+// a horizontal direction takes `ax`, a vertical one `ay`, and a diagonal what
+// fits between - which is the whole point of the pairs, since a 16:9 frame has
+// far less screen above and below the player than either side of them.
+//
+// It answers CONTAINMENT - a displacement is inside the ellipse or it is not -
+// which is what the corridor, its band and the release ask, and what they are
+// drawn as. The pairs measured ALONG the route are `axisBlend` below, for the
+// one reason written out there: a zero axis.
 //
 // `dir` need not be normalised, and a zero one answers `ax`: a path with
 // nowhere left to go is horizontal as far as this is concerned.
@@ -142,6 +147,48 @@ export function ellipseReach(ax: number, ay: number, dir: Vec2): number {
   const len = dir.length();
   if (len < 1e-9) return a;
   return 1 / dmath.hypot(dir.x / len / a, dir.y / len / b);
+}
+
+// The distance ALONG a route heading in `dir` that the per-axis pair `ax`, `ay`
+// asks for: `ax` on a horizontal route, `ay` on a vertical one, and a blend of
+// the two by heading in between - `ax * cos^2 + ay * sin^2`, which is the one
+// convex combination the direction itself hands over, its squared components
+// already summing to one.
+//
+// This is the pair read as TWO AMOUNTS, and it is how every per-axis distance
+// measured along the route resolves: the camera's lead and the slack that lead
+// is measured with. Distances measured OFF the route - a path's corridor, its
+// falloff band, its release - go through `ellipseReach` instead, because those
+// are containment: a displacement is inside the ellipse or it is not, and the
+// zone is drawn as exactly that ellipse.
+//
+// What separates the two is a ZERO AXIS. A degenerate ellipse is a flat line
+// segment, so `ellipseReach(2, 0, dir)` is a micron for every heading but the
+// exactly horizontal one - a route three degrees off the flat gets no lead at
+// all, which is not what an author typing a zero meant. Here a zero axis simply
+// contributes nothing: `axisBlend(2, 0, dir)` is the full 2 m along the flat,
+// 1.9 m over a gentle slope, and nothing at all up a shaft.
+//
+// The price is that on a diagonal the lead's DISPLACEMENT is no longer inside
+// the pair - it is the arc length that blends, not the point it lands on - so a
+// 45-degree route overshoots the tighter axis by a few percent. The two cannot
+// both hold: if the vertical displacement may never exceed `ay`, then `ay = 0`
+// forbids leading on anything but a perfectly flat route, which is the very
+// behaviour a zero is being typed to ask for the opposite of.
+//
+// Isotropic pairs are untouched - `axisBlend(a, a, dir) === a` for every
+// heading, exactly as `ellipseReach(a, a, dir)` is - so the two answers only
+// ever differ where the two axes do.
+//
+// `dir` need not be normalised, and a zero one answers `ax`, as `ellipseReach`
+// does: a path with nowhere left to go is horizontal as far as this is
+// concerned.
+export function axisBlend(ax: number, ay: number, dir: Vec2): number {
+  const a = Math.max(0, ax);
+  const b = Math.max(0, ay);
+  const lenSq = dir.lengthSquared();
+  if (lenSq < 1e-18) return a;
+  return (a * dir.x * dir.x + b * dir.y * dir.y) / lenSq;
 }
 
 // READONLY throughout: an index is built once and read for ever, and a rail's
