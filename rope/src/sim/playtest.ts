@@ -140,6 +140,15 @@ export interface WindowAssert {
 }
 
 export type PlaytestAssert =
+  // THE BELL RANG, at or before this frame (see `LevelBodyData.bell`). The one
+  // assertion a bell level's script is actually about: everything else here
+  // holds the avatar to something, and this holds the LEVEL to being
+  // finishable by the input stream the script carries.
+  //
+  // A frame rather than a flag, because "it rang eventually" is not the claim -
+  // a script that hauls for ten seconds and rings on the last frame has found
+  // a bell that is much harder to ring than the one that was authored.
+  | { ringsBy: number }
   | { frame: number; state: string }
   | { frame: number; maxSpeed: number }
   | { frame: number; hasRope: boolean }
@@ -444,9 +453,20 @@ function evaluateAsserts(
   digests: Digest[],
   stateFirstFrame: Map<string, number>,
   stats: FrameStat[],
+  // The frame the level's bell rang on, or null - `BallLevel.completedFrame`
+  // at the end of the run. Null on every grapple script and on every level
+  // with no bell, where a `ringsBy` assertion is one the script should not
+  // have written.
+  rang: number | null = null,
 ): AssertResult[] {
   return (script.asserts ?? []).map((a) => {
     if ("window" in a) return evaluateWindow(a, stats);
+    if ("ringsBy" in a) {
+      return {
+        ok: rang !== null && rang <= a.ringsBy,
+        description: `the bell rings by f${a.ringsBy} (rang=${rang ?? "never"})`,
+      };
+    }
     if ("reachState" in a) {
       const first = stateFirstFrame.get(a.reachState);
       const ok = first !== undefined && (a.byFrame === undefined || first <= a.byFrame);
@@ -539,7 +559,7 @@ function runBallScript(script: PlaytestScript, spec: LevelSpec): PlaytestResult 
     if (tv) violations.push(tv);
   }
 
-  const assertResults = evaluateAsserts(script, digests, stateFirstFrame, stats);
+  const assertResults = evaluateAsserts(script, digests, stateFirstFrame, stats, level.completedFrame);
   const passed = violations.length === 0 && assertResults.every((r) => r.ok);
   return {
     level: script.level,

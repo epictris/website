@@ -470,11 +470,25 @@ window.addEventListener("pageshow", (e) => {
 
 function downloadRecording(): void {
   const rec: Recording = {
-    level: levelId,
+    // THE LEVEL THAT WAS SIMULATED, which on a replay page is the RECORDING's
+    // and not the URL's. A P press while watching a replay is the browser's own
+    // re-simulation of that run - which is exactly what a browser-versus-bun
+    // check wants - and labelling it with `?level=`'s fallback made the export
+    // claim to be a run of `BALL` that diverged on frame 1 against a level it
+    // had never touched. Its geometry, its checkpoint and its spawn all come
+    // from the recording too (see `makeLevel`), so all three follow it here.
+    level: replayRec?.level ?? levelId,
+    // `data` AND `controller` together, because they are one statement: a
+    // self-contained bundle builds from its embedded geometry and `controller`
+    // is what says which driver to build it with (see `Recording.controller`).
+    // Carrying the geometry without it re-exported a ball run as a grapple one,
+    // which diverges on frame 1 with no ball to steer and no bell to ring.
+    ...(replayRec?.data ? { data: replayRec.data } : {}),
+    ...(replayRec?.controller ? { controller: replayRec.controller } : {}),
     // A bundle names its level rather than embedding it, so a run from a named
     // spawn has to say so or its replay starts at the level's own spawn and
     // diverges on frame 1 (see `Recording.checkpoint`).
-    ...(checkpoint ? { checkpoint } : {}),
+    ...(replayRec ? (replayRec.checkpoint ? { checkpoint: replayRec.checkpoint } : {}) : checkpoint ? { checkpoint } : {}),
     git: commit,
     dirty,
     srcHash,

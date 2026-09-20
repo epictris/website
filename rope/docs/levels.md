@@ -89,6 +89,10 @@ Its detectors ship with it: `WorldDigest.bell` carries the swing off rest and wh
 `cli spring`'s `bell-ring` asserts the mechanism and both ends of the margin: a pull DOWN on the rope turns the bell and rings it once, the same rig with the rope cut never rings however long it is hauled on, and the rope hanging there on its own never rings it either.
 It hauls the sally directly rather than throwing a scripted hook at it, because whether a pull on the rope rings the bell is a fact about the assembly and whether a player can land a hook on the sally is a fact about the arena - and only the first belongs in a unit case.
 
+The arena's half is `playtests/bell-ring.json`, which plays the real level file through the real input stream - a throw at the sally and then the wind-up, which hauls the ball up the rope and the rope down with it - and asserts `ringsBy`.
+And the BROWSER's half is `playtests/regressions/bell-ring-376f.json.gz`: the same run replayed through the page's own frame loop and exported with **P**, which rings on the same frame 77 and diverges from bun by nothing.
+That last one is the rule in `rope/CLAUDE.md` being paid rather than a nicety - headless validation cannot see the browser.
+
 ### Finishing a level
 
 On the ring the page (`main.ts`) lets the sim run `BELL_LINGER_FRAMES` (60) more steps on live input so the swing is seen, and then **stops stepping**.

@@ -66,7 +66,9 @@ remove the marker in the same change.
 
 Playtest scripts are frame-indexed held-button ranges + aim waypoints with
 asserts (`reachState`, per-frame `state`/`maxSpeed`/`hasRope`/position bounds,
-and `window` asserts over a frame range).
+`window` asserts over a frame range, and `ringsBy` - the frame the level's bell
+was rung on, which is the one assertion that is about the LEVEL being finishable
+rather than about the avatar).
 They drive **either controller**: the ball's actions are the same FrameInput
 fields under its own names (`deploy`, `restart`, `aim`), and a script may carry
 its own `data` (an arena authored inline, as a bundle does) and a `spawn`

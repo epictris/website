@@ -136,7 +136,7 @@ Tooling
 
 Editor and levels
 
-- [levels](docs/levels.md) - the level select, `meta` and the listing rules, the end bell and its toll rope, the ring, finishing a level, the level hash.
+- [levels](docs/levels.md) - the level select, `meta` and the listing rules, the end bell and its toll rope, the ring, the feedback form and where what players say is kept, the level hash.
 - [editor](docs/editor.md) - gestures, selection, vertex editing, the 3D view, orbit, the lens, the gizmo, the depth handle, ▶ Test.
 - [editor-model](docs/editor-model.md) - layers, the body outliner, decoration, notes, compound bodies.
 - [level-format](docs/level-format.md) - level files, the dev REST API, autosave, `levelFormat.ts`, regenerating `levelData.ts`.
