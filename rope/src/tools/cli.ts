@@ -2395,6 +2395,46 @@ async function cmdPull(o: Record<string, string>): Promise<void> {
   for (const commit of mismatched) {
     console.log(`  to replay the @${commit} runs exactly: git worktree add ../rope-${commit} ${commit} && cd ../rope-${commit}/rope && bun install && bun run replay replay ../../website/rope/${PROD_DIR}/<id>.json.gz`);
   }
+
+  // WHAT PLAYERS SAID, beside the runs (see docs/levels.md). It is append-only,
+  // so a level and player may have several rows and the version is what says
+  // which: "v1 of 3" is the first thing they said about it, and what changed
+  // between the versions is the thing worth reading.
+  const fb = await fetch(`${api}/feedback`, { headers });
+  if (!fb.ok) {
+    console.log(`[pull] feedback: ${fb.status} ${fb.statusText}`);
+    return;
+  }
+  const said = (await fb.json()) as {
+    feedback: {
+      id: string; level: string; levelHash: string; hereLevelHash: string; commit: string;
+      player: string; stars: number | null; comment: string | null; at: number;
+    }[];
+    players: Record<string, { name: string | null }>;
+  };
+  writeFileSync(join(dir, "feedback.ndjson"), said.feedback.map((r) => JSON.stringify(r)).join("\n") + (said.feedback.length ? "\n" : ""));
+  console.log(`\n[pull] ${said.feedback.length} piece(s) of feedback, in ${PROD_DIR}/feedback.ndjson`);
+  const seq = new Map<string, number>();
+  const totals = new Map<string, number>();
+  for (const r of [...said.feedback].sort((a, b) => a.at - b.at)) {
+    const k = `${r.level}\u0000${r.player}`;
+    const n = (totals.get(k) ?? 0) + 1;
+    totals.set(k, n);
+    seq.set(r.id, n);
+  }
+  for (const r of said.feedback) {
+    const k = `${r.level}\u0000${r.player}`;
+    const when = new Date(r.at).toISOString().slice(0, 16).replace("T", " ");
+    const who = said.players[r.player]?.name ?? r.player.slice(0, 8);
+    const stars = r.stars === null ? " -  " : "*".repeat(r.stars).padEnd(5);
+    // The level FILE the rating is about, and whether it is still the one being
+    // served: a rating left on a level that has since been re-authored is about
+    // a level that no longer exists.
+    const level = r.hereLevelHash && r.levelHash !== r.hereLevelHash ? `${r.levelHash.slice(0, 8)} (changed)` : "current";
+    console.log(
+      `  ${when}  ${who.padEnd(12)} ${r.level.padEnd(8)} v${seq.get(r.id)}/${totals.get(k)} ${stars} @${r.commit.padEnd(7)} ${level.padEnd(20)} ${r.comment ?? ""}`,
+    );
+  }
 }
 
 // 3D rendering cases (src/sim/render3dCases.ts): the camera correspondence

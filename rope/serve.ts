@@ -8,7 +8,8 @@ import { readFileSync } from "node:fs";
 import { join, normalize } from "node:path";
 import { adminHtmlPath, handlePlaytest } from "./src/server/routes";
 import { PlaytestStore, type Verdict } from "./src/server/store";
-import { sourceHash } from "./src/sim/treeStamp";
+import { levelFileHash, sourceHash } from "./src/sim/treeStamp";
+import { LEVELS } from "./src/level/registry";
 
 const PORT = Number(process.env.PORT ?? 8080);
 const DIST = join(import.meta.dir, "dist");
@@ -44,7 +45,26 @@ async function verifyInSubprocess(path: string): Promise<Verdict | null> {
   return JSON.parse(out.trim()) as Verdict;
 }
 
-const store = new PlaytestStore({ dir: PLAYTEST_DIR, here, verify: verifyInSubprocess, log });
+// The hash of every level FILE this process is serving (see `levelFileHash`).
+// The runner image ships `levels/`, so this is the same table the page was
+// built against - and it is stamped into every feedback record beside the
+// page's own claim, so a client lying about which level it played is visible
+// rather than believed.
+//
+// At startup rather than per request: the files do not change under a running
+// container, and a deploy is a new one.
+const hereLevelHashes: Record<string, string> = {};
+for (const [id, spec] of Object.entries(LEVELS)) {
+  if (spec.file) hereLevelHashes[id] = levelFileHash(import.meta.dir, spec.file);
+}
+
+const store = new PlaytestStore({
+  dir: PLAYTEST_DIR,
+  here,
+  levelHashes: hereLevelHashes,
+  verify: verifyInSubprocess,
+  log,
+});
 const adminHtml = readFileSync(adminHtmlPath(), "utf8");
 
 setInterval(() => {

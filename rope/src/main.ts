@@ -48,6 +48,9 @@ import {
 } from "./playtest/protocol";
 import { selfReplayLine, verifySelfReplay } from "./sim/selfReplay";
 import { showToast } from "./render/toast";
+import { showFeedbackForm } from "./render/feedbackForm";
+import { readProgress, writeProgress } from "./render/progress";
+import { submitFeedback, type Stars } from "./playtest/feedback";
 import { LoadingScreen } from "./render/loadingScreen";
 // The tree this page was served from, not the commit the dev server booted at
 // (see src/sim/treeStamp.ts).
@@ -96,7 +99,17 @@ let view = viewTransform(VIEW_WIDTH, VIEW_HEIGHT);
 
 const params = new URLSearchParams(location.search);
 
-// Level selection via ?level=NAME (defaults to DEFAULT_LEVEL).
+// Level selection via ?level=NAME.
+//
+// `DEFAULT_LEVEL` is a FALLBACK here and no longer the meaning of a bare URL:
+// on `index.html` a page with no `?level=` is the level select and this module
+// was never imported at all (see `paintMenu` in render3d/store.ts, and the
+// module tag in index.html). What still reaches here with nothing asked for is
+// `shot.html` and `cli shot`, which have no menu and want a level to build.
+//
+// An unknown `?level=` is the store's to answer as well - it shows the menu
+// with a line saying so, rather than silently playing something else - so by
+// the time this runs the name is one the registry has.
 const levelId = ((): string => {
   const requested = params.get("level") ?? DEFAULT_LEVEL;
   return LEVELS[requested] ? requested : DEFAULT_LEVEL;
@@ -106,6 +119,9 @@ const levelSpec = LEVELS[levelId]!;
 // `virtual:level-hashes`). "" for a level compiled in rather than authored on
 // disk, which is every `TEST_*` rig.
 const levelHash = levelHashes[levelId] ?? "";
+// What the feedback form calls this level. The registry id is a key; the title
+// is what the player has just played (see `LevelMetaData.title`).
+const levelTitle = levelSpec.data.meta?.title ?? levelId;
 const isBall = levelSpec.controller === "ball";
 const baseZoom = isBall ? BALL_ZOOM : GRAPPLE_ZOOM;
 
@@ -630,6 +646,14 @@ let fps = 0;
 // sort a second - and only the HUD is opt-in.
 const perf = new PerfProbe();
 (window as unknown as { __perf: typeof perf.snapshot }).__perf = perf.snapshot;
+// A live handle on the level being played, the way `__perf` is one on the probe
+// and `__replay` is one on the transport: a script driving the page - a grab, a
+// headless check of the completion flow - can read where the sim has got to and
+// reach into it without going through the keyboard.
+//
+// A GETTER, because the level is replaced on every reset and a captured
+// reference would be of a run that has ended.
+Object.defineProperty(window, "__level", { get: () => level, configurable: true });
 // The visual chain drape may not cost gameplay a frame: past this much of a
 // step it stops iterating and the next step picks up the slack (literally).
 // Half a millisecond is 3% of the 60 Hz step and several times what the drape
@@ -767,10 +791,60 @@ function completeLevel(): void {
   // or the form is a dialogue the player cannot point at.
   document.exitPointerLock?.();
   document.documentElement.style.cursor = "";
-  // Phase 5 puts the feedback form here and sends the player back to the level
-  // select. Until it lands, the level says it is finished and stays on screen,
-  // which is the honest half of the behaviour rather than a placeholder for it.
-  showToast(`Rung at frame ${(level as BallLevel).completedFrame}`, "ok");
+  const completedFrame = (level as BallLevel).completedFrame ?? 0;
+  const was = readProgress()[levelId];
+  const stars = (was?.stars ?? null) as Stars | null;
+
+  void showFeedbackForm({
+    eyebrow: "Rung",
+    title: levelTitle,
+    // Pre-filled from the last thing this player said about this level: a
+    // re-rating that opened blank would read as the old one having been lost.
+    stars,
+    comment: was?.comment ?? null,
+    submit: ({ stars: gave, comment }) => {
+      // LOCALLY FIRST, and then the POST. A dev page with no `serve.ts` beside
+      // it and a flaky network are the same case, and in both the level has
+      // still been finished: writing progress only on a successful send would
+      // lose the completion along with the rating.
+      writeProgress(levelId, {
+        completedAt: was?.completedAt ?? Date.now(),
+        stars: gave,
+        comment,
+        submittedAt: Date.now(),
+      });
+      void submitFeedback({
+        level: levelId,
+        levelHash,
+        commit,
+        dirty,
+        srcHash,
+        stars: gave,
+        comment,
+        // The run that rang it, so a rating can be read beside the play it came
+        // out of. A re-rating from the level select carries neither.
+        ...(recorder?.session ? { session: recorder.session, run: resets } : {}),
+        completedFrame,
+      }).then((ok) => {
+        if (!ok) showToast("Could not send that - it is saved on this device.", "warn");
+      });
+    },
+    // Skip is a first-class outcome: the level was finished and nothing was
+    // said, which is a real answer rather than a missing one.
+    skip: () => {
+      writeProgress(levelId, {
+        completedAt: was?.completedAt ?? Date.now(),
+        stars: was?.stars ?? null,
+        comment: was?.comment ?? null,
+        submittedAt: was?.submittedAt ?? null,
+      });
+    },
+  }).then(() => {
+    // Back to the level select, which is where a finished level leads. A
+    // navigation rather than an in-page return, for the reason picking a level
+    // is one: a session is a page load (see docs/levels.md).
+    location.href = "/";
+  });
 }
 
 function frame(now: number): void {

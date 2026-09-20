@@ -52,6 +52,7 @@
 <nav role="tablist">
   <button role="tab" data-tab="runs" aria-selected="true">runs</button>
   <button role="tab" data-tab="live">live</button>
+  <button role="tab" data-tab="feedback">feedback</button>
   <button role="tab" data-tab="players">players</button>
   <button role="tab" data-tab="storage">storage</button>
 </nav>
@@ -80,6 +81,29 @@
     <tbody></tbody>
   </table></div>
   <div class="empty" id="runs-empty" hidden>No runs match.</div>
+</section>
+
+<!-- WHAT PLAYERS SAID. Append-only, so a level and player may have several
+     rows and the version count is what says so: "v3 of 3" is the latest of
+     three, and an older one reads "v1 of 3". A rating that was left on a
+     different tree or a different LEVEL FILE from the one being served is
+     marked, the way a run's commit is. -->
+<section id="feedback" hidden>
+  <div class="bar">
+    <label>player <select id="fb-player"><option value="">all</option></select></label>
+    <label>level <select id="fb-level"><option value="">all</option></select></label>
+    <label>stars <select id="fb-stars"><option value="">any</option><option>5</option><option>4</option><option>3</option><option>2</option><option>1</option><option value="none">none</option></select></label>
+    <label><input type="checkbox" id="fb-latest" /> latest only</label>
+    <span class="dim" id="fb-count"></span>
+  </div>
+  <div class="wrap"><table id="fb-table">
+    <thead><tr>
+      <th>when</th><th>player</th><th>level</th><th>version</th><th>stars</th>
+      <th>comment</th><th>commit</th><th>level file</th>
+    </tr></thead>
+    <tbody></tbody>
+  </table></div>
+  <div class="empty" id="fb-empty" hidden>Nobody has said anything yet.</div>
 </section>
 
 <section id="live" hidden>
@@ -270,6 +294,73 @@
     ].map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
   }
 
+  // ---- feedback ---------------------------------------------------------------
+  let feedback = { feedback: [], players: {}, here: { commit: "", srcHash: "" } };
+
+  function renderFeedback() {
+    const rows = feedback.feedback;
+    // The version a row is, per LEVEL and PLAYER, counted oldest-first so "v1"
+    // is the first thing they said about it.
+    const seq = new Map();
+    const totals = new Map();
+    for (const r of [...rows].sort((a, b) => a.at - b.at)) {
+      const k = `${r.level}\u0000${r.player}`;
+      const n = (totals.get(k) || 0) + 1;
+      totals.set(k, n);
+      seq.set(r.id, n);
+    }
+    const fPlayer = $("#fb-player").value, fLevel = $("#fb-level").value, fStars = $("#fb-stars").value;
+    const latestOnly = $("#fb-latest").checked;
+    const view = rows.filter((r) => {
+      const k = `${r.level}\u0000${r.player}`;
+      if (fPlayer && r.player !== fPlayer) return false;
+      if (fLevel && r.level !== fLevel) return false;
+      if (fStars === "none" && r.stars !== null) return false;
+      if (fStars && fStars !== "none" && r.stars !== Number(fStars)) return false;
+      if (latestOnly && seq.get(r.id) !== totals.get(k)) return false;
+      return true;
+    });
+    const name = (id) => {
+      const p = feedback.players[id];
+      return p && p.name ? p.name : id.slice(0, 8);
+    };
+    $("#fb-count").textContent = `${view.length} of ${rows.length}`;
+    $("#fb-empty").hidden = view.length > 0;
+    $("#fb-table").hidden = view.length === 0;
+    $("#fb-table tbody").innerHTML = view.map((r) => {
+      const k = `${r.level}\u0000${r.player}`;
+      const stars = r.stars === null ? '<span class="dim">-</span>' : "\u2605".repeat(r.stars) + '<span class="dim">' + "\u2606".repeat(5 - r.stars) + "</span>";
+      const sameTree = r.srcHash === feedback.here.srcHash;
+      const sameLevel = !r.hereLevelHash || r.levelHash === r.hereLevelHash;
+      return `<tr>
+        <td title="${esc(fmtWhen(r.at))}">${fmtShort(r.at)}</td>
+        <td>${esc(name(r.player))}</td>
+        <td>${esc(r.level)}</td>
+        <td class="dim">v${seq.get(r.id)} of ${totals.get(k)}</td>
+        <td>${stars}</td>
+        <td style="white-space:normal;max-width:48ch">${esc(r.comment || "")}</td>
+        <td>${esc(r.commit)}${sameTree ? ' <span class="tag live">live</span>' : ""}</td>
+        <td class="${sameLevel ? "dim" : "warn"}">${esc((r.levelHash || "").slice(0, 8))}${sameLevel ? "" : " changed"}</td>
+      </tr>`;
+    }).join("");
+
+    for (const [sel, values] of [["#fb-player", [...new Set(rows.map((r) => r.player))]], ["#fb-level", [...new Set(rows.map((r) => r.level))].sort()]]) {
+      const el = $(sel);
+      const keep = el.value;
+      el.innerHTML = '<option value="">all</option>' + values.map((v) => `<option value="${esc(v)}">${esc(sel === "#fb-player" ? name(v) : v)}</option>`).join("");
+      el.value = keep;
+    }
+  }
+
+  async function loadFeedback() {
+    try {
+      feedback = await api("GET", "/feedback");
+      renderFeedback();
+    } catch (e) {
+      status(String(e), true);
+    }
+  }
+
   function render() {
     fillFilters();
     renderRuns();
@@ -283,7 +374,11 @@
     $$("nav [role=tab]").forEach((x) => x.setAttribute("aria-selected", x === b));
     $$("section").forEach((s) => s.hidden = s.id !== b.dataset.tab);
     location.hash = b.dataset.tab;
+    // Fetched when the tab is opened rather than with the index: it is a
+    // separate file and a separate question, and the runs page polls.
+    if (b.dataset.tab === "feedback") void loadFeedback();
   }));
+  $$("#feedback .bar select, #feedback .bar input").forEach((el) => el.addEventListener("change", renderFeedback));
   if (location.hash) $(`nav [data-tab="${location.hash.slice(1)}"]`)?.click();
 
   $$("#runs .bar select, #runs .bar input").forEach((el) => el.addEventListener("change", renderRuns));

@@ -10,6 +10,7 @@
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ADMIN_API, INGEST_PATH, MAX_BODY_BYTES } from "../playtest/protocol";
+import { FEEDBACK_PATH } from "../playtest/feedback";
 import type { PlaytestStore } from "./store";
 
 const PID_COOKIE = "pid";
@@ -21,6 +22,20 @@ function json(status: number, body: unknown, headers: Record<string, string> = {
     status,
     headers: { "content-type": "application/json", "cache-control": "no-store", ...headers },
   });
+}
+
+// The `pid` cookie, as a response header. HttpOnly, so the page cannot read or
+// forge it, and refreshed on every response so an active player never ages out
+// of their own identity. `Secure` only where the request actually arrived over
+// HTTPS - a local `bun run serve.ts` is plain HTTP and a Secure cookie there is
+// one the browser silently drops.
+function pidCookie(pid: string, req: Request, url: URL): Record<string, string> {
+  if (!pid) return {};
+  const secure =
+    url.protocol === "https:" || req.headers.get("x-forwarded-proto") === "https" ? "; Secure" : "";
+  return {
+    "set-cookie": `${PID_COOKIE}=${pid}; Path=/; Max-Age=${PID_MAX_AGE}; HttpOnly; SameSite=Lax${secure}`,
+  };
 }
 
 function cookie(req: Request, name: string): string | null {
@@ -62,18 +77,21 @@ export async function handlePlaytest(req: Request, ctx: RouteContext): Promise<R
   const url = new URL(req.url);
   const path = url.pathname;
 
-  if (path === INGEST_PATH) {
+  // The two OPEN routes: runs stream into one and ratings post to the other.
+  // Both mint and refresh the same `pid` cookie, which is what makes a player's
+  // runs and their ratings one player - so the response headers are built once,
+  // here, rather than copied.
+  if (path === INGEST_PATH || path === FEEDBACK_PATH) {
     if (req.method !== "POST") return json(405, { error: "method not allowed" });
     const body = await readBody(req);
     if (body === null) return json(413, { error: `body over ${MAX_BODY_BYTES} bytes` });
-    const r = ctx.store.ingest(body, clientIp(req, ctx.socketIp), cookie(req, PID_COOKIE));
-    const headers: Record<string, string> = {};
-    if (r.pid) {
-      headers["set-cookie"] =
-        `${PID_COOKIE}=${r.pid}; Path=/; Max-Age=${PID_MAX_AGE}; HttpOnly; SameSite=Lax` +
-        (url.protocol === "https:" || req.headers.get("x-forwarded-proto") === "https" ? "; Secure" : "");
-    }
-    return json(r.status, r.body, headers);
+    const ip = clientIp(req, ctx.socketIp);
+    const pid = cookie(req, PID_COOKIE);
+    const r =
+      path === INGEST_PATH
+        ? ctx.store.ingest(body, ip, pid)
+        : ctx.store.feedback(body, ip, pid);
+    return json(r.status, r.body, pidCookie(r.pid, req, url));
   }
 
   if (path === "/admin" || path === "/admin/") {
@@ -88,6 +106,17 @@ export async function handlePlaytest(req: Request, ctx: RouteContext): Promise<R
 
   if (parts[0] === "index" && parts.length === 1 && req.method === "GET") {
     return json(200, store.adminIndex());
+  }
+
+  // Every rating, newest first, with the players so the page can show names
+  // rather than uuids. Whole rather than paged for the reason the store reads
+  // the file whole: this is a handful of friends, and a line is ~300 bytes.
+  if (parts[0] === "feedback" && parts.length === 1 && req.method === "GET") {
+    return json(200, {
+      feedback: store.readFeedback().sort((a, b) => b.at - a.at),
+      players: store.adminIndex().players,
+      here: store.adminIndex().here,
+    });
   }
 
   if (parts[0] === "runs" && parts[1]) {

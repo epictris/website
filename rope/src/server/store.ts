@@ -36,6 +36,13 @@ import { join } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { ACTIONS, type Recording, type SerializedFrame, type WorldDigest } from "../sim/trace";
 import {
+  FEEDBACK_PER_IP_PER_HOUR,
+  MAX_COMMENT,
+  type FeedbackRecord,
+  type FeedbackSubmission,
+  type Stars,
+} from "../playtest/feedback";
+import {
   IDLE_SEAL_MS,
   MAX_RUN_FRAMES,
   type AdminIndex,
@@ -73,6 +80,11 @@ export interface StoreOptions {
   dir: string;
   // The tree this server serves, for the index's `here`.
   here: { commit: string; srcHash: string };
+  // The hash of each level FILE this server is serving, by registry id (see
+  // `levelFileHash`). Stamped into every feedback record beside the page's own
+  // claim, so a client lying about which level it played is visible. Absent in
+  // the cases, which have no `levels/` to read.
+  levelHashes?: Record<string, string>;
   // Replays a sealed bundle and returns its verdict, or null when it cannot.
   // Injected because production runs it in a subprocess (a two-hour run takes
   // tens of seconds to re-simulate, and the event loop has other players to
@@ -211,6 +223,53 @@ function validateMeta(m: unknown): SessionMeta {
   };
 }
 
+// One submission, field by field, with a `Refusal` per bad field - the shape
+// `validateMeta` sets, and for the reason it sets it: this route is OPEN, so
+// everything that reaches it is a claim rather than a fact.
+//
+// A COMMENT IS TRIMMED AND CAPPED rather than refused for being long: a player
+// who wrote three thousand characters said something, and answering them with a
+// 400 loses all of it to punish the last thousand.
+function validateFeedback(b: unknown): FeedbackSubmission {
+  if (!isRecord(b)) throw new Refusal(400, "feedback: body is not an object");
+  if (
+    !isStr(b.level, 64) ||
+    !isStr(b.levelHash, 64) ||
+    !isStr(b.commit, 64) ||
+    typeof b.dirty !== "boolean" ||
+    !isStr(b.srcHash, 64)
+  ) {
+    throw new Refusal(400, "feedback: the level or the tree stamp is of the wrong shape");
+  }
+  if (!b.level.trim()) throw new Refusal(400, "feedback: no level");
+  if (!(b.stars === null || (isInt(b.stars, 1) && b.stars <= 5))) {
+    throw new Refusal(400, "feedback: stars is 1..5 or null");
+  }
+  if (!(b.comment === null || typeof b.comment === "string")) {
+    throw new Refusal(400, "feedback: comment is a string or null");
+  }
+  // NEITHER is what Skip leaves, and it is a real answer - "played it, said
+  // nothing" - so it is accepted rather than refused as an empty form.
+  const comment = typeof b.comment === "string" ? b.comment.trim().slice(0, MAX_COMMENT) : null;
+  if (!(b.session === undefined || isStr(b.session, 64))) throw new Refusal(400, "feedback: bad session");
+  if (!(b.run === undefined || isInt(b.run))) throw new Refusal(400, "feedback: bad run");
+  if (!(b.completedFrame === undefined || isInt(b.completedFrame))) {
+    throw new Refusal(400, "feedback: bad completedFrame");
+  }
+  return {
+    level: b.level,
+    levelHash: b.levelHash,
+    commit: b.commit,
+    dirty: b.dirty,
+    srcHash: b.srcHash,
+    stars: (b.stars as Stars | null) ?? null,
+    comment: comment || null,
+    ...(typeof b.session === "string" ? { session: b.session } : {}),
+    ...(typeof b.run === "number" ? { run: b.run } : {}),
+    ...(typeof b.completedFrame === "number" ? { completedFrame: b.completedFrame } : {}),
+  };
+}
+
 function validateFrame(f: unknown): SerializedFrame {
   if (!isRecord(f) || !isInt(f.h) || f.h >= HELD_MASK_LIMIT || !isFinite(f.mx) || !isFinite(f.my)) {
     throw new Refusal(400, "frames: a frame is not {h, mx, my}");
@@ -231,12 +290,15 @@ export class PlaytestStore {
   private annotations: Record<string, Annotation>;
   private index = new Map<string, RunRow>();
   private newSessionTimes = new Map<string, number[]>();
+  private feedbackTimes = new Map<string, number[]>();
+  private readonly levelHashes: Record<string, string>;
   private verifyQueue: string[] = [];
   private verifying = false;
 
   constructor(opts: StoreOptions) {
     this.dir = opts.dir;
     this.here = opts.here;
+    this.levelHashes = opts.levelHashes ?? {};
     this.verifier = opts.verify;
     this.now = opts.now ?? (() => Date.now());
     this.log = opts.log ?? (() => undefined);
@@ -808,6 +870,8 @@ export class PlaytestStore {
       }
     }
     for (const sess of this.sessions.values()) if (sess.pid === from) sess.pid = into;
+    // ...and their feedback, so a merged player's ratings read as theirs.
+    this.rewriteFeedback((r) => (r.player === from ? { ...r, player: into } : r));
     this.savePlayers();
     if (rows) this.saveIndex();
     return a;
@@ -827,11 +891,114 @@ export class PlaytestStore {
         this.sessions.delete(sess.id);
       }
     }
+    // Their FEEDBACK too. The admin's delete is meant to be a full erase, and a
+    // rating left behind is the one trace of a deleted player that nothing else
+    // would ever show.
+    this.rewriteFeedback((r) => (r.player === id ? null : r));
     for (const alias of this.players[id]!.aliases) this.aliasOf.delete(alias);
     delete this.players[id];
     for (const p of Object.values(this.players)) p.probably = p.probably.filter((x) => x !== id);
     this.savePlayers();
     return n;
+  }
+
+  // ---- feedback --------------------------------------------------------------
+  //
+  // APPEND-ONLY, one JSON line per submission in `<dir>/feedback.ndjson` (see
+  // `playtest/feedback.ts`). Nothing here rewrites the file, nothing dedupes
+  // and nothing overwrites: a player who rates a level, plays it again and
+  // rates it differently leaves two lines, and what changed between them is the
+  // thing worth reading. The two exceptions are both ADMIN acts and both say so
+  // where they are (`deletePlayer`, `mergePlayers`).
+  //
+  // It is read back whole rather than indexed. A line is ~300 bytes and this is
+  // a handful of friends: the index that exists for runs exists because
+  // listing a month of them meant gunzipping a month of them, and reading a
+  // few thousand lines of text is not that.
+
+  private feedbackPath(): string {
+    return this.path("feedback.ndjson");
+  }
+
+  private hereLevelHash(level: string): string {
+    return this.levelHashes[level] ?? "";
+  }
+
+  readFeedback(): FeedbackRecord[] {
+    if (!existsSync(this.feedbackPath())) return [];
+    const out: FeedbackRecord[] = [];
+    for (const line of readFileSync(this.feedbackPath(), "utf8").split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        out.push(JSON.parse(line) as FeedbackRecord);
+      } catch {
+        // One bad line is one lost rating, not a broken store.
+      }
+    }
+    return out;
+  }
+
+  // Take one submission. Returns what the route should answer, and the player
+  // id it should set as the cookie - exactly as `ingest` does, so a player who
+  // rates before their first batch lands still gets ONE identity rather than
+  // two (see `resolveOrMintPlayer`).
+  feedback(rawBody: string, ip: string, cookiePid: string | null): IngestResult {
+    const now = this.now();
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(rawBody);
+    } catch {
+      return { status: 400, body: { error: "body is not JSON" }, pid: cookiePid ?? "" };
+    }
+    let submission: FeedbackSubmission;
+    try {
+      submission = validateFeedback(parsed);
+    } catch (e) {
+      const status = e instanceof Refusal ? e.status : 400;
+      return { status, body: { error: e instanceof Error ? e.message : String(e) }, pid: cookiePid ?? "" };
+    }
+    const recent = (this.feedbackTimes.get(ip) ?? []).filter((t) => now - t < 60 * 60 * 1000);
+    if (recent.length >= FEEDBACK_PER_IP_PER_HOUR) {
+      return { status: 429, body: { error: "too much feedback from this address" }, pid: cookiePid ?? "" };
+    }
+    recent.push(now);
+    this.feedbackTimes.set(ip, recent);
+
+    const pid = this.resolveOrMintPlayer(cookiePid, ip, now);
+    const record: FeedbackRecord = {
+      ...submission,
+      id: randomUUID(),
+      player: pid,
+      ip,
+      at: now,
+      // The SERVER's own answers beside the page's, so a client lying about
+      // either is visible rather than believed.
+      hereCommit: this.here.commit,
+      hereLevelHash: this.hereLevelHash(submission.level),
+    };
+    appendFileSync(this.feedbackPath(), JSON.stringify(record) + "\n");
+    this.touchPlayer(pid, ip, now, 0);
+    return { status: 200, body: { ok: true }, pid };
+  }
+
+  // Rewrite the file without `keep`-rejected lines. The ONE thing that rewrites
+  // it, and both callers are admin acts: a delete is meant to be a full erase,
+  // and a merge re-attributes. Atomic, so a crash mid-write leaves the previous
+  // file rather than half of the new one.
+  private rewriteFeedback(map: (r: FeedbackRecord) => FeedbackRecord | null): number {
+    if (!existsSync(this.feedbackPath())) return 0;
+    const kept: string[] = [];
+    let touched = 0;
+    for (const r of this.readFeedback()) {
+      const next = map(r);
+      if (next === null) touched++;
+      else {
+        if (next !== r) touched++;
+        kept.push(JSON.stringify(next));
+      }
+    }
+    if (touched > 0) writeAtomic(this.feedbackPath(), kept.length ? kept.join("\n") + "\n" : "");
+    return touched;
   }
 
   // For the cases.

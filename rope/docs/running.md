@@ -57,12 +57,25 @@ and `TEST_SPRING` is the spring-body one (a leaf over a chasm to hang off - see
 
 ## Starting a run
 
-A page opens on the loading screen, and the level starts on a **PLAY** press: when the assets are in the bar is replaced by a button, and the frame loop begins on the click (see [**The loading screen**](loading-screen.md)).
+`/` with nothing asked for is the **level select** (see [**Levels**](levels.md)): a list of the listed levels, the introduction first, with what this browser has finished and last rated beside each.
+Picking one navigates to `/?level=ID`, because one page load is one session and one level.
+That page never loads the game at all, so a bare `/` costs a list of words rather than a megabyte of three.js; a `?level=` nobody has shows the same list with a line saying so.
+
+A level page opens on the loading screen, and the level starts on a **PLAY** press: when the assets are in the bar is replaced by a button, and the frame loop begins on the click (see [**The loading screen**](loading-screen.md)).
 The press is what buys fullscreen and, through it, the pointer lock - both are gestures a browser grants only to a click - so the game opens filling the screen with the cursor in hand.
 The button is focused, so Enter or Space works; a refused fullscreen still plays windowed.
 Nothing is waiting on the press but the press: the level is downloaded, warmed and prewarmed behind the screen before the button appears.
 
 A test run from the editor has no loading screen and no gate - it is the editor's canvas and the editor's cursor, and starts the moment ▶ Test is pressed.
+
+## Ending one
+
+A listed level ends at a **bell** (see [**The bell**](levels.md#the-bell)): hook the sally on the end of its toll rope, pull down, and the bell swings past the threshold and rings.
+The sim then runs a second more so the swing is seen and **freezes** - nothing reaches into the level, so a **P** download taken afterwards still replays and rings on the same frame - the pointer comes back, and a form appears over the frozen scene: five stars and a comment, both optional, **Submit** or **Skip**.
+Either way the level is marked as finished on this browser and the page returns to the level select, where a finished row can be re-rated from its `rate` link.
+The run is sealed with the end reason `complete`, which is its own reason because it is neither a failure nor an interruption.
+
+In the editor's ▶ Test a ring raises a toast and the test carries on: what is being judged there is the swing.
 
 ## Watching a replay
 

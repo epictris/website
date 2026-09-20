@@ -28,15 +28,20 @@ import { levelStoredFiles } from "./src/render3d/levelAssets";
 const TREE_STAMP_ID = "virtual:tree-stamp";
 const TREE_STAMP_RESOLVED = "\0" + TREE_STAMP_ID;
 
+// One `git`, because two plugins need the stamp: the app imports it through
+// `virtual:tree-stamp`, and the preload manifest carries it for the level
+// select, which never loads the app (see `storeScript`). It must never take the
+// dev server down over a broken checkout, hence the swallowed error.
+const git = (args: string[]): string | null => {
+  try {
+    return execSync(`git ${args.join(" ")}`, { cwd: import.meta.dirname, encoding: "utf8" });
+  } catch {
+    return null;
+  }
+};
+
 function treeStampPlugin(): Plugin {
   const root = import.meta.dirname;
-  const git = (args: string[]): string | null => {
-    try {
-      return execSync(`git ${args.join(" ")}`, { cwd: root, encoding: "utf8" });
-    } catch {
-      return null;
-    }
-  };
   // Recomputed lazily rather than on every watcher event: hashing the tree is
   // cheap but not free, and a burst of saves would otherwise pay for each one.
   let cached: TreeStamp | null = null;
@@ -347,10 +352,28 @@ function storeScript(): Plugin {
   const build = (): string => {
     const index = new Map<string, number>();
     const files: [string, number][] = [];
-    const levels: Record<string, { b: 0 | 1; i: number[] }> = {};
+    const levels: Record<string, { b: 0 | 1; i: number[]; t: string; k: 0 | 1 | 2 }> = {};
+    // Which levels the menu offers and what it calls them, resolved HERE for
+    // the same reason the file list is: the menu is painted by the inlined
+    // store before the app exists, and on a bare `/` the app is never loaded
+    // at all - so reading `meta` out of `registry.ts` at runtime would mean
+    // downloading the level graph to draw a list of six words.
+    //
+    // Off the level as it is ON DISK RIGHT NOW (`levelData`) rather than off
+    // the copy compiled into this config, so a title typed into the editor's
+    // Level panel is on the menu at the next page load rather than at the next
+    // server restart. It is `listedLevels()`'s rule applied to those bytes -
+    // file-backed ball levels that do not say `unlisted` - which is why the
+    // condition is spelled out here rather than the function called: the
+    // function reads the compiled-in copy, and the two would disagree for
+    // exactly as long as an edit was unsaved.
     for (const [id, spec] of Object.entries(LEVELS)) {
+      const meta = levelData(spec).meta;
+      const listed = spec.controller === "ball" && !!spec.file && !meta?.unlisted;
       levels[id] = {
         b: spec.controller === "ball" ? 1 : 0,
+        t: meta?.title ?? id,
+        k: !listed ? 0 : meta?.intro ? 2 : 1,
         i: levelStoredFiles(levelData(spec)).map((f) => {
           let at = index.get(f.file);
           if (at === undefined) {
@@ -361,7 +384,25 @@ function storeScript(): Plugin {
         }),
       };
     }
-    return JSON.stringify({ f: files, l: levels, d: DEFAULT_LEVEL });
+    // The tree stamp and the level hashes ride along too, because the LEVEL
+    // SELECT can leave feedback (its `rate` link) and a page that never loads
+    // the app cannot import `virtual:tree-stamp` or `virtual:level-hashes` to
+    // find out what it is serving. Cheap: a commit, a flag and one 12-hex hash
+    // per file-backed level.
+    const stamp = treeStamp(import.meta.dirname, git);
+    const hashes: Record<string, string> = {};
+    for (const [id, spec] of Object.entries(LEVELS)) {
+      if (spec.file) hashes[id] = levelFileHash(import.meta.dirname, spec.file);
+    }
+    return JSON.stringify({
+      f: files,
+      l: levels,
+      d: DEFAULT_LEVEL,
+      c: stamp.commit,
+      y: stamp.dirty ? 1 : 0,
+      s: stamp.srcHash,
+      h: hashes,
+    });
   };
 
   // Compiled once per config load. `bundle: true` is what turns the module's

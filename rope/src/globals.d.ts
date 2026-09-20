@@ -22,6 +22,19 @@ declare module "virtual:level-hashes" {
 // `src/render3d/store.ts` for why it is a global rather than an export, and
 // `storeScript` in vite.config.ts for how it gets there).
 interface Window {
+  // The level being played, live (see `main.ts`). A debug handle in the same
+  // idiom as `__perf` and `__replay`: a driving script reads it, and nothing in
+  // the app does.
+  readonly __level?: unknown;
+  // FALSE on a page that is the level select rather than a level (see
+  // `paintMenu` in src/render3d/store.ts). `index.html`'s module tag reads it
+  // and imports `main.ts` only when there is something to play, so a bare `/`
+  // never downloads three.js or the level graph to draw a list of six words.
+  //
+  // A global rather than an export for the reason the store itself is one: the
+  // script that decides is deliberately outside the module graph, because it
+  // has to have run before the graph exists.
+  __ropePlay?: boolean;
   __ropeStore?: {
     // The bytes of `url`, adopting the download the preloader already started
     // for it. `bytes` is the manifest's size for the file.

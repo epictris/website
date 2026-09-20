@@ -18,6 +18,13 @@ import {
   type PlaytestEvent,
   type SessionMeta,
 } from "../playtest/protocol";
+import {
+  ADMIN_FEEDBACK,
+  FEEDBACK_PER_IP_PER_HOUR,
+  MAX_COMMENT,
+  type FeedbackRecord,
+  type FeedbackSubmission,
+} from "../playtest/feedback";
 import { runScript } from "../sim/playtest";
 import { replayRecording } from "../sim/replay";
 import { verifySelfReplay } from "../sim/selfReplay";
@@ -106,6 +113,8 @@ class Harness {
     return new PlaytestStore({
       dir: this.dir,
       here: { commit: "abc1234", srcHash: "0123456789ab" },
+      // What the SERVER says the level file is, against the page's own claim.
+      levelHashes: { BALL: "serverhash01" },
       now: () => this.t,
       verify: async (file): Promise<Verdict> => {
         const v = verifySelfReplay(loadGz(file));
@@ -129,6 +138,27 @@ class Harness {
     return p!;
   }
 
+  // One rating, as the page would post it.
+  rate(body: Partial<FeedbackSubmission>, ip = "203.0.113.7", pid: string | null = null) {
+    const full: FeedbackSubmission = {
+      level: "BALL",
+      levelHash: "pagehash001",
+      commit: "abc1234",
+      dirty: false,
+      srcHash: "0123456789ab",
+      stars: null,
+      comment: null,
+      ...body,
+    };
+    return this.store.feedback(JSON.stringify(full), ip, pid);
+  }
+
+  feedbackLines(): FeedbackRecord[] {
+    const f = join(this.dir, "feedback.ndjson");
+    if (!existsSync(f)) return [];
+    return readFileSync(f, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as FeedbackRecord);
+  }
+
   runFiles(): string[] {
     const out: string[] = [];
     const runs = join(this.dir, "runs");
@@ -145,6 +175,122 @@ class Harness {
 type Case = (h: Harness, s: { frames: SerializedFrame[]; digests: WorldDigest[] }) => Promise<string> | string;
 
 const CASES: Record<string, Case> = {
+  // FEEDBACK IS APPEND-ONLY, which is the whole property (see
+  // `playtest/feedback.ts`): a player who rates a level, plays it again and
+  // rates it differently leaves TWO lines, and what changed between them is the
+  // thing worth reading. A store that kept only the latest would have thrown it
+  // away, and nothing on the page would say so.
+  "feedback is appended, never overwritten": (h) => {
+    h.rate({ stars: 3, comment: "the bell is stiff" });
+    h.t += 60_000;
+    h.rate({ stars: 5, comment: "rang it, much better" });
+    const lines = h.feedbackLines();
+    if (lines.length !== 2) throw new Error(`${lines.length} lines, expected 2`);
+    if (lines[0]!.stars !== 3 || lines[1]!.stars !== 5) throw new Error(JSON.stringify(lines.map((l) => l.stars)));
+    if (lines[0]!.id === lines[1]!.id) throw new Error("two submissions share an id");
+    if (lines[0]!.at === lines[1]!.at) throw new Error("both lines carry the same clock");
+    return `2 versions, ${lines[0]!.stars}* then ${lines[1]!.stars}*`;
+  },
+
+  // The SERVER's own answer beside the page's claim, so a client lying about
+  // which level it played is visible rather than believed.
+  "a rating is stamped with what the server is serving": (h) => {
+    const r = h.rate({ levelHash: "a-lie-000000" });
+    if (r.status !== 200) throw new Error(`${r.status} ${JSON.stringify(r.body)}`);
+    const line = h.feedbackLines()[0]!;
+    if (line.levelHash !== "a-lie-000000") throw new Error("the page's claim was not kept");
+    if (line.hereLevelHash !== "serverhash01") throw new Error(`hereLevelHash ${line.hereLevelHash}`);
+    if (line.hereCommit !== "abc1234") throw new Error(`hereCommit ${line.hereCommit}`);
+    return `page says ${line.levelHash}, server says ${line.hereLevelHash}`;
+  },
+
+  // ONE identity for a player's runs and their ratings, whichever they do
+  // first. Rating before a single batch has landed is the case that used to
+  // mint two players for one person.
+  "a rating mints the pid cookie, and a run then lands on the same player": async (h, s) => {
+    const first = h.rate({ stars: 4 });
+    if (!first.pid) throw new Error("no pid minted");
+    const pid = h.play(SESSION_A, runBatches(s.frames, s.digests, 0), "203.0.113.7", first.pid);
+    if (pid !== first.pid) throw new Error(`run landed on ${pid}, rating on ${first.pid}`);
+    await h.store.settled();
+    const row = h.store.adminIndex().runs[0]!;
+    if (row.player !== first.pid) throw new Error(`index says ${row.player}`);
+    if (h.feedbackLines()[0]!.player !== first.pid) throw new Error("the rating is on another player");
+    return `one player for a rating and a run: ${pid.slice(0, 8)}`;
+  },
+
+  // Every refusal, because this route is OPEN and everything that reaches it is
+  // a claim. A long comment is TRIMMED rather than refused: a player who wrote
+  // three thousand characters said something, and a 400 loses all of it.
+  "a malformed rating is refused field by field, and a long comment is trimmed": (h) => {
+    const bad: [string, Partial<FeedbackSubmission>][] = [
+      ["no level", { level: "" }],
+      ["stars 0", { stars: 0 as unknown as null }],
+      ["stars 6", { stars: 6 as unknown as null }],
+      ["stars as a string", { stars: "5" as unknown as null }],
+      ["comment as a number", { comment: 7 as unknown as null }],
+      ["run as a string", { run: "1" as unknown as number }],
+    ];
+    for (const [what, body] of bad) {
+      const r = h.rate(body);
+      if (r.status !== 400) throw new Error(`${what} was answered ${r.status}`);
+    }
+    if (h.store.feedback("not json", "203.0.113.7", null).status !== 400) throw new Error("non-JSON accepted");
+    const long = h.rate({ comment: "x".repeat(MAX_COMMENT + 500) });
+    if (long.status !== 200) throw new Error(`a long comment was answered ${long.status}`);
+    const kept = h.feedbackLines().at(-1)!.comment!;
+    if (kept.length !== MAX_COMMENT) throw new Error(`comment kept at ${kept.length}`);
+    // ...and NEITHER is a real answer: Skip records "played it, said nothing".
+    if (h.rate({ stars: null, comment: null }).status !== 200) throw new Error("a skip was refused");
+    return `${bad.length + 1} refusals, a comment trimmed to ${MAX_COMMENT}, a skip accepted`;
+  },
+
+  "feedback is rate limited per address": (h) => {
+    for (let i = 0; i < FEEDBACK_PER_IP_PER_HOUR; i++) {
+      if (h.rate({ stars: 3 }, "198.51.100.9").status !== 200) throw new Error(`refused at ${i}`);
+    }
+    if (h.rate({ stars: 3 }, "198.51.100.9").status !== 429) throw new Error("the cap did not bite");
+    // Another address is another player's, and is unaffected.
+    if (h.rate({ stars: 3 }, "203.0.113.7").status !== 200) throw new Error("a second address was capped too");
+    return `${FEEDBACK_PER_IP_PER_HOUR} an hour, then 429`;
+  },
+
+  // The two ADMIN acts that are allowed to rewrite the file, and the only two.
+  "deleting a player erases their feedback and merging re-attributes it": async (h, s) => {
+    const a = h.play(SESSION_A, runBatches(s.frames, s.digests, 0), "203.0.113.7");
+    const b = h.play(SESSION_B, runBatches(s.frames, s.digests, 0), "198.51.100.9");
+    h.rate({ stars: 5 }, "203.0.113.7", a);
+    h.rate({ stars: 2 }, "198.51.100.9", b);
+    await h.store.settled();
+
+    h.store.mergePlayers(a, b);
+    const merged = h.feedbackLines();
+    if (merged.length !== 2) throw new Error(`${merged.length} lines after a merge`);
+    if (merged.some((r) => r.player !== a)) throw new Error("a merged player's rating was left behind");
+
+    h.store.deletePlayer(a);
+    const after = h.feedbackLines();
+    if (after.length !== 0) throw new Error(`${after.length} lines survived a delete`);
+    return "merged 2 onto one player, then erased both with them";
+  },
+
+  // What `/admin` and `cli pull` read.
+  "the admin listing returns every rating newest first": async (h) => {
+    h.rate({ stars: 1, comment: "first" });
+    h.t += 60_000;
+    h.rate({ stars: 5, comment: "second" });
+    const res = await handlePlaytest(
+      new Request(`http://x${ADMIN_FEEDBACK}`),
+      { store: h.store, socketIp: "203.0.113.7", adminHtml: "" },
+    );
+    if (!res || res.status !== 200) throw new Error(`admin feedback: ${res?.status}`);
+    const body = (await res.json()) as { feedback: FeedbackRecord[]; players: Record<string, unknown> };
+    if (body.feedback.length !== 2) throw new Error(`${body.feedback.length} rows`);
+    if (body.feedback[0]!.comment !== "second") throw new Error("not newest first");
+    if (!body.players[body.feedback[0]!.player]) throw new Error("the player is not in the listing");
+    return "2 rows, newest first, with their player";
+  },
+
   // The level was FINISHED, which is a reason of its own and the one the bell
   // seals a run with (see `EndReason`). It has to be known at BOTH ends in the
   // same deploy: the store refuses a reason it does not have, and a refusal is

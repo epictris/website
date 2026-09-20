@@ -41,6 +41,15 @@
 
 export {};
 
+// What this browser has done with each level (see render/progress.ts). Bundled
+// IN by esbuild, since this file is compiled on its own and inlined ahead of
+// the app rather than imported by it.
+import { readProgress, writeProgress } from "../render/progress";
+// The form the level select's `rate` link opens. Bundled in for the same
+// reason: this page never loads the app.
+import { showFeedbackForm } from "../render/feedbackForm";
+import { submitFeedback, type Stars } from "../playtest/feedback";
+
 // One file being downloaded. Kept after it finishes: the bar's denominator is
 // everything the page has asked for, not what is in flight this instant.
 interface Download {
@@ -129,18 +138,183 @@ interface PreloadManifest {
   // Files, as [url, bytes].
   f: [string, number][];
   // Per level: `b` is 1 for a level that plays in 3D by default (the ball
-  // controller), and `i` are its indices into `f`, in the order the scene will
-  // ask for them.
-  l: Record<string, { b: 0 | 1; i: number[] }>;
-  // The level a bare URL plays, and the fallback for a `?level=` nobody has.
+  // controller), `i` are its indices into `f` in the order the scene will ask
+  // for them, `t` is the title the level select shows, and `k` is where it
+  // stands on that list - 0 unlisted, 1 listed, 2 the introduction.
+  //
+  // The title and the listing are HERE, in markup that already ships on every
+  // page, because the menu is painted before the app exists and the app is
+  // never loaded on the menu at all: reading them out of `registry.ts` would
+  // mean downloading the level graph to draw a list of six words.
+  l: Record<string, { b: 0 | 1; i: number[]; t: string; k: 0 | 1 | 2 }>;
+  // The fallback for a `?level=` nobody has. A BARE url is the menu.
   d: string;
+  // The tree this page was served from, and the hash of each level's own file:
+  // what a piece of feedback left FROM THE MENU has to stamp itself with (see
+  // `FeedbackSubmission`). The game page gets the same facts through
+  // `virtual:tree-stamp` and `virtual:level-hashes`, which this page has no app
+  // to import them with.
+  c?: string;
+  y?: 0 | 1;
+  s?: string;
+  h?: Record<string, string>;
 }
 
-// Start the level's download now. Everything here mirrors a decision `main.ts`
-// makes later - which level, and whether it renders in 3D - because the whole
-// point is to act on them before `main.ts` exists. They are small, stable rules,
-// and the cost of them drifting is a page that preloads the wrong level's
-// assets, which the "not in the preload list" warning below reports.
+
+
+// ---------------------------------------------------------------------------
+// The level select
+// ---------------------------------------------------------------------------
+
+// The menu is painted HERE, for the same reason the bar is: whoever draws it
+// has to be running before the thing it is instead of. A bare `/` must not
+// download a megabyte of three.js to show a list of six words, so the app is
+// never loaded on this page at all (see the module tag in index.html) and this
+// script is the whole of it.
+//
+// Every row is an `<a href="/?level=ID">`, so middle-click, a screen reader and
+// a bookmark all work, and picking a level is a NAVIGATION rather than an
+// in-page switch. That is not a nicety either: one page load is one session and
+// one level - the preload above is keyed on `?level=`, the recorder's session
+// meta is fixed per page, and a checkpoint is resolved once - and an in-page
+// switch would quietly break every one of them.
+function paintMenu(manifest: PreloadManifest, note: string): void {
+  // THIS SCRIPT RUNS IN THE HEAD, during parsing, so the markup it draws into
+  // does not exist yet - the same reason the bar looks its element up per
+  // animation frame instead of once. The DECISION is made now (`__ropePlay` is
+  // read by the module tag at the end of the body), and the painting waits for
+  // the document.
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", () => paintMenu(manifest, note), { once: true });
+    return;
+  }
+  const root = document.getElementById("menu");
+  const list = document.getElementById("menu-list");
+  if (!root || !list) return;
+  document.getElementById("loading")?.setAttribute("hidden", "");
+  const noteEl = document.getElementById("menu-note");
+  if (noteEl) noteEl.textContent = note;
+
+  const progress = readProgress();
+  const rows = Object.entries(manifest.l)
+    .filter(([, l]) => l.k !== 0)
+    .sort(([, a], [, b]) =>
+      a.k !== b.k ? b.k - a.k : a.t.localeCompare(b.t, undefined, { sensitivity: "base" }),
+    );
+
+  list.innerHTML = "";
+  for (const [id, level] of rows) {
+    const li = document.createElement("li");
+    // The rule under the introduction is what separates it from the rest, so
+    // it is drawn only when there IS a rest: a lone row with a line under it is
+    // a list that looks like it lost something.
+    if (level.k === 2 && rows.length > 1) li.dataset.intro = "1";
+    const a = document.createElement("a");
+    a.href = `/?level=${encodeURIComponent(id)}`;
+    const title = document.createElement("span");
+    title.className = "menu-title";
+    title.textContent = level.t;
+    a.appendChild(title);
+    const done = progress[id];
+    if (done) {
+      const mark = document.createElement("span");
+      mark.className = "menu-mark";
+      mark.textContent = "done";
+      a.appendChild(mark);
+      if (done.stars !== null) {
+        const stars = document.createElement("span");
+        stars.className = "menu-stars";
+        // Five glyphs always, so the ratings line up down the list.
+        stars.textContent = "\u2605".repeat(done.stars) + "\u2606".repeat(5 - done.stars);
+        a.appendChild(stars);
+      }
+    }
+    li.appendChild(a);
+    // RE-RATING, offered on every level this browser has finished. A rating is
+    // about a level rather than about a run, so it carries no session and no
+    // run, and it can be left long after the play it is about (see
+    // docs/levels.md).
+    if (done) {
+      const rate = document.createElement("span");
+      rate.className = "menu-rate";
+      rate.tabIndex = 0;
+      rate.role = "button";
+      rate.textContent = "rate";
+      const open = (): void => {
+        void showFeedbackForm({
+          // Nothing was rung: this is a level the player finished earlier and
+          // is saying something about now.
+          eyebrow: "Rate",
+          title: level.t,
+          stars: done.stars as Stars | null,
+          comment: done.comment,
+          submit: ({ stars, comment }) => {
+            // Locally FIRST, so a failed POST still keeps what was said - the
+            // rule the completion flow follows (see `submitFeedback`).
+            writeProgress(id, { ...done, stars, comment, submittedAt: Date.now() });
+            void submitFeedback({
+              level: id,
+              levelHash: manifest.h?.[id] ?? "",
+              commit: manifest.c ?? "",
+              dirty: manifest.y === 1,
+              srcHash: manifest.s ?? "",
+              stars,
+              comment,
+            });
+            paintMenu(manifest, note);
+          },
+        });
+      };
+      rate.addEventListener("click", (e) => {
+        e.preventDefault();
+        open();
+      });
+      rate.addEventListener("keydown", (e) => {
+        if (e.key !== "Enter" && e.key !== " ") return;
+        e.preventDefault();
+        open();
+      });
+      // Beside the row rather than inside its anchor: a link inside a link is
+      // not a thing, and a tap on "rate" must not open the level.
+      li.appendChild(rate);
+      li.style.display = "flex";
+      li.style.alignItems = "center";
+      li.style.gap = "1ch";
+      a.style.flex = "1";
+    }
+    list.appendChild(li);
+  }
+
+  root.dataset.show = "1";
+  // Arrows move, Enter opens - which the anchors give for free once one of them
+  // has the focus. The first row takes it, so the keyboard works without a
+  // click and a player who never touches the mouse still starts somewhere.
+  const links = [...list.querySelectorAll("a")];
+  let at = 0;
+  const focus = (i: number): void => {
+    at = (i + links.length) % links.length;
+    for (const [k, el] of links.entries()) el.dataset.at = k === at ? "1" : "0";
+    links[at]?.focus();
+  };
+  if (links.length) focus(0);
+  root.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowDown") focus(at + 1);
+    else if (e.key === "ArrowUp") focus(at - 1);
+    else return;
+    e.preventDefault();
+  });
+  // A click anywhere on a row follows its link, which is what makes a tap on a
+  // phone hit the whole row rather than the word in it.
+  for (const [i, el] of links.entries()) el.addEventListener("focus", () => focus(i));
+}
+
+// Start the level's download now - or, on a bare URL, paint the menu instead.
+//
+// Everything here mirrors a decision `main.ts` makes later - which level, and
+// whether it renders in 3D - because the whole point is to act on them before
+// `main.ts` exists. They are small, stable rules, and the cost of them drifting
+// is a page that preloads the wrong level's assets, which the "not in the
+// preload list" warning below reports.
 function preload(): void {
   const el = document.getElementById("preload-manifest");
   if (!el?.textContent) return;
@@ -153,6 +327,21 @@ function preload(): void {
   preloaded = true;
   const params = new URLSearchParams(location.search);
   const requested = params.get("level");
+  const replay = params.get("replay");
+
+  // NO LEVEL AND NO REPLAY IS THE MENU. It used to be the default level, which
+  // was right while there was one arena and is wrong now that there is a list
+  // (see docs/levels.md).
+  //
+  // A `?level=` NOBODY HAS is the menu too, with a line saying so, rather than
+  // silently playing something else: a mistyped or stale link that quietly
+  // opens a different level is a link nobody can debug.
+  if (replay === null && (requested === null || !manifest.l[requested])) {
+    window.__ropePlay = false;
+    paintMenu(manifest, requested === null ? "" : `There is no level called "${requested}".`);
+    return;
+  }
+
   const level = (requested !== null && manifest.l[requested]) || manifest.l[manifest.d];
   if (!level) return;
   // `?render=2d` is the escape hatch for a machine with no working WebGL, and a
@@ -291,6 +480,6 @@ window.__ropeStore = {
 
 preload();
 // Only a page with a preload list has a loading screen on it; the editor has
-// neither, and an animation frame a second forever is not something to leave
-// running there.
-if (preloaded) polling = requestAnimationFrame(tick);
+// neither, and the MENU has taken it off the page. An animation frame a second
+// forever is not something to leave running on either.
+if (preloaded && window.__ropePlay !== false) polling = requestAnimationFrame(tick);
