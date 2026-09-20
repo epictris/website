@@ -257,14 +257,13 @@ export class AimPointer {
     // in `update`, where the ordering cannot double-count them.
     const suspicious = (e: MouseEvent): void => {
       this.suspect++;
-      // A press is a POSITION as well as a warp, and the press that starts the
-      // run is the only one the game gets before the level is on screen: it is
-      // made on the loading screen's Play button rather than on the canvas, so
-      // the canvas's own `reveal` never sees it (see input/ballInput.ts). Taken
-      // here, the ball opens the level facing the hand that started it rather
-      // than facing nowhere until the mouse is next moved. `reveal` is a no-op
-      // where the reticle is not the page's cursor, and on every press after
-      // the cursor exists.
+      // A press is a POSITION as well as a warp, and a press that lands
+      // anywhere but the canvas is one the canvas's own `reveal` never sees
+      // (see input/ballInput.ts) - a letterbox bar, or the loading screen's
+      // PLAY button back when the level ended at one. Taken here, the ball
+      // faces the hand that pressed rather than facing nowhere until the mouse
+      // is next moved. `reveal` is a no-op where the reticle is not the page's
+      // cursor, and on every press after the cursor exists.
       this.reveal(e);
     };
     document.addEventListener("mousedown", suspicious, true);

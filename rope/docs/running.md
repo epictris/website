@@ -61,10 +61,12 @@ and `TEST_SPRING` is the spring-body one (a leaf over a chasm to hang off - see
 Picking one navigates to `/?level=ID`, because one page load is one session and one level.
 That page never loads the game at all, so a bare `/` costs a list of words rather than a megabyte of three.js; a `?level=` nobody has shows the same list with a line saying so.
 
-A level page opens on the loading screen, and the level starts on a **PLAY** press: when the assets are in the bar is replaced by a button, and the frame loop begins on the click (see [**The loading screen**](loading-screen.md)).
-The press is what buys fullscreen and, through it, the pointer lock - both are gestures a browser grants only to a click - so the game opens filling the screen with the cursor in hand.
-The button is focused, so Enter or Space works; a refused fullscreen still plays windowed.
-Nothing is waiting on the press but the press: the level is downloaded, warmed and prewarmed behind the screen before the button appears.
+A level page opens on the loading screen and **starts when the level is ready** - the bar fills, the scene is warmed and prewarmed behind it, and the frame loop begins (see [**The loading screen**](loading-screen.md)).
+There is no second press between choosing a level and playing it.
+
+It opens **windowed**, aiming with the real pointer, because fullscreen and the pointer lock are gestures a browser grants only to a click and there is no longer one to spend.
+The **first click in the level** takes both, in that order - it is the click that throws the first hook, so nothing is asked of the player they were not about to do - and the game fills the screen from there.
+A refused fullscreen gives the lock straight back and plays windowed, which is what the whole gate exists to guarantee: the lock is never held outside fullscreen.
 
 A test run from the editor has no loading screen and no gate - it is the editor's canvas and the editor's cursor, and starts the moment ▶ Test is pressed.
 
@@ -171,8 +173,8 @@ feel without a rebuild):
   un-projected through the *current* camera every time it is read
   (`currentAimLocal`) - the **virtual** cursor in fullscreen, where the lock is
   held, and the real pointer in a window, where it is not.
-  The **PLAY press takes the pointer lock** along with fullscreen (see [**Starting a run**](#starting-a-run)), and clicking the canvas takes it in **fullscreen only** thereafter - Esc releases it and the next click takes it back, and leaving fullscreen by either route gives the pointer back.
-  The press asks for the lock *itself*, first, before requesting fullscreen: asked from the `fullscreenchange` that follows instead - which reads as though it should work, entering fullscreen being a user gesture of its own - Chrome refuses it every time (`The root document of this element is not valid for pointer lock`, measured in a real browser on first loads and refreshes alike), and the game opened fullscreen with the desktop pointer loose in it until the player happened to click the canvas.
+  The **first click in the level takes the pointer lock** along with fullscreen (see [**Starting a run**](#starting-a-run)), and clicking the canvas takes it in **fullscreen only** thereafter - Esc releases it and the next click takes it back, and leaving fullscreen by either route gives the pointer back.
+  That click asks for the lock *itself*, first, before requesting fullscreen: asked from the `fullscreenchange` that follows instead - which reads as though it should work, entering fullscreen being a user gesture of its own - Chrome refuses it every time (`The root document of this element is not valid for pointer lock`, measured in a real browser on first loads and refreshes alike), and the game opened fullscreen with the desktop pointer loose in it until the player happened to click the canvas.
   A refused fullscreen gives the lock straight back, since a lock in a *window* is the one thing it is never allowed to be.
   While locked the
   virtual cursor is integrated from `movementX/Y` and held inside the 1920x1080
@@ -189,8 +191,8 @@ feel without a rebuild):
   It is hidden rather than shown as a crosshair beneath the ring because two marks for one pointer is what the reticle exists to avoid - and the crosshair the canvas carries in CSS is the grapple controller's, which has no reticle of its own.
 
   **The run opens with a reticle, never without one.**
-  The PLAY press is itself a position - `clientX/Y` is live on it, and the hand that made it is pointing at something - so the press that starts the level is the level's first aim (`AimPointer.reveal`, called from the document-level press listener because the press lands on the loading screen's button rather than on the canvas).
-  Windowed, that is where the hidden desktop pointer is, and the ball opens the level facing it.
+  A press is itself a position - `clientX/Y` is live on it, and the hand that made it is pointing at something - so the first press is the level's first aim, wherever on the page it lands (`AimPointer.reveal`, called from the document-level press listener so a press on a letterbox bar counts too).
+  Windowed - which is how a level now opens - that is where the hidden desktop pointer is, and the ball faces it.
   Locked, the desktop pointer has just been taken away and that point is no longer where anything is, so the `pointerlockchange` that confirms the capture re-seeds the cursor `AIM_SEED_ABOVE` (0.5 m) straight above the ball - the birthplace a virtual cursor has always had, now taken at the moment of the lock instead of on the first move after it.
   It re-seeds only while the aim is still the game's own: once the player has moved the mouse, the reticle is theirs, and a re-lock after an Esc leaves it where they put it.
   (Up to the press the desktop cursor is untouched: the gate is a button, and a button is aimed at with the pointer the player can see.)
@@ -201,7 +203,7 @@ feel without a rebuild):
 
   **A warp is not a move, and nothing on the event says which it is.**
   Taking the lock, going fullscreen and releasing a click all teleport the cursor, and Chromium reports the teleport as `movementX/Y`.
-  Traced with every field an event carries, on a real mouse: a release at `t=3480` was followed one millisecond later by `(1174,98)` and, on the player's next movement 518 ms after that, by `(-1173,-98)`; the Play press gave `(1280,30)` between its lock change and its fullscreen change, and `(-1279,-30)` on the move after.
+  Traced with every field an event carries, on a real mouse: a release at `t=3480` was followed one millisecond later by `(1174,98)` and, on the player's next movement 518 ms after that, by `(-1173,-98)`; the press that took the lock gave `(1280,30)` between its lock change and its fullscreen change, and `(-1279,-30)` on the move after.
   Integrated, that is a reticle that jumps a screen-width and snaps back when the player moves again.
 
   Three things that trace settles, each of which had been guessed at before it was measured.

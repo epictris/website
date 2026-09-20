@@ -48,7 +48,7 @@ export function showFeedbackForm(opts: FeedbackFormOptions): Promise<void> {
   const skipEl = document.getElementById("complete-skip");
   // A page whose markup has no form in it (the editor, `shot.html`) resolves
   // rather than throwing - the same courtesy `LoadingScreen` extends to a page
-  // with no PLAY button.
+  // with no `#loading` on it.
   if (!root || !eyebrow || !heading || !starsEl || !commentEl || !submitEl || !skipEl) {
     return Promise.resolve();
   }

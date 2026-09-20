@@ -800,9 +800,9 @@ function completeLevel(): void {
   // the player having failed at the thing they just did (see `EndReason`).
   recorder?.endRun("complete");
   // The cursor comes back before anything is asked of it. The lock is what the
-  // ball's aim took (see `AimPointer`), and the page's own cursor was hidden
-  // from the PLAY press onward (see `hidePointer`) - so both have to be undone
-  // or the form is a dialogue the player cannot point at.
+  // ball's aim took (see `AimPointer`), and the page's own cursor has been
+  // hidden since the level started (see `hidePointer`) - so both have to be
+  // undone or the form is a dialogue the player cannot point at.
   document.exitPointerLock?.();
   document.documentElement.style.cursor = "";
   const completedFrame = (level as BallLevel).completedFrame ?? 0;
@@ -1075,7 +1075,8 @@ function warmFrame(): void {
   scene3d.render(level, camera, 1);
 }
 
-// Fill the screen with the game, from the PLAY press (see `LoadingScreen.play`).
+// Fill the screen with the game, from the first click in it (see
+// `armFirstClick`).
 //
 // The whole document rather than the frame, which is what F11 does and what the
 // viewport already answers to: the frame is sized to fit whatever it is given
@@ -1099,15 +1100,16 @@ function enterFullscreen(): void {
   });
 }
 
-// Take the desktop cursor off the whole page, from the PLAY press onward.
+// Take the desktop cursor off the whole page, from the moment the level starts.
 //
 // The canvas has hidden it since the level was chosen, but the canvas is not the
 // page: the letterbox bars either side of the frame kept the arrow, and a
-// fullscreen window that is wider than 16:9 is mostly bars. The press is the
-// right moment for it rather than the load - up to there the screen is a button
-// to be clicked, and after it the game's own reticle is the cursor - drawn from
-// this press onward, which is itself the aim the run opens on (see
-// `AimPointer.reveal`).
+// fullscreen window that is wider than 16:9 is mostly bars. It used to happen on
+// the PLAY press, because up to there the screen was a button to be clicked and
+// the cursor was what you clicked it with; with no press in the way, the start
+// of the level is that moment. From here the game's own reticle is the cursor,
+// drawn from the first mouse move, which is itself the aim the run opens on
+// (see `AimPointer.reveal`).
 //
 // The ball controller only: the grapple controller aims with the OS pointer
 // itself and draws no reticle, so hiding it there would leave nothing to aim
@@ -1115,6 +1117,48 @@ function enterFullscreen(): void {
 // A replay keeps its pointer for the same reason the canvas does (see there).
 function hidePointer(): void {
   if (isBall && replayName === null) document.documentElement.style.cursor = "none";
+}
+
+// Hand the game the screen and the cursor on the player's FIRST CLICK in it.
+//
+// There is no PLAY button to hang them on any more (see `LoadingScreen`), and
+// they are the two things a browser will only grant to a gesture - so the
+// gesture is the first press inside the level, which for the ball is the throw
+// that opens the run. Nothing is asked of the player that they were not about
+// to do, and what they get for it is the game filling the screen from the
+// moment they engage with it rather than from a door they had to open first.
+//
+// ONCE: after this the page is fullscreen and `AimPointer`'s own canvas
+// `mousedown` keeps the lock topped up, which is the path that has always
+// handled a fullscreen the page did not start (F11, an installed PWA).
+//
+// The lock FIRST, while the gesture is unspent and the document is plainly the
+// focused one: asked any later - from the `fullscreenchange` this same press is
+// about to cause - Chrome refuses it outright (see
+// `BallInputSource.takePointerLock`), and `enterFullscreen` hands it back if
+// fullscreen is then refused.
+//
+// A replay takes no lock: nothing on the page is aimed, and a locked pointer is
+// one that cannot reach the transport bar. It still gets the screen.
+function armFirstClick(): void {
+  canvas.addEventListener(
+    "pointerdown",
+    () => {
+      if (replayName === null) ballInput?.takePointerLock();
+      enterFullscreen();
+      // What the click actually got. The two can come apart - a browser may
+      // refuse either - and "the cursor is still sitting there" is
+      // unattributable without it. Read a beat later because both are
+      // asynchronous: the transition and the lock that rides on it land after
+      // the handler returns.
+      window.setTimeout(() => {
+        console.log(
+          `[play] fullscreen=${document.fullscreenElement !== null} lock=${document.pointerLockElement === canvas}`,
+        );
+      }, 500);
+    },
+    { once: true },
+  );
 }
 
 // Play once the level's assets are in - or once the loading screen has run out
@@ -1154,32 +1198,27 @@ async function boot(): Promise<void> {
       `[prewarm] ${warmed.programs} programs, ${warmed.textures} textures in ${warmed.ms.toFixed(0)} ms`,
     );
   }
-  // Everything is loaded, warm and drawn; what is left is the PRESS (see
-  // `LoadingScreen.play`). The level starts fullscreen with the pointer in hand
-  // because a click is the only thing a browser will grant either to, and the
-  // one click the player has to make anyway is this one.
-  await loading.play(() => {
-    // The lock FIRST, while the press's gesture is unspent and the document is
-    // plainly the focused one: asked any later - from the fullscreen transition
-    // this same press is about to start - Chrome refuses it outright (see
-    // `BallInputSource.takePointerLock`). Fullscreen follows in the same
-    // handler, and hands the lock back if it is refused.
-    //
-    // A replay takes no lock: nothing on the page is aimed, and a locked
-    // pointer is one that cannot reach the transport bar.
-    if (replayName === null) ballInput?.takePointerLock();
-    enterFullscreen();
-    hidePointer();
-  });
-  // What the press actually got. The two can come apart - a browser may refuse
-  // either - and "the cursor is still sitting there" is unattributable without
-  // it. Read a beat later because both are asynchronous: the fullscreen
-  // transition and the lock that rides on it land after the click returns.
-  window.setTimeout(() => {
-    console.log(
-      `[play] fullscreen=${document.fullscreenElement !== null} lock=${document.pointerLockElement === canvas}`,
-    );
-  }, 500);
+  // Everything is loaded, warm and drawn, so the level STARTS. There is nothing
+  // else to wait for: choosing it on the level select was the press (Tris,
+  // 2026-09-20), and a second one in front of a room that is already lit is a
+  // door held shut.
+  //
+  // The two grants the press used to buy move to the FIRST CLICK IN THE GAME,
+  // which is the same argument the press was made on - "the one click the
+  // player has to make anyway" - with the click that throws the first hook
+  // standing in for the one that used to start the level. Until it lands the
+  // level is windowed and aims with the real pointer, which is a mode the game
+  // already has (see `AimPointer`: the lock is deliberately never taken outside
+  // fullscreen, because Chromium's Wayland pointer drifts out of a windowed
+  // capture and eats presses).
+  //
+  // The desktop cursor still goes here rather than there, and earlier than it
+  // used to: the canvas has hidden it since the level was chosen, and this
+  // takes it off the letterbox bars either side, which are page rather than
+  // canvas. The game's own reticle replaces it from the first mouse move (see
+  // `AimPointer.reveal`).
+  hidePointer();
+  armFirstClick();
   requestAnimationFrame(frame);
 }
 void boot();
