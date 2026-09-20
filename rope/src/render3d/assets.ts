@@ -2351,6 +2351,32 @@ function rock(node: string): MeshAsset {
 }
 
 export const MESH_ASSETS: Record<string, MeshAsset> = {
+  // A rusty cast bell on a yoke - the thing a level ENDS at (see
+  // `LevelBodyData.bell` and docs/levels.md). One material with a base, a
+  // normal and a metallic-roughness map, all 1k; no emission, so `wakeEmission`
+  // has nothing to do here.
+  //
+  // 333 x 350 x 333 of the file's own units, which are centimetres, and
+  // `--center` re-origined it on that box because the export put the origin a
+  // bell's height below the geometry - a prop placed by a point that is not on
+  // it is a prop that appears to hang in the wrong place.
+  //
+  // `scale` is a LEVEL-DESIGN number rather than a conversion: 0.01 would be
+  // the file's own 3.5 m, which is a cathedral bell beside a 24 cm ball. 0.003
+  // is a metre of bell, about four ball-widths and a landmark at the end of a
+  // level without filling the frame.
+  //
+  // 3,553 triangles is already a prop's count, so it wears no `simplify`.
+  bell: {
+    file: "/meshes/bell.glb",
+    sha256: "26519a55fc3ac58ba851fa66f173fc24872a989450868b1b844f45e21afdae6c",
+    bytes: 415096,
+    center: true,
+    scale: 0.003,
+    source: "https://sketchfab.com/3d-models/bell-897bc8230df54a1cad474492771880d8",
+    author: "jQueary",
+    license: "CC BY 4.0",
+  },
   // A wall-mounted bulkhead lamp. Its material ships an EMISSION MAP, so the
   // glass reads as lit on its own (via `wakeEmission` - the export carries no
   // emissive factor, and glTF's default is black). What it does not do is light

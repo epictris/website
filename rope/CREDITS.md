@@ -6,6 +6,7 @@ asset to its manifest and regenerate, which is what `cli assets` checks.
 
 ## 3D models
 
+- **bell** - "jQueary", [source](https://sketchfab.com/3d-models/bell-897bc8230df54a1cad474492771880d8), CC BY 4.0
 - **bulkhead-lamp** - "andersonmat", [source](https://sketchfab.com/3d-models/bulkhead-lamp-game-ready-c7ecba33758a46c78537c1c9e6161aeb), CC BY 4.0
 - **cage** - "AAA (@BitoRaccoon)", [source](https://sketchfab.com/3d-models/cage-7f86e8c4f839424fab8a6d43cdf2b4fc), CC BY 4.0
 - **cage-dungeon** - "Samuel F. Angrick-Johanns (@oneironauticus)", [source](https://sketchfab.com/3d-models/dungeon-cage-34dcb15847ef439eb9f0c991ae1078f8), CC BY 4.0
