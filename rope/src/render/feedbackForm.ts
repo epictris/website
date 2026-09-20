@@ -133,10 +133,8 @@ export function showFeedbackForm(opts: FeedbackFormOptions): Promise<void> {
     skipEl.addEventListener("click", onSkip, { once: true });
     document.addEventListener("keydown", onKey, true);
 
+    // Nothing takes the focus: a focused star reads as a rating already given,
+    // and the form is a thing to point at. Tab still reaches every control.
     root.removeAttribute("hidden");
-    // The first star takes the focus, so Enter and Space work without a click
-    // and a keyboard player can rate and submit by tabbing. It never takes the
-    // pointer lock - the form is a thing to point at.
-    buttons[0]?.focus();
   });
 }
