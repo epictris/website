@@ -53,6 +53,7 @@ import {
   moveModeEases,
   type MoveEase,
   type MoveMode,
+  spawnWithoutEntry,
 } from "../level/levelFormat";
 import { LAYER_ROPE, MASK_ALL } from "../engine/body";
 import { moveAngleAt } from "../level/movers";
@@ -1548,7 +1549,15 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // reset (and the exported bundle) respawns at the same place.
   function startTest(controller: "grapple" | "ball", spawn?: Vec2): void {
     if (mode === "test") stopTest();
-    const pixelData = modelToDisk(model);
+    // A ROLLING ENTRY IS NOT PLAYED HERE (`spawnWithoutEntry`, the same drop a
+    // checkpoint start makes - see `SpawnData.roll`).
+    //
+    // A test is a spot-check of the thing being edited - press it, see whether
+    // the ledge is reachable, press Esc, move the ledge - and an entry is the
+    // opening of a RUN: two metres of rolling in and a second of hands off,
+    // between every edit and the thing it is being checked against. The game
+    // plays the opening; the editor plays the level.
+    const pixelData = spawnWithoutEntry(modelToDisk(model));
     if (spawn) {
       pixelData.player = { ...pixelData.player, x: spawn.x * M2PX, y: spawn.y * M2PX };
     }
@@ -6204,7 +6213,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       (v) => (model.player.roll = v * PX),
     );
     rollField.title =
-      "Open the level on the ball rolling in from this far to the side of the spawn: negative to come in from the left, positive from the right, 0 for a ball that starts standing at its spawn. The ball is placed there and rolls to the spawn at 1.5 m/s, and the player's aim and chain do nothing until it arrives - so the spawn is still where the run starts, it is where the player is handed the ball. The camera stands at the spawn the whole way in rather than following the ball, so the offset is also how far off the standing frame the ball begins: 2 to 4 m rolls it in from the edge, past about 4.8 m it starts out of shot. The grapple controller ignores it, as does a start from a checkpoint.";
+      "Open the level on the ball rolling in from this far to the side of the spawn: negative to come in from the left, positive from the right, 0 for a ball that starts standing at its spawn. The ball is placed there and rolls to the spawn at 1.5 m/s, and the player's aim and chain do nothing until it arrives - so the spawn is still where the run starts, it is where the player is handed the ball. The camera stands at the spawn the whole way in rather than following the ball, so the offset is also how far off the standing frame the ball begins: 2 to 4 m rolls it in from the edge, past about 4.8 m it starts out of shot. The grapple controller ignores it, as do a start from a checkpoint and a ▶ Test here - a test starts at the spawn, in your hands, so an edit is not two metres of rolling in away from being checked. Play the level to see the opening.";
     inspector.appendChild(player);
 
     buildEnvironmentGroup();
@@ -9308,7 +9317,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           testLevel,
           camera,
           fps,
-          ballInput?.aimPoint() ?? null,
+          ballInput?.reticlePoint() ?? null,
           alpha,
           testIn3d,
           testSparks,

@@ -27,8 +27,10 @@
 //   STALLED    - an entry authored into a wall hands over anyway, rather than
 //                holding the player's hands off a ball that is never arriving.
 //   ABSENT     - a spawn with no entry opens exactly as it always did, a spawn
-//                that asks for both an entry and a hang keeps the hang, and a
-//                checkpoint start has no entry at all.
+//                that asks for both an entry and a hang keeps the hang, and the
+//                drop that takes an entry out of the data (`spawnWithoutEntry`,
+//                which is a checkpoint start and the editor's ▶ Test) takes
+//                that and nothing else.
 //
 // Bodies are rigs of plain rects in level pixels (100 to the metre), on a
 // `BallLevel`, as the finish and sleep suites are.
@@ -36,7 +38,12 @@
 import { Vec2 } from "../engine/vec2";
 import { BallLevel } from "../level/ballLevel";
 import { emptyFrameInput, type FrameInput } from "../input/frameInput";
-import { spawnAtCheckpoint, type LevelBodyData, type RawLevelData } from "../level/levelFormat";
+import {
+  spawnAtCheckpoint,
+  spawnWithoutEntry,
+  type LevelBodyData,
+  type RawLevelData,
+} from "../level/levelFormat";
 
 export interface EntryResult {
   name: string;
@@ -290,6 +297,27 @@ function caseAbsent(): EntryResult {
     "a spawn that asks for both an entry and a hang keeps the hang",
     !hung.rollingIn && hung.ball.globalPosition.x === SPAWN_X / 100,
   );
+
+  // The drop itself, which is one operation with two callers: a checkpoint
+  // start (below) and the editor's ▶ Test, where the level is built from
+  // `spawnWithoutEntry(modelToDisk(model))` and there is no DOM here to press
+  // the button. It takes the entry out of the DATA, so what is asserted is that
+  // the field goes and nothing else moves.
+  const authored = rig(ROLL_PX);
+  const stripped = spawnWithoutEntry(authored);
+  c.check(
+    "the drop takes the entry out of the data",
+    stripped.player.roll === undefined && !new BallLevel(stripped).rollingIn,
+  );
+  c.check(
+    "...and moves nothing else",
+    stripped.player.x === authored.player.x &&
+      stripped.player.y === authored.player.y &&
+      stripped.player.radius === authored.player.radius &&
+      stripped.bodies === authored.bodies,
+  );
+  const plainData = rig(0);
+  c.check("...and hands a level with no entry straight back", spawnWithoutEntry(plainData) === plainData);
 
   // A checkpoint start is not the level's opening, so it has no entry at all -
   // and, kept, the entry would have put the ball an entry's length to one side

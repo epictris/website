@@ -35,6 +35,12 @@ interface Window {
   // script that decides is deliberately outside the module graph, because it
   // has to have run before the graph exists.
   __ropePlay?: boolean;
+  // Load the app INTO THIS PAGE, set by `index.html`'s module tag on the one
+  // page that did not load it: the level select. Picking a level there calls it
+  // rather than following the row's link, because fullscreen and the pointer
+  // lock are granted to that press and neither survives a navigation (see
+  // `startOnClick` in src/render3d/store.ts).
+  __ropeBoot?: () => void;
   __ropeStore?: {
     // The bytes of `url`, adopting the download the preloader already started
     // for it. `bytes` is the manifest's size for the file.

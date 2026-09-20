@@ -341,5 +341,19 @@ A spent entry hands over where it stands, because the alternative is a level tha
 A button **held** through the hand-over throws nothing: `pressed` is an edge the input source measures against its own last frame, and that edge happened while the ball was not the player's.
 The throw costs a fresh press, which is the right price - the alternative is a chain thrown by a hand that was only resting on the mouse.
 
-`cli entry` is the suite: the placement and the arrival, the hands-off bit-identity, the hand-over, an entry authored into a wall, the camera standing still, and the three ways a level has no entry at all - no field, a `hang` beside it, and a start from a checkpoint.
+**The cursor is handed over PARKED**, for the same reason: at its seed, `AIM_SEED_ABOVE` straight above the ball, aimed at and not drawn (`BallInputSource.handOver` → `AimPointer.park`).
+The entry drops the aim in the sim, but the input source goes on tracking the mouse through it, and at the hand-over that tracked position would become an aim the player never made - the reticle appearing wherever their hand was resting, with the ball turning to face it on the first frame it was theirs.
+
+It is moved rather than forgotten because **the ball is handed over aiming**.
+A cursor with no position is a ball with no aim, which leaves its rotation to the physics: the ball arrives still carrying the entry's roll, climbs its own lug and rocks about half a metre back down it before it settles.
+Aimed at the seed, the loop is already pointing where the aim is, so nothing snaps, and the aim's speed-faded brake (see [the steered ball's grip](#the-steered-balls-grip)) stops the ball where it arrived - measured on `CAVE`, at rest with the loop dead vertical.
+While it is parked the seed is re-taken every poll, so the cursor rides above the ball instead of sliding out from over it as the camera eases off the spawn onto the avatar (26 cm of ease put the aim 22 degrees off vertical before it did).
+The first mouse move, or the first press, takes it over and nothing re-seeds it again.
+
+Windowed there is no virtual cursor to keep - the reticle is the real pointer and is drawn under it on the next move - and what the park buys there is the frames up to that move.
+
+**Four ways a level has no entry**, and the last two are the same thought: no field, a `hang` beside it (a hanging ball has nothing to roll on), a start from a **checkpoint**, and a **▶ Test in the editor**.
+Both of those last are places the run is deliberately not being opened - a checkpoint is a place to be dropped into ready to play, and a test is a spot-check of the geometry being edited - and both drop `roll` from the data rather than skipping it in the driver, so the bundle either one exports describes the run that was played (`spawnAtCheckpoint`, `startTest` in `editor/editor.ts`).
+
+`cli entry` is the suite: the placement and the arrival, the hands-off bit-identity, the hand-over, an entry authored into a wall, the camera standing still, and the ways a level has no entry at all.
 `playtests/ball-spawn-roll.json` is the same opening as a scripted run, with the aim and the button held from frame 1.

@@ -299,4 +299,9 @@ A test also plays in the game's own fixed 1920 × 1080 frame, fitted into the ed
 **B** is the same ball test but spawned **at the cursor**, so a corner of the level can be spot-checked without walking the spawn marker over to it and back.
 Selecting a **checkpoint** and pressing either ▶ Test does the same thing from a place the level itself records (see [**Notes and checkpoints**](editor-model.md#notes-and-checkpoints)): the spot-check is the throwaway version of it and the checkpoint is the one worth keeping, since it is also what `?checkpoint=NAME` asks for in the game.
 The override is baked into the `LevelData` the test level is built from rather than into the model, so it never edits the level, and a reset (and the exported P bundle) respawns at the same point.
+
+**A test never plays the level's rolling entry** (`roll` in the Player spawn group - see [**The rolling entry**](ball-rolling.md#the-rolling-entry)): the ball starts at the spawn, in the player's hands, on the first frame.
+A test is a spot-check of the thing being edited - press it, see whether the ledge is reachable, Esc, move the ledge - and an entry is the opening of a *run*: two metres of rolling in and a second of hands off, between every edit and the thing it is being checked against.
+It is dropped from the data the test is built from rather than skipped by the driver, so the bundle a test exports describes the run that was actually played.
+To see the opening itself, play the level (`?level=NAME`), which is where an opening is worth judging anyway - the editor's canvas is not the screen it will be read on.
 Starting a test also **detaches the 3D gizmo**: it lives in the scene rather than on the overlay, so a selection left the editing arrows hanging in the middle of the level being played - `gizmoSpec` had always answered "none in test mode" and nothing asked it, the sync running on the edit loop and a test having its own.

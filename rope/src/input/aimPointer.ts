@@ -189,6 +189,10 @@ export class AimPointer {
   // the run - and the lock may move it; after one it is the player's aim and
   // nothing may move it but them.
   private moved = false;
+  // Whether the cursor is being held off the screen: it has a position and the
+  // aim is read from it, but nothing draws it until the player moves the mouse
+  // or presses a button (see `park`, `reveal` and `isHidden`).
+  private hidden = false;
   // How far it moved on the last mousemove, in view pixels.
   private lastMotion: Vec2 | null = null;
   // The real cursor as of the last mousemove, in view pixels. Unlocked, the
@@ -432,8 +436,13 @@ export class AimPointer {
     // the player's hand actually is without waiting for them to move it.
     if (this.view === null && locked && motion.x === 0 && motion.y === 0) return;
     // Travel is the player saying where they want to aim; a position is only
-    // where their hand already was (see `moved`).
-    if (motion.x !== 0 || motion.y !== 0) this.moved = true;
+    // where their hand already was (see `moved`). It is also what takes a parked
+    // cursor back off the shelf: the player has moved it, so it is theirs to
+    // see again (see `park`).
+    if (motion.x !== 0 || motion.y !== 0) {
+      this.moved = true;
+      this.hidden = false;
+    }
     // UNLOCKED, THERE IS NO VIRTUAL CURSOR: the desktop pointer is still the
     // one the OS is moving, and it is the one a click lands under, so the aim
     // is simply read off it - unseeded and unbounded, exactly as `position`
@@ -473,6 +482,54 @@ export class AimPointer {
     return this.view;
   }
 
+  // PUT THE CURSOR BACK WHERE IT IS BORN, and hold it there UNDRAWN until the
+  // player moves the mouse.
+  //
+  // What asks for this is the rolling entry handing the ball over (see
+  // `BallInputSource`): the player has been watching a ball they could not aim,
+  // and wherever their hand happened to be resting through it is not an aim they
+  // made. Left alone, the reticle appears at the hand-over already somewhere -
+  // over the level, off to one side - and the ball turns to face it before the
+  // player has touched anything.
+  //
+  // The cursor is MOVED rather than forgotten, and that is the difference
+  // between this and a run that has not been aimed yet. The aim is the cursor's
+  // position, so a cursor with no position is a ball with no aim at all -
+  // rotation left to the physics, the loop wherever the roll left it. Put at the
+  // seed instead, the ball is handed over aiming at the one place the player's
+  // own cursor would be born: straight above it, where the loop already points.
+  //
+  // HIDDEN, because a mark the player did not put there is a mark they did not
+  // ask for; the aim is held at it until the first mouse move, which is the
+  // player taking the cursor over, or the first press, which is them saying
+  // something about where they are aiming (see `reveal`).
+  //
+  // `moved` goes back too, and that is the point rather than housekeeping: it is
+  // what says the cursor is still this class's own, so a re-lock may re-seed it.
+  //
+  // A pointer with no seed (the grapple controller, a test in the editor) has
+  // nowhere of its own to be put and is left exactly as it was.
+  park(): void {
+    const at = this.seed?.();
+    if (!at) return;
+    this.view = clampToFrame(at);
+    this.moved = false;
+    this.hidden = true;
+    this.lastMotion = null;
+    // Nothing may be owed across a cursor that has just been picked up and put
+    // down somewhere else: a withheld warp is a correction to the position it
+    // no longer has, and paying it into the first move after would be a jump
+    // nobody made.
+    this.withheld = null;
+  }
+
+  // Is the cursor being held off the screen - parked at its seed with nothing
+  // moved since (see `park`)? The aim is still read from it; this is only about
+  // whether the reticle is DRAWN (see `BallInputSource.reticlePoint`).
+  isHidden(): boolean {
+    return this.hidden;
+  }
+
   // Bring the cursor into being where it would have been born, without a move.
   // A CLICK is a player saying something about where they are aiming, so it has
   // to leave an aim behind: pressing with nothing on screen and having nothing
@@ -489,7 +546,14 @@ export class AimPointer {
   // cursor appears under the hand that clicked. Locked, those fields are frozen
   // at wherever the lock was taken and the seed is the only honest answer.
   reveal(e: MouseEvent): void {
-    if (this.view !== null || this.seed === null) return;
+    if (this.seed === null) return;
+    // A press SHOWS a cursor that is only parked (see `park`): the press throws
+    // the chain, and the throw leaves along the loop the parked cursor is
+    // pointing the ball at, so the mark saying where it went is exactly the one
+    // being held back. The player has said something about their aim by using
+    // it; what is drawn is where it already was, so nothing moves.
+    this.hidden = false;
+    if (this.view !== null) return;
     if (!this.locked()) {
       this.view = clientToView(this.canvas, e.clientX, e.clientY);
       return;

@@ -343,6 +343,11 @@ const ballInput = isBall
       // arrow is still on screen there, and the aim has to stay under it - and
       // nor does a replay, which keeps the desktop cursor for the bar.
       replayName === null,
+      // While the ball is rolling in at the opening of a level the player's aim
+      // is dropped by the sim, so the cursor is put back above the ball and off
+      // the screen when it hands over (see `BallInputSource.handOver`). Read
+      // through `level`, which a reset replaces.
+      () => level instanceof BallLevel && level.rollingIn,
     )
   : null;
 // The ball controller draws its own aim reticle (clamped to the chain's reach),
@@ -957,7 +962,7 @@ function frame(now: number): void {
       level,
       camera,
       fps,
-      replay ? replayAim : ballInput!.aimPoint(),
+      replay ? replayAim : ballInput!.reticlePoint(),
       alpha,
       scene3d !== null,
       sparks,

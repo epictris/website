@@ -118,10 +118,17 @@ A test is an authoring instrument - what is being judged there is where the line
 A bare `/` must not download a megabyte of three.js and the whole level graph to show a list of six words.
 That is also why the titles and the listing ride in the preload manifest (`t` and `k` per level) rather than being read out of `registry.ts`: the manifest is markup that already ships on every page.
 
-Every row is an `<a href="/?level=ID">`, so middle-click, a bookmark and a screen reader all work, and picking a level is a **navigation**.
-That is not a nicety: **one page load is one session and one level**.
-The preload is keyed on `?level=`, the recorder's `SessionMeta` is fixed per page, a checkpoint is resolved once, and the level hash is stamped once - an in-page switch would quietly break every one of them.
+Every row is an `<a href="/?level=ID">`, so middle-click, a bookmark and a screen reader all work, and a row opened any of those ways is an ordinary navigation to the level's own page.
 Arrows move and Enter opens, which the anchors give for free once one of them has the focus; the first row takes it.
+
+**A plain press on a row does not navigate.** It takes fullscreen and the pointer lock - the two things a browser grants to a gesture and to nothing else - pushes the level's URL, and boots the app into *this* document (`startOnClick` in `render3d/store.ts`, `window.__ropeBoot` from `index.html`'s module tag).
+The reason is measured rather than assumed: **neither grant survives a navigation.** A fullscreen taken on this page is gone by the time the next document loads (chromium 142: `document.fullscreenElement` null and `(display-mode: fullscreen)` false on the page the press opened), and a pointer lock never survives one at all.
+A press that took both and then threw them away is worse than one that never asked - the window flickers into fullscreen and straight back out - and the alternative is the game interrupting itself to ask again on the first click of a run.
+So the press that commits to playing is the press that is spent on them, and the run opens fullscreen with the virtual cursor live (see [**Starting a run**](running.md#starting-a-run)).
+
+**One page load is still one session and one level**, which is what the navigation was protecting: the URL is pushed before the app is imported, so `main.ts` reads which level to play out of `location` exactly as it does on a page loaded at it, the recorder's `SessionMeta` is fixed for the one level that is played in the page, and the checkpoint and the level hash are still resolved once.
+Back returns to the menu by reloading it, since the app owns the document by then.
+A row opened in a new tab, or a level reached by its URL, loads the app the way it always did and takes the screen on the first click in the level instead.
 
 Per-level marks - completed, and the last rating as five glyphs - come from `rope.progress` in `localStorage` (`render/progress.ts`), never from the server.
 It is a convenience rather than a record: the server already has the runs and the feedback, and a menu that cannot say what you have played until a fetch answers is a menu that flickers.

@@ -58,14 +58,14 @@ and `TEST_SPRING` is the spring-body one (a leaf over a chasm to hang off - see
 ## Starting a run
 
 `/` with nothing asked for is the **level select** (see [**Levels**](levels.md)): a list of the listed levels, the introduction first, with what this browser has finished and last rated beside each.
-Picking one navigates to `/?level=ID`, because one page load is one session and one level.
-That page never loads the game at all, so a bare `/` costs a list of words rather than a megabyte of three.js; a `?level=` nobody has shows the same list with a line saying so.
+Picking one puts the game fullscreen, takes the pointer, pushes `/?level=ID` and starts the level in that same page - one page load is still one session and one level.
+That page never loads the game until a level is picked, so a bare `/` costs a list of words rather than a megabyte of three.js; a `?level=` nobody has shows the same list with a line saying so.
 
 A level page opens on the loading screen and **starts when the level is ready** - the bar fills, the scene is warmed and prewarmed behind it, and the frame loop begins (see [**The loading screen**](loading-screen.md)).
 There is no second press between choosing a level and playing it.
 
-It opens **windowed**, aiming with the real pointer, because fullscreen and the pointer lock are gestures a browser grants only to a click and there is no longer one to spend.
-The **first click in the level** takes both, in that order - it is the click that throws the first hook, so nothing is asked of the player they were not about to do - and the game fills the screen from there.
+**The press that picks the level takes fullscreen and the pointer lock**, in that order - the lock first, while the gesture is unspent, then fullscreen - so a run started from the menu opens filling the screen with the virtual cursor already live (see [**The level select**](levels.md#the-level-select) for why that press cannot also be a navigation).
+A level reached any other way - its own URL, a new tab, a reload - opens **windowed**, aiming with the real pointer, and the **first click in the level** takes both instead: it is the click that throws the first hook, so nothing is asked of the player they were not about to do.
 A refused fullscreen gives the lock straight back and plays windowed, which is what the whole gate exists to guarantee: the lock is never held outside fullscreen.
 
 A test run from the editor has no loading screen and no gate - it is the editor's canvas and the editor's cursor, and starts the moment ▶ Test is pressed.
@@ -173,7 +173,7 @@ feel without a rebuild):
   un-projected through the *current* camera every time it is read
   (`currentAimLocal`) - the **virtual** cursor in fullscreen, where the lock is
   held, and the real pointer in a window, where it is not.
-  The **first click in the level takes the pointer lock** along with fullscreen (see [**Starting a run**](#starting-a-run)), and clicking the canvas takes it in **fullscreen only** thereafter - Esc releases it and the next click takes it back, and leaving fullscreen by either route gives the pointer back.
+  The **press that picks the level takes the pointer lock** along with fullscreen, and the first click in the level does it for a run that started any other way (see [**Starting a run**](#starting-a-run)); clicking the canvas takes it in **fullscreen only** thereafter - Esc releases it and the next click takes it back, and leaving fullscreen by either route gives the pointer back.
   That click asks for the lock *itself*, first, before requesting fullscreen: asked from the `fullscreenchange` that follows instead - which reads as though it should work, entering fullscreen being a user gesture of its own - Chrome refuses it every time (`The root document of this element is not valid for pointer lock`, measured in a real browser on first loads and refreshes alike), and the game opened fullscreen with the desktop pointer loose in it until the player happened to click the canvas.
   A refused fullscreen gives the lock straight back, since a lock in a *window* is the one thing it is never allowed to be.
   While locked the
@@ -196,6 +196,13 @@ feel without a rebuild):
   Locked, the desktop pointer has just been taken away and that point is no longer where anything is, so the `pointerlockchange` that confirms the capture re-seeds the cursor `AIM_SEED_ABOVE` (0.5 m) straight above the ball - the birthplace a virtual cursor has always had, now taken at the moment of the lock instead of on the first move after it.
   It re-seeds only while the aim is still the game's own: once the player has moved the mouse, the reticle is theirs, and a re-lock after an Esc leaves it where they put it.
   (Up to the press the desktop cursor is untouched: the gate is a button, and a button is aimed at with the pointer the player can see.)
+
+  **A rolling entry hands the cursor back PARKED**: put at its seed, directly above the ball, aimed at and not drawn (`AimPointer.park`, called from `BallInputSource.handOver`).
+  A level that opens on the ball rolling in drops the player's aim in the sim until it arrives (see [**The rolling entry**](ball-rolling.md#the-rolling-entry)), so wherever their hand was resting through it is not an aim they made: left alone the reticle appeared at the hand-over already somewhere, and the ball turned to face it on the first frame it was theirs.
+  The cursor is MOVED rather than forgotten, because the aim is the cursor's position and a cursor with no position is a ball with no aim at all - rotation left to the physics, the loop wherever the roll left it, the ball rocking back off its own lug as it settles.
+  Put at the seed, the ball is handed over aiming where the loop already points, and the aim's own brake stops it there.
+  It is **hidden**, because a mark the player did not put there is one they did not ask for: the reticle is what `reticlePoint()` answers rather than `aimPoint()`, and it is null until the first mouse move takes the cursor over or the first press uses it.
+  While it is parked it is re-seeded every poll, so it rides above the ball rather than sliding out from over it as the camera eases off the spawn onto the avatar - 26 cm of that ease left the aim 22 degrees off vertical before it did.
 
   **A mousemove carrying *no movement* is a position, not a move** - the one a browser sends when the page shifts under a stationary pointer (the loading screen coming off, the fullscreen transition).
   Unlocked it is answered, because unlocked the reticle stands on the real pointer and where that pointer is sitting is exactly what the event says.

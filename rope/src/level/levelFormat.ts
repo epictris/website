@@ -1906,9 +1906,28 @@ export function spawnAtCheckpoint<T extends RawLevelData>(
   // means: the level's OPENING is what rolls in, and a checkpoint is explicitly
   // not the opening - it is a place to be dropped into, ready to play. Kept, it
   // would put the ball an entry's length to one side of the point that was
-  // asked for, inside whatever stands there (see `SpawnData.roll`).
+  // asked for, inside whatever stands there.
+  return spawnWithoutEntry({ ...data, player: { ...data.player, x: hit.x, y: hit.y } });
+}
+
+// The level with NO ROLLING ENTRY: the ball stands at its spawn and the run is
+// the player's from the first frame (see `SpawnData.roll`).
+//
+// One operation with two callers, and both are places a run is deliberately not
+// being OPENED: a start from a checkpoint (above) and the editor's ▶ Test,
+// which is a spot-check of the geometry being edited rather than a run.
+//
+// It is taken out of the DATA rather than skipped in the driver, which is the
+// property worth keeping: every path downstream - the sim, a reset, the camera's
+// first frame, an exported bundle - then describes the same run, so a recording
+// made from either replays as what was played.
+//
+// The same object back when there is no entry to drop, so a level that authors
+// none passes through untouched.
+export function spawnWithoutEntry<T extends RawLevelData>(data: T): T {
+  if (!data.player.roll) return data;
   const { roll: _roll, ...player } = data.player;
-  return { ...data, player: { ...player, x: hit.x, y: hit.y } };
+  return { ...data, player };
 }
 
 // The light and air a level is played in (`render3d/environment.ts`). Every
@@ -2061,6 +2080,11 @@ export interface SpawnData {
   // Absent (and 0) is the ball standing at its spawn, which is every level
   // authored before the field. Ignored by the grapple controller, and ignored
   // beside `hang` - a ball that starts on its anchor has nothing to roll in on.
+  //
+  // Dropped outright where the run is deliberately not being opened: a start
+  // from a checkpoint (`spawnAtCheckpoint`) and a ▶ Test in the editor
+  // (`startTest`). Both drop it from the DATA rather than skipping it in the
+  // driver, so a bundle either one exports describes the run that was played.
   roll?: number;
 }
 

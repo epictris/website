@@ -178,6 +178,76 @@ interface PreloadManifest {
 // one level - the preload above is keyed on `?level=`, the recorder's session
 // meta is fixed per page, and a checkpoint is resolved once - and an in-page
 // switch would quietly break every one of them.
+// PICKING A LEVEL TAKES THE SCREEN AND THE POINTER, and starts the level in
+// THIS page rather than navigating to it.
+//
+// Fullscreen and the pointer lock are granted to a user gesture and to nothing
+// else, and picking a level is the gesture: it is the moment the player commits
+// to playing, and it is the last press this page gets. Taken here, the run
+// opens already fullscreen with the virtual cursor live (it exists only under
+// the lock, which is only taken in fullscreen - see input/aimPointer.ts),
+// instead of the game having to interrupt itself to ask for both on the first
+// click inside the level.
+//
+// IT CANNOT BE A NAVIGATION, and that is measured rather than assumed: a
+// fullscreen taken on this page is gone by the time the next document loads
+// (chromium 142, `document.fullscreenElement` null and `(display-mode:
+// fullscreen)` false on the page the click opened), and a pointer lock never
+// survives a navigation at all. A press that took both and then threw them away
+// is worse than one that never asked - the window flickers into fullscreen and
+// straight back out. So the anchor's default is prevented and the app is
+// imported into this document instead (`__ropeBoot`, see index.html).
+//
+// What the navigation was for is kept: the URL becomes the level's, pushed
+// rather than replaced so Back returns to the menu (and reloads it, since the
+// app is running in this document by then), and `main.ts` reads which level to
+// play out of `location` exactly as it does on a page that was loaded at it.
+// One page load is still one session and one level.
+//
+// Every OTHER way of opening a row is left alone: only a plain primary press is
+// intercepted, so middle-click, ctrl/cmd-click and "open in new tab" still
+// navigate - a background tab is not this tab going fullscreen.
+function startOnClick(a: HTMLAnchorElement, manifest: PreloadManifest, id: string): void {
+  a.addEventListener("click", (e) => {
+    if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    // Nothing to boot into: the module tag never ran (an old browser, a failed
+    // parse), so the link is still the way in.
+    if (!window.__ropeBoot) return;
+    e.preventDefault();
+    takeScreen(manifest.l[id]?.b === 1);
+    history.pushState(null, "", a.href);
+    // Back goes to the menu, which is this document with the app running in it,
+    // so it is re-loaded rather than re-painted. The app owns the page by then.
+    window.addEventListener("popstate", () => location.reload());
+    document.getElementById("menu")?.removeAttribute("data-show");
+    document.getElementById("loading")?.removeAttribute("hidden");
+    fetchLevel(manifest, id, new URLSearchParams(location.search).get("render"));
+    if (!polling) polling = requestAnimationFrame(tick);
+    window.__ropeBoot();
+  });
+}
+
+// The screen and the pointer, in the order `main.ts` learned to ask for them:
+// THE LOCK FIRST, while the gesture is unspent, because a lock asked for after
+// the fullscreen transition has started is one chrome refuses outright; then
+// fullscreen, which hands the lock back if it is itself refused, since a lock
+// held in a WINDOW is the one thing this game never allows (see `AimPointer`:
+// windowed, chromium's Wayland pointer drifts out of the page and eats presses).
+//
+// The lock is for the ball controller alone - the grapple controller aims with
+// the desktop pointer and draws no reticle of its own, so capturing it would
+// leave nothing to aim with. Both are best-effort: a browser that refuses either
+// gives the windowed game this page has always opened.
+function takeScreen(ball: boolean): void {
+  const canvas = document.getElementById("game");
+  if (ball && canvas) void Promise.resolve(canvas.requestPointerLock()).catch(() => {});
+  const el = document.documentElement;
+  if (document.fullscreenElement || typeof el.requestFullscreen !== "function") return;
+  void Promise.resolve(el.requestFullscreen()).catch(() => {
+    document.exitPointerLock?.();
+  });
+}
+
 function paintMenu(manifest: PreloadManifest, note: string): void {
   // THIS SCRIPT RUNS IN THE HEAD, during parsing, so the markup it draws into
   // does not exist yet - the same reason the bar looks its element up per
@@ -211,6 +281,7 @@ function paintMenu(manifest: PreloadManifest, note: string): void {
     if (level.k === 2 && rows.length > 1) li.dataset.intro = "1";
     const a = document.createElement("a");
     a.href = `/?level=${encodeURIComponent(id)}`;
+    startOnClick(a, manifest, id);
     const title = document.createElement("span");
     title.className = "menu-title";
     title.textContent = level.t;
@@ -342,14 +413,23 @@ function preload(): void {
     return;
   }
 
-  const level = (requested !== null && manifest.l[requested]) || manifest.l[manifest.d];
+  fetchLevel(manifest, requested ?? manifest.d, params.get("render"));
+}
+
+// Start every file a level's scene is going to ask for. `render` is the
+// `?render=` override, or null for the level's own default.
+//
+// Its own function because there are two moments a level is chosen: a page
+// loaded AT one (above), and one picked off the level select, which starts it
+// in this same document (see `startOnClick`).
+function fetchLevel(manifest: PreloadManifest, id: string, render: string | null): void {
+  const level = manifest.l[id] ?? manifest.l[manifest.d];
   if (!level) return;
   // `?render=2d` is the escape hatch for a machine with no working WebGL, and a
   // page that is not going to build a 3D scene must not fetch 26 MB to not draw
   // (see `wants3d` in main.ts). The reverse - `?render=3d` on a grapple level -
   // is why the list is carried for every level rather than only the 3D ones.
-  const render = params.get("render") ?? (level.b ? "3d" : "2d");
-  if (render !== "3d") return;
+  if ((render ?? (level.b ? "3d" : "2d")) !== "3d") return;
   for (const index of level.i) {
     const entry = manifest.f[index];
     if (!entry) continue;

@@ -151,6 +151,9 @@ export class BallInputSource implements IInputSource {
   // some default direction before the first input).
   private aimLocal: Vec2 | null = null;
   private aimSource: "mouse" | "pad" | "touch" = "mouse";
+  // Whether the level said the ball was still rolling in last time this looked,
+  // so the frame it stops can be spotted (see `handOver`).
+  private wasRollingIn = false;
 
   // Left-stick aim: a normalized direction while deflected past the deadzone,
   // else null ("not aiming"). Refreshed every sample(); kept as a field so the
@@ -171,12 +174,18 @@ export class BallInputSource implements IInputSource {
   // test there runs on the editor's own canvas with the arrow still showing, so
   // its aim must stay under that arrow rather than starting somewhere of its own
   // (see `AimPointer`'s `seed`).
+  // `rollingIn` is the level saying the ball is still rolling in at the opening
+  // of a run and the player's hands are off it (see `BallLevel.rollingIn`). This
+  // source watches it for the frame it goes false and puts the cursor back where
+  // a run's cursor starts (see `handOver`); a caller with no such level - a
+  // replay, a test in the editor - passes nothing and the hand-over never fires.
   constructor(
     private canvas: HTMLCanvasElement,
     private camera: Camera,
     private aimOrigin: () => Vec2,
     private active: () => boolean = () => true,
     ownsCursor = false,
+    private rollingIn: () => boolean = () => false,
   ) {
     this.pointer = new AimPointer(
       canvas,
@@ -487,6 +496,21 @@ export class BallInputSource implements IInputSource {
     return this.aimOrigin().add(local);
   }
 
+  // WHERE THE RETICLE IS DRAWN, which is the aim point unless the cursor is
+  // being held off the screen: parked at its seed by a rolling entry's
+  // hand-over, with nothing moved or pressed since (see `handOver` and
+  // `AimPointer.park`).
+  //
+  // Two accessors rather than one because the two questions came apart there
+  // for the first time: the sim is aiming at a point the player has not been
+  // shown. Everywhere else they are the same answer, and the pad and the
+  // on-screen joystick are not this cursor at all - their reticle is drawn
+  // whenever they are aiming.
+  reticlePoint(): Vec2 | null {
+    if (this.aimSource === "mouse" && this.pointer.isHidden()) return null;
+    return this.aimPoint();
+  }
+
   // The aim offset as it stands *now*. Position- and cursor-mode mouse aim is
   // re-derived from the pointer's screen position through the CURRENT camera each
   // time it is read, instead of being frozen at mousemove time: the reticle
@@ -515,7 +539,68 @@ export class BallInputSource implements IInputSource {
   // aim stays smooth. Render-rate polling can't affect the sim: it only moves
   // `aimLocal` forward in time, and sample() still encodes whatever it holds at
   // the physics frame.
+  // The frame the rolling entry hands the ball over, THE AIM IS PUT WHERE THE
+  // PLAYER'S OWN CURSOR IS BORN: directly above the ball (`aimSeed`), held
+  // there, and not drawn until they move the mouse.
+  //
+  // The entry drops the player's aim in the sim (`BallLevel.playerInput`), so
+  // nothing they did with the mouse while the ball rolled in steered anything -
+  // but this source went on tracking it, and at the hand-over that tracked
+  // position becomes an aim the player never made: the reticle appears wherever
+  // their hand was resting and the ball turns to face it, on the first frame
+  // they are given it.
+  //
+  // Parking the pointer (`AimPointer.park`) puts it at the seed instead, which
+  // is what the ball is handed over aiming at: the loop is already pointing
+  // there, so the aim arrives agreeing with the avatar and the first hand
+  // movement steers from it rather than snapping the ball round. It is aim
+  // rather than nothing on purpose - "not aiming" would leave the rotation to
+  // the physics, and the ball would go on turning under the roll it came in on.
+  //
+  // Unlocked there is a real pointer on the desktop, and from the first move
+  // the reticle is under it again, because that is the one the player's clicks
+  // land under (see `AimPointer`'s header); what the park buys there is the
+  // frames up to that move.
+  //
+  // Checked from `pollAim` as well as from `sample` because `pollAim` runs once
+  // per RENDERED frame, before the reticle is drawn: checked only on the sim
+  // step, a fast display draws the stale reticle for the frames between the two.
+  private handOver(): void {
+    const rolling = this.rollingIn();
+    if (this.wasRollingIn && !rolling) {
+      this.aimSource = "mouse";
+      this.park();
+    } else if (this.pointer.isHidden()) {
+      // A PARKED CURSOR RIDES ABOVE THE BALL until the player takes it over.
+      //
+      // It is a screen position like any other cursor, so left where it was put
+      // it slides out from over the avatar the moment the camera moves - and
+      // the camera moves immediately at a hand-over, easing from the spawn it
+      // held through the entry onto the ball it is now following. Measured on
+      // `CAVE`, 26 cm of ease put the aim 22 degrees off vertical and the ball
+      // settled with its loop leaning that way.
+      //
+      // Re-seeding it every poll is what "directly above the ball" means while
+      // nobody is holding it: the camera can ease and the ball can roll on, and
+      // the pose the player is handed is the same either way. From the first
+      // move (or press) it is theirs, and nothing re-seeds it again.
+      this.park();
+    }
+    this.wasRollingIn = rolling;
+  }
+
+  // Put the cursor at its seed, hidden, and write the aim that follows from it.
+  private park(): void {
+    this.pointer.park();
+    // Modes that hold the aim as state rather than re-reading the cursor
+    // (`motion`) need it written; `cursor` and `position` re-derive it from the
+    // pointer every read and would ignore whatever is here.
+    const seeded = this.cursorAim();
+    this.aimLocal = seeded === null ? null : clampReach(seeded);
+  }
+
   pollAim(): void {
+    this.handOver();
     const pad = readGamepad();
     this.padAim = null;
     if (!pad) return;

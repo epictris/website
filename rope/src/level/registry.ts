@@ -23,6 +23,11 @@ import type { RawLevelData } from "./levelFormat";
 // built app, which has no server. JSON widens string literals (`kind: string`),
 // hence the cast — the file is written by the editor against this schema.
 import ballLevelJson from "../../levels/ball.json";
+// The cave: a second authored arena, opened on a rolling entry (see
+// `SpawnData.roll`). Registered here because a file in `levels/` is not a level
+// until it is - the menu's list is built from THIS map, through the preload
+// manifest (see `listedLevels` below and docs/levels.md).
+import caveJson from "../../levels/cave.json";
 // The rail sandbox: a low-friction zipline between two posts, a peg, and a
 // hanging lantern whose handles are rails and whose lid, bulb and base are
 // hook-proof (see `lib/rail.ts`). Hand-authored, so `levels/ball.json` - which
@@ -89,6 +94,10 @@ export const LEVELS: Record<string, LevelSpec> = {
   // the FILE authored - a swinging body (see `LevelBodyData.swingAmp`) - since
   // the ball driver takes no `init` hook.
   BALL: { data: ballLevelJson as RawLevelData, controller: "ball", file: "ball" },
+  // The cave (see the import): a listed level like `BALL`, so it is on the menu
+  // and answers to the level lint - a finish line to cross, and exactly one
+  // level in the list claiming `intro`.
+  CAVE: { data: caveJson as RawLevelData, controller: "ball", file: "cave" },
   // Rails to clamp and slide along, driven with the ball (see `lib/rail.ts`).
   RAIL_TEST: { data: railTestJson as RawLevelData, controller: "ball", file: "rail-test" },
   // Mud to bite into and creep through, driven with the ball (see `lib/viscous.ts`).

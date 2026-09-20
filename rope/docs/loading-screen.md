@@ -46,8 +46,10 @@ So the level opened filling the screen with the cursor already in hand.
 
 It is gone because it was a second press (Tris, 2026-09-20: *"the level should then load and start. There shouldn't be any intermediary Play screen"*).
 Choosing the level on the level select is the press, and a door held shut in front of a room that is already lit is not worth what it was buying.
-**What it was buying moves to the first click IN the level** (`armFirstClick` in main.ts), which is the same argument one step later: the click that throws the first hook is one the player was about to make anyway, and it asks for the lock and fullscreen in the same order the press did.
-Until that click the level is windowed and aims with the real pointer, which is a mode the game already has - the lock is never taken outside fullscreen whatever asks for it (see [**Ball controls and aim**](running.md#ball-controls-and-aim)).
+**What it was buying moves to the press on the level select** (`startOnClick` in `render3d/store.ts`), which is where the argument always pointed: picking a level is the press that commits to playing, and it asks for the lock and fullscreen in the same order the PLAY button did.
+Neither grant survives a navigation, so that press does not make one - it boots the app into the menu's own document (see [**The level select**](levels.md#the-level-select)).
+A level reached any other way - its own URL, a new tab, a reload - has no such press to spend, and there the **first click IN the level** takes both (`armFirstClick` in main.ts): the click that throws the first hook is one the player was about to make anyway.
+Until it lands that run is windowed and aims with the real pointer, which is a mode the game already has - the lock is never taken outside fullscreen whatever asks for it (see [**Ball controls and aim**](running.md#ball-controls-and-aim)).
 
 **The desktop cursor goes when the level starts**, rather than at a press: `hidePointer` takes it off the whole page (the ball controller only - the grapple controller aims with the OS pointer itself), on top of the `cursor: none` the canvas has carried since the level was chosen.
 The page rather than the canvas because the letterbox bars are page too, and a fullscreen window wider than 16:9 is mostly bars.

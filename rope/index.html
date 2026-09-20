@@ -307,6 +307,13 @@
          this reads. -->
     <script type="module">
       if (window.__ropePlay !== false) await import("/src/main.ts");
+      // The level select is on screen instead. Picking a level there boots the
+      // app into THIS document rather than navigating to the level's own page:
+      // fullscreen and the pointer lock are granted to that press and neither
+      // survives a navigation, so a link would hand both straight back (see
+      // `startOnClick` in render3d/store.ts). The import stays inside this tag
+      // so vite still resolves it to the built chunk.
+      else window.__ropeBoot = () => void import("/src/main.ts");
     </script>
   </body>
 </html>
