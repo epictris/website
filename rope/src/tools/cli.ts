@@ -2252,9 +2252,12 @@ switch (cmd) {
   case "finish":
     void cmdFinish();
     break;
+  case "entry":
+    void cmdEntry();
+    break;
   default:
     fail(
-      "usage: cli <play|record|replay|dump|query|scan|trace|settle|compare|continue|render|shot|chainpath|fork|bundles|pull|playtest|restamp|selftest|latch|transport|clicks|ledges|corners|tangents|decompose|dmath|contacts|spring|movers|vines|rails|viscous|breaks|render3d|camera|assets|levels|finish> [file] [options]",
+      "usage: cli <play|record|replay|dump|query|scan|trace|settle|compare|continue|render|shot|chainpath|fork|bundles|pull|playtest|restamp|selftest|latch|transport|clicks|ledges|corners|tangents|decompose|dmath|contacts|spring|movers|vines|rails|viscous|breaks|render3d|camera|assets|levels|finish|entry> [file] [options]",
     );
 }
 
@@ -2510,6 +2513,23 @@ async function cmdFinish(): Promise<void> {
     if (!r.passed) failed++;
   }
   console.log(`[finish] ${results.length - failed}/${results.length} cases passed`);
+  process.exit(failed > 0 ? 1 : 0);
+}
+
+// Rolling-entry cases (src/sim/entryCases.ts): the other end of a run from
+// `finish`, and the same kind of mechanic - a level whose spawn asks for one
+// opens on the ball rolling in from off to the side, with the player's aim and
+// deploy doing nothing until it arrives at the spawn.
+async function cmdEntry(): Promise<void> {
+  const { runEntryCases } = await import("../sim/entryCases");
+  const results = runEntryCases();
+  let failed = 0;
+  for (const r of results) {
+    console.log(`  ${r.passed ? "PASS " : "FAIL "} ${r.name}`);
+    for (const d of r.details) console.log(`        ${d}`);
+    if (!r.passed) failed++;
+  }
+  console.log(`[entry] ${results.length - failed}/${results.length} cases passed`);
   process.exit(failed > 0 ? 1 : 0);
 }
 

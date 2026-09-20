@@ -174,3 +174,16 @@ Turn the debug overlay on (**L**) while playing.
 It draws every region and path, marks the one in force, and for a held path shows the point the lead is measured from, the lookahead target the camera is aimed at, and the release boundary.
 A hollow mark appears at the player's own projection whenever `lead buf` is holding it away from the committed point - so the mark appearing is the buffer doing its job.
 A camera that offsets, zooms, pins or leads has no on-screen cause otherwise, so authoring either of these by feel alone is authoring blind.
+
+## A rolling entry
+
+A spawn may open the level on the ball **rolling in** from off to one side (`roll` in the editor's Player spawn group - see [ball-rolling](ball-rolling.md#the-rolling-entry)).
+The ball is placed that far along x from the spawn, rolls to it at 1.5 m/s, and the player takes over when it arrives.
+
+**The camera stands at the spawn for the whole entry**, so the framing the player watches the ball roll into is the framing that spawn already has - whatever region, path or plain follow governs the point the ball is arriving at.
+Nothing extra has to be drawn for it, and a region drawn over the entry run does nothing: the camera is not reading the ball while it rolls, so the rules are asked about the spawn from the first frame.
+
+What the offset is, then, is how far off the standing frame the ball begins.
+The frame shows 9.6 m of world at the base zoom, so the ball is out of shot past about 4.8 m either side of a centred spawn, and 2 to 4 m rolls it in from the edge - a second and a third at 2 m, a little under three at 4.
+A region that zooms out shows more of it, and one that offsets the spawn on screen moves the edge the ball has to come from: measure the entry against the framing the spawn actually gets, not against the middle of the screen.
+The editor draws the entry as a second spawn ring on a dashed run into the marker, which is what that is judged by eye against.

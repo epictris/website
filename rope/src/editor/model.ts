@@ -789,11 +789,14 @@ export interface EdBodyFrame {
 }
 
 export interface EdModel {
-  // The spawn, and whether the run starts on the anchor (see `SpawnData.hang`).
-  // The flag is carried through the model rather than read off the file,
-  // because the editor writes the level back whole: a field it does not know
-  // about is a field it DELETES the first time a level is opened and autosaved.
-  player: { pos: Vec2; radius: number; hang: boolean };
+  // The spawn: where it is, how big the avatar is, whether the run starts on
+  // the anchor (`SpawnData.hang`) and how far off to the side it rolls in from
+  // (`SpawnData.roll`, metres here as every length in the model is, 0 for no
+  // entry). All of it is carried through the model rather than read off the
+  // file, because the editor writes the level back whole: a field it does not
+  // know about is a field it DELETES the first time a level is opened and
+  // autosaved.
+  player: { pos: Vec2; radius: number; hang: boolean; roll: number };
   items: EdItem[];
   chains: EdChain[];
   vines: EdVine[];
@@ -1759,6 +1762,7 @@ function lightItem(
       pos: new Vec2(data.player.x, data.player.y),
       radius: data.player.radius,
       hang: data.player.hang === true,
+      roll: data.player.roll ?? 0,
     },
     items: [...bodies, ...regions, ...camPaths, ...notes],
     chains,
@@ -2302,6 +2306,9 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
       // Absent rather than false, so a level that does not start on its anchor
       // is written exactly as it always was.
       ...(model.player.hang ? { hang: true } : {}),
+      // And absent rather than 0, for the same reason: a level whose ball starts
+      // standing at its spawn is written exactly as it always was.
+      ...(model.player.roll ? { roll: model.player.roll } : {}),
     },
     bodies,
     // An empty list is the same as no list, and the absent field keeps levels
@@ -3701,7 +3708,7 @@ export function distanceToVine(model: EdModel, v: EdVine, world: Vec2): number {
 // testable.
 export function emptyModel(): EdModel {
   return {
-    player: { pos: new Vec2(0, -1), radius: 0.08, hang: false },
+    player: { pos: new Vec2(0, -1), radius: 0.08, hang: false, roll: 0 },
     chains: [],
     vines: [],
     // Nothing stored: a fresh level's one body holds one object, whose placement

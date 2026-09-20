@@ -1,4 +1,4 @@
-# The steered ball: grip, spin traction and the loop
+# The steered ball: grip, spin traction, the loop and the entry
 
 ## The steered ball's grip
 
@@ -308,3 +308,38 @@ It is green at 0 airborne frames of 1440 everywhere out to 45 rad/s, which is wh
 The load-bearing bar is separate and looser, and the gap between them is the honest residue of the profile's corner: on the frame it falls faster than what is left of the lug the ball is held to the rim, so the loop grazes at exactly zero depth while turning away - touching, and carrying nothing.
 23 frames of 1440 at 27 rad/s, against 328.
 Past the aim's range it degrades rather than breaking: at 90 rad/s the window is one frame wide and the ball still leaves the floor for 623 of 1440, against 1049.
+
+
+## The rolling entry
+
+A spawn may say that the run OPENS with the ball rolling in from off to one side, rather than standing where the level put it (`SpawnData.roll`, an offset along x from the spawn).
+The ball is placed at that offset, rolls to the spawn, and until it arrives the player's aim and deploy do nothing: the cursor is not drawn and the chain cannot be thrown.
+`BallLevel.startRolling` places it, `stepEntry` decides each frame whether the entry is still running, and `playerInput` is the gate - see [**level-format**](level-format.md) for the field and [**level-design**](level-design.md) for how a level is authored around one.
+
+**The gate lives in the sim, not in the input source**, so every way of driving a frame meets it: a browser, a scripted playtest, and a replay of a recording made in either.
+It drops the aim by answering with the ball's own position, which is the "not aiming" sentinel a released stick already sends (`BallPlayer.resolveInput`), so the entry is not a new state for the controller to know about - it is the state it is already in when nobody is aiming.
+`cli entry`'s `entry-hands-off` is the claim, and it is made the only way it can be: the ball's whole path under a whirling aim with the button held is **bit-identical** to the same run under a neutral input, and the two are metres apart by the end once the hand-over has happened.
+
+**The camera stands at the spawn for the whole entry** and takes the ball over where it arrives (`BallLevel.cameraRenderPosition`, and `cameraPosition` for the rules and the overlay).
+A camera that followed the entry would hold the ball in the middle of the screen for the whole of it, which is a ball rolling on the spot in front of a sliding level: the entry only reads as an entry if the frame stands still and the ball comes into it.
+Standing where the ball will arrive is also what makes the hand-over invisible - the camera is already looking at the point the ball reaches, so the target it takes over is a couple of centimetres from the one it was holding, well inside the follow's own ease.
+The rule set is evaluated at that point too, which is the right reading of it: what a region frames during the entry is the room the ball is arriving in, not the one it is passing through on the way.
+It is the camera's ordinary machinery seeing a different anchor, so nothing here is a rule, a priority or a blend of its own.
+
+**The entry's speed is held for as long as it runs** (`ENTRY_SPEED`, 1.5 m/s - a walk, for a 52 kg cast-iron ball trundling in under its own weight), rather than being given to the ball once at build, and the measurement is why.
+A ball shoved along a flat floor and left to coast stops in **34 cm** from 1.5 m/s, in 1.83 m from 3 and in 2.64 m from 5, because it climbs its own mounting lug once a revolution and spends the frames after bottom-dead-centre in free fall (see [the loop ride](#the-loop-ride) above).
+Every offset that could put the ball off the side of the standing frame is further than a coast survives, so a coasted entry stops in plain view and hands the player a ball that is already still - which is the one thing an opening must not do.
+Held, the entry arrives from any authored distance at the same pace, and hands over a ball that is still rolling.
+It is held along **x only** - falling onto the floor, climbing the lug and being stopped by what stands in the way are the world's, as they always were, which is what makes an entry authored into a wall something that visibly happens rather than something smuggled through it.
+Being a force the player's stream does not carry, it disarms the energy invariant for its frames exactly as the winch and the trampoline do (`EnergyMonitor.push`).
+
+**It ends on arrival, or when it stops arriving.**
+The arrival test is a crossing of the spawn's x taken at the top of a frame, so the hand-over is the first frame at or past the spawn and never one before it.
+The other end is measured as **ground made** rather than as speed, because a held entry cannot be argued out of its speed - only out of its place, by a wall it was authored into or a step it cannot climb: `ENTRY_PROGRESS` (1 cm) not closed in `ENTRY_STUCK_FRAMES` (30) is half a second in which anything still coming would have made three quarters of a metre.
+A spent entry hands over where it stands, because the alternative is a level that never hands the player their ball - the page then looks like a hung tab rather than a broken level.
+
+A button **held** through the hand-over throws nothing: `pressed` is an edge the input source measures against its own last frame, and that edge happened while the ball was not the player's.
+The throw costs a fresh press, which is the right price - the alternative is a chain thrown by a hand that was only resting on the mouse.
+
+`cli entry` is the suite: the placement and the arrival, the hands-off bit-identity, the hand-over, an entry authored into a wall, the camera standing still, and the three ways a level has no entry at all - no field, a `hang` beside it, and a start from a checkpoint.
+`playtests/ball-spawn-roll.json` is the same opening as a scripted run, with the aim and the button held from frame 1.

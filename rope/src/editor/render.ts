@@ -2451,6 +2451,27 @@ export function drawEditor(
   ctx.lineTo(p.x, p.y + tick);
   ctx.stroke();
 
+  // ...and where a rolling entry brings it in from (see `SpawnData.roll`): the
+  // same ring at the point the ball is actually placed, with a dashed run to the
+  // spawn it rolls to. Drawn because the entry is the one part of the spawn that
+  // is not AT the spawn, and because what it has to be authored against is the
+  // camera region that frames it - which cannot be sized by eye against a number
+  // in a panel.
+  if (model.player.roll !== 0) {
+    const from = p.withX(p.x + model.player.roll);
+    ctx.setLineDash([worldLine * 6, worldLine * 6]);
+    ctx.lineWidth = worldLine;
+    ctx.beginPath();
+    ctx.moveTo(from.x, from.y);
+    ctx.lineTo(p.x, p.y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.lineWidth = worldLine * 1.5;
+    ctx.beginPath();
+    ctx.arc(from.x, from.y, model.player.radius, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
   ctx.restore();
 
   // Region labels in screen space: what a region does has to stay readable at

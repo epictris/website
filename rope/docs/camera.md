@@ -37,6 +37,10 @@ One mechanism therefore covers default→region, region→region and region→de
 A hand-off between two sets whose weights have already faded freezes a delta of zero, so a region with a `falloff` band crosses over without using this mechanism at all.
 `CameraController.snap()` drops the easing for one frame (level start and reset), where easing in from the last frame's position would be a swoop across the level.
 
+What the camera follows is the level's `cameraRenderPosition`, which is the avatar on every frame but one kind: while a ball is **rolling in** at the opening of a level it is the SPAWN, the point the ball is rolling to (see [ball-rolling](ball-rolling.md#the-rolling-entry)).
+The camera therefore stands still while the ball comes into the frame, and takes the ball over a couple of centimetres from where it was already looking.
+It is this machinery reading a different anchor rather than a rule of its own: regions, paths, priorities and the blend all see that point and are none the wiser.
+
 ## Render interpolation
 
 The sim is a fixed 60 Hz, so drawing its raw state on a 120/144 Hz display repeats and skips frames, which reads as jitter - most visible on the ball at the end of a fast swing.

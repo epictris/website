@@ -1902,7 +1902,13 @@ export function spawnAtCheckpoint<T extends RawLevelData>(
     );
     return data;
   }
-  return { ...data, player: { ...data.player, x: hit.x, y: hit.y } };
+  // The rolling entry is dropped with the move, and that is what a checkpoint
+  // means: the level's OPENING is what rolls in, and a checkpoint is explicitly
+  // not the opening - it is a place to be dropped into, ready to play. Kept, it
+  // would put the ball an entry's length to one side of the point that was
+  // asked for, inside whatever stands there (see `SpawnData.roll`).
+  const { roll: _roll, ...player } = data.player;
+  return { ...data, player: { ...player, x: hit.x, y: hit.y } };
 }
 
 // The light and air a level is played in (`render3d/environment.ts`). Every
@@ -2033,6 +2039,29 @@ export interface SpawnData {
   //
   // Ignored by the grapple controller, which has no chain to spawn on.
   hang?: boolean;
+  // Open the level on the ball ROLLING IN: an offset along x (pixels on disk,
+  // metres in the sim) from the spawn to the point the ball is actually placed
+  // at, negative to come in from the left and positive from the right. The ball
+  // is set rolling from there toward the spawn at `BallLevel.ENTRY_SPEED`, and
+  // the player's aim and deploy do nothing until it arrives (see
+  // `BallLevel.rollingIn`). The spawn is still where the run starts in the sense
+  // that matters: it is where the player takes the ball over.
+  //
+  // It is a length rather than a speed because the speed is the one number that
+  // has to read the same in every level - an entry is a piece of the game's
+  // feel, not of this arena - while how long the player watches before they are
+  // handed the ball is exactly the arena's business: the further out the offset,
+  // the longer the entry.
+  //
+  // The CAMERA stands at the spawn for the whole entry rather than following
+  // the ball in (see `BallLevel.cameraRenderPosition`), so the offset is also
+  // how far off the standing frame the ball starts: past about 4.8 m it begins
+  // out of shot entirely, and at 2 to 4 it rolls in from the edge of it.
+  //
+  // Absent (and 0) is the ball standing at its spawn, which is every level
+  // authored before the field. Ignored by the grapple controller, and ignored
+  // beside `hang` - a ball that starts on its anchor has nothing to roll in on.
+  roll?: number;
 }
 
 // WHAT A LEVEL IS, as the level select needs to know it: a name to show, and
@@ -3137,6 +3166,9 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
       // A flag, not a length: it crosses the conversion unchanged, like the
       // ratios above (see `SpawnData.hang`).
       ...(data.player.hang ? { hang: true } : {}),
+      // A length, and a signed one (see `SpawnData.roll`): it scales like the
+      // point it is an offset from.
+      ...(data.player.roll ? { roll: data.player.roll * factor } : {}),
     },
     bodies: data.bodies.map((b) => ({
       kind: b.kind,

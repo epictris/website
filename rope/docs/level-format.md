@@ -34,10 +34,16 @@ Beside the geometry a level carries a few lists that are not bodies: `cameraRegi
 `scaleLevelData` converts a checkpoint's placement and leaves its name alone, and it **drops nothing**: that function is the editor's save as much as the game's load, so a rule that deleted a blank or repeated name would delete a marker the author had just placed.
 The lookup is what enforces the name instead - trimmed, case-folded, first match wins - and the editor's panel is what reports a name that is missing or already taken.
 
-The `player` block is the spawn (`SpawnData`): a point, the avatar radius, and **`hang`**, which is the only thing in it that is not geometry.
+The `player` block is the spawn (`SpawnData`): a point, the avatar radius, and two fields that say how the run OPENS - **`hang`** and **`roll`**.
 A spawn with `hang: true` opens the ball & chain run already on its anchor - see [**The spawn anchor**](ball-coil-and-hook.md#the-spawn-anchor) - and one without it starts the ball on the ground, which is every level authored before the field.
 It anchors the chain; it does not lift the ball, so a level that starts hanging is authored by putting the spawn where the ball should *hang*, under something to hang from.
 The editor offers it as `hang` in the Player spawn group, and carries it through the model for the reason the environment block is carried: the editor writes the whole file back, so a field the model does not know about is a field the first autosave *deletes*.
+
+**`roll`** opens the level on the ball rolling in from off to one side - see [**The rolling entry**](ball-rolling.md#the-rolling-entry).
+It is a signed offset along x (pixels on disk, metres in the sim), negative to come in from the left: the ball is placed there, rolls to the spawn, and the player's aim and deploy do nothing until it arrives.
+So the spawn is still where the run starts, in the sense that matters - it is where the player is handed the ball - and the entry is the only part of the spawn that is not *at* the spawn, which is why the editor draws it as a second ring on a dashed run into the marker.
+The camera stands at the spawn for the whole entry rather than following the ball in, so the offset is also how far off the standing frame the ball begins - see [**A rolling entry**](level-design.md#a-rolling-entry).
+The two openings contradict each other and the build says so: a hanging ball has nothing to roll on, so a spawn that asks for both keeps the hang, and `cli levels` holds every level file to asking for one.
 
 The **`meta`** block is what the level select reads: a `title` to show, `intro` for the one level shown first, and `unlisted` for a level that is off the menu but still played by `?level=` - see [**Levels**](levels.md).
 Nothing in it is a length, so it crosses `scaleLevelData` whole; everything in it is optional, so a level that authors no block is a listed level named after its registry id.

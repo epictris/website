@@ -735,7 +735,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   const history: EdModel[] = [];
   const future: EdModel[] = [];
   const snapshot = (m: EdModel): EdModel => ({
-    player: { pos: m.player.pos, radius: m.player.radius, hang: m.player.hang },
+    player: { pos: m.player.pos, radius: m.player.radius, hang: m.player.hang, roll: m.player.roll },
     items: m.items.map((b) => ({
       ...b,
       shape: cloneShape(b.shape),
@@ -6194,6 +6194,17 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     });
     hang.appendChild(hangBox);
     player.appendChild(hang);
+    // How far off to the side the run rolls in from (ball & chain only), 0 for
+    // a ball that simply stands at its spawn. A plain number field beside the
+    // spawn's own x, because that is what it is: an offset along x from it.
+    const rollField = numField(
+      player,
+      "roll in",
+      () => model.player.roll * M2PX,
+      (v) => (model.player.roll = v * PX),
+    );
+    rollField.title =
+      "Open the level on the ball rolling in from this far to the side of the spawn: negative to come in from the left, positive from the right, 0 for a ball that starts standing at its spawn. The ball is placed there and rolls to the spawn at 1.5 m/s, and the player's aim and chain do nothing until it arrives - so the spawn is still where the run starts, it is where the player is handed the ball. The camera stands at the spawn the whole way in rather than following the ball, so the offset is also how far off the standing frame the ball begins: 2 to 4 m rolls it in from the edge, past about 4.8 m it starts out of shot. The grapple controller ignores it, as does a start from a checkpoint.";
     inspector.appendChild(player);
 
     buildEnvironmentGroup();

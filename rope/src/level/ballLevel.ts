@@ -20,13 +20,14 @@ import { bodySweepCircle, circleOverlap } from "../engine/collision";
 import { BallPlayer } from "../classes/ballPlayer";
 import { BallHook } from "../classes/ballHook";
 import { FinishLine } from "../classes/finishLine";
-import type { FrameInput } from "../input/frameInput";
+import { NO_BUTTON, type FrameInput } from "../input/frameInput";
 import {
   scaleLevelData,
   type CameraPathData,
   type CameraRegionData,
   type LevelData,
   type RawLevelData,
+  type SpawnData,
 } from "./levelFormat";
 import { buildLevelBodies, type LevelVisualSource } from "./buildBodies";
 import type { MoverScript } from "./movers";
@@ -173,6 +174,29 @@ export class BallLevel {
   // what makes a level without one run none of the arithmetic - which is what
   // keeps every recording of every other level bit-identical.
   private readonly finishAreas: readonly FinishLine[];
+
+  // THE ROLLING ENTRY still running: the spawn the ball is rolling to (which is
+  // also where the camera stands while it does), the direction it is travelling
+  // in, the furthest along that run it has got and how long it has been since
+  // that improved - or null, which is a level whose spawn authors no entry
+  // (every level but the ones that do), and every frame after the ball has
+  // arrived.
+  //
+  // Sim state, and it has to be: while it stands the player's aim and deploy are
+  // not the ball's (see `playerInput`), so a replay that let the recorded aim
+  // through on a frame the run did not would diverge on the first one. It is set
+  // at build and cleared once; nothing sets it again, because the entry is the
+  // opening of a run and a RESET builds a fresh level, which is what plays it
+  // again.
+  private entry: { at: Vec2; dir: number; best: number; since: number } | null = null;
+
+  // Is the ball still rolling in, with the player's hands off it? The renderer
+  // asks so it can leave the aim reticle off the screen until the ball is the
+  // player's to aim (see `render/renderer.ts`): a cursor drawn over an entry it
+  // cannot steer is a control that looks broken.
+  get rollingIn(): boolean {
+    return this.entry !== null;
+  }
 
   // Whether this level has a finish line at all, which is a fact about the FILE
   // rather than about the run. It is what the digest asks before writing
@@ -325,6 +349,48 @@ export class BallLevel {
   // & chain than the grapple avatar, without hand-editing generated levelData.
   static readonly BALL_RADIUS_SCALE = 1.5;
 
+  // How fast a ball rolls in on a spawn that asks for an entry (m/s — see
+  // `SpawnData.roll`). One number for the whole game rather than a per-level
+  // one: an entry is how the game hands the player the ball, and a game whose
+  // openings each roll in at their own speed has no such gesture, only levels
+  // that each start oddly. What an arena DOES author is how far out the ball
+  // starts, which is how long the entry lasts.
+  //
+  // 1.5 m/s: a walk. The ball is a 52 kg cast-iron wrecking ball and the entry
+  // is the first thing anybody sees of it, so it trundles in under its own
+  // weight rather than arriving at the speed a swing would put it on the floor
+  // at - and the slower it comes, the longer the player has to read the room it
+  // is coming into. 2 m of entry is 1.3 s of it, and 4 m - most of the 9.6 m the
+  // frame shows - is a little under three.
+  //
+  // It is HELD for as long as the entry runs (see `driveEntry`) rather than
+  // given to the ball once at build, and that is not a shortcut, it is the
+  // measurement: a ball shoved along a flat floor and left to coast stops in
+  // 34 cm from this speed - and in 1.8 m from 3 m/s and 2.6 m from 5 - because
+  // it climbs its own mounting lug once a revolution and loses the frames after
+  // bottom-dead-centre in free fall (see docs/ball-rolling.md#the-loop-ride).
+  // Every offset that could put the ball off the side of the screen is
+  // further than a coast survives,
+  // so a coasted entry is one that stops in plain view and hands the player a
+  // ball that is already still - which is the one thing the opening must not
+  // do. Held, the entry arrives at any authored distance, at the same pace, and
+  // hands over a ball that is still rolling.
+  static readonly ENTRY_SPEED = 1.5;
+
+  // What counts as still arriving: an entry that has not closed
+  // `ENTRY_PROGRESS` metres on the spawn in `ENTRY_STUCK_FRAMES` frames has
+  // stopped getting there, and hands over where it stands.
+  //
+  // Being held (above), an entry cannot be argued out of its speed - it can only
+  // be argued out of its PLACE, by a wall it was authored into, a step it cannot
+  // climb, a pit it is sitting in the bottom of. Measuring the progress rather
+  // than the speed is what tells those apart from an entry that is simply
+  // taking its time. Half a second of no ground made is unambiguous: the entry
+  // covers 2.5 cm a frame, so anything still coming has made three quarters of
+  // a metre by then.
+  static readonly ENTRY_STUCK_FRAMES = 30;
+  static readonly ENTRY_PROGRESS = 0.01;
+
   constructor(rawData: RawLevelData) {
     const data = scaleLevelData(rawData, PX);
     this.cameraRegions = data.cameraRegions ?? [];
@@ -332,6 +398,7 @@ export class BallLevel {
     this.cameraRules = buildCameraRules(this.cameraRegions, this.cameraPaths);
     this.ball = new BallPlayer(data.player.radius * BallLevel.BALL_RADIUS_SCALE);
     this.ball.globalPosition = new Vec2(data.player.x, data.player.y);
+    this.startRolling(data.player);
     this.ball.spawnBody = (b) => this.spawnBody(b);
     this.world.add(this.ball);
     this.bodies.push(this.ball);
@@ -394,7 +461,16 @@ export class BallLevel {
       }
     }
 
-    this.cameraPosition = this.ball.globalPosition;
+    this.cameraPosition = this.cameraAnchor();
+  }
+
+  // Where the camera reads the world from this frame: the ball, or the spawn
+  // while the ball is still rolling in to it (see `cameraRenderPosition`, which
+  // is the same choice made against the interpolated pose). It is what the rule
+  // set is evaluated at, so the debug overlay names the regions the camera is
+  // actually being governed by rather than the ones the ball is passing through.
+  private cameraAnchor(): Vec2 {
+    return this.entry?.at ?? this.ball.globalPosition;
   }
 
   // The chain set as it stands this frame: the authored chains, every vine's
@@ -472,8 +548,21 @@ export class BallLevel {
   // Camera target for a render frame: the ball's interpolated position, so the
   // camera tracks exactly what is drawn. Following the raw 60 Hz position while
   // the ball renders interpolated would put the jitter back, on screen.
+  //
+  // While the ball is ROLLING IN it is the SPAWN instead - the point the ball is
+  // rolling to (see `SpawnData.roll`). A camera that followed the entry would
+  // hold the ball in the middle of the screen for the whole of it, which is a
+  // ball rolling on the spot in front of a sliding level: the entry only reads
+  // as an entry if the frame stands still and the ball comes into it. Standing
+  // where the ball will arrive is also what makes the hand-over invisible - the
+  // camera is already looking at the point the ball reaches, so nothing moves on
+  // the frame it takes over.
+  //
+  // The camera rules are evaluated at this point too, which is the right
+  // reading of them: what a region frames during the entry is the room the ball
+  // is arriving in, not the one it is passing through on the way.
   cameraRenderPosition(alpha: number): Vec2 {
-    return this.ball.renderPosition(alpha);
+    return this.entry === null ? this.ball.renderPosition(alpha) : this.entry.at;
   }
 
   // What the camera treats this frame as a SWING on (see `Level.cameraHang`),
@@ -512,6 +601,104 @@ export class BallLevel {
     if (this.completedFrame === null) this.completedFrame = this.frame;
   }
 
+  // Set the ball rolling in from off to one side, if the spawn asks for it (see
+  // `SpawnData.roll`). Build-time, and it moves the ball rather than the spawn:
+  // the spawn stays the point the player is handed the ball at, and that is the
+  // point everything else in the level was authored around.
+  private startRolling(spawn: SpawnData): void {
+    const roll = spawn.roll ?? 0;
+    if (roll === 0) return;
+    if (spawn.hang) {
+      // Two openings that cannot both happen: `hang` throws the chain straight
+      // up from the spawn and leaves the ball on the end of it, and there is
+      // nothing for a ball hanging in the air to roll in ON. The hang is the
+      // one kept because it is the one that decides where the ball IS.
+      console.warn(
+        "[spawn] this level's spawn asks to roll in and to start hanging; a hanging ball has nothing to roll on, so the entry is ignored.",
+      );
+      return;
+    }
+    // A ball placed to the left of the spawn rolls right to reach it.
+    const dir = roll < 0 ? 1 : -1;
+    const from = spawn.x + roll;
+    this.ball.globalPosition = new Vec2(from, spawn.y);
+    this.entry = { at: new Vec2(spawn.x, spawn.y), dir, best: from, since: 0 };
+    // Already at speed on the first frame: the level opens on a ball rolling
+    // rather than on one that stands for a frame and is then pushed.
+    this.driveEntry();
+  }
+
+  // Hold the ball at the entry's roll for this frame (see `ENTRY_SPEED`).
+  //
+  // Along x only: what the entry is in charge of is the ball coming in, and
+  // everything else about it - falling onto the floor, climbing its own lug,
+  // being stopped by what stands in the way - is the world's as it always was,
+  // which is what makes an entry into a wall a thing that visibly happens
+  // rather than a thing that is smuggled through it.
+  private driveEntry(): void {
+    const entry = this.entry;
+    if (entry === null) return;
+    const v = entry.dir * BallLevel.ENTRY_SPEED;
+    this.ball.linearVelocity = this.ball.linearVelocity.withX(v);
+    // Rolling, not sliding: ω = v / r is the spin a ball that got here by
+    // rolling is already carrying, so the floor has nothing to correct and the
+    // entry neither scrubs nor skids.
+    this.ball.angularVelocity = v / this.ball.radius;
+  }
+
+  // The input the RUN is played with: the player's own, unless the ball is still
+  // rolling in, in which case the aim and the deploy are dropped and only the
+  // restart survives (see `entry`).
+  //
+  // Dropped in the SIM rather than in the input source, so every way of driving
+  // a frame gets the same gate: a browser, a scripted playtest and a replay of a
+  // recording made in either. The aim is dropped by being answered with the
+  // ball's own position, which is the "not aiming" sentinel the pad's released
+  // stick already sends (see `BallPlayer.resolveInput`) - so an entry is not a
+  // new state for the controller to know about, it is the state it is already in
+  // when nobody is aiming.
+  //
+  // A button held down through the hand-over does NOT throw the chain on the
+  // frame control arrives: `pressed` is an edge the input source measures against
+  // its own last frame, and that edge happened while the ball was not the
+  // player's. The throw costs a fresh press, which is the right price - the
+  // alternative is a chain thrown by a hand that was resting on the mouse.
+  private playerInput(input: FrameInput): FrameInput {
+    if (this.entry === null) return input;
+    return {
+      ...input,
+      fire: { ...NO_BUTTON },
+      mouseWorldPosition: this.ball.globalPosition,
+    };
+  }
+
+  // Has the rolling entry ended, and if not, carry it. Run at the top of the
+  // frame, so the frame the ball arrives on is the first one the player plays.
+  //
+  // Two ways to end, and the second is not a fallback so much as the honest
+  // reading of the first: the ball reaches the spawn, or it stops getting any
+  // nearer to it - stopped by a wall, a step it cannot climb, a pit it was
+  // authored into. Either way the entry is spent, and a spent entry hands over
+  // where it stands rather than holding the player's hands off a ball that is
+  // never going to arrive.
+  private stepEntry(): void {
+    const entry = this.entry;
+    if (entry === null) return;
+    const x = this.ball.globalPosition.x;
+    if ((x - entry.at.x) * entry.dir >= 0) {
+      this.entry = null;
+      return;
+    }
+    if ((x - entry.best) * entry.dir >= BallLevel.ENTRY_PROGRESS) {
+      entry.best = x;
+      entry.since = 0;
+    } else if (++entry.since > BallLevel.ENTRY_STUCK_FRAMES) {
+      this.entry = null;
+      return;
+    }
+    this.driveEntry();
+  }
+
   physicsProcess(input: FrameInput, delta: number): void {
     this.frame++;
     // Where the ball stands as the frame BEGINS, for the swept finish test at
@@ -536,6 +723,15 @@ export class BallLevel {
       this.onReset?.();
       return;
     }
+
+    // The rolling entry, before anything reads the input: while it stands, the
+    // aim and the deploy are dropped (see `playerInput`), and it ends at the top
+    // of the frame the ball arrives on, so that frame is played with the
+    // player's own hands on it. The restart above is deliberately upstream of
+    // it - a run the player wants to start over is one they may restart while
+    // watching it roll in.
+    this.stepEntry();
+    const played = this.playerInput(input);
 
     // Scripted movers run first, exactly as they do in `Level`: the ball, the
     // chain and the contact solve all have to see current-frame transforms with
@@ -566,7 +762,7 @@ export class BallLevel {
     this.chainUnwindRefund = 0;
     this.chainBraced = false;
 
-    this.ball.resolveInput(input, delta);
+    this.ball.resolveInput(played, delta);
     // The aim steering overwrites the ball's angular velocity outright, so it is
     // a phase in its own right - a spin that appears here is the player's, and
     // one that appears in `unwind` is the chain refusing it.
@@ -1931,7 +2127,7 @@ export class BallLevel {
       }
     }
 
-    this.cameraPosition = this.ball.globalPosition;
+    this.cameraPosition = this.cameraAnchor();
   }
 
   // Break whatever this frame's contacts finished off: the chain lets go of it,

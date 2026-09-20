@@ -1565,8 +1565,15 @@ export class EnergyMonitor {
     // itself rather than by the input, because a pad fires on contact and no
     // button is pressed for it (see `World.launchedThisFrame`).
     const launched = level.world.launchedThisFrame;
+    // A ball rolling in at the opening of a level is being HELD at its entry
+    // speed by the level itself (see `BallLevel.ENTRY_SPEED`), which is a force
+    // on it as surely as the winch is - and one no input carries, since the
+    // entry is the stretch of the run where the player's input is dropped. Said
+    // by the sim rather than read off the stream, exactly as the trampoline
+    // below it is.
+    const rollingIn = level.rollingIn;
     const bodies = level.world.bodies.filter((b) => !b.removed).length;
-    if (anyForcedInput(input) || steering || launched || bodies !== this.bodyCount) {
+    if (anyForcedInput(input) || steering || launched || rollingIn || bodies !== this.bodyCount) {
       // A body appearing or disappearing (a hook spawned, a hook removed)
       // changes the total by construction, so the span restarts rather than
       // reading the difference as the solver's doing.

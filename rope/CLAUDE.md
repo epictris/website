@@ -98,7 +98,7 @@ Foundations
 The ball and chain
 
 - [ball-chain](docs/ball-chain.md) - the chain phase: push-out order, the blocked-length lease, the spin rollback, the winch, sprung and pivot anchors, the pair separation, the wind stall.
-- [ball-rolling](docs/ball-rolling.md) - the steered ball's grip, spin traction on a fresh contact, the loop cap and the loop ride.
+- [ball-rolling](docs/ball-rolling.md) - the steered ball's grip, spin traction on a fresh contact, the loop cap and the loop ride, the rolling entry a level may open on.
 - [ball-coil-and-hook](docs/ball-coil-and-hook.md) - the coil as an angle, how the hook attaches (sweep, blocking contact, seam, reach), the dangling tip and scene catch.
 - [manacle](docs/manacle.md) - the edge-on ring, its hinge pin, driven rotation, the bite and the mounted cuff.
 - [slack-chain-drape](docs/slack-chain-drape.md) - the visual-only drape of a chain with length to spare.

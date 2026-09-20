@@ -22,6 +22,7 @@ bun run src/tools/cli.ts render3d             # 3D camera correspondence, extrus
 bun run src/tools/cli.ts assets               # prop + texture budget, stale bytes, orphans, licences (see The asset store)
 bun run src/tools/cli.ts levels               # the level-file lint: the menu's list, one intro, and each listed level's finish line (see Levels)
 bun run src/tools/cli.ts finish               # the finish-line mechanic: crossed once, missed, and the region moving nothing (see Levels)
+bun run src/tools/cli.ts entry                # the rolling entry a level may open on: the roll in, the hands-off gate and the hand-over (see Ball rolling)
 bun run src/tools/cli.ts latch                # the button latch that carries a sub-step click into the next sample, and the click audit
 bun run src/tools/cli.ts clicks session.json  # the DOM button story a P bundle carries, laid against its frames (see The input latch)
 bun run src/tools/cli.ts transport            # the replay transport: play, pause, speed, and which frame a seek lands on (see Watching a replay)

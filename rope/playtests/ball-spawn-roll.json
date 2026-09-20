@@ -1,0 +1,45 @@
+{
+  "level": "ball-spawn-roll",
+  "controller": "ball",
+  "frames": 320,
+  "data": {
+    "player": {
+      "x": 0,
+      "y": -12,
+      "radius": 8,
+      "roll": -400
+    },
+    "bodies": [
+      {
+        "kind": "static",
+        "x": 0.0,
+        "y": 20.0,
+        "rot": 0.0,
+        "shape": { "kind": "rect", "w": 2000.0, "h": 40.0 },
+        "friction": 1.0
+      },
+      {
+        "kind": "static",
+        "x": 100.0,
+        "y": -150.0,
+        "rot": 0.0,
+        "shape": { "kind": "rect", "w": 400.0, "h": 40.0 },
+        "friction": 1.0
+      }
+    ]
+  },
+  "aim": [{ "from": 1, "to": 320, "x": 0.4, "y": -1.0, "relative": true }],
+  "holds": [
+    { "action": "deploy", "from": 1, "to": 200 },
+    { "action": "deploy", "from": 240, "to": 320 }
+  ],
+  "asserts": [
+    { "frame": 1, "maxX": -3.9 },
+    { "window": { "from": 1, "to": 160 }, "minTravelX": 3.5, "maxClimb": 0.1 },
+    { "frame": 80, "hasRope": false },
+    { "frame": 80, "maxX": -1.8 },
+    { "frame": 170, "hasRope": false },
+    { "frame": 170, "minX": -0.1 },
+    { "frame": 245, "hasRope": true }
+  ]
+}

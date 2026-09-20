@@ -117,5 +117,20 @@ export function runLevelChecks(): LevelCheck[] {
     checks.push(...checkLevel(l.id, l.title, normalizeLevelData(spec.data)));
   }
 
+  // ...and one asked of EVERY level, listed or not, because it is about the
+  // spawn rather than about the menu: a spawn cannot both roll the ball in and
+  // start it hanging (see `SpawnData.roll`). The build says so too, but it says
+  // it into the console of whoever happens to play that level, which is not a
+  // place an authoring mistake is found.
+  const contradictory = Object.entries(LEVELS).filter(([, s]) => s.data.player.hang && s.data.player.roll);
+  checks.push({
+    name: "levels: no spawn asks to roll in and to start hanging",
+    pass: contradictory.length === 0,
+    detail:
+      contradictory.length === 0
+        ? "every spawn asks for one opening"
+        : `${contradictory.map(([id]) => id).join(", ")}: a hanging ball has nothing to roll on, so the entry would be ignored.`,
+  });
+
   return checks;
 }
