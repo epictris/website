@@ -97,8 +97,17 @@ Two things fall out of it being the system clipboard. The shortcuts are `copy` a
 listeners on the document rather than cases in the keydown switch, because those are the only
 events that may touch it and neither fires when a keydown handler has already cancelled the key.
 And a paste of text that is not a payload does nothing rather than failing - what is on the
-clipboard is whatever was last copied anywhere, and a sentence is not a mistake the author made;
-this tab's own last copy is the fallback.
+clipboard is whatever was last copied anywhere, and a sentence is not a mistake the author made.
+It does nothing *at all*: there is no fallback to this tab's own last copy.
+The fallback used to be there, and it made the editor paste on its own.
+On Linux the browser pastes the X primary selection when the **middle button is released**, and it
+does that by dispatching a `paste` at the page - over the canvas, with nothing editable under it,
+the event still reaches the document listener carrying whatever text was selected (often none).
+Every middle-drag of the view therefore ended in a paste, because text that was not a payload fell
+through to the last copy.
+So the fallback is gone, and a paste that arrives between a middle-button press and its release is
+declined outright: that button means **pan**, and a pan has to be able to end without the level
+gaining a copy of something.
 
 A paste **remints anchor ids**, which are content in the file rather than page state: pasting into
 a level that already holds anchor 1 would otherwise leave two of them and a chain naming either.

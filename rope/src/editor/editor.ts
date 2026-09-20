@@ -7263,11 +7263,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // What was here before was three arrays of live `EdItem`s, which a reload
   // emptied and a second tab never saw.
 
-  // The last payload this tab produced, as a fallback for two cases the system
-  // clipboard cannot cover: a browser that refuses to read it, and a clipboard
-  // that has since been overwritten by something that is not a payload.
-  let lastCopied: string | null = null;
-
   // Whether a keyboard shortcut may act at all: the same test the keydown
   // handler makes, since a `copy` or `paste` event fires wherever the caret is
   // and the inspector's fields have their own editing to do.
@@ -7311,16 +7306,21 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   function copySelection(): string | null {
     const sel = operandItems();
     if (!sel.length) return null;
-    lastCopied = writeClipboard(model, sel);
-    return lastCopied;
+    return writeClipboard(model, sel);
   }
 
-  // Ctrl+V. `text` is whatever the system clipboard had; anything that is not a
-  // payload falls back to this tab's own last copy, and a paste with neither
-  // does nothing rather than throwing - the input is whatever happened to be on
-  // the clipboard, and a sentence is not an error the author made.
+  // Ctrl+V. `text` is whatever the system clipboard had, and anything that is
+  // not a payload does nothing rather than throwing - the input is whatever
+  // happened to be on the clipboard, and a sentence is not an error the author
+  // made.
+  //
+  // What is NOT here is a fallback to this tab's own last copy. It read as
+  // generosity - a paste that works even once the clipboard has moved on - and
+  // was the whole of the middle-click bug below: every paste the page did not
+  // ask for, carrying text that is not a payload, landed the last copy instead
+  // of declining. A paste pastes what is on the clipboard, or nothing.
   function pasteClipboard(text: string | null): void {
-    const data = (text !== null ? readClipboard(text) : null) ?? (lastCopied ? readClipboard(lastCopied) : null);
+    const data = text !== null ? readClipboard(text) : null;
     if (!data) return;
     // The payload is on-disk pixel level data, so it comes back in through the
     // SAME loader a level does - page-fresh ids and all. That is what makes the
@@ -7377,7 +7377,34 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     e.clipboardData?.setData("text/plain", payload);
     e.preventDefault();
   });
+  // MIDDLE CLICK IS PAN, NOT PASTE. On Linux the browser pastes the X primary
+  // selection when the middle button is RELEASED, and it does it by dispatching
+  // a `paste` at the page - over a canvas, with nothing editable under it and
+  // nothing to insert into, the event still arrives here. So every middle-drag
+  // of the view ended in a paste the author never asked for.
+  //
+  // The gesture the editor gives that button is panning, and it has to be able
+  // to end without the view gaining a copy of something. This is the only tell
+  // the DOM offers that a paste came from the mouse rather than from Ctrl+V,
+  // and it holds because the browser dispatches the paste from inside its own
+  // handling of that release: the flag is still standing one task later.
+  let middleButtonPaste = false;
+  window.addEventListener("mousedown", (e) => {
+    if (e.button === 1) middleButtonPaste = true;
+  }, true);
+  window.addEventListener("mouseup", (e) => {
+    if (e.button !== 1) return;
+    middleButtonPaste = true;
+    setTimeout(() => (middleButtonPaste = false), 0);
+  }, true);
+  // ...and a KEY PRESS takes it down again, whatever the mouse is doing. Ctrl+V
+  // dispatches its `paste` from inside the keydown, so a paste that follows a
+  // key is the author's by construction - and this is what keeps a middle press
+  // whose release never arrived (a drag out of the window, a lost button) from
+  // silently costing the editor its paste for the rest of the session.
+  window.addEventListener("keydown", () => (middleButtonPaste = false), true);
   document.addEventListener("paste", (e) => {
+    if (middleButtonPaste) return;
     if (!clipboardUsable(e.target)) return;
     pasteClipboard(e.clipboardData?.getData("text/plain") ?? null);
     e.preventDefault();

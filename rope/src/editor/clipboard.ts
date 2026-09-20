@@ -105,8 +105,9 @@ export function writeClipboard(model: EdModel, items: readonly EdItem[]): string
 // Null rather than a throw for everything, because the input is whatever
 // happened to be on the system clipboard: a paste of a sentence, of a half-copied
 // fragment, of a payload from a future version. None of those is an error the
-// author made, and the editor's answer to all of them is to do nothing and let
-// the in-memory fallback answer instead.
+// author made, and the editor's answer to all of them is to do nothing at all -
+// there is no fallback behind this, and the last one made every middle-click pan
+// paste the tab's previous copy (see `pasteClipboard` in `editor.ts`).
 export function readClipboard(text: string): RawLevelData | null {
   let parsed: unknown;
   try {
