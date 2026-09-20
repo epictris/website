@@ -14,6 +14,7 @@ import {
   IDLE_SEAL_MS,
   INGEST_PATH,
   MAX_BODY_BYTES,
+  type EndReason,
   type PlaytestEvent,
   type SessionMeta,
 } from "../playtest/protocol";
@@ -68,7 +69,7 @@ function runBatches(
   frames: SerializedFrame[],
   digests: WorldDigest[],
   run: number,
-  reason: "reset" | "kill" | "unload" | "pause" = "reset",
+  reason: EndReason = "reset",
   withStart = run === 0,
 ): PlaytestEvent[][] {
   const batches: PlaytestEvent[][] = [];
@@ -144,6 +145,39 @@ class Harness {
 type Case = (h: Harness, s: { frames: SerializedFrame[]; digests: WorldDigest[] }) => Promise<string> | string;
 
 const CASES: Record<string, Case> = {
+  // The level was FINISHED, which is a reason of its own and the one the bell
+  // seals a run with (see `EndReason`). It has to be known at BOTH ends in the
+  // same deploy: the store refuses a reason it does not have, and a refusal is
+  // a 400 the client goes dead on.
+  "a run the player finished seals as `complete`": async (h, s) => {
+    h.play(SESSION_A, runBatches(s.frames, s.digests, 0, "complete"));
+    const files = h.runFiles();
+    if (files.length !== 1) throw new Error(`sealed files: ${files.join(", ")}`);
+    const rec = loadGz(files[0]!);
+    if (rec.meta?.reason !== "complete") throw new Error(`reason: ${JSON.stringify(rec.meta)}`);
+    const row = h.store.adminIndex().runs[0]!;
+    if (row.reason !== "complete") throw new Error(`index row reason: ${row.reason}`);
+    return `sealed ${rec.frames.length} frames as complete`;
+  },
+
+  // ...and a reason NEITHER end knows is still refused, so the acceptance above
+  // is the list growing rather than the check going away. `idle` is on the list
+  // deliberately: it is the sweeper's own verdict on a session that stopped
+  // talking, so a client claiming it is claiming something only the server can
+  // know.
+  "a reason the store does not know is refused, `idle` included": (h, s) => {
+    const batches = runBatches(s.frames, s.digests, 0);
+    for (let i = 0; i < batches.length - 1; i++) h.post(SESSION_A, i, batches[i]!);
+    const last = batches.length - 1;
+    for (const reason of ["idle", "quit"]) {
+      const r = h.post(SESSION_A, last, [
+        { t: "end", run: 0, frames: s.frames.length, reason: reason as EndReason },
+      ]);
+      if (r.status !== 400) throw new Error(`\`${reason}\` was answered ${r.status}`);
+    }
+    return "`idle` and `quit` both refused with 400";
+  },
+
   "in-order batches are acked and the run seals on end": async (h, s) => {
     const batches = runBatches(s.frames, s.digests, 0);
     for (let i = 0; i < batches.length; i++) {

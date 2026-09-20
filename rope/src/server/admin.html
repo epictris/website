@@ -62,7 +62,7 @@
     <label>level <select id="f-level"><option value="">all</option></select></label>
     <label>from <input type="date" id="f-from" /></label>
     <label>to <input type="date" id="f-to" /></label>
-    <label>end <select id="f-reason"><option value="">any</option><option>reset</option><option>kill</option><option>unload</option><option>pause</option><option>idle</option></select></label>
+    <label>end <select id="f-reason"><option value="">any</option><option>reset</option><option>kill</option><option>unload</option><option>pause</option><option>idle</option><option>complete</option></select></label>
     <label>verdict <select id="f-verdict"><option value="">any</option><option value="ok">reproduces</option><option value="diverges">diverges</option><option value="pending">pending</option></select></label>
     <label><input type="checkbox" id="f-starred" /> starred</label>
     <span class="dim" id="runs-count"></span>
@@ -196,7 +196,7 @@
         <td>${esc(r.commit)}${r.srcHash === data.here.srcHash ? ' <span class="tag live">live</span>' : ""}</td>
         <td class="num">${r.frames}</td>
         <td class="num">${fmtDur(r.seconds)}</td>
-        <td class="${r.reason === "reset" || r.reason === "kill" ? "" : "warn"}">${esc(r.reason)}</td>
+        <td class="${r.reason === "complete" ? "ok" : r.reason === "reset" || r.reason === "kill" ? "" : "warn"}">${esc(r.reason)}</td>
         <td>${verdictCell(r)}</td>
         <td class="dim">${esc(r.device)}</td>
         <td class="dim">${esc(r.ip)}</td>

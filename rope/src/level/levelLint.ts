@@ -13,10 +13,11 @@
 //   NOT A PIVOT  - a `bell` on a body with no bearing. The ring is measured as
 //                  a swing about one, so a bell that cannot turn can never be
 //                  rung however hard it is hauled on.
-//   NO ROPE      - a bell with no vine anchored to it. The vine is the whole
-//                  interface: the chain grabs a vine anywhere along its length
-//                  (`docs/vines.md`) and grabs a scene chain nowhere, so a bell
-//                  reached only by its own geometry is a bell nothing can pull.
+//   NO ROPE      - a bell with no toll rope: a scene chain from an anchor on
+//                  the bell to a SALLY, the rigid grip on the end of it that the
+//                  player hooks and hauls on. The rope is the whole interface,
+//                  and the bell itself is in nothing's way, so a bell with no
+//                  chain on it is a bell nothing can reach.
 //   IN THE WAY   - a bell whose collision shapes stop the player, the hook or
 //                  the chain. The body has to exist in the world for the vine's
 //                  load rope to have something to load, and it must be in the
@@ -85,9 +86,15 @@ function checkLevel(id: string, title: string, data: LevelData): LevelCheck[] {
   }
   const bell = bells[0]!;
   const ids = anchorIdsOf(bell);
-  const ropes = (data.vines ?? []).filter(
-    (v) => ids.includes(v.anchor) || (v.anchor2 !== undefined && ids.includes(v.anchor2)),
-  );
+  // The toll rope: a scene chain with one end bolted to the bell. Its other end
+  // is the sally, and that end has to be on something that MOVES - a chain
+  // between the bell and a static is a rope nailed to the wall.
+  const ropes = (data.chains ?? []).filter((c) => ids.includes(c.a) || ids.includes(c.b));
+  const sallyOf = (rope: (typeof ropes)[number]): LevelBodyData | undefined => {
+    const far = ids.includes(rope.a) ? rope.b : rope.a;
+    return data.bodies.find((b) => anchorIdsOf(b).includes(far));
+  };
+  const sally = ropes.length === 1 ? sallyOf(ropes[0]!) : undefined;
   return [
     {
       name: `levels: ${where} has exactly one bell`,
@@ -107,8 +114,18 @@ function checkLevel(id: string, title: string, data: LevelData): LevelCheck[] {
       pass: ropes.length === 1,
       detail:
         ropes.length === 1
-          ? `vine on anchor ${ropes[0]!.anchor}`
-          : `${ropes.length} vines anchored to the bell (anchors ${ids.join(", ") || "none"}). The vine is the only handle - the hook grabs a vine and never a scene chain.`,
+          ? `chain ${ropes[0]!.a} -> ${ropes[0]!.b}`
+          : `${ropes.length} chains anchored to the bell (anchors ${ids.join(", ") || "none"}). The rope is the only handle: the bell itself is in nothing's way.`,
+    },
+    {
+      name: `levels: ${where}'s toll rope ends at a sally the player can hook`,
+      pass: sally !== undefined && sally.kind === "rigid" && sally.pivot !== true,
+      detail:
+        sally === undefined
+          ? "the rope's far end is on no body this level contains"
+          : sally.kind === "rigid" && sally.pivot !== true
+            ? "a free rigid body on the end of the rope"
+            : `the rope ends on a ${sally.pivot ? "pivot" : sally.kind} body. A sally has to hang and be hauled, so it is a free rigid body.`,
     },
     {
       name: `levels: ${where}'s bell is in nothing's way`,

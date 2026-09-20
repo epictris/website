@@ -1,0 +1,159 @@
+{
+  "meta": {
+    "unlisted": true
+  },
+  "environment": {
+    "envIntensity": 0.6,
+    "hdri": "golden-gate-hills"
+  },
+  "player": {
+    "x": -120,
+    "y": -20,
+    "radius": 8
+  },
+  "bodies": [
+    {
+      "kind": "static",
+      "x": 0,
+      "y": 20,
+      "rot": 0,
+      "friction": 0.8,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 2400,
+            "h": 40
+          }
+        },
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 2400,
+            "h": 40
+          },
+          "matchCollision": true,
+          "texture": "rock wall"
+        }
+      ]
+    },
+    {
+      "kind": "static",
+      "x": 0,
+      "y": -430,
+      "rot": 0,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 260,
+            "h": 40
+          }
+        },
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 260,
+            "h": 40
+          },
+          "matchCollision": true,
+          "texture": "rock wall"
+        }
+      ]
+    },
+    {
+      "kind": "rigid",
+      "pivot": true,
+      "pivotX": 0,
+      "pivotY": -45,
+      "pivotFreq": 0.5,
+      "pivotDamping": 0.25,
+      "bell": true,
+      "x": 0,
+      "y": -355,
+      "rot": 0,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "circle",
+            "r": 35
+          },
+          "material": "brick",
+          "passes": [
+            "player",
+            "hook",
+            "chain"
+          ]
+        },
+        {
+          "type": "geometry",
+          "kind": "mesh",
+          "mesh": "bell"
+        },
+        {
+          "type": "anchor",
+          "id": 1,
+          "x": 0,
+          "y": 45
+        }
+      ]
+    },
+    {
+      "kind": "rigid",
+      "x": 0,
+      "y": -120,
+      "rot": 0,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 20,
+            "h": 60
+          },
+          "material": "wood"
+        },
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 20,
+            "h": 60
+          },
+          "matchCollision": true,
+          "texture": "rusted iron"
+        },
+        {
+          "type": "anchor",
+          "id": 2,
+          "x": 0,
+          "y": -30
+        }
+      ]
+    }
+  ],
+  "notes": [
+    {
+      "kind": "text",
+      "x": -620,
+      "y": -220,
+      "rot": 0,
+      "w": 520,
+      "h": 160,
+      "size": 22,
+      "text": "BELL SANDBOX. The toll rope is a scene chain with a sally on the end of it - hook the sally and haul. The bell rings at 0.35 rad (20 deg) off where it settled. Numbers to judge: pivotFreq 0.5 Hz, pivotDamping 0.25, the brick disc's 146 kg, the 2.25 m chain, the sally's 11 kg."
+    }
+  ],
+  "chains": [
+    {
+      "a": 1,
+      "b": 2,
+      "length": 160
+    }
+  ]
+}

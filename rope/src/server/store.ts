@@ -55,7 +55,10 @@ const RUN_ID = /^[0-9a-f-]{36}-r\d+$/;
 const MAX_EVENTS_PER_BATCH = 1000;
 const MAX_FRAMES_PER_EVENT = 6000;
 const HELD_MASK_LIMIT = 1 << ACTIONS.length;
-const END_REASONS = new Set<EndReason>(["reset", "kill", "unload", "pause"]);
+// What the INGEST accepts. `idle` is not among them and never was: it is the
+// sweeper's own verdict on a session that stopped talking, so a client claiming
+// it is a client claiming something only the server can know.
+const END_REASONS = new Set<EndReason>(["reset", "kill", "unload", "pause", "complete"]);
 const TRASH_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const RUN_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 // A shared address within this window is what makes a new player id

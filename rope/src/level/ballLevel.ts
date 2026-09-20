@@ -165,6 +165,31 @@ export class BallLevel {
   // accounting that decides when a load is a fresh hit.
   private readonly breaker = new BreakTracker();
 
+  // THE FRAME THE BELL RANG, once, or null on a level with no bell and on one
+  // whose bell has not been rung (see `LevelBodyData.bell`).
+  //
+  // Sim state rather than a render-side flag: it is a fact about the run, so it
+  // is read by the page, digested into every bundle and asserted by the
+  // invariants, and a replay of a run that rang has to ring on the same frame.
+  // It never goes back to null - a bell that has been rung has been rung, and a
+  // RESET builds a fresh level, which is what starts it over.
+  completedFrame: number | null = null;
+  // The bell body, and the rotation it settled at during the build, which is
+  // the angle a ring is measured FROM. Both null on a level with no bell, and
+  // that is what makes such a level run no ring arithmetic at all - every
+  // recording of one is bit-identical.
+  private readonly bellBody: RigidBody2D | null;
+  private readonly bellRest: number;
+
+  // How far the bell stands off the angle it settled at, signed, or null on a
+  // level with no bell. This is the quantity the ring is measured on
+  // (`BELL_RING_ANGLE`), and it is what the digest carries: the bell BODY's own
+  // rotation is already in the digest's body list, and what is not anywhere
+  // else is the rest angle it is measured from, which is build state.
+  get bellSwing(): number | null {
+    return this.bellBody === null ? null : this.bellBody.globalRotation - this.bellRest;
+  }
+
   // Diagnostic for the anchor-kick invariant. On the frame the chain first
   // anchors to a fixed body, this holds the speed the length solve added to
   // the ball; null on every other frame. A rope going taut against a fixed
@@ -368,6 +393,31 @@ export class BallLevel {
         );
       }
     }
+
+    // THE END BELL, and the angle it settled at (see `LevelBodyData.bell`).
+    //
+    // LAST of the build, after `settleChainsAtBuild` and after the spawn
+    // anchor, because the rest angle a ring is measured from has to be the one
+    // the first frame of play opens on: a bell hung among scene chains has
+    // come to rest by now, and a level measured before that settle would start
+    // part-rung.
+    //
+    // Two bells is a build error rather than a silent first-wins, and that is
+    // the direction a level survives being wrong in: a level with two is one an
+    // author has half-finished, and quietly ringing at whichever body came
+    // first would leave the OTHER inert with nothing to say so. `cli levels`
+    // catches it earlier, on the file, where it is a line of output rather than
+    // a page that will not open.
+    const bells = built.bodies.filter((b) => b.data.bell === true);
+    if (bells.length > 1) {
+      throw new Error(`this level has ${bells.length} bodies marked \`bell\`; a level ends at one`);
+    }
+    const bell = bells[0]?.body ?? null;
+    if (bells.length === 1 && !(bell instanceof RigidBody2D)) {
+      throw new Error("the body marked `bell` is not a rigid body; a bell swings about a bearing");
+    }
+    this.bellBody = bell instanceof RigidBody2D ? bell : null;
+    this.bellRest = this.bellBody?.globalRotation ?? 0;
 
     this.cameraPosition = this.ball.globalPosition;
   }
@@ -1846,6 +1896,25 @@ export class BallLevel {
     // own and nothing above touches them, so waiting costs the measurement
     // nothing and costs the reader one frame of scenery that was already broken.
     this.breakBodies(delta);
+
+    // THE RING (see `LevelBodyData.bell`). Last, on the frame's final poses, so
+    // the angle asked about is the one the renderer is about to draw.
+    //
+    // A comparison on a rotation the sim already owns, and `Mathf.abs` is not a
+    // transcendental - so nothing here reaches for a platform `Math` and `cli
+    // dmath` has nothing to find. A level with NO bell does not run it at all,
+    // which is what keeps every recording of every other level bit-identical.
+    //
+    // Once: `completedFrame` never clears and never moves, which is what
+    // `bell-rung-once` asserts. What the page does about it - linger, freeze,
+    // and the form - is the page's (see main.ts); the sim carries on stepping
+    // exactly as it would have, so a bundle of a run that rang replays and
+    // rings on the same frame.
+    if (this.completedFrame === null && this.bellBody !== null) {
+      if (Mathf.abs(this.bellBody.globalRotation - this.bellRest) >= BELL_RING_ANGLE) {
+        this.completedFrame = this.frame;
+      }
+    }
 
     this.cameraPosition = this.ball.globalPosition;
   }

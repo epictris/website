@@ -2,7 +2,7 @@
 
 import { Vec2 } from "./engine/vec2";
 import { Level } from "./level/level";
-import { BallLevel } from "./level/ballLevel";
+import { BallLevel, BELL_LINGER_FRAMES } from "./level/ballLevel";
 import { SlackChain } from "./classes/slackChain";
 import { LiveInputSource } from "./input/liveInput";
 import { BallInputSource } from "./input/ballInput";
@@ -722,6 +722,57 @@ function stepLevel(frameInput: FrameInput, seeking: boolean): void {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Finishing a level
+// ---------------------------------------------------------------------------
+//
+// The bell has been rung (`BallLevel.completedFrame`), the swing has been
+// watched for `BELL_LINGER_FRAMES` more steps, and the level is over: the loop
+// stops stepping, the pointer comes back, and the form appears over a scene
+// that is still being drawn.
+//
+// STOPPING IS THE PAGE'S, not the sim's. Nothing here reaches into the level:
+// it carries on being exactly the level it was, so a P download taken now is a
+// bundle that replays and rings on the same frame, and the recorder's sealed
+// run is the frames that were actually played. What changes is that no more of
+// them are stepped.
+//
+// Rendering carries on, which is the point of freezing rather than tearing the
+// page down: the form is a panel over the level the player has just finished,
+// with the bell still swinging behind it at the pose the last step left.
+let frozen = false;
+// Null until the ring. Then the frame the linger ends on, so the check is a
+// comparison rather than a second counter to keep in step with the sim's.
+let lingerUntil: number | null = null;
+
+// Returns true once stepping should stop for this frame.
+function checkCompletion(): boolean {
+  if (frozen) return true;
+  if (!(level instanceof BallLevel) || level.completedFrame === null) return false;
+  if (lingerUntil === null) lingerUntil = level.completedFrame + BELL_LINGER_FRAMES;
+  if (level.frame < lingerUntil) return false;
+  frozen = true;
+  completeLevel();
+  return true;
+}
+
+function completeLevel(): void {
+  // The run ended because the level was FINISHED, which is a reason of its own:
+  // it is neither a reset nor a kill, and a run sealed as either would read as
+  // the player having failed at the thing they just did (see `EndReason`).
+  recorder?.endRun("complete");
+  // The cursor comes back before anything is asked of it. The lock is what the
+  // ball's aim took (see `AimPointer`), and the page's own cursor was hidden
+  // from the PLAY press onward (see `hidePointer`) - so both have to be undone
+  // or the form is a dialogue the player cannot point at.
+  document.exitPointerLock?.();
+  document.documentElement.style.cursor = "";
+  // Phase 5 puts the feedback form here and sends the player back to the level
+  // select. Until it lands, the level says it is finished and stays on screen,
+  // which is the honest half of the behaviour rather than a placeholder for it.
+  showToast(`Rung at frame ${(level as BallLevel).completedFrame}`, "ok");
+}
+
 function frame(now: number): void {
   // The whole callback's wall time, which is the HUD's "cpu": the share of each
   // frame the main thread is actually busy in. Everything below is inside it,
@@ -750,10 +801,15 @@ function frame(now: number): void {
     // A replay's steps are the transport's to schedule: it may run none
     // (paused), sixteen (fast-forward) or fifty-five (paying off a seek).
     replay.pump(dt);
-  } else if (replayName === null) {
+  } else if (replayName === null && !frozen) {
     while (accumulator >= STEP && frameSteps < MAX_STEPS_PER_FRAME) {
       stepLevel(input.sample(), false);
       accumulator -= STEP;
+      // The bell has rung: the run's remaining steps are the LINGER, and when
+      // it is spent the loop stops stepping (see `completeLevel`). Checked
+      // inside the catch-up loop rather than after it, so a frame that runs
+      // several steps cannot overshoot the linger by the rest of them.
+      if (checkCompletion()) break;
     }
     // Debt beyond what the capped loop repaid is dropped, keeping only the
     // sub-step remainder for interpolation. Banking it is what turned overload

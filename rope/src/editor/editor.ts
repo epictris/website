@@ -1510,6 +1510,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // The game's debug overlay (L) inside ▶ Test. Off at the start of every test:
   // it is an instrument, and a test opens as the picture the player gets.
   let testShowDebug = false;
+  // Has this test already said the bell rang? The sim's `completedFrame` is
+  // true for every frame after it, so without this the toast would be raised
+  // sixty times a second for the rest of the run.
+  let testRang = false;
   let testData: LevelData | null = null;
   const recFrames: SerializedFrame[] = [];
   const recDigests: Digest[] = [];
@@ -1547,6 +1551,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       pixelData.player = { ...pixelData.player, x: spawn.x * M2PX, y: spawn.y * M2PX };
     }
     testShowDebug = false;
+    testRang = false;
     savedCam = { pos: camera.position, zoom: camera.zoom };
     // The test is played in the game's fixed 16:9 frame, so the camera is given
     // the frame's dimensions rather than the editor window's: `viewportScale`,
@@ -9152,6 +9157,16 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         recWorldDigests.push(
           testLevel instanceof BallLevel ? worldDigestBall(testLevel) : worldDigest(testLevel),
         );
+        // The bell RANG. A test is an authoring instrument, so it says so and
+        // carries on: what an author is judging here is the swing - how hard
+        // the haul has to be and how far the bell travels - and a test that
+        // froze and asked for a star rating would be answering a question
+        // nobody in the editor is asking. The game's own completion flow is in
+        // main.ts (see `checkCompletion`).
+        if (testLevel instanceof BallLevel && testLevel.completedFrame !== null && !testRang) {
+          testRang = true;
+          showToast(`bell rung at frame ${testLevel.completedFrame}`, "ok");
+        }
         accumulator -= STEP;
         steps++;
       }

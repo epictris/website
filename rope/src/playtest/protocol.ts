@@ -72,7 +72,15 @@ export interface SessionMeta {
   render: "2d" | "3d";
 }
 
-export type EndReason = "reset" | "kill" | "unload" | "pause" | "idle";
+// Why a run ended. `complete` is the one that is not a failure or an
+// interruption: the player rang the level's bell and finished it (see
+// `BallLevel.completedFrame`), and a run sealed as `reset` or `kill` instead
+// would read as their having failed at the thing they just did.
+//
+// BOTH ENDS HAVE TO KNOW A REASON, in the same deploy: `END_REASONS` in
+// server/store.ts refuses one it does not have, and the client goes dead on the
+// first 400 (see `Rewind`).
+export type EndReason = "reset" | "kill" | "unload" | "pause" | "idle" | "complete";
 
 export type PlaytestEvent =
   | { t: "start"; meta: SessionMeta }

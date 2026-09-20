@@ -42,6 +42,14 @@ import cameraTestJson from "../../levels/camera-test.json";
 // to the stone floor (see `level/breakable.ts`). Hand-authored, like the rail,
 // mud and camera sandboxes.
 import breakTestJson from "../../levels/break-test.json";
+// The bell sandbox: a floor, a beam, and the end bell hanging off it with its
+// toll rope, and nothing else in the level to be distracted by (see
+// `LevelBodyData.bell` and docs/levels.md). It exists so the swing can be
+// PLAYED before its numbers are pinned - the spring, the damping, the bell's
+// mass and the ring threshold - which is what the working practice in
+// `rope/CLAUDE.md` asks for and what a bell placed straight into `ball.json`
+// would have skipped.
+import bellTestJson from "../../levels/bell-test.json";
 
 export const LEVELS: Record<string, LevelSpec> = {
   LEVEL_2: {
@@ -93,6 +101,9 @@ export const LEVELS: Record<string, LevelSpec> = {
   // Camera regions that blend, and a priority island that does not (see
   // `docs/camera.md`). Nothing to grapple: roll right and watch the framing.
   CAMERA_TEST: { data: cameraTestJson as RawLevelData, controller: "ball", file: "camera-test" },
+  // The end bell on its own, to hook the toll rope and haul (see
+  // `docs/levels.md`). Unlisted like every other sandbox.
+  BELL_TEST: { data: bellTestJson as RawLevelData, controller: "ball", file: "bell-test" },
   // The ball & chain controller in the grapple arena, kept for A/B comparison.
   BALL_LEVEL_2: { data: LEVEL_2, controller: "ball" },
 };
