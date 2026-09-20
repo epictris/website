@@ -187,3 +187,18 @@ What the offset is, then, is how far off the standing frame the ball begins.
 The frame shows 9.6 m of world at the base zoom, so the ball is out of shot past about 4.8 m either side of a centred spawn, and 2 to 4 m rolls it in from the edge - a second and a third at 2 m, a little under three at 4.
 A region that zooms out shows more of it, and one that offsets the spawn on screen moves the edge the ball has to come from: measure the entry against the framing the spawn actually gets, not against the middle of the screen.
 The editor draws the entry as a second spawn ring on a dashed run into the marker, which is what that is judged by eye against.
+
+## A recorded arrival
+
+The other opening a spawn may author is a **recorded run**: the level plays somebody's session back from the point it started and hands the ball over when the recording runs out (`arrival` - see [ball-rolling](ball-rolling.md#the-recorded-arrival)).
+`CAVE` opens on one, and what it buys over a roll is everything a roll cannot say: the ball arrives by swinging, through the level's own geometry, from somewhere the player will later be.
+
+It is **authored by playing it**, which is the whole method and the whole constraint.
+Play the opening you want, press **P**, run `bun run scripts/make-arrival.ts <bundle> <level>`, keep the bundle in `playtests/arrivals/` and name the stream on the spawn - and expect to record it several times, because what you are judging is a performance rather than a number.
+What to play FOR is the ENDING: somewhere the player can be handed the ball - near the spawn, at rest, off the chain (`arrival-lands` holds it to within a metre of the spawn).
+How long you take pressing P afterwards does not matter, because the generator cuts the stream where the ball stops moving; what it cannot cut is an opening that ends with the ball somewhere awkward.
+
+The camera is the level's own, following the ball as it does in play, so an arrival is also a **tour of the framing**: every region and path it passes through is one the player sees working before they touch anything, and a camera rule that is wrong on the way in is wrong on the opening of the level.
+
+Editing the level under a recording that was made on it does not break the stream, it changes what the stream does - the throws go where they went and the geometry they went around is somewhere else.
+Re-record the arrival whenever the room it moves through changes, and read `cli entry`'s `arrival-lands` as the alarm rather than as the check.

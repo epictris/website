@@ -341,7 +341,7 @@ A spent entry hands over where it stands, because the alternative is a level tha
 A button **held** through the hand-over throws nothing: `pressed` is an edge the input source measures against its own last frame, and that edge happened while the ball was not the player's.
 The throw costs a fresh press, which is the right price - the alternative is a chain thrown by a hand that was only resting on the mouse.
 
-**The cursor is handed over PARKED**, for the same reason: at its seed, `AIM_SEED_ABOVE` straight above the ball, aimed at and not drawn (`BallInputSource.handOver` → `AimPointer.park`).
+**The cursor is handed over PARKED**, for the same reason: at its seed, `AIM_SEED_ABOVE` straight above the ball, aimed at and - since 2026-09-20 - drawn there (`BallInputSource.handOver` → `AimPointer.park(true)`, and [the recorded arrival](#the-recorded-arrival) for why it is shown).
 The entry drops the aim in the sim, but the input source goes on tracking the mouse through it, and at the hand-over that tracked position would become an aim the player never made - the reticle appearing wherever their hand was resting, with the ball turning to face it on the first frame it was theirs.
 
 It is moved rather than forgotten because **the ball is handed over aiming**.
@@ -350,10 +350,79 @@ Aimed at the seed, the loop is already pointing where the aim is, so nothing sna
 While it is parked the seed is re-taken every poll, so the cursor rides above the ball instead of sliding out from over it as the camera eases off the spawn onto the avatar (26 cm of ease put the aim 22 degrees off vertical before it did).
 The first mouse move, or the first press, takes it over and nothing re-seeds it again.
 
-Windowed there is no virtual cursor to keep - the reticle is the real pointer and is drawn under it on the next move - and what the park buys there is the frames up to that move.
+Windowed there is no virtual cursor to keep - the reticle is the real pointer and is drawn under it on the next move - and what the park buys there is the frames up to that move, which is where the reticle the hand-over shows is standing.
 
 **Four ways a level has no entry**, and the last two are the same thought: no field, a `hang` beside it (a hanging ball has nothing to roll on), a start from a **checkpoint**, and a **▶ Test in the editor**.
 Both of those last are places the run is deliberately not being opened - a checkpoint is a place to be dropped into ready to play, and a test is a spot-check of the geometry being edited - and both drop `roll` from the data rather than skipping it in the driver, so the bundle either one exports describes the run that was played (`spawnAtCheckpoint`, `startTest` in `editor/editor.ts`).
 
 `cli entry` is the suite: the placement and the arrival, the hands-off bit-identity, the hand-over, an entry authored into a wall, the camera standing still, and the ways a level has no entry at all.
 `playtests/ball-spawn-roll.json` is the same opening as a scripted run, with the aim and the button held from frame 1.
+
+
+## The recorded arrival
+
+A spawn may instead say that the run opens on a RECORDED RUN: the level plays back somebody's session from the point it started, and hands the ball over when the recording runs out (`SpawnData.arrival`, a name in `level/arrivals.ts`).
+`CAVE` opens on one - 383 frames, 6.4 s, the ball dropped into the back of the cave and swung out to the mouth of it on five throws, topping out at 12.4 m/s - and it replaced the rolling entry there on 2026-09-20.
+
+**What is stored is INPUT, not video.**
+The stream is the held-bits and the aim point of every frame that was played, which is what a session bundle records; fed back into the same deterministic sim on the same level, it produces the same run.
+So the opening is not a picture of the game, it is the game: the cave is lit by the level's own lights, the camera is the level's own camera doing what it does, the chain wraps the geometry it is wrapping now, and the ball the player is handed is the one they have been watching.
+It is also how an opening like this is authored at all - by PLAYING it.
+Nothing about a 7-second swing through a cave is writable as keyframes, and a level that opens on a cinematic somebody flew by hand is a level whose opening does not match its own physics.
+
+**One file plays, another proves it.**
+`src/level/arrivals/<name>.json` is the stream the browser downloads (21 kB for the cave's), generated from a bundle by `scripts/make-arrival.ts`; the bundle it was generated from is kept beside it in `playtests/arrivals/`, so `cli replay playtests/arrivals/cave-449f.json.gz` is always able to say whether the tree still reproduces the run the stream was cut from (it does, bit-exactly, on 2026-09-20).
+It is kept THERE rather than in `playtests/regressions/` because the corpus is a pass/fail gate and this recording trips one invariant that has nothing to do with the opening: `hook-embedded` at f285, the hook 21.7 mm inside a static body on one of the five throws.
+A committed regression is a bundle somebody is promising is clean; this one is a performance, and the promise it makes is `arrival-lands`.
+The generator is where "this recording is of this level" is enforced: every field but the spawn - the bodies, the environment, the camera paths, the ball's radius, the hang - has to be identical to the level file or it refuses to write, naming the field.
+It refuses a recording made on a rolling entry too, since an arrival is the input stream alone and a roll is the sim pushing the ball.
+
+**The ball starts where the recording started, and the spawn stays what it always was.**
+This is the same division the roll makes: `startArrival` moves the BALL (to `from`, scaled by the same `PX` the spawn is, so the placement is the double the recording began on), and the spawn goes on being the point the player takes the ball over at - here, the point a **reset** puts them back at.
+Where an arrival hands over is wherever the recorded run had got to, which for the cave is 0.60 m from the spawn, at 0.020 m/s, on the floor at the cave mouth, off its chain.
+
+**The stream is cut where the ball stops moving, not where P was pressed.**
+The generator scans the bundle's digests BACKWARDS for the last frame the ball was travelling faster than 0.1 m/s and keeps a tenth of a second past it; the cave's recording gave up 66 frames - 1.10 s - to that, and every one of them was the ball standing still with the controls dead.
+That second is the worst second in the game: the opening is over, nothing has said so, and the player's first act is to move the mouse to find out whether anything is listening.
+Backwards rather than forwards because any PAUSE would satisfy a forward scan - a ball hanging on its spawn anchor before the first throw, a ball resting on a ledge between two - and the opening would be cut off at the first of them.
+
+**The gate is the sim's, exactly as the entry's is**, so a browser, a scripted playtest and a replay of a recording made in either all play the same opening.
+What it does is different, though: the entry DROPS the player's input, and an arrival REPLACES it.
+`playerInput` hands the controller the recorded frame - the aim that steers the loop, the presses that throw the chain - and the player's own frame is not read at all.
+That is measured the way the entry's is, and it is the claim the suite exists for: the ball's whole path under a whirling aim with the button held is bit-identical to the same run under a neutral input, over all 383 frames, and a second after the hand-over the two runs are 1.08 m apart (`arrival-hands-over`).
+
+**It ends one way only: the stream runs out.**
+There is no equivalent of the entry's stalled arm, because nothing about the world can shorten a recording - it is input, and a level that has changed under it plays it out against the level as it now is.
+The end is taken at the TOP of a frame like the entry's, so the frame after the last recorded one is the player's, completely: the aim steers on it, a button held through it throws nothing (that edge happened while the ball was not theirs), and the cursor arrives PARKED above the ball.
+All three of those are the rolling entry's, unchanged - the input source watches one flag for both openings (`BallLevel.handsOff`), which is why an arrival needed nothing of its own at the hand-over.
+
+**The parked cursor is DRAWN at a hand-over**, and that is the one thing about it an arrival changed (`AimPointer.park(show)`, 2026-09-20).
+A reticle appearing is how the player is told the ball is theirs: nothing has been drawn over the opening, the ball has been moving without them, and a hand-over that leaves the screen exactly as it was leaves them to find out by moving the mouse and seeing whether anything answers.
+Shown, it still RIDES above the ball - the re-seed that keeps it there is keyed on the cursor still being the game's own (`isParked`) rather than on its being hidden, which is what lets the two come apart.
+Everywhere else a park is still hidden: a mark the player did not put there is one they did not ask for, and the hand-over is the one moment that is exactly what is wanted.
+
+**The camera follows the ball through an arrival**, which is the opposite of what it does through a roll, and for the same reason.
+A roll is a ball coming into a room the player is being shown, so the frame stands still; an arrival is somebody swinging through the level, and a camera that stood still for it would watch them leave.
+What the camera does here is simply what it does in play - follow, with the level's regions and paths reshaping the framing - because that IS what was recorded.
+
+**The screen fades up out of the loading screen** (`render/openingFade.ts`): 18 frames blank, then 54 easing the cover away, so the opening costs 1.2 s of the 6.4.
+The colour is `#1f2430` and not black, and that is the whole trick - the page has been that colour since its first byte, the loading screen is that colour, and the letterbox bars are, so the bar going and the level coming up are one continuous screen rather than two with a flash between them.
+Cut to instead, frame 1 reads as the level having started, and the seven seconds after it read as a game ignoring its controls.
+
+Two things the arrival touches outside itself, both of them because the run is being played from a stream the caller cannot see:
+
+- **The energy invariant reads the played input** (`BallLevel.playedInput`, `EnergyMonitor.push`), since the winch presses of an arrival are in the recording rather than in the stream the monitor was handed - read off the caller's, seven seconds of chain being wound in look like energy arriving from nowhere.
+  A rolling entry is still disarmed outright (`BallLevel.rollingIn`), because that one genuinely is a force no input carries.
+- **A reset replays it.** An arrival is the opening of a run and a reset builds a fresh level, which is what plays it again - the same rule the roll follows. `CAVE` has no kill zone, so the only way back to it is the restart button.
+
+**Four ways a level has no arrival**: no field, a name nothing answers to (the build warns and opens at the spawn - a level that refuses to open is worse than one that opens without its cinema), a start from a **checkpoint**, and a **▶ Test in the editor**.
+The last two are the same drop the roll gets and share its implementation (`spawnWithoutEntry`), for the same reason: both are places a run is deliberately not being opened, and both take the field out of the DATA so the bundle either one exports describes the run that was played.
+An arrival authored beside a `roll` takes the opening and says so: it decides where the ball is, what it does and how long that takes, and a roll underneath it would be a second hand on the same ball.
+
+**The risk it carries is that the level and the recording are two files.**
+Move a rock and the stream plays on regardless - the throws go where they went, the geometry they went around is somewhere else, and the ball is handed over in a pit, in the air, or three rooms away, with nothing anywhere saying so.
+`arrival-lands` is the detector: the level's own arrival, played on the level as it now stands, has to end within a metre of the spawn the level was authored around, at rest, off its chain.
+A metre is 0.58 m of measurement with room for the physics to move underneath it, and nowhere near enough room to have arrived anywhere else in a level 25 m across.
+The tighter statement is the recording beside it: built from `levels/cave.json` and played on the stream, the arrival reproduces the bundle's digests **bit-exactly** over every frame it keeps (worst drift 0.000e+0 m over 383), and `cli replay playtests/arrivals/cave-449f.json.gz` re-checks the whole 449 on demand.
+
+`cli entry` is the suite for both openings, and the arrival's three cases are `arrival-lands`, `arrival-hands-over` and `arrival-absent`.

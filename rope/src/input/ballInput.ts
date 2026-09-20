@@ -151,9 +151,9 @@ export class BallInputSource implements IInputSource {
   // some default direction before the first input).
   private aimLocal: Vec2 | null = null;
   private aimSource: "mouse" | "pad" | "touch" = "mouse";
-  // Whether the level said the ball was still rolling in last time this looked,
-  // so the frame it stops can be spotted (see `handOver`).
-  private wasRollingIn = false;
+  // Whether the level said the player's hands were off the ball last time this
+  // looked, so the frame it hands over can be spotted (see `handOver`).
+  private wasHandsOff = false;
 
   // Left-stick aim: a normalized direction while deflected past the deadzone,
   // else null ("not aiming"). Refreshed every sample(); kept as a field so the
@@ -174,18 +174,19 @@ export class BallInputSource implements IInputSource {
   // test there runs on the editor's own canvas with the arrow still showing, so
   // its aim must stay under that arrow rather than starting somewhere of its own
   // (see `AimPointer`'s `seed`).
-  // `rollingIn` is the level saying the ball is still rolling in at the opening
-  // of a run and the player's hands are off it (see `BallLevel.rollingIn`). This
-  // source watches it for the frame it goes false and puts the cursor back where
-  // a run's cursor starts (see `handOver`); a caller with no such level - a
-  // replay, a test in the editor - passes nothing and the hand-over never fires.
+  // `handsOff` is the level saying it is still OPENING - rolling the ball in,
+  // or playing back the run it arrives on - and the player's hands are not on
+  // the ball yet (see `BallLevel.handsOff`). This source watches it for the
+  // frame it goes false and puts the cursor back where a run's cursor starts
+  // (see `handOver`); a caller with no such level - a replay, a test in the
+  // editor - passes nothing and the hand-over never fires.
   constructor(
     private canvas: HTMLCanvasElement,
     private camera: Camera,
     private aimOrigin: () => Vec2,
     private active: () => boolean = () => true,
     ownsCursor = false,
-    private rollingIn: () => boolean = () => false,
+    private handsOff: () => boolean = () => false,
   ) {
     this.pointer = new AimPointer(
       canvas,
@@ -539,12 +540,13 @@ export class BallInputSource implements IInputSource {
   // aim stays smooth. Render-rate polling can't affect the sim: it only moves
   // `aimLocal` forward in time, and sample() still encodes whatever it holds at
   // the physics frame.
-  // The frame the rolling entry hands the ball over, THE AIM IS PUT WHERE THE
+  // The frame the level's opening hands the ball over - the rolling entry
+  // arriving, or the recorded arrival running out - THE AIM IS PUT WHERE THE
   // PLAYER'S OWN CURSOR IS BORN: directly above the ball (`aimSeed`), held
   // there, and not drawn until they move the mouse.
   //
-  // The entry drops the player's aim in the sim (`BallLevel.playerInput`), so
-  // nothing they did with the mouse while the ball rolled in steered anything -
+  // An opening drops the player's aim in the sim (`BallLevel.playerInput`), so
+  // nothing they did with the mouse while it played steered anything -
   // but this source went on tracking it, and at the hand-over that tracked
   // position becomes an aim the player never made: the reticle appears wherever
   // their hand was resting and the ball turns to face it, on the first frame
@@ -566,11 +568,17 @@ export class BallInputSource implements IInputSource {
   // per RENDERED frame, before the reticle is drawn: checked only on the sim
   // step, a fast display draws the stale reticle for the frames between the two.
   private handOver(): void {
-    const rolling = this.rollingIn();
-    if (this.wasRollingIn && !rolling) {
+    const handsOff = this.handsOff();
+    if (this.wasHandsOff && !handsOff) {
       this.aimSource = "mouse";
-      this.park();
-    } else if (this.pointer.isHidden()) {
+      // SHOWN, on this one frame's transition: the reticle appearing is how the
+      // player is told the ball is theirs. Everything they have watched up to
+      // here happened with the controls dead, and the level has been drawing no
+      // cursor at all through it (see `BallLevel.handsOff`), so without a mark
+      // arriving with the hand-over the only way to find out the game is
+      // listening is to move the mouse and see whether anything answers.
+      this.park(true);
+    } else if (this.pointer.isParked()) {
       // A PARKED CURSOR RIDES ABOVE THE BALL until the player takes it over.
       //
       // It is a screen position like any other cursor, so left where it was put
@@ -584,14 +592,19 @@ export class BallInputSource implements IInputSource {
       // nobody is holding it: the camera can ease and the ball can roll on, and
       // the pose the player is handed is the same either way. From the first
       // move (or press) it is theirs, and nothing re-seeds it again.
-      this.park();
+      //
+      // It carries its VISIBILITY across the re-seed rather than being handed
+      // one here: a reticle shown at the hand-over goes on being shown while it
+      // rides, and one parked for any other reason stays hidden.
+      this.park(!this.pointer.isHidden());
     }
-    this.wasRollingIn = rolling;
+    this.wasHandsOff = handsOff;
   }
 
-  // Put the cursor at its seed, hidden, and write the aim that follows from it.
-  private park(): void {
-    this.pointer.park();
+  // Put the cursor at its seed - drawn or not (see `AimPointer.park`) - and
+  // write the aim that follows from it.
+  private park(show = false): void {
+    this.pointer.park(show);
     // Modes that hold the aim as state rather than re-reading the cursor
     // (`motion`) need it written; `cursor` and `position` re-derive it from the
     // pointer every read and would ignore whatever is here.

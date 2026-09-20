@@ -87,7 +87,7 @@ export function writeClipboard(model: EdModel, items: readonly EdItem[]): string
     frames.set(id, bodyFrameOf(model, id));
   }
   const sub: EdModel = {
-    player: { pos: Vec2.ZERO, radius: NO_SPAWN.radius * PX, hang: false, roll: 0 },
+    player: { pos: Vec2.ZERO, radius: NO_SPAWN.radius * PX, hang: false, roll: 0, arrival: "" },
     items: scope.items,
     chains: scope.chains,
     vines: scope.vines,

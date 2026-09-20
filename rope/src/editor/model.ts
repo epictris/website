@@ -790,13 +790,16 @@ export interface EdBodyFrame {
 
 export interface EdModel {
   // The spawn: where it is, how big the avatar is, whether the run starts on
-  // the anchor (`SpawnData.hang`) and how far off to the side it rolls in from
+  // the anchor (`SpawnData.hang`), how far off to the side it rolls in from
   // (`SpawnData.roll`, metres here as every length in the model is, 0 for no
-  // entry). All of it is carried through the model rather than read off the
-  // file, because the editor writes the level back whole: a field it does not
-  // know about is a field it DELETES the first time a level is opened and
+  // entry) and the recorded run it opens on if it opens on one
+  // (`SpawnData.arrival`, "" for none - a name, authored by recording a run and
+  // running `scripts/make-arrival.ts`, so the editor carries it rather than
+  // offering it). All of it is carried through the model rather than read off
+  // the file, because the editor writes the level back whole: a field it does
+  // not know about is a field it DELETES the first time a level is opened and
   // autosaved.
-  player: { pos: Vec2; radius: number; hang: boolean; roll: number };
+  player: { pos: Vec2; radius: number; hang: boolean; roll: number; arrival: string };
   items: EdItem[];
   chains: EdChain[];
   vines: EdVine[];
@@ -1763,6 +1766,7 @@ function lightItem(
       radius: data.player.radius,
       hang: data.player.hang === true,
       roll: data.player.roll ?? 0,
+      arrival: data.player.arrival ?? "",
     },
     items: [...bodies, ...regions, ...camPaths, ...notes],
     chains,
@@ -2309,6 +2313,11 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
       // And absent rather than 0, for the same reason: a level whose ball starts
       // standing at its spawn is written exactly as it always was.
       ...(model.player.roll ? { roll: model.player.roll } : {}),
+      // Carried straight back out, absent when there is none: the editor does
+      // not author an arrival (it is a recorded run - see `SpawnData.arrival`),
+      // and writing the level back without it would delete a level's opening
+      // 750 ms after it was opened in the editor.
+      ...(model.player.arrival ? { arrival: model.player.arrival } : {}),
     },
     bodies,
     // An empty list is the same as no list, and the absent field keeps levels
@@ -3708,7 +3717,7 @@ export function distanceToVine(model: EdModel, v: EdVine, world: Vec2): number {
 // testable.
 export function emptyModel(): EdModel {
   return {
-    player: { pos: new Vec2(0, -1), radius: 0.08, hang: false, roll: 0 },
+    player: { pos: new Vec2(0, -1), radius: 0.08, hang: false, roll: 0, arrival: "" },
     chains: [],
     vines: [],
     // Nothing stored: a fresh level's one body holds one object, whose placement

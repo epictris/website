@@ -736,7 +736,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   const history: EdModel[] = [];
   const future: EdModel[] = [];
   const snapshot = (m: EdModel): EdModel => ({
-    player: { pos: m.player.pos, radius: m.player.radius, hang: m.player.hang, roll: m.player.roll },
+    player: {
+      pos: m.player.pos,
+      radius: m.player.radius,
+      hang: m.player.hang,
+      roll: m.player.roll,
+      arrival: m.player.arrival,
+    },
     items: m.items.map((b) => ({
       ...b,
       shape: cloneShape(b.shape),

@@ -1572,8 +1572,15 @@ export class EnergyMonitor {
     // by the sim rather than read off the stream, exactly as the trampoline
     // below it is.
     const rollingIn = level.rollingIn;
+    // THE INPUT THE FRAME WAS PLAYED WITH, which is the caller's everywhere
+    // except during a recorded arrival, where the run is played from the
+    // recording's stream and the caller's is not the ball's at all (see
+    // `BallLevel.playerInput`). Read off the stream there, an arrival's winch
+    // is a source the monitor cannot see - seven seconds of chain being wound
+    // in under a neutral-looking input, read as energy arriving from nowhere.
+    const forced = anyForcedInput(level.playedInput ?? input);
     const bodies = level.world.bodies.filter((b) => !b.removed).length;
-    if (anyForcedInput(input) || steering || launched || rollingIn || bodies !== this.bodyCount) {
+    if (forced || steering || launched || rollingIn || bodies !== this.bodyCount) {
       // A body appearing or disappearing (a hook spawned, a hook removed)
       // changes the total by construction, so the span restarts rather than
       // reading the difference as the solver's doing.

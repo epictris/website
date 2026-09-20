@@ -65,6 +65,7 @@ import {
 } from "./breakable";
 import { PX } from "../engine/units";
 import { Mathf } from "../engine/mathf";
+import { resolveArrival } from "./arrivals";
 
 // How long the level carries on being stepped after the player crosses the
 // finish line, before the page freezes it (see `main.ts`).
@@ -190,13 +191,59 @@ export class BallLevel {
   // again.
   private entry: { at: Vec2; dir: number; best: number; since: number } | null = null;
 
-  // Is the ball still rolling in, with the player's hands off it? The renderer
-  // asks so it can leave the aim reticle off the screen until the ball is the
-  // player's to aim (see `render/renderer.ts`): a cursor drawn over an entry it
-  // cannot steer is a control that looks broken.
+  // THE RECORDED ARRIVAL still running: the input stream the opening is played
+  // back from and how far into it the run has got - or null, which is every
+  // level whose spawn names no arrival (`SpawnData.arrival`), and every frame
+  // after the stream ran out.
+  //
+  // Sim state for the same reason the entry above is: while it stands the
+  // player's input is not the ball's at all, it is the recording's (see
+  // `playerInput`), so a driver that let a frame of the player's through would
+  // be playing a different run from the one every other driver plays. Set at
+  // build and cleared once; a RESET builds a fresh level, which is what plays
+  // the arrival again.
+  private arrival: { frames: readonly FrameInput[]; next: number } | null = null;
+
+  // Did this run OPEN on a recorded arrival? Unlike `arrival` above it is a
+  // fact about the build rather than about this frame, and nothing clears it:
+  // the page asks so it can fade the screen up over the opening (see
+  // `render/openingFade.ts`), and a fade that stopped because the arrival did
+  // would be a fade that never ran - it is over in a fifth of the stream.
+  readonly opensOnArrival: boolean;
+
+  // Are the player's hands OFF the ball - because it is still rolling in, or
+  // because the level is still playing back the arrival it opens on?
+  //
+  // The renderer asks so it can leave the aim reticle off the screen until the
+  // ball is the player's to aim (see `render/renderer.ts`): a cursor drawn over
+  // an opening it cannot steer is a control that looks broken. The input source
+  // asks so it can put the cursor back above the ball on the frame the level
+  // hands it over (see `BallInputSource.handOver`).
+  get handsOff(): boolean {
+    return this.entry !== null || this.arrival !== null;
+  }
+
+  // Is the ball being HELD at its entry speed by the level itself (see
+  // `ENTRY_SPEED`)? A narrower question than `handsOff` above, and a different
+  // one: this is the level putting energy into the ball that no input carries,
+  // which is what the energy invariant has to be told about (see
+  // `EnergyMonitor.push`). An arrival is not one - every joule in it was bought
+  // by a recorded press, on a frame the recording carries.
   get rollingIn(): boolean {
     return this.entry !== null;
   }
+
+  // The input the last step was actually PLAYED with, which during an arrival
+  // is the recording's and not the caller's (see `playerInput`). Null before
+  // the first step.
+  //
+  // Observation only, for the monitors that ask what was asked of the ball this
+  // frame - the same job `aimSpin` does for the aim. Nothing in the sim reads
+  // it.
+  get playedInput(): FrameInput | null {
+    return this.lastPlayed;
+  }
+  private lastPlayed: FrameInput | null = null;
 
   // Whether this level has a finish line at all, which is a fact about the FILE
   // rather than about the run. It is what the digest asks before writing
@@ -398,6 +445,11 @@ export class BallLevel {
     this.cameraRules = buildCameraRules(this.cameraRegions, this.cameraPaths);
     this.ball = new BallPlayer(data.player.radius * BallLevel.BALL_RADIUS_SCALE);
     this.ball.globalPosition = new Vec2(data.player.x, data.player.y);
+    // The two openings a spawn may author, and only one of them can happen: the
+    // arrival is the recorded one and it decides where the ball starts, so it is
+    // asked first and the roll gives way to it (see `startArrival`).
+    this.startArrival(data.player);
+    this.opensOnArrival = this.arrival !== null;
     this.startRolling(data.player);
     this.ball.spawnBody = (b) => this.spawnBody(b);
     this.world.add(this.ball);
@@ -601,6 +653,47 @@ export class BallLevel {
     if (this.completedFrame === null) this.completedFrame = this.frame;
   }
 
+  // Open the level on a RECORDED RUN, if the spawn names one (see
+  // `SpawnData.arrival` and `level/arrivals.ts`). Build-time, and like the roll
+  // below it moves the ball rather than the spawn: the ball starts where the
+  // recording started, and the spawn stays the point a reset puts it back at.
+  //
+  // The stream is deserialized here, once per build, rather than a frame at a
+  // time: the pressed and released edges of a frame are a diff against the one
+  // before it, so the frames have to be produced in order from the hand the
+  // recording began with, and a build is the one place that is true by
+  // construction.
+  private startArrival(spawn: SpawnData): void {
+    const name = spawn.arrival;
+    if (name === undefined || name === "") return;
+    const arrival = resolveArrival(name);
+    if (arrival === null) return;
+    if (spawn.roll) {
+      // Two openings that cannot both happen, and the arrival is the one that
+      // was PLAYED: it says where the ball is, what it does and how long that
+      // takes, and a roll underneath it would be a second hand on the same ball.
+      console.warn(
+        "[spawn] this level's spawn opens on a recorded arrival and also asks to roll in; the arrival is what plays.",
+      );
+    }
+    this.ball.globalPosition = arrival.from;
+    this.arrival = { frames: arrival.frames, next: 0 };
+  }
+
+  // Has the arrival run out? Run at the top of the frame, beside the entry's
+  // own test, so the first frame there is no recorded input left for is the
+  // first frame the player plays.
+  //
+  // There is only one way for an arrival to end, and that is the stream being
+  // spent - unlike the roll, which can be argued out of its place by a wall.
+  // Nothing about the world can shorten a recording: it is an input stream, and
+  // a level that has changed under it plays it out against the level as it now
+  // is (which is what `arrival-lands` is a case about).
+  private stepArrival(): void {
+    const arrival = this.arrival;
+    if (arrival !== null && arrival.next >= arrival.frames.length) this.arrival = null;
+  }
+
   // Set the ball rolling in from off to one side, if the spawn asks for it (see
   // `SpawnData.roll`). Build-time, and it moves the ball rather than the spawn:
   // the spawn stays the point the player is handed the ball at, and that is the
@@ -608,6 +701,9 @@ export class BallLevel {
   private startRolling(spawn: SpawnData): void {
     const roll = spawn.roll ?? 0;
     if (roll === 0) return;
+    // A recorded arrival has already taken the opening, and said so (see
+    // `startArrival`).
+    if (this.arrival !== null) return;
     if (spawn.hang) {
       // Two openings that cannot both happen: `hang` throws the chain straight
       // up from the spawn and leaves the ball on the end of it, and there is
@@ -663,7 +759,16 @@ export class BallLevel {
   // its own last frame, and that edge happened while the ball was not the
   // player's. The throw costs a fresh press, which is the right price - the
   // alternative is a chain thrown by a hand that was resting on the mouse.
+  //
+  // While a RECORDED ARRIVAL is playing back, the player's input is not dropped
+  // but REPLACED: the frame the recording was played with is what the
+  // controller is handed, which is the whole of how an arrival works. The aim
+  // steers the loop, the deploy throws the chain, and the run comes out the way
+  // it was played - on this level, with this sim, rather than as a picture of
+  // one that was.
   private playerInput(input: FrameInput): FrameInput {
+    const arrival = this.arrival;
+    if (arrival !== null) return arrival.frames[arrival.next++]!;
     if (this.entry === null) return input;
     return {
       ...input,
@@ -724,14 +829,16 @@ export class BallLevel {
       return;
     }
 
-    // The rolling entry, before anything reads the input: while it stands, the
-    // aim and the deploy are dropped (see `playerInput`), and it ends at the top
-    // of the frame the ball arrives on, so that frame is played with the
-    // player's own hands on it. The restart above is deliberately upstream of
-    // it - a run the player wants to start over is one they may restart while
-    // watching it roll in.
+    // The two openings, before anything reads the input: while either stands
+    // the player's own hands are off the ball (see `playerInput`), and both end
+    // at the TOP of a frame, so the frame they hand over on is played with the
+    // player's hands on it. The restart above is deliberately upstream of both -
+    // a run the player wants to start over is one they may restart while
+    // watching it open.
+    this.stepArrival();
     this.stepEntry();
     const played = this.playerInput(input);
+    this.lastPlayed = played;
 
     // Scripted movers run first, exactly as they do in `Level`: the ball, the
     // chain and the contact solve all have to see current-frame transforms with

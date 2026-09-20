@@ -14,6 +14,7 @@ import { clientToView, fitCanvas, VIEW_HEIGHT, VIEW_WIDTH, viewTransform } from 
 import { CameraController } from "./render/cameraController";
 import { PerfProbe } from "./render/perfProbe";
 import { drawPerfHud } from "./render/perfHud";
+import { drawOpeningFade, openingFadeAlpha } from "./render/openingFade";
 import { SparkSystem } from "./render/sparks";
 import { DebrisSystem } from "./render/debris";
 import { ChainRetract } from "./render/chainRetract";
@@ -343,11 +344,12 @@ const ballInput = isBall
       // arrow is still on screen there, and the aim has to stay under it - and
       // nor does a replay, which keeps the desktop cursor for the bar.
       replayName === null,
-      // While the ball is rolling in at the opening of a level the player's aim
-      // is dropped by the sim, so the cursor is put back above the ball and off
-      // the screen when it hands over (see `BallInputSource.handOver`). Read
-      // through `level`, which a reset replaces.
-      () => level instanceof BallLevel && level.rollingIn,
+      // While a level is still opening - the ball rolling in, or the recorded
+      // arrival playing back - the player's aim is dropped by the sim, so the
+      // cursor is put back above the ball and off the screen when it hands over
+      // (see `BallInputSource.handOver`). Read through `level`, which a reset
+      // replaces.
+      () => level instanceof BallLevel && level.handsOff,
     )
   : null;
 // The ball controller draws its own aim reticle (clamped to the chain's reach),
@@ -986,6 +988,15 @@ function frame(now: number): void {
     );
   }
   const draw2dMs = performance.now() - draw2dT0;
+
+  // The screen a level that opens on a recorded arrival comes up out of (see
+  // render/openingFade.ts). Over both canvases - it is drawn on the 2D one,
+  // which is on top - and under the instruments below, because a perf panel or
+  // a transport bar is the page talking to whoever opened it rather than part
+  // of the picture being faded in.
+  if (level instanceof BallLevel && level.opensOnArrival) {
+    drawOpeningFade(ctx, view, openingFadeAlpha(level.frame + alpha));
+  }
 
   if (probeRect) drawProbeOutline(ctx, view, camera, probeRect);
 

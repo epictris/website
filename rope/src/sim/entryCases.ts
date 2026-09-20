@@ -1,5 +1,7 @@
-// Rolling-entry cases: the way a level OPENS when its spawn authors one (see
-// `SpawnData.roll`, `BallLevel.startRolling` and docs/ball-rolling.md).
+// Opening cases: the two ways a level OPENS when its spawn authors one - the
+// ball ROLLING IN from off to one side (`SpawnData.roll`,
+// `BallLevel.startRolling`), and the RECORDED ARRIVAL it is handed over out of
+// (`SpawnData.arrival`, `BallLevel.startArrival`) - see docs/ball-rolling.md.
 //
 // The mechanic is two lines of arithmetic gating one frame's input, and that is
 // exactly what makes it worth a suite: everything it can get wrong is silent
@@ -32,6 +34,21 @@
 //                which is a checkpoint start and the editor's ▶ Test) takes
 //                that and nothing else.
 //
+// ...and three more about the arrival, which is the same shape of claim made
+// about an opening the sim PLAYS BACK rather than drives:
+//
+//   LANDS      - the level's own arrival, played on the level as it now stands,
+//                still ends where the level was authored around: the ball is
+//                near the spawn, at rest, on the ground. This is what goes red
+//                when the level is edited under a recording that was made on it
+//                - the one failure a screenshot of frame 1 cannot show.
+//   HANDS OVER - the stream is spent at the top of the frame after its last, so
+//                the hand-over is exactly as long as what was recorded, and
+//                what arrives with it is the player's own input.
+//   ABSENT     - the arrival is dropped by the same drop the entry is, it wins
+//                over a roll authored beside it, and a name nothing answers to
+//                opens the level at its spawn rather than not at all.
+//
 // Bodies are rigs of plain rects in level pixels (100 to the metre), on a
 // `BallLevel`, as the finish and sleep suites are.
 
@@ -44,6 +61,8 @@ import {
   type LevelBodyData,
   type RawLevelData,
 } from "../level/levelFormat";
+import { LEVELS } from "../level/registry";
+import { PX } from "../engine/units";
 
 export interface EntryResult {
   name: string;
@@ -374,6 +393,203 @@ function caseCameraHolds(): EntryResult {
   return c.done("entry-camera-holds — the frame stands still and the ball rolls into it");
 }
 
+// ---------------------------------------------------------------------------
+// The recorded arrival
+// ---------------------------------------------------------------------------
+
+// The level that actually opens on one, and the stream it names (see
+// `level/arrivals.ts`). The arrival cases are measured on the REAL level rather
+// than on a rig, and they have to be: a recording is only an opening while the
+// level it was recorded on is the level it is played on, so what is being
+// asserted is a fact about `levels/cave.json` and `src/level/arrivals/cave.json`
+// together. A rig could only ever assert that playback runs.
+const ARRIVAL_LEVEL = "CAVE";
+
+function arrivalLevelData(): RawLevelData {
+  return LEVELS[ARRIVAL_LEVEL]!.data as RawLevelData;
+}
+
+// Play an arrival out, stepping a player who is doing NOTHING, and stop on the
+// frame it hands over - which is the frame everything about the hand-over is
+// measured on. Stepped further, the measurement would be of the frames AFTER
+// it, where a ball left with no aim at all is a ball whose rotation is the
+// physics' (see docs/ball-rolling.md#the-rolling-entry) rather than of the
+// pose the player is handed.
+function playArrival(level: BallLevel): number {
+  for (let f = 0; f < 3600; f++) {
+    const was = level.handsOff;
+    level.physicsProcess(neutral(level), DT);
+    if (was && !level.handsOff) return level.frame;
+  }
+  return -1;
+}
+
+// THE ARRIVAL STILL LANDS WHERE THE LEVEL IS AUTHORED AROUND.
+//
+// An arrival is a recording, and a recording is only the opening of this level
+// for as long as this level is the one it was recorded on. Move a rock, and the
+// stream plays on regardless: the throws go where they went, the geometry they
+// went around is somewhere else, and the ball is handed over in a pit, in the
+// air, or three rooms away, with nothing anywhere saying so. The level file and
+// the stream are two files and only this holds them together.
+//
+// The bar is the SPAWN, which is the point the level was authored around - it
+// is where a reset puts the ball and what every camera rule was placed against
+// - and the recorded run ends 0.62 m from it, in the same room, on the same
+// floor. A metre is that with room for the physics to move underneath it
+// without being a false alarm, and nowhere near enough room for the ball to
+// have arrived anywhere else: the level is 25 m across.
+function caseArrivalLands(): EntryResult {
+  const c = new Checks();
+  const data = arrivalLevelData();
+  const level = new BallLevel(data);
+  // The spawn in metres, read off the level FILE: the ball is not standing on
+  // it at any point of an arrival, so the level cannot be asked where it is.
+  const spawn = new Vec2(data.player.x / 100, data.player.y / 100);
+  c.check(`${ARRIVAL_LEVEL} opens on a recorded arrival`, level.opensOnArrival && level.handsOff);
+  const start = level.ball.globalPosition;
+  c.check(
+    `...starting where the recording did, ${start.sub(spawn).length().toFixed(1)} m from the spawn`,
+    start.sub(spawn).length() > 1,
+  );
+
+  const handOver = playArrival(level);
+  c.check(`the arrival hands over (f${handOver})`, handOver > 0);
+  const at = level.ball.globalPosition;
+  const off = at.sub(spawn).length();
+  c.check(`...with the ball ${off.toFixed(2)} m from the spawn (within 1.00)`, off <= 1);
+  // At rest, because an opening that hands over a ball already rolling off
+  // somewhere is an opening the player has to undo before they can start.
+  const speed = level.ball.linearVelocity.length();
+  c.check(`...at rest (${speed.toFixed(3)} m/s)`, speed < 0.2);
+  c.check("...and off its chain, with the level in the player's hands", level.ball.chain === null && !level.handsOff);
+  return c.done("arrival-lands — the recorded opening still ends at the spawn the level was authored around");
+}
+
+// The hand-over is the stream running out, and nothing else: the frame after
+// the last recorded one is the player's, and it is theirs completely.
+//
+// The bit-identity claim is the same one `entry-hands-off` makes, and it is
+// made the same way - a whirling aim with the button held against a player
+// doing nothing - because it is the same risk: an arrival that let one frame of
+// the player's input through would play a different run from the one that was
+// recorded, and a run that diverges on frame 200 of a 429-frame opening is a
+// cave the ball swings straight past.
+function caseArrivalHandsOver(): EntryResult {
+  const c = new Checks();
+  const played = new BallLevel(arrivalLevelData());
+  const left = new BallLevel(arrivalLevelData());
+  // Stepped in lockstep rather than one after the other, so the two runs differ
+  // in exactly one thing: the hand on the mouse.
+  let worst = 0;
+  let at = -1;
+  let handOver = -1;
+  let compared = 0;
+  for (let f = 0; f < 3600 && handOver < 0; f++) {
+    const was = left.handsOff;
+    played.physicsProcess(aiming(played, played.frame === 0), DT);
+    left.physicsProcess(neutral(left), DT);
+    if (was && !left.handsOff) handOver = left.frame;
+    // The frames of the ARRIVAL, which is every frame up to but not including
+    // the hand-over: on that one the aim is the player's and the two runs are
+    // meant to come apart. They do, by 0.07 mm, and that is the case below.
+    if (!left.handsOff) break;
+    const a = played.ball.globalPosition;
+    const b = left.ball.globalPosition;
+    const d = Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
+    compared++;
+    if (d > worst) {
+      worst = d;
+      at = left.frame;
+    }
+  }
+  c.check(`the arrival hands over (f${handOver})`, handOver > 0);
+  // BIT-identical, not "close", exactly as `entry-hands-off` is: an aim that
+  // moved the ball by a rounding error is an aim that was read.
+  c.check(
+    `...bit-identical played and left alone over ${compared} frames (worst ${worst}${at < 0 ? "" : ` at f${at}`})`,
+    worst === 0 && compared > 300,
+  );
+  c.check(
+    "...and what is on the chain at the hand-over is the recording's, not the player's",
+    played.ball.chain === left.ball.chain || played.ball.chain === null,
+  );
+
+  // The frame after the stream's last is the player's, and it is theirs
+  // completely: the aim steers on it, a button held through it throws nothing,
+  // and a press of its own throws.
+  c.check("the aim steers on the hand-over frame", !played.handsOff && played.ball.kinematicRotation);
+  c.check("...and a button held through it throws nothing", played.ball.chain === null);
+  played.physicsProcess(aiming(played, true), DT);
+  c.check("a fresh press throws the chain", played.ball.chain !== null);
+
+  // ...and the comparison above is a real one. Without this, an arrival that
+  // ignored its input for ever - a controller wired to nothing - would pass it.
+  for (let f = 0; f < 60; f++) {
+    played.physicsProcess(aiming(played, false), DT);
+    left.physicsProcess(neutral(left), DT);
+  }
+  const apart = played.ball.globalPosition.sub(left.ball.globalPosition).length();
+  c.check(`...and a second later the two runs are ${apart.toFixed(2)} m apart`, apart > 0.01);
+  return c.done("arrival-hands-over — the stream runs out and the run is the player's from the next frame");
+}
+
+// The ways a level does NOT open on its arrival, and the one way two openings
+// meet.
+function caseArrivalAbsent(): EntryResult {
+  const c = new Checks();
+  const authored = arrivalLevelData();
+
+  // The drop, which is a checkpoint start and the editor's ▶ Test: the field
+  // goes, the spawn stays, and the ball is the player's on frame 1.
+  const stripped = spawnWithoutEntry(authored);
+  const plain = new BallLevel(stripped);
+  c.check(
+    "the drop takes the arrival out of the data",
+    stripped.player.arrival === undefined && !plain.opensOnArrival && !plain.handsOff,
+  );
+  // The spawn in metres through the conversion the level itself goes through
+  // (`scaleLevelData`), not through a hand-written division by 100: the two
+  // differ in the last bit (140 * PX is 1.4000000000000001, 140 / 100 is 1.4),
+  // and what is being asserted here is that the ball is on the authored spawn
+  // exactly.
+  const spawnX = authored.player.x * PX;
+  c.check(
+    "...and leaves the ball standing at the spawn",
+    plain.ball.globalPosition.x === spawnX && plain.ball.linearVelocity.length() === 0,
+  );
+
+  // A name nothing answers to is a level that must still open. The build warns
+  // (see `resolveArrival`) and starts at the spawn, because a level that
+  // refuses to open is worse than one that opens without its cinema.
+  const misnamed: RawLevelData = { ...authored, player: { ...authored.player, arrival: "no-such-arrival" } };
+  const opened = new BallLevel(misnamed);
+  c.check(
+    "an arrival nothing answers to opens the level at its spawn",
+    !opened.opensOnArrival && !opened.handsOff && opened.ball.globalPosition.x === spawnX,
+  );
+
+  // Both openings authored at once: the arrival is the one that was PLAYED, so
+  // it takes the opening and the roll gives way (the build says so).
+  const both: RawLevelData = { ...authored, player: { ...authored.player, roll: -200 } };
+  const contested = new BallLevel(both);
+  c.check(
+    "an arrival beside a roll keeps the arrival",
+    contested.opensOnArrival && !contested.rollingIn && contested.ball.linearVelocity.x === 0,
+  );
+  return c.done("arrival-absent — dropped at a checkpoint, missing, or authored beside a roll");
+}
+
 export function runEntryCases(): EntryResult[] {
-  return [caseRollsIn(), caseHandsOff(), caseHandsOver(), caseStalled(), caseCameraHolds(), caseAbsent()];
+  return [
+    caseRollsIn(),
+    caseHandsOff(),
+    caseHandsOver(),
+    caseStalled(),
+    caseCameraHolds(),
+    caseAbsent(),
+    caseArrivalLands(),
+    caseArrivalHandsOver(),
+    caseArrivalAbsent(),
+  ];
 }

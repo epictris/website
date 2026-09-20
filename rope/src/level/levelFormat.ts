@@ -1904,16 +1904,19 @@ export function spawnAtCheckpoint<T extends RawLevelData>(
     );
     return data;
   }
-  // The rolling entry is dropped with the move, and that is what a checkpoint
-  // means: the level's OPENING is what rolls in, and a checkpoint is explicitly
-  // not the opening - it is a place to be dropped into, ready to play. Kept, it
-  // would put the ball an entry's length to one side of the point that was
-  // asked for, inside whatever stands there.
+  // The opening - the rolling entry, or the recorded arrival - is dropped with
+  // the move, and that is what a checkpoint means: an opening is how the LEVEL
+  // starts, and a checkpoint is explicitly not the opening, it is a place to be
+  // dropped into, ready to play. Kept, the entry would put the ball an entry's
+  // length to one side of the point that was asked for, inside whatever stands
+  // there, and the arrival would ignore the point entirely and play seven
+  // seconds of somewhere else.
   return spawnWithoutEntry({ ...data, player: { ...data.player, x: hit.x, y: hit.y } });
 }
 
-// The level with NO ROLLING ENTRY: the ball stands at its spawn and the run is
-// the player's from the first frame (see `SpawnData.roll`).
+// The level with NO OPENING: neither the rolling entry nor the recorded
+// arrival, so the ball stands at its spawn and the run is the player's from the
+// first frame (see `SpawnData.roll` and `SpawnData.arrival`).
 //
 // One operation with two callers, and both are places a run is deliberately not
 // being OPENED: a start from a checkpoint (above) and the editor's ▶ Test,
@@ -1924,11 +1927,11 @@ export function spawnAtCheckpoint<T extends RawLevelData>(
 // first frame, an exported bundle - then describes the same run, so a recording
 // made from either replays as what was played.
 //
-// The same object back when there is no entry to drop, so a level that authors
-// none passes through untouched.
+// The same object back when there is no opening to drop, so a level that
+// authors none passes through untouched.
 export function spawnWithoutEntry<T extends RawLevelData>(data: T): T {
-  if (!data.player.roll) return data;
-  const { roll: _roll, ...player } = data.player;
+  if (!data.player.roll && !data.player.arrival) return data;
+  const { roll: _roll, arrival: _arrival, ...player } = data.player;
   return { ...data, player };
 }
 
@@ -2088,6 +2091,26 @@ export interface SpawnData {
   // (`startTest`). Both drop it from the DATA rather than skipping it in the
   // driver, so a bundle either one exports describes the run that was played.
   roll?: number;
+  // Open the level on a RECORDED RUN: the name of an input stream in
+  // `level/arrivals.ts`, played back by the sim from the point the recording
+  // started, with the player's hands off the ball until it is spent (see
+  // `BallLevel.startArrival` and docs/ball-rolling.md#the-recorded-arrival).
+  //
+  // A name rather than the frames themselves, for the reason a texture is a
+  // name: seven seconds of input is twenty-four kilobytes, the editor writes
+  // this file every 750 ms while it is open, and an opening is authored by
+  // PLAYING it and running `scripts/make-arrival.ts` over the bundle - never by
+  // hand, and never in the level file.
+  //
+  // It REPLACES the roll above rather than joining it: an arrival says where
+  // the ball is, what it does and how long that takes. The spawn stays what it
+  // always was, the point the player takes the ball over at - here that is
+  // where a RESET puts them, since where an arrival hands over is wherever the
+  // recorded run ended up.
+  //
+  // Dropped with `roll`, and in the same two places, for the same reason: a
+  // checkpoint start and the editor's ▶ Test are not the level's opening.
+  arrival?: string;
 }
 
 // WHAT A LEVEL IS, as the level select needs to know it: a name to show, and
@@ -3195,6 +3218,10 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
       // A length, and a signed one (see `SpawnData.roll`): it scales like the
       // point it is an offset from.
       ...(data.player.roll ? { roll: data.player.roll * factor } : {}),
+      // A name, not a length: it crosses the conversion unchanged (see
+      // `SpawnData.arrival`). What it names is measured in the level file's own
+      // pixels and scaled where it is read (`BallLevel.startArrival`).
+      ...(data.player.arrival ? { arrival: data.player.arrival } : {}),
     },
     bodies: data.bodies.map((b) => ({
       kind: b.kind,

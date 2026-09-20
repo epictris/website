@@ -197,12 +197,14 @@ feel without a rebuild):
   It re-seeds only while the aim is still the game's own: once the player has moved the mouse, the reticle is theirs, and a re-lock after an Esc leaves it where they put it.
   (Up to the press the desktop cursor is untouched: the gate is a button, and a button is aimed at with the pointer the player can see.)
 
-  **A rolling entry hands the cursor back PARKED**: put at its seed, directly above the ball, aimed at and not drawn (`AimPointer.park`, called from `BallInputSource.handOver`).
-  A level that opens on the ball rolling in drops the player's aim in the sim until it arrives (see [**The rolling entry**](ball-rolling.md#the-rolling-entry)), so wherever their hand was resting through it is not an aim they made: left alone the reticle appeared at the hand-over already somewhere, and the ball turned to face it on the first frame it was theirs.
+  **A level's opening hands the cursor back PARKED**: put at its seed, directly above the ball, aimed at and drawn (`AimPointer.park`, called from `BallInputSource.handOver`).
+  A level that opens on the ball rolling in (see [**The rolling entry**](ball-rolling.md#the-rolling-entry)) or on a recorded run (see [**The recorded arrival**](ball-rolling.md#the-recorded-arrival)) takes the player's aim out of the sim until it hands over, so wherever their hand was resting through it is not an aim they made: left alone the reticle appeared at the hand-over already somewhere, and the ball turned to face it on the first frame it was theirs.
   The cursor is MOVED rather than forgotten, because the aim is the cursor's position and a cursor with no position is a ball with no aim at all - rotation left to the physics, the loop wherever the roll left it, the ball rocking back off its own lug as it settles.
   Put at the seed, the ball is handed over aiming where the loop already points, and the aim's own brake stops it there.
-  It is **hidden**, because a mark the player did not put there is one they did not ask for: the reticle is what `reticlePoint()` answers rather than `aimPoint()`, and it is null until the first mouse move takes the cursor over or the first press uses it.
+  It is **shown**, and that is the hand-over's one announcement: nothing was drawn over the opening, the ball moved without the player, and a reticle appearing where their aim now is is how they are told the level is theirs.
+  A park made for any other reason is still hidden (`park(show)`), because a mark the player did not put there is one they did not ask for: the reticle is what `reticlePoint()` answers rather than `aimPoint()`, and it is null while the cursor is hidden - until the first mouse move takes it over, or the first press uses it.
   While it is parked it is re-seeded every poll, so it rides above the ball rather than sliding out from over it as the camera eases off the spawn onto the avatar - 26 cm of that ease left the aim 22 degrees off vertical before it did.
+  Parked and hidden are separate states for exactly that reason (`isParked` vs `isHidden`): the shown cursor of a hand-over is still the game's own until the player moves it, so it goes on riding.
 
   **A mousemove carrying *no movement* is a position, not a move** - the one a browser sends when the page shifts under a stationary pointer (the loading screen coming off, the fullscreen transition).
   Unlocked it is answered, because unlocked the reticle stands on the real pointer and where that pointer is sitting is exactly what the event says.
