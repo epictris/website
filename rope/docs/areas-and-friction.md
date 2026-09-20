@@ -174,6 +174,14 @@ its holes are literally holes, so the backdrop shows through the body.
 A **finish line**'s chequer is the one glyph that fills its cell rather than sitting as a mark
 inside it: a chequer is only a chequer if the squares meet, so the cut square *is* the cell
 (20 cm, about one ball across) and what is left standing is the cells beside it. It is static
-for the reason the skulls are, and its wash is much thinner than theirs — a killzone is drawn
-to be avoided and can afford to shout, while a finish line is drawn around the gantry the
-player is aiming at, and an opaque chequerboard over a gate hides the thing being aimed at.
+for the reason the skulls are.
+
+It is also the one glyph the **game does not draw at all**, and that is the exception the rule
+above allows for rather than a hole in it. Every other region here *does something* to what is
+inside it — a killzone kills, a current pushes, water drags — and a player who cannot tell one
+from a wall walks into it. A finish line does nothing to the body that enters it, so there is
+nothing to misread, and what it means is already standing in the level: the gantry on the same
+body is the mark (see [**Levels**](levels.md#the-finish-line)). Drawn, it was a second
+chequerboard at a different pitch laid over the first, in front of the gate the player is
+aiming at. The glyph stays for the two places an invisible volume has to be visible — the
+editor, and `cli render`'s snapshot.

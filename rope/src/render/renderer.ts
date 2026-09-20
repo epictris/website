@@ -37,7 +37,7 @@ import { railPolyline } from "../lib/rail";
 import { drawTrainingGrid } from "./trainingGrid";
 import { drawDecor } from "./decor";
 import { drawVines } from "./vines";
-import { fillAnchor, fillFinish, fillForceArea, fillKillZone, fillWaterArea } from "./areaFill";
+import { fillAnchor, fillForceArea, fillKillZone, fillWaterArea } from "./areaFill";
 import {
   outlineHalfExtents,
   outlineOfShape,
@@ -68,15 +68,6 @@ const CHAIN_DARK = "#4e555e"; // shadowed / narrow link
 const MANACLE = "#7c848e"; // steel cuff band
 const MANACLE_DARK = "#454c55"; // lock housing / hinge shadow
 const KILLZONE = "rgba(220,60,80,0.35)";
-// A finish line with no authored colour: near-white, so the cells left standing
-// between the cut chequers are the white squares of the flag and the cutouts
-// are the dark ones (see `finishGlyphs`).
-//
-// Thinner than the killzone's red, and for the opposite reason. A killzone is
-// drawn to be avoided and can afford to shout; a finish line is drawn AROUND
-// the gantry that marks it, and an opaque chequerboard over a gate the player
-// is aiming at hides the thing they are aiming at.
-const FINISH_FILL = "rgba(236,238,240,0.22)";
 const IMPERMEABLE_EDGE = "#9db8c6"; // hook-proof surfaces: dashed steel border
 const VISCOUS_EDGE = "#c9a066"; // viscous (mud) surfaces: dash-dot ochre border
 const VISCOUS_DASH = [8 * PX, 3 * PX, 2 * PX, 3 * PX];
@@ -501,20 +492,24 @@ function drawGeometryShape(
     return;
   }
 
-  // Finish lines: authored fill (or a translucent white) stamped with chequers,
-  // on the same rule the killzone above follows - an area whose meaning is the
-  // end of the level has to read as an area, and the chequer is the one mark
-  // everybody already knows means exactly that.
-  if (body instanceof FinishLine) {
-    fillFinish(
-      ctx,
-      t.globalPosition,
-      t.globalRotation,
-      outlineOfShape(t.shape),
-      body.fillColor ? hexToRgba(body.fillColor, body.fillOpacity) : FINISH_FILL,
-    );
-    return;
-  }
+  // Finish lines: NOTHING. The one area the player never sees the region of,
+  // and the one that does not need to be seen.
+  //
+  // Every other area here is stamped with a glyph because it must not be
+  // mistakable for solid geometry (see docs/game-design.md, "Areas must read as
+  // areas") - but that rule is about regions that DO something to whatever is
+  // inside them: a killzone kills, a current pushes, water drags, and a player
+  // who cannot tell one from a wall is a player who walks into it. A finish
+  // line does nothing at all to the body that enters it, so there is nothing to
+  // misread, and what it means is already standing in the level: the gantry on
+  // the same body is the mark (see docs/levels.md).
+  //
+  // Drawn, it was a translucent chequer wash over the gate the player is aiming
+  // AT - a second chequerboard at a different pitch, laid over the first, in
+  // front of the level (Tris, 2026-09-20). The author still sees the region,
+  // in the editor and in `cli render`'s snapshot, which is where an invisible
+  // volume has to be visible.
+  if (body instanceof FinishLine) return;
 
   // Authored level geometry (static/rigid): fill in the body's colour
   // + opacity, border fully opaque in the same colour.
