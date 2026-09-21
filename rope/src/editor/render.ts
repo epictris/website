@@ -81,6 +81,9 @@ import {
   type PathKeyField,
 } from "../render/cameraController";
 import { decomposeSeams, isSimpleLoop } from "../lib/polygon";
+// For the one number: the multiple of the authored spawn radius the ball is
+// actually played at (see the spawn marker).
+import { BallLevel } from "../level/ballLevel";
 
 const PLAYER = "#65bddb";
 const IMPERMEABLE_EDGE = "#9db8c6"; // hook-proof surfaces: dashed steel border
@@ -2436,13 +2439,38 @@ export function drawEditor(
     }
   }
 
-  // Player spawn marker: ring at the avatar radius + crosshair.
+  // Player spawn marker: ring at the avatar radius, the ball's own footprint
+  // around it, and a crosshair.
+  //
+  // The FOOTPRINT is the second ring, at the size the ball is actually played at
+  // - a multiple of the authored radius (`BallLevel.BALL_RADIUS_SCALE`), which
+  // is the grapple avatar's. The inner ring is the marker, the thing drawn at
+  // the spawn and dragged by; the outer one is how much room the avatar takes,
+  // which is what every gap and shelf around it was authored against. In a 3D
+  // view it lands on the drawn ball's silhouette (see `spawnBall` in
+  // `editor.ts`); in the 2D one it is the only thing that says the ball's size
+  // at all.
+  //
+  // Drawn fainter than the marker for the reason it is a second ring rather
+  // than a resized one: where the spawn IS is a point an author sets, and how
+  // much of the level the ball fills is a consequence of it.
+  const spawnGlyph = (at: Vec2): void => {
+    ctx.lineWidth = worldLine * 1.5;
+    ctx.beginPath();
+    ctx.arc(at.x, at.y, model.player.radius, 0, Math.PI * 2);
+    ctx.stroke();
+    const was = ctx.globalAlpha;
+    ctx.globalAlpha = was * 0.5;
+    ctx.lineWidth = worldLine;
+    ctx.beginPath();
+    ctx.arc(at.x, at.y, model.player.radius * BallLevel.BALL_RADIUS_SCALE, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.globalAlpha = was;
+  };
   const p = model.player.pos;
   ctx.strokeStyle = PLAYER;
+  spawnGlyph(p);
   ctx.lineWidth = worldLine * 1.5;
-  ctx.beginPath();
-  ctx.arc(p.x, p.y, model.player.radius, 0, Math.PI * 2);
-  ctx.stroke();
   const tick = model.player.radius * 1.6;
   ctx.beginPath();
   ctx.moveTo(p.x - tick, p.y);
@@ -2466,10 +2494,7 @@ export function drawEditor(
     ctx.lineTo(p.x, p.y);
     ctx.stroke();
     ctx.setLineDash([]);
-    ctx.lineWidth = worldLine * 1.5;
-    ctx.beginPath();
-    ctx.arc(from.x, from.y, model.player.radius, 0, Math.PI * 2);
-    ctx.stroke();
+    spawnGlyph(from);
   }
 
   ctx.restore();

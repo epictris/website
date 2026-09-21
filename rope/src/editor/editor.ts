@@ -1570,6 +1570,20 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // item and has to name the drawn object to paint.
   let sceneObjectOfItem = new Map<number, SceneObjectData>();
 
+  // The ball as it stands at the spawn, for the scene to draw (see
+  // `syncEditorScene`). At the spawn point itself rather than at a rolling
+  // entry's start (`SpawnData.roll`): the entry is drawn as its own ring on the
+  // overlay, and where the ball comes to rest is the placement everything
+  // around it was authored for.
+  //
+  // Rotation 0, which puts the mounting loop straight up - the pose a run opens
+  // in, and the one the chain leaves through on the first throw.
+  function spawnBall(): BallPlayer {
+    const ball = new BallPlayer(model.player.radius * BallLevel.BALL_RADIUS_SCALE);
+    ball.globalPosition = model.player.pos;
+    return ball;
+  }
+
   function syncEditorScene(): void {
     if (!scene3d || sceneRev === modelRev) return;
     sceneRev = modelRev;
@@ -1603,6 +1617,18 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // under the editor.
       sceneChains: [],
       visualSource: { data, built },
+      // THE AVATAR AT THE SPAWN, because a level is authored against the thing
+      // that plays it. Every gap, ledge and shelf in the file is a decision
+      // about a 12 cm iron ball, and a ring drawn on the overlay says where the
+      // run starts without saying how much room it takes - so a slot judged by
+      // eye in the editor was judged against nothing until it was played.
+      //
+      // Built here rather than borrowed from a `BallLevel`, and at the radius it
+      // is PLAYED at (`BALL_RADIUS_SCALE` over the authored spawn radius, which
+      // is the grapple avatar's), so what stands in the scene is the size that
+      // has to fit. It is a body nothing steps: `BallVisual` reads its pose, and
+      // with no chain thrown there is nothing else of the assembly to draw.
+      ball: spawnBall(),
     };
     scene3d.setLevel(sceneLevel);
     highlightKey = null; // a fresh scene holds none of the last one's paint
