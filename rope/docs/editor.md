@@ -254,6 +254,8 @@ A move is then written as a CHANGE against where the handles started rather than
 
 **The gizmo never touches the model.** It moves a proxy object and the editor reads that proxy and writes the model, which is what lets it survive the scene being rebuilt from scratch on every model revision - that is, on every drag. A handle attached to a visual is attached to an object that is disposed a frame later, and re-attaching per frame is a gesture that cannot survive its own effect.
 
+**The gizmo is offered for one object, one body, or the whole selection** (`gizmoSpec`), ordered by how much is known about the target rather than by how many things it holds: one object offers its own depth, tip and size; one body turns about the centre of mass the engine mounts it at; anything wider is an ARRANGEMENT, and what an arrangement has is a place and an angle.
+
 **A handle is offered only where the format has somewhere to put its answer** (`GizmoHandlers.axes`), so what is on screen is the level's real degrees of freedom rather than three of everything:
 
 | Target | move | rotate | scale |
@@ -263,6 +265,7 @@ A move is then written as a CHANGE against where the handles started rather than
 | collision shape | x, y | z | w/h |
 | light | x, y, z | z (its aim) | - (its reach is the 2D radius handle) |
 | body | x, y | z, as a delta about the centre of mass | - (a body has no size; its objects do) |
+| several of either | x, y, z (what has a z) | z, as a delta about the selection's centre | - (each member's own handles) |
 
 **A primitive tips like a prop does**, and that is this table's rule rather than an exception to it: `EdVisual.rotX`/`rotY` belong to what is DRAWN, so `mountVisual` turns an extrusion by them exactly as it turns a prop's holder, and `visualData` writes them for either kind.
 The pivot is the object's own origin, and an extrusion is built centred on z (`extrude.ts`), so a rect tipped about x is a ramp hinged on its own middle rather than on its back face.
@@ -270,6 +273,23 @@ It was a prop's field alone while nothing in the extrusion path read it - the ri
 
 What a tipped primitive does NOT do is move the collision: the body still collides with the outline its collision objects state, in the plane, and the 2D renderer still draws that outline face on.
 A ramp the ball can actually run up is a collision shape turned by `rot`; this is the look.
+
+**Several things move as one arrangement.** Selecting a handful of objects (or a handful of bodies, which means every object in them - the same set `operandItems` hands Delete, Duplicate and a nudge) puts the handles at their middle, and a drag moves or turns the lot about that point: a run of pillars, a stack of crates, a dressed doorway.
+It is the one gesture the plane could never offer, the overlay having handles on one shape and a rotate knob on one body, so laying out an arrangement meant turning every piece about its own centre and dragging each of them back into formation.
+
+Three things decide whether it behaves:
+
+- **The centre is a MEAN of the members' own centres** (`selectionCentre`), not the middle of their bounding box and not `bodyCentroid`.
+  A mean is a fixed point of its own rotation, so the handles stay put across a turn where a bounding box would hop sideways the moment one was released; and `bodyCentroid` answers a different question - it is mass-weighted over the COLLIDING shapes alone, because a body has to turn about the point the engine mounts it at, so a backdrop selected beside a wall would be ignored entirely and a small dense block would drag the handles off the middle of what is lit up.
+- **The transform is measured from the pose the drag began in** (`captureGroupPose` / `placeGroup`), because a drag re-applies its whole displacement on every pointer move.
+  A delta-per-move reads identically for one move and accumulates the snap grid's rounding over a slow one.
+- **A body carries its frame only when the whole body is in the selection**, which is `carryBodyFrames`' rule and the one every other group edit already follows: dragging two objects out of a compound body moves those two and leaves the body they came from where it was.
+
+**The blue arrow moves what has a depth and passes over what does not.** It is offered as soon as ONE member has a z - a drawn form's `offsetZ`, a light's own `z` - and every member that has one moves by the drag while a collision shape in the selection stays in the plane.
+The stricter reading (no depth handle unless every member could move) was rejected because a level's collision IS the gameplay plane and is never anywhere else, so it would mean that a selection holding one piece of collision could never be pushed back - which is most of them.
+Each member keeps its own depth and moves by the displacement, so a backdrop 6 m back and the sign 20 cm in front of it stay 5.8 m apart.
+
+**Size is deliberately absent from a selection.** Every member has its own, in its own units - an outline, an extrusion depth, a mesh's one factor, a light's reach - and one handle over the lot would have to invent a rule for each; the members' own handles say it exactly.
 
 Two consequences worth knowing before reaching for it.
 A **mesh has one `scale`**, so any axis of the handle drives it, by the mean of the three factors - the uniform centre handle is exact and a single axis is an approximation of "bigger", because the file has one number and cannot record more.

@@ -129,6 +129,10 @@ import {
   rotateItemsAbout,
   translateItems,
   bodyFrameOf,
+  captureGroupPose,
+  type GroupPose,
+  placeGroup,
+  selectionCentre,
   settledGhosts,
   type SettleGhost,
   pinBodyFrame,
@@ -1275,6 +1279,131 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     };
   }
 
+  // SEVERAL THINGS AT ONCE: whatever the selection is - a handful of objects, a
+  // handful of whole bodies - moved and turned as one arrangement about a single
+  // point, which is what the gizmo standing at their middle says it will do.
+  //
+  // It is the one gesture the plane could never offer. The 2D overlay draws
+  // handles on ONE shape and a rotate knob on ONE body (`computeGroupHandles`),
+  // so laying out a run of pillars, a stack of crates or a dressed doorway meant
+  // turning each piece about its own centre and then dragging every one of them
+  // back into formation - an arrangement is a thing with a pose, and nothing in
+  // the editor could say so.
+  //
+  // What it writes is exactly what a single body's gizmo writes, member by
+  // member: each item's `pos` and `rot`, plus the frame of any body wholly
+  // inside the selection (`placeGroup`). A body only half-selected keeps its
+  // frame, so dragging two objects out of a compound body moves those two and
+  // leaves the body they came from where it was - the rule every other group
+  // edit in the editor already follows (`translateItems`, the nudge, delete).
+  function selectionHandlers(ids: readonly number[]): GizmoHandlers {
+    const wanted = new Set(ids);
+    // Resolved by id every time, like `itemHandlers`: undo and redo replace the
+    // model wholesale, so a captured item is a stale one the moment a drag is
+    // undone.
+    const items = (): EdItem[] => model.items.filter((i) => wanted.has(i.id));
+    // Has ANY member somewhere to put a depth? The blue arrow is offered as soon
+    // as one has, and it moves every member that has one.
+    //
+    // The alternative was to offer it only where the WHOLE selection could move
+    // - a set with a collision shape in it then has no depth handle at all - and
+    // that is the stricter reading of "a handle is offered only where the format
+    // has somewhere to put its answer". It is the wrong one here. A level's
+    // collision is the gameplay PLANE and is never anywhere else, so a selection
+    // holding one piece of collision would be a selection that could never be
+    // pushed back, which is most of them; and z moving what is DRAWN and leaving
+    // what collides is not a special case of this gizmo, it is what the depth
+    // handle and the single-object gizmo have always done to a wall's dressing.
+    const anyZ = (list: readonly EdItem[]): boolean =>
+      list.some((i) => i.object === "geometry" || i.object === "light");
+    // The item's own authored depth - the field a drag writes - as against
+    // `handleZ`, which is where it is DRAWN (see `itemHandlers`). The two differ
+    // for decoration authoring none, and a group drag has to move the field by
+    // the displacement rather than stamp the drawn fallback onto every member.
+    const ownZ = (i: EdItem): number =>
+      i.object === "light" ? i.light.z : i.object === "geometry" ? i.visual.offsetZ : 0;
+    let base: {
+      pose: GroupPose;
+      // Where the handles stood in depth, which is the mean of what the members
+      // are drawn at: the gizmo sits in the middle of the selection in all three
+      // axes, and a displacement is measured from there.
+      z: number;
+      own: Map<number, number>;
+    } | null = null;
+    return {
+      pose() {
+        const list = items();
+        const c = selectionCentre(list);
+        const z = list.length
+          ? list.reduce((a, i) => a + handleZ(i), 0) / list.length
+          : 0;
+        return { pos: new THREE.Vector3(c.x, threeY(c.y), z), quat: new THREE.Quaternion() };
+      },
+      axes(mode): GizmoAxes {
+        const list = items();
+        if (list.length < 2) return null;
+        if (mode === "translate") return { x: true, y: true, z: anyZ(list) };
+        // In the plane only. The two out-of-plane turns are a DRAWN thing's own
+        // (`GeometryObjectData.rotX`/`rotY`, and a prop or a primitive is turned
+        // about its own origin by them); tipping an arrangement would have to
+        // lift its members out of the plane to do it, and a member's placement
+        // is two numbers and an angle in that plane. There is nowhere to put the
+        // answer, so the rings are not offered - the same rule every other
+        // target here follows.
+        if (mode === "rotate") return { x: false, y: false, z: true };
+        // Size is deliberately absent. Every member has its own, in its own
+        // units - an outline, an extrusion depth, a mesh's one factor, a light's
+        // reach - and one handle over the lot of them would have to invent a
+        // rule for each. The members' own handles say it exactly.
+        return null;
+      },
+      begin() {
+        gizmoBegin();
+        const list = items();
+        base = {
+          pose: captureGroupPose(model, list, selectionCentre(list)),
+          z: list.length ? list.reduce((a, i) => a + handleZ(i), 0) / list.length : 0,
+          own: new Map(list.map((i) => [i.id, ownZ(i)])),
+        };
+      },
+      apply(mode, pos, quat) {
+        if (!base) return;
+        const list = items();
+        if (mode === "translate") {
+          const centre = base.pose.centre;
+          const d = new Vec2(pos.x - centre.x, threeY(pos.y) - centre.y);
+          placeGroup(model, list, base.pose, d, 0);
+          // Depth, for every member that has one - a drawn form's `offsetZ`, a
+          // light's own `z`. Each keeps what it had and moves by the drag's
+          // displacement, so a backdrop 6 m back and the sign 20 cm in front of
+          // it stay 5.8 m apart; a collision shape in the selection is passed
+          // over, the plane being the only place it can be (see `anyZ`).
+          const dz = pos.z - base.z;
+          if (dz !== 0) {
+            for (const i of list) {
+              const was = base.own.get(i.id);
+              if (was === undefined) continue;
+              if (i.object === "light") i.light.z = was + dz;
+              else if (i.object === "geometry") i.visual.offsetZ = was + dz;
+            }
+          }
+        } else if (mode === "rotate") {
+          // The ring returns to zero when the drag ends (`pose` answers the
+          // identity), so what it means is a DELTA - the same reading a body's
+          // ring has, and for the same reason: an arrangement has no angle of
+          // its own to write.
+          const e = new THREE.Euler().setFromQuaternion(quat, "ZXY");
+          placeGroup(model, list, base.pose, Vec2.ZERO, threeRotation(e.z));
+        }
+        gizmoTouched();
+      },
+      end() {
+        base = null;
+        rebuildInspector();
+      },
+    };
+  }
+
   // A whole body. It has no z, no size and no rotation of its own - what it has
   // is a placement and an arrangement - so the handles offered are a move in the
   // plane and a turn about the centre of mass, which is the point the built body
@@ -1343,25 +1472,51 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     };
   }
 
-  // What the handles are on: a single object, or a single body. A wider
-  // selection keeps the 2D handles alone - there is one transform to show and a
-  // group of things has several - and a chain has no transform at all.
-  function gizmoSpec(): { kind: "item" | "body"; id: number } | null {
+  // What the handles are on: a single object, a single body, or the whole
+  // selection where it is wider than one of those. A chain has no transform at
+  // all, so a chain or a vine in the selection is still nothing to attach to.
+  //
+  // The three are ordered by how MUCH is known about the target rather than by
+  // how many things it holds: one object offers its own depth, tip and size; one
+  // body turns about the centre of mass the engine mounts it at; a selection is
+  // an arrangement, and what an arrangement has is a place and an angle.
+  type GizmoTarget =
+    | { kind: "item" | "body"; id: number }
+    | { kind: "selection"; ids: number[] };
+
+  function gizmoSpec(): GizmoTarget | null {
     if (mode === "test" || !scene3d || viewMode === "2d") return null;
     if (selectedChainIds.size || selectedVineIds.size) return null;
     if (selectedBodyIds.size === 1) return { kind: "body", id: [...selectedBodyIds][0]! };
     if (selectedIds.size === 1) return { kind: "item", id: [...selectedIds][0]! };
-    return null;
+    // Whatever Delete, Duplicate and a nudge would act on (`operandItems`), so
+    // the gizmo and the keyboard move the same things: selected BODIES mean
+    // every object in them, and selected objects mean themselves.
+    const ids = operandItems().map((i) => i.id);
+    return ids.length > 1 ? { kind: "selection", ids } : null;
   }
+
+  // The key an attach is skipped on. It has to name the whole target, not just
+  // its kind: a selection that gains or loses a member is a different target
+  // with different members to move, and a key that said only "selection" would
+  // leave the handles writing the set that was selected before.
+  const gizmoKeyOf = (t: GizmoTarget | null): string =>
+    t === null ? "" : t.kind === "selection" ? `selection:${t.ids.join(",")}` : `${t.kind}:${t.id}`;
 
   function syncGizmo(): void {
     if (!gizmo) return;
     const spec = gizmoSpec();
-    const key = spec ? `${spec.kind}:${spec.id}` : "";
+    const key = gizmoKeyOf(spec);
     if (key !== gizmoKey) {
       gizmoKey = key;
       gizmo.attach(
-        spec === null ? null : spec.kind === "body" ? bodyHandlers(spec.id) : itemHandlers(spec.id),
+        spec === null
+          ? null
+          : spec.kind === "selection"
+            ? selectionHandlers(spec.ids)
+            : spec.kind === "body"
+              ? bodyHandlers(spec.id)
+              : itemHandlers(spec.id),
       );
     }
     // The same grid and the same 15° the 2D drags snap to, so a gizmo drag and a
@@ -4583,7 +4738,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         : `One body of ${parts.join(", ")}, moved and turned as one. Nothing here collides, so it builds no engine body: it stays where it is authored in play. Merge it with a colliding shape to have it ride that.`;
     } else {
       hint.textContent =
-        "Merging puts these objects in ONE body. Its collision shapes build as a single body, so the rope runs straight over the seams between them instead of snagging; kind, fill and friction collapse onto the first shape's, while material, thickness and hook-proof stay per shape. Decoration in the body is carried by it - its own fill, no mass, drawn in the body's frame. A light in it is that body's light, and moving the body moves the light.";
+        "Merging puts these objects in ONE body. Its collision shapes build as a single body, so the rope runs straight over the seams between them instead of snagging; kind, fill and friction collapse onto the first shape's, while material, thickness and hook-proof stay per shape. Decoration in the body is carried by it - its own fill, no mass, drawn in the body's frame. A light in it is that body's light, and moving the body moves the light. Without merging anything, the 3D view's gizmo stands at the middle of this selection and moves and turns all of it as one arrangement.";
     }
     g.appendChild(hint);
   }
@@ -6294,7 +6449,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       const g = el("div", "ed-group");
       g.appendChild(heading(`${sel.length} objects of ${panels.length} kinds`));
       const hint = el("div", "ed-hint");
-      hint.textContent = `${panels.join(", ")} - each kind's properties are edited in its own panel below. Merge, Duplicate and Delete apply to all of them.`;
+      hint.textContent = `${panels.join(", ")} - each kind's properties are edited in its own panel below. Merge, Duplicate and Delete apply to all of them, and so does the 3D view's gizmo: it stands at the middle of the selection and moves and turns the lot as one arrangement.`;
       g.appendChild(hint);
       appendGroupSection(g);
       appendActions(g);

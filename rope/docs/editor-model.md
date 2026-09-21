@@ -87,6 +87,7 @@ Stored, an edit to one object changes that object's offset and nothing else.
 
 The frame moves when the BODY moves, and `translateItems` / `rotateItemsAbout` are the one statement of what that means: they carry a body's frame exactly when every one of its objects is in the set being moved.
 So it is one rule rather than a decision at each of the dozen gestures that move something - a drag, a nudge, an inspector field, a gizmo handle, a group rotate - and a gesture cannot move a body's frame by accident.
+`captureGroupPose` is the third writer and states the same rule for the same reason: the gizmo's multi-selection transform works from a snapshot rather than a delta (see [editor](editor.md#the-transform-gizmo)), so it records the frames it may move at the moment the gesture begins and carries only the bodies that are in the selection whole.
 A frame is **absent** until a body holds more than one object, where it means "wherever the first object is": that is exact for a body of one, since any move of that object is a move of the whole body, so a level of simple bodies stores nothing and saves byte-for-byte as it did.
 What makes the rest safe is that every body holding more than one object has its frame written down before anything is edited, once per undo step in `beginAction` - membership grows by merging, by drawing into a selected body, by dressing a shape and by pasting, and settling it in one place is what stops the next of those forgetting a rule it is not written into.
 

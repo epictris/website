@@ -3039,6 +3039,95 @@ export function bodyCentroid(items: readonly EdItem[]): Vec2 {
   return weighed.reduce((c, i) => c.add(shapeCentre(i)), Vec2.ZERO).div(Math.max(1, weighed.length));
 }
 
+// The point a SELECTION of several things is moved and turned about: the plain
+// mean of its members' own centres.
+//
+// It is deliberately NOT `bodyCentroid`, which answers a different question and
+// answers it for one body. That one is mass-weighted over the COLLIDING shapes
+// alone, because a body has to turn about the point the engine mounts it at; a
+// selection is not a body, nothing in the sim has an opinion about it, and both
+// of those properties read as the gizmo being somewhere strange - a backdrop
+// selected beside a wall would be ignored entirely (no mass), and a small dense
+// block would drag the handles off the middle of what is lit up on screen.
+//
+// A MEAN rather than the centre of the selection's bounding box, and that is the
+// load-bearing part: the mean of a set of points turned about their own mean is
+// that same mean, so the handles stay put across a rotation. A bounding box does
+// not - an arrangement turned 45° has a different box - so the gizmo would hop
+// sideways the moment a turn was released, which reads as the selection having
+// moved when nothing did.
+export function selectionCentre(items: readonly EdItem[]): Vec2 {
+  if (!items.length) return Vec2.ZERO;
+  return items.reduce((c, i) => c.add(shapeCentre(i)), Vec2.ZERO).div(items.length);
+}
+
+// Where a set of items stood when a gesture began, and the frames of the bodies
+// WHOLLY inside that set (the same rule `carryBodyFrames` states: a body's frame
+// moves when the body moves, and an edit to some of its objects is not that).
+//
+// A gesture that transforms a group works from a snapshot rather than by adding
+// up its own steps. It is the reason `bodyHandlers` writes placements from a
+// base map instead of calling `translateItems` per frame: a drag re-applies its
+// WHOLE displacement every time the pointer moves, so a delta-per-move would
+// accumulate the snap grid's rounding across the drag and leave a group that was
+// dragged slowly a few millimetres off one that was dragged fast.
+export interface GroupPose {
+  centre: Vec2;
+  items: Map<number, { pos: Vec2; rot: number }>;
+  frames: Map<number, EdBodyFrame>;
+}
+
+export function captureGroupPose(
+  model: EdModel,
+  items: readonly EdItem[],
+  centre: Vec2,
+): GroupPose {
+  const held = new Map<number, number>();
+  for (const i of items) held.set(i.bodyId, (held.get(i.bodyId) ?? 0) + 1);
+  const frames = new Map<number, EdBodyFrame>();
+  for (const [bodyId, count] of held) {
+    if (count < bodyMembers(model.items, bodyId).length) continue;
+    // Only a STORED frame is carried, exactly as `carryBodyFrames` has it: a
+    // body with none derives it from its first object, which moves with the
+    // group anyway. Every compound body has one by now - `beginAction` pins
+    // them before any gesture starts.
+    const stored = model.bodyFrames.get(bodyId);
+    if (stored) frames.set(bodyId, stored);
+  }
+  return {
+    centre,
+    items: new Map(items.map((i) => [i.id, { pos: i.pos, rot: i.rot }])),
+    frames,
+  };
+}
+
+// Put a group back down: each member turned by `turn` about the snapshot's
+// centre and then displaced by `move`, measured from where it stood when the
+// gesture began rather than from where it is now.
+//
+// It is `rotateItemsAbout` and `translateItems` composed, from a base - the two
+// orders differing only in whether the displacement is turned as well, and it is
+// not: a drag says "this far in the level's own axes", which is what the gizmo's
+// world-space move arrows mean.
+export function placeGroup(
+  model: EdModel,
+  items: readonly EdItem[],
+  base: GroupPose,
+  move: Vec2,
+  turn: number,
+): void {
+  const place = (p: Vec2): Vec2 => base.centre.add(p.sub(base.centre).rotated(turn)).add(move);
+  for (const [bodyId, f] of base.frames) {
+    model.bodyFrames.set(bodyId, { pos: place(f.pos), rot: f.rot + turn });
+  }
+  for (const i of items) {
+    const was = base.items.get(i.id);
+    if (!was) continue;
+    i.pos = place(was.pos);
+    i.rot = was.rot + turn;
+  }
+}
+
 // --- settled ghosts ---------------------------------------------------------
 
 // A body whose REST pose differs from its authored one - a spring body's droop,

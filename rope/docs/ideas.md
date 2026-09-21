@@ -11,6 +11,8 @@
 - Swing your way up to the highest point in the level, then jump off ledge to generate enough momentum to smash through the ground at the start, landing in an underground chamber.
 - Start with a clean ball and accumulate muck/marks whenever you hit a surface
 - Track run time & number of collisions and show this to players who complete the level
+- Play whooshing should when player moves fast
+- Play satisfying sound when player does a clean swing
 
 # Underground:
 - fast-moving subway train requiring you to precisely time falls and move quickly to land on top of train
@@ -21,4 +23,5 @@
 **mine exit**
 - https://media.mymythos.org/The-Mine-Archetype-Featured.webp
 - https://media.mymythos.org/The-Mine-Archetype-Mythic-Body.webp
+
 

@@ -80,7 +80,12 @@ import {
   bodyMembers,
   bodyFrameOf,
   originToCentroid,
+  pinBodyFrame,
+  selectionCentre,
+  captureGroupPose,
+  placeGroup,
   type EdItem,
+  type EdModel,
 } from "../editor/model";
 import { lightPlaneReach } from "../editor/render";
 import { readClipboard, writeClipboard } from "../editor/clipboard";
@@ -1105,6 +1110,140 @@ function editorRoundTrip(): CaseResult[] {
       detail: keptTip
         ? "rotX and rotY written for a primitive as for a prop"
         : `wrote rotX ${tipped?.rotX}, rotY ${tipped?.rotY}`,
+    },
+  ];
+}
+
+// TRANSFORMING A SELECTION AS ONE ARRANGEMENT (`selectionCentre`,
+// `captureGroupPose`, `placeGroup`) - what the editor's gizmo writes when more
+// than one thing is selected.
+//
+// None of it can be seen in a picture, and two of the three claims are the kind
+// that look fine for one drag and are wrong by the tenth.
+//
+// The centre has to be a fixed point of its own rotation, or the handles walk
+// away from the selection a turn at a time. The transform has to be measured
+// from the pose the gesture STARTED in, because a drag re-applies its whole
+// displacement on every pointer move - a delta-per-move reads identically for
+// one move and accumulates the snap grid's rounding over a slow drag. And a
+// body's frame may move only when the whole body moves, which is the rule every
+// other group edit in the editor follows and the one a new writer of placements
+// is most likely to miss.
+function groupTransform(): CaseResult[] {
+  const authored: RawLevelData = {
+    player: { x: 0, y: 0, radius: 8 },
+    bodies: [
+      // Two bodies of one object...
+      { kind: "static", x: -200, y: 0, rot: 0, shape: { kind: "rect", w: 100, h: 100 } },
+      { kind: "static", x: 200, y: 0, rot: 0, shape: { kind: "rect", w: 100, h: 100 } },
+      // ...and a compound one, whose frame is the thing a half-selection must
+      // not move.
+      {
+        kind: "static",
+        x: 0,
+        y: 400,
+        rot: 0,
+        objects: [
+          { type: "collision", shape: { kind: "rect", w: 100, h: 100 } },
+          { type: "collision", x: 150, shape: { kind: "rect", w: 100, h: 100 } },
+        ],
+      },
+    ],
+  };
+  const fresh = (): EdModel => {
+    const m = modelFromDisk(authored);
+    // What `beginAction` does before any gesture: a body of more than one object
+    // has its frame written down, so an edit to a piece of it cannot be read as
+    // an edit to the body.
+    for (const id of new Set(m.items.map((i) => i.bodyId))) {
+      if (bodyMembers(m.items, id).length > 1) pinBodyFrame(m, id);
+    }
+    return m;
+  };
+  const near = (a: number, b: number, tol = 1e-9): boolean => Math.abs(a - b) <= tol;
+
+  // A TURN LEAVES THE CENTRE WHERE IT WAS. The mean of a set of points turned
+  // about their own mean is that same mean - which is the whole reason the
+  // centre is a mean and not the middle of a bounding box, the box of a turned
+  // arrangement being a different box.
+  const turning = fresh();
+  const turned = turning.items;
+  const centre0 = selectionCentre(turned);
+  placeGroup(turning, turned, captureGroupPose(turning, turned, centre0), Vec2.ZERO, 0.7);
+  const centre1 = selectionCentre(turning.items);
+  const centreHeld = near(centre0.x, centre1.x) && near(centre0.y, centre1.y);
+
+  // ...and it is a TURN: every member swings about that centre and takes its own
+  // angle with it, which is what makes an arrangement keep its shape.
+  const before = fresh();
+  const list = before.items;
+  const centre = selectionCentre(list);
+  const was = list.map((i) => ({ id: i.id, pos: i.pos, rot: i.rot }));
+  placeGroup(before, list, captureGroupPose(before, list, centre), Vec2.ZERO, 0.7);
+  const swung = was.every((w) => {
+    const now = before.items.find((i) => i.id === w.id)!;
+    const want = centre.add(w.pos.sub(centre).rotated(0.7));
+    return near(now.pos.x, want.x) && near(now.pos.y, want.y) && near(now.rot, w.rot + 0.7);
+  });
+
+  // MEASURED FROM THE SNAPSHOT. A drag applies its whole displacement every
+  // pointer move, so the second apply against one base must land where the
+  // second displacement says and not where the two of them add up to.
+  const dragging = fresh();
+  const dragged = dragging.items;
+  const start = dragged.map((i) => ({ id: i.id, pos: i.pos }));
+  const pose = captureGroupPose(dragging, dragged, selectionCentre(dragged));
+  placeGroup(dragging, dragged, pose, new Vec2(1, 0), 0);
+  placeGroup(dragging, dragged, pose, new Vec2(3, -2), 0);
+  const fromBase = start.every((s) => {
+    const now = dragging.items.find((i) => i.id === s.id)!;
+    return near(now.pos.x, s.pos.x + 3) && near(now.pos.y, s.pos.y - 2);
+  });
+
+  // THE BODY FRAME MOVES WITH THE WHOLE BODY AND NOT WITH A PIECE OF IT. Both
+  // halves asserted on the same compound body, since the bug is that the rule
+  // holds in one direction only.
+  // Ids are minted per model (`newBodyId` is a running counter), so the compound
+  // body is found inside each model rather than carried between two of them.
+  const compoundOf = (m: EdModel): number =>
+    [...new Set(m.items.map((i) => i.bodyId))].find((id) => bodyMembers(m.items, id).length > 1)!;
+
+  const whole = fresh();
+  const members = bodyMembers(whole.items, compoundOf(whole));
+  const frameWas = bodyFrameOf(whole, compoundOf(whole));
+  placeGroup(whole, members, captureGroupPose(whole, members, selectionCentre(members)), new Vec2(2, 0), 0);
+  const frameMoved = near(bodyFrameOf(whole, compoundOf(whole)).pos.x, frameWas.pos.x + 2);
+
+  const part = fresh();
+  const partId = compoundOf(part);
+  const half = [bodyMembers(part.items, partId)[0]!];
+  const partFrameWas = bodyFrameOf(part, partId);
+  const memberWas = half[0]!.pos;
+  placeGroup(part, half, captureGroupPose(part, half, selectionCentre(half)), new Vec2(2, 0), 0);
+  const frameStayed =
+    near(bodyFrameOf(part, partId).pos.x, partFrameWas.pos.x) &&
+    near(half[0]!.pos.x, memberWas.x + 2);
+
+  return [
+    {
+      name: "editor: a selection turns about a centre the turn does not move",
+      pass: centreHeld,
+      detail: `centre (${centre0.x.toFixed(6)}, ${centre0.y.toFixed(6)}) -> (${centre1.x.toFixed(6)}, ${centre1.y.toFixed(6)})`,
+    },
+    {
+      name: "editor: a group turn swings every member about that centre and turns it with it",
+      pass: swung,
+      detail: swung ? `${was.length} members` : "a member did not land on the turned placement",
+    },
+    {
+      name: "editor: a group drag is measured from the pose the drag began in",
+      pass: fromBase,
+      detail: fromBase ? "two applies against one base land on the second" : "the two displacements accumulated",
+    },
+    {
+      name: "editor: a body moves its frame only when the whole body is in the selection",
+      pass: frameMoved && frameStayed,
+      detail: `whole body ${frameMoved ? "carried" : "LEFT"} its frame, a piece of one ${frameStayed ? "left it alone" : "MOVED it"}`,
     },
   ];
 }
@@ -3266,6 +3405,7 @@ export function runRender3dCases(): CaseResult[] {
     ...visualRoundTrip(),
     ...editorRoundTrip(),
     ...matchedOutline(),
+    ...groupTransform(),
     ...vertexEditMoves(),
     ...pickIndex(),
     ...lightRoundTrip(),
