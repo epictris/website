@@ -181,7 +181,7 @@
          the level select's own list. Markup rather than something a module
          builds, for the third time on this page and for the third version of
          the same reason: the menu page never loads the app, so the form has to
-         exist without it (see src/render/feedbackForm.ts).
+         exist without it (see src/render/completionForm.ts).
          Same idiom again - the flat page, hairline borders, square corners,
          #65bddb only on the thing being chosen. */
       #complete {
@@ -208,12 +208,33 @@
         box-sizing: border-box;
       }
       #complete-eyebrow { color: #65bddb; letter-spacing: 0.22em; margin: 0 0 0.35rem; }
-      #complete-heading { margin: 0 0 1.25rem; font: inherit; font-weight: normal; }
-      /* The question the stars are the answer to. Without it a row of stars is
-         a rating of something unstated - the level, the run, the game - and
+      #complete-heading { margin: 0 0 1rem; font: inherit; font-weight: normal; }
+      /* WHAT THE RUN TOOK, which every crossing reports whether or not there is
+         anything to ask. The label is dim and the figure is not: the number is
+         the thing being read, and a run is not a time trial - nothing else on
+         the panel competes with it for the accent. */
+      #complete-time {
+        margin: 0 0 1.5rem;
+        display: flex;
+        gap: 1ch;
+        align-items: baseline;
+      }
+      #complete-time-label { color: #8a8f98; letter-spacing: 0.16em; }
+      #complete-time-value { color: #cbccc6; }
+      /* THE FEEDBACK HALF, separated from the heading above and the exits below
+         by a rule, because it is the part of the panel that is not always here:
+         it is asked for on a first crossing and on one where nothing has been
+         sent yet, and left out otherwise (see src/render/completionForm.ts). */
+      #complete-ask-section {
+        border-top: 1px solid #313244;
+        padding-top: 1.25rem;
+      }
+      /* The question each control is the answer to. Without it a row of stars
+         is a rating of something unstated - the level, the run, the game - and
          five stars for "how fun" is a different answer from five stars for
-         "how hard". */
-      #complete-ask { margin: 0 0 0.5rem; color: #8a8f98; }
+         "how hard". Now that the panel asks two of them, the difference
+         between the two questions is the whole point of labelling them. */
+      .complete-ask { margin: 0 0 0.5rem; color: #8a8f98; }
       #complete-stars { display: flex; gap: 0.5ch; margin-bottom: 1.25rem; }
       .complete-star {
         /* A star is bigger than the body text on purpose - it is the one thing
@@ -231,6 +252,59 @@
       }
       .complete-star[data-on="1"] { color: #65bddb; }
       .complete-star:hover, .complete-star:focus-visible { border-color: #65bddb; outline: none; }
+      /* THE DIFFICULTY SCALE: five cells carrying their own words, and exactly
+         one of them lit. The words are on the cells rather than as a caption at
+         each end, because five bare boxes between "too easy" and "too hard" is
+         a 1..5 ramp again and the whole reason this is not a second row of
+         stars is that the MIDDLE is the good answer (see `Difficulty` in
+         src/playtest/feedback.ts).
+         The labels wrap to two lines at the panel's width and to three on a
+         narrow phone, so the height is a minimum rather than a size and the
+         row's cells stretch to the tallest of them. */
+      #complete-difficulty { display: flex; gap: 0.5ch; margin-bottom: 1.25rem; }
+      .complete-diff {
+        flex: 1 1 0;
+        /* Without this a flex item refuses to go below its longest word and
+           the row overflows the panel at a phone's width. */
+        min-width: 0;
+        min-height: 44px;
+        padding: 0.4rem 0.2rem;
+        border: 1px solid #313244;
+        background: transparent;
+        color: #8a8f98;
+        font: inherit;
+        letter-spacing: inherit;
+        line-height: 1.3;
+        text-align: center;
+        overflow-wrap: break-word;
+        cursor: pointer;
+      }
+      .complete-diff[data-on="1"] { color: #65bddb; border-color: #65bddb; }
+      .complete-diff:hover, .complete-diff:focus-visible { border-color: #65bddb; outline: none; }
+      /* NARROW ENOUGH AND THE SCALE STANDS UP. Five cells side by side need
+         about eight monospace columns each to hold "Way too" on one line, which
+         is a 480px viewport; under that the row either breaks words down the
+         middle or overflows. Stacked, each answer gets its own line and reads
+         as what it is, and the order top-to-bottom is the same order the scale
+         runs in left-to-right - easiest first - so the middle is still the
+         middle. */
+      @media (max-width: 480px) {
+        #complete-difficulty { flex-direction: column; gap: 0; }
+        .complete-diff {
+          text-align: left;
+          padding: 0.6rem 1ch;
+          /* One hairline between cells rather than two, so a stacked scale
+             reads as one control instead of five buttons. */
+          border-bottom-width: 0;
+        }
+        .complete-diff:last-child { border-bottom-width: 1px; }
+        /* The lit one needs its whole outline back, or its bottom edge is the
+           next cell's missing border. */
+        .complete-diff[data-on="1"], .complete-diff:hover, .complete-diff:focus-visible {
+          border-bottom-width: 1px;
+          margin-bottom: -1px;
+        }
+      }
       #complete-comment {
         width: 100%;
         box-sizing: border-box;
@@ -244,10 +318,21 @@
         padding: 0.6rem;
       }
       #complete-comment:focus { border-color: #65bddb; outline: none; }
-      #complete-buttons { display: flex; gap: 1ch; margin-top: 1.25rem; }
-      #complete-buttons button {
-        flex: 1;
+      /* SUBMIT SITS WITH THE FEEDBACK, not with the exits, because it is not
+         one: sending says nothing about what to play next and does not close
+         the panel (see src/render/completionForm.ts). It is the width of its
+         own words rather than a third of the row, so it cannot be mistaken for
+         one of the three ways on. */
+      #complete-send {
+        display: flex;
+        gap: 1.5ch;
+        align-items: center;
+        flex-wrap: wrap;
+        margin-top: 1.25rem;
+      }
+      #complete-submit {
         min-height: 44px;
+        padding: 0 2ch;
         border: 1px solid rgba(203, 204, 198, 0.45);
         background: transparent;
         color: #cbccc6;
@@ -255,22 +340,68 @@
         letter-spacing: 0.16em;
         cursor: pointer;
       }
-      #complete-buttons button:hover, #complete-buttons button:focus-visible {
+      #complete-submit:hover, #complete-submit:focus-visible {
         background: rgba(203, 204, 198, 0.12);
         border-color: #cbccc6;
         outline: none;
       }
-      #complete-skip { color: #8a8f98 !important; border-color: #313244 !important; }
-      /* Submit with nothing said is Skip under another name, so it is OFF until
-         there is something to send (see `render/feedbackForm.ts`). Dimmed and
-         `not-allowed` rather than hidden: a button that appears when you type
-         is a button nobody knew was coming. */
-      #complete-buttons button:disabled {
+      /* Submit with nothing said is a round trip that says nothing, and Submit
+         with what was just sent appends the same answer twice - so it is OFF in
+         both cases (see `render/completionForm.ts`). Dimmed and `not-allowed`
+         rather than hidden: a button that appears when you type is a button
+         nobody knew was coming. */
+      #complete-submit:disabled {
         color: #5b6068;
         border-color: #2a2f3c;
         cursor: not-allowed;
       }
-      #complete-buttons button:disabled:hover { background: transparent; border-color: #2a2f3c; }
+      #complete-submit:disabled:hover { background: transparent; border-color: #2a2f3c; }
+      #complete-thanks { color: #65bddb; }
+      /* THE WAYS ON, below a rule of their own so that leaving is plainly a
+         separate decision from rating. Built by the module, since how many
+         there are depends on where the panel came from - the last level in the
+         list has no Next Level to offer. */
+      #complete-buttons {
+        display: flex;
+        gap: 1ch;
+        margin-top: 1.5rem;
+        border-top: 1px solid #313244;
+        padding-top: 1.5rem;
+      }
+      #complete-buttons button {
+        flex: 1;
+        min-height: 44px;
+        border: 1px solid #313244;
+        background: transparent;
+        color: #8a8f98;
+        font: inherit;
+        letter-spacing: 0.16em;
+        cursor: pointer;
+        padding: 0 0.5ch;
+      }
+      /* The one the panel leads with. On a finished level that is Retry: the
+         player who just crossed the line and wants another go is the one who
+         should not have to read the row. */
+      #complete-buttons button[data-primary="1"] {
+        color: #cbccc6;
+        border-color: rgba(203, 204, 198, 0.45);
+      }
+      #complete-buttons button:hover, #complete-buttons button:focus-visible {
+        background: rgba(203, 204, 198, 0.12);
+        border-color: #cbccc6;
+        color: #cbccc6;
+        outline: none;
+      }
+      /* Equal thirds are tidy until a third of the row is narrower than "Next
+         Level", which on a phone it is: the label wraps to two lines and stands
+         the row up beside two single-line neighbours. Under 480px the buttons
+         take their own width instead and share what is left over, which fits
+         all three on one line; `wrap` is the floor under that, so a viewport
+         narrow enough to beat even that stacks them rather than overflowing. */
+      @media (max-width: 480px) {
+        #complete-buttons { flex-wrap: wrap; }
+        #complete-buttons button { flex: 1 1 auto; }
+      }
     </style>
   </head>
   <body>
@@ -290,13 +421,21 @@
       <div id="complete-panel">
         <p id="complete-eyebrow">Finished</p>
         <h2 id="complete-heading"></h2>
-        <p id="complete-ask">How fun was this level?</p>
-        <div id="complete-stars" role="group" aria-label="How fun was this level?"></div>
-        <textarea id="complete-comment" placeholder="Anything to say about it? (optional)"></textarea>
-        <div id="complete-buttons">
-          <button id="complete-submit" type="button">Submit</button>
-          <button id="complete-skip" type="button">Skip</button>
+        <p id="complete-time" hidden>
+          <span id="complete-time-label">Time</span><span id="complete-time-value"></span>
+        </p>
+        <div id="complete-ask-section" hidden>
+          <p class="complete-ask">How fun was this level?</p>
+          <div id="complete-stars" role="group" aria-label="How fun was this level?"></div>
+          <p class="complete-ask">How was the difficulty?</p>
+          <div id="complete-difficulty" role="group" aria-label="How was the difficulty?"></div>
+          <textarea id="complete-comment" placeholder="Anything to say about it? (optional)"></textarea>
+          <div id="complete-send">
+            <button id="complete-submit" type="button">Send</button>
+            <span id="complete-thanks" hidden>Thanks - that is saved.</span>
+          </div>
         </div>
+        <div id="complete-buttons"></div>
       </div>
     </div>
     <!-- THE APP IS LOADED ONLY WHERE THERE IS SOMETHING TO PLAY. A bare `/` is

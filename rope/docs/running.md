@@ -73,8 +73,10 @@ A test run from the editor has no loading screen and no gate - it is the editor'
 ## Ending one
 
 A listed level ends at a **finish line** (see [**The finish line**](levels.md#the-finish-line)): a chequered gantry across the way out, which finishes the level the moment you touch it, swinging through or rolling into it.
-The sim then runs half a second more so the ball carries out the far side and **freezes** - nothing reaches into the level, so a **P** download taken afterwards still replays and finishes on the same frame - the pointer comes back, and a form appears over the frozen scene: five stars and a comment, both optional, **Submit** or **Skip**.
-Either way the level is marked as finished on this browser and the page returns to the level select, where a finished row can be re-rated from its `rate` link.
+The sim then runs half a second more so the ball carries out the far side and **freezes** - nothing reaches into the level, so a **P** download taken afterwards still replays and finishes on the same frame - the pointer comes back, and a panel appears over the frozen scene with what the run took and three ways on: **Retry**, **Next Level** and **Menu** (see [**The completion panel**](levels.md#the-completion-panel)).
+Retry rebuilds the level in the page, so the screen and the run are not spent on a reload.
+The level is marked as finished on this browser whichever way it is left, and a finished row can be re-rated from its `rate` link on the level select.
+The panel also asks for **feedback** - five stars for fun, a five-point bipolar difficulty scale and a comment, all optional - on the first crossing and on any later one where nothing has been sent yet; sending does not close the panel.
 The run is sealed with the end reason `complete`, which is its own reason because it is neither a failure nor an interruption.
 
 In the editor's ▶ Test a crossing raises a toast and the test carries on: what is being judged there is where the line is.

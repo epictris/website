@@ -45,10 +45,11 @@ export {};
 // IN by esbuild, since this file is compiled on its own and inlined ahead of
 // the app rather than imported by it.
 import { readProgress, writeProgress } from "../render/progress";
-// The form the level select's `rate` link opens. Bundled in for the same
+// The panel the level select's `rate` link opens - the same one a finished
+// level ends at, with its time and its exits left out. Bundled in for the same
 // reason: this page never loads the app.
-import { showFeedbackForm } from "../render/feedbackForm";
-import { submitFeedback, type Stars } from "../playtest/feedback";
+import { showCompletionForm } from "../render/completionForm";
+import { submitFeedback, type Difficulty, type Stars } from "../playtest/feedback";
 
 // One file being downloaded. Kept after it finishes: the bar's denominator is
 // everything the page has asked for, not what is in flight this instant.
@@ -301,10 +302,12 @@ function paintMenu(manifest: PreloadManifest, note: string): void {
       }
     }
     li.appendChild(a);
-    // RE-RATING, offered on every level this browser has finished. A rating is
-    // about a level rather than about a run, so it carries no session and no
-    // run, and it can be left long after the play it is about (see
-    // docs/levels.md).
+    // RE-RATING, offered on every level this browser has finished, and THE ONLY
+    // WAY BACK TO THE FORM: the completion flow asks once and never again (see
+    // `completeLevel` in main.ts), so this link is what keeps a second opinion
+    // reachable rather than a convenience beside it. A rating is about a level
+    // rather than about a run, so it carries no session and no run, and it can
+    // be left long after the play it is about (see docs/levels.md).
     if (done) {
       const rate = document.createElement("span");
       rate.className = "menu-rate";
@@ -312,28 +315,43 @@ function paintMenu(manifest: PreloadManifest, note: string): void {
       rate.role = "button";
       rate.textContent = "rate";
       const open = (): void => {
-        void showFeedbackForm({
+        void showCompletionForm({
           // Nothing was just played: this is a level the player finished
-          // earlier and is saying something about now.
+          // earlier and is saying something about now - so there is no time to
+          // report and nothing to retry or move on from.
           eyebrow: "Rate",
           title: level.t,
-          stars: done.stars as Stars | null,
-          comment: done.comment,
-          submit: ({ stars, comment }) => {
-            // Locally FIRST, so a failed POST still keeps what was said - the
-            // rule the completion flow follows (see `submitFeedback`).
-            writeProgress(id, { ...done, stars, comment, submittedAt: Date.now() });
-            void submitFeedback({
-              level: id,
-              levelHash: manifest.h?.[id] ?? "",
-              commit: manifest.c ?? "",
-              dirty: manifest.y === 1,
-              srcHash: manifest.s ?? "",
-              stars,
-              comment,
-            });
-            paintMenu(manifest, note);
+          seconds: null,
+          ask: {
+            stars: done.stars as Stars | null,
+            // `?? null` because an entry written before the scale existed has
+            // no `difficulty` on it at all, and `undefined` is not an answer
+            // the form knows how to open on (see render/progress.ts).
+            difficulty: (done.difficulty ?? null) as Difficulty | null,
+            comment: done.comment,
+            submit: ({ stars, difficulty, comment }) => {
+              // Locally FIRST, so a failed POST still keeps what was said - the
+              // rule the completion flow follows (see `submitFeedback`).
+              writeProgress(id, { ...done, stars, difficulty, comment, submittedAt: Date.now() });
+              void submitFeedback({
+                level: id,
+                levelHash: manifest.h?.[id] ?? "",
+                commit: manifest.c ?? "",
+                dirty: manifest.y === 1,
+                srcHash: manifest.s ?? "",
+                stars,
+                difficulty,
+                comment,
+              });
+              // The row's marks are behind the panel, which stays open: a
+              // rating that did not show up on the list it came from would read
+              // as not having landed.
+              paintMenu(manifest, note);
+            },
           },
+          // One way out, and it is also what Esc runs (see
+          // `showCompletionForm`): the menu is already the page underneath.
+          actions: [{ label: "Close", run: () => {} }],
         });
       };
       rate.addEventListener("click", (e) => {

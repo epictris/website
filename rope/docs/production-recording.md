@@ -33,7 +33,7 @@ reload can change it, and `Store.seal` copies it into the `Recording`.
 
 ## What players said
 
-Beside the runs, the store keeps **feedback**: five stars and a comment, left at the finish line that ends a level or from the level select's `rate` link (see [**Levels**](levels.md#the-feedback-form)).
+Beside the runs, the store keeps **feedback**: five stars for fun, a bipolar difficulty answer and a comment, left on the panel that ends a level or from the level select's `rate` link (see [**Levels**](levels.md#the-completion-panel)).
 
 `POST /api/playtest/feedback` is open for the reason ingest is, and shares ingest's `pid` cookie exactly - the same `resolveOrMintPlayer`, the same response header - so a player's runs and their ratings are **one player** whichever they do first, and rename, merge and delete reach both.
 It is **append-only**: one JSON line per submission in `<dir>/feedback.ndjson`, never rewritten, never deduplicated.

@@ -147,6 +147,7 @@ class Harness {
       dirty: false,
       srcHash: "0123456789ab",
       stars: null,
+      difficulty: null,
       comment: null,
       ...body,
     };
@@ -228,6 +229,9 @@ const CASES: Record<string, Case> = {
       ["stars 0", { stars: 0 as unknown as null }],
       ["stars 6", { stars: 6 as unknown as null }],
       ["stars as a string", { stars: "5" as unknown as null }],
+      ["difficulty 0", { difficulty: 0 as unknown as null }],
+      ["difficulty 6", { difficulty: 6 as unknown as null }],
+      ["difficulty as a string", { difficulty: "3" as unknown as null }],
       ["comment as a number", { comment: 7 as unknown as null }],
       ["run as a string", { run: "1" as unknown as number }],
     ];
@@ -240,9 +244,47 @@ const CASES: Record<string, Case> = {
     if (long.status !== 200) throw new Error(`a long comment was answered ${long.status}`);
     const kept = h.feedbackLines().at(-1)!.comment!;
     if (kept.length !== MAX_COMMENT) throw new Error(`comment kept at ${kept.length}`);
-    // ...and NEITHER is a real answer: Skip records "played it, said nothing".
-    if (h.rate({ stars: null, comment: null }).status !== 200) throw new Error("a skip was refused");
-    return `${bad.length + 1} refusals, a comment trimmed to ${MAX_COMMENT}, a skip accepted`;
+    // ...and NONE of them is a real answer: a player may leave the panel having
+    // said nothing, and that records "played it, said nothing".
+    if (h.rate({ stars: null, difficulty: null, comment: null }).status !== 200) {
+      throw new Error("a rating with nothing in it was refused");
+    }
+    return `${bad.length + 1} refusals, a comment trimmed to ${MAX_COMMENT}, an empty rating accepted`;
+  },
+
+  // A PAGE OLDER THAN THE FIELD posts a body with no `difficulty` in it at all,
+  // and it is not malformed - it is last week's tree, still open in somebody's
+  // tab. It lands as null, which is what it means, and every reader takes
+  // `difficulty ?? null` for the same reason (see `playtest/feedback.ts`).
+  "a rating from a page that predates the difficulty scale is kept as null": (h) => {
+    const body = {
+      level: "BALL",
+      levelHash: "pagehash001",
+      commit: "abc1234",
+      dirty: false,
+      srcHash: "0123456789ab",
+      stars: 4,
+      comment: "before the scale",
+    };
+    const r = h.store.feedback(JSON.stringify(body), "203.0.113.7", null);
+    if (r.status !== 200) throw new Error(`${r.status} ${JSON.stringify(r.body)}`);
+    const line = h.feedbackLines().at(-1)!;
+    if (line.difficulty !== null) throw new Error(`difficulty came out ${String(line.difficulty)}`);
+    if (line.stars !== 4) throw new Error("the rest of the body was not kept");
+    return "no difficulty posted, null stored, the rest intact";
+  },
+
+  // The BIPOLAR scale, end to end: every point it offers is accepted and kept
+  // as itself, because "way too easy" and "way too hard" are the two answers a
+  // ramp would have collapsed (see `Difficulty` in playtest/feedback.ts).
+  "every point of the difficulty scale round-trips": (h) => {
+    for (const d of [1, 2, 3, 4, 5] as const) {
+      const r = h.rate({ difficulty: d });
+      if (r.status !== 200) throw new Error(`difficulty ${d} was answered ${r.status}`);
+    }
+    const kept = h.feedbackLines().map((l) => l.difficulty);
+    if (kept.join(",") !== "1,2,3,4,5") throw new Error(`kept ${kept.join(",")}`);
+    return "1..5 stored as given";
   },
 
   "feedback is rate limited per address": (h) => {

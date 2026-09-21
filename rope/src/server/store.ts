@@ -38,6 +38,7 @@ import { ACTIONS, type Recording, type SerializedFrame, type WorldDigest } from 
 import {
   FEEDBACK_PER_IP_PER_HOUR,
   MAX_COMMENT,
+  type Difficulty,
   type FeedbackRecord,
   type FeedbackSubmission,
   type Stars,
@@ -245,6 +246,12 @@ function validateFeedback(b: unknown): FeedbackSubmission {
   if (!(b.stars === null || (isInt(b.stars, 1) && b.stars <= 5))) {
     throw new Refusal(400, "feedback: stars is 1..5 or null");
   }
+  // UNDEFINED IS ACCEPTED, unlike the fields above, because a page served from
+  // a tree older than this field posts a body without it and that page is not
+  // malformed - it is last week's. It lands as null, which is what it means.
+  if (!(b.difficulty === null || b.difficulty === undefined || (isInt(b.difficulty, 1) && b.difficulty <= 5))) {
+    throw new Refusal(400, "feedback: difficulty is 1..5 or null");
+  }
   if (!(b.comment === null || typeof b.comment === "string")) {
     throw new Refusal(400, "feedback: comment is a string or null");
   }
@@ -263,6 +270,7 @@ function validateFeedback(b: unknown): FeedbackSubmission {
     dirty: b.dirty,
     srcHash: b.srcHash,
     stars: (b.stars as Stars | null) ?? null,
+    difficulty: (b.difficulty as Difficulty | null) ?? null,
     comment: comment || null,
     ...(typeof b.session === "string" ? { session: b.session } : {}),
     ...(typeof b.run === "number" ? { run: b.run } : {}),

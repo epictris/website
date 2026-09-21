@@ -93,12 +93,25 @@
     <label>player <select id="fb-player"><option value="">all</option></select></label>
     <label>level <select id="fb-level"><option value="">all</option></select></label>
     <label>stars <select id="fb-stars"><option value="">any</option><option>5</option><option>4</option><option>3</option><option>2</option><option>1</option><option value="none">none</option></select></label>
+    <!-- The BIPOLAR scale, filtered by its own words rather than by 1..5: "4"
+         is not an answer anyone gave, "a bit hard" is. The two ends are the two
+         ways of being wrong and the middle is the good one, which is the whole
+         reason it is not a second star rating (see src/playtest/feedback.ts). -->
+    <label>difficulty <select id="fb-diff">
+      <option value="">any</option>
+      <option value="1">way too easy</option>
+      <option value="2">a bit easy</option>
+      <option value="3">just right</option>
+      <option value="4">a bit hard</option>
+      <option value="5">way too hard</option>
+      <option value="none">none</option>
+    </select></label>
     <label><input type="checkbox" id="fb-latest" /> latest only</label>
     <span class="dim" id="fb-count"></span>
   </div>
   <div class="wrap"><table id="fb-table">
     <thead><tr>
-      <th>when</th><th>player</th><th>level</th><th>version</th><th>stars</th>
+      <th>when</th><th>player</th><th>level</th><th>version</th><th>stars</th><th>difficulty</th>
       <th>comment</th><th>commit</th><th>level file</th>
     </tr></thead>
     <tbody></tbody>
@@ -297,6 +310,20 @@
   // ---- feedback ---------------------------------------------------------------
   let feedback = { feedback: [], players: {}, here: { commit: "", srcHash: "" } };
 
+  // The difficulty scale's words, kept in step with `DIFFICULTY_LABELS` in
+  // src/playtest/feedback.ts by hand - this page is served as a static file and
+  // imports nothing, which is the same reason every other constant here is a
+  // copy. They are lower case because the listing is, and marked by side so the
+  // table can be read down the column: the arrows say which way a level missed,
+  // which is the whole point of a bipolar scale.
+  const DIFF_WORDS = {
+    1: '<span class="warn">&lt;&lt; way too easy</span>',
+    2: "&lt; a bit easy",
+    3: "just right",
+    4: "a bit hard &gt;",
+    5: '<span class="warn">way too hard &gt;&gt;</span>',
+  };
+
   function renderFeedback() {
     const rows = feedback.feedback;
     // The version a row is, per LEVEL and PLAYER, counted oldest-first so "v1"
@@ -310,13 +337,21 @@
       seq.set(r.id, n);
     }
     const fPlayer = $("#fb-player").value, fLevel = $("#fb-level").value, fStars = $("#fb-stars").value;
+    const fDiff = $("#fb-diff").value;
     const latestOnly = $("#fb-latest").checked;
     const view = rows.filter((r) => {
       const k = `${r.level}\u0000${r.player}`;
+      // A record written before the scale existed carries no `difficulty` at
+      // all, so "none" has to mean absent as well as null - "never asked" and
+      // "asked, no answer" are the same blank in a listing, which is the truth
+      // about both (see src/playtest/feedback.ts).
+      const diff = r.difficulty == null ? null : r.difficulty;
       if (fPlayer && r.player !== fPlayer) return false;
       if (fLevel && r.level !== fLevel) return false;
       if (fStars === "none" && r.stars !== null) return false;
       if (fStars && fStars !== "none" && r.stars !== Number(fStars)) return false;
+      if (fDiff === "none" && diff !== null) return false;
+      if (fDiff && fDiff !== "none" && diff !== Number(fDiff)) return false;
       if (latestOnly && seq.get(r.id) !== totals.get(k)) return false;
       return true;
     });
@@ -330,6 +365,12 @@
     $("#fb-table tbody").innerHTML = view.map((r) => {
       const k = `${r.level}\u0000${r.player}`;
       const stars = r.stars === null ? '<span class="dim">-</span>' : "\u2605".repeat(r.stars) + '<span class="dim">' + "\u2606".repeat(5 - r.stars) + "</span>";
+      // The words, not the number, and the SIDE marked: on a bipolar scale the
+      // reading that matters is which way a level missed, and "3" on its own
+      // reads as a mediocre score rather than as the good answer.
+      const diffWord = r.difficulty == null
+        ? '<span class="dim">-</span>'
+        : DIFF_WORDS[r.difficulty] || String(r.difficulty);
       const sameTree = r.srcHash === feedback.here.srcHash;
       const sameLevel = !r.hereLevelHash || r.levelHash === r.hereLevelHash;
       return `<tr>
@@ -338,6 +379,7 @@
         <td>${esc(r.level)}</td>
         <td class="dim">v${seq.get(r.id)} of ${totals.get(k)}</td>
         <td>${stars}</td>
+        <td>${diffWord}</td>
         <td style="white-space:normal;max-width:48ch">${esc(r.comment || "")}</td>
         <td>${esc(r.commit)}${sameTree ? ' <span class="tag live">live</span>' : ""}</td>
         <td class="${sameLevel ? "dim" : "warn"}">${esc((r.levelHash || "").slice(0, 8))}${sameLevel ? "" : " changed"}</td>

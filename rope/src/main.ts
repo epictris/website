@@ -19,7 +19,7 @@ import { SparkSystem } from "./render/sparks";
 import { DebrisSystem } from "./render/debris";
 import { ChainRetract } from "./render/chainRetract";
 import { NO_ORBIT } from "./render3d/space";
-import { DEFAULT_LEVEL, LEVELS } from "./level/registry";
+import { DEFAULT_LEVEL, LEVELS, listedLevels } from "./level/registry";
 import { spawnAtCheckpoint } from "./level/levelFormat";
 import {
   digest,
@@ -49,9 +49,9 @@ import {
 } from "./playtest/protocol";
 import { selfReplayLine, verifySelfReplay } from "./sim/selfReplay";
 import { showToast } from "./render/toast";
-import { showFeedbackForm } from "./render/feedbackForm";
+import { showCompletionForm } from "./render/completionForm";
 import { readProgress, writeProgress } from "./render/progress";
-import { submitFeedback, type Stars } from "./playtest/feedback";
+import { submitFeedback } from "./playtest/feedback";
 import { LoadingScreen } from "./render/loadingScreen";
 // The tree this page was served from, not the commit the dev server booted at
 // (see src/sim/treeStamp.ts).
@@ -801,6 +801,38 @@ function checkCompletion(): boolean {
   return true;
 }
 
+// Another go at this level, in this page, without a reload: the panel comes
+// off, the level is rebuilt and the recorder opens a fresh run.
+//
+// A NAVIGATION WOULD THROW AWAY THE SCREEN. Fullscreen and the pointer lock are
+// gone by the time the next document loads (see `startOnClick` in
+// render3d/store.ts), so `location.reload()` here would drop the player out of
+// fullscreen and make them click their way back in - which is the exact cost
+// the level select's in-page boot exists to avoid. Retry is the same act a jump
+// press already is (`reset`), so it is the same code.
+//
+// The lock itself is not re-taken here. It is released at the crossing so the
+// panel can be pointed at, and `AimPointer`'s canvas `mousedown` takes it back
+// on the first press in the level - which for the ball is the throw that opens
+// the run, exactly as it is at the start of any run.
+function retryLevel(): void {
+  frozen = false;
+  lingerUntil = null;
+  // THE FROZEN FRAMES ARE NOT OWED. `accumulator` has been taking every `dt`
+  // since the crossing with nothing draining it (see `frame`), so a retry that
+  // left it alone would open by burning MAX_STEPS_PER_FRAME steps a frame until
+  // the debt was paid - the level fast-forwarding through the first seconds of
+  // its own run. Time spent reading a panel is not time the sim is behind by.
+  accumulator = 0;
+  restartRun(null);
+  // The cursor goes back under the game's own reticle, which `completeLevel`
+  // took off so the panel could be pointed at.
+  hidePointer();
+  // The aim opens with the run rather than carrying whatever the hand did over
+  // the panel, which is the rule the first run follows too (see `boot`).
+  ballInput?.openRun();
+}
+
 function completeLevel(): void {
   // The run ended because the level was FINISHED, which is a reason of its own:
   // it is neither a reset nor a kill, and a run sealed as either would read as
@@ -809,62 +841,109 @@ function completeLevel(): void {
   // The cursor comes back before anything is asked of it. The lock is what the
   // ball's aim took (see `AimPointer`), and the page's own cursor has been
   // hidden since the level started (see `hidePointer`) - so both have to be
-  // undone or the form is a dialogue the player cannot point at.
+  // undone or the panel is a dialogue the player cannot point at.
   document.exitPointerLock?.();
   document.documentElement.style.cursor = "";
   const completedFrame = (level as BallLevel).completedFrame ?? 0;
   const was = readProgress()[levelId];
-  const stars = (was?.stars ?? null) as Stars | null;
+  // The crossing, in seconds. `completedFrame` is the fixed-step frame the line
+  // was crossed on and the step is exactly 1/60, so this is the run's own clock
+  // rather than a wall clock - a frame dropped to a slow machine does not make
+  // the level take longer to finish (see `frame`).
+  const seconds = completedFrame * STEP;
 
-  void showFeedbackForm({
+  // THE COMPLETION IS RECORDED NOW, before anything is asked and whatever the
+  // player does next. Finishing the level is what happened; a rating is a
+  // separate thing that may or may not follow, and a completion written only
+  // down the Submit path would be a level the menu forgets you played because
+  // you had nothing to say about it.
+  const completedAt = was?.completedAt ?? Date.now();
+  writeProgress(levelId, {
+    completedAt,
+    stars: was?.stars ?? null,
+    difficulty: was?.difficulty ?? null,
+    comment: was?.comment ?? null,
+    submittedAt: was?.submittedAt ?? null,
+  });
+
+  // THE FEEDBACK HALF IS ASKED FOR ONCE ANSWERED. A first crossing is asked,
+  // and so is a later one where nothing has ever been sent - a player who had
+  // no opinion the first time may well have one on the fourth. What is not
+  // asked again is a player who has already said something, because a form put
+  // in front of someone with nothing new to say collects an answer they did not
+  // have, and a level worth replaying is exactly the level whose form would be
+  // in the way on every lap. The way back to it is the menu row's `rate` link,
+  // which carries the last answers (see `paintMenu` in render3d/store.ts).
+  //
+  // Storage that throws or has been cleared reads as "never played", so the
+  // panel asks again. That is the right way round: the cost of asking twice is
+  // a question, and the cost of never asking is a playtest with no answers.
+  const sendable = was?.submittedAt == null;
+
+  // WHAT COMES NEXT IN THE MENU'S OWN ORDER, so the button and the list agree
+  // about what "next" means (see `listedLevels`). The last level in the list
+  // offers no Next Level at all rather than a button that goes back to the
+  // start - a row that lies about where it leads is worse than a row that is
+  // not there.
+  const listed = listedLevels();
+  const at = listed.findIndex((l) => l.id === levelId);
+  const next = at >= 0 ? listed[at + 1] : undefined;
+
+  void showCompletionForm({
     eyebrow: "Finished",
     title: levelTitle,
-    // Pre-filled from the last thing this player said about this level: a
-    // re-rating that opened blank would read as the old one having been lost.
-    stars,
-    comment: was?.comment ?? null,
-    submit: ({ stars: gave, comment }) => {
-      // LOCALLY FIRST, and then the POST. A dev page with no `serve.ts` beside
-      // it and a flaky network are the same case, and in both the level has
-      // still been finished: writing progress only on a successful send would
-      // lose the completion along with the rating.
-      writeProgress(levelId, {
-        completedAt: was?.completedAt ?? Date.now(),
-        stars: gave,
-        comment,
-        submittedAt: Date.now(),
-      });
-      void submitFeedback({
-        level: levelId,
-        levelHash,
-        commit,
-        dirty,
-        srcHash,
-        stars: gave,
-        comment,
-        // The run that finished it, so a rating can be read beside the play it
-        // came out of. A re-rating from the level select carries neither.
-        ...(recorder?.session ? { session: recorder.session, run: resets } : {}),
-        completedFrame,
-      }).then((ok) => {
-        if (!ok) showToast("Could not send that - it is saved on this device.", "warn");
-      });
-    },
-    // Skip is a first-class outcome: the level was finished and nothing was
-    // said, which is a real answer rather than a missing one.
-    skip: () => {
-      writeProgress(levelId, {
-        completedAt: was?.completedAt ?? Date.now(),
-        stars: was?.stars ?? null,
-        comment: was?.comment ?? null,
-        submittedAt: was?.submittedAt ?? null,
-      });
-    },
-  }).then(() => {
-    // Back to the level select, which is where a finished level leads. A
-    // navigation rather than an in-page return, for the reason picking a level
-    // is one: a session is a page load (see docs/levels.md).
-    location.href = "/";
+    seconds,
+    ask: sendable
+      ? {
+          // Nothing to pre-fill: the half is only here when nothing has been
+          // sent about this level.
+          stars: null,
+          difficulty: null,
+          comment: null,
+          submit: ({ stars, difficulty, comment }) => {
+            // LOCALLY FIRST, and then the POST. A dev page with no `serve.ts`
+            // beside it and a flaky network are the same case, and in both the
+            // player still said this: writing progress only on a successful
+            // send would lose the rating along with the round trip.
+            writeProgress(levelId, {
+              completedAt,
+              stars,
+              difficulty,
+              comment,
+              submittedAt: Date.now(),
+            });
+            void submitFeedback({
+              level: levelId,
+              levelHash,
+              commit,
+              dirty,
+              srcHash,
+              stars,
+              difficulty,
+              comment,
+              // The run that finished it, so a rating can be read beside the
+              // play it came out of. A re-rating from the level select carries
+              // neither.
+              ...(recorder?.session ? { session: recorder.session, run: resets } : {}),
+              completedFrame,
+            }).then((ok) => {
+              if (!ok) showToast("Could not send that - it is saved on this device.", "warn");
+            });
+          },
+        }
+      : null,
+    actions: [
+      { label: "Retry", run: retryLevel },
+      // A navigation rather than an in-page boot, which the menu's own rows do
+      // instead: this page has spent its session on the level it just finished
+      // (`SessionMeta` is fixed for one level), so the next one is the next page
+      // load - see docs/levels.md.
+      ...(next
+        ? [{ label: "Next Level", run: () => { location.href = `/?level=${encodeURIComponent(next.id)}`; } }]
+        : []),
+      // LAST, because it is what Esc runs (see `showCompletionForm`).
+      { label: "Menu", run: () => { location.href = "/"; } },
+    ],
   });
 }
 

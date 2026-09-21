@@ -2,11 +2,16 @@
 // left for it (see docs/levels.md).
 //
 // The level select reads it to draw its marks, the completion flow writes it,
-// and the feedback form reads it back to pre-fill. It is kept in
-// `localStorage` rather than on the server because it is a convenience rather
-// than a record: the server already has the runs and the feedback, and a menu
-// that cannot say what you have played until a fetch answers is a menu that
-// flickers. Cross-device progress is a separate feature and is not this.
+// and the feedback form reads it back to pre-fill. It is also WHAT DECIDES
+// WHETHER THE FORM IS SHOWN AT ALL: an entry here means this browser has
+// finished the level before, and the form is asked for once (see
+// `completeLevel` in main.ts).
+//
+// It is kept in `localStorage` rather than on the server because it is a
+// convenience rather than a record: the server already has the runs and the
+// feedback, and a menu that cannot say what you have played until a fetch
+// answers is a menu that flickers. Cross-device progress is a separate feature
+// and is not this.
 //
 // EVERY ACCESS IS GUARDED, and not as a formality. `localStorage` throws
 // outright in some privacy modes, comes back empty after the player clears
@@ -25,6 +30,10 @@ export interface LevelProgress {
   // which is what Skip leaves, and it is a real state rather than a missing
   // one: "played it, said nothing" is not "never played it".
   stars: number | null;
+  // The bipolar difficulty answer, 1..5 with 3 for "just right" (see
+  // `playtest/feedback.ts`). Absent on an entry written before this field
+  // existed, so every read of it takes `?? null`.
+  difficulty: number | null;
   comment: string | null;
   submittedAt: number | null;
 }

@@ -135,21 +135,49 @@ It is a convenience rather than a record: the server already has the runs and th
 Every access is guarded, because storage throws outright in some privacy modes, comes back empty after a clear and is absent in a preview - and the menu has to paint correctly with no storage at all, the marks being the one thing on it that is not the offer.
 Cross-device progress is a separate feature and is not this.
 
-## The feedback form
+## The completion panel
 
-`render/feedbackForm.ts`: **How fun was this level?** over five stars, a comment, **Submit** and **Skip**, shown over the frozen level or over the menu's own list.
-The question is on the panel because a row of stars on its own is a rating of something unstated - the level, the run, the game - and five stars for "how fun" is a different answer from five stars for "how hard".
+`render/completionForm.ts`: the panel a level ends at, over the frozen level (`completeLevel` in `main.ts`) or over the menu's own list (a row's `rate` link).
+It is one panel with two halves, and the halves are answerable at different rates.
 
-Both fields are optional and that is the point rather than a convenience - a form that insists on a rating collects a rating from people who did not have one, which is worse than no answer.
-Skip is a first-class outcome: the level was finished and nothing was said.
-**Submit is dark until one of the two is filled in**, which follows from that rather than contradicting it: an empty submission and a skip are the same act, so the empty one was the same button twice over, and the version of it that POSTs is the one that costs a round trip to say nothing.
-It is disabled rather than hidden, with Skip lit beside it, so the way out of an empty form is always visible.
-Esc is Skip, the first star takes the focus so the keyboard works without a click, and pressing the star that is already the rating clears it.
+**The time and the exits are what every crossing gets.**
+A level that finishes says what it took - `M:SS.CC` off `completedFrame` and the fixed 1/60 step, so it is the run's own clock and a frame dropped to a slow machine does not make the level take longer - and it offers **Retry**, **Next Level** and **Menu**.
+Next Level is the next row in the menu's own order (`listedLevels`), so the button and the list agree about what "next" means; the last level in the list offers no Next Level at all rather than a button that quietly goes back to the start.
+Retry rebuilds the level **in this page** rather than reloading: fullscreen and the pointer lock do not survive a navigation (see [**The level select**](#the-level-select)), so a reload would drop the player out of the screen they are playing in and make them click their way back.
+It is the same act a jump press already is, so it is the same `reset`, plus a zeroed `accumulator` - time spent reading a panel is not time the sim is behind by, and leaving the debt would fast-forward the first seconds of the new run.
 
-It comes up from two places and says which: **Finished** from a run that has just crossed the line, **Rate** from a completed row's `rate` link on the menu, where nothing was played.
-A re-rating opens **pre-filled** from the last thing this player said about this level, since one that opened blank would read as the old one having been lost.
+**The feedback half is asked for until it is answered.**
+A first crossing is asked, and so is a later one where nothing has ever been sent - a player who had no opinion the first time may well have one on the fourth.
+What is not asked again is a player who has already said something: a form put in front of someone with nothing new to say collects an answer they did not have, and a level worth replaying is exactly the level whose form would be in the way on every lap.
+Storage that throws or has been cleared reads as "never played", so the panel asks again - the cost of asking twice is a question, and the cost of never asking is a playtest with no answers.
+The way back to it afterwards is the menu row's `rate` link, on every level this browser has finished.
 
-**Progress is written locally BEFORE the POST.** A dev page with no `serve.ts` beside it and a flaky network are the same case, and in both the level has still been finished: writing progress only on a successful send would lose the completion along with the rating.
+It asks three things, all optional.
+**How fun was this level?** over five stars; **How was the difficulty?** over a five-point bipolar scale; and a comment.
+The questions are on the panel because a row of stars on its own is a rating of something unstated - the level, the run, the game - and five stars for "how fun" is a different answer from five stars for "how hard".
+
+**The difficulty scale is bipolar, not a ramp**, and the difference is the whole reason the field exists (`Difficulty` in `playtest/feedback.ts`).
+`3` is *just right* and the two ends are the two ways of being wrong: "2 out of 5 for difficulty" is either an easy level or a badly tuned one, and a record that cannot say which is a record of nothing.
+What a playtest wants is which **side** of right a level fell on and by how far, so the five cells carry their own words - *Way too easy*, *A bit easy*, *Just right*, *A bit hard*, *Way too hard* - rather than sitting bare between a pair of end captions, and exactly one of them lights.
+Filling up to the answer the way the stars do would read as a ramp again.
+Under 480px the five cells stand up into a column, because five cells side by side need about eight monospace columns each to hold "Way too" on one line.
+
+Every field being optional is the point rather than a convenience - a form that insists on a rating collects a rating from people who did not have one, which is worse than no answer.
+**Submit is dark until there is something new to send**: an empty submission is a round trip that says nothing, and a repeat submission appends the same answer twice to a store that is append-only precisely so that two records mean two opinions.
+It is disabled rather than hidden, because a button that appears when you type is a button nobody knew was coming.
+Esc runs the **last** action - Menu on the game page, Close on the menu - and pressing the star or the difficulty cell that is already the answer clears it.
+Nothing takes the focus, since a focused star reads as a rating already given; Tab still reaches every control.
+
+**Sending does not close the panel.**
+The two acts are unrelated - one posts a rating, the other decides what to play next - and a Submit that navigated would be a form that punishes answering it by taking the level away.
+Submit posts, says so, and leaves the player where they were with the exits still under their hand.
+
+It says which of the two places it came from: **Finished** from a run that has just crossed the line, **Rate** from the menu, where nothing was played and there is no time to report, nothing to retry and one way out.
+A re-rating opens **pre-filled** from the last thing this player said about this level, since one that opened blank would read as the old one having been lost - and Submit opens dark on it, because that answer is already in the store.
+
+**The completion is recorded locally before anything is asked**, and the rating is recorded locally before the POST.
+Finishing the level is what happened; a rating is a separate thing that may or may not follow, and a completion written only down the Submit path would be a level the menu forgets you played because you had nothing to say about it.
+A dev page with no `serve.ts` beside it and a flaky network are the same case, and in both the player still said this.
 The failure shows as a toast and is not retried - a rating is not a run, losing one is tolerable, and the player can rate again from the menu.
 
 ### What is kept
@@ -163,8 +191,12 @@ The two exceptions are both admin acts and both say so where they are - `deleteP
 
 Every record carries the page's own claim about which tree and which level file it was played on **and the server's answer beside it** (`hereCommit`, `hereLevelHash`), so a client lying about either is visible rather than believed.
 
-`/admin` gains a **feedback** tab: when, player, level, `v2 of 3`, stars, comment, commit and the level file, with a row whose tree or level file is not the one being served marked the way a run's commit is.
-`cli pull` writes the same rows to `playtests/prod/feedback.ndjson` and prints them with their version counts.
+A record written before the difficulty scale existed carries no `difficulty` field at all, and that is not malformed - it is last week's tree, still open in somebody's tab.
+The route accepts a body without it and stores null; every reader takes `difficulty ?? null`, so "never asked" and "asked, no answer" are the same blank, which is the truth about both.
+
+`/admin` gains a **feedback** tab: when, player, level, `v2 of 3`, stars, difficulty, comment, commit and the level file, with a row whose tree or level file is not the one being served marked the way a run's commit is.
+Difficulty is shown and filtered by its words rather than by 1..5, with the two ends marked `<<` and `>>`, so a column of them can be read straight down for whether a level is missing and which way.
+`cli pull` writes the same rows to `playtests/prod/feedback.ndjson` and prints them with their version counts, drawing the difficulty as a fixed-width bar for the same reason.
 
 ## The level hash
 
