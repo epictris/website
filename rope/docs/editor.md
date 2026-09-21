@@ -259,20 +259,22 @@ A move is then written as a CHANGE against where the handles started rather than
 | Target | move | rotate | scale |
 |---|---|---|---|
 | geometry: mesh | x, y, z | x, y, z | its one `scale` |
-| geometry: primitive | x, y, z | z | w/h + depth |
+| geometry: primitive | x, y, z | x, y, z | w/h + depth |
 | collision shape | x, y | z | w/h |
 | light | x, y, z | z (its aim) | - (its reach is the 2D radius handle) |
 | body | x, y | z, as a delta about the centre of mass | - (a body has no size; its objects do) |
 
-A **primitive does not tip**, and that is this table's rule rather than an exception to it.
-`EdVisual.rotX`/`rotY` are carried by the holder object `mountVisual` builds for a **prop**, and it returns before that on a primitive - which is its own outline extruded along z and has nowhere to put an out-of-plane angle.
-So the x and y rings on a primitive were a dial connected to nothing: the gizmo tilted, `rot x°`/`rot y°` changed, and the level went on looking exactly as it did.
-`visualData` stops writing the two fields for a primitive for the same reason `mesh` has always been written only for a mesh - a pose nothing draws is not a pose the file should record.
+**A primitive tips like a prop does**, and that is this table's rule rather than an exception to it: `EdVisual.rotX`/`rotY` belong to what is DRAWN, so `mountVisual` turns an extrusion by them exactly as it turns a prop's holder, and `visualData` writes them for either kind.
+The pivot is the object's own origin, and an extrusion is built centred on z (`extrude.ts`), so a rect tipped about x is a ramp hinged on its own middle rather than on its back face.
+It was a prop's field alone while nothing in the extrusion path read it - the ring turned, `rot x°` changed, and the level went on looking exactly as it did - which is the shape of the bug this closes, not a reason the plane is special.
+
+What a tipped primitive does NOT do is move the collision: the body still collides with the outline its collision objects state, in the plane, and the 2D renderer still draws that outline face on.
+A ramp the ball can actually run up is a collision shape turned by `rot`; this is the look.
 
 Two consequences worth knowing before reaching for it.
 A **mesh has one `scale`**, so any axis of the handle drives it, by the mean of the three factors - the uniform centre handle is exact and a single axis is an approximation of "bigger", because the file has one number and cannot record more.
 And **an axis pointing at the camera cannot be dragged**, which head on is z for a move and the ring for a turn: `TransformControls` hides a handle within a few degrees of the view direction, and maps a ring drag onto the screen direction perpendicular to both the axis and the view, which degenerates as the two line up.
-Turning about z head on is therefore the 2D rotate knob's job (or the outer screen-space ring, which a mesh gets since all three of its axes are authorable), and moving through z head on is the **depth handle** below.
+Turning about z head on is therefore the 2D rotate knob's job (or the outer screen-space ring, which anything drawn gets since all three of its axes are authorable), and moving through z head on is the **depth handle** below.
 Orbited, both gizmo handles behave normally - which is the pairing: orbit to see the depth, drag the blue arrow to author it.
 
 ## The depth handle

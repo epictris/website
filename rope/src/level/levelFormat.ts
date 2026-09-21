@@ -612,6 +612,12 @@ export interface GeometryObjectData extends ObjectPlacement {
   // Rotation about the two axes the body's own `rot` cannot express. (Rotation
   // in the gameplay plane is `ObjectPlacement.rot`, shared with every other
   // object kind, so a prop and the light beside it are turned by the same field.)
+  //
+  // BOTH kinds tip: `mountVisual` turns a prop's holder and an extrusion itself
+  // by these, about the object's own origin, and an extrusion is built centred
+  // on z - so a rect tipped about x is a ramp hinged on its own middle rather
+  // than on its back face. It is APPEARANCE, like every other field here: what a
+  // body collides with is its collision objects, which stay in the plane.
   rotX?: number;
   rotY?: number;
   // Uniform mesh scale, dimensionless: it multiplies a model's own size and is

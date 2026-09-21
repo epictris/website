@@ -230,6 +230,15 @@ export function mountVisual(
     const mesh = new THREE.Mesh(geo, material);
     mesh.castShadow = opts.castShadow;
     mesh.receiveShadow = true;
+    // Tipped out of the gameplay plane by the same two angles a prop is, and
+    // about the same point: an extrusion is built centred on z (extrude.ts), so
+    // turning it about its own origin swings the solid about its middle rather
+    // than about its back face, and the `z` below then places that middle at the
+    // depth the object is drawn at - which is exactly what the prop's holder
+    // does one line down. A rect on its own becomes a ramp, a slab, a panel
+    // canted toward the camera; with `matchCollision` off it is a look and
+    // nothing else, so the body goes on colliding with the outline it states.
+    mesh.rotation.set(g?.rotX ?? 0, g?.rotY ?? 0, 0);
     mesh.position.z = z;
     parent.add(mesh);
     return { geometry: owned };

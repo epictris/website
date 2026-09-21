@@ -64,7 +64,7 @@ import {
   type SceneObjectData,
   type RawLevelData,
 } from "../level/levelFormat";
-import { drawnObjects } from "../render3d/bodyVisuals";
+import { drawnObjects, mountVisual } from "../render3d/bodyVisuals";
 import { DECOR_Z, depthOf } from "../level/decor";
 import ballLevelJson from "../../levels/ball.json";
 const BALL_LEVEL = ballLevelJson as unknown;
@@ -685,6 +685,100 @@ function extrusionGeometry(): CaseResult[] {
   return out;
 }
 
+// A PRIMITIVE TIPPED OUT OF THE PLANE (`GeometryObjectData.rotX`/`rotY`).
+//
+// The two angles were a prop's alone for as long as nothing in the extrusion
+// path read them, which is a bug with no symptom: the editor's rings turned, the
+// inspector's numbers changed, `visualData` wrote them for a mesh and dropped
+// them for a primitive, and the level went on looking exactly as it did. The
+// only thing that can catch that class is asserting what `mountVisual` BUILT,
+// because every other signal in the project says the pose is fine.
+//
+// It runs headlessly - which nothing else about a `BodyVisual` does (see
+// `pickIndex`) - because a FLAT FILL builds no maps: `buildSurface` returns a
+// bare `MeshStandardMaterial` for `SOLID_SURFACE` and never reaches the canvas
+// the generated surfaces are drawn on. Any textured object here would need a DOM
+// and this case would not exist.
+function tippedPrimitive(): CaseResult[] {
+  const half = new Vec2(1, 0.2);
+  const depth = 0.4;
+  const drawnAt = 0.7;
+  const rotX = 0.35;
+  const rotY = -0.8;
+  const mount = (tip: boolean): THREE.Mesh => {
+    const parent = new THREE.Group();
+    mountVisual(
+      parent,
+      () => extrudeOutline({ kind: "rect", half }, { depth, bevel: 0 }),
+      {
+        geometry: {
+          type: "geometry",
+          shape: { kind: "rect", w: half.x * 2, h: half.y * 2 },
+          // A flat fill, for the reason above, and the one surface that needs
+          // nothing downloaded either.
+          texture: SOLID_SURFACE,
+          color: "#ff0000",
+          ...(tip ? { rotX, rotY } : {}),
+        },
+      },
+      { defaultZ: drawnAt, castShadow: true, alive: () => true },
+    );
+    const mesh = parent.children[0] as THREE.Mesh;
+    mesh.updateMatrixWorld(true);
+    return mesh;
+  };
+
+  const tipped = mount(true);
+  const flat = mount(false);
+  const turned =
+    Math.abs(tipped.rotation.x - rotX) < F32 &&
+    Math.abs(tipped.rotation.y - rotY) < F32 &&
+    // Never z: the piece the object is mounted in carries `rot` (`BodyVisual`'s
+    // own child group), so writing it here would turn the thing twice.
+    tipped.rotation.z === 0;
+
+  // WHERE THE PIVOT IS. An extrusion is built centred on z, so turning the mesh
+  // about its own origin and then placing it at `defaultZ` swings the solid
+  // about its MIDDLE and leaves that middle at the depth the object is drawn at.
+  // Turning it about the piece's origin instead - the obvious alternative, and
+  // what folding the angles into the parent group would do - would carry the
+  // whole solid round an axis `drawnAt` metres behind it, which on a backdrop at
+  // -6 m is a panel that leaves the frame rather than one that tips.
+  const box = new THREE.Box3().setFromObject(tipped);
+  const centre = box.getCenter(new THREE.Vector3());
+  const centred =
+    Math.abs(centre.x) < F32 && Math.abs(centre.y) < F32 && Math.abs(centre.z - drawnAt) < F32;
+
+  // The control, and the claim that matters to every level already authored: an
+  // object that tips by nothing is mounted exactly as it was before the two
+  // angles were read at all.
+  const unchanged =
+    flat.rotation.x === 0 &&
+    flat.rotation.y === 0 &&
+    flat.rotation.z === 0 &&
+    flat.position.x === 0 &&
+    flat.position.y === 0 &&
+    flat.position.z === drawnAt;
+
+  return [
+    {
+      name: "render: a primitive is tipped out of the plane by rotX and rotY",
+      pass: turned,
+      detail: `rotation (${tipped.rotation.x}, ${tipped.rotation.y}, ${tipped.rotation.z}), want (${rotX}, ${rotY}, 0)`,
+    },
+    {
+      name: "render: a tipped primitive turns about its own middle, at the depth it is drawn at",
+      pass: centred,
+      detail: `centre (${centre.x.toFixed(6)}, ${centre.y.toFixed(6)}, ${centre.z.toFixed(6)}), want (0, 0, ${drawnAt})`,
+    },
+    {
+      name: "render: a primitive that tips by nothing is mounted exactly as before",
+      pass: unchanged,
+      detail: `rotation (${flat.rotation.x}, ${flat.rotation.y}, ${flat.rotation.z}) at z ${flat.position.z}`,
+    },
+  ];
+}
+
 // A level with every body's frame pushed onto its objects and the body left at
 // the origin. It is what makes the round trips below comparable at all: a body's
 // transform and its objects' placements are two halves of ONE answer, and the
@@ -896,7 +990,7 @@ function editorRoundTrip(): CaseResult[] {
         friction: 1,
         visual: { kind: "none" },
       },
-      // ...and a body with no visual at all, which must come back with the
+      // ...a body with no visual at all, which must come back with the
       // geometry object that draws it and nothing more.
       {
         kind: "static",
@@ -907,6 +1001,22 @@ function editorRoundTrip(): CaseResult[] {
         color: "#555555",
         opacity: 0.5,
         friction: 1,
+      },
+      // ...and a PRIMITIVE tipped out of the plane. The two angles were a
+      // prop's alone while nothing in the extrusion path read them, and
+      // `visualData` dropped them for a primitive on the way out to say so -
+      // so a save that goes back to dropping them silently flattens every
+      // canted panel in a level 750 ms after it is opened.
+      {
+        kind: "static",
+        x: 700,
+        y: 0,
+        rot: 0,
+        shape: { kind: "rect", w: 200, h: 40 },
+        color: "#555555",
+        opacity: 0.5,
+        friction: 1,
+        visual: { rotX: 0.35, rotY: -0.8 },
       },
     ],
     backgrounds: [
@@ -963,6 +1073,12 @@ function editorRoundTrip(): CaseResult[] {
     JSON.stringify(reopened.bodies[0]!.objects) ===
     JSON.stringify([{ type: "collision", shape: { kind: "rect", w: 80, h: 80 } }]);
 
+  // The tipped primitive, read back off the object the editor wrote. The
+  // byte-identity above already covers it, but it covers it as one difference
+  // in a blob of twenty fields; this says which field went.
+  const tipped = lookOf(back.bodies[4]!);
+  const keptTip = tipped?.rotX === 0.35 && tipped?.rotY === -0.8;
+
   return [
     {
       name: "editor: a level with visuals saves back byte-identical",
@@ -982,6 +1098,13 @@ function editorRoundTrip(): CaseResult[] {
       detail: stayedBare
         ? "one collision object, nothing added"
         : `wrote ${JSON.stringify(reopened.bodies[0]!.objects)}`,
+    },
+    {
+      name: "editor: a primitive's out-of-plane tip survives a save",
+      pass: keptTip,
+      detail: keptTip
+        ? "rotX and rotY written for a primitive as for a prop"
+        : `wrote rotX ${tipped?.rotX}, rotY ${tipped?.rotY}`,
     },
   ];
 }
@@ -3137,6 +3260,7 @@ export function runRender3dCases(): CaseResult[] {
     ...orbitView(),
     ...orthographicView(),
     ...extrusionGeometry(),
+    ...tippedPrimitive(),
     ...depthOrdering(),
     ...surfaceResolution(),
     ...visualRoundTrip(),

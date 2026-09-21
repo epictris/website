@@ -1091,13 +1091,15 @@ export function visualData(v: EdVisual): GeometryObjectData | undefined {
     ...(v.kind !== d.kind ? { kind: v.kind } : {}),
     ...(v.kind === "mesh" && v.mesh ? { mesh: v.mesh } : {}),
     ...(v.offsetZ !== 0 ? { z: v.offsetZ } : {}),
-    // Out-of-plane tips are a PROP's, like `mesh` above: `mountVisual` builds the
-    // holder that carries them only for a mesh, and a primitive is its own
-    // outline extruded along z, so writing them there records a pose nothing
-    // draws and an author cannot see - which is exactly what the gizmo's x and y
-    // rings used to be before they were dropped for a primitive.
-    ...(v.kind === "mesh" && v.rotX !== 0 ? { rotX: v.rotX } : {}),
-    ...(v.kind === "mesh" && v.rotY !== 0 ? { rotY: v.rotY } : {}),
+    // Out-of-plane tips are written for EITHER kind: `mountVisual` turns the
+    // extrusion by them exactly as it turns a prop's holder, about the same
+    // point, so the field records a pose that is drawn whichever way the object
+    // gets its look. (They were a prop's alone while a primitive had nowhere to
+    // put them, and the gizmo's x and y rings on one were a dial connected to
+    // nothing; the renderer carries them now, so the ring, the number and the
+    // picture agree.)
+    ...(v.rotX !== 0 ? { rotX: v.rotX } : {}),
+    ...(v.rotY !== 0 ? { rotY: v.rotY } : {}),
     ...(v.scale !== d.scale ? { scale: v.scale } : {}),
     ...(v.depth !== null ? { depth: v.depth } : {}),
     ...(v.texture ? { texture: v.texture } : {}),

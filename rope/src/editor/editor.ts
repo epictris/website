@@ -1113,20 +1113,16 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // shape that can never be grabbed again, and negative is a shape inside out.
   const MIN_EXTENT = PX;
 
-  // Does this item tip out of the gameplay plane? Only a MESH does. A primitive
-  // is its own shape extruded along z, so there is no `rotX`/`rotY` anywhere in
-  // the path that draws it, and the rings that wrote those fields were a dial
-  // connected to nothing: the gizmo tilted, the inspector's numbers changed, the
-  // level went on looking exactly as it did.
-  const tips = (i: EdItem): boolean => i.object === "geometry" && i.visual.kind === "mesh";
+  // Does this item tip out of the gameplay plane? Anything that is DRAWN does,
+  // whichever way it gets its look: `mountVisual` turns a prop's holder and an
+  // extrusion itself by `rotX`/`rotY`, about the same point. A collision shape
+  // and a light have nowhere to put the answer, so neither is offered the rings.
+  const tips = (i: EdItem): boolean => i.object === "geometry";
 
   // The item's orientation as three sees it: the same composition the renderer
-  // builds (`mountVisual` turns the piece about z and the holder about x and y),
-  // which is why the decomposition below reads Euler order ZXY and gets exactly
-  // `rotX`, `rotY` and `-rot` back.
-  //
-  // That holder is built for a MESH alone - `mountVisual` returns before it on a
-  // primitive - so `rotX`/`rotY` are a prop's fields and nothing else's.
+  // builds (`mountVisual` turns the piece about z and the drawn thing inside it
+  // about x and y), which is why the decomposition below reads Euler order ZXY
+  // and gets exactly `rotX`, `rotY` and `-rot` back.
   function itemQuat(i: EdItem): THREE.Quaternion {
     const geo = tips(i);
     return new THREE.Quaternion().setFromEuler(
@@ -1200,9 +1196,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         if (mode === "translate") return { x: true, y: true, z: offPlane };
         if (mode === "rotate") {
           // A shape's rotation in the plane is the only one the level records
-          // for it; the two out-of-plane ones exist on a PROP alone, since a
-          // primitive is drawn by extruding its own outline along z and nothing
-          // in that path reads `rotX`/`rotY` (see `tips`).
+          // for it; the two out-of-plane ones belong to what is DRAWN, prop or
+          // primitive alike, and a collision shape has neither (see `tips`).
           return { x: tips(it), y: tips(it), z: true };
         }
         // Scale. An anchor is a point and a light is a reach authored by its own
@@ -4160,15 +4155,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       mw.appendChild(ms);
       g.appendChild(mw);
 
-      // Placement of the prop in the shape's own frame. Lengths in pixels like
-      // every other length; the rotations are angles and are authored in
-      // degrees, as `rot°` is.
-      // The two rotations the item's own in-plane transform cannot express.
-      // Its x, y and rotation are the ITEM's, edited above like every other
-      // object's - a geometry object has a transform of its own now, so the look
-      // does not carry a second one that could disagree with it.
-      num("rot x°", (v) => deg(v.rotX), (v, d) => (v.rotX = rad(d)), 5);
-      num("rot y°", (v) => deg(v.rotY), (v, d) => (v.rotY = rad(d)), 5);
       // Dimensionless: it multiplies the model's own size, so it is not a length
       // and does not scale on the way to disk.
       num("scale", (v) => v.scale, (v, s) => (v.scale = s), 0.1);
@@ -4179,6 +4165,15 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // point of the section - a panel at -20 m parallaxes as the camera pans,
     // where a panel at 0 is the flat fill the 2D renderer draws.
     num("off z", (v) => v.offsetZ * M2PX, (v, z) => (v.offsetZ = z * PX), 5);
+
+    // The two rotations the item's own in-plane transform cannot express, and
+    // like `off z` they apply whatever the kind is: a prop's holder and an
+    // extrusion are turned by them alike. Its x, y and rotation are the ITEM's,
+    // edited above like every other object's - a geometry object has a transform
+    // of its own now, so the look does not carry a second one that could
+    // disagree with it. Angles in degrees, as `rot°` is.
+    num("rot x°", (v) => deg(v.rotX), (v, d) => (v.rotX = rad(d)), 5);
+    num("rot y°", (v) => deg(v.rotY), (v, d) => (v.rotY = rad(d)), 5);
 
     if (sharedKind !== "mesh") {
       // Extrusion controls. Both are optional overrides with a real third state

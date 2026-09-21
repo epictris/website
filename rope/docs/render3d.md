@@ -108,6 +108,11 @@ A **geometry object** is the choice between the two ways a thing gets a look:
 - `kind: "primitive"` (or absent) draws its own `shape` as a solid: a **rect is a rectangular prism**, a **circle is a cylinder** (three's own lathe rather than a 24-gon extrusion, so a barrel's highlight travels round it smoothly) and a polygon is that outline extruded. `depth`, `bevel`, `texture` and `tileScale` are its own; `depth` defaults to `DEFAULT_THICKNESS` on a body that collides and `DECOR_DEPTH` on one that does not, and `bevel` to none.
 - `kind: "mesh"` replaces it with a named **GLB prop** from the manifest, placed by the object's own `x`/`y`/`rot` plus `z`, `rotX`, `rotY` and a dimensionless `scale`. It keeps the materials its own file carries **unless** the object names a `texture`, in which case it wears that instead - which is what lets a bare, geometry-only export (~20 KB) be dressed as the same stone the walls are made of, and what makes "a GLB **or** a primitive" the real choice rather than "a GLB or a textured primitive".
 
+**Out of the plane, both kinds tip the same way.**
+`rotX`/`rotY` turn the drawn thing inside its piece - a prop's holder, an extrusion itself - about the object's own origin, and since an extrusion is built centred on z the pivot is the solid's middle rather than its back face: a rect canted about x is a ramp hinged on itself.
+It is a look and nothing more, like every other field on the object: the body collides with the outline its collision objects state, in the plane, and the 2D renderer draws that outline face on.
+A surface the ball can actually run up is `rot` on a collision shape; this is what makes a panel read as one seen slightly from the side.
+
 There is deliberately no third answer for "drawn by nothing": a body draws its geometry objects and nothing else, so an invisible wall is a body with **no geometry object**, which is also what an editor draw produces before anything dresses it.
 A primitive with no `shape` at all draws the same unit placeholder an unfetched prop does - visible and obviously wrong, rather than silently absent.
 
