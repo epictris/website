@@ -28,6 +28,11 @@ import ballLevelJson from "../../levels/ball.json";
 // until it is - the menu's list is built from THIS map, through the preload
 // manifest (see `listedLevels` below and docs/levels.md).
 import caveJson from "../../levels/cave.json";
+// The rails level: the third of the authored arenas, a descent along ziplines
+// and bars the cuff clamps onto and slides down (see `lib/rail.ts`). Listed for
+// the same reason `CAVE` is - a file in `levels/` is not a level until it is in
+// THIS map.
+import railsJson from "../../levels/rails.json";
 // The rail sandbox: a low-friction zipline between two posts, a peg, and a
 // hanging lantern whose handles are rails and whose lid, bulb and base are
 // hook-proof (see `lib/rail.ts`). Hand-authored, so `levels/ball.json` - which
@@ -98,6 +103,9 @@ export const LEVELS: Record<string, LevelSpec> = {
   // and answers to the level lint - a finish line to cross, and exactly one
   // level in the list claiming `intro`.
   CAVE: { data: caveJson as RawLevelData, controller: "ball", file: "cave" },
+  // The rails descent (see the import): listed, so it carries a finish line and
+  // a title of its own and `cli levels` holds it to both.
+  RAILS: { data: railsJson as RawLevelData, controller: "ball", file: "rails" },
   // Rails to clamp and slide along, driven with the ball (see `lib/rail.ts`).
   RAIL_TEST: { data: railTestJson as RawLevelData, controller: "ball", file: "rail-test" },
   // Mud to bite into and creep through, driven with the ball (see `lib/viscous.ts`).
