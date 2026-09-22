@@ -68,6 +68,7 @@ import {
   DEFAULT_PATH_LOOKAHEAD_Y,
   DEFAULT_PATH_RANGE_X,
   DEFAULT_PATH_RANGE_Y,
+  DEFAULT_PATH_REACTION,
   DEFAULT_PATH_SOFTNESS,
   DEFAULT_VIEWPORT_SCALE,
 } from "../level/levelFormat";
@@ -395,6 +396,18 @@ export const CAMERA_EDGE_SMOOTHING = 0.3;
 // about the edge of the frame.
 export const CAMERA_STICK_TAU = 1.5;
 
+// How long the progress rate the SPEED LEAD is bought with is smoothed over, in
+// seconds (see `CameraController.progressRate`).
+//
+// The lead is stretched by `rate * reactionTime`, so `rate` is a term in the
+// camera's target and its own noise reaches the screen. A frame-to-frame
+// difference of the lead origin is noisy at exactly the scale that matters -
+// the origin is dragged by an edge of the deadband, so it moves in bursts even
+// while the player travels steadily - and 0.3 s is long enough to read that as
+// one speed and short enough that a player who stops sees the lead come back
+// within about a second, through the motion layer.
+export const CAMERA_RATE_TAU = 0.3;
+
 // The buffer a region actually holds by: its own, or the jitter default.
 //
 // A rect may state one per side (`bufferLeft` and friends), each falling back to
@@ -544,19 +557,21 @@ export function buildCameraRules(
 
 // --- keys -------------------------------------------------------------------
 //
-// The fields a node may key (see `CameraPathVert`). The first five shape the
-// path's TARGET - how much world is on screen, how far ahead the camera looks
-// and how much slack that lead is measured with - and are read at the
-// committed lead origin. The last five shape the GRIP - the corridor, its
-// falloff band and the release hysteresis - and are read at `sNear`, the arc
-// length the range is measured from. `pathParamsAt` resolves all ten at
-// whatever `s` it is given; the caller knows which `s` a field is about.
+// The fields a node may key (see `CameraPathVert`). The first six shape the
+// path's TARGET - how much world is on screen, how far ahead the camera looks,
+// how much slack that lead is measured with and how many seconds of warning it
+// is stretched by - and are read at the committed lead origin. The last five
+// shape the GRIP - the corridor, its falloff band and the release hysteresis -
+// and are read at `sNear`, the arc length the range is measured from.
+// `pathParamsAt` resolves all eleven at whatever `s` it is given; the caller
+// knows which `s` a field is about.
 export const PATH_KEY_FIELDS = [
   "viewportScale",
   "lookaheadX",
   "lookaheadY",
   "lookaheadBufferX",
   "lookaheadBufferY",
+  "reactionTime",
   "rangeX",
   "rangeY",
   "falloffX",
@@ -580,6 +595,7 @@ const PATH_PARAM_DEFAULTS: PathParams = {
   lookaheadY: DEFAULT_PATH_LOOKAHEAD_Y,
   lookaheadBufferX: DEFAULT_PATH_LOOKAHEAD_BUFFER_X,
   lookaheadBufferY: DEFAULT_PATH_LOOKAHEAD_BUFFER_Y,
+  reactionTime: DEFAULT_PATH_REACTION,
   rangeX: DEFAULT_PATH_RANGE_X,
   rangeY: DEFAULT_PATH_RANGE_Y,
   falloffX: DEFAULT_PATH_FALLOFF_X,
@@ -704,6 +720,10 @@ export function blendCameraTarget(
   baseZoom: number,
   // The committed lead origin, for the path in the set; ignored by regions.
   s = 0,
+  // How fast that origin is travelling down the route, m/s, smoothed (see
+  // `CameraController.progressRate`). It is what buys the SPEED LEAD, and it is
+  // ignored by regions too.
+  rate = 0,
 ): CameraTarget {
   let total = 0;
   for (const i of influences) total += Math.max(0, i.weight);
@@ -714,7 +734,7 @@ export function blendCameraTarget(
   for (const i of influences) {
     const w = Math.max(0, i.weight) * scale;
     if (w <= 0) continue;
-    const t = cameraRuleTarget(i.rule, follow, baseZoom, s);
+    const t = cameraRuleTarget(i.rule, follow, baseZoom, s, rate);
     pos = pos.add(t.pos.mul(w));
     logZoom += w * Math.log(Math.max(1e-9, t.zoom));
   }
@@ -1031,6 +1051,7 @@ export function cameraRuleTarget(
   follow: Vec2,
   baseZoom: number,
   s = 0,
+  rate = 0,
 ): CameraTarget {
   if (!rule) return { pos: follow, zoom: baseZoom };
   if (rule.kind === "path") {
@@ -1050,7 +1071,7 @@ export function cameraRuleTarget(
     // release delta is zero by construction - the same fade as before, moved
     // out to where every rule's fade now happens.
     return {
-      pos: pointAtArcLength(rule.index, s + pathLeadAlong(rule, s, params)),
+      pos: pointAtArcLength(rule.index, s + pathLeadAlong(rule, s, params, rate)),
       zoom: baseZoom / Math.max(0.01, params.viewportScale),
     };
   }
@@ -1085,11 +1106,35 @@ function pathLeadAlong(
   rule: CameraRule & { kind: "path" },
   s: number,
   params: PathParams = pathParamsAt(rule, s),
+  rate = 0,
 ): number {
   const here = pointAtArcLength(rule.index, s);
-  const first = pathLookahead(params, tangentAt(rule.index, s));
+  const first = leadFor(params, tangentAt(rule.index, s), rate);
   const chord = pointAtArcLength(rule.index, s + first).sub(here);
-  return pathLookahead(params, chord.lengthSquared() > 0 ? chord : tangentAt(rule.index, s));
+  return leadFor(params, chord.lengthSquared() > 0 ? chord : tangentAt(rule.index, s), rate);
+}
+
+// The whole lead along `dir`: the authored distance, plus the SPEED LEAD.
+//
+// The authored pair is a distance, so on its own a player travelling at 8 m/s
+// sees exactly as far ahead as one strolling at 1 - which is the opposite of
+// what a camera is for. The second half is "time to react" made explicit:
+// `progressRate * reactionTime` metres of route, which at a given speed is a
+// fixed number of SECONDS of warning however fast the player is going.
+//
+// Capped at the authored lead, so a fast player sees at most twice as far ahead
+// as a slow one - and capped against the lead RESOLVED ALONG `dir`, which is
+// what keeps it per-axis: a shaft with `lookaheadY: 0` gets no speed lead up it
+// either, where a cap in metres would have put the camera over the player's
+// head the moment they fell fast enough.
+//
+// `rate` is the rate of the COMMITTED lead origin rather than of the raw
+// progress (see `CameraController.progressRate`), and it is floored at zero:
+// backtracking is not a reason to look further ahead, and the lead never
+// reverses (see `pathLookahead`).
+export function leadFor(p: PathParams, dir: Vec2, rate: number): number {
+  const lead = pathLookahead(p, dir);
+  return lead + Math.min(lead, Math.max(0, rate) * Math.max(0, p.reactionTime));
 }
 
 // The polyline's direction at `s`, from a short chord across it. A chord rather
@@ -1337,6 +1382,10 @@ export interface HeldCamera {
   // it stops being asked for. Nonzero on an axis means the camera is being held
   // there rather than aiming where the level asked.
   stick: { x: number; y: number };
+  // How fast the committed lead origin is travelling down the route, m/s,
+  // smoothed - what the speed lead is bought with (see `leadFor`). Meaningless
+  // unless a path is in the set.
+  rate: number;
 }
 
 // WHAT WAS HERE: `CameraHang`, the avatar's line as the camera saw it - the
@@ -1439,6 +1488,20 @@ export class CameraController {
   // runs back and forth underneath.
   private pathLeadS = 0;
 
+  // How fast the committed lead origin is travelling down the route, m/s,
+  // smoothed over CAMERA_RATE_TAU. It is what the speed lead is bought with
+  // (see `leadFor`).
+  //
+  // Taken from the rate of the COMMITTED origin rather than of the raw
+  // progress, and that is the whole reason it is here rather than in the
+  // projection: `leadS` is deadbanded and, while anchored, ratcheted. A swing
+  // moves it only when the swing EXTENDS, so a hang does not pump the lead,
+  // while genuine travel down the route reads as its true rate. Read off `s`
+  // instead, every arc of every swing would buy a metre of extra lead and give
+  // it back.
+  private progressRate = 0;
+  private lastLeadS = 0;
+
   // Set on any frame the edge clamp actually moved the camera (see
   // `clampToEdge`), for the debug overlay and for nothing else.
   private edge: { centre: Vec2; reach: Vec2; inner: Vec2 } | null = null;
@@ -1506,6 +1569,7 @@ export class CameraController {
       edge: this.edge,
       aim: this.aim,
       stick: { x: this.stickX, y: this.stickY },
+      rate: this.progressRate,
     };
   }
 
@@ -1570,6 +1634,8 @@ export class CameraController {
       this.pathS = 0;
       this.pathNearS = 0;
       this.pathLeadS = 0;
+      this.progressRate = 0;
+      this.lastLeadS = 0;
       this.aimPullX = 0;
       this.aimPullY = 0;
       this.stickX = 0;
@@ -1689,12 +1755,26 @@ export class CameraController {
           )
         : s;
 
+    // How fast the lead origin is travelling down the route, smoothed (see
+    // `progressRate`). A re-acquisition contributes no sample at all: the
+    // origin moves by the whole gap between two branches on that frame, which
+    // is not a speed, and a filter fed it would buy several metres of lead off
+    // one frame of geometry.
+    const reseeded = !this.started || nextSeat !== seat || branchJump;
+    if (!reseeded && dt > 0) {
+      const raw = (leadS - this.lastLeadS) / dt;
+      this.progressRate += (raw - this.progressRate) * (1 - Math.exp(-dt / CAMERA_RATE_TAU));
+    } else if (reseeded) {
+      this.progressRate = 0;
+    }
+    this.lastLeadS = leadS;
+
     // Each rule's share of the camera. A path's is read from the avatar's TRUE
     // displacement off the route - the windowed one while held, so at a
     // switchback the weight is about the branch they are actually on, exactly
     // as the grip is.
     const members = cameraInfluences(nextRules, follow, offset ? { s: nearS, off: offset } : null);
-    const target = blendCameraTarget(members, follow, baseZoom, leadS);
+    const target = blendCameraTarget(members, follow, baseZoom, leadS, this.progressRate);
 
     if (!this.started) {
       this.started = true;

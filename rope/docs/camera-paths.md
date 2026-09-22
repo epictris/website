@@ -34,6 +34,29 @@ The two cannot both hold: if the vertical displacement may never exceed `lookahe
 Isotropic pairs are identical under both readings, so this only ever differs where the two axes do.
 `rule-path-lookahead-is-per-axis` and `rule-path-lead-axis-zero-drops-only-that-axis` are the pair of cases.
 
+## The speed lead
+
+`lookaheadX`/`lookaheadY` are a **distance**, so on their own a player travelling at 8 m/s sees exactly as far ahead as one strolling at 1 - which is the opposite of what a camera is for.
+What "enough warning" means is a number of **seconds**, and the distance that buys is the speed times that.
+
+```
+progressRate = first-order filter of d(leadS)/dt, tau = CAMERA_RATE_TAU (0.3 s)
+speedLead    = min(lead, max(0, progressRate) * reactionTime)
+```
+
+`reactionTime` is an authored path field in **seconds** (0.3 s by default, keyable like the rest of the target fields and read at the committed lead origin) - the one keyable field the format does not scale.
+
+Four things about it are load-bearing:
+
+- it is the rate of the **committed** lead origin, not of the raw progress. `leadS` is deadbanded and, while anchored, ratcheted, so a swing moves it only when the swing *extends*: a hang does not pump the lead, while genuine travel down the route reads as its true rate. Read off `s` instead, every arc of every swing would buy a metre of extra lead and give it straight back.
+- it is **capped at the authored lead**, so a fast player sees at most twice as far ahead as a slow one.
+- the cap is the lead **resolved along the route** (`axisBlend`, as the lead itself is), so a shaft with `lookaheadY: 0` gets no speed lead down it either - a cap in metres would have put the camera over the player's head the moment they fell fast enough.
+- a re-acquisition contributes **no sample**: the origin moves by the whole gap between two branches on that frame, which is not a speed.
+
+Beyond all of that the screen-edge window bounds it as it bounds any other framing, and a player who stops sees the lead come back over `CAMERA_RATE_TAU` through the motion layer.
+
+`speed-lead-grows-and-caps` and `speed-lead-is-per-axis` are the cases: the lead is 2 m standing still, 2.9 m at 3 m/s and 4 m (twice) at 12 m/s on a 2 m authored lead, and 0 down a shaft that zeroes its vertical lead however fast the player falls.
+
 ## The lookahead buffer
 
 `lookaheadBufferX` / `lookaheadBufferY` are a **deadband on the arc length the lead is measured from**, and they are the answer to swinging.
@@ -96,10 +119,10 @@ Inserting on an edge is a **de Casteljau split at t = 1/2**, so a bowed edge gai
 
 ## Keys
 
-A node may **key** any of the path's tuning fields - `viewportScale`, `lookaheadX/Y`, `lookaheadBufferX/Y`, `rangeX/Y`, `falloffX/Y`, `buffer` and `windBuffer`, as optionals on `CameraPathVert` - so the framing and the grip change along the route: a tighter view through a corridor, a longer lead down a drop, a wider corridor where the level opens out.
+A node may **key** any of the path's tuning fields - `viewportScale`, `lookaheadX/Y`, `lookaheadBufferX/Y`, `reactionTime`, `rangeX/Y`, `falloffX/Y` and `buffer`, as optionals on `CameraPathVert` - so the framing and the grip change along the route: a tighter view through a corridor, a longer lead down a drop, a wider corridor where the level opens out. `softness` is deliberately not among them (see [**The soft projection**](#the-soft-projection)).
 A node that carries a value is a keyframe for THAT field only, and a node that carries none is transparent to it.
 Per field, `pathParamsAt` holds the first key's value before it and the last key's after it, smoothsteps between two by arc length (flat at each key, for the same reason the falloff band is smoothstepped: a kink in the target is a step in the camera's velocity), and interpolates the view scale geometrically like every other zoom blend here.
-That rule is `lib/keyframes.ts` (`buildKeyTrack`, `keyValueAt`) rather than the controller's own, since a mover's route keys its pose and its pace along exactly the same lines; `pathParamsAt` is the camera's ten fields run through it.
+That rule is `lib/keyframes.ts` (`buildKeyTrack`, `keyValueAt`) rather than the controller's own, since a mover's route keys its pose and its pace along exactly the same lines; `pathParamsAt` is the camera's eleven fields run through it.
 A field no node keys at all is the path-level field, exactly as before keys existed, so every level on disk is unchanged and `keys-without-keys-are-the-path` says so.
 
 Keys live **on the nodes, not at authored arc lengths**, because a node is what the editor picks, drags, inserts, deletes and reverses, and a key that rides its node survives every one of those - a key at `s = 12.3` would name a different place the moment any node before it moved.

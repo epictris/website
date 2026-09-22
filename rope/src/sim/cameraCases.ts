@@ -237,6 +237,7 @@ function ride(
   edge: { centre: Vec2; reach: Vec2 } | null;
   aim: Vec2;
   stick: { x: number; y: number };
+  rate: number;
 }[] {
   const ctl = new CameraController();
   ctl.edgeClamp = edgeClamp;
@@ -254,6 +255,7 @@ function ride(
       edge: held.edge,
       aim: held.aim,
       stick: held.stick,
+      rate: held.rate,
     };
   });
 }
@@ -964,6 +966,7 @@ export function runCameraCases(): CameraResult[] {
             blend: 0.4,
             buffer: 60,
             softness: 70,
+            reactionTime: 0.45,
             priority: 2,
           },
         ],
@@ -999,6 +1002,7 @@ export function runCameraCases(): CameraResult[] {
         "blend",
         "buffer",
         "softness",
+        "reactionTime",
         "priority",
       ] as const) {
         if (Math.abs((out[k] ?? NaN) - (want[k] ?? NaN)) > 1e-6) {
@@ -2084,6 +2088,97 @@ export function runCameraCases(): CameraResult[] {
       ];
     }),
 
+    // --- the speed lead ----------------------------------------------------
+    //
+    // The authored lead is a DISTANCE, so on its own a player travelling at
+    // 8 m/s sees exactly as far ahead as one strolling at 1 - which is the
+    // opposite of what a camera is for. The lead is therefore stretched by
+    // `progressRate * reactionTime`, which at any speed is a fixed number of
+    // SECONDS of warning, and capped at the authored lead so a fast player sees
+    // at most twice as far.
+
+    run("speed-lead-grows-and-caps", () => {
+      // A long straight route with the deadband off, so the committed origin IS
+      // the progress and the rate is exactly the avatar's speed.
+      const path: CameraPathData = {
+        x: 0,
+        y: 0,
+        rot: 0,
+        verts: [
+          { x: 0, y: 0 },
+          { x: 120, y: 0 },
+        ],
+        rangeX: 5,
+        rangeY: 5,
+        falloffX: 0,
+        falloffY: 0,
+        lookaheadX: 2,
+        lookaheadY: 2,
+        lookaheadBufferX: 0,
+        lookaheadBufferY: 0,
+      };
+      const rules = buildCameraRules([], [path]);
+      const at = (speed: number): { rate: number; lead: number } => {
+        const walk: Vec2[] = [];
+        for (let i = 0; i < 300; i++) walk.push(new Vec2(5 + (speed * i) / 60, 0));
+        const out = ride(rules, walk, false);
+        const last = out[out.length - 1]!;
+        // The TARGET rather than the camera, since the camera is still chasing
+        // it: what the lead is, is a statement about the aim.
+        const target = cameraRuleTarget(last.rule, walk[walk.length - 1]!, BASE_ZOOM, last.leadS, last.rate);
+        return { rate: last.rate, lead: target.pos.x - last.leadS };
+      };
+      const slow = at(3);
+      const fast = at(12);
+      const still = at(0);
+      return [
+        // The rate is read off the committed origin, which on a route with no
+        // deadband tracks the avatar exactly.
+        { label: "the rate is the avatar's speed", got: slow.rate, want: 3, tol: 0.05 },
+        // 2 m authored + 3 m/s x 0.3 s.
+        { label: "the lead at 3 m/s", got: slow.lead, want: 2.9, tol: 0.02 },
+        // 12 x 0.3 is 3.6 m of speed lead, capped at the authored 2.
+        { label: "the lead at 12 m/s is capped at twice", got: fast.lead, want: 4, tol: 0.02 },
+        // ...and standing still is the authored lead and nothing more, which is
+        // what every level authored before this reads as.
+        { label: "the lead standing still", got: still.lead, want: 2, tol: 1e-6 },
+      ];
+    }),
+
+    run("speed-lead-is-per-axis", () => {
+      // The cap is the lead RESOLVED ALONG THE ROUTE, so a shaft that zeroes
+      // its vertical lead gets no speed lead down it either - where a cap in
+      // metres would have put the camera over the player's head the moment they
+      // fell fast enough. The same path, ridden along and then down.
+      const shaft: CameraPathData = {
+        x: 0,
+        y: 0,
+        rot: 0,
+        verts: [
+          { x: 0, y: 0 },
+          { x: 0, y: 120 },
+        ],
+        rangeX: 5,
+        rangeY: 5,
+        falloffX: 0,
+        falloffY: 0,
+        lookaheadX: 3,
+        lookaheadY: 0,
+        lookaheadBufferX: 0,
+        lookaheadBufferY: 0,
+      };
+      const rules = buildCameraRules([], [shaft]);
+      const walk: Vec2[] = [];
+      for (let i = 0; i < 200; i++) walk.push(new Vec2(0, 5 + (12 * i) / 60));
+      const out = ride(rules, walk, false);
+      const last = out[out.length - 1]!;
+      const target = cameraRuleTarget(last.rule, walk[walk.length - 1]!, BASE_ZOOM, last.leadS, last.rate);
+      return [
+        { label: "the player really is falling", got: last.rate, want: 12, tol: 0.05 },
+        { label: "and the camera leads by nothing", got: target.pos.y - last.leadS, want: 0, tol: 1e-6 },
+      ];
+    }),
+
     run("rule-path-lookahead-is-per-axis", () => {
       // A 16:9 frame has far less screen above and below the player than either
       // side of them, so the lead is a PAIR, blended by the heading the route
@@ -2535,7 +2630,7 @@ export function runCameraCases(): CameraResult[] {
             // and is not keyable - a node cannot carry one.
             softness: 40,
             verts: [
-              { x: 0, y: 0, viewportScale: 2, lookaheadX: 250, lookaheadBufferY: 55, rangeX: 300, buffer: 20 },
+              { x: 0, y: 0, viewportScale: 2, lookaheadX: 250, lookaheadBufferY: 55, rangeX: 300, buffer: 20, reactionTime: 0.5 },
               { x: 100, y: 0 },
             ],
           },
@@ -2545,6 +2640,9 @@ export function runCameraCases(): CameraResult[] {
       const v = path.verts;
       return [
         { label: "softness", got: path.softness ?? NaN, want: 0.4 },
+        // Seconds, so the gate leaves it alone - the one keyable field that is
+        // not a length.
+        { label: "reaction", got: v[0]!.reactionTime ?? NaN, want: 0.5 },
         { label: "view", got: v[0]!.viewportScale ?? NaN, want: 2 },
         { label: "x lead", got: v[0]!.lookaheadX ?? NaN, want: 2.5 },
         { label: "y lead buffer", got: v[0]!.lookaheadBufferY ?? NaN, want: 0.55 },

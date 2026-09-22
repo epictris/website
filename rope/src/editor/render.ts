@@ -970,6 +970,8 @@ export function cameraRegionLabel(r: EdItem): string {
       parts.push(`view ×${Number(r.cam.viewportScale.toFixed(2))}`);
     }
     if (r.cam.softness !== null) parts.push(`soft ${px(r.cam.softness)}`);
+    if (keyed("reactionTime")) parts.push("react keyed");
+    else if (r.cam.reactionTime !== null) parts.push(`react ${Number(r.cam.reactionTime.toFixed(2))}s`);
     const keys = nodeKeys.filter(isKeyed).length;
     if (keys) parts.push(`${keys} key${keys === 1 ? "" : "s"}`);
     if (keyed("buffer")) parts.push("buf keyed");

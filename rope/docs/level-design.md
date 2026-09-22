@@ -86,6 +86,11 @@ If a swing carries the player right off the edge of the frame, the screen-edge g
 Neither hold is authorable, and neither needs to be: they are about the difference between swinging and travelling rather than about this route.
 A player who climbs toward an anchor ahead on the route needs no special case either - they are moving toward the middle of the frame, so the guarantee stops asking and the camera comes with them.
 
+`reaction s` is how many **seconds** of warning the lead is stretched by at the speed the player is travelling (0.3 s unless the path says otherwise, keyable).
+The lead you type is a distance, so on its own a player at 8 m/s sees exactly as far ahead as one strolling at 1; this is what makes it a number of seconds instead.
+It is capped at the lead itself, so a fast player sees at most twice as far and a shaft with a zeroed vertical lead leads by nothing however fast they fall.
+Raise it where a route wants the player to commit early - a drop with one safe landing - and leave it alone everywhere else.
+
 `softness` is the one thing about the ROUTE'S SHAPE an author can tune here: how far off the route two places on it count as the same place to the camera's progress (0.5 m unless the path says otherwise).
 It is what makes a bend read as one smooth advance rather than as a corner the camera catches on, and the number to raise on a route with tighter bends than the river's 0.8 m - at the cost of the camera cutting a corner a little before the player does.
 

@@ -2868,7 +2868,7 @@ async function cmdCameraRide(file: string, o: Record<string, string>): Promise<v
   if (o.table === "true") {
     console.log(
       "  frame        cam x        cam y     avatar x     avatar y" +
-        "        s    leadS   ds/dt   speed   accel    jerk  rules  edge",
+        "        s    leadS   ds/dt    rate   speed   accel    jerk  rules  edge",
     );
     for (const f of rows) {
       console.log(
@@ -2876,6 +2876,7 @@ async function cmdCameraRide(file: string, o: Record<string, string>): Promise<v
           ` ${f.pos.y.toFixed(3).padStart(12)} ${f.follow.x.toFixed(3).padStart(12)}` +
           ` ${f.follow.y.toFixed(3).padStart(12)} ${f.s.toFixed(3).padStart(8)}` +
           ` ${f.leadS.toFixed(3).padStart(8)} ${f.ds.toFixed(2).padStart(7)}` +
+          ` ${f.rate.toFixed(2).padStart(7)}` +
           ` ${f.speed.toFixed(2).padStart(7)} ${f.accel.toFixed(1).padStart(7)}` +
           ` ${f.jerk.toFixed(0).padStart(7)} ${`${f.members}${f.rule[0] ?? "-"}`.padStart(6)}` +
           `  ${f.floor ? "floor" : "     "}` +

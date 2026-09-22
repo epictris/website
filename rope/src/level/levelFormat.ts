@@ -1592,6 +1592,26 @@ export const DEFAULT_PATH_LOOKAHEAD_Y = 1.4;
 export const DEFAULT_PATH_LOOKAHEAD_BUFFER_X = 1;
 export const DEFAULT_PATH_LOOKAHEAD_BUFFER_Y = 0.55;
 
+// How much TIME the camera gives the player to react to what they are about to
+// hit, in seconds - the second half of what a camera is for, and the one the
+// lookahead pair alone cannot say.
+//
+// `lookaheadX/Y` are a DISTANCE, so a player travelling at 8 m/s sees exactly
+// as far ahead as one strolling at 1 - which is the opposite of the
+// requirement: what "enough warning" means is a number of seconds, and the
+// distance that buys is the speed times that. So the lead is extended by
+// `progressRate * reactionTime`, capped at the authored lead per axis so a fast
+// player sees at most twice as far ahead and a shaft with a short vertical lead
+// stays a shaft.
+//
+// 0.3 s is about human reaction time, and it is deliberately the SHORT end of
+// it: the authored lead is already most of the warning, and this is the part
+// that scales. A route that wants a player to commit early - a drop with one
+// safe landing - is what a larger one is for.
+//
+// SECONDS, so it is the one keyable path field the format does not scale.
+export const DEFAULT_PATH_REACTION = 0.3;
+
 // How far off the route two places on it count as comparable, in metres - the
 // sigma of the camera's SOFT projection (see `render/pathProgress.ts`).
 //
@@ -1772,6 +1792,10 @@ export interface CameraPathVert {
   falloffX?: number;
   falloffY?: number;
   buffer?: number;
+  // Seconds, and the one keyable field that is NOT a length: how long the
+  // camera gives the player to react at the speed they are travelling (see
+  // DEFAULT_PATH_REACTION). A target field, read at the committed lead origin.
+  reactionTime?: number;
 }
 
 export interface CameraPathData {
@@ -1817,6 +1841,10 @@ export interface CameraPathData {
   // comparable to the soft projection (see DEFAULT_PATH_SOFTNESS, which is what
   // it falls back to). A property of the route's shape, so it is NOT keyable.
   softness?: number;
+  // Seconds of warning the lead is stretched by at the speed the player is
+  // travelling (see DEFAULT_PATH_REACTION). Keyable, and NOT a length, so the
+  // format does not scale it.
+  reactionTime?: number;
   // RETIRED: how far along the route a hanging avatar wound themselves up
   // their line before the frame-edge latch let the camera go. There is no latch
   // and no wind release - the guarantee's pull decays on its own clock now (see
@@ -3116,6 +3144,7 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
         ...(v.falloffX !== undefined ? { falloffX: v.falloffX * factor } : {}),
         ...(v.falloffY !== undefined ? { falloffY: v.falloffY * factor } : {}),
         ...(v.buffer !== undefined ? { buffer: v.buffer * factor } : {}),
+        ...(v.reactionTime !== undefined ? { reactionTime: v.reactionTime } : {}),
       })),
       // The retired scalar range/falloff were one circular radius each: folded
       // into both axes here, at the one gate, so a level that authored a
@@ -3152,6 +3181,7 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
       ...(p.viewportScale !== undefined ? { viewportScale: p.viewportScale } : {}),
       ...(p.buffer !== undefined ? { buffer: p.buffer * factor } : {}),
       ...(p.softness !== undefined ? { softness: p.softness * factor } : {}),
+      ...(p.reactionTime !== undefined ? { reactionTime: p.reactionTime } : {}),
       ...(p.priority !== undefined ? { priority: p.priority } : {}),
     }));
   // A note's placement, box and glyph height are lengths; its text is not.

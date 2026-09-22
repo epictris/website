@@ -313,6 +313,9 @@ export interface EdCamera {
   // How far off the route two places on it count as comparable to the soft
   // projection (see DEFAULT_PATH_SOFTNESS). null = that default.
   softness: number | null; // metres
+  // Seconds of warning the lead is stretched by at the speed the player is
+  // travelling (see DEFAULT_PATH_REACTION). null = that default.
+  reactionTime: number | null; // seconds
 }
 
 // Lights-layer properties (see LightData for the semantics).
@@ -913,6 +916,7 @@ export const defaultCamera = (): EdCamera => ({
   lookaheadBufferX: null,
   lookaheadBufferY: null,
   softness: null,
+  reactionTime: null,
 });
 
 export const defaultLight = (): EdLight => ({
@@ -1446,6 +1450,7 @@ function fromLevelData(data: LevelData): EdModel {
       lookaheadBufferX: null,
       lookaheadBufferY: null,
       softness: null,
+      reactionTime: null,
     },
     light: defaultLight(),
     note: defaultNote(),
@@ -1543,6 +1548,7 @@ function fromLevelData(data: LevelData): EdModel {
       lookaheadBufferX: c.lookaheadBufferX ?? null,
       lookaheadBufferY: c.lookaheadBufferY ?? null,
       softness: c.softness ?? null,
+      reactionTime: c.reactionTime ?? null,
     },
     light: defaultLight(),
     note: defaultNote(),
@@ -1835,6 +1841,7 @@ export function pathDataOf(i: EdItem): CameraPathData {
       : {}),
     ...(i.cam.buffer !== null ? { buffer: i.cam.buffer } : {}),
     ...(i.cam.softness !== null ? { softness: i.cam.softness } : {}),
+    ...(i.cam.reactionTime !== null ? { reactionTime: i.cam.reactionTime } : {}),
     ...(i.cam.priority !== 0 ? { priority: i.cam.priority } : {}),
   };
 }

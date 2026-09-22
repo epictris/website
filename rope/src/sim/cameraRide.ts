@@ -55,6 +55,9 @@ export interface RideFrame {
   leadS: number;
   ds: number;
   dds: number;
+  // The smoothed rate of the lead origin, which is what the speed lead is
+  // bought with (see `leadFor`).
+  rate: number;
   // How many rules were in force, and the kind of the one taking the largest
   // share. "-" when the camera was the plain follow.
   members: number;
@@ -150,6 +153,7 @@ export function rideRecording(rec: Recording, from = 0): RideResult {
         leadS: held.leadS,
         ds: ds ?? 0,
         dds: dds ?? 0,
+        rate: held.rate,
         members: held.members.length,
         rule: held.rule?.kind ?? "-",
         floor: held.edge !== null,

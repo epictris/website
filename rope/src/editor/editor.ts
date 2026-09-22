@@ -35,6 +35,7 @@ import {
   DEFAULT_PATH_LOOKAHEAD_X,
   DEFAULT_PATH_LOOKAHEAD_Y,
   DEFAULT_PATH_RANGE_X,
+  DEFAULT_PATH_REACTION,
   DEFAULT_PATH_SOFTNESS,
   DEFAULT_PATH_RANGE_Y,
   DEFAULT_WATER_DRAG,
@@ -5680,6 +5681,27 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         },
       },
     );
+    // Seconds of warning the lead is stretched by at the speed the player is
+    // travelling: the lead an author types is a DISTANCE, so on its own a
+    // player at 8 m/s sees exactly as far ahead as one strolling at 1. The
+    // stretch is capped at the authored lead, so a fast player sees at most
+    // twice as far and a shaft with a zeroed vertical lead leads by nothing
+    // however fast they fall. Blank = the controller's default.
+    const reactKeyed = keyedAt("reactionTime");
+    const reactInput = num(
+      "reaction s",
+      (b) => (reactKeyed ? NaN : (b.cam.reactionTime ?? NaN)),
+      (b, v) => (b.cam.reactionTime = Math.max(0, v)),
+      0.05,
+      {
+        placeholder: reactKeyed ? "keyed" : String(DEFAULT_PATH_REACTION),
+        disabled: reactKeyed !== null,
+        onEmpty: () => {
+          for (const b of paths) b.cam.reactionTime = null;
+        },
+      },
+    );
+    if (reactKeyed) reactInput.title = reactKeyed;
     num("priority", (b) => b.cam.priority, (b, v) => (b.cam.priority = Math.round(v)), 1);
 
     // Three whole-path actions, because each is miserable to do node by node.
@@ -5738,7 +5760,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     g.appendChild(heading(picked.length === 1 ? `Node ${picked[0]}` : `${picked.length} nodes`));
     const hint = el("div", "ed-hint");
     hint.textContent =
-      "Keys: the path's fields, said at these nodes. A keyed field is interpolated along the route between its keyed nodes and held beyond the first and last; a node with no key is transparent to it, and a field no node keys is the path's own. View and lead are read where the lead is measured from, so a swing across a change does not pump the camera; range, falloff, buffer and wind buf are read at the player's projection, and the corridor is drawn as they vary. Blank drops the key.";
+      "Keys: the path's fields, said at these nodes. A keyed field is interpolated along the route between its keyed nodes and held beyond the first and last; a node with no key is transparent to it, and a field no node keys is the path's own. View, lead and reaction are read where the lead is measured from, so a swing across a change does not pump the camera; range, falloff and buffer are read at the player's nearest point on the route, and the corridor is drawn as they vary. Blank drops the key.";
     g.appendChild(hint);
 
     // What each picked node is effectively at, through the SAME rule the game
@@ -5786,6 +5808,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     field("lead buf y", "lookaheadBufferY", M2PX, 10);
     field("view ×", "viewportScale", 1, 0.1);
     field("buffer", "buffer", M2PX, 10);
+    field("reaction s", "reactionTime", 1, 0.05);
   }
 
   // Lights-layer panel. The two fields that matter most are at the top and in
