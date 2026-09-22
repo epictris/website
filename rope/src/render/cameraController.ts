@@ -1839,7 +1839,6 @@ export class CameraController {
     // not a guarantee and outrunning the spring is exactly what a launch does.
     const aimPos = this.softEdge(camera, target.pos, follow, step);
     this.aim = aimPos;
-    const before = this.pos;
     // The spring, then the caps, then integrate what is left. The caps are
     // taken as VECTOR lengths over both axes so a diagonal move is not faster
     // than an axial one, and the position is integrated from the capped
@@ -1857,15 +1856,28 @@ export class CameraController {
     }
     this.vel = vel;
     this.pos = this.pos.add(vel.mul(step));
-    const held = this.holdEdge(camera, this.pos, follow, step);
-    // The floor may move the camera, and when it does the spring's velocity has
-    // to become what the frame ACTUALLY moved: carried over unchanged it would
-    // spend the next frame fighting a constraint that has already won, which is
-    // the camera pressing against the floor instead of riding it.
-    if (step > 0 && (held.x !== this.pos.x || held.y !== this.pos.y)) {
-      this.vel = held.sub(before).div(step);
-    }
-    this.pos = held;
+    // The guarantee is POSITIONAL RECOVERY and does not feed the velocity, the
+    // same rule the contact solver follows for the same reason: a correction
+    // applied to the position every frame is not a speed, and reading it as one
+    // makes it accumulate.
+    //
+    // It was read as one, and `session-222f` is what that cost. The window's
+    // half of `holdEdge` pulls a fraction of its demand per frame, so setting
+    // the velocity to "what the frame actually moved" added that pull to the
+    // spring's own velocity and then did it again next frame: over the eleven
+    // frames of a fall the camera's acceleration ran 18, 35, 50, 62, 67 m/s² -
+    // eight times the cap the whole layer exists to enforce - and it arrived at
+    // the landing carrying 6.8 m/s. The cap is symmetric, so shedding that took
+    // 0.85 s, and the camera sailed nearly three metres below the ground before
+    // it came back.
+    //
+    // Nothing is lost by dropping it. The camera really is where the constraint
+    // put it (`this.pos` is the corrected value, so the spring's next error is
+    // measured from there), and the spring is never left driving INTO the
+    // constraint: `softEdge` has already shaped the aim to the inner margin, so
+    // whenever the floor is holding the camera the spring is pulling it back
+    // off the floor rather than against it.
+    this.pos = this.holdEdge(camera, this.pos, follow, step);
 
     camera.position = this.pos;
     camera.zoom = this.zoom;

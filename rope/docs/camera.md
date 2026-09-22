@@ -50,13 +50,18 @@ Zoom goes through the same spring in `log(zoom)`, the geometric blend every zoom
 What this buys is a **global** guarantee: whatever any rule upstream does, the camera's acceleration is bounded and its velocity is continuous.
 Measured on the exact aim signal the old ease was chasing, over the two 2026-09-22 river bundles:
 
-| tail of session | first-order 0.15 s (the old) | spring alone | and with the speed lead |
-|---|---|---|---|
-| 268f peak accel / jerk | 16 / 1533 | 7.6 / 102 | **8.0 / 130** |
-| 336f peak accel / jerk | 55 / 2152 | 9.3 / 207 | **10.3 / 342** |
+| tail of session | first-order 0.15 s (the old) | this |
+|---|---|---|
+| 268f peak accel / jerk | 16 / 1533 | **7.6 / 102** |
+| 336f peak accel / jerk | 55 / 2152 | **8.4 / 204** |
 
-The last column is what ships: the [speed lead](camera-paths.md#the-speed-lead) gives the camera further to travel, so it is busier, and it is still inside the cap plus the floor.
 (Anything over 8 is the hard floor, which is not capped and may not be - see [the screen-edge guarantee](#the-screen-edge-guarantee).)
+
+Two things are **outside** the cap, and both are worth knowing before reading a ride's peak.
+
+The floor is one, by design. The other is the window's own pull in `holdEdge`, which is given at `edgeTakeUp`'s rate law and is not bounded by anything: on a landing it hands the avatar's own impact straight to the camera, since the demand is a function of where the avatar IS and their velocity steps to zero in a frame. `session-222f` reads 34 m/s² and 2162 m/s³ on the frame the ball hits the water. That is not new - the same landing on the camera this replaced reads 48 m/s² - and it is the largest hole left in the bounded-acceleration claim.
+
+A THIRD was found by play and fixed: the guarantee used to write its correction back into the spring's velocity ("the camera really is where the constraint put it"), and since the window's half of it pulls a fraction of its demand every frame, that turned a position correction into a speed and accumulated it. Over the eleven frames of one fall the camera's acceleration ran 18, 35, 50, 62, 67 m/s² and it arrived at the landing carrying 6.8 m/s; the cap is symmetric, so shedding that took 0.85 s and the camera sailed nearly three metres **below the ground** before coming back (`session-222f`, reported from a play). The guarantee is positional recovery and does not feed the velocity - the same rule the contact solver follows, for the same reason.
 
 That guarantee is what the following mechanisms were each trying to provide locally, and they are **gone**:
 

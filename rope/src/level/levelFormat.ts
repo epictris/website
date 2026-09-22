@@ -1604,13 +1604,31 @@ export const DEFAULT_PATH_LOOKAHEAD_BUFFER_Y = 0.55;
 // player sees at most twice as far ahead and a shaft with a short vertical lead
 // stays a shaft.
 //
-// 0.3 s is about human reaction time, and it is deliberately the SHORT end of
-// it: the authored lead is already most of the warning, and this is the part
-// that scales. A route that wants a player to commit early - a drop with one
-// safe landing - is what a larger one is for.
+// DEFAULT OFF, which is not where it started and is what the first play of it
+// settled (2026-09-22, `session-684f`).
+//
+// The mechanism is right and the default was wrong, and the reason is that the
+// lead becomes a framing offset that TRACKS SPEED - so wherever the player's
+// speed oscillates, their position on screen oscillates with it. On the ball
+// and chain it oscillates every arc: the progress rate through one swing of
+// `session-684f` runs 2.3 to 4.8 m/s, which at 0.3 s is 0.75 m of lead appearing
+// and disappearing twice a second. Measured over that session, the avatar's
+// horizontal position in the frame has a standard deviation of 1.27 m with it
+// at 0.3 s and 0.72 m with it off, against 0.88 m for the camera this one
+// replaced - so it was the one number making the new camera slide MORE than the
+// old one, while being half as harsh (mean acceleration 2.9 m/s² against 5.9).
+//
+// A longer `CAMERA_RATE_TAU` only trades it down slowly (0.99 m at four
+// seconds), because what is being filtered is the player's real speed and not
+// noise; a peak-hold release was measured too and is no better.
+//
+// So it is a field a ROUTE opts into where the level wants it - a long fast
+// descent with one safe landing, where the warning is worth the drift - and
+// 0.3 s is about human reaction time and the value to type. It is not the
+// default, because most of a level is not that.
 //
 // SECONDS, so it is the one keyable path field the format does not scale.
-export const DEFAULT_PATH_REACTION = 0.3;
+export const DEFAULT_PATH_REACTION = 0;
 
 // How far off the route two places on it count as comparable, in metres - the
 // sigma of the camera's SOFT projection (see `render/pathProgress.ts`).

@@ -1490,7 +1490,7 @@ export function runCameraCases(): CameraResult[] {
         return {
           moving: Math.abs(walk[119]!.x - out[119]!.pos.x),
           settled: Math.abs(walk[479]!.x - out[479]!.pos.x),
-          oneSecond: Math.abs(walk[299]!.x - out[299]!.pos.x),
+          halfASecond: Math.abs(walk[149]!.x - out[149]!.pos.x),
         };
       });
       return [
@@ -1501,13 +1501,13 @@ export function runCameraCases(): CameraResult[] {
         { label: "the stroll rests on the margin", got: rest[0]!.settled, want: inner, tol: 1e-6 },
         { label: "the run rests on the margin", got: rest[1]!.settled, want: inner, tol: 1e-6 },
         { label: "the launch rests on the margin", got: rest[2]!.settled, want: inner, tol: 1e-6 },
-        // And it is a clock that takes them there rather than a snap: three
-        // seconds after the launch stops, the correction is measurably still
+        // And it is a clock that takes them there rather than a snap: half a
+        // second after the launch stops, the correction is measurably still
         // running. Stated as "still short" rather than as a residual, because
         // the exact number is CAMERA_EDGE_SMOOTHING's and the spring's to move
         // and what this case is about is that the arrival is gradual and the
         // destination is the margin.
-        { label: "three seconds in, the correction is still running", got: inner - rest[2]!.oneSecond > 0.01 ? 1 : 0, want: 1 },
+        { label: "half a second in, the correction is still running", got: inner - rest[2]!.halfASecond > 0.01 ? 1 : 0, want: 1 },
       ];
     }),
 
@@ -2116,6 +2116,10 @@ export function runCameraCases(): CameraResult[] {
         lookaheadY: 2,
         lookaheadBufferX: 0,
         lookaheadBufferY: 0,
+        // Authored, because the default is OFF (see DEFAULT_PATH_REACTION): the
+        // speed lead is a route's opt-in, and the case is about what it does
+        // where a route asks for it.
+        reactionTime: 0.3,
       };
       const rules = buildCameraRules([], [path]);
       const at = (speed: number): { rate: number; lead: number } => {
@@ -2145,6 +2149,42 @@ export function runCameraCases(): CameraResult[] {
       ];
     }),
 
+    run("speed-lead-is-off-unless-a-route-asks", () => {
+      // The DEFAULT, and the reason it is the default: the lead becomes a
+      // framing offset that tracks speed, so wherever the player's speed
+      // oscillates their position on screen oscillates with it - which on the
+      // ball and chain is every arc (see DEFAULT_PATH_REACTION for the
+      // measurement). The same route, saying nothing, leads by its authored
+      // distance at any speed.
+      const path: CameraPathData = {
+        x: 0,
+        y: 0,
+        rot: 0,
+        verts: [
+          { x: 0, y: 0 },
+          { x: 120, y: 0 },
+        ],
+        rangeX: 5,
+        rangeY: 5,
+        falloffX: 0,
+        falloffY: 0,
+        lookaheadX: 2,
+        lookaheadY: 2,
+        lookaheadBufferX: 0,
+        lookaheadBufferY: 0,
+      };
+      const rules = buildCameraRules([], [path]);
+      const walk: Vec2[] = [];
+      for (let i = 0; i < 300; i++) walk.push(new Vec2(5 + (12 * i) / 60, 0));
+      const out = ride(rules, walk, false);
+      const last = out[out.length - 1]!;
+      const target = cameraRuleTarget(last.rule, walk[walk.length - 1]!, BASE_ZOOM, last.leadS, last.rate);
+      return [
+        { label: "the player really is fast", got: last.rate, want: 12, tol: 0.05 },
+        { label: "and the lead is the authored one", got: target.pos.x - last.leadS, want: 2, tol: 1e-6 },
+      ];
+    }),
+
     run("speed-lead-is-per-axis", () => {
       // The cap is the lead RESOLVED ALONG THE ROUTE, so a shaft that zeroes
       // its vertical lead gets no speed lead down it either - where a cap in
@@ -2166,6 +2206,7 @@ export function runCameraCases(): CameraResult[] {
         lookaheadY: 0,
         lookaheadBufferX: 0,
         lookaheadBufferY: 0,
+        reactionTime: 0.3,
       };
       const rules = buildCameraRules([], [shaft]);
       const walk: Vec2[] = [];

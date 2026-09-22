@@ -44,7 +44,13 @@ progressRate = first-order filter of d(leadS)/dt, tau = CAMERA_RATE_TAU (0.3 s)
 speedLead    = min(lead, max(0, progressRate) * reactionTime)
 ```
 
-`reactionTime` is an authored path field in **seconds** (0.3 s by default, keyable like the rest of the target fields and read at the committed lead origin) - the one keyable field the format does not scale.
+`reactionTime` is an authored path field in **seconds** (keyable like the rest of the target fields and read at the committed lead origin) - the one keyable field the format does not scale.
+
+It is **off by default**, which the first play of it settled (2026-09-22, `session-684f`), and the reason is worth having written down: the lead becomes a framing offset that TRACKS SPEED, so wherever the player's speed oscillates their position on screen oscillates with it.
+On the ball and chain it oscillates every arc - the progress rate through one swing of that session runs 2.3 to 4.8 m/s, which at 0.3 s is 0.75 m of lead appearing and disappearing twice a second.
+Measured over that session, the avatar's horizontal position in the frame has a standard deviation of **1.27 m** with it at 0.3 s and **0.72 m** with it off, against **0.88 m** for the camera this one replaced: it was the one thing making the new camera slide MORE than the old one, while being half as harsh (mean acceleration 2.9 m/s² against 5.9).
+A longer `CAMERA_RATE_TAU` only trades it down slowly (0.99 m at four seconds), because what is being filtered is the player's real speed rather than noise, and a peak-hold release was measured and is no better.
+So it is a field a **route opts into** where the level wants it - a long fast descent with one safe landing, where the warning is worth the drift - and 0.3 s is about human reaction time and the value to type.
 
 Four things about it are load-bearing:
 
@@ -55,7 +61,8 @@ Four things about it are load-bearing:
 
 Beyond all of that the screen-edge window bounds it as it bounds any other framing, and a player who stops sees the lead come back over `CAMERA_RATE_TAU` through the motion layer.
 
-`speed-lead-grows-and-caps` and `speed-lead-is-per-axis` are the cases: the lead is 2 m standing still, 2.9 m at 3 m/s and 4 m (twice) at 12 m/s on a 2 m authored lead, and 0 down a shaft that zeroes its vertical lead however fast the player falls.
+`speed-lead-grows-and-caps` and `speed-lead-is-per-axis` are the cases: on a route that asks for 0.3 s, the lead is 2 m standing still, 2.9 m at 3 m/s and 4 m (twice) at 12 m/s on a 2 m authored lead, and 0 down a shaft that zeroes its vertical lead however fast the player falls.
+`speed-lead-is-off-unless-a-route-asks` pins the default.
 
 ## The lookahead buffer
 
