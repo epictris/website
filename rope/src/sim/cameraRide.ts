@@ -1,0 +1,189 @@
+// Replaying a recorded run through the REAL camera controller, and measuring
+// what the screen did.
+//
+// The camera is render-side and driven by wall-clock dt, so it is the one part
+// of the game a bundle does not capture: two replays of the same recording are
+// bit-identical in the sim and say nothing at all about whether the camera
+// lurched. This is what says it. The sim is stepped exactly as `cli replay`
+// steps it, and the controller is driven beside it at a fixed 1/60 with
+// `alpha = 1` - the frame the sim just produced, with no interpolation to blur
+// what the controller was handed.
+//
+// What it measures is the camera's own MOTION, because that is what "harsh" is:
+// speed, acceleration and jerk are the first three derivatives of what the
+// player is looking through, and a rule that steps the target shows up in the
+// second and third of them however smooth the rule's own story is. Beside them
+// it measures the PROGRESS `s` the target is built from, since a staircase
+// there is the cause the camera numbers are only the symptom of (see
+// `plans/camera-motion.md`).
+//
+// Deliberately not a case: a ride is a measurement, and the thresholds that
+// turn one into a case are a statement about how the level should FEEL, which
+// is written once the feel has been played.
+
+import { Vec2 } from "../engine/vec2";
+import { BallLevel } from "../level/ballLevel";
+import type { Level } from "../level/level";
+import { CameraController, type CameraHang } from "../render/cameraController";
+import { BALL_ZOOM, GRAPPLE_ZOOM, type Camera } from "../render/camera";
+import { VIEW_HEIGHT, VIEW_WIDTH } from "../render/viewport";
+import { levelFromRecording } from "./replay";
+import { recordingDeserializer, type Recording } from "./trace";
+
+// The render clock the ride drives the camera on. Fixed, because the whole
+// point is that two rides of the same bundle answer the same numbers: a ride
+// taken at the wall-clock rate of whatever machine ran it would report the
+// display's stutter as the camera's.
+export const RIDE_DT = 1 / 60;
+
+// One frame of the ride: what the sim produced, what the controller did with
+// it, and the derivatives that make it readable.
+export interface RideFrame {
+  frame: number;
+  // The avatar the camera was following, and where the camera ended up.
+  follow: Vec2;
+  pos: Vec2;
+  zoom: number;
+  // The camera's own motion: metres this frame, and the three derivatives in
+  // m/s, m/s² and m/s³. Zero on the frames before there is enough history.
+  step: number;
+  speed: number;
+  accel: number;
+  jerk: number;
+  // The progress the target is built from, and its first two derivatives -
+  // the cause, where the three above are the effect.
+  s: number;
+  leadS: number;
+  ds: number;
+  dds: number;
+  // How many rules were in force, and the kind of the one taking the largest
+  // share. "-" when the camera was the plain follow.
+  members: number;
+  rule: string;
+  // The frame-edge guarantee: whether the floor moved the camera this frame,
+  // and the pin each axis is held at.
+  floor: boolean;
+  latchX: number | null;
+  latchY: number | null;
+}
+
+export interface RideResult {
+  frames: RideFrame[];
+  // The peaks, each with the frame it happened on.
+  peak: {
+    speed: Peak;
+    accel: Peak;
+    jerk: Peak;
+    step: Peak;
+    ds: Peak;
+    dds: Peak;
+  };
+  // The mean of |d²s/dt²| over the run - the number a staircase in the
+  // projection moves and a single teleport barely does, which is why it is
+  // reported beside the peaks rather than instead of them.
+  meanAbsDds: number;
+}
+
+export interface Peak {
+  value: number;
+  frame: number;
+}
+
+function peakOf(frames: readonly RideFrame[], pick: (f: RideFrame) => number): Peak {
+  let best: Peak = { value: 0, frame: 0 };
+  for (const f of frames) {
+    const v = Math.abs(pick(f));
+    if (v > best.value) best = { value: v, frame: f.frame };
+  }
+  return best;
+}
+
+// Replay `rec` through the sim and the camera controller together.
+//
+// `from` skips the leading frames of the run - what "the tail of a session" is
+// - so a bundle whose interesting corner is at the end can be measured without
+// the spawn's own settle in the numbers. The sim is still stepped from frame
+// one either way; only the measurement starts later, since a camera measured
+// from a cold start would report the snap as a jerk.
+export function rideRecording(rec: Recording, from = 0): RideResult {
+  const level = levelFromRecording(rec);
+  const deserialize = recordingDeserializer(rec);
+  const camera: Camera = {
+    position: Vec2.ZERO,
+    zoom: GRAPPLE_ZOOM,
+    viewportWidth: VIEW_WIDTH,
+    viewportHeight: VIEW_HEIGHT,
+  };
+  const baseZoom = level instanceof BallLevel ? BALL_ZOOM : GRAPPLE_ZOOM;
+  const ctl = new CameraController();
+
+  const frames: RideFrame[] = [];
+  let prevPos: Vec2 | null = null;
+  let prevVel: Vec2 | null = null;
+  let prevAcc: Vec2 | null = null;
+  let prevS: number | null = null;
+  let prevDs: number | null = null;
+
+  for (let i = 0; i < rec.frames.length; i++) {
+    level.physicsProcess(deserialize(rec.frames[i]!), 1 / 60);
+    const follow = level.cameraRenderPosition(1);
+    ctl.update(camera, RIDE_DT, follow, level.cameraRules, baseZoom, hangOf(level));
+    const held = ctl.held;
+
+    const pos = camera.position;
+    const vel = prevPos ? pos.sub(prevPos).div(RIDE_DT) : null;
+    const acc = vel && prevVel ? vel.sub(prevVel).div(RIDE_DT) : null;
+    const jerk = acc && prevAcc ? acc.sub(prevAcc).div(RIDE_DT) : null;
+    const ds = prevS === null ? null : (held.s - prevS) / RIDE_DT;
+    const dds = ds !== null && prevDs !== null ? (ds - prevDs) / RIDE_DT : null;
+
+    if (i >= from) {
+      frames.push({
+        frame: i + 1,
+        follow,
+        pos,
+        zoom: camera.zoom,
+        step: prevPos ? pos.distanceTo(prevPos) : 0,
+        speed: vel?.length() ?? 0,
+        accel: acc?.length() ?? 0,
+        jerk: jerk?.length() ?? 0,
+        s: held.s,
+        leadS: held.leadS,
+        ds: ds ?? 0,
+        dds: dds ?? 0,
+        members: held.members.length,
+        rule: held.rule?.kind ?? "-",
+        floor: held.edge !== null,
+        latchX: held.latch.x,
+        latchY: held.latch.y,
+      });
+    }
+
+    prevPos = pos;
+    prevVel = vel;
+    prevAcc = acc;
+    prevS = held.s;
+    prevDs = ds;
+  }
+
+  let sum = 0;
+  for (const f of frames) sum += Math.abs(f.dds);
+  return {
+    frames,
+    peak: {
+      speed: peakOf(frames, (f) => f.speed),
+      accel: peakOf(frames, (f) => f.accel),
+      jerk: peakOf(frames, (f) => f.jerk),
+      step: peakOf(frames, (f) => f.step),
+      ds: peakOf(frames, (f) => f.ds),
+      dds: peakOf(frames, (f) => f.dds),
+    },
+    meanAbsDds: frames.length ? sum / frames.length : 0,
+  };
+}
+
+// What the avatar is hanging on this frame - the anchored episode's input,
+// read off whichever controller the recording is of.
+function hangOf(level: Level | BallLevel): CameraHang | null {
+  return level.cameraHang;
+}

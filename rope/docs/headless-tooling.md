@@ -18,6 +18,7 @@ bun run src/tools/cli.ts rails                # rail cases (the stroke, the cone
 bun run src/tools/cli.ts viscous              # viscous (mud) cases (the creep law, the hang, the catch, the drop-out, the format)
 bun run src/tools/cli.ts breaks               # breakable-geometry cases (the force table, the threshold, the durability, the bounce, the drag, the chain, the guard, the format)
 bun run src/tools/cli.ts camera               # camera-path geometry, the rule set, and the editor's path round trip
+bun run src/tools/cli.ts camera --ride b.json # one recorded run through the real controller: camera speed/accel/jerk and the progress behind them
 bun run src/tools/cli.ts render3d             # 3D camera correspondence, extrusion winding, depth order, surface resolution, `visual` round trips
 bun run src/tools/cli.ts assets               # prop + texture budget, stale bytes, orphans, licences (see The asset store)
 bun run src/tools/cli.ts levels               # the level-file lint: the menu's list, one intro, and each listed level's finish line (see Levels)

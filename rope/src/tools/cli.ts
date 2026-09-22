@@ -39,7 +39,7 @@
 //   bun run src/tools/cli.ts movers
 //   bun run src/tools/cli.ts vines
 //   bun run src/tools/cli.ts render3d
-//   bun run src/tools/cli.ts camera
+//   bun run src/tools/cli.ts camera    [--ride bundle.json [--from N] [--table]]
 //
 // Exit codes: 0 = pass/healthy, 1 = failure/violation, 2 = usage error.
 // (replay: 2 = diverged-but-healthy, 3 = invariant violated.)
@@ -2241,7 +2241,7 @@ switch (cmd) {
     void cmdRender3d();
     break;
   case "camera":
-    void cmdCamera();
+    void cmdCamera(opts([arg, ...rest].filter((a) => a !== undefined)));
     break;
   case "assets":
     void cmdAssets();
@@ -2828,7 +2828,13 @@ async function cmdDecompose(): Promise<void> {
 // Camera-path geometry cases (src/sim/cameraCases.ts). Pure geometry - no
 // level, no controller, no canvas - so the projection the camera rides is
 // asserted directly rather than eyeballed through a running game.
-async function cmdCamera(): Promise<void> {
+//
+// `--ride <bundle>` is the other half: the recorded run replayed through the
+// real controller, answering what the SCREEN did rather than what the geometry
+// says (see `sim/cameraRide.ts`). It is a measurement and not a case, so it
+// runs only when it is asked for and the bare command is still the suite.
+async function cmdCamera(o: Record<string, string>): Promise<void> {
+  if (o.ride && o.ride !== "true") return cmdCameraRide(o.ride, o);
   const { runCameraCases } = await import("../sim/cameraCases");
   const results = runCameraCases();
   let failed = 0;
@@ -2839,6 +2845,55 @@ async function cmdCamera(): Promise<void> {
   }
   console.log(`[camera] ${results.length - failed}/${results.length} cases passed`);
   process.exit(failed > 0 ? 1 : 0);
+}
+
+// One recorded run through the real camera controller: what the screen did.
+//
+// The numbers are the camera's first three derivatives and the progress `s`
+// the target is built from, because a rule that STEPS its target shows up in
+// the second and third of those and in nothing else - which is the whole
+// diagnosis in `plans/camera-motion.md`.
+//
+// `--from N` measures only from frame N, so a bundle recorded to catch one
+// corner is not averaged with its own spawn settle. `--table` prints the
+// per-frame rows the peaks are picked out of.
+async function cmdCameraRide(file: string, o: Record<string, string>): Promise<void> {
+  const { rideRecording } = await import("../sim/cameraRide");
+  const rec = loadRecording(file);
+  printTreeStamp(rec);
+  const from = o.from ? Number(o.from) : 0;
+  const ride = rideRecording(rec, from);
+  const rows = ride.frames;
+  if (rows.length === 0) fail(`${basename(file)}: no frames to ride`, 1);
+  if (o.table === "true") {
+    console.log(
+      "  frame        cam x        cam y     avatar x     avatar y" +
+        "        s    leadS   ds/dt   speed   accel    jerk  rules  edge",
+    );
+    for (const f of rows) {
+      console.log(
+        `  ${String(f.frame).padStart(5)} ${f.pos.x.toFixed(3).padStart(12)}` +
+          ` ${f.pos.y.toFixed(3).padStart(12)} ${f.follow.x.toFixed(3).padStart(12)}` +
+          ` ${f.follow.y.toFixed(3).padStart(12)} ${f.s.toFixed(3).padStart(8)}` +
+          ` ${f.leadS.toFixed(3).padStart(8)} ${f.ds.toFixed(2).padStart(7)}` +
+          ` ${f.speed.toFixed(2).padStart(7)} ${f.accel.toFixed(1).padStart(7)}` +
+          ` ${f.jerk.toFixed(0).padStart(7)} ${`${f.members}${f.rule[0] ?? "-"}`.padStart(6)}` +
+          `  ${f.floor ? "floor" : "     "}` +
+          `${f.latchX !== null || f.latchY !== null ? " pin" : ""}`,
+      );
+    }
+  }
+  const peak = ride.peak;
+  const at = (p: { value: number; frame: number }, unit: string, dp = 2): string =>
+    `${p.value.toFixed(dp)} ${unit} @f${p.frame}`;
+  console.log(`  ${basename(file)}: ${rows.length} frames measured (from f${rows[0]!.frame})`);
+  console.log(`  camera speed        ${at(peak.speed, "m/s")}`);
+  console.log(`  camera acceleration ${at(peak.accel, "m/s²", 1)}`);
+  console.log(`  camera jerk         ${at(peak.jerk, "m/s³", 0)}`);
+  console.log(`  worst frame step    ${at(peak.step, "m", 4)}`);
+  console.log(`  progress max ds/dt  ${at(peak.ds, "m/s")}`);
+  console.log(`  progress max d2s/dt2 ${at(peak.dds, "m/s²", 1)}`);
+  console.log(`  progress mean |d2s/dt2| ${ride.meanAbsDds.toFixed(1)} m/s²`);
 }
 
 // Generated grab-scenario sweep (src/sim/ledgeMatrix.ts).
