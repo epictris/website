@@ -84,6 +84,41 @@ export interface RideResult {
   // projection moves and a single teleport barely does, which is why it is
   // reported beside the peaks rather than instead of them.
   meanAbsDds: number;
+  // The mean of the camera's own |acceleration|. The peak is one event and this
+  // is the character, and a camera can be well inside its cap on both and still
+  // read as harsh if the mean is half its speed.
+  meanAccel: number;
+  // What the PLAYER sees, per axis: how much their own position in the frame
+  // moves. A camera can be perfectly smooth in its own motion and still read as
+  // "wobbly" if the avatar slides about in the frame while it is being smooth,
+  // which is exactly what a speed-dependent lead or lag does - so the two
+  // measurements are not the same question and both are reported.
+  //
+  // `sd` is the spread of the offset and `slide` its total variation per
+  // second, which is what the eye follows.
+  framing: { x: Framing; y: Framing };
+}
+
+export interface Framing {
+  mean: number;
+  sd: number;
+  range: number;
+  slide: number;
+}
+
+function framingOf(frames: readonly RideFrame[], pick: (f: RideFrame) => number): Framing {
+  const a = frames.map(pick);
+  if (a.length === 0) return { mean: 0, sd: 0, range: 0, slide: 0 };
+  const mean = a.reduce((x, y) => x + y, 0) / a.length;
+  const sd = Math.sqrt(a.reduce((x, y) => x + (y - mean) ** 2, 0) / a.length);
+  let slide = 0;
+  for (let i = 1; i < a.length; i++) slide += Math.abs(a[i]! - a[i - 1]!);
+  return {
+    mean,
+    sd,
+    range: Math.max(...a) - Math.min(...a),
+    slide: slide / (a.length * RIDE_DT),
+  };
 }
 
 export interface Peak {
@@ -125,6 +160,13 @@ export function rideRecording(rec: Recording, from = 0): RideResult {
   let prevAcc: Vec2 | null = null;
   let prevS: number | null = null;
   let prevDs: number | null = null;
+  // The path the camera was riding last frame. Arc length is a coordinate on
+  // ONE route, so a frame that changes seat has no `ds/dt` to report: the river
+  // level's two paths are 22.2 m and 22.9 m long and unrelated, and differencing
+  // across the swap read -1140 m/s and took the run's mean |d²s/dt²| from 5 to
+  // 192. It is not a discontinuity in the camera - the camera crossed it without
+  // a step - it is two different rulers.
+  let prevSeat: unknown = null;
 
   for (let i = 0; i < rec.frames.length; i++) {
     level.physicsProcess(deserialize(rec.frames[i]!), 1 / 60);
@@ -136,7 +178,9 @@ export function rideRecording(rec: Recording, from = 0): RideResult {
     const vel = prevPos ? pos.sub(prevPos).div(RIDE_DT) : null;
     const acc = vel && prevVel ? vel.sub(prevVel).div(RIDE_DT) : null;
     const jerk = acc && prevAcc ? acc.sub(prevAcc).div(RIDE_DT) : null;
-    const ds = prevS === null ? null : (held.s - prevS) / RIDE_DT;
+    const seat = held.members.find((m) => m.rule.kind === "path")?.rule ?? null;
+    const reseated = seat !== prevSeat;
+    const ds = prevS === null || reseated ? null : (held.s - prevS) / RIDE_DT;
     const dds = ds !== null && prevDs !== null ? (ds - prevDs) / RIDE_DT : null;
 
     if (i >= from) {
@@ -167,10 +211,15 @@ export function rideRecording(rec: Recording, from = 0): RideResult {
     prevAcc = acc;
     prevS = held.s;
     prevDs = ds;
+    prevSeat = seat;
   }
 
   let sum = 0;
-  for (const f of frames) sum += Math.abs(f.dds);
+  let accSum = 0;
+  for (const f of frames) {
+    sum += Math.abs(f.dds);
+    accSum += f.accel;
+  }
   return {
     frames,
     peak: {
@@ -182,5 +231,10 @@ export function rideRecording(rec: Recording, from = 0): RideResult {
       dds: peakOf(frames, (f) => f.dds),
     },
     meanAbsDds: frames.length ? sum / frames.length : 0,
+    meanAccel: frames.length ? accSum / frames.length : 0,
+    framing: {
+      x: framingOf(frames, (f) => f.pos.x - f.follow.x),
+      y: framingOf(frames, (f) => f.pos.y - f.follow.y),
+    },
   };
 }

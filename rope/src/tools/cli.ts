@@ -2895,6 +2895,16 @@ async function cmdCameraRide(file: string, o: Record<string, string>): Promise<v
   console.log(`  progress max ds/dt  ${at(peak.ds, "m/s")}`);
   console.log(`  progress max d2s/dt2 ${at(peak.dds, "m/s²", 1)}`);
   console.log(`  progress mean |d2s/dt2| ${ride.meanAbsDds.toFixed(1)} m/s²`);
+  console.log(`  camera mean |accel|  ${ride.meanAccel.toFixed(2)} m/s²`);
+  // What the player sees, which is a different question from how smoothly the
+  // camera moves: a camera can be well inside its cap and still read as wobbly
+  // if the avatar slides about in the frame while it is being smooth.
+  for (const [axis, f] of [["x", ride.framing.x], ["y", ride.framing.y]] as const) {
+    console.log(
+      `  avatar in frame, ${axis}  mean ${f.mean.toFixed(2)} m  sd ${f.sd.toFixed(2)}` +
+        `  range ${f.range.toFixed(2)}  slide ${f.slide.toFixed(2)} m/s`,
+    );
+  }
 }
 
 // Generated grab-scenario sweep (src/sim/ledgeMatrix.ts).
