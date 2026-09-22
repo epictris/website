@@ -71,6 +71,7 @@ import {
   pointAtArcLength,
   projectOntoPolyline,
   projectOntoPolylineWindow,
+  withProjectionBlocks,
   type PolylineIndex,
 } from "../lib/path";
 import {
@@ -87,6 +88,32 @@ import { marginSides, uniformMargin } from "./shapePath";
 // distance to the target. Small enough to stay responsive, large enough to take
 // the edge off a landing or a hook release.
 export const CAMERA_FOLLOW_TAU = 0.15;
+
+// Metres of control polygon per sample of a CAMERA route, where
+// `PATH_FLATTEN_STEP` (25 cm) is what everything else flattens at.
+//
+// The camera's projection is not about the curve's accuracy, which 25 cm
+// already has to well under a centimetre. It is about CONTINUITY. From a metre
+// off the route the closest point sits on a vertex for the whole wedge of that
+// vertex's normal cone, then slides 1:1 along the next segment - so the arc
+// length the camera rides stands still for `offset × turn` of avatar travel and
+// then runs, once per vertex. On the river level's bends (segments of 12 to
+// 25 cm turning 5 to 9 degrees) that is a plateau of about 15 cm and a duty
+// cycle around 5 Hz, which no ease at any sane time constant can hide: measured
+// on `session-268f`, the camera's speed pulses 0.2, 1.4, 0.7, 1.4 m/s.
+//
+// The plateau is proportional to the turn at a vertex, and the turn at a vertex
+// is proportional to the step, so the cure is simply to sample finer: at 2 cm
+// the same bends turn under a degree per vertex and the mean |d²s/dt²| over
+// that session's tail falls from 21.7 to 8.6 m/s².
+//
+// It is the CAMERA's own and not `PATH_FLATTEN_STEP` because that constant is
+// shared with the movers, where it is the sim-side quantisation of a scripted
+// pace (`PACE_STEP`): changing it there would diverge every recorded mover
+// replay. A camera route is render-side and reaches the sim through nothing, so
+// it is free to be as fine as it likes - the cost is memory (a 6000-point
+// river route) and is paid for once at build.
+export const CAMERA_SAMPLE_STEP = 0.02;
 
 // Default region cross-fade, seconds. A region may override it with `blend`.
 export const CAMERA_BLEND_TIME = 0.7;
@@ -526,8 +553,12 @@ export function buildCameraRules(
   return [
     ...regions.map((region): CameraRule => ({ kind: "region", region })),
     ...paths.map((path): CameraRule => {
-      const flat = flattenPathNodes(pathNodesOf(path.verts));
-      const index = buildPolylineIndex(flat.points, new Vec2(path.x, path.y), path.rot, flat.nodeAt);
+      const flat = flattenPathNodes(pathNodesOf(path.verts), CAMERA_SAMPLE_STEP);
+      // Blocks because a camera route is 2 cm sampled and the corridor sweep
+      // projects once per sample it draws (see `withProjectionBlocks`).
+      const index = withProjectionBlocks(
+        buildPolylineIndex(flat.points, new Vec2(path.x, path.y), path.rot, flat.nodeAt),
+      );
       return { kind: "path", path, index, keys: pathKeyTracks(path, index) };
     }),
   ];

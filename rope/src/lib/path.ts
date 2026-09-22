@@ -41,15 +41,34 @@ export interface PathNode {
   out: Vec2;
 }
 
-// Metres of control polygon per flattening sample. A cubic never strays further
-// from its control polygon than the polygon's own slack, so sampling at this
-// spacing keeps the chordal error well under a centimetre on the segment lengths
-// a level authors - far below the metres `range` is measured in.
+// Metres of control polygon per flattening sample, by DEFAULT. A cubic never
+// strays further from its control polygon than the polygon's own slack, so
+// sampling at this spacing keeps the chordal error well under a centimetre on
+// the segment lengths a level authors - far below the metres `range` is
+// measured in.
+//
+// A default rather than the step, because the two callers want different ones
+// for a reason that is not about accuracy. A mover's pace is quantised to this
+// (`PACE_STEP` in `level/movers.ts`) and is SIM-SIDE, so changing it would
+// diverge every recorded mover replay; the camera's route is render-side and
+// reaches the sim through nothing, so it is free to sample as finely as it
+// likes and does (`CAMERA_SAMPLE_STEP`). What a finer step buys the camera is
+// not a truer curve but a CONTINUOUS projection: the closest point to a vertex
+// sits on that vertex for the whole wedge of its normal cone, so the coarser
+// the polyline the longer the arc length stands still while the player goes on
+// moving (see `plans/camera-motion.md`).
 export const PATH_FLATTEN_STEP = 0.25;
 
-// Hard cap per edge, so a pathological handle (one dragged a hundred metres out)
-// cannot turn one authored node into thousands of points.
-const MAX_SAMPLES_PER_EDGE = 64;
+// Hard cap per edge, as the metres of control polygon one authored edge may
+// spend samples on, so a pathological handle (one dragged a hundred metres out)
+// cannot turn one authored node into unbounded points.
+//
+// A LENGTH rather than a count, because the count is a function of the step: at
+// the 25 cm default it is the 64 samples it has always been, and at the
+// camera's 2 cm it is 800 - the same 16 m of curve either way, which is the
+// statement that was meant. A count held fixed across both would silently
+// coarsen the camera's sampling on exactly the long bends it is finest for.
+const MAX_EDGE_CONTROL = 16;
 
 // The on-disk node form as the geometry's own, with absent handles read as zero.
 // One conversion, so the level format's optional fields and this module's plain
@@ -75,8 +94,8 @@ export function pathNodesOf(
 // An edge whose two facing handles are both zero contributes NOTHING but its
 // endpoint, so a path of corners flattens to exactly its own nodes and every
 // polyline path is bit-identical to what it was before handles existed.
-export function flattenPath(nodes: readonly PathNode[]): Vec2[] {
-  return flattenPathNodes(nodes).points;
+export function flattenPath(nodes: readonly PathNode[], step = PATH_FLATTEN_STEP): Vec2[] {
+  return flattenPathNodes(nodes, step).points;
 }
 
 // The same flattening, also answering WHERE each authored node landed in the
@@ -85,7 +104,10 @@ export function flattenPath(nodes: readonly PathNode[]): Vec2[] {
 // arc length of a node is only known once the curve into it is flattened; a
 // key looked up by node index alone would sit at the wrong `s` on any curved
 // edge.
-export function flattenPathNodes(nodes: readonly PathNode[]): {
+export function flattenPathNodes(
+  nodes: readonly PathNode[],
+  step = PATH_FLATTEN_STEP,
+): {
   points: Vec2[];
   nodeAt: number[];
 } {
@@ -103,7 +125,8 @@ export function flattenPathNodes(nodes: readonly PathNode[]): {
       continue;
     }
     const control = a.p.distanceTo(c1) + c1.distanceTo(c2) + c2.distanceTo(b.p);
-    const n = Math.min(MAX_SAMPLES_PER_EDGE, Math.max(2, Math.ceil(control / PATH_FLATTEN_STEP)));
+    const cap = Math.max(2, Math.ceil(MAX_EDGE_CONTROL / step));
+    const n = Math.min(cap, Math.max(2, Math.ceil(control / step)));
     for (let k = 1; k <= n; k++) out.push(cubicAt(a.p, c1, c2, b.p, k / n));
     // The last sample is t = 1, which is exactly the node.
     nodeAt.push(out.length - 1);
@@ -205,6 +228,79 @@ export interface PolylineIndex {
   // from `flattenPathNodes` and the caller said so; empty when it did not.
   // It is what a node's keys are placed at along the route.
   nodeS: readonly number[];
+  // Bounding boxes over runs of segments, for the projection to skip whole
+  // stretches of a long polyline with (see `withProjectionBlocks`). Absent on
+  // every index that has not asked for them, which is every SIM-side one.
+  blocks?: readonly PolylineBlock[];
+}
+
+// One run of segments and the box that contains it (see `withProjectionBlocks`).
+export interface PolylineBlock {
+  // Segment indices [i0, i1) - segment i runs verts[i] to verts[i + 1].
+  i0: number;
+  i1: number;
+  // The arc lengths the run spans, so a WINDOWED projection can skip it
+  // without looking at the geometry at all.
+  s0: number;
+  s1: number;
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+}
+
+// Segments per block. Big enough that the boxes are a small fraction of the
+// polyline and small enough that a box is local: at the camera's 2 cm sampling
+// one block is about 1.3 m of route, which is the scale the corridor and the
+// tracking window already work at.
+const PROJECT_BLOCK = 64;
+
+// The same index with a block list attached, so `projectOntoPolyline` can skip
+// the stretches of the route that cannot hold the answer.
+//
+// OPT-IN, and that is the whole reason it is a second function rather than
+// part of `buildPolylineIndex`. The skip is exact in real arithmetic - a box
+// is a lower bound on the distance to everything inside it, and a block is only
+// skipped when that bound is already worse than the best answer so far - but
+// the bound is computed in floats, so a projection onto a route with two
+// exactly equidistant branches could in principle answer the other one. That is
+// nothing to a camera and it is the contract to a RAIL (`lib/rail.ts` projects
+// sim-side, and bit-identity is what every recorded replay rests on), so only
+// the camera asks for it.
+//
+// It is worth asking for because the camera's route is 6885 points on the
+// river level: the corridor sweep tests one global projection per sample it
+// draws, which is quadratic in the sampling, and measured 1.4 s a sweep without
+// this and 40 ms with it.
+export function withProjectionBlocks(ix: PolylineIndex): PolylineIndex {
+  const { verts, cum } = ix;
+  if (verts.length < 2) return ix;
+  const blocks: PolylineBlock[] = [];
+  for (let i0 = 0; i0 + 1 < verts.length; i0 += PROJECT_BLOCK) {
+    const i1 = Math.min(i0 + PROJECT_BLOCK, verts.length - 1);
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    // Through i1 inclusive: the last segment of the run ends on that vertex.
+    for (let i = i0; i <= i1; i++) {
+      const v = verts[i]!;
+      if (v.x < minX) minX = v.x;
+      if (v.x > maxX) maxX = v.x;
+      if (v.y < minY) minY = v.y;
+      if (v.y > maxY) maxY = v.y;
+    }
+    blocks.push({ i0, i1, s0: cum[i0]!, s1: cum[i1]!, minX, minY, maxX, maxY });
+  }
+  return { ...ix, blocks };
+}
+
+// The square of the shortest distance from `p` to a block's box - zero inside
+// it - which is a lower bound on the distance to every segment the block holds.
+function blockDistSq(b: PolylineBlock, p: Vec2): number {
+  const dx = Math.max(0, b.minX - p.x, p.x - b.maxX);
+  const dy = Math.max(0, b.minY - p.y, p.y - b.maxY);
+  return dx * dx + dy * dy;
 }
 
 export function buildPolylineIndex(
@@ -230,17 +326,36 @@ export function buildPolylineIndex(
 // The world point at arc length `s`, clamped to [0, total]. Clamping is the
 // correct degenerate behaviour for the lookahead target: near the end of the
 // path the camera comes to rest on the end rather than sliding off past it.
+// A BINARY SEARCH on `cum`, which is what it is allowed to be: arc length is
+// non-decreasing along the polyline by construction, so the first segment
+// ending at or past `t` is a lower bound and nothing before it can hold `t`.
+// The answers are identical to the linear scan this replaces - same segment,
+// same interpolation - and `point-at-arc-length` and the `flatten-*` cases are
+// what say so.
+//
+// It is here because the camera's route is now sampled at 2 cm (see
+// `CAMERA_SAMPLE_STEP`): the river level is about 6000 points and this is
+// called several times a frame by the lead, the tangent and the sweep, so a
+// scan over the whole polyline per call is the one place the finer sampling
+// would have been paid for in time rather than in memory.
 export function pointAtArcLength(ix: PolylineIndex, s: number): Vec2 {
   const { verts, cum } = ix;
   if (verts.length === 0) return Vec2.ZERO;
   const t = Math.min(Math.max(s, 0), ix.total);
-  for (let i = 0; i + 1 < verts.length; i++) {
+  // The first segment whose END is at or past `t`, by bisection on its end.
+  let lo = 0;
+  let hi = verts.length - 2;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (cum[mid + 1]! < t) lo = mid + 1;
+    else hi = mid;
+  }
+  // A zero-length segment holds no interval, so `t` belongs to whichever
+  // segment after it does - exactly the scan's own rule, and the reason the
+  // search cannot simply answer `lo`.
+  for (let i = lo; i + 1 < verts.length; i++) {
     const s0 = cum[i]!;
-    const s1 = cum[i + 1]!;
-    if (t > s1) continue;
-    const len = s1 - s0;
-    // A zero-length segment holds no interval, so `t` belongs to whichever
-    // segment after it does.
+    const len = cum[i + 1]! - s0;
     if (len < MIN_SEGMENT) continue;
     return verts[i]!.add(verts[i + 1]!.sub(verts[i]!).mul((t - s0) / len));
   }
@@ -279,10 +394,88 @@ function projectRange(
   sLo: number,
   sHi: number,
 ): { s: number; dist: number } {
+  const { verts, blocks } = ix;
+  const best = { s: sLo, dist: Infinity };
+  // Blocks in route order, so the "strictly closer" tie-break below still keeps
+  // the EARLIEST answer; a block is skipped only when it cannot hold anything
+  // closer than a distance already ACHIEVED, so the answer is the scan's own
+  // (see `withProjectionBlocks`). No blocks is one run over the whole polyline.
+  //
+  // The bound has to come from somewhere before the ordered pass, and that is
+  // the whole of this preamble. Scanning in route order alone, the first block
+  // sets the bound - and the first block of a 124 m route is nowhere near a
+  // player standing in the middle of it, so the bound stays metres wide and
+  // nothing is skipped until the scan arrives at the answer: measured on the
+  // river level's path, blocks alone took 18 us a projection and this takes
+  // 0.8 us. So the nearest block by its BOX is scanned first, purely to earn a
+  // bound, and the ordered pass then starts from scratch with it in hand.
+  const runs = blocks?.length ?? 1;
+  let bound = Infinity;
+  if (blocks) {
+    let near = -1;
+    let nearDist = Infinity;
+    for (let b = 0; b < runs; b++) {
+      const blk = blocks[b]!;
+      if (blk.s1 < sLo || blk.s0 > sHi) continue;
+      const d = blockDistSq(blk, p);
+      if (d < nearDist) {
+        nearDist = d;
+        near = b;
+      }
+    }
+    if (near >= 0) {
+      const blk = blocks[near]!;
+      const probe = { s: sLo, dist: Infinity };
+      scanSegments(ix, p, sLo, sHi, blk.i0, blk.i1, probe);
+      bound = probe.dist;
+    }
+  }
+  for (let b = 0; b < runs; b++) {
+    let from = 0;
+    let to = verts.length - 1;
+    if (blocks) {
+      const blk = blocks[b]!;
+      if (blk.s1 < sLo || blk.s0 > sHi) continue;
+      // A hair of slack on the comparison, because the two sides can be the
+      // SAME distance - a block whose nearest box corner IS the answer, which
+      // is every block holding a straight leg the player stands off the end of
+      // - and they are computed by different routes (a hypot on one side, two
+      // subtractions on the other), so exact equality is not reliably decided.
+      // Erring this way only ever scans a block that could have been skipped;
+      // erring the other way throws the answer itself away.
+      const cut = Math.min(bound, best.dist);
+      if (blockDistSq(blk, p) > cut * cut * (1 + 1e-12)) continue;
+      from = blk.i0;
+      to = blk.i1;
+    }
+    scanSegments(ix, p, sLo, sHi, from, to, best);
+  }
+  if (best.dist === Infinity) {
+    // No segment overlapped the window: a path of coincident verts, or one
+    // whose only segments are zero-length. The clamped point is still an answer.
+    const s = Math.min(Math.max(sLo, 0), ix.total);
+    return { s, dist: pointAtArcLength(ix, s).distanceTo(p) };
+  }
+  return { s: best.s, dist: best.dist };
+}
+
+// The nearest point on segments [i0, i1) to `p`, restricted to arc lengths in
+// [sLo, sHi], accumulated into `best` - which the caller seeds and reads.
+//
+// Accumulated rather than returned because it is run twice per projection over
+// different ranges (see `projectRange`), and the only thing that may differ
+// between the two runs is which `best` they write into.
+function scanSegments(
+  ix: PolylineIndex,
+  p: Vec2,
+  sLo: number,
+  sHi: number,
+  i0: number,
+  i1: number,
+  best: { s: number; dist: number },
+): void {
   const { verts, cum } = ix;
-  let bestS = sLo;
-  let bestDist = Infinity;
-  for (let i = 0; i + 1 < verts.length; i++) {
+  for (let i = i0; i < i1; i++) {
     const s0 = cum[i]!;
     const s1 = cum[i + 1]!;
     const lo = Math.max(s0, sLo);
@@ -300,18 +493,11 @@ function projectRange(
     const dist = q.distanceTo(p);
     // Strictly closer, so a tie at a shared vertex keeps the earlier segment -
     // which reports the same `s` either way, the corner being one point.
-    if (dist < bestDist) {
-      bestDist = dist;
-      bestS = s;
+    if (dist < best.dist) {
+      best.dist = dist;
+      best.s = s;
     }
   }
-  if (bestDist === Infinity) {
-    // No segment overlapped the window: a path of coincident verts, or one
-    // whose only segments are zero-length. The clamped point is still an answer.
-    const s = Math.min(Math.max(sLo, 0), ix.total);
-    return { s, dist: pointAtArcLength(ix, s).distanceTo(p) };
-  }
-  return { s: bestS, dist: bestDist };
 }
 
 // How much arc length either side of `s` the tangent below is measured over.

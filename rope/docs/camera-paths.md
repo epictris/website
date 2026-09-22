@@ -79,7 +79,18 @@ The retired approach here was a SECOND authored band width for the anchored regi
 
 A path's nodes carry cubic **Bézier tangent handles** (`CameraPathVert`'s `inX/inY/outX/outY`, offsets from the node in the path's own frame), and the whole of what they cost is `flattenPath` (`lib/path.ts`, shared with a body's travel route - see [**Scripted movers**](movers.md), which is the other thing in this project that is an authored curve with a direction, an arc length and per-node keys): everything downstream rides a polyline, and a flattened cubic IS one.
 An edge whose two facing handles are both absent contributes nothing but its endpoint, so a path of corners flattens to exactly its own nodes and every polyline path is bit-identical to what it was before handles existed - which is also why a corner writes four keys and no more.
-Sampling is `PATH_FLATTEN_STEP` (25 cm) of control polygon per point, capped per edge; `cli camera` asserts the worst chordal error against the true cubic, which is what `range` is ultimately measured against.
+Sampling is `CAMERA_SAMPLE_STEP` (**2 cm**) of control polygon per point, capped per edge at 16 m of curve; `cli camera` asserts the worst chordal error against the true cubic, which is what `range` is ultimately measured against.
+
+2 cm rather than the 25 cm everything else flattens at (`PATH_FLATTEN_STEP`, which the camera used until 2026-09-22), and it is not about accuracy: 25 cm is already well under a centimetre of chordal error.
+It is about **continuity**, which is what the camera and nothing else needs from the polyline.
+The closest point to a route sits ON a vertex for the whole wedge of that vertex's normal cone, so from a metre off the route the tracked arc length stands still for `offset × turn` of avatar travel and then slides 1:1 - once per vertex, a plateau of about 15 cm on the river level's bends, a duty cycle near 5 Hz, and a camera whose speed pulses 0.2, 1.4, 0.7, 1.4 m/s (`session-268f`).
+The plateau is proportional to the turn at a vertex and the turn is proportional to the step, so the cure is to sample finer: the same session's tail goes from a mean `|d²s/dt²|` of 21.7 to 7.9 m/s² and a peak jerk of 1533 to 457 m/s³.
+
+It is the camera's OWN step because `PATH_FLATTEN_STEP` is shared with the movers, where it is the sim-side quantisation of a scripted pace (`PACE_STEP`) and changing it would diverge every recorded mover replay.
+A camera route is render-side and reaches the sim through nothing.
+What it costs is memory - the river level's path is 6885 points - and one piece of machinery: `projectOntoPolyline` is quadratic in the sampling when the corridor sweep runs it once per sample it draws, so a camera index carries bounding **blocks** (`withProjectionBlocks`) the projection skips whole stretches of route with.
+The skip is exact (a box is a lower bound, and a block is skipped only when that bound is already worse than an answer in hand), `projection-blocks-are-the-scan` says so, and it is opt-in rather than automatic because a rail projects sim-side and bit-identity is what every recorded replay rests on.
+Measured on the river level: a projection 18 µs without blocks and 5 µs with, and the corridor sweep 58.7 ms at the old 25 cm, 1.4 s at 2 cm unblocked, and 70 ms as it stands.
 
 In the editor a node's two grips are drawn at their own offsets, or as a **stub** a fixed screen distance along the edge when unset - a grip sitting exactly on the vertex it belongs to is unpickable, and a stub makes every corner one drag from smooth.
 Dragging mirrors the opposite handle in direction and length (a smooth node); Alt at the press breaks the pair into a cusp.

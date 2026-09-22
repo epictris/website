@@ -424,19 +424,43 @@ export function pathCorridorSweepInto(
 ): void {
   const { verts, cum } = index;
   if (verts.length < 2) return;
-  // Samples along the route with their arc lengths: every vertex, plus enough
-  // between two to keep the spacing under `step`.
+  // Samples along the route with their arc lengths: every vertex the route
+  // spends at least `step` of arc reaching, plus enough between two to keep the
+  // spacing under `step`. `step` is the resolution of the DRAWING, and it works
+  // in both directions - a leg longer than it is subdivided, and a vertex
+  // closer than it to the last sample is dropped.
+  //
+  // Dropping is what makes the cost a function of the route's LENGTH rather
+  // than of how finely the projection samples it. A camera route is flattened
+  // at 2 cm (see `CAMERA_SAMPLE_STEP`), so taking every vertex would put 6885
+  // samples on the river level's path and run the predicate below - a global
+  // projection each - once per sample, which is quadratic in the sampling and
+  // measured 4 s a sweep. Thinned, the drawing is the same drawing the 25 cm
+  // flattening produced, because a vertex a centimetre off its neighbours'
+  // chord moves the offset curve by a centimetre.
+  //
+  // The limit is a genuine CORNER whose two legs are both shorter than `step`:
+  // its turn is cut, and the cut is inward (the samples are then held to the
+  // predicate exactly as every other one is), so a corridor is drawn slightly
+  // small there rather than slightly large. Authored nodes sit metres apart, so
+  // nothing on disk is near it.
   const pts: Vec2[] = [verts[0]!];
   const ss: number[] = [cum[0]!];
   for (let i = 0; i + 1 < verts.length; i++) {
-    const a = verts[i]!;
     const b = verts[i + 1]!;
-    const len = cum[i + 1]! - cum[i]!;
+    const s1 = cum[i + 1]!;
+    const s0 = ss[ss.length - 1]!;
+    const len = s1 - s0;
     if (len < 1e-9) continue;
+    // A vertex the route reaches within `step` of the last sample is not a
+    // sample of its own - unless it is the last, which is the far cap's point
+    // and may not be cut off.
+    if (len < step && i + 2 < verts.length) continue;
+    const a = pts[pts.length - 1]!;
     const n = Math.max(1, Math.ceil(len / step));
     for (let k = 1; k <= n; k++) {
       pts.push(a.add(b.sub(a).mul(k / n)));
-      ss.push(cum[i]! + (len * k) / n);
+      ss.push(s0 + (len * k) / n);
     }
   }
   const m = pts.length;

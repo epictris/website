@@ -19,6 +19,7 @@ import {
   buildCameraRules,
   CAMERA_EDGE_MARGIN,
   CAMERA_FOLLOW_TAU,
+  CAMERA_SAMPLE_STEP,
   CameraController,
   edgeAxis,
   edgePull,
@@ -58,6 +59,7 @@ import {
   pointAtArcLength,
   projectOntoPolyline,
   projectOntoPolylineWindow,
+  withProjectionBlocks,
   type PolylineIndex,
 } from "../lib/path";
 
@@ -2094,13 +2096,76 @@ export function runCameraCases(): CameraResult[] {
       const a: PathNode = { p: V(0, 0), in: Vec2.ZERO, out: V(0, -6) };
       const b: PathNode = { p: V(6, 0), in: V(0, -6), out: Vec2.ZERO };
       const ix = buildPolylineIndex(flattenPath([a, b]));
-      let worst = 0;
-      for (let i = 0; i <= 200; i++) {
-        const t = i / 200;
-        const p = cubicAt(a.p, a.p.add(a.out), b.p.add(b.in), b.p, t);
-        worst = Math.max(worst, projectOntoPolyline(ix, p).dist);
+      // The CAMERA's own step (see `CAMERA_SAMPLE_STEP`), which is the one
+      // `buildCameraRules` flattens at. It is not finer for accuracy's sake -
+      // the default is already well inside the tolerance - but the accuracy
+      // comes with it, and what is asserted here is that the two steps are the
+      // same statement about the same curve at different densities.
+      const fine = buildPolylineIndex(flattenPath([a, b], CAMERA_SAMPLE_STEP));
+      const worstOf = (index: PolylineIndex): number => {
+        let worst = 0;
+        for (let i = 0; i <= 200; i++) {
+          const t = i / 200;
+          const p = cubicAt(a.p, a.p.add(a.out), b.p.add(b.in), b.p, t);
+          worst = Math.max(worst, projectOntoPolyline(index, p).dist);
+        }
+        return worst;
+      };
+      // The widest gap between two consecutive samples, which is what the
+      // projection's PLATEAU is proportional to and therefore the number the
+      // camera's step is chosen for.
+      let widest = 0;
+      for (let i = 0; i + 1 < fine.verts.length; i++) {
+        widest = Math.max(widest, fine.cum[i + 1]! - fine.cum[i]!);
       }
-      return [{ label: "worst chordal error (m)", got: worst, want: 0, tol: 0.01 }];
+      return [
+        { label: "worst chordal error (m)", got: worstOf(ix), want: 0, tol: 0.01 },
+        { label: "worst chordal error, camera step (m)", got: worstOf(fine), want: 0, tol: 0.0001 },
+        // Not the step itself: this edge's control polygon is 20 m, past the
+        // per-edge cap (see `MAX_EDGE_CONTROL`), so its samples are the cap's
+        // 800 rather than the step's 1025 - which is the cap doing exactly what
+        // it is for. An ordinary edge lands under the step.
+        { label: "widest camera sample gap (m)", got: widest, want: 0, tol: 0.03 },
+      ];
+    }),
+
+    runFacts("projection-blocks-are-the-scan", () => {
+      // The block skip is an optimisation and nothing else: an index that
+      // carries blocks answers what the same index without them answers, at
+      // every point and for a window as well as a global query. It is asserted
+      // rather than argued because the claim is EXACTNESS - a block is skipped
+      // only when its box is already further away than an answer in hand - and
+      // an optimisation that is merely almost right would be found as a camera
+      // that reads the wrong branch of a switchback once in a level.
+      const bad: string[] = [];
+      // A route that doubles back and passes near itself, so the global query
+      // has two genuine candidates and the blocks straddle both.
+      const nodes = pathNodesOf([
+        { x: 0, y: 0, outX: 3, outY: 0 },
+        { x: 10, y: 0, inX: -3, inY: 0, outX: 3, outY: 0 },
+        { x: 10, y: 2, inX: 0, inY: -1 },
+        { x: 0, y: 2 },
+      ]);
+      const flat = flattenPathNodes(nodes, CAMERA_SAMPLE_STEP);
+      const plain = buildPolylineIndex(flat.points, V(0, 0), 0, flat.nodeAt);
+      const blocked = withProjectionBlocks(plain);
+      if (!blocked.blocks || blocked.blocks.length < 2) bad.push("no blocks were built");
+      for (let i = 0; i <= 40; i++) {
+        for (let j = 0; j <= 20; j++) {
+          const p = V(-2 + (i * 14) / 40, -2 + (j * 6) / 20);
+          const a = projectOntoPolyline(plain, p);
+          const b = projectOntoPolyline(blocked, p);
+          if (a.s !== b.s || a.dist !== b.dist) {
+            bad.push(`global at (${p.x}, ${p.y}): ${a.s}/${a.dist} vs ${b.s}/${b.dist}`);
+          }
+          const wa = projectOntoPolylineWindow(plain, p, 4, 16);
+          const wb = projectOntoPolylineWindow(blocked, p, 4, 16);
+          if (wa.s !== wb.s || wa.dist !== wb.dist) {
+            bad.push(`window at (${p.x}, ${p.y}): ${wa.s}/${wa.dist} vs ${wb.s}/${wb.dist}`);
+          }
+        }
+      }
+      return bad.slice(0, 5);
     }),
 
     run("flatten-reads-absent-handles-as-corners", () => {
