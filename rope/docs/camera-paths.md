@@ -92,7 +92,7 @@ The lead origin is handed back to the band in one frame - a step of everything t
 
 It is gated on the anchor rather than applied always because that is the distinction it is about: a player rolling along the route does not oscillate, so there is nothing one-sided to say about them, and a ratchet with no episode boundary would have no moment at which it could ever be given back.
 
-`cli camera` asserts the ratchet as its own pair - the same swing walks the origin forward and never back while anchored (holding at the furthest projection less the band) and is dragged both ways while rolling - plus the release (back in the band on the release frame, with no single frame of camera travel anywhere near the follow lag's own pace, and the camera arriving at the unratcheted lead).
+`cli camera` asserts the ratchet as its own pair - the same swing walks the origin forward and never back while anchored (holding at the furthest projection less the band) and is dragged both ways while rolling - plus the release (back in the band on the release frame, with no single frame of camera travel anywhere near what a snap would cost, and the camera arriving at the unratcheted lead).
 The retired approach here was a SECOND authored band width for the anchored regime (`anchoredBufferX`/`anchoredBufferY`, eased between over a time constant of its own); it is gone, because a wider band is still two-sided and still rocks - it only rocks slower - and it charged an author two more fields for it.
 
 ## Curves

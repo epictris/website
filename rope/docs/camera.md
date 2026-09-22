@@ -17,8 +17,8 @@ The touch controls are positioned inside the frame rather than the window for th
 
 `cli shot` asks headless chromium for a window 87px taller than the frame, since that is what the browser keeps for itself, so a grab is exactly the frame with no bars.
 
-`render/cameraController.ts` owns the view: an **eased follow** of the avatar, reshaped by the level's **camera regions**.
-It is deliberately render-side, driven by the wall-clock frame `dt` rather than the fixed timestep, so easing it can never change a recorded run.
+`render/cameraController.ts` owns the view: a **sprung follow** of the avatar, reshaped by the level's **camera regions** and **camera paths**.
+It is deliberately render-side, driven by the wall-clock frame `dt` rather than the fixed timestep, so moving it can never change a recorded run.
 (The grapple controller un-projects the cursor through the camera, so the camera does reach the sim as *input* — but the trace records the resulting world point, so replays stay bit-identical.)
 `camera.zoom` is the controller's **output**; the base framing scale lives in the caller (`GRAPPLE_ZOOM`, or `BALL_ZOOM` for the ball).
 The default framing puts the avatar **dead centre** for both controllers — the ball's old 3/5-down shift is gone — so shifting the view is a camera region's `offsetX`/`offsetY` and nothing else, one authored mechanism rather than a per-controller rule.
@@ -34,7 +34,7 @@ The controller is three layers, each smooth in its inputs, so that no rule upstr
 The third is load-bearing, and it is what a pile of local smoothing rules was replaced by on 2026-09-22.
 The old controller computed a memoryless piecewise target every frame and put one first-order ease (`CAMERA_FOLLOW_TAU`, 0.15 s) between it and the screen.
 Every piecewise rule is a **step in the target's velocity** - the vertex projection, the window edge, both edges of the lead deadband, the ratchet engaging, the pin opening and dropping, the branch challenge, the frozen-delta hand-off - and a first-order ease at 0.15 s attenuates a 3 Hz disturbance by about a third, so every one of them leaked to the screen.
-Most of the 1976-line file was machinery trying to keep each rule individually continuous, which is the wrong place for that guarantee.
+Most of the 1976-line file was machinery trying to keep each rule individually continuous, which is the wrong place for that guarantee; what is left is 1961 lines of controller and 204 of progress, the deletions having been spent again on writing down why each of them went.
 
 ```
 CAMERA_FREQ       = 1.2 Hz     omega = 2*pi*CAMERA_FREQ
@@ -50,12 +50,13 @@ Zoom goes through the same spring in `log(zoom)`, the geometric blend every zoom
 What this buys is a **global** guarantee: whatever any rule upstream does, the camera's acceleration is bounded and its velocity is continuous.
 Measured on the exact aim signal the old ease was chasing, over the two 2026-09-22 river bundles:
 
-| tail of session | first-order 0.15 s (the old) | spring 1.2 Hz, a ≤ 8 m/s² |
-|---|---|---|
-| 268f peak accel / jerk | 16 / 1533 | **7.6 / 102** |
-| 336f peak accel / jerk | 55 / 2152 | **9.3 / 207** |
+| tail of session | first-order 0.15 s (the old) | spring alone | and with the speed lead |
+|---|---|---|---|
+| 268f peak accel / jerk | 16 / 1533 | 7.6 / 102 | **8.0 / 130** |
+| 336f peak accel / jerk | 55 / 2152 | 9.3 / 207 | **10.3 / 342** |
 
-(336f's 9.3 is the hard floor, which is not capped and may not be - see [the screen-edge guarantee](#the-screen-edge-guarantee).)
+The last column is what ships: the [speed lead](camera-paths.md#the-speed-lead) gives the camera further to travel, so it is busier, and it is still inside the cap plus the floor.
+(Anything over 8 is the hard floor, which is not capped and may not be - see [the screen-edge guarantee](#the-screen-edge-guarantee).)
 
 That guarantee is what the following mechanisms were each trying to provide locally, and they are **gone**:
 
@@ -316,12 +317,10 @@ The guarantee still **outranks the ratchet** and is outranked by nothing: with t
 
 Unplayed as of 2026-09-22; the feel constants (`CAMERA_FREQ`, `CAMERA_MAX_ACCEL`, `CAMERA_STICK_TAU`) are tuned in the play and nowhere else.
 
-The debug overlay draws the stick as a line through the aim coordinate on each axis it is holding by more than a centimetre, in the same amber as the keep-out box: it is the same rule's doing, still being held rather than re-asked.
-
 The debug overlay draws the keep-out box **only on the frames it is binding** (amber, not the camera layer's violet): a camera that has stopped following has no on-screen cause otherwise, and drawing it every frame would make it furniture rather than a diagnosis.
 It draws **two** boxes, because the constraint has two boundaries: the inner one finely, where the override starts easing in, and the outer one as the line the avatar may never cross.
 The avatar between them is the override working; the avatar hard against the outer one is the framing being asked for having run out of room, which is the thing to re-tune.
-It draws the **pin** in the same amber, as a dashed line right across the frame through each latched axis - the pin is a coordinate rather than a point, and a camera that has stopped following because it is pinned needs its own answer on screen, the keep-out box being absent on exactly those frames.
+It draws the **stick** in the same amber, as a dashed line right across the frame through the aim coordinate on each axis it is holding by more than a centimetre - the stick is a displacement on one axis rather than a point, and a camera that has stopped following because it is being held needs its own answer on screen, the keep-out box being absent on exactly those frames. It fades out with the stick rather than being dropped, so the line simply stops being there once the camera has returned.
 
 `CameraController.edgeClamp` turns it off, and the **editor's `edge clamp` checkbox is the only thing that ever does** - for ▶ Test alone.
 An author tuning a lock or a lookahead has to be able to see the framing that rule is actually ASKING for, and that question is unanswerable while the answer is being silently corrected.
@@ -333,5 +332,5 @@ It is an instrument rather than a level property, so it lives on the controller 
 **`cli shot` cannot see the camera at all.** `shot.html` pins the view on the avatar (`camera.position = level.cameraRenderPosition(1)`, `zoom` from `?zoom=` or `BALL_ZOOM`) and never constructs a `CameraController`, because it exists to inspect the SIM and a camera that framed the avatar would put a body 20 m away off the side of every grab.
 So a filmstrip of a hand-off shows the avatar dead centre with the world scrolling past whatever the rules do, and its motion profile reads zero changed pixels for a camera move over a resting avatar.
 
-What covers it instead: `cli camera` for the rules, the weights and a controller ride; a bun script driving `CameraController.update` over a real level file (`scaleLevelData` + `buildCameraRules`) when the question is about an authored level rather than about the mechanism; and a person in a browser for the rest, which is where a camera is judged anyway.
+What covers it instead: `cli camera` for the rules, the weights and a controller ride; **`cli camera --ride <bundle>`** for what the screen actually did on a recorded run, which is the sim stepped as `cli replay` steps it with the real controller driven beside it at a fixed 1/60 (it prints peak camera speed, acceleration and jerk, the worst single-frame step, and the progress `s` behind them, and `--from N` measures only the tail of a session so a bundle recorded for one corner is not averaged with its own spawn settle); a bun script driving `CameraController.update` over a real level file (`scaleLevelData` + `buildCameraRules`) when the question is about an authored level rather than about the mechanism; and a person in a browser for the rest, which is where a camera is judged anyway.
 `?level=CAMERA_TEST` exists for exactly that, and the editor's ▶ Test runs the real controller on the level being authored.

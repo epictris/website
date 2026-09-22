@@ -1,8 +1,8 @@
-// Camera behaviour: an eased follow of the avatar, reshaped by the level's
-// camera regions.
+// Camera behaviour: a sprung follow of the avatar, reshaped by the level's
+// camera regions and camera paths.
 //
 // Deliberately render-side, driven by wall-clock dt rather than the fixed
-// timestep: the camera is not part of the simulation, so easing it can never
+// timestep: the camera is not part of the simulation, so moving it can never
 // change a recorded run. (The grapple controller un-projects the cursor through
 // the camera, so the camera does reach the sim as *input* — but the recorded
 // trace stores the resulting world point, so replays stay bit-identical.)
@@ -191,7 +191,7 @@ export const REGION_EXIT_MARGIN = 0.15; // metres
 //
 // The override runs in two places, which is what makes it smooth (see
 // `CameraController.softEdge` and `holdEdge`): the window shapes what the
-// camera is AIMING at, so the camera answers it through its own follow ease and
+// camera is AIMING at, so the camera answers it through its own motion and
 // its velocity turns over instead of reversing, and the same window plus the
 // hard floor is then applied to where the camera actually IS, because an aim
 // can be outrun and the guarantee may not be.
@@ -1337,7 +1337,7 @@ export function edgeTakeUp(demand: number, headroom: number, dt: number): number
 // avatar at `follow`, with the whole of the window's pull taken up at once.
 //
 // Applied to where the camera ACTUALLY IS rather than to what it is aiming at:
-// a target the avatar can outrun is not a guarantee, and outrunning the ease is
+// a target the avatar can outrun is not a guarantee, and outrunning the spring is
 // exactly what a fast swing or a launch does.
 //
 // This is the undelayed answer, which is what the geometry cases assert and
