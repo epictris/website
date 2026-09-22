@@ -7,7 +7,6 @@ import { PIXELS_PER_METER, PX } from "../engine/units";
 import { BALL_ZOOM, GRAPPLE_ZOOM, screenToWorld, worldToScreen, type Camera } from "../render/camera";
 import { LETTERBOX_COLOR, VIEW_HEIGHT, VIEW_WIDTH, viewTransform } from "../render/viewport";
 import {
-  CAMERA_BLEND_TIME,
   CameraController,
   REGION_EXIT_MARGIN,
   buildCameraRules,
@@ -37,7 +36,6 @@ import {
   DEFAULT_PATH_LOOKAHEAD_Y,
   DEFAULT_PATH_RANGE_X,
   DEFAULT_PATH_SOFTNESS,
-  DEFAULT_PATH_WIND_BUFFER,
   DEFAULT_PATH_RANGE_Y,
   DEFAULT_WATER_DRAG,
   DEFAULT_WATER_FLOW,
@@ -5479,19 +5477,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     lockField("lock x", "lockX", (b) => b.pos.x);
     lockField("lock y", "lockY", (b) => b.pos.y);
 
-    // Blank = the controller's default cross-fade (CAMERA_BLEND_TIME).
-    num(
-      "blend s",
-      (b) => b.cam.blend ?? NaN,
-      (b, v) => (b.cam.blend = Math.max(0, v)),
-      0.1,
-      {
-        placeholder: String(CAMERA_BLEND_TIME),
-        onEmpty: () => {
-          for (const b of regions) b.cam.blend = null;
-        },
-      },
-    );
+    // (`blend s` was here. The camera has no hand-off clock any more: a rule
+    // change is a step in the aim, and the motion layer answers every step at a
+    // bounded acceleration.)
     // How far outside the region the avatar may travel before it gives the
     // camera up. Blank = the controller's jitter margin (REGION_EXIT_MARGIN),
     // which is what every region authored before this field had.
@@ -5573,7 +5561,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     );
     const hint = el("div", "ed-hint");
     hint.textContent =
-      "The route the camera rides, in the direction it was drawn. The player is projected onto it and the camera targets a point further ALONG it, so the screen leads them the way the level wants them to go - even when they backtrack. `lead x`/`lead y` are how far ahead, per axis, because the frame is 16:9; `lead buf x`/`lead buf y` are slack in where that lead is measured FROM, so a swing running back and forth along the route does not slosh the camera - and while the player is on a line that band is one-sided, so a swing wider than it ratchets the camera down the route instead of sawing it back and forth. `range x`/`range y` are the corridor, per axis for the same reason - the pair is an ellipse around the route, so the corridor is screen-shaped. Stray past it and the path's grip fades over `falloff x`/`falloff y`, then lets go, handing the camera to whatever region contains them (or to the plain follow); coming back takes it again. Both hand-offs are blended. Drag a node to move it, its round grips to shape the curve through it, an edge midpoint to insert one, Alt+click a node to remove it; click a node to pick it out (Shift adds, a rubber band from empty space catches several, Esc drops them), and Delete removes the picked nodes while the arrows nudge them.";
+      "The route the camera rides, in the direction it was drawn. The player is projected onto it and the camera targets a point further ALONG it, so the screen leads them the way the level wants them to go - even when they backtrack. `lead x`/`lead y` are how far ahead, per axis, because the frame is 16:9; `lead buf x`/`lead buf y` are slack in where that lead is measured FROM, so a swing running back and forth along the route does not slosh the camera - and while the player is on a line that band is one-sided, so a swing wider than it ratchets the camera down the route instead of sawing it back and forth. `range x`/`range y` are the corridor, per axis for the same reason - the pair is an ellipse around the route, so the corridor is screen-shaped. Stray past it and the path's grip fades over `falloff x`/`falloff y`, then lets go, handing the camera to whatever region contains them (or to the plain follow); coming back takes it again. Both hand-offs are bounded by the camera's own acceleration cap rather than blended on a clock. Drag a node to move it, its round grips to shape the curve through it, an edge midpoint to insert one, Alt+click a node to remove it; click a node to pick it out (Shift adds, a rubber band from empty space catches several, Esc drops them), and Delete removes the picked nodes while the arrows nudge them.";
     g.appendChild(hint);
 
     const num = groupNum(g, paths);
@@ -5652,18 +5640,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       viewKeyed ? { placeholder: "keyed", disabled: true } : {},
     );
     if (viewKeyed) viewInput.title = viewKeyed;
-    num(
-      "blend s",
-      (b) => b.cam.blend ?? NaN,
-      (b, v) => (b.cam.blend = Math.max(0, v)),
-      0.1,
-      {
-        placeholder: String(CAMERA_BLEND_TIME),
-        onEmpty: () => {
-          for (const b of paths) b.cam.blend = null;
-        },
-      },
-    );
     // Extra hysteresis outside `range` before the path lets go, on top of the
     // corridor itself. Blank = the controller's jitter margin, which is the same
     // default a region's buffer falls back to.
@@ -5682,26 +5658,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       },
     );
     if (bufKeyed) bufInput.title = bufKeyed;
-    // How far along the route a hanging player has to wind themselves up their
-    // line before the frame-edge latch lets the camera go. A backswing out of
-    // the frame pins the camera for the rest of the hang; winding toward an
-    // anchor AHEAD on the route is the player going the level's way, and this
-    // is how much of that says so. Blank = the controller's default.
-    const windKeyed = keyedAt("windBuffer");
-    const windInput = num(
-      "wind buf",
-      (b) => (windKeyed ? NaN : (b.cam.windBuffer ?? NaN) * M2PX),
-      (b, v) => (b.cam.windBuffer = Math.max(0, v * PX)),
-      10,
-      {
-        placeholder: windKeyed ? "keyed" : String(Math.round(DEFAULT_PATH_WIND_BUFFER * M2PX)),
-        disabled: windKeyed !== null,
-        onEmpty: () => {
-          for (const b of paths) b.cam.windBuffer = null;
-        },
-      },
-    );
-    if (windKeyed) windInput.title = windKeyed;
+    // (`wind buf` was here. The frame-edge pin it released is gone: the
+    // guarantee's pull now decays on its own clock, so winding up the line
+    // toward an anchor ahead needs no release at all - see CAMERA_STICK_TAU.)
     // How far off the route two places on it count as comparable to the camera's
     // SOFT projection - the width of the blur that makes progress along the
     // route a continuous function of where the player is. Much smaller than the
@@ -5827,7 +5786,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     field("lead buf y", "lookaheadBufferY", M2PX, 10);
     field("view ×", "viewportScale", 1, 0.1);
     field("buffer", "buffer", M2PX, 10);
-    field("wind buf", "windBuffer", M2PX, 10);
   }
 
   // Lights-layer panel. The two fields that matter most are at the top and in
@@ -9479,7 +9437,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         testLevel.cameraRenderPosition(alpha),
         testLevel.cameraRules,
         testController === "ball" ? BALL_ZOOM : GRAPPLE_ZOOM,
-        testLevel.cameraHang,
+        testLevel.cameraAnchored,
       );
       // Render-rate refresh of stick aim (see LiveInputSource.pollAim).
       ballInput?.pollAim();

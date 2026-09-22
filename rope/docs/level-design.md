@@ -80,15 +80,14 @@ Setting both to 0 tracks the player exactly.
 **While the player is hanging on a line the band is one-sided**, and that is worth knowing before tuning it against a swing.
 A swing's forward half says something about where the player is going and its return half says nothing, so on those frames only the band's rear edge moves the point the lead is taken from: it walks forward with the swing and is never hauled back by the return.
 So a swing wider than the band no longer rocks the camera either - it ratchets it a little further down the route each arc and holds there - and what the band is really tuning is how much of a *roll* it absorbs.
-Letting go hands the point back to the middle of the band, blended, so the camera eases back to the lead it would have had all along.
+Letting go hands the point back to the middle of the band, and the camera glides to the lead it would have had all along.
 
-If a swing carries the player right off the edge of the frame, the screen-edge guarantee (below) takes over, and it too holds where it put the camera until the line is released - or until the player winds themselves up the line toward where the route goes.
+If a swing carries the player right off the edge of the frame, the screen-edge guarantee (below) takes over, and it too lets go of where it put the camera slowly rather than at once.
 Neither hold is authorable, and neither needs to be: they are about the difference between swinging and travelling rather than about this route.
+A player who climbs toward an anchor ahead on the route needs no special case either - they are moving toward the middle of the frame, so the guarantee stops asking and the camera comes with them.
 
-`wind buf` is the one thing about them that is: how far along the route the player has to wind themselves up their line before the frame-edge hold lets the camera go (0.5 m unless the path says otherwise).
-A player climbing toward an anchor ahead on the route is travelling, not swinging, and without this the camera stays pinned to their last backswing while they climb away from it.
-Winding straight up under a horizontal route counts for nothing, nor does winding toward an anchor behind, and paying line back out counts against it.
-Tune it up if a turn of the spool taken mid-swing frees the camera when you did not mean it to, and down if a climb has to go on too long before the camera comes with it.
+`softness` is the one thing about the ROUTE'S SHAPE an author can tune here: how far off the route two places on it count as the same place to the camera's progress (0.5 m unless the path says otherwise).
+It is what makes a bend read as one smooth advance rather than as a corner the camera catches on, and the number to raise on a route with tighter bends than the river's 0.8 m - at the cost of the camera cutting a corner a little before the player does.
 
 `range x` and `range y` are the corridor: how far off the route the player may be while the camera still narrates it.
 Two numbers for the same 16:9 reason the lead is two: the pair is read as an ellipse around the route, resolved along the direction the player actually left in, so the corridor is screen-shaped.
@@ -99,7 +98,7 @@ Tune `range x` to the route and pull `range y` down until leaving vertically sta
 Through it the path's hold on the camera fades: the target slides smoothly from the path's - the lookahead point, at the path's zoom - to the plain follow, so the lead, the zoom and everything else the path asks for all relax together as the player walks away.
 Leaving the route reads as the camera loosening its grip rather than swapping what it is framing, and by the band's outer edge the path is asking for exactly what the plain follow would - so the moment it lets go, nothing on screen changes at all.
 The fade is eased at both edges, so there is no line in the world where the camera's behaviour audibly changes gear.
-Both falloffs at 0 turn the band off: the path holds at full strength out to the release and the hand-off blend covers the swap.
+Both falloffs at 0 turn the band off: the path holds at full strength out to the release and the camera swells across the swap at its own bounded acceleration.
 
 Past the band's outer edge plus `buffer` (the same jitter hysteresis a region has, grown onto both axes) the path **lets go**, handing the camera to whatever governs where the player actually is - a region if one contains them, the plain follow otherwise.
 Coming back within the range takes the path again - the band is a graceful exit, not a wider entrance, so drifting in from the side does not grab the camera early.
@@ -149,15 +148,12 @@ What an author sees of it is that **a framing which puts the player inside that 
 At the shipped settings the band starts 20% in from the edge, and it is wide on purpose: the wider it is, the more room the override has to come on gently, and a narrow one is answered by the hard floor instead, which is the one place a jolt is left.
 The ball level's own path is comfortably clear of it standing still, so what the band catches is a swing carrying the player toward the edge, which is what it is for.
 
-**While the player hangs on a line it latches.**
-A swing that reaches the edge of the frame reaches it twice an arc, so a camera that is shoved and then eased back rocks for as long as the player hangs there.
-Instead the point it was shoved to is kept: the camera is pinned there for the rest of the swing, and the pin moves only when the guarantee has to move it again.
-Per axis, so a swing that drops the player out of the bottom of the frame pins nothing horizontally and the route goes on being narrated.
-Releasing the line drops the pin and the camera eases back to whatever the region or path wanted, blended.
+**The shove it gives is let go of slowly.**
+A swing that reaches the edge of the frame reaches it twice an arc, so a camera that is shoved and then snapped back rocks for as long as the player hangs there.
+Instead the shove decays over about a second and a half: the next arc raises it again long before it has gone, so a long hang reads as still rather than as rocking, and a player who comes back inside and stays there gets the framing the level asked for a couple of seconds later.
+Per axis, so a swing that drops the player out of the bottom of the frame holds nothing horizontally and the route goes on being narrated.
 
-The pin also **ignores anything it is asked for by less than a couple of percent of the frame**, and that is what makes a long hang read as still rather than as slowly sliding.
-Each arc of a swing reaches a centimetre or two past where the last one left the pin, and the pin is only ever pulled inward, so without the deadband those nudges accumulate: a shift too small to see happen, ten times over, into a shift you can see.
-What it costs is that the player may sit a little closer to the edge while hanging, which is the same headroom the band above is spending and the reason the two are tuned together.
+It is not gated on hanging, and it costs nothing when nothing is asking: what it does is make the guarantee's own corrections read as one slow movement rather than as a series of catches.
 Like the band, it is a global setting rather than a level field.
 
 The debug overlay draws the keep-out boxes in amber on the frames it is holding the camera - the inner one finely, where the override starts easing in, and the outer one as the line the player may never cross - and a dashed amber line across the frame through each pinned axis, so "why has the camera stopped following" has an answer on screen either way.

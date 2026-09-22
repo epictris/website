@@ -2879,7 +2879,7 @@ async function cmdCameraRide(file: string, o: Record<string, string>): Promise<v
           ` ${f.speed.toFixed(2).padStart(7)} ${f.accel.toFixed(1).padStart(7)}` +
           ` ${f.jerk.toFixed(0).padStart(7)} ${`${f.members}${f.rule[0] ?? "-"}`.padStart(6)}` +
           `  ${f.floor ? "floor" : "     "}` +
-          `${f.latchX !== null || f.latchY !== null ? " pin" : ""}`,
+          `${Math.abs(f.stickX) > 0.01 || Math.abs(f.stickY) > 0.01 ? " stick" : ""}`,
       );
     }
   }

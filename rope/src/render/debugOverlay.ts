@@ -205,9 +205,10 @@ const CAMERA_REGION = "#c792ea"; // matches the editor's camera layer
 // an authored volume, it is the one rule a level cannot opt out of, and it is
 // on screen only while it is overriding whatever the level asked for.
 const EDGE_HOLD = "#ffcc66";
-// The frame-edge latch, in the same amber: it is the same rule's doing, kept
-// rather than re-derived, so it belongs to the same family on screen.
-const EDGE_LATCH = "#ffcc66";
+// The frame guarantee's stick, in the same amber: it is the same rule's doing,
+// still being held rather than re-asked, so it belongs to the same family on
+// screen.
+const EDGE_STICK = "#ffcc66";
 
 // Metres between the direction arrowheads along a camera path. Direction is the
 // design (the lookahead never reverses), so it has to be readable at a glance.
@@ -450,7 +451,7 @@ export function drawDebugOverlay(
   drawPlayerCollider(ctx, level);
   drawCameraRules(ctx, level, heldCamera);
   drawEdgeConstraint(ctx, heldCamera);
-  drawEdgeLatch(ctx, heldCamera);
+  drawEdgeStick(ctx, heldCamera);
 }
 
 // The screen-edge keep-out, drawn ONLY on the frames it is what is holding the
@@ -489,30 +490,38 @@ function drawEdgeConstraint(ctx: CanvasRenderingContext2D, held: HeldCamera | nu
   ctx.setLineDash([]);
 }
 
-// The frame-edge latch, as a line through the pinned coordinate on each axis it
-// holds (see `CameraController.latchX`). Drawn only while an anchored episode
-// is pinning the camera, and drawn as a LINE because that is what the pin is: a
-// value on one axis, with the other still free to follow the rule.
-function drawEdgeLatch(ctx: CanvasRenderingContext2D, held: HeldCamera | null): void {
-  const latch = held?.latch;
-  if (!latch || (latch.x === null && latch.y === null)) return;
+// The frame guarantee's STICK, as a line through the aim coordinate on each
+// axis it is still holding (see `CameraController.softEdge`).
+//
+// Drawn as a LINE because that is what the stick is: a displacement on one
+// axis, with the other still free to follow the rule. It is what the old pin's
+// amber lines drew and it is on screen for the same reason - a camera that is
+// not where its rule asked for needs its cause visible - but it fades out
+// rather than being dropped, so the line is drawn only while it is worth more
+// than a centimetre and simply stops being there when the camera has returned.
+const STICK_EPSILON = 0.01;
+
+function drawEdgeStick(ctx: CanvasRenderingContext2D, held: HeldCamera | null): void {
+  if (!held) return;
+  const { stick, aim } = held;
+  if (Math.abs(stick.x) < STICK_EPSILON && Math.abs(stick.y) < STICK_EPSILON) return;
   // The visible world rect, from the transform the overlay is already drawing
-  // under: the pin is a coordinate rather than a point, so what says so is a
-  // line right across the frame.
+  // under: the stick holds a coordinate rather than a point, so what says so is
+  // a line right across the frame.
   const inv = ctx.getTransform().inverse();
   const tl = inv.transformPoint({ x: 0, y: 0 });
   const br = inv.transformPoint({ x: ctx.canvas.width, y: ctx.canvas.height });
-  ctx.strokeStyle = EDGE_LATCH;
+  ctx.strokeStyle = EDGE_STICK;
   ctx.lineWidth = 1 * PX;
   ctx.setLineDash([3 * PX, 5 * PX]);
   ctx.beginPath();
-  if (latch.x !== null) {
-    ctx.moveTo(latch.x, tl.y);
-    ctx.lineTo(latch.x, br.y);
+  if (Math.abs(stick.x) >= STICK_EPSILON) {
+    ctx.moveTo(aim.x, tl.y);
+    ctx.lineTo(aim.x, br.y);
   }
-  if (latch.y !== null) {
-    ctx.moveTo(tl.x, latch.y);
-    ctx.lineTo(br.x, latch.y);
+  if (Math.abs(stick.y) >= STICK_EPSILON) {
+    ctx.moveTo(tl.x, aim.y);
+    ctx.lineTo(br.x, aim.y);
   }
   ctx.stroke();
   ctx.setLineDash([]);

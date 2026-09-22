@@ -23,8 +23,7 @@
 
 import { Vec2 } from "../engine/vec2";
 import { BallLevel } from "../level/ballLevel";
-import type { Level } from "../level/level";
-import { CameraController, type CameraHang } from "../render/cameraController";
+import { CameraController } from "../render/cameraController";
 import { BALL_ZOOM, GRAPPLE_ZOOM, type Camera } from "../render/camera";
 import { VIEW_HEIGHT, VIEW_WIDTH } from "../render/viewport";
 import { levelFromRecording } from "./replay";
@@ -60,11 +59,11 @@ export interface RideFrame {
   // share. "-" when the camera was the plain follow.
   members: number;
   rule: string;
-  // The frame-edge guarantee: whether the floor moved the camera this frame,
-  // and the pin each axis is held at.
+  // The frame-edge guarantee: whether it was shaping the camera this frame,
+  // and how far its stick is still holding the aim off the rule's target.
   floor: boolean;
-  latchX: number | null;
-  latchY: number | null;
+  stickX: number;
+  stickY: number;
 }
 
 export interface RideResult {
@@ -127,7 +126,7 @@ export function rideRecording(rec: Recording, from = 0): RideResult {
   for (let i = 0; i < rec.frames.length; i++) {
     level.physicsProcess(deserialize(rec.frames[i]!), 1 / 60);
     const follow = level.cameraRenderPosition(1);
-    ctl.update(camera, RIDE_DT, follow, level.cameraRules, baseZoom, hangOf(level));
+    ctl.update(camera, RIDE_DT, follow, level.cameraRules, baseZoom, level.cameraAnchored);
     const held = ctl.held;
 
     const pos = camera.position;
@@ -154,8 +153,8 @@ export function rideRecording(rec: Recording, from = 0): RideResult {
         members: held.members.length,
         rule: held.rule?.kind ?? "-",
         floor: held.edge !== null,
-        latchX: held.latch.x,
-        latchY: held.latch.y,
+        stickX: held.stick.x,
+        stickY: held.stick.y,
       });
     }
 
@@ -180,10 +179,4 @@ export function rideRecording(rec: Recording, from = 0): RideResult {
     },
     meanAbsDds: frames.length ? sum / frames.length : 0,
   };
-}
-
-// What the avatar is hanging on this frame - the anchored episode's input,
-// read off whichever controller the recording is of.
-function hangOf(level: Level | BallLevel): CameraHang | null {
-  return level.cameraHang;
 }

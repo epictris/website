@@ -1020,7 +1020,7 @@ function frame(now: number): void {
     level.cameraRenderPosition(alpha),
     level.cameraRules,
     baseZoom,
-    level.cameraHang,
+    level.cameraAnchored,
   );
 
   // Poll-based aim (gamepad sticks) refreshes per rendered frame, not per
@@ -1165,7 +1165,7 @@ function warmFrame(): void {
     level.cameraRenderPosition(1),
     level.cameraRules,
     baseZoom,
-    level.cameraHang,
+    level.cameraAnchored,
   );
   scene3d.render(level, camera, 1);
 }

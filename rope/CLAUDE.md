@@ -143,8 +143,8 @@ Editor and levels
 
 Camera
 
-- [camera](docs/camera.md) - the fixed frame, follow and hand-off, regions and buffers, render interpolation, the screen-edge guarantee, its latch and the wind release.
-- [camera-paths](docs/camera-paths.md) - authored routes with lookahead, keys, corridors, falloff and the windowed projection.
+- [camera](docs/camera.md) - the fixed frame, the three layers (progress, framing, one capped spring), regions and buffers, render interpolation, the screen-edge guarantee and its stick.
+- [camera-paths](docs/camera-paths.md) - authored routes with lookahead, keys, corridors, falloff and the soft projection.
 
 Rendering
 

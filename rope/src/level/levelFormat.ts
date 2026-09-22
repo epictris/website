@@ -1543,8 +1543,8 @@ export const DEFAULT_PATH_RANGE_Y = 2.25;
 // (rangeX + falloffX, rangeY + falloffY).
 //
 // Without it, crossing the range swaps the rule outright: the camera stops
-// aiming down the route and starts aiming at the player, and the hand-off
-// blend can only smooth that over, not make it small. Through this band the
+// aiming down the route and starts aiming at the player, and the motion layer
+// can only bound that swell, not make it small. Through this band the
 // camera's target is instead interpolated from the path's (the lookahead
 // point, at the path's zoom) to the plain follow (the player, at the base
 // zoom), so by the band's outer edge the two targets are IDENTICAL and the
@@ -1591,22 +1591,6 @@ export const DEFAULT_PATH_LOOKAHEAD_Y = 1.4;
 // the route runs where the band currently sits.
 export const DEFAULT_PATH_LOOKAHEAD_BUFFER_X = 1;
 export const DEFAULT_PATH_LOOKAHEAD_BUFFER_Y = 0.55;
-
-// How far along the route a hanging avatar has to WIND themselves up their line
-// before the frame-edge latch lets the camera go, in metres: line taken in,
-// projected onto the direction the route runs where they are (see
-// `CameraController.update`, the wind release).
-//
-// A swing that carries the avatar out of the frame pins the camera where the
-// guarantee left it, for the rest of the hang - the pin is what stops the
-// return half of every swing rocking the camera back. Winding up the line
-// toward an anchor AHEAD on the route is not a swing: it is the player going
-// where the level wants them, and a camera still pinned to the backswing then
-// trails them until the far edge of the frame drags it. This is how much of
-// that travel says so. Small enough that a climb frees the camera early;
-// large enough that the wobble of a taut line's solve, and a turn or two of
-// the spool taken up mid-swing, does not.
-export const DEFAULT_PATH_WIND_BUFFER = 0.5;
 
 // How far off the route two places on it count as comparable, in metres - the
 // sigma of the camera's SOFT projection (see `render/pathProgress.ts`).
@@ -1664,8 +1648,12 @@ export interface CameraRegionData {
   // World coordinate to pin the camera to on that axis; absent = follow.
   lockX?: number;
   lockY?: number;
-  // Seconds to hand the camera in and out of this region; absent = the
-  // controller's CAMERA_BLEND_TIME.
+  // RETIRED: seconds to hand the camera in and out of this region. The camera
+  // no longer has a hand-off clock - a rule change is a step in the aim, and
+  // the motion layer answers every step at a bounded acceleration (see
+  // `render/cameraController.ts`) - so this is dropped at the one gate every
+  // level passes through and is absent everywhere downstream of it. It stays
+  // declared so a file that authored one still loads.
   blend?: number;
   // Metres (pixels on disk) the avatar must travel *outside* this region before
   // it will let the camera go: the region keeps its grip anywhere within its
@@ -1730,8 +1718,9 @@ export interface CameraRegionData {
 // If the player strays more than `range` from the polyline the path lets go and
 // the camera falls back to whatever rule governs where the player actually is -
 // a camera region if one contains them, the plain follow otherwise - and coming
-// back within range re-acquires it. Every one of those transitions is a rule
-// change, so the controller's frozen-delta hand-off blends them all for free.
+// back within range re-acquires it. Every one of those transitions is a step in
+// what the camera is aiming at, and the motion layer answers every step at a
+// bounded acceleration, so none of them can lurch.
 // One node of a camera path: a point the route passes through, plus the cubic
 // Bézier tangent handles that shape the two edges meeting at it.
 //
@@ -1770,11 +1759,9 @@ export interface CameraPathVert {
   // lengths are pixels on disk like everything else here.
   //
   // The first five shape the TARGET and are read at the committed lead origin;
-  // the next five shape the GRIP - the corridor, its falloff band and the
-  // release hysteresis - and are read at the player's projection, since that
-  // is where the range is measured from (see `pathParamsAt`). `windBuffer` is
-  // read at the player's projection too: it is about the route where they
-  // hang.
+  // the last five shape the GRIP - the corridor, its falloff band and the
+  // release hysteresis - and are read at `sNear`, since that is where the range
+  // is measured from (see `pathParamsAt`).
   viewportScale?: number;
   lookaheadX?: number;
   lookaheadY?: number;
@@ -1785,7 +1772,6 @@ export interface CameraPathVert {
   falloffX?: number;
   falloffY?: number;
   buffer?: number;
-  windBuffer?: number;
 }
 
 export interface CameraPathData {
@@ -1821,7 +1807,8 @@ export interface CameraPathData {
   // projection exactly.
   lookaheadBufferX?: number;
   lookaheadBufferY?: number;
-  // Same semantics as the region fields of the same names.
+  // Same semantics as the region fields of the same names - `blend` retired
+  // with the hand-off clock, and dropped at the same gate.
   viewportScale?: number;
   blend?: number;
   // Extra release hysteresis outside `range`; absent = REGION_EXIT_MARGIN.
@@ -1830,9 +1817,11 @@ export interface CameraPathData {
   // comparable to the soft projection (see DEFAULT_PATH_SOFTNESS, which is what
   // it falls back to). A property of the route's shape, so it is NOT keyable.
   softness?: number;
-  // How far along the route a hanging avatar winds themselves up their line
-  // before the frame-edge latch lets the camera go (see
-  // DEFAULT_PATH_WIND_BUFFER, which is what it falls back to).
+  // RETIRED: how far along the route a hanging avatar wound themselves up
+  // their line before the frame-edge latch let the camera go. There is no latch
+  // and no wind release - the guarantee's pull decays on its own clock now (see
+  // CAMERA_STICK_TAU) - so this is dropped at the one gate, on the path and on
+  // its nodes alike, and stays declared only so a file that authored one loads.
   windBuffer?: number;
   // Which rule wins against regions and other paths: the LOWEST number in force
   // wins, and rules tied at that number blend. Absent = 0, so a path and a
@@ -3061,7 +3050,8 @@ export function scaleObject(o: SceneObjectData, factor: number): SceneObjectData
 export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData {
   const data = normalizeLevelData(rawData);
   // A camera region's positions, extents, offsets, locks, buffer and falloff
-  // are lengths; viewportScale, blend (seconds) and priority are not.
+  // are lengths; viewportScale and priority are not, and the retired `blend` is
+  // dropped here rather than carried (see `CameraRegionData.blend`).
   const regions = data.cameraRegions?.map((r) => ({
     x: r.x * factor,
     y: r.y * factor,
@@ -3072,7 +3062,6 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
     ...(r.viewportScale !== undefined ? { viewportScale: r.viewportScale } : {}),
     ...(r.lockX !== undefined ? { lockX: r.lockX * factor } : {}),
     ...(r.lockY !== undefined ? { lockY: r.lockY * factor } : {}),
-    ...(r.blend !== undefined ? { blend: r.blend } : {}),
     ...(r.buffer !== undefined ? { buffer: r.buffer * factor } : {}),
     ...(r.bufferLeft !== undefined ? { bufferLeft: r.bufferLeft * factor } : {}),
     ...(r.bufferRight !== undefined ? { bufferRight: r.bufferRight * factor } : {}),
@@ -3127,7 +3116,6 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
         ...(v.falloffX !== undefined ? { falloffX: v.falloffX * factor } : {}),
         ...(v.falloffY !== undefined ? { falloffY: v.falloffY * factor } : {}),
         ...(v.buffer !== undefined ? { buffer: v.buffer * factor } : {}),
-        ...(v.windBuffer !== undefined ? { windBuffer: v.windBuffer * factor } : {}),
       })),
       // The retired scalar range/falloff were one circular radius each: folded
       // into both axes here, at the one gate, so a level that authored a
@@ -3162,9 +3150,7 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
         ? { lookaheadBufferY: p.lookaheadBufferY * factor }
         : {}),
       ...(p.viewportScale !== undefined ? { viewportScale: p.viewportScale } : {}),
-      ...(p.blend !== undefined ? { blend: p.blend } : {}),
       ...(p.buffer !== undefined ? { buffer: p.buffer * factor } : {}),
-      ...(p.windBuffer !== undefined ? { windBuffer: p.windBuffer * factor } : {}),
       ...(p.softness !== undefined ? { softness: p.softness * factor } : {}),
       ...(p.priority !== undefined ? { priority: p.priority } : {}),
     }));

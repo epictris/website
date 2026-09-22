@@ -7,27 +7,37 @@
 // the camera, so the camera does reach the sim as *input* — but the recorded
 // trace stores the resulting world point, so replays stay bit-identical.)
 //
-// Two independent smoothings, because they want very different timescales:
+// THREE LAYERS, each smooth in its inputs, so that no rule upstream can jerk
+// the screen:
 //
-//  1. **Follow lag** (CAMERA_FOLLOW_TAU, ~0.15 s) — an exponential ease of the
-//     camera toward its target. This is the "not rigidly locked to the player"
-//     part; it is short enough to never feel like the camera is behind.
-//  2. **Region hand-off** (CAMERA_BLEND_TIME, ~0.7 s, per-region override) -
-//     when the SET of regions in force changes, the gap between what the
-//     outgoing set wanted and what the incoming one wants is *frozen* at that
-//     instant and smoothstepped to zero on top of the incoming (live) target.
+//  1. **Progress** (`render/pathProgress.ts`) - where along its route the
+//     camera thinks the player is, as a soft projection rather than a nearest
+//     point, which is the one thing that makes it a continuous function of
+//     where they are.
+//  2. **Framing** (`cameraRuleTarget`, `blendCameraTarget`) - the authored
+//     idea: a path's lead at the zoom keyed there, a region's lock, offset and
+//     scale, blended by weight with the plain follow taking the unclaimed
+//     share. Piecewise, and allowed to be.
+//  3. **Motion** (`CAMERA_FREQ` and the two caps) - one critically damped
+//     spring with an acceleration cap, and the only thing that ever writes the
+//     camera's position and zoom.
 //
-// Freezing that delta is the whole point. The camera aims at the correct
-// position for the region it is now in, displaced by a decaying constant, so
-// two very different configurations that happen to agree at the crossing hand
-// over invisibly - the delta is simply zero. Cross-fading the two *live*
-// targets instead, as this used to, keeps the outgoing region tracking the
-// avatar for the whole blend, so its decaying share hauls the camera off the
-// correct position and then lets it snap back: rubber banding whose size has
-// nothing to do with how far apart the two cameras actually are.
+// The third is the load-bearing one, and it is what a pile of local smoothing
+// rules was replaced by. The old controller computed a memoryless piecewise
+// target every frame and put one first-order ease between it and the screen -
+// and every piecewise rule is a STEP IN THE TARGET'S VELOCITY: the vertex
+// projection, the window edge, both edges of the lead deadband, the ratchet
+// engaging, the pin opening and dropping, the branch challenge, the
+// frozen-delta hand-off. A first-order ease at 0.15 s attenuates a 3 Hz
+// disturbance by about a third, so every one of them leaked to the screen, and
+// most of the file was machinery trying to keep each rule individually
+// continuous - which is the wrong place for that guarantee.
 //
-// The avatar is still tracked live throughout, because the delta rides on the
-// incoming target rather than replacing it.
+// A spring with an acceleration cap makes the guarantee GLOBAL instead:
+// whatever any rule upstream does, the camera's acceleration is bounded and its
+// velocity is continuous. A rule change is a step in the aim, and a step in the
+// aim is a bounded swell. That is why there is no cross-fade clock here any
+// more, no frozen delta, and no per-region `blend`.
 //
 // A single mechanism covers default→region, region→region and region→default:
 // "no region" is just the plain follow point, which is the share of the camera
@@ -43,8 +53,8 @@
 // On top of those sits one one-sided rule, the ANCHORED EPISODE (see `update`):
 // while the avatar hangs on a taut line the camera does not walk back down the
 // track, because half of a swing is travel the level did not mean. It is not a
-// smoothing - it is a constraint, and it is given back through the hand-off
-// blend when the anchor is released.
+// smoothing - it is a constraint, and it is given back as a step in the aim
+// when the anchor is released.
 
 import { Vec2 } from "../engine/vec2";
 import { PIXELS_PER_METER } from "../engine/units";
@@ -59,7 +69,6 @@ import {
   DEFAULT_PATH_RANGE_X,
   DEFAULT_PATH_RANGE_Y,
   DEFAULT_PATH_SOFTNESS,
-  DEFAULT_PATH_WIND_BUFFER,
   DEFAULT_VIEWPORT_SCALE,
 } from "../level/levelFormat";
 import type { Camera } from "./camera";
@@ -90,13 +99,44 @@ import {
 import type { Margin } from "./shapePath";
 import { marginSides, uniformMargin } from "./shapePath";
 
-// Exponential follow time constant, seconds — the time to close ~63% of the
-// distance to the target. Small enough to stay responsive, large enough to take
-// the edge off a landing or a hook release.
-export const CAMERA_FOLLOW_TAU = 0.15;
+// --- the motion layer's parameters ------------------------------------------
+//
+// One critically damped spring, an acceleration cap and a speed cap, and
+// nothing else ever writes the camera's position or zoom.
+//
+// The FREQUENCY is the feel: how briskly the camera closes a gap it is allowed
+// to close, in hertz rather than as a time constant because a critically damped
+// second-order response has no single time constant - it rises, and 1.2 Hz is
+// about 0.3 s to settle. It replaced a first-order ease at 0.15 s, which is
+// roughly as responsive to a slow move and has no bounded acceleration at all.
+//
+// The CAP is the guarantee, and it is what the whole design rests on: the
+// camera's acceleration is bounded whatever any rule upstream does, so a step
+// in the target is a swell rather than a lurch. Measured on the exact aim
+// signal the old ease was chasing, over the two 2026-09-22 river bundles:
+//
+//                                   peak accel / jerk, m/s² and m/s³
+//   first-order 0.15 s (the old)     268f  16 / 1533     336f  55 / 2152
+//   spring 1.2 Hz, a <= 8 m/s²       268f   8 /  156     336f   8 /  314
+//
+// The two are tuned against each other and against the frame guarantee below:
+// past what the cap can deliver the SPRING is outrun, and past what the spring
+// can deliver the FLOOR is, and the floor is the one thing that may never be.
+// If play shows the floor binding on ordinary runs, raise the frequency before
+// touching the cap - the cap is the guarantee, the frequency is the feel.
+//
+// The SPEED cap is a backstop rather than a knob: 12 m/s is faster than
+// anything the level's framing asks for and slower than a teleport, so what it
+// bounds is a hand-off across half a level.
+export const CAMERA_FREQ = 1.2;
+export const CAMERA_MAX_ACCEL = 8;
+export const CAMERA_MAX_SPEED = 12;
 
-// Default region cross-fade, seconds. A region may override it with `blend`.
-export const CAMERA_BLEND_TIME = 0.7;
+// The longest frame the spring will integrate, seconds. A hitched frame is a
+// frame the wall clock spent elsewhere, not a frame the camera was allowed to
+// fly across the level in; past a tenth of a second the honest answer is that
+// the camera lagged, which is what clamping gives.
+const CAMERA_MAX_DT = 0.1;
 
 // How far outside a region the avatar must travel before the region lets go,
 // when the region does not author a `buffer` of its own. Without it, hovering
@@ -114,15 +154,13 @@ export const REGION_EXIT_MARGIN = 0.15; // metres
 //   CAMERA_EDGE_MARGIN     where the avatar may never go.
 //   CAMERA_EDGE_INNER_X/Y  where the override holds them, per axis.
 //   CAMERA_EDGE_SMOOTHING  how fast it corrects toward that, in seconds.
-//   CAMERA_LATCH_BUFFER    how much of it a PINNED axis ignores.
+//   CAMERA_STICK_TAU       how long its pull lasts once it stops being asked.
 //
 // Three of them are fractions of the frame, so they mean the same thing at any
-// zoom, and the smoothing is a clock. `edgeReach` turns the first two into the
+// zoom, and the other two are clocks. `edgeReach` turns the first two into the
 // distances a given camera actually allows - `innerReach` is the inner one -
-// `edgeOffset` is where the override wants the avatar held, `edgeTakeUp` is the
-// clock, and `latchBuffer` is the last in metres. The last belongs to the
-// anchored latch rather than to the guarantee, and is declared beside them
-// because it is tuned against them.
+// `edgeOffset` is where the override wants the avatar held, and `edgeTakeUp` is
+// the rate. The stick is declared with them because it is tuned against them.
 //
 // The law is a WINDOW, a rate, and a floor, in that order:
 //
@@ -198,8 +236,7 @@ export const CAMERA_EDGE_MARGIN = 0;
 // frame; held equal in metres - 0.1125 across to 0.2 down - it reads as a
 // uniform border, which is 216 px on all four sides of a 1080p frame. The pair
 // is the interim either way: the unit this wants is one distance, stated as a
-// fraction of the frame's HEIGHT on both axes, which is what
-// CAMERA_LATCH_BUFFER already does.
+// fraction of the frame's HEIGHT on both axes.
 //
 // It is bounded BELOW by the margin (a target inside the floor is the floor)
 // and above by half the frame, where `edgeReach` returns 0 and the camera is
@@ -312,83 +349,51 @@ export const CAMERA_EDGE_SMOOTHING = 0.3;
 // it is not allowed to take that long - the headroom term is still there, still
 // divides, and still diverges, which is what makes the floor unreachable.
 
-// How much of what the band asks for a PINNED axis simply ignores, as a
-// fraction of the frame's HEIGHT.
+// How long the frame guarantee's pull STICKS once it stops being asked for,
+// in seconds.
 //
-// It belongs to the anchored latch rather than to the band above, and it is the
-// answer to the one thing the pin does not already stop. The pin is re-pulled
-// every frame (see `latched`), so it holds only for as long as the guarantee
-// asks nothing of it - and every arc of a long swing asks for a little. The
-// avatar reaches a centimetre or two past where the last arc left the pin, the
-// pin is dragged that far in, and it never comes back out, the override only
-// ever pulling toward the avatar. Over `session-546f`'s ten arcs on one anchor
-// that is 9 cm of horizontal and 11 cm of vertical creep after the first swing
-// has done the real work: every shift too small to see happen and the sum large
-// enough to see, which is the worst shape a camera motion can have.
+// The guarantee shoves the camera to keep the avatar on screen. The question
+// this answers is what happens on the frames after a shove ends, and the whole
+// of the old anchored latch was one answer to it: pin the camera where the
+// guarantee left it and keep it there for the rest of the hang, because a swing
+// is an oscillation and the return half says nothing about where the player is
+// going. Unpinned and answered instantly, the camera eases back toward its
+// target the moment each shove ends and then gets shoved again - a wobble,
+// twice a swing, for as long as the avatar hangs there.
 //
-// A DEADBAND on the demand is enough and needs no state of its own, because
-// what the band asks of a pinned axis is a function of how far past the line
-// the avatar has got: an arc that never reaches the buffer moves the pin by
-// nothing at all, and one that does drags it by the excess. Continuous either
-// way - the excess grows out of zero - so an arc that crosses is not snapped to
-// what was asked, it pays the buffer once.
+// The pin worked and cost four mechanisms to keep working: a deadband so
+// re-pulling it every frame did not walk it in, an opening clock so a pin born
+// deep past the margin was not a step in the camera's velocity, an episode to
+// belong to, and a wind release to drop it early when the player wound
+// themselves up the line toward an anchor ahead. Every one of those was a patch
+// for the pin being a LATCH - a state with an edge, which has to be entered,
+// held and handed back.
 //
-// It has to reach BOTH halves of the guarantee, and that is the part that is
-// easy to get wrong. Buffered on the aim alone the pin holds and the camera
-// does not: the position half goes on answering the band from where the camera
-// is, pulling in over each arc and easing back out after it, so the creep
-// becomes a wobble and the camera's total travel over the same ten arcs goes
-// from 21 cm to 91. Buffered on both, it is 0.
+// A decaying pull has no edge. The window shapes the aim outright while it is
+// asking, exactly as the pin did; when it stops asking, the aim returns to the
+// rule's target on this clock instead of instantly. At 1.5 s:
 //
-// The frame's height on BOTH axes rather than each axis's own extent, because
-// what this is about is how far the camera visibly MOVES, and a shift of a
-// given number of pixels reads the same whichever way it points. Sized per
-// axis, a 16:9 frame would need a vertical shift to be nearly twice as large as
-// a horizontal one before it was worth answering, which is backwards if it is
-// anything.
+//  * a swing at the edge of the frame asks about once a period - also around
+//    1.5 s - so a pull decays only partly before the next one raises it again,
+//    and the rocking the latch existed to stop is a few centimetres of slow
+//    drift through a spring rather than a pin;
+//  * nothing has to be handed back when the anchor releases, nothing creeps (a
+//    decaying stick moves outward on its own, so there is nothing for a
+//    deadband to stop), and nothing has to open on a clock;
+//  * WINDING UP THE LINE toward an anchor ahead needs no special case at all.
+//    The player moves toward the middle of the frame, the window stops asking,
+//    and the stick decays while the spring glides the camera forward to its
+//    lead. That is what `windProgress`, `hangLength`, `windArmed`, `sinceWind`,
+//    WIND_REARM_DELAY, WIND_REST_RATE and the path's `windBuffer` field were
+//    between them for.
 //
-// At 0.02 that is 22 screen pixels, 8.6 cm of world at the ball level's zoom.
-// Over `session-546f` the first swing still does its work (22 cm of vertical
-// pin travel against 37 unbuffered), the camera's travel over every arc after
-// it is 0.000 m, and the cost is 1% of the floor's own margin: the avatar
-// reaches 0.925 of it rather than 0.916. That is what the buffer is spent on,
-// and it is the trade to read before turning it up:
-//
-//   buffer   creep after the first swing   camera travel   floor used
-//     0            9 cm / 11 cm                21 cm          0.916
-//     0.01         0 cm /  4 cm                 4 cm          0.921
-//     0.02         0    /  0                    0             0.925
-//     0.05         0    /  0                    0             0.940
-//
-// Setting it to 0 is the un-buffered pin exactly.
-//
-// It is deliberately the PIN's and not the guarantee's: the buffer is room the
-// pin is allowed to be wrong by, and what stops that mattering is that the
-// floor is enforced on the camera's own position regardless - which is why
-// `edgeAxis` runs its floor clamp even on the frames the buffer has left it
-// nothing to do.
-export const CAMERA_LATCH_BUFFER = 0.02;
-
-// The wind release's re-arm (see `CameraController.windArmed`): how long the
-// avatar has to have stopped winding up their line before a swing may pin the
-// camera again, and what "winding" is - metres per second of line taken in
-// along the route, above which a frame counts.
-const WIND_REARM_DELAY = 0.25;
-const WIND_REST_RATE = 0.05;
-
-// How long the pin's buffer takes to open, in seconds - machinery rather than a
-// knob, and the reason is in `latchOpenX`: it exists so the buffer arrives as a
-// ramp instead of as a step. Half a second is long enough that a pin born deep
-// past the margin costs a couple of m/s^2 rather than a hundred, and short
-// enough to be fully open before the second arc of any swing, which is the
-// first one it has anything to do.
-const LATCH_OPEN_TAU = 0.5;
-
-// The pin's buffer in metres, for a camera at a given zoom.
-export function latchBuffer(camera: Camera, zoom: number): number {
-  const scale = Math.max(1e-6, zoom * PIXELS_PER_METER);
-  return (camera.viewportHeight * CAMERA_LATCH_BUFFER) / scale;
-}
+// It is not gated on being anchored, and it does not need to be: the guarantee
+// is inert in ordinary play (it binds on a locked room the avatar has left, on
+// a path leading well off them, and on being outrun), and where it does bind a
+// slow return is at worst a calmer camera. The lead RATCHET stays gated on
+// anchored, because that one is about backtracking along the route rather than
+// about the edge of the frame.
+export const CAMERA_STICK_TAU = 1.5;
 
 // The buffer a region actually holds by: its own, or the jitter default.
 //
@@ -542,12 +547,10 @@ export function buildCameraRules(
 // The fields a node may key (see `CameraPathVert`). The first five shape the
 // path's TARGET - how much world is on screen, how far ahead the camera looks
 // and how much slack that lead is measured with - and are read at the
-// committed lead origin. The next five shape the GRIP - the corridor, its
-// falloff band and the release hysteresis - and are read at the player's
-// projection, the arc length the range is measured from. The last is the WIND
-// RELEASE (see `windProgress`), read at the player's projection too.
-// `pathParamsAt` resolves all eleven at whatever `s` it is given; the caller
-// knows which `s` a field is about.
+// committed lead origin. The last five shape the GRIP - the corridor, its
+// falloff band and the release hysteresis - and are read at `sNear`, the arc
+// length the range is measured from. `pathParamsAt` resolves all ten at
+// whatever `s` it is given; the caller knows which `s` a field is about.
 export const PATH_KEY_FIELDS = [
   "viewportScale",
   "lookaheadX",
@@ -559,7 +562,6 @@ export const PATH_KEY_FIELDS = [
   "falloffX",
   "falloffY",
   "buffer",
-  "windBuffer",
 ] as const;
 export type PathKeyField = (typeof PATH_KEY_FIELDS)[number];
 
@@ -583,7 +585,6 @@ const PATH_PARAM_DEFAULTS: PathParams = {
   falloffX: DEFAULT_PATH_FALLOFF_X,
   falloffY: DEFAULT_PATH_FALLOFF_Y,
   buffer: REGION_EXIT_MARGIN,
-  windBuffer: DEFAULT_PATH_WIND_BUFFER,
 };
 
 // The path-level values: what every field is with no keys at all, and what a
@@ -729,20 +730,16 @@ export function dominantRule(influences: readonly CameraInfluence[]): CameraRule
   return best?.rule ?? null;
 }
 
-function ruleBlend(r: CameraRule | null): number | undefined {
-  return r === null ? undefined : r.kind === "region" ? r.region.blend : r.path.blend;
-}
-
-// How long a hand-off between two SETS takes: the blend authored by whatever
-// joined, and failing that by whatever left. Entering a rule uses its own blend
-// and leaving one back to the default uses the blend of the rule being left, so
-// a hand-off feels symmetric; a set that gains and loses a rule at once is a
-// crossing into the room being entered, so the joiner is asked first.
-function setBlend(from: readonly CameraRule[], to: readonly CameraRule[]): number {
-  for (const r of to) if (!from.includes(r) && ruleBlend(r) !== undefined) return ruleBlend(r)!;
-  for (const r of from) if (!to.includes(r) && ruleBlend(r) !== undefined) return ruleBlend(r)!;
-  return CAMERA_BLEND_TIME;
-}
+// WHAT WAS HERE: `ruleBlend` and `setBlend`, which resolved how long a hand-off
+// between two rule sets took - the `blend` a joining rule authored, failing
+// that the one the rule being left authored, failing that CAMERA_BLEND_TIME.
+//
+// There is no hand-off clock any more. The gap between two sets is a step in
+// the aim and the motion layer answers every step the same way, at a bounded
+// acceleration, so the only thing a `blend` could have said is "take longer
+// than the camera's own physics", which is a second timescale for the same
+// motion and is exactly what made the old controller unpredictable. The field
+// is folded away at the format's one gate, so every level on disk still loads.
 
 // Are these the same rules, in any order? What decides whether the camera has
 // changed hands and the frozen-delta hand-off has to fire.
@@ -1224,16 +1221,13 @@ export function edgeAxis(
   inner: number,
   hard: number,
   dt: number,
-  slack = 0,
 ): { pos: number; pull: number } {
   const d = pos - follow;
   const away = Math.abs(d);
   const side = Math.sign(d);
-  const demand = edgePull(away, inner) - slack;
-  // Nothing asked for, but the FLOOR is not the window's to forgive: `slack`
-  // can exceed what the window asks anywhere inside the line (see
-  // CAMERA_LATCH_BUFFER), and an early return that skipped the clamp would let
-  // a wide enough buffer disarm the one rule a level may not opt out of.
+  const demand = edgePull(away, inner);
+  // Nothing asked for - but the FLOOR is not the window's to forgive, so the
+  // clamp runs even here.
   if (demand <= 0) return away <= hard ? { pos, pull: 0 } : { pos: follow + side * hard, pull: 0 };
   const pull = demand * edgeTakeUp(demand, hard - (away - demand), dt);
   return { pos: follow + side * Math.min(away - pull, hard), pull };
@@ -1333,34 +1327,94 @@ export interface HeldCamera {
   // whenever nothing is being overridden, so the overlay drawing it at all
   // means the camera is being held back rather than following.
   edge: { centre: Vec2; reach: Vec2; inner: Vec2 } | null;
-  // The frame-edge latch, per axis: where the clamp last forced the camera
-  // during the anchored episode in force, and null on an axis it has not.
-  // Non-null on an axis means the camera is PINNED there rather than aiming at
-  // the rule's target, which the overlay is otherwise unable to explain.
-  latch: { x: number | null; y: number | null };
-  // Metres the wind release has accrued toward the path's `windBuffer` (see
-  // `CameraController.windProgress`) - 0 whenever nothing is pinned.
-  wind: number;
+  // What the camera is actually aiming at this frame - the rule's target with
+  // the frame guarantee's window and its stick already on it. The camera is
+  // springing toward this and not toward the rule's own target, so it is the
+  // only thing that explains where the camera is going.
+  aim: Vec2;
+  // The STICK, per axis, in signed metres: how far the guarantee is still
+  // holding the aim off the rule's target, decaying over CAMERA_STICK_TAU once
+  // it stops being asked for. Nonzero on an axis means the camera is being held
+  // there rather than aiming where the level asked.
+  stick: { x: number; y: number };
 }
 
-// What the avatar is hanging on, for the anchored episode (see
-// `CameraController.update`): the unit direction their line leaves them along
-// - toward its first wrap or its anchor - and how much line is out. Null when
-// they are moving under their own feet. The length is what the wind release
-// watches; the pull is what says which way winding it in carries them.
-export interface CameraHang {
-  pull: Vec2;
-  length: number;
+// WHAT WAS HERE: `CameraHang`, the avatar's line as the camera saw it - the
+// direction it left them along and how much of it was out. The wind release
+// read both, to drop the frame-edge pin once the player had wound themselves
+// far enough up the line along the route. The pin is gone (see
+// CAMERA_STICK_TAU) and winding needs no special case, so what the camera asks
+// about a hang is now only whether there IS one - `anchored`, which is what the
+// lead ratchet is about.
+
+// One axis of the critically damped spring, over `dt`, in CLOSED FORM.
+//
+// `x` is the error - where the camera is minus where it is aiming - and `v` its
+// rate; the answer is where both are `dt` later, for an aim held constant over
+// the step. The closed form rather than an Euler step because it is exact for
+// every `dt`, which is the property `1 - exp(-dt/tau)` had and the reason the
+// old ease was frame-rate independent: a 60 Hz and a 144 Hz display have to
+// show the same motion, and a spring integrated numerically does not.
+//
+// Critically damped - x'' + 2wx' + w²x = 0, whose solution is
+// `(A + Bt)e^(-wt)` with `A = x` and `B = v + wx` - because that is the one
+// damping that closes a gap without overshooting it, and a camera that
+// overshoots is a camera that has to come back.
+function springStep(x: number, v: number, dt: number): { x: number; vel: number } {
+  const w = 2 * Math.PI * CAMERA_FREQ;
+  const b = v + w * x;
+  const decay = Math.exp(-w * dt);
+  return { x: (x + b * dt) * decay, vel: (v - w * b * dt) * decay };
+}
+
+// One axis of the stick: what the window is asking for now (`want`, a signed
+// displacement of the aim, zero when it asks nothing) against what the stick
+// was already holding, already decayed one frame (see CAMERA_STICK_TAU).
+//
+// The HOLD is what makes it work at all, and it is the thing to not simplify
+// away. The obvious form is "the stick IS the demand while there is one, and
+// decays once there is not" - and measured, that buys nothing whatsoever,
+// because the demand is itself continuous: it falls smoothly to zero as the
+// avatar comes back inside the inner margin, so by the frame it stops being
+// asked there is nothing left to decay. The camera returns to its target at
+// exactly the pace the avatar returns, which is the wobble the stick exists to
+// stop. Holding the largest recent demand on that side instead means the
+// extreme of a swing is what decays, over a second and a half, while the avatar
+// swings back under it.
+//
+// A demand on the OTHER side replaces the hold outright rather than being
+// blended with it: the window has just said the camera is wrong in the opposite
+// direction, and continuing to hold it the old way would be the one thing the
+// guarantee may not do. That is a step in the aim, and a step in the aim is the
+// motion layer's to absorb.
+function stick(want: number, decayed: number): number {
+  if (want === 0) return decayed;
+  return want > 0 ? Math.max(want, Math.max(0, decayed)) : Math.min(want, Math.min(0, decayed));
 }
 
 export class CameraController {
-  // The camera's own smoothed state, kept here rather than read back off the
-  // Camera: callers are free to post-process camera.position for framing (the
-  // ball controller shifts it up a tenth of a viewport) without that shift
-  // feeding back into the next frame's easing.
+  // The camera's own state, kept here rather than read back off the Camera:
+  // callers are free to post-process camera.position for framing (the ball
+  // controller shifts it up a tenth of a viewport) without that shift feeding
+  // back into the next frame.
+  //
+  // A position AND A VELOCITY, which is the motion layer: the camera is a
+  // second-order system, so where it is going is as much its state as where it
+  // is, and that is what makes its velocity continuous across a step in the
+  // target. The zoom is the same spring in LOG space, which is the geometric
+  // blend every zoom transition here already uses - 1 to 4 through 2.
   private pos = Vec2.ZERO;
-  private zoom = 1;
+  private vel = Vec2.ZERO;
+  private logZoom = 0;
+  private zoomVel = 0;
   private started = false;
+
+  // The zoom the frame guarantee reads: its margins are fractions of the frame
+  // and the frame is what the zoom decides. A getter because the spring's state
+  // is the LOG, and there is no second copy to disagree with it.
+  private get zoom(): number {
+    return Math.exp(this.logZoom);
+  }
 
   // The rules in force last frame, with the weights they were blended at.
   private members: CameraInfluence[] = [];
@@ -1389,86 +1443,26 @@ export class CameraController {
   // `clampToEdge`), for the debug overlay and for nothing else.
   private edge: { centre: Vec2; reach: Vec2; inner: Vec2 } | null = null;
 
-  // The FRAME-EDGE LATCH: per axis, where the edge clamp forced the camera
-  // during the anchored episode in force, and null on an axis it never did.
+  // The STICK: how far the frame guarantee is still holding the aim off the
+  // rule's target, per axis, in signed metres (see CAMERA_STICK_TAU).
   //
-  // A swing that carries the avatar out of the frame is answered by the edge
-  // guarantee, which shoves the camera along to keep them in it. Unlatched, the
-  // half-swing back releases the shove and the camera eases straight back to
-  // the target it was being held off: the whole arc wobbles the camera in and
-  // out, twice a swing, for as long as the avatar hangs there. So the point the
-  // clamp forced is KEPT - the camera is pinned there for the rest of the
-  // episode, and the pin moves only when the clamp forces it further. What is
-  // on screen then stops moving until the swing asks for something the frame
-  // guarantee will not allow, which is the smallest amount of camera motion a
-  // swing at the edge of the frame can be answered with.
+  // While the window is asking, this IS what it asked for - the aim is the
+  // window's answer outright, exactly as it always was. When it stops asking,
+  // this decays rather than vanishing, so the camera returns to the rule's
+  // target over a second and a half instead of on the next frame. That is the
+  // whole of what the anchored pin, its deadband, its opening clock and its
+  // wind release did between them, and it needs no episode to belong to.
   //
-  // Per axis because the clamp is per axis: a swing that drops the avatar out
+  // Per axis because the window is per axis: a swing that drops the avatar out
   // of the bottom of the frame has said nothing about the horizontal lead, and
-  // pinning x for it would freeze the route the camera is narrating.
-  //
-  // Cleared when the anchor is released, which is what hands the camera back to
-  // its rule - through the hand-off blend, since the gap by then is arbitrary.
-  private latchX: number | null = null;
-  private latchY: number | null = null;
+  // holding x for it would freeze the route the camera is narrating.
+  private stickX = 0;
+  private stickY = 0;
 
-  // Whether the avatar was anchored last frame - the edge of the episode the
-  // latch and the lead ratchet both belong to.
-  private wasAnchored = false;
-
-  // How far open each axis's pin buffer is, 0..1 (see CAMERA_LATCH_BUFFER).
-  //
-  // The buffer cannot simply switch on with the pin. A pin is born wherever the
-  // override happened to be when the anchor was taken, which on a swing already
-  // at the edge of the frame is deep past the margin, and taking a tenth of a
-  // metre of demand away in one frame is a step in the camera's VELOCITY - the
-  // one
-  // thing it may not have (measured on `session-546f`: 112 m/s^2 on the frame
-  // after the anchor, against 26 without). It opens on the same clock the
-  // band's own rate uses, and closes the same way when the pin is dropped.
-  private latchOpenX = 0;
-  private latchOpenY = 0;
-
-  // The WIND RELEASE: the one thing besides the anchor letting go that drops
-  // the pin.
-  //
-  // A pin is the answer to a SWING - the return half of an oscillation says
-  // nothing about where the player is going, so the camera is held where the
-  // guarantee left it rather than rocked back. Winding up the line is not a
-  // swing. The player is hauling themselves toward the anchor, and when the
-  // anchor lies ahead on the route that is the level's own direction: a camera
-  // still pinned to the backswing then trails them, until the far edge of the
-  // frame drags it forward a shove at a time. So the pin is dropped once the
-  // winding has carried them `windBuffer` metres along the route (the path's
-  // field, read where they hang), and the camera goes back to its rule through
-  // the hand-off blend, exactly as it does when the anchor lets go. A path's
-  // release and nobody else's: a pin under a locked room has no route to be
-  // ahead on.
-  //
-  // `windProgress` is what has been taken in since the pin was born, each
-  // frame's shortening projected onto the route's direction where the avatar
-  // is - so winding straight up under a horizontal route counts for nothing,
-  // and paying line back out counts against it, down to zero. Measured from
-  // the pin's birth rather than the anchor's, because it is the pin's release,
-  // and a turn of the spool taken before any pin existed is no reason to drop
-  // one later.
-  //
-  // `windArmed` is what stops the release re-pinning on the spot. The camera
-  // leaves the pin toward a target the avatar is still behind, so the
-  // guarantee is asking on the very next frame, and a pin recorded then is the
-  // old pin back with its progress reset - which, measured, is a camera that
-  // catches the climb up in steps of the buffer, a blend at a time. So while
-  // the winding goes on no pin is recorded at all, and the guarantee carries
-  // the camera up after them at the pace they wind (it is asking every frame,
-  // and unlatched it answers every frame). The pin is armed again
-  // `WIND_REARM_DELAY` after the last frame that took line in along the route
-  // faster than `WIND_REST_RATE` - a rate rather than any take-up at all,
-  // because a taut line's solve breathes by a few microns a frame and a swing
-  // must not read as a wind.
-  private windProgress = 0;
-  private hangLength: number | null = null;
-  private windArmed = true;
-  private sinceWind = Infinity;
+  // What the camera aimed at on the last frame - the rule's target with the
+  // window and the stick already on it. Recorded for the overlay, which cannot
+  // otherwise explain where the camera is going.
+  private aim = Vec2.ZERO;
 
   // How far the band moved the AIM on this frame, per axis, in metres. A
   // record of what just happened rather than carried state - the override has
@@ -1488,14 +1482,6 @@ export class CameraController {
   // question the editor asks, not a property of the level, so it lives here and
   // is never written to a file.
   edgeClamp = true;
-
-  // Hand-off state: the target gap frozen when the rule last changed - the
-  // outgoing position minus the incoming one, and the outgoing zoom over the
-  // incoming one - decayed to nothing over `dur`, with `s` the raw progress.
-  private offset = Vec2.ZERO;
-  private zoomRatio = 1;
-  private s = 1;
-  private dur = CAMERA_BLEND_TIME;
 
   // The rule doing most of the framing, for a caller that wants one name for
   // what the camera is doing. It cannot be recomputed outside: the grip depends
@@ -1518,8 +1504,8 @@ export class CameraController {
       s: this.pathS,
       leadS: this.pathLeadS,
       edge: this.edge,
-      latch: { x: this.latchX, y: this.latchY },
-      wind: this.windProgress,
+      aim: this.aim,
+      stick: { x: this.stickX, y: this.stickY },
     };
   }
 
@@ -1553,43 +1539,29 @@ export class CameraController {
     );
   }
 
-  // `hang` is what the avatar is hanging on - a taut line rather than their
-  // own feet (see `Level.cameraHang`) - and having one opens an EPISODE in
-  // which the camera does not walk back down the track.
+  // `anchored` is whether the avatar is hanging on a taut line rather than
+  // moving under their own feet (see `Level.cameraAnchored`), and it opens the
+  // one one-sided rule left in the controller: the committed lead origin
+  // RATCHETS forward (see `committedLeadS`), so the target only ever moves
+  // further along the route.
   //
   // A swing is an oscillation, so half of it is travel the level did not mean:
   // the forward half says where the player is going and the return half says
   // nothing, and a camera that answers both equally spends the whole arc
-  // rocking. Two one-sided rules answer that at the two levels it happens on,
-  // and they are the same statement said twice:
-  //
-  //  * the committed lead origin RATCHETS forward (see `committedLeadS`), so
-  //    the target only ever moves further along the route;
-  //  * the frame-edge guarantee LATCHES (see `latchX`/`latchY`), so a shove it
-  //    had to give the camera is kept rather than eased back out of.
-  //
-  // The second is what happens when the first is not enough. With the lead
-  // ratcheted the target stays forward while the avatar swings back, so far
-  // enough back and the frame guarantee takes over and hauls the camera after
-  // them - the one camera rule a level may never opt out of, and it outranks
-  // this one too. Where it leaves the camera then becomes the pin, so the
-  // forward half of the next swing does not spring the camera back off it.
-  //
-  // The episode ends when the anchor is released, and the camera returns to
-  // whatever its rule wants through the frozen-delta hand-off below, since by
-  // then the gap is arbitrary and a 0.15 s ease across it would be a lurch.
-  // The pin alone also lets go mid-episode, once the avatar has wound
-  // themselves far enough up the line along the route (see `windProgress`),
-  // through the same hand-off and for the same reason.
+  // rocking. The ratchet is that said at the level of the ROUTE. It used to be
+  // said a second time at the level of the FRAME - the edge guarantee latched
+  // where it had shoved the camera, for the rest of the hang - and that half is
+  // now the stick (see CAMERA_STICK_TAU), which needs no episode: a swing at
+  // the edge of the frame asks about once a period, so the pull barely decays
+  // between asks and the camera stays where the guarantee left it anyway.
   update(
     camera: Camera,
     dt: number,
     follow: Vec2,
     rules: readonly CameraRule[],
     baseZoom: number,
-    hang: CameraHang | null,
+    anchored: boolean,
   ): void {
-    const anchored = hang !== null;
     if (!this.started) {
       // A snap is history-free: there is no incumbent to keep a grip, and no
       // tracked projection or committed lead to continue from.
@@ -1598,22 +1570,11 @@ export class CameraController {
       this.pathS = 0;
       this.pathNearS = 0;
       this.pathLeadS = 0;
-      this.latchX = null;
-      this.latchY = null;
       this.aimPullX = 0;
       this.aimPullY = 0;
-      this.latchOpenX = 0;
-      this.latchOpenY = 0;
-      this.windProgress = 0;
-      this.hangLength = null;
-      this.windArmed = true;
-      this.sinceWind = Infinity;
+      this.stickX = 0;
+      this.stickY = 0;
     }
-
-    // The frame the episode ends on. The lead origin un-ratchets and the latch
-    // lets go together, and both are read BELOW - the outgoing aim is the one
-    // they were still shaping.
-    const releasing = this.wasAnchored && !anchored;
 
     // Resolved BEFORE the rule decision, because a path's grip is measured to
     // the tracked projection rather than to the global closest point. The grip
@@ -1706,26 +1667,6 @@ export class CameraController {
     }
     const s = progress;
 
-    // The wind release (see `windProgress`): what this frame's take-up of the
-    // line is worth along the route where the avatar hangs, whether the sum
-    // since the pin was born has reached the path's buffer there, and how long
-    // it has been since they were winding at all. Read before the hand-off
-    // decision, since the release IS one.
-    let takeUp = 0;
-    if (hang && this.hangLength !== null && nextSeat) {
-      // `tangentAt` is a chord, not a unit vector; the projection wants one.
-      const chord = tangentAt(nextSeat.index, s);
-      const span = chord.length();
-      const along = span > 0 ? Math.max(0, chord.dot(hang.pull) / span) : 0;
-      takeUp = (this.hangLength - hang.length) * along;
-    }
-    this.hangLength = hang?.length ?? null;
-    const pinned = this.latchX !== null || this.latchY !== null;
-    if (pinned) this.windProgress = Math.max(0, this.windProgress + takeUp);
-    if (dt > 0) this.sinceWind = takeUp / dt > WIND_REST_RATE ? 0 : this.sinceWind + dt;
-    const unpinning =
-      pinned && nextSeat !== null && this.windProgress > pathParamsAt(nextSeat, nearS).windBuffer;
-
     // Acquiring a path commits the lead to the projection outright - entering
     // (a branch jump included) is history-free, so the band starts centred on
     // the avatar rather than holding an offset earned somewhere else on the
@@ -1762,163 +1703,92 @@ export class CameraController {
       this.pathS = s;
       this.pathNearS = nearS;
       this.pathLeadS = leadS;
-      this.offset = Vec2.ZERO;
-      this.zoomRatio = 1;
-      this.s = 1;
-      this.zoom = target.zoom;
-      this.pos = this.holdEdge(
-        camera,
-        this.softEdge(camera, target.pos, follow, Infinity),
-        follow,
-        Infinity,
-      );
-      this.wasAnchored = anchored;
+      // A snap is the spring placed at its aim AT REST: a velocity carried over
+      // from before a reset would be a swoop across the level, which is the one
+      // thing `snap` exists to stop.
+      this.vel = Vec2.ZERO;
+      this.zoomVel = 0;
+      this.logZoom = Math.log(Math.max(1e-9, target.zoom));
+      this.aim = this.softEdge(camera, target.pos, follow, Infinity);
+      this.pos = this.holdEdge(camera, this.aim, follow, Infinity);
       camera.position = this.pos;
       camera.zoom = this.zoom;
       return;
     }
 
-    if (
-      !sameRules(nextRules, this.members.map((m) => m.rule)) ||
-      branchJump ||
-      releasing ||
-      unpinning
-    ) {
-      // The discrepancy is measured between the two *targets*, not against
-      // where the camera is: aiming at the camera's own position would drop its
-      // velocity to nothing for an instant, which reads as a hitch. Taken this
-      // way the aim point is unchanged on the crossing frame, so the camera
-      // carries its follow lag straight through and only the delta decays.
-      // Any remainder of an interrupted hand-off is folded in, which keeps that
-      // case continuous too.
-      //
-      // A branch jump comes through here too even though the rule identity is
-      // unchanged: the jump in arc length moves the lookahead target by the
-      // gap between the branches, and freezing that delta is exactly what this
-      // machinery is for.
-      //
-      // An outgoing PATH is evaluated at its tracked projection, not at a fresh
-      // global one: both targets have to be measured at the same instant and on
-      // the same branch, or the frozen delta is a gap that never existed.
-      //
-      // A RELEASED anchor comes through here for the same reason a branch jump
-      // does, and it is the larger step of the two: the lead origin gives up a
-      // whole swing's worth of ratchet in one frame, and a pinned camera gives
-      // up however far the frame guarantee had shoved it. The outgoing aim is
-      // taken with the episode's constraints still on - the ratcheted lead
-      // origin, and the pin over the top of it - so the delta frozen here is
-      // exactly what the release gave up, and the camera leaves the pin at the
-      // blend's pace rather than the follow lag's. A WIND release is the same
-      // step without the ratchet's half: the lead origin stays where the
-      // episode has walked it, and what is frozen is the pin alone.
-      //
-      // The OUTGOING set is re-weighted here rather than reusing last frame's
-      // weights, for the same reason its targets are re-evaluated: both sides
-      // of the delta have to be what the two sets ask for at this instant, or
-      // the frozen gap is one that never existed. A rule leaving a set it had
-      // already faded out of therefore freezes nothing at all - which is the
-      // whole point of a `falloff` band, and why a blended hand-off is
-      // invisible where a bandless one needs the full cross-fade.
-      const prev = blendCameraTarget(
-        cameraInfluences(
-          this.members.map((m) => m.rule),
-          follow,
-          heldSeat?.at ?? null,
-        ),
-        follow,
-        baseZoom,
-        this.pathLeadS,
-      );
-      const rest = 1 - smoothstep(this.s);
-      this.offset = this.latched(prev.pos.add(this.offset.mul(rest))).sub(target.pos);
-      this.zoomRatio = (prev.zoom * this.zoomRatio ** rest) / target.zoom;
-      this.s = 0;
-      this.dur = setBlend(
-        this.members.map((m) => m.rule),
-        nextRules,
-      );
-    }
+    // WHAT WAS HERE: the frozen-delta hand-off. When the rule set changed - or
+    // a branch jumped, or an anchor released, or a pin dropped - the gap
+    // between what the outgoing set wanted and what the incoming one wants was
+    // frozen at that instant and smoothstepped to zero over `CAMERA_BLEND_TIME`
+    // on top of the incoming target.
+    //
+    // Every one of those is a step in the AIM, and the motion layer below
+    // answers a step in the aim with a bounded swell whatever caused it, so
+    // there is nothing left for a hand-off to do. What is lost with it is real
+    // and worth naming: the blend was tunable per rule and the swell is not, so
+    // a room that wanted a slow, deliberate crossing can no longer buy one.
+    // What is gained is that there is exactly one timescale in the camera's
+    // motion rather than two fighting over the same frames - which is what made
+    // the old one unpredictable, since which of the two you got depended on
+    // whether a rule identity happened to change.
     this.members = members;
     this.seat = nextSeat;
     this.pathS = s;
     this.pathNearS = nearS;
     this.pathLeadS = leadS;
-    this.s = this.dur > 0 ? Math.min(1, this.s + dt / this.dur) : 1;
-    // Read by the hand-off above and dropped here: outside an episode there is
-    // nothing pinning the camera, and the gap the pin leaves behind is already
-    // frozen into the delta that is now decaying. A wind release drops it the
-    // same way and DISARMS the next pin (see `windArmed`); the anchor letting
-    // go re-arms it, since the next episode starts with a clean slate.
-    if (!anchored || unpinning) {
-      this.latchX = null;
-      this.latchY = null;
-      this.windProgress = 0;
-      this.windArmed = !anchored;
-    }
-    this.wasAnchored = anchored;
 
-    // What is left of the hand-off discrepancy, laid on top of the live target,
-    // and then the pin - which outranks every rule, being the frame guarantee's
-    // own answer kept rather than re-derived.
-    const k = 1 - smoothstep(this.s);
-    const aimZoom = target.zoom * this.zoomRatio ** k;
+    // A hitched frame is a frame the wall clock spent elsewhere, not a frame
+    // the camera was allowed to fly across the level in.
+    const step = Math.min(Math.max(0, dt), CAMERA_MAX_DT);
 
-    // Frame-rate independent exponential ease: the same time constant on a
-    // 60 Hz and a 144 Hz display. The zoom first, because the frame guarantee
-    // is a fraction of the frame and the frame is what the zoom decides.
-    const t = 1 - Math.exp(-Math.max(0, dt) / CAMERA_FOLLOW_TAU);
-    this.zoom = lerpZoom(this.zoom, aimZoom, t);
+    // The zoom first, because the frame guarantee is a fraction of the frame and
+    // the frame is what the zoom decides. Through the same spring, in log space.
+    const zoomStep = springStep(
+      this.logZoom - Math.log(Math.max(1e-9, target.zoom)),
+      this.zoomVel,
+      step,
+    );
+    this.zoomVel = zoomStep.vel;
+    this.logZoom += this.zoomVel * step;
 
     // The frame guarantee, in its two halves (see CAMERA_EDGE_MARGIN and the
     // parameters beside it). The SOFT half shapes what the camera is aiming
-    // at, so the camera answers it through the follow ease and its velocity
+    // at, so the camera answers it through its own motion and its velocity
     // turns over rather than reversing; the HARD half is applied last and to
     // where the camera actually IS, because a target the avatar can outrun is
-    // not a guarantee and outrunning the ease is exactly what a launch does.
-    // The pin buffer opens and closes on the window's own clock rather than with
-    // the pin (see `latchOpenX`). Advanced before the guarantee runs and from
-    // LAST frame's pins, so the frame a pin is born carries no buffer at all -
-    // which is what makes a pin born deep past the margin cost nothing.
-    const open = 1 - Math.exp(-Math.max(0, dt) / LATCH_OPEN_TAU);
-    this.latchOpenX += ((this.latchX === null ? 0 : 1) - this.latchOpenX) * open;
-    this.latchOpenY += ((this.latchY === null ? 0 : 1) - this.latchOpenY) * open;
-
-    const aimPos = this.softEdge(camera, this.latched(target.pos.add(this.offset.mul(k))), follow, dt);
-    this.pos = this.pos.add(aimPos.sub(this.pos).mul(t));
-    this.pos = this.holdEdge(camera, this.pos, follow, dt);
-
-    // Whatever the guarantee moved is the pin, per axis and per anchored
-    // episode: the aim where the soft half shaped it, and the camera's own
-    // position where the floor had to catch it, the floor being the stronger
-    // demand of the two.
-    //
-    // Not while a wind release has the pin DISARMED, which lasts until the
-    // avatar has stopped winding (see `windArmed`). A pin born here starts the
-    // wind release's count from zero.
-    if (!this.windArmed && this.sinceWind >= WIND_REARM_DELAY) this.windArmed = true;
-    if (anchored && this.windArmed) {
-      const was = this.latchX !== null || this.latchY !== null;
-      if (this.aimPullX > 0) this.latchX = aimPos.x;
-      if (this.aimPullY > 0) this.latchY = aimPos.y;
-      if (!was && (this.latchX !== null || this.latchY !== null)) this.windProgress = 0;
+    // not a guarantee and outrunning the spring is exactly what a launch does.
+    const aimPos = this.softEdge(camera, target.pos, follow, step);
+    this.aim = aimPos;
+    const before = this.pos;
+    // The spring, then the caps, then integrate what is left. The caps are
+    // taken as VECTOR lengths over both axes so a diagonal move is not faster
+    // than an axial one, and the position is integrated from the capped
+    // velocity rather than from the spring's own closed-form displacement -
+    // which is what makes the cap bound the motion rather than only the
+    // velocity that was asked for.
+    const sx = springStep(this.pos.x - aimPos.x, this.vel.x, step);
+    const sy = springStep(this.pos.y - aimPos.y, this.vel.y, step);
+    let dv = new Vec2(sx.vel - this.vel.x, sy.vel - this.vel.y);
+    const dvMax = CAMERA_MAX_ACCEL * step;
+    if (dv.lengthSquared() > dvMax * dvMax) dv = dv.normalized().mul(dvMax);
+    let vel = this.vel.add(dv);
+    if (vel.lengthSquared() > CAMERA_MAX_SPEED * CAMERA_MAX_SPEED) {
+      vel = vel.normalized().mul(CAMERA_MAX_SPEED);
     }
+    this.vel = vel;
+    this.pos = this.pos.add(vel.mul(step));
+    const held = this.holdEdge(camera, this.pos, follow, step);
+    // The floor may move the camera, and when it does the spring's velocity has
+    // to become what the frame ACTUALLY moved: carried over unchanged it would
+    // spend the next frame fighting a constraint that has already won, which is
+    // the camera pressing against the floor instead of riding it.
+    if (step > 0 && (held.x !== this.pos.x || held.y !== this.pos.y)) {
+      this.vel = held.sub(before).div(step);
+    }
+    this.pos = held;
 
     camera.position = this.pos;
     camera.zoom = this.zoom;
-  }
-
-  // How one axis of the aim asks the band for its answer: outright and in full
-  // if the axis is free, and over the clock less the pin's buffer if it is
-  // pinned (see CAMERA_LATCH_BUFFER, and `softEdge` for why an unpinned aim
-  // takes the whole of it at once).
-  private pinnedAsk(pin: number | null, openness: number, dt: number, buffer: number): [number, number] {
-    return pin === null ? [Infinity, buffer * openness] : [dt, buffer * openness];
-  }
-
-  // `p` with each latched axis replaced by its pin (see `latchX`).
-  private latched(p: Vec2): Vec2 {
-    if (this.latchX === null && this.latchY === null) return p;
-    return new Vec2(this.latchX ?? p.x, this.latchY ?? p.y);
   }
 
   // The SOFT half of the frame guarantee, applied to what the camera is AIMING
@@ -1928,37 +1798,45 @@ export class CameraController {
   // only ever be a correction - the camera's velocity is whatever the
   // correction happens to need this frame, and on a backswing that is a
   // reversal, since the camera is still advancing into a lead the avatar has
-  // already left. Applied to the aim, the camera answers it through the same
-  // exponential ease it answers everything else with: the forward motion is
-  // bled off and turned over on the follow lag's own clock, and there is no
-  // frame on which the camera's speed jumps.
+  // already left. Applied to the aim, the camera answers it through the motion
+  // layer: the forward motion is bled off and turned over at a bounded
+  // acceleration, and there is no frame on which the camera's speed jumps.
   //
   // The aim can be outrun, which is exactly why it is only the soft half; the
   // floor below cannot.
   //
-  // The band is given OUTRIGHT here rather than at the rate law, because an aim
-  // is rebuilt from the rule every frame and holds nothing: a fraction of it
-  // per frame would be a band permanently weakened to that fraction rather than
-  // a delayed one. A LATCHED axis is the exception and takes the rate, the pin
-  // being state and accumulating exactly as the camera's position does - and it
-  // has to, since the pin is re-pulled every frame and is therefore an
-  // integrator of whatever this gives it (measured: given outright, the pin
-  // walks in three times as far over a swing, which is the camera following the
-  // avatar back in that the latch exists to stop).
+  // The band is given OUTRIGHT rather than over a clock, because an aim is
+  // rebuilt from the rule every frame and holds nothing: a fraction of it per
+  // frame would be a band permanently weakened to that fraction rather than a
+  // delayed one, and the delay belongs to the camera's own motion.
+  //
+  // And this is where the STICK lives (see CAMERA_STICK_TAU). While the window
+  // is asking, the aim is its answer outright and the stick IS that answer;
+  // when it stops asking, the stick decays instead of vanishing, so the aim
+  // comes back to the rule's target over a second and a half. Held as a signed
+  // displacement rather than as a coordinate, so a target that crosses the
+  // follow point carries the stick with it rather than having it re-applied on
+  // the wrong side.
   private softEdge(camera: Camera, aim: Vec2, follow: Vec2, dt: number): Vec2 {
     if (!this.edgeClamp) {
       this.aimPullX = 0;
       this.aimPullY = 0;
+      this.stickX = 0;
+      this.stickY = 0;
       return aim;
     }
     const hard = edgeReach(camera, this.zoom);
     const inner = innerReach(camera, this.zoom);
-    const buffer = latchBuffer(camera, this.zoom);
-    const x = edgeAxis(aim.x, follow.x, inner.x, hard.x, ...this.pinnedAsk(this.latchX, this.latchOpenX, dt, buffer));
-    const y = edgeAxis(aim.y, follow.y, inner.y, hard.y, ...this.pinnedAsk(this.latchY, this.latchOpenY, dt, buffer));
+    const x = edgeAxis(aim.x, follow.x, inner.x, hard.x, Infinity);
+    const y = edgeAxis(aim.y, follow.y, inner.y, hard.y, Infinity);
     this.aimPullX = x.pull;
     this.aimPullY = y.pull;
-    return new Vec2(x.pos, y.pos);
+    // `Infinity` here is a snap and wants no decay at all - the camera is being
+    // placed, not moved.
+    const decay = Number.isFinite(dt) ? Math.exp(-Math.max(0, dt) / CAMERA_STICK_TAU) : 0;
+    this.stickX = stick(x.pos - aim.x, this.stickX * decay);
+    this.stickY = stick(y.pos - aim.y, this.stickY * decay);
+    return new Vec2(aim.x + this.stickX, aim.y + this.stickY);
   }
 
   // The HOLDING half, on where the camera actually IS and applied last: the
@@ -1967,10 +1845,11 @@ export class CameraController {
   // however fast they got there.
   //
   // The aim can be outrun and this cannot, which is why there are two of them
-  // rather than one. What outruns it is not a launch but the ordinary follow
-  // lag: the camera trails its aim by `speed x CAMERA_FOLLOW_TAU`, so a
-  // sustained excursion would otherwise ride the floor - the one place a step
-  // is left - even though the aim it is chasing is comfortably inside.
+  // rather than one. What outruns it is not only a launch but the camera's own
+  // motion: a critically damped spring trails a steady target by `2 * speed /
+  // omega` and cannot turn faster than CAMERA_MAX_ACCEL at all, so a sustained
+  // excursion would otherwise ride the floor - the one place a step is left -
+  // even though the aim it is chasing is comfortably inside.
   //
   // This is where the SMOOTHING lives, and it is the one place a fraction of
   // the demand per frame means a delay rather than a weakening: `this.pos` is
@@ -1989,9 +1868,8 @@ export class CameraController {
     }
     const reach = edgeReach(camera, this.zoom);
     const inner = innerReach(camera, this.zoom);
-    const buffer = latchBuffer(camera, this.zoom);
-    const hx = edgeAxis(pos.x, follow.x, inner.x, reach.x, dt, buffer * this.latchOpenX);
-    const hy = edgeAxis(pos.y, follow.y, inner.y, reach.y, dt, buffer * this.latchOpenY);
+    const hx = edgeAxis(pos.x, follow.x, inner.x, reach.x, dt);
+    const hy = edgeAxis(pos.y, follow.y, inner.y, reach.y, dt);
     const clamped = new Vec2(hx.pos, hy.pos);
     const engaged = this.aimPullX > 0 || this.aimPullY > 0;
     this.edge =

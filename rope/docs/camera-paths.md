@@ -37,38 +37,35 @@ Isotropic pairs are identical under both readings, so this only ever differs whe
 ## The lookahead buffer
 
 `lookaheadBufferX` / `lookaheadBufferY` are a **deadband on the arc length the lead is measured from**, and they are the answer to swinging.
-A swing is an oscillation ALONG the route - the projection runs forward and back several times a second - so a lead taken from it exactly sloshes the camera with it, which no amount of `CAMERA_FOLLOW_TAU` fixes because the target itself is rocking.
+A swing is an oscillation ALONG the route - the projection runs forward and back several times a second - so a lead taken from it exactly sloshes the camera with it, which no amount of smoothing fixes because the target itself is rocking.
 `committedLeadS` clamps the committed point into a band of this width around the projection, so it does not move at all while the avatar stays inside: on the first half-swing the band is dragged to one edge, and every swing after that moves it by nothing.
 Absorbed rather than damped, which is the difference from easing harder.
 
-Clamping rather than "hold, then jump to the avatar" is what keeps it CONTINUOUS - the committed point is only ever dragged by the edge of the band, so there is no step in the target for the hand-off machinery to have to blend.
+Clamping rather than "hold, then jump to the avatar" is what keeps it CONTINUOUS - the committed point is only ever dragged by the edge of the band, so there is no step in the target at all.
 The price is that on genuine forward travel the lead is short by the band, which is what the buffer MEANS and what an author is choosing when they widen it.
 It is centred on the avatar on acquisition, like the projection itself: entering is history-free, so the band never carries an offset earned somewhere else on the route.
 
 The pair is resolved through `axisBlend` - the same helper `pathLookahead` uses, and for the same 16:9 reason - against the direction the route runs where the BAND currently sits, which on a bend is not where the avatar is.
 It is measured along the route, so it reads its zeroes the same way the lead does: one zeroed axis costs the band what that axis was worth and nothing more, and both zeroed is no band at all.
 
-`cli camera` asserts the pair that makes the claim: the same swing with the band absorbs it (the committed point's range is exactly 0 and the camera's travel over the last second is 0) and without it does not (the camera keeps moving), plus that a swing WIDER than the band is dragged by exactly its excursion less the band on each side, and that the same swing is absorbed along a horizontal route and not along a vertical one when the two axes differ.
+`cli camera` asserts the pair that makes the claim: the same swing with the band absorbs it (the committed point's range is exactly 0 and the camera's travel over the last second is 0) and without it does not (the camera keeps moving - stated as a comparison, since a swing at 2.4 Hz is most of an octave above the camera's own 1.2 Hz and the motion layer attenuates whatever survives the band), plus that a swing WIDER than the band is dragged by exactly its excursion less the band on each side, and that the same swing is absorbed along a horizontal route and not along a vertical one when the two axes differ.
 
 ## The anchored episode
 
-While the avatar is **anchored** - hanging on a taut line rather than moving under their own feet (`Level.cameraHang`, `BallLevel.cameraHang`) - the camera does not walk back down the track.
+While the avatar is **anchored** - hanging on a taut line rather than moving under their own feet (`Level.cameraAnchored`, `BallLevel.cameraAnchored`) - the camera does not walk back down the track.
 
 The reason is that a swing is an oscillation, so half of it is travel the level did not mean: the forward half says something about where the player is going and the return half says nothing, and a camera that answers both equally spends the whole arc rocking.
 The band above absorbs an oscillation narrower than itself and can do nothing about a wider one - past the band the committed point is dragged by whichever edge it reaches, and a swing reaches both.
 
 So while anchored the band is a **RATCHET**: `committedLeadS` keeps its rear edge and drops its front one, so the committed lead origin only ever moves further along the route.
 A wide swing then walks it forward an arc at a time and holds it at the furthest it reached, rather than sawing it back and forth by the excursion less the band.
-It stays one-sided rather than becoming a freeze because the forward drag is what keeps it continuous: the origin is still only ever moved by an edge of the band, so there is still no step in the target for the hand-off machinery to blend.
+It stays one-sided rather than becoming a freeze because the forward drag is what keeps it continuous: the origin is still only ever moved by an edge of the band, so there is still no step in the target.
 
-That leaves the case the ratchet cannot answer on its own, which is a backswing wide enough to put the avatar off the screen: the target is forward, they are behind it, and the **frame-edge guarantee** takes over and hauls the camera after them (see [**The latch**](camera.md#the-latch), which is what stops the forward half springing the camera straight back off where it left it).
+That leaves the case the ratchet cannot answer on its own, which is a backswing wide enough to put the avatar off the screen: the target is forward, they are behind it, and the **frame-edge guarantee** takes over and hauls the camera after them (see [**The stick**](camera.md#the-stick), which is what stops the forward half springing the camera straight back off where it left it).
 The two are the same one-sided statement made at the two levels it happens on, and the guarantee wins where they disagree.
 
 The episode ends when the anchor is released.
-The lead origin is handed back to the band in one frame - a step of everything the ratchet had earned - and that step goes through the frozen-delta hand-off, exactly as a branch jump does and for the same reason.
-
-The pin alone also lets go mid-episode, once the avatar has wound themselves `windBuffer` metres up their line along the route - see [**The wind release**](camera.md#the-wind-release).
-The ratchet is untouched by it: winding toward an anchor ahead is travel the level meant, and the origin it has earned stays earned.
+The lead origin is handed back to the band in one frame - a step of everything the ratchet had earned - and that step is a step in the AIM, which the motion layer answers at a bounded acceleration exactly as it answers a branch jump or a rule change.
 
 It is gated on the anchor rather than applied always because that is the distinction it is about: a player rolling along the route does not oscillate, so there is nothing one-sided to say about them, and a ratchet with no episode boundary would have no moment at which it could ever be given back.
 
@@ -112,7 +109,7 @@ A node's arc length is only known once the curve into it is flattened, so `flatt
 The **target** fields (view, lead, lead buffer) are read at the **committed lead origin** (`pathLeadS`), not at the raw projection.
 The lead origin sits still inside the lookahead deadband while a swing runs back and forth under it, so a swing across a zoom gradient moves the zoom by nothing - read at the projection it would pump every half-swing, which no easing fixes because the target itself is rocking.
 `keys-are-read-at-the-lead-origin` asserts the pair: the same swing across a keyed gradient with the band leaves the zoom at rest, and without it does not.
-Nothing new is needed for hand-offs: a rule change or a branch jump already runs the target through the frozen-delta blend, zoom ratio included.
+Nothing new is needed for hand-offs: a rule change or a branch jump is a step in the aim, and the motion layer answers every step at a bounded acceleration, zoom included (it springs in `log(zoom)`).
 
 The **grip** fields (range, falloff, buffer) are read at the **projection** - the global one on acquisition, the windowed one while held, the same standing (`PathStanding`) the grip was always measured against - because the range is a statement about the point on the route the player is nearest, and it is the quantity the offset is measured from.
 `grip-keys-are-read-at-the-projection` asserts the smoothstepped corridor width against acquisition, and `grip-keys-hold-by-the-keyed-buffer` that a held path lets go by the buffer where the player is projected.
@@ -143,13 +140,13 @@ The retired scalar `range` / `falloff` are folded into both axes by `scaleLevelD
 
 ## The falloff band
 
-The falloff is the band OUTSIDE the range the path lets go over, and it exists because crossing the range used to swap the rule outright - the camera aiming down the route one frame and at the avatar the next, with the hand-off blend able to smooth that over but never make it small.
+The falloff is the band OUTSIDE the range the path lets go over, and it exists because crossing the range used to swap the rule outright - the camera aiming down the route one frame and at the avatar the next, which the motion layer can bound but never make small.
 
 Through the band `pathFalloffWeight` gives away the path's share of the camera, smoothstepped from 0 at the range ellipse to 1 at the band's outer ellipse (both resolved along the player's own offset direction, above).
 What it gives it away *to* is whatever else is in force there and, failing that, the **plain follow** at the base zoom (`blendCameraTarget`), so lookahead, viewport scale and everything else the path asks for fade together and by the band's outer edge the path is asking for nothing: the release delta is exactly zero and the boundary stops existing perceptually.
 The weight is the path's arm of the blend every rule now goes through, and a path alone in the set blends exactly as it did when the fade was built into `cameraRuleTarget`.
 Smoothstep rather than linear so the weight is C1 at both edges - a kink in the target is a step in the camera's velocity, which reads as the camera catching on an invisible line.
-A zero falloff (both axes) means no band at all: the path keeps its full grip out to the release and the hand-off blend covers the swap, which is the pre-band behaviour.
+A zero falloff (both axes) means no band at all: the path keeps its full grip out to the release and the swap is a step in the aim the motion layer swells across, which is the pre-band behaviour.
 
 This replaced a positional drift that froze the avatar's screen position across the band, and the drift's three seams are why: the camera's behaviour flipped character at the range (riding the route one frame, tracking the avatar 1:1 the next), the drift capped at the falloff while the grip held all the way to the release (so the avatar slid again in the gap), and the lookahead never faded - so the release still swapped a full-lead target for the plain follow, a ~2.7 m delta the blend could smooth but never make small.
 The trade accepted with the weight: the avatar's screen position is no longer perfectly frozen inside the band - frozen-screen-position was the drift's mechanism, not the goal, and the goal was no jump.
@@ -165,7 +162,7 @@ Taking all of that out where the path is contributing nothing is state committed
 
 Straying past the release ellipse **releases** the path, and the camera falls back to whatever rule governs where the player actually is - a region if one contains them, the plain follow otherwise.
 Coming back re-acquires it.
-Every one of those transitions is a rule change, so the controller's existing frozen-delta hand-off blends all of them for free; the one addition is that an outgoing path is evaluated at its tracked projection rather than at a fresh global one, since both targets have to be measured at the same instant and on the same branch or the frozen delta is a gap that never existed.
+Every one of those transitions is a rule change, and therefore a step in what the camera is aiming at, which the motion layer answers at a bounded acceleration whatever caused it.
 
 ## The soft projection
 
@@ -217,9 +214,9 @@ The window has a failure mode of its own, and the **branch challenge** is its ot
 (It is measured at `sNear`, like the rest of the grip.)
 The grip is per-PATH while the geometry is per-branch, so a player who genuinely leaves the ridden branch and lands inside the corridor of a DIFFERENT branch of the same path was held by the ridden branch's falloff zone in preference to the branch under their feet - the incumbent and the containing rule are the same object, so "keep the incumbent" won, and the window then guaranteed the projection could never walk there.
 `session-285f` is the shape of it: the ball fell off the upper branch clean through the lower branch's corridor at 0.05 m while the grip clung to the upper one at 5.4 m, the release finally fired at 1.06 m off the lower branch - 6 cm outside its range, so nothing ever re-acquired - and the ball settled inside the drawn falloff band with the camera plain-following, which reads as the camera being in the wrong place.
-So a held path is challenged every frame by its own GLOBAL projection (`branchJump` in the controller): outside the ridden corridor (plus the jitter buffer) and inside the core range at the global answer, it re-acquires there exactly as it would after a release - a fresh projection, a re-centred lead, and the jump run through the frozen-delta hand-off so the arc gap between the branches blends instead of snapping.
+So a held path is challenged every frame by its own GLOBAL projection (`branchJump` in the controller): outside the ridden corridor (plus the jitter buffer) and inside the core range at the global answer, it re-acquires there exactly as it would after a release - a fresh projection and a re-centred lead, with the arc gap between the branches arriving as a step in the aim that the motion layer swells across.
 The challenge cannot fire on the ridden branch itself, by construction rather than by threshold: a global answer inside the window IS the windowed answer, so the two distances agree and cannot sit on opposite sides of the range - which is what keeps the switchback protection whole.
-`switchback-branch-reacquire` asserts both halves (the camera ends held on the branch the ball is on, and no single frame moves it more than 15 cm), and each is red alone: the challenge disabled ends held on the wrong branch, and the challenge without the hand-off snaps 0.29 m in one frame.
+`switchback-branch-reacquire` asserts both halves (the camera ends held on the branch the ball is on, and no single frame moves it more than 15 cm), and each is red alone: the challenge disabled ends held on the wrong branch, and before the motion layer a challenge without the hand-off snapped 0.29 m in one frame. What bounds it now is `CAMERA_MAX_ACCEL` and nothing else.
 
 The whole thing stays **render-side and wall-clock driven**, so recorded replays and `cli selftest` are bit-identical: nothing here touches the sim.
 A level with no `cameraPaths` reduces to a regions-only rule set and every code path is what it was.

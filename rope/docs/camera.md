@@ -23,19 +23,52 @@ It is deliberately render-side, driven by the wall-clock frame `dt` rather than 
 `camera.zoom` is the controller's **output**; the base framing scale lives in the caller (`GRAPPLE_ZOOM`, or `BALL_ZOOM` for the ball).
 The default framing puts the avatar **dead centre** for both controllers — the ball's old 3/5-down shift is gone — so shifting the view is a camera region's `offsetX`/`offsetY` and nothing else, one authored mechanism rather than a per-controller rule.
 
-Two smoothings run at deliberately different timescales:
+## Three layers
 
-- **Follow lag** (`CAMERA_FOLLOW_TAU`, 0.15 s) — an exponential ease of the camera toward its target, `1 - exp(-dt/tau)` so a 60 Hz and a 144 Hz display behave identically. This is the "not rigidly locked to the player" part.
-- **Region hand-off** (`CAMERA_BLEND_TIME`, 0.7 s, per-region `blend` override) - when the set of rules in force changes, the gap between what the outgoing set wanted and what the incoming one wants is **frozen** at that instant and smoothstepped to zero on top of the incoming target, which goes on being evaluated live.
+The controller is three layers, each smooth in its inputs, so that no rule upstream can jerk the screen:
 
-Freezing that delta is the point of the mechanism.
-The camera aims at the *correct* position for the region it is now in, displaced by a decaying constant, so two very different configurations that happen to agree at the crossing hand over invisibly - the delta is simply zero.
-Cross-fading the two *live* targets instead, as this used to, keeps the outgoing region tracking the avatar for the whole blend, so its decaying share hauls the camera off the correct position and then lets it snap back: rubber banding whose size has nothing to do with how far apart the two cameras actually are.
-The delta is measured between the two targets rather than against where the camera *is*: aiming the camera at its own position would drop its velocity to nothing for a frame, which reads as a hitch.
-Taken this way the aim point is unchanged on the crossing frame, so the camera carries its follow lag straight through and only the delta decays; a hand-off interrupted part-way folds its remainder into the new delta, so that case is continuous too.
-One mechanism therefore covers default→region, region→region and region→default: "no region" is just the plain follow, which is the share of the camera no rule has claimed (see [Blending](#blending)).
-A hand-off between two sets whose weights have already faded freezes a delta of zero, so a region with a `falloff` band crosses over without using this mechanism at all.
-`CameraController.snap()` drops the easing for one frame (level start and reset), where easing in from the last frame's position would be a swoop across the level.
+1. **Progress** (`render/pathProgress.ts`) - where along its route the camera thinks the player is, as a soft projection rather than a nearest point. See [camera-paths](camera-paths.md#the-soft-projection).
+2. **Framing** (`cameraRuleTarget`, `blendCameraTarget`) - the authored idea: a path's lead at the zoom keyed there, a region's lock, offset and scale, blended by weight with the plain follow taking the unclaimed share. Piecewise, and allowed to be.
+3. **Motion** - one critically damped spring with an acceleration cap, and the only thing that ever writes the camera's position and zoom.
+
+The third is load-bearing, and it is what a pile of local smoothing rules was replaced by on 2026-09-22.
+The old controller computed a memoryless piecewise target every frame and put one first-order ease (`CAMERA_FOLLOW_TAU`, 0.15 s) between it and the screen.
+Every piecewise rule is a **step in the target's velocity** - the vertex projection, the window edge, both edges of the lead deadband, the ratchet engaging, the pin opening and dropping, the branch challenge, the frozen-delta hand-off - and a first-order ease at 0.15 s attenuates a 3 Hz disturbance by about a third, so every one of them leaked to the screen.
+Most of the 1976-line file was machinery trying to keep each rule individually continuous, which is the wrong place for that guarantee.
+
+```
+CAMERA_FREQ       = 1.2 Hz     omega = 2*pi*CAMERA_FREQ
+CAMERA_MAX_ACCEL  = 8  m/s²
+CAMERA_MAX_SPEED  = 12 m/s
+```
+
+Per frame, per axis, with `e = aim - pos`: the exact closed-form step of the critically damped spring over `dt` (`x(dt) = (x + (v + omega*x)*dt) * exp(-omega*dt)`, with `x = -e`), then the resulting velocity CHANGE clamped to `CAMERA_MAX_ACCEL * dt` and the speed to `CAMERA_MAX_SPEED` - both as vector lengths over the two axes, so a diagonal move is not faster than an axial one - then the position integrated from the clamped velocity.
+Closed form because it is exact for every `dt`, which is the frame-rate independence `1 - exp(-dt/tau)` had; `dt` is clamped to 0.1 s first, because a hitched frame is a frame the wall clock spent elsewhere and not one the camera may fly across the level in.
+Zoom goes through the same spring in `log(zoom)`, the geometric blend every zoom transition here already uses.
+`snap()` places the spring at its aim **at rest** (level start and reset), where carrying a velocity over would be a swoop across the level.
+
+What this buys is a **global** guarantee: whatever any rule upstream does, the camera's acceleration is bounded and its velocity is continuous.
+Measured on the exact aim signal the old ease was chasing, over the two 2026-09-22 river bundles:
+
+| tail of session | first-order 0.15 s (the old) | spring 1.2 Hz, a ≤ 8 m/s² |
+|---|---|---|
+| 268f peak accel / jerk | 16 / 1533 | **7.6 / 102** |
+| 336f peak accel / jerk | 55 / 2152 | **9.3 / 207** |
+
+(336f's 9.3 is the hard floor, which is not capped and may not be - see [the screen-edge guarantee](#the-screen-edge-guarantee).)
+
+That guarantee is what the following mechanisms were each trying to provide locally, and they are **gone**:
+
+- the **frozen-delta hand-off** (`offset`, `zoomRatio`, `setBlend`, `CAMERA_BLEND_TIME`, and the region and path `blend` fields). When the rule set changed, the gap between what the outgoing set wanted and what the incoming one wants was frozen and smoothstepped to zero on top of the incoming target. A rule change is a step in the aim, and a step in the aim is a bounded swell. What is lost is real and worth naming: the blend was tunable per rule and the swell is not, so a room that wanted a slow deliberate crossing can no longer buy one. What is gained is one timescale in the camera's motion rather than two fighting over the same frames - which is what made the old one unpredictable, since which of the two you got depended on whether a rule identity happened to change.
+- the **branch challenge's hand-off half** (see [camera-paths](camera-paths.md#the-soft-projection)).
+- the **first-order ease** itself, and `CAMERA_FOLLOW_TAU`.
+
+The one number worth carrying over: a critically damped spring trails a target moving at a steady speed by `2 * v / omega`, which is 0.80 m at 3 m/s where the old ease's `v * tau` was 0.45 m.
+The camera is a little further behind at speed and cannot turn faster than 8 m/s² at all, which is what the floor below is for.
+
+The **cap binds in real play**, and that is stated here rather than discovered: a hard swing on a short line is 30 m/s² of centripetal acceleration, which the camera cannot hold, so the guarantee below does bind on hard swings.
+It bound on a third of the frames of `session-336f` before this change too, for a different reason (the path's lead), so what changed is the cause and not the frequency.
+`edge-binds-only-when-the-camera-is-outrun` asserts both halves: inert inside the cap, and the avatar still never in the edge band past it.
 
 What the camera follows is the level's `cameraRenderPosition`, which is the avatar on every frame but one kind: while a ball is **rolling in** at the opening of a level it is the SPAWN, the point the ball is rolling to (see [ball-rolling](ball-rolling.md#the-rolling-entry)).
 The camera therefore stands still while the ball comes into the frame, and takes the ball over a couple of centimetres from where it was already looking.
@@ -91,8 +124,8 @@ Weights summing past 1 (two bandless regions overlapping) are **normalised**, so
 Positions blend linearly and zooms geometrically, as every zoom blend here does.
 
 The authoring rule that falls out of it: **overlap two rooms by the width of their band and the hand-over is an exact cross-fade.**
-`smoothstep(t) + smoothstep(1-t) = 1`, so across an overlap exactly as wide as the band the two weights sum to 1 everywhere - no share leaks back to the plain follow on the way across, and the camera sweeps from one room's framing to the other's without stopping, reversing, or needing the hand-off blend at all.
-A room that must frame right out to its own walls authors no band and hands over the old way, through the frozen delta.
+`smoothstep(t) + smoothstep(1-t) = 1`, so across an overlap exactly as wide as the band the two weights sum to 1 everywhere - no share leaks back to the plain follow on the way across, and the camera sweeps from one room's framing to the other's without stopping or reversing.
+A room that must frame right out to its own walls authors no band, and the crossing is then a step in the aim, which the motion layer answers at a bounded acceleration - smooth, but not authorable.
 
 Only **one path** can be in the set: the projection, the lead deadband and the branch window are all state about one polyline, so among tied paths the seat goes to the one already being ridden, and to the last in the list otherwise.
 That is the only thing authoring order still decides; regions tied at the winning rank all blend, however they are ordered.
@@ -125,16 +158,17 @@ It is the one camera rule with no authored override, and deliberately: a level m
 At 0 the floor is the frame's own edge, so what it guarantees is that the avatar's *centre* is on screen.
 
 It is a clamp on **where the camera IS**, applied last in `update` and to the controller's own `pos` rather than to the target.
-A target the avatar can outrun is not a guarantee, and outrunning the ease is exactly what a launch does; clamping `this.pos` rather than only what is handed to the `Camera` is also what keeps the next frame continuous, since the camera really is where the constraint put it and carries on easing from there.
+A target the avatar can outrun is not a guarantee, and outrunning the camera is exactly what a launch does - and what any turn past `CAMERA_MAX_ACCEL` does.
+Clamping `this.pos` rather than only what is handed to the `Camera` is also what keeps the next frame continuous, since the camera really is where the constraint put it and carries on from there; when the floor moves the camera the spring's velocity is set to what the frame **actually** moved, so the next frame is not spent pressing against a constraint that has already won.
 
-**The law is a window, a rate, and a floor**, and that is what its parameters are - three for the guarantee, and a fourth that belongs to the anchored latch below:
+**The law is a window, a rate, and a floor**, and that is what its parameters are - three for the guarantee, and a fourth for how long its pull lasts once it stops being asked for:
 
 | parameter | what it sets |
 |---|---|
 | `CAMERA_EDGE_MARGIN` (0) | where the avatar may never go, as a fraction of the frame |
 | `CAMERA_EDGE_INNER_X` (0.1125), `CAMERA_EDGE_INNER_Y` (0.2) | the target minimum distance from the edge, as a fraction of that axis's own extent |
 | `CAMERA_EDGE_SMOOTHING` (0.3) | how fast the camera corrects toward that margin when there is room, in seconds |
-| `CAMERA_LATCH_BUFFER` (0.02) | how much of what the window asks a *pinned* axis simply ignores, as a fraction of the frame's height (see **The latch**) |
+| `CAMERA_STICK_TAU` (1.5 s) | how long its pull lasts once it stops being asked for (see **The stick**) |
 
 All of them are **global** and deliberately not authorable, for the reason the margin always was: what the guarantee does is a property of the game rather than of a room in it.
 `edgeReach` turns the fractions into the distances a given camera allows - the avatar may never pass `edgeReach(margin)`, and `innerReach` is the margin they are held to - `edgeOffset` is the window, and `edgeTakeUp` is the clock.
@@ -159,7 +193,7 @@ What the give-way was there for is smoothness, and smoothness belongs to the clo
 
 A bare clamp **given outright** is a discontinuity in the camera's **velocity**, which is the one thing a camera may not have.
 Up to the line the camera is easing toward whatever the level asked for; one frame later it is rigidly locked to the avatar, travelling at exactly their speed.
-Nothing about the position jumps, which is what makes it hard to see coming, and it is felt as the camera being caught and dragged - again every time a swing crosses back out, which on the anchored latch below is twice an arc.
+Nothing about the position jumps, which is what makes it hard to see coming, and it is felt as the camera being caught and dragged - again every time a swing crosses back out, which is twice an arc.
 
 **Given over the clock it is not**, and that is why the window is allowed to be a hard clamp.
 The demand at the margin is zero and grows from there, so the correction grows out of nothing rather than starting; the camera's velocity is continuous across the crossing; and the camera position is a first-order approach to the margin, which is what the player sees - eased back to the inner margin over about a fifth of a second, and resting exactly on it when they stop.
@@ -223,84 +257,66 @@ A **shape** knob was tried on the give-way first and removed, and it is worth no
 The family `1 - (1+uk)**(-1/k)` holds both end conditions for every `k` and looks like a free choice of tail, but its curvature at the join is `-(1+k)`: a longer tail is a *sharper* bend exactly where the override engages, so the knob ran the wrong way (23, 29, 44, 77 m/s² of peak acceleration for `k` = 0.01, 1, 4, 20 on `session-137f`) and every value of it was worse than `k = 0`.
 What it was reaching for is a rate, and a rate is a clock - which is the same conclusion the give-way itself reached in the end.
 
-Three things fall out that are worth knowing before tuning it.
+Two things fall out that are worth knowing before tuning it.
 An **authored framing that puts the avatar past the inner margin is trimmed to it** - the override is engaged, so it is doing its job - which is why `rule-path-lookahead-is-per-axis` and the lead-band cases run with the clamp off: those are about what the lead ASKS for, and a 2.5 m lead on a 9.6 m frame is already outside the margin.
-The **anchored latch pins on the inner margin** rather than on the floor, and its pin is now the point the override pulled the AIM to rather than where the camera was - which is what stops the pin itself being a step in the aim, worth ~500 m/s³ of the old jerk on its own.
-And the two halves are not separable in the cases: taking the window off the aim also takes the pin with it, so that ablation reddens the latch cases as well.
+And the **stick holds the inner margin** rather than the floor, since what it holds is the pull the window asked for and the window only ever asks the avatar back to the inner line.
 
-An axis the override is not touching is returned **as it came in** rather than rebuilt from the follow point: `follow + (pos - follow)` is not `pos` in floats, so rebuilding it moves the camera by an ULP on every frame of ordinary play and reports the override as engaged on all of them - which is what the overlay draws and what the latch pins on.
+An axis the override is not touching is returned **as it came in** rather than rebuilt from the follow point: `follow + (pos - follow)` is not `pos` in floats, so rebuilding it moves the camera by an ULP on every frame of ordinary play and reports the override as engaged on all of them - which is what the overlay draws and what the stick holds.
 
 `cli camera` asserts the window (untouched inside the margin, held exactly on it at every depth outside, monotone, never past the floor) and then what it does to a camera: a locked room walked steadily out of has no step in the camera's speed at the crossing and ends up carried at exactly the avatar's speed; an anchored swing on a ratcheted lead - `session-137f`'s own shape - is turned over rather than reversed, at under a third of the bare clamp's peak acceleration and without the floor ever being reached; the rate shows as the avatar being allowed further toward the line while the correction comes on, but never as far as it; a deeper incursion is corrected more than proportionally faster and the margin itself corrects nothing; a stroll, a hard run and a launch all ride deeper the faster they go and all stay inside half the headroom; and each of the three, stood still, **comes to rest exactly on the inner margin**, which is the claim the whole law exists to make.
-Every part of it is load-bearing under ablation: `CAMERA_EDGE_SMOOTHING = 0` reddens two cases, dropping the headroom out of the rate five, giving the window outright on a latched axis reddens three latch cases, and giving it outright on the position reddens the floor case and two latch ones.
+Every part of it is load-bearing under ablation: `CAMERA_EDGE_SMOOTHING = 0` reddens two cases, dropping the headroom out of the rate five, and giving the window outright on the position reddens the floor case.
 
 The margin is a **fraction of the frame** rather than a distance, because what is being constrained is where the avatar is ON SCREEN: a region that zooms out shows more world, and a margin in metres would shrink to a sliver of the frame exactly where the frame got roomier.
 It is measured to the follow POINT, so it has to clear the avatar's own radius and leave something worth seeing - 77 cm either side and 43 cm above and below on the 9.6 x 5.4 m a 1080p frame shows at `GRAPPLE_ZOOM`.
 
-It is **inert in ordinary play**, which is what makes it safe to apply globally.
-The default camera centres the avatar, so the only thing that can put it near the edge under the plain follow is outrunning the ease - which settles at a lag of `speed x CAMERA_FOLLOW_TAU`, needing a sustained ~27 m/s before it binds against a hard swing's ~10.
-What it does bite on is a locked region the avatar has left, and a path whose lookahead aims the camera well off them.
-`cli camera` asserts both of those, plus a one-frame teleport, plus that it never binds at ordinary speed - and each of the three holding cases is red without the clamp.
+It is **inert while the camera can keep up**, which is what makes it safe to apply globally.
+The default camera centres the avatar, so the only thing that can put it near the edge under the plain follow is outrunning the camera - which now means two things rather than one: the spring's steady-state lag of `2 * speed / omega`, which takes a sustained ~18 m/s to bind, and CAMERA_MAX_ACCEL, past which the camera cannot turn with the avatar at all.
+A hard swing on a short line is around 30 m/s² of centripetal acceleration, so it does bind there - and that is the guarantee doing its job rather than failing at it: the avatar is held at the inner margin instead of leaving the frame.
+What it also bites on is a locked region the avatar has left, and a path whose lookahead aims the camera well off them.
+`cli camera` asserts all of it - the two holding cases, a one-frame teleport, and `edge-binds-only-when-the-camera-is-outrun`'s two halves - and each of the holding cases is red without the clamp.
 
-### The latch
+### The stick
 
-**While the avatar is anchored the shove is KEPT rather than eased back out of** (`CameraController.latchX`/`latchY`, per axis).
+**The window's pull decays rather than stopping** (`CAMERA_STICK_TAU`, 1.5 s, per axis).
 
-A swing that carries the avatar out of the frame carries them out twice an arc, so the clamp binds, releases and binds again for as long as they hang there - and unlatched, each release lets the camera ease straight back toward the target it was being held off.
-The result is a camera that rocks for the whole swing, with an amplitude set by how far the frame guarantee had to move it, which is the wobble this exists to remove.
-Latched, the point the clamp forced becomes a **pin**: the aim is that point for the rest of the anchored episode, and it moves only when the clamp forces it further.
-So the camera moves on the frames the guarantee is actually moving it and on no others, which is the least motion a swing at the edge of the frame can be answered with.
+A swing that carries the avatar out of the frame carries them out twice an arc, so the clamp binds, releases and binds again for as long as they hang there - and if each release let the aim snap home, the camera would rock for the whole swing with an amplitude set by how far the guarantee had to move it.
+So the aim is the window's answer **outright while it is asking**, exactly as it always was, and when the window stops asking the aim returns to the rule's target over a second and a half instead of on the next frame.
 
-It is per **axis** because the clamp is: a swing that drops the avatar out of the bottom of the frame has said nothing about the horizontal lead, and pinning x for it would freeze the route the camera is narrating.
+It is per **axis** because the window is: a swing that drops the avatar out of the bottom of the frame has said nothing about the horizontal lead, and holding x for it would freeze the route the camera is narrating.
 
-The pin is recorded **after** the clamp has run, from what it actually moved, rather than predicted from the target before it - so next frame's aim is that position exactly and the ease has nothing left to do, which is what makes "the camera does not move" exact rather than nearly so.
+**It holds the largest recent demand on that side**, and that is the part measurement moved.
+The obvious form - the stick IS the demand while there is one, and decays once there is not - buys nothing at all, because the demand is itself continuous: it falls smoothly to zero as the avatar comes back inside the inner margin, so by the frame it stops being asked there is nothing left to decay, and the camera returns at exactly the pace the avatar does.
+Holding the extreme of the arc instead is what decays under the avatar as they swing back.
+A demand on the **other** side replaces the hold outright rather than blending with it - the window has just said the camera is wrong the other way, and continuing to hold it the old way is the one thing the guarantee may not do - and that step is the motion layer's to absorb.
 
-**The pin ignores what it is asked for by less than `CAMERA_LATCH_BUFFER`**, and without that it creeps.
-The pin is re-pulled every frame, so it holds only for as long as the guarantee asks nothing of it - and every arc of a long swing asks for a little: the avatar reaches a centimetre or two past where the last arc left the pin, the pin is dragged that far in, and it never comes back out, the override only ever pulling toward the avatar.
-Over `session-546f`'s ten arcs on one anchor that is 9 cm of horizontal and 11 cm of vertical creep after the first swing has done the real work - every shift too small to see happen and the sum large enough to see, which is the worst shape a camera motion can have.
+#### What it replaced, and why
 
-A plain deadband on the demand answers it and needs no state: what the window asks of a pinned axis is a function of how far past the margin the avatar has got, so an arc that never reaches the buffer moves the pin by nothing and one that does drags it by the excess, continuously.
+The **anchored latch** (`latchX`/`latchY`): while the avatar was anchored, the point the clamp forced became a pin, kept for the rest of the episode and moved only when the clamp forced it further.
+It worked, and it cost four mechanisms to keep working:
 
-It has to reach **both halves** of the guarantee, which is the part that is easy to get wrong.
-Buffered on the aim alone the pin holds and the camera does not: the position half goes on answering the window from where the camera is, pulling in over each arc and easing back out after it, so the creep becomes a *wobble* and the camera's travel over the same ten arcs goes from 21 cm to **91**.
-Buffered on both it is **0**.
+- a **deadband** (`CAMERA_LATCH_BUFFER`), because a pin re-pulled every frame walked in a centimetre an arc and never came back out - 9 cm of horizontal and 11 cm of vertical creep over `session-546f`'s ten arcs, and 91 cm of *wobble* if the deadband was applied to only one half of the guarantee;
+- an **opening clock** (`LATCH_OPEN_TAU`), because a pin born deep past the margin switched a tenth of a metre of demand off in one frame: 112 m/s² against 26;
+- an **episode** to belong to, and a frozen-delta hand-off to give the pin back with when the anchor released;
+- a **wind release** (`windProgress` against the path's `windBuffer`, plus `windArmed`, `sinceWind`, `WIND_REARM_DELAY` and `WIND_REST_RATE`), because a player winding themselves up the line toward an anchor ahead is going the level's way and a camera pinned to the backswing trails them up the climb.
 
-And it **opens on a clock rather than with the pin** (`latchOpenX`, half a second).
-A pin is born wherever the override happened to be when the anchor was taken, which on a swing already at the edge of the frame is deep past the margin, so switching a tenth of a metre of demand off in one frame is a step in the camera's velocity: 112 m/s² on the frame after the anchor, against 26 without the buffer at all and 28 with it ramped.
+Every one of those is a patch for the pin being a **latch** - a state with an edge, which has to be entered, held and handed back.
+A decaying pull has no edge, so all four go:
 
-The buffer is spent as headroom against the floor, and that is the trade to read before turning it up - at the shipped 0.02 the avatar reaches 0.925 of the floor on `session-118f` rather than 0.916, and the first swing still does its work (22 cm of vertical pin travel against 37 unbuffered).
+- nothing has to be handed back when the anchor releases;
+- nothing creeps, because a decaying stick moves outward on its own and there is nothing for a deadband to stop;
+- nothing has to open on a clock;
+- **winding up the line needs no special case at all**: the player moves toward the middle of the frame, the window stops asking, and the stick decays while the spring glides the camera forward to its lead.
 
-It **outranks the lead ratchet** and is outranked by nothing.
-With the lead ratcheted (see [**The anchored episode**](camera-paths.md#the-anchored-episode)) the target stays forward while the avatar swings back, so far enough back and the guarantee hauls the camera after them - down the track, against the ratchet's whole bias, because the frame guarantee is the one camera rule a level may never opt out of and this one is not an exception to that.
-Where it leaves the camera becomes the pin, so the forward half of the next swing does not spring the camera back off it.
+It is also **not gated on being anchored**, and does not need to be: the guarantee is inert in ordinary play, and where it does bind a slow return is at worst a calmer camera.
+The lead **ratchet** stays gated on anchored (see [**The anchored episode**](camera-paths.md#the-anchored-episode)), because that one is about backtracking along the route rather than about the edge of the frame.
 
-The episode ends with the anchor: the pin is dropped and the gap it leaves is frozen into the **hand-off delta** and blended out over `CAMERA_BLEND_TIME`, rather than eased across at the follow lag - a pinned camera is at rest and metres from its target, so 0.15 s of ease across that is a lurch.
-Aiming the blend at the camera's own position is the one thing the hand-off machinery warns against, and it is right here for the reason it is wrong there: there is no velocity to preserve.
+The guarantee still **outranks the ratchet** and is outranked by nothing: with the lead ratcheted the target stays forward while the avatar swings back, so far enough back and the guarantee hauls the camera after them, down the track and against the ratchet's whole bias.
 
-### The wind release
+`cli camera` asserts the stick's two facts, and each is red both ways under ablation (no clock, and no hold): `stick-holds-after-the-ask-stops` measures the decay law itself half a tau and one tau after the window goes quiet, and `stick-decays-when-nothing-asks` measures that it reaches zero and the camera is back on the room's lock.
 
-**The pin also lets go when the avatar winds themselves up the line along the route** (`CameraController.windProgress`, against the path's `windBuffer`).
+Unplayed as of 2026-09-22; the feel constants (`CAMERA_FREQ`, `CAMERA_MAX_ACCEL`, `CAMERA_STICK_TAU`) are tuned in the play and nowhere else.
 
-A pin is the answer to a swing: the return half of an oscillation says nothing about where the player is going, so the camera is held where the guarantee left it rather than rocked back.
-Winding up the line is not a swing.
-The player is hauling themselves toward the anchor, and when the anchor lies ahead on the route that is the level's own direction - a camera still pinned to the backswing then trails them up the climb, until the far edge of the frame drags it after them a shove at a time.
-
-What is counted is the line taken in since the pin was born, each frame's shortening projected onto the direction the route runs where the avatar is (`Level.cameraHang` hands the controller the line's length and the direction it leaves the avatar along).
-So winding straight up under a horizontal route counts for nothing, winding toward an anchor behind counts for nothing, and paying line back out counts against it, down to zero.
-Once the sum passes the path's `windBuffer` (0.5 m unless the path says otherwise, keyable like every other path field, read at the avatar's projection) the pin is dropped and its gap goes through the same frozen-delta hand-off the anchor's release uses, for the same reason.
-The lead origin keeps what the episode has ratcheted; what is given back is the pin alone.
-It is a path's release and nobody else's: a pin under a locked room has no route to be ahead on.
-
-It is measured from the pin's birth rather than the anchor's, because it is the pin's release: a turn of the spool taken before any pin existed is no reason to drop one later.
-
-**While the winding goes on, no pin is recorded.**
-Dropped on its own, the pin came straight back: the camera leaves it toward a target the avatar is still behind, the guarantee is asking again on the very next frame, and the pin recorded then is the old one with its count reset - measured, a camera that catches the climb up in steps of the buffer, a blend at a time.
-So the guarantee carries the camera up after them unlatched, at the pace they wind (it is asking every frame, and unlatched it answers every frame), and the pin is armed again a quarter second (`WIND_REARM_DELAY`) after the last frame that took line in along the route faster than `WIND_REST_RATE` (5 cm/s).
-A rate rather than any take-up at all, because a taut line's solve breathes by microns a frame and a swing must not read as a wind.
-The price is that a wide swing made WHILE winding rocks the camera the way an unlatched one always did, for as long as the winding lasts.
-
-Unplayed as of 2026-09-19, and the cases wait on the play (see [**Validate the behaviour before writing the cases**](../CLAUDE.md)); the shape was measured with a bun script driving `CameraController.update` through a pinned backswing and a 1 m/s wind toward an anchor ahead.
-
-`cli camera` asserts it as four cases, each red without it: the swing that holds (metres of unshoved drift, 0 latched against >5 rolling, with the guarantee itself still never violated), the per-axis half (y pinned while x goes on tracking the avatar at the plain follow lag), the release (the pin dropped, the camera back at the lock, and no single frame moving it more than the blend's own rate), and the meeting with the ratchet.
+The debug overlay draws the stick as a line through the aim coordinate on each axis it is holding by more than a centimetre, in the same amber as the keep-out box: it is the same rule's doing, still being held rather than re-asked.
 
 The debug overlay draws the keep-out box **only on the frames it is binding** (amber, not the camera layer's violet): a camera that has stopped following has no on-screen cause otherwise, and drawing it every frame would make it furniture rather than a diagnosis.
 It draws **two** boxes, because the constraint has two boundaries: the inner one finely, where the override starts easing in, and the outer one as the line the avatar may never cross.

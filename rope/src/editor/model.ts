@@ -269,14 +269,15 @@ export function isKeyed(k: EdPathKey | undefined): boolean {
 }
 
 // Camera-layer properties (see CameraRegionData for the semantics). `lockX/Y`
-// null = that axis follows the avatar; `blend` and `buffer` null = the
-// controller's defaults.
+// null = that axis follows the avatar; `buffer` null = the controller's
+// default. (`blend` was here and is retired with the hand-off clock - the
+// format drops it at its one gate, so a file that authored one loads and the
+// editor rewrites it without.)
 export interface EdCamera {
   offset: Vec2; // metres
   viewportScale: number;
   lockX: number | null; // metres
   lockY: number | null; // metres
-  blend: number | null; // seconds
   buffer: number | null; // metres; null = the controller's REGION_EXIT_MARGIN
   // Per-side overrides of `buffer`, in the region's own frame (left/right = ∓x,
   // top/bottom = ∓y). Rect regions only - a circle has no sides and a polygon
@@ -309,10 +310,6 @@ export interface EdCamera {
   // camera (see DEFAULT_PATH_LOOKAHEAD_BUFFER_X/_Y). null = those defaults.
   lookaheadBufferX: number | null; // metres
   lookaheadBufferY: number | null; // metres
-  // How far along the route a hanging player winds themselves up their line
-  // before the frame-edge latch lets the camera go (see
-  // DEFAULT_PATH_WIND_BUFFER). null = that default.
-  windBuffer: number | null; // metres
   // How far off the route two places on it count as comparable to the soft
   // projection (see DEFAULT_PATH_SOFTNESS). null = that default.
   softness: number | null; // metres
@@ -900,7 +897,6 @@ export const defaultCamera = (): EdCamera => ({
   viewportScale: DEFAULT_VIEWPORT_SCALE,
   lockX: null,
   lockY: null,
-  blend: null,
   buffer: null,
   bufferLeft: null,
   bufferRight: null,
@@ -916,7 +912,6 @@ export const defaultCamera = (): EdCamera => ({
   lookaheadY: null,
   lookaheadBufferX: null,
   lookaheadBufferY: null,
-  windBuffer: null,
   softness: null,
 });
 
@@ -1434,7 +1429,6 @@ function fromLevelData(data: LevelData): EdModel {
       viewportScale: r.viewportScale ?? DEFAULT_VIEWPORT_SCALE,
       lockX: r.lockX ?? null,
       lockY: r.lockY ?? null,
-      blend: r.blend ?? null,
       buffer: r.buffer ?? null,
       bufferLeft: r.bufferLeft ?? null,
       bufferRight: r.bufferRight ?? null,
@@ -1451,7 +1445,6 @@ function fromLevelData(data: LevelData): EdModel {
       lookaheadY: null,
       lookaheadBufferX: null,
       lookaheadBufferY: null,
-      windBuffer: null,
       softness: null,
     },
     light: defaultLight(),
@@ -1533,7 +1526,6 @@ function fromLevelData(data: LevelData): EdModel {
       viewportScale: c.viewportScale ?? DEFAULT_VIEWPORT_SCALE,
       lockX: null,
       lockY: null,
-      blend: c.blend ?? null,
       buffer: c.buffer ?? null,
       bufferLeft: null,
       bufferRight: null,
@@ -1550,7 +1542,6 @@ function fromLevelData(data: LevelData): EdModel {
       lookaheadY: c.lookaheadY ?? null,
       lookaheadBufferX: c.lookaheadBufferX ?? null,
       lookaheadBufferY: c.lookaheadBufferY ?? null,
-      windBuffer: c.windBuffer ?? null,
       softness: c.softness ?? null,
     },
     light: defaultLight(),
@@ -1842,9 +1833,7 @@ export function pathDataOf(i: EdItem): CameraPathData {
     ...(i.cam.viewportScale !== DEFAULT_VIEWPORT_SCALE
       ? { viewportScale: i.cam.viewportScale }
       : {}),
-    ...(i.cam.blend !== null ? { blend: i.cam.blend } : {}),
     ...(i.cam.buffer !== null ? { buffer: i.cam.buffer } : {}),
-    ...(i.cam.windBuffer !== null ? { windBuffer: i.cam.windBuffer } : {}),
     ...(i.cam.softness !== null ? { softness: i.cam.softness } : {}),
     ...(i.cam.priority !== 0 ? { priority: i.cam.priority } : {}),
   };
@@ -1902,8 +1891,7 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
         : {}),
       ...(i.cam.lockX !== null ? { lockX: i.cam.lockX } : {}),
       ...(i.cam.lockY !== null ? { lockY: i.cam.lockY } : {}),
-      ...(i.cam.blend !== null ? { blend: i.cam.blend } : {}),
-      ...(i.cam.buffer !== null ? { buffer: i.cam.buffer } : {}),
+        ...(i.cam.buffer !== null ? { buffer: i.cam.buffer } : {}),
       // Per-side buffers mean nothing off a rect, so they are not written for
       // one: a field on disk the loader ignores is a field that lies about what
       // it does.

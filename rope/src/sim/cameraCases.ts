@@ -18,7 +18,8 @@ import type { Camera } from "../render/camera";
 import {
   buildCameraRules,
   CAMERA_EDGE_MARGIN,
-  CAMERA_FOLLOW_TAU,
+  CAMERA_FREQ,
+  CAMERA_STICK_TAU,
   CameraController,
   edgeAxis,
   edgePull,
@@ -40,7 +41,6 @@ import {
   pathParamsAt,
   pathParamsOf,
   pathRangeAxes,
-  type CameraHang,
   type CameraRule,
   type CameraInfluence,
 } from "../render/cameraController";
@@ -205,9 +205,13 @@ const ROOM: CameraRegionData = {
 const BASE_ZOOM = 2;
 const DT = 1 / 60;
 
-// A hang with nothing to say about its line: no pull and no length, so the
-// wind release accrues nothing and the case is about the episode alone.
-const STILL_HANG: CameraHang = { pull: Vec2.ZERO, length: 0 };
+// How far a critically damped spring trails a target moving at a steady speed,
+// in metres: `2 * v / omega`, which is the closed-form steady state of
+// `x'' + 2wx' + w²x = 0` driven by a ramp. It is what the camera's "follow lag"
+// is now - the one number the old first-order ease stated as `v * tau` - and it
+// is stated here rather than written out at each call site because two cases
+// assert it and a third is sized against it.
+const STEADY_LAG = (speed: number): number => (2 * speed) / (2 * Math.PI * CAMERA_FREQ);
 
 // Run the controller over a scripted walk, one entry per frame, and answer the
 // camera's aim point and the rule in force at each.
@@ -216,12 +220,10 @@ function ride(
   walk: readonly Vec2[],
   edgeClamp = true,
   // Whether the avatar is ANCHORED on each frame - hanging on a taut line
-  // rather than rolling, which is what opens the episode the lead ratchet and
-  // the frame-edge latch belong to. A walk that says nothing is a roll from end
-  // to end, which is what every case written before the episode existed is;
-  // `true` is a hang that says nothing about its line, and a `CameraHang` is
-  // one whose length and pull the wind release can read.
-  anchored: (i: number) => boolean | CameraHang = () => false,
+  // rather than rolling, which is what ratchets the lead origin. A walk that
+  // says nothing is a roll from end to end, which is what every case written
+  // before the ratchet existed is.
+  anchored: (i: number) => boolean = () => false,
 ): {
   pos: Vec2;
   zoom: number;
@@ -233,15 +235,14 @@ function ride(
   s: number;
   leadS: number;
   edge: { centre: Vec2; reach: Vec2 } | null;
-  latch: { x: number | null; y: number | null };
-  wind: number;
+  aim: Vec2;
+  stick: { x: number; y: number };
 }[] {
   const ctl = new CameraController();
   ctl.edgeClamp = edgeClamp;
   const cam = stubCamera();
   return walk.map((p, i) => {
-    const a = anchored(i);
-    ctl.update(cam, DT, p, rules, BASE_ZOOM, a === true ? STILL_HANG : a === false ? null : a);
+    ctl.update(cam, DT, p, rules, BASE_ZOOM, anchored(i));
     const held = ctl.held;
     return {
       pos: cam.position,
@@ -251,8 +252,8 @@ function ride(
       s: held.s,
       leadS: held.leadS,
       edge: held.edge,
-      latch: held.latch,
-      wind: held.wind,
+      aim: held.aim,
+      stick: held.stick,
     };
   });
 }
@@ -1196,26 +1197,53 @@ export function runCameraCases(): CameraResult[] {
       return bad.length ? [`${bad.length} frames put the avatar in the edge band`] : [];
     }),
 
-    run("edge-never-binds-at-ordinary-speed", () => {
+    run("edge-binds-only-when-the-camera-is-outrun", () => {
       // The default camera centres the avatar, so the only thing that can put it
-      // near the edge under the plain follow is OUTRUNNING THE EASE - and the
-      // ease settles at a lag of `speed * CAMERA_FOLLOW_TAU`, which at the
-      // reach here needs a sustained 27 m/s before it binds. A hard swing is
-      // around 10. So the clamp is inert in ordinary play, which is what makes
-      // it safe to apply globally rather than as a rule a level opts into.
+      // near the edge under the plain follow is OUTRUNNING THE CAMERA - which
+      // now has two ways of being outrun rather than one. A critically damped
+      // spring settles at a lag of `2 * speed / omega` (`STEADY_LAG`), and past
+      // CAMERA_MAX_ACCEL it stops being able to turn with the avatar at all.
+      //
+      // Under an unbounded first-order ease only the first existed, and the
+      // guarantee was inert in every wander: the lag was `speed x 0.15 s`, so
+      // it took a sustained 27 m/s to bind. The cap changes that, and this case
+      // is where it is stated rather than discovered - a 3 m wander at a
+      // two-second period is 9.4 m/s but 30 m/s² of centripetal acceleration,
+      // which is what a hard swing on a short line is, and the camera cannot
+      // hold it.
+      //
+      // Both halves matter. Inside the cap the guarantee is inert, so a level's
+      // framing is honoured exactly; past it the guarantee does exactly what it
+      // is for - the avatar is never in the edge band, whatever it cost.
       const rules = buildCameraRules([], []);
-      const walk: Vec2[] = [];
-      // A 3 m wander at a two-second period: about 9.4 m/s at its fastest.
-      for (let i = 0; i < 240; i++) {
-        walk.push(new Vec2(Math.sin((i / 120) * Math.PI * 2) * 3, Math.cos((i / 120) * Math.PI * 2) * 2));
-      }
-      const out = ride(rules, walk);
-      const worst = Math.max(...out.map((o, i) => Math.abs(walk[i]!.x - o.pos.x)));
+      const wander = (periodFrames: number): Vec2[] => {
+        const walk: Vec2[] = [];
+        for (let i = 0; i < periodFrames * 2; i++) {
+          const a = (i / periodFrames) * Math.PI * 2;
+          walk.push(new Vec2(Math.sin(a) * 3, Math.cos(a) * 2));
+        }
+        return walk;
+      };
       const reach = edgeReach(stubCamera(), BASE_ZOOM).x;
+      // 4.7 m/s and 7.4 m/s², just inside what the camera can turn with.
+      const easy = wander(240);
+      const outEasy = ride(rules, easy);
+      const worstEasy = Math.max(...outEasy.map((o, i) => Math.abs(easy[i]!.x - o.pos.x)));
+      // 9.4 m/s and 30 m/s², well past it.
+      const hard = wander(120);
+      const outHard = ride(rules, hard);
+      const hardReach = edgeReach(stubCamera(), BASE_ZOOM);
+      const offScreen = outHard.filter(
+        (o, i) =>
+          Math.abs(hard[i]!.x - o.pos.x) > hardReach.x + 1e-9 ||
+          Math.abs(hard[i]!.y - o.pos.y) > hardReach.y + 1e-9,
+      ).length;
       return [
-        { label: "frames the clamp bound on", got: out.filter((o) => o.edge !== null).length, want: 0 },
+        { label: "inside the cap: frames the clamp bound on", got: outEasy.filter((o) => o.edge !== null).length, want: 0 },
         // ...with room to spare, so the case is not sitting on the threshold.
-        { label: "worst lag as a fraction of the reach", got: worst / reach, want: 0, tol: 0.5 },
+        { label: "inside the cap: worst lag as a fraction of the reach", got: worstEasy / reach, want: 0, tol: 0.5 },
+        { label: "past the cap: the clamp does bind", got: outHard.filter((o) => o.edge !== null).length > 0 ? 1 : 0, want: 1 },
+        { label: "past the cap: the avatar is still never in the edge band", got: offScreen, want: 0 },
       ];
     }),
 
@@ -1447,14 +1475,18 @@ export function runCameraCases(): CameraResult[] {
       const rest = [0.05, 0.15, 0.3].map((speed) => {
         const walk: Vec2[] = [];
         for (let i = 0; i < 120; i++) walk.push(new Vec2(i * speed, 0));
-        // Two seconds of standing still, which is an age next to the 0.15 s
-        // clock and is deliberately not the moment after the avatar stops.
-        for (let i = 0; i < 120; i++) walk.push(new Vec2(119 * speed, 0));
+        // SIX seconds of standing still, where two used to do. The camera has a
+        // bounded acceleration now (CAMERA_MAX_ACCEL), so the launch - 18 m/s,
+        // and past the speed cap as well - takes over two seconds just to shed
+        // its own velocity before the last of the correction can close. What
+        // the case is about is where all three END UP, and the wait is sized so
+        // that is what it measures.
+        for (let i = 0; i < 360; i++) walk.push(new Vec2(119 * speed, 0));
         const out = ride(rules, walk);
         return {
           moving: Math.abs(walk[119]!.x - out[119]!.pos.x),
-          settled: Math.abs(walk[239]!.x - out[239]!.pos.x),
-          oneSecond: Math.abs(walk[179]!.x - out[179]!.pos.x),
+          settled: Math.abs(walk[479]!.x - out[479]!.pos.x),
+          oneSecond: Math.abs(walk[299]!.x - out[299]!.pos.x),
         };
       });
       return [
@@ -1465,13 +1497,13 @@ export function runCameraCases(): CameraResult[] {
         { label: "the stroll rests on the margin", got: rest[0]!.settled, want: inner, tol: 1e-6 },
         { label: "the run rests on the margin", got: rest[1]!.settled, want: inner, tol: 1e-6 },
         { label: "the launch rests on the margin", got: rest[2]!.settled, want: inner, tol: 1e-6 },
-        // And it is the clock that takes them there rather than a snap: the
-        // last of the correction runs at the slowest the rate law goes, so a
-        // second of standing still is inside a tenth of a millimetre and the
-        // rest closes from there. Stated loosely on purpose - the exact residual
-        // is CAMERA_EDGE_SMOOTHING's to move, and what this case is about is
-        // that it converges on the margin rather than near it.
-        { label: "and a second is within a tenth of a millimetre", got: rest[2]!.oneSecond, want: inner, tol: 1e-4 },
+        // And it is a clock that takes them there rather than a snap: three
+        // seconds after the launch stops, the correction is measurably still
+        // running. Stated as "still short" rather than as a residual, because
+        // the exact number is CAMERA_EDGE_SMOOTHING's and the spring's to move
+        // and what this case is about is that the arrival is gradual and the
+        // destination is the margin.
+        { label: "three seconds in, the correction is still running", got: inner - rest[2]!.oneSecond > 0.01 ? 1 : 0, want: 1 },
       ];
     }),
 
@@ -1683,9 +1715,12 @@ export function runCameraCases(): CameraResult[] {
       // corridor at 0.05 m while the grip clung to the upper one at 5.4 m,
       // released 6 cm outside the lower range, and the path never re-acquired.
       //
-      // The jump must also BLEND - it moves the lookahead target by the arc
-      // gap between the branches, and a reseed that skips the frozen-delta
-      // hand-off snaps the camera by exactly that gap.
+      // The jump must also not SNAP - it moves the lookahead target by the arc
+      // gap between the branches, which is a step in the aim, and what bounds
+      // it is the motion layer's acceleration cap rather than a hand-off clock:
+      // from rest the camera cannot move more than `½·a·dt²` on the frame of
+      // the step and builds from there, so a metre of arc gap arrives as a
+      // swell over a third of a second.
       const path: CameraPathData = {
         x: 0,
         y: 0,
@@ -1799,20 +1834,27 @@ export function runCameraCases(): CameraResult[] {
     }),
 
     run("lead-buffer-off-tracks-the-swing", () => {
-      // The control: the same swing with no buffer moves the camera every
-      // frame, which is the behaviour the band exists to remove.
-      const path: CameraPathData = { ...RIDE, lookaheadBufferX: 0, lookaheadBufferY: 0 };
-      const rules = buildCameraRules([], [path]);
+      // The control: the same swing with no buffer sloshes the camera, which is
+      // the behaviour the band exists to remove.
+      //
+      // Stated as a COMPARISON against the buffered ride rather than as an
+      // absolute travel, because a swing at 2.4 Hz is most of an octave above
+      // the camera's own 1.2 Hz and the motion layer attenuates whatever
+      // survives the band: the unbuffered camera moves, but it no longer moves
+      // "every frame, by the whole of the swing". What the band is for is that
+      // it moves by NOTHING, and the gap between the two is the case.
       const walk: Vec2[] = [];
       for (let i = 0; i < 240; i++) walk.push(new Vec2(5 + 0.4 * Math.sin(i / 4), 0));
-      const out = ride(rules, walk, false);
+      const travelOf = (buffer: number): number =>
+        ride(buildCameraRules([], [{ ...RIDE, lookaheadBufferX: buffer, lookaheadBufferY: buffer }]), walk, false)
+          .slice(-60)
+          .reduce((a, o, i, arr) => (i ? a + o.pos.distanceTo(arr[i - 1]!.pos) : 0), 0);
+      const out = ride(buildCameraRules([], [{ ...RIDE, lookaheadBufferX: 0, lookaheadBufferY: 0 }]), walk, false);
       const leads = out.map((o) => o.leadS);
-      const travel = out
-        .slice(-60)
-        .reduce((a, o, i, arr) => (i ? a + o.pos.distanceTo(arr[i - 1]!.pos) : 0), 0);
       return [
         { label: "the lead tracks the projection exactly", got: Math.max(...leads) - Math.min(...leads), want: 0.8, tol: 0.02 },
-        { label: "the camera keeps moving", got: travel > 1 ? 1 : 0, want: 1 },
+        { label: "the camera keeps moving", got: travelOf(0) > 0.1 ? 1 : 0, want: 1 },
+        { label: "...where the band stops it dead", got: travelOf(1), want: 0, tol: 1e-6 },
       ];
     }),
 
@@ -1949,130 +1991,96 @@ export function runCameraCases(): CameraResult[] {
       ];
     }),
 
-    run("edge-latch-holds-the-shove", () => {
-      // A locked room the avatar swings right out of: the guarantee shoves the
-      // camera to keep them on screen, twice a swing, in opposite directions.
-      // Latched, the camera moves ONLY on the frames it is being shoved;
-      // unlatched, it eases back toward the lock the moment each shove ends,
-      // which is the wobble the whole episode exists to remove.
-      const rules = buildCameraRules([LOCKED_ROOM], []);
-      const walk: Vec2[] = [];
-      for (let i = 0; i < 400; i++) walk.push(new Vec2(6 * Math.sin(i / 20), 0));
-      // Metres of camera travel on frames the override was asking for NOTHING,
-      // which is exactly the motion the swing had no business causing. The
-      // override itself has to move the camera either way - the frame guarantee
-      // is not optional - so what separates the two is what happens in between.
+    // --- the frame guarantee's stick -------------------------------------
+    //
+    // WHAT WAS HERE: `edge-latch-holds-the-shove`, `edge-latch-is-per-axis`,
+    // `edge-latch-releases-with-the-anchor` and
+    // `edge-latch-outranks-the-ratchet`. The frame-edge pin they asserted is
+    // gone (see CAMERA_STICK_TAU): there is no episode to enter, no pin to hand
+    // back, no deadband to stop it creeping and no wind release to drop it
+    // early. What is left of their claim is the two facts below, plus the
+    // acceleration cap, which is what stops any of it lurching.
+    //
+    // Their walks are also worth not re-inventing at the speeds they used: a
+    // 6 m swing at a two-second period is 18 m/s and 54 m/s² of centripetal
+    // acceleration, which the camera cannot turn with at all now, so what such
+    // a walk measures is the cap and not the mechanism under test.
+
+    run("stick-holds-after-the-ask-stops", () => {
+      // The stick's first fact: when the window stops asking, what it asked for
+      // does not vanish - it decays over CAMERA_STICK_TAU. That is the whole of
+      // what the anchored pin did, without an episode to enter or hand back.
       //
-      // Not quite zero latched: the pin is where the override put the AIM, so
-      // the camera goes on closing the last of its follow lag onto it after the
-      // pull lets go. That is the correction finishing, and it is toward the
-      // pin rather than back off it.
-      const drift = (out: ReturnType<typeof ride>): number =>
-        out.reduce((a, o, i, arr) => (i && o.edge === null ? a + Math.abs(o.pos.x - arr[i - 1]!.pos.x) : a), 0);
-      const swinging = ride(rules, walk, true, () => true);
-      const rolling = ride(rules, walk);
-      const r = edgeReach(stubCamera(), BASE_ZOOM);
-      const offScreen = swinging.filter((o, i) => Math.abs(walk[i]!.x - o.pos.x) > r.x + 1e-9).length;
-      return [
-        { label: "swinging: metres drifted unasked", got: drift(swinging) < 0.15 ? 1 : 0, want: 1 },
-        { label: "rolling: it eases back after every shove", got: drift(rolling) > 3 ? 1 : 0, want: 1 },
-        // ...and the guarantee itself is untouched, which is the whole point of
-        // latching where it put the camera rather than overriding it.
-        { label: "the avatar is never in the edge band", got: offScreen, want: 0 },
-      ];
-    }),
-
-    run("edge-latch-is-per-axis", () => {
-      // The clamp is per axis and so is the pin: a swing that drops the avatar
-      // out of the BOTTOM of the frame has said nothing about the horizontal
-      // lead, and pinning x for it would freeze the route being narrated.
-      const room: CameraRegionData = {
-        x: 0,
-        y: 0,
-        rot: 0,
-        shape: { kind: "rect", w: 400, h: 400 },
-        lockY: 0,
-      };
-      const rules = buildCameraRules([room], []);
-      const walk: Vec2[] = [];
-      for (let i = 0; i < 300; i++) walk.push(new Vec2(i * 0.05, 4 * Math.sin(i / 20)));
-      const out = ride(rules, walk, true, () => true);
-      const rolling = ride(rules, walk);
-      const drift = (o: ReturnType<typeof ride>, pick: (p: Vec2) => number): number =>
-        o.reduce((a, r, i, arr) => (i && r.edge === null ? a + Math.abs(pick(r.pos) - pick(arr[i - 1]!.pos)) : a), 0);
-      return [
-        { label: "x is never pinned", got: out.filter((o) => o.latch.x !== null).length, want: 0 },
-        { label: "y is", got: out.filter((o) => o.latch.y !== null).length > 150 ? 1 : 0, want: 1 },
-        { label: "y holds unless it is being asked for", got: drift(out, (p) => p.y) < 0.1 ? 1 : 0, want: 1 },
-        { label: "...where a roll drifts on y all the way", got: drift(rolling, (p) => p.y) > 1 ? 1 : 0, want: 1 },
-        // ...while x goes on tracking the avatar the whole way, trailing it by
-        // the plain follow lag (`speed * CAMERA_FOLLOW_TAU`) and nothing else.
-        { label: "x still follows", got: walk[299]!.x - out[299]!.pos.x, want: 3 * CAMERA_FOLLOW_TAU, tol: 0.05 },
-      ];
-    }),
-
-    run("edge-latch-releases-with-the-anchor", () => {
-      // The pin is the episode's, so letting go returns the camera to what the
-      // rule actually wants - blended, the gap by then being arbitrary.
+      // Why it matters is the swing: an arc that carries the avatar past the
+      // inner margin asks, comes back inside for a moment and asks again, and
+      // an aim that snapped home in between would rock the camera twice a
+      // swing for as long as the hang lasted. At this clock a gap of half a
+      // second costs the pull under a third of itself.
       const rules = buildCameraRules([LOCKED_ROOM], []);
-      const walk: Vec2[] = [];
-      for (let i = 0; i < 60; i++) walk.push(new Vec2(6, 0));
-      for (let i = 0; i < 200; i++) walk.push(new Vec2(0, 0));
-      const out = ride(rules, walk, true, (i) => i < 60);
-      const after = out.slice(60);
-      const steps = after.map((o, i, arr) => (i ? Math.abs(o.pos.x - arr[i - 1]!.pos.x) : 0));
-      const hard = edgeReach(stubCamera(), BASE_ZOOM).x;
       const inner = innerReach(stubCamera(), BASE_ZOOM).x;
-      const offset = 6 - out[59]!.pos.x;
-      return [
-        // Held by the override and pinned there: the avatar stood still long
-        // enough for the correction to finish, so they are AT the inner margin
-        // rather than somewhere between it and the line they may never cross.
-        { label: "the override holds them on the inner margin", got: offset, want: inner, tol: 1e-9 },
-        { label: "and short of the line", got: offset < hard ? 1 : 0, want: 1 },
-        { label: "the pin is dropped", got: after[after.length - 1]!.latch.x === null ? 1 : 0, want: 1 },
-        { label: "and the camera comes back to the lock", got: after[after.length - 1]!.pos.x, want: 0, tol: 0.01 },
-        // None of the gap crossed at the follow lag's pace, which would put
-        // 10.5% of it on the first frame alone (`1 - exp(-dt / 0.15)`).
-        { label: "biggest single-frame move", got: Math.max(...steps) < 0.05 * offset ? 1 : 0, want: 1 },
-      ];
-    }),
-
-    run("edge-latch-outranks-the-ratchet", () => {
-      // The two rules meet when a backswing is wide enough to put the avatar off
-      // the screen: the ratchet says the camera holds its ground down the track
-      // and the frame guarantee says it may not, and the guarantee wins - it is
-      // the one camera rule a level may never opt out of. Where it leaves the
-      // camera then becomes the pin, so the forward half does not spring the
-      // camera back off it.
-      const path: CameraPathData = { ...SWING_RIDE, lookaheadX: 2.5, lookaheadY: 2.5, lookaheadBufferX: 0.5, lookaheadBufferY: 0.5 };
-      const rules = buildCameraRules([], [path]);
       const walk: Vec2[] = [];
-      for (let i = 0; i < 80; i++) walk.push(new Vec2(10 + 6 * (i / 79), 0)); // out to 16
-      for (let i = 0; i < 60; i++) walk.push(new Vec2(16 - 10 * (i / 59), 0)); // back to 6
-      for (let i = 0; i < 100; i++) walk.push(new Vec2(6 + 3 * (i / 99), 0)); // forward to 9
-      const travel = (out: ReturnType<typeof ride>, from: number, to: number): number =>
-        out.slice(from, to).reduce((a, o, i, arr) => (i ? a + Math.abs(o.pos.x - arr[i - 1]!.pos.x) : 0), 0);
-      const swinging = ride(rules, walk, true, () => true);
-      const rolling = ride(rules, walk);
-      const leads = swinging.map((o) => o.leadS);
-      const back = Math.max(...leads.map((v, i, arr) => (i ? Math.max(0, arr[i - 1]! - v) : 0)));
+      // Out past the inner margin at a pace the camera can hold, and stood
+      // there long enough for the guarantee to settle on its full demand...
+      for (let i = 0; i < 120; i++) walk.push(new Vec2(6 * (i / 119), 0));
+      for (let i = 0; i < 180; i++) walk.push(new Vec2(6, 0));
+      // ...then back to the lock, which is where the window stops asking (its
+      // demand is `|lock - avatar| - inner` and nothing else), and stood there.
+      for (let i = 0; i < 60; i++) walk.push(new Vec2(6 - 6 * (i / 59), 0));
+      for (let i = 0; i < 360; i++) walk.push(new Vec2(0, 0));
+      const out = ride(rules, walk);
+      // The first frame the window asks nothing at all.
+      const quiet = walk.findIndex((p, i) => i > 300 && Math.abs(p.x) <= inner);
+      const at = (seconds: number): number => Math.abs(out[quiet + Math.round(seconds * 60)]!.stick.x);
+      const held = Math.abs(out[quiet]!.stick.x);
+      const decay = (seconds: number): number => Math.exp(-seconds / CAMERA_STICK_TAU);
       return [
-        { label: "the lead origin still never retreats", got: back, want: 0 },
-        // ...and yet the camera did come back down the track, because the
-        // guarantee made it.
-        { label: "the guarantee hauled the camera back", got: swinging[79]!.pos.x - swinging[139]!.pos.x > 4 ? 1 : 0, want: 1 },
-        // Not zero any more: the override is still engaged where it let go, so
-        // it goes on gently giving the avatar room and then gently taking the
-        // pull back (see CAMERA_EDGE_INNER_X/Y and CAMERA_EDGE_SMOOTHING). Stated
-        // against the roll rather than as a distance, since what separates them
-        // is following the avatar versus settling - a seventh of it, measured.
+        { label: "the guarantee was asking", got: held > 0.5 ? 1 : 0, want: 1 },
+        // The law itself, at half a tau and at one tau. A tolerance rather than
+        // an equality because the aim it decays on top of is still moving over
+        // the first frames of it.
+        { label: "half a second later", got: at(0.5) / held, want: decay(0.5), tol: 0.05 },
+        { label: "a stick-tau later", got: at(1.5) / held, want: decay(1.5), tol: 0.05 },
+        // ...and the camera goes with it rather than springing home: what it
+        // covers in the first half-second after the ask stops is a fraction of
+        // the whole return.
         {
-          label: "and it does not follow them back",
-          got: travel(swinging, 140, 240) < travel(rolling, 140, 240) / 4 ? 1 : 0,
+          label: "the camera does not spring home",
+          got:
+            Math.abs(out[quiet + 30]!.pos.x - out[quiet]!.pos.x) <
+            Math.abs(out[out.length - 1]!.pos.x - out[quiet]!.pos.x) / 3
+              ? 1
+              : 0,
           want: 1,
         },
-        { label: "rolling: the camera follows back and forth", got: travel(rolling, 140, 240) > 2 ? 1 : 0, want: 1 },
+      ];
+    }),
+
+    run("stick-decays-when-nothing-asks", () => {
+      // The other half, and the one the pin could not do without an episode to
+      // end: once the avatar comes back inside the frame and stays there, the
+      // stick goes to zero on its own and the camera returns to what the rule
+      // asked for. That is the wind release, the pin's drop and the whole
+      // anchored hand-off, all of it, and it needs no state with an edge.
+      const rules = buildCameraRules([LOCKED_ROOM], []);
+      const walk: Vec2[] = [];
+      // Out to where the guarantee has to shove, at a pace the camera can hold.
+      for (let i = 0; i < 180; i++) walk.push(new Vec2(6 * (i / 179), 0));
+      // ...and back to the lock, where the room's framing is honoured exactly,
+      // and stood there for eight seconds - which is how long a 2.28 m hold
+      // takes to decay under a centimetre at this clock.
+      for (let i = 0; i < 720; i++) walk.push(new Vec2(Math.max(0, 6 - 6 * (i / 120)), 0));
+      const out = ride(rules, walk, true, () => true);
+      const shoved = Math.max(...out.slice(0, 180).map((o) => Math.abs(o.stick.x)));
+      return [
+        { label: "the guarantee shoved", got: shoved > 0.5 ? 1 : 0, want: 1 },
+        // A second and a half after the ask stops, most of it has gone...
+        { label: "and a stick-tau later it is mostly gone", got: Math.abs(out[390]!.stick.x) / shoved < 0.4 ? 1 : 0, want: 1 },
+        // ...and in the end there is nothing left at all, whether or not the
+        // avatar is still anchored - the stick is not an episode.
+        { label: "and it decays to nothing", got: Math.abs(out[899]!.stick.x), want: 0, tol: 0.01 },
+        // The camera is back on the room's lock, which is what the stick was
+        // holding it off.
+        { label: "the camera is back on the lock", got: out[899]!.pos.x, want: 0, tol: 0.01 },
       ];
     }),
 

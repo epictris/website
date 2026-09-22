@@ -969,12 +969,9 @@ export function cameraRegionLabel(r: EdItem): string {
     else if (r.cam.viewportScale !== DEFAULT_VIEWPORT_SCALE) {
       parts.push(`view ×${Number(r.cam.viewportScale.toFixed(2))}`);
     }
-    if (keyed("windBuffer")) parts.push("wind keyed");
-    else if (r.cam.windBuffer !== null) parts.push(`wind ${px(r.cam.windBuffer)}`);
     if (r.cam.softness !== null) parts.push(`soft ${px(r.cam.softness)}`);
     const keys = nodeKeys.filter(isKeyed).length;
     if (keys) parts.push(`${keys} key${keys === 1 ? "" : "s"}`);
-    if (r.cam.blend !== null) parts.push(`${Number(r.cam.blend.toFixed(2))}s`);
     if (keyed("buffer")) parts.push("buf keyed");
     else if (r.cam.buffer !== null) parts.push(`buf ${px(r.cam.buffer)}`);
     if (r.cam.priority !== 0) parts.push(`p${r.cam.priority}`);
@@ -988,7 +985,6 @@ export function cameraRegionLabel(r: EdItem): string {
   }
   const lock = `${r.cam.lockX !== null ? "x" : ""}${r.cam.lockY !== null ? "y" : ""}`;
   if (lock) parts.push(`lock ${lock}`);
-  if (r.cam.blend !== null) parts.push(`${Number(r.cam.blend.toFixed(2))}s`);
   const buf = cameraBufferMargin(r);
   if (buf !== null) {
     // Per side, the sides are named rather than left to a reading order nobody
