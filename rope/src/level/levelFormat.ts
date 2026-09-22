@@ -1608,6 +1608,29 @@ export const DEFAULT_PATH_LOOKAHEAD_BUFFER_Y = 0.55;
 // the spool taken up mid-swing, does not.
 export const DEFAULT_PATH_WIND_BUFFER = 0.5;
 
+// How far off the route two places on it count as comparable, in metres - the
+// sigma of the camera's SOFT projection (see `render/pathProgress.ts`).
+//
+// The camera's progress along a path is not the arc length of the nearest point
+// but the arc-length-weighted mean of the whole window, weighted by a Gaussian
+// in distance at this width. That is what makes it continuous: with one nearest
+// point there is a winner, and a winner can change in a frame; with a mean
+// there is nothing to change.
+//
+// So this is the scale over which a bend is allowed to blur. Much smaller than
+// the route's own bend radii and one candidate dominates again, which is the
+// closest point and its medial axis back; much larger and a corner is rounded
+// off so far that the camera cuts it before the player does. 0.5 m was measured
+// against the river level's tightest bend (0.8 m radius), where it takes the
+// peak `d²s/dt²` of `session-336f` from 345 to 68 m/s²; a level with tighter
+// bends than that wants more.
+//
+// Not keyable, unlike the corridor and the lead. It is a property of the ROUTE'S
+// SHAPE rather than of the framing at a place on it, and a sigma that changed
+// along the route would make the mean a weighted average under two different
+// weightings at once.
+export const DEFAULT_PATH_SOFTNESS = 0.5;
+
 // A camera region: a volume that reshapes the camera while the avatar is inside
 // it. Deliberately NOT a body — it has no collision, nothing wraps it and the
 // sim never sees it, so it lives in its own list rather than gaining a
@@ -1803,6 +1826,10 @@ export interface CameraPathData {
   blend?: number;
   // Extra release hysteresis outside `range`; absent = REGION_EXIT_MARGIN.
   buffer?: number;
+  // Metres (pixels on disk) off the route over which two places on it count as
+  // comparable to the soft projection (see DEFAULT_PATH_SOFTNESS, which is what
+  // it falls back to). A property of the route's shape, so it is NOT keyable.
+  softness?: number;
   // How far along the route a hanging avatar winds themselves up their line
   // before the frame-edge latch lets the camera go (see
   // DEFAULT_PATH_WIND_BUFFER, which is what it falls back to).
@@ -3138,6 +3165,7 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
       ...(p.blend !== undefined ? { blend: p.blend } : {}),
       ...(p.buffer !== undefined ? { buffer: p.buffer * factor } : {}),
       ...(p.windBuffer !== undefined ? { windBuffer: p.windBuffer * factor } : {}),
+      ...(p.softness !== undefined ? { softness: p.softness * factor } : {}),
       ...(p.priority !== undefined ? { priority: p.priority } : {}),
     }));
   // A note's placement, box and glyph height are lengths; its text is not.

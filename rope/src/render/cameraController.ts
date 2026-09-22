@@ -58,6 +58,7 @@ import {
   DEFAULT_PATH_LOOKAHEAD_Y,
   DEFAULT_PATH_RANGE_X,
   DEFAULT_PATH_RANGE_Y,
+  DEFAULT_PATH_SOFTNESS,
   DEFAULT_PATH_WIND_BUFFER,
   DEFAULT_VIEWPORT_SCALE,
 } from "../level/levelFormat";
@@ -75,6 +76,11 @@ import {
   type PolylineIndex,
 } from "../lib/path";
 import {
+  CAMERA_SAMPLE_STEP,
+  CAMERA_TRACK_WINDOW,
+  softProjectOntoPolyline,
+} from "./pathProgress";
+import {
   buildKeyTrack,
   keyValueAt,
   lerpZoom,
@@ -89,32 +95,6 @@ import { marginSides, uniformMargin } from "./shapePath";
 // the edge off a landing or a hook release.
 export const CAMERA_FOLLOW_TAU = 0.15;
 
-// Metres of control polygon per sample of a CAMERA route, where
-// `PATH_FLATTEN_STEP` (25 cm) is what everything else flattens at.
-//
-// The camera's projection is not about the curve's accuracy, which 25 cm
-// already has to well under a centimetre. It is about CONTINUITY. From a metre
-// off the route the closest point sits on a vertex for the whole wedge of that
-// vertex's normal cone, then slides 1:1 along the next segment - so the arc
-// length the camera rides stands still for `offset × turn` of avatar travel and
-// then runs, once per vertex. On the river level's bends (segments of 12 to
-// 25 cm turning 5 to 9 degrees) that is a plateau of about 15 cm and a duty
-// cycle around 5 Hz, which no ease at any sane time constant can hide: measured
-// on `session-268f`, the camera's speed pulses 0.2, 1.4, 0.7, 1.4 m/s.
-//
-// The plateau is proportional to the turn at a vertex, and the turn at a vertex
-// is proportional to the step, so the cure is simply to sample finer: at 2 cm
-// the same bends turn under a degree per vertex and the mean |d²s/dt²| over
-// that session's tail falls from 21.7 to 8.6 m/s².
-//
-// It is the CAMERA's own and not `PATH_FLATTEN_STEP` because that constant is
-// shared with the movers, where it is the sim-side quantisation of a scripted
-// pace (`PACE_STEP`): changing it there would diverge every recorded mover
-// replay. A camera route is render-side and reaches the sim through nothing, so
-// it is free to be as fine as it likes - the cost is memory (a 6000-point
-// river route) and is paid for once at build.
-export const CAMERA_SAMPLE_STEP = 0.02;
-
 // Default region cross-fade, seconds. A region may override it with `blend`.
 export const CAMERA_BLEND_TIME = 0.7;
 
@@ -123,13 +103,6 @@ export const CAMERA_BLEND_TIME = 0.7;
 // exactly on a boundary re-triggers the cross-fade every frame and the camera
 // stutters, so it is sized for jitter and nothing more.
 export const REGION_EXIT_MARGIN = 0.15; // metres
-
-// Metres per second of allowance, beyond the player's own motion, for the
-// window the held path's projection is searched in. The player's `followDelta`
-// term means no legitimate move can outrun the window however fast the avatar
-// is flung; this is the slack on top of it, and the `dt` it is multiplied by is
-// what keeps the window frame-rate independent.
-export const PATH_TRACK_SLACK_SPEED = 5;
 
 // --- the frame guarantee's parameters ---------------------------------------
 //
@@ -1397,11 +1370,15 @@ export class CameraController {
   private seat: (CameraRule & { kind: "path" }) | null = null;
 
   // Path tracking, alongside the smoothing state and reset with it by `snap()`.
-  // `pathS` is last frame's projection along the held path and `lastFollow` is
-  // where the avatar was when it was taken; together they size the window this
-  // frame's projection is searched in (see `trackPath`).
+  //
+  // `pathS` is last frame's SOFT progress along the held path (see
+  // `softProjectOntoPolyline`) - what the target is built from, and what this
+  // frame's window is centred on. `pathNearS` is the nearest point in that
+  // window, which is what the GRIP is measured at: the corridor an author draws
+  // is a distance off the route, so it has to be answered by a point on the
+  // route and not by a mean of several.
   private pathS = 0;
-  private lastFollow = Vec2.ZERO;
+  private pathNearS = 0;
   // The arc length the LEAD is measured from: `pathS` held in the path's
   // lookahead deadband (see `committedLeadS`). Equal to `pathS` on acquisition
   // and whenever the band is being dragged; anywhere inside it while a swing
@@ -1553,22 +1530,27 @@ export class CameraController {
     this.started = false;
   }
 
-  // The held path's projection, searched only within what the player could
-  // plausibly have moved along it. The `followDelta` term means no legitimate
-  // move can outrun the window however fast the avatar is flung, and the `dt`
-  // term keeps it frame-rate independent.
+  // The held path's progress, continued from last frame's: the soft mean the
+  // target is built from, the nearest point in the window the grip is measured
+  // at, and the distance to it (see `softProjectOntoPolyline`).
   //
-  // Confining it is what makes a switchback behave: the global closest point
+  // The window is what makes a switchback behave: the global closest point
   // flips branches the instant the player is nearer the other one, many metres
-  // of arc length in a frame, and the hand-off blend cannot help because the
-  // rule identity has not changed.
+  // of arc length in a frame, and no blend can help because the rule identity
+  // has not changed. What is new is that a branch entering the window fades in
+  // from zero weight rather than arriving, and that there is nothing to size
+  // against the player's speed - the window is a neighbourhood, not a race.
   private trackPath(
     rule: CameraRule & { kind: "path" },
     follow: Vec2,
-    dt: number,
-  ): { s: number; dist: number } {
-    const maxStep = follow.distanceTo(this.lastFollow) + PATH_TRACK_SLACK_SPEED * Math.max(0, dt);
-    return projectOntoPolylineWindow(rule.index, follow, this.pathS - maxStep, this.pathS + maxStep);
+  ): { s: number; sNear: number; dist: number } {
+    return softProjectOntoPolyline(
+      rule.index,
+      follow,
+      this.pathS,
+      CAMERA_TRACK_WINDOW,
+      rule.path.softness ?? DEFAULT_PATH_SOFTNESS,
+    );
   }
 
   // `hang` is what the avatar is hanging on - a taut line rather than their
@@ -1614,6 +1596,7 @@ export class CameraController {
       this.members = [];
       this.seat = null;
       this.pathS = 0;
+      this.pathNearS = 0;
       this.pathLeadS = 0;
       this.latchX = null;
       this.latchY = null;
@@ -1625,7 +1608,6 @@ export class CameraController {
       this.hangLength = null;
       this.windArmed = true;
       this.sinceWind = Infinity;
-      this.lastFollow = follow;
     }
 
     // The frame the episode ends on. The lead origin un-ratchets and the latch
@@ -1634,14 +1616,17 @@ export class CameraController {
     const releasing = this.wasAnchored && !anchored;
 
     // Resolved BEFORE the rule decision, because a path's grip is measured to
-    // the windowed projection rather than to the global closest point. The
-    // offset is the same displacement as a vector, which is what the range and
-    // falloff ellipses are resolved along.
+    // the tracked projection rather than to the global closest point. The grip
+    // reads `sNear` and not the soft progress: a corridor is a distance OFF the
+    // route, so it has to be answered by a point on the route rather than by a
+    // mean of several, and the zone an author draws is then exactly the zone
+    // tested. The offset is that same displacement as a vector, which is what
+    // the range and falloff ellipses are resolved along.
     const seat = this.seat;
-    const heldPath = seat ? this.trackPath(seat, follow, dt) : null;
-    const heldOffset = heldPath ? follow.sub(pointAtArcLength(seat!.index, heldPath.s)) : null;
+    const heldPath = seat ? this.trackPath(seat, follow) : null;
+    const heldOffset = heldPath ? follow.sub(pointAtArcLength(seat!.index, heldPath.sNear)) : null;
     const heldSeat: HeldSeat | null =
-      seat && heldPath && heldOffset ? { seat, at: { s: heldPath.s, off: heldOffset } } : null;
+      seat && heldPath && heldOffset ? { seat, at: { s: heldPath.sNear, off: heldOffset } } : null;
 
     const nextRules = activeCameraRules(
       rules,
@@ -1679,33 +1664,47 @@ export class CameraController {
     // than snaps. The challenge cannot fire on the ridden branch itself: a
     // global answer inside the window IS the windowed answer, so the two
     // distances agree and cannot sit on opposite sides of the range.
-    let proj = !nextSeat
-      ? null
-      : nextSeat === seat
-        ? heldPath!
-        : projectOntoPolyline(nextSeat.index, follow);
-    let offset = !nextSeat
-      ? null
-      : nextSeat === seat
-        ? heldOffset!
-        : follow.sub(pointAtArcLength(nextSeat.index, proj!.s));
+    //
+    // Two arc lengths come out of this, and keeping them apart is the whole of
+    // the layer: `progress` is the soft mean the TARGET is built from, and
+    // `nearS` is the nearest point on the route, which the GRIP is measured at
+    // (see `softProjectOntoPolyline`). They agree everywhere one candidate
+    // dominates, which is most of a level.
+    let progress = 0;
+    let nearS = 0;
+    let offset: Vec2 | null = null;
+    if (nextSeat) {
+      if (nextSeat === seat) {
+        progress = heldPath!.s;
+        nearS = heldPath!.sNear;
+        offset = heldOffset!;
+      } else {
+        // Acquiring is history-free, so there is no window to be soft within:
+        // the global closest point is both answers, and the soft mean starts
+        // centred on it.
+        const g = projectOntoPolyline(nextSeat.index, follow);
+        progress = g.s;
+        nearS = g.s;
+        offset = follow.sub(pointAtArcLength(nextSeat.index, g.s));
+      }
+    }
     let branchJump = false;
     if (
       nextSeat &&
       nextSeat === seat &&
       offset!.length() >
-        pathRange(pathParamsAt(nextSeat, proj!.s), offset!) +
-          pathParamsAt(nextSeat, proj!.s).buffer
+        pathRange(pathParamsAt(nextSeat, nearS), offset!) + pathParamsAt(nextSeat, nearS).buffer
     ) {
       const g = projectOntoPolyline(nextSeat.index, follow);
       const goff = follow.sub(pointAtArcLength(nextSeat.index, g.s));
       if (goff.length() <= pathRange(pathParamsAt(nextSeat, g.s), goff)) {
-        proj = g;
+        progress = g.s;
+        nearS = g.s;
         offset = goff;
         branchJump = true;
       }
     }
-    const s = proj?.s ?? 0;
+    const s = progress;
 
     // The wind release (see `windProgress`): what this frame's take-up of the
     // line is worth along the route where the avatar hangs, whether the sum
@@ -1725,7 +1724,7 @@ export class CameraController {
     if (pinned) this.windProgress = Math.max(0, this.windProgress + takeUp);
     if (dt > 0) this.sinceWind = takeUp / dt > WIND_REST_RATE ? 0 : this.sinceWind + dt;
     const unpinning =
-      pinned && nextSeat !== null && this.windProgress > pathParamsAt(nextSeat, s).windBuffer;
+      pinned && nextSeat !== null && this.windProgress > pathParamsAt(nextSeat, nearS).windBuffer;
 
     // Acquiring a path commits the lead to the projection outright - entering
     // (a branch jump included) is history-free, so the band starts centred on
@@ -1753,11 +1752,7 @@ export class CameraController {
     // displacement off the route - the windowed one while held, so at a
     // switchback the weight is about the branch they are actually on, exactly
     // as the grip is.
-    const members = cameraInfluences(
-      nextRules,
-      follow,
-      proj && offset ? { s: proj.s, off: offset } : null,
-    );
+    const members = cameraInfluences(nextRules, follow, offset ? { s: nearS, off: offset } : null);
     const target = blendCameraTarget(members, follow, baseZoom, leadS);
 
     if (!this.started) {
@@ -1765,6 +1760,7 @@ export class CameraController {
       this.members = members;
       this.seat = nextSeat;
       this.pathS = s;
+      this.pathNearS = nearS;
       this.pathLeadS = leadS;
       this.offset = Vec2.ZERO;
       this.zoomRatio = 1;
@@ -1845,8 +1841,8 @@ export class CameraController {
     this.members = members;
     this.seat = nextSeat;
     this.pathS = s;
+    this.pathNearS = nearS;
     this.pathLeadS = leadS;
-    this.lastFollow = follow;
     this.s = this.dur > 0 ? Math.min(1, this.s + dt / this.dur) : 1;
     // Read by the hand-off above and dropped here: outside an episode there is
     // nothing pinning the camera, and the gap the pin leaves behind is already

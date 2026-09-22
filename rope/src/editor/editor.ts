@@ -36,6 +36,7 @@ import {
   DEFAULT_PATH_LOOKAHEAD_X,
   DEFAULT_PATH_LOOKAHEAD_Y,
   DEFAULT_PATH_RANGE_X,
+  DEFAULT_PATH_SOFTNESS,
   DEFAULT_PATH_WIND_BUFFER,
   DEFAULT_PATH_RANGE_Y,
   DEFAULT_WATER_DRAG,
@@ -5701,6 +5702,25 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       },
     );
     if (windKeyed) windInput.title = windKeyed;
+    // How far off the route two places on it count as comparable to the camera's
+    // SOFT projection - the width of the blur that makes progress along the
+    // route a continuous function of where the player is. Much smaller than the
+    // route's own bend radii and the camera cuts back to a nearest point, with
+    // the jerk that goes with it; much larger and it cuts a corner before the
+    // player does. Not keyable: it is a property of the route's shape rather
+    // than of the framing at a place on it.
+    num(
+      "softness",
+      (b) => (b.cam.softness ?? NaN) * M2PX,
+      (b, v) => (b.cam.softness = Math.max(0, v * PX)),
+      10,
+      {
+        placeholder: String(Math.round(DEFAULT_PATH_SOFTNESS * M2PX)),
+        onEmpty: () => {
+          for (const b of paths) b.cam.softness = null;
+        },
+      },
+    );
     num("priority", (b) => b.cam.priority, (b, v) => (b.cam.priority = Math.round(v)), 1);
 
     // Three whole-path actions, because each is miserable to do node by node.

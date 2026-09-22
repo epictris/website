@@ -971,6 +971,7 @@ export function cameraRegionLabel(r: EdItem): string {
     }
     if (keyed("windBuffer")) parts.push("wind keyed");
     else if (r.cam.windBuffer !== null) parts.push(`wind ${px(r.cam.windBuffer)}`);
+    if (r.cam.softness !== null) parts.push(`soft ${px(r.cam.softness)}`);
     const keys = nodeKeys.filter(isKeyed).length;
     if (keys) parts.push(`${keys} key${keys === 1 ? "" : "s"}`);
     if (r.cam.blend !== null) parts.push(`${Number(r.cam.blend.toFixed(2))}s`);

@@ -313,6 +313,9 @@ export interface EdCamera {
   // before the frame-edge latch lets the camera go (see
   // DEFAULT_PATH_WIND_BUFFER). null = that default.
   windBuffer: number | null; // metres
+  // How far off the route two places on it count as comparable to the soft
+  // projection (see DEFAULT_PATH_SOFTNESS). null = that default.
+  softness: number | null; // metres
 }
 
 // Lights-layer properties (see LightData for the semantics).
@@ -914,6 +917,7 @@ export const defaultCamera = (): EdCamera => ({
   lookaheadBufferX: null,
   lookaheadBufferY: null,
   windBuffer: null,
+  softness: null,
 });
 
 export const defaultLight = (): EdLight => ({
@@ -1448,6 +1452,7 @@ function fromLevelData(data: LevelData): EdModel {
       lookaheadBufferX: null,
       lookaheadBufferY: null,
       windBuffer: null,
+      softness: null,
     },
     light: defaultLight(),
     note: defaultNote(),
@@ -1546,6 +1551,7 @@ function fromLevelData(data: LevelData): EdModel {
       lookaheadBufferX: c.lookaheadBufferX ?? null,
       lookaheadBufferY: c.lookaheadBufferY ?? null,
       windBuffer: c.windBuffer ?? null,
+      softness: c.softness ?? null,
     },
     light: defaultLight(),
     note: defaultNote(),
@@ -1839,6 +1845,7 @@ export function pathDataOf(i: EdItem): CameraPathData {
     ...(i.cam.blend !== null ? { blend: i.cam.blend } : {}),
     ...(i.cam.buffer !== null ? { buffer: i.cam.buffer } : {}),
     ...(i.cam.windBuffer !== null ? { windBuffer: i.cam.windBuffer } : {}),
+    ...(i.cam.softness !== null ? { softness: i.cam.softness } : {}),
     ...(i.cam.priority !== 0 ? { priority: i.cam.priority } : {}),
   };
 }

@@ -19,7 +19,6 @@ import {
   buildCameraRules,
   CAMERA_EDGE_MARGIN,
   CAMERA_FOLLOW_TAU,
-  CAMERA_SAMPLE_STEP,
   CameraController,
   edgeAxis,
   edgePull,
@@ -45,6 +44,12 @@ import {
   type CameraRule,
   type CameraInfluence,
 } from "../render/cameraController";
+import {
+  CAMERA_SAMPLE_STEP,
+  CAMERA_TRACK_WINDOW,
+  softProjectOntoPolyline,
+  windowWeight,
+} from "../render/pathProgress";
 import type { CameraPathData, CameraRegionData, RawLevelData } from "../level/levelFormat";
 import { scaleLevelData } from "../level/levelFormat";
 import { modelFromDisk, modelToDisk, reversePathVerts } from "../editor/model";
@@ -397,6 +402,127 @@ export function runCameraCases(): CameraResult[] {
       return checks;
     }),
 
+    runFacts("soft-progress-is-continuous", () => {
+      // The whole of the bottom layer, and the one thing the closest point
+      // cannot do (see `render/pathProgress.ts`). An avatar swept in 1 mm steps
+      // past a bend must move `s` by something close to 1 mm every step: the
+      // closest point instead PLATEAUS on the outside of the bend (it sits on a
+      // vertex for the whole wedge of its normal cone) and TELEPORTS on the
+      // inside (past the centre of curvature a whole arc of route is
+      // equidistant, so the winner flips legs).
+      //
+      // Both halves are asserted against the closest point as well, so the case
+      // says out loud that it is discriminating: a soft projection that had
+      // quietly become a closest point again would pass the first half of every
+      // line here and fail the second.
+      const bad: string[] = [];
+      const R = 0.8;
+      const centre = V(0, R);
+      // A quarter bend of radius R from (0, 0) round to (R, R), with a straight
+      // leg either side, flattened at the camera's own step.
+      const arc: Vec2[] = [V(-3, 0)];
+      const turns = Math.max(2, Math.ceil(((Math.PI / 2) * R) / CAMERA_SAMPLE_STEP));
+      for (let k = 0; k <= turns; k++) {
+        const a = (Math.PI / 2) * (k / turns);
+        arc.push(centre.add(V(Math.sin(a), -Math.cos(a)).mul(R)));
+      }
+      arc.push(V(R, R + 3));
+      const ix = buildPolylineIndex(arc);
+      const sweep = (radius: number, label: string, defect: "plateau" | "jump"): void => {
+        const at = (k: number, steps: number): Vec2 => {
+          const a = (Math.PI / 2) * (k / steps);
+          return centre.add(V(Math.sin(a), -Math.cos(a)).mul(radius));
+        };
+        // 1 mm of avatar travel per step, along an arc concentric with the bend.
+        const steps = Math.ceil(((Math.PI / 2) * radius) / 0.001);
+        // Settled before the sweep starts, since the soft mean and the closest
+        // point are genuinely different answers at a bend and the difference
+        // between them is not a step the sweep took.
+        let soft = projectOntoPolyline(ix, at(0, steps)).s;
+        for (let i = 0; i < 50; i++) {
+          soft = softProjectOntoPolyline(ix, at(0, steps), soft, CAMERA_TRACK_WINDOW, 0.5).s;
+        }
+        let worstSoft = 0;
+        let worstHard = 0;
+        let plateau = 0;
+        let worstPlateau = 0;
+        let prevHard = projectOntoPolyline(ix, at(0, steps)).s;
+        for (let k = 1; k <= steps; k++) {
+          const p = at(k, steps);
+          const next = softProjectOntoPolyline(ix, p, soft, CAMERA_TRACK_WINDOW, 0.5).s;
+          worstSoft = Math.max(worstSoft, Math.abs(next - soft));
+          soft = next;
+          const hard = projectOntoPolyline(ix, p).s;
+          worstHard = Math.max(worstHard, Math.abs(hard - prevHard));
+          plateau = hard === prevHard ? plateau + 1 : 0;
+          worstPlateau = Math.max(worstPlateau, plateau);
+          prevHard = hard;
+        }
+        // A small multiple of the step: the soft mean advances FASTER than the
+        // avatar inside a bend, because cutting a corner is advancing past it.
+        if (worstSoft > 0.005) bad.push(`${label}: soft step ${worstSoft.toFixed(4)} m per 1 mm`);
+        if (defect === "jump" && worstHard <= 0.005) {
+          bad.push(`${label}: the closest point did not jump (${worstHard})`);
+        }
+        if (defect === "plateau" && worstPlateau <= 1) {
+          bad.push(`${label}: the closest point did not plateau (${worstPlateau})`);
+        }
+      };
+      // Outside the bend at a metre off it, where the plateau lives...
+      sweep(R + 1, "outside", "plateau");
+      // ...and inside it, past the centre of curvature, where the flip does.
+      sweep(0.3, "inside", "jump");
+      return bad;
+    }),
+
+    runFacts("soft-progress-is-the-closest-point-on-a-straight", () => {
+      // The other half of the claim: softening costs nothing where there was
+      // nothing wrong. On a straight route one candidate dominates and the
+      // Gaussian is symmetric about it, so the mean IS the projection.
+      const bad: string[] = [];
+      for (let i = 0; i <= 20; i++) {
+        const p = V(1 + (i * 8) / 20, 0.6);
+        const soft = softProjectOntoPolyline(SEGMENT, p, p.x, CAMERA_TRACK_WINDOW, 0.5);
+        const hard = projectOntoPolyline(SEGMENT, p);
+        if (Math.abs(soft.s - hard.s) > 1e-3) {
+          bad.push(`at x=${p.x}: soft ${soft.s} vs closest ${hard.s}`);
+        }
+        if (Math.abs(soft.sNear - hard.s) > 1e-9 || Math.abs(soft.dist - hard.dist) > 1e-9) {
+          bad.push(`at x=${p.x}: sNear/dist disagree with the projection`);
+        }
+      }
+      return bad;
+    }),
+
+    runFacts("soft-progress-keeps-its-branch", () => {
+      // The window, which is what the hard one was for: a switchback's other
+      // branch is a metre away in space and twelve metres away along the route,
+      // and beyond `CAMERA_TRACK_WINDOW` it weighs exactly nothing. Inside the
+      // window a candidate fades in from zero instead of arriving, which is the
+      // part the hard window could not do.
+      const bad: string[] = [];
+      let s = 5;
+      for (const y of [0.5, 1.0, 1.6]) {
+        s = softProjectOntoPolyline(SWITCHBACK, V(5, y), s, CAMERA_TRACK_WINDOW, 0.5).s;
+        if (Math.abs(s - 5) > 0.05) bad.push(`at y=${y} the progress left the branch: ${s}`);
+      }
+      // Sanity, and the same one `switchback-window` makes: it is the window
+      // doing this and not the geometry.
+      const global = projectOntoPolyline(SWITCHBACK, V(5, 1.6)).s;
+      if (Math.abs(global - 17) > 1e-9) bad.push(`the global answer is not the far branch: ${global}`);
+      // The window's own two facts, stated on the weight rather than inferred
+      // from a rig: a piece of route AT the rim counts for exactly nothing, one
+      // at nine tenths of it counts for something, and the weight arrives at
+      // the rim FLAT - which is what makes a branch fade in rather than appear.
+      if (windowWeight(1) !== 0) bad.push(`a sample at W weighs ${windowWeight(1)}`);
+      if (windowWeight(1.5) !== 0) bad.push(`a sample past W weighs ${windowWeight(1.5)}`);
+      if (!(windowWeight(0.9) > 0)) bad.push(`a sample at 0.9 W weighs ${windowWeight(0.9)}`);
+      if (windowWeight(0) !== 1) bad.push(`a sample at the centre weighs ${windowWeight(0)}`);
+      const slopeAtRim = (windowWeight(1) - windowWeight(1 - 1e-4)) / 1e-4;
+      if (Math.abs(slopeAtRim) > 1e-3) bad.push(`the rim has a corner: slope ${slopeAtRim}`);
+      return bad;
+    }),
+
     run("switchback-reacquire", () => {
       // Once the path has let go, re-acquisition is a fresh global query, and
       // it correctly lands on the lower branch the player is now on.
@@ -467,11 +593,17 @@ export function runCameraCases(): CameraResult[] {
       // Walking backwards must not flip the lookahead: direction is the design,
       // so the screen keeps arguing for the authored way.
       const rules = buildCameraRules([], [RIDE]);
-      const walk = [8, 7, 6, 5].map((x) => new Vec2(x, 0));
+      // At 3 m/s, which is a player rather than a teleport: the progress is a
+      // soft mean over a window centred on last frame's (see
+      // `softProjectOntoPolyline`), so it trails a move by about a fifth of the
+      // move itself - 11 mm at this speed, and a quarter of a metre for the
+      // metre-a-frame steps this case used to take.
+      const walk: Vec2[] = [];
+      for (let x = 8; x >= 5 - 1e-9; x -= 0.05) walk.push(new Vec2(x, 0));
       const out = ride(rules, walk);
       const last = out[out.length - 1]!;
       return [
-        { label: "s", got: last.s, want: 5 },
+        { label: "s", got: last.s, want: 5, tol: 0.02 },
         // The camera is still eased, so what is asserted is the AIM: the target
         // is ahead of the player by the lookahead, and the camera is chasing it
         // from further along rather than from behind.
@@ -830,6 +962,7 @@ export function runCameraCases(): CameraResult[] {
             viewportScale: 1.6,
             blend: 0.4,
             buffer: 60,
+            softness: 70,
             priority: 2,
           },
         ],
@@ -864,6 +997,7 @@ export function runCameraCases(): CameraResult[] {
         "viewportScale",
         "blend",
         "buffer",
+        "softness",
         "priority",
       ] as const) {
         if (Math.abs((out[k] ?? NaN) - (want[k] ?? NaN)) > 1e-6) {
@@ -1795,8 +1929,19 @@ export function runCameraCases(): CameraResult[] {
       return [
         { label: "held at the ratchet's furthest", got: out[199]!.leadS, want: 10.7, tol: 0.02 },
         // Back in the band the instant the anchor goes: the origin is the
-        // avatar's projection plus the band's width.
-        { label: "back in the band on release", got: after[0]!.leadS, want: 9.3, tol: 1e-9 },
+        // avatar's progress plus the band's width, and no longer the ratchet's
+        // 10.7. Stated as that RELATION rather than as 9.3, because this walk
+        // teleports from the swing to a standstill and the soft projection
+        // trails a teleport by design (see `softProjectOntoPolyline`); it is at
+        // 9.3 within a millimetre four frames later, which the settled
+        // assertion below covers.
+        {
+          label: "back in the band on release",
+          got: after[0]!.leadS - after[0]!.s,
+          want: 0.3,
+          tol: 1e-9,
+        },
+        { label: "and it settles in the band", got: after[10]!.leadS, want: 9.3, tol: 1e-3 },
         // 1.4 m of target step, none of it at the follow lag's pace - which
         // would put 0.15 m of it on the first frame alone.
         { label: "biggest single-frame move", got: Math.max(...steps) < 0.08 ? 1 : 0, want: 1 },
@@ -2378,6 +2523,9 @@ export function runCameraCases(): CameraResult[] {
             x: 0,
             y: 0,
             rot: 0,
+            // `softness` is a path-level LENGTH, so it scales at the same gate
+            // and is not keyable - a node cannot carry one.
+            softness: 40,
             verts: [
               { x: 0, y: 0, viewportScale: 2, lookaheadX: 250, lookaheadBufferY: 55, rangeX: 300, buffer: 20 },
               { x: 100, y: 0 },
@@ -2385,8 +2533,10 @@ export function runCameraCases(): CameraResult[] {
           },
         ],
       };
-      const v = scaleLevelData(raw, 0.01).cameraPaths![0]!.verts;
+      const path = scaleLevelData(raw, 0.01).cameraPaths![0]!;
+      const v = path.verts;
       return [
+        { label: "softness", got: path.softness ?? NaN, want: 0.4 },
         { label: "view", got: v[0]!.viewportScale ?? NaN, want: 2 },
         { label: "x lead", got: v[0]!.lookaheadX ?? NaN, want: 2.5 },
         { label: "y lead buffer", got: v[0]!.lookaheadBufferY ?? NaN, want: 0.55 },

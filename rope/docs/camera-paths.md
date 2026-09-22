@@ -167,25 +167,54 @@ Straying past the release ellipse **releases** the path, and the camera falls ba
 Coming back re-acquires it.
 Every one of those transitions is a rule change, so the controller's existing frozen-delta hand-off blends all of them for free; the one addition is that an outgoing path is evaluated at its tracked projection rather than at a fresh global one, since both targets have to be measured at the same instant and on the same branch or the frozen delta is a gap that never existed.
 
-## The windowed projection
+## The soft projection
 
-The load-bearing piece, and the reason `lib/path.ts` is more than a distance function.
-A **global** closest-point query is discontinuous wherever the path passes near itself: on a switchback one frame's projection can teleport many metres of arc length, taking the lookahead target with it, and the hand-off blend cannot help because the rule identity has not changed.
+The load-bearing piece, and the whole of the camera's smoothness: every framing decision a path makes is a function of one number, `s`, so the camera is exactly as smooth as that number is.
+A closest-point projection is not smooth in the player's position and cannot be made so.
+It has **two** discontinuities, both intrinsic:
 
-So the controller tracks the projection statefully.
-On **acquisition** it is a global `projectOntoPolyline` - entering is unbuffered and history-free, exactly like a region.
-While **held** it is `projectOntoPolylineWindow` around last frame's `s`, with the window sized to what the player could plausibly have moved:
+- a **plateau** at every vertex. From a distance off the route the closest point sits on a vertex for the whole wedge of that vertex's normal cone, then slides 1:1 along the next segment, so `s` alternates between standing still and running. Finer sampling shrinks it (see [**Curves**](#curves)) but never removes it: on `session-268f` the tracked `s` stands at exactly the vertex arc lengths - 21.65, 21.82, 21.94, 22.07, 22.22, 22.38 - for about 15 cm of avatar travel each.
+- a **teleport** on the medial axis. Past a bend's centre of curvature a whole arc of the route is equidistant, and the global closest point flips legs - half a metre of arc in a frame on `session-336f`. A hard tracking window refuses the flip and rides its own edge instead, which is the same discontinuity with a ramp on it: `s` sprinting at 6 m/s of arc while the avatar moves at 1 to 2.6 m/s.
+
+So the progress is a **soft** projection (`render/pathProgress.ts`): not the arc length of the one nearest point, but the arc-length-weighted mean of every point in a window, weighted by a Gaussian in distance.
 
 ```
-maxStep = |follow - lastFollow| + PATH_TRACK_SLACK_SPEED * dt
-window  = [s - maxStep, s + maxStep]
+w(s) = exp(-(d(s)² - dmin²) / 2σ²) · windowWeight(|s - sPrev| / W) · ds
+s*   = ∫ w s / ∫ w
 ```
 
-The `followDelta` term means no legitimate move can outrun the window however fast the avatar is flung; the `dt` term keeps it frame-rate independent.
-The path's **grip** is then measured to that windowed projection rather than to the global closest point, which is what makes the range mean what the author set it to: a player who drops off an upper branch toward a lower one has the release distance measured against the branch they were actually riding, so the path lets go, the fallback rule takes over with a blend, and the lower branch re-acquires with a fresh global projection and another blend.
-`switchback-window` in `cli camera` is the case, and it is red against a window-ignoring implementation while every other case in the file is green.
+`σ` is the path's `softness` (0.5 m by default, authored in pixels, **not** keyable - it is a property of the route's shape rather than of the framing at a place on it) and `W` is `CAMERA_TRACK_WINDOW` (2.5 m).
+`windowWeight` is a falling smoothstep: 1 at the middle of the window, 0 at the rim **and flat there**, which is what lets a branch entering the window fade in from zero rate rather than arriving.
+
+It is C∞ in the player's position for any positive `σ` - there is no winner to change - and on a straight route the Gaussian is symmetric about the projection, so the mean IS the projection (`soft-progress-is-the-closest-point-on-a-straight`).
+The route is treated as **continuing straight past either end** along the tangent there, so the window is never one-sided and the mean at the first node is the first node; clamped instead, a player standing on the start of a route reads half a Gaussian - about 0.4 m - further along than they are.
+
+Its costs are two, both small and both deliberate:
+
+- inside a tight corner the mean advances **faster** than the player does, because cutting a corner is advancing past the bend. The motion layer is what makes that a swell rather than a jerk.
+- it **trails** a move by about a fifth of that move, because the window is centred on last frame's answer: 11 mm at 3 m/s, and a quarter of a metre for a metre-a-frame teleport.
+
+Two arc lengths come out of it and keeping them apart is the whole layer.
+`s` is the soft mean, and it feeds the lead origin and every keyed **target** field.
+`sNear` is the nearest point in the window, exactly as the hard window answered it, and it is what the **grip** is measured at - the corridor, the falloff weight and the release - because a corridor is a distance OFF the route and has to be answered by a point on the route rather than by a mean of several.
+So the zone an author draws is still exactly the zone tested, and only what the camera LOOKS AT moved.
+
+On **acquisition** it is still a global `projectOntoPolyline` and both answers are that - entering is unbuffered and history-free, exactly like a region.
+
+Measured on the two 2026-09-22 river bundles, against the closest point at the same 2 cm sampling:
+
+| | 268f tail | 336f tail |
+|---|---|---|
+| max `ds/dt`, m/s | 2.48 → 2.42 | 7.05 → **4.81** |
+| max `d²s/dt²`, m/s² | 55 → 53 | 273 → **139** |
+| camera peak accel, m/s² | 15.7 → 15.6 | 51.7 → **31.0** |
+| camera peak jerk, m/s³ | 457 → 392 | 2270 → **653** |
+
+`soft-progress-is-continuous` is the case: an avatar swept in 1 mm steps round the outside and the inside of a 0.8 m bend moves `s` by at most a few millimetres a step, where the closest point plateaus on the outside and jumps on the inside - and the case asserts both of the closest point's defects too, so it says out loud that it is discriminating.
+`soft-progress-keeps-its-branch` is the window, and it asserts the rim's two facts on `windowWeight` directly.
 
 The window has a failure mode of its own, and the **branch challenge** is its other half.
+(It is measured at `sNear`, like the rest of the grip.)
 The grip is per-PATH while the geometry is per-branch, so a player who genuinely leaves the ridden branch and lands inside the corridor of a DIFFERENT branch of the same path was held by the ridden branch's falloff zone in preference to the branch under their feet - the incumbent and the containing rule are the same object, so "keep the incumbent" won, and the window then guaranteed the projection could never walk there.
 `session-285f` is the shape of it: the ball fell off the upper branch clean through the lower branch's corridor at 0.05 m while the grip clung to the upper one at 5.4 m, the release finally fired at 1.06 m off the lower branch - 6 cm outside its range, so nothing ever re-acquired - and the ball settled inside the drawn falloff band with the camera plain-following, which reads as the camera being in the wrong place.
 So a held path is challenged every frame by its own GLOBAL projection (`branchJump` in the controller): outside the ridden corridor (plus the jitter buffer) and inside the core range at the global answer, it re-acquires there exactly as it would after a release - a fresh projection, a re-centred lead, and the jump run through the frozen-delta hand-off so the arc gap between the branches blends instead of snapping.
