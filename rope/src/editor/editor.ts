@@ -38,6 +38,7 @@ import {
   DEFAULT_PATH_REACTION,
   DEFAULT_PATH_SOFTNESS,
   DEFAULT_PATH_RANGE_Y,
+  DEFAULT_PATH_WIND_BUFFER,
   DEFAULT_WATER_DRAG,
   DEFAULT_WATER_FLOW,
   DEFAULT_BOUNCE,
@@ -5659,9 +5660,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       },
     );
     if (bufKeyed) bufInput.title = bufKeyed;
-    // (`wind buf` was here. The frame-edge pin it released is gone: the
-    // guarantee's pull now decays on its own clock, so winding up the line
-    // toward an anchor ahead needs no release at all - see CAMERA_STICK_TAU.)
     // How far off the route two places on it count as comparable to the camera's
     // SOFT projection - the width of the blur that makes progress along the
     // route a continuous function of where the player is. Much smaller than the
@@ -5702,6 +5700,26 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       },
     );
     if (reactKeyed) reactInput.title = reactKeyed;
+    // How far along the route a hanging player winds themselves up their line
+    // before the camera's vertical lock lets go: a swing locks the frame's
+    // vertical at the furthest the guarantee pushed it, and winding toward an
+    // anchor ahead on the route is the one thing that says the player is going
+    // the level's way rather than swinging. Blank = the controller's default.
+    const windKeyed = keyedAt("windBuffer");
+    const windInput = num(
+      "wind buf",
+      (b) => (windKeyed ? NaN : (b.cam.windBuffer ?? NaN) * M2PX),
+      (b, v) => (b.cam.windBuffer = Math.max(0, v * PX)),
+      10,
+      {
+        placeholder: windKeyed ? "keyed" : String(Math.round(DEFAULT_PATH_WIND_BUFFER * M2PX)),
+        disabled: windKeyed !== null,
+        onEmpty: () => {
+          for (const b of paths) b.cam.windBuffer = null;
+        },
+      },
+    );
+    if (windKeyed) windInput.title = windKeyed;
     num("priority", (b) => b.cam.priority, (b, v) => (b.cam.priority = Math.round(v)), 1);
 
     // Three whole-path actions, because each is miserable to do node by node.
@@ -5809,6 +5827,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     field("view ×", "viewportScale", 1, 0.1);
     field("buffer", "buffer", M2PX, 10);
     field("reaction s", "reactionTime", 1, 0.05);
+    field("wind buf", "windBuffer", M2PX, 10);
   }
 
   // Lights-layer panel. The two fields that matter most are at the top and in
@@ -9460,7 +9479,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         testLevel.cameraRenderPosition(alpha),
         testLevel.cameraRules,
         testController === "ball" ? BALL_ZOOM : GRAPPLE_ZOOM,
-        testLevel.cameraAnchored,
+        testLevel.cameraHang,
       );
       // Render-rate refresh of stick aim (see LiveInputSource.pollAim).
       ballInput?.pollAim();

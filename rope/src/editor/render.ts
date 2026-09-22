@@ -976,6 +976,8 @@ export function cameraRegionLabel(r: EdItem): string {
     if (keys) parts.push(`${keys} key${keys === 1 ? "" : "s"}`);
     if (keyed("buffer")) parts.push("buf keyed");
     else if (r.cam.buffer !== null) parts.push(`buf ${px(r.cam.buffer)}`);
+    if (keyed("windBuffer")) parts.push("wind keyed");
+    else if (r.cam.windBuffer !== null) parts.push(`wind ${px(r.cam.windBuffer)}`);
     if (r.cam.priority !== 0) parts.push(`p${r.cam.priority}`);
     return `path · ${parts.join(" · ")}`;
   }

@@ -184,6 +184,7 @@ Clamping `this.pos` rather than only what is handed to the `Camera` is also what
 | `CAMERA_EDGE_SMOOTHING` (0.3) | how fast the camera corrects toward that margin when there is room, in seconds |
 | `CAMERA_STICK_TAU` (1.5 s) | how long its pull lasts once it stops being asked for (see **The stick**) |
 | `CAMERA_STICK_RELEASE` (0.4 m/s) | the rate on top of that, which is what makes the pull **end** - before the camera does, so it is not a second motion |
+| `WIND_REARM_DELAY` (0.25 s), `WIND_REST_RATE` (0.05 m/s) | the re-arm of the vertical lock's wind release (see **The stick**); the buffer itself is the path's `windBuffer` |
 
 All of them are **global** and deliberately not authorable, for the reason the margin always was: what the guarantee does is a property of the game rather than of a room in it.
 `edgeReach` turns the fractions into the distances a given camera allows - the avatar may never pass `edgeReach(margin)`, and `innerReach` is the margin they are held to - `edgeOffset` is the window, and `edgeTakeUp` is the clock.
@@ -292,12 +293,42 @@ What it also bites on is a locked region the avatar has left, and a path whose l
 
 ### The stick
 
-**The window's pull decays rather than stopping** (`CAMERA_STICK_TAU`, 1.5 s, per axis).
+**The window's pull decays rather than stopping** (`CAMERA_STICK_TAU`, 1.5 s, per axis) - **and on the vertical axis it does not decay at all while the avatar hangs**.
 
 A swing that carries the avatar out of the frame carries them out twice an arc, so the clamp binds, releases and binds again for as long as they hang there - and if each release let the aim snap home, the camera would rock for the whole swing with an amplitude set by how far the guarantee had to move it.
 So the aim is the window's answer **outright while it is asking**, exactly as it always was, and when the window stops asking the aim returns to the rule's target over a second and a half instead of on the next frame.
 
 It is per **axis** because the window is: a swing that drops the avatar out of the bottom of the frame has said nothing about the horizontal lead, and holding x for it would freeze the route the camera is narrating.
+
+#### The vertical lock
+
+The decay was played on the rails level (`session-336f`, the rails one, 2026-09-22) and the report was that "the screen is bobbing up and down".
+The ride says why: the avatar hung at the top of the frame on a short line, 2.6 m above what the path was asking for, so the guarantee asked on **every** frame of the hang and the stick never held the extreme of the arc - it held the current demand, less whatever the release had not yet given back.
+A 1.3 m hold at a 1.5 s tau is nearly a metre a second of decay, faster than the avatar swings back under it, so the camera followed them down and back up by 17 cm an arc for the whole of a five-second hang.
+Horizontally that same shape is a camera keeping up with a player who swung out of the side of the frame and back in, and it is what a horizontal excursion should look like.
+Vertically it is the whole screen rising and falling with the swing.
+
+So while the avatar is **anchored** (`Level.cameraHang` is non-null) the vertical stick is a **lock**: it is not released at all, holds the furthest the guarantee has pushed the aim on that side, and moves only when the guarantee pushes it further or asks the other way (which replaces it outright, as always).
+It is given back on the same release law as x the frame the anchor lets go, or the frame the **wind release** below opens it.
+On the rails ride the camera's vertical aim climbs to its extent over the first arc and then does not move again for the rest of the hang; over the corpus the camera's vertical travel while anchored falls in every stick-heavy bundle (rails 1.96 -> 0.75 m, `session-821f` 2.31 -> 0.37 m, `session-473f` 3.50 -> 2.53 m) and the mean acceleration with it, and the cost is the avatar moving a little more **in** the frame (rails y sd 0.10 -> 0.13 m), which is the trade asked for.
+
+It is a displacement off the rule's target rather than a coordinate, exactly as the decaying stick is, so a target that moves during the hang (the lead ratcheting forward) carries the hold with it rather than being fought by it.
+
+**The wind release** (`CameraController.windProgress`, against the path's `windBuffer`) is what opens the lock besides the anchor letting go.
+The lock is the answer to a swing: the return half of an oscillation says nothing about where the player is going, so the camera is held where the guarantee left it rather than rocked back.
+Winding up the line is not a swing.
+The player is hauling themselves toward the anchor, and when the anchor lies ahead on the route that is the level's own direction - a camera still locked to the backswing then trails them up the climb, until the far edge of the frame drags it after them a shove at a time.
+What is counted is the line taken in since the lock took hold, each frame's shortening projected onto the direction the route runs where the avatar is (`Level.cameraHang` hands the controller the line's length and the direction it leaves the avatar along), so winding straight up under a horizontal route counts for nothing, winding toward an anchor behind counts for nothing, and paying line back out counts against it, down to zero.
+Once the sum passes the path's `windBuffer` (0.5 m unless the path says otherwise, keyable like every other path field, read at the avatar's projection) the vertical stick goes back onto the release law and the camera glides forward to its lead.
+It is a path's release and nobody else's: a lock under a locked room has no route to be ahead on.
+
+**While the winding goes on, the lock does not re-take.**
+Opened on its own it came straight back on the pin this replaced: the camera leaves the lock toward a target the avatar is still behind, the guarantee is asking again on the very next frame, and a lock taken then is the old one with its count reset - measured, a camera that catches the climb up in steps of the buffer.
+So the vertical stick stays on the release law and the guarantee carries the camera up after them at the pace they wind, and the lock is armed again a quarter second (`WIND_REARM_DELAY`) after the last frame that took line in along the route faster than `WIND_REST_RATE` (5 cm/s).
+A rate rather than any take-up at all, because a taut line's solve breathes by microns a frame and a swing must not read as a wind.
+It fires on six of the river bundles (`session-238f`, `268f`, `336f`, `391f` twice, `485f`, `702f`).
+
+Unplayed as of 2026-09-22, and the cases wait on the play (see [**Validate the behaviour before writing the cases**](../CLAUDE.md)).
 
 **It holds the largest recent demand on that side**, and that is the part measurement moved.
 The obvious form - the stick IS the demand while there is one, and decays once there is not - buys nothing at all, because the demand is itself continuous: it falls smoothly to zero as the avatar comes back inside the inner margin, so by the frame it stops being asked there is nothing left to decay, and the camera returns at exactly the pace the avatar does.
@@ -329,22 +360,22 @@ It worked, and it cost four mechanisms to keep working:
 - a **wind release** (`windProgress` against the path's `windBuffer`, plus `windArmed`, `sinceWind`, `WIND_REARM_DELAY` and `WIND_REST_RATE`), because a player winding themselves up the line toward an anchor ahead is going the level's way and a camera pinned to the backswing trails them up the climb.
 
 Every one of those is a patch for the pin being a **latch** - a state with an edge, which has to be entered, held and handed back.
-A decaying pull has no edge, so all four go:
+A decaying pull has no edge, so the first three go, and the fourth goes on the horizontal axis:
 
-- nothing has to be handed back when the anchor releases;
-- nothing creeps, because a decaying stick moves outward on its own and there is nothing for a deadband to stop;
-- nothing has to open on a clock;
-- **winding up the line needs no special case at all**: the player moves toward the middle of the frame, the window stops asking, and the stick decays while the spring glides the camera forward to its lead.
+- nothing has to be handed back when the anchor releases - the vertical lock is a held stick, so the frame the anchor lets go it simply starts being released;
+- nothing creeps, because a held stick is the largest demand rather than a re-pulled pin, and there is nothing for a deadband to stop;
+- nothing has to open on a clock, because the lock is a displacement the aim already carries;
+- **winding up the line needs no special case horizontally**: the player moves toward the middle of the frame, the window stops asking, and the stick decays while the spring glides the camera forward to its lead. Vertically the lock needs the wind release back, since a lock that never decays has to be opened by something (see **The vertical lock**).
 
-It is also **not gated on being anchored**, and does not need to be: the guarantee is inert in ordinary play, and where it does bind a slow return is at worst a calmer camera.
-The lead **ratchet** stays gated on anchored (see [**The anchored episode**](camera-paths.md#the-anchored-episode)), because that one is about backtracking along the route rather than about the edge of the frame.
+The horizontal stick is **not gated on being anchored**, and does not need to be: the guarantee is inert in ordinary play, and where it does bind a slow return is at worst a calmer camera.
+The vertical lock is, exactly as the lead **ratchet** is (see [**The anchored episode**](camera-paths.md#the-anchored-episode)): both are the one-sided answer to a swing, and a player rolling along the route does not oscillate.
 
 The guarantee still **outranks the ratchet** and is outranked by nothing: with the lead ratcheted the target stays forward while the avatar swings back, so far enough back and the guarantee hauls the camera after them, down the track and against the ratchet's whole bias.
 
 `cli camera` asserts the stick's two facts, and each is red both ways under ablation (no clock, and no hold): `stick-holds-after-the-ask-stops` measures the release law itself half a tau and one tau after the window goes quiet, that the hold and the camera both outlast the spring's own 0.3 s settle, and that it is finished by the time the law says where a bare exponential would still be giving back; `stick-decays-when-nothing-asks` measures that it reaches zero and the camera is back on the room's lock.
 No bar is put on how much of the return happens by a given second, because that is the release rate and the release rate is a feel constant.
 
-Played through four rounds as of 2026-09-22 (`session-222f`, `session-684f`, `session-726f`, `session-538f`); the feel constants (`CAMERA_FREQ`, `CAMERA_MAX_ACCEL`, `CAMERA_STICK_TAU`, `CAMERA_STICK_RELEASE`) are tuned in the play and nowhere else.
+Played through five rounds as of 2026-09-22 (`session-222f`, `session-684f`, `session-726f`, `session-538f`, and the rails `session-336f` that made the vertical axis a lock); the feel constants (`CAMERA_FREQ`, `CAMERA_MAX_ACCEL`, `CAMERA_STICK_TAU`, `CAMERA_STICK_RELEASE`) are tuned in the play and nowhere else.
 
 The debug overlay draws the keep-out box **only on the frames it is binding** (amber, not the camera layer's violet): a camera that has stopped following has no on-screen cause otherwise, and drawing it every frame would make it furniture rather than a diagnosis.
 It draws **two** boxes, because the constraint has two boundaries: the inner one finely, where the override starts easing in, and the outer one as the line the avatar may never cross.

@@ -1653,6 +1653,12 @@ export const DEFAULT_PATH_REACTION = 0;
 // weightings at once.
 export const DEFAULT_PATH_SOFTNESS = 0.5;
 
+// How far along the route a hanging avatar winds themselves up their line
+// before the camera's vertical lock lets go, in metres (see
+// `CameraController.windProgress`; WIND_REARM_DELAY beside it is the re-arm).
+// A path's field, keyable, and read where the avatar hangs.
+export const DEFAULT_PATH_WIND_BUFFER = 0.5;
+
 // A camera region: a volume that reshapes the camera while the avatar is inside
 // it. Deliberately NOT a body — it has no collision, nothing wraps it and the
 // sim never sees it, so it lives in its own list rather than gaining a
@@ -1796,10 +1802,11 @@ export interface CameraPathVert {
   // Same units and meaning as the path-level field of the same name; the
   // lengths are pixels on disk like everything else here.
   //
-  // The first five shape the TARGET and are read at the committed lead origin;
-  // the last five shape the GRIP - the corridor, its falloff band and the
+  // The first six shape the TARGET and are read at the committed lead origin;
+  // the next five shape the GRIP - the corridor, its falloff band and the
   // release hysteresis - and are read at `sNear`, since that is where the range
-  // is measured from (see `pathParamsAt`).
+  // is measured from (see `pathParamsAt`). `windBuffer` is read at `sNear` too:
+  // it is about the route where the avatar hangs.
   viewportScale?: number;
   lookaheadX?: number;
   lookaheadY?: number;
@@ -1814,6 +1821,7 @@ export interface CameraPathVert {
   // camera gives the player to react at the speed they are travelling (see
   // DEFAULT_PATH_REACTION). A target field, read at the committed lead origin.
   reactionTime?: number;
+  windBuffer?: number;
 }
 
 export interface CameraPathData {
@@ -1863,11 +1871,9 @@ export interface CameraPathData {
   // travelling (see DEFAULT_PATH_REACTION). Keyable, and NOT a length, so the
   // format does not scale it.
   reactionTime?: number;
-  // RETIRED: how far along the route a hanging avatar wound themselves up
-  // their line before the frame-edge latch let the camera go. There is no latch
-  // and no wind release - the guarantee's pull decays on its own clock now (see
-  // CAMERA_STICK_TAU) - so this is dropped at the one gate, on the path and on
-  // its nodes alike, and stays declared only so a file that authored one loads.
+  // How far along the route a hanging avatar winds themselves up their line
+  // before the camera's vertical lock lets go (see DEFAULT_PATH_WIND_BUFFER,
+  // which is what it falls back to).
   windBuffer?: number;
   // Which rule wins against regions and other paths: the LOWEST number in force
   // wins, and rules tied at that number blend. Absent = 0, so a path and a
@@ -3163,6 +3169,7 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
         ...(v.falloffY !== undefined ? { falloffY: v.falloffY * factor } : {}),
         ...(v.buffer !== undefined ? { buffer: v.buffer * factor } : {}),
         ...(v.reactionTime !== undefined ? { reactionTime: v.reactionTime } : {}),
+        ...(v.windBuffer !== undefined ? { windBuffer: v.windBuffer * factor } : {}),
       })),
       // The retired scalar range/falloff were one circular radius each: folded
       // into both axes here, at the one gate, so a level that authored a
@@ -3200,6 +3207,7 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
       ...(p.buffer !== undefined ? { buffer: p.buffer * factor } : {}),
       ...(p.softness !== undefined ? { softness: p.softness * factor } : {}),
       ...(p.reactionTime !== undefined ? { reactionTime: p.reactionTime } : {}),
+      ...(p.windBuffer !== undefined ? { windBuffer: p.windBuffer * factor } : {}),
       ...(p.priority !== undefined ? { priority: p.priority } : {}),
     }));
   // A note's placement, box and glyph height are lengths; its text is not.

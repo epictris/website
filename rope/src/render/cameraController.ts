@@ -70,6 +70,7 @@ import {
   DEFAULT_PATH_RANGE_Y,
   DEFAULT_PATH_REACTION,
   DEFAULT_PATH_SOFTNESS,
+  DEFAULT_PATH_WIND_BUFFER,
   DEFAULT_VIEWPORT_SCALE,
 } from "../level/levelFormat";
 import type { Camera } from "./camera";
@@ -385,19 +386,38 @@ export const CAMERA_EDGE_SMOOTHING = 0.3;
 //  * nothing has to be handed back when the anchor releases, nothing creeps (a
 //    decaying stick moves outward on its own, so there is nothing for a
 //    deadband to stop), and nothing has to open on a clock;
-//  * WINDING UP THE LINE toward an anchor ahead needs no special case at all.
-//    The player moves toward the middle of the frame, the window stops asking,
-//    and the stick decays while the spring glides the camera forward to its
-//    lead. That is what `windProgress`, `hangLength`, `windArmed`, `sinceWind`,
-//    WIND_REARM_DELAY, WIND_REST_RATE and the path's `windBuffer` field were
-//    between them for.
+//  * WINDING UP THE LINE toward an anchor ahead needs no special case on the
+//    horizontal axis: the player moves toward the middle of the frame, the
+//    window stops asking, and the stick decays while the spring glides the
+//    camera forward to its lead.
 //
-// It is not gated on being anchored, and it does not need to be: the guarantee
-// is inert in ordinary play (it binds on a locked room the avatar has left, on
-// a path leading well off them, and on being outrun), and where it does bind a
-// slow return is at worst a calmer camera. The lead RATCHET stays gated on
-// anchored, because that one is about backtracking along the route rather than
-// about the edge of the frame.
+// That is the HORIZONTAL axis, and it is not gated on being anchored: the
+// guarantee is inert in ordinary play (it binds on a locked room the avatar has
+// left, on a path leading well off them, and on being outrun), and where it
+// does bind a slow return is at worst a calmer camera.
+//
+// THE VERTICAL AXIS IS A LOCK WHILE THE AVATAR HANGS, and that was the first
+// play of the decay (`session-336f` on the rails level, 2026-09-22): "the
+// screen is bobbing up and down". A hang on a short line is a swing of a few
+// tenths of a metre at about the period this clock is set to, and on a frame
+// the avatar hangs at the top of the guarantee asks EVERY frame - so what the
+// stick holds is never the extreme of the arc but the current demand, less
+// whatever the release has not yet given back. A 1.3 m hold at this tau is
+// nearly a metre a second of decay, which is faster than the avatar swings
+// back under it, so the camera followed the swing down and up by 17 cm an arc
+// for the whole of a 5 s hang. Horizontally the same shape reads as the camera
+// keeping up with a player who swung out of the frame and back in, and is
+// wanted; vertically it is the whole screen rising and falling with the swing,
+// and is not.
+//
+// So while the avatar is anchored the vertical stick does not decay at all: it
+// holds the furthest the guarantee has moved the aim on that side, moves only
+// when the guarantee moves it further (or asks the other way, which replaces
+// it outright as always), and is given back on the same release law as x the
+// frame the anchor lets go - or the frame the WIND RELEASE below fires. It is
+// a displacement off the rule's target rather than a coordinate, exactly as
+// the decaying stick is, so a target that moves during the hang (the lead
+// ratcheting forward) carries the hold with it.
 export const CAMERA_STICK_TAU = 1.5;
 
 // And the rate, in m/s, that makes the decay a RELEASE: what the stick gives
@@ -433,6 +453,30 @@ export const CAMERA_STICK_TAU = 1.5;
 // acceleration. What the swing wants is the HOLD, which is unchanged; the tail
 // after it was doing nothing but drifting.
 export const CAMERA_STICK_RELEASE = 0.4;
+
+// The WIND RELEASE: the one thing besides the anchor letting go that opens the
+// vertical lock above (see `CameraController.windProgress`).
+//
+// The lock is the answer to a SWING - the return half of an oscillation says
+// nothing about where the player is going, so the camera is held where the
+// guarantee left it rather than rocked back. Winding up the line is not a
+// swing. The player is hauling themselves toward the anchor, and when the
+// anchor lies ahead on the route that is the level's own direction: a camera
+// still locked to the backswing then trails them up the climb, until the far
+// edge of the frame drags it after them a shove at a time. So the lock is
+// opened once the winding has carried them `windBuffer` metres along the route
+// (the path's field, read where they hang), and the vertical stick goes back
+// to the rule's target on the release law, exactly as it does when the anchor
+// lets go. A path's release and nobody else's: a lock under a locked room has
+// no route to be ahead on.
+//
+// These two are the re-arm: how long the avatar has to have stopped winding
+// before the lock may take hold again, and what "winding" is - metres per
+// second of line taken in along the route, above which a frame counts. A rate
+// rather than any take-up at all, because a taut line's solve breathes by a
+// few microns a frame and a swing must not read as a wind.
+export const WIND_REARM_DELAY = 0.25;
+export const WIND_REST_RATE = 0.05;
 
 // How long the progress rate the SPEED LEAD is bought with is smoothed over, in
 // seconds (see `CameraController.progressRate`).
@@ -598,11 +642,12 @@ export function buildCameraRules(
 // The fields a node may key (see `CameraPathVert`). The first six shape the
 // path's TARGET - how much world is on screen, how far ahead the camera looks,
 // how much slack that lead is measured with and how many seconds of warning it
-// is stretched by - and are read at the committed lead origin. The last five
+// is stretched by - and are read at the committed lead origin. The next five
 // shape the GRIP - the corridor, its falloff band and the release hysteresis -
-// and are read at `sNear`, the arc length the range is measured from.
-// `pathParamsAt` resolves all eleven at whatever `s` it is given; the caller
-// knows which `s` a field is about.
+// and are read at `sNear`, the arc length the range is measured from. The last
+// is the WIND RELEASE (see `windProgress`), read at `sNear` too: it is about
+// the route where the avatar hangs. `pathParamsAt` resolves all twelve at
+// whatever `s` it is given; the caller knows which `s` a field is about.
 export const PATH_KEY_FIELDS = [
   "viewportScale",
   "lookaheadX",
@@ -615,6 +660,7 @@ export const PATH_KEY_FIELDS = [
   "falloffX",
   "falloffY",
   "buffer",
+  "windBuffer",
 ] as const;
 export type PathKeyField = (typeof PATH_KEY_FIELDS)[number];
 
@@ -639,6 +685,7 @@ const PATH_PARAM_DEFAULTS: PathParams = {
   falloffX: DEFAULT_PATH_FALLOFF_X,
   falloffY: DEFAULT_PATH_FALLOFF_Y,
   buffer: REGION_EXIT_MARGIN,
+  windBuffer: DEFAULT_PATH_WIND_BUFFER,
 };
 
 // The path-level values: what every field is with no keys at all, and what a
@@ -1416,23 +1463,31 @@ export interface HeldCamera {
   // only thing that explains where the camera is going.
   aim: Vec2;
   // The STICK, per axis, in signed metres: how far the guarantee is still
-  // holding the aim off the rule's target, decaying over CAMERA_STICK_TAU once
-  // it stops being asked for. Nonzero on an axis means the camera is being held
-  // there rather than aiming where the level asked.
+  // holding the aim off the rule's target - decaying over CAMERA_STICK_TAU once
+  // it stops being asked for on x, LOCKED while the avatar hangs on y. Nonzero
+  // on an axis means the camera is being held there rather than aiming where
+  // the level asked.
   stick: { x: number; y: number };
+  // Metres the wind release has accrued toward the path's `windBuffer` (see
+  // `CameraController.windProgress`) - 0 whenever the vertical lock holds
+  // nothing.
+  wind: number;
   // How fast the committed lead origin is travelling down the route, m/s,
   // smoothed - what the speed lead is bought with (see `leadFor`). Meaningless
   // unless a path is in the set.
   rate: number;
 }
 
-// WHAT WAS HERE: `CameraHang`, the avatar's line as the camera saw it - the
-// direction it left them along and how much of it was out. The wind release
-// read both, to drop the frame-edge pin once the player had wound themselves
-// far enough up the line along the route. The pin is gone (see
-// CAMERA_STICK_TAU) and winding needs no special case, so what the camera asks
-// about a hang is now only whether there IS one - `anchored`, which is what the
-// lead ratchet is about.
+// What the avatar is hanging on, or null while they move under their own feet:
+// the unit direction their line leaves them along - toward its first wrap or
+// its anchor - and how much line is out. Having one at all is `anchored`, which
+// is what the lead ratchet and the vertical lock are gated on; the length is
+// what the wind release watches, and the pull is what says which way winding
+// it in carries them.
+export interface CameraHang {
+  pull: Vec2;
+  length: number;
+}
 
 // One axis of the critically damped spring, over `dt`, in CLOSED FORM.
 //
@@ -1560,6 +1615,31 @@ export class CameraController {
   private stickX = 0;
   private stickY = 0;
 
+  // The WIND RELEASE (see WIND_REARM_DELAY): what opens the vertical lock
+  // besides the anchor letting go.
+  //
+  // `windProgress` is what has been taken in since the lock took hold, each
+  // frame's shortening projected onto the route's direction where the avatar
+  // is - so winding straight up under a horizontal route counts for nothing,
+  // and paying line back out counts against it, down to zero. Measured from
+  // the lock taking hold rather than from the anchor, because it is the lock's
+  // release, and a turn of the spool taken before the lock held anything is no
+  // reason to open it later.
+  //
+  // `windArmed` is what stops the release re-locking on the spot. The stick
+  // leaves the lock toward a target the avatar is still behind, so the
+  // guarantee is asking on the very next frame, and a lock taken then is the
+  // old one back with its progress reset - which, measured on the pin this
+  // replaced, was a camera that catches the climb up in steps of the buffer.
+  // So while the winding goes on the vertical stick is on the release law like
+  // x, and the guarantee carries the camera up after them at the pace they
+  // wind; the lock is armed again WIND_REARM_DELAY after the last frame that
+  // took line in along the route faster than WIND_REST_RATE.
+  private windProgress = 0;
+  private hangLength: number | null = null;
+  private windArmed = true;
+  private sinceWind = Infinity;
+
   // What the camera aimed at on the last frame - the rule's target with the
   // window and the stick already on it. Recorded for the overlay, which cannot
   // otherwise explain where the camera is going.
@@ -1607,6 +1687,7 @@ export class CameraController {
       edge: this.edge,
       aim: this.aim,
       stick: { x: this.stickX, y: this.stickY },
+      wind: this.windProgress,
       rate: this.progressRate,
     };
   }
@@ -1641,29 +1722,30 @@ export class CameraController {
     );
   }
 
-  // `anchored` is whether the avatar is hanging on a taut line rather than
-  // moving under their own feet (see `Level.cameraAnchored`), and it opens the
-  // one one-sided rule left in the controller: the committed lead origin
-  // RATCHETS forward (see `committedLeadS`), so the target only ever moves
-  // further along the route.
+  // `hang` is what the avatar is hanging on, or null while they move under
+  // their own feet (see `Level.cameraHang`). Having one opens the two one-sided
+  // rules in the controller: the committed lead origin RATCHETS forward (see
+  // `committedLeadS`), so the target only ever moves further along the route,
+  // and the vertical stick LOCKS (see CAMERA_STICK_TAU), so the frame only
+  // ever moves as far as the guarantee has pushed it.
   //
   // A swing is an oscillation, so half of it is travel the level did not mean:
   // the forward half says where the player is going and the return half says
   // nothing, and a camera that answers both equally spends the whole arc
-  // rocking. The ratchet is that said at the level of the ROUTE. It used to be
-  // said a second time at the level of the FRAME - the edge guarantee latched
-  // where it had shoved the camera, for the rest of the hang - and that half is
-  // now the stick (see CAMERA_STICK_TAU), which needs no episode: a swing at
-  // the edge of the frame asks about once a period, so the pull barely decays
-  // between asks and the camera stays where the guarantee left it anyway.
+  // rocking. The ratchet is that said at the level of the ROUTE and the lock is
+  // the same thing said at the level of the FRAME. Horizontally the frame's
+  // half is the decaying stick instead, which needs no episode: a player who
+  // swings out of the side of the frame and back in is followed, and that is
+  // what a horizontal excursion should look like.
   update(
     camera: Camera,
     dt: number,
     follow: Vec2,
     rules: readonly CameraRule[],
     baseZoom: number,
-    anchored: boolean,
+    hang: CameraHang | null,
   ): void {
+    const anchored = hang !== null;
     if (!this.started) {
       // A snap is history-free: there is no incumbent to keep a grip, and no
       // tracked projection or committed lead to continue from.
@@ -1678,6 +1760,10 @@ export class CameraController {
       this.aimPullY = 0;
       this.stickX = 0;
       this.stickY = 0;
+      this.windProgress = 0;
+      this.hangLength = null;
+      this.windArmed = true;
+      this.sinceWind = Infinity;
     }
 
     // Resolved BEFORE the rule decision, because a path's grip is measured to
@@ -1814,6 +1900,42 @@ export class CameraController {
     const members = cameraInfluences(nextRules, follow, offset ? { s: nearS, off: offset } : null);
     const target = blendCameraTarget(members, follow, baseZoom, leadS, this.progressRate);
 
+    // The wind release (see `windProgress`): what this frame's take-up of the
+    // line is worth along the route where the avatar hangs, whether the sum
+    // since the vertical lock took hold has reached the path's buffer there,
+    // and how long it has been since they were winding at all. Read at the
+    // player's projection, like the grip: it is about the route where they
+    // are, not where the camera is looking.
+    let takeUp = 0;
+    if (hang && this.hangLength !== null && nextSeat) {
+      // `tangentAt` is a chord, not a unit vector; the projection wants one.
+      const chord = tangentAt(nextSeat.index, nearS);
+      const span = chord.length();
+      const along = span > 0 ? Math.max(0, chord.dot(hang.pull) / span) : 0;
+      takeUp = (this.hangLength - hang.length) * along;
+    }
+    this.hangLength = hang?.length ?? null;
+    if (dt > 0 && Number.isFinite(dt)) {
+      this.sinceWind = takeUp / dt > WIND_REST_RATE ? 0 : this.sinceWind + dt;
+    }
+    if (!anchored) {
+      this.windProgress = 0;
+      this.windArmed = true;
+    } else if (!this.windArmed) {
+      if (this.sinceWind >= WIND_REARM_DELAY) this.windArmed = true;
+    } else if (this.stickY !== 0) {
+      this.windProgress = Math.max(0, this.windProgress + takeUp);
+      if (nextSeat && this.windProgress > pathParamsAt(nextSeat, nearS).windBuffer) {
+        this.windArmed = false;
+        this.windProgress = 0;
+      }
+    } else {
+      this.windProgress = 0;
+    }
+    // The vertical lock: held while the avatar hangs and the wind release has
+    // not opened it (see CAMERA_STICK_TAU).
+    const lockY = anchored && this.windArmed;
+
     if (!this.started) {
       this.started = true;
       this.members = members;
@@ -1827,7 +1949,7 @@ export class CameraController {
       this.vel = Vec2.ZERO;
       this.zoomVel = 0;
       this.logZoom = Math.log(Math.max(1e-9, target.zoom));
-      this.aim = this.softEdge(camera, target.pos, follow, Infinity);
+      this.aim = this.softEdge(camera, target.pos, follow, Infinity, lockY);
       this.pos = this.holdEdge(camera, this.aim, follow, Infinity);
       camera.position = this.pos;
       camera.zoom = this.zoom;
@@ -1875,7 +1997,7 @@ export class CameraController {
     // turns over rather than reversing; the HARD half is applied last and to
     // where the camera actually IS, because a target the avatar can outrun is
     // not a guarantee and outrunning the spring is exactly what a launch does.
-    const aimPos = this.softEdge(camera, target.pos, follow, step);
+    const aimPos = this.softEdge(camera, target.pos, follow, step, lockY);
     this.aim = aimPos;
     // The spring, then the caps, then integrate what is left, with the position
     // integrated from the capped velocity rather than from the spring's own
@@ -1963,7 +2085,11 @@ export class CameraController {
   // displacement rather than as a coordinate, so a target that crosses the
   // follow point carries the stick with it rather than having it re-applied on
   // the wrong side.
-  private softEdge(camera: Camera, aim: Vec2, follow: Vec2, dt: number): Vec2 {
+  //
+  // `lockY` is the vertical lock: while it is on, the vertical stick is not
+  // released at all, so it holds the furthest the guarantee has pushed the aim
+  // on that side until the guarantee pushes it further or asks the other way.
+  private softEdge(camera: Camera, aim: Vec2, follow: Vec2, dt: number, lockY: boolean): Vec2 {
     if (!this.edgeClamp) {
       this.aimPullX = 0;
       this.aimPullY = 0;
@@ -1986,7 +2112,7 @@ export class CameraController {
       return left <= 0 ? 0 : held < 0 ? -left : left;
     };
     this.stickX = stick(x.pos - aim.x, released(this.stickX));
-    this.stickY = stick(y.pos - aim.y, released(this.stickY));
+    this.stickY = stick(y.pos - aim.y, lockY ? this.stickY : released(this.stickY));
     return new Vec2(aim.x + this.stickX, aim.y + this.stickY);
   }
 

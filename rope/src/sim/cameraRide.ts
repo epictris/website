@@ -171,7 +171,7 @@ export function rideRecording(rec: Recording, from = 0): RideResult {
   for (let i = 0; i < rec.frames.length; i++) {
     level.physicsProcess(deserialize(rec.frames[i]!), 1 / 60);
     const follow = level.cameraRenderPosition(1);
-    ctl.update(camera, RIDE_DT, follow, level.cameraRules, baseZoom, level.cameraAnchored);
+    ctl.update(camera, RIDE_DT, follow, level.cameraRules, baseZoom, level.cameraHang);
     const held = ctl.held;
 
     const pos = camera.position;

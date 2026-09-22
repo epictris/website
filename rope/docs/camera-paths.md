@@ -82,7 +82,7 @@ It is measured along the route, so it reads its zeroes the same way the lead doe
 
 ## The anchored episode
 
-While the avatar is **anchored** - hanging on a taut line rather than moving under their own feet (`Level.cameraAnchored`, `BallLevel.cameraAnchored`) - the camera does not walk back down the track.
+While the avatar is **anchored** - hanging on a taut line rather than moving under their own feet (`Level.cameraHang`, `BallLevel.cameraHang`) - the camera does not walk back down the track.
 
 The reason is that a swing is an oscillation, so half of it is travel the level did not mean: the forward half says something about where the player is going and the return half says nothing, and a camera that answers both equally spends the whole arc rocking.
 The band above absorbs an oscillation narrower than itself and can do nothing about a wider one - past the band the committed point is dragged by whichever edge it reaches, and a swing reaches both.
@@ -91,7 +91,7 @@ So while anchored the band is a **RATCHET**: `committedLeadS` keeps its rear edg
 A wide swing then walks it forward an arc at a time and holds it at the furthest it reached, rather than sawing it back and forth by the excursion less the band.
 It stays one-sided rather than becoming a freeze because the forward drag is what keeps it continuous: the origin is still only ever moved by an edge of the band, so there is still no step in the target.
 
-That leaves the case the ratchet cannot answer on its own, which is a backswing wide enough to put the avatar off the screen: the target is forward, they are behind it, and the **frame-edge guarantee** takes over and hauls the camera after them (see [**The stick**](camera.md#the-stick), which is what stops the forward half springing the camera straight back off where it left it).
+That leaves the case the ratchet cannot answer on its own, which is a backswing wide enough to put the avatar off the screen: the target is forward, they are behind it, and the **frame-edge guarantee** takes over and hauls the camera after them (see [**The stick**](camera.md#the-stick), which is what stops the forward half springing the camera straight back off where it left it - and which on the vertical axis is a lock for the length of the episode, opened by the anchor letting go or by the path's `windBuffer`).
 The two are the same one-sided statement made at the two levels it happens on, and the guarantee wins where they disagree.
 
 The episode ends when the anchor is released.
@@ -129,7 +129,7 @@ Inserting on an edge is a **de Casteljau split at t = 1/2**, so a bowed edge gai
 A node may **key** any of the path's tuning fields - `viewportScale`, `lookaheadX/Y`, `lookaheadBufferX/Y`, `reactionTime`, `rangeX/Y`, `falloffX/Y` and `buffer`, as optionals on `CameraPathVert` - so the framing and the grip change along the route: a tighter view through a corridor, a longer lead down a drop, a wider corridor where the level opens out. `softness` is deliberately not among them (see [**The soft projection**](#the-soft-projection)).
 A node that carries a value is a keyframe for THAT field only, and a node that carries none is transparent to it.
 Per field, `pathParamsAt` holds the first key's value before it and the last key's after it, smoothsteps between two by arc length (flat at each key, for the same reason the falloff band is smoothstepped: a kink in the target is a step in the camera's velocity), and interpolates the view scale geometrically like every other zoom blend here.
-That rule is `lib/keyframes.ts` (`buildKeyTrack`, `keyValueAt`) rather than the controller's own, since a mover's route keys its pose and its pace along exactly the same lines; `pathParamsAt` is the camera's eleven fields run through it.
+That rule is `lib/keyframes.ts` (`buildKeyTrack`, `keyValueAt`) rather than the controller's own, since a mover's route keys its pose and its pace along exactly the same lines; `pathParamsAt` is the camera's twelve fields run through it.
 A field no node keys at all is the path-level field, exactly as before keys existed, so every level on disk is unchanged and `keys-without-keys-are-the-path` says so.
 
 Keys live **on the nodes, not at authored arc lengths**, because a node is what the editor picks, drags, inserts, deletes and reverses, and a key that rides its node survives every one of those - a key at `s = 12.3` would name a different place the moment any node before it moved.

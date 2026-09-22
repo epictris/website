@@ -252,6 +252,7 @@
       "lookaheadBufferX": 50,
       "lookaheadBufferY": 70,
       "viewportScale": 0.8,
+      "softness": 30,
       "priority": 1
     }
   ],
