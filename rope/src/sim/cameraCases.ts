@@ -2133,14 +2133,18 @@ export function runCameraCases(): CameraResult[] {
           got: held * Math.exp(-ends / CAMERA_STICK_TAU) > 0.02 ? 1 : 0,
           want: 1,
         },
-        // ...and the camera goes with it rather than springing home: what it
-        // covers in the first half-second after the ask stops is a fraction of
-        // the whole return.
+        // ...and the camera goes with it rather than springing home. The claim
+        // is that the return is on the STICK's clock and not the spring's, so
+        // that is what is measured: a spring at CAMERA_FREQ has settled in
+        // about 0.3 s, and at that point most of the hold must still be there
+        // and the camera must still be out with it. A fraction of the whole
+        // return would be a bar on the release rate, which is a feel constant.
+        { label: "the hold outlasts the spring's own settle", got: at(0.3) / held, want: 1, tol: 0.5 },
         {
-          label: "the camera does not spring home",
+          label: "and so does the camera",
           got:
-            Math.abs(out[quiet + 30]!.pos.x - out[quiet]!.pos.x) <
-            Math.abs(out[out.length - 1]!.pos.x - out[quiet]!.pos.x) / 3
+            Math.abs(out[quiet + 18]!.pos.x - out[out.length - 1]!.pos.x) >
+            Math.abs(out[quiet]!.pos.x - out[out.length - 1]!.pos.x) / 2
               ? 1
               : 0,
           want: 1,

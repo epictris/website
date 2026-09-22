@@ -183,7 +183,7 @@ Clamping `this.pos` rather than only what is handed to the `Camera` is also what
 | `CAMERA_EDGE_INNER_X` (0.1125), `CAMERA_EDGE_INNER_Y` (0.2) | the target minimum distance from the edge, as a fraction of that axis's own extent |
 | `CAMERA_EDGE_SMOOTHING` (0.3) | how fast the camera corrects toward that margin when there is room, in seconds |
 | `CAMERA_STICK_TAU` (1.5 s) | how long its pull lasts once it stops being asked for (see **The stick**) |
-| `CAMERA_STICK_RELEASE` (0.1 m/s) | the rate on top of that, which is what makes the pull **end** rather than approach zero |
+| `CAMERA_STICK_RELEASE` (0.4 m/s) | the rate on top of that, which is what makes the pull **end** - before the camera does, so it is not a second motion |
 
 All of them are **global** and deliberately not authorable, for the reason the margin always was: what the guarantee does is a property of the game rather than of a room in it.
 `edgeReach` turns the fractions into the distances a given camera allows - the avatar may never pass `edgeReach(margin)`, and `innerReach` is the margin they are held to - `edgeOffset` is the window, and `edgeTakeUp` is the clock.
@@ -304,10 +304,19 @@ The obvious form - the stick IS the demand while there is one, and decays once t
 Holding the extreme of the arc instead is what decays under the avatar as they swing back.
 A demand on the **other** side replaces the hold outright rather than blending with it - the window has just said the camera is wrong the other way, and continuing to hold it the old way is the one thing the guarantee may not do - and that step is the motion layer's to absorb.
 
-**It is a release, not a decay**: on top of the fraction per second, `CAMERA_STICK_RELEASE` (0.1 m/s) is subtracted, so the hold reaches zero rather than approaching it, in `TAU * ln(1 + s / (RELEASE * TAU))` seconds - 2.4 s for half a metre.
+**It is a release, not a decay**: on top of the fraction per second, `CAMERA_STICK_RELEASE` (0.4 m/s) is subtracted, so the hold reaches zero rather than approaching it, in `TAU * ln(1 + s / (RELEASE * TAU))` seconds - 0.9 s for half a metre.
 An exponential never arrives, and the last centimetres of one are the worst motion a camera can be making: a slow, steady, unmotivated drift of the whole screen at a moment when the player has stopped and everything else on it is still.
 Half a metre of stick left at the end of a fling is 8 cm/s two seconds later and 2 cm/s five seconds later, which is what `session-726f` reported as the camera taking about five seconds to settle after hitting the ground.
 It was still giving the stick back.
+
+The rate is set so the hold is gone **before the camera comes to rest**, which is what stops it being a *second* motion.
+That is what `session-538f` reported on the same landing: the camera spent 0.7 s settling onto the aim the stick was still displacing - a point 0.17 m past where it was going to end up - and then another second and a half creeping back off it.
+"It would make more sense for the initial up motion to just move towards the final resting place."
+At 0.4 m/s the half-metre hold is gone in the same 0.9 s the camera spends arriving, so there is one motion and it lands on its mark.
+
+Nothing was traded for it, which is worth recording because the long tail was supposed to be what bought the swing its steadiness.
+Over the five bundles the stick shapes - including `session-702f`, which charges it 107 times and peaks at 2.05 m - the avatar's total variation in the frame gets slightly **better** at every rate from 0.1 to 1.6 m/s, and the cost is a few per cent of camera acceleration (`session-821f`, the calmest of them, is the worst at 1.41 to 1.66 m/s²).
+What the swing wants is the **hold**, which is unchanged; the tail after it was doing nothing but drifting.
 
 #### What it replaced, and why
 
@@ -332,9 +341,10 @@ The lead **ratchet** stays gated on anchored (see [**The anchored episode**](cam
 
 The guarantee still **outranks the ratchet** and is outranked by nothing: with the lead ratcheted the target stays forward while the avatar swings back, so far enough back and the guarantee hauls the camera after them, down the track and against the ratchet's whole bias.
 
-`cli camera` asserts the stick's two facts, and each is red both ways under ablation (no clock, and no hold): `stick-holds-after-the-ask-stops` measures the release law itself half a tau and one tau after the window goes quiet, and that it is finished by the time the law says it should be where a bare exponential would still be giving back; `stick-decays-when-nothing-asks` measures that it reaches zero and the camera is back on the room's lock.
+`cli camera` asserts the stick's two facts, and each is red both ways under ablation (no clock, and no hold): `stick-holds-after-the-ask-stops` measures the release law itself half a tau and one tau after the window goes quiet, that the hold and the camera both outlast the spring's own 0.3 s settle, and that it is finished by the time the law says where a bare exponential would still be giving back; `stick-decays-when-nothing-asks` measures that it reaches zero and the camera is back on the room's lock.
+No bar is put on how much of the return happens by a given second, because that is the release rate and the release rate is a feel constant.
 
-Played once as of 2026-09-22 (`session-222f`, `session-684f`, `session-726f`); the feel constants (`CAMERA_FREQ`, `CAMERA_MAX_ACCEL`, `CAMERA_STICK_TAU`, `CAMERA_STICK_RELEASE`) are tuned in the play and nowhere else.
+Played through four rounds as of 2026-09-22 (`session-222f`, `session-684f`, `session-726f`, `session-538f`); the feel constants (`CAMERA_FREQ`, `CAMERA_MAX_ACCEL`, `CAMERA_STICK_TAU`, `CAMERA_STICK_RELEASE`) are tuned in the play and nowhere else.
 
 The debug overlay draws the keep-out box **only on the frames it is binding** (amber, not the camera layer's violet): a camera that has stopped following has no on-screen cause otherwise, and drawing it every frame would make it furniture rather than a diagnosis.
 It draws **two** boxes, because the constraint has two boundaries: the inner one finely, where the override starts easing in, and the outer one as the line the avatar may never cross.

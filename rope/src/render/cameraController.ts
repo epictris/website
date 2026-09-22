@@ -412,12 +412,27 @@ export const CAMERA_STICK_TAU = 1.5;
 // `session-726f` was that the camera "takes about 5 s to settle" after they
 // hit the ground. It did: it was still giving the stick back.
 //
-// Subtracting a rate as well as a fraction ends it. The decay still does the
-// shape - most of the hold comes back in the first second, where the eye is
-// still on the landing - and the rate cleans up the tail, so a hold of `s` is
-// gone in `TAU * ln(1 + s / (RELEASE * TAU))` seconds: 2.4 s for half a metre
-// rather than never, with the give-back never exceeding this rate at the end.
-export const CAMERA_STICK_RELEASE = 0.1;
+// Subtracting a rate as well as a fraction ends it: a hold of `s` is gone in
+// `TAU * ln(1 + s / (RELEASE * TAU))` seconds rather than never.
+//
+// The rate is set so that the hold is gone BEFORE THE CAMERA COMES TO REST,
+// which is what stops it being a second motion. That was the next thing play
+// found (`session-538f`, the same landing): at 0.1 m/s the camera spent 0.7 s
+// settling onto the aim the stick was still displacing - a point 0.17 m past
+// where it was going to end up - and then took another second and a half
+// creeping back off it. "It would make more sense for the initial up motion to
+// just move towards the final resting place." It would, and at 0.4 m/s it
+// does: half a metre of hold is gone in 0.9 s, which is the same 0.9 s the
+// camera spends arriving, so there is one motion and it lands on its mark.
+//
+// Nothing was traded for it, which is worth recording because the long tail was
+// supposed to be buying the swing its steadiness. Over the five bundles the
+// stick shapes - including `session-702f`, which charges it 107 times and peaks
+// at 2.05 m - the avatar's total variation in the frame gets slightly BETTER at
+// every rate from 0.1 to 1.6 m/s, and the cost is a few per cent of camera
+// acceleration. What the swing wants is the HOLD, which is unchanged; the tail
+// after it was doing nothing but drifting.
+export const CAMERA_STICK_RELEASE = 0.4;
 
 // How long the progress rate the SPEED LEAD is bought with is smoothed over, in
 // seconds (see `CameraController.progressRate`).
