@@ -113,8 +113,12 @@ import { marginSides, uniformMargin } from "./shapePath";
 //
 // The CAP is the guarantee, and it is what the whole design rests on: the
 // camera's acceleration is bounded whatever any rule upstream does, so a step
-// in the target is a swell rather than a lurch. Measured on the exact aim
-// signal the old ease was chasing, over the two 2026-09-22 river bundles:
+// in the target is a swell rather than a lurch. It is applied PER AXIS, which
+// is what makes it a bound rather than a rationing - see the motion block in
+// `update`, and `session-726f` for what rationing looked like. The bound the
+// layer promises is therefore `sqrt(2)` times this on a perfect diagonal.
+// Measured on the exact aim signal the old ease was chasing, over the two
+// 2026-09-22 river bundles:
 //
 //                                   peak accel / jerk, m/s² and m/s³
 //   first-order 0.15 s (the old)     268f  16 / 1533     336f  55 / 2152
@@ -395,6 +399,25 @@ export const CAMERA_EDGE_SMOOTHING = 0.3;
 // anchored, because that one is about backtracking along the route rather than
 // about the edge of the frame.
 export const CAMERA_STICK_TAU = 1.5;
+
+// And the rate, in m/s, that makes the decay a RELEASE: what the stick gives
+// back per second on top of the decay above, so that it reaches zero rather
+// than approaching it.
+//
+// An exponential never arrives, and the last centimetres of one are the worst
+// possible motion for a camera to be making - a slow, steady, unmotivated drift
+// of the whole screen, in a moment when the player has stopped and everything
+// else on it is still. A half-metre stick left at the end of a fling is 8 cm/s
+// after two seconds and 2 cm/s after five, and the player's report of
+// `session-726f` was that the camera "takes about 5 s to settle" after they
+// hit the ground. It did: it was still giving the stick back.
+//
+// Subtracting a rate as well as a fraction ends it. The decay still does the
+// shape - most of the hold comes back in the first second, where the eye is
+// still on the landing - and the rate cleans up the tail, so a hold of `s` is
+// gone in `TAU * ln(1 + s / (RELEASE * TAU))` seconds: 2.4 s for half a metre
+// rather than never, with the give-back never exceeding this rate at the end.
+export const CAMERA_STICK_RELEASE = 0.1;
 
 // How long the progress rate the SPEED LEAD is bought with is smoothed over, in
 // seconds (see `CameraController.progressRate`).
@@ -1839,17 +1862,33 @@ export class CameraController {
     // not a guarantee and outrunning the spring is exactly what a launch does.
     const aimPos = this.softEdge(camera, target.pos, follow, step);
     this.aim = aimPos;
-    // The spring, then the caps, then integrate what is left. The caps are
-    // taken as VECTOR lengths over both axes so a diagonal move is not faster
-    // than an axial one, and the position is integrated from the capped
-    // velocity rather than from the spring's own closed-form displacement -
-    // which is what makes the cap bound the motion rather than only the
-    // velocity that was asked for.
+    // The spring, then the caps, then integrate what is left, with the position
+    // integrated from the capped velocity rather than from the spring's own
+    // closed-form displacement - which is what makes the cap bound the motion
+    // rather than only the velocity that was asked for.
+    //
+    // THE ACCELERATION CAP IS PER AXIS. It was a vector length, for the good
+    // reason that a diagonal move should not be quicker than an axial one, and
+    // that is what `session-726f` was: scaling a vector rations both axes by
+    // one `k`, so an axis that needs to STOP is rationed by an axis that wants
+    // to PULL, and gets a thirteenth of the brake it asked for. Landing a 12 m/s
+    // fling ran at `k ~ 0.12` for sixty unbroken frames with x asking to brake
+    // at 32 m/s² and being handed 6; both axes overshot, a quarter cycle apart,
+    // and the camera looped over the avatar and came back down. Scaling is also
+    // what makes it bouncy rather than slow in the first place - `x'' = k(-w²x
+    // - 2wv)` is a spring of damping ratio `sqrt(k)`, so at `k = 0.12` the
+    // camera rings at a damping ratio of 0.35 whatever else it is doing.
+    //
+    // Per axis, each axis is the one-dimensional capped spring, which closes an
+    // error of up to `8a/w²` - 2.25 m here, comfortably more than anything the
+    // framing asks for - without overshooting at all. The price is honest and
+    // small: on a perfect diagonal the magnitude can reach `sqrt(2)` times the
+    // cap, so the bound the layer promises is 11.3 m/s² rather than 8.
+    const dvMax = CAMERA_MAX_ACCEL * step;
+    const capped = (d: number): number => (d > dvMax ? dvMax : d < -dvMax ? -dvMax : d);
     const sx = springStep(this.pos.x - aimPos.x, this.vel.x, step);
     const sy = springStep(this.pos.y - aimPos.y, this.vel.y, step);
-    let dv = new Vec2(sx.vel - this.vel.x, sy.vel - this.vel.y);
-    const dvMax = CAMERA_MAX_ACCEL * step;
-    if (dv.lengthSquared() > dvMax * dvMax) dv = dv.normalized().mul(dvMax);
+    const dv = new Vec2(capped(sx.vel - this.vel.x), capped(sy.vel - this.vel.y));
     let vel = this.vel.add(dv);
     if (vel.lengthSquared() > CAMERA_MAX_SPEED * CAMERA_MAX_SPEED) {
       vel = vel.normalized().mul(CAMERA_MAX_SPEED);
@@ -1926,8 +1965,13 @@ export class CameraController {
     // `Infinity` here is a snap and wants no decay at all - the camera is being
     // placed, not moved.
     const decay = Number.isFinite(dt) ? Math.exp(-Math.max(0, dt) / CAMERA_STICK_TAU) : 0;
-    this.stickX = stick(x.pos - aim.x, this.stickX * decay);
-    this.stickY = stick(y.pos - aim.y, this.stickY * decay);
+    const give = Number.isFinite(dt) ? CAMERA_STICK_RELEASE * Math.max(0, dt) : 0;
+    const released = (held: number): number => {
+      const left = Math.abs(held) * decay - give;
+      return left <= 0 ? 0 : held < 0 ? -left : left;
+    };
+    this.stickX = stick(x.pos - aim.x, released(this.stickX));
+    this.stickY = stick(y.pos - aim.y, released(this.stickY));
     return new Vec2(aim.x + this.stickX, aim.y + this.stickY);
   }
 

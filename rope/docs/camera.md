@@ -42,7 +42,15 @@ CAMERA_MAX_ACCEL  = 8  m/s²
 CAMERA_MAX_SPEED  = 12 m/s
 ```
 
-Per frame, per axis, with `e = aim - pos`: the exact closed-form step of the critically damped spring over `dt` (`x(dt) = (x + (v + omega*x)*dt) * exp(-omega*dt)`, with `x = -e`), then the resulting velocity CHANGE clamped to `CAMERA_MAX_ACCEL * dt` and the speed to `CAMERA_MAX_SPEED` - both as vector lengths over the two axes, so a diagonal move is not faster than an axial one - then the position integrated from the clamped velocity.
+Per frame, per axis, with `e = aim - pos`: the exact closed-form step of the critically damped spring over `dt` (`x(dt) = (x + (v + omega*x)*dt) * exp(-omega*dt)`, with `x = -e`), then the resulting velocity CHANGE clamped **per axis** to `CAMERA_MAX_ACCEL * dt`, the speed clamped to `CAMERA_MAX_SPEED` as a vector length, then the position integrated from the clamped velocity.
+
+The acceleration clamp is per axis and the speed clamp is not, which is worth the asymmetry it looks like.
+A cap taken as a vector length rations both axes by one factor `k`, so **an axis that needs to stop is rationed by an axis that wants to pull**, and that is a real defect rather than a tidy invariant: landing a 12 m/s fling in `session-726f` ran at `k ~ 0.12` for sixty unbroken frames with the x axis asking to brake at 32 m/s² and being handed 6.
+Both axes overshot, a quarter cycle apart, so the camera looped over the avatar and came back down - reported as "it does a weird counterclockwise loop".
+Scaling is also what makes a capped spring bouncy rather than slow: `x'' = k(-omega²x - 2*omega*v)` is a spring of frequency `omega*sqrt(k)` and damping ratio **`sqrt(k)`**, so at `k = 0.12` the one property the layer is built on is down to 0.35 whatever else is going on.
+Per axis, each axis is the one-dimensional capped spring, which closes an error of up to `8a/omega²` - 2.25 m, more than the framing ever asks for - without overshooting at all.
+The price is honest and small: on a perfect diagonal the magnitude can reach `sqrt(2)` times the cap, so what the layer promises is 11.3 m/s² rather than 8.
+`no-axis-is-rationed-by-the-other` is the case, and it is red under the vector clamp.
 Closed form because it is exact for every `dt`, which is the frame-rate independence `1 - exp(-dt/tau)` had; `dt` is clamped to 0.1 s first, because a hitched frame is a frame the wall clock spent elsewhere and not one the camera may fly across the level in.
 Zoom goes through the same spring in `log(zoom)`, the geometric blend every zoom transition here already uses.
 `snap()` places the spring at its aim **at rest** (level start and reset), where carrying a velocity over would be a swoop across the level.
@@ -167,7 +175,7 @@ It is a clamp on **where the camera IS**, applied last in `update` and to the co
 A target the avatar can outrun is not a guarantee, and outrunning the camera is exactly what a launch does - and what any turn past `CAMERA_MAX_ACCEL` does.
 Clamping `this.pos` rather than only what is handed to the `Camera` is also what keeps the next frame continuous, since the camera really is where the constraint put it and carries on from there; when the floor moves the camera the spring's velocity is set to what the frame **actually** moved, so the next frame is not spent pressing against a constraint that has already won.
 
-**The law is a window, a rate, and a floor**, and that is what its parameters are - three for the guarantee, and a fourth for how long its pull lasts once it stops being asked for:
+**The law is a window, a rate, and a floor**, and that is what its parameters are - three for the guarantee, and two for how its pull is given back once it stops being asked for:
 
 | parameter | what it sets |
 |---|---|
@@ -175,6 +183,7 @@ Clamping `this.pos` rather than only what is handed to the `Camera` is also what
 | `CAMERA_EDGE_INNER_X` (0.1125), `CAMERA_EDGE_INNER_Y` (0.2) | the target minimum distance from the edge, as a fraction of that axis's own extent |
 | `CAMERA_EDGE_SMOOTHING` (0.3) | how fast the camera corrects toward that margin when there is room, in seconds |
 | `CAMERA_STICK_TAU` (1.5 s) | how long its pull lasts once it stops being asked for (see **The stick**) |
+| `CAMERA_STICK_RELEASE` (0.1 m/s) | the rate on top of that, which is what makes the pull **end** rather than approach zero |
 
 All of them are **global** and deliberately not authorable, for the reason the margin always was: what the guarantee does is a property of the game rather than of a room in it.
 `edgeReach` turns the fractions into the distances a given camera allows - the avatar may never pass `edgeReach(margin)`, and `innerReach` is the margin they are held to - `edgeOffset` is the window, and `edgeTakeUp` is the clock.
@@ -295,6 +304,11 @@ The obvious form - the stick IS the demand while there is one, and decays once t
 Holding the extreme of the arc instead is what decays under the avatar as they swing back.
 A demand on the **other** side replaces the hold outright rather than blending with it - the window has just said the camera is wrong the other way, and continuing to hold it the old way is the one thing the guarantee may not do - and that step is the motion layer's to absorb.
 
+**It is a release, not a decay**: on top of the fraction per second, `CAMERA_STICK_RELEASE` (0.1 m/s) is subtracted, so the hold reaches zero rather than approaching it, in `TAU * ln(1 + s / (RELEASE * TAU))` seconds - 2.4 s for half a metre.
+An exponential never arrives, and the last centimetres of one are the worst motion a camera can be making: a slow, steady, unmotivated drift of the whole screen at a moment when the player has stopped and everything else on it is still.
+Half a metre of stick left at the end of a fling is 8 cm/s two seconds later and 2 cm/s five seconds later, which is what `session-726f` reported as the camera taking about five seconds to settle after hitting the ground.
+It was still giving the stick back.
+
 #### What it replaced, and why
 
 The **anchored latch** (`latchX`/`latchY`): while the avatar was anchored, the point the clamp forced became a pin, kept for the rest of the episode and moved only when the clamp forced it further.
@@ -318,9 +332,9 @@ The lead **ratchet** stays gated on anchored (see [**The anchored episode**](cam
 
 The guarantee still **outranks the ratchet** and is outranked by nothing: with the lead ratcheted the target stays forward while the avatar swings back, so far enough back and the guarantee hauls the camera after them, down the track and against the ratchet's whole bias.
 
-`cli camera` asserts the stick's two facts, and each is red both ways under ablation (no clock, and no hold): `stick-holds-after-the-ask-stops` measures the decay law itself half a tau and one tau after the window goes quiet, and `stick-decays-when-nothing-asks` measures that it reaches zero and the camera is back on the room's lock.
+`cli camera` asserts the stick's two facts, and each is red both ways under ablation (no clock, and no hold): `stick-holds-after-the-ask-stops` measures the release law itself half a tau and one tau after the window goes quiet, and that it is finished by the time the law says it should be where a bare exponential would still be giving back; `stick-decays-when-nothing-asks` measures that it reaches zero and the camera is back on the room's lock.
 
-Unplayed as of 2026-09-22; the feel constants (`CAMERA_FREQ`, `CAMERA_MAX_ACCEL`, `CAMERA_STICK_TAU`) are tuned in the play and nowhere else.
+Played once as of 2026-09-22 (`session-222f`, `session-684f`, `session-726f`); the feel constants (`CAMERA_FREQ`, `CAMERA_MAX_ACCEL`, `CAMERA_STICK_TAU`, `CAMERA_STICK_RELEASE`) are tuned in the play and nowhere else.
 
 The debug overlay draws the keep-out box **only on the frames it is binding** (amber, not the camera layer's violet): a camera that has stopped following has no on-screen cause otherwise, and drawing it every frame would make it furniture rather than a diagnosis.
 It draws **two** boxes, because the constraint has two boundaries: the inner one finely, where the override starts easing in, and the outer one as the line the avatar may never cross.

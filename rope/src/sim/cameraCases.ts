@@ -19,6 +19,8 @@ import {
   buildCameraRules,
   CAMERA_EDGE_MARGIN,
   CAMERA_FREQ,
+  CAMERA_MAX_ACCEL,
+  CAMERA_STICK_RELEASE,
   CAMERA_STICK_TAU,
   CameraController,
   edgeAxis,
@@ -1129,6 +1131,76 @@ export function runCameraCases(): CameraResult[] {
       const kept = scaleLevelData(authored, 1).cameraPaths ?? [];
       return kept.length === 1 ? [] : [`kept ${kept.length} of 3 paths, expected 1`];
     }),
+    // --- the motion layer ----------------------------------------------------
+    //
+    // One critically damped spring under an acceleration cap. Critically damped
+    // is the whole of what it promises - it closes a gap without coming back -
+    // and the cap is the one thing that can take that promise away, so this is
+    // where the promise is stated for the case the cap BINDS.
+
+    run("no-axis-is-rationed-by-the-other", () => {
+      // The acceleration cap is PER AXIS, and this is the property that buys.
+      //
+      // Taken as a vector length it rations both axes by one `k`, so an axis
+      // that needs to STOP is rationed by an axis that wants to PULL. That is
+      // what `session-726f` was: a 12 m/s fling landed, and for sixty unbroken
+      // frames the camera ran at `k ~ 0.12` with the x axis asking to brake at
+      // 32 m/s² and being handed 6, because y was spending the budget. Both
+      // axes overshot, a quarter cycle apart, and the camera looped over the
+      // avatar and came back down - the player's "weird counterclockwise loop".
+      //
+      // The scenario is the bundle's shape: a run that opens a lag in both
+      // axes, then a dead stop, which leaves the camera closing a diagonal
+      // error with a diagonal speed - the one arrangement where the two axes
+      // want different things at once.
+      const rules = buildCameraRules([], []);
+      const walk: Vec2[] = [];
+      let p = Vec2.ZERO;
+      for (let i = 0; i < 180; i++) walk.push((p = p.add(new Vec2(5 * DT, 4 * DT))));
+      for (let i = 0; i < 300; i++) walk.push(p);
+      const out = ride(rules, walk, false);
+      // What the spring asked for each frame, recomputed from the state it was
+      // handed, against what the camera's motion shows it was granted.
+      const w = 2 * Math.PI * CAMERA_FREQ;
+      const ask = (x: number, v: number): number => {
+        const b = v + w * x;
+        return ((v - w * b * DT) * Math.exp(-w * DT) - v) / DT;
+      };
+      let starved = 0;
+      let worst = 0;
+      for (let i = 2; i < out.length; i++) {
+        const pre = out[i - 1]!.pos.sub(out[i - 2]!.pos).div(DT);
+        const got = out[i]!.pos.sub(out[i - 1]!.pos).div(DT).sub(pre).div(DT);
+        const want = [
+          ask(out[i - 1]!.pos.x - out[i]!.aim.x, pre.x),
+          ask(out[i - 1]!.pos.y - out[i]!.aim.y, pre.y),
+        ];
+        [got.x, got.y].forEach((g, a) => {
+          const asked = want[a]!;
+          // An axis asking for less than the cap must get what it asked for.
+          if (Math.abs(asked) > CAMERA_MAX_ACCEL - 0.5) return;
+          const short = Math.abs(asked - g);
+          if (short > 0.5) {
+            starved++;
+            worst = Math.max(worst, short);
+          }
+        });
+      }
+      const stop = 180;
+      const walked = out
+        .slice(stop)
+        .reduce((d, o, i, a) => (i === 0 ? 0 : d + o.pos.distanceTo(a[i - 1]!.pos)), 0);
+      const lag = walk[stop]!.sub(out[stop]!.pos).length();
+      return [
+        { label: "the camera was behind in both axes", got: lag > 1 ? 1 : 0, want: 1 },
+        { label: "frames an axis was starved of what it asked for", got: starved, want: 0 },
+        { label: "worst shortfall, m/s²", got: worst, want: 0, tol: 0.5 },
+        // And the outcome: the ground it covers coming to rest is the lag it
+        // had, not a tour around it.
+        { label: "metres walked to close the lag, over the lag itself", got: walked / lag, want: 1, tol: 0.35 },
+      ];
+    }),
+
     // --- the screen-edge guarantee ------------------------------------------
     //
     // Whatever rule is in force, the avatar may never enter the outer
@@ -2036,14 +2108,31 @@ export function runCameraCases(): CameraResult[] {
       const quiet = walk.findIndex((p, i) => i > 300 && Math.abs(p.x) <= inner);
       const at = (seconds: number): number => Math.abs(out[quiet + Math.round(seconds * 60)]!.stick.x);
       const held = Math.abs(out[quiet]!.stick.x);
-      const decay = (seconds: number): number => Math.exp(-seconds / CAMERA_STICK_TAU);
+      // The law in closed form: a fraction per second AND a rate, which solves
+      // to `(s + R*TAU)e^(-t/TAU) - R*TAU`. The rate is what makes it a release
+      // rather than a decay, and it reaches zero at `TAU * ln(1 + s/(R*TAU))`.
+      const floor = CAMERA_STICK_RELEASE * CAMERA_STICK_TAU;
+      const left = (seconds: number): number =>
+        ((held + floor) * Math.exp(-seconds / CAMERA_STICK_TAU) - floor) / held;
+      const ends = CAMERA_STICK_TAU * Math.log(1 + held / floor);
       return [
         { label: "the guarantee was asking", got: held > 0.5 ? 1 : 0, want: 1 },
         // The law itself, at half a tau and at one tau. A tolerance rather than
         // an equality because the aim it decays on top of is still moving over
         // the first frames of it.
-        { label: "half a second later", got: at(0.5) / held, want: decay(0.5), tol: 0.05 },
-        { label: "a stick-tau later", got: at(1.5) / held, want: decay(1.5), tol: 0.05 },
+        { label: "half a second later", got: at(0.5) / held, want: left(0.5), tol: 0.05 },
+        { label: "a stick-tau later", got: at(1.5) / held, want: left(1.5), tol: 0.05 },
+        // And it ARRIVES, which is the half a bare exponential cannot do: the
+        // last centimetres of one are a slow unmotivated drift of the whole
+        // screen at a standstill, which is what `session-726f` reported as the
+        // camera taking five seconds to settle after a landing.
+        { label: "the hold ends in finite time", got: ends < 5 ? 1 : 0, want: 1 },
+        { label: "and by then there is none of it left", got: at(ends + 0.5), want: 0, tol: 1e-9 },
+        {
+          label: "where the decay alone would still be giving back",
+          got: held * Math.exp(-ends / CAMERA_STICK_TAU) > 0.02 ? 1 : 0,
+          want: 1,
+        },
         // ...and the camera goes with it rather than springing home: what it
         // covers in the first half-second after the ask stops is a fraction of
         // the whole return.
