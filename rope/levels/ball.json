@@ -1,6 +1,7 @@
 {
   "meta": {
-    "title": "1. river"
+    "title": "1. river",
+    "intro": true
   },
   "cameraRegions": [
     {

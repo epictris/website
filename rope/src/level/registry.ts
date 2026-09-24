@@ -23,15 +23,11 @@ import type { RawLevelData } from "./levelFormat";
 // built app, which has no server. JSON widens string literals (`kind: string`),
 // hence the cast — the file is written by the editor against this schema.
 import ballLevelJson from "../../levels/ball.json";
-// The cave: a second authored arena, opened by dropping the ball from its spawn
-// into a locked camera region. Registered here because a file in `levels/` is not a level
-// until it is - the menu's list is built from THIS map, through the preload
-// manifest (see `listedLevels` below and docs/levels.md).
-import caveJson from "../../levels/cave.json";
 // The rails level: the third of the authored arenas, a descent along ziplines
-// and bars the cuff clamps onto and slides down (see `lib/rail.ts`). Listed for
-// the same reason `CAVE` is - a file in `levels/` is not a level until it is in
-// THIS map.
+// and bars the cuff clamps onto and slides down (see `lib/rail.ts`). Registered
+// here because a file in `levels/` is not a level until it is - the menu's list
+// is built from THIS map, through the preload manifest (see `listedLevels`
+// below and docs/levels.md).
 import railsJson from "../../levels/rails.json";
 // The rail sandbox: a low-friction zipline between two posts, a peg, and a
 // hanging lantern whose handles are rails and whose lid, bulb and base are
@@ -106,10 +102,6 @@ export const LEVELS: Record<string, LevelSpec> = {
   // the FILE authored - a swinging body (see `LevelBodyData.swingAmp`) - since
   // the ball driver takes no `init` hook.
   BALL: { data: ballLevelJson as RawLevelData, controller: "ball", file: "ball" },
-  // The cave (see the import): a listed level like `BALL`, so it is on the menu
-  // and answers to the level lint - a finish line to cross, and exactly one
-  // level in the list claiming `intro`.
-  CAVE: { data: caveJson as RawLevelData, controller: "ball", file: "cave" },
   // The rails descent (see the import): listed, so it carries a finish line and
   // a title of its own and `cli levels` holds it to both.
   RAILS: { data: railsJson as RawLevelData, controller: "ball", file: "rails" },
