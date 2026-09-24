@@ -1,0 +1,4 @@
+numpy>=1.24
+shapely==2.1.2
+Pillow>=9
+matplotlib>=3.6

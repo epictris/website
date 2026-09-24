@@ -15,7 +15,7 @@ export function vineGenerator(): Plugin {
     name: "vine-generator-v3",
     configureServer(server) {
       const project = server.config.root;
-      const source = process.env.ROOTS_PROJECT ?? resolve(project, "../../../assets/roots");
+      const source = process.env.ROOTS_PROJECT ?? resolve(project, "../asset-generators/roots");
       const blender = process.env.BLENDER_PATH ?? (process.platform === "win32"
         ? "C:/Program Files/Blender Foundation/Blender 5.2/blender.exe" : "blender");
       server.middlewares.use("/generated-vines", async (req, res, next) => {

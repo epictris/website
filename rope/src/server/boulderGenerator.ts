@@ -29,7 +29,7 @@ export function boulderGenerator(): Plugin {
     configureServer(server) {
       const project = server.config.root;
       const source = process.env.BOULDERS_V5_PROJECT ??
-        resolve(project, "../../../assets/boulders/stylised_rocks_v5");
+        resolve(project, "../asset-generators/boulders/stylised_rocks_v5");
       server.middlewares.use("/generated-boulders", async (req, res, next) => {
         const match = /^\/([a-f0-9-]{36})\/(boulder\.glb)$/.exec((req.url ?? "").split("?")[0]);
         if (!match || (req.method !== "GET" && req.method !== "HEAD")) return next();

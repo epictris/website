@@ -29,7 +29,7 @@ export function rootGenerator(): Plugin {
     name: "root-generator",
     configureServer(server) {
       const project = server.config.root;
-      const source = process.env.ROOTS_PROJECT ?? resolve(project, "../../../assets/roots");
+      const source = process.env.ROOTS_PROJECT ?? resolve(project, "../asset-generators/roots");
       const blender = process.env.BLENDER_PATH ?? (process.platform === "win32"
         ? "C:/Program Files/Blender Foundation/Blender 5.2/blender.exe" : "blender");
       // These files are deliberately outside Vite's watcher: exporting a mesh

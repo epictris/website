@@ -14,6 +14,7 @@ public/water/
 public/hdri/
 public/generated-roots/
 public/generated-boulders/
+public/generated-vines/
 # Raw, un-optimised models as they were downloaded. Local scratch: the shippable
 # copy is what `assets:publish` uploads, and a raw is re-downloadable from the
 # `source` its manifest entry records.
