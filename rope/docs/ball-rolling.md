@@ -363,7 +363,8 @@ Both of those last are places the run is deliberately not being opened - a check
 ## The recorded arrival
 
 A spawn may instead say that the run opens on a RECORDED RUN: the level plays back somebody's session from the point it started, and hands the ball over when the recording runs out (`SpawnData.arrival`, a name in `level/arrivals.ts`).
-`CAVE` opens on one - 383 frames, 6.4 s, the ball dropped into the back of the cave and swung out to the mouth of it on five throws, topping out at 12.4 m/s - and it replaced the rolling entry there on 2026-09-20.
+`CAVE` opened on one - 383 frames, 6.4 s, the ball dropped into the back of the cave and swung out to the mouth of it on five throws, topping out at 12.4 m/s - from 2026-09-20, when it replaced the rolling entry there, to 2026-09-23, when the cave dropped it for a fall into a locked opening shot (a camera region with `keepInFrame: false`, see [camera](camera.md#the-screen-edge-guarantee)).
+No level authors an arrival now; the mechanism, the cave's stream and its cases are kept for the next level that wants one.
 
 **What is stored is INPUT, not video.**
 The stream is the held-bits and the aim point of every frame that was played, which is what a session bundle records; fed back into the same deterministic sim on the same level, it produces the same run.
@@ -422,8 +423,9 @@ An arrival authored beside a `roll` takes the opening and says so: it decides wh
 
 **The risk it carries is that the level and the recording are two files.**
 Move a rock and the stream plays on regardless - the throws go where they went, the geometry they went around is somewhere else, and the ball is handed over in a pit, in the air, or three rooms away, with nothing anywhere saying so.
-`arrival-lands` is the detector: the level's own arrival, played on the level as it now stands, has to end within a metre of the spawn the level was authored around, at rest, off its chain.
+`arrival-lands` is the detector: the arrival, played on the level it opens, has to end within a metre of the spawn the level was authored around, at rest, off its chain.
+With no level authoring one, the cases play the cave's stream on `src/sim/caveArrivalLevel.json`, a frozen copy of `levels/cave.json` as it stood while the cave opened on it, so they measure the mechanism and cannot drift as the cave is edited; a level that authors an arrival again is the one they should be pointed at.
 A metre is 0.58 m of measurement with room for the physics to move underneath it, and nowhere near enough room to have arrived anywhere else in a level 25 m across.
-The tighter statement is the recording beside it: built from `levels/cave.json` and played on the stream, the arrival reproduces the bundle's digests **bit-exactly** over every frame it keeps (worst drift 0.000e+0 m over 383), and `cli replay playtests/arrivals/cave-449f.json.gz` re-checks the whole 449 on demand.
+The tighter statement is the recording beside it: built from the cave as recorded and played on the stream, the arrival reproduces the bundle's digests **bit-exactly** over every frame it keeps (worst drift 0.000e+0 m over 383), and `cli replay playtests/arrivals/cave-449f.json.gz` re-checks the whole 449 on demand.
 
 `cli entry` is the suite for both openings, and the arrival's three cases are `arrival-lands`, `arrival-hands-over` and `arrival-absent`.

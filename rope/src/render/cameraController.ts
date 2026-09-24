@@ -155,7 +155,10 @@ export const REGION_EXIT_MARGIN = 0.15; // metres
 // Global, and deliberately not authorable: a level may frame the avatar however
 // it likes and none of those framings is allowed to be "off the bottom of the
 // screen", so what the guarantee does is a property of the GAME rather than of
-// a room in it. They are tuned together and are what every one of them means:
+// a room in it. WHETHER it applies is the one thing a room may say - a region
+// authoring `keepInFrame: false` switches it off while it frames the camera
+// (see `keepsInFrame`) - but never how. They are tuned together and are what
+// every one of them means:
 //
 //   CAMERA_EDGE_MARGIN     where the avatar may never go.
 //   CAMERA_EDGE_INNER_X/Y  where the override holds them, per axis.
@@ -833,6 +836,23 @@ export function dominantRule(influences: readonly CameraInfluence[]): CameraRule
   let best: CameraInfluence | null = null;
   for (const i of influences) if (!best || i.weight >= best.weight) best = i;
   return best?.rule ?? null;
+}
+
+// Does the frame guarantee apply under this rule set? Yes unless the rule doing
+// most of the framing is a region authoring `keepInFrame: false` - a level's
+// opening that lets the player fall INTO the frame rather than dragging the
+// camera up to meet them.
+//
+// The dominant rule rather than any member, so a room with the guarantee off
+// hands it back across its falloff band at the same point it hands over the
+// framing, and a path or the plain follow always keeps it. Stateless, like the
+// rest of the rule decision: on the frame it switches back on the soft half
+// is a step in the aim the motion layer answers, and the hard floor (the
+// avatar's centre on screen) catches the camera up only if the player left the
+// region while still off screen - which is the region drawn too small.
+export function keepsInFrame(influences: readonly CameraInfluence[]): boolean {
+  const rule = dominantRule(influences);
+  return rule?.kind !== "region" || rule.region.keepInFrame !== false;
 }
 
 // WHAT WAS HERE: `ruleBlend` and `setBlend`, which resolved how long a hand-off
@@ -1653,8 +1673,9 @@ export class CameraController {
   private aimPullX = 0;
   private aimPullY = 0;
 
-  // The screen-edge guarantee, which the GAME never turns off: it is the one
-  // camera rule a level may not opt out of (see CAMERA_EDGE_MARGIN).
+  // The screen-edge guarantee (see CAMERA_EDGE_MARGIN). A level turns it off
+  // only through a region's `keepInFrame` (see `keepsInFrame`), resolved per
+  // frame into `keep` below; this switch is the other way, and outranks it.
   //
   // The editor's ▶ Test turns it off as an INSTRUMENT, so an author can see the
   // framing a lock or a lookahead is actually asking for rather than the one
@@ -1663,6 +1684,10 @@ export class CameraController {
   // question the editor asks, not a property of the level, so it lives here and
   // is never written to a file.
   edgeClamp = true;
+
+  // Whether the guarantee applies THIS frame: `edgeClamp` and the rules in force
+  // agreeing (see `keepsInFrame`). Set before either half runs.
+  private keep = true;
 
   // The rule doing most of the framing, for a caller that wants one name for
   // what the camera is doing. It cannot be recomputed outside: the grip depends
@@ -1898,6 +1923,7 @@ export class CameraController {
     // switchback the weight is about the branch they are actually on, exactly
     // as the grip is.
     const members = cameraInfluences(nextRules, follow, offset ? { s: nearS, off: offset } : null);
+    this.keep = this.edgeClamp && keepsInFrame(members);
     const target = blendCameraTarget(members, follow, baseZoom, leadS, this.progressRate);
 
     // The wind release (see `windProgress`): what this frame's take-up of the
@@ -2090,7 +2116,7 @@ export class CameraController {
   // released at all, so it holds the furthest the guarantee has pushed the aim
   // on that side until the guarantee pushes it further or asks the other way.
   private softEdge(camera: Camera, aim: Vec2, follow: Vec2, dt: number, lockY: boolean): Vec2 {
-    if (!this.edgeClamp) {
+    if (!this.keep) {
       this.aimPullX = 0;
       this.aimPullY = 0;
       this.stickX = 0;
@@ -2139,7 +2165,7 @@ export class CameraController {
   // constraint put it, so it carries on from there instead of being dragged
   // back to an illegal position every frame.
   private holdEdge(camera: Camera, pos: Vec2, follow: Vec2, dt: number): Vec2 {
-    if (!this.edgeClamp) {
+    if (!this.keep) {
       this.edge = null;
       return pos;
     }

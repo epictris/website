@@ -5621,6 +5621,27 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     );
     // Lowest number wins outright; rules tied at it blend (see `ruleWeight`).
     num("priority", (b) => b.cam.priority, (b, v) => (b.cam.priority = Math.round(v)), 1);
+    // Whether the screen-edge guarantee holds the player in frame while this
+    // region frames the camera. Unticked, they may leave the frame - or fall
+    // into it, which is what a level's opening shot wants.
+    {
+      const box = document.createElement("input");
+      box.type = "checkbox";
+      box.checked = regions.every((b) => b.cam.keepInFrame);
+      box.indeterminate = !box.checked && regions.some((b) => b.cam.keepInFrame);
+      box.addEventListener("change", () => {
+        beginAction();
+        for (const b of regions) b.cam.keepInFrame = box.checked;
+        markDirty();
+        rebuildInspector();
+      });
+      const wrap = el("label", "ed-field");
+      wrap.textContent = "keep in frame";
+      wrap.title =
+        "Hold the player on screen while this region frames the camera. Untick to let them leave the frame - or fall into it, for a level's opening shot.";
+      wrap.appendChild(box);
+      g.appendChild(wrap);
+    }
 
     addActionsRow(g);
     inspector.appendChild(g);

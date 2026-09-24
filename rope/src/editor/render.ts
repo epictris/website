@@ -1001,6 +1001,7 @@ export function cameraRegionLabel(r: EdItem): string {
   }
   if (r.cam.falloff !== null) parts.push(`fade ${px(r.cam.falloff)}`);
   if (r.cam.priority !== 0) parts.push(`p${r.cam.priority}`);
+  if (!r.cam.keepInFrame) parts.push("free frame");
   return parts.length ? `cam · ${parts.join(" · ")}` : "cam · (no effect)";
 }
 

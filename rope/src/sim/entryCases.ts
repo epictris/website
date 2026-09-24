@@ -61,7 +61,7 @@ import {
   type LevelBodyData,
   type RawLevelData,
 } from "../level/levelFormat";
-import { LEVELS } from "../level/registry";
+import caveArrivalLevel from "./caveArrivalLevel.json";
 import { PX } from "../engine/units";
 
 export interface EntryResult {
@@ -397,16 +397,23 @@ function caseCameraHolds(): EntryResult {
 // The recorded arrival
 // ---------------------------------------------------------------------------
 
-// The level that actually opens on one, and the stream it names (see
-// `level/arrivals.ts`). The arrival cases are measured on the REAL level rather
-// than on a rig, and they have to be: a recording is only an opening while the
-// level it was recorded on is the level it is played on, so what is being
-// asserted is a fact about `levels/cave.json` and `src/level/arrivals/cave.json`
-// together. A rig could only ever assert that playback runs.
-const ARRIVAL_LEVEL = "CAVE";
+// The level the stream was recorded on, and still opens on. The arrival cases
+// are measured on a REAL level rather than on a rig, and they have to be: a
+// recording is only an opening while the level it was recorded on is the level
+// it is played on, so what is being asserted is a fact about a level file and
+// `src/level/arrivals/cave.json` together. A rig could only ever assert that
+// playback runs.
+//
+// A frozen copy of `levels/cave.json` as it was when the cave opened on the
+// arrival (up to 0e668b8), rather than the live file: the cave dropped the
+// arrival for a fall-in opening on 2026-09-23, and no level authors one now.
+// The copy keeps the mechanism under test and cannot drift out from under the
+// recording as the cave is edited. A level that authors an arrival again is
+// the one these should be measured on instead.
+const ARRIVAL_LEVEL = "the recorded cave";
 
 function arrivalLevelData(): RawLevelData {
-  return LEVELS[ARRIVAL_LEVEL]!.data as RawLevelData;
+  return caveArrivalLevel as RawLevelData;
 }
 
 // Play an arrival out, stepping a player who is doing NOTHING, and stop on the

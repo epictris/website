@@ -23,8 +23,8 @@ import type { RawLevelData } from "./levelFormat";
 // built app, which has no server. JSON widens string literals (`kind: string`),
 // hence the cast — the file is written by the editor against this schema.
 import ballLevelJson from "../../levels/ball.json";
-// The cave: a second authored arena, opened on a rolling entry (see
-// `SpawnData.roll`). Registered here because a file in `levels/` is not a level
+// The cave: a second authored arena, opened by dropping the ball from its spawn
+// into a locked camera region. Registered here because a file in `levels/` is not a level
 // until it is - the menu's list is built from THIS map, through the preload
 // manifest (see `listedLevels` below and docs/levels.md).
 import caveJson from "../../levels/cave.json";

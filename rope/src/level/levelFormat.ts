@@ -1763,6 +1763,13 @@ export interface CameraRegionData {
   // unprioritised region blends with every other unprioritised one and a `-1`
   // takes the camera outright.
   priority?: number;
+  // Whether the screen-edge guarantee holds the avatar in frame while this
+  // region is the one framing the camera (see `keepsInFrame` in
+  // `render/cameraController.ts`). Absent = true, the guarantee every region had
+  // before the field; false lets the player leave the frame - or arrive in it,
+  // falling into a level's opening shot rather than dragging the camera up to
+  // meet them. Only `false` is ever written.
+  keepInFrame?: boolean;
 }
 
 // A camera path: an authored polyline the camera rides. The player's position
@@ -3159,8 +3166,8 @@ export function scaleObject(o: SceneObjectData, factor: number): SceneObjectData
 export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData {
   const data = normalizeLevelData(rawData);
   // A camera region's positions, extents, offsets, locks, buffer and falloff
-  // are lengths; viewportScale and priority are not, and the retired `blend` is
-  // dropped here rather than carried (see `CameraRegionData.blend`).
+  // are lengths; viewportScale, priority and keepInFrame are not, and the retired
+  // `blend` is dropped here rather than carried (see `CameraRegionData.blend`).
   const regions = data.cameraRegions?.map((r) => ({
     x: r.x * factor,
     y: r.y * factor,
@@ -3178,6 +3185,7 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
     ...(r.bufferBottom !== undefined ? { bufferBottom: r.bufferBottom * factor } : {}),
     ...(r.falloff !== undefined ? { falloff: r.falloff * factor } : {}),
     ...(r.priority !== undefined ? { priority: r.priority } : {}),
+    ...(r.keepInFrame !== undefined ? { keepInFrame: r.keepInFrame } : {}),
   }));
   // A camera path's placement, verts, range, lookahead and buffer are lengths;
   // rot, viewportScale, blend (seconds) and priority are not.

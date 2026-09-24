@@ -295,6 +295,9 @@ export interface EdCamera {
   // the middle of its claim rather than the edge.)
   falloff: number | null;
   priority: number;
+  // Whether the screen-edge guarantee holds while this region frames the camera
+  // (see `CameraRegionData.keepInFrame`). Region only; true on a path.
+  keepInFrame: boolean;
   // Camera PATH fields (see `CameraPathData`), meaningless on a region and left
   // null there. null = the format's DEFAULT_PATH_RANGE_X/_Y / _LOOKAHEAD.
   // Per axis, because the frame is 16:9: the corridor is the ellipse with
@@ -919,6 +922,7 @@ export const defaultCamera = (): EdCamera => ({
   bufferBottom: null,
   falloff: null,
   priority: 0,
+  keepInFrame: true,
   rangeX: null,
   rangeY: null,
   falloffX: null,
@@ -1456,6 +1460,7 @@ function fromLevelData(data: LevelData): EdModel {
       bufferBottom: r.bufferBottom ?? null,
       falloff: r.falloff ?? null,
       priority: r.priority ?? 0,
+      keepInFrame: r.keepInFrame ?? true,
       // A region has no corridor and no lookahead.
       rangeX: null,
       rangeY: null,
@@ -1556,6 +1561,7 @@ function fromLevelData(data: LevelData): EdModel {
       // A path fades through `falloffX/falloffY`; the scalar band is a region's.
       falloff: null,
       priority: c.priority ?? 0,
+      keepInFrame: true,
       rangeX: c.rangeX ?? null,
       rangeY: c.rangeY ?? null,
       falloffX: c.falloffX ?? null,
@@ -1932,6 +1938,7 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
         : {}),
       ...(i.cam.falloff !== null ? { falloff: i.cam.falloff } : {}),
       ...(i.cam.priority !== 0 ? { priority: i.cam.priority } : {}),
+      ...(!i.cam.keepInFrame ? { keepInFrame: false } : {}),
     }));
 
   // The notes layer writes to TWO lists: the annotations the game never reads,
