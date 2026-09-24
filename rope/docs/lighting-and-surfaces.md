@@ -110,26 +110,16 @@ Tone mapping is ACES, which is what gives the sun range to work in; the vignette
 
 The GLTF loader is imported dynamically, so it lands in its own chunk and is fetched only by a page that actually loads a prop.
 
-## Painted light
+## Painted light (removed)
 
-Since 2026-09-17 the game is a digital painting (see [**Painted surfaces**](asset-store.md)), and the maps are only half of that: they carry flat planes of tone and crisp breaks, and **`render3d/paint.ts`** makes the light fall on them the way a painter's does.
-It is one shader patch, `paintMaterial`, worn by every lit material at the one place each kind is built - `buildSurface` for generated and authored surfaces (an authored set dressed in later wears it too), `loadFile` for a prop's own materials, the vine, and the water over its own painting - and it composes with a material that already has an `onBeforeCompile` by calling that one first and extending its program cache key, so a painted material and an unpainted one of the same kind never share a program.
-Everything else - the lamps, the shadows, the fog, the tone mapping, the environment - is left exactly as it is: **stylised colour, real light**, the rule the water established.
-
-Three edits inside three's physically-based shading, by text on its chunks:
-
-- **Light falls in bands.** Lambert's `dot(N, L)` is a smooth cosine, so two facets a few degrees apart merely shade and a ball is a smooth gradient - the roundness of a photograph. `paintBands` cuts the wrapped cosine into three bands with a soft edge between neighbours: a facet (a plateau of one normal in the painted maps) lands wholly in one band and is one tone, and a sphere crosses the bands as a painter's sphere - a lit side, a mid tone and a shadow side (four bands cut the ball into stripes). The **hemisphere fill's** sky-to-ground blend is cut by the same bands, because in a level lit mostly by fill (the ball arena's fill is twice its sun) that is where most of the tone is; the environment map's diffuse irradiance is left smooth, being a fraction of the light. A band's value is the cosine at its middle, so the bands average to the line they replace and levels are not re-lit.
-- **The reflected environment is soft and has no sun in it.** A reflection sits where the view and the normal put it, not where the object's rotation does, so on the rolling ball the HDRI's sun was an oval that never moved - a sticker. Banding the reflection by brightness only gave the oval a crisp edge; reflecting at the roughest mip removed it but removed the horizon with it, and a metal reflecting one tone is a grey rubber sphere. So the reflection is sampled at a roughness of at least 0.45, which keeps the sky-to-ground horizon as a soft division, and its luminance is soft-clipped at a ceiling (`PAINT_REFLECTION_CEILING`) that a bright sky reaches and the sun cannot exceed. The avatar wears `painted steel`, a baked set of oil strokes (see [**The ball and chain**](art-style.md#the-ball-and-chain-painted-steel)) at 0.6 metalness, so the strokes' own grey carries its value in a dark level and the soft reflection is its sheen.
-- **The sun makes no highlight**, only the lamps do. The sun is a light at infinity and the camera rides the avatar, so its glint sat at the same spot on the ball however it rolled; the directional loop calls a diffuse-only form (`RE_Direct_Matte`) and the point and spot loops keep their specular, which moves as the ball moves past a lamp.
-- **The wrap never crosses the terminator.** The cosine is wrapped a little into the shadow side before banding (the fill of a real room, and what keeps a facet turned just past the light from going black), but it fades to nothing over the last few degrees before a normal faces away from the lamp. Past the geometric terminator the shadow map is at its least reliable - a grazing depth test - and a wrap that fed sun to those texels drew as **white speckles along every crack** of a face turned from the sun; `cli shot --query paint=0` against the same frame is what found it.
-- **Nothing is a mirror.** Roughness has a floor of 0.42, which keeps every highlight a drawn blob rather than a pinpoint and blurs the environment a metal reflects into a soft tone rather than a picture of the sky. It was 0.5 until the ball was asked to look shinier and 0.35 when that was too much; the ball's own shine is mostly its set's roughness multiplier (2.2, from 3.2) and its metalness (0.55). A floor rather than a scale on the specular term, because a metal's whole colour IS its specular - scaled down, the ball goes black - where a rougher metal is the same metal, matte.
-
-The first version was a saturating ramp - a wrap and a smoothstep that lit every facet facing the sun fully - and under a sun that hits the wall nearly face-on it put every facet at one tone and flattened away exactly the facets the painted maps had made.
-Bands separate them instead.
-
-`?paint=0` turns the patch off for the session (read once, at load: a material is patched when built, and a toggle that could change between two materials would give a scene half painted), and that A/B in the live browser is how a change to it is judged - the headless runner's SwiftShader is not what the player sees.
+From 2026-09-17 to 2026-09-24 every lit material wore `render3d/paint.ts`, a shader patch that cut the light into bands, gave roughness a floor of 0.42, sampled the reflected environment no sharper than 0.45 with its sun soft-clipped out, and took the sun's highlight away.
+It was removed on 2026-09-24 because painterly is no longer the look: every material is now three's plain physically-based shading, and `?paint=0` is gone with it.
+The one thing it guarded that is worth remembering is the sticker: a directional sun's highlight, or a sharp reflection of the HDRI's sun, sits where the view puts it rather than where the ball's rotation does, so on the rolling ball it can read as a fixed patch.
+Judge that by playing on a real GPU, not off a headless still.
 
 ## Surfaces
+
+Generated rocks are the one surface outside this namespace: they wear their own composed material, baked masks from the GLB over the `seaside rock` and `quarry wall` tiles, described under [**The rock material**](rocks.md#the-rock-material).
 
 A surface comes from one of two places and a level cannot tell which, because both are keyed into **one namespace** that `surfaceFor` looks up authored-first:
 
@@ -182,5 +172,9 @@ The one residue is the **corner**: the outward direction there is the bisector, 
 `cli render3d` asserts both halves (`extrude: a chamfer …`), and both are red against the depth mapping.
 
 The resolved size and offset are part of the material cache key, because `repeat` and `offset` live on the *texture* rather than the material: two tilings are two `Texture.clone`s sharing one uploaded image.
+
+**A conveyor belt is the one surface whose tiling is adjusted and whose pattern moves** ([conveyors](conveyors.md#rendering)).
+Its band is its own ring of geometry with `u` in metres of ARC LENGTH along the running surface, and the repeat `tileMetres` gives is stretched or squeezed to the nearest length that goes round the loop a whole number of times (`beltTextureTile`), so the loop closes on the pattern with no seam; the material is the ordinary cached one, untouched.
+The motion is written into the ring's own UV buffer, never into a map's `offset`: the material and its maps are shared by everything wearing that surface, and an authored set's maps are swapped into the shared material when they arrive, so an offset set on one belt would move every wall of the same stuff, or be lost when the images landed.
 
 `cli render3d` asserts the resolution rule directly (`surfaces: …`) - authored beats generated, a material name still resolves to its own surface, an unknown name falls back, and each side's tile is its own - because it is pure arithmetic over the two manifests, and because getting the precedence backwards is invisible: every level goes on wearing perfectly presentable noise while the downloaded maps sit unused.

@@ -23,8 +23,8 @@ import type { RawLevelData } from "./levelFormat";
 // built app, which has no server. JSON widens string literals (`kind: string`),
 // hence the cast — the file is written by the editor against this schema.
 import ballLevelJson from "../../levels/ball.json";
-// The cave: a second authored arena, opened on a rolling entry (see
-// `SpawnData.roll`). Registered here because a file in `levels/` is not a level
+// The cave: a second authored arena, opened by dropping the ball from its spawn
+// into a locked camera region. Registered here because a file in `levels/` is not a level
 // until it is - the menu's list is built from THIS map, through the preload
 // manifest (see `listedLevels` below and docs/levels.md).
 import caveJson from "../../levels/cave.json";
@@ -59,6 +59,13 @@ import breakTestJson from "../../levels/break-test.json";
 // - which is what the working practice in `rope/CLAUDE.md` asks for and what a
 // gantry dropped straight into `ball.json` would have skipped.
 import finishTestJson from "../../levels/finish-test.json";
+// The conveyor sandbox: a belt under the spawn with a crate riding it, a long
+// belt overhead to hook and be carried along, a post beside that belt's far
+// wheel for a carried chain to cross, a reverse belt on a slope with a crate
+// of its own, and a three-wheel belt drive up to the right in rubber, hollow
+// inside for a wheel prop (see `lib/belt.ts`, docs/conveyors.md).
+// Hand-authored, like the rail and mud sandboxes.
+import beltTestJson from "../../levels/belt-test.json";
 
 export const LEVELS: Record<string, LevelSpec> = {
   LEVEL_2: {
@@ -110,6 +117,9 @@ export const LEVELS: Record<string, LevelSpec> = {
   RAIL_TEST: { data: railTestJson as RawLevelData, controller: "ball", file: "rail-test" },
   // Mud to bite into and creep through, driven with the ball (see `lib/viscous.ts`).
   MUD_TEST: { data: mudTestJson as RawLevelData, controller: "ball", file: "mud-test" },
+  // Conveyor belts to ride, drop crates on and hook, driven with the ball (see
+  // `lib/belt.ts`). Unlisted, like every sandbox.
+  TEST_BELT: { data: beltTestJson as RawLevelData, controller: "ball", file: "belt-test" },
   // Geometry that gives way: swing off the ceiling and drop through it (see
   // `docs/breakable.md`). The three ledges are 2.5 kN, 5 kN, and 4 kN three
   // times over; the L at the end is one body of two pieces, so it goes as one.

@@ -81,6 +81,26 @@ It used to re-centre on every write, which kept a polygon's origin its own centr
 Fitting a collision outline to the mesh it is being fitted *to* moved the mesh, which is the one thing that edit may not do.
 What the re-centring was for is still true and is answered from the outline instead: `shapeCentre` gives a shape's own centre of area (a polygon's centroid, a curve's stroke, a rect's or circle's origin), and `bodyCentroid` weighs the body's pieces at those points, so the point the editor turns a body about is still the one `mountPieces` mounts it at.
 
+## Conveyor belts
+
+`+ Belt` (beside `+ Circle`) lays a **conveyor**: press where the first wheel goes and drag to the second, or click to drop a two-wheel belt 1.5 m long running right at 1 m/s on 10 cm wheels under a 5 cm band (see [**Conveyor belts**](conveyors.md)).
+The item's own position IS wheel 0, so the ordinary move gesture places the belt and the rotate knob turns it about that wheel.
+
+- Every wheel has a **square grip** at its centre, dragged like a path vertex; wheel 0's is the item's position, so pressing it picks the wheel and moves the whole belt.
+- Every wheel has a **round grip** on its rim, facing away from the middle of the belt, the grip a curve's tangent wears, which drags that wheel's radius.
+- Every run has a **midpoint handle**, which inserts a wheel there - sized as the smaller of the run's two wheels and set so its band just touches the run, which changes nothing about the loop - and drags it straight away, the path's insert gesture.
+- **Alt+click** on a wheel's square removes it, never below two; removing wheel 0 moves the item onto the wheel that takes its place, so the belt stays put.
+- Pressing a wheel's square or its radius grip **picks** it (the square fills), and the panel shows that wheel's `r`.
+
+Every one of those, the inspector's fields and the gizmo's scale go through `setBelt`, which **refuses wheels that make no belt** - a wheel inside the hull the others make, a disc inside another, a radius or a thickness under a pixel - asking the build's own loop, so the grip stalls at the last belt, as a polygon's corner stalls at the last simple loop, because the editor rebuilds the level from the model on every edit and a belt the build refuses would take the preview down mid-drag.
+The panel has `thickness` (the band's depth in the plane, px as every length there), `width` (how wide the band is across the pulleys: it writes the geometry twin's `depth`), the twin's `texture` (`color` is the flat fill, which keeps the cleats), `speed m/s` (signed: positive runs the loop clockwise on screen), the picked wheel's `r`, and two readouts, the loop's **perimeter** and one **lap** of its surface, `P / |speed|`; a belt with no geometry twin says `Add geometry` gives it one instead of `width` and `texture`.
+The outline is `outlineOfData`'s, the one the game draws - the band, hollow inside - with the tread ticks STANDING STILL (nothing runs in the editor) and a small arrowhead over the middle of the longest run saying which way it runs, which a still tread cannot.
+The wheels are drawn as editor marks the game does not draw: a thin circle at each wheel's own radius and a dot at its centre.
+A click in the hollow between the wheels passes through the belt to whatever an author has put inside it; the band and the wheels pick it, which is where it collides.
+A belt builds only on a static body that does not move, and that is a fact about the BODY: a kind change or a merge can break it after the belt is drawn.
+The editor does not throw on it - the title says `DOES NOT BUILD:` and the build's own message, the 3D view keeps the last scene that built, and ▶ Test refuses to start - so the author sees what to undo.
+The file still saves, and the game refuses it as loudly as the build does.
+
 ## Picking corners out of a shape
 
 **Corners are selectable in their own right** (`selectedVerts` in `editor.ts`), which is a second level of selection nested inside the item one: a polygon is the item whose parts are separately editable, so once the shape itself is picked, a click, a rubber band, a Delete, a nudge and a drag can all just as well mean its corners.
@@ -265,6 +285,11 @@ Both lenses are driven from the same visible height, so the gameplay plane is fr
 The two cameras both live on `Scene3D` for the life of the scene rather than one being rebuilt on the toggle, since the gizmo raycasts against whichever is current and wants something stable to be handed.
 A **▶ Test is always perspective**, whatever the toggle says: the point of a test is that the framing is the player's, and the player has no lens button.
 
+The toggle is the editor's view of the whole scene.
+The `lens` picker on the geometry panel is a different thing: it is authored, saved and seen by the player, and it draws one object orthographically inside the perspective frame (see [Per-object projection](render3d.md#per-object-projection)).
+An orthographic object's plane handles land on its drawn face at any `off z`, since the overlay is itself an orthographic projection of the plane.
+The transform gizmo does not follow it yet: the gizmo is drawn in perspective at the object's real position, so off the plane it is not over the object.
+
 ## The transform gizmo
 
 A single selected object or body carries the standard **red/green/blue handles** in the 3D scene - arrows to move, rings to turn, boxes to size - through three.js's own `TransformControls` (`editor/gizmo.ts`).
@@ -359,6 +384,27 @@ Every gap, ledge and shelf in the file is a decision about a 12 cm iron ball, an
 It is built here from the model rather than borrowed from a `BallLevel`, at the radius it is actually PLAYED at (`BallLevel.BALL_RADIUS_SCALE` over the authored spawn radius, which is the grapple avatar's), and nothing steps it: with no chain thrown there is nothing else of the assembly to draw, so what stands in the scene is the sphere and its mounting loop in the pose a run opens in.
 The spawn marker on the overlay gained the same size as a second, fainter ring outside its own: the inner one is the marker - the thing dragged to move the spawn - and the outer one is the ball's footprint, which lands on the drawn sphere's silhouette in a 3D view and is the only thing that says the ball's size in the 2D one.
 A geometry object's panel authors what it is drawn as (**kind** - `primitive` or `mesh` - plus mesh, depth, bevel, texture) alongside the placement and size every object has, since a geometry object states its own form and those fields are what say it.
+
+**Generated rocks** add two fields and one button (see [rocks](rocks.md#reference-and-actual-outlines)).
+When a selected primitive wears a rock texture (`ROCK_TEXTURES`), **taper start** and **taper angle** take the place of **bevel**: where the rock's taper begins, in pixels in front of the object's plane, and how far its surface leans in, in degrees clamped to 0..90.
+The 3D view draws a rock as the solid its generated mesh fills, the outline straight through to the start and then the tapered roof (`taperOutline` in `render3d/extrude.ts`), so the taper is read off the picture as it is set; the bevel is not drawn on a rock, because the generator does not read it.
+**bevel** stays for everything else, and a mixed selection offers both.
+Both default to 0 and are written to the file only when nonzero, so a level that never touches them saves byte-identically.
+They only change the generated rock, which needs `bun run assets:rocks <level>` to see; the editor's own 3D view still draws the flat extrusion.
+
+**Fit collision to rock** sits under **match collision** on a rock's geometry object panel (a single object selected) and beside **Origin to COM** on its body panel.
+It is offered on any body `rockBodies` counts as rock; whether it can work is only known once the file is read, so the refusals are said when it is pressed, as a toast.
+It reads `/rocks/<level>.glb` (the file this level saves to, or `?rocks=NAME` on the editor's URL), finds the body's node, and refuses with "rock is stale, regenerate" when the node's hash is not the hash of the body as the editor holds it now.
+Otherwise it projects every triangle of the node straight along z, traces the silhouette (rasterised at 1 cm, simplified at 2 cm, holes ignored, the largest blob kept), and writes it as the body's collision object's outline, a `poly` in that object's own frame; the object keeps its placement and every other field.
+The geometry object's **match collision** is switched off in the same edit, so the reference outline the rock was generated from stays as authored; it is one undo step.
+Its limits: a body with exactly one rock geometry object and exactly one collision object (anything else is refused, naming the counts), a collision object that is an outline rather than a curve or a belt, and a missing file (404) is a message and no change.
+The projection has no depth cut: a shard far behind the gameplay plane widens the outline as much as one standing on it, and a fragment the raster does not join to the main blob is dropped.
+
+**rock seed** sits in the body properties (the body panel, and the panel for several bodies) when every selected body is one `rockBodies` counts as rock, below the physics fields and above the fill.
+It is the body's `rockSeed`: an integer, step 1, never below 0, written to the file only when nonzero, and one undo step per edit like every other field.
+It is held on every member of the body rather than only the collision lead, because a rock body may be geometry alone.
+**Next seed** below it adds 1 to each selected body's seed, for the loop it exists for: regenerate, look, bump.
+Changing the seed marks the rock stale, so play shows the extrusion until `bun run assets:rocks <level>` is run again.
 `mesh` gets a badge on the canvas in the **2D view**, being the one kind whose outline is not what the player sees; a primitive is drawn as exactly the shape on screen, so a badge on it would be a mark on almost every object saying nothing.
 In a 3D view the prop itself is drawn, so the badge would be a mark pointing at the thing it is standing on, and it is not drawn (see **Geometry is picked by its model**).
 

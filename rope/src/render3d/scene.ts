@@ -37,17 +37,23 @@ import { VineLayer } from "./vineVisual";
 import type { ChainRetract } from "../render/chainRetract";
 import { configureRenderer, Environment } from "./environment";
 import { LightRig } from "./lights";
+import { cloneWithPatches, isOrthographicMaterial, orthoFramedZ } from "./projection";
 import {
+  CAMERA_FAR,
+  DEFAULT_LENS,
   FOV_Y_DEG,
+  lensOf,
   NO_ORBIT,
   placeAt,
   syncCamera,
   VIEW_ASPECT,
   type CameraOrbit,
+  type SceneLens,
   type ViewCamera,
   type ViewProjection,
 } from "./space";
 import { updateWater, waterTextures } from "./water";
+import { beltRenderTime } from "../render/beltTread";
 
 // What the 3D renderer needs of a level. Deliberately structural rather than
 // `Level | BallLevel`: the editor drives one of these from a model that is
@@ -66,6 +72,10 @@ export interface Scene3DLevel {
   // loop and its chain are drawn by their own modules; a grapple level has none
   // and stays on the 2D path for the avatar (see "Explicitly out of scope").
   readonly ball?: BallPlayer;
+  // How many steps the sim has taken, which is the clock a conveyor's tread
+  // runs on (`beltRenderTime`). Absent = a host with no running sim (the
+  // editor's preview), whose belts stand still.
+  readonly frame?: number;
 }
 
 // Bodies the 3D scene deliberately does not extrude, because something else
@@ -106,8 +116,10 @@ export class Scene3D {
   // scene rather than one being rebuilt on a toggle: a camera is a transform and
   // a frustum, both rewritten from the 2D camera every frame, so keeping the
   // pair costs nothing and leaves the gizmo something stable to be attached to.
-  private readonly perspective = new THREE.PerspectiveCamera(FOV_Y_DEG, VIEW_ASPECT, 0.1, 400);
-  private readonly orthographic = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 400);
+  private readonly perspective = new THREE.PerspectiveCamera(FOV_Y_DEG, VIEW_ASPECT, 0.1, CAMERA_FAR);
+  private readonly orthographic = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, CAMERA_FAR);
+  // The lens and z offset the current level asked for (`LevelCameraData`).
+  private lens: SceneLens = DEFAULT_LENS;
   // The game never touches this: it is played through the perspective camera the
   // levels are framed against, and only the editor offers the other.
   private projection: ViewProjection = "perspective";
@@ -145,6 +157,7 @@ export class Scene3D {
   // Picking and highlighting (editor only; the game never clicks the scene).
   private readonly raycaster = new THREE.Raycaster();
   private readonly pointer = new THREE.Vector2();
+  private readonly forward = new THREE.Vector3();
   // What each highlighted tag is painted with, and the materials the meshes
   // under it were wearing before. The set is diffed rather than rebuilt, so a
   // prop that arrives after the selection was made is picked up on the next
@@ -216,6 +229,7 @@ export class Scene3D {
   setLevel(level: Scene3DLevel): void {
     this.clearLevel();
     this.setEnvironment(level.visualSource.data.environment);
+    this.lens = lensOf(level.visualSource.data.camera);
     // Authored bodies FIRST, and in authored order, because the light budgets
     // are spent in that order: a level whose lamps are drawn in a different
     // order from the one it was authored in is a level whose lamps go out
@@ -684,12 +698,34 @@ export class Scene3D {
   //
   // Duplicates are dropped rather than repeated: a prop is many meshes and one
   // thing, and a caller walking the list wants the next OBJECT down.
+  //
+  // An object drawn through the orthographic lens (`GeometryObjectData.projection`)
+  // is on screen where the ORTHOGRAPHIC camera puts it, so it is picked by that
+  // camera's ray - both cameras are synced to the same view every frame - and
+  // the two lists are merged by depth along the view axis, the quantity the
+  // depth buffer sorted them by when they were drawn.
   pick(x: number, y: number): unknown[] {
     this.pointer.set(x, y);
-    this.raycaster.setFromCamera(this.pointer, this.camera);
+    const split = this.camera === this.perspective;
+    const hits: { object: THREE.Object3D; depth: number }[] = [];
+    const cast = (cam: ViewCamera, ortho: boolean): void => {
+      cam.getWorldDirection(this.forward);
+      this.raycaster.setFromCamera(this.pointer, cam);
+      for (const hit of this.raycaster.intersectObjects(this.scene.children, true)) {
+        const mesh = hit.object as THREE.Mesh;
+        const drawnOrtho = mesh.isMesh && isOrthographicMaterial(mesh.material);
+        // Under the orthographic scene camera there is one ray, and every
+        // object is answered by it.
+        if (split && drawnOrtho !== ortho) continue;
+        hits.push({ object: hit.object, depth: this.forward.dot(hit.point.sub(cam.position)) });
+      }
+    };
+    cast(this.camera, false);
+    if (split) cast(this.orthographic, true);
+    hits.sort((a, b) => a.depth - b.depth);
     const out: unknown[] = [];
     const seen = new Set<unknown>();
-    for (const hit of this.raycaster.intersectObjects(this.scene.children, true)) {
+    for (const hit of hits) {
       const tag = pickTagOf(hit.object);
       if (tag === undefined || seen.has(tag)) continue;
       seen.add(tag);
@@ -745,7 +781,11 @@ export class Scene3D {
     const key = `${color}|${src.uuid}`;
     const existing = this.highlightMaterials.get(key);
     if (existing) return existing;
-    const clone = src.clone();
+    // Keeping the source's shader patches: a plain clone drops a patched
+    // surface's shader (water, rocks) and an orthographic object's lens, so
+    // selecting a thing would change what it looks like and, for an ortho one,
+    // where it is drawn.
+    const clone = cloneWithPatches(src);
     const std = clone as THREE.MeshStandardMaterial;
     if (std.isMeshStandardMaterial) {
       std.emissive = new THREE.Color(color);
@@ -790,7 +830,19 @@ export class Scene3D {
       this.renderer.setViewport(0, 0, this.size.x, this.size.y);
       this.renderer.setScissorTest(false);
     }
-    syncCamera(this.camera, camera, FOV_Y_DEG, orbit);
+    syncCamera(this.camera, camera, this.lens, orbit);
+    // The lens not being drawn through is kept on the same view too: an object
+    // drawn orthographically inside a perspective frame is where the
+    // orthographic camera would put it, and `pick` asks that camera about it.
+    syncCamera(
+      this.camera === this.perspective ? this.orthographic : this.perspective,
+      camera,
+      this.lens,
+      orbit,
+    );
+    // Written every frame rather than at `setLevel`, because it is shared by
+    // every scene on the page (see `orthoFramedZ`).
+    orthoFramedZ.value = this.lens.zOffset;
     this.env.follow(camera);
     const clock = this.pinnedClock ?? performance.now() / 1000;
     this.lights.update(clock);
@@ -828,7 +880,14 @@ export class Scene3D {
     for (const area of level.world.areas) stamp(area);
     if (seen !== this.bodies.size) this.dropStaleBodies();
 
-    for (const visual of this.bodies.values()) visual.sync(alpha);
+    // The SIM clock, not the wall clock above: a conveyor's tread shows how far
+    // the belt has run, so a replay shows the same belt at the same frame and a
+    // paused game shows it standing.
+    const treadTime = beltRenderTime(level.frame ?? 0, alpha);
+    for (const visual of this.bodies.values()) visual.sync(alpha, treadTime);
+    // Standing bodies built no engine body and have no pose to follow, but a
+    // drawn-only conveyor still runs its tread.
+    for (const visual of this.standing) visual.sync(alpha, treadTime);
 
     this.chains.sync(level, alpha, retract);
     this.vines.sync(level.vines ?? NO_VINES, alpha);

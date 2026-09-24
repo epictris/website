@@ -60,6 +60,69 @@ export interface RailCurve {
   readonly pieceAt: readonly number[];
 }
 
+// A CONVEYOR BELT's loop: a band of `thickness` wrapped round the OUTSIDE of N
+// wheels, in the BODY's local frame, parameterised by arc length along its
+// outer (running) surface.
+//
+// The surface is the convex hull of the discs of radius `r_i + thickness` about
+// the wheel centres - a taut band round pins - so it alternates an ARC on a
+// wheel with a straight RUN along the external tangent to the next wheel, and
+// every wheel is on it (a wheel inside the hull is an idler the build refuses).
+//
+// It is what an authored `belt` shape leaves behind once it has been built into
+// the pieces the engine collides as (one disc per wheel and one thin quad per
+// run, nothing between the wheels), and every one of those pieces holds the
+// same object (`CollisionShape2D.belt`), exactly as the pieces of a rail share
+// one `RailCurve`. Declared here rather than in `lib/belt.ts`, where every
+// function over it lives, because nothing in `engine/` may depend on `lib/`.
+//
+// Increasing `s` turns the angle about each wheel UP, which in the y-down frame
+// is clockwise on screen: a two-wheel belt drawn left to right has its top run
+// going toward the second wheel. That is the winding every polygon here has
+// (consecutive edge cross-products positive), so the outward normal at `s` is
+// the tangent's Godot orthogonal, as it is for a polygon's edge.
+export interface BeltLoop {
+  // The wheels in AUTHORED order: centres and the WHEELS' own radii (the band's
+  // inner surface), which is what the renderers draw the band's inside from.
+  readonly wheels: readonly { readonly c: Vec2; readonly r: number }[];
+  // The band's depth in the plane: its outer surface stands this far off each
+  // wheel, and every arc's radius below is the wheel's plus this.
+  readonly thickness: number;
+  // The segments in loop order, alternating arc and run, starting with the arc
+  // on wheel 0 (so `s = 0` is where the band arrives on the first wheel).
+  readonly segments: readonly BeltSegment[];
+  // cum[i] = arc length at the start of segment i; cum[segments.length] = the
+  // perimeter.
+  readonly cum: readonly number[];
+  readonly total: number;
+  // `pieceAt[i]` is the mount index of the piece under segment `i` (a wheel's
+  // disc on an arc, that run's quad on a run), so where a point on the loop is
+  // answers which shape it is on.
+  readonly pieceAt: readonly number[];
+}
+
+// One segment of a belt's outer surface. An arc sweeps a positive angle from
+// `theta` about its wheel at the OUTER radius; a run goes straight from `from`
+// to `to` along `dir`, with `normal` the outward normal (the Godot orthogonal
+// of `dir`).
+export type BeltSegment =
+  | {
+      readonly kind: "arc";
+      readonly wheel: number;
+      readonly centre: Vec2;
+      readonly radius: number;
+      readonly theta: number;
+      readonly sweep: number;
+    }
+  | {
+      readonly kind: "run";
+      readonly from: Vec2;
+      readonly to: Vec2;
+      readonly dir: Vec2;
+      readonly normal: Vec2;
+      readonly length: number;
+    };
+
 export function circleShape(radius: number): Shape {
   return { kind: "circle", radius };
 }

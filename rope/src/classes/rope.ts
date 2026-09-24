@@ -47,6 +47,7 @@ import {
 import { MANACLE_BORE } from "../lib/manacle";
 import { RopeEmbed, slipDistance, type EmbedState } from "../lib/viscous";
 import { RopeVineClamp, type VineClampState } from "../lib/vineClamp";
+import { RopeRide } from "../lib/belt";
 import { Player } from "./player";
 import { Hook } from "./hook";
 import { PhaseTrace, type SolveBodyTerm } from "../engine/phaseTrace";
@@ -503,6 +504,13 @@ export class Rope {
   // settled at different points in the frame.
   private seatLooked = false;
 
+  // The owner's frame number and step, for a hook that bites a running belt:
+  // the ride it starts is a pure function of the frame from there (see
+  // `RopeRide`). The grapple's `Player` hands its own, which `Level` stamps
+  // every frame; a rope with none (a scene chain, which has no hook) anchors
+  // to a belt as to any static.
+  clock: { readonly frame: number; readonly dt: number } | null = null;
+
   // Wires hook attachment callbacks; called on construction and after snapshot restore.
   registerHookCallbacks(): void {
     const endObj = this.end.contact.obj;
@@ -510,17 +518,48 @@ export class Rope {
       endObj.registerAttachmentCallback((body, point) => {
         // `RopeContact.at`: the hook anchors on whichever piece of the body it
         // hit, and the wrap resolvers walk the piece the contact names.
-        this.end = new RopeAttachment(RopeContact.at(body, point));
+        this.end = this.attachmentAt(body, point);
         this.maxRopeLength = Mathf.max(this.maxRopeLength, this.calculateRopePathLength());
       });
     }
     const startObj = this.start.contact.obj;
     if (startObj instanceof Hook) {
       startObj.registerAttachmentCallback((body, point) => {
-        this.start = new RopeAttachment(RopeContact.at(body, point));
+        this.start = this.attachmentAt(body, point);
         this.maxRopeLength = Mathf.max(this.maxRopeLength, this.calculateRopePathLength());
       });
     }
+  }
+
+  // What the grapple's hook anchors as where it strikes `body` at `point`: a
+  // ride on a running belt, carried round the loop with the surface (no cuff
+  // and no standoff - the hook is a point), else a plain attachment.
+  private attachmentAt(body: PhysicsBody2D, point: Vec2): RopeAttachment {
+    const contact = RopeContact.at(body, point);
+    const piece = contact.shape;
+    const clock = this.clock;
+    if (clock !== null && piece.belt !== null && piece.beltSpeed !== 0) {
+      return RopeRide.at(body, piece, point, null, clock.frame, clock.dt, 0);
+    }
+    return new RopeAttachment(contact);
+  }
+
+  // Carry an end riding a belt to where `frame` has it (`RopeRide.carry`).
+  // Called by the level after the movers and belts and before anything
+  // regenerates this rope's path, so a continuous rope's sweep sees the
+  // carry as the end's motion since the last regeneration and catches a body
+  // it carries the chain across.
+  carryRides(frame: number): void {
+    let moved = false;
+    if (this.start instanceof RopeRide) {
+      this.start.carry(frame);
+      moved = true;
+    }
+    if (this.end instanceof RopeRide) {
+      this.end.carry(frame);
+      moved = true;
+    }
+    if (moved) this.markPathChanged();
   }
 
   getSpans(): RopePath[] {
@@ -1105,7 +1144,7 @@ export class Rope {
     let openingRate = 0;
     for (const pathObject of this.generatePathObjects()) {
       const point = Rope.contactPointOf(pathObject);
-      const velocity = entering?.get(pathObject.body) ?? Rope.velocityAt(pathObject.body, point);
+      const velocity = entering?.get(pathObject.body) ?? this.nodeVelocity(pathObject, point);
       // `resolveCorrectionDir` points the way the correction hauls this body,
       // which is the way that SHORTENS the path — so a body moving along it is
       // closing the constraint and one moving against it is opening it.
@@ -1305,6 +1344,25 @@ export class Rope {
     if (pathObject instanceof PathStart) return pathObject.next.start;
     if (pathObject instanceof PathEnd) return pathObject.previous.end;
     return (pathObject as PathWrap).wrapStartPosition;
+  }
+
+  // Velocity of the path point `pathObject` stands for. A rope node is a
+  // material point of its body's FRAME - a wrap sits on a corner, a plain
+  // anchor where it bit - and the frame's velocity at it is the body's
+  // `velocityAtPoint` for every body but a running conveyor, whose frame is
+  // still while its surface runs: a node on one stands still, and the
+  // surface speed it reported was an opening rate the path did not have (a
+  // wrap on a belt's tangent seam read up to 0.97 m/s of it into a taut
+  // chain's `creditBound`, `ride-round-roller`'s scene). The exception is an
+  // end RIDING the belt, which is carried with the surface and answers the
+  // carry itself (`RopeRide.velocity`).
+  private nodeVelocity(pathObject: PathObject, point: Vec2): Vec2 {
+    const node =
+      pathObject instanceof PathEnd ? this.end : pathObject instanceof PathStart ? this.start : null;
+    if (node instanceof RopeRide) return node.velocity();
+    const body = pathObject.body;
+    if (body.surfaceMoves && !body.isMobile) return Vec2.ZERO;
+    return Rope.velocityAt(body, point);
   }
 
   // Velocity of the point of `body` the rope acts through. Rotation counts —
@@ -1740,9 +1798,17 @@ export class Rope {
     this.wraps = newNodes;
   }
 
+  // A span between two nodes on the same piece is skipped because neither end
+  // moves along that piece: it is a stretch of chain lying on the surface
+  // between two points of it. An end RIDING a belt does move along it - round
+  // a roller, away from the wrap the chain took on that roller as it came over
+  // - and skipped, the chord from the wrap to the carried anchor deepened
+  // through the roller for as long as the anchor was on the arc (3-4 cm of
+  // `chain-clip` for twenty frames, `ride-round-roller`). Tested, the start
+  // resolver bends it round the roller to the tangent from the anchor.
   private shouldIgnorePathCollisions(span: RopePath): boolean {
     return (
-      span.from.contact.shape === span.to.contact.shape ||
+      (span.from.contact.shape === span.to.contact.shape && !(span.to instanceof RopeRide)) ||
       span.span.start.distanceTo(span.span.end) < PX
     );
   }

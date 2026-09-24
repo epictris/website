@@ -26,6 +26,27 @@ threeCam.position = (camera.position.x, -camera.position.y, dist)
 So camera regions, blends and `viewportScale` keep working untouched, and props off the plane parallax naturally as the view zooms.
 The FOV is a narrow ~34° on purpose: the gameplay plane reads almost orthographic, so a wall at the top of the frame is barely foreshortened and the outline a level was authored against is still what the player sees, while off-plane layers still move at their own rate.
 
+### A level's lens
+
+A level may change the camera with a top-level `camera` block (`LevelCameraData`), edited in the editor's **3D camera** panel under the environment.
+It sits beside the environment block rather than inside it because `zOffset` is a length, and the environment block holds none by design.
+
+- `focalLength` is in millimetres, as a 35 mm-equivalent lens: `fovY = 2 atan(12 / f)`.
+  Absent is the 34° lens (about 39.3 mm).
+  It is not scaled between pixels and metres.
+  The dolly above still sets the camera's distance from the zoom, so **the gameplay plane is framed identically at any focal length**, and every overlay stays on it.
+  Only how depth reads changes: longer flattens toward orthographic, shorter exaggerates parallax.
+- `zOffset` (scene pixels on disk, metres in the sim) moves the whole placement along z.
+  The camera stands that much further back (positive) or nearer, looks at and orbits about the point that far off the plane, and so **frames the plane at `z = zOffset` exactly as the 2D view frames the gameplay plane**.
+  Away from 0, the gameplay plane itself is drawn smaller (positive) or larger (negative) than the overlay's reticle, glyphs and handles describing it.
+  That drift is the chosen trade: the zoom and the camera regions still decide how much world is on screen, and nothing about the 2D camera is re-derived from the 3D one.
+
+Both resolve to one `SceneLens` (`lensOf` in `space.ts`), which `syncCamera` takes in place of the old bare field of view.
+The far plane is pushed out, never in, when a long lens stands the camera far back, so no default camera changes its depth range.
+Fog is measured from the camera, so moving the camera changes how much fog the gameplay plane takes on.
+Orthographic objects (see [Per-object projection](#per-object-projection)) scale to the framed plane, which is the scale the orthographic camera and the overlay use.
+`cli render3d`'s `lens:` cases assert all of this: the focal-length conversion, an 85 mm lens still framing the plane to a hundredth of a pixel, the z offset moving the correspondence to its own plane (and off z = 0), a 2 m lens not clipping the plane, and the block's px/m and editor round trips.
+
 The two projections agreeing is **asserted, not eyeballed**: `cli render3d` runs three.js's own projection against the 2D transform at five camera placements and through a pan, at the corners of the frame where a wrong dolly distance shows first, and holds them to a hundredth of a view pixel.
 `?probe3d=1` is the same claim made visible - a known world rect drawn as a plane in the scene and as an outline on the overlay, which must coincide at any zoom, position or mid-blend frame.
 
@@ -132,6 +153,52 @@ Every length goes through `scaleObject` both ways.
 Forgetting one is silent (the editor rewrites the whole file every 750 ms, so a dropped field is gone from disk before anyone notices it was read), which is why `cli render3d` asserts both round trips: the format's px → m → px, and the editor's `modelFromDisk`/`modelToDisk`, which goes through a different shape entirely. Both are compared over **flattened** placements rather than bytes, because a body's transform and its objects' placements are two halves of one answer and the editor legitimately re-origins a body onto its first object when it saves; a byte comparison would read that as a lost field.
 
 **The retired flat form is still an input**, and permanently: the Godot extractor writes it, so `levelData.ts` arrives that way. `normalizeLevelData` folds every retired form - the flat entries, the `impermeable` kind, the `backgrounds` list and the top-level `lights` list - into this one, inside `scaleLevelData`, which is the one gate a level cannot reach the sim or the editor without passing through. It is **bit-identical by construction**: a migrated body's own origin is (0, 0, 0) and its objects keep the world placements the flat entries carried, so the centre-of-mass arithmetic reads exactly the numbers it read before, and a group's body is emitted where its first member sat so `World.add` stamps the same build index. The whole committed bundle corpus replays byte-for-byte across the change, which is the test that this is a re-shaping and not a rewrite.
+
+## Per-object projection
+
+A geometry object may be drawn through an **orthographic** lens inside a scene drawn through the perspective one: `GeometryObjectData.projection`, `"perspective"` when absent, and the `lens` picker on the editor's geometry panel.
+An orthographic object has no perspective divide, so it keeps its size at every depth, shows none of its side faces head on, and does not parallax as the camera pans.
+The two lenses agree exactly on the gameplay plane, so an object at `z = 0` only looks different where its extrusion leaves the plane.
+
+It is **not a second camera and a second pass**.
+A perspective depth buffer is hyperbolic and an orthographic one is linear, so two passes cannot sort against each other honestly, and every light, shadow and fog term would have to be kept in step across both.
+Instead the object is drawn through the same camera, wearing an orthographic twin of its material (`render3d/projection.ts`) whose vertex shader changes one line: before the projection matrix, the view-space `xy` is scaled by `-z_view / plane`, where `plane` is the distance along the view axis to the framed plane (`z = 0`, or the level's camera `zOffset`, passed in the shared `orthoFramedZ` uniform that `Scene3D.render` writes before each draw).
+That cancels the perspective divide, so each vertex lands exactly where the editor's orthographic camera would put it.
+The depth it writes is still the true perspective depth, so it sorts against every other object by where it really is.
+
+Everything except the screen position is still the object's real position: `mvPosition` itself is untouched, so lighting, the shadow lookup and fog read the authored placement.
+The shadow pass uses three's own depth materials, which are never patched, so **an orthographic object casts the shadow its real position throws**, and that shadow is not under what is drawn if the object sits off the plane.
+Under the editor's orthographic camera the patch does nothing (it tests three's `isOrthographic`), because the whole scene is already orthographic.
+
+The rest follows from that:
+
+- Twins are cached one per source material and share its program cache key with `|ortho` appended, so a hundred orthographic bricks compile one program.
+- Orthographic meshes are not frustum-culled, because culling tests the true bounds against the perspective frustum, and in front of the plane that frustum is narrower than the one the mesh is drawn through.
+- `Scene3D.pick` casts a second ray through the orthographic camera, which is synced to the same view every frame, for objects drawn orthographically, and merges the hits by view depth.
+- `cloneWithPatches` is the clone that keeps `onBeforeCompile` and `customProgramCacheKey`, which three's own `clone()` drops.
+  The editor's selection highlight uses it, so a selected orthographic object stays where it is drawn.
+  It also fixes a highlighted object losing its shader patches (water, rocks), which it did before.
+
+`cli render3d`'s `format:` and `render:` projection cases assert the field survives the px-to-m gate and an editor save, that the twin is shared and keyed apart, that its hook really rewrites three's `project_vertex` chunk (a renamed chunk would be a `replace` matching nothing, and the object would silently draw in perspective), and that the highlight keeps it.
+What they cannot see is the picture, so the shader was checked with a `cli shot --3d` of a probe level: pairs of boxes at z = -6, -2, 0 and +1.5 m, one of each lens.
+
+## Conveyor belts
+
+A geometry object whose shape is a `belt` (see [**Conveyor belts**](conveyors.md)) draws its BAND as its own geometry (`BeltRing`, `render3d/beltTread.ts`), not an extruded outline: the extruder's side-wall UVs are anchored in the object's own x and y so a wall's texture meets the cap's, which on a loop runs u along the runs and turns it into the depth axis wherever the outline goes vertical, and a belt's running surface wants u by ARC LENGTH.
+The ring is an outer wall on the loop, an inner wall `thickness` inside it, and front and back caps (the band's edge) at `±depth / 2`, the object's `depth` being the band's width across the pulleys; each face has its own normals, so the edges are creases and no two faces share a plane.
+Its UVs are metres, as the extruder's are: `u` is arc length along the outer surface at the rate that makes the surface's repeat (`tileMetres`) the nearest length going round a whole number of times, so there is no seam where `s` wraps and nothing stretches round a wheel, and the caps and the inner wall carry the same `u` as the surface they stand on; `v` runs on round the cross-section, continuous over every rim but the back of the outer wall.
+Inside the band is the hollow: nothing is drawn at the wheels, which an author dresses with props of their own.
+
+What says the belt runs is its surface.
+A textured band **scrolls**: every frame its `u` is `(s - speed · t) · rate` with `t` the SIM clock, `(frame - 1 + alpha) / 60` (`beltRenderTime`, the instant the bodies are interpolated to), so a replay shows the same belt at the same frame and a paused game shows it standing.
+The scroll is written into the ring's own UV buffer rather than a map's `offset`, because materials are shared through the cache in `assets.ts` and an authored set's maps are swapped into that shared material as they arrive; a belt whose phase has not changed skips the write.
+An UNTEXTURED band - the flat fill, `texture: "color"` - has nothing to scroll and keeps its **cleats**: a ring of thin pale slats (one `InstancedMesh` per belt) set 4 mm inside the surface (or a fifth of the band, if less), through the whole width and 4 mm out past both caps, so what shows is a slat end on the rim of the front cap, and a slat never reaches the band's inner face.
+Both run at the geometry object's own `speed`; `Scene3DLevel.frame` is how the clock reaches the scene, and a host with none (the editor's preview) draws the belts still.
+Cleat placement allocates nothing (`beltFrameAt` is `beltPointAt`/`beltTangentAt` written into a scratch record, and `cli render3d` holds the two to agree).
+`cli render3d`'s `belt:` cases hold the ring's walls, caps and normals against the loop, `u` against arc length with a whole number of repeats, and the scroll's rate and sign; `cli shot --3d --frames` on `TEST_BELT` is the evidence for how it looks.
+
+The first cut drew the extruded loop and cleats only, rejecting a scrolled texture because the extruder's UVs could not carry one and because the side wall is seen nearly edge-on.
+The ring answers the first; the second turned out to matter less than it read, because the camera sees the front cap face on and the inner wall through the hollow, and both carry the moving `u`.
 
 ## Traps
 

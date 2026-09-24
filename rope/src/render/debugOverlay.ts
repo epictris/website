@@ -19,21 +19,18 @@ import type { Level } from "../level/level";
 import {
   activeCameraRules,
   cameraInfluences,
-  pathBandAxes,
   pathHasBand,
   pathLookahead,
   pathParamsAt,
   PATH_KEY_FIELDS,
-  pathRangeAxes,
   type HeldCamera,
-  pathReleaseAxes,
   regionBuffer,
   type CameraRule,
 } from "./cameraController";
 import { pointAtArcLength, projectOntoPolyline } from "../lib/path";
+import { pathCorridor } from "./pathCorridors";
 import {
   outlineOfData,
-  pathCorridorSweepInto,
   pathOutline,
   pathOutlineGrown,
   pathOutlineInset,
@@ -315,12 +312,10 @@ function drawCameraPath(
 
   // Each corridor's ellipse is resolved through the path's keys at every
   // sample, so a range that widens along the route is drawn widening.
-  ctx.beginPath();
-  pathCorridorSweepInto(ctx, ix, (s) => pathRangeAxes(pathParamsAt(rule, s)));
   ctx.strokeStyle = CAMERA_REGION;
   ctx.lineWidth = 1.5 * PX;
   ctx.setLineDash([6 * PX, 4 * PX]);
-  ctx.stroke();
+  ctx.stroke(pathCorridor(rule, "range"));
   ctx.setLineDash([]);
 
   // The polyline itself, solid and brighter than its corridor: it is the route,
@@ -353,18 +348,14 @@ function drawCameraPath(
   // the second does the rule itself let go - so a path that seems slow to hand
   // over has both of its reasons on screen.
   if (pathHasBand(rule)) {
-    ctx.beginPath();
-    pathCorridorSweepInto(ctx, ix, (s) => pathBandAxes(pathParamsAt(rule, s)));
     ctx.lineWidth = PX;
     ctx.setLineDash([3 * PX, 3 * PX]);
-    ctx.stroke();
+    ctx.stroke(pathCorridor(rule, "band"));
     ctx.setLineDash([]);
   }
-  ctx.beginPath();
-  pathCorridorSweepInto(ctx, ix, (s) => pathReleaseAxes(pathParamsAt(rule, s)));
   ctx.lineWidth = PX;
   ctx.setLineDash([2 * PX, 5 * PX]);
-  ctx.stroke();
+  ctx.stroke(pathCorridor(rule, "release"));
   ctx.setLineDash([]);
 
   // Where the player projects, and where the camera is therefore aimed. The

@@ -31,6 +31,7 @@ import {
 } from "./levelFormat";
 import { buildLevelBodies, type LevelVisualSource } from "./buildBodies";
 import type { MoverScript } from "./movers";
+import type { ConveyorBody } from "../lib/belt";
 import { collectDecor, type SceneDecor } from "./decor";
 import {
   buildVines,
@@ -128,6 +129,9 @@ export class BallLevel {
   // hand-written movers, so unlike `Level.movers` this list is exactly what the
   // level FILE asked for.
   readonly movers: Array<{ body: AnimatableBody2D; script: MoverScript }> = [];
+  // The conveyor belts the file authored (`lib/belt.ts`), whose running
+  // surfaces wake what rests on them every frame (see `physicsProcess`).
+  readonly belts: ConveyorBody[] = [];
   // Render-only: the metre-scaled level as built, and the engine object each
   // authored entry became. It is what lets the 3D renderer hand an authored
   // `visual` to the exact piece of the exact body it decorates (see
@@ -213,12 +217,6 @@ export class BallLevel {
 
   // Are the player's hands OFF the ball - because it is still rolling in, or
   // because the level is still playing back the arrival it opens on?
-  //
-  // The renderer asks so it can leave the aim reticle off the screen until the
-  // ball is the player's to aim (see `render/renderer.ts`): a cursor drawn over
-  // an opening it cannot steer is a control that looks broken. The input source
-  // asks so it can put the cursor back above the ball on the frame the level
-  // hands it over (see `BallInputSource.handOver`).
   get handsOff(): boolean {
     return this.entry !== null || this.arrival !== null;
   }
@@ -466,6 +464,7 @@ export class BallLevel {
       .filter((b): b is FinishLine => b instanceof FinishLine);
     this.bodies.push(...built.wrapBodies);
     this.movers.push(...built.movers);
+    this.belts.push(...built.belts);
     this.sceneChains = buildSceneChains(data, built);
     // Before the vines, so a vine hung from a lantern is built from where the
     // lantern comes to rest.
@@ -859,6 +858,27 @@ export class BallLevel {
         this.world.wakeTouching(m.body);
       }
     }
+    // A running belt wakes what rests on it EVERY frame, not only the frames
+    // it moved: its frame never moves while its surface always does, and a
+    // static is never a contact's leading side, so nothing else would notice
+    // it carrying a sleeping crate. A belt at speed 0 is scenery and wakes
+    // nothing.
+    for (const belt of this.belts) {
+      if (belt.running) this.world.wakeTouching(belt);
+    }
+    // A cuff riding a belt is carried to where this frame has it, beside the
+    // movers and BEFORE anything regenerates the chain's path: the continuous
+    // sweep measures the end's motion from where the last regeneration left
+    // it, so a carry made here is end motion it sweeps, and a post the belt
+    // carries the chain across is caught (`RopeRide`, docs/conveyors.md). The
+    // clock is what a hook biting a belt later in this frame starts from.
+    this.ball.clock.frame = this.frame;
+    this.ball.clock.dt = delta;
+    // A ride the geometry has held the ball against until the chain would be
+    // longer than any attach may make it is torn off first (see
+    // `tearOffOverdrawnRide`).
+    this.ball.tearOffOverdrawnRide();
+    this.ball.chain?.carryRides(this.frame);
 
     // Where the ball was facing before anything this frame turned it — the floor
     // the chain's unwind correction may walk its rotation back to, and no

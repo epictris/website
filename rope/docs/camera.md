@@ -168,7 +168,10 @@ The consequence to author around is that leaving that priority island drops to w
 ## The screen-edge guarantee
 
 Whatever rule is in force, the avatar may never enter the outer **`CAMERA_EDGE_MARGIN`** of the frame, on either axis.
-It is the one camera rule with no authored override, and deliberately: a level may frame the avatar however it likes, and none of those framings is allowed to be "off the bottom of the screen".
+How it behaves has no authored override, and deliberately: a level may frame the avatar however it likes, and none of those framings is allowed to be "off the bottom of the screen".
+Whether it applies has exactly one: a region authoring **`keepInFrame: false`** turns it off while that region is the dominant rule (`keepsInFrame`), for an opening shot the player falls *into* rather than one that drags the camera up to meet them.
+The dominant rule rather than any member, so the guarantee comes back where the framing hands over, and a path or the plain follow always keeps it; if the player leaves such a region while still off screen, the hard floor catches the camera up on that frame, which is the region drawn too small.
+`cli camera` asserts all three halves in `region-can-let-the-player-leave-the-frame`.
 At 0 the floor is the frame's own edge, so what it guarantees is that the avatar's *centre* is on screen.
 
 It is a clamp on **where the camera IS**, applied last in `update` and to the controller's own `pos` rather than to the target.
@@ -382,7 +385,7 @@ It draws **two** boxes, because the constraint has two boundaries: the inner one
 The avatar between them is the override working; the avatar hard against the outer one is the framing being asked for having run out of room, which is the thing to re-tune.
 It draws the **stick** in the same amber, as a dashed line right across the frame through the aim coordinate on each axis it is holding by more than a centimetre - the stick is a displacement on one axis rather than a point, and a camera that has stopped following because it is being held needs its own answer on screen, the keep-out box being absent on exactly those frames. It fades out with the stick rather than being dropped, so the line simply stops being there once the camera has returned.
 
-`CameraController.edgeClamp` turns it off, and the **editor's `edge clamp` checkbox is the only thing that ever does** - for ▶ Test alone.
+`CameraController.edgeClamp` turns it off everywhere, outranking every region, and the **editor's `edge clamp` checkbox is the only thing that ever does** - for ▶ Test alone.
 An author tuning a lock or a lookahead has to be able to see the framing that rule is actually ASKING for, and that question is unanswerable while the answer is being silently corrected.
 It is an instrument rather than a level property, so it lives on the controller and is written to no file; the game constructs its controller and never touches the switch.
 `cli camera` asserts both halves of it - the same walk held on screen with it on and not held with it off - since a toggle connected to nothing passes any test that only checks one side.

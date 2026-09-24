@@ -51,6 +51,11 @@ What that assumes is that the origin is somewhere on the prop at all, and an ass
 `metal-bars` arrived with its geometry 8.9 m from its own origin, which places as a prop that is most of a room away from where it was put - read as the prop having failed to load rather than as a pivot.
 The flag runs `gltf-transform center --pivot center` into a temp file the optimise then reads, and `center: true` goes in that prop's `MESH_ASSETS` entry beside its sha256: a centred prop and a prop modelled about its own centre are the same file, so without the record the raw cannot be re-optimised into the same asset.
 
+**A baked map with no margin has to be filled, not padded.**
+A GPU samples a filtered neighbourhood rather than a texel, so a map whose background outside the UV islands is a flat colour (a first delivery of the avatar's had it pure white, hard up against the island edge) mixes that colour into every seam: a crack at close range, and at play size - roughly mip 5 for a 30 px ball - pale bands down both sides of it.
+A dilation ring of any plausible width fixes the close-up and not the bands, because no margin survives the mip chain that is doing the mixing; what works is filling **every** background texel (a pull-push pyramid), after which no mip level can contain the flat colour.
+Check a delivered map for this before shipping it; the current `iron-ball` needs nothing, its maps (an equirect wrap for the ball, one for the loop) having no background at all.
+
 **A model PACK is one file and several manifest keys**, and `bun run assets:extract <pack.glb> <out.glb> <Node>=<prop-name> ...` is the step in front of the pipeline that makes one.
 A pack shares its materials, and a texture set is the overwhelming majority of a prop's bytes: the 24 rocks of `pbr-rock-cliffs-pack` are ~20 KB of geometry each and 370 KB of 1k maps they all have in common, so one file each is 9.4 MB of which 8.7 MB is the same three images written out 24 times - paid again on every download, and again in VRAM, each time a level scatters more than one of them.
 Extracted together they are one **624 KB** file, one fetch and one GPU upload however many of them a level uses.
@@ -99,6 +104,8 @@ So a new texture is:
 3. `bun run assets:paint "<set>" --publish`, and paste the hash and size it prints.
 
 An albedo's `cavity` is taken from the set's **own** `ao` map's raw and channel, so there is nothing to name twice; a set with no AO cannot ask for cracks.
+A set that must stay **photographic** leaves `paint` (and `strokes`) off every map, and `assets:paint` bakes it as a plain optimise.
+`seaside rock` and `quarry wall`, the detail tiles the generated rocks compose in their own material, were that until 2026-09-24; they now record `paint: { brush: 36 }` on every map and no strokes, since the rocks became stylised (see [**Rocks**](rocks.md#the-painted-tiles)).
 The older sets (the `rock-*` family, `moss`, `forest-floor`, `factory-brick`) predate the record and have no `raw`; `assets:paint` names them as not reproducible rather than guessing.
 A set may also be **generated** rather than photographed: `painted steel`, the avatar's oil strokes, is baked by `scripts/bake-strokes.ts` into `assets-src/painted-steel/` (deterministic, so the same script is the same bytes) and from there is an ordinary set with a `raw`, optimised, hashed and published like any other.
 
@@ -176,3 +183,6 @@ bun run replay assets                                        # check it
 just assets                                                  # on another machine
 gh release delete-asset assets rock.glb                      # change your mind
 ```
+
+Generated rock files (`public/rocks/`, see [rocks](rocks.md)) are not in the store yet.
+When they are, the shipping build passes `--no-debug-attributes`: the `_SHARD` and `_PROVENANCE` attributes the dev loop keeps cost about 5 bytes a vertex before compression and more in the vertices they split.

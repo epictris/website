@@ -1,6 +1,16 @@
 // The ball & chain avatar in 3D: a cast-iron sphere and the steel loop the chain
 // deploys through.
 //
+// Since the model landed (`BALL_MESH`) both of those are one MODELLED
+// assembly - a hammered iron ball with a thin forged loop at its pole - and
+// what this file builds from primitives is what stands in for it until the
+// file arrives. That stand-in is not scaffolding to delete: the avatar is on
+// screen from the first frame, the sim runs whether or not 700 KB has landed,
+// and a grey placeholder box where the player is would be a worse failure than
+// on any prop. So the sphere and torus below are built, drawn, and swapped out
+// in place - the one prop in this game whose fallback is a considered object
+// rather than a box.
+//
 // The sphere is what the 2D renderer's radial-sheen gradient was standing in
 // for. It is a real sphere with a real metal material, so the highlight is where
 // the sun actually is rather than baked at a fixed offset - which is the single
@@ -11,11 +21,13 @@
 // The loop is a material point on the rim, so it rides the ball's own rotation
 // rather than being placed from `renderLoopCenter` each frame: a child at the
 // loop's local offset under a root carrying the interpolated pose IS
-// `renderLoopCenter`, computed by the scene graph instead of by hand.
+// `renderLoopCenter`, computed by the scene graph instead of by hand. The model
+// gets this for free, and for the same reason: its ring is modelled at the pole,
+// so it is a material point of the same rotating root.
 
 import * as THREE from "three";
 import { BallPlayer } from "../classes/ballPlayer";
-import { IRON_SURFACE, surfaceFor } from "./assets";
+import { BALL_MESH, BALL_MESH_RADIUS, IRON_SURFACE, loadMesh, surfaceFor } from "./assets";
 import { orientTo, placeAt, threeY } from "./space";
 
 // How much thicker than the collision radius the mounting loop's ring is drawn.
@@ -48,35 +60,71 @@ export const FORGED = IRON_SURFACE;
 // from the same bar. The ball itself wears the set at its own tile.
 export const FORGED_SMALL = 5;
 
-// How dark, and how warm. The strokes are baked at the steel's own value (a
-// mid grey, a little cool, as the reference paints it), and this pulls the
-// assembly a shade darker and toward the warm: nearly white read pale and
-// cool in the game, and a warm grey is the reference's steel under a warm
-// room.
+// How light, and how warm. The strokes are baked at the steel's own value (a
+// mid grey, a little cool), and this barely darkens them and nudges them warm:
+// the links are metal, so this is their reflectance, and anything darker
+// turned them into black beads against a dark cave.
 //
 // It is NOT the authored-fill tint the surfaces rule keeps off authored sets
 // (see `TEXTURE_ASSETS`): that one is a level's flat colour leaking onto a
 // picture. This is the avatar's own material saying what shade of steel it is,
 // stated once here rather than baked into the shipped bytes, so it can be
 // changed by editing a constant instead of re-baking and re-publishing.
-const FORGED_TINT = "#b8ac9e";
+const FORGED_TINT = "#f2eadf";
 
 // The assembly's surface, at the ball's own scale or a small part's.
 export function forgedMetal(tileScale?: number): THREE.MeshStandardMaterial {
   return surfaceFor({ texture: FORGED, tileScale, color: FORGED_TINT });
 }
 
+// How the model's own materials are worn, over its maps. Its packed roughness
+// reads a 0.49 mean and its albedo a 0.15 grey, which under plain PBR is a
+// dull, near-black iron: a metal's colour IS its reflection, so a 0.15 albedo
+// reflects 15% of the room, and in a dark cave the ball was a silhouette.
+// Half the roughness tightens the reflection into a shine; the albedo lifted
+// to a ~0.75 mean gives it something to shine with; and metalness just short
+// of 1 lets the lamps light it diffusely as well, which is what shows the
+// sphere's form and its hammer facets where the environment is dark. Applied
+// here rather than baked into the file, so the shine is tuned by editing a
+// constant instead of re-optimising and re-publishing the model.
+const MODEL_ROUGHNESS = 0.5;
+const MODEL_METALNESS = 0.85;
+const MODEL_ALBEDO_LIFT = 5;
+
+function shine(obj: THREE.Object3D): void {
+  obj.traverse((o) => {
+    const mesh = o as THREE.Mesh;
+    if (!mesh.isMesh) return;
+    for (const m of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
+      const std = m as THREE.MeshStandardMaterial;
+      if (!std.isMeshStandardMaterial) continue;
+      // `loadMesh` hands out clones that share the cached file's materials,
+      // so a second ball on the page must not lift the albedo twice.
+      if (std.userData.shined) continue;
+      std.userData.shined = true;
+      std.roughness = MODEL_ROUGHNESS;
+      std.metalness = MODEL_METALNESS;
+      std.color.multiplyScalar(MODEL_ALBEDO_LIFT);
+    }
+  });
+}
+
 export class BallVisual {
   readonly root = new THREE.Group();
   private readonly owned: THREE.BufferGeometry[] = [];
+  // The primitives standing in until the model lands, as one group so the swap
+  // is a remove rather than a search. Null once it has happened.
+  private stand: THREE.Group | null = new THREE.Group();
+  private disposed = false;
 
   constructor(private readonly ball: BallPlayer) {
+    const stand = this.stand as THREE.Group;
     const sphere = new THREE.SphereGeometry(ball.radius, 32, 24);
     this.owned.push(sphere);
     const body = new THREE.Mesh(sphere, forgedMetal());
     body.castShadow = true;
     body.receiveShadow = true;
-    this.root.add(body);
+    stand.add(body);
 
     // The loop, at the material point the chain leaves through: the top of the
     // ball at rotation 0, which in the ball's own frame is
@@ -86,7 +134,27 @@ export class BallVisual {
     const loop = new THREE.Mesh(torus, forgedMetal(FORGED_SMALL));
     loop.castShadow = true;
     loop.position.set(0, threeY(-(ball.radius + BallPlayer.LOOP_GAP)), 0);
-    this.root.add(loop);
+    stand.add(loop);
+    this.root.add(stand);
+
+    void loadMesh(BALL_MESH).then((obj) => {
+      if (!obj || this.disposed) return;
+      // The one number that has to be applied here rather than baked into the
+      // file, since a level may author a different radius than the model's.
+      obj.scale.multiplyScalar(ball.radius / BALL_MESH_RADIUS);
+      shine(obj);
+      obj.traverse((o) => {
+        const mesh = o as THREE.Mesh;
+        if (!mesh.isMesh) return;
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+      });
+      this.root.add(obj);
+      // Removed only once the model is in the scene, so there is never a frame
+      // with no avatar in it.
+      if (this.stand) this.root.remove(this.stand);
+      this.stand = null;
+    });
   }
 
   sync(alpha: number): void {
@@ -95,8 +163,10 @@ export class BallVisual {
   }
 
   dispose(): void {
+    this.disposed = true;
     for (const g of this.owned) g.dispose();
     this.owned.length = 0;
+    this.stand = null;
     this.root.clear();
   }
 }

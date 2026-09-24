@@ -20,6 +20,7 @@ import { Density, ShapeGeometry } from "../lib/shapeGeometry";
 import { RopeAttachment, RopeContact } from "../lib/ropeContact";
 import { RopeClamp } from "../lib/rail";
 import { RopeEmbed } from "../lib/viscous";
+import { RopeRide } from "../lib/belt";
 import { ringEnd, RopeVineClamp, type VineLine } from "../lib/vineClamp";
 import type { FrameInput } from "../input/frameInput";
 import { Rope } from "./rope";
@@ -203,6 +204,11 @@ export class BallPlayer extends RigidBody2D {
   // the hook's attach callback can regenerate the chain's wrap path (the hook
   // fires mid-integration, with no bodies list in hand).
   sceneBodies: PhysicsBody2D[] = [];
+  // The level's frame number and step, stamped by BallLevel at the top of
+  // every frame: a hook that bites a running belt starts a ride on this frame,
+  // and the ride's position is a pure function of the frame from there (see
+  // `RopeRide`).
+  clock = { frame: 0, dt: 1 / 60 };
   // The loop is mounted second, so it is shape 1. Named because a contact's
   // `shapeA` is how the cap tells a loop strike from the ball's own rim.
   static readonly LOOP_SHAPE_INDEX = 1;
@@ -715,6 +721,11 @@ export class BallPlayer extends RigidBody2D {
   manacleFacing(alpha: number): Vec2 | null {
     const ring = this.ringClamp;
     if (ring !== null) return ring.renderRimDir(alpha);
+    // Riding a belt, the cuff keeps its angle to the SURFACE, which turns as
+    // the ride goes round a roller: read live, at the ride's own
+    // interpolation.
+    const end = this.chain?.end;
+    if (end instanceof RopeRide) return end.renderFacing(alpha);
     const local = this.anchorFacingLocal;
     if (local === null) return null;
     const body = this.anchorBody;
@@ -768,12 +779,18 @@ export class BallPlayer extends RigidBody2D {
     const hinge = chain.end.contact.renderGlobalPosition(alpha);
     const body = this.anchorBody;
     const normal = this.anchorNormalLocal ?? dir;
+    const end = chain.end;
     return {
       centre: hinge.sub(dir.mul(MANACLE_HINGE)),
       dir,
       clamped: true,
       onRail: false,
-      buriedUnder: body === null ? normal : normal.rotated(body.renderRotation(alpha)),
+      buriedUnder:
+        end instanceof RopeRide
+          ? end.renderNormal(alpha)
+          : body === null
+            ? normal
+            : normal.rotated(body.renderRotation(alpha)),
     };
   }
 
@@ -1224,6 +1241,16 @@ export class BallPlayer extends RigidBody2D {
       const embed = RopeEmbed.at(body, pieceIndex, point, facing);
       this.chain.end = embed;
       embed.cuff = this.mountCuff(body, point.sub(facing.mul(MANACLE_HINGE)), facing);
+    } else if (piece?.belt && piece.beltSpeed !== 0) {
+      // A RUNNING BELT: bitten as a face below is, pin one ring radius proud
+      // along the arrival facing and the cuff mounted centred on the bite, and
+      // then CARRIED round the loop with the surface it bit - the pin, the
+      // cuff and the angle the cuff makes with the surface, a pure function of
+      // the frame (see `RopeRide`, docs/conveyors.md). A belt at speed 0 is
+      // scenery and is bitten as scenery, below.
+      const ride = RopeRide.at(body, piece, point, facing, this.clock.frame, this.clock.dt, MANACLE_HINGE);
+      this.chain.end = ride;
+      ride.cuff = this.mountCuff(body, ride.bite(), ride.facingLocal.rotated(body.globalRotation));
     } else {
       // The cuff bites at the angle it arrived at, centred on the surface - the
       // mouth half embedded in the geometry, the hinge half standing proud of
@@ -1430,6 +1457,37 @@ export class BallPlayer extends RigidBody2D {
     this.unmountCuff();
     const mud = embed.body.getShapes().filter((piece) => piece.viscous && !piece.impermeable);
     this.dropChainEnd(chain, embed.centre(), velocity).shedPieces(mud);
+  }
+
+  // A ride the chain cannot follow tears the cuff out of the belt. A carry is
+  // driven - nothing the chain does slows it - so a ball the geometry holds
+  // while the belt takes its anchor away has only one other answer, the stall
+  // lease, and the lease pays the carry out for as long as it lasts: a ball
+  // wedged at the mouth of the 20 cm gap under `TEST_BELT`'s low belt, with
+  // the anchor carried on along the bottom run at 1.5 m/s, leased exactly one
+  // frame of carry a frame (25.0 mm) and ran a 1.8 m chain out to 3.04 m in
+  // fifty frames (`rope-grew`). So once the belt has drawn more chain on lease
+  // than the attach's own snap forgives (`ATTACH_SNAP_TOLERANCE`, the margin
+  // past which an attach is a chain no throw could have reached), the bite
+  // gives instead: the cuff comes out as the dangling tip, clear of the
+  // surface it was torn from and moving with it, ARMED as a cuff out of mud
+  // is and with the belt's pieces shed so it does not bite straight back into
+  // the belt it lies against. The lease and not the whole length, because a
+  // ride may be anchored at any length up to the chain's: a ball hanging on
+  // 86 cm under a belt that carried it into a wall leased to 1.87 m before an
+  // absolute bound would have noticed, a metre past its anchoring length. The
+  // wind-up's own small leases against a ride (millimetres, while wound tight
+  // and still whirling) are nowhere near it. Returns whether it tore. Called
+  // by BallLevel at the top of the frame, before the carry.
+  tearOffOverdrawnRide(): boolean {
+    const chain = this.chain;
+    const ride = chain?.end;
+    if (!chain || !(ride instanceof RopeRide)) return false;
+    if (chain.blockedSlack <= BallPlayer.ATTACH_SNAP_TOLERANCE) return false;
+    this.unmountCuff();
+    const belt = ride.body.getShapes().filter((piece) => piece.belt !== null && !piece.impermeable);
+    this.dropChainEnd(chain, ride.bite().add(ride.normal().mul(MANACLE_REACH)), Vec2.ZERO).shedPieces(belt);
+    return true;
   }
 
   // A ring on a vine has slid off the vine's free bottom end

@@ -74,6 +74,7 @@ A ball spinning at 20 rad/s rolled 49.5 m along a static floor and **0.0 cm** al
 **Only contacts that pushed back count as contact.**
 `contactDamp` is applied once per body per frame, to the bodies that met something - and a speculative contact carries no impulse, so it is not something met.
 Damping a body for being merely *near* another is a permanent brake on something that is not touching anything: a ball hanging on a chain a centimetre clear of a crate was slowed 2% every frame, the chain read that refusal as a block, and the winch stall paid out slack against it for ever - 1.7 m of chain grown to 3.7 and never released.
+On a running conveyor the drag is taken relative to the belt's surface velocity rather than toward rest, or a belt could never carry anything at its own speed (see [**The drag is relative to the belt**](conveyors.md#the-drag-is-relative-to-the-belt)).
 
 **Static contacts are in the same list.**
 They enter as one-sided constraints with zero inverse mass and inertia, which is what lets one solver handle both without a branch - and it is not a tidiness argument, it is the difference between a pile converging and not.

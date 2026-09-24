@@ -2,7 +2,7 @@
   "name": "rope",
   "version": "0.0.0",
   "type": "module",
-  "description": "2D grappling-hook character controller — TS port of the C#/Godot prototype",
+  "description": "2D grappling-hook character controller \u2014 TS port of the C#/Godot prototype",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -18,7 +18,10 @@
     "assets:publish": "bun run scripts/publish-asset.ts",
     "assets:paint": "bun run scripts/paint-textures.ts",
     "assets:fetch": "bun run scripts/fetch-assets.ts",
-    "assets:credits": "bun run scripts/credits.ts"
+    "assets:credits": "bun run scripts/credits.ts",
+    "assets:rocks": "bun run scripts/generate-rocks.ts",
+    "assets:rock": "bun run scripts/rock-asset.ts",
+    "assets:rock-texture": "python3 tools/rock-texture.py"
   },
   "devDependencies": {
     "@gltf-transform/cli": "^4.1.1",

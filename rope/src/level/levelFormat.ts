@@ -318,11 +318,36 @@ export const LEGACY_IMPERMEABLE = "impermeable";
 // them (`pointInRegion`, `pathOutlineGrown`), neither of which has a concave
 // answer, and a region is not built into pieces that could carry one. The editor
 // holds a camera-layer polygon convex for that reason.
+//
+// `belt` is the fifth: a CONVEYOR, a band `thickness` deep wrapped round the
+// outside of two or more WHEELS, whose surface runs round the loop
+// (`lib/belt.ts`, docs/conveyors.md). Each wheel is a centre in the object's
+// frame and the wheel's own radius `r`; the band lies on it, so the running
+// surface round wheel i is at `r + thickness`, and the loop is the convex hull
+// of those discs, every wheel on it. `wheels[0]` is at (0, 0), the object's own
+// origin, so placing the object places the belt (the argument `moveNodes`
+// makes for node zero), and is written out anyway because it carries a radius.
+// `thickness` is the band's depth IN THE PLANE, a length, > 0; how wide the
+// band is across the pulleys is a look, the geometry twin's `depth`. `speed`
+// is ONE SIGNED NUMBER - px/s on disk, m/s in the sim - and its sign is the
+// direction, as `spinPeriod`'s is: positive turns the loop clockwise on
+// screen. It builds one disc per wheel and one thin quad per run, nothing
+// between the wheels, on a STATIC body that does not move; anything else fails
+// the build.
 export type ShapeData =
   | { kind: "rect"; w: number; h: number }
   | { kind: "circle"; r: number }
   | { kind: "poly"; verts: { x: number; y: number }[] }
-  | { kind: "curve"; verts: CurveVertData[]; width: number };
+  | { kind: "curve"; verts: CurveVertData[]; width: number }
+  | { kind: "belt"; wheels: BeltWheelData[]; thickness: number; speed: number };
+
+// One wheel of an authored BELT (`ShapeData`'s `belt`): its centre in the
+// object's frame and the wheel's own radius, which the band lies on.
+export interface BeltWheelData {
+  x: number;
+  y: number;
+  r: number;
+}
 
 // One node of an authored CURVE (`ShapeData`'s `curve`): a point the bar passes
 // through and the cubic tangent handles that shape the two legs meeting at it.
@@ -566,6 +591,10 @@ export interface CollisionObjectData extends ObjectPlacement {
 // to primitives that state the outline they were drawing (see
 // `scripts/migrate-primitives.ts`), so nothing changed appearance and every one
 // of those fields now means what it says.
+// The two lenses a geometry object can be drawn through (see
+// `GeometryObjectData.projection`).
+export type GeometryProjection = "perspective" | "orthographic";
+
 export interface GeometryObjectData extends ObjectPlacement {
   type: "geometry";
   // How this is turned into something the GPU draws. The two answers are the two
@@ -623,6 +652,22 @@ export interface GeometryObjectData extends ObjectPlacement {
   // Uniform mesh scale, dimensionless: it multiplies a model's own size and is
   // not a length, so it does NOT scale on the way in or out.
   scale?: number;
+  // Which lens THIS object is drawn through. Absent = "perspective", the scene
+  // camera's own, which is what every object was before the field existed.
+  //
+  // "orthographic" draws it with no perspective divide: a metre is the same
+  // number of pixels at every depth, so it neither shrinks toward the vanishing
+  // point behind the gameplay plane nor swells in front of it, and it does not
+  // parallax as the camera pans. The two lenses agree exactly ON the plane
+  // (z = 0), so a form there looks the same either way; the difference is
+  // entirely in how its off-plane parts, and its `z`, read.
+  //
+  // It is a statement about the PICTURE and nothing else, like every field
+  // here. The object is still lit, shadowed, fogged and depth-tested at the
+  // place it is authored - only where its vertices land on screen changes (see
+  // render3d/projection.ts) - so it sorts against perspective objects by true
+  // depth, and the shadow it casts is the one its real position throws.
+  projection?: GeometryProjection;
   // Depth through z. Absent = `DEFAULT_THICKNESS` on a body that collides and
   // `DECOR_DEPTH` on one that does not, which is what a flat fill drawn before
   // every body already was. It is NOT the collision object's `thickness`: that
@@ -633,7 +678,29 @@ export interface GeometryObjectData extends ObjectPlacement {
   // Edge break, metres. Absent = none: a level is boxes meeting boxes, and a
   // chamfer on every one of them softens the corners its silhouette is made
   // of, so this is authored where a solid actually wants one.
+  //
+  // It is the FLAT EXTRUSION's field and nothing else's: a generated rock
+  // (render3d/rocks.ts) does not read it, and takes its edge from the taper
+  // below instead.
   bevel?: number;
+  // Where a GENERATED ROCK's taper begins, metres in FRONT of this object's own
+  // plane (its `z`), + toward the camera. Behind it the rock's side walls stand
+  // exactly on the outline; from it forward the surface leans inward by
+  // `taperAngle`. Absent = 0: the taper begins at the gameplay plane, the line
+  // the ball travels, so the rock meets the ball at its outline and swells
+  // toward the camera from there.
+  //
+  // Read only by the rock generator (docs/rocks.md), and part of the rock's
+  // hash, so changing it marks the body stale. A LENGTH, so it scales with the
+  // geometry on the way in and out.
+  taperStart?: number;
+  // How far the tapered surface leans in from the outline's wall, in DEGREES:
+  // 0 (or absent) is no taper at all, the rock a straight extrusion of its
+  // outline; 45 a 45-degree chamfer; 90 a flat top at `taperStart`. Values
+  // outside 0..90 are clamped by the reader. Dimensionless, so it passes
+  // through scaling untouched. Read only by the rock generator, like
+  // `taperStart`.
+  taperAngle?: number;
   // Which surface to wear. A key of `TEXTURE_ASSETS` (an authored PBR set:
   // albedo, normal, roughness, metallic, ambient-occlusion and emission maps) or
   // of `TEXTURE_SETS` (the generated surfaces, keyed by material name) - one
@@ -1252,6 +1319,16 @@ export interface LevelBodyData {
   // and read nowhere downstream of it.
   movePath?: { x: number; y: number }[];
   moveClosed?: boolean;
+  // Rock bodies only: the seed of this body's GENERATED rock, an integer, so an
+  // author who does not like the boulders the generator cut can ask for another
+  // set without touching the outline. Read by the rock generator and nothing
+  // else - the sim and the extrusion never see it - and it changes every random
+  // choice in that body's rock (docs/rocks.md). It is in the rock hash, so
+  // changing it marks the body stale, and the body stands on its extrusion until
+  // the rocks are generated again. Dimensionless: it crosses `scaleLevelData`
+  // untouched. Absent = 0, which is the rock every body was generated with
+  // before the field.
+  rockSeed?: number;
   // What this body is made of, looks like and lights with. Order is authored
   // order, and it is what the build and both renderers walk: a body's collision
   // objects become its shapes in this order (which is what `setCompoundInertia`
@@ -1743,6 +1820,13 @@ export interface CameraRegionData {
   // unprioritised region blends with every other unprioritised one and a `-1`
   // takes the camera outright.
   priority?: number;
+  // Whether the screen-edge guarantee holds the avatar in frame while this
+  // region is the one framing the camera (see `keepsInFrame` in
+  // `render/cameraController.ts`). Absent = true, the guarantee every region had
+  // before the field; false lets the player leave the frame - or arrive in it,
+  // falling into a level's opening shot rather than dragging the camera up to
+  // meet them. Only `false` is ever written.
+  keepInFrame?: boolean;
 }
 
 // A camera path: an authored polyline the camera rides. The player's position
@@ -2110,6 +2194,37 @@ export interface EnvironmentData {
   fogColor?: string;
 }
 
+// The 3D camera a level is seen through (`render3d/space.ts`). Both fields are
+// optional and absent is the camera every level had before the block existed.
+//
+// It is a sibling of the environment block rather than part of it because
+// `zOffset` is a LENGTH, and the environment block holds none by design (see
+// EnvironmentData): this one is scaled like the geometry is.
+//
+// Neither field changes how much of the world the 2D view shows. The camera
+// regions and the zoom still decide that, and the 3D camera is still placed
+// from them every frame; these say what lens it wears and how far along z it
+// stands from where that placement would put it.
+export interface LevelCameraData {
+  // Focal length in MILLIMETRES, as a 35 mm-equivalent lens: the vertical field
+  // of view is 2 atan(12 / focalLength), a full-frame sensor being 24 mm tall.
+  // Absent = the 34 deg lens (`FOV_Y_DEG`), about 39 mm. Longer flattens the
+  // scene toward orthographic and shorter deepens it; the gameplay plane is
+  // framed the same either way, because the camera dollies to keep it so.
+  //
+  // A lens property rather than a distance in the level, so NOT scaled between
+  // pixels and metres.
+  focalLength?: number;
+  // How far the camera stands along z from where the zoom puts it, positive
+  // toward the viewer (scene pixels on disk, metres in the sim). Equivalently,
+  // the depth that is framed exactly as the 2D view frames the gameplay plane:
+  // at 0 that depth IS the gameplay plane, and every 2D overlay (the reticle,
+  // the area glyphs, the editor's handles) sits exactly on it. At anything
+  // else the gameplay plane is drawn a little smaller (positive) or larger
+  // (negative) than the overlay describing it.
+  zOffset?: number;
+}
+
 // WHERE A RUN STARTS, and how. The point is the avatar's centre; `radius` is
 // the avatar it is the centre of (the ball plays a multiple of it - see
 // `BallLevel.BALL_RADIUS_SCALE`).
@@ -2237,6 +2352,9 @@ export interface LevelData {
   // absent means the defaults, so the 2D renderer and every existing level are
   // untouched by it.
   environment?: EnvironmentData;
+  // The 3D camera's lens and depth (see LevelCameraData). Render-only like the
+  // environment, and absent means the camera every level had before it.
+  camera?: LevelCameraData;
 }
 
 // ---------------------------------------------------------------------------
@@ -2367,6 +2485,7 @@ export interface RawLevelData {
   chains?: (ChainData | LegacyChainData)[];
   vines?: VineData[];
   environment?: EnvironmentData;
+  camera?: LevelCameraData;
 }
 
 function isLegacyBody(b: LevelBodyData | LegacyBodyData): b is LegacyBodyData {
@@ -2996,6 +3115,17 @@ function scaleShape(s: ShapeData, factor: number): ShapeData {
       })),
     };
   }
+  if (s.kind === "belt") {
+    // Every wheel's centre and radius and the band's thickness are lengths, and
+    // so is the speed: it is a length per second, which converts by the same
+    // factor for the reason `force` (a length per second squared) does.
+    return {
+      kind: "belt",
+      wheels: s.wheels.map((w) => ({ x: w.x * factor, y: w.y * factor, r: w.r * factor })),
+      thickness: s.thickness * factor,
+      speed: s.speed * factor,
+    };
+  }
   return { kind: "poly", verts: s.verts.map((v) => ({ x: v.x * factor, y: v.y * factor })) };
 }
 
@@ -3077,8 +3207,14 @@ export function scaleObject(o: SceneObjectData, factor: number): SceneObjectData
     ...(o.rotX !== undefined ? { rotX: o.rotX } : {}),
     ...(o.rotY !== undefined ? { rotY: o.rotY } : {}),
     ...(o.scale !== undefined ? { scale: o.scale } : {}),
+    // A choice of lens, not a length.
+    ...(o.projection !== undefined ? { projection: o.projection } : {}),
     ...(o.depth !== undefined ? { depth: o.depth * factor } : {}),
     ...(o.bevel !== undefined ? { bevel: o.bevel * factor } : {}),
+    // Where a generated rock's taper begins is a length; the angle it leans
+    // in by is not.
+    ...(o.taperStart !== undefined ? { taperStart: o.taperStart * factor } : {}),
+    ...(o.taperAngle !== undefined ? { taperAngle: o.taperAngle } : {}),
     ...(o.texture !== undefined ? { texture: o.texture } : {}),
     // A MULTIPLE of the texture's own size rather than a length - see
     // `GeometryObjectData.tileScale` - so it passes through untouched, as
@@ -3102,8 +3238,8 @@ export function scaleObject(o: SceneObjectData, factor: number): SceneObjectData
 export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData {
   const data = normalizeLevelData(rawData);
   // A camera region's positions, extents, offsets, locks, buffer and falloff
-  // are lengths; viewportScale and priority are not, and the retired `blend` is
-  // dropped here rather than carried (see `CameraRegionData.blend`).
+  // are lengths; viewportScale, priority and keepInFrame are not, and the retired
+  // `blend` is dropped here rather than carried (see `CameraRegionData.blend`).
   const regions = data.cameraRegions?.map((r) => ({
     x: r.x * factor,
     y: r.y * factor,
@@ -3121,6 +3257,7 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
     ...(r.bufferBottom !== undefined ? { bufferBottom: r.bufferBottom * factor } : {}),
     ...(r.falloff !== undefined ? { falloff: r.falloff * factor } : {}),
     ...(r.priority !== undefined ? { priority: r.priority } : {}),
+    ...(r.keepInFrame !== undefined ? { keepInFrame: r.keepInFrame } : {}),
   }));
   // A camera path's placement, verts, range, lookahead and buffer are lengths;
   // rot, viewportScale, blend (seconds) and priority are not.
@@ -3280,6 +3417,18 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
     // is copied rather than scaled - but copied, not shared, since everything
     // else here hands the caller a fresh object.
     ...(data.environment ? { environment: { ...data.environment } } : {}),
+    // The focal length is a lens property in millimetres and crosses untouched;
+    // the offset is a length in the level and scales like one.
+    ...(data.camera
+      ? {
+          camera: {
+            ...(data.camera.focalLength !== undefined
+              ? { focalLength: data.camera.focalLength }
+              : {}),
+            ...(data.camera.zOffset !== undefined ? { zOffset: data.camera.zOffset * factor } : {}),
+          },
+        }
+      : {}),
     ...(notes ? { notes } : {}),
     ...(checkpoints ? { checkpoints } : {}),
     ...(chains ? { chains } : {}),
@@ -3388,6 +3537,8 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
       ...(b.movePhase !== undefined ? { movePhase: b.movePhase } : {}),
       ...(b.moveEase !== undefined ? { moveEase: b.moveEase } : {}),
       ...(b.moveAlign !== undefined ? { moveAlign: b.moveAlign } : {}),
+      // A seed, not a length (see `LevelBodyData.rockSeed`).
+      ...(b.rockSeed !== undefined ? { rockSeed: b.rockSeed } : {}),
       objects: b.objects.map((o) => scaleObject(o, factor)),
     })),
   };

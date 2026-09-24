@@ -24,6 +24,7 @@ import { WallJumpingState } from "../classes/states/wallJumpingState";
 import { button, emptyFrameInput, type FrameInput } from "../input/frameInput";
 import { isSeamVertex, type Rope } from "../classes/rope";
 import type { RopeNode } from "../lib/ropeContact";
+import { RopeRide } from "../lib/belt";
 import { shapeCrossesSpan, spanMotionBox, type Pose, type SpanMotion } from "../lib/spanSweep";
 import { WrapDirection } from "../lib/types";
 import { CONTACT_SLOP, type ContactConstraint, type World } from "../engine/world";
@@ -859,6 +860,11 @@ const STUCK_YIELD_DISPLACEMENT = 0.03; // m backward over the tail counts as yie
 function mobileBodyNear(level: Level): boolean {
   const p = level.player;
   for (const body of level.world.bodies) {
+    // `isMobile` and NOT `surfaceMoves`, deliberately: this detector only ARMS
+    // near a mobile body (a static wall pressed into is exempt), and a running
+    // belt is a static whose sweep the avatar resolves against like any other.
+    // Walking against a belt at its own speed is zero displacement by design -
+    // armed there it fired `input-frozen` every 45 frames (docs/conveyors.md).
     if (body === p || body.removed || !body.isMobile || !body.hasShape()) continue;
     if (body instanceof Hook) continue;
     const s = body.primaryShape().shape;
@@ -1565,6 +1571,18 @@ export class EnergyMonitor {
     // itself rather than by the input, because a pad fires on contact and no
     // button is pressed for it (see `World.launchedThisFrame`).
     const launched = level.world.launchedThisFrame;
+    // A running conveyor is the same kind of source: it accelerates what rests
+    // on it out of a motor nothing in the scene stores, and no button is
+    // pressed for it (see `World.conveyedThisFrame`). A rider on a scripted
+    // mover is the same hole and is not closed here (docs/conveyors.md).
+    const conveyed = level.world.conveyedThisFrame;
+    // ...and so is a belt that has the ball's chain by the end: a ride is
+    // DRIVEN (`RopeRide`), so the carried anchor hauls a hanging ball along
+    // and up over a roller out of that same motor, through the chain rather
+    // than a contact, where `conveyedThisFrame` cannot see it (a headless
+    // `TEST_BELT` lap fired `energy-gained` at f583 on the lift over the start
+    // roller; `cli belts` `energy-armed`).
+    const ridden = level.ball.chain?.end instanceof RopeRide;
     // A ball rolling in at the opening of a level is being HELD at its entry
     // speed by the level itself (see `BallLevel.ENTRY_SPEED`), which is a force
     // on it as surely as the winch is - and one no input carries, since the
@@ -1580,7 +1598,7 @@ export class EnergyMonitor {
     // in under a neutral-looking input, read as energy arriving from nowhere.
     const forced = anyForcedInput(level.playedInput ?? input);
     const bodies = level.world.bodies.filter((b) => !b.removed).length;
-    if (forced || steering || launched || rollingIn || bodies !== this.bodyCount) {
+    if (forced || steering || launched || conveyed || ridden || rollingIn || bodies !== this.bodyCount) {
       // A body appearing or disappearing (a hook spawned, a hook removed)
       // changes the total by construction, so the span restarts rather than
       // reading the difference as the solver's doing.

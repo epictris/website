@@ -25,3 +25,7 @@
 - https://media.mymythos.org/The-Mine-Archetype-Mythic-Body.webp
 
 
+# Obstacles
+
+Losing progress from bad luck or lack of understanding feels unfair. A player should only lose significant progress by failing something they know they could have completed.
+Obstacles should be low risk while the player is understanding the solution, and high risk once they have proven that they are capable of overcoming the obstacle.

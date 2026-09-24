@@ -22,6 +22,8 @@
 //                                      [--at X,Y] [--out f.png] [--allow-errors]
 //   bun run src/tools/cli.ts shot      bundle.json --frames A..B [--every K] [--3d]
 //   bun run src/tools/cli.ts shot      bundle.json --dump A..B   (chain state per frame, as JSON lines)
+//   bun run src/tools/cli.ts shot      --view capture.json   (an F4 view capture)
+//   bun run src/tools/cli.ts rocks-check public/rocks/ball.glb [--body I] [--no-geometry] [--json]
 //   bun run src/tools/cli.ts shot      --diff a.png b.png [--out diff.png]
 //   bun run src/tools/cli.ts chainpath bundle.json [--from A] [--to B] [--every N]
 //   bun run src/tools/cli.ts fork      bundle.json --frame N [--frames M] [--out prefix]
@@ -33,11 +35,13 @@
 //   bun run src/tools/cli.ts clicks    bundle.json [--all] [--evdev log] [--wayland log]   (the DOM button story beside the frames)
 //   bun run src/tools/cli.ts corners
 //   bun run src/tools/cli.ts decompose
+//   bun run src/tools/cli.ts silhouette   (the rock-fit outline tracer)
 //   bun run src/tools/cli.ts dmath     [--write]   (the deterministic libm: bit-exact vectors + source scan)
 //   bun run src/tools/cli.ts contacts
 //   bun run src/tools/cli.ts spring
 //   bun run src/tools/cli.ts movers
 //   bun run src/tools/cli.ts vines
+//   bun run src/tools/cli.ts belts
 //   bun run src/tools/cli.ts render3d
 //   bun run src/tools/cli.ts camera    [--ride bundle.json [--from N] [--table]]
 //
@@ -97,6 +101,16 @@ import { Vec2 } from "../engine/vec2";
 import { PIXELS_PER_METER } from "../engine/units";
 import { findChromium, grab, PageNotReady, type PageLogEntry } from "./shotRunner";
 import { VIEW_HEIGHT, VIEW_WIDTH } from "../render/viewport";
+import type { ViewCapture } from "../render3d/rocks";
+import {
+  checkRockFile,
+  faceLines,
+  printBuildReport,
+  printRockFileCheck,
+  readBuildReport,
+  rockFileDefects,
+  shardStages,
+} from "./rockCheck";
 import {
   ACTIONS,
   checkBallInvariants,
@@ -951,7 +965,26 @@ async function cmdShot(first: string, o: Record<string, string>, extra: string[]
     process.exit(0);
   }
 
-  const bundle = resolve(first);
+  // `--view capture.json` puts the grab on an F4 view capture's picture (see
+  // `applyViewCapture`); with no bundle it records a one-frame one of the
+  // capture's level, because the camera is pinned and the avatar is beside the
+  // point.
+  const bundleArg = positionals(extra)[0];
+  const view = o.view !== undefined ? applyViewCapture(o) : null;
+  let bundle: string;
+  let name: string;
+  if (bundleArg !== undefined) {
+    bundle = resolve(bundleArg);
+    name = bundleArg;
+  } else if (view) {
+    const { recording } = recordScript({ level: view.level, frames: 1 }, recordStamp());
+    bundle = join(tmpdir(), `shot-view-${process.pid}.json`);
+    writeFileSync(bundle, JSON.stringify(recording));
+    name = o.view!;
+  } else {
+    fail("usage: cli shot <bundle.json> [...] | cli shot --view capture.json [...]");
+  }
+  first = name;
   // `--frames A..B [--every K]` is the motion form: one page load, one chromium
   // session, a filmstrip of tiles and a changed-pixel count between adjacent
   // ones. A single frame cannot show flashing, flicker or the speed something
@@ -1013,8 +1046,7 @@ async function cmdShot(first: string, o: Record<string, string>, extra: string[]
       (o.retract ? "&retract=1" : "") +
       // `--query a=1&b=2` passes any other URL parameters through to the page
       // as typed, for the switches the game reads that have no flag of their
-      // own - `paint=0` is the one this was added for (see render3d/paint.ts):
-      // the same frame painted and not is how the painted light is judged.
+      // own, e.g. `rocks=0` for an A/B of the same frame.
       (o.query ? `&${o.query}` : "") +
       // `--probe` (with `--3d`) skips the precompile and logs, per drawn frame,
       // the programs and textures three has built and the meshes whose program
@@ -1070,9 +1102,27 @@ async function cmdShot(first: string, o: Record<string, string>, extra: string[]
       vite.kill("SIGTERM");
     }
     rmSync(served, { force: true });
+    if (bundleArg === undefined) rmSync(bundle, { force: true });
   }
   if (failure) fail(failure, 1);
   process.exit(0);
+}
+
+// An F4 VIEW CAPTURE (main.ts `captureView`) folded into the shot's options:
+// `--at`, `--orbit` and `--zoom` from the camera, and `--3d` on, since a
+// capture is always of the 3D scene. A flag given on the command line wins over
+// the capture's.
+function applyViewCapture(o: Record<string, string>): ViewCapture {
+  const path = o.view!;
+  if (!existsSync(path)) fail(`--view ${path}: no such file`);
+  const raw = readFileSync(path, "utf8").trim();
+  // Pasted from the console, the line may still carry its `[view] ` prefix.
+  const view = JSON.parse(raw.replace(/^\[view\]\s*/, "")) as ViewCapture;
+  o.at ??= view.at.join(",");
+  o.orbit ??= view.orbit.join(",");
+  o.zoom ??= String(view.zoom);
+  o["3d"] ??= "true";
+  return view;
 }
 
 // Everything the page said, in the order it said it. The `motion` line a
@@ -2121,7 +2171,7 @@ switch (cmd) {
     cmdQuery(arg, opts(rest));
     break;
   case "shot":
-    if (!arg) fail("usage: cli shot <bundle.json> [--frame N | --frames A..B [--every K]] [--zoom Z] [--3d] [--retract] [--at X,Y] [--orbit YAW,PITCH] [--query k=v] [--out f.png] [--allow-errors]  |  cli shot --diff a.png b.png [--out d.png]");
+    if (!arg) fail("usage: cli shot <bundle.json> [--frame N | --frames A..B [--every K]] [--zoom Z] [--3d] [--retract] [--at X,Y] [--orbit YAW,PITCH] [--query k=v] [--out f.png] [--allow-errors]  |  cli shot [bundle.json] --view capture.json  |  cli shot --diff a.png b.png [--out d.png]");
     await cmdShot(arg, opts([arg, ...rest]), [arg, ...rest]);
     break;
   case "record":
@@ -2207,6 +2257,13 @@ switch (cmd) {
   case "decompose":
     void cmdDecompose();
     break;
+  case "silhouette":
+    void cmdSilhouette();
+    break;
+  case "rocks-check":
+    if (!arg) fail("usage: cli rocks-check <file.glb> [--body I[,J]] [--no-geometry] [--cameras head,above,left,right] [--face BODY:FACE] [--shard N] [--json]");
+    cmdRocksCheck(arg, opts(rest));
+    break;
   case "dmath":
     void cmdDmath([arg, ...rest].includes("--write"));
     break;
@@ -2230,6 +2287,9 @@ switch (cmd) {
     break;
   case "rails":
     void cmdRails();
+    break;
+  case "belts":
+    void cmdBelts();
     break;
   case "viscous":
     void cmdViscous();
@@ -2257,7 +2317,7 @@ switch (cmd) {
     break;
   default:
     fail(
-      "usage: cli <play|record|replay|dump|query|scan|trace|settle|compare|continue|render|shot|chainpath|fork|bundles|pull|playtest|restamp|selftest|latch|transport|clicks|ledges|corners|tangents|decompose|dmath|contacts|spring|movers|vines|rails|viscous|breaks|render3d|camera|assets|levels|finish|entry> [file] [options]",
+      "usage: cli <play|record|replay|dump|query|scan|trace|settle|compare|continue|render|shot|chainpath|fork|bundles|pull|playtest|restamp|selftest|latch|transport|clicks|ledges|corners|tangents|decompose|silhouette|rocks-check|dmath|contacts|spring|movers|vines|rails|belts|viscous|breaks|render3d|camera|assets|levels|finish|entry> [file] [options]",
     );
 }
 
@@ -2702,6 +2762,26 @@ async function cmdRails(): Promise<void> {
   process.exit(failed > 0 ? 1 : 0);
 }
 
+// Conveyor belt cases (src/sim/beltCases.ts). A belt is a static whose surface
+// runs, and like a mover it reaches no digest and no invariant of its own, so
+// this is the whole of its coverage: the loop's closed forms, the format and
+// the build (a belt at speed 0 is bit-identical to its static pieces), and the
+// carry - a crate, a free ball and the avatar ride it, it wakes what sleeps on
+// it, and the energy monitor knows it for a source - and the hook riding it
+// round the loop, torn out when the chain cannot follow.
+async function cmdBelts(): Promise<void> {
+  const { runBeltCases } = await import("../sim/beltCases");
+  const results = runBeltCases();
+  let failed = 0;
+  for (const r of results) {
+    console.log(`  ${r.passed ? "PASS " : "FAIL "} ${r.name}`);
+    for (const d of r.details) console.log(`        ${d}`);
+    if (!r.passed) failed++;
+  }
+  console.log(`[belts] ${results.length - failed}/${results.length} cases passed`);
+  process.exit(failed > 0 ? 1 : 0);
+}
+
 // Viscous cases (src/sim/viscousCases.ts). A viscous face - mud - is one the
 // manacle bites and then creeps through under the chain's pull, at a power of
 // the load, and drops out of once its mouth has crept clear. The law has a
@@ -2822,6 +2902,117 @@ async function cmdDecompose(): Promise<void> {
     if (!r.passed) failed++;
   }
   console.log(`[decompose] ${results.length - failed}/${results.length} cases passed`);
+  process.exit(failed > 0 ? 1 : 0);
+}
+
+// A generated rock file checked (docs/rocks.md, "Diagnosing"): the build
+// report `rocks.py` wrote beside it, the file-level checks in bun
+// (rockCheck.ts), and the geometric ones in headless Blender
+// (tools/blender/check.py) - back faces seen from four cameras, coincident
+// coplanar faces, degenerate triangles, dark caps. Exits 1 on a file defect or
+// a chunk left open by the build; the geometric findings are reported for a
+// human to judge and never fail it (a notch seen from above is a legitimate
+// back face).
+//
+// `--face 150:9021` prints one triangle (the `face` a pick logs); `--shard N`
+// on a `--dump-stages` file prints that shard's story through the build.
+function cmdRocksCheck(file: string, o: Record<string, string>): void {
+  const path = resolve(file);
+  if (!existsSync(path)) fail(`no file at ${path}`);
+  if (o.shard !== undefined) {
+    console.log(`[rocks-check] ${file}: shard ${o.shard} per stage`);
+    for (const line of shardStages(path, Number(o.shard))) console.log(line);
+    process.exit(0);
+  }
+  if (o.face !== undefined) {
+    const m = /^(\d+):(\d+)$/.exec(o.face);
+    if (!m) fail("--face BODY:FACE");
+    for (const line of faceLines(path, Number(m[1]), Number(m[2]))) console.log(line);
+    process.exit(0);
+  }
+  const only = o.body !== undefined ? new Set(o.body.split(",").map(Number)) : undefined;
+  const check = checkRockFile(path, ROPE_DIR, only);
+  const report = readBuildReport(path);
+  let geometry: unknown[] = [];
+  if (o["no-geometry"] === undefined) geometry = rocksGeometry(path, only, o.cameras?.split(","), o.blender);
+  if (o.json !== undefined) {
+    console.log(JSON.stringify({ file: check, build: report, geometry }, null, 1));
+  } else {
+    printRockFileCheck(check);
+    if (report) printBuildReport(report, only);
+    else console.log("[rocks-check] no build report beside the file (built before the report existed, or by hand)");
+    for (const g of geometry) printGeometry(g as GeometryReport);
+  }
+  const open = report ? report.bodies.filter((b) => !only || only.has(b.index)).reduce((n, b) => n + b.pieces.reduce((m, p) => m + p.open, 0), 0) : 0;
+  const defects = rockFileDefects(check) + open;
+  console.log(defects > 0 ? `[rocks-check] FAIL: ${defects} defect(s)` : "[rocks-check] no defects (geometric findings are for a human to judge)");
+  process.exit(defects > 0 ? 1 : 0);
+}
+
+interface GeometryReport {
+  body: number;
+  spacing?: number;
+  backFaces: { camera: string; rays: number; back: number; spacing: number; clusters: { count: number; at: number[] }[] }[];
+  coincident: { pairs: number; tested: number; shardAware: boolean; top: { faces: number[]; shards: number[] | null; area: number; at: number[] }[] };
+  degenerate: { area: number; edge: number; of: number };
+  darkCaps: { checked: boolean; caps?: number; dark?: number; top?: { face: number; area: number; ao: number; at: number[] }[] };
+}
+
+// The Blender half, one `[check] {json}` line per body.
+function rocksGeometry(path: string, only: Set<number> | undefined, cameras: string[] | undefined, blenderArg?: string): unknown[] {
+  const optsPath = join(tmpdir(), `rocks-check-${process.pid}.json`);
+  writeFileSync(optsPath, JSON.stringify({ bodies: only ? [...only] : null, cameras: cameras ?? null }));
+  const blender = blenderArg ?? process.env["BLENDER"] ?? "blender";
+  const r = spawnSync(
+    blender,
+    ["-b", "--factory-startup", "--python", join(ROPE_DIR, "tools", "blender", "check.py"), "--", path, optsPath],
+    { encoding: "utf8", maxBuffer: 256 * 1024 * 1024 },
+  );
+  rmSync(optsPath, { force: true });
+  if (r.error) fail(`could not run ${blender}: ${r.error.message}`);
+  const lines = `${r.stdout}\n${r.stderr}`.split("\n");
+  if (r.status !== 0) {
+    console.error(lines.slice(-30).join("\n"));
+    fail(`blender exited ${r.status}`, 1);
+  }
+  return lines.filter((l) => l.startsWith("[check] ")).map((l) => JSON.parse(l.slice(8)) as unknown);
+}
+
+// Metres in the importer's Blender frame (x, -game z, game y) are printed back
+// in three's (x, game y, game z) and the sim's (x, -game y) so a finding can be
+// fed to `cli shot --at`.
+function printGeometry(g: GeometryReport): void {
+  const at = (p: number[]): string => `(${p[0]!.toFixed(2)}, ${p[2]!.toFixed(2)}, ${(-p[1]!).toFixed(2)}) sim --at ${p[0]!.toFixed(2)},${(-p[2]!).toFixed(2)}`;
+  console.log(`  body ${g.body} geometry:`);
+  for (const b of g.backFaces) {
+    const top = b.clusters.slice(0, 5).map((c) => `${c.count} at ${at(c.at)}`).join("; ");
+    console.log(`    back faces from ${b.camera.padEnd(5)} ${b.back}/${b.rays} rays at ${(b.spacing * 100).toFixed(0)} cm${b.back ? `, ${b.clusters.length} cluster(s): ${top}` : ""}`);
+  }
+  const c = g.coincident;
+  console.log(`    coincident coplanar pairs: ${c.pairs}${c.shardAware ? " (different shards)" : " (any, no _SHARD)"} of ${c.tested} tested`);
+  for (const p of c.top.slice(0, 5)) console.log(`      faces ${p.faces.join(",")}${p.shards ? ` shards ${p.shards.join(",")}` : ""}: ${p.area} cm^2 at ${at(p.at)}`);
+  console.log(`    degenerate: ${g.degenerate.area} by area, ${g.degenerate.edge} by edge, of ${g.degenerate.of}`);
+  const d = g.darkCaps;
+  if (!d.checked) console.log("    dark caps: not checked (no AO atlas)");
+  else {
+    console.log(`    dark caps: ${d.dark} of ${d.caps} up-facing faces over 10 cm^2 read AO < 0.05 (seen from above or head-on)`);
+    for (const f of (d.top ?? []).slice(0, 5)) console.log(`      face ${f.face}: ${f.area} cm^2, ao ${f.ao} at ${at(f.at)}`);
+  }
+}
+
+// Silhouette cases (src/sim/silhouetteCases.ts): the outline tracer the
+// editor's "fit collision to rock" writes a collision outline with. Pure
+// geometry over flat triangles, so it needs no GLB and no browser.
+async function cmdSilhouette(): Promise<void> {
+  const { runSilhouetteCases } = await import("../sim/silhouetteCases");
+  const results = runSilhouetteCases();
+  let failed = 0;
+  for (const r of results) {
+    console.log(`  ${r.passed ? "PASS" : "FAIL"}  ${r.name}`);
+    for (const d of r.details) console.log(`        ${d}`);
+    if (!r.passed) failed++;
+  }
+  console.log(`[silhouette] ${results.length - failed}/${results.length} cases passed`);
   process.exit(failed > 0 ? 1 : 0);
 }
 

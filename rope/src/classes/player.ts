@@ -117,6 +117,11 @@ export class Player extends CharacterBody2D {
   // comparison against that body's mass, so the number has to be a real one for
   // the comparison to mean anything.
   static readonly MASS = 70; // kg
+
+  // The level's frame number and step, stamped by `Level` at the top of every
+  // frame and shared with the rope this avatar fires, so a hook that bites a
+  // running belt starts its ride on the right frame (see `RopeRide`).
+  readonly clock = { frame: 0, dt: 1 / 60 };
   override get mass(): number {
     return Player.MASS;
   }
@@ -142,6 +147,7 @@ export class Player extends CharacterBody2D {
         [] as RopeWrap[],
         null,
       );
+      this.rope.clock = this.clock;
     }
 
     if (input.fire.released) this.rope = null;

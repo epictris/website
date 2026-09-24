@@ -32,6 +32,7 @@ import {
 } from "./levelFormat";
 import { buildLevelBodies, type LevelVisualSource } from "./buildBodies";
 import type { MoverScript } from "./movers";
+import type { ConveyorBody } from "../lib/belt";
 import { collectDecor, type SceneDecor } from "./decor";
 import {
   awakeChains,
@@ -80,6 +81,9 @@ export class Level {
   // All PhysicsBody2D the rope may wrap (player + statics + spawned bodies).
   bodies: PhysicsBody2D[] = [];
   readonly movers: Array<{ body: AnimatableBody2D; script: MoverScript }> = [];
+  // The conveyor belts the file authored (`lib/belt.ts`), whose running
+  // surfaces wake what rests on them every frame (see `physicsProcess`).
+  readonly belts: ConveyorBody[] = [];
   frame = 0;
   cameraPosition = Vec2.ZERO;
   // Camera-behaviour volumes, in metres. Read by the render-side
@@ -155,6 +159,7 @@ export class Level {
     // straight onto the list rather than going through `addMover`, which is the
     // door a hand-written `init` hook spawns one through.
     this.movers.push(...built.movers);
+    this.belts.push(...built.belts);
     this.sceneChains = buildSceneChains(data, built);
     settleChainsAtBuild(this.world, this.sceneChains);
     this.vines = buildVines(this.world, data, built);
@@ -254,6 +259,19 @@ export class Level {
         this.world.wakeTouching(m.body);
       }
     }
+    // A running belt wakes what rests on it every frame, for the reason a
+    // moving platform does: a static is never a contact's leading side, so
+    // nothing else would notice that its surface is carrying a sleeping crate.
+    for (const belt of this.belts) {
+      if (belt.running) this.world.wakeTouching(belt);
+    }
+    // A hook riding a belt is carried to where this frame has it, beside the
+    // movers and before the rope regenerates, so the rope sees its anchor
+    // where the belt has taken it (`RopeRide`). The clock is what a hook
+    // biting a belt later in this frame starts its ride from.
+    this.player.clock.frame = this.frame;
+    this.player.clock.dt = delta;
+    this.player.rope?.carryRides(this.frame);
 
     this.player.resolveMouseActions(input);
     if (input.spawnSmallCircle.pressed) this.spawnCircle(0.1, input.mouseWorldPosition);

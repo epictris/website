@@ -29,9 +29,11 @@ export class GroundedState extends PlayerState {
 
   // Contact-point velocity of the supporting surface (v + ω × r,
   // game-design.md velocity inheritance); null on static supports so the
-  // static path runs the exact pre-inheritance math.
+  // static path runs the exact pre-inheritance math. Asked of the SURFACE
+  // (`surfaceMoves`), so a running conveyor carries the avatar as a mover does
+  // while every static and every mover reads exactly as before.
   private carriedVelocity(player: Player): Vec2 | null {
-    if (!this.supportBody?.isMobile) return null;
+    if (!this.supportBody?.surfaceMoves) return null;
     const shape = player.primaryShape().shape;
     const r = shape.kind === "circle" ? shape.radius : 0;
     return this.supportBody.velocityAtPoint(player.globalPosition.sub(this.surfaceNormal.mul(r)));
@@ -125,8 +127,9 @@ export class GroundedState extends PlayerState {
           // Against a mobile surface, stop only the *relative normal*
           // component — keep the relative tangent so input still moves the
           // player along the surface (a full relative stop wiped locomotion
-          // every frame while riding a mover). Statics keep the hard stop.
-          if (collider.isMobile) {
+          // every frame while riding a mover). Statics keep the hard stop. A
+          // running belt is a moving SURFACE, so it is asked of that.
+          if (collider.surfaceMoves) {
             const vSurf = collider.velocityAtPoint(collision.getPosition());
             player.velocity = player.velocity.sub(vSurf).slide(normal).add(vSurf);
           } else {
@@ -177,7 +180,7 @@ export class GroundedState extends PlayerState {
         case SurfaceType.CEILING:
           // A mover's underside/corner must not hard-zero the player —
           // adopt its contact velocity instead (statics still full-stop).
-          player.velocity = collider.isMobile
+          player.velocity = collider.surfaceMoves
             ? collider.velocityAtPoint(collision.getPosition())
             : Vec2.ZERO;
           return new AirborneState();

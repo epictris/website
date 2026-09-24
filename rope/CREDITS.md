@@ -11,10 +11,16 @@ asset to its manifest and regenerate, which is what `cli assets` checks.
 - **cage-dungeon** - "Samuel F. Angrick-Johanns (@oneironauticus)", [source](https://sketchfab.com/3d-models/dungeon-cage-34dcb15847ef439eb9f0c991ae1078f8), CC BY 4.0
 - **cage-rusty** - "Samuel F. Angrick-Johanns (@oneironauticus)", [source](https://sketchfab.com/3d-models/rusty-dungeon-cage-3e404a7e3fec4340b52519942ff229e0), CC BY 4.0
 - **finish-line** - "hyd (@hydroh)", [source](https://sketchfab.com/3d-models/finish-line-7ec1d8194ddf46e6b398d336df0b5d7a), Sketchfab Standard
+- **iron-ball** - "a private commission, credit declined", [source](modelled for this game, delivered as a glTF binary), used with permission, redistributable, no attribution required
 - **iron-gate** - "Yukitsu-Senpai", [source](https://sketchfab.com/3d-models/dungeonprison-bars-door-410e6acfc4c448d3835929e1b6d6df3a), CC BY 4.0
 - **lantern** - "Mandrake (@mandrake_3d)", [source](https://sketchfab.com/3d-models/lantern-f0b0ea89f20b4f10bb583c449ae04d9c), CC BY 4.0
 - **lantern-rusty** - "lhaegy.fu", [source](https://sketchfab.com/3d-models/old-rusty-lantern-c11fd480023d485f9bbeaae633c868d7), CC BY-NC 4.0
 - **metal-bars** - "FuzerGamesTV", [source](https://sketchfab.com/3d-models/poppy-playtime-4-prison-door-bars-5dc2f7af7ec144afb2443fe86c74c288), CC BY 4.0
+- **moss-145** - "Tristan Bray (textures: freestylized.com)", [source](tools/blender/rock_asset.py from levels/ball.json body 145; textures https://freestylized.com/material/moss_ground_01/), CC0
+- **moss-160** - "Tristan Bray (textures: freestylized.com)", [source](tools/blender/rock_asset.py from levels/ball.json body 160; textures https://freestylized.com/material/moss_ground_01/), CC0
+- **moss-190** - "Tristan Bray (textures: freestylized.com)", [source](tools/blender/rock_asset.py from levels/ball.json body 190; textures https://freestylized.com/material/moss_ground_01/), CC0
+- **moss-191** - "Tristan Bray (textures: freestylized.com)", [source](tools/blender/rock_asset.py from levels/ball.json body 191; textures https://freestylized.com/material/moss_ground_01/), CC0
+- **moss-192** - "Tristan Bray (textures: freestylized.com)", [source](tools/blender/rock_asset.py from levels/ball.json body 192; textures https://freestylized.com/material/moss_ground_01/), CC0
 - **pipe-concrete** - "PT34", [source](https://sketchfab.com/3d-models/concrete-pipe-game-ready-92d1cbc20e8c440aad9be60586d5efa6), CC BY 4.0
 - **pipe-long** - "Mehdi Shahsavan (@ahmagh2e)", [source](https://sketchfab.com/3d-models/pipe-metalic-metal-14mb-48182e0a4c7943f596dced21a167379b), CC BY 4.0
 - **rock-1** - "Maksim Batyrev (@c3posw01)", [source](https://sketchfab.com/3d-models/pbr-rock-cliffs-pack-8fa6cabbbf0c431a9f5ffe91eb0b9090), CC BY 4.0
@@ -28,8 +34,13 @@ asset to its manifest and regenerate, which is what `cli assets` checks.
 - **rock-17** - "Maksim Batyrev (@c3posw01)", [source](https://sketchfab.com/3d-models/pbr-rock-cliffs-pack-8fa6cabbbf0c431a9f5ffe91eb0b9090), CC BY 4.0
 - **rock-18** - "Maksim Batyrev (@c3posw01)", [source](https://sketchfab.com/3d-models/pbr-rock-cliffs-pack-8fa6cabbbf0c431a9f5ffe91eb0b9090), CC BY 4.0
 - **rock-19** - "Maksim Batyrev (@c3posw01)", [source](https://sketchfab.com/3d-models/pbr-rock-cliffs-pack-8fa6cabbbf0c431a9f5ffe91eb0b9090), CC BY 4.0
+- **rock-196** - "Tristan Bray (textures: freestylized.com)", [source](tools/blender/rock_asset.py from levels/ball.json body 196; textures https://freestylized.com/material/cliff_rocks_07/), CC0
+- **rock-197** - "Tristan Bray (textures: freestylized.com)", [source](tools/blender/rock_asset.py from levels/ball.json body 197; textures https://freestylized.com/material/cliff_rocks_07/), CC0
+- **rock-199** - "Tristan Bray (textures: freestylized.com)", [source](tools/blender/rock_asset.py from levels/ball.json body 199; textures https://freestylized.com/material/cliff_rocks_07/), CC0
 - **rock-2** - "Maksim Batyrev (@c3posw01)", [source](https://sketchfab.com/3d-models/pbr-rock-cliffs-pack-8fa6cabbbf0c431a9f5ffe91eb0b9090), CC BY 4.0
 - **rock-20** - "Maksim Batyrev (@c3posw01)", [source](https://sketchfab.com/3d-models/pbr-rock-cliffs-pack-8fa6cabbbf0c431a9f5ffe91eb0b9090), CC BY 4.0
+- **rock-200** - "Tristan Bray (textures: freestylized.com)", [source](tools/blender/rock_asset.py from levels/ball.json body 200; textures https://freestylized.com/material/cliff_rocks_07/), CC0
+- **rock-201** - "Tristan Bray (textures: freestylized.com)", [source](tools/blender/rock_asset.py from levels/ball.json body 201; textures https://freestylized.com/material/cliff_rocks_07/), CC0
 - **rock-21** - "Maksim Batyrev (@c3posw01)", [source](https://sketchfab.com/3d-models/pbr-rock-cliffs-pack-8fa6cabbbf0c431a9f5ffe91eb0b9090), CC BY 4.0
 - **rock-22** - "Maksim Batyrev (@c3posw01)", [source](https://sketchfab.com/3d-models/pbr-rock-cliffs-pack-8fa6cabbbf0c431a9f5ffe91eb0b9090), CC BY 4.0
 - **rock-23** - "Maksim Batyrev (@c3posw01)", [source](https://sketchfab.com/3d-models/pbr-rock-cliffs-pack-8fa6cabbbf0c431a9f5ffe91eb0b9090), CC BY 4.0
@@ -44,6 +55,24 @@ asset to its manifest and regenerate, which is what `cli assets` checks.
 - **sewer-arch** - "MightyPinecone", [source](https://sketchfab.com/3d-models/sewer-brick-walls-set-midpoly-ue5-nanite-27143020c0bb4624aaf4f5257fd603bd), CC BY 4.0
 - **sewer-doorway** - "MightyPinecone", [source](https://sketchfab.com/3d-models/sewer-brick-walls-set-2-midpoly-ue5-nanite-5a5ae221432444f898336627dc192567), CC BY 4.0
 - **sewer-wall** - "MightyPinecone", [source](https://sketchfab.com/3d-models/sewer-brick-walls-set-midpoly-ue5-nanite-27143020c0bb4624aaf4f5257fd603bd), CC BY 4.0
+- **stylized-rock-1** - "FreeStylized", [source](https://freestylized.com/asset_pack/rocks-01/), FreeStylized CC0 (no redistribution of the unmodified pack)
+- **stylized-rock-10** - "FreeStylized", [source](https://freestylized.com/asset_pack/rocks-01/), FreeStylized CC0 (no redistribution of the unmodified pack)
+- **stylized-rock-11** - "FreeStylized", [source](https://freestylized.com/asset_pack/rocks-01/), FreeStylized CC0 (no redistribution of the unmodified pack)
+- **stylized-rock-12** - "FreeStylized", [source](https://freestylized.com/asset_pack/rocks-01/), FreeStylized CC0 (no redistribution of the unmodified pack)
+- **stylized-rock-13** - "FreeStylized", [source](https://freestylized.com/asset_pack/rocks-01/), FreeStylized CC0 (no redistribution of the unmodified pack)
+- **stylized-rock-14** - "FreeStylized", [source](https://freestylized.com/asset_pack/rocks-01/), FreeStylized CC0 (no redistribution of the unmodified pack)
+- **stylized-rock-15** - "FreeStylized", [source](https://freestylized.com/asset_pack/rocks-01/), FreeStylized CC0 (no redistribution of the unmodified pack)
+- **stylized-rock-16** - "FreeStylized", [source](https://freestylized.com/asset_pack/rocks-01/), FreeStylized CC0 (no redistribution of the unmodified pack)
+- **stylized-rock-17** - "FreeStylized", [source](https://freestylized.com/asset_pack/rocks-01/), FreeStylized CC0 (no redistribution of the unmodified pack)
+- **stylized-rock-2** - "FreeStylized", [source](https://freestylized.com/asset_pack/rocks-01/), FreeStylized CC0 (no redistribution of the unmodified pack)
+- **stylized-rock-3** - "FreeStylized", [source](https://freestylized.com/asset_pack/rocks-01/), FreeStylized CC0 (no redistribution of the unmodified pack)
+- **stylized-rock-4** - "FreeStylized", [source](https://freestylized.com/asset_pack/rocks-01/), FreeStylized CC0 (no redistribution of the unmodified pack)
+- **stylized-rock-5** - "FreeStylized", [source](https://freestylized.com/asset_pack/rocks-01/), FreeStylized CC0 (no redistribution of the unmodified pack)
+- **stylized-rock-6** - "FreeStylized", [source](https://freestylized.com/asset_pack/rocks-01/), FreeStylized CC0 (no redistribution of the unmodified pack)
+- **stylized-rock-7** - "FreeStylized", [source](https://freestylized.com/asset_pack/rocks-01/), FreeStylized CC0 (no redistribution of the unmodified pack)
+- **stylized-rock-8** - "FreeStylized", [source](https://freestylized.com/asset_pack/rocks-01/), FreeStylized CC0 (no redistribution of the unmodified pack)
+- **stylized-rock-9** - "FreeStylized", [source](https://freestylized.com/asset_pack/rocks-01/), FreeStylized CC0 (no redistribution of the unmodified pack)
+- **water-wheel** - "lyamborrel", [source](https://sketchfab.com/3d-models/water-wheel-with-cog-b855246572934af19aa062a329c1bcfa), CC BY 4.0
 - **wooden-stool** - "yoyo83710", [source](https://sketchfab.com/3d-models/wooden-stool-528f72346b2f4a1096c1d5104b731d04), CC BY 4.0
 - **yellow_barrel** - "Anna Denisova (@Den1121)", [source](https://sketchfab.com/3d-models/low-poly-closed-barrels-8df46c47099a4b9d9bc4a69edcad1b88), CC BY 4.0
 
@@ -60,12 +89,14 @@ asset to its manifest and regenerate, which is what `cli assets` checks.
 - **mossy ground** (4 maps) - "ambientCG (Lennart Demes)", [source](https://ambientcg.com/view?id=Ground047), CC0
 - **mud** (3 maps) - "Rob Tuytel", [source](https://polyhaven.com/a/brown_mud_02), CC0
 - **painted steel** (3 maps) - "generated by this repository", [source](scripts/bake-strokes.ts), CC0
+- **quarry wall** (4 maps) - "Dimitrios Savva", [source](https://polyhaven.com/a/quarry_wall_02), CC0
 - **rock wall** (4 maps) - "Amal Kumar", [source](https://polyhaven.com/a/rock_wall_08), CC0
 - **rock-black** (4 maps) - "ambientCG (Lennart Demes)", [source](https://ambientcg.com/view?id=Rock035), CC0
 - **rock-charcoal** (4 maps) - "ambientCG (Lennart Demes)", [source](https://ambientcg.com/view?id=Rock014), CC0
 - **rock-grey** (4 maps) - "ambientCG (Lennart Demes)", [source](https://ambientcg.com/view?id=Rock060), CC0
 - **rock-wet** (4 maps) - "ambientCG (Lennart Demes)", [source](https://ambientcg.com/view?id=Rock037), CC0
 - **rusted iron** (4 maps) - "ambientCG (Lennart Demes)", [source](https://ambientcg.com/view?id=Metal053B), CC0
+- **seaside rock** (4 maps) - "Dimitrios Savva", [source](https://polyhaven.com/a/seaside_rock), CC0
 
 ## Environment maps
 

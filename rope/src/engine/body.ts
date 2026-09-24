@@ -4,7 +4,7 @@
 import { Vec2 } from "./vec2";
 import { wrapAngle } from "./mathf";
 import { computeWorldVertices, isExposedCorner, shapeExtents, shapeVertices } from "./shapes";
-import type { RailCurve, Shape, ShapeTransform } from "./shapes";
+import type { BeltLoop, RailCurve, Shape, ShapeTransform } from "./shapes";
 import type { World } from "./world";
 
 // Collision CATEGORIES. Every piece of geometry belongs to one or more of them
@@ -138,6 +138,19 @@ export class CollisionShape2D implements ShapeTransform {
   // lid, bulb and base are hook-proof. Solid for everything else - the avatar
   // stands on it, bodies collide with it, other chains wrap its corners.
   rail: RailCurve | null = null;
+
+  // The CONVEYOR BELT this piece is part of, or null (`lib/belt.ts`): an
+  // authored `belt` shape is built into a disc per wheel and a thin quad per
+  // run of its band, and all of them hold the same `BeltLoop`, in the body's
+  // local frame, as the pieces of a rail share one `RailCurve`.
+  //
+  // `beltSpeed` is how fast the belt's surface runs along the loop, m/s,
+  // signed by the loop's sense (positive turns it clockwise on screen). 0 on
+  // every other surface, and on a belt that is authored standing still -
+  // which then builds and plays exactly as the same pieces authored as plain
+  // statics would.
+  belt: BeltLoop | null = null;
+  beltSpeed = 0;
 
   // How VISCOUS this surface is - mud, tar, wet clay: a face the manacle bites
   // exactly as it bites any other, but does not hold still in. The cuff creeps
@@ -302,6 +315,14 @@ export class CollisionShape2D implements ShapeTransform {
   }
 
   private exposedVertices: boolean[] | null = null;
+
+  // Drop the cached world pose (`globalPosition`, `worldVertices`). Both are
+  // keyed on the mount offset's identity but not on `localRotation`, so a
+  // piece turned in place through `moveShape` has to say so.
+  forgetPose(): void {
+    this.positionVersion = -1;
+    this.verticesVersion = -1;
+  }
 
   invalidateExposure(): void {
     this.exposedVertices = null;
@@ -575,14 +596,18 @@ export abstract class CollisionObject2D {
   }
 
   // Move a shape `addShape` mounted to a new offset in the body's local frame,
-  // keeping its rotation. The one thing that repositions a mounted piece while
-  // the level runs is the manacle creeping through a viscous face
-  // (`RopeEmbed.slip`), and it goes through here so every cache keyed on
-  // where the pieces stand - the corner exposure, the broadphase leaf, the
-  // memoized span list - is told. A shape the body does not carry is a no-op.
-  moveShape(s: CollisionShape2D, localOffset: Vec2): void {
+  // keeping its rotation unless it is handed a new one. The one thing that
+  // repositions a mounted piece while the level runs is the manacle - creeping
+  // through a viscous face (`RopeEmbed.slip`), or carried round a conveyor
+  // belt and turned as it goes (`RopeRide.carry`) - and it goes through here
+  // so every cache keyed on where the pieces stand - the piece's own pose, the
+  // corner exposure, the broadphase leaf, the memoized span list - is told. A
+  // shape the body does not carry is a no-op.
+  moveShape(s: CollisionShape2D, localOffset: Vec2, localRotation = s.localRotation): void {
     if (!this.collisionShapes.includes(s)) return;
     s.localOffset = localOffset;
+    s.localRotation = localRotation;
+    s.forgetPose();
     this.invalidateExposure();
     bumpTransformEpoch();
     if (!this.broadphaseDirty) this.world?.markBroadphaseDirty(this);
@@ -712,6 +737,21 @@ export abstract class PhysicsBody2D extends CollisionObject2D {
   // over time? Separate axis from "physics-driven".
   get isMobile(): boolean {
     return false;
+  }
+
+  // Whether the surface this body presents can have a velocity at a contact.
+  // `isMobile` is about the TRANSFORM moving (the tree, the sweep baselines,
+  // a ledge that follows its body); this is about `velocityAtPoint` being
+  // allowed to answer non-zero. They agree for every body but a conveyor,
+  // whose transform is still while its surface runs (`lib/belt.ts`,
+  // `ConveyorBody`).
+  //
+  // So a site that asks "may this surface CARRY me" - the avatar's grounded
+  // and wall carry, the stiction pin and the steered grip declining a surface
+  // that runs out from under them - reads this, and a site that asks "does
+  // this body's frame move" keeps reading `isMobile`.
+  get surfaceMoves(): boolean {
+    return this.isMobile;
   }
 
   // Surface velocity at a world point: v + ω × r (game-design.md, velocity

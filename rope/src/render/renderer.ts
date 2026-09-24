@@ -2,7 +2,7 @@
 // via Godot's scene graph and Debug canvas overlay.
 
 import { Vec2 } from "../engine/vec2";
-import type { RailCurve, ShapeTransform } from "../engine/shapes";
+import type { BeltLoop, RailCurve, ShapeTransform } from "../engine/shapes";
 import {
   AnimatableBody2D,
   Area2D,
@@ -34,6 +34,7 @@ import { CHAIN_LINK_LEN, CHAIN_LINK_W, walkChain } from "./chainMetrics";
 import type { ChainRetract } from "./chainRetract";
 import { MANACLE_BAND, MANACLE_RADIUS, MANACLE_REACH, MANACLE_THICKNESS } from "../lib/manacle";
 import { railPolyline } from "../lib/rail";
+import { beltBand, beltRenderTime, beltTreadPhase, beltTreadTicks } from "./beltTread";
 import { drawTrainingGrid } from "./trainingGrid";
 import { drawDecor } from "./decor";
 import { drawVines } from "./vines";
@@ -79,6 +80,9 @@ const BREAK_EDGE = "#c96a6a";
 const BREAK_DASH = [3 * PX, 5 * PX];
 const BREAK_WIDTH = 3 * PX;
 const RAIL_LINE = "#9db8c6"; // a rail's centreline: the same steel, drawn down the bar
+// A conveyor's tread ticks: near-white, which reads on the dark fill over the
+// dark SVG ground and on the same fill over the pale 2D grid alike.
+const BELT_TREAD = "#e6e8eb";
 const ANCHOR_FILL = "rgba(122,140,155,0.38)"; // hook-only scenery with no authored colour
 const FORCE_FILL = "rgba(101,189,219,0.16)"; // force areas with no authored colour
 // Water with no authored colour: sewer green, dark and murky rather than the
@@ -100,7 +104,14 @@ function pathShape(ctx: CanvasRenderingContext2D, t: ShapeTransform): void {
 // `alpha` is the render interpolation factor (see CollisionObject2D.renderShape):
 // every body is drawn between its previous and current sim transform, so motion
 // is smooth on a display faster than the 60 Hz simulation.
-function drawBody(ctx: CanvasRenderingContext2D, body: CollisionObject2D, alpha: number): void {
+function drawBody(
+  ctx: CanvasRenderingContext2D,
+  body: CollisionObject2D,
+  alpha: number,
+  // The sim time the frame stands for, in seconds, which carries a conveyor's
+  // tread round its loop (`beltRenderTime`). Read, never written.
+  treadTime = 0,
+): void {
   if (!body.hasShape()) return;
   const t = body.renderShape(alpha);
   // The avatars are drawn from their primary shape alone and return below: the
@@ -154,6 +165,9 @@ function drawBody(ctx: CanvasRenderingContext2D, body: CollisionObject2D, alpha:
     pieces.push(p);
     shapes.push(placed[i]!);
   });
+  // A conveyor is built as a disc per wheel and a quad per run, and drawn as
+  // the ONE band it is (see `collapseBelts`).
+  const belts = collapseBelts(shapes, pieces);
   // A compound body is ONE object, and drawing it piece by piece says otherwise:
   // the overlaps fill twice and read as a darker patch, and the joins get a
   // border each and read as cracks across a solid wall. So its pieces are filled
@@ -179,9 +193,106 @@ function drawBody(ctx: CanvasRenderingContext2D, body: CollisionObject2D, alpha:
   }
   if (shapes.length > 1 && !(body instanceof Area2D) && !body.passable) {
     drawCompoundGeometry(ctx, body, shapes, pieces);
-    return;
+  } else {
+    shapes.forEach((s, i) => drawGeometryShape(ctx, body, s, pieces[i]));
   }
-  shapes.forEach((s, i) => drawGeometryShape(ctx, body, s, pieces[i]));
+  // Each belt as its band, then the tread over the fill and the edge, since it
+  // is a mark ON the surface.
+  for (const b of belts) {
+    drawBeltBand(ctx, body, b);
+    drawBeltTread(ctx, b, treadTime);
+  }
+}
+
+// One belt as drawn: its loop in the body's frame, how fast it runs, the
+// body's interpolated pose, and the piece whose flags (hook-proof, mud) the
+// band's edge wears - the belt's, since its pieces share one authored object.
+interface DrawnBelt {
+  loop: BeltLoop;
+  speed: number;
+  pos: Vec2;
+  rot: number;
+  piece: CollisionShape2D;
+}
+
+// Take a belt's pieces out of the ones drawn as geometry, in place, and hand
+// back one `DrawnBelt` per belt instead. The pieces are what the belt COLLIDES
+// as - a disc per wheel and a quad per run - and drawn as such they would fill
+// the wheels solid and show a seam at every tangent point. A belt is drawn as
+// its BAND (`drawBeltBand`), whose inside is the hollow the author puts wheel
+// props in, and nothing at the wheels at all.
+function collapseBelts(shapes: ShapeTransform[], pieces: CollisionShape2D[]): DrawnBelt[] {
+  if (!pieces.some((p) => p.belt !== null)) return [];
+  const belts: DrawnBelt[] = [];
+  const seen = new Set<BeltLoop>();
+  let w = 0;
+  for (let i = 0; i < pieces.length; i++) {
+    const piece = pieces[i]!;
+    const t = shapes[i]!;
+    const loop = piece.belt;
+    if (loop === null) {
+      shapes[w] = t;
+      pieces[w] = piece;
+      w++;
+      continue;
+    }
+    if (seen.has(loop)) continue;
+    seen.add(loop);
+    const pose = bodyPoseOf(t, piece);
+    belts.push({ loop, speed: piece.beltSpeed, pos: pose.pos, rot: pose.rot, piece });
+  }
+  shapes.length = w;
+  pieces.length = w;
+  return belts;
+}
+
+// The band: its outer loop and its inner loop as one path filled EVEN-ODD, so
+// the fill is the band and the inside of the belt shows what is behind it, and
+// both loops edged as a piece's border is (hook-proof and mud included).
+function drawBeltBand(ctx: CanvasRenderingContext2D, body: CollisionObject2D, b: DrawnBelt): void {
+  const { outer, inner } = beltBand(b.loop);
+  const path = new Path2D();
+  for (const ring of [outer, inner]) {
+    ring.forEach((v, i) => {
+      const p = b.pos.add(v.rotated(b.rot));
+      if (i === 0) path.moveTo(p.x, p.y);
+      else path.lineTo(p.x, p.y);
+    });
+    path.closePath();
+  }
+  if (body.breakForce > 0) {
+    ctx.strokeStyle = BREAK_EDGE;
+    ctx.lineWidth = BREAK_WIDTH;
+    ctx.setLineDash(BREAK_DASH);
+    ctx.stroke(path);
+  }
+  const style = geometryStyle(body, b.piece);
+  if (style.fill) {
+    ctx.fillStyle = style.fill;
+    ctx.fill(path, "evenodd");
+  }
+  ctx.strokeStyle = style.stroke;
+  ctx.lineWidth = style.width;
+  ctx.setLineDash(style.dash);
+  ctx.stroke(path);
+  ctx.setLineDash([]);
+}
+
+// The tread: short ticks across the loop, carried round it at the belt's speed
+// by the sim clock (`render/beltTread.ts`), so a replay shows the same belt.
+function drawBeltTread(ctx: CanvasRenderingContext2D, b: DrawnBelt, time: number): void {
+  const ticks = beltTreadTicks(b.loop, beltTreadPhase(b.loop, b.speed, time));
+  ctx.strokeStyle = BELT_TREAD;
+  ctx.lineWidth = 1.5 * PX;
+  ctx.setLineDash([]);
+  ctx.beginPath();
+  for (const { a, b: c } of ticks) {
+    const p = b.pos.add(a.rotated(b.rot));
+    const q = b.pos.add(c.rotated(b.rot));
+    ctx.moveTo(p.x, p.y);
+    ctx.lineTo(q.x, q.y);
+  }
+  ctx.stroke();
 }
 
 // How a body's geometry is painted: the same choices `drawGeometryShape` makes,
@@ -627,6 +738,8 @@ export function render(
   debris: DebrisSystem | null = null,
 ): void {
   const { width: viewWidth, height: viewHeight } = view;
+  // The sim instant this frame stands for, which carries every conveyor's tread.
+  const treadTime = beltRenderTime(level.frame, alpha);
   ctx.setTransform(view.scale, 0, 0, view.scale, view.originX, view.originY);
   if (overlayOnly) ctx.clearRect(0, 0, viewWidth, viewHeight);
   else drawTrainingGrid(ctx, camera, viewWidth, viewHeight);
@@ -656,7 +769,7 @@ export function render(
   // `renderBall`).
   if (!overlayOnly) {
     for (const body of level.world.bodies) {
-      if (body.passable) drawBody(ctx, body, alpha);
+      if (body.passable) drawBody(ctx, body, alpha, treadTime);
     }
   }
   if (!overlayOnly) {
@@ -667,7 +780,7 @@ export function render(
       // gauge the vine is drawn at, and a vine is one cord rather than thirty
       // discs - `drawVines` below draws the whole thing from the link centres.
       if (body instanceof VineLink) continue;
-      drawBody(ctx, body, alpha);
+      drawBody(ctx, body, alpha, treadTime);
     }
   }
   for (const area of level.world.areas) {
@@ -675,7 +788,7 @@ export function render(
     // rather than a mark on a region, so in 3D (`overlayOnly`) the scene draws
     // the real thing and a lattice of streaks over the top would only fight it.
     if (overlayOnly && area instanceof WaterArea) continue;
-    drawBody(ctx, area, alpha);
+    drawBody(ctx, area, alpha, treadTime);
   }
 
   // Vines over the geometry and under the player: a vine is a thing the player
@@ -1000,6 +1113,8 @@ export function renderBall(
   debris: DebrisSystem | null = null,
 ): void {
   const { width: viewWidth, height: viewHeight } = view;
+  // See `render`: the sim instant that carries every conveyor's tread.
+  const treadTime = beltRenderTime(level.frame, alpha);
   ctx.setTransform(view.scale, 0, 0, view.scale, view.originX, view.originY);
   if (overlayOnly) ctx.clearRect(0, 0, viewWidth, viewHeight);
   else drawTrainingGrid(ctx, camera, viewWidth, viewHeight);
@@ -1028,7 +1143,7 @@ export function renderBall(
   // "Pass-through geometry must read as pass-through" in docs/game-design.md).
   if (!overlayOnly) {
     for (const body of level.world.bodies) {
-      if (body.passable) drawBody(ctx, body, alpha);
+      if (body.passable) drawBody(ctx, body, alpha, treadTime);
     }
   }
   if (!overlayOnly) {
@@ -1037,7 +1152,7 @@ export function renderBall(
       if (body instanceof BallHook) continue; // the manacle is drawn at the chain tip
       if (body.passable) continue; // already drawn, behind
       if (body instanceof VineLink) continue; // one cord, not twenty discs (see `render`)
-      drawBody(ctx, body, alpha);
+      drawBody(ctx, body, alpha, treadTime);
     }
     // ...and the vine as that cord, over the geometry and under the ball. 2D
     // only, for the reason `render` gives: in 3D the scene draws it.
@@ -1051,7 +1166,7 @@ export function renderBall(
     // rather than a mark on a region, so in 3D (`overlayOnly`) the scene draws
     // the real thing and a lattice of streaks over the top would only fight it.
     if (overlayOnly && area instanceof WaterArea) continue;
-    drawBody(ctx, area, alpha);
+    drawBody(ctx, area, alpha, treadTime);
   }
 
   // Metal chain behind the ball. Links are laid at a fixed length from the
@@ -1113,13 +1228,10 @@ export function renderBall(
   debris?.draw(ctx);
   sparks?.draw(ctx);
 
-  // Not while the level is still opening - rolling the ball in, or playing back
-  // the run it arrives on (see `BallLevel.handsOff`): until the ball is handed
-  // over the player's aim does nothing, and a reticle drawn over an opening it
-  // cannot steer is a cursor that looks broken. Asked of the LEVEL rather than
-  // left to each caller, so the game, the editor's ▶ Test and `cli shot` all
-  // draw the same opening.
-  if (aimWorld && !level.handsOff) drawAimReticle(ctx, aimWorld);
+  // Drawn through a level's opening as well: the reticle stands in for the
+  // hidden OS pointer, and a cursor that vanishes while the ball rolls in is a
+  // pointer the player has lost.
+  if (aimWorld) drawAimReticle(ctx, aimWorld);
 
   ctx.restore();
 

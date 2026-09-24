@@ -38,8 +38,9 @@ import * as THREE from "three";
 import { generatedRootAsset } from "./generatedRoots";
 import { generatedBoulderAsset } from "./generatedBoulders";
 import { generatedVineAsset } from "./generatedVines";
+// Type-only, so the loader's module still lands in its own chunk (`gltfLoader`).
+import type { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { withDownload } from "./download";
-import { paintMaterial, paintTree } from "./paint";
 import { MATERIAL_NAMES, type MaterialName } from "../lib/shapeGeometry";
 
 // How a surface looks. `tile` is the size of one texture repeat in METRES, which
@@ -92,6 +93,17 @@ export const DEFAULT_TEXTURE: MaterialName = "wood";
 // the manifest above and because both readers have to agree about it: a scene
 // with any chain in it loads this set, ball level or not.
 export const IRON_SURFACE = "painted steel";
+
+// The avatar's own model (`MESH_ASSETS`, and see `BallVisual`). Named here for
+// the same reason the surface above is: the preload list a page starts fetching
+// before the app exists has to account for the ball, and the resolver that
+// builds it (`levelAssets.ts`) cannot import the avatar's module without
+// dragging the sim and three into a build step.
+export const BALL_MESH = "iron-ball";
+// The radius, in metres, the ball in that model is modelled at (the mean over
+// its hammered surface is 99.95 mm). `BallVisual` scales by the ball's own
+// radius over this.
+export const BALL_MESH_RADIUS = 0.1;
 
 export function textureSetName(name: string | undefined): MaterialName {
   if (name !== undefined && (MATERIAL_NAMES as string[]).includes(name)) return name as MaterialName;
@@ -513,6 +525,110 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
     strokes: { width: 14 },
     source: "https://polyhaven.com/a/marble_cliff_05",
     author: "Amal Kumar",
+    license: "CC0",
+  },
+  // Dark grey-brown shore rock (#454037 mean): a rough, pitted face with
+  // rounded weathered lumps, the rock a sea cliff or a wave-worn boulder is.
+  //
+  // This and `quarry wall` are the DETAIL tiles for the generated rocks (see
+  // docs/rocks.md, "The rock material"), composed in a custom material of
+  // their own. Since 2026-09-24 the rocks are stylised, so both are painted
+  // (a brush, flattened into plateaus) and the material keeps only a low-
+  // contrast mottling of this albedo and a subtle relief of the other's
+  // normal. No `strokes`: at the rock's scale the plateaus are the paint.
+  //
+  // Keyed as a SURFACE for the reason the other rocks are: `stone` already has
+  // a generated surface every stone body wears by naming its material.
+  "seaside rock": {
+    maps: {
+      base: {
+        file: "/textures/seaside-rock-base.webp",
+        raw: "seaside-rock/textures/seaside_rock_diff_2k.jpg",
+        sha256: "cc7fdfe2e72b022c2719a8f695b3a8e0a40939bae0738b36181430078b64c896",
+        bytes: 18040,
+        paint: { brush: 36 },
+      },
+      normal: {
+        file: "/textures/seaside-rock-normal.webp",
+        raw: "seaside-rock/textures/seaside_rock_nor_gl_2k.jpg",
+        sha256: "386aaab0244c619fd941e4a293e182825f2e7499e6935467510a6be685ead696",
+        bytes: 89544,
+        paint: { brush: 36 },
+      },
+      // Poly Haven's packed ARM image - R ambient occlusion, G roughness, B
+      // metallic (zero, stated below) - read on two channels.
+      roughness: {
+        file: "/textures/seaside-rock-roughness.webp",
+        raw: "seaside-rock/textures/seaside_rock_arm_2k.jpg",
+        channel: "g",
+        sha256: "8671d45754f3b0c4f6d06f949a2b26f866c0202011e24d36c38fe5c641e84adc",
+        bytes: 4630,
+        paint: { brush: 36 },
+      },
+      ao: {
+        file: "/textures/seaside-rock-ao.webp",
+        raw: "seaside-rock/textures/seaside_rock_arm_2k.jpg",
+        channel: "r",
+        sha256: "63b573623473b5287665ba75a19b4546f9b969683bb67122a0aab019e95d2f7c",
+        bytes: 15590,
+        paint: { brush: 36 },
+      },
+    },
+    // Poly Haven's own captured size, 2 m square
+    // (https://api.polyhaven.com/info/seaside_rock).
+    tile: 2,
+    metalness: 0,
+    fallback: "stone",
+    source: "https://polyhaven.com/a/seaside_rock",
+    author: "Dimitrios Savva",
+    license: "CC0",
+  },
+  // Warm brown-grey quarried rock (#564938 mean): broken, blocky faces with
+  // sharp fracture edges, the cut face a quarry or a blasted cutting shows.
+  //
+  // A detail tile for the generated rocks' own material, painted as
+  // `seaside rock` is and for the same reason. No `strokes`.
+  "quarry wall": {
+    maps: {
+      base: {
+        file: "/textures/quarry-wall-base.webp",
+        raw: "quarry-wall/textures/quarry_wall_02_diff_2k.jpg",
+        sha256: "c6f9d35cccf8c9b75386bf948e88434b98d169d8387b5f3580747df7ac9c69b4",
+        bytes: 32924,
+        paint: { brush: 36 },
+      },
+      normal: {
+        file: "/textures/quarry-wall-normal.webp",
+        raw: "quarry-wall/textures/quarry_wall_02_nor_gl_2k.jpg",
+        sha256: "51c16c18a48879a365f0fc7112677ee25bcb9ee84f36e545f82d217e9f638a53",
+        bytes: 211266,
+        paint: { brush: 36 },
+      },
+      // Packed ARM again: R ambient occlusion, G roughness, B metallic (zero).
+      roughness: {
+        file: "/textures/quarry-wall-roughness.webp",
+        raw: "quarry-wall/textures/quarry_wall_02_arm_2k.jpg",
+        channel: "g",
+        sha256: "ad3932537a5aee3bbcfaa73116738709034a876c17bb2e2ba04b9e531de19c9f",
+        bytes: 7596,
+        paint: { brush: 36 },
+      },
+      ao: {
+        file: "/textures/quarry-wall-ao.webp",
+        raw: "quarry-wall/textures/quarry_wall_02_arm_2k.jpg",
+        channel: "r",
+        sha256: "0e84907038fee318caad2bc686b4ab908c4e0b1a75af4406370c09692bf6881a",
+        bytes: 19542,
+        paint: { brush: 36 },
+      },
+    },
+    // Poly Haven's own captured size, 1.8 m square
+    // (https://api.polyhaven.com/info/quarry_wall_02).
+    tile: 1.8,
+    metalness: 0,
+    fallback: "stone",
+    source: "https://polyhaven.com/a/quarry_wall_02",
+    author: "Dimitrios Savva",
     license: "CC0",
   },
   // Plain grey rock, warm rather than blue (#605B57 mean) - a rough face broken
@@ -1422,8 +1538,7 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
   // published like the rest. Tuned to a reference painting of a clean
   // polished steel ball (2026-09-17): a mid-grey ground under soft,
   // low-contrast strokes that turn with the ball, and the scene's own
-  // reflection, kept soft (render3d/paint.ts), for the shine. See
-  // docs/art-style.md.
+  // reflection for the shine. See docs/art-style.md.
   "painted steel": {
     maps: {
       base: {
@@ -1453,11 +1568,13 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
     // The ridges along the strokes, kept faint: at full strength they were a
     // second grain on top of the strokes.
     normalScale: 0.5,
-    // The map is the roughness (a polished mean, streaky dab by dab). Metal
-    // enough that the soft reflection is its shine, dielectric enough that the
-    // strokes' own mid grey carries its value in a dark level - a cave's
-    // environment is dark, and a mirror of a dark room is a dark ball.
-    metalness: 0.6,
+    // Half the map's roughness (a 0.47 mean, streaky dab by dab), so the
+    // links shine: at the map's own value they were a soft matte sheen. Metal
+    // enough that the reflection is most of their colour, with a little of
+    // the strokes' own mid grey left to carry their value in a dark level - a
+    // cave's environment is dark, and a mirror of a dark room is a dark chain.
+    roughness: 0.5,
+    metalness: 0.9,
     fallback: "steel",
     source: "scripts/bake-strokes.ts",
     author: "generated by this repository",
@@ -1521,10 +1638,8 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
     // blue sky and nothing else: the rust and the pitting the set was chosen for
     // are wiped out by a reflection of the air. Roughened, the albedo and the
     // metallic map are what is seen, which is the point of having them.
-    // Down from 3.2 for the painted look: with the environment reflection now
-    // banded (render3d/paint.ts) a shine is a drawn highlight rather than a
-    // mirror of the sky, and the ball is meant to have one. 1.4 was two hard
-    // billiard-ball hits; 2.2 is a soft blob.
+    // Down from 3.2 so the ball has a shine; 1.4 was two hard billiard-ball
+    // hits, 2.2 is a soft blob.
     roughness: 2.2,
     // Metalness has its own map (bare metal reads ~1, rust ~0), and this scales
     // it down rather than replacing it: the map's own bare metal is a 0.91 mean,
@@ -1533,14 +1648,6 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
     // moving thing on screen, which is not what the thing you are steering
     // should be. Scaled down it keeps the map's rust/metal contrast and reads as
     // iron rather than as chrome.
-    //
-    // Lower again for the painted look (0.85 before 2026-09-17): a metal's
-    // colour is its reflection, and a painter's iron is a dark flat tone with
-    // one soft sheen, not a picture of the room. At 0.4 the banded diffuse
-    // (see render3d/paint.ts) carries most of the ball and the banded
-    // reflection is the sheen. Back up to 0.75 once the reflection was made
-    // safe to wear (see PAINT_REFLECTION_CEILING): a metal IS its reflection,
-    // and at 0.15 the ball was a grey rubber sphere with a lit side.
     metalness: 0.75,
     fallback: "cast iron",
     strokes: { width: 12 },
@@ -1993,7 +2100,7 @@ export async function assetsSettled(): Promise<void> {
 // shares that upload while carrying its own `repeat`.
 const imageCache = new Map<string, Promise<LoadedMaps>>();
 type Slot = "base" | "normal" | "roughness" | "metallic" | "ao" | "emissive";
-type LoadedMaps = Partial<Record<Slot, THREE.Texture>>;
+export type LoadedMaps = Partial<Record<Slot, THREE.Texture>>;
 
 let textureLoader: THREE.TextureLoader | null = null;
 
@@ -2183,9 +2290,7 @@ function buildSurface(
   // A flat fill: no maps at all. The colour itself is applied by `surfaceFor`
   // like every other tint, so this is only the absence of a pattern.
   if (name === SOLID_SURFACE) {
-    const flat = new THREE.MeshStandardMaterial({ roughness: SOLID_ROUGHNESS, metalness: 0 });
-    paintMaterial(flat);
-    return flat;
+    return new THREE.MeshStandardMaterial({ roughness: SOLID_ROUGHNESS, metalness: 0 });
   }
   const set = TEXTURE_SETS[name as MaterialName];
   let maps = mapsCache.get(name);
@@ -2199,7 +2304,7 @@ function buildSurface(
     roughnessMap: maps.roughnessMap.clone(),
   };
   for (const t of [maps.map, maps.normalMap, maps.roughnessMap]) applyTiling(t, tile, ox, oy);
-  const mat = new THREE.MeshStandardMaterial({
+  return new THREE.MeshStandardMaterial({
     map: maps.map,
     normalMap: maps.normalMap,
     roughnessMap: maps.roughnessMap,
@@ -2207,10 +2312,6 @@ function buildSurface(
     metalness: set.metalness,
     normalScale: new THREE.Vector2(1, 1),
   });
-  // The painted light (paint.ts) is worn here, at the one place a surface is
-  // built, so an authored set dressed into this material later wears it too.
-  paintMaterial(mat);
-  return mat;
 }
 
 // ---------------------------------------------------------------------------
@@ -2353,7 +2454,80 @@ function rock(node: string): MeshAsset {
   };
 }
 
+// The 17 rocks of FreeStylized's "Rocks 01" pack (Rocks1_(AssetPack2).zip),
+// extracted together into ONE file for the same reason as `rock()` above. Only
+// LOD0 of each is in here - this renderer has no LOD switching, and LOD0 is
+// already game-weight (60 to 3278 tris). The pack is authored in Blender at
+// real-world metres, Z up, so `assets:extract` only turns it Y up; each origin
+// is where the pack's modeller put it, at the rock's BASE rather than its
+// centre, so a level stands one of these on a surface by its position.
+//
+// The pack's own material mixes a clean albedo with a gradient and a dirt mask
+// in Blender nodes that glTF cannot carry, so the file wears the pack's baked
+// equivalent, `AP2_Rocks_BaseColor_V2` (the brown-dirt variant; the pack's
+// other bake, `AP2_Rocks_BaseColor`, is the same with green moss), plus
+// `Normal_GL` and `Roughness` - one 2k set, 1k WebP once optimised.
+//
+// Numbered as the pack numbers them, which runs roughly by size: 1-4 are
+// boulders under 2 m, 5-9 are 3-5 m outcrops, 10-11 are 8 m pillars and 12-17
+// are 8-10 m cliff pieces. The pack node behind `stylized-rock-N` is `RockN_LOD0`.
+//
+// The licence is FreeStylized's custom CC0: free for any use, attribution
+// appreciated, but no redistributing the pack as it ships. What the store holds
+// is a derivative (one mesh out of three LODs, re-encoded, 1k maps), the same
+// footing `rock-196` wears their textures on.
+function stylizedRock(node: string): MeshAsset {
+  return {
+    file: "/meshes/stylized-rocks.glb",
+    node,
+    sha256: "82449cb7a62c3ea4aae3b8f680fe92174d74f84c7e798656603a89eb0852267c",
+    bytes: 336024,
+    source: "https://freestylized.com/asset_pack/rocks-01/",
+    author: "FreeStylized",
+    license: "FreeStylized CC0 (no redistribution of the unmodified pack)",
+  };
+}
+
 export const MESH_ASSETS: Record<string, MeshAsset> = {
+  // THE AVATAR. A hammered cast-iron ball with a thin forged loop at its pole,
+  // modelled for this game - the first prop here that is not scenery, and the
+  // one thing on screen the player looks at for the whole of a run (see
+  // `BallVisual`, which wears it, and `BALL_MESH` below, which is the name both
+  // it and the preload resolver address it by).
+  //
+  // Metres, Y up, the ball centred on the origin at `BALL_MESH_RADIUS` (10 cm)
+  // and the loop in the XY plane at +Y, its top at 1.40 radii - a centimetre
+  // proud of the collision lug's reach (`radius + BallPlayer.LOOP_EXCESS`,
+  // 1.29 radii at the level's 12 cm ball), which the previous delivery matched
+  // at 1.30. `BallVisual` scales the whole assembly from the modelled radius
+  // to the ball's own, so a level that authors a different one
+  // (`SpawnData.radius`) needs no second asset, and the loop rides the ball's
+  // rotation as the material point it is.
+  //
+  // The fourth delivery (`improved_LOD0.glb`, raw at `assets-src/iron-ball.glb`),
+  // through `assets:optimize --keep-nodes` with nothing else. Two nodes, `Ball`
+  // (101,760 triangles) and `Loop` (34,560), and no `simplify`: a sphere's
+  // silhouette IS the thing, this one is drawn once and it is the closest
+  // object to the camera in every frame - and the hammer facets are in the
+  // geometry here, the normal maps being all but flat. Each node has its own
+  // material with a full PBR set - albedo, normal, and packed AO/roughness/
+  // metalness - on its own UV wrap with no background (the ball's equirect),
+  // so nothing bleeds in down the mips.
+  "iron-ball": {
+    file: "/meshes/iron-ball.glb",
+    sha256: "141414c00dacbddf298750c66b60fc57aca1fd749731e8ff34997525c2149e54",
+    bytes: 702608,
+    // A private commission rather than a download, so `source` is what it is
+    // rather than a URL, and the author is deliberately unnamed - the modeller
+    // asked for no credit. It still states a person and a permission, because
+    // what this field is FOR is answering "can this ship" a year from now, and
+    // "no attribution required" is the answer to a different question than
+    // "may it be redistributed" (see docs/asset-store.md, which requires both
+    // of any asset in the public store).
+    source: "modelled for this game, delivered as a glTF binary",
+    author: "a private commission, credit declined",
+    license: "used with permission, redistributable, no attribution required",
+  },
   // A chequered gantry: two posts, a banner across the top and a band of
   // chequers at the bottom - the thing a level ENDS at (see the `finish` body
   // kind and docs/levels.md). UNTEXTURED, which is why it is 6 KB: the chequers
@@ -2748,6 +2922,34 @@ export const MESH_ASSETS: Record<string, MeshAsset> = {
     author: "FuzerGamesTV",
     license: "CC BY 4.0",
   },
+  // A wooden water wheel with a cog on its axle - paddles on the rim, the
+  // axle standing out the back to a toothed gear. Rendered through `loadMesh`
+  // it measures 6.8 x 6.8 x 6.5 m: the wheel faces the camera in x/y and the
+  // axle runs along z. As exported the axle runs toward +z, which in this game
+  // is TOWARD the camera (render3d/space.ts), so the cog would hang 5 m in front
+  // of the wheel between the player and the gameplay plane; `rotY: Math.PI`
+  // turns it round so the drive train runs back into the scene.
+  //
+  // Its origin is ON THE HUB, the point the wheel turns about, which is the
+  // pivot a level wants for a wheel whether it spins or not, so it is not
+  // `center`ed: the bounds' centre is 1.85 m down the axle, and centring would
+  // put the pivot behind the wheel.
+  //
+  // No `simplify`: 1,150 triangles. What its 7.5 MB raw was is three 2048²
+  // PNGs (albedo, normal, metallic-roughness); at the 1k WebP ceiling it is
+  // 191 KB.
+  "water-wheel": {
+    file: "/meshes/water-wheel.glb",
+    sha256: "2329349417feecb3dc420acbfa5d3fac80658236b48a7b0c535ae8ba29f468b3",
+    bytes: 190820,
+    rotY: Math.PI,
+    // CC BY, so the credit names the person rather than the page (see
+    // "Provenance, in the manifest" in docs/asset-store.md).
+    source:
+      "https://sketchfab.com/3d-models/water-wheel-with-cog-b855246572934af19aa062a329c1bcfa",
+    author: "lyamborrel",
+    license: "CC BY 4.0",
+  },
   // A four-legged wooden stool with a round seat and a square stretcher, the
   // kind that dresses a cellar or a hut interior. Rendered through `loadMesh`
   // it measures 0.344 x 0.523 x 0.344 m, a real stool's size, so it wears
@@ -2764,6 +2966,101 @@ export const MESH_ASSETS: Record<string, MeshAsset> = {
   // its 3.03 MB raw was is three 1024² PNGs - albedo, normal and a packed
   // AO/metallic-roughness - 209 KB once they are WebP, so this is the ordinary
   // case the texture ceiling is for rather than a prop that needed an argument.
+  // Hand-authored rock props (docs/rock-assets.md): modelled in headless
+  // Blender from a level body's collision outline, baked from the high mesh
+  // onto a low one, wearing the CC0 "cliff rocks 07" set from freestylized.com
+  // (base colour desaturated and lifted, see tools/blender/rock_asset.py).
+  // Metres, origin at the BODY's origin (the mesh object sits at 0,0), front
+  // toward +z.
+  "rock-196": {
+    file: "/meshes/rock-196.glb",
+    sha256: "b8a62112c65f12a2b3ef784954ae6df65cee9a2a6144e0016f11528116bcceb6",
+    bytes: 119420,
+    source: "tools/blender/rock_asset.py from levels/ball.json body 196; textures https://freestylized.com/material/cliff_rocks_07/",
+    author: "Tristan Bray (textures: freestylized.com)",
+    license: "CC0",
+  },
+  // The long low slab rock-196 stands on, detailed at its 1.4 m height rather
+  // than its 4.5 m length (the job's `detail`).
+  "rock-197": {
+    file: "/meshes/rock-197.glb",
+    sha256: "68809680abf8dbf6d1ee27238868902d0cbbbe58597f262f8cd4b6789aafa0bb",
+    bytes: 116096,
+    source: "tools/blender/rock_asset.py from levels/ball.json body 197; textures https://freestylized.com/material/cliff_rocks_07/",
+    author: "Tristan Bray (textures: freestylized.com)",
+    license: "CC0",
+  },
+  // The rock hanging from the roof above the slab, tapered in depth to a blunt
+  // tip (the job's `taper`), and the moss wrapping that tip (body 190).
+  "rock-199": {
+    file: "/meshes/rock-199.glb",
+    sha256: "f9376fb2c53b023d7271ce9e6e16103e41194af5b488e20482a30828c7ecbfa3",
+    bytes: 103736,
+    source: "tools/blender/rock_asset.py from levels/ball.json body 199; textures https://freestylized.com/material/cliff_rocks_07/",
+    author: "Tristan Bray (textures: freestylized.com)",
+    license: "CC0",
+  },
+  "moss-190": {
+    file: "/meshes/moss-190.glb",
+    sha256: "42e7825587c7c4d3edf1e62ce212536d81b2335fadaed9905c1b7e4c87cb4574",
+    bytes: 454816,
+    source: "tools/blender/rock_asset.py from levels/ball.json body 190; textures https://freestylized.com/material/moss_ground_01/",
+    author: "Tristan Bray (textures: freestylized.com)",
+    license: "CC0",
+  },
+  // The second rock hanging from the roof, beside rock-199, and its moss (body 191).
+  "rock-200": {
+    file: "/meshes/rock-200.glb",
+    sha256: "bc73e0b71b55def23ec1cd0319bc3c7000428b0b405989c40840b7f45f9c7b42",
+    bytes: 99308,
+    source: "tools/blender/rock_asset.py from levels/ball.json body 200; textures https://freestylized.com/material/cliff_rocks_07/",
+    author: "Tristan Bray (textures: freestylized.com)",
+    license: "CC0",
+  },
+  "moss-191": {
+    file: "/meshes/moss-191.glb",
+    sha256: "26bc65ae9fd3621c4481ea0a8208f234a088d4ee41296f6bec3ca21304cbcde2",
+    bytes: 447840,
+    source: "tools/blender/rock_asset.py from levels/ball.json body 191; textures https://freestylized.com/material/moss_ground_01/",
+    author: "Tristan Bray (textures: freestylized.com)",
+    license: "CC0",
+  },
+  // The large rock hanging right of rock-200, and its two mosses (bodies 145, 160).
+  "rock-201": {
+    file: "/meshes/rock-201.glb",
+    sha256: "f40b7993dad5526baafa575698c3a4ac3bd60b5c58ee66827b1c788fb028fdc2",
+    bytes: 101156,
+    source: "tools/blender/rock_asset.py from levels/ball.json body 201; textures https://freestylized.com/material/cliff_rocks_07/",
+    author: "Tristan Bray (textures: freestylized.com)",
+    license: "CC0",
+  },
+  "moss-145": {
+    file: "/meshes/moss-145.glb",
+    sha256: "86cfa15591c6ac8d709846b0c9ab381b93d4d74b5be0dff97767ddf39d7afb62",
+    bytes: 484276,
+    source: "tools/blender/rock_asset.py from levels/ball.json body 145; textures https://freestylized.com/material/moss_ground_01/",
+    author: "Tristan Bray (textures: freestylized.com)",
+    license: "CC0",
+  },
+  "moss-160": {
+    file: "/meshes/moss-160.glb",
+    sha256: "b81c41dc205bb77c45fff8384fc34604fb308fedc32b23d54b68fa56fa297636",
+    bytes: 386180,
+    source: "tools/blender/rock_asset.py from levels/ball.json body 160; textures https://freestylized.com/material/moss_ground_01/",
+    author: "Tristan Bray (textures: freestylized.com)",
+    license: "CC0",
+  },
+  // The moss carpet over rock-196, from its own body's outline (body 192; the
+  // hook attaches to moss, so it is its own body and its own prop), wearing the
+  // CC0 "moss ground 01" set from freestylized.com.
+  "moss-192": {
+    file: "/meshes/moss-192.glb",
+    sha256: "6dbaeeb9b4c43ff133b01ded9b9d73cac2661a588e2f660a47706f09d2192ec6",
+    bytes: 461992,
+    source: "tools/blender/rock_asset.py from levels/ball.json body 192; textures https://freestylized.com/material/moss_ground_01/",
+    author: "Tristan Bray (textures: freestylized.com)",
+    license: "CC0",
+  },
   "wooden-stool": {
     file: "/meshes/wooden-stool.glb",
     sha256: "8d0ebb3a81af469bbb87d67b7d3ba083ab82aefaf49392dcb6294d231fd1da9f",
@@ -2832,6 +3129,40 @@ export const MESH_ASSETS: Record<string, MeshAsset> = {
   "rock-23": rock("rock-23"),
   // 2.04 x 0.95 x 1.05 m, 1994 tris (Cliffs_LargeStone_6)
   "rock-24": rock("rock-24"),
+  // 0.70 x 0.56 x 0.67 m, 60 tris
+  "stylized-rock-1": stylizedRock("stylized-rock-1"),
+  // 1.60 x 1.04 x 1.34 m, 170 tris
+  "stylized-rock-2": stylizedRock("stylized-rock-2"),
+  // 2.02 x 1.30 x 1.76 m, 140 tris
+  "stylized-rock-3": stylizedRock("stylized-rock-3"),
+  // 1.59 x 1.27 x 1.15 m, 196 tris
+  "stylized-rock-4": stylizedRock("stylized-rock-4"),
+  // 3.39 x 5.29 x 3.52 m, 492 tris
+  "stylized-rock-5": stylizedRock("stylized-rock-5"),
+  // 3.46 x 3.45 x 2.85 m, 418 tris
+  "stylized-rock-6": stylizedRock("stylized-rock-6"),
+  // 3.56 x 3.21 x 2.96 m, 402 tris
+  "stylized-rock-7": stylizedRock("stylized-rock-7"),
+  // 3.27 x 5.16 x 2.30 m, 344 tris
+  "stylized-rock-8": stylizedRock("stylized-rock-8"),
+  // 5.05 x 4.17 x 4.11 m, 420 tris
+  "stylized-rock-9": stylizedRock("stylized-rock-9"),
+  // 3.68 x 7.83 x 3.31 m, 500 tris
+  "stylized-rock-10": stylizedRock("stylized-rock-10"),
+  // 4.22 x 7.61 x 3.50 m, 482 tris
+  "stylized-rock-11": stylizedRock("stylized-rock-11"),
+  // 8.35 x 8.49 x 5.36 m, 2246 tris
+  "stylized-rock-12": stylizedRock("stylized-rock-12"),
+  // 10.15 x 8.79 x 6.06 m, 3278 tris
+  "stylized-rock-13": stylizedRock("stylized-rock-13"),
+  // 7.70 x 8.25 x 5.29 m, 2588 tris
+  "stylized-rock-14": stylizedRock("stylized-rock-14"),
+  // 5.29 x 8.14 x 5.46 m, 1540 tris
+  "stylized-rock-15": stylizedRock("stylized-rock-15"),
+  // 7.73 x 8.32 x 4.46 m, 1884 tris
+  "stylized-rock-16": stylizedRock("stylized-rock-16"),
+  // 5.97 x 8.10 x 4.90 m, 1580 tris
+  "stylized-rock-17": stylizedRock("stylized-rock-17"),
 };
 
 // ---------------------------------------------------------------------------
@@ -3030,10 +3361,9 @@ const gltfCache = new Map<string, Promise<THREE.Object3D | null>>();
 // is fetched only by a page that actually loads a prop. It is a large module,
 // the manifest is empty for a level that authors no meshes, and the editor never
 // needs it eagerly - which is exactly the case chunk splitting is for.
-let loaderPromise: Promise<{ loadAsync(url: string): Promise<{ scene: THREE.Object3D }> }> | null =
-  null;
+let loaderPromise: Promise<GLTFLoader> | null = null;
 
-function gltfLoader(): Promise<{ loadAsync(url: string): Promise<{ scene: THREE.Object3D }> }> {
+export function gltfLoader(): Promise<GLTFLoader> {
   // The meshopt decoder is NOT optional. `assets:optimize` runs every prop
   // through `--compress meshopt`, which lands `EXT_meshopt_compression` in the
   // file's `extensionsRequired` - so a loader without the decoder does not
@@ -3103,9 +3433,6 @@ function loadFile(file: string, bytes: number): Promise<THREE.Object3D | null> {
         mesh.receiveShadow = true;
         wakeEmission(mesh.material);
       });
-      // A prop arrives with its own materials, and they wear the painted light
-      // like every surface built here (paint.ts).
-      paintTree(gltf.scene);
       return gltf.scene as THREE.Object3D;
     })
     .catch((err: unknown) => {

@@ -47,6 +47,10 @@ Set it by looking at how far out of the room the arc actually reaches; the edito
 `falloff` is the band **inside** the region over which its share of the camera ramps away to nothing at its own wall - how it hands over to a room it overlaps, rather than how far it holds on (see [Which one wins](#which-one-wins)).
 The editor draws its inner edge dashed: inside that line the region has the camera to itself, and between there and its wall it is sharing.
 
+`keep in frame` (on by default) is whether [the screen edge](#the-screen-edge) holds the player on screen while this region is framing the camera.
+Untick it for a level's opening shot, so the player falls into a locked frame instead of the camera dragging up to meet them.
+Draw the region to cover the whole fall and the landing: once the player leaves it the guarantee is back, and a player still off screen at that moment has the camera jump to them.
+
 A region frames a **place**.
 It cannot say anything about where the player is going next, which in a traversal level is the more common thing to want.
 
@@ -135,8 +139,9 @@ Two paths never blend with each other - the camera rides one route at a time - s
 
 ## The screen edge
 
-One rule overrides every region and every path, and it cannot be authored away: **the player may never be in the outer 8% of the frame**.
-If a lock, an offset or a lookahead would put them there, the camera moves to keep them out of it.
+One rule overrides every region and every path: **the player is held at least a fifth of the frame's height from the top and bottom, and about a ninth of its width from the sides, and their centre never leaves the screen**.
+The only way to author it away is a region with `keep in frame` unticked, and only while that region is framing the camera.
+If a lock, an offset or a lookahead would put them closer to the edge than that, the camera moves until they are exactly there.
 
 It is measured as a fraction of the frame, so it means the same thing at any `view ×`, and it is measured to the player's centre - so it clears the avatar and leaves a little room besides.
 In ordinary play it never fires: the default camera centres the player, and outrunning the follow lag far enough to reach the band takes a sustained ~27 m/s against a hard swing's ~10.
@@ -166,7 +171,7 @@ The player between the two boxes is the override working; the player hard agains
 Seeing that box is a sign to re-tune whatever was asking for the framing it is overriding: the constraint is a backstop, not a framing tool.
 A pin that shows up on an ordinary swing means the same thing - the framing being asked for does not fit the arc the player actually takes.
 
-The toolbar's **`edge clamp`** checkbox turns it off for ▶ Test, and for nothing else - the game always applies it.
+The toolbar's **`edge clamp`** checkbox turns it off for ▶ Test, and for nothing else - the game always applies it, outside a region with `keep in frame` unticked.
 Untick it when you want to see the framing a lock or a lookahead is really asking for rather than the one the backstop allowed; tick it back to see what the player will get.
 
 ## Authoring both
@@ -192,7 +197,7 @@ The editor draws the entry as a second spawn ring on a dashed run into the marke
 ## A recorded arrival
 
 The other opening a spawn may author is a **recorded run**: the level plays somebody's session back from the point it started and hands the ball over when the recording runs out (`arrival` - see [ball-rolling](ball-rolling.md#the-recorded-arrival)).
-`CAVE` opens on one, and what it buys over a roll is everything a roll cannot say: the ball arrives by swinging, through the level's own geometry, from somewhere the player will later be.
+`CAVE` opened on one until 2026-09-23 (no level does now), and what it buys over a roll is everything a roll cannot say: the ball arrives by swinging, through the level's own geometry, from somewhere the player will later be.
 
 It is **authored by playing it**, which is the whole method and the whole constraint.
 Play the opening you want, press **P**, run `bun run scripts/make-arrival.ts <bundle> <level>`, keep the bundle in `playtests/arrivals/` and name the stream on the spawn - and expect to record it several times, because what you are judging is a performance rather than a number.

@@ -26,6 +26,7 @@ import {
   edgeAxis,
   edgePull,
   edgeReach,
+  REGION_EXIT_MARGIN,
   pathBand,
   pathFalloffWeight,
   pathRange,
@@ -1618,6 +1619,49 @@ export function runCameraCases(): CameraResult[] {
       return bad;
     }),
 
+    runFacts("region-can-let-the-player-leave-the-frame", () => {
+      // A region authoring `keepInFrame: false` turns the guarantee off while it
+      // frames the camera - a level's opening shot the player falls INTO - and
+      // it comes back on in the room after it. Three halves, each of which a
+      // wrong wiring fails: the free room lets the fall start off screen, the
+      // same room without the field does not (the default is on), and the next
+      // room holds the player from the frame they enter it.
+      const shot = (keepInFrame?: boolean): CameraRegionData => ({
+        x: 0,
+        y: 0,
+        rot: 0,
+        shape: { kind: "rect", w: 20, h: 20 },
+        lockX: 0,
+        lockY: 0,
+        ...(keepInFrame === undefined ? {} : { keepInFrame }),
+      });
+      const next: CameraRegionData = {
+        x: 0,
+        y: 30,
+        rot: 0,
+        shape: { kind: "rect", w: 20, h: 40 },
+        lockX: 0,
+        lockY: 30,
+      };
+      const walk: Vec2[] = [];
+      for (let y = -9; y <= 40; y += 0.1) walk.push(new Vec2(0, y));
+      const r = edgeReach(stubCamera(), BASE_ZOOM);
+      const outside = (o: { pos: Vec2 }, i: number): boolean =>
+        Math.abs(walk[i]!.x - o.pos.x) > r.x + 1e-9 || Math.abs(walk[i]!.y - o.pos.y) > r.y + 1e-9;
+      // Past the free room's wall and its exit buffer, so the next room frames.
+      const inNext = (i: number): boolean => walk[i]!.y > 10 + REGION_EXIT_MARGIN;
+      const free = ride(buildCameraRules([shot(false), next], []), walk);
+      const kept = ride(buildCameraRules([shot(), next], []), walk);
+      const freeOut = free.filter((o, i) => !inNext(i) && outside(o, i)).length;
+      const keptOut = kept.filter(outside).length;
+      const nextOut = free.filter((o, i) => inNext(i) && outside(o, i)).length;
+      const bad: string[] = [];
+      if (freeOut === 0) bad.push("the fall never left the frame in the free room");
+      if (keptOut !== 0) bad.push(`${keptOut} frames left the frame with keepInFrame absent`);
+      if (nextOut !== 0) bad.push(`${nextOut} frames left the frame in the room after the free one`);
+      return bad;
+    }),
+
     run("edge-reach-is-a-fraction-of-the-frame", () => {
       // It is measured in SCREEN terms, so a region that zooms out has a wider
       // keep-out in metres and the same one in pixels. A margin in metres would
@@ -2568,6 +2612,32 @@ export function runCameraCases(): CameraResult[] {
         { label: "node 1 in.x", got: nodes[1]!.in.x, want: -1 },
         { label: "node 1 in.y", got: nodes[1]!.in.y, want: 0 },
       ];
+    }),
+
+    runFacts("keep-in-frame-round-trip", () => {
+      // A region's `keepInFrame: false` survives the one gate every level passes
+      // through and the editor's own trip, and the default writes nothing - so
+      // every region authored before the field stays byte-stable.
+      const region = (keepInFrame?: boolean) => ({
+        x: 0,
+        y: 0,
+        rot: 0,
+        shape: { kind: "rect" as const, w: 100, h: 100 },
+        ...(keepInFrame === undefined ? {} : { keepInFrame }),
+      });
+      const authored: RawLevelData = {
+        player: { x: 0, y: 0, radius: 20 },
+        bodies: [],
+        cameraRegions: [region(false), region()],
+      };
+      const bad: string[] = [];
+      const loaded = scaleLevelData(authored, 0.01).cameraRegions ?? [];
+      if (loaded[0]?.keepInFrame !== false) bad.push("the level gate dropped keepInFrame: false");
+      if (loaded[1] && "keepInFrame" in loaded[1]) bad.push("the level gate invented keepInFrame");
+      const saved = modelToDisk(modelFromDisk(authored)).cameraRegions ?? [];
+      if (saved[0]?.keepInFrame !== false) bad.push("the editor dropped keepInFrame: false");
+      if (saved[1] && "keepInFrame" in saved[1]) bad.push("the editor wrote the default");
+      return bad;
     }),
 
     runFacts("editor-curve-round-trip", () => {

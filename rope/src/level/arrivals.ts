@@ -29,7 +29,9 @@ import { inputDeserializer, type SerializedFrame } from "../sim/trace";
 import type { FrameInput } from "../input/frameInput";
 import { PX } from "../engine/units";
 // The cave's arrival: the ball dropped into the back of the cave and swung out
-// to the mouth of it on five throws (`session-449f`, 7.5 s).
+// to the mouth of it on five throws (`session-449f`, 7.5 s). The cave stopped
+// opening on it on 2026-09-23; it is kept for the entry cases, which play it on
+// a frozen copy of the cave (`sim/caveArrivalLevel.json`).
 import caveArrival from "./arrivals/cave.json";
 
 // One arrival as it is stored on disk (see `scripts/make-arrival.ts`).

@@ -7,6 +7,8 @@ bun run src/tools/cli.ts ledges               # generated ledge-grab matrix (spe
 bun run src/tools/cli.ts corners              # corner geometry cases (compound-body seams, the release of a corner two bodies share)
 bun run src/tools/cli.ts tangents             # tangent-vertex cases (which corner a wrap node is born on)
 bun run src/tools/cli.ts decompose            # convex decomposition of authored concave outlines (partition, seams, determinism)
+bun run src/tools/cli.ts rocks-check public/rocks/ball.glb --body 150   # a generated rock file: build report, file checks, back faces, coincident faces, dark caps (docs/rocks.md)
+bun run src/tools/cli.ts silhouette           # the rock-fit outline tracer (raster, largest blob, holes ignored, 2 cm simplification)
 bun run src/tools/cli.ts dmath                # the deterministic libm: bit-exact vectors on this engine + no platform Math in the sim
 bun run dmath:crosscheck                      # how far THIS engine's own Math is from it (an instrument, not a test)
 bun run src/tools/cli.ts contacts             # rigid-body contact cases (settle/stack/ramps/impact/momentum/loop-cap/loop-ride)
@@ -15,6 +17,7 @@ bun run src/tools/cli.ts movers               # scripted-mover cases (the arc, t
 bun run src/tools/cli.ts vines                # vine cases (the pass-through guards, drape, grab, winch, the load rope)
 bun run src/tools/cli.ts sleep                # sleep cases (a hung body and its chain sleep, the hook / a landing / a platform / an impulse wake, the lead swap, the stack, the arena)
 bun run src/tools/cli.ts rails                # rail cases (the stroke, the cone, the clamp, the coast, the jam, the catch)
+bun run src/tools/cli.ts belts                # conveyor cases (the hull of N wheels and its closed forms, the hollow build, speed 0 = static, the carry, the wake, the energy source, the ride, the tear)
 bun run src/tools/cli.ts viscous              # viscous (mud) cases (the creep law, the hang, the catch, the drop-out, the format)
 bun run src/tools/cli.ts breaks               # breakable-geometry cases (the force table, the threshold, the durability, the bounce, the drag, the chain, the guard, the format)
 bun run src/tools/cli.ts camera               # camera-path geometry, the rule set, and the editor's path round trip
@@ -47,7 +50,8 @@ bun run src/tools/cli.ts shot session.json --frame 65 --out f65.png     # the RE
 bun run src/tools/cli.ts shot session.json --frame 65 --3d --out f65.png # ...through the WebGL renderer
 bun run src/tools/cli.ts shot session.json --frames 60..120 --every 10 --3d  # a filmstrip + motion profile
 bun run src/tools/cli.ts shot session.json --frame 65 --3d --at 21,8.6 --orbit -35,25  # the 3D view turned about a world point (degrees), for a shape rather than a frame
-bun run src/tools/cli.ts shot session.json --frame 65 --3d --query paint=0             # any other URL switch passed to the page: here the painted light off, for an A/B
+bun run src/tools/cli.ts shot --view capture.json  # an F4 view capture reproduced: the same camera point, orbit and zoom
+bun run src/tools/cli.ts shot session.json --frame 65 --3d --query rocks=0             # any other URL switch passed to the page: here the rocks off, for an A/B
 bun run src/tools/cli.ts shot session.json --frames 1..1600 --every 40 --3d --probe      # which frame compiled which program, the LAZY way (no prewarm)
 bun run src/tools/cli.ts shot session.json --frames 1..1600 --every 40 --3d --probe all  # after the game's prewarm: anything `fresh` is a stutter it missed
 bun run src/tools/cli.ts shot --diff before.png after.png               # changed-pixel count + highlight
@@ -60,7 +64,7 @@ bun run src/tools/cli.ts ab      session.json --metrics peakV,pushRun  # the sam
 ```
 
 `bun run test` is what "all green" means: typecheck, `dmath`, `selftest`, `contacts`,
-`spring`, `movers`, `vines`, `rails`, `viscous`, `breaks`, `finish`, `corners`, `tangents`, `decompose`, `camera`, `render3d`, `assets`, `levels`, `ledges`, every `playtests/*.json`,
+`spring`, `movers`, `vines`, `rails`, `belts`, `viscous`, `breaks`, `finish`, `corners`, `tangents`, `decompose`, `silhouette`, `camera`, `render3d`, `assets`, `levels`, `ledges`, every `playtests/*.json`,
 then the bundle corpus, in that order and under one exit code.
 A case that is red on purpose carries `expectedFail` (see `sim/contactCases.ts`),
 which the runner counts as a pass and, crucially, **fails on if it ever passes**:

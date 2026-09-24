@@ -202,6 +202,21 @@ function shapeOfOutline(o: Outline): THREE.Shape {
     shape.absarc(0, 0, o.radius, 0, Math.PI * 2, false);
     return shape;
   }
+  shape.setFromPoints(loopOfOutline(o));
+  return shape;
+}
+
+// The outline as a counter-clockwise loop in three's frame (a circle sampled at
+// CIRCLE_SEGMENTS, a polygon's hole ignored).
+function loopOfOutline(o: Outline): THREE.Vector2[] {
+  if (o.kind === "circle") {
+    const pts: THREE.Vector2[] = [];
+    for (let i = 0; i < CIRCLE_SEGMENTS; i++) {
+      const a = (i / CIRCLE_SEGMENTS) * Math.PI * 2;
+      pts.push(new THREE.Vector2(Math.cos(a) * o.radius, Math.sin(a) * o.radius));
+    }
+    return pts;
+  }
   const local =
     o.kind === "rect"
       ? [
@@ -216,15 +231,18 @@ function shapeOfOutline(o: Outline): THREE.Shape {
   const pts = local.map((v) => new THREE.Vector2(v.x, -v.y));
   // Signed area: positive is counter-clockwise in three's y-up frame, which is
   // what `ExtrudeGeometry` treats as the outside of the shape.
+  if (signedArea(pts) < 0) pts.reverse();
+  return pts;
+}
+
+function signedArea(pts: readonly THREE.Vector2[]): number {
   let area = 0;
   for (let i = 0; i < pts.length; i++) {
     const a = pts[i]!;
     const b = pts[(i + 1) % pts.length]!;
     area += a.x * b.y - b.x * a.y;
   }
-  if (area < 0) pts.reverse();
-  shape.setFromPoints(pts);
-  return shape;
+  return area / 2;
 }
 
 // A CIRCLE IS A CYLINDER, and gets three's own cylinder rather than its outline
@@ -306,4 +324,199 @@ export function extrudeOutline(o: Outline, opts: ExtrudeOptions): THREE.ExtrudeG
   geo.translate(0, 0, -(core / 2));
   geo.computeVertexNormals();
   return geo;
+}
+
+// A GENERATED ROCK'S REFERENCE SOLID (docs/rocks.md). The rock pipeline fills
+// an outline with shards that stand on it from the back of the solid up to
+// `taperStart` in front of the gameplay plane and then lean in from the wall by
+// `taperAngle`, so where a rock is drawn by its extrusion - in the editor, and
+// in the game while its generated mesh is stale - the extrusion shows THAT
+// shape: a straight prism to the start and a roof over it whose height is the
+// distance in from the outline times the slope, capped at the front. The
+// author reads the taper off this while setting it, in place of the bevel,
+// which the generator does not read.
+export interface TaperOptions {
+  depth: number;
+  // Metres in front of the plane where the roof starts (clamped to the solid).
+  taperStart: number;
+  // Degrees the roof leans in from the outline's wall: 0 is no roof (a
+  // straight extrusion), 90 a flat cap at the start.
+  taperAngle: number;
+}
+
+// Under this angle there is no taper, and over 90 minus it the roof is flat -
+// the generator's `TAPER_EPSILON`.
+const TAPER_EPSILON = 0.05;
+// The roof is a height field over the outline: it is sampled at about this many
+// cells across the outline's longer side, between these cell sizes in metres.
+// The height is the distance to the outline, which is exact at every sample,
+// so the ridge where the roof meets the front cap is the only thing the
+// sampling softens.
+const ROOF_CELLS = 32;
+const ROOF_CELL_MIN = 0.04;
+const ROOF_CELL_MAX = 0.5;
+
+export function taperOutline(o: Outline, opts: TaperOptions): THREE.BufferGeometry {
+  const half = opts.depth / 2;
+  const angle = Math.max(0, Math.min(90, opts.taperAngle));
+  if (angle <= TAPER_EPSILON || (o.kind === "poly" && o.hole !== undefined)) {
+    if (o.kind === "circle") return cylinderSolid(o.radius, opts.depth);
+    return extrudeOutline(o, { depth: opts.depth, bevel: 0 });
+  }
+  const start = Math.max(-half, Math.min(half, opts.taperStart));
+  const rise = angle >= 90 - TAPER_EPSILON ? 0 : 1 / Math.tan((angle * Math.PI) / 180);
+  const loop = loopOfOutline(o);
+  const n = loop.length;
+
+  // THE ROOF IS A GRID OF CELLS, each the piece of the outline inside one cell
+  // of a grid over it (a Sutherland-Hodgman clip of the loop by the cell,
+  // which is exact because the cell is convex), triangulated on its own. The
+  // vertices on the outline have height `start`, so the roof meets the wall's
+  // top edge exactly, and every other vertex is the roof's true height there.
+  // Earcut over the outline with the grid points as Steiner points came
+  // first and drew the slope as long slivers fanning from the corners, whose
+  // smoothed normals streaked the surface; cells give well-shaped triangles.
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const p of loop) {
+    minX = Math.min(minX, p.x);
+    minY = Math.min(minY, p.y);
+    maxX = Math.max(maxX, p.x);
+    maxY = Math.max(maxY, p.y);
+  }
+  const cell = Math.max(ROOF_CELL_MIN, Math.min(ROOF_CELL_MAX, Math.max(maxX - minX, maxY - minY) / ROOF_CELLS));
+  const heightAt = (p: THREE.Vector2): number => Math.min(half, start + distanceToLoop(p, loop) * rise);
+  // Smooth normals over the roof, accumulated by position so the cells share
+  // them: a sampled slope then reads as one surface rather than as the grid
+  // it was sampled on.
+  const key = (p: THREE.Vector2): string => `${Math.round(p.x * 1e5)},${Math.round(p.y * 1e5)}`;
+  const normals = new Map<string, THREE.Vector3>();
+  const roof: { pts: THREE.Vector2[]; z: number[]; tris: number[][] }[] = [];
+  const a3 = new THREE.Vector3();
+  const b3 = new THREE.Vector3();
+  const c3 = new THREE.Vector3();
+  const face = new THREE.Vector3();
+  for (let x0 = minX; x0 < maxX; x0 += cell) {
+    for (let y0 = minY; y0 < maxY; y0 += cell) {
+      const piece = clipLoopToCell(loop, x0, y0, Math.min(x0 + cell, maxX), Math.min(y0 + cell, maxY));
+      if (piece.length < 3 || Math.abs(signedArea(piece)) < 1e-10) continue;
+      const tris = THREE.ShapeUtils.triangulateShape(piece.map((p) => p.clone()), []);
+      const z = piece.map((p) => heightAt(p));
+      for (const t of tris) {
+        if (signedArea([piece[t[0]!]!, piece[t[1]!]!, piece[t[2]!]!]) < 0) t.reverse();
+        a3.set(piece[t[0]!]!.x, piece[t[0]!]!.y, z[t[0]!]!);
+        b3.set(piece[t[1]!]!.x, piece[t[1]!]!.y, z[t[1]!]!);
+        c3.set(piece[t[2]!]!.x, piece[t[2]!]!.y, z[t[2]!]!);
+        face.subVectors(b3, a3).cross(c3.sub(a3));
+        for (const i of t) {
+          const k = key(piece[i]!);
+          const acc = normals.get(k);
+          if (acc) acc.add(face);
+          else normals.set(k, face.clone());
+        }
+      }
+      roof.push({ pts: piece, z, tris });
+    }
+  }
+  for (const nrm of normals.values()) if (nrm.lengthSq() > 0) nrm.normalize();
+
+  const pos: number[] = [];
+  const nor: number[] = [];
+  const uv: number[] = [];
+  const push = (x: number, y: number, z: number, nx: number, ny: number, nz: number, u: number, v: number): void => {
+    pos.push(x, y, z);
+    nor.push(nx, ny, nz);
+    uv.push(u, v);
+  };
+  // The roof, with the cap's UV rule: measured in the plane it is drawn in.
+  for (const { pts, z, tris } of roof) {
+    for (const t of tris) {
+      for (const i of t) {
+        const p = pts[i]!;
+        const nrm = normals.get(key(p))!;
+        push(p.x, p.y, z[i]!, nrm.x, nrm.y, nrm.z, p.x, p.y);
+      }
+    }
+  }
+  // The back cap, facing away.
+  for (const t of THREE.ShapeUtils.triangulateShape(loop.map((p) => p.clone()), [])) {
+    if (signedArea([loop[t[0]!]!, loop[t[1]!]!, loop[t[2]!]!]) < 0) t.reverse();
+    for (const i of [t[0]!, t[2]!, t[1]!]) push(loop[i]!.x, loop[i]!.y, -half, 0, 0, -1, loop[i]!.x, loop[i]!.y);
+  }
+  // The walls, from the back to the start, u along the outline and v through
+  // depth reading zero on the plane - the extruder's rule for a side wall.
+  if (start > -half + 1e-4) {
+    let u = 0;
+    for (let i = 0; i < n; i++) {
+      const a = loop[i]!;
+      const b = loop[(i + 1) % n]!;
+      const len = a.distanceTo(b);
+      // Outward for a counter-clockwise loop.
+      const nx = (b.y - a.y) / len;
+      const ny = -(b.x - a.x) / len;
+      push(a.x, a.y, -half, nx, ny, 0, u, -half);
+      push(b.x, b.y, -half, nx, ny, 0, u + len, -half);
+      push(b.x, b.y, start, nx, ny, 0, u + len, start);
+      push(a.x, a.y, -half, nx, ny, 0, u, -half);
+      push(b.x, b.y, start, nx, ny, 0, u + len, start);
+      push(a.x, a.y, start, nx, ny, 0, u, start);
+      u += len;
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute("normal", new THREE.Float32BufferAttribute(nor, 3));
+  geo.setAttribute("uv", new THREE.Float32BufferAttribute(uv, 2));
+  return geo;
+}
+
+// The part of the loop inside the axis-aligned cell: Sutherland-Hodgman, one
+// half-plane per cell side. The subject may be concave; the clipper is convex,
+// which is all the algorithm needs. Where the loop leaves and re-enters the
+// cell the result carries a zero-width bridge along the cell's side, which
+// triangulates to nothing and draws as nothing.
+function clipLoopToCell(loop: readonly THREE.Vector2[], x0: number, y0: number, x1: number, y1: number): THREE.Vector2[] {
+  let out: THREE.Vector2[] = loop.map((p) => p.clone());
+  const sides: ((p: THREE.Vector2) => number)[] = [
+    (p) => p.x - x0,
+    (p) => x1 - p.x,
+    (p) => p.y - y0,
+    (p) => y1 - p.y,
+  ];
+  for (const inside of sides) {
+    const input = out;
+    out = [];
+    for (let i = 0; i < input.length; i++) {
+      const a = input[(i + input.length - 1) % input.length]!;
+      const b = input[i]!;
+      const da = inside(a);
+      const db = inside(b);
+      if (db >= 0) {
+        if (da < 0) out.push(a.clone().lerp(b, da / (da - db)));
+        out.push(b);
+      } else if (da >= 0) {
+        out.push(a.clone().lerp(b, da / (da - db)));
+      }
+    }
+    if (out.length === 0) return out;
+  }
+  // Consecutive duplicates (a vertex exactly on a side) would be zero-length
+  // edges to the triangulation.
+  return out.filter((p, i) => p.distanceToSquared(out[(i + out.length - 1) % out.length]!) > 1e-14);
+}
+
+function distanceToLoop(p: THREE.Vector2, loop: readonly THREE.Vector2[]): number {
+  let best = Infinity;
+  for (let i = 0; i < loop.length; i++) {
+    const a = loop[i]!;
+    const b = loop[(i + 1) % loop.length]!;
+    const ex = b.x - a.x;
+    const ey = b.y - a.y;
+    const len2 = ex * ex + ey * ey;
+    const t = len2 > 0 ? Math.max(0, Math.min(1, ((p.x - a.x) * ex + (p.y - a.y) * ey) / len2)) : 0;
+    best = Math.min(best, Math.hypot(p.x - (a.x + ex * t), p.y - (a.y + ey * t)));
+  }
+  return best;
 }

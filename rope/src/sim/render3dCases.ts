@@ -23,12 +23,17 @@ import { VIEW_HEIGHT, VIEW_WIDTH } from "../render/viewport";
 import type { Camera } from "../render/camera";
 import {
   cameraDistance,
+  DEFAULT_LENS,
+  focalLengthFromFov,
   FOV_Y_DEG,
+  lensOf,
+  type SceneLens,
   projectToView,
   syncCamera,
   unprojectToPlane,
 } from "../render3d/space";
 import { cylinderSolid, extrudeOutline } from "../render3d/extrude";
+import { cloneWithPatches, isOrthographicMaterial } from "../render3d/projection";
 import {
   DEFAULT_TEXTURE,
   emissiveMapName,
@@ -59,12 +64,32 @@ import {
   normalizeLevelData,
   spawnAtCheckpoint,
   type GeometryObjectData,
+  type GeometryProjection,
   type LightObjectData,
   type LevelBodyData,
   type SceneObjectData,
   type RawLevelData,
 } from "../level/levelFormat";
-import { drawnObjects, mountVisual } from "../render3d/bodyVisuals";
+import { BodyVisual, drawnObjects, mountVisual } from "../render3d/bodyVisuals";
+import {
+  beltNearest,
+  beltOutline,
+  beltPointAt,
+  beltTangentAt,
+  buildBeltLoop,
+} from "../lib/belt";
+import {
+  BELT_TREAD_PITCH,
+  beltFrameAt,
+  beltRenderTime,
+  beltTextureTile,
+  beltTreadDepth,
+  beltTreadPhase,
+  beltTreadPitch,
+} from "../render/beltTread";
+import { BeltRing, beltRingStations } from "../render3d/beltTread";
+import { outlineOfData } from "../render/shapePath";
+import { loopContainsPoint } from "../lib/polygon";
 import { DECOR_Z, depthOf } from "../level/decor";
 import ballLevelJson from "../../levels/ball.json";
 const BALL_LEVEL = ballLevelJson as unknown;
@@ -76,6 +101,11 @@ import {
   toLevelData,
   syncMatchedOutlines,
   setPolyVerts,
+  setBelt,
+  beltShapeData,
+  beltLap,
+  beltInsertWheel,
+  beltRemoveWheel,
   bodyCentroid,
   bodyMembers,
   bodyFrameOf,
@@ -131,6 +161,99 @@ const PIXEL_TOL = 0.01;
 // Geometry attributes are float32, so a "these are the same number" test on one
 // is held to float32 precision at the magnitudes a level uses, not float64.
 const F32 = 1e-6;
+
+// A LEVEL'S LENS (`LevelCameraData`): its focal length and z offset.
+//
+// The claims are the correspondence's own, restated for a camera the level has
+// moved. A focal length changes the lens and NOT the framing - the camera
+// dollies so the gameplay plane stays exactly where the 2D view has it - and a
+// z offset moves the framed plane itself, so the correspondence holds on the
+// plane at that depth and (by the ratio of the two distances) not on z = 0.
+function levelLens(): CaseResult[] {
+  const cam = camera(13.5, -7.25, 2);
+  const halfH = VIEW_HEIGHT / 2 / (cam.zoom * PIXELS_PER_METER);
+  const halfW = VIEW_WIDTH / 2 / (cam.zoom * PIXELS_PER_METER);
+  const corners = [
+    new Vec2(halfW, halfH),
+    new Vec2(-halfW, halfH),
+    new Vec2(halfW, -halfH),
+    new Vec2(-halfW, -halfH),
+  ].map((d) => cam.position.add(d));
+  // Worst view-pixel disagreement between the 2D transform and three's own
+  // projection, for points on the plane at depth `z`.
+  const worstAt = (lens: SceneLens, z: number): number => {
+    const c = new THREE.PerspectiveCamera();
+    syncCamera(c, cam, lens);
+    c.updateMatrixWorld(true);
+    let worst = 0;
+    for (const p of corners) {
+      const a = projectToView(cam, p);
+      const ndc = new THREE.Vector3(p.x, -p.y, z).project(c);
+      const b = { x: ((ndc.x + 1) / 2) * VIEW_WIDTH, y: ((1 - ndc.y) / 2) * VIEW_HEIGHT };
+      worst = Math.max(worst, Math.abs(a.x - b.x), Math.abs(a.y - b.y));
+    }
+    return worst;
+  };
+
+  const roundTrip = lensOf({ focalLength: focalLengthFromFov(FOV_Y_DEG) }).fovYDeg;
+  const defaults =
+    lensOf(undefined).fovYDeg === FOV_Y_DEG &&
+    lensOf(undefined).zOffset === 0 &&
+    lensOf({ focalLength: 0 }).fovYDeg === FOV_Y_DEG;
+
+  const tele = lensOf({ focalLength: 85 });
+  const teleErr = worstAt(tele, 0);
+  const moved: SceneLens = { fovYDeg: FOV_Y_DEG, zOffset: 1.5 };
+  const movedErr = worstAt(moved, moved.zOffset);
+  const movedPlaneErr = worstAt(moved, 0);
+
+  // A long lens stands the camera far back; the far plane has to follow or the
+  // gameplay plane itself is clipped away.
+  const far = new THREE.PerspectiveCamera();
+  syncCamera(far, cam, lensOf({ focalLength: 2000 }));
+  far.updateMatrixWorld(true);
+  const planeDepth = new THREE.Vector3(cam.position.x, -cam.position.y, 0).project(far).z;
+
+  const raw: RawLevelData = {
+    player: { x: 0, y: 0, radius: 8 },
+    bodies: [],
+    camera: { focalLength: 85, zOffset: 150 },
+  };
+  const scaled = scaleLevelData(raw, 1 / PIXELS_PER_METER).camera;
+  const scaledOk = scaled?.focalLength === 85 && Math.abs((scaled.zOffset ?? 0) - 1.5) < 1e-12;
+  const saved = modelToDisk(modelFromDisk(raw)).camera;
+  const savedOk = saved?.focalLength === 85 && Math.abs((saved.zOffset ?? 0) - 150) < 1e-9;
+  const bare = modelToDisk(modelFromDisk({ player: raw.player, bodies: [] }));
+  const bareOk = !("camera" in bare);
+
+  return [
+    {
+      name: "lens: focal length and field of view convert both ways, and absent is the old lens",
+      pass: Math.abs(roundTrip - FOV_Y_DEG) < 1e-9 && defaults,
+      detail: `${FOV_Y_DEG} deg -> ${focalLengthFromFov(FOV_Y_DEG).toFixed(3)} mm -> ${roundTrip} deg`,
+    },
+    {
+      name: "lens: an 85 mm lens frames the gameplay plane exactly as the 2D view does",
+      pass: teleErr < PIXEL_TOL,
+      detail: `worst corner ${teleErr.toFixed(5)} px`,
+    },
+    {
+      name: "lens: a z offset frames the plane at that depth as the 2D view, and not z = 0",
+      pass: movedErr < PIXEL_TOL && movedPlaneErr > 1,
+      detail: `framed plane ${movedErr.toFixed(5)} px, gameplay plane ${movedPlaneErr.toFixed(1)} px`,
+    },
+    {
+      name: "lens: a very long lens does not clip the gameplay plane",
+      pass: planeDepth > -1 && planeDepth < 1,
+      detail: `plane at ndc z ${planeDepth.toFixed(4)}, far ${far.far.toFixed(1)} m`,
+    },
+    {
+      name: "format: a level's camera block scales its offset, keeps its focal length, and survives a save",
+      pass: scaledOk && savedOk && bareOk,
+      detail: `scaled ${JSON.stringify(scaled)}, saved ${JSON.stringify(saved)}, bare level writes camera: ${!bareOk}`,
+    },
+  ];
+}
 
 function cameraCorrespondence(): CaseResult[] {
   const out: CaseResult[] = [];
@@ -222,7 +345,7 @@ function orbitView(): CaseResult[] {
   const plain = make();
   syncCamera(plain, cam);
   const zero = make();
-  syncCamera(zero, cam, FOV_Y_DEG, { yaw: 0, pitch: 0 });
+  syncCamera(zero, cam, DEFAULT_LENS,{ yaw: 0, pitch: 0 });
   const same =
     plain.position.equals(zero.position) &&
     plain.rotation.x === zero.rotation.x &&
@@ -242,7 +365,7 @@ function orbitView(): CaseResult[] {
   for (const yaw of [-1.2, -0.3, 0.45, 1.9, 3.0]) {
     for (const pitch of [-1.0, -0.2, 0, 0.35, 1.1]) {
       const c = make();
-      syncCamera(c, cam, FOV_Y_DEG, { yaw, pitch });
+      syncCamera(c, cam, DEFAULT_LENS,{ yaw, pitch });
       c.updateMatrixWorld(true);
       const ndc = focus.clone().project(c);
       worstCentre = Math.max(worstCentre, Math.abs(ndc.x), Math.abs(ndc.y));
@@ -258,7 +381,7 @@ function orbitView(): CaseResult[] {
   // A quarter turn of yaw looks along the level's own +x axis, which is what
   // says the sign and the axis are the ones the drag handler thinks they are.
   const side = make();
-  syncCamera(side, cam, FOV_Y_DEG, { yaw: Math.PI / 2, pitch: 0 });
+  syncCamera(side, cam, DEFAULT_LENS,{ yaw: Math.PI / 2, pitch: 0 });
   out.push({
     name: "orbit: a quarter turn puts the camera out along +x",
     pass:
@@ -271,7 +394,7 @@ function orbitView(): CaseResult[] {
   // Past the poles the up vector degenerates and the view rolls, so the pitch is
   // clamped inside `syncCamera` rather than only at the drag that writes it.
   const over = make();
-  syncCamera(over, cam, FOV_Y_DEG, { yaw: 0, pitch: Math.PI / 2 });
+  syncCamera(over, cam, DEFAULT_LENS,{ yaw: 0, pitch: Math.PI / 2 });
   out.push({
     name: "orbit: pitch is clamped short of the pole",
     pass: over.position.z > 0 && Math.abs(over.position.y - focus.y) < dist,
@@ -300,7 +423,7 @@ function orbitView(): CaseResult[] {
     { yaw: 2.6, pitch: 0.9 },
   ]) {
     const c = make();
-    syncCamera(c, cam, FOV_Y_DEG, orbit);
+    syncCamera(c, cam, DEFAULT_LENS,orbit);
     c.updateMatrixWorld(true);
     for (const p of [
       new Vec2(cam.position.x, cam.position.y),
@@ -328,13 +451,13 @@ function orbitView(): CaseResult[] {
   // implementation that quietly returned the 2D answer would pass the round trip
   // above at zero orbit and put every turned-view click somewhere else.
   const headOn = make();
-  syncCamera(headOn, cam, FOV_Y_DEG, { yaw: 0, pitch: 0 });
+  syncCamera(headOn, cam, DEFAULT_LENS,{ yaw: 0, pitch: 0 });
   headOn.updateMatrixWorld(true);
   const probe = new Vec2(cam.position.x + 5.5, cam.position.y - 2.75);
   const px = projectToView(cam, probe);
   const flat = unprojectToPlane(headOn, ...ndcOf(px));
   const turnedCam = make();
-  syncCamera(turnedCam, cam, FOV_Y_DEG, { yaw: 0.6, pitch: 0.35 });
+  syncCamera(turnedCam, cam, DEFAULT_LENS,{ yaw: 0.6, pitch: 0.35 });
   turnedCam.updateMatrixWorld(true);
   const turned = unprojectToPlane(turnedCam, ...ndcOf(px));
   const flatErr = flat ? flat.sub(probe).length() : Infinity;
@@ -688,6 +811,110 @@ function extrusionGeometry(): CaseResult[] {
       `(the depth it crosses is ${bevel.toFixed(5)})`,
   });
   return out;
+}
+
+// A GEOMETRY OBJECT DRAWN THROUGH ITS OWN LENS (`GeometryObjectData.projection`).
+//
+// Every way this breaks is silent in the picture's favour - the object is simply
+// drawn in perspective, which is what it looked like before anyone asked - so
+// each link in the chain is asserted: the field survives the px -> m gate and the
+// editor's save, the mounted mesh wears an orthographic twin that compiles to a
+// program of its own, the twin's hook actually finds the chunk it rewrites in
+// three's shader (a renamed chunk is a `replace` that matches nothing), and the
+// editor's selection highlight - a clone - keeps the lens rather than moving the
+// selected object back to where perspective would put it.
+function perObjectProjection(): CaseResult[] {
+  const geometry = (projection?: GeometryProjection): GeometryObjectData => ({
+    type: "geometry",
+    shape: { kind: "rect", w: 1, h: 1 },
+    // A flat fill, for the reason `tippedPrimitive` gives: it builds headlessly.
+    texture: SOLID_SURFACE,
+    color: "#ff0000",
+    ...(projection ? { projection } : {}),
+  });
+  const authored: RawLevelData = {
+    player: { x: 0, y: 0, radius: 8 },
+    bodies: [
+      {
+        kind: "static",
+        x: 0,
+        y: 0,
+        rot: 0,
+        objects: [
+          { ...geometry("orthographic"), shape: { kind: "rect", w: 100, h: 100 }, z: -300 },
+          { ...geometry(), shape: { kind: "rect", w: 100, h: 100 } },
+        ],
+      },
+    ],
+  };
+  const scaled = scaleLevelData(authored, 1 / PIXELS_PER_METER).bodies[0]!.objects.filter(isGeometryObject);
+  const scaledKept = scaled[0]?.projection === "orthographic" && scaled[1]?.projection === undefined;
+  const saved = modelToDisk(modelFromDisk(authored)).bodies[0]!.objects.filter(isGeometryObject);
+  const savedKept = saved[0]?.projection === "orthographic" && !("projection" in (saved[1] ?? {}));
+
+  const mount = (projection?: GeometryProjection): THREE.Mesh => {
+    const parent = new THREE.Group();
+    mountVisual(
+      parent,
+      () => extrudeOutline({ kind: "rect", half: new Vec2(0.5, 0.5) }, { depth: 0.2, bevel: 0 }),
+      { geometry: geometry(projection) },
+      { defaultZ: 0, castShadow: true, alive: () => true },
+    );
+    return parent.children[0] as THREE.Mesh;
+  };
+  const ortho = mount("orthographic");
+  const orthoAgain = mount("orthographic");
+  const persp = mount();
+  const om = ortho.material as THREE.Material;
+  const pm = persp.material as THREE.Material;
+  const twinned =
+    isOrthographicMaterial(om) &&
+    !isOrthographicMaterial(pm) &&
+    om !== pm &&
+    orthoAgain.material === om &&
+    om.customProgramCacheKey() !== pm.customProgramCacheKey() &&
+    !ortho.frustumCulled &&
+    persp.frustumCulled;
+
+  const patchedText = (m: THREE.Material): string => {
+    const shader = {
+      uniforms: {},
+      vertexShader: THREE.ShaderLib.physical.vertexShader,
+      fragmentShader: THREE.ShaderLib.physical.fragmentShader,
+    } as unknown as THREE.WebGLProgramParametersWithUniforms;
+    m.onBeforeCompile(shader, undefined as unknown as THREE.WebGLRenderer);
+    return shader.vertexShader;
+  };
+  const rewrites = (m: THREE.Material): boolean => patchedText(m).includes("orthoPosition");
+  const patched = rewrites(om) && !rewrites(pm);
+  const highlight = cloneWithPatches(om);
+  const highlightKept =
+    isOrthographicMaterial(highlight) &&
+    rewrites(highlight) &&
+    highlight.customProgramCacheKey() === om.customProgramCacheKey();
+
+  return [
+    {
+      name: "format: a geometry object's projection survives the px -> m gate and an editor save",
+      pass: scaledKept && savedKept,
+      detail: `scaled ${scaled.map((g) => g.projection)}, saved ${saved.map((g) => g.projection)}`,
+    },
+    {
+      name: "render: an orthographic object wears one shared twin with a program of its own",
+      pass: twinned,
+      detail: `tagged ${isOrthographicMaterial(om)}, shared ${orthoAgain.material === om}, keys ${om.customProgramCacheKey()} / ${pm.customProgramCacheKey()}, culled ${ortho.frustumCulled}`,
+    },
+    {
+      name: "render: the orthographic twin rewrites three's projection chunk",
+      pass: patched,
+      detail: patched ? "project_vertex rewritten for the twin alone" : "the chunk was not found or not rewritten",
+    },
+    {
+      name: "render: a selection highlight keeps an orthographic object's lens",
+      pass: highlightKept,
+      detail: highlightKept ? "clone carries the tag, the hook and the key" : "the clone lost the patch",
+    },
+  ];
 }
 
 // A PRIMITIVE TIPPED OUT OF THE PLANE (`GeometryObjectData.rotX`/`rotY`).
@@ -3389,17 +3616,333 @@ function clipboardPayload(): CaseResult[] {
   ];
 }
 
+// A conveyor belt as the renderers and the editor see it (docs/conveyors.md,
+// "Rendering" and "The editor"). What these can say without a GPU: that the 3D
+// tread's allocation-free placement IS the loop's own closed form, that the
+// tread's pitch closes round the loop and its phase runs with the speed's
+// sign, that the band is its own ring of geometry - outer wall on the loop with
+// arc-length UVs that close on a whole number of repeats, inner wall a
+// thickness in, caps at the width - whose texture the sim clock scrolls, that
+// an untextured belt keeps a ring of cleats inside its band, that the 2D
+// outline is the band with its hollow, and that the editor keeps every field
+// of the shape and refuses what is not a belt. What they cannot say is how it
+// looks, which is `cli shot --3d --frames` on TEST_BELT.
+function beltRendering(): CaseResult[] {
+  const out: CaseResult[] = [];
+  // The drive: a small wheel top-left, a large one right, a medium one
+  // bottom-left, under a 5 cm band.
+  const wheelsM = [
+    { x: 0, y: 0, r: 0.15 },
+    { x: 1.7, y: 0.3, r: 0.45 },
+    { x: 0.3, y: 1.3, r: 0.25 },
+  ];
+  const thickness = 0.05;
+  const loop = buildBeltLoop(
+    wheelsM.map((w) => ({ c: new Vec2(w.x, w.y), r: w.r })),
+    thickness,
+  );
+
+  // The tread's frame against `beltPointAt` / `beltTangentAt`, over several
+  // laps either way, so the reduction and every segment are exercised.
+  let worst = 0;
+  const frame = { x: 0, y: 0, tx: 0, ty: 0 };
+  for (let k = -1000; k <= 1000; k++) {
+    const s = (k / 1000) * loop.total * 2.3;
+    beltFrameAt(loop, s, frame);
+    const p = beltPointAt(loop, s);
+    const t = beltTangentAt(loop, s);
+    worst = Math.max(worst, Math.hypot(frame.x - p.x, frame.y - p.y), Math.hypot(frame.tx - t.x, frame.ty - t.y));
+  }
+  out.push({
+    name: "belt: the 3D tread's allocation-free frame is the loop's own point and tangent",
+    pass: worst < 1e-9,
+    detail: `worst disagreement ${worst.toExponential(2)} over 2001 stations, 4.6 laps`,
+  });
+
+  // A whole number of pitches round the loop (no seam), near the nominal 20 cm,
+  // and the phase carried the way the speed's sign says: positive advances `s`,
+  // which is clockwise on screen, and a negative belt runs the pattern back.
+  const pitch = beltTreadPitch(loop);
+  const n = loop.total / pitch;
+  const dt = 1 / 60;
+  const fwd = beltTreadPhase(loop, 1.5, dt);
+  const back = beltTreadPhase(loop, -1.5, dt);
+  out.push({
+    name: "belt: the tread's pitch closes round the loop and its phase runs with the speed's sign",
+    pass:
+      Math.abs(n - Math.round(n)) < 1e-9 &&
+      Math.abs(pitch - BELT_TREAD_PITCH) < BELT_TREAD_PITCH * 0.5 &&
+      Math.abs(fwd - 1.5 * dt) < 1e-12 &&
+      Math.abs(back - (pitch - 1.5 * dt)) < 1e-12 &&
+      beltRenderTime(0, 1) === 0 &&
+      Math.abs(beltRenderTime(60, 0.5) - 59.5 / 60) < 1e-12,
+    detail: `P ${loop.total.toFixed(4)} m = ${n.toFixed(6)} x ${pitch.toFixed(4)} m; one frame at +/-1.5 m/s: ${fwd.toFixed(4)} / ${back.toFixed(4)}`,
+  });
+
+  // A body with a belt, collided AND drawn (a matched pair, as `Add geometry`
+  // makes it), through the real build and the real visual.
+  const px = PIXELS_PER_METER;
+  const belt = {
+    kind: "belt" as const,
+    wheels: wheelsM.map((w) => ({ x: w.x * px, y: w.y * px, r: w.r * px })),
+    thickness: thickness * px,
+    speed: 1.5 * px,
+  };
+  const raw: RawLevelData = {
+    player: { x: 0, y: -200, radius: 8 },
+    bodies: [
+      {
+        kind: "static",
+        x: 40,
+        y: 60,
+        rot: 0.2,
+        color: "#555555",
+        opacity: 0.5,
+        friction: 1,
+        objects: [
+          { type: "collision", shape: belt },
+          // A flat fill: the one surface that needs no canvas and no download.
+          { type: "geometry", shape: belt, matchCollision: true, depth: 0.5 * px, texture: SOLID_SURFACE },
+        ],
+      },
+    ],
+  };
+  const built = buildLevelBodies(new World(), scaleLevelData(raw, 1 / PIXELS_PER_METER), () => {});
+  const b = built.bodies[0]!;
+  const visual = new BodyVisual(b.body, b);
+  const meshes: THREE.Mesh[] = [];
+  visual.root.traverse((o) => {
+    if ((o as THREE.Mesh).isMesh) meshes.push(o as THREE.Mesh);
+  });
+  const cleats = meshes.find((m) => (m as THREE.InstancedMesh).isInstancedMesh) as
+    | THREE.InstancedMesh
+    | undefined;
+  const solids = meshes.filter((m) => m !== cleats);
+  // The cleat ring in the geometry object's own frame, where the loop is
+  // (wheel 0 at the origin): every centre inside the outline, within a
+  // tread's depth of it, and never on it.
+  const outline = beltOutline(loop);
+  const m4 = new THREE.Matrix4();
+  const at = new THREE.Vector3();
+  let inside = true;
+  let nearest = Infinity;
+  let farthest = 0;
+  const centres: Vec2[] = [];
+  for (let k = 0; k < (cleats?.count ?? 0); k++) {
+    cleats!.getMatrixAt(k, m4);
+    at.setFromMatrixPosition(m4);
+    const c = new Vec2(at.x, -at.y);
+    centres.push(c);
+    if (!loopContainsPoint(outline, c)) inside = false;
+    const d = beltNearest(loop, c).distSq ** 0.5;
+    nearest = Math.min(nearest, d);
+    farthest = Math.max(farthest, d);
+  }
+  const depth = beltTreadDepth(loop);
+  const ringUv = solids[0]?.geometry.getAttribute("uv");
+  out.push({
+    name: "belt: an untextured belt draws ONE band and a ring of cleats inside the band",
+    pass:
+      solids.length === 1 &&
+      ringUv !== undefined &&
+      cleats !== undefined &&
+      cleats.count === Math.round(n) &&
+      inside &&
+      nearest > 0 &&
+      farthest < depth &&
+      depth < thickness,
+    detail: `${solids.length} band(s), ${cleats?.count ?? 0} cleats (pitch count ${Math.round(n)}); centres ${nearest.toFixed(4)}..${farthest.toFixed(4)} m inside, tread depth ${depth.toFixed(3)} m in a ${thickness} m band`,
+  });
+
+  // The sim clock carries them: a frame of 1.5 m/s later every cleat has moved
+  // 2.5 cm along the loop in +s. Measured as the arc length each centre
+  // projects to, which is where the cleat sits along the loop.
+  visual.sync(1, 1 / 60);
+  let moved = Infinity;
+  let movedMax = 0;
+  for (let k = 0; k < (cleats?.count ?? 0); k++) {
+    cleats!.getMatrixAt(k, m4);
+    at.setFromMatrixPosition(m4);
+    const s0 = beltNearest(loop, centres[k]!).s;
+    const s1 = beltNearest(loop, new Vec2(at.x, -at.y)).s;
+    let ds = s1 - s0;
+    if (ds < -loop.total / 2) ds += loop.total;
+    moved = Math.min(moved, ds);
+    movedMax = Math.max(movedMax, ds);
+  }
+  visual.dispose();
+  out.push({
+    name: "belt: the cleats ride the loop in the belt's sense at its speed, by the sim clock",
+    // Loose: a centre inside a roller's arc projects onto the arc at a
+    // radius-scaled arc length, so it is a band either side of 2.5 cm.
+    pass: cleats !== undefined && moved > 0.02 && movedMax < 0.03,
+    detail: `per-cleat advance over one frame at 1.5 m/s: ${(moved * 100).toFixed(2)}..${(movedMax * 100).toFixed(2)} cm (2.5 cm on the loop)`,
+  });
+
+  // THE RING, textured: its own geometry, measured directly (a generated
+  // surface needs a canvas to build, which a headless case has not got).
+  const width = 0.5;
+  const tile = 0.6;
+  const ring = new BeltRing(loop, width, tile, 1.5);
+  const pos = ring.geometry.getAttribute("position");
+  const nor = ring.geometry.getAttribute("normal");
+  const uv = ring.geometry.getAttribute("uv");
+  const stations = beltRingStations(loop);
+  const PER = pos.count / stations.length;
+  // Per station: outer wall (2), front cap (2), inner wall (2), back cap (2).
+  let worstOuter = 0;
+  let worstInner = 0;
+  let worstNormal = 0;
+  let zs = new Set<number>();
+  for (let j = 0; j < stations.length; j++) {
+    const at = (k: number): Vec2 => new Vec2(pos.getX(j * PER + k), -pos.getY(j * PER + k));
+    const onLoop = beltPointAt(loop, stations[j]!);
+    worstOuter = Math.max(worstOuter, at(0).distanceTo(onLoop), at(1).distanceTo(onLoop));
+    const n = beltTangentAt(loop, stations[j]!).orthogonal();
+    const innerAt = onLoop.sub(n.mul(thickness));
+    worstInner = Math.max(worstInner, at(4).distanceTo(innerAt), at(5).distanceTo(innerAt));
+    worstNormal = Math.max(
+      worstNormal,
+      Math.hypot(nor.getX(j * PER) - n.x, -nor.getY(j * PER) - n.y),
+      Math.hypot(nor.getX(j * PER + 4) + n.x, -nor.getY(j * PER + 4) + n.y),
+      Math.abs(nor.getZ(j * PER + 2) - 1),
+      Math.abs(nor.getZ(j * PER + 6) + 1),
+    );
+    for (let k = 0; k < PER; k++) zs.add(Math.round(pos.getZ(j * PER + k) * 1e6) / 1e6);
+  }
+  zs = new Set([...zs].sort());
+  out.push({
+    name: "belt: the band is its own ring - outer wall on the loop, inner wall a thickness in, caps at the width",
+    pass:
+      PER === 8 &&
+      worstOuter < 1e-6 &&
+      worstInner < 1e-6 &&
+      worstNormal < 1e-6 &&
+      zs.size === 2 &&
+      zs.has(width / 2) &&
+      zs.has(-width / 2) &&
+      (ring.geometry.getIndex()?.count ?? 0) === (stations.length - 1) * 4 * 6,
+    detail: `${stations.length} stations x ${PER} vertices; outer ${worstOuter.toExponential(2)} m, inner ${worstInner.toExponential(2)} m, normals ${worstNormal.toExponential(2)}; z planes ${[...zs].join(", ")}`,
+  });
+  // u is arc length, at a rate that closes on a whole number of repeats: the
+  // first and last stations are the same point with u a whole number of tiles
+  // apart (no seam where s wraps), and u runs linearly with s everywhere, round
+  // the wheels too (no stretching), on the outer wall and the caps' rim alike.
+  const u0 = uv.getX(0);
+  const uEnd = uv.getX((stations.length - 1) * PER);
+  const laps = (uEnd - u0) / tile;
+  const rate = (uEnd - u0) / loop.total;
+  let worstRate = 0;
+  for (let j = 1; j < stations.length; j++) {
+    for (const k of [0, 2, 4, 6]) {
+      worstRate = Math.max(worstRate, Math.abs(uv.getX(j * PER + k) - u0 - rate * stations[j]!));
+    }
+  }
+  out.push({
+    name: "belt: the running surface's u is arc length, closing on a whole number of repeats",
+    pass: Math.abs(laps - Math.round(laps)) < 1e-4 && Math.abs(rate - 1) < 0.1 && worstRate < 1e-4,
+    detail: `${laps.toFixed(6)} repeats of ${tile} m round a ${loop.total.toFixed(4)} m loop (u per metre of s ${rate.toFixed(6)}); worst departure from linear ${worstRate.toExponential(2)}`,
+  });
+  // The scroll: a frame of 1.5 m/s later, u has moved back 2.5 cm of arc (the
+  // pattern carried forward in +s), the same at every vertex; a negative belt
+  // runs it the other way; and the clock, not a counter, decides it.
+  ring.sync(1 / 60);
+  const du = uv.getX(0) - u0;
+  let spread = 0;
+  for (let j = 0; j < stations.length; j++) spread = Math.max(spread, Math.abs(uv.getX(j * PER + 3) - uv.getX(3) - (uv.getX(j * PER) - uv.getX(0))));
+  const reverse = new BeltRing(loop, width, tile, -1.5);
+  reverse.sync(1 / 60);
+  const duBack = reverse.geometry.getAttribute("uv").getX(0) - u0;
+  const period = beltTextureTile(loop, tile);
+  out.push({
+    name: "belt: the sim clock scrolls the running surface's texture at the belt's speed",
+    pass:
+      Math.abs(du + 0.025 * rate) < 1e-6 &&
+      Math.abs(duBack + (period - 0.025) * rate) < 1e-5 &&
+      spread < 1e-5,
+    detail: `u moved ${du.toFixed(6)} at +1.5 m/s and ${duBack.toFixed(6)} at -1.5 m/s over one frame (repeat ${period.toFixed(4)} m of arc)`,
+  });
+  ring.geometry.dispose();
+  reverse.geometry.dispose();
+
+  // The 2D outline of a belt is its BAND: the outer loop with the inner one as
+  // a hole, the hole a thickness inside everywhere.
+  const band = outlineOfData({ ...belt, wheels: wheelsM, thickness });
+  const hole = band.kind === "poly" ? (band.hole ?? []) : [];
+  let worstHole = 0;
+  for (const v of hole) worstHole = Math.max(worstHole, Math.abs(Math.sqrt(beltNearest(loop, v).distSq) - thickness));
+  out.push({
+    name: "belt: the 2D outline is the band - the outer loop with the inner loop as its hole",
+    pass: band.kind === "poly" && hole.length > 10 && worstHole < 1e-9,
+    detail: `${band.kind === "poly" ? band.verts.length : 0} outer and ${hole.length} inner points; inner loop ${worstHole.toExponential(2)} m off a thickness in`,
+  });
+
+  // The editor keeps every field, the wheel list and the matched link
+  // included: the file comes back from the model byte-identical.
+  const back2 = modelToDisk(modelFromDisk(raw));
+  const authoredObjects = (raw.bodies[0] as { objects: SceneObjectData[] }).objects;
+  const kept = JSON.stringify(back2.bodies[0]!.objects) === JSON.stringify(authoredObjects);
+  out.push({
+    name: "belt: the editor round trip keeps every field of a belt - its wheel list included - and its matched twin",
+    pass: kept,
+    detail: kept ? "byte-identical objects" : JSON.stringify(back2.bodies[0]!.objects),
+  });
+
+  // The editor's one writer refuses what is not a belt, and a refused edit
+  // leaves the belt as it was; inserting a wheel on a run changes nothing about
+  // the loop (the new wheel touches the band); removing wheel 0 moves the item
+  // onto the next wheel without moving the belt.
+  const model = modelFromDisk(raw);
+  const item = model.items.find((i) => i.object === "collision" && i.shape.kind === "belt")!;
+  const shape = () => (item.shape.kind === "belt" ? item.shape : null)!;
+  const before = JSON.stringify(beltShapeData(shape()));
+  const w = shape().wheels;
+  const idler = !setBelt(item, { wheels: [...w, { c: new Vec2(0.6, 0.55), r: 0.05 }] });
+  const nested = !setBelt(item, { wheels: [w[0]!, w[1]!, { c: w[1]!.c.add(new Vec2(0.05, 0)), r: 0.2 }] });
+  const flat = !setBelt(item, { thickness: 0 });
+  const unchanged = JSON.stringify(beltShapeData(shape())) === before;
+  const perimeter = beltLap(shape())!.perimeter;
+  const inserted = beltInsertWheel(item, 1);
+  const afterInsert = beltLap(shape())!.perimeter;
+  // Every wheel but the removed one, in the world, before and after.
+  const wheelCentres = (): Vec2[] => shape().wheels.map((wh) => item.pos.add(wh.c.rotated(item.rot)));
+  const kept0 = wheelCentres().slice(1);
+  const removed = beltRemoveWheel(item, 0);
+  const kept1 = wheelCentres();
+  let shifted = kept0.length === kept1.length ? 0 : Infinity;
+  kept0.forEach((p, i) => (shifted = Math.max(shifted, p.distanceTo(kept1[i] ?? new Vec2(Infinity, 0)))));
+  out.push({
+    name: "belt: the editor refuses an idler, a disc inside another and a zero thickness; inserts on a run and removes wheel 0 without moving the belt",
+    pass:
+      idler &&
+      nested &&
+      flat &&
+      unchanged &&
+      inserted === 2 &&
+      Math.abs(afterInsert - perimeter) < 1e-9 &&
+      removed &&
+      shape().wheels[0]!.c.x === 0 &&
+      shape().wheels[0]!.c.y === 0 &&
+      shifted < 1e-12,
+    detail: `refused idler ${idler}, nested ${nested}, zero thickness ${flat}, unchanged ${unchanged}; inserted at ${inserted} (perimeter ${perimeter.toFixed(6)} -> ${afterInsert.toFixed(6)} m); wheel 0 removed ${removed}, the other wheels moved ${shifted.toExponential(2)} m`,
+  });
+  return out;
+}
+
 export function runRender3dCases(): CaseResult[] {
   return [
+    ...beltRendering(),
     ...renderNeedsGeometry(),
     ...chainAnchors(),
     ...chainWrapPoints(),
     ...cameraCorrespondence(),
+    ...levelLens(),
     ...blendStability(),
     ...orbitView(),
     ...orthographicView(),
     ...extrusionGeometry(),
     ...tippedPrimitive(),
+    ...perObjectProjection(),
     ...depthOrdering(),
     ...surfaceResolution(),
     ...visualRoundTrip(),

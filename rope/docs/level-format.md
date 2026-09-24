@@ -62,6 +62,29 @@ The gantry that marks it is an ordinary geometry object on the same body (`mesh:
 A body may also state what it takes to DESTROY it: **`breakForce`** (newtons) and **`durability`** (hits), the breakable pair - see [**Breakable geometry**](breakable.md).
 Both are stated in the sim's own units and `scaleLevelData` leaves them alone, for the reason `drag` is left alone: the file's lengths are pixels because the editor draws in pixels, and neither a force nor a count is a length.
 
+A rock body may carry **`rockSeed`**, an integer seed for its [generated rock](rocks.md): absent is 0, the rock every body was generated with before the field.
+Only the rock generator reads it, and it changes every random choice in that body's rock, so an author can ask for another set of boulders without touching the outline.
+It is in the rock hash, so changing it marks the body stale until the rocks are regenerated; it is dimensionless and `scaleLevelData` passes it through untouched.
+The editor writes it only when it is nonzero, so a level that never sets one saves byte-identically.
+
+A collision object's shape may be a **`belt`**: `{ kind: "belt", wheels: [{ x, y, r }, ...], thickness, speed }`, a conveyor - see [**Conveyor belts**](conveyors.md).
+Each wheel is a centre in the object's frame and the WHEEL's own radius; `wheels[0]` is at `(0, 0)`, the object's own origin, and is written out anyway because it carries a radius.
+There are two or more, and every one must lie on the convex hull of the discs of radius `r + thickness`: the band wraps the outside of all of them.
+`thickness` is the band's depth in the plane, `> 0`, so the running surface round each wheel is at `r + thickness`; how wide the band is across the pulleys is the geometry twin's `depth`, a look.
+`speed` is one signed number whose sign is the direction (positive turns the loop clockwise on screen).
+Every field is a length or a length per second, so `scaleLevelData` scales them all; a belt builds only on a `static` body that is not a mover, and fails the build anywhere else, as it does for a wheel inside the hull, a disc inside another or a zero thickness, naming the wheel.
+A geometry object may carry a `belt` shape too: it draws the band as its own ring, with its `texture` scrolling at its own `speed` (the flat `color` fill keeps a ring of cleats instead; see [**Conveyor belts**](render3d.md#conveyor-belts)), and in the editor `+ Belt` draws the collision object and `Add geometry` gives it its matched twin, as for any shape.
+There is no retired two-roller form: nothing committed ever used it, so it was replaced rather than folded.
+`levels/belt-test.json` (`?level=TEST_BELT`) is the sandbox.
+
+A geometry object that becomes a [generated rock](rocks.md) may state the rock's **taper**: **`taperStart`** and **`taperAngle`**, read by the rock generator and by nothing else.
+`taperStart` is how far in FRONT of the object's own plane (its `z`) the taper begins, a length (pixels on disk, metres in the sim, scaled by `scaleLevelData` like `depth`); behind it the rock's side walls stand exactly on the outline, and from it forward the surface leans inward.
+Absent is 0: the taper begins at the gameplay plane, the line the ball travels.
+`taperAngle` is how far that surface leans in from the outline's wall, in degrees, dimensionless and passed through scaling untouched: 0 (or absent) is no taper at all, a straight extrusion of the outline; 45 is a 45-degree chamfer; 90 is a flat top at `taperStart`.
+The reader clamps it to 0..90.
+Both are in the rock's hash, so changing either marks the body stale.
+The object's `bevel` is the flat extrusion's chamfer and nothing else: the rock pipeline no longer reads it.
+
 The canonical, hand-editable schema now lives in `src/level/levelFormat.ts` (superset of
 the generated one — adds the `rigid` and `force` kinds, the `cameraRegions` and
 `chains` lists, and bodies made of scene objects); `levelData.ts` stays

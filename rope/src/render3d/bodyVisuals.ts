@@ -47,10 +47,14 @@ import {
   type GeometryObjectData,
   type LevelBodyData,
 } from "../level/levelFormat";
-import { DEFAULT_BEVEL, cylinderSolid, extrudeOutline } from "./extrude";
-import { isAuthoredSurface, isSolidSurface, loadMesh, surfaceFor, surfaceName } from "./assets";
+import { DEFAULT_BEVEL, cylinderSolid, extrudeOutline, taperOutline } from "./extrude";
+import { ROCK_TEXTURES } from "./rocks";
+import { isAuthoredSurface, isSolidSurface, loadMesh, surfaceFor, surfaceName, tileMetres } from "./assets";
 import { buildWater } from "./water";
 import { DEFAULT_LIGHT_Z, LightRig, type MountedLight } from "./lights";
+import { applyProjection } from "./projection";
+import { BeltRing, BeltTread } from "./beltTread";
+import { beltLoopOf } from "../render/beltTread";
 import { orientTo, placeAt, threeY } from "./space";
 
 // The floor an authored colour's brightness is lifted to before it tints the
@@ -135,6 +139,14 @@ function primitiveGeometry(
   defaults: PrimitiveDefaults,
 ): THREE.BufferGeometry {
   const depth = g?.depth ?? defaults.depth;
+  // A ROCK is drawn as the reference solid its generated mesh fills: the
+  // outline straight through to the taper's start, then the tapered roof
+  // (`taperOutline`). Its `bevel` is not drawn, because the generator does not
+  // read it; the taper is the rock's edge treatment, and this extrusion is how
+  // the author sees it while setting it in the editor.
+  if (g?.texture !== undefined && ROCK_TEXTURES.has(g.texture)) {
+    return taperOutline(outline, { depth, taperStart: g.taperStart ?? 0, taperAngle: g.taperAngle ?? 0 });
+  }
   if (outline.kind === "circle") return cylinderSolid(outline.radius, depth);
   return extrudeOutline(outline, { depth, bevel: g?.bevel ?? defaults.bevel });
 }
@@ -240,6 +252,7 @@ export function mountVisual(
     // nothing else, so the body goes on colliding with the outline it states.
     mesh.rotation.set(g?.rotX ?? 0, g?.rotY ?? 0, 0);
     mesh.position.z = z;
+    applyProjection(mesh, g?.projection);
     parent.add(mesh);
     return { geometry: owned };
   }
@@ -260,6 +273,7 @@ export function mountVisual(
   placeholder.castShadow = opts.castShadow;
   placeholder.receiveShadow = true;
   holder.add(placeholder);
+  applyProjection(placeholder, g?.projection);
 
   const key = g?.mesh;
   if (!key) return { geometry: owned };
@@ -283,6 +297,8 @@ export function mountVisual(
       mesh.castShadow = opts.castShadow;
       mesh.receiveShadow = true;
     });
+    // After the texture override, so the lens is applied to what it wears.
+    applyProjection(obj, g?.projection);
     holder.add(obj);
   });
   return { geometry: owned };
@@ -337,6 +353,11 @@ export class BodyVisual {
   // ride the pose with no per-frame cost; handed back to the rig at dispose,
   // which is what frees the budget slot as well as the objects.
   private readonly lights: MountedLight[] = [];
+  // The conveyor cleat rings this body draws, one per untextured belt geometry
+  // object, and the textured bands whose surface it scrolls, one per textured
+  // one. A band's geometry is in `owned` like any other.
+  private readonly treads: BeltTread[] = [];
+  private readonly rings: BeltRing[] = [];
   private disposed = false;
 
   // `body` is what moves and is null for an authored body that built nothing;
@@ -416,9 +437,41 @@ export class BodyVisual {
       const outline = outlineOfData(
         g.shape ?? { kind: "rect", w: ORPHAN_PLACEHOLDER, h: ORPHAN_PLACEHOLDER },
       );
+      const defaults = solid ? SOLID_DEFAULTS : DECOR_DEFAULTS;
+      // A CONVEYOR is its own geometry, not an extruded outline: the band as a
+      // ring whose running surface carries its texture round the loop, and on
+      // a band with no texture to move (the flat colour) a ring of cleats
+      // instead (`beltTread.ts`). Both run at the geometry object's own
+      // `speed`, for the reason every other look field is its own: a matched
+      // pair states the collision object's, and a drawn-only belt runs as it is
+      // authored. The width across the pulleys is the object's `depth`. A prop
+      // standing in for a belt draws what its file draws.
+      const loop =
+        g.shape?.kind === "belt" && (g.kind ?? "primitive") !== "mesh" ? beltLoopOf(g.shape) : null;
+      let ring: BeltRing | null = null;
+      if (loop && g.shape?.kind === "belt") {
+        const width = g.depth ?? defaults.depth;
+        const surface = surfaceName(g.texture);
+        const flat = isSolidSurface(surface);
+        ring = new BeltRing(loop, width, tileMetres(surface, g.tileScale), flat ? 0 : g.shape.speed);
+        if (flat) {
+          const tread = new BeltTread(loop, g.shape.speed, width);
+          // Placed and tipped exactly as `mountVisual` places the band, so the
+          // cleats stay on it whatever the object's depth and angles.
+          tread.mesh.position.z = defaultZ;
+          tread.mesh.rotation.set(g.rotX ?? 0, g.rotY ?? 0, 0);
+          applyProjection(tread.mesh, g.projection);
+          piece.add(tread.mesh);
+          this.treads.push(tread);
+          this.owned.push(tread.geometry);
+        } else {
+          this.rings.push(ring);
+        }
+      }
+      const band = ring;
       this.mount(
         piece,
-        () => primitiveGeometry(outline, g, solid ? SOLID_DEFAULTS : DECOR_DEFAULTS),
+        () => band?.geometry ?? primitiveGeometry(outline, g, defaults),
         spec,
         defaultZ,
         // WHAT COLLIDES, CASTS - wherever its dressing has been nudged to.
@@ -485,8 +538,12 @@ export class BodyVisual {
   }
 
   // The whole per-frame cost of a body: two writes into vectors it already owns,
-  // and nothing at all for one that never moves.
-  sync(alpha: number): void {
+  // and nothing at all for one that never moves - plus, on a conveyor, its
+  // texture or its cleats carried to `time`, the sim instant the frame stands
+  // for (`beltRenderTime`), which a belt at rest skips.
+  sync(alpha: number, time = 0): void {
+    for (const t of this.treads) t.sync(time);
+    for (const r of this.rings) r.sync(time);
     if (!this.body) return;
     placeAt(this.root, this.body.renderPosition(alpha));
     orientTo(this.root, this.body.renderRotation(alpha));
@@ -498,6 +555,9 @@ export class BodyVisual {
     this.lights.length = 0;
     for (const g of this.owned) g.dispose();
     this.owned.length = 0;
+    for (const t of this.treads) t.mesh.dispose();
+    this.treads.length = 0;
+    this.rings.length = 0;
     for (const m of this.ownedMaterials) m.dispose();
     this.ownedMaterials.length = 0;
     this.root.clear();

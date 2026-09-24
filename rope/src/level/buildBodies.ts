@@ -59,6 +59,7 @@ import { buildMoveRoute, moverScript, type MoverScript } from "./movers";
 import { strokeCurve } from "../lib/stroke";
 import { pathNodesOf } from "../lib/path";
 import { buildRailCurve } from "../lib/rail";
+import { beltRunQuads, buildBeltLoop, ConveyorBody } from "../lib/belt";
 import type { CollisionObject2D } from "../engine/body";
 
 // An authored shape as the ENGINE primitives it is made of, each with the
@@ -101,6 +102,7 @@ function makeShapes(shape: ShapeData): { shape: Shape; offset: Vec2 }[] {
     }
     return pieces;
   }
+  if (shape.kind === "belt") return beltPieces(shape);
   const verts = shape.verts.map((v) => new Vec2(v.x, v.y));
   const pieces = decomposeConvex(verts);
   // Empty means the loop crosses itself, so there is no inside to build. The
@@ -268,6 +270,11 @@ export interface BuiltBodies {
   // the level driver's - `Level` and `BallLevel` each own the loop that steps it
   // - and the builder has no level to add one to.
   movers: Array<{ body: AnimatableBody2D; script: MoverScript }>;
+  // The bodies carrying a conveyor belt (`ConveyorBody`), running or not.
+  // Handed back for the reason `movers` is: a running belt has to wake what
+  // rests on it every frame (`World.wakeTouching`), and that loop is the level
+  // driver's.
+  belts: ConveyorBody[];
 }
 
 // The level as built, from the renderers' point of view: the metre-scaled data
@@ -302,6 +309,19 @@ interface Piece {
   // Viscosity (`CollisionObjectData.viscosity`, 0 = solid), per piece for the
   // same reason once more: a stone wall with one mud patch is one body.
   viscosity: number;
+  // The BELT this piece is part of (`ShapeData`'s `belt`), or null. Shared by
+  // every piece one belt builds, exactly as `rail` is by the pieces of one
+  // curve, and turned by `attachBelts` into the `BeltLoop` they all carry.
+  belt: BeltBuild | null;
+}
+
+// A belt under construction: the wheels' centres in WORLD metres (the frame
+// every piece is built in, before the body's origin is known) with their own
+// radii, the band's thickness and the signed surface speed.
+interface BeltBuild {
+  wheels: { c: Vec2; r: number }[];
+  thickness: number;
+  speed: number;
 }
 
 // A rail under construction: the bar's centreline in WORLD metres (the frame
@@ -339,7 +359,62 @@ function makePieces(body: LevelBodyData, o: CollisionObjectData): Piece[] {
         : null;
     return pieces.map((made) => ({ ...makePiece(o, made, world), rail }));
   }
+  if (o.shape.kind === "belt") {
+    // A BELT builds a disc per wheel and a quad per run, and one record shared
+    // by all of them (see `Piece.belt`) - the wheels' centres placed in the
+    // world here for the reason a rail's centreline is.
+    const shape = o.shape;
+    const belt: BeltBuild = {
+      wheels: shape.wheels.map((w) => ({
+        c: world.pos.add(new Vec2(w.x, w.y).rotated(world.rot)),
+        r: w.r,
+      })),
+      thickness: shape.thickness,
+      speed: shape.speed,
+    };
+    return beltPieces(shape).map((made) => ({ ...makePiece(o, made, world), belt }));
+  }
   return makeShapes(o.shape).map((made) => makePiece(o, made, world));
+}
+
+// An authored belt as the pieces it collides as, in the shape's own frame
+// (`lib/belt.ts`): one DISC of radius `r + thickness` at every wheel, in
+// authored order - the wheel and the band on it as one solid, since the inside
+// of a disc cannot be reached in the plane anyway and the arcs stay exact for
+// the wrap resolvers and the ride - then one thin QUAD per run, in loop order:
+// the band along that run, `thickness` deep, lying inside the outer run line.
+//
+// NOTHING covers the region between the wheels. The band encloses it on every
+// side, so nothing in the plane can reach it, and leaving it empty is what lets
+// an author put a wheel prop or anything else inside a belt without it being
+// buried in a static.
+//
+// A quad goes through the POLYGON path (`makeShapes` on a `poly`), so it is
+// re-centred and wound exactly as the same four points authored as a polygon
+// would be. That, and the discs being plain circles, is what makes a belt at
+// speed 0 build the very bodies its pieces authored by hand do (`cli belts`
+// `static-equivalent`). A quad is convex, so it is one piece: `attachBelts`
+// counts on the order being discs then quads, one each.
+//
+// The discs overlap their quads at the tangent seams, which collision does not
+// mind, and the masses are simply the pieces' sum: a belt only ever builds on a
+// static, whose mass nothing reads, and what the masses DO decide - the body's
+// origin in `mountPieces` - has no older answer to match.
+function beltPieces(shape: Extract<ShapeData, { kind: "belt" }>): { shape: Shape; offset: Vec2 }[] {
+  const loop = buildBeltLoop(
+    shape.wheels.map((w) => ({ c: new Vec2(w.x, w.y), r: w.r })),
+    shape.thickness,
+  );
+  const discs = shape.wheels.map((w) => ({
+    shape: circleShape(w.r + shape.thickness),
+    offset: new Vec2(w.x, w.y),
+  }));
+  const quads = beltRunQuads(loop).map((quad, k) => {
+    const made = makeShapes({ kind: "poly", verts: quad.map((v) => ({ x: v.x, y: v.y })) });
+    if (made.length !== 1) throw new Error(`belt run ${k} built ${made.length} pieces rather than one quad`);
+    return made[0]!;
+  });
+  return [...discs, ...quads];
 }
 
 // An authored curve as the convex pieces that tile it, the centreline they were
@@ -380,6 +455,8 @@ function makePiece(
     // Filled in by `makePieces` for the pieces of a rail curve; a rail flag on
     // any other shape kind means nothing (see `CollisionObjectData.rail`).
     rail: null,
+    // Filled in by `makePieces` for the pieces of a belt, likewise.
+    belt: null,
     // A viscosity that is not a positive number - absent, zero, a hand-edited
     // file's nonsense - is a solid face.
     viscosity: typeof o.viscosity === "number" && o.viscosity > 0 ? o.viscosity : 0,
@@ -470,6 +547,42 @@ function attachRails(body: CollisionObject2D, pieces: Piece[]): void {
       if (shape) shape.rail = curve;
     }
   }
+}
+
+// Give every piece of a belt the LOOP it is part of, and the speed its surface
+// runs at, once the body's own origin is settled - `attachRails`' argument, for
+// the same reason: the loop is stored in the body's local frame, like every
+// `RopeContact` position.
+//
+// `makePieces` builds a belt's pieces in the order every wheel's disc (authored
+// order) then every run's quad (loop order), which is the order the loop's own
+// default `pieceAt` names them in, so the mounts are read straight through it.
+function attachBelts(body: CollisionObject2D, pieces: Piece[]): void {
+  const mounts = new Map<BeltBuild, number[]>();
+  for (let i = 0; i < pieces.length; i++) {
+    const belt = pieces[i]!.belt;
+    if (!belt) continue;
+    const list = mounts.get(belt);
+    if (list) list.push(i);
+    else mounts.set(belt, [i]);
+  }
+  if (mounts.size === 0) return;
+  const shapes = body.getShapes();
+  const toLocal = (p: Vec2): Vec2 => p.sub(body.globalPosition).rotated(-body.globalRotation);
+  let running = false;
+  for (const [belt, mounted] of mounts) {
+    const wheels = belt.wheels.map((w) => ({ c: toLocal(w.c), r: w.r }));
+    const unmounted = buildBeltLoop(wheels, belt.thickness);
+    const loop = { ...unmounted, pieceAt: unmounted.pieceAt.map((k) => mounted[k] ?? 0) };
+    for (const i of mounted) {
+      const shape = shapes[i];
+      if (!shape) continue;
+      shape.belt = loop;
+      shape.beltSpeed = belt.speed;
+    }
+    if (belt.speed !== 0) running = true;
+  }
+  if (body instanceof ConveyorBody) body.running = running;
 }
 
 // Mass and moment of inertia of a mounted compound body. Each piece contributes
@@ -667,6 +780,7 @@ export function buildLevelBodies(
   const wrapBodies: PhysicsBody2D[] = [];
   const bodies: BuiltBody[] = [];
   const movers: BuiltBodies["movers"] = [];
+  const belts: ConveyorBody[] = [];
 
   for (const b of data.bodies) {
     if (!collides(b)) {
@@ -678,8 +792,23 @@ export function buildLevelBodies(
       continue;
     }
     const pieces = b.objects.filter(isCollisionObject).flatMap((o) => makePieces(b, o));
+    // A belt's geometry never moves - only its surface does - so it may only
+    // be built on a body whose geometry never moves either: a plain static.
+    // On a rigid body or a mover it would need a surface velocity composed
+    // with the body's own, which is a later feature, and building it as
+    // anything else would be a level that quietly plays differently from the
+    // one authored.
+    if (pieces.some((p) => p.belt !== null) && (b.kind !== "static" || isMover(b))) {
+      throw new Error(
+        `a belt may only be built on a static body that does not move (this one is ${
+          isMover(b) ? "a mover" : `kind "${b.kind}"`
+        })`,
+      );
+    }
     const built = buildOne(world, b, pieces, onReset, onFinish);
     attachRails(built, pieces);
+    attachBelts(built, pieces);
+    if (built instanceof ConveyorBody) belts.push(built);
     bodies.push({
       data: b,
       body: built,
@@ -715,7 +844,7 @@ export function buildLevelBodies(
     if (built instanceof PhysicsBody2D && built.isSolid) wrapBodies.push(built);
   }
 
-  return { wrapBodies, bodies, movers };
+  return { wrapBodies, bodies, movers, belts };
 }
 
 function buildOne(
@@ -846,7 +975,15 @@ function buildOne(
   // it. It is still a static in every other respect - it collides, it is
   // wrapped, it may be hook-proof or hook-only - which is why these compose with
   // the kind instead of replacing it.
-  const sb = isMover(b) ? new AnimatableBody2D() : new StaticBody2D();
+  //
+  // A static that authors a BELT is a `ConveyorBody`: still a static in every
+  // respect (its transform never moves), with a surface that runs
+  // (`lib/belt.ts`). The build has already refused a belt on a mover.
+  const sb = isMover(b)
+    ? new AnimatableBody2D()
+    : pieces.some((p) => p.belt !== null)
+      ? new ConveyorBody()
+      : new StaticBody2D();
   mountPieces(sb, pieces);
   applyStyle(sb, b);
   // Mount it ON its bearing (see `LevelBodyData.pivotX`), the way an authored

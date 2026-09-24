@@ -93,6 +93,7 @@ export function writeClipboard(model: EdModel, items: readonly EdItem[]): string
     vines: scope.vines,
     bodyFrames: frames,
     environment: undefined,
+    camera: undefined,
     meta: {},
   };
   const { player: _spawn, ...rest } = scaleLevelData(toLevelData(sub), PIXELS_PER_METER);
@@ -119,6 +120,6 @@ export function readClipboard(text: string): RawLevelData | null {
   const payload = parsed as Record<string, unknown>;
   if (payload[CLIPBOARD_KEY] !== CLIPBOARD_VERSION) return null;
   if (!Array.isArray(payload.bodies)) return null;
-  const { [CLIPBOARD_KEY]: _v, player: _spawn, meta: _meta, environment: _env, ...rest } = payload;
+  const { [CLIPBOARD_KEY]: _v, player: _spawn, meta: _meta, environment: _env, camera: _camera, ...rest } = payload;
   return { ...rest, player: NO_SPAWN } as RawLevelData;
 }

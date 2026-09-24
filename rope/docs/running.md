@@ -39,7 +39,7 @@ deliberately historical, and `cli bundles` therefore does not repeat it per row.
 level plays in 3D by default and the grapple levels stay 2D, and `?render=2d` is
 the escape hatch anywhere. `?probe3d=1` draws the alignment probe.
 `?retract=1` turns on the released chain reeling back in ([chain-retract](chain-retract.md)); off, a let-go chain vanishes as it always did. `cli shot --retract` is the same switch for a filmstrip.
-`?paint=0` turns off the painted light ([lighting-and-surfaces](lighting-and-surfaces.md#painted-light)) for the session, which is how a change to it is judged: the same frame painted and not. `cli shot --query paint=0` is the same switch headless.
+**F4** captures the camera as JSON for `cli shot --view`, so a report about a spot in the level is a replayable grab.
 The frame is drawn at 1920x1080 device pixels at most, whatever the display: past that a player is paying for fragments rather than seeing more, and the browser scales the result up to the window. `?dpr=N` overrides that (clamped to 4) and is how the renderer's FILL cost is measured from a 1080p desk - the picture is identical and only the fragment count behind it changes, so `?dpr=2` on 1080p pays what an uncapped 4K player used to. Debug only - see [**Testing a weaker GPU**](debugging-rendering.md#testing-a-weaker-gpu).
 
 Pick a level with `?level=NAME` (see `src/level/registry.ts`); `TEST_MOVERS` /
@@ -195,40 +195,34 @@ feel without a rebuild):
   **The run opens with a reticle, never without one - and with the ball already facing it.**
   A cursor has no position until an event carries one, and a ball with no aim is a ball whose rotation belongs to the physics, so a run used to open unaimed and stay that way until the player's first mouse move.
   Measured on `BALL`, whose ball opens on a ledge: 0 to 14.5 radians over the first 100 frames, `kinematicRotation` false throughout - two and a third revolutions of tumbling loop, ending in a snap to face whatever the first move said.
-  So the cursor is PARKED at the opening as well as at a hand-over (`BallInputSource.openRun`, and see the park below), shown where the ball is already the player's and hidden while a level's opening is still running.
+  So the cursor is PARKED when the run opens (`BallInputSource.openRun`, called from `boot` and from a Retry), and drawn from the first frame.
 
-  **The park happens when the RUN starts, not when the input source is built**, and the gap between those is the whole loading screen.
-  The source exists from the moment the page's module graph runs; the level starts when the screen comes off (`boot` in main.ts), a measured 1.8 s later from localhost.
-  Parked at construction, everything the hand did in between landed on top of the park: under the lock a mouse move is delivered to the lock's own target whatever is drawn over it, so a hand that wandered while the level loaded integrated straight into the virtual cursor, and the level opened that far off the seed - with `moved` set, so the lock's own re-seed then refused to touch what it took for the player's aim.
-  Measured on `BALL` with two moves dispatched at the canvas 1.2 s in and the page's pointer note dropped: the run opened aiming 0.81 rad off vertical and settling at 1.33, dragging the ball 13 cm, against a dead-vertical 0.000 and 0 cm parked at the run's start.
-  Nothing done while a level is loading is aiming - there is nothing on screen to aim at.
+  **A level starting never moves the cursor and never hides it** (2026-09-23, asked for by Tris).
+  It used to: the lock re-seeded the virtual cursor `AIM_SEED_ABOVE` (0.5 m) above the ball, a level's opening hid the reticle until it handed the ball over, and the hand-over parked it above the ball again and showed it as the announcement that the ball was the player's.
+  All of that is gone.
+  The reticle stands in for the hidden OS pointer, and a pointer that jumps somewhere of the game's choosing, or vanishes while the ball rolls in, is a pointer the player has lost.
+  The reticle is drawn through an opening too, even though the sim drops the aim until the hand-over.
 
-  **Where the cursor is born is what the lock decides** (`AimPointer.birthplace`), and it is the question the `pointerlockchange` re-seed has always answered, asked one moment earlier.
-  Locked, it is `AIM_SEED_ABOVE` (0.5 m) straight above the ball, where the loop already points, so the aim arrives agreeing with the avatar and the first hand movement steers from it rather than snapping the ball round.
+  **Where the cursor is born is where the desktop pointer last was** (`AimPointer.birthplace`), locked or not.
   Unlocked the cursor IS the desktop pointer, and where that is is a fact about the desktop rather than ours to choose: born anywhere else, a reticle standing in for a hidden OS pointer would be lying about where the player's clicks will land.
+  Locked, `clientX/Y` froze at the capture point, which is the same place: where the desktop pointer was when the lock took it.
+  A park under the lock with a virtual cursor already in hand keeps that cursor, since the capture point is where the lock was taken and not where the hand has steered since.
   The page has been noting that position since it parsed (`watchPointer` in `render3d/store.ts`), because nothing in the app is listening early enough - the press that picks a level is the last event before the run opens, and the app is booted from inside its handler - so what the birth reads is the pointer crossing the menu and the press that started the level.
-  A page nobody has touched - one loaded straight at `?level=`, with the mouse outside the window - has no position to offer, and the seed stands in.
+  A page nobody has touched - one loaded straight at `?level=`, with the mouse outside the window - has no position to offer, and the seed (`AIM_SEED_ABOVE` straight above the ball) stands in.
   That note keeps the same warp rule the pointer does (below), and for a measured reason: a press on a menu row at (640, 412) is followed one event later by `move 0,0 m=(-650,-509)`, and taken at face value it opens the level aiming at the top-left corner of the page.
 
-  **An aim is also a grip**, so a run that opens aiming opens braked: the ball holds where the level put it instead of rolling off under its own weight (`BALL` again - 1.6 m of roll and 1.3 m of drop before, nothing at all now, with the cursor above it).
-  That is the same brake the hand-over leans on to stop the ball where it arrives, and it is the game's own rule seen at frame 1 rather than a new one: a cursor held over the ball is how a player stops it rolling at any other moment of a run.
+  **An aim is also a grip**, so a run that opens aiming opens braked: the ball holds where the level put it instead of rolling off under its own weight (`BALL` again - 1.6 m of roll and 1.3 m of drop unaimed, nothing at all with the cursor above it; measured before the cursor stopped being placed there).
+  It is the game's own rule seen at frame 1 rather than a new one: a cursor held over the ball is how a player stops it rolling at any other moment of a run.
   A level that wants an opening the ball rolls through wants an opening the player's hands are OFF (see [**The rolling entry**](ball-rolling.md#the-rolling-entry)).
 
   **A press is itself a position** - `clientX/Y` is live on it, and the hand that made it is pointing at something - so a press is an aim wherever on the page it lands (`AimPointer.reveal`, called from the document-level press listener so a press on a letterbox bar counts too).
   It is what brings a cursor into being on a page whose pointer has never been seen, and what ends a park: the aim has been used, so it is the player's from there.
-  The `pointerlockchange` that confirms a capture re-seeds the cursor above the ball for the lock that lands AFTER a level has opened, and only while the aim is still the game's own: once the player has moved the mouse, the reticle is theirs, and a re-lock after an Esc leaves it where they put it.
+  The `pointerlockchange` that confirms a capture re-seeds the cursor at its birthplace (the capture point) for the lock that lands AFTER a level has opened, and only while the aim is still the game's own: once the player has moved the mouse, the reticle is theirs, and a re-lock after an Esc leaves it where they put it.
   (Up to the press that picks a level the desktop cursor is untouched: the menu is a list of links, and a link is aimed at with the pointer the player can see.)
 
-  **A level's opening hands the cursor back PARKED**: put at its birthplace, aimed at and drawn (`AimPointer.park`, called from `BallInputSource.handOver`).
-  A level that opens on the ball rolling in (see [**The rolling entry**](ball-rolling.md#the-rolling-entry)) or on a recorded run (see [**The recorded arrival**](ball-rolling.md#the-recorded-arrival)) takes the player's aim out of the sim until it hands over, so wherever their hand was resting through it is not an aim they made: left alone the reticle appeared at the hand-over already somewhere, and the ball turned to face it on the first frame it was theirs.
-  The cursor is MOVED rather than forgotten, because the aim is the cursor's position and a cursor with no position is a ball with no aim at all - rotation left to the physics, the loop wherever the roll left it, the ball rocking back off its own lug as it settles.
-  Put at the birthplace, the ball is handed over aiming where the loop already points, and the aim's own brake stops it there.
-  It is **shown**, and that is the hand-over's one announcement: nothing was drawn over the opening, the ball moved without the player, and a reticle appearing where their aim now is is how they are told the level is theirs.
-  A park made while the ball is NOT the player's is hidden (`park(show)`), because a mark they cannot use is one they did not ask for: the reticle is what `reticlePoint()` answers rather than `aimPoint()`, and it is null while the cursor is hidden - until the first mouse move takes it over, or the first press uses it.
-  `reticlePoint()` is also null for the whole of a level's opening, whatever the mouse does through it: the sim has dropped the player's aim until the hand-over, so a reticle there would steer nothing, and one stray mouse move used to be enough to put one on screen and spend the hand-over's announcement before it was made.
-  While it is parked it is re-taken every poll, so it rides at its birthplace rather than sliding out from over it as the camera eases off the spawn onto the avatar - 26 cm of that ease left the aim 22 degrees off vertical before it did.
-  Windowed that ride is also what keeps the mark under a hand crossing the letterbox bars, whose moves reach the page and not the canvas.
-  Parked and hidden are separate states for exactly that reason (`isParked` vs `isHidden`): the shown cursor of a hand-over is still the game's own until the player moves it, so it goes on riding.
+  **A level's opening hands the ball over with the cursor where it is.**
+  Nothing is re-parked at the hand-over: wherever the player's hand rested through the opening is where the aim is when the ball becomes theirs.
+  While the cursor is parked it is re-taken every poll (`BallInputSource.rideParked`); windowed that is what keeps the mark under a hand crossing the letterbox bars, whose moves reach the page and not the canvas, and under the lock the birthplace does not move so the ride holds it still.
 
   **A mousemove carrying *no movement* is a position, not a move** - the one a browser sends when the page shifts under a stationary pointer (the loading screen coming off, the fullscreen transition).
   Unlocked it is answered, because unlocked the reticle stands on the real pointer and where that pointer is sitting is exactly what the event says.

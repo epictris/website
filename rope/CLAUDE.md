@@ -23,7 +23,7 @@ bun run test       # THE suite: typecheck + every case suite + every playtest + 
 ```
 
 `/` is the **level select** and `?level=NAME` plays one (`src/level/registry.ts`); `BALL` (the ball & chain controller, 3D) is the introduction and the grapple levels stay 2D.
-`?render=2d|3d`, `?hud=1` (F3 in play), `?aim=cursor|position|motion`, `?toggle_click=true` (click to deploy/redeploy, right-click to detach), `?probe3d=1`, `?retract=1` (the released chain reels in, still being judged), `?paint=0` (the painted light off, for an A/B).
+`?render=2d|3d`, `?hud=1` (F3 in play), `?aim=cursor|position|motion`, `?toggle_click=true` (click to deploy/redeploy, right-click to detach), `?probe3d=1`, `?retract=1` (the released chain reels in, still being judged), F4 captures the camera for `cli shot --view`.
 `?checkpoint=NAME` starts (and restarts) at an authored named spawn instead of the level's own - placed on the editor's notes layer, recorded into every bundle so a replay starts where the run did.
 `/editor` is the level editor.
 **P** downloads a replayable session bundle stamped with the served tree.
@@ -77,7 +77,7 @@ Every command is listed with its purpose in [headless-tooling](docs/headless-too
 |---|---|
 | `src/engine/` | bodies, shapes, collision, manifolds, the contact solver, `World`, `dmath`, `trig` |
 | `src/classes/` | `Player` state machine, `BallPlayer`, `BallHook`, `Rope`, `SlackChain` |
-| `src/lib/` | pure geometry: polygon decomposition, stroke, path, keyframes, rail, viscous, manacle, span sweep |
+| `src/lib/` | pure geometry: polygon decomposition, stroke, path, keyframes, rail, viscous, belt, manacle, span sweep |
 | `src/level/` | level format, `buildBodies`, chains, vines, movers, registry, generated `levelData.ts` |
 | `src/sim/` | invariants, digests and traces, the case suites (`*Cases.ts`), the playtest runner, rigs |
 | `src/tools/` | `cli.ts` and the headless shot runner |
@@ -112,6 +112,7 @@ Rope geometry and surfaces
 - [hook-surfaces](docs/hook-surfaces.md) - hook-proof and chain-through pieces, hook-only bodies.
 - [rails](docs/rails.md) - authored curves the cuff clamps around and slides along.
 - [viscous-surfaces](docs/viscous-surfaces.md) - mud: the cuff sinks, creeps and drops out.
+- [conveyors](docs/conveyors.md) - belts: a static with a surface velocity, the hull of N wheels and its sense, the hollow build, the carry, the ride round the wheels, the tear-out, the band's ring and its scrolling texture.
 - [breakable](docs/breakable.md) - geometry that gives way: the force a hit carries, the hit count, and the debris it leaves.
 - [scene-chains](docs/scene-chains.md) - authored chains, the coupled sweep, the settle, anchors and wrap points.
 - [vines](docs/vines.md) - pass-through link chains, the load rope, stiffness, spans, sleep, drawing, authoring.
@@ -148,9 +149,11 @@ Camera
 
 Rendering
 
-- [art-style](docs/art-style.md) - the painterly look: painted maps, painted light, the reproducible bake, how to add a texture, what was rejected.
+- [art-style](docs/art-style.md) - the painterly look (no longer the direction since 2026-09-24; the painted light is removed): painted maps, the reproducible bake, how to add a texture, what was rejected.
 - [render3d](docs/render3d.md) - two canvases one camera, the coordinate mapping, geometry objects versus collision, bodies and scene objects, traps.
 - [lighting-and-surfaces](docs/lighting-and-surfaces.md) - environment, light objects in bodies, fog, HDRI skies, generated and authored PBR surfaces, tiling.
+- [rock-assets](docs/rock-assets.md) - rock and moss props: a body's outline modelled into a stylised rock in headless Blender, the moss grown from the rock inside the moss body's outline, the job files, the previews, every lesson from the first rock.
+- [rocks](docs/rocks.md) - the earlier generated rocks (rejected; kept as history): the level's outlines turned into boulders, the GLB per level, the staleness hash.
 - [asset-store](docs/asset-store.md) - the release-hosted binaries, budgets, the optimise pipelines, licensing and credits.
 - [loading-screen](docs/loading-screen.md) - the inlined store, the two-halves bar, the warm frame.
 
