@@ -35,6 +35,8 @@
 // mesh that has not arrived yet never blocks the frame or the sim.
 
 import * as THREE from "three";
+// Type-only, so the loader's module still lands in its own chunk (`gltfLoader`).
+import type { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { withDownload } from "./download";
 import { paintMaterial, paintTree } from "./paint";
 import { MATERIAL_NAMES, type MaterialName } from "../lib/shapeGeometry";
@@ -3103,10 +3105,12 @@ const gltfCache = new Map<string, Promise<THREE.Object3D | null>>();
 // is fetched only by a page that actually loads a prop. It is a large module,
 // the manifest is empty for a level that authors no meshes, and the editor never
 // needs it eagerly - which is exactly the case chunk splitting is for.
-let loaderPromise: Promise<{ loadAsync(url: string): Promise<{ scene: THREE.Object3D }> }> | null =
-  null;
+//
+// Exported for the generated rocks (rockMesh.ts), which are not manifest props
+// but are GLBs all the same and need the same decoder.
+let loaderPromise: Promise<GLTFLoader> | null = null;
 
-function gltfLoader(): Promise<{ loadAsync(url: string): Promise<{ scene: THREE.Object3D }> }> {
+export function gltfLoader(): Promise<GLTFLoader> {
   // The meshopt decoder is NOT optional. `assets:optimize` runs every prop
   // through `--compress meshopt`, which lands `EXT_meshopt_compression` in the
   // file's `extensionsRequired` - so a loader without the decoder does not

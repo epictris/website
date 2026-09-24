@@ -32,6 +32,7 @@ import type { ViewTransform } from "../render/viewport";
 import { GpuTimer } from "../render/gpuTimer";
 import { BodyVisual, pickTagOf, surfaceOf } from "./bodyVisuals";
 import { BallVisual } from "./ballVisual";
+import { loadLevelRocks, mountRocks } from "./rockMesh";
 import { ChainLayer } from "./chainVisual";
 import { VineLayer } from "./vineVisual";
 import type { ChainRetract } from "../render/chainRetract";
@@ -150,6 +151,15 @@ export class Scene3D {
   // fitting. They are not in the world, so they can neither be found by the
   // reconciliation nor go stale: they live exactly as long as the level does.
   private readonly standing: BodyVisual[] = [];
+  // Every authored body's visual in authored order, one per `data.bodies` entry,
+  // because that index is how the generated rocks name the body they replace.
+  private readonly authored: BodyVisual[] = [];
+  // Whose generated rocks to load (`setRocks`), and what is mounted of them.
+  // The generation guards the async load: a level replaced while its rocks were
+  // still in flight must not have them mounted over the next one.
+  private rocksName: string | null = null;
+  private rocksGroup: THREE.Group | null = null;
+  private levelGeneration = 0;
   private ballVisual: BallVisual | null = null;
   private chains: ChainLayer;
   private vines: VineLayer;
@@ -243,7 +253,11 @@ export class Scene3D {
       this.scene.add(visual.root);
       if (built.body) this.bodies.set(built.body, visual);
       else this.standing.push(visual);
+      this.authored.push(visual);
     }
+    // The rocks arrive later, over the extrusions already drawn, so a level is
+    // never held back by (or blank for want of) its generated file.
+    void this.mountRocks(level, ++this.levelGeneration);
     // Then whatever else the world already holds - the avatar's debris, a
     // sandbox rock spawned before the scene was built.
     for (const body of level.world.bodies) this.ensureBody(body);
@@ -251,6 +265,24 @@ export class Scene3D {
       this.ballVisual = new BallVisual(level.ball);
       this.scene.add(this.ballVisual.root);
     }
+  }
+
+  // Which level's generated rocks `setLevel` mounts (rockMesh.ts); null = none.
+  // Named by the host rather than read off the level, because a level's data
+  // does not know the file it came from (and `?rocks=` may point elsewhere).
+  setRocks(name: string | null): void {
+    this.rocksName = name;
+  }
+
+  private async mountRocks(level: Scene3DLevel, generation: number): Promise<void> {
+    const name = this.rocksName;
+    if (name === null) return;
+    const root = await loadLevelRocks(name);
+    // A later `setLevel` or `clearLevel` has moved on: these visuals are gone.
+    if (!root || generation !== this.levelGeneration) return;
+    const { group } = mountRocks(root, level.visualSource.data, this.authored, name);
+    this.scene.add(group);
+    this.rocksGroup = group;
   }
 
   // The environment a level authored, so a host that rebuilds the scene without
@@ -922,6 +954,14 @@ export class Scene3D {
       visual.dispose();
     }
     this.standing.length = 0;
+    this.authored.length = 0;
+    // Removed, not disposed: the clones share the cached file's geometry and
+    // materials, which the next build of the same level mounts again.
+    this.levelGeneration++;
+    if (this.rocksGroup) {
+      this.scene.remove(this.rocksGroup);
+      this.rocksGroup = null;
+    }
     if (this.ballVisual) {
       this.scene.remove(this.ballVisual.root);
       this.ballVisual.dispose();

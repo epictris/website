@@ -152,6 +152,10 @@ const scene3d = ((): Scene3D | null => {
   }
 })();
 if (!scene3d) sceneCanvas.style.display = "none";
+// The level's generated rocks (rockMesh.ts), named by its file; `?rocks=NAME`
+// borrows another file's, `?rocks=0` shows the plain extrusions.
+const rocksParam = params.get("rocks");
+scene3d?.setRocks(rocksParam === "0" ? null : (rocksParam ?? levelSpec.file ?? null));
 
 // `?dpr=N` draws the frame at a device pixel ratio this display does not have,
 // so the fill cost a 4K or HiDPI player pays can be read on a 1080p desk (see

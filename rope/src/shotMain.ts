@@ -30,6 +30,7 @@ import { NO_ORBIT, type CameraOrbit } from "./render3d/space";
 import { Scene3D } from "./render3d/scene";
 import { assetsSettled, pendingAssets } from "./render3d/assets";
 import { BallLevel } from "./level/ballLevel";
+import { LEVELS } from "./level/registry";
 import type { Level } from "./level/level";
 import { levelFromRecording } from "./sim/replay";
 import { recordingDeserializer, type Recording } from "./sim/trace";
@@ -139,6 +140,10 @@ const camera: Camera = {
 const scene3d = use3d ? new Scene3D(sceneCanvas, { diagnostics: true }) : null;
 if (scene3d) {
   scene3d.resize(view);
+  // The generated rocks, as the game names them (main.ts): a grab of a rock
+  // level without them is a picture of a level nobody plays.
+  const rocks = q.get("rocks");
+  scene3d.setRocks(rocks === "0" ? null : (rocks ?? LEVELS[rec.level]?.file ?? null));
   scene3d.setLevel(level);
   // Props and authored texture maps arrive asynchronously, and in the GAME that
   // is the point - the placeholder box and the generated surface cover the gap.

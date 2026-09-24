@@ -16,3 +16,5 @@ public/hdri/
 # copy is what `assets:publish` uploads, and a raw is re-downloadable from the
 # `source` its manifest entry records.
 assets-src/
+# Generated rocks (`bun run assets:rocks <level>`), rebuilt from the level file.
+public/rocks/
