@@ -33,6 +33,7 @@
 //   bun run src/tools/cli.ts clicks    bundle.json [--all] [--evdev log] [--wayland log]   (the DOM button story beside the frames)
 //   bun run src/tools/cli.ts corners
 //   bun run src/tools/cli.ts decompose
+//   bun run src/tools/cli.ts silhouette   (the rock-fit outline tracer)
 //   bun run src/tools/cli.ts dmath     [--write]   (the deterministic libm: bit-exact vectors + source scan)
 //   bun run src/tools/cli.ts contacts
 //   bun run src/tools/cli.ts spring
@@ -2208,6 +2209,9 @@ switch (cmd) {
   case "decompose":
     void cmdDecompose();
     break;
+  case "silhouette":
+    void cmdSilhouette();
+    break;
   case "dmath":
     void cmdDmath([arg, ...rest].includes("--write"));
     break;
@@ -2261,7 +2265,7 @@ switch (cmd) {
     break;
   default:
     fail(
-      "usage: cli <play|record|replay|dump|query|scan|trace|settle|compare|continue|render|shot|chainpath|fork|bundles|pull|playtest|restamp|selftest|latch|transport|clicks|ledges|corners|tangents|decompose|dmath|contacts|spring|movers|vines|rails|belts|viscous|breaks|render3d|camera|assets|levels|finish|entry> [file] [options]",
+      "usage: cli <play|record|replay|dump|query|scan|trace|settle|compare|continue|render|shot|chainpath|fork|bundles|pull|playtest|restamp|selftest|latch|transport|clicks|ledges|corners|tangents|decompose|silhouette|dmath|contacts|spring|movers|vines|rails|belts|viscous|breaks|render3d|camera|assets|levels|finish|entry> [file] [options]",
     );
 }
 
@@ -2846,6 +2850,22 @@ async function cmdDecompose(): Promise<void> {
     if (!r.passed) failed++;
   }
   console.log(`[decompose] ${results.length - failed}/${results.length} cases passed`);
+  process.exit(failed > 0 ? 1 : 0);
+}
+
+// Silhouette cases (src/sim/silhouetteCases.ts): the outline tracer the
+// editor's "fit collision to rock" writes a collision outline with. Pure
+// geometry over flat triangles, so it needs no GLB and no browser.
+async function cmdSilhouette(): Promise<void> {
+  const { runSilhouetteCases } = await import("../sim/silhouetteCases");
+  const results = runSilhouetteCases();
+  let failed = 0;
+  for (const r of results) {
+    console.log(`  ${r.passed ? "PASS" : "FAIL"}  ${r.name}`);
+    for (const d of r.details) console.log(`        ${d}`);
+    if (!r.passed) failed++;
+  }
+  console.log(`[silhouette] ${results.length - failed}/${results.length} cases passed`);
   process.exit(failed > 0 ? 1 : 0);
 }
 

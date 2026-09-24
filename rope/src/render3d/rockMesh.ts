@@ -12,8 +12,39 @@ import * as THREE from "three";
 import type { LevelData } from "../level/levelFormat";
 import { gltfLoader, trackPending } from "./assets";
 import type { BodyVisual } from "./bodyVisuals";
-import { paintTree } from "./paint";
+import { rockMaterial } from "./rockMaterial";
 import { ROCK_HASH_KEY, ROCK_INDEX_KEY, rockBodies, rocksUrl } from "./rocks";
+
+// Replace the GLB's own material on every mesh of one body node with the rock
+// material (rockMaterial.ts), which reads COLOR_0 as masks and wears the
+// painted light itself. One material per body, because the AO atlas is the
+// body's own: the GLB material's `aoMap` (occlusionTexture on TEXCOORD_1, so
+// `channel` 1) is carried over as it is and the rest of that material is
+// disposed. A mesh without COLOR_0 gets a material that reads neutral masks
+// rather than the zeros an absent attribute would feed it.
+function dressBody(body: THREE.Object3D): void {
+  const made = new Map<string, THREE.MeshStandardMaterial>();
+  body.traverse((o) => {
+    const mesh = o as THREE.Mesh;
+    if (!mesh.isMesh) return;
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    const old = (Array.isArray(mesh.material) ? mesh.material[0] : mesh.material) as
+      | THREE.MeshStandardMaterial
+      | undefined;
+    const aoMap = old?.aoMap ?? null;
+    const masks = mesh.geometry.getAttribute("color") !== undefined;
+    const side = old?.side ?? THREE.FrontSide;
+    const key = `${aoMap?.uuid ?? ""}|${masks}|${side}`;
+    let mat = made.get(key);
+    if (!mat) {
+      mat = rockMaterial({ aoMap, masks, side });
+      made.set(key, mat);
+    }
+    for (const m of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) m.dispose();
+    mesh.material = mat;
+  });
+}
 
 // One decoded file per level name, for the life of the page. A reset or a
 // restart rebuilds the scene for the same level, and must not fetch and decode
@@ -39,15 +70,7 @@ export function loadLevelRocks(name: string): Promise<THREE.Object3D | null> {
         return null;
       }
       const gltf = await loader.parseAsync(await res.arrayBuffer(), "");
-      gltf.scene.traverse((o) => {
-        const mesh = o as THREE.Mesh;
-        if (!mesh.isMesh) return;
-        mesh.castShadow = true;
-        mesh.receiveShadow = true;
-      });
-      // The file's own material is kept as it comes (its vertex colours are the
-      // shading), and wears the painted light like every prop (paint.ts).
-      paintTree(gltf.scene);
+      for (const body of gltf.scene.children) dressBody(body);
       return gltf.scene;
     } catch (err: unknown) {
       console.info(`[rocks] ${name}: generated rocks failed to load (${url}):`, err);

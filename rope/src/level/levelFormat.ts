@@ -678,7 +678,29 @@ export interface GeometryObjectData extends ObjectPlacement {
   // Edge break, metres. Absent = none: a level is boxes meeting boxes, and a
   // chamfer on every one of them softens the corners its silhouette is made
   // of, so this is authored where a solid actually wants one.
+  //
+  // It is the FLAT EXTRUSION's field and nothing else's: a generated rock
+  // (render3d/rocks.ts) does not read it, and takes its edge from the taper
+  // below instead.
   bevel?: number;
+  // Where a GENERATED ROCK's taper begins, metres in FRONT of this object's own
+  // plane (its `z`), + toward the camera. Behind it the rock's side walls stand
+  // exactly on the outline; from it forward the surface leans inward by
+  // `taperAngle`. Absent = 0: the taper begins at the gameplay plane, the line
+  // the ball travels, so the rock meets the ball at its outline and swells
+  // toward the camera from there.
+  //
+  // Read only by the rock generator (docs/rocks.md), and part of the rock's
+  // hash, so changing it marks the body stale. A LENGTH, so it scales with the
+  // geometry on the way in and out.
+  taperStart?: number;
+  // How far the tapered surface leans in from the outline's wall, in DEGREES:
+  // 0 (or absent) is no taper at all, the rock a straight extrusion of its
+  // outline; 45 a 45-degree chamfer; 90 a flat top at `taperStart`. Values
+  // outside 0..90 are clamped by the reader. Dimensionless, so it passes
+  // through scaling untouched. Read only by the rock generator, like
+  // `taperStart`.
+  taperAngle?: number;
   // Which surface to wear. A key of `TEXTURE_ASSETS` (an authored PBR set:
   // albedo, normal, roughness, metallic, ambient-occlusion and emission maps) or
   // of `TEXTURE_SETS` (the generated surfaces, keyed by material name) - one
@@ -1297,6 +1319,16 @@ export interface LevelBodyData {
   // and read nowhere downstream of it.
   movePath?: { x: number; y: number }[];
   moveClosed?: boolean;
+  // Rock bodies only: the seed of this body's GENERATED rock, an integer, so an
+  // author who does not like the boulders the generator cut can ask for another
+  // set without touching the outline. Read by the rock generator and nothing
+  // else - the sim and the extrusion never see it - and it changes every random
+  // choice in that body's rock (docs/rocks.md). It is in the rock hash, so
+  // changing it marks the body stale, and the body stands on its extrusion until
+  // the rocks are generated again. Dimensionless: it crosses `scaleLevelData`
+  // untouched. Absent = 0, which is the rock every body was generated with
+  // before the field.
+  rockSeed?: number;
   // What this body is made of, looks like and lights with. Order is authored
   // order, and it is what the build and both renderers walk: a body's collision
   // objects become its shapes in this order (which is what `setCompoundInertia`
@@ -3179,6 +3211,10 @@ export function scaleObject(o: SceneObjectData, factor: number): SceneObjectData
     ...(o.projection !== undefined ? { projection: o.projection } : {}),
     ...(o.depth !== undefined ? { depth: o.depth * factor } : {}),
     ...(o.bevel !== undefined ? { bevel: o.bevel * factor } : {}),
+    // Where a generated rock's taper begins is a length; the angle it leans
+    // in by is not.
+    ...(o.taperStart !== undefined ? { taperStart: o.taperStart * factor } : {}),
+    ...(o.taperAngle !== undefined ? { taperAngle: o.taperAngle } : {}),
     ...(o.texture !== undefined ? { texture: o.texture } : {}),
     // A MULTIPLE of the texture's own size rather than a length - see
     // `GeometryObjectData.tileScale` - so it passes through untouched, as
@@ -3501,6 +3537,8 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
       ...(b.movePhase !== undefined ? { movePhase: b.movePhase } : {}),
       ...(b.moveEase !== undefined ? { moveEase: b.moveEase } : {}),
       ...(b.moveAlign !== undefined ? { moveAlign: b.moveAlign } : {}),
+      // A seed, not a length (see `LevelBodyData.rockSeed`).
+      ...(b.rockSeed !== undefined ? { rockSeed: b.rockSeed } : {}),
       objects: b.objects.map((o) => scaleObject(o, factor)),
     })),
   };

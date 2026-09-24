@@ -104,6 +104,8 @@ So a new texture is:
 3. `bun run assets:paint "<set>" --publish`, and paste the hash and size it prints.
 
 An albedo's `cavity` is taken from the set's **own** `ao` map's raw and channel, so there is nothing to name twice; a set with no AO cannot ask for cracks.
+A set that must stay **photographic** leaves `paint` (and `strokes`) off every map, and `assets:paint` bakes it as a plain optimise.
+`seaside rock` and `quarry wall`, the detail tiles the generated rocks compose in their own material, were that until 2026-09-24; they now record `paint: { brush: 36 }` on every map and no strokes, since the rocks became stylised (see [**Rocks**](rocks.md#the-painted-tiles)).
 The older sets (the `rock-*` family, `moss`, `forest-floor`, `factory-brick`) predate the record and have no `raw`; `assets:paint` names them as not reproducible rather than guessing.
 A set may also be **generated** rather than photographed: `painted steel`, the avatar's oil strokes, is baked by `scripts/bake-strokes.ts` into `assets-src/painted-steel/` (deterministic, so the same script is the same bytes) and from there is an ordinary set with a `raw`, optimised, hashed and published like any other.
 

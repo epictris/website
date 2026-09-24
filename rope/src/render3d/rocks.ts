@@ -34,6 +34,7 @@ export const ROCK_TEXTURES: ReadonlySet<string> = new Set([
   "dark rock",
   "marble cliff",
   "rock wall",
+  "rock-grey",
   "stone",
   "moss-dark",
   "mossy ground",
@@ -54,11 +55,15 @@ export interface RockPiece {
   depth: number;
   // The piece's own z offset (`GeometryObjectData.z`), + toward the camera.
   z: number;
-  // The extrusion's chamfer (`GeometryObjectData.bevel`, clamped as
-  // `extrudeOutline` clamps it). The generator reads it as a RAGGED EDGE:
-  // shards meeting the outline above or below end a random way short of it,
-  // up to the bevel, so the edge is a broken skyline rather than a flat cut.
-  bevel: number;
+  // Where the taper begins, metres in front of the piece's own plane
+  // (`GeometryObjectData.taperStart`, absent = 0 = the gameplay plane): behind
+  // it the rock's walls stand on the outline, from it forward they lean in.
+  taperStart: number;
+  // How far the tapered surface leans in from the wall, degrees in [0, 90]
+  // (`GeometryObjectData.taperAngle`, absent = 0 = no taper, a straight
+  // extrusion of the outline; 90 = a flat top at `taperStart`). The piece's
+  // `bevel` belongs to the flat extrusion and is not carried here.
+  taperAngle: number;
   // Whether the piece wears a mossy surface. Ignored by the generator today;
   // carried so a moss pass changes the job, and therefore the hash.
   mossy: boolean;
@@ -68,9 +73,12 @@ export interface RockBody {
   // Index into `LevelData.bodies`, which is also the index into
   // `BuiltBodies.bodies` (one per authored body, in authored order).
   index: number;
-  // `rockHash` of `pieces`: the generated node carries the hash it was built
-  // from, and the runtime only mounts it while the two agree.
+  // `rockHash` of `pieces` and `seed`: the generated node carries the hash it
+  // was built from, and the runtime only mounts it while the two agree.
   hash: string;
+  // The body's `rockSeed` (absent = 0), which the generator seeds every random
+  // choice in this body's rock from.
+  seed: number;
   pieces: RockPiece[];
   // The geometry objects the pieces came from, so the runtime knows which of
   // the body's drawn things the generated mesh stands in for.
@@ -131,7 +139,8 @@ function pieceOf(body: LevelBodyData, g: GeometryObjectData): RockPiece {
     convex: (parts.length > 0 ? parts : [world]).map(plain),
     depth,
     z: g.z ?? 0,
-    bevel: Math.max(0, Math.min(g.bevel ?? 0, depth * 0.25)),
+    taperStart: g.taperStart ?? 0,
+    taperAngle: Math.max(0, Math.min(g.taperAngle ?? 0, 90)),
     mossy: g.texture === "moss-dark" || g.texture === "mossy ground",
   };
 }
@@ -144,17 +153,20 @@ export function rockBodies(data: LevelData): RockBody[] {
     const objects = body.objects.filter(isGeometryObject).filter(isRockObject);
     if (objects.length === 0) return;
     const pieces = objects.map((g) => pieceOf(body, g));
-    out.push({ index, hash: rockHash(pieces), pieces, objects });
+    const seed = body.rockSeed ?? 0;
+    out.push({ index, hash: rockHash(pieces, seed), seed, pieces, objects });
   });
   return out;
 }
 
-// FNV-1a over the pieces at millimetre resolution. Coordinates are rounded so a
-// level re-saved by the editor with float noise a few nanometres off still
-// hashes the same, while a vertex nudged by a millimetre is a different rock.
+// FNV-1a over the seed and the pieces at millimetre resolution. Coordinates are
+// rounded so a level re-saved by the editor with float noise a few nanometres
+// off still hashes the same, while a vertex nudged by a millimetre is a
+// different rock. The seed goes in first: the same outline under another seed
+// is another rock, so a new seed leaves the old node stale until regenerated.
 // Written out by hand rather than through `crypto`, because the generator runs
 // it under bun and the runtime in a browser and both must agree bit for bit.
-export function rockHash(pieces: RockPiece[]): string {
+export function rockHash(pieces: RockPiece[], seed: number): string {
   let h = 0x811c9dc5;
   const feed = (s: string): void => {
     for (let i = 0; i < s.length; i++) {
@@ -163,8 +175,10 @@ export function rockHash(pieces: RockPiece[]): string {
     }
   };
   const mm = (v: number): string => Math.round(v * 1000).toString();
+  feed(`s${seed}|`);
   for (const p of pieces) {
-    feed(`d${mm(p.depth)}z${mm(p.z)}b${mm(p.bevel)}m${p.mossy ? 1 : 0}:`);
+    // The angle to a tenth of a degree, the finest step worth telling apart.
+    feed(`d${mm(p.depth)}z${mm(p.z)}t${mm(p.taperStart)}a${Math.round(p.taperAngle * 10)}m${p.mossy ? 1 : 0}:`);
     for (const v of p.verts) feed(`${mm(v.x)},${mm(v.y)};`);
     feed("|");
   }

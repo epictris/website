@@ -341,6 +341,27 @@ Every gap, ledge and shelf in the file is a decision about a 12 cm iron ball, an
 It is built here from the model rather than borrowed from a `BallLevel`, at the radius it is actually PLAYED at (`BallLevel.BALL_RADIUS_SCALE` over the authored spawn radius, which is the grapple avatar's), and nothing steps it: with no chain thrown there is nothing else of the assembly to draw, so what stands in the scene is the sphere and its mounting loop in the pose a run opens in.
 The spawn marker on the overlay gained the same size as a second, fainter ring outside its own: the inner one is the marker - the thing dragged to move the spawn - and the outer one is the ball's footprint, which lands on the drawn sphere's silhouette in a 3D view and is the only thing that says the ball's size in the 2D one.
 A geometry object's panel authors what it is drawn as (**kind** - `primitive` or `mesh` - plus mesh, depth, bevel, texture) alongside the placement and size every object has, since a geometry object states its own form and those fields are what say it.
+
+**Generated rocks** add two fields and one button (see [rocks](rocks.md#reference-and-actual-outlines)).
+When a selected primitive wears a rock texture (`ROCK_TEXTURES`), **taper start** and **taper angle** take the place of **bevel**: where the rock's taper begins, in pixels in front of the object's plane, and how far its surface leans in, in degrees clamped to 0..90.
+The 3D view draws a rock as the solid its generated mesh fills, the outline straight through to the start and then the tapered roof (`taperOutline` in `render3d/extrude.ts`), so the taper is read off the picture as it is set; the bevel is not drawn on a rock, because the generator does not read it.
+**bevel** stays for everything else, and a mixed selection offers both.
+Both default to 0 and are written to the file only when nonzero, so a level that never touches them saves byte-identically.
+They only change the generated rock, which needs `bun run assets:rocks <level>` to see; the editor's own 3D view still draws the flat extrusion.
+
+**Fit collision to rock** sits under **match collision** on a rock's geometry object panel (a single object selected) and beside **Origin to COM** on its body panel.
+It is offered on any body `rockBodies` counts as rock; whether it can work is only known once the file is read, so the refusals are said when it is pressed, as a toast.
+It reads `/rocks/<level>.glb` (the file this level saves to, or `?rocks=NAME` on the editor's URL, as in play), finds the body's node, and refuses with "rock is stale, regenerate" when the node's hash is not the hash of the body as the editor holds it now.
+Otherwise it projects every triangle of the node straight along z, traces the silhouette (rasterised at 1 cm, simplified at 2 cm, holes ignored, the largest blob kept), and writes it as the body's collision object's outline, a `poly` in that object's own frame; the object keeps its placement and every other field.
+The geometry object's **match collision** is switched off in the same edit, so the reference outline the rock was generated from stays as authored; it is one undo step.
+Its limits: a body with exactly one rock geometry object and exactly one collision object (anything else is refused, naming the counts), a collision object that is an outline rather than a curve or a belt, and a missing file (404) is a message and no change.
+The projection has no depth cut: a shard far behind the gameplay plane widens the outline as much as one standing on it, and a fragment the raster does not join to the main blob is dropped.
+
+**rock seed** sits in the body properties (the body panel, and the panel for several bodies) when every selected body is one `rockBodies` counts as rock, below the physics fields and above the fill.
+It is the body's `rockSeed`: an integer, step 1, never below 0, written to the file only when nonzero, and one undo step per edit like every other field.
+It is held on every member of the body rather than only the collision lead, because a rock body may be geometry alone.
+**Next seed** below it adds 1 to each selected body's seed, for the loop it exists for: regenerate, look, bump.
+Changing the seed marks the rock stale, so play shows the extrusion until `bun run assets:rocks <level>` is run again.
 `mesh` gets a badge on the canvas in the **2D view**, being the one kind whose outline is not what the player sees; a primitive is drawn as exactly the shape on screen, so a badge on it would be a mark on almost every object saying nothing.
 In a 3D view the prop itself is drawn, so the badge would be a mark pointing at the thing it is standing on, and it is not drawn (see **Geometry is picked by its model**).
 

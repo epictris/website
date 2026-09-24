@@ -37,11 +37,17 @@ the same for every piece, so a 5 m wall and a 1 m ledge show the same stone:
   its front to the back of the solid, and one prism of the whole outline
   fills in behind the deepest recess.
 - Every shard reaching past the outline is intersected, on its own, with one
-  prism of the concave outline pushed out by the tolerance (a per-shard float
-  boolean), so the silhouette stays within a few centimetres of the collision
-  outline (the outline is a GUIDE, which the author accepted). Half-plane
-  clipping against convex parts came first and could not be made right: it
-  cut the shards along every decomposition seam.
+  straight prism of the concave outline (a per-shard float boolean), so the
+  rock's side walls stand EXACTLY on the outline: the author wants the faces
+  perpendicular to the camera flat on the outline at the gameplay plane, and
+  the collision outline fitted to the rock afterwards from its silhouette.
+  Half-plane clipping against convex parts came first and could not be made
+  right: it cut the shards along every decomposition seam.
+- A piece's TAPER (`taperStart`, `taperAngle`) is honoured by placement, not
+  by cutting: from `taperStart` in front of the plane the surface leans in
+  from the outline wall by `taperAngle`, and every shard's front is set so the
+  whole shard stands under that surface (see `taper_top`), so the chamfer is
+  a staircase of whole column ends rather than a plane sliced through them.
 - The shards ship as they are (or, with --remesh, voxel-remeshed into one
   solid), warped by three smooth noises as position offsets (scalar field
   times a constant vector, never along the normal, which rounds edges off),
@@ -49,11 +55,17 @@ the same for every piece, so a 5 m wall and a 1 m ledge show the same stone:
   collapse-decimated to budget unless --decimate 1, smooth shaded with the
   edges sharper than SHARP_ANGLE_DEG marked sharp, and darkened with depth.
 
-Colour. Box-projected UVs in world metres (one texture tile per TEXTURE_TILE)
-carry a tileable stone texture from `rocktex.py` when that module is present;
-a body-wide dark grey in COLOR_0, darkened in the cavities by Blender's "dirty
-vertex colours", multiplies it. Without the texture module the colour layer
-alone is the stone.
+Surface. The GLB carries no colour: the look is composed at runtime by
+`render3d/rockMaterial.ts` from tileable detail sets and the MASKS this script
+bakes (docs/rocks.md, "The rock material"):
+- TEXCOORD_0 is a box projection in world metres (V is world up on every face
+  that has one), for the detail tiles.
+- TEXCOORD_1 is a per-body atlas (Smart UV Project) carrying the baked
+  ambient occlusion, exported as the glTF material's occlusionTexture, which
+  three reads as `aoMap` on channel 1. `--flat` skips the bake.
+- COLOR_0 is masks, not colour: r = cavity (Blender's dirty vertex colours,
+  1 open, 0 deep), g = depth shade (1 at the proudest face, 1 - DEPTH_SHADE at
+  the deepest recess), b = a per-shard random, a = 1.
 """
 
 import json
@@ -95,6 +107,8 @@ SHARD_OFFSET = (0.41 / 5, 0.60 / 5)
 # Random spin about the vertical (radians).
 SHARD_SPIN = 0.21
 # The template's bevel at S, its segments and angle limit (degrees).
+# How far from square-on a column's end facet may lean (degrees).
+TEMPLATE_CAP_TILT = 15.0
 TEMPLATE_BEVEL = 0.004
 TEMPLATE_BEVEL_SEGMENTS = 2
 TEMPLATE_BEVEL_ANGLE = 30.0
@@ -131,14 +145,12 @@ DEPTH_JITTER = 0.02
 # their sides, and the recessed ones in shadow.
 RELIEF = 0.14
 PROUD_SHARE = 0.35
-# How far in front of the gameplay plane a bevelled piece's taper stops at
-# the outline's edge (see `scatter`): almost at the plane, not on it.
-TAPER_MARGIN = 0.05
-# A bevelled piece's edge is RAGGED (see `ragged_ends`): this share of the
-# shards that meet the outline end exactly on it, the rest stop short of it
-# by up to the bevel; a shard is never shortened below this share of itself.
-RAGGED_FLUSH = 0.4
-RAGGED_MIN_LENGTH = 0.3
+# THE TAPER is the piece's own (`taperStart` metres in front of its plane,
+# `taperAngle` degrees leaned in from the outline wall; 0 = no taper, 90 = a
+# flat cap at the start), read in `taper_top`. It has no tunable here on
+# purpose: the author sets it per geometry object in the editor.
+# A taper angle under this is no taper, and over 90 minus this a flat cap.
+TAPER_EPSILON = 0.05
 # A clipped shard whose remnant is thinner than this share of S, across or
 # up, is dropped: a shard reaching just over the outline left a few
 # centimetres of itself inside, full depth, which read as a plate floating on
@@ -149,15 +161,12 @@ DEPTH_SHADE = 0.45
 # The backing prism sits behind the deepest recess and is at least this
 # thick, so a gap between shards shows rock rather than sky.
 MIN_BACKING = 0.1
-# How far past the outline a shard may reach before it is cut.
-OUTLINE_TOLERANCE = 0.06
-# ...and at least this share of the piece's size S, so a big rock's silhouette
-# is jagged the way the author's reference is rather than shaved flat.
-OUTLINE_TOLERANCE_RATIO = 0.03
-
-
-def tolerance(s):
-    return max(OUTLINE_TOLERANCE, OUTLINE_TOLERANCE_RATIO * s)
+# There is deliberately NO tolerance past the outline: the clip prism is the
+# outline itself, so the faces perpendicular to the camera are flat on the
+# collision line (a 6 + 3 % of S tolerance stood the walls 12 cm out at S = 2,
+# which the author read as the rock not matching its outline). The detail
+# noise still moves that wall by a few centimetres either way, which is what
+# the editor's fit of the collision outline to the rock's silhouette absorbs.
 # Voxel size of the remesh at S, and its floor.
 VOXEL_SIZE = 0.01
 VOXEL_MIN = 0.02
@@ -172,8 +181,12 @@ DETAIL = (
     ("CLOUDS", 1 / 2.0 / 5, 0.04 / 5),
     ("CLOUDS", 1 / 4.0 / 5, 0.02 / 5),
 )
-# Collapse decimation ratio of the visible faces. 0.3 ate the shard edges.
-COLLAPSE_RATIO = 0.5
+# Without `--decimate`, the faces are PLANAR-dissolved: neighbouring faces
+# within this angle become one, which folds the boolean's many coplanar
+# triangles back into facets and moves no vertex, so the crisp corners stay
+# and the buried-face pass stays valid. `--decimate R` is a collapse to R of
+# the faces instead (1 = none), which smears; 0.3 ate the shard edges.
+DISSOLVE_ANGLE_DEG = 2.0
 # Edges folding more than this (degrees) are marked sharp under smooth shading.
 # The remesh spreads a corner over a voxel or two, so at 30 almost nothing
 # qualified and the rock read as a blob.
@@ -184,17 +197,48 @@ ISLAND_MIN = 0.05
 # A face is back (and dropped) when its normal's +y exceeds this: it faces
 # away from the camera, which is always in front of the level.
 BACK_NORMAL = 0.5
-# One texture tile per this many metres.
+# TEXCOORD_0 is world metres: one unit per this many metres, and the runtime
+# material sets each detail tile's repeat from its own life size.
 TEXTURE_TILE = 1.0
-# Texture size in pixels, and its seed.
-TEXTURE_SIZE = 1024
-TEXTURE_SEED = 0
-# The stone, as LINEAR colour (glTF COLOR_0 is linear): dark, since the texture
-# carries the value; alone it reads as a mid-dark grey.
-ROCK_GREY = (0.30, 0.30, 0.285)
-# How much a body may wander from it: mostly in brightness, a little in hue.
-SHADE_JITTER = 0.10
-HUE_JITTER = 0.02
+# THE AMBIENT OCCLUSION BAKE (Cycles, CPU): texels per metre of the body's
+# surface (the atlas is the power of two nearest sqrt(area) * this, clamped),
+# the samples per texel, how far a face looks for occluders, and the margin
+# the bake bleeds past each island so filtering never reads the void.
+AO_TEXELS = 48
+AO_SIZE_MIN = 128
+AO_SIZE_MAX = 1024
+AO_SAMPLES = 32
+AO_DISTANCE = 1.5
+AO_MARGIN_PX = 4
+# THE BURIED FACES ARE DELETED before the shards are joined: they overlap,
+# so most of a body's faces lie inside neighbouring shards, where nobody
+# sees them. A face is buried when the point this far outside it (along its
+# normal) is inside another shard's solid (see `drop_buried`). Left in, they
+# were most of the atlas, all of it black, and the small visible caps packed
+# beside them read black through the filtering ("a hole in the top face");
+# and they were half the triangles. An occlusion test came first and took
+# the faces at the bottom of narrow slits too, which ARE seen straight down
+# the slit: the background showed through.
+BURIED_EPSILON = 0.002
+# ...and it has to be buried DEEPER than the detail noise can move a face,
+# as a share of S: the noise displaces the buried face and the face covering
+# it by different amounts, and a face buried by less than that poked out
+# through its cover after the sculpt, a sky-coloured triangle in the rock.
+# The three DETAIL offsets sum to 0.032 S per axis, half of it either way.
+BURIED_MARGIN_RATIO = 0.03
+# How far, at most, a clipped shard's cut face is set in from the outline
+# wall (see `inset_wall`); each shard draws its own amount in a quarter of
+# this to all of it, so no two cut faces share a plane.
+RIM_INSET = 0.006
+# The unwrap's spacing between islands, as a share of the atlas, and the
+# angle between neighbouring faces under which they stay in one island. A
+# body is tens of thousands of small faces, so the margin has to be tiny: at
+# 0.02 the packer shrank every island to a dot to honour it and the atlas
+# was 2 % covered.
+# Two texels at the largest atlas, so bilinear filtering never reads across
+# into a neighbouring island.
+AO_ISLAND_MARGIN = 0.002
+AO_ISLAND_ANGLE = 80.0
 
 
 # ---------------------------------------------------------------------------
@@ -338,8 +382,11 @@ def mesh_arrays(mesh):
     return v.reshape(-1, 3), t.reshape(-1, 3)
 
 
-def mesh_from_arrays(name, chunks):
-    """One triangle mesh from (verts, tris) chunks, without a Python loop."""
+def mesh_from_arrays(name, chunks, marks=None):
+    """One triangle mesh from (verts, tris) chunks, without a Python loop.
+    `marks`, one number per chunk, becomes the per-vertex float attribute
+    "shard" (the per-shard variation the runtime material reads out of
+    COLOR_0.b); it rides through the modifiers and the join like any layer."""
     vs, ts, base = [], [], 0
     for v, t in chunks:
         vs.append(v)
@@ -355,6 +402,10 @@ def mesh_from_arrays(name, chunks):
     mesh.polygons.add(len(t))
     mesh.polygons.foreach_set("loop_start", np.arange(0, len(t) * 3, 3, dtype=np.int32))
     mesh.update(calc_edges=True)
+    if marks is not None and len(v):
+        attr = mesh.attributes.new("shard", "FLOAT", "POINT")
+        counts = [len(cv) for cv, _ in chunks]
+        attr.data.foreach_set("value", np.repeat(np.array(marks, dtype=np.float32), counts))
     return mesh
 
 
@@ -396,6 +447,9 @@ def shard_templates(rng, index, remesh):
         off = np.array([rng.uniform(-50, 50) for _ in range(3)])
         bm = bmesh.new()
         grid_cube(bm, TEMPLATE_CUTS)
+        # Where each vertex started, to find the end caps after the warp (a
+        # deform modifier keeps the vertex order).
+        base = np.array([vert.co[:] for vert in bm.verts])
         bmesh.ops.translate(bm, vec=off.tolist(), verts=bm.verts)
         mesh = bpy.data.meshes.new(f"shard-{index}-{k}")
         bm.to_mesh(mesh)
@@ -419,6 +473,20 @@ def shard_templates(rng, index, remesh):
         v = v.reshape(-1, 3) - off
         lo, hi = v.min(axis=0), v.max(axis=0)
         v = (v - (lo + hi) / 2) / np.maximum(hi - lo, 1e-6)
+        # THE END CAPS ARE ONE PLANE EACH. The cap is cut into four quads by
+        # the grid, and the warp moved their shared centre and edge vertices
+        # by different amounts, folding every column end into a crown of
+        # notches ("weirdly angled tops"). A column end is a single facet,
+        # so the cap's vertices are put back on one plane through their
+        # centroid, tilted a random way by up to TEMPLATE_CAP_TILT.
+        for sign in (1.0, -1.0):
+            cap = base[:, 2] * sign > 0.49
+            if not cap.any():
+                continue
+            tilt = math.tan(math.radians(rng.uniform(0, TEMPLATE_CAP_TILT)))
+            phi = rng.uniform(0, 2 * math.pi)
+            centre = v[cap].mean(axis=0)
+            v[cap, 2] = centre[2] + tilt * (math.cos(phi) * (v[cap, 0] - centre[0]) + math.sin(phi) * (v[cap, 1] - centre[1]))
         taper = 1 + (1 / SHARD_TAPER - 1) * (v[:, 2] + 0.5)
         v[:, 0] *= taper
         v[:, 1] *= taper
@@ -437,7 +505,7 @@ def shard_templates(rng, index, remesh):
             sub.levels = TEMPLATE_SUBDIV
             sub.render_levels = TEMPLATE_SUBDIV
         mesh = evaluate(obj)
-        out.append(mesh_arrays(mesh))
+        out.append(outward(*mesh_arrays(mesh)))
         remove(obj)
     return out
 
@@ -526,26 +594,21 @@ def scatter(poly, piece, templates, body_tilt, wander_tex, rng):
             # Shallower toward the edge, so the silhouette is not a ragged
             # step down to the backing.
             recess = rng.uniform(0.15, 1.0) * dm["relief"] * (0.3 + 0.7 * edge)
-        # A piece's bevel is also the TAPER: within `bevel` of the outline the
-        # fronts fall along a quarter-round from the full half-depth down to
-        # almost the gameplay plane at the edge, the line the ball travels, so
-        # the rock swells out of the plane toward its middle and meets the
-        # ball at the edge rather than standing a metre in front of it.
-        bevel = piece.get("bevel", 0.0)
-        # Read at the shard's NEAREST extent, not its centre: a shard whose
-        # centre sits a bevel in but whose body reaches the outline would
-        # otherwise stand proud right at the edge and poke past it on screen.
+        # THE TAPER: the shard's front is set under the tapered surface (see
+        # `taper_top`) read at the shard's NEAREST extent, not its centre, so
+        # the WHOLE shard stands under the surface - a shard whose centre sits
+        # well inside but whose body reaches the outline would otherwise stand
+        # proud right at the edge and poke past the collision line on screen
+        # ("geometry in thin air"). The chamfer is therefore a staircase of
+        # whole column ends, one step per shard, never a plane cut through
+        # them, which is what the author asked for.
         x0, z0 = pts[:, 0].min() + px, pts[:, 2].min() + pz
         x1, z1 = pts[:, 0].max() + px, pts[:, 2].max() + pz
         corners = np.array([[px, pz], [x0, z0], [x1, z0], [x0, z1], [x1, z1]])
         near = float(dist_to_outline(corners, poly).min())
         if not points_in_poly(corners[1:], poly).all():
             near = 0.0
-        if bevel > 0.005 and near < bevel:
-            u = (bevel - near) / bevel
-            taper = (piece["depth"] / 2 - TAPER_MARGIN) * (1 - math.sqrt(max(0.0, 1 - u * u)))
-        else:
-            taper = 0.0
+        taper = piece["depth"] / 2 - taper_top(piece, near)
         front = dm["front"] + max(dm["fall"] * (1 - edge), taper) + recess
         pts += np.array([px, front - pts[:, 1].min(), pz])
         low = pts[:, 1].min()
@@ -559,64 +622,43 @@ def scatter(poly, piece, templates, body_tilt, wander_tex, rng):
         # shape in front and a straight extrusion of its midsection behind:
         # scaling the whole shard through depth turned its spin about the
         # vertical into a lean, and every slab became a feathered wedge.
-        low, high = pts[:, 1].min(), pts[:, 1].max()
-        if back_limit > high:
-            pts[pts[:, 1] > (low + high) / 2, 1] += back_limit - high
+        # The stretch is along the shard's OWN depth axis, about its front-most
+        # point: an affine map, so every face stays planar. Scaling world y
+        # sheared the spun shards into a lean, and shifting only the back
+        # half by a step folded every cap that spanned the shard's depth into
+        # a V (the "weirdly angled tops" came back as creases).
+        axis = rot @ np.array([0.0, 1.0, 0.0])
+        along = pts @ axis
+        span = along.max() - along.min()
+        need = back_limit - pts[:, 1].max()
+        if need > 0 and span > 1e-6 and abs(axis[1]) > 0.5:
+            pts += np.outer((along - along.min()) * (need / (span * axis[1])), axis)
         pts[:, 1] = np.minimum(pts[:, 1], back_limit)
-        ragged_ends(pts, poly, px, pz, piece.get("bevel", 0.0), rng)
         # Filed under where it stands, which is what the clip groups by.
         shards.append(((px, pz), pts, t))
     return shards
 
 
-def outline_span(poly, x, y):
-    """Where the outline lies straight above and straight below the plan point
-    (x, y): (below, above) as y values, None where the ray leaves the outline
-    without meeting it."""
-    n = len(poly)
-    above, below = None, None
-    for i in range(n):
-        (ax, ay), (bx, by) = poly[i], poly[(i + 1) % n]
-        if (ax > x) == (bx > x) or ax == bx:
-            continue
-        cy = ay + (by - ay) * (x - ax) / (bx - ax)
-        if cy > y and (above is None or cy < above):
-            above = cy
-        if cy < y and (below is None or cy > below):
-            below = cy
-    return below, above
-
-
-def ragged_ends(pts, poly, px, pz, bevel, rng):
-    """A piece's `bevel` (the extrusion's chamfer) as a RAGGED EDGE: a shard
-    that would reach the outline above or below its plan position is
-    shortened along the level's up axis, in place, so its natural tapered end
-    stops a random way short of the outline, up to the bevel. The edge then
-    reads as a broken skyline of shard ends rather than as the flat plane the
-    clip would have cut, and nothing is sliced to get there. Most ends stay
-    near the outline (RAGGED_FLUSH of them exactly on it, the rest pulled in
-    by a square law), so the ball still has stone under it at the edge."""
-    if bevel <= 0.005:
-        return
-    below, above = outline_span(poly, px, pz)
-    top, bottom = pts[:, 2].max(), pts[:, 2].min()
-    length = top - bottom
-    if length < 1e-6:
-        return
-
-    def pull():
-        return 0.0 if rng.random() < RAGGED_FLUSH else bevel * rng.random() ** 2
-
-    if above is not None and top > above - bevel:
-        new_top = above - pull()
-        if new_top - bottom > RAGGED_MIN_LENGTH * length:
-            pts[:, 2] = bottom + (pts[:, 2] - bottom) * ((new_top - bottom) / length)
-            top = new_top
-            length = top - bottom
-    if below is not None and bottom < below + bevel:
-        new_bottom = below + pull()
-        if top - new_bottom > RAGGED_MIN_LENGTH * length:
-            pts[:, 2] = top - (top - pts[:, 2]) * ((top - new_bottom) / length)
+def taper_top(piece, near):
+    """The TAPERED SURFACE: the game z (relative to the piece's plane, + toward
+    the camera) the rock may reach `near` metres inside the outline. Below
+    `taperStart` the side walls stand on the outline; from there the surface
+    leans in from the wall by `taperAngle`, a straight chamfer, so the rise
+    per metre inward is 1/tan(angle), until it reaches the proudest front at
+    half the depth. An angle of 0 is no taper (the surface is the front
+    everywhere), 90 a flat cap at the start. The start may sit behind the
+    plane, in which case the edge shards stand behind the ball's line; it is
+    clamped to the solid. A quarter-round came before this and was rejected:
+    its profile is vertical at the outline, so a strip of the edge showed no
+    taper however the margin was set."""
+    half = piece["depth"] / 2
+    angle = float(piece.get("taperAngle", 0.0))
+    if angle <= TAPER_EPSILON:
+        return half
+    start = clamp(float(piece.get("taperStart", 0.0)), -half, half)
+    if angle >= 90 - TAPER_EPSILON:
+        return start
+    return min(half, start + max(near, 0.0) / math.tan(math.radians(angle)))
 
 
 def depth_model(piece, s):
@@ -631,27 +673,25 @@ def depth_model(piece, s):
     front = plane - half
     fall = min(EDGE_FALL * s, half * 0.5)
     relief = min(RELIEF * s, half * 0.9)
-    # With a bevel the taper takes the edge fronts almost to the plane, and
-    # the backing has to sit behind those too.
-    taper = half - TAPER_MARGIN if piece.get("bevel", 0.0) > 0.005 else 0.0
+    # The taper takes the edge fronts down to its start, and the backing has
+    # to sit behind those too.
+    taper = half - taper_top(piece, 0.0)
     backing = front + max(fall, taper) + relief + 0.02
     back = max(plane + half, backing + MIN_BACKING)
     return {"front": front, "fall": fall, "relief": relief, "backing": backing, "back": back}
 
 
-def backing(poly, parts, front, back, ring=None):
+def backing(poly, parts, front, back):
     """ONE prism of the whole outline from `front` (behind the deepest recess)
     to the back, as a single (verts, tris). Its caps are triangulated through
     the convex parts, whose corners are outline corners (`decomposeConvex`
     adds none), so the front face is one surface with no internal wall along a
     seam. One prism per part had such walls, and wherever the backing showed
     between shards the cavity darkening drew each as a faint straight line.
-    `ring` substitutes other coordinates for the outline's vertices, index for
-    index (the clip prism is the outline pushed out by the tolerance)."""
+    The clip solid is the same prism, longer through depth."""
     k = len(poly)
     pts = np.array(poly)
-    coords = poly if ring is None else ring
-    v = np.array([(x, front, z) for x, z in coords] + [(x, back, z) for x, z in coords])
+    v = np.array([(x, front, z) for x, z in poly] + [(x, back, z) for x, z in poly])
 
     def index_of(p):
         return int(np.argmin(np.hypot(pts[:, 0] - p[0], pts[:, 1] - p[1])))
@@ -677,106 +717,53 @@ def piece_mesh(poly, parts, piece, templates, body_tilt, wander_tex, rng, name):
     back = dm["back"]
     backing_front = dm["backing"]
 
-    # THE CLIP IS A BOOLEAN. The shards and the backing go into one mesh as
-    # they are, and Blender's exact boolean intersects the lot with one prism
-    # of the whole concave outline pushed out by the tolerance. Clipping by
+    # THE CLIP IS A BOOLEAN. Each shard reaching past the outline is
+    # intersected with one straight prism of the whole concave outline, so
+    # every cut face lies exactly on the collision line. Clipping by
     # half-planes against the convex parts came before this and could not be
     # made right: a seam between two parts cut every shard along a straight
     # line across the rock, and at a reflex corner the seam plane's extension
-    # left a flat facet that belonged to no outline edge. The boolean also
-    # fuses the overlapping shards into one shell with their corners intact,
-    # which is what the voxel remesh did at a thousand times the triangles.
-    ring = offset_outline(poly, tolerance(s))
-    clip = link(f"{name}-clip", mesh_from_arrays(f"{name}-clip", clip_solid(poly, parts, piece, dm, tolerance(s))))
+    # left a flat facet that belonged to no outline edge.
+    clip = link(f"{name}-clip", mesh_from_arrays(f"{name}-clip", clip_solid(poly, parts, dm)))
     chunks = []
+    marks = []
     for _, v, t in shards:
-        # A shard whose every vertex stands inside the pushed-out outline
-        # (in plan: the prism is only ever cut through by its walls) ships as
-        # it is; the rest are each intersected with the prism on their own.
-        # One shard is a simple closed solid, which the float (fast) solver
-        # handles well and in milliseconds; the exact solver over the whole
-        # overlapping soup took half a minute for one body.
-        if points_in_poly(v[:, [0, 2]], ring).all():
+        marks.append(rng.random())
+        # A shard whose every vertex stands inside the outline (in plan: the
+        # prism is only ever cut through by its walls) ships as it is; the
+        # rest are each intersected with the prism on their own. One shard is
+        # a simple closed solid, which the float (fast) solver handles well
+        # and in milliseconds; the exact solver over the whole overlapping
+        # soup took half a minute for one body.
+        if points_in_poly(v[:, [0, 2]], poly).all():
             chunks.append((v, t))
             continue
-        tmp = link(f"{name}-shard", mesh_from_arrays(f"{name}-shard", [(v, t)]))
-        mod = tmp.modifiers.new("clip", "BOOLEAN")
-        mod.operation = "INTERSECT"
-        mod.solver = "FLOAT"
-        mod.object = clip
-        cut = mesh_arrays(evaluate(tmp))
+        cut = inset_wall(clip_shard(name, v, t, clip), poly, rng.uniform(RIM_INSET * 0.25, RIM_INSET))
+        kept = False
         if len(cut[1]):
             extent = cut[0].max(axis=0) - cut[0].min(axis=0)
             if extent[0] >= SLIVER * s and extent[2] >= SLIVER * s:
                 chunks.append(cut)
-        remove(tmp)
+                kept = True
+        if not kept:
+            marks.pop()
     remove(clip)
-    # On a bevelled piece the backing keeps clear of the edge band: the ragged
-    # shard ends stop short of the outline there, and a slab running up to it
-    # showed its thin top edge as a plate floating above them. The inset is
-    # capped by the outline's clearance so a narrow arm does not fold over.
-    inset = min(piece.get("bevel", 0.0), clearance(poly) * 0.4)
-    chunks += backing(poly, parts, backing_front, back, ring=offset_outline(poly, -inset) if inset > 0.005 else None)
-    return link(name, mesh_from_arrays(name, chunks)), len(shards)
+    chunks += backing(poly, parts, backing_front, back)
+    # The backing is one chunk; it takes the middle of the variation range.
+    marks += [0.5] * (len(chunks) - len(marks))
+    t = time.time()
+    chunks, gone = drop_buried(chunks, s)
+    print(f"[rocks] {name}: {gone} buried triangles dropped, {time.time() - t:.1f}s")
+    return link(name, mesh_from_arrays(name, chunks, marks)), len(shards)
 
 
-def clip_solid(poly, parts, piece, dm, tol):
-    """The solid every shard is intersected with: the outline pushed out by
-    the tolerance, from just ahead of the proudest front to well behind the
-    back. It is a straight prism on purpose. A piece's bevel is NOT cut into
-    it: the author wants the taper to come from where the shards stand, whole,
-    not from a plane sliced through them (see the fillet in `scatter`)."""
-    ring = offset_outline(poly, tol)
-    return backing(poly, parts, dm["front"] - 0.03, dm["back"] + 0.5, ring=ring)
-
-
-def clearance(poly):
-    """The outline's narrowest span: the smallest distance from an edge to a
-    vertex that is not one of its own or its neighbours' ends (those sit close
-    to it at any sharp corner without the outline being narrow there)."""
-    n = len(poly)
-    pts = np.array(poly)
-    best = np.inf
-    for i in range(n):
-        skip = {(i - 1) % n, i, (i + 1) % n, (i + 2) % n}
-        others = np.array([p for j, p in enumerate(poly) if j not in skip])
-        if len(others) == 0:
-            continue
-        a, b = pts[i], pts[(i + 1) % n]
-        ab = b - a
-        denom = max(float(ab @ ab), 1e-12)
-        t = np.clip(((others - a) @ ab) / denom, 0, 1)
-        best = min(best, float(np.hypot(*(others - (a + t[:, None] * ab)).T).min()))
-    return best if np.isfinite(best) else 0.0
-
-
-def offset_outline(poly, tol):
-    """The CCW outline pushed out by `tol`: each vertex moved along the
-    bisector of its two outward edge normals, the mitre clamped so an acute
-    corner does not spike (a thin triangle's apex once went 0.75 m out)."""
-    n = len(poly)
-    out = []
-    for i in range(n):
-        ax, ay = poly[i - 1]
-        bx, by = poly[i]
-        cx, cy = poly[(i + 1) % n]
-        n1 = (by - ay, -(bx - ax))
-        n2 = (cy - by, -(cx - bx))
-        l1, l2 = math.hypot(*n1), math.hypot(*n2)
-        if l1 < 1e-9 or l2 < 1e-9:
-            out.append((bx, by))
-            continue
-        n1 = (n1[0] / l1, n1[1] / l1)
-        n2 = (n2[0] / l2, n2[1] / l2)
-        d = (n1[0] + n2[0], n1[1] + n2[1])
-        ld = math.hypot(*d)
-        if ld < 1e-6:
-            out.append((bx + n1[0] * tol, by + n1[1] * tol))
-            continue
-        d = (d[0] / ld, d[1] / ld)
-        k = tol / max(0.5, d[0] * n1[0] + d[1] * n1[1])
-        out.append((bx + d[0] * k, by + d[1] * k))
-    return out
+def clip_solid(poly, parts, dm):
+    """The solid every shard is intersected with: the outline itself, from
+    just ahead of the proudest front to well behind the back. It is a
+    straight prism on purpose. A piece's taper is NOT cut into it: the author
+    wants the taper to come from where the shards stand, whole, not from a
+    plane sliced through them (see `taper_top` and `scatter`)."""
+    return backing(poly, parts, dm["front"] - 0.03, dm["back"] + 0.5)
 
 
 def detail_texture(name, kind, size, rng):
@@ -880,8 +867,16 @@ def cull(obj, piece, fused):
 
 
 def decimate(obj, ratio):
-    """Collapse decimation to `ratio` of the faces; 1 leaves the remesh as it
-    is, which is how the shape is inspected (the wrapper's --decimate 1)."""
+    """`ratio` None: planar dissolve (see DISSOLVE_ANGLE_DEG). A number:
+    collapse to that share of the faces, 1 leaving the mesh as it is, which
+    is how the shape is inspected (the wrapper's --decimate 1)."""
+    if ratio is None:
+        dec = obj.modifiers.new("dissolve", "DECIMATE")
+        dec.decimate_type = "DISSOLVE"
+        dec.angle_limit = math.radians(DISSOLVE_ANGLE_DEG)
+        dec.use_dissolve_boundaries = False
+        evaluate(obj)
+        return
     if ratio >= 1:
         return
     dec = obj.modifiers.new("collapse", "DECIMATE")
@@ -921,34 +916,44 @@ def smooth_with_sharp_edges(mesh):
     mesh.update()
 
 
-def paint_tint(mesh, rgb):
-    attr = mesh.color_attributes.new(name="Col", type="BYTE_COLOR", domain="CORNER")
-    n = len(mesh.loops)
-    buf = np.tile(np.array([rgb[0], rgb[1], rgb[2], 1.0], dtype=np.float32), n)
-    attr.data.foreach_set("color", buf)
+def white_layer(mesh):
+    """The colour layer the dirt pass darkens, starting white."""
+    # FLOAT, not byte: a byte colour layer is stored as sRGB and the exporter
+    # linearises it, which would hand the shader every mask raised to 2.2.
+    attr = mesh.color_attributes.new(name="Col", type="FLOAT_COLOR", domain="CORNER")
+    attr.data.foreach_set("color", np.tile(np.array([1.0, 1.0, 1.0, 1.0], dtype=np.float32), len(mesh.loops)))
     mesh.color_attributes.active_color = attr
 
 
-def depth_shade(mesh, span):
-    """Darken the colour layer with depth: a face `span` metres behind the
-    proudest one loses DEPTH_SHADE of its brightness. The game looks at a rock
-    head-on, lit head-on, and from there a recessed slab is exactly as bright
-    as the one in front of it; this is the occlusion a real crevice would
-    have, written into COLOR_0 where the shader multiplies it in."""
+def masks(mesh, span):
+    """COLOR_0 as the MASKS the runtime material composes the colour from
+    (docs/rocks.md, "The rock material"): r = cavity, the dirt pass's value
+    (1 open, 0 deep); g = depth shade, 1 at the proudest face falling to
+    1 - DEPTH_SHADE at `span` behind it (the game looks at a rock head-on, lit
+    head-on, and from there a recessed slab is exactly as bright as the one
+    in front of it, so this is the crevice's occlusion said in a number);
+    b = the per-shard random from the "shard" attribute; a = 1."""
     attr = mesh.color_attributes.active_color
-    if attr is None or span <= 0:
-        return
+    nl = len(mesh.loops)
+    col = np.empty(nl * 4, dtype=np.float32)
+    attr.data.foreach_get("color", col)
+    col = col.reshape(-1, 4)
+    cavity = col[:, 0].copy()
+    vi = np.empty(nl, dtype=np.int64)
+    mesh.loops.foreach_get("vertex_index", vi)
     co = np.empty(len(mesh.vertices) * 3)
     mesh.vertices.foreach_get("co", co)
     y = co.reshape(-1, 3)[:, 1]
-    t = np.clip((y - y.min()) / span, 0, 1)
-    factor = 1 - DEPTH_SHADE * t
-    vi = np.empty(len(mesh.loops), dtype=np.int64)
-    mesh.loops.foreach_get("vertex_index", vi)
-    col = np.empty(len(mesh.loops) * 4, dtype=np.float32)
-    attr.data.foreach_get("color", col)
-    col = col.reshape(-1, 4)
-    col[:, :3] *= factor[vi][:, None]
+    depth = np.ones(len(mesh.vertices))
+    if span > 0:
+        depth = 1 - DEPTH_SHADE * np.clip((y - y.min()) / span, 0, 1)
+    shard = np.full(len(mesh.vertices), 0.5, dtype=np.float32)
+    if "shard" in mesh.attributes:
+        mesh.attributes["shard"].data.foreach_get("value", shard)
+    col[:, 0] = cavity
+    col[:, 1] = depth[vi]
+    col[:, 2] = np.clip(shard[vi], 0, 1)
+    col[:, 3] = 1
     attr.data.foreach_set("color", col.ravel())
 
 
@@ -1006,68 +1011,319 @@ def dirty(obj):
         )
 
 
-def load_textures():
-    """The tileable stone maps from `rocktex.py`, or None without it."""
-    try:
-        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-        import rocktex
+def gltf_output_group():
+    """The node group the glTF exporter reads extra channels from: a group
+    named "glTF Material Output" with an "Occlusion" input becomes the
+    material's occlusionTexture."""
+    grp = bpy.data.node_groups.get("glTF Material Output")
+    if grp is None:
+        grp = bpy.data.node_groups.new("glTF Material Output", "ShaderNodeTree")
+        grp.interface.new_socket(name="Occlusion", in_out="INPUT", socket_type="NodeSocketFloat")
+        grp.nodes.new("NodeGroupInput")
+    return grp
 
-        out_dir = tempfile.mkdtemp(prefix="rocktex-")
-        return rocktex.generate(out_dir, seed=TEXTURE_SEED, size=TEXTURE_SIZE)
-    except Exception as e:  # noqa: BLE001 - any failure means the flat colour
-        print(f"[rocks] no texture module, flat colour ({type(e).__name__}: {e})")
-        return None
 
-
-def rock_material(maps):
-    mat = bpy.data.materials.new("rock")
+def rock_material(index, ao_image):
+    """One material per body: a plain grey Principled the runtime replaces,
+    carrying the baked AO on the "AO" UV layer as the glTF occlusionTexture
+    (so three mounts it as `aoMap`, channel 1). The image node is the
+    material's active node, which is where Cycles' bake writes."""
+    mat = bpy.data.materials.new(f"rock-{index}")
     mat.use_nodes = True
     nt = mat.node_tree
     bsdf = nt.nodes["Principled BSDF"]
-    col = nt.nodes.new("ShaderNodeVertexColor")
-    col.layer_name = "Col"
-    bsdf.inputs["Roughness"].default_value = 0.92
-    bsdf.inputs["Specular IOR Level"].default_value = 0.3
-    if maps is None:
-        nt.links.new(col.outputs["Color"], bsdf.inputs["Base Color"])
+    bsdf.inputs["Base Color"].default_value = (0.3, 0.3, 0.3, 1.0)
+    bsdf.inputs["Roughness"].default_value = 0.9
+    if ao_image is None:
         return mat
-
-    def image(key, non_color):
-        node = nt.nodes.new("ShaderNodeTexImage")
-        node.image = bpy.data.images.load(maps[key])
-        if non_color:
-            node.image.colorspace_settings.name = "Non-Color"
-        return node
-
-    albedo = image("albedo", False)
-    mix = nt.nodes.new("ShaderNodeMix")
-    mix.data_type = "RGBA"
-    mix.blend_type = "MULTIPLY"
-    mix.inputs["Factor"].default_value = 1.0
-    nt.links.new(col.outputs["Color"], mix.inputs["A"])
-    nt.links.new(albedo.outputs["Color"], mix.inputs["B"])
-    nt.links.new(mix.outputs["Result"], bsdf.inputs["Base Color"])
-
-    normal = image("normal", True)
-    nmap = nt.nodes.new("ShaderNodeNormalMap")
-    nt.links.new(normal.outputs["Color"], nmap.inputs["Color"])
-    nt.links.new(nmap.outputs["Normal"], bsdf.inputs["Normal"])
-
-    rough = image("roughness", True)
-    nt.links.new(rough.outputs["Color"], bsdf.inputs["Roughness"])
+    uv = nt.nodes.new("ShaderNodeUVMap")
+    uv.uv_map = "AO"
+    img = nt.nodes.new("ShaderNodeTexImage")
+    img.image = ao_image
+    ao_image.colorspace_settings.name = "Non-Color"
+    nt.links.new(uv.outputs["UV"], img.inputs["Vector"])
+    out = nt.nodes.new("ShaderNodeGroup")
+    out.node_tree = gltf_output_group()
+    nt.links.new(img.outputs["Color"], out.inputs["Occlusion"])
+    # Last, because adding a node makes it the active one, and the bake
+    # writes into the ACTIVE AND SELECTED image node's image. Activating
+    # clears the selection, so the select comes after.
+    nt.nodes.active = img
+    img.select = True
     return mat
 
 
-def build_body(body, material, collapse=COLLAPSE_RATIO, remesh=False):
+def ao_size(mesh):
+    """The AO atlas side: the power of two nearest AO_TEXELS per metre of the
+    body's surface, clamped."""
+    areas = np.empty(len(mesh.polygons))
+    mesh.polygons.foreach_get("area", areas)
+    px = math.sqrt(max(areas.sum(), 1e-6)) * AO_TEXELS
+    size = 2 ** int(round(math.log2(max(px, 1))))
+    return int(clamp(size, AO_SIZE_MIN, AO_SIZE_MAX))
+
+
+def ao_uvs(obj):
+    """A second UV layer "AO": the body unwrapped into an atlas by Smart UV
+    Project. The box projection stays the active (first) layer."""
+    mesh = obj.data
+    layer = mesh.uv_layers.new(name="AO")
+    mesh.uv_layers.active = layer
+    bpy.context.view_layer.objects.active = obj
+    # This body ALONE: every selected mesh enters edit mode with the active
+    # one, and the unwrap then ran over the previous body too, replacing its
+    # box projection (the level build's detail tiles all read through the
+    # atlas).
+    for o in bpy.context.scene.objects:
+        o.select_set(o is obj)
+    with bpy.context.temp_override(active_object=obj, object=obj, selected_objects=[obj], selected_editable_objects=[obj]):
+        bpy.ops.object.mode_set(mode="EDIT")
+        bpy.ops.mesh.select_all(action="SELECT")
+        bpy.ops.uv.smart_project(angle_limit=math.radians(AO_ISLAND_ANGLE), island_margin=AO_ISLAND_MARGIN, scale_to_bounds=False)
+        # Repacked by the island packer proper: Smart UV Project's own packing
+        # of thousands of small islands left most of the atlas empty.
+        bpy.ops.uv.pack_islands(margin=AO_ISLAND_MARGIN, rotate=True)
+        bpy.ops.object.mode_set(mode="OBJECT")
+    uv = np.empty(len(mesh.loops) * 2)
+    mesh.uv_layers["AO"].data.foreach_get("uv", uv)
+    uv = uv.reshape(-1, 2)
+    print(f"[rocks] AO uvs: {len(uv)} loops, u {uv[:, 0].min():.2f}..{uv[:, 0].max():.2f}, v {uv[:, 1].min():.2f}..{uv[:, 1].max():.2f}")
+    mesh.uv_layers.active = mesh.uv_layers["UVMap"]
+
+
+def bake_alone(obj, samples, **kwargs):
+    """Cycles ambient occlusion of the body ALONE: every other object is
+    hidden from the render, so a rock is not darkened by whichever neighbour
+    happened to be built already (the extrusion-drawn bodies are not in the
+    scene at all, so occlusion between bodies would be inconsistent).
+    `kwargs` go to the bake operator (the target and its layer)."""
+    scene = bpy.context.scene
+    scene.render.engine = "CYCLES"
+    scene.cycles.device = "CPU"
+    scene.cycles.samples = samples
+    scene.cycles.use_denoising = False
+    if scene.world is None:
+        scene.world = bpy.data.worlds.new("world")
+    light = getattr(scene.world, "light_settings", None)
+    if light is not None:
+        light.distance = AO_DISTANCE
+    scene.render.bake.use_selected_to_active = False
+    others = [o for o in scene.objects if o is not obj]
+    hidden = [(o, o.hide_render) for o in others]
+    for o in others:
+        o.hide_render = True
+    bpy.context.view_layer.objects.active = obj
+    for o in scene.objects:
+        o.select_set(o is obj)
+    try:
+        with bpy.context.temp_override(active_object=obj, object=obj, selected_objects=[obj], selected_editable_objects=[obj]):
+            bpy.ops.object.bake(type="AO", use_clear=True, **kwargs)
+    finally:
+        for o, was in hidden:
+            o.hide_render = was
+
+
+def inset_wall(chunk, poly, amount):
+    """The clipped chunk with the vertices it has ON the outline moved
+    `amount` inward, along the inward normal of the nearest outline edge.
+    Every clipped shard's cut face lies in the same prism wall plane, and
+    where shards overlap those coincident faces z-fought on screen, a jagged
+    dark pattern all along the rock's rim; a different inset per shard
+    stacks them a few millimetres apart instead, with the backing's wall
+    (never inset) as the outermost, clean face."""
+    v, t = chunk
+    if len(v) == 0:
+        return chunk
+    pts = v[:, [0, 2]]
+    n = len(poly)
+    best = np.full(len(pts), np.inf)
+    normal = np.zeros((len(pts), 2))
+    for i in range(n):
+        a = np.array(poly[i])
+        b = np.array(poly[(i + 1) % n])
+        ab = b - a
+        length = math.hypot(*ab)
+        if length < 1e-9:
+            continue
+        t_ = np.clip(((pts - a) @ ab) / (length * length), 0, 1)
+        d = np.hypot(*(pts - (a + t_[:, None] * ab)).T)
+        closer = d < best
+        best[closer] = d[closer]
+        # Counter-clockwise outline: the inward normal is the edge turned left.
+        normal[closer] = np.array([-ab[1], ab[0]]) / length
+    on = best < 1e-4
+    if not on.any():
+        return chunk
+    v = v.copy()
+    v[on, 0] += normal[on, 0] * amount
+    v[on, 2] += normal[on, 1] * amount
+    return v, t
+
+
+def is_closed(t):
+    """Whether every edge of the triangle soup is shared by exactly two
+    triangles: a watertight solid."""
+    if len(t) == 0:
+        return True
+    e = np.sort(np.concatenate([t[:, [0, 1]], t[:, [1, 2]], t[:, [2, 0]]]), axis=1)
+    _, counts = np.unique(e, axis=0, return_counts=True)
+    return bool((counts == 2).all())
+
+
+def fill_holes(v, t):
+    """The soup with its boundary loops filled and triangulated."""
+    bm = bmesh.new()
+    verts = [bm.verts.new(p.tolist()) for p in v]
+    for a, b, c in t.tolist():
+        try:
+            bm.faces.new((verts[a], verts[b], verts[c]))
+        except ValueError:
+            pass
+    bmesh.ops.holes_fill(bm, edges=[e for e in bm.edges if e.is_boundary], sides=0)
+    bmesh.ops.triangulate(bm, faces=bm.faces)
+    mesh = bpy.data.meshes.new("filled")
+    bm.to_mesh(mesh)
+    bm.free()
+    out = mesh_arrays(mesh)
+    bpy.data.meshes.remove(mesh)
+    return out
+
+
+def clip_shard(name, v, t, clip):
+    """One shard intersected with the clip prism, WATERTIGHT: the float
+    solver's result is taken when it is closed, otherwise the exact solver's,
+    and a result still open after that has its holes filled. The float
+    solver returned 8 of body 150's 275 shards with triangles missing, open
+    shells whose missing faces were holes in the rock ("the missing face at
+    the bottom of the column")."""
+    # An intersection lies inside the shard. A result that does not is the
+    # solver handing back the wrong operand: the exact solver once returned
+    # the CLIP PRISM for a shard it could not cut, closed and body-sized, and
+    # that slab stood at the front of body 110 hiding every real shard behind
+    # it ("why does it look like a smooth wall").
+    lo = v.min(axis=0) - 1e-3
+    hi = v.max(axis=0) + 1e-3
+
+    def within(cut):
+        return len(cut[0]) == 0 or (bool((cut[0] >= lo).all()) and bool((cut[0] <= hi).all()))
+
+    first = None
+    for solver in ("FLOAT", "EXACT"):
+        tmp = link(f"{name}-shard", mesh_from_arrays(f"{name}-shard", [(v, t)]))
+        mod = tmp.modifiers.new("clip", "BOOLEAN")
+        mod.operation = "INTERSECT"
+        mod.solver = solver
+        if solver == "EXACT":
+            mod.use_self = False
+        mod.object = clip
+        cut = mesh_arrays(evaluate(tmp))
+        remove(tmp)
+        if not within(cut):
+            REPAIRS["rejected"] += 1
+            continue
+        if first is None:
+            first = cut
+        if is_closed(cut[1]):
+            if solver == "EXACT":
+                REPAIRS["exact"] += 1
+            return outward(*cut)
+    if first is None:
+        # Neither solver produced anything inside the shard: no shard.
+        REPAIRS["dropped"] += 1
+        return v[:0], t[:0]
+    REPAIRS["filled"] += 1
+    return outward(*fill_holes(*first))
+
+
+# How many clipped shards the float solver left open, by what closed them
+# (reported per build).
+REPAIRS = {"exact": 0, "filled": 0, "rejected": 0, "dropped": 0}
+
+
+def outward(v, t):
+    """(v, t) with its triangles wound so the normals point OUT: the float
+    boolean now and then returns a shard inside out (3 of 275 on body 150),
+    and an inside-out shard has its front faces taken by the back-face cull
+    and its back faces kept, a hollow shell showing its far wall from inside
+    ("a hole in the top face"). The sign of the enclosed volume says which
+    way a closed solid is wound."""
+    if len(t) == 0:
+        return v, t
+    a, b, c = v[t[:, 0]], v[t[:, 1]], v[t[:, 2]]
+    volume = np.einsum("ij,ij->i", a, np.cross(b, c)).sum()
+    return (v, t[:, [0, 2, 1]]) if volume < 0 else (v, t)
+
+
+def drop_buried(chunks, s):
+    """The (verts, tris) chunks of one piece with their buried triangles
+    removed (see BURIED_EPSILON): a triangle whose centre, pushed just
+    outside its own solid along its normal, lies at least BURIED_MARGIN_RATIO
+    of S inside another chunk.
+    Inside is the HALF-SPACE test, behind every face plane of the other
+    chunk. For a convex chunk that is exact, and for a concave one (a shard
+    clipped by the concave outline) the intersection of the half-spaces is a
+    subset of the solid, so the test can only keep a face it could have
+    dropped, never drop one it should have kept. Ray parity came first and
+    double-counted rays through shared edges of the many coplanar triangle
+    pairs, and the rock came out riddled with gaps. The chunks a point can
+    be inside are prefiltered by bounding box. Returns the chunks and how
+    many triangles went."""
+    planes = []
+    bounds = []
+    for v, t in chunks:
+        a, b, c = v[t[:, 0]], v[t[:, 1]], v[t[:, 2]]
+        n = np.cross(b - a, c - a)
+        n /= np.maximum(np.linalg.norm(n, axis=1, keepdims=True), 1e-12)
+        planes.append((n, np.einsum("ij,ij->i", n, a)))
+        bounds.append((v.min(axis=0), v.max(axis=0)))
+    lo = np.array([b[0] for b in bounds])[None, :, :] - BURIED_EPSILON
+    hi = np.array([b[1] for b in bounds])[None, :, :] + BURIED_EPSILON
+    out = []
+    gone = 0
+    for i, (v, t) in enumerate(chunks):
+        n, _ = planes[i]
+        a, b, c = v[t[:, 0]], v[t[:, 1]], v[t[:, 2]]
+        probe = (a + b + c) / 3 + n * BURIED_EPSILON
+        within = np.all((probe[:, None, :] >= lo) & (probe[:, None, :] <= hi), axis=2)
+        within[:, i] = False
+        buried = np.zeros(len(t), dtype=bool)
+        for j in np.nonzero(within.any(axis=0))[0]:
+            rows = np.nonzero(within[:, j] & ~buried)[0]
+            if len(rows) == 0:
+                continue
+            nj, dj = planes[j]
+            behind = (probe[rows] @ nj.T - dj[None, :]) <= -BURIED_MARGIN_RATIO * s
+            buried[rows[behind.all(axis=1)]] = True
+        gone += int(buried.sum())
+        out.append((v, t[~buried]))
+    return out, gone
+
+
+def bake_ao(obj, image):
+    """Cycles ambient occlusion into `image` through the "AO" layer."""
+    bpy.context.scene.render.bake.margin = AO_MARGIN_PX
+    bake_alone(obj, AO_SAMPLES, margin=AO_MARGIN_PX, uv_layer="AO", target="IMAGE_TEXTURES")
+    px = np.empty(image.size[0] * image.size[1] * 4, dtype=np.float32)
+    image.pixels.foreach_get(px)
+    print(f"[rocks] AO image mean {px.reshape(-1, 4)[:, 0].mean():.3f}")
+    # Saved to disk so the exporter has bytes to embed (a generated image has
+    # pixels but no file, and the exporter converts from the file).
+    image.filepath_raw = os.path.join(tempfile.gettempdir(), f"{image.name}.png")
+    image.file_format = "PNG"
+    image.save()
+
+
+def build_body(body, flat, collapse=None, remesh=False):
     index = body["index"]
-    rng = random.Random(int(body["hash"], 16))
+    # The body's hash seeds every random choice, so the same outline builds
+    # the same rock, and the author's `rockSeed` (in the hash too, mixed in
+    # here as well) turns it into a different one to look at.
+    rng = random.Random(int(body["hash"], 16) ^ (int(body.get("seed", 0)) * 0x9E3779B1))
     templates = shard_templates(rng, index, remesh)
     body_tilt = math.radians(rng.uniform(-BODY_TILT, BODY_TILT))
     wander_tex = bpy.data.textures.new(f"wander-{index}", "CLOUDS")
     wander_tex.noise_scale = 1.0
     wander_tex.noise_depth = 1
-    shade = rng.uniform(1 - SHADE_JITTER, 1 + SHADE_JITTER)
-    tint = tuple(clamp(c * shade * rng.uniform(1 - HUE_JITTER, 1 + HUE_JITTER), 0, 1) for c in ROCK_GREY)
     objs = []
     shards = 0
     for pi, piece in enumerate(body["pieces"]):
@@ -1092,12 +1348,21 @@ def build_body(body, material, collapse=COLLAPSE_RATIO, remesh=False):
         return None, 0
     obj = join(objs, f"body-{index}")
     smooth_with_sharp_edges(obj.data)
-    paint_tint(obj.data, tint)
+    white_layer(obj.data)
     dirty(obj)
     spans = [depth_model(p, piece_size(dedupe([(v["x"], v["y"]) for v in p["verts"]]))) for p in body["pieces"]]
-    depth_shade(obj.data, max(d["fall"] + d["relief"] for d in spans))
+    masks(obj.data, max(d["fall"] + d["relief"] for d in spans))
     box_uvs(obj.data)
-    obj.data.materials.append(material)
+    ao_image = None
+    if not flat:
+        ao_uvs(obj)
+        size = ao_size(obj.data)
+        ao_image = bpy.data.images.new(f"ao-{index}", size, size, alpha=False)
+    obj.data.materials.append(rock_material(index, ao_image))
+    if ao_image is not None:
+        t = time.time()
+        bake_ao(obj, ao_image)
+        print(f"[rocks] body {index}: AO {size}x{size}, {time.time() - t:.1f}s")
     obj["rockIndex"] = index
     obj["rockHash"] = body["hash"]
     return obj, shards
@@ -1115,18 +1380,17 @@ def main():
     global ROCK_SCALE
     ROCK_SCALE = float(job.get("scale", ROCK_SCALE))
     print(f"[rocks] rock scale {ROCK_SCALE:g} m")
-    # `flat` (the wrapper's --flat) leaves the texture out, so the shape can be
-    # judged by its shading alone.
-    material = rock_material(None if job.get("flat") else load_textures())
+    # `flat` (the wrapper's --flat) skips the ambient-occlusion bake, the slow
+    # step, so the shape can be iterated on quickly.
+    flat = bool(job.get("flat"))
 
     t0 = time.time()
     tris = 0
     built = 0
     for body in job["bodies"]:
         t = time.time()
-        obj, shards = build_body(
-            body, material, float(job.get("decimate", COLLAPSE_RATIO)), bool(job.get("remesh"))
-        )
+        ratio = job.get("decimate")
+        obj, shards = build_body(body, flat, None if ratio is None else float(ratio), bool(job.get("remesh")))
         if obj is None:
             continue
         built += 1
@@ -1159,6 +1423,10 @@ def main():
         # The colour layer goes out as COLOR_0 however the material uses it.
         kwargs["export_vertex_color"] = "ACTIVE"
     bpy.ops.export_scene.gltf(**kwargs)
+    print(
+        f"[rocks] open clips closed: {REPAIRS['exact']} by the exact solver, {REPAIRS['filled']} by filling; "
+        f"{REPAIRS['rejected']} results outside their shard rejected, {REPAIRS['dropped']} shards dropped for it"
+    )
     print(f"[rocks] {built} bodies, {tris} tris, {time.time() - t0:.1f}s -> {out_path}")
 
 

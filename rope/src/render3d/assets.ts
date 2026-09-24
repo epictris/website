@@ -525,6 +525,110 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
     author: "Amal Kumar",
     license: "CC0",
   },
+  // Dark grey-brown shore rock (#454037 mean): a rough, pitted face with
+  // rounded weathered lumps, the rock a sea cliff or a wave-worn boulder is.
+  //
+  // This and `quarry wall` are the DETAIL tiles for the generated rocks (see
+  // docs/rocks.md, "The rock material"), composed in a custom material of
+  // their own. Since 2026-09-24 the rocks are stylised, so both are painted
+  // (a brush, flattened into plateaus) and the material keeps only a low-
+  // contrast mottling of this albedo and a subtle relief of the other's
+  // normal. No `strokes`: at the rock's scale the plateaus are the paint.
+  //
+  // Keyed as a SURFACE for the reason the other rocks are: `stone` already has
+  // a generated surface every stone body wears by naming its material.
+  "seaside rock": {
+    maps: {
+      base: {
+        file: "/textures/seaside-rock-base.webp",
+        raw: "seaside-rock/textures/seaside_rock_diff_2k.jpg",
+        sha256: "cc7fdfe2e72b022c2719a8f695b3a8e0a40939bae0738b36181430078b64c896",
+        bytes: 18040,
+        paint: { brush: 36 },
+      },
+      normal: {
+        file: "/textures/seaside-rock-normal.webp",
+        raw: "seaside-rock/textures/seaside_rock_nor_gl_2k.jpg",
+        sha256: "386aaab0244c619fd941e4a293e182825f2e7499e6935467510a6be685ead696",
+        bytes: 89544,
+        paint: { brush: 36 },
+      },
+      // Poly Haven's packed ARM image - R ambient occlusion, G roughness, B
+      // metallic (zero, stated below) - read on two channels.
+      roughness: {
+        file: "/textures/seaside-rock-roughness.webp",
+        raw: "seaside-rock/textures/seaside_rock_arm_2k.jpg",
+        channel: "g",
+        sha256: "8671d45754f3b0c4f6d06f949a2b26f866c0202011e24d36c38fe5c641e84adc",
+        bytes: 4630,
+        paint: { brush: 36 },
+      },
+      ao: {
+        file: "/textures/seaside-rock-ao.webp",
+        raw: "seaside-rock/textures/seaside_rock_arm_2k.jpg",
+        channel: "r",
+        sha256: "63b573623473b5287665ba75a19b4546f9b969683bb67122a0aab019e95d2f7c",
+        bytes: 15590,
+        paint: { brush: 36 },
+      },
+    },
+    // Poly Haven's own captured size, 2 m square
+    // (https://api.polyhaven.com/info/seaside_rock).
+    tile: 2,
+    metalness: 0,
+    fallback: "stone",
+    source: "https://polyhaven.com/a/seaside_rock",
+    author: "Dimitrios Savva",
+    license: "CC0",
+  },
+  // Warm brown-grey quarried rock (#564938 mean): broken, blocky faces with
+  // sharp fracture edges, the cut face a quarry or a blasted cutting shows.
+  //
+  // A detail tile for the generated rocks' own material, painted as
+  // `seaside rock` is and for the same reason. No `strokes`.
+  "quarry wall": {
+    maps: {
+      base: {
+        file: "/textures/quarry-wall-base.webp",
+        raw: "quarry-wall/textures/quarry_wall_02_diff_2k.jpg",
+        sha256: "c6f9d35cccf8c9b75386bf948e88434b98d169d8387b5f3580747df7ac9c69b4",
+        bytes: 32924,
+        paint: { brush: 36 },
+      },
+      normal: {
+        file: "/textures/quarry-wall-normal.webp",
+        raw: "quarry-wall/textures/quarry_wall_02_nor_gl_2k.jpg",
+        sha256: "51c16c18a48879a365f0fc7112677ee25bcb9ee84f36e545f82d217e9f638a53",
+        bytes: 211266,
+        paint: { brush: 36 },
+      },
+      // Packed ARM again: R ambient occlusion, G roughness, B metallic (zero).
+      roughness: {
+        file: "/textures/quarry-wall-roughness.webp",
+        raw: "quarry-wall/textures/quarry_wall_02_arm_2k.jpg",
+        channel: "g",
+        sha256: "ad3932537a5aee3bbcfaa73116738709034a876c17bb2e2ba04b9e531de19c9f",
+        bytes: 7596,
+        paint: { brush: 36 },
+      },
+      ao: {
+        file: "/textures/quarry-wall-ao.webp",
+        raw: "quarry-wall/textures/quarry_wall_02_arm_2k.jpg",
+        channel: "r",
+        sha256: "0e84907038fee318caad2bc686b4ab908c4e0b1a75af4406370c09692bf6881a",
+        bytes: 19542,
+        paint: { brush: 36 },
+      },
+    },
+    // Poly Haven's own captured size, 1.8 m square
+    // (https://api.polyhaven.com/info/quarry_wall_02).
+    tile: 1.8,
+    metalness: 0,
+    fallback: "stone",
+    source: "https://polyhaven.com/a/quarry_wall_02",
+    author: "Dimitrios Savva",
+    license: "CC0",
+  },
   // Plain grey rock, warm rather than blue (#605B57 mean) - a rough face broken
   // by fine vertical fracture channels, with none of the character the other
   // three carry: no strata like `dark rock`, no courses like `rock wall`, no
@@ -2003,7 +2107,7 @@ export async function assetsSettled(): Promise<void> {
 // shares that upload while carrying its own `repeat`.
 const imageCache = new Map<string, Promise<LoadedMaps>>();
 type Slot = "base" | "normal" | "roughness" | "metallic" | "ao" | "emissive";
-type LoadedMaps = Partial<Record<Slot, THREE.Texture>>;
+export type LoadedMaps = Partial<Record<Slot, THREE.Texture>>;
 
 let textureLoader: THREE.TextureLoader | null = null;
 
@@ -2051,6 +2155,15 @@ function loadMaps(name: string, asset: TextureAsset): Promise<LoadedMaps> {
   });
   imageCache.set(name, track(p, `texture images "${name}"`));
   return p;
+}
+
+// An authored set's decoded images as they are cached - untiled, shared, never
+// to be mutated or disposed - for a material that samples them itself at its
+// own coordinates rather than through three's map slots (the generated rocks,
+// rockMaterial.ts). Null for a name that is not in the manifest.
+export function authoredMaps(name: string): Promise<LoadedMaps> | null {
+  const asset = TEXTURE_ASSETS[name];
+  return asset ? loadMaps(name, asset) : null;
 }
 
 // Wear ANOTHER set's emission map over this material - `VisualData.emissiveTexture`,

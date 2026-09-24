@@ -55,9 +55,10 @@ const out = flag("out") ?? join(outDir, `${name}.glb`);
 
 // The job carries only what the generator reads; the geometry objects the
 // runtime keys on stay on this side.
-// `--flat` skips the texture so the shape can be judged by its shading alone;
-// `--decimate R` overrides the collapse ratio (1 = none, for inspecting the
-// clean corners the remesh made before the collapse softens them).
+// `--flat` skips the ambient-occlusion bake, the slow step, so the shape can be
+// iterated on quickly (the runtime material treats a missing AO map as none);
+// `--decimate R` replaces the default planar dissolve with a collapse to R of
+// the faces (1 = none at all), an inspection tool: the collapse smears facets.
 const decimateArg = flag("decimate");
 const decimate = decimateArg === undefined ? undefined : Number(decimateArg);
 if (decimate !== undefined && !(decimate > 0 && decimate <= 1)) fail(`--decimate ${decimateArg}: expected a ratio in (0, 1]`);
@@ -74,13 +75,21 @@ const job = {
   remesh: args.includes("--remesh"),
   ...(decimate !== undefined ? { decimate } : {}),
   ...(scale !== undefined ? { scale } : {}),
-  bodies: bodies.map((b) => ({ index: b.index, hash: b.hash, pieces: b.pieces })),
+  // `seed` is the body's `rockSeed` (absent = 0); rocks.py reads it with
+  // `body.get("seed", 0)`.
+  bodies: bodies.map((b) => ({ index: b.index, hash: b.hash, seed: b.seed, pieces: b.pieces })),
 };
 const jobPath = join(tmpdir(), `rocks-${name}-${process.pid}.json`);
 writeFileSync(jobPath, JSON.stringify(job));
 
 const pieces = bodies.reduce((n, b) => n + b.pieces.length, 0);
 console.log(`[rocks] ${name}: ${bodies.length} rock bodies, ${pieces} pieces -> ${out}`);
+if (job.flat) {
+  // The stylised material draws the cracks between slabs and the shading at
+  // every step from the baked AO; without it the relief is there but reads as
+  // one flat wall, which has been mistaken for a stale body.
+  console.log("[rocks] --flat: no AO bake, so the rock will read flat in the game; drop the flag to judge the look");
+}
 
 const blender = flag("blender") ?? process.env["BLENDER"] ?? "blender";
 const result = spawnSync(

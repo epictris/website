@@ -7,6 +7,7 @@ bun run src/tools/cli.ts ledges               # generated ledge-grab matrix (spe
 bun run src/tools/cli.ts corners              # corner geometry cases (compound-body seams, the release of a corner two bodies share)
 bun run src/tools/cli.ts tangents             # tangent-vertex cases (which corner a wrap node is born on)
 bun run src/tools/cli.ts decompose            # convex decomposition of authored concave outlines (partition, seams, determinism)
+bun run src/tools/cli.ts silhouette           # the rock-fit outline tracer (raster, largest blob, holes ignored, 2 cm simplification)
 bun run src/tools/cli.ts dmath                # the deterministic libm: bit-exact vectors on this engine + no platform Math in the sim
 bun run dmath:crosscheck                      # how far THIS engine's own Math is from it (an instrument, not a test)
 bun run src/tools/cli.ts contacts             # rigid-body contact cases (settle/stack/ramps/impact/momentum/loop-cap/loop-ride)
@@ -61,7 +62,7 @@ bun run src/tools/cli.ts ab      session.json --metrics peakV,pushRun  # the sam
 ```
 
 `bun run test` is what "all green" means: typecheck, `dmath`, `selftest`, `contacts`,
-`spring`, `movers`, `vines`, `rails`, `belts`, `viscous`, `breaks`, `finish`, `corners`, `tangents`, `decompose`, `camera`, `render3d`, `assets`, `levels`, `ledges`, every `playtests/*.json`,
+`spring`, `movers`, `vines`, `rails`, `belts`, `viscous`, `breaks`, `finish`, `corners`, `tangents`, `decompose`, `silhouette`, `camera`, `render3d`, `assets`, `levels`, `ledges`, every `playtests/*.json`,
 then the bundle corpus, in that order and under one exit code.
 A case that is red on purpose carries `expectedFail` (see `sim/contactCases.ts`),
 which the runner counts as a pass and, crucially, **fails on if it ever passes**:

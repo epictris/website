@@ -461,6 +461,12 @@ export interface EdItem {
   // `syncBodyProps` carries both across a compound one.
   breakForce: number;
   durability: number;
+  // The seed of the body's GENERATED rock (see `LevelBodyData.rockSeed`), 0 for
+  // the default. Unlike the physics above it is held on EVERY member, geometry
+  // included, because a rock body may be nothing but geometry - there is then
+  // no collision lead to carry it - and it is written from whichever member
+  // `toLevelData` writes the body from.
+  rockSeed: number;
   // There is no body depth here, and none on a collision item either: a body is
   // a thing in the gameplay plane and so is the shape it collides as (see
   // `LevelBodyData`). Depth is `EdVisual.offsetZ`, on the geometry objects and
@@ -799,6 +805,12 @@ export interface EdVisual {
   // ordinary authored value, so there is no third state to represent.
   tileOffset: Vec2;
   bevel: number | null; // metres; null = the extruder's default
+  // A generated rock's taper (see `GeometryObjectData.taperStart`/`taperAngle`):
+  // metres in front of the object's plane where it starts, and degrees it leans
+  // in by. Plain numbers like `tileOffset`: 0 is both the default and an
+  // ordinary value, so there is no third state, and a 0 is not written.
+  taperStart: number;
+  taperAngle: number;
   // What the shape GIVES OFF (see `VisualData.emissive`). "" = nothing, which is
   // every shape: emission is what makes a lamp's own geometry read as lit, and
   // it is a statement rather than an appearance, so there is no sensible
@@ -1002,6 +1014,8 @@ export const defaultVisual = (): EdVisual => ({
   tileScale: null,
   tileOffset: Vec2.ZERO,
   bevel: null,
+  taperStart: 0,
+  taperAngle: 0,
   emissive: "",
   emissiveIntensity: 1,
   emissiveTexture: "",
@@ -1121,6 +1135,8 @@ export function edVisual(v: GeometryObjectData | undefined): EdVisual {
     depth: v.depth ?? null,
     texture: v.texture ?? d.texture,
     bevel: v.bevel ?? null,
+    taperStart: v.taperStart ?? d.taperStart,
+    taperAngle: v.taperAngle ?? d.taperAngle,
     emissive: v.emissive ?? d.emissive,
     emissiveIntensity: v.emissiveIntensity ?? d.emissiveIntensity,
     emissiveTexture: v.emissiveTexture ?? d.emissiveTexture,
@@ -1164,6 +1180,8 @@ export function visualData(v: EdVisual): GeometryObjectData | undefined {
     ...(v.tileOffset.x !== 0 ? { tileOffsetX: v.tileOffset.x } : {}),
     ...(v.tileOffset.y !== 0 ? { tileOffsetY: v.tileOffset.y } : {}),
     ...(v.bevel !== null ? { bevel: v.bevel } : {}),
+    ...(v.taperStart !== 0 ? { taperStart: v.taperStart } : {}),
+    ...(v.taperAngle !== 0 ? { taperAngle: v.taperAngle } : {}),
     ...(v.emissive ? { emissive: v.emissive } : {}),
     // Only written alongside an emissive colour: a multiplier on nothing is a
     // field that reads as meaningful and is not.
@@ -1306,6 +1324,7 @@ function fromLevelData(data: LevelData): EdModel {
       launch: b.launch ?? DEFAULT_LAUNCH,
       breakForce: b.breakForce ?? 0,
       durability: b.durability ?? 1,
+      rockSeed: b.rockSeed ?? 0,
       force: b.force ?? 0,
       flow: b.flow ?? 0,
       drag: b.drag ?? 0,
@@ -1450,6 +1469,7 @@ function fromLevelData(data: LevelData): EdModel {
     launch: DEFAULT_LAUNCH,
     breakForce: 0,
     durability: 1,
+    rockSeed: 0,
     impermeable: false,
     mask: MASK_ALL,
     rail: false,
@@ -1548,6 +1568,7 @@ function fromLevelData(data: LevelData): EdModel {
     launch: DEFAULT_LAUNCH,
     breakForce: 0,
     durability: 1,
+    rockSeed: 0,
     impermeable: false,
     mask: MASK_ALL,
     rail: false,
@@ -1642,6 +1663,7 @@ function lightItem(
     launch: DEFAULT_LAUNCH,
     breakForce: 0,
     durability: 1,
+    rockSeed: 0,
     impermeable: false,
     mask: MASK_ALL,
     rail: false,
@@ -1713,6 +1735,7 @@ function lightItem(
     launch: DEFAULT_LAUNCH,
     breakForce: 0,
     durability: 1,
+    rockSeed: 0,
     impermeable: false,
     mask: MASK_ALL,
     rail: false,
@@ -2299,6 +2322,11 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
               : {}),
           }
         : {}),
+      // The generated rock's seed, outside the physics half because a rock body
+      // may be geometry alone, and only when it is not the 0 every level
+      // authored before it means by saying nothing - which keeps such a level
+      // byte-identical through a save (see `LevelBodyData.rockSeed`).
+      ...(lead.rockSeed ? { rockSeed: lead.rockSeed } : {}),
       objects,
     };
   });
@@ -3734,6 +3762,7 @@ export function syncBodyProps(members: readonly EdItem[]): void {
     m.launch = lead.launch;
     m.breakForce = lead.breakForce;
     m.durability = lead.durability;
+    m.rockSeed = lead.rockSeed;
     m.force = lead.force;
     m.flow = lead.flow;
     m.drag = lead.drag;
@@ -4265,6 +4294,7 @@ export function emptyModel(): EdModel {
         launch: DEFAULT_LAUNCH,
         breakForce: 0,
         durability: 1,
+        rockSeed: 0,
         impermeable: false,
         mask: MASK_ALL,
         rail: false,

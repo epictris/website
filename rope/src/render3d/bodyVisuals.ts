@@ -47,7 +47,8 @@ import {
   type GeometryObjectData,
   type LevelBodyData,
 } from "../level/levelFormat";
-import { DEFAULT_BEVEL, cylinderSolid, extrudeOutline } from "./extrude";
+import { DEFAULT_BEVEL, cylinderSolid, extrudeOutline, taperOutline } from "./extrude";
+import { ROCK_TEXTURES } from "./rocks";
 import { isAuthoredSurface, isSolidSurface, loadMesh, surfaceFor, surfaceName, tileMetres } from "./assets";
 import { buildWater } from "./water";
 import { DEFAULT_LIGHT_Z, LightRig, type MountedLight } from "./lights";
@@ -138,6 +139,14 @@ function primitiveGeometry(
   defaults: PrimitiveDefaults,
 ): THREE.BufferGeometry {
   const depth = g?.depth ?? defaults.depth;
+  // A ROCK is drawn as the reference solid its generated mesh fills: the
+  // outline straight through to the taper's start, then the tapered roof
+  // (`taperOutline`). Its `bevel` is not drawn, because the generator does not
+  // read it; the taper is the rock's edge treatment, and this extrusion is how
+  // the author sees it while setting it in the editor.
+  if (g?.texture !== undefined && ROCK_TEXTURES.has(g.texture)) {
+    return taperOutline(outline, { depth, taperStart: g.taperStart ?? 0, taperAngle: g.taperAngle ?? 0 });
+  }
   if (outline.kind === "circle") return cylinderSolid(outline.radius, depth);
   return extrudeOutline(outline, { depth, bevel: g?.bevel ?? defaults.bevel });
 }

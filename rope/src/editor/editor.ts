@@ -217,6 +217,7 @@ import { decomposeConvex, isSimpleLoop, normalizeWinding } from "../lib/polygon"
 import { deleteLevel, listLevels, loadLevel, saveLevel } from "./api";
 import {
   emissiveMapNames,
+  gltfLoader,
   HDRI_ASSETS,
   hdriNames,
   isSolidSurface,
@@ -227,6 +228,8 @@ import {
   TEXTURE_ASSETS,
 } from "../render3d/assets";
 import * as THREE from "three";
+import { ROCK_HASH_KEY, ROCK_INDEX_KEY, ROCK_TEXTURES, rockBodies, rockNodeName, rocksUrl } from "../render3d/rocks";
+import { silhouette, type SilTriangle } from "../lib/silhouette";
 import { Scene3D, type Scene3DLevel } from "../render3d/scene";
 import {
   focalLengthFromFov,
@@ -4382,6 +4385,217 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     return best;
   }
 
+  // FIT COLLISION TO ROCK (docs/rocks.md, "Reference and actual outlines"). A
+  // rock body's geometry object is the REFERENCE outline its rock is generated
+  // from, and its collision object the ACTUAL outline the ball meets; this
+  // writes the actual one from the generated rock's own head-on silhouette.
+  //
+  // Which rock body of the level an editor body is, asked through the same
+  // `toLevelData` the save writes and the same `rockBodies` the generator
+  // reads, so the index and the hash are the ones the GLB was stamped with -
+  // never a second reckoning of the body order that could disagree with it.
+  function rockBodyOf(bodyId: number): {
+    rock: ReturnType<typeof rockBodies>[number];
+    itemOf: Map<SceneObjectData, number>;
+  } | null {
+    const itemOf = new Map<SceneObjectData, number>();
+    const data = toLevelData(model, itemOf);
+    const byId = new Map(model.items.map((i) => [i.id, i]));
+    const index = data.bodies.findIndex((b) =>
+      b.objects.some((o) => {
+        const id = itemOf.get(o);
+        return id !== undefined && byId.get(id)?.bodyId === bodyId;
+      }),
+    );
+    if (index < 0) return null;
+    const rock = rockBodies(data).find((r) => r.index === index);
+    return rock ? { rock, itemOf } : null;
+  }
+
+  // Which level's generated rocks the fit reads: `?rocks=NAME` on the editor's
+  // URL borrows another file's, as it does in play (`main.ts`) - the fast loop
+  // builds a few bodies to `public/rocks/test.glb` - and otherwise the file
+  // this level saves to.
+  function rocksNameForFit(): string | null {
+    const param = new URLSearchParams(location.search).get("rocks");
+    if (param === "0") return null;
+    return param ?? currentName;
+  }
+
+  // Offered on a rock body's geometry object and on its body panel. What it
+  // needs to go right is only known once the file is read (is there one, is it
+  // current), so the button is shown for any rock body and the refusals are
+  // said when it is pressed.
+  function addRockFitButton(row: HTMLElement, bodyId: number): void {
+    if (!rockBodyOf(bodyId)) return;
+    const b = button("Fit collision to rock", () => void fitCollisionToRock(bodyId));
+    b.title =
+      "Replace this body's collision outline with the head-on silhouette of its GENERATED rock (public/rocks/<level>.glb, or ?rocks=NAME): every triangle projected along z, rasterised at 1 cm, traced and simplified at 2 cm. The geometry object's outline stays as authored - it is the reference the rock is generated from - so its 'match collision' link is switched off. Refuses when the rock is missing or stale (regenerate with bun run assets:rocks <level>), or when the body has more than one rock geometry object or collision object.";
+    row.appendChild(b);
+  }
+
+  let fittingRock = false;
+  async function fitCollisionToRock(bodyId: number): Promise<void> {
+    if (fittingRock) return;
+    const refuse = (why: string): void => showToast(`fit collision to rock: ${why}`, "warn");
+    const name = rocksNameForFit();
+    if (name === null) {
+      refuse(
+        new URLSearchParams(location.search).get("rocks") === "0"
+          ? "rocks are off on this page (?rocks=0)"
+          : "this level has no file name yet - save it and generate its rocks first",
+      );
+      return;
+    }
+    const url = rocksUrl(name);
+    // The command that rebuilds what was read: the level's own file, written
+    // to the borrowed name when `?rocks=` named another.
+    const level = currentName ?? "<level>";
+    const regen = `bun run assets:rocks ${level}${name !== currentName ? ` --out public/rocks/${name}.glb` : ""}`;
+    fittingRock = true;
+    let root: THREE.Object3D;
+    try {
+      // Fetched by hand and uncached, as `loadLevelRocks` fetches it: a missing
+      // file is told apart from a broken one by its status, the dev server's
+      // HTML fallback is not handed to the decoder, and a GLB regenerated a
+      // moment ago is the one read rather than the page's first copy.
+      const [res, loader] = await Promise.all([fetch(url, { cache: "no-store" }), gltfLoader()]);
+      const type = res.headers.get("content-type") ?? "";
+      if (!res.ok || type.startsWith("text/html")) {
+        // The dev server answers a missing file with its HTML page and a 200,
+        // so that case is named for what it is rather than by its status.
+        const why = res.ok ? "not found" : String(res.status);
+        refuse(`no generated rocks at ${url} (${why}) - run: ${regen}`);
+        return;
+      }
+      root = (await loader.parseAsync(await res.arrayBuffer(), "")).scene;
+    } catch (err) {
+      refuse(`${url} failed to load: ${err instanceof Error ? err.message : String(err)}`);
+      return;
+    } finally {
+      fittingRock = false;
+    }
+
+    // Everything below reads the model as it is NOW, after the load: an edit
+    // made while the file was in flight is what the hash is checked against.
+    const found = rockBodyOf(bodyId);
+    if (!found) {
+      refuse("this body is no longer a rock body");
+      return;
+    }
+    const { rock, itemOf } = found;
+    if (rock.objects.length !== 1) {
+      refuse(
+        `body #${rock.index} has ${rock.objects.length} rock geometry objects; the fit handles a body with exactly one`,
+      );
+      return;
+    }
+    const collisions = bodyMembers(model.items, bodyId).filter((i) => i.object === "collision");
+    if (collisions.length !== 1) {
+      refuse(
+        `body #${rock.index} has ${collisions.length} collision objects; the fit handles a body with exactly one`,
+      );
+      return;
+    }
+    const collision = collisions[0]!;
+    if (collision.shape.kind === "path" || collision.shape.kind === "belt") {
+      refuse(`body #${rock.index}'s collision object is a ${collision.shape.kind === "path" ? "curve" : "belt"}, not an outline`);
+      return;
+    }
+    const geomId = itemOf.get(rock.objects[0]!);
+    const geom = model.items.find((i) => i.id === geomId);
+    if (!geom) {
+      refuse("could not find the rock's geometry object");
+      return;
+    }
+
+    // The body's node, found as `mountRocks` finds it: by the index the
+    // generator stamped on it, with its name as the fallback.
+    let node: THREE.Object3D | undefined;
+    root.traverse((o) => {
+      if (!node && o.userData[ROCK_INDEX_KEY] === rock.index) node = o;
+    });
+    node ??= root.getObjectByName(rockNodeName(rock.index));
+    if (!node) {
+      refuse(`${url} has no rock for body #${rock.index} - run: ${regen}`);
+      return;
+    }
+    if (node.userData[ROCK_HASH_KEY] !== rock.hash) {
+      refuse(
+        `rock is stale, regenerate: body #${rock.index} has changed since ${url} was built - run: ${regen}`,
+      );
+      return;
+    }
+
+    // Every triangle of the node in the file's world space (three's frame: x
+    // right, y UP, z toward the camera, metres), projected ORTHOGRAPHICALLY
+    // along z - z dropped - and turned into the sim's y-down world metres (see
+    // `threeY`). A generated node is exported at the identity, but its
+    // matrices are applied anyway so a transformed one is read right too.
+    root.updateMatrixWorld(true);
+    const tris: SilTriangle[] = [];
+    const m = new THREE.Matrix4();
+    const inst = new THREE.Matrix4();
+    const a = new THREE.Vector3();
+    const b = new THREE.Vector3();
+    const c = new THREE.Vector3();
+    const flat = (v: THREE.Vector3): { x: number; y: number } => ({ x: v.x, y: -v.y });
+    node.traverse((o) => {
+      const mesh = o as THREE.Mesh;
+      if (!mesh.isMesh) return;
+      const pos = mesh.geometry.getAttribute("position");
+      if (!pos) return;
+      const index = mesh.geometry.getIndex();
+      const count = index ? index.count : pos.count;
+      const im = o as THREE.InstancedMesh;
+      const instances = im.isInstancedMesh ? im.count : 1;
+      for (let k = 0; k < instances; k++) {
+        m.copy(mesh.matrixWorld);
+        if (im.isInstancedMesh) {
+          im.getMatrixAt(k, inst);
+          m.multiply(inst);
+        }
+        for (let t = 0; t + 2 < count; t += 3) {
+          const i0 = index ? index.getX(t) : t;
+          const i1 = index ? index.getX(t + 1) : t + 1;
+          const i2 = index ? index.getX(t + 2) : t + 2;
+          a.fromBufferAttribute(pos, i0).applyMatrix4(m);
+          b.fromBufferAttribute(pos, i1).applyMatrix4(m);
+          c.fromBufferAttribute(pos, i2).applyMatrix4(m);
+          tris.push([flat(a), flat(b), flat(c)]);
+        }
+      }
+    });
+    if (!tris.length) {
+      refuse(`body #${rock.index}'s rock has no triangles`);
+      return;
+    }
+    let outline: { x: number; y: number }[];
+    try {
+      outline = silhouette(tris).verts;
+    } catch (err) {
+      refuse(err instanceof Error ? err.message : String(err));
+      return;
+    }
+    const local = outline.map((p) => toLocal(collision, new Vec2(p.x, p.y)));
+    if (local.length < 3 || !isSimpleLoop(local)) {
+      refuse(`the traced silhouette (${local.length} vertices) is not a simple outline`);
+      return;
+    }
+
+    beginAction();
+    // The reference stays as authored - that is the point - so the link that
+    // would copy the new outline straight back onto it goes first.
+    geom.matchId = 0;
+    collision.shape = { kind: "poly", verts: normalizeWinding(local) };
+    markDirty();
+    rebuildInspector();
+    showToast(
+      `fit collision to rock: body #${rock.index} now collides as its rock's silhouette (${local.length} vertices, from ${tris.length} triangles)`,
+      "ok",
+    );
+  }
+
   // What the shapes are made of: a material, a thickness through the z axis the
   // 2D view cannot show, and the mass those two work out to. Per SHAPE, not per
   // body - the one geometry property a compound body does not collapse onto its
@@ -4637,12 +4851,40 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           for (const b of items) b.visual.depth = null;
         },
       });
-      num("bevel", (v) => (v.bevel ?? 0) * M2PX, (v, b) => (v.bevel = Math.max(0, b) * PX), 1, {
-        placeholder: items.length > 1 ? "mixed" : "none",
-        onEmpty: () => {
-          for (const b of items) b.visual.bevel = null;
-        },
-      });
+      // The bevel is the flat extrusion's edge break, and a ROCK has a taper in
+      // its place (below): a rock's extrusion draws the taper and not the bevel
+      // (`primitiveGeometry`), so the field is offered only where something
+      // selected is not a rock.
+      const rocks = items.filter((b) => ROCK_TEXTURES.has(b.visual.texture));
+      if (rocks.length < items.length) {
+        num("bevel", (v) => (v.bevel ?? 0) * M2PX, (v, b) => (v.bevel = Math.max(0, b) * PX), 1, {
+          placeholder: items.length > 1 ? "mixed" : "none",
+          onEmpty: () => {
+            for (const b of items) b.visual.bevel = null;
+          },
+        });
+      }
+      // A GENERATED ROCK's taper (docs/rocks.md), offered only where one of the
+      // selected objects wears a rock texture - the only thing that reads it.
+      // Where it starts, in front of the object's own plane, in scene pixels
+      // like `bevel`; and how far the surface leans in from the outline's wall,
+      // in degrees (0 = a straight extrusion of the outline, 90 = a flat top at
+      // the start). Both are in the rock's hash, so an edit marks it stale, and
+      // the 3D view draws the tapered solid as they change.
+      if (rocks.length > 0) {
+        num(
+          "taper start",
+          (v) => v.taperStart * M2PX,
+          (v, x) => (v.taperStart = Math.max(0, x) * PX),
+          1,
+        );
+        num(
+          "taper angle",
+          (v) => v.taperAngle,
+          (v, a) => (v.taperAngle = Math.max(0, Math.min(90, a))),
+          1,
+        );
+      }
     }
 
     // The surface, offered whatever the kind. It is what an extrusion is
@@ -4967,6 +5209,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // The link that keeps a look and the collision shape it dresses one
     // outline; beside the transform fields, since it is those it takes over.
     if (!solid) addMatchField(g, bodies);
+    // ...and the edit that deliberately breaks that link for a generated rock:
+    // the collision outline written from the rock itself. One object at a time,
+    // since it rewrites that object's body.
+    if (!solid && bodies.length === 1 && ROCK_TEXTURES.has(bodies[0]!.visual.texture)) {
+      const row = el("div", "ed-row");
+      addRockFitButton(row, bodies[0]!.bodyId);
+      if (row.childElementCount) g.appendChild(row);
+    }
     // What a thing LOOKS like is a geometry object's business and only its own.
     // A collision shape is drawn by whichever geometry object dresses it, and
     // `toLevelData` writes no look for a collision object at all - so these
@@ -5159,10 +5409,48 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         addMoverFields(g, leads);
       }
     }
+    // The generated rock's seed, for a rock body whatever it is built of - one
+    // of geometry alone has no leads and is still a rock.
+    addRockSeedField(g, members);
     // ...and the fill, which only a body written from a collision lead has: a
     // body of pure decoration is painted by its objects' own colours, and a
     // body that is nothing but a light is not painted at all.
     if (leads.length) addFillFields(g, num, leads, () => syncEditedBodies(leads));
+  }
+
+  // The seed of a body's GENERATED rock (see `LevelBodyData.rockSeed`), offered
+  // only where every selected body is one `rockBodies` counts - the question
+  // the fit button asks. Read and written on EVERY member rather than on the
+  // leads, because a rock body of geometry alone has none (see `EdItem.rockSeed`).
+  //
+  // The loop it serves is regenerate, look, bump: so beside the number is the
+  // bump itself, which moves each body on to its own next seed. Changing it
+  // marks the body's rock stale, and play shows the extrusion until
+  // `bun run assets:rocks <level>` is run again.
+  function addRockSeedField(g: HTMLElement, members: EdItem[]): void {
+    const ids = [...new Set(members.map((m) => m.bodyId))];
+    if (ids.length === 0 || !ids.every((id) => rockBodyOf(id))) return;
+    const all = ids.flatMap((id) => bodyMembers(model.items, id));
+    const num = groupNum(g, all);
+    const input = num(
+      "rock seed",
+      (b) => b.rockSeed,
+      (b, v) => (b.rockSeed = Math.max(0, Math.round(v))),
+      1,
+    );
+    input.min = "0";
+    input.title =
+      "Seeds every random choice in this body's generated rock. Changing it marks the rock stale - play shows the flat extrusion until the rocks are regenerated (bun run assets:rocks <level>).";
+    const row = el("div", "ed-row");
+    const next = button("Next seed", () => {
+      beginAction();
+      for (const b of all) b.rockSeed += 1;
+      markDirty();
+      refreshFields();
+    });
+    next.title = "Add 1 to the rock seed, then regenerate the rocks to see the new one.";
+    row.appendChild(next);
+    g.appendChild(row);
   }
 
   // THE BODY panel: a container with a transform and the properties a body has
@@ -5217,6 +5505,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       ? "This body's origin is already on its centre of mass."
       : "Move this body's origin onto its centre of mass - the point the engine builds it about - and take up the step in every object's offset. Nothing moves in the level.";
     row.appendChild(centre);
+    addRockFitButton(row, id);
     g.appendChild(row);
 
     addBodyProps(g, members);
@@ -7358,6 +7647,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // the "nothing can" every body has until one is made.
       breakForce: 0,
       durability: 1,
+      rockSeed: 0,
       // Hook-proof is opt-in: a fresh shape is one the hook can catch.
       impermeable: false,
       // ...and so is standing out of something's way: a fresh shape is in
