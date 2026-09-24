@@ -332,9 +332,62 @@ if (entry.test(manifest)) {
   console.log(`[rock] manifest: add to MESH_ASSETS in src/render3d/assets.ts:\n  "${job.key}": {\n    file: "/meshes/${job.key}.glb",\n    sha256: "${hash}",\n    bytes: ${bytes.length},\n    source: "tools/blender/rock_asset.py from ${relative(jobPath)}; textures <set source>",\n    author: "<you> (textures: <set author>)",\n    license: "CC0",\n  },`);
 }
 
+// A moss glows (docs/lighting-and-surfaces.md, "Glowing props"): its mesh
+// object emits MOSS_GLOW, and a point light of the same colour hangs
+// MOSS_LIGHT_OUT off the moss, away from the rock it grows on, so it lights the
+// rock and the ball without a hot spot where it touches the moss.
+const MOSS_GLOW = "#2fe6d0";
+const MOSS_GLOW_INTENSITY = 0.6;
+const MOSS_LIGHT = { z: 70, intensity: 3, range: 350 };
+const MOSS_LIGHT_OUT = 0.3;
+
+// The area centroid of an outline.
+function centroid(v: Vec[]): Vec {
+  let a = 0;
+  let cx = 0;
+  let cy = 0;
+  v.forEach((p, i) => {
+    const q = v[(i + 1) % v.length]!;
+    const c = p.x * q.y - q.x * p.y;
+    a += c;
+    cx += (p.x + q.x) * c;
+    cy += (p.y + q.y) * c;
+  });
+  return { x: cx / (3 * a), y: cy / (3 * a) };
+}
+
+// The moss's light, in the body's own frame (pixels, y down).
+function mossLight(index: number, rockIndex: number): Obj {
+  const moss = collisionOutline(index);
+  const rock = collisionOutline(rockIndex);
+  if (typeof moss === "string") fail(moss);
+  if (typeof rock === "string") fail(rock);
+  const m = centroid(moss);
+  const r = centroid(rock);
+  const d = Math.hypot(m.x - r.x, m.y - r.y) || 1;
+  const body = level.bodies[index];
+  // World metres y up -> world pixels y down -> the body's frame.
+  const wx = (m.x + ((m.x - r.x) / d) * MOSS_LIGHT_OUT) * PPM - body.x;
+  const wy = -(m.y + ((m.y - r.y) / d) * MOSS_LIGHT_OUT) * PPM - body.y;
+  const c = Math.cos(-(body.rot ?? 0));
+  const sn = Math.sin(-(body.rot ?? 0));
+  const round = (n: number) => Math.round(n * 10) / 10;
+  return { type: "light", x: round(wx * c - wy * sn), y: round(wx * sn + wy * c), color: MOSS_GLOW, ...MOSS_LIGHT };
+}
+
 if (has("place")) {
   const body = level.bodies[bodyIndex];
-  body.objects = [...body.objects.filter((o) => o.type !== "geometry"), { type: "geometry", kind: "mesh", mesh: job.key }];
+  // What the author set on the prop object already placed (its glow, its
+  // depth) outlives a re-place; only the key is this tool's.
+  const prior = body.objects.find((o) => o.type === "geometry" && o.kind === "mesh" && o.mesh === job.key);
+  const glow = kind === "moss" && !prior ? { emissive: MOSS_GLOW, emissiveIntensity: MOSS_GLOW_INTENSITY } : {};
+  body.objects = [
+    ...body.objects.filter((o) => o.type !== "geometry"),
+    { ...prior, ...glow, type: "geometry", kind: "mesh", mesh: job.key },
+  ];
+  if (kind === "moss" && !body.objects.some((o) => o.type === "light")) {
+    body.objects.push(mossLight(bodyIndex, Number(mossOf)));
+  }
   writeFileSync(levelPath, JSON.stringify(level, null, 2) + "\n");
   console.log(`[rock] ${relative(levelPath)}: body ${bodyIndex} now draws "${job.key}" (reload an open editor tab before editing)`);
 } else {

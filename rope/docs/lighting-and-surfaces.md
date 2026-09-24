@@ -186,7 +186,7 @@ A dark level is lit by the world itself rather than by anything the player carri
 The mushroom is a **waking light**: a point light object with a `wake` distance, whose body's glowing shapes follow it (`render3d/glow.ts` for the law, `render3d/lights.ts` for the pool).
 There is no new object type: the lantern pattern (a glowing geometry object and a light object in one body) is already how the format says "this thing is a source", and a mushroom is that pattern with a light that starts dark.
 A separate `glow` type was rejected because it would be every editor touchpoint for lights again, and a source that could disagree with its own light.
-Lichen is the same light without `wake`, and waits on the emissive moss texture.
+Lichen is the same light without `wake`; the river's moss props are it (see **Glowing props**).
 
 **It is render-side, driven by the clock the rig is handed**, exactly like flicker and the beams.
 The renderer reads the ball's drawn position (`renderPosition(alpha)`) and writes nothing back, so no replay can diverge on it; putting it in the sim would only give it a path into replays and the determinism contract, for a glow that has no effect on the ball.
@@ -239,6 +239,27 @@ Measured on the river (`--frames 100..580 --every 6 --3d --probe all` over a run
 
 `cli render3d` holds the law (the phases against time, the cancelled delay, the hysteresis, the re-entry, the clamp), the scaling (`wake` like `range`, the times untouched), the pool's assignment and size, the instance key, and the editor's fields and `+ Glow` body; none of the spacing, reach or brightness has a case, because those are the play's to decide.
 The river (`levels/ball.json`) carries four `+ Glow` bodies along the route from the spawn, unplayed.
+
+## Glowing props
+
+The river's moss props (bodies 145, 160, 190, 191 and 192 of `levels/ball.json`) are bioluminescent: they glow, and they light the rock they grow on and the ball that passes them.
+Each is the lantern pattern with nothing new in the format: the mesh geometry object authors `emissive` and `emissiveIntensity`, and the body carries an always-on point light of the same colour.
+
+**The glow** (`render3d/propGlow.ts`).
+A mesh prop keeps the materials its file was exported with, so an authored emission cannot go through `surfaceFor` as a primitive's does.
+When the object authors `emissive` and no `texture`, `mountVisual` swaps every material of the loaded prop for a copy that emits the authored colour, masked by the luminance of the prop's own base colour map.
+Three's `emissiveMap = map` was tried first and rejected: it multiplies the glow by the albedo's colour, so the moss glowed the green it is painted and read as green paint.
+The mask is stretched over the map's own 5th to 95th luminance percentile (measured once per material on a 64 px thumbnail), because the moss set's albedo spans only 0.12 to 0.23 linear luminance and unstretched the pattern is a flat wash.
+It is read `GLOW_MIP_BIAS` (2.5) mip levels coarse, because at the map's own detail it is single-texel white speckle and moss glows in clumps, and it never goes below `GLOW_FLOOR` (0.3), so the hollows glow faintly rather than not at all.
+The copies are cached by source material and glow and never mutated, so the editor's rebuild on every revision does not leak them; the patch is one program (`prop-glow`), compiled under the loading screen like any other.
+A prop wearing an authored `texture` glows through `surfaceFor` as a primitive does, and a waking light does not drive a prop's glow (only primitives are in its driven set).
+
+**The light** hangs 0.3 m off the moss's outline centroid, away from its rock's centroid, 0.7 m in front of the plane: `#2fe6d0`, 3 cd, 3.5 m reach, no shadow.
+At the moss itself (z 0.3 m) it was an inverse-square white hot spot on the rock right beside it; out in the air the rock and the moss are lit evenly.
+The glow and the light are one colour on purpose, and the emission is 0.6: higher tone-maps the teal to pale mint, which reads as lit rather than glowing.
+These are always-on lights and spend `LIGHT_BUDGET` in authored order: the river has 15 of its 16 after them.
+`bun run assets:rock ... --moss-of N --place` writes both for a moss placed for the first time (`MOSS_*` in `scripts/rock-asset.ts`).
+None of the colour, strength or placement has a case, because those are the play's to decide; `cli render3d` holds the material swap, the shader splice and the stretch.
 
 ## Painted light (removed)
 

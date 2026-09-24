@@ -54,6 +54,7 @@ import { buildWater } from "./water";
 import { DEFAULT_LIGHT_Z, LightRig, type DrivenEmission, type MountedLight } from "./lights";
 import { isWaking } from "./glow";
 import { applyProjection } from "./projection";
+import { glowProp } from "./propGlow";
 import { BeltRing, BeltTread } from "./beltTread";
 import { beltLoopOf } from "../render/beltTread";
 import { orientTo, placeAt, threeY } from "./space";
@@ -295,6 +296,12 @@ export function mountVisual(
         const mesh = o as THREE.Mesh;
         if (mesh.isMesh) mesh.material = material;
       });
+    }
+    // A prop that keeps its own materials glows in its own pattern when the
+    // object authors an emission; one wearing an authored texture already has
+    // the emission in `material` above.
+    if (g?.texture === undefined && g?.emissive !== undefined) {
+      glowProp(obj, g.emissive, g.emissiveIntensity ?? 1);
     }
     obj.traverse((o) => {
       const mesh = o as THREE.Mesh;

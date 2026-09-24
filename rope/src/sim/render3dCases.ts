@@ -151,6 +151,7 @@ import {
 import { AVATAR_FOG, AVATAR_PROGRAM_KEY, AVATAR_WRAP, wearAvatar } from "../render3d/avatarSurface";
 import { beamFarRadius, beamRadiusAt, BEAM_SOURCE_RADIUS, seedDust } from "../render3d/beam";
 import { IRON_SURFACE } from "../render3d/assets";
+import { glowProp, patchGlow, stretch } from "../render3d/propGlow";
 import { HDRI_ASSETS, hdriNames } from "../render3d/assets";
 import { PIXELS_PER_METER, PX } from "../engine/units";
 
@@ -2773,6 +2774,71 @@ function propEmission(): CaseResult[] {
       name: "props: a material with no emission map is left dark",
       pass: untouched,
       detail: untouched ? "no map, no glow" : "lit a material that ships no emission",
+    },
+    ...propGlow(),
+  ];
+}
+
+// A prop whose geometry object authors `emissive` (the river's moss) glows in
+// its own pattern: its materials are swapped for cached copies, the file's own
+// materials are left alone, and the mask is spliced into three's real
+// physical fragment shader.
+function propGlow(): CaseResult[] {
+  const prop = () => {
+    const group = new THREE.Group();
+    const source = new THREE.MeshPhysicalMaterial({ color: 0x44aa44 });
+    group.add(new THREE.Mesh(new THREE.BufferGeometry(), source));
+    group.add(new THREE.Mesh(new THREE.BufferGeometry(), [source, new THREE.MeshBasicMaterial()]));
+    return { group, source };
+  };
+  const { group, source } = prop();
+  const twin = group.clone(true);
+  glowProp(group, "#2fe6d0", 0.6);
+  glowProp(twin, "#2fe6d0", 0.6);
+  const [one, many] = group.children as THREE.Mesh[];
+  const copy = one!.material as THREE.MeshStandardMaterial;
+  const arr = many!.material as THREE.Material[];
+  const swapped =
+    copy !== source &&
+    copy.emissive.getHexString() === "2fe6d0" &&
+    copy.emissiveIntensity === 0.6 &&
+    source.emissive.getHex() === 0 &&
+    arr[0] === copy &&
+    (arr[1] as THREE.MeshBasicMaterial).isMeshBasicMaterial === true &&
+    (twin.children[0] as THREE.Mesh).material === copy;
+
+  const fragment = THREE.ShaderLib.physical.fragmentShader;
+  const patched = patchGlow(fragment);
+  const spliced =
+    patched.includes("uniform vec2 uGlowRange;") &&
+    patched.indexOf("smoothstep( uGlowRange.x") > patched.indexOf("#include <emissivemap_fragment>");
+  let refused = false;
+  try {
+    patchGlow("void main() {}");
+  } catch {
+    refused = true;
+  }
+
+  const lum = Array.from({ length: 100 }, (_, i) => i / 100);
+  const [lo, hi] = stretch(lum);
+  const [flatLo, flatHi] = stretch([0.2, 0.2, 0.2]);
+  const stretched = lo === 0.05 && hi === 0.95 && flatHi > flatLo;
+
+  return [
+    {
+      name: "props: an authored glow swaps a prop's materials for shared glowing copies and leaves the file's own dark",
+      pass: swapped,
+      detail: `copy ${copy !== source} emissive #${copy.emissive.getHexString()} x${copy.emissiveIntensity}, source #${source.emissive.getHexString()}, shared across mounts ${(twin.children[0] as THREE.Mesh).material === copy}`,
+    },
+    {
+      name: "props: the glow mask is spliced after three's emissive chunk, and a three without it is refused",
+      pass: spliced && refused,
+      detail: `spliced ${spliced}, refused ${refused}`,
+    },
+    {
+      name: "props: the glow mask spans its map's 5th to 95th luminance percentile, and a flat map divides by nothing",
+      pass: stretched,
+      detail: `ramp -> ${lo}..${hi}, flat -> ${flatLo}..${flatHi}`,
     },
   ];
 }
