@@ -2990,12 +2990,24 @@ export const MESH_ASSETS: Record<string, MeshAsset> = {
   // Blender from a level body's collision outline, baked from the high mesh
   // onto a low one, wearing the CC0 "cliff rocks 07" set from freestylized.com
   // (base colour desaturated and lifted, see tools/blender/rock_asset.py).
-  // Metres, origin at the outline's bounding-box centre, front toward +z.
+  // Metres, origin at the BODY's origin (the mesh object sits at 0,0), front
+  // toward +z.
   "rock-196": {
     file: "/meshes/rock-196.glb",
-    sha256: "d8d96f7e8d6601a9add08d7b01778370be3d06a58f5eecda45fbf9d2b7134a44",
-    bytes: 128792,
+    sha256: "7a14294e184b948d9f632508e9b2b47218e047e3f482ac18c53e3971c5b317f3",
+    bytes: 119420,
     source: "tools/blender/rock_asset.py from levels/ball.json body 196; textures https://freestylized.com/material/cliff_rocks_07/",
+    author: "Tristan Bray (textures: freestylized.com)",
+    license: "CC0",
+  },
+  // The moss carpet over rock-196, from its own body's outline (body 192; the
+  // hook attaches to moss, so it is its own body and its own prop), wearing the
+  // CC0 "moss ground 02" set from freestylized.com.
+  "moss-192": {
+    file: "/meshes/moss-192.glb",
+    sha256: "6dbaeeb9b4c43ff133b01ded9b9d73cac2661a588e2f660a47706f09d2192ec6",
+    bytes: 461992,
+    source: "tools/blender/rock_asset.py from levels/ball.json body 192; textures https://freestylized.com/material/moss_ground_01/",
     author: "Tristan Bray (textures: freestylized.com)",
     license: "CC0",
   },

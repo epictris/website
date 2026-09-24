@@ -48,6 +48,7 @@ import bpy
 import bmesh
 import numpy as np
 from mathutils import Vector
+from mathutils.bvhtree import BVHTree
 
 # ---------------------------------------------------------------- parameters
 # Detail constants are authored for a 1 m rock and scaled by the rock's size.
@@ -73,6 +74,36 @@ AO_SAMPLES = 64
 RENDER_SAMPLES = 96
 RENDER_SIZE = 900
 LOW_TRIS = 2500        # the shipped mesh's triangle budget (`--tris`)
+# A `kind: "moss"` job: the outline of a moss BODY (its own collision; the hook
+# attaches to moss, not rock) with a `rock` reference to the rock job it grows
+# on. The moss is the rock's own high surface inside the moss outline, pushed
+# out into a thick skin, so it wraps over the top and down the faces like a
+# growth, with a rounded lip, a scalloped edge and drips. Moving the moss body
+# means regenerating the moss.
+MOSS_THICKNESS = 0.05  # metres, the skin over a face
+MOSS_TOP_EXTRA = 0.4   # share more on faces that face up
+MOSS_FILL_MAX = 0.05   # metres: the skin grows out toward its own outline, up to
+                       # this (0.3 made a blob whose top copied the outline's
+                       # corners as ridges and whose thin ends went to spikes)
+MOSS_LIP = 0.03        # the thinnest the skin gets, at its edge
+MOSS_CLEARANCE = 0.04  # the moss stays at least this far outside the DRAWN rock
+MOSS_FALLOFF = 0.08    # metres in from the edge over which it thickens
+MOSS_EDGE_WOBBLE = 0.04  # lobes on the edge, metres
+MOSS_EDGE_SCALE = 0.3    # lobe spacing, metres
+MOSS_DRIP = 0.05       # how far the lower edge is eaten back between lobes, metres
+MOSS_DRIP_FRONT = 0.12 # ...on the face toward the camera, where the lobes should
+                       # read as moss drooping down the rock
+MOSS_DRIP_SCALE = 0.3  # lobe wavelength along the edge, metres
+MOSS_CLUMP = 0.2       # bulge size, metres (soft noise, not cells)
+MOSS_CLUMP_AMOUNT = 0.12 # share of the thickness the bulges modulate: a carpet
+                         # drapes and droops, it does not bulge outward
+MOSS_SMOOTH = 8
+MOSS_BASE_VOXEL = 0.03   # the rock copy the skin grows from is remeshed at this
+MOSS_BASE_SMOOTH = 12    # and smoothed this much: facets and cracks go
+MOSS_VOXEL = 0.02      # the closed skin is remeshed at this, then smoothed: soft
+MOSS_FIELD_SMOOTH = 25  # Laplacian passes over the thickness field
+MOSS_TILE = 0.5
+MOSS_TRIS = 1800
 LOW_REMESH_OVER = 2.5  # the low's remesh aims this factor over the budget
 LOW_DISSOLVE_DEG = 10.0
 
@@ -343,6 +374,236 @@ def unwrap(obj):
     bpy.ops.object.mode_set(mode="OBJECT")
 
 
+def smoothstep(a, b, x):
+    t = min(1.0, max(0.0, (x - a) / (b - a)))
+    return t * t * (3 - 2 * t)
+
+
+def ray_to_outline(p, d, poly):
+    """Distance along the 2D ray p + t d (t > 0) to the first outline edge."""
+    best = None
+    n = len(poly)
+    for i in range(n):
+        a = poly[i]
+        b = poly[(i + 1) % n]
+        ex, ey = b[0] - a[0], b[1] - a[1]
+        den = d[0] * ey - d[1] * ex
+        if abs(den) < 1e-9:
+            continue
+        t = ((a[0] - p[0]) * ey - (a[1] - p[1]) * ex) / den
+        u = ((a[0] - p[0]) * d[1] - (a[1] - p[1]) * d[0]) / den
+        if t > 0 and 0 <= u <= 1 and (best is None or t < best):
+            best = t
+    return best
+
+
+def rock_cap(real, region, clearance, name, scale):
+    """A shell over the DRAWN rock inside the moss cover: its faces there,
+    pushed out by `clearance` and closed inward. Fused into the moss by the
+    remesh it guarantees the moss encloses every rock peak, which no
+    vertex-by-vertex lift can (a peak comes up between the moss's vertices)."""
+    me = real.data
+    n = len(me.vertices)
+    co = np.empty(n * 3, dtype=np.float32)
+    me.vertices.foreach_get("co", co)
+    co = co.reshape(n, 3)
+    nrm = np.empty(n * 3, dtype=np.float32)
+    me.vertices.foreach_get("normal", nrm)
+    nrm = nrm.reshape(n, 3)
+    w = cover_weights(co, nrm, region, scale)
+    faces = [list(p.vertices) for p in me.polygons if w[list(p.vertices)].mean() > 0.3]
+    if not faces:
+        return None
+    used = sorted({v for f in faces for v in f})
+    remap = {v: i for i, v in enumerate(used)}
+    # Feathered by the cover: at full cover the cap stands the clearance off
+    # the rock, toward the edge it sinks under the skin, so its boundary
+    # never emerges as a ledge (a notch on the moss surface).
+    verts = [tuple(me.vertices[v].co + me.vertices[v].normal * (clearance * float(w[v]))) for v in used]
+    obj = new_object(name, verts, [[remap[v] for v in f] for f in faces])
+    bpy.context.view_layer.objects.active = obj
+    # Nothing of the cap outside the moss outline in the side view.
+    pull_into_outline(obj, region, 0.002)
+    mod = obj.modifiers.new("close", "SOLIDIFY")
+    mod.thickness = -(clearance + 0.06)
+    mod.offset = 1.0
+    mod.use_rim = True
+    apply_all(obj)
+    return obj
+
+
+def lift_clear(obj, real, clearance):
+    """Hold the finished moss solid's OUTER surface at least `clearance`
+    outside the real rock: the remesh and smoothing after the skin was closed
+    sag it under the rock's sharp peaks, which then poke through. Only verts
+    whose normal agrees with the rock's are outer surface; the underside and
+    the rim, which are meant to be inside, are left alone."""
+    tree = BVHTree.FromObject(real, bpy.context.evaluated_depsgraph_get())
+    me = obj.data
+    n = len(me.vertices)
+    co = np.empty(n * 3, dtype=np.float32)
+    me.vertices.foreach_get("co", co)
+    co = co.reshape(n, 3)
+    nrm = np.empty(n * 3, dtype=np.float32)
+    me.vertices.foreach_get("normal", nrm)
+    nrm = nrm.reshape(n, 3)
+    lifted = 0
+    for i in range(n):
+        v = Vector(co[i])
+        loc, rn, _, _ = tree.find_nearest(v)
+        if loc is None or rn.dot(Vector(nrm[i])) < 0.3:
+            continue
+        gap = (v - loc).dot(rn)
+        if gap < clearance:
+            co[i] = loc + rn * clearance
+            lifted += 1
+    me.vertices.foreach_set("co", co.reshape(-1))
+    me.update()
+    return lifted
+
+
+def cover_weights(co, nrm, region, scale):
+    """Per-vertex cover of the moss outline, 0..1: strictly inside the outline
+    in the side view, fading in over MOSS_FALLOFF from an edge that is
+    scalloped inward and, toward the camera, droops in lobes along its lower
+    edge. Shared by the skin and the rock cap so both stop at the same edge."""
+    n = len(co)
+    wob = bpy.data.textures.new("moss-wobble", "CLOUDS")
+    wob.noise_scale = MOSS_EDGE_SCALE * scale
+    wob.noise_depth = 0
+    drip = bpy.data.textures.new("moss-drip", "CLOUDS")
+    drip.noise_scale = MOSS_DRIP_SCALE * scale
+    drip.noise_depth = 0
+    w = np.zeros(n, dtype=np.float32)
+    for i in range(n):
+        x, y, z = (float(v) for v in co[i])
+        q, d = nearest_on_outline((x, z), region)
+        if not point_in_poly((x, z), region):
+            # Strictly inside the moss collider: the editor's outline is where
+            # the moss ends, and the droop is drawn into that outline.
+            continue
+        # Scallops and the lobes' gaps only ever eat INTO the outline.
+        d -= abs(wob.evaluate((x, y, z))[3] - 0.5) * 2 * MOSS_EDGE_WOBBLE * scale
+        if z > q[1]:
+            # The nearest outline point is BELOW this one, so it is near the
+            # lower edge (the earlier test had this the wrong way round and
+            # the droop never applied to anything inside the outline).
+            # Toward the camera (Blender -y) the lower edge droops in lobes: a
+            # sinusoid along the edge (zero retreat at a lobe's centre, full
+            # between lobes), so the edge is a gradual curve by construction; a
+            # thresholded noise gave tongues a few centimetres wide however
+            # wide its features were. The noise only varies the amplitude.
+            front = smoothstep(0.2, 0.7, -float(nrm[i, 1]))
+            reach = (MOSS_DRIP + (MOSS_DRIP_FRONT - MOSS_DRIP) * front) * scale
+            wave = 0.5 - 0.5 * math.cos(2 * math.pi * x / (MOSS_DRIP_SCALE * scale))
+            amp = 0.75 + 0.5 * drip.evaluate((x, 0.0, 0.0))[3]
+            d -= wave * amp * reach
+        cover = smoothstep(0.0, MOSS_FALLOFF * scale, d)
+        w[i] = cover
+    return w
+
+
+def moss_from_rock(rock, name, region, seed, scale, real=None):
+    """The moss skin: every face of the rock's high mesh whose side-view
+    position lies inside the moss outline (scalloped, with drips hanging off
+    its lower edges) is copied and pushed out along its normal by the skin's
+    thickness, thin at the edge, thicker on top, modulated by rounded clumps;
+    the copy is closed underneath into the rock and remeshed into one solid
+    with a rounded lip."""
+    me = rock.data
+    n = len(me.vertices)
+    co = np.empty(n * 3, dtype=np.float32)
+    me.vertices.foreach_get("co", co)
+    co = co.reshape(n, 3)
+    nrm = np.empty(n * 3, dtype=np.float32)
+    me.vertices.foreach_get("normal", nrm)
+    nrm = nrm.reshape(n, 3)
+    w = cover_weights(co, nrm, region, scale)
+    faces = [list(p.vertices) for p in me.polygons if w[list(p.vertices)].mean() > 0.03]
+    if not faces:
+        raise RuntimeError("the moss outline covers no face of the rock")
+    used = sorted({v for f in faces for v in f})
+    remap = {v: i for i, v in enumerate(used)}
+    # Bulges from a soft noise: Voronoi domes creased where cells met.
+    clumps = bpy.data.textures.new("moss-bulges", "CLOUDS")
+    clumps.noise_scale = MOSS_CLUMP * scale
+    clumps.noise_depth = 0
+    thick = MOSS_THICKNESS * scale
+    lip = MOSS_LIP * scale
+    # The thickness field: the skin over a face, more on top, and where the
+    # normal has a side-view direction the skin grows out to the moss outline
+    # itself (straight up on top faces, sideways on side faces, so the visible
+    # moss is the editor's moss shape and the hook lands on what is drawn).
+    # The field is then smoothed over the mesh: per-vertex rays gave
+    # neighbours wildly different reaches and a spiky skin.
+    idx = {v: i for i, v in enumerate(used)}
+    t = np.zeros(len(used), dtype=np.float32)
+    for v in used:
+        x, y, z = (float(c) for c in co[v])
+        nx, nz = float(nrm[v, 0]), float(nrm[v, 2])
+        up = max(0.0, nz)
+        ti = thick * (1 + MOSS_TOP_EXTRA * up)
+        if point_in_poly((x, z), region):
+            if nz > 0.35:
+                reach = ray_to_outline((x, z), (0.0, 1.0), region)
+                if reach is not None:
+                    ti = max(ti, min(reach, MOSS_FILL_MAX * scale) * nz)
+            elif abs(nx) > 0.6:
+                reach = ray_to_outline((x, z), (1.0 if nx > 0 else -1.0, 0.0), region)
+                if reach is not None:
+                    ti = max(ti, min(reach, MOSS_FILL_MAX * scale) * abs(nx))
+        t[idx[v]] = ti
+    neighbours = [set() for _ in used]
+    for f in faces:
+        for i in range(len(f)):
+            a, b = idx[f[i]], idx[f[(i + 1) % len(f)]]
+            neighbours[a].add(b)
+            neighbours[b].add(a)
+    for _ in range(MOSS_FIELD_SMOOTH):
+        t = np.array([0.5 * t[i] + 0.5 * np.mean(t[list(nb)]) if nb else t[i] for i, nb in enumerate(neighbours)], dtype=np.float32)
+    verts = []
+    for v in used:
+        x, y, z = (float(c) for c in co[v])
+        dome = min(1.0, max(0.0, (clumps.evaluate((x, y, z))[3] - 0.3) / 0.4))
+        ti = lip + (float(t[idx[v]]) - lip) * w[v]
+        ti *= (1 - MOSS_CLUMP_AMOUNT) + MOSS_CLUMP_AMOUNT * dome
+        verts.append(tuple(co[v] + nrm[v] * ti))
+    if real is not None:
+        # The skin grows from a SOFTENED rock, whose smoothing sits below the
+        # real rock's sharp peaks; a peak then pokes through the moss. Every
+        # skin vertex is held at least MOSS_CLEARANCE outside the real rock.
+        tree = BVHTree.FromObject(real, bpy.context.evaluated_depsgraph_get())
+        clearance = MOSS_CLEARANCE * scale
+        pushed = 0
+        for i, v in enumerate(verts):
+            loc, nrm_r, _, _ = tree.find_nearest(Vector(v))
+            if loc is None:
+                continue
+            gap = (Vector(v) - loc).dot(nrm_r)
+            if gap < clearance:
+                verts[i] = tuple(loc + nrm_r * clearance)
+                pushed += 1
+        log(f"moss: {pushed} skin verts lifted clear of the rock")
+    obj = new_object(name, verts, [[remap[v] for v in f] for f in faces])
+    bpy.context.view_layer.objects.active = obj
+    # The skin's thickness may push it past the collider on top or at the
+    # sides; in the side view the moss must stay inside its outline exactly,
+    # so anything outside is pulled back onto it (a flat cap where it clips).
+    pulled = pull_into_outline(obj, region, 0.002)
+    if pulled:
+        log(f"moss: {pulled} skin verts clipped to the outline")
+    mod = obj.modifiers.new("close", "SOLIDIFY")
+    # Deep enough that the smoothing after the remesh cannot lift the
+    # underside out of the rock at the lip (a dark slot between the two).
+    mod.thickness = -(lip + 0.09 * scale)
+    mod.offset = 1.0
+    mod.use_rim = True
+    apply_all(obj)
+    remesh(obj, MOSS_VOXEL * scale)
+    smooth(obj, MOSS_SMOOTH, 0.5)
+    return obj, len(faces)
+
+
 # ------------------------------------------------------------------ material
 
 
@@ -480,7 +741,8 @@ def flood_background(imgs, coverage_from, normal_from=None, steps=48):
     marker = np.array(MARKER[:3], dtype=np.float32)
     # Unwritten texels still show the marker; a ray that hit a back face of
     # the high wrote black, which no texel of a rock is, so both are refilled.
-    filled = (np.abs(base[..., :3] - marker).max(axis=2) > 0.02) & (base[..., :3].max(axis=2) > 0.03)
+    magenta = (base[..., 0] > 0.45) & (base[..., 1] < 0.35) & (base[..., 2] > 0.45)
+    filled = (~magenta) & (base[..., :3].max(axis=2) > 0.03)
     if normal_from is not None:
         # A ray that hit a back face wrote a normal pointing INTO the low
         # surface (tangent-space blue near 0), which shades as a dark dot.
@@ -511,7 +773,7 @@ def flood_background(imgs, coverage_from, normal_from=None, steps=48):
         img.update()
 
 
-def low_poly(high, name, tris, scale):
+def low_poly(high, name, tris, scale, max_voxel=None, dissolve_deg=None):
     """The shipped mesh. Not a collapse of the high: quadric collapse merges the
     two walls of a groove into jagged bridging triangles (lumps and teeth in
     every crack). Instead a COARSE voxel remesh of the high, whose skin is a
@@ -526,11 +788,13 @@ def low_poly(high, name, tris, scale):
     # Triangles scale with 1/voxel^2; the dissolve then folds the flat facets
     # up, so aim the remesh a factor over the budget.
     voxel = math.sqrt(2.0 * area / (LOW_REMESH_OVER * tris))
+    if max_voxel is not None:
+        voxel = min(voxel, max_voxel)
     remesh(low, voxel)
     smooth(low, 2, 0.5)
     mod = low.modifiers.new("planar", "DECIMATE")
     mod.decimate_type = "DISSOLVE"
-    mod.angle_limit = math.radians(LOW_DISSOLVE_DEG)
+    mod.angle_limit = math.radians(dissolve_deg or LOW_DISSOLVE_DEG)
     apply_all(low)
     bpy.ops.object.mode_set(mode="EDIT")
     bpy.ops.mesh.select_all(action="SELECT")
@@ -628,7 +892,8 @@ def flood_background(imgs, coverage_from, normal_from=None, steps=48):
     marker = np.array(MARKER[:3], dtype=np.float32)
     # Unwritten texels still show the marker; a ray that hit a back face of
     # the high wrote black, which no texel of a rock is, so both are refilled.
-    filled = (np.abs(base[..., :3] - marker).max(axis=2) > 0.02) & (base[..., :3].max(axis=2) > 0.03)
+    magenta = (base[..., 0] > 0.45) & (base[..., 1] < 0.35) & (base[..., 2] > 0.45)
+    filled = (~magenta) & (base[..., :3].max(axis=2) > 0.03)
     if normal_from is not None:
         # A ray that hit a back face wrote a normal pointing INTO the low
         # surface (tangent-space blue near 0), which shades as a dark dot.
@@ -845,44 +1110,37 @@ def render(path, cam_pos, look_at, ortho_scale, size, samples, perspective=False
 # ---------------------------------------------------------------------- main
 
 
-def build(job, out_path, flags):
-    t0 = time.time()
-    name = job["name"]
-    seed = int(job.get("seed", 0))
-    rng = random.Random(seed * 7919 + 17)
-    depth = float(flags.get("depth") or job["depth"])
-
-    poly = [(float(p["x"]), float(p["y"])) for p in job["outline"]]
-    poly = dedupe(poly)
+def framed(job, flags):
+    """The job's outline centred on its bounding box, with the frame."""
+    poly = dedupe([(float(p["x"]), float(p["y"])) for p in job["outline"]])
     if signed_area(poly) < 0:
         poly.reverse()
     xs = [p[0] for p in poly]
     ys = [p[1] for p in poly]
-    cx, cy = (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2
-    poly = [(x - cx, y - cy) for (x, y) in poly]
+    # The frame's origin is the BODY's position when the job carries one (the
+    # mesh object then sits at the body's own origin, so an outline edit in
+    # the editor only means regenerating, never re-placing), else the
+    # outline's bounding-box centre.
+    if job.get("origin"):
+        cx, cy = float(job["origin"]["x"]), float(job["origin"]["y"])
+    else:
+        cx, cy = (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2
     width, height = max(xs) - min(xs), max(ys) - min(ys)
-    size = max(width, height)
-    scale = size / 1.0  # detail constants are authored for a 1 m rock
-    log(f"{name}: outline {len(poly)} verts, {width:.2f} x {height:.2f} m, depth {depth:.2f}, origin at world ({cx:.3f}, {cy:.3f})")
+    depth = float(flags.get("depth") or job["depth"])
+    return [(x - cx, y - cy) for (x, y) in poly], cx, cy, width, height, depth
 
-    clear_scene()
-    scene = bpy.context.scene
-    scene.unit_settings.system = "METRIC"
 
-    # 1. One rounded mass of the outline.
+def rock_high(job, name, poly, depth, scale, rng, flags, t0):
+    """Stages 1-3 of a rock: the rounded mass, the chisel facets, the cracks."""
     half = depth / 2
-    rock = prism(name, poly, half, max(RIM_BEVEL * half, 0.02), SIDE_BEVEL * scale)
     voxel = VOXEL * scale
+    rock = prism(name, poly, half, max(RIM_BEVEL * half, 0.02), SIDE_BEVEL * scale)
     remesh(rock, voxel)
     smooth(rock, SMOOTH_ITER)
     log(f"mass at voxel {voxel*100:.1f} cm: {len(rock.data.polygons)} faces ({time.time()-t0:.1f}s)")
-
-    # 2. Chisel facets, then rebuild a uniform skin over them.
     cuts = chisel(rock, rng, int(flags.get("cuts") or CUTS), CUT_DEPTH, CUT_MIN_Y, scale)
     remesh(rock, voxel)
     log(f"chiselled {cuts} facets ({time.time()-t0:.1f}s)")
-
-    # 3. Authored cracks.
     cracks = [[(float(p["x"]), float(p["y"])) for p in line] for line in job.get("cracks", [])]
     if cracks:
         moved = carve_cracks(rock, cracks, CRACK_RADIUS, CRACK_DEPTH, CRACK_WOBBLE, rng, scale)
@@ -890,12 +1148,98 @@ def build(job, out_path, flags):
     moved = pull_into_outline(rock, poly, 0.004)
     if moved:
         log(f"{moved} verts pulled back onto the outline")
+    smooth(rock, 1, 0.3)
+    return rock
+
+
+def build(job, out_path, flags, job_dir="."):
+    t0 = time.time()
+    name = job["name"]
+    seed = int(job.get("seed", 0))
+    rng = random.Random(seed * 7919 + 17)
+    poly, cx, cy, width, height, depth = framed(job, flags)
+    size = max(width, height)
+    half = depth / 2
+    scale = size / 1.0  # detail constants are authored for a 1 m rock
+    log(f"{name}: outline {len(poly)} verts, {width:.2f} x {height:.2f} m, depth {depth:.2f}, origin at world ({cx:.3f}, {cy:.3f})")
+
+    clear_scene()
+    scene = bpy.context.scene
+    scene.unit_settings.system = "METRIC"
+
+    kind = job.get("kind", "rock")
+    occluders = []
+    if kind == "moss":
+        # The rock it grows on, rebuilt exactly as its own job builds it (same
+        # seed, same flags-free depth), then moved into the moss's frame.
+        with open(os.path.join(job_dir, job["rock"])) as f:
+            rjob = json.load(f)
+        rpoly, rcx, rcy, rw, rh, rdepth = framed(rjob, {})
+        rscale = max(rw, rh) / 1.0
+        rrng = random.Random(int(rjob.get("seed", 0)) * 7919 + 17)
+        base = rock_high(rjob, f"{name}-rock", rpoly, rdepth, rscale, rrng, {}, t0)
+        base.location = (rcx - cx, 0, rcy - cy)
+        bpy.ops.object.select_all(action="DESELECT")
+        base.select_set(True)
+        bpy.context.view_layer.objects.active = base
+        bpy.ops.object.transform_apply(location=True)
+        # The skin grows from a SOFTENED copy of the rock: an offset of the
+        # real surface inherits every chisel facet and crack as a bump, and a
+        # dent where a groove runs under the moss; real moss smooths over them.
+        # ...and built from the rock job with its CRACKS stripped: a groove's
+        # end under the moss survived the softening as a dimple in the carpet.
+        uncracked = {k: v for k, v in rjob.items() if k != "cracks"}
+        soft = rock_high(uncracked, f"{name}-soft", rpoly, rdepth, rscale, random.Random(int(rjob.get("seed", 0)) * 7919 + 17), {}, t0)
+        soft.location = (rcx - cx, 0, rcy - cy)
+        bpy.ops.object.select_all(action="DESELECT")
+        soft.select_set(True)
+        bpy.context.view_layer.objects.active = soft
+        bpy.ops.object.transform_apply(location=True)
+        remesh(soft, MOSS_BASE_VOXEL * rscale)
+        smooth(soft, MOSS_BASE_SMOOTH, 0.5)
+        rock, nfaces = moss_from_rock(soft, name, poly, seed, scale, real=base)
+        bpy.data.objects.remove(soft)
+        # Clear of the rock AS THE GAME DRAWS IT: its low mesh, built exactly
+        # as the rock job builds it, which the remesh moves by up to a voxel
+        # from the high (a peak of the low came through the moss lifted only
+        # clear of the high).
+        rock_ref = low_poly(base, f"{name}-rockref", int(rjob.get("tris") or LOW_TRIS), rscale)
+        # The cap's source is a DENSE uniform copy of the drawn rock, not the
+        # low itself: the low's dissolved facets are long thin triangles, and
+        # one whose centre is inside the cover reaches far outside it (two
+        # tongues hung below the moss). The remesh moves the surface by up to
+        # half a voxel, which the clearance covers.
+        dense = rock_ref.copy()
+        dense.data = rock_ref.data.copy()
+        dense.name = f"{name}-rockdense"
+        bpy.context.collection.objects.link(dense)
+        bpy.context.view_layer.objects.active = dense
+        remesh(dense, MOSS_VOXEL * scale)
+        cap = rock_cap(dense, poly, (MOSS_CLEARANCE + MOSS_VOXEL) * scale, f"{name}-cap", scale)
+        bpy.data.objects.remove(dense)
+        if cap is not None:
+            bpy.ops.object.select_all(action="DESELECT")
+            cap.select_set(True)
+            rock.select_set(True)
+            bpy.context.view_layer.objects.active = rock
+            bpy.ops.object.join()
+            rock = bpy.context.view_layer.objects.active
+            remesh(rock, MOSS_VOXEL * scale)
+            smooth(rock, 4, 0.5)
+            bpy.ops.object.shade_smooth()
+            log(f"moss: fused with the rock cap, {sum(len(p.vertices) - 2 for p in rock.data.polygons)} tris")
+        log(f"moss: {lift_clear(rock, rock_ref, MOSS_CLEARANCE * scale)} finished verts lifted clear of the rock's low")
+        log(f"moss skin over {nfaces} softened rock faces ({time.time()-t0:.1f}s)")
+        # The rock stays in the scene through the bake so the moss's own
+        # occlusion sees it (dark under the lip), then goes.
+        occluders.append(base)
+    else:
+        rock = rock_high(job, name, poly, depth, scale, rng, flags, t0)
 
     # 4. The high mesh is this dense skin as it is: the chisel planes are flat
     # already, the remesh has rounded every edge by a voxel, and a planar
     # dissolve or a bevel here only chops the curved groove walls into strips
     # (streaks and lumps in every crack of the bake).
-    smooth(rock, 1, 0.3)
     bpy.ops.object.select_all(action="DESELECT")
     rock.select_set(True)
     bpy.context.view_layer.objects.active = rock
@@ -906,14 +1250,24 @@ def build(job, out_path, flags):
     # 5. The low mesh, its atlas, and the bake from the high.
     high = rock
     high.name = f"{name}-high"
-    low = low_poly(high, name, int(flags.get("tris") or LOW_TRIS), scale)
+    budget = int(flags.get("tris") or job.get("tris") or (MOSS_TRIS if kind == "moss" else LOW_TRIS))
+    if kind == "moss":
+        # A skin at least MOSS_LIP + 9 cm thick: a 3 cm voxel is safe, and a
+        # gentle dissolve keeps its curves (the collapse left spikes and holes).
+        low = low_poly(high, name, budget, scale, max_voxel=0.03 * scale, dissolve_deg=6.0)
+        # The low's own remesh and smoothing flatten a lifted bump straight
+        # back under a peak, so the shipped mesh is lifted once more, last.
+        log(f"moss: {lift_clear(low, rock_ref, MOSS_CLEARANCE * scale)} low verts lifted clear of the rock's low")
+        bpy.data.objects.remove(rock_ref)
+    else:
+        low = low_poly(high, name, budget, scale)
     low_tris = sum(len(p.vertices) - 2 for p in low.data.polygons)
     log(f"low: {low_tris} tris")
     unwrap(low)
     textures = job.get("textures")
     do_bake = textures is not None and not flags.get("no_bake")
     if do_bake:
-        tile = float(flags.get("tile") or TEXTURE_TILE)
+        tile = float(flags.get("tile") or job.get("tile") or (MOSS_TILE if kind == "moss" else TEXTURE_TILE))
         src, bsdf, nmap = source_material(textures, tile)
         high.data.materials.clear()
         high.data.materials.append(src)
@@ -932,7 +1286,7 @@ def build(job, out_path, flags):
         low.data.materials.clear()
         low.data.materials.append(clay_material())
     if flags.get("high"):
-        # The bake source, for a look at what the low is standing in for.
+        # The bake source, for a look at what the low stands in for.
         high.data.materials.clear()
         high.data.materials.append(clay_material())
         rock = high
@@ -940,16 +1294,46 @@ def build(job, out_path, flags):
     else:
         rock = low
         bpy.data.objects.remove(high)
+    shipped = [rock]
 
-    # Export: the rock alone, at the origin.
+    # Previews.
+    render_dir = flags.get("render")
+    if render_dir:
+        os.makedirs(render_dir, exist_ok=True)
+        if not do_bake:
+            pass
+        setup_world(0.6)
+        for o in occluders:
+            # What the moss grows on, as clay, so the wrap can be judged.
+            o.data.materials.clear()
+            o.data.materials.append(clay_material())
+        samples = int(flags.get("samples") or RENDER_SAMPLES)
+        wire = outline_wire(poly, -half - 0.05, 0.004 * scale)
+        extent = size * 1.25
+        # The outline's centre: the frame's origin may be the body's, metres away.
+        ox = sum(p[0] for p in poly) / len(poly)
+        oz = sum(p[1] for p in poly) / len(poly)
+        look = (ox, 0, oz)
+        # Head-on, orthographic: the game's view, the outline drawn in red.
+        render(os.path.join(render_dir, f"{name}-front.png"), (ox, -10, oz), look, extent, RENDER_SIZE, samples)
+        bpy.data.objects.remove(wire)
+        # Three-quarter perspective from above-left.
+        d = size * 2.6
+        render(os.path.join(render_dir, f"{name}-quarter.png"), (ox - d * 0.7, -d * 0.75, oz + d * 0.55), look, extent, RENDER_SIZE, samples, perspective=True)
+        # From the other side, lower, to see the grooves.
+        render(os.path.join(render_dir, f"{name}-quarter2.png"), (ox + d * 0.75, -d * 0.6, oz + d * 0.3), look, extent, RENDER_SIZE, samples, perspective=True)
+        log(f"rendered previews into {render_dir} ({time.time()-t0:.1f}s)")
+
+    # Export: the shipped meshes alone, at the origin.
     for o in list(scene.objects):
-        if o is not rock:
+        if o not in shipped:
             bpy.data.objects.remove(o)
-    rock.location = (0, 0, 0)
-    rock["rockName"] = name
-    rock["rockOrigin"] = [cx, cy]
     bpy.ops.object.select_all(action="DESELECT")
-    rock.select_set(True)
+    for o in shipped:
+        o.location = (0, 0, 0)
+        o["rockName"] = name
+        o["rockOrigin"] = [cx, cy]
+        o.select_set(True)
     kwargs = dict(
         filepath=out_path,
         export_format="GLB",
@@ -968,27 +1352,6 @@ def build(job, out_path, flags):
         kwargs["export_image_format"] = "AUTO"
     bpy.ops.export_scene.gltf(**kwargs)
     log(f"wrote {out_path} ({os.path.getsize(out_path)/1024:.0f} KB, {time.time()-t0:.1f}s)")
-
-    # Previews.
-    render_dir = flags.get("render")
-    if render_dir:
-        os.makedirs(render_dir, exist_ok=True)
-        if not do_bake:
-            pass
-        setup_world(0.6)
-        samples = int(flags.get("samples") or RENDER_SAMPLES)
-        wire = outline_wire(poly, -half - 0.05, 0.004 * scale)
-        extent = size * 1.25
-        # Head-on, orthographic: the game's view, the outline drawn in red.
-        render(os.path.join(render_dir, f"{name}-front.png"), (0, -10, 0), (0, 0, 0), extent, RENDER_SIZE, samples)
-        bpy.data.objects.remove(wire)
-        # Three-quarter perspective from above-left.
-        d = size * 2.6
-        render(os.path.join(render_dir, f"{name}-quarter.png"), (-d * 0.7, -d * 0.75, d * 0.55), (0, 0, 0), extent, RENDER_SIZE, samples, perspective=True)
-        # From the other side, lower, to see the grooves.
-        render(os.path.join(render_dir, f"{name}-quarter2.png"), (d * 0.75, -d * 0.6, d * 0.3), (0, 0, 0), extent, RENDER_SIZE, samples, perspective=True)
-        log(f"rendered previews into {render_dir} ({time.time()-t0:.1f}s)")
-
 
 def parse_flags(argv):
     flags = {}
@@ -1014,4 +1377,4 @@ if __name__ == "__main__":
     flags = parse_flags(argv[2:])
     with open(job_path) as f:
         job = json.load(f)
-    build(job, out_path, flags)
+    build(job, out_path, flags, os.path.dirname(os.path.abspath(job_path)))
