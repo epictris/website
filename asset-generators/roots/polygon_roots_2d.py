@@ -66,8 +66,8 @@ def validate_shapes(data):
         if not isinstance(grabs, list) or any(type(i) is not int or not 0 <= i < len(p) for i in grabs):
             raise ValueError(f'{name}: supply grab_edges (zero-based outline edge indices).')
         depth = root.get('depth', .38)
-        if not isinstance(depth, (int,float)) or not math.isfinite(depth) or not .02 <= depth <= 3:
-            raise ValueError(f'{name}: visual depth must be between .02 and 3 metres.')
+        if not isinstance(depth, (int,float)) or not math.isfinite(depth) or not .02 <= depth <= 5:
+            raise ValueError(f'{name}: visual depth must be between .02 and 5 metres.')
         rounding=root.get('corner_rounding',0)
         if not isinstance(rounding,(int,float)) or not math.isfinite(rounding) or not 0<=rounding<=1:
             raise ValueError(f'{name}: corner_rounding must be between 0 and 1.')

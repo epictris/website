@@ -1,5 +1,18 @@
 # Level editor
 
+## Braid a cylindrical vine
+
+Select one **geometry object** whose shape is a circle and whose **depth** is
+set, then click **Braid selected vine**. The circle's radius and the geometry
+depth determine a single three-stem braid centred on that cylinder. Its authored
+position, rotation, tilt, scale, body and collision association stay in place.
+The generated GLB replaces that geometry object's primitive look; selecting the
+generated braid and clicking again regenerates it with the current radius, depth
+and seed. The braid has sparse leaves, with no curtain of vines hanging from a
+polygon. The local Blender source is `asset-generators/roots/procedural_vine_braid.py`
+(override its directory with `ROOTS_PROJECT`). Generated files are saved under
+`public/generated-vines/<id>/` and are local, gitignored assets.
+
 ## Generate v5 boulders
 
 Select one scene collision polygon or rectangle and click **Generate boulder v5**.

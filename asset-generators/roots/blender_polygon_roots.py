@@ -74,8 +74,11 @@ def mesh_object(name, vertices, faces, collection, material=None, uv=None):
         mesh.materials.append(material)
     if uv is not None:
         layer = mesh.uv_layers.new(name='UVMap')
-        for loop in mesh.loops:
-            layer.data[loop.index].uv = tuple(uv[loop.vertex_index])
+        corner_uv = len(uv) == len(faces) and hasattr(uv[0][0], '__len__')
+        for polygon in mesh.polygons:
+            for corner, loop_index in enumerate(polygon.loop_indices):
+                layer.data[loop_index].uv = tuple(uv[polygon.index][corner] if corner_uv
+                                                  else uv[mesh.loops[loop_index].vertex_index])
     return obj
 
 
@@ -94,7 +97,8 @@ def flow_bark_material(part):
         image_name=name+'_'+suffix
         image=bpy.data.images.get(image_name)
         height,width=pixels.shape[:2]
-        if image is None: image=bpy.data.images.new(image_name,width=width,height=height,alpha=False)
+        if image is None or image.source != 'GENERATED':
+            image=bpy.data.images.new(image_name,width=width,height=height,alpha=False)
         elif tuple(image.size)!=(width,height): image.scale(width,height)
         image.colorspace_settings.name='sRGB' if suffix=='Albedo' else 'Non-Color'
         rgba=np.ones((height,width,4),dtype=np.float32);rgba[:,:,:3]=pixels

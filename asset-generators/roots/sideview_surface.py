@@ -170,7 +170,7 @@ def branch_frame(root):
     curve=stations[:,None]*axis+centers[:,None]*across
     length=np.r_[0,np.cumsum(np.linalg.norm(np.diff(curve,axis=0),axis=1))]
     return dict(axis=axis,across=across,stations=stations,centers=centers,
-                width=max(float(np.median(widths)),.025),length=length,
+                width=max(float(np.median(widths)),.025),widths=np.asarray(widths),length=length,
                 depth=root.get('depth',.38),id=root['id'])
 
 
@@ -320,6 +320,62 @@ def solve_squared_depth(p,f,boundary,roots):
     return height
 
 
+def surface_bark_uv(vertices, faces, roots):
+    """Project each triangle onto its best-facing plane in a padded atlas.
+
+    Dominant-normal projection bounds the local surface/UV area ratio by
+    sqrt(3), including forks that have no single well-defined branch axis.
+    Geometry remains welded; only UV loops are split at chart borders.
+    """
+    triangle=vertices[faces]
+    normal=np.cross(triangle[:,1]-triangle[:,0],triangle[:,2]-triangle[:,0])
+    dominant=np.argmax(np.abs(normal),axis=1)
+    charts=np.where(normal[:,1]>=0,0,1)
+    charts[dominant==2]=np.where(normal[dominant==2,2]>=0,2,3)
+    charts[dominant==0]=np.where(normal[dominant==0,0]>=0,4,5)
+    axes=((0,2),(0,2),(0,1),(0,1),(1,2),(1,2))
+    # Separate disconnected patches before packing. Prongs can have the same
+    # projection but different positions along the omitted axis.
+    parent=np.arange(len(faces))
+    def root(i):
+        while parent[i]!=i:
+            parent[i]=parent[parent[i]];i=parent[i]
+        return i
+    edges={}
+    for i,(a,b,c) in enumerate(faces):
+        for x,y in ((a,b),(b,c),(c,a)):
+            edge=(min(x,y),max(x,y))
+            other=edges.get(edge)
+            if other is None:edges[edge]=i
+            elif charts[i]==charts[other]:
+                parent[root(i)]=root(other)
+    groups={}
+    for i in range(len(faces)):
+        groups.setdefault(root(i),[]).append(i)
+    patches=[]
+    gutter=.03
+    for indices in groups.values():
+        indices=np.asarray(indices)
+        ax=axes[charts[indices[0]]]
+        projected=triangle[indices][:,:,ax]
+        lo=projected.reshape(-1,2).min(axis=0)
+        hi=projected.reshape(-1,2).max(axis=0)
+        patches.append((indices,projected,lo,hi,hi-lo+gutter))
+    total_area=sum(float(s[0]*s[1]) for *_,s in patches)
+    target=max(max(float(s[0]) for *_,s in patches),
+               1.5*math.sqrt(total_area))
+    uv=np.empty((len(faces),3,2),float)
+    x=y=row_height=0.
+    for indices,projected,lo,hi,patch_size in sorted(patches,key=lambda item:-item[-1][1]):
+        w,h=patch_size
+        if x+w>target+1e-9:
+            x=0;y+=row_height;row_height=0
+        uv[indices]=projected-lo+np.array([x,y])+gutter/2
+        x+=w;row_height=max(row_height,h)
+    size=np.array([target,y+row_height])
+    return uv,size,charts
+
+
 def build_surfaces(roots,seed):
     from polygon_roots import stable_seed
     result=[]
@@ -342,6 +398,10 @@ def build_surfaces(roots,seed):
         front_height+=fade*cap*fibres*1.4
         front_height=np.maximum(front_height,height*.12)
         back_height=np.maximum(back_height,height*.12)
+        # The depth control is the total occupied thickness, including relief.
+        requested_depth=max(float(root.get('depth',.38)) for root in group)
+        fit=min(1,requested_depth/max(float(front_height.max()+back_height.max()),1e-12))
+        front_height*=fit;back_height*=fit
         front_height[boundary]=0;back_height[boundary]=0
         vertices=[];front=[];back=[];boundary_set=set(boundary)
         for i,(x,y) in enumerate(p):
@@ -350,39 +410,111 @@ def build_surfaces(roots,seed):
             else: back.append(len(vertices));vertices.append((x,back_height[i],y))
         front=np.asarray(front);back=np.asarray(back)
         faces=np.concatenate([front[f],back[f[:,::-1]]])
-        vertices=np.asarray(vertices);lo=p.min(axis=0)-.015;hi=p.max(axis=0)+.015
-        uv=(vertices[:,[0,2]]-lo)/(hi-lo)
+        vertices=np.asarray(vertices)
+        surface_uv,atlas_size,charts=surface_bark_uv(vertices,faces,group)
+        uv=(surface_uv+.015)/(atlas_size+.03)
         result.append(dict(id=group[0]['id'] if len(group)==1 else group[0]['id']+'__fused',
             source_root_ids=[r['id'] for r in group],vertices=vertices,faces=faces,uv=uv,
             materials=np.zeros(len(faces),int),source_faces=np.full(len(faces),-1),smooth=True,
-            atlas_bounds=[lo.tolist(),hi.tolist()],atlas_roots=group,seed=seed))
+            atlas_size=atlas_size,atlas_roots=group,seed=seed,
+            surface_uv=surface_uv,atlas_charts=charts))
     return result
 
 
 def bark_atlas(part,size=1536):
-    """Portable PBR maps: irregular flowing bark and exposed end grain."""
+    """Bake the continuous world-space bark field into surface UV charts."""
     from polygon_roots import stable_seed
-    lo,hi=np.asarray(part['atlas_bounds']);extent=hi-lo
-    width=max(64,round(size*extent[0]/max(extent)));height=max(64,round(size*extent[1]/max(extent)))
-    x=lo[0]+(np.arange(width)+.5)/width*extent[0]
-    y=lo[1]+(np.arange(height)+.5)/height*extent[1]
-    xx,yy=np.meshgrid(x,y);points=np.column_stack([xx.ravel(),yy.ravel()])
-    field=np.zeros(len(points));albedo=np.zeros((len(points),3));roughness=np.zeros(len(points))
-    roots=part['atlas_roots'];setup=flow_setup(roots)
+    extent=np.asarray(part['atlas_size'])+.03
+    width=max(64,round(size*extent[0]/max(extent)))
+    height=max(64,round(size*extent[1]/max(extent)))
+    world=np.zeros((height*width,3),np.float32)
+    shaded_normal=np.zeros((height*width,3),np.float32)
+    covered=np.zeros(height*width,bool)
+    triangle=part['vertices'][part['faces']]
+    face_normal=np.cross(triangle[:,1]-triangle[:,0],triangle[:,2]-triangle[:,0])
+    vertex_normal=np.zeros_like(part['vertices'])
+    for corner in range(3):np.add.at(vertex_normal,part['faces'][:,corner],face_normal)
+    vertex_normal/=np.maximum(np.linalg.norm(vertex_normal,axis=1,keepdims=True),1e-12)
+    for face,triangle in zip(part['faces'],part['surface_uv']):
+        pixel=(triangle+.015)*np.array([width/extent[0],height/extent[1]])-.5
+        x0=max(0,int(np.floor(pixel[:,0].min())));x1=min(width,int(np.ceil(pixel[:,0].max()))+1)
+        y0=max(0,int(np.floor(pixel[:,1].min())));y1=min(height,int(np.ceil(pixel[:,1].max()))+1)
+        if x0>=x1 or y0>=y1:continue
+        a,b,c=triangle
+        determinant=cross(b-a,c-a)
+        if abs(determinant)<1e-12:continue
+        gx,gy=np.meshgrid(np.arange(x0,x1),np.arange(y0,y1))
+        sample=np.column_stack([(gx.ravel()+.5)/width*extent[0]-.015,
+                                (gy.ravel()+.5)/height*extent[1]-.015])
+        delta=sample-a
+        beta=(delta[:,0]*(c-a)[1]-delta[:,1]*(c-a)[0])/determinant
+        gamma=((b-a)[0]*delta[:,1]-(b-a)[1]*delta[:,0])/determinant
+        inside_uv=(beta>=-1e-8)&(gamma>=-1e-8)&(beta+gamma<=1+1e-8)
+        if not np.any(inside_uv):continue
+        alpha=1-beta[inside_uv]-gamma[inside_uv]
+        projected=part['vertices'][face]
+        normals=vertex_normal[face]
+        index=gy.ravel()[inside_uv]*width+gx.ravel()[inside_uv]
+        world[index]=(alpha[:,None]*projected[0]+
+                      beta[inside_uv,None]*projected[1]+
+                      gamma[inside_uv,None]*projected[2])
+        shaded_normal[index]=(alpha[:,None]*normals[0]+
+                              beta[inside_uv,None]*normals[1]+
+                              gamma[inside_uv,None]*normals[2])
+        covered[index]=True
+    field=np.zeros(height*width,np.float32)
+    albedo=np.zeros((height*width,3),np.float32)
+    roughness=np.full(height*width,.88,np.float32)
+    roots=part['atlas_roots']
     phase=(stable_seed(f'{part["seed"]}:{roots[0]["id"]}')%1000)/71
-    for start in range(0,len(points),65536):
-        end=min(start+65536,len(points));q=points[start:end]
+    setup=flow_setup(roots)
+    active=np.flatnonzero(covered)
+    for start in range(0,len(active),65536):
+        index=active[start:start+65536];position=world[index]
+        q=position[:,[0,2]]
         u,v,_=flow_coordinates(q,roots,setup)
         from stylised_bark import bark_field
-        color,relief,painted_roughness=bark_field(u,v,phase)
+        side=bark_field(u,v,phase)
+        top=bark_field(position[:,1],position[:,0],phase+3.7)
+        end=bark_field(position[:,1],position[:,2],phase+7.3)
+        normal=shaded_normal[index]
+        weight=np.abs(normal)**4
+        weight/=np.maximum(weight.sum(axis=1,keepdims=True),1e-12)
+        color=side[0]*weight[:,1,None]+top[0]*weight[:,2,None]+end[0]*weight[:,0,None]
+        relief=side[1]*weight[:,1]+top[1]*weight[:,2]+end[1]*weight[:,0]
+        painted_roughness=side[2]*weight[:,1]+top[2]*weight[:,2]+end[2]*weight[:,0]
         cap,cut_color,fibres,_,_=end_fields(q,roots,phase)
-        albedo[start:end]=color*(1-cap[:,None])+cut_color*cap[:,None]
-        field[start:end]=relief*(1-cap)+fibres*cap
-        roughness[start:end]=painted_roughness*(1-cap)+.78*cap
+        albedo[index]=color*(1-cap[:,None])+cut_color*cap[:,None]
+        field[index]=relief*(1-cap)+fibres*cap
+        roughness[index]=painted_roughness*(1-cap)+.78*cap
+    # Extend chart colours through a few empty texels for bilinear sampling.
+    filled=covered.reshape(height,width)
+    albedo=albedo.reshape(height,width,3)
     field=field.reshape(height,width)
-    dy,dx=np.gradient(field,extent[1]/height,extent[0]/width)
-    normal=np.stack([-dx,-dy,np.ones_like(dx)],axis=-1)
-    normal/=np.linalg.norm(normal,axis=-1,keepdims=True)
+    roughness=roughness.reshape(height,width)
+    for _ in range(3):
+        changed=False
+        for dy,dx in ((-1,0),(1,0),(0,-1),(0,1)):
+            source=np.roll(filled,(dy,dx),(0,1))
+            if dy<0:source[-1,:]=False
+            if dy>0:source[0,:]=False
+            if dx<0:source[:,-1]=False
+            if dx>0:source[:,0]=False
+            take=(~filled)&source
+            if np.any(take):
+                albedo[take]=np.roll(albedo,(dy,dx),(0,1))[take]
+                field[take]=np.roll(field,(dy,dx),(0,1))[take]
+                roughness[take]=np.roll(roughness,(dy,dx),(0,1))[take]
+                filled[take]=True;changed=True
+        if not changed:break
+    # The surface charts rotate at their borders; a flat tangent-space normal
+    # leaves the smooth welded geometry normal intact across those borders.
+    normal=np.zeros((height,width,3),np.float32)
+    normal[:,:,0:2]=.5;normal[:,:,2]=1
     orm=np.ones((height,width,3),np.float32)
-    orm[:,:,1]=np.clip(roughness.reshape(height,width),.5,1);orm[:,:,2]=0
-    return np.clip(albedo.reshape(height,width,3),0,1).astype(np.float32),(normal*.5+.5).astype(np.float32),orm
+    orm[:,:,1]=np.clip(roughness,.5,1);orm[:,:,2]=0
+    # Blender marks the image sRGB; encode the linear bark colours before they
+    # are interpreted by the shader and exported to glTF.
+    albedo=np.clip(albedo,0,1)
+    albedo=np.where(albedo<=.0031308,12.92*albedo,1.055*albedo**(1/2.4)-.055)
+    return albedo.astype(np.float32),normal,orm

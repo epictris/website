@@ -6,13 +6,10 @@ import { tmpdir } from "node:os";
 import { resolve, join } from "node:path";
 import type { Plugin } from "vite";
 
-const VARIANTS = ["curtain", "cascade", "tangle"] as const;
-type VineVariant = typeof VARIANTS[number];
-
 export function vineGenerator(): Plugin {
   let busy = false;
   return {
-    name: "vine-generator-v3",
+    name: "vine-cylinder-braid-generator",
     configureServer(server) {
       const project = server.config.root;
       const source = process.env.ROOTS_PROJECT ?? resolve(project, "../asset-generators/roots");
@@ -44,39 +41,44 @@ export function vineGenerator(): Plugin {
           } catch { return send(403, { error: "Generate vines from this editor's origin." }); }
         }
         if (busy) return send(409, { error: "A vine is already generating. Try again when it finishes." });
-        let variant: VineVariant, seed: number;
+        let radius: number, length: number, seed: number;
         try {
           let body = "";
           for await (const chunk of req) {
             body += chunk;
             if (body.length > 4000) throw new Error("Vine request is too large.");
           }
-          const value = JSON.parse(body) as { variant?: unknown; seed?: unknown };
-          if (!VARIANTS.includes(value.variant as VineVariant)) throw new Error("Choose curtain, cascade, or tangle.");
+          const value = JSON.parse(body) as { radius?: unknown; length?: unknown; seed?: unknown };
+          if (typeof value.radius !== "number" || !Number.isFinite(value.radius) || value.radius < 0.005 || value.radius > 1)
+            throw new Error("Cylinder radius must be between 0.005 and 1 metre.");
+          if (typeof value.length !== "number" || !Number.isFinite(value.length) || value.length < 0.1 || value.length > 30)
+            throw new Error("Cylinder depth must be between 0.1 and 30 metres.");
           if (!Number.isInteger(value.seed) || (value.seed as number) < 0 || (value.seed as number) > 2147483647)
             throw new Error("Seed must be an integer from 0 to 2147483647.");
-          variant = value.variant as VineVariant;
+          radius = value.radius;
+          length = value.length;
           seed = value.seed as number;
         } catch (e) {
           return send(400, { error: e instanceof Error ? e.message : "Invalid vine request." });
         }
-        const script = join(source, "procedural_vines_v3.py");
+        const script = join(source, "procedural_vine_braid.py");
         if (!existsSync(script)) return send(503, { error: "Vine generator not found. Set ROOTS_PROJECT to the roots project directory." });
         if (busy) return send(409, { error: "A vine is already generating. Try again when it finishes." });
         busy = true;
         let scratch: string | undefined;
         try {
           const id = randomUUID();
-          scratch = await mkdtemp(join(tmpdir(), "trisball-vine-v3-"));
+          scratch = await mkdtemp(join(tmpdir(), "trisball-vine-braid-"));
           await new Promise<void>((done, fail) => {
             execFile(blender, ["--background", "--factory-startup", "--python-exit-code", "1",
-              "--python", script, "--", "--out", scratch!, "--variant", variant, "--seed", String(seed)],
+              "--python", script, "--", "--out", scratch!, "--radius", String(radius),
+              "--length", String(length), "--seed", String(seed)],
             { windowsHide: true, timeout: 300000, maxBuffer: 4 * 1024 * 1024 }, (error, stdout, stderr) => {
               if (error) fail(new Error(`Vine generation failed: ${(stderr || stdout || error.message).slice(-1800)}`));
               else done();
             });
           });
-          const file = join(scratch, `vine_${variant}_LOD0.glb`);
+          const file = join(scratch, "vine_braid.glb");
           const { size } = await stat(file);
           const out = join(project, "public", "generated-vines", id);
           await mkdir(out, { recursive: true });

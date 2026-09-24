@@ -36,6 +36,33 @@ class SideViewTests(unittest.TestCase):
             centers=triangles.mean(axis=1)
             self.assertTrue(np.all(np.any([inside(centers,p)|(boundary_distance(centers,p)<1e-8) for p in polygons],axis=0)))
 
+    def test_surface_uv_has_bounded_stretch_on_taper_and_fork(self):
+        # A saved editor fork has horizontal prongs inside one polygon, so a
+        # single branch-axis unwrap cannot represent its whole surface.
+        fork=[[-1.330065,-.167320],[-.530065,-.067320],[-.4,.2],[-.3,.3],
+              [-.2,.5],[.2,.6],[-.030065,.432680],[-.230065,-.067320],
+              [.3,0],[.8,0],[1.269935,.132680],[1.8,.1],[.5,-.2],
+              [-.530065,-.267320],[-1.4,-.4]]
+        tapered=[[0,0],[.34,0],[.24,1.2],[.06,2],[0,1.2]]
+        for polygon in (fork,tapered):
+            part=build_surfaces([dict(id='root',polygon=polygon,depth=.38)],4321)[0]
+            triangle=part['vertices'][part['faces']]
+            uv=part['surface_uv']
+            area3=np.linalg.norm(np.cross(triangle[:,1]-triangle[:,0],
+                                          triangle[:,2]-triangle[:,0]),axis=1)/2
+            a=uv[:,1]-uv[:,0];b=uv[:,2]-uv[:,0]
+            area2=np.abs(a[:,0]*b[:,1]-a[:,1]*b[:,0])/2
+            self.assertTrue(np.all(area2>1e-12))
+            self.assertLessEqual(np.max(area3/area2),np.sqrt(3)+1e-6)
+            self.assertLessEqual(np.ptp(part['vertices'][:,1]),.38+1e-9)
+
+    def test_depth_limit_matches_editor_and_server(self):
+        data=copy.deepcopy(self.data)
+        data['roots'][0]['depth']=5
+        validate_shapes(data)
+        data['roots'][0]['depth']=5.01
+        with self.assertRaises(ValueError):validate_shapes(data)
+
     def test_noise_depth_and_seed_cannot_change_gameplay(self):
         changed=copy.deepcopy(self.data)
         for root in changed['roots']: root['depth']*=2

@@ -2192,15 +2192,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   bar.appendChild(boulderRow);
 
   const vineRow = el("div", "ed-row");
-  const vineVariant = document.createElement("select");
-  vineVariant.className = "ed-select";
-  vineVariant.setAttribute("aria-label", "Vine variant");
-  for (const [value, title] of [["curtain", "curtain"], ["cascade", "cascade"], ["tangle", "tangle"]]) {
-    const option = document.createElement("option");
-    option.value = value;
-    option.textContent = title;
-    vineVariant.appendChild(option);
-  }
   const vineSeed = document.createElement("input");
   vineSeed.type = "number";
   vineSeed.className = "ed-num";
@@ -2211,52 +2202,43 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   vineSeed.setAttribute("aria-label", "Vine seed");
   const vineStatus = el("span", "ed-root-status");
   vineStatus.setAttribute("role", "status");
-  vineStatus.textContent = "Select one polygon or rectangle.";
-  const vineGenerate = button("Generate vine v3", async () => {
-    const sources = new Map<number, EdItem>();
-    for (const item of operandItems()) {
-      const source = item.object === "collision" ? item :
-        model.items.find(i => i.id === item.matchId && i.object === "collision");
-      if (source) sources.set(source.id, source);
-    }
-    const source = [...sources.values()][0];
-    if (sources.size !== 1 || !source || source.layer !== "scene" ||
-        (source.shape.kind !== "poly" && source.shape.kind !== "rect")) {
-      vineStatus.textContent = "Select one collision polygon or rectangle, or its vine mesh.";
+  vineStatus.textContent = "Select one cylindrical geometry object.";
+  const vineGenerate = button("Braid selected vine", async () => {
+    const selected = operandItems().filter(i => i.object === "geometry");
+    const geometry = selected.length === 1 ? selected[0] : undefined;
+    if (!geometry || geometry.layer !== "scene" || geometry.shape.kind !== "circle" ||
+        geometry.visual.depth === null || geometry.visual.depth <= 0 ||
+        (geometry.visual.kind === "mesh" && !geometry.visual.mesh.startsWith("vine-v3:"))) {
+      vineStatus.textContent = "Select one cylinder geometry object with a depth, or a generated braid.";
       return;
     }
     if (!vineSeed.reportValidity()) return;
     const revision = modelRev;
     vineGenerate.disabled = true;
-    vineStatus.textContent = "Generating vine v3 in Blender…";
+    vineStatus.textContent = "Braiding the selected cylinder in Blender…";
     try {
       const response = await fetch("/api/vines", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ variant: vineVariant.value, seed: Number(vineSeed.value) }),
+        body: JSON.stringify({ radius: geometry.shape.r, length: geometry.visual.depth,
+          seed: Number(vineSeed.value) }),
       });
       const result = await response.json() as { mesh?: string; error?: string };
       if (!response.ok || !result.mesh) throw new Error(result.error ?? "Vine generation failed.");
       if (modelRev !== revision || mode !== "edit")
         throw new Error("The level changed during generation. Select the shape and generate again.");
       beginAction();
-      const existing = model.items.find(i => i.object === "geometry" && i.matchId === source.id);
-      const geometry: EdItem = existing ?? {
-        ...source, id: newBodyId(), object: "geometry", shape: cloneShape(source.shape),
-        cam: { ...source.cam }, light: { ...source.light }, note: { ...source.note },
-        matchId: source.id,
-      };
-      geometry.pos = source.pos.clone();
-      geometry.rot = source.rot;
-      geometry.visual = { ...defaultVisual(), kind: "mesh", mesh: result.mesh };
-      if (!existing) addAndSelect([geometry]);
-      else { markDirty(); rebuildInspector(); }
-      vineStatus.textContent = "Vine ready. View in 3D + overlay; regenerate after repositioning.";
+      // An authored cylinder surface (often wood) would otherwise replace every
+      // GLB material, including the separate leaf greens.
+      geometry.visual = { ...geometry.visual, kind: "mesh", mesh: result.mesh, texture: "" };
+      markDirty();
+      rebuildInspector();
+      vineStatus.textContent = "Braid ready on the selected cylinder.";
     } catch (error) {
       vineStatus.textContent = error instanceof Error ? error.message : "Vine generation failed.";
     } finally { vineGenerate.disabled = false; }
   });
-  vineGenerate.title = "Generate a seeded v3 jungle vine mesh. Select a collision outline to position it; it adds no collision.";
-  vineRow.append(vineGenerate, labelWrap("variant", vineVariant), labelWrap("seed", vineSeed), vineStatus);
+  vineGenerate.title = "Replace one cylindrical geometry object's look with a seeded three-stem braid following its radius, depth and transform. Its collision stays unchanged.";
+  vineRow.append(vineGenerate, labelWrap("seed", vineSeed), vineStatus);
   bar.appendChild(vineRow);
 
   const toolRow = el("div", "ed-row");
