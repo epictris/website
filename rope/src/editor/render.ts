@@ -61,7 +61,6 @@ import {
 import { MASK_ALL } from "../engine/body";
 import {
   pathOutline,
-  pathCorridorSweepInto,
   pathOutlineGrown,
   pathOutlineInset,
   pathOutlineInto,
@@ -73,13 +72,11 @@ import {
 import {
   REGION_EXIT_MARGIN,
   buildCameraRules,
-  pathBandAxes,
   pathHasBand,
-  pathParamsAt,
-  pathRangeAxes,
-  pathReleaseAxes,
+  type CameraRule,
   type PathKeyField,
 } from "../render/cameraController";
+import { pathCorridor } from "../render/pathCorridors";
 import { decomposeSeams, isSimpleLoop } from "../lib/polygon";
 // For the one number: the multiple of the authored spawn radius the ball is
 // actually played at (see the spawn marker).
@@ -1014,6 +1011,25 @@ export function cameraRegionLabel(r: EdItem): string {
 const PATH_ARROW_SPACING = 1.5;
 const PATH_ARROW_LENGTH = 0.22;
 
+// The rule a path item builds, kept across frames while its saved form is
+// unchanged. The rule is what the game builds (`pathDataOf` is the one mapping),
+// and it is the key its corridors are cached on (see `pathCorridor`), so
+// rebuilding it every frame would re-run the 2 cm flattening AND throw away
+// every corridor sweep with it. Keyed by id and checked against the saved form,
+// so an edit - a node dragged, a key typed - rebuilds exactly that path.
+const pathRules = new Map<number, { key: string; rule: CameraRule & { kind: "path" } }>();
+
+function editorPathRule(item: EdItem): (CameraRule & { kind: "path" }) | null {
+  const data = pathDataOf(item);
+  const key = JSON.stringify(data);
+  const hit = pathRules.get(item.id);
+  if (hit?.key === key) return hit.rule;
+  const rule = buildCameraRules([], [data])[0];
+  if (rule?.kind !== "path") return null;
+  pathRules.set(item.id, { key, rule });
+  return rule;
+}
+
 // A camera path: its corridor, the polyline itself, and the arrowheads that say
 // which way it runs.
 //
@@ -1034,8 +1050,8 @@ function drawCameraPath(
   // camera does not ride. Built as the RULE the game builds (`pathDataOf` is
   // the one mapping), so the polyline, the keys along it and every corridor
   // below are exactly what the controller tests.
-  const rule = buildCameraRules([], [pathDataOf(item)])[0];
-  if (rule?.kind !== "path") return;
+  const rule = editorPathRule(item);
+  if (!rule) return;
   const world = rule.index.verts;
   // NOT through `paint`. That is the fill switch - it goes fully transparent in
   // the overlay view, where the 3D scene underneath is what shows the level -
@@ -1050,12 +1066,10 @@ function drawCameraPath(
   // through the keys at every sample, so a range that widens along the route
   // is drawn widening - `pathCorridorSweepInto` owns the geometry, so what is
   // drawn is exactly the zone the controller tests.
-  ctx.beginPath();
-  pathCorridorSweepInto(ctx, rule.index, (s) => pathRangeAxes(pathParamsAt(rule, s)));
   ctx.strokeStyle = stroke;
   ctx.lineWidth = worldLine * 1.5;
   ctx.setLineDash([6 * PX, 4 * PX]);
-  ctx.stroke();
+  ctx.stroke(pathCorridor(rule, "range"));
   ctx.setLineDash([]);
 
   // ...and the far edge of the falloff band beyond it: across the band the
@@ -1063,11 +1077,9 @@ function drawCameraPath(
   // corridor and worth seeing while the range and falloff are being tuned
   // against each other.
   if (pathHasBand(rule)) {
-    ctx.beginPath();
-    pathCorridorSweepInto(ctx, rule.index, (s) => pathBandAxes(pathParamsAt(rule, s)));
     ctx.lineWidth = worldLine;
     ctx.setLineDash([3 * PX, 3 * PX]);
-    ctx.stroke();
+    ctx.stroke(pathCorridor(rule, "band"));
     ctx.setLineDash([]);
   }
   // ...and the release boundary, when a buffer is authored. Finer dots and a
@@ -1075,11 +1087,9 @@ function drawCameraPath(
   // than a second corridor. The buffer grows both semi-axes, which is exactly
   // how `pathRelease` tests it.
   if (item.cam.buffer !== null || shape.keys.some((k) => k.buffer !== null)) {
-    ctx.beginPath();
-    pathCorridorSweepInto(ctx, rule.index, (s) => pathReleaseAxes(pathParamsAt(rule, s)));
     ctx.lineWidth = worldLine;
     ctx.setLineDash([2 * PX, 5 * PX]);
-    ctx.stroke();
+    ctx.stroke(pathCorridor(rule, "release"));
     ctx.setLineDash([]);
   }
 

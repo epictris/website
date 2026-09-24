@@ -19,7 +19,44 @@ import {
   waterAreaGlyphs,
   type PolyPath,
 } from "./areaGlyphs";
-import { outlineHalfExtents, outlineIsRound, pathOutline, type Outline } from "./shapePath";
+import {
+  outlineHalfExtents,
+  outlineIsRound,
+  pathOutline,
+  pathOutlineInto,
+  type Outline,
+} from "./shapePath";
+
+// The STATIC glyph sets - a grate, a finish line's chequer, a killzone's
+// skulls - as Path2Ds in the shape's local frame, built once per lattice.
+//
+// They depend on nothing but the lattice's half-extents and roundness, yet a
+// grate is up to MAX_GLYPHS square holes at five canvas calls apiece, and the
+// editor was re-emitting every hole of every anchor on every frame (about 5 ms
+// a frame on the river level, measured in a trace). Cached, a fill is one
+// `addPath`. Keyed by size, so resizing an area in the editor builds a new
+// entry per size it passes through; the cap keeps a long drag from growing the
+// map without bound, and clearing it outright costs one rebuild per shape.
+type StaticGlyphs = "anchor" | "finish" | "killzone";
+const STATIC_GLYPHS: Record<StaticGlyphs, (p: PolyPath, half: Vec2, circle: boolean) => void> = {
+  anchor: anchorGlyphs,
+  finish: finishGlyphs,
+  killzone: killZoneGlyphs,
+};
+const STATIC_GLYPH_CACHE_MAX = 256;
+const staticGlyphCache = new Map<string, Path2D>();
+
+function staticGlyphPath(kind: StaticGlyphs, half: Vec2, circle: boolean): Path2D {
+  const key = `${kind}:${half.x}:${half.y}:${circle}`;
+  let path = staticGlyphCache.get(key);
+  if (!path) {
+    if (staticGlyphCache.size >= STATIC_GLYPH_CACHE_MAX) staticGlyphCache.clear();
+    path = new Path2D();
+    STATIC_GLYPHS[kind](path, half, circle);
+    staticGlyphCache.set(key, path);
+  }
+  return path;
+}
 
 // The glyph lattice is laid out over the shape's bounding half-extents whatever
 // the shape is, and the even-odd clip below trims it to the real outline — so a
@@ -31,7 +68,9 @@ function fillWithCutouts(
   rotation: number,
   shape: Outline,
   fillStyle: string,
-  glyphs: ((p: PolyPath) => void) | null,
+  // A function emits glyphs that change frame to frame (a drifting current);
+  // a Path2D is a static set from `staticGlyphPath`, in the local frame.
+  glyphs: ((p: PolyPath) => void) | Path2D | null,
 ): void {
   const half = outlineHalfExtents(shape);
   const outline = (): void => pathOutline(ctx, center, rotation, shape);
@@ -52,6 +91,21 @@ function fillWithCutouts(
   outline();
   ctx.clip();
 
+  if (glyphs instanceof Path2D) {
+    // A Path2D cannot be appended to the context's current path, so the
+    // outline goes into a Path2D of its own (world coordinates, as
+    // `pathOutline` places it) and the glyphs are added under the transform
+    // the function branch below sets on the context.
+    const p = new Path2D();
+    pathOutlineInto(p, center, rotation, shape);
+    p.addPath(
+      glyphs,
+      new DOMMatrix().translateSelf(center.x, center.y).rotateSelf((rotation * 180) / Math.PI),
+    );
+    ctx.fill(p, "evenodd");
+    ctx.restore();
+    return;
+  }
   ctx.beginPath();
   outline();
   ctx.save();
@@ -107,8 +161,13 @@ export function fillAnchor(
   fillStyle: string,
 ): void {
   const half = outlineHalfExtents(shape);
-  fillWithCutouts(ctx, center, rotation, shape, fillStyle, (p) =>
-    anchorGlyphs(p, half, outlineIsRound(shape)),
+  fillWithCutouts(
+    ctx,
+    center,
+    rotation,
+    shape,
+    fillStyle,
+    staticGlyphPath("anchor", half, outlineIsRound(shape)),
   );
 }
 
@@ -121,8 +180,13 @@ export function fillFinish(
   fillStyle: string,
 ): void {
   const half = outlineHalfExtents(shape);
-  fillWithCutouts(ctx, center, rotation, shape, fillStyle, (p) =>
-    finishGlyphs(p, half, outlineIsRound(shape)),
+  fillWithCutouts(
+    ctx,
+    center,
+    rotation,
+    shape,
+    fillStyle,
+    staticGlyphPath("finish", half, outlineIsRound(shape)),
   );
 }
 
@@ -135,7 +199,12 @@ export function fillKillZone(
   fillStyle: string,
 ): void {
   const half = outlineHalfExtents(shape);
-  fillWithCutouts(ctx, center, rotation, shape, fillStyle, (p) =>
-    killZoneGlyphs(p, half, outlineIsRound(shape)),
+  fillWithCutouts(
+    ctx,
+    center,
+    rotation,
+    shape,
+    fillStyle,
+    staticGlyphPath("killzone", half, outlineIsRound(shape)),
   );
 }
