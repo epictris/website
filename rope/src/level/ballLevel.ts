@@ -213,12 +213,6 @@ export class BallLevel {
 
   // Are the player's hands OFF the ball - because it is still rolling in, or
   // because the level is still playing back the arrival it opens on?
-  //
-  // The renderer asks so it can leave the aim reticle off the screen until the
-  // ball is the player's to aim (see `render/renderer.ts`): a cursor drawn over
-  // an opening it cannot steer is a control that looks broken. The input source
-  // asks so it can put the cursor back above the ball on the frame the level
-  // hands it over (see `BallInputSource.handOver`).
   get handsOff(): boolean {
     return this.entry !== null || this.arrival !== null;
   }

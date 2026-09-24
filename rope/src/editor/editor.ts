@@ -9667,7 +9667,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           testLevel,
           camera,
           fps,
-          ballInput?.reticlePoint() ?? null,
+          ballInput?.aimPoint() ?? null,
           alpha,
           testIn3d,
           testSparks,

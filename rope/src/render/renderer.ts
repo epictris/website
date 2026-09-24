@@ -1113,13 +1113,10 @@ export function renderBall(
   debris?.draw(ctx);
   sparks?.draw(ctx);
 
-  // Not while the level is still opening - rolling the ball in, or playing back
-  // the run it arrives on (see `BallLevel.handsOff`): until the ball is handed
-  // over the player's aim does nothing, and a reticle drawn over an opening it
-  // cannot steer is a cursor that looks broken. Asked of the LEVEL rather than
-  // left to each caller, so the game, the editor's ▶ Test and `cli shot` all
-  // draw the same opening.
-  if (aimWorld && !level.handsOff) drawAimReticle(ctx, aimWorld);
+  // Drawn through a level's opening as well: the reticle stands in for the
+  // hidden OS pointer, and a cursor that vanishes while the ball rolls in is a
+  // pointer the player has lost.
+  if (aimWorld) drawAimReticle(ctx, aimWorld);
 
   ctx.restore();
 

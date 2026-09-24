@@ -26,9 +26,9 @@
 // real pointer on the desktop - one the OS is moving, one the browser is
 // hit-testing every click against - and the aim is read straight off it,
 // unseeded and unbounded. Where the reticle IS the page's cursor (the game hides
-// the OS pointer for the ball controller and draws this in its place) the seed
-// says where the virtual one is born, and it is asked only when there is a
-// virtual one to be born.
+// the OS pointer for the ball controller and draws this in its place) the
+// virtual one is born where the desktop pointer was when the lock took it, so
+// the cursor stays exactly where the player left it.
 //
 // It was briefly the other way: with a seed, the cursor travelled by the mouse's
 // steps whether or not the lock was held, so that a window would feel like
@@ -71,8 +71,8 @@ import {
 //   cursor (default) - the aim point is the cursor's screen position,
 //     un-projected through the current camera. Fullscreen, with the lock held,
 //     that is the VIRTUAL cursor: integrated from the mouse's own travel,
-//     bounded by the play frame, and born above the avatar rather than under the
-//     desktop pointer (see `AimPointer`'s `seed`), so aim carries on past the
+//     bounded by the play frame, and born where the desktop pointer was when
+//     the lock took it (see `AimPointer.birthplace`), so aim carries on past the
 //     edge of the screen. Windowed there is no lock and no virtual cursor, and
 //     this is the real pointer, followed outright - the same picture `position`
 //     draws, which is what a page with a visible-or-not desktop pointer in it
@@ -181,27 +181,20 @@ export class AimPointer {
   //
   // LOCKED there is no such pointer - `clientX/clientY` is frozen at the point
   // the capture was made from - so a motionless event says nothing, and the
-  // virtual cursor is born at the seed instead (see `seed` and the
+  // virtual cursor is born at its birthplace instead (see `birthplace` and the
   // `pointerlockchange` handler).
   private view: Vec2 | null = null;
   // Whether a mouse MOVE has ever been folded in. Until one has, wherever the
-  // cursor is is this class's own doing - the seed, or the press that opened
-  // the run - and the lock may move it; after one it is the player's aim and
-  // nothing may move it but them.
+  // cursor is is this class's own doing - its birthplace, or the press that
+  // opened the run - and the lock may move it; after one it is the player's aim
+  // and nothing may move it but them.
   private moved = false;
-  // Whether the cursor is being held off the screen: it has a position and the
-  // aim is read from it, but nothing draws it until the player moves the mouse
-  // or presses a button (see `park`, `reveal` and `isHidden`).
-  private hidden = false;
-  // Whether the cursor is PARKED: put at its seed by this class rather than by
-  // the player, and still there (see `park`).
-  //
-  // Separate from `hidden` because a parked cursor may be drawn - the one a
-  // level's opening hands over IS drawn, and its appearing is what tells the
-  // player the ball is theirs (see `BallInputSource.handOver`). What parked
-  // means is only that nobody has taken it over yet, so it may still be
-  // re-seeded as the camera eases and the ball rolls on. The first move or
-  // press ends it, and nothing re-seeds it again.
+  // Whether the cursor is PARKED: put at its birthplace by this class rather
+  // than by the player, and still there (see `park`). What parked means is only
+  // that nobody has taken it over yet, so it may still be re-seeded to follow
+  // a desktop pointer that moved across the letterbox rather than the canvas
+  // (see `BallInputSource.rideParked`). The first move or press ends it, and
+  // nothing re-seeds it again.
   private parked = false;
   // How far it moved on the last mousemove, in view pixels.
   private lastMotion: Vec2 | null = null;
@@ -240,14 +233,11 @@ export class AimPointer {
   // editor/editor.ts), so these listeners outlive the run and a click meant for
   // the toolbar would otherwise capture the cursor into a level nobody is
   // playing.
-  // `seed` is where the virtual cursor is BORN, in view pixels, and passing one
-  // is the statement that THIS RETICLE IS THE PAGE'S CURSOR: the game hides the
-  // OS pointer for the ball controller and draws the reticle in its place, so
-  // once the lock has taken the desktop pointer away the reticle may start above
-  // the avatar (see `BallInputSource`) rather than at the frozen point the
-  // capture happened to be made from, with the ball snapping to face it. It is
-  // asked ONLY while locked; unlocked there is a real pointer to be under and
-  // that is where the aim is, seed or no seed.
+  // `seed` is where the cursor is born when the page has never seen the desktop
+  // pointer at all (see `birthplace`), in view pixels, and passing one is the
+  // statement that THIS RETICLE IS THE PAGE'S CURSOR: the game hides the OS
+  // pointer for the ball controller and draws the reticle in its place, so this
+  // class may give it a position of its own before the first move.
   //
   // Null - the default - is a page whose reticle never replaces the pointer at
   // all: the grapple controller (its canvas keeps a crosshair) and every test
@@ -320,18 +310,16 @@ export class AimPointer {
     // carries `movementX/Y` and nothing is lost.
     document.addEventListener("pointerlockchange", () => {
       this.lastReal = null;
-      // The lock has just taken the desktop pointer away, so an aim read off it
-      // - the Play press, made by a hand that is no longer pointing at anything
-      // the page can see - is not where anything is any more. The virtual
-      // cursor is re-born at the seed instead, which is where a locked one
-      // always belongs (see `seed`), and the run still opens WITH a reticle
-      // rather than with none until the first move.
+      // The lock has just taken the desktop pointer away, and the virtual
+      // cursor carries on from exactly where it was: the capture point, which
+      // is where the player's hand left the desktop pointer (see
+      // `birthplace`). The run still opens WITH a reticle rather than with none
+      // until the first move.
       //
       // Only while the aim is still this class's own: once the player has
-      // moved, the reticle is theirs, and a re-lock after an Esc may not jerk
-      // it back over the avatar.
+      // moved, the reticle is theirs, and a re-lock after an Esc leaves it be.
       if (!this.locked() || this.moved || this.seed === null) return;
-      const at = this.seed();
+      const at = this.birthplace();
       if (at !== null) this.view = clampToFrame(at);
     });
   }
@@ -436,9 +424,8 @@ export class AimPointer {
     // A mousemove that did not move, before there is a cursor to move. The
     // browser sends one whenever the page moves under a stationary pointer, and
     // LOCKED it says nothing at all: `clientX/clientY` is the frozen capture
-    // point, so answering it would put the virtual cursor (and the steering
-    // under it) wherever the desktop pointer happened to be sitting when the
-    // lock was taken, rather than at the seed it is born at.
+    // point, and the virtual cursor is born at its birthplace (the lock change
+    // or the first real move puts it there) rather than off a non-event.
     //
     // UNLOCKED the same event is the answer to "where is the pointer" - the one
     // the OS is moving and the browser hit-tests clicks against - and the game
@@ -446,12 +433,10 @@ export class AimPointer {
     // the player's hand actually is without waiting for them to move it.
     if (this.view === null && locked && motion.x === 0 && motion.y === 0) return;
     // Travel is the player saying where they want to aim; a position is only
-    // where their hand already was (see `moved`). It is also what takes a parked
-    // cursor back off the shelf: the player has moved it, so it is theirs to
-    // see again (see `park`).
+    // where their hand already was (see `moved`). It is also what ends a park:
+    // the player has moved the cursor, so it is theirs (see `park`).
     if (motion.x !== 0 || motion.y !== 0) {
       this.moved = true;
-      this.hidden = false;
       this.parked = false;
     }
     // UNLOCKED, THERE IS NO VIRTUAL CURSOR: the desktop pointer is still the
@@ -480,12 +465,12 @@ export class AimPointer {
     // cursor is what the desktop pointer stopped being, and aim carries on past
     // the edge of the screen because nothing is tracking an edge any more.
     //
-    // Its FIRST position is the seed's where there is one (the avatar's own head
-    // for the ball controller, whose reticle IS the page's cursor), so a lock
-    // taken before the mouse has moved starts the aim at the player rather than
-    // at whatever frozen point the pointer was captured from.
+    // Its FIRST position is its birthplace where the reticle IS the page's
+    // cursor - the last place the page saw the desktop pointer, which is the
+    // frozen capture point itself unless the page never saw one at all.
     this.lastMotion = motion;
-    this.view = clampToFrame((this.view ?? this.seed?.() ?? real).add(motion));
+    const from = this.view ?? this.birthplace() ?? real;
+    this.view = clampToFrame(from.add(motion));
   }
 
   // The virtual cursor in view pixels, or null before the first mousemove.
@@ -494,16 +479,16 @@ export class AimPointer {
   }
 
   // WHERE THE CURSOR IS BORN, in view pixels, for a run nobody has aimed yet:
-  // the virtual one under the lock, and the desktop one without it.
-  //
-  // LOCKED there is no desktop pointer left to be under - `clientX/clientY` is
-  // frozen at the capture point - so the seed is the whole answer, which for the
-  // ball controller is straight above the avatar (see `seed`).
+  // wherever the desktop pointer last was. The cursor STAYS where the player's
+  // hand left it - a level starting does not move it anywhere of its own.
   //
   // UNLOCKED the cursor IS the desktop pointer, and where that is is a fact
   // about the desktop rather than ours to choose: born anywhere else, the aim
   // would sit somewhere the player's hand is not, and the reticle standing in
   // for a hidden OS pointer would be lying about where their clicks will land.
+  // LOCKED the answer is the same point: `clientX/clientY` froze at the capture
+  // point, which is where the desktop pointer was when the lock took it.
+  //
   // The page has been noting it since it parsed (`watchPointer` in
   // render3d/store.ts) because nothing in the app is listening early enough -
   // the press that picks a level is the last one before the run opens, and the
@@ -516,61 +501,36 @@ export class AimPointer {
   // cursor is on screen and is its own mark, and nothing here may move it.
   private birthplace(): Vec2 | null {
     if (this.seed === null) return null;
-    if (this.locked()) return this.seed();
     const last = typeof window === "undefined" ? undefined : window.__ropePointer;
     return last ? clientToView(this.canvas, last.x, last.y) : this.seed();
   }
 
-  // PUT THE CURSOR BACK WHERE IT IS BORN, and hold it there until the player
-  // moves the mouse - drawn or not, as the caller says.
+  // GIVE THE CURSOR A POSITION AT THE START OF A RUN without moving it, and
+  // hold it there until the player moves the mouse.
   //
-  // Two callers, and both are a run that has not been aimed yet (see
-  // `BallInputSource`). One is the OPENING of every run: the page has hidden the
-  // OS pointer and this reticle replaces it, so the level opens with the ball
-  // facing the cursor rather than with no aim at all. The other is a level's
-  // opening HANDING THE BALL OVER: the player has been watching a ball they
-  // could not aim, and wherever their hand happened to be resting through it is
-  // not an aim they made. Left alone, the reticle appears at the hand-over
-  // already somewhere - over the level, off to one side - and the ball turns to
-  // face it before the player has touched anything.
+  // Called at the OPENING of every run (see `BallInputSource.openRun`): the page
+  // has hidden the OS pointer and this reticle replaces it, so the level opens
+  // with the ball facing the cursor rather than with no aim at all, and the
+  // reticle drawn from the first frame.
   //
-  // The cursor is MOVED rather than forgotten, and that is the difference
-  // between this and a cursor nothing has put anywhere. The aim is the cursor's
-  // position, so a cursor with no position is a ball with no aim at all -
-  // rotation left to the physics, the loop wherever the roll left it. Put at its
-  // birthplace instead, the ball is aiming at the one place the player's own
-  // cursor would be: under their hand windowed, and straight above the avatar
-  // under the lock, where the loop already points.
+  // It does not MOVE the cursor. Under the lock, a virtual cursor that already
+  // has a position - a retry after the completion panel, say - keeps it; the
+  // capture point the birthplace would answer is where the lock was TAKEN, not
+  // where the hand has since steered it. Otherwise it is the birthplace, which
+  // is where the desktop pointer is, or was when the lock took it.
   //
-  // `show` is whether it is DRAWN while it sits there, and what decides it is
-  // whether the ball is the player's on the frame it is parked.
-  //
-  // In their hands it is shown, which is a run opening with nothing in front of
-  // it and a hand-over at the end of an opening alike: the page has taken the OS
-  // pointer away, so a cursor that is aiming and not drawn is a game whose only
-  // way of saying it is listening is to be moved and watched. At a hand-over
-  // that mark is also the message - the reticle appearing is how the player is
-  // told the ball is theirs.
-  //
-  // While the ball is NOT theirs it is hidden: an opening is watched rather than
-  // aimed (`BallLevel.handsOff` drops the aim in the sim), and a reticle over it
-  // would be a mark the player cannot use. The aim is held at it until the first
-  // mouse move, which is the player taking the cursor over, or the first press,
-  // which is them saying something about where they are aiming (see `reveal`).
-  //
-  // `moved` goes back either way, and that is the point rather than
-  // housekeeping: it is what says the cursor is still this class's own, so a
-  // re-lock may re-seed it.
+  // `moved` goes back, and that is the point rather than housekeeping: it is
+  // what says the cursor is still this class's own, so a re-lock may re-seed it
+  // at the capture point.
   //
   // A pointer with no seed (the grapple controller, a test in the editor) has
   // nowhere of its own to be put and is left exactly as it was.
-  park(show = false): void {
-    const at = this.birthplace();
+  park(): void {
+    const at = this.locked() && this.view !== null ? this.view : this.birthplace();
     if (!at) return;
     this.view = clampToFrame(at);
     this.moved = false;
     this.parked = true;
-    this.hidden = !show;
     this.lastMotion = null;
     // Nothing may be owed across a cursor that has just been picked up and put
     // down somewhere else: a withheld warp is a correction to the position it
@@ -579,17 +539,10 @@ export class AimPointer {
     this.withheld = null;
   }
 
-  // Is the cursor being held off the screen (see `park`)? The aim is still read
-  // from it; this is only about whether the reticle is DRAWN (see
-  // `BallInputSource.reticlePoint`).
-  isHidden(): boolean {
-    return this.hidden;
-  }
-
-  // Is the cursor still the one this class put where it is - parked at its seed
-  // with nothing moved or pressed since (see `park`)? Drawn or not: what it
-  // answers is whether the player has taken it over, which is what says it may
-  // still be re-seeded (see `BallInputSource.handOver`).
+  // Is the cursor still the one this class put where it is - parked at its
+  // birthplace with nothing moved or pressed since (see `park`)? What it answers
+  // is whether the player has taken it over, which is what says it may still be
+  // re-seeded (see `BallInputSource.rideParked`).
   isParked(): boolean {
     return this.parked;
   }
@@ -608,25 +561,18 @@ export class AimPointer {
   // UNLOCKED the press itself says where the pointer is - `clientX/clientY` is
   // live, and it is the point the browser hit-tested the click at - so the
   // cursor appears under the hand that clicked. Locked, those fields are frozen
-  // at wherever the lock was taken and the seed is the only honest answer.
+  // at wherever the lock was taken, which is the birthplace.
   reveal(e: MouseEvent): void {
     if (this.seed === null) return;
-    // A press SHOWS a cursor that is only parked (see `park`): the press throws
-    // the chain, and the throw leaves along the loop the parked cursor is
-    // pointing the ball at, so the mark saying where it went is exactly the one
-    // being held back. The player has said something about their aim by using
-    // it; what is drawn is where it already was, so nothing moves.
-    //
-    // A press also ENDS a park, shown or hidden: the aim has been used, so it
-    // is the player's from here and nothing re-seeds it again.
-    this.hidden = false;
+    // A press ENDS a park: the aim has been used, so it is the player's from
+    // here and nothing re-seeds it again.
     this.parked = false;
     if (this.view !== null) return;
     if (!this.locked()) {
       this.view = clientToView(this.canvas, e.clientX, e.clientY);
       return;
     }
-    const at = this.seed();
+    const at = this.birthplace();
     if (at !== null) this.view = clampToFrame(at);
   }
 

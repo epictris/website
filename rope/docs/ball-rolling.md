@@ -341,17 +341,10 @@ A spent entry hands over where it stands, because the alternative is a level tha
 A button **held** through the hand-over throws nothing: `pressed` is an edge the input source measures against its own last frame, and that edge happened while the ball was not the player's.
 The throw costs a fresh press, which is the right price - the alternative is a chain thrown by a hand that was only resting on the mouse.
 
-**The cursor is handed over PARKED**, for the same reason: at its birthplace - `AIM_SEED_ABOVE` straight above the ball under the lock, and the desktop pointer's own position windowed - aimed at and, since 2026-09-20, drawn there (`BallInputSource.handOver` → `AimPointer.park(true)`, and [the recorded arrival](#the-recorded-arrival) for why it is shown).
-A run with no opening at all is parked the same way on its first frame, so the ball faces the cursor from frame 1 rather than tumbling until the first mouse move catches it ([running](running.md#ball-controls-and-aim)).
-The entry drops the aim in the sim, but the input source goes on tracking the mouse through it, and at the hand-over that tracked position would become an aim the player never made - the reticle appearing wherever their hand was resting, with the ball turning to face it on the first frame it was theirs.
-
-It is moved rather than forgotten because **the ball is handed over aiming**.
-A cursor with no position is a ball with no aim, which leaves its rotation to the physics: the ball arrives still carrying the entry's roll, climbs its own lug and rocks about half a metre back down it before it settles.
-Aimed at the seed, the loop is already pointing where the aim is, so nothing snaps, and the aim's speed-faded brake (see [the steered ball's grip](#the-steered-balls-grip)) stops the ball where it arrived - measured on `CAVE`, at rest with the loop dead vertical.
-While it is parked the seed is re-taken every poll, so the cursor rides above the ball instead of sliding out from over it as the camera eases off the spawn onto the avatar (26 cm of ease put the aim 22 degrees off vertical before it did).
-The first mouse move, or the first press, takes it over and nothing re-seeds it again.
-
-Windowed there is no virtual cursor to keep - the reticle is the real pointer and is drawn under it on the next move - and what the park buys there is the frames up to that move, which is where the reticle the hand-over shows is standing, over the last position the page saw the pointer at (`watchPointer` in `render3d/store.ts`).
+**The cursor is handed over where it is.**
+It is drawn through the whole opening and is not moved at the hand-over, so the ball becomes the player's aiming wherever their hand has been resting (2026-09-23, asked for by Tris: the cursor used to be parked above the ball at the hand-over and hidden until then).
+The run's cursor is parked once, when the run opens, at the desktop pointer's last position, so the ball faces the cursor from frame 1 rather than tumbling until the first mouse move catches it ([running](running.md#ball-controls-and-aim)).
+The cost is the old hand-over's pose: parked above the ball, the loop was already pointing at the aim and the aim's speed-faded brake (see [the steered ball's grip](#the-steered-balls-grip)) stopped the ball where it arrived, measured on `CAVE` at rest with the loop dead vertical; a cursor off to one side turns the ball to face it on the hand-over frame.
 
 **Four ways a level has no entry**, and the last two are the same thought: no field, a `hang` beside it (a hanging ball has nothing to roll on), a start from a **checkpoint**, and a **▶ Test in the editor**.
 Both of those last are places the run is deliberately not being opened - a checkpoint is a place to be dropped into ready to play, and a test is a spot-check of the geometry being edited - and both drop `roll` from the data rather than skipping it in the driver, so the bundle either one exports describes the run that was played (`spawnAtCheckpoint`, `startTest` in `editor/editor.ts`).
@@ -395,13 +388,8 @@ That is measured the way the entry's is, and it is the claim the suite exists fo
 
 **It ends one way only: the stream runs out.**
 There is no equivalent of the entry's stalled arm, because nothing about the world can shorten a recording - it is input, and a level that has changed under it plays it out against the level as it now is.
-The end is taken at the TOP of a frame like the entry's, so the frame after the last recorded one is the player's, completely: the aim steers on it, a button held through it throws nothing (that edge happened while the ball was not theirs), and the cursor arrives PARKED above the ball.
-All three of those are the rolling entry's, unchanged - the input source watches one flag for both openings (`BallLevel.handsOff`), which is why an arrival needed nothing of its own at the hand-over.
-
-**The parked cursor is DRAWN at a hand-over**, and that is the one thing about it an arrival changed (`AimPointer.park(show)`, 2026-09-20).
-A reticle appearing is how the player is told the ball is theirs: nothing has been drawn over the opening, the ball has been moving without them, and a hand-over that leaves the screen exactly as it was leaves them to find out by moving the mouse and seeing whether anything answers.
-Shown, it still RIDES above the ball - the re-seed that keeps it there is keyed on the cursor still being the game's own (`isParked`) rather than on its being hidden, which is what lets the two come apart.
-Everywhere else a park is still hidden: a mark the player did not put there is one they did not ask for, and the hand-over is the one moment that is exactly what is wanted.
+The end is taken at the TOP of a frame like the entry's, so the frame after the last recorded one is the player's, completely: the aim steers on it, a button held through it throws nothing (that edge happened while the ball was not theirs), and the cursor stays where it is, drawn throughout.
+All three of those are the rolling entry's, unchanged, which is why an arrival needed nothing of its own at the hand-over.
 
 **The camera follows the ball through an arrival**, which is the opposite of what it does through a roll, and for the same reason.
 A roll is a ball coming into a room the player is being shown, so the frame stands still; an arrival is somebody swinging through the level, and a camera that stood still for it would watch them leave.

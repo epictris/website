@@ -339,17 +339,11 @@ const ballInput = isBall
       // idle in, which is the editor's case and not this one.
       () => replayName === null,
       // The canvas hides the OS pointer here (below) and the reticle stands in
-      // for it, so the aim may be born above the avatar and travel from there
-      // (see `AimPointer`). A test run from the editor passes nothing here: the
-      // arrow is still on screen there, and the aim has to stay under it - and
-      // nor does a replay, which keeps the desktop cursor for the bar.
+      // for it, so the aim may be given a position of its own before the first
+      // move (see `AimPointer`). A test run from the editor passes nothing here:
+      // the arrow is still on screen there, and the aim has to stay under it -
+      // and nor does a replay, which keeps the desktop cursor for the bar.
       replayName === null,
-      // While a level is still opening - the ball rolling in, or the recorded
-      // arrival playing back - the player's aim is dropped by the sim, so the
-      // cursor is put back above the ball and off the screen when it hands over
-      // (see `BallInputSource.handOver`). Read through `level`, which a reset
-      // replaces.
-      () => level instanceof BallLevel && level.handsOff,
     )
   : null;
 // The ball controller draws its own aim reticle (clamped to the chain's reach),
@@ -828,8 +822,8 @@ function retryLevel(): void {
   // The cursor goes back under the game's own reticle, which `completeLevel`
   // took off so the panel could be pointed at.
   hidePointer();
-  // The aim opens with the run rather than carrying whatever the hand did over
-  // the panel, which is the rule the first run follows too (see `boot`).
+  // The aim opens with the run, at the cursor where the hand left it, which is
+  // the rule the first run follows too (see `boot`).
   ballInput?.openRun();
 }
 
@@ -1043,7 +1037,7 @@ function frame(now: number): void {
       level,
       camera,
       fps,
-      replay ? replayAim : ballInput!.reticlePoint(),
+      replay ? replayAim : ballInput!.aimPoint(),
       alpha,
       scene3d !== null,
       sparks,
@@ -1315,9 +1309,8 @@ async function boot(): Promise<void> {
   hidePointer();
   armFirstClick();
   // The aim starts HERE, with the run, rather than when the input source was
-  // built: the ball opens facing the cursor's birthplace, and whatever the hand
-  // did while the loading screen was up is dropped (see
-  // `BallInputSource.openRun`). Nothing done under an opaque rectangle is aiming.
+  // built: the ball opens facing the cursor, wherever the hand left it (see
+  // `BallInputSource.openRun`).
   ballInput?.openRun();
   requestAnimationFrame(frame);
 }
