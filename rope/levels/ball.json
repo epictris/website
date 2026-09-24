@@ -2798,30 +2798,29 @@
       "color": "#0a4247",
       "opacity": 0.5,
       "friction": 1,
-      "flow": -120,
-      "drag": 50,
+      "flow": 0,
+      "drag": 5,
       "objects": [
         {
           "type": "collision",
-          "x": -1467.4999999999986,
+          "x": -1032.4999999999984,
           "y": -4.999999999999893,
           "shape": {
             "kind": "rect",
-            "w": 1195,
+            "w": 325,
             "h": 50
           }
         },
         {
           "type": "geometry",
-          "x": -1467.4999999999986,
+          "x": -1032.4999999999984,
           "y": -4.999999999999893,
           "shape": {
             "kind": "rect",
-            "w": 1195,
+            "w": 325,
             "h": 50
           },
           "matchCollision": true,
-          "z": 25,
           "depth": 150,
           "texture": "wood"
         }
@@ -8163,6 +8162,7 @@
       "objects": [
         {
           "type": "collision",
+          "x": -2.4868995751603507e-12,
           "shape": {
             "kind": "poly",
             "verts": [
@@ -8296,6 +8296,7 @@
         },
         {
           "type": "geometry",
+          "x": -2.4868995751603507e-12,
           "shape": {
             "kind": "poly",
             "verts": [
@@ -13627,7 +13628,6 @@
             "h": 50
           },
           "matchCollision": true,
-          "z": 25,
           "depth": 150,
           "texture": "wood"
         }
