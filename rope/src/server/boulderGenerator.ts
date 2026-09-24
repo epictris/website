@@ -85,13 +85,15 @@ export function boulderGenerator(): Plugin {
           await writeFile(spec, JSON.stringify({
             plane: "CAMERA", units: "metres",
             defaults: {
-              depth: input.depth, seed: input.seed, slabs: 24,
+              depth: input.depth, seed: input.seed, slabs: 10,
               tolerance: Math.min(0.04, Math.sqrt(area) * 0.04),
-              fracture_angle: 4, detail: 1, color: [0.13, 0.15, 0.18],
-              weathering: 0.38, strata: 0.08, secondary_slabs: 0.12,
-              edge_variation: 1, fit_mode: "playable_perimeter",
-              chunked_sides: true, hybrid_faces: true, broad_side_chunks: true,
-              soften_thin_edges: true, solid_chunk_edges: true, join_undercuts: false,
+              fracture_angle: 4, camera_yaw: 0, camera_pitch: 0,
+              detail: 1, color: [0.13, 0.15, 0.18],
+              weathering: 0.38, strata: 0.08, secondary_slabs: 0,
+              edge_variation: 0.65, fit_mode: "playable_perimeter",
+              chunked_sides: true, hybrid_faces: true, balanced_hybrid: true,
+              broad_side_chunks: true, soften_thin_edges: true,
+              solid_chunk_edges: true, join_undercuts: false,
             },
             rocks: [{ name: "boulder", outer: input.polygon }],
           }));

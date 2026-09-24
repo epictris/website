@@ -143,7 +143,12 @@ def assemble_rock(rock, destination, source_collection, materials):
         remesh = result.modifiers.new("Consolidate overlapping rock volume", "REMESH")
         remesh.mode = "VOXEL"
         remesh.voxel_size = spec["tolerance"] * .30 / math.sqrt(max(1,spec["detail"]))
-        if spec.get('chunked_sides'):
+        if spec.get('balanced_hybrid'):
+            # The previous 0.0065 m voxel pass made hundreds of thousands of
+            # temporary polygons before the facets were simplified again.
+            # Keep enough resolution for the rounded chunk edges and outline.
+            remesh.voxel_size=min(remesh.voxel_size,.012)
+        elif spec.get('chunked_sides'):
             remesh.voxel_size=min(remesh.voxel_size,.0065 if spec.get('broad_side_chunks') else .0045)
         remesh.adaptivity = .06
         remesh.use_smooth_shade = True
@@ -189,7 +194,12 @@ def assemble_rock(rock, destination, source_collection, materials):
         keep_main_body(result)
     # Simplify the smooth voxel union into larger sculpted planes.
     dec = result.modifiers.new("Broad sculpted facets", "DECIMATE")
-    dec.ratio = .18 if spec.get('join_undercuts') else (.085 if spec.get('broad_side_chunks') else (.045 if spec.get('hybrid_faces') else .075))
+    if spec.get('balanced_hybrid'):
+        # Preserve the broad faces and two-segment rock bevel, while budgeting
+        # the surface before the bevel expands its edge loops.
+        dec.ratio=min(1.0, 7000/max(1,len(result.data.polygons)))
+    else:
+        dec.ratio = .18 if spec.get('join_undercuts') else (.085 if spec.get('broad_side_chunks') else (.045 if spec.get('hybrid_faces') else .075))
     bpy.context.view_layer.objects.active = result
     bpy.ops.object.modifier_apply(modifier=dec.name)
     bevel = result.modifiers.new("Chipped light-catching edges", "BEVEL")

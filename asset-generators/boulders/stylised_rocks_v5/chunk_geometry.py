@@ -21,7 +21,10 @@ def build_chunks(spec):
         coreparts=[prism(q,-depth*.38,depth*.38,'buried_seam_support_'+str(i),0) for i,q in enumerate(polygons(support))]
     bounds=np.array([[p.bounds[0],p.bounds[1],-depth*.64],[p.bounds[2],p.bounds[3],depth*.64]])
     broad=spec.get('broad_side_chunks',False)
-    count=max(16,int(spec['slabs']*.90)) if broad else max(42,int(spec['slabs']*3.0))
+    # Keep the original chunk geometry; only sample fewer, broader cells for
+    # the balanced hybrid recipe.
+    count=(max(10,int(spec['slabs']*.90)) if spec.get('balanced_hybrid') else
+           (max(16,int(spec['slabs']*.90)) if broad else max(42,int(spec['slabs']*3.0))))
     candidates=[]
     for _ in range(count*200):
         v=rng.uniform(bounds[0]+1e-4,bounds[1]-1e-4)
