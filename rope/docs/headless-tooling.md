@@ -51,7 +51,7 @@ bun run src/tools/cli.ts shot session.json --frame 65 --3d --out f65.png # ...th
 bun run src/tools/cli.ts shot session.json --frames 60..120 --every 10 --3d  # a filmstrip + motion profile
 bun run src/tools/cli.ts shot session.json --frame 65 --3d --at 21,8.6 --orbit -35,25  # the 3D view turned about a world point (degrees), for a shape rather than a frame
 bun run src/tools/cli.ts shot --view capture.json  # an F4 view capture reproduced: the same camera point, orbit and zoom
-bun run src/tools/cli.ts shot session.json --frame 65 --3d --query paint=0             # any other URL switch passed to the page: here the painted light off, for an A/B
+bun run src/tools/cli.ts shot session.json --frame 65 --3d --query rocks=0             # any other URL switch passed to the page: here the rocks off, for an A/B
 bun run src/tools/cli.ts shot session.json --frames 1..1600 --every 40 --3d --probe      # which frame compiled which program, the LAZY way (no prewarm)
 bun run src/tools/cli.ts shot session.json --frames 1..1600 --every 40 --3d --probe all  # after the game's prewarm: anything `fresh` is a stutter it missed
 bun run src/tools/cli.ts shot --diff before.png after.png               # changed-pixel count + highlight

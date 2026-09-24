@@ -1046,8 +1046,7 @@ async function cmdShot(first: string, o: Record<string, string>, extra: string[]
       (o.retract ? "&retract=1" : "") +
       // `--query a=1&b=2` passes any other URL parameters through to the page
       // as typed, for the switches the game reads that have no flag of their
-      // own - `paint=0` is the one this was added for (see render3d/paint.ts):
-      // the same frame painted and not is how the painted light is judged.
+      // own, e.g. `rocks=0` for an A/B of the same frame.
       (o.query ? `&${o.query}` : "") +
       // `--probe` (with `--3d`) skips the precompile and logs, per drawn frame,
       // the programs and textures three has built and the meshes whose program

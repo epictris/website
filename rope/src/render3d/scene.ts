@@ -781,9 +781,10 @@ export class Scene3D {
     const key = `${color}|${src.uuid}`;
     const existing = this.highlightMaterials.get(key);
     if (existing) return existing;
-    // Keeping the source's shader patches: a plain clone drops the painted light
-    // and an orthographic object's lens, so selecting a thing would change what
-    // it looks like and, for an ortho one, where it is drawn.
+    // Keeping the source's shader patches: a plain clone drops a patched
+    // surface's shader (water, rocks) and an orthographic object's lens, so
+    // selecting a thing would change what it looks like and, for an ortho one,
+    // where it is drawn.
     const clone = cloneWithPatches(src);
     const std = clone as THREE.MeshStandardMaterial;
     if (std.isMeshStandardMaterial) {

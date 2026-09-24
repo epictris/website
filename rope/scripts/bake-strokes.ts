@@ -10,8 +10,7 @@
 // following the form - and whose shine is a painted reflection, the warm
 // ground below and the pale sky above smeared into each other with a soft
 // horizon. The strokes are paint on the object, so they turn with it; the
-// reflection is the scene's own, kept soft and with its sun clipped out
-// (see render3d/paint.ts), so it is a broad sheen rather than a hot spot.
+// reflection is the scene's own.
 // A first version painted the ball as a heavily dabbed dark cannonball; the
 // reference is cleaner than that, and the set is tuned to it.
 //

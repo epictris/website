@@ -23,7 +23,7 @@ bun run test       # THE suite: typecheck + every case suite + every playtest + 
 ```
 
 `/` is the **level select** and `?level=NAME` plays one (`src/level/registry.ts`); `BALL` (the ball & chain controller, 3D) is the introduction and the grapple levels stay 2D.
-`?render=2d|3d`, `?hud=1` (F3 in play), `?aim=cursor|position|motion`, `?toggle_click=true` (click to deploy/redeploy, right-click to detach), `?probe3d=1`, `?retract=1` (the released chain reels in, still being judged), `?paint=0` (the painted light off, for an A/B), F4 captures the camera for `cli shot --view`.
+`?render=2d|3d`, `?hud=1` (F3 in play), `?aim=cursor|position|motion`, `?toggle_click=true` (click to deploy/redeploy, right-click to detach), `?probe3d=1`, `?retract=1` (the released chain reels in, still being judged), F4 captures the camera for `cli shot --view`.
 `?checkpoint=NAME` starts (and restarts) at an authored named spawn instead of the level's own - placed on the editor's notes layer, recorded into every bundle so a replay starts where the run did.
 `/editor` is the level editor.
 **P** downloads a replayable session bundle stamped with the served tree.
@@ -149,7 +149,7 @@ Camera
 
 Rendering
 
-- [art-style](docs/art-style.md) - the painterly look: painted maps, painted light, the reproducible bake, how to add a texture, what was rejected.
+- [art-style](docs/art-style.md) - the painterly look (no longer the direction since 2026-09-24; the painted light is removed): painted maps, the reproducible bake, how to add a texture, what was rejected.
 - [render3d](docs/render3d.md) - two canvases one camera, the coordinate mapping, geometry objects versus collision, bodies and scene objects, traps.
 - [lighting-and-surfaces](docs/lighting-and-surfaces.md) - environment, light objects in bodies, fog, HDRI skies, generated and authored PBR surfaces, tiling.
 - [rock-assets](docs/rock-assets.md) - rock and moss props: a body's outline modelled into a stylised rock in headless Blender, the moss grown from the rock inside the moss body's outline, the job files, the previews, every lesson from the first rock.

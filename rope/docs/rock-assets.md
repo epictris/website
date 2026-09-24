@@ -128,7 +128,6 @@ A few hard-edged black specks show on moss-145's upper-left lip in the game (and
 What is known, each by an A/B in `cli shot`:
 
 - It is the **normal map**: stripping `normalTexture` from the GLB removes them, stripping `occlusionTexture` does not; at `normalScale` 0.2 one blob survives, so it is not a strong but valid tilt.
-- It is not the painted light (`paint=0` keeps them).
 - Ruled out as the cause, each tried and reverted: refilling normals over 40 degrees off their 5x5 mean, exporting tangents (`export_tangents`), refilling occlusion under 0.1, renormalising the normal map after the refill.
 - No UV-degenerate triangles and no bad tangents in the mesh.
 - The raw normal map has a handful of texels 0.3 to 0.5 long, and WebP shortens thousands more below 0.8; renormalising did not remove the specks, so that is not the whole story.

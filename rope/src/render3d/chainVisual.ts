@@ -69,7 +69,7 @@ export class ChainLayer {
   constructor(private readonly scene: THREE.Scene) {
     // Built along +x so the instance rotation is "turn +x onto the tangent",
     // which is the same statement the 2D renderer makes with `atan2`.
-    const torus = new THREE.TorusGeometry(LINK_HALF_LEN, LINK_TUBE, 6, 14);
+    const torus = new THREE.TorusGeometry(LINK_HALF_LEN, LINK_TUBE, 10, 20);
     torus.scale(1, CHAIN_LINK_W / LINK_HALF_LEN, 1);
     this.geometry = torus;
     this.mesh = this.makeMesh(this.capacity);

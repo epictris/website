@@ -45,13 +45,10 @@ bun run assets:paint "<set>" --publish
 
 Full detail, including every flag and why each map is treated differently: [**Painted surfaces**](asset-store.md).
 
-## Layer 2: painted light
+## Layer 2: painted light (removed)
 
-`render3d/paint.ts` is one shader patch, `paintMaterial`, worn by every lit material at the one place each kind is built: generated and authored surfaces, a prop's own materials, the vine, and the water over its own painting.
-It makes three edits inside three's physically-based shading and leaves everything else alone.
-
-- **Light falls in bands.** The wrapped cosine of the sun and of the hemisphere fill's sky-to-ground blend is cut into three bands with soft edges. A painted facet lands wholly in one band and is one tone; the ball crosses the bands as a painter's sphere, a lit side, a mid tone and a shadow side.
-- **Nothing that stays put on a rolling ball.** The sun makes no highlight, and the environment is reflected softly with its sun clipped out, because a highlight or a hot reflection sits where the view puts it rather than where the ball's rotation does, and reads as a sticker. The horizon of the reflection stays, since a metal is its reflection. Sheens come from the lamps, which the ball moves past.
+`render3d/paint.ts` was removed on 2026-09-24: painterly is no longer the look, and every material is now lit by three's plain physically-based shading.
+See [**Painted light (removed)**](lighting-and-surfaces.md#painted-light-removed) for what it did.
 
 ## The ball and chain: painted steel
 
@@ -59,8 +56,9 @@ It makes three edits inside three's physically-based shading and leaves everythi
 It is a commissioned hammered cast-iron ball with a thin forged loop at its pole, wearing a full PBR set of its own: a dark iron albedo with pale seams between the hammer facets, the facets themselves modelled in the geometry (the normal map is all but flat), and packed AO/roughness/metalness in which the roughness averages 0.49 and the metalness 0.74, so it reads as worked iron rather than as chrome.
 
 That is a **deliberate exception to this file rather than a revision of it**, and the two claims it puts under strain are named here because they were paid for: the avatar's surface is now a photograph rather than strokes (the argument against which is the whole of "Painting the photographed iron" below), and where the roughness map dips the environment is reflected sharply enough to test "nothing that stays put on a rolling ball" above.
-The painted light is still worn - a prop's own materials go through `paintMaterial` like everything else, so the sun makes no highlight and its reflection is clipped out of the sky.
-What remains to be judged is whether the lamps' sheen now sits on the ball as a patch, and that is a judgement to be made by PLAYING it on a real GPU rather than off a headless still.
+Since 2026-09-24 it is worn shiny (`MODEL_*` in `render3d/ballVisual.ts`): half its roughness, its 0.15 albedo lifted five times so a lit side and the hammer facets read in a dark cave, and metalness 0.85 so the lamps light it diffusely as well as in its reflection.
+The chain wears `painted steel` at half its map's roughness and 0.9 metalness under a near-white tint, for the same reason.
+What remains to be judged is whether a highlight now sits on the ball as a patch, and that is a judgement to be made by PLAYING it on a real GPU rather than off a headless still.
 
 The avatar wears its own set, **`painted steel`**, and it is the one surface in the game that is strokes rather than a photograph flattened: `scripts/bake-strokes.ts` lays a few thousand soft, part-opacity dabs over a steel-grey ground on a wrapped canvas, with a faint ridge along each stroke for the normal map and a dab-by-dab roughness, and writes the result into `assets-src/painted-steel/` as the set's raw, from where the ordinary pipeline (`bun run assets:paint "painted steel"`) optimises and hashes it like any other.
 The reference is an oil painting of a clean polished steel ball on a chain: a mid grey covered in broad low-contrast strokes that follow the form, and a shine that is the room reflected softly - warm ground below, pale sky above, a soft horizon.
@@ -69,13 +67,6 @@ Two numbers carry the read and both were wrong first: the **tile** is 2 m, so a 
 The chain wears the same set at a multiple (`FORGED_SMALL`) that puts a link at the ball's grain, and the tint (`FORGED_TINT`) is nearly white since the strokes are baked at the steel's own value.
 
 Before this the avatar wore the photographed `rusted iron`, and everything tried on it is in the list below: its rust flecks were photographic detail on a painted ball whatever brush flattened them, and no treatment of its reflection was both metal and free of a fixed patch.
-- **The wrap stops at the terminator**, so a normal turned away from a lamp gets none of it.
-- **Nothing is glossy**: roughness has a floor, so highlights are washes and a metal reflects a soft tone rather than the sky.
-
-`?paint=0` in the browser, or `cli shot --query paint=0` headless, draws the same frame without the patch; that A/B in the live browser on a real GPU is how a change to it is judged.
-The headless runner's SwiftShader is not what the player sees.
-
-Full detail: [**Painted light**](lighting-and-surfaces.md#painted-light).
 
 ## Tuning
 

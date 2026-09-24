@@ -60,22 +60,53 @@ export const FORGED = IRON_SURFACE;
 // from the same bar. The ball itself wears the set at its own tile.
 export const FORGED_SMALL = 5;
 
-// How dark, and how warm. The strokes are baked at the steel's own value (a
-// mid grey, a little cool, as the reference paints it), and this pulls the
-// assembly a shade darker and toward the warm: nearly white read pale and
-// cool in the game, and a warm grey is the reference's steel under a warm
-// room.
+// How light, and how warm. The strokes are baked at the steel's own value (a
+// mid grey, a little cool), and this barely darkens them and nudges them warm:
+// the links are metal, so this is their reflectance, and anything darker
+// turned them into black beads against a dark cave.
 //
 // It is NOT the authored-fill tint the surfaces rule keeps off authored sets
 // (see `TEXTURE_ASSETS`): that one is a level's flat colour leaking onto a
 // picture. This is the avatar's own material saying what shade of steel it is,
 // stated once here rather than baked into the shipped bytes, so it can be
 // changed by editing a constant instead of re-baking and re-publishing.
-const FORGED_TINT = "#b8ac9e";
+const FORGED_TINT = "#f2eadf";
 
 // The assembly's surface, at the ball's own scale or a small part's.
 export function forgedMetal(tileScale?: number): THREE.MeshStandardMaterial {
   return surfaceFor({ texture: FORGED, tileScale, color: FORGED_TINT });
+}
+
+// How the model's own materials are worn, over its maps. Its packed roughness
+// reads a 0.49 mean and its albedo a 0.15 grey, which under plain PBR is a
+// dull, near-black iron: a metal's colour IS its reflection, so a 0.15 albedo
+// reflects 15% of the room, and in a dark cave the ball was a silhouette.
+// Half the roughness tightens the reflection into a shine; the albedo lifted
+// to a ~0.75 mean gives it something to shine with; and metalness just short
+// of 1 lets the lamps light it diffusely as well, which is what shows the
+// sphere's form and its hammer facets where the environment is dark. Applied
+// here rather than baked into the file, so the shine is tuned by editing a
+// constant instead of re-optimising and re-publishing the model.
+const MODEL_ROUGHNESS = 0.5;
+const MODEL_METALNESS = 0.85;
+const MODEL_ALBEDO_LIFT = 5;
+
+function shine(obj: THREE.Object3D): void {
+  obj.traverse((o) => {
+    const mesh = o as THREE.Mesh;
+    if (!mesh.isMesh) return;
+    for (const m of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
+      const std = m as THREE.MeshStandardMaterial;
+      if (!std.isMeshStandardMaterial) continue;
+      // `loadMesh` hands out clones that share the cached file's materials,
+      // so a second ball on the page must not lift the albedo twice.
+      if (std.userData.shined) continue;
+      std.userData.shined = true;
+      std.roughness = MODEL_ROUGHNESS;
+      std.metalness = MODEL_METALNESS;
+      std.color.multiplyScalar(MODEL_ALBEDO_LIFT);
+    }
+  });
 }
 
 export class BallVisual {
@@ -111,6 +142,7 @@ export class BallVisual {
       // The one number that has to be applied here rather than baked into the
       // file, since a level may author a different radius than the model's.
       obj.scale.multiplyScalar(ball.radius / BALL_MESH_RADIUS);
+      shine(obj);
       obj.traverse((o) => {
         const mesh = o as THREE.Mesh;
         if (!mesh.isMesh) return;

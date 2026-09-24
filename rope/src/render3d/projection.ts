@@ -69,19 +69,15 @@ const ORTHO_VERTEX = /* glsl */ `#include <project_vertex>
   }
 }`;
 
-type Patchable = THREE.Material & { __painted?: true };
-
 // `clone()` that keeps a material's shader patches. Three's `copy` carries every
 // parameter but NOT `onBeforeCompile` or `customProgramCacheKey`, which are
-// instance overrides - so a plain clone of a painted or orthographic material is
-// silently a photographic, perspective one.
+// instance overrides - so a plain clone of a patched or orthographic material is
+// silently an unpatched, perspective one.
 export function cloneWithPatches<M extends THREE.Material>(src: M): M {
   const clone = src.clone() as M;
   const own = (k: string): boolean => Object.prototype.hasOwnProperty.call(src, k);
   if (own("onBeforeCompile")) clone.onBeforeCompile = src.onBeforeCompile;
   if (own("customProgramCacheKey")) clone.customProgramCacheKey = src.customProgramCacheKey;
-  const tagged = src as Patchable;
-  if (tagged.__painted) (clone as Patchable).__painted = true;
   return clone;
 }
 
@@ -102,9 +98,10 @@ function orthographicTwin(src: THREE.Material): THREE.Material {
   const twin = cloneWithPatches(src);
   twin.userData[ORTHO_TAG] = true;
   const previous = twin.onBeforeCompile;
-  // The key the material had BEFORE this patch, captured now for the reason
-  // `paintMaterial` gives: three's default key is the hook's source text, which
-  // after the swap below would be this wrapper's - the same for every twin.
+  // The key the material had BEFORE this patch, captured now: three's default
+  // key is the hook's source text, which after the swap below would be this
+  // wrapper's - the same for every twin, so two twins with different hooks
+  // under it would share one program.
   const previousKey = Object.prototype.hasOwnProperty.call(twin, "customProgramCacheKey")
     ? twin.customProgramCacheKey.bind(twin)
     : () => previous.toString();

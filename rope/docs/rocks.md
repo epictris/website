@@ -95,7 +95,6 @@ Being written alongside this doc; described as designed.
 - `Scene3D.setRocks(name)` picks which level's GLB to load. `main.ts` passes `?rocks=<name>` when given (`?rocks=0` turns rocks off), otherwise the level spec's `file` (`ball` for `BALL`). The shot page does the same from the bundle's level id, so `cli shot <bundle> --3d --query rocks=ball` sees them.
 - At `setLevel`, `src/render3d/rockMesh.ts` loads `rocksUrl(level)` = `/rocks/<level>.glb`. A 404 is silent: a level with no generated rocks is normal.
 - For each node whose `rockHash` still equals the hash of that body's current outlines, it hides the body's flat extrusion of those objects and mounts the node in world space.
-- The meshes wear the [painted light](lighting-and-surfaces.md#painted-light) like props, so `?paint=0` is the plain A/B.
 
 ## The rock material
 
@@ -105,7 +104,7 @@ What makes that look, and what the first, photographic slate material lacked: fa
 The machinery is **baked low-frequency masks plus tileable detail**: Blender bakes what varies over the size of a shard (cavity, depth, occlusion), and two painted tiles supply the mottling and a subtle relief.
 The hue stays the level's `dark rock` colour (`ROCK_BASE`, #3a342c, the owner's ask) and the palette is value variations of it; the reference's own cool blue-grey is a second preset one edit away.
 
-It is a `MeshStandardMaterial`, what `surfaceOf` builds for every other surface, patched in `onBeforeCompile`, so shadows, fog, tone mapping and the painted light treat a rock like any other surface; `paintMaterial` is applied after the rock patch and calls it first, and `?paint=0` still gives the plain A/B.
+It is a `MeshStandardMaterial`, what `surfaceOf` builds for every other surface, patched in `onBeforeCompile`, so shadows, fog and tone mapping treat a rock like any other surface.
 `rockMesh.ts` gives every body node one material (the AO atlas is the body's own), carries over the GLB material's `aoMap` with its `channel`, and disposes the rest of the GLB material.
 All materials share one program (`customProgramCacheKey` `rock|2|<palette>`, extended by the paint patch; the palette is compiled in as constants) and one set of tile uniforms, so a tile that lands later updates every rock without a recompile; until then each tile is a 1x1 neutral stand-in.
 
@@ -130,7 +129,7 @@ Any input missing reads as neutral: no `aoMap` is an AO of 1, and a mesh without
   4. **The mottling**: the painted `seaside rock` base at its 2 m tile, desaturated by `ROCK_DESATURATE`, divided by its own mean linear luminance (measured once from a 32x32 downscale when it loads) and flattened to `ROCK_ALBEDO_CONTRAST`, so it adds soft low-contrast patches and a few specks and never a hue or a change of overall value.
   The result is multiplied by the depth shade, by a per-shard brightness jitter from b, and by `ROCK_AO_DIRECT` of the AO.
 - **Normal** (replaces `normal_fragment_maps`): the painted `quarry wall` normal at its 1.8 m tile, plus a second sample at `ROCK_DETAIL_SCALE_2` times the frequency added in at `ROCK_DETAIL_WEIGHT_2` (the `secondDetail` option, on by default), scaled by `ROCK_NORMAL_SCALE`, which is kept subtle: the painted facets only break a plane's gradient a little.
-- **Roughness** (replaces `roughnessmap_fragment`): the `quarry wall` roughness (green channel) plus `ROCK_ROUGHNESS_BIAS` plus `ROCK_CAVITY_ROUGHNESS` times (1 - cavity), clamped; the painted light floors it at 0.42 anyway.
+- **Roughness** (replaces `roughnessmap_fragment`): the `quarry wall` roughness (green channel) plus `ROCK_ROUGHNESS_BIAS` plus `ROCK_CAVITY_ROUGHNESS` times (1 - cavity), clamped.
 - **AO**: `aoMapIntensity` = `ROCK_AO_INTENSITY`, and three's own `aomap_fragment` applies it to the indirect light as usual; `ROCK_AO_DIRECT` is the share that also darkens the albedo, because the scene is lit nearly head-on and the sun alone lights the back of a gap as brightly as the face in front of it.
 
 A set missing from the manifest falls back to `dark rock` for its role, with one `console.info` line.
@@ -268,7 +267,7 @@ bun run src/tools/cli.ts rocks-check public/rocks/ball.glb --body 150   # the bu
 ```
 
 Then play `?level=BALL` (the rocks load by the level's file name), or headless: `bun run src/tools/cli.ts shot <bundle> --3d --query rocks=ball`.
-Add `?rocks=0` or `?paint=0` for the A/B.
+Add `?rocks=0` for the A/B.
 `--only` with no match prints the level's rock body indices.
 
 ## Reporting a defect

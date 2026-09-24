@@ -177,7 +177,7 @@ The rest follows from that:
 - `Scene3D.pick` casts a second ray through the orthographic camera, which is synced to the same view every frame, for objects drawn orthographically, and merges the hits by view depth.
 - `cloneWithPatches` is the clone that keeps `onBeforeCompile` and `customProgramCacheKey`, which three's own `clone()` drops.
   The editor's selection highlight uses it, so a selected orthographic object stays where it is drawn.
-  It also fixes a highlighted object losing the painted light, which it did before.
+  It also fixes a highlighted object losing its shader patches (water, rocks), which it did before.
 
 `cli render3d`'s `format:` and `render:` projection cases assert the field survives the px-to-m gate and an editor save, that the twin is shared and keyed apart, that its hook really rewrites three's `project_vertex` chunk (a renamed chunk would be a `replace` matching nothing, and the object would silently draw in perspective), and that the highlight keeps it.
 What they cannot see is the picture, so the shader was checked with a `cli shot --3d` of a probe level: pairs of boxes at z = -6, -2, 0 and +1.5 m, one of each lens.
