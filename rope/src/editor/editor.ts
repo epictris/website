@@ -181,6 +181,7 @@ import {
   type EdLayer,
   type EdModel,
   glowModel,
+  fireflyModel,
   cloneRouteNode,
   peakSurfaceSpeed,
   routeNode,
@@ -290,6 +291,7 @@ import {
   LIGHT_SHADOW_BUDGET,
 } from "../render3d/lights";
 import { DEFAULT_WAKE_FALL, DEFAULT_WAKE_RISE } from "../render3d/glow";
+import { DEFAULT_FIREFLY_NOTICE, FIREFLY_MAX } from "../render3d/fireflies";
 
 // `geometry` draws the OTHER kind of scene object: a rect like `rect`, but one
 // that is drawn and never simulated. It is a tool rather than a mode on the rect
@@ -310,7 +312,8 @@ type Tool =
   | "chain"
   | "vine"
   | "light"
-  | "glow";
+  | "glow"
+  | "fireflies";
 
 // Which tools each layer offers. A shape tool has no meaning on the notes layer
 // (a note is a text box or an arrow, never a circle) and vice versa, so the
@@ -322,7 +325,20 @@ type Tool =
 // because that is what a light is: another kind of scene object, dropped into
 // the same layer and welded into a body with the shape it belongs to.
 const LAYER_TOOLS: Record<EdLayer, Tool[]> = {
-  scene: ["select", "rect", "circle", "belt", "poly", "path", "geometry", "light", "glow", "chain", "vine"],
+  scene: [
+    "select",
+    "rect",
+    "circle",
+    "belt",
+    "poly",
+    "path",
+    "geometry",
+    "light",
+    "glow",
+    "fireflies",
+    "chain",
+    "vine",
+  ],
   camera: ["select", "rect", "circle", "poly", "path"],
   notes: ["select", "text", "arrow", "checkpoint"],
 };
@@ -2080,6 +2096,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     vine: button("+ Vine", () => setTool("vine")),
     light: button("+ Light", () => setTool("light")),
     glow: button("+ Glow", () => setTool("glow")),
+    fireflies: button("+ Fireflies", () => setTool("fireflies")),
   };
   toolBtns.geometry.title =
     "Click to drop a geometry object; drag to size it. It is DRAWN and never simulated - nothing collides with it, the rope does not wrap it, no force reaches it. Give it a mesh or a texture on the panel; drop it on a selected body to have it ride that body.";
@@ -2093,6 +2110,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   toolBtns.light.title = "Click to drop a light; drag to set how far it reaches";
   toolBtns.glow.title =
     "Click to drop a glowing mushroom (a purple cube for now): one static body holding the cube, the collision box it mirrors, and a WAKING light that stays dark until the ball comes within its wake (the dashed ring) and fades out after it leaves. The 3D preview shows it awake.";
+  toolBtns.fireflies.title =
+    "Click to drop a swarm of fireflies: a body holding only the swarm's light, which is where they hover. When the ball comes within the dashed ring they follow it for the rest of the run, looping around it and lighting it wherever it goes.";
   toolBtns.checkpoint.title =
     "Click to drop a named spawn. Playing with ?checkpoint=NAME starts there instead of at the level's spawn - and stays there over a reset - so an area can be playtested without swinging out to it first. Selecting one and pressing ▶ Test starts the test there.";
   const kindSel = document.createElement("select");
@@ -6465,17 +6484,21 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // A waking light is point-only (the pool that serves it is point
       // lights), so turning one into a spot takes its wake with it - said in
       // the status line, since the fields that showed it are about to go.
+      // A swarm is point-only for the same reason, and goes the same way.
       let slept = 0;
       for (const b of lights) {
         b.light.kind = kind;
-        if (kind === "spot" && b.light.wake > 0) {
+        if (kind === "spot" && (b.light.wake > 0 || b.light.fireflies > 0)) {
           b.light.wake = 0;
+          b.light.fireflies = 0;
           slept++;
         }
       }
       markDirty();
       if (slept > 0) {
-        flashNotice(`a spot cannot wake: cleared wake on ${slept} light${slept === 1 ? "" : "s"}`);
+        flashNotice(
+          `a spot cannot wake or swarm: cleared wake and fireflies on ${slept} light${slept === 1 ? "" : "s"}`,
+        );
       }
       rebuildInspector(); // the cone fields appear or go
     });
@@ -6498,6 +6521,25 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     );
 
     if (lights.every((b) => b.light.kind === "point")) {
+      // A FIREFLY SWARM (see `LightObjectData.fireflies`): this many motes
+      // hovering at the light until the ball comes within `wake`, then
+      // following it. Blank or 0 is an ordinary light.
+      const swarmInput = num(
+        "fireflies",
+        (b) => (b.light.fireflies > 0 ? b.light.fireflies : NaN),
+        (b, v) => (b.light.fireflies = Math.min(FIREFLY_MAX, Math.max(0, Math.round(v)))),
+        1,
+        {
+          placeholder: "none",
+          onEmpty: () => {
+            for (const b of lights) b.light.fireflies = 0;
+          },
+        },
+      );
+      // The times below appear or go with it.
+      swarmInput.addEventListener("change", () => rebuildInspector());
+      const swarming = lights.every((b) => b.light.fireflies > 0);
+
       // A WAKING light (see `LightObjectData.wake`): dark until the ball comes
       // within `wake`, then rising to its intensity with the glowing shapes of
       // its body. Canvas pixels here like the reach, metres on disk; blank or 0
@@ -6509,7 +6551,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         (b, v) => (b.light.wake = Math.max(0, v * PX)),
         10,
         {
-          placeholder: "always on",
+          // A swarm reads the wake as where it notices the ball.
+          placeholder: swarming ? String(Math.round(DEFAULT_FIREFLY_NOTICE * M2PX)) : "always on",
           onEmpty: () => {
             for (const b of lights) b.light.wake = 0;
           },
@@ -6519,7 +6562,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // not - rebuilt once the value is committed rather than per keystroke,
       // which would take the caret out of the field being typed into.
       wakeInput.addEventListener("change", () => rebuildInspector());
-      if (lights.every((b) => b.light.wake > 0)) {
+      // A swarm is never dark, so it has no times to author.
+      if (!lights.some((b) => b.light.fireflies > 0) && lights.every((b) => b.light.wake > 0)) {
         // Seconds, floored at 0; blank is the renderer's default (no delay,
         // DEFAULT_WAKE_RISE, DEFAULT_WAKE_FALL).
         const secs = (
@@ -6586,12 +6630,16 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // handed between sources as they wake, and a shadow map swapped with it
     // would flash (see `render3d/lights.ts`). The box stays, greyed, so the
     // authored flag is visible and survives turning the wake off again.
-    const waking = lights.some((b) => b.light.kind === "point" && b.light.wake > 0);
+    // A swarm is served by a pool too, and casts none either.
+    const waking = lights.some(
+      (b) => b.light.kind === "point" && (b.light.wake > 0 || b.light.fireflies > 0),
+    );
     shadowBox.disabled = waking;
     const sw = el("label", "ed-field");
     sw.textContent = "shadows";
     if (waking) {
-      sw.title = "A waking light casts no shadow (the pool lights that serve it cast none).";
+      sw.title =
+        "A waking light or a firefly swarm casts no shadow (the pool lights that serve them cast none).";
       sw.style.opacity = "0.5";
     }
     sw.appendChild(shadowBox);
@@ -7716,7 +7764,16 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     addAndSelect(copy.items, [], [], copy.frames);
   }
 
-  function newDrawnItem(t: Exclude<Tool, "select" | "chain" | "glow">, start: Vec2): EdItem {
+  // `+ Fireflies`: the body `fireflyBody` describes, the way `placeGlow` places
+  // a mushroom - always a body of its own.
+  function placeFireflies(at: Vec2): void {
+    const arrived = fireflyModel(at);
+    beginAction();
+    const copy = cloneBodies(arrived.items, Vec2.ZERO, arrived.bodyFrames);
+    addAndSelect(copy.items, [], [], copy.frames);
+  }
+
+  function newDrawnItem(t: Exclude<Tool, "select" | "chain" | "glow" | "fireflies">, start: Vec2): EdItem {
     // Which of the three scene objects the tool draws. `+ Geometry` is the only
     // way to get a drawn-and-not-simulated object in one gesture; every other
     // shape tool draws a collision object, and NOTHING is created beside it.
@@ -9054,6 +9111,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // box and its waking light - so there is nothing to drag out.
     if (drawTool === "glow") {
       placeGlow(snapVec(world));
+      return;
+    }
+    // ...and the fireflies tool, a body holding the swarm's light.
+    if (drawTool === "fireflies") {
+      placeFireflies(snapVec(world));
       return;
     }
     // 2. Draw tool: create a new item on the active layer and drag out its size.

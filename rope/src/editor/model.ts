@@ -112,6 +112,7 @@ import {
   DEFAULT_SPOT_ANGLE,
   DEFAULT_SPOT_PENUMBRA,
 } from "../render3d/lights";
+import { FIREFLY_COLOR, FIREFLY_INTENSITY, FIREFLY_RANGE, FOLLOW_Z } from "../render3d/fireflies";
 import { SOLID_SURFACE } from "../render3d/assets";
 
 // Editor layers, in draw order (the list also stacks bottom-up in the toolbar):
@@ -386,6 +387,10 @@ export interface EdLight {
   wakeDelay: number | null;
   wakeRise: number | null;
   wakeFall: number | null;
+  // Point only: a FIREFLY SWARM of this many motes (see
+  // `LightObjectData.fireflies`), 0 = an ordinary light. A swarm reads `wake`
+  // as where it notices the ball and never reads the three times.
+  fireflies: number;
 }
 
 // Notes-layer properties (see NoteData, CheckpointData). A note is always a
@@ -1007,6 +1012,7 @@ export const defaultLight = (): EdLight => ({
   wakeDelay: null,
   wakeRise: null,
   wakeFall: null,
+  fireflies: 0,
 });
 
 export const defaultNote = (): EdNote => ({
@@ -1074,6 +1080,55 @@ export function glowBody(pos: Vec2): LevelBodyData {
 // `+ Glow` tool adds exactly what a level file holding that body would load as.
 export function glowModel(pos: Vec2): EdModel {
   return fromLevelData({ player: { x: pos.x, y: pos.y, radius: 0.08 }, bodies: [glowBody(pos)] });
+}
+
+// The values a light object's absent `color`, `intensity` and `range` take in
+// the renderer (`LightRig.add`): a swarm's are the firefly's, anything else's a
+// lamp's. The loader fills an item from these and the save omits a field equal
+// to them, so a swarm reads as a swarm on the panel and on disk alike.
+export function lightDefaultsFor(swarm: boolean): { color: string; intensity: number; range: number } {
+  return swarm
+    ? { color: FIREFLY_COLOR, intensity: FIREFLY_INTENSITY, range: FIREFLY_RANGE }
+    : { color: DEFAULT_LIGHT_COLOR, intensity: DEFAULT_LIGHT_INTENSITY, range: DEFAULT_LIGHT_RANGE };
+}
+
+// `+ Fireflies`: what one click drops. Editor defaults like `+ Glow`'s, to be
+// played; the colour, intensity and reach are left to the renderer's firefly
+// defaults (`lightDefaultsFor`) so tuning those tunes every swarm that did not
+// ask for its own.
+export const FIREFLY_COUNT = 12;
+export const FIREFLY_NOTICE = 2.5; // metres
+// Off the plane like a lamp, so the idle knot hangs in the air in front of the
+// rock rather than inside it: the depth the swarm flies at once it follows
+// (`FOLLOW_Z`), so noticing the ball moves it across the level and not
+// toward the camera.
+export const FIREFLY_HOME_Z = FOLLOW_Z; // metres
+
+// The body `+ Fireflies` places at `pos` (metres): a body holding nothing but
+// the swarm's light, which is its home. No collision - the ball flies through
+// fireflies - and no geometry, since the motes are drawn by the renderer. Pure,
+// so `cli render3d` can hold it.
+export function fireflyBody(pos: Vec2): LevelBodyData {
+  return {
+    kind: "static",
+    x: pos.x,
+    y: pos.y,
+    rot: 0,
+    objects: [
+      {
+        type: "light",
+        z: FIREFLY_HOME_Z,
+        wake: FIREFLY_NOTICE,
+        fireflies: FIREFLY_COUNT,
+      },
+    ],
+  };
+}
+
+// ...as editor items, through the same loader a level comes in by (see
+// `glowModel`).
+export function fireflyModel(pos: Vec2): EdModel {
+  return fromLevelData({ player: { x: pos.x, y: pos.y, radius: 0.08 }, bodies: [fireflyBody(pos)] });
 }
 
 // A fresh look is a `primitive` with everything defaulted: this object's own
@@ -1724,6 +1779,7 @@ function lightItem(
   rot: number,
   bodyId: number,
 ): EdItem {
+  const d = lightDefaultsFor(l.kind !== "spot" && (l.fireflies ?? 0) > 0);
   return {
     id: newBodyId(),
     layer: "scene",
@@ -1735,8 +1791,8 @@ function lightItem(
     // spot's aim: the direction is authored in the object's own frame.
     rot,
     // The reach IS the shape - see `EdLight`.
-    shape: { kind: "circle", r: l.range ?? DEFAULT_LIGHT_RANGE },
-    color: l.color ?? DEFAULT_LIGHT_COLOR,
+    shape: { kind: "circle", r: l.range ?? d.range },
+    color: l.color ?? d.color,
     opacity: LIGHT_FILL_OPACITY,
     friction: DEFAULT_SURFACE_FRICTION,
     bounce: DEFAULT_BOUNCE,
@@ -1779,7 +1835,7 @@ function lightItem(
     cam: defaultCamera(),
     light: {
       kind: l.kind ?? "point",
-      intensity: l.intensity ?? DEFAULT_LIGHT_INTENSITY,
+      intensity: l.intensity ?? d.intensity,
       z: l.z ?? DEFAULT_LIGHT_Z,
       angle: l.angle ?? DEFAULT_SPOT_ANGLE,
       penumbra: l.penumbra ?? DEFAULT_SPOT_PENUMBRA,
@@ -1794,6 +1850,7 @@ function lightItem(
       wakeDelay: l.wakeDelay ?? null,
       wakeRise: l.wakeRise ?? null,
       wakeFall: l.wakeFall ?? null,
+      fireflies: l.fireflies ?? 0,
     },
     note: defaultNote(),
     anchorId: 0,
@@ -2186,6 +2243,9 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
       if (i.object === "light") {
         const d = defaultLight();
         const spot = i.light.kind === "spot";
+        // Against the defaults the renderer will fill in, which for a swarm
+        // are the firefly's rather than a lamp's.
+        const fill = lightDefaultsFor(!spot && i.light.fireflies > 0);
         emit(i, {
           type: "light",
           ...localOf(i),
@@ -2193,12 +2253,12 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
           // what was authored - the rule every other list here is written under.
           ...(spot ? { kind: "spot" as const } : {}),
           ...(i.light.z !== d.z ? { z: i.light.z } : {}),
-          ...(i.color !== DEFAULT_LIGHT_COLOR ? { color: i.color } : {}),
-          ...(i.light.intensity !== d.intensity ? { intensity: i.light.intensity } : {}),
+          ...(i.color !== fill.color ? { color: i.color } : {}),
+          ...(i.light.intensity !== fill.intensity ? { intensity: i.light.intensity } : {}),
           // The reach lives in the shape (see `EdLight`). A light whose item is
           // not a circle cannot happen through any edit path, but the fallback
           // keeps the write total rather than saving a light with no reach.
-          ...(i.shape.kind === "circle" && i.shape.r !== DEFAULT_LIGHT_RANGE
+          ...(i.shape.kind === "circle" && i.shape.r !== fill.range
             ? { range: i.shape.r }
             : {}),
           // The cone and its aim mean nothing on a point light, and a field on
@@ -2230,11 +2290,18 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
           ...(!spot && i.light.wake > 0
             ? {
                 wake: i.light.wake,
-                ...(i.light.wakeDelay !== null ? { wakeDelay: i.light.wakeDelay } : {}),
-                ...(i.light.wakeRise !== null ? { wakeRise: i.light.wakeRise } : {}),
-                ...(i.light.wakeFall !== null ? { wakeFall: i.light.wakeFall } : {}),
+                // A swarm never reads them (see `LightObjectData.fireflies`).
+                ...(i.light.fireflies > 0
+                  ? {}
+                  : {
+                      ...(i.light.wakeDelay !== null ? { wakeDelay: i.light.wakeDelay } : {}),
+                      ...(i.light.wakeRise !== null ? { wakeRise: i.light.wakeRise } : {}),
+                      ...(i.light.wakeFall !== null ? { wakeFall: i.light.wakeFall } : {}),
+                    }),
               }
             : {}),
+          // A swarm is point-only, like the wake it notices the ball by.
+          ...(!spot && i.light.fireflies > 0 ? { fireflies: i.light.fireflies } : {}),
         });
         continue;
       }

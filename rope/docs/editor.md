@@ -57,6 +57,18 @@ The cube is a stand-in until the mushroom model exists, and nothing about the li
 There is nobody in the editor's scene to wake anything, and an author has to see what a mushroom lights before anyone does.
 **▶ Test** turns the preview off, so a test wakes them for the ball exactly as the game does.
 
+## Fireflies: `+ Fireflies`
+
+A point light's panel has a `fireflies` field above `wake` (a whole count, blank or 0 for an ordinary light, capped at `FIREFLY_MAX`).
+With it set the light is a **firefly swarm** (see [Fireflies](lighting-and-surfaces.md#fireflies)): `wake` is where the swarm notices the ball (blank = `DEFAULT_FIREFLY_NOTICE`, shown as the placeholder), the three wake times go away since a swarm is never dark, and `shadows` greys out as for a waking light.
+Turning a swarm into a spot clears `fireflies` and `wake` with a notice in the status line.
+On the canvas the notice distance is the same dashed ring and grip as a waking light's, drawn at the default when `wake` is blank, and the label says `N fireflies · notice D`.
+
+**`+ Fireflies`** (beside `+ Glow`) places a swarm with one click: a static body holding only the swarm's light, `FIREFLY_COUNT` (12) motes, `wake` `FIREFLY_NOTICE` (2.5 m), `z` `FIREFLY_HOME_Z` (0.5 m) so the knot hangs in the air in front of the rock, and the firefly's own colour, intensity and reach left to the renderer's defaults.
+There is no collision: the ball flies through fireflies.
+
+In the editor's 3D view a swarm hovers at its home, since there is no ball to follow; **▶ Test** has them follow the ball as the game does.
+
 ## Conveyor belts
 
 `+ Belt` (beside `+ Circle`) lays a **conveyor**: press where the first wheel goes and drag to the second, or click to drop a two-wheel belt 1.5 m long running right at 1 m/s on 10 cm wheels under a 5 cm band (see [**Conveyor belts**](conveyors.md)).

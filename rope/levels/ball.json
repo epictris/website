@@ -285,6 +285,7 @@
       "lookaheadBufferX": 30,
       "lookaheadBufferY": 50,
       "viewportScale": 0.8,
+      "buffer": 0,
       "softness": 30,
       "priority": 1
     }
@@ -533,7 +534,7 @@
     }
   ],
   "player": {
-    "x": 920.0000000000001,
+    "x": 935,
     "y": 370,
     "radius": 8
   },
@@ -17105,7 +17106,7 @@
     },
     {
       "kind": "static",
-      "x": 919.9999999999999,
+      "x": 935.0000000000001,
       "y": -250,
       "rot": 0,
       "objects": [
@@ -17121,58 +17122,6 @@
           "castShadow": true,
           "beam": 0.6,
           "dust": 0.5
-        }
-      ]
-    },
-    {
-      "kind": "static",
-      "x": 1374.999999999998,
-      "y": 844.9999999999995,
-      "rot": 0,
-      "color": "#555555",
-      "opacity": 0.5,
-      "friction": 1,
-      "objects": [
-        {
-          "type": "collision",
-          "x": 2.1316282072803006e-12,
-          "y": 5.329070518200751e-13,
-          "shape": {
-            "kind": "rect",
-            "w": 30,
-            "h": 30
-          }
-        },
-        {
-          "type": "geometry",
-          "x": 2.1316282072803006e-12,
-          "y": 5.329070518200751e-13,
-          "shape": {
-            "kind": "rect",
-            "w": 30,
-            "h": 30
-          },
-          "matchCollision": true,
-          "z": 215,
-          "depth": 30,
-          "texture": "color",
-          "color": "#8a3fd6",
-          "opacity": 0.5,
-          "emissive": "#b070ff",
-          "emissiveIntensity": 2
-        },
-        {
-          "type": "light",
-          "x": 1.9539925233402755e-12,
-          "y": 3.552713678800501e-13,
-          "z": 230.00000000000003,
-          "color": "#d9cf9b",
-          "intensity": 10,
-          "range": 1000,
-          "wake": 300,
-          "wakeDelay": 0.25,
-          "wakeRise": 0.6,
-          "wakeFall": 1.5
         }
       ]
     },
@@ -17305,6 +17254,21 @@
           "wakeDelay": 0.25,
           "wakeRise": 0.6,
           "wakeFall": 1.5
+        }
+      ]
+    },
+    {
+      "kind": "static",
+      "x": 1279.9999999999995,
+      "y": 740,
+      "rot": 0,
+      "objects": [
+        {
+          "type": "light",
+          "z": 90,
+          "color": "#ffe5ad",
+          "wake": 100,
+          "fireflies": 2
         }
       ]
     }

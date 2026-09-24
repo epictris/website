@@ -980,6 +980,26 @@ export interface LightObjectData extends ObjectPlacement {
   // renderer's hysteresis, so a ball resting on the edge does not strobe).
   // Absent = DEFAULT_WAKE_FALL; 0 is instant.
   wakeFall?: number;
+  // Point only. A FIREFLY SWARM of this many glowing motes (capped at
+  // `FIREFLY_MAX`), hovering about the light's placement - its home - until the
+  // ball comes within `wake` of it (absent = `DEFAULT_FIREFLY_NOTICE`), and
+  // from then on following the ball for the rest of the run, looping and
+  // swirling around it. Absent (or 0) = an ordinary light. Dimensionless.
+  //
+  // The light IS the swarm's: `color`, `intensity`, `range` and `flicker` are
+  // the swarm's light, hung at its motes' centroid wherever they fly, and `z`
+  // is the height of its home. Absent, the colour and intensity are the
+  // firefly's own (`FIREFLY_COLOR`, `FIREFLY_INTENSITY`), not a lamp's.
+  // `wakeDelay`, `wakeRise` and `wakeFall` are not read: a swarm is always
+  // lit, and it is its presence that the ball gains. Like a waking light it is
+  // served by a small fixed POOL (`FIREFLY_POOL` in `render3d/fireflies.ts`)
+  // handed to the swarms nearest the ball, and it casts no shadow.
+  //
+  // RENDER-ONLY and driven by the wall clock, like `wake`: the renderer reads
+  // the ball's position and writes nothing back, so no replay can diverge on
+  // it. Its purpose is that the player is always lit, by something the world
+  // gave them rather than a light they carry.
+  fireflies?: number;
 }
 
 // A named point ON a body, and the only thing a chain end ties to.
@@ -3256,6 +3276,8 @@ export function scaleObject(o: SceneObjectData, factor: number): SceneObjectData
       ...(o.wakeDelay !== undefined ? { wakeDelay: o.wakeDelay } : {}),
       ...(o.wakeRise !== undefined ? { wakeRise: o.wakeRise } : {}),
       ...(o.wakeFall !== undefined ? { wakeFall: o.wakeFall } : {}),
+      // A count.
+      ...(o.fireflies !== undefined ? { fireflies: o.fireflies } : {}),
     };
   }
   return {

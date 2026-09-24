@@ -86,6 +86,7 @@ import { decomposeSeams, isSimpleLoop } from "../lib/polygon";
 // For the one number: the multiple of the authored spawn radius the ball is
 // actually played at (see the spawn marker).
 import { BallLevel } from "../level/ballLevel";
+import { DEFAULT_FIREFLY_NOTICE } from "../render3d/fireflies";
 
 const PLAYER = "#65bddb";
 const IMPERMEABLE_EDGE = "#9db8c6"; // hook-proof surfaces: dashed steel border
@@ -330,7 +331,7 @@ export function computeHandles(cam: Camera, body: EdItem): Handles {
       rotate: base ? base.add(up.mul(ROT_OFFSET_PX)) : null,
       rotateBase: base,
       radius: worldToScreen(cam, toWorld(body, new Vec2(r, 0))),
-      wake: lightWakes(body) ? worldToScreen(cam, body.pos.add(new Vec2(-body.light.wake, 0))) : null,
+      wake: lightWakes(body) ? worldToScreen(cam, body.pos.add(new Vec2(-lightTrigger(body), 0))) : null,
       // A light's circle is its REACH, which is as wide as the room it lights,
       // so its depth handle goes beside the source icon instead - the same
       // reason a click on a light lands on the icon and not on the pool.
@@ -960,7 +961,7 @@ function drawLightGizmo(
   // dashes than the reach's, so the two rings never read as one.
   if (lightWakes(l)) {
     ctx.beginPath();
-    ctx.arc(l.pos.x, l.pos.y, l.light.wake, 0, Math.PI * 2);
+    ctx.arc(l.pos.x, l.pos.y, lightTrigger(l), 0, Math.PI * 2);
     ctx.strokeStyle = l.color;
     ctx.globalAlpha = 0.8;
     ctx.lineWidth = worldLine * 1.5;
@@ -1046,7 +1047,20 @@ export function lightPlaneReach(l: EdItem): number {
 // Is this a WAKING light (see `LightObjectData.wake`)? Point-only, like the
 // renderer's own rule, so a spot that somehow carries a wake draws none.
 export function lightWakes(l: EdItem): boolean {
-  return l.object === "light" && l.light.kind === "point" && l.light.wake > 0;
+  return l.object === "light" && l.light.kind === "point" && lightTrigger(l) > 0;
+}
+
+// Is this a FIREFLY SWARM (see `LightObjectData.fireflies`)? Point-only too.
+export function lightSwarms(l: EdItem): boolean {
+  return l.object === "light" && l.light.kind === "point" && l.light.fireflies > 0;
+}
+
+// The distance the ball has to come within: the authored `wake`, or for a
+// swarm with none, the distance the renderer notices the ball at anyway - so
+// the ring is drawn wherever the game has one.
+export function lightTrigger(l: EdItem): number {
+  if (l.light.wake > 0) return l.light.wake;
+  return l.light.fireflies > 0 ? DEFAULT_FIREFLY_NOTICE : 0;
 }
 
 // What a light does, for the screen-space label beside it. Only what was
@@ -1069,7 +1083,8 @@ export function lightLabel(l: EdItem): string {
   // Read only on a spot (see `LightObjectData.beam`), so labelled only there.
   if (l.light.kind === "spot" && l.light.beam > 0) parts.push(`beam ${Number(l.light.beam.toFixed(2))}`);
   if (l.light.kind === "spot" && l.light.dust > 0) parts.push(`dust ${Number(l.light.dust.toFixed(2))}`);
-  if (lightWakes(l)) parts.push(`wakes ${px(l.light.wake)}`);
+  if (lightSwarms(l)) parts.push(`${l.light.fireflies} fireflies`, `notice ${px(lightTrigger(l))}`);
+  else if (lightWakes(l)) parts.push(`wakes ${px(l.light.wake)}`);
   // A waking light casts none whatever it says (see `LightRig`).
   else if (l.light.castShadow) parts.push("shadows");
   return parts.join(" · ");

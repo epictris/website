@@ -107,6 +107,7 @@ Its fields, and what `scaleLevelData` does to each:
 | `wakeDelay` | point only, seconds from the trigger to the start of the rise; absent = 0 | no |
 | `wakeRise` | point only, seconds from dark to full; absent = `DEFAULT_WAKE_RISE` (0.6), 0 = instant | no |
 | `wakeFall` | point only, seconds from full to dark once the ball has left; absent = `DEFAULT_WAKE_FALL` (1.5), 0 = instant | no |
+| `fireflies` | point only: a firefly swarm of this many motes (capped at `FIREFLY_MAX`, 32); absent or 0 = an ordinary light | no |
 
 `beam` and `dust` are the spot's cone made visible - see [**Beams**](lighting-and-surfaces.md#beams).
 Both are absent (0) on every light authored before them, and the editor writes them only on a spot and only when nonzero, so a level that never sets one saves byte-identically.
@@ -115,6 +116,10 @@ The beam is not occluded by geometry: a shaft that should stop at a floor is aut
 `wake` makes a point light a **waking light**, dark until the ball comes near and fading after it leaves, with the emission of the glowing shapes in its body following it - see [**Waking lights**](lighting-and-surfaces.md#waking-lights).
 `wake` is a length and converts like `range`; the three times are seconds and pass through untouched.
 The editor writes the four only on a point light with a nonzero `wake`, and each time only when it is set, so a level that never sets one saves byte-identically; a waking light's `castShadow` is ignored.
+
+`fireflies` makes a point light a **firefly swarm**: the light's placement is where the motes hover, and once the ball comes within `wake` (absent = `DEFAULT_FIREFLY_NOTICE`, 2.5 m) they follow it for the rest of the run - see [**Fireflies**](lighting-and-surfaces.md#fireflies).
+A swarm is never a waking light: it reads `wake` as its notice distance and ignores the three times, which the editor does not write for one.
+Its absent `color`, `intensity` and `range` are the firefly's (`FIREFLY_COLOR`, `FIREFLY_INTENSITY`, `FIREFLY_RANGE`) rather than a lamp's, and the editor loads and saves a swarm against those, so a swarm that never sets them saves none of them; its `castShadow` is ignored.
 
 The canonical, hand-editable schema now lives in `src/level/levelFormat.ts` (superset of
 the generated one — adds the `rigid` and `force` kinds, the `cameraRegions` and

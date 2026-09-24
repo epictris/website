@@ -49,6 +49,9 @@ export interface WakeParams {
 // point-only, and the editor clears `wake` when a light is turned into a spot).
 export function wakeParams(data: LightObjectData): WakeParams | null {
   if (data.kind === "spot") return null;
+  // A firefly swarm reads `wake` as where it notices the ball, and is never
+  // dark (see `swarmParams`).
+  if ((data.fireflies ?? 0) >= 1) return null;
   const wake = data.wake ?? 0;
   if (!(wake > 0)) return null;
   return {

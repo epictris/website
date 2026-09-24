@@ -264,8 +264,9 @@ function f(v: number): string {
 
 // Additive light seen through the level's haze: dimmed by the fraction of the
 // fog a surface at this depth would take, computed exactly as three's own
-// `fog_fragment` computes it.
-const FOG_ATTENUATE = /* glsl */ `
+// `fog_fragment` computes it. Shared with the fireflies (`fireflyVisual.ts`),
+// which are the same additive light in the same haze.
+export const FOG_ATTENUATE = /* glsl */ `
   #ifdef USE_FOG
     #ifdef FOG_EXP2
       float fogFactor = 1.0 - exp( - fogDensity * fogDensity * vFogDepth * vFogDepth );

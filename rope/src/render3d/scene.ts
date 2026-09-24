@@ -35,6 +35,7 @@ import { BallVisual } from "./ballVisual";
 import { ChainLayer } from "./chainVisual";
 import { VineLayer } from "./vineVisual";
 import type { ChainRetract } from "../render/chainRetract";
+import type { CameraRule } from "../render/cameraController";
 import { configureRenderer, Environment } from "./environment";
 import { LightRig } from "./lights";
 import { cloneWithPatches, isOrthographicMaterial, orthoFramedZ } from "./projection";
@@ -76,6 +77,11 @@ export interface Scene3DLevel {
   // runs on (`beltRenderTime`). Absent = a host with no running sim (the
   // editor's preview), whose belts stand still.
   readonly frame?: number;
+  // The level's camera rules, whose PATHS are the authored way forward the
+  // fireflies hover ahead of the ball along - as level geometry, read once,
+  // never the camera's state. Absent = no path, which is every host that
+  // predates them and every level that authors none.
+  readonly cameraRules?: readonly CameraRule[];
 }
 
 // Bodies the 3D scene deliberately does not extrude, because something else
@@ -258,6 +264,10 @@ export class Scene3D {
     // recorded and before `prewarm` compiles against the scene's lights (see
     // `LightRig.buildPool`). A level with no waking light builds none.
     this.lights.buildPool(this.scene);
+    // The authored routes the fireflies read (see `Scene3DLevel.cameraRules`).
+    this.lights.setRoutes(
+      (level.cameraRules ?? []).flatMap((r) => (r.kind === "path" ? [r.index] : [])),
+    );
   }
 
   // Hold every waking light at full, served nearest the view's centre, rather
@@ -270,6 +280,11 @@ export class Scene3D {
   // The waking lights' levels, in authored order, for a probe.
   glowLevels(): number[] {
     return this.lights.glowLevels();
+  }
+
+  // The firefly swarms' states, in authored order, for a probe.
+  swarmStates(): ReturnType<LightRig["swarmStates"]> {
+    return this.lights.swarmStates();
   }
 
   // The environment a level authored, so a host that rebuilds the scene without
@@ -919,6 +934,7 @@ export class Scene3D {
     this.lights.update(clock, viewportHeight, {
       ball: level.ball ? level.ball.renderPosition(alpha) : null,
       view: camera.position,
+      world: level.world,
     });
     // After the visuals are synced and before the frame is drawn: a highlight is
     // a material swap on meshes the reconciliation above may have only just

@@ -61,12 +61,46 @@
 // compiles every lit program against the NUMBER of lights in the scene, so a
 // light that came and went with the player would be a fresh program on a
 // played frame - the stutter `Scene3D.prewarm` exists to prevent.
+//
+// FIREFLY SWARMS (a point light with `fireflies`, see `fireflies.ts`) are the
+// same idea taken off the body: the light object is only the swarm's HOME, the
+// motes fly in world space once they notice the ball, and a second fixed pool
+// (`FIREFLY_POOL`) hangs a light at the centre of each of the swarms nearest
+// the ball. The motes of every swarm are one draw (`FireflyVisual`).
 
 import * as THREE from "three";
 import type { LightObjectData } from "../level/levelFormat";
 import { Beam, buildBeam } from "./beam";
+import {
+  FIREFLY_COLOR,
+  FIREFLY_INTENSITY,
+  FIREFLY_RANGE,
+  fireflyPoolSizeFor,
+  Swarm,
+  swarmParams,
+  type SwarmParams,
+  type SwarmPlace,
+  OPEN_PLACE,
+} from "./fireflies";
+import { FireflyVisual } from "./fireflyVisual";
 import { assignPool, GlowState, poolSizeFor, wakeParams, type PoolCandidate } from "./glow";
 import { threeY } from "./space";
+import { Vec2 } from "../engine/vec2";
+import { LAYER_SCENERY } from "../engine/body";
+import { circleOverlap } from "../engine/collision";
+import type { World } from "../engine/world";
+import {
+  pointAtArcLength,
+  projectOntoPolyline,
+  projectOntoPolylineWindow,
+  tangentAtArcLength,
+  type PolylineIndex,
+} from "../lib/path";
+
+// Metres either side of a swarm's own progress along a route that its next
+// projection of the ball is confined to, so on a switchback it stays on the
+// branch the ball is on (`projectOntoPolylineWindow`, as the camera does).
+const ROUTE_WINDOW = 4;
 
 // A warm flame. Deliberately well off white: a lamp reading as a lamp is mostly
 // about the contrast between its own colour and the cool fill around it, which
@@ -201,6 +235,25 @@ interface GlowSource extends PoolCandidate {
   z: number;
 }
 
+// One firefly swarm (a point light with `fireflies`), recorded instead of built.
+// Its holder is its HOME, a child of the body's group like any light; the
+// swarm itself is hatched on the first `update`, once the holder's world
+// position can be read, and flies in world space from then on. `x`, `y`, `z`
+// are its centre (`Swarm.lightAt`), where a pool light hangs for it.
+interface SwarmSource extends PoolCandidate {
+  holder: THREE.Object3D;
+  params: SwarmParams;
+  seed: number;
+  swarm: Swarm | null;
+  count: number;
+  color: THREE.Color;
+  intensity: number;
+  range: number;
+  flicker: number;
+  phase: number;
+  z: number;
+}
+
 // A built light, handed back to its owner so it can be given up as a unit. Half
 // a lamp is not a thing an owner should be able to hold.
 export interface MountedLight {
@@ -213,6 +266,9 @@ export interface MountedLight {
 export interface GlowFocus {
   ball: { x: number; y: number } | null;
   view: { x: number; y: number };
+  // The level's world, whose solid scenery the fireflies never come to rest
+  // in front of (they fly through it freely). Absent = nothing to avoid.
+  world?: World;
 }
 
 // Where a light object sits in the frame its body is drawn in.
@@ -243,6 +299,15 @@ export class LightRig {
   // pool's tie-break), and the pool of real lights that serves them.
   private readonly glows: GlowSource[] = [];
   private pool: THREE.PointLight[] = [];
+  // Firefly swarms in authored order, the pool of real lights that serves them,
+  // and the one draw every mote is in (see `fireflies.ts`).
+  private readonly swarms: SwarmSource[] = [];
+  private fireflyPool: THREE.PointLight[] = [];
+  private fireflyVisual: FireflyVisual | null = null;
+  // The level's authored routes as the swarms read them (see `setRoutes`).
+  private place: SwarmPlace = OPEN_PLACE;
+  // The world handed to the last `update`, for `solidAt`.
+  private world: World | null = null;
   // The clock at the last `update`, so a glow steps by the time that passed.
   private lastSeconds: number | null = null;
   // The editor's preview: every waking light held at full without stepping its
@@ -265,6 +330,36 @@ export class LightRig {
     place: LightPlacement,
     emission: readonly DrivenEmission[] = [],
   ): MountedLight | null {
+    // A FIREFLY SWARM builds no THREE light either: its light is a pool light
+    // hung at the swarm's centre wherever it flies (`updateFireflies`), and it
+    // spends none of `LIGHT_BUDGET`. Its defaults are the firefly's, not a
+    // lamp's.
+    const swarm = swarmParams(data);
+    if (swarm) {
+      const holder = new THREE.Object3D();
+      holder.position.set(place.x, threeY(place.y), place.z);
+      parent.add(holder);
+      const phase = this.nextPhase++ * 2.399963;
+      this.swarms.push({
+        holder,
+        params: swarm,
+        // Authored order, so the same level hatches the same swarms.
+        seed: this.swarms.length + 1,
+        swarm: null,
+        count: swarm.count,
+        color: new THREE.Color(data.color ?? FIREFLY_COLOR),
+        intensity: data.intensity ?? FIREFLY_INTENSITY,
+        range: data.range ?? FIREFLY_RANGE,
+        flicker: clamp01(data.flicker ?? 0),
+        phase,
+        level: 0,
+        x: 0,
+        y: 0,
+        z: 0,
+      });
+      return { holder };
+    }
+
     const color = new THREE.Color(data.color ?? DEFAULT_LIGHT_COLOR);
     const intensity = data.intensity ?? DEFAULT_LIGHT_INTENSITY;
     const range = data.range ?? DEFAULT_LIGHT_RANGE;
@@ -425,6 +520,20 @@ export class LightRig {
   // light whose parent has been cleared is both a leak and a slot of the budget
   // spent on nothing.
   drop(mounted: MountedLight): void {
+    // A swarm OUTLIVES its body: fireflies following the ball are not part of
+    // the rock they were found on, and ones still at home keep hovering where
+    // it was. Only the home marker goes; the swarm, its draw and its light stay
+    // until the level does (`dispose`).
+    const f = this.swarms.find((s) => s.holder === mounted.holder);
+    if (f) {
+      f.holder.updateWorldMatrix(true, false);
+      const at = f.holder.getWorldPosition(this.scratch);
+      f.holder.removeFromParent();
+      f.holder.position.copy(at);
+      f.holder.rotation.set(0, 0, 0);
+      f.holder.updateMatrixWorld(true);
+      return;
+    }
     const g = this.glows.findIndex((s) => s.holder === mounted.holder);
     if (g >= 0) {
       const s = this.glows[g]!;
@@ -461,6 +570,7 @@ export class LightRig {
     const dt = this.lastSeconds === null ? 0 : seconds - this.lastSeconds;
     this.lastSeconds = seconds;
     if (focus && this.glows.length > 0) this.updateGlows(seconds, dt, focus);
+    if (focus && this.swarms.length > 0) this.updateFireflies(seconds, dt, focus);
     if (!this.flickers) return;
     for (const b of this.built) flick(b, seconds);
   }
@@ -482,6 +592,10 @@ export class LightRig {
   // scene it always was. In WORLD space (children of the scene, not of a body),
   // intensity 0, no shadow - a point light's shadow is six renders, and a map
   // handed between sources as they swap would flash.
+  //
+  // The fireflies' pool and their draw are built here too, for the same reason:
+  // `min(FIREFLY_POOL, swarms)` lights and one `Points` holding every mote, so
+  // a level with no swarm is the scene it always was.
   buildPool(scene: THREE.Object3D): void {
     this.disposePool();
     const n = poolSizeFor(this.glows.length);
@@ -491,6 +605,114 @@ export class LightRig {
       light.name = `glow-pool-${i}`;
       scene.add(light);
       this.pool.push(light);
+    }
+    const f = fireflyPoolSizeFor(this.swarms.length);
+    for (let i = 0; i < f; i++) {
+      const light = new THREE.PointLight(0xffffff, 0, FIREFLY_RANGE, 2);
+      light.castShadow = false;
+      light.name = `firefly-pool-${i}`;
+      scene.add(light);
+      this.fireflyPool.push(light);
+    }
+    if (this.swarms.length > 0) {
+      this.fireflyVisual = new FireflyVisual(this.swarms, this.beamViewHalfHeight);
+      scene.add(this.fireflyVisual.root);
+    }
+  }
+
+  // Each swarm's state, in authored order, for the probe and the cases:
+  // whether it is following the ball, and where its light hangs (sim frame,
+  // metres, y down). Nothing drives from it.
+  swarmStates(): {
+    following: boolean;
+    x: number;
+    y: number;
+    ahead: { x: number; y: number } | null;
+  }[] {
+    return this.swarms.map((s) => {
+      const a = s.swarm?.aheadDir() ?? null;
+      return {
+        following: s.swarm?.following ?? false,
+        x: s.x,
+        y: threeY(s.y),
+        ahead: a ? { x: a.x, y: threeY(a.y) } : null,
+      };
+    });
+  }
+
+  // The level's authored routes - its camera PATHS, as level geometry - which
+  // the fireflies hover ahead of the ball along (see `fireflies.ts`). Sim
+  // frame. Set once a level, after `buildPool`.
+  //
+  // What the swarms read is built here once, in three's frame (y up): every
+  // query flips y on the way in and on the way out.
+  setRoutes(routes: readonly PolylineIndex[]): void {
+    const flip = (v: Vec2): { x: number; y: number } => ({ x: v.x, y: threeY(v.y) });
+    this.place = {
+      routes: routes.length,
+      project: (i, x, y, near) => {
+        const ix = routes[i]!;
+        const p = new Vec2(x, threeY(y));
+        return near === null
+          ? projectOntoPolyline(ix, p)
+          : projectOntoPolylineWindow(ix, p, near - ROUTE_WINDOW, near + ROUTE_WINDOW);
+      },
+      point: (i, s) => flip(pointAtArcLength(routes[i]!, s)),
+      tangent: (i, s) => flip(tangentAtArcLength(routes[i]!, s)),
+      solid: (x, y, r) => this.solidAt(x, y, r),
+    };
+  }
+
+  // Whether a disc at (x, y) in three's frame overlaps the level's solid
+  // scenery - somewhere the player cannot go - in the world handed to the last
+  // `update`. Solid scenery only: not the ball, its hook, a vine or a hook-only
+  // body, whose layers are their own (see `LAYER_SCENERY`). Read-only.
+  private solidAt(x: number, y: number, r: number): boolean {
+    const world = this.world;
+    if (!world) return false;
+    const p = new Vec2(x, threeY(y));
+    for (const shape of world.queryShapes(p.x - r, p.y - r, p.x + r, p.y + r)) {
+      if ((shape.layer & LAYER_SCENERY) === 0) continue;
+      if (circleOverlap(p, r, shape)) return true;
+    }
+    return false;
+  }
+
+  // Fly every swarm (hatching any not yet hatched at its home), refresh the
+  // motes' draw, and hand the fireflies' pool to the swarms nearest the ball.
+  private updateFireflies(seconds: number, dt: number, focus: GlowFocus): void {
+    // In three's frame, on the plane: the ball is at z 0.
+    const ball = focus.ball ? { x: focus.ball.x, y: threeY(focus.ball.y), z: 0 } : null;
+    const view = { x: focus.view.x, y: threeY(focus.view.y) };
+    this.world = focus.world ?? null;
+    const place = this.place;
+    for (const s of this.swarms) {
+      s.holder.updateWorldMatrix(true, false);
+      const w = s.holder.getWorldPosition(this.scratch);
+      const home = { x: w.x, y: w.y, z: w.z };
+      if (!s.swarm) s.swarm = new Swarm(s.params, home, s.seed);
+      s.swarm.step(dt, home, ball, place);
+      const c = s.swarm.lightAt();
+      s.x = c.x;
+      s.y = c.y;
+      s.z = c.z;
+      s.level = s.intensity > 0 ? 1 : 0;
+    }
+    this.fireflyVisual?.update();
+
+    if (this.fireflyPool.length === 0) return;
+    const served = assignPool(this.swarms, ball ?? view, this.fireflyPool.length);
+    for (let i = 0; i < this.fireflyPool.length; i++) {
+      const light = this.fireflyPool[i]!;
+      const s = served[i] !== undefined ? this.swarms[served[i]!]! : null;
+      if (!s) {
+        light.intensity = 0;
+        continue;
+      }
+      light.position.set(s.x, s.y, s.z);
+      light.color.copy(s.color);
+      light.distance = s.range;
+      light.intensity = s.intensity * flickerLevel(s.flicker, s.phase, seconds);
     }
   }
 
@@ -542,11 +764,14 @@ export class LightRig {
   }
 
   private disposePool(): void {
-    for (const light of this.pool) {
+    for (const light of [...this.pool, ...this.fireflyPool]) {
       light.removeFromParent();
       light.dispose();
     }
     this.pool = [];
+    this.fireflyPool = [];
+    this.fireflyVisual?.dispose();
+    this.fireflyVisual = null;
   }
 
   dispose(): void {
@@ -555,6 +780,8 @@ export class LightRig {
       s.holder.removeFromParent();
     }
     this.glows.length = 0;
+    for (const s of this.swarms) s.holder.removeFromParent();
+    this.swarms.length = 0;
     this.disposePool();
     this.lastSeconds = null;
     for (const b of this.built) {
@@ -565,6 +792,8 @@ export class LightRig {
     }
     this.built.length = 0;
     this.shadowsLeft = LIGHT_SHADOW_BUDGET;
+    this.place = OPEN_PLACE;
+    this.world = null;
     this.flickers = false;
   }
 }
