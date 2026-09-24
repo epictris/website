@@ -3,6 +3,7 @@
 // and saves/loads levels from disk through the dev-server API.
 
 import { Vec2 } from "../engine/vec2";
+import { localVertices } from "./model";
 import { PIXELS_PER_METER, PX } from "../engine/units";
 import { BALL_ZOOM, GRAPPLE_ZOOM, screenToWorld, worldToScreen, type Camera } from "../render/camera";
 import { LETTERBOX_COLOR, VIEW_HEIGHT, VIEW_WIDTH, viewTransform } from "../render/viewport";
@@ -1928,6 +1929,143 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     updateTitle();
   });
   fileRow.append(btnNew, loadSel, btnSave, btnSaveAs, btnDelete);
+
+  const rootsRow = el("div", "ed-row");
+  const rootSeed = document.createElement("input");
+  rootSeed.type = "number";
+  rootSeed.className = "ed-num";
+  rootSeed.value = "1234";
+  rootSeed.min = "0";
+  rootSeed.max = "2147483647";
+  rootSeed.step = "1";
+  rootSeed.setAttribute("aria-label", "Root seed");
+  const rootDepth = document.createElement("input");
+  rootDepth.type = "number";
+  rootDepth.className = "ed-num";
+  rootDepth.value = "0.38";
+  rootDepth.min = "0.02";
+  rootDepth.max = "5";
+  rootDepth.step = "0.01";
+  rootDepth.setAttribute("aria-label", "Root visual depth in metres");
+  const rootStatus = el("span", "ed-root-status");
+  rootStatus.setAttribute("role", "status");
+  rootStatus.textContent = "Select one polygon or rectangle.";
+  const rootGenerate = button("Generate roots", async () => {
+    const selection = operandItems();
+    const sources = new Map<number, EdItem>();
+    for (const item of selection) {
+      const source = item.object === "collision" ? item :
+        model.items.find(i => i.id === item.matchId && i.object === "collision");
+      if (source) sources.set(source.id, source);
+    }
+    const source = [...sources.values()][0];
+    if (sources.size !== 1 || !source || source.layer !== "scene" ||
+        (source.shape.kind !== "poly" && source.shape.kind !== "rect")) {
+      rootStatus.textContent = "Select one collision polygon or rectangle, or its root mesh.";
+      return;
+    }
+    if (!rootSeed.reportValidity() || !rootDepth.reportValidity()) return;
+    const revision = modelRev;
+    rootGenerate.disabled = true;
+    rootStatus.textContent = "Generating roots in Blender…";
+    try {
+      const response = await fetch("/api/roots", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ polygon: localVertices(source).map(p => [p.x, threeY(p.y)]),
+          seed: Number(rootSeed.value), depth: Number(rootDepth.value) }),
+      });
+      const result = await response.json() as { mesh?: string; error?: string };
+      if (!response.ok || !result.mesh) throw new Error(result.error ?? "Root generation failed.");
+      if (modelRev !== revision || mode !== "edit")
+        throw new Error("The level changed during generation. Select the shape and generate again.");
+      beginAction();
+      const existing = model.items.find(i => i.object === "geometry" && i.matchId === source.id);
+      const geometry: EdItem = existing ?? {
+        ...source, id: newBodyId(), object: "geometry", shape: cloneShape(source.shape),
+        cam: { ...source.cam }, light: { ...source.light }, note: { ...source.note },
+        matchId: source.id,
+      };
+      geometry.pos = source.pos.clone();
+      geometry.rot = source.rot;
+      geometry.visual = { ...defaultVisual(), kind: "mesh", mesh: result.mesh };
+      if (!existing) addAndSelect([geometry]);
+      else { markDirty(); rebuildInspector(); }
+      rootStatus.textContent = "Root ready. View in 3D + overlay; regenerate after reshaping.";
+    } catch (error) {
+      rootStatus.textContent = error instanceof Error ? error.message : "Root generation failed.";
+    } finally { rootGenerate.disabled = false; }
+  });
+  rootGenerate.title = "Generate a bark-textured 3D root from one collision outline. Seed and visual depth leave collision unchanged.";
+  rootsRow.append(rootGenerate, labelWrap("seed", rootSeed), labelWrap("depth (m)", rootDepth), rootStatus);
+  bar.appendChild(rootsRow);
+
+  const boulderRow = el("div", "ed-row");
+  const boulderSeed = document.createElement("input");
+  boulderSeed.type = "number";
+  boulderSeed.className = "ed-num";
+  boulderSeed.value = "31";
+  boulderSeed.min = "0";
+  boulderSeed.max = "2147483647";
+  boulderSeed.step = "1";
+  boulderSeed.setAttribute("aria-label", "Boulder seed");
+  const boulderDepth = document.createElement("input");
+  boulderDepth.type = "number";
+  boulderDepth.className = "ed-num";
+  boulderDepth.value = "1.6";
+  boulderDepth.min = "0.02";
+  boulderDepth.max = "5";
+  boulderDepth.step = "0.01";
+  boulderDepth.setAttribute("aria-label", "Boulder visual depth in metres");
+  const boulderStatus = el("span", "ed-root-status");
+  boulderStatus.setAttribute("role", "status");
+  boulderStatus.textContent = "Select one polygon or rectangle.";
+  const boulderGenerate = button("Generate boulder v5", async () => {
+    const sources = new Map<number, EdItem>();
+    for (const item of operandItems()) {
+      const source = item.object === "collision" ? item :
+        model.items.find(i => i.id === item.matchId && i.object === "collision");
+      if (source) sources.set(source.id, source);
+    }
+    const source = [...sources.values()][0];
+    if (sources.size !== 1 || !source || source.layer !== "scene" ||
+        (source.shape.kind !== "poly" && source.shape.kind !== "rect")) {
+      boulderStatus.textContent = "Select one collision polygon or rectangle, or its boulder mesh.";
+      return;
+    }
+    if (!boulderSeed.reportValidity() || !boulderDepth.reportValidity()) return;
+    const revision = modelRev;
+    boulderGenerate.disabled = true;
+    boulderStatus.textContent = "Generating boulder v5 in Blender…";
+    try {
+      const response = await fetch("/api/boulders", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ polygon: localVertices(source).map(p => [p.x, threeY(p.y)]),
+          seed: Number(boulderSeed.value), depth: Number(boulderDepth.value) }),
+      });
+      const result = await response.json() as { mesh?: string; error?: string };
+      if (!response.ok || !result.mesh) throw new Error(result.error ?? "Boulder generation failed.");
+      if (modelRev !== revision || mode !== "edit")
+        throw new Error("The level changed during generation. Select the shape and generate again.");
+      beginAction();
+      const existing = model.items.find(i => i.object === "geometry" && i.matchId === source.id);
+      const geometry: EdItem = existing ?? {
+        ...source, id: newBodyId(), object: "geometry", shape: cloneShape(source.shape),
+        cam: { ...source.cam }, light: { ...source.light }, note: { ...source.note },
+        matchId: source.id,
+      };
+      geometry.pos = source.pos.clone();
+      geometry.rot = source.rot;
+      geometry.visual = { ...defaultVisual(), kind: "mesh", mesh: result.mesh };
+      if (!existing) addAndSelect([geometry]);
+      else { markDirty(); rebuildInspector(); }
+      boulderStatus.textContent = "Boulder ready. View in 3D + overlay; regenerate after reshaping.";
+    } catch (error) {
+      boulderStatus.textContent = error instanceof Error ? error.message : "Boulder generation failed.";
+    } finally { boulderGenerate.disabled = false; }
+  });
+  boulderGenerate.title = "Generate a v5 stylised boulder from one collision outline. Seed and visual depth leave collision unchanged.";
+  boulderRow.append(boulderGenerate, labelWrap("seed", boulderSeed), labelWrap("depth (m)", boulderDepth), boulderStatus);
+  bar.appendChild(boulderRow);
 
   const toolRow = el("div", "ed-row");
   bar.appendChild(toolRow);
@@ -9716,6 +9854,7 @@ function injectStyles(): void {
     gap: 6px; background: rgba(31,36,48,0.92); border: 1px solid #313244; padding: 8px;
     border-radius: 2px; }
   .ed-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .ed-root-status { max-width: 48ch; overflow-wrap: anywhere; color: #9aa0ac; }
   .ed-btn { background: #2a2f3d; color: #cbccc6; border: 1px solid #3c445c;
     padding: 3px 8px; font-family: monospace; font-size: 13px; cursor: pointer;
     border-radius: 2px; }

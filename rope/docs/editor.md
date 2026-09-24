@@ -1,5 +1,48 @@
 # Level editor
 
+## Generate v5 boulders
+
+Select one scene collision polygon or rectangle and click **Generate boulder v5**.
+The editor sends its local outline, seed, and visual depth to the local v5
+generator in `../../../assets/boulders/stylised_rocks_v5` (override with
+`BOULDERS_V5_PROJECT`). The generator uses Python and Blender; set `PYTHON_PATH`
+and `BLENDER_PATH` if they are not on the default paths. The resulting GLB is
+stored in `public/generated-boulders/<id>/` and linked to a matched geometry
+object. Collision remains the selected outline. Generation is available only
+on the dev server; saved levels can load the exported mesh without Blender.
+The generated files are local and gitignored, so copy them with a level when
+moving it to another machine.
+
+## Generate procedural roots
+
+Select one collision polygon or rectangle on the scene layer and click
+**Generate roots**. **Seed** changes the bark and volume variation; **depth (m)**
+sets visual thickness (default 0.38 m). Generation uses the local
+`procedural_roots` project's Blender exporter and may take a minute. Inspect the
+result with **3D + overlay**, then use **Test Ball** or **Test Grapple** to play it.
+The local `root-generation-test` level contains a generated branch and a floor
+for trying the workflow; select its root body to regenerate with another seed.
+
+The action adds a mesh geometry object to the same body, or replaces its matched
+geometry. It is one undoable edit. Collision and hook rules stay on the original
+outline; rounding and broken ends are disabled so the generated silhouette agrees
+with it. Regenerate after editing the outline. Selecting the generated mesh also
+finds its matched collision shape. This first integration generates one shape at
+a time; it does not fuse separate bodies into a shared root surface. If the level
+changes while Blender runs, the result is not applied to the changed model.
+
+On this Windows setup the default generator is `../../../assets/roots` relative
+to `rope`, and Blender is `C:/Program Files/Blender Foundation/Blender 5.2/blender.exe`.
+Set `ROOTS_PROJECT` and `BLENDER_PATH` before starting Vite to use other locations.
+Only the dev server offers generation. Exported meshes, source blockouts and
+generation settings are stored in `public/generated-roots/<id>/`; saved levels
+reference immutable mesh keys and work after restarting the editor. This directory
+is gitignored local output. Keep it with the level when sharing or backing up a
+test; a production build copies it into `dist`. Publishing through the shared
+release asset store remains a separate step.
+
+Run the focused request/asset checks with `node --test scripts/root-generator.test.mjs`.
+
 The **`/editor`** page (its own HTML page `editor.html` → `src/editorMain.ts`, distinct
 from the game at `/`) runs an in-browser level editor (`src/editor/`, its own canvas loop +
 DOM overlay). Dev serves `/editor` via a rewrite in `vite.config.ts`; production maps it to

@@ -35,6 +35,8 @@
 // mesh that has not arrived yet never blocks the frame or the sim.
 
 import * as THREE from "three";
+import { generatedRootAsset } from "./generatedRoots";
+import { generatedBoulderAsset } from "./generatedBoulders";
 import { withDownload } from "./download";
 import { paintMaterial, paintTree } from "./paint";
 import { MATERIAL_NAMES, type MaterialName } from "../lib/shapeGeometry";
@@ -3117,7 +3119,8 @@ function loadFile(file: string, bytes: number): Promise<THREE.Object3D | null> {
 // null for an unknown key or a load failure, which is the caller's cue to keep
 // its placeholder.
 export function loadMesh(key: string): Promise<THREE.Object3D | null> {
-  const asset = MESH_ASSETS[key];
+  const generated = generatedRootAsset(key) ?? generatedBoulderAsset(key);
+  const asset = generated ? { ...generated, node: undefined, scale: 1, rotX: 0, rotY: 0, rotZ: 0 } : MESH_ASSETS[key];
   if (!asset) return Promise.resolve(null);
   return loadFile(asset.file, asset.bytes).then((root) => {
     if (!root) return null;
