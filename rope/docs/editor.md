@@ -4,7 +4,9 @@
 
 Select a rope made with **+ Vine** and click **Braid selected vine** to give it
 three stems that follow the simulated rope in play. The seed changes the twist;
-the action is undoable and saves with the level. You can also select a circle
+the action is undoable and saves with the level. The stems vary in twist spacing,
+separation and thickness, taper to a point at the free end, and carry sparse
+hanging leaves. Change the seed and click again to compare variations. You can also select a circle
 geometry object with a depth to generate a static Blender braid as below.
 
 Select one **geometry object** whose shape is a circle and whose **depth** is
@@ -13,7 +15,8 @@ depth determine a single three-stem braid centred on that cylinder. Its authored
 position, rotation, tilt, scale, body and collision association stay in place.
 The generated GLB replaces that geometry object's primitive look; selecting the
 generated braid and clicking again regenerates it with the current radius, depth
-and seed. The braid has sparse leaves, with no curtain of vines hanging from a
+and seed. Regenerate after changes to the Blender generator to update an older
+asset. The braid has a pointed end and sparse leaves, with no curtain of vines hanging from a
 polygon. The local Blender source is `asset-generators/roots/procedural_vine_braid.py`
 (override its directory with `ROOTS_PROJECT`). Generated files are saved under
 `public/generated-vines/<id>/` and are local, gitignored assets.

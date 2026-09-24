@@ -28,16 +28,16 @@ def build(radius, length, seed):
 
     # One centreline through the selected cylinder, with three persistent stems.
     # A braid turn is scaled to its diameter rather than to a preset curtain.
-    turns = length / max(radius * 5, .18) * rng.uniform(.88, 1.12)
+    turns = length / max(radius * 5, .18) * rng.uniform(.78, 1.22)
     segments = max(32, math.ceil(turns * 12))
     spread = radius * .43
     strand_radius = radius * .56
     phase = rng.uniform(0, math.tau)
-    pitch = [0.0] + [rng.uniform(-.06, .06) for _ in range(5)] + [0.0]
+    pitch = [0.0] + [rng.uniform(-.16, .16) for _ in range(7)] + [0.0]
     profiles = [
         (rng.uniform(0, math.tau),
-         [rng.uniform(.91, 1.09) for _ in range(7)],
-         [rng.uniform(.90, 1.10) for _ in range(7)])
+         [rng.uniform(.72, 1.28) for _ in range(9)],
+         [rng.uniform(.77, 1.23) for _ in range(9)])
         for _ in range(3)
     ]
     for thread, (shade, spread_profile, girth_profile) in enumerate(profiles):
@@ -48,28 +48,36 @@ def build(radius, length, seed):
             angle = phase + math.tau * (turns * t + thread / 3 + smooth_profile(pitch, t))
             # The source cylinder is centred on its local axis and has flat ends.
             z = (t - .5) * length
-            points.append(Vector((math.cos(angle) * spread * smooth_profile(spread_profile, t),
-                                  math.sin(angle) * spread * smooth_profile(spread_profile, t), z)))
-            end = min(1.0, t * 15, (1 - t) * 15)
-            radii.append(strand_radius * smooth_profile(girth_profile, t) * (.84 + .16 * end))
+            # Blender builds from bottom to top here: t=0 is the hanging tip.
+            # Smoothstep makes the taper join the body without a shoulder.
+            tip = max(0.0, min(1.0, t / .16))
+            tip = tip * tip * (3 - 2 * tip)
+            end = min(1.0, (1 - t) * 15)
+            spread_at_t = spread * smooth_profile(spread_profile, t) * (.08 + .92 * tip)
+            points.append(Vector((math.cos(angle) * spread_at_t,
+                                  math.sin(angle) * spread_at_t, z)))
+            radii.append(strand_radius * smooth_profile(girth_profile, t) *
+                         (.84 + .16 * end) * (.025 + .975 * tip))
         stems.tube(points, radii, 8, thread, shade=True,
                    shade_phase=shade, cap_ends=True)
 
-    # Sparse leaves keep the earlier jungle-vine appearance without spawning
-    # secondary hanging vines or changing the selected cylinder's silhouette.
-    leaf_count = min(18, max(0, round(length / .7)))
+    # Match v3's sparse 11-19 cm hanging blades and short petioles. Leaf size is
+    # independent of cylinder radius so a thin authored braid still reads leafy.
+    leaf_count = min(18, max(0, round(length * 1.05)))
     for i in range(leaf_count):
         t = (i + rng.uniform(.2, .8)) / leaf_count
         angle = phase + math.tau * turns * t
         outward = Vector((math.cos(angle), math.sin(angle), 0))
         root = outward * (radius * .8) + Vector((0, 0, (t - .5) * length))
         side = -1 if i % 2 else 1
-        direction = (outward * .7 + Vector((0, 0, side * .7))).normalized()
-        tip = root + direction * min(radius * 1.3, .07)
-        stems.tube((root, tip), (radius * .10, radius * .05), 4)
-        size = min(radius * rng.uniform(2.3, 3.2), .17)
-        leaves.leaf(tip, direction, size, size * .30,
-                    rng.uniform(-.02, .02), rng.randrange(3))
+        lateral = Vector((-outward.y, outward.x, 0)) * side
+        petiole = root + lateral * rng.uniform(.04, .07) + Vector((0, 0, -.025))
+        stems.tube((root, petiole), (.005, .003), 4)
+        direction = (lateral * rng.uniform(.34, .58) + outward * .12 +
+                     Vector((0, 0, -rng.uniform(.76, .98)))).normalized()
+        blade = rng.uniform(.108, .19)
+        leaves.leaf(petiole, direction, blade, blade * rng.uniform(.25, .35),
+                    rng.uniform(-.028, .028), rng.randrange(3))
 
     stem_colors = ((.045, .085, .028), (.058, .105, .033), (.075, .125, .039))
     stem_mats = []

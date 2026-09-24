@@ -26,6 +26,7 @@ import { Vec2 } from "../engine/vec2";
 import { VINE_VISUAL_RADIUS, type VineCord } from "../level/vines";
 import { VINE_COLOR } from "../render/vines";
 import { forEachBraidSegment } from "../render/vineBraid";
+import { forEachVineLeaf } from "../render/vineLeaves";
 import { threeY } from "./space";
 
 // White: the instance colour MULTIPLIES the shared material, so the default has
@@ -50,13 +51,20 @@ const FORWARD = new THREE.Vector3(0, 0, 1);
 export class VineLayer {
   private mesh: THREE.InstancedMesh;
   private braidMesh: THREE.InstancedMesh;
+  private leafMesh: THREE.InstancedMesh;
+  private leafStemMesh: THREE.InstancedMesh;
   private capacity = INITIAL_SEGMENTS;
   private count = 0;
   private braidCapacity = INITIAL_SEGMENTS;
   private braidCount = 0;
+  private leafCapacity = INITIAL_SEGMENTS;
+  private leafCount = 0;
   private readonly geometry: THREE.BufferGeometry;
   private readonly braidGeometry: THREE.BufferGeometry;
+  private readonly leafGeometry: THREE.BufferGeometry;
+  private readonly leafStemGeometry: THREE.BufferGeometry;
   private readonly material: THREE.Material;
+  private readonly leafMaterial: THREE.Material;
   // Scratch, reused every frame: a transform sync must not allocate.
   private readonly m = new THREE.Matrix4();
   private readonly q = new THREE.Quaternion();
@@ -74,19 +82,34 @@ export class VineLayer {
     // length, and nothing has to rebuild geometry as a vine bends.
     this.geometry = new THREE.CapsuleGeometry(VINE_VISUAL_RADIUS, 1, 3, 8);
     this.braidGeometry = new THREE.CapsuleGeometry(VINE_VISUAL_RADIUS * 0.52, 1, 2, 6);
+    const blade = new THREE.Shape();
+    blade.moveTo(0, 0);
+    blade.bezierCurveTo(-0.08, 0.12, -0.35, 0.31, -0.3, 0.48);
+    blade.bezierCurveTo(-0.23, 0.75, -0.04, 0.94, 0, 1);
+    blade.bezierCurveTo(0.07, 0.93, 0.28, 0.7, 0.31, 0.48);
+    blade.bezierCurveTo(0.32, 0.3, 0.08, 0.12, 0, 0);
+    this.leafGeometry = new THREE.ShapeGeometry(blade, 4);
+    this.leafStemGeometry = new THREE.CapsuleGeometry(0.004, 1, 2, 4);
     this.material = new THREE.MeshStandardMaterial({
       color: new THREE.Color(VINE_COLOR),
       roughness: 0.85,
       metalness: 0,
     });
+    this.leafMaterial = new THREE.MeshStandardMaterial({
+      color: 0xffffff, roughness: 0.85, metalness: 0, side: THREE.DoubleSide,
+    });
     this.mesh = this.makeMesh(this.capacity);
     this.braidMesh = this.makeMesh(this.braidCapacity, this.braidGeometry);
+    this.leafMesh = this.makeMesh(this.leafCapacity, this.leafGeometry, this.leafMaterial);
+    this.leafStemMesh = this.makeMesh(this.leafCapacity, this.leafStemGeometry);
     scene.add(this.mesh);
     scene.add(this.braidMesh);
+    scene.add(this.leafMesh);
+    scene.add(this.leafStemMesh);
   }
 
-  private makeMesh(capacity: number, geometry = this.geometry): THREE.InstancedMesh {
-    const mesh = new THREE.InstancedMesh(geometry, this.material, capacity);
+  private makeMesh(capacity: number, geometry = this.geometry, material = this.material): THREE.InstancedMesh {
+    const mesh = new THREE.InstancedMesh(geometry, material, capacity);
     mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     mesh.castShadow = true;
     mesh.receiveShadow = true;
@@ -111,12 +134,16 @@ export class VineLayer {
   sync(vines: readonly VineCord[], alpha: number): void {
     this.count = 0;
     this.braidCount = 0;
+    this.leafCount = 0;
     for (const vine of vines) {
       vine.path(alpha, this.path);
       if (this.path.length < 2) continue;
       this.tint.set(vine.color ?? DEFAULT_TINT);
       if (vine.braidSeed === null) this.lay(this.path);
-      else this.layBraid(this.path, vine.braidSeed);
+      else {
+        this.layBraid(this.path, vine.braidSeed);
+        this.layLeaves(this.path, vine.braidSeed);
+      }
     }
     // A vine longer than the buffer truncates for one frame and the buffer is
     // resized for the next, rather than mid-walk - which would throw away every
@@ -129,16 +156,60 @@ export class VineLayer {
       this.braidMesh = this.makeMesh(this.braidCapacity, this.braidGeometry);
       this.scene.add(this.braidMesh);
     }
+    if (this.leafCount > this.leafCapacity) {
+      while (this.leafCapacity < this.leafCount) this.leafCapacity *= 2;
+      this.scene.remove(this.leafMesh);
+      this.leafMesh.dispose();
+      this.scene.remove(this.leafStemMesh);
+      this.leafStemMesh.dispose();
+      this.leafMesh = this.makeMesh(this.leafCapacity, this.leafGeometry, this.leafMaterial);
+      this.leafStemMesh = this.makeMesh(this.leafCapacity, this.leafStemGeometry);
+      this.scene.add(this.leafMesh);
+      this.scene.add(this.leafStemMesh);
+    }
     this.mesh.count = Math.min(this.count, this.capacity);
     this.mesh.instanceMatrix.needsUpdate = true;
     if (this.mesh.instanceColor) this.mesh.instanceColor.needsUpdate = true;
     this.braidMesh.count = Math.min(this.braidCount, this.braidCapacity);
     this.braidMesh.instanceMatrix.needsUpdate = true;
     if (this.braidMesh.instanceColor) this.braidMesh.instanceColor.needsUpdate = true;
+    this.leafMesh.count = Math.min(this.leafCount, this.leafCapacity);
+    this.leafMesh.instanceMatrix.needsUpdate = true;
+    if (this.leafMesh.instanceColor) this.leafMesh.instanceColor.needsUpdate = true;
+    this.leafStemMesh.count = Math.min(this.leafCount, this.leafCapacity);
+    this.leafStemMesh.instanceMatrix.needsUpdate = true;
+    if (this.leafStemMesh.instanceColor) this.leafStemMesh.instanceColor.needsUpdate = true;
+  }
+
+  private layLeaves(points: readonly Vec2[], seed: number): void {
+    forEachVineLeaf(points, seed, (x, y, side, length, tone) => {
+      const j = this.leafCount++;
+      if (j >= this.leafCapacity) return;
+      this.a3.set(x, threeY(y), 0);
+      this.b3.set(x + side * 0.04, threeY(y + 0.02), 0.018);
+      this.dir3.subVectors(this.b3, this.a3);
+      const stemLength = this.dir3.length();
+      this.q.setFromUnitVectors(this.up, this.dir3.multiplyScalar(1 / stemLength));
+      this.pos.addVectors(this.a3, this.b3).multiplyScalar(0.5);
+      this.scl.set(1, stemLength, 1);
+      this.m.compose(this.pos, this.q, this.scl);
+      this.leafStemMesh.setMatrixAt(j, this.m);
+      this.leafStemMesh.instanceColor?.setXYZ(j, this.tint.r, this.tint.g, this.tint.b);
+      this.pos.copy(this.b3);
+      this.dir3.set(side * 0.45, -0.89, 0).normalize();
+      this.q.setFromUnitVectors(this.up, this.dir3);
+      this.scl.set(length, length, 1);
+      this.m.compose(this.pos, this.q, this.scl);
+      this.leafMesh.setMatrixAt(j, this.m);
+      const green = tone === 0 ? [0.075, 0.22, 0.055] :
+        tone === 1 ? [0.15, 0.36, 0.07] : [0.28, 0.46, 0.11];
+      this.leafMesh.instanceColor?.setXYZ(j, green[0]!, green[1]!, green[2]!);
+    });
+    this.scl.set(1, 1, 1);
   }
 
   private layBraid(points: readonly Vec2[], seed: number): void {
-    forEachBraidSegment(points, seed, (ax, ay, az, bx, by, bz, strand) => {
+    forEachBraidSegment(points, seed, (ax, ay, az, bx, by, bz, strand, girth) => {
       const j = this.braidCount++;
       if (j >= this.braidCapacity) return;
       this.a3.set(ax, threeY(ay), az);
@@ -148,7 +219,7 @@ export class VineLayer {
       if (length < 1e-6) return;
       this.q.setFromUnitVectors(this.up, this.dir3.multiplyScalar(1 / length));
       this.pos.addVectors(this.a3, this.b3).multiplyScalar(0.5);
-      this.scl.set(1, length * 1.08, 1);
+      this.scl.set(girth, length * 1.08, girth);
       this.m.compose(this.pos, this.q, this.scl);
       this.braidMesh.setMatrixAt(j, this.m);
       const shade = strand === 0 ? 1.1 : strand === 1 ? 0.9 : 0.72;
@@ -182,6 +253,8 @@ export class VineLayer {
     this.count = 0;
     this.mesh.count = 0;
     this.braidMesh.count = 0;
+    this.leafMesh.count = 0;
+    this.leafStemMesh.count = 0;
   }
 
   dispose(): void {
@@ -189,8 +262,15 @@ export class VineLayer {
     this.mesh.dispose();
     this.scene.remove(this.braidMesh);
     this.braidMesh.dispose();
+    this.scene.remove(this.leafMesh);
+    this.leafMesh.dispose();
+    this.scene.remove(this.leafStemMesh);
+    this.leafStemMesh.dispose();
     this.geometry.dispose();
     this.braidGeometry.dispose();
+    this.leafGeometry.dispose();
+    this.leafStemGeometry.dispose();
     this.material.dispose();
+    this.leafMaterial.dispose();
   }
 }

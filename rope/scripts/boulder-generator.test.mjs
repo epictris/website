@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { validateBoulderRequest } from "../src/server/boulderGenerator.ts";
+import { boulderSlabCount, validateBoulderRequest } from "../src/server/boulderGenerator.ts";
 import { generatedBoulderAsset } from "../src/render3d/generatedBoulders.ts";
 
 test("boulder requests accept one outline and reject invalid generation settings", () => {
@@ -21,4 +21,11 @@ test("generated boulder keys resolve to local GLBs only", () => {
   for (const key of [`boulder-v5:${id}:0`, `boulder-v5:${id}:9007199254740992`,
     "boulder-v5:../../secret:123", "rock-1"])
     assert.equal(generatedBoulderAsset(key), undefined);
+});
+
+test("boulder fracture count follows polygon area in square metres", () => {
+  assert.equal(boulderSlabCount(0.1), 2);
+  assert.equal(boulderSlabCount(1), 10);
+  assert.equal(boulderSlabCount(4), 40);
+  assert.equal(boulderSlabCount(20), 100);
 });

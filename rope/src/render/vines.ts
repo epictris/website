@@ -15,6 +15,7 @@ import { PX } from "../engine/units";
 import { shade } from "./color";
 import { VINE_VISUAL_RADIUS, type Vine } from "../level/vines";
 import { forEachBraidSegment } from "./vineBraid";
+import { forEachVineLeaf } from "./vineLeaves";
 
 // A vine with no authored colour. Deliberately desaturated: it hangs among the
 // level's own greys and has to read as growth without pulling the eye off the
@@ -41,14 +42,33 @@ export function drawVines(
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
     if (vine.braidSeed !== null) {
-      ctx.lineWidth = VINE_VISUAL_RADIUS * 0.95;
       const colors = [shade(color, 1.2), color, shade(color, 0.7)];
-      forEachBraidSegment(points, vine.braidSeed, (ax, ay, _az, bx, by, _bz, strand) => {
+      forEachBraidSegment(points, vine.braidSeed, (ax, ay, _az, bx, by, _bz, strand, girth) => {
         ctx.strokeStyle = colors[strand]!;
+        ctx.lineWidth = VINE_VISUAL_RADIUS * 0.95 * girth;
         ctx.beginPath();
         ctx.moveTo(ax, ay);
         ctx.lineTo(bx, by);
         ctx.stroke();
+      });
+      forEachVineLeaf(points, vine.braidSeed, (x, y, side, length, tone) => {
+        const baseX = x + side * 0.045;
+        const baseY = y + 0.025;
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 0.005;
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(baseX, baseY);
+        ctx.stroke();
+        const tipX = baseX + side * length * 0.45;
+        const tipY = baseY + length * 0.89;
+        const width = length * 0.3;
+        ctx.fillStyle = ["#397b35", "#5a9d38", "#7dad48"][tone]!;
+        ctx.beginPath();
+        ctx.moveTo(baseX, baseY);
+        ctx.quadraticCurveTo(baseX + side * width * 1.5, baseY + length * 0.28, tipX, tipY);
+        ctx.quadraticCurveTo(baseX - side * width * 0.45, baseY + length * 0.52, baseX, baseY);
+        ctx.fill();
       });
       ctx.restore();
       continue;

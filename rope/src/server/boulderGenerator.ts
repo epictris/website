@@ -7,6 +7,13 @@ import { join, resolve } from "node:path";
 import type { Plugin } from "vite";
 export interface BoulderRequest { polygon: number[][]; seed: number; depth: number }
 
+// Roughly ten fractures per square metre keeps their world-space size stable.
+// Bound the count so tiny outlines remain rocky and large ones stay practical
+// for the Boolean/remesh pass in Blender.
+export function boulderSlabCount(area: number): number {
+  return Math.max(2, Math.min(100, Math.round(area * 10)));
+}
+
 export function validateBoulderRequest(value: unknown): BoulderRequest {
   const v = value as BoulderRequest;
   if (!v || !Array.isArray(v.polygon) || v.polygon.length < 3 || v.polygon.length > 128 ||
@@ -85,7 +92,7 @@ export function boulderGenerator(): Plugin {
           await writeFile(spec, JSON.stringify({
             plane: "CAMERA", units: "metres",
             defaults: {
-              depth: input.depth, seed: input.seed, slabs: 10,
+              depth: input.depth, seed: input.seed, slabs: boulderSlabCount(area),
               tolerance: Math.min(0.04, Math.sqrt(area) * 0.04),
               fracture_angle: 4, camera_yaw: 0, camera_pitch: 0,
               detail: 1, color: [0.13, 0.15, 0.18],
