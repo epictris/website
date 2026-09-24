@@ -14,6 +14,7 @@ import { shapeVertices } from "../engine/shapes";
 import type { Shape } from "../engine/shapes";
 import type { ShapeData } from "../level/levelFormat";
 import { strokeCurve } from "../lib/stroke";
+import { beltBand, beltLoopOf } from "./beltTread";
 import {
   ellipseReach,
   PATH_FLATTEN_STEP,
@@ -23,10 +24,16 @@ import {
   type PolylineIndex,
 } from "../lib/path";
 
+// A `poly` may carry a HOLE: one inner loop, wound the same way as `verts`,
+// which the two path writers emit REVERSED so that an ordinary nonzero fill
+// leaves it empty and a stroke draws both loops. It is a conveyor belt's band
+// (`outlineOfData`), whose inside is the hollow an author puts wheel props in.
+// Everything that reads only `verts` - extents, the grown masks, hit tests -
+// reads the outer boundary, which is the belt's extent.
 export type Outline =
   | { kind: "circle"; radius: number }
   | { kind: "rect"; half: Vec2 }
-  | { kind: "poly"; verts: readonly Vec2[] };
+  | { kind: "poly"; verts: readonly Vec2[]; hole?: readonly Vec2[] };
 
 export function outlineOfShape(s: Shape): Outline {
   if (s.kind === "circle") return { kind: "circle", radius: s.radius };
@@ -42,6 +49,21 @@ export function outlineOfData(s: ShapeData): Outline {
   // the bar that is drawn and the bar that is collided are the one shape.
   if (s.kind === "curve") {
     return { kind: "poly", verts: strokeCurve(pathNodesOf(s.verts), s.width).outline };
+  }
+  // A BELT's outline is its BAND (`lib/belt.ts`), in the object's frame with
+  // wheel 0 at the origin: the loop's outer surface, flattened, with the inner
+  // surface - the wheels' side, `thickness` in - as its hole, so a fill leaves
+  // the inside of the belt empty and a stroke draws both faces. Wheels that
+  // make no belt fail the build; drawn, they are one disc the size of the
+  // largest, so a hand-edited file still has something to show.
+  if (s.kind === "belt") {
+    const loop = beltLoopOf(s);
+    if (!loop) {
+      const r = s.wheels.reduce((m, w) => Math.max(m, w.r + s.thickness), 0);
+      return { kind: "circle", radius: Math.max(r, 0) };
+    }
+    const band = beltBand(loop);
+    return { kind: "poly", verts: band.outer, hole: band.inner };
   }
   return { kind: "rect", half: new Vec2(s.w / 2, s.h / 2) };
 }
@@ -86,6 +108,15 @@ export function pathOutline(
   } else {
     o.verts.forEach((v, i) => (i === 0 ? ctx.moveTo(v.x, v.y) : ctx.lineTo(v.x, v.y)));
     ctx.closePath();
+    // The hole the other way round, so a nonzero fill leaves it empty.
+    if (o.hole) {
+      for (let i = o.hole.length - 1; i >= 0; i--) {
+        const v = o.hole[i]!;
+        if (i === o.hole.length - 1) ctx.moveTo(v.x, v.y);
+        else ctx.lineTo(v.x, v.y);
+      }
+      ctx.closePath();
+    }
   }
   ctx.restore();
 }
@@ -131,6 +162,15 @@ export function pathOutlineInto(
     else p.lineTo(w.x, w.y);
   });
   p.closePath();
+  // The hole the other way round, so a nonzero fill leaves it empty.
+  if (o.kind === "poly" && o.hole) {
+    for (let i = o.hole.length - 1; i >= 0; i--) {
+      const w = center.add(o.hole[i]!.rotated(rot));
+      if (i === o.hole.length - 1) p.moveTo(w.x, w.y);
+      else p.lineTo(w.x, w.y);
+    }
+    p.closePath();
+  }
 }
 
 // The outline pushed out by `grow` on every side, in world coordinates, appended

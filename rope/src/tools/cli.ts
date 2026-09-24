@@ -38,6 +38,7 @@
 //   bun run src/tools/cli.ts spring
 //   bun run src/tools/cli.ts movers
 //   bun run src/tools/cli.ts vines
+//   bun run src/tools/cli.ts belts
 //   bun run src/tools/cli.ts render3d
 //   bun run src/tools/cli.ts camera    [--ride bundle.json [--from N] [--table]]
 //
@@ -2231,6 +2232,9 @@ switch (cmd) {
   case "rails":
     void cmdRails();
     break;
+  case "belts":
+    void cmdBelts();
+    break;
   case "viscous":
     void cmdViscous();
     break;
@@ -2257,7 +2261,7 @@ switch (cmd) {
     break;
   default:
     fail(
-      "usage: cli <play|record|replay|dump|query|scan|trace|settle|compare|continue|render|shot|chainpath|fork|bundles|pull|playtest|restamp|selftest|latch|transport|clicks|ledges|corners|tangents|decompose|dmath|contacts|spring|movers|vines|rails|viscous|breaks|render3d|camera|assets|levels|finish|entry> [file] [options]",
+      "usage: cli <play|record|replay|dump|query|scan|trace|settle|compare|continue|render|shot|chainpath|fork|bundles|pull|playtest|restamp|selftest|latch|transport|clicks|ledges|corners|tangents|decompose|dmath|contacts|spring|movers|vines|rails|belts|viscous|breaks|render3d|camera|assets|levels|finish|entry> [file] [options]",
     );
 }
 
@@ -2699,6 +2703,26 @@ async function cmdRails(): Promise<void> {
   }
   const x = xfail > 0 ? ` (${xfail} expected-fail)` : "";
   console.log(`[rails] ${results.length - failed}/${results.length} cases passed${x}`);
+  process.exit(failed > 0 ? 1 : 0);
+}
+
+// Conveyor belt cases (src/sim/beltCases.ts). A belt is a static whose surface
+// runs, and like a mover it reaches no digest and no invariant of its own, so
+// this is the whole of its coverage: the loop's closed forms, the format and
+// the build (a belt at speed 0 is bit-identical to its static pieces), and the
+// carry - a crate, a free ball and the avatar ride it, it wakes what sleeps on
+// it, and the energy monitor knows it for a source - and the hook riding it
+// round the loop, torn out when the chain cannot follow.
+async function cmdBelts(): Promise<void> {
+  const { runBeltCases } = await import("../sim/beltCases");
+  const results = runBeltCases();
+  let failed = 0;
+  for (const r of results) {
+    console.log(`  ${r.passed ? "PASS " : "FAIL "} ${r.name}`);
+    for (const d of r.details) console.log(`        ${d}`);
+    if (!r.passed) failed++;
+  }
+  console.log(`[belts] ${results.length - failed}/${results.length} cases passed`);
   process.exit(failed > 0 ? 1 : 0);
 }
 

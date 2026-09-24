@@ -34,6 +34,9 @@ import {
   NOTE_COLOR,
   polyMustBeConvex,
   toWorld,
+  beltGrips,
+  beltLoopOfShape,
+  beltShapeData,
   type EdChain,
   type EdVine,
   type EdItem,
@@ -60,6 +63,7 @@ import {
 } from "../level/levelFormat";
 import { MASK_ALL } from "../engine/body";
 import {
+  outlineOfData,
   pathOutline,
   pathOutlineGrown,
   pathOutlineInset,
@@ -69,6 +73,7 @@ import {
   type Margin,
   type Outline,
 } from "../render/shapePath";
+import { beltTreadTicks } from "../render/beltTread";
 import {
   REGION_EXIT_MARGIN,
   buildCameraRules,
@@ -85,6 +90,16 @@ import { BallLevel } from "../level/ballLevel";
 const PLAYER = "#65bddb";
 const IMPERMEABLE_EDGE = "#9db8c6"; // hook-proof surfaces: dashed steel border
 const VISCOUS_EDGE = "#c9a066"; // viscous (mud) surfaces: dash-dot ochre border
+// A conveyor's tread ticks and direction arrow: the game's tread grey
+// (`render/renderer.ts`), so the belt reads the same in both.
+const BELT_TREAD = "#e6e8eb";
+// A belt's wheels, which only the editor draws (the game leaves them to the
+// author's props): a faint grey, editor furniture rather than geometry.
+const BELT_WHEEL = "rgba(230,232,235,0.55)";
+// The direction arrow over a belt's run: how far outside the surface it sits
+// and how long it is, in metres, so it scales with the belt as the ticks do.
+const BELT_ARROW_LIFT = 0.1;
+const BELT_ARROW_SIZE = 0.1;
 const VISCOUS_DASH = [8 * PX, 3 * PX, 2 * PX, 3 * PX];
 // Breakable bodies: a broken red under-stroke, drawn BEHIND the piece border
 // rather than instead of it.
@@ -203,6 +218,15 @@ export interface Handles {
   // it belongs to, which would be unpickable. Dragging a stub is what authors
   // the first real handle, so every corner is one drag from smooth.
   pathHandles: PathHandlePoint[] | null;
+  // A conveyor's grips (see `beltGrips`), in wheel order: every wheel's centre
+  // (a square, dragged like a path vertex; wheel 0's is the item's own
+  // position, which the body is moved to move), one round grip per wheel on
+  // its rim that drags its radius, and the midpoint of every run's outer line,
+  // which inserts a wheel there. `beltRunFrom` names the wheel each run leaves.
+  beltCentres: Vec2[] | null;
+  beltRadii: Vec2[] | null;
+  beltMids: Vec2[] | null;
+  beltRunFrom: number[] | null;
 }
 
 export interface PathHandlePoint {
@@ -260,6 +284,10 @@ export function computeHandles(cam: Camera, body: EdItem): Handles {
     vertMids: null,
     depth: null,
     pathHandles: null,
+    beltCentres: null,
+    beltRadii: null,
+    beltMids: null,
+    beltRunFrom: null,
   };
   // Beside the shape's right edge, on the body's own +x, so it sits clear of the
   // corner boxes and turns with the shape exactly as the rotate knob does.
@@ -360,6 +388,23 @@ export function computeHandles(cam: Camera, body: EdItem): Handles {
         worldToScreen(cam, w.add(world[(i + 1) % n]!).mul(0.5)),
       ),
       depth: depthHandle(h.x),
+    };
+  }
+  if (body.shape.kind === "belt") {
+    // No corners: a belt is not a box, and its extents are its wheels. The
+    // knob turns it about wheel 0 (its origin), which is where the item is
+    // placed from.
+    const g = beltGrips(body)!;
+    return {
+      ...none,
+      body,
+      rotate: topMid.add(up.mul(ROT_OFFSET_PX)),
+      rotateBase: topMid,
+      depth: depthHandle(h.x),
+      beltCentres: g.centres.map((c) => worldToScreen(cam, c)),
+      beltRadii: g.radii.map((r) => worldToScreen(cam, r)),
+      beltMids: g.runs.map((r) => worldToScreen(cam, r.mid)),
+      beltRunFrom: g.runs.map((r) => r.from),
     };
   }
   const hw = body.shape.w / 2;
@@ -521,6 +566,9 @@ function outlineOf(body: EdItem): Outline {
     const h = halfExtents(body);
     return { kind: "rect", half: h };
   }
+  // A BELT is its loop, through the same `outlineOfData` the game's renderers
+  // take it from, so the editor and the game agree about where the surface is.
+  if (body.shape.kind === "belt") return outlineOfData(beltShapeData(body.shape));
   return { kind: "rect", half: new Vec2(body.shape.w / 2, body.shape.h / 2) };
 }
 
@@ -558,6 +606,70 @@ function curveNodes(shape: { verts: Vec2[]; handles: { in: Vec2; out: Vec2 }[] }
 function pathBody(ctx: CanvasRenderingContext2D, body: EdItem): void {
   ctx.beginPath();
   pathOutline(ctx, body.pos, body.rot, outlineOf(body));
+}
+
+// A conveyor's tread, the same ticks the game draws round the loop
+// (`render/beltTread.ts`) but STANDING STILL: nothing runs in the editor, and a
+// pattern pinned at phase 0 is what the SVG snapshot shows too. An arrowhead
+// just outside the middle of the longest run says which way it runs, since a
+// still tread does not - the one fact about a belt a static picture otherwise
+// hides.
+//
+// And the WHEELS, which the game does not draw at all (an author places wheel
+// props at their centres): a thin circle at each wheel's own radius and a dot
+// at its centre, as editor marks, so the wheels can be seen and grabbed.
+function drawBeltGlyph(ctx: CanvasRenderingContext2D, item: EdItem, worldLine: number): void {
+  if (item.shape.kind !== "belt") return;
+  const place = (v: Vec2): Vec2 => toWorld(item, v);
+  ctx.strokeStyle = BELT_WHEEL;
+  ctx.fillStyle = BELT_WHEEL;
+  ctx.lineWidth = worldLine;
+  ctx.setLineDash([]);
+  for (const w of item.shape.wheels) {
+    const c = place(w.c);
+    ctx.beginPath();
+    ctx.arc(c.x, c.y, w.r, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(c.x, c.y, worldLine * 2, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  const loop = beltLoopOfShape(item.shape);
+  if (!loop) return;
+  ctx.strokeStyle = BELT_TREAD;
+  ctx.lineWidth = worldLine * 1.5;
+  ctx.beginPath();
+  for (const { a, b } of beltTreadTicks(loop, 0)) {
+    const p = place(a);
+    const q = place(b);
+    ctx.moveTo(p.x, p.y);
+    ctx.lineTo(q.x, q.y);
+  }
+  ctx.stroke();
+  const speed = item.shape.speed;
+  if (speed === 0) return;
+  // Halfway along the longest run, pointing the way the surface moves along it.
+  let run: { from: Vec2; to: Vec2; dir: Vec2; normal: Vec2; length: number } | null = null;
+  for (const seg of loop.segments) {
+    if (seg.kind === "run" && (run === null || seg.length > run.length)) run = seg;
+  }
+  if (!run) return;
+  const dir = run.dir.mul(Math.sign(speed));
+  const mid = run.from.add(run.to).mul(0.5);
+  const tip = mid.add(run.normal.mul(BELT_ARROW_LIFT));
+  const size = BELT_ARROW_SIZE;
+  const back = tip.sub(dir.mul(size));
+  const side = new Vec2(-dir.y, dir.x).mul(size * 0.5);
+  ctx.fillStyle = BELT_TREAD;
+  ctx.beginPath();
+  const t = place(tip.add(dir.mul(size * 0.5)));
+  const l = place(back.add(side));
+  const r = place(back.sub(side));
+  ctx.moveTo(t.x, t.y);
+  ctx.lineTo(l.x, l.y);
+  ctx.lineTo(r.x, r.y);
+  ctx.closePath();
+  ctx.fill();
 }
 
 // A rail's centreline down the middle of the bar, in the steel a hook-proof
@@ -1991,6 +2103,7 @@ export function drawEditor(
     });
     ctx.setLineDash([]);
     for (const m of members) if (m.rail) drawRailGlyph(ctx, m, worldLine);
+    for (const m of members) drawBeltGlyph(ctx, m, worldLine);
   }
   for (const body of ordered) {
     if (drawnAsBody.has(body.id)) continue;
@@ -2093,6 +2206,7 @@ export function drawEditor(
       ctx.stroke();
     }
     if (body.rail && body.object === "collision") drawRailGlyph(ctx, body, worldLine);
+    drawBeltGlyph(ctx, body, worldLine);
   }
 
   // What the 3D renderer will do with a shape, marked on the 2D view - which
@@ -2668,6 +2782,26 @@ export function drawEditor(
       }
     }
     if (hs.vertMids) for (const m of hs.vertMids) midHandle(ctx, m);
+    // A belt: a stalk from each wheel's centre to its radius grip (the round
+    // grip a curve's tangent wears, since it too is dragged to a length from a
+    // point), each wheel's centre as a vertex square over it - filled for the
+    // wheel the panel's `r` edits - and a midpoint handle on every run, which
+    // inserts a wheel there as a polygon's edge midpoint inserts a corner.
+    if (hs.beltRadii && hs.beltCentres) {
+      const centres = hs.beltCentres;
+      ctx.strokeStyle = HANDLE;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      hs.beltRadii.forEach((g, i) => {
+        const c = centres[i]!;
+        ctx.moveTo(c.x, c.y);
+        ctx.lineTo(g.x, g.y);
+      });
+      ctx.stroke();
+      for (const m of hs.beltMids ?? []) midHandle(ctx, m);
+      for (const g of hs.beltRadii) tangentHandle(ctx, g);
+      centres.forEach((c, i) => (selectedVerts.has(i) ? filledSquare(ctx, c) : square(ctx, c)));
+    }
     // An arrow's endpoints are round, so they read as "drag me somewhere"
     // rather than as the corners of a box.
     if (hs.ends) for (const e of hs.ends) circleHandle(ctx, e);

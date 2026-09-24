@@ -38,16 +38,24 @@
           "y": -217.88713444196,
           "inX": -75.31427149697363,
           "inY": 21.519453635906792,
-          "outX": 75.31427149697363,
-          "outY": -21.519453635906792
+          "outX": 37.657135748486816,
+          "outY": -10.75972681795343
         },
         {
-          "x": 588.8483012963378,
-          "y": -197.88713444195997,
-          "inX": -83.63784543983685,
-          "inY": 1.7234942690149468,
-          "outX": 167.2756908796737,
-          "outY": -3.4469885380298937
+          "x": 838.8483012963377,
+          "y": -272.8871344419601,
+          "inX": -70.82740550290208,
+          "inY": 87.48419088240276,
+          "outX": 70.82740550290208,
+          "outY": -87.48419088240276
+        },
+        {
+          "x": 883.8483012963378,
+          "y": -667.8871344419599,
+          "inX": -3.8778346085448945,
+          "inY": 165.91646222825477,
+          "outX": 3.8778346085448945,
+          "outY": -165.91646222825477
         }
       ],
       "rangeX": 250,
@@ -65,6 +73,9 @@
   ],
   "environment": {
     "hdri": "golden-gate-hills"
+  },
+  "camera": {
+    "focalLength": 70
   },
   "player": {
     "x": -470,
@@ -221,8 +232,8 @@
     },
     {
       "kind": "static",
-      "x": -1480.0000000000011,
-      "y": -190.0000000000001,
+      "x": -1889.9999999999998,
+      "y": -75,
       "rot": 0,
       "color": "#555555",
       "opacity": 0.5,
@@ -246,6 +257,275 @@
           "matchCollision": true,
           "depth": 20,
           "texture": "dark rock"
+        }
+      ]
+    },
+    {
+      "kind": "static",
+      "x": -1902.5000000000002,
+      "y": -700.0000000000001,
+      "rot": 0,
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 25,
+            "h": 560
+          }
+        },
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 25,
+            "h": 560
+          },
+          "matchCollision": true,
+          "depth": 20,
+          "texture": "wood"
+        }
+      ]
+    },
+    {
+      "kind": "static",
+      "x": -1900.0000000000005,
+      "y": -950,
+      "rot": 0,
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 160.00000000000014,
+            "h": 19.99999999999993
+          }
+        },
+        {
+          "type": "collision",
+          "x": -4.999999999999716,
+          "y": 44.99999999999993,
+          "shape": {
+            "kind": "rect",
+            "w": 160.00000000000014,
+            "h": 19.99999999999993
+          }
+        },
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 160.00000000000014,
+            "h": 19.99999999999993
+          },
+          "matchCollision": true,
+          "depth": 20,
+          "texture": "wood"
+        },
+        {
+          "type": "geometry",
+          "x": -4.999999999999716,
+          "y": 44.99999999999993,
+          "shape": {
+            "kind": "rect",
+            "w": 160.00000000000014,
+            "h": 19.99999999999993
+          },
+          "matchCollision": true,
+          "depth": 20,
+          "texture": "wood"
+        }
+      ]
+    },
+    {
+      "kind": "static",
+      "x": -662.5,
+      "y": -395,
+      "rot": 0,
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 25,
+            "h": 560
+          }
+        },
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 25,
+            "h": 560
+          },
+          "matchCollision": true,
+          "depth": 20,
+          "texture": "wood"
+        }
+      ]
+    },
+    {
+      "kind": "static",
+      "x": -660.0000000000001,
+      "y": -645,
+      "rot": 0,
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 160.00000000000014,
+            "h": 19.99999999999993
+          }
+        },
+        {
+          "type": "collision",
+          "x": -4.999999999999716,
+          "y": 44.99999999999993,
+          "shape": {
+            "kind": "rect",
+            "w": 160.00000000000014,
+            "h": 19.99999999999993
+          }
+        },
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 160.00000000000014,
+            "h": 19.99999999999993
+          },
+          "matchCollision": true,
+          "depth": 20,
+          "texture": "wood"
+        },
+        {
+          "type": "geometry",
+          "x": -4.999999999999716,
+          "y": 44.99999999999993,
+          "shape": {
+            "kind": "rect",
+            "w": 160.00000000000014,
+            "h": 19.99999999999993
+          },
+          "matchCollision": true,
+          "depth": 20,
+          "texture": "wood"
+        }
+      ]
+    },
+    {
+      "kind": "static",
+      "x": -1285.0000000000002,
+      "y": -797.5,
+      "rot": 0,
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 0.1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "curve",
+            "width": 7.3,
+            "verts": [
+              {
+                "x": -544.9999999999999,
+                "y": -152.50000000000003
+              },
+              {
+                "x": 545.0000000000001,
+                "y": 152.49999999999994
+              }
+            ]
+          },
+          "rail": true
+        },
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "curve",
+            "width": 7.3,
+            "verts": [
+              {
+                "x": -544.9999999999999,
+                "y": -152.50000000000003
+              },
+              {
+                "x": 545.0000000000001,
+                "y": 152.49999999999994
+              }
+            ]
+          },
+          "matchCollision": true,
+          "depth": 20,
+          "texture": "steel"
+        }
+      ]
+    },
+    {
+      "kind": "static",
+      "x": 380,
+      "y": -500,
+      "rot": 0,
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "belt",
+            "wheels": [
+              {
+                "x": 0,
+                "y": 0,
+                "r": 10
+              },
+              {
+                "x": 385,
+                "y": -20.000000000000018,
+                "r": 20
+              }
+            ],
+            "thickness": 5,
+            "speed": -200
+          }
+        },
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "belt",
+            "wheels": [
+              {
+                "x": 0,
+                "y": 0,
+                "r": 10
+              },
+              {
+                "x": 385,
+                "y": -20.000000000000018,
+                "r": 20
+              }
+            ],
+            "thickness": 5,
+            "speed": -200
+          },
+          "matchCollision": true,
+          "depth": 40,
+          "texture": "rubber"
         }
       ]
     }

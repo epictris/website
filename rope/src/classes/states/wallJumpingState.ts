@@ -104,7 +104,7 @@ export class WallJumpingState extends PlayerState {
           break;
         case SlideType.PROJECT_VELOCITY: {
           // Relative projection against mobile surfaces (see AirborneState).
-          if (collider.isMobile) {
+          if (collider.surfaceMoves) {
             const vSurf = collider.velocityAtPoint(collision.getPosition());
             player.velocity = player.velocity.sub(vSurf).slide(normal).add(vSurf);
           } else {

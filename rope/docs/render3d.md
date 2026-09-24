@@ -182,6 +182,24 @@ The rest follows from that:
 `cli render3d`'s `format:` and `render:` projection cases assert the field survives the px-to-m gate and an editor save, that the twin is shared and keyed apart, that its hook really rewrites three's `project_vertex` chunk (a renamed chunk would be a `replace` matching nothing, and the object would silently draw in perspective), and that the highlight keeps it.
 What they cannot see is the picture, so the shader was checked with a `cli shot --3d` of a probe level: pairs of boxes at z = -6, -2, 0 and +1.5 m, one of each lens.
 
+## Conveyor belts
+
+A geometry object whose shape is a `belt` (see [**Conveyor belts**](conveyors.md)) draws its BAND as its own geometry (`BeltRing`, `render3d/beltTread.ts`), not an extruded outline: the extruder's side-wall UVs are anchored in the object's own x and y so a wall's texture meets the cap's, which on a loop runs u along the runs and turns it into the depth axis wherever the outline goes vertical, and a belt's running surface wants u by ARC LENGTH.
+The ring is an outer wall on the loop, an inner wall `thickness` inside it, and front and back caps (the band's edge) at `±depth / 2`, the object's `depth` being the band's width across the pulleys; each face has its own normals, so the edges are creases and no two faces share a plane.
+Its UVs are metres, as the extruder's are: `u` is arc length along the outer surface at the rate that makes the surface's repeat (`tileMetres`) the nearest length going round a whole number of times, so there is no seam where `s` wraps and nothing stretches round a wheel, and the caps and the inner wall carry the same `u` as the surface they stand on; `v` runs on round the cross-section, continuous over every rim but the back of the outer wall.
+Inside the band is the hollow: nothing is drawn at the wheels, which an author dresses with props of their own.
+
+What says the belt runs is its surface.
+A textured band **scrolls**: every frame its `u` is `(s - speed · t) · rate` with `t` the SIM clock, `(frame - 1 + alpha) / 60` (`beltRenderTime`, the instant the bodies are interpolated to), so a replay shows the same belt at the same frame and a paused game shows it standing.
+The scroll is written into the ring's own UV buffer rather than a map's `offset`, because materials are shared through the cache in `assets.ts` and an authored set's maps are swapped into that shared material as they arrive; a belt whose phase has not changed skips the write.
+An UNTEXTURED band - the flat fill, `texture: "color"` - has nothing to scroll and keeps its **cleats**: a ring of thin pale slats (one `InstancedMesh` per belt) set 4 mm inside the surface (or a fifth of the band, if less), through the whole width and 4 mm out past both caps, so what shows is a slat end on the rim of the front cap, and a slat never reaches the band's inner face.
+Both run at the geometry object's own `speed`; `Scene3DLevel.frame` is how the clock reaches the scene, and a host with none (the editor's preview) draws the belts still.
+Cleat placement allocates nothing (`beltFrameAt` is `beltPointAt`/`beltTangentAt` written into a scratch record, and `cli render3d` holds the two to agree).
+`cli render3d`'s `belt:` cases hold the ring's walls, caps and normals against the loop, `u` against arc length with a whole number of repeats, and the scroll's rate and sign; `cli shot --3d --frames` on `TEST_BELT` is the evidence for how it looks.
+
+The first cut drew the extruded loop and cleats only, rejecting a scrolled texture because the extruder's UVs could not carry one and because the side wall is seen nearly edge-on.
+The ring answers the first; the second turned out to matter less than it read, because the camera sees the front cap face on and the inner wall through the hollow, and both carry the moving `u`.
+
 ## Traps
 
 - **`PX`-sized constants do not survive projection.** A fixed on-screen size written as `<px> * PX` assumes the 2D renderer's uniform transform. Everything like that stays on the overlay, and nothing in the 3D scene may depend on `PIXELS_PER_METER` except through `space.ts`.

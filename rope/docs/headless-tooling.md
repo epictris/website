@@ -15,6 +15,7 @@ bun run src/tools/cli.ts movers               # scripted-mover cases (the arc, t
 bun run src/tools/cli.ts vines                # vine cases (the pass-through guards, drape, grab, winch, the load rope)
 bun run src/tools/cli.ts sleep                # sleep cases (a hung body and its chain sleep, the hook / a landing / a platform / an impulse wake, the lead swap, the stack, the arena)
 bun run src/tools/cli.ts rails                # rail cases (the stroke, the cone, the clamp, the coast, the jam, the catch)
+bun run src/tools/cli.ts belts                # conveyor cases (the hull of N wheels and its closed forms, the hollow build, speed 0 = static, the carry, the wake, the energy source, the ride, the tear)
 bun run src/tools/cli.ts viscous              # viscous (mud) cases (the creep law, the hang, the catch, the drop-out, the format)
 bun run src/tools/cli.ts breaks               # breakable-geometry cases (the force table, the threshold, the durability, the bounce, the drag, the chain, the guard, the format)
 bun run src/tools/cli.ts camera               # camera-path geometry, the rule set, and the editor's path round trip
@@ -60,7 +61,7 @@ bun run src/tools/cli.ts ab      session.json --metrics peakV,pushRun  # the sam
 ```
 
 `bun run test` is what "all green" means: typecheck, `dmath`, `selftest`, `contacts`,
-`spring`, `movers`, `vines`, `rails`, `viscous`, `breaks`, `finish`, `corners`, `tangents`, `decompose`, `camera`, `render3d`, `assets`, `levels`, `ledges`, every `playtests/*.json`,
+`spring`, `movers`, `vines`, `rails`, `belts`, `viscous`, `breaks`, `finish`, `corners`, `tangents`, `decompose`, `camera`, `render3d`, `assets`, `levels`, `ledges`, every `playtests/*.json`,
 then the bundle corpus, in that order and under one exit code.
 A case that is red on purpose carries `expectedFail` (see `sim/contactCases.ts`),
 which the runner counts as a pass and, crucially, **fails on if it ever passes**:

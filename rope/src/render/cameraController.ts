@@ -530,6 +530,10 @@ export function pointInRegion(r: CameraRegionData, p: Vec2, margin: Margin = 0):
   if (r.shape.kind === "circle") {
     return p.distanceTo(new Vec2(r.x, r.y)) <= r.shape.r + uniformMargin(margin);
   }
+  // A belt is a collision kind with no meaning as a camera volume; the editor
+  // cannot author one here, so a hand-edited region of that kind contains
+  // nothing.
+  if (r.shape.kind === "belt") return false;
   const l = p.sub(new Vec2(r.x, r.y)).rotated(-r.rot);
   if (r.shape.kind === "rect") {
     // Per side, in the region's own frame: the sides the buffer names, and the
@@ -575,6 +579,8 @@ export function pointInRegion(r: CameraRegionData, p: Vec2, margin: Margin = 0):
 // there - a weight is clamped to zero the moment the sign is negative.
 export function regionDepth(r: CameraRegionData, p: Vec2): number {
   if (r.shape.kind === "circle") return r.shape.r - p.distanceTo(new Vec2(r.x, r.y));
+  // Contains nothing (see `pointInRegion`), so everywhere is outside it.
+  if (r.shape.kind === "belt") return -Infinity;
   const l = p.sub(new Vec2(r.x, r.y)).rotated(-r.rot);
   if (r.shape.kind === "rect") {
     return Math.min(r.shape.w / 2 - Math.abs(l.x), r.shape.h / 2 - Math.abs(l.y));

@@ -12,6 +12,7 @@ constant rate and goes round rather than back and forth:
 `rot(t) = rot + 2π · (t/period + phase)`.
 A **traveller** (`moveNodes` / `moveMode` / `moveSpeed` / `movePhase` /
 `moveEase` / `moveAlign`) follows an authored cubic Bézier route.
+A moving SURFACE on a body that stays still is not a mover but a conveyor belt, a static with a surface velocity: see [conveyors](conveyors.md).
 
 The point of them being driven rather than simulated is **authority**, and it is
 the whole reason this is not a preset for `pivot`.

@@ -53,6 +53,7 @@ import {
   type ViewProjection,
 } from "./space";
 import { updateWater, waterTextures } from "./water";
+import { beltRenderTime } from "../render/beltTread";
 
 // What the 3D renderer needs of a level. Deliberately structural rather than
 // `Level | BallLevel`: the editor drives one of these from a model that is
@@ -71,6 +72,10 @@ export interface Scene3DLevel {
   // loop and its chain are drawn by their own modules; a grapple level has none
   // and stays on the 2D path for the avatar (see "Explicitly out of scope").
   readonly ball?: BallPlayer;
+  // How many steps the sim has taken, which is the clock a conveyor's tread
+  // runs on (`beltRenderTime`). Absent = a host with no running sim (the
+  // editor's preview), whose belts stand still.
+  readonly frame?: number;
 }
 
 // Bodies the 3D scene deliberately does not extrude, because something else
@@ -874,7 +879,14 @@ export class Scene3D {
     for (const area of level.world.areas) stamp(area);
     if (seen !== this.bodies.size) this.dropStaleBodies();
 
-    for (const visual of this.bodies.values()) visual.sync(alpha);
+    // The SIM clock, not the wall clock above: a conveyor's tread shows how far
+    // the belt has run, so a replay shows the same belt at the same frame and a
+    // paused game shows it standing.
+    const treadTime = beltRenderTime(level.frame ?? 0, alpha);
+    for (const visual of this.bodies.values()) visual.sync(alpha, treadTime);
+    // Standing bodies built no engine body and have no pose to follow, but a
+    // drawn-only conveyor still runs its tread.
+    for (const visual of this.standing) visual.sync(alpha, treadTime);
 
     this.chains.sync(level, alpha, retract);
     this.vines.sync(level.vines ?? NO_VINES, alpha);

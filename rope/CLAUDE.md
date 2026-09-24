@@ -77,7 +77,7 @@ Every command is listed with its purpose in [headless-tooling](docs/headless-too
 |---|---|
 | `src/engine/` | bodies, shapes, collision, manifolds, the contact solver, `World`, `dmath`, `trig` |
 | `src/classes/` | `Player` state machine, `BallPlayer`, `BallHook`, `Rope`, `SlackChain` |
-| `src/lib/` | pure geometry: polygon decomposition, stroke, path, keyframes, rail, viscous, manacle, span sweep |
+| `src/lib/` | pure geometry: polygon decomposition, stroke, path, keyframes, rail, viscous, belt, manacle, span sweep |
 | `src/level/` | level format, `buildBodies`, chains, vines, movers, registry, generated `levelData.ts` |
 | `src/sim/` | invariants, digests and traces, the case suites (`*Cases.ts`), the playtest runner, rigs |
 | `src/tools/` | `cli.ts` and the headless shot runner |
@@ -112,6 +112,7 @@ Rope geometry and surfaces
 - [hook-surfaces](docs/hook-surfaces.md) - hook-proof and chain-through pieces, hook-only bodies.
 - [rails](docs/rails.md) - authored curves the cuff clamps around and slides along.
 - [viscous-surfaces](docs/viscous-surfaces.md) - mud: the cuff sinks, creeps and drops out.
+- [conveyors](docs/conveyors.md) - belts: a static with a surface velocity, the hull of N wheels and its sense, the hollow build, the carry, the ride round the wheels, the tear-out, the band's ring and its scrolling texture.
 - [breakable](docs/breakable.md) - geometry that gives way: the force a hit carries, the hit count, and the debris it leaves.
 - [scene-chains](docs/scene-chains.md) - authored chains, the coupled sweep, the settle, anchors and wrap points.
 - [vines](docs/vines.md) - pass-through link chains, the load rope, stiffness, spans, sleep, drawing, authoring.

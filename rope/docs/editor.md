@@ -38,6 +38,26 @@ It used to re-centre on every write, which kept a polygon's origin its own centr
 Fitting a collision outline to the mesh it is being fitted *to* moved the mesh, which is the one thing that edit may not do.
 What the re-centring was for is still true and is answered from the outline instead: `shapeCentre` gives a shape's own centre of area (a polygon's centroid, a curve's stroke, a rect's or circle's origin), and `bodyCentroid` weighs the body's pieces at those points, so the point the editor turns a body about is still the one `mountPieces` mounts it at.
 
+## Conveyor belts
+
+`+ Belt` (beside `+ Circle`) lays a **conveyor**: press where the first wheel goes and drag to the second, or click to drop a two-wheel belt 1.5 m long running right at 1 m/s on 10 cm wheels under a 5 cm band (see [**Conveyor belts**](conveyors.md)).
+The item's own position IS wheel 0, so the ordinary move gesture places the belt and the rotate knob turns it about that wheel.
+
+- Every wheel has a **square grip** at its centre, dragged like a path vertex; wheel 0's is the item's position, so pressing it picks the wheel and moves the whole belt.
+- Every wheel has a **round grip** on its rim, facing away from the middle of the belt, the grip a curve's tangent wears, which drags that wheel's radius.
+- Every run has a **midpoint handle**, which inserts a wheel there - sized as the smaller of the run's two wheels and set so its band just touches the run, which changes nothing about the loop - and drags it straight away, the path's insert gesture.
+- **Alt+click** on a wheel's square removes it, never below two; removing wheel 0 moves the item onto the wheel that takes its place, so the belt stays put.
+- Pressing a wheel's square or its radius grip **picks** it (the square fills), and the panel shows that wheel's `r`.
+
+Every one of those, the inspector's fields and the gizmo's scale go through `setBelt`, which **refuses wheels that make no belt** - a wheel inside the hull the others make, a disc inside another, a radius or a thickness under a pixel - asking the build's own loop, so the grip stalls at the last belt, as a polygon's corner stalls at the last simple loop, because the editor rebuilds the level from the model on every edit and a belt the build refuses would take the preview down mid-drag.
+The panel has `thickness` (the band's depth in the plane, px as every length there), `width` (how wide the band is across the pulleys: it writes the geometry twin's `depth`), the twin's `texture` (`color` is the flat fill, which keeps the cleats), `speed m/s` (signed: positive runs the loop clockwise on screen), the picked wheel's `r`, and two readouts, the loop's **perimeter** and one **lap** of its surface, `P / |speed|`; a belt with no geometry twin says `Add geometry` gives it one instead of `width` and `texture`.
+The outline is `outlineOfData`'s, the one the game draws - the band, hollow inside - with the tread ticks STANDING STILL (nothing runs in the editor) and a small arrowhead over the middle of the longest run saying which way it runs, which a still tread cannot.
+The wheels are drawn as editor marks the game does not draw: a thin circle at each wheel's own radius and a dot at its centre.
+A click in the hollow between the wheels passes through the belt to whatever an author has put inside it; the band and the wheels pick it, which is where it collides.
+A belt builds only on a static body that does not move, and that is a fact about the BODY: a kind change or a merge can break it after the belt is drawn.
+The editor does not throw on it - the title says `DOES NOT BUILD:` and the build's own message, the 3D view keeps the last scene that built, and ▶ Test refuses to start - so the author sees what to undo.
+The file still saves, and the game refuses it as loudly as the build does.
+
 ## Picking corners out of a shape
 
 **Corners are selectable in their own right** (`selectedVerts` in `editor.ts`), which is a second level of selection nested inside the item one: a polygon is the item whose parts are separately editable, so once the shape itself is picked, a click, a rubber band, a Delete, a nudge and a drag can all just as well mean its corners.

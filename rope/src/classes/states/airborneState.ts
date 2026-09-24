@@ -127,8 +127,9 @@ export class AirborneState extends PlayerState {
         case SlideType.PROJECT_VELOCITY: {
           // Project the velocity *relative* to a mobile surface so an
           // advancing mover imparts its motion (statics reduce to the plain
-          // slide as before).
-          if (collider.isMobile) {
+          // slide as before). Asked of the SURFACE (`surfaceMoves`), so a
+          // running belt's material counts and its still frame does not.
+          if (collider.surfaceMoves) {
             const vSurf = collider.velocityAtPoint(collision.getPosition());
             player.velocity = player.velocity.sub(vSurf).slide(normal).add(vSurf);
           } else {

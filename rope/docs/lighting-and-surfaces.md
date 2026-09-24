@@ -183,4 +183,8 @@ The one residue is the **corner**: the outward direction there is the bisector, 
 
 The resolved size and offset are part of the material cache key, because `repeat` and `offset` live on the *texture* rather than the material: two tilings are two `Texture.clone`s sharing one uploaded image.
 
+**A conveyor belt is the one surface whose tiling is adjusted and whose pattern moves** ([conveyors](conveyors.md#rendering)).
+Its band is its own ring of geometry with `u` in metres of ARC LENGTH along the running surface, and the repeat `tileMetres` gives is stretched or squeezed to the nearest length that goes round the loop a whole number of times (`beltTextureTile`), so the loop closes on the pattern with no seam; the material is the ordinary cached one, untouched.
+The motion is written into the ring's own UV buffer, never into a map's `offset`: the material and its maps are shared by everything wearing that surface, and an authored set's maps are swapped into the shared material when they arrive, so an offset set on one belt would move every wall of the same stuff, or be lost when the images landed.
+
 `cli render3d` asserts the resolution rule directly (`surfaces: …`) - authored beats generated, a material name still resolves to its own surface, an unknown name falls back, and each side's tile is its own - because it is pure arithmetic over the two manifests, and because getting the precedence backwards is invisible: every level goes on wearing perfectly presentable noise while the downloaded maps sit unused.

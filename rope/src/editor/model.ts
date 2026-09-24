@@ -19,7 +19,11 @@ import {
   nearestOnOutline,
   polyCentroid,
   polySignedArea2,
+  type BeltLoop,
 } from "../engine/shapes";
+import { outlineOfData } from "../render/shapePath";
+import { beltLoopOf } from "../render/beltTread";
+import { beltRunQuads } from "../lib/belt";
 import {
   isSimpleLoop,
   loopContainsPoint,
@@ -209,7 +213,23 @@ export type EdShape =
       // well-formed one and nothing has to ask which layer it is on to know
       // whether it may be read.
       width: number;
-    };
+    }
+  // A CONVEYOR (`ShapeData`'s `belt`, docs/conveyors.md): a band `thickness`
+  // deep round the outside of two or more wheels. Each wheel is a centre `c` in
+  // the item's frame and its own radius `r`; wheel 0 is at the origin, the
+  // item's own `pos`, so the ordinary move gesture places the belt, and every
+  // other wheel's centre is a grip dragged like a path vertex. `speed` is the
+  // signed surface speed in m/s (positive turns the loop clockwise on screen).
+  // Scene layer only, and collision or geometry.
+  | { kind: "belt"; wheels: EdWheel[]; thickness: number; speed: number };
+
+// One wheel of an editor belt: its centre in the item's frame and its radius,
+// metres. Replaced wholesale by `setBelt`, never mutated in place, so an undo
+// snapshot that shares one is not rewritten by the edit it exists to undo.
+export interface EdWheel {
+  readonly c: Vec2;
+  readonly r: number;
+}
 
 // What a curve drawn in the editor starts out as: a bar the manacle's own ring
 // closes around (`MANACLE_BORE`), which is the bar a rail is for.
@@ -629,6 +649,9 @@ export function cloneShape(s: EdShape): EdShape {
       width: s.width,
     };
   }
+  // A belt's wheel list is cloned for the same reason: `setBelt` writes a new
+  // array, but a snapshot sharing the old one must not see a later edit.
+  if (s.kind === "belt") return { ...s, wheels: [...s.wheels] };
   return { ...s };
 }
 
@@ -1063,6 +1086,17 @@ function edShape(s: ShapeData): EdShape {
       })),
       keys: s.verts.map(() => NO_KEY()),
       width: s.width,
+    };
+  }
+  // A BELT keeps every field it has on disk (docs/conveyors.md): each wheel's
+  // centre in the object's frame and its radius, the band's thickness and the
+  // signed speed. Wheel 0 is the item's own position.
+  if (s.kind === "belt") {
+    return {
+      kind: "belt",
+      wheels: s.wheels.map((w) => ({ c: new Vec2(w.x, w.y), r: w.r })),
+      thickness: s.thickness,
+      speed: s.speed,
     };
   }
   return { kind: "poly", verts: s.verts.map((v) => new Vec2(v.x, v.y)) };
@@ -1901,6 +1935,9 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
         }),
       };
     }
+    if (i.shape.kind === "belt") {
+      return beltShapeData(i.shape);
+    }
     return { kind: "poly", verts: i.shape.verts.map((v) => ({ x: v.x, y: v.y })) };
   };
 
@@ -2390,9 +2427,233 @@ export function localVertices(item: EdItem): Vec2[] {
   // the shape kind first; what is shared is the bounds, the handles and the
   // transform, which read a vertex list either way.
   if (item.shape.kind === "poly" || item.shape.kind === "path") return item.shape.verts;
+  // A belt's outer loop, flattened: a closed outline like a polygon's, so the
+  // bounds, the rubber band and the surface snaps all read it as one. It is
+  // DERIVED, never edited vertex by vertex - the vertex interface is gated on
+  // `poly` and `path`, and a belt is edited by its wheels.
+  if (item.shape.kind === "belt") return beltOutlineLocal(item.shape);
   const hw = item.shape.w / 2;
   const hh = item.shape.h / 2;
   return [new Vec2(-hw, hh), new Vec2(-hw, -hh), new Vec2(hw, -hh), new Vec2(hw, hh)];
+}
+
+export type EdBelt = Extract<EdShape, { kind: "belt" }>;
+
+// What `+ Belt` drops with a click: a belt a crate can ride and a ball can roll
+// on - two 10 cm wheels 1.5 m apart under a 5 cm band, so the running surface
+// is 15 cm round each end (a 24 cm ball is on the scale of it), running at a
+// walking 1 m/s. A drag from the first wheel places the second instead.
+export const DEFAULT_BELT_LENGTH = 1.5;
+export const DEFAULT_BELT_RADIUS = 0.1;
+export const DEFAULT_BELT_THICKNESS = 0.05;
+export const DEFAULT_BELT_SPEED = 1;
+
+// Do these wheels make a belt? At least two, every radius and the band's
+// thickness at least a pixel, every pair of discs
+// clear of each other's inside by a pixel more than the build needs (external
+// tangents exist only then), and every wheel ON the hull - asked of the build's
+// own loop (`beltLoopOf`), so the editor and the build cannot disagree about
+// what is a belt. The margins are so no edit can hand the build one it refuses:
+// the editor rebuilds the level from the model on every edit, so a gesture that
+// let one through would take the preview down mid-drag rather than stall.
+// Wheel 0 sitting at the item's origin is kept by the gestures (it has no drag
+// grip of its own, and removing it re-origins the item), not demanded here:
+// the build reads every centre as an offset, and a hand-edited file with wheel
+// 0 elsewhere must still be editable rather than frozen.
+export function beltValid(wheels: readonly EdWheel[], thickness: number): boolean {
+  if (wheels.length < 2 || !(thickness >= MIN_SHAPE_EXTENT)) return false;
+  for (let i = 0; i < wheels.length; i++) {
+    const a = wheels[i]!;
+    if (!(a.r >= MIN_SHAPE_EXTENT) || !a.c.isFinite()) return false;
+    for (let j = i + 1; j < wheels.length; j++) {
+      const b = wheels[j]!;
+      if (!(a.c.distanceTo(b.c) > Math.abs(a.r - b.r) + MIN_SHAPE_EXTENT)) return false;
+    }
+  }
+  return beltLoopOf({ wheels: wheels.map((w) => ({ x: w.c.x, y: w.c.y, r: w.r })), thickness }) !== null;
+}
+
+// The one writer of a belt's geometry: applies `patch` if the result is still a
+// belt and reports whether it did. A refused edit leaves the belt exactly as it
+// was, so a drag stalls at the last valid shape - what `setPolyVerts` does for
+// a polygon that would turn inside out. The wheel list is REPLACED, never
+// edited in place (see `EdWheel`).
+export function setBelt(
+  item: EdItem,
+  patch: { wheels?: readonly EdWheel[]; thickness?: number; speed?: number },
+): boolean {
+  if (item.shape.kind !== "belt") return false;
+  const wheels = patch.wheels ?? item.shape.wheels;
+  const thickness = patch.thickness ?? item.shape.thickness;
+  if (!beltValid(wheels, thickness)) return false;
+  item.shape.wheels = [...wheels];
+  item.shape.thickness = thickness;
+  if (patch.speed !== undefined) item.shape.speed = patch.speed;
+  return true;
+}
+
+// One wheel moved to `c` or resized to `r`, through `setBelt`.
+export function setBeltWheel(item: EdItem, index: number, patch: { c?: Vec2; r?: number }): boolean {
+  if (item.shape.kind !== "belt") return false;
+  const w = item.shape.wheels[index];
+  if (!w) return false;
+  const wheels = [...item.shape.wheels];
+  wheels[index] = { c: patch.c ?? w.c, r: patch.r ?? w.r };
+  return setBelt(item, { wheels });
+}
+
+// Where a belt's grips sit, in WORLD metres: every wheel's centre (dragged like
+// a path vertex, wheel 0's being the item's own position), one radius grip per
+// wheel on its own rim, on the side facing away from the middle of the belt so
+// dragging it out makes the wheel bigger, and the midpoint of every run's outer
+// line, which inserts a wheel there (`beltInsertWheel`). Runs in loop order,
+// each naming the wheel it leaves.
+export interface BeltGrips {
+  centres: Vec2[];
+  radii: Vec2[];
+  runs: { mid: Vec2; from: number }[];
+}
+
+export function beltGrips(item: EdItem): BeltGrips | null {
+  if (item.shape.kind !== "belt") return null;
+  const s = item.shape;
+  let middle = Vec2.ZERO;
+  for (const w of s.wheels) middle = middle.add(w.c);
+  middle = middle.div(s.wheels.length);
+  const radii = s.wheels.map((w) => {
+    const away = w.c.sub(middle);
+    const u = away.length() > 1e-9 ? away.normalized() : new Vec2(1, 0);
+    return toWorld(item, w.c.add(u.mul(w.r)));
+  });
+  const loop = beltLoopOfShape(s);
+  const runs: BeltGrips["runs"] = [];
+  if (loop) {
+    loop.segments.forEach((seg, i) => {
+      if (seg.kind !== "run") return;
+      const arc = loop.segments[i - 1];
+      runs.push({
+        mid: toWorld(item, seg.from.add(seg.to).mul(0.5)),
+        from: arc && arc.kind === "arc" ? arc.wheel : 0,
+      });
+    });
+  }
+  return { centres: s.wheels.map((w) => toWorld(item, w.c)), radii, runs };
+}
+
+// Insert a wheel under the midpoint of the run that leaves wheel `from`: the
+// size of the smaller of that run's two wheels, set so its band just TOUCHES
+// the run's outer line there - which changes nothing about the loop (a wheel
+// touching the band is on it, with an arc of no sweep), so inserting a wheel
+// and placing it is one gesture, as a path's edge midpoint is. Placed after
+// `from` in the list. The new wheel's index, or -1 if the belt refuses it (a
+// disc that would sit inside another).
+export function beltInsertWheel(item: EdItem, from: number): number {
+  if (item.shape.kind !== "belt") return -1;
+  const s = item.shape;
+  const loop = beltLoopOfShape(s);
+  if (!loop) return -1;
+  const k = loop.segments.findIndex((seg) => seg.kind === "arc" && seg.wheel === from);
+  const run = loop.segments[k + 1];
+  const next = loop.segments[(k + 2) % loop.segments.length];
+  if (k < 0 || !run || run.kind !== "run" || !next || next.kind !== "arc") return -1;
+  const r = Math.min(s.wheels[from]!.r, s.wheels[next.wheel]!.r);
+  const mid = run.from.add(run.to).mul(0.5);
+  const c = mid.sub(run.normal.mul(r + s.thickness));
+  const wheels = [...s.wheels];
+  wheels.splice(from + 1, 0, { c, r });
+  return setBelt(item, { wheels }) ? from + 1 : -1;
+}
+
+// Remove wheel `index`, never below two. Wheel 0 is the item's own position,
+// so removing it moves the item onto the wheel that takes its place and every
+// other centre by the same amount - the belt stays where it was. False if the
+// belt refuses what is left (a wheel the removed one held out that now falls
+// inside the hull).
+export function beltRemoveWheel(item: EdItem, index: number): boolean {
+  if (item.shape.kind !== "belt") return false;
+  const s = item.shape;
+  if (s.wheels.length <= 2 || !s.wheels[index]) return false;
+  const rest = s.wheels.filter((_, j) => j !== index);
+  const origin = rest[0]!.c;
+  const shifted = rest.map((w, j) => ({ c: j === 0 ? Vec2.ZERO : w.c.sub(origin), r: w.r }));
+  const pos = toWorld(item, origin);
+  if (!setBelt(item, { wheels: shifted })) return false;
+  item.pos = pos;
+  return true;
+}
+
+// The perimeter of a belt's loop in metres, and how long one lap of its surface
+// takes at its speed (Infinity for a belt that does not run) - the inspector's
+// readout, from the same loop the build makes.
+export function beltLap(s: EdBelt): { perimeter: number; lap: number } | null {
+  const loop = beltLoopOfShape(s);
+  if (!loop) return null;
+  return { perimeter: loop.total, lap: s.speed === 0 ? Infinity : loop.total / Math.abs(s.speed) };
+}
+
+// A belt shape in the on-disk form (`ShapeData`'s `belt`), still in metres -
+// what `outlineOfData` and `beltLoopOf` take, so the editor's belt is drawn by
+// the one outline the game draws it by.
+export function beltShapeData(s: EdBelt): Extract<ShapeData, { kind: "belt" }> {
+  return {
+    kind: "belt",
+    wheels: s.wheels.map((w) => ({ x: w.c.x, y: w.c.y, r: w.r })),
+    thickness: s.thickness,
+    speed: s.speed,
+  };
+}
+
+// The key a belt's derived geometry is cached against: everything the loop is
+// made of. A shape is replaced field by field by its gestures, so the caches
+// below are checked rather than trusted.
+function beltKey(s: EdBelt): string {
+  return `${s.thickness}|${s.wheels.map((w) => `${w.c.x},${w.c.y},${w.r}`).join(";")}`;
+}
+
+// The belt's loop in the item's frame, or null for wheels that make none -
+// which the build refuses and `setBelt` never lets through, so only a
+// hand-edited file reaches it. Cached per shape: every frame of the editor
+// asks for it several times over (the draw, the grips, the pick).
+const beltLoops = new WeakMap<EdBelt, { key: string; loop: BeltLoop | null }>();
+export function beltLoopOfShape(s: EdBelt): BeltLoop | null {
+  const key = beltKey(s);
+  const hit = beltLoops.get(s);
+  if (hit && hit.key === key) return hit.loop;
+  const loop = beltLoopOf(beltShapeData(s));
+  beltLoops.set(s, { key, loop });
+  return loop;
+}
+
+// The band's OUTER loop, flattened: a closed outline like a polygon's, so the
+// bounds, the rubber band and the surface snaps all read it as one. Cached for
+// the reason the loop is.
+const beltOutlines = new WeakMap<EdBelt, { key: string; verts: Vec2[] }>();
+function beltOutlineLocal(s: EdBelt): Vec2[] {
+  const key = beltKey(s);
+  const hit = beltOutlines.get(s);
+  if (hit && hit.key === key) return hit.verts;
+  const o = outlineOfData(beltShapeData(s));
+  // Degenerate wheels draw as one disc; as a vertex loop that is a polygon
+  // round it, so every consumer still gets a closed outline.
+  const verts =
+    o.kind === "poly"
+      ? [...o.verts]
+      : Array.from({ length: 24 }, (_, k) => {
+          const t = (k / 24) * Math.PI * 2;
+          const r = o.kind === "circle" ? o.radius : 0;
+          return new Vec2(Math.cos(t) * r, Math.sin(t) * r);
+        });
+  beltOutlines.set(s, { key, verts });
+  return verts;
+}
+
+// The band's INNER loop - the wheels' side of it - in the item's frame, or
+// empty for a belt that builds none: the hole a click inside the belt falls
+// through (`pointInBody`), since the inside of a belt is where an author puts
+// the props that stand for its wheels.
+function beltInnerLocal(s: EdBelt): readonly Vec2[] {
+  const o = outlineOfData(beltShapeData(s));
+  return o.kind === "poly" ? (o.hole ?? []) : [];
 }
 
 export function worldVertices(item: EdItem): Vec2[] {
@@ -2637,6 +2898,24 @@ export function scaleShape(
     );
     return;
   }
+  if (item.shape.kind === "belt" && base.kind === "belt") {
+    // Every wheel's centre scales with the frame, as a vertex would, about
+    // wheel 0 (the item's origin, where the gizmo pivots); each radius and the
+    // band's thickness take the mean of the two factors, as a circle's radius
+    // does. The SPEED is a rate the author chose, not an extent of the shape,
+    // and a resize leaves it alone. Through `setBelt`, so a scale that would
+    // sink one wheel inside another, or inside the hull, is refused rather than
+    // handed to the build.
+    const mean = (Math.abs(fx) + Math.abs(fy)) / 2;
+    setBelt(item, {
+      wheels: base.wheels.map((w) => ({
+        c: new Vec2(w.c.x * fx, w.c.y * fy),
+        r: floor(w.r * mean),
+      })),
+      thickness: floor(base.thickness * mean),
+    });
+    return;
+  }
   if (item.shape.kind === "path" && base.kind === "path") {
     // A path scales like any other vertex list, and its tangent handles scale
     // with it - they are offsets in the same frame, so a stretched curve keeps
@@ -2679,7 +2958,7 @@ export function halfExtents(item: EdItem): Vec2 {
   }
   let x = 0;
   let y = 0;
-  for (const v of item.shape.verts) {
+  for (const v of localVertices(item)) {
     x = Math.max(x, Math.abs(v.x));
     y = Math.max(y, Math.abs(v.y));
   }
@@ -2829,7 +3108,9 @@ export function bodyIntersectsRect(item: EdItem, min: Vec2, max: Vec2): boolean 
     }
     return false;
   }
-  if (item.shape.kind === "poly") {
+  // A belt is a closed loop like a polygon's, and not centred on its origin, so
+  // the box-about-the-origin SAT below would be the wrong box.
+  if (item.shape.kind === "poly" || item.shape.kind === "belt") {
     // Directly, rather than by SAT: a separating axis exists only between
     // CONVEX shapes, and an authored outline may have a notch the band sits in
     // without touching it. Three questions cover every arrangement of two simple
@@ -2926,10 +3207,21 @@ export function pointInBody(item: EdItem, world: Vec2): boolean {
   if (item.shape.kind === "rect") {
     return Math.abs(l.x) <= item.shape.w / 2 && Math.abs(l.y) <= item.shape.h / 2;
   }
+  // A belt is picked where it COLLIDES: on the band, or on a wheel (whose disc
+  // is solid), and not in the hollow between the wheels - that is where an
+  // author puts the props that stand for the wheels, and a click there is
+  // meant for them.
+  if (item.shape.kind === "belt") {
+    const s = item.shape;
+    if (!loopContainsPoint(localVertices(item), l)) return false;
+    const hole = beltInnerLocal(s);
+    if (hole.length < 3 || !loopContainsPoint(hole, l)) return true;
+    return s.wheels.some((w) => w.c.distanceTo(l) <= w.r + s.thickness);
+  }
   // Even-odd, not "inside every face's half-plane": the half-plane answer is the
   // convex one and fills in a notch, so clicking through the gap in a C-shaped
   // wall would pick the wall.
-  return loopContainsPoint(item.shape.verts, l);
+  return loopContainsPoint(localVertices(item), l);
 }
 
 // --- bodies -----------------------------------------------------------------
@@ -3006,7 +3298,9 @@ export function objectLabel(item: EdItem, metresToPx: number): string {
       ? `${n(item.shape.w)}×${n(item.shape.h)}`
       : item.shape.kind === "circle"
         ? `r${n(item.shape.r)}`
-        : `${item.shape.verts.length}v`;
+        : item.shape.kind === "belt"
+          ? `${item.shape.wheels.length} wheels t${n(item.shape.thickness)}`
+          : `${item.shape.verts.length}v`;
   // A mesh is named by its asset, since that is what tells two props apart -
   // their placeholders are usually identical.
   if (item.visual.kind === "mesh") return `mesh ${item.visual.mesh || "(none)"}`;
@@ -3024,10 +3318,12 @@ export function objectLabel(item: EdItem, metresToPx: number): string {
 // `primitiveGeometry` makes, said in words for the outliner.
 // A camera path is never a geometry object, so it has no solid to be named
 // after and is not in this table.
-const PRIMITIVE_NAME: Record<"rect" | "circle" | "poly", string> = {
+const PRIMITIVE_NAME: Record<"rect" | "circle" | "poly" | "belt", string> = {
   rect: "box",
   circle: "cylinder",
   poly: "prism",
+  // A belt's loop extruded, with the tread riding it (`render3d/beltTread.ts`).
+  belt: "belt",
 };
 
 // Area of an item's shape, in m².
@@ -3045,7 +3341,33 @@ export function shapeArea(item: EdItem): number {
       0,
     );
   }
+  // A BELT weighs what its pieces weigh - a disc of `r + thickness` per wheel
+  // and a quad per run, overlaps and all - which is what the build weighs
+  // (docs/conveyors.md, "The build"). A belt only builds on a static, whose mass
+  // nothing reads, but the pieces' masses are what place its body's origin, and
+  // that is what `shapeCentre` beside this has to agree with.
+  if (item.shape.kind === "belt") {
+    return beltPieces(item.shape).reduce((a, p) => a + p.area, 0);
+  }
   return Math.abs(polySignedArea2(item.shape.verts)) / 2;
+}
+
+// A belt's build pieces as areas at centres, in the item's frame: every
+// wheel's disc at its centre and every run's quad at its centroid, as
+// `makePieces` cuts them. Wheels that make no belt build nothing and weigh
+// nothing here.
+function beltPieces(s: EdBelt): { area: number; at: Vec2 }[] {
+  const loop = beltLoopOfShape(s);
+  if (!loop) return [];
+  const discs = s.wheels.map((w) => {
+    const r = w.r + s.thickness;
+    return { area: Math.PI * r * r, at: w.c };
+  });
+  const quads = beltRunQuads(loop).map((q) => ({
+    area: Math.abs(polySignedArea2(q)) / 2,
+    at: polyCentroid(q),
+  }));
+  return [...discs, ...quads];
 }
 
 // Mass of an item's shape, in kg - the same answer `ShapeGeometry.computeMass`
@@ -3081,6 +3403,15 @@ export function shapeCentre(item: EdItem): Vec2 {
     }
     // A camera path is stroked for its bar all the same (nothing weighs one), and
     // a degenerate run has no area to weigh: both fall back to the placement.
+    return total > 0 ? toWorld(item, acc.div(total)) : item.pos;
+  }
+  if (s.kind === "belt") {
+    let total = 0;
+    let acc = Vec2.ZERO;
+    for (const p of beltPieces(s)) {
+      total += p.area;
+      acc = acc.add(p.at.mul(p.area));
+    }
     return total > 0 ? toWorld(item, acc.div(total)) : item.pos;
   }
   return toWorld(item, polyCentroid(s.verts));
@@ -3600,7 +3931,9 @@ function shapeCorners(item: EdItem): Vec2[] {
         ? [new Vec2(s.r, 0), new Vec2(-s.r, 0), new Vec2(0, s.r), new Vec2(0, -s.r)]
         : s.kind === "poly" || s.kind === "path"
           ? s.verts
-          : [Vec2.ZERO];
+          : s.kind === "belt"
+            ? localVertices(item)
+            : [Vec2.ZERO];
   return local.map((v) => item.pos.add(v.rotated(item.rot)));
 }
 
@@ -3624,6 +3957,21 @@ export function outlinesEqual(a: EdItem, b: EdItem, eps = 1e-9): boolean {
       s.verts.every(
         (v, i) => Math.abs(v.x - t.verts[i]!.x) <= eps && Math.abs(v.y - t.verts[i]!.y) <= eps,
       )
+    );
+  // The speed is part of a belt's outline for this purpose: a matched pair
+  // mirrors the WHOLE shape, and a drawn belt running at a different speed from
+  // the one it collides as would show a tread that lies about the carry.
+  if (s.kind === "belt" && t.kind === "belt")
+    return (
+      s.wheels.length === t.wheels.length &&
+      s.wheels.every(
+        (w, i) =>
+          Math.abs(w.c.x - t.wheels[i]!.c.x) <= eps &&
+          Math.abs(w.c.y - t.wheels[i]!.c.y) <= eps &&
+          Math.abs(w.r - t.wheels[i]!.r) <= eps,
+      ) &&
+      Math.abs(s.thickness - t.thickness) <= eps &&
+      Math.abs(s.speed - t.speed) <= eps
     );
   return false;
 }
@@ -3658,7 +4006,9 @@ function outlineSig(i: EdItem): string {
                 return `${v.x},${v.y},${h?.in.x ?? 0},${h?.in.y ?? 0},${h?.out.x ?? 0},${h?.out.y ?? 0}`;
               })
               .join(";")}`
-          : `p${s.verts.map((v) => `${v.x},${v.y}`).join(";")}`;
+          : s.kind === "belt"
+            ? `b${beltKey(s)}|${s.speed}`
+            : `p${s.verts.map((v) => `${v.x},${v.y}`).join(";")}`;
   return `${i.pos.x},${i.pos.y},${i.rot},${i.bodyId}|${shape}`;
 }
 

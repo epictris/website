@@ -318,11 +318,36 @@ export const LEGACY_IMPERMEABLE = "impermeable";
 // them (`pointInRegion`, `pathOutlineGrown`), neither of which has a concave
 // answer, and a region is not built into pieces that could carry one. The editor
 // holds a camera-layer polygon convex for that reason.
+//
+// `belt` is the fifth: a CONVEYOR, a band `thickness` deep wrapped round the
+// outside of two or more WHEELS, whose surface runs round the loop
+// (`lib/belt.ts`, docs/conveyors.md). Each wheel is a centre in the object's
+// frame and the wheel's own radius `r`; the band lies on it, so the running
+// surface round wheel i is at `r + thickness`, and the loop is the convex hull
+// of those discs, every wheel on it. `wheels[0]` is at (0, 0), the object's own
+// origin, so placing the object places the belt (the argument `moveNodes`
+// makes for node zero), and is written out anyway because it carries a radius.
+// `thickness` is the band's depth IN THE PLANE, a length, > 0; how wide the
+// band is across the pulleys is a look, the geometry twin's `depth`. `speed`
+// is ONE SIGNED NUMBER - px/s on disk, m/s in the sim - and its sign is the
+// direction, as `spinPeriod`'s is: positive turns the loop clockwise on
+// screen. It builds one disc per wheel and one thin quad per run, nothing
+// between the wheels, on a STATIC body that does not move; anything else fails
+// the build.
 export type ShapeData =
   | { kind: "rect"; w: number; h: number }
   | { kind: "circle"; r: number }
   | { kind: "poly"; verts: { x: number; y: number }[] }
-  | { kind: "curve"; verts: CurveVertData[]; width: number };
+  | { kind: "curve"; verts: CurveVertData[]; width: number }
+  | { kind: "belt"; wheels: BeltWheelData[]; thickness: number; speed: number };
+
+// One wheel of an authored BELT (`ShapeData`'s `belt`): its centre in the
+// object's frame and the wheel's own radius, which the band lies on.
+export interface BeltWheelData {
+  x: number;
+  y: number;
+  r: number;
+}
 
 // One node of an authored CURVE (`ShapeData`'s `curve`): a point the bar passes
 // through and the cubic tangent handles that shape the two legs meeting at it.
@@ -3056,6 +3081,17 @@ function scaleShape(s: ShapeData, factor: number): ShapeData {
         ...(v.outX !== undefined ? { outX: v.outX * factor } : {}),
         ...(v.outY !== undefined ? { outY: v.outY * factor } : {}),
       })),
+    };
+  }
+  if (s.kind === "belt") {
+    // Every wheel's centre and radius and the band's thickness are lengths, and
+    // so is the speed: it is a length per second, which converts by the same
+    // factor for the reason `force` (a length per second squared) does.
+    return {
+      kind: "belt",
+      wheels: s.wheels.map((w) => ({ x: w.x * factor, y: w.y * factor, r: w.r * factor })),
+      thickness: s.thickness * factor,
+      speed: s.speed * factor,
     };
   }
   return { kind: "poly", verts: s.verts.map((v) => ({ x: v.x * factor, y: v.y * factor })) };

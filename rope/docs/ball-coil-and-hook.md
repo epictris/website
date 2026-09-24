@@ -163,6 +163,8 @@ A sweep that *begins* inside the piece returns `t = 0` (see "rest resolution whe
 There the surface answers for the cuff's centre (`nearestSurfacePoint`), exactly as `probeContact` has it answer for the same reason.
 `cli contacts` `hook-seam` is the detector, and it asserts the seam from **both build orders** - an answer that depends on which body was listed first is not an answer - that the anchor lands on the face rather than a radius inside it, and that a hook-proof surface genuinely reached *first* still deflects, which is what stops the fix collapsing to "attach always wins".
 
+What the hook becomes once it has bitten is the piece's to say (`BallPlayer.onHookAttached`): a vine is threaded as a ring ([vine-ring](vine-ring.md)), a rail clamped around ([rails](rails.md)), a viscous face bitten to the hinge and crept through ([viscous-surfaces](viscous-surfaces.md)), a running conveyor belt ridden round its loop ([conveyors](conveyors.md#the-ride)), and anything else bitten where it struck ([manacle](manacle.md)).
+
 **Reach is what the player is shown.** The chain is budgeted to the manacle's HINGE - its own end node - and an attach is forgiven nothing beyond it: the cuff's mouth leads the hinge by `MANACLE_MOUTH`, so a face the mouth can touch with the hinge at full stretch is bitten and one a hair further is not, and the tip stopping at `CHAIN_MAX_LENGTH` with the cuff drawn on the end of it is exactly the reach a throw has.
 The chain anchors at the length it reached, to the hinge one ring radius proud of the face, so the anchored path is bounded by `CHAIN_MAX_LENGTH + MANACLE_REACH`.
 

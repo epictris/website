@@ -25,6 +25,8 @@ import {
   type PolyPath,
 } from "../render/areaGlyphs";
 import { outlineHalfExtents, outlineOfShape, type Outline } from "../render/shapePath";
+import { beltBand, beltTreadTicks } from "../render/beltTread";
+import type { BeltLoop } from "../engine/shapes";
 
 const M = PIXELS_PER_METER; // metres → px
 
@@ -171,10 +173,41 @@ export function renderFrameSVG(level: Level | BallLevel): string {
   const shapeEls: string[] = [];
   for (const b of bodies) {
     const op = (b as { fillOpacity?: number }).fillOpacity ?? 0.5;
+    const beltsDrawn = new Set<BeltLoop>();
     for (const s of b.getShapes()) {
       const { fill, stroke } = bodyColor(b, s);
       const cx = s.globalPosition.x * M;
       const cy = s.globalPosition.y * M;
+      if (s.belt !== null) {
+        // A conveyor: its BAND in place of the discs and quads it is built of -
+        // the outer and inner loops filled even-odd, so the inside of the belt
+        // shows the ground and nothing is drawn at the wheels - once for the
+        // belt, with the tread ticks at phase 0, pinned for the reason the
+        // force arrows are below: a snapshot of a frame must not depend on a
+        // clock (`render/beltTread.ts`).
+        if (beltsDrawn.has(s.belt)) continue;
+        beltsDrawn.add(s.belt);
+        const loop = s.belt;
+        const place = (v: Vec2): Vec2 => b.globalPosition.add(v.rotated(b.globalRotation)).mul(M);
+        const { outer, inner } = beltBand(loop);
+        const rings = [outer.map(place), inner.map(place)];
+        for (const p of rings[0]!) grow(box, p.x, p.y, 0);
+        const d = rings
+          .map((ring) => `M${ring.map((p) => `${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(" L")} Z`)
+          .join(" ");
+        shapeEls.push(
+          `<path d="${d}" fill-rule="evenodd" fill="${fill}" fill-opacity="${op}" stroke="${stroke}" stroke-width="1"/>`,
+        );
+        const ticks = beltTreadTicks(loop, 0)
+          .map(({ a, b: c }) => {
+            const p = place(a);
+            const q = place(c);
+            return `M${f1(p.x)} ${f1(p.y)} L${f1(q.x)} ${f1(q.y)}`;
+          })
+          .join(" ");
+        shapeEls.push(`<path d="${ticks}" stroke="#e6e8eb" stroke-width="1.5" fill="none"/>`);
+        continue;
+      }
       if (s.shape.kind === "rect") {
         const w = s.shape.size.x * M;
         const h = s.shape.size.y * M;

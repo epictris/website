@@ -489,6 +489,10 @@ interface SolverContact {
   // may fund this frame. 1 for everything but a steered ball whose chain
   // refused part of last frame's turn.
   readonly spinKept: number;
+  // Is `b` a running conveyor - a surface that moves on a body that does not
+  // (`surfaceMoves && !isMobile`)? Friction against one is work the belt does,
+  // which `conveyedThisFrame` reports.
+  readonly conveyed: boolean;
   readonly key: string;
 }
 
@@ -1611,6 +1615,15 @@ export class World {
   // it always was.
   launchedThisFrame = false;
 
+  // Did a running CONVEYOR do work this frame - a belt contact that ended the
+  // contact solve carrying a friction impulse? A belt is a source of energy
+  // exactly as a pad is: it accelerates what rests on it out of a motor the sim
+  // does not model, so `EnergyMonitor` restarts its span on such a frame
+  // rather than read the carry as the solver inventing energy. False in every
+  // level that authors no running belt, which keeps the invariant armed
+  // everywhere it always was.
+  conveyedThisFrame = false;
+
   // The frame's worst overspend against the kinematic-spin drive cap (N·s), and
   // which contact spent it. 0 while the cap in `solveTangent` holds; the
   // `spin-overdrive` invariant reads it so a future path that spends spin-funded
@@ -1867,6 +1880,7 @@ export class World {
     const previous = this.contactCache;
     this.contactCache = new Map<string, CachedImpulses>();
     this.launchedThisFrame = false;
+    this.conveyedThisFrame = false;
     this.spinDriveOverspend = 0;
     this.spinDriveDetail = null;
     const prevLoads = this.pairLoad;
@@ -1993,6 +2007,7 @@ export class World {
           : bRigid !== null && bRigid.kinematicRotation
             ? bRigid.spinDriveShare
             : 1,
+        conveyed: bRigid === null && c.b.surfaceMoves && !c.b.isMobile,
         key: `${c.a.id}:${c.b.id}:${c.shapeA}:${c.shapeB}:${c.featureId}`,
       });
     }
@@ -2029,6 +2044,11 @@ export class World {
         this.solveTangent(s);
         this.solveNormal(s);
       }
+    }
+    // A running belt that ended the solve applying friction is doing work on
+    // what it carries (see `conveyedThisFrame`).
+    for (const s of solved) {
+      if (s.conveyed && s.c.tangentImpulse !== 0) this.conveyedThisFrame = true;
     }
 
     // The pairs' sustained loads for next frame: ramp-limited on the way up,
@@ -2360,6 +2380,7 @@ export class World {
     const met = (body: PhysicsBody2D, grip: number): void => {
       grips.set(body.id, Math.max(grips.get(body.id) ?? 0, grip));
     };
+    const carriers = new Map<number, { v: Vec2; pn: number }>();
     for (const c of constraints) {
       // Only contacts that actually PUSHED BACK count. The gather keeps
       // speculative contacts - bodies within `CONTACT_SLOP` but not yet touching
@@ -2373,6 +2394,15 @@ export class World {
       if (c.normalImpulse <= 0) continue;
       met(c.a, c.b.surfaceFriction);
       met(c.b, c.a.surfaceFriction);
+      // A running belt's surface velocity where it carries this body, from the
+      // belt contact that pushed back hardest (see the drag below). `b` is
+      // the static side of a static contact, so the carried body is `a`.
+      if (!(c.b instanceof RigidBody2D) && c.b.surfaceMoves && !c.b.isMobile) {
+        const prev = carriers.get(c.a.id);
+        if (prev === undefined || c.normalImpulse > prev.pn) {
+          carriers.set(c.a.id, { v: c.b.velocityAtPoint(c.point), pn: c.normalImpulse });
+        }
+      }
     }
 
     // This frame's contact set, kept for callers that own a mechanic the solver
@@ -2437,7 +2467,19 @@ export class World {
       const grip = grips.get(body.id);
       if (grip === undefined) continue;
       const damp = grip === 1 ? body.contactDamp : 1 - (1 - body.contactDamp) * grip;
-      body.linearVelocity = body.linearVelocity.mul(damp);
+      // A drag is a drag against the SURFACE, so on a running belt it damps
+      // the body's velocity relative to the belt rather than toward the
+      // world's rest. Taken toward zero instead it is 2% of the carry lost
+      // every frame and bought back by friction every frame: a crate rode a
+      // 2 m/s belt at 1.96, and a free ball was held on the spot spinning like
+      // a treadmill's, since the only state that drag and no-slip agree on
+      // there is a ball going nowhere. Every other body, a mover's rider
+      // included (replay-locked, see docs/conveyors.md), keeps the literal
+      // product.
+      const carrier = carriers.get(body.id);
+      body.linearVelocity = carrier
+        ? carrier.v.add(body.linearVelocity.sub(carrier.v).mul(damp))
+        : body.linearVelocity.mul(damp);
     }
     PhaseTrace.mark("contact-damp", this);
 
@@ -2549,8 +2591,12 @@ export class World {
     const best = new Map<number, Candidate>();
     const offer = (c: Candidate): void => {
       // A scripted mover carries the surface out from under the body by design,
-      // so there is nothing to hold still against.
-      if (!(c.other instanceof RigidBody2D) && c.other.isMobile) return;
+      // so there is nothing to hold still against - and neither is there on a
+      // running belt, whose frame is still while its surface runs: pinned to
+      // the belt's frame, a resting crate would be held against the carry and
+      // judder instead of riding. Asked of the SURFACE for that reason
+      // (`surfaceMoves`), which is `isMobile` for every other body.
+      if (!(c.other instanceof RigidBody2D) && c.other.surfaceMoves) return;
       // A steered ball owns its own anchor (`applySteeringGrip`), which holds a
       // rolling contact rather than a still one: the two write the same field and
       // mean different things by it.
@@ -2764,7 +2810,9 @@ export class World {
       // sideways travel a frame, 84 cm down a 20 degree ramp in fifteen seconds,
       // at a reported velocity of zero, while the identical static ramp held it
       // to 0.1 cm (`steered-ramp-hold`).
-      if (!(other instanceof RigidBody2D) && other.isMobile) {
+      // A running belt declines for the same reason (`surfaceMoves`): its
+      // anchor would be held in a frame the surface is running through.
+      if (!(other instanceof RigidBody2D) && other.surfaceMoves) {
         body.releaseStick();
         return;
       }

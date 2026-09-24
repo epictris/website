@@ -153,6 +153,16 @@ import {
   NO_KEY,
   pathDataOf,
   setPolyVerts,
+  setBelt,
+  setBeltWheel,
+  beltInsertWheel,
+  beltRemoveWheel,
+  beltLap,
+  DEFAULT_BELT_LENGTH,
+  DEFAULT_BELT_RADIUS,
+  DEFAULT_BELT_THICKNESS,
+  DEFAULT_BELT_SPEED,
+  toLocal,
   centreShapeOrigin,
   scaleShape,
   syncBodyProps,
@@ -284,6 +294,7 @@ type Tool =
   | "select"
   | "rect"
   | "circle"
+  | "belt"
   | "poly"
   | "path"
   | "geometry"
@@ -304,7 +315,7 @@ type Tool =
 // because that is what a light is: another kind of scene object, dropped into
 // the same layer and welded into a body with the shape it belongs to.
 const LAYER_TOOLS: Record<EdLayer, Tool[]> = {
-  scene: ["select", "rect", "circle", "poly", "path", "geometry", "light", "chain", "vine"],
+  scene: ["select", "rect", "circle", "belt", "poly", "path", "geometry", "light", "chain", "vine"],
   camera: ["select", "rect", "circle", "poly", "path"],
   notes: ["select", "text", "arrow", "checkpoint"],
 };
@@ -394,6 +405,12 @@ type Drag =
   | { mode: "movePlayer"; grab: Vec2 }
   | { mode: "corner"; body: EdItem; anchor: Vec2 }
   | { mode: "radius"; body: EdItem }
+  // One of a conveyor's wheels (not wheel 0, which is the item's position),
+  // dragged like a path vertex: its centre follows the pointer and the other
+  // wheels stay put.
+  | { mode: "beltWheel"; body: EdItem; index: number }
+  // ...and one wheel's radius, by the round grip on its rim.
+  | { mode: "beltRadius"; body: EdItem; index: number }
   // The one axis the canvas has no direction for: dragging up moves the object
   // toward the camera. Measured from where the press was rather than per move,
   // so the grid's rounding cannot accumulate across the drag.
@@ -729,9 +746,31 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   function currentSettleGhosts(): readonly SettleGhost[] {
     if (settleGhostRev !== modelRev) {
       settleGhostRev = modelRev;
-      settleGhostCache = settledGhosts(model);
+      try {
+        settleGhostCache = settledGhosts(model);
+        noteBuildError(null);
+      } catch (err) {
+        settleGhostCache = [];
+        noteBuildError(err);
+      }
     }
     return settleGhostCache;
+  }
+  // What the level's build refuses about the model as it stands, or null. The
+  // editor builds the level from the model on every edit (the settled ghosts
+  // above, the 3D scene), and most of what the build would refuse the editor
+  // cannot author in the first place - but a BELT is valid only on a static
+  // body that does not move, which is a fact about the body and not the shape,
+  // and a kind change or a merge can break it after the belt is drawn. Said in
+  // the title rather than thrown, so the editor keeps running and the author
+  // sees what to undo; the file still saves, and the game refuses it loudly.
+  let buildError: string | null = null;
+  function noteBuildError(err: unknown): void {
+    const msg = err === null ? null : err instanceof Error ? err.message : String(err);
+    if (msg === buildError) return;
+    buildError = msg;
+    if (msg) console.warn("[editor] the level does not build:", msg);
+    updateTitle();
   }
   let drag: Drag | null = null;
   // Vertices clicked out so far for a polygon in progress, in world metres.
@@ -917,6 +956,23 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   function selectedVertIndices(item: EdItem): number[] {
     const n = item.shape.kind === "poly" || item.shape.kind === "path" ? item.shape.verts.length : 0;
     return [...selectedVerts].filter((i) => i < n).sort((a, b) => a - b);
+  }
+  // The one WHEEL picked on a belt, or null. A belt's wheels are picked by
+  // their centre squares (or radius grips) into the same set a polygon's
+  // corners go in, so every rule that drops that set - a click on empty space,
+  // Esc, a new selection - drops a picked wheel too; everything that EDITS
+  // corners asks `vertexEditTarget`, which a belt never is.
+  function selectedBeltWheel(item: EdItem): number | null {
+    if (item.shape.kind !== "belt" || selectedVerts.size !== 1) return null;
+    const i = [...selectedVerts][0]!;
+    return i < item.shape.wheels.length ? i : null;
+  }
+  // Pick wheel `index` of a belt, for the panel's `r`.
+  function pickBeltWheel(index: number): void {
+    if (selectedVerts.size === 1 && selectedVerts.has(index)) return;
+    selectedVerts.clear();
+    selectedVerts.add(index);
+    rebuildInspector();
   }
   // The body whose ROUTE nodes are pickable right now: the lone selected body,
   // if it is a static with a route. The same one statement `vertexEditTarget`
@@ -1634,11 +1690,21 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (!scene3d || sceneRev === modelRev) return;
     sceneRev = modelRev;
     const world = new World();
-    itemOfSceneObject = new Map();
-    const data = toLevelData(model, itemOfSceneObject);
+    const itemOf = new Map<SceneObjectData, number>();
+    const data = toLevelData(model, itemOf);
+    let built: ReturnType<typeof buildLevelBodies>;
+    try {
+      built = buildLevelBodies(world, data, () => {});
+    } catch (err) {
+      // The scene on screen stays the last one that built (see `buildError`),
+      // and so do the maps that pick it.
+      noteBuildError(err);
+      return;
+    }
+    noteBuildError(null);
+    itemOfSceneObject = itemOf;
     sceneObjectOfItem = new Map();
     for (const [object, id] of itemOfSceneObject) sceneObjectOfItem.set(id, object);
-    const built = buildLevelBodies(world, data, () => {});
     sceneLevel = {
       world,
       // Vines DO reach the 3D scene, where chains do not, and the difference is
@@ -1786,6 +1852,16 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // between every edit and the thing it is being checked against. The game
     // plays the opening; the editor plays the level.
     const pixelData = spawnWithoutEntry(modelToDisk(model));
+    // A level the build refuses cannot be played, and the refusal is a throw
+    // from inside the level's constructor below - after the camera and the
+    // recording have been handed over to a test that never starts. So it is
+    // asked first, through the same builder, and said where the title says it.
+    try {
+      buildLevelBodies(new World(), toLevelData(model), () => {});
+    } catch (err) {
+      noteBuildError(err);
+      return;
+    }
     if (spawn) {
       pixelData.player = { ...pixelData.player, x: spawn.x * M2PX, y: spawn.y * M2PX };
     }
@@ -1980,6 +2056,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     select: button("Select", () => setTool("select")),
     rect: button("+ Rect", () => setTool("rect")),
     circle: button("+ Circle", () => setTool("circle")),
+    belt: button("+ Belt", () => setTool("belt")),
     poly: button("+ Poly", () => setTool("poly")),
     path: button("+ Path", () => setTool("path")),
     geometry: button("+ Geometry", () => setTool("geometry")),
@@ -1995,6 +2072,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   toolBtns.path.title =
     "Click out a camera path: the route the camera rides, in the direction it is drawn. Enter or double-click finishes it, Esc drops it. The camera targets a point `lookahead` further along than the player, and lets go if they stray more than `range` from it.";
   toolBtns.chain.title = "Drag from one body to another to string a chain between them";
+  toolBtns.belt.title =
+    "Press where the first wheel goes and drag to the second to lay a conveyor belt; a click drops one 1.5 m long. Click a run's midpoint to add a wheel, Alt+click a wheel's square to remove it. The band wraps the outside of every wheel and its surface runs round the loop at the panel's speed (positive = clockwise on screen), carrying whatever rests on it. It builds only on a static body that does not move.";
   toolBtns.vine.title =
     "Press on a body and drag DOWN to hang a vine from it. Shift-drag its end handle onto another body to span between the two. The player passes through a vine and the hook grabs it anywhere along its length.";
   toolBtns.light.title = "Click to drop a light; drag to set how far it reaches";
@@ -2027,6 +2106,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     toolBtns.select,
     toolBtns.rect,
     toolBtns.circle,
+    toolBtns.belt,
     toolBtns.poly,
     toolBtns.path,
     toolBtns.geometry,
@@ -2513,7 +2593,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   function updateTitle(): void {
     // A named level autosaves, so `*` is a brief in-flight marker rather than a
     // standing warning; an unnamed one keeps it until the first Save names it.
-    const state = saveError ? " · SAVE FAILED" : dirty ? " *" : "";
+    const state =
+      (saveError ? " · SAVE FAILED" : dirty ? " *" : "") +
+      (buildError ? ` · DOES NOT BUILD: ${buildError}` : "");
     const count = (l: EdLayer) => model.items.filter((i) => i.layer === l).length;
     // Only the layers that have anything on them are named, so the title stays
     // short on a level that only uses geometry.
@@ -2897,6 +2979,115 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       num(label, (b) => (b.shape.kind === "circle" ? b.shape.r * M2PX : 0), (b, v) => {
         if (b.shape.kind === "circle") b.shape.r = Math.max(1, v) * PX;
       });
+    } else if (items.every((b) => b.shape.kind === "belt")) {
+      // A CONVEYOR: the two radii (px, as every length here) and the signed
+      // surface speed in m/s, which is the one number on this panel whose sign
+      // matters - positive turns the loop clockwise on screen. Three knobs that
+      // must not be confused, named so they cannot be: `thickness` is the
+      // band's depth IN THE PLANE (collision: the running surface stands that
+      // far off every wheel), `width` how wide the band is ACROSS the pulleys
+      // (the 3D look, which is the geometry twin's `depth`), and `r` one
+      // wheel's own radius, shown for the wheel whose square is picked. A value
+      // the belt cannot take - a zero thickness, a wheel swallowing another or
+      // falling inside the hull - is refused by `setBelt`, and the field reads
+      // back what the belt still has.
+      num("thickness", (b) => (b.shape.kind === "belt" ? b.shape.thickness * M2PX : 0), (b, v) => {
+        setBelt(b, { thickness: Math.max(1, v) * PX });
+      });
+      // The look lives on the geometry object that draws the belt: the item
+      // itself when it IS one, else its matched twin. With no twin there is no
+      // look to edit, which `Add geometry` fixes, and the fields say so.
+      const lookOf = (b: EdItem): EdItem | null =>
+        b.object === "geometry"
+          ? b
+          : (model.items.find((i) => i.object === "geometry" && i.matchId === b.id) ?? null);
+      const looks = items.map(lookOf);
+      if (looks.every((l): l is EdItem => l !== null)) {
+        num(
+          "width",
+          (b) => (lookOf(b)?.visual.depth ?? DEFAULT_THICKNESS) * M2PX,
+          (b, v) => {
+            const look = lookOf(b);
+            if (look) look.visual.depth = Math.max(1, v) * PX;
+          },
+          5,
+        );
+        const tw = el("label", "ed-field");
+        tw.textContent = "texture";
+        const ts = document.createElement("select");
+        ts.className = "ed-select";
+        const keys = new Set<string>([SOLID_SURFACE, ...Object.keys(TEXTURE_ASSETS), ...MATERIAL_NAMES]);
+        for (const l of looks) if (l.visual.texture) keys.add(l.visual.texture);
+        for (const key of ["", ...keys]) {
+          const o = document.createElement("option");
+          o.value = key;
+          o.textContent = key
+            ? key === SOLID_SURFACE
+              ? `${key} (flat, cleats)`
+              : key in TEXTURE_ASSETS
+                ? `${key} (authored)`
+                : key
+            : "(default)";
+          ts.appendChild(o);
+        }
+        ts.value = looks.every((l) => l.visual.texture === looks[0]!.visual.texture)
+          ? looks[0]!.visual.texture
+          : "";
+        ts.addEventListener("change", () => {
+          beginAction();
+          for (const l of looks) l.visual.texture = ts.value;
+          markDirty();
+          rebuildInspector();
+        });
+        tw.appendChild(ts);
+        g.appendChild(tw);
+      } else {
+        const hint = el("div", "ed-hint");
+        hint.textContent =
+          "No geometry draws this belt yet, so it has no width or texture: Add geometry gives it a matched twin that does.";
+        g.appendChild(hint);
+      }
+      num(
+        "speed m/s",
+        (b) => (b.shape.kind === "belt" ? b.shape.speed : 0),
+        (b, v) => {
+          setBelt(b, { speed: v });
+        },
+        0.1,
+      );
+      // One wheel's radius, when a single belt is selected and one of its
+      // wheels is picked (its centre square, or its radius grip).
+      const wheel = items.length === 1 ? selectedBeltWheel(items[0]!) : null;
+      if (wheel !== null) {
+        num(`wheel ${wheel} r`, (b) => (b.shape.kind === "belt" ? (b.shape.wheels[wheel]?.r ?? 0) * M2PX : 0), (b, v) => {
+          setBeltWheel(b, wheel, { r: Math.max(1, v) * PX });
+        });
+      }
+      // What the belt IS, as numbers: how far round the loop is and how long
+      // one lap of its surface takes - the figure a crate riding it, or a hook
+      // bitten into it, is timed by.
+      const lap = (which: "perimeter" | "lap"): string => {
+        const values = items.map((b) => {
+          const l = b.shape.kind === "belt" ? beltLap(b.shape) : null;
+          if (!l) return "-";
+          if (which === "perimeter") return `${l.perimeter.toFixed(2)} m`;
+          return Number.isFinite(l.lap) ? `${l.lap.toFixed(2)} s` : "stopped";
+        });
+        return values.every((v) => v === values[0]) ? values[0]! : "mixed";
+      };
+      for (const which of ["perimeter", "lap"] as const) {
+        const row = el("label", "ed-field");
+        row.textContent = which;
+        const val = document.createElement("span");
+        val.textContent = lap(which);
+        row.appendChild(val);
+        g.appendChild(row);
+        readouts.push({ el: val, get: () => lap(which) });
+      }
+      const hint = el("div", "ed-hint");
+      hint.textContent =
+        "The object's position is wheel 0. Drag a square to move a wheel (click one to edit its r here), a round grip on a wheel's rim to size it, a run's midpoint to add a wheel there; Alt+click a square removes its wheel. Every wheel must touch the band. Speed is signed: positive runs the loop clockwise on screen, negative runs it back. A belt builds only on a static body that does not move.";
+      g.appendChild(hint);
     } else if (items.every((b) => b.shape.kind === "path" && b.layer !== "camera")) {
       // A CURVE has one size and it is the width of the bar: the line itself is
       // edited on the canvas, node by node, exactly as a polygon's outline is.
@@ -7295,6 +7486,26 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         },
       };
     }
+    if (t === "belt") {
+      // The press is wheel 0 and a click drops a two-wheel belt of the default
+      // length running right; a drag places the second wheel instead (the draw
+      // case below). More wheels are added on a run's midpoint once it is down.
+      // A static body whatever kind the selector is on, since a belt builds on
+      // nothing else - the kind selector is for the next box.
+      return {
+        ...base,
+        kind: "static",
+        shape: {
+          kind: "belt",
+          wheels: [
+            { c: Vec2.ZERO, r: DEFAULT_BELT_RADIUS },
+            { c: new Vec2(DEFAULT_BELT_LENGTH, 0), r: DEFAULT_BELT_RADIUS },
+          ],
+          thickness: DEFAULT_BELT_THICKNESS,
+          speed: DEFAULT_BELT_SPEED,
+        },
+      };
+    }
     // A geometry object is a rect like `+ Rect`, so a click drops one at the grid
     // step and a drag sizes it - the drag itself reads `shape.kind` and needs to
     // know nothing about which tool drew it.
@@ -8262,6 +8473,53 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         return { mode: "polyVertex", body: s, index: i + 1, others: [], accepted: mid };
       }
     }
+    // A belt's wheel centres before their radius grips, as a path's vertex is
+    // tested before its tangent grips: a wheel shrunk to nothing puts its grip
+    // on its own centre, and the centre is the one reached for. Then the run
+    // midpoints, which insert a wheel.
+    if (h.beltCentres && s.shape.kind === "belt") {
+      for (let i = 0; i < h.beltCentres.length; i++) {
+        if (scr.distanceTo(h.beltCentres[i]!) > HANDLE_HIT_PX) continue;
+        // Alt+click removes the wheel instead of dragging it - two is the
+        // floor, and `beltRemoveWheel` refuses a removal that would leave a
+        // wheel inside the hull the others make.
+        if (alt) {
+          if (s.shape.wheels.length <= 2) return null;
+          beginAction();
+          if (beltRemoveWheel(s, i)) {
+            selectedVerts.clear();
+            markDirty();
+            rebuildInspector();
+          }
+          return "consumed";
+        }
+        pickBeltWheel(i);
+        // Wheel 0 IS the item's position: pressing it picks it and then moves
+        // the belt the way a press on the body does.
+        if (i === 0) return null;
+        return { mode: "beltWheel", body: s, index: i };
+      }
+      for (let i = 0; i < (h.beltRadii?.length ?? 0); i++) {
+        if (scr.distanceTo(h.beltRadii![i]!) > HANDLE_HIT_PX) continue;
+        pickBeltWheel(i);
+        return { mode: "beltRadius", body: s, index: i };
+      }
+      for (let i = 0; i < (h.beltMids?.length ?? 0); i++) {
+        if (scr.distanceTo(h.beltMids![i]!) > HANDLE_HIT_PX) continue;
+        // Inserted TOUCHING the band at the midpoint, which changes nothing
+        // about the loop, and dragged straight away, so adding a wheel and
+        // placing it is one gesture - the path's insert.
+        beginAction();
+        dragPushed = true;
+        const index = beltInsertWheel(s, h.beltRunFrom![i]!);
+        if (index < 0) return null;
+        markDirty();
+        selectedVerts.clear();
+        selectedVerts.add(index);
+        rebuildInspector();
+        return { mode: "beltWheel", body: s, index };
+      }
+    }
     if (h.depth && scr.distanceTo(h.depth) <= HANDLE_HIT_PX) {
       return { mode: "depth", body: s, base: depthOf(s), press: scr };
     }
@@ -9022,6 +9280,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           // the gesture was actually a drag; every other circle is dragged out
           // from nothing, so it takes whatever the pointer says including zero.
           if (b.object !== "light" || r >= gridStep) b.shape.r = r;
+        } else if (b.shape.kind === "belt") {
+          // Dragged from wheel 0 to the second wheel. Short of the two bands'
+          // own size it is still a click, and keeps the default length.
+          const end = p.sub(drag.start).rotated(-b.rot);
+          const [w0, w1] = b.shape.wheels;
+          if (w0 && w1 && end.length() >= w0.r + w1.r + 2 * b.shape.thickness) {
+            setBeltWheel(b, 1, { c: end });
+          }
         }
         markDirty();
         refreshFields();
@@ -9062,6 +9328,31 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         const b = drag.body;
         if (b.shape.kind === "circle") {
           b.shape.r = snapLen(world.distanceTo(b.pos));
+          markDirty();
+          refreshFields();
+        }
+        break;
+      }
+      case "beltWheel": {
+        // The wheel's centre follows the pointer on the grid; `setBelt` refuses
+        // a spot where its disc sinks inside another's, or where it or another
+        // wheel falls inside the hull, so the drag stalls at the last belt
+        // rather than handing the build one it cannot make.
+        const b = drag.body;
+        if (b.shape.kind !== "belt") break;
+        if (setBeltWheel(b, drag.index, { c: toLocal(b, snapVec(world)) })) {
+          markDirty();
+          refreshFields();
+        }
+        break;
+      }
+      case "beltRadius": {
+        const b = drag.body;
+        if (b.shape.kind !== "belt") break;
+        const w = b.shape.wheels[drag.index];
+        if (!w) break;
+        const r = Math.max(gridStep, snapLen(world.distanceTo(toWorld(b, w.c))));
+        if (setBeltWheel(b, drag.index, { r })) {
           markDirty();
           refreshFields();
         }

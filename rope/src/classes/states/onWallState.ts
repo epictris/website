@@ -58,7 +58,8 @@ export class OnWallState extends PlayerState {
   // Contact-point velocity of the wall (game-design.md velocity inheritance);
   // null on static walls so the static path runs the exact pre-inheritance math.
   private carriedVelocity(player: Player): Vec2 | null {
-    if (!this.supportBody?.isMobile) return null;
+    // Asked of the surface (see `GroundedState.carriedVelocity`).
+    if (!this.supportBody?.surfaceMoves) return null;
     const shape = player.primaryShape().shape;
     const r = shape.kind === "circle" ? shape.radius : 0;
     return this.supportBody.velocityAtPoint(player.globalPosition.sub(this.surfaceNormal.mul(r)));
@@ -189,7 +190,7 @@ export class OnWallState extends PlayerState {
           break;
         case SlideType.PROJECT_VELOCITY: {
           // Relative projection against mobile surfaces (see AirborneState).
-          if (collider.isMobile) {
+          if (collider.surfaceMoves) {
             const vSurf = collider.velocityAtPoint(collision.getPosition());
             player.velocity = player.velocity.sub(vSurf).slide(normal).add(vSurf);
           } else {

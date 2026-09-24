@@ -18,6 +18,7 @@ Undamped, every lantern in the arena swung for ever at 3-60 mm and restarted its
 - a contact from an awake body (`World.resolveDynamicCollisions`, after the gather). The gather is done FOR the pair's leading side and the lower id led, so a sleeping lead returned nothing and an awake crate slid clean through a sleeping one with the lower id; the awake side leads now (`collectPairContacts`, the `lead` case);
 - the avatar's chain: every body on the rope's path is `keepAwake`d at the top of the frame, the anchor it took this frame included, so a held body's window never runs (the `hook` case);
 - a mover: a platform that moved this frame wakes whatever is within a contact's reach of it (`World.wakeTouching`), because a kinematic body is never a contact's leading side and nothing else would notice; one parked at the end of its route lets its cargo sleep (the `platform` case);
+- a running conveyor belt, every frame, for the same reason: its frame never moves while its surface always does ([conveyors](conveyors.md#the-wake), `cli belts` `wakes`);
 - a force area, water, and any impulse (`applyImpulse`);
 - its chain (`SceneChain.wakeIfDisturbed`, top of the frame): an awake chain wakes any body still flagged asleep, since the solve is about to move it - a no-op on a body already awake, which is what lets it be asked every frame without holding anything awake.
 
