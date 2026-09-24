@@ -1,6 +1,7 @@
 import { defineConfig, type HtmlTagDescriptor, type Plugin } from "vite";
 import { rootGenerator } from "./src/server/rootGenerator";
 import { boulderGenerator } from "./src/server/boulderGenerator";
+import { vineGenerator } from "./src/server/vineGenerator";
 import { buildSync } from "esbuild";
 import {
   existsSync,
@@ -475,7 +476,7 @@ export default defineConfig({
       // editor holds the authoritative copy in memory and saves THROUGH
       // /api/levels, and the preload list re-reads the file off disk per page
       // load (see `storeScript`). Reload by hand to pick up a level edit.
-      ignored: ["**/levels/*.json", "**/public/generated-roots/**", "**/public/generated-boulders/**"],
+      ignored: ["**/levels/*.json", "**/public/generated-roots/**", "**/public/generated-boulders/**", "**/public/generated-vines/**"],
     },
     // The playtest store lives in serve.ts, not in Vite. With `bun run serve.ts`
     // beside the dev server, `?record=1` streams into it and /admin shows it.
@@ -507,6 +508,7 @@ export default defineConfig({
   plugins: [
     rootGenerator(),
     boulderGenerator(),
+    vineGenerator(),
     treeStampPlugin(),
     levelHashesPlugin(),
     storeScript(),

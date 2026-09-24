@@ -23,6 +23,7 @@
 import type { RawLevelData } from "../level/levelFormat";
 import { generatedRootAsset } from "./generatedRoots";
 import { generatedBoulderAsset } from "./generatedBoulders";
+import { generatedVineAsset } from "./generatedVines";
 import { normalizeLevelData } from "../level/levelFormat";
 import {
   emissiveMapName,
@@ -86,7 +87,7 @@ export function levelStoredFiles(raw: RawLevelData): StoredFile[] {
       // glowing in the fallback's).
       const glow = emissiveMapName(object.emissiveTexture);
       if (glow) addSurface(glow);
-      if (object.mesh) add(generatedRootAsset(object.mesh) ?? generatedBoulderAsset(object.mesh) ?? MESH_ASSETS[object.mesh]);
+      if (object.mesh) add(generatedRootAsset(object.mesh) ?? generatedBoulderAsset(object.mesh) ?? generatedVineAsset(object.mesh) ?? MESH_ASSETS[object.mesh]);
     }
   }
   // The flipbook and the foam mask are loaded when the first water material is

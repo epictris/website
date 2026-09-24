@@ -2067,6 +2067,74 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   boulderRow.append(boulderGenerate, labelWrap("seed", boulderSeed), labelWrap("depth (m)", boulderDepth), boulderStatus);
   bar.appendChild(boulderRow);
 
+  const vineRow = el("div", "ed-row");
+  const vineVariant = document.createElement("select");
+  vineVariant.className = "ed-select";
+  vineVariant.setAttribute("aria-label", "Vine variant");
+  for (const [value, title] of [["curtain", "curtain"], ["cascade", "cascade"], ["tangle", "tangle"]]) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = title;
+    vineVariant.appendChild(option);
+  }
+  const vineSeed = document.createElement("input");
+  vineSeed.type = "number";
+  vineSeed.className = "ed-num";
+  vineSeed.value = "1701";
+  vineSeed.min = "0";
+  vineSeed.max = "2147483647";
+  vineSeed.step = "1";
+  vineSeed.setAttribute("aria-label", "Vine seed");
+  const vineStatus = el("span", "ed-root-status");
+  vineStatus.setAttribute("role", "status");
+  vineStatus.textContent = "Select one polygon or rectangle.";
+  const vineGenerate = button("Generate vine v3", async () => {
+    const sources = new Map<number, EdItem>();
+    for (const item of operandItems()) {
+      const source = item.object === "collision" ? item :
+        model.items.find(i => i.id === item.matchId && i.object === "collision");
+      if (source) sources.set(source.id, source);
+    }
+    const source = [...sources.values()][0];
+    if (sources.size !== 1 || !source || source.layer !== "scene" ||
+        (source.shape.kind !== "poly" && source.shape.kind !== "rect")) {
+      vineStatus.textContent = "Select one collision polygon or rectangle, or its vine mesh.";
+      return;
+    }
+    if (!vineSeed.reportValidity()) return;
+    const revision = modelRev;
+    vineGenerate.disabled = true;
+    vineStatus.textContent = "Generating vine v3 in Blender…";
+    try {
+      const response = await fetch("/api/vines", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ variant: vineVariant.value, seed: Number(vineSeed.value) }),
+      });
+      const result = await response.json() as { mesh?: string; error?: string };
+      if (!response.ok || !result.mesh) throw new Error(result.error ?? "Vine generation failed.");
+      if (modelRev !== revision || mode !== "edit")
+        throw new Error("The level changed during generation. Select the shape and generate again.");
+      beginAction();
+      const existing = model.items.find(i => i.object === "geometry" && i.matchId === source.id);
+      const geometry: EdItem = existing ?? {
+        ...source, id: newBodyId(), object: "geometry", shape: cloneShape(source.shape),
+        cam: { ...source.cam }, light: { ...source.light }, note: { ...source.note },
+        matchId: source.id,
+      };
+      geometry.pos = source.pos.clone();
+      geometry.rot = source.rot;
+      geometry.visual = { ...defaultVisual(), kind: "mesh", mesh: result.mesh };
+      if (!existing) addAndSelect([geometry]);
+      else { markDirty(); rebuildInspector(); }
+      vineStatus.textContent = "Vine ready. View in 3D + overlay; regenerate after repositioning.";
+    } catch (error) {
+      vineStatus.textContent = error instanceof Error ? error.message : "Vine generation failed.";
+    } finally { vineGenerate.disabled = false; }
+  });
+  vineGenerate.title = "Generate a seeded v3 jungle vine mesh. Select a collision outline to position it; it adds no collision.";
+  vineRow.append(vineGenerate, labelWrap("variant", vineVariant), labelWrap("seed", vineSeed), vineStatus);
+  bar.appendChild(vineRow);
+
   const toolRow = el("div", "ed-row");
   bar.appendChild(toolRow);
   const toolBtns: Record<Tool, HTMLButtonElement> = {
