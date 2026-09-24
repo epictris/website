@@ -45,6 +45,7 @@ asset to its manifest and regenerate, which is what `cli assets` checks.
 - **sewer-arch** - "MightyPinecone", [source](https://sketchfab.com/3d-models/sewer-brick-walls-set-midpoly-ue5-nanite-27143020c0bb4624aaf4f5257fd603bd), CC BY 4.0
 - **sewer-doorway** - "MightyPinecone", [source](https://sketchfab.com/3d-models/sewer-brick-walls-set-2-midpoly-ue5-nanite-5a5ae221432444f898336627dc192567), CC BY 4.0
 - **sewer-wall** - "MightyPinecone", [source](https://sketchfab.com/3d-models/sewer-brick-walls-set-midpoly-ue5-nanite-27143020c0bb4624aaf4f5257fd603bd), CC BY 4.0
+- **water-wheel** - "lyamborrel", [source](https://sketchfab.com/3d-models/water-wheel-with-cog-b855246572934af19aa062a329c1bcfa), CC BY 4.0
 - **wooden-stool** - "yoyo83710", [source](https://sketchfab.com/3d-models/wooden-stool-528f72346b2f4a1096c1d5104b731d04), CC BY 4.0
 - **yellow_barrel** - "Anna Denisova (@Den1121)", [source](https://sketchfab.com/3d-models/low-poly-closed-barrels-8df46c47099a4b9d9bc4a69edcad1b88), CC BY 4.0
 

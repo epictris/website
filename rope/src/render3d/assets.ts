@@ -2793,6 +2793,34 @@ export const MESH_ASSETS: Record<string, MeshAsset> = {
     author: "FuzerGamesTV",
     license: "CC BY 4.0",
   },
+  // A wooden water wheel with a cog on its axle - paddles on the rim, the
+  // axle standing out the back to a toothed gear. Rendered through `loadMesh`
+  // it measures 6.8 x 6.8 x 6.5 m: the wheel faces the camera in x/y and the
+  // axle runs along z. As exported the axle runs toward +z, which in this game
+  // is TOWARD the camera (render3d/space.ts), so the cog would hang 5 m in front
+  // of the wheel between the player and the gameplay plane; `rotY: Math.PI`
+  // turns it round so the drive train runs back into the scene.
+  //
+  // Its origin is ON THE HUB, the point the wheel turns about, which is the
+  // pivot a level wants for a wheel whether it spins or not, so it is not
+  // `center`ed: the bounds' centre is 1.85 m down the axle, and centring would
+  // put the pivot behind the wheel.
+  //
+  // No `simplify`: 1,150 triangles. What its 7.5 MB raw was is three 2048²
+  // PNGs (albedo, normal, metallic-roughness); at the 1k WebP ceiling it is
+  // 191 KB.
+  "water-wheel": {
+    file: "/meshes/water-wheel.glb",
+    sha256: "2329349417feecb3dc420acbfa5d3fac80658236b48a7b0c535ae8ba29f468b3",
+    bytes: 190820,
+    rotY: Math.PI,
+    // CC BY, so the credit names the person rather than the page (see
+    // "Provenance, in the manifest" in docs/asset-store.md).
+    source:
+      "https://sketchfab.com/3d-models/water-wheel-with-cog-b855246572934af19aa062a329c1bcfa",
+    author: "lyamborrel",
+    license: "CC BY 4.0",
+  },
   // A four-legged wooden stool with a round seat and a square stretcher, the
   // kind that dresses a cellar or a hut interior. Rendered through `loadMesh`
   // it measures 0.344 x 0.523 x 0.344 m, a real stool's size, so it wears
