@@ -275,7 +275,13 @@ function drawFrame(frame: number): void {
     scene3d.pinClock((frame - frames[0]!) / 60);
     scene3d.render(level, camera, 1, orbit, chainRetract);
     if (q.get("probe") !== null) {
-      console.log(`probe ${JSON.stringify({ frame, ...scene3d.programProbe() })}`);
+      // The waking lights' levels too, where the level has any: a filmstrip of
+      // a mushroom rising is otherwise a claim read off the pictures alone.
+      // They step on the pinned clock above, so only the DRAWN frames advance
+      // them, each by at most MAX_GLOW_STEP (0.1 s = every 6 frames).
+      const glow = scene3d.glowLevels();
+      const glowField = glow.length > 0 ? { glow: glow.map((l) => Number(l.toFixed(3))) } : {};
+      console.log(`probe ${JSON.stringify({ frame, ...scene3d.programProbe(), ...glowField })}`);
     }
     // A frame that drew nothing is a valid PNG and a lie: `shot --3d` at f35+
     // has come back uniformly blank while the 2D path rendered the same frame

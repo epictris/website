@@ -923,8 +923,63 @@ export interface LightObjectData extends ObjectPlacement {
   //
   // The LIGHT flickers and the emission does not: a material is shared and
   // cached between every geometry that asked for the same surface (`assets.ts`),
-  // so what can move per lamp is the light.
+  // so what can move per lamp is the light. (A waking light's body is the one
+  // exception: it wears its own copies, and their emission follows the wake -
+  // see `wake` below.)
   flicker?: number;
+  // Spot only. How visible the lit AIR inside the cone is, 0 (invisible, as
+  // every spot authored before the field) .. 1. Absent = 0.
+  //
+  // The beam IS the spot, made visible: a cone of lit air along the spot's own
+  // aim, as long as its `range` and as wide as its `angle`, softened at the
+  // edge by its `penumbra`, in its colour, flickering with it - so a shaft of
+  // daylight is one authored thing that cannot drift off its own light. It is
+  // NOT occluded by geometry: a shaft that should stop at a floor is authored
+  // with a `range` that stops there, and `castShadow` is what gives the pool on
+  // the floor and the shadow of anything hanging in it. There is no switch for
+  // it to look for.
+  //
+  // RENDER-ONLY and driven by the WALL CLOCK, like `flicker`: the rays drift
+  // with a clock the renderer is handed, and nothing here reaches the sim.
+  // Dimensionless, so `scaleLevelData` passes it through untouched.
+  beam?: number;
+  // Spot only. How thick the dust drifting in the beam is, 0 (none) .. 1.
+  // Absent = 0. The motes live inside the cone whether or not `beam` is set, lit
+  // in the light's colour and dimmer toward the cone's edge. Render-only and
+  // wall-clock driven, like `beam`; dimensionless, so never scaled.
+  dust?: number;
+  // Point only. A WAKING light: dark until the ball comes within this distance
+  // of it on the gameplay plane, then rising to `intensity`, and going dark
+  // again once the ball has left. Absent (or 0) = a light that is always on,
+  // which is every light authored before the field. A length like `range`,
+  // converted on load the same way.
+  //
+  // The emission of every glowing geometry object in the same body follows the
+  // light, so a mushroom's cap brightens with the light it throws; a shape with
+  // no `emissive` in that body (the stalk) is left alone. RENDER-ONLY and driven
+  // by the wall clock, like `flicker`: the renderer reads the ball's position
+  // and writes nothing back, so no replay can diverge on it.
+  //
+  // Waking lights mount no light of their own. They share a small fixed POOL
+  // (`GLOW_POOL` in `render3d/glow.ts`), handed each frame to the awake sources
+  // NEAREST THE BALL, so the scene's light count never changes while a level is
+  // played (a light coming and going would recompile every lit material on a
+  // played frame). A level with more awake sources than the pool leaves the
+  // furthest dark: the budget is spent by distance rather than by authored
+  // order, which is the right order for a light that only matters near the
+  // player. They cast no shadow (`castShadow` is ignored): a point light's
+  // shadow is six renders, and a map handed between sources as they swap would
+  // flash.
+  wake?: number;
+  // Seconds after the ball comes within `wake` before the light starts to rise.
+  // Absent = 0. A ball that leaves before it has passed wakes nothing.
+  wakeDelay?: number;
+  // Seconds from dark to full. Absent = DEFAULT_WAKE_RISE; 0 is instant.
+  wakeRise?: number;
+  // Seconds from full to dark once the ball has left (beyond `wake` by the
+  // renderer's hysteresis, so a ball resting on the edge does not strobe).
+  // Absent = DEFAULT_WAKE_FALL; 0 is instant.
+  wakeFall?: number;
 }
 
 // A named point ON a body, and the only thing a chain end ties to.
@@ -3191,6 +3246,16 @@ export function scaleObject(o: SceneObjectData, factor: number): SceneObjectData
       // A length, like `range`: the shadow camera's near plane.
       ...(o.shadowNear !== undefined ? { shadowNear: o.shadowNear * factor } : {}),
       ...(o.flicker !== undefined ? { flicker: o.flicker } : {}),
+      // How visible the lit air is and how thick the dust in it: fractions,
+      // not lengths.
+      ...(o.beam !== undefined ? { beam: o.beam } : {}),
+      ...(o.dust !== undefined ? { dust: o.dust } : {}),
+      // The trigger distance is a length, like `range`; the three times are
+      // seconds, which are not.
+      ...(o.wake !== undefined ? { wake: o.wake * factor } : {}),
+      ...(o.wakeDelay !== undefined ? { wakeDelay: o.wakeDelay } : {}),
+      ...(o.wakeRise !== undefined ? { wakeRise: o.wakeRise } : {}),
+      ...(o.wakeFall !== undefined ? { wakeFall: o.wakeFall } : {}),
     };
   }
   return {

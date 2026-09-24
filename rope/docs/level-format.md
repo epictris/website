@@ -85,6 +85,37 @@ The reader clamps it to 0..90.
 Both are in the rock's hash, so changing either marks the body stale.
 The object's `bevel` is the flat extrusion's chamfer and nothing else: the rock pipeline no longer reads it.
 
+A **light object** (`LightObjectData`, `type: "light"`) sits in a body like any other scene object and rides its pose - see [**Light and air**](lighting-and-surfaces.md#light-and-air).
+Its fields, and what `scaleLevelData` does to each:
+
+| Field | What it is | Scaled px ↔ m |
+|---|---|---|
+| `kind` | `"point"` (absent) or `"spot"` | no |
+| `x`, `y`, `rot` | placement in the body's frame | `x`, `y` yes |
+| `z` | off the body's plane, toward the camera | yes |
+| `color` | the light's colour | no |
+| `intensity` | candela against the sim's metres (see the lighting doc for why it is not scaled) | no |
+| `range` | how far it reaches before it is cut to nothing | yes |
+| `angle`, `penumbra` | spot only: the cone's half-angle in degrees, and its edge softness 0..1 | no |
+| `dirX`, `dirY`, `dirZ` | spot only: the aim, in the object's own frame | no |
+| `castShadow` | whether it occludes (capped by `LIGHT_SHADOW_BUDGET`) | no |
+| `shadowNear` | the shadow camera's near plane | yes |
+| `flicker` | 0 (steady) .. 1 (guttering); render-only, wall-clock driven | no |
+| `beam` | spot only: how visible the lit air in the cone is, 0..1; render-only, wall-clock driven | no |
+| `dust` | spot only: how thick the dust drifting in the beam is, 0..1; render-only, wall-clock driven | no |
+| `wake` | point only: the distance on the gameplay plane the ball has to come within to wake the light; absent or 0 = always on | yes |
+| `wakeDelay` | point only, seconds from the trigger to the start of the rise; absent = 0 | no |
+| `wakeRise` | point only, seconds from dark to full; absent = `DEFAULT_WAKE_RISE` (0.6), 0 = instant | no |
+| `wakeFall` | point only, seconds from full to dark once the ball has left; absent = `DEFAULT_WAKE_FALL` (1.5), 0 = instant | no |
+
+`beam` and `dust` are the spot's cone made visible - see [**Beams**](lighting-and-surfaces.md#beams).
+Both are absent (0) on every light authored before them, and the editor writes them only on a spot and only when nonzero, so a level that never sets one saves byte-identically.
+The beam is not occluded by geometry: a shaft that should stop at a floor is authored with a `range` that stops there.
+
+`wake` makes a point light a **waking light**, dark until the ball comes near and fading after it leaves, with the emission of the glowing shapes in its body following it - see [**Waking lights**](lighting-and-surfaces.md#waking-lights).
+`wake` is a length and converts like `range`; the three times are seconds and pass through untouched.
+The editor writes the four only on a point light with a nonzero `wake`, and each time only when it is set, so a level that never sets one saves byte-identically; a waking light's `castShadow` is ignored.
+
 The canonical, hand-editable schema now lives in `src/level/levelFormat.ts` (superset of
 the generated one — adds the `rigid` and `force` kinds, the `cameraRegions` and
 `chains` lists, and bodies made of scene objects); `levelData.ts` stays

@@ -28,6 +28,7 @@
 import * as THREE from "three";
 import { BallPlayer } from "../classes/ballPlayer";
 import { BALL_MESH, BALL_MESH_RADIUS, IRON_SURFACE, loadMesh, surfaceFor } from "./assets";
+import { standardMaterialsOf, wearAvatar } from "./avatarSurface";
 import { orientTo, placeAt, threeY } from "./space";
 
 // How much thicker than the collision radius the mounting loop's ring is drawn.
@@ -72,9 +73,12 @@ export const FORGED_SMALL = 5;
 // changed by editing a constant instead of re-baking and re-publishing.
 const FORGED_TINT = "#f2eadf";
 
-// The assembly's surface, at the ball's own scale or a small part's.
+// The assembly's surface, at the ball's own scale or a small part's. The
+// avatar's OWN copy of it (`avatar: true`), wearing the avatar's thinner air,
+// which the shared copy a wall of the same steel would get must not (see
+// `avatarSurface.ts`).
 export function forgedMetal(tileScale?: number): THREE.MeshStandardMaterial {
-  return surfaceFor({ texture: FORGED, tileScale, color: FORGED_TINT });
+  return wearAvatar(surfaceFor({ texture: FORGED, tileScale, color: FORGED_TINT, avatar: true }));
 }
 
 // How the model's own materials are worn, over its maps. Its packed roughness
@@ -87,26 +91,35 @@ export function forgedMetal(tileScale?: number): THREE.MeshStandardMaterial {
 // sphere's form and its hammer facets where the environment is dark. Applied
 // here rather than baked into the file, so the shine is tuned by editing a
 // constant instead of re-optimising and re-publishing the model.
-const MODEL_ROUGHNESS = 0.5;
-const MODEL_METALNESS = 0.85;
+//
+// Metalness HALF rather than just short of 1 (2026-09-24): in the cave the
+// environment is dark, so a near-metal lit by a mushroom showed one smeared
+// highlight and a black sphere - a metal's lit side is a reflection, and there
+// was nothing to reflect. At 0.5 the other half of the surface is a diffuse
+// lobe that takes a lamp's colour across the whole lit hemisphere, which is
+// what old iron looks like anyway: rust, grime and dust are dielectric layers
+// over the metal, not chrome. Roughness up with it (0.5 -> 0.65): the
+// highlight a lamp puts on the sphere spreads across more of it instead of
+// sitting as one tight patch, and it softens the view-fixed highlight the
+// rolling ball would otherwise wear as a sticker.
+const MODEL_ROUGHNESS = 0.65;
+const MODEL_METALNESS = 0.5;
 const MODEL_ALBEDO_LIFT = 5;
 
+// The model's materials, worn as the avatar: its shine, and the avatar's rules
+// (see `avatarSurface.ts`).
 function shine(obj: THREE.Object3D): void {
-  obj.traverse((o) => {
-    const mesh = o as THREE.Mesh;
-    if (!mesh.isMesh) return;
-    for (const m of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
-      const std = m as THREE.MeshStandardMaterial;
-      if (!std.isMeshStandardMaterial) continue;
-      // `loadMesh` hands out clones that share the cached file's materials,
-      // so a second ball on the page must not lift the albedo twice.
-      if (std.userData.shined) continue;
-      std.userData.shined = true;
-      std.roughness = MODEL_ROUGHNESS;
-      std.metalness = MODEL_METALNESS;
-      std.color.multiplyScalar(MODEL_ALBEDO_LIFT);
-    }
-  });
+  for (const std of standardMaterialsOf(obj)) {
+    // `loadMesh` hands out clones that share the cached file's materials,
+    // so a second ball on the page must not lift the albedo twice.
+    // `wearAvatar` has the same guard of its own.
+    wearAvatar(std);
+    if (std.userData.shined) continue;
+    std.userData.shined = true;
+    std.roughness = MODEL_ROUGHNESS;
+    std.metalness = MODEL_METALNESS;
+    std.color.multiplyScalar(MODEL_ALBEDO_LIFT);
+  }
 }
 
 export class BallVisual {

@@ -1943,9 +1943,27 @@ export interface SurfaceRequest {
   // answer different questions - what this is made of, and what is lit on it -
   // and a level pairs them freely.
   emissiveTexture?: string;
+  // The avatar's own copy of this surface (the ball, its loop, the chain, the
+  // manacle - see `render3d/avatarSurface.ts`). The same painted maps, dressed
+  // the same way as the images arrive, under a key of its own so that the
+  // avatar's rule (less fog) can be set on it without leaking onto
+  // a wall that happens to ask for the same steel in the same tint. Cloning the
+  // shared one instead would freeze the clone in the fallback surface, since the
+  // authored maps are swapped into the cached object when they land.
+  avatar?: boolean;
+  // A body's OWN dressed copy of this surface, named by the body (see
+  // `BodyVisual`). Set only on the shapes of a body carrying a waking light,
+  // whose emission follows that light every frame (`lights.ts`): driven through
+  // the shared material, every shape of the same stuff in the level would
+  // pulse with the nearest mushroom. Same reasoning as `avatar` for why it is
+  // a key rather than a clone.
+  instance?: string;
 }
 
-// The shared surface for a request. Callers must not mutate the result.
+// The shared surface for a request. Callers must not mutate the result - with
+// two exceptions: an `avatar` request, whose material is shared with the avatar
+// alone and is dressed by `avatarSurface.ts`, and an `instance` request, whose
+// `emissiveIntensity` a waking light writes every frame (`lights.ts`).
 //
 // Cached on every part of the request that changes what the material IS, so a
 // level of 154 bodies in three colours at two tiling scales is six materials and
@@ -1972,7 +1990,10 @@ export function surfaceKey(req: SurfaceRequest): string {
   // A multiplier on no emission is not a difference: it multiplies black.
   const emits = emissive !== "" || glowMap !== "" || surfaceEmits(name);
   const emissiveIntensity = emits ? (req.emissiveIntensity ?? 1) : 1;
-  return `${name}|${tile}|${ox}|${oy}|${req.color ?? ""}|${emissive}|${emissiveIntensity}|${glowMap}`;
+  // Appended only when set, so every key a level already produces is unchanged.
+  const avatar = req.avatar === true ? "|avatar" : "";
+  const instance = req.instance ? `|instance:${req.instance}` : "";
+  return `${name}|${tile}|${ox}|${oy}|${req.color ?? ""}|${emissive}|${emissiveIntensity}|${glowMap}${avatar}${instance}`;
 }
 
 // Does this surface glow of its own accord - is there an emission map in the

@@ -38,6 +38,25 @@ It used to re-centre on every write, which kept a polygon's origin its own centr
 Fitting a collision outline to the mesh it is being fitted *to* moved the mesh, which is the one thing that edit may not do.
 What the re-centring was for is still true and is answered from the outline instead: `shapeCentre` gives a shape's own centre of area (a polygon's centroid, a curve's stroke, a rect's or circle's origin), and `bodyCentroid` weighs the body's pieces at those points, so the point the editor turns a body about is still the one `mountPieces` mounts it at.
 
+## Waking lights: `+ Glow` and the awake preview
+
+A point light's panel has a `wake` field below `flicker` (canvas pixels like the reach, metres on disk; blank or 0 is a light that is always on), and with it set, `delay s`, `rise s` and `fall s` (0.05 steps, floored at 0, blank for the renderer's default).
+They are the fields of a **waking light** - see [**Waking lights**](lighting-and-surfaces.md#waking-lights).
+A spot shows none of them, and turning a waking light into a spot clears its `wake` with a notice in the status line, since the pool that serves waking lights is point lights.
+The `shadows` box greys out while `wake` is set: a waking light casts no shadow, and the authored flag is kept so turning the wake off gives it back.
+
+On the canvas the wake is a dashed ring in the light's colour, with longer dashes than the reach's, drawn at the distance itself rather than cut by `z`, because the trigger is measured on the gameplay plane; a round grip on its left drags it like the reach's grip on the right.
+The label says `wakes N`.
+
+**`+ Glow`** (beside `+ Light`) places a glowing mushroom with one click: one static body holding a solid purple cube (`GLOW_CUBE` 0.3 m square and deep, `GLOW_COLOR` `#8a3fd6`, glowing `GLOW_EMISSIVE` `#b070ff` at 2), the collision rect it mirrors (`matchCollision`), and a waking point light at its centre (colour `GLOW_EMISSIVE`, `range` 4 m, `intensity` 6, `wake` 3 m, `wakeDelay` 0.25, `wakeRise` 0.6, `wakeFall` 1.5).
+It goes through the same loader a level and a paste come in by (`glowModel`), so it is exactly what a file holding that body loads as, and it is one body, so the outliner shows one row and it drags as one.
+Those numbers are editor defaults in `editor/model.ts`, not format defaults, and all of them wait on a play; a mushroom on a far wall can lose its collision object.
+The cube is a stand-in until the mushroom model exists, and nothing about the light changes when it does.
+
+**The 3D preview shows every waking light AWAKE** (`Scene3D.setGlowPreview(true)`, `LightRig.previewAwake`): each source is held at full without stepping its state, and the pool is spent nearest the view's centre instead of the ball.
+There is nobody in the editor's scene to wake anything, and an author has to see what a mushroom lights before anyone does.
+**▶ Test** turns the preview off, so a test wakes them for the ball exactly as the game does.
+
 ## Conveyor belts
 
 `+ Belt` (beside `+ Circle`) lays a **conveyor**: press where the first wheel goes and drag to the second, or click to drop a two-wheel belt 1.5 m long running right at 1 m/s on 10 cm wheels under a 5 cm band (see [**Conveyor belts**](conveyors.md)).

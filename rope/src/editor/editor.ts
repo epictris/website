@@ -176,9 +176,11 @@ import {
   type EdVine,
   type EdBodyFrame,
   type EdItem,
+  type EdLight,
   type EdShape,
   type EdLayer,
   type EdModel,
+  glowModel,
   cloneRouteNode,
   peakSurfaceSpeed,
   routeNode,
@@ -287,6 +289,7 @@ import {
   DEFAULT_LIGHT_RANGE,
   LIGHT_SHADOW_BUDGET,
 } from "../render3d/lights";
+import { DEFAULT_WAKE_FALL, DEFAULT_WAKE_RISE } from "../render3d/glow";
 
 // `geometry` draws the OTHER kind of scene object: a rect like `rect`, but one
 // that is drawn and never simulated. It is a tool rather than a mode on the rect
@@ -306,7 +309,8 @@ type Tool =
   | "checkpoint"
   | "chain"
   | "vine"
-  | "light";
+  | "light"
+  | "glow";
 
 // Which tools each layer offers. A shape tool has no meaning on the notes layer
 // (a note is a text box or an arrow, never a circle) and vice versa, so the
@@ -318,7 +322,7 @@ type Tool =
 // because that is what a light is: another kind of scene object, dropped into
 // the same layer and welded into a body with the shape it belongs to.
 const LAYER_TOOLS: Record<EdLayer, Tool[]> = {
-  scene: ["select", "rect", "circle", "belt", "poly", "path", "geometry", "light", "chain", "vine"],
+  scene: ["select", "rect", "circle", "belt", "poly", "path", "geometry", "light", "glow", "chain", "vine"],
   camera: ["select", "rect", "circle", "poly", "path"],
   notes: ["select", "text", "arrow", "checkpoint"],
 };
@@ -408,6 +412,7 @@ type Drag =
   | { mode: "movePlayer"; grab: Vec2 }
   | { mode: "corner"; body: EdItem; anchor: Vec2 }
   | { mode: "radius"; body: EdItem }
+  | { mode: "wake"; body: EdItem }
   // One of a conveyor's wheels (not wheel 0, which is the item's position),
   // dragged like a path vertex: its centre follows the pointer and the other
   // wheels stay put.
@@ -768,6 +773,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // the title rather than thrown, so the editor keeps running and the author
   // sees what to undo; the file still saves, and the game refuses it loudly.
   let buildError: string | null = null;
+  // A one-off message in the status line, for an edit that quietly took
+  // something with it (a waking light turned into a spot loses its `wake`).
+  // Cleared after a few seconds rather than by the next edit, so it is read.
+  let notice: string | null = null;
+  let noticeTimer: ReturnType<typeof setTimeout> | null = null;
   function noteBuildError(err: unknown): void {
     const msg = err === null ? null : err instanceof Error ? err.message : String(err);
     if (msg === buildError) return;
@@ -2069,6 +2079,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     chain: button("+ Chain", () => setTool("chain")),
     vine: button("+ Vine", () => setTool("vine")),
     light: button("+ Light", () => setTool("light")),
+    glow: button("+ Glow", () => setTool("glow")),
   };
   toolBtns.geometry.title =
     "Click to drop a geometry object; drag to size it. It is DRAWN and never simulated - nothing collides with it, the rope does not wrap it, no force reaches it. Give it a mesh or a texture on the panel; drop it on a selected body to have it ride that body.";
@@ -2080,6 +2091,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   toolBtns.vine.title =
     "Press on a body and drag DOWN to hang a vine from it. Shift-drag its end handle onto another body to span between the two. The player passes through a vine and the hook grabs it anywhere along its length.";
   toolBtns.light.title = "Click to drop a light; drag to set how far it reaches";
+  toolBtns.glow.title =
+    "Click to drop a glowing mushroom (a purple cube for now): one static body holding the cube, the collision box it mirrors, and a WAKING light that stays dark until the ball comes within its wake (the dashed ring) and fades out after it leaves. The 3D preview shows it awake.";
   toolBtns.checkpoint.title =
     "Click to drop a named spawn. Playing with ?checkpoint=NAME starts there instead of at the level's spawn - and stays there over a reset - so an area can be playtested without swinging out to it first. Selecting one and pressing ▶ Test starts the test there.";
   const kindSel = document.createElement("select");
@@ -2119,6 +2132,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     toolBtns.chain,
     toolBtns.vine,
     toolBtns.light,
+    toolBtns.glow,
     kindWrap,
   );
 
@@ -2642,7 +2656,17 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
             : " · Enter to close"
           : "")
       : "";
-    title.textContent = `${currentName ?? "(unsaved)"}${state} · ${count("scene")} objects${extra}${draft}`;
+    title.textContent = `${currentName ?? "(unsaved)"}${state} · ${count("scene")} objects${extra}${draft}${notice ? ` · ${notice}` : ""}`;
+  }
+  function flashNotice(text: string): void {
+    notice = text;
+    if (noticeTimer !== null) clearTimeout(noticeTimer);
+    noticeTimer = setTimeout(() => {
+      notice = null;
+      noticeTimer = null;
+      updateTitle();
+    }, 5000);
+    updateTitle();
   }
   // The cursor a drag borrows and must hand back (pan swaps in a grab hand).
   function applyToolCursor(): void {
@@ -6437,8 +6461,22 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     kindSel.title = "point throws in every direction; spot is a cone (a shaft through a grate)";
     kindSel.addEventListener("change", () => {
       beginAction();
-      for (const b of lights) b.light.kind = kindSel.value as "point" | "spot";
+      const kind = kindSel.value as "point" | "spot";
+      // A waking light is point-only (the pool that serves it is point
+      // lights), so turning one into a spot takes its wake with it - said in
+      // the status line, since the fields that showed it are about to go.
+      let slept = 0;
+      for (const b of lights) {
+        b.light.kind = kind;
+        if (kind === "spot" && b.light.wake > 0) {
+          b.light.wake = 0;
+          slept++;
+        }
+      }
       markDirty();
+      if (slept > 0) {
+        flashNotice(`a spot cannot wake: cleared wake on ${slept} light${slept === 1 ? "" : "s"}`);
+      }
       rebuildInspector(); // the cone fields appear or go
     });
     g.appendChild(labelWrap("kind", kindSel));
@@ -6459,8 +6497,63 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       0.1,
     );
 
+    if (lights.every((b) => b.light.kind === "point")) {
+      // A WAKING light (see `LightObjectData.wake`): dark until the ball comes
+      // within `wake`, then rising to its intensity with the glowing shapes of
+      // its body. Canvas pixels here like the reach, metres on disk; blank or 0
+      // is a light that is always on. The canvas draws the wake as a dashed
+      // ring outside the reach; the 3D preview shows every waking light AWAKE.
+      const wakeInput = num(
+        "wake",
+        (b) => (b.light.wake > 0 ? b.light.wake * M2PX : NaN),
+        (b, v) => (b.light.wake = Math.max(0, v * PX)),
+        10,
+        {
+          placeholder: "always on",
+          onEmpty: () => {
+            for (const b of lights) b.light.wake = 0;
+          },
+        },
+      );
+      // Set or cleared, the times appear or go and the shadow box greys or
+      // not - rebuilt once the value is committed rather than per keystroke,
+      // which would take the caret out of the field being typed into.
+      wakeInput.addEventListener("change", () => rebuildInspector());
+      if (lights.every((b) => b.light.wake > 0)) {
+        // Seconds, floored at 0; blank is the renderer's default (no delay,
+        // DEFAULT_WAKE_RISE, DEFAULT_WAKE_FALL).
+        const secs = (
+          label: string,
+          get: (l: EdLight) => number | null,
+          set: (l: EdLight, v: number | null) => void,
+          fallback: string,
+        ): void => {
+          num(
+            label,
+            (b) => get(b.light) ?? NaN,
+            (b, v) => set(b.light, Math.max(0, v)),
+            0.05,
+            {
+              placeholder: fallback,
+              onEmpty: () => {
+                for (const b of lights) set(b.light, null);
+              },
+            },
+          );
+        };
+        secs("delay s", (l) => l.wakeDelay, (l, v) => (l.wakeDelay = v), "0");
+        secs("rise s", (l) => l.wakeRise, (l, v) => (l.wakeRise = v), String(DEFAULT_WAKE_RISE));
+        secs("fall s", (l) => l.wakeFall, (l, v) => (l.wakeFall = v), String(DEFAULT_WAKE_FALL));
+      }
+    }
+
     if (lights.every((b) => b.light.kind === "spot")) {
-      num("cone°", (b) => b.light.angle, (b, v) => (b.light.angle = Math.min(89, Math.max(1, v))), 5);
+      // The cone made visible, beside the flicker it flickers with: how much
+      // the lit air shows, and how thick the dust drifting in it is. The 3D
+      // view shows both; the 2D canvas does not draw the cone.
+      num("beam", (b) => b.light.beam, (b, v) => (b.light.beam = Math.min(1, Math.max(0, v))), 0.05);
+      num("dust", (b) => b.light.dust, (b, v) => (b.light.dust = Math.min(1, Math.max(0, v))), 0.05);
+      num("cone°",(b) => b.light.angle, (b, v) => (b.light.angle = Math.min(89, Math.max(1, v))), 5);
       num(
         "penumbra",
         (b) => b.light.penumbra,
@@ -6489,8 +6582,18 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       markDirty();
       rebuildInspector();
     });
+    // A waking light casts none, whatever it says: it is served by a pool light
+    // handed between sources as they wake, and a shadow map swapped with it
+    // would flash (see `render3d/lights.ts`). The box stays, greyed, so the
+    // authored flag is visible and survives turning the wake off again.
+    const waking = lights.some((b) => b.light.kind === "point" && b.light.wake > 0);
+    shadowBox.disabled = waking;
     const sw = el("label", "ed-field");
     sw.textContent = "shadows";
+    if (waking) {
+      sw.title = "A waking light casts no shadow (the pool lights that serve it cast none).";
+      sw.style.opacity = "0.5";
+    }
     sw.appendChild(shadowBox);
     g.appendChild(sw);
     if (lights.every((b) => b.light.castShadow)) {
@@ -7602,7 +7705,18 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // A fresh item for the draw tool, on the active layer. Every layer's item is
   // the same type, so this only picks the appearance and the starting size —
   // the drag that follows resizes it identically whatever it is.
-  function newDrawnItem(t: Exclude<Tool, "select" | "chain">, start: Vec2): EdItem {
+  // `+ Glow`: the body `glowBody` describes, centred on `at`, through the same
+  // loader a level (and a paste) comes in by, so it is exactly what a file
+  // holding that body would load as. Always a body of its own: a mushroom is a
+  // thing in the level, not a part of whatever happens to be selected.
+  function placeGlow(at: Vec2): void {
+    const arrived = glowModel(at);
+    beginAction();
+    const copy = cloneBodies(arrived.items, Vec2.ZERO, arrived.bodyFrames);
+    addAndSelect(copy.items, [], [], copy.frames);
+  }
+
+  function newDrawnItem(t: Exclude<Tool, "select" | "chain" | "glow">, start: Vec2): EdItem {
     // Which of the three scene objects the tool draws. `+ Geometry` is the only
     // way to get a drawn-and-not-simulated object in one gesture; every other
     // shape tool draws a collision object, and NOTHING is created beside it.
@@ -8813,6 +8927,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       return { mode: "depth", body: s, base: depthOf(s), press: scr };
     }
     if (h.rotate && scr.distanceTo(h.rotate) <= HANDLE_HIT_PX) return { mode: "rotate", body: s };
+    if (h.wake && scr.distanceTo(h.wake) <= HANDLE_HIT_PX) return { mode: "wake", body: s };
     if (h.radius && scr.distanceTo(h.radius) <= HANDLE_HIT_PX) return { mode: "radius", body: s };
     if (s.shape.kind === "rect") {
       const hw = s.shape.w / 2;
@@ -8933,6 +9048,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       if (from) {
         drag = { mode: "vineDraw", from, local: nearestSurfaceLocal(from, world), length: 0 };
       }
+      return;
+    }
+    // 1e. Glow tool: one click places a whole body - the cube, its collision
+    // box and its waking light - so there is nothing to drag out.
+    if (drawTool === "glow") {
+      placeGlow(snapVec(world));
       return;
     }
     // 2. Draw tool: create a new item on the active layer and drag out its size.
@@ -9622,6 +9743,16 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         }
         break;
       }
+      case "wake": {
+        // Floored above 0: dragging the ring onto the source would silently
+        // turn the waking light into an always-on one, which is the field's
+        // job (blank it) rather than a drag's.
+        const b = drag.body;
+        b.light.wake = Math.max(snapLen(world.distanceTo(b.pos)), PX);
+        markDirty();
+        refreshFields();
+        break;
+      }
       case "beltWheel": {
         // The wheel's centre follows the pointer on the grid; `setBelt` refuses
         // a spot where its disc sinks inside another's, or where it or another
@@ -10230,6 +10361,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         // the editor's orthographic lens is an authoring instrument, and a level
         // judged through it would be judged through a lens nobody plays in.
         scene3d!.setProjection("perspective");
+        // ...and the mushrooms wake for the ball, as they do in the game.
+        scene3d!.setGlowPreview(false);
         const w = Math.round(view.width * view.scale);
         const h = Math.round(view.height * view.scale);
         scene3d!.setViewportRect({
@@ -10286,6 +10419,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         // Set per frame rather than only at the toggle, because ▶ Test borrows
         // the same scene and puts it back on the perspective camera.
         scene3d.setProjection(projection);
+        // Every waking light AWAKE while authoring: there is nobody in this
+        // scene to wake one, and an author has to see what a mushroom lights
+        // before anyone does. ▶ Test hands it back to the ball.
+        scene3d.setGlowPreview(true);
         gizmo?.setCamera(scene3d.camera);
         syncEditorScene();
         // What is selected, said on the models themselves - the geometry

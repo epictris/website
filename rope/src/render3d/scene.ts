@@ -238,12 +238,15 @@ export class Scene3D {
     // A body that built an engine object is registered under it, so the
     // reconciliation below finds it already made rather than building a second,
     // authorless visual for the same body.
-    for (const built of level.visualSource.built.bodies) {
-      const visual = new BodyVisual(built.body, built, this.lights);
+    level.visualSource.built.bodies.forEach((built, index) => {
+      // The body's index in the level names its own copy of any surface a
+      // waking light drives (see `BodyVisual`'s `instance`), so a rebuild of
+      // the same level (every editor revision) reuses the same cache entries.
+      const visual = new BodyVisual(built.body, built, this.lights, `b${index}`);
       this.scene.add(visual.root);
       if (built.body) this.bodies.set(built.body, visual);
       else this.standing.push(visual);
-    }
+    });
     // Then whatever else the world already holds - the avatar's debris, a
     // sandbox rock spawned before the scene was built.
     for (const body of level.world.bodies) this.ensureBody(body);
@@ -251,6 +254,22 @@ export class Scene3D {
       this.ballVisual = new BallVisual(level.ball);
       this.scene.add(this.ballVisual.root);
     }
+    // The waking lights' pool, sized now that every authored light has been
+    // recorded and before `prewarm` compiles against the scene's lights (see
+    // `LightRig.buildPool`). A level with no waking light builds none.
+    this.lights.buildPool(this.scene);
+  }
+
+  // Hold every waking light at full, served nearest the view's centre, rather
+  // than waking it for a ball (`LightRig.previewAwake`). The editor's preview,
+  // which has nobody in it to wake anything; its ▶ Test turns it off.
+  setGlowPreview(awake: boolean): void {
+    this.lights.previewAwake = awake;
+  }
+
+  // The waking lights' levels, in authored order, for a probe.
+  glowLevels(): number[] {
+    return this.lights.glowLevels();
   }
 
   // The environment a level authored, so a host that rebuilds the scene without
@@ -845,10 +864,11 @@ export class Scene3D {
     orthoFramedZ.value = this.lens.zOffset;
     this.env.follow(camera);
     const clock = this.pinnedClock ?? performance.now() / 1000;
-    this.lights.update(clock);
-    // The spray's point sprites are sized in metres and need the viewport's
-    // pixel height to stay that size (see water.ts `updateWater`).
-    updateWater(clock, rect ? rect.h : this.size.y);
+    // The spray's point sprites and a beam's dust are sized in metres and need
+    // the viewport's pixel height to stay that size (see water.ts
+    // `updateWater`).
+    const viewportHeight = rect ? rect.h : this.size.y;
+    updateWater(clock, viewportHeight);
 
     // Bodies come and go at runtime (the hook is destroyed and rebuilt on every
     // throw, the sandbox spawns rocks), so the visual set is reconciled rather
@@ -892,6 +912,14 @@ export class Scene3D {
     this.chains.sync(level, alpha, retract);
     this.vines.sync(level.vines ?? NO_VINES, alpha);
     this.ballVisual?.sync(alpha);
+    // The lights after the bodies, because a waking light is judged by where
+    // its body is drawn this frame against where the ball is drawn this frame
+    // (`renderPosition`, the pose `BallVisual` just used) - both read, neither
+    // written: nothing here reaches the sim.
+    this.lights.update(clock, viewportHeight, {
+      ball: level.ball ? level.ball.renderPosition(alpha) : null,
+      view: camera.position,
+    });
     // After the visuals are synced and before the frame is drawn: a highlight is
     // a material swap on meshes the reconciliation above may have only just
     // created, and it costs a traverse only while something is selected.

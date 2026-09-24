@@ -290,16 +290,15 @@
     }
   ],
   "environment": {
-    "sunIntensity": 5,
-    "skyColor": "#828282",
-    "groundColor": "#14181f",
-    "fillIntensity": 10,
+    "sunIntensity": 0,
+    "skyColor": "#3d5a72",
+    "groundColor": "#0c1410",
+    "fillIntensity": 2,
     "envIntensity": 0.3,
-    "backgroundColor": "#080a0f",
+    "backgroundColor": "#070a10",
     "fogAmount": 0.4,
-    "fogColor": "#2b2e33",
-    "sunColor": "#bababa",
-    "hdri": "golden-gate-hills"
+    "fogColor": "#1f2a36",
+    "sunColor": "#bababa"
   },
   "camera": {
     "focalLength": 70
@@ -535,7 +534,7 @@
   ],
   "player": {
     "x": 920.0000000000001,
-    "y": 550,
+    "y": 370,
     "radius": 8
   },
   "bodies": [
@@ -16783,7 +16782,7 @@
     {
       "kind": "static",
       "x": 847.5000000000001,
-      "y": 872.5000000000001,
+      "y": 912.5000000000007,
       "rot": 0,
       "color": "#555555",
       "opacity": 0.5,
@@ -16792,7 +16791,7 @@
         {
           "type": "collision",
           "x": 6.219711853308496,
-          "y": -75.06385068762187,
+          "y": -75.06385068762197,
           "shape": {
             "kind": "poly",
             "verts": [
@@ -17101,6 +17100,211 @@
           "rotX": 1.5707963267948966,
           "color": "#555555",
           "opacity": 0.5
+        }
+      ]
+    },
+    {
+      "kind": "static",
+      "x": 919.9999999999999,
+      "y": -250,
+      "rot": 0,
+      "objects": [
+        {
+          "type": "light",
+          "kind": "spot",
+          "z": 0,
+          "color": "#f3ecd8",
+          "intensity": 400,
+          "range": 2000,
+          "angle": 3,
+          "penumbra": 1,
+          "castShadow": true,
+          "beam": 0.6,
+          "dust": 0.5
+        }
+      ]
+    },
+    {
+      "kind": "static",
+      "x": 1374.999999999998,
+      "y": 844.9999999999995,
+      "rot": 0,
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "x": 2.1316282072803006e-12,
+          "y": 5.329070518200751e-13,
+          "shape": {
+            "kind": "rect",
+            "w": 30,
+            "h": 30
+          }
+        },
+        {
+          "type": "geometry",
+          "x": 2.1316282072803006e-12,
+          "y": 5.329070518200751e-13,
+          "shape": {
+            "kind": "rect",
+            "w": 30,
+            "h": 30
+          },
+          "matchCollision": true,
+          "z": 215,
+          "depth": 30,
+          "texture": "color",
+          "color": "#8a3fd6",
+          "opacity": 0.5,
+          "emissive": "#b070ff",
+          "emissiveIntensity": 2
+        },
+        {
+          "type": "light",
+          "x": 1.9539925233402755e-12,
+          "y": 3.552713678800501e-13,
+          "z": 230.00000000000003,
+          "color": "#d9cf9b",
+          "intensity": 10,
+          "range": 1000,
+          "wake": 300,
+          "wakeDelay": 0.25,
+          "wakeRise": 0.6,
+          "wakeFall": 1.5
+        }
+      ]
+    },
+    {
+      "kind": "static",
+      "x": 1950,
+      "y": 625,
+      "rot": 0,
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 30,
+            "h": 30
+          }
+        },
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 30,
+            "h": 30
+          },
+          "matchCollision": true,
+          "depth": 30,
+          "texture": "color",
+          "color": "#8a3fd6",
+          "opacity": 0.5,
+          "emissive": "#b070ff",
+          "emissiveIntensity": 2
+        },
+        {
+          "type": "light",
+          "color": "#b070ff",
+          "intensity": 6,
+          "range": 400,
+          "wake": 300,
+          "wakeDelay": 0.25,
+          "wakeRise": 0.6,
+          "wakeFall": 1.5
+        }
+      ]
+    },
+    {
+      "kind": "static",
+      "x": 2525,
+      "y": 615,
+      "rot": 0,
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 30,
+            "h": 30
+          }
+        },
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 30,
+            "h": 30
+          },
+          "matchCollision": true,
+          "depth": 30,
+          "texture": "color",
+          "color": "#8a3fd6",
+          "opacity": 0.5,
+          "emissive": "#b070ff",
+          "emissiveIntensity": 2
+        },
+        {
+          "type": "light",
+          "color": "#b070ff",
+          "intensity": 6,
+          "range": 400,
+          "wake": 300,
+          "wakeDelay": 0.25,
+          "wakeRise": 0.6,
+          "wakeFall": 1.5
+        }
+      ]
+    },
+    {
+      "kind": "static",
+      "x": 3250,
+      "y": 735,
+      "rot": 0,
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 30,
+            "h": 30
+          }
+        },
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 30,
+            "h": 30
+          },
+          "matchCollision": true,
+          "depth": 30,
+          "texture": "color",
+          "color": "#8a3fd6",
+          "opacity": 0.5,
+          "emissive": "#b070ff",
+          "emissiveIntensity": 2
+        },
+        {
+          "type": "light",
+          "color": "#b070ff",
+          "intensity": 6,
+          "range": 400,
+          "wake": 300,
+          "wakeDelay": 0.25,
+          "wakeRise": 0.6,
+          "wakeFall": 1.5
         }
       ]
     }

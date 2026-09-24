@@ -83,6 +83,12 @@ Measured on the ball arena at 0.2: 0.73% RMSE over the frame - 10% of haze on th
 
 `equirectEnvironment` paints a small equirectangular sky from the level's OWN colours - the hemisphere's sky and ground either side of a soft horizon, plus a warm lobe where the sun is - and `PMREMGenerator` convolves it into the mip chain a rough surface samples. No asset, nothing to download, and it cannot disagree with the fog and the fill about what colour the air is. It is a **float** texture because the sun lobe is several times brighter than the sky, which is the range an LDR image cannot hold: clipped, the highlight it puts on a metal is the same white as the sky around it. Directional for the same reason - a uniform environment is indistinguishable from ambient light and puts a highlight nowhere.
 
+**The texels are painted in the direction three READS them** (`equirectDirection`): three's `equirectUv` takes u from `atan(z, x)` and v from `asin(y)` with v = 0 straight down, and a `DataTexture` is not flipped, so row 0 is the bottom of the sphere.
+Until 2026-09-24 the painter used a convention of its own - row 0 straight up, azimuth `atan2(x, z)` - so every generated sky was upside down and mirrored: the ground colour reflected from overhead, the sky from below, and the sun lobe exactly opposite the sun (the peak texel read back at a dot of -0.999 with the sun's direction).
+It was found by the avatar's private sky (tried and removed the same day, see below), whose lobe landed on the lower right of a ball lit from the upper left.
+Every level on the generated sky changed with the fix; at the time that was the river (`levels/ball.json`, once its HDRI was dropped), `BALL_LEVEL_2`, the untextured test levels, and any level for the frames before its capture arrives.
+`cli render3d` holds the painter to three's formula restated independently (`sky: a generated sky is painted as three reads it`), and is red against the old convention.
+
 Image-based lighting contributes **diffuse as well as specular**, so the hemisphere fill comes down to meet it (`FILL_WITH_ENV`) rather than the two stacking: measured over the ball arena, the frame's mean brightness moves 0.1304 to 0.1353 - under 4% - while the chains go from nearly invisible to reading as forged metal. `ENV_INTENSITY` is 0.6 rather than higher because past that the dielectrics start losing the sun's directional shading, which is the contrast the fill was tuned for in the first place.
 
 `Scene3D` rebuilds it only when the authored environment actually changes (`envKey`). The lights and the fog are cheap to rebuild and the convolution is not, and the editor reconstructs its scene on every model revision - every drag - none of which changes the sky.
@@ -109,6 +115,130 @@ It is authored in the editor's Environment panel: `sky hdr` picks from the manif
 Tone mapping is ACES, which is what gives the sun range to work in; the vignette is drawn on the **overlay canvas** as one gradient fill rather than as a post-processing pass, because a vignette is a screen-space multiply over the finished frame and the overlay is already exactly that.
 
 The GLTF loader is imported dynamically, so it lands in its own chunk and is fetched only by a page that actually loads a prop.
+
+## The avatar's own surface
+
+The ball and its chain are the one thing in the frame the player must never lose, and a level's atmosphere is exactly what loses them: a grey metal sphere in a murky grey-blue cave is a murky grey-blue sphere.
+Rather than a light carried by the ball (rejected: nothing in the world emits it), the avatar gets a rule of its own in `render3d/avatarSurface.ts`, which is the one place that says what the avatar is made of beside the `MODEL_*` constants in `ballVisual.ts`.
+It is applied to every material the avatar is drawn in: the stand-in sphere and loop, the chain's instanced links, the manacle, and the loaded ball model's own materials (inside `shine()`).
+The chain's `InstancedMesh` also draws the level's authored scene chains, so those wear the same rule; they are the same forged steel.
+
+**It is its own cache entry.**
+`surfaceFor` caches materials by `surfaceKey`, and `dressWithImages` swaps the authored maps into the cached object as they arrive, so the steel `forgedMetal()` asks for is shared with any level geometry that asks for the same surface and tint.
+Patching its fog would leak onto that geometry, and cloning it would freeze the clone in the fallback surface before the images land.
+So `SurfaceRequest.avatar` is part of the key (`|avatar`, appended only when set, so no existing key moves): the same painted steel, dressed the same way, shared with nothing but the avatar.
+It is mutated after it is built, which is safe because a page has one `Scene3D` and that scene draws one avatar; the only other entries mutated after they are built are a waking light's own instance copies (see **Waking lights**).
+The loaded model's materials are shared between `loadMesh` clones, and `wearAvatar` guards itself (`userData.avatar`) the way `shine()` already did.
+
+**The avatar is drawn through less air.**
+The fog it takes on is three's own `fog_fragment` chunk with `fogFactor` multiplied by `AVATAR_FOG` (0.35) before the mix, patched in `onBeforeCompile` under a `customProgramCacheKey` that names it (`avatar-fog:0.35`) - without the key three would hand the patched material an unpatched program, or the reverse, whichever compiled first.
+0 is three's `fog: false` and 1 is the world's air.
+The constant exists because a binary exemption reads as a cut-out pasted over a thick fog, and its value is a played one: the ball is drawn through less air than the wall behind it, on purpose, because it is the one thing in the frame the player must never lose.
+The patch throws if three's chunk stops containing the line it rewrites, since a `replace` that matches nothing would put the avatar back in the world's air with no diagnostic anywhere; `cli render3d` asserts the key and the rewritten chunk.
+
+**The avatar is lit round the back.**
+A lamp's diffuse light on the avatar keeps going past the terminator: in three's `RE_Direct_Physical` the direct diffuse term spends `(dotNL + AVATAR_WRAP) / (1 + AVATAR_WRAP)` instead of `dotNL` (`avatarLightChunk`, patched beside the fog under the same program key, `avatar-wrap:1`).
+0 is three's own Lambert, 1 is half-Lambert - the far side dark only at the exact antipode, the sides at half - and the lit side is never brighter than Lambert, so a lamp that blows the near side out is a lamp to turn down, not a wrap to lower.
+The specular keeps the unwrapped irradiance, so the highlight stays where the lamp puts it rather than glinting on the side no light reaches.
+It is physically the bounce the renderer does not model: a mushroom sits on rock, the rock is lit hard, and it throws that light back onto the ball's far side.
+And because it is bounce, the ball's own shadow does not block it: three multiplies a light by its shadow term before the material sees it, and a shadow-casting lamp's map marks the ball's own far half as occluded, which under plain Lambert coincides with the light reaching zero and is invisible, but under the wrap was a hard cut to black across the sphere (played 2026-09-24 under the river's shaft).
+So `avatarLightsBeginChunk` stashes each direct light as read, before its shadow, and the wrapped irradiance is the shadowed Lambert part plus `(wrapNL - dotNL)` of the unshadowed light; shadows from everything else still land on the direct term as before.
+`cli render3d` asserts all three stashes and the split.
+Played 2026-09-24 after the river's mushrooms at 30 cd lit one side of the ball to white and left the other black; at the same time the model's metalness came down from 0.85 to 0.5 and its roughness up from 0.5 to 0.65 (`MODEL_*` in `ballVisual.ts`), because a near-metal's lit side is a reflection and in a cave there is nothing to reflect - old iron is rust, grime and dust over the metal, not chrome.
+
+**The avatar reflects the level's own environment, on purpose.**
+A private sky for it (the level's sky and ground lifted toward white, with a sun lobe always on, handed to the ball and chain as their own `envMap`) was built and played on 2026-09-24 and rejected: a ball reflecting a brighter sky than the room it is in looks pasted on.
+Do not build it again; what lights the player in a dark level is the world itself, the lichen and the mushrooms of **Waking lights** below.
+
+## Beams
+
+A spot light may show its beam: `beam` (0..1) is how visible the lit air inside its cone is, and `dust` (0..1) how thick the motes drifting in it are, both absent (0) on every spot authored before them, which therefore draws exactly what it drew.
+The shaft IS the spot, made visible (`render3d/beam.ts`): `LightRig.add` hangs it on the spot's own holder, turned onto the spot's own aim, `range` long and `range * tan(angle)` wide at the far end (`beamFarRadius`), softened by the spot's `penumbra`, in its colour, and guttering with its `flicker`.
+There is nothing new to place and nothing that can drift off its own light, which is why it is two fields on the spot rather than a `shaft` object type (rejected: every one of the editor's light touchpoints again, and a shaft that can disagree with its lamp).
+
+**The cone** is an open `CylinderGeometry` from `BEAM_SOURCE_RADIUS` (6 cm) at the lamp to the far radius, drawn additive, double-sided, with no depth write and `renderOrder` 12 (above the water's spray).
+A view ray through a cone of lit air collects light in proportion to the chord it crosses, and for a cone seen from the side that chord is proportional to how squarely the surface faces the view - so each face's alpha is that facing term, the front and back faces summed are the chord, and the cone's own silhouette fades to nothing instead of drawing as a line.
+The penumbra shapes the same term, as an exponent from 0.6 (bright to the rim) to 2.2 (gathered on the axis).
+Along the cone it fades in from nothing at the lamp to full by `BEAM_FADE_IN` (a tenth of the range) and eases out from `BEAM_FADE_OUT_FROM` (0.35) to nothing at the reach, so the shaft dies in the air rather than at a rim.
+The rays are two octaves of a smooth wave around the cone's azimuth (`BEAM_RAYS` 7 and `BEAM_RAYS_FINE` 17, integers so they close on themselves, `BEAM_RAY_DEPTH` 0.55, drifting at `BEAM_RAY_DRIFT` 0.05 rad/s), read per fragment so the seam where the angle wraps is never interpolated across; no grain, per the rule in [art-style](art-style.md).
+`BEAM_ALPHA` (0.16) is one face's alpha at `beam = 1`.
+
+**The fog attenuates it** rather than mixing toward the fog colour, as three's chunk would: added light seen through haze is dimmed by it, and a mix toward the fog colour would ADD fog colour wherever the beam is, drawing the cone's outline in fog.
+
+**The dust** is one `THREE.Points` per beam, `dust * DUST_PER_METRE (60) * range` motes capped at `DUST_MAX` (1500), seeded inside the cone (`seedDust`: a random length along the axis, a radius up to the cone's there, square-rooted so the disc fills evenly).
+Each mote is a pure function of the clock and its seed, like the spray: it drifts away from the lamp at 1-4.5 cm/s (`DUST_FALL`, down for a shaft aimed down), wanders sideways by up to 5 cm, is clamped back inside the cone, and wraps to the lamp at the reach, where the length fade has already put it out.
+It is sized in metres by the spray's `uViewHalfHeight` rule (`DUST_SIZE` 1.4-3.4 cm), dimmer toward the cone's edge, glints slowly as it tumbles, and is drawn additive in the light's colour.
+`LightRig.update(clock, viewportHeight)` writes the shared clock and viewport once a frame for every beam in the rig.
+
+**It is not occluded by geometry.**
+A shaft that should stop at a floor is authored with a `range` that stops there, and the spot's own `castShadow` gives the pool on the floor and the shadow of anything hanging in the shaft.
+Screen-space god rays were rejected because they need the source on screen and a full-screen pass over the frame, and the camera never stops panning while the shaft's source is usually above the frame.
+
+**Budget:** one draw for the cone and one for the dust, per light that asks; neither adds a light or a shadow pass, and `LIGHT_BUDGET` is unchanged (a light past the budget builds no beam either, since the beam is the light).
+Neither is pickable (`raycast` is a no-op), so the editor's 3D click goes through a shaft to the wall behind it; the 2D canvas does not draw the cone, the 3D preview does, and the label says `beam` and `dust` on a spot that has them.
+`cli render3d` asserts the geometry and the format, never the look: the cone's far ring against `range` and `angle` along a turned aim, every seeded mote inside its cone, both fields passing px → m unscaled and surviving an editor save (and not written for a point light), and a light asking for neither building no beam objects at all.
+
+The river (`levels/ball.json`) is the worked example: a light-only static body 8 m above the spawn, one spot aimed straight down at 7° with `beam` 0.6 and `dust` 0.5, so the ball sits in the shaft at frame 1.
+
+## Waking lights
+
+A dark level is lit by the world itself rather than by anything the player carries: persistent glowing lichen, and mushrooms that come alight as the player approaches, lighting the ball and the rock around it together.
+The mushroom is a **waking light**: a point light object with a `wake` distance, whose body's glowing shapes follow it (`render3d/glow.ts` for the law, `render3d/lights.ts` for the pool).
+There is no new object type: the lantern pattern (a glowing geometry object and a light object in one body) is already how the format says "this thing is a source", and a mushroom is that pattern with a light that starts dark.
+A separate `glow` type was rejected because it would be every editor touchpoint for lights again, and a source that could disagree with its own light.
+Lichen is the same light without `wake`, and waits on the emissive moss texture.
+
+**It is render-side, driven by the clock the rig is handed**, exactly like flicker and the beams.
+The renderer reads the ball's drawn position (`renderPosition(alpha)`) and writes nothing back, so no replay can diverge on it; putting it in the sim would only give it a path into replays and the determinism contract, for a glow that has no effect on the ball.
+
+**The law** (`GlowState`, stepped by the ball's distance and the time since the last frame):
+
+- `dormant` while the ball's centre is further than `wake` from the light, measured on the gameplay plane (the ball lives on the plane, so the trigger is exactly the dashed ring the editor draws, whatever the light's `z`).
+- `armed` once it comes within `wake`: the `wakeDelay` runs, and a ball that leaves before it has passed wakes nothing.
+- `rising` over `wakeRise` seconds, linearly, from wherever the level was.
+- `lit` while the ball stays within `wake * WAKE_HYSTERESIS` (1.15), so a ball resting on the edge does not strobe it.
+- `falling` over `wakeFall` seconds once the ball is beyond that. Coming back within `wake` rises again from the current level with no delay: a mushroom half dark does not wait to notice you came back.
+
+A step is clamped to `MAX_GLOW_STEP` (0.1 s), so a tab brought back from the background does not snap every mushroom in the level to full on its first frame, and a clock that runs backwards (a headless grab pinning it) steps nothing.
+A rise or fall of 0 is instant and legal.
+`DEFAULT_WAKE_RISE` (0.6 s) and `DEFAULT_WAKE_FALL` (1.5 s) are what a light authoring only `wake` gets; the fall is the slower one because a light noticing you is an event and a light forgetting you is not.
+
+**Waking lights mount no THREE light of their own: a fixed POOL serves them.**
+Three compiles every lit program against the NUMBER of lights in the scene (a light at intensity 0 still counts; one removed or hidden changes the count), so a light that came and went with the player would compile fresh programs on a played frame - the stutter class `session-1697f` was, and what `Scene3D.prewarm` exists to prevent.
+So `LightRig.buildPool`, called at the end of `setLevel` and therefore before `prewarm`, builds `min(GLOW_POOL, waking sources)` point lights (`GLOW_POOL` 6) in world space at intensity 0, and none is removed while the level is loaded.
+A level with no waking light builds a pool of zero and is exactly the scene it was.
+Each frame, after the bodies are synced (a light rides its body, so its holder's world matrix is brought up to date first), every source is stepped, and the awake ones nearest the ball take the pool lights in order: position, colour and `range` copied, `intensity = authored * level * flicker`.
+Pool lights past the awake count sit at 0.
+Ties keep authored order, so two mushrooms the same distance away do not swap lights between frames.
+A waking light spends none of `LIGHT_BUDGET`; the pool is its cost, and it is fixed.
+
+**Why by distance.**
+A level with more awake sources than the pool leaves the furthest dark.
+That is the budget spent by distance rather than by authored order, which is the right order for a light that only matters near the player; the always-on lights keep their authored-order budget.
+
+**Why no shadow.**
+A point light's shadow is six renders of the scene, and a shadow map handed between sources as they wake and swap would flash.
+Pool lights cast none, `castShadow` on a waking light is ignored, and the editor greys the box out.
+A light is point-only to wake at all (`wakeParams` answers null for a spot), because the pool is point lights; the editor clears `wake` when a light is turned into a spot.
+
+**The emission follows the light.**
+Materials are cached by `surfaceKey` and shared, which is why a flickering lamp's emission does not flicker.
+A body carrying a waking light is the exception: every geometry object in it asks for its surface under `SurfaceRequest.instance` (the body's index in the level, appended to the key as `|instance:bN`), so it wears its own dressed copy - still dressed as the images arrive, and shared with nothing else.
+The rig drives `emissiveIntensity = authored * level` on the copies of the shapes that author a glow (`emissive` or `emissiveTexture`), a uniform write with no recompile; the stalk under the cap, with no emission, is left alone.
+A body with several waking lights follows the brightest.
+`authored` comes from the level rather than off the material, which the rig has been writing, and the rig hands it back when the body goes.
+Driving the shared material instead was rejected: every purple cube in the level would pulse with the nearest one.
+
+**The editor's preview shows them awake** (`LightRig.previewAwake`): every source held at full without stepping, the pool spent nearest the view's centre, because there is nobody in that scene to wake anything; **▶ Test** hands them back to the ball.
+See [editor](editor.md#waking-lights-glow-and-the-awake-preview) for the fields, the ring and `+ Glow`.
+
+**Headless.** `cli shot` pins the clock at `(frame - first frame) / 60`, so a filmstrip advances it with the sim, but only DRAWN frames step a glow, each by at most `MAX_GLOW_STEP`: a filmstrip drawn `--every 6` or finer steps it at the game's rate, and a coarser one slows the rise and fall in proportion.
+A single-frame grab therefore draws every waking light as it is before any time has passed - dark, whatever the ball is doing - so a mushroom's lit look is photographed with a filmstrip that runs into it (`--frames A..B --every 6`, the rise complete by `wakeDelay + wakeRise` seconds of drawn frames), or in the editor's awake preview.
+`--probe` prints each drawn frame's levels as `glow: [...]` beside the program counts.
+Measured on the river (`--frames 100..580 --every 6 --3d --probe all` over a run that rolls up to the first mushroom and back): nothing fresh on any drawn frame, 24 programs throughout, and the first mushroom dark to f148, rising f154-f190, lit to f406, falling f412-f490, dark from f496.
+
+`cli render3d` holds the law (the phases against time, the cancelled delay, the hysteresis, the re-entry, the clamp), the scaling (`wake` like `range`, the times untouched), the pool's assignment and size, the instance key, and the editor's fields and `+ Glow` body; none of the spacing, reach or brightness has a case, because those are the play's to decide.
+The river (`levels/ball.json`) carries four `+ Glow` bodies along the route from the spawn, unplayed.
 
 ## Painted light (removed)
 

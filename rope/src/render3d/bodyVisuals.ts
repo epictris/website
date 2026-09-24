@@ -51,7 +51,8 @@ import { DEFAULT_BEVEL, cylinderSolid, extrudeOutline, taperOutline } from "./ex
 import { ROCK_TEXTURES } from "./rocks";
 import { isAuthoredSurface, isSolidSurface, loadMesh, surfaceFor, surfaceName, tileMetres } from "./assets";
 import { buildWater } from "./water";
-import { DEFAULT_LIGHT_Z, LightRig, type MountedLight } from "./lights";
+import { DEFAULT_LIGHT_Z, LightRig, type DrivenEmission, type MountedLight } from "./lights";
+import { isWaking } from "./glow";
 import { applyProjection } from "./projection";
 import { BeltRing, BeltTread } from "./beltTread";
 import { beltLoopOf } from "../render/beltTread";
@@ -103,6 +104,9 @@ export interface DrawSpec {
   geometry?: GeometryObjectData;
   // The body's own fill, for the tint. A geometry object's own `color` wins.
   color?: string;
+  // Wear the body's own copy of the surface (`SurfaceRequest.instance`): set
+  // only on a body carrying a waking light, whose emission it drives.
+  instance?: string;
 }
 
 // What a primitive falls back to where its geometry object says nothing, which
@@ -197,6 +201,7 @@ export function surfaceOf(spec: DrawSpec): THREE.MeshStandardMaterial {
     emissive: g?.emissive,
     emissiveIntensity: g?.emissiveIntensity,
     emissiveTexture: g?.emissiveTexture,
+    ...(spec.instance ? { instance: spec.instance } : {}),
   });
 }
 
@@ -304,6 +309,22 @@ export function mountVisual(
   return { geometry: owned };
 }
 
+// The instance name a body's shapes ask their surfaces under
+// (`SurfaceRequest.instance`): `name` for a body carrying at least one waking
+// light, and undefined for every other body, which therefore asks for exactly
+// the shared materials it always did. Pure, so `cli render3d` can hold the
+// second half of that - the proof that no existing level gains a material.
+export function surfaceInstance(data: LevelBodyData, name: string | undefined): string | undefined {
+  if (name === undefined) return undefined;
+  return data.objects.some((o) => isLightObject(o) && isWaking(o)) ? name : undefined;
+}
+
+// Whether a geometry object authors a glow of its own - the shapes of a waking
+// body whose emission follows its light.
+function glows(g: GeometryObjectData): boolean {
+  return g.emissive !== undefined || g.emissiveTexture !== undefined;
+}
+
 // A unit placeholder for a prop that authors no outline of its own. Small enough
 // to read as "something is missing here" rather than as a wall.
 const ORPHAN_PLACEHOLDER = 0.3;
@@ -368,6 +389,10 @@ export class BodyVisual {
     readonly body: CollisionObject2D | null,
     private readonly built: BuiltBody | null,
     private readonly rig?: LightRig,
+    // What names this body's own copies of its surfaces, if a waking light in
+    // it drives their emission (see `buildAuthored`). Unique among the level's
+    // bodies; `Scene3D` passes the authored index.
+    private readonly instance?: string,
   ) {
     const data = built?.data ?? null;
     // Hook-only scenery sits BEHIND the level it decorates by default, because
@@ -418,6 +443,12 @@ export class BodyVisual {
     // body is made of and what it looks like are two authored statements, and
     // this is the file where the second one is the only one consulted.
     const solid = data.objects.some(isCollisionObject);
+    // A body with a waking light draws every shape in its OWN copy of its
+    // surface, so the glowing ones can follow the light without every other
+    // shape of the same stuff in the level following it too. Only then: every
+    // other body asks for exactly the materials it always did.
+    const instance = surfaceInstance(data, this.instance);
+    const driven: DrivenEmission[] = [];
 
     for (const g of drawnObjects(data)) {
       const local = localPlacement(built, g);
@@ -425,7 +456,17 @@ export class BodyVisual {
       const spec: DrawSpec = {
         geometry: g,
         ...(data.color !== undefined ? { color: data.color } : {}),
+        ...(instance !== undefined ? { instance } : {}),
       };
+      // The glowing shapes of a waking body are the set its lights drive; a
+      // shape that authors no emission (the stalk under the cap) is left alone.
+      // `surfaceOf` is the cache, so this is the very material mounted below.
+      if (instance !== undefined && glows(g)) {
+        const material = surfaceOf(spec);
+        if (!driven.some((d) => d.material === material)) {
+          driven.push({ material, authored: g.emissiveIntensity ?? 1 });
+        }
+      }
       // A form on a body with collision is an object among objects and is drawn
       // on the body's own plane; one on a body without is decoration and sits
       // behind it, which is what a flat fill drawn before every body already was.
@@ -499,12 +540,19 @@ export class BodyVisual {
     for (const l of data.objects) {
       if (!isLightObject(l)) continue;
       const local = localPlacement(built, l);
-      const mounted = this.rig.add(this.root, l, {
-        x: local.pos.x,
-        y: local.pos.y,
-        rot: local.rot,
-        z: objectDepth(l.z, DEFAULT_LIGHT_Z),
-      });
+      const mounted = this.rig.add(
+        this.root,
+        l,
+        {
+          x: local.pos.x,
+          y: local.pos.y,
+          rot: local.rot,
+          z: objectDepth(l.z, DEFAULT_LIGHT_Z),
+        },
+        // Only a waking light reads it; an always-on light leaves the
+        // emission as authored.
+        driven,
+      );
       if (mounted) this.lights.push(mounted);
     }
   }

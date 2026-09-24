@@ -112,6 +112,7 @@ import {
   DEFAULT_SPOT_ANGLE,
   DEFAULT_SPOT_PENUMBRA,
 } from "../render3d/lights";
+import { SOLID_SURFACE } from "../render3d/assets";
 
 // Editor layers, in draw order (the list also stacks bottom-up in the toolbar):
 // `geometry` is the scene's shapes, `camera` the camera-behaviour volumes and
@@ -374,6 +375,17 @@ export interface EdLight {
   // its own light - see `LightObjectData.shadowNear`.
   shadowNear: number | null;
   flicker: number; // 0 (steady) .. 1 (guttering)
+  // Spot only: how visible the lit air in the cone is, and how thick the dust
+  // in it, both 0..1 (see `LightObjectData.beam` / `.dust`).
+  beam: number;
+  dust: number;
+  // Point only: a WAKING light (see `LightObjectData.wake`). `wake` in metres,
+  // 0 = always on; the three times in seconds, null = the renderer's default
+  // (`DEFAULT_WAKE_RISE` / `DEFAULT_WAKE_FALL`, and no delay).
+  wake: number;
+  wakeDelay: number | null;
+  wakeRise: number | null;
+  wakeFall: number | null;
 }
 
 // Notes-layer properties (see NoteData, CheckpointData). A note is always a
@@ -988,6 +1000,13 @@ export const defaultLight = (): EdLight => ({
   castShadow: false,
   shadowNear: null,
   flicker: 0,
+  beam: 0,
+  dust: 0,
+  // Always on: a light wakes only when the author says so (or `+ Glow` does).
+  wake: 0,
+  wakeDelay: null,
+  wakeRise: null,
+  wakeFall: null,
 });
 
 export const defaultNote = (): EdNote => ({
@@ -995,6 +1014,67 @@ export const defaultNote = (): EdNote => ({
   text: "",
   size: DEFAULT_NOTE_TEXT_SIZE * PX,
 });
+
+// `+ Glow`: what one click drops. EDITOR defaults, not format defaults - a light
+// object on disk with `wake` and nothing else gets the renderer's
+// `DEFAULT_WAKE_*` - and every number here is a starting point to be played.
+// The mushroom is a purple cube until its model exists; nothing below changes
+// when it does.
+export const GLOW_CUBE = 0.3; // metres, the cube's side and its depth
+export const GLOW_COLOR = "#8a3fd6";
+export const GLOW_EMISSIVE = "#b070ff";
+export const GLOW_EMISSIVE_INTENSITY = 2;
+export const GLOW_RANGE = 4; // metres
+export const GLOW_INTENSITY = 6; // candela
+export const GLOW_WAKE = 3; // metres
+export const GLOW_WAKE_DELAY = 0.25; // seconds
+export const GLOW_WAKE_RISE = 0.6; // seconds
+export const GLOW_WAKE_FALL = 1.5; // seconds
+
+// The body `+ Glow` places at `pos` (metres): one static body holding a solid
+// purple cube with an emissive, the collision rect it mirrors (a mushroom the
+// ball rolls through reads as a ghost; delete the collision object for one on
+// a far wall), and a waking point light at the cube's centre. One body, so the
+// outliner shows one row and the whole thing drags together. Pure, so
+// `cli render3d` can hold its shapes and defaults.
+export function glowBody(pos: Vec2): LevelBodyData {
+  const square: ShapeData = { kind: "rect", w: GLOW_CUBE, h: GLOW_CUBE };
+  return {
+    kind: "static",
+    x: pos.x,
+    y: pos.y,
+    rot: 0,
+    objects: [
+      { type: "collision", shape: { ...square } },
+      {
+        type: "geometry",
+        shape: { ...square },
+        matchCollision: true,
+        depth: GLOW_CUBE,
+        texture: SOLID_SURFACE,
+        color: GLOW_COLOR,
+        emissive: GLOW_EMISSIVE,
+        emissiveIntensity: GLOW_EMISSIVE_INTENSITY,
+      },
+      {
+        type: "light",
+        color: GLOW_EMISSIVE,
+        range: GLOW_RANGE,
+        intensity: GLOW_INTENSITY,
+        wake: GLOW_WAKE,
+        wakeDelay: GLOW_WAKE_DELAY,
+        wakeRise: GLOW_WAKE_RISE,
+        wakeFall: GLOW_WAKE_FALL,
+      },
+    ],
+  };
+}
+
+// ...as editor items, through the same loader a level comes in by, so the
+// `+ Glow` tool adds exactly what a level file holding that body would load as.
+export function glowModel(pos: Vec2): EdModel {
+  return fromLevelData({ player: { x: pos.x, y: pos.y, radius: 0.08 }, bodies: [glowBody(pos)] });
+}
 
 // A fresh look is a `primitive` with everything defaulted: this object's own
 // form given the default depth and wearing the default generated surface.
@@ -1708,6 +1788,12 @@ function lightItem(
       castShadow: l.castShadow === true,
       shadowNear: l.shadowNear ?? null,
       flicker: l.flicker ?? 0,
+      beam: l.beam ?? 0,
+      dust: l.dust ?? 0,
+      wake: l.wake ?? 0,
+      wakeDelay: l.wakeDelay ?? null,
+      wakeRise: l.wakeRise ?? null,
+      wakeFall: l.wakeFall ?? null,
     },
     note: defaultNote(),
     anchorId: 0,
@@ -2134,6 +2220,21 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
             ? { shadowNear: i.light.shadowNear }
             : {}),
           ...(i.light.flicker !== 0 ? { flicker: i.light.flicker } : {}),
+          // A beam is a spot's cone made visible, so - like the cone itself -
+          // it is written only for a spot, and only when it is there at all.
+          ...(spot && i.light.beam !== 0 ? { beam: i.light.beam } : {}),
+          ...(spot && i.light.dust !== 0 ? { dust: i.light.dust } : {}),
+          // A waking light is point-only (the pool is point lights), so - like
+          // the beam on a point light - none of it is written for a spot, and
+          // the times only with a trigger to time.
+          ...(!spot && i.light.wake > 0
+            ? {
+                wake: i.light.wake,
+                ...(i.light.wakeDelay !== null ? { wakeDelay: i.light.wakeDelay } : {}),
+                ...(i.light.wakeRise !== null ? { wakeRise: i.light.wakeRise } : {}),
+                ...(i.light.wakeFall !== null ? { wakeFall: i.light.wakeFall } : {}),
+              }
+            : {}),
         });
         continue;
       }

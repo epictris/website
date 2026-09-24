@@ -196,6 +196,10 @@ export interface Handles {
   rotate: Vec2 | null; // screen
   rotateBase: Vec2 | null; // screen; where the rotate knob's stalk starts
   radius: Vec2 | null; // screen; circle only
+  // screen; a WAKING light only: the grip on its dashed wake ring, dragged to
+  // the trigger distance the way the reach grip drags the reach. On the ring's
+  // left, opposite the reach grip, so the two never sit on each other.
+  wake: Vec2 | null;
   ends: Vec2[] | null; // screen; arrow notes only (tail, head)
   // Screen positions of a polygon's vertices, in loop order. A polygon has no
   // meaningful width and height to resize, so it is edited vertex by vertex —
@@ -279,6 +283,7 @@ export function computeHandles(cam: Camera, body: EdItem): Handles {
     rotate: null,
     rotateBase: null,
     radius: null,
+    wake: null,
     ends: null,
     verts: null,
     vertMids: null,
@@ -325,6 +330,7 @@ export function computeHandles(cam: Camera, body: EdItem): Handles {
       rotate: base ? base.add(up.mul(ROT_OFFSET_PX)) : null,
       rotateBase: base,
       radius: worldToScreen(cam, toWorld(body, new Vec2(r, 0))),
+      wake: lightWakes(body) ? worldToScreen(cam, body.pos.add(new Vec2(-body.light.wake, 0))) : null,
       // A light's circle is its REACH, which is as wide as the room it lights,
       // so its depth handle goes beside the source icon instead - the same
       // reason a click on a light lands on the icon and not on the pool.
@@ -947,6 +953,23 @@ function drawLightGizmo(
     ctx.globalAlpha = 1;
   }
 
+  // THE WAKE, for a waking light: a dashed ring in the light's colour at the
+  // distance the ball has to come within to wake it. The trigger is measured
+  // on the gameplay plane (see `LightRig`), so this ring is exactly where the
+  // ball's centre has to reach - not cut by `z` the way the reach is. Longer
+  // dashes than the reach's, so the two rings never read as one.
+  if (lightWakes(l)) {
+    ctx.beginPath();
+    ctx.arc(l.pos.x, l.pos.y, l.light.wake, 0, Math.PI * 2);
+    ctx.strokeStyle = l.color;
+    ctx.globalAlpha = 0.8;
+    ctx.lineWidth = worldLine * 1.5;
+    ctx.setLineDash([14 * PX, 6 * PX]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.globalAlpha = 1;
+  }
+
   if (l.light.kind === "spot" && planeReach > 0) {
     const aim = Math.atan2(l.light.dir.y, l.light.dir.x);
     const half = (l.light.angle * Math.PI) / 180;
@@ -1020,6 +1043,12 @@ export function lightPlaneReach(l: EdItem): number {
   return z >= range ? 0 : Math.sqrt(range * range - z * z);
 }
 
+// Is this a WAKING light (see `LightObjectData.wake`)? Point-only, like the
+// renderer's own rule, so a spot that somehow carries a wake draws none.
+export function lightWakes(l: EdItem): boolean {
+  return l.object === "light" && l.light.kind === "point" && l.light.wake > 0;
+}
+
 // What a light does, for the screen-space label beside it. Only what was
 // authored away from the defaults, so an ordinary lamp reads as `light` and a
 // guttering shadow-casting spot says so.
@@ -1037,7 +1066,12 @@ export function lightLabel(l: EdItem): string {
     parts.push(plane > 0 ? `${px(plane)}on plane` : "MISSES PLANE");
   }
   if (l.light.flicker > 0) parts.push(`flicker ${Number(l.light.flicker.toFixed(2))}`);
-  if (l.light.castShadow) parts.push("shadows");
+  // Read only on a spot (see `LightObjectData.beam`), so labelled only there.
+  if (l.light.kind === "spot" && l.light.beam > 0) parts.push(`beam ${Number(l.light.beam.toFixed(2))}`);
+  if (l.light.kind === "spot" && l.light.dust > 0) parts.push(`dust ${Number(l.light.dust.toFixed(2))}`);
+  if (lightWakes(l)) parts.push(`wakes ${px(l.light.wake)}`);
+  // A waking light casts none whatever it says (see `LightRig`).
+  else if (l.light.castShadow) parts.push("shadows");
   return parts.join(" · ");
 }
 
@@ -2754,6 +2788,9 @@ export function drawEditor(
     }
     for (const c of hs.corners) square(ctx, c);
     if (hs.radius) square(ctx, hs.radius);
+    // Round, like every grip dragged to a length from a point (a belt wheel's
+    // radius, a curve's tangent), so it does not read as a second reach.
+    if (hs.wake) circleHandle(ctx, hs.wake);
     // A polygon is edited vertex by vertex: square handles on the vertices, and
     // smaller hollow ones at the edge midpoints, which insert a new vertex when
     // dragged. The midpoints are drawn differently on purpose - a uniform row of

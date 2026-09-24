@@ -56,6 +56,7 @@ import {
 } from "../render3d/lights";
 import {
   scaleLevelData,
+  scaleObject,
   isLightObject,
   type LevelData,
   isCollisionObject,
@@ -70,7 +71,17 @@ import {
   type SceneObjectData,
   type RawLevelData,
 } from "../level/levelFormat";
-import { BodyVisual, drawnObjects, mountVisual } from "../render3d/bodyVisuals";
+import { BodyVisual, drawnObjects, mountVisual, surfaceInstance } from "../render3d/bodyVisuals";
+import {
+  assignPool,
+  DEFAULT_WAKE_FALL,
+  DEFAULT_WAKE_RISE,
+  GLOW_POOL,
+  GlowState,
+  MAX_GLOW_STEP,
+  WAKE_HYSTERESIS,
+  wakeParams,
+} from "../render3d/glow";
 import {
   beltNearest,
   beltOutline,
@@ -116,10 +127,30 @@ import {
   placeGroup,
   type EdItem,
   type EdModel,
+  glowBody,
+  GLOW_COLOR,
+  GLOW_CUBE,
+  GLOW_EMISSIVE,
+  GLOW_EMISSIVE_INTENSITY,
+  GLOW_INTENSITY,
+  GLOW_RANGE,
+  GLOW_WAKE,
+  GLOW_WAKE_DELAY,
+  GLOW_WAKE_FALL,
+  GLOW_WAKE_RISE,
 } from "../editor/model";
 import { lightPlaneReach } from "../editor/render";
 import { readClipboard, writeClipboard } from "../editor/clipboard";
-import { FOG_REFERENCE_DISTANCE, fogDensity } from "../render3d/environment";
+import {
+  EQUIRECT_SIZE,
+  equirectPixels,
+  FOG_REFERENCE_DISTANCE,
+  fogDensity,
+  skyInputs,
+} from "../render3d/environment";
+import { AVATAR_FOG, AVATAR_PROGRAM_KEY, AVATAR_WRAP, wearAvatar } from "../render3d/avatarSurface";
+import { beamFarRadius, beamRadiusAt, BEAM_SOURCE_RADIUS, seedDust } from "../render3d/beam";
+import { IRON_SURFACE } from "../render3d/assets";
 import { HDRI_ASSETS, hdriNames } from "../render3d/assets";
 import { PIXELS_PER_METER, PX } from "../engine/units";
 
@@ -3929,6 +3960,617 @@ function beltRendering(): CaseResult[] {
   return out;
 }
 
+// THE AVATAR'S OWN SURFACE (render3d/avatarSurface.ts). Two facts, neither
+// visible in a picture that looks fine: the avatar's copy of the painted steel
+// is a cache entry of its own, so its fog and its sky never leak onto a wall of
+// the same steel; and the fog patch really rewrites three's chunk - a renamed
+// chunk would be a `replace` matching nothing, and the ball would quietly go
+// back to the world's air.
+function avatarSurface(): CaseResult[] {
+  const req = { texture: IRON_SURFACE, tileScale: 5, color: "#f2eadf" };
+  const plain = surfaceKey(req);
+  const avatar = surfaceKey({ ...req, avatar: true });
+  const keyed = plain !== avatar && avatar === surfaceKey({ ...req, avatar: true }) && !plain.includes("avatar");
+
+  const mat = wearAvatar(wearAvatar(new THREE.MeshStandardMaterial()));
+  const shader = { fragmentShader: THREE.ShaderLib.standard.fragmentShader, vertexShader: "", uniforms: {} };
+  const hadChunk = shader.fragmentShader.includes("#include <fog_fragment>");
+  mat.onBeforeCompile(shader as never, null as never);
+  const patched = shader.fragmentShader;
+  const scaled = patched.includes(`fogFactor * ${AVATAR_FOG}`);
+  const once = patched.split(`fogFactor * ${AVATAR_FOG}`).length === 2;
+  const replaced = !patched.includes("#include <fog_fragment>");
+  const key = mat.customProgramCacheKey();
+  const programKeyed = key.includes(AVATAR_PROGRAM_KEY) && key.split(AVATAR_PROGRAM_KEY).length === 2;
+  const fogOk = hadChunk && scaled && once && replaced && programKeyed;
+  // The wrap: the direct diffuse term spends the wrapped irradiance and the
+  // specular does not, under the same program key.
+  const wrapLit = `+ ${AVATAR_WRAP}.0 ) / ( 1.0 + ${AVATAR_WRAP}.0 )`;
+  const wrapped = patched.includes(wrapLit) && patched.split(wrapLit).length === 2;
+  const diffuseWrapped = patched.includes("directDiffuse += wrapIrradiance * BRDF_Lambert");
+  const specularPlain = patched.includes("directSpecular += irradiance * BRDF_GGX");
+  const lightsReplaced = !patched.includes("#include <lights_physical_pars_fragment>");
+  const wrapKeyed = key.includes(`avatar-wrap:${AVATAR_WRAP}`);
+  // The bounce part spends the light BEFORE its shadow: each of the three
+  // direct-light reads stashes it, and the wrapped irradiance adds it back.
+  const stashes = patched.split("avatarUnshadowed = directLight.color;").length - 1;
+  const bounceUnshadowed = patched.includes("max( wrapNL - dotNL, 0.0 ) * avatarUnshadowed");
+  const beginReplaced = !patched.includes("#include <lights_fragment_begin>");
+  const wrapOk =
+    wrapped && diffuseWrapped && specularPlain && lightsReplaced && wrapKeyed &&
+    stashes === 3 && bounceUnshadowed && beginReplaced;
+  return [
+    {
+      name: "avatar: its surface key differs from the plain key for the same request, and is stable",
+      pass: keyed,
+      detail: keyed ? `${plain} vs ${avatar}` : `plain ${plain}, avatar ${avatar}`,
+    },
+    {
+      name: "avatar: the patched fog chunk scales the fog factor by AVATAR_FOG, once, under a program key of its own",
+      pass: fogOk,
+      detail: fogOk
+        ? `fogFactor * ${AVATAR_FOG}, key "${key}"`
+        : `chunk present ${hadChunk}, scaled ${scaled}, once ${once}, include replaced ${replaced}, key "${key}"`,
+    },
+    {
+      name: "avatar: the patched light chunk wraps the direct DIFFUSE by AVATAR_WRAP, unshadowed, and leaves the specular alone",
+      pass: wrapOk,
+      detail: wrapOk
+        ? `wrap ${AVATAR_WRAP}, key "${key}"`
+        : `wrapped ${wrapped}, diffuse ${diffuseWrapped}, specular plain ${specularPlain}, include replaced ${lightsReplaced}, keyed ${wrapKeyed}, stashes ${stashes}, bounce unshadowed ${bounceUnshadowed}, begin replaced ${beginReplaced}`,
+    },
+  ];
+}
+
+// THE GENERATED SKIES (environment.ts `equirectPixels`), read the way three
+// reads them. `equirectUv` in three's common.glsl is restated here rather than
+// imported, so the painter is checked against three's convention and not
+// against itself: that is exactly the mistake the painter made until
+// 2026-09-24, painting row 0 as straight up and the azimuth as atan2(x, z), so
+// every generated sky was upside down and mirrored and the sun lobe sat
+// opposite the sun.
+function threeReads(px: Float32Array, dir: THREE.Vector3): [number, number, number] {
+  const { width: W, height: H } = EQUIRECT_SIZE;
+  const d = dir.clone().normalize();
+  const u = Math.atan2(d.z, d.x) / (Math.PI * 2) + 0.5;
+  const v = Math.asin(Math.max(-1, Math.min(1, d.y))) / Math.PI + 0.5;
+  const x = Math.min(W - 1, Math.floor(u * W));
+  const y = Math.min(H - 1, Math.floor(v * H));
+  const i = (y * W + x) * 4;
+  return [px[i]!, px[i + 1]!, px[i + 2]!];
+}
+
+function generatedSkies(): CaseResult[] {
+  // Orientation: straight up reads the sky, straight down the ground, and the
+  // lobe peaks where three looks for the sun. A black-and-white sky with no
+  // sun for the first half, and the default level (which has one) for the
+  // lobe.
+  const bw = equirectPixels(skyInputs({ skyColor: "#ffffff", groundColor: "#000000", sunIntensity: 0 }));
+  const up = threeReads(bw, new THREE.Vector3(0, 1, 0))[0];
+  const down = threeReads(bw, new THREE.Vector3(0, -1, 0))[0];
+  const sunny = skyInputs();
+  const lit = equirectPixels(sunny);
+  const sunward = threeReads(lit, sunny.sunDir)[0];
+  const antisun = threeReads(lit, sunny.sunDir.clone().negate())[0];
+  const upright = up > 0.99 && down < 0.01 && sunward > antisun * 2;
+
+  return [
+    {
+      name: "sky: a generated sky is painted as three reads it - sky overhead, ground below, the lobe toward the sun",
+      pass: upright,
+      detail: `straight up reads ${up.toFixed(3)} (sky 1), down ${down.toFixed(3)} (ground 0); toward the sun ${sunward.toFixed(3)}, away ${antisun.toFixed(3)}`,
+    },
+  ];
+}
+
+// A SPOT'S VISIBLE BEAM (render3d/beam.ts). What is asserted is geometry and
+// format, never the look: the cone is the spot's own cone, the dust starts
+// inside it, the two fields survive both round trips, and a spot asking for
+// neither builds nothing at all - which is the proof that every level authored
+// before the fields draws exactly what it drew.
+function beamCases(): CaseResult[] {
+  const out: CaseResult[] = [];
+
+  // The far radius, and the built cone: lamp at the holder's origin, the far
+  // ring `range` along the authored aim at that radius. Aimed along +x in sim
+  // terms so the aim is not the cone's own default axis.
+  const expected = 10 * Math.tan((7 * Math.PI) / 180);
+  const rig = new LightRig();
+  const scene = new THREE.Group();
+  const mounted = rig.add(
+    scene,
+    { type: "light", kind: "spot", range: 10, angle: 7, dirX: 1, dirY: 0, beam: 0.6, dust: 0.5 },
+    { x: 0, y: 0, rot: 0, z: 0 },
+  );
+  const cone = mounted?.holder.getObjectByName("beam-cone") as THREE.Mesh | undefined;
+  const dust = mounted?.holder.getObjectByName("beam-dust") as THREE.Points | undefined;
+  let farErr = Infinity;
+  let nearErr = Infinity;
+  if (cone) {
+    scene.updateMatrixWorld(true);
+    const pos = cone.geometry.getAttribute("position");
+    const v = new THREE.Vector3();
+    farErr = 0;
+    nearErr = 0;
+    for (let i = 0; i < pos.count; i++) {
+      v.fromBufferAttribute(pos, i).applyMatrix4(cone.matrixWorld);
+      // Along +x, the far ring is at x = 10 and radius `expected` about the axis.
+      const r = Math.hypot(v.y, v.z);
+      if (Math.abs(v.x - 10) < 1e-6) farErr = Math.max(farErr, Math.abs(r - expected));
+      else if (Math.abs(v.x) < 1e-6) nearErr = Math.max(nearErr, Math.abs(r - BEAM_SOURCE_RADIUS));
+    }
+  }
+  const radiusOk = Math.abs(beamFarRadius(10, 7) - expected) < 1e-12 && farErr < 1e-5 && nearErr < 1e-5;
+  out.push({
+    name: "beam: the cone reaches `range` along the spot's aim, at range x tan(angle)",
+    pass: radiusOk && dust !== undefined,
+    detail: cone
+      ? `far radius ${expected.toFixed(4)} m, far ring off by ${farErr.toExponential(2)}, lamp ring off by ${nearErr.toExponential(2)}; dust ${dust ? "built" : "MISSING"}`
+      : "no cone built",
+  });
+  rig.dispose();
+
+  // Every seeded mote inside the cone, over several beams.
+  let worst = -Infinity;
+  let seeded = 0;
+  for (const [range, angle, seed] of [
+    [10, 7, 0],
+    [4, 30, 2.4],
+    [25, 3, 9.6],
+    [1, 60, 17],
+  ] as const) {
+    const far = beamFarRadius(range, angle);
+    const source = Math.min(BEAM_SOURCE_RADIUS, far);
+    const { positions } = seedDust(500, range, source, far, seed);
+    for (let i = 0; i < 500; i++) {
+      const x = positions[i * 3]!;
+      const y = positions[i * 3 + 1]!;
+      const z = positions[i * 3 + 2]!;
+      const along = -y / range;
+      const over = Math.max(
+        Math.hypot(x, z) - beamRadiusAt(along, source, far),
+        -along,
+        along - 1,
+      );
+      worst = Math.max(worst, over);
+      seeded++;
+    }
+  }
+  out.push({
+    name: "beam: every dust mote is seeded inside the cone",
+    pass: worst <= 1e-6,
+    detail: `${seeded} motes over four cones, furthest outside by ${worst.toExponential(2)} m`,
+  });
+
+  // The format: dimensionless, so untouched by px -> m, and carried by the
+  // editor's model on a spot.
+  const authored: RawLevelData = {
+    player: { x: 0, y: 0, radius: 20 },
+    bodies: [
+      {
+        kind: "static",
+        x: 100,
+        y: -300,
+        rot: 0,
+        objects: [
+          {
+            type: "light",
+            kind: "spot",
+            z: 0,
+            color: "#f3ecd8",
+            intensity: 300,
+            range: 1000,
+            angle: 7,
+            penumbra: 0.6,
+            castShadow: true,
+            beam: 0.6,
+            dust: 0.5,
+          },
+        ],
+      },
+    ],
+  };
+  const inMetres = scaleLevelData(authored, PX);
+  const lit = inMetres.bodies[0]!.objects.find(isLightObject)!;
+  const unscaled = lit.beam === 0.6 && lit.dust === 0.5 && lit.range === 10;
+  const a = JSON.stringify(scaleLevelData(authored, 1));
+  const b = JSON.stringify(scaleLevelData(inMetres, PIXELS_PER_METER));
+  const saved = modelToDisk(modelFromDisk(authored)).bodies[0]!.objects.find(isLightObject);
+  const kept = saved?.beam === 0.6 && saved?.dust === 0.5;
+  // On a point light the fields mean nothing, so the editor does not write them.
+  const pointed = modelToDisk(
+    modelFromDisk({
+      ...authored,
+      bodies: [{ ...authored.bodies[0]!, objects: [{ type: "light", beam: 0.6, dust: 0.5 }] }],
+    } as RawLevelData),
+  ).bodies[0]!.objects.find(isLightObject);
+  const pointDropped = pointed !== undefined && pointed.beam === undefined && pointed.dust === undefined;
+  out.push({
+    name: "format: a spot's beam and dust pass px -> m unscaled and survive an editor save",
+    pass: unscaled && a === b && kept && pointDropped,
+    detail: `in metres beam ${lit.beam} dust ${lit.dust} range ${lit.range}; px round trip ${a === b ? "byte-identical" : "DIFFERS"}; editor save ${kept ? "kept" : `became ${JSON.stringify(saved)}`}; on a point light ${pointDropped ? "not written" : JSON.stringify(pointed)}`,
+  });
+
+  // No beam asked for, no beam built: a spot with neither field, with both at
+  // zero, and a point light asking for one.
+  const bare = new LightRig();
+  const kids = (data: LightObjectData): string[] => {
+    const m = bare.add(new THREE.Group(), data, { x: 0, y: 0, rot: 0, z: 0 });
+    const names: string[] = [];
+    m?.holder.traverse((o) => {
+      if (o === m.holder) return;
+      if ((o as THREE.Light).isLight) names.push("light");
+      else if ((o as THREE.Mesh).isMesh || (o as THREE.Points).isPoints || o.name === "beam") names.push(o.name || o.type);
+      else names.push("target");
+    });
+    return names.sort();
+  };
+  const shapes = [
+    kids({ type: "light", kind: "spot", range: 8 }),
+    kids({ type: "light", kind: "spot", range: 8, beam: 0, dust: 0 }),
+    kids({ type: "light", kind: "point", range: 8, beam: 0.6, dust: 0.5 }),
+  ];
+  bare.dispose();
+  const nothing =
+    JSON.stringify(shapes[0]) === JSON.stringify(["light", "target"]) &&
+    JSON.stringify(shapes[1]) === JSON.stringify(["light", "target"]) &&
+    JSON.stringify(shapes[2]) === JSON.stringify(["light"]);
+  out.push({
+    name: "beam: a light asking for no beam builds no beam objects at all",
+    pass: nothing,
+    detail: shapes.map((s) => `[${s.join(", ")}]`).join(" / "),
+  });
+  return out;
+}
+
+// WAKING LIGHTS (render3d/glow.ts, the pool in lights.ts, the instance key, the
+// editor's fields and `+ Glow`). The law, the assignment and the format -
+// never the look: how far apart the mushrooms are, how far they reach and how
+// bright they rise are the play's to decide and get no case.
+function glowCases(): CaseResult[] {
+  const out: CaseResult[] = [];
+  const near = (a: number, b: number): boolean => Math.abs(a - b) < 1e-9;
+  const law = { wake: 3, delay: 0.25, rise: 0.6, fall: 1.5 };
+  const IN = 1;
+  const OUT = 10;
+  // Run a script of (steps, distance) at a fixed dt, recording after each step.
+  const run = (
+    state: GlowState,
+    script: readonly (readonly [number, number])[],
+    dt = 0.05,
+  ): { phase: string; level: number }[] => {
+    const rows: { phase: string; level: number }[] = [];
+    for (const [steps, distance] of script) {
+      for (let i = 0; i < steps; i++) {
+        state.step(distance, dt);
+        rows.push({ phase: state.phase, level: state.level });
+      }
+    }
+    return rows;
+  };
+
+  // The phases in order, at a fixed 50 ms step: inside from t = 0 until
+  // t = 1.0 s, then gone. Delay to 0.25, rise over 0.6 to 0.85, lit, fall over
+  // 1.5 from 1.0 to 2.5, dormant.
+  {
+    const rows = run(new GlowState(law), [
+      [20, IN],
+      [40, OUT],
+    ]);
+    const at = (t: number) => rows[Math.round(t / 0.05) - 1]!;
+    const table: [number, string, number][] = [
+      [0.05, "armed", 0],
+      [0.2, "armed", 0],
+      [0.55, "rising", 0.5],
+      [0.7, "rising", 0.75],
+      [1.0, "lit", 1],
+      [1.05, "falling", 1 - 0.05 / 1.5],
+      [1.75, "falling", 0.5],
+      [2.6, "dormant", 0],
+      [3.0, "dormant", 0],
+    ];
+    const bad = table.filter(([t, phase, level]) => at(t).phase !== phase || !near(at(t).level, level));
+    out.push({
+      name: "glow: dormant, armed, rising, lit, falling, dormant - the levels against time at a fixed step",
+      pass: bad.length === 0,
+      detail:
+        bad.length === 0
+          ? table.map(([t, p, l]) => `${t}s ${p} ${l.toFixed(3)}`).join(", ")
+          : bad.map(([t, p, l]) => `${t}s wanted ${p} ${l.toFixed(3)}, got ${at(t).phase} ${at(t).level.toFixed(4)}`).join("; "),
+    });
+  }
+
+  // Leaving during the delay emits nothing, ever.
+  {
+    const rows = run(new GlowState(law), [
+      [3, IN],
+      [40, OUT],
+    ]);
+    const peak = Math.max(...rows.map((r) => r.level));
+    const last = rows[rows.length - 1]!;
+    out.push({
+      name: "glow: a ball that leaves during the delay wakes nothing",
+      pass: peak === 0 && last.phase === "dormant",
+      detail: `peak level ${peak} over ${rows.length} steps, ends ${last.phase}`,
+    });
+  }
+
+  // Hysteresis: parked just outside `wake` (inside the release band) after
+  // waking it stays lit; parked past the band it falls.
+  {
+    const parked = run(new GlowState(law), [
+      [20, IN],
+      [60, law.wake * 1.05],
+    ]);
+    const beyond = run(new GlowState(law), [
+      [20, IN],
+      [1, law.wake * WAKE_HYSTERESIS * 1.01],
+    ]);
+    const held = parked.slice(20).every((r) => r.phase === "lit" && r.level === 1);
+    const released = beyond[beyond.length - 1]!.phase === "falling";
+    out.push({
+      name: "glow: a ball parked at wake x 1.05 after waking it keeps it lit; past the hysteresis it falls",
+      pass: held && released,
+      detail: `3 s at 1.05 x wake: ${held ? "lit throughout" : "LET GO"}; at ${(WAKE_HYSTERESIS * 1.01).toFixed(3)} x wake: ${beyond[beyond.length - 1]!.phase}`,
+    });
+  }
+
+  // Re-entry during the fall re-arms from the current level with no delay.
+  {
+    const rows = run(new GlowState(law), [
+      [20, IN],
+      [15, OUT],
+      [1, IN],
+    ]);
+    const before = rows[34]!;
+    const after = rows[35]!;
+    const ok =
+      before.phase === "falling" &&
+      near(before.level, 0.5) &&
+      after.phase === "rising" &&
+      near(after.level, 0.5 + 0.05 / 0.6);
+    out.push({
+      name: "glow: coming back during the fall rises again from where it was, with no delay",
+      pass: ok,
+      detail: `falling at ${before.level.toFixed(4)}, one step back inside: ${after.phase} at ${after.level.toFixed(4)} (wanted ${(0.5 + 0.05 / 0.6).toFixed(4)})`,
+    });
+  }
+
+  // The clamp: a 5 s step moves it no further than MAX_GLOW_STEP would, a
+  // backwards clock moves it not at all, and a zero rise or fall is instant.
+  {
+    const lit = new GlowState({ ...law, delay: 0 });
+    run(lit, [[20, IN]]);
+    lit.step(OUT, 5);
+    const clampedFall = near(lit.level, 1 - MAX_GLOW_STEP / law.fall);
+    const fresh = new GlowState({ ...law, delay: 0 });
+    fresh.step(IN, 5);
+    const clampedRise = near(fresh.level, MAX_GLOW_STEP / law.rise);
+    const back = fresh.level;
+    fresh.step(IN, -3);
+    const backwards = fresh.level === back;
+    const snap = new GlowState({ ...law, delay: 0, rise: 0, fall: 0 });
+    snap.step(IN, 0);
+    const onAtOnce = snap.level === 1 && snap.phase === "lit";
+    snap.step(OUT, 0);
+    const offAtOnce = snap.level === 0 && snap.phase === "dormant";
+    out.push({
+      name: "glow: a step is clamped to MAX_GLOW_STEP, a clock running backwards steps nothing, and a rise or fall of 0 is instant",
+      pass: clampedFall && clampedRise && backwards && onAtOnce && offAtOnce,
+      detail: `5 s step: fell to ${lit.level.toFixed(4)}, rose to ${back.toFixed(4)}; -3 s step ${backwards ? "held" : "MOVED"}; rise 0 ${onAtOnce ? "instant" : "NOT"}, fall 0 ${offAtOnce ? "instant" : "NOT"}`,
+    });
+  }
+
+  // The format: `wake` is a length, the times are not.
+  {
+    const scaled = scaleObject(
+      { type: "light", wake: 300, wakeDelay: 0.25, wakeRise: 0.6, wakeFall: 1.5, range: 400 },
+      PX,
+    ) as LightObjectData;
+    const ok =
+      near(scaled.wake!, 3) &&
+      scaled.wakeDelay === 0.25 &&
+      scaled.wakeRise === 0.6 &&
+      scaled.wakeFall === 1.5 &&
+      near(scaled.range!, 4);
+    const defaults = wakeParams({ type: "light", wake: 3 });
+    const spot = wakeParams({ type: "light", kind: "spot", wake: 3 });
+    const off = wakeParams({ type: "light", wake: 0 });
+    const lawOk =
+      defaults !== null &&
+      defaults.delay === 0 &&
+      defaults.rise === DEFAULT_WAKE_RISE &&
+      defaults.fall === DEFAULT_WAKE_FALL &&
+      spot === null &&
+      off === null;
+    out.push({
+      name: "format: scaleObject converts wake like range and passes wakeDelay, wakeRise and wakeFall untouched",
+      pass: ok && lawOk,
+      detail: `300 px -> wake ${scaled.wake} m, delay ${scaled.wakeDelay} s, rise ${scaled.wakeRise} s, fall ${scaled.wakeFall} s; defaults ${JSON.stringify(defaults)}; a spot ${spot === null ? "never wakes" : "WAKES"}; wake 0 ${off === null ? "is always on" : "WAKES"}`,
+    });
+  }
+
+  // The pool's assignment: nearest first, authored order on a tie, a dark
+  // source never served, and never more than n.
+  {
+    const sources = [
+      { level: 1, x: 5, y: 0 }, // 0: 5 m
+      { level: 0.5, x: 1, y: 0 }, // 1: 1 m
+      { level: 0, x: 0.5, y: 0 }, // 2: dark, nearest of all
+      { level: 1, x: -5, y: 0 }, // 3: 5 m, ties with 0
+      { level: 1, x: 0, y: 2 }, // 4: 2 m
+    ];
+    const three = assignPool(sources, { x: 0, y: 0 }, 3);
+    const all = assignPool(sources, { x: 0, y: 0 }, 10);
+    const none = assignPool(sources, { x: 0, y: 0 }, 0);
+    const ok =
+      JSON.stringify(three) === "[1,4,0]" && JSON.stringify(all) === "[1,4,0,3]" && none.length === 0;
+    out.push({
+      name: "glow pool: nearest awake source first, ties in authored order, a dark source never served",
+      pass: ok,
+      detail: `n=3 ${JSON.stringify(three)} (want [1,4,0]), n=10 ${JSON.stringify(all)} (want [1,4,0,3]), n=0 ${JSON.stringify(none)}`,
+    });
+  }
+
+  // The pool the rig builds: none for a level with no waking light (so every
+  // existing level is the scene it was), one per waking source up to
+  // GLOW_POOL, and a waking light mounts no light of its own.
+  {
+    const poolOf = (waking: number, steady: number): { size: number; lights: number; own: number } => {
+      const rig = new LightRig();
+      const scene = new THREE.Scene();
+      const body = new THREE.Group();
+      scene.add(body);
+      let own = 0;
+      for (let i = 0; i < steady; i++) rig.add(body, { type: "light", range: 4 }, { x: i, y: 0, rot: 0, z: 0 });
+      for (let i = 0; i < waking; i++) {
+        const m = rig.add(body, { type: "light", range: 4, wake: 3 }, { x: i, y: 1, rot: 0, z: 0 });
+        m?.holder.traverse((o) => {
+          if ((o as THREE.Light).isLight) own++;
+        });
+      }
+      rig.buildPool(scene);
+      let lights = 0;
+      scene.traverse((o) => {
+        if ((o as THREE.Light).isLight) lights++;
+      });
+      const size = rig.poolSize;
+      rig.dispose();
+      return { size, lights, own };
+    };
+    const none = poolOf(0, 3);
+    const few = poolOf(3, 2);
+    const many = poolOf(GLOW_POOL + 4, 0);
+    const ok =
+      none.size === 0 &&
+      none.lights === 3 &&
+      few.size === 3 &&
+      few.lights === 5 &&
+      many.size === GLOW_POOL &&
+      many.lights === GLOW_POOL &&
+      few.own === 0 &&
+      many.own === 0;
+    out.push({
+      name: "glow pool: a level with no waking light builds none, and the pool never exceeds GLOW_POOL",
+      pass: ok,
+      detail: `0 waking + 3 steady: pool ${none.size}, ${none.lights} lights; 3 + 2: pool ${few.size}, ${few.lights} lights; ${GLOW_POOL + 4} waking: pool ${many.size} (GLOW_POOL ${GLOW_POOL}); a waking source's own lights: ${few.own + many.own}`,
+    });
+  }
+
+  // The instance key: a body of its own, different from the shared material
+  // and from any other body's; and no body without a waking light asks for
+  // one, which is the proof that no existing level gains a material.
+  {
+    const req = { texture: "color", color: "#8a3fd6", emissive: "#b070ff", emissiveIntensity: 2 };
+    const plain = surfaceKey(req);
+    const mine = surfaceKey({ ...req, instance: "b3" });
+    const theirs = surfaceKey({ ...req, instance: "b4" });
+    const keyed = plain !== mine && mine !== theirs && mine === surfaceKey({ ...req, instance: "b3" });
+    const river = scaleLevelData(ballLevelJson as RawLevelData, PX);
+    const wakingBodies = river.bodies.filter((b) => b.objects.some((o) => isLightObject(o) && wakeParams(o) !== null));
+    const asking = river.bodies.filter((b, i) => surfaceInstance(b, `b${i}`) !== undefined);
+    const steady: LevelBodyData = {
+      kind: "static",
+      x: 0,
+      y: 0,
+      rot: 0,
+      objects: [
+        { type: "geometry", shape: { kind: "rect", w: 1, h: 1 }, emissive: "#ffaa00" },
+        { type: "light", range: 4 },
+      ],
+    };
+    const ok =
+      keyed &&
+      surfaceInstance(steady, "b0") === undefined &&
+      surfaceInstance(glowBody(new Vec2(0, 0)), "b0") === "b0" &&
+      surfaceInstance(glowBody(new Vec2(0, 0)), undefined) === undefined &&
+      asking.length === wakingBodies.length &&
+      asking.every((b) => wakingBodies.includes(b));
+    out.push({
+      name: "glow: a waking body's instance key is its own, and a body with no waking light asks for none",
+      pass: ok,
+      detail: `plain ${plain} / b3 ${mine} / b4 ${theirs}; river: ${asking.length} of ${river.bodies.length} bodies ask for an instance, ${wakingBodies.length} carry a waking light`,
+    });
+  }
+
+  // The editor: the four fields round-trip on a point light, a spot never
+  // writes them, a waking light with no times writes only `wake`.
+  {
+    const level = (light: LightObjectData): RawLevelData => ({
+      player: { x: 0, y: 0, radius: 20 },
+      bodies: [{ kind: "static", x: 100, y: -300, rot: 0, objects: [light] }],
+    });
+    const saved = (light: LightObjectData) =>
+      modelToDisk(modelFromDisk(level(light))).bodies[0]!.objects.find(isLightObject)!;
+    const full = saved({ type: "light", range: 400, wake: 300, wakeDelay: 0.25, wakeRise: 0.4, wakeFall: 2 });
+    const bare = saved({ type: "light", range: 400, wake: 250 });
+    const spot = saved({ type: "light", kind: "spot", range: 400, wake: 300, wakeDelay: 0.25 });
+    const steady = saved({ type: "light", range: 400 });
+    const ok =
+      near(full.wake!, 300) &&
+      full.wakeDelay === 0.25 &&
+      full.wakeRise === 0.4 &&
+      full.wakeFall === 2 &&
+      near(bare.wake!, 250) &&
+      bare.wakeDelay === undefined &&
+      bare.wakeRise === undefined &&
+      bare.wakeFall === undefined &&
+      spot.wake === undefined &&
+      spot.wakeDelay === undefined &&
+      steady.wake === undefined;
+    out.push({
+      name: "editor: wake, wakeDelay, wakeRise and wakeFall survive a save; a spot never writes them",
+      pass: ok,
+      detail: `point ${JSON.stringify({ wake: full.wake, wakeDelay: full.wakeDelay, wakeRise: full.wakeRise, wakeFall: full.wakeFall })}; wake alone ${JSON.stringify({ wake: bare.wake, wakeDelay: bare.wakeDelay })}; spot ${JSON.stringify({ wake: spot.wake })}; always-on ${JSON.stringify({ wake: steady.wake })}`,
+    });
+  }
+
+  // `+ Glow`: one body, a solid purple cube with its glow, the collision rect
+  // it mirrors, and a waking point light at the cube's centre with the
+  // editor's defaults.
+  {
+    const body = glowBody(new Vec2(4, -2));
+    const collision = body.objects.filter(isCollisionObject);
+    const geometry = body.objects.filter(isGeometryObject);
+    const light = body.objects.filter(isLightObject);
+    const square = (s: unknown): boolean =>
+      JSON.stringify(s) === JSON.stringify({ kind: "rect", w: GLOW_CUBE, h: GLOW_CUBE });
+    const g = geometry[0];
+    const l = light[0];
+    const ok =
+      body.kind === "static" &&
+      body.x === 4 &&
+      body.y === -2 &&
+      collision.length === 1 &&
+      square(collision[0]!.shape) &&
+      geometry.length === 1 &&
+      square(g!.shape) &&
+      g!.matchCollision === true &&
+      g!.depth === GLOW_CUBE &&
+      g!.texture === "color" &&
+      g!.color === GLOW_COLOR &&
+      g!.emissive === GLOW_EMISSIVE &&
+      g!.emissiveIntensity === GLOW_EMISSIVE_INTENSITY &&
+      light.length === 1 &&
+      (l!.kind ?? "point") === "point" &&
+      (l!.x ?? 0) === 0 &&
+      (l!.y ?? 0) === 0 &&
+      l!.color === GLOW_EMISSIVE &&
+      l!.range === GLOW_RANGE &&
+      l!.intensity === GLOW_INTENSITY &&
+      l!.wake === GLOW_WAKE &&
+      l!.wakeDelay === GLOW_WAKE_DELAY &&
+      l!.wakeRise === GLOW_WAKE_RISE &&
+      l!.wakeFall === GLOW_WAKE_FALL;
+    out.push({
+      name: "editor: + Glow places one static body - a solid purple cube, its collision rect, and a waking point light at its centre",
+      pass: ok,
+      detail: `${body.objects.length} objects; cube ${JSON.stringify(g?.shape)} ${g?.color} glowing ${g?.emissive} x${g?.emissiveIntensity}; light range ${l?.range} m, ${l?.intensity} cd, wake ${l?.wake} m, delay ${l?.wakeDelay} s, rise ${l?.wakeRise} s, fall ${l?.wakeFall} s`,
+    });
+  }
+  return out;
+}
+
 export function runRender3dCases(): CaseResult[] {
   return [
     ...beltRendering(),
@@ -3955,6 +4597,10 @@ export function runRender3dCases(): CaseResult[] {
     ...lightRidesBody(),
     ...lightAim(),
     ...lightShadowNear(),
+    ...avatarSurface(),
+    ...generatedSkies(),
+    ...beamCases(),
+    ...glowCases(),
     ...bodyFrame(),
     ...originToCom(),
     ...emissiveMaps(),
