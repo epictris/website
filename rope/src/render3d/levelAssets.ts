@@ -23,6 +23,7 @@
 import type { RawLevelData } from "../level/levelFormat";
 import { normalizeLevelData } from "../level/levelFormat";
 import {
+  BALL_MESH,
   emissiveMapName,
   HDRI_ASSETS,
   IRON_SURFACE,
@@ -44,7 +45,7 @@ export interface StoredFile {
 // order it will request them - the sky and the avatar first, then the bodies in
 // authored order - so a connection that cannot carry all of it at once carries
 // the most visible parts first.
-export function levelStoredFiles(raw: RawLevelData): StoredFile[] {
+export function levelStoredFiles(raw: RawLevelData, controller?: string): StoredFile[] {
   // Normalised, not scaled: the units are irrelevant here, but a level still in
   // the retired flat form only grows its geometry objects (and so its texture
   // names) on the way through this gate. `LEVEL_2` is one - it comes from the
@@ -71,6 +72,12 @@ export function levelStoredFiles(raw: RawLevelData): StoredFile[] {
   // Every 3D page builds a `ChainLayer`, ball level or not, and a chain link is
   // forged iron - so this set is on the critical path of any scene.
   addSurface(IRON_SURFACE);
+  // The avatar's model, and the one thing here that the level DATA cannot
+  // answer: which controller a level is played with lives in the registry
+  // beside it (`LevelSpec.controller`), and a grapple level builds no
+  // `BallVisual` and so fetches no ball. It is named right after the sky
+  // because it is what the player is looking at.
+  if (controller === "ball") add(MESH_ASSETS[BALL_MESH]);
 
   let water = false;
   for (const body of data.bodies) {

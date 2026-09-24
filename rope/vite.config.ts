@@ -374,7 +374,7 @@ function storeScript(): Plugin {
         b: spec.controller === "ball" ? 1 : 0,
         t: meta?.title ?? id,
         k: !listed ? 0 : meta?.intro ? 2 : 1,
-        i: levelStoredFiles(levelData(spec)).map((f) => {
+        i: levelStoredFiles(levelData(spec), spec.controller).map((f) => {
           let at = index.get(f.file);
           if (at === undefined) {
             at = files.push([f.file, f.bytes]) - 1;

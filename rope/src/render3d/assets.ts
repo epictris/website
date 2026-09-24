@@ -90,6 +90,17 @@ export const DEFAULT_TEXTURE: MaterialName = "wood";
 // with any chain in it loads this set, ball level or not.
 export const IRON_SURFACE = "painted steel";
 
+// The avatar's own model (`MESH_ASSETS`, and see `BallVisual`). Named here for
+// the same reason the surface above is: the preload list a page starts fetching
+// before the app exists has to account for the ball, and the resolver that
+// builds it (`levelAssets.ts`) cannot import the avatar's module without
+// dragging the sim and three into a build step.
+export const BALL_MESH = "iron-ball";
+// The radius, in metres, the ball in that model is modelled at (the mean over
+// its hammered surface is 99.95 mm). `BallVisual` scales by the ball's own
+// radius over this.
+export const BALL_MESH_RADIUS = 0.1;
+
 export function textureSetName(name: string | undefined): MaterialName {
   if (name !== undefined && (MATERIAL_NAMES as string[]).includes(name)) return name as MaterialName;
   return DEFAULT_TEXTURE;
@@ -2351,6 +2362,43 @@ function rock(node: string): MeshAsset {
 }
 
 export const MESH_ASSETS: Record<string, MeshAsset> = {
+  // THE AVATAR. A hammered cast-iron ball with a thin forged loop at its pole,
+  // modelled for this game - the first prop here that is not scenery, and the
+  // one thing on screen the player looks at for the whole of a run (see
+  // `BallVisual`, which wears it, and `BALL_MESH` below, which is the name both
+  // it and the preload resolver address it by).
+  //
+  // Metres, Y up, the ball centred on the origin at `BALL_MESH_RADIUS` (10 cm)
+  // and the loop in the XY plane at +Y, its top at 1.30 radii - which is the
+  // collision lug's reach (`radius + BallPlayer.LOOP_EXCESS`, 1.29 radii at
+  // the level's 12 cm ball). `BallVisual` scales the whole assembly from the
+  // modelled radius to the ball's own, so a level that authors a different
+  // one (`SpawnData.radius`) needs no second asset, and the loop rides the
+  // ball's rotation as the material point it is.
+  //
+  // Delivered as a glTF with two LODs; this is LOD0
+  // (`hammered_iron_ball_LOD0_thin_loop.glb`, raw at `assets-src/iron-ball.glb`),
+  // through `assets:optimize --keep-nodes` with nothing else. 43,312 triangles
+  // and no `simplify`: a sphere's silhouette IS the thing, this one is drawn
+  // once and it is the closest object to the camera in every frame. One
+  // material with a full PBR set - albedo, normal, and packed AO/roughness/
+  // metalness, whose metalness is a real map (the rust is not metal) - on one
+  // equirect UV wrap with no background, so nothing bleeds in down the mips.
+  "iron-ball": {
+    file: "/meshes/iron-ball.glb",
+    sha256: "6a7784c5bba7dc46be301e1fdb5924011c4b72b71b8681a03485ff16c313a8ff",
+    bytes: 312476,
+    // A private commission rather than a download, so `source` is what it is
+    // rather than a URL, and the author is deliberately unnamed - the modeller
+    // asked for no credit. It still states a person and a permission, because
+    // what this field is FOR is answering "can this ship" a year from now, and
+    // "no attribution required" is the answer to a different question than
+    // "may it be redistributed" (see docs/asset-store.md, which requires both
+    // of any asset in the public store).
+    source: "modelled for this game, delivered as a glTF binary",
+    author: "a private commission, credit declined",
+    license: "used with permission, redistributable, no attribution required",
+  },
   // A chequered gantry: two posts, a banner across the top and a band of
   // chequers at the bottom - the thing a level ENDS at (see the `finish` body
   // kind and docs/levels.md). UNTEXTURED, which is why it is 6 KB: the chequers

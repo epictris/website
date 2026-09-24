@@ -55,6 +55,13 @@ It makes three edits inside three's physically-based shading and leaves everythi
 
 ## The ball and chain: painted steel
 
+**Since 2026-09-22 the BALL itself is a modelled prop** (`iron-ball` in `MESH_ASSETS`, see [**The asset store**](asset-store.md)) wearing the maps it was modelled with, and everything below is the surface the rest of the assembly wears - the chain, the manacle, and the ball's own stand-in until the model lands.
+It is a commissioned hammered cast-iron ball with a thin forged loop at its pole, wearing a full PBR set of its own: a dark mottled albedo with rust blooms, a normal map carrying the hammer facets, and packed AO/roughness/metalness in which the roughness averages 0.46 and the metalness 0.63 - the rust is not metal - so it reads as worked iron rather than as chrome.
+
+That is a **deliberate exception to this file rather than a revision of it**, and the two claims it puts under strain are named here because they were paid for: the avatar's surface is now a photograph rather than strokes (the argument against which is the whole of "Painting the photographed iron" below), and where the roughness map dips the environment is reflected sharply enough to test "nothing that stays put on a rolling ball" above.
+The painted light is still worn - a prop's own materials go through `paintMaterial` like everything else, so the sun makes no highlight and its reflection is clipped out of the sky.
+What remains to be judged is whether the lamps' sheen now sits on the ball as a patch, and that is a judgement to be made by PLAYING it on a real GPU rather than off a headless still.
+
 The avatar wears its own set, **`painted steel`**, and it is the one surface in the game that is strokes rather than a photograph flattened: `scripts/bake-strokes.ts` lays a few thousand soft, part-opacity dabs over a steel-grey ground on a wrapped canvas, with a faint ridge along each stroke for the normal map and a dab-by-dab roughness, and writes the result into `assets-src/painted-steel/` as the set's raw, from where the ordinary pipeline (`bun run assets:paint "painted steel"`) optimises and hashes it like any other.
 The reference is an oil painting of a clean polished steel ball on a chain: a mid grey covered in broad low-contrast strokes that follow the form, and a shine that is the room reflected softly - warm ground below, pale sky above, a soft horizon.
 The strokes are paint on the object and turn with it; the reflection is the scene's own, soft and with its sun clipped (above), so the ball has a sheen and no sticker.
@@ -79,7 +86,8 @@ Full detail: [**Painted light**](lighting-and-surfaces.md#painted-light).
 | How far apart facets shade | the set's `normalScale` (no re-bake) |
 | The generated patch look | `SEAM_WIDTH`, `SEAM_DARKEN`, `PATCH_TILT`, `PATCH_SLOPE` in `render3d/assets.ts` |
 | Number and softness of the light bands, the wrap, the gloss floor, the reflection's roughness and ceiling | the constants at the top of `render3d/paint.ts` |
-| The ball: stroke size, how metal, how dark | `painted steel`'s `tile`, `metalness` and `normalScale` in `TEXTURE_ASSETS`; `FORGED_TINT` in `render3d/ballVisual.ts` |
+| The ball: how metal, how glossy | the model's own maps - a new delivery, then `assets:optimize` and `assets:publish` (see `iron-ball` in `MESH_ASSETS`) |
+| The chain and the ball's stand-in: stroke size, how metal, how dark | `painted steel`'s `tile`, `metalness` and `normalScale` in `TEXTURE_ASSETS`; `FORGED_TINT` in `render3d/ballVisual.ts` |
 | The strokes themselves: palette, size, opacity, count, ridge depth | the constants at the top of `scripts/bake-strokes.ts`, then `bun run scripts/bake-strokes.ts` and `bun run assets:paint "painted steel"` |
 | The water's own painting | `render3d/water.ts` (see [water](water.md)) |
 

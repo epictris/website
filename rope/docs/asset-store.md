@@ -51,6 +51,11 @@ What that assumes is that the origin is somewhere on the prop at all, and an ass
 `metal-bars` arrived with its geometry 8.9 m from its own origin, which places as a prop that is most of a room away from where it was put - read as the prop having failed to load rather than as a pivot.
 The flag runs `gltf-transform center --pivot center` into a temp file the optimise then reads, and `center: true` goes in that prop's `MESH_ASSETS` entry beside its sha256: a centred prop and a prop modelled about its own centre are the same file, so without the record the raw cannot be re-optimised into the same asset.
 
+**A baked map with no margin has to be filled, not padded.**
+A GPU samples a filtered neighbourhood rather than a texel, so a map whose background outside the UV islands is a flat colour (a first delivery of the avatar's had it pure white, hard up against the island edge) mixes that colour into every seam: a crack at close range, and at play size - roughly mip 5 for a 30 px ball - pale bands down both sides of it.
+A dilation ring of any plausible width fixes the close-up and not the bands, because no margin survives the mip chain that is doing the mixing; what works is filling **every** background texel (a pull-push pyramid), after which no mip level can contain the flat colour.
+Check a delivered map for this before shipping it; the current `iron-ball` needs nothing, its maps being one equirect wrap with no background at all.
+
 **A model PACK is one file and several manifest keys**, and `bun run assets:extract <pack.glb> <out.glb> <Node>=<prop-name> ...` is the step in front of the pipeline that makes one.
 A pack shares its materials, and a texture set is the overwhelming majority of a prop's bytes: the 24 rocks of `pbr-rock-cliffs-pack` are ~20 KB of geometry each and 370 KB of 1k maps they all have in common, so one file each is 9.4 MB of which 8.7 MB is the same three images written out 24 times - paid again on every download, and again in VRAM, each time a level scatters more than one of them.
 Extracted together they are one **624 KB** file, one fetch and one GPU upload however many of them a level uses.

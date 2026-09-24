@@ -1,6 +1,16 @@
 // The ball & chain avatar in 3D: a cast-iron sphere and the steel loop the chain
 // deploys through.
 //
+// Since the model landed (`BALL_MESH`) both of those are one MODELLED
+// assembly - a hammered iron ball with a thin forged loop at its pole - and
+// what this file builds from primitives is what stands in for it until the
+// file arrives. That stand-in is not scaffolding to delete: the avatar is on
+// screen from the first frame, the sim runs whether or not 312 KB has landed,
+// and a grey placeholder box where the player is would be a worse failure than
+// on any prop. So the sphere and torus below are built, drawn, and swapped out
+// in place - the one prop in this game whose fallback is a considered object
+// rather than a box.
+//
 // The sphere is what the 2D renderer's radial-sheen gradient was standing in
 // for. It is a real sphere with a real metal material, so the highlight is where
 // the sun actually is rather than baked at a fixed offset - which is the single
@@ -11,11 +21,13 @@
 // The loop is a material point on the rim, so it rides the ball's own rotation
 // rather than being placed from `renderLoopCenter` each frame: a child at the
 // loop's local offset under a root carrying the interpolated pose IS
-// `renderLoopCenter`, computed by the scene graph instead of by hand.
+// `renderLoopCenter`, computed by the scene graph instead of by hand. The model
+// gets this for free, and for the same reason: its ring is modelled at the pole,
+// so it is a material point of the same rotating root.
 
 import * as THREE from "three";
 import { BallPlayer } from "../classes/ballPlayer";
-import { IRON_SURFACE, surfaceFor } from "./assets";
+import { BALL_MESH, BALL_MESH_RADIUS, IRON_SURFACE, loadMesh, surfaceFor } from "./assets";
 import { orientTo, placeAt, threeY } from "./space";
 
 // How much thicker than the collision radius the mounting loop's ring is drawn.
@@ -69,14 +81,19 @@ export function forgedMetal(tileScale?: number): THREE.MeshStandardMaterial {
 export class BallVisual {
   readonly root = new THREE.Group();
   private readonly owned: THREE.BufferGeometry[] = [];
+  // The primitives standing in until the model lands, as one group so the swap
+  // is a remove rather than a search. Null once it has happened.
+  private stand: THREE.Group | null = new THREE.Group();
+  private disposed = false;
 
   constructor(private readonly ball: BallPlayer) {
+    const stand = this.stand as THREE.Group;
     const sphere = new THREE.SphereGeometry(ball.radius, 32, 24);
     this.owned.push(sphere);
     const body = new THREE.Mesh(sphere, forgedMetal());
     body.castShadow = true;
     body.receiveShadow = true;
-    this.root.add(body);
+    stand.add(body);
 
     // The loop, at the material point the chain leaves through: the top of the
     // ball at rotation 0, which in the ball's own frame is
@@ -86,7 +103,26 @@ export class BallVisual {
     const loop = new THREE.Mesh(torus, forgedMetal(FORGED_SMALL));
     loop.castShadow = true;
     loop.position.set(0, threeY(-(ball.radius + BallPlayer.LOOP_GAP)), 0);
-    this.root.add(loop);
+    stand.add(loop);
+    this.root.add(stand);
+
+    void loadMesh(BALL_MESH).then((obj) => {
+      if (!obj || this.disposed) return;
+      // The one number that has to be applied here rather than baked into the
+      // file, since a level may author a different radius than the model's.
+      obj.scale.multiplyScalar(ball.radius / BALL_MESH_RADIUS);
+      obj.traverse((o) => {
+        const mesh = o as THREE.Mesh;
+        if (!mesh.isMesh) return;
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+      });
+      this.root.add(obj);
+      // Removed only once the model is in the scene, so there is never a frame
+      // with no avatar in it.
+      if (this.stand) this.root.remove(this.stand);
+      this.stand = null;
+    });
   }
 
   sync(alpha: number): void {
@@ -95,8 +131,10 @@ export class BallVisual {
   }
 
   dispose(): void {
+    this.disposed = true;
     for (const g of this.owned) g.dispose();
     this.owned.length = 0;
+    this.stand = null;
     this.root.clear();
   }
 }
