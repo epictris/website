@@ -522,16 +522,6 @@ export class BodyVisual {
     return piece;
   }
 
-  // Show or hide one authored object's drawing, found by the same tag a pick
-  // answers with. The generated rocks (rockMesh.ts) stand in for a body's rock
-  // pieces while leaving its other pieces and its lights drawn, so what they hide
-  // is the piece, never the body's root.
-  setDrawnVisible(g: GeometryObjectData, visible: boolean): void {
-    for (const child of this.root.children) {
-      if (child.userData["pickTag"] === g) child.visible = visible;
-    }
-  }
-
   private mount(
     piece: THREE.Group,
     geometryFor: () => THREE.BufferGeometry,

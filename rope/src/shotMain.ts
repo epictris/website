@@ -28,10 +28,8 @@ import { DebrisSystem } from "./render/debris";
 import { ChainRetract } from "./render/chainRetract";
 import { NO_ORBIT, type CameraOrbit } from "./render3d/space";
 import { Scene3D } from "./render3d/scene";
-import { parseRockDebug, pickLine } from "./render3d/rockDebug";
 import { assetsSettled, pendingAssets } from "./render3d/assets";
 import { BallLevel } from "./level/ballLevel";
-import { LEVELS } from "./level/registry";
 import type { Level } from "./level/level";
 import { levelFromRecording } from "./sim/replay";
 import { recordingDeserializer, type Recording } from "./sim/trace";
@@ -141,13 +139,6 @@ const camera: Camera = {
 const scene3d = use3d ? new Scene3D(sceneCanvas, { diagnostics: true }) : null;
 if (scene3d) {
   scene3d.resize(view);
-  // The generated rocks, as the game names them (main.ts): a grab of a rock
-  // level without them is a picture of a level nobody plays.
-  const rocks = q.get("rocks");
-  scene3d.setRocks(rocks === "0" ? null : (rocks ?? LEVELS[rec.level]?.file ?? null));
-  // `rockdebug=<view>` draws the rocks in a debug view (render3d/rockDebug.ts),
-  // as the game does.
-  scene3d.setRockDebug(parseRockDebug(q.get("rockdebug")));
   scene3d.setLevel(level);
   // Props and authored texture maps arrive asynchronously, and in the GAME that
   // is the point - the placeholder box and the generated surface cover the gap.
@@ -229,17 +220,6 @@ if (dump) {
   drawFrame(frames[0]!);
 } else {
   drawFilmstrip();
-}
-
-// `pick=X,Y` (view pixels, the 1920x1080 frame) names the rock face under that
-// point of the frame just drawn (`cli shot --pick`, see rockDebug.ts).
-const pickAt = /^(-?[\d.]+),(-?[\d.]+)$/.exec(q.get("pick") ?? "");
-if (pickAt && scene3d) {
-  const [px, py] = [Number(pickAt[1]), Number(pickAt[2])];
-  const hit = scene3d.pickRock((px / VIEW_WIDTH) * 2 - 1, 1 - (py / VIEW_HEIGHT) * 2);
-  console.log(hit ? pickLine(hit) : `[rocks] pick ${px},${py}: no rock there`);
-} else if (q.get("pick") !== null) {
-  console.error(`pick=${q.get("pick")} needs X,Y in view pixels and --3d`);
 }
 
 reportErrors();

@@ -351,7 +351,7 @@ They only change the generated rock, which needs `bun run assets:rocks <level>` 
 
 **Fit collision to rock** sits under **match collision** on a rock's geometry object panel (a single object selected) and beside **Origin to COM** on its body panel.
 It is offered on any body `rockBodies` counts as rock; whether it can work is only known once the file is read, so the refusals are said when it is pressed, as a toast.
-It reads `/rocks/<level>.glb` (the file this level saves to, or `?rocks=NAME` on the editor's URL, as in play), finds the body's node, and refuses with "rock is stale, regenerate" when the node's hash is not the hash of the body as the editor holds it now.
+It reads `/rocks/<level>.glb` (the file this level saves to, or `?rocks=NAME` on the editor's URL), finds the body's node, and refuses with "rock is stale, regenerate" when the node's hash is not the hash of the body as the editor holds it now.
 Otherwise it projects every triangle of the node straight along z, traces the silhouette (rasterised at 1 cm, simplified at 2 cm, holes ignored, the largest blob kept), and writes it as the body's collision object's outline, a `poly` in that object's own frame; the object keeps its placement and every other field.
 The geometry object's **match collision** is switched off in the same edit, so the reference outline the rock was generated from stays as authored; it is one undo step.
 Its limits: a body with exactly one rock geometry object and exactly one collision object (anything else is refused, naming the counts), a collision object that is an outline rather than a curve or a belt, and a missing file (404) is a message and no change.

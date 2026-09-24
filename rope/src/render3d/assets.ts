@@ -2157,15 +2157,6 @@ function loadMaps(name: string, asset: TextureAsset): Promise<LoadedMaps> {
   return p;
 }
 
-// An authored set's decoded images as they are cached - untiled, shared, never
-// to be mutated or disposed - for a material that samples them itself at its
-// own coordinates rather than through three's map slots (the generated rocks,
-// rockMaterial.ts). Null for a name that is not in the manifest.
-export function authoredMaps(name: string): Promise<LoadedMaps> | null {
-  const asset = TEXTURE_ASSETS[name];
-  return asset ? loadMaps(name, asset) : null;
-}
-
 // Wear ANOTHER set's emission map over this material - `VisualData.emissiveTexture`,
 // which is how a brick wall gets lit windows without the brick being a different
 // surface. Only the one slot is taken; everything else the borrowed set carries
@@ -3383,9 +3374,6 @@ const gltfCache = new Map<string, Promise<THREE.Object3D | null>>();
 // is fetched only by a page that actually loads a prop. It is a large module,
 // the manifest is empty for a level that authors no meshes, and the editor never
 // needs it eagerly - which is exactly the case chunk splitting is for.
-//
-// Exported for the generated rocks (rockMesh.ts), which are not manifest props
-// but are GLBs all the same and need the same decoder.
 let loaderPromise: Promise<GLTFLoader> | null = null;
 
 export function gltfLoader(): Promise<GLTFLoader> {

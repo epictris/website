@@ -22,7 +22,7 @@
 //                                      [--at X,Y] [--out f.png] [--allow-errors]
 //   bun run src/tools/cli.ts shot      bundle.json --frames A..B [--every K] [--3d]
 //   bun run src/tools/cli.ts shot      bundle.json --dump A..B   (chain state per frame, as JSON lines)
-//   bun run src/tools/cli.ts shot      --view capture.json [--pick X,Y]   (an F4 view capture, see docs/rocks.md)
+//   bun run src/tools/cli.ts shot      --view capture.json   (an F4 view capture)
 //   bun run src/tools/cli.ts rocks-check public/rocks/ball.glb [--body I] [--no-geometry] [--json]
 //   bun run src/tools/cli.ts shot      --diff a.png b.png [--out diff.png]
 //   bun run src/tools/cli.ts chainpath bundle.json [--from A] [--to B] [--every N]
@@ -101,7 +101,7 @@ import { Vec2 } from "../engine/vec2";
 import { PIXELS_PER_METER } from "../engine/units";
 import { findChromium, grab, PageNotReady, type PageLogEntry } from "./shotRunner";
 import { VIEW_HEIGHT, VIEW_WIDTH } from "../render/viewport";
-import { rockFileId, type ViewCapture } from "../render3d/rocks";
+import type { ViewCapture } from "../render3d/rocks";
 import {
   checkRockFile,
   faceLines,
@@ -1049,10 +1049,6 @@ async function cmdShot(first: string, o: Record<string, string>, extra: string[]
       // own - `paint=0` is the one this was added for (see render3d/paint.ts):
       // the same frame painted and not is how the painted light is judged.
       (o.query ? `&${o.query}` : "") +
-      // `--pick X,Y` (view pixels) raycasts the rocks at that point after the
-      // frame is drawn and logs the face it hit (see rockDebug.ts); it needs a
-      // `rockdebug` view on, as the click does in the game.
-      (o.pick ? `&pick=${encodeURIComponent(o.pick)}` : "") +
       // `--probe` (with `--3d`) skips the precompile and logs, per drawn frame,
       // the programs and textures three has built and the meshes whose program
       // was compiled on THAT frame - the mid-play compile a stutter is made of.
@@ -1114,12 +1110,9 @@ async function cmdShot(first: string, o: Record<string, string>, extra: string[]
 }
 
 // An F4 VIEW CAPTURE (main.ts `captureView`) folded into the shot's options:
-// `--at`, `--orbit` and `--zoom` from the camera, `rocks=<name>` added to
-// `--query`, and `--3d` on, since a capture is always of the 3D scene. A flag
-// given on the command line wins over the capture's. The rock file the grab
-// will load has to be the one the capture was made against: a different
-// `rockFileId` is refused (a picture of a different file is evidence about a
-// different file) unless `--allow-stale-rocks`.
+// `--at`, `--orbit` and `--zoom` from the camera, and `--3d` on, since a
+// capture is always of the 3D scene. A flag given on the command line wins over
+// the capture's.
 function applyViewCapture(o: Record<string, string>): ViewCapture {
   const path = o.view!;
   if (!existsSync(path)) fail(`--view ${path}: no such file`);
@@ -1130,19 +1123,6 @@ function applyViewCapture(o: Record<string, string>): ViewCapture {
   o.orbit ??= view.orbit.join(",");
   o.zoom ??= String(view.zoom);
   o["3d"] ??= "true";
-  const rocks = view.rocks === "" ? "rocks=0" : `rocks=${view.rocks}`;
-  if (!/(^|&)rocks=/.test(o.query ?? "")) o.query = o.query ? `${o.query}&${rocks}` : rocks;
-  if (view.rocks !== "") {
-    const file = join(ROPE_DIR, "public", "rocks", `${view.rocks}.glb`);
-    const id = existsSync(file) ? rockFileId(new Uint8Array(readFileSync(file))) : "(missing)";
-    if (id !== view.rocksId) {
-      const msg = `--view ${path}: the capture was made against rocks id ${view.rocksId}, public/rocks/${view.rocks}.glb is ${id}`;
-      if (o["allow-stale-rocks"] === undefined) fail(`${msg} (pass --allow-stale-rocks to grab it anyway)`);
-      console.log(`[shot] ${msg}; grabbing anyway`);
-    } else {
-      console.log(`[shot] rocks ${view.rocks} id ${id}: match`);
-    }
-  }
   return view;
 }
 
@@ -2192,7 +2172,7 @@ switch (cmd) {
     cmdQuery(arg, opts(rest));
     break;
   case "shot":
-    if (!arg) fail("usage: cli shot <bundle.json> [--frame N | --frames A..B [--every K]] [--zoom Z] [--3d] [--retract] [--at X,Y] [--orbit YAW,PITCH] [--query k=v] [--pick X,Y] [--out f.png] [--allow-errors]  |  cli shot [bundle.json] --view capture.json [--allow-stale-rocks]  |  cli shot --diff a.png b.png [--out d.png]");
+    if (!arg) fail("usage: cli shot <bundle.json> [--frame N | --frames A..B [--every K]] [--zoom Z] [--3d] [--retract] [--at X,Y] [--orbit YAW,PITCH] [--query k=v] [--out f.png] [--allow-errors]  |  cli shot [bundle.json] --view capture.json  |  cli shot --diff a.png b.png [--out d.png]");
     await cmdShot(arg, opts([arg, ...rest]), [arg, ...rest]);
     break;
   case "record":

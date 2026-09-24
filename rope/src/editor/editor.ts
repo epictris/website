@@ -4413,9 +4413,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   }
 
   // Which level's generated rocks the fit reads: `?rocks=NAME` on the editor's
-  // URL borrows another file's, as it does in play (`main.ts`) - the fast loop
-  // builds a few bodies to `public/rocks/test.glb` - and otherwise the file
-  // this level saves to.
+  // URL borrows another file's - the fast loop builds a few bodies to
+  // `public/rocks/test.glb` - and otherwise the file this level saves to.
   function rocksNameForFit(): string | null {
     const param = new URLSearchParams(location.search).get("rocks");
     if (param === "0") return null;
@@ -4455,10 +4454,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     fittingRock = true;
     let root: THREE.Object3D;
     try {
-      // Fetched by hand and uncached, as `loadLevelRocks` fetches it: a missing
-      // file is told apart from a broken one by its status, the dev server's
-      // HTML fallback is not handed to the decoder, and a GLB regenerated a
-      // moment ago is the one read rather than the page's first copy.
+      // Fetched by hand and uncached: a missing file is told apart from a
+      // broken one by its status, the dev server's HTML fallback is not handed
+      // to the decoder, and a GLB regenerated a moment ago is the one read
+      // rather than the page's first copy.
       const [res, loader] = await Promise.all([fetch(url, { cache: "no-store" }), gltfLoader()]);
       const type = res.headers.get("content-type") ?? "";
       if (!res.ok || type.startsWith("text/html")) {
@@ -4509,8 +4508,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       return;
     }
 
-    // The body's node, found as `mountRocks` finds it: by the index the
-    // generator stamped on it, with its name as the fallback.
+    // The body's node, found by the index the generator stamped on it, with
+    // its name as the fallback.
     let node: THREE.Object3D | undefined;
     root.traverse((o) => {
       if (!node && o.userData[ROCK_INDEX_KEY] === rock.index) node = o;

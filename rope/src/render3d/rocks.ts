@@ -2,17 +2,13 @@
 // space for the offline generator, and the hash that says whether a generated
 // mesh still matches what the level authors.
 //
-// The rocks a level shows are not extruded at runtime. `scripts/generate-rocks.ts`
-// turns each rock body's outlines into a job for `tools/blender/rocks.py`, which
-// builds faceted boulders in headless Blender and writes one GLB per level to
-// `public/rocks/<level>.glb`. At load, `Scene3D.setRocks` names the file and
-// `rockMesh.ts` swaps every body whose generated node still matches its
-// authored outline for that node, and
-// leaves a body whose outline has changed since on its flat extrusion - which is
-// how a stale rock announces itself, without any level ever failing to draw.
+// `scripts/generate-rocks.ts` turns each rock body's outlines into a job for
+// `tools/blender/rocks.py`, which builds faceted boulders in headless Blender
+// and writes one GLB per level to `public/rocks/<level>.glb`. That pipeline is
+// superseded (docs/rocks.md): the game and the editor both draw a rock as its
+// tapered extrusion and never load the GLB. The editor's collision fit and
+// `cli rocks-check` still read it.
 //
-// This module is the one place both sides read the level, so the generator and
-// the runtime cannot disagree about WHICH pieces are rock or WHERE they are.
 // It is deliberately free of three.js: the generator runs it under bun.
 
 import { Vec2 } from "../engine/vec2";
@@ -224,7 +220,7 @@ export function rockFileId(bytes: Uint8Array): string {
 
 // A VIEW CAPTURE (F4 in the game): what is needed to put a headless grab on the
 // same picture, in the units `cli shot` takes. `cli shot --view capture.json`
-// reads it back (docs/rocks.md, "Reporting a defect").
+// reads it back.
 export interface ViewCapture {
   // The registry id of the level played (`?level=`).
   level: string;
@@ -233,29 +229,7 @@ export interface ViewCapture {
   // Yaw and pitch in degrees (`--orbit`); the game's own view is head-on.
   orbit: [number, number];
   zoom: number;
-  // The rock file's name and `rockFileId`, "" when none was mounted.
-  rocks: string;
-  rocksId: string;
-  // Every rock body's current `rockHash`, and which of them were mounted.
-  hash: Record<string, string>;
-  mounted: number[];
   // The served tree (see src/sim/treeStamp.ts).
   tree: string;
   srcHash: string;
-}
-
-// What the page knows about the rock file it mounted, published as
-// `window.__rocks` for the F4 view capture (main.ts) and for a headless probe.
-export interface RocksLoaded {
-  // The name the file was loaded by (`?rocks=` or the level's file).
-  name: string;
-  url: string;
-  bytes: number;
-  // `rockFileId` of those bytes.
-  id: string;
-  // The body indices mounted and left on their extrusion (stale or missing),
-  // and every rock body's CURRENT hash, so a capture says what was on screen.
-  mounted: number[];
-  stale: number[];
-  hashes: Record<string, string>;
 }
