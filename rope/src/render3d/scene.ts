@@ -33,6 +33,7 @@ import { GpuTimer } from "../render/gpuTimer";
 import { BodyVisual, pickTagOf, surfaceOf } from "./bodyVisuals";
 import { BallVisual } from "./ballVisual";
 import { loadLevelRocks, mountRocks } from "./rockMesh";
+import { pickRock, setRockDebug, showRockDebugLegend, type RockDebugView, type RockPick } from "./rockDebug";
 import { ChainLayer } from "./chainVisual";
 import { VineLayer } from "./vineVisual";
 import type { ChainRetract } from "../render/chainRetract";
@@ -159,6 +160,8 @@ export class Scene3D {
   // still in flight must not have them mounted over the next one.
   private rocksName: string | null = null;
   private rocksGroup: THREE.Group | null = null;
+  // The `?rockdebug=` view every mounted rock is drawn in (rockDebug.ts).
+  private rockDebug: RockDebugView | null = null;
   private levelGeneration = 0;
   private ballVisual: BallVisual | null = null;
   private chains: ChainLayer;
@@ -281,8 +284,26 @@ export class Scene3D {
     // A later `setLevel` or `clearLevel` has moved on: these visuals are gone.
     if (!root || generation !== this.levelGeneration) return;
     const { group } = mountRocks(root, level.visualSource.data, this.authored, name);
+    if (this.rockDebug) setRockDebug(group, this.rockDebug);
     this.scene.add(group);
     this.rocksGroup = group;
+  }
+
+  // Draw the generated rocks in a debug view, or plainly with null (see
+  // rockDebug.ts); applies to what is mounted now and to every later mount.
+  setRockDebug(view: RockDebugView | null): void {
+    this.rockDebug = view;
+    if (this.rocksGroup) setRockDebug(this.rocksGroup, view);
+    showRockDebugLegend(view);
+  }
+
+  // The rock face under a point in normalised device coordinates, through the
+  // camera the last frame was drawn with (as `pick`), or null over no rock.
+  pickRock(x: number, y: number): RockPick | null {
+    if (!this.rocksGroup) return null;
+    this.pointer.set(x, y);
+    this.raycaster.setFromCamera(this.pointer, this.camera);
+    return pickRock(this.raycaster, this.rocksGroup);
   }
 
   // The environment a level authored, so a host that rebuilds the scene without
@@ -959,6 +980,9 @@ export class Scene3D {
     // materials, which the next build of the same level mounts again.
     this.levelGeneration++;
     if (this.rocksGroup) {
+      // The debug view's own materials go, and the shared rock material's
+      // side comes back (see rockDebug.ts).
+      if (this.rockDebug) setRockDebug(this.rocksGroup, null);
       this.scene.remove(this.rocksGroup);
       this.rocksGroup = null;
     }

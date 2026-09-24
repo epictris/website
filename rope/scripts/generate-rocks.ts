@@ -10,13 +10,21 @@
 // `--only` builds a subset of bodies (by index into the level's `bodies`) for a
 // quick look at one rock while tuning the generator.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { PIXELS_PER_METER } from "../src/engine/units";
 import { scaleLevelData, type RawLevelData } from "../src/level/levelFormat";
-import { rockBodies } from "../src/render3d/rocks";
+import { rockBodies, rockFileId } from "../src/render3d/rocks";
+import {
+  checkRockFile,
+  printBuildReport,
+  printRockFileCheck,
+  readBuildReport,
+  reportPathOf,
+  rockFileDefects,
+} from "../src/tools/rockCheck";
 
 const ROOT = resolve(import.meta.dirname, "..");
 
@@ -32,7 +40,10 @@ const flag = (name: string): string | undefined => {
   return i >= 0 ? args[i + 1] : undefined;
 };
 
-const levelArg = positional[0] ?? fail("usage: generate-rocks <level|levels/x.json> [--only i,j] [--out f.glb] [--flat] [--decimate R] [--scale S] [--remesh]");
+const USAGE =
+  "usage: generate-rocks <level|levels/x.json> [--only i,j] [--out f.glb] [--flat] [--decimate R] [--scale S] [--remesh]\n" +
+  "       [--no-check] [--no-debug-attributes] [--no-buried] [--no-cull] [--no-detail] [--no-inset] [--no-repair] [--seed N] [--dump-stages DIR]";
+const levelArg = positional[0] ?? fail(USAGE);
 const levelPath = levelArg.endsWith(".json") ? resolve(levelArg) : join(ROOT, "levels", `${levelArg}.json`);
 if (!existsSync(levelPath)) fail(`no level at ${levelPath}`);
 const name = basename(levelPath, ".json");
@@ -67,6 +78,19 @@ if (decimate !== undefined && !(decimate > 0 && decimate <= 1)) fail(`--decimate
 const scaleArg = flag("scale");
 const scale = scaleArg === undefined ? undefined : Number(scaleArg);
 if (scale !== undefined && !(scale > 0)) fail(`--scale ${scaleArg}: expected metres > 0`);
+// THE DEBUGGING SWITCHES (docs/rocks.md, "Diagnosing"): each turns one step
+// off for an A/B build, `--seed N` builds every body under another seed, and
+// `--dump-stages DIR` writes each body's mesh after every step. They are
+// echoed in the build log and the report, so an A/B file says what it is.
+// `--no-debug-attributes` leaves _SHARD and _PROVENANCE out, the shipping
+// build (see docs/asset-store.md).
+const seedArg = flag("seed");
+const seed = seedArg === undefined ? undefined : Number(seedArg);
+if (seed !== undefined && !Number.isInteger(seed)) fail(`--seed ${seedArg}: expected an integer`);
+const dumpArg = flag("dump-stages");
+// The dumps are a debugging artefact, every shard whole before the clip: never
+// somewhere the game serves or the asset store picks up.
+if (dumpArg !== undefined && resolve(dumpArg).startsWith(join(ROOT, "public"))) fail("--dump-stages: not under public/ (use the scratchpad or /tmp)");
 // `--remesh` fuses the shards with a voxel remesh (the author's recipe's step;
 // dense and soft, see rocks.py); without it the shards ship as instanced.
 const job = {
@@ -75,6 +99,14 @@ const job = {
   remesh: args.includes("--remesh"),
   ...(decimate !== undefined ? { decimate } : {}),
   ...(scale !== undefined ? { scale } : {}),
+  noBuried: args.includes("--no-buried"),
+  noCull: args.includes("--no-cull"),
+  noDetail: args.includes("--no-detail"),
+  noInset: args.includes("--no-inset"),
+  noRepair: args.includes("--no-repair"),
+  debugAttributes: !args.includes("--no-debug-attributes"),
+  ...(seed !== undefined ? { seed } : {}),
+  ...(dumpArg !== undefined ? { dumpStages: resolve(dumpArg) } : {}),
   // `seed` is the body's `rockSeed` (absent = 0); rocks.py reads it with
   // `body.get("seed", 0)`.
   bodies: bodies.map((b) => ({ index: b.index, hash: b.hash, seed: b.seed, pieces: b.pieces })),
@@ -92,9 +124,13 @@ if (job.flat) {
 }
 
 const blender = flag("blender") ?? process.env["BLENDER"] ?? "blender";
+// The build report, beside the GLB (`<level>.rocks.json`), which
+// `cli rocks-check` reads back.
+const reportPath = reportPathOf(out);
+rmSync(reportPath, { force: true });
 const result = spawnSync(
   blender,
-  ["-b", "--factory-startup", "--python", join(ROOT, "tools", "blender", "rocks.py"), "--", jobPath, out],
+  ["-b", "--factory-startup", "--python", join(ROOT, "tools", "blender", "rocks.py"), "--", jobPath, out, reportPath],
   { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
 );
 if (result.error) fail(`could not run ${blender}: ${result.error.message}`);
@@ -110,3 +146,32 @@ if (result.status !== 0) {
   fail(`blender exited ${result.status}`);
 }
 if (!existsSync(out)) fail(`blender wrote nothing at ${out}`);
+
+// The file's stamp, the same number the page logs when it mounts it
+// (`[rocks] ball: 57 mounted, file N bytes, id X`), so a build log and a
+// report can be matched without guessing which build the browser had.
+const bytes = new Uint8Array(await Bun.file(out).arrayBuffer());
+console.log(`[rocks] ${name}: file ${bytes.byteLength} bytes, id ${rockFileId(bytes)} -> ${out}`);
+
+// The build's own counts, and a chunk still open after repair fails the build:
+// it is a hole in the rock, which nobody should have to find by eye.
+let failed = false;
+const report = readBuildReport(out);
+if (!report) {
+  console.error(`[rocks] no build report at ${reportPath}`);
+  failed = true;
+} else if (printBuildReport(report) > 0) {
+  console.error("[rocks] FAIL: chunks still open after repair (the OPEN column); the file is written but has holes");
+  failed = true;
+}
+
+// The file check on what was just written (`--no-check` skips it).
+if (!args.includes("--no-check")) {
+  const check = checkRockFile(out, ROOT);
+  printRockFileCheck(check);
+  if (rockFileDefects(check) > 0) {
+    console.error(`[rocks] FAIL: ${rockFileDefects(check)} file defect(s)`);
+    failed = true;
+  }
+}
+if (failed) process.exit(1);

@@ -13,7 +13,10 @@ import type { LevelData } from "../level/levelFormat";
 import { gltfLoader, trackPending } from "./assets";
 import type { BodyVisual } from "./bodyVisuals";
 import { rockMaterial } from "./rockMaterial";
-import { ROCK_HASH_KEY, ROCK_INDEX_KEY, rockBodies, rocksUrl } from "./rocks";
+import { ROCK_HASH_KEY, ROCK_INDEX_KEY, rockBodies, rockFileId, rocksUrl, type RocksLoaded } from "./rocks";
+
+// The decoded root's userData key for the file's size and `rockFileId`.
+const FILE_KEY = "rocksFile";
 
 // Replace the GLB's own material on every mesh of one body node with the rock
 // material (rockMaterial.ts), which reads COLOR_0 as masks and wears the
@@ -63,14 +66,23 @@ export function loadLevelRocks(name: string): Promise<THREE.Object3D | null> {
       // told apart from a broken one by its status - and so a dev server that
       // answers a missing path with its HTML fallback is not handed to the
       // decoder as if it were a GLB.
-      const [res, loader] = await Promise.all([fetch(url), gltfLoader()]);
+      //
+      // In dev the browser's cache is bypassed: the file is rebuilt many times
+      // an hour, and a report made against the copy cached from before a fix
+      // is a report about a file nobody has any more.
+      const init: RequestInit = import.meta.env.DEV ? { cache: "no-store" } : {};
+      const [res, loader] = await Promise.all([fetch(url, init), gltfLoader()]);
       const type = res.headers.get("content-type") ?? "";
       if (!res.ok || type.startsWith("text/html")) {
         console.info(`[rocks] ${name}: no generated rocks (${url}: ${res.status})`);
         return null;
       }
-      const gltf = await loader.parseAsync(await res.arrayBuffer(), "");
+      const buffer = await res.arrayBuffer();
+      const gltf = await loader.parseAsync(buffer, "");
       for (const body of gltf.scene.children) dressBody(body);
+      // The file's stamp rides on the root, so every mount can say which bytes
+      // it drew (see `rockFileId`).
+      gltf.scene.userData[FILE_KEY] = { bytes: buffer.byteLength, id: rockFileId(new Uint8Array(buffer)), url };
       return gltf.scene;
     } catch (err: unknown) {
       console.info(`[rocks] ${name}: generated rocks failed to load (${url}):`, err);
@@ -102,7 +114,8 @@ export function mountRocks(
   }
   let mounted = 0;
   const stale: number[] = [];
-  for (const rock of rockBodies(data)) {
+  const rocks = rockBodies(data);
+  for (const rock of rocks) {
     const node = byIndex.get(rock.index);
     const visual = visuals[rock.index];
     if (!node || node.userData[ROCK_HASH_KEY] !== rock.hash || !visual) {
@@ -117,6 +130,18 @@ export function mountRocks(
     stale.length > 0
       ? `, ${stale.length} stale (bodies ${stale.join(", ")}) - run: bun run assets:rocks ${level}`
       : "";
-  console.info(`[rocks] ${level}: ${mounted} mounted${staleNote}`);
+  const file = root.userData[FILE_KEY] as { bytes: number; id: string; url: string } | undefined;
+  const fileNote = file ? `, file ${file.bytes} bytes, id ${file.id}` : "";
+  console.info(`[rocks] ${level}: ${mounted} mounted${staleNote}${fileNote}`);
+  const loaded: RocksLoaded = {
+    name: level,
+    url: file?.url ?? rocksUrl(level),
+    bytes: file?.bytes ?? 0,
+    id: file?.id ?? "",
+    mounted: rocks.filter((r) => !stale.includes(r.index)).map((r) => r.index),
+    stale,
+    hashes: Object.fromEntries(rocks.map((r) => [String(r.index), r.hash])),
+  };
+  (globalThis as { __rocks?: RocksLoaded }).__rocks = loaded;
   return { group, mounted, stale };
 }

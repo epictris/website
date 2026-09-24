@@ -183,3 +183,6 @@ bun run replay assets                                        # check it
 just assets                                                  # on another machine
 gh release delete-asset assets rock.glb                      # change your mind
 ```
+
+Generated rock files (`public/rocks/`, see [rocks](rocks.md)) are not in the store yet.
+When they are, the shipping build passes `--no-debug-attributes`: the `_SHARD` and `_PROVENANCE` attributes the dev loop keeps cost about 5 bytes a vertex before compression and more in the vertices they split.

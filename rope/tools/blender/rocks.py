@@ -382,16 +382,20 @@ def mesh_arrays(mesh):
     return v.reshape(-1, 3), t.reshape(-1, 3)
 
 
-def mesh_from_arrays(name, chunks, marks=None):
-    """One triangle mesh from (verts, tris) chunks, without a Python loop.
-    `marks`, one number per chunk, becomes the per-vertex float attribute
-    "shard" (the per-shard variation the runtime material reads out of
-    COLOR_0.b); it rides through the modifiers and the join like any layer."""
+def mesh_from_arrays(name, chunks):
+    """One triangle mesh from chunks, without a Python loop. A chunk is a
+    (verts, tris) pair or a `chunk` dict; a dict's
+    - `mark` becomes the per-vertex float attribute "shard" (the per-shard
+      variation the runtime material reads out of COLOR_0.b),
+    - `sid` the per-vertex int attribute "shard_id" (PROVENANCE, below),
+    - `prov` (one value per triangle) the per-face int attribute "provenance";
+    all three ride through the modifiers and the join like any layer."""
+    chunks = [c if isinstance(c, dict) else {"v": c[0], "t": c[1]} for c in chunks]
     vs, ts, base = [], [], 0
-    for v, t in chunks:
-        vs.append(v)
-        ts.append(t + base)
-        base += len(v)
+    for c in chunks:
+        vs.append(c["v"])
+        ts.append(c["t"] + base)
+        base += len(c["v"])
     v = np.concatenate(vs) if vs else np.zeros((0, 3))
     t = np.concatenate(ts) if ts else np.zeros((0, 3), dtype=np.int64)
     mesh = bpy.data.meshes.new(name)
@@ -402,11 +406,70 @@ def mesh_from_arrays(name, chunks, marks=None):
     mesh.polygons.add(len(t))
     mesh.polygons.foreach_set("loop_start", np.arange(0, len(t) * 3, 3, dtype=np.int32))
     mesh.update(calc_edges=True)
-    if marks is not None and len(v):
+    if not len(v):
+        return mesh
+    counts = [len(c["v"]) for c in chunks]
+    if all("mark" in c for c in chunks):
         attr = mesh.attributes.new("shard", "FLOAT", "POINT")
-        counts = [len(cv) for cv, _ in chunks]
-        attr.data.foreach_set("value", np.repeat(np.array(marks, dtype=np.float32), counts))
+        attr.data.foreach_set("value", np.repeat(np.array([c["mark"] for c in chunks], dtype=np.float32), counts))
+    if all("sid" in c for c in chunks):
+        attr = mesh.attributes.new("shard_id", "INT", "POINT")
+        attr.data.foreach_set("value", np.repeat(np.array([c["sid"] for c in chunks], dtype=np.int32), counts))
+    if all("prov" in c for c in chunks):
+        attr = mesh.attributes.new("provenance", "INT", "FACE")
+        attr.data.foreach_set("value", np.concatenate([c["prov"] for c in chunks]).astype(np.int32))
     return mesh
+
+
+# PROVENANCE: which step last made or altered each face, carried as the int
+# face attribute "provenance" through the build and exported (unless the
+# wrapper's --no-debug-attributes) as the glTF attribute _PROVENANCE, one value
+# per corner, beside _SHARD, the chunk's id (see `debug_attributes`). A hole on
+# screen then reads "shard 143, a float-clip face" rather than "a hole"
+# (docs/rocks.md, "Diagnosing"). A step that deletes faces cannot mark them;
+# those are counted in the build report instead.
+PROV_TEMPLATE = 1
+PROV_FLOAT_CLIP = 2
+PROV_EXACT_CLIP = 3
+PROV_FILL = 4
+PROV_BACKING = 5
+PROV_RIM = 6
+PROV_DISSOLVE = 7
+PROV_NAMES = {
+    PROV_TEMPLATE: "template",
+    PROV_FLOAT_CLIP: "float clip",
+    PROV_EXACT_CLIP: "exact clip",
+    PROV_FILL: "hole fill",
+    PROV_BACKING: "backing",
+    PROV_RIM: "rim inset",
+    PROV_DISSOLVE: "planar dissolve",
+}
+
+
+def debug_attributes(mesh):
+    """The build's "shard_id" and "provenance" as the exported _SHARD (per
+    vertex) and _PROVENANCE (per corner: glTF has no per-face attribute, and
+    the exporter's own face-domain path is a Python loop over every polygon).
+    Blender's glTF exporter writes an attribute whose name starts with an
+    underscore when `export_attributes` is on, as a float accessor (glTF has
+    no signed int attribute), which three exposes as `_shard`/`_provenance`."""
+    if "shard_id" in mesh.attributes:
+        sid = np.empty(len(mesh.vertices), dtype=np.int32)
+        mesh.attributes["shard_id"].data.foreach_get("value", sid)
+        mesh.attributes.new("_SHARD", "INT", "POINT").data.foreach_set("value", sid)
+    if "provenance" in mesh.attributes:
+        prov = np.empty(len(mesh.polygons), dtype=np.int32)
+        mesh.attributes["provenance"].data.foreach_get("value", prov)
+        totals = np.empty(len(mesh.polygons), dtype=np.int64)
+        mesh.polygons.foreach_get("loop_total", totals)
+        mesh.attributes.new("_PROVENANCE", "INT", "CORNER").data.foreach_set("value", np.repeat(prov, totals))
+
+
+def face_ints(mesh, name, default=0):
+    out = np.full(len(mesh.polygons), default, dtype=np.int32)
+    if name in mesh.attributes:
+        mesh.attributes[name].data.foreach_get("value", out)
+    return out
 
 
 def link(name, mesh):
@@ -709,13 +772,34 @@ def backing(poly, parts, front, back):
     return [(v, np.array(tris))]
 
 
-def piece_mesh(poly, parts, piece, templates, body_tilt, wander_tex, rng, name):
-    """Shards clipped to the outline plus the backing prism, as one object."""
+def piece_mesh(poly, parts, piece, templates, body_tilt, wander_tex, rng, name, sid_base, stages):
+    """Shards clipped to the outline plus the backing prism, as one object.
+    Every shard is chunk `sid_base + k` (k its index in the scatter, so a
+    shard keeps its id through every stage whether or not it survives the
+    clip) and the backing is the id after the last shard. Returns the object,
+    the shard count and this piece's build report; `stages`, when dumping,
+    collects the chunks before the clip, after it and after the buried pass."""
     shards = scatter(poly, piece, templates, body_tilt, wander_tex, rng)
     s = piece_size(poly)
     dm = depth_model(piece, s)
     back = dm["back"]
     backing_front = dm["backing"]
+    backing_sid = sid_base + len(shards)
+    report = {
+        "piece": name,
+        "shards": len(shards),
+        "ids": [sid_base, backing_sid],
+        "clipped": 0,
+        "slivers": 0,
+        "exact": 0,
+        "filled": 0,
+        "rejected": 0,
+        "dropped": 0,
+        "rewound": 0,
+        "open": 0,
+        "openIds": [],
+        "buried": 0,
+    }
 
     # THE CLIP IS A BOOLEAN. Each shard reaching past the outline is
     # intersected with one straight prism of the whole concave outline, so
@@ -726,9 +810,11 @@ def piece_mesh(poly, parts, piece, templates, body_tilt, wander_tex, rng, name):
     # left a flat facet that belonged to no outline edge.
     clip = link(f"{name}-clip", mesh_from_arrays(f"{name}-clip", clip_solid(poly, parts, dm)))
     chunks = []
-    marks = []
-    for _, v, t in shards:
-        marks.append(rng.random())
+    for k, (_, v, t) in enumerate(shards):
+        sid = sid_base + k
+        # Drawn for every shard, kept or not, so the random stream (and so
+        # every later shard) is the same whatever the clip decides.
+        mark = rng.random()
         # A shard whose every vertex stands inside the outline (in plan: the
         # prism is only ever cut through by its walls) ships as it is; the
         # rest are each intersected with the prism on their own. One shard is
@@ -736,25 +822,50 @@ def piece_mesh(poly, parts, piece, templates, body_tilt, wander_tex, rng, name):
         # and in milliseconds; the exact solver over the whole overlapping
         # soup took half a minute for one body.
         if points_in_poly(v[:, [0, 2]], poly).all():
-            chunks.append((v, t))
+            chunks.append({"v": v, "t": t, "prov": np.full(len(t), PROV_TEMPLATE), "sid": sid, "mark": mark})
             continue
-        cut = inset_wall(clip_shard(name, v, t, clip), poly, rng.uniform(RIM_INSET * 0.25, RIM_INSET))
+        report["clipped"] += 1
+        cut = clip_shard(name, v, t, clip, report, sid)
+        # Drawn even under --no-inset, for the same reason as the mark.
+        inset = rng.uniform(RIM_INSET * 0.25, RIM_INSET)
+        if not FLAGS["noInset"]:
+            cut = inset_wall(cut, poly, inset)
         kept = False
-        if len(cut[1]):
-            extent = cut[0].max(axis=0) - cut[0].min(axis=0)
+        if len(cut["t"]):
+            extent = cut["v"].max(axis=0) - cut["v"].min(axis=0)
             if extent[0] >= SLIVER * s and extent[2] >= SLIVER * s:
+                cut.update(sid=sid, mark=mark)
                 chunks.append(cut)
                 kept = True
-        if not kept:
-            marks.pop()
+            else:
+                report["slivers"] += 1
     remove(clip)
-    chunks += backing(poly, parts, backing_front, back)
     # The backing is one chunk; it takes the middle of the variation range.
-    marks += [0.5] * (len(chunks) - len(marks))
+    for v, t in backing(poly, parts, backing_front, back):
+        chunks.append({"v": v, "t": t, "prov": np.full(len(t), PROV_BACKING), "sid": backing_sid, "mark": 0.5})
+    # A chunk still open here is a hole in the rock: the buried pass below
+    # opens chunks on purpose, so this is the last point closedness means
+    # anything. The wrapper fails the build on any.
+    for c in chunks:
+        if not is_closed(c["t"]):
+            report["open"] += 1
+            report["openIds"].append(int(c["sid"]))
+    if stages is not None:
+        stages["scatter"].append(
+            [{"v": v, "t": t, "prov": np.full(len(t), PROV_TEMPLATE), "sid": sid_base + k, "mark": 0.5} for k, (_, v, t) in enumerate(shards)]
+            + [c for c in chunks if c["sid"] == backing_sid]
+        )
+        stages["clipped"].append([dict(c) for c in chunks])
     t = time.time()
-    chunks, gone = drop_buried(chunks, s)
+    if FLAGS["noBuried"]:
+        gone = 0
+    else:
+        chunks, gone = drop_buried(chunks, s)
+    report["buried"] = gone
+    if stages is not None:
+        stages["buried"].append(chunks)
     print(f"[rocks] {name}: {gone} buried triangles dropped, {time.time() - t:.1f}s")
-    return link(name, mesh_from_arrays(name, chunks, marks)), len(shards)
+    return link(name, mesh_from_arrays(name, chunks)), len(shards), report
 
 
 def clip_solid(poly, parts, dm):
@@ -802,7 +913,11 @@ def sculpt(obj, s, index, rng, remesh):
         rm.use_smooth_shade = False
 
     for k, (kind, size, strength) in enumerate(DETAIL):
+        # Made (and its random size drawn) even under --no-detail, so the
+        # random stream after it is the same as a build with the detail.
         tex = detail_texture(f"detail-{index}-{k}", kind, size * s, rng)
+        if FLAGS["noDetail"]:
+            continue
         for axis in "XYZ":
             d = obj.modifiers.new(f"detail-{k}-{axis}", "DISPLACE")
             d.texture = tex
@@ -848,9 +963,11 @@ def cull(obj, piece, fused):
     """Drop the faces nobody sees, those facing away from the camera behind
     the gameplay plane, and on a FUSED (remeshed) mesh the stray islands too: a
     sliver the cut left behind, voxelised on its own. Unfused, every shard is
-    its own island and none of them is stray."""
-    plane = -piece["z"]
+    its own island and none of them is stray. Returns how many faces went."""
     mesh = obj.data
+    if FLAGS["noCull"]:
+        return 0
+    before = len(mesh.polygons)
     bm = bmesh.new()
     bm.from_mesh(mesh)
     bm.normal_update()
@@ -864,6 +981,7 @@ def cull(obj, piece, fused):
     bmesh.ops.delete(bm, geom=back, context="FACES")
     bm.to_mesh(mesh)
     bm.free()
+    return before - len(mesh.polygons)
 
 
 def decimate(obj, ratio):
@@ -875,7 +993,15 @@ def decimate(obj, ratio):
         dec.decimate_type = "DISSOLVE"
         dec.angle_limit = math.radians(DISSOLVE_ANGLE_DEG)
         dec.use_dissolve_boundaries = False
-        evaluate(obj)
+        mesh = evaluate(obj)
+        # Every face is a triangle going in, so a polygon of more than three
+        # corners coming out is triangles the dissolve merged.
+        totals = np.empty(len(mesh.polygons), dtype=np.int64)
+        mesh.polygons.foreach_get("loop_total", totals)
+        if "provenance" in mesh.attributes:
+            prov = face_ints(mesh, "provenance")
+            prov[totals > 3] = PROV_DISSOLVE
+            mesh.attributes["provenance"].data.foreach_set("value", prov)
         return
     if ratio >= 1:
         return
@@ -1089,6 +1215,14 @@ def ao_uvs(obj):
     uv = uv.reshape(-1, 2)
     print(f"[rocks] AO uvs: {len(uv)} loops, u {uv[:, 0].min():.2f}..{uv[:, 0].max():.2f}, v {uv[:, 1].min():.2f}..{uv[:, 1].max():.2f}")
     mesh.uv_layers.active = mesh.uv_layers["UVMap"]
+    # The share of the atlas the islands cover (they do not overlap once
+    # packed, so it is the summed area of the UV triangles): the number that
+    # read 2 % when the island margin starved the packer.
+    mesh.calc_loop_triangles()
+    lt = np.empty(len(mesh.loop_triangles) * 3, dtype=np.int64)
+    mesh.loop_triangles.foreach_get("loops", lt)
+    a, b, c = (uv[lt.reshape(-1, 3)[:, k]] for k in range(3))
+    return float(np.abs(np.cross(b - a, c - a)).sum() / 2)
 
 
 def bake_alone(obj, samples, **kwargs):
@@ -1128,10 +1262,11 @@ def inset_wall(chunk, poly, amount):
     `amount` inward, along the inward normal of the nearest outline edge.
     Every clipped shard's cut face lies in the same prism wall plane, and
     where shards overlap those coincident faces z-fought on screen, a jagged
-    dark pattern all along the rock's rim; a different inset per shard
-    stacks them a few millimetres apart instead, with the backing's wall
-    (never inset) as the outermost, clean face."""
-    v, t = chunk
+    dark pattern all along the rim; a different inset per shard stacks them a
+    few millimetres apart instead, with the backing's wall (never inset) as
+    the outermost, clean face. Every face with a moved corner is marked
+    PROV_RIM."""
+    v, t = chunk["v"], chunk["t"]
     if len(v) == 0:
         return chunk
     pts = v[:, [0, 2]]
@@ -1157,7 +1292,9 @@ def inset_wall(chunk, poly, amount):
     v = v.copy()
     v[on, 0] += normal[on, 0] * amount
     v[on, 2] += normal[on, 1] * amount
-    return v, t
+    prov = chunk["prov"].copy()
+    prov[on[t].any(axis=1)] = PROV_RIM
+    return {**chunk, "v": v, "prov": prov}
 
 
 def is_closed(t):
@@ -1171,7 +1308,10 @@ def is_closed(t):
 
 
 def fill_holes(v, t):
-    """The soup with its boundary loops filled and triangulated."""
+    """The soup with its boundary loops filled and triangulated, and which of
+    its triangles are new (a boolean per triangle). Vertices keep their order
+    (the fill adds none), so a triangle is original when its vertex set is one
+    of the input's."""
     bm = bmesh.new()
     verts = [bm.verts.new(p.tolist()) for p in v]
     for a, b, c in t.tolist():
@@ -1184,18 +1324,23 @@ def fill_holes(v, t):
     mesh = bpy.data.meshes.new("filled")
     bm.to_mesh(mesh)
     bm.free()
-    out = mesh_arrays(mesh)
+    fv, ft = mesh_arrays(mesh)
     bpy.data.meshes.remove(mesh)
-    return out
+    before = {tuple(sorted(tri)) for tri in t.tolist()}
+    new = np.array([tuple(sorted(tri)) not in before for tri in ft.tolist()], dtype=bool)
+    return fv, ft, new
 
 
-def clip_shard(name, v, t, clip):
+def clip_shard(name, v, t, clip, report, sid):
     """One shard intersected with the clip prism, WATERTIGHT: the float
     solver's result is taken when it is closed, otherwise the exact solver's,
     and a result still open after that has its holes filled. The float
     solver returned 8 of body 150's 275 shards with triangles missing, open
     shells whose missing faces were holes in the rock ("the missing face at
-    the bottom of the column")."""
+    the bottom of the column"). Returns a chunk dict whose `prov` says which
+    solver (or the fill) made each triangle; `report` counts what it took.
+    Under --no-repair the float result is taken as it comes, open or inside
+    out, which reproduces both boolean failures on demand."""
     # An intersection lies inside the shard. A result that does not is the
     # solver handing back the wrong operand: the exact solver once returned
     # the CLIP PRISM for a shard it could not cut, closed and body-sized, and
@@ -1206,6 +1351,9 @@ def clip_shard(name, v, t, clip):
 
     def within(cut):
         return len(cut[0]) == 0 or (bool((cut[0] >= lo).all()) and bool((cut[0] <= hi).all()))
+
+    def chunk(cv, ct, prov):
+        return {"v": cv, "t": ct, "prov": np.full(len(ct), prov) if np.isscalar(prov) else prov}
 
     first = None
     for solver in ("FLOAT", "EXACT"):
@@ -1218,47 +1366,52 @@ def clip_shard(name, v, t, clip):
         mod.object = clip
         cut = mesh_arrays(evaluate(tmp))
         remove(tmp)
+        prov = PROV_FLOAT_CLIP if solver == "FLOAT" else PROV_EXACT_CLIP
+        if FLAGS["noRepair"]:
+            return chunk(cut[0], cut[1], prov)
         if not within(cut):
-            REPAIRS["rejected"] += 1
+            report["rejected"] += 1
             continue
         if first is None:
-            first = cut
+            first = (cut, prov)
         if is_closed(cut[1]):
             if solver == "EXACT":
-                REPAIRS["exact"] += 1
-            return outward(*cut)
+                report["exact"] += 1
+            return chunk(*outward(*cut, report), prov)
     if first is None:
         # Neither solver produced anything inside the shard: no shard.
-        REPAIRS["dropped"] += 1
-        return v[:0], t[:0]
-    REPAIRS["filled"] += 1
-    return outward(*fill_holes(*first))
+        report["dropped"] += 1
+        return chunk(v[:0], t[:0], PROV_TEMPLATE)
+    report["filled"] += 1
+    (cv, ct), prov = first
+    fv, ft, new = fill_holes(cv, ct)
+    fv, ft = outward(fv, ft, report)
+    return chunk(fv, ft, np.where(new, PROV_FILL, prov))
 
 
-# How many clipped shards the float solver left open, by what closed them
-# (reported per build).
-REPAIRS = {"exact": 0, "filled": 0, "rejected": 0, "dropped": 0}
-
-
-def outward(v, t):
+def outward(v, t, report=None):
     """(v, t) with its triangles wound so the normals point OUT: the float
     boolean now and then returns a shard inside out (3 of 275 on body 150),
     and an inside-out shard has its front faces taken by the back-face cull
     and its back faces kept, a hollow shell showing its far wall from inside
     ("a hole in the top face"). The sign of the enclosed volume says which
-    way a closed solid is wound."""
+    way a closed solid is wound. A re-wind is counted in `report`."""
     if len(t) == 0:
         return v, t
     a, b, c = v[t[:, 0]], v[t[:, 1]], v[t[:, 2]]
     volume = np.einsum("ij,ij->i", a, np.cross(b, c)).sum()
-    return (v, t[:, [0, 2, 1]]) if volume < 0 else (v, t)
+    if volume >= 0:
+        return v, t
+    if report is not None:
+        report["rewound"] += 1
+    return v, t[:, [0, 2, 1]]
 
 
 def drop_buried(chunks, s):
-    """The (verts, tris) chunks of one piece with their buried triangles
-    removed (see BURIED_EPSILON): a triangle whose centre, pushed just
-    outside its own solid along its normal, lies at least BURIED_MARGIN_RATIO
-    of S inside another chunk.
+    """The chunks of one piece with their buried triangles removed (see
+    BURIED_EPSILON): a triangle whose centre, pushed just outside its own
+    solid along its normal, lies at least BURIED_MARGIN_RATIO of S inside
+    another chunk.
     Inside is the HALF-SPACE test, behind every face plane of the other
     chunk. For a convex chunk that is exact, and for a concave one (a shard
     clipped by the concave outline) the intersection of the half-spaces is a
@@ -1270,9 +1423,10 @@ def drop_buried(chunks, s):
     many triangles went."""
     planes = []
     bounds = []
-    for v, t in chunks:
-        a, b, c = v[t[:, 0]], v[t[:, 1]], v[t[:, 2]]
-        n = np.cross(b - a, c - a)
+    for c in chunks:
+        v, t = c["v"], c["t"]
+        a, b, cc = v[t[:, 0]], v[t[:, 1]], v[t[:, 2]]
+        n = np.cross(b - a, cc - a)
         n /= np.maximum(np.linalg.norm(n, axis=1, keepdims=True), 1e-12)
         planes.append((n, np.einsum("ij,ij->i", n, a)))
         bounds.append((v.min(axis=0), v.max(axis=0)))
@@ -1280,10 +1434,11 @@ def drop_buried(chunks, s):
     hi = np.array([b[1] for b in bounds])[None, :, :] + BURIED_EPSILON
     out = []
     gone = 0
-    for i, (v, t) in enumerate(chunks):
+    for i, c in enumerate(chunks):
+        v, t = c["v"], c["t"]
         n, _ = planes[i]
-        a, b, c = v[t[:, 0]], v[t[:, 1]], v[t[:, 2]]
-        probe = (a + b + c) / 3 + n * BURIED_EPSILON
+        a, b, cc = v[t[:, 0]], v[t[:, 1]], v[t[:, 2]]
+        probe = (a + b + cc) / 3 + n * BURIED_EPSILON
         within = np.all((probe[:, None, :] >= lo) & (probe[:, None, :] <= hi), axis=2)
         within[:, i] = False
         buried = np.zeros(len(t), dtype=bool)
@@ -1295,7 +1450,7 @@ def drop_buried(chunks, s):
             behind = (probe[rows] @ nj.T - dj[None, :]) <= -BURIED_MARGIN_RATIO * s
             buried[rows[behind.all(axis=1)]] = True
         gone += int(buried.sum())
-        out.append((v, t[~buried]))
+        out.append({**c, "t": t[~buried], "prov": c["prov"][~buried]})
     return out, gone
 
 
@@ -1305,25 +1460,84 @@ def bake_ao(obj, image):
     bake_alone(obj, AO_SAMPLES, margin=AO_MARGIN_PX, uv_layer="AO", target="IMAGE_TEXTURES")
     px = np.empty(image.size[0] * image.size[1] * 4, dtype=np.float32)
     image.pixels.foreach_get(px)
-    print(f"[rocks] AO image mean {px.reshape(-1, 4)[:, 0].mean():.3f}")
+    mean = float(px.reshape(-1, 4)[:, 0].mean())
+    print(f"[rocks] AO image mean {mean:.3f}")
     # Saved to disk so the exporter has bytes to embed (a generated image has
     # pixels but no file, and the exporter converts from the file).
     image.filepath_raw = os.path.join(tempfile.gettempdir(), f"{image.name}.png")
     image.file_format = "PNG"
     image.save()
+    return mean
+
+
+STAGES = ("scatter", "clipped", "buried", "sculpted", "culled", "final")
+
+
+def stage_object(name, mesh=None, chunks=None):
+    """A stage dump's object: a copy of `mesh`, or a mesh of `chunks`."""
+    data = mesh.copy() if mesh is not None else mesh_from_arrays(name, chunks)
+    return link(name, data)
+
+
+def dump_stages(index, stages, out_dir):
+    """One GLB per body, `body-<i>.stages.glb`, one node per stage named
+    `<stage>-body-<i>`, each carrying _SHARD and _PROVENANCE, so a face picked
+    in the game is found in every stage by its shard id and the first stage it
+    is missing from is the step that removed it (`cli rocks-check <dump>
+    --shard N`). The objects are removed again, so the level file never sees
+    them."""
+    objs = []
+    for stage in STAGES:
+        parts = stages[stage]
+        if not parts:
+            continue
+        name = f"{stage}-body-{index}"
+        if all(isinstance(p, list) for p in parts):
+            obj = stage_object(name, chunks=[c for p in parts for c in p])
+        else:
+            obj = join([stage_object(f"{name}-{k}", mesh=p) for k, p in enumerate(parts)], name)
+        debug_attributes(obj.data)
+        obj["stage"] = stage
+        obj["rockIndex"] = index
+        objs.append(obj)
+    for o in bpy.context.scene.objects:
+        o.select_set(o in objs)
+    path = os.path.join(out_dir, f"body-{index}.stages.glb")
+    bpy.ops.export_scene.gltf(
+        filepath=path,
+        export_format="GLB",
+        use_selection=True,
+        export_extras=True,
+        export_yup=True,
+        export_normals=True,
+        export_attributes=True,
+        export_materials="NONE",
+        export_cameras=False,
+        export_lights=False,
+        export_animations=False,
+    )
+    for o in objs:
+        remove(o)
+    print(f"[rocks] body {index}: stages -> {path}")
 
 
 def build_body(body, flat, collapse=None, remesh=False):
+    """The body's object, its shard count and its build report."""
     index = body["index"]
+    t_body = time.time()
     # The body's hash seeds every random choice, so the same outline builds
     # the same rock, and the author's `rockSeed` (in the hash too, mixed in
-    # here as well) turns it into a different one to look at.
-    rng = random.Random(int(body["hash"], 16) ^ (int(body.get("seed", 0)) * 0x9E3779B1))
+    # here as well) turns it into a different one to look at. The wrapper's
+    # --seed overrides every body's for one build (an A/B, never shipped).
+    seed = FLAGS["seed"] if FLAGS["seed"] is not None else int(body.get("seed", 0))
+    rng = random.Random(int(body["hash"], 16) ^ (seed * 0x9E3779B1))
     templates = shard_templates(rng, index, remesh)
     body_tilt = math.radians(rng.uniform(-BODY_TILT, BODY_TILT))
     wander_tex = bpy.data.textures.new(f"wander-{index}", "CLOUDS")
     wander_tex.noise_scale = 1.0
     wander_tex.noise_depth = 1
+    stages = {k: [] for k in STAGES} if FLAGS["dumpStages"] else None
+    report = {"index": index, "hash": body["hash"], "seed": seed, "pieces": [], "culled": 0}
     objs = []
     shards = 0
     for pi, piece in enumerate(body["pieces"]):
@@ -1336,41 +1550,74 @@ def build_body(body, flat, collapse=None, remesh=False):
         convex = [c if area(c) >= 0 else list(reversed(c)) for c in convex if len(c) >= 3]
         if not convex:
             convex = [poly]
-        obj, n = piece_mesh(poly, convex, piece, templates, body_tilt, wander_tex, rng, f"b{index}-p{pi}")
+        obj, n, piece_report = piece_mesh(
+            poly, convex, piece, templates, body_tilt, wander_tex, rng, f"b{index}-p{pi}", shards + pi, stages
+        )
+        report["pieces"].append(piece_report)
         shards += n
         sculpt(obj, piece_size(poly), index, rng, remesh)
         evaluate(obj)
-        cull(obj, piece, remesh)
+        if stages is not None:
+            stages["sculpted"].append(obj.data.copy())
+        report["culled"] += cull(obj, piece, remesh)
+        if stages is not None:
+            stages["culled"].append(obj.data.copy())
         decimate(obj, collapse)
         clamp_depth(obj.data, piece, piece_size(poly))
         objs.append(obj)
     if not objs:
-        return None, 0
+        return None, 0, report
     obj = join(objs, f"body-{index}")
+    report["faces"] = len(obj.data.polygons)
     smooth_with_sharp_edges(obj.data)
     white_layer(obj.data)
     dirty(obj)
     spans = [depth_model(p, piece_size(dedupe([(v["x"], v["y"]) for v in p["verts"]]))) for p in body["pieces"]]
     masks(obj.data, max(d["fall"] + d["relief"] for d in spans))
     box_uvs(obj.data)
+    if stages is not None:
+        stages["final"].append(obj.data.copy())
+        dump_stages(index, stages, FLAGS["dumpStages"])
+        for stage in ("sculpted", "culled", "final"):
+            for m in stages[stage]:
+                bpy.data.meshes.remove(m)
+    if FLAGS["debugAttributes"]:
+        debug_attributes(obj.data)
     ao_image = None
     if not flat:
-        ao_uvs(obj)
+        report["aoCoverage"] = round(ao_uvs(obj), 4)
         size = ao_size(obj.data)
+        report["aoSize"] = size
         ao_image = bpy.data.images.new(f"ao-{index}", size, size, alpha=False)
     obj.data.materials.append(rock_material(index, ao_image))
     if ao_image is not None:
         t = time.time()
-        bake_ao(obj, ao_image)
-        print(f"[rocks] body {index}: AO {size}x{size}, {time.time() - t:.1f}s")
+        report["aoMean"] = round(bake_ao(obj, ao_image), 4)
+        print(f"[rocks] body {index}: AO {size}x{size}, {report['aoCoverage'] * 100:.0f}% covered, {time.time() - t:.1f}s")
     obj["rockIndex"] = index
     obj["rockHash"] = body["hash"]
-    return obj, shards
+    report["tris"] = sum(len(p.vertices) - 2 for p in obj.data.polygons)
+    report["seconds"] = round(time.time() - t_body, 2)
+    return obj, shards, report
+
+
+# The job's switches (see `main`), read by the steps they turn off.
+FLAGS = {
+    "noBuried": False,
+    "noCull": False,
+    "noDetail": False,
+    "noInset": False,
+    "noRepair": False,
+    "seed": None,
+    "dumpStages": None,
+    "debugAttributes": True,
+}
 
 
 def main():
     argv = sys.argv[sys.argv.index("--") + 1 :]
     job_path, out_path = argv[0], argv[1]
+    report_path = argv[2] if len(argv) > 2 else None
     with open(job_path) as f:
         job = json.load(f)
 
@@ -1383,18 +1630,29 @@ def main():
     # `flat` (the wrapper's --flat) skips the ambient-occlusion bake, the slow
     # step, so the shape can be iterated on quickly.
     flat = bool(job.get("flat"))
+    # The A/B switches and the debug outputs (docs/rocks.md, "Diagnosing"),
+    # echoed so a build log and its report say what the file is.
+    for key in FLAGS:
+        if key in job:
+            FLAGS[key] = job[key]
+    if FLAGS["dumpStages"]:
+        os.makedirs(FLAGS["dumpStages"], exist_ok=True)
+    changed = {k: v for k, v in FLAGS.items() if k in job and v not in (False, None)}
+    print(f"[rocks] flags: {json.dumps(changed) if changed else 'none'}")
 
     t0 = time.time()
     tris = 0
     built = 0
+    bodies = []
     for body in job["bodies"]:
         t = time.time()
         ratio = job.get("decimate")
-        obj, shards = build_body(body, flat, None if ratio is None else float(ratio), bool(job.get("remesh")))
+        obj, shards, report = build_body(body, flat, None if ratio is None else float(ratio), bool(job.get("remesh")))
+        bodies.append(report)
         if obj is None:
             continue
         built += 1
-        n = sum(len(p.vertices) - 2 for p in obj.data.polygons)
+        n = report["tris"]
         tris += n
         print(
             f"[rocks] body {body['index']}: {len(body['pieces'])} piece(s), {shards} shards, "
@@ -1409,6 +1667,7 @@ def main():
         export_yup=True,
         export_texcoords=True,
         export_normals=True,
+        export_attributes=bool(FLAGS["debugAttributes"]),
         export_cameras=False,
         export_lights=False,
         export_animations=False,
@@ -1422,12 +1681,44 @@ def main():
     if "export_vertex_color" in props.keys():
         # The colour layer goes out as COLOR_0 however the material uses it.
         kwargs["export_vertex_color"] = "ACTIVE"
+    # The level the file was built from and how, as the scene's glTF extras,
+    # for `cli rocks-check` to hash the bodies against.
+    scene = bpy.context.scene
+    scene["rockLevel"] = job.get("level", "")
+    scene["rockFlags"] = json.dumps(
+        {
+            "scale": ROCK_SCALE,
+            "flat": flat,
+            "remesh": bool(job.get("remesh")),
+            "decimate": job.get("decimate"),
+            **{k: FLAGS[k] for k in FLAGS if k != "dumpStages"},
+        }
+    )
+    for o in scene.objects:
+        o.select_set(True)
     bpy.ops.export_scene.gltf(**kwargs)
+    total = {k: sum(p[k] for b in bodies for p in b["pieces"]) for k in ("exact", "filled", "rejected", "dropped", "rewound", "open")}
     print(
-        f"[rocks] open clips closed: {REPAIRS['exact']} by the exact solver, {REPAIRS['filled']} by filling; "
-        f"{REPAIRS['rejected']} results outside their shard rejected, {REPAIRS['dropped']} shards dropped for it"
+        f"[rocks] open clips closed: {total['exact']} by the exact solver, {total['filled']} by filling; "
+        f"{total['rejected']} results outside their shard rejected, {total['dropped']} shards dropped for it; "
+        f"{total['rewound']} re-wound, {total['open']} chunks still open"
     )
     print(f"[rocks] {built} bodies, {tris} tris, {time.time() - t0:.1f}s -> {out_path}")
+    if report_path:
+        with open(report_path, "w") as f:
+            json.dump(
+                {
+                    "level": job.get("level", ""),
+                    "scale": ROCK_SCALE,
+                    "flat": flat,
+                    "decimate": job.get("decimate"),
+                    "remesh": bool(job.get("remesh")),
+                    "flags": {k: FLAGS[k] for k in FLAGS},
+                    "bodies": bodies,
+                },
+                f,
+                indent=1,
+            )
 
 
 main()

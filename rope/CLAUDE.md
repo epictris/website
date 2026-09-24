@@ -23,7 +23,7 @@ bun run test       # THE suite: typecheck + every case suite + every playtest + 
 ```
 
 `/` is the **level select** and `?level=NAME` plays one (`src/level/registry.ts`); `BALL` (the ball & chain controller, 3D) is the introduction and the grapple levels stay 2D.
-`?render=2d|3d`, `?hud=1` (F3 in play), `?aim=cursor|position|motion`, `?toggle_click=true` (click to deploy/redeploy, right-click to detach), `?probe3d=1`, `?retract=1` (the released chain reels in, still being judged), `?paint=0` (the painted light off, for an A/B), `?rocks=NAME|0` (which level's generated rocks to load, or none).
+`?render=2d|3d`, `?hud=1` (F3 in play), `?aim=cursor|position|motion`, `?toggle_click=true` (click to deploy/redeploy, right-click to detach), `?probe3d=1`, `?retract=1` (the released chain reels in, still being judged), `?paint=0` (the painted light off, for an A/B), `?rocks=NAME|0` (which level's generated rocks to load, or none), `?rockdebug=VIEW` (rock debug views; F4 captures the view for `cli shot --view`).
 `?checkpoint=NAME` starts (and restarts) at an authored named spawn instead of the level's own - placed on the editor's notes layer, recorded into every bundle so a replay starts where the run did.
 `/editor` is the level editor.
 **P** downloads a replayable session bundle stamped with the served tree.

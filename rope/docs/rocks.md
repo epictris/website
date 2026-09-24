@@ -258,11 +258,125 @@ bun run assets:rocks ball                       # levels/ball.json -> public/roc
 bun run assets:rocks ball --only 3,17           # just those body indices, for a quick look while tuning
 bun run assets:rocks ball --out /tmp/try.glb    # somewhere else
 bun run assets:rocks ball --flat --decimate 1 --scale 3   # no AO bake, uncollapsed, finer stone (S = 3 m)
+bun run assets:rocks ball --only 150 --scale 2 --out public/rocks/debug150.glb --dump-stages /tmp/stages   # the reference body, with its stages
+bun run assets:rocks ball --no-debug-attributes   # the shipping build, without _SHARD and _PROVENANCE
+bun run src/tools/cli.ts rocks-check public/rocks/ball.glb --body 150   # the build report, the file and the geometry
 ```
 
 Then play `?level=BALL` (the rocks load by the level's file name), or headless: `bun run src/tools/cli.ts shot <bundle> --3d --query rocks=ball`.
 Add `?rocks=0` or `?paint=0` for the A/B.
 `--only` with no match prints the level's rock body indices.
+
+## Reporting a defect
+
+A rock defect report is an **F4 view capture plus a screenshot**.
+F4 in the game writes one JSON line to the console (`[view] {...}`) and, when the browser allows it, to the clipboard; the toast says "view copied" or "view logged".
+It carries the level, the camera's `at` (sim metres), `orbit` and `zoom` in the units `cli shot` takes, the rock file's name and id, every rock body's current hash, which bodies were mounted, and the served tree.
+
+The page stamps the file it mounted: `[rocks] ball: 57 mounted, file 60175184 bytes, id 3f9a1c2e`, where the id is `rockFileId` (FNV-1a over the file's 32-bit words, `render3d/rocks.ts`).
+The build prints the same id when it finishes, so a report and a build are matched by number rather than by time.
+In dev the page fetches the GLB with `cache: "no-store"`, so a rebuilt file is never answered from the browser cache.
+The same facts are on `window.__rocks`.
+
+`cli shot --view capture.json` reproduces the picture headlessly: it sets `--at`, `--orbit`, `--zoom`, `--3d` and `rocks=<name>` from the capture (a flag on the command line wins), records a one-frame bundle of the capture's level when no bundle is given, and refuses when `public/rocks/<name>.glb` has a different id from the capture's unless `--allow-stale-rocks`.
+The console line pastes as it is; its `[view] ` prefix is stripped.
+
+## Diagnosing
+
+Written after one evening with five defects on body 150, each attributed by a different throwaway probe (see [plans/rock-debugging.md](../plans/rock-debugging.md) for the table).
+The rule since: a step that deletes or rewrites faces sets provenance or is counted in the build report, or it does not land; and no fix to `rocks.py` lands without the build report and the file check both clean on body 150 at scale 2, seed 0.
+
+The investigation goes: `cli shot --view capture.json --query rockdebug=backfaces` (a magenta patch is a hole), then `--query rockdebug=provenance --pick X,Y` (which shard, which step), then `cli rocks-check` on the file the capture names, then a stage dump or an A/B build of the step it points at.
+
+### The build report
+
+Every build writes `<level>.rocks.json` beside the GLB and prints it as a table, one row per body: shards placed, shards that reached past the outline and were clipped, slivers dropped, clips closed by the exact solver, closed by the hole fill, results rejected for leaving their shard's box, shards dropped for it, chunks re-wound (`outward`), chunks **still open** after all that, buried triangles dropped, faces culled, faces after the join, triangles, and the AO atlas's size and coverage.
+A chunk still open after repair **fails the build** (exit 1, the file is still written), because it is a hole in the rock; the ids of the open shards are listed under the row.
+Closedness is checked before the buried pass, which opens chunks on purpose.
+
+A clean build of body 150 at scale 2, seed 0 (2026-09-24) printed:
+
+```
+  body   shards clipped slivers exact filled reject drop rewound OPEN   buried  culled   faces    tris   AO
+   150      274     220       0     9      0      0    0       1    0     6131   10209   13434   18915   1024px 16%
+```
+
+so a regression is a diff against that line.
+
+### Provenance in the mesh
+
+Every face carries which step last made or altered it, and every vertex the id of the chunk it belongs to, exported as the glTF attributes `_PROVENANCE` (per corner, so the exporter splits vertices between faces that disagree) and `_SHARD`; three reads them as `_provenance` and `_shard`.
+
+| Value | Step |
+|---|---|
+| 1 | template: a shard that needed no clip |
+| 2 | float clip: made by Blender's float boolean |
+| 3 | exact clip: made by the exact solver, after the float result was open |
+| 4 | hole fill: added by `fill_holes` after both solvers left the shard open |
+| 5 | backing: the prism behind the shards |
+| 6 | rim inset: a face with a corner moved by `inset_wall` |
+| 7 | planar dissolve: a polygon the dissolve merged from several triangles |
+
+The dissolve overwrites what was under it, so on a shipped file most large facets read 7; the stage dumps keep the earlier values.
+A shard's id is its index in the body's scatter, running across the body's pieces, with each piece's backing the id after its last shard, so an id means the same shard in every stage whether or not it survived the clip.
+The random per-shard mark the material reads (`COLOR_0.b`) is still drawn from the stream as before rather than derived from the id, so adding the attributes changed no rock: the same body builds the same triangles as before.
+A deleted face has no provenance; the steps that delete (sliver filter, buried pass, cull, dissolve) are counted in the report instead.
+The two attributes cost about 5 bytes a vertex before compression; `--no-debug-attributes` leaves them out, and a shipping build passes it.
+
+### `cli rocks-check`
+
+`bun run src/tools/cli.ts rocks-check public/rocks/ball.glb [--body 150] [--cameras head,above] [--no-geometry] [--json]` checks a rock file in three halves.
+
+- **The file, in bun** (`src/tools/rockCheck.ts`): every `body-<i>` node carries `rockIndex` and `rockHash`, and the hash is compared with the level named in the scene's `rockLevel` extra (a mismatch is reported STALE, not a failure); every primitive has `POSITION`, `NORMAL`, `TEXCOORD_0`, `TEXCOORD_1` and `COLOR_0` and its material an `occlusionTexture` on texCoord 1 (not required of a `--flat` build); `TEXCOORD_0` spans more than one unit; `TEXCOORD_1` stays in 0..1; `COLOR_0.r` has open values and is not mostly near 0; and triangles and bytes per body are compared with a soft budget (60,000, 4 MB), as warnings. It lists the attributes present, which is how `_SHARD` and `_PROVENANCE` are confirmed. `bun run assets:rocks` runs this half on its own output (`--no-check` skips it) and fails on a defect.
+- **The build report** beside the file, as above.
+- **The geometry, in Blender** (`tools/blender/check.py`, skipped by `--no-geometry`): rays at 2 cm from four cameras 6 m out (head-on, raised 30 degrees, 30 degrees to each side; the spacing widens for a body so large that a camera would cast more than 250,000) report every ray whose first hit is a back face, clustered to 25 cm; coincident coplanar faces (same-facing, normal to a degree, plane to a millimetre, overlapping by more than 1 mm^2) between different shards; degenerate triangles; and up-facing faces over 10 cm^2, seen from the raised or head-on camera, whose AO texel reads under 0.05.
+  Every finding prints its point both in three's frame and as `--at` for `cli shot`.
+  These are for a human to judge and never fail the command: a notch seen from above is a legitimate back face.
+
+`--face 150:9021` prints one triangle's vertices and attributes (the `face` a pick logs).
+`--shard 143` on a stage dump prints that shard's triangles, closedness and bounding box per stage (below).
+
+### Debug views and picking
+
+`?rockdebug=<view>` (and `cli shot --query rockdebug=<view>`) draws every mounted rock in one of six views (`src/render3d/rockDebug.ts`), each unlit, unfogged and unpainted, in colours nothing else uses:
+
+- `backfaces`: the rock as it is, front faces only, and every back face in flat magenta. Any magenta pixel is a hole or an inside-out face.
+- `shards`: a flat hue per `_SHARD` under a fixed hemisphere light. Overlaps and leftovers of the buried pass show as speckle.
+- `provenance`: a flat colour per `_PROVENANCE`, with a legend (grey template, blue float clip, orange exact clip, red fill, green backing, yellow rim, purple dissolve).
+- `ao`: the AO atlas alone, grey.
+- `normals`: the world normal as colour.
+- `wire`: the rock as it is with its triangles drawn over it.
+
+With a view on, a click in the windowed game names the face under the pointer, and so does `cli shot --pick X,Y` (view pixels of the 1920x1080 frame):
+
+```
+[rocks] pick body 150 shard 169 provenance 1 (template) face 12048 at (50.000, 2.000, 0.094) normal (0.230, 0.029, 0.973) ao 0.88 - sim --at 50.000,-2.000; cli rocks-check <file> --face 150:12048
+```
+
+`BACK FACE` is appended when the ray met the back of the face.
+Pointer-locked in fullscreen the click belongs to the game, so picking is a windowed and headless tool.
+
+### A/B switches and stage dumps
+
+The generator takes switches that each turn one step off, echoed in the build log, the report and the file's `rockFlags` extra, so an A/B file says what it is:
+`--no-buried`, `--no-cull`, `--no-detail`, `--no-inset`, `--no-repair` (take the float boolean's result as it comes, which reproduces the open and inside-out shards on demand) and `--seed N` (every body under another seed, for one build).
+The random stream is drawn the same whatever a switch turns off, so the rest of the rock is unchanged.
+The loop is: build A, build B, `cli shot --view` both, `cli shot --diff`.
+
+`--dump-stages DIR` writes `DIR/body-<i>.stages.glb` per body, one node per stage (`scatter`: every shard whole before the clip, with the backing; `clipped`: after the clip and the rim inset; `buried`; `sculpted`: after the detail offsets; `culled`; `final`), each carrying `_SHARD` and `_PROVENANCE`.
+The first stage a picked shard's face is missing from is the step that removed it: `cli rocks-check DIR/body-150.stages.glb --shard 4` prints it as a table.
+Dumps are a debugging artefact and are refused under `public/`.
+
+### What the tools found on body 150 (2026-09-24)
+
+Their first run, for the next person to judge, none of it fixed yet:
+
+- **Coincident rim faces.** 114 overlapping coplanar pairs between different shards. The largest (shards 4 and 83, 2 cm^2 at `--at 48.52,0.21`) are two rim-inset faces in the same outline wall plane: each clipped shard draws its inset in 1.5 to 6 mm, and with 220 clipped shards overlapping neighbours land within a millimetre of each other, which the detail offsets then move by the same vector. So `RIM_INSET` alone does not keep the cut faces apart.
+- **The backing's wall seen through the inset.** The backfaces view draws a 1 px magenta line along parts of the silhouette: the backing's wall stays on the outline while the shards' cut walls are inset, and the inside of that wall shows through the gap.
+- **A flat cavity mask.** `COLOR_0.r` reads open on 100% of vertices on the default (unfused) path, at HEAD as well: every shard is convex and its own island, so the dirt pass finds no cavity. The crevice colour is driven by the AO alone.
+- **A thin atlas.** The AO atlas is 16% covered at 1024 px.
+
+The throwaway scripts of the evening this came out of (`rocks-open.py`, `rocks-cap.py`, the BVH scan) lived in a session scratchpad and are superseded by the build report and `rocks-check`.
 
 ## What is not done
 
@@ -274,3 +388,4 @@ Add `?rocks=0` or `?paint=0` for the A/B.
 - No per-body caching across levels: every run rebuilds every body.
 - One generated texture for every rock; no per-level or per-body variation of it, and no moss or wet variants.
 - No cases yet. Per "validate the behaviour before writing the cases", the look has to be played first.
+- No regression fixture for the build report: building body 150 at scale 2, seed 0 and comparing the report to a committed one would make it a test, but it needs Blender and the GLBs are gitignored, so it is not in `bun run test`.

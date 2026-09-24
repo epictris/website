@@ -198,3 +198,64 @@ export const ROCK_HASH_KEY = "rockHash";
 export function rocksUrl(level: string): string {
   return `/rocks/${level}.glb`;
 }
+
+// A generated file's identity: FNV-1a over its bytes read as 32-bit
+// little-endian words (and any tail byte by byte), 8 hex characters. The
+// generator prints it at the end of a build, the page logs it when it mounts
+// the file, `cli rocks-check` prints it and an F4 view capture carries it, so a
+// report names the exact bytes it was made against. Identity, not security;
+// words rather than bytes because the level file is 60 MB and the page hashes
+// it on load (about a quarter of the byte loop's time). Here rather than in a
+// crypto API because bun and the browser must agree bit for bit.
+export function rockFileId(bytes: Uint8Array): string {
+  let h = 0x811c9dc5;
+  const aligned = bytes.byteOffset % 4 === 0 ? bytes : bytes.slice();
+  const words = new Uint32Array(aligned.buffer, aligned.byteOffset, aligned.byteLength >>> 2);
+  for (let i = 0; i < words.length; i++) {
+    h ^= words[i]!;
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  for (let i = words.length * 4; i < aligned.byteLength; i++) {
+    h ^= aligned[i]!;
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(16).padStart(8, "0");
+}
+
+// A VIEW CAPTURE (F4 in the game): what is needed to put a headless grab on the
+// same picture, in the units `cli shot` takes. `cli shot --view capture.json`
+// reads it back (docs/rocks.md, "Reporting a defect").
+export interface ViewCapture {
+  // The registry id of the level played (`?level=`).
+  level: string;
+  // The sim-metre point the camera looks at (sim y down, as `--at`).
+  at: [number, number];
+  // Yaw and pitch in degrees (`--orbit`); the game's own view is head-on.
+  orbit: [number, number];
+  zoom: number;
+  // The rock file's name and `rockFileId`, "" when none was mounted.
+  rocks: string;
+  rocksId: string;
+  // Every rock body's current `rockHash`, and which of them were mounted.
+  hash: Record<string, string>;
+  mounted: number[];
+  // The served tree (see src/sim/treeStamp.ts).
+  tree: string;
+  srcHash: string;
+}
+
+// What the page knows about the rock file it mounted, published as
+// `window.__rocks` for the F4 view capture (main.ts) and for a headless probe.
+export interface RocksLoaded {
+  // The name the file was loaded by (`?rocks=` or the level's file).
+  name: string;
+  url: string;
+  bytes: number;
+  // `rockFileId` of those bytes.
+  id: string;
+  // The body indices mounted and left on their extrusion (stale or missing),
+  // and every rock body's CURRENT hash, so a capture says what was on screen.
+  mounted: number[];
+  stale: number[];
+  hashes: Record<string, string>;
+}

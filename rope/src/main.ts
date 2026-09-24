@@ -19,6 +19,8 @@ import { SparkSystem } from "./render/sparks";
 import { DebrisSystem } from "./render/debris";
 import { ChainRetract } from "./render/chainRetract";
 import { NO_ORBIT } from "./render3d/space";
+import type { RocksLoaded, ViewCapture } from "./render3d/rocks";
+import { parseRockDebug, pickLine, PROVENANCE } from "./render3d/rockDebug";
 import { DEFAULT_LEVEL, LEVELS, listedLevels } from "./level/registry";
 import { spawnAtCheckpoint } from "./level/levelFormat";
 import {
@@ -156,6 +158,21 @@ if (!scene3d) sceneCanvas.style.display = "none";
 // borrows another file's, `?rocks=0` shows the plain extrusions.
 const rocksParam = params.get("rocks");
 scene3d?.setRocks(rocksParam === "0" ? null : (rocksParam ?? levelSpec.file ?? null));
+// `?rockdebug=<view>` draws the rocks in a debug view, and a click then names
+// the rock face under it (render3d/rockDebug.ts, docs/rocks.md "Diagnosing").
+// Windowed only in practice: pointer-locked in fullscreen the click is the
+// game's and the pointer is not where the aim is drawn.
+const rockDebug = parseRockDebug(params.get("rockdebug"));
+if (scene3d && rockDebug) {
+  scene3d.setRockDebug(rockDebug);
+  canvas.addEventListener("pointerdown", (e) => {
+    const at = clientToView(canvas, e.clientX, e.clientY);
+    const hit = scene3d.pickRock((at.x / VIEW_WIDTH) * 2 - 1, 1 - (at.y / VIEW_HEIGHT) * 2);
+    const line = hit ? pickLine(hit) : `[rocks] pick ${at.x.toFixed(0)},${at.y.toFixed(0)}: no rock there`;
+    console.info(line);
+    if (hit) showToast(`body ${hit.body} shard ${hit.shard} face ${hit.face} (${PROVENANCE[hit.provenance]?.name ?? "?"})`);
+  });
+}
 
 // `?dpr=N` draws the frame at a device pixel ratio this display does not have,
 // so the fill cost a 4K or HiDPI player pays can be read on a 1080p desk (see
@@ -533,7 +550,45 @@ window.addEventListener("keydown", (e) => {
     e.preventDefault();
     showPerfHud = !showPerfHud;
   }
+  if (e.code === "F4") {
+    e.preventDefault();
+    captureView();
+  }
 });
+
+// F4: THE VIEW CAPTURE. One JSON object that puts `cli shot --view` on the same
+// picture - the camera's point, orbit and zoom in the units `cli shot` takes,
+// and the rock file and body hashes the picture was drawn from - so a report
+// of "a hole here" is a replayable command rather than a guess at the camera
+// (docs/rocks.md, "Reporting a defect"). The numbers are read off the camera
+// the last frame was drawn with; nothing is computed. The clipboard may refuse
+// (a pointer-locked fullscreen page, a browser without the permission), so the
+// console line is the record and the toast says which one happened.
+function captureView(): void {
+  const rocks = (globalThis as { __rocks?: RocksLoaded }).__rocks;
+  const capture: ViewCapture = {
+    level: levelId,
+    at: [round4(camera.position.x), round4(camera.position.y)],
+    // The game draws head-on (`NO_ORBIT`, see the render call).
+    orbit: [0, 0],
+    zoom: round4(camera.zoom),
+    rocks: rocks?.name ?? "",
+    rocksId: rocks?.id ?? "",
+    hash: rocks?.hashes ?? {},
+    mounted: rocks?.mounted ?? [],
+    tree: dirty ? `${commit}+dirty` : commit,
+    srcHash,
+  };
+  const text = JSON.stringify(capture);
+  console.info(`[view] ${text}`);
+  void Promise.resolve()
+    .then(() => navigator.clipboard.writeText(text))
+    .then(
+      () => showToast("view copied"),
+      () => showToast("view logged (clipboard refused)", "warn"),
+    );
+}
+const round4 = (v: number): number => Math.round(v * 1e4) / 1e4;
 
 // What the replay transport drives. It decides when a step runs; the level, the
 // scene, the particles and the bundle buffers are all the page's, and this is

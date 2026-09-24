@@ -7,6 +7,7 @@ bun run src/tools/cli.ts ledges               # generated ledge-grab matrix (spe
 bun run src/tools/cli.ts corners              # corner geometry cases (compound-body seams, the release of a corner two bodies share)
 bun run src/tools/cli.ts tangents             # tangent-vertex cases (which corner a wrap node is born on)
 bun run src/tools/cli.ts decompose            # convex decomposition of authored concave outlines (partition, seams, determinism)
+bun run src/tools/cli.ts rocks-check public/rocks/ball.glb --body 150   # a generated rock file: build report, file checks, back faces, coincident faces, dark caps (docs/rocks.md)
 bun run src/tools/cli.ts silhouette           # the rock-fit outline tracer (raster, largest blob, holes ignored, 2 cm simplification)
 bun run src/tools/cli.ts dmath                # the deterministic libm: bit-exact vectors on this engine + no platform Math in the sim
 bun run dmath:crosscheck                      # how far THIS engine's own Math is from it (an instrument, not a test)
@@ -49,6 +50,7 @@ bun run src/tools/cli.ts shot session.json --frame 65 --out f65.png     # the RE
 bun run src/tools/cli.ts shot session.json --frame 65 --3d --out f65.png # ...through the WebGL renderer
 bun run src/tools/cli.ts shot session.json --frames 60..120 --every 10 --3d  # a filmstrip + motion profile
 bun run src/tools/cli.ts shot session.json --frame 65 --3d --at 21,8.6 --orbit -35,25  # the 3D view turned about a world point (degrees), for a shape rather than a frame
+bun run src/tools/cli.ts shot --view capture.json --query rockdebug=backfaces --pick 960,540  # an F4 view capture reproduced (refused if the rock file's id differs, --allow-stale-rocks), in a rock debug view, naming the face under a pixel
 bun run src/tools/cli.ts shot session.json --frame 65 --3d --query paint=0             # any other URL switch passed to the page: here the painted light off, for an A/B
 bun run src/tools/cli.ts shot session.json --frames 1..1600 --every 40 --3d --probe      # which frame compiled which program, the LAZY way (no prewarm)
 bun run src/tools/cli.ts shot session.json --frames 1..1600 --every 40 --3d --probe all  # after the game's prewarm: anything `fresh` is a stutter it missed
