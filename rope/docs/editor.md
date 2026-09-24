@@ -222,6 +222,11 @@ Both lenses are driven from the same visible height, so the gameplay plane is fr
 The two cameras both live on `Scene3D` for the life of the scene rather than one being rebuilt on the toggle, since the gizmo raycasts against whichever is current and wants something stable to be handed.
 A **▶ Test is always perspective**, whatever the toggle says: the point of a test is that the framing is the player's, and the player has no lens button.
 
+The toggle is the editor's view of the whole scene.
+The `lens` picker on the geometry panel is a different thing: it is authored, saved and seen by the player, and it draws one object orthographically inside the perspective frame (see [Per-object projection](render3d.md#per-object-projection)).
+An orthographic object's plane handles land on its drawn face at any `off z`, since the overlay is itself an orthographic projection of the plane.
+The transform gizmo does not follow it yet: the gizmo is drawn in perspective at the object's real position, so off the plane it is not over the object.
+
 ## The transform gizmo
 
 A single selected object or body carries the standard **red/green/blue handles** in the 3D scene - arrows to move, rings to turn, boxes to size - through three.js's own `TransformControls` (`editor/gizmo.ts`).

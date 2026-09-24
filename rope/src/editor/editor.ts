@@ -219,6 +219,8 @@ import {
 import * as THREE from "three";
 import { Scene3D, type Scene3DLevel } from "../render3d/scene";
 import {
+  focalLengthFromFov,
+  FOV_Y_DEG,
   isHeadOn,
   MAX_ORBIT_PITCH,
   threeY,
@@ -251,7 +253,12 @@ import {
   type SerializedFrame,
   type WorldDigest,
 } from "../sim/trace";
-import type { EnvironmentData, LevelData, SceneObjectData } from "../level/levelFormat";
+import type {
+  EnvironmentData,
+  LevelCameraData,
+  LevelData,
+  SceneObjectData,
+} from "../level/levelFormat";
 // The tree this page was served from, not the commit the dev server booted at
 // (see src/sim/treeStamp.ts). Aliased because `commit` and `dirty` are ordinary
 // words in an editor that autosaves.
@@ -772,6 +779,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // Mutated in place by the environment panel exactly as `cam` and `light`
     // are, so a snapshot sharing it would alias the state it restores.
     environment: m.environment ? { ...m.environment } : undefined,
+    // Mutated in place by the camera fields, for the same reason.
+    camera: m.camera ? { ...m.camera } : undefined,
     // Mutated in place by the Level panel, exactly as the environment block is
     // and for the same reason: a shared reference would alias the state the
     // undo is meant to be restoring.
@@ -4393,6 +4402,40 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     num("rot x°", (v) => deg(v.rotX), (v, d) => (v.rotX = rad(d)), 5);
     num("rot y°", (v) => deg(v.rotY), (v, d) => (v.rotY = rad(d)), 5);
 
+    // Which lens the object is drawn through (`GeometryObjectData.projection`),
+    // whatever the kind. Orthographic drops the perspective divide for this
+    // object alone: it keeps its size at any depth and does not parallax.
+    {
+      const pw = el("label", "ed-field");
+      pw.textContent = "lens";
+      const ps = document.createElement("select");
+      ps.className = "ed-select";
+      const first = items[0]!.visual.projection;
+      const shared = items.every((b) => b.visual.projection === first) ? first : null;
+      if (!shared) {
+        const o = document.createElement("option");
+        o.value = "";
+        o.textContent = "mixed";
+        ps.appendChild(o);
+      }
+      for (const value of ["perspective", "orthographic"] as const) {
+        const o = document.createElement("option");
+        o.value = value;
+        o.textContent = value;
+        ps.appendChild(o);
+      }
+      ps.value = shared ?? "";
+      ps.addEventListener("change", () => {
+        if (!ps.value) return;
+        beginAction();
+        for (const b of items) b.visual.projection = ps.value as EdVisual["projection"];
+        markDirty();
+        refreshFields();
+      });
+      pw.appendChild(ps);
+      g.appendChild(pw);
+    }
+
     if (sharedKind !== "mesh") {
       // Extrusion controls. Both are optional overrides with a real third state
       // - "take it from somewhere else" - so clearing the field is meaningful
@@ -6260,6 +6303,49 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   //
   // A level with no environment block carries none until something is authored,
   // which is what keeps a file that never touches this byte-identical.
+  // The level's 3D camera (`LevelCameraData`): the lens it wears and how far
+  // along z it stands. Level-wide like the environment, and like it a level
+  // carries no block until one of these is authored; clearing both fields drops
+  // the block again.
+  function buildLensGroup(): void {
+    const g = el("div", "ed-group");
+    g.appendChild(heading("3D camera"));
+    const cam = (): LevelCameraData => (model.camera ??= {});
+    const drop = (key: keyof LevelCameraData): void => {
+      if (!model.camera) return;
+      delete model.camera[key];
+      if (Object.keys(model.camera).length === 0) model.camera = undefined;
+    };
+    const focal = numField(
+      g,
+      "focal mm",
+      () => model.camera?.focalLength ?? null,
+      // Below a millimetre the field of view runs out past 170 degrees and the
+      // frame stops being a picture of anything.
+      (v) => (cam().focalLength = Math.max(1, v)),
+      5,
+      false,
+      {
+        placeholder: `${focalLengthFromFov(FOV_Y_DEG).toFixed(1)} (default)`,
+        onEmpty: () => drop("focalLength"),
+      },
+    );
+    focal.title =
+      "35 mm-equivalent focal length. Longer flattens the scene toward orthographic, shorter deepens it; the gameplay plane stays framed the same because the camera dollies to keep it so.";
+    const z = numField(
+      g,
+      "cam z",
+      () => (model.camera?.zOffset === undefined ? null : model.camera.zOffset * M2PX),
+      (v) => (cam().zOffset = v * PX),
+      10,
+      false,
+      { placeholder: "0", onEmpty: () => drop("zOffset") },
+    );
+    z.title =
+      "How far the camera stands along z from where the zoom puts it, positive toward you. The plane at this depth is framed exactly like the 2D view; at anything but 0 the gameplay plane is drawn smaller (positive) or larger (negative) than the overlay's outlines, handles and reticle.";
+    inspector.appendChild(g);
+  }
+
   function buildEnvironmentGroup(): void {
     const g = el("div", "ed-group");
     g.appendChild(heading("Environment"));
@@ -6457,6 +6543,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     inspector.appendChild(player);
 
     buildEnvironmentGroup();
+    buildLensGroup();
 
     // Chains carry their own, exclusive selection (see `selectedChainIds`).
     const chains = selectedChains();

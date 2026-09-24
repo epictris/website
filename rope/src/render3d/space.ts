@@ -29,6 +29,7 @@ import { Vec2 } from "../engine/vec2";
 import { PIXELS_PER_METER } from "../engine/units";
 import { VIEW_HEIGHT, VIEW_WIDTH } from "../render/viewport";
 import type { Camera } from "../render/camera";
+import type { LevelCameraData } from "../level/levelFormat";
 
 // Vertical field of view, degrees. Deliberately narrow: at ~34 deg the gameplay
 // plane reads almost orthographic - a wall at the top of the frame is barely
@@ -38,6 +39,43 @@ import type { Camera } from "../render/camera";
 // from "2.5D diorama" into "first-person-ish", so it is a constant rather than
 // something a level authors.
 export const FOV_Y_DEG = 34;
+
+// A level may swap that lens and move the camera along z (`LevelCameraData`),
+// and this is the whole of what it can say, resolved. `FOV_Y_DEG` and 0 are the
+// camera every level had before it could.
+export interface SceneLens {
+  fovYDeg: number;
+  // Metres the camera stands along z from where the zoom puts it, positive
+  // toward the viewer - which is the same thing as the depth that is framed
+  // exactly as the 2D view frames the gameplay plane.
+  zOffset: number;
+}
+export const DEFAULT_LENS: SceneLens = { fovYDeg: FOV_Y_DEG, zOffset: 0 };
+
+// A 35 mm-equivalent lens: a full-frame sensor is 24 mm tall, so the vertical
+// field of view is 2 atan(12 / f).
+const SENSOR_HALF_HEIGHT_MM = 12;
+export function fovFromFocalLength(mm: number): number {
+  return (2 * Math.atan(SENSOR_HALF_HEIGHT_MM / mm) * 180) / Math.PI;
+}
+export function focalLengthFromFov(fovYDeg: number): number {
+  return SENSOR_HALF_HEIGHT_MM / Math.tan((fovYDeg * Math.PI) / 360);
+}
+
+// What a level's camera block asks for. A focal length that is not a positive
+// number has no field of view, so it is the default lens rather than a NaN camera.
+export function lensOf(data: LevelCameraData | undefined): SceneLens {
+  const mm = data?.focalLength;
+  return {
+    fovYDeg: mm !== undefined && mm > 0 ? fovFromFocalLength(mm) : FOV_Y_DEG,
+    zOffset: data?.zOffset ?? 0,
+  };
+}
+
+// How far past the camera the scene is drawn, in metres. A floor rather than a
+// constant: a long lens stands the camera far back to frame the same view, and
+// a fixed far plane would clip the gameplay plane itself once it did.
+export const CAMERA_FAR = 400;
 
 // The frame is a fixed 16:9 (see render/viewport.ts), so the 3D camera's aspect
 // is a constant for the same reason the 2D camera's viewport is.
@@ -149,16 +187,25 @@ export type ViewCamera = THREE.PerspectiveCamera | THREE.OrthographicCamera;
 // camera is dollied to exactly the distance the perspective one would be, so it
 // clips the same scene and orbits about the same point - and only the projection
 // differs.
+//
+// The lens's `zOffset` moves the whole placement along z: the camera stands that
+// much nearer or further, looks at (and orbits about) the point that much off
+// the plane, and so frames the plane at `z = zOffset` exactly as the 2D view
+// frames the gameplay plane. At 0 it is the arithmetic it has always been.
 export function syncCamera(
   threeCam: ViewCamera,
   camera: Camera,
-  fovYDeg = FOV_Y_DEG,
+  lens: SceneLens = DEFAULT_LENS,
   orbit: CameraOrbit = NO_ORBIT,
 ): void {
   const x = camera.position.x;
   const y = threeY(camera.position.y);
-  const dist = cameraDistance(camera, fovYDeg);
+  const z = lens.zOffset;
+  const dist = cameraDistance(camera, lens.fovYDeg);
   const aspect = camera.viewportWidth / camera.viewportHeight;
+  // Only ever pushed OUT, so every camera that fitted inside the old constant
+  // is drawn with exactly the depth range it always was.
+  threeCam.far = Math.max(CAMERA_FAR, dist + z + CAMERA_FAR / 2);
   if (threeCam instanceof THREE.OrthographicCamera) {
     // The frustum IS the 2D renderer's transform, read off the same visible
     // height the dolly distance comes from: no divide, so this holds at every
@@ -170,7 +217,7 @@ export function syncCamera(
     threeCam.top = halfH;
     threeCam.bottom = -halfH;
   } else {
-    threeCam.fov = fovYDeg;
+    threeCam.fov = lens.fovYDeg;
     threeCam.aspect = aspect;
   }
   // The head-on view is written out rather than reached through the orbit path
@@ -178,7 +225,7 @@ export function syncCamera(
   // `lookAt` that ought to produce the identity rotation is not a thing to take
   // on trust when every overlay in the project is aligned against it.
   if (isHeadOn(orbit)) {
-    threeCam.position.set(x, y, dist);
+    threeCam.position.set(x, y, z + dist);
     // Looking straight down -z keeps the gameplay plane parallel to the image
     // plane, which is what makes the alignment with the 2D overlay exact rather
     // than exact-at-the-centre. `lookAt` would give the same rotation, but this
@@ -195,10 +242,10 @@ export function syncCamera(
   threeCam.position.set(
     x + dist * Math.sin(orbit.yaw) * cp,
     y + dist * Math.sin(pitch),
-    dist * Math.cos(orbit.yaw) * cp,
+    z + dist * Math.cos(orbit.yaw) * cp,
   );
   threeCam.up.set(0, 1, 0);
-  threeCam.lookAt(x, y, 0);
+  threeCam.lookAt(x, y, z);
   threeCam.updateProjectionMatrix();
 }
 

@@ -566,6 +566,10 @@ export interface CollisionObjectData extends ObjectPlacement {
 // to primitives that state the outline they were drawing (see
 // `scripts/migrate-primitives.ts`), so nothing changed appearance and every one
 // of those fields now means what it says.
+// The two lenses a geometry object can be drawn through (see
+// `GeometryObjectData.projection`).
+export type GeometryProjection = "perspective" | "orthographic";
+
 export interface GeometryObjectData extends ObjectPlacement {
   type: "geometry";
   // How this is turned into something the GPU draws. The two answers are the two
@@ -623,6 +627,22 @@ export interface GeometryObjectData extends ObjectPlacement {
   // Uniform mesh scale, dimensionless: it multiplies a model's own size and is
   // not a length, so it does NOT scale on the way in or out.
   scale?: number;
+  // Which lens THIS object is drawn through. Absent = "perspective", the scene
+  // camera's own, which is what every object was before the field existed.
+  //
+  // "orthographic" draws it with no perspective divide: a metre is the same
+  // number of pixels at every depth, so it neither shrinks toward the vanishing
+  // point behind the gameplay plane nor swells in front of it, and it does not
+  // parallax as the camera pans. The two lenses agree exactly ON the plane
+  // (z = 0), so a form there looks the same either way; the difference is
+  // entirely in how its off-plane parts, and its `z`, read.
+  //
+  // It is a statement about the PICTURE and nothing else, like every field
+  // here. The object is still lit, shadowed, fogged and depth-tested at the
+  // place it is authored - only where its vertices land on screen changes (see
+  // render3d/projection.ts) - so it sorts against perspective objects by true
+  // depth, and the shadow it casts is the one its real position throws.
+  projection?: GeometryProjection;
   // Depth through z. Absent = `DEFAULT_THICKNESS` on a body that collides and
   // `DECOR_DEPTH` on one that does not, which is what a flat fill drawn before
   // every body already was. It is NOT the collision object's `thickness`: that
@@ -2110,6 +2130,37 @@ export interface EnvironmentData {
   fogColor?: string;
 }
 
+// The 3D camera a level is seen through (`render3d/space.ts`). Both fields are
+// optional and absent is the camera every level had before the block existed.
+//
+// It is a sibling of the environment block rather than part of it because
+// `zOffset` is a LENGTH, and the environment block holds none by design (see
+// EnvironmentData): this one is scaled like the geometry is.
+//
+// Neither field changes how much of the world the 2D view shows. The camera
+// regions and the zoom still decide that, and the 3D camera is still placed
+// from them every frame; these say what lens it wears and how far along z it
+// stands from where that placement would put it.
+export interface LevelCameraData {
+  // Focal length in MILLIMETRES, as a 35 mm-equivalent lens: the vertical field
+  // of view is 2 atan(12 / focalLength), a full-frame sensor being 24 mm tall.
+  // Absent = the 34 deg lens (`FOV_Y_DEG`), about 39 mm. Longer flattens the
+  // scene toward orthographic and shorter deepens it; the gameplay plane is
+  // framed the same either way, because the camera dollies to keep it so.
+  //
+  // A lens property rather than a distance in the level, so NOT scaled between
+  // pixels and metres.
+  focalLength?: number;
+  // How far the camera stands along z from where the zoom puts it, positive
+  // toward the viewer (scene pixels on disk, metres in the sim). Equivalently,
+  // the depth that is framed exactly as the 2D view frames the gameplay plane:
+  // at 0 that depth IS the gameplay plane, and every 2D overlay (the reticle,
+  // the area glyphs, the editor's handles) sits exactly on it. At anything
+  // else the gameplay plane is drawn a little smaller (positive) or larger
+  // (negative) than the overlay describing it.
+  zOffset?: number;
+}
+
 // WHERE A RUN STARTS, and how. The point is the avatar's centre; `radius` is
 // the avatar it is the centre of (the ball plays a multiple of it - see
 // `BallLevel.BALL_RADIUS_SCALE`).
@@ -2237,6 +2288,9 @@ export interface LevelData {
   // absent means the defaults, so the 2D renderer and every existing level are
   // untouched by it.
   environment?: EnvironmentData;
+  // The 3D camera's lens and depth (see LevelCameraData). Render-only like the
+  // environment, and absent means the camera every level had before it.
+  camera?: LevelCameraData;
 }
 
 // ---------------------------------------------------------------------------
@@ -2367,6 +2421,7 @@ export interface RawLevelData {
   chains?: (ChainData | LegacyChainData)[];
   vines?: VineData[];
   environment?: EnvironmentData;
+  camera?: LevelCameraData;
 }
 
 function isLegacyBody(b: LevelBodyData | LegacyBodyData): b is LegacyBodyData {
@@ -3077,6 +3132,8 @@ export function scaleObject(o: SceneObjectData, factor: number): SceneObjectData
     ...(o.rotX !== undefined ? { rotX: o.rotX } : {}),
     ...(o.rotY !== undefined ? { rotY: o.rotY } : {}),
     ...(o.scale !== undefined ? { scale: o.scale } : {}),
+    // A choice of lens, not a length.
+    ...(o.projection !== undefined ? { projection: o.projection } : {}),
     ...(o.depth !== undefined ? { depth: o.depth * factor } : {}),
     ...(o.bevel !== undefined ? { bevel: o.bevel * factor } : {}),
     ...(o.texture !== undefined ? { texture: o.texture } : {}),
@@ -3280,6 +3337,18 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
     // is copied rather than scaled - but copied, not shared, since everything
     // else here hands the caller a fresh object.
     ...(data.environment ? { environment: { ...data.environment } } : {}),
+    // The focal length is a lens property in millimetres and crosses untouched;
+    // the offset is a length in the level and scales like one.
+    ...(data.camera
+      ? {
+          camera: {
+            ...(data.camera.focalLength !== undefined
+              ? { focalLength: data.camera.focalLength }
+              : {}),
+            ...(data.camera.zOffset !== undefined ? { zOffset: data.camera.zOffset * factor } : {}),
+          },
+        }
+      : {}),
     ...(notes ? { notes } : {}),
     ...(checkpoints ? { checkpoints } : {}),
     ...(chains ? { chains } : {}),

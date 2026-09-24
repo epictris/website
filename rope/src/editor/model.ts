@@ -85,6 +85,8 @@ import {
   isAnchorObject,
   isGeometryObject,
   type CheckpointData,
+  type GeometryProjection,
+  type LevelCameraData,
   type NoteData,
   type ShapeData,
 } from "../level/levelFormat";
@@ -761,6 +763,8 @@ export interface EdVisual {
   rotX: number;
   rotY: number;
   scale: number; // dimensionless
+  // Which lens this is drawn through (see `GeometryObjectData.projection`).
+  projection: GeometryProjection;
   depth: number | null; // metres; null = the shape's own thickness
   texture: string; // texture key (authored set or material); "" = from material
   tileScale: number | null; // multiple of the texture's own size; null = 1 (life size)
@@ -846,6 +850,10 @@ export interface EdModel {
   // editor: the scene is rebuilt from the model, so it goes on looking however
   // the model says, and the loss only shows up next time the game loads the file.
   environment: EnvironmentData | undefined;
+  // The 3D camera's lens and z offset (`LevelCameraData`), in metres like the
+  // rest of the model. Carried for the environment's reason: a block the editor
+  // does not write back is a block it deletes 750 ms after the level is opened.
+  camera: LevelCameraData | undefined;
   // What the level select shows (see `LevelMetaData`): the title, and whether
   // this level is the introduction or off the list entirely.
   //
@@ -961,6 +969,7 @@ export const defaultVisual = (): EdVisual => ({
   rotX: 0,
   rotY: 0,
   scale: 1,
+  projection: "perspective",
   depth: null,
   texture: "",
   tileScale: null,
@@ -1070,6 +1079,7 @@ export function edVisual(v: GeometryObjectData | undefined): EdVisual {
     rotX: v.rotX ?? d.rotX,
     rotY: v.rotY ?? d.rotY,
     scale: v.scale ?? d.scale,
+    projection: v.projection ?? d.projection,
     depth: v.depth ?? null,
     texture: v.texture ?? d.texture,
     bevel: v.bevel ?? null,
@@ -1109,6 +1119,7 @@ export function visualData(v: EdVisual): GeometryObjectData | undefined {
     ...(v.rotX !== 0 ? { rotX: v.rotX } : {}),
     ...(v.rotY !== 0 ? { rotY: v.rotY } : {}),
     ...(v.scale !== d.scale ? { scale: v.scale } : {}),
+    ...(v.projection !== d.projection ? { projection: v.projection } : {}),
     ...(v.depth !== null ? { depth: v.depth } : {}),
     ...(v.texture ? { texture: v.texture } : {}),
     ...(v.tileScale !== null ? { tileScale: v.tileScale } : {}),
@@ -1792,6 +1803,7 @@ function lightItem(
     // Copied rather than shared, since everything else here hands the caller a
     // fresh object, and undo snapshots this by value.
     environment: data.environment ? { ...data.environment } : undefined,
+    camera: data.camera ? { ...data.camera } : undefined,
     meta: { ...data.meta },
   };
 }
@@ -2341,6 +2353,7 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
     // does not support it", it is the editor DELETING a level's lighting the
     // first time the file is opened.
     ...(model.environment ? { environment: { ...model.environment } } : {}),
+    ...(model.camera ? { camera: { ...model.camera } } : {}),
     ...(notes.length ? { notes } : {}),
     ...(checkpoints.length ? { checkpoints } : {}),
     ...(chains.length ? { chains } : {}),
@@ -3874,6 +3887,7 @@ export function emptyModel(): EdModel {
     // A fresh level authors none, which is every level authored before the
     // block and is what the renderer's own defaults are for.
     environment: undefined,
+    camera: undefined,
     // Unnamed and listed: a new level belongs on the menu, and the Level panel
     // is where it is given a title.
     meta: {},

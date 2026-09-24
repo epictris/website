@@ -51,6 +51,7 @@ import { DEFAULT_BEVEL, cylinderSolid, extrudeOutline } from "./extrude";
 import { isAuthoredSurface, isSolidSurface, loadMesh, surfaceFor, surfaceName } from "./assets";
 import { buildWater } from "./water";
 import { DEFAULT_LIGHT_Z, LightRig, type MountedLight } from "./lights";
+import { applyProjection } from "./projection";
 import { orientTo, placeAt, threeY } from "./space";
 
 // The floor an authored colour's brightness is lifted to before it tints the
@@ -240,6 +241,7 @@ export function mountVisual(
     // nothing else, so the body goes on colliding with the outline it states.
     mesh.rotation.set(g?.rotX ?? 0, g?.rotY ?? 0, 0);
     mesh.position.z = z;
+    applyProjection(mesh, g?.projection);
     parent.add(mesh);
     return { geometry: owned };
   }
@@ -260,6 +262,7 @@ export function mountVisual(
   placeholder.castShadow = opts.castShadow;
   placeholder.receiveShadow = true;
   holder.add(placeholder);
+  applyProjection(placeholder, g?.projection);
 
   const key = g?.mesh;
   if (!key) return { geometry: owned };
@@ -283,6 +286,8 @@ export function mountVisual(
       mesh.castShadow = opts.castShadow;
       mesh.receiveShadow = true;
     });
+    // After the texture override, so the lens is applied to what it wears.
+    applyProjection(obj, g?.projection);
     holder.add(obj);
   });
   return { geometry: owned };

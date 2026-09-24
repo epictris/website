@@ -23,12 +23,17 @@ import { VIEW_HEIGHT, VIEW_WIDTH } from "../render/viewport";
 import type { Camera } from "../render/camera";
 import {
   cameraDistance,
+  DEFAULT_LENS,
+  focalLengthFromFov,
   FOV_Y_DEG,
+  lensOf,
+  type SceneLens,
   projectToView,
   syncCamera,
   unprojectToPlane,
 } from "../render3d/space";
 import { cylinderSolid, extrudeOutline } from "../render3d/extrude";
+import { cloneWithPatches, isOrthographicMaterial } from "../render3d/projection";
 import {
   DEFAULT_TEXTURE,
   emissiveMapName,
@@ -59,6 +64,7 @@ import {
   normalizeLevelData,
   spawnAtCheckpoint,
   type GeometryObjectData,
+  type GeometryProjection,
   type LightObjectData,
   type LevelBodyData,
   type SceneObjectData,
@@ -131,6 +137,99 @@ const PIXEL_TOL = 0.01;
 // Geometry attributes are float32, so a "these are the same number" test on one
 // is held to float32 precision at the magnitudes a level uses, not float64.
 const F32 = 1e-6;
+
+// A LEVEL'S LENS (`LevelCameraData`): its focal length and z offset.
+//
+// The claims are the correspondence's own, restated for a camera the level has
+// moved. A focal length changes the lens and NOT the framing - the camera
+// dollies so the gameplay plane stays exactly where the 2D view has it - and a
+// z offset moves the framed plane itself, so the correspondence holds on the
+// plane at that depth and (by the ratio of the two distances) not on z = 0.
+function levelLens(): CaseResult[] {
+  const cam = camera(13.5, -7.25, 2);
+  const halfH = VIEW_HEIGHT / 2 / (cam.zoom * PIXELS_PER_METER);
+  const halfW = VIEW_WIDTH / 2 / (cam.zoom * PIXELS_PER_METER);
+  const corners = [
+    new Vec2(halfW, halfH),
+    new Vec2(-halfW, halfH),
+    new Vec2(halfW, -halfH),
+    new Vec2(-halfW, -halfH),
+  ].map((d) => cam.position.add(d));
+  // Worst view-pixel disagreement between the 2D transform and three's own
+  // projection, for points on the plane at depth `z`.
+  const worstAt = (lens: SceneLens, z: number): number => {
+    const c = new THREE.PerspectiveCamera();
+    syncCamera(c, cam, lens);
+    c.updateMatrixWorld(true);
+    let worst = 0;
+    for (const p of corners) {
+      const a = projectToView(cam, p);
+      const ndc = new THREE.Vector3(p.x, -p.y, z).project(c);
+      const b = { x: ((ndc.x + 1) / 2) * VIEW_WIDTH, y: ((1 - ndc.y) / 2) * VIEW_HEIGHT };
+      worst = Math.max(worst, Math.abs(a.x - b.x), Math.abs(a.y - b.y));
+    }
+    return worst;
+  };
+
+  const roundTrip = lensOf({ focalLength: focalLengthFromFov(FOV_Y_DEG) }).fovYDeg;
+  const defaults =
+    lensOf(undefined).fovYDeg === FOV_Y_DEG &&
+    lensOf(undefined).zOffset === 0 &&
+    lensOf({ focalLength: 0 }).fovYDeg === FOV_Y_DEG;
+
+  const tele = lensOf({ focalLength: 85 });
+  const teleErr = worstAt(tele, 0);
+  const moved: SceneLens = { fovYDeg: FOV_Y_DEG, zOffset: 1.5 };
+  const movedErr = worstAt(moved, moved.zOffset);
+  const movedPlaneErr = worstAt(moved, 0);
+
+  // A long lens stands the camera far back; the far plane has to follow or the
+  // gameplay plane itself is clipped away.
+  const far = new THREE.PerspectiveCamera();
+  syncCamera(far, cam, lensOf({ focalLength: 2000 }));
+  far.updateMatrixWorld(true);
+  const planeDepth = new THREE.Vector3(cam.position.x, -cam.position.y, 0).project(far).z;
+
+  const raw: RawLevelData = {
+    player: { x: 0, y: 0, radius: 8 },
+    bodies: [],
+    camera: { focalLength: 85, zOffset: 150 },
+  };
+  const scaled = scaleLevelData(raw, 1 / PIXELS_PER_METER).camera;
+  const scaledOk = scaled?.focalLength === 85 && Math.abs((scaled.zOffset ?? 0) - 1.5) < 1e-12;
+  const saved = modelToDisk(modelFromDisk(raw)).camera;
+  const savedOk = saved?.focalLength === 85 && Math.abs((saved.zOffset ?? 0) - 150) < 1e-9;
+  const bare = modelToDisk(modelFromDisk({ player: raw.player, bodies: [] }));
+  const bareOk = !("camera" in bare);
+
+  return [
+    {
+      name: "lens: focal length and field of view convert both ways, and absent is the old lens",
+      pass: Math.abs(roundTrip - FOV_Y_DEG) < 1e-9 && defaults,
+      detail: `${FOV_Y_DEG} deg -> ${focalLengthFromFov(FOV_Y_DEG).toFixed(3)} mm -> ${roundTrip} deg`,
+    },
+    {
+      name: "lens: an 85 mm lens frames the gameplay plane exactly as the 2D view does",
+      pass: teleErr < PIXEL_TOL,
+      detail: `worst corner ${teleErr.toFixed(5)} px`,
+    },
+    {
+      name: "lens: a z offset frames the plane at that depth as the 2D view, and not z = 0",
+      pass: movedErr < PIXEL_TOL && movedPlaneErr > 1,
+      detail: `framed plane ${movedErr.toFixed(5)} px, gameplay plane ${movedPlaneErr.toFixed(1)} px`,
+    },
+    {
+      name: "lens: a very long lens does not clip the gameplay plane",
+      pass: planeDepth > -1 && planeDepth < 1,
+      detail: `plane at ndc z ${planeDepth.toFixed(4)}, far ${far.far.toFixed(1)} m`,
+    },
+    {
+      name: "format: a level's camera block scales its offset, keeps its focal length, and survives a save",
+      pass: scaledOk && savedOk && bareOk,
+      detail: `scaled ${JSON.stringify(scaled)}, saved ${JSON.stringify(saved)}, bare level writes camera: ${!bareOk}`,
+    },
+  ];
+}
 
 function cameraCorrespondence(): CaseResult[] {
   const out: CaseResult[] = [];
@@ -222,7 +321,7 @@ function orbitView(): CaseResult[] {
   const plain = make();
   syncCamera(plain, cam);
   const zero = make();
-  syncCamera(zero, cam, FOV_Y_DEG, { yaw: 0, pitch: 0 });
+  syncCamera(zero, cam, DEFAULT_LENS,{ yaw: 0, pitch: 0 });
   const same =
     plain.position.equals(zero.position) &&
     plain.rotation.x === zero.rotation.x &&
@@ -242,7 +341,7 @@ function orbitView(): CaseResult[] {
   for (const yaw of [-1.2, -0.3, 0.45, 1.9, 3.0]) {
     for (const pitch of [-1.0, -0.2, 0, 0.35, 1.1]) {
       const c = make();
-      syncCamera(c, cam, FOV_Y_DEG, { yaw, pitch });
+      syncCamera(c, cam, DEFAULT_LENS,{ yaw, pitch });
       c.updateMatrixWorld(true);
       const ndc = focus.clone().project(c);
       worstCentre = Math.max(worstCentre, Math.abs(ndc.x), Math.abs(ndc.y));
@@ -258,7 +357,7 @@ function orbitView(): CaseResult[] {
   // A quarter turn of yaw looks along the level's own +x axis, which is what
   // says the sign and the axis are the ones the drag handler thinks they are.
   const side = make();
-  syncCamera(side, cam, FOV_Y_DEG, { yaw: Math.PI / 2, pitch: 0 });
+  syncCamera(side, cam, DEFAULT_LENS,{ yaw: Math.PI / 2, pitch: 0 });
   out.push({
     name: "orbit: a quarter turn puts the camera out along +x",
     pass:
@@ -271,7 +370,7 @@ function orbitView(): CaseResult[] {
   // Past the poles the up vector degenerates and the view rolls, so the pitch is
   // clamped inside `syncCamera` rather than only at the drag that writes it.
   const over = make();
-  syncCamera(over, cam, FOV_Y_DEG, { yaw: 0, pitch: Math.PI / 2 });
+  syncCamera(over, cam, DEFAULT_LENS,{ yaw: 0, pitch: Math.PI / 2 });
   out.push({
     name: "orbit: pitch is clamped short of the pole",
     pass: over.position.z > 0 && Math.abs(over.position.y - focus.y) < dist,
@@ -300,7 +399,7 @@ function orbitView(): CaseResult[] {
     { yaw: 2.6, pitch: 0.9 },
   ]) {
     const c = make();
-    syncCamera(c, cam, FOV_Y_DEG, orbit);
+    syncCamera(c, cam, DEFAULT_LENS,orbit);
     c.updateMatrixWorld(true);
     for (const p of [
       new Vec2(cam.position.x, cam.position.y),
@@ -328,13 +427,13 @@ function orbitView(): CaseResult[] {
   // implementation that quietly returned the 2D answer would pass the round trip
   // above at zero orbit and put every turned-view click somewhere else.
   const headOn = make();
-  syncCamera(headOn, cam, FOV_Y_DEG, { yaw: 0, pitch: 0 });
+  syncCamera(headOn, cam, DEFAULT_LENS,{ yaw: 0, pitch: 0 });
   headOn.updateMatrixWorld(true);
   const probe = new Vec2(cam.position.x + 5.5, cam.position.y - 2.75);
   const px = projectToView(cam, probe);
   const flat = unprojectToPlane(headOn, ...ndcOf(px));
   const turnedCam = make();
-  syncCamera(turnedCam, cam, FOV_Y_DEG, { yaw: 0.6, pitch: 0.35 });
+  syncCamera(turnedCam, cam, DEFAULT_LENS,{ yaw: 0.6, pitch: 0.35 });
   turnedCam.updateMatrixWorld(true);
   const turned = unprojectToPlane(turnedCam, ...ndcOf(px));
   const flatErr = flat ? flat.sub(probe).length() : Infinity;
@@ -688,6 +787,110 @@ function extrusionGeometry(): CaseResult[] {
       `(the depth it crosses is ${bevel.toFixed(5)})`,
   });
   return out;
+}
+
+// A GEOMETRY OBJECT DRAWN THROUGH ITS OWN LENS (`GeometryObjectData.projection`).
+//
+// Every way this breaks is silent in the picture's favour - the object is simply
+// drawn in perspective, which is what it looked like before anyone asked - so
+// each link in the chain is asserted: the field survives the px -> m gate and the
+// editor's save, the mounted mesh wears an orthographic twin that compiles to a
+// program of its own, the twin's hook actually finds the chunk it rewrites in
+// three's shader (a renamed chunk is a `replace` that matches nothing), and the
+// editor's selection highlight - a clone - keeps the lens rather than moving the
+// selected object back to where perspective would put it.
+function perObjectProjection(): CaseResult[] {
+  const geometry = (projection?: GeometryProjection): GeometryObjectData => ({
+    type: "geometry",
+    shape: { kind: "rect", w: 1, h: 1 },
+    // A flat fill, for the reason `tippedPrimitive` gives: it builds headlessly.
+    texture: SOLID_SURFACE,
+    color: "#ff0000",
+    ...(projection ? { projection } : {}),
+  });
+  const authored: RawLevelData = {
+    player: { x: 0, y: 0, radius: 8 },
+    bodies: [
+      {
+        kind: "static",
+        x: 0,
+        y: 0,
+        rot: 0,
+        objects: [
+          { ...geometry("orthographic"), shape: { kind: "rect", w: 100, h: 100 }, z: -300 },
+          { ...geometry(), shape: { kind: "rect", w: 100, h: 100 } },
+        ],
+      },
+    ],
+  };
+  const scaled = scaleLevelData(authored, 1 / PIXELS_PER_METER).bodies[0]!.objects.filter(isGeometryObject);
+  const scaledKept = scaled[0]?.projection === "orthographic" && scaled[1]?.projection === undefined;
+  const saved = modelToDisk(modelFromDisk(authored)).bodies[0]!.objects.filter(isGeometryObject);
+  const savedKept = saved[0]?.projection === "orthographic" && !("projection" in (saved[1] ?? {}));
+
+  const mount = (projection?: GeometryProjection): THREE.Mesh => {
+    const parent = new THREE.Group();
+    mountVisual(
+      parent,
+      () => extrudeOutline({ kind: "rect", half: new Vec2(0.5, 0.5) }, { depth: 0.2, bevel: 0 }),
+      { geometry: geometry(projection) },
+      { defaultZ: 0, castShadow: true, alive: () => true },
+    );
+    return parent.children[0] as THREE.Mesh;
+  };
+  const ortho = mount("orthographic");
+  const orthoAgain = mount("orthographic");
+  const persp = mount();
+  const om = ortho.material as THREE.Material;
+  const pm = persp.material as THREE.Material;
+  const twinned =
+    isOrthographicMaterial(om) &&
+    !isOrthographicMaterial(pm) &&
+    om !== pm &&
+    orthoAgain.material === om &&
+    om.customProgramCacheKey() !== pm.customProgramCacheKey() &&
+    !ortho.frustumCulled &&
+    persp.frustumCulled;
+
+  const patchedText = (m: THREE.Material): string => {
+    const shader = {
+      uniforms: {},
+      vertexShader: THREE.ShaderLib.physical.vertexShader,
+      fragmentShader: THREE.ShaderLib.physical.fragmentShader,
+    } as unknown as THREE.WebGLProgramParametersWithUniforms;
+    m.onBeforeCompile(shader, undefined as unknown as THREE.WebGLRenderer);
+    return shader.vertexShader;
+  };
+  const rewrites = (m: THREE.Material): boolean => patchedText(m).includes("orthoPosition");
+  const patched = rewrites(om) && !rewrites(pm);
+  const highlight = cloneWithPatches(om);
+  const highlightKept =
+    isOrthographicMaterial(highlight) &&
+    rewrites(highlight) &&
+    highlight.customProgramCacheKey() === om.customProgramCacheKey();
+
+  return [
+    {
+      name: "format: a geometry object's projection survives the px -> m gate and an editor save",
+      pass: scaledKept && savedKept,
+      detail: `scaled ${scaled.map((g) => g.projection)}, saved ${saved.map((g) => g.projection)}`,
+    },
+    {
+      name: "render: an orthographic object wears one shared twin with a program of its own",
+      pass: twinned,
+      detail: `tagged ${isOrthographicMaterial(om)}, shared ${orthoAgain.material === om}, keys ${om.customProgramCacheKey()} / ${pm.customProgramCacheKey()}, culled ${ortho.frustumCulled}`,
+    },
+    {
+      name: "render: the orthographic twin rewrites three's projection chunk",
+      pass: patched,
+      detail: patched ? "project_vertex rewritten for the twin alone" : "the chunk was not found or not rewritten",
+    },
+    {
+      name: "render: a selection highlight keeps an orthographic object's lens",
+      pass: highlightKept,
+      detail: highlightKept ? "clone carries the tag, the hook and the key" : "the clone lost the patch",
+    },
+  ];
 }
 
 // A PRIMITIVE TIPPED OUT OF THE PLANE (`GeometryObjectData.rotX`/`rotY`).
@@ -3395,11 +3598,13 @@ export function runRender3dCases(): CaseResult[] {
     ...chainAnchors(),
     ...chainWrapPoints(),
     ...cameraCorrespondence(),
+    ...levelLens(),
     ...blendStability(),
     ...orbitView(),
     ...orthographicView(),
     ...extrusionGeometry(),
     ...tippedPrimitive(),
+    ...perObjectProjection(),
     ...depthOrdering(),
     ...surfaceResolution(),
     ...visualRoundTrip(),
