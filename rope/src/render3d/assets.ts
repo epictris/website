@@ -2476,6 +2476,40 @@ function rock(node: string): MeshAsset {
   };
 }
 
+// The 17 rocks of FreeStylized's "Rocks 01" pack (Rocks1_(AssetPack2).zip),
+// extracted together into ONE file for the same reason as `rock()` above. Only
+// LOD0 of each is in here - this renderer has no LOD switching, and LOD0 is
+// already game-weight (60 to 3278 tris). The pack is authored in Blender at
+// real-world metres, Z up, so `assets:extract` only turns it Y up; each origin
+// is where the pack's modeller put it, at the rock's BASE rather than its
+// centre, so a level stands one of these on a surface by its position.
+//
+// The pack's own material mixes a clean albedo with a gradient and a dirt mask
+// in Blender nodes that glTF cannot carry, so the file wears the pack's baked
+// equivalent, `AP2_Rocks_BaseColor_V2` (the brown-dirt variant; the pack's
+// other bake, `AP2_Rocks_BaseColor`, is the same with green moss), plus
+// `Normal_GL` and `Roughness` - one 2k set, 1k WebP once optimised.
+//
+// Numbered as the pack numbers them, which runs roughly by size: 1-4 are
+// boulders under 2 m, 5-9 are 3-5 m outcrops, 10-11 are 8 m pillars and 12-17
+// are 8-10 m cliff pieces. The pack node behind `stylized-rock-N` is `RockN_LOD0`.
+//
+// The licence is FreeStylized's custom CC0: free for any use, attribution
+// appreciated, but no redistributing the pack as it ships. What the store holds
+// is a derivative (one mesh out of three LODs, re-encoded, 1k maps), the same
+// footing `rock-196` wears their textures on.
+function stylizedRock(node: string): MeshAsset {
+  return {
+    file: "/meshes/stylized-rocks.glb",
+    node,
+    sha256: "82449cb7a62c3ea4aae3b8f680fe92174d74f84c7e798656603a89eb0852267c",
+    bytes: 336024,
+    source: "https://freestylized.com/asset_pack/rocks-01/",
+    author: "FreeStylized",
+    license: "FreeStylized CC0 (no redistribution of the unmodified pack)",
+  };
+}
+
 export const MESH_ASSETS: Record<string, MeshAsset> = {
   // THE AVATAR. A hammered cast-iron ball with a thin forged loop at its pole,
   // modelled for this game - the first prop here that is not scenery, and the
@@ -2952,6 +2986,19 @@ export const MESH_ASSETS: Record<string, MeshAsset> = {
   // its 3.03 MB raw was is three 1024² PNGs - albedo, normal and a packed
   // AO/metallic-roughness - 209 KB once they are WebP, so this is the ordinary
   // case the texture ceiling is for rather than a prop that needed an argument.
+  // Hand-authored rock props (docs/rock-assets.md): modelled in headless
+  // Blender from a level body's collision outline, baked from the high mesh
+  // onto a low one, wearing the CC0 "cliff rocks 07" set from freestylized.com
+  // (base colour desaturated and lifted, see tools/blender/rock_asset.py).
+  // Metres, origin at the outline's bounding-box centre, front toward +z.
+  "rock-196": {
+    file: "/meshes/rock-196.glb",
+    sha256: "d8d96f7e8d6601a9add08d7b01778370be3d06a58f5eecda45fbf9d2b7134a44",
+    bytes: 128792,
+    source: "tools/blender/rock_asset.py from levels/ball.json body 196; textures https://freestylized.com/material/cliff_rocks_07/",
+    author: "Tristan Bray (textures: freestylized.com)",
+    license: "CC0",
+  },
   "wooden-stool": {
     file: "/meshes/wooden-stool.glb",
     sha256: "8d0ebb3a81af469bbb87d67b7d3ba083ab82aefaf49392dcb6294d231fd1da9f",
@@ -3020,6 +3067,40 @@ export const MESH_ASSETS: Record<string, MeshAsset> = {
   "rock-23": rock("rock-23"),
   // 2.04 x 0.95 x 1.05 m, 1994 tris (Cliffs_LargeStone_6)
   "rock-24": rock("rock-24"),
+  // 0.70 x 0.56 x 0.67 m, 60 tris
+  "stylized-rock-1": stylizedRock("stylized-rock-1"),
+  // 1.60 x 1.04 x 1.34 m, 170 tris
+  "stylized-rock-2": stylizedRock("stylized-rock-2"),
+  // 2.02 x 1.30 x 1.76 m, 140 tris
+  "stylized-rock-3": stylizedRock("stylized-rock-3"),
+  // 1.59 x 1.27 x 1.15 m, 196 tris
+  "stylized-rock-4": stylizedRock("stylized-rock-4"),
+  // 3.39 x 5.29 x 3.52 m, 492 tris
+  "stylized-rock-5": stylizedRock("stylized-rock-5"),
+  // 3.46 x 3.45 x 2.85 m, 418 tris
+  "stylized-rock-6": stylizedRock("stylized-rock-6"),
+  // 3.56 x 3.21 x 2.96 m, 402 tris
+  "stylized-rock-7": stylizedRock("stylized-rock-7"),
+  // 3.27 x 5.16 x 2.30 m, 344 tris
+  "stylized-rock-8": stylizedRock("stylized-rock-8"),
+  // 5.05 x 4.17 x 4.11 m, 420 tris
+  "stylized-rock-9": stylizedRock("stylized-rock-9"),
+  // 3.68 x 7.83 x 3.31 m, 500 tris
+  "stylized-rock-10": stylizedRock("stylized-rock-10"),
+  // 4.22 x 7.61 x 3.50 m, 482 tris
+  "stylized-rock-11": stylizedRock("stylized-rock-11"),
+  // 8.35 x 8.49 x 5.36 m, 2246 tris
+  "stylized-rock-12": stylizedRock("stylized-rock-12"),
+  // 10.15 x 8.79 x 6.06 m, 3278 tris
+  "stylized-rock-13": stylizedRock("stylized-rock-13"),
+  // 7.70 x 8.25 x 5.29 m, 2588 tris
+  "stylized-rock-14": stylizedRock("stylized-rock-14"),
+  // 5.29 x 8.14 x 5.46 m, 1540 tris
+  "stylized-rock-15": stylizedRock("stylized-rock-15"),
+  // 7.73 x 8.32 x 4.46 m, 1884 tris
+  "stylized-rock-16": stylizedRock("stylized-rock-16"),
+  // 5.97 x 8.10 x 4.90 m, 1580 tris
+  "stylized-rock-17": stylizedRock("stylized-rock-17"),
 };
 
 // ---------------------------------------------------------------------------

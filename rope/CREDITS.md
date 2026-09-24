@@ -29,6 +29,7 @@ asset to its manifest and regenerate, which is what `cli assets` checks.
 - **rock-17** - "Maksim Batyrev (@c3posw01)", [source](https://sketchfab.com/3d-models/pbr-rock-cliffs-pack-8fa6cabbbf0c431a9f5ffe91eb0b9090), CC BY 4.0
 - **rock-18** - "Maksim Batyrev (@c3posw01)", [source](https://sketchfab.com/3d-models/pbr-rock-cliffs-pack-8fa6cabbbf0c431a9f5ffe91eb0b9090), CC BY 4.0
 - **rock-19** - "Maksim Batyrev (@c3posw01)", [source](https://sketchfab.com/3d-models/pbr-rock-cliffs-pack-8fa6cabbbf0c431a9f5ffe91eb0b9090), CC BY 4.0
+- **rock-196** - "Tristan Bray (textures: freestylized.com)", [source](tools/blender/rock_asset.py from levels/ball.json body 196; textures https://freestylized.com/material/cliff_rocks_07/), CC0
 - **rock-2** - "Maksim Batyrev (@c3posw01)", [source](https://sketchfab.com/3d-models/pbr-rock-cliffs-pack-8fa6cabbbf0c431a9f5ffe91eb0b9090), CC BY 4.0
 - **rock-20** - "Maksim Batyrev (@c3posw01)", [source](https://sketchfab.com/3d-models/pbr-rock-cliffs-pack-8fa6cabbbf0c431a9f5ffe91eb0b9090), CC BY 4.0
 - **rock-21** - "Maksim Batyrev (@c3posw01)", [source](https://sketchfab.com/3d-models/pbr-rock-cliffs-pack-8fa6cabbbf0c431a9f5ffe91eb0b9090), CC BY 4.0
@@ -45,6 +46,23 @@ asset to its manifest and regenerate, which is what `cli assets` checks.
 - **sewer-arch** - "MightyPinecone", [source](https://sketchfab.com/3d-models/sewer-brick-walls-set-midpoly-ue5-nanite-27143020c0bb4624aaf4f5257fd603bd), CC BY 4.0
 - **sewer-doorway** - "MightyPinecone", [source](https://sketchfab.com/3d-models/sewer-brick-walls-set-2-midpoly-ue5-nanite-5a5ae221432444f898336627dc192567), CC BY 4.0
 - **sewer-wall** - "MightyPinecone", [source](https://sketchfab.com/3d-models/sewer-brick-walls-set-midpoly-ue5-nanite-27143020c0bb4624aaf4f5257fd603bd), CC BY 4.0
+- **stylized-rock-1** - "FreeStylized", [source](https://freestylized.com/asset_pack/rocks-01/), FreeStylized CC0 (no redistribution of the unmodified pack)
+- **stylized-rock-10** - "FreeStylized", [source](https://freestylized.com/asset_pack/rocks-01/), FreeStylized CC0 (no redistribution of the unmodified pack)
+- **stylized-rock-11** - "FreeStylized", [source](https://freestylized.com/asset_pack/rocks-01/), FreeStylized CC0 (no redistribution of the unmodified pack)
+- **stylized-rock-12** - "FreeStylized", [source](https://freestylized.com/asset_pack/rocks-01/), FreeStylized CC0 (no redistribution of the unmodified pack)
+- **stylized-rock-13** - "FreeStylized", [source](https://freestylized.com/asset_pack/rocks-01/), FreeStylized CC0 (no redistribution of the unmodified pack)
+- **stylized-rock-14** - "FreeStylized", [source](https://freestylized.com/asset_pack/rocks-01/), FreeStylized CC0 (no redistribution of the unmodified pack)
+- **stylized-rock-15** - "FreeStylized", [source](https://freestylized.com/asset_pack/rocks-01/), FreeStylized CC0 (no redistribution of the unmodified pack)
+- **stylized-rock-16** - "FreeStylized", [source](https://freestylized.com/asset_pack/rocks-01/), FreeStylized CC0 (no redistribution of the unmodified pack)
+- **stylized-rock-17** - "FreeStylized", [source](https://freestylized.com/asset_pack/rocks-01/), FreeStylized CC0 (no redistribution of the unmodified pack)
+- **stylized-rock-2** - "FreeStylized", [source](https://freestylized.com/asset_pack/rocks-01/), FreeStylized CC0 (no redistribution of the unmodified pack)
+- **stylized-rock-3** - "FreeStylized", [source](https://freestylized.com/asset_pack/rocks-01/), FreeStylized CC0 (no redistribution of the unmodified pack)
+- **stylized-rock-4** - "FreeStylized", [source](https://freestylized.com/asset_pack/rocks-01/), FreeStylized CC0 (no redistribution of the unmodified pack)
+- **stylized-rock-5** - "FreeStylized", [source](https://freestylized.com/asset_pack/rocks-01/), FreeStylized CC0 (no redistribution of the unmodified pack)
+- **stylized-rock-6** - "FreeStylized", [source](https://freestylized.com/asset_pack/rocks-01/), FreeStylized CC0 (no redistribution of the unmodified pack)
+- **stylized-rock-7** - "FreeStylized", [source](https://freestylized.com/asset_pack/rocks-01/), FreeStylized CC0 (no redistribution of the unmodified pack)
+- **stylized-rock-8** - "FreeStylized", [source](https://freestylized.com/asset_pack/rocks-01/), FreeStylized CC0 (no redistribution of the unmodified pack)
+- **stylized-rock-9** - "FreeStylized", [source](https://freestylized.com/asset_pack/rocks-01/), FreeStylized CC0 (no redistribution of the unmodified pack)
 - **water-wheel** - "lyamborrel", [source](https://sketchfab.com/3d-models/water-wheel-with-cog-b855246572934af19aa062a329c1bcfa), CC BY 4.0
 - **wooden-stool** - "yoyo83710", [source](https://sketchfab.com/3d-models/wooden-stool-528f72346b2f4a1096c1d5104b731d04), CC BY 4.0
 - **yellow_barrel** - "Anna Denisova (@Den1121)", [source](https://sketchfab.com/3d-models/low-poly-closed-barrels-8df46c47099a4b9d9bc4a69edcad1b88), CC BY 4.0
