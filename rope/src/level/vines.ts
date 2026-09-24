@@ -220,6 +220,7 @@ export const DEFAULT_VINE_STIFFNESS = 0;
 // where a vine is.
 export interface VineCord {
   readonly color: string | null;
+  readonly braidSeed: number | null;
   // The cord's points, in metres, appended to `out` (which is cleared first).
   // An `out` parameter because this runs per vine per frame in both renderers
   // and a fresh array per call is exactly the per-frame allocation the 3D
@@ -623,6 +624,7 @@ function buildOne(
   }
 
   const color = v.color ?? null;
+  const braidSeed = Number.isInteger(v.braidSeed) && v.braidSeed! >= 0 ? v.braidSeed! : null;
   const chains: SceneConstraint[] = [];
   // A HANGING vine's joints run to the loose `VINE_TOLERANCE` and carry no
   // standing-stretch lease; a SPAN's run to the tight `CHAIN_TOLERANCE` and
@@ -729,6 +731,7 @@ function buildOne(
     viscosity,
     spacing,
     color,
+    braidSeed,
     lra: null,
     lra2: null,
     lraLink: null,

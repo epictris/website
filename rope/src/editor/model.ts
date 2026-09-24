@@ -744,6 +744,7 @@ export interface EdChain {
 // instead of reaching for a second body.
 export interface EdVine {
   id: number;
+  braidSeed: number | null;
   // The item id of the anchor it hangs from.
   anchor: number;
   // The item id of an optional SECOND anchor, making the vine a span attached
@@ -1835,6 +1836,7 @@ function lightItem(
     const a2 = v.anchor2 !== undefined ? itemOfAnchor.get(v.anchor2) : undefined;
     vines.push({
       id: newBodyId(),
+      braidSeed: v.braidSeed ?? null,
       anchor: a.id,
       anchor2: a2 && a2 !== a ? a2.id : null,
       length: v.length,
@@ -2378,6 +2380,7 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
     const a2 = v.anchor2 !== null ? model.items.find((i) => i.id === v.anchor2) : undefined;
     vines.push({
       anchor: a.anchorId,
+      ...(v.braidSeed !== null ? { braidSeed: v.braidSeed } : {}),
       ...(a2?.object === "anchor" ? { anchor2: a2.anchorId } : {}),
       length: v.length,
       ...(v.spacing !== null ? { spacing: v.spacing } : {}),

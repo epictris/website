@@ -1721,7 +1721,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       vines: model.vines.flatMap((v) => {
         const points = vineRestPath(model, v);
         if (!points) return [];
-        return [{ color: v.color, path: (_alpha: number, out: Vec2[]) => {
+        return [{ color: v.color, braidSeed: v.braidSeed, path: (_alpha: number, out: Vec2[]) => {
           out.length = 0;
           out.push(...points);
         } }];
@@ -2202,14 +2202,24 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   vineSeed.setAttribute("aria-label", "Vine seed");
   const vineStatus = el("span", "ed-root-status");
   vineStatus.setAttribute("role", "status");
-  vineStatus.textContent = "Select one cylindrical geometry object.";
+  vineStatus.textContent = "Select one +Vine rope or cylindrical geometry object.";
   const vineGenerate = button("Braid selected vine", async () => {
+    if (selectedVineIds.size === 1 && selectedIds.size === 0 && selectedBodyIds.size === 0) {
+      if (!vineSeed.reportValidity()) return;
+      const vine = selectedVines()[0]!;
+      beginAction();
+      vine.braidSeed = Number(vineSeed.value);
+      markDirty();
+      rebuildInspector();
+      vineStatus.textContent = "Braid ready on the selected vine.";
+      return;
+    }
     const selected = operandItems().filter(i => i.object === "geometry");
     const geometry = selected.length === 1 ? selected[0] : undefined;
     if (!geometry || geometry.layer !== "scene" || geometry.shape.kind !== "circle" ||
         geometry.visual.depth === null || geometry.visual.depth <= 0 ||
         (geometry.visual.kind === "mesh" && !geometry.visual.mesh.startsWith("vine-v3:"))) {
-      vineStatus.textContent = "Select one cylinder geometry object with a depth, or a generated braid.";
+      vineStatus.textContent = "Select one +Vine rope, or one cylinder geometry object with depth.";
       return;
     }
     if (!vineSeed.reportValidity()) return;
@@ -2237,7 +2247,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       vineStatus.textContent = error instanceof Error ? error.message : "Vine generation failed.";
     } finally { vineGenerate.disabled = false; }
   });
-  vineGenerate.title = "Replace one cylindrical geometry object's look with a seeded three-stem braid following its radius, depth and transform. Its collision stays unchanged.";
+  vineGenerate.title = "Braid a selected +Vine rope so the stems follow its physics, or generate a static cylinder braid in Blender.";
   vineRow.append(vineGenerate, labelWrap("seed", vineSeed), vineStatus);
   bar.appendChild(vineRow);
 
@@ -7689,6 +7699,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     model.items.push(a);
     const vine: EdVine = {
       id: newBodyId(),
+      braidSeed: null,
       anchor: a.id,
       anchor2: null,
       length,

@@ -1525,6 +1525,8 @@ export interface VineData {
   // body that builds nothing, is dropped at load - the same tolerance a chain
   // end gets.
   anchor: number;
+  // Seeded three-stem appearance. Absent keeps the original smooth cord.
+  braidSeed?: number;
   // Optional SECOND anchor id, making the vine a span attached at both ends
   // rather than a hanging one. The length below is still the whole arc, so a
   // span longer than the distance between its anchors sags into a catenary -
@@ -3393,6 +3395,7 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
   // through `scaleObject` with every other placement, exactly as a chain end does.
   const vines = data.vines?.map((v) => ({
     anchor: v.anchor,
+    ...(v.braidSeed !== undefined ? { braidSeed: v.braidSeed } : {}),
     ...(v.anchor2 !== undefined ? { anchor2: v.anchor2 } : {}),
     length: v.length * factor,
     ...(v.spacing !== undefined ? { spacing: v.spacing * factor } : {}),

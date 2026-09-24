@@ -1,6 +1,11 @@
 # Level editor
 
-## Braid a cylindrical vine
+## Braid a vine
+
+Select a rope made with **+ Vine** and click **Braid selected vine** to give it
+three stems that follow the simulated rope in play. The seed changes the twist;
+the action is undoable and saves with the level. You can also select a circle
+geometry object with a depth to generate a static Blender braid as below.
 
 Select one **geometry object** whose shape is a circle and whose **depth** is
 set, then click **Braid selected vine**. The circle's radius and the geometry

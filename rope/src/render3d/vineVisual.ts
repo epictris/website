@@ -25,6 +25,7 @@ import * as THREE from "three";
 import { Vec2 } from "../engine/vec2";
 import { VINE_VISUAL_RADIUS, type VineCord } from "../level/vines";
 import { VINE_COLOR } from "../render/vines";
+import { forEachBraidSegment } from "../render/vineBraid";
 import { threeY } from "./space";
 
 // White: the instance colour MULTIPLIES the shared material, so the default has
@@ -48,9 +49,13 @@ const FORWARD = new THREE.Vector3(0, 0, 1);
 
 export class VineLayer {
   private mesh: THREE.InstancedMesh;
+  private braidMesh: THREE.InstancedMesh;
   private capacity = INITIAL_SEGMENTS;
   private count = 0;
+  private braidCapacity = INITIAL_SEGMENTS;
+  private braidCount = 0;
   private readonly geometry: THREE.BufferGeometry;
+  private readonly braidGeometry: THREE.BufferGeometry;
   private readonly material: THREE.Material;
   // Scratch, reused every frame: a transform sync must not allocate.
   private readonly m = new THREE.Matrix4();
@@ -59,22 +64,29 @@ export class VineLayer {
   private readonly scl = new THREE.Vector3(1, 1, 1);
   private readonly tint = new THREE.Color();
   private readonly path: Vec2[] = [];
+  private readonly a3 = new THREE.Vector3();
+  private readonly b3 = new THREE.Vector3();
+  private readonly dir3 = new THREE.Vector3();
+  private readonly up = new THREE.Vector3(0, 1, 0);
 
   constructor(private readonly scene: THREE.Scene) {
     // A unit-length capsule: the per-instance y scale is then the segment's own
     // length, and nothing has to rebuild geometry as a vine bends.
     this.geometry = new THREE.CapsuleGeometry(VINE_VISUAL_RADIUS, 1, 3, 8);
+    this.braidGeometry = new THREE.CapsuleGeometry(VINE_VISUAL_RADIUS * 0.52, 1, 2, 6);
     this.material = new THREE.MeshStandardMaterial({
       color: new THREE.Color(VINE_COLOR),
       roughness: 0.85,
       metalness: 0,
     });
     this.mesh = this.makeMesh(this.capacity);
+    this.braidMesh = this.makeMesh(this.braidCapacity, this.braidGeometry);
     scene.add(this.mesh);
+    scene.add(this.braidMesh);
   }
 
-  private makeMesh(capacity: number): THREE.InstancedMesh {
-    const mesh = new THREE.InstancedMesh(this.geometry, this.material, capacity);
+  private makeMesh(capacity: number, geometry = this.geometry): THREE.InstancedMesh {
+    const mesh = new THREE.InstancedMesh(geometry, this.material, capacity);
     mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     mesh.castShadow = true;
     mesh.receiveShadow = true;
@@ -98,19 +110,50 @@ export class VineLayer {
   // Every vine on the level, laid this frame.
   sync(vines: readonly VineCord[], alpha: number): void {
     this.count = 0;
+    this.braidCount = 0;
     for (const vine of vines) {
       vine.path(alpha, this.path);
       if (this.path.length < 2) continue;
       this.tint.set(vine.color ?? DEFAULT_TINT);
-      this.lay(this.path);
+      if (vine.braidSeed === null) this.lay(this.path);
+      else this.layBraid(this.path, vine.braidSeed);
     }
     // A vine longer than the buffer truncates for one frame and the buffer is
     // resized for the next, rather than mid-walk - which would throw away every
     // matrix already written into it this frame. `ChainLayer`'s rule.
     if (this.count > this.capacity) this.grow(this.count);
+    if (this.braidCount > this.braidCapacity) {
+      while (this.braidCapacity < this.braidCount) this.braidCapacity *= 2;
+      this.scene.remove(this.braidMesh);
+      this.braidMesh.dispose();
+      this.braidMesh = this.makeMesh(this.braidCapacity, this.braidGeometry);
+      this.scene.add(this.braidMesh);
+    }
     this.mesh.count = Math.min(this.count, this.capacity);
     this.mesh.instanceMatrix.needsUpdate = true;
     if (this.mesh.instanceColor) this.mesh.instanceColor.needsUpdate = true;
+    this.braidMesh.count = Math.min(this.braidCount, this.braidCapacity);
+    this.braidMesh.instanceMatrix.needsUpdate = true;
+    if (this.braidMesh.instanceColor) this.braidMesh.instanceColor.needsUpdate = true;
+  }
+
+  private layBraid(points: readonly Vec2[], seed: number): void {
+    forEachBraidSegment(points, seed, (ax, ay, az, bx, by, bz, strand) => {
+      const j = this.braidCount++;
+      if (j >= this.braidCapacity) return;
+      this.a3.set(ax, threeY(ay), az);
+      this.b3.set(bx, threeY(by), bz);
+      this.dir3.subVectors(this.b3, this.a3);
+      const length = this.dir3.length();
+      if (length < 1e-6) return;
+      this.q.setFromUnitVectors(this.up, this.dir3.multiplyScalar(1 / length));
+      this.pos.addVectors(this.a3, this.b3).multiplyScalar(0.5);
+      this.scl.set(1, length * 1.08, 1);
+      this.m.compose(this.pos, this.q, this.scl);
+      this.braidMesh.setMatrixAt(j, this.m);
+      const shade = strand === 0 ? 1.1 : strand === 1 ? 0.9 : 0.72;
+      this.braidMesh.instanceColor?.setXYZ(j, this.tint.r * shade, this.tint.g * shade, this.tint.b * shade);
+    });
   }
 
   private lay(points: readonly Vec2[]): void {
@@ -138,12 +181,16 @@ export class VineLayer {
   clear(): void {
     this.count = 0;
     this.mesh.count = 0;
+    this.braidMesh.count = 0;
   }
 
   dispose(): void {
     this.scene.remove(this.mesh);
     this.mesh.dispose();
+    this.scene.remove(this.braidMesh);
+    this.braidMesh.dispose();
     this.geometry.dispose();
+    this.braidGeometry.dispose();
     this.material.dispose();
   }
 }

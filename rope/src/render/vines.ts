@@ -14,6 +14,7 @@ import { Vec2 } from "../engine/vec2";
 import { PX } from "../engine/units";
 import { shade } from "./color";
 import { VINE_VISUAL_RADIUS, type Vine } from "../level/vines";
+import { forEachBraidSegment } from "./vineBraid";
 
 // A vine with no authored colour. Deliberately desaturated: it hangs among the
 // level's own greys and has to read as growth without pulling the eye off the
@@ -39,6 +40,19 @@ export function drawVines(
     ctx.save();
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
+    if (vine.braidSeed !== null) {
+      ctx.lineWidth = VINE_VISUAL_RADIUS * 0.95;
+      const colors = [shade(color, 1.2), color, shade(color, 0.7)];
+      forEachBraidSegment(points, vine.braidSeed, (ax, ay, _az, bx, by, _bz, strand) => {
+        ctx.strokeStyle = colors[strand]!;
+        ctx.beginPath();
+        ctx.moveTo(ax, ay);
+        ctx.lineTo(bx, by);
+        ctx.stroke();
+      });
+      ctx.restore();
+      continue;
+    }
     traceVine(ctx, points);
     ctx.strokeStyle = shade(color, RIM_SHADE);
     ctx.lineWidth = VINE_VISUAL_RADIUS * 2;
