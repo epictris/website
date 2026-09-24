@@ -34,6 +34,52 @@ on the dev server; saved levels can load the exported mesh without Blender.
 The generated files are local and gitignored, so copy them with a level when
 moving it to another machine.
 
+## Grow mushroom patches on a model
+
+Arm **+ Mushrooms** and click an outline **onto the faces of a drawn model** - a
+rock, a root, a primitive wall - in **3D + overlay** or **3D**. It works at any
+orbit, which is the point: turn the view (Ctrl+middle drag) to see the top of a
+rock, then click round the part that should grow. Enter or a click on the first
+vertex closes the loop, Backspace drops the last vertex, Esc cancels. Each click
+is a raycast (`Scene3D.pickSurface`) that lands on the nearest drawn geometry
+object that is not itself a patch, so a second patch is drawn on the rock under
+the first. The outline, its vertices and the faces it covers are drawn in the
+scene itself (`SurfaceDraftView`), not on the overlay, so they stay on the model
+at any angle.
+
+**Which faces are covered** (`selectSurface` in `editor/surfacePatch.ts`): the
+loop's plane of best fit (Newell's method, oriented by the surface normals the
+clicks landed on) is the judging plane. Every triangle of the clicked models is
+subdivided down to a step of 1/48 of the outline (1-10 cm), and a piece is kept
+when its centre projects inside the loop, lies within a band of the plane (the
+loop's own deviation plus a third of its size), faces the patch, and is no
+steeper than **max slope°** (default 75; 90 keeps walls, nothing keeps an
+overhang, because stems grow straight up). So a large low-poly facet is cut to
+the drawn edge and the back of a rock is never taken with its front. The panel
+reports the faces, the area and the most mushrooms it can hold.
+
+**Generate mushrooms** posts the covered faces (a triangle soup in metres,
+relative to their centre) with **density /m²**, **height (m)**, **clumping**,
+**detail** and **seed** to `/api/mushrooms`, which runs
+`asset-generators/mushrooms/editor_patch.py` in Blender: the Mushroom Patch
+add-on's Geometry Nodes group grows the patch on the faces, bakes it with No
+Overlaps on and exports one GLB with its baked albedo, emissive (glowing gills,
+`KHR_materials_emissive_strength`) and ORM textures. A generation takes about
+8-15 s. The server refuses a request past 3000 expected mushrooms, because the
+overlap pass is exact and pairwise.
+
+The result is a `mesh` geometry object **in the body of the model it grows on**,
+at the faces' centre with no rotation, so it rides that body and collides with
+nothing. The outline stays open after a Generate so the settings can be tuned on
+the same faces: generating again replaces the patch that outline made (one undo
+step each). A click after that starts the next outline.
+
+Override the generator with `MUSHROOMS_PROJECT` and Blender with `BLENDER_PATH`.
+Files go to `public/generated-mushrooms/<id>/` (`mushrooms.glb` and the
+`patch.json` request that made it), local and gitignored like the other
+generators; mesh keys are `mushroom-patch:<id>:<bytes>`. Checks:
+`node --test scripts/mushroom-generator.test.mjs`.
+
 ## Generate procedural roots
 
 Select one collision polygon or rectangle on the scene layer and click

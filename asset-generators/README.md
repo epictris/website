@@ -1,7 +1,7 @@
 # Procedural asset generators
 
 These source projects power the level editor's **Generate roots**, **Generate
-vine v3**, and **Generate boulder v5** controls. Generated meshes, renders,
+vine v3**, **Generate boulder v5**, and **Generate mushrooms** controls. Generated meshes, renders,
 caches, and texture outputs are intentionally excluded from Git.
 
 ## Windows setup
@@ -52,9 +52,14 @@ again after opening a new window.
 
 - `roots/` contains the root and vine v3 Blender generators.
 - `boulders/stylised_rocks_v5/` contains the boulder v5 generator.
+- `mushrooms/` contains the glowing mushroom patch Blender add-on
+  (`mushroom_patch_tools.py`, copied from `blender/mushroom_patch`) and
+  `editor_patch.py`, which grows a patch on the faces picked in the editor.
+  Override it with `MUSHROOMS_PROJECT`.
 - `requirements.txt` contains all packages installed into the virtual
   environment.
 
 Output files go into `rope/public/generated-roots`,
-`rope/public/generated-vines`, and `rope/public/generated-boulders`. Those
+`rope/public/generated-vines`, `rope/public/generated-boulders`, and
+`rope/public/generated-mushrooms`. Those
 directories remain untracked build output.

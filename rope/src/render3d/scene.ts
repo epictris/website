@@ -705,9 +705,22 @@ export class Scene3D {
   // the two lists are merged by depth along the view axis, the quantity the
   // depth buffer sorted them by when they were drawn.
   pick(x: number, y: number): unknown[] {
+    const out: unknown[] = [];
+    const seen = new Set<unknown>();
+    for (const hit of this.hitsAt(x, y)) {
+      const tag = pickTagOf(hit.object);
+      if (tag === undefined || seen.has(tag)) continue;
+      seen.add(tag);
+      out.push(tag);
+    }
+    return out;
+  }
+
+  // Every ray hit under the pointer, nearest first, by the rules `pick` states.
+  private hitsAt(x: number, y: number): (THREE.Intersection & { depth: number })[] {
     this.pointer.set(x, y);
     const split = this.camera === this.perspective;
-    const hits: { object: THREE.Object3D; depth: number }[] = [];
+    const hits: (THREE.Intersection & { depth: number })[] = [];
     const cast = (cam: ViewCamera, ortho: boolean): void => {
       cam.getWorldDirection(this.forward);
       this.raycaster.setFromCamera(this.pointer, cam);
@@ -717,20 +730,41 @@ export class Scene3D {
         // Under the orthographic scene camera there is one ray, and every
         // object is answered by it.
         if (split && drawnOrtho !== ortho) continue;
-        hits.push({ object: hit.object, depth: this.forward.dot(hit.point.sub(cam.position)) });
+        hits.push({ ...hit, depth: this.forward.dot(hit.point.clone().sub(cam.position)) });
       }
     };
     cast(this.camera, false);
     if (split) cast(this.orthographic, true);
-    hits.sort((a, b) => a.depth - b.depth);
-    const out: unknown[] = [];
-    const seen = new Set<unknown>();
-    for (const hit of hits) {
+    return hits.sort((a, b) => a.depth - b.depth);
+  }
+
+  // The nearest drawn SURFACE under the pointer whose pick tag `accept` takes:
+  // the world point the ray met and the face's world normal there. What the
+  // editor's surface tools (the mushroom patch) click out their outline on, so
+  // a vertex lands on the model rather than on the gameplay plane.
+  pickSurface(
+    x: number,
+    y: number,
+    accept: (tag: unknown) => boolean,
+  ): { tag: unknown; point: THREE.Vector3; normal: THREE.Vector3 } | null {
+    for (const hit of this.hitsAt(x, y)) {
       const tag = pickTagOf(hit.object);
-      if (tag === undefined || seen.has(tag)) continue;
-      seen.add(tag);
-      out.push(tag);
+      if (tag === undefined || !accept(tag) || !hit.face) continue;
+      const normal = hit.face.normal.clone().transformDirection(hit.object.matrixWorld);
+      return { tag, point: hit.point.clone(), normal };
     }
+    return null;
+  }
+
+  // Every mesh drawn for one pick tag - a prop's submeshes, or an extrusion.
+  meshesOf(tag: unknown): THREE.Mesh[] {
+    const out: THREE.Mesh[] = [];
+    this.scene.traverse((o) => {
+      const mesh = o as THREE.Mesh;
+      if (mesh.isMesh && !(mesh as THREE.InstancedMesh).isInstancedMesh && pickTagOf(mesh) === tag) {
+        out.push(mesh);
+      }
+    });
     return out;
   }
 
