@@ -1,25 +1,32 @@
-"""Treat a downloaded rock texture set for the stylised rock props.
+"""Prepare a downloaded texture set for the rock props.
 
-    python3 tools/rock-texture.py <set dir> <out dir> [--mean 150] [--keep 0.15]
+    python3 tools/rock-texture.py <set.zip | set dir> <out dir> [--plain] [--mean 150] [--keep 0.15]
 
-Reads `*basecolor*.png` and `*normal_gl*.png` from the set directory and
-writes `basecolor.png` and `normal.png` beside `roughness.png` (copied) into
-the out directory. What it does, and why (docs/rock-assets.md):
+Reads the base colour, GL normal and roughness maps out of a freestylized-style
+set (a zip as downloaded, or its unpacked directory) and writes
+`basecolor.png`, `normal.png` and `roughness.png` into the out directory,
+which is what a rock job's `textures` set name resolves to
+(`assets-src/rock-textures/<name>/`, see docs/rock-assets.md).
 
-- Desaturates the base colour to `--keep` of its saturation and remaps its
-  luminance so the mean lands at `--mean` on 255, with a faint cool cast.
-  The reference rocks are pale neutral grey; freestylized's "cliff rocks 07"
-  as shipped is a dark grey (mean 100) with ochre strata.
-- Flattens the crumbly pale patches: blobs that stand well above the local
-  luminance and are wider than the strata veins are replaced by the local
-  colour, and the normal map is flattened under them. Left in, each one is a
-  recognisable stamp on a rock about one tile across ("why is this part here").
+By default the base colour is TREATED for the pale stylised rock look:
+
+- desaturated to `--keep` of its saturation and remapped so the mean lands at
+  `--mean` on 255, with a faint cool cast. freestylized's "cliff rocks 07" as
+  shipped is a dark grey (mean 100) with ochre strata;
+- its crumbly pale patches flattened: blobs that are the ochre crumbles in the
+  source (found by chroma, opened so the thin strata veins drop out) are
+  filled from their surroundings and the normal map flattened under them.
+  Left in, each one is a recognisable stamp on a rock about one tile across.
+
+`--plain` copies the three maps untouched (the moss sets are used as they are).
 """
 
 import argparse
 import glob
 import os
 import shutil
+import tempfile
+import zipfile
 
 import numpy as np
 from PIL import Image, ImageFilter
@@ -28,11 +35,14 @@ from PIL import Image, ImageFilter
 CHROMA = 0.05  # max - min of the source RGB above which a texel is an ochre crumble
 
 
-def find(dirname, pattern):
-    hits = sorted(glob.glob(os.path.join(dirname, f"*{pattern}*.png")))
-    if not hits:
-        raise SystemExit(f"no *{pattern}*.png in {dirname}")
-    return hits[0]
+def find(dirname, patterns):
+    """The first map whose name contains one of `patterns`, anywhere under
+    the directory (a zip unpacks into a folder of its own)."""
+    for pattern in patterns:
+        hits = sorted(glob.glob(os.path.join(dirname, "**", f"*{pattern}*.png"), recursive=True))
+        if hits:
+            return hits[0]
+    raise SystemExit(f"no *{patterns}*.png under {dirname}")
 
 
 def luminance(rgb):
@@ -83,10 +93,24 @@ def main():
     ap.add_argument("--mean", type=float, default=150.0)
     ap.add_argument("--keep", type=float, default=0.15)
     ap.add_argument("--no-flatten", action="store_true")
+    ap.add_argument("--plain", action="store_true", help="copy the maps untouched")
     args = ap.parse_args()
     os.makedirs(args.out_dir, exist_ok=True)
+    set_dir = args.set_dir
+    if set_dir.endswith(".zip"):
+        set_dir = tempfile.mkdtemp(prefix="rock-texture-")
+        with zipfile.ZipFile(args.set_dir) as z:
+            z.extractall(set_dir)
+    base_path = find(set_dir, ("basecolor", "Base_Color", "BaseColor"))
+    normal_path = find(set_dir, ("normal_gl", "Normal_gl", "NormalGL"))
+    rough_path = find(set_dir, ("roughness", "Roughness"))
+    if args.plain:
+        for src, dst in ((base_path, "basecolor.png"), (normal_path, "normal.png"), (rough_path, "roughness.png")):
+            shutil.copy(src, os.path.join(args.out_dir, dst))
+        print(f"wrote {args.out_dir}: maps copied untouched")
+        return
 
-    base = np.asarray(Image.open(find(args.set_dir, "basecolor")).convert("RGB")).astype(np.float32) / 255
+    base = np.asarray(Image.open(base_path).convert("RGB")).astype(np.float32) / 255
     size = base.shape[0]
     lum = luminance(base)
     grey = np.repeat(lum[..., None], 3, axis=2)
@@ -94,7 +118,7 @@ def main():
     g = np.log(args.mean / 255) / np.log(mixed.mean())
     out = np.clip(mixed ** g, 0, 1) * np.array([0.985, 1.0, 1.02], dtype=np.float32)
 
-    normal = np.asarray(Image.open(find(args.set_dir, "normal_gl")).convert("RGB")).astype(np.float32) / 255
+    normal = np.asarray(Image.open(normal_path).convert("RGB")).astype(np.float32) / 255
     if not args.no_flatten:
         mask = patch_mask(base, size)[..., None]
         # The fill is the surroundings only: a blur normalised by the blurred
@@ -108,7 +132,7 @@ def main():
 
     Image.fromarray((np.clip(out, 0, 1) * 255 + 0.5).astype(np.uint8)).save(os.path.join(args.out_dir, "basecolor.png"))
     Image.fromarray((np.clip(normal, 0, 1) * 255 + 0.5).astype(np.uint8)).save(os.path.join(args.out_dir, "normal.png"))
-    shutil.copy(find(args.set_dir, "roughness"), os.path.join(args.out_dir, "roughness.png"))
+    shutil.copy(rough_path, os.path.join(args.out_dir, "roughness.png"))
     print(f"wrote {args.out_dir}: base mean {out.mean() * 255:.0f}/255")
 
 

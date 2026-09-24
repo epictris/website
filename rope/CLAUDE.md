@@ -152,7 +152,8 @@ Rendering
 - [art-style](docs/art-style.md) - the painterly look: painted maps, painted light, the reproducible bake, how to add a texture, what was rejected.
 - [render3d](docs/render3d.md) - two canvases one camera, the coordinate mapping, geometry objects versus collision, bodies and scene objects, traps.
 - [lighting-and-surfaces](docs/lighting-and-surfaces.md) - environment, light objects in bodies, fog, HDRI skies, generated and authored PBR surfaces, tiling.
-- [rocks](docs/rocks.md) - generated rocks: the level's outlines turned into faceted boulders in headless Blender, the GLB per level, the hash that keeps a stale one on its extrusion.
+- [rock-assets](docs/rock-assets.md) - rock and moss props: a body's outline modelled into a stylised rock in headless Blender, the moss grown from the rock inside the moss body's outline, the job files, the previews, every lesson from the first rock.
+- [rocks](docs/rocks.md) - the earlier generated rocks (rejected; kept as history): the level's outlines turned into boulders, the GLB per level, the staleness hash.
 - [asset-store](docs/asset-store.md) - the release-hosted binaries, budgets, the optimise pipelines, licensing and credits.
 - [loading-screen](docs/loading-screen.md) - the inlined store, the two-halves bar, the warm frame.
 

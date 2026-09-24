@@ -2994,7 +2994,7 @@ export const MESH_ASSETS: Record<string, MeshAsset> = {
   // toward +z.
   "rock-196": {
     file: "/meshes/rock-196.glb",
-    sha256: "7a14294e184b948d9f632508e9b2b47218e047e3f482ac18c53e3971c5b317f3",
+    sha256: "b8a62112c65f12a2b3ef784954ae6df65cee9a2a6144e0016f11528116bcceb6",
     bytes: 119420,
     source: "tools/blender/rock_asset.py from levels/ball.json body 196; textures https://freestylized.com/material/cliff_rocks_07/",
     author: "Tristan Bray (textures: freestylized.com)",

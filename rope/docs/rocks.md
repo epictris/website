@@ -1,5 +1,7 @@
 # Generated rocks
 
+> **Superseded 2026-09-24.** The owner rejected this pipeline's results ("too messy, the texture doesn't look good"); rocks are now hand-authored props, see [rock-assets.md](rock-assets.md). This page stays as the record of what was tried.
+
 Since 2026-09-23 a level's rock is not drawn as the flat extrusion of its collision outline but as **faceted boulders built offline in headless Blender**, one GLB per level.
 It is an MVP: the shape and the swap work, moss and everything under [What is not done](#what-is-not-done) do not.
 

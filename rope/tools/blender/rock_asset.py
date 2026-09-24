@@ -607,6 +607,21 @@ def moss_from_rock(rock, name, region, seed, scale, real=None):
 # ------------------------------------------------------------------ material
 
 
+def texture_set(spec):
+    """A job's `textures`: a set NAME resolves to the three maps under
+    assets-src/rock-textures/<name>/ (prepared by tools/rock-texture.py); a
+    dict of explicit paths is taken as it is."""
+    if spec is None or isinstance(spec, dict):
+        return spec
+    root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    d = os.path.join(root, "assets-src", "rock-textures", spec)
+    maps = {k: os.path.join(d, f"{k}.png") for k in ("basecolor", "normal", "roughness")}
+    for k, path in maps.items():
+        if not os.path.exists(path):
+            raise RuntimeError(f"texture set {spec!r}: no {path} (prepare it with tools/rock-texture.py)")
+    return maps
+
+
 def load_image(path, colorspace):
     img = bpy.data.images.load(path, check_existing=True)
     img.colorspace_settings.name = colorspace
@@ -816,6 +831,21 @@ def low_poly(high, name, tris, scale, max_voxel=None, dissolve_deg=None):
 
 
 # ------------------------------------------------------------------ material
+
+
+def texture_set(spec):
+    """A job's `textures`: a set NAME resolves to the three maps under
+    assets-src/rock-textures/<name>/ (prepared by tools/rock-texture.py); a
+    dict of explicit paths is taken as it is."""
+    if spec is None or isinstance(spec, dict):
+        return spec
+    root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    d = os.path.join(root, "assets-src", "rock-textures", spec)
+    maps = {k: os.path.join(d, f"{k}.png") for k in ("basecolor", "normal", "roughness")}
+    for k, path in maps.items():
+        if not os.path.exists(path):
+            raise RuntimeError(f"texture set {spec!r}: no {path} (prepare it with tools/rock-texture.py)")
+    return maps
 
 
 def load_image(path, colorspace):
@@ -1264,7 +1294,7 @@ def build(job, out_path, flags, job_dir="."):
     low_tris = sum(len(p.vertices) - 2 for p in low.data.polygons)
     log(f"low: {low_tris} tris")
     unwrap(low)
-    textures = job.get("textures")
+    textures = texture_set(job.get("textures"))
     do_bake = textures is not None and not flags.get("no_bake")
     if do_bake:
         tile = float(flags.get("tile") or job.get("tile") or (MOSS_TILE if kind == "moss" else TEXTURE_TILE))
@@ -1295,6 +1325,15 @@ def build(job, out_path, flags, job_dir="."):
         rock = low
         bpy.data.objects.remove(high)
     shipped = [rock]
+    # The shipped mesh must be closed: an open low is a hole in the game.
+    bm = bmesh.new()
+    bm.from_mesh(rock.data)
+    open_edges = sum(1 for e in bm.edges if len(e.link_faces) == 1)
+    bm.free()
+    if open_edges:
+        log(f"WARNING the shipped mesh has {open_edges} open edges (holes)")
+    else:
+        log("shipped mesh is watertight")
 
     # Previews.
     render_dir = flags.get("render")
