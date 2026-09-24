@@ -2518,25 +2518,27 @@ export const MESH_ASSETS: Record<string, MeshAsset> = {
   // it and the preload resolver address it by).
   //
   // Metres, Y up, the ball centred on the origin at `BALL_MESH_RADIUS` (10 cm)
-  // and the loop in the XY plane at +Y, its top at 1.30 radii - which is the
-  // collision lug's reach (`radius + BallPlayer.LOOP_EXCESS`, 1.29 radii at
-  // the level's 12 cm ball). `BallVisual` scales the whole assembly from the
-  // modelled radius to the ball's own, so a level that authors a different
-  // one (`SpawnData.radius`) needs no second asset, and the loop rides the
-  // ball's rotation as the material point it is.
+  // and the loop in the XY plane at +Y, its top at 1.40 radii - a centimetre
+  // proud of the collision lug's reach (`radius + BallPlayer.LOOP_EXCESS`,
+  // 1.29 radii at the level's 12 cm ball), which the previous delivery matched
+  // at 1.30. `BallVisual` scales the whole assembly from the modelled radius
+  // to the ball's own, so a level that authors a different one
+  // (`SpawnData.radius`) needs no second asset, and the loop rides the ball's
+  // rotation as the material point it is.
   //
-  // Delivered as a glTF with two LODs; this is LOD0
-  // (`hammered_iron_ball_LOD0_thin_loop.glb`, raw at `assets-src/iron-ball.glb`),
-  // through `assets:optimize --keep-nodes` with nothing else. 43,312 triangles
-  // and no `simplify`: a sphere's silhouette IS the thing, this one is drawn
-  // once and it is the closest object to the camera in every frame. One
+  // The fourth delivery (`improved_LOD0.glb`, raw at `assets-src/iron-ball.glb`),
+  // through `assets:optimize --keep-nodes` with nothing else. Two nodes, `Ball`
+  // (101,760 triangles) and `Loop` (34,560), and no `simplify`: a sphere's
+  // silhouette IS the thing, this one is drawn once and it is the closest
+  // object to the camera in every frame - and the hammer facets are in the
+  // geometry here, the normal maps being all but flat. Each node has its own
   // material with a full PBR set - albedo, normal, and packed AO/roughness/
-  // metalness, whose metalness is a real map (the rust is not metal) - on one
-  // equirect UV wrap with no background, so nothing bleeds in down the mips.
+  // metalness - on its own UV wrap with no background (the ball's equirect),
+  // so nothing bleeds in down the mips.
   "iron-ball": {
     file: "/meshes/iron-ball.glb",
-    sha256: "6a7784c5bba7dc46be301e1fdb5924011c4b72b71b8681a03485ff16c313a8ff",
-    bytes: 312476,
+    sha256: "141414c00dacbddf298750c66b60fc57aca1fd749731e8ff34997525c2149e54",
+    bytes: 702608,
     // A private commission rather than a download, so `source` is what it is
     // rather than a URL, and the author is deliberately unnamed - the modeller
     // asked for no credit. It still states a person and a permission, because

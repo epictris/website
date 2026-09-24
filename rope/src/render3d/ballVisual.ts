@@ -5,7 +5,7 @@
 // assembly - a hammered iron ball with a thin forged loop at its pole - and
 // what this file builds from primitives is what stands in for it until the
 // file arrives. That stand-in is not scaffolding to delete: the avatar is on
-// screen from the first frame, the sim runs whether or not 312 KB has landed,
+// screen from the first frame, the sim runs whether or not 700 KB has landed,
 // and a grey placeholder box where the player is would be a worse failure than
 // on any prop. So the sphere and torus below are built, drawn, and swapped out
 // in place - the one prop in this game whose fallback is a considered object

@@ -16,6 +16,10 @@ asset to its manifest and regenerate, which is what `cli assets` checks.
 - **lantern** - "Mandrake (@mandrake_3d)", [source](https://sketchfab.com/3d-models/lantern-f0b0ea89f20b4f10bb583c449ae04d9c), CC BY 4.0
 - **lantern-rusty** - "lhaegy.fu", [source](https://sketchfab.com/3d-models/old-rusty-lantern-c11fd480023d485f9bbeaae633c868d7), CC BY-NC 4.0
 - **metal-bars** - "FuzerGamesTV", [source](https://sketchfab.com/3d-models/poppy-playtime-4-prison-door-bars-5dc2f7af7ec144afb2443fe86c74c288), CC BY 4.0
+- **moss-145** - "Tristan Bray (textures: freestylized.com)", [source](tools/blender/rock_asset.py from levels/ball.json body 145; textures https://freestylized.com/material/moss_ground_01/), CC0
+- **moss-160** - "Tristan Bray (textures: freestylized.com)", [source](tools/blender/rock_asset.py from levels/ball.json body 160; textures https://freestylized.com/material/moss_ground_01/), CC0
+- **moss-190** - "Tristan Bray (textures: freestylized.com)", [source](tools/blender/rock_asset.py from levels/ball.json body 190; textures https://freestylized.com/material/moss_ground_01/), CC0
+- **moss-191** - "Tristan Bray (textures: freestylized.com)", [source](tools/blender/rock_asset.py from levels/ball.json body 191; textures https://freestylized.com/material/moss_ground_01/), CC0
 - **moss-192** - "Tristan Bray (textures: freestylized.com)", [source](tools/blender/rock_asset.py from levels/ball.json body 192; textures https://freestylized.com/material/moss_ground_01/), CC0
 - **pipe-concrete** - "PT34", [source](https://sketchfab.com/3d-models/concrete-pipe-game-ready-92d1cbc20e8c440aad9be60586d5efa6), CC BY 4.0
 - **pipe-long** - "Mehdi Shahsavan (@ahmagh2e)", [source](https://sketchfab.com/3d-models/pipe-metalic-metal-14mb-48182e0a4c7943f596dced21a167379b), CC BY 4.0
@@ -31,8 +35,12 @@ asset to its manifest and regenerate, which is what `cli assets` checks.
 - **rock-18** - "Maksim Batyrev (@c3posw01)", [source](https://sketchfab.com/3d-models/pbr-rock-cliffs-pack-8fa6cabbbf0c431a9f5ffe91eb0b9090), CC BY 4.0
 - **rock-19** - "Maksim Batyrev (@c3posw01)", [source](https://sketchfab.com/3d-models/pbr-rock-cliffs-pack-8fa6cabbbf0c431a9f5ffe91eb0b9090), CC BY 4.0
 - **rock-196** - "Tristan Bray (textures: freestylized.com)", [source](tools/blender/rock_asset.py from levels/ball.json body 196; textures https://freestylized.com/material/cliff_rocks_07/), CC0
+- **rock-197** - "Tristan Bray (textures: freestylized.com)", [source](tools/blender/rock_asset.py from levels/ball.json body 197; textures https://freestylized.com/material/cliff_rocks_07/), CC0
+- **rock-199** - "Tristan Bray (textures: freestylized.com)", [source](tools/blender/rock_asset.py from levels/ball.json body 199; textures https://freestylized.com/material/cliff_rocks_07/), CC0
 - **rock-2** - "Maksim Batyrev (@c3posw01)", [source](https://sketchfab.com/3d-models/pbr-rock-cliffs-pack-8fa6cabbbf0c431a9f5ffe91eb0b9090), CC BY 4.0
 - **rock-20** - "Maksim Batyrev (@c3posw01)", [source](https://sketchfab.com/3d-models/pbr-rock-cliffs-pack-8fa6cabbbf0c431a9f5ffe91eb0b9090), CC BY 4.0
+- **rock-200** - "Tristan Bray (textures: freestylized.com)", [source](tools/blender/rock_asset.py from levels/ball.json body 200; textures https://freestylized.com/material/cliff_rocks_07/), CC0
+- **rock-201** - "Tristan Bray (textures: freestylized.com)", [source](tools/blender/rock_asset.py from levels/ball.json body 201; textures https://freestylized.com/material/cliff_rocks_07/), CC0
 - **rock-21** - "Maksim Batyrev (@c3posw01)", [source](https://sketchfab.com/3d-models/pbr-rock-cliffs-pack-8fa6cabbbf0c431a9f5ffe91eb0b9090), CC BY 4.0
 - **rock-22** - "Maksim Batyrev (@c3posw01)", [source](https://sketchfab.com/3d-models/pbr-rock-cliffs-pack-8fa6cabbbf0c431a9f5ffe91eb0b9090), CC BY 4.0
 - **rock-23** - "Maksim Batyrev (@c3posw01)", [source](https://sketchfab.com/3d-models/pbr-rock-cliffs-pack-8fa6cabbbf0c431a9f5ffe91eb0b9090), CC BY 4.0
