@@ -234,12 +234,11 @@ export class EditorGizmo {
     }
   }
 
-  // Grid and angle snapping, mirroring the editor's own toggle so a gizmo drag
-  // lands on the same grid a 2D drag does. `null` is no snapping at all. A size
-  // is not snapped here - the editor rounds the dimensions it writes, which is
-  // the same grid applied to the number the file actually records.
-  setSnap(translate: number | null, rotate: number | null): void {
-    this.controls.translate.translationSnap = translate;
+  // Angle snapping, mirroring the editor's own toggle. `null` is no snapping.
+  // A move and a size are not snapped here: the editor snaps the move by the
+  // corner a 2D drag lines up (three can only round the proxy, which stands at
+  // the centre) and rounds the dimensions it writes.
+  setSnap(rotate: number | null): void {
     this.controls.rotate.rotationSnap = rotate;
   }
 

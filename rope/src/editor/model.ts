@@ -2666,6 +2666,53 @@ export function halfExtents(item: EdItem): Vec2 {
   return new Vec2(x, y);
 }
 
+// The point a move snaps to the grid, in the world: the top-left corner or
+// vertex of the top-left piece. Every candidate the items offer is gathered -
+// a polygon's vertices and a rect's four corners, both as turned, and the box
+// corner of anything else (a circle has no corner of its own) - and the one
+// nearest the top-left of their joint box wins. A polygon's centre is wherever
+// its hull's extremes put it, and a body's origin wherever it was authored, so
+// snapping either carries grid-drawn corners off the grid; snapping a corner
+// keeps them on (while nothing is turned). Ties - a diamond's top and left
+// corners - go to the higher point, then the further left, so the choice is
+// the same every time the thing is picked up.
+export function moveSnapPoint(items: readonly EdItem[]): Vec2 {
+  const points: Vec2[] = [];
+  for (const i of items) {
+    const s = i.shape;
+    if (s.kind === "poly") {
+      for (const v of s.verts) points.push(i.pos.add(v.rotated(i.rot)));
+    } else if (s.kind === "rect") {
+      for (const [x, y] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
+        points.push(i.pos.add(new Vec2((x * s.w) / 2, (y * s.h) / 2).rotated(i.rot)));
+      }
+    } else {
+      points.push(i.pos.sub(halfExtents(i)));
+    }
+  }
+  let minX = Infinity;
+  let minY = Infinity;
+  for (const p of points) {
+    minX = Math.min(minX, p.x);
+    minY = Math.min(minY, p.y);
+  }
+  const corner = new Vec2(minX, minY);
+  const EPS = 1e-9;
+  let best = points[0] ?? Vec2.ZERO;
+  let bestD = Infinity;
+  for (const p of points) {
+    const d = p.distanceTo(corner);
+    if (
+      d < bestD - EPS ||
+      (d < bestD + EPS && (p.y < best.y - EPS || (p.y < best.y + EPS && p.x < best.x)))
+    ) {
+      best = p;
+      bestD = Math.min(bestD, d);
+    }
+  }
+  return best;
+}
+
 // One item's axis-aligned bounds IN THE WORLD, rotation included - the box it
 // actually occupies on screen, which is what "this shape is inside that one"
 // has to be decided from. `halfExtents` is deliberately not that: it is the

@@ -1795,6 +1795,10 @@ export function drawEditor(
   // where the cart tilts or changes pace, and which of them an edit applies to
   // has to be legible on the route rather than only in the panel.
   selectedRouteNodes: ReadonlySet<number> = new Set<number>(),
+  // The corner a move is snapping to the grid (see `moveSnapPoint` in
+  // model.ts), marked while the drag is live so it is plain which corner of
+  // which piece is being lined up.
+  snapPoint: Vec2 | null = null,
 ): void {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   // The backdrop is the editor's own paper. With a 3D scene underneath, this
@@ -2675,4 +2679,28 @@ export function drawEditor(
     ctx.strokeRect(a.x, a.y, b.x - a.x, b.y - a.y);
     ctx.setLineDash([]);
   }
+
+  // A ring with a cross through it: not a square, which on a polygon would
+  // read as one more vertex handle rather than as the vertex that is special.
+  if (snapPoint) {
+    const p = worldToScreen(cam, snapPoint);
+    const R = 8;
+    ctx.strokeStyle = HANDLE_FILL;
+    ctx.lineWidth = 4;
+    snapMark(ctx, p, R);
+    ctx.strokeStyle = SELECT;
+    ctx.lineWidth = 2;
+    snapMark(ctx, p, R);
+  }
+}
+
+function snapMark(ctx: CanvasRenderingContext2D, p: Vec2, r: number): void {
+  ctx.beginPath();
+  ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+  // Ticks outside the ring only, so the corner itself stays visible inside it.
+  for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+    ctx.moveTo(p.x + dx * r * 0.5, p.y + dy * r * 0.5);
+    ctx.lineTo(p.x + dx * r * 1.9, p.y + dy * r * 1.9);
+  }
+  ctx.stroke();
 }

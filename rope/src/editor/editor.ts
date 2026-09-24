@@ -106,6 +106,7 @@ import {
   bodyRuns,
   objectLabel,
   halfExtents,
+  moveSnapPoint,
   isArrowNote,
   isCheckpointNote,
   checkpointBox,
@@ -378,6 +379,10 @@ type Drag =
       press: Vec2;
       moved: boolean;
       pick?: () => void;
+      // The point that lands on the grid, as an offset from the lead's
+      // position (see `moveSnapPoint`). Fixed at the press: a move only
+      // translates, so the offset cannot change during the drag.
+      snapAt: Vec2;
     }
   | { mode: "movePlayer"; grab: Vec2 }
   | { mode: "corner"; body: EdItem; anchor: Vec2 }
@@ -700,7 +705,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // keeps it on screen and out of harm's way.
   const lockedLayers = new Set<EdLayer>();
   let snapOn = true;
-  const gridStep = 0.1; // snap spacing: fixed 10 cm (matches the backdrop minor grid)
+  const gridStep = 0.05; // snap spacing: fixed 5 cm (half the backdrop's 10 cm minor grid)
   let currentName: string | null = null;
   let dirty = false;
   // Bumped by every model edit, so a save that started before an edit knows not
@@ -1090,12 +1095,19 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   const snapVec = (v: Vec2) => new Vec2(snap(v.x), snap(v.y));
   // Snap a shape dimension (width/height/radius) to the grid, never below one cell.
   const snapLen = (v: number) => Math.max(gridStep, snap(v));
-  // Snap a would-be centre so the body's top-left corner lands on the grid
-  // (moves snap the corner rather than the centre).
-  const snapCorner = (b: EdItem, center: Vec2) => {
-    const off = halfExtents(b);
-    return snapVec(center.sub(off)).add(off);
+  // What a move lines up with the grid (see `moveSnapPoint`): a body's colliders
+  // and geometry, whichever piece was grabbed - a light or an anchor is not the
+  // outline being lined up - or everything, where there is nothing else.
+  const snapOutlineOf = (items: readonly EdItem[]): Vec2 => {
+    const outline = items.filter((m) => m.object === "collision" || m.object === "geometry");
+    return moveSnapPoint(outline.length ? outline : items);
   };
+  // A move's displacement, adjusted so the point it lines up (`at`, taken at
+  // the press) lands on the grid.
+  const snapMove = (at: Vec2, d: Vec2): Vec2 => (snapOn ? snapVec(at.add(d)).sub(at) : d);
+  // Where the gizmo's live move is lining up, for the overlay's marker - the
+  // same one a 2D drag shows. Null outside a gizmo translate.
+  let gizmoSnapPoint: Vec2 | null = null;
   const snapAngle = (a: number) => {
     if (!snapOn) return a;
     const step = Math.PI / 12; // 15°
@@ -1174,6 +1186,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       scale: number;
       z: number;
       offsetZ: number;
+      pos: Vec2;
+      snapAt: Vec2;
     } | null = null;
     return {
       pose() {
@@ -1234,20 +1248,28 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           // fallback into an authored number.
           z: handleZ(it),
           offsetZ: it.visual.offsetZ,
+          pos: it.pos,
+          snapAt: moveSnapPoint([it]),
         };
       },
       apply(mode, pos, quat, scale) {
         const it = find();
         if (!it) return;
-        if (mode === "translate") {
-          it.pos = new Vec2(pos.x, threeY(pos.y));
-          if (it.object === "geometry" && base) {
-            it.visual.offsetZ = base.offsetZ + (pos.z - base.z);
+        if (mode === "translate" && base) {
+          // The plane is snapped here rather than by three (see `syncGizmo`),
+          // by the same corner a 2D drag lines up; depth has no corner and
+          // snaps as the proxy's own z.
+          const d = snapMove(base.snapAt, new Vec2(pos.x, threeY(pos.y)).sub(base.pos));
+          it.pos = base.pos.add(d);
+          gizmoSnapPoint = base.snapAt.add(d);
+          const z = snap(pos.z);
+          if (it.object === "geometry") {
+            it.visual.offsetZ = base.offsetZ + (z - base.z);
             // A light's field is written outright rather than as a change, and
             // may be: `light.z` is always a concrete number in the model, so
             // `handleZ` starts the proxy exactly there and there is no fallback
             // for a drag to stamp into the file.
-          } else if (it.object === "light") it.light.z = pos.z;
+          } else if (it.object === "light") it.light.z = z;
         } else if (mode === "rotate") {
           const e = new THREE.Euler().setFromQuaternion(quat, "ZXY");
           it.rot = threeRotation(e.z);
@@ -1275,6 +1297,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       },
       end() {
         base = null;
+        gizmoSnapPoint = null;
         rebuildInspector();
       },
     };
@@ -1330,6 +1353,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // axes, and a displacement is measured from there.
       z: number;
       own: Map<number, number>;
+      snapAt: Vec2;
     } | null = null;
     return {
       pose() {
@@ -1365,6 +1389,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           pose: captureGroupPose(model, list, selectionCentre(list)),
           z: list.length ? list.reduce((a, i) => a + handleZ(i), 0) / list.length : 0,
           own: new Map(list.map((i) => [i.id, ownZ(i)])),
+          snapAt: snapOutlineOf(list),
         };
       },
       apply(mode, pos, quat) {
@@ -1372,14 +1397,15 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         const list = items();
         if (mode === "translate") {
           const centre = base.pose.centre;
-          const d = new Vec2(pos.x - centre.x, threeY(pos.y) - centre.y);
+          const d = snapMove(base.snapAt, new Vec2(pos.x - centre.x, threeY(pos.y) - centre.y));
           placeGroup(model, list, base.pose, d, 0);
+          gizmoSnapPoint = base.snapAt.add(d);
           // Depth, for every member that has one - a drawn form's `offsetZ`, a
           // light's own `z`. Each keeps what it had and moves by the drag's
           // displacement, so a backdrop 6 m back and the sign 20 cm in front of
           // it stay 5.8 m apart; a collision shape in the selection is passed
           // over, the plane being the only place it can be (see `anyZ`).
-          const dz = pos.z - base.z;
+          const dz = snap(pos.z) - base.z;
           if (dz !== 0) {
             for (const i of list) {
               const was = base.own.get(i.id);
@@ -1400,6 +1426,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       },
       end() {
         base = null;
+        gizmoSnapPoint = null;
         rebuildInspector();
       },
     };
@@ -1416,6 +1443,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       pos: Map<number, Vec2>;
       frame: EdBodyFrame;
       applied: number;
+      snapAt: Vec2;
     } | null = null;
     return {
       pose() {
@@ -1439,6 +1467,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           pos: new Map(items.map((m) => [m.id, m.pos])),
           frame: bodyFrameOf(model, id),
           applied: 0,
+          snapAt: snapOutlineOf(items),
         };
       },
       apply(mode, pos, quat) {
@@ -1446,7 +1475,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         if (mode === "translate") {
           // Measured from where the body was, so a drag cannot accumulate the
           // grid's rounding across its own moves.
-          const d = new Vec2(pos.x - base.centre.x, threeY(pos.y) - base.centre.y);
+          const d = snapMove(
+            base.snapAt,
+            new Vec2(pos.x - base.centre.x, threeY(pos.y) - base.centre.y),
+          );
+          gizmoSnapPoint = base.snapAt.add(d);
           for (const m of members()) {
             const from = base.pos.get(m.id);
             if (from) m.pos = from.add(d);
@@ -1468,6 +1501,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       },
       end() {
         base = null;
+        gizmoSnapPoint = null;
         rebuildInspector();
       },
     };
@@ -1520,9 +1554,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
               : itemHandlers(spec.id),
       );
     }
-    // The same grid and the same 15° the 2D drags snap to, so a gizmo drag and a
-    // handle drag cannot land a body in different places.
-    gizmo.setSnap(snapOn ? gridStep : null, snapOn ? ANGLE_STEP : null);
+    // The same 15° the 2D drags snap to. A move is NOT snapped by three: that
+    // would round the proxy, which stands at the centre, and a 2D drag lines up
+    // a corner (`moveSnapPoint`) - so the handlers snap the move themselves,
+    // and a gizmo drag and a handle drag cannot land a body in different places.
+    gizmo.setSnap(snapOn ? ANGLE_STEP : null);
     gizmo.follow();
   }
 
@@ -2125,7 +2161,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     button("▶ Test Grapple", () => startTest("grapple", testSpawn())),
     btnTestBall,
   );
-  const snapChk = checkbox("snap 10cm", snapOn, (v) => (snapOn = v));
+  const snapChk = checkbox("snap 5cm", snapOn, (v) => (snapOn = v));
   testRow.append(snapChk);
   // The screen-edge guarantee, off-switchable for a test and NOWHERE else. The
   // game never turns it off - it is the one camera rule a level may not opt out
@@ -8337,6 +8373,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           press: scr,
           moved: false,
           pick: pickAt(world, scr),
+          snapAt: snapOutlineOf(members).sub(hit.pos),
         };
         return;
       }
@@ -8357,6 +8394,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           press: scr,
           moved: false,
           pick: selectedIds.size === 1 ? pickAt(world, scr) : undefined,
+          snapAt: moveSnapPoint([hit]).sub(hit.pos),
         };
         return;
       }
@@ -8798,9 +8836,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         drag.current = world;
         break;
       case "move": {
-        // Snap the lead body's corner; the rest keep their relative offsets so
-        // a group's internal layout survives the move.
-        const lead = snapCorner(drag.lead, world.add(drag.grab));
+        // Snap the press's chosen corner (`snapAt`); the rest keep their
+        // relative offsets so a group's internal layout survives the move.
+        const lead = snapVec(world.add(drag.grab).add(drag.snapAt)).sub(drag.snapAt);
         // Written as the translation it is, so a body dragged whole carries its
         // frame and a piece dragged out of one does not (see `translateItems`).
         // The others keep their offsets, which is the same delta by definition.
@@ -8949,7 +8987,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         const p = b.shape.verts[drag.index];
         if (!h || !p) break;
         // NOT snapped to the grid: a tangent is a direction and a length, not a
-        // placement, and rounding it to 10 cm quantises the curvature into
+        // placement, and rounding it to the grid quantises the curvature into
         // visible steps.
         const offset = world.sub(b.pos).rotated(-b.rot).sub(p);
         const other = drag.side === "in" ? "out" : "in";
@@ -9614,6 +9652,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         currentSettleGhosts(),
         wrapDraftView(),
         routeSel?.bodyId === soleBodyId() ? routeSel.nodes : NO_NODES,
+        !snapOn
+          ? null
+          : drag?.mode === "move" && drag.moved
+            ? drag.lead.pos.add(drag.snapAt)
+            : gizmoSnapPoint,
       );
     }
     requestAnimationFrame(frame);
