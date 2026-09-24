@@ -47,7 +47,6 @@
   "depth": 0.9,
   "seed": 0,
   "textures": "cliff-rocks-07",
-  "tile": 1,
   "cracks": [
     [
       {

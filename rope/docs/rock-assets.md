@@ -10,13 +10,13 @@ Do not resurrect that pipeline or its constants.
 ## The loop
 
 1. **The job file** `rocks/<level>-<body>.json` is the authored record of a prop.
-   `bun run assets:rock <level> <body>` creates it from the body's collision outline, or refreshes the parts the level owns in an existing one (outline, origin, depth), keeping what was authored by hand (cracks, seed, textures, tile, budget).
+   `bun run assets:rock <level> <body>` creates it from the body's collision outline, or refreshes the parts the level owns in an existing one (outline, origin, buried outline), keeping what was authored by hand (cracks, seed, textures, budget).
 2. **The build** runs `tools/blender/rock_asset.py` on the job, optimises the result into `public/meshes/<key>.glb` and updates the key's hash and size in the manifest.
    `--preview` writes a preview sheet into `public/rocks/<name>-front.png`, `-quarter.png`, `-quarter2.png`: the game's head-on view with the collision outline drawn in red, and two three-quarter views.
    A moss preview shows the rock it grows on in clay.
 3. **Judge the previews**, then the game: `?level=BALL` in the browser, or headlessly a scratch bundle (any recorded BALL run with its `data` replaced by the current level file) through `cli shot <bundle> --frame 1 --3d --at X,Y --zoom 3 --query rocks=0`, where X,Y is the body in sim metres, y down.
    The Blender previews and the game disagree in two ways worth knowing: the game lights a rock nearly head-on with little fill, so a face tilted away from the sun goes black, and the game draws the rock's LOW mesh while a moss preview shows the rock's high.
-4. **Change one authored thing at a time** (a crack, the tile, a constant), rebuild, look again.
+4. **Change one authored thing at a time** (a crack, a job field, a constant), rebuild, look again.
    A build is 15 to 25 seconds including the bake and the previews.
 5. When the owner accepts it: `bun run assets:publish public/meshes/<key>.glb`, then `bun run assets:credits`.
 
@@ -30,7 +30,7 @@ The first rock (body 196 of `ball`) took about twenty rounds; most of what follo
   "outline": [{"x": 11.6, "y": -9.05}, ...],
   "origin": {"x": 17.85, "y": -10.81},
   "depth": 0.9, "seed": 0,
-  "textures": "cliff-rocks-07", "tile": 1.0,
+  "textures": "cliff-rocks-07",
   "cracks": [[{"x": 11.75, "y": -8.35}, {"x": 12.1, "y": -8.3}, ...], ...]
 }
 ```
@@ -39,16 +39,35 @@ The first rock (body 196 of `ball`) took about twenty rounds; most of what follo
   `origin` is the **body's** position, and the mesh object sits at body-local 0,0, so editing the outline in the editor only means regenerating, never re-placing the mesh.
   These two are the level's and are overwritten on every refresh.
 - `depth`: the solid's depth through the gameplay plane, centred on it.
-  Taken from the geometry object's `depth` when it has one.
+  Seeded from the geometry object's `depth` when the job is created, then the job's: a refresh used to copy it again from the extruded geometry, so a depth set before `--place` was overwritten.
   For a rock it should be about the rock's width: the authored 2 m on a 1 m rock made a loaf of butter.
 - `cracks`: polylines in the same frame, each carved as a soft groove that wraps over the front, top and back.
   Author them like a sculptor: one across the lower third, one splitting the top block, a short shoulder crack.
   They are the only per-rock geometry decision besides the outline; the wrapper keeps them on the rock when the body moves.
+  A crack laid along the crease where chisel planes meet renders as a hard black slit: rock-197's low bedding crack did once `front` put planes there, and was removed.
 - `seed`: every random choice (chisel cuts, wobble) is seeded from it; the same job always gives the same rock.
 - `textures`: a set name under `assets-src/rock-textures/<name>/` holding `basecolor.png`, `normal.png`, `roughness.png`, prepared by `bun run assets:rock-texture <zip> assets-src/rock-textures/<name>` (see "Textures").
-- `tile`: metres per repeat of the set. 1.0 m was chosen for the rock; 1.6 m read as one band across the rock, 0.6 m as fine strata.
+- There is no per-rock tile: metres per repeat belong to the texture set (`SET_TILE` in `rock_asset.py`), so every prop wearing a set shows it at the same world size.
+  1.0 m was chosen for the rock set (1.6 m read as one band across a rock, 0.6 m as fine strata), 0.5 m for the moss.
+  A per-job tile let rock-197 fall back to 1.6 m beside rock-196's 1.0 m ("the texture scale should be based on the world size").
+- `detail`: metres, the size every detail constant (voxel, corner rounding, chisel depth, crack width) is scaled from, as if it were a rock that big; the rock's larger side by default.
+  Set it for a long, low rock: body 197 (4.5 x 1.4 m) detailed at 4.5 m got 31 cm corner rounding and 40 cm chisel cuts and shrank well inside its outline, so it carries `"detail": 1.4`.
+- `cuts`: how many chisel planes (34 by default, right for about a square metre of face); rock-197 carries 110.
+- `front`: the share of chisel cuts made on the face toward the camera (0 to 1); without it each cut picks its side by coin toss.
+  rock-197's seed put the big planes on the back, which the game never shows ("you've put the interesting geometry on the side facing away from the camera"); it carries 0.85.
+- `bury`: metres to push every outline edge the rock shares with another body's collision (the roof or wall it comes out of) into that neighbour, for the mesh only, so its rounded rim is hidden inside the neighbour.
+  `bun run assets:rock` finds the shared edges and writes the result into the job as `buriedOutline` (level-owned, rewritten on every refresh): shared edges are sampled every 5 cm, pushed out, ramped in at a junction with a free edge, and each sample pulled back until it lies inside the rock or a neighbour, so a thin spike of the roof is never poked through.
+  rock-199 without it met the roof's flat underside along a rounded edge and looked stuck on; its first version (`buryTop`, the top edge only) could not bury rock-200, whose top slants and whose side runs down a roof wall.
+  Its depth must stay under the roof's: at equal depth its buried front fought the roof's front face and showed through as a white patch (rock-199 and rock-200 are 0.9 m under a 1.0 m roof).
+  The 5 cm recess that leaves shows as a thin shadow of the roof's edge on the rock's face.
+  A roof body whose own outline still runs round the rock draws over it: rock-199 was invisible until body 193's outline was re-routed along the rock's top.
+- `taper`: `{root, tip, share}` narrows the depth, eased, from the root to `share` at the tip.
+  Tried on rock-199 and dropped by the owner ("far too severe", the tip a blade the moss wrapped as two lobes); no job uses it.
 - `tris`: the shipped triangle budget (2500 for a rock, 1800 for moss by default). 17k was "way too many for a single rock".
 - A moss job has `"kind": "moss"` and `"rock": "<level>-<body>.json"`, the rock it grows on.
+  `"drip"` (metres, default 0.12 toward the camera) sets how far the lobes cut back into the outline and `"fill"` (metres, default 0.05) how far the skin may grow off the rock toward its outline; a small moss hanging below a rock (moss-145, moss-160: 0.04 and 0.12) needs both to reach its collider.
+  The skin grows along each face's own side-view direction, so a moss under a rock's tip fills down to its outline as well as up and sideways.
+  `"lobes": "upper"` puts the scalloped edge on the moss's upper edge, reaching up the face, for a moss under a rock's tip (moss-190); the default is the lower edge, drooping (moss-192).
   Its `outline` is the moss body's own collision, which is what the hook attaches to.
 
 ## How a rock is made
@@ -59,9 +78,11 @@ The first rock (body 196 of `ball`) took about twenty rounds; most of what follo
    Voxel remesh at `VOXEL` (1.2 cm on a 1 m rock; constants scale with the rock's size), a light smooth.
 2. **Chisel facets.** `CUTS` flat planes are shaved off the blob, each `CUT_DEPTH` in from its support point, with normals that have at least `CUT_MIN_Y` of depth component, so they face the camera or away and never cut the silhouette.
    This is where the reference's flat planes meeting at crisp edges come from.
+   A cut that would cross the outline in the gameplay plane is rejected (steep cuts shaved rock-199's silhouette inside its collision), and a cut whose section the fill cannot close is undone (one such cut collapsed rock-199's high to 200 triangles).
    Then a second remesh rebuilds a uniform skin over the cuts.
 3. **Cracks.** Each authored polyline is a curtain through the depth; vertices within `CRACK_RADIUS` of it in the side view move inward along their normal by up to `CRACK_DEPTH`, a soft V, with a smooth `CRACK_WOBBLE`.
    The groove is wide and shallow (6 cm, 2.2 cm) on purpose: at 4 cm and 3.5 cm the groove walls were steep enough that their baked normals faced away from the game's sun and every crack was a harsh black band.
+   The carve fades to nothing at the gameplay plane itself, so a crack ending at a side wall does not notch the silhouette.
    Anything the carve pushed outside the outline is pulled back onto it.
 4. **The high mesh is this dense skin as it is** (about 48k triangles), one light smooth, shaded smooth.
    A planar dissolve and an edge bevel used to follow here to save triangles, and they were the cause of "messy crevices": the dissolve chopped the curved groove walls into strips and the bevel fragmented them, and the bake copied both.
@@ -72,6 +93,8 @@ The first rock (body 196 of `ball`) took about twenty rounds; most of what follo
    The source material is a hand-built **triplanar** with a different offset per axis: Blender's own box projection read the same tile region on the front and the side of a rock about one tile across, and one pale patch of the set showed twice ("why is this part here").
    The cage is 1.2 cm and rays reach 6 cm: larger values let rays cross a groove and sample the far wall, black specks in every crack.
    Every atlas texel the bake left unwritten (marker colour), wrote black (a ray that hit a back face) or gave a normal pointing into the surface is refilled from its neighbours.
+   A texel the bake's margin blended with the marker counts as the marker (red and blue both clear green by 0.12): rock-197's first bake left such texels as magenta streaks.
+   The build logs the share of the atlas it refilled; a jump between builds means the low has left the high by more than the rays reach.
    The normal map is exported at `NORMAL_STRENGTH` 0.7, because a full-strength tilt goes black under the game's light.
 7. **Export**: one GLB at the origin, PNG textures, which `assets:optimize` turns into meshopt geometry and 1k WebP.
    The script ends by checking the shipped mesh is watertight.
@@ -98,6 +121,19 @@ A slab built from the moss outline alone was rejected: "a random blob on top of 
    The moss then encloses every peak by construction.
 7. The moss low comes from the same remesh route with its voxel capped at 3 cm and a gentle dissolve, and is lifted clear of the rock's low once more, last.
    The rock stays in the scene through the moss bake so the occlusion darkens under the lip.
+
+### Open: black specks on moss-145's lip
+
+A few hard-edged black specks show on moss-145's upper-left lip in the game (and were in the owner's screenshot); investigation stopped on 2026-09-24 at the owner's request.
+What is known, each by an A/B in `cli shot`:
+
+- It is the **normal map**: stripping `normalTexture` from the GLB removes them, stripping `occlusionTexture` does not; at `normalScale` 0.2 one blob survives, so it is not a strong but valid tilt.
+- It is not the painted light (`paint=0` keeps them).
+- Ruled out as the cause, each tried and reverted: refilling normals over 40 degrees off their 5x5 mean, exporting tangents (`export_tangents`), refilling occlusion under 0.1, renormalising the normal map after the refill.
+- No UV-degenerate triangles and no bad tangents in the mesh.
+- The raw normal map has a handful of texels 0.3 to 0.5 long, and WebP shortens thousands more below 0.8; renormalising did not remove the specks, so that is not the whole story.
+
+Next: find the specks' texels (a UV-coloured debug render of the moss, or reading the atlas at the pixel's UV) before changing anything else.
 
 ## Textures
 

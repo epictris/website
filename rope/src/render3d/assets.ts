@@ -3000,9 +3000,79 @@ export const MESH_ASSETS: Record<string, MeshAsset> = {
     author: "Tristan Bray (textures: freestylized.com)",
     license: "CC0",
   },
+  // The long low slab rock-196 stands on, detailed at its 1.4 m height rather
+  // than its 4.5 m length (the job's `detail`).
+  "rock-197": {
+    file: "/meshes/rock-197.glb",
+    sha256: "68809680abf8dbf6d1ee27238868902d0cbbbe58597f262f8cd4b6789aafa0bb",
+    bytes: 116096,
+    source: "tools/blender/rock_asset.py from levels/ball.json body 197; textures https://freestylized.com/material/cliff_rocks_07/",
+    author: "Tristan Bray (textures: freestylized.com)",
+    license: "CC0",
+  },
+  // The rock hanging from the roof above the slab, tapered in depth to a blunt
+  // tip (the job's `taper`), and the moss wrapping that tip (body 190).
+  "rock-199": {
+    file: "/meshes/rock-199.glb",
+    sha256: "f9376fb2c53b023d7271ce9e6e16103e41194af5b488e20482a30828c7ecbfa3",
+    bytes: 103736,
+    source: "tools/blender/rock_asset.py from levels/ball.json body 199; textures https://freestylized.com/material/cliff_rocks_07/",
+    author: "Tristan Bray (textures: freestylized.com)",
+    license: "CC0",
+  },
+  "moss-190": {
+    file: "/meshes/moss-190.glb",
+    sha256: "42e7825587c7c4d3edf1e62ce212536d81b2335fadaed9905c1b7e4c87cb4574",
+    bytes: 454816,
+    source: "tools/blender/rock_asset.py from levels/ball.json body 190; textures https://freestylized.com/material/moss_ground_01/",
+    author: "Tristan Bray (textures: freestylized.com)",
+    license: "CC0",
+  },
+  // The second rock hanging from the roof, beside rock-199, and its moss (body 191).
+  "rock-200": {
+    file: "/meshes/rock-200.glb",
+    sha256: "bc73e0b71b55def23ec1cd0319bc3c7000428b0b405989c40840b7f45f9c7b42",
+    bytes: 99308,
+    source: "tools/blender/rock_asset.py from levels/ball.json body 200; textures https://freestylized.com/material/cliff_rocks_07/",
+    author: "Tristan Bray (textures: freestylized.com)",
+    license: "CC0",
+  },
+  "moss-191": {
+    file: "/meshes/moss-191.glb",
+    sha256: "26bc65ae9fd3621c4481ea0a8208f234a088d4ee41296f6bec3ca21304cbcde2",
+    bytes: 447840,
+    source: "tools/blender/rock_asset.py from levels/ball.json body 191; textures https://freestylized.com/material/moss_ground_01/",
+    author: "Tristan Bray (textures: freestylized.com)",
+    license: "CC0",
+  },
+  // The large rock hanging right of rock-200, and its two mosses (bodies 145, 160).
+  "rock-201": {
+    file: "/meshes/rock-201.glb",
+    sha256: "f40b7993dad5526baafa575698c3a4ac3bd60b5c58ee66827b1c788fb028fdc2",
+    bytes: 101156,
+    source: "tools/blender/rock_asset.py from levels/ball.json body 201; textures https://freestylized.com/material/cliff_rocks_07/",
+    author: "Tristan Bray (textures: freestylized.com)",
+    license: "CC0",
+  },
+  "moss-145": {
+    file: "/meshes/moss-145.glb",
+    sha256: "86cfa15591c6ac8d709846b0c9ab381b93d4d74b5be0dff97767ddf39d7afb62",
+    bytes: 484276,
+    source: "tools/blender/rock_asset.py from levels/ball.json body 145; textures https://freestylized.com/material/moss_ground_01/",
+    author: "Tristan Bray (textures: freestylized.com)",
+    license: "CC0",
+  },
+  "moss-160": {
+    file: "/meshes/moss-160.glb",
+    sha256: "b81c41dc205bb77c45fff8384fc34604fb308fedc32b23d54b68fa56fa297636",
+    bytes: 386180,
+    source: "tools/blender/rock_asset.py from levels/ball.json body 160; textures https://freestylized.com/material/moss_ground_01/",
+    author: "Tristan Bray (textures: freestylized.com)",
+    license: "CC0",
+  },
   // The moss carpet over rock-196, from its own body's outline (body 192; the
   // hook attaches to moss, so it is its own body and its own prop), wearing the
-  // CC0 "moss ground 02" set from freestylized.com.
+  // CC0 "moss ground 01" set from freestylized.com.
   "moss-192": {
     file: "/meshes/moss-192.glb",
     sha256: "6dbaeeb9b4c43ff133b01ded9b9d73cac2661a588e2f660a47706f09d2192ec6",

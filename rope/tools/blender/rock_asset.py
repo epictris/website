@@ -65,7 +65,12 @@ CUT_DEPTH = (0.03, 0.09)  # how deep a cut shaves, metres
 CRACK_RADIUS = 0.06    # half width of a carved crack, metres
 CRACK_DEPTH = 0.022    # metres, at the crack's centre line
 CRACK_WOBBLE = 0.03    # noise on the crack line, metres
-TEXTURE_TILE = 1.6     # metres per repeat of the rock set
+# Metres per repeat, per texture SET rather than per rock: triplanar projects
+# in the mesh's own metres, so every prop wearing a set shows it at one size.
+# A per-job tile let rock-197 fall back to 1.6 m beside rock-196's 1.0 m.
+# 1.0 m was chosen for the rock (1.6 m read as one band across a rock, 0.6 m
+# as fine strata).
+SET_TILE = {"cliff-rocks-07": 1.0, "moss-ground-01": 0.5, "moss-ground-02": 0.5}
 NORMAL_STRENGTH = 0.7  # exported normalTexture scale: the game lights a rock
                        # nearly head-on with little fill, so a full-strength
                        # groove wall goes black (a harsh, jagged band)
@@ -102,7 +107,6 @@ MOSS_BASE_VOXEL = 0.03   # the rock copy the skin grows from is remeshed at this
 MOSS_BASE_SMOOTH = 12    # and smoothed this much: facets and cracks go
 MOSS_VOXEL = 0.02      # the closed skin is remeshed at this, then smoothed: soft
 MOSS_FIELD_SMOOTH = 25  # Laplacian passes over the thickness field
-MOSS_TILE = 0.5
 MOSS_TRIS = 1800
 LOW_REMESH_OVER = 2.5  # the low's remesh aims this factor over the budget
 LOW_DISSOLVE_DEG = 10.0
@@ -243,12 +247,28 @@ def remesh(obj, voxel):
     apply_all(obj)
 
 
-def chisel(obj, rng, count, depth_range, min_y, scale):
+def densify(poly, step):
+    """The closed polygon as points at most `step` apart along its edges."""
+    out = []
+    for i, (ax, az) in enumerate(poly):
+        bx, bz = poly[(i + 1) % len(poly)]
+        n = max(1, int(math.ceil(math.hypot(bx - ax, bz - az) / step)))
+        out += [(ax + (bx - ax) * k / n, az + (bz - az) * k / n) for k in range(n)]
+    return out
+
+
+def chisel(obj, rng, count, depth_range, min_y, scale, front=None, band=None):
     """Shave `count` flat facets off the blob: each is a plane whose normal
     points mostly toward or away from the camera (|y| >= min_y), placed a cut
     depth inside the blob's support point along that normal, the outer part
     removed and the cut filled. Chisel-flat planes meeting at crisp edges are
-    the reference's look; the depth bias keeps the outline uncut."""
+    the reference's look; the depth bias keeps the outline uncut.
+    `front`, when given, is the share of cuts made on the face toward the
+    camera (negative y): a free side is a coin toss per cut, and rock-197's
+    seed put the facets on the back, which the game never shows.
+    `band`, the outline as (x, z) points, rejects every cut that would cross
+    it in the gameplay plane: the depth bias alone let steep cuts shave the
+    silhouette, and rock-199 sat visibly inside its collision."""
     bm = bmesh.new()
     bm.from_mesh(obj.data)
     cuts = 0
@@ -260,15 +280,28 @@ def chisel(obj, rng, count, depth_range, min_y, scale):
             v.normalize()
             if abs(v.y) >= min_y:
                 break
+        if front is not None:
+            v.y = -abs(v.y) if rng.random() < front else abs(v.y)
         support = max(vv.co.dot(v) for vv in bm.verts)
         d = rng.uniform(*depth_range) * scale
         co = v * (support - d)
+        if band is not None and max(x * v.x + z * v.z for (x, z) in band) > support - d:
+            continue
+        before = bm.copy()
         geom = bm.verts[:] + bm.edges[:] + bm.faces[:]
         ret = bmesh.ops.bisect_plane(bm, geom=geom, plane_co=co, plane_no=v, clear_outer=True, clear_inner=False, dist=1e-5)
         edges = [e for e in ret["geom_cut"] if isinstance(e, bmesh.types.BMEdge)]
         if edges:
             bmesh.ops.holes_fill(bm, edges=edges, sides=0)
+        # A cut whose section the fill could not close leaves the mesh open,
+        # and the voxel remesh then collapses it: rock-199's high came out at
+        # 200 triangles from one such cut. Such a cut is undone.
+        if edges and all(e.is_manifold for e in bm.edges):
             cuts += 1
+            before.free()
+        else:
+            bm.free()
+            bm = before
     bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
     bm.to_mesh(obj.data)
     bm.free()
@@ -301,7 +334,9 @@ def carve_cracks(obj, cracks, radius, depth, wobble, rng, scale):
         if d >= r:
             continue
         t = 1 - d / r
-        push = depth * scale * (t * t)
+        # Nothing at the gameplay plane itself, the band that IS the outline:
+        # a crack ending at a side wall notched rock-199's silhouette there.
+        push = depth * scale * (t * t) * smoothstep(0.0, r, abs(y))
         co[i] -= nrm[i] * push
         moved += 1
     me.vertices.foreach_set("co", co.reshape(-1))
@@ -397,7 +432,7 @@ def ray_to_outline(p, d, poly):
     return best
 
 
-def rock_cap(real, region, clearance, name, scale):
+def rock_cap(real, region, clearance, name, scale, lobes="lower", drip=None):
     """A shell over the DRAWN rock inside the moss cover: its faces there,
     pushed out by `clearance` and closed inward. Fused into the moss by the
     remesh it guarantees the moss encloses every rock peak, which no
@@ -410,7 +445,7 @@ def rock_cap(real, region, clearance, name, scale):
     nrm = np.empty(n * 3, dtype=np.float32)
     me.vertices.foreach_get("normal", nrm)
     nrm = nrm.reshape(n, 3)
-    w = cover_weights(co, nrm, region, scale)
+    w = cover_weights(co, nrm, region, scale, lobes, drip)
     faces = [list(p.vertices) for p in me.polygons if w[list(p.vertices)].mean() > 0.3]
     if not faces:
         return None
@@ -462,11 +497,13 @@ def lift_clear(obj, real, clearance):
     return lifted
 
 
-def cover_weights(co, nrm, region, scale):
+def cover_weights(co, nrm, region, scale, lobes="lower", drip_front=None):
     """Per-vertex cover of the moss outline, 0..1: strictly inside the outline
     in the side view, fading in over MOSS_FALLOFF from an edge that is
     scalloped inward and, toward the camera, droops in lobes along its lower
-    edge. Shared by the skin and the rock cap so both stop at the same edge."""
+    edge (`lobes="upper"`: along its UPPER edge, reaching up the face, for a
+    moss under a rock's tip, rock-199's). Shared by the skin and the rock cap
+    so both stop at the same edge."""
     n = len(co)
     wob = bpy.data.textures.new("moss-wobble", "CLOUDS")
     wob.noise_scale = MOSS_EDGE_SCALE * scale
@@ -484,7 +521,7 @@ def cover_weights(co, nrm, region, scale):
             continue
         # Scallops and the lobes' gaps only ever eat INTO the outline.
         d -= abs(wob.evaluate((x, y, z))[3] - 0.5) * 2 * MOSS_EDGE_WOBBLE * scale
-        if z > q[1]:
+        if (z > q[1]) if lobes == "lower" else (z < q[1]):
             # The nearest outline point is BELOW this one, so it is near the
             # lower edge (the earlier test had this the wrong way round and
             # the droop never applied to anything inside the outline).
@@ -494,7 +531,11 @@ def cover_weights(co, nrm, region, scale):
             # thresholded noise gave tongues a few centimetres wide however
             # wide its features were. The noise only varies the amplitude.
             front = smoothstep(0.2, 0.7, -float(nrm[i, 1]))
-            reach = (MOSS_DRIP + (MOSS_DRIP_FRONT - MOSS_DRIP) * front) * scale
+            # `drip` (a job's), the retreat toward the camera, for a small moss
+            # whose outline the default lobes would eat most of (moss-145).
+            front_drip = MOSS_DRIP_FRONT if drip_front is None else drip_front
+            side_drip = MOSS_DRIP if drip_front is None else drip_front * MOSS_DRIP / MOSS_DRIP_FRONT
+            reach = (side_drip + (front_drip - side_drip) * front) * scale
             wave = 0.5 - 0.5 * math.cos(2 * math.pi * x / (MOSS_DRIP_SCALE * scale))
             amp = 0.75 + 0.5 * drip.evaluate((x, 0.0, 0.0))[3]
             d -= wave * amp * reach
@@ -503,7 +544,7 @@ def cover_weights(co, nrm, region, scale):
     return w
 
 
-def moss_from_rock(rock, name, region, seed, scale, real=None):
+def moss_from_rock(rock, name, region, seed, scale, real=None, lobes="lower", drip=None, fill_max=MOSS_FILL_MAX):
     """The moss skin: every face of the rock's high mesh whose side-view
     position lies inside the moss outline (scalloped, with drips hanging off
     its lower edges) is copied and pushed out along its normal by the skin's
@@ -518,7 +559,7 @@ def moss_from_rock(rock, name, region, seed, scale, real=None):
     nrm = np.empty(n * 3, dtype=np.float32)
     me.vertices.foreach_get("normal", nrm)
     nrm = nrm.reshape(n, 3)
-    w = cover_weights(co, nrm, region, scale)
+    w = cover_weights(co, nrm, region, scale, lobes, drip)
     faces = [list(p.vertices) for p in me.polygons if w[list(p.vertices)].mean() > 0.03]
     if not faces:
         raise RuntimeError("the moss outline covers no face of the rock")
@@ -543,15 +584,14 @@ def moss_from_rock(rock, name, region, seed, scale, real=None):
         nx, nz = float(nrm[v, 0]), float(nrm[v, 2])
         up = max(0.0, nz)
         ti = thick * (1 + MOSS_TOP_EXTRA * up)
-        if point_in_poly((x, z), region):
-            if nz > 0.35:
-                reach = ray_to_outline((x, z), (0.0, 1.0), region)
-                if reach is not None:
-                    ti = max(ti, min(reach, MOSS_FILL_MAX * scale) * nz)
-            elif abs(nx) > 0.6:
-                reach = ray_to_outline((x, z), (1.0 if nx > 0 else -1.0, 0.0), region)
-                if reach is not None:
-                    ti = max(ti, min(reach, MOSS_FILL_MAX * scale) * abs(nx))
+        side = math.hypot(nx, nz)
+        if point_in_poly((x, z), region) and side > 0.35:
+            # Along the face's own side-view direction, so a moss under a
+            # rock's tip fills DOWN to its outline too: only up and sideways
+            # were grown, and moss-145 hung 10 cm short of its collider.
+            reach = ray_to_outline((x, z), (nx / side, nz / side), region)
+            if reach is not None:
+                ti = max(ti, min(reach, fill_max * scale) * side)
         t[idx[v]] = ti
     neighbours = [set() for _ in used]
     for f in faces:
@@ -753,10 +793,13 @@ def flood_background(imgs, coverage_from, normal_from=None, steps=48):
     base = np.empty(w * h * 4, dtype=np.float32)
     coverage_from.pixels.foreach_get(base)
     base = base.reshape(h, w, 4)
-    marker = np.array(MARKER[:3], dtype=np.float32)
     # Unwritten texels still show the marker; a ray that hit a back face of
     # the high wrote black, which no texel of a rock is, so both are refilled.
-    magenta = (base[..., 0] > 0.45) & (base[..., 1] < 0.35) & (base[..., 2] > 0.45)
+    # The bake's margin blends the marker into the texels beside an island, so
+    # a texel is the marker's when red and blue both clear green by a margin
+    # no rock or moss colour does: (0.73, 0.36, 0.74) passed a plain
+    # "green < 0.35" and showed as magenta streaks on rock-197.
+    magenta = (base[..., [0, 2]].min(axis=2) - base[..., 1]) > 0.12
     filled = (~magenta) & (base[..., :3].max(axis=2) > 0.03)
     if normal_from is not None:
         # A ray that hit a back face wrote a normal pointing INTO the low
@@ -764,6 +807,9 @@ def flood_background(imgs, coverage_from, normal_from=None, steps=48):
         nrm = np.empty(w * h * 4, dtype=np.float32)
         normal_from.pixels.foreach_get(nrm)
         filled &= nrm.reshape(h, w, 4)[..., 2] > 0.35
+    # Background between islands is refilled too, so this is an upper bound on
+    # the missed rays; a jump between builds means the low left the high.
+    log(f"refilled {100.0 * (1.0 - filled.mean()):.1f}% of the atlas ({int(magenta.sum())} marker texels)")
     for img in imgs:
         px = np.empty(w * h * 4, dtype=np.float32)
         img.pixels.foreach_get(px)
@@ -828,130 +874,6 @@ def low_poly(high, name, tris, scale, max_voxel=None, dissolve_deg=None):
     low.select_set(True)
     bpy.ops.object.shade_smooth()
     return low
-
-
-# ------------------------------------------------------------------ material
-
-
-def texture_set(spec):
-    """A job's `textures`: a set NAME resolves to the three maps under
-    assets-src/rock-textures/<name>/ (prepared by tools/rock-texture.py); a
-    dict of explicit paths is taken as it is."""
-    if spec is None or isinstance(spec, dict):
-        return spec
-    root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-    d = os.path.join(root, "assets-src", "rock-textures", spec)
-    maps = {k: os.path.join(d, f"{k}.png") for k in ("basecolor", "normal", "roughness")}
-    for k, path in maps.items():
-        if not os.path.exists(path):
-            raise RuntimeError(f"texture set {spec!r}: no {path} (prepare it with tools/rock-texture.py)")
-    return maps
-
-
-def load_image(path, colorspace):
-    img = bpy.data.images.load(path, check_existing=True)
-    img.colorspace_settings.name = colorspace
-    return img
-
-
-def box_tex_node(nodes, links, img, tile, mapping_out, name):
-    tex = nodes.new("ShaderNodeTexImage")
-    tex.name = name
-    tex.image = img
-    tex.projection = "BOX"
-    tex.projection_blend = 0.25
-    tex.interpolation = "Linear"
-    links.new(mapping_out, tex.inputs["Vector"])
-    return tex
-
-
-def source_material(textures, tile):
-    """The look, triplanar in world metres; what the bake reads."""
-    mat = bpy.data.materials.new("rock-source")
-    mat.use_nodes = True
-    nodes = mat.node_tree.nodes
-    links = mat.node_tree.links
-    nodes.clear()
-    out = nodes.new("ShaderNodeOutputMaterial")
-    bsdf = nodes.new("ShaderNodeBsdfPrincipled")
-    links.new(bsdf.outputs["BSDF"], out.inputs["Surface"])
-    base = triplanar(nodes, links, load_image(textures["basecolor"], "sRGB"), tile, "base")
-    links.new(base, bsdf.inputs["Base Color"])
-    rough = triplanar(nodes, links, load_image(textures["roughness"], "Non-Color"), tile, "rough")
-    links.new(rough, bsdf.inputs["Roughness"])
-    nrm = triplanar(nodes, links, load_image(textures["normal"], "Non-Color"), tile, "nrm")
-    nmap = nodes.new("ShaderNodeNormalMap")
-    nmap.space = "TANGENT"
-    nmap.inputs["Strength"].default_value = 0.8
-    links.new(nrm, nmap.inputs["Color"])
-    links.new(nmap.outputs["Normal"], bsdf.inputs["Normal"])
-    bsdf.inputs["Specular IOR Level"].default_value = 0.3
-    return mat, bsdf, nmap
-
-
-def bake_material(name, size, atlas_targets):
-    """The low mesh's material during the bake: it only holds the targets."""
-    imgs = {}
-    for key, colorspace in atlas_targets:
-        img = bpy.data.images.new(f"{name}-{key}", size, size, alpha=False, float_buffer=False)
-        img.colorspace_settings.name = colorspace
-        imgs[key] = img
-    mat = bpy.data.materials.new(f"{name}-bake")
-    mat.use_nodes = True
-    return mat, imgs
-
-
-MARKER = (1.0, 0.0, 1.0, 1.0)  # what a texel nobody baked still shows
-
-
-def clear_to_marker(img):
-    w, h = img.size
-    px = np.tile(np.array(MARKER, dtype=np.float32), w * h)
-    img.pixels.foreach_set(px)
-
-
-def flood_background(imgs, coverage_from, normal_from=None, steps=48):
-    """Fill every atlas texel the bake did not write from its nearest written
-    neighbour (a few dozen one-texel dilations, then the mean for what is
-    left). Thin islands, the groove walls, otherwise read the clear colour
-    through the texture filtering: black specks in every crack."""
-    w, h = coverage_from.size
-    base = np.empty(w * h * 4, dtype=np.float32)
-    coverage_from.pixels.foreach_get(base)
-    base = base.reshape(h, w, 4)
-    marker = np.array(MARKER[:3], dtype=np.float32)
-    # Unwritten texels still show the marker; a ray that hit a back face of
-    # the high wrote black, which no texel of a rock is, so both are refilled.
-    magenta = (base[..., 0] > 0.45) & (base[..., 1] < 0.35) & (base[..., 2] > 0.45)
-    filled = (~magenta) & (base[..., :3].max(axis=2) > 0.03)
-    if normal_from is not None:
-        # A ray that hit a back face wrote a normal pointing INTO the low
-        # surface (tangent-space blue near 0), which shades as a dark dot.
-        nrm = np.empty(w * h * 4, dtype=np.float32)
-        normal_from.pixels.foreach_get(nrm)
-        filled &= nrm.reshape(h, w, 4)[..., 2] > 0.35
-    for img in imgs:
-        px = np.empty(w * h * 4, dtype=np.float32)
-        img.pixels.foreach_get(px)
-        px = px.reshape(h, w, 4)
-        f = filled.copy()
-        for _ in range(steps):
-            if f.all():
-                break
-            acc = np.zeros_like(px)
-            cnt = np.zeros((h, w), dtype=np.float32)
-            for dy, dx in ((1, 0), (-1, 0), (0, 1), (0, -1)):
-                sf = np.roll(f, (dy, dx), axis=(0, 1))
-                sp = np.roll(px, (dy, dx), axis=(0, 1))
-                acc += sp * sf[..., None]
-                cnt += sf
-            grow = (~f) & (cnt > 0)
-            px[grow] = acc[grow] / cnt[grow][:, None]
-            f |= grow
-        if not f.all():
-            px[~f] = px[f].mean(axis=0)
-        img.pixels.foreach_set(px.reshape(-1))
-        img.update()
 
 
 def bake(low, high, bake_mat, imgs, samples, scale):
@@ -1157,7 +1079,47 @@ def framed(job, flags):
         cx, cy = (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2
     width, height = max(xs) - min(xs), max(ys) - min(ys)
     depth = float(flags.get("depth") or job["depth"])
+    if job.get("buriedOutline"):
+        # The mesh's outline: the collision's with its edges shared with a
+        # roof or wall pushed into it (scripts/rock-asset.ts, `bury`). The
+        # size, and so the detail scale, stay the collision's.
+        poly = dedupe([(float(p["x"]), float(p["y"])) for p in job["buriedOutline"]])
+        if signed_area(poly) < 0:
+            poly.reverse()
     return [(x - cx, y - cy) for (x, y) in poly], cx, cy, width, height, depth
+
+
+def detail_scale(job, width, height):
+    """The factor every detail constant (authored for a 1 m rock) is scaled by.
+    By default the rock's larger side; a job's `detail` (metres) overrides it,
+    for a rock whose larger side is not its size: a 4.5 m slab 1.4 m tall
+    scaled 4.5x got 31 cm corner rounding and 40 cm chisel cuts, and shrank
+    well inside its own outline."""
+    return float(job.get("detail") or max(width, height)) / 1.0
+
+
+def taper_depth(obj, taper):
+    """Narrow the depth along a line in the side view: `root` and `tip` are
+    points in the job's frame (as cracks are), `share` the depth left at the
+    tip. Every vertex's depth is scaled by 1 at the root down to `share` at the
+    tip, eased (smoothstep) along root->tip, so a rock hanging from a roof
+    narrows in depth as well as in outline (a plain extrusion ends in a wedge
+    as deep as the root) and ends in a rounded knub: a linear taper to 0.3
+    made rock-199's tip a blade the moss wrapped as two lobes with a slot."""
+    rx, rz = float(taper["root"]["x"]), float(taper["root"]["y"])
+    tx, tz = float(taper["tip"]["x"]), float(taper["tip"]["y"])
+    share = float(taper["share"])
+    dx, dz = tx - rx, tz - rz
+    ll = dx * dx + dz * dz
+    me = obj.data
+    n = len(me.vertices)
+    co = np.empty(n * 3, dtype=np.float32)
+    me.vertices.foreach_get("co", co)
+    co = co.reshape(n, 3)
+    t = np.clip(((co[:, 0] - rx) * dx + (co[:, 2] - rz) * dz) / ll, 0.0, 1.0)
+    co[:, 1] *= 1.0 + (share - 1.0) * (t * t * (3.0 - 2.0 * t))
+    me.vertices.foreach_set("co", co.reshape(-1))
+    me.update()
 
 
 def rock_high(job, name, poly, depth, scale, rng, flags, t0):
@@ -1168,7 +1130,12 @@ def rock_high(job, name, poly, depth, scale, rng, flags, t0):
     remesh(rock, voxel)
     smooth(rock, SMOOTH_ITER)
     log(f"mass at voxel {voxel*100:.1f} cm: {len(rock.data.polygons)} faces ({time.time()-t0:.1f}s)")
-    cuts = chisel(rock, rng, int(flags.get("cuts") or CUTS), CUT_DEPTH, CUT_MIN_Y, scale)
+    front = job.get("front")
+    cuts = chisel(rock, rng, int(flags.get("cuts") or job.get("cuts") or CUTS), CUT_DEPTH, CUT_MIN_Y, scale, None if front is None else float(front), densify(poly, 0.02))
+    if job.get("taper"):
+        # After the cuts, which are made on the full block: tapered first, a
+        # tip 30% as deep was thinner than a cut and rock-199 lost 20 cm of it.
+        taper_depth(rock, job["taper"])
     remesh(rock, voxel)
     log(f"chiselled {cuts} facets ({time.time()-t0:.1f}s)")
     cracks = [[(float(p["x"]), float(p["y"])) for p in line] for line in job.get("cracks", [])]
@@ -1190,7 +1157,7 @@ def build(job, out_path, flags, job_dir="."):
     poly, cx, cy, width, height, depth = framed(job, flags)
     size = max(width, height)
     half = depth / 2
-    scale = size / 1.0  # detail constants are authored for a 1 m rock
+    scale = detail_scale(job, width, height)
     log(f"{name}: outline {len(poly)} verts, {width:.2f} x {height:.2f} m, depth {depth:.2f}, origin at world ({cx:.3f}, {cy:.3f})")
 
     clear_scene()
@@ -1205,7 +1172,7 @@ def build(job, out_path, flags, job_dir="."):
         with open(os.path.join(job_dir, job["rock"])) as f:
             rjob = json.load(f)
         rpoly, rcx, rcy, rw, rh, rdepth = framed(rjob, {})
-        rscale = max(rw, rh) / 1.0
+        rscale = detail_scale(rjob, rw, rh)
         rrng = random.Random(int(rjob.get("seed", 0)) * 7919 + 17)
         base = rock_high(rjob, f"{name}-rock", rpoly, rdepth, rscale, rrng, {}, t0)
         base.location = (rcx - cx, 0, rcy - cy)
@@ -1227,7 +1194,7 @@ def build(job, out_path, flags, job_dir="."):
         bpy.ops.object.transform_apply(location=True)
         remesh(soft, MOSS_BASE_VOXEL * rscale)
         smooth(soft, MOSS_BASE_SMOOTH, 0.5)
-        rock, nfaces = moss_from_rock(soft, name, poly, seed, scale, real=base)
+        rock, nfaces = moss_from_rock(soft, name, poly, seed, scale, real=base, lobes=job.get("lobes", "lower"), drip=job.get("drip"), fill_max=float(job.get("fill", MOSS_FILL_MAX)))
         bpy.data.objects.remove(soft)
         # Clear of the rock AS THE GAME DRAWS IT: its low mesh, built exactly
         # as the rock job builds it, which the remesh moves by up to a voxel
@@ -1245,7 +1212,7 @@ def build(job, out_path, flags, job_dir="."):
         bpy.context.collection.objects.link(dense)
         bpy.context.view_layer.objects.active = dense
         remesh(dense, MOSS_VOXEL * scale)
-        cap = rock_cap(dense, poly, (MOSS_CLEARANCE + MOSS_VOXEL) * scale, f"{name}-cap", scale)
+        cap = rock_cap(dense, poly, (MOSS_CLEARANCE + MOSS_VOXEL) * scale, f"{name}-cap", scale, job.get("lobes", "lower"), job.get("drip"))
         bpy.data.objects.remove(dense)
         if cap is not None:
             bpy.ops.object.select_all(action="DESELECT")
@@ -1297,7 +1264,9 @@ def build(job, out_path, flags, job_dir="."):
     textures = texture_set(job.get("textures"))
     do_bake = textures is not None and not flags.get("no_bake")
     if do_bake:
-        tile = float(flags.get("tile") or job.get("tile") or (MOSS_TILE if kind == "moss" else TEXTURE_TILE))
+        tile = SET_TILE.get(job.get("textures"))
+        if tile is None:
+            raise SystemExit(f"no tile for texture set {job.get('textures')!r}: add it to SET_TILE")
         src, bsdf, nmap = source_material(textures, tile)
         high.data.materials.clear()
         high.data.materials.append(src)
@@ -1347,11 +1316,14 @@ def build(job, out_path, flags, job_dir="."):
             o.data.materials.clear()
             o.data.materials.append(clay_material())
         samples = int(flags.get("samples") or RENDER_SAMPLES)
-        wire = outline_wire(poly, -half - 0.05, 0.004 * scale)
+        # The collision outline, not the buried one the mesh was built from.
+        real = [(float(p["x"]) - cx, float(p["y"]) - cy) for p in job["outline"]]
+        wire = outline_wire(real, -half - 0.05, 0.004 * scale)
         extent = size * 1.25
-        # The outline's centre: the frame's origin may be the body's, metres away.
-        ox = sum(p[0] for p in poly) / len(poly)
-        oz = sum(p[1] for p in poly) / len(poly)
+        # The outline's bounding-box centre: the frame's origin may be the
+        # body's, metres away, and a vertex mean framed rock-199 off its top.
+        ox = (min(p[0] for p in poly) + max(p[0] for p in poly)) / 2
+        oz = (min(p[1] for p in poly) + max(p[1] for p in poly)) / 2
         look = (ox, 0, oz)
         # Head-on, orthographic: the game's view, the outline drawn in red.
         render(os.path.join(render_dir, f"{name}-front.png"), (ox, -10, oz), look, extent, RENDER_SIZE, samples)
@@ -1401,7 +1373,7 @@ def parse_flags(argv):
             flags["no_bake"] = True
         elif a == "--high":
             flags["high"] = True
-        elif a in ("--render", "--cuts", "--depth", "--samples", "--bake-size", "--tile", "--tris"):
+        elif a in ("--render", "--cuts", "--depth", "--samples", "--bake-size", "--tris"):
             flags[a[2:].replace("-", "_")] = argv[i + 1]
             i += 1
         else:

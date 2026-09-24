@@ -2,12 +2,13 @@
 //
 //   bun run assets:rock <level> <body>                  a rock from body <body>
 //   bun run assets:rock <level> <body> --moss-of <rock>  a moss growing on rock body <rock>
-//   ... [--preview] [--place] [--no-build] [--blender PATH] [--tile T] [--tris N] [--depth D] [--samples N]
+//   ... [--preview] [--place] [--no-build] [--blender PATH] [--tris N] [--depth D] [--samples N]
 //
 // The job file `rocks/<level>-<body>.json` is the authored record of the prop
 // (docs/rock-assets.md). This command REFRESHES what the level owns in it (the
-// outline, the origin, the authored depth) and KEEPS what was authored by hand
-// (cracks, seed, textures, tile, tris, the rock a moss grows on), then runs
+// outline, the origin, the buried outline) and KEEPS what was authored by hand
+// (cracks, seed, textures, tris, depth, the rock a moss grows on; the depth is
+// seeded from the body's extruded geometry when the job is created), then runs
 // headless Blender, optimises the result into `public/meshes/<key>.glb` and
 // updates the key's `sha256`/`bytes` in the manifest when the entry exists.
 //
@@ -16,7 +17,7 @@
 // the level file (replacing its drawn primitives); close the editor first, an
 // open editor tab autosaves over what a script writes.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -42,7 +43,7 @@ const flag = (name: string): string | undefined => {
 };
 const has = (name: string): boolean => args.includes(`--${name}`);
 
-const USAGE = "usage: bun run assets:rock <level> <body> [--moss-of <rock body>] [--preview] [--place] [--no-build] [--blender PATH] [--tile T] [--tris N] [--depth D] [--samples N]";
+const USAGE = "usage: bun run assets:rock <level> <body> [--moss-of <rock body>] [--preview] [--place] [--no-build] [--blender PATH] [--tris N] [--depth D] [--samples N]";
 const levelArg = positional[0] ?? fail(USAGE);
 const bodyIndex = Number(positional[1] ?? fail(USAGE));
 if (!Number.isInteger(bodyIndex)) fail(`body must be an index into the level's bodies, got ${positional[1]}`);
@@ -84,10 +85,12 @@ interface Level {
 const level = JSON.parse(readFileSync(levelPath, "utf8")) as Level;
 
 // The collision outline of a body in world metres, y UP (the sim is y down),
-// and the body's own origin in the same frame.
-function outlineOf(index: number): { outline: Vec[]; origin: Vec; depth: number | undefined } {
-  const body = level.bodies[index] ?? fail(`${levelName} has no body ${index} (bodies: ${level.bodies.length})`);
-  const col = body.objects.find((o) => o.type === "collision" && o.shape) ?? fail(`body ${index} has no collision shape`);
+// or why it has none this tool can read.
+function collisionOutline(index: number): Vec[] | string {
+  const body = level.bodies[index];
+  if (!body) return `${levelName} has no body ${index} (bodies: ${level.bodies.length})`;
+  const col = body.objects.find((o) => o.type === "collision" && o.shape);
+  if (!col) return `body ${index} has no collision shape`;
   const s = col.shape!;
   let local: Vec[];
   if (s.kind === "poly") local = s.verts!;
@@ -100,7 +103,7 @@ function outlineOf(index: number): { outline: Vec[]; origin: Vec; depth: number 
       { x: hx, y: hy },
       { x: -hx, y: hy },
     ];
-  } else fail(`body ${index}: a ${s.kind} collision shape is not supported`);
+  } else return `body ${index}: a ${s.kind} collision shape is not supported`;
   const rot = (body.rot ?? 0) + (col.rot ?? 0);
   const c = Math.cos(body.rot ?? 0);
   const sn = Math.sin(body.rot ?? 0);
@@ -110,12 +113,95 @@ function outlineOf(index: number): { outline: Vec[]; origin: Vec; depth: number 
   const py = body.y + lx * sn + ly * c;
   const cr = Math.cos(rot);
   const sr = Math.sin(rot);
-  const outline = local.map((v) => ({
+  return local.map((v) => ({
     x: (px + v.x * cr - v.y * sr) / PPM,
     y: -(py + v.x * sr + v.y * cr) / PPM,
   }));
+}
+
+// The body's outline, its own origin in the same frame, and its authored depth.
+function outlineOf(index: number): { outline: Vec[]; origin: Vec; depth: number | undefined } {
+  const outline = collisionOutline(index);
+  if (typeof outline === "string") fail(outline);
+  const body = level.bodies[index];
   const geo = body.objects.find((o) => o.type === "geometry" && o.depth !== undefined);
   return { outline, origin: { x: body.x / PPM, y: -body.y / PPM }, depth: geo?.depth === undefined ? undefined : geo.depth / PPM };
+}
+
+// The outline with every edge it shares with another body's collision (the
+// roof or wall a rock comes out of) pushed `bury` metres into that neighbour,
+// for the mesh only: the rounded rim then sits hidden inside the neighbour
+// instead of meeting its flat face along a visible seam ("looked stuck on").
+// Shared edges are sampled every 5 cm and each sample is pulled back toward
+// the edge until it lies inside the rock or a neighbour, so a thin spike of
+// the neighbour (rock-199's lower right) is never poked through.
+function buriedOutline(index: number, outline: Vec[], bury: number): { outline: Vec[]; shared: number } {
+  const others: Vec[][] = [];
+  level.bodies.forEach((_, k) => {
+    // Not into another prop (a body with its own job, rock or moss): two rocks
+    // pushed into each other fight face to face along their seam, and two
+    // rounded rims meeting there read as the crevice between two stones.
+    if (k === index || existsSync(join(JOBS, `${levelName}-${k}.json`))) return;
+    const o = collisionOutline(k);
+    if (typeof o !== "string") others.push(o);
+  });
+  const onBoundary = (p: Vec): boolean => others.some((o) => o.some((a, i) => distToSegment(p, a, o[(i + 1) % o.length]) < 0.002));
+  const n = outline.length;
+  const shared = outline.map((a, i) => {
+    const b = outline[(i + 1) % n];
+    return onBoundary(a) && onBoundary(b) && onBoundary({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+  });
+  // Outward normal of edge a->b: (dy, -dx) for a counter-clockwise outline.
+  const sign = signedArea(outline) > 0 ? 1 : -1;
+  const inside = (p: Vec): boolean => pointInPoly(p, outline) || others.some((o) => pointInPoly(p, o));
+  const out: Vec[] = [];
+  outline.forEach((a, i) => {
+    const b = outline[(i + 1) % n];
+    out.push(a);
+    if (!shared[i]) return;
+    const len = Math.hypot(b.x - a.x, b.y - a.y);
+    const nx = (sign * (b.y - a.y)) / len;
+    const ny = (sign * -(b.x - a.x)) / len;
+    const steps = Math.max(2, Math.ceil(len / 0.05));
+    // The ends stay on the outline and the offset ramps in over `bury`, so
+    // the junction with a free edge leans inward like the neighbour's wall.
+    for (let k = 1; k < steps; k++) {
+      const t = k / steps;
+      const along = Math.min(t * len, (1 - t) * len);
+      let d = Math.min(bury, along * 2);
+      const p = { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
+      while (d > 0.005 && !inside({ x: p.x + nx * d, y: p.y + ny * d })) d /= 2;
+      if (d > 0.005) out.push({ x: p.x + nx * d, y: p.y + ny * d });
+    }
+  });
+  return { outline: out, shared: shared.filter(Boolean).length };
+}
+
+function signedArea(poly: Vec[]): number {
+  let a = 0;
+  poly.forEach((p, i) => {
+    const q = poly[(i + 1) % poly.length];
+    a += p.x * q.y - q.x * p.y;
+  });
+  return a / 2;
+}
+
+function pointInPoly(p: Vec, poly: Vec[]): boolean {
+  let c = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const a = poly[i];
+    const b = poly[j];
+    if (a.y > p.y !== b.y > p.y && p.x < ((b.x - a.x) * (p.y - a.y)) / (b.y - a.y) + a.x) c = !c;
+  }
+  return c;
+}
+
+function distToSegment(p: Vec, a: Vec, b: Vec): number {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const l = dx * dx + dy * dy;
+  const t = l === 0 ? 0 : Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / l));
+  return Math.hypot(p.x - a.x - t * dx, p.y - a.y - t * dy);
 }
 
 // ------------------------------------------------------------------ the job
@@ -129,7 +215,6 @@ interface Job {
   depth: number;
   seed: number;
   textures: string;
-  tile?: number;
   tris?: number;
   cracks?: Vec[][];
   rock?: string;
@@ -168,9 +253,16 @@ if (existsSync(jobPath)) {
   console.log(`[rock] new job ${relative(jobPath)}; author cracks/seed/textures in it and rerun`);
 }
 job.kind = kind;
+// The tile belongs to the texture set (SET_TILE in rock_asset.py), not the rock.
+delete job["tile"];
 job.outline = found.outline;
 job.origin = found.origin;
-if (found.depth !== undefined) job.depth = found.depth;
+delete job["buried"];
+if (kind === "rock" && typeof job.bury === "number") {
+  const b = buriedOutline(bodyIndex, found.outline, job.bury);
+  job.buriedOutline = b.outline;
+  console.log(`[rock] ${b.shared} edges shared with a neighbour, buried ${job.bury} m into it`);
+} else delete job["buriedOutline"];
 if (kind === "moss") {
   const rockJob = `${levelName}-${mossOf}.json`;
   if (!existsSync(join(JOBS, rockJob))) fail(`the moss needs its rock's job first: bun run assets:rock ${levelName} ${mossOf}`);
@@ -203,8 +295,11 @@ const blender = flag("blender") ?? process.env["BLENDER"] ?? "blender";
 const outDir = join(tmpdir(), "rock-asset");
 mkdirSync(outDir, { recursive: true });
 const raw = join(outDir, `${job.name}.glb`);
-const blenderArgs = ["-b", "--factory-startup", "--python", join(ROOT, "tools", "blender", "rock_asset.py"), "--", jobPath, raw];
-for (const f of ["tile", "tris", "depth", "samples"]) {
+// A stale GLB from an earlier build must not pass for this one.
+rmSync(raw, { force: true });
+// Blender exits 0 after a Python traceback unless told otherwise.
+const blenderArgs = ["-b", "--factory-startup", "--python-exit-code", "1", "--python", join(ROOT, "tools", "blender", "rock_asset.py"), "--", jobPath, raw];
+for (const f of ["tris", "depth", "samples"]) {
   const v = flag(f);
   if (v !== undefined) blenderArgs.push(`--${f}`, v);
 }
