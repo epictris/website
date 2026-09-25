@@ -50,6 +50,27 @@ Orthographic objects (see [Per-object projection](#per-object-projection)) scale
 The two projections agreeing is **asserted, not eyeballed**: `cli render3d` runs three.js's own projection against the 2D transform at five camera placements and through a pan, at the corners of the frame where a wrong dolly distance shows first, and holds them to a hundredth of a view pixel.
 `?probe3d=1` is the same claim made visible - a known world rect drawn as a plane in the scene and as an outline on the overlay, which must coincide at any zoom, position or mid-blend frame.
 
+### Free view pose
+
+`syncCamera` is two steps: `poseFromCamera(camera, lens, orbit)` reduces the 2D camera, the level's lens and the editor's orbit to a `ViewPose`, and `applyPose(threeCam, pose, aspect)` places a three.js camera at it.
+A pose is five numbers in three's frame: a `target` (x, y up, z toward the viewer, metres), `yaw` and `pitch` about it (radians, both zero is head-on), `halfHeight` and `fovYDeg`.
+It exists so a host can hold a camera the 2D one cannot describe: the editor's Visuals workspace keeps a pose of its own, whose target may leave the gameplay plane, and hands it to `Scene3D.setViewPose` (null hands the camera back to the 2D one).
+
+- The view is sized by **`halfHeight`**, the world metres from the frame's centre to its top edge at the target's depth, not by the camera's distance.
+  It is the one number both lenses are sized by - the orthographic frustum is it, and the perspective camera stands `poseDistance(pose) = halfHeight / tan(fovY / 2)` back - so a single pose drives both to the bit, and a lens change reframes nothing and moves the camera, which is the rule a level's lens already follows.
+- **The split changed nothing.** `applyPose` keeps the written-out head-on branch, `poseDistance` is `cameraDistance`'s arithmetic operation for operation, and `cli render3d`'s `visuals:` case holds `syncCamera`, `applyPose(poseFromCamera(...))` and the workspace's `headOn` to a verbatim copy of the old `syncCamera` in every number of the camera (position, quaternion, up, near, far, projection and world matrices, frustum) at five placements, three orbits (one past the pitch clamp) and both lenses.
+  A one-ulp change to the distance turns it red.
+- Under a pose, `Scene3D` places both cameras from it (the aspect still from the 2D camera's viewport), so `pick`, `unprojectToPlane` through `scene3d.camera` and the gizmo see the view that was drawn.
+  The sun's shadow frustum and the light budget's "nearest the view" follow the pose's target instead of the 2D camera, and `orthoFramedZ` is the target's depth, which is the depth the orthographic camera is sized at.
+- `unprojectToPlane` takes an optional `z`, the plane that far off the gameplay plane, for guides drawn at an object's own depth.
+  Under a free pose the camera can stand behind a plane it is asked about, and that is the null answer.
+
+`Scene3D` also carries the editor's own layer and the queries its surface tools need, all editor-only:
+
+- `editorLayer`, a group in the scene that survives `setLevel`, is raycast by `pick` (fat lines picked `LINE_PICK_PX` either side) and skipped by `setHighlight` and `meshesOf`.
+- `hitsAt(x, y)` is `pick` with three's whole intersection kept, nearest first; `pickSurface(x, y, accept)` answers the nearest hit with a face whose tag `accept` takes, as a world point and a world normal; `meshesOf(tag)` lists every non-instanced mesh drawn for a tag.
+  All three are ported from the fork (karin_website `381b923`), including its fix of `pick` measuring depth by `hit.point.sub(...)`, which rewrote the hit point in place.
+
 ## The coordinate mapping
 
 Physics is x right, y **down**, rotation clockwise-positive.

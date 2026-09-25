@@ -139,6 +139,7 @@ Editor and levels
 
 - [levels](docs/levels.md) - the level select, `meta` and the listing rules, the finish line and the crossing, the completion panel (time, Retry/Next Level/Menu, the feedback half) and where what players say is kept, the level hash.
 - [editor](docs/editor.md) - gestures, selection, vertex editing, the 3D view, orbit, the lens, the gizmo, the depth handle, ▶ Test.
+- [editor-visuals](docs/editor-visuals.md) - the Visuals workspace (in progress): the free view pose and its gestures, the guides drawn into the scene and their pick tags.
 - [editor-model](docs/editor-model.md) - layers, the body outliner, decoration, notes, compound bodies.
 - [level-format](docs/level-format.md) - level files, the dev REST API, autosave, `levelFormat.ts`, regenerating `levelData.ts`.
 

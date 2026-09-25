@@ -61,7 +61,6 @@ import * as THREE from "three";
 import type { EnvironmentData } from "../level/levelFormat";
 import { loadedHdri, loadHdri } from "./assets";
 import { threeY } from "./space";
-import type { Camera } from "../render/camera";
 
 // The page's own background (see index.html and LETTERBOX_COLOR): the frame's
 // surround, so the scene fades into it rather than ending at it.
@@ -300,12 +299,15 @@ export class Environment {
   // it with the camera rather than fitting it to the scene is what keeps the
   // texel density constant as the view zooms, which is what stops shadow edges
   // shimmering during a camera blend.
-  follow(camera: Camera): void {
+  //
+  // `centre` is the sim-frame point the view is centred on: the 2D camera's
+  // position, or the target of the editor's free pose (see `ViewPose`).
+  follow(centre: { x: number; y: number }): void {
     // The fog needs nothing here: its density is a property of the air, and the
     // distance it is applied over is the one three.js already has per fragment.
     if (!this.sun) return;
-    const cx = camera.position.x;
-    const cy = threeY(camera.position.y);
+    const cx = centre.x;
+    const cy = threeY(centre.y);
     this.target.position.set(cx, cy, 0);
     this.target.updateMatrixWorld();
     this.sun.position.set(

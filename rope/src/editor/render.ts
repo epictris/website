@@ -89,9 +89,12 @@ import { decomposeSeams, isSimpleLoop } from "../lib/polygon";
 import { BallLevel } from "../level/ballLevel";
 import { DEFAULT_FIREFLY_NOTICE } from "../render3d/fireflies";
 
-const PLAYER = "#65bddb";
-const IMPERMEABLE_EDGE = "#9db8c6"; // hook-proof surfaces: dashed steel border
-const VISCOUS_EDGE = "#c9a066"; // viscous (mud) surfaces: dash-dot ochre border
+// Exported, like the handle colours below, for the Visuals workspace's guides
+// (editor/visuals/guides.ts), which draw the same marks into the 3D scene and
+// must not drift from these.
+export const PLAYER = "#65bddb";
+export const IMPERMEABLE_EDGE = "#9db8c6"; // hook-proof surfaces: dashed steel border
+export const VISCOUS_EDGE = "#c9a066"; // viscous (mud) surfaces: dash-dot ochre border
 // A conveyor's tread ticks and direction arrow: the game's tread grey
 // (`render/renderer.ts`), so the belt reads the same in both.
 const BELT_TREAD = "#e6e8eb";
@@ -131,8 +134,8 @@ const CAMERA_LOCK = "#e6c07b"; // camera-lock guides: warm, distinct from the re
 // backdrop and whatever the shape is filled with, and a neutral edge disappears
 // into one or the other.
 const DECOR_EDGE = "#4ec9b0";
-const HANDLE = "#f4a460";
-const HANDLE_FILL = "#1f2430";
+export const HANDLE = "#f4a460";
+export const HANDLE_FILL = "#1f2430";
 // Where a concave outline is cut into convex pieces: dim and dashed, because a
 // seam is not a surface. It has to read as "this is inside the shape" against
 // the orange handles, which are the things on a polygon that CAN be dragged.
@@ -141,7 +144,7 @@ const SEAM = "#8a93a5";
 // than when it is closed, because closing it is when it stops being fixable by
 // moving the pointer - and a crossed loop is the one draft the poly tool cannot
 // take as drawn (it falls back to the convex hull, which is not what was drawn).
-const DRAFT_CROSSED = "#d4756f";
+export const DRAFT_CROSSED = "#d4756f";
 
 // Chains. Forged iron rather than a saturated editor colour: a chain is played,
 // not editor furniture, so it is drawn as the thing it will be and only its
@@ -558,8 +561,8 @@ export function computeGroupHandles(
 
 // The item's outline — one description, shared with the game renderer, the
 // backdrop pass and the SVG snapshot, so an authored shape is drawn by exactly
-// the same geometry that plays.
-function outlineOf(body: EdItem): Outline {
+// the same geometry that plays - and with the Visuals workspace's guides.
+export function outlineOf(body: EdItem): Outline {
   if (body.shape.kind === "circle") return { kind: "circle", radius: body.shape.r };
   if (body.shape.kind === "poly") return { kind: "poly", verts: body.shape.verts };
   if (body.shape.kind === "path") {
@@ -867,7 +870,7 @@ function circleHandle(ctx: CanvasRenderingContext2D, p: Vec2): void {
 // position along an edge. It carries the same dark fill as every other handle —
 // a hollow or dimmed ring vanishes into the selection halo it sits on top of,
 // which is the one place these handles always are.
-const MID_HANDLE_RADIUS_PX = 3;
+export const MID_HANDLE_RADIUS_PX = 3;
 function midHandle(ctx: CanvasRenderingContext2D, p: Vec2): void {
   ctx.fillStyle = HANDLE_FILL;
   ctx.strokeStyle = HANDLE;
