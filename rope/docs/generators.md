@@ -176,7 +176,7 @@ This is what it holds up of the contract.
 - **A finished mesh goes on its object once**, as one undo step, and only if the object is still there and its `wantedKey` is still that key.
   A result for content the object has since left stays in the cache, where the next Generate of that content finds it at once.
   A result that lands during any gesture waits for it to end: a drag, a gizmo drag (three's own, which the editor's `drag` never sees) or a held arrow's nudge run, each of which is one undo step a swap would split.
-  The swap is not the author's edit, so it keeps the redo stack (`beginAction({ keepRedo: true })`).
+  The swap is not the author's edit, so it keeps the redo stack (`beginAction({ keepRedo: true })`) and writes the mesh into every redo state that wants that very key (`landMesh` in `editor/visuals/generatorEdits.ts`).
   A key whose file failed to load earlier in the page (a missing file, then generated) has that failure forgotten (`forgetFailedMesh`) and the scene rebuilt, so the new file is fetched even when the object already names the key.
 - **A key that cannot be made** (a non-finite number in a parameter or an outline, which `generatedKey` refuses rather than hash) reads as `stale: invalid value` on the status line and `stale` in the outliner, and Generate says so; neither throws out of the frame loop. A field never writes one.
 - **`failed` is an ordinary outcome.**

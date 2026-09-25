@@ -6,7 +6,7 @@ import * as THREE from "three";
 import { Vec2 } from "../../engine/vec2";
 import { threeY } from "../../render3d/space";
 import { cloneShape, defaultVisual, type EdItem } from "../model";
-import { loadSchema, roundParam } from "./paramSchema";
+import { itemLookup, loadSchema, roundParam, wantedKey } from "./paramSchema";
 import { patchMatrix, worldToLoopPoint, type ObjectPose } from "./surfacePatch";
 
 // The collision outline a rock is fitted to, from what was clicked: a scene
@@ -64,6 +64,29 @@ export function rockFor(source: EdItem, id: number): EdItem {
       generator: { kind: "boulder", version: schema.version, params: {}, patch: null },
     },
   };
+}
+
+// A finished mesh put on item `id` of a set of items (an undo snapshot, in
+// practice) if that item would be generated under exactly `key` there, with the
+// block's version brought up to the schema's; true when it was written. A mesh
+// landing is an outside event rather than an edit, so the editor keeps its redo
+// stack across it - and writes it into every redo state that wants the same
+// mesh, so a redo does not take the landed rock back off. A state whose content
+// differs (a different seed, say) is left as it is.
+export function landMesh(items: readonly EdItem[], id: number, key: string): boolean {
+  const it = items.find((i) => i.id === id);
+  const g = it?.visual.generator;
+  if (!it || !g || it.visual.mesh === key) return false;
+  let wants: string | null = null;
+  try {
+    wants = wantedKey(it, itemLookup(items));
+  } catch {
+    return false;
+  }
+  if (wants !== key) return false;
+  it.visual.mesh = key;
+  g.version = loadSchema(g.kind)?.version ?? g.version;
+  return true;
 }
 
 // Where an item is drawn, as `patchMatrix` wants it: `z` is its drawn depth

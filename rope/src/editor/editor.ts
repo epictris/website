@@ -266,7 +266,7 @@ import { guidePlaneZ, type GuideDraft } from "./visuals/guides";
 import { alignUp, surfacePlacement } from "./visuals/surfaceDrop";
 import { GeneratorJobs, missingTools } from "./visuals/jobs";
 import { buildGeneratorGroup, generatorBadge, GENERATOR_PANEL_CSS, paramIssues } from "./visuals/generatorPanel";
-import { existingRock, objectPose, patchFor, refitPatch, rockFor, rockSource } from "./visuals/generatorEdits";
+import { existingRock, landMesh, objectPose, patchFor, refitPatch, rockFor, rockSource } from "./visuals/generatorEdits";
 import {
   loopPointToWorld,
   patchMatrix,
@@ -878,13 +878,16 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       }
       // Not the author's edit but an outside event landing, so it does not
       // clear the redo stack (an author who undid, then saw a rock land, can
-      // still redo what they undid).
+      // still redo what they undid) - and every redo state that would want this
+      // very mesh gets it too, so a redo does not take the rock back off. The
+      // landing itself is one undo step.
       beginAction({ keepRedo: true });
       it.visual.mesh = key;
       // The key was made at the schema version the server runs, so the block
       // says that version from now on (an older level is brought up to it by
       // the generation that made its new mesh).
       g.version = loadSchema(g.kind)?.version ?? g.version;
+      for (const state of future) landMesh(state.items, id, key);
       markDirty();
     },
     changed: () => {

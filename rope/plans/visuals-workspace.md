@@ -378,6 +378,30 @@ The five red steps are red on a clean `main` worktree (c045af2) with byte-identi
 - `stale: file missing` is covered by a case and by the service's 404 read live; the page reload that would show it on a level generated elsewhere was not driven.
 - Nothing has been played in a level: a generated object has not been saved into a named level (no `levels/*.json` was touched), so the preload list's `meta.json` read and a deploy with generated files are untried.
 
+### Review fixes (2026-09-25)
+
+A read-only review of 299c3dd found seventeen problems; each was fixed, one line each (the docs say the rest):
+
+1. A patch generated while the scene was not drawn collected from the last BUILT scene: Generate now switches to Visuals, `collectPatch` builds the scene for the current revision, waits a frame, and abandons if the model moved meanwhile.
+2. A host drawn as a stand-in or a placeholder was grown on under the real key: `hostRefusal` refuses a rock never generated, a mesh object with no mesh and a mesh that does not load, and `PatchHost.generator` names an ungenerated host's future key.
+3. A failed load was cached for good, so a key generated after its 404 stayed a stand-in: `forgetFailedMesh` drops the failure when the file lands, and the swap rebuilds the scene when the key is unchanged.
+4. A job landing mid-gizmo-drag or mid-nudge split the gesture and cleared redo: `canWrite` also waits on the gizmo and a nudge run, and the swap keeps the redo stack (`beginAction({ keepRedo })`) and lands in every redo state that wants the key (`landMesh`).
+5. The loop's side was guessed from the host's middle: `EdPatch.facing` / `GeneratorPatchData.facing` is stored on close, used by `frameOf`, part of the key, unscaled; the pinned patch key was re-pinned (the input shape changed, no version bump).
+6. A job shared by two objects was reassigned and a supersede from one killed it: a job holds a set of waiting objects and stops only when it is empty.
+7. The key missed the patch's own tilt and scale and a primitive host's texture and lens: `PatchHost.frame` is the whole relative transform, and `texture`/`projection` are keyed.
+8. A restart or Ctrl+C left Blender running: `run.ts` tracks every process group, the service kills them on HTTP close, `exit`, `SIGINT` and `SIGTERM`, and the client reads the lost job as "the dev server restarted: press Generate again" after retrying unanswered polls.
+9. Python was handed unrounded parameters under a rounded key: the service passes `canonicalParams`.
+10. A non-finite value threw from the frame loop: the status and badge say `stale: invalid value`, the panel never writes one, Generate refuses it.
+11. A malformed `%` was a 500, split multi-byte characters were corrupted, and the body limit was below the schema's largest soup: 400, one decode of the bytes, `BODY_LIMIT` sized from `maxTriangles.max` (19 MB).
+12. A loop point click took an undo step and W/F/Home auto-repeated: `CLICK_SLOP_PX` on the loop point, key repeats ignored.
+13. The guides rebuilt the whole grid on every revision and the draft path allocated per frame: the grid is kept apart and rebuilt when the extent crosses a cell, the draft hash is numeric, and the loop drafts and `patchLoopWorld` are kept per revision.
+14. Edit loop left the patch's rect and depth where the old loop was: `refitPatch` re-fits origin, rect and depth on drop, the loop staying put in the world.
+15. The mesh picker on a generated object made it silently stale: `mesh` and `kind` are disabled there, with a hint.
+16. A patch duplicated alone went hostless silently: the status line says so (`remapPatchHosts` returns the orphans).
+17. `dist` grew with every seed ever generated: `generatedMeshesInBuild` keeps only the meshes a registered level names (a deploy from a fresh checkout still has none).
+
+Checks after the fixes: `typecheck`, `cli render3d` (230 cases), `cli dmath` and `generators:check` (23 service cases, both param tests, both end-to-end runs) green; the browser re-run of the touched flows is recorded in [editor-visuals](../docs/editor-visuals.md#what-green-cannot-see).
+
 ### Follow-ups
 
 - Publishing generated meshes to the release store with manifest entries, so a level with generated objects deploys (until then it draws stand-ins wherever `public/generated/` is not).

@@ -227,6 +227,7 @@ import {
 } from "../editor/visuals/surfacePatch";
 import {
   existingRock,
+  landMesh,
   MIN_PATCH_EXTENT,
   objectPose,
   patchFor,
@@ -6475,6 +6476,34 @@ function generatorTools(): CaseResult[] {
       name: "generator: Edit loop re-fits the patch to the faces its loop covers now (origin, rect, depth in its own turned, tipped, scaled frame), the loop staying put in the world",
       pass: refitOk,
       detail: JSON.stringify({ drift, origin: origin.toArray(), centre: centre.toArray(), w: fit.w, h: fit.h, depth: fit.depth }),
+    });
+  }
+
+  // --- a landing mesh in the redo states ------------------------------------
+  // The swap keeps the redo stack and writes the mesh into every redo state
+  // that wants it, so a redo after a landing keeps the rock; a state whose
+  // content differs is left alone, as is a state without the object.
+  {
+    const redoState = (seed?: number) => {
+      const m = modelFromDisk(toolLevel());
+      const coll = m.items.find((i) => i.object === "collision" && i.shape.kind === "poly")!;
+      const rock = rockFor(coll, 9004);
+      if (seed !== undefined) rock.visual.generator!.params = { seed };
+      m.items.push(rock);
+      return m.items;
+    };
+    const same = redoState();
+    const key = wantedKey(same.find((i) => i.id === 9004)!, itemLookup(same))!;
+    const other = redoState(5);
+    const without = redoState().filter((i) => i.id !== 9004);
+    const landed = landMesh(same, 9004, key) && same.find((i) => i.id === 9004)!.visual.mesh === key;
+    const again = !landMesh(same, 9004, key);
+    const leftAlone = !landMesh(other, 9004, key) && other.find((i) => i.id === 9004)!.visual.mesh === "";
+    const absent = !landMesh(without, 9004, key);
+    out.push({
+      name: "generator: a landed mesh goes into every redo state that wants that very key, and no other",
+      pass: landed && again && leftAlone && absent,
+      detail: JSON.stringify({ landed, again, leftAlone, absent }),
     });
   }
 
