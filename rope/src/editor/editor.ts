@@ -266,13 +266,14 @@ import { guidePlaneZ, type GuideDraft } from "./visuals/guides";
 import { alignUp, surfacePlacement } from "./visuals/surfaceDrop";
 import { GeneratorJobs, missingTools } from "./visuals/jobs";
 import { buildGeneratorGroup, generatorBadge, GENERATOR_PANEL_CSS, paramIssues } from "./visuals/generatorPanel";
-import { existingRock, objectPose, patchFor, rockFor, rockSource } from "./visuals/generatorEdits";
+import { existingRock, objectPose, patchFor, refitPatch, rockFor, rockSource } from "./visuals/generatorEdits";
 import {
   loopPointToWorld,
   patchMatrix,
   selectSurface,
   soupInFrame,
   worldToLoopPoint,
+  type SurfacePoint,
   type SurfaceSelection,
 } from "./visuals/surfacePatch";
 import { closedDraft, SurfaceLoop } from "./visuals/surfaceLoop";
@@ -286,7 +287,7 @@ import {
   wantedKey,
   type ItemLookup,
 } from "./visuals/paramSchema";
-import { loadMesh } from "../render3d/assets";
+import { forgetFailedMesh, loadMesh } from "../render3d/assets";
 import { World } from "../engine/world";
 import { buildLevelBodies, DEFAULT_SPRING_DAMPING, MAX_SPRING_FREQ } from "../level/buildBodies";
 import {
@@ -501,8 +502,10 @@ type Drag =
     }
   // A mushroom patch's loop point, dragged along its host's surface (Visuals,
   // **Edit loop**). Model-mutating, so it takes the one undo step at its first
-  // movement like a vertex drag.
-  | { mode: "loopPoint"; itemId: number; index: number }
+  // movement like a vertex drag - and like a move, not before the pointer has
+  // left the click's slop (`moved`), so a click that shakes a pixel neither
+  // takes an undo step nor re-picks the surface under the point.
+  | { mode: "loopPoint"; itemId: number; index: number; press: Vec2; moved: boolean }
   // Turning the 3D view about what it is centred on (see `CameraOrbit`). Middle
   // button, and only while a scene is drawn: in the 2D view there is nothing to
   // orbit, so the button keeps panning there.
@@ -845,16 +848,38 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   const jobs = new GeneratorJobs({
     fetch: (url, init) => fetch(url, init),
     later: (fn, ms) => void setTimeout(fn, ms),
-    canWrite: () => mode === "edit" && drag === null,
+    // Not in the middle of ANY gesture: a drag, a gizmo drag (three's own, which
+    // never sets `drag`) or a held arrow's nudge run, each of which is one undo
+    // step that a swap landing inside it would split in two.
+    canWrite: () => mode === "edit" && drag === null && !(gizmo?.busy ?? false) && !nudging,
     wantedKey: (id) => {
       const it = model.items.find((i) => i.id === id);
-      return it ? wantedKey(it, itemLookup(model.items)) : undefined;
+      if (!it) return undefined;
+      try {
+        return wantedKey(it, itemLookup(model.items));
+      } catch {
+        // A value the key cannot be made of (see `generatorStatus`).
+        return null;
+      }
     },
     swap: (id, key) => {
       const it = model.items.find((i) => i.id === id);
       const g = it?.visual.generator;
-      if (!it || !g || it.visual.mesh === key) return;
-      beginAction();
+      if (!it || !g) return;
+      // The file behind `key` exists now. An earlier load of it may have failed
+      // and been cached (a level naming a key whose file was missing, or an
+      // undo back to a key never generated here), so that failure goes, and
+      // when the object already names the key nothing in the model moves - the
+      // scene is told to rebuild so the new file is fetched and mounted.
+      const refetch = forgetFailedMesh(key);
+      if (it.visual.mesh === key) {
+        if (refetch) sceneRev = -1;
+        return;
+      }
+      // Not the author's edit but an outside event landing, so it does not
+      // clear the redo stack (an author who undid, then saw a rock land, can
+      // still redo what they undid).
+      beginAction({ keepRedo: true });
       it.visual.mesh = key;
       // The key was made at the schema version the server runs, so the block
       // says that version from now on (an older level is brought up to it by
@@ -1069,12 +1094,17 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   }
 
   // Record the current state before a mutating action, so it can be undone.
-  function beginAction(): void {
+  //
+  // An author's action clears the redo stack: redoing past a new edit would
+  // replay the undone one over it. `keepRedo` is for an edit the author did not
+  // make - a generated mesh landing on its object (see `jobs`) - which is an
+  // undo step of its own but must not throw away what the author can redo.
+  function beginAction(opts: { keepRedo?: boolean } = {}): void {
     nudging = false; // any other action ends the current nudge run
     pinCompoundFrames();
     history.push(snapshot(model));
     if (history.length > HISTORY_MAX) history.shift();
-    future.length = 0;
+    if (!opts.keepRedo) future.length = 0;
   }
   function undo(): void {
     if (!history.length) return;
@@ -5200,8 +5230,24 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         markDirty();
         refreshFields();
       });
+      // A GENERATED object's mesh is its generator's: a key picked here would
+      // make it stale in silence and be overwritten by the next Generate, so
+      // the picker shows the key and is not offered (nor is `kind`, which
+      // would draw the stand-in the generator block does not describe).
+      if (items.some((b) => b.visual.generator)) {
+        ms.disabled = true;
+        ks.disabled = true;
+        const why = "Generated: the mesh is made by Generate from the Rock or Mushrooms group below. Delete the object and place a prop to wear a hand-made mesh.";
+        mw.title = why;
+        kw.title = why;
+      }
       mw.appendChild(ms);
       g.appendChild(mw);
+      if (ms.disabled) {
+        const hint = el("div", "ed-hint");
+        hint.textContent = "generated: the mesh is made by Generate below";
+        g.appendChild(hint);
+      }
 
       // Dimensionless: it multiplies the model's own size, so it is not a length
       // and does not scale on the way to disk.
@@ -7807,7 +7853,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // The model's own for a duplicate; the parsed payload's for a paste out of
     // the clipboard, which is a different model entirely.
     sourceFrames: ReadonlyMap<number, EdBodyFrame> = model.bodyFrames,
-  ): { items: EdItem[]; idOf: Map<number, number>; frames: Map<number, EdBodyFrame> } {
+  ): { items: EdItem[]; idOf: Map<number, number>; frames: Map<number, EdBodyFrame>; orphanedPatches: number } {
     const groups = new Map<number, number>();
     const idOf = new Map<number, number>();
     // A body's frame is NOT in its items, so a copy that does not carry it gets
@@ -7853,8 +7899,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     for (const it of items) {
       if (it.matchId !== 0) it.matchId = idOf.get(it.matchId) ?? 0;
     }
-    // ...and a mushroom patch follows its host the same way.
-    remapPatchHosts(items, idOf);
+    // ...and a mushroom patch follows its host the same way: copied together
+    // they stay a pair, and a patch copied without its host is hostless, said
+    // by the caller (`sayOrphanedPatches`).
+    const orphanedPatches = remapPatchHosts(items, idOf);
     // A copied anchor is a NEW anchor and needs an on-disk id of its own:
     // `anchorId` is what chains and vines name their ends by in the file, so a
     // copy carrying the original's id loads with both ends resolving to
@@ -7882,7 +7930,17 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         it.light = { ...it.light, path: pathOf.get(p)! };
       }
     }
-    return { items, idOf, frames };
+    return { items, idOf, frames, orphanedPatches };
+  }
+
+  // A patch copied without its host lands in a body of its own and grows on
+  // nothing; said rather than left for the panel's `no host` to explain.
+  function sayOrphanedPatches(n: number): void {
+    if (n > 0) {
+      flashNotice(
+        `${n === 1 ? "the copied mushroom patch has" : `${n} copied mushroom patches have`} no host: copy the patch together with the model it grows on`,
+      );
+    }
   }
 
   // Copies of the chains whose BOTH ends landed in the copied set. A chain with
@@ -8818,6 +8876,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       cloneVinesWithin(model.vines, copy.idOf),
       copy.frames,
     );
+    sayOrphanedPatches(copy.orphanedPatches);
   }
 
   // --- clipboard ------------------------------------------------------------
@@ -8931,6 +8990,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // one gets. The host's own lead comes first in `model.items`, so it is the
     // body that wins, not the arrival.
     if (host !== null) syncBodyProps(bodyMembers(model.items, host));
+    sayOrphanedPatches(copy.orphanedPatches);
   }
 
   // THE DOM'S OWN EVENTS rather than the keydown switch, and that is what the
@@ -9497,7 +9557,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       return;
     }
     beginAction();
-    const patch = patchFor(host, newBodyId(), surfaceLoop.points.map((p) => p.point), res.selection.positions);
+    // The side it was painted on, from the faces it was clicked on: stored with
+    // the loop, since the file holds no normals and the plane of best fit of a
+    // loop near a face's edge could be read either way round.
+    const facing = new THREE.Vector3();
+    for (const p of surfaceLoop.points) facing.add(p.normal);
+    const patch = patchFor(host, newBodyId(), surfaceLoop.points.map((p) => p.point), res.selection.positions, facing);
     surfaceLoop.clear();
     addAndSelect([patch]);
     updateTitle();
@@ -9510,21 +9575,41 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   }
 
   // A patch's stored loop on its host's surface, in three's world, each point
-  // facing away from the host's middle: the side the loop was painted on. The
-  // loop stores no normals (the file holds points), and the plane of best fit
-  // only needs to know which of its two sides is out.
-  function patchLoopWorld(it: EdItem): { point: THREE.Vector3; normal: THREE.Vector3 }[] {
+  // carrying the side the loop was painted on (`EdPatch.facing`, turned into
+  // the world with the patch): the plane of best fit needs only to know which
+  // of its two sides is out. A patch from a file that did not store its facing
+  // guesses it as away from the host's middle, which a loop on a wide face
+  // near its edge can get wrong - hence the stored one.
+  //
+  // Read every frame while Edit loop is open (the draft) and at every collect,
+  // so it is kept per patch until the model or the scene moves: the guess
+  // walks the host's meshes, and the answer is fresh vectors each time.
+  let loopWorldCache: { id: number; rev: number; scene: number; points: SurfacePoint[] } | null = null;
+  function patchLoopWorld(it: EdItem): SurfacePoint[] {
+    const c = loopWorldCache;
+    if (c && c.id === it.id && c.rev === modelRev && c.scene === sceneRev) return c.points;
+    const points = computePatchLoopWorld(it);
+    loopWorldCache = { id: it.id, rev: modelRev, scene: sceneRev, points };
+    return points;
+  }
+  function computePatchLoopWorld(it: EdItem): SurfacePoint[] {
     const patch = it.visual.generator?.patch;
     const host = patch ? itemOf(patch.hostId) : null;
     if (!patch || !host) return [];
     const m = patchFrame(it);
     const points = patch.points.map((p) => loopPointToWorld(m, p));
-    const centre = new THREE.Vector3();
-    for (const p of points) centre.add(p);
-    centre.divideScalar(Math.max(1, points.length));
-    const box = new THREE.Box3();
-    for (const mesh of drawnMeshesOf(host)) box.expandByObject(mesh);
-    const out = box.isEmpty() ? new THREE.Vector3(0, 0, 1) : centre.clone().sub(box.getCenter(new THREE.Vector3()));
+    let out: THREE.Vector3;
+    if (patch.facing) {
+      // Stored y down, like the points.
+      out = new THREE.Vector3(patch.facing.x, -patch.facing.y, patch.facing.z).transformDirection(m);
+    } else {
+      const centre = new THREE.Vector3();
+      for (const p of points) centre.add(p);
+      centre.divideScalar(Math.max(1, points.length));
+      const box = new THREE.Box3();
+      for (const mesh of drawnMeshesOf(host)) box.expandByObject(mesh);
+      out = box.isEmpty() ? new THREE.Vector3(0, 0, 1) : centre.clone().sub(box.getCenter(new THREE.Vector3()));
+    }
     if (out.lengthSq() < 1e-12) out.set(0, 0, 1);
     out.normalize();
     return points.map((point) => ({ point, normal: out }));
@@ -9534,22 +9619,57 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // readout and Edit loop's shading, by item id.
   const patchSurfaces = new Map<number, SurfaceSelection>();
 
+  // Why a host cannot be grown on as it is drawn now, or null when it can. The
+  // soup is read off the host's DRAWN meshes and sent under a key that names
+  // the host's mesh, so the two must be the same thing: a rock never generated
+  // is drawn as its stand-in extrusion, and a mesh object with no mesh (or one
+  // whose file never loads) as a grey placeholder box - a patch grown on either
+  // would be keyed as the real rock and cached as done.
+  function hostRefusal(host: EdItem): string | null {
+    if (host.visual.generator && !host.visual.mesh) return "the host rock has never been generated: generate the host first";
+    if (host.visual.kind === "mesh" && !host.visual.mesh) return "the host has no mesh to grow on: give it one first";
+    return null;
+  }
+
   // Collect a patch's surface from its host's CURRENT meshes (a regenerated rock
   // under it is what it grows on next), waiting for a host mesh still loading.
+  //
+  // Only a scene built from THIS model is read. The frame loop rebuilds the
+  // scene only while one is drawn, so a collect started in the Level
+  // workspace's 2D view would otherwise read the last scene built - a host
+  // nudged since would give a soup from its old pose under its new key, cached
+  // as done for ever. `generate` puts the scene on screen first; here the
+  // scene is built for the model as it stands, one frame is let place it, and
+  // an edit in the frames waited (a drag, an undo, a job landing) abandons the
+  // collect rather than reading a scene that is again not the model's.
+  // A selection change moves nothing the soup is read from and is ignored.
   async function collectPatch(patchId: number): Promise<{ soup: number[]; selection: SurfaceSelection } | { error: string }> {
     const first = itemOf(patchId);
     const firstHost = first?.visual.generator?.patch ? itemOf(first.visual.generator.patch.hostId) : null;
     if (!firstHost) return { error: "the patch has no host to grow on" };
-    // The scene as the frame loop leaves it: rebuilt from the model (a patch
-    // just added rebuilds it) and every body PLACED, which a fresh build is
-    // not until its first frame - read before that, the host's faces are at
-    // its body's origin and the loop covers none of them. Then the host's mesh
-    // if it is still loading, and one more frame for it to be mounted.
+    const refused = hostRefusal(firstHost);
+    if (refused) return { error: refused };
+    if (!scene3d || !sceneShown()) return { error: "the patch's surface is read off the drawn scene: open the Visuals workspace" };
+    const rev = modelRev;
+    const changed = { error: "the level changed while the patch's surface was being collected; Generate again" };
+    // Built now from this model if the frame loop has not yet (a no-op when
+    // it has), then every body PLACED, which a fresh build is not until its
+    // first frame - read before that, the host's faces are at its body's
+    // origin and the loop covers none of them. Then the host's mesh if it is
+    // still loading, and one more frame for it to be mounted.
+    syncEditorScene();
     const nextFrame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
     await nextFrame();
-    if (firstHost.visual.kind === "mesh" && firstHost.visual.mesh) await loadMesh(firstHost.visual.mesh);
+    if (firstHost.visual.kind === "mesh") {
+      const loaded = await loadMesh(firstHost.visual.mesh);
+      if (!loaded) return { error: `the host's mesh ${firstHost.visual.mesh} did not load, so there is no surface to grow on` };
+    }
     await nextFrame();
-    // Read again: an undo in those frames replaces the items.
+    if (modelRev !== rev) return changed;
+    // The scene on screen is this model's only if its last build succeeded
+    // and nothing took the view away in the frames waited.
+    if (buildError !== null || sceneRev !== modelRev || !sceneShown())
+      return { error: "the scene is not built from the level as it stands, so its surface cannot be read" };
     const it = itemOf(patchId);
     const host = it?.visual.generator?.patch ? itemOf(it.visual.generator.patch.hostId) : null;
     if (!it || !host) return { error: "the patch or its host went while its surface was being collected" };
@@ -9589,8 +9709,16 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const schema = g ? loadSchema(g.kind) : undefined;
     if (!g || !schema) return;
     const lookup: ItemLookup = itemLookup(model.items);
-    const input = generatorInput(item, lookup);
-    const key = wantedKey(item, lookup);
+    let input: ReturnType<typeof generatorInput>;
+    let key: string | null;
+    try {
+      input = generatorInput(item, lookup);
+      key = wantedKey(item, lookup);
+    } catch {
+      // `generatedKey` refuses a non-finite number rather than hash it.
+      flashNotice("generate: a parameter or the outline is not a finite number");
+      return;
+    }
     if (!input || !key) {
       flashNotice(g.kind === "mushrooms" ? "generate: the patch has no host (Edit loop paints it again)" : "generate: a rock needs a polygon or rect outline");
       return;
@@ -9603,6 +9731,16 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const params = stripDefaults(g.params, schema);
     let soup: number[] | undefined;
     if (g.kind === "mushrooms") {
+      // The surface is read off the drawn scene, which the Level workspace's 2D
+      // view does not draw (nor rebuild): the patch is generated from the
+      // Visuals workspace, as Edit loop is edited there.
+      if (!sceneShown()) {
+        if (!visuals || mode !== "edit") {
+          flashNotice("generate: a patch's surface is read off the 3D scene, which this page cannot draw");
+          return;
+        }
+        setWorkspace("visuals");
+      }
       const collected = await collectPatch(id);
       refreshFields();
       if ("error" in collected) {
@@ -9610,9 +9748,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         return;
       }
       soup = collected.soup;
-      // The collection waited on a mesh: the object may have moved on since.
-      const now = itemOf(id);
-      if (!now || wantedKey(now, itemLookup(model.items)) !== key) return;
+      // `collectPatch` refused any edit in the frames it waited, so the patch
+      // is still exactly what `key` was made of.
     }
     await jobs.submit(id, { kind: g.kind, key, input, params, ...(soup ? { soup } : {}) });
   }
@@ -9649,7 +9786,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     for (let i = 0; i < pts.length; i++) {
       const p = pts[i]!.point;
       const at = visuals!.screenOf(new Vec2(p.x, threeY(p.y)), p.z);
-      if (at && at.distanceTo(scr) <= HANDLE_HIT_PX) return { mode: "loopPoint", itemId: it.id, index: i };
+      if (at && at.distanceTo(scr) <= HANDLE_HIT_PX) {
+        return { mode: "loopPoint", itemId: it.id, index: i, press: scr, moved: false };
+      }
     }
     endLoopEdit();
     return null;
@@ -9668,7 +9807,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     markDirty();
   }
 
-  // After a drag of a loop point: shade what the loop covers now.
+  // After a drag of a loop point: shade what the loop covers now, and fit the
+  // patch to it - its origin, rect and depth to the covered faces, as + Mushrooms
+  // placed it - so the gizmo and the selection box stay on the patch rather
+  // than on where the loop used to be. Part of the drag's own undo step.
   function afterLoopDrag(itemId: number): void {
     const it = itemOf(itemId);
     const host = it?.visual.generator?.patch ? itemOf(it.visual.generator.patch.hostId) : null;
@@ -9681,16 +9823,34 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (res.ok) patchSurfaces.set(itemId, res.selection);
     else patchSurfaces.delete(itemId);
     loopEditFill = res.ok ? res.selection.positions : null;
+    const fit = res.ok ? refitPatch(it, patchFrame(it), res.selection.positions) : null;
+    if (fit && it.shape.kind === "rect") {
+      it.pos = fit.pos;
+      it.visual.offsetZ = fit.offsetZ;
+      it.shape = { ...it.shape, w: fit.w, h: fit.h };
+      it.visual.depth = fit.depth;
+      it.visual.generator!.patch!.points = fit.points;
+      markDirty();
+    }
     refreshFields();
   }
 
   // The mushroom loop's draft for the guides: the loop being painted, or the
   // loop open for editing.
+  // The loop open for editing is kept as one draft object while its points
+  // (`patchLoopWorld`, itself kept per revision) and its shading are the same,
+  // so a frame where nothing moved hands the guides the object they already
+  // hold.
+  let loopEditDraft: { points: readonly SurfacePoint[]; fill: Float32Array | null; draft: GuideDraft } | null = null;
   function surfaceDraftGuide(): GuideDraft | null {
     if (loopEdit) {
       const it = itemOf(loopEdit.itemId);
       if (!it) return null;
-      return closedDraft(patchLoopWorld(it), loopEditFill);
+      const points = patchLoopWorld(it);
+      const d = loopEditDraft;
+      if (d && d.points === points && d.fill === loopEditFill) return d.draft;
+      loopEditDraft = { points, fill: loopEditFill, draft: closedDraft(points, loopEditFill) };
+      return loopEditDraft.draft;
     }
     return tool === "mushrooms" ? surfaceLoop.draft() : null;
   }
@@ -10781,7 +10941,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // click's slop, so a click that drills into a body cannot also nudge it by
     // the pixel the hand shook by - and, since nothing is written before that,
     // there is no undo step for the nudge that did not happen either.
-    if (drag.mode === "move" && !drag.moved) {
+    if ((drag.mode === "move" || drag.mode === "loopPoint") && !drag.moved) {
       if (scr.distanceTo(drag.press) < CLICK_SLOP_PX) return;
       drag.moved = true;
     }
@@ -11230,7 +11390,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (drag.mode === "panPick" && drag.travel < CLICK_SLOP_PX) drag.pick();
     if (drag.mode === "move" && !drag.moved) drag.pick?.();
     if (drag.mode === "view") visuals?.endView();
-    if (drag.mode === "loopPoint") afterLoopDrag(drag.itemId);
+    // A point that never left the click's slop was not moved: nothing to fit.
+    if (drag.mode === "loopPoint" && drag.moved) afterLoopDrag(drag.itemId);
     if (drag.mode === "surfaceDrop") {
       if (drag.handlers) drag.handlers.end("translate");
       else drag.pick();
@@ -11484,7 +11645,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       e.preventDefault();
       return;
     }
-    // The workspace switch, and the Visuals workspace's two view keys.
+    // The workspace switch, and the Visuals workspace's two view keys. Each is
+    // one action per press: a held key's auto-repeat would flip the workspace
+    // back and forth (or re-frame and re-reset the view) until it is let go.
+    if ((e.code === "KeyW" || e.code === "KeyF" || e.code === "Home") && e.repeat) {
+      e.preventDefault();
+      return;
+    }
     if (e.code === "KeyW" && visuals) {
       setWorkspace(inVisuals() ? "level" : "visuals");
       return;

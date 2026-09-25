@@ -111,11 +111,26 @@ export function spawnUnder(tags: readonly unknown[]): boolean {
   return tags.some((t) => isGuideTag(t) && t.guide === "spawn");
 }
 
-// Everything a draft draws from, as a string: equal strings draw the same.
-function draftSignature(d: GuideDraft | null): string {
-  if (!d) return "-";
-  const p = (v: Vec3 | null | undefined): string => (v ? `${v.x},${v.y},${v.z}` : "~");
-  return `${d.closed ? 1 : 0}${d.crossed ? 1 : 0}|${d.points.map(p).join(";")}|${p(d.cursor)}`;
+// Everything a draft draws from, hashed: equal hashes draw the same (up to a
+// 32-bit collision, which costs one frame showing the previous draft). Asked
+// every frame a draft is up, so it allocates nothing: each coordinate's bits
+// are mixed in through one shared scratch word, where the string it replaced
+// made a few hundred bytes per frame for a pointer standing still.
+const hashWord = new Float64Array(1);
+const hashBits = new Uint32Array(hashWord.buffer);
+function mix(h: number, x: number): number {
+  hashWord[0] = x;
+  h = Math.imul(h ^ hashBits[0]!, 0x9e3779b1);
+  return Math.imul(h ^ hashBits[1]!, 0x85ebca6b) ^ (h >>> 15);
+}
+function mixPoint(h: number, v: Vec3 | null | undefined): number {
+  return v ? mix(mix(mix(h, v.x), v.y), v.z) : mix(h, Number.NaN);
+}
+export function draftSignature(d: GuideDraft | null): number {
+  if (!d) return 0;
+  let h = mix(0x2545f491, (d.closed ? 1 : 0) + (d.crossed ? 2 : 0) + d.points.length * 4);
+  for (let i = 0; i < d.points.length; i++) h = mixPoint(h, d.points[i]);
+  return mixPoint(h, d.cursor) | 0;
 }
 
 // A box in three's frame (y up), metres.
@@ -170,6 +185,9 @@ export class VisualsWorkspace {
   private gesture: { kind: ViewGesture; last: Vec2 } | null = null;
   private draftSig = draftSignature(null);
   private draftFill: Float32Array | null = null;
+  // The draft last handed over, by identity: a tool that keeps its draft
+  // object while nothing changed (the loop tools do) costs nothing at all.
+  private draftRef: GuideDraft | null = null;
   private readonly project3 = new THREE.Vector3();
 
   constructor(private readonly host: WorkspaceHost) {}
@@ -211,6 +229,7 @@ export class VisualsWorkspace {
     this.guides.setDraft(null);
     this.draftSig = draftSignature(null);
     this.draftFill = null;
+    this.draftRef = null;
     this.guides.group.removeFromParent();
     this.host.scene.setViewPose(null);
   }
@@ -266,6 +285,8 @@ export class VisualsWorkspace {
     // not make sixty times a second for a pointer that is standing still.
     // A surface soup is compared by identity: the tool that collects one makes
     // a new array when it collects again.
+    if (draft === this.draftRef) return;
+    this.draftRef = draft;
     const sig = draftSignature(draft);
     const fill = draft?.fill ?? null;
     if (sig === this.draftSig && fill === this.draftFill) return;

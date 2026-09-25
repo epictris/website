@@ -3456,10 +3456,31 @@ function loadFile(file: string, bytes: number): Promise<THREE.Object3D | null> {
     })
     .catch((err: unknown) => {
       console.warn(`[render3d] mesh file "${file}" failed to load:`, err);
+      failedFiles.add(file);
       return null;
     });
   gltfCache.set(file, track(p, `mesh file "${file}"`));
   return p;
+}
+
+// The files whose load failed. A failure stays cached, so a level naming a
+// file that is not there asks for it once rather than on every scene rebuild
+// (the editor rebuilds on every pointer move of a drag). A GENERATED key's file
+// is the one kind that can appear later in the same page - a job lands under
+// it - so `forgetFailedMesh` drops its failure and the next `loadMesh` fetches
+// it again.
+const failedFiles = new Set<string>();
+
+// Forget a failed load of a generated key's file, so the next `loadMesh` asks
+// again; called when the generator service has just published it. A load that
+// succeeded (or is still in flight) is kept: a key names one mesh for ever.
+// True when there was a failure to forget.
+export function forgetFailedMesh(key: string): boolean {
+  const generated = generatedMeshAsset(key);
+  if (!generated || !failedFiles.has(generated.file)) return false;
+  failedFiles.delete(generated.file);
+  gltfCache.delete(generated.file);
+  return true;
 }
 
 // The prop for a manifest key, as a fresh instance the caller owns. Resolves to

@@ -8,7 +8,9 @@
 // module to import. What is added here is the part that reads the MODEL: the
 // generator's input for an item as it now stands, and whether its mesh is stale.
 
+import type * as THREE from "three";
 import { Vec2 } from "../../engine/vec2";
+import { patchMatrix } from "./surfacePatch";
 import {
   generatedKey,
   type BoulderInput,
@@ -66,43 +68,58 @@ function boulderInput(item: EdItem): BoulderInput | null {
   return outline.length >= 3 ? { outline } : null;
 }
 
+// An item's frame as `patchMatrix` builds it (see `ObjectPose`), at its own
+// `offsetZ`: both ends of a patch-host pair are measured the same way, and the
+// body's depth they share cancels in the relative frame.
+function itemFrame(item: EdItem): THREE.Matrix4 {
+  const v = item.visual;
+  return patchMatrix({ x: item.pos.x, y: item.pos.y, z: v.offsetZ, rot: item.rot, rotX: v.rotX, rotY: v.rotY, scale: v.scale });
+}
+
 // What decides a host's drawn surface, placed relative to the patch (see
-// `PatchHost`). Relative so a body moved as a whole leaves the patch current.
+// `PatchHost`). Relative so a body moved as a whole leaves the patch current;
+// the WHOLE relative transform (both objects' place, turn, tilt and scale), so
+// tipping or scaling either one alone is a different patch.
 function hostOf(patch: EdItem, host: EdItem): PatchHost {
-  const rel = host.pos.sub(patch.pos).rotated(-patch.rot);
+  const rel = itemFrame(patch).invert().multiply(itemFrame(host)).elements;
+  // Three's elements are column-major; the key reads the rows.
+  const frame = [0, 1, 2].flatMap((r) => [rel[r]!, rel[r + 4]!, rel[r + 8]!, rel[r + 12]!]);
   const v = host.visual;
-  const pose: PatchHost["pose"] = [
-    rel.x,
-    -rel.y,
-    v.offsetZ - patch.visual.offsetZ,
-    // In three's sense (counter-clockwise, y up), the negation of the level's.
-    -(host.rot - patch.rot),
-    v.rotX,
-    v.rotY,
-    v.scale,
-  ];
-  if (v.kind === "mesh") return { kind: "mesh", mesh: v.mesh, pose };
+  // A generated host never generated is drawn as a stand-in, which says
+  // nothing about which rock it will be: its future key does. Asked with a
+  // lookup that finds nothing, so a patch hosted on a patch cannot recurse.
+  const pending = v.generator && !v.mesh ? expectedKey(host, () => undefined) : null;
+  const generator = pending ? { generator: pending } : {};
+  if (v.kind === "mesh") return { kind: "mesh", mesh: v.mesh, ...generator, frame };
   return {
     kind: "primitive",
     mesh: "",
+    ...generator,
     ...(host.shape.kind === "circle" ? { radius: host.shape.r } : { outline: localVertices(host).map(up) }),
     depth: v.depth,
     bevel: v.bevel,
     taperStart: v.taperStart,
     taperAngle: v.taperAngle,
-    pose,
+    // What the primitive wears and the lens it is drawn through.
+    texture: v.texture,
+    projection: v.projection,
+    frame,
   };
 }
 
-// A patch's loop and host (see `MushroomsInput`), or null when it has no host
-// to grow on or no loop to grow inside.
+// A patch's loop, facing and host (see `MushroomsInput`), or null when it has
+// no host to grow on or no loop to grow inside.
 function mushroomsInput(item: EdItem, lookup: ItemLookup): MushroomsInput | null {
   const patch = item.visual.generator?.patch;
   if (!patch || patch.points.length < 3 || patch.hostId === 0) return null;
   const host = lookup(patch.hostId);
   if (!host || host.object !== "geometry" || host === item) return null;
+  const f = patch.facing;
   return {
     loop: patch.points.map((p) => [p.x, -p.y, p.z]),
+    // Dimensionless and y up like the loop; absent for a patch saved before
+    // the facing was stored (its side is then guessed, see `patchLoopWorld`).
+    ...(f ? { facing: [f.x, -f.y, f.z] as [number, number, number] } : {}),
     host: hostOf(item, host),
   };
 }

@@ -21,7 +21,9 @@
 //
 // Rebuilt when the model's revision, the selection or the layers change
 // (`sync`), never per frame; per frame only the pixel-sized parts are resized
-// (`update`), in place.
+// (`update`), in place. The plane grid is kept apart from that rebuild: a drag
+// moves the revision every frame, and the grid (up to `GRID_MAX_LINES` lines)
+// changes only when the level's extent crosses a whole major cell.
 //
 // Nothing here needs a DOM: the icons are drawn into `DataTexture`s, and three's
 // fat lines (`Line2`) build and raycast in bun, so `cli render3d` counts and
@@ -324,9 +326,12 @@ interface Stroke {
 
 export class Guides {
   readonly group = new THREE.Group();
-  // What `sync` rebuilds; the grid's passes live here too, since the grid's
-  // extent is the level's.
+  // What `sync` rebuilds on every revision.
   private readonly built = new THREE.Group();
+  // The plane grid's passes, rebuilt only when the extent they rule (snapped
+  // out to whole major cells) changes: `gridExtent` says which it was built for.
+  private readonly grid = new THREE.Group();
+  private gridExtent = "";
   private readonly draft = new DraftView();
   private readonly icons = buildIcons();
   // Materials by stroke, shared by every line drawn in that stroke and kept
@@ -370,7 +375,8 @@ export class Guides {
   constructor() {
     this.group.name = "guides";
     this.built.name = "guides-built";
-    this.group.add(this.built, this.draft.group);
+    this.grid.name = "guides-grid";
+    this.group.add(this.grid, this.built, this.draft.group);
     // The fat lines are sized in screen pixels, and three sets their viewport
     // on every draw; the sprites and the grid are sized here, from the camera
     // the frame is actually drawn with, so a dolly never shows a frame of
@@ -470,11 +476,16 @@ export class Guides {
   // the same cases.
   named(name: string): THREE.Object3D[] {
     const out: THREE.Object3D[] = [];
-    this.built.traverse((o) => {
+    const visit = (o: THREE.Object3D): void => {
       if (o.name === name) out.push(o);
-    });
+    };
+    this.grid.traverse(visit);
+    this.built.traverse(visit);
     return out;
   }
+
+  // How many times the grid has been built, for the cases.
+  gridBuilds = 0;
 
   // The draft's drawn size, for the cases.
   draftCounts(): { segments: number; points: number } {
@@ -483,6 +494,7 @@ export class Guides {
 
   dispose(): void {
     this.clearBuilt();
+    this.clearGrid();
     this.draft.dispose();
     for (const m of this.lineMaterials.values()) m.dispose();
     for (const m of this.spriteMaterials.values()) m.dispose();
@@ -502,6 +514,12 @@ export class Guides {
     });
     this.built.clear();
     this.sprites = [];
+  }
+
+  private clearGrid(): void {
+    for (const o of this.grid.children) (o as THREE.LineSegments).geometry.dispose();
+    this.grid.clear();
+    this.gridExtent = "";
   }
 
   private rebuild(view: GuideView): void {
@@ -606,7 +624,8 @@ export class Guides {
   }
 
   // The plane grid over the level's extent plus a margin, snapped out to whole
-  // major cells so the lines fall where the training grid's do.
+  // major cells so the lines fall where the training grid's do. Built only when
+  // that snapped extent differs from the one the grid on hand was built for.
   private buildGrid(model: EdModel): void {
     const b = bodyBounds(model.items);
     const p = model.player.pos;
@@ -614,6 +633,11 @@ export class Guides {
     const x1 = Math.ceil((Math.max(b.max.x, p.x) + GRID_MARGIN) / MAJOR_M) * MAJOR_M;
     const y0 = Math.floor((Math.min(b.min.y, p.y) - GRID_MARGIN) / MAJOR_M) * MAJOR_M;
     const y1 = Math.ceil((Math.max(b.max.y, p.y) + GRID_MARGIN) / MAJOR_M) * MAJOR_M;
+    const extent = `${x0},${x1},${y0},${y1}`;
+    if (extent === this.gridExtent) return;
+    this.clearGrid();
+    this.gridExtent = extent;
+    this.gridBuilds++;
     const perMajor = Math.round(MAJOR_M / MINOR_M);
     const minor: number[] = [];
     const major: number[] = [];
@@ -644,7 +668,7 @@ export class Guides {
       const segs = new THREE.LineSegments(geo, material);
       segs.name = name;
       segs.raycast = () => undefined;
-      this.built.add(segs);
+      this.grid.add(segs);
     };
     pass(minor, this.gridMaterials.minor, "grid-minor");
     pass(major, this.gridMaterials.major, "grid-major");

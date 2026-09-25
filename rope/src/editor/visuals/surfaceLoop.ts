@@ -26,6 +26,10 @@ const toDraft = (p: SurfacePoint): DraftPoint => ({
 export class SurfaceLoop {
   private pts: LoopPoint[] = [];
   private cursorAt: THREE.Vector3 | null = null;
+  // The draft as last built, kept until a point or the cursor changes: the
+  // frame loop asks for it every frame, and the guides take the same object
+  // back as "nothing changed" without looking inside it.
+  private built: GuideDraft | null | undefined = undefined;
 
   get points(): readonly LoopPoint[] {
     return this.pts;
@@ -47,31 +51,40 @@ export class SurfaceLoop {
 
   add(p: LoopPoint): void {
     this.pts = [...this.pts, p];
+    this.built = undefined;
   }
 
   // Backspace: the last point goes; true when there was one.
   pop(): boolean {
     if (!this.pts.length) return false;
     this.pts = this.pts.slice(0, -1);
+    this.built = undefined;
     return true;
   }
 
   clear(): void {
     this.pts = [];
     this.cursorAt = null;
+    this.built = undefined;
   }
 
   // Where the next point would go (the surface under the pointer), or null off
-  // the host.
+  // the host. Setting the same point again changes nothing.
   set cursor(p: THREE.Vector3 | null) {
+    const was = this.cursorAt;
+    if (p === null ? was === null : was !== null && was.equals(p)) return;
     this.cursorAt = p ? p.clone() : null;
+    this.built = undefined;
   }
 
   // The draft the guides draw: the placed points and the run on to the cursor.
   draft(): GuideDraft | null {
-    if (!this.pts.length) return null;
+    if (this.built !== undefined) return this.built;
     const c = this.cursorAt;
-    return { points: this.pts.map(toDraft), closed: false, cursor: c ? { x: c.x, y: c.y, z: c.z } : null };
+    this.built = this.pts.length
+      ? { points: this.pts.map(toDraft), closed: false, cursor: c ? { x: c.x, y: c.y, z: c.z } : null }
+      : null;
+    return this.built;
   }
 }
 

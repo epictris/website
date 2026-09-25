@@ -238,8 +238,8 @@ The object's `mesh` is the key `<kind>:<hash>`, where `<hash>` is 16 hex digits 
   Changing a default is therefore a schema `version` bump, which is in the key, so every mesh made under the old defaults reads as stale.
 - A boulder's `input` is `{ outline }`: the object's own shape in its own frame, metres, y UP, in the shape's vertex order (`localVertices` with y negated, exactly what the fork's editor sent).
   That frame is the one `mountVisual` places the GLB in, so the file needs no transform, and moving or turning the object never makes it stale.
-- A mushroom patch's `input` is `{ loop, host }`: the loop in the patch object's own frame (metres, y up, z off its own plane), and the host described by what decides its drawn surface (its mesh key, or a primitive's outline or radius, depth, bevel and taper) and its pose relative to the patch.
-  Moving the patch and its host together changes nothing; moving either alone, regenerating the host, or editing the loop makes the patch stale.
+- A mushroom patch's `input` is `{ loop, facing, host }`: the loop in the patch object's own frame (metres, y up, z off its own plane), the side of the loop's plane it was painted on (a unit vector in that frame; absent for a patch saved before it was stored), and the host described by what decides its drawn surface (its mesh key; a primitive's outline or radius, depth, bevel, taper, texture and lens; for a generated host never generated, the key it would be generated under) and its whole frame relative to the patch (`frame`, the top three rows of the affine matrix, with both objects' tilt and scale in it).
+  Moving the patch and its host together changes nothing; moving, tipping or scaling either alone, regenerating the host, or editing the loop makes the patch stale.
   The triangle soup the generator is handed is collected from the host's drawn meshes at generation time and is not part of the key; the server checks the key against `input`, not against the soup.
 - `editor/visuals/paramSchema.ts` computes an item's input (`generatorInput`), its expected key (`expectedKey`) and `isStale` from the model, so the badge and the job client read one definition.
 
@@ -253,8 +253,10 @@ public/generated/<kind>/<hash>/meta.json   { key, kind, version, params, input, 
 A generated file is one prop in its own frame: no node, no scale, no turn, and no manifest entry.
 The key carries no size, so the browser fetches it unweighted; the preload list (`levelStoredFiles`, node only) reads `bytes` from `meta.json` through `generatedMeta` (`render3d/generatedMeta.ts`, kept apart so its `fs` import never reaches the browser), and lists a file with no meta at 0 bytes with a warning.
 A key whose file is missing is a failed load like any other, and draws the placeholder.
+The failure stays cached (a missing file is asked for once, not on every rebuild of the editor's scene), except that a GENERATED key's failure is dropped by `forgetFailedMesh(key)` when the service publishes that file, so a mesh generated for a key whose earlier 404 was cached is fetched at the next rebuild rather than staying a stand-in until a reload.
 The placeholder of a generated object is its generator's: a BOULDER with no mesh yet (or one still loading, or missing) stands in as its outline extruded to the block's `depth` and chamfered in toward the camera at `BOULDER_STANDIN_TAPER` (45°), the volume the rock will fill, rather than a 20 cm slab; a MUSHROOM PATCH has none at all, since its rect is only the extent of the surface it grows on and a box of that size would stand over the rock it is on (`mountVisual`, `primitiveGeometry` in `render3d/bodyVisuals.ts`).
 The files are dev-only and gitignored for now; publishing them to the release store is a follow-up the key and layout are shaped for.
+A local build copies `public/` into `dist`, and `generatedMeshesInBuild` (`vite.config.ts`) then removes every generated directory no registered level names and every file but `mesh.glb` from the ones kept, so `dist` does not grow with every seed ever tried.
 
 ## Traps
 

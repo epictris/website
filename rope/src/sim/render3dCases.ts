@@ -49,6 +49,7 @@ import { MIN_VIEW_DISTANCE, poseBasis, poseEye } from "../editor/visuals/viewPos
 import { Guides, type GuideView } from "../editor/visuals/guides";
 import { guideTag, isGuideTag, SPAWN_GUIDE_ID, type GuideTag } from "../editor/visuals/tags";
 import {
+  draftSignature,
   handleUnder,
   itemsBox,
   itemsUnder,
@@ -56,6 +57,7 @@ import {
   VisualsWorkspace,
   type WorkspaceScene,
 } from "../editor/visuals/workspace";
+import { SurfaceLoop } from "../editor/visuals/surfaceLoop";
 import { alignUp, surfacePlacement, upOf } from "../editor/visuals/surfaceDrop";
 import { ED_LAYERS, offsetZAfterMove, type EdLayer } from "../editor/model";
 import { cylinderSolid, extrudeOutline } from "../render3d/extrude";
@@ -223,7 +225,15 @@ import {
   soupInFrame,
   worldToLoopPoint,
 } from "../editor/visuals/surfacePatch";
-import { existingRock, objectPose, patchFor, rockFor, rockSource } from "../editor/visuals/generatorEdits";
+import {
+  existingRock,
+  MIN_PATCH_EXTENT,
+  objectPose,
+  patchFor,
+  refitPatch,
+  rockFor,
+  rockSource,
+} from "../editor/visuals/generatorEdits";
 import {
   clampParam,
   generatorBadge,
@@ -237,7 +247,7 @@ import {
   parseParamsPayload,
   withParam,
 } from "../editor/visuals/generatorPanel";
-import { GeneratorJobs, missingTools, type Fetcher, type Job } from "../editor/visuals/jobs";
+import { GeneratorJobs, missingTools, POLL_MISSES, type Fetcher, type Job } from "../editor/visuals/jobs";
 
 export interface CaseResult {
   name: string;
@@ -1123,6 +1133,44 @@ function visualsGuides(): CaseResult[] {
     name: "visuals: a draft draws its placed points and its run to the cursor, closes, and clears",
     pass: open.segments === 3 && open.points === 3 && closed.segments === 3 && none.segments === 0 && none.points === 0,
     detail: `open ${JSON.stringify(open)}, closed ${JSON.stringify(closed)}, cleared ${JSON.stringify(none)}`,
+  });
+
+  // What a drag costs per frame: the grid is built once and survives the
+  // revisions of a drag that stays inside the level's major cells, and is
+  // built again only when the extent crosses one; the draft signature is a
+  // number that tells a moved cursor from a still one; the painted loop hands
+  // back one draft object until a point or its cursor changes.
+  const gridBefore = guides.gridBuilds;
+  const home = poly.pos;
+  for (let rev = 2; rev < 12; rev++) {
+    poly.pos = home.add(new Vec2(rev * 0.01, 0));
+    guides.sync(view({ rev }));
+  }
+  const dragBuilds = guides.gridBuilds - gridBefore;
+  // A body 100 m out widens the level by many cells.
+  poly.pos = home.add(new Vec2(100, 0));
+  guides.sync(view({ rev: 99 }));
+  const farBuilds = guides.gridBuilds - gridBefore;
+  poly.pos = home;
+  guides.sync(view({ rev: 100 }));
+  const gridPasses = guides.named("grid-major").length;
+  const draftA = { points: [{ x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }], closed: false, cursor: { x: 0.5, y: 1, z: 0 } };
+  const sameSig = draftSignature(draftA) === draftSignature({ ...draftA, points: [...draftA.points], cursor: { x: 0.5, y: 1, z: 0 } });
+  const movedSig = draftSignature(draftA) !== draftSignature({ ...draftA, cursor: { x: 0.5, y: 1.001, z: 0 } });
+  const loop = new SurfaceLoop();
+  const n = new THREE.Vector3(0, 1, 0);
+  loop.add({ point: new THREE.Vector3(0, 0, 0), normal: n, hostId: 1 });
+  loop.cursor = new THREE.Vector3(1, 0, 0);
+  const d1 = loop.draft();
+  loop.cursor = new THREE.Vector3(1, 0, 0);
+  const kept = loop.draft() === d1;
+  loop.cursor = new THREE.Vector3(1, 0, 0.5);
+  const renewed = loop.draft() !== d1 && loop.draft()?.cursor?.z === 0.5;
+  const ok = dragBuilds === 0 && farBuilds === 1 && gridPasses === 1 && sameSig && movedSig && kept && renewed;
+  out.push({
+    name: "visuals: a drag rebuilds the outlines but not the grid (rebuilt only when the level's extent crosses a cell), and a still draft is not rebuilt",
+    pass: ok,
+    detail: JSON.stringify({ dragBuilds, farBuilds, gridPasses, sameSig, movedSig, kept, renewed }),
   });
   guides.dispose();
   return out;
@@ -5883,16 +5931,25 @@ function generatorCases(): CaseResult[] {
     // stale, and is only ever made on purpose (with a schema version bump).
     const rockInput = { outline: [[-1, -0.5], [1, -0.5], [1, 0.5], [-1, 0.5]] as [number, number][] };
     const rockParams = { seed: 7, depth: 1.2 };
+    //
+    // The patch's key was re-pinned once, on 2026-09-25 (it was
+    // mushrooms:a63d3184bac129bb): its key INPUT changed shape - the host's
+    // pose became its whole frame relative to the patch (`frame`, both tilts
+    // and scales), and the side the loop was painted on (`facing`) joined it -
+    // before any patch had been saved into a level. The schema `version` is the
+    // parameters' and was not bumped; a changed input shape changes keys by
+    // itself (docs/generators.md, "The editor's side").
     const patchInput = {
       loop: [[0, 0, 0.1], [0.5, 0, 0.1], [0.25, 0.4, 0.12]] as [number, number, number][],
-      host: { kind: "mesh" as const, mesh: "boulder:0123456789abcdef", pose: [0.1, -0.2, 0, 0, 0, 0, 1] as [number, number, number, number, number, number, number] },
+      facing: [0, 0.6, 0.8] as [number, number, number],
+      host: { kind: "mesh" as const, mesh: "boulder:0123456789abcdef", frame: [1, 0, 0, 0.1, 0, 1, 0, -0.2, 0, 0, 1, 0] },
     };
     const patchParams = { density: 200, noOverlaps: false };
     const rockKey = generatedKey("boulder", 1, rockInput, rockParams);
     const patchKey = generatedKey("mushrooms", 1, patchInput, patchParams);
     // Also computed under node (V8) when pinned, which agreed with bun (JSC).
     const ROCK_KEY = "boulder:c82bc75873f0956b";
-    const PATCH_KEY = "mushrooms:a63d3184bac129bb";
+    const PATCH_KEY = "mushrooms:b23c95d4426ccdcd";
     const text = canonicalString({ kind: "boulder", version: 1, input: rockInput, params: rockParams });
     const TEXT = `{"input":{"outline":[[-1,-0.5],[1,-0.5],[1,0.5],[-1,0.5]]},"kind":"boulder","params":{"depth":1.2,"seed":7},"version":1}`;
     out.push({
@@ -6090,6 +6147,42 @@ function generatorCases(): CaseResult[] {
     const hostMoved = !isStale(rock!, lookup) && isStale(patch!, lookup);
     rock!.pos = home;
 
+    // The patch tipped or scaled on its own, or the host tipped: the relative
+    // frame the key holds moved, so the patch is stale.
+    const alone = (edit: () => void, undo: () => void): boolean => {
+      edit();
+      const stale = isStale(patch!, lookup);
+      undo();
+      return stale && !isStale(patch!, lookup);
+    };
+    const patchTipped = alone(() => (patch!.visual.rotX = 0.1), () => (patch!.visual.rotX = 0));
+    const patchScaled = alone(() => (patch!.visual.scale = 1.2), () => (patch!.visual.scale = 1));
+    const hostTipped = alone(() => (rock!.visual.rotY = 0.1), () => (rock!.visual.rotY = 0));
+
+    // A primitive host: what it wears and its lens are part of its surface.
+    rock!.visual.kind = "primitive";
+    patch!.visual.mesh = expectedKey(patch!, lookup)!;
+    const retextured = alone(() => (rock!.visual.texture = "moss"), () => (rock!.visual.texture = ""));
+    const lens = rock!.visual.projection;
+    const relensed = alone(
+      () => (rock!.visual.projection = lens === "orthographic" ? "perspective" : "orthographic"),
+      () => (rock!.visual.projection = lens),
+    );
+    rock!.visual.kind = "mesh";
+    patch!.visual.mesh = expectedKey(patch!, lookup)!;
+
+    // Two rocks never generated are two hosts: a patch on one keys the rock's
+    // future key, so a different seed is a different patch; once the rock has
+    // a mesh, its mesh key alone speaks for it.
+    const rockMesh = rock!.visual.mesh;
+    rock!.visual.mesh = "";
+    const unmadeA = expectedKey(patch!, lookup);
+    rock!.visual.generator!.params.seed = 99;
+    const unmadeB = expectedKey(patch!, lookup);
+    delete rock!.visual.generator!.params.seed;
+    rock!.visual.mesh = rockMesh;
+    const unmadeHosts = unmadeA !== null && unmadeB !== null && unmadeA !== unmadeB && !isStale(patch!, lookup);
+
     // A parameter, a vertex, the version.
     rock!.visual.generator!.params.depth = 1.3;
     const paramChanged = isStale(rock!, lookup) && isStale(patch!, lookup) === false;
@@ -6110,6 +6203,12 @@ function generatorCases(): CaseResult[] {
       fresh,
       bodyMoved,
       hostMoved,
+      patchTipped,
+      patchScaled,
+      hostTipped,
+      retextured,
+      relensed,
+      unmadeHosts,
       paramChanged,
       vertexChanged,
       versionChanged,
@@ -6120,7 +6219,7 @@ function generatorCases(): CaseResult[] {
     };
     const ok = Object.values(results).every(Boolean);
     out.push({
-      name: "generator: isStale follows the outline, the loop's host, the params and the version, and not a move of the whole body",
+      name: "generator: isStale follows the outline, the loop's host (its whole frame relative to the patch, a primitive's texture and lens, an ungenerated rock's future key), the patch's own tilt and scale, the params and the version, and not a move of the whole body",
       pass: ok,
       detail: JSON.stringify(results),
     });
@@ -6306,7 +6405,8 @@ function generatorTools(): CaseResult[] {
       new THREE.Vector3(1.85, -1.15, 0.1),
     ];
     const soup = new Float32Array([1.8, -1.2, 0.1, 2.2, -1.2, 0.14, 2.2, -0.9, 0.12, 1.8, -1.2, 0.1, 2.2, -0.9, 0.12, 1.8, -0.9, 0.1]);
-    const patch = patchFor(host, 9002, loop, soup);
+    // The painted normals summed: toward the camera, a little up.
+    const patch = patchFor(host, 9002, loop, soup, new THREE.Vector3(0, 0.4, 3.8));
     model.items.push(patch);
     const g = patch.visual.generator!;
     const m = patchMatrix(objectPose(patch, patch.visual.offsetZ));
@@ -6314,6 +6414,11 @@ function generatorTools(): CaseResult[] {
     const lookup = itemLookup(model.items);
     const input = generatorInput(patch, lookup);
     const shape = patch.shape.kind === "rect" ? patch.shape : null;
+    // The facing stored unit length, y down like the points, and keyed y up.
+    const f = g.patch!.facing;
+    const facingOk =
+      f !== null && near(Math.hypot(f.x, f.y, f.z), 1, 1e-4) && near(f.y, -0.1047, 1e-4) && f.z > 0.99 &&
+      input !== null && "facing" in input && near(input.facing![1], 0.1047, 1e-4);
     const placed =
       patch.bodyId === host.bodyId &&
       g.kind === "mushrooms" &&
@@ -6329,11 +6434,47 @@ function generatorTools(): CaseResult[] {
     const written = objects.filter(isGeometryObject).find((o) => o.generator?.kind === "mushrooms");
     const hostIndex = objects.findIndex((o) => isGeometryObject(o) && !o.generator);
     const disk = written?.generator?.patch?.host === hostIndex && written.generator.patch.points.length === 4;
-    const ok = placed && worst < 1e-9 && input !== null && disk;
+    // The facing is a direction: written as held, and not scaled px <-> m.
+    const px = scaleLevelData(data, PIXELS_PER_METER);
+    const pxPatch = px.bodies.flatMap((b) => b.objects).filter(isGeometryObject).find((o) => o.generator?.kind === "mushrooms");
+    const asText = (v: unknown): string => JSON.stringify(v ?? null);
+    const facingDisk =
+      f !== null && asText(written?.generator?.patch?.facing) === asText(f) && asText(pxPatch?.generator?.patch?.facing) === asText(f);
+    const ok = placed && worst < 1e-9 && input !== null && disk && facingOk && facingDisk;
     out.push({
-      name: "generator: + Mushrooms adds one patch in the host's body, at the soup's middle and extent, its loop in its own frame naming the host",
+      name: "generator: + Mushrooms adds one patch in the host's body, at the soup's middle and extent, its loop in its own frame naming the host, with the side it was painted on",
       pass: ok,
-      detail: JSON.stringify({ placed, worst, input: input !== null, disk, hostIndex, written: written?.generator?.patch?.host }),
+      detail: JSON.stringify({ placed, worst, input: input !== null, disk, facingOk, facingDisk, f, hostIndex, written: written?.generator?.patch?.host }),
+    });
+
+    // Edit loop moved the loop: the patch is fitted to what it covers now, and
+    // the loop stays where it was painted in the world. A turned, tipped and
+    // scaled patch, so the fit is shown in its own frame and not the world's.
+    patch.rot = 0.3;
+    patch.visual.rotX = 0.2;
+    patch.visual.scale = 1.5;
+    const frame = patchMatrix(objectPose(patch, patch.visual.offsetZ));
+    const before = g.patch!.points.map((p) => loopPointToWorld(frame, p));
+    // A soup 0.5 m further right in the patch's own frame, 0.2 x 0.1 x 0.02.
+    const local = [[0.4, -0.05, 0], [0.6, -0.05, 0.02], [0.6, 0.05, 0.01]];
+    const moved = new Float32Array(local.flatMap(([x, y, z]) => new THREE.Vector3(x, y, z).applyMatrix4(frame).toArray()));
+    const fit = refitPatch(patch, frame, moved)!;
+    const refitted = { ...patch, pos: fit.pos, visual: { ...patch.visual, offsetZ: fit.offsetZ } };
+    const after = patchMatrix(objectPose(refitted, fit.offsetZ));
+    const drift = Math.max(...fit.points.map((p, i) => loopPointToWorld(after, p).distanceTo(before[i]!)));
+    const centre = new THREE.Vector3(0.5, 0, 0.01).applyMatrix4(frame);
+    const origin = new THREE.Vector3().applyMatrix4(after);
+    // The soup is a Float32Array (as `selectSurface` makes it), so the box it
+    // gives is good to a few tenths of a micrometre.
+    const refitOk =
+      drift < 1e-9 &&
+      origin.distanceTo(centre) < 1e-6 &&
+      near(fit.w, 0.2, 1e-6) && near(fit.h, 0.1, 1e-6) && near(fit.depth, MIN_PATCH_EXTENT, 1e-9) &&
+      refitPatch(patch, frame, new Float32Array(0)) === null;
+    out.push({
+      name: "generator: Edit loop re-fits the patch to the faces its loop covers now (origin, rect, depth in its own turned, tipped, scaled frame), the loop staying put in the world",
+      pass: refitOk,
+      detail: JSON.stringify({ drift, origin: origin.toArray(), centre: centre.toArray(), w: fit.w, h: fit.h, depth: fit.depth }),
     });
   }
 
@@ -6399,8 +6540,23 @@ function generatorTools(): CaseResult[] {
     // A current key with no file on this machine (the service answers 404).
     rock.visual.generator!.params = {};
     const missing = generatorStatus(rock, lookup, undefined, none, () => true);
+    // The job's server restarted under it: lost, said as such.
+    const lost = generatorStatus(rock, lookup, job("lost", { message: "the dev server restarted: press Generate again" }), none);
+    // A value the key cannot be made of: said, never thrown out of the frame
+    // loop that asks every frame. (A field never writes one; a file could.)
+    rock.visual.generator!.params = { depth: Number.NaN };
+    let invalid = { text: "threw", tone: "" } as { text: string; tone: string };
+    let invalidBadge = "threw";
+    try {
+      invalid = generatorStatus(rock, lookup, undefined, none);
+      invalidBadge = generatorBadge(rock, lookup, undefined);
+    } catch {
+      // `invalid` stays "threw"
+    }
     rock.visual.generator!.params = { depth: 1.2 };
     const results = {
+      lost: lost.text === "the dev server restarted: press Generate again" && lost.tone === "warn",
+      invalid: invalid.text.startsWith("stale: invalid value") && invalid.tone === "warn" && invalidBadge === "stale",
       never: never.text === "stale: never generated" && never.tone === "warn",
       running: running.text === "generating 12 s" && running.tone === "busy",
       failed:
@@ -6418,7 +6574,7 @@ function generatorTools(): CaseResult[] {
           "Blender not found (rocks, mushrooms) · rock packages missing: bun run generators:setup",
     };
     out.push({
-      name: "generator: the status line says never generated, generating N s, the failing check (and the remedy), the mesh's size, stale once edited, and stale: file missing",
+      name: "generator: the status line says never generated, generating N s, the failing check (and the remedy), the mesh's size, stale once edited, stale: file missing, lost to a restart, and stale: invalid value without throwing",
       pass: Object.values(results).every(Boolean),
       detail: JSON.stringify({ results, texts: [never.text, running.text, failed.text, done.text, stale.text] }),
     });
@@ -6457,6 +6613,8 @@ export async function generatorJobCases(): Promise<CaseResult[]> {
       const n = seen.get(key) ?? 0;
       seen.set(key, n + 1);
       const body = list[Math.min(n, list.length - 1)];
+      // "offline": the server does not answer at all (mid-restart).
+      if (body === "offline") throw new Error("fetch failed");
       return body === undefined
         ? { ok: false, status: 404, json: async () => ({ error: "No such job." }) }
         : { ok: true, status: 200, json: async () => body };
@@ -6595,6 +6753,39 @@ export async function generatorJobCases(): Promise<CaseResult[]> {
       name: "generator: a result waits out a drag and lands once after it; a deleted or since-edited object gets nothing",
       pass: ok,
       detail: JSON.stringify({ held, stillHeld, landedOnce, gone: gone.swaps, moved: moved.swaps }),
+    });
+  }
+
+  // The dev server restarted mid-job: a 404 for a running job is `lost` (not
+  // `failed`: the generator said nothing), and says to Generate again. A few
+  // unanswered polls (the second a restart takes) are asked again rather than
+  // judged, and a server that never answers again is lost after POLL_MISSES.
+  {
+    const running = { state: "running", elapsed: 1 };
+    const post = { status: 200, body: { state: "running" } };
+    const restarted = rig({ post, gets: { [A]: [running, undefined] } }, () => A);
+    await restarted.jobs.submit(7, req(A));
+    await restarted.drain();
+    const blip = rig({ post, gets: { [A]: [running, "offline", "offline", { state: "done", elapsed: 2, bytes: 1, triangles: 1 }] } }, () => A);
+    await blip.jobs.submit(7, req(A));
+    await blip.drain();
+    const gone = rig({ post, gets: { [A]: ["offline"] } }, () => A);
+    await gone.jobs.submit(7, req(A));
+    await gone.drain();
+    const asked = gone.log.filter((l) => l.startsWith("GET ")).length;
+    const lost = restarted.jobs.job(7);
+    const ok =
+      lost?.state === "lost" &&
+      (lost.message ?? "").includes("Generate again") &&
+      restarted.swaps.length === 0 &&
+      blip.jobs.job(7)?.state === "done" &&
+      blip.swaps.length === 1 &&
+      gone.jobs.job(7)?.state === "lost" &&
+      asked === POLL_MISSES;
+    out.push({
+      name: "generator: a job the restarted dev server has no record of is lost (Generate again), not failed; unanswered polls are retried, then lost",
+      pass: ok,
+      detail: JSON.stringify({ lost, blip: blip.jobs.job(7), gone: gone.jobs.job(7), asked }),
     });
   }
   return out;

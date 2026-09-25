@@ -52,25 +52,43 @@ export interface BoulderInput {
 // collected from the host's drawn meshes at generation time and is NOT part of
 // the key: it is derived from these, and the server checks the key against
 // this input, not against the soup.
+//
+// `facing` is which side of the loop's plane the loop was painted on: a unit
+// vector in the patch's frame (y up), the mean of the painted faces' normals.
+// The surface collected from the loop depends on it (a loop near a wide face's
+// edge has a plane of best fit that could be read either way round), so it is
+// part of the key. Absent for a patch saved before it was stored, whose side
+// is guessed from its host's middle.
 export interface MushroomsInput {
   loop: [number, number, number][];
+  facing?: [number, number, number];
   host: PatchHost;
 }
 export interface PatchHost {
   kind: "primitive" | "mesh";
   mesh: string; // the host's mesh key ("" for a primitive)
+  // For a GENERATED host with no mesh yet: the key it would be generated
+  // under, so two rocks never generated whose patches sit alike are still two
+  // hosts. Absent otherwise - a mesh key already names what is drawn, and a
+  // stale host is drawn (and grown on) as the mesh it has.
+  generator?: string;
   // A primitive's form, which is its surface: its outline in its own frame (y
-  // up) or its radius, and the look fields that change the extrusion. Absent
-  // for a mesh, whose key already says what it is.
+  // up) or its radius, and the look fields that change the extrusion or what
+  // it wears. Absent for a mesh, whose key already says what it is.
   outline?: [number, number][];
   radius?: number;
   depth?: number | null;
   bevel?: number | null;
   taperStart?: number;
   taperAngle?: number;
-  // x, y (up), z, in-plane turn (three's, counter-clockwise), rotX, rotY, and
-  // the dimensionless scale, all relative to the patch object.
-  pose: [number, number, number, number, number, number, number];
+  texture?: string;
+  projection?: string;
+  // The host's frame in the patch's frame, three's axes (y up), metres: the
+  // top three rows of the 4x4 affine matrix, row by row. Both frames carry
+  // their object's place, turn, tilt (rotX, rotY) and scale, so a patch tipped
+  // or scaled on its own, or a host moved, tipped or scaled on its own, is a
+  // different key, and a body moved as a whole is not.
+  frame: number[];
 }
 
 export type GeneratorInput = BoulderInput | MushroomsInput;

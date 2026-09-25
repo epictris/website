@@ -43,12 +43,17 @@ export interface GenerateRequest {
 
 // One object's latest job as the panel shows it. `state` is the service's, or
 // `failed` for a request the service refused (a 400 names the bad parameters,
-// a 503 the missing tool) or never answered.
+// a 503 the missing tool) or never answered, or `lost` for a job the service
+// no longer knows: the dev server restarted (or stopped) while it ran, and a
+// job lives only as long as the server that ran it. Lost is not failed - the
+// generator said nothing about the rock - so the panel says to Generate again.
+export type ClientJobState = JobState | "lost";
+
 export interface Job {
   readonly itemId: number;
   readonly key: string;
   readonly kind: GeneratorKind;
-  state: JobState;
+  state: ClientJobState;
   elapsed: number;
   message?: string;
   bytes?: number;
@@ -104,7 +109,13 @@ export interface JobsHost {
 export const POLL_FIRST_MS = 250;
 export const POLL_MAX_MS = 1000;
 
-const TERMINAL: ReadonlySet<JobState> = new Set(["done", "failed", "superseded"]);
+const TERMINAL: ReadonlySet<ClientJobState> = new Set(["done", "failed", "superseded", "lost"]);
+
+// How many polls in a row may go unanswered (a network error, the server down
+// for the second a restart takes) before the job is called lost. A restart is
+// told apart by the 404 that follows it; this bounds a server that never
+// comes back.
+export const POLL_MISSES = 5;
 
 async function errorOf(res: { status: number; json(): Promise<unknown> }): Promise<string> {
   try {
@@ -269,25 +280,32 @@ export class GeneratorJobs {
     }
   }
 
-  private poll(job: Job, delay: number): void {
-    this.host.later(() => void this.look(job, delay), delay);
+  private poll(job: Job, delay: number, misses = 0): void {
+    this.host.later(() => void this.look(job, delay, misses), delay);
   }
 
-  private async look(job: Job, delay: number): Promise<void> {
+  private async look(job: Job, delay: number, misses: number): Promise<void> {
     if (!this.follows(job)) return;
     const s = await this.status(job.key);
     if (!this.follows(job)) return;
+    const next = Math.min(POLL_MAX_MS, Math.max(POLL_FIRST_MS, delay * 2));
+    if (s === null && misses + 1 < POLL_MISSES) {
+      // Unanswered (the server may be mid-restart): ask again before judging.
+      this.poll(job, next, misses + 1);
+      return;
+    }
     if (!s || s === "missing") {
-      // The server restarted mid-job (a job lives only as long as the server)
-      // or never had it: say so rather than poll for ever.
-      this.settle(job, { state: "failed", elapsed: job.elapsed, message: "the dev server has no record of this job (restarted?); Generate again" });
+      // The server restarted (or stopped) mid-job - a job lives only as long
+      // as the server, and the old one killed its Blender on the way out - or
+      // never had it: say so rather than poll for ever, and not as a failure.
+      this.settle(job, { state: "lost", elapsed: job.elapsed, message: "the dev server restarted: press Generate again" });
       return;
     }
     this.settle(job, s);
-    if (!TERMINAL.has(s.state)) this.poll(job, Math.min(POLL_MAX_MS, Math.max(POLL_FIRST_MS, delay * 2)));
+    if (!TERMINAL.has(s.state)) this.poll(job, next);
   }
 
-  private settle(job: Job, s: JobStatus): void {
+  private settle(job: Job, s: Omit<JobStatus, "state"> & { state: ClientJobState }): void {
     if (!this.follows(job)) return;
     job.state = s.state;
     job.elapsed = s.elapsed;

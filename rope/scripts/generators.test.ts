@@ -19,7 +19,7 @@ import { glbTriangles } from "../src/server/generators/glb";
 import { mushrooms, soupArea } from "../src/server/generators/mushrooms";
 import type { Tools } from "../src/server/generators/paths";
 import { BAKE_MARKER } from "../src/server/generators/run";
-import { GeneratorService, type Status } from "../src/server/generators/service";
+import { BODY_LIMIT, GeneratorService, HttpError, keyOfPath, readBody, type Status } from "../src/server/generators/service";
 
 const keyOf = (kind: "boulder" | "mushrooms", input: GeneratorInput, params: ParamValues = {}) =>
   generatedKey(kind, loadSchema(kind)!.version, input, params);
@@ -28,7 +28,7 @@ const keyOf = (kind: "boulder" | "mushrooms", input: GeneratorInput, params: Par
 const square = [0, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 1, 0, 0, 1];
 const loop: MushroomsInput = {
   loop: [[0, 0, 0], [1, 0, 0], [1, 0, 1]],
-  host: { kind: "primitive", mesh: "", outline: [[0, 0], [1, 0], [1, 1]], pose: [0, 0, 0, 0, 0, 0, 1] },
+  host: { kind: "primitive", mesh: "", outline: [[0, 0], [1, 0], [1, 1]], frame: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0] },
 };
 
 test("the triangle soup's area is in square metres", () => {
@@ -126,17 +126,20 @@ describe("the service", () => {
   // A scratch project root with an empty public/, and stand-ins for Python and
   // Blender that write a GLB. The Python reads its behaviour from the last digit
   // of the request's seed: 1 sleeps, 2 prints the bake marker then sleeps, 3
-  // fails its validation, else quick.
+  // fails its validation, else quick. Every request it is handed is appended to
+  // requests.log, one per line, so a case can read what the generator saw.
   const root = mkdtempSync(join(tmpdir(), "generators-test-"));
   afterAll(() => rmSync(root, { recursive: true, force: true }));
   const glb = join(root, "fake.glb");
   writeFileSync(glb, fakeGlb(12));
   const python = join(root, "fake-python");
+  const requests = join(root, "requests.log");
   writeFileSync(
     python,
     `#!/bin/sh
 # $1 rockgen.py, $2 request.json, $3 --output, $4 out
 seed=$(sed -n 's/.*"seed":\\([0-9]*\\).*/\\1/p' "$2")
+{ cat "$2"; echo; } >> "${requests}"
 mkdir -p "$4/models"
 case "$((seed % 10))" in
   1) sleep 3 ;;
@@ -273,6 +276,80 @@ cp "${glb}" "$4/models/boulder.glb"
     const kept = /Output kept in (.*)/.exec(failed.message!)![1]!;
     expect(existsSync(join(kept, "request.json"))).toBe(true);
     rmSync(kept, { recursive: true, force: true });
+  });
+
+  test("a job two objects wait on runs on until neither does", async () => {
+    // A rock duplicated mid-generation: the copy asks for the same key, then
+    // moves on to another. The original still waits, so the job runs on for it.
+    submit(701, "rock-c");
+    await Bun.sleep(200);
+    expect(submit(701, "rock-d")).toEqual({ key: keyFor(701), state: "running" });
+    submit(704, "rock-d");
+    expect(service.status(keyFor(701))!.state).toBe("running");
+    expect((await settle(keyFor(701))).state).toBe("done");
+    expect((await settle(keyFor(704))).state).toBe("done");
+  });
+
+  test("a job is superseded once every object waiting on it has moved on", async () => {
+    submit(811, "rock-e");
+    submit(811, "rock-f");
+    await Bun.sleep(200);
+    submit(814, "rock-e");
+    expect(service.status(keyFor(811))!.state).toBe("running");
+    submit(815, "rock-f");
+    expect((await settle(keyFor(811))).state).toBe("superseded");
+    expect((await settle(keyFor(814))).state).toBe("done");
+    expect((await settle(keyFor(815))).state).toBe("done");
+  });
+
+  test("the generator is handed the parameters the key hashed (rounded), not the request's", async () => {
+    // 1.20004 m and 1.2 m share a key, so they must build the same mesh.
+    const params = { seed: 906, depth: 1.20004 };
+    const key = keyOf("boulder", { outline }, params);
+    expect(key).toBe(keyOf("boulder", { outline }, { seed: 906, depth: 1.2 }));
+    service.submit({ kind: "boulder", key, input: { outline }, params });
+    expect((await settle(key)).state).toBe("done");
+    const seen = readFileSync(requests, "utf8").split("\n").filter((l) => l.includes('"seed":906')).map((l) => JSON.parse(l));
+    expect(seen.length).toBe(1);
+    expect(seen[0].params).toEqual({ depth: 1.2, seed: 906 });
+  });
+
+  test("a malformed key escape is a 400, not a 500", () => {
+    expect(keyOfPath("/boulder%3A00000000000000aa")).toBe("boulder:00000000000000aa");
+    for (const bad of ["/%E0%A4%A", "/%", "/boulder:xyz"]) {
+      let status = 0;
+      try {
+        keyOfPath(bad);
+      } catch (e) {
+        status = (e as HttpError).status;
+      }
+      expect(status).toBe(400);
+    }
+  });
+
+  test("a body is decoded once, so a character split across chunks survives", async () => {
+    const bytes = new TextEncoder().encode(JSON.stringify({ name: "moss é ü 苔" }));
+    // Cut inside the three-byte character.
+    const at = bytes.length - 4;
+    async function* chunks() {
+      yield bytes.slice(0, at);
+      yield bytes.slice(at);
+    }
+    expect(await readBody(chunks())).toEqual({ name: "moss é ü 苔" });
+    let status = 0;
+    try {
+      await readBody(chunks(), 10);
+    } catch (e) {
+      status = (e as HttpError).status;
+    }
+    expect(status).toBe(413);
+  });
+
+  test("the body limit holds the largest soup the schema allows", () => {
+    const max = loadSchema("mushrooms")!.params.find((p) => p.key === "maxTriangles")!.max!;
+    // Every number at the widest the editor sends it: "-99.9999,".
+    const widest = 9 * max * "-99.9999,".length;
+    expect(BODY_LIMIT).toBeGreaterThan(widest + 100_000);
   });
 
   test("a missing tool is said at once", () => {

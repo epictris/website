@@ -77,7 +77,8 @@ Every pickable part carries a `GuideTag` (`editor/visuals/tags.ts`) as its `user
 The rings, the grid, the footprint and the draft are readouts and are never picked, which is the overlay's rule for a light's pool.
 
 `sync(view)` rebuilds only when the model's revision, the selection or the layers change (a hash, no allocation, so it may be called every frame).
-The draft is rebuilt only when it changes (`VisualsWorkspace.sync` compares a signature of its points and cursor, and the surface soup by identity), since each rebuild is fresh geometry.
+A drag moves the revision every frame, so the outlines are rebuilt every frame of one; the plane grid (up to `GRID_MAX_LINES` lines) is kept apart and rebuilt only when the level's extent, snapped out to whole major cells, changes.
+The draft is rebuilt only when it changes (`VisualsWorkspace.sync` takes the draft object it already holds as unchanged, then compares a numeric hash of its points and cursor, allocation-free, and the surface soup by identity), since each rebuild is fresh geometry; the loop tools keep one draft object until a point or the cursor moves (`SurfaceLoop.draft`, and Edit loop's draft kept with `patchLoopWorld`, itself kept per revision).
 The pixel-sized parts are resized per frame in place by `update(camera, heightPx)`, which runs from an `onBeforeRender` hook with the camera the frame is drawn through; `setResolution` is for a raycast with no frame drawn yet.
 None of it needs a DOM: the icons are `DataTexture`s and three's fat lines build and raycast in bun, so the `visuals:` cases count a small model's guides and pick a corner and an outline through a real raycast.
 
@@ -114,6 +115,7 @@ Chains and vines are not picked on the canvas here (the guides draw neither); th
   Over no surface the object stays where it last landed.
   A Shift press that never travels is the Shift+click it would otherwise have been.
 - Everything that is about the model rather than the view - Delete, duplicate, copy and paste (at the plane point under the pointer), nudge, merge and split, the outliner, the inspector, B (test from the plane point under the pointer) - is unchanged.
+  A mushroom patch duplicated or pasted together with its host follows the host's copy; one copied on its own lands in a body of its own with no host, and the status line says so ("copy the patch together with the model it grows on").
 
 ## Tools
 
@@ -167,17 +169,22 @@ Until its mesh arrives a rock with no mesh stands in as its outline extruded to 
 Clicks place points on the drawn surface under the pointer (`Scene3D.pickSurface`), on any scene geometry object but a patch, and a rubber band runs from the last point to the surface under the pointer.
 The loop stays on the model its first point was placed on, since a patch grows on one host; a click elsewhere says so.
 Enter or a click on the first point closes it, Backspace takes the last point back, and Esc drops the loop.
-Closing it collects the faces inside the loop (`selectSurface`, below) and, if there are any, adds as one undo step a patch object in the host's BODY: a mesh geometry object at the middle of those faces, unturned, its rect their extent and its depth their thickness, with a mushroom block whose loop is stored in the patch's own frame and whose host is the object painted on; it is selected and its generation asked for.
+Closing it collects the faces inside the loop (`selectSurface`, below) and, if there are any, adds as one undo step a patch object in the host's BODY: a mesh geometry object at the middle of those faces, unturned, its rect their extent and its depth their thickness, with a mushroom block whose loop is stored in the patch's own frame, with the side it was painted on (`facing`, the clicked faces' normals averaged), and whose host is the object painted on; it is selected and its generation asked for.
 A loop that covers nothing (every face under it steeper than `maxSlope`, 75° by default) stays open with a notice, for Backspace or Esc.
 A patch with no mesh draws nothing at all: its rect is only the extent of the surface, and a box of that size would stand over the rock the mushrooms are for.
 
 **The surface** (`editor/visuals/surfacePatch.ts`, ported from the fork) is judged on the loop's plane of best fit: a face is taken where its middle lands inside the loop, it faces the loop's side of the plane, it is no steeper than `maxSlope`, and it lies within a band of the plane (the loop's own deviation plus a third of its size), so the back of a rock and a wall behind it are left out.
 Faces are cut down to a step of a 48th of the loop's size (1 to 10 cm) so a big facet is cut at the painted edge; a soup over `maxTriangles` is cut more coarsely, and one over it with nothing left to cut is refused rather than searched for ever (the fork's loop could not end there).
-The surface is collected again from the host's CURRENT meshes every time the patch is generated, after the frame loop has rebuilt and placed the scene (it waits two animation frames: a body built this instant is not placed until its first frame), so a regenerated rock is followed by a regenerated patch on demand.
+The surface is collected again from the host's CURRENT meshes every time the patch is generated, so a regenerated rock is followed by a regenerated patch on demand (`collectPatch`).
+It is read only off a scene built from the model as it stands: Generate on a patch from the Level workspace's 2D view (which neither draws nor rebuilds the scene) switches to the Visuals workspace first, the scene is built for the current revision, one frame places it (a body built this instant is not placed until its first frame), the host's mesh is awaited, one more frame mounts it, and an edit in those frames (a drag, an undo, a job landing) abandons the collect with "the level changed while the patch's surface was being collected; Generate again" rather than read a scene that is not the model's.
+It refuses a host drawn as something its key does not name: a rock never generated ("generate the host first": it is drawn as its stand-in), a mesh object with no mesh, and a host whose mesh does not load (drawn as a grey placeholder).
 It is sent in the patch's own frame (`patchMatrix`, the frame `mountVisual` draws the mesh in), so the mushrooms land where the loop was painted however the patch has been placed since.
-The stored loop has no normals (the file holds points); which side of the loop's plane is out is taken from the host's middle.
+Which side of the loop's plane is out is the stored `facing`, turned into the world with the patch; a patch from a file that never stored one guesses it from the host's middle, which a loop on a wide face near its edge can get wrong.
 
 **Edit loop** on the Mushrooms group shows the patch's loop closed on the host, the covered faces shaded, and its points as handles: a drag moves a point to where the pointer meets the host's surface (off the host it stays put), one undo step per drag, and the shading follows on release.
+A press that does not leave the click's slop (`CLICK_SLOP_PX`) moves nothing and takes no undo step.
+On release the patch is fitted to what the loop covers now, as + Mushrooms placed it (`refitPatch`): its origin to the middle of the covered faces, its rect and depth to their extent, in its own turned, tipped and scaled frame, with the loop's points moved the other way so the loop stays where it was painted; the gizmo and the selection box stay on the patch.
+The facing is not changed by a drag: the side a loop was painted on does not move with one of its points.
 It moves points only: it cannot add or remove one, so a loop that needs another shape is painted again with **+ Mushrooms** (and the old patch deleted).
 Enter, Esc or a press anywhere but a point ends it (the press then goes on as a press).
 
@@ -190,9 +197,11 @@ A lone generated object's panel ends with its generator's group (`editor/visuals
   - `queued` or `generating N s` while the object's job is under way;
   - `failed:` with the check that refused it (the validator lines that say FAIL, at most three, the whole message in the tooltip), and for a rock the remedy, "another seed or a looser tolerance may pass"; a request the service refused (a bad parameter, a missing tool) or never answered, and a job the dev server lost by restarting ("has no record of this job (restarted?); Generate again"), read as `failed` too;
   - `superseded` when a newer request for the object stopped the job;
+  - "the dev server restarted: press Generate again" when the job was lost with the server that ran it (not `failed`: the generator said nothing about the rock);
   - `no host` for a patch whose host is gone, or `cannot generate` for a rock whose outline is not a polygon or rect;
   - `stale: never generated` for a block with no `mesh`, and `stale` in the warning colour once the object is no longer what its mesh was made from;
   - `stale: file missing` when the key is current but the service has no file for it (its `GET /api/generate/<key>` is a 404: a level generated on another machine, or a `public/generated/` directory deleted); Generate makes it again;
+  - `stale: invalid value` when a parameter or the outline holds a number that is not finite, of which no key can be made (a field never writes one; a hand-edited file could), said rather than thrown out of the frame loop;
   - else the mesh's triangles and size (`7,504 triangles · 1.5 MB`), asked of the service once per key, or `generated` until it answers.
 
   A failure or supersede is shown only while the object still holds the content it was asked for, so an edit since reads as plain `stale`;
@@ -206,6 +215,8 @@ The label is the key's words and its unit (`depth (m)`, `slab yaw°`), cut with 
 Lengths are in METRES here, the schema's unit, where the rest of the panel shows scene pixels: the steps, ranges and docs are all stated in metres (the file stores them in pixels like every length).
 Only values that differ from the default are written (`withParam`): setting a field back to its default, or clearing it, removes the key.
 
+A generated object's `mesh` and `kind` pickers, higher up the panel, are shown but not offered, with a hint: its mesh is its generator's, and a key picked by hand would make it stale in silence and be overwritten by the next Generate.
+
 The outliner row of a generated object carries the same word as a badge (`generating`, `queued`, `failed`, `stale`), and its body's row the loudest of its objects', so a collapsed body still says it holds something stale.
 The badge is computed from the model and the jobs alone, so a current key whose file is missing shows on the panel's status line and not in the outliner.
 
@@ -214,14 +225,16 @@ The badge is computed from the model and the jobs alone, so a current key whose 
 A request is exactly what the key is made from: `generatorInput` (the rock's outline, or the patch's loop and a description of its host), the parameters that differ from the defaults, and the schema version this build runs, plus a patch's surface soup ([generators](generators.md#the-editors-side)).
 The job client (`editor/visuals/jobs.ts`, `GeneratorJobs`) submits it, polls the job (every 250 ms at first, backing off to once a second), and when the mesh is there puts its key on the object as ONE undo step, bringing the block's `version` up to the one it was made under; nothing else about the object changes.
 It does that only if the object is still there and would still be generated under that very key; otherwise the result simply waits in the service's cache for the object to come back round to it.
-A result that lands during a drag waits for the drag to end (the frame loop's `jobs.flush`), so an undo step is never pushed into the middle of a gesture.
+A result that lands during a gesture waits for it to end (the frame loop's `jobs.flush`): a drag, a gizmo drag (three's own, which never sets the editor's `drag`) or a held arrow's nudge run, so an undo step is never pushed into the middle of one.
+The swap is an outside event rather than the author's edit, so it does not clear the redo stack: an author who undid something, then saw a rock land, can still redo it.
+When the object already names the key (a mesh generated for a key whose file was missing), nothing in the model moves; the cached failure to load it is forgotten and the scene rebuilt, so the new file is drawn.
 A newer Generate for the same object stops the client following the older job, and tells the service, which stops it unless it is past its bake.
 `failed` is an ordinary outcome: the boulder's validators are strict ([generators](generators.md#jobs), "Failures"), and a plain 2 x 1 m rectangle fails its centre slice at the default tolerance; the panel says which check failed, and another seed or a much looser `tolerance` (it also sets the remesh voxel, so the deviation grows with it: 0.05 m still failed at 0.053, 0.1 m passed) is the answer.
 
 **Job state lives in the page.**
 A reload forgets which object was waiting on which job: the service carries on and publishes the mesh into its cache, but nothing puts its key on the object, which reads `stale: never generated` (or `stale`) until Generate is pressed again.
 That Generate joins the job if it is still running, or finds the mesh at once if it has landed, so the cost is the click, not a second Blender run.
-A job lives only as long as the dev server; a restart mid-job reads as `failed` with the reason.
+A job lives only as long as the dev server, which kills its Blender on the way out (a restart or Ctrl+C); a restart mid-job reads as "the dev server restarted: press Generate again", and a poll that goes unanswered for a moment is asked again first.
 
 ## Not in Visuals
 
@@ -236,7 +249,7 @@ Each of these is the overlay's, and the guides do not draw it, so it is not offe
 
 | Key | Does |
 |---|---|
-| **W** | switch workspace |
+| **W** | switch workspace (once per press: a held key's repeats are ignored, as they are for F and Home) |
 | **F** | frame the selection or the level (Visuals) |
 | **Home** | head on (either workspace resets its own view) |
 | Ctrl+Enter | generate the selected generated object |
@@ -250,7 +263,7 @@ Each of these is the overlay's, and the guides do not draw it, so it is not offe
 - `editor/visuals/surfaceDrop.ts`: the drop's arithmetic.
 - `editor/visuals/surfacePatch.ts`: `frameOf`, `collect`, `selectSurface`, `minUpOf`, the patch frame (`patchMatrix`, `loopPointToWorld`, `worldToLoopPoint`) and `soupInFrame`.
 - `editor/visuals/surfaceLoop.ts`: `SurfaceLoop`, the loop being painted, and `closedDraft` for Edit loop.
-- `editor/visuals/generatorEdits.ts`: the model edits the tools make (`rockSource`, `existingRock`, `rockFor`, `patchFor`, `objectPose`).
+- `editor/visuals/generatorEdits.ts`: the model edits the tools make (`rockSource`, `existingRock`, `rockFor`, `patchFor`, `refitPatch`, `objectPose`).
 - `editor/visuals/jobs.ts`: `GeneratorJobs`, the service's client, and `missingTools`.
 - `editor/visuals/generatorPanel.ts`: `buildGeneratorGroup` and its pure half (`withParam`, `clampParam`, `hexOfLinear`/`linearOfHex`, `nextSeedParams`, `paramIssues`, `paramsPayload`/`parseParamsPayload`, `generatorStatus`, `generatorBadge`, `paramLabel`).
 - `editor/visuals/paramSchema.ts`: `generatorInput`, `expectedKey`, `wantedKey` (the key at the version this build runs) and `isStale`.
@@ -261,5 +274,6 @@ Each of these is the overlay's, and the guides do not draw it, so it is not offe
 `cli render3d`'s `visuals:` cases cover the pose seeding and its keeping across a switch, which guide a click at a corner means (through a real raycast of the guides), the drop's arithmetic, a move through z, and the boxes **F** frames.
 The scene cannot be built headlessly, so the press routing, the gizmo, the drop onto a real model and every look were verified by driving `/editor` through the CDP harness; how any of it looks, the line and sprite sizes on a real canvas and the render order against transparent materials need the page.
 
-For the generators, the `generator:` cases cover the surface a loop collects on a box (area, triangle count, the slope filter, the band, the cap), the patch frame against the one `mountVisual` builds, the objects `+ Rock` and `+ Mushrooms` add and what they save as, the panel's parameter writes (the `stripDefaults` round trip through the setters, clamping, paste, a Min over its Max), the status line, and the job client against a scripted service (one swap per finished job, supersede, a failure keeps the model, a result waits out a drag, a deleted or edited object gets nothing, a 404 for a mesh key read as a missing file).
+For the generators, the `generator:` cases cover the surface a loop collects on a box (area, triangle count, the slope filter, the band, the cap), the patch frame against the one `mountVisual` builds, the objects `+ Rock` and `+ Mushrooms` add and what they save as (the facing stored and not scaled), Edit loop's re-fit in a turned, tipped, scaled frame, the staleness of a patch tipped or scaled alone and of a primitive host re-textured, the panel's parameter writes (the `stripDefaults` round trip through the setters, clamping, paste, a Min over its Max), the status line (lost to a restart, an invalid value said without throwing), and the job client against a scripted service (one swap per finished job, supersede, a failure keeps the model, a result waits out a drag, a deleted or edited object gets nothing, a 404 for a mesh key read as a missing file, a job lost to a restart and unanswered polls retried); a `visuals:` case holds the grid's survival across a drag and the draft kept while still.
+The gizmo and nudge gates on a landing job, the kept redo stack, the scene rebuild after a forgotten failed load, the collect's workspace switch and refusals, the loop point's slop and the disabled mesh picker are the editor's wiring and were driven in the page.
 They cannot see the scene: the click on an outline, the loop painted on a real rock, the surface collected from a mesh the scene has just rebuilt, the one-undo-step claims, the panel's layout and the look of a rock or a patch were verified by driving `/editor` through the CDP harness with real Blender runs (2026-09-25), and the look is the owner's to judge.

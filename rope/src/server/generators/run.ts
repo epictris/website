@@ -62,6 +62,34 @@ export class Cancelled extends Error {
   }
 }
 
+// Every generator process group alive in this process, by the group leader's
+// pid. A run is spawned DETACHED (its own process group, so Blender goes down
+// with the Python that started it), which also means Ctrl+C in the dev
+// server's terminal - delivered to the terminal's foreground group - never
+// reaches it, and a dev-server restart forgets it: a Blender left running for
+// minutes, beside the one the restarted server starts. `killLiveGroups` is how
+// the service ends them all (see `generatorService`).
+const liveGroups = new Set<number>();
+
+function signalGroup(pid: number, signal: NodeJS.Signals): void {
+  try {
+    process.kill(process.platform === "win32" ? pid : -pid, signal);
+  } catch {
+    // already gone
+  }
+}
+
+// Signal every live generator group at once. Synchronous, so it may run from
+// a process `exit` handler, where nothing asynchronous happens any more.
+export function killLiveGroups(signal: NodeJS.Signals = "SIGKILL"): number {
+  for (const pid of liveGroups) signalGroup(pid, signal);
+  return liveGroups.size;
+}
+
+export function liveGroupCount(): number {
+  return liveGroups.size;
+}
+
 export interface RunOptions {
   signal?: AbortSignal;
   /** Called once, when the run prints BAKE_MARKER. */
@@ -112,12 +140,10 @@ export async function runGenerator<Input>(
     let settled = false;
     let reason: Error | null = null;
 
+    const pid = child.pid;
+    if (pid !== undefined) liveGroups.add(pid);
     const killGroup = (signal: NodeJS.Signals) => {
-      try {
-        if (child.pid !== undefined) process.kill(process.platform === "win32" ? child.pid : -child.pid, signal);
-      } catch {
-        // already gone
-      }
+      if (pid !== undefined) signalGroup(pid, signal);
     };
     const stop = (why: Error) => {
       if (reason) return;
@@ -157,6 +183,9 @@ export async function runGenerator<Input>(
     };
     child.on("error", (e) => finish(new Error(`${command.file}: ${e.message}`)));
     child.on("close", (code, signal) => {
+      // The leader is gone; a grandchild it left behind is not tracked by it
+      // any more, but the grace kill of a cancel still reaches the group.
+      if (pid !== undefined) liveGroups.delete(pid);
       if (pending) options.onLine?.(pending);
       if (reason instanceof Cancelled) return finish(reason);
       const fallback = reason?.message ?? `exit ${code ?? signal}`;

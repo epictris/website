@@ -92,7 +92,7 @@ A geometry object whose mesh is **generated** (a boulder fitted to an outline, o
   "kind": "boulder",
   "version": 1,
   "params": { "depth": 120, "weathering": 0.5 },
-  "patch": { "host": 2, "points": [{ "x": -20, "y": 10, "z": 3 }] }
+  "patch": { "host": 2, "points": [{ "x": -20, "y": 10, "z": 3 }], "facing": { "x": 0, "y": -0.1047, "z": 0.9945 } }
 }
 ```
 
@@ -105,6 +105,9 @@ A geometry object whose mesh is **generated** (a boulder fitted to an outline, o
   The loop is in the object's frame rather than the body's because the editor re-origins a body under its objects, and a loop stated in the body's frame would have to be rewritten, through a rotation and so not exactly, every time it did.
   The editor resolves `host` to an item on load and rewrites it on save from wherever the host then is, so reordering a body cannot leave it naming the wrong object.
   An index that names no other geometry object loads as a patch with no host (with a warning); the loop is kept, and a patch saved with no host writes no `host`.
+  `facing` is which side of the loop's plane the loop was painted on: a unit vector in the same frame (y down, as the points), the mean of the normals of the faces it was clicked on, written when the loop is closed at a ten-thousandth.
+  It is a direction, so it is NOT scaled px <-> m, and it is part of the mesh key.
+  A patch saved before it was stored has none; the editor then guesses the side from the host's middle, which a loop near a wide face's edge can get wrong.
 - A boulder's other input is the object's own `shape`, so nothing about the outline is stored in the block.
 
 `mesh` is then the key of the generated file, `boulder:<hash>` or `mushrooms:<hash>`, derived from the block and the outline or loop (see [**Generated meshes**](render3d.md#generated-meshes)).
@@ -114,6 +117,7 @@ It is appearance and nothing else, like the rest of the object: a regenerated ro
 A level with no generated object saves byte-identically, which `cli render3d` holds `levels/ball.json` to; the `generator:` cases there hold the block's px/m trip, the host index, the clipboard, the schemas and the key.
 The block is authored in the editor's Visuals workspace (**+ Rock**, **+ Mushrooms** and their panels, [editor-visuals](editor-visuals.md#rocks-and-mushrooms)), and the files it names are made by the dev server's generator service ([generators](generators.md)).
 They are dev-only for now (`public/generated/`, gitignored), so a level holding a generated object draws its stand-in, or nothing for a patch, wherever the file is not.
+A local `vite build` keeps in `dist` only the generated meshes a registered level names (`generatedMeshesInBuild` in `vite.config.ts`), but a deploy builds from a fresh checkout that has none.
 
 A **light object** (`LightObjectData`, `type: "light"`) sits in a body like any other scene object and rides its pose - see [**Light and air**](lighting-and-surfaces.md#light-and-air).
 Its fields, and what `scaleLevelData` does to each:

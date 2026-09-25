@@ -6,7 +6,7 @@ import * as THREE from "three";
 import { Vec2 } from "../../engine/vec2";
 import { threeY } from "../../render3d/space";
 import { cloneShape, defaultVisual, type EdItem } from "../model";
-import { loadSchema } from "./paramSchema";
+import { loadSchema, roundParam } from "./paramSchema";
 import { patchMatrix, worldToLoopPoint, type ObjectPose } from "./surfacePatch";
 
 // The collision outline a rock is fitted to, from what was clicked: a scene
@@ -90,14 +90,24 @@ export const MIN_PATCH_EXTENT = 0.05;
 // already collected). Its origin is the middle of the soup's box, unturned, so
 // the mesh is placed by an ordinary position and depth and turns about its own
 // centre; its rect is the soup's extent (the fork's placement). The loop is
-// stored in the patch's own frame (see `EdPatch.points`). No mesh yet.
-export function patchFor(host: EdItem, id: number, loop: readonly THREE.Vector3[], soup: Float32Array): EdItem {
+// stored in the patch's own frame (see `EdPatch.points`), and with it which
+// side of the loop's plane it was painted on: `facing`, the painted faces'
+// normals summed (world), stored as a unit vector in the patch's frame at the
+// key's resolution. No mesh yet.
+export function patchFor(
+  host: EdItem,
+  id: number,
+  loop: readonly THREE.Vector3[],
+  soup: Float32Array,
+  facing: THREE.Vector3,
+): EdItem {
   const schema = loadSchema("mushrooms")!;
   const box = new THREE.Box3().setFromArray(soup);
   const origin = box.getCenter(new THREE.Vector3());
   const extent = box.getSize(new THREE.Vector3());
   const pose: ObjectPose = { x: origin.x, y: threeY(origin.y), z: origin.z, rot: 0, rotX: 0, rotY: 0, scale: 1 };
   const inverse = patchMatrix(pose).invert();
+  const side = facing.clone().transformDirection(inverse);
   return {
     ...host,
     id,
@@ -121,8 +131,47 @@ export function patchFor(host: EdItem, id: number, loop: readonly THREE.Vector3[
         kind: "mushrooms",
         version: schema.version,
         params: {},
-        patch: { hostId: host.id, points: loop.map((p) => worldToLoopPoint(inverse, p)) },
+        patch: {
+          hostId: host.id,
+          points: loop.map((p) => worldToLoopPoint(inverse, p)),
+          // y down, as the points are stored.
+          facing: { x: roundParam(side.x), y: roundParam(-side.y), z: roundParam(side.z) },
+        },
       },
     },
+  };
+}
+
+// A patch re-fitted to the surface its loop covers NOW, after Edit loop moved
+// points: its origin at the middle of the covered faces' box and its rect and
+// depth their extent, as `patchFor` placed it, with its turn, tilt and scale
+// kept. `frame` is the patch's frame to three's world as it is drawn
+// (`patchMatrix`) and `soup` the covered faces in that world. Moving the origin
+// by `c` (in the patch's own frame) moves every loop point by `-c` in it, so
+// the loop stays where it was painted. Null for an empty soup.
+export function refitPatch(
+  item: EdItem,
+  frame: THREE.Matrix4,
+  soup: Float32Array,
+): { pos: Vec2; offsetZ: number; w: number; h: number; depth: number; points: { x: number; y: number; z: number }[] } | null {
+  const points = item.visual.generator?.patch?.points;
+  if (!points || soup.length < 9) return null;
+  const inverse = frame.clone().invert();
+  const box = new THREE.Box3();
+  const v = new THREE.Vector3();
+  for (let i = 0; i + 2 < soup.length; i += 3) box.expandByPoint(v.set(soup[i]!, soup[i + 1]!, soup[i + 2]!).applyMatrix4(inverse));
+  const c = box.getCenter(new THREE.Vector3());
+  const size = box.getSize(new THREE.Vector3());
+  const delta = c.clone().applyMatrix4(frame).sub(new THREE.Vector3().applyMatrix4(frame));
+  return {
+    // Three's world y is up, the model's down.
+    pos: item.pos.add(new Vec2(delta.x, -delta.y)),
+    offsetZ: item.visual.offsetZ + delta.z,
+    w: Math.max(MIN_PATCH_EXTENT, size.x),
+    h: Math.max(MIN_PATCH_EXTENT, size.y),
+    depth: Math.max(MIN_PATCH_EXTENT, size.z),
+    // Stored y down: the local y (up) of a point moves by -c.y, so its stored
+    // y moves by +c.y.
+    points: points.map((p) => ({ x: p.x - c.x, y: p.y + c.y, z: p.z - c.z })),
   };
 }

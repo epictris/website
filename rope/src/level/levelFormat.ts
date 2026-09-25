@@ -859,6 +859,13 @@ export interface GeneratorPatchData {
   // not exactly - every time that happened. The generated mesh is placed in
   // this frame anyway.
   points: { x: number; y: number; z: number }[];
+  // Which side of the loop's plane the loop was painted on: a unit vector in
+  // this object's frame (y down, as the points), the mean of the normals of the
+  // faces it was clicked on. A direction, so it is NOT scaled with the lengths.
+  // Absent in a file saved before it was stored; the editor then guesses the
+  // side from the host's middle, which a loop near a wide face's edge can get
+  // wrong.
+  facing?: { x: number; y: number; z: number };
 }
 
 // A LIGHT: a torch on a wall, a shaft coming down through a grate, the glow off
@@ -3409,9 +3416,11 @@ export function scaleObject(o: SceneObjectData, factor: number): SceneObjectData
 
 // A generator block's lengths are its length PARAMETERS, by the schema's unit,
 // and a patch's loop, which is a set of positions. The kind, the version, the
-// flags, the counts, the angles and the host's index are not lengths. Always a
-// copy, like every other nested thing `scaleObject` returns.
+// flags, the counts, the angles, the host's index and the loop's facing (a
+// direction) are not lengths. Always a copy, like every other nested thing
+// `scaleObject` returns.
 function scaleGenerator(g: GeneratorData, factor: number): GeneratorData {
+  const f = g.patch?.facing;
   return {
     kind: g.kind,
     version: g.version,
@@ -3421,6 +3430,7 @@ function scaleGenerator(g: GeneratorData, factor: number): GeneratorData {
           patch: {
             ...(g.patch.host !== undefined ? { host: g.patch.host } : {}),
             points: g.patch.points.map((p) => ({ x: p.x * factor, y: p.y * factor, z: p.z * factor })),
+            ...(f !== undefined ? { facing: { x: f.x, y: f.y, z: f.z } } : {}),
           },
         }
       : {}),

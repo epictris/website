@@ -41,7 +41,7 @@ import {
 } from "../../render3d/generated";
 import type { GeneratedMeta } from "../../render3d/generatedMeta";
 import { findTools, toolVersions, type Tools, type ToolVersions } from "./paths";
-import { Cancelled, makeJobDir, runGenerator, type Generator, type GeneratorKind } from "./run";
+import { Cancelled, killLiveGroups, makeJobDir, runGenerator, type Generator, type GeneratorKind } from "./run";
 
 export const GENERATORS: Record<GeneratorKind, Generator<unknown>> = {
   boulder: boulder as Generator<unknown>,
@@ -86,8 +86,13 @@ interface Job {
   hash: string;
   input: unknown;
   params: ParamValues;
-  /** The editor object this job generates for; a newer request for it supersedes this one. */
-  object?: string;
+  /**
+   * The editor objects waiting on this job. A key is content, so two objects
+   * can wait on one job (a rock duplicated mid-generation is a second object
+   * with the same key); a newer request from one of them takes it out of the
+   * set, and the job is stopped only when nobody is left waiting on it.
+   */
+  objects: Set<string>;
   state: JobState;
   submitted: number;
   started?: number;
@@ -109,13 +114,20 @@ export interface Meta extends GeneratedMeta {
 export const generatedPath = (root: string, kind: string, hash: string) =>
   join(root, "public", GENERATED_ROOT.slice(1), kind, hash);
 
-// The request body cap (characters): a mushroom patch's 40 000-triangle soup,
-// as the fork allowed it. A boulder's outline is bounded by its own validation.
-const BODY_LIMIT = 12_000_000;
+// The request body cap (bytes), sized from the schema rather than guessed: the
+// largest soup the mushroom schema allows (`maxTriangles`' own max, nine
+// numbers a triangle) at the widest a soup number prints - the editor rounds to
+// a tenth of a millimetre within 100 m, "-99.9999," being 9 bytes, 10 allowed -
+// plus a megabyte for the loop, the host and the parameters. 200 000 triangles
+// is 19 MB; a boulder's outline is bounded by its own validation.
+const SOUP_NUMBER_BYTES = 10;
+const BODY_SLACK = 1_000_000;
+export const BODY_LIMIT =
+  ((paramSpec(loadSchema("mushrooms")!, "maxTriangles")!.max ?? 0) * 9 * SOUP_NUMBER_BYTES) + BODY_SLACK;
 
 const seconds = (ms: number) => Math.round(ms / 100) / 10;
 
-class HttpError extends Error {
+export class HttpError extends Error {
   constructor(
     readonly status: number,
     message: string,
@@ -179,16 +191,19 @@ export class GeneratorService {
 
     if (req.object !== undefined) this.supersede(req.object, key);
     if (existsSync(join(generatedPath(this.root, kind, hash), GENERATED_MESH_FILE))) return { key, state: "done" };
+    // A request naming no object is a waiter that never leaves (nothing can
+    // supersede it), held as the empty name.
+    const waiter = req.object ?? "";
     const current = this.jobs.get(key);
     if (current && (current.state === "queued" || current.state === "running")) {
-      current.object = req.object ?? current.object;
+      current.objects.add(waiter);
       return { key, state: current.state };
     }
     const missing = gen.missing(this.findToolsNow());
     if (missing) throw new HttpError(503, missing);
 
     const job: Job = {
-      key, kind, hash, input, params, object: req.object, state: "queued", submitted: Date.now(), pastBake: false,
+      key, kind, hash, input, params, objects: new Set([waiter]), state: "queued", submitted: Date.now(), pastBake: false,
     };
     this.jobs.set(key, job);
     this.queue.push(job);
@@ -224,6 +239,15 @@ export class GeneratorService {
     }
   }
 
+  /**
+   * Stops every queued and running job, past the bake or not: the server is
+   * going away and nothing will be left to publish a result or answer a poll.
+   * The running job's process group is killed (see `run.ts`).
+   */
+  shutdown(): void {
+    for (const job of [...this.queue, ...(this.running ? [this.running] : [])]) this.stop(job, "the dev server stopped");
+  }
+
   /** Cancels a queued or running job outright, past the bake or not: the author asked. */
   cancel(key: string): Status | null {
     const job = this.jobs.get(key);
@@ -231,10 +255,14 @@ export class GeneratorService {
     return this.status(key);
   }
 
-  /** Every job still pending for `object` under another key stops, unless it is past the bake. */
+  /**
+   * `object` no longer waits on any job under another key. A job nobody is
+   * left waiting on stops, unless it is past the bake; one another object still
+   * waits on runs on for it, and answers that object's polls as ever.
+   */
   private supersede(object: string, key: string): void {
     for (const job of this.jobs.values()) {
-      if (job.object !== object || job.key === key) continue;
+      if (job.key === key || !job.objects.delete(object) || job.objects.size > 0) continue;
       if (job.state === "queued" || (job.state === "running" && !job.pastBake)) this.stop(job, "superseded by a newer request");
     }
   }
@@ -273,7 +301,11 @@ export class GeneratorService {
     this.log(`generating ${job.key}`);
     try {
       jobDir = await makeJobDir(job.kind);
-      const result = await runGenerator(gen, tools, this.root, job.input, job.params, schema, jobDir, {
+      // The generator is handed the parameters in the form the key hashed
+      // (rounded to PARAM_RESOLUTION, defaults stripped): two requests within a
+      // ten-thousandth of each other share a key, so they must build the same
+      // mesh, and the first one's unrounded value would otherwise be baked in.
+      const result = await runGenerator(gen, tools, this.root, job.input, canonicalParams(job.params, schema), schema, jobDir, {
         signal: job.abort.signal,
         onBake: () => (job.pastBake = true),
       });
@@ -337,17 +369,36 @@ function send(res: ServerResponse, status: number, body: unknown): void {
   res.end(JSON.stringify(body));
 }
 
-async function readBody(req: IncomingMessage): Promise<unknown> {
-  let body = "";
+// The body as JSON. Chunks are kept as bytes and decoded once at the end: a
+// multi-byte character split across two chunks decodes as two replacement
+// characters when each chunk is made a string on its own.
+export async function readBody(req: AsyncIterable<Uint8Array | string>, limit = BODY_LIMIT): Promise<unknown> {
+  const chunks: Buffer[] = [];
+  let bytes = 0;
   for await (const chunk of req) {
-    body += chunk;
-    if (body.length > BODY_LIMIT) throw new HttpError(413, "The request is too large; select fewer faces.");
+    const b = typeof chunk === "string" ? Buffer.from(chunk) : Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength);
+    bytes += b.byteLength;
+    if (bytes > limit) throw new HttpError(413, "The request is too large; select fewer faces.");
+    chunks.push(b);
   }
   try {
-    return JSON.parse(body);
+    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
   } catch {
     throw new HttpError(400, "The request is not JSON.");
   }
+}
+
+// A key named in a URL path (`/api/generate/<key>`), or a 400: a malformed
+// escape (a lone `%`) is the client's mistake, not the server's.
+export function keyOfPath(path: string): string {
+  let key: string;
+  try {
+    key = decodeURIComponent(path.replace(/^\//, ""));
+  } catch {
+    throw new HttpError(400, "Not a mesh key (a malformed escape).");
+  }
+  if (!parseGeneratedKey(key)) throw new HttpError(400, "Not a mesh key.");
+  return key;
 }
 
 // State changes only from the editor's own page: a page on another origin could
@@ -361,12 +412,41 @@ function sameOrigin(req: IncomingMessage): boolean {
   }
 }
 
+// When the dev server's PROCESS ends - Ctrl+C, a kill, a crash - every
+// generator group goes with it: they run detached (run.ts), so the terminal's
+// Ctrl+C never reaches them on its own. Installed once per process, since a
+// restart configures the plugin again in the same process.
+//
+// A signal handler replaces the default of exiting, so each one kills the
+// groups, takes itself off, and re-raises the signal when no other handler is
+// left to act on it (vite may well have its own, which then ends the process).
+let exitHooked = false;
+function endGroupsOnExit(): void {
+  if (exitHooked) return;
+  exitHooked = true;
+  process.on("exit", () => killLiveGroups("SIGKILL"));
+  for (const signal of ["SIGINT", "SIGTERM"] as const) {
+    const onSignal = (): void => {
+      killLiveGroups("SIGKILL");
+      process.off(signal, onSignal);
+      if (process.listenerCount(signal) === 0) process.kill(process.pid, signal);
+    };
+    process.on(signal, onSignal);
+  }
+}
+
 export function generatorService(): Plugin {
   return {
     name: "generator-service",
     apply: "serve",
     configureServer(server) {
       const service = new GeneratorService(server.config.root, (line) => server.config.logger.info(`[generators] ${line}`));
+      // A restart (any edit to a config dependency, `levelFormat.ts` among
+      // them) closes this server and configures a new one with a new service:
+      // this one's jobs end with it, rather than leave a Blender running that
+      // no poll can ever reach.
+      server.httpServer?.once("close", () => service.shutdown());
+      endGroupsOnExit();
 
       server.middlewares.use("/api/generators", (req, res) => {
         if (req.method !== "GET") return send(res, 405, { error: "Use GET." });
@@ -384,8 +464,7 @@ export function generatorService(): Plugin {
             if (!sameOrigin(req)) return send(res, 403, { error: "Generate from this editor's origin." });
             return send(res, 200, service.submit(await readBody(req)));
           }
-          const key = decodeURIComponent(path.slice(1));
-          if (!parseGeneratedKey(key)) return send(res, 400, { error: "Not a mesh key." });
+          const key = keyOfPath(path);
           if (req.method === "GET") {
             const status = service.status(key);
             return status ? send(res, 200, status) : send(res, 404, { error: "No such job." });

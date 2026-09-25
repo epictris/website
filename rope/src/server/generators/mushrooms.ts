@@ -34,9 +34,11 @@ function checkKeyInput(value: unknown): MushroomsInput {
   const v = value as MushroomsInput | null;
   if (!v || !Array.isArray(v.loop) || v.loop.length < 3 || !v.loop.every((p) => finiteVector(p, 3)))
     throw new Error("input.loop must be three or more [x, y, z] points.");
+  if (v.facing !== undefined && !finiteVector(v.facing, 3))
+    throw new Error("input.facing, when given, must be an [x, y, z] direction.");
   const h = v.host;
-  if (!h || (h.kind !== "primitive" && h.kind !== "mesh") || typeof h.mesh !== "string" || !finiteVector(h.pose, 7))
-    throw new Error("input.host must be { kind, mesh, pose: [x, y, z, rotZ, rotX, rotY, scale], ... }.");
+  if (!h || (h.kind !== "primitive" && h.kind !== "mesh") || typeof h.mesh !== "string" || !finiteVector(h.frame, 12))
+    throw new Error("input.host must be { kind, mesh, frame: [the top three rows of the host's frame in the patch's], ... }.");
   return v;
 }
 // Below this the surface has no area to grow on (m^2).

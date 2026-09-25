@@ -95,6 +95,7 @@ import {
   type NoteData,
   type ShapeData,
   type GeneratorData,
+  type GeneratorPatchData,
 } from "../level/levelFormat";
 import type { GeneratorKind, ParamValue } from "../level/generatorParams";
 import {
@@ -907,6 +908,12 @@ export interface EdPatch {
   // object's own plane. Points are replaced, never mutated, so a clone copies
   // the array and shares the points.
   points: readonly EdPoint3[];
+  // Which side of the loop's plane it was painted on: a unit vector in the
+  // patch's own frame, y DOWN like the points, dimensionless (never scaled).
+  // The mean of the painted faces' normals, written when the loop is closed;
+  // null for a patch loaded from a file that did not store it, whose side is
+  // then guessed from the host's middle. Replaced, never mutated.
+  facing: EdPoint3 | null;
 }
 
 export interface EdPoint3 {
@@ -925,7 +932,7 @@ export function cloneGenerator(g: EdGenerator): EdGenerator {
     kind: g.kind,
     version: g.version,
     params,
-    patch: g.patch ? { hostId: g.patch.hostId, points: [...g.patch.points] } : null,
+    patch: g.patch ? { hostId: g.patch.hostId, points: [...g.patch.points], facing: g.patch.facing } : null,
   };
 }
 
@@ -938,11 +945,17 @@ export function cloneVisual(v: EdVisual): EdVisual {
 // After a copy (`idOf` maps each original item id to its copy's), point every
 // copied patch at its host's COPY, or at nothing when the host was not copied:
 // the original host is in another body, where a patch cannot name it.
-export function remapPatchHosts(items: readonly EdItem[], idOf: ReadonlyMap<number, number>): void {
+// Returns how many copied patches had a host and lost it, for the editor to
+// say (a patch duplicated on its own lands in a body of its own, hostless).
+export function remapPatchHosts(items: readonly EdItem[], idOf: ReadonlyMap<number, number>): number {
+  let orphaned = 0;
   for (const it of items) {
     const patch = it.visual.generator?.patch;
-    if (patch && patch.hostId !== 0) patch.hostId = idOf.get(patch.hostId) ?? 0;
+    if (!patch || patch.hostId === 0) continue;
+    patch.hostId = idOf.get(patch.hostId) ?? 0;
+    if (patch.hostId === 0) orphaned++;
   }
+  return orphaned;
 }
 
 // On-disk generator block -> the editor's, host unresolved (the caller knows the
@@ -954,7 +967,13 @@ function edGenerator(g: GeneratorData): EdGenerator {
     kind: g.kind,
     version: g.version,
     params,
-    patch: g.patch ? { hostId: 0, points: g.patch.points.map((p) => ({ x: p.x, y: p.y, z: p.z })) } : null,
+    patch: g.patch
+      ? {
+          hostId: 0,
+          points: g.patch.points.map((p) => ({ x: p.x, y: p.y, z: p.z })),
+          facing: g.patch.facing ? { x: g.patch.facing.x, y: g.patch.facing.y, z: g.patch.facing.z } : null,
+        }
+      : null,
   };
 }
 
@@ -968,7 +987,16 @@ function generatorData(g: EdGenerator): GeneratorData {
     ...(params.length > 0
       ? { params: Object.fromEntries(params.map(([k, v]) => [k, Array.isArray(v) ? [...v] : v])) }
       : {}),
-    ...(g.patch ? { patch: { points: g.patch.points.map((p) => ({ x: p.x, y: p.y, z: p.z })) } } : {}),
+    ...(g.patch ? { patch: patchData(g.patch) } : {}),
+  };
+}
+
+// A patch's loop and facing as the file holds them (the host's index is
+// `toLevelData`'s), the facing only when there is one.
+function patchData(p: EdPatch): GeneratorPatchData {
+  return {
+    points: p.points.map((q) => ({ x: q.x, y: q.y, z: q.z })),
+    ...(p.facing ? { facing: { x: p.facing.x, y: p.facing.y, z: p.facing.z } } : {}),
   };
 }
 
@@ -2563,7 +2591,9 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
       const own = objects[indexOfItem.get(i.id)!];
       if (k === undefined || objects[k]!.type !== "geometry" || !own || own.type !== "geometry") continue;
       const g = own.generator!;
-      own.generator = { ...g, patch: { host: k, points: g.patch!.points } };
+      // The host first, as the file has always ordered it, then the loop and
+      // its facing as `patchData` wrote them.
+      own.generator = { ...g, patch: { host: k, ...g.patch! } };
     }
 
     return {

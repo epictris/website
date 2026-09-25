@@ -49,27 +49,31 @@ The probe runs once per server and again after any probe that found something mi
 
 ```json
 { "kind": "mushrooms", "key": "mushrooms:...",
-  "input": { "loop": [[x, y, z], ...], "host": { "kind": "mesh", "mesh": "boulder:...", "pose": [x, y, z, rotZ, rotX, rotY, scale] } },
+  "input": { "loop": [[x, y, z], ...], "facing": [x, y, z],
+             "host": { "kind": "mesh", "mesh": "boulder:...", "frame": [r00, r01, r02, tx, r10, r11, r12, ty, r20, r21, r22, tz] } },
   "soup": [x, y, z, x, y, z, ...], "params": { "density": 220 }, "object": "ball/geometry-18" }
 ```
 
 - `kind` is `boulder` or `mushrooms`, and `key` must be `<kind>:<16 hex digits>` (`parseGeneratedKey` in `src/render3d/generated.ts`).
 - `input` is the **key input**, exactly what `generatorInput` (`src/editor/visuals/paramSchema.ts`) builds for the object and what `generatedKey` hashes:
   a boulder's `{ outline }` is the object's local outline in metres, y up, 3 to 128 vertices within 100 m of the origin;
-  a patch's `{ loop, host }` is the painted loop in the patch's frame and the host as `PatchHost` describes it.
+  a patch's `{ loop, facing?, host }` is the painted loop in the patch's frame, the side of the loop's plane it was painted on (a unit vector in the patch's frame, y up; absent for a patch saved before it was stored), and the host as `PatchHost` describes it.
+  The host's `frame` is its whole frame in the patch's (the top three rows of the 4x4 affine matrix, row by row, so both objects' place, turn, tilt and scale are in it); a primitive host adds its outline or radius, depth, bevel, taper, `texture` and `projection`; a generated host that has never been generated adds `generator`, the key it would be generated under, so two such rocks are two hosts.
 - `soup` is a patch's alone: the host surface inside the loop as a flat triangle soup in the three.js frame relative to the patch origin, metres, collected by the editor at generation time.
   It is what Blender grows on, but it is derived from the key input and is not hashed.
 - `params` holds the values that differ from the schema's defaults (defaults are allowed and ignored by the key).
   They are checked by `validateParams` from `src/level/generatorParams.ts`, the editor's own validation, and every `<name>Min` / `<name>Max` pair by `validatePairs` after `mergeDefaults`.
   A `null` for a parameter whose default is `null` (the boulder's `tolerance`) means "derive it", as absent does.
-- `object` is optional: any string that names the editor object the mesh is for. A newer request for the same object under another key supersedes the older job (below).
+- `object` is optional: any string that names the editor object the mesh is for. A newer request for the same object under another key takes that object off the older job, which stops once no object waits on it (below).
 
 **The key is checked.**
 `expectedKey(kind, input, params)` in `service.ts` is `generatedKey(kind, <the schema's version>, input, params)`, and a request whose key differs is a 400 naming both: `The key boulder:0123456789abcdef does not match its content, which makes boulder:c82bc75873f0956b.`
 So the client must hash at the schema version the server runs (`loadSchema(kind).version`), not at an older version stored in a level; a level generated under an older version is stale and regenerates under the new one.
 
 The answer is `{ "key": ..., "state": "done" | "queued" | "running" }`: `done` at once when `public/generated/<kind>/<hash>/mesh.glb` exists, else the job's state (`running` when the queue was idle).
-A bad request is a 400 with `{ "error": ... }` naming each bad key and why; a missing tool is a 503 saying which; a body over 12 MB is a 413; a request from another origin is a 403.
+A bad request is a 400 with `{ "error": ... }` naming each bad key and why; a missing tool is a 503 saying which; a request from another origin is a 403.
+A body over `BODY_LIMIT` is a 413: the limit is sized from the mushroom schema's own `maxTriangles.max` (200 000 triangles, nine numbers each, at the 10 bytes the widest soup number takes at the editor's 0.1 mm rounding) plus a megabyte, 19 MB, so any soup the schema allows fits.
+The body is read as bytes and decoded once, so a character split across two network chunks survives.
 
 `GET /api/generate/<key>` answers a job's state:
 
@@ -81,6 +85,7 @@ A bad request is a 400 with `{ "error": ... }` naming each bad key and why; a mi
 `elapsed` is seconds waiting (queued), running (running), or what the run took (done, failed, superseded).
 `message` carries a failure (below) or why a job was superseded; `bytes` and `triangles` come with `done`.
 A key the server has not seen this life but whose mesh is on disk answers `done` from its `meta.json`; anything else is a 404.
+A path that is not a key, including a malformed escape (a lone `%`), is a 400.
 
 `DELETE /api/generate/<key>` cancels a queued or running job outright, past the bake or not, and answers its status.
 
@@ -92,6 +97,13 @@ A job writes its request to a scratch directory (`$TMPDIR/trisball-<kind>-*`), r
 The process group matters because `rockgen.py` starts Blender as its own child; killing Python alone would leave that Blender running.
 A failed run's scratch directory is kept, and the failure message says where.
 
+The generator is handed the parameters in the form the key hashed (`canonicalParams`: rounded to a ten-thousandth, defaults stripped), never the request's own spelling: two requests within a ten-thousandth of each other share a key, so they must build the same mesh.
+
+**A job lives as long as its server.**
+Because a run is its own process group, Ctrl+C in the dev server's terminal (delivered to the terminal's foreground group) never reaches it, and a restart forgets it; either used to leave Blender running for minutes beside the one the next server started.
+`run.ts` tracks every live group, and the service ends them: a restart (any edit to a config dependency, `levelFormat.ts` among them, restarts vite) closes the old HTTP server, whose `close` stops that service's queued and running jobs; the process's `exit`, `SIGINT` and `SIGTERM` kill every group (a signal handler then takes itself off and re-raises the signal when nothing else handles it, so Ctrl+C still ends the server).
+The editor's poll then meets a 404 and reads the job as `lost`, "the dev server restarted: press Generate again", not as a failure (see [The editor's side](#the-editors-side)).
+
 `meta.json` is:
 
 ```json
@@ -102,7 +114,9 @@ A failed run's scratch directory is kept, and the failure message says where.
 It is `GeneratedMeta` (`src/render3d/generatedMeta.ts`) plus `seconds`: `params` in the canonical form the key hashed (defaults stripped, keys sorted), `input` the key input.
 A patch's soup can run to megabytes and `meta.json` is read for every level that uses the mesh, so the soup sits beside it in `input.json` as `{ "soup": [...] }`.
 
-**Supersede.** A request carrying `object` stops every other queued or running job for that object, unless the job is past its bake: the geometry is then final, the bake is most of what is left, and the result is cached under its own key anyway.
+**Supersede.** A job holds the set of objects waiting on it: a key is content, so two objects can wait on one job (a rock duplicated mid-generation and generated again is a second object asking for the same key), and a request naming no object is a waiter that never leaves.
+A request carrying `object` takes that object off every other job; a queued or running job that nobody is left waiting on stops, unless it is past its bake: the geometry is then final, the bake is most of what is left, and the result is cached under its own key anyway.
+A job another object still waits on runs on and answers that object's polls as before.
 "Past the bake" is the run printing `GENERATOR: bake started` (`blender_build.py` at the start of the texture bake; `editor_patch.py` once the node group has been frozen).
 A stopped job's state is `superseded`, and its scratch directory is removed.
 
@@ -145,22 +159,32 @@ This is what it holds up of the contract.
   The editor runs `validateParams` and `validatePairs` itself first, and says what is wrong without a round trip.
 - **`input` is exactly `generatorInput`'s**, and a patch's `soup` is collected at generation time from the host's drawn meshes, in the patch's own frame (`patchMatrix` in `editor/visuals/surfacePatch.ts`, the frame `mountVisual` draws the mesh in), metres to 1e-4.
   `maxSlope` is applied there, as a face filter; `maxTriangles` bounds the cut before the request, and the editor checks `area * density` against `maxEstimate` before sending, with the server's own check behind it.
+- **The soup is read off a scene built from the model as it stands.**
+  The frame loop rebuilds the scene only while one is drawn, so a patch generated from the Level workspace's 2D view first switches to the Visuals workspace; the collect then builds the scene for the current revision, waits a frame for it to be placed, and abandons (with a status line) if the model changed in the frames it waited, rather than send a soup of an old pose under a new key.
+  It refuses a host drawn as something its key does not name: a generated rock never generated (its stand-in extrusion; "generate the host first"), a mesh object with no mesh, or a host whose mesh does not load (a grey placeholder).
+- **The key input's shape is part of the key.**
+  The schema `version` is the PARAMETERS' version and is bumped when a default changes; a change to what the key input holds (on 2026-09-25 a patch's host `pose` became its whole `frame` and `facing` was added) changes every key it touches by itself, with no version bump, and makes those objects stale.
+  That change was made before any patch was saved into a level; the pinned patch key in `cli render3d` was re-pinned for it and says so.
 - **`object`** is `<page>/<item id>`, the page part random per editor tab, so a newer request supersedes the older one for the same object in the same tab and never another tab's.
 - **Polling** starts at 250 ms and backs off to once a second (`POLL_FIRST_MS`, `POLL_MAX_MS` in `editor/visuals/jobs.ts`).
-  A 404 mid-job means the dev server restarted (a job lives as long as the server), and the panel says so.
+  A 404 mid-job means the dev server restarted or stopped (a job lives as long as the server, and the old one killed its Blender on the way out): the job is `lost`, and the panel says "the dev server restarted: press Generate again", not `failed`.
+  A poll that goes unanswered (a network error, the second a restart takes) is asked again, and the job is called lost only after `POLL_MISSES` (5) in a row.
 - **The panel asks for a current mesh's facts** (`GeneratorJobs.facts`, once per key per page) with `GET /api/generate/<key>`.
   A `done` answer gives the triangles and bytes the status line shows; a 404 means the service has neither a job nor a file for the key (a level generated on another machine, or a deleted `public/generated/` directory), and the panel reads `stale: file missing` until Generate makes it again.
 - **Job state lives in the page.**
   A reload forgets which object waits on which job; the service carries on and caches the result, and the next Generate of the same content joins the running job or finds the mesh at once.
 - **A finished mesh goes on its object once**, as one undo step, and only if the object is still there and its `wantedKey` is still that key.
   A result for content the object has since left stays in the cache, where the next Generate of that content finds it at once.
-  A result that lands during a drag waits for the drag to end.
+  A result that lands during any gesture waits for it to end: a drag, a gizmo drag (three's own, which the editor's `drag` never sees) or a held arrow's nudge run, each of which is one undo step a swap would split.
+  The swap is not the author's edit, so it keeps the redo stack (`beginAction({ keepRedo: true })`).
+  A key whose file failed to load earlier in the page (a missing file, then generated) has that failure forgotten (`forgetFailedMesh`) and the scene rebuilt, so the new file is fetched even when the object already names the key.
+- **A key that cannot be made** (a non-finite number in a parameter or an outline, which `generatedKey` refuses rather than hash) reads as `stale: invalid value` on the status line and `stale` in the outliner, and Generate says so; neither throws out of the frame loop. A field never writes one.
 - **`failed` is an ordinary outcome.**
   The panel leads with the validator lines that say FAIL and, for a rock, the remedy: another seed, or a looser `tolerance`.
   `tolerance` also sets the remesh voxel size, so the deviation grows with it: the 2 x 1 m rectangle failed its centre slice at 0.0418 with the default (0.04 m), at 0.0534 with 0.05 m, and passed with 0.1 m.
   Widen it well past the reported number, or move the seed on.
 
-**Staleness** is `isStale`: the stored `mesh` is not `expectedKey` of the object as it stands (its outline, its loop, its host's key and pose relative to the patch, its params, or its stored version changed since), or it has never been generated, or it cannot be (a patch whose host is gone).
+**Staleness** is `isStale`: the stored `mesh` is not `expectedKey` of the object as it stands (its outline; its loop or facing; its host's key, a primitive host's form, texture and lens, or the host's whole frame relative to the patch, so tipping or scaling either alone counts; its params; or its stored version changed since), or it has never been generated, or it cannot be (a patch whose host is gone).
 A stale object keeps drawing its last mesh; the editor never regenerates on its own.
 A regenerated rock makes the patches grown on it stale (their host's key moved), and each regrows on the new surface when it is generated.
 
@@ -229,7 +253,7 @@ The OKLab stops and shade tables stay constants; `capVariants` uses the first n 
 
 `bun run generators:check` (`scripts/generators-check.ts`) runs, and prints PASS, FAIL or SKIP with a reason for each:
 
-1. **Service cases** (`scripts/generators.test.ts`, `bun test`): request validation, the key check (the pinned `boulder:c82bc75873f0956b` accepted, a wrong key refused naming both, a patch's key blind to its soup), the failure formatter (the fork's three `.test.mjs` files, rewritten), the GLB triangle count, and the queue against a stand-in `python` that behaves like `rockgen.py` without Blender: one job at a time, supersede before and after the bake, cancel, a failure's verdicts.
+1. **Service cases** (`scripts/generators.test.ts`, `bun test`): request validation, the key check (the pinned `boulder:c82bc75873f0956b` accepted, a wrong key refused naming both, a patch's key blind to its soup), the failure formatter (the fork's three `.test.mjs` files, rewritten), the GLB triangle count, and the queue against a stand-in `python` that behaves like `rockgen.py` without Blender: one job at a time, supersede before and after the bake, a job two objects wait on running on until both have moved on, cancel, a failure's verdicts, the generator handed the rounded parameters the key hashed; plus a malformed key escape as a 400, a body decoded once across a split character, and the body limit holding the schema's largest soup.
 2. **Boulder params** (`tools/blender/boulders/test_params.py`): a request of the ball.json body 7 outline with no overrides becomes, field by field and type by type, the fork's `polygon.json` for that rock (`boulders/fixtures/ball-body-7.polygon.json`), apart from the two recipe changes the fork's server made after that rock was generated (`slabs` 10 became `round(area * 10)` = 8; `game_low_poly` was added); every other schema knob rides along at its default; plus the fork's slab-count cases, the auto tolerance and unknown keys.
 3. **Mushroom params** (`tools/blender/mushrooms/test_params.py`, standard library only): the add-on's defaults agree with `params.json`, and every parameter has somewhere to go.
 4. **End to end**, when the tools are here: a 1 m square outline through `rockgen.py` and Blender, and a 1 m square surface through the patch, each checked for a GLB with triangles in it.

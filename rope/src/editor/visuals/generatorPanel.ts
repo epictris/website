@@ -154,6 +154,12 @@ function size(bytes: number): string {
   return bytes >= 1e6 ? `${(bytes / 1e6).toFixed(1)} MB` : `${Math.round(bytes / 1024)} KB`;
 }
 
+// What the status line and the badge say when the key cannot be made at all: a
+// value that is not a finite number somewhere in what it is made of (a
+// parameter, an outline, a pose), which `generatedKey` refuses to hash. They
+// run every frame, so they say it rather than throw out of the frame loop.
+const INVALID: GeneratorStatus = { text: "stale: invalid value (a parameter or the outline is not a finite number)", tone: "warn" };
+
 // What the object's generation is doing, in one line: the job it is waiting
 // for, else whether its mesh matches what it would be generated from now, else
 // what the mesh is.
@@ -165,6 +171,20 @@ export function generatorStatus(
   // Whether the service has no file for a key (a level naming a mesh that was
   // never generated on this machine, or whose directory was deleted).
   missing: (key: string) => boolean = () => false,
+): GeneratorStatus {
+  try {
+    return statusOf(item, lookup, job, facts, missing);
+  } catch {
+    return INVALID;
+  }
+}
+
+function statusOf(
+  item: EdItem,
+  lookup: ItemLookup,
+  job: Job | undefined,
+  facts: (key: string) => { bytes: number; triangles: number } | null,
+  missing: (key: string) => boolean,
 ): GeneratorStatus {
   const g = item.visual.generator;
   if (!g) return { text: "", tone: "ok" };
@@ -188,6 +208,9 @@ export function generatorStatus(
   }
   if (job && job.key === wanted && job.state === "superseded")
     return { text: `superseded${job.message ? `: ${job.message}` : ""}`, tone: "warn" };
+  // The server that ran it is gone; nothing was said about the rock itself.
+  if (job && job.key === wanted && job.state === "lost")
+    return { text: job.message ?? "the dev server restarted: press Generate again", tone: "warn" };
   if (!generatorInput(item, lookup)) {
     return g.kind === "mushrooms"
       ? { text: "no host: the surface this patch grows on is gone (Edit loop paints it again)", tone: "warn" }
@@ -202,12 +225,18 @@ export function generatorStatus(
 
 // The outliner's badge for an object: what the status line would lead with,
 // in a word, or "" for nothing to say.
+// Never throws, for the same reason as `generatorStatus`: a key that cannot be
+// made reads as stale.
 export function generatorBadge(item: EdItem, lookup: ItemLookup, job: Job | undefined): string {
   if (!item.visual.generator) return "";
   if (job?.state === "queued") return "queued";
   if (job?.state === "running") return "generating";
-  if (job?.state === "failed" && job.key === wantedKey(item, lookup)) return "failed";
-  return isStale(item, lookup) ? "stale" : "";
+  try {
+    if (job?.state === "failed" && job.key === wantedKey(item, lookup)) return "failed";
+    return isStale(item, lookup) ? "stale" : "";
+  } catch {
+    return "stale";
+  }
 }
 
 // Re-exported for the editor, which asks the same question of the same item.
@@ -290,6 +319,8 @@ function relabel(wrap: HTMLElement, spec: ParamSpec): void {
 function addParamField(host: PanelHost, parent: HTMLElement, item: EdItem, schema: ParamSchema, spec: ParamSpec): void {
   const gen = () => item.visual.generator!;
   const write = (value: ParamValue | null): void => {
+    // A non-finite number is never stored: the key cannot be made of one.
+    if (typeof value === "number" && !Number.isFinite(value)) return;
     gen().params = withParam(gen().params, schema, spec.key, value);
   };
   if (spec.type === "int" || spec.type === "number") {
