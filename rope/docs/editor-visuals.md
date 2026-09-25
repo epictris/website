@@ -154,7 +154,9 @@ On entering the workspace the editor asks the service what it has (`GET /api/gen
 A request made while a tool is missing fails with the service's 503 message, and the toolbar is asked again.
 
 On the owner's machine (32 threads, Blender 5.2.0) a rock takes about 7 s at the defaults and a patch about 2 s, one at a time; the full table is in [generators](generators.md#timings).
-Generated files are dev-only for now (`public/generated/`, gitignored): a level holding a generated object does not deploy until they are published to the release store (a follow-up).
+Generated files live in `public/generated/` (gitignored).
+Before committing a level whose generated objects changed, run `bun run assets:publish-generated`: it uploads the meshes the levels name to the release store and pins them in `src/render3d/generatedAssets.json`, which is committed with the level (see [**Generated meshes in the store**](asset-store.md#generated-meshes-in-the-store)).
+A level naming a mesh that is not published fails `cli assets` and the deploy's fetch rather than shipping stand-ins.
 
 ### + Rock
 
@@ -201,7 +203,7 @@ A lone generated object's panel ends with its generator's group (`editor/visuals
   - "the dev server restarted: press Generate again" when the job was lost with the server that ran it (not `failed`: the generator said nothing about the rock);
   - `no host` for a patch whose host is gone, or `cannot generate` for a rock whose outline is not a polygon or rect;
   - `stale: never generated` for a block with no `mesh`, and `stale` in the warning colour once the object is no longer what its mesh was made from;
-  - `stale: file missing` when the key is current but the service has no file for it (its `GET /api/generate/<key>` is a 404: a level generated on another machine, or a `public/generated/` directory deleted); Generate makes it again;
+  - `stale: file missing` when the key is current but the service has no file for it (its `GET /api/generate/<key>` is a 404: a level generated on another machine and not fetched, or a `public/generated/` directory deleted); `bun run assets:fetch` brings back a published one, and Generate makes it again;
   - `stale: invalid value` when a parameter or the outline holds a number that is not finite, of which no key can be made (a field never writes one; a hand-edited file could), said rather than thrown out of the frame loop;
   - else the mesh's triangles and size (`7,504 triangles · 1.5 MB`), asked of the service once per key, or `generated` until it answers.
 

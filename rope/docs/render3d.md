@@ -250,12 +250,12 @@ public/generated/<kind>/<hash>/mesh.glb    served as /generated/<kind>/<hash>/me
 public/generated/<kind>/<hash>/meta.json   { key, kind, version, params, input, bytes, triangles, generatedAt, blender }
 ```
 
-A generated file is one prop in its own frame: no node, no scale, no turn, and no manifest entry.
-The key carries no size, so the browser fetches it unweighted; the preload list (`levelStoredFiles`, node only) reads `bytes` from `meta.json` through `generatedMeta` (`render3d/generatedMeta.ts`, kept apart so its `fs` import never reaches the browser), and lists a file with no meta at 0 bytes with a warning.
+A generated file is one prop in its own frame: no node, no scale, no turn, and no `MESH_ASSETS` entry.
+The key carries no size, so the browser fetches it unweighted; the preload list (`levelStoredFiles`, node only) takes `bytes` from the store manifest (`GENERATED_ASSETS`) for a published key and from `meta.json` for one only generated here, both through `render3d/generatedMeta.ts` (kept apart so its `fs` import never reaches the browser), and lists a file with neither at 0 bytes with a warning.
 A key whose file is missing is a failed load like any other, and draws the placeholder.
 The failure stays cached (a missing file is asked for once, not on every rebuild of the editor's scene), except that a GENERATED key's failure is dropped by `forgetFailedMesh(key)` when the service publishes that file, so a mesh generated for a key whose earlier 404 was cached is fetched at the next rebuild rather than staying a stand-in until a reload.
 The placeholder of a generated object is its generator's: a BOULDER with no mesh yet (or one still loading, or missing) stands in as its outline extruded to the block's `depth` and chamfered in toward the camera at `BOULDER_STANDIN_TAPER` (45°), the volume the rock will fill, rather than a 20 cm slab; a MUSHROOM PATCH has none at all, since its rect is only the extent of the surface it grows on and a box of that size would stand over the rock it is on (`mountVisual`, `primitiveGeometry` in `render3d/bodyVisuals.ts`).
-The files are dev-only and gitignored for now; publishing them to the release store is a follow-up the key and layout are shaped for.
+`public/generated/` is gitignored; the meshes the registered levels name are published to the release store and fetched back into the same layout (see [**Generated meshes in the store**](asset-store.md#generated-meshes-in-the-store)).
 A local build copies `public/` into `dist`, and `generatedMeshesInBuild` (`vite.config.ts`) then removes every generated directory no registered level names and every file but `mesh.glb` from the ones kept, so `dist` does not grow with every seed ever tried.
 
 ## Traps

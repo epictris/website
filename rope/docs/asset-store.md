@@ -1,9 +1,9 @@
 # The asset store
 
-Four kinds of binary: props (`.glb` under `public/meshes/`), authored texture maps (`.webp` under `public/textures/`), the water renderer's raw maps (`public/water/`) and captured skies (`.hdr` under `public/hdri/`).
+Five kinds of binary: props (`.glb` under `public/meshes/`), authored texture maps (`.webp` under `public/textures/`), the water renderer's raw maps (`public/water/`), captured skies (`.hdr` under `public/hdri/`) and the generated meshes the levels name (`public/generated/`, see [below](#generated-meshes-in-the-store)).
 Every one of those directories is **gitignored**: the bytes live in a permanent GitHub Release (tag `assets`) on this repo and are fetched at build time (`bun run assets:fetch`, run by the Dockerfile before `bun run build`).
 They are the only binaries this tree has - every other surface is generated in code - which is why they carry a process the rest of the project does not need.
-`storedAssets()` (`scripts/assetStore.ts`) flattens all four manifests into one list of files, and the fetch, the budget, the sha check, the basename-collision check and the orphan sweep all iterate **that** rather than a manifest, so no kind can be checked while another quietly is not.
+`storedAssets()` (`scripts/assetStore.ts`) flattens all five manifests into one list of files, and the fetch, the budget, the sha check, the basename-collision check and the orphan sweep all iterate **that** rather than a manifest, so no kind can be checked while another quietly is not.
 
 **Not git, and specifically not Git LFS**, because an asset has to be **deletable**.
 A binary in git history is permanent, and an LFS object pushed to GitHub goes on consuming the quota after the file is removed - the only supported purge is deleting the repository, which is not an option for a repo with a deploy wired to it.
@@ -184,5 +184,23 @@ just assets                                                  # on another machin
 gh release delete-asset assets rock.glb                      # change your mind
 ```
 
-Generated rock files (`public/rocks/`, see [rocks](rocks.md)) are not in the store yet.
+## Generated meshes in the store
+
+The rocks and mushroom patches the editor's Visuals workspace generates (see [generators](generators.md)) are written to `public/generated/<kind>/<hash>/mesh.glb` on the machine that generated them, and the ones the registered levels name are published here so every other checkout, and the deploy, draws them too.
+Their manifest is `src/render3d/generatedAssets.json`, mesh key to `{ sha256, bytes }`, and `storedAssets()` lists it with the others, so the fetch, the sha and size checks, the name-collision check and the budget cover generated meshes as they cover props.
+The release name is spelled out of the key (`generated-boulder-<hash>.glb`, `generatedReleaseName`), because every file on disk is called `mesh.glb` and the release is one flat namespace.
+
+The key cannot stand in for the sha256.
+It is content-addressed over what the generator is GIVEN, and Blender is not a pure function of that across versions and machines, so two runs of one key can write different files; the store holds the one that was published, and the pinned hash is what says which.
+
+`bun run assets:publish-generated` is the one writer of the manifest, and unlike `assets:publish` it writes rather than prints: an entry is a hash and a size, and which keys need one is decided by the levels, so there is nothing in it for a person to look at.
+It uploads every key a registered level names that the manifest lacks, from this machine's `public/generated/`.
+It never clobbers: a key already in the release (published from another machine whose manifest entry has not reached this tree) is fetched and pinned as published, and the local copy is replaced by it.
+An entry no level names any more is dropped from the manifest but left in the release, since an older commit may pin it; the script prints the `gh release delete-asset` line for when that stops mattering.
+
+So a level whose generated objects changed is committed together with `generatedAssets.json`, after running the script.
+Forgetting is loud twice over: `cli assets` fails on a key a level names that the store does not hold (and on an entry no level names), and `assets:fetch` refuses to run with one, which stops the Docker build rather than deploying the level in stand-ins.
+The build then ships exactly these (`generatedMeshesInBuild` in `vite.config.ts` drops any other generated directory a dev machine's `public/` carries).
+
+The older generated rock files (`public/rocks/`, see [rocks](rocks.md)) are not in the store.
 When they are, the shipping build passes `--no-debug-attributes`: the `_SHARD` and `_PROVENANCE` attributes the dev loop keeps cost about 5 bytes a vertex before compression and more in the vertices they split.

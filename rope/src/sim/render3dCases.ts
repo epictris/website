@@ -199,7 +199,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { canonicalString, generatedKey, generatedMeshAsset, parseGeneratedKey } from "../render3d/generated";
-import { generatedMeta } from "../render3d/generatedMeta";
+import { GENERATED_ASSETS, generatedMeta, generatedReleaseName } from "../render3d/generatedMeta";
 import { levelStoredFiles } from "../render3d/levelAssets";
 import {
   canonicalParams,
@@ -6012,6 +6012,25 @@ function generatorCases(): CaseResult[] {
       pass: preload,
       detail: `meta bytes ${meta?.bytes}, missing ${JSON.stringify(missing)}, listed ${JSON.stringify(listed)}, warnings ${warnings.length}`,
     });
+
+    // A PUBLISHED key is weighed from the store manifest, which a fresh
+    // checkout (the deploy's) has and its meta.json does not; and its release
+    // name is its own, since every generated file is `mesh.glb`.
+    const published = Object.keys(GENERATED_ASSETS)[0];
+    if (published) {
+      const pinned: RawLevelData = {
+        player: { x: 0, y: 0, radius: 8 },
+        bodies: [{ kind: "static", x: 0, y: 0, rot: 0, objects: [{ type: "geometry", kind: "mesh", mesh: published }] }],
+      };
+      const got = quietly(() => levelStoredFiles(pinned));
+      const entry = got.value.find((f) => f.file === generatedMeshAsset(published)!.file);
+      const name = generatedReleaseName(published);
+      out.push({
+        name: "generator: a published key is weighed from the store manifest, under a release name of its own",
+        pass: entry?.bytes === GENERATED_ASSETS[published]!.bytes && got.warnings.length === 0 && /^generated-(boulder|mushrooms)-[0-9a-f]{16}\.glb$/.test(name),
+        detail: `${published}: listed ${JSON.stringify(entry)}, manifest ${GENERATED_ASSETS[published]!.bytes}, release name ${name}`,
+      });
+    }
   }
 
   // --- the schemas -------------------------------------------------------------

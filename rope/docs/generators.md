@@ -170,7 +170,7 @@ This is what it holds up of the contract.
   A 404 mid-job means the dev server restarted or stopped (a job lives as long as the server, and the old one killed its Blender on the way out): the job is `lost`, and the panel says "the dev server restarted: press Generate again", not `failed`.
   A poll that goes unanswered (a network error, the second a restart takes) is asked again, and the job is called lost only after `POLL_MISSES` (5) in a row.
 - **The panel asks for a current mesh's facts** (`GeneratorJobs.facts`, once per key per page) with `GET /api/generate/<key>`.
-  A `done` answer gives the triangles and bytes the status line shows; a 404 means the service has neither a job nor a file for the key (a level generated on another machine, or a deleted `public/generated/` directory), and the panel reads `stale: file missing` until Generate makes it again.
+  A `done` answer gives the triangles and bytes the status line shows; a 404 means the service has neither a job nor a file for the key (a level generated on another machine and not fetched, or a deleted `public/generated/` directory), and the panel reads `stale: file missing` until `bun run assets:fetch` brings back a published one or Generate makes it again.
 - **Job state lives in the page.**
   A reload forgets which object waits on which job; the service carries on and caches the result, and the next Generate of the same content joins the running job or finds the mesh at once.
 - **A finished mesh goes on its object once**, as one undo step, and only if the object is still there and its `wantedKey` is still that key.

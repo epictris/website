@@ -404,7 +404,7 @@ Checks after the fixes: `typecheck`, `cli render3d` (230 cases), `cli dmath` and
 
 ### Follow-ups
 
-- Publishing generated meshes to the release store with manifest entries, so a level with generated objects deploys (until then it draws stand-ins wherever `public/generated/` is not).
+- Publishing generated meshes to the release store with manifest entries, so a level with generated objects deploys (until then it draws stand-ins wherever `public/generated/` is not). Done 2026-09-26: `assets:publish-generated` and `src/render3d/generatedAssets.json`, see docs/asset-store.md.
 - Job state that survives a reload (ask the service for the jobs of this page's objects, or key jobs by content alone).
 - Edit loop adding and removing points.
 - A badge for `stale: file missing` in the outliner (today only the panel says it).

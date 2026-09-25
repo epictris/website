@@ -1,9 +1,8 @@
 # Running
 
 ```sh
-cd rope
-bun install
-bun run dev        # http://localhost:3100
+just setup swing   # once per machine, and again whenever: bun install, assets:fetch, the generators' Python and Blender
+just swing         # http://localhost:3100 (bun run dev in rope/)
 ```
 
 Controls (match the Godot input map): **R/T** move · **Space** jump · **left-click** fire

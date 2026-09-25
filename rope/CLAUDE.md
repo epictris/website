@@ -43,7 +43,7 @@ Controls, gamepad and touch mapping, the level list and the aim modes: [docs/run
 - **`expectedFail` is a lie the moment it passes**: the runner fails on a marker whose case goes green, so the fix that closes a gap removes the marker.
 - **Levels are `levels/*.json`** in the on-disk pixel format, imported into `registry.ts`. `levelData.ts` is generated (`bun scripts/extract-level.ts`), never hand-edited. Every retired form is folded in by `normalizeLevelData` inside `scaleLevelData`, the one gate every level passes through.
 - **The editor autosaves 750 ms after any edit**, so an open editor tab is a second author of a level file. Close it before a script touches a level.
-- **Binary assets live in a GitHub release**, not git. Every manifest entry pins `sha256` and `bytes` and names `source`, `author` and `license` (redistributable, NC acceptable here); `CREDITS.md` is generated and checked by `cli assets`.
+- **Binary assets live in a GitHub release**, not git. Every manifest entry pins `sha256` and `bytes` and names `source`, `author` and `license` (redistributable, NC acceptable here); `CREDITS.md` is generated and checked by `cli assets`. Generated meshes (rocks, mushroom patches) are published with `bun run assets:publish-generated`, which pins them in `src/render3d/generatedAssets.json`; run it before committing a level whose generated objects changed.
 
 ## Working practices
 

@@ -466,11 +466,9 @@ function storeScript(): Plugin {
 // every generated directory no registered level's preload list names is
 // removed, and a named one keeps its mesh.glb alone.
 //
-// This is the dev-only half of shipping them: `dist` then holds exactly the
-// generated meshes the levels use, but the deployed image is built from a
-// fresh checkout where `public/generated/` does not exist, so a level holding
-// a generated object still deploys with stand-ins until publishing to the
-// release store lands (plans/visuals-workspace.md, "Follow-ups").
+// A fresh checkout (the deployed image's) has only what `assets:fetch` put
+// there, which is exactly these: the published meshes the levels name (see
+// `GENERATED_ASSETS`), so on a deploy this keeps everything and drops nothing.
 function generatedMeshesInBuild(): Plugin {
   let outDir = "";
   return {
