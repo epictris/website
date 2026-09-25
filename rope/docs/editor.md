@@ -274,6 +274,11 @@ That is not a fallback but the same rule - the overlay picks and offers handles 
 An **orbited** view picks by exactly these rules (above): the ray answers for geometry as it does head on, and the collision shapes, lights, regions and notes it shares the canvas with are resolved against the plane through `unprojectToPlane` rather than through the 2D camera, so the two halves of a pick agree about where the pointer is aimed at any angle.
 What it does not offer there is the plane HANDLES, for the reason this section gives about geometry objects and the orbit section gives about everything else: a handle that is not drawn must not be grabbable either.
 
+## Guides
+
+The Visuals workspace (in progress, [editor-visuals](editor-visuals.md)) answers the turned view's missing overlay by drawing the overlay's marks into the scene instead: collision outlines, light icons and rings, the spawn, regions, paths, notes, the selected polygon's handles and tool drafts, each carrying a guide tag that `Scene3D.pick` returns beside the models.
+The guides are built (`editor/visuals/guides.ts`) but not yet wired into the editor.
+
 ## The lens
 
 `⧉ Ortho` (**O**) draws the scene through an **orthographic** camera instead of the perspective one (`ViewProjection` in `render3d/space.ts`).

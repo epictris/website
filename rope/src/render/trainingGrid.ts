@@ -6,14 +6,17 @@
 import { PIXELS_PER_METER } from "../engine/units";
 import type { Camera } from "./camera";
 
+// The spacings and line colours are exported for the Visuals workspace's
+// plane grid (editor/visuals/guides.ts), which is this paper laid into the 3D
+// scene at z = 0 and has to rule the same cells.
 const BG = "#eef0f2";
-const MINOR = "#d5dae0";
-const MAJOR = "#aab2bd";
+export const MINOR = "#d5dae0";
+export const MAJOR = "#aab2bd";
 const VALUE = "#3f6fd6"; // blue lines/labels at multiples of 5
-const AXIS = "#e23b3b"; // red origin cross
+export const AXIS = "#e23b3b"; // red origin cross
 
-const MINOR_M = 0.1; // fine cell size — 10 minor lines per metre
-const MAJOR_M = 1.0; // heavy grid line every metre
+export const MINOR_M = 0.1; // fine cell size - 10 minor lines per metre
+export const MAJOR_M = 1.0; // heavy grid line every metre
 const VALUE_M = 5.0; // bold blue labelled line every 5 metres
 
 export function drawTrainingGrid(

@@ -22,16 +22,33 @@ import { Vec2 } from "../engine/vec2";
 import { VIEW_HEIGHT, VIEW_WIDTH } from "../render/viewport";
 import type { Camera } from "../render/camera";
 import {
+  applyPose,
+  CAMERA_FAR,
   cameraDistance,
   DEFAULT_LENS,
   focalLengthFromFov,
   FOV_Y_DEG,
+  isHeadOn,
   lensOf,
+  MAX_ORBIT_PITCH,
+  NO_ORBIT,
+  poseDistance,
+  poseFromCamera,
+  type CameraOrbit,
   type SceneLens,
+  type ViewCamera,
+  type ViewPose,
   projectToView,
   syncCamera,
+  threeY,
   unprojectToPlane,
+  visibleHeightMetres,
 } from "../render3d/space";
+import { dolly, frame, headOn, orbit, pan } from "../editor/visuals/viewControls";
+import { MIN_VIEW_DISTANCE, poseBasis, poseEye } from "../editor/visuals/viewPose";
+import { Guides, type GuideView } from "../editor/visuals/guides";
+import { isGuideTag, SPAWN_GUIDE_ID, type GuideTag } from "../editor/visuals/tags";
+import { ED_LAYERS, type EdLayer } from "../editor/model";
 import { cylinderSolid, extrudeOutline } from "../render3d/extrude";
 import { cloneWithPatches, isOrthographicMaterial } from "../render3d/projection";
 import {
@@ -580,6 +597,480 @@ function orthographicView(): CaseResult[] {
       detail: `ortho spread ${spread.toExponential(2)} px over 20 m of depth, perspective ${perspShift.toFixed(1)} px`,
     });
   }
+  return out;
+}
+
+// `syncCamera` exactly as it was before the pose was factored out of it
+// (`ViewPose`, `poseFromCamera`, `applyPose`), kept here as the reference the
+// factored version is held to BIT FOR BIT. Every overlay in the project is
+// aligned against the camera this built, so "the same to a tolerance" is not
+// the claim: a float's worth of drift is a change to every level's framing.
+function legacySyncCamera(
+  threeCam: ViewCamera,
+  camera: Camera,
+  lens: SceneLens = DEFAULT_LENS,
+  orbit: CameraOrbit = NO_ORBIT,
+): void {
+  const x = camera.position.x;
+  const y = threeY(camera.position.y);
+  const z = lens.zOffset;
+  const dist = cameraDistance(camera, lens.fovYDeg);
+  const aspect = camera.viewportWidth / camera.viewportHeight;
+  threeCam.far = Math.max(CAMERA_FAR, dist + z + CAMERA_FAR / 2);
+  if (threeCam instanceof THREE.OrthographicCamera) {
+    const halfH = visibleHeightMetres(camera) / 2;
+    const halfW = halfH * aspect;
+    threeCam.left = -halfW;
+    threeCam.right = halfW;
+    threeCam.top = halfH;
+    threeCam.bottom = -halfH;
+  } else {
+    threeCam.fov = lens.fovYDeg;
+    threeCam.aspect = aspect;
+  }
+  if (isHeadOn(orbit)) {
+    threeCam.position.set(x, y, z + dist);
+    threeCam.rotation.set(0, 0, 0);
+    threeCam.updateProjectionMatrix();
+    return;
+  }
+  const pitch = Math.max(-MAX_ORBIT_PITCH, Math.min(MAX_ORBIT_PITCH, orbit.pitch));
+  const cp = Math.cos(pitch);
+  threeCam.position.set(
+    x + dist * Math.sin(orbit.yaw) * cp,
+    y + dist * Math.sin(pitch),
+    z + dist * Math.cos(orbit.yaw) * cp,
+  );
+  threeCam.up.set(0, 1, 0);
+  threeCam.lookAt(x, y, z);
+  threeCam.updateProjectionMatrix();
+}
+
+// Every number a camera is drawn and picked through.
+function cameraBits(c: ViewCamera): number[] {
+  c.updateMatrixWorld(true);
+  const out = [
+    ...c.position.toArray(),
+    ...c.quaternion.toArray(),
+    ...c.up.toArray(),
+    c.near,
+    c.far,
+    ...c.projectionMatrix.elements,
+    ...c.matrixWorld.elements,
+  ];
+  if (c instanceof THREE.OrthographicCamera) out.push(c.left, c.right, c.top, c.bottom);
+  else out.push(c.fov, c.aspect);
+  return out;
+}
+
+function newViewCamera(ortho: boolean): ViewCamera {
+  return ortho
+    ? new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 1000)
+    : new THREE.PerspectiveCamera(FOV_Y_DEG, VIEW_WIDTH / VIEW_HEIGHT, 0.1, 1000);
+}
+
+// A fresh camera placed at a pose, matrices current, as `Scene3D.render`
+// leaves its cameras before a pick.
+function posedCamera(pose: ViewPose, aspect: number, ortho = false): ViewCamera {
+  const c = newViewCamera(ortho);
+  applyPose(c, pose, aspect);
+  c.updateMatrixWorld(true);
+  return c;
+}
+
+// THE VISUALS WORKSPACE'S VIEW (plans/visuals-workspace.md, Phase 1).
+//
+// The workspace holds a camera pose of its own and navigates it by pure
+// functions (`editor/visuals/viewControls.ts`); the Level workspace's camera
+// is now that same pose derived from the 2D camera. So the first claim is that
+// the derivation changed nothing, to the bit, and the rest are the promise
+// each gesture makes - asserted against three's own projection of the camera
+// the pose builds, not against the pose's arithmetic, so a sign error in the
+// gesture and the same one in its helper cannot agree with each other.
+function visualsView(): CaseResult[] {
+  const out: CaseResult[] = [];
+  const placements: Array<{ name: string; cam: Camera; lens: SceneLens }> = [
+    { name: "origin", cam: camera(0, 0, 2), lens: DEFAULT_LENS },
+    { name: "off-centre", cam: camera(13.5, -7.25, 2), lens: DEFAULT_LENS },
+    { name: "zoomed out through 85 mm", cam: camera(-40.3, 12.7, 0.35), lens: lensOf({ focalLength: 85 }) },
+    { name: "zoomed in with a z offset", cam: camera(3.3, 90.1, 7.5), lens: { fovYDeg: FOV_Y_DEG, zOffset: 1.5 } },
+    {
+      name: "an editor window through 24 mm",
+      cam: { position: new Vec2(-2.2, -5.9), zoom: 1.3, viewportWidth: 1283, viewportHeight: 771 },
+      lens: lensOf({ focalLength: 24, zOffset: -0.8 }),
+    },
+  ];
+  // Head on, turned, and turned past the pole (the clamp is part of the camera).
+  const orbits: CameraOrbit[] = [NO_ORBIT, { yaw: 0.45, pitch: 0.2 }, { yaw: -2.6, pitch: 1.6 }];
+  let compared = 0;
+  const mismatches: string[] = [];
+  for (const { name, cam, lens } of placements) {
+    for (const o of orbits) {
+      for (const ortho of [false, true]) {
+        const want = newViewCamera(ortho);
+        legacySyncCamera(want, cam, lens, o);
+        const bits = cameraBits(want);
+        const composed = newViewCamera(ortho);
+        syncCamera(composed, cam, lens, o);
+        const posed = newViewCamera(ortho);
+        applyPose(posed, poseFromCamera(cam, lens, o), cam.viewportWidth / cam.viewportHeight);
+        const tries: Array<[string, ViewCamera]> = [
+          ["syncCamera", composed],
+          ["applyPose(poseFromCamera)", posed],
+        ];
+        // The workspace's Home is `headOn`, which must be the head-on camera.
+        if (isHeadOn(o)) {
+          const home = newViewCamera(ortho);
+          applyPose(home, headOn(cam, lens), cam.viewportWidth / cam.viewportHeight);
+          tries.push(["headOn", home]);
+        }
+        for (const [how, c] of tries) {
+          compared++;
+          const got = cameraBits(c);
+          const i = got.findIndex((v, k) => !Object.is(v, bits[k]));
+          if (i >= 0 || got.length !== bits.length) {
+            mismatches.push(`${how} ${name} yaw ${o.yaw} ${ortho ? "ortho" : "persp"}: [${i}] ${got[i]} vs ${bits[i]}`);
+          }
+        }
+      }
+    }
+  }
+  out.push({
+    name: "visuals: a pose from the 2D camera is today's camera to the bit (5 placements, 3 orbits, both lenses)",
+    pass: mismatches.length === 0 && compared === 5 * 3 * 2 * 2 + 5 * 2,
+    detail: mismatches.length ? mismatches.slice(0, 3).join("; ") : `${compared} cameras identical in every number`,
+  });
+
+  const aspect = VIEW_WIDTH / VIEW_HEIGHT;
+  const ndc = (c: ViewCamera, p: { x: number; y: number; z: number }): THREE.Vector3 =>
+    new THREE.Vector3(p.x, p.y, p.z).project(c);
+  // A pose the Level workspace cannot express: the target 1.7 m behind the
+  // gameplay plane, turned both ways.
+  const free: ViewPose = { target: { x: 4.1, y: -2.3, z: -1.7 }, yaw: 0.7, pitch: 0.35, halfHeight: 3.2, fovYDeg: FOV_Y_DEG };
+
+  // The pose's own geometry is the camera `applyPose` builds.
+  {
+    let worst = 0;
+    for (const p of [free, { ...free, yaw: -2.2, pitch: -0.9 }, { ...free, yaw: 0, pitch: 0 }]) {
+      const c = posedCamera(p, aspect);
+      const eye = poseEye(p);
+      const b = poseBasis(p);
+      const e = c.matrixWorld.elements;
+      const axes: Array<[{ x: number; y: number; z: number }, number]> = [
+        [b.right, 0],
+        [b.up, 4],
+        [b.back, 8],
+      ];
+      worst = Math.max(worst, Math.abs(eye.x - c.position.x), Math.abs(eye.y - c.position.y), Math.abs(eye.z - c.position.z));
+      for (const [v, o] of axes) {
+        worst = Math.max(worst, Math.abs(v.x - e[o]!), Math.abs(v.y - e[o + 1]!), Math.abs(v.z - e[o + 2]!));
+      }
+    }
+    out.push({
+      name: "visuals: the pose's eye and axes are the camera applyPose places",
+      pass: worst <= 1e-12,
+      detail: `worst ${worst.toExponential(2)}`,
+    });
+  }
+
+  // ORBIT keeps the target at the centre of the frame and the camera at its
+  // distance, and clamps the pitch as the Level workspace's orbit does.
+  {
+    let worstCentre = 0;
+    let worstDist = 0;
+    const d0 = poseDistance(free);
+    for (const [dy, dp] of [[0.3, 0.1], [-1.4, -0.6], [2.9, 0.05], [0, -0.3]] as const) {
+      const turned = orbit(free, dy, dp);
+      const c = posedCamera(turned, aspect);
+      const q = ndc(c, turned.target);
+      worstCentre = Math.max(worstCentre, Math.abs(q.x), Math.abs(q.y));
+      worstDist = Math.max(worstDist, Math.abs(c.position.distanceTo(new THREE.Vector3(free.target.x, free.target.y, free.target.z)) - d0));
+    }
+    const pole = orbit(free, 0, 10);
+    out.push({
+      name: "visuals: orbit keeps the target's screen position and the distance, and clamps the pitch",
+      pass: worstCentre <= 1e-9 && worstDist <= 1e-9 && pole.pitch === MAX_ORBIT_PITCH,
+      detail: `target off centre by ${worstCentre.toExponential(2)} ndc, distance by ${worstDist.toExponential(2)} m, pitch at the pole ${pole.pitch.toFixed(4)}`,
+    });
+  }
+
+  // PAN carries the grabbed point with the pointer: head on, a point ON THE
+  // GAMEPLAY PLANE (the target is on it, so it is at the target's depth); turned
+  // and off the plane, a point at the target's depth, through both lenses.
+  {
+    const from = { x: 0.31, y: -0.42 };
+    const to = { x: -0.18, y: 0.27 };
+    let worst = 0;
+    const flat = poseFromCamera(camera(13.5, -7.25, 2));
+    const c0 = posedCamera(flat, aspect);
+    const grabbed = unprojectToPlane(c0, from.x, from.y)!;
+    const c1 = posedCamera(pan(flat, aspect, from, to), aspect);
+    const q = ndc(c1, { x: grabbed.x, y: threeY(grabbed.y), z: 0 });
+    worst = Math.max(worst, Math.abs(q.x - to.x), Math.abs(q.y - to.y));
+    for (const ortho of [false, true]) {
+      const { right, up } = poseBasis(free);
+      const u = from.x * free.halfHeight * aspect;
+      const v = from.y * free.halfHeight;
+      const t = free.target;
+      const p = { x: t.x + right.x * u + up.x * v, y: t.y + right.y * u + up.y * v, z: t.z + right.z * u + up.z * v };
+      const before = ndc(posedCamera(free, aspect, ortho), p);
+      const after = ndc(posedCamera(pan(free, aspect, from, to), aspect, ortho), p);
+      worst = Math.max(worst, Math.abs(before.x - from.x), Math.abs(before.y - from.y));
+      worst = Math.max(worst, Math.abs(after.x - to.x), Math.abs(after.y - to.y));
+    }
+    out.push({
+      name: "visuals: pan keeps the grabbed point under the pointer",
+      pass: worst <= 1e-9,
+      detail: `worst ${worst.toExponential(2)} ndc`,
+    });
+  }
+
+  // DOLLY toward a point keeps that point where it is on screen (it is a zoom
+  // about the cursor), moves the eye along the ray through it, and never
+  // through it - clamped at the near limit, the point is still in front.
+  {
+    let worstScreen = 0;
+    let worstRay = 0;
+    let clamped = true;
+    for (const ortho of [false, true]) {
+      const c0 = posedCamera(free, aspect, ortho);
+      const hitSim = unprojectToPlane(c0, 0.3, -0.2)!;
+      const hit = { x: hitSim.x, y: threeY(hitSim.y), z: 0 };
+      const before = ndc(c0, hit);
+      for (const factor of [0.5, 1.7, 1e-6]) {
+        const after = dolly(free, hit, factor);
+        const c1 = posedCamera(after, aspect, ortho);
+        const q = ndc(c1, hit);
+        worstScreen = Math.max(worstScreen, Math.abs(q.x - before.x), Math.abs(q.y - before.y));
+        if (!ortho) {
+          // The old eye, the new eye and the point are on one line.
+          const a = new THREE.Vector3().subVectors(c0.position, new THREE.Vector3(hit.x, hit.y, hit.z));
+          const b = new THREE.Vector3().subVectors(c1.position, new THREE.Vector3(hit.x, hit.y, hit.z));
+          worstRay = Math.max(worstRay, a.clone().normalize().cross(b.clone().normalize()).length());
+          if (b.dot(a) <= 0) clamped = false;
+        }
+        if (factor === 1e-6) {
+          clamped &&= Math.abs(poseDistance(after) - MIN_VIEW_DISTANCE) <= 1e-12 && q.z > -1 && q.z < 1;
+        }
+      }
+    }
+    out.push({
+      name: "visuals: dolly keeps the point under the pointer on its ray, and never passes it",
+      pass: worstScreen <= 1e-9 && worstRay <= 1e-9 && clamped,
+      detail: `screen drift ${worstScreen.toExponential(2)} ndc, off the ray ${worstRay.toExponential(2)}, clamped ${clamped}`,
+    });
+  }
+
+  // FRAME puts a box's centre at the centre of the frame and all of it in it.
+  {
+    const box = { min: { x: -3, y: 1, z: -2 }, max: { x: 5, y: 4.5, z: 0.5 } };
+    const framed = frame(free, box, aspect);
+    const c = posedCamera(framed, aspect);
+    let inside = true;
+    for (const x of [box.min.x, box.max.x]) {
+      for (const y of [box.min.y, box.max.y]) {
+        for (const z of [box.min.z, box.max.z]) {
+          const q = ndc(c, { x, y, z });
+          inside &&= Math.abs(q.x) < 1 && Math.abs(q.y) < 1;
+        }
+      }
+    }
+    const centre = ndc(c, { x: 1, y: 2.75, z: -0.75 });
+    out.push({
+      name: "visuals: frame centres a box and holds all of it",
+      pass: inside && Math.abs(centre.x) <= 1e-9 && Math.abs(centre.y) <= 1e-9,
+      detail: `corners inside ${inside}, centre at (${centre.x.toExponential(1)}, ${centre.y.toExponential(1)})`,
+    });
+  }
+
+  // UNPROJECT under a free pose: a point drawn on the gameplay plane, or on a
+  // plane `z` off it, comes back as itself - which is what every plane click
+  // in the workspace stands on.
+  {
+    let worst = 0;
+    for (const ortho of [false, true]) {
+      const c = posedCamera(free, aspect, ortho);
+      for (const z of [0, 1.2, -0.6]) {
+        for (const p of [new Vec2(4.1, 2.3), new Vec2(7.9, 0.4), new Vec2(1.2, 5.5)]) {
+          const q = ndc(c, { x: p.x, y: threeY(p.y), z });
+          const back = unprojectToPlane(c, q.x, q.y, z);
+          worst = Math.max(worst, back ? back.sub(p).length() : Infinity);
+        }
+      }
+    }
+    out.push({
+      name: "visuals: a screen point un-projects onto the plane it was drawn from under a free pose",
+      pass: worst <= 1e-9,
+      detail: `worst round trip ${worst.toExponential(2)} m`,
+    });
+  }
+  return out;
+}
+
+// THE GUIDES (`editor/visuals/guides.ts`): what the workspace draws into the
+// scene for a small model, counted by the tags the picks will come back with,
+// and one pick of each kind run through a real raycast. Headless: three's fat
+// lines and the data-texture sprites need no DOM.
+function visualsGuides(): CaseResult[] {
+  const out: CaseResult[] = [];
+  const model = modelFromDisk({
+    player: { x: -600, y: -300, radius: 20 },
+    bodies: [
+      { kind: "static", x: 0, y: 0, rot: 0, shape: { kind: "rect", w: 400, h: 60 } },
+      {
+        kind: "static",
+        x: 300,
+        y: -200,
+        rot: 0,
+        objects: [
+          {
+            type: "collision",
+            shape: {
+              kind: "poly",
+              verts: [
+                { x: -60, y: -40 },
+                { x: 60, y: -40 },
+                { x: 80, y: 30 },
+                { x: 0, y: 10 },
+                { x: -70, y: 40 },
+              ],
+            },
+          },
+        ],
+      },
+      {
+        kind: "static",
+        x: -300,
+        y: -150,
+        rot: 0,
+        objects: [{ type: "light", range: 300, wake: 120, z: 40 }],
+      },
+    ],
+  } as RawLevelData);
+  const poly = model.items.find((i) => i.shape.kind === "poly")!;
+  const rect = model.items.find((i) => i.object === "collision" && i.shape.kind === "rect")!;
+  const light = model.items.find((i) => i.object === "light")!;
+  const all = new Set<EdLayer>(ED_LAYERS);
+  const view = (over: Partial<GuideView> = {}): GuideView => ({
+    model,
+    rev: 1,
+    selectedIds: new Set([poly.id]),
+    selectedBodyIds: new Set(),
+    selectedVerts: new Set([1]),
+    visibleLayers: all,
+    lockedLayers: new Set(),
+    ...over,
+  });
+  const guides = new Guides();
+  const rebuilt = guides.sync(view());
+  const again = guides.sync(view());
+  const tags = guides.tags();
+  const count = (g: GuideTag["guide"], id?: number): number =>
+    tags.filter((t) => t.guide === g && (id === undefined || t.id === id)).length;
+  const vertIdx = tags.filter((t) => t.guide === "vertex").map((t) => t.index);
+  const vertexSprites = guides.named("vertex") as THREE.Sprite[];
+  const pickedLooks = new Set(vertexSprites.map((s) => s.material)).size;
+  const collisions = model.items.filter((i) => i.object === "collision").length;
+  out.push({
+    name: "visuals: the guides of a small model - an outline per collision object, the selected polygon's corners and midpoints, a light's icon and rings, the spawn",
+    pass:
+      rebuilt &&
+      !again &&
+      count("outline") === collisions &&
+      count("outline", rect.id) === 1 &&
+      count("vertex", poly.id) === 5 &&
+      vertIdx.join(",") === "0,1,2,3,4" &&
+      count("midpoint", poly.id) === 5 &&
+      pickedLooks === 2 &&
+      count("light", light.id) === 1 &&
+      guides.named("light-icon").length === 1 &&
+      guides.named("light-reach").length === 1 &&
+      guides.named("light-wake").length === 1 &&
+      guides.named("light-stalk").length === 1 &&
+      count("spawn", SPAWN_GUIDE_ID) === 1 &&
+      tags.every(isGuideTag),
+    detail: `rebuilt ${rebuilt}, rebuilt again unchanged ${again}; outlines ${count("outline")} of ${collisions}, vertices ${count("vertex", poly.id)} [${vertIdx.join(",")}] in ${pickedLooks} looks, midpoints ${count("midpoint", poly.id)}, light icons ${count("light", light.id)} with reach/wake/stalk ${guides.named("light-reach").length}/${guides.named("light-wake").length}/${guides.named("light-stalk").length}, spawn ${count("spawn", SPAWN_GUIDE_ID)}`,
+  });
+
+  // A hidden layer draws nothing; a locked one draws and answers no pick; no
+  // selection, no handles.
+  guides.sync(view({ visibleLayers: new Set<EdLayer>(["camera", "fireflies", "notes"]) }));
+  const hidden = guides.tags().length + guides.named("outline").length;
+  guides.sync(view({ lockedLayers: new Set<EdLayer>(["scene"]) }));
+  const lockedTags = guides.tags().length;
+  const lockedDrawn = guides.named("outline").length;
+  guides.sync(view({ selectedIds: new Set() }));
+  const unselected = guides.tags().filter((t) => t.guide === "vertex" || t.guide === "midpoint").length;
+  out.push({
+    name: "visuals: guides follow the layers - hidden draws nothing, locked draws but is not picked - and handles follow the selection",
+    pass: hidden === 0 && lockedTags === 0 && lockedDrawn === collisions && unselected === 0,
+    detail: `hidden ${hidden} objects, locked ${lockedDrawn} outlines with ${lockedTags} tags, handles with nothing selected ${unselected}`,
+  });
+
+  // A PICK through a real raycast, as `Scene3D.pick` casts it: the selected
+  // polygon's corner under its own pixel, and the rect's outline under a point
+  // on its top edge, from a turned view.
+  //
+  // Both lenses, since a pixel-sized sprite is sized by different arithmetic
+  // through each (see `Guides.update`), and a handle a few pixels off the
+  // corner it is drawn at is the one kind of wrong a picture does not show.
+  guides.sync(view());
+  const pose: ViewPose = { ...poseFromCamera(camera(1, -1, 2)), yaw: 0.35, pitch: 0.25 };
+  const aspect = VIEW_WIDTH / VIEW_HEIGHT;
+  const corner = poly.pos.add((poly.shape as { verts: Vec2[] }).verts[2]!);
+  const verdicts: string[] = [];
+  let picksOk = true;
+  for (const ortho of [false, true]) {
+    const cam = posedCamera(pose, aspect, ortho);
+    guides.setResolution(VIEW_WIDTH, VIEW_HEIGHT);
+    guides.update(cam, VIEW_HEIGHT);
+    guides.group.updateMatrixWorld(true);
+    const ray = new THREE.Raycaster();
+    // Pointer at `p`, nudged `dx` view pixels right.
+    const pickAt = (p: Vec2, dx = 0): GuideTag[] => {
+      const q = new THREE.Vector3(p.x, threeY(p.y), 0).project(cam);
+      ray.setFromCamera(new THREE.Vector2(q.x + (dx * 2) / VIEW_WIDTH, q.y), cam);
+      return ray
+        .intersectObject(guides.group, true)
+        .map((h) => h.object.userData["pickTag"] as unknown)
+        .filter(isGuideTag);
+    };
+    const isCorner = (t: GuideTag): boolean => t.guide === "vertex" && t.id === poly.id && t.index === 2;
+    const atCorner = pickAt(corner);
+    // Inside the 10 px sprite, and just outside it.
+    const inside = pickAt(corner, 4).some(isCorner);
+    const outside = pickAt(corner, 7).some(isCorner);
+    const onEdge = pickAt(rect.pos.add(new Vec2(-1.1, -0.3)));
+    const ok =
+      atCorner.some(isCorner) &&
+      !atCorner.some((t) => t.guide === "vertex" && t.index !== 2) &&
+      inside &&
+      !outside &&
+      onEdge.some((t) => t.guide === "outline" && t.id === rect.id);
+    picksOk &&= ok;
+    verdicts.push(
+      `${ortho ? "ortho" : "persp"}: corner -> ${JSON.stringify(atCorner)}, 4 px off ${inside}, 7 px off ${outside}; edge -> ${JSON.stringify(onEdge)}`,
+    );
+  }
+  out.push({
+    name: "visuals: a raycast picks a corner by its pixel-sized handle and a body by its outline, from a turned view",
+    pass: picksOk,
+    detail: verdicts.join("; "),
+  });
+
+  // A tool's draft: an open run to the cursor, then closed, then gone.
+  guides.setDraft({ points: [{ x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }, { x: 1, y: 1, z: 0.2, normal: { x: 0, y: 0, z: 1 } }], closed: false, cursor: { x: 0, y: 1, z: 0 } });
+  const open = guides.draftCounts();
+  guides.setDraft({ points: [{ x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }, { x: 1, y: 1, z: 0 }], closed: true });
+  const closed = guides.draftCounts();
+  guides.setDraft(null);
+  const none = guides.draftCounts();
+  out.push({
+    name: "visuals: a draft draws its placed points and its run to the cursor, closes, and clears",
+    pass: open.segments === 3 && open.points === 3 && closed.segments === 3 && none.segments === 0 && none.points === 0,
+    detail: `open ${JSON.stringify(open)}, closed ${JSON.stringify(closed)}, cleared ${JSON.stringify(none)}`,
+  });
+  guides.dispose();
   return out;
 }
 
@@ -4898,6 +5389,8 @@ export function runRender3dCases(): CaseResult[] {
     ...blendStability(),
     ...orbitView(),
     ...orthographicView(),
+    ...visualsView(),
+    ...visualsGuides(),
     ...extrusionGeometry(),
     ...tippedPrimitive(),
     ...perObjectProjection(),
