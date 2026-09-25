@@ -85,6 +85,34 @@ The reader clamps it to 0..90.
 Both are in the rock's hash, so changing either marks the body stale.
 The object's `bevel` is the flat extrusion's chamfer and nothing else: the rock pipeline no longer reads it.
 
+A geometry object whose mesh is **generated** (a boulder fitted to an outline, or a patch of mushrooms grown on another object's surface; see [plans/visuals-workspace.md](../plans/visuals-workspace.md)) carries a **`generator`** block saying what it is generated from:
+
+```json
+"generator": {
+  "kind": "boulder",
+  "version": 1,
+  "params": { "depth": 120, "weathering": 0.5 },
+  "patch": { "host": 2, "points": [{ "x": -20, "y": 10, "z": 3 }] }
+}
+```
+
+- `kind` is `"boulder"` or `"mushrooms"`, and `version` is the version of that generator's parameter schema (`tools/blender/<kind>/params.json`).
+- `params` holds only the parameters that differ from the schema's defaults, and is absent when none do.
+  A parameter whose schema `unit` is `"m"` is a length, so it is pixels on disk and metres in the sim, and `scaleObject` converts it by the schema; every other value (a count, a ratio, a flag, a degree, a colour, a density per square metre) passes through untouched.
+  A key the schema does not know is carried through unscaled rather than dropped, and the generator refuses it.
+  The editor writes `params` back as it loaded them, so a file stating a default keeps stating it; the mesh key strips defaults on its own.
+- `patch` is a mushroom patch's alone: `points` is the loop it was painted inside, in the object's OWN frame (x and y as its shape's vertices are, z off its own `z`), and `host` is the index, in this body's `objects`, of the geometry object it grows on.
+  The loop is in the object's frame rather than the body's because the editor re-origins a body under its objects, and a loop stated in the body's frame would have to be rewritten, through a rotation and so not exactly, every time it did.
+  The editor resolves `host` to an item on load and rewrites it on save from wherever the host then is, so reordering a body cannot leave it naming the wrong object.
+  An index that names no other geometry object loads as a patch with no host (with a warning); the loop is kept, and a patch saved with no host writes no `host`.
+- A boulder's other input is the object's own `shape`, so nothing about the outline is stored in the block.
+
+`mesh` is then the key of the generated file, `boulder:<hash>` or `mushrooms:<hash>`, derived from the block and the outline or loop (see [**Generated meshes**](render3d.md#generated-meshes)).
+The object is **stale** when `mesh` is not the key its current content makes; the editor compares, and never regenerates on its own.
+A block with no `mesh` is an object that has never been generated.
+It is appearance and nothing else, like the rest of the object: a regenerated rock is the same rock to the sim.
+A level with no generated object saves byte-identically, which `cli render3d` holds `levels/ball.json` to; the `generator:` cases there hold the block's px/m trip, the host index, the clipboard, the schemas and the key.
+
 A **light object** (`LightObjectData`, `type: "light"`) sits in a body like any other scene object and rides its pose - see [**Light and air**](lighting-and-surfaces.md#light-and-air).
 Its fields, and what `scaleLevelData` does to each:
 

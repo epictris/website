@@ -38,6 +38,7 @@ import * as THREE from "three";
 // Type-only, so the loader's module still lands in its own chunk (`gltfLoader`).
 import type { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { withDownload } from "./download";
+import { generatedMeshAsset } from "./generated";
 import { MATERIAL_NAMES, type MaterialName } from "../lib/shapeGeometry";
 
 // How a surface looks. `tile` is the size of one texture repeat in METRES, which
@@ -3464,8 +3465,15 @@ function loadFile(file: string, bytes: number): Promise<THREE.Object3D | null> {
 // The prop for a manifest key, as a fresh instance the caller owns. Resolves to
 // null for an unknown key or a load failure, which is the caller's cue to keep
 // its placeholder.
+//
+// A GENERATED key (`boulder:<hash>`, `mushrooms:<hash>`, see generated.ts) is
+// asked first: it names its file itself, is one prop in its own frame (no node,
+// no scale, no turn), and has no manifest entry. Its size is unknown here, so
+// the download is unweighted; a missing file is a failed load like any other.
 export function loadMesh(key: string): Promise<THREE.Object3D | null> {
-  const asset = MESH_ASSETS[key];
+  const generated = generatedMeshAsset(key);
+  const asset: Pick<MeshAsset, "file" | "bytes" | "node" | "scale" | "rotX" | "rotY" | "rotZ"> | undefined =
+    generated ? { file: generated.file, bytes: 0 } : MESH_ASSETS[key];
   if (!asset) return Promise.resolve(null);
   return loadFile(asset.file, asset.bytes).then((root) => {
     if (!root) return null;

@@ -200,6 +200,39 @@ Cleat placement allocates nothing (`beltFrameAt` is `beltPointAt`/`beltTangentAt
 The first cut drew the extruded loop and cleats only, rejecting a scrolled texture because the extruder's UVs could not carry one and because the side wall is seen nearly edge-on.
 The ring answers the first; the second turned out to matter less than it read, because the camera sees the front cap face on and the inner wall through the hollow, and both carry the moving `u`.
 
+## Generated meshes
+
+A geometry object carrying a `generator` block (see [level-format](level-format.md)) draws a GENERATED mesh: a boulder built from its outline, or a mushroom patch grown on another object, by Python and headless Blender behind the dev server (plans/visuals-workspace.md).
+To the renderer it is an ordinary `kind: "mesh"` object; what differs is where the file comes from.
+
+### Keys and files
+
+The object's `mesh` is the key `<kind>:<hash>`, where `<hash>` is 16 hex digits of 64-bit FNV-1a over a canonical string of everything the generator is given.
+`generatedKey(kind, version, input, params)` in `render3d/generated.ts` makes it, and the same function runs in the browser, in bun and on the dev server:
+
+- The canonical string is the object `{ input, kind, params, version }` with every object's keys sorted, undefined dropped, and every number rounded to a ten-thousandth of its unit (0.1 mm for a length; `-0` prints as `0`).
+  `String` of a double is exactly specified by ECMAScript, so every engine prints the same characters, and the hash is BigInt arithmetic over the UTF-8 bytes; `cli render3d` pins two keys, which node agreed with when they were pinned.
+- `params` is brought to canonical form inside the function (`canonicalParams`: defaults stripped against the current schema, keys sorted), so a parameter written out at its default, a value carrying px/m float noise, or keys in another order make the same key.
+  Changing a default is therefore a schema `version` bump, which is in the key, so every mesh made under the old defaults reads as stale.
+- A boulder's `input` is `{ outline }`: the object's own shape in its own frame, metres, y UP, in the shape's vertex order (`localVertices` with y negated, exactly what the fork's editor sent).
+  That frame is the one `mountVisual` places the GLB in, so the file needs no transform, and moving or turning the object never makes it stale.
+- A mushroom patch's `input` is `{ loop, host }`: the loop in the patch object's own frame (metres, y up, z off its own plane), and the host described by what decides its drawn surface (its mesh key, or a primitive's outline or radius, depth, bevel and taper) and its pose relative to the patch.
+  Moving the patch and its host together changes nothing; moving either alone, regenerating the host, or editing the loop makes the patch stale.
+  The triangle soup the generator is handed is collected from the host's drawn meshes at generation time and is not part of the key; the server checks the key against `input`, not against the soup.
+- `editor/visuals/paramSchema.ts` computes an item's input (`generatorInput`), its expected key (`expectedKey`) and `isStale` from the model, so the badge and the job client read one definition.
+
+`generatedMeshAsset(key)` maps a generated key to its file, and `loadMesh` asks it before `MESH_ASSETS`:
+
+```
+public/generated/<kind>/<hash>/mesh.glb    served as /generated/<kind>/<hash>/mesh.glb
+public/generated/<kind>/<hash>/meta.json   { key, kind, version, params, input, bytes, triangles, generatedAt, blender }
+```
+
+A generated file is one prop in its own frame: no node, no scale, no turn, and no manifest entry.
+The key carries no size, so the browser fetches it unweighted; the preload list (`levelStoredFiles`, node only) reads `bytes` from `meta.json` through `generatedMeta` (`render3d/generatedMeta.ts`, kept apart so its `fs` import never reaches the browser), and lists a file with no meta at 0 bytes with a warning.
+A key whose file is missing is a failed load like any other, and draws the placeholder.
+The files are dev-only and gitignored for now; publishing them to the release store is a follow-up the key and layout are shaped for.
+
 ## Traps
 
 - **`PX`-sized constants do not survive projection.** A fixed on-screen size written as `<px> * PX` assumes the 2D renderer's uniform transform. Everything like that stays on the overlay, and nothing in the 3D scene may depend on `PIXELS_PER_METER` except through `space.ts`.

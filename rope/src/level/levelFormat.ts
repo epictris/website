@@ -83,6 +83,7 @@
 // kind on the way through would be a field that forgets.
 import { dmath } from "../engine/dmath";
 import { LAYER_HOOK, LAYER_PLAYER, LAYER_ROPE, MASK_ALL } from "../engine/body";
+import { loadSchema, scaleParams, type GeneratorKind, type ParamValues } from "./generatorParams";
 
 export type BodyKind = "static" | "killzone" | "rigid" | "force" | "water" | "finish";
 
@@ -811,6 +812,53 @@ export interface GeometryObjectData extends ObjectPlacement {
   // shifted by `tileOffset` - so the glow lands on the same grid as the surface
   // under it.
   emissiveTexture?: string;
+  // This object's mesh is GENERATED, and this is what it is generated from (see
+  // `GeneratorData`). `mesh` is then the key of the generated file, derived from
+  // this block, so the file says what the mesh is and "stale" is a comparison.
+  // Absent on every hand-placed object, which is every object authored before it.
+  generator?: GeneratorData;
+}
+
+// What a generated geometry object is generated FROM: which generator, the
+// version of its parameter schema, and the parameters that differ from that
+// schema's defaults (`tools/blender/<kind>/params.json`). A mushroom patch also
+// carries the loop it was painted inside and the object it grows on.
+//
+// It is appearance and nothing else, like every field on a geometry object: the
+// body collides with its collision objects, and a regenerated rock is the same
+// rock to the sim.
+//
+// A boulder's other input is the object's own `shape`, read in its own frame -
+// the outline the rock is fitted to - so there is nothing to store for it here.
+export interface GeneratorData {
+  kind: GeneratorKind;
+  version: number;
+  // Only the values that differ from the schema's defaults. A parameter whose
+  // schema unit is "m" is a length, pixels on disk and metres in the sim, and
+  // `scaleObject` converts it; every other value passes through untouched.
+  params?: ParamValues;
+  patch?: GeneratorPatchData;
+}
+
+// A mushroom patch's painted loop and the object it was painted on.
+export interface GeneratorPatchData {
+  // The index, within this body's `objects`, of the geometry object the patch
+  // grows on. An index rather than a name because objects have none; the
+  // editor re-resolves it on every load and rewrites it on every save, so a
+  // reordered body cannot leave it pointing at the wrong object. Absent (or an
+  // index naming no geometry object) is a patch whose host is gone: the loop is
+  // kept, and nothing can be regenerated until it is given one.
+  host?: number;
+  // The loop, in THIS object's own frame (the frame its `shape` is in): x and y
+  // as a shape's vertices are, and z off this object's own `z`, toward the
+  // camera. Lengths, so pixels on disk and metres in the sim.
+  //
+  // The object's frame rather than the body's, because the body's frame moves
+  // under its objects (the editor re-origins a body onto its centre of mass),
+  // and a loop stated in it would have to be rewritten - through a rotation, so
+  // not exactly - every time that happened. The generated mesh is placed in
+  // this frame anyway.
+  points: { x: number; y: number; z: number }[];
 }
 
 // A LIGHT: a torch on a wall, a shaft coming down through a grate, the glow off
@@ -3355,6 +3403,27 @@ export function scaleObject(o: SceneObjectData, factor: number): SceneObjectData
     ...(o.emissive !== undefined ? { emissive: o.emissive } : {}),
     ...(o.emissiveIntensity !== undefined ? { emissiveIntensity: o.emissiveIntensity } : {}),
     ...(o.emissiveTexture !== undefined ? { emissiveTexture: o.emissiveTexture } : {}),
+    ...(o.generator !== undefined ? { generator: scaleGenerator(o.generator, factor) } : {}),
+  };
+}
+
+// A generator block's lengths are its length PARAMETERS, by the schema's unit,
+// and a patch's loop, which is a set of positions. The kind, the version, the
+// flags, the counts, the angles and the host's index are not lengths. Always a
+// copy, like every other nested thing `scaleObject` returns.
+function scaleGenerator(g: GeneratorData, factor: number): GeneratorData {
+  return {
+    kind: g.kind,
+    version: g.version,
+    ...(g.params !== undefined ? { params: scaleParams(g.params, loadSchema(g.kind), factor) } : {}),
+    ...(g.patch !== undefined
+      ? {
+          patch: {
+            ...(g.patch.host !== undefined ? { host: g.patch.host } : {}),
+            points: g.patch.points.map((p) => ({ x: p.x * factor, y: p.y * factor, z: p.z * factor })),
+          },
+        }
+      : {}),
   };
 }
 

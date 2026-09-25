@@ -167,6 +167,27 @@ import { IRON_SURFACE } from "../render3d/assets";
 import { glowProp, patchGlow, stretch } from "../render3d/propGlow";
 import { HDRI_ASSETS, hdriNames } from "../render3d/assets";
 import { PIXELS_PER_METER, PX } from "../engine/units";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { canonicalString, generatedKey, generatedMeshAsset, parseGeneratedKey } from "../render3d/generated";
+import { generatedMeta } from "../render3d/generatedMeta";
+import { levelStoredFiles } from "../render3d/levelAssets";
+import {
+  canonicalParams,
+  expectedKey,
+  GENERATOR_KINDS,
+  GENERATOR_SCHEMAS,
+  generatorInput,
+  isStale,
+  itemLookup,
+  mergeDefaults,
+  scaleParams,
+  stripDefaults,
+  validateParams,
+  type GeneratorKind,
+} from "../editor/visuals/paramSchema";
+import { cloneGenerator, cloneVisual, remapPatchHosts } from "../editor/model";
 
 export interface CaseResult {
   name: string;
@@ -4887,6 +4908,468 @@ function glowCases(): CaseResult[] {
   return out;
 }
 
+// GENERATED GEOMETRY: the `generator` block on a geometry object, its parameter
+// schemas, and the content-addressed mesh key (plans/visuals-workspace.md,
+// Phase 2).
+//
+// Nothing here is visible in a picture, and every failure is silent in the way
+// the rest of this file guards against: a length parameter left in pixels is a
+// rock a hundred times too deep, a patch's host index that goes stale is a patch
+// growing on the wrong object, and a key that drifts between the editor and the
+// server is every rock in every level reading as stale (or, worse, as current).
+function generatorCases(): CaseResult[] {
+  const out: CaseResult[] = [];
+  // Rounded to a micrometre for comparison, as `flattened` is: px -> m -> px
+  // leaves float noise in the last bits of a length.
+  const r6 = (_k: string, v: unknown): unknown => (typeof v === "number" ? Math.round(v * 1e6) / 1e6 : v);
+  const same = (a: unknown, b: unknown): boolean => JSON.stringify(a, r6) === JSON.stringify(b, r6);
+  // A loader warning is part of what is asserted, never noise in the suite's
+  // output, so a case that expects one catches it.
+  const quietly = <T,>(run: () => T): { value: T; warnings: string[] } => {
+    const warnings: string[] = [];
+    const warn = console.warn;
+    console.warn = (...args: unknown[]) => void warnings.push(args.map(String).join(" "));
+    try {
+      return { value: run(), warnings };
+    } finally {
+      console.warn = warn;
+    }
+  };
+
+  // One body, on disk in pixels: a collision outline, the boulder dressing it
+  // (a length parameter and two that are not), the rock's mushroom patch naming
+  // the rock as its host by index, and a second patch whose index names the
+  // collision object - which is no host at all.
+  const authored: RawLevelData = {
+    player: { x: 0, y: 0, radius: 8 },
+    bodies: [
+      {
+        kind: "static",
+        x: 300,
+        y: -100,
+        rot: 0.25,
+        color: "#555555",
+        opacity: 1,
+        friction: 1,
+        objects: [
+          { type: "collision", shape: { kind: "poly", verts: [{ x: -100, y: -50 }, { x: 100, y: -50 }, { x: 80, y: 60 }, { x: -90, y: 50 }] } },
+          {
+            type: "geometry",
+            x: 20,
+            y: 5,
+            z: 12,
+            kind: "mesh",
+            mesh: "mushrooms:0000000000000000",
+            shape: { kind: "rect", w: 40, h: 30 },
+            generator: {
+              kind: "mushrooms",
+              version: 1,
+              params: { density: 220, height: 25, noOverlaps: false },
+              patch: { host: 2, points: [{ x: -20, y: 10, z: 3 }, { x: 20, y: 10, z: 4 }, { x: 0, y: -15, z: 6 }] },
+            },
+          },
+          {
+            type: "geometry",
+            kind: "mesh",
+            mesh: "boulder:0000000000000000",
+            shape: { kind: "poly", verts: [{ x: -100, y: -50 }, { x: 100, y: -50 }, { x: 80, y: 60 }, { x: -90, y: 50 }] },
+            generator: { kind: "boulder", version: 1, params: { depth: 120, weathering: 0.5, fractureAngle: 10, color: [0.2, 0.2, 0.25] } },
+          },
+          {
+            type: "geometry",
+            kind: "mesh",
+            shape: { kind: "rect", w: 10, h: 10 },
+            generator: { kind: "mushrooms", version: 1, patch: { host: 0, points: [{ x: 1, y: 2, z: 3 }, { x: 4, y: 5, z: 6 }, { x: 7, y: 8, z: 9 }] } },
+          },
+        ],
+      },
+    ],
+  };
+  const geometries = (d: LevelData): GeometryObjectData[] => d.bodies[0]!.objects.filter(isGeometryObject);
+
+  // --- the format: px <-> m by schema unit ---------------------------------
+  {
+    const m = scaleLevelData(authored, PX);
+    const [patch, rock] = geometries(m);
+    const p = rock!.generator!.params!;
+    const unitsRight =
+      same(p.depth, 1.2) &&
+      p.weathering === 0.5 &&
+      p.fractureAngle === 10 &&
+      JSON.stringify(p.color) === "[0.2,0.2,0.25]" &&
+      same(patch!.generator!.params!.height, 0.25) &&
+      patch!.generator!.params!.density === 220 &&
+      patch!.generator!.params!.noOverlaps === false &&
+      patch!.generator!.patch!.host === 2 &&
+      same(patch!.generator!.patch!.points[2], { x: 0, y: -0.15, z: 0.06 });
+    const back = scaleLevelData(m, PIXELS_PER_METER);
+    const trip = same(geometries(back).map((g) => g.generator), geometries(scaleLevelData(authored, 1)).map((g) => g.generator));
+    out.push({
+      name: "generator: the block crosses px -> m by schema unit (a length scales; a count, a flag, an angle, a ratio, a colour and the host index do not) and back",
+      pass: unitsRight && trip,
+      detail: `in metres ${JSON.stringify({ rock: p, patch: patch!.generator })}; round trip ${trip ? "kept" : `became ${JSON.stringify(geometries(back).map((g) => g.generator))}`}`,
+    });
+  }
+
+  // --- the editor: host index <-> item id ----------------------------------
+  {
+    const { value: model, warnings } = quietly(() => modelFromDisk(authored));
+    const items = model.items.filter((i) => i.object === "geometry");
+    const [patch, rock, orphan] = items;
+    const g = patch!.visual.generator!;
+    const loaded =
+      g.kind === "mushrooms" &&
+      g.patch!.hostId === rock!.id &&
+      same(g.params.height, 0.25) &&
+      same(rock!.visual.generator!.params.depth, 1.2) &&
+      orphan!.visual.generator!.patch!.hostId === 0 &&
+      orphan!.visual.generator!.patch!.points.length === 3 &&
+      warnings.length === 1 &&
+      warnings[0]!.includes("no host");
+    out.push({
+      name: "generator: a patch's host index loads as the host's item id; an index naming no other geometry object loads as no host, loop kept, with a warning",
+      pass: loaded,
+      detail: `host ${g.patch!.hostId} (rock ${rock!.id}); orphan ${JSON.stringify(orphan!.visual.generator!.patch)}; warnings ${JSON.stringify(warnings)}`,
+    });
+
+    // Saved back: the host is written as the index it now has, the orphan
+    // writes none, and everything else is what was loaded.
+    const saved = geometries(modelToDisk(model));
+    const want = geometries(scaleLevelData(authored, 1)).map((o) => o.generator);
+    delete want[2]!.patch!.host;
+    const kept = same(saved.map((o) => o.generator), want);
+    out.push({
+      name: "generator: the editor saves the block back in pixels, the host as its index in the body, a hostless patch with no index",
+      pass: kept,
+      detail: kept ? "kept" : `\n  want  ${JSON.stringify(want, r6)}\n  saved ${JSON.stringify(saved.map((o) => o.generator), r6)}`,
+    });
+
+    // The body's objects reordered under the patch: a new object ahead of the
+    // host moves the host's index, and the save follows it.
+    const shifted: RawLevelData = JSON.parse(JSON.stringify(authored));
+    const shiftedObjects = (shifted.bodies[0] as LevelBodyData).objects;
+    shiftedObjects.splice(1, 0, { type: "geometry", shape: { kind: "rect", w: 5, h: 5 } });
+    // The file states the host where it now is; the editor re-derives it.
+    (shiftedObjects[2] as GeometryObjectData).generator!.patch!.host = 3;
+    const moved = geometries(quietly(() => modelToDisk(modelFromDisk(shifted))).value);
+    const follows = moved[1]!.generator!.patch!.host === 3 && moved[2]!.generator?.kind === "boulder";
+    out.push({
+      name: "generator: a patch whose host moved within the body is written with the host's new index",
+      pass: follows,
+      detail: `host ${moved[1]!.generator!.patch!.host}, object 3 is ${moved[2]!.generator?.kind ?? "not generated"}`,
+    });
+
+    // Clipboard: a copy of the whole body pastes as a patch hosted by the
+    // PASTED rock, which is what `toLevelData` writing indexes buys for free.
+    const payload = writeClipboard(model, model.items);
+    const parsed = readClipboard(payload);
+    const pasted = parsed ? quietly(() => modelFromDisk(parsed)).value : null;
+    const pItems = pasted?.items.filter((i) => i.object === "geometry") ?? [];
+    const pasteOk =
+      pItems.length === 3 &&
+      pItems[0]!.visual.generator!.patch!.hostId === pItems[1]!.id &&
+      same(pItems[1]!.visual.generator!.params, rock!.visual.generator!.params) &&
+      same(pItems[0]!.visual.generator!.patch!.points, g.patch!.points);
+    out.push({
+      name: "generator: copy and paste carries the block, the patch hosted by the pasted rock",
+      pass: pasteOk,
+      detail: pasteOk ? "kept" : `pasted ${JSON.stringify(pItems.map((i) => i.visual.generator), r6)}`,
+    });
+
+    // The deep copy the editor's snapshot, duplicate and paste make, and the
+    // host remap a duplicate does: a copy's colour is its own array, its loop
+    // its own list, and a patch copied without its host has none.
+    const copy = cloneVisual(rock!.visual);
+    (copy.generator!.params.color as number[])[0] = 0.9;
+    const patchCopy = { ...patch!, visual: cloneVisual(patch!.visual) };
+    remapPatchHosts([patchCopy], new Map([[patch!.id, 999]]));
+    const detached =
+      (rock!.visual.generator!.params.color as number[])[0] === 0.2 &&
+      copy.generator !== rock!.visual.generator &&
+      patchCopy.visual.generator!.patch !== g.patch &&
+      patchCopy.visual.generator!.patch!.points !== g.patch!.points &&
+      patchCopy.visual.generator!.patch!.hostId === 0 &&
+      g.patch!.hostId === rock!.id &&
+      cloneGenerator(g).patch!.hostId === rock!.id;
+    out.push({
+      name: "generator: cloneVisual detaches the block (params and loop), and a patch copied without its host is re-hosted to nothing",
+      pass: detached,
+      detail: `original colour ${JSON.stringify(rock!.visual.generator!.params.color)}, copy's host ${patchCopy.visual.generator!.patch!.hostId}`,
+    });
+  }
+
+  // --- an untouched level saves byte-identically -----------------------------
+  {
+    const disk = JSON.stringify(BALL_LEVEL, null, 2);
+    const saved = JSON.stringify(modelToDisk(modelFromDisk(BALL_LEVEL as RawLevelData)), null, 2);
+    const identical = disk === saved;
+    let at = 0;
+    while (at < disk.length && disk[at] === saved[at]) at++;
+    out.push({
+      name: "generator: levels/ball.json (no generated objects) saves back byte-identical",
+      pass: identical,
+      detail: identical ? `${disk.length} bytes` : `first difference at ${at}: ${JSON.stringify(disk.slice(at - 40, at + 40))} vs ${JSON.stringify(saved.slice(at - 40, at + 40))}`,
+    });
+  }
+
+  // --- the key ----------------------------------------------------------------
+  {
+    // Two fixed contents, and the keys they must make everywhere, for ever: a
+    // change to either string is every generated mesh in every level going
+    // stale, and is only ever made on purpose (with a schema version bump).
+    const rockInput = { outline: [[-1, -0.5], [1, -0.5], [1, 0.5], [-1, 0.5]] as [number, number][] };
+    const rockParams = { seed: 7, depth: 1.2 };
+    const patchInput = {
+      loop: [[0, 0, 0.1], [0.5, 0, 0.1], [0.25, 0.4, 0.12]] as [number, number, number][],
+      host: { kind: "mesh" as const, mesh: "boulder:0123456789abcdef", pose: [0.1, -0.2, 0, 0, 0, 0, 1] as [number, number, number, number, number, number, number] },
+    };
+    const patchParams = { density: 200, noOverlaps: false };
+    const rockKey = generatedKey("boulder", 1, rockInput, rockParams);
+    const patchKey = generatedKey("mushrooms", 1, patchInput, patchParams);
+    // Also computed under node (V8) when pinned, which agreed with bun (JSC).
+    const ROCK_KEY = "boulder:c82bc75873f0956b";
+    const PATCH_KEY = "mushrooms:a63d3184bac129bb";
+    const text = canonicalString({ kind: "boulder", version: 1, input: rockInput, params: rockParams });
+    const TEXT = `{"input":{"outline":[[-1,-0.5],[1,-0.5],[1,0.5],[-1,0.5]]},"kind":"boulder","params":{"depth":1.2,"seed":7},"version":1}`;
+    out.push({
+      name: "generator: generatedKey is pinned on two fixed inputs (a boulder outline, a mushroom patch) and on its canonical string",
+      pass: rockKey === ROCK_KEY && patchKey === PATCH_KEY && text === TEXT,
+      detail: `${rockKey}, ${patchKey}; canonical ${text}`,
+    });
+
+    // One rock, however its parameters are spelled: defaults written out,
+    // float noise from a px round trip, keys in another order. And a different
+    // rock for a different seed, version, outline or kind.
+    const spelled = generatedKey("boulder", 1, rockInput, { depth: 1.2 + 1e-12, edgeVariation: 0.65, seed: 7, tolerance: null });
+    const moved = generatedKey("boulder", 1, { outline: [[-1, -0.5], [1, -0.5], [1, 0.5], [-1, 0.51]] }, rockParams);
+    const distinct = new Set([
+      rockKey,
+      generatedKey("boulder", 1, rockInput, { ...rockParams, seed: 8 }),
+      generatedKey("boulder", 2, rockInput, rockParams),
+      moved,
+      generatedKey("mushrooms", 1, rockInput, {}),
+    ]);
+    const stable = spelled === rockKey && distinct.size === 5;
+    out.push({
+      name: "generator: generatedKey ignores defaults, float noise and key order, and changes with seed, version, outline and kind",
+      pass: stable,
+      detail: `spelled ${spelled}; ${distinct.size} distinct of 5`,
+    });
+
+    const hash = rockKey.split(":")[1]!;
+    const resolved =
+      generatedMeshAsset(rockKey)?.file === `/generated/boulder/${hash}/mesh.glb` &&
+      generatedMeshAsset(patchKey)?.file === `/generated/mushrooms/${patchKey.split(":")[1]}/mesh.glb` &&
+      generatedMeshAsset("rock-196") === null &&
+      generatedMeshAsset("boulder-v5:263a5a5c-58d7-437c-b957-9900893e48b5:5129496") === null &&
+      generatedMeshAsset("boulder:XYZ") === null &&
+      parseGeneratedKey(patchKey)?.kind === "mushrooms";
+    out.push({
+      name: "generator: a generated key resolves to /generated/<kind>/<hash>/mesh.glb, and nothing else does",
+      pass: resolved,
+      detail: `${rockKey} -> ${generatedMeshAsset(rockKey)?.file}`,
+    });
+
+    // The preload list: a generated file is listed at the bytes its meta.json
+    // records, and at 0 with a warning when there is none.
+    const dir = mkdtempSync(join(tmpdir(), "rope-generated-"));
+    mkdirSync(join(dir, "generated", "boulder", hash), { recursive: true });
+    writeFileSync(join(dir, "generated", "boulder", hash, "meta.json"), JSON.stringify({ key: rockKey, bytes: 123456 }));
+    const meta = generatedMeta(rockKey, dir);
+    const missing = generatedMeta(patchKey, dir);
+    rmSync(dir, { recursive: true, force: true });
+    const level: RawLevelData = {
+      player: { x: 0, y: 0, radius: 8 },
+      bodies: [{ kind: "static", x: 0, y: 0, rot: 0, objects: [{ type: "geometry", kind: "mesh", mesh: patchKey }] }],
+    };
+    const { value: files, warnings } = quietly(() => levelStoredFiles(level));
+    const listed = files.find((f) => f.file === generatedMeshAsset(patchKey)!.file);
+    const preload = meta?.bytes === 123456 && missing === null && listed?.bytes === 0 && warnings.some((w) => w.includes("meta.json"));
+    out.push({
+      name: "generator: meta.json gives a generated file its bytes; the preload list names one without it at 0, with a warning",
+      pass: preload,
+      detail: `meta bytes ${meta?.bytes}, missing ${JSON.stringify(missing)}, listed ${JSON.stringify(listed)}, warnings ${warnings.length}`,
+    });
+  }
+
+  // --- the schemas -------------------------------------------------------------
+  {
+    const problems: string[] = [];
+    const counts: string[] = [];
+    for (const kind of GENERATOR_KINDS) {
+      const s = GENERATOR_SCHEMAS[kind];
+      if (s.kind !== kind || !Number.isInteger(s.version) || s.version < 1) problems.push(`${kind}: kind/version`);
+      if (!Array.isArray(s.notes?.constants) || s.notes.constants.length === 0) problems.push(`${kind}: no constants note`);
+      const keys = new Set<string>();
+      for (const p of s.params) {
+        const where = `${kind}.${p.key}`;
+        if (keys.has(p.key)) problems.push(`${where}: duplicate`);
+        keys.add(p.key);
+        if (!s.groups.includes(p.group)) problems.push(`${where}: group ${p.group}`);
+        if (typeof p.basic !== "boolean" || typeof p.doc !== "string" || p.doc.length < 10) problems.push(`${where}: basic/doc`);
+        if (p.unit !== undefined && p.unit !== "m" && p.unit !== "deg") problems.push(`${where}: unit ${p.unit}`);
+        if (p.type === "int" || p.type === "number" || p.type === "color") {
+          if (typeof p.min !== "number" || typeof p.max !== "number" || typeof p.step !== "number") problems.push(`${where}: min/max/step`);
+        }
+        if (p.type === "enum" && !(p.options ?? []).includes(p.default as number | string)) problems.push(`${where}: default not an option`);
+        // Every default is itself a valid value (null is "derived").
+        if (p.default !== null && validateParams({ [p.key]: p.default }, s).length > 0) problems.push(`${where}: default invalid`);
+      }
+      counts.push(`${kind} ${s.groups.map((g) => `${g} ${s.params.filter((p) => p.group === g).length}`).join(", ")}`);
+    }
+    out.push({
+      name: "generator: both params.json files are well formed (unique keys, known groups and units, ranges, a doc each, defaults valid)",
+      pass: problems.length === 0,
+      detail: problems.length === 0 ? counts.join("; ") : problems.join("; "),
+    });
+
+    // The values the fork's editor actually sent, which is what "the port
+    // changes nothing about an approved rock" rests on.
+    const d = (kind: GeneratorKind) => Object.fromEntries(GENERATOR_SCHEMAS[kind].params.map((p) => [p.key, p.default]));
+    const b = d("boulder");
+    const m = d("mushrooms");
+    const fork =
+      b.seed === 31 && b.depth === 1.6 && b.tolerance === null && b.edgeVariation === 0.65 && b.weathering === 0.38 &&
+      b.fractureAngle === 4 && b.detail === 1 && b.secondarySlabs === 0 && b.slabsPerArea === 10 &&
+      JSON.stringify(b.color) === "[0.13,0.15,0.18]" && b.faceBudget === 3000 && b.bakeSize === 2048 &&
+      m.seed === 0 && m.density === 150 && m.height === 0.16 && m.clumping === 0.75 && m.maxSlope === 75 &&
+      m.detail === 0.3 && m.spacing === 0.02 && m.noOverlaps === true && m.glow === 2 && m.maxTriangles === 40000 &&
+      m.maxEstimate === 3000;
+    out.push({
+      name: "generator: the defaults are the values the fork's editor sent (boulder seed 31, depth 1.6, ...; mushrooms density 150, detail 0.3, ...)",
+      pass: fork,
+      detail: `boulder ${JSON.stringify(b)}; mushrooms ${JSON.stringify(m)}`,
+    });
+  }
+
+  // --- scaling, validation, defaults -----------------------------------------
+  {
+    const boulder = GENERATOR_SCHEMAS.boulder;
+    const mushrooms = GENERATOR_SCHEMAS.mushrooms;
+    const scaled = scaleParams(
+      { depth: 1.2, edgeBevelWidth: 0.02, weathering: 0.5, fractureAngle: 10, faceBudget: 4000, color: [0.1, 0.2, 0.3], mystery: 3 },
+      boulder,
+      100,
+    );
+    const grown = scaleParams({ height: 0.2, spacing: 0.03, gap: 0.004, clumpSize: 0.5, density: 180, maxTilt: 20, noOverlaps: false }, mushrooms, 100);
+    const byUnit =
+      same(scaled, { depth: 120, edgeBevelWidth: 2, weathering: 0.5, fractureAngle: 10, faceBudget: 4000, color: [0.1, 0.2, 0.3], mystery: 3 }) &&
+      same(grown, { height: 20, spacing: 3, gap: 0.4, clumpSize: 50, density: 180, maxTilt: 20, noOverlaps: false });
+    out.push({
+      name: "generator: scaleParams scales exactly the unit-m parameters (a degree, a count, a ratio, a density, a colour and an unknown key pass)",
+      pass: byUnit,
+      detail: `${JSON.stringify(scaled, r6)}; ${JSON.stringify(grown, r6)}`,
+    });
+
+    const bad = validateParams(
+      { depth: 9, seed: 1.5, weathering: "much", bakeSize: 3000, color: [0.1, 2, 0.1], mystery: 1 },
+      boulder,
+    ).map((i) => i.key);
+    const badBool = validateParams({ noOverlaps: 1, density: 0 }, mushrooms).map((i) => i.key);
+    const good = validateParams({ depth: 5, seed: 0, color: [0, 1, 0.5], bakeSize: 4096, tolerance: 0.03 }, boulder);
+    const rejects =
+      JSON.stringify(bad.sort()) === JSON.stringify(["bakeSize", "color", "depth", "mystery", "seed", "weathering"]) &&
+      JSON.stringify(badBool.sort()) === JSON.stringify(["density", "noOverlaps"]) &&
+      good.length === 0;
+    out.push({
+      name: "generator: validateParams rejects out-of-range, mistyped, non-option and unknown values and passes the edges of the range",
+      pass: rejects,
+      detail: `flagged ${JSON.stringify(bad)} and ${JSON.stringify(badBool)}; valid set ${JSON.stringify(good)}`,
+    });
+
+    const authoredParams = { depth: 1.2, color: [0.2, 0.2, 0.25] };
+    const merged = mergeDefaults(authoredParams, boulder);
+    const stripped = stripDefaults(merged, boulder);
+    const allDefaults = stripDefaults(mergeDefaults({}, boulder), boulder);
+    const nearDefault = stripDefaults({ depth: 1.6 + 1e-9, seed: 31, weathering: 0.3801 }, boulder);
+    const mergeOk =
+      Object.keys(merged).length === boulder.params.length &&
+      merged.depth === 1.2 &&
+      merged.seed === 31 &&
+      merged.tolerance === null &&
+      same(stripped, authoredParams) &&
+      Object.keys(allDefaults).length === 0 &&
+      same(nearDefault, { weathering: 0.3801 }) &&
+      same(canonicalParams({ weathering: 0.5, depth: 1.6, seed: 9 }, boulder), { seed: 9, weathering: 0.5 }) &&
+      JSON.stringify(Object.keys(canonicalParams({ weathering: 0.5, seed: 9 }, boulder))) === '["seed","weathering"]';
+    out.push({
+      name: "generator: mergeDefaults fills every parameter and stripDefaults takes it back to what was authored, at 1e-4 resolution",
+      pass: mergeOk,
+      detail: `merged ${Object.keys(merged).length} of ${boulder.params.length}; stripped ${JSON.stringify(stripped)}; near-default ${JSON.stringify(nearDefault)}`,
+    });
+  }
+
+  // --- staleness -----------------------------------------------------------------
+  {
+    const model = quietly(() => modelFromDisk(authored)).value;
+    const lookup = itemLookup(model.items);
+    const [patch, rock] = model.items.filter((i) => i.object === "geometry");
+    // Generated as it stands.
+    rock!.visual.mesh = expectedKey(rock!, lookup)!;
+    patch!.visual.mesh = expectedKey(patch!, lookup)!;
+    const fresh = !isStale(rock!, lookup) && !isStale(patch!, lookup);
+    const plain = model.items.find((i) => i.object === "collision")!;
+    const outline = boulderOutline(rock!);
+
+    // The whole body moved and turned: nothing the generators read changed.
+    const turn = 0.4;
+    const pivot = new Vec2(1, 2);
+    for (const i of model.items) {
+      i.pos = pivot.add(i.pos.sub(pivot).rotated(turn));
+      i.rot += turn;
+    }
+    const bodyMoved = !isStale(rock!, lookup) && !isStale(patch!, lookup);
+
+    // The host alone moved: the patch is stale, the rock is not.
+    const home = rock!.pos;
+    rock!.pos = rock!.pos.add(new Vec2(0.05, 0));
+    const hostMoved = !isStale(rock!, lookup) && isStale(patch!, lookup);
+    rock!.pos = home;
+
+    // A parameter, a vertex, the version.
+    rock!.visual.generator!.params.depth = 1.3;
+    const paramChanged = isStale(rock!, lookup) && isStale(patch!, lookup) === false;
+    rock!.visual.generator!.params.depth = 1.2;
+    const shape = rock!.shape as Extract<EdItem["shape"], { kind: "poly" }>;
+    const vert = shape.verts[0]!;
+    shape.verts[0] = vert.add(new Vec2(0.01, 0));
+    const vertexChanged = isStale(rock!, lookup);
+    shape.verts[0] = vert;
+    rock!.visual.generator!.version = 2;
+    const versionChanged = isStale(rock!, lookup);
+    rock!.visual.generator!.version = 1;
+    // Stale when the host goes, when never generated, never without a block.
+    patch!.visual.generator!.patch!.hostId = 0;
+    const hostless = isStale(patch!, lookup) && expectedKey(patch!, lookup) === null;
+    const unmade = { ...rock!, visual: { ...rock!.visual, mesh: "" } };
+    const results = {
+      fresh,
+      bodyMoved,
+      hostMoved,
+      paramChanged,
+      vertexChanged,
+      versionChanged,
+      hostless,
+      neverGenerated: isStale(unmade, lookup),
+      noBlock: !isStale(plain, lookup),
+      outlineUp: same(outline[0], [-1, 0.5]),
+    };
+    const ok = Object.values(results).every(Boolean);
+    out.push({
+      name: "generator: isStale follows the outline, the loop's host, the params and the version, and not a move of the whole body",
+      pass: ok,
+      detail: JSON.stringify(results),
+    });
+  }
+  return out;
+}
+
+// A boulder's outline as the key sees it: the object's own shape, y up.
+function boulderOutline(item: EdItem): [number, number][] {
+  const input = generatorInput(item, () => undefined);
+  return input && "outline" in input ? input.outline : [];
+}
+
 export function runRender3dCases(): CaseResult[] {
   return [
     ...beltRendering(),
@@ -4928,5 +5411,6 @@ export function runRender3dCases(): CaseResult[] {
     ...checkpointFormat(),
     ...levelMetaFormat(),
     ...clipboardPayload(),
+    ...generatorCases(),
   ];
 }

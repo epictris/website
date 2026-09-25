@@ -86,6 +86,8 @@ import {
   cloneChain,
   cloneShape,
   cloneVine,
+  cloneVisual,
+  remapPatchHosts,
   DEFAULT_CURVE_WIDTH,
   convexHull,
   bodyWithinRect,
@@ -841,7 +843,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // The visual is mutated in place by the inspector exactly as `cam`,
       // `light` and `note` are, so an undo snapshot that shared it would alias
       // the state it is meant to be restoring - the known trap on this line.
-      visual: { ...b.visual },
+      // `cloneVisual` because the generator block nests.
+      visual: cloneVisual(b.visual),
     })),
     chains: m.chains.map(cloneChain),
     vines: m.vines.map(cloneVine),
@@ -7437,7 +7440,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         cam: { ...b.cam },
         light: { ...b.light },
         note: { ...b.note },
-        visual: { ...b.visual },
+        visual: cloneVisual(b.visual),
       };
     });
     // A matched pair copied together stays a pair; a geometry object copied
@@ -7446,6 +7449,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     for (const it of items) {
       if (it.matchId !== 0) it.matchId = idOf.get(it.matchId) ?? 0;
     }
+    // ...and a mushroom patch follows its host the same way.
+    remapPatchHosts(items, idOf);
     // A copied anchor is a NEW anchor and needs an on-disk id of its own:
     // `anchorId` is what chains and vines name their ends by in the file, so a
     // copy carrying the original's id loads with both ends resolving to

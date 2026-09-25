@@ -94,7 +94,9 @@ import {
   type LevelCameraData,
   type NoteData,
   type ShapeData,
+  type GeneratorData,
 } from "../level/levelFormat";
+import type { GeneratorKind, ParamValue } from "../level/generatorParams";
 import {
   DEFAULT_FILL_INTENSITY,
   DEFAULT_GROUND_FILL,
@@ -858,6 +860,100 @@ export interface EdVisual {
   // a light item grouped into the same body IS the lamp's light, and it cannot
   // drift from the fitting because they are one body.
   emissiveTexture: string;
+  // What this object's mesh is GENERATED from (see `GeneratorData`); absent on
+  // everything placed by hand. Optional rather than nullable because it is the
+  // rare case: the spread copies of a visual all over the editor carry an
+  // absent field correctly, and `cloneVisual` is what copies a present one.
+  generator?: EdGenerator;
+}
+
+// A generator block as the editor holds it: the on-disk block in metres, with a
+// patch's host resolved from an index in the body to the host's item id, so it
+// survives the body's objects being reordered, added to or split.
+export interface EdGenerator {
+  kind: GeneratorKind;
+  version: number;
+  // As authored and loaded: only what the author set, in metres, keys in the
+  // order they were set. Written back verbatim, so a level saves byte-identical
+  // whatever it holds; defaults are stripped where a value is SET (the panel),
+  // and the mesh key strips them again on its own (`generatedKey`).
+  params: Record<string, ParamValue>;
+  patch: EdPatch | null;
+}
+
+export interface EdPatch {
+  // The host's item id; 0 = no host (the index on disk named nothing usable, or
+  // the host was deleted, or the patch was copied without it). The loop is kept
+  // either way.
+  hostId: number;
+  // The painted loop in the PATCH object's own frame, metres, y DOWN like every
+  // other point in the model (and the file), z toward the camera off the
+  // object's own plane. Points are replaced, never mutated, so a clone copies
+  // the array and shares the points.
+  points: readonly EdPoint3[];
+}
+
+export interface EdPoint3 {
+  readonly x: number;
+  readonly y: number;
+  readonly z: number;
+}
+
+// A generator block no other object shares: the params (a colour is an array
+// the inspector may write into) and the loop are copied. The ONE deep copy the
+// editor's snapshot, duplicate and paste make of it.
+export function cloneGenerator(g: EdGenerator): EdGenerator {
+  const params: Record<string, ParamValue> = {};
+  for (const [k, v] of Object.entries(g.params)) params[k] = Array.isArray(v) ? [...v] : v;
+  return {
+    kind: g.kind,
+    version: g.version,
+    params,
+    patch: g.patch ? { hostId: g.patch.hostId, points: [...g.patch.points] } : null,
+  };
+}
+
+// A visual no other item shares. Every field but the generator is a primitive
+// or an immutable Vec2, so a spread is a copy; the generator is the nested one.
+export function cloneVisual(v: EdVisual): EdVisual {
+  return v.generator ? { ...v, generator: cloneGenerator(v.generator) } : { ...v };
+}
+
+// After a copy (`idOf` maps each original item id to its copy's), point every
+// copied patch at its host's COPY, or at nothing when the host was not copied:
+// the original host is in another body, where a patch cannot name it.
+export function remapPatchHosts(items: readonly EdItem[], idOf: ReadonlyMap<number, number>): void {
+  for (const it of items) {
+    const patch = it.visual.generator?.patch;
+    if (patch && patch.hostId !== 0) patch.hostId = idOf.get(patch.hostId) ?? 0;
+  }
+}
+
+// On-disk generator block -> the editor's, host unresolved (the caller knows the
+// body; see `fromLevelData`).
+function edGenerator(g: GeneratorData): EdGenerator {
+  const params: Record<string, ParamValue> = {};
+  for (const [k, v] of Object.entries(g.params ?? {})) params[k] = Array.isArray(v) ? [...v] : v;
+  return {
+    kind: g.kind,
+    version: g.version,
+    params,
+    patch: g.patch ? { hostId: 0, points: g.patch.points.map((p) => ({ x: p.x, y: p.y, z: p.z })) } : null,
+  };
+}
+
+// ...and back, host left for `toLevelData`, which is where the body's object
+// order is decided. Params are written as held, and only when there are any.
+function generatorData(g: EdGenerator): GeneratorData {
+  const params = Object.entries(g.params);
+  return {
+    kind: g.kind,
+    version: g.version,
+    ...(params.length > 0
+      ? { params: Object.fromEntries(params.map(([k, v]) => [k, Array.isArray(v) ? [...v] : v])) }
+      : {}),
+    ...(g.patch ? { patch: { points: g.patch.points.map((p) => ({ x: p.x, y: p.y, z: p.z })) } } : {}),
+  };
 }
 
 // A body's own frame: the transform its objects are placed in, and what the file
@@ -1293,6 +1389,7 @@ export function edVisual(v: GeometryObjectData | undefined): EdVisual {
     emissive: v.emissive ?? d.emissive,
     emissiveIntensity: v.emissiveIntensity ?? d.emissiveIntensity,
     emissiveTexture: v.emissiveTexture ?? d.emissiveTexture,
+    ...(v.generator ? { generator: edGenerator(v.generator) } : {}),
   };
 }
 
@@ -1345,6 +1442,9 @@ export function visualData(v: EdVisual): GeometryObjectData | undefined {
     // it glows in the colours it was painted in, and the colour beside it is a
     // tint over that rather than the thing being turned on.
     ...(v.emissiveTexture ? { emissiveTexture: v.emissiveTexture } : {}),
+    // A patch's host is an index into the body's objects, which only
+    // `toLevelData` knows the order of; it adds it.
+    ...(v.generator ? { generator: generatorData(v.generator) } : {}),
   };
   // `type` alone means nothing was authored.
   return Object.keys(out).length > 1 ? out : undefined;
@@ -1605,6 +1705,19 @@ function fromLevelData(data: LevelData): EdModel {
       g.matchId = target.id;
       if (!exact) copyMatchedOutline(target, g);
     }
+    // Resolve each mushroom patch's host from its index in this body's objects
+    // (one item per object, in file order, so `made[k]` IS object k). An index
+    // that names nothing, names something other than a geometry object, or
+    // names the patch itself loads as no host: the loop is kept for the author
+    // to re-host, and the panel says so.
+    b.objects.forEach((o, k) => {
+      const host = isGeometryObject(o) ? o.generator?.patch?.host : undefined;
+      const patch = made[k]!.visual.generator?.patch;
+      if (host === undefined || !patch) return;
+      const target = made[host];
+      if (target && host !== k && target.object === "geometry") patch.hostId = target.id;
+      else console.warn(`[editor] body ${data.bodies.indexOf(b)}: patch object ${k} names object ${host} as its host, which is not another geometry object; loaded with no host`);
+    });
     itemOfBody.push(made.find((i) => i.object === "collision") ?? null);
   }
 
@@ -2287,9 +2400,12 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
     };
 
     const objects: SceneObjectData[] = [];
+    // Where each item's object landed in `objects`, for a patch naming its host.
+    const indexOfItem = new Map<number, number>();
     // Every object written goes through this, so one cannot reach the file
     // without `itemOf` recording which item wrote it.
     const emit = (item: EdItem, o: SceneObjectData): void => {
+      indexOfItem.set(item.id, objects.length);
       objects.push(o);
       itemOf?.set(o, item.id);
     };
@@ -2419,6 +2535,19 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
           : {}),
         ...(ownFill ? { color: i.color, opacity: i.opacity } : {}),
       });
+    }
+    // Every patch names its host by where the host was just written, now that
+    // the whole body's order is settled. A host that is no longer a geometry
+    // object in this body (deleted, split off, never there) writes no index,
+    // which is what a patch with no host loads from.
+    for (const i of run) {
+      const hostId = i.visual.generator?.patch?.hostId;
+      if (i.object !== "geometry" || !hostId || hostId === i.id) continue;
+      const k = indexOfItem.get(hostId);
+      const own = objects[indexOfItem.get(i.id)!];
+      if (k === undefined || objects[k]!.type !== "geometry" || !own || own.type !== "geometry") continue;
+      const g = own.generator!;
+      own.generator = { ...g, patch: { host: k, points: g.patch!.points } };
     }
 
     return {

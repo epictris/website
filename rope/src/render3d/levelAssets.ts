@@ -22,6 +22,8 @@
 
 import type { RawLevelData } from "../level/levelFormat";
 import { normalizeLevelData } from "../level/levelFormat";
+import { generatedMeshAsset } from "./generated";
+import { generatedMeta } from "./generatedMeta";
 import {
   BALL_MESH,
   emissiveMapName,
@@ -39,6 +41,20 @@ import {
 export interface StoredFile {
   file: string;
   bytes: number;
+}
+
+// A mesh key's file, generated or from the manifest, as `loadMesh` resolves it.
+// A generated file's weight is not in its key, so it is read from the
+// `meta.json` beside it; one with no meta (generated elsewhere, or by a
+// service that died before writing it) is listed at 0 bytes, which only means
+// the bar does not count it, and said out loud because a 0 is otherwise a
+// silent wrong answer.
+function meshFile(key: string): StoredFile | undefined {
+  const generated = generatedMeshAsset(key);
+  if (!generated) return MESH_ASSETS[key];
+  const meta = generatedMeta(key);
+  if (!meta) console.warn(`[levelAssets] ${key} has no meta.json; preloading ${generated.file} unweighted`);
+  return { file: generated.file, bytes: meta?.bytes ?? 0 };
 }
 
 // Every stored file the 3D scene will request for this level, in roughly the
@@ -91,7 +107,7 @@ export function levelStoredFiles(raw: RawLevelData, controller?: string): Stored
       // glowing in the fallback's).
       const glow = emissiveMapName(object.emissiveTexture);
       if (glow) addSurface(glow);
-      if (object.mesh) add(MESH_ASSETS[object.mesh]);
+      if (object.mesh) add(meshFile(object.mesh));
     }
   }
   // The flipbook and the foam mask are loaded when the first water material is
