@@ -22,8 +22,8 @@
 
 import type { RawLevelData } from "../level/levelFormat";
 import { normalizeLevelData } from "../level/levelFormat";
-import { generatedMeshAsset } from "./generated";
-import { generatedMeta } from "./generatedMeta";
+import { generatedMeshAsset, parseGeneratedKey } from "./generated";
+import { GENERATED_ASSETS, generatedMeta } from "./generatedMeta";
 import {
   BALL_MESH,
   emissiveMapName,
@@ -44,17 +44,34 @@ export interface StoredFile {
 }
 
 // A mesh key's file, generated or from the manifest, as `loadMesh` resolves it.
-// A generated file's weight is not in its key, so it is read from the
-// `meta.json` beside it; one with no meta (generated elsewhere, or by a
-// service that died before writing it) is listed at 0 bytes, which only means
-// the bar does not count it, and said out loud because a 0 is otherwise a
-// silent wrong answer.
+// A generated file's weight is not in its key: a published one has it pinned in
+// the store manifest (`GENERATED_ASSETS`), which a fresh checkout has too; one
+// generated here and not yet published has it in the `meta.json` beside it; one
+// with neither (generated elsewhere and never published, or by a service that
+// died before writing it) is listed at 0 bytes, which only means the bar does
+// not count it, and said out loud because a 0 is otherwise a silent wrong
+// answer.
 function meshFile(key: string): StoredFile | undefined {
   const generated = generatedMeshAsset(key);
   if (!generated) return MESH_ASSETS[key];
-  const meta = generatedMeta(key);
-  if (!meta) console.warn(`[levelAssets] ${key} has no meta.json; preloading ${generated.file} unweighted`);
-  return { file: generated.file, bytes: meta?.bytes ?? 0 };
+  const bytes = GENERATED_ASSETS[key]?.bytes ?? generatedMeta(key)?.bytes;
+  if (bytes === undefined) {
+    console.warn(`[levelAssets] ${key} is not in the store and has no meta.json; preloading ${generated.file} unweighted`);
+  }
+  return { file: generated.file, bytes: bytes ?? 0 };
+}
+
+// Every generated mesh key the level names, in authored order, once each: what
+// the store has to hold for the level to draw as it was generated (see
+// `GENERATED_ASSETS`).
+export function levelGeneratedKeys(raw: RawLevelData): string[] {
+  const keys = new Set<string>();
+  for (const body of normalizeLevelData(raw).bodies) {
+    for (const object of body.objects) {
+      if (object.type === "geometry" && object.mesh && parseGeneratedKey(object.mesh)) keys.add(object.mesh);
+    }
+  }
+  return [...keys];
 }
 
 // Every stored file the 3D scene will request for this level, in roughly the

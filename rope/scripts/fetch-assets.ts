@@ -1,4 +1,5 @@
-// Populate `public/meshes/` and `public/textures/` from the release store. Run by hand after a clone
+// Populate `public/meshes/`, `public/textures/` (and the other stored kinds,
+// generated meshes among them) from the release store. Run by hand after a clone
 // (`bun run assets:fetch`) and by the Dockerfile before `bun run build`, so the
 // bytes reach the image without ever entering git.
 //
@@ -12,10 +13,22 @@
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { assetName, assetUrl, sha256, storedAssets } from "./assetStore";
+import { GENERATED_ASSETS } from "../src/render3d/generatedMeta";
+import { assetName, assetUrl, levelsGeneratedKeys, sha256, storedAssets } from "./assetStore";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const PUBLIC_DIR = join(ROOT, "public");
+
+// A generated mesh a level names and the store does not hold would ship as its
+// stand-in - the build succeeds and the level is quietly not the one that was
+// generated - so it stops the fetch, and with it the Docker build, before the
+// empty-manifest early exit below can wave it through.
+const unpublished = [...levelsGeneratedKeys()].filter(([key]) => !GENERATED_ASSETS[key]);
+if (unpublished.length) {
+  for (const [key, levels] of unpublished) console.error(`  FAIL  ${key} (${levels.join(", ")}) is not in the store`);
+  console.error(`\n[assets] publish them from the machine that generated them: \`bun run assets:publish-generated\`.`);
+  process.exit(1);
+}
 
 // Props and texture maps in one list: both live in the same flat release, both
 // are pinned by sha256, and a fetch that knew about only one of the two

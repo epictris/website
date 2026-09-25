@@ -1,11 +1,43 @@
-// The facts a generation recorded about its own output, read off disk. Node
-// only (the dev server, `vite.config.ts`'s preload list, bun tools): it imports
-// `fs`, which is why it is not in `generated.ts`, which the browser loads.
+// The facts recorded about a generated mesh: what the release store pins for it
+// (`GENERATED_ASSETS`, committed) and what the generation that made it wrote
+// beside it (`meta.json`, local). Node only (the dev server, `vite.config.ts`'s
+// preload list, bun tools): it imports `fs`, which is why it is not in
+// `generated.ts`, which the browser loads.
 
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import type { GeneratorKind, ParamValues } from "../level/generatorParams";
 import { GENERATED_META_FILE, generatedDir, parseGeneratedKey, type GeneratorInput } from "./generated";
+import generatedAssets from "./generatedAssets.json";
+
+// A generated mesh in the release store, pinned exactly as a prop is (see
+// `MeshAsset`): the sha256 says which bytes this revision was written against,
+// `bytes` is what the loading bar counts.
+//
+// The KEY cannot stand in for the hash. It is content-addressed over the
+// generator's INPUT, and Blender is not a pure function of it across versions
+// and machines, so two runs of one key may write different files; the store
+// holds the one that was published, and this entry is what says which that was.
+//
+// The file (`generatedAssets.json`) is written by `bun run
+// assets:publish-generated` and by nothing else, and holds exactly the keys the
+// registered levels name - `cli assets` fails on a key a level names that is not
+// here, and on an entry no level names.
+export interface GeneratedAsset {
+  sha256: string;
+  bytes: number;
+}
+export const GENERATED_ASSETS: Readonly<Record<string, GeneratedAsset>> = generatedAssets;
+export const GENERATED_ASSETS_FILE = fileURLToPath(new URL("./generatedAssets.json", import.meta.url));
+
+// The key's name in the release. The store is one flat namespace keyed by
+// basename, and every generated file is called `mesh.glb`, so the release name
+// is spelled out of the key rather than taken from the path.
+export function generatedReleaseName(key: string): string {
+  const parsed = parseGeneratedKey(key);
+  if (!parsed) throw new Error(`not a generated key: ${key}`);
+  return `generated-${parsed.kind}-${parsed.hash}.glb`;
+}
 
 // What the generator service writes beside every `mesh.glb` (see
 // plans/visuals-workspace.md, "The generator service").

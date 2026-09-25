@@ -27,6 +27,10 @@ import {
   TEXTURE_ASSETS,
   textureMaps,
 } from "../src/render3d/assets";
+import { generatedMeshAsset } from "../src/render3d/generated";
+import { GENERATED_ASSETS, generatedReleaseName } from "../src/render3d/generatedMeta";
+import { levelGeneratedKeys } from "../src/render3d/levelAssets";
+import { LEVELS } from "../src/level/registry";
 
 // Overridable so a fork, or a private mirror, does not have to patch source.
 export const ASSET_REPO = process.env.ASSET_REPO ?? "epictris/website";
@@ -47,6 +51,9 @@ export interface StoredAsset {
   // hold it to the file on disk exactly as it holds the hash (see `TextureMap`
   // for what the number is for).
   bytes: number;
+  // The file's name in the release, when it is not the basename of `file`: a
+  // generated mesh is always `mesh.glb` on disk (see `generatedReleaseName`).
+  name?: string;
 }
 
 export function storedAssets(): StoredAsset[] {
@@ -96,14 +103,33 @@ export function storedAssets(): StoredAsset[] {
       throw new Error(`texture "${key}": textureMaps() disagrees with its own map slots`);
     }
   }
+  // Generated meshes the levels name, published by `assets:publish-generated`.
+  // One file per key, like a prop.
+  for (const [key, asset] of Object.entries(GENERATED_ASSETS)) {
+    const file = generatedMeshAsset(key)?.file;
+    if (!file) throw new Error(`generatedAssets.json: "${key}" is not a generated key`);
+    out.push({ key, file, sha256: asset.sha256, bytes: asset.bytes, name: generatedReleaseName(key) });
+  }
   return out;
 }
 
-export function assetName(asset: { file: string }): string {
-  return basename(asset.file);
+// Every generated mesh key a registered level names - what the build ships and
+// so what the store must hold (`GENERATED_ASSETS`). Registered levels only, as
+// the build's own `generatedMeshesInBuild` counts them: a file in `levels/` is
+// not a level until `registry.ts` lists it.
+export function levelsGeneratedKeys(): Map<string, string[]> {
+  const out = new Map<string, string[]>(); // key -> the levels naming it
+  for (const [id, spec] of Object.entries(LEVELS)) {
+    for (const key of levelGeneratedKeys(spec.data)) out.set(key, [...(out.get(key) ?? []), id]);
+  }
+  return out;
 }
 
-export function assetUrl(asset: { file: string }): string {
+export function assetName(asset: { file: string; name?: string }): string {
+  return asset.name ?? basename(asset.file);
+}
+
+export function assetUrl(asset: { file: string; name?: string }): string {
   return `https://github.com/${ASSET_REPO}/releases/download/${ASSET_TAG}/${assetName(asset)}`;
 }
 

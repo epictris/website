@@ -25,16 +25,20 @@
 //                that nothing can draw; a `.glb` is self-contained, so there is
 //                no sidecar that would legitimately be unreferenced.
 //   PROVENANCE - an entry with no `source`/`license`. See `MeshAsset`.
+//   UNPUBLISHED - a generated mesh a registered level names that the store
+//                does not hold (`bun run assets:publish-generated`), or a
+//                store entry no level names any more.
 //
 // Then the budget itself.
 
 import { existsSync, readdirSync, readFileSync, statSync, type Dirent } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { basename, dirname, join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { HDRI_ASSETS, MESH_ASSETS, RAW_ASSETS, TEXTURE_ASSETS } from "../render3d/assets";
-import { storedAssets } from "../../scripts/assetStore";
+import { GENERATED_ASSETS } from "../render3d/generatedMeta";
+import { assetName, levelsGeneratedKeys, storedAssets } from "../../scripts/assetStore";
 import { CREDITS_PATH, renderCredits } from "../../scripts/credits";
 
 const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
@@ -101,7 +105,16 @@ function mb(bytes: number): string {
 }
 
 export function runAssetChecks(): AssetCheck[] {
-  const files = ASSET_DIRS.flatMap(walk).sort();
+  const stored = storedAssets();
+  // `public/generated/` is not walked: it is the generator service's scratch,
+  // every seed ever tried, and a file there no manifest names is expected. The
+  // published ones are the store's, so they are held to it and to the budget
+  // like any prop (the build ships them).
+  const generatedFiles = stored
+    .filter((a) => a.name?.startsWith("generated-"))
+    .map((a) => join(PUBLIC_DIR, a.file.replace(/^\//, "")))
+    .filter((path) => existsSync(path));
+  const files = [...ASSET_DIRS.flatMap(walk), ...generatedFiles].sort();
   const checks: AssetCheck[] = [];
 
   // Props and texture maps in one list (`storedAssets`), so neither manifest can
@@ -111,7 +124,6 @@ export function runAssetChecks(): AssetCheck[] {
   // resolved against `public/` rather than against a directory chosen here - the
   // manifest is what says where a file lives, and a key naming something outside
   // `public/` could never be served at all.
-  const stored = storedAssets();
   const wanted = new Map<string, string>(); // absolute path -> sha256
   const referenced = new Map<string, string>(); // absolute path -> manifest key
   for (const asset of stored) {
@@ -167,13 +179,14 @@ export function runAssetChecks(): AssetCheck[] {
       : `${referenced.size - missing.length} verified`,
   });
 
-  // One flat namespace in the release, keyed by basename - so two entries whose
-  // files differ only by directory would overwrite each other on publish and
-  // then both fetch the same bytes, which is a level quietly wearing the wrong
-  // prop rather than any kind of error.
+  // One flat namespace in the release, keyed by name (the basename, or a
+  // generated mesh's `generatedReleaseName`) - so two entries whose files
+  // differ only by directory would overwrite each other on publish and then
+  // both fetch the same bytes, which is a level quietly wearing the wrong prop
+  // rather than any kind of error.
   const byName = new Map<string, string[]>();
   for (const asset of stored) {
-    const name = basename(asset.file);
+    const name = assetName(asset);
     byName.set(name, [...(byName.get(name) ?? []), asset.key]);
   }
   const collisions = [...byName].filter(([, keys]) => keys.length > 1);
@@ -183,6 +196,26 @@ export function runAssetChecks(): AssetCheck[] {
     detail: collisions.length
       ? collisions.map(([name, keys]) => `${name} <- ${keys.join(", ")}`).join("; ")
       : `${byName.size} distinct filename(s)`,
+  });
+
+  // The store holds exactly the generated meshes the levels name. One missing
+  // is a level that deploys with stand-ins (the fetch refuses it too, so this
+  // is the same failure found before the push rather than in the build); one
+  // extra is bytes the build fetches and then drops.
+  const named = levelsGeneratedKeys();
+  const unpublished = [...named].filter(([key]) => !GENERATED_ASSETS[key]);
+  const unnamed = Object.keys(GENERATED_ASSETS).filter((key) => !named.has(key));
+  checks.push({
+    name: "assets: the store holds exactly the generated meshes the levels name",
+    pass: unpublished.length === 0 && unnamed.length === 0,
+    detail:
+      unpublished.length || unnamed.length
+        ? "run `bun run assets:publish-generated`: " +
+          [
+            ...unpublished.map(([key, levels]) => `${key} (${levels.join(", ")}) not published`),
+            ...unnamed.map((key) => `${key} named by no level`),
+          ].join(", ")
+        : `${named.size} generated mesh(es) published`,
   });
 
   const orphans = files.filter((f) => !referenced.has(f));
