@@ -114,6 +114,7 @@ import {
   checkpointBox,
   collidingBodyIds,
   itemDepth,
+  offsetZAfterMove,
   newItemStyle,
   type EdObject,
   MIN_ARROW_LENGTH,
@@ -197,6 +198,7 @@ import {
   computeGroupHandles,
   computeHandles,
   drawEditor,
+  drawVisualsStatus,
   hasPlaneHandles,
   BODY_MEMBER,
   SELECT,
@@ -240,7 +242,9 @@ import {
   focalLengthFromFov,
   FOV_Y_DEG,
   isHeadOn,
+  lensOf,
   MAX_ORBIT_PITCH,
+  NO_ORBIT,
   threeY,
   threeRotation,
   unprojectToPlane,
@@ -248,6 +252,18 @@ import {
   type ViewProjection,
 } from "../render3d/space";
 import { EditorGizmo, type GizmoAxes, type GizmoHandlers, type GizmoMode } from "./gizmo";
+import {
+  handleUnder,
+  itemsBox,
+  itemsUnder,
+  levelBox,
+  ORBIT_RADIANS_PER_PX,
+  PROP_FOOTPRINT,
+  spawnUnder,
+  VisualsWorkspace,
+} from "./visuals/workspace";
+import { guidePlaneZ, type GuideDraft } from "./visuals/guides";
+import { alignUp, surfacePlacement } from "./visuals/surfaceDrop";
 import { World } from "../engine/world";
 import { buildLevelBodies, DEFAULT_SPRING_DAMPING, MAX_SPRING_FREQ } from "../level/buildBodies";
 import {
@@ -347,6 +363,34 @@ const LAYER_TOOLS: Record<EdLayer, Tool[]> = {
   notes: ["select", "text", "arrow", "checkpoint"],
 };
 
+// Which workspace offers each tool, on top of the layer's own set above. Every
+// tool whose gesture is on the gameplay plane works in both: a press is
+// resolved on the plane through the camera the view is drawn with, and what it
+// makes is an item the scene or the guides draw. The two that are not are the
+// ones whose gesture and feedback live on the 2D overlay: a chain and a vine
+// are strung from collision outline to collision outline with a draft the
+// overlay draws, and neither is drawn by the guides. A tool for the Visuals
+// workspace alone (one that clicks on model surfaces rather than the plane) is
+// "visuals" here and gets a press handler in `sceneToolPress`.
+type ToolWorkspace = "both" | "level" | "visuals";
+const TOOL_WORKSPACES: Record<Tool, ToolWorkspace> = {
+  select: "both",
+  rect: "both",
+  circle: "both",
+  belt: "both",
+  poly: "both",
+  path: "both",
+  geometry: "both",
+  text: "both",
+  arrow: "both",
+  checkpoint: "both",
+  chain: "level",
+  vine: "level",
+  light: "both",
+  glow: "both",
+  fireflies: "both",
+};
+
 // Kinds a chain may be tied to. An area is a region, not a body - nothing hangs
 // off a killzone or a current - so the chain tool passes straight through one.
 const CHAINABLE_KINDS: BodyKind[] = ["static", "rigid"];
@@ -388,10 +432,8 @@ const CLICK_SLOP_PX = 4;
 // this as the floor on what a click has to land within. Drawn size is unchanged:
 // this is about what can be hit, not about what is seen.
 const SMALL_MARK_PICK_PX = 12;
-// Orbit sensitivity: a drag across a 1600px window is a bit over a half turn,
-// which is enough to see round a prop without a level swinging past under a
-// nudge.
-const ORBIT_RADIANS_PER_PX = 0.006;
+// (Orbit sensitivity, `ORBIT_RADIANS_PER_PX`, is the Visuals workspace's
+// module's, so the two workspaces' orbits are one constant.)
 
 type Drag =
   | { mode: "pan"; lastScreen: Vec2 }
@@ -402,7 +444,29 @@ type Drag =
   // one editing mistake that is silent (it looks like the level, and the level
   // is different). Selecting first and dragging second is what makes moving a
   // body deliberate.
-  | { mode: "panPick"; lastScreen: Vec2; travel: number; pick: () => void }
+  //
+  // In the Visuals workspace a left drag never navigates (the middle and right
+  // buttons do, Blender's way), so there the press is a click or nothing, and
+  // `still` is what the status line says if it is dragged anyway.
+  | { mode: "panPick"; lastScreen: Vec2; travel: number; pick: () => void; still?: string }
+  // Navigating the Visuals workspace's free view (see `VisualsWorkspace`):
+  // middle drag orbits, Shift + middle or right drag pans.
+  | { mode: "view" }
+  // DROP ON SURFACE (Visuals, Shift-drag of a selected prop or light): the
+  // object's origin follows the nearest model surface under the pointer, and
+  // with Ctrl held a prop also stands up along the face's normal. Written
+  // through the gizmo's own handlers (`handlers`), begun at the first real
+  // movement so the whole drag is one undo step; a press that never travels is
+  // the Shift+click it would otherwise have been (`pick`).
+  | {
+      mode: "surfaceDrop";
+      item: EdItem;
+      press: Vec2;
+      handlers: GizmoHandlers | null;
+      // The item's tilt when the drag began, which an aligned drop turns from.
+      tilt: { rot: number; rotX: number; rotY: number } | null;
+      pick: () => void;
+    }
   // Turning the 3D view about what it is centred on (see `CameraOrbit`). Middle
   // button, and only while a scene is drawn: in the 2D view there is nothing to
   // orbit, so the button keeps panning there.
@@ -430,6 +494,10 @@ type Drag =
       // position (see `moveSnapPoint`). Fixed at the press: a move only
       // translates, so the offset cannot change during the drag.
       snapAt: Vec2;
+      // The plane the drag is resolved in, metres off the gameplay plane: the
+      // one the lead is drawn in (`guidePlaneZ`), so with the view turned the
+      // thing grabbed stays under the pointer. Head on it changes nothing.
+      planeZ: number;
     }
   | { mode: "movePlayer"; grab: Vec2 }
   | { mode: "corner"; body: EdItem; anchor: Vec2 }
@@ -463,6 +531,8 @@ type Drag =
       index: number;
       others: Array<{ index: number; offset: Vec2 }>;
       accepted: Vec2;
+      // The plane the corner is drawn in (see `move`'s).
+      planeZ?: number;
     }
   // One Bézier tangent grip of a camera path. `mirror` keeps the node smooth by
   // writing the opposite handle as the negation of this one; Alt breaks it, so a
@@ -585,13 +655,26 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     }
   })();
   if (!scene3d) viewMode = "2d";
+  // THE WORKSPACE: Level (the editor as it has always been, driven by the 2D
+  // camera) or Visuals (a free 3D camera, the overlay's marks drawn into the
+  // scene - see editor/visuals/workspace.ts and docs/editor-visuals.md). One
+  // editor either way: the model, the selection, the layer, the tool and the
+  // inspector carry across a switch; what changes is how the view is driven,
+  // what stands in for the overlay, and where a press lands.
+  //
+  // Declared before everything that asks `inScene`, and built lazily below
+  // once the camera and the model exist (`visuals` is null without WebGL).
+  let visuals: VisualsWorkspace | null = null;
+  const inVisuals = (): boolean => visuals?.active ?? false;
+  // Is a scene drawn this frame? The Visuals workspace always draws one, and
+  // keeps the Level workspace's view toggle for when it returns.
+  const sceneShown = (): boolean => scene3d !== null && (inVisuals() || viewMode !== "2d");
   // How much of the scene the 2D overlay is responsible for. With a scene under
   // it the overlay drops every fill - and the geometry objects entirely, since
   // the scene draws those and an outline on the plane describes something else
   // (see `drawEditor` and `hasPlaneHandles`). One statement of it, because what
   // the overlay DRAWS and what it offers handles for have to be the same set.
-  const overlayLayers = (): "fill" | "outline" =>
-    scene3d && viewMode !== "2d" ? "outline" : "fill";
+  const overlayLayers = (): "fill" | "outline" => (sceneShown() ? "outline" : "fill");
   // How far the 3D view is turned from the side-on view the level is authored
   // against. Editor-only, and zero for every other host (see `CameraOrbit`).
   //
@@ -607,7 +690,20 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // and dragging survive the turn and only the drawn chrome - handles, band,
   // draw previews - drops out with the overlay. See the press handler.
   const orbit: CameraOrbit = { yaw: 0, pitch: 0 };
-  const orbited = (): boolean => scene3d !== null && viewMode !== "2d" && !isHeadOn(orbit);
+  // The Level workspace turned: its overlay is off and its plane gestures are
+  // resolved through the scene's camera.
+  const orbited = (): boolean =>
+    scene3d !== null && !inVisuals() && viewMode !== "2d" && !isHeadOn(orbit);
+  // WHERE A PRESS IS RESOLVED. Head on in the Level workspace the 2D camera's
+  // scale and offset are the answer, and the overlay is drawn; anywhere else -
+  // the Level workspace turned, or the Visuals workspace at all - a screen
+  // position means a world point only through the ray that drew it, and the
+  // overlay is not on screen. Every branch that used to ask "is the view
+  // turned" asks this, and then, where the two differ, which of the two it is:
+  // a turned Level view offers only select and move, the Visuals workspace
+  // draws its own chrome into the scene (the guides) and offers the gestures
+  // those marks make possible.
+  const inScene = (): boolean => inVisuals() || orbited();
   // Which lens the scene is drawn through (see `ViewProjection`). Perspective is
   // what the level is played in and so the default; orthographic is the
   // authoring instrument - with no perspective divide, geometry at any depth is
@@ -625,7 +721,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   }
   let resetViewBtn: HTMLButtonElement | null = null;
   function refreshOrbitBtn(): void {
-    resetViewBtn?.classList.toggle("active", orbited());
+    resetViewBtn?.classList.toggle("active", inVisuals() ? (visuals?.turned ?? false) : orbited());
+  }
+  // `⟲ Reset view` and **Home**: the workspace's own way back to head on. Each
+  // workspace keeps its own view, so each resets its own.
+  function resetView(): void {
+    if (inVisuals()) visuals!.resetView();
+    else resetOrbit();
+    refreshOrbitBtn();
   }
   function resetOrbit(): void {
     orbit.yaw = 0;
@@ -685,6 +788,16 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   }
   resize();
   window.addEventListener("resize", resize);
+  if (scene3d) {
+    visuals = new VisualsWorkspace({
+      scene: scene3d,
+      camera2d: () => camera,
+      // The level's own lens, which the head-on pose is framed through exactly
+      // as the Level workspace's scene is (`Scene3D.setLevel` reads the same).
+      lens: () => lensOf(model.camera),
+      canvasSize: () => ({ width: cssW, height: cssH }),
+    });
+  }
 
   // --- state ----------------------------------------------------------------
   let model: EdModel = emptyModel();
@@ -982,6 +1095,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   function vertexEditTarget(): EdItem | null {
     const s = selected();
     if (!s || (s.shape.kind !== "poly" && s.shape.kind !== "path")) return null;
+    // In the Visuals workspace the corners are the guides' handles, which are
+    // drawn for any lone selected polygon or path on a layer that can be
+    // edited (`Guides.vertexHandles`) - a prop's outline included, since its
+    // corners are stored as a primitive's are. A turned Level view draws none.
+    if (inVisuals()) return s;
     if (orbited() || !hasPlaneHandles(s, overlayLayers())) return null;
     return s;
   }
@@ -1018,7 +1136,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const id = soleBodyId();
     if (id === null) return null;
     const lead = routeLeadOf(id);
-    return lead && lead.route.length > 1 && !orbited() ? lead : null;
+    // Head on in the Level workspace only: a route's nodes and grips are
+    // overlay handles, and the guides do not draw them (see
+    // docs/editor-visuals.md, "Not in Visuals").
+    return lead && lead.route.length > 1 && !inScene() ? lead : null;
   }
   // ...and the nodes actually picked on it, sorted, empty for any body but the
   // one they were picked on, and with anything past the route's end dropped: an
@@ -1342,11 +1463,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           // Where the handles started, and what the file said about it. The two
           // differ for a piece of decoration authoring no `offsetZ`: it is DRAWN
           // at `DECOR_Z` (see `itemDepth`), which is where the handles have to
-          // be, and the field is 0. A move is therefore written as a CHANGE
-          // against where the handles started rather than as the pose's own z -
-          // which would stamp that default into the file the first time a
-          // backdrop was nudged sideways, an edit nobody asked for that turns a
-          // fallback into an authored number.
+          // be, and the field is 0. A move that does not go through z therefore
+          // leaves the field alone rather than writing the pose's own z - which
+          // would stamp that default into the file the first time a backdrop
+          // was nudged sideways, an edit nobody asked for that turns a fallback
+          // into an authored number - and one that does writes the new depth
+          // outright (`offsetZAfterMove`).
           z: handleZ(it),
           offsetZ: it.visual.offsetZ,
           pos: it.pos,
@@ -1365,7 +1487,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           gizmoSnapPoint = base.snapAt.add(d);
           const z = snap(pos.z);
           if (it.object === "geometry") {
-            it.visual.offsetZ = base.offsetZ + (z - base.z);
+            it.visual.offsetZ = offsetZAfterMove(base.offsetZ, base.z, z);
             // A light's field is written outright rather than as a change, and
             // may be: `light.z` is always a concrete number in the model, so
             // `handleZ` starts the proxy exactly there and there is no fallback
@@ -1441,12 +1563,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // handle and the single-object gizmo have always done to a wall's dressing.
     const anyZ = (list: readonly EdItem[]): boolean =>
       list.some((i) => i.object === "geometry" || i.object === "light");
-    // The item's own authored depth - the field a drag writes - as against
-    // `handleZ`, which is where it is DRAWN (see `itemHandlers`). The two differ
-    // for decoration authoring none, and a group drag has to move the field by
-    // the displacement rather than stamp the drawn fallback onto every member.
+    // The depth each member is DRAWN at, which a drag through z moves by the
+    // displacement and writes outright (`offsetZAfterMove`): decoration
+    // authoring no `offsetZ` is drawn at `DECOR_Z`, and moving the field of 0
+    // by the displacement instead jumped it that far toward the camera. A drag
+    // that does not go through z writes no depth at all (see `apply`), so the
+    // fallback is never stamped into the file by a sideways move.
     const ownZ = (i: EdItem): number =>
-      i.object === "light" ? i.light.z : i.object === "geometry" ? i.visual.offsetZ : 0;
+      i.object === "light" ? i.light.z : i.object === "geometry" ? handleZ(i) : 0;
     let base: {
       pose: GroupPose;
       // Where the handles stood in depth, which is the mean of what the members
@@ -1454,6 +1578,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // axes, and a displacement is measured from there.
       z: number;
       own: Map<number, number>;
+      // Each geometry member's authored `offsetZ` at the press, which a drag
+      // that comes back to no displacement through z hands back.
+      authored: Map<number, number>;
       snapAt: Vec2;
     } | null = null;
     return {
@@ -1490,6 +1617,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           pose: captureGroupPose(model, list, selectionCentre(list)),
           z: list.length ? list.reduce((a, i) => a + handleZ(i), 0) / list.length : 0,
           own: new Map(list.map((i) => [i.id, ownZ(i)])),
+          authored: new Map(list.map((i) => [i.id, i.visual.offsetZ])),
           snapAt: snapOutlineOf(list),
         };
       },
@@ -1506,13 +1634,15 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           // displacement, so a backdrop 6 m back and the sign 20 cm in front of
           // it stay 5.8 m apart; a collision shape in the selection is passed
           // over, the plane being the only place it can be (see `anyZ`).
+          // Every move writes every member's depth from the press, so a drag
+          // that goes out through z and comes back leaves each one as it was.
           const dz = snap(pos.z) - base.z;
-          if (dz !== 0) {
-            for (const i of list) {
-              const was = base.own.get(i.id);
-              if (was === undefined) continue;
-              if (i.object === "light") i.light.z = was + dz;
-              else if (i.object === "geometry") i.visual.offsetZ = was + dz;
+          for (const i of list) {
+            const was = base.own.get(i.id);
+            if (was === undefined) continue;
+            if (i.object === "light") i.light.z = was + dz;
+            else if (i.object === "geometry") {
+              i.visual.offsetZ = offsetZAfterMove(base.authored.get(i.id) ?? 0, was, was + dz);
             }
           }
         } else if (mode === "rotate") {
@@ -1621,7 +1751,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     | { kind: "selection"; ids: number[] };
 
   function gizmoSpec(): GizmoTarget | null {
-    if (mode === "test" || !scene3d || viewMode === "2d") return null;
+    if (mode === "test" || !sceneShown()) return null;
     if (selectedChainIds.size || selectedVineIds.size) return null;
     if (selectedBodyIds.size === 1) return { kind: "body", id: [...selectedBodyIds][0]! };
     if (selectedIds.size === 1) return { kind: "item", id: [...selectedIds][0]! };
@@ -1951,7 +2081,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // renderer reads. A grapple test keeps its avatar and rope on the 2D canvas
     // (the Player slice is 2D-only), which is what `overlayOnly` leaves there.
     testLevel3d = testLevel;
-    if (scene3d && viewMode !== "2d") scene3d.setLevel(testLevel);
+    if (sceneShown()) scene3d!.setLevel(testLevel);
+    // A test is the player's camera and the player's picture, from whichever
+    // workspace it started in: the Visuals pose and guides are set aside here
+    // and taken up again when the test stops, so Esc returns to the view it
+    // left rather than to the Level workspace.
+    visuals?.suspend();
     accumulator = 0;
     lastNow = -1;
     testSparks.reset();
@@ -2026,7 +2161,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // Leaving the test has to give the cursor back whichever way it was left, or
     // the editor comes back with nothing to click its toolbar with.
     if (document.pointerLockElement === canvas) document.exitPointerLock();
-    // ...and the selection's gizmo comes back with the editor (see startTest).
+    // ...and the selection's gizmo comes back with the editor (see startTest),
+    // and the Visuals workspace's view, if the test was started from there.
+    visuals?.resume();
     syncGizmo();
   }
 
@@ -2045,6 +2182,23 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // Toolbar.
   const bar = el("div", "ed-bar");
   root.appendChild(bar);
+
+  // The workspace switcher, at the top because it changes what everything
+  // below it means: which view is driven, which tools are offered, what the
+  // canvas draws. Only offered with a scene to switch to.
+  type Workspace = "level" | "visuals";
+  const workspaceBtns: Partial<Record<Workspace, HTMLButtonElement>> = {};
+  if (visuals) {
+    const row = el("div", "ed-row");
+    bar.appendChild(row);
+    workspaceBtns.level = button("Level", () => setWorkspace("level"));
+    workspaceBtns.level.title = "Author the level against the gameplay plane: the 2D camera and the overlay (W toggles)";
+    workspaceBtns.visuals = button("Visuals", () => setWorkspace("visuals"));
+    workspaceBtns.visuals.title =
+      "Dress the level in a free 3D view: middle drag orbits, Shift + middle or right drag pans, the wheel dollies, F frames, Home faces the plane (W toggles)";
+    row.append(workspaceBtns.level, workspaceBtns.visuals);
+    workspaceBtns.level.classList.add("active");
+  }
 
   const fileRow = el("div", "ed-row");
   bar.appendChild(fileRow);
@@ -2263,7 +2417,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // all while it is locked. An armed tool the new state cannot draw falls back to
   // Select rather than lingering as a lit dead button.
   function refreshToolButtons(): void {
-    const tools: Tool[] = lockedLayers.has(activeLayer) ? ["select"] : LAYER_TOOLS[activeLayer];
+    const tools: Tool[] = lockedLayers.has(activeLayer)
+      ? ["select"]
+      : LAYER_TOOLS[activeLayer].filter(toolOffered);
     for (const [k, b] of Object.entries(toolBtns)) {
       b.style.display = tools.includes(k as Tool) ? "" : "none";
     }
@@ -2334,7 +2490,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       for (const [k, b] of Object.entries(viewBtns)) b.classList.toggle("active", k === m);
       // The 3D canvas keeps its last frame otherwise, showing a stale scene
       // under a 2D view that is meant to be the editor exactly as it was.
-      if (sceneCanvas) sceneCanvas.style.display = m === "2d" ? "none" : "";
+      refreshSceneCanvas();
       // A turned view is only a turned view while a scene is drawn: the 2D mode
       // is the plane itself and edits normally, orbit or no orbit.
       refreshOrbitBtn();
@@ -2347,8 +2503,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // overlay and offers none of its handles (see `orbit`), so this is the only
     // way back to those, and it lights up while the view is turned so it reads
     // as the way back rather than as a button that usually does nothing.
-    resetViewBtn = button("⟲ Reset view", resetOrbit);
-    resetViewBtn.title = "Face the gameplay plane again (Ctrl + middle-drag orbits)";
+    resetViewBtn = button("⟲ Reset view", resetView);
+    resetViewBtn.title =
+      "Face the gameplay plane again (Level: Ctrl + middle-drag orbits; Visuals: middle drag orbits, Home resets)";
     // The lens. One toggle rather than two buttons, because unlike the view
     // modes these are not three jobs: it is one view, drawn with the perspective
     // divide or without it, and what the button says is which.
@@ -2367,6 +2524,36 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     setViewMode(viewMode);
     refreshOrbitBtn();
     setProjection(projection);
+  }
+
+  // The scene canvas is shown whenever a scene is drawn: always in the Visuals
+  // workspace, and by the view toggle in the Level one.
+  function refreshSceneCanvas(): void {
+    if (sceneCanvas) sceneCanvas.style.display = sceneShown() ? "" : "none";
+  }
+
+  // Switch workspace (the toolbar's switcher, and **W**). The selection, the
+  // active layer, the armed tool (where the other workspace offers it) and the
+  // inspector carry across untouched: a switch changes how the level is looked
+  // at, not what is being edited. Each workspace keeps its own view - the
+  // Level one its 2D camera, orbit and view toggle, the Visuals one its pose.
+  function setWorkspace(k: Workspace): void {
+    if (!visuals || mode !== "edit") return;
+    if ((k === "visuals") === inVisuals()) return;
+    // A gesture in flight was measured in the other workspace's view.
+    drag = null;
+    if (k === "visuals") visuals.enter();
+    else visuals.leave();
+    for (const [key, b] of Object.entries(workspaceBtns)) b.classList.toggle("active", key === k);
+    // The Level workspace's view toggle says how IT draws; the Visuals
+    // workspace is always the scene with its guides, so the toggle goes while
+    // it is active and comes back as it was left.
+    for (const b of Object.values(viewBtns)) b.style.display = k === "visuals" ? "none" : "";
+    refreshSceneCanvas();
+    refreshToolButtons();
+    refreshOrbitBtn();
+    applyToolCursor();
+    updateTitle();
   }
 
   const title = el("div", "ed-title");
@@ -2712,13 +2899,25 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   }
   // The cursor a drag borrows and must hand back (pan swaps in a grab hand).
   function applyToolCursor(): void {
-    // A turned view selects and moves but draws nothing (see the press handler),
-    // so the pointer is the select one whatever the toolbar has armed rather
-    // than a crosshair over a canvas that will not draw.
+    // A turned Level view selects and moves but draws nothing (see the press
+    // handler), so the pointer is the select one whatever the toolbar has armed
+    // rather than a crosshair over a canvas that will not draw. The Visuals
+    // workspace draws, into the scene, so its tools keep their crosshair.
     canvas.style.cursor = orbited() || tool === "select" ? "default" : "crosshair";
+  }
+  // Does the current workspace offer this tool (`TOOL_WORKSPACES`)?
+  function toolOffered(t: Tool): boolean {
+    const w = TOOL_WORKSPACES[t];
+    return w === "both" || w === (inVisuals() ? "visuals" : "level");
   }
   function setTool(t: Tool): void {
     if (!LAYER_TOOLS[activeLayer].includes(t)) return;
+    // A key for a tool the workspace does not offer says so rather than doing
+    // nothing, since the button it would light is not on screen to explain.
+    if (!toolOffered(t)) {
+      flashNotice(`${toolBtns[t].textContent} is not in ${inVisuals() ? "Visuals" : "Level"} (W switches)`);
+      return;
+    }
     // A locked layer accepts no new geometry either, so its draw tools cannot be
     // armed by the keyboard shortcuts any more than by the (hidden) buttons.
     if (t !== "select" && lockedLayers.has(activeLayer)) return;
@@ -4846,6 +5045,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       ms.addEventListener("change", () => {
         beginAction();
         for (const b of items) b.visual.mesh = ms.value;
+        // ...and it is what the Visuals workspace's `+ Geometry` places next,
+        // so a run of the same prop is a run of clicks.
+        if (visuals && ms.value) visuals.propMesh = ms.value;
         markDirty();
         refreshFields();
       });
@@ -8699,16 +8901,38 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // through the same camera `Scene3D.pick` raycasts geometry with, so the plane
   // and the models a click is resolved against cannot disagree about where the
   // pointer is aimed.
-  function canvasWorld(scr: Vec2): Vec2 {
-    if (!orbited() || !scene3d) return screenToWorld(camera, scr.x, scr.y);
+  //
+  // `z` asks about the plane that far in front of the gameplay plane instead
+  // (metres), for a drag of something DRAWN at a depth of its own - a light
+  // hanging at its `z`, a prop's corners on the face it is drawn at - so what is
+  // dragged stays under the pointer rather than sliding at the plane's rate.
+  // Head on every such plane is the same picture, and the answer is the 2D one.
+  //
+  // In the Visuals workspace the camera is the pose's (placed by the workspace
+  // the moment a gesture moves it), and a ray that misses the plane - the
+  // camera standing behind it - falls back to where the pointer last met it
+  // rather than to a 2D camera that is not the view on screen.
+  let lastPlaneHit: Vec2 = Vec2.ZERO;
+  function canvasWorld(scr: Vec2, z = 0): Vec2 {
+    if (!inScene() || !scene3d) return screenToWorld(camera, scr.x, scr.y);
     const r = canvas.getBoundingClientRect();
     if (!r.width || !r.height) return screenToWorld(camera, scr.x, scr.y);
     const hit = unprojectToPlane(
       scene3d.camera,
       (scr.x / r.width) * 2 - 1,
       1 - (scr.y / r.height) * 2,
+      z,
     );
-    return hit ?? screenToWorld(camera, scr.x, scr.y);
+    if (hit) lastPlaneHit = hit;
+    return hit ?? (inVisuals() ? lastPlaneHit : screenToWorld(camera, scr.x, scr.y));
+  }
+  // Where a world point (at depth `z`) is on the canvas, in CSS pixels: the
+  // inverse of `canvasWorld`, for a press tested against something drawn (the
+  // first vertex a polygon draft closes on).
+  function canvasScreen(world: Vec2, z = 0): Vec2 {
+    // Behind the camera it is nowhere on the canvas, so no press is near it.
+    if (inVisuals()) return visuals!.screenOf(world, z) ?? new Vec2(Infinity, Infinity);
+    return worldToScreen(camera, world);
   }
 
   // Last pointer position, kept in screen space so it un-projects through the
@@ -8726,7 +8950,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // toggle. A plain press on a vertex already in the selection keeps the whole
   // set and drags it, so a group of corners is moved by grabbing any of them; a
   // plain press on any other vertex means that vertex alone.
-  function grabVertex(item: EdItem, index: number, shift: boolean): Drag | "consumed" | null {
+  function grabVertex(item: EdItem, index: number, shift: boolean, planeZ = 0): Drag | "consumed" | null {
     if (item.shape.kind !== "poly" && item.shape.kind !== "path") return null;
     const verts = item.shape.verts;
     if (shift) {
@@ -8749,7 +8973,233 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const others = selectedVertIndices(item)
       .filter((i) => i !== index)
       .map((i) => ({ index: i, offset: verts[i]!.sub(lead) }));
-    return { mode: "polyVertex", body: item, index, others, accepted: lead };
+    return { mode: "polyVertex", body: item, index, others, accepted: lead, planeZ };
+  }
+
+  // A press on corner `i` of the shape open for vertex editing: Alt+click
+  // removes it (never below the loop's floor: three for a polygon, two for an
+  // open path), anything else picks it and drags it. One function for the
+  // overlay's square and the Visuals workspace's guide handle, so the two
+  // cannot come to mean different things. `planeZ` is the plane the corner is
+  // drawn in, which a drag of it stays in.
+  function pressVertex(s: EdItem, i: number, alt: boolean, shift: boolean, planeZ = 0): Drag | "consumed" | null {
+    const shape = s.shape;
+    if (shape.kind !== "poly" && shape.kind !== "path") return null;
+    if (!alt) return grabVertex(s, i, shift, planeZ);
+    if (shape.verts.length <= (shape.kind === "path" ? 2 : 3)) return null;
+    beginAction();
+    const ok =
+      shape.kind === "path"
+        ? setPathVerts(
+            s,
+            shape.verts.filter((_, j) => j !== i),
+            shape.handles.filter((_, j) => j !== i),
+            shape.keys.filter((_, j) => j !== i),
+          )
+        : setPolyVerts(s, shape.verts.filter((_, j) => j !== i));
+    if (ok) {
+      // Every index past the removed one has shifted, so the set names corners
+      // nobody picked; it goes rather than being renumbered, since a removal
+      // is the end of the gesture that made it.
+      selectedVerts.clear();
+      markDirty();
+      rebuildInspector();
+    }
+    return "consumed";
+  }
+
+  // A press on the midpoint of edge `i` (from vertex `i` to the next): insert
+  // a vertex there and drag it straight away, so adding a corner and placing it
+  // is one gesture.
+  function pressMidpoint(s: EdItem, i: number, planeZ = 0): Drag | null {
+    const shape = s.shape;
+    let mid: Vec2;
+    if (shape.kind === "path") {
+      // A de Casteljau split at t = 1/2: the two halves are exactly the curve
+      // that was there, so inserting a node on a bowed edge adds a grip and
+      // changes nothing about the shape. Splitting the chord instead would
+      // straighten the edge the moment it was subdivided.
+      const nodes = pathNodes(s);
+      const a = nodes[i]!;
+      const b = nodes[i + 1]!;
+      const c1 = a.p.add(a.out);
+      const c2 = b.p.add(b.in);
+      const m1 = a.p.add(c1).mul(0.5);
+      const m2 = c1.add(c2).mul(0.5);
+      const m3 = c2.add(b.p).mul(0.5);
+      const n1 = m1.add(m2).mul(0.5);
+      const n2 = m2.add(m3).mul(0.5);
+      mid = n1.add(n2).mul(0.5);
+      const verts = [...shape.verts.slice(0, i + 1), mid, ...shape.verts.slice(i + 1)];
+      const handles = shape.handles.map((x) => ({ ...x }));
+      handles[i] = { in: handles[i]!.in, out: m1.sub(a.p) };
+      handles[i + 1] = { in: m3.sub(b.p), out: handles[i + 1]!.out };
+      handles.splice(i + 1, 0, { in: n1.sub(mid), out: n2.sub(mid) });
+      // The new node keys nothing: an unkeyed node is transparent to the
+      // interpolation, so the split changes the framing along the route by
+      // exactly as much as it changes the curve - nothing.
+      const keys = shape.keys.map((k) => ({ ...k }));
+      keys.splice(i + 1, 0, NO_KEY());
+      beginAction();
+      dragPushed = true;
+      if (!setPathVerts(s, verts, handles, keys)) return null;
+    } else if (shape.kind === "poly") {
+      const verts = shape.verts;
+      mid = verts[i]!.add(verts[(i + 1) % verts.length]!).mul(0.5);
+      const next = [...verts.slice(0, i + 1), mid, ...verts.slice(i + 1)];
+      beginAction();
+      dragPushed = true;
+      if (!setPolyVerts(s, next)) return null;
+    } else {
+      return null;
+    }
+    markDirty();
+    // The inserted vertex becomes the selection: it is the one the gesture is
+    // about, and every index past it has just shifted, so carrying the old set
+    // over would name different corners than the ones that were picked.
+    selectedVerts.clear();
+    selectedVerts.add(i + 1);
+    return { mode: "polyVertex", body: s, index: i + 1, others: [], accepted: mid, planeZ };
+  }
+
+  // The Visuals workspace's `pickHandle`: the handles are the guides' own, so
+  // they are found by the raycast that drew them rather than by distance on a
+  // plane. Only the shape open for vertex editing has any (see
+  // `vertexEditTarget`), and a handle anywhere under the pointer wins over the
+  // outlines and models it is drawn over (`handleUnder`).
+  function pickSceneHandle(tags: readonly unknown[], alt: boolean, shift: boolean): Drag | "consumed" | null {
+    const s = vertexEditTarget();
+    const h = handleUnder(tags);
+    if (!s || !h || h.id !== s.id || h.index === undefined) return null;
+    const z = guidePlaneZ(s, bodyCollides(s.bodyId));
+    return h.guide === "vertex" ? pressVertex(s, h.index, alt, shift, z) : pressMidpoint(s, h.index, z);
+  }
+
+  // The nearest level surface under the pointer (Visuals), leaving out the
+  // body `exclude` - the thing being put down must not be put down on itself.
+  // Any drawn geometry object of the level counts; the guides, the gizmo and
+  // the ball at the spawn do not.
+  function surfaceUnder(scr: Vec2, exclude: number | null): { point: THREE.Vector3; normal: THREE.Vector3 } | null {
+    const hit = visuals?.surfaceAt(scr, (tag) => {
+      const id = itemOfSceneObject.get(tag as SceneObjectData);
+      const it = id === undefined ? null : itemOf(id);
+      return it !== null && it.bodyId !== exclude;
+    });
+    return hit ? { point: new THREE.Vector3(hit.point.x, hit.point.y, hit.point.z), normal: new THREE.Vector3(hit.normal.x, hit.normal.y, hit.normal.z) } : null;
+  }
+
+  // Run a write with the grid off. A drop on a surface is exact by nature: the
+  // point it lands on is where the face IS, and rounding it to the 5 cm grid
+  // would sink a prop into the rock it was stood on or float it off.
+  function unsnapped(write: () => void): void {
+    const was = snapOn;
+    snapOn = false;
+    try {
+      write();
+    } finally {
+      snapOn = was;
+    }
+  }
+
+  // One pointer move of a DROP ON SURFACE. Written through the gizmo's own
+  // item handlers - the move and, with Ctrl on a prop, the turn - so the fields
+  // it writes (`pos`, `offsetZ` or a light's `z`, `rot`/`rotX`/`rotY`) are
+  // written exactly as the arrows and rings write them, fallback depth and all.
+  // Begun at the first move past the click's slop, which is the one undo step.
+  //
+  // The tilt is aligned from the one the drag STARTED with every move, rather
+  // than from the last move's, so a sweep across a bumpy face ends up at the
+  // same angle as a jump straight to its last point; releasing Ctrl mid-drag
+  // hands the object its own tilt back.
+  function surfaceDropMove(d: Extract<Drag, { mode: "surfaceDrop" }>, scr: Vec2, align: boolean): void {
+    if (!d.handlers) {
+      if (scr.distanceTo(d.press) < CLICK_SLOP_PX) return;
+      d.handlers = itemHandlers(d.item.id);
+      d.handlers.begin("translate");
+      d.tilt = { rot: d.item.rot, rotX: d.item.visual.rotX, rotY: d.item.visual.rotY };
+    }
+    const it = itemOf(d.item.id);
+    const tilt = d.tilt;
+    if (!it || !tilt) return;
+    const hit = surfaceUnder(scr, it.bodyId);
+    // Over nothing it stays where it last landed: a drop has no plane to fall
+    // back to, and snapping to the gameplay plane would be a move nobody made.
+    if (!hit) return;
+    const at = surfacePlacement(hit.point);
+    const pos = new THREE.Vector3(at.pos.x, threeY(at.pos.y), at.z);
+    const handlers = d.handlers;
+    unsnapped(() => {
+      handlers.apply("translate", pos, itemQuat(it), new THREE.Vector3(1, 1, 1));
+      if (it.object === "geometry" && it.visual.kind === "mesh") {
+        const want = align ? alignUp(tilt, hit.normal) : tilt;
+        if (want.rot !== it.rot || want.rotX !== it.visual.rotX || want.rotY !== it.visual.rotY) {
+          const q = new THREE.Quaternion().setFromEuler(
+            new THREE.Euler(want.rotX, want.rotY, threeRotation(want.rot), "ZXY"),
+          );
+          handlers.apply("rotate", pos, q, new THREE.Vector3(1, 1, 1));
+        }
+      }
+    });
+  }
+
+  // WHAT A PRESS DOES WITH A TOOL OF THE VISUALS WORKSPACE'S OWN: the tools
+  // whose gesture is about the scene rather than the plane. The press handler
+  // asks this before anything a plane tool does, so a tool registers here and
+  // nowhere else in the handler; one the table does not name falls through to
+  // the plane gestures both workspaces share. (`+ Rock` and `+ Mushrooms` land
+  // here.)
+  interface ScenePress {
+    readonly scr: Vec2;
+    // Where the pointer meets the gameplay plane, sim metres.
+    readonly world: Vec2;
+    readonly shift: boolean;
+    readonly ctrl: boolean;
+    // Everything under the pointer, models and guides, nearest first.
+    readonly tags: readonly unknown[];
+  }
+  const sceneToolPress: Partial<Record<Tool, (p: ScenePress) => void>> = {
+    geometry: placeProp,
+  };
+
+  // `+ Geometry` in the Visuals workspace: a click places a PROP - a mesh
+  // geometry object wearing the last mesh chosen (`VisualsWorkspace.propMesh`)
+  // - where the pointer is. Dragging out a box is a plan gesture, and what a
+  // prop is has nothing to do with the box it was placed with. On the plane it
+  // lands under the pointer in the plane it is drawn in; with Shift, on the
+  // surface under the pointer (with Ctrl as well, standing up along its
+  // normal), which is how a rock is put on a ledge in one click.
+  function placeProp(p: ScenePress): void {
+    const hit = p.shift ? surfaceUnder(p.scr, null) : null;
+    if (p.shift && !hit) {
+      flashNotice("no surface under the pointer to place the prop on");
+      return;
+    }
+    beginAction();
+    const item = newDrawnItem("geometry", p.world);
+    item.shape = { kind: "rect", w: PROP_FOOTPRINT, h: PROP_FOOTPRINT };
+    item.visual.kind = "mesh";
+    item.visual.mesh = visuals!.propMesh;
+    model.items.push(item);
+    syncBodyProps(bodyMembers(model.items, item.bodyId));
+    if (hit) {
+      const at = surfacePlacement(hit.point);
+      item.pos = at.pos;
+      item.visual.offsetZ = at.z;
+      if (p.ctrl) {
+        const t = alignUp({ rot: 0, rotX: 0, rotY: 0 }, hit.normal);
+        item.rot = t.rot;
+        item.visual.rotX = t.rotX;
+        item.visual.rotY = t.rotY;
+      }
+    } else {
+      // The plane it is DRAWN in (`itemDepth`: a prop on a body that collides
+      // with nothing stands at the decoration depth), so it appears where it
+      // was clicked rather than that far behind it.
+      item.pos = snapVec(canvasWorld(p.scr, itemDepth(item, bodyCollides(item.bodyId))));
+    }
+    setSelection([item.id]);
+    markDirty();
+    rebuildInspector();
   }
 
   // A press on a mover's route: a node, a tangent grip, or a leg midpoint that
@@ -8949,26 +9399,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // do not join, so the last vert has no edge after it to split and two verts
     // is the floor rather than three.
     if (h.verts && s.shape.kind === "path") {
-      const shape = s.shape;
       for (let i = 0; i < h.verts.length; i++) {
         if (scr.distanceTo(h.verts[i]!) > HANDLE_HIT_PX) continue;
-        if (alt) {
-          if (shape.verts.length <= 2) return null;
-          beginAction();
-          const rest = shape.verts.filter((_, j) => j !== i);
-          const restH = shape.handles.filter((_, j) => j !== i);
-          const restK = shape.keys.filter((_, j) => j !== i);
-          if (setPathVerts(s, rest, restH, restK)) {
-            // Every index past the removed one has shifted, so the set names
-            // corners nobody picked; it goes rather than being renumbered,
-            // since a removal is the end of the gesture that made it.
-            selectedVerts.clear();
-            markDirty();
-            rebuildInspector();
-          }
-          return "consumed";
-        }
-        return grabVertex(s, i, shift);
+        return pressVertex(s, i, alt, shift);
       }
       // Tangent grips after the vertices: a handle pulled back onto its own node
       // sits under it, and the node is what the pointer is far more often after.
@@ -8980,42 +9413,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       }
       for (let i = 0; i < (h.vertMids?.length ?? 0); i++) {
         if (scr.distanceTo(h.vertMids![i]!) > HANDLE_HIT_PX) continue;
-        // A de Casteljau split at t = 1/2: the two halves are exactly the curve
-        // that was there, so inserting a node on a bowed edge adds a grip and
-        // changes nothing about the shape. Splitting the chord instead would
-        // straighten the edge the moment it was subdivided.
-        const nodes = pathNodes(s);
-        const a = nodes[i]!;
-        const b = nodes[i + 1]!;
-        const c1 = a.p.add(a.out);
-        const c2 = b.p.add(b.in);
-        const m1 = a.p.add(c1).mul(0.5);
-        const m2 = c1.add(c2).mul(0.5);
-        const m3 = c2.add(b.p).mul(0.5);
-        const n1 = m1.add(m2).mul(0.5);
-        const n2 = m2.add(m3).mul(0.5);
-        const mid = n1.add(n2).mul(0.5);
-        const verts = [...shape.verts.slice(0, i + 1), mid, ...shape.verts.slice(i + 1)];
-        const handles = shape.handles.map((x) => ({ ...x }));
-        handles[i] = { in: handles[i]!.in, out: m1.sub(a.p) };
-        handles[i + 1] = { in: m3.sub(b.p), out: handles[i + 1]!.out };
-        handles.splice(i + 1, 0, { in: n1.sub(mid), out: n2.sub(mid) });
-        // The new node keys nothing: an unkeyed node is transparent to the
-        // interpolation, so the split changes the framing along the route by
-        // exactly as much as it changes the curve - nothing.
-        const keys = shape.keys.map((k) => ({ ...k }));
-        keys.splice(i + 1, 0, NO_KEY());
-        beginAction();
-        dragPushed = true;
-        if (!setPathVerts(s, verts, handles, keys)) return null;
-        markDirty();
-        // The inserted vertex becomes the selection: it is the one the gesture
-        // is about, and every index past it has just shifted, so carrying the
-        // old set over would name different corners than the ones that were
-        // picked.
-        selectedVerts.clear();
-        selectedVerts.add(i + 1);
-        return { mode: "polyVertex", body: s, index: i + 1, others: [], accepted: mid };
+        return pressMidpoint(s, i);
       }
     }
     // Vertices before the rotate knob: on a small polygon the knob can overlap a
@@ -9023,39 +9421,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (h.verts && s.shape.kind === "poly") {
       for (let i = 0; i < h.verts.length; i++) {
         if (scr.distanceTo(h.verts[i]!) > HANDLE_HIT_PX) continue;
-        // Alt+click removes the vertex instead of dragging it — a triangle is
-        // the floor, so the last three are not removable.
-        if (alt) {
-          if (s.shape.verts.length <= 3) return null;
-          beginAction();
-          const rest = s.shape.verts.filter((_, j) => j !== i);
-          if (setPolyVerts(s, rest)) {
-            selectedVerts.clear();
-            markDirty();
-            rebuildInspector();
-          }
-          return "consumed";
-        }
-        return grabVertex(s, i, shift);
+        return pressVertex(s, i, alt, shift);
       }
       // An edge midpoint splits that edge: insert a vertex there and drag it
       // straight away, so adding a corner and placing it is one gesture.
       for (let i = 0; i < (h.vertMids?.length ?? 0); i++) {
         if (scr.distanceTo(h.vertMids![i]!) > HANDLE_HIT_PX) continue;
-        const verts = s.shape.verts;
-        const mid = verts[i]!.add(verts[(i + 1) % verts.length]!).mul(0.5);
-        const next = [...verts.slice(0, i + 1), mid, ...verts.slice(i + 1)];
-        beginAction();
-        dragPushed = true;
-        if (!setPolyVerts(s, next)) return null;
-        markDirty();
-        // The inserted vertex becomes the selection: it is the one the gesture
-        // is about, and every index past it has just shifted, so carrying the
-        // old set over would name different corners than the ones that were
-        // picked.
-        selectedVerts.clear();
-        selectedVerts.add(i + 1);
-        return { mode: "polyVertex", body: s, index: i + 1, others: [], accepted: mid };
+        return pressMidpoint(s, i);
       }
     }
     // A belt's wheel centres before their radius grips, as a path's vertex is
@@ -9133,6 +9505,17 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // and a press that grabs an arrow must not also select, pan or rubber-band
     // whatever happens to be under it.
     if (gizmo?.busy) return;
+    // THE VISUALS WORKSPACE NAVIGATES BLENDER'S WAY: the middle button orbits,
+    // Shift + middle or the right button pans, and the left button is the
+    // level's alone. It is a modelling view rather than a plan, and the turn is
+    // the gesture made most there, so it is the unmodified one.
+    if (inVisuals() && (e.button === 1 || e.button === 2)) {
+      visuals!.beginView(e.button === 2 || e.shiftKey ? "pan" : "orbit", pointerScreen(e));
+      drag = { mode: "view" };
+      canvas.style.cursor = "grabbing";
+      e.preventDefault();
+      return;
+    }
     // Pan is the middle button (right too, as a convenience) and CTRL+middle
     // ORBITS the 3D view; the left button belongs to the level - it selects,
     // drags what is selected, and pans everything else (see `panPick`).
@@ -9173,7 +9556,17 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // drawn at all here: the resize handles, the marquee band and the draw
     // tools' previews would each be somewhere the geometry is not. Those press
     // like empty space, which is a pan.
-    const turned = orbited();
+    //
+    // THE VISUALS WORKSPACE puts that chrome back, drawn into the scene (the
+    // guides): a corner's handle, the outlines, a light's icon and the spawn
+    // are all there to be aimed at, so a press there is resolved by the
+    // raycast that drew them first (`Scene3D.pick`, models and guides nearest
+    // first) and on the plane through the pose's camera second (`canvasWorld`)
+    // - and the draw tools draw, their drafts in the guides.
+    const scene = inVisuals();
+    const turned = inScene();
+    // Everything under the pointer, once per press, for the steps below.
+    const tags = scene ? visuals!.tagsAt(scr) : [];
     if (!turned) {
       // 1. Handles of the current selection.
       const h = pickHandle(scr, e.altKey, e.shiftKey);
@@ -9182,11 +9575,28 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         drag = h;
         return;
       }
+    } else if (scene) {
+      // 1. The guides' handles: the selected shape's corners and midpoints.
+      const h = pickSceneHandle(tags, e.altKey, e.shiftKey);
+      if (h === "consumed") return;
+      if (h) {
+        drag = h;
+        return;
+      }
     }
-    // What this press draws. A turned view draws nothing whatever the toolbar
-    // says: every draw gesture previews on the overlay, and the overlay is not
-    // on screen here, so an armed tool would author geometry blind.
-    const drawTool = turned ? "select" : tool;
+    // What this press draws. A turned Level view draws nothing whatever the
+    // toolbar says: every draw gesture previews on the overlay, and the overlay
+    // is not on screen there, so an armed tool would author geometry blind.
+    const drawTool = turned && !scene ? "select" : tool;
+    // 1a. A tool of the Visuals workspace's own (see `sceneToolPress`), whose
+    // gesture is about the scene rather than the plane.
+    if (scene && drawTool !== "select") {
+      const press = sceneToolPress[drawTool];
+      if (press) {
+        press({ scr, world, shift: e.shiftKey, ctrl: e.ctrlKey || e.metaKey, tags });
+        return;
+      }
+    }
     // 1b. Polygon drafting: a run of clicks, not a drag. Clicking the first
     // vertex again (or Enter) closes the loop; Esc drops it.
     if (drawTool === "poly" || drawTool === "path") {
@@ -9195,7 +9605,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // its first vertex: an open run may legitimately end where it started (a
       // loop of a level), and closing on it would make that unauthorable.
       if (drawTool === "poly" && polyDraft && polyDraft.verts.length >= 3) {
-        const first = worldToScreen(camera, polyDraft.verts[0]!);
+        const first = canvasScreen(polyDraft.verts[0]!);
         if (scr.distanceTo(first) <= POLY_CLOSE_PX) {
           commitPolyDraft();
           return;
@@ -9275,11 +9685,19 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       return;
     }
     // 3. Player spawn marker (small target — needs pointer within its radius).
-    if (
-      !turned &&
-      world.distanceTo(model.player.pos) <=
-        Math.max(model.player.radius, SMALL_MARK_PICK_PX * worldLine())
-    ) {
+    // In the Visuals workspace it is its guide: the ring (picked a few pixels
+    // either side, as every guide line is) or the disc inside it on the plane.
+    // The 2D floor on its size is in 2D camera pixels, which are not the view
+    // on screen there, so it does not apply. A turned Level view has no spawn
+    // drag: the marker is overlay chrome, and the overlay is not drawn.
+    const spawnHit = scene
+      ? visibleLayers.has("scene") &&
+        !lockedLayers.has("scene") &&
+        (spawnUnder(tags) || world.distanceTo(model.player.pos) <= model.player.radius)
+      : !turned &&
+        world.distanceTo(model.player.pos) <=
+          Math.max(model.player.radius, SMALL_MARK_PICK_PX * worldLine());
+    if (spawnHit) {
       drag = { mode: "movePlayer", grab: model.player.pos.sub(world) };
       return;
     }
@@ -9294,7 +9712,31 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // same rule applied down the stack (`pickCandidatesAt`), so the first of them
     // IS what `topmostAt` answers and the press and the cycle it may turn into
     // cannot disagree about what was under the pointer.
-    const hit = pickCandidatesAt(world, scr)[0] ?? null;
+    const cands = pickCandidatesAt(world, scr);
+    const hit = cands[0] ?? null;
+    // 3b. DROP ON SURFACE (Visuals): Shift-drag of the selected prop or light,
+    // wherever it is in the stack under the pointer - a prop is usually drawn
+    // over the collision box that wins the pick, and the gesture is about the
+    // selected thing, which is plainly what was pressed on.
+    if (scene && e.shiftKey && !e.altKey && selectedIds.size === 1) {
+      const dropped = cands.find(
+        (c) => selectedIds.has(c.id) && (c.object === "geometry" || c.object === "light"),
+      );
+      if (dropped) {
+        drag = {
+          mode: "surfaceDrop",
+          item: dropped,
+          press: scr,
+          handlers: null,
+          tilt: null,
+          pick: () => toggleSelection(dropped.id),
+        };
+        return;
+      }
+    }
+    // The plane a drag of `it` is resolved in: the one it is drawn in, so with
+    // the view turned it stays under the pointer (see `move`'s `planeZ`).
+    const planeOf = (it: EdItem): number => (turned ? guidePlaneZ(it, bodyCollides(it.bodyId)) : 0);
     if (hit) {
       // CLICK THE BODY, THEN CLICK INTO IT. A click on a body that is not the
       // one being edited selects the BODY - the thing with the transform, the
@@ -9328,15 +9770,17 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         const others = members
           .filter((o) => o !== hit)
           .map((o) => ({ body: o, offset: o.pos.sub(hit.pos) }));
+        const planeZ = planeOf(hit);
         drag = {
           mode: "move",
           lead: hit,
           others,
-          grab: hit.pos.sub(world),
+          grab: hit.pos.sub(planeZ ? canvasWorld(scr, planeZ) : world),
           press: scr,
           moved: false,
           pick: pickAt(world, scr),
           snapAt: snapOutlineOf(members).sub(hit.pos),
+          planeZ,
         };
         return;
       }
@@ -9349,15 +9793,17 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         const others = selectedBodies()
           .filter((o) => o !== hit)
           .map((o) => ({ body: o, offset: o.pos.sub(hit.pos) }));
+        const planeZ = planeOf(hit);
         drag = {
           mode: "move",
           lead: hit,
           others,
-          grab: hit.pos.sub(world),
+          grab: hit.pos.sub(planeZ ? canvasWorld(scr, planeZ) : world),
           press: scr,
           moved: false,
           pick: selectedIds.size === 1 ? pickAt(world, scr) : undefined,
           snapAt: moveSnapPoint([hit]).sub(hit.pos),
+          planeZ,
         };
         return;
       }
@@ -9394,13 +9840,24 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         }
         cycle();
       };
-      drag = { mode: "panPick", lastScreen: scr, travel: 0, pick };
+      drag = {
+        mode: "panPick",
+        lastScreen: scr,
+        travel: 0,
+        pick,
+        still: scene ? "a left drag does not navigate in Visuals: middle drag orbits, right drag pans" : undefined,
+      };
       return;
     }
     // 5. A chain under the pointer. Tested after the bodies, since a chain is
     // strung over the geometry it holds and its ends sit inside those bodies -
     // picking it first would swallow every click near an anchor.
-    const chain = topmostChainAt(world);
+    //
+    // Not in the Visuals workspace, and neither is a vine: the guides draw
+    // neither (a chain is not in the editor's scene at all, and a vine is drawn
+    // there untagged), so there is nothing on screen a press could be aimed
+    // at. The outliner and the Level workspace reach them.
+    const chain = scene ? null : topmostChainAt(world);
     if (chain) {
       // Shift-drag on the chain that is already selected pulls a new WRAP POINT
       // out of the span under the pointer (see `chainWrapOut`); a plain press
@@ -9416,7 +9873,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     }
     // ...and a vine, for the same reason and after the same bodies: a vine hangs
     // over the geometry it is bolted to.
-    const vine = topmostVineAt(world);
+    const vine = scene ? null : topmostVineAt(world);
     if (vine) {
       setVineSelection([vine.id]);
       drag = null;
@@ -9430,7 +9887,27 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // overlay, and a screen-aligned rectangle is a slanted quadrilateral on the
     // plane the moment the camera is off axis - so what is dragged out and what
     // is caught could not be the same shape.
-    drag = turned
+    //
+    // The Visuals workspace offers no band either, for that reason, and does
+    // not pan on a left drag (its view is the middle and right buttons'). Its
+    // click on empty space clears as a head-on one does, the picked corners
+    // first and then the selection, so the way out of vertex editing is the
+    // same two clicks; Shift+click on things builds a set instead of a band.
+    drag = scene
+      ? {
+          mode: "panPick",
+          lastScreen: scr,
+          travel: 0,
+          pick: () => {
+            if (e.shiftKey) return;
+            if (selectedVerts.size) {
+              selectedVerts.clear();
+              rebuildInspector();
+            } else setSelection([]);
+          },
+          still: "no rubber band in Visuals: Shift+click builds the selection",
+        }
+      : turned
       ? {
           mode: "panPick",
           lastScreen: scr,
@@ -9474,10 +9951,16 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const r = canvas.getBoundingClientRect();
     if (!r.width || !r.height) return null;
     const ids = new Set<number>();
-    for (const tag of scene3d!.pick((scr.x / r.width) * 2 - 1, 1 - (scr.y / r.height) * 2)) {
+    const tags = scene3d!.pick((scr.x / r.width) * 2 - 1, 1 - (scr.y / r.height) * 2);
+    for (const tag of tags) {
       const id = itemOfSceneObject.get(tag as SceneObjectData);
       if (id !== undefined) ids.add(id);
     }
+    // ...and in the Visuals workspace, what the GUIDES under the pointer name:
+    // an outline, a light's icon, a region, a path, a note. The guides are only
+    // in the scene while that workspace is active, so the Level workspace's
+    // answer is exactly what it was.
+    if (inVisuals()) itemsUnder(tags, ids);
     return ids;
   }
 
@@ -9494,12 +9977,25 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // something else. It is reached by its chain's handle, or by its row in the
     // outliner.
     if (b.object === "anchor") return false;
-    if (b.object === "light") return world.distanceTo(b.pos) <= lightPickRadius(worldLine());
+    // In the Visuals workspace a guide under the pointer names its item
+    // outright (`raycastItems`); an outline is picked a few pixels either side
+    // of its line, so a thin wall is hit by its edge as well as its inside.
+    if (inVisuals() && ray?.has(b.id)) return true;
+    // A light there is its icon and only its icon: it hangs at its own `z`,
+    // and a disc on the plane under it is somewhere the light is not drawn.
+    if (b.object === "light") {
+      return inVisuals() ? false : world.distanceTo(b.pos) <= lightPickRadius(worldLine());
+    }
     // A checkpoint is its RING, and never smaller on screen than a thing can be
     // aimed at: the ring is the avatar's size in world metres (see
     // `checkpointBox`), which at the zoom a level is laid out at is a few pixels
     // across. The level's own spawn marker is picked under exactly this rule.
-    if (isCheckpointNote(b)) return world.distanceTo(b.pos) <= checkpointPickRadius(b);
+    if (isCheckpointNote(b)) {
+      // Its ring, without the 2D floor on its size, which is in 2D camera
+      // pixels and not the view on screen in Visuals (the guide's own pick band
+      // is the floor there).
+      return world.distanceTo(b.pos) <= (inVisuals() ? halfExtents(b).x : checkpointPickRadius(b));
+    }
     if (ray && b.object === "geometry") return ray.has(b.id);
     return pointInBody(b, world);
   }
@@ -9729,7 +10225,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const scr = pointerScreen(e);
     lastPointerScreen = scr;
     if (!drag) return;
-    const world = canvasWorld(scr);
+    // Resolved in the plane the dragged thing is drawn in (see `move`'s
+    // `planeZ`); every other drag is on the gameplay plane.
+    const world = canvasWorld(
+      scr,
+      drag.mode === "move" ? drag.planeZ : drag.mode === "polyVertex" ? (drag.planeZ ?? 0) : 0,
+    );
     dragMoved = true;
 
     // A press on something selected is not a move until the pointer has left the
@@ -9750,6 +10251,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       drag.mode !== "pan" &&
       drag.mode !== "panPick" &&
       drag.mode !== "orbit" &&
+      drag.mode !== "view" &&
+      // Begun through the gizmo's handlers, which take their own snapshot.
+      drag.mode !== "surfaceDrop" &&
       drag.mode !== "marquee" &&
       drag.mode !== "chainDraw" &&
       drag.mode !== "vineDraw"
@@ -9770,8 +10274,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         // Nothing happens at all until the pointer has really travelled: a click
         // that jitters by a pixel is a click, and it must still select what it
         // was aimed at rather than panning the level by a pixel instead.
+        const was = drag.travel;
         drag.travel += scr.distanceTo(drag.lastScreen);
-        if (drag.travel >= CLICK_SLOP_PX) {
+        if (drag.still !== undefined) {
+          // The Visuals workspace: past the slop the press is no longer a
+          // click, and it does nothing - said once, as it crosses.
+          if (was < CLICK_SLOP_PX && drag.travel >= CLICK_SLOP_PX) flashNotice(drag.still);
+        } else if (drag.travel >= CLICK_SLOP_PX) {
           const scale = camera.zoom * PIXELS_PER_METER;
           camera.position = camera.position.sub(scr.sub(drag.lastScreen).div(scale));
           canvas.style.cursor = "grabbing";
@@ -9779,6 +10288,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         drag.lastScreen = scr;
         break;
       }
+      case "view":
+        visuals?.moveView(scr);
+        refreshOrbitBtn();
+        break;
+      case "surfaceDrop":
+        surfaceDropMove(drag, scr, e.ctrlKey || e.metaKey);
+        break;
       case "orbit": {
         const d = scr.sub(drag.lastScreen);
         orbit.yaw -= d.x * ORBIT_RADIANS_PER_PX;
@@ -10166,6 +10682,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // item has always meant.
     if (drag.mode === "panPick" && drag.travel < CLICK_SLOP_PX) drag.pick();
     if (drag.mode === "move" && !drag.moved) drag.pick?.();
+    if (drag.mode === "view") visuals?.endView();
+    if (drag.mode === "surfaceDrop") {
+      if (drag.handlers) drag.handlers.end("translate");
+      else drag.pick();
+    }
     if (drag.mode === "marquee") {
       const box = marqueeBand();
       const vertTarget = drag.verts;
@@ -10256,6 +10777,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (mode !== "edit") return;
     e.preventDefault();
     const scr = pointerScreen(e);
+    // The Visuals workspace dollies its own view toward what is under the
+    // pointer; the 2D camera is the Level workspace's and stays as it was left.
+    if (inVisuals()) {
+      visuals!.wheel(scr, e.deltaY);
+      return;
+    }
     const before = screenToWorld(camera, scr.x, scr.y);
     const factor = Math.exp(-e.deltaY * 0.001);
     camera.zoom = Math.min(20, Math.max(0.2, camera.zoom * factor));
@@ -10381,6 +10908,24 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       e.preventDefault();
       return;
     }
+    // The workspace switch, and the Visuals workspace's two view keys.
+    if (e.code === "KeyW" && visuals) {
+      setWorkspace(inVisuals() ? "level" : "visuals");
+      return;
+    }
+    if (inVisuals() && e.code === "KeyF") {
+      // The selection's box, or the level's when nothing is selected.
+      const box = itemsBox(model, operandItems()) ?? levelBox(model);
+      visuals!.frameBox(box);
+      refreshOrbitBtn();
+      e.preventDefault();
+      return;
+    }
+    if (e.code === "Home") {
+      resetView();
+      e.preventDefault();
+      return;
+    }
     if (e.code === "Delete" || e.code === "Backspace") {
       // Corners before objects: with vertices picked out of a shape, Delete is
       // about them, and the shape itself is one Escape away from being what it
@@ -10464,6 +11009,39 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     return null;
   }
 
+  // The polygon or path being clicked out, as the Visuals workspace's guides
+  // draw it (`Guides.setDraft`): the placed vertices on the gameplay plane and
+  // the run on to where the pointer meets it, in the warning colour once the
+  // loop would cross itself - the overlay's draft, drawn in the scene.
+  function polyDraftGuide(): GuideDraft | null {
+    if (!polyDraft) return null;
+    const v = polyDraft.verts;
+    const cursor = lastPointerScreen ? snapVec(canvasWorld(lastPointerScreen)) : null;
+    const crossed = polyDraft.kind === "poly" && cursor !== null && v.length >= 3 && !isSimpleLoop([...v, cursor]);
+    const three = (p: Vec2) => ({ x: p.x, y: threeY(p.y), z: 0 });
+    return { points: v.map(three), closed: false, cursor: cursor ? three(cursor) : null, crossed };
+  }
+
+  // The Visuals workspace's status line: how to get around, and what the armed
+  // tool or the selection offers there that the Level workspace does not say.
+  function visualsStatus(): string {
+    const nav = "middle drag orbit · Shift+middle or right drag pan · wheel dolly · F frame · Home head-on · W Level";
+    let what = "";
+    if (tool === "geometry") {
+      what = `click places ${visuals!.propMesh} on the plane · Shift+click on a surface (Ctrl stands it up)`;
+    } else if (tool === "poly" || tool === "path") {
+      what = "click out the vertices on the plane · Enter finishes · Esc drops it";
+    } else if (tool === "select") {
+      const s = selected();
+      if (s && (s.object === "geometry" || s.object === "light")) {
+        what = "Shift-drag drops it on a surface (Ctrl aligns a prop) · the gizmo moves it through z";
+      } else if (vertexEditTarget()) {
+        what = "drag a corner · a midpoint inserts one · Alt+click removes · Shift+click picks several";
+      }
+    }
+    return `VISUALS · ${what ? `${what} · ` : ""}${nav}`;
+  }
+
   // --- loop -----------------------------------------------------------------
   let accumulator = 0;
   let lastNow = -1;
@@ -10542,7 +11120,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // - drawn into the letterboxed frame rather than the whole canvas, since
       // the bars are not part of the picture the player is shown. WebGL's
       // viewport origin is the BOTTOM left, hence the flipped y.
-      const testIn3d = scene3d !== null && viewMode !== "2d" && testLevel3d !== null;
+      const testIn3d = sceneShown() && testLevel3d !== null;
       if (testIn3d) {
         // A test is the player's view, so it is always the perspective camera:
         // the editor's orthographic lens is an authoring instrument, and a level
@@ -10601,7 +11179,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // lands on the geometry it describes underneath at any pan or zoom - which
       // is the whole reason the editor can gain a 3D view without giving up
       // precise collision authoring.
-      if (scene3d && viewMode !== "2d") {
+      if (scene3d && sceneShown()) {
         scene3d.setViewportRect(null);
         // Set per frame rather than only at the toggle, because ▶ Test borrows
         // the same scene and puts it back on the perspective camera.
@@ -10621,7 +11199,28 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         // a proxy rather than on a visual precisely so a rebuild cannot take
         // them with it, and this is where they pick the model's pose back up.
         syncGizmo();
-        if (sceneLevel) scene3d.render(sceneLevel, camera, 1, orbit);
+        // The Visuals workspace: its pose, and the guides it draws in place of
+        // the overlay, brought up to date with the model, the selection and
+        // the layers (a hash, so a frame where nothing moved rebuilds nothing).
+        if (inVisuals()) {
+          visuals!.apply();
+          visuals!.sync(
+            { model, rev: modelRev, selectedIds, selectedBodyIds, selectedVerts, visibleLayers, lockedLayers },
+            polyDraftGuide(),
+          );
+        }
+        if (sceneLevel) scene3d.render(sceneLevel, camera, 1, inVisuals() ? NO_ORBIT : orbit);
+      }
+      // THE VISUALS WORKSPACE draws nothing on the overlay but its status line:
+      // everything the overlay says is in the scene, where it is right from any
+      // angle. The canvas still takes the pointer - it is what every press in
+      // either workspace lands on.
+      if (inVisuals()) {
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        drawVisualsStatus(ctx, dpr, cssW, cssH, visualsStatus());
+        requestAnimationFrame(frame);
+        return;
       }
       // Scene only: the overlay draws nothing at all, so what is on screen is
       // the level as it will be played. Selection chrome goes with it, which is

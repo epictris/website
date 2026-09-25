@@ -47,8 +47,17 @@ import {
 import { dolly, frame, headOn, orbit, pan } from "../editor/visuals/viewControls";
 import { MIN_VIEW_DISTANCE, poseBasis, poseEye } from "../editor/visuals/viewPose";
 import { Guides, type GuideView } from "../editor/visuals/guides";
-import { isGuideTag, SPAWN_GUIDE_ID, type GuideTag } from "../editor/visuals/tags";
-import { ED_LAYERS, type EdLayer } from "../editor/model";
+import { guideTag, isGuideTag, SPAWN_GUIDE_ID, type GuideTag } from "../editor/visuals/tags";
+import {
+  handleUnder,
+  itemsBox,
+  itemsUnder,
+  ORBIT_RADIANS_PER_PX,
+  VisualsWorkspace,
+  type WorkspaceScene,
+} from "../editor/visuals/workspace";
+import { alignUp, surfacePlacement, upOf } from "../editor/visuals/surfaceDrop";
+import { ED_LAYERS, offsetZAfterMove, type EdLayer } from "../editor/model";
 import { cylinderSolid, extrudeOutline } from "../render3d/extrude";
 import { cloneWithPatches, isOrthographicMaterial } from "../render3d/projection";
 import {
@@ -1092,6 +1101,246 @@ function visualsGuides(): CaseResult[] {
     detail: `open ${JSON.stringify(open)}, closed ${JSON.stringify(closed)}, cleared ${JSON.stringify(none)}`,
   });
   guides.dispose();
+  return out;
+}
+
+// THE VISUALS WORKSPACE IN THE EDITOR (plans/visuals-workspace.md, Phase 4):
+// the controller's pose bookkeeping, which guide a click means, and the drop
+// on surface's arithmetic. The editor's wiring - the press handler, the
+// gizmo, the frame loop - needs the page and is verified there.
+function visualsWorkspace(): CaseResult[] {
+  const out: CaseResult[] = [];
+  const same = (a: ViewPose | null, b: ViewPose | null): boolean =>
+    a !== null &&
+    b !== null &&
+    Object.is(a.target.x, b.target.x) &&
+    Object.is(a.target.y, b.target.y) &&
+    Object.is(a.target.z, b.target.z) &&
+    Object.is(a.yaw, b.yaw) &&
+    Object.is(a.pitch, b.pitch) &&
+    Object.is(a.halfHeight, b.halfHeight) &&
+    Object.is(a.fovYDeg, b.fovYDeg);
+
+  // SEEDING. The first entry is the Level workspace's view to the bit (so a
+  // switch changes nothing on screen), later entries keep the pose that was
+  // left, and Reset returns to head-on framing of the 2D camera as it is NOW.
+  {
+    const editorLayer = new THREE.Group();
+    const sceneCam = new THREE.PerspectiveCamera(FOV_Y_DEG, VIEW_WIDTH / VIEW_HEIGHT, 0.1, 1000);
+    const handed: (ViewPose | null)[] = [];
+    const scene = {
+      editorLayer,
+      camera: sceneCam,
+      setViewPose: (p: ViewPose | null) => handed.push(p),
+      pick: () => [],
+      pickSurface: () => null,
+    } as unknown as WorkspaceScene;
+    const cam2d = camera(3.2, -1.4, 1.7);
+    const lens: SceneLens = { fovYDeg: 38, zOffset: -0.4 };
+    const ws = new VisualsWorkspace({
+      scene,
+      camera2d: () => cam2d,
+      lens: () => lens,
+      canvasSize: () => ({ width: VIEW_WIDTH, height: VIEW_HEIGHT }),
+    });
+    const before = ws.view;
+    ws.enter();
+    const seeded = ws.view;
+    const seededOk = same(seeded, headOn(cam2d, lens)) && handed[handed.length - 1] === seeded;
+    // The scene camera is placed at once, exactly where the frame will place it.
+    const want = newViewCamera(false);
+    applyPose(want, headOn(cam2d, lens), VIEW_WIDTH / VIEW_HEIGHT);
+    const placed = cameraBits(sceneCam).every((v, i) => Object.is(v, cameraBits(want)[i]));
+    const guidesIn = ws.guides.group.parent === editorLayer;
+    // A 50 px drag right and 20 px down orbits at the Level workspace's rate.
+    ws.beginView("orbit", new Vec2(400, 300));
+    ws.moveView(new Vec2(450, 320));
+    ws.endView();
+    const turned = ws.view!;
+    const turnOk = Object.is(turned.yaw, -50 * ORBIT_RADIANS_PER_PX) && Object.is(turned.pitch, 20 * ORBIT_RADIANS_PER_PX);
+    // Leave, move the 2D camera, come back: the pose is the one left behind.
+    ws.leave();
+    const handedBack = handed[handed.length - 1] === null && ws.guides.group.parent === null;
+    cam2d.position = new Vec2(-5, 2);
+    ws.enter();
+    const kept = same(ws.view, turned);
+    ws.resetView();
+    const reset = same(ws.view, headOn(cam2d, lens));
+    ws.leave();
+    ws.guides.dispose();
+    out.push({
+      name: "visuals: the workspace seeds its pose from the 2D camera to the bit, keeps it across a switch, and Reset re-seeds it",
+      pass: before === null && seededOk && placed && guidesIn && turnOk && handedBack && kept && reset,
+      detail: `seeded ${seededOk}, camera placed ${placed}, guides in the scene ${guidesIn}, orbit yaw ${turned.yaw.toFixed(3)} pitch ${turned.pitch.toFixed(3)} (${turnOk}), left ${handedBack}, kept ${kept}, reset ${reset}`,
+    });
+  }
+
+  // WHICH GUIDE A CLICK MEANS. At a corner the outline's segments come back
+  // from the raycast at the very depth of the corner's handle, and in build
+  // order the outline is first; the handle must win. A midpoint loses to a
+  // corner, and a click on an edge away from both is the outline's item.
+  {
+    const model = modelFromDisk({
+      player: { x: -600, y: -300, radius: 20 },
+      bodies: [
+        {
+          kind: "static",
+          x: 0,
+          y: 0,
+          rot: 0,
+          objects: [{ type: "collision", shape: { kind: "poly", verts: [{ x: -80, y: -60 }, { x: 80, y: -60 }, { x: 60, y: 50 }, { x: -70, y: 40 }] } }],
+        },
+      ],
+    } as RawLevelData);
+    const poly = model.items.find((i) => i.shape.kind === "poly")!;
+    const guides = new Guides();
+    guides.sync({
+      model,
+      rev: 1,
+      selectedIds: new Set([poly.id]),
+      selectedBodyIds: new Set(),
+      selectedVerts: new Set(),
+      visibleLayers: new Set<EdLayer>(ED_LAYERS),
+      lockedLayers: new Set(),
+    });
+    const pose: ViewPose = { ...poseFromCamera(camera(0, 0, 2)), yaw: -0.4, pitch: 0.3 };
+    const cam = posedCamera(pose, VIEW_WIDTH / VIEW_HEIGHT);
+    guides.setResolution(VIEW_WIDTH, VIEW_HEIGHT);
+    guides.update(cam, VIEW_HEIGHT);
+    guides.group.updateMatrixWorld(true);
+    const ray = new THREE.Raycaster();
+    const tagsAt = (p: Vec2): unknown[] => {
+      const q = new THREE.Vector3(p.x, threeY(p.y), 0).project(cam);
+      ray.setFromCamera(new THREE.Vector2(q.x, q.y), cam);
+      return ray.intersectObject(guides.group, true).map((h) => h.object.userData["pickTag"] as unknown);
+    };
+    const verts = (poly.shape as { verts: Vec2[] }).verts.map((v) => poly.pos.add(v));
+    const atCorner = tagsAt(verts[1]!);
+    const cornerOrder = atCorner.filter(isGuideTag).map((t) => t.guide).join(",");
+    const corner = handleUnder(atCorner);
+    const atMid = tagsAt(verts[1]!.add(verts[2]!).mul(0.5));
+    const mid = handleUnder(atMid);
+    const onEdge = tagsAt(verts[0]!.mul(0.3).add(verts[1]!.mul(0.7)));
+    const edge = handleUnder(onEdge);
+    const edgeItems = itemsUnder(onEdge, new Set());
+    // A synthetic list in the worst order: a model first, the outline, the
+    // midpoint, then the corner.
+    const listed = handleUnder([{}, guideTag("outline", 7), guideTag("midpoint", 7, 2), guideTag("vertex", 7, 3)]);
+    const spawnOnly = itemsUnder([guideTag("spawn", SPAWN_GUIDE_ID), guideTag("vertex", 7, 0), guideTag("light", 9)], new Set());
+    guides.dispose();
+    out.push({
+      name: "visuals: a click at a corner means the corner's handle over its outline, a midpoint over nothing, an edge its item",
+      pass:
+        atCorner.filter(isGuideTag).some((t) => t.guide === "outline") &&
+        corner?.guide === "vertex" &&
+        corner.index === 1 &&
+        mid?.guide === "midpoint" &&
+        mid.index === 1 &&
+        edge === null &&
+        edgeItems.has(poly.id) &&
+        listed?.guide === "vertex" &&
+        listed.index === 3 &&
+        [...spawnOnly].join(",") === "9",
+      detail: `corner list [${cornerOrder}] -> ${JSON.stringify(corner)}, midpoint -> ${JSON.stringify(mid)}, edge -> ${JSON.stringify(edge)} items [${[...edgeItems]}], worst-order list -> ${JSON.stringify(listed)}, items past spawn and handles [${[...spawnOnly]}]`,
+    });
+  }
+
+  // THE DROP ON SURFACE: the origin lands on the hit point (sim frame, z
+  // toward the camera), and an aligned prop's up is the face normal, reached by
+  // the smallest turn - a prop already standing along the normal is not turned
+  // at all, whatever its heading.
+  {
+    const at = surfacePlacement({ x: 1.25, y: -0.5, z: 0.375 });
+    // A float32 face at -0.2 m is written as -0.2, not its interpolation noise.
+    const noisy = surfacePlacement({ x: 0, y: 0, z: -0.19999999925494215 });
+    const placedOk = at.pos.x === 1.25 && at.pos.y === 0.5 && at.z === 0.375 && noisy.z === -0.2;
+    let worst = 0;
+    const normals = [
+      { x: 0, y: 0, z: 1 },
+      { x: 0.6, y: 0.8, z: 0 },
+      { x: -0.3, y: 0.2, z: 0.9 },
+      { x: 0.1, y: -1, z: 0.05 },
+    ];
+    const tilts = [
+      { rot: 0, rotX: 0, rotY: 0 },
+      { rot: 0.7, rotX: 0.2, rotY: -0.4 },
+      { rot: -2.1, rotX: -0.6, rotY: 0.3 },
+    ];
+    for (const t of tilts) {
+      for (const n of normals) {
+        const len = Math.hypot(n.x, n.y, n.z);
+        const up = upOf(alignUp(t, n));
+        worst = Math.max(worst, Math.abs(up.x - n.x / len), Math.abs(up.y - n.y / len), Math.abs(up.z - n.z / len));
+      }
+    }
+    // Already along the normal: the heading survives exactly (to rounding).
+    const t0 = { rot: 0.9, rotX: 0.25, rotY: -0.15 };
+    const kept = alignUp(t0, upOf(t0));
+    const keptErr = Math.max(Math.abs(kept.rot - t0.rot), Math.abs(kept.rotX - t0.rotX), Math.abs(kept.rotY - t0.rotY));
+    // A level floor: a prop stood on it is upright - no turn in the plane
+    // (`rot`) and no tip (`rotX`) - with its heading about its own up in
+    // `rotY`, which is where the composition keeps a heading.
+    const floor = alignUp({ rot: 1.1, rotX: 0.4, rotY: 0.2 }, { x: 0, y: 1, z: 0 });
+    const floorOk = Math.abs(floor.rot) < 1e-12 && Math.abs(floor.rotX) < 1e-12;
+    out.push({
+      name: "visuals: a drop on a surface stands the origin on the hit and turns a prop's up onto the normal by the smallest turn",
+      // Radians: 1e-7, not 1e-12, because the composition's gimbal is at
+      // rotX = 90 degrees - a prop's up pointing straight at the camera, which
+      // is a drop on the front of a wall - where `asin` hands back half the
+      // digits. A tenth of a micron at a metre.
+      pass: placedOk && worst < 1e-7 && keptErr < 1e-12 && floorOk,
+      detail: `placed ${placedOk}, worst up error ${worst.toExponential(2)} over ${tilts.length * normals.length} tilts x normals, re-aligning changes a standing prop by ${keptErr.toExponential(2)}, on a floor rotX ${floor.rotX.toExponential(2)} rotY ${floor.rotY.toExponential(2)} rot ${floor.rot.toFixed(3)}`,
+    });
+  }
+
+  // A MOVE THROUGH Z writes the new depth outright. Decoration authoring no
+  // `offsetZ` is drawn at DECOR_Z, and the gizmo (and the drop, which goes
+  // through the gizmo's handlers) used to write the displacement into the
+  // field as if it were relative, which jumped the object 35 cm toward the
+  // camera on the first touch of the blue arrow.
+  {
+    const up = offsetZAfterMove(0, DECOR_Z, DECOR_Z + 0.1);
+    const sideways = offsetZAfterMove(0, DECOR_Z, DECOR_Z);
+    const authored = offsetZAfterMove(0.4, 0.4, 0.6);
+    out.push({
+      name: "visuals: a move through z leaves a fallen-back depth alone sideways and writes the new depth outright",
+      pass: Math.abs(up - (DECOR_Z + 0.1)) < 1e-12 && sideways === 0 && authored === 0.6,
+      detail: `decor moved 10 cm toward the camera -> offsetZ ${up.toFixed(3)} (drawn at ${DECOR_Z} before), moved sideways -> ${sideways}, authored 0.4 -> 0.6 gives ${authored}`,
+    });
+  }
+
+  // **F**'s box: a light by its source at its own z (not its reach), a drawn
+  // object by its extrusion either side of the depth it is drawn at.
+  {
+    const model = modelFromDisk({
+      player: { x: 0, y: 0, radius: 20 },
+      bodies: [
+        { kind: "static", x: 100, y: 0, rot: 0, objects: [{ type: "light", range: 400, z: 60 }] },
+        {
+          kind: "static",
+          x: -200,
+          y: 0,
+          rot: 0,
+          objects: [{ type: "geometry", z: -100, depth: 40, shape: { kind: "rect", w: 50, h: 20 } }],
+        },
+      ],
+    } as RawLevelData);
+    const light = model.items.find((i) => i.object === "light")!;
+    const prop = model.items.find((i) => i.object === "geometry")!;
+    const lb = itemsBox(model, [light])!;
+    const pb = itemsBox(model, [prop])!;
+    const near = (a: number, b: number): boolean => Math.abs(a - b) < 1e-9;
+    const ok =
+      near(lb.min.x, 1) && near(lb.max.x, 1) && near(lb.min.z, 0.6) && near(lb.max.z, 0.6) &&
+      near(pb.min.x, -2.25) && near(pb.max.x, -1.75) && near(pb.min.y, -0.1) && near(pb.max.y, 0.1) &&
+      near(pb.min.z, -1.2) && near(pb.max.z, -0.8) &&
+      itemsBox(model, []) === null;
+    out.push({
+      name: "visuals: F frames a light by its source at its z and a drawn object by its extrusion about its depth",
+      pass: ok,
+      detail: `light ${JSON.stringify(lb)}, prop ${JSON.stringify(pb)}`,
+    });
+  }
   return out;
 }
 
@@ -5874,6 +6123,7 @@ export function runRender3dCases(): CaseResult[] {
     ...orthographicView(),
     ...visualsView(),
     ...visualsGuides(),
+    ...visualsWorkspace(),
     ...extrusionGeometry(),
     ...tippedPrimitive(),
     ...perObjectProjection(),

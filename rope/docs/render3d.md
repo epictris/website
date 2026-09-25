@@ -70,6 +70,7 @@ It exists so a host can hold a camera the 2D one cannot describe: the editor's V
 - `editorLayer`, a group in the scene that survives `setLevel`, is raycast by `pick` (fat lines picked `LINE_PICK_PX` either side) and skipped by `setHighlight` and `meshesOf`.
 - `hitsAt(x, y)` is `pick` with three's whole intersection kept, nearest first; `pickSurface(x, y, accept)` answers the nearest hit with a face whose tag `accept` takes, as a world point and a world normal; `meshesOf(tag)` lists every non-instanced mesh drawn for a tag.
   All three are ported from the fork (karin_website `381b923`), including its fix of `pick` measuring depth by `hit.point.sub(...)`, which rewrote the hit point in place.
+  A hit on something that is not a mesh (a guide's sprite: a corner handle, a light's icon) is kept by both lens passes: the split tested `mesh.isMesh && ...`, which is `undefined` for a sprite and so unequal to either pass's lens, and until 2026-09-25 no sprite could be picked at all (found driving the Visuals workspace; the `visuals:` cases raycast the guides directly and could not see it).
 
 ## The coordinate mapping
 

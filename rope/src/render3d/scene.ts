@@ -823,7 +823,11 @@ export class Scene3D {
       this.raycaster.setFromCamera(this.pointer, cam);
       for (const hit of this.raycaster.intersectObjects(this.scene.children, true)) {
         const mesh = hit.object as THREE.Mesh;
-        const drawnOrtho = mesh.isMesh && isOrthographicMaterial(mesh.material);
+        // A boolean, not `mesh.isMesh && ...`: a sprite (a guide's handle or
+        // light icon) has no `isMesh`, and the `undefined` that expression
+        // hands back is `!== false` as well as `!== true`, so every sprite was
+        // dropped by both passes below and no handle could ever be clicked.
+        const drawnOrtho = mesh.isMesh === true && isOrthographicMaterial(mesh.material);
         // Under the orthographic scene camera there is one ray, and every
         // object is answered by it.
         if (split && drawnOrtho !== ortho) continue;
