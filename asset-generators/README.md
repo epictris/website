@@ -1,7 +1,7 @@
 # Procedural asset generators
 
 These source projects power the level editor's **Generate roots**, **Generate
-vine v3**, **Generate boulder v5**, **Generate dirt + moss**, and **Generate mushrooms** controls. Generated meshes, renders,
+vine v3**, **Generate boulder v5**, **Generate dirt + moss**, **Generate mushrooms**, and **Generate grass** controls. Generated meshes, renders,
 caches, and texture outputs are intentionally excluded from Git.
 
 ## Windows setup
@@ -57,11 +57,15 @@ again after opening a new window.
   (`mushroom_patch_tools.py`, copied from `blender/mushroom_patch`) and
   `editor_patch.py`, which grows a patch on the faces picked in the editor.
   Override it with `MUSHROOMS_PROJECT`.
+- `grass/` contains the low-poly grass patch generator, built the same way as the
+  mushrooms (`grass_patch_tools.py` is the Geometry Nodes group and material,
+  `editor_patch.py` grows a patch on the faces picked in the editor). Override it
+  with `GRASS_PROJECT`.
 - `requirements.txt` contains all packages installed into the virtual
   environment.
 
 Output files go into `rope/public/generated-roots`,
 `rope/public/generated-vines`, `rope/public/generated-boulders`,
 `rope/public/generated-dirt-moss`, and
-`rope/public/generated-mushrooms`. Those
+`rope/public/generated-mushrooms`, and `rope/public/generated-grass`. Those
 directories remain untracked build output.

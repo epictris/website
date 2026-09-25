@@ -310,8 +310,13 @@ type Tool =
   | "vine"
   | "light"
   // Clicks an outline out ON THE FACES of a drawn model rather than on the
-  // gameplay plane, for the mushroom patch generator (see `surfaceDraft`).
-  | "mushroom";
+  // gameplay plane, for the mushroom and grass patch generators (see
+  // `surfaceDraft`). The two tools draw the same outline; they differ only in
+  // which Generate button the outline is meant for.
+  | "mushroom"
+  | "grass";
+
+const isSurfaceTool = (t: Tool): boolean => t === "mushroom" || t === "grass";
 
 // Which tools each layer offers. A shape tool has no meaning on the notes layer
 // (a note is a text box or an arrow, never a circle) and vice versa, so the
@@ -323,7 +328,7 @@ type Tool =
 // because that is what a light is: another kind of scene object, dropped into
 // the same layer and welded into a body with the shape it belongs to.
 const LAYER_TOOLS: Record<EdLayer, Tool[]> = {
-  scene: ["select", "rect", "circle", "belt", "poly", "path", "geometry", "light", "chain", "vine", "mushroom"],
+  scene: ["select", "rect", "circle", "belt", "poly", "path", "geometry", "light", "chain", "vine", "mushroom", "grass"],
   camera: ["select", "rect", "circle", "poly", "path"],
   notes: ["select", "text", "arrow", "checkpoint"],
 };
@@ -2331,22 +2336,28 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   vineRow.append(vineGenerate, labelWrap("seed", vineSeed), vineStatus);
   bar.appendChild(vineRow);
 
-  // --- mushroom patches -----------------------------------------------------
-  // The one generator whose outline is drawn ON A MODEL rather than on the
-  // gameplay plane: `+ Mushrooms` clicks a loop out on the faces of whatever is
-  // drawn there (a rock, a root, a wall), the faces it covers light up, and
-  // Generate grows a glowing patch on exactly those faces in Blender
-  // (`asset-generators/mushrooms`). The result is a mesh geometry object in the
-  // body of the model it grows on, so it rides that body and collides with
-  // nothing.
+  // --- mushroom and grass patches --------------------------------------------
+  // The generators whose outline is drawn ON A MODEL rather than on the
+  // gameplay plane: `+ Mushrooms` (or `+ Grass`) clicks a loop out on the faces
+  // of whatever is drawn there (a rock, a root, a wall), the faces it covers
+  // light up, and Generate grows a patch on exactly those faces in Blender
+  // (`asset-generators/mushrooms`, `asset-generators/grass`). The result is a
+  // mesh geometry object in the body of the model it grows on, so it rides that
+  // body and collides with nothing.
   //
   // The outline outlives a Generate so the settings can be tuned against the
-  // same faces: generating again replaces the patch it made last.
+  // same faces: generating again replaces the patch of that kind it made last,
+  // and one outline can carry a mushroom patch and a grass patch at once.
+  type PatchKind = "mushroom" | "grass";
+  // A vertex names the drawn object it landed on (`tag`, which the editor
+  // rebuilds whenever the level changes, adding a patch included) and the item
+  // that object was built from (`item`, which outlives the rebuild).
+  type SurfaceVertex = SurfacePoint & { item: number };
   let surfaceDraft: {
-    points: SurfacePoint[];
+    points: SurfaceVertex[];
     closed: boolean;
     selection: SurfaceSelection | null;
-    generated: number | null;
+    generated: Partial<Record<PatchKind, number>>;
   } | null = null;
   const surfaceView = scene3d ? new SurfaceDraftView() : null;
   if (surfaceView) scene3d!.scene.add(surfaceView.group);  let surfaceHoverAt = 0;
@@ -2370,11 +2381,19 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   const mushroomSlope = mushroomNum("75", 0, 90, 1, "Steepest face mushrooms grow on, degrees from level");
   const mushroomDetail = mushroomNum("0.3", 0, 1, 0.1, "Polygon budget: 0 ~ 90 triangles a mushroom, 0.5 ~ 520, 1 ~ 1300");
   const mushroomSeed = mushroomNum("0", 0, 2147483647, 1, "Mushroom seed");
+  const grassDensity = mushroomNum("1100", 1, 30000, 1,"Grass blades per square metre inside the middle of a tuft");
+  const grassHeight = mushroomNum("0.3", 0.01, 3, 0.01, "Length of a typical blade in the middle of a tuft, metres");
+  const grassClump = mushroomNum("0.7", 0, 1, 0.05, "0 = an even lawn, 1 = separate tufts with bare ground between them");
+  const grassTuft = mushroomNum("0.35", 0.05, 5, 0.05, "Rough spacing between the middles of neighbouring tufts, metres");
+  const grassDetail = mushroomNum("0.25", 0, 1, 0.05, "Segments per blade: 0 = 3 (6 triangles), 1 = 7 (14 triangles)");
+  const grassSeed = mushroomNum("0", 0, 2147483647, 1, "Grass seed");
+  const SURFACE_IDLE = "Arm + Mushrooms or + Grass, then click an outline onto a model.";
   const mushroomStatus = el("span", "ed-root-status");
   mushroomStatus.setAttribute("role", "status");
-  mushroomStatus.textContent = "Arm + Mushrooms, then click an outline onto a model.";
+  mushroomStatus.textContent = SURFACE_IDLE;
   mushroomSlope.addEventListener("change", () => refreshSurfaceSelection());
   mushroomDensity.addEventListener("change", () => describeSurface());
+  grassDensity.addEventListener("change", () => describeSurface());
 
   // A model the outline may be drawn on: any drawn scene object but a patch,
   // so a second patch beside the first is drawn on the rock under it.
@@ -2382,7 +2401,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const id = itemOfSceneObject.get(tag as SceneObjectData);
     const item = id === undefined ? undefined : model.items.find((i) => i.id === id);
     return !!item && item.layer === "scene" && item.object === "geometry" &&
-      !item.visual.mesh.startsWith("mushroom-patch:");
+      !item.visual.mesh.startsWith("mushroom-patch:") && !item.visual.mesh.startsWith("grass-patch:");
   }
   function surfaceNdc(scr: Vec2): [number, number] | null {
     const r = canvas.getBoundingClientRect();
@@ -2399,7 +2418,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   function describeSurface(): void {
     const draft = surfaceDraft;
     if (!draft) {
-      mushroomStatus.textContent = "Arm + Mushrooms, then click an outline onto a model.";
+      mushroomStatus.textContent = SURFACE_IDLE;
     } else if (!draft.closed) {
       mushroomStatus.textContent = `${draft.points.length} ${draft.points.length === 1 ? "vertex" : "vertices"}` +
         (draft.points.length >= 3 ? " · Enter or the first vertex closes" : "");
@@ -2407,8 +2426,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       mushroomStatus.textContent = "The outline covers no faces that face it at this slope. Esc and draw again.";
     } else {
       const { triangles, area } = draft.selection;
-      const most = Math.round(area * Number(mushroomDensity.value));
-      mushroomStatus.textContent = `${triangles} faces · ${area.toFixed(2)} m² · up to ~${most} mushrooms`;
+      const grass = tool === "grass";
+      const most = Math.round(area * Number((grass ? grassDensity : mushroomDensity).value));
+      mushroomStatus.textContent = `${triangles} faces · ${area.toFixed(2)} m² · up to ~${most} ${grass ? "blades" : "mushrooms"}`;
     }
   }
   function redrawSurface(cursor: THREE.Vector3 | null = null): void {
@@ -2420,8 +2440,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const draft = surfaceDraft;
     if (!draft || !scene3d) return;
     draft.selection = null;
+    for (const p of draft.points) p.tag = sceneObjectOfItem.get(p.item) ?? p.tag;
     if (draft.closed) {
-      const meshes = [...new Set(draft.points.map((p) => p.tag))].flatMap((tag) => scene3d.meshesOf(tag));
+      const meshes =[...new Set(draft.points.map((p) => p.tag))].flatMap((tag) => scene3d.meshesOf(tag));
       draft.selection = selectSurface(meshes, draft.points, {
         maxSlopeDeg: Number(mushroomSlope.value) || 0,
         maxTriangles: 40000,
@@ -2449,8 +2470,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       mushroomStatus.textContent = "Click on a drawn model to place a vertex.";
       return;
     }
-    surfaceDraft ??= { points: [], closed: false, selection: null, generated: null };
-    surfaceDraft.points.push(hit);
+    const item = itemOfSceneObject.get(hit.tag as SceneObjectData);
+    if (item === undefined) return;
+    surfaceDraft ??= { points: [], closed: false, selection: null, generated: {} };
+    surfaceDraft.points.push({ ...hit, item });
     redrawSurface();
     describeSurface();
   }
@@ -2484,17 +2507,23 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     describeSurface();
   }
 
-  const mushroomGenerate = button("Generate mushrooms", async () => {
+  // Grow one kind of patch on the closed outline: cut the covered faces, post
+  // them with the kind's settings, and put the returned GLB in the level as a
+  // mesh geometry object (replacing the one this outline made of that kind).
+  async function growPatch(g: {
+    kind: PatchKind; noun: string; endpoint: string; inputs: HTMLInputElement[];
+    settings: () => Record<string, number>; generate: HTMLButtonElement;
+  }): Promise<void> {
     const draft = surfaceDraft;
     if (!draft?.closed) {
-      mushroomStatus.textContent = "Close an outline on a model first (+ Mushrooms, then Enter).";
+      mushroomStatus.textContent = "Close an outline on a model first (+ Mushrooms or + Grass, then Enter).";
       return;
     }
-    for (const input of [mushroomDensity, mushroomHeight, mushroomClump, mushroomSlope, mushroomDetail, mushroomSeed])
+    for (const input of [...g.inputs, mushroomSlope])
       if (!input.reportValidity()) return;
     refreshSurfaceSelection();
     const selection = draft.selection;
-    const hostId = itemOfSceneObject.get(draft.points[0]!.tag as SceneObjectData);
+    const hostId = draft.points[0]!.item;
     const host = model.items.find((i) => i.id === hostId);
     if (!selection) return;
     if (!host) {
@@ -2509,27 +2538,21 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const positions = Array.from(selection.positions,
       (n, i) => Math.round((n - origin.getComponent(i % 3)) * 1e4) / 1e4);
     const revision = modelRev;
-    mushroomGenerate.disabled = true;
-    mushroomStatus.textContent = "Growing mushrooms in Blender…";
+    g.generate.disabled = true;
+    mushroomStatus.textContent = `Growing ${g.noun} in Blender…`;
     try {
-      const response = await fetch("/api/mushrooms", {
+      const response = await fetch(g.endpoint, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          positions,
-          seed: Number(mushroomSeed.value),
-          density: Number(mushroomDensity.value),
-          height: Number(mushroomHeight.value),
-          clumping: Number(mushroomClump.value),
-          detail: Number(mushroomDetail.value),
-        }),
+        body: JSON.stringify({ positions, ...g.settings() }),
       });
       const result = await response.json() as { mesh?: string; error?: string };
-      if (!response.ok || !result.mesh) throw new Error(result.error ?? "Mushroom generation failed.");
+      if (!response.ok || !result.mesh) throw new Error(result.error ?? `Generating ${g.noun} failed.`);
       if (modelRev !== revision || mode !== "edit")
         throw new Error("The level changed during generation. Generate again.");
       beginAction();
-      const existing = draft.generated === null ? undefined
-        : model.items.find((i) => i.id === draft.generated && i.object === "geometry");
+      const previous = draft.generated[g.kind];
+      const existing = previous === undefined ? undefined
+        : model.items.find((i) => i.id === previous && i.object === "geometry");
       const patch: EdItem = existing ?? {
         ...host, id: newBodyId(), object: "geometry", shape: cloneShape(host.shape),
         cam: { ...host.cam }, light: { ...host.light }, note: { ...host.note },
@@ -2542,17 +2565,49 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         depth: Math.max(0.05, size.z) };
       if (!existing) addAndSelect([patch]);
       else { markDirty(); rebuildInspector(); }
-      draft.generated = patch.id;
-      mushroomStatus.textContent = "Mushrooms ready. Change a setting and generate again to replace them; Esc to finish.";
+      draft.generated[g.kind] = patch.id;
+      mushroomStatus.textContent =
+        `${g.noun[0]!.toUpperCase()}${g.noun.slice(1)} ready. Change a setting and generate again to replace them; Esc to finish.`;
     } catch (error) {
-      mushroomStatus.textContent = error instanceof Error ? error.message : "Mushroom generation failed.";
-    } finally { mushroomGenerate.disabled = false; }
-  });
+      mushroomStatus.textContent = error instanceof Error ? error.message : `Generating ${g.noun} failed.`;
+    } finally { g.generate.disabled = false; }
+  }
+
+  const mushroomGenerate = button("Generate mushrooms", () => growPatch({
+    kind: "mushroom", noun: "mushrooms", endpoint: "/api/mushrooms", generate: mushroomGenerate,
+    inputs: [mushroomDensity, mushroomHeight, mushroomClump, mushroomDetail, mushroomSeed],
+    settings: () => ({
+      seed: Number(mushroomSeed.value),
+      density: Number(mushroomDensity.value),
+      height: Number(mushroomHeight.value),
+      clumping: Number(mushroomClump.value),
+      detail: Number(mushroomDetail.value),
+    }),
+  }));
   mushroomGenerate.title = "Grow glowing mushrooms in Blender on the faces the + Mushrooms outline covers. The patch is drawn only; collision is unchanged.";
   mushroomRow.append(mushroomGenerate, labelWrap("density /m²", mushroomDensity), labelWrap("height (m)", mushroomHeight),
     labelWrap("clumping", mushroomClump), labelWrap("max slope°", mushroomSlope), labelWrap("detail", mushroomDetail),
-    labelWrap("seed", mushroomSeed), mushroomStatus);
+    labelWrap("seed", mushroomSeed));
   bar.appendChild(mushroomRow);
+
+  const grassRow = el("div", "ed-row");
+  const grassGenerate = button("Generate grass", () => growPatch({
+    kind: "grass", noun: "grass", endpoint: "/api/grass", generate: grassGenerate,
+    inputs: [grassDensity, grassHeight, grassClump, grassTuft, grassDetail, grassSeed],
+    settings: () => ({
+      seed: Number(grassSeed.value),
+      density: Number(grassDensity.value),
+      height: Number(grassHeight.value),
+      clumping: Number(grassClump.value),
+      tuft: Number(grassTuft.value),
+      detail: Number(grassDetail.value),
+    }),
+  }));
+  grassGenerate.title = "Grow low-poly grass tufts in Blender on the faces the + Grass outline covers (max slope° is the mushroom row's). The patch is drawn only; collision is unchanged.";
+  grassRow.append(grassGenerate, labelWrap("blades /m²", grassDensity), labelWrap("height (m)", grassHeight),
+    labelWrap("clumping", grassClump), labelWrap("tuft (m)", grassTuft), labelWrap("detail", grassDetail),
+    labelWrap("seed", grassSeed), mushroomStatus);
+  bar.appendChild(grassRow);
 
   const toolRow = el("div", "ed-row");
   bar.appendChild(toolRow);
@@ -2571,9 +2626,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     vine: button("+ Vine", () => setTool("vine")),
     light: button("+ Light", () => setTool("light")),
     mushroom: button("+ Mushrooms", () => setTool("mushroom")),
+    grass: button("+ Grass", () => setTool("grass")),
   };
   toolBtns.mushroom.title =
     "Click an outline onto the faces of a drawn model (a rock, a root, a wall) in the 3D view, at any orbit; Enter or the first vertex closes it, Backspace drops the last vertex, Esc cancels. The covered faces light up, and Generate mushrooms grows a glowing patch on them.";
+  toolBtns.grass.title =
+    "The same on-model outline as + Mushrooms; Generate grass grows low-poly grass tufts on the covered faces. Switching between the two tools keeps the outline, so one outline can carry both.";
   toolBtns.geometry.title =
     "Click to drop a geometry object; drag to size it. It is DRAWN and never simulated - nothing collides with it, the rope does not wrap it, no force reaches it. Give it a mesh or a texture on the panel; drop it on a selected body to have it ride that body.";
   toolBtns.path.title =
@@ -2624,6 +2682,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     toolBtns.vine,
     toolBtns.light,
     toolBtns.mushroom,
+    toolBtns.grass,
     kindWrap,
   );
 
@@ -3154,9 +3213,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // A turned view selects and moves but draws nothing (see the press handler),
     // so the pointer is the select one whatever the toolbar has armed rather
     // than a crosshair over a canvas that will not draw.
-    // ...except the mushroom outline, which is drawn IN the scene and so draws
-    // at any orbit.
-    canvas.style.cursor = tool === "mushroom" ? "crosshair"
+    // ...except the mushroom and grass outline, which is drawn IN the scene and
+    // so draws at any orbit.
+    canvas.style.cursor = isSurfaceTool(tool) ? "crosshair"
       : orbited() || tool === "select" ? "default" : "crosshair";
   }
   function setTool(t: Tool): void {
@@ -3165,8 +3224,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // armed by the keyboard shortcuts any more than by the (hidden) buttons.
     if (t !== "select" && lockedLayers.has(activeLayer)) return;
     if (t !== "poly" && t !== "path") cancelPolyDraft();
-    if (t !== "mushroom") cancelSurfaceDraft();
+    if (!isSurfaceTool(t)) cancelSurfaceDraft();
     tool = t;
+    describeSurface();
     for (const [k, b] of Object.entries(toolBtns)) b.classList.toggle("active", k === t);
     applyToolCursor();
   }
@@ -9368,10 +9428,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     }
     if (e.button !== 0) return;
     const scr = pointerScreen(e);
-    // The mushroom outline is clicked onto the models, at any orbit, and owns
-    // the left button while it is armed: nothing on the plane is selected or
-    // dragged under it.
-    if (tool === "mushroom") {
+    // The mushroom and grass outline is clicked onto the models, at any orbit,
+    // and owns the left button while it is armed: nothing on the plane is
+    // selected or dragged under it.
+    if (isSurfaceTool(tool)) {
       surfaceClick(scr);
       return;
     }
@@ -9937,7 +9997,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (mode !== "edit") return;
     const scr = pointerScreen(e);
     lastPointerScreen = scr;
-    if (tool === "mushroom") surfaceHover(scr);
+    if (isSurfaceTool(tool)) surfaceHover(scr);
     if (!drag) return;
     const world = canvasWorld(scr);
     dragMoved = true;

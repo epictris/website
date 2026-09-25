@@ -93,6 +93,38 @@ Files go to `public/generated-mushrooms/<id>/` (`mushrooms.glb` and the
 generators; mesh keys are `mushroom-patch:<id>:<bytes>`. Checks:
 `node --test scripts/mushroom-generator.test.mjs`.
 
+## Grow grass on a model
+
+**+ Grass** is the same on-model outline as **+ Mushrooms** (same picking, same
+face selection, same **max slope°**, which lives in the mushroom row); the two
+tools share one outline, so switching between them keeps it and one outline can
+carry a mushroom patch and a grass patch. Each **Generate** replaces only the
+patch of its own kind that the outline made.
+
+**Generate grass** posts the covered faces with **blades /m²**, **height (m)**,
+**clumping**, **tuft (m)**, **detail** and **seed** to `/api/grass`, which runs
+`asset-generators/grass/editor_patch.py` in Blender. The `GrassPatch` Geometry
+Nodes group (`grass_patch_tools.py`) scatters blade points on the faces, thins
+them by a 2D Voronoi lattice so they gather into tufts (`tuft` is the lattice
+spacing, `clumping` how bare the ground between tufts is), and stores every
+per-blade decision on the point: the middle blades are the tallest and stand
+straight, outer blades are shorter and lean away from the tuft's middle, a few
+slender ones shoot up. Each blade is one flat grid (a quad per segment,
+tapering to a point at the tip) placed on a closed-form arc, twisted about its
+length and shaded flat so every segment catches the light alone. One 128x64
+gradient texture (U base to tip, V one tone row per blade) and one double-sided
+material carry the colour. Nothing culls against neighbours, so the cost is
+linear: the server refuses a request past 40000 expected blades, and about 10
+triangles a blade at the default detail is what the level pays. A generation
+takes about 15 s.
+
+The result is a `mesh` geometry object in the body of the model it grows on,
+exactly as for mushrooms: drawn only, no collision. Override the generator with
+`GRASS_PROJECT` and Blender with `BLENDER_PATH`. Files go to
+`public/generated-grass/<id>/` (`grass.glb` and its `patch.json`), local and
+gitignored; mesh keys are `grass-patch:<id>:<bytes>`. Checks:
+`node --test scripts/grass-generator.test.mjs`.
+
 ## Generate procedural roots
 
 Select one collision polygon or rectangle on the scene layer and click
