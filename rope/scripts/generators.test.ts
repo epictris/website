@@ -1,99 +1,65 @@
 // The generator service's own cases, run by `bun run generators:check`: request
 // validation and keys (rewritten from the fork's boulder-generator.test.mjs,
-// mushroom-generator.test.mjs and generator-failure.test.mjs), the schemas, the
-// GLB triangle count, and the queue - one at a time, supersede, cancel, failure
-// - against a stand-in "python" that behaves like rockgen.py without Blender.
+// mushroom-generator.test.mjs and generator-failure.test.mjs), the GLB triangle
+// count, and the queue - one at a time, supersede, cancel, failure - against a
+// stand-in "python" that behaves like rockgen.py without Blender. Every request
+// carries the key `generatedKey` makes of it, as the editor's will.
 // The fork's slab-count cases live in tools/blender/boulders/test_params.py,
-// since the count is derived in Python now.
+// since the count is derived in Python. The schemas themselves are held by the
+// `generator:` cases of `cli render3d`.
 
 import { afterAll, describe, expect, test } from "bun:test";
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { boulder } from "../src/server/generators/boulder";
+import { join } from "node:path";
+import { loadSchema, mergeDefaults, type ParamValues } from "../src/level/generatorParams";
+import { generatedKey, type GeneratorInput, type MushroomsInput } from "../src/render3d/generated";
 import { generatorFailure } from "../src/server/generators/failure";
 import { glbTriangles } from "../src/server/generators/glb";
 import { mushrooms, soupArea } from "../src/server/generators/mushrooms";
 import type { Tools } from "../src/server/generators/paths";
 import { BAKE_MARKER } from "../src/server/generators/run";
-import { loadSchema, mergeParams, validateParams } from "../src/server/generators/schema";
-import { GeneratorService, KEY, type Status } from "../src/server/generators/service";
+import { GeneratorService, type Status } from "../src/server/generators/service";
 
-const ROOT = dirname(import.meta.dir);
-const boulderSchema = loadSchema(ROOT, "boulders");
-const mushroomSchema = loadSchema(ROOT, "mushrooms");
+const keyOf = (kind: "boulder" | "mushrooms", input: GeneratorInput, params: ParamValues = {}) =>
+  generatedKey(kind, loadSchema(kind)!.version, input, params);
 
-describe("schemas", () => {
-  for (const schema of [boulderSchema, mushroomSchema])
-    test(`${schema.kind}: every default passes its own validation`, () => {
-      const defaults = mergeParams(schema, {});
-      expect(() => validateParams(schema, defaults)).not.toThrow();
-      expect(new Set(schema.params.map((p) => p.key)).size).toBe(schema.params.length);
-      for (const p of schema.params) expect(schema.groups).toContain(p.group);
-    });
+// A 1 m square on level ground, as two triangles in the three.js frame.
+const square = [0, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 1, 0, 0, 1];
+const loop: MushroomsInput = {
+  loop: [[0, 0, 0], [1, 0, 0], [1, 0, 1]],
+  host: { kind: "primitive", mesh: "", outline: [[0, 0], [1, 0], [1, 1]], pose: [0, 0, 0, 0, 0, 0, 1] },
+};
+
+test("the triangle soup's area is in square metres", () => {
+  expect(soupArea(square)).toBe(1);
+  expect(soupArea([0, 0, 0, 2, 0, 0, 0, 3, 0])).toBe(3);
 });
 
-describe("boulder requests", () => {
-  const valid = { outline: [[0, 0], [2, 0], [1, 1]] };
-  const check = (input: unknown, params: unknown = {}) =>
-    boulder.validateInput(input, mergeParams(boulderSchema, validateParams(boulderSchema, params)));
+describe("mushroom input", () => {
+  const values = (params: ParamValues = {}) => mergeDefaults(params, loadSchema("mushrooms")!);
+  const check = (soup: unknown, params: ParamValues = {}, input: unknown = loop) =>
+    mushrooms.validateInput(input, soup, values(params));
 
-  test("accept one outline and reject invalid ones", () => {
-    expect(check(valid)).toEqual(valid);
-    for (const outline of [[], [[0, 0], [1, 0]], [[0, 0], [NaN, 0], [1, 1]], [[0, 0], [101, 0], [1, 1]]])
-      expect(() => check({ outline })).toThrow();
-    expect(() => check({ outline: [[0, 0], [1, 0], [2, 0]] })).toThrow(/zero area/);
+  test("accepts a loop, a host and a soup; the key input is the loop and host alone", () => {
+    const ok = check(square);
+    expect(ok).toEqual({ key: loop, soup: square });
+    expect(mushrooms.keyInput(ok)).toBe(loop);
+    expect(mushrooms.sidecars(ok)).toEqual({ "input.json": { soup: square } });
   });
 
-  test("reject invalid generation settings", () => {
-    expect(() => check(valid, { seed: "31" })).toThrow(/whole number/);
-    expect(() => check(valid, { seed: 1.5 })).toThrow(/whole number/);
-    expect(() => check(valid, { depth: 6 })).toThrow(/between 0.02 and 5 m/);
-    expect(() => check(valid, { bakeSize: 3000 })).toThrow(/one of/);
-    expect(() => check(valid, { color: [0.1, 0.2] })).toThrow(/linear RGB/);
-    expect(() => check(valid, { nope: 1 })).toThrow(/not a boulder parameter/);
-    expect(() => check(valid, [])).toThrow(/object/);
-    // Blank tolerance is the derived one.
-    expect(() => check(valid, { tolerance: null, seed: 7, depth: 2 })).not.toThrow();
-  });
-});
-
-describe("mushroom requests", () => {
-  // A 1 m square on level ground, as two triangles in the three.js frame.
-  const square = [0, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 1, 0, 0, 1];
-  const check = (input: unknown, params: unknown = {}) =>
-    mushrooms.validateInput(input, mergeParams(mushroomSchema, validateParams(mushroomSchema, params)));
-
-  test("the triangle soup's area is in square metres", () => {
-    expect(soupArea(square)).toBe(1);
-    expect(soupArea([0, 0, 0, 2, 0, 0, 0, 3, 0])).toBe(3);
-  });
-
-  test("accept a surface and reject invalid settings", () => {
-    expect(check({ positions: square }, { seed: 3, density: 150, height: 0.16, clumping: 0.75, detail: 0.3 })).toEqual({ positions: square });
-    for (const positions of [[], square.slice(0, 8), [...square.slice(0, 8), NaN], [...square.slice(0, 8), 101]])
-      expect(() => check({ positions })).toThrow();
-    expect(() => check({ positions: square }, { seed: 1.5 })).toThrow();
-    expect(() => check({ positions: square }, { density: 0 })).toThrow();
-    expect(() => check({ positions: square }, { height: 3 })).toThrow();
-    expect(() => check({ positions: square }, { clumping: 2 })).toThrow();
-    expect(() => check({ positions: square }, { detail: -1 })).toThrow();
+  test("rejects a bad soup, loop or host", () => {
+    for (const soup of [undefined, [], square.slice(0, 8), [...square.slice(0, 8), NaN], [...square.slice(0, 8), 101]])
+      expect(() => check(soup)).toThrow(/faces within 100 metres/);
     // 4 m² at 1000 per m² is past what the exact overlap pass bakes interactively.
-    expect(() => check({ positions: square.map((n) => n * 2) }, { density: 1000 })).toThrow(/lower the density/);
+    expect(() => check(square.map((n) => n * 2), { density: 1000 })).toThrow(/lower the density/);
     // A sliver has no area to grow on.
-    expect(() => check({ positions: [0, 0, 0, 1, 0, 0, 2, 0, 0] })).toThrow();
+    expect(() => check([0, 0, 0, 1, 0, 0, 2, 0, 0])).toThrow(/zero area/);
     // The limits are parameters too.
-    expect(() => check({ positions: square }, { maxTriangles: 1 })).toThrow(/Select 1-1 faces/);
+    expect(() => check(square, { maxTriangles: 1 })).toThrow(/Select 1-1 faces/);
+    expect(() => check(square, {}, { ...loop, loop: [[0, 0, 0]] })).toThrow(/input.loop/);
+    expect(() => check(square, {}, { ...loop, host: { kind: "mesh", mesh: "rock-1" } })).toThrow(/input.host/);
   });
-});
-
-test("mesh keys are a generator and 16 hex digits, nothing else", () => {
-  for (const key of ["boulder:0123456789abcdef", "mushrooms:ffffffffffffffff"]) expect(KEY.test(key)).toBe(true);
-  for (const key of [
-    "boulder:0123456789ABCDEF", "boulder:0123456789abcde", "boulder:0123456789abcdef0",
-    "boulder-v5:c81013ad-0aa9-4301-a6de-e766c5f7c81b:12345", "boulder:../../secret", "rock-1", "moss:0123456789abcdef",
-  ])
-    expect(KEY.test(key)).toBe(false);
 });
 
 describe("generator failures", () => {
@@ -156,16 +122,13 @@ test("triangles are counted from the GLB's accessors", () => {
   expect(() => glbTriangles(new Uint8Array(24))).toThrow(/not a GLB/);
 });
 
-describe("the queue", () => {
-  // A scratch project: the real schemas, an empty public/, and a stand-in for
-  // rockgen.py that reads its behaviour from the request's seed: seed 1 sleeps,
-  // 2 prints the bake marker then sleeps, 3 fails its validation, else quick.
+describe("the service", () => {
+  // A scratch project root with an empty public/, and stand-ins for Python and
+  // Blender that write a GLB. The Python reads its behaviour from the last digit
+  // of the request's seed: 1 sleeps, 2 prints the bake marker then sleeps, 3
+  // fails its validation, else quick.
   const root = mkdtempSync(join(tmpdir(), "generators-test-"));
   afterAll(() => rmSync(root, { recursive: true, force: true }));
-  for (const dir of ["boulders", "mushrooms"]) {
-    mkdirSync(join(root, "tools", "blender", dir), { recursive: true });
-    cpSync(join(ROOT, "tools", "blender", dir, "params.json"), join(root, "tools", "blender", dir, "params.json"));
-  }
   const glb = join(root, "fake.glb");
   writeFileSync(glb, fakeGlb(12));
   const python = join(root, "fake-python");
@@ -175,7 +138,7 @@ describe("the queue", () => {
 # $1 rockgen.py, $2 request.json, $3 --output, $4 out
 seed=$(sed -n 's/.*"seed":\\([0-9]*\\).*/\\1/p' "$2")
 mkdir -p "$4/models"
-case "$seed" in
+case "$((seed % 10))" in
   1) sleep 3 ;;
   2) echo "${BAKE_MARKER}"; sleep 1 ;;
   3) echo "boulder: FAIL; outline 0.07"; echo "Traceback" >&2; exit 1 ;;
@@ -183,13 +146,20 @@ esac
 cp "${glb}" "$4/models/boulder.glb"
 `,
   );
+  const blender = join(root, "fake-blender");
+  // editor_patch.py's arguments end "--spec <file> --out <dir>".
+  writeFileSync(blender, `#!/bin/sh\nfor last; do :; done\nmkdir -p "$last"\ncp "${glb}" "$last/mushrooms.glb"\n`);
   chmodSync(python, 0o755);
-  const tools: Tools = { python, blender: "/bin/true", venv: false };
+  chmodSync(blender, 0o755);
+  const tools: Tools = { python, blender, venv: false };
   const service = new GeneratorService(root, () => {}, () => tools);
-  const outline = [[0, 0], [1, 0], [1, 1], [0, 1]];
-  const key = (n: number) => `boulder:${n.toString(16).padStart(16, "0")}`;
-  const submit = (n: number, seed: number, object?: string) =>
-    service.submit({ kind: "boulder", key: key(n), input: { outline }, params: { seed }, object });
+  const outline: [number, number][] = [[0, 0], [1, 0], [1, 1], [0, 1]];
+  const rock = (seed: number, object?: string) => {
+    const params = { seed };
+    return { kind: "boulder", key: keyOf("boulder", { outline }, params), input: { outline }, params, object };
+  };
+  const submit = (seed: number, object?: string) => service.submit(rock(seed, object));
+  const keyFor = (seed: number) => rock(seed).key;
   const settle = async (k: string): Promise<Status> => {
     for (let i = 0; i < 100; i++) {
       const s = service.status(k)!;
@@ -198,59 +168,106 @@ cp "${glb}" "$4/models/boulder.glb"
     }
     throw new Error(`${k} never settled`);
   };
+  const refuse = (body: unknown, pattern: RegExp) => expect(() => service.submit(body)).toThrow(pattern);
+  const withParams = (params: Record<string, unknown>) => ({
+    kind: "boulder", key: keyOf("boulder", { outline }, params as ParamValues), input: { outline }, params,
+  });
+  const pinned = { outline: [[-1, -0.5], [1, -0.5], [1, 0.5], [-1, 0.5]] as [number, number][] };
+  const mkey = keyOf("mushrooms", loop);
+
+  test("the key must be the one its content makes", () => {
+    // Pinned by the format phase's cases in cli render3d.
+    const params = { seed: 7, depth: 1.2 };
+    expect(keyOf("boulder", pinned, params)).toBe("boulder:c82bc75873f0956b");
+    refuse({ kind: "boulder", key: "boulder:0123456789abcdef", input: pinned, params },
+      /The key boulder:0123456789abcdef does not match its content, which makes boulder:c82bc75873f0956b/);
+    // Defaults, unrounded noise and key order make the same key.
+    expect(service.submit({ kind: "boulder", key: "boulder:c82bc75873f0956b", input: pinned,
+      params: { depth: 1.20000001, seed: 7, weathering: 0.38 } }).key).toBe("boulder:c82bc75873f0956b");
+    // A mushroom patch's key covers the loop and host, not the soup.
+    expect(service.submit({ kind: "mushrooms", key: mkey, input: loop, soup: square }).key).toBe(mkey);
+    expect(service.submit({ kind: "mushrooms", key: mkey, input: loop, soup: square.map((n) => n * 0.5) }).key).toBe(mkey);
+    refuse({ kind: "mushrooms", key: mkey, input: { ...loop, loop: [[0, 0, 0], [1, 0, 0], [1, 0, 2]] }, soup: square }, /does not match/);
+  });
 
   test("bad requests are refused before anything runs", () => {
-    const refuse = (body: unknown, pattern: RegExp) => expect(() => service.submit(body)).toThrow(pattern);
     refuse({ kind: "moss", key: "moss:0123456789abcdef", input: {} }, /boulder or mushrooms/);
     refuse({ kind: "boulder", key: "mushrooms:0123456789abcdef", input: { outline } }, /key must be boulder:/);
     refuse({ kind: "boulder", key: "boulder:xyz", input: { outline } }, /key must be/);
-    refuse({ kind: "boulder", key: key(1), input: { outline }, params: { depth: 9 } }, /between/);
-    refuse({ kind: "boulder", key: key(1), input: { outline: [[0, 0]] } }, /3-128/);
+    refuse({ kind: "boulder", key: "boulder:0123456789ABCDEF", input: { outline } }, /key must be/);
+    refuse({ ...withParams({}), params: [] }, /params must be an object/);
+    refuse(withParams({ depth: 9 }), /depth: 9 is outside 0.02..5/);
+    refuse(withParams({ seed: "31" }), /seed: must be an integer/);
+    refuse(withParams({ seed: 1.5 }), /seed: must be an integer/);
+    refuse(withParams({ bakeSize: 3000 }), /bakeSize: 3000 is not one of/);
+    refuse(withParams({ color: [0.1, 0.2] }), /color: must be a linear RGB triple/);
+    refuse(withParams({ nope: 1 }), /nope: unknown parameter for boulder/);
+    refuse({ ...withParams({}), input: { outline: [[0, 0]] } }, /3-128/);
+    refuse({ ...withParams({}), input: { outline: [[0, 0], [1, 0], [2, 0]] } }, /zero area/);
     // Raising a Min past the default Max is caught against the merged values.
-    refuse({ kind: "boulder", key: key(1), input: { outline }, params: { chunkDepthScaleMin: 1.3 } }, /chunkDepthScaleMin \(1.3\) must not be above chunkDepthScaleMax \(1.2\)/);
-    refuse({ kind: "mushrooms", key: "mushrooms:0000000000000001", input: { positions: [0, 0, 0, 1, 0, 0, 0, 0, 1] }, params: { sizeMin: 0.8, sizeMax: 0.5 } }, /sizeMin/);
+    refuse(withParams({ chunkDepthScaleMin: 1.3 }), /chunkDepthScaleMin: 1.3 is above chunkDepthScaleMax \(1.2\)/);
+    const sizes = { sizeMin: 0.8, sizeMax: 0.5 };
+    refuse({ kind: "mushrooms", key: keyOf("mushrooms", loop, sizes), input: loop, soup: square, params: sizes }, /sizeMin/);
+    refuse({ kind: "mushrooms", key: keyOf("mushrooms", loop, { density: 0 }), input: loop, soup: square, params: { density: 0 } },
+      /density: 0 is outside/);
   });
 
-  test("one job runs at a time, and each lands under its key", async () => {
-    expect(submit(10, 1)).toEqual({ key: key(10), state: "running" });
-    expect(submit(11, 0)).toEqual({ key: key(11), state: "queued" });
-    expect((await settle(key(10))).state).toBe("done");
-    const done = await settle(key(11));
-    expect(done).toMatchObject({ state: "done", triangles: 12 });
-    expect(existsSync(join(root, "public", "generated", "boulder", key(11).slice(8), "mesh.glb"))).toBe(true);
+  test("a blank tolerance is the derived one, and makes the default's key", () => {
+    expect(service.submit({ ...withParams({}), params: { tolerance: null, seed: 5 },
+      key: keyOf("boulder", { outline }, { seed: 5 }) }).key).toBe(keyFor(5));
+  });
+
+  test("one job runs at a time, and each lands under its key with its meta", async () => {
+    await Promise.all(["boulder:c82bc75873f0956b", mkey, keyFor(5)].map(settle));
+    expect(submit(101)).toEqual({ key: keyFor(101), state: "running" });
+    expect(submit(100)).toEqual({ key: keyFor(100), state: "queued" });
+    expect((await settle(keyFor(101))).state).toBe("done");
+    expect(await settle(keyFor(100))).toMatchObject({ state: "done", triangles: 12 });
+    const dir = join(root, "public", "generated", "boulder", keyFor(100).slice(8));
+    const meta = JSON.parse(readFileSync(join(dir, "meta.json"), "utf8"));
+    expect(meta).toMatchObject({ key: keyFor(100), kind: "boulder", version: 1, params: { seed: 100 }, input: { outline }, triangles: 12 });
+    expect(existsSync(join(dir, "input.json"))).toBe(false);
     // Asking again is free: the directory answers.
-    expect(submit(11, 0)).toEqual({ key: key(11), state: "done" });
+    expect(submit(100)).toEqual({ key: keyFor(100), state: "done" });
+  });
+
+  test("a patch's meta holds its key input, and the soup sits beside it", () => {
+    const dir = join(root, "public", "generated", "mushrooms", mkey.slice(10));
+    expect(service.status(mkey)!.state).toBe("done");
+    expect(JSON.parse(readFileSync(join(dir, "meta.json"), "utf8")).input).toEqual(loop);
+    // The first soup submitted is the one generated; the second found it queued.
+    expect(JSON.parse(readFileSync(join(dir, "input.json"), "utf8"))).toEqual({ soup: square });
   });
 
   test("a newer request for the same object supersedes a running job before its bake", async () => {
-    submit(20, 1, "rock-a");
+    submit(201, "rock-a");
     await Bun.sleep(200);
-    submit(21, 0, "rock-a");
-    expect((await settle(key(20))).state).toBe("superseded");
-    expect((await settle(key(21))).state).toBe("done");
-    expect(existsSync(join(root, "public", "generated", "boulder", key(20).slice(8)))).toBe(false);
+    submit(200, "rock-a");
+    expect((await settle(keyFor(201))).state).toBe("superseded");
+    expect((await settle(keyFor(200))).state).toBe("done");
+    expect(existsSync(join(root, "public", "generated", "boulder", keyFor(201).slice(8)))).toBe(false);
   });
 
   test("a job past its bake is left to finish", async () => {
-    submit(30, 2, "rock-b");
+    submit(302, "rock-b");
     await Bun.sleep(400);
-    submit(31, 0, "rock-b");
-    expect((await settle(key(30))).state).toBe("done");
-    expect((await settle(key(31))).state).toBe("done");
+    submit(300, "rock-b");
+    expect((await settle(keyFor(302))).state).toBe("done");
+    expect((await settle(keyFor(300))).state).toBe("done");
   });
 
   test("cancel stops a queued or running job", async () => {
-    submit(40, 1);
-    submit(41, 0);
-    expect(service.cancel(key(41))!.state).toBe("superseded");
+    submit(401);
+    submit(400);
+    expect(service.cancel(keyFor(400))!.state).toBe("superseded");
     await Bun.sleep(200);
-    service.cancel(key(40));
-    expect((await settle(key(40))).state).toBe("superseded");
+    service.cancel(keyFor(401));
+    expect((await settle(keyFor(401))).state).toBe("superseded");
   });
 
   test("a failure reports the validator verdicts", async () => {
-    submit(50, 3);
-    const failed = await settle(key(50));
+    submit(503);
+    const failed = await settle(keyFor(503));
     expect(failed.state).toBe("failed");
     expect(failed.message).toContain("boulder: FAIL; outline 0.07");
     const kept = /Output kept in (.*)/.exec(failed.message!)![1]!;
@@ -260,9 +277,8 @@ cp "${glb}" "$4/models/boulder.glb"
 
   test("a missing tool is said at once", () => {
     const bare = new GeneratorService(root, () => {}, () => ({ python: null, blender: null, venv: false }));
-    expect(() => bare.submit({ kind: "boulder", key: key(60), input: { outline } })).toThrow(/No Python found/);
-    expect(() =>
-      bare.submit({ kind: "mushrooms", key: "mushrooms:0000000000000060", input: { positions: [0, 0, 0, 1, 0, 0, 0, 0, 1] } }),
-    ).toThrow(/No Blender found/);
+    expect(() => bare.submit(rock(600))).toThrow(/No Python found/);
+    const other = { ...loop, loop: [[0, 0, 0], [2, 0, 0], [2, 0, 2]] as [number, number, number][] };
+    expect(() => bare.submit({ kind: "mushrooms", key: keyOf("mushrooms", other), input: other, soup: square })).toThrow(/No Blender found/);
   });
 });

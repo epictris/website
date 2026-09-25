@@ -22,7 +22,7 @@ import { glbTriangles } from "../src/server/generators/glb";
 import { mushrooms } from "../src/server/generators/mushrooms";
 import { findTools, toolVersions } from "../src/server/generators/paths";
 import { makeJobDir, runGenerator, type Generator } from "../src/server/generators/run";
-import { loadSchema } from "../src/server/generators/schema";
+import { loadSchema } from "../src/level/generatorParams";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 type Verdict = "PASS" | "FAIL" | "SKIP";
@@ -46,7 +46,7 @@ async function endToEnd<I>(name: string, gen: Generator<I>, input: I): Promise<v
   const jobDir = await makeJobDir(gen.kind);
   const started = performance.now();
   try {
-    const result = await runGenerator(gen, tools, ROOT, input, {}, loadSchema(ROOT, gen.dir), jobDir, {
+    const result = await runGenerator(gen, tools, ROOT, input, {}, loadSchema(gen.kind)!, jobDir, {
       onLine: (line) => console.log(`  ${line}`),
     });
     const bytes = readFileSync(result.glb);
@@ -82,8 +82,10 @@ if (!tools.python) {
 if (tools.python && !versions.deps)
   record("boulder end to end", "SKIP", `${tools.python} lacks the generator's packages: run \`bun run generators:setup\``);
 else await endToEnd("boulder end to end (1 m square)", boulder, { outline: [[0, 0], [1, 0], [1, 1], [0, 1]] });
+// The key input is carried but unused here: no key is computed off the service.
 await endToEnd("mushrooms end to end (1 m square)", mushrooms, {
-  positions: [0, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 1, 0, 0, 1],
+  key: { loop: [[0, 0, 0], [1, 0, 0], [1, 0, 1], [0, 0, 1]], host: { kind: "primitive", mesh: "", pose: [0, 0, 0, 0, 0, 0, 1] } },
+  soup: [0, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 1, 0, 0, 1],
 });
 
 console.log("\n=== generators:check");

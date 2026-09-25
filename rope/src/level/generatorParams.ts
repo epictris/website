@@ -180,6 +180,24 @@ export function validateParams(params: Readonly<Record<string, unknown>>, schema
   return issues;
 }
 
+// A `<name>Min` / `<name>Max` pair bounds one random draw, and the Python's numpy
+// refuses a draw whose low end is above its high end, with a traceback from
+// inside a Blender job. So the pair is checked on the MERGED values (defaults
+// filled in), where raising only the Min past the default Max is caught, and
+// the issue names both keys. Each key alone is `validateParams`' business.
+export function validatePairs(values: Readonly<Record<string, unknown>>): ParamIssue[] {
+  const issues: ParamIssue[] = [];
+  for (const [key, low] of Object.entries(values)) {
+    if (!key.endsWith("Min")) continue;
+    const highKey = `${key.slice(0, -3)}Max`;
+    const high = values[highKey];
+    if (typeof low === "number" && typeof high === "number" && low > high) {
+      issues.push({ key, message: `${low} is above ${highKey} (${high})` });
+    }
+  }
+  return issues;
+}
+
 // Every parameter the schema lists, the given value where there is one and the
 // default where not (null where the generator derives it). What the generator
 // is handed. Keys the schema does not know are kept, for `validateParams` to

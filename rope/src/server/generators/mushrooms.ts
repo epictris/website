@@ -2,18 +2,43 @@
 // author painted, as a triangle soup, in; a merged mesh of glowing mushrooms
 // out. editor_patch.py runs the MushroomPatch Geometry Nodes group in Blender
 // with every socket set from params.json and the request's overrides.
+//
+// Two things arrive, because the key and the generator want different ones.
+// The key input (`MushroomsInput`: the painted loop and a description of the
+// host) is what the patch is made FROM, and what the mesh key hashes; the
+// `soup` is the host surface inside the loop, collected by the editor from the
+// host's drawn meshes at generation time, and is what Blender grows on. The
+// soup is derived from the key input, so it is not hashed; it is kept beside
+// meta.json as input.json.
 
 import { join } from "node:path";
+import type { MushroomsInput } from "../../render3d/generated";
 import type { Generator } from "./run";
-import type { Params, Schema } from "./schema";
 
 export interface MushroomInput {
+  key: MushroomsInput;
   /** Flat triangle soup in the three.js frame relative to the patch origin, metres. */
-  positions: number[];
+  soup: number[];
 }
 
 // Coordinates within this many metres of the patch origin (m).
 const MAX_COORD = 100;
+
+const finiteVector = (v: unknown, length: number): boolean =>
+  Array.isArray(v) && v.length === length && v.every((n) => typeof n === "number" && Number.isFinite(n));
+
+// The key input's shape, as `generatorInput` in editor/visuals/paramSchema.ts
+// builds it. Only the shape: whether it is the RIGHT loop and host is the
+// key's business, which the service checks against it.
+function checkKeyInput(value: unknown): MushroomsInput {
+  const v = value as MushroomsInput | null;
+  if (!v || !Array.isArray(v.loop) || v.loop.length < 3 || !v.loop.every((p) => finiteVector(p, 3)))
+    throw new Error("input.loop must be three or more [x, y, z] points.");
+  const h = v.host;
+  if (!h || (h.kind !== "primitive" && h.kind !== "mesh") || typeof h.mesh !== "string" || !finiteVector(h.pose, 7))
+    throw new Error("input.host must be { kind, mesh, pose: [x, y, z, rotZ, rotX, rotY, scale], ... }.");
+  return v;
+}
 // Below this the surface has no area to grow on (m^2).
 const MIN_AREA = 1e-4;
 
@@ -32,11 +57,12 @@ export const mushrooms: Generator<MushroomInput> = {
   dir: "mushrooms",
   timeout: 300_000,
 
-  validateInput(input, values) {
+  validateInput(input, soup, values) {
+    const key = checkKeyInput(input);
     const maxTriangles = values.maxTriangles as number;
     const maxEstimate = values.maxEstimate as number;
     const density = values.density as number;
-    const positions = (input as MushroomInput | null)?.positions;
+    const positions = soup as number[];
     if (
       !Array.isArray(positions) ||
       positions.length < 9 ||
@@ -55,11 +81,14 @@ export const mushrooms: Generator<MushroomInput> = {
         `About ${Math.round(area * density)} mushrooms (${area.toFixed(2)} m²); ` +
           `lower the density or select less than ${maxEstimate} / density m².`,
       );
-    return { positions };
+    return { key, soup: positions };
   },
 
-  request(input, overrides: Params, schema: Schema) {
-    return { kind: "mushrooms", version: schema.version, positions: input.positions, params: overrides };
+  keyInput: (input) => input.key,
+  sidecars: (input) => ({ "input.json": { soup: input.soup } }),
+
+  request(input, overrides, schema) {
+    return { kind: "mushrooms", version: schema.version, positions: input.soup, params: overrides };
   },
 
   missing: (tools) => (tools.blender ? null : "No Blender found: put blender on PATH, or set BLENDER_PATH."),

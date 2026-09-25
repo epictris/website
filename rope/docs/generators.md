@@ -42,19 +42,34 @@ The probe runs once per server and again after any probe that found something mi
 `POST /api/generate` asks for a mesh:
 
 ```json
-{ "kind": "boulder", "key": "boulder:0123456789abcdef", "input": { "outline": [[0, 0], [1, 0], [1, 1], [0, 1]] }, "params": { "depth": 1.2 }, "object": "ball/geometry-17" }
+{ "kind": "boulder", "key": "boulder:c82bc75873f0956b",
+  "input": { "outline": [[-1, -0.5], [1, -0.5], [1, 0.5], [-1, 0.5]] }, "params": { "seed": 7, "depth": 1.2 },
+  "object": "ball/geometry-17" }
 ```
 
-- `kind` is `boulder` or `mushrooms`, and `key` must be `<kind>:<16 hex digits>` (`KEY` in `service.ts`).
-- `input` is the kind's input: a boulder's `outline` is the object's local outline in metres, y up, 3 to 128 vertices within 100 m of the origin; a patch's `positions` is the painted surface as a flat triangle soup in the three.js frame relative to the patch origin, metres.
-- `params` holds only the values that differ from the schema's defaults; every key is checked against the schema (type, range, options), and so is every `<name>Min` / `<name>Max` pair after merging with the defaults.
+```json
+{ "kind": "mushrooms", "key": "mushrooms:...",
+  "input": { "loop": [[x, y, z], ...], "host": { "kind": "mesh", "mesh": "boulder:...", "pose": [x, y, z, rotZ, rotX, rotY, scale] } },
+  "soup": [x, y, z, x, y, z, ...], "params": { "density": 220 }, "object": "ball/geometry-18" }
+```
+
+- `kind` is `boulder` or `mushrooms`, and `key` must be `<kind>:<16 hex digits>` (`parseGeneratedKey` in `src/render3d/generated.ts`).
+- `input` is the **key input**, exactly what `generatorInput` (`src/editor/visuals/paramSchema.ts`) builds for the object and what `generatedKey` hashes:
+  a boulder's `{ outline }` is the object's local outline in metres, y up, 3 to 128 vertices within 100 m of the origin;
+  a patch's `{ loop, host }` is the painted loop in the patch's frame and the host as `PatchHost` describes it.
+- `soup` is a patch's alone: the host surface inside the loop as a flat triangle soup in the three.js frame relative to the patch origin, metres, collected by the editor at generation time.
+  It is what Blender grows on, but it is derived from the key input and is not hashed.
+- `params` holds the values that differ from the schema's defaults (defaults are allowed and ignored by the key).
+  They are checked by `validateParams` from `src/level/generatorParams.ts`, the editor's own validation, and every `<name>Min` / `<name>Max` pair by `validatePairs` after `mergeDefaults`.
+  A `null` for a parameter whose default is `null` (the boulder's `tolerance`) means "derive it", as absent does.
 - `object` is optional: any string that names the editor object the mesh is for. A newer request for the same object under another key supersedes the older job (below).
 
-The answer is `{ "key": ..., "state": "done" | "queued" | "running" }`: `done` at once when `public/generated/<kind>/<hash>/mesh.glb` exists, else the job's state.
-A bad request is a 400 with `{ "error": ... }` naming the key and its range; a missing tool is a 503 saying which; a body over 12 MB is a 413; a request from another origin is a 403.
+**The key is checked.**
+`expectedKey(kind, input, params)` in `service.ts` is `generatedKey(kind, <the schema's version>, input, params)`, and a request whose key differs is a 400 naming both: `The key boulder:0123456789abcdef does not match its content, which makes boulder:c82bc75873f0956b.`
+So the client must hash at the schema version the server runs (`loadSchema(kind).version`), not at an older version stored in a level; a level generated under an older version is stale and regenerates under the new one.
 
-The server does not compute the key.
-`expectedKey(kind, input, params)` in `service.ts` returns `null` for now, which means "trust the client's key, check only its shape"; the merge with the format phase wires `generatedKey` from `src/render3d/generated.ts` into it, and from then on a key that does not match its content is refused.
+The answer is `{ "key": ..., "state": "done" | "queued" | "running" }`: `done` at once when `public/generated/<kind>/<hash>/mesh.glb` exists, else the job's state (`running` when the queue was idle).
+A bad request is a 400 with `{ "error": ... }` naming each bad key and why; a missing tool is a 503 saying which; a body over 12 MB is a 413; a request from another origin is a 403.
 
 `GET /api/generate/<key>` answers a job's state:
 
@@ -84,13 +99,15 @@ A failed run's scratch directory is kept, and the failure message says where.
   "bytes": 1499436, "triangles": 7504, "generatedAt": "2026-09-25T15:46:00.000Z", "blender": "5.2.0", "seconds": 6.9 }
 ```
 
-A mushroom patch's soup can run to megabytes and `meta.json` is read for every level that uses the mesh, so a patch's `input` is a summary (`{ "triangles": n, "file": "input.json" }`) and the soup sits beside it in `input.json`.
+It is `GeneratedMeta` (`src/render3d/generatedMeta.ts`) plus `seconds`: `params` in the canonical form the key hashed (defaults stripped, keys sorted), `input` the key input.
+A patch's soup can run to megabytes and `meta.json` is read for every level that uses the mesh, so the soup sits beside it in `input.json` as `{ "soup": [...] }`.
 
 **Supersede.** A request carrying `object` stops every other queued or running job for that object, unless the job is past its bake: the geometry is then final, the bake is most of what is left, and the result is cached under its own key anyway.
 "Past the bake" is the run printing `GENERATOR: bake started` (`blender_build.py` at the start of the texture bake; `editor_patch.py` once the node group has been frozen).
 A stopped job's state is `superseded`, and its scratch directory is removed.
 
 **Failures.** `failure.ts` is the fork's `generatorFailure.ts`: the validators' `name: PASS|FAIL ...` lines first, then where the output was kept, then the tail of stderr without Blender's deprecation noise, cut on whole lines at about 1200 characters.
+The validators are the fork's and are strict: the 2 x 1 m rectangle with seed 7 and depth 1.2 (the pinned `boulder:c82bc75873f0956b`) fails its centre slice by 0.1 mm (0.040106 against a 0.04 m tolerance) in the fork's own code as well as here, so a failure is a normal outcome the author answers with another seed or a looser tolerance.
 A mushroom run says its own refusals on a `MUSHROOMS:` line ("no mushrooms fit this surface"), which is passed through as it is.
 
 **Triangles** are read from the GLB (`glb.ts`): the JSON chunk's index accessor count (or the POSITION count, unindexed) over three, per primitive, per node that places the mesh.
@@ -116,6 +133,7 @@ The fork's docs quote 8 to 60 s a boulder on slower machines; most of a boulder'
 ## The schemas
 
 Each generator has one parameter schema, `tools/blender/<dir>/params.json`, read by the inspector, by the server's validation and by the Python alike, so a default is stated once.
+The TypeScript half is `src/level/generatorParams.ts` (types, `loadSchema`, `validateParams`, `validatePairs`, `mergeDefaults`, `stripDefaults`, `scaleParams`, `canonicalParams`), shared by the level format, the editor and the service; the Python half is `boulders/params.py` and `editor_patch.py`'s `patch_values`.
 
 ```json
 { "kind": "boulder", "version": 1, "groups": ["Shape", "Fracture", "Surface", "Material", "Bake"],
@@ -125,14 +143,12 @@ Each generator has one parameter schema, `tools/blender/<dir>/params.json`, read
 
 - `type` is `int`, `number`, `bool`, `enum` (with `options`) or `color` (linear RGB triple).
 - A `number` whose `default` is `null` is blank by default and derived by the generator: the boulder's `tolerance` is `min(0.04 m, 4 % of the square root of the outline's area)` when blank.
-- `unit` `m` marks a length (scaled between px and metres by the level format), `deg` an angle, `px` a texture size, `1/m2` a density; the rest are dimensionless.
+- `unit` `m` marks a length (scaled between px and metres by the level format) and `deg` an angle; the rest are dimensionless or a rate per metre, which the `doc` says.
 - `basic` parameters show by default in the inspector; the rest sit under an Advanced disclosure per group.
+- `notes` says where the defaults came from and which fork constants deliberately stay constants.
 
-The two files in this branch are **provisional**: written by the service phase from the plan's lists so the generators had a schema to run against, and replaced at merge by the format phase's, which owns the format.
-The Python and the server read them by key at run time, so a replacement with the same keys works unchanged.
-
-Boulders have 73 parameters in five groups; mushroom patches have 25 in four.
-The lists, with every default's source in the fork, are the plan's "The parameter schema" section.
+Boulders have 78 parameters (Shape 10, Fracture 29, Surface 17, Material 16, Bake 6; 12 basic); mushroom patches have 26 (Placement 8, Form 7, Look 9, Limits 2; 8 basic).
+Every default is the fork's value, and a request of defaults alone reproduces the fork's GLB byte for byte.
 
 ## The Python
 
@@ -168,8 +184,8 @@ A knob is threaded only into the branch the editor runs: `chunkTilt` replaces th
 | `mushroom_patch_tools.py` | Karin's "Mushroom Patch" Blender add-on: the `MushroomPatch` Geometry Nodes group, the generated textures and material, bake and export |
 | `editor_patch.py` | The editor's entry: soup in, every socket and look knob set from the spec, GLB out |
 
-A request is `{ "kind": "mushrooms", "version": 1, "positions": [...], "params": { ... } }`; the fork's flat shape (`seed`, `density`, ... at the top level) still reads.
-`editor_patch.py` merges `params.json` with the overrides, sets every node group socket from `SOCKETS` (`maxTilt` authored in degrees, the socket in radians), and hands the look knobs (`glow`, `paleness`, `capVariants`, `stripeDarken`, the three roughnesses, `textureSize`) to `make_patch(look=...)`.
+A request is `{ "kind": "mushrooms", "version": 1, "positions": [...], "params": { ... } }`, where `positions` is the service request's `soup`; the fork's flat shape (`seed`, `density`, ... at the top level) still reads.
+`editor_patch.py` merges `params.json` with the overrides, sets every node group socket from `SOCKETS` (`maxTilt` authored in degrees, the socket in radians), and hands the look knobs (`glow`, `paleness`, `capVariants`, `stripeDarken`, the four roughnesses, `textureSize`) to `make_patch(look=...)`.
 `maxSlope`, `maxTriangles` and `maxEstimate` act before Blender: the editor filters the surface by slope, the server bounds the soup and the estimated count.
 The add-on installs into Blender as one file, so it keeps its own defaults (the sockets' and `LOOK`); `mushrooms/test_params.py` fails when they drift from `params.json`.
 The one deliberate difference is `detail`: the fork's editor sent 0.3 where the add-on's panel starts at 0.5.
@@ -179,7 +195,7 @@ The OKLab stops and shade tables stay constants; `capVariants` uses the first n 
 
 `bun run generators:check` (`scripts/generators-check.ts`) runs, and prints PASS, FAIL or SKIP with a reason for each:
 
-1. **Service cases** (`scripts/generators.test.ts`, `bun test`): request validation, the key shape, the schemas' own defaults, the failure formatter (the fork's three `.test.mjs` files, rewritten), the GLB triangle count, and the queue against a stand-in `python` that behaves like `rockgen.py` without Blender: one job at a time, supersede before and after the bake, cancel, a failure's verdicts.
+1. **Service cases** (`scripts/generators.test.ts`, `bun test`): request validation, the key check (the pinned `boulder:c82bc75873f0956b` accepted, a wrong key refused naming both, a patch's key blind to its soup), the failure formatter (the fork's three `.test.mjs` files, rewritten), the GLB triangle count, and the queue against a stand-in `python` that behaves like `rockgen.py` without Blender: one job at a time, supersede before and after the bake, cancel, a failure's verdicts.
 2. **Boulder params** (`tools/blender/boulders/test_params.py`): a request of the ball.json body 7 outline with no overrides becomes, field by field and type by type, the fork's `polygon.json` for that rock (`boulders/fixtures/ball-body-7.polygon.json`), apart from the two recipe changes the fork's server made after that rock was generated (`slabs` 10 became `round(area * 10)` = 8; `game_low_poly` was added); every other schema knob rides along at its default; plus the fork's slab-count cases, the auto tolerance and unknown keys.
 3. **Mushroom params** (`tools/blender/mushrooms/test_params.py`, standard library only): the add-on's defaults agree with `params.json`, and every parameter has somewhere to go.
 4. **End to end**, when the tools are here: a 1 m square outline through `rockgen.py` and Blender, and a 1 m square surface through the patch, each checked for a GLB with triangles in it.
@@ -193,13 +209,13 @@ When this port was made, the ported generators were shown to reproduce the fork 
 1. Find the constant in the Python, and the branch the editor runs through it.
 2. Add it to `params.json` with its current value as the default, a range that holds that value, a step, a unit if it has one, a group and a one-line `doc`.
 3. Read it where the constant was: `param(spec, "key")` in the boulder modules (pass `spec` down to a helper that has none in reach, as an optional argument that falls back to `None`), or a `SOCKETS` row or a `LOOK` key for the patch.
-4. Run `bun run generators:check`: the boulder fixture test must stay green (a default that is not the old constant changes the request) and the mushroom test says where a key has nowhere to go.
+4. Run `bun run generators:check` and `bun run src/tools/cli.ts render3d` (its `generator:` cases hold the schema's shape and the defaults): the boulder fixture test must stay green (a default that is not the old constant changes the request) and the mushroom test says where a key has nowhere to go.
 5. Move the value once through the endpoint and confirm the GLB changes; a knob that does nothing on one outline may be clamped by another (`tipInset` is capped at 0.14 m, so it does nothing on a 1.6 m deep rock until it drops below 0.0875).
 
 ## Adding a generator
 
 1. Put its sources under `tools/blender/<dir>/` with a `params.json`, and make its entry point read the schema defaults, then the request's `params`.
 2. Print `GENERATOR: bake started` once its result can no longer change, if it should survive a supersede from there.
-3. Write `src/server/generators/<kind>.ts` exporting a `Generator` (`run.ts`): its `dir`, `validateInput`, the `request` it writes, what it is `missing`, its `command`, where it leaves the GLB, a timeout and a failure formatter.
-4. Add it to `GENERATORS` and to `KEY` in `service.ts`, and to the `/generated` route's pattern.
+3. Add the kind to `GeneratorKind` and `GENERATOR_SCHEMAS` (`src/level/generatorParams.ts`), its key input to `GeneratorInput` and its prefix to the key pattern (`src/render3d/generated.ts`), and its `generatorInput` branch (`src/editor/visuals/paramSchema.ts`).
+4. Write `src/server/generators/<kind>.ts` exporting a `Generator` (`run.ts`): its `dir`, `validateInput`, its `keyInput` and `sidecars`, the `request` it writes, what it is `missing`, its `command`, where it leaves the GLB, a timeout and a failure formatter; add it to `GENERATORS` in `service.ts`.
 5. Add its cases to `scripts/generators.test.ts` and its end-to-end run to `scripts/generators-check.ts`.

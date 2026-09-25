@@ -7,10 +7,11 @@ import { spawn } from "node:child_process";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { GeneratorKind, ParamSchema, ParamValue, ParamValues } from "../../level/generatorParams";
+import type { GeneratorInput } from "../../render3d/generated";
 import type { Tools } from "./paths";
-import type { Params, Schema } from "./schema";
 
-export type GeneratorKind = "boulder" | "mushrooms";
+export type { GeneratorKind };
 
 export interface Command {
   file: string;
@@ -21,10 +22,18 @@ export interface Generator<Input> {
   kind: GeneratorKind;
   /** tools/blender/<dir>: the Python sources and params.json. */
   dir: string;
-  /** Checks the kind's input against the merged params; throws with a message for the author. */
-  validateInput(input: unknown, values: Params): Input;
+  /**
+   * Checks the request's `input` (and `soup`, for a kind that is handed
+   * derived geometry the key does not cover) against the merged params;
+   * throws with a message for the author.
+   */
+  validateInput(input: unknown, soup: unknown, values: Readonly<Record<string, ParamValue | null>>): Input;
+  /** What the mesh key hashes and meta.json records (generatedKey's input). */
+  keyInput(input: Input): GeneratorInput;
+  /** Files written beside meta.json, by name: what the key input leaves out. */
+  sidecars(input: Input): Record<string, unknown>;
   /** The request file the Python reads. */
-  request(input: Input, overrides: Params, schema: Schema): unknown;
+  request(input: Input, overrides: ParamValues, schema: ParamSchema): unknown;
   /** What the kind cannot run without, said for the author; null when all is here. */
   missing(tools: Tools): string | null;
   /** The process to run; only asked once `missing` is null. */
@@ -75,8 +84,8 @@ export async function runGenerator<Input>(
   tools: Tools,
   root: string,
   input: Input,
-  overrides: Params,
-  schema: Schema,
+  overrides: ParamValues,
+  schema: ParamSchema,
   jobDir: string,
   options: RunOptions = {},
 ): Promise<RunResult> {

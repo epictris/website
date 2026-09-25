@@ -2,7 +2,7 @@
 // procedural pipelines. See docs/generators.md.
 //
 //   GET    /api/generators            which tools are here, how long the queue is
-//   POST   /api/generate              { kind, key, input, params, object? } -> { key, state }
+//   POST   /api/generate              { kind, key, input, params, soup?, object? } -> { key, state }
 //   GET    /api/generate/<key>        a job's state
 //   DELETE /api/generate/<key>        cancel it
 //   GET    /generated/<kind>/<hash>/mesh.glb   the result, immutable
@@ -20,28 +20,53 @@ import type { Plugin } from "vite";
 import { boulder } from "./boulder";
 import { glbTriangles } from "./glb";
 import { mushrooms } from "./mushrooms";
+import {
+  canonicalParams,
+  loadSchema,
+  mergeDefaults,
+  paramSpec,
+  validatePairs,
+  validateParams,
+  type ParamIssue,
+  type ParamSchema,
+  type ParamValues,
+} from "../../level/generatorParams";
+import {
+  GENERATED_MESH_FILE,
+  GENERATED_META_FILE,
+  GENERATED_ROOT,
+  generatedKey,
+  parseGeneratedKey,
+  type GeneratorInput,
+} from "../../render3d/generated";
+import type { GeneratedMeta } from "../../render3d/generatedMeta";
 import { findTools, toolVersions, type Tools, type ToolVersions } from "./paths";
 import { Cancelled, makeJobDir, runGenerator, type Generator, type GeneratorKind } from "./run";
-import { loadSchema, mergeParams, validatePairs, validateParams, type Params } from "./schema";
 
 export const GENERATORS: Record<GeneratorKind, Generator<unknown>> = {
   boulder: boulder as Generator<unknown>,
   mushrooms: mushrooms as Generator<unknown>,
 };
 
-/** A mesh key: the generator, then a 64-bit content hash as 16 hex digits. */
-export const KEY = /^(boulder|mushrooms):([0-9a-f]{16})$/;
-
 /**
- * The key the server would give this content, or null to trust the client's.
- *
- * Null for now: the key's hash (`generatedKey` in src/render3d/generated.ts) is
- * the format phase's, and the server only checks the key's shape. The merge
- * wires `generatedKey` in here so a request whose key does not match its
- * content is refused rather than cached under a wrong name.
+ * The key this content makes: the same `generatedKey` the editor computes for
+ * its staleness badge, at the schema version this server runs. A request whose
+ * key differs is refused, so nothing is ever cached under a name that does not
+ * say what it is.
  */
-export function expectedKey(_kind: GeneratorKind, _input: unknown, _params: Params): string | null {
-  return null;
+export function expectedKey(kind: GeneratorKind, input: GeneratorInput, params: ParamValues): string {
+  return generatedKey(kind, loadSchema(kind)!.version, input, params);
+}
+
+const issuesText = (issues: ParamIssue[]) => issues.map((i) => `${i.key}: ${i.message}`).join("; ");
+
+// A null for a parameter whose default is null (the boulder's tolerance) means
+// "derive it", which is what leaving it out means; it is dropped here so the
+// shared validation, which stores no nulls, has nothing to refuse.
+function dropBlanks(params: Record<string, unknown>, schema: ParamSchema): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(params).filter(([key, v]) => !(v === null && paramSpec(schema, key)?.default === null)),
+  );
 }
 
 export type JobState = "queued" | "running" | "done" | "failed" | "superseded";
@@ -60,7 +85,7 @@ interface Job {
   kind: GeneratorKind;
   hash: string;
   input: unknown;
-  params: Params;
+  params: ParamValues;
   /** The editor object this job generates for; a newer request for it supersedes this one. */
   object?: string;
   state: JobState;
@@ -75,21 +100,14 @@ interface Job {
   abort?: AbortController;
 }
 
-export interface Meta {
-  key: string;
-  kind: GeneratorKind;
-  version: number;
-  params: Params;
-  input: unknown;
-  bytes: number;
-  triangles: number;
-  generatedAt: string;
-  blender: string | null;
+// meta.json: what render3d/generatedMeta.ts reads, plus the run's length (s).
+export interface Meta extends GeneratedMeta {
   seconds: number;
 }
 
-export const generatedDir = (root: string, kind: string, hash: string) =>
-  join(root, "public", "generated", kind, hash);
+/** The directory on disk a key's files live in (generated.ts's `generatedDir` is its URL). */
+export const generatedPath = (root: string, kind: string, hash: string) =>
+  join(root, "public", GENERATED_ROOT.slice(1), kind, hash);
 
 // The request body cap (characters): a mushroom patch's 40 000-triangle soup,
 // as the fork allowed it. A boulder's outline is bounded by its own validation.
@@ -128,33 +146,39 @@ export class GeneratorService {
   }
 
   submit(body: unknown): { key: string; state: JobState } {
-    const req = body as { kind?: unknown; key?: unknown; input?: unknown; params?: unknown; object?: unknown } | null;
+    const req = body as
+      | { kind?: unknown; key?: unknown; input?: unknown; params?: unknown; soup?: unknown; object?: unknown }
+      | null;
     if (!req || typeof req !== "object") throw new HttpError(400, "Send { kind, key, input, params }.");
     const kind = req.kind as GeneratorKind;
     const gen = GENERATORS[kind];
     if (typeof req.kind !== "string" || !gen) throw new HttpError(400, "kind must be boulder or mushrooms.");
-    const match = typeof req.key === "string" ? KEY.exec(req.key) : null;
-    if (!match || match[1] !== kind) throw new HttpError(400, `key must be ${kind}:<16 hex digits>.`);
+    const parsed = typeof req.key === "string" ? parseGeneratedKey(req.key) : null;
+    if (!parsed || parsed.kind !== kind) throw new HttpError(400, `key must be ${kind}:<16 hex digits>.`);
     if (req.object !== undefined && typeof req.object !== "string") throw new HttpError(400, "object must be a string.");
     const key = req.key as string;
-    const hash = match[2]!;
+    const hash = parsed.hash;
 
-    const schema = loadSchema(this.root, gen.dir);
-    let params: Params;
+    const schema = loadSchema(kind)!;
+    if (req.params !== undefined && (!req.params || typeof req.params !== "object" || Array.isArray(req.params)))
+      throw new HttpError(400, "params must be an object of parameter values.");
+    const params = dropBlanks((req.params ?? {}) as Record<string, unknown>, schema) as ParamValues;
+    const issues = validateParams(params, schema);
+    const values = mergeDefaults(params, schema);
+    issues.push(...validatePairs(values));
+    if (issues.length) throw new HttpError(400, `Invalid ${kind} parameters: ${issuesText(issues)}.`);
     let input: unknown;
     try {
-      params = validateParams(schema, req.params);
-      const values = mergeParams(schema, params);
-      validatePairs(values);
-      input = gen.validateInput(req.input, values);
+      input = gen.validateInput(req.input, req.soup, values);
     } catch (e) {
       throw new HttpError(400, (e as Error).message);
     }
-    const expected = expectedKey(kind, input, params);
-    if (expected !== null && expected !== key) throw new HttpError(400, `key does not match its content (${expected}).`);
+    const expected = expectedKey(kind, gen.keyInput(input), params);
+    if (expected !== key)
+      throw new HttpError(400, `The key ${key} does not match its content, which makes ${expected}.`);
 
     if (req.object !== undefined) this.supersede(req.object, key);
-    if (existsSync(join(generatedDir(this.root, kind, hash), "mesh.glb"))) return { key, state: "done" };
+    if (existsSync(join(generatedPath(this.root, kind, hash), GENERATED_MESH_FILE))) return { key, state: "done" };
     const current = this.jobs.get(key);
     if (current && (current.state === "queued" || current.state === "running")) {
       current.object = req.object ?? current.object;
@@ -188,12 +212,12 @@ export class GeneratorService {
       };
     }
     // Generated in an earlier server life: the directory answers.
-    const match = KEY.exec(key);
-    if (!match) return null;
-    const dir = generatedDir(this.root, match[1]!, match[2]!);
-    if (!existsSync(join(dir, "mesh.glb"))) return null;
+    const parsed = parseGeneratedKey(key);
+    if (!parsed) return null;
+    const dir = generatedPath(this.root, parsed.kind, parsed.hash);
+    if (!existsSync(join(dir, GENERATED_MESH_FILE))) return null;
     try {
-      const meta = JSON.parse(readFileSync(join(dir, "meta.json"), "utf8")) as Meta;
+      const meta = JSON.parse(readFileSync(join(dir, GENERATED_META_FILE), "utf8")) as Meta;
       return { state: "done", elapsed: meta.seconds, bytes: meta.bytes, triangles: meta.triangles };
     } catch {
       return { state: "done", elapsed: 0 };
@@ -242,7 +266,7 @@ export class GeneratorService {
     job.state = "running";
     job.started = Date.now();
     job.abort = new AbortController();
-    const schema = loadSchema(this.root, gen.dir);
+    const schema = loadSchema(job.kind)!;
     const tools = this.findToolsNow();
     let jobDir: string | undefined;
     let keep = false;
@@ -261,15 +285,16 @@ export class GeneratorService {
         key: job.key,
         kind: job.kind,
         version: schema.version,
-        params: job.params,
-        input: summariseInput(job.kind, job.input),
+        // The form the key hashed: defaults stripped, keys sorted.
+        params: canonicalParams(job.params, schema),
+        input: gen.keyInput(job.input),
         bytes: bytes.byteLength,
         triangles,
         generatedAt: new Date(finished).toISOString(),
-        blender: versions.blender,
+        blender: versions.blender ?? "unknown",
         seconds: seconds(finished - job.started),
       };
-      await publish(generatedDir(this.root, job.kind, job.hash), bytes, meta, job.kind === "mushrooms" ? job.input : undefined);
+      await publish(generatedPath(this.root, job.kind, job.hash), bytes, meta, gen.sidecars(job.input));
       Object.assign(job, { state: "done", finished, bytes: meta.bytes, triangles });
       this.log(`generated ${job.key}: ${triangles} triangles, ${meta.bytes} bytes, ${meta.seconds} s`);
     } catch (e) {
@@ -293,23 +318,17 @@ export class GeneratorService {
   }
 }
 
-// A mushroom request's soup can run to megabytes; the level re-collects the
-// surface from its host at generation time, so meta.json (read for every level
-// that uses the mesh) carries a summary and the soup sits beside it.
-function summariseInput(kind: GeneratorKind, input: unknown): unknown {
-  if (kind !== "mushrooms") return input;
-  const positions = (input as { positions: number[] }).positions;
-  return { triangles: positions.length / 9, file: "input.json" };
-}
-
-// The GLB lands last and by rename, so "mesh.glb exists" always means "done".
-async function publish(dir: string, glb: Uint8Array, meta: Meta, input?: unknown): Promise<void> {
+// meta.json holds the key input (read for every level that uses the mesh, so it
+// stays small); what the key leaves out, a mushroom patch's megabytes of soup,
+// sits beside it as a sidecar. The GLB lands last and by rename, so "mesh.glb
+// exists" always means "done".
+async function publish(dir: string, glb: Uint8Array, meta: Meta, sidecars: Record<string, unknown>): Promise<void> {
   await mkdir(dir, { recursive: true });
-  if (input !== undefined) await writeFile(join(dir, "input.json"), JSON.stringify(input));
-  await writeFile(join(dir, "meta.json"), JSON.stringify(meta, null, 2) + "\n");
-  const partial = join(dir, `mesh.glb.${process.pid}.partial`);
+  for (const [name, data] of Object.entries(sidecars)) await writeFile(join(dir, name), JSON.stringify(data));
+  await writeFile(join(dir, GENERATED_META_FILE), JSON.stringify(meta, null, 2) + "\n");
+  const partial = join(dir, `${GENERATED_MESH_FILE}.${process.pid}.partial`);
   await writeFile(partial, glb);
-  await rename(partial, join(dir, "mesh.glb"));
+  await rename(partial, join(dir, GENERATED_MESH_FILE));
 }
 
 function send(res: ServerResponse, status: number, body: unknown): void {
@@ -366,7 +385,7 @@ export function generatorService(): Plugin {
             return send(res, 200, service.submit(await readBody(req)));
           }
           const key = decodeURIComponent(path.slice(1));
-          if (!KEY.test(key)) return send(res, 400, { error: "Not a mesh key." });
+          if (!parseGeneratedKey(key)) return send(res, 400, { error: "Not a mesh key." });
           if (req.method === "GET") {
             const status = service.status(key);
             return status ? send(res, 200, status) : send(res, 404, { error: "No such job." });
@@ -385,10 +404,11 @@ export function generatorService(): Plugin {
 
       // Served here rather than by vite's public handler so the answer can say
       // `immutable`: a key names exactly one mesh for ever.
-      server.middlewares.use("/generated", async (req, res, next) => {
-        const match = /^\/(boulder|mushrooms)\/([0-9a-f]{16})\/mesh\.glb$/.exec((req.url ?? "").split("?")[0]!);
-        if (!match || (req.method !== "GET" && req.method !== "HEAD")) return next();
-        const file = join(generatedDir(server.config.root, match[1]!, match[2]!), "mesh.glb");
+      server.middlewares.use(GENERATED_ROOT, async (req, res, next) => {
+        const match = /^\/(\w+)\/(\w+)\/(\w+\.\w+)$/.exec((req.url ?? "").split("?")[0]!);
+        const parsed = match && match[3] === GENERATED_MESH_FILE ? parseGeneratedKey(`${match[1]}:${match[2]}`) : null;
+        if (!parsed || (req.method !== "GET" && req.method !== "HEAD")) return next();
+        const file = join(generatedPath(server.config.root, parsed.kind, parsed.hash), GENERATED_MESH_FILE);
         try {
           const info = await stat(file);
           res.setHeader("Content-Type", "model/gltf-binary");

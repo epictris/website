@@ -6,13 +6,11 @@
 
 import { join } from "node:path";
 import { generatorFailure } from "./failure";
+import type { BoulderInput } from "../../render3d/generated";
 import type { Generator } from "./run";
-import type { Params, Schema } from "./schema";
 
-export interface BoulderInput {
-  /** The object's local outline, metres, y up, as [x, y] pairs. */
-  outline: number[][];
-}
+// The key input is the whole input: the object's local outline, metres, y up.
+export type { BoulderInput };
 
 // The outline's bounds, as the fork's server checked them: a vertex count the
 // Boolean pass handles, and coordinates within this many metres of the origin.
@@ -51,10 +49,13 @@ export const boulder: Generator<BoulderInput> = {
     )
       throw new Error(`Use an outline of 3-${MAX_VERTICES} vertices, within ${MAX_COORD} metres of its origin.`);
     if (outlineArea(outline) < MIN_AREA) throw new Error("The outline is too small or has zero area.");
-    return { outline };
+    return { outline: outline as [number, number][] };
   },
 
-  request(input, overrides: Params, schema: Schema) {
+  keyInput: (input) => input,
+  sidecars: () => ({}),
+
+  request(input, overrides, schema) {
     return { kind: "boulder", version: schema.version, outline: input.outline, params: overrides };
   },
 
