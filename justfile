@@ -1,5 +1,14 @@
-setup:
+# Install a subproject's dev dependencies: just setup [app|swing]
+setup PROJECT="app":
+    just _setup-{{PROJECT}}
+
+_setup-app:
     cd app && bun install
+
+# The swing game (rope/): bun packages, the asset store, the generators' Python
+# and Blender. Safe to re-run; see rope/scripts/setup.sh.
+_setup-swing:
+    rope/scripts/setup.sh
 
 # Run a subproject's dev server: just run [app|rope|pool]
 run PROJECT="app":
@@ -30,6 +39,6 @@ asset IN OUT:
 texture IN OUT MAP:
     cd rope && bun run assets:optimize-texture {{IN}} {{OUT}} --map {{MAP}} && bun run assets:publish {{OUT}}
 
-# Pull the props and textures this checkout's manifests name into rope/public/.
+# Pull the props, textures and generated meshes this checkout's manifests name into rope/public/.
 assets:
     cd rope && bun run assets:fetch
