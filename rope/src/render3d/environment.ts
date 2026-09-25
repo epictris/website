@@ -459,5 +459,8 @@ export function configureRenderer(renderer: THREE.WebGLRenderer): void {
   renderer.toneMappingExposure = 1.15;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  // PCF, which is what three has drawn for `PCFSoftShadowMap` since it
+  // deprecated it (it swapped the type on the first frame, with a console
+  // warning every page load); asking for it by name changes no pixel.
+  renderer.shadowMap.type = THREE.PCFShadowMap;
 }

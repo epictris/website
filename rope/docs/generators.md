@@ -130,6 +130,36 @@ Seconds are the service's own `elapsed`, from the job starting to its mesh being
 
 The fork's docs quote 8 to 60 s a boulder on slower machines; most of a boulder's time is the Manifold booleans, the voxel remesh and the 2048² bake.
 
+Through the editor (Phase 5's acceptance run, 2026-09-25, the same machine): a 2 m six-vertex outline took 7.2 s at the defaults and 6.6 s at `depth` 1.2 m (about 7 400 triangles, 1.5 to 1.7 MB); `Next seed` 7.3 s; the 2 x 1 m rectangle 7.2 s to fail and 7.2 s to pass at `tolerance` 0.1 m; a patch of about 0.4 m² on a rock's top 1.8 s (10 000 to 12 000 triangles, 1 MB).
+The author waits about a second longer than `elapsed`, the poll's resolution.
+
+## The editor's side
+
+The Visuals workspace's **+ Rock** and **+ Mushrooms** and their panels are the service's one client ([editor-visuals](editor-visuals.md#rocks-and-mushrooms)).
+This is what it holds up of the contract.
+
+- **The key is computed at the server's schema version.**
+  The editor asks `wantedKey` (`editor/visuals/paramSchema.ts`): `generatedKey(kind, loadSchema(kind).version, generatorInput(item, lookup), params)`, not the version stored in the block, which the server would refuse.
+  When the mesh lands, the block's `version` is written up to the one it was made under, in the same undo step as the `mesh`.
+- **`params` holds only non-default values**, stripped by `stripDefaults`; a blank field (the boulder's `tolerance`) is absent rather than null.
+  The editor runs `validateParams` and `validatePairs` itself first, and says what is wrong without a round trip.
+- **`input` is exactly `generatorInput`'s**, and a patch's `soup` is collected at generation time from the host's drawn meshes, in the patch's own frame (`patchMatrix` in `editor/visuals/surfacePatch.ts`, the frame `mountVisual` draws the mesh in), metres to 1e-4.
+  `maxSlope` is applied there, as a face filter; `maxTriangles` bounds the cut before the request, and the editor checks `area * density` against `maxEstimate` before sending, with the server's own check behind it.
+- **`object`** is `<page>/<item id>`, the page part random per editor tab, so a newer request supersedes the older one for the same object in the same tab and never another tab's.
+- **Polling** starts at 250 ms and backs off to once a second (`POLL_FIRST_MS`, `POLL_MAX_MS` in `editor/visuals/jobs.ts`).
+  A 404 mid-job means the dev server restarted (a job lives as long as the server), and the panel says so.
+- **A finished mesh goes on its object once**, as one undo step, and only if the object is still there and its `wantedKey` is still that key.
+  A result for content the object has since left stays in the cache, where the next Generate of that content finds it at once.
+  A result that lands during a drag waits for the drag to end.
+- **`failed` is an ordinary outcome.**
+  The panel leads with the validator lines that say FAIL and, for a rock, the remedy: another seed, or a looser `tolerance`.
+  `tolerance` also sets the remesh voxel size, so the deviation grows with it: the 2 x 1 m rectangle failed its centre slice at 0.0418 with the default (0.04 m), at 0.0534 with 0.05 m, and passed with 0.1 m.
+  Widen it well past the reported number, or move the seed on.
+
+**Staleness** is `isStale`: the stored `mesh` is not `expectedKey` of the object as it stands (its outline, its loop, its host's key and pose relative to the patch, its params, or its stored version changed since), or it has never been generated, or it cannot be (a patch whose host is gone).
+A stale object keeps drawing its last mesh; the editor never regenerates on its own.
+A regenerated rock makes the patches grown on it stale (their host's key moved), and each regrows on the new surface when it is generated.
+
 ## The schemas
 
 Each generator has one parameter schema, `tools/blender/<dir>/params.json`, read by the inspector, by the server's validation and by the Python alike, so a default is stated once.

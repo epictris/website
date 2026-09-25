@@ -49,6 +49,7 @@ import {
 } from "../level/levelFormat";
 import { DEFAULT_BEVEL, cylinderSolid, extrudeOutline, taperOutline } from "./extrude";
 import { ROCK_TEXTURES } from "./rocks";
+import { loadSchema } from "../level/generatorParams";
 import { isAuthoredSurface, isSolidSurface, loadMesh, surfaceFor, surfaceName, tileMetres } from "./assets";
 import { buildWater } from "./water";
 import { DEFAULT_LIGHT_Z, LightRig, type DrivenEmission, type MountedLight } from "./lights";
@@ -134,6 +135,20 @@ function spawnedGeometry(shape: CollisionShape2D): THREE.BufferGeometry {
   return primitiveGeometry(outlineOfShape(s), undefined, SOLID_DEFAULTS);
 }
 
+// How far a generated boulder's stand-in leans in from its outline's wall, in
+// degrees: a chamfer that reads as "a rock goes here", not a claim about the
+// rock's shape (the generator's own taper is `taperSlopeMin`/`Max`).
+const BOULDER_STANDIN_TAPER = 45;
+
+// A boulder block's depth in metres (the level is in metres by the time it is
+// drawn): the authored one, else the schema's default.
+function boulderDepth(g: GeometryObjectData): number {
+  const authored = g.generator?.params?.["depth"];
+  if (typeof authored === "number") return authored;
+  const d = loadSchema("boulder")?.params.find((p) => p.key === "depth")?.default;
+  return typeof d === "number" ? d : DEFAULT_THICKNESS;
+}
+
 // An authored form as the solid it stands for. A rect is a rectangular prism, a
 // circle a cylinder and a polygon that outline extruded, each `depth` thick -
 // which is what the geometry object says it is and NOT what the body's collision
@@ -143,6 +158,13 @@ function primitiveGeometry(
   g: GeometryObjectData | undefined,
   defaults: PrimitiveDefaults,
 ): THREE.BufferGeometry {
+  // A GENERATED BOULDER whose mesh is not there yet (never generated, or its
+  // file still loading or missing) stands in as the solid the generator fills:
+  // its outline at the depth the block asks for, tapered in toward the camera,
+  // so the author sees the rock's volume rather than a 20 cm slab.
+  if (g?.kind === "mesh" && g.generator?.kind === "boulder") {
+    return taperOutline(outline, { depth: boulderDepth(g), taperStart: 0, taperAngle: BOULDER_STANDIN_TAPER });
+  }
   const depth = g?.depth ?? defaults.depth;
   // A ROCK is drawn as the reference solid its generated mesh fills: the
   // outline straight through to the taper's start, then the tapered roof
@@ -273,19 +295,26 @@ export function mountVisual(
   holder.scale.setScalar(g?.scale ?? 1);
   parent.add(holder);
 
-  const geo = geometryFor();
-  owned.push(geo);
-  const placeholder = new THREE.Mesh(geo, material);
-  placeholder.castShadow = opts.castShadow;
-  placeholder.receiveShadow = true;
-  holder.add(placeholder);
-  applyProjection(placeholder, g?.projection);
+  // ...except a MUSHROOM PATCH, which has none: its rect is only the extent of
+  // the surface it grows on, and a box of that size would stand over the very
+  // rock the mushrooms are meant to be seen on. Until its mesh is there it is
+  // drawn as nothing (the outliner and the panel still reach it).
+  let placeholder: THREE.Mesh | null = null;
+  if (g?.generator?.kind !== "mushrooms") {
+    const geo = geometryFor();
+    owned.push(geo);
+    placeholder = new THREE.Mesh(geo, material);
+    placeholder.castShadow = opts.castShadow;
+    placeholder.receiveShadow = true;
+    holder.add(placeholder);
+    applyProjection(placeholder, g?.projection);
+  }
 
   const key = g?.mesh;
   if (!key) return { geometry: owned };
   void loadMesh(key).then((obj) => {
     if (!obj || !opts.alive()) return;
-    holder.remove(placeholder);
+    if (placeholder) holder.remove(placeholder);
     // An authored texture is the level saying what this thing is made of, and it
     // outranks whatever the file was exported with - which is the whole point of
     // being able to author one: a bare geometry-only export wears the same

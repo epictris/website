@@ -214,6 +214,30 @@ import {
   type GeneratorKind,
 } from "../editor/visuals/paramSchema";
 import { cloneGenerator, cloneVisual, remapPatchHosts } from "../editor/model";
+import { paramSpec, wantedKey, type ParamValues } from "../editor/visuals/paramSchema";
+import {
+  frameOf,
+  loopPointToWorld,
+  patchMatrix,
+  selectSurface,
+  soupInFrame,
+  worldToLoopPoint,
+} from "../editor/visuals/surfacePatch";
+import { existingRock, objectPose, patchFor, rockFor, rockSource } from "../editor/visuals/generatorEdits";
+import {
+  clampParam,
+  generatorBadge,
+  generatorStatus,
+  hexOfLinear,
+  linearOfHex,
+  nextSeedParams,
+  paramIssues,
+  paramLabel,
+  paramsPayload,
+  parseParamsPayload,
+  withParam,
+} from "../editor/visuals/generatorPanel";
+import { GeneratorJobs, missingTools, type Fetcher, type Job } from "../editor/visuals/jobs";
 
 export interface CaseResult {
   name: string;
@@ -6110,6 +6134,452 @@ function boulderOutline(item: EdItem): [number, number][] {
   return input && "outline" in input ? input.outline : [];
 }
 
+// A small level for the tools' cases, on disk in pixels: one static body with
+// an irregular collision polygon (about 2 m across) and the geometry matched
+// to it, and a circle body that no rock can be fitted to.
+function toolLevel(): RawLevelData {
+  return {
+    player: { x: 0, y: 0, radius: 8 },
+    bodies: [
+      {
+        kind: "static",
+        x: 200,
+        y: 100,
+        rot: 0,
+        objects: [
+          {
+            type: "collision",
+            shape: { kind: "poly", verts: [{ x: -100, y: -40 }, { x: -30, y: -70 }, { x: 90, y: -50 }, { x: 110, y: 20 }, { x: 40, y: 60 }, { x: -80, y: 45 }] },
+          },
+          {
+            type: "geometry",
+            matchCollision: true,
+            shape: { kind: "poly", verts: [{ x: -100, y: -40 }, { x: -30, y: -70 }, { x: 90, y: -50 }, { x: 110, y: 20 }, { x: 40, y: 60 }, { x: -80, y: 45 }] },
+          },
+        ],
+      },
+      { kind: "static", x: -300, y: 0, rot: 0, objects: [{ type: "collision", shape: { kind: "circle", r: 30 } }] },
+    ],
+  };
+}
+
+// THE TOOLS' PURE HALVES (Phase 5 of plans/visuals-workspace.md): the surface a
+// mushroom loop covers, the objects + Rock and + Mushrooms add, and the panel's
+// reading and writing of parameters. The editor's wiring (one undo step per
+// gesture, the scene's meshes) is driven in the browser, not here.
+function generatorTools(): CaseResult[] {
+  const out: CaseResult[] = [];
+  const near = (a: number, b: number, tol: number) => Math.abs(a - b) <= tol;
+
+  // --- the surface a loop covers, on a 1 m box at the origin ---------------
+  {
+    const box = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1));
+    box.updateMatrixWorld(true);
+    // A 0.6 m square on the top face, and one on the front face (a wall).
+    const up = new THREE.Vector3(0, 1, 0);
+    const toward = new THREE.Vector3(0, 0, 1);
+    const top = [[-0.3, -0.3], [0.3, -0.3], [0.3, 0.3], [-0.3, 0.3]].map(([x, z]) => ({
+      point: new THREE.Vector3(x!, 0.5, z!),
+      normal: up,
+    }));
+    const front = [[-0.3, -0.3], [0.3, -0.3], [0.3, 0.3], [-0.3, 0.3]].map(([x, y]) => ({
+      point: new THREE.Vector3(x!, y!, 0.5),
+      normal: toward,
+    }));
+    const f = frameOf(top)!;
+    const frameOk = f !== null && near(f.n.y, 1, 1e-9) && near(f.origin.y, 0.5, 1e-9) && f.band >= 0.05 && f.step > 0;
+    const topSel = selectSurface([box], top, { maxSlopeDeg: 75, maxTriangles: 40000 });
+    const topArea = topSel.ok ? topSel.selection.area : 0;
+    const topTris = topSel.ok ? topSel.selection.triangles : 0;
+    // The step cuts the box's two top triangles to the loop's edge: the area is
+    // the loop's own 0.36 m^2 to within the cut's staircase.
+    const areaOk = near(topArea, 0.36, 0.36 * 0.05) && topTris > 2;
+    // A wall: refused at 75 degrees, taken at 90.
+    const wall75 = selectSurface([box], front, { maxSlopeDeg: 75, maxTriangles: 40000 });
+    const wall90 = selectSurface([box], front, { maxSlopeDeg: 90, maxTriangles: 40000 });
+    const slopeOk = !wall75.ok && wall75.reason === "empty" && wall90.ok && near(wall90.selection.area, 0.36, 0.36 * 0.05);
+    // A second box 3 m under the first: its top faces the loop and is inside it
+    // seen from above, but it is far outside the band.
+    const below = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1));
+    below.position.set(0, -3, 0);
+    below.updateMatrixWorld(true);
+    const banded = selectSurface([box, below], top, { maxSlopeDeg: 75, maxTriangles: 40000 });
+    const bandOk = banded.ok && near(banded.selection.area, topArea, 1e-9);
+    // Over the cap: an answer, not a search that never ends.
+    const capped = selectSurface([box], top, { maxSlopeDeg: 75, maxTriangles: 1 });
+    const capOk = !capped.ok && capped.reason === "overflow";
+    // The soup in the patch's frame: world minus the patch origin, 1e-4 m.
+    const pose = { x: 0, y: -0.5, z: 0, rot: 0, rotX: 0, rotY: 0, scale: 1 };
+    const soup = topSel.ok ? soupInFrame(topSel.selection.positions, patchMatrix(pose).invert()) : [];
+    const soupOk = soup.length === topTris * 9 && soup.filter((_, i) => i % 3 === 1).every((y) => y === 0);
+    const ok = frameOk && areaOk && slopeOk && bandOk && capOk && soupOk;
+    out.push({
+      name: "generator: a painted loop collects the faces inside it (area, triangles), leaves a wall past maxSlope, a face outside the band and a soup over the cap",
+      pass: ok,
+      detail: JSON.stringify({ frameOk, topArea, topTris, slopeOk, bandOk, capOk, soupOk }),
+    });
+  }
+
+  // --- the patch frame: a loop stored in it comes back where it was painted --
+  {
+    const pose = { x: 1.2, y: -0.4, z: 0.3, rot: 0.7, rotX: 0.2, rotY: -0.3, scale: 1.5 };
+    const m = patchMatrix(pose);
+    const inv = m.clone().invert();
+    const w = new THREE.Vector3(1.5, 0.9, 0.1);
+    const back = loopPointToWorld(m, worldToLoopPoint(inv, w));
+    // The frame is the one `mountVisual` builds: a piece turned by `rot`, a
+    // holder at `z` tipped (rotX, rotY) and scaled.
+    const piece = new THREE.Group();
+    piece.position.set(pose.x, -pose.y, 0);
+    piece.rotation.z = -pose.rot;
+    const holder = new THREE.Group();
+    holder.position.z = pose.z;
+    holder.rotation.set(pose.rotX, pose.rotY, 0);
+    holder.scale.setScalar(pose.scale);
+    piece.add(holder);
+    piece.updateMatrixWorld(true);
+    const local = new THREE.Vector3(0.1, -0.2, 0.3);
+    const viaScene = local.clone().applyMatrix4(holder.matrixWorld);
+    const viaFrame = local.clone().applyMatrix4(m);
+    const ok = back.distanceTo(w) < 1e-12 && viaScene.distanceTo(viaFrame) < 1e-12;
+    out.push({
+      name: "generator: a patch's frame is the one mountVisual draws its mesh in, and a loop point round-trips through it",
+      pass: ok,
+      detail: `round trip ${back.distanceTo(w).toExponential(2)} m; scene vs frame ${viaScene.distanceTo(viaFrame).toExponential(2)} m`,
+    });
+  }
+
+  // --- + Rock: one body gains one generated object ---------------------------
+  {
+    const model = modelFromDisk(toolLevel());
+    const lookup = itemLookup(model.items);
+    const [coll, matched] = model.items.filter((i) => i.bodyId === model.items[0]!.bodyId);
+    const circle = model.items.find((i) => i.shape.kind === "circle")!;
+    const fromOutline = rockSource(model.items, coll!);
+    const fromMatched = rockSource(model.items, matched!);
+    const noCircle = rockSource(model.items, circle) === null;
+    const before = model.items.length;
+    const rock = rockFor(fromOutline!, 9001);
+    model.items.push(rock);
+    const g = rock.visual.generator!;
+    const block =
+      g.kind === "boulder" &&
+      g.version === GENERATOR_SCHEMAS.boulder.version &&
+      Object.keys(g.params).length === 0 &&
+      g.patch === null &&
+      rock.visual.kind === "mesh" &&
+      rock.visual.mesh === "" &&
+      rock.object === "geometry" &&
+      rock.bodyId === coll!.bodyId &&
+      rock.matchId === coll!.id;
+    // Not yet generated: stale, with a key to generate under.
+    const stale = isStale(rock, itemLookup(model.items)) && wantedKey(rock, itemLookup(model.items)) !== null;
+    const again = existingRock(model.items, coll!) === rock;
+    // On disk: the same body, one more object, the block and the match.
+    const data = toLevelData(model);
+    const body = data.bodies.find((b) => b.objects.length === 3)!;
+    const written = body?.objects.filter(isGeometryObject).find((o) => o.generator);
+    const disk =
+      model.items.length === before + 1 &&
+      written?.generator?.kind === "boulder" &&
+      written.matchCollision === true &&
+      written.generator.params === undefined &&
+      written.mesh === undefined;
+    const ok = fromOutline === coll && fromMatched === coll && noCircle && block && stale && again && disk && lookup(coll!.id) === coll;
+    out.push({
+      name: "generator: + Rock adds one matched mesh object with a default boulder block to the outline's body, and finds it again",
+      pass: ok,
+      detail: JSON.stringify({ fromOutline: fromOutline === coll, fromMatched: fromMatched === coll, noCircle, block, stale, again, disk, written: written?.generator }),
+    });
+  }
+
+  // --- + Mushrooms: the patch in the host's body, its loop in its own frame ---
+  {
+    const model = modelFromDisk(toolLevel());
+    const host = model.items.find((i) => i.object === "geometry")!;
+    // A loop on the host's front face, 0.1 m toward the camera, and a soup
+    // under it.
+    const loop = [
+      new THREE.Vector3(1.8, -0.9, 0.1),
+      new THREE.Vector3(2.2, -0.9, 0.12),
+      new THREE.Vector3(2.1, -1.2, 0.14),
+      new THREE.Vector3(1.85, -1.15, 0.1),
+    ];
+    const soup = new Float32Array([1.8, -1.2, 0.1, 2.2, -1.2, 0.14, 2.2, -0.9, 0.12, 1.8, -1.2, 0.1, 2.2, -0.9, 0.12, 1.8, -0.9, 0.1]);
+    const patch = patchFor(host, 9002, loop, soup);
+    model.items.push(patch);
+    const g = patch.visual.generator!;
+    const m = patchMatrix(objectPose(patch, patch.visual.offsetZ));
+    const worst = Math.max(...g.patch!.points.map((p, i) => loopPointToWorld(m, p).distanceTo(loop[i]!)));
+    const lookup = itemLookup(model.items);
+    const input = generatorInput(patch, lookup);
+    const shape = patch.shape.kind === "rect" ? patch.shape : null;
+    const placed =
+      patch.bodyId === host.bodyId &&
+      g.kind === "mushrooms" &&
+      g.patch?.hostId === host.id &&
+      patch.matchId === 0 &&
+      patch.visual.mesh === "" &&
+      near(patch.pos.x, 2, 1e-6) &&
+      near(patch.pos.y, 1.05, 1e-6) &&
+      near(patch.visual.offsetZ, 0.12, 1e-6) &&
+      shape !== null && near(shape.w, 0.4, 1e-6) && near(shape.h, 0.3, 1e-6);
+    const data = toLevelData(model);
+    const objects = data.bodies.find((b) => b.objects.some((o) => isGeometryObject(o) && o.generator))!.objects;
+    const written = objects.filter(isGeometryObject).find((o) => o.generator?.kind === "mushrooms");
+    const hostIndex = objects.findIndex((o) => isGeometryObject(o) && !o.generator);
+    const disk = written?.generator?.patch?.host === hostIndex && written.generator.patch.points.length === 4;
+    const ok = placed && worst < 1e-9 && input !== null && disk;
+    out.push({
+      name: "generator: + Mushrooms adds one patch in the host's body, at the soup's middle and extent, its loop in its own frame naming the host",
+      pass: ok,
+      detail: JSON.stringify({ placed, worst, input: input !== null, disk, hostIndex, written: written?.generator?.patch?.host }),
+    });
+  }
+
+  // --- the panel: parameters in and out -------------------------------------
+  {
+    const schema = GENERATOR_SCHEMAS.boulder;
+    const authored: ParamValues = { seed: 7, depth: 1.2, weathering: 0.5, bakeSize: 1024, color: [0.2, 0.2, 0.25] };
+    // Every field written from the merged values, as the panel's setters do,
+    // one at a time over an empty block: the defaults fall away and what was
+    // authored is what is left.
+    let params: ParamValues = {};
+    for (const [key, value] of Object.entries(mergeDefaults(authored, schema))) params = withParam(params, schema, key, value);
+    const sorted = (p: ParamValues) => JSON.stringify(Object.keys(p).sort().map((k) => [k, p[k]]));
+    const trip = sorted(params) === sorted(stripDefaults(authored, schema)) && !("tolerance" in params);
+    // A value set back to its default, and a cleared field, remove the key.
+    const reset = withParam(withParam(params, schema, "depth", 1.6), schema, "seed", null);
+    const resetOk = !("depth" in reset) && !("seed" in reset) && reset.weathering === 0.5;
+    const intSpec = paramSpec(schema, "seed")!;
+    const numSpec = paramSpec(schema, "depth")!;
+    const clampOk = clampParam(intSpec, 7.6) === 8 && clampParam(intSpec, -3) === 0 && clampParam(numSpec, 9) === 5 && clampParam(numSpec, 0) === 0.02;
+    const colour = paramSpec(schema, "color")!.default as number[];
+    const hexTrip = linearOfHex(hexOfLinear(colour)).every((c, i) => Math.abs(c - colour[i]!) < 2e-3);
+    const seeded = nextSeedParams({}, schema).seed === 32 && nextSeedParams({ seed: 2147483647 }, schema).seed === 0;
+    const pasted = parseParamsPayload(paramsPayload("boulder", 1, authored), schema);
+    const pasteOk =
+      "params" in pasted &&
+      JSON.stringify(pasted.params) === JSON.stringify(stripDefaults(authored, schema)) &&
+      "error" in parseParamsPayload(paramsPayload("mushrooms", 1, { density: 10 }), schema) &&
+      "error" in parseParamsPayload(paramsPayload("boulder", 1, { depth: 99 }), schema) &&
+      "error" in parseParamsPayload("not json", schema);
+    const pairs = paramIssues({ slabWidthMin: 0.6 }, schema);
+    const pairOk = pairs.length === 1 && pairs[0]!.startsWith("slabWidthMin:");
+    const labelOk = paramLabel(numSpec) === "depth (m)" && paramLabel(paramSpec(schema, "slabYaw")!) === "slab yaw°";
+    const ok = trip && resetOk && clampOk && hexTrip && seeded && pasteOk && pairOk && labelOk;
+    out.push({
+      name: "generator: the panel writes only non-default values (stripDefaults round trip through the setters), clamps, pastes and flags a Min over its Max",
+      pass: ok,
+      detail: JSON.stringify({ trip, params, resetOk, clampOk, hexTrip, seeded, pasteOk, pairs, labelOk }),
+    });
+  }
+
+  // --- the status line -------------------------------------------------------
+  {
+    const model = modelFromDisk(toolLevel());
+    const coll = model.items.find((i) => i.object === "collision" && i.shape.kind === "poly")!;
+    const rock = rockFor(coll, 9003);
+    model.items.push(rock);
+    const lookup = itemLookup(model.items);
+    const key = wantedKey(rock, lookup)!;
+    const none = () => null;
+    const job = (state: Job["state"], extra: Partial<Job> = {}): Job => ({ itemId: rock.id, key, kind: "boulder", state, elapsed: 12.4, ...extra });
+    const never = generatorStatus(rock, lookup, undefined, none);
+    const running = generatorStatus(rock, lookup, job("running"), none);
+    const failed = generatorStatus(rock, lookup, job("failed", { message: "Boulder generation failed.\nboulder: PASS; outline 0.02\nboulder: FAIL centre slice 0.041790\nkept in /tmp/x" }), none);
+    const unexplained = generatorStatus(rock, lookup, job("failed", { message: "a\nb\nc\nd" }), none);
+    rock.visual.mesh = key;
+    const done = generatorStatus(rock, lookup, job("done"), () => ({ bytes: 1_499_436, triangles: 7504 }));
+    const badgeFresh = generatorBadge(rock, lookup, job("done"));
+    rock.visual.generator!.params = { depth: 1.2 };
+    const stale = generatorStatus(rock, lookup, job("done"), none);
+    // A failure for content the object no longer holds is not its status.
+    const oldFailure = generatorStatus(rock, lookup, job("failed", { message: "x" }), none);
+    const results = {
+      never: never.text === "stale: never generated" && never.tone === "warn",
+      running: running.text === "generating 12 s" && running.tone === "busy",
+      failed:
+        failed.text === "failed: boulder: FAIL centre slice 0.041790\nanother seed or a looser tolerance may pass" &&
+        failed.tone === "fail" &&
+        unexplained.text === "failed: a\nb\nc",
+      done: done.text === "7,504 triangles · 1.5 MB" && badgeFresh === "",
+      stale: stale.text === "stale" && generatorBadge(rock, lookup, undefined) === "stale",
+      oldFailure: oldFailure.text === "stale",
+      // The toolbar's line: nothing when everything is here.
+      health:
+        missingTools({ python: "3.14.0", blender: "5.2.0", deps: true, venv: true, queue: 0 }) === "" &&
+        missingTools({ python: "3.14.0", blender: null, deps: false, venv: true, queue: 0 }) ===
+          "Blender not found (rocks, mushrooms) · rock packages missing: bun run generators:setup",
+    };
+    out.push({
+      name: "generator: the status line says never generated, generating N s, the failing check (and the remedy), the mesh's size, and stale once edited",
+      pass: Object.values(results).every(Boolean),
+      detail: JSON.stringify({ results, texts: [never.text, running.text, failed.text, done.text, stale.text] }),
+    });
+  }
+  return out;
+}
+
+// THE JOB CLIENT against a scripted service: what it asks, and what it writes.
+// Async because the client is (its fetches are promises); the timers it sets
+// are a queue drained here in order.
+export async function generatorJobCases(): Promise<CaseResult[]> {
+  const out: CaseResult[] = [];
+  const tick = () => new Promise<void>((r) => setTimeout(r, 0));
+
+  // A fake service: the POST answers `post`, each GET the next of `gets` (the
+  // last repeats), and every request is logged.
+  interface Script {
+    post: { status: number; body: unknown };
+    gets: Record<string, unknown[]>;
+  }
+  const rig = (script: Script, wanted: () => string | null | undefined) => {
+    const log: string[] = [];
+    const timers: (() => void)[] = [];
+    const swaps: string[] = [];
+    let writable = true;
+    const seen = new Map<string, number>();
+    const fetcher: Fetcher = async (url, init) => {
+      const method = init?.method ?? "GET";
+      log.push(`${method} ${url}`);
+      if (method === "POST") {
+        const p = script.post;
+        return { ok: p.status < 400, status: p.status, json: async () => p.body };
+      }
+      const key = decodeURIComponent(url.split("/").pop()!);
+      const list = script.gets[key] ?? [];
+      const n = seen.get(key) ?? 0;
+      seen.set(key, n + 1);
+      const body = list[Math.min(n, list.length - 1)];
+      return body === undefined
+        ? { ok: false, status: 404, json: async () => ({ error: "No such job." }) }
+        : { ok: true, status: 200, json: async () => body };
+    };
+    const jobs = new GeneratorJobs({
+      fetch: fetcher,
+      later: (fn) => void timers.push(fn),
+      canWrite: () => writable,
+      wantedKey: () => wanted(),
+      swap: (_id, key) => void swaps.push(key),
+      changed: () => {},
+    });
+    const drain = async () => {
+      for (let i = 0; i < 50; i++) {
+        await tick();
+        const fn = timers.shift();
+        if (!fn) {
+          await tick();
+          if (!timers.length) return;
+          continue;
+        }
+        fn();
+      }
+    };
+    return { jobs, log, swaps, drain, setWritable: (w: boolean) => (writable = w) };
+  };
+  const A = "boulder:00000000000000aa";
+  const B = "boulder:00000000000000bb";
+  const req = (key: string) => ({ kind: "boulder" as const, key, input: { outline: [] }, params: {} });
+
+  // submit -> running -> done: one swap, and the mesh's facts kept.
+  {
+    const r = rig(
+      { post: { status: 200, body: { key: A, state: "running" } }, gets: { [A]: [{ state: "running", elapsed: 1 }, { state: "done", elapsed: 6.9, bytes: 1000, triangles: 50 }] } },
+      () => A,
+    );
+    await r.jobs.submit(7, req(A));
+    await r.drain();
+    const job = r.jobs.job(7);
+    const ok = r.swaps.length === 1 && r.swaps[0] === A && job?.state === "done" && job.triangles === 50 && r.jobs.facts(A)?.bytes === 1000;
+    out.push({
+      name: "generator: the job client follows submit -> running -> done and puts the key on the object once",
+      pass: ok,
+      detail: JSON.stringify({ swaps: r.swaps, job, log: r.log }),
+    });
+  }
+
+  // A newer submit for the same object: the older job is no longer followed,
+  // and only the newer key lands.
+  {
+    const r = rig(
+      {
+        post: { status: 200, body: { state: "queued" } },
+        gets: { [A]: [{ state: "done", elapsed: 1, bytes: 1, triangles: 1 }], [B]: [{ state: "running", elapsed: 0 }, { state: "done", elapsed: 2, bytes: 2, triangles: 2 }] },
+      },
+      () => B,
+    );
+    await r.jobs.submit(7, req(A));
+    await r.jobs.submit(7, req(B));
+    await r.drain();
+    const askedA = r.log.filter((l) => l === `GET /api/generate/${encodeURIComponent(A)}`).length;
+    const ok = r.swaps.length === 1 && r.swaps[0] === B && askedA === 0 && r.jobs.job(7)?.key === B;
+    out.push({
+      name: "generator: a newer submit for the same object supersedes the older job, whose result never lands",
+      pass: ok,
+      detail: JSON.stringify({ swaps: r.swaps, askedA, log: r.log }),
+    });
+  }
+
+  // Failed: the model is untouched and the message is kept; a refused request
+  // (400) is a failure too.
+  {
+    const r = rig(
+      { post: { status: 200, body: { state: "running" } }, gets: { [A]: [{ state: "failed", elapsed: 3, message: "centre: FAIL\nkept in /tmp" }] } },
+      () => A,
+    );
+    await r.jobs.submit(7, req(A));
+    await r.drain();
+    const refused = rig({ post: { status: 400, body: { error: "Invalid boulder parameters: depth: 9 is outside 0.02..5." } }, gets: {} }, () => A);
+    await refused.jobs.submit(8, req(A));
+    await refused.drain();
+    const ok =
+      r.swaps.length === 0 &&
+      r.jobs.job(7)?.state === "failed" &&
+      r.jobs.job(7)?.message === "centre: FAIL\nkept in /tmp" &&
+      refused.swaps.length === 0 &&
+      refused.jobs.job(8)?.state === "failed" &&
+      (refused.jobs.job(8)?.message ?? "").includes("depth: 9 is outside");
+    out.push({
+      name: "generator: a failed job, or a refused request, keeps the model and the service's message",
+      pass: ok,
+      detail: JSON.stringify({ swaps: r.swaps, job: r.jobs.job(7), refused: refused.jobs.job(8) }),
+    });
+  }
+
+  // During a drag the result waits, and lands once on the next flush; an
+  // object deleted or edited away meanwhile gets nothing.
+  {
+    let wanted: string | null | undefined = A;
+    const r = rig({ post: { status: 200, body: { state: "done" } }, gets: { [A]: [{ state: "done", elapsed: 0, bytes: 1, triangles: 1 }] } }, () => wanted);
+    r.setWritable(false);
+    await r.jobs.submit(7, req(A));
+    await r.drain();
+    const held = r.swaps.length === 0;
+    r.jobs.flush();
+    const stillHeld = r.swaps.length === 0;
+    r.setWritable(true);
+    r.jobs.flush();
+    r.jobs.flush();
+    const landedOnce = r.swaps.length === 1;
+    // Deleted (undefined) and moved on (another key).
+    const gone = rig({ post: { status: 200, body: { state: "done" } }, gets: { [A]: [{ state: "done", elapsed: 0, bytes: 1, triangles: 1 }] } }, () => undefined);
+    await gone.jobs.submit(7, req(A));
+    await gone.drain();
+    wanted = B;
+    const moved = rig({ post: { status: 200, body: { state: "done" } }, gets: { [A]: [{ state: "done", elapsed: 0, bytes: 1, triangles: 1 }] } }, () => wanted);
+    await moved.jobs.submit(7, req(A));
+    await moved.drain();
+    const ok = held && stillHeld && landedOnce && gone.swaps.length === 0 && moved.swaps.length === 0;
+    out.push({
+      name: "generator: a result waits out a drag and lands once after it; a deleted or since-edited object gets nothing",
+      pass: ok,
+      detail: JSON.stringify({ held, stillHeld, landedOnce, gone: gone.swaps, moved: moved.swaps }),
+    });
+  }
+  return out;
+}
+
 export function runRender3dCases(): CaseResult[] {
   return [
     ...beltRendering(),
@@ -6155,5 +6625,6 @@ export function runRender3dCases(): CaseResult[] {
     ...levelMetaFormat(),
     ...clipboardPayload(),
     ...generatorCases(),
+    ...generatorTools(),
   ];
 }

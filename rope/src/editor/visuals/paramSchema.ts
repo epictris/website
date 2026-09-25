@@ -17,6 +17,7 @@ import {
   type PatchHost,
 } from "../../render3d/generated";
 import { localVertices, type EdItem } from "../model";
+import { loadSchema as loadSchemaOf } from "../../level/generatorParams";
 
 export {
   GENERATOR_KINDS,
@@ -30,6 +31,7 @@ export {
   roundParam,
   scaleParams,
   stripDefaults,
+  validatePairs,
   validateParams,
   type GeneratorKind,
   type ParamIssue,
@@ -124,6 +126,19 @@ export function expectedKey(item: EdItem, lookup: ItemLookup): string | null {
   const input = generatorInput(item, lookup);
   if (!g || !input) return null;
   return generatedKey(g.kind, g.version, input, g.params);
+}
+
+// The key the item would be generated under NOW: its input and parameters at
+// the schema version this build runs, which is the version the server hashes
+// at (it refuses any other). What Generate asks for and what a finished job is
+// checked against before its mesh goes on the object; the stored `version` is
+// brought up to it by that same swap. Null when there is nothing to generate.
+export function wantedKey(item: EdItem, lookup: ItemLookup): string | null {
+  const g = item.visual.generator;
+  const schema = g ? loadSchemaOf(g.kind) : undefined;
+  const input = generatorInput(item, lookup);
+  if (!g || !schema || !input) return null;
+  return generatedKey(g.kind, schema.version, input, g.params);
 }
 
 // Whether a generated object's mesh no longer matches what it would be

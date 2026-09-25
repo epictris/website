@@ -264,6 +264,29 @@ import {
 } from "./visuals/workspace";
 import { guidePlaneZ, type GuideDraft } from "./visuals/guides";
 import { alignUp, surfacePlacement } from "./visuals/surfaceDrop";
+import { GeneratorJobs, missingTools } from "./visuals/jobs";
+import { buildGeneratorGroup, generatorBadge, GENERATOR_PANEL_CSS, paramIssues } from "./visuals/generatorPanel";
+import { existingRock, objectPose, patchFor, rockFor, rockSource } from "./visuals/generatorEdits";
+import {
+  loopPointToWorld,
+  patchMatrix,
+  selectSurface,
+  soupInFrame,
+  worldToLoopPoint,
+  type SurfaceSelection,
+} from "./visuals/surfacePatch";
+import { closedDraft, SurfaceLoop } from "./visuals/surfaceLoop";
+import { isGuideTag } from "./visuals/tags";
+import {
+  generatorInput,
+  itemLookup,
+  loadSchema,
+  mergeDefaults,
+  stripDefaults,
+  wantedKey,
+  type ItemLookup,
+} from "./visuals/paramSchema";
+import { loadMesh } from "../render3d/assets";
 import { World } from "../engine/world";
 import { buildLevelBodies, DEFAULT_SPRING_DAMPING, MAX_SPRING_FREQ } from "../level/buildBodies";
 import {
@@ -331,7 +354,12 @@ type Tool =
   | "vine"
   | "light"
   | "glow"
-  | "fireflies";
+  | "fireflies"
+  // The Visuals workspace's two generators (see `sceneToolPress`): a click on
+  // a collision outline dresses it with a generated rock, and a loop painted
+  // onto a model's faces grows a mushroom patch there.
+  | "rock"
+  | "mushrooms";
 
 // Which tools each layer offers. A shape tool has no meaning on the notes layer
 // (a note is a text box or an arrow, never a circle) and vice versa, so the
@@ -351,6 +379,8 @@ const LAYER_TOOLS: Record<EdLayer, Tool[]> = {
     "poly",
     "path",
     "geometry",
+    "rock",
+    "mushrooms",
     "light",
     "glow",
     "fireflies",
@@ -389,6 +419,8 @@ const TOOL_WORKSPACES: Record<Tool, ToolWorkspace> = {
   light: "both",
   glow: "both",
   fireflies: "both",
+  rock: "visuals",
+  mushrooms: "visuals",
 };
 
 // Kinds a chain may be tied to. An area is a region, not a body - nothing hangs
@@ -467,6 +499,10 @@ type Drag =
       tilt: { rot: number; rotX: number; rotY: number } | null;
       pick: () => void;
     }
+  // A mushroom patch's loop point, dragged along its host's surface (Visuals,
+  // **Edit loop**). Model-mutating, so it takes the one undo step at its first
+  // movement like a vertex drag.
+  | { mode: "loopPoint"; itemId: number; index: number }
   // Turning the 3D view about what it is centred on (see `CameraOrbit`). Middle
   // button, and only while a scene is drawn: in the 2D view there is nothing to
   // orbit, so the button keeps panning there.
@@ -801,6 +837,46 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
 
   // --- state ----------------------------------------------------------------
   let model: EdModel = emptyModel();
+
+  // THE GENERATOR SERVICE'S CLIENT (editor/visuals/jobs.ts): generations run
+  // on the dev server while the editor goes on, and a finished mesh is put on
+  // its object as one undo step - never in the middle of a drag, and never on
+  // an object that has since been deleted or edited away from what was asked.
+  const jobs = new GeneratorJobs({
+    fetch: (url, init) => fetch(url, init),
+    later: (fn, ms) => void setTimeout(fn, ms),
+    canWrite: () => mode === "edit" && drag === null,
+    wantedKey: (id) => {
+      const it = model.items.find((i) => i.id === id);
+      return it ? wantedKey(it, itemLookup(model.items)) : undefined;
+    },
+    swap: (id, key) => {
+      const it = model.items.find((i) => i.id === id);
+      const g = it?.visual.generator;
+      if (!it || !g || it.visual.mesh === key) return;
+      beginAction();
+      it.visual.mesh = key;
+      // The key was made at the schema version the server runs, so the block
+      // says that version from now on (an older level is brought up to it by
+      // the generation that made its new mesh).
+      g.version = loadSchema(g.kind)?.version ?? g.version;
+      markDirty();
+    },
+    changed: () => {
+      jobsTick++;
+      refreshFields();
+      refreshGeneratorHealth();
+    },
+  });
+  // Moves whenever a job's state does, so the outliner's badges are recomputed
+  // only when the model or a job has changed rather than every frame.
+  let jobsTick = 0;
+  // `+ Mushrooms`' loop while it is being painted (editor/visuals/surfaceLoop.ts).
+  const surfaceLoop = new SurfaceLoop();
+  // The patch whose loop is open for dragging (**Edit loop**), or null. Its
+  // points are the patch's own, drawn and dragged on the host's surface; a drag
+  // writes them back as it goes, one undo step per drag.
+  let loopEdit: { itemId: number } | null = null;
   // Selection is a set: plain click selects one, shift+click toggles a body in
   // or out. Handles and the per-body inspector only apply to a lone selection.
   const selectedIds = new Set<number>();
@@ -2188,6 +2264,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // canvas draws. Only offered with a scene to switch to.
   type Workspace = "level" | "visuals";
   const workspaceBtns: Partial<Record<Workspace, HTMLButtonElement>> = {};
+  let generatorHealthEl: HTMLElement | null = null;
+  function refreshGeneratorHealth(): void {
+    if (!generatorHealthEl) return;
+    const missing = inVisuals() ? missingTools(jobs.health) : "";
+    generatorHealthEl.textContent = missing ? `generators: ${missing}` : "";
+    generatorHealthEl.title = missing ? "GET /api/generators on the dev server; see docs/generators.md, Setup." : "";
+  }
   if (visuals) {
     const row = el("div", "ed-row");
     bar.appendChild(row);
@@ -2198,6 +2281,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       "Dress the level in a free 3D view: middle drag orbits, Shift + middle or right drag pans, the wheel dollies, F frames, Home faces the plane (W toggles)";
     row.append(workspaceBtns.level, workspaceBtns.visuals);
     workspaceBtns.level.classList.add("active");
+    // What the generators are missing, when something is: `+ Rock` and
+    // `+ Mushrooms` need Blender (and the rock Python and its packages) on the
+    // dev server, and a request made without them fails with a 503 anyway.
+    generatorHealthEl = el("span", "ed-warn");
+    row.appendChild(generatorHealthEl);
   }
 
   const fileRow = el("div", "ed-row");
@@ -2261,7 +2349,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     light: button("+ Light", () => setTool("light")),
     glow: button("+ Glow", () => setTool("glow")),
     fireflies: button("+ Fireflies", () => setTool("fireflies")),
+    rock: button("+ Rock", () => setTool("rock")),
+    mushrooms: button("+ Mushrooms", () => setTool("mushrooms")),
   };
+  toolBtns.rock.title =
+    "Click a collision outline (a polygon or rect, or the geometry matched to one) to dress it with a GENERATED ROCK: a mesh geometry object matched to the outline, generated in Blender from the parameters on its panel. A plain rectangle can fail the generator's centre check; widen `tolerance` or draw a less regular outline.";
+  toolBtns.mushrooms.title =
+    "Click a loop onto the faces of a drawn model (a rock, a wall); Enter or the first point closes it, Backspace drops the last point, Esc cancels. Closing it adds a MUSHROOM PATCH in that model's body and generates it on the faces inside the loop.";
   toolBtns.geometry.title =
     "Click to drop a geometry object; drag to size it. It is DRAWN and never simulated - nothing collides with it, the rope does not wrap it, no force reaches it. Give it a mesh or a texture on the panel; drop it on a selected body to have it ride that body.";
   // The path tool's tooltip is the active layer's (see `refreshToolButtons`):
@@ -2319,6 +2413,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     toolBtns.poly,
     toolBtns.path,
     toolBtns.geometry,
+    toolBtns.rock,
+    toolBtns.mushrooms,
     toolBtns.text,
     toolBtns.arrow,
     toolBtns.checkpoint,
@@ -2543,7 +2639,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // A gesture in flight was measured in the other workspace's view.
     drag = null;
     if (k === "visuals") visuals.enter();
-    else visuals.leave();
+    else {
+      visuals.leave();
+      // A loop is painted and edited on the scene's surfaces, which the Level
+      // workspace does not offer.
+      if (loopEdit) endLoopEdit();
+    }
     for (const [key, b] of Object.entries(workspaceBtns)) b.classList.toggle("active", key === k);
     // The Level workspace's view toggle says how IT draws; the Visuals
     // workspace is always the scene with its guides, so the toggle goes while
@@ -2554,6 +2655,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     refreshOrbitBtn();
     applyToolCursor();
     updateTitle();
+    // The generators are the Visuals workspace's, so it is where their tools
+    // are asked after (once; again after any request the service refuses for a
+    // missing tool).
+    if (k === "visuals" && !jobs.healthChecked) void jobs.checkHealth();
+    refreshGeneratorHealth();
   }
 
   const title = el("div", "ed-title");
@@ -2634,6 +2740,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       row.classList.toggle("sel", on);
       if (on && !first) first = row;
     }
+    refreshBadges();
     const bodyKey = [...selectedBodyIds].sort((a, b) => a - b).join(",");
     const chainKey = [...selectedChainIds].sort((a, b) => a - b).join(",");
     const vineKey = [...selectedVineIds].sort((a, b) => a - b).join(",");
@@ -2653,8 +2760,37 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   const bodyRows: Array<[HTMLElement, number]> = [];
   const chainRows: Array<[HTMLElement, number]> = [];
   const vineRows: Array<[HTMLElement, number]> = [];
+  // The generated objects' badges (`stale`, `generating`, ...), each with the
+  // item ids it speaks for: one on an object's row, and one on its body's row
+  // so a collapsed body still says it holds something stale.
+  const badgeRows: Array<[HTMLElement, number[]]> = [];
+  let badgeKey = "";
+  function refreshBadges(): void {
+    const key = `${modelRev}|${jobsTick}`;
+    if (key === badgeKey) return;
+    badgeKey = key;
+    const lookup = itemLookup(model.items);
+    const cache = new Map<number, string>();
+    const badgeOf = (id: number): string => {
+      if (!cache.has(id)) {
+        const it = lookup(id);
+        cache.set(id, it ? generatorBadge(it, lookup, jobs.job(id)) : "");
+      }
+      return cache.get(id)!;
+    };
+    // The loudest of a row's: a job under way, then a failure, then stale.
+    const RANK = ["generating", "queued", "failed", "stale"];
+    for (const [span, ids] of badgeRows) {
+      const all = ids.map(badgeOf).filter(Boolean);
+      const top = RANK.find((b) => all.includes(b)) ?? "";
+      span.textContent = top;
+      span.className = `ed-out-badge${top === "generating" || top === "queued" ? " busy" : top === "failed" ? " fail" : ""}`;
+    }
+  }
 
   function buildOutliner(): void {
+    badgeRows.length = 0;
+    badgeKey = "";
     outlinerRows.length = 0;
     bodyRows.length = 0;
     chainRows.length = 0;
@@ -2687,7 +2823,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       label.textContent = `${index}  ${bodyLabel(members)}`;
       const count = el("span", "ed-out-count");
       count.textContent = `${members.length}`;
-      row.append(twist, label, count);
+      row.append(twist, label);
+      const generated = members.filter((m) => m.visual.generator).map((m) => m.id);
+      if (generated.length) {
+        const badge = el("span", "ed-out-badge");
+        row.appendChild(badge);
+        badgeRows.push([badge, generated]);
+      }
+      row.appendChild(count);
       // Selecting a body selects THE BODY - not the objects in it. That is the
       // whole point of the row existing: a body has properties of its own, and
       // they are what the inspector should offer when you click one.
@@ -2719,6 +2862,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         const objLabel = el("span", "ed-out-label");
         objLabel.textContent = objectLabel(m, M2PX);
         objRow.append(el("span", "ed-out-twist"), objLabel);
+        if (m.visual.generator) {
+          const badge = el("span", "ed-out-badge");
+          objRow.appendChild(badge);
+          badgeRows.push([badge, [m.id]]);
+        }
         // ...and selecting ONE object selects only it, which is what Alt+click
         // reaches for on the canvas. That is the whole point of the panel: the
         // objects with no outline are not clickable there at all.
@@ -2922,6 +3070,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // armed by the keyboard shortcuts any more than by the (hidden) buttons.
     if (t !== "select" && lockedLayers.has(activeLayer)) return;
     if (t !== "poly" && t !== "path") cancelPolyDraft();
+    if (t !== "mushrooms") surfaceLoop.clear();
     tool = t;
     for (const [k, b] of Object.entries(toolBtns)) b.classList.toggle("active", k === t);
     applyToolCursor();
@@ -5407,6 +5556,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       b.title =
         "Give this shape a look: a geometry object with its own copy of the outline, in the same body. Nothing draws a collision shape by itself.";
       row.appendChild(b);
+      addGenerateRockButton(row, solids.length === 1 ? rockSourceOf(solids) : null);
     }
     row.append(
       button("Duplicate", () => duplicateSelected()),
@@ -5498,6 +5648,56 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     addGroupSection(g);
     addActionsRow(g);
     inspector.appendChild(g);
+    // A GENERATED object's Rock or Mushrooms group, below its geometry panel:
+    // one object at a time, since generating is about one mesh.
+    if (!solid && bodies.length === 1 && bodies[0]!.visual.generator) {
+      inspector.appendChild(buildGeneratorGroup(generatorPanelHost, bodies[0]!));
+    }
+  }
+
+  // What the generator group is handed of the editor (see `PanelHost`).
+  const generatorPanelHost = {
+    numField: (
+      parent: HTMLElement,
+      label: string,
+      get: () => number | null,
+      set: (v: number) => void,
+      step: number,
+      mixable: boolean,
+      opts: { placeholder?: string; onEmpty?: () => void },
+    ) => numField(parent, label, get, set, step, mixable, opts),
+    readouts,
+    beginAction: () => beginAction(),
+    markDirty: () => markDirty(),
+    refreshFields: () => refreshFields(),
+    lookup: () => itemLookup(model.items),
+    job: (id: number) => jobs.job(id),
+    facts: (key: string) => jobs.facts(key),
+    generate: (it: EdItem) => void generate(it),
+    editLoop: (it: EdItem) => editLoop(it),
+    surfaceSummary: (it: EdItem) => patchSummary(it),
+    notice: (text: string) => flashNotice(text),
+  };
+
+  // **Generate rock** beside **Add geometry** and on the body panel: the one
+  // collision polygon or rect among `items` it applies to (see `rockSource`),
+  // or null when there is none or more than one to choose between.
+  function rockSourceOf(items: readonly EdItem[]): EdItem | null {
+    const sources = items
+      .filter((b) => b.object === "collision")
+      .flatMap((b) => rockSource(model.items, b) ?? []);
+    return sources.length === 1 ? sources[0]! : null;
+  }
+  function addGenerateRockButton(row: HTMLElement, source: EdItem | null): void {
+    if (!source || !visuals) return;
+    const b = button("Generate rock", () => {
+      if (!inVisuals()) setWorkspace("visuals");
+      dressWithRock(source);
+    });
+    b.title = existingRock(model.items, source)
+      ? "This outline already has a generated rock: select it and generate it again."
+      : "Dress this outline with a GENERATED ROCK (the Visuals workspace's + Rock): a mesh geometry object matched to it, generated in Blender from the parameters on its panel.";
+    row.appendChild(b);
   }
 
   // Compound-body controls. A group is one engine body carrying several convex
@@ -5773,6 +5973,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       : "Move this body's origin onto its centre of mass - the point the engine builds it about - and take up the step in every object's offset. Nothing moves in the level.";
     row.appendChild(centre);
     addRockFitButton(row, id);
+    addGenerateRockButton(row, rockSourceOf(members));
     g.appendChild(row);
 
     addBodyProps(g, members);
@@ -9159,7 +9360,339 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   }
   const sceneToolPress: Partial<Record<Tool, (p: ScenePress) => void>> = {
     geometry: placeProp,
+    rock: placeRock,
+    mushrooms: paintLoop,
   };
+
+  // --- the generators (+ Rock, + Mushrooms, the Rock and Mushrooms groups) ---
+  // docs/editor-visuals.md, "Rocks and mushrooms". The pure halves are in
+  // editor/visuals/ (generatorEdits, surfacePatch, surfaceLoop, jobs,
+  // generatorPanel); what is here is the part that needs the live scene.
+
+  // The item a drawn model's pick tag names.
+  function itemOfTag(tag: unknown): EdItem | null {
+    const id = itemOfSceneObject.get(tag as SceneObjectData);
+    return id === undefined ? null : itemOf(id);
+  }
+
+  // `+ Rock`: the nearest collision outline under the pointer (by its guide) or
+  // model matched to one, dressed with a generated rock.
+  function placeRock(p: ScenePress): void {
+    for (const t of p.tags) {
+      const it = isGuideTag(t) ? (t.guide === "outline" ? itemOf(t.id) : null) : itemOfTag(t);
+      const source = it ? rockSource(model.items, it) : null;
+      if (source) {
+        dressWithRock(source);
+        return;
+      }
+    }
+    // ...else inside one, on the plane: a bare collision outline draws nothing
+    // but its line, and a click anywhere in the shape means the shape.
+    for (const it of pickCandidatesAt(p.world, p.scr)) {
+      const source = rockSource(model.items, it);
+      if (source) {
+        dressWithRock(source);
+        return;
+      }
+    }
+    flashNotice("+ Rock: click a collision polygon or rect, or the geometry matched to one");
+  }
+
+  // One undo step: the rock added and selected, then its generation asked for.
+  // An outline already dressed with one has it selected and generated instead.
+  function dressWithRock(source: EdItem): void {
+    const had = existingRock(model.items, source);
+    if (had) {
+      setSelection([had.id]);
+      rebuildInspector();
+      void generate(had);
+      return;
+    }
+    beginAction();
+    const rock = rockFor(source, newBodyId());
+    addAndSelect([rock]);
+    void generate(rock);
+  }
+
+  // What a mushroom loop may be painted on: any drawn scene geometry but a
+  // patch, so a second patch beside the first is painted on the rock under it.
+  const loopHostable = (it: EdItem): boolean =>
+    it.layer === "scene" && it.object === "geometry" && it.visual.generator?.kind !== "mushrooms";
+
+  // Every mesh drawn for an item, as the scene holds it now.
+  function drawnMeshesOf(it: EdItem): THREE.Mesh[] {
+    const tag = sceneObjectOfItem.get(it.id);
+    return scene3d && tag ? scene3d.meshesOf(tag) : [];
+  }
+
+  // `+ Mushrooms`: a click adds a point on the surface under the pointer (on
+  // the loop's host once it has one), and a click on the first point closes it.
+  function paintLoop(p: ScenePress): void {
+    if (surfaceLoop.closable) {
+      const first = surfaceLoop.points[0]!.point;
+      const at = visuals!.screenOf(new Vec2(first.x, threeY(first.y)), first.z);
+      if (at && at.distanceTo(p.scr) <= POLY_CLOSE_PX) {
+        closeSurfaceLoop();
+        return;
+      }
+    }
+    const host = surfaceLoop.hostId;
+    const hit = visuals!.surfaceAt(p.scr, (tag) => {
+      const it = itemOfTag(tag);
+      return it !== null && loopHostable(it) && (host === null || it.id === host);
+    });
+    const on = hit ? itemOfTag(hit.tag) : null;
+    if (!hit || !on) {
+      flashNotice(
+        host === null
+          ? "+ Mushrooms: click on a drawn model to start the loop"
+          : "+ Mushrooms: the loop stays on the model it was started on",
+      );
+      return;
+    }
+    surfaceLoop.add({
+      point: new THREE.Vector3(hit.point.x, hit.point.y, hit.point.z),
+      normal: new THREE.Vector3(hit.normal.x, hit.normal.y, hit.normal.z),
+      hostId: on.id,
+    });
+    updateTitle();
+  }
+
+  // The rubber band from the last point to the surface under the pointer, at
+  // most every `LOOP_HOVER_MS` (ms): a raycast of the whole scene per mouse
+  // event is more than a rubber band is worth.
+  const LOOP_HOVER_MS = 30;
+  let loopHoverAt = 0;
+  function hoverLoop(scr: Vec2): void {
+    const now = performance.now();
+    if (now - loopHoverAt < LOOP_HOVER_MS) return;
+    loopHoverAt = now;
+    const host = surfaceLoop.hostId;
+    const hit = visuals?.surfaceAt(scr, (tag) => itemOfTag(tag)?.id === host) ?? null;
+    surfaceLoop.cursor = hit ? new THREE.Vector3(hit.point.x, hit.point.y, hit.point.z) : null;
+  }
+
+  // What a surface selection that failed means, for the status line.
+  const SURFACE_REFUSALS = {
+    loop: "the loop has no extent",
+    empty: "the loop covers no faces that face it at this slope (maxSlope)",
+    overflow: "the loop covers more faces than maxTriangles allows",
+  } as const;
+
+  // Close the loop: one undo step adds the patch in the host's body, sized to
+  // the faces the loop covers, and asks for its generation. A loop that covers
+  // nothing stays open, so Backspace or Esc can deal with it.
+  function closeSurfaceLoop(): void {
+    const hostId = surfaceLoop.hostId;
+    const host = hostId === null ? null : itemOf(hostId);
+    if (!surfaceLoop.closable || !host) return;
+    const values = mergeDefaults({}, loadSchema("mushrooms")!);
+    const res = selectSurface(drawnMeshesOf(host), surfaceLoop.points, {
+      maxSlopeDeg: values["maxSlope"] as number,
+      maxTriangles: values["maxTriangles"] as number,
+    });
+    if (!res.ok) {
+      flashNotice(`+ Mushrooms: ${SURFACE_REFUSALS[res.reason]}`);
+      return;
+    }
+    beginAction();
+    const patch = patchFor(host, newBodyId(), surfaceLoop.points.map((p) => p.point), res.selection.positions);
+    surfaceLoop.clear();
+    addAndSelect([patch]);
+    updateTitle();
+    void generate(patch);
+  }
+
+  // Where a patch is drawn, as a matrix from its own frame to three's world.
+  function patchFrame(it: EdItem): THREE.Matrix4 {
+    return patchMatrix(objectPose(it, guidePlaneZ(it, bodyCollides(it.bodyId))));
+  }
+
+  // A patch's stored loop on its host's surface, in three's world, each point
+  // facing away from the host's middle: the side the loop was painted on. The
+  // loop stores no normals (the file holds points), and the plane of best fit
+  // only needs to know which of its two sides is out.
+  function patchLoopWorld(it: EdItem): { point: THREE.Vector3; normal: THREE.Vector3 }[] {
+    const patch = it.visual.generator?.patch;
+    const host = patch ? itemOf(patch.hostId) : null;
+    if (!patch || !host) return [];
+    const m = patchFrame(it);
+    const points = patch.points.map((p) => loopPointToWorld(m, p));
+    const centre = new THREE.Vector3();
+    for (const p of points) centre.add(p);
+    centre.divideScalar(Math.max(1, points.length));
+    const box = new THREE.Box3();
+    for (const mesh of drawnMeshesOf(host)) box.expandByObject(mesh);
+    const out = box.isEmpty() ? new THREE.Vector3(0, 0, 1) : centre.clone().sub(box.getCenter(new THREE.Vector3()));
+    if (out.lengthSq() < 1e-12) out.set(0, 0, 1);
+    out.normalize();
+    return points.map((point) => ({ point, normal: out }));
+  }
+
+  // The faces each patch covered when it was last collected, for the panel's
+  // readout and Edit loop's shading, by item id.
+  const patchSurfaces = new Map<number, SurfaceSelection>();
+
+  // Collect a patch's surface from its host's CURRENT meshes (a regenerated rock
+  // under it is what it grows on next), waiting for a host mesh still loading.
+  async function collectPatch(patchId: number): Promise<{ soup: number[]; selection: SurfaceSelection } | { error: string }> {
+    const first = itemOf(patchId);
+    const firstHost = first?.visual.generator?.patch ? itemOf(first.visual.generator.patch.hostId) : null;
+    if (!firstHost) return { error: "the patch has no host to grow on" };
+    // The scene as the frame loop leaves it: rebuilt from the model (a patch
+    // just added rebuilds it) and every body PLACED, which a fresh build is
+    // not until its first frame - read before that, the host's faces are at
+    // its body's origin and the loop covers none of them. Then the host's mesh
+    // if it is still loading, and one more frame for it to be mounted.
+    const nextFrame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    await nextFrame();
+    if (firstHost.visual.kind === "mesh" && firstHost.visual.mesh) await loadMesh(firstHost.visual.mesh);
+    await nextFrame();
+    // Read again: an undo in those frames replaces the items.
+    const it = itemOf(patchId);
+    const host = it?.visual.generator?.patch ? itemOf(it.visual.generator.patch.hostId) : null;
+    if (!it || !host) return { error: "the patch or its host went while its surface was being collected" };
+    const values = mergeDefaults(it.visual.generator!.params, loadSchema("mushrooms")!);
+    const res = selectSurface(drawnMeshesOf(host), patchLoopWorld(it), {
+      maxSlopeDeg: values["maxSlope"] as number,
+      maxTriangles: values["maxTriangles"] as number,
+    });
+    if (!res.ok) return { error: SURFACE_REFUSALS[res.reason] };
+    patchSurfaces.set(it.id, res.selection);
+    const estimate = res.selection.area * (values["density"] as number);
+    if (estimate > (values["maxEstimate"] as number))
+      return {
+        error: `about ${Math.round(estimate)} mushrooms (${res.selection.area.toFixed(2)} m² at density ${values["density"]}) is over maxEstimate ${values["maxEstimate"]}: paint a smaller loop or lower the density`,
+      };
+    return { soup: soupInFrame(res.selection.positions, patchFrame(it).invert()), selection: res.selection };
+  }
+
+  // The panel's line about a patch's surface.
+  function patchSummary(it: EdItem): string {
+    const s = patchSurfaces.get(it.id);
+    if (!s) return "surface: collected when generated";
+    const density = mergeDefaults(it.visual.generator?.params ?? {}, loadSchema("mushrooms")!)["density"] as number;
+    // Three places for a patch under a tenth of a square metre, which is where
+    // a loop on a steep face ends up once maxSlope has taken the steep faces.
+    const area = s.area.toFixed(s.area < 0.1 ? 3 : 2);
+    return `${s.triangles.toLocaleString("en")} faces · ${area} m² · up to ${Math.round(s.area * density)} mushrooms`;
+  }
+
+  // GENERATE: ask the service for this object's mesh as it now stands. The
+  // request is exactly what the key is made from (`generatorInput`, the params
+  // that differ from the defaults, the schema version the server runs), plus a
+  // patch's surface, collected now.
+  async function generate(item: EdItem): Promise<void> {
+    const id = item.id;
+    const g = item.visual.generator;
+    const schema = g ? loadSchema(g.kind) : undefined;
+    if (!g || !schema) return;
+    const lookup: ItemLookup = itemLookup(model.items);
+    const input = generatorInput(item, lookup);
+    const key = wantedKey(item, lookup);
+    if (!input || !key) {
+      flashNotice(g.kind === "mushrooms" ? "generate: the patch has no host (Edit loop paints it again)" : "generate: a rock needs a polygon or rect outline");
+      return;
+    }
+    const issues = paramIssues(g.params, schema);
+    if (issues.length) {
+      flashNotice(`generate: ${issues[0]}`);
+      return;
+    }
+    const params = stripDefaults(g.params, schema);
+    let soup: number[] | undefined;
+    if (g.kind === "mushrooms") {
+      const collected = await collectPatch(id);
+      refreshFields();
+      if ("error" in collected) {
+        flashNotice(`generate: ${collected.error}`);
+        return;
+      }
+      soup = collected.soup;
+      // The collection waited on a mesh: the object may have moved on since.
+      const now = itemOf(id);
+      if (!now || wantedKey(now, itemLookup(model.items)) !== key) return;
+    }
+    await jobs.submit(id, { kind: g.kind, key, input, params, ...(soup ? { soup } : {}) });
+  }
+
+  // **Edit loop**: the patch's points as handles on its host's surface.
+  function editLoop(it: EdItem): void {
+    if (!it.visual.generator?.patch || !itemOf(it.visual.generator.patch.hostId)) {
+      flashNotice("Edit loop: the patch has no host; paint a new patch with + Mushrooms");
+      return;
+    }
+    loopEdit = { itemId: it.id };
+    loopEditFill = patchSurfaces.get(it.id)?.positions ?? null;
+    if (!inVisuals()) setWorkspace("visuals");
+    updateTitle();
+  }
+  function endLoopEdit(): void {
+    loopEdit = null;
+    loopEditFill = null;
+    updateTitle();
+  }
+  // The surface Edit loop shades, world frame, kept by identity between frames
+  // (the draft is rebuilt when it changes).
+  let loopEditFill: Float32Array | null = null;
+
+  // A press while a loop is open: a point under the pointer starts a drag of
+  // it. Anything else closes the loop edit and is a press like any other.
+  function pressLoopPoint(scr: Vec2): Drag | null {
+    const it = loopEdit ? itemOf(loopEdit.itemId) : null;
+    if (!it) {
+      endLoopEdit();
+      return null;
+    }
+    const pts = patchLoopWorld(it);
+    for (let i = 0; i < pts.length; i++) {
+      const p = pts[i]!.point;
+      const at = visuals!.screenOf(new Vec2(p.x, threeY(p.y)), p.z);
+      if (at && at.distanceTo(scr) <= HANDLE_HIT_PX) return { mode: "loopPoint", itemId: it.id, index: i };
+    }
+    endLoopEdit();
+    return null;
+  }
+
+  // One move of a loop point's drag: the point goes where the pointer meets its
+  // host's surface, in the patch's own frame. Off the host it stays put.
+  function moveLoopPoint(d: Extract<Drag, { mode: "loopPoint" }>, scr: Vec2): void {
+    const it = itemOf(d.itemId);
+    const patch = it?.visual.generator?.patch;
+    if (!it || !patch) return;
+    const hit = visuals?.surfaceAt(scr, (tag) => itemOfTag(tag)?.id === patch.hostId) ?? null;
+    if (!hit) return;
+    const local = worldToLoopPoint(patchFrame(it).invert(), new THREE.Vector3(hit.point.x, hit.point.y, hit.point.z));
+    patch.points = patch.points.map((p, i) => (i === d.index ? local : p));
+    markDirty();
+  }
+
+  // After a drag of a loop point: shade what the loop covers now.
+  function afterLoopDrag(itemId: number): void {
+    const it = itemOf(itemId);
+    const host = it?.visual.generator?.patch ? itemOf(it.visual.generator.patch.hostId) : null;
+    if (!it || !host) return;
+    const values = mergeDefaults(it.visual.generator!.params, loadSchema("mushrooms")!);
+    const res = selectSurface(drawnMeshesOf(host), patchLoopWorld(it), {
+      maxSlopeDeg: values["maxSlope"] as number,
+      maxTriangles: values["maxTriangles"] as number,
+    });
+    if (res.ok) patchSurfaces.set(itemId, res.selection);
+    else patchSurfaces.delete(itemId);
+    loopEditFill = res.ok ? res.selection.positions : null;
+    refreshFields();
+  }
+
+  // The mushroom loop's draft for the guides: the loop being painted, or the
+  // loop open for editing.
+  function surfaceDraftGuide(): GuideDraft | null {
+    if (loopEdit) {
+      const it = itemOf(loopEdit.itemId);
+      if (!it) return null;
+      return closedDraft(patchLoopWorld(it), loopEditFill);
+    }
+    return tool === "mushrooms" ? surfaceLoop.draft() : null;
+  }
 
   // `+ Geometry` in the Visuals workspace: a click places a PROP - a mesh
   // geometry object wearing the last mesh chosen (`VisualsWorkspace.propMesh`)
@@ -9576,6 +10109,15 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         return;
       }
     } else if (scene) {
+      // 0. A mushroom loop open for editing: its points are the handles, and a
+      // press anywhere else closes it and goes on as a press.
+      if (loopEdit) {
+        const d = pressLoopPoint(scr);
+        if (d) {
+          drag = d;
+          return;
+        }
+      }
       // 1. The guides' handles: the selected shape's corners and midpoints.
       const h = pickSceneHandle(tags, e.altKey, e.shiftKey);
       if (h === "consumed") return;
@@ -10224,6 +10766,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (mode !== "edit") return;
     const scr = pointerScreen(e);
     lastPointerScreen = scr;
+    if (!drag && inVisuals() && tool === "mushrooms" && !surfaceLoop.empty) hoverLoop(scr);
     if (!drag) return;
     // Resolved in the plane the dragged thing is drawn in (see `move`'s
     // `planeZ`); every other drag is on the gameplay plane.
@@ -10294,6 +10837,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         break;
       case "surfaceDrop":
         surfaceDropMove(drag, scr, e.ctrlKey || e.metaKey);
+        break;
+      case "loopPoint":
+        moveLoopPoint(drag, scr);
         break;
       case "orbit": {
         const d = scr.sub(drag.lastScreen);
@@ -10683,6 +11229,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (drag.mode === "panPick" && drag.travel < CLICK_SLOP_PX) drag.pick();
     if (drag.mode === "move" && !drag.moved) drag.pick?.();
     if (drag.mode === "view") visuals?.endView();
+    if (drag.mode === "loopPoint") afterLoopDrag(drag.itemId);
     if (drag.mode === "surfaceDrop") {
       if (drag.handlers) drag.handlers.end("translate");
       else drag.pick();
@@ -10803,6 +11350,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (e.code === "Escape") {
       if (mode === "test") stopTest();
       else if (polyDraft) cancelPolyDraft();
+      else if (!surfaceLoop.empty) {
+        surfaceLoop.clear();
+        updateTitle();
+      } else if (loopEdit) endLoopEdit();
       // The vertex selection goes first, for the reason a click on empty space
       // drops it first: it is the innermost thing selected, and dropping it is
       // how the shape stops being open for vertex editing.
@@ -10838,6 +11389,16 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       return;
     }
     if (mode !== "edit") return;
+    // Ctrl+Enter generates the selected generated object - from inside one of
+    // its parameter fields too, so a value can be typed and tried in one go.
+    if ((e.ctrlKey || e.metaKey) && (e.code === "Enter" || e.code === "NumpadEnter")) {
+      const s = selected();
+      if (s && s.object === "geometry" && s.visual.generator) {
+        void generate(s);
+        e.preventDefault();
+        return;
+      }
+    }
     // Ignore shortcuts while a field that consumes keystrokes has focus (let
     // its native editing/undo win). Toggles don't consume them, so clicking the
     // snap checkbox must not leave the editor deaf to shortcuts.
@@ -10905,6 +11466,20 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     }
     if ((e.code === "Enter" || e.code === "NumpadEnter") && polyDraft) {
       commitPolyDraft();
+      e.preventDefault();
+      return;
+    }
+    // The mushroom loop: Enter closes the one being painted, or ends Edit loop.
+    if ((e.code === "Enter" || e.code === "NumpadEnter") && (surfaceLoop.closable || loopEdit)) {
+      if (surfaceLoop.closable) closeSurfaceLoop();
+      else endLoopEdit();
+      e.preventDefault();
+      return;
+    }
+    // ...and Backspace takes its last point back, before Backspace deletes.
+    if (e.code === "Backspace" && !surfaceLoop.empty) {
+      surfaceLoop.pop();
+      updateTitle();
       e.preventDefault();
       return;
     }
@@ -11027,7 +11602,16 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   function visualsStatus(): string {
     const nav = "middle drag orbit · Shift+middle or right drag pan · wheel dolly · F frame · Home head-on · W Level";
     let what = "";
-    if (tool === "geometry") {
+    if (loopEdit) {
+      what = "Edit loop: drag a point along the surface · Enter or Esc ends · Generate on the panel regrows the patch";
+    } else if (tool === "rock") {
+      what = "click a collision outline (or its matched geometry) to dress it with a generated rock";
+    } else if (tool === "mushrooms") {
+      const n = surfaceLoop.points.length;
+      what = n
+        ? `${n} point${n === 1 ? "" : "s"} on the model${n >= 3 ? " · Enter or the first point closes" : ""} · Backspace drops the last · Esc cancels`
+        : "click a loop onto a drawn model's faces · Enter or the first point closes it";
+    } else if (tool === "geometry") {
       what = `click places ${visuals!.propMesh} on the plane · Shift+click on a surface (Ctrl stands it up)`;
     } else if (tool === "poly" || tool === "path") {
       what = "click out the vertices on the plane · Enter finishes · Esc drops it";
@@ -11174,6 +11758,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // only on selection. It is a revision check and a class toggle per row
       // unless the model actually moved.
       refreshOutliner();
+      // A generation that finished during a drag lands now that it is over
+      // (free when none is waiting).
+      jobs.flush();
       // The scene first, then the editor's own canvas over it. Both are driven
       // from the SAME free camera through `space.ts`, so an outline drawn on top
       // lands on the geometry it describes underneath at any pan or zoom - which
@@ -11206,7 +11793,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           visuals!.apply();
           visuals!.sync(
             { model, rev: modelRev, selectedIds, selectedBodyIds, selectedVerts, visibleLayers, lockedLayers },
-            polyDraftGuide(),
+            polyDraftGuide() ?? surfaceDraftGuide(),
           );
         }
         if (sceneLevel) scene3d.render(sceneLevel, camera, 1, inVisuals() ? NO_ORBIT : orbit);
@@ -11486,6 +12073,7 @@ function injectStyles(): void {
   .ed-test-banner { position: fixed; top: 8px; left: 50%; transform: translateX(-50%);
     background: rgba(31,36,48,0.92); border: 1px solid #65bddb; color: #65bddb;
     font-family: monospace; font-size: 13px; padding: 4px 12px; border-radius: 2px; z-index: 10; }
+  ${GENERATOR_PANEL_CSS}
   `;
   document.head.appendChild(s);
 }

@@ -253,6 +253,7 @@ public/generated/<kind>/<hash>/meta.json   { key, kind, version, params, input, 
 A generated file is one prop in its own frame: no node, no scale, no turn, and no manifest entry.
 The key carries no size, so the browser fetches it unweighted; the preload list (`levelStoredFiles`, node only) reads `bytes` from `meta.json` through `generatedMeta` (`render3d/generatedMeta.ts`, kept apart so its `fs` import never reaches the browser), and lists a file with no meta at 0 bytes with a warning.
 A key whose file is missing is a failed load like any other, and draws the placeholder.
+The placeholder of a generated object is its generator's: a BOULDER with no mesh yet (or one still loading, or missing) stands in as its outline extruded to the block's `depth` and chamfered in toward the camera at `BOULDER_STANDIN_TAPER` (45°), the volume the rock will fill, rather than a 20 cm slab; a MUSHROOM PATCH has none at all, since its rect is only the extent of the surface it grows on and a box of that size would stand over the rock it is on (`mountVisual`, `primitiveGeometry` in `render3d/bodyVisuals.ts`).
 The files are dev-only and gitignored for now; publishing them to the release store is a follow-up the key and layout are shaped for.
 
 ## Traps

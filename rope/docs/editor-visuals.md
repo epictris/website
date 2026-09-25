@@ -1,8 +1,8 @@
 # The Visuals workspace
 
 Status: in progress (plans/visuals-workspace.md).
-Phases 1 and 4 are in: the free view, the guides, and the workspace in the editor (switching, navigation, picking through the guides, editing in the scene, the tools that work on the plane, and a prop placed or dropped on a surface).
-The rock and mushroom tools (Phase 5) are not yet in.
+Phases 1, 4 and 5 are in: the free view, the guides, the workspace in the editor (switching, navigation, picking through the guides, editing in the scene, the tools that work on the plane, and a prop placed or dropped on a surface), and the two generators' tools and panels (**+ Rock**, **+ Mushrooms**, see [Rocks and mushrooms](#rocks-and-mushrooms)).
+Phase 6 (the docs pass and the suite) is not yet done.
 
 The Visuals workspace is a second way of driving the one editor: a free 3D camera navigated Blender's way, with the level's editor furniture drawn into the scene instead of onto the 2D overlay.
 It is for dressing a level - putting props on ledges, lights where they read, judging depth from the side it will be seen from - where the Level workspace is for authoring the level against the gameplay plane.
@@ -117,7 +117,8 @@ Chains and vines are not picked on the canvas here (the guides draw neither); th
 
 ## Tools
 
-Offered on the scene layer: Select, **+ Rect**, **+ Circle**, **+ Belt**, **+ Poly**, **+ Curve**, **+ Geometry**, **+ Light**, **+ Glow**, **+ Fireflies**.
+Offered on the scene layer: Select, **+ Rect**, **+ Circle**, **+ Belt**, **+ Poly**, **+ Curve**, **+ Geometry**, **+ Rock**, **+ Mushrooms**, **+ Light**, **+ Glow**, **+ Fireflies**.
+**+ Rock** and **+ Mushrooms** are the Visuals workspace's own (see [Rocks and mushrooms](#rocks-and-mushrooms)); the Level workspace does not offer them.
 The other layers keep their own tools (**+ Rect**, **+ Circle**, **+ Poly**, **+ Path** on the camera layer, **+ Path** on the fireflies layer, **+ Text**, **+ Arrow**, **+ Checkpoint** on notes), since every one of them is a gesture on the plane.
 
 - The drawing tools draw on the gameplay plane through `unprojectToPlane`.
@@ -129,6 +130,65 @@ The other layers keep their own tools (**+ Rect**, **+ Circle**, **+ Poly**, **+
 
 Which workspace offers a tool is `TOOL_WORKSPACES` in `editor.ts` (`both`, `level` or `visuals`); a tool of the Visuals workspace's own registers its press in `sceneToolPress`, which the press handler asks before any plane gesture.
 
+## Rocks and mushrooms
+
+The two procedural generators ([generators](generators.md)) are driven from here: a **generated rock** fitted to a collision outline, and a **mushroom patch** grown on a model's surface inside a loop painted on it.
+Both are geometry objects carrying a `generator` block ([level format](level-format.md)): which generator, its schema version, the parameters that differ from the defaults, and for a patch the loop and its host.
+Their `mesh` is the key of the generated file, content-addressed, so the editor can tell a mesh that matches its block from a stale one by comparing keys, and generating the same thing twice costs nothing.
+The editor never generates on its own: an edit makes the object **stale**, and **Generate** (or Ctrl+Enter) asks for the new mesh.
+
+### + Rock
+
+A click on a collision outline (a scene polygon or rect, by its guide line or anywhere inside it on the plane) or on the geometry object matched to one adds, as one undo step, a mesh geometry object matched to that outline (`matchCollision`) with a boulder block of defaults and no mesh, selects it, and asks for its generation.
+An outline that already has a generated rock has that rock selected and generated instead of a second one stacked on it (`existingRock`).
+A circle, a curve or a belt has no outline the generator fits, so the click says so.
+The same is **Generate rock** beside **Add geometry** on a lone collision polygon's or rect's panel, and on the body panel of a body with exactly one.
+Until its mesh arrives a rock with no mesh stands in as its outline extruded to the block's `depth` (1.6 m by default) and chamfered in toward the camera (`BOULDER_STANDIN_TAPER`, 45°, in `render3d/bodyVisuals.ts`), so its volume reads while Blender works; a regeneration keeps drawing the previous mesh until the new one lands.
+
+### + Mushrooms
+
+Clicks place points on the drawn surface under the pointer (`Scene3D.pickSurface`), on any scene geometry object but a patch, and a rubber band runs from the last point to the surface under the pointer.
+The loop stays on the model its first point was placed on, since a patch grows on one host; a click elsewhere says so.
+Enter or a click on the first point closes it, Backspace takes the last point back, and Esc drops the loop.
+Closing it collects the faces inside the loop (`selectSurface`, below) and, if there are any, adds as one undo step a patch object in the host's BODY: a mesh geometry object at the middle of those faces, unturned, its rect their extent and its depth their thickness, with a mushroom block whose loop is stored in the patch's own frame and whose host is the object painted on; it is selected and its generation asked for.
+A loop that covers nothing (every face under it steeper than `maxSlope`, 75° by default) stays open with a notice, for Backspace or Esc.
+A patch with no mesh draws nothing at all: its rect is only the extent of the surface, and a box of that size would stand over the rock the mushrooms are for.
+
+**The surface** (`editor/visuals/surfacePatch.ts`, ported from the fork) is judged on the loop's plane of best fit: a face is taken where its middle lands inside the loop, it faces the loop's side of the plane, it is no steeper than `maxSlope`, and it lies within a band of the plane (the loop's own deviation plus a third of its size), so the back of a rock and a wall behind it are left out.
+Faces are cut down to a step of a 48th of the loop's size (1 to 10 cm) so a big facet is cut at the painted edge; a soup over `maxTriangles` is cut more coarsely, and one over it with nothing left to cut is refused rather than searched for ever (the fork's loop could not end there).
+The surface is collected again from the host's CURRENT meshes every time the patch is generated, after the frame loop has rebuilt and placed the scene (a body built this instant is not placed until its first frame), so a regenerated rock is followed by a regenerated patch on demand.
+It is sent in the patch's own frame (`patchMatrix`, the frame `mountVisual` draws the mesh in), so the mushrooms land where the loop was painted however the patch has been placed since.
+The stored loop has no normals (the file holds points); which side of the loop's plane is out is taken from the host's middle.
+
+**Edit loop** on the Mushrooms group shows the patch's loop closed on the host, the covered faces shaded, and its points as handles: a drag moves a point to where the pointer meets the host's surface (off the host it stays put), one undo step per drag, and the shading follows on release.
+Enter, Esc or a press anywhere but a point ends it (the press then goes on as a press).
+
+### The Rock and Mushrooms groups
+
+A lone generated object's panel ends with its generator's group (`editor/visuals/generatorPanel.ts`, `buildGeneratorGroup`), built from the schema rather than written out:
+
+- the **status line**: `queued`, `generating N s`, `failed:` with the check that refused it (for a rock, and the remedy), `superseded`, `stale` in the warning colour once the object is no longer what its mesh was made from, `stale: never generated`, a warning for a patch whose host is gone, or the mesh's triangles and size once current (asked of the service once per key);
+- **Generate** (Ctrl+Enter while the object is selected, also from inside one of its fields), **Next seed** (the seed on by one, then Generate), **Reset** (every parameter back to its default, no generation), **Copy** and **Paste** (the parameters as JSON `{ kind, version, params }` through the clipboard, so a look moves between objects and levels; a paste of another kind's, or of a value out of range, is refused by name), and for a patch **Edit loop**;
+- for a patch, what the surface was when last collected: `faces · m² · up to N mushrooms`;
+- any `<name>Min` above its `<name>Max` once the defaults are in, before the server has to say so;
+- then each schema group: its basic parameters, and the rest under an **Advanced** disclosure that stays open across rebuilds.
+
+Each field is of its schema type: a number field (the step the schema's, the default as its placeholder, blank for the default, typed values held to the range), a checkbox, a picker, or a colour swatch (the linear RGB triple shown as sRGB).
+The label is the key's words and its unit (`depth (m)`, `slab yaw°`), cut with an ellipsis where the panel is too narrow, and the tooltip is the schema's `doc` and default.
+Lengths are in METRES here, the schema's unit, where the rest of the panel shows scene pixels: the steps, ranges and docs are all stated in metres (the file stores them in pixels like every length).
+Only values that differ from the default are written (`withParam`): setting a field back to its default, or clearing it, removes the key.
+
+The outliner row of a generated object carries the same word as a badge (`generating`, `queued`, `failed`, `stale`), and its body's row the loudest of its objects', so a collapsed body still says it holds something stale.
+
+### Generating
+
+A request is exactly what the key is made from: `generatorInput` (the rock's outline, or the patch's loop and a description of its host), the parameters that differ from the defaults, and the schema version this build runs, plus a patch's surface soup ([generators](generators.md#the-editors-side)).
+The job client (`editor/visuals/jobs.ts`, `GeneratorJobs`) submits it, polls the job (every 250 ms at first, backing off to once a second), and when the mesh is there puts its key on the object as ONE undo step, bringing the block's `version` up to the one it was made under; nothing else about the object changes.
+It does that only if the object is still there and would still be generated under that very key; otherwise the result simply waits in the service's cache for the object to come back round to it.
+A result that lands during a drag waits for the drag to end (the frame loop's `jobs.flush`), so an undo step is never pushed into the middle of a gesture.
+A newer Generate for the same object stops the client following the older job, and tells the service, which stops it unless it is past its bake.
+`failed` is an ordinary outcome: the boulder's validators are strict ([generators](generators.md#jobs), "Failures"), and a plain 2 x 1 m rectangle fails its centre slice at the default tolerance; the panel says which check failed, and another seed or a much looser `tolerance` (it also sets the remesh voxel, so the deviation grows with it: 0.05 m still failed at 0.053, 0.1 m passed) is the answer.
+On entering the workspace the editor asks the service what it has (`GET /api/generators`), and the toolbar says what is missing, if anything (Blender for both, Python and its packages for rocks).
 ## Not in Visuals
 
 Each of these is the overlay's, and the guides do not draw it, so it is not offered (a handle only where the format can store its answer, and only where it is drawn):
@@ -145,6 +205,8 @@ Each of these is the overlay's, and the guides do not draw it, so it is not offe
 | **W** | switch workspace |
 | **F** | frame the selection or the level (Visuals) |
 | **Home** | head on (either workspace resets its own view) |
+| Ctrl+Enter | generate the selected generated object |
+| Enter, Backspace, Esc | close, shorten or drop the mushroom loop; Enter or Esc ends Edit loop |
 | Esc, Delete, arrows, Enter, Ctrl+Z/Y/D/G/C/V, Tab, V R C P T A S O B | as in the Level workspace |
 | K | not in Visuals (says so) |
 
@@ -152,9 +214,18 @@ Each of these is the overlay's, and the guides do not draw it, so it is not offe
 
 - `editor/visuals/workspace.ts`: `VisualsWorkspace` (the pose, the guides' ownership, the navigation gestures, `enter`/`leave`/`suspend`/`resume`/`resetView`/`frameBox`/`apply`/`sync`, and the pointer questions `ndc`, `planePoint`, `screenOf`, `tagsAt`, `surfaceAt`, `wheel`), plus the pick rules `handleUnder`, `itemsUnder`, `spawnUnder` and the boxes **F** frames.
 - `editor/visuals/surfaceDrop.ts`: the drop's arithmetic.
-- `editor.ts`: the switcher, `inScene()`, the press routing, `pickSceneHandle`, `surfaceDropMove`, `placeProp`, `sceneToolPress`, `polyDraftGuide`, `visualsStatus`.
+- `editor/visuals/surfacePatch.ts`: `frameOf`, `collect`, `selectSurface`, `minUpOf`, the patch frame (`patchMatrix`, `loopPointToWorld`, `worldToLoopPoint`) and `soupInFrame`.
+- `editor/visuals/surfaceLoop.ts`: `SurfaceLoop`, the loop being painted, and `closedDraft` for Edit loop.
+- `editor/visuals/generatorEdits.ts`: the model edits the tools make (`rockSource`, `existingRock`, `rockFor`, `patchFor`, `objectPose`).
+- `editor/visuals/jobs.ts`: `GeneratorJobs`, the service's client, and `missingTools`.
+- `editor/visuals/generatorPanel.ts`: `buildGeneratorGroup` and its pure half (`withParam`, `clampParam`, `hexOfLinear`/`linearOfHex`, `nextSeedParams`, `paramIssues`, `paramsPayload`/`parseParamsPayload`, `generatorStatus`, `generatorBadge`, `paramLabel`).
+- `editor/visuals/paramSchema.ts`: `generatorInput`, `expectedKey`, `wantedKey` (the key at the version this build runs) and `isStale`.
+- `editor.ts`: the switcher, `inScene()`, the press routing, `pickSceneHandle`, `surfaceDropMove`, `placeProp`, `sceneToolPress`, `polyDraftGuide`, `visualsStatus`, and the generators' wiring (`placeRock`, `dressWithRock`, `paintLoop`, `closeSurfaceLoop`, `collectPatch`, `generate`, `editLoop`, the `jobs` host, the outliner badges).
 
 ## What green cannot see
 
 `cli render3d`'s `visuals:` cases cover the pose seeding and its keeping across a switch, which guide a click at a corner means (through a real raycast of the guides), the drop's arithmetic, a move through z, and the boxes **F** frames.
 The scene cannot be built headlessly, so the press routing, the gizmo, the drop onto a real model and every look were verified by driving `/editor` through the CDP harness; how any of it looks, the line and sprite sizes on a real canvas and the render order against transparent materials need the page.
+
+For the generators, the `generator:` cases cover the surface a loop collects on a box (area, triangle count, the slope filter, the band, the cap), the patch frame against the one `mountVisual` builds, the objects `+ Rock` and `+ Mushrooms` add and what they save as, the panel's parameter writes (the `stripDefaults` round trip through the setters, clamping, paste, a Min over its Max), the status line, and the job client against a scripted service (one swap per finished job, supersede, a failure keeps the model, a result waits out a drag, a deleted or edited object gets nothing).
+They cannot see the scene: the click on an outline, the loop painted on a real rock, the surface collected from a mesh the scene has just rebuilt, the one-undo-step claims, the panel's layout and the look of a rock or a patch were verified by driving `/editor` through the CDP harness with real Blender runs (2026-09-25), and the look is the owner's to judge.
