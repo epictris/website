@@ -663,6 +663,22 @@ export function itemDepth(i: EdItem, bodyCollides: boolean): number {
   return bodyCollides ? 0 : DECOR_Z;
 }
 
+// The `offsetZ` a geometry object is left with after a move through z that
+// started with it drawn at `drawnZ` (`itemDepth`) and authoring `offsetZ`, and
+// ended with it at depth `z`, metres.
+//
+// A move that did not go through z leaves the field exactly as it was, so
+// nudging a backdrop sideways never stamps the depth it falls back to into the
+// file. A move that did is the new depth OUTRIGHT: once written, `offsetZ` is
+// where the object is, not a change from where it fell back to - written as a
+// change instead (`offsetZ + (z - drawnZ)`), a piece of decoration drawn at
+// `DECOR_Z` jumped 35 cm toward the camera on the first touch of the blue
+// arrow. The one depth this cannot say is exactly 0 on a body that collides
+// with nothing, which the format reads as unset (see above).
+export function offsetZAfterMove(offsetZ: number, drawnZ: number, z: number): number {
+  return z === drawnZ ? offsetZ : z;
+}
+
 // Which bodies of a model have a collision object in them - the one fact
 // `itemDepth` needs about a body and an item cannot answer about itself.
 export function collidingBodyIds(items: readonly EdItem[]): Set<number> {

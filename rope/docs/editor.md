@@ -238,10 +238,11 @@ So the resize handles, the rubber band and the draw tools' previews all go with 
 
 **What does not go is what a click MEANS.**
 Those two were run together for as long as a pick was resolved on the plane by the 2D camera, and they are different questions: a ray answers for the models (`Scene3D.pick`) and meets the gameplay plane for everything resolved against it (`unprojectToPlane`, `canvasWorld` in `editor.ts`), both at any angle.
-So bodies and objects are **selected in a turned view exactly as they are head on** - the drill-in cycle, Shift, Alt, the outliner - and dragging one carries it along the plane, and the **transform gizmo** the pick puts on it is in the scene and works from any angle.
+So bodies and objects are **selected in a turned view exactly as they are head on** - the drill-in cycle, Shift, Alt, the outliner - and dragging one carries it along the plane it is drawn in (a light at its `z`, a prop at its depth, so it stays under the pointer), and the **transform gizmo** the pick puts on it is in the scene and works from any angle.
 That pairing is the point of the orbit: turn the view to see the depth, then drag the blue arrow to author it, on the thing you turned the view to look at.
 `unprojectToPlane` is `projectToView` backwards, and `cli render3d` asserts it as a round trip through three's own projection at a spread of orbits, plus that it is the 2D answer head on and is NOT it turned - an implementation that quietly returned the 2D answer passes the round trip at zero orbit and puts every turned-view click somewhere else.
 The one thing zoom gives up there is zooming about the cursor: the zoom is a dolly along the view direction rather than a scale about the screen, so the correction would want a ray through a camera that is not built until the frame is drawn, and a turned view zooms about its centre instead.
+The Visuals workspace does zoom about the cursor, because its camera is its own pose rather than the 2D camera, placed the moment a gesture moves it.
 
 Ctrl is on the orbit rather than on the pan because panning is how you get around a level and is wanted in every view, while orbiting is the rarer act and the one you come back from; with no scene to turn (the 2D view) Ctrl+middle simply pans like any other middle drag.
 
@@ -274,10 +275,16 @@ That is not a fallback but the same rule - the overlay picks and offers handles 
 An **orbited** view picks by exactly these rules (above): the ray answers for geometry as it does head on, and the collision shapes, lights, regions and notes it shares the canvas with are resolved against the plane through `unprojectToPlane` rather than through the 2D camera, so the two halves of a pick agree about where the pointer is aimed at any angle.
 What it does not offer there is the plane HANDLES, for the reason this section gives about geometry objects and the orbit section gives about everything else: a handle that is not drawn must not be grabbable either.
 
-## Guides
+## Workspaces: Level and Visuals
 
-The Visuals workspace (in progress, [editor-visuals](editor-visuals.md)) answers the turned view's missing overlay by drawing the overlay's marks into the scene instead: collision outlines, light icons and rings, the spawn, regions, paths, notes, the selected polygon's handles and tool drafts, each carrying a guide tag that `Scene3D.pick` returns beside the models.
-The guides are built (`editor/visuals/guides.ts`) but not yet wired into the editor.
+The toolbar opens with a switcher, **Level** and **Visuals** (**W** toggles).
+Everything in this document is the **Level** workspace: the editor driven by the 2D camera, with the overlay on top.
+The **Visuals** workspace ([editor-visuals](editor-visuals.md)) is the same editor - the model, undo, the selection, the layer, the tool and the inspector carry across a switch - driven by a free 3D camera navigated Blender's way (middle drag orbits, Shift + middle or right drag pans, the wheel dollies toward what is under the pointer, **F** frames, **Home** faces the plane), with the overlay's marks drawn into the scene as guides instead: collision outlines, light icons and rings, the spawn, regions, paths, notes, the selected polygon's handles and tool drafts, each carrying a guide tag that `Scene3D.pick` returns beside the models.
+It is what the turned view's missing overlay became: where a turned Level view only selects and moves, Visuals edits corners, draws with the plane tools, places props and drops them on surfaces, from any angle.
+Each workspace keeps its own view, and `▶ Test` returns to the one it left.
+
+The one predicate the press handler asks is `inScene()` - the Visuals workspace, or the Level workspace turned - which says a press is resolved through the scene's camera rather than the 2D camera's scale and offset; where the two differ, each branch says which it is (see [Picking](editor-visuals.md#picking) there).
+**Home** resets the Level workspace's orbit as `⟲ Reset view` does.
 
 ## The lens
 
@@ -321,7 +328,10 @@ The two features are a pair - orbit to see the depth, drag the blue arrow to aut
 
 **The handles sit at the depth the object is DRAWN at**, which is `itemDepth` and not the authored `offsetZ`: a geometry object authoring no depth is drawn on the gameplay plane if its body collides and at `DECOR_Z` if it does not.
 Read as a plain 0, the whole gizmo stood 35 cm in front of every piece of decoration it was attached to - invisible head on, and the first thing you see when the view is turned, which is the view it exists for.
-A move is then written as a CHANGE against where the handles started rather than as the pose's own z, or nudging a backdrop sideways would stamp that fallback into the file as an authored `off z` nobody asked for.
+A move that does not go through z then leaves the field alone rather than writing the pose's own z, or nudging a backdrop sideways would stamp that fallback into the file as an authored `off z` nobody asked for.
+A move that does go through z writes the new depth OUTRIGHT (`offsetZAfterMove` in `editor/model.ts`), because once written `offsetZ` is where the object is rather than a change from where it fell back to.
+Until 2026-09-25 it wrote the displacement into the field as a change, so the first touch of the blue arrow on decoration drawn at `DECOR_Z` jumped it 35 cm toward the camera (found by the Visuals workspace's drop on surface, which goes through the same handler); a group drag had the same fault through its members' authored depths, and a group drag that went out through z and came back left its members where they had been mid-drag.
+The one depth the field cannot hold is exactly 0 on a body that collides with nothing, which the format reads as unset.
 
 **The gizmo never touches the model.** It moves a proxy object and the editor reads that proxy and writes the model, which is what lets it survive the scene being rebuilt from scratch on every model revision - that is, on every drag. A handle attached to a visual is attached to an object that is disposed a frame later, and re-attaching per frame is a gesture that cannot survive its own effect.
 

@@ -2799,12 +2799,17 @@ export function drawEditor(
   // world-space label would shrink to nothing as the level is zoomed out. Placed
   // beside the source rather than at the edge of the reach, which is where the
   // thing being labelled actually is.
+  //
+  // Clear of the burst: it is drawn `LIGHT_MARK_SIZE` metres across the plane
+  // (36 px at the default zoom), so a label at a fixed 8 px ran through its
+  // rays and read "·oint".
   for (const l of lights) {
     const anchor = worldToScreen(cam, l.pos);
+    const clear = lightPickRadius(1 / scale) * scale;
     ctx.font = "11px monospace";
     ctx.textBaseline = "bottom";
     ctx.fillStyle = l.color;
-    ctx.fillText(lightLabel(l), anchor.x + 8, anchor.y - 6);
+    ctx.fillText(lightLabel(l), anchor.x + clear + 4, anchor.y - 2);
   }
   for (const n of notes) {
     if (n.note.kind === "text") drawNoteText(ctx, cam, n);
@@ -3007,4 +3012,57 @@ function snapMark(ctx: CanvasRenderingContext2D, p: Vec2, r: number): void {
     ctx.lineTo(p.x + dx * r * 1.9, p.y + dy * r * 1.9);
   }
   ctx.stroke();
+}
+
+// The Visuals workspace's one mark on the overlay canvas: a status line along
+// the bottom, between the outliner and the inspector, saying how the free view
+// is driven and what the armed tool or the selection offers there. Everything
+// else the overlay would draw is in the scene (editor/visuals/guides.ts), where
+// it is right from any angle; this is the one thing that is about the SCREEN
+// rather than the level, so it stays on it.
+//
+// CSS pixels: the band the outliner (8 + 230 px wide) and the inspector (8 +
+// 190 px, plus its padding) leave free, wrapped at " · " to fit it.
+const STATUS_LEFT_PX = 252;
+const STATUS_RIGHT_PX = 218;
+const STATUS_BOTTOM_PX = 8;
+const STATUS_LINE_PX = 16;
+const STATUS_PAD_PX = 6;
+const STATUS_BG = "rgba(31,36,48,0.92)";
+const STATUS_BORDER = "#313244";
+const STATUS_TEXT = "#cbccc6";
+
+export function drawVisualsStatus(
+  ctx: CanvasRenderingContext2D,
+  dpr: number,
+  w: number,
+  h: number,
+  text: string,
+): void {
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.font = "12px monospace";
+  const room = Math.max(120, w - STATUS_LEFT_PX - STATUS_RIGHT_PX - STATUS_PAD_PX * 2);
+  const lines: string[] = [];
+  let line = "";
+  for (const part of text.split(" · ")) {
+    const next = line ? `${line} · ${part}` : part;
+    if (line && ctx.measureText(next).width > room) {
+      lines.push(line);
+      line = part;
+    } else line = next;
+  }
+  if (line) lines.push(line);
+  const width = Math.min(room, Math.max(...lines.map((l) => ctx.measureText(l).width))) + STATUS_PAD_PX * 2;
+  const height = lines.length * STATUS_LINE_PX + STATUS_PAD_PX;
+  const x = Math.round(STATUS_LEFT_PX + (w - STATUS_LEFT_PX - STATUS_RIGHT_PX - width) / 2);
+  const y = Math.round(h - STATUS_BOTTOM_PX - height);
+  ctx.fillStyle = STATUS_BG;
+  ctx.fillRect(x, y, width, height);
+  ctx.strokeStyle = STATUS_BORDER;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x + 0.5, y + 0.5, width - 1, height - 1);
+  ctx.fillStyle = STATUS_TEXT;
+  ctx.textBaseline = "top";
+  ctx.textAlign = "left";
+  lines.forEach((l, i) => ctx.fillText(l, x + STATUS_PAD_PX, y + STATUS_PAD_PX / 2 + 2 + i * STATUS_LINE_PX));
 }
