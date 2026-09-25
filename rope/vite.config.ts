@@ -16,6 +16,7 @@ import { levelFileHash, treeStamp, type TreeStamp } from "./src/sim/treeStamp";
 import { DEFAULT_LEVEL, LEVELS } from "./src/level/registry";
 import type { RawLevelData } from "./src/level/levelFormat";
 import { levelStoredFiles } from "./src/render3d/levelAssets";
+import { generatorService } from "./src/server/generators/service";
 
 // The identity of the SOURCE this server is serving, exposed to the app as
 // `virtual:tree-stamp` and stamped into every exported bundle.
@@ -473,7 +474,12 @@ export default defineConfig({
       // editor holds the authoritative copy in memory and saves THROUGH
       // /api/levels, and the preload list re-reads the file off disk per page
       // load (see `storeScript`). Reload by hand to pick up a level edit.
-      ignored: ["**/levels/*.json"],
+      ignored: [
+        "**/levels/*.json",
+        // Generated meshes land here while the editor is open; they are
+        // fetched by key, never imported, so a write must not reach HMR.
+        "**/public/generated/**",
+      ],
     },
     // The playtest store lives in serve.ts, not in Vite. With `bun run serve.ts`
     // beside the dev server, `?record=1` streams into it and /admin shows it.
@@ -509,5 +515,6 @@ export default defineConfig({
     levelApi(),
     prodReplays(),
     editorRoute(),
+    generatorService(),
   ],
 });

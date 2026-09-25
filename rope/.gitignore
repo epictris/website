@@ -18,3 +18,10 @@ public/hdri/
 assets-src/
 # Generated rocks (`bun run assets:rocks <level>`), rebuilt from the level file.
 public/rocks/
+# The generator service's output (boulders, mushroom patches), content-addressed
+# by mesh key and regenerated from the level; see docs/generators.md.
+public/generated/
+# The generators' Python environment (`bun run generators:setup`), and the
+# bytecode Blender's own interpreter leaves beside the sources.
+.venv/
+__pycache__/
