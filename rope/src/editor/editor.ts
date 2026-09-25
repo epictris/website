@@ -207,7 +207,7 @@ import {
   curvePieceCount,
   routeHandlePoints,
   routeMidpoints,
-
+  lightSwarms,
 } from "./render";
 import {
   DEFAULT_MATERIAL,
@@ -340,6 +340,8 @@ const LAYER_TOOLS: Record<EdLayer, Tool[]> = {
     "vine",
   ],
   camera: ["select", "rect", "circle", "poly", "path"],
+  // A firefly path is a route and nothing else: no regions to draw.
+  fireflies: ["select", "path"],
   notes: ["select", "text", "arrow", "checkpoint"],
 };
 
@@ -363,6 +365,8 @@ const EMPTY_HINTS: Record<EdLayer, string> = {
     "No selection. Click a body, or pick +Rect / +Circle and drag on the canvas; +Poly clicks out an outline, concave corners and all (Enter or click the first vertex to close, Esc to cancel) - the physics gets it cut into convex pieces, so a notch is one object rather than three overlapping ones. Those draw a COLLISION shape - what the body is made of, simulated and never drawn. +Geometry draws the other half: an object that is drawn and never simulated, which is what carries a mesh or a texture. A body wants one of each, and they are two decisions. +Chain drags a chain from one body to another. Ctrl+G moves the selected objects into ONE body (Ctrl+Shift+G takes bodies apart again; Alt+click picks one object out of a body). The panel bottom-left lists every body and expands it into the objects it is made of, which is the only way to reach an object with no outline - a light, or the mesh a wall is dressed in. Rubber-band from empty space: drag left→right to catch what the box encloses, right→left for anything it touches. +Light drops a lamp - drag as you place it to set how far it reaches. A light with no visible source is a body of its own (a shaft down a grate, a fill); a lamp you can see is a light merged into the body its fitting is in, so moving the fitting moves the light. Any visible layer can be selected.",
   camera:
     "Camera layer. Click a region, drag to rubber-band select, or pick +Rect / +Circle and drag one out (+Poly clicks out an outline). Tab switches layer.",
+  fireflies:
+    "Fireflies layer. +Path clicks out a FIREFLY PATH (Enter to finish), start to end. Give a swarm its number in the swarm's `path` field and the swarm guides the player along it instead of the camera paths; when the player reaches the end, the swarm flies back along it to the start and waits there. Tab switches layer.",
   notes:
     "Notes layer. +Text drops a box to type into, +Arrow drags a pointer out, +Checkpoint drops a named place to start from - play with ?checkpoint=NAME to spawn there instead of at the level's spawn, or select one and press ▶ Test. None of the three is drawn in play. Tab switches layer.",
 };
@@ -1757,6 +1761,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // and solving them here to draw them would be a second simulation running
       // under the editor.
       sceneChains: [],
+      // Read by no swarm here (nobody is in the preview to follow), but
+      // handed over so a swarm naming a path finds it rather than warning.
+      fireflyPaths: data.fireflyPaths ?? [],
       visualSource: { data, built },
       // THE AVATAR AT THE SPAWN, because a level is authored against the thing
       // that plays it. Every gap, ledge and shelf in the file is a decision
@@ -2100,8 +2107,18 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   };
   toolBtns.geometry.title =
     "Click to drop a geometry object; drag to size it. It is DRAWN and never simulated - nothing collides with it, the rope does not wrap it, no force reaches it. Give it a mesh or a texture on the panel; drop it on a selected body to have it ride that body.";
-  toolBtns.path.title =
-    "Click out a camera path: the route the camera rides, in the direction it is drawn. Enter or double-click finishes it, Esc drops it. The camera targets a point `lookahead` further along than the player, and lets go if they stray more than `range` from it.";
+  // The path tool's tooltip is the active layer's (see `refreshToolButtons`):
+  // the one gesture draws three different things.
+  const PATH_TOOL_TITLE: Record<EdLayer, string> = {
+    scene:
+      "Click out a curve: a bar stroked to its width, which a rail's cuff slides along. Enter or double-click finishes it, Esc drops it.",
+    camera:
+      "Click out a camera path: the route the camera rides, in the direction it is drawn. Enter or double-click finishes it, Esc drops it. The camera targets a point `lookahead` further along than the player, and lets go if they stray more than `range` from it.",
+    fireflies:
+      "Click out a firefly path, start to end: the route a swarm naming it in its `path` field guides the player along. Enter or double-click finishes it, Esc drops it. At the end the swarm leaves the player and flies back to the start.",
+    notes: "",
+  };
+  toolBtns.path.title = PATH_TOOL_TITLE[activeLayer];
   toolBtns.chain.title = "Drag from one body to another to string a chain between them";
   toolBtns.belt.title =
     "Press where the first wheel goes and drag to the second to lay a conveyor belt; a click drops one 1.5 m long. Click a run's midpoint to add a wheel, Alt+click a wheel's square to remove it. The band wraps the outside of every wheel and its surface runs round the loop at the panel's speed (positive = clockwise on screen), carrying whatever rests on it. It builds only on a static body that does not move.";
@@ -2111,7 +2128,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   toolBtns.glow.title =
     "Click to drop a glowing mushroom (a purple cube for now): one static body holding the cube, the collision box it mirrors, and a WAKING light that stays dark until the ball comes within its wake (the dashed ring) and fades out after it leaves. The 3D preview shows it awake.";
   toolBtns.fireflies.title =
-    "Click to drop a swarm of fireflies: a body holding only the swarm's light, which is where they hover. When the ball comes within the dashed ring they follow it for the rest of the run, looping around it and lighting it wherever it goes.";
+    "Click to drop a swarm of fireflies: a body holding only the swarm's light, which is where they hover. When the ball comes within the dashed ring they follow it for the rest of the run, looping around it and lighting it wherever it goes - or, given a firefly path (the fireflies layer) in their `path` field, along that path until the player reaches its end.";
   toolBtns.checkpoint.title =
     "Click to drop a named spawn. Playing with ?checkpoint=NAME starts there instead of at the level's spawn - and stays there over a reset - so an area can be playtested without swinging out to it first. Selecting one and pressing ▶ Test starts the test there.";
   const kindSel = document.createElement("select");
@@ -2152,6 +2169,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     toolBtns.vine,
     toolBtns.light,
     toolBtns.glow,
+    toolBtns.fireflies,
     kindWrap,
   );
 
@@ -2249,7 +2267,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // The same gesture draws two different things: a camera path is a route the
     // camera rides, and a scene one is a BAR - the curve a rail's cuff slides
     // along, stroked out to its width. The button says which.
-    toolBtns.path.textContent = activeLayer === "camera" ? "+ Path" : "+ Curve";
+    toolBtns.path.textContent = activeLayer === "scene" ? "+ Curve" : "+ Path";
+    toolBtns.path.title = PATH_TOOL_TITLE[activeLayer];
     if (!tools.includes(tool)) setTool("select");
   }
 
@@ -2647,12 +2666,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const checkpoints = model.items.filter(isCheckpointNote).length;
     const extra =
       ([
-        ["camera", "cam"],
-        ["notes", "notes"],
+        ["camera", "cam", "cam"],
+        ["fireflies", "firefly path", "firefly paths"],
+        ["notes", "note", "notes"],
       ] as const)
-        .map(([l, name]) => {
+        .map(([l, one, many]) => {
           const n = l === "notes" ? count(l) - checkpoints : count(l);
-          return n ? ` · ${n} ${name}` : "";
+          return n ? ` · ${n} ${n === 1 ? one : many}` : "";
         })
         .join("") +
       (checkpoints ? ` · ${checkpoints} checkpoint${checkpoints === 1 ? "" : "s"}` : "") +
@@ -3134,7 +3154,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       hint.textContent =
         "The object's position is wheel 0. Drag a square to move a wheel (click one to edit its r here), a round grip on a wheel's rim to size it, a run's midpoint to add a wheel there; Alt+click a square removes its wheel. Every wheel must touch the band. Speed is signed: positive runs the loop clockwise on screen, negative runs it back. A belt builds only on a static body that does not move.";
       g.appendChild(hint);
-    } else if (items.every((b) => b.shape.kind === "path" && b.layer !== "camera")) {
+    } else if (items.every((b) => b.shape.kind === "path" && b.layer === "scene")) {
       // A CURVE has one size and it is the width of the bar: the line itself is
       // edited on the canvas, node by node, exactly as a polygon's outline is.
       num("width", (b) => (b.shape.kind === "path" ? b.shape.width * M2PX : 0), (b, v) => {
@@ -6344,7 +6364,53 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (windKeyed) windInput.title = windKeyed;
     num("priority", (b) => b.cam.priority, (b, v) => (b.cam.priority = Math.round(v)), 1);
 
-    // Three whole-path actions, because each is miserable to do node by node.
+    appendPathActions(g, paths, "Reverse the direction of travel - the way the camera leads along this path");
+
+    // The picked nodes' KEYS, when the path is open for vertex editing and
+    // some are picked. Under the path's own fields because a key is one of
+    // those fields said at one place on the route.
+    const sole = paths.length === 1 ? paths[0]! : null;
+    if (sole && sole.shape.kind === "path" && vertexEditTarget() === sole) {
+      const picked = selectedVertIndices(sole);
+      if (picked.length) buildPathNodeKeys(g, sole, picked);
+    }
+
+    addActionsRow(g);
+    inspector.appendChild(g);
+  }
+
+  // A FIREFLY PATH's panel (see `FireflyPathData`): its number, the swarms
+  // that name it, and the curve's own actions. It frames nothing, so there is
+  // nothing else to author on it.
+  function buildFireflyPathGroup(paths: EdItem[]): void {
+    const g = el("div", "ed-group");
+    g.appendChild(
+      heading(paths.length === 1 ? `Firefly path ${paths[0]!.pathId}` : `${paths.length} firefly paths selected`),
+    );
+    const hint = el("div", "ed-hint");
+    hint.textContent =
+      "A route a firefly swarm guides the player along, in the direction it was drawn - instead of the camera paths. A swarm follows it once its `path` field names this path's number. When the player reaches the END (the bar) the swarm stops following, flies back along the path to the START (the ring) and waits there, noticing the player again once they have left its ring and come back. Edit it like a camera path: drag a node, its round grips to shape the curve, an edge midpoint to insert one, Alt+click to remove one.";
+    g.appendChild(hint);
+    const num = groupNum(g, paths);
+    addTransformFields(g, num, paths);
+    // Which swarms follow it: a path none names is drawn for nothing.
+    const followers = el("div", "ed-hint");
+    followers.textContent = paths
+      .map((p) => {
+        const swarms = model.items.filter(
+          (i) => i.object === "light" && lightSwarms(i) && i.light.path === p.pathId,
+        );
+        return `path ${p.pathId}: ${swarms.length === 0 ? "no swarm names it" : `followed by ${swarms.length} swarm${swarms.length === 1 ? "" : "s"}`}`;
+      })
+      .join("; ");
+    g.appendChild(followers);
+    appendPathActions(g, paths, "Reverse the direction of travel - which end the swarm waits at, and which it leaves the player at");
+    addActionsRow(g);
+    inspector.appendChild(g);
+  }
+
+  // Three whole-path actions, because each is miserable to do node by node.
+  function appendPathActions(g: HTMLElement, paths: EdItem[], reverseTitle: string): void {
     const row = el("div", "ed-row");
     const act = (label: string, title: string, apply: (b: EdItem) => void): void => {
       const b = button(label, () => {
@@ -6361,11 +6427,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       row.appendChild(b);
     };
     // Direction is meaning, and re-drawing a long path backwards is miserable.
-    act(
-      "Reverse",
-      "Reverse the direction of travel - the way the camera leads along this path",
-      (b) => void reversePathVerts(b),
-    );
+    act("Reverse", reverseTitle, (b) => void reversePathVerts(b));
     act(
       "Smooth",
       "Round every corner: each node gets the tangent that carries the curve through it (drag a node's round grips to shape one by hand)",
@@ -6375,18 +6437,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       void sharpenPathNodes(b),
     );
     g.appendChild(row);
-
-    // The picked nodes' KEYS, when the path is open for vertex editing and
-    // some are picked. Under the path's own fields because a key is one of
-    // those fields said at one place on the route.
-    const sole = paths.length === 1 ? paths[0]! : null;
-    if (sole && sole.shape.kind === "path" && vertexEditTarget() === sole) {
-      const picked = selectedVertIndices(sole);
-      if (picked.length) buildPathNodeKeys(g, sole, picked);
-    }
-
-    addActionsRow(g);
-    inspector.appendChild(g);
   }
 
   // The keyframe fields of a path's picked nodes (see `CameraPathVert`). Each
@@ -6539,6 +6589,40 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // The times below appear or go with it.
       swarmInput.addEventListener("change", () => rebuildInspector());
       const swarming = lights.every((b) => b.light.fireflies > 0);
+
+      // The FIREFLY PATH it guides the player along (see
+      // `LightObjectData.path`), by the number the fireflies layer labels it
+      // with. Blank = the camera paths, followed for the rest of the run.
+      if (swarming) {
+        const ids = new Set(model.items.filter((i) => i.layer === "fireflies").map((i) => i.pathId));
+        const pathInput = num(
+          "path",
+          (b) => b.light.path ?? NaN,
+          (b, v) => (b.light.path = Math.max(1, Math.round(v))),
+          1,
+          {
+            placeholder: "camera",
+            onEmpty: () => {
+              for (const b of lights) b.light.path = null;
+            },
+          },
+        );
+        pathInput.title =
+          "The number of a firefly path (the fireflies layer) this swarm guides the player along; blank reads the camera paths.";
+        pathInput.addEventListener("change", () => rebuildInspector());
+        // A number naming no path is read as blank (see `LightRig.placeFor`),
+        // which is silent in play - so it is said here.
+        const missing = [
+          ...new Set(
+            lights.flatMap((b) => (b.light.path !== null && !ids.has(b.light.path) ? [b.light.path] : [])),
+          ),
+        ];
+        if (missing.length > 0) {
+          const warn = el("div", "ed-hint");
+          warn.textContent = `No firefly path ${missing.join(", ")} on the fireflies layer: the swarm reads the camera paths until there is one.`;
+          g.appendChild(warn);
+        }
+      }
 
       // A WAKING light (see `LightObjectData.wake`): dark until the ball comes
       // within `wake`, then rising to its intensity with the glowing shapes of
@@ -7253,6 +7337,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       "anchor",
       "camera",
       "campath",
+      "ffpath",
       "notes",
     ] as const;
     const panelOf = (b: EdItem): (typeof PANELS)[number] =>
@@ -7260,9 +7345,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         ? b.shape.kind === "path"
           ? "campath"
           : "camera"
-        : b.layer === "notes"
-          ? "notes"
-          : b.object;
+        : b.layer === "fireflies"
+          ? "ffpath"
+          : b.layer === "notes"
+            ? "notes"
+            : b.object;
     const panels = PANELS.filter((k) => sel.some((b) => panelOf(b) === k));
     selectionSpansLayers = panels.length > 1;
     if (selectionSpansLayers) {
@@ -7283,6 +7370,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       const items = sel.filter((b) => panelOf(b) === k);
       if (k === "camera") buildCameraGroup(items);
       else if (k === "campath") buildCameraPathGroup(items);
+      else if (k === "ffpath") buildFireflyPathGroup(items);
       else if (k === "light") buildLightsGroup(items);
       else if (k === "anchor") buildAnchorsGroup(items);
       else if (k === "notes") buildNotesGroup(items);
@@ -7365,6 +7453,25 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     let nextAnchorId = newAnchorId();
     for (const it of items) {
       if (it.object === "anchor") it.anchorId = nextAnchorId++;
+    }
+    // ...and a copied firefly path is a new path, for the same reason: two
+    // paths under one id leave a swarm naming it following whichever loads
+    // first (the loader drops the second). A copied SWARM keeps naming the
+    // original's path - two swarms guiding along one path is a fine thing to
+    // author - unless that path was copied with it, when the copy follows the
+    // copy.
+    let nextPathId = newFireflyPathId();
+    const pathOf = new Map<number, number>();
+    for (const it of items) {
+      if (it.layer !== "fireflies") continue;
+      pathOf.set(it.pathId, nextPathId);
+      it.pathId = nextPathId++;
+    }
+    for (const it of items) {
+      const p = it.light.path;
+      if (it.object === "light" && p !== null && pathOf.has(p)) {
+        it.light = { ...it.light, path: pathOf.get(p)! };
+      }
     }
     return { items, idOf, frames };
   }
@@ -7579,6 +7686,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     return next;
   }
 
+  // The next free firefly path id, unique across the level's firefly paths -
+  // the scope a swarm names its path in.
+  function newFireflyPathId(): number {
+    let next = 1;
+    for (const i of model.items) if (i.layer === "fireflies" && i.pathId >= next) next = i.pathId + 1;
+    return next;
+  }
+
   // A fresh ANCHOR object on `host`, at a world point pushed onto that item's
   // surface. It joins the host's BODY, which is the whole point of the anchor
   // being an object: it rides the body from then on, with nothing to keep in
@@ -7606,6 +7721,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       light: { ...host.light },
       note: { ...host.note },
       anchorId: newAnchorId(),
+      pathId: 0,
     };
   }
 
@@ -7873,6 +7989,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       light: defaultLight(),
       note: defaultNote(),
       anchorId: 0,
+      pathId: 0,
       matchId: 0,
     };
     if (t === "light") {
@@ -7921,6 +8038,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // every instant, never a shape with no direction.
       return {
         ...base,
+        // A firefly path is named by an id swarms refer to it by (see
+        // `EdItem.pathId`), minted here so it has one from the first instant.
+        pathId: activeLayer === "fireflies" ? newFireflyPathId() : 0,
         shape: {
           kind: "path",
           verts: [new Vec2(-gridStep, 0), new Vec2(gridStep, 0)],

@@ -69,7 +69,7 @@
 // the ball. The motes of every swarm are one draw (`FireflyVisual`).
 
 import * as THREE from "three";
-import type { LightObjectData } from "../level/levelFormat";
+import type { FireflyPathData, LightObjectData } from "../level/levelFormat";
 import { Beam, buildBeam } from "./beam";
 import {
   FIREFLY_COLOR,
@@ -90,12 +90,20 @@ import { LAYER_SCENERY } from "../engine/body";
 import { circleOverlap } from "../engine/collision";
 import type { World } from "../engine/world";
 import {
+  buildPolylineIndex,
+  flattenPathNodes,
+  pathNodesOf,
   pointAtArcLength,
   projectOntoPolyline,
   projectOntoPolylineWindow,
   tangentAtArcLength,
   type PolylineIndex,
 } from "../lib/path";
+
+// Metres between the samples a curved firefly path is flattened to: fine
+// enough that the swarm's way forward turns smoothly round a bend (its
+// heading is rotated toward the tangent anyway, see `HEADING_TURN`).
+const FIREFLY_PATH_STEP = 0.05;
 
 // Metres either side of a swarm's own progress along a route that its next
 // projection of the ball is confined to, so on a switchback it stays on the
@@ -243,6 +251,11 @@ interface GlowSource extends PoolCandidate {
 interface SwarmSource extends PoolCandidate {
   holder: THREE.Object3D;
   params: SwarmParams;
+  // What the swarm reads about the level (see `LightRig.placeFor`): over its
+  // own firefly path when it names one, the camera paths otherwise. Resolved
+  // on first use and dropped by `setRoutes`, so a swarm added after the routes
+  // were set still finds its path.
+  place: SwarmPlace | null;
   seed: number;
   swarm: Swarm | null;
   count: number;
@@ -304,15 +317,18 @@ export class LightRig {
   private readonly swarms: SwarmSource[] = [];
   private fireflyPool: THREE.PointLight[] = [];
   private fireflyVisual: FireflyVisual | null = null;
-  // The level's authored routes as the swarms read them (see `setRoutes`).
+  // The level's camera paths as the swarms read them, and its firefly paths by
+  // id (see `setRoutes`).
   private place: SwarmPlace = OPEN_PLACE;
+  private fireflyRoutes = new Map<number, PolylineIndex>();
   // The world handed to the last `update`, for `solidAt`.
   private world: World | null = null;
   // The clock at the last `update`, so a glow steps by the time that passed.
   private lastSeconds: number | null = null;
   // The editor's preview: every waking light held at full without stepping its
   // state, and the pool spent nearest the view's centre. An author must be able
-  // to see what a mushroom lights before there is anyone to wake it.
+  // to see what a mushroom lights before there is anyone to wake it. Every
+  // firefly swarm stays at its home, the ball at the spawn noticed by none.
   previewAwake = false;
   private readonly scratch = new THREE.Vector3();
 
@@ -343,6 +359,7 @@ export class LightRig {
       this.swarms.push({
         holder,
         params: swarm,
+        place: null,
         // Authored order, so the same level hatches the same swarms.
         seed: this.swarms.length + 1,
         swarm: null,
@@ -621,10 +638,12 @@ export class LightRig {
   }
 
   // Each swarm's state, in authored order, for the probe and the cases:
-  // whether it is following the ball, and where its light hangs (sim frame,
-  // metres, y down). Nothing drives from it.
+  // whether it is following the ball or flying back along its firefly path,
+  // and where its light hangs (sim frame, metres, y down). Nothing drives from
+  // it.
   swarmStates(): {
     following: boolean;
+    returning: boolean;
     x: number;
     y: number;
     ahead: { x: number; y: number } | null;
@@ -633,6 +652,7 @@ export class LightRig {
       const a = s.swarm?.aheadDir() ?? null;
       return {
         following: s.swarm?.following ?? false,
+        returning: s.swarm?.returning ?? false,
         x: s.x,
         y: threeY(s.y),
         ahead: a ? { x: a.x, y: threeY(a.y) } : null,
@@ -646,10 +666,26 @@ export class LightRig {
   //
   // What the swarms read is built here once, in three's frame (y up): every
   // query flips y on the way in and on the way out.
-  setRoutes(routes: readonly PolylineIndex[]): void {
+  //
+  // `fireflyPaths` are the level's FIREFLY PATHS (see `FireflyPathData`): a
+  // swarm naming one reads that path alone, and it ENDS (see `SwarmPlace.ends`).
+  setRoutes(routes: readonly PolylineIndex[], fireflyPaths: readonly FireflyPathData[] = []): void {
+    this.place = this.placeOver(routes, false);
+    this.fireflyRoutes = new Map(
+      fireflyPaths.map((p) => {
+        const flat = flattenPathNodes(pathNodesOf(p.verts), FIREFLY_PATH_STEP);
+        return [p.id, buildPolylineIndex(flat.points, new Vec2(p.x, p.y), p.rot, flat.nodeAt)];
+      }),
+    );
+    for (const s of this.swarms) s.place = null;
+  }
+
+  private placeOver(routes: readonly PolylineIndex[], ends: boolean): SwarmPlace {
     const flip = (v: Vec2): { x: number; y: number } => ({ x: v.x, y: threeY(v.y) });
-    this.place = {
+    return {
       routes: routes.length,
+      ends,
+      length: (i) => routes[i]!.total,
       project: (i, x, y, near) => {
         const ix = routes[i]!;
         const p = new Vec2(x, threeY(y));
@@ -661,6 +697,20 @@ export class LightRig {
       tangent: (i, s) => flip(tangentAtArcLength(routes[i]!, s)),
       solid: (x, y, r) => this.solidAt(x, y, r),
     };
+  }
+
+  // What swarm `s` reads: its own firefly path when it names one that exists,
+  // the camera paths otherwise. A name with no path is said once and read as
+  // no name, which is what the format promises.
+  private placeFor(s: SwarmSource): SwarmPlace {
+    if (s.place) return s.place;
+    const id = s.params.path;
+    const own = id !== null ? this.fireflyRoutes.get(id) : undefined;
+    if (id !== null && !own) {
+      console.warn(`[fireflies] swarm ${s.seed} names firefly path ${id}, which the level does not have; it reads the camera paths.`);
+    }
+    s.place = own ? this.placeOver([own], true) : this.place;
+    return s.place;
   }
 
   // Whether a disc at (x, y) in three's frame overlaps the level's solid
@@ -681,17 +731,20 @@ export class LightRig {
   // Fly every swarm (hatching any not yet hatched at its home), refresh the
   // motes' draw, and hand the fireflies' pool to the swarms nearest the ball.
   private updateFireflies(seconds: number, dt: number, focus: GlowFocus): void {
-    // In three's frame, on the plane: the ball is at z 0.
-    const ball = focus.ball ? { x: focus.ball.x, y: threeY(focus.ball.y), z: 0 } : null;
+    // In three's frame, on the plane: the ball is at z 0. Nobody, in the
+    // editor's preview: the ball standing at its spawn there is a statement
+    // about the level's scale, not a player, and a swarm authored near the
+    // spawn followed it - off its home, which is the thing being placed.
+    const ball =
+      focus.ball && !this.previewAwake ? { x: focus.ball.x, y: threeY(focus.ball.y), z: 0 } : null;
     const view = { x: focus.view.x, y: threeY(focus.view.y) };
     this.world = focus.world ?? null;
-    const place = this.place;
     for (const s of this.swarms) {
       s.holder.updateWorldMatrix(true, false);
       const w = s.holder.getWorldPosition(this.scratch);
       const home = { x: w.x, y: w.y, z: w.z };
       if (!s.swarm) s.swarm = new Swarm(s.params, home, s.seed);
-      s.swarm.step(dt, home, ball, place);
+      s.swarm.step(dt, home, ball, this.placeFor(s));
       const c = s.swarm.lightAt();
       s.x = c.x;
       s.y = c.y;

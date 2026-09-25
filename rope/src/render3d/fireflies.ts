@@ -43,6 +43,12 @@
 // - Where the level authors no route (or the player is far from every one),
 //   it is the player's position through the same heavy smoothing.
 //
+// A swarm that names a FIREFLY PATH (`LightObjectData.path`) reads that path
+// alone instead of the camera's, and it ENDS: when the player reaches its end
+// the swarm stops following, flies back along it at `RETURN_SPEED` and waits
+// at its start, noticing the player again only once they have left the
+// notice ring and come back into it (see `Swarm.turnBack`).
+//
 // Each firefly hovers at its own place in the swarm's cloud near the spot,
 // trembling there (see THE HOVER), keeps a little apart from its neighbours,
 // and FLEES the ball - from where the ball is about to be, and only forward
@@ -166,6 +172,13 @@ const ROUTE_JUMP = 2;
 // between two does not flip the swarm between them.
 const ROUTE_REACH = 6;
 const ROUTE_SWITCH = 0.5;
+// A FIREFLY PATH's end (see the header): the player has reached it once their
+// projection onto the path is within this many metres of its far end.
+const PATH_END_SLACK = 0.1;
+// Metres per second the swarm's spot flies back along its firefly path to the
+// start once the player has reached the end: an unhurried flight home, well
+// under the cruise so the fireflies keep up with it as a knot.
+export const RETURN_SPEED = 2;
 // WHERE IT RESTS (see the header). The hover spot is kept this clear of rock,
 // and always AHEAD of the player: one in rock is looked for in the open at
 // ahead distances from where it was down to MIN_AHEAD, in steps of
@@ -354,6 +367,9 @@ const BLINK_SHARPNESS = 6;
 export interface SwarmParams {
   count: number;
   notice: number;
+  // The firefly path it guides the player along, by id, or null for the
+  // camera paths.
+  path: number | null;
 }
 
 // The swarm a light object authors, or null for an ordinary light: absent,
@@ -364,7 +380,11 @@ export function swarmParams(data: LightObjectData): SwarmParams | null {
   const count = Math.min(FIREFLY_MAX, Math.floor(data.fireflies ?? 0));
   if (!(count > 0)) return null;
   const wake = data.wake ?? 0;
-  return { count, notice: wake > 0 ? wake : DEFAULT_FIREFLY_NOTICE };
+  return {
+    count,
+    notice: wake > 0 ? wake : DEFAULT_FIREFLY_NOTICE,
+    path: data.path ?? null,
+  };
 }
 
 export function isSwarm(data: LightObjectData): boolean {
@@ -389,6 +409,12 @@ interface Vec2 {
 export interface SwarmPlace {
   // How many authored routes the level has.
   routes: number;
+  // Whether the one route is the swarm's own FIREFLY PATH, whose end is where
+  // it leaves the player and goes back to the start (see the header). Camera
+  // paths do not end: a swarm reading them follows for the rest of the run.
+  ends: boolean;
+  // Route `i`'s arc length.
+  length(i: number): number;
   // Route `i`'s nearest point to (x, y) as an arc length and a distance -
   // confined to a window around `near` when given, so on a switchback the
   // answer stays on the branch the ball is on.
@@ -406,6 +432,8 @@ export interface SwarmPlace {
 // no lead.
 export const OPEN_PLACE: SwarmPlace = {
   routes: 0,
+  ends: false,
+  length: () => 0,
   project: () => ({ s: 0, dist: Infinity }),
   point: () => ({ x: 0, y: 0 }),
   tangent: () => ({ x: 1, y: 0 }),
@@ -479,8 +507,21 @@ export class Swarm {
   // Each firefly's brightness this frame, 0..1.
   readonly brightness: Float32Array;
   // Whether the ball has been noticed. Once it has, the swarm keeps the ball
-  // company for the rest of the run: its purpose is that the player stays lit.
+  // company for the rest of the run - its purpose is that the player stays
+  // lit - or, on a firefly path, until the player reaches the path's end.
   following = false;
+  // Where along its firefly path the swarm is flying back to the start, or
+  // null when it is not (see `turnBack`).
+  private returnS: number | null = null;
+  // Where it waits once it has flown back: the path's start, at its home's
+  // depth. Null = its home, which is where every swarm waits at first.
+  private rest: Vec3 | null = null;
+  // Whether it may notice the ball. A swarm that has just left the player at
+  // its path's end is not, until the ball has been outside the notice ring of
+  // where it waits: a path that ends near its own start would otherwise find
+  // the player still there, follow them to the end they are standing at, and
+  // turn back again, over and over.
+  private armed = true;
   // 0 = the home knot, 1 = the hover spread.
   private spread = 0;
   // The swarm's own clock, the sum of the steps it was given, so a clock that
@@ -564,7 +605,12 @@ export class Swarm {
   step(dt: number, home: Vec3, ball: Vec3 | null, place: SwarmPlace = OPEN_PLACE): void {
     if (!(dt > 0)) return;
     dt = Math.min(dt, MAX_FIREFLY_STEP);
-    if (!this.following && ball && Math.hypot(ball.x - home.x, ball.y - home.y) <= this.params.notice) {
+    // Noticed from where it WAITS - its home, or its path's start once it has
+    // flown back there - and never while it is still flying back.
+    const waits = this.rest ?? home;
+    const near = ball !== null && Math.hypot(ball.x - waits.x, ball.y - waits.y) <= this.params.notice;
+    if (ball && !near) this.armed = true;
+    if (!this.following && this.returnS === null && this.armed && near) {
       this.following = true;
       // The spot is about to leave home for the ball: every firefly is in
       // transit until it has caught up with it.
@@ -573,9 +619,17 @@ export class Swarm {
     this.readBall(dt, ball);
     this.ballNow = ball;
     this.placeNow = place;
-    const want =
-      this.following && ball ? this.hoverSpot(dt, ball, place) : { held: home, free: home };
-    const goal = this.following && ball ? this.commitSpot(want.held, ball, place) : home;
+    let want = { held: home, free: home };
+    let goal = home;
+    if (this.following && ball) {
+      want = this.hoverSpot(dt, ball, place);
+      if (this.atPathEnd(place)) this.turnBack(place, home);
+      else goal = this.commitSpot(want.held, ball, place);
+    }
+    if (!this.following) {
+      goal = this.homeward(dt, place, home);
+      want = { held: goal, free: goal };
+    }
     const k = 1 - Math.exp(-dt / SPOT_SMOOTH);
     this.spot.x += (goal.x - this.spot.x) * k;
     this.spot.y += (goal.y - this.spot.y) * k;
@@ -809,6 +863,52 @@ export class Swarm {
     }
     this.ballS = s;
     return next;
+  }
+
+  // Whether the player, this frame, has reached the end of the swarm's own
+  // firefly path (see the header). Only a path that ends does, and only while
+  // it is the route in use - the player within ROUTE_REACH of it.
+  private atPathEnd(place: SwarmPlace): boolean {
+    return place.ends && this.route === 0 && this.ballS >= place.length(0) - PATH_END_SLACK;
+  }
+
+  // Leave the player at the path's end: the swarm stops following and flies
+  // back along the path, from its own progress, to the start (`homeward`),
+  // where it waits - no longer noticing the player until they have left the
+  // notice ring of that start (see `armed`). Everything it knew about the
+  // player's route is dropped, since the next time it follows it starts again
+  // from wherever they are.
+  private turnBack(place: SwarmPlace, home: Vec3): void {
+    this.following = false;
+    this.armed = false;
+    this.returnS = Math.min(this.progress, place.length(0));
+    const start = place.point(0, 0);
+    this.rest = { x: start.x, y: start.y, z: home.z };
+    this.route = null;
+    this.heading = null;
+    this.offset = null;
+    this.committed = null;
+    // The spot is about to leave: every firefly is in transit again.
+    for (const m of this.motes) m.leashed = false;
+  }
+
+  // Where a swarm that is not following hovers: along its firefly path at
+  // RETURN_SPEED toward the start while it flies back, at its home's depth,
+  // then where it waits.
+  private homeward(dt: number, place: SwarmPlace, home: Vec3): Vec3 {
+    if (this.returnS !== null && place.routes > 0) {
+      this.returnS = Math.max(0, this.returnS - RETURN_SPEED * dt);
+      const p = place.point(0, this.returnS);
+      if (this.returnS === 0) this.returnS = null;
+      return { x: p.x, y: p.y, z: home.z };
+    }
+    this.returnS = null;
+    return this.rest ?? home;
+  }
+
+  // Whether the swarm is flying back along its firefly path - for a probe.
+  get returning(): boolean {
+    return this.returnS !== null;
   }
 
 

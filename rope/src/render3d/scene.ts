@@ -26,7 +26,7 @@ import type { World } from "../engine/world";
 import type { SceneChain } from "../level/chains";
 import type { VineCord } from "../level/vines";
 import type { LevelVisualSource } from "../level/buildBodies";
-import type { EnvironmentData } from "../level/levelFormat";
+import type { EnvironmentData, FireflyPathData } from "../level/levelFormat";
 import type { Camera } from "../render/camera";
 import type { ViewTransform } from "../render/viewport";
 import { GpuTimer } from "../render/gpuTimer";
@@ -82,6 +82,9 @@ export interface Scene3DLevel {
   // never the camera's state. Absent = no path, which is every host that
   // predates them and every level that authors none.
   readonly cameraRules?: readonly CameraRule[];
+  // The level's firefly paths (metres): a swarm that names one guides the
+  // player along it instead of the camera paths. Absent = none.
+  readonly fireflyPaths?: readonly FireflyPathData[];
 }
 
 // Bodies the 3D scene deliberately does not extrude, because something else
@@ -264,9 +267,11 @@ export class Scene3D {
     // recorded and before `prewarm` compiles against the scene's lights (see
     // `LightRig.buildPool`). A level with no waking light builds none.
     this.lights.buildPool(this.scene);
-    // The authored routes the fireflies read (see `Scene3DLevel.cameraRules`).
+    // The authored routes the fireflies read (see `Scene3DLevel.cameraRules`
+    // and `Scene3DLevel.fireflyPaths`).
     this.lights.setRoutes(
       (level.cameraRules ?? []).flatMap((r) => (r.kind === "path" ? [r.index] : [])),
+      level.fireflyPaths ?? [],
     );
   }
 

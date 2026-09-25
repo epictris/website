@@ -246,7 +246,7 @@ A swarm of small curious creatures that hovers where it was authored until the b
 Its purpose is that the player is lit, by something the world gave them rather than a light they carry (a carried light was rejected in [the atmosphere plan](../plans/atmosphere.md): nothing in the world justifies it).
 A swarm is a point light object with `fireflies` set to its firefly count (`render3d/fireflies.ts` for the flight, `render3d/fireflyVisual.ts` for the draw, `LightRig` for the light).
 The light object's placement is the swarm's HOME; its `wake` is where it notices the ball (absent = `DEFAULT_FIREFLY_NOTICE`, 2.5 m, measured on the plane like a waking light's); its `color`, `intensity`, `range` and `flicker` are the swarm's light, defaulting to the firefly's own (`FIREFLY_COLOR` `#c8f060`, `FIREFLY_INTENSITY` 5 cd, `FIREFLY_RANGE` 5 m) rather than a lamp's.
-Once it follows, it follows for good; a reset builds a new scene, so every swarm starts at home again.
+Once it follows, it follows for good - unless it has a firefly path (below); a reset builds a new scene, so every swarm starts at home again.
 A swarm whose body leaves the world (a breakable rock) is not taken with it: only its home marker goes, and a following swarm keeps following.
 
 **It is render-side**, like the waking lights: the renderer reads the ball's drawn position and writes nothing back, and the flight is stepped by the clock the rig is handed, clamped to `MAX_FIREFLY_STEP` (0.1 s) and integrated in steps of at most 1/60 s so a 30 Hz frame flies the path a 60 Hz one does.
@@ -276,6 +276,16 @@ A cut that took the camera controller's committed progress (its ratcheted lead o
   Fireflies are not carried by the ideal spot's continuous motion at all (`CARRY` 0): the committed spot does not follow it, so a carried firefly drifted off its place and hopped back.
 
 The way forward is ROTATED toward the route's over 0.4 s, rounding the polyline's corners; a dead reversal (a switchback) turns over the top rather than never turning at all, which is what blending the vectors and renormalising did.
+
+**A firefly path** (`fireflyPaths`, named by the swarm's `path`; see [level-format](level-format.md) and [the editor](editor.md#firefly-paths-the-fireflies-layer)) replaces the camera paths for one swarm, so where the swarm leads can be authored apart from where the camera looks - asked for on 2026-09-25.
+Everything above reads it as it reads a camera path (the rig hands the swarm a `SwarmPlace` over that one path, `LightRig.placeFor`), with two differences, both in `Swarm.step`:
+
+- It ENDS. When the player's projection onto the path comes within `PATH_END_SLACK` (0.1 m) of its far end, the swarm stops following (`Swarm.turnBack`) and its spot flies back along the path at `RETURN_SPEED` (2 m/s), at the home's depth, the fireflies in transit behind it as a knot, to the path's START - not the light's placement - where it waits from then on.
+- It RE-ARMS. A swarm that has left the player notices nobody until the ball has been outside the notice ring of the start, then notices as before. Without it a path ending near its own start would find the player still there, follow them to the end they are standing at, and turn back again, every frame.
+
+A camera path does not end, and a swarm reading the camera paths follows for good, as before.
+A `path` naming no firefly path is warned about once and read as absent.
+The end, the return and the re-arm are structural and have a case (`fireflies: a swarm on a firefly path leaves the player at its end...`); `RETURN_SPEED` is feel, and unplayed.
 
 **The flight.**
 
@@ -340,7 +350,7 @@ The core is about 5 cm across on the larger sprites, bigger than a firefly, beca
 Additive, depth-tested so a rock in front hides a mote, not depth-written, and dimmed by the fog as attenuation like the beams.
 
 **Headless.** Like a waking light, a swarm steps only on DRAWN frames, at most 0.1 s each, so a filmstrip at `--every 6` or finer flies it at the game's rate and a single-frame grab shows it at home.
-`--probe` prints each swarm as `fireflies: ["home@x,y"]` or `"follow@x,y"` (its light, in metres), with the ball's position and the way forward each swarm is using beside it.
+`--probe` prints each swarm as `fireflies: ["home@x,y"]`, `"follow@x,y"` or `"return@x,y"` (its light, in metres), with the ball's position and the way forward each swarm is using beside it.
 Measured on the river (`--frames 6..420 --every 6 --3d --probe all` over a run that rolls right from the arrival): nothing fresh on any drawn frame, 26 programs throughout (one more than without a swarm), the swarm home until f114 and following from f120.
 
 The river (`levels/ball.json`) carries one swarm just ahead of where the arrival hands the ball over, authored in the editor.

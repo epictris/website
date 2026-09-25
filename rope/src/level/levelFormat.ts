@@ -1000,6 +1000,14 @@ export interface LightObjectData extends ObjectPlacement {
   // it. Its purpose is that the player is always lit, by something the world
   // gave them rather than a light they carry.
   fireflies?: number;
+  // Swarm only: the `id` of the FIREFLY PATH (`FireflyPathData`) the swarm
+  // guides the player along, instead of the level's camera paths. When the
+  // player reaches that path's end the swarm stops following, flies back along
+  // the path to its start and waits there, noticing the player again once they
+  // have left its `wake` ring and come back into it. Absent = the camera paths,
+  // followed for the rest of the run. An id naming no path is warned about and
+  // treated as absent. An id, not a length.
+  path?: number;
 }
 
 // A named point ON a body, and the only thing a chain end ties to.
@@ -2045,6 +2053,28 @@ export interface CameraPathData {
   priority?: number;
 }
 
+// One node of a firefly path: a camera path's node without the keys, since a
+// firefly path carries no framing to key.
+export type FireflyPathVert = Pick<CameraPathVert, "x" | "y" | "inX" | "inY" | "outX" | "outY">;
+
+// A FIREFLY PATH: the route a swarm guides the player along, authored apart
+// from the camera's (see `LightObjectData.path`, which names it by `id`, and
+// "Fireflies" in docs/lighting-and-surfaces.md). The same curve as a camera
+// path - local verts under (x, y, rot), cubic Bézier handles, >= 2 distinct
+// nodes, node order the way forward - and nothing else: it frames nothing.
+//
+// Its END is where the swarm leaves the player, and its START is where the
+// swarm goes back to wait. RENDER-ONLY, like everything about fireflies.
+export interface FireflyPathData {
+  // Unique across the level's firefly paths; what a swarm names it by, so
+  // reordering the list re-ties nothing.
+  id: number;
+  x: number;
+  y: number;
+  rot: number;
+  verts: FireflyPathVert[];
+}
+
 // Default glyph height of a text note, in scene pixels.
 export const DEFAULT_NOTE_TEXT_SIZE = 12;
 
@@ -2410,6 +2440,9 @@ export interface LevelData {
   // Camera paths (see CameraPathData). Absent = the rule set is regions-only,
   // which is every level authored before this field.
   cameraPaths?: CameraPathData[];
+  // The routes firefly swarms guide the player along (see FireflyPathData).
+  // Render-only. Absent = none, and every swarm reads the camera paths.
+  fireflyPaths?: FireflyPathData[];
   // Editor-only annotations (see NoteData). Never read by the sim or the game
   // renderer, so a level plays identically with or without them.
   notes?: NoteData[];
@@ -2555,6 +2588,7 @@ export interface RawLevelData {
   lights?: LegacyLightData[];
   cameraRegions?: CameraRegionData[];
   cameraPaths?: CameraPathData[];
+  fireflyPaths?: FireflyPathData[];
   notes?: NoteData[];
   checkpoints?: CheckpointData[];
   chains?: (ChainData | LegacyChainData)[];
@@ -3278,6 +3312,8 @@ export function scaleObject(o: SceneObjectData, factor: number): SceneObjectData
       ...(o.wakeFall !== undefined ? { wakeFall: o.wakeFall } : {}),
       // A count.
       ...(o.fireflies !== undefined ? { fireflies: o.fireflies } : {}),
+      // An id.
+      ...(o.path !== undefined ? { path: o.path } : {}),
     };
   }
   return {
@@ -3493,6 +3529,43 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
     ...(v.viscosity !== undefined ? { viscosity: v.viscosity } : {}),
     ...(v.color !== undefined ? { color: v.color } : {}),
   }));
+  // A firefly path is the camera path's curve alone: its placement, its nodes
+  // and their handles are lengths, `rot` and `id` are not. Degenerate ones are
+  // dropped here for the camera path's reason, as are repeated ids - the first
+  // keeps the id, since a swarm naming it cannot say which it meant.
+  const fireflyIds = new Set<number>();
+  const fireflyPaths = data.fireflyPaths
+    ?.filter((p, i) => {
+      const distinct = p.verts?.some((v) => v.x !== p.verts[0]!.x || v.y !== p.verts[0]!.y);
+      if ((p.verts?.length ?? 0) < 2 || !distinct) {
+        console.warn(
+          `[fireflies] fireflyPaths[${i}] (id ${p.id}) at (${p.x}, ${p.y}) has fewer than 2 distinct verts; dropped.`,
+        );
+        return false;
+      }
+      if (fireflyIds.has(p.id)) {
+        console.warn(`[fireflies] fireflyPaths[${i}] repeats id ${p.id}; dropped.`);
+        return false;
+      }
+      fireflyIds.add(p.id);
+      return true;
+    })
+    .map(
+      (p): FireflyPathData => ({
+        id: p.id,
+        x: p.x * factor,
+        y: p.y * factor,
+        rot: p.rot,
+        verts: p.verts.map((v) => ({
+          x: v.x * factor,
+          y: v.y * factor,
+          ...(v.inX !== undefined ? { inX: v.inX * factor } : {}),
+          ...(v.inY !== undefined ? { inY: v.inY * factor } : {}),
+          ...(v.outX !== undefined ? { outX: v.outX * factor } : {}),
+          ...(v.outY !== undefined ? { outY: v.outY * factor } : {}),
+        })),
+      }),
+    );
   return {
     // A title and two flags: nothing in the block is a length, so it crosses
     // the conversion whole - copied rather than shared, like the environment
@@ -3500,6 +3573,7 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
     ...(data.meta ? { meta: { ...data.meta } } : {}),
     ...(regions ? { cameraRegions: regions } : {}),
     ...(paths ? { cameraPaths: paths } : {}),
+    ...(fireflyPaths ? { fireflyPaths } : {}),
     // Nothing in the environment block is a length (see EnvironmentData), so it
     // is copied rather than scaled - but copied, not shared, since everything
     // else here hands the caller a fresh object.

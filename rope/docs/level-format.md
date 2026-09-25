@@ -108,6 +108,7 @@ Its fields, and what `scaleLevelData` does to each:
 | `wakeRise` | point only, seconds from dark to full; absent = `DEFAULT_WAKE_RISE` (0.6), 0 = instant | no |
 | `wakeFall` | point only, seconds from full to dark once the ball has left; absent = `DEFAULT_WAKE_FALL` (1.5), 0 = instant | no |
 | `fireflies` | point only: a firefly swarm of this many motes (capped at `FIREFLY_MAX`, 32); absent or 0 = an ordinary light | no |
+| `path` | swarm only: the `id` of the firefly path it guides the player along; absent = the camera paths | no (an id) |
 
 `beam` and `dust` are the spot's cone made visible - see [**Beams**](lighting-and-surfaces.md#beams).
 Both are absent (0) on every light authored before them, and the editor writes them only on a spot and only when nonzero, so a level that never sets one saves byte-identically.
@@ -120,6 +121,12 @@ The editor writes the four only on a point light with a nonzero `wake`, and each
 `fireflies` makes a point light a **firefly swarm**: the light's placement is where the motes hover, and once the ball comes within `wake` (absent = `DEFAULT_FIREFLY_NOTICE`, 2.5 m) they follow it for the rest of the run - see [**Fireflies**](lighting-and-surfaces.md#fireflies).
 A swarm is never a waking light: it reads `wake` as its notice distance and ignores the three times, which the editor does not write for one.
 Its absent `color`, `intensity` and `range` are the firefly's (`FIREFLY_COLOR`, `FIREFLY_INTENSITY`, `FIREFLY_RANGE`) rather than a lamp's, and the editor loads and saves a swarm against those, so a swarm that never sets them saves none of them; its `castShadow` is ignored.
+
+`path` ties a swarm to a **firefly path** (`fireflyPaths`, top-level beside `cameraPaths`): `{ id, x, y, rot, verts }`, the camera path's curve (local verts under the placement, optional Bézier `inX`/`inY`/`outX`/`outY` handles, node order the way forward) with an `id` and nothing else.
+The swarm reads that path alone instead of the camera paths, and when the player reaches its end it flies back along it to its start and waits there - see [**Fireflies**](lighting-and-surfaces.md#fireflies).
+The placement, the nodes and the handles are lengths and convert; `id` and `rot` do not.
+A path with fewer than two distinct nodes, or repeating an earlier path's `id`, is dropped at load with a warning, and a `path` naming no path is warned about by the renderer and read as absent.
+The editor writes `path` only on a swarm, and `fireflyPaths` only when there is one, so a level that uses neither saves byte-identically.
 
 The canonical, hand-editable schema now lives in `src/level/levelFormat.ts` (superset of
 the generated one — adds the `rigid` and `force` kinds, the `cameraRegions` and

@@ -67,7 +67,17 @@ On the canvas the notice distance is the same dashed ring and grip as a waking l
 **`+ Fireflies`** (beside `+ Glow`) places a swarm with one click: a static body holding only the swarm's light, `FIREFLY_COUNT` (12) motes, `wake` `FIREFLY_NOTICE` (2.5 m), `z` `FIREFLY_HOME_Z` (0.5 m) so the knot hangs in the air in front of the rock, and the firefly's own colour, intensity and reach left to the renderer's defaults.
 There is no collision: the ball flies through fireflies.
 
-In the editor's 3D view a swarm hovers at its home, since there is no ball to follow; **▶ Test** has them follow the ball as the game does.
+In the editor's 3D view a swarm hovers at its home: the ball drawn at the spawn is not a player, and the preview (`LightRig.previewAwake`) hands no ball to the swarms - before 2026-09-25 it did, and a swarm authored within notice of the spawn flew off its home to hover by it; **▶ Test** has them follow the ball as the game does.
+
+### Firefly paths: the `fireflies` layer
+
+A swarm can be given a route of its own instead of the camera paths: a **firefly path** (see [Fireflies](lighting-and-surfaces.md#fireflies)), authored on the `fireflies` layer (between `camera` and `notes`) with **`+ Path`**, which draws it exactly as a camera path is drawn and edited - click out the nodes start to end, Enter to finish, drag a node or its round grips, an edge midpoint to insert one, Alt+click to remove one, and `Reverse` / `Smooth` / `Sharpen` in its panel.
+It carries no framing and no keys, so its panel has only the placement, those three actions, and which swarms follow it.
+Each path is numbered (`firefly path N`, minted on draw, kept through a save, fresh on a duplicate), and a swarm's panel has a `path` field under `fireflies` that takes that number; blank (the `camera` placeholder) is the camera paths.
+A number naming no path is said under the field, since in play it silently reads as blank.
+Duplicating a swarm keeps its `path`; duplicating a swarm together with its path points the copy at the copied path.
+
+On the canvas a firefly path is a dashed line in the firefly's colour with the camera path's direction arrows, a ring at its START (where a swarm that has left the player waits) and a bar across its END (where it leaves them), labelled at the start with its number and how many swarms follow it; a swarm's label gains `path N`.
 
 ## Conveyor belts
 

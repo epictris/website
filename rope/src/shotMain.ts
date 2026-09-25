@@ -281,7 +281,8 @@ function drawFrame(frame: number): void {
       // them, each by at most MAX_GLOW_STEP (0.1 s = every 6 frames).
       const glow = scene3d.glowLevels();
       const glowField = glow.length > 0 ? { glow: glow.map((l) => Number(l.toFixed(3))) } : {};
-      // ...and each firefly swarm's: following or home, and where its light
+      // ...and each firefly swarm's: following, returning along its firefly
+      // path, or home, and where its light
       // hangs (metres, sim frame), stepped on the same drawn frames.
       // With the ball's own position and the way forward each swarm is using,
       // so "ahead" can be read off the numbers rather than the pictures.
@@ -291,7 +292,8 @@ function drawFrame(frame: number): void {
         swarms.length > 0
           ? {
               fireflies: swarms.map(
-                (s) => `${s.following ? "follow" : "home"}@${s.x.toFixed(2)},${s.y.toFixed(2)}`,
+                (s) =>
+                  `${s.following ? "follow" : s.returning ? "return" : "home"}@${s.x.toFixed(2)},${s.y.toFixed(2)}`,
               ),
               ...(ballAt ? { ball: `${ballAt.x.toFixed(2)},${ballAt.y.toFixed(2)}` } : {}),
               route: swarms.map((s) => (s.ahead ? `${s.ahead.x.toFixed(2)},${s.ahead.y.toFixed(2)}` : null)),

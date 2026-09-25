@@ -14,6 +14,7 @@ import {
   isKeyed,
   pathDataOf,
   CAMERA_REGION_COLOR,
+  FIREFLY_PATH_COLOR,
   chainEnds,
   chainPath,
   chainViaItems,
@@ -565,8 +566,8 @@ function outlineOf(body: EdItem): Outline {
     // A SCENE path is a curve with a width, and its outline is the bar the
     // build strokes it into (`lib/stroke.ts`) - the same geometry, so what is
     // drawn is what plays.
-    if (body.layer !== "camera") return { kind: "poly", verts: strokeOf(body.shape) };
-    // A CAMERA path is an open polyline and has no outline at all - no inside,
+    if (body.layer === "scene") return { kind: "poly", verts: strokeOf(body.shape) };
+    // A CAMERA or FIREFLY path is an open polyline and has no outline at all - no inside,
     // no area, nothing to fill. It is drawn by `drawCameraPath` instead, and
     // every caller here is about a closed shape, so answering its bounding box
     // would be a rectangle that is not the thing.
@@ -1083,7 +1084,10 @@ export function lightLabel(l: EdItem): string {
   // Read only on a spot (see `LightObjectData.beam`), so labelled only there.
   if (l.light.kind === "spot" && l.light.beam > 0) parts.push(`beam ${Number(l.light.beam.toFixed(2))}`);
   if (l.light.kind === "spot" && l.light.dust > 0) parts.push(`dust ${Number(l.light.dust.toFixed(2))}`);
-  if (lightSwarms(l)) parts.push(`${l.light.fireflies} fireflies`, `notice ${px(lightTrigger(l))}`);
+  if (lightSwarms(l)) {
+    parts.push(`${l.light.fireflies} fireflies`, `notice ${px(lightTrigger(l))}`);
+    if (l.light.path !== null) parts.push(`path ${l.light.path}`);
+  }
   else if (lightWakes(l)) parts.push(`wakes ${px(l.light.wake)}`);
   // A waking light casts none whatever it says (see `LightRig`).
   else if (l.light.castShadow) parts.push("shadows");
@@ -1171,6 +1175,11 @@ export function cameraRegionLabel(r: EdItem): string {
 // be readable without selecting the path first.
 const PATH_ARROW_SPACING = 1.5;
 const PATH_ARROW_LENGTH = 0.22;
+// Metres: the radius of the ring at a firefly path's start, and half the bar
+// across its end. A little over half an arrowhead, so the ends read as marks
+// on the line rather than as objects of their own (0.2 m was a 40 px ring at
+// the default zoom, bigger than the ball).
+const FIREFLY_PATH_MARK = 0.12;
 
 // The rule a path item builds, kept across frames while its saved form is
 // unchanged. The rule is what the game builds (`pathDataOf` is the one mapping),
@@ -1302,6 +1311,78 @@ function drawCameraPath(
     // would otherwise be solid arrowheads.
     carried = ((carried - len) % PATH_ARROW_SPACING + PATH_ARROW_SPACING) % PATH_ARROW_SPACING;
   }
+}
+
+// A FIREFLY PATH (see `FireflyPathData`): the flattened curve in the
+// firefly's colour, the arrowheads that say which way it runs, a ring at its
+// START - where a swarm waits once it has flown back - and a bar across its
+// END, where it leaves the player. No corridor: a firefly path frames
+// nothing, so there is no range to draw.
+function drawFireflyPath(
+  ctx: CanvasRenderingContext2D,
+  item: EdItem,
+  worldLine: number,
+  selected: boolean,
+): void {
+  if (item.shape.kind !== "path") return;
+  // The camera's rule is built only for its polyline: the same flattening the
+  // rig gives a firefly path, which is what the swarm rides.
+  const rule = editorPathRule(item);
+  if (!rule) return;
+  const world = rule.index.verts;
+  const stroke = FIREFLY_PATH_COLOR;
+  ctx.beginPath();
+  ctx.moveTo(world[0]!.x, world[0]!.y);
+  for (const w of world.slice(1)) ctx.lineTo(w.x, w.y);
+  if (selected) {
+    ctx.strokeStyle = SELECT;
+    ctx.lineWidth = worldLine * 5;
+    ctx.stroke();
+  }
+  ctx.strokeStyle = stroke;
+  ctx.lineWidth = worldLine * 2.5;
+  ctx.setLineDash([8 * PX, 4 * PX]);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  const start = world[0]!;
+  ctx.lineWidth = worldLine * 2;
+  ctx.beginPath();
+  ctx.arc(start.x, start.y, FIREFLY_PATH_MARK, 0, Math.PI * 2);
+  ctx.stroke();
+  const end = world[world.length - 1]!;
+  const before = world[world.length - 2]!;
+  const len = end.distanceTo(before);
+  if (len > 1e-9) {
+    const across = new Vec2(before.y - end.y, end.x - before.x).div(len).mul(FIREFLY_PATH_MARK);
+    ctx.beginPath();
+    ctx.moveTo(end.x + across.x, end.y + across.y);
+    ctx.lineTo(end.x - across.x, end.y - across.y);
+    ctx.stroke();
+  }
+
+  ctx.fillStyle = stroke;
+  let carried = PATH_ARROW_SPACING / 2;
+  for (let i = 0; i + 1 < world.length; i++) {
+    const a = world[i]!;
+    const b = world[i + 1]!;
+    const d0 = a.distanceTo(b);
+    if (d0 < 1e-9) continue;
+    const dir = b.sub(a).div(d0);
+    for (let d = carried; d < d0; d += PATH_ARROW_SPACING) {
+      drawPathArrow(ctx, a.add(dir.mul(d)), dir);
+    }
+    carried = ((carried - d0) % PATH_ARROW_SPACING + PATH_ARROW_SPACING) % PATH_ARROW_SPACING;
+  }
+}
+
+// What a firefly path's label says: its number, and which swarms follow it -
+// a path no swarm names is drawn for nothing, and that is worth seeing.
+export function fireflyPathLabel(item: EdItem, items: readonly EdItem[]): string {
+  const swarms = items.filter(
+    (i) => i.object === "light" && lightSwarms(i) && i.light.path === item.pathId,
+  ).length;
+  return `firefly path ${item.pathId} · ${swarms === 0 ? "no swarm" : `${swarms} swarm${swarms === 1 ? "" : "s"}`}`;
 }
 
 // A filled triangle centred at `at`, pointing along the unit vector `dir`.
@@ -2060,7 +2141,8 @@ export function drawEditor(
   // A camera PATH is excluded: this pass fills and strokes a closed outline, and
   // an open polyline has none - `outlineOf` can only answer its bounding box,
   // which is a rectangle that is not the thing. It is drawn by `drawCameraPath`
-  // in the camera pass instead. Camera REGIONS and notes stay in, because they
+  // in the camera pass instead, and a FIREFLY path by `drawFireflyPath` in the
+  // fireflies pass, for the same reason. Camera REGIONS and notes stay in, because they
   // are closed shapes and this is where their fill has always come from.
   //
   // A SCENE path stays in too, and it is the reason this is a layer test rather
@@ -2075,7 +2157,7 @@ export function drawEditor(
   const geometry = model.items.filter(
     (i) =>
       i.object === "collision" &&
-      !(i.shape.kind === "path" && i.layer === "camera") &&
+      !(i.shape.kind === "path" && i.layer !== "scene") &&
       !isCheckpointNote(i),
   );
   const ordered = visibleLayers.has("scene")
@@ -2529,6 +2611,12 @@ export function drawEditor(
     drawLockMarks(ctx, r, worldLine);
   }
 
+  // Firefly paths, above the geometry for the camera regions' reason.
+  const fireflyPaths = visibleLayers.has("fireflies")
+    ? model.items.filter((i) => i.layer === "fireflies")
+    : [];
+  for (const f of fireflyPaths) drawFireflyPath(ctx, f, worldLine, selectedIds.has(f.id));
+
   // Lights above the geometry they light, for the reason camera regions are:
   // they are a statement ABOUT the scene rather than part of it, and a lamp
   // hidden behind the wall it is mounted on could not be found to be clicked.
@@ -2687,6 +2775,22 @@ export function drawEditor(
     ctx.textBaseline = "bottom";
     ctx.fillStyle = CAMERA_REGION_COLOR;
     ctx.fillText(cameraRegionLabel(r), anchor.x + 2, anchor.y - 3);
+  }
+  // ...and the firefly paths', beside the start - the end a swarm waits at -
+  // on the side AWAY from where the path sets off, so the label never sits on
+  // the line it names.
+  for (const f of fireflyPaths) {
+    if (f.shape.kind !== "path" || f.shape.verts.length < 2) continue;
+    const start = worldToScreen(cam, toWorld(f, f.shape.verts[0]!));
+    const next = worldToScreen(cam, toWorld(f, f.shape.verts[1]!));
+    const clear = FIREFLY_PATH_MARK * cam.zoom * PIXELS_PER_METER + 6;
+    const leftward = next.x >= start.x;
+    ctx.font = "11px monospace";
+    ctx.textBaseline = "middle";
+    ctx.textAlign = leftward ? "right" : "left";
+    ctx.fillStyle = FIREFLY_PATH_COLOR;
+    ctx.fillText(fireflyPathLabel(f, model.items), start.x + (leftward ? -clear : clear), start.y);
+    ctx.textAlign = "left";
   }
   // ...and the lights', for the same reason: what a lamp does is numbers, and a
   // world-space label would shrink to nothing as the level is zoomed out. Placed

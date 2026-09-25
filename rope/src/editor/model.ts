@@ -73,6 +73,7 @@ import {
   movePeakFactor,
   type MoveMode,
   type CameraPathData,
+  type FireflyPathData,
   type CameraRegionData,
   type ChainData,
   type VineData,
@@ -144,8 +145,13 @@ import { SOLID_SURFACE } from "../render3d/assets";
 // different layers, so one could be hidden or locked without the other, and
 // welding them into a body meant a cross-layer selection. What distinguishes
 // them is `EdItem.object`, which is what the FORMAT distinguishes them by.
-export type EdLayer = "scene" | "camera" | "notes";
-export const ED_LAYERS: EdLayer[] = ["scene", "camera", "notes"];
+//
+// `fireflies` holds the FIREFLY PATHS (`FireflyPathData`): routes a swarm
+// guides the player along, drawn with the camera path's curve tools but
+// belonging to no camera. Editor furniture like the camera layer - nothing on
+// it is a body or drawn in play.
+export type EdLayer = "scene" | "camera" | "fireflies" | "notes";
+export const ED_LAYERS: EdLayer[] = ["scene", "camera", "fireflies", "notes"];
 
 // What KIND of scene object an item is - the SAME set the format has, and one
 // editor item per authored object.
@@ -391,6 +397,9 @@ export interface EdLight {
   // `LightObjectData.fireflies`), 0 = an ordinary light. A swarm reads `wake`
   // as where it notices the ball and never reads the three times.
   fireflies: number;
+  // Swarm only: the id of the firefly path it guides the player along (see
+  // `LightObjectData.path`), null = the camera paths.
+  path: number | null;
 }
 
 // Notes-layer properties (see NoteData, CheckpointData). A note is always a
@@ -612,6 +621,10 @@ export interface EdItem {
   // that goes through the editor untouched comes back with the same ids it went
   // in with - the id is content, not a handle. 0 on everything else.
   anchorId: number;
+  // Firefly paths only (the fireflies layer): the id a swarm names this path
+  // by (`FireflyPathData.id`, `LightObjectData.path`), preserved through a
+  // load and a save for the anchor's reason. 0 on everything else.
+  pathId: number;
   // Geometry objects only: the item id of the COLLISION object in this body
   // whose outline this one mirrors, 0 for none. While set, the editor keeps the
   // two outlines - `pos`, `rot` and `shape` - equal in BOTH directions
@@ -1013,6 +1026,7 @@ export const defaultLight = (): EdLight => ({
   wakeRise: null,
   wakeFall: null,
   fireflies: 0,
+  path: null,
 });
 
 export const defaultNote = (): EdNote => ({
@@ -1162,6 +1176,9 @@ export const CAMERA_REGION_COLOR = "#c792ea";
 export const CAMERA_REGION_OPACITY = 0.12;
 export const NOTE_COLOR = "#98c379";
 export const NOTE_OPACITY = 0.08;
+// A firefly path is drawn in the firefly's own colour, so it reads as the
+// swarms' and not as the camera's.
+export const FIREFLY_PATH_COLOR = FIREFLY_COLOR;
 
 // Appearance a freshly drawn item starts with, per layer. Geometry is authored
 // from here on; the other two are fixed furniture.
@@ -1186,6 +1203,7 @@ export function newItemStyle(
   object: EdObject,
 ): { color: string; opacity: number } {
   if (layer === "camera") return { color: CAMERA_REGION_COLOR, opacity: CAMERA_REGION_OPACITY };
+  if (layer === "fireflies") return { color: FIREFLY_PATH_COLOR, opacity: CAMERA_REGION_OPACITY };
   if (layer === "notes") return { color: NOTE_COLOR, opacity: NOTE_OPACITY };
   if (object === "light") return { color: DEFAULT_LIGHT_COLOR, opacity: LIGHT_FILL_OPACITY };
   return { color: DEFAULT_BODY_COLOR, opacity: DEFAULT_BODY_OPACITY };
@@ -1488,6 +1506,7 @@ function fromLevelData(data: LevelData): EdModel {
       light: defaultLight(),
       note: defaultNote(),
       anchorId: 0,
+      pathId: 0,
       matchId: 0,
     };
     // Geometry objects whose file says they mirror a collision sibling; the
@@ -1564,6 +1583,7 @@ function fromLevelData(data: LevelData): EdModel {
           thickness: DEFAULT_THICKNESS,
           visual: defaultVisual(),
           anchorId: o.id,
+          pathId: 0,
         });
         continue;
       }
@@ -1666,6 +1686,7 @@ function fromLevelData(data: LevelData): EdModel {
     light: defaultLight(),
     note: defaultNote(),
     anchorId: 0,
+    pathId: 0,
     matchId: 0,
   }));
 
@@ -1673,7 +1694,7 @@ function fromLevelData(data: LevelData): EdModel {
   // kind. One item type per layer rather than a union is what keeps a path
   // dragged, rotated, rubber-banded, duplicated and undone by exactly the code
   // a region already goes through.
-  const camPaths: EdItem[] = (data.cameraPaths ?? []).map((c) => ({
+  const camPathItem = (c: CameraPathData): EdItem => ({
     id: newBodyId(),
     layer: "camera",
     object: "collision",
@@ -1767,8 +1788,22 @@ function fromLevelData(data: LevelData): EdModel {
     light: defaultLight(),
     note: defaultNote(),
     anchorId: 0,
+    pathId: 0,
     matchId: 0,
-  }));
+  });
+  const camPaths = (data.cameraPaths ?? []).map(camPathItem);
+  // Firefly paths: the camera path's item moved onto the fireflies layer, with
+  // no keys and no framing - the curve is the same, and so is every gesture
+  // that edits it - carrying the id swarms name it by.
+  const fireflyPaths = (data.fireflyPaths ?? []).map(
+    (p): EdItem => ({
+      ...camPathItem(p),
+      layer: "fireflies",
+      ...newItemStyle("fireflies", "collision"),
+      cam: defaultCamera(),
+      pathId: p.id,
+    }),
+  );
 // One light OBJECT as the editor item that edits it. The lights layer is a view
 // over light objects wherever they live rather than a list of its own: a light
 // with no fitting is a body containing only this, and a lamp's light is this
@@ -1851,9 +1886,11 @@ function lightItem(
       wakeRise: l.wakeRise ?? null,
       wakeFall: l.wakeFall ?? null,
       fireflies: l.fireflies ?? 0,
+      path: l.path ?? null,
     },
     note: defaultNote(),
     anchorId: 0,
+    pathId: 0,
     matchId: 0,
   };
 }
@@ -1914,6 +1951,7 @@ function lightItem(
     cam: defaultCamera(),
     light: defaultLight(),
     anchorId: 0,
+    pathId: 0,
     matchId: 0,
     note,
   });
@@ -1997,7 +2035,7 @@ function lightItem(
       roll: data.player.roll ?? 0,
       arrival: data.player.arrival ?? "",
     },
-    items: [...bodies, ...regions, ...camPaths, ...notes],
+    items: [...bodies, ...regions, ...camPaths, ...fireflyPaths, ...notes],
     chains,
     vines,
     // Only the bodies whose file frame is somewhere no object sits. Everything
@@ -2110,6 +2148,28 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
   const cameraPaths: CameraPathData[] = model.items
     .filter((i) => i.layer === "camera" && i.shape.kind === "path")
     .map(pathDataOf);
+
+  // A firefly path is the camera path's curve with its id and nothing else: an
+  // item on the fireflies layer never carries keys, and none are written.
+  const fireflyPaths: FireflyPathData[] = model.items
+    .filter((i) => i.layer === "fireflies" && i.shape.kind === "path")
+    .map((i) => {
+      const { x, y, rot, verts } = pathDataOf(i);
+      return {
+        id: i.pathId,
+        x,
+        y,
+        rot,
+        verts: verts.map((v) => ({
+          x: v.x,
+          y: v.y,
+          ...(v.inX !== undefined ? { inX: v.inX } : {}),
+          ...(v.inY !== undefined ? { inY: v.inY } : {}),
+          ...(v.outX !== undefined ? { outX: v.outX } : {}),
+          ...(v.outY !== undefined ? { outY: v.outY } : {}),
+        })),
+      };
+    });
 
   const cameraRegions: CameraRegionData[] = model.items
     .filter((i) => i.layer === "camera" && i.shape.kind !== "path")
@@ -2302,6 +2362,10 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
             : {}),
           // A swarm is point-only, like the wake it notices the ball by.
           ...(!spot && i.light.fireflies > 0 ? { fireflies: i.light.fireflies } : {}),
+          // ...and so is the path it guides the player along.
+          ...(!spot && i.light.fireflies > 0 && i.light.path !== null
+            ? { path: i.light.path }
+            : {}),
         });
         continue;
       }
@@ -2588,6 +2652,7 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
     // authored before camera regions (or notes) byte-identical.
     ...(cameraRegions.length ? { cameraRegions } : {}),
     ...(cameraPaths.length ? { cameraPaths } : {}),
+    ...(fireflyPaths.length ? { fireflyPaths } : {}),
     // Written back verbatim. It is not derived from anything in the item list,
     // so there is nothing to rebuild - and leaving it out is not "the editor
     // does not support it", it is the editor DELETING a level's lighting the
@@ -3466,6 +3531,7 @@ export function bodyLabel(members: readonly EdItem[]): string {
   if (!first) return "empty";
   if (first.object === "light") return "light";
   if (first.layer === "camera") return "camera";
+  if (first.layer === "fireflies") return "fireflies";
   if (first.layer === "notes") return first.note.kind === "checkpoint" ? "checkpoint" : "note";
   return "decor";
 }
@@ -3489,6 +3555,8 @@ export function objectLabel(item: EdItem, metresToPx: number): string {
     return item.note.kind === "arrow" ? "arrow" : "text";
   }
   if (item.layer === "camera") return item.shape.kind === "path" ? "path" : "region";
+  // A firefly path is named by the number swarms name it by.
+  if (item.layer === "fireflies") return `firefly path ${item.pathId}`;
   const form =
     item.shape.kind === "rect"
       ? `${n(item.shape.w)}×${n(item.shape.h)}`
@@ -3531,7 +3599,7 @@ export function shapeArea(item: EdItem): number {
   // the body's mass are the one answer. A camera path is not a piece of a body
   // and nothing weighs it, which its own zero area says.
   if (item.shape.kind === "path") {
-    if (item.layer === "camera") return 0;
+    if (item.layer !== "scene") return 0;
     return strokeCurve(pathNodes(item), item.shape.width).pieces.reduce(
       (a, piece) => a + Math.abs(polySignedArea2(piece)) / 2,
       0,
@@ -4498,6 +4566,7 @@ export function emptyModel(): EdModel {
         light: defaultLight(),
         note: defaultNote(),
         anchorId: 0,
+        pathId: 0,
         matchId: 0,
       },
     ],

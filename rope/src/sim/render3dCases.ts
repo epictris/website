@@ -4755,6 +4755,98 @@ function glowCases(): CaseResult[] {
     });
   }
 
+  // A swarm on a FIREFLY PATH, through the rig that looks the path up by id:
+  // it follows the ball along the path, leaves it at the path's end, flies back
+  // to the start (not its authored home) and waits there - not noticing the
+  // ball, still standing at the end within reach of nothing, until it has
+  // come back. A swarm on the camera paths beside it follows for good.
+  {
+    const rig = new LightRig();
+    const scene = new THREE.Scene();
+    const body = new THREE.Group();
+    scene.add(body);
+    rig.add(body, { type: "light", fireflies: 6, path: 4 }, { x: -1, y: -0.5, rot: 0, z: 0.5 });
+    rig.add(body, { type: "light", fireflies: 6 }, { x: -1, y: -0.5, rot: 0, z: 0.5 });
+    rig.buildPool(scene);
+    // Sim frame, metres: 10 m to the right along y = 0, starting at x = 0.
+    rig.setRoutes([], [{ id: 4, x: 0, y: 0, rot: 0, verts: [{ x: 0, y: 0 }, { x: 10, y: 0 }] }]);
+    let t = 0;
+    const ball = { x: -1.5, y: 0 };
+    const run = (seconds: number, vx: number) => {
+      for (let i = 0; i < seconds * 60; i++) {
+        ball.x += vx / 60;
+        t += 1 / 60;
+        rig.update(t, 1080, { ball, view: ball });
+      }
+      return rig.swarmStates();
+    };
+    const state = (s: { following: boolean; returning: boolean }) =>
+      s.following ? "follow" : s.returning ? "return" : "home";
+    const rolling = run(3, 3); // x 7.5: on the way
+    const atEnd = run(1.5, 3); // x 12: past the end
+    const back = run(8, 0); // 10 m at RETURN_SPEED, and time to settle
+    const [pathed, camera] = back;
+    const waitsAtStart = Math.hypot(pathed!.x - 0, pathed!.y - 0) < 0.6;
+    const returned = run(4.5, -3); // x -1.5: back past the start
+    const ok =
+      state(rolling[0]!) === "follow" &&
+      state(atEnd[0]!) === "return" &&
+      state(pathed!) === "home" &&
+      waitsAtStart &&
+      state(camera!) === "follow" &&
+      state(returned[0]!) === "follow";
+    rig.dispose();
+    out.push({
+      name: "fireflies: a swarm on a firefly path leaves the player at its end, flies back to its start, and waits there until they come back",
+      pass: ok,
+      detail: `rolling ${state(rolling[0]!)}; past the end ${state(atEnd[0]!)}; 8 s later ${state(pathed!)} at ${pathed!.x.toFixed(2)},${pathed!.y.toFixed(2)} (start 0,0; home -1,-0.5); camera-path swarm ${state(camera!)}; back at the start ${state(returned[0]!)}`,
+    });
+  }
+
+  // The editor: a firefly path round-trips with its id and curve (and no
+  // keys), a swarm's `path` round-trips, and a light that is not a swarm never
+  // writes one.
+  {
+    const raw: RawLevelData = {
+      player: { x: 0, y: 0, radius: 20 },
+      bodies: [
+        {
+          kind: "static",
+          x: 100,
+          y: -300,
+          rot: 0,
+          objects: [
+            { type: "light", fireflies: 9, path: 3 },
+            { type: "light", path: 3 },
+          ],
+        },
+      ],
+      fireflyPaths: [{ id: 3, x: 50, y: 60, rot: 0.5, verts: [{ x: 0, y: 0 }, { x: 400, y: 0, inX: -100, inY: 40 }] }],
+    };
+    const disk = modelToDisk(modelFromDisk(raw));
+    const [swarm, lamp] = disk.bodies[0]!.objects.filter(isLightObject);
+    const p = disk.fireflyPaths?.[0];
+    const ok =
+      disk.fireflyPaths?.length === 1 &&
+      p!.id === 3 &&
+      near(p!.x, 50) &&
+      near(p!.y, 60) &&
+      near(p!.rot, 0.5) &&
+      p!.verts.length === 2 &&
+      near(p!.verts[1]!.x, 400) &&
+      near(p!.verts[1]!.inX!, -100) &&
+      near(p!.verts[1]!.inY!, 40) &&
+      Object.keys(p!.verts[1]!).length === 4 &&
+      disk.cameraPaths === undefined &&
+      swarm!.path === 3 &&
+      lamp!.path === undefined;
+    out.push({
+      name: "editor: firefly paths and a swarm's `path` survive a save; only a swarm writes `path`",
+      pass: ok,
+      detail: `paths ${JSON.stringify(disk.fireflyPaths)}; camera paths ${JSON.stringify(disk.cameraPaths)}; swarm path ${swarm!.path}; lamp path ${lamp!.path}`,
+    });
+  }
+
   // The editor: `fireflies` round-trips on a point light, a swarm's colour,
   // intensity and reach are omitted at the FIREFLY's defaults (not a lamp's),
   // a swarm never writes the wake times, a spot never writes it at all; and

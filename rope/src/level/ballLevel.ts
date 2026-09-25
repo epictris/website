@@ -24,6 +24,7 @@ import { NO_BUTTON, type FrameInput } from "../input/frameInput";
 import {
   scaleLevelData,
   type CameraPathData,
+  type FireflyPathData,
   type CameraRegionData,
   type LevelData,
   type RawLevelData,
@@ -93,6 +94,9 @@ export class BallLevel {
   // The two lists as the one rule set the controller governs with, built once
   // here because a path's polyline index is derived and nothing mutates it.
   readonly cameraRules: CameraRule[];
+  // The routes firefly swarms guide the player along, in metres (see
+  // FireflyPathData). Render-only.
+  readonly fireflyPaths: FireflyPathData[];
   // The authored shapes that are drawn and never simulated (see Level.decor).
   readonly decor: SceneDecor[];
   // Chains strung between authored bodies (see Level.sceneChains).
@@ -441,7 +445,8 @@ export class BallLevel {
     this.cameraRegions = data.cameraRegions ?? [];
     this.cameraPaths = data.cameraPaths ?? [];
     this.cameraRules = buildCameraRules(this.cameraRegions, this.cameraPaths);
-    this.ball = new BallPlayer(data.player.radius * BallLevel.BALL_RADIUS_SCALE);
+    this.fireflyPaths = data.fireflyPaths ?? [];
+    this.ball =new BallPlayer(data.player.radius * BallLevel.BALL_RADIUS_SCALE);
     this.ball.globalPosition = new Vec2(data.player.x, data.player.y);
     // The two openings a spawn may author, and only one of them can happen: the
     // arrival is the recorded one and it decides where the ball starts, so it is
