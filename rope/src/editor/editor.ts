@@ -5673,6 +5673,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     lookup: () => itemLookup(model.items),
     job: (id: number) => jobs.job(id),
     facts: (key: string) => jobs.facts(key),
+    missing: (key: string) => jobs.missing(key),
     generate: (it: EdItem) => void generate(it),
     editLoop: (it: EdItem) => editLoop(it),
     surfaceSummary: (it: EdItem) => patchSummary(it),

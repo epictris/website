@@ -162,6 +162,9 @@ export function generatorStatus(
   lookup: ItemLookup,
   job: Job | undefined,
   facts: (key: string) => { bytes: number; triangles: number } | null,
+  // Whether the service has no file for a key (a level naming a mesh that was
+  // never generated on this machine, or whose directory was deleted).
+  missing: (key: string) => boolean = () => false,
 ): GeneratorStatus {
   const g = item.visual.generator;
   if (!g) return { text: "", tone: "ok" };
@@ -193,6 +196,7 @@ export function generatorStatus(
   if (!item.visual.mesh) return { text: "stale: never generated", tone: "warn" };
   if (isStale(item, lookup)) return { text: "stale", tone: "warn" };
   const f = facts(item.visual.mesh);
+  if (!f && missing(item.visual.mesh)) return { text: "stale: file missing", tone: "warn" };
   return { text: f ? `${f.triangles.toLocaleString("en")} triangles · ${size(f.bytes)}` : "generated", tone: "ok" };
 }
 
@@ -231,6 +235,7 @@ export interface PanelHost {
   lookup(): ItemLookup;
   job(itemId: number): Job | undefined;
   facts(key: string): { bytes: number; triangles: number } | null;
+  missing(key: string): boolean;
   generate(item: EdItem): void;
   // Mushrooms: reopen the loop for dragging, and what the loop covers now.
   editLoop(item: EdItem): void;
@@ -388,7 +393,8 @@ export function buildGeneratorGroup(host: PanelHost, item: EdItem): HTMLElement 
   // The status line, refreshed with the fields (the job client refreshes them
   // at every poll, so "generating N s" counts).
   const status = el("div", "ed-gen-status");
-  const statusNow = () => generatorStatus(item, host.lookup(), host.job(item.id), (k) => host.facts(k));
+  const statusNow = () =>
+    generatorStatus(item, host.lookup(), host.job(item.id), (k) => host.facts(k), (k) => host.missing(k));
   host.readouts.push({
     el: status,
     get: () => {
@@ -485,8 +491,14 @@ export function buildGeneratorGroup(host: PanelHost, item: EdItem): HTMLElement 
         else openAdvanced.delete(id);
       });
       const summary = document.createElement("summary");
-      const set = advanced.filter((p) => p.key in g.params).length;
-      summary.textContent = `Advanced (${advanced.length}${set ? `, ${set} set` : ""})`;
+      // Refreshed with the fields, so a value set or cleared inside is counted
+      // at once rather than at the next rebuild.
+      const count = () => {
+        const set = advanced.filter((p) => p.key in item.visual.generator!.params).length;
+        return `Advanced (${advanced.length}${set ? `, ${set} set` : ""})`;
+      };
+      host.readouts.push({ el: summary, get: count });
+      summary.textContent = count();
       details.appendChild(summary);
       const body = el("div", "ed-group");
       for (const spec of advanced) addParamField(host, body, item, schema, spec);

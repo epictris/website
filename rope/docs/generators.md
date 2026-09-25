@@ -148,6 +148,10 @@ This is what it holds up of the contract.
 - **`object`** is `<page>/<item id>`, the page part random per editor tab, so a newer request supersedes the older one for the same object in the same tab and never another tab's.
 - **Polling** starts at 250 ms and backs off to once a second (`POLL_FIRST_MS`, `POLL_MAX_MS` in `editor/visuals/jobs.ts`).
   A 404 mid-job means the dev server restarted (a job lives as long as the server), and the panel says so.
+- **The panel asks for a current mesh's facts** (`GeneratorJobs.facts`, once per key per page) with `GET /api/generate/<key>`.
+  A `done` answer gives the triangles and bytes the status line shows; a 404 means the service has neither a job nor a file for the key (a level generated on another machine, or a deleted `public/generated/` directory), and the panel reads `stale: file missing` until Generate makes it again.
+- **Job state lives in the page.**
+  A reload forgets which object waits on which job; the service carries on and caches the result, and the next Generate of the same content joins the running job or finds the mesh at once.
 - **A finished mesh goes on its object once**, as one undo step, and only if the object is still there and its `wantedKey` is still that key.
   A result for content the object has since left stays in the cache, where the next Generate of that content finds it at once.
   A result that lands during a drag waits for the drag to end.

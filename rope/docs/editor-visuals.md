@@ -1,8 +1,8 @@
 # The Visuals workspace
 
-Status: in progress (plans/visuals-workspace.md).
-Phases 1, 4 and 5 are in: the free view, the guides, the workspace in the editor (switching, navigation, picking through the guides, editing in the scene, the tools that work on the plane, and a prop placed or dropped on a surface), and the two generators' tools and panels (**+ Rock**, **+ Mushrooms**, see [Rocks and mushrooms](#rocks-and-mushrooms)).
-Phase 6 (the docs pass and the suite) is not yet done.
+Status: implemented on the `visuals-workspace` branch, 2026-09-25 ([plans/visuals-workspace.md](../plans/visuals-workspace.md), whose Delivery section lists what shipped, what deviated and what is unverified).
+It holds the free view, the guides, the workspace in the editor (switching, navigation, picking through the guides, editing in the scene, the tools that work on the plane, and a prop placed or dropped on a surface), and the two generators' tools and panels (**+ Rock**, **+ Mushrooms**, see [Rocks and mushrooms](#rocks-and-mushrooms)).
+The service behind the generators, their schemas and their Python are [generators](generators.md).
 
 The Visuals workspace is a second way of driving the one editor: a free 3D camera navigated Blender's way, with the level's editor furniture drawn into the scene instead of onto the 2D overlay.
 It is for dressing a level - putting props on ledges, lights where they read, judging depth from the side it will be seen from - where the Level workspace is for authoring the level against the gameplay plane.
@@ -137,6 +137,23 @@ Both are geometry objects carrying a `generator` block ([level format](level-for
 Their `mesh` is the key of the generated file, content-addressed, so the editor can tell a mesh that matches its block from a stale one by comparing keys, and generating the same thing twice costs nothing.
 The editor never generates on its own: an edit makes the object **stale**, and **Generate** (or Ctrl+Enter) asks for the new mesh.
 
+### Setup
+
+The generators run on the dev server (`bun run dev`), never in the browser, and need two tools on the machine:
+
+```sh
+cd rope
+bun run generators:setup   # rope/.venv with the rock generator's Python packages
+bun run generators:check   # the service cases, the parameter tests, and one real generation of each kind
+```
+
+Blender 5.2 must be on `PATH` or named by `BLENDER_PATH`; the mushroom patch needs Blender alone, the rock Blender and the venv's packages ([generators](generators.md#setup)).
+On entering the workspace the editor asks the service what it has (`GET /api/generators`), and the toolbar says what is missing, if anything: `Blender not found (rocks, mushrooms)`, `Python not found (rocks)`, or `rock packages missing: bun run generators:setup`.
+A request made while a tool is missing fails with the service's 503 message, and the toolbar is asked again.
+
+On the owner's machine (32 threads, Blender 5.2.0) a rock takes about 7 s at the defaults and a patch about 2 s, one at a time; the full table is in [generators](generators.md#timings).
+Generated files are dev-only for now (`public/generated/`, gitignored): a level holding a generated object does not deploy until they are published to the release store (a follow-up).
+
 ### + Rock
 
 A click on a collision outline (a scene polygon or rect, by its guide line or anywhere inside it on the plane) or on the geometry object matched to one adds, as one undo step, a mesh geometry object matched to that outline (`matchCollision`) with a boulder block of defaults and no mesh, selects it, and asks for its generation.
@@ -156,22 +173,33 @@ A patch with no mesh draws nothing at all: its rect is only the extent of the su
 
 **The surface** (`editor/visuals/surfacePatch.ts`, ported from the fork) is judged on the loop's plane of best fit: a face is taken where its middle lands inside the loop, it faces the loop's side of the plane, it is no steeper than `maxSlope`, and it lies within a band of the plane (the loop's own deviation plus a third of its size), so the back of a rock and a wall behind it are left out.
 Faces are cut down to a step of a 48th of the loop's size (1 to 10 cm) so a big facet is cut at the painted edge; a soup over `maxTriangles` is cut more coarsely, and one over it with nothing left to cut is refused rather than searched for ever (the fork's loop could not end there).
-The surface is collected again from the host's CURRENT meshes every time the patch is generated, after the frame loop has rebuilt and placed the scene (a body built this instant is not placed until its first frame), so a regenerated rock is followed by a regenerated patch on demand.
+The surface is collected again from the host's CURRENT meshes every time the patch is generated, after the frame loop has rebuilt and placed the scene (it waits two animation frames: a body built this instant is not placed until its first frame), so a regenerated rock is followed by a regenerated patch on demand.
 It is sent in the patch's own frame (`patchMatrix`, the frame `mountVisual` draws the mesh in), so the mushrooms land where the loop was painted however the patch has been placed since.
 The stored loop has no normals (the file holds points); which side of the loop's plane is out is taken from the host's middle.
 
 **Edit loop** on the Mushrooms group shows the patch's loop closed on the host, the covered faces shaded, and its points as handles: a drag moves a point to where the pointer meets the host's surface (off the host it stays put), one undo step per drag, and the shading follows on release.
+It moves points only: it cannot add or remove one, so a loop that needs another shape is painted again with **+ Mushrooms** (and the old patch deleted).
 Enter, Esc or a press anywhere but a point ends it (the press then goes on as a press).
 
 ### The Rock and Mushrooms groups
 
 A lone generated object's panel ends with its generator's group (`editor/visuals/generatorPanel.ts`, `buildGeneratorGroup`), built from the schema rather than written out:
 
-- the **status line**: `queued`, `generating N s`, `failed:` with the check that refused it (for a rock, and the remedy), `superseded`, `stale` in the warning colour once the object is no longer what its mesh was made from, `stale: never generated`, a warning for a patch whose host is gone, or the mesh's triangles and size once current (asked of the service once per key);
+- a hint when the block was set under an older schema version than this build runs (Generate makes it under the current one);
+- the **status line** (`generatorStatus`), the first of these that holds:
+  - `queued` or `generating N s` while the object's job is under way;
+  - `failed:` with the check that refused it (the validator lines that say FAIL, at most three, the whole message in the tooltip), and for a rock the remedy, "another seed or a looser tolerance may pass"; a request the service refused (a bad parameter, a missing tool) or never answered, and a job the dev server lost by restarting ("has no record of this job (restarted?); Generate again"), read as `failed` too;
+  - `superseded` when a newer request for the object stopped the job;
+  - `no host` for a patch whose host is gone, or `cannot generate` for a rock whose outline is not a polygon or rect;
+  - `stale: never generated` for a block with no `mesh`, and `stale` in the warning colour once the object is no longer what its mesh was made from;
+  - `stale: file missing` when the key is current but the service has no file for it (its `GET /api/generate/<key>` is a 404: a level generated on another machine, or a `public/generated/` directory deleted); Generate makes it again;
+  - else the mesh's triangles and size (`7,504 triangles · 1.5 MB`), asked of the service once per key, or `generated` until it answers.
+
+  A failure or supersede is shown only while the object still holds the content it was asked for, so an edit since reads as plain `stale`;
 - **Generate** (Ctrl+Enter while the object is selected, also from inside one of its fields), **Next seed** (the seed on by one, then Generate), **Reset** (every parameter back to its default, no generation), **Copy** and **Paste** (the parameters as JSON `{ kind, version, params }` through the clipboard, so a look moves between objects and levels; a paste of another kind's, or of a value out of range, is refused by name), and for a patch **Edit loop**;
 - for a patch, what the surface was when last collected: `faces · m² · up to N mushrooms`;
 - any `<name>Min` above its `<name>Max` once the defaults are in, before the server has to say so;
-- then each schema group: its basic parameters, and the rest under an **Advanced** disclosure that stays open across rebuilds.
+- then each schema group: its basic parameters, and the rest under an **Advanced** disclosure that stays open across rebuilds, whose summary counts them and how many are set (`Advanced (26, 1 set)`), refreshed as a field changes.
 
 Each field is of its schema type: a number field (the step the schema's, the default as its placeholder, blank for the default, typed values held to the range), a checkbox, a picker, or a colour swatch (the linear RGB triple shown as sRGB).
 The label is the key's words and its unit (`depth (m)`, `slab yaw°`), cut with an ellipsis where the panel is too narrow, and the tooltip is the schema's `doc` and default.
@@ -179,6 +207,7 @@ Lengths are in METRES here, the schema's unit, where the rest of the panel shows
 Only values that differ from the default are written (`withParam`): setting a field back to its default, or clearing it, removes the key.
 
 The outliner row of a generated object carries the same word as a badge (`generating`, `queued`, `failed`, `stale`), and its body's row the loudest of its objects', so a collapsed body still says it holds something stale.
+The badge is computed from the model and the jobs alone, so a current key whose file is missing shows on the panel's status line and not in the outliner.
 
 ### Generating
 
@@ -188,7 +217,12 @@ It does that only if the object is still there and would still be generated unde
 A result that lands during a drag waits for the drag to end (the frame loop's `jobs.flush`), so an undo step is never pushed into the middle of a gesture.
 A newer Generate for the same object stops the client following the older job, and tells the service, which stops it unless it is past its bake.
 `failed` is an ordinary outcome: the boulder's validators are strict ([generators](generators.md#jobs), "Failures"), and a plain 2 x 1 m rectangle fails its centre slice at the default tolerance; the panel says which check failed, and another seed or a much looser `tolerance` (it also sets the remesh voxel, so the deviation grows with it: 0.05 m still failed at 0.053, 0.1 m passed) is the answer.
-On entering the workspace the editor asks the service what it has (`GET /api/generators`), and the toolbar says what is missing, if anything (Blender for both, Python and its packages for rocks).
+
+**Job state lives in the page.**
+A reload forgets which object was waiting on which job: the service carries on and publishes the mesh into its cache, but nothing puts its key on the object, which reads `stale: never generated` (or `stale`) until Generate is pressed again.
+That Generate joins the job if it is still running, or finds the mesh at once if it has landed, so the cost is the click, not a second Blender run.
+A job lives only as long as the dev server; a restart mid-job reads as `failed` with the reason.
+
 ## Not in Visuals
 
 Each of these is the overlay's, and the guides do not draw it, so it is not offered (a handle only where the format can store its answer, and only where it is drawn):
@@ -227,5 +261,5 @@ Each of these is the overlay's, and the guides do not draw it, so it is not offe
 `cli render3d`'s `visuals:` cases cover the pose seeding and its keeping across a switch, which guide a click at a corner means (through a real raycast of the guides), the drop's arithmetic, a move through z, and the boxes **F** frames.
 The scene cannot be built headlessly, so the press routing, the gizmo, the drop onto a real model and every look were verified by driving `/editor` through the CDP harness; how any of it looks, the line and sprite sizes on a real canvas and the render order against transparent materials need the page.
 
-For the generators, the `generator:` cases cover the surface a loop collects on a box (area, triangle count, the slope filter, the band, the cap), the patch frame against the one `mountVisual` builds, the objects `+ Rock` and `+ Mushrooms` add and what they save as, the panel's parameter writes (the `stripDefaults` round trip through the setters, clamping, paste, a Min over its Max), the status line, and the job client against a scripted service (one swap per finished job, supersede, a failure keeps the model, a result waits out a drag, a deleted or edited object gets nothing).
+For the generators, the `generator:` cases cover the surface a loop collects on a box (area, triangle count, the slope filter, the band, the cap), the patch frame against the one `mountVisual` builds, the objects `+ Rock` and `+ Mushrooms` add and what they save as, the panel's parameter writes (the `stripDefaults` round trip through the setters, clamping, paste, a Min over its Max), the status line, and the job client against a scripted service (one swap per finished job, supersede, a failure keeps the model, a result waits out a drag, a deleted or edited object gets nothing, a 404 for a mesh key read as a missing file).
 They cannot see the scene: the click on an outline, the loop painted on a real rock, the surface collected from a mesh the scene has just rebuilt, the one-undo-step claims, the panel's layout and the look of a rock or a patch were verified by driving `/editor` through the CDP harness with real Blender runs (2026-09-25), and the look is the owner's to judge.

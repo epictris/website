@@ -119,8 +119,10 @@ async function errorOf(res: { status: number; json(): Promise<unknown> }): Promi
 export class GeneratorJobs {
   private readonly jobs = new Map<number, Job>();
   // A finished mesh's facts by key, from the status endpoint, for the panel's
-  // "N triangles · M KB" (null while being asked, so it is asked once).
-  private readonly known = new Map<string, { bytes: number; triangles: number } | null>();
+  // "N triangles · M KB" (null while being asked, so it is asked once), or
+  // "missing" when the service has neither a job nor a file for the key: a
+  // level names a mesh that is not on this machine.
+  private readonly known = new Map<string, { bytes: number; triangles: number } | "missing" | null>();
   // Results waiting for the drag to end.
   private readonly pending: Job[] = [];
   private toolHealth: ToolHealth | null = null;
@@ -203,13 +205,24 @@ export class GeneratorJobs {
     if (!this.known.has(key)) {
       this.known.set(key, null);
       void this.status(key).then((s) => {
-        if (s?.state === "done" && s.bytes !== undefined && s.triangles !== undefined) {
+        if (s === "missing") {
+          this.known.set(key, "missing");
+          this.host.changed();
+        } else if (s?.state === "done" && s.bytes !== undefined && s.triangles !== undefined) {
           this.known.set(key, { bytes: s.bytes, triangles: s.triangles });
           this.host.changed();
         }
       });
     }
-    return this.known.get(key) ?? null;
+    const f = this.known.get(key);
+    return f && f !== "missing" ? f : null;
+  }
+
+  // Whether the service answered that it has no mesh file for `key` (asked by
+  // `facts`, so false until that has been asked and answered). A generation
+  // that lands under the key replaces it with the mesh's facts.
+  missing(key: string): boolean {
+    return this.known.get(key) === "missing";
   }
 
   // Which tools the service has, asked once (and again after a 503).
@@ -244,9 +257,12 @@ export class GeneratorJobs {
     return this.jobs.get(job.itemId) === job;
   }
 
-  private async status(key: string): Promise<JobStatus | null> {
+  // The job's status, "missing" for a 404 (no job this server life and no mesh
+  // on disk), or null when the service could not be asked.
+  private async status(key: string): Promise<JobStatus | "missing" | null> {
     try {
       const res = await this.host.fetch(`/api/generate/${encodeURIComponent(key)}`);
+      if (res.status === 404) return "missing";
       return res.ok ? ((await res.json()) as JobStatus) : null;
     } catch {
       return null;
@@ -261,7 +277,7 @@ export class GeneratorJobs {
     if (!this.follows(job)) return;
     const s = await this.status(job.key);
     if (!this.follows(job)) return;
-    if (!s) {
+    if (!s || s === "missing") {
       // The server restarted mid-job (a job lives only as long as the server)
       // or never had it: say so rather than poll for ever.
       this.settle(job, { state: "failed", elapsed: job.elapsed, message: "the dev server has no record of this job (restarted?); Generate again" });

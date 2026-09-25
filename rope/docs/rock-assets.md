@@ -7,6 +7,9 @@ This page is written for the agent that models the next one: what the tools are,
 It replaced the procedural per-level rocks of [rocks.md](rocks.md), which the owner rejected ("too messy, the texture doesn't look good").
 Do not resurrect that pipeline or its constants.
 
+Since 2026-09-25 the editor's Visuals workspace has an in-editor alternative: **+ Rock** fits the fork's boulder generator to a collision outline and puts the result on a geometry object whose parameters live in the level ([editor-visuals](editor-visuals.md#rocks-and-mushrooms), [generators](generators.md)).
+It is a different pipeline from this page's and does not replace it: the accepted props (rock-196, moss-192 and those placed with them) stay hand-authored through the loop below, and a new prop may come from either.
+
 ## The loop
 
 1. **The job file** `rocks/<level>-<body>.json` is the authored record of a prop.

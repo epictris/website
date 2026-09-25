@@ -1,7 +1,7 @@
 # The visuals workspace
 
 Date: 2026-09-25.
-Status: plan, implementation delegated to subagents on the `visuals-workspace` branch.
+Status: implemented on the visuals-workspace branch, 2026-09-25; see the Delivery section.
 
 ## Goal
 
@@ -316,3 +316,72 @@ Files: `src/editor/editor.ts`, `src/editor/visuals/generatorPanel.ts` (schema-dr
 - Every new constant states its dimension; every new field is written only when non-default; every new nested object is cloned in `snapshot`.
 - Docs are updated in the same change as the code they describe.
 - Before claiming a phase done, run `bun run typecheck` and the `render3d` cases, and say what green cannot see.
+
+## Delivery
+
+Implemented 2026-09-25 on the `visuals-workspace` branch in `~/projects/website-visuals`, one phase at a time, each merged back and committed.
+The docs that now describe it are [editor-visuals](../docs/editor-visuals.md) and [generators](../docs/generators.md), with the block in [level-format](../docs/level-format.md), the free pose and the generated-mesh keys in [render3d](../docs/render3d.md), and a pointer in [editor](../docs/editor.md#workspaces-level-and-visuals).
+
+### What shipped
+
+- **Phase 1**: the free `ViewPose` (`poseFromCamera` + `applyPose`, bit-identical to the old `syncCamera`), `Scene3D.setViewPose`, `editorLayer`, `hitsAt`/`pickSurface`/`meshesOf`, the pure view gestures and the scene guides with guide tags, all under `visuals:` cases.
+- **Phase 2**: the `generator` block through the format, the model, the clipboard and the render3d round trips; `generatedKey` and the resolvers; the two `params.json` schemas (boulder 78 parameters, mushrooms 26) with shared validation in `src/level/generatorParams.ts`.
+- **Phase 3**: the fork's boulder v5 and mushroom sources under `tools/blender/`, every schema parameter threaded through the Python, the generator service (queue, supersede, cancel, content-addressed cache, failure formatter, GLB triangle count), `generators:setup` and `generators:check`.
+- **Phase 4**: the Level | Visuals switcher (W), Blender-style navigation, the guides in the scene, picking through guide tags, plane moves, vertex editing, drop on surface, the plane draw tools and a one-click prop in Visuals.
+- **Phase 5**: + Rock and + Mushrooms, Generate rock on a body's panel, the schema-built Rock and Mushrooms groups (status, Generate, Next seed, Reset, Copy/Paste, Edit loop), the jobs client, outliner badges, a stand-in for an ungenerated rock.
+- **Phase 6**: the docs pass (editor-visuals, generators, level-format, editor, rock-assets, the map), three small fixes (the Advanced count refreshed with the fields, `stale: file missing` for a current key with no file, the body-scroll check), and the suite checked against a clean `main`.
+
+### What deviated from the plan
+
+- The pose is sized by `halfHeight`, not `distance`: the orthographic frustum IS the half height, so one number drives both lenses to the bit, where a distance would have needed a division the old code did not do.
+- Guides are fat lines (`LineSegments2`) as planned, and vertex handles are offered only for polygon and path corners; a rect's corners, rotate knob, circle radius, light grips, path tangents, belt and mover handles are not in Visuals (the gizmo and the inspector cover them).
+- The patch loop is stored in the PATCH object's own frame, not the body's, because the editor re-origins a body under its objects; the patch `host` index is optional (absent means the host is gone), and `params` are written back verbatim as loaded (the key strips defaults, the file keeps what it said).
+- The schema functions live in `src/level/generatorParams.ts`, shared by the level format, the editor and the service, rather than in `src/editor/visuals/paramSchema.ts`, which re-exports them with the item-level helpers.
+- A patch's key hashes the host's fingerprint (its mesh key, or a primitive's outline and form) and its pose relative to the patch, not a host index, so moving both together changes nothing and regenerating the host makes the patch stale.
+- The Python port reproduces the fork's GLB byte for byte at defaults; a `params.py` fallback keeps the fork's own document format working, and the service's validation is the level module's (`validateParams`, `validatePairs`), and it checks the request's key against `expectedKey`.
+- The fork's validators are strict: a plain 2 x 1 m rect fails the centre slice at the default tolerance (0.0418 against 0.04 m) in the fork too; a tolerance of 0.1 m passes; the panel shows the failing check and the remedy.
+- Chains and vines are not offered in Visuals (their gesture runs outline to outline with an overlay-only draft); there is no rubber band in Visuals.
+- Three bugs found by driving the workspace were fixed on the way: sprites could not be picked (`pick`'s lens split tested `isMesh`), a gizmo move through z jumped decoration 35 cm (`offsetZAfterMove`), and a light's label.
+- A rock with no mesh draws a stand-in extrusion of its outline (tapered at 45°) rather than a slab; a patch with no mesh draws nothing.
+- The surface collection waits two animation frames after a rebuild so a just-built host is placed before it is read.
+- Edit loop moves points only: it cannot add or remove one.
+- Job state lives in the page: a reload forgets which object waits on which job (the service keeps the result; Generate again finds it).
+- `DELETE /api/generate/<key>` was added (cancel outright), and a `GET` for a key with no job and no file is a 404, which the panel reads as `stale: file missing`.
+
+### Timings (owner's machine, 32 threads, Blender 5.2.0)
+
+- A boulder at the defaults takes about 7 s (6.4 to 7.3 s measured, about 7 500 triangles, 1.5 MB); `bakeSize` 1024 halves it.
+- A mushroom patch takes about 2 s (1.7 to 1.8 s, 10 000 to 26 000 triangles, about 1 MB); `textureSize` 1024 makes it 4.4 s.
+- The author waits about a second longer than the service's `elapsed`, the poll's resolution.
+
+### The suite
+
+`bun run test` on the branch after Phase 6: 58 of 63 steps green.
+The five red steps are red on a clean `main` worktree (c045af2) with byte-identical output, so none is this branch's:
+
+| Suite | Branch | Main |
+|---|---|---|
+| contacts | red (`hook-sparks`, `chain-sweep`) | red, same cases |
+| movers | red (`levels - every shipped mover stays under the contact-speed bar`) | red, same case |
+| vines | red (`ring-square`) | red, same case |
+| sleep | red (`arena`) | red, same case |
+| assets | red (every manifest key has a file: `assets:fetch` has not been run in either worktree) | red, same |
+| every other step, including render3d, bundles and every playtest | green | not rerun |
+
+`bundles`, listed as red on main in memory, is green on both.
+
+### What is unverified (the blind spots)
+
+- The suite cannot see the scene: every guide, pick and gesture claim, the panel's layout and the one-undo-step claims were verified by driving `/editor` through the CDP harness on scratch models, not by the owner's hand.
+- The look of a generated rock and a mushroom patch in the level has not been judged by the owner; the port was shown byte-identical to the fork, whose look was approved there.
+- Line widths, sprite sizes and render order against transparent materials were seen only in headless Chromium, never on the owner's GPU.
+- `stale: file missing` is covered by a case and by the service's 404 read live; the page reload that would show it on a level generated elsewhere was not driven.
+- Nothing has been played in a level: a generated object has not been saved into a named level (no `levels/*.json` was touched), so the preload list's `meta.json` read and a deploy with generated files are untried.
+
+### Follow-ups
+
+- Publishing generated meshes to the release store with manifest entries, so a level with generated objects deploys (until then it draws stand-ins wherever `public/generated/` is not).
+- Job state that survives a reload (ask the service for the jobs of this page's objects, or key jobs by content alone).
+- Edit loop adding and removing points.
+- A badge for `stale: file missing` in the outliner (today only the panel says it).
+- The rest of the plan's follow-ups stand: moss (`dirt_moss`) as a third generator, a waking light on a mushroom patch, bloom for the mushroom emissive, camera bookmarks in the workspace.

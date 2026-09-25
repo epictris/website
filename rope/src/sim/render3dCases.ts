@@ -6396,6 +6396,10 @@ function generatorTools(): CaseResult[] {
     const stale = generatorStatus(rock, lookup, job("done"), none);
     // A failure for content the object no longer holds is not its status.
     const oldFailure = generatorStatus(rock, lookup, job("failed", { message: "x" }), none);
+    // A current key with no file on this machine (the service answers 404).
+    rock.visual.generator!.params = {};
+    const missing = generatorStatus(rock, lookup, undefined, none, () => true);
+    rock.visual.generator!.params = { depth: 1.2 };
     const results = {
       never: never.text === "stale: never generated" && never.tone === "warn",
       running: running.text === "generating 12 s" && running.tone === "busy",
@@ -6406,6 +6410,7 @@ function generatorTools(): CaseResult[] {
       done: done.text === "7,504 triangles · 1.5 MB" && badgeFresh === "",
       stale: stale.text === "stale" && generatorBadge(rock, lookup, undefined) === "stale",
       oldFailure: oldFailure.text === "stale",
+      missing: missing.text === "stale: file missing" && missing.tone === "warn",
       // The toolbar's line: nothing when everything is here.
       health:
         missingTools({ python: "3.14.0", blender: "5.2.0", deps: true, venv: true, queue: 0 }) === "" &&
@@ -6413,7 +6418,7 @@ function generatorTools(): CaseResult[] {
           "Blender not found (rocks, mushrooms) · rock packages missing: bun run generators:setup",
     };
     out.push({
-      name: "generator: the status line says never generated, generating N s, the failing check (and the remedy), the mesh's size, and stale once edited",
+      name: "generator: the status line says never generated, generating N s, the failing check (and the remedy), the mesh's size, stale once edited, and stale: file missing",
       pass: Object.values(results).every(Boolean),
       detail: JSON.stringify({ results, texts: [never.text, running.text, failed.text, done.text, stale.text] }),
     });
@@ -6496,6 +6501,21 @@ export async function generatorJobCases(): Promise<CaseResult[]> {
       name: "generator: the job client follows submit -> running -> done and puts the key on the object once",
       pass: ok,
       detail: JSON.stringify({ swaps: r.swaps, job, log: r.log }),
+    });
+  }
+
+  // A key the service has no file for (a 404): the facts stay null and the key
+  // reads as missing, where a key with a file does not.
+  {
+    const r = rig({ post: { status: 200, body: { key: A, state: "done" } }, gets: { [A]: [{ state: "done", elapsed: 1, bytes: 10, triangles: 2 }] } }, () => A);
+    r.jobs.facts(A);
+    r.jobs.facts(B);
+    await r.drain();
+    const ok = r.jobs.facts(B) === null && r.jobs.missing(B) && r.jobs.facts(A)?.bytes === 10 && !r.jobs.missing(A);
+    out.push({
+      name: "generator: the job client reads a 404 for a mesh key as a missing file",
+      pass: ok,
+      detail: JSON.stringify({ missingB: r.jobs.missing(B), missingA: r.jobs.missing(A), log: r.log }),
     });
   }
 

@@ -112,6 +112,8 @@ The object is **stale** when `mesh` is not the key its current content makes; th
 A block with no `mesh` is an object that has never been generated.
 It is appearance and nothing else, like the rest of the object: a regenerated rock is the same rock to the sim.
 A level with no generated object saves byte-identically, which `cli render3d` holds `levels/ball.json` to; the `generator:` cases there hold the block's px/m trip, the host index, the clipboard, the schemas and the key.
+The block is authored in the editor's Visuals workspace (**+ Rock**, **+ Mushrooms** and their panels, [editor-visuals](editor-visuals.md#rocks-and-mushrooms)), and the files it names are made by the dev server's generator service ([generators](generators.md)).
+They are dev-only for now (`public/generated/`, gitignored), so a level holding a generated object draws its stand-in, or nothing for a patch, wherever the file is not.
 
 A **light object** (`LightObjectData`, `type: "light"`) sits in a body like any other scene object and rides its pose - see [**Light and air**](lighting-and-surfaces.md#light-and-air).
 Its fields, and what `scaleLevelData` does to each:
