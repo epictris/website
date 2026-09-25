@@ -489,7 +489,8 @@ ROUGH_CAP, ROUGH_GILLS, ROUGH_STEM, ROUGH_DIRT = 0.15, 0.6, 0.55, 0.8
 # the maps are twice as tall. capVariants uses the first n shade/stripe rows.
 LOOK = {"paleness": 0.5, "glow": GLOW, "capVariants": CAP_VARIANTS,
         "stripeDarken": STRIPE_DARKEN, "capRoughness": ROUGH_CAP,
-        "gillRoughness": ROUGH_GILLS, "stemRoughness": ROUGH_STEM, "textureSize": TEX_W}
+        "gillRoughness": ROUGH_GILLS, "stemRoughness": ROUGH_STEM, "dirtRoughness": ROUGH_DIRT,
+        "textureSize": TEX_W}
 
 
 def resolve_look(look=None, paleness=None):
@@ -638,7 +639,8 @@ def texture_pixels(paleness=None, look=None):
     glow = _l2s(_s2l(_pale(GLOW_RGB, paleness)) * glow_mask[..., None])
 
     rough_cap, rough_gills, rough_stem = look["capRoughness"], look["gillRoughness"], look["stemRoughness"]
-    rough = np.where(stem, rough_stem + (ROUGH_DIRT - rough_stem) * (1.0 - _smooth(0.1, 0.3, ts)),
+    rough_dirt = look["dirtRoughness"]
+    rough = np.where(stem, rough_stem + (rough_dirt - rough_stem) * (1.0 - _smooth(0.1, 0.3, ts)),
                      rough_gills + (rough_cap - rough_gills) * _smooth(0.47, 0.53, s))
     rough = np.clip(rough * (1.0 + 2.0 * (grain - 1.0)), 0.05, 1.0)   # +-7% breakup
     orm = np.stack([np.ones_like(rough), rough, np.zeros_like(rough)], axis=-1)

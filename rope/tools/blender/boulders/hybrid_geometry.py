@@ -22,7 +22,7 @@ def build_hybrid(spec):
             v[2]+=side*depth*proud
         part['name']='overlapping_'+part['name']
         part['clip_to_outline']=True
-        part['chunk_bevel']=.020
+        part['chunk_bevel']=param(spec,'slabBevel')
         body['parts'].append(part)
     # Broad, shallow deviations along polygon edges avoid a ruler-straight
     # clipping wall while keeping original corners and the gameplay fit budget.

@@ -6,7 +6,7 @@
     "units": "A unit of \"m\" is a length: pixels on disk, metres in the model and in the spec handed to Blender. \"deg\" is degrees; the node group's Max Tilt socket is in radians and the Python converts. Every other number is dimensionless or a rate stated in metres (per square metre) and is never converted, on disk or off it.",
     "defaults": "Every default is the value the fork's editor produced (karin_website, branch add-boulder-and-root-generation, working tree of 2026-09-25): the editor row's density 150, height 0.16, clumping 0.75, max slope 75, detail 0.3 and seed 0 (editor.ts), the node group's own socket defaults for every socket the editor did not send (mushroom_patch_tools.py build_group), the texture constants (GLOW, STRIPE_DARKEN, ROUGH_*, paleness 0.5, TEX_W) and the server's two caps (mushroomGenerator.ts). Note detail: the node group's socket default is 0.5 but the editor always sent 0.3.",
     "constants": [
-      "The colour tables stay constants: STEM_STOPS, CAP_STOPS, CAP_SHADES, CAP_STRIPES, GLOW_RGB and the OKLab matrices. They are the approved palette, and CAP_VARIANTS (8) stays with them because CAP_SHADES and CAP_STRIPES hold exactly one entry per variant (asserted in mushroom_patch_tools.py).",
+      "The colour tables stay constants: STEM_STOPS, CAP_STOPS, CAP_SHADES, CAP_STRIPES, GLOW_RGB and the OKLab matrices. They are the approved palette. CAP_VARIANTS (8) is their length, since CAP_SHADES and CAP_STRIPES hold exactly one entry per variant (asserted in mushroom_patch_tools.py); the capVariants parameter uses the first n rows of each, 1..8.",
       "The texture's aspect stays 1:2 (TEX_H = 2 * TEX_W): each of the eight cap bands needs the height for its stripes, so only the width is a parameter.",
       "The node group's internal shaping constants are not design knobs: the clump noise (W * 7.31, roughness 0.4, map range 0.42..0.62, squared), the per-point formulas (size exponent 1.7, clump size factor 0.55/0.45, height jitter 0.8..1.2, tilt exponent 2, bend 0.4..1, stem radius, cap radius and height, tip and axis jitter, pointiness), the overlap cylinder (0.5/0.4/0.6, 1.07, 1.2) and stem sample heights, the stem and cap resolutions per detail, sink, wobble, foot and taper, the cap UV layout and band margin, and the lump noise.",
       "The texture's noise and shape constants (wobble, grain, dirt line, tone, shade window, stripe lengths, widths, strengths and curve, chroma boost, glow mask 0.42..0.50, roughness breakup) stay constants for the same reason.",
@@ -51,6 +51,8 @@
       "doc": "Emission strength of the gills (exported as KHR_materials_emissive_strength)." },
     { "key": "paleness", "type": "number", "default": 0.5, "min": 0, "max": 1, "step": 0.05, "group": "Look", "basic": false,
       "doc": "Lifts every colour toward white." },
+    { "key": "capVariants", "type": "int", "default": 8, "min": 1, "max": 8, "step": 1, "group": "Look", "basic": false,
+      "doc": "Cap shades in use, from the first of the eight shade and stripe tables." },
     { "key": "stripeDarken", "type": "number", "default": 0.14, "min": 0, "max": 1, "step": 0.01, "group": "Look", "basic": false,
       "doc": "How much darker the radial cap stripes are, in OKLab lightness." },
     { "key": "capRoughness", "type": "number", "default": 0.15, "min": 0, "max": 1, "step": 0.01, "group": "Look", "basic": false,

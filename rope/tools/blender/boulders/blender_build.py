@@ -89,8 +89,8 @@ def assemble_rock(rock, destination, source_collection, materials):
                 # remesh and decimation, so it costs no final triangles, and a
                 # single-segment chamfer this wide cuts outline corners by
                 # more than the tolerance.
-                bevel.width=part['chunk_bevel']; bevel.segments=2 if spec.get('soften_thin_edges') else 1
-                bevel.limit_method='ANGLE'; bevel.angle_limit=math.radians(22)
+                bevel.width=part['chunk_bevel']; bevel.segments=int(param(spec,'chunkBevelSegments')) if spec.get('soften_thin_edges') else 1
+                bevel.limit_method='ANGLE'; bevel.angle_limit=math.radians(param(spec,'chunkBevelAngle'))
                 bpy.ops.object.modifier_apply(modifier=bevel.name)
                 for face in piece.data.polygons:
                     face.material_index=part['material']
@@ -118,7 +118,7 @@ def assemble_rock(rock, destination, source_collection, materials):
                 bm=bmesh.new(); bm.from_mesh(piece.data); bm.normal_update()
                 sharp=[e for e in bm.edges if e.is_manifold and e.is_convex
                     and e.calc_face_angle(0)>math.radians(param(spec,'thinEdgeAngle'))
-                    and all(abs(v.co.z)>spec['depth']*.065 for v in e.verts)]
+                    and all(abs(v.co.z)>spec['depth']*param(spec,'protectedBand') for v in e.verts)]
                 if sharp:
                     bmesh.ops.bevel(bm,geom=sharp,offset=param(spec,'thinEdgeOffset'),
                         segments=1 if spec.get('game_low_poly') else 3,
@@ -358,9 +358,9 @@ def clip_pointed_game_chunk_tips(obj,spec):
                 continue
             threshold=top-inset
             removed=[v for v in bm.verts if v.co.dot(normal)>threshold]
-            if not removed or any(abs(v.co.z)<spec['depth']*.065 for v in removed):
+            band_limit=spec['depth']*param(spec,'protectedBand')
+            if not removed or any(abs(v.co.z)<band_limit for v in removed):
                 continue
-            band_limit=spec['depth']*.065
             crosses_band=False
             for edge in bm.edges:
                 a,b=(v.co for v in edge.verts)

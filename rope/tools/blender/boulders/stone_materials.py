@@ -75,7 +75,7 @@ def stone_material(name, color, variation, spec=None):
     fine = noise('Subtle stone grain', coord, param(spec, 'grainScale'), 1, -370, -120)
     bump = node('ShaderNodeBump', 'Shallow stone grain', 90, -90)
     bump.inputs['Strength'].default_value = param(spec, 'bumpStrength')
-    bump.inputs['Distance'].default_value = .0025
+    bump.inputs['Distance'].default_value = param(spec, 'bumpDistance')
     links.new(fine, bump.inputs['Height'])
     links.new(bump.outputs['Normal'], shader.inputs['Normal'])
     return mat
