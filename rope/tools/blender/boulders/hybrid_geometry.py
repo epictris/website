@@ -2,21 +2,24 @@
 def build_hybrid(spec):
     from chunk_geometry import build_chunks
     from volume_geometry import build_volume
+    from params import param
     body=build_chunks(spec)
     depth=spec['depth']
     # Keep the structural chunks around the centre and sides; let the natural
     # independent slabs form the foremost faces instead of a tiled front cap.
+    flatten=param(spec,'chunkFlatten')
     for part in body['parts']:
         for v in part['vertices']:
-            v[2]*=.73
+            v[2]*=flatten
     natural=build_volume(spec)
+    proud=param(spec,'slabProud')
     for part in natural['parts'][1:]:
         if spec.get('solid_chunk_edges') and part['name'].startswith('secondary_plate_'):
             continue
         centre=sum(v[2] for v in part['vertices'])/len(part['vertices'])
         side=1 if centre>=0 else -1
         for v in part['vertices']:
-            v[2]+=side*depth*.22
+            v[2]+=side*depth*proud
         part['name']='overlapping_'+part['name']
         part['clip_to_outline']=True
         part['chunk_bevel']=.020
@@ -77,13 +80,14 @@ def taper_chunk(obj,spec,is_support=False,part_name=None):
     direction/=total[:,None]
     seed=int(hashlib.sha256((part_name or obj.name).encode()).hexdigest()[:8],16)+spec['seed']
     rng=np.random.default_rng(seed)
-    front,back=rng.uniform(.32,.66,2)
+    from params import param
+    front,back=rng.uniform(param(spec,'taperSlopeMin'),param(spec,'taperSlopeMax'),2)
     slopes=np.where(coords[:,2]>0,front,back)
     if is_support:
-        slopes[:]=.38
+        slopes[:]=param(spec,'supportSlope')
         influence=1
     else:
-        influence=np.exp(-nearest/(depth*.8))
+        influence=np.exp(-nearest/(depth*param(spec,'taperReach')))
     travel=np.abs(coords[:,2])*slopes*influence
     coords[:,:2]+=travel[:,None]*direction
     obj.data.vertices.foreach_set('co',coords.ravel())

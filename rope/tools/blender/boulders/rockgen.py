@@ -30,8 +30,88 @@ def polygons(geometry):
     return [p for child in getattr(geometry, "geoms", []) for p in polygons(child)]
 
 
+# Schema keys the generator already read under another name. Every other schema
+# key travels in the spec under its own name and is read with params.param.
+LEGACY_NAMES = {"seed": "seed", "depth": "depth", "tolerance": "tolerance",
+                "edgeVariation": "edge_variation", "weathering": "weathering",
+                "fractureAngle": "fracture_angle", "secondarySlabs": "secondary_slabs",
+                "detail": "detail", "color": "color"}
+
+# The recipe the level editor always runs. The editor never varied these, so they
+# are not parameters: the frame must stay head-on for the game (yaw, pitch in
+# degrees), `strata` only feeds the dead add_surface_relief, and the flags pick
+# the hybrid, broad, game low-poly construction the approved rocks came from.
+EDITOR_RECIPE = {"camera_yaw": 0, "camera_pitch": 0, "strata": 0.08,
+                 "fit_mode": "playable_perimeter", "chunked_sides": True, "hybrid_faces": True,
+                 "balanced_hybrid": True, "broad_side_chunks": True, "soften_thin_edges": True,
+                 "solid_chunk_edges": True, "join_undercuts": False, "game_low_poly": True}
+
+# Slab count bounds: tiny outlines stay rocky, large ones stay practical for the
+# Boolean/remesh pass in Blender (slabs, dimensionless).
+MIN_SLABS, MAX_SLABS = 2, 100
+
+
+def outline_area(outline):
+    """Shoelace area (m^2), summed in the order and grouping the fork's server
+    used in JavaScript, so the tolerance derived from it is the same to the bit."""
+    total = 0.0
+    for i, point in enumerate(outline):
+        after = outline[(i + 1) % len(outline)]
+        total = total + point[0] * after[1] - after[0] * point[1]
+    return abs(total / 2)
+
+
+def js_round(x):
+    """JavaScript's Math.round (halves go up), which the fork's slab count used."""
+    whole = math.floor(x)
+    return whole + 1 if x - whole >= 0.5 else whole
+
+
+def slab_count(area, per_area):
+    return max(MIN_SLABS, min(MAX_SLABS, js_round(area * per_area)))
+
+
+def request_document(request):
+    """The editor's request -> the rock document the fork's server wrote for it.
+
+    A request is {"kind": "boulder", "outline": [[x, y], ...], "params": {...}},
+    the outline in the object's local metres with y up and params holding only
+    the values that differ from params.json. The document keeps the fork's field
+    names and derived values (slab count, auto tolerance) so the construction
+    code is unchanged; the other schema knobs ride along under their own names.
+    """
+    from params import defaults as schema_defaults
+    overrides = request.get("params") or {}
+    values = schema_defaults()
+    unknown = sorted(set(overrides) - set(values))
+    if unknown:
+        raise ValueError(f"Unknown boulder parameters: {', '.join(unknown)}")
+    values.update(overrides)
+    outline = request["outline"]
+    area = outline_area(outline)
+    tolerance = values["tolerance"]
+    if tolerance is None:
+        # Blank: 4 % of the outline's linear size, capped at 4 cm (m).
+        tolerance = min(0.04, math.sqrt(area) * 0.04)
+    fork = {
+        "depth": values["depth"], "seed": values["seed"],
+        "slabs": slab_count(area, values["slabsPerArea"]), "tolerance": tolerance,
+        "fracture_angle": values["fractureAngle"],
+        "camera_yaw": EDITOR_RECIPE["camera_yaw"], "camera_pitch": EDITOR_RECIPE["camera_pitch"],
+        "detail": values["detail"], "color": values["color"],
+        "weathering": values["weathering"], "strata": EDITOR_RECIPE["strata"],
+        "secondary_slabs": values["secondarySlabs"], "edge_variation": values["edgeVariation"],
+    }
+    fork.update((k, v) for k, v in EDITOR_RECIPE.items() if k not in fork)
+    knobs = {k: v for k, v in values.items() if k not in LEGACY_NAMES}
+    return {"plane": "CAMERA", "units": "metres", "defaults": dict(fork, **knobs),
+            "rocks": [{"name": "boulder", "outer": outline}]}
+
+
 def read_specs(path):
     data = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+    if "outline" in data:
+        data = request_document(data)
     if data.get("plane", "CAMERA") != "CAMERA":
         raise ValueError("This generator expects side-view polygons in the CAMERA plane, as [horizontal, vertical] pairs.")
     defaults = data.get("defaults", {})

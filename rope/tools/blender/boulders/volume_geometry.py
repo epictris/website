@@ -20,12 +20,13 @@ def camera_basis(spec):
     return np.array([right, up, toward]).T
 
 
-def core_depth(p, xy, depth):
+def core_depth(p, xy, depth, spec=None):
+    from params import param
     width = min(p.bounds[2]-p.bounds[0], p.bounds[3]-p.bounds[1])
     distance = p.boundary.distance(Point(xy))
     if distance < 1e-8:
         return 0.0
-    return depth * 0.30 * min(1, distance / max(width*0.30, 1e-9))**0.36
+    return depth * param(spec, "coreDepth") * min(1, distance / max(width*0.30, 1e-9))**0.36
 
 
 def natural_outline(p, spec):
@@ -62,9 +63,10 @@ def natural_outline(p, spec):
 
 
 def ridge_depth(xy,spec):
+    from params import param
     phase=spec["seed"]*.31
-    return spec["depth"]*(.10*math.sin(xy[0]*2.4+xy[1]*1.8+phase)
-                          +.045*math.sin(xy[0]*5.1-xy[1]*2.1+phase*.7))
+    return spec["depth"]*(param(spec,"ridgeAmplitude")*math.sin(xy[0]*2.4+xy[1]*1.8+phase)
+                          +param(spec,"ridgeFine")*math.sin(xy[0]*5.1-xy[1]*2.1+phase*.7))
 
 
 def rounded_core(p, spec, Mesh, envelope=False):
@@ -162,20 +164,26 @@ def build_volume(spec):
         distances = [min(np.linalg.norm((q-v)*[1,.65]) for v in chosen) for q in candidates]
         best = int(np.argmax(np.array(distances)*rng.uniform(.85,1.15,len(distances))))
         chosen.append(candidates.pop(best))
+    from params import param
+    back_every = int(param(spec, "backSlabEvery"))
+    width_share = param(spec, "slabWidthMin"), param(spec, "slabWidthMax")
+    thickness_share = param(spec, "slabThicknessMin"), param(spec, "slabThicknessMax")
+    length_share = param(spec, "slabLengthMin"), param(spec, "slabLengthMax")
+    max_yaw = param(spec, "slabYaw")
     for index, xy in enumerate(chosen):
-        half = core_depth(core_polygon, xy, spec["depth"])
+        half = core_depth(core_polygon, xy, spec["depth"], spec)
         # Some slabs live on the back, others on either side/front. Their
         # centres are inside the rounded core, ensuring overlap/connectivity.
-        side = 1 if index % 4 else -1
-        plate_width = width * rng.uniform(.29,.48)
-        plate_thickness = spec["depth"] * rng.uniform(.35,.60)
-        plate_length = height * rng.uniform(.19,.43)
+        side = 1 if index % back_every else -1
+        plate_width = width * rng.uniform(*width_share)
+        plate_thickness = spec["depth"] * rng.uniform(*thickness_share)
+        plate_length = height * rng.uniform(*length_share)
         # Let the slab stand proud of the core. Its inward half still overlaps
         # the mass; burying its centre deep inside would hide the side faces.
         projected_half = plate_thickness / (2 * max(abs(basis[1,2]), .4))
         d = ridge_depth(xy,spec)+side * (half * .96 + projected_half * rng.uniform(.25,.5))
         center = np.array([*xy,d]) @ basis.T
-        yaw = math.radians(rng.uniform(-28,28) + spec.get("fracture_angle",0))
+        yaw = math.radians(rng.uniform(-max_yaw,max_yaw) + spec.get("fracture_angle",0))
         weathering = spec.get("weathering",.7)
         parts.append(make_block(center,plate_width,plate_thickness,plate_length,yaw,rng,index,basis,Mesh,weathering))
         node_points.append(dict(position=center.tolist(),scale=[plate_width,plate_thickness,plate_length],

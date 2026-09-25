@@ -208,7 +208,11 @@ def resolve_overlaps(b, pts, store, attr, enabled, gap):
                   domain="POINT")
 
 
-def build_group():
+def build_group(look=None):
+    look = resolve_look(look)
+    # The cap bands in use and the texture height they are squeezed into (px).
+    variants = int(look["capVariants"])
+    tex_h = 2 * int(look["textureSize"])
     old = bpy.data.node_groups.get(GROUP)
     if old:
         bpy.data.node_groups.remove(old)
@@ -340,7 +344,7 @@ def build_group():
                           ("m_tip", tip, "FLOAT_VECTOR"),
                           ("m_ax", b.v("NORMALIZE", tangent), "FLOAT_VECTOR"),
                           ("m_ch", cap_h, "FLOAT"), ("m_pt", pointy, "FLOAT"),
-                          ("m_band", b.m("FLOOR", rand(0, CAP_VARIANTS - 0.001, 13)), "FLOAT")):
+                          ("m_band", b.m("FLOOR", rand(0, variants - 0.001, 13)), "FLOAT")):
         pts = store(pts, name, val, dt)
 
     def attr(name, dtype="FLOAT"):
@@ -417,11 +421,11 @@ def build_group():
                                  scale=b.m("MULTIPLY", b.m("MULTIPLY", attr("m_ch"), attr("m_pt")), attr("m_pk")))})
     # colour variant: squeeze the cap's V into its own horizontal band of the
     # texture (with a pixel of margin so bands don't bleed into each other)
-    margin = 1.5 / (TEX_H / CAP_VARIANTS)
+    margin = 1.5 / (tex_h / variants)
     cu, cv, _ = b.sep(b.node("GeometryNodeInputNamedAttribute", {"Name": UV},
                              out="Attribute", data_type="FLOAT_VECTOR"))
     band_v = b.m("DIVIDE", b.m("ADD", attr("m_band"), b.m("MULTIPLY_ADD", cv, 1.0 - 2 * margin, margin)),
-                 float(CAP_VARIANTS))
+                 float(variants))
     caps = store(caps, UV, b.xyz(cu, band_v, 0.0), "FLOAT2", "CORNER")
     # hand-sculpted lumpiness, proportional to each cap's own size
     lump = b.node("ShaderNodeTexNoise", {"Vector": pos, "Scale": 90.0, "Detail": 2.0})
@@ -477,6 +481,26 @@ assert len(CAP_STRIPES) == CAP_VARIANTS
 GLOW_RGB = (255, 200, 110)
 # Roughness per region (0 = mirror). Glossy caps, satin stems, matte gills.
 ROUGH_CAP, ROUGH_GILLS, ROUGH_STEM, ROUGH_DIRT = 0.15, 0.6, 0.55, 0.8
+
+# The look's knobs under the level editor's schema names (params.json). The
+# add-on installs as this one file, so its own defaults stay here; the editor's
+# generator hands every knob in from the schema (editor_patch.py), and
+# test_params.py fails when the two disagree. textureSize is the width (px);
+# the maps are twice as tall. capVariants uses the first n shade/stripe rows.
+LOOK = {"paleness": 0.5, "glow": GLOW, "capVariants": CAP_VARIANTS,
+        "stripeDarken": STRIPE_DARKEN, "capRoughness": ROUGH_CAP,
+        "gillRoughness": ROUGH_GILLS, "stemRoughness": ROUGH_STEM, "textureSize": TEX_W}
+
+
+def resolve_look(look=None, paleness=None):
+    """LOOK with a caller's overrides; a bare paleness is the add-on UI's slider."""
+    resolved = dict(LOOK)
+    resolved.update((k, v) for k, v in (look or {}).items() if k in LOOK)
+    if paleness is not None:
+        resolved["paleness"] = paleness
+    if not 1 <= int(resolved["capVariants"]) <= CAP_VARIANTS:
+        raise ValueError(f"capVariants must be 1..{CAP_VARIANTS}, one per shade row")
+    return resolved
 
 
 def _s2l(c):
@@ -553,20 +577,24 @@ def _wave_noise(u, v, n, freq_v, freq_u, seed):
     return out / np.abs(out).max()
 
 
-def texture_pixels(paleness=0.5):
+def texture_pixels(paleness=None, look=None):
     """Returns (albedo, emissive, orm) as HxWx3 float arrays; the first two sRGB,
     orm linear (R occlusion = 1, G roughness, B metallic = 0; glTF / Unreal packing)."""
-    u = (np.arange(TEX_W) + 0.5) / TEX_W
-    v = (np.arange(TEX_H) + 0.5) / TEX_H
+    look = resolve_look(look, paleness)
+    paleness = look["paleness"]
+    variants = int(look["capVariants"])
+    width = int(look["textureSize"])                          # px; twice as tall
+    u = (np.arange(width) + 0.5) / width
+    v = (np.arange(2 * width) + 0.5) / (2 * width)
     U, V = np.meshgrid(u, v)
     stem = U < 0.5
     t = np.clip((U - 0.01) / 0.48, 0, 1)                     # stem base -> top
     s = np.clip((U - 0.51) / 0.48, 0, 1)                     # cap gills -> crown
 
-    # caps: V holds CAP_VARIANTS bands (one shade per band); vl runs 0..1 around
+    # caps: V holds `variants` bands (one shade per band); vl runs 0..1 around
     # the cap inside each band, so noise with integer V frequency tiles per band
-    band = np.minimum((V * CAP_VARIANTS).astype(int), CAP_VARIANTS - 1)
-    vl = V * CAP_VARIANTS - band
+    band = np.minimum((V * variants).astype(int), variants - 1)
+    vl = V * variants - band
 
     # soft, painterly irregularity only where blue meets purple, kept small so
     # the transition reads as a blend rather than blotches
@@ -584,13 +612,13 @@ def texture_pixels(paleness=0.5):
 
     cap_lab = _ramp_lab(CAP_STOPS, s + wobble, paleness)
     upper = _smooth(0.47, 0.53, s)                 # shade the top only; gills stay amber
-    for k, (hue, dl, chroma) in enumerate(CAP_SHADES):
+    for k, (hue, dl, chroma) in enumerate(CAP_SHADES[:variants]):
         in_band = band == k
         cap_lab[in_band] = _shade(cap_lab[in_band], hue, dl, chroma, upper[in_band])
     # radial stripes on top: darkest at the rim, fading toward the crown, each a
     # few shades darker (OKLab L) than that cap's own colour
     stripes = np.zeros_like(s)
-    for k, n in enumerate(CAP_STRIPES):
+    for k, n in enumerate(CAP_STRIPES[:variants]):
         m = band == k
         rng = np.random.default_rng(100 + k)
         length, width, strength = (rng.uniform(0.55, 1.0, n), rng.uniform(0.55, 0.85, n),
@@ -601,7 +629,7 @@ def texture_pixels(paleness=0.5):
         across = 1.0 - _smooth(width[i] * 0.25, width[i], d)
         along = (1.0 - _smooth(0.5, 0.5 + 0.5 * length[i], s[m])) * _smooth(0.49, 0.53, s[m])
         stripes[m] = across * along * strength[i]
-    cap_lab[..., 0] -= STRIPE_DARKEN * stripes
+    cap_lab[..., 0] -= look["stripeDarken"] * stripes
     cap_lab[..., 1:] *= (1.0 + 0.12 * stripes)[..., None]     # keep dark lines from greying
     alb = np.where(stem[..., None], stem_alb, _from_oklab(cap_lab))
     alb = np.clip(alb * grain[..., None], 0, 1)
@@ -609,19 +637,21 @@ def texture_pixels(paleness=0.5):
     glow_mask = np.where(stem, 0.0, 1.0 - _smooth(0.42, 0.50, s))   # gills only
     glow = _l2s(_s2l(_pale(GLOW_RGB, paleness)) * glow_mask[..., None])
 
-    rough = np.where(stem, ROUGH_STEM + (ROUGH_DIRT - ROUGH_STEM) * (1.0 - _smooth(0.1, 0.3, ts)),
-                     ROUGH_GILLS + (ROUGH_CAP - ROUGH_GILLS) * _smooth(0.47, 0.53, s))
+    rough_cap, rough_gills, rough_stem = look["capRoughness"], look["gillRoughness"], look["stemRoughness"]
+    rough = np.where(stem, rough_stem + (ROUGH_DIRT - rough_stem) * (1.0 - _smooth(0.1, 0.3, ts)),
+                     rough_gills + (rough_cap - rough_gills) * _smooth(0.47, 0.53, s))
     rough = np.clip(rough * (1.0 + 2.0 * (grain - 1.0)), 0.05, 1.0)   # +-7% breakup
     orm = np.stack([np.ones_like(rough), rough, np.zeros_like(rough)], axis=-1)
     return alb, glow, orm
 
 
 def _write_image(name, rgb, non_color=False):
+    height, width = rgb.shape[:2]
     img = bpy.data.images.get(name)
-    if img is None or tuple(img.size) != (TEX_W, TEX_H):
+    if img is None or tuple(img.size) != (width, height):
         if img:
             bpy.data.images.remove(img)
-        img = bpy.data.images.new(name, TEX_W, TEX_H, alpha=False)
+        img = bpy.data.images.new(name, width, height, alpha=False)
     if non_color:
         img.colorspace_settings.name = "Non-Color"
     rgba = np.concatenate([rgb, np.ones(rgb.shape[:2] + (1,))], axis=2).astype(np.float32)
@@ -631,14 +661,15 @@ def _write_image(name, rgb, non_color=False):
     return img
 
 
-def build_textures(paleness=0.5):
-    alb, glow, orm = texture_pixels(paleness)
+def build_textures(paleness=None, look=None):
+    alb, glow, orm = texture_pixels(paleness, look)
     return (_write_image(ALBEDO, alb), _write_image(EMISSIVE, glow),
             _write_image(ORM, orm, non_color=True))
 
 
-def build_material(paleness=0.5):
-    alb_img, glow_img, orm_img = build_textures(paleness)
+def build_material(paleness=None, look=None):
+    look = resolve_look(look, paleness)
+    alb_img, glow_img, orm_img = build_textures(look=look)
     mat = bpy.data.materials.get(MATERIAL) or bpy.data.materials.new(MATERIAL)
     try:
         mat.use_nodes = True
@@ -658,15 +689,16 @@ def build_material(paleness=0.5):
     b.feed(bsdf.inputs["Roughness"], rgb.outputs["Green"])
     b.feed(bsdf.inputs["Metallic"], rgb.outputs["Blue"])
     b.feed(bsdf.inputs["Emission Color"], glow)
-    b.feed(bsdf.inputs["Emission Strength"], GLOW)
+    b.feed(bsdf.inputs["Emission Strength"], look["glow"])
     outn = b.new("ShaderNodeOutputMaterial")
     nt.links.new(bsdf.outputs[0], outn.inputs["Surface"])
     return mat
 
 
-def ensure_assets(paleness=0.5):
-    ng = bpy.data.node_groups.get(GROUP) or build_group()
-    mat = bpy.data.materials.get(MATERIAL) or build_material(paleness)
+def ensure_assets(paleness=None, look=None):
+    look = resolve_look(look, paleness)
+    ng = bpy.data.node_groups.get(GROUP) or build_group(look)
+    mat = bpy.data.materials.get(MATERIAL) or build_material(look=look)
     return ng, mat
 
 
@@ -702,8 +734,8 @@ def patch_modifier(obj):
     return None
 
 
-def make_patch(obj, paleness=0.5):
-    ng, mat = ensure_assets(paleness)
+def make_patch(obj, paleness=None, look=None):
+    ng, mat = ensure_assets(paleness, look)
     mod = patch_modifier(obj)
     if mod is None:
         mod = obj.modifiers.new(GROUP, "NODES")
@@ -731,17 +763,18 @@ def _asset_name(obj):
     return "SM_MushroomPatch_" + re.sub(r"[^A-Za-z0-9_]+", "_", obj.name).strip("_")
 
 
-def bake_patch(obj, context):
+def bake_patch(obj, context, no_overlaps=True):
     """Freeze a patch into a static mesh. Rotation/scale are baked into the
     vertices; the pivot stays at the polygon's origin."""
     mod = patch_modifier(obj)
     if mod is None:
         raise ValueError(f"{obj.name} has no {GROUP} modifier")
     # exported assets never intersect, even if No Overlaps was switched off for
-    # faster previews while blocking out a large area
+    # faster previews while blocking out a large area; the level editor's
+    # noOverlaps parameter is the one way to bake them overlapping
     saved = {k: get_input(mod, k) for k in ("Show Area", "No Overlaps")}
     set_input(mod, "Show Area", False)
-    set_input(mod, "No Overlaps", True)
+    set_input(mod, "No Overlaps", bool(no_overlaps))
     obj.update_tag()
     dg = context.evaluated_depsgraph_get()
     me = bpy.data.meshes.new_from_object(obj.evaluated_get(dg),
@@ -783,9 +816,10 @@ def export_asset(baked, folder, fmt, context):
     os.makedirs(folder, exist_ok=True)
     for img_name in (ALBEDO, EMISSIVE, ORM):
         img = bpy.data.images[img_name]
-        px = np.empty(TEX_W * TEX_H * 4, np.float32)
+        width, height = img.size
+        px = np.empty(width * height * 4, np.float32)
         img.pixels.foreach_get(px)
-        out = bpy.data.images.new("_tmp_export", TEX_W, TEX_H, alpha=False)
+        out = bpy.data.images.new("_tmp_export", width, height, alpha=False)
         out.pixels.foreach_set(px)
         out.filepath_raw = os.path.join(folder, img_name + ".png")
         out.file_format = "PNG"

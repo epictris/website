@@ -6,11 +6,14 @@ signals turn the baked albedo into dark spots and a bright triangular web.
 """
 import bpy
 
+from params import param
 
-def worn_edge_color(color):
+
+def worn_edge_color(color, spec=None):
     """A pale, slightly desaturated version of the requested stone colour."""
     average = sum(color) / 3
-    return tuple(min(.38, (average * .75 + channel * .25) * 1.8)
+    cap, lift = param(spec, 'wornEdgeCap'), param(spec, 'wornEdgeLift')
+    return tuple(min(cap, (average * .75 + channel * .25) * lift)
                  for channel in color)
 
 
@@ -48,15 +51,16 @@ def stone_material(name, color, variation, spec=None):
 
     tex = node('ShaderNodeTexCoord', 'Rock coordinates', -900, 150)
     coord = tex.outputs['Object']
-    broad = noise('Broad mineral clouds', coord, 1.25, 2, -670, 350)
+    broad = noise('Broad mineral clouds', coord, param(spec, 'noiseScale'), 2, -670, 350)
     # Variation is deliberately narrow. Chunk-to-chunk colour and the broad
     # clouds should read as slate, even where several chunks meet.
-    tint = min(1.12, max(.84, variation))
+    tint = min(param(spec, 'tintMax'), max(param(spec, 'tintMin'), variation))
     base = tuple(min(.32, channel * tint) for channel in color)
-    dark = tuple(channel * .78 for channel in base)
-    light = tuple(channel * 1.25 for channel in base)
+    dark = tuple(channel * param(spec, 'darkShade') for channel in base)
+    light = tuple(channel * param(spec, 'lightShade') for channel in base)
     albedo = ramp('Soft slate colour', broad, [
-        (.34, dark), (.50, base), (.66, light),
+        (param(spec, 'rampLow'), dark), (param(spec, 'rampMid'), base),
+        (param(spec, 'rampHigh'), light),
     ], -370, 330)
 
     out = node('ShaderNodeOutputMaterial', 'Surface', 620, 200)
@@ -68,9 +72,9 @@ def stone_material(name, color, variation, spec=None):
 
     # Very shallow continuous relief, with no hard cell boundaries or isolated
     # dark pits. Actual beveled geometry catches the pale edge lighting.
-    fine = noise('Subtle stone grain', coord, 18, 1, -370, -120)
+    fine = noise('Subtle stone grain', coord, param(spec, 'grainScale'), 1, -370, -120)
     bump = node('ShaderNodeBump', 'Shallow stone grain', 90, -90)
-    bump.inputs['Strength'].default_value = .085
+    bump.inputs['Strength'].default_value = param(spec, 'bumpStrength')
     bump.inputs['Distance'].default_value = .0025
     links.new(fine, bump.inputs['Height'])
     links.new(bump.outputs['Normal'], shader.inputs['Normal'])

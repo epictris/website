@@ -8,8 +8,10 @@ from mathutils.bvhtree import BVHTree
 def reinforce_chunks(pieces, parts, spec):
     retained=[]
     removed=backed=0
+    from params import param
     depth=spec['depth']
-    minimum=depth*.105
+    minimum=depth*param(spec,'backingDepth')
+    sliver_volume=param(spec,'sliverVolume'); sliver_thickness=param(spec,'sliverThickness')
     for obj,part in zip(pieces,parts):
         if part['name'].startswith('buried_'):
             retained.append(obj)
@@ -18,7 +20,7 @@ def reinforce_chunks(pieces, parts, spec):
         area=sum(f.calc_area() for f in bm.faces)
         volume=abs(bm.calc_volume(signed=True)) if bm.faces else 0
         # Discard shallow remnants, not the substantial overlapping masses.
-        if not area or volume<depth**3*.0006 or 2*volume/area<depth*.028:
+        if not area or volume<depth**3*sliver_volume or 2*volume/area<depth*sliver_thickness:
             bm.free(); bpy.data.objects.remove(obj,do_unlink=True)
             removed+=1
             continue

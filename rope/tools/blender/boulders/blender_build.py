@@ -14,7 +14,13 @@ from mathutils import Matrix, Vector, noise
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from params import param
 from stone_materials import stone_material, worn_edge_color
+
+# Printed once the texture bake starts. The dev server lets a job that has said
+# it finish even when a newer request supersedes it: the geometry is done, the
+# bake is most of what is left, and the result is cached under its own key.
+BAKE_MARKER = "GENERATOR: bake started"
 
 
 def object_from_part(part, collection, materials):
@@ -111,10 +117,10 @@ def assemble_rock(rock, destination, source_collection, materials):
             for piece in pieces[1:]:
                 bm=bmesh.new(); bm.from_mesh(piece.data); bm.normal_update()
                 sharp=[e for e in bm.edges if e.is_manifold and e.is_convex
-                    and e.calc_face_angle(0)>math.radians(70)
+                    and e.calc_face_angle(0)>math.radians(param(spec,'thinEdgeAngle'))
                     and all(abs(v.co.z)>spec['depth']*.065 for v in e.verts)]
                 if sharp:
-                    bmesh.ops.bevel(bm,geom=sharp,offset=.045,
+                    bmesh.ops.bevel(bm,geom=sharp,offset=param(spec,'thinEdgeOffset'),
                         segments=1 if spec.get('game_low_poly') else 3,
                         affect='EDGES',clamp_overlap=True,loop_slide=True)
                 bmesh.ops.recalc_face_normals(bm,faces=list(bm.faces))
@@ -154,10 +160,10 @@ def assemble_rock(rock, destination, source_collection, materials):
             # The previous 0.0065 m voxel pass made hundreds of thousands of
             # temporary polygons before the facets were simplified again.
             # Keep enough resolution for the rounded chunk edges and outline.
-            remesh.voxel_size=min(remesh.voxel_size,.012)
+            remesh.voxel_size=min(remesh.voxel_size,param(spec,'voxelCap'))
         elif spec.get('chunked_sides'):
             remesh.voxel_size=min(remesh.voxel_size,.0065 if spec.get('broad_side_chunks') else .0045)
-        remesh.adaptivity = .06
+        remesh.adaptivity = param(spec,'remeshAdaptivity')
         remesh.use_smooth_shade = True
         bpy.ops.object.modifier_apply(modifier=remesh.name)
         keep_main_body(result)
@@ -181,8 +187,8 @@ def assemble_rock(rock, destination, source_collection, materials):
     bm.free()
     result.data.update()
     smooth = result.modifiers.new("Remove tiny voxel ridges", "SMOOTH")
-    smooth.factor = .65
-    smooth.iterations = 2 if spec.get('chunked_sides') else 5
+    smooth.factor = param(spec,'smoothFactor')
+    smooth.iterations = int(param(spec,'smoothIterations')) if spec.get('chunked_sides') else 5
     bpy.context.view_layer.objects.active = result
     bpy.ops.object.modifier_apply(modifier=smooth.name)
     if spec.get('join_undercuts'):
@@ -203,13 +209,14 @@ def assemble_rock(rock, destination, source_collection, materials):
     dec = result.modifiers.new("Broad sculpted facets", "DECIMATE")
     if spec.get('game_low_poly'):
         # Keep broad face placement and the validated gameplay outline, but
-        # budget far fewer triangles before the final edge treatment. 3,000
-        # faces was tuned on outlines of about 8.5 m perimeter; the outline
-        # tolerance is absolute, so a longer outline needs proportionally
-        # more faces or its facets cut inside the silhouette.
+        # budget far fewer triangles before the final edge treatment. The
+        # budget (faceBudget, 3,000 faces) was tuned on outlines of about
+        # 8.5 m perimeter; the outline tolerance is absolute, so a longer
+        # outline needs proportionally more faces or its facets cut inside
+        # the silhouette.
         rings=[spec['outer'],*spec.get('holes',[])]
         perimeter=sum(math.dist(ring[i],ring[(i+1)%len(ring)]) for ring in rings for i in range(len(ring)))
-        budget=3000*max(1.0,perimeter/8.5)
+        budget=param(spec,'faceBudget')*max(1.0,perimeter/8.5)
         dec.ratio=min(1.0, budget/max(1,len(result.data.polygons)))
     elif spec.get('balanced_hybrid'):
         # Preserve the broad faces and two-segment rock bevel, while budgeting
@@ -246,12 +253,12 @@ def assemble_rock(rock, destination, source_collection, materials):
             if hit[2] is not None:
                 face.material_index=source_materials[hit[2]]
     bevel = result.modifiers.new("Chipped light-catching edges", "BEVEL")
-    bevel.width = (.018 if spec.get('game_low_poly') else
+    bevel.width = (param(spec,'edgeBevelWidth') if spec.get('game_low_poly') else
                    .020 if spec.get('soften_thin_edges') else .012)
-    bevel.segments = (1 if spec.get('game_low_poly') else
+    bevel.segments = (int(param(spec,'edgeBevelSegments')) if spec.get('game_low_poly') else
                       2 if spec.get('soften_thin_edges') else 1)
     bevel.limit_method = "ANGLE"
-    bevel.angle_limit = math.radians(36 if spec.get('game_low_poly') else 27)
+    bevel.angle_limit = math.radians(param(spec,'edgeBevelAngle') if spec.get('game_low_poly') else 27)
     # Paint only the actual bevel bands. Mesh Pointiness is unstable after
     # remeshing and decimation and draws highlights across triangle junctions.
     bevel.material = len(result.data.materials) - 1
@@ -337,8 +344,8 @@ def clip_pointed_game_chunk_tips(obj,spec):
         bm.free(); return
     cuts=0
     width=max(v.co.x for v in bm.verts)-min(v.co.x for v in bm.verts)
-    band=min(.022,spec['depth']*.015)
-    inset=min(.14,spec['depth']*.09)
+    band=min(.022,spec['depth']*param(spec,'tipBand'))
+    inset=min(.14,spec['depth']*param(spec,'tipInset'))
     for up in (-1,1):
         for toward in (-1,1):
             normal=Vector((0,up,toward)).normalized()
@@ -517,15 +524,17 @@ def make_stage(samples):
     return scene, camera, ground
 
 
-def bake_color(obj, path):
+def bake_color(obj, path, spec=None):
+    print(BAKE_MARKER, flush=True)
+    size=int(param(spec,'bakeSize')); samples=int(param(spec,'bakeSamples'))
     bpy.ops.object.select_all(action="DESELECT")
     obj.select_set(True)
     bpy.context.view_layer.objects.active = obj
     bpy.ops.object.mode_set(mode="EDIT")
     bpy.ops.mesh.select_all(action="SELECT")
-    bpy.ops.uv.smart_project(angle_limit=math.radians(60), island_margin=.015)
+    bpy.ops.uv.smart_project(angle_limit=math.radians(param(spec,'uvAngle')), island_margin=param(spec,'uvMargin'))
     bpy.ops.object.mode_set(mode="OBJECT")
-    image=bpy.data.images.new(obj.name+"_BaseColor",width=2048,height=2048)
+    image=bpy.data.images.new(obj.name+"_BaseColor",width=size,height=size)
     restore=[]
     for mat in obj.data.materials:
         nodes,links=mat.node_tree.nodes,mat.node_tree.links
@@ -540,30 +549,31 @@ def bake_color(obj, path):
         restore.append((mat,out,original,emission))
     scene=bpy.context.scene
     old_samples=scene.cycles.samples
-    scene.cycles.samples=8
-    bpy.ops.object.bake(type='EMIT',margin=8)
+    scene.cycles.samples=samples
+    bpy.ops.object.bake(type='EMIT',margin=int(param(spec,'bakeMarginColor')))
     scene.cycles.samples=old_samples
     path.parent.mkdir(exist_ok=True)
     image.filepath_raw=str(path); image.file_format='PNG'; image.save(); image.pack()
     for mat,out,original,emission in restore:
         mat.node_tree.links.new(original,out.inputs['Surface'])
         mat.node_tree.nodes.remove(emission)
-    normal=bpy.data.images.new(obj.name+'_Normal',width=2048,height=2048)
+    normal=bpy.data.images.new(obj.name+'_Normal',width=size,height=size)
     normal.colorspace_settings.name='Non-Color'
     for mat in obj.data.materials:
         target=mat.node_tree.nodes.new('ShaderNodeTexImage'); target.image=normal
         mat.node_tree.nodes.active=target
-    scene.cycles.samples=8
-    bpy.ops.object.bake(type='NORMAL',normal_space='TANGENT',margin=12)
+    scene.cycles.samples=samples
+    bpy.ops.object.bake(type='NORMAL',normal_space='TANGENT',margin=int(param(spec,'bakeMarginNormal')))
     scene.cycles.samples=old_samples
     normal.filepath_raw=str(path.parent/(obj.name+'_Normal.png'))
     normal.file_format='PNG'; normal.save(); normal.pack()
     original_mats=list(obj.data.materials)
     baked=bpy.data.materials.new(obj.name+' / portable painted slate')
     baked.use_nodes=True
-    baked.diffuse_color=(.13,.15,.18,1)
+    # The viewport colour only; what exports is the baked map.
+    baked.diffuse_color=(*param(spec,'color'),1)
     bs=baked.node_tree.nodes.get('Principled BSDF')
-    bs.inputs['Roughness'].default_value=.86
+    bs.inputs['Roughness'].default_value=param(spec,'roughness')
     target=baked.node_tree.nodes.new('ShaderNodeTexImage'); target.image=image
     baked.node_tree.links.new(target.outputs['Color'],bs.inputs['Base Color'])
     normal_tex=baked.node_tree.nodes.new('ShaderNodeTexImage'); normal_tex.image=normal
@@ -575,11 +585,11 @@ def bake_color(obj, path):
     return original_mats,indices
 
 
-def export_model(obj, path):
+def export_model(obj, path, spec=None):
     bpy.ops.object.select_all(action="DESELECT")
     obj.select_set(True)
     bpy.context.view_layer.objects.active = obj
-    original_mats,indices=bake_color(obj,path.parent.parent/'textures'/(obj.name+'_BaseColor.png'))
+    original_mats,indices=bake_color(obj,path.parent.parent/'textures'/(obj.name+'_BaseColor.png'),spec)
     bpy.ops.export_scene.gltf(filepath=str(path.with_suffix(".glb")), export_format="GLB",
                               use_selection=True, export_materials="EXPORT", export_yup=True,
                               export_extras=True)
@@ -626,9 +636,9 @@ def main():
         scene.collection.children.link(collection)
         sources = bpy.data.collections.new(spec["name"] + " / editable source slabs")
         scene.collection.children.link(sources)
-        mats = [stone_material(spec["name"] + f" / stone {i}", spec["color"], (0.88+i*.055 if spec.get('broad_side_chunks') else (0.78+i*.11 if spec.get('chunked_sides') else 0.91+i*.045)), spec) for i in range(5)]
+        mats = [stone_material(spec["name"] + f" / stone {i}", spec["color"], (0.88+i*param(spec,'variation') if spec.get('broad_side_chunks') else (0.78+i*.11 if spec.get('chunked_sides') else 0.91+i*.045)), spec) for i in range(5)]
         mats.append(stone_material(spec["name"] + " / worn bevels",
-                                   worn_edge_color(spec["color"]), 1, spec))
+                                   worn_edge_color(spec["color"], spec), 1, spec))
         start = time.monotonic()
         if spec.get("engine")=="nodes":
             from geometry_nodes import assemble_nodes
@@ -650,7 +660,7 @@ def main():
         }, separators=(",", ":")), encoding="utf-8")
         print(f"Health: {health}", flush=True)
         if not args.preview_only:
-            export_model(obj, out / "models" / spec["name"])
+            export_model(obj, out / "models" / spec["name"], spec)
         obj.hide_render = True
         objects.append((obj, spec))
 

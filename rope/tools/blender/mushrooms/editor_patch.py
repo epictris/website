@@ -4,16 +4,20 @@
 
 `patch.json` holds the faces the editor selected, as a flat triangle soup in the
 game's three.js frame relative to the patch origin (x right, y up, z toward the
-camera, metres), plus the growth settings:
+camera, metres), plus the parameters that differ from params.json:
 
-    {"positions": [x, y, z, ...], "seed": 0, "density": 150, "height": 0.16,
-     "clumping": 0.75, "spacing": 0.02, "detail": 0.5}
+    {"kind": "mushrooms", "positions": [x, y, z, ...],
+     "params": {"seed": 3, "density": 200}}
+
+A spec with no "params" block is the fork's older flat shape
+({"positions": [...], "seed": 0, "density": 150, ...}) and is read as overrides.
 
 Writes DIR/mushrooms.glb in the same frame (the glTF exporter's +Y up undoes the
 axis swap below), so the editor can place it at the patch origin unchanged.
 """
 import argparse
 import json
+import math
 import os
 import sys
 
@@ -24,14 +28,54 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import mushroom_patch_tools as mpt  # noqa: E402
 
-SETTINGS = {  # spec key -> (modifier input, cast)
+SCHEMA = os.path.join(HERE, "params.json")
+
+# Schema key -> MushroomPatch node group input and the cast it takes. maxTilt is
+# authored in degrees and the socket is an ANGLE (radians).
+SOCKETS = {
     "seed": ("Seed", int),
     "density": ("Density", float),
-    "height": ("Height", float),
-    "clumping": ("Clumping", float),
     "spacing": ("Spacing", float),
+    "noOverlaps": ("No Overlaps", bool),
+    "gap": ("Gap", float),
+    "clumping": ("Clumping", float),
+    "clumpSize": ("Clump Size", float),
+    "height": ("Height", float),
+    "sizeMin": ("Size Min", float),
+    "sizeMax": ("Size Max", float),
+    "maxTilt": ("Max Tilt", lambda deg: math.radians(float(deg))),
+    "bend": ("Bend", float),
+    "capSize": ("Cap Size", float),
     "detail": ("Detail", float),
 }
+
+# Keys the level editor and the dev server act on before Blender is reached: the
+# slope filter picks the faces sent, the limits bound the request.
+EDITOR_SIDE = {"maxSlope", "maxTriangles", "maxEstimate"}
+
+# The fork's flat request carried these at the top level.
+LEGACY_KEYS = ("seed", "density", "height", "clumping", "spacing", "detail")
+
+# Printed once the node group has been evaluated and frozen. The dev server lets
+# a job that has said it finish even when a newer request supersedes it.
+BAKE_MARKER = "GENERATOR: bake started"
+
+
+def patch_values(spec):
+    """params.json defaults, then the spec's overrides; unknown keys are an error."""
+    with open(SCHEMA, encoding="utf-8") as f:
+        values = {p["key"]: p["default"] for p in json.load(f)["params"]}
+    overrides = spec.get("params")
+    if overrides is None:
+        overrides = {k: spec[k] for k in LEGACY_KEYS if k in spec}
+    unknown = sorted(set(overrides) - set(values))
+    if unknown:
+        raise SystemExit(f"MUSHROOMS: unknown parameters {', '.join(unknown)}")
+    values.update(overrides)
+    missing = sorted(set(values) - set(SOCKETS) - set(mpt.LOOK) - EDITOR_SIDE)
+    if missing:
+        raise SystemExit(f"MUSHROOMS: parameters with nowhere to go: {', '.join(missing)}")
+    return values
 
 
 def area_from_soup(positions):
@@ -63,19 +107,20 @@ def main():
     args = ap.parse_args(argv)
     with open(args.spec, encoding="utf-8") as f:
         spec = json.load(f)
+    values = patch_values(spec)
 
     bpy.ops.wm.read_factory_settings(use_empty=True)
     area = area_from_soup(spec["positions"])
     if not area.data.polygons:
         raise SystemExit("MUSHROOMS: the selected surface has no faces")
-    mod = mpt.make_patch(area)
-    for key, (name, cast) in SETTINGS.items():
-        if key in spec:
-            mpt.set_input(mod, name, cast(spec[key]))
+    mod = mpt.make_patch(area, look={k: values[k] for k in mpt.LOOK})
+    for key, (name, cast) in SOCKETS.items():
+        mpt.set_input(mod, name, cast(values[key]))
     area.update_tag()
 
     ctx = bpy.context
-    baked = mpt.bake_patch(area, ctx)
+    baked = mpt.bake_patch(area, ctx, no_overlaps=values["noOverlaps"])
+    print(BAKE_MARKER, flush=True)
     tris = sum(len(p.vertices) - 2 for p in baked.data.polygons)
     if tris == 0:
         raise SystemExit("MUSHROOMS: no mushrooms fit this surface; raise the density or select more area")
