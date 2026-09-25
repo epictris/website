@@ -1,0 +1,9 @@
+# The generators' Python packages (boulder v5 in tools/blender/boulders).
+# `bun run generators:setup` installs them into rope/.venv. shapely is pinned
+# as the fork pinned it: the approved rocks were built with 2.1.2, and its
+# triangulation and buffers decide the rock's pieces.
+numpy>=1.24
+shapely==2.1.2
+scipy>=1.12
+Pillow>=9
+matplotlib>=3.6
