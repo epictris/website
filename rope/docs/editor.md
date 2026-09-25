@@ -34,6 +34,19 @@ on the dev server; saved levels can load the exported mesh without Blender.
 The generated files are local and gitignored, so copy them with a level when
 moving it to another machine.
 
+## Generate dirt and moss
+
+Select one scene collision polygon or rectangle and click **Generate dirt + moss**.
+Set the seed, visual depth, and moss coverage from 0 (bare dirt) to 1 (full
+coverage). The editor uses the local generator in `asset-generators/dirt_moss`
+(override with `DIRT_MOSS_PROJECT`). It needs Python and Blender, with
+`PYTHON_PATH` and `BLENDER_PATH` set if they are not on the default paths.
+The GLB is saved under `public/generated-dirt-moss/<id>/` and attached to the
+matched geometry object. Collision remains the selected outline. Select the
+same outline or generated mesh and click again to regenerate it. Generated
+files are local and gitignored; copy them with a level when moving it to another
+machine.
+
 ## Grow mushroom patches on a model
 
 Arm **+ Mushrooms** and click an outline **onto the faces of a drawn model** - a

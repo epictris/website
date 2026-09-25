@@ -1,7 +1,7 @@
 # Procedural asset generators
 
 These source projects power the level editor's **Generate roots**, **Generate
-vine v3**, **Generate boulder v5**, and **Generate mushrooms** controls. Generated meshes, renders,
+vine v3**, **Generate boulder v5**, **Generate dirt + moss**, and **Generate mushrooms** controls. Generated meshes, renders,
 caches, and texture outputs are intentionally excluded from Git.
 
 ## Windows setup
@@ -42,7 +42,7 @@ bun run dev
 ```
 
 Open `http://localhost:3100/editor`. The editor uses the tracked generator
-directories automatically. `ROOTS_PROJECT` and `BOULDERS_V5_PROJECT` may still
+directories automatically. `ROOTS_PROJECT`, `BOULDERS_V5_PROJECT`, and `DIRT_MOSS_PROJECT` may still
 be set to override them.
 
 The environment variables last for the current PowerShell window. Set them
@@ -52,6 +52,7 @@ again after opening a new window.
 
 - `roots/` contains the root and vine v3 Blender generators.
 - `boulders/stylised_rocks_v5/` contains the boulder v5 generator.
+- `dirt_moss/` contains the dirt and moss generator, using the boulder v5 shared helpers.
 - `mushrooms/` contains the glowing mushroom patch Blender add-on
   (`mushroom_patch_tools.py`, copied from `blender/mushroom_patch`) and
   `editor_patch.py`, which grows a patch on the faces picked in the editor.
@@ -60,6 +61,7 @@ again after opening a new window.
   environment.
 
 Output files go into `rope/public/generated-roots`,
-`rope/public/generated-vines`, `rope/public/generated-boulders`, and
+`rope/public/generated-vines`, `rope/public/generated-boulders`,
+`rope/public/generated-dirt-moss`, and
 `rope/public/generated-mushrooms`. Those
 directories remain untracked build output.

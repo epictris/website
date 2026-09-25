@@ -2195,6 +2195,82 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   boulderRow.append(boulderGenerate, labelWrap("seed", boulderSeed), labelWrap("depth (m)", boulderDepth), boulderStatus);
   bar.appendChild(boulderRow);
 
+  const dirtRow = el("div", "ed-row");
+  const dirtSeed = document.createElement("input");
+  dirtSeed.type = "number";
+  dirtSeed.className = "ed-num";
+  dirtSeed.value = "31";
+  dirtSeed.min = "0";
+  dirtSeed.max = "2147483647";
+  dirtSeed.step = "1";
+  dirtSeed.setAttribute("aria-label", "Dirt and moss seed");
+  const dirtDepth = document.createElement("input");
+  dirtDepth.type = "number";
+  dirtDepth.className = "ed-num";
+  dirtDepth.value = "1.6";
+  dirtDepth.min = "0.02";
+  dirtDepth.max = "5";
+  dirtDepth.step = "0.01";
+  dirtDepth.setAttribute("aria-label", "Dirt visual depth in metres");
+  const dirtMoss = document.createElement("input");
+  dirtMoss.type = "number";
+  dirtMoss.className = "ed-num";
+  dirtMoss.value = "0.28";
+  dirtMoss.min = "0";
+  dirtMoss.max = "1";
+  dirtMoss.step = "0.01";
+  dirtMoss.setAttribute("aria-label", "Moss coverage fraction");
+  const dirtStatus = el("span", "ed-root-status");
+  dirtStatus.setAttribute("role", "status");
+  dirtStatus.textContent = "Select one polygon or rectangle.";
+  const dirtGenerate = button("Generate dirt + moss", async () => {
+    const sources = new Map<number, EdItem>();
+    for (const item of operandItems()) {
+      const source = item.object === "collision" ? item :
+        model.items.find(i => i.id === item.matchId && i.object === "collision");
+      if (source) sources.set(source.id, source);
+    }
+    const source = [...sources.values()][0];
+    if (sources.size !== 1 || !source || source.layer !== "scene" ||
+        (source.shape.kind !== "poly" && source.shape.kind !== "rect")) {
+      dirtStatus.textContent = "Select one collision polygon or rectangle, or its dirt mesh.";
+      return;
+    }
+    if (!dirtSeed.reportValidity() || !dirtDepth.reportValidity() || !dirtMoss.reportValidity()) return;
+    const revision = modelRev;
+    dirtGenerate.disabled = true;
+    dirtStatus.textContent = "Generating dirt and moss in Blender…";
+    try {
+      const response = await fetch("/api/dirt-moss", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ polygon: localVertices(source).map(p => [p.x, threeY(p.y)]),
+          seed: Number(dirtSeed.value), depth: Number(dirtDepth.value), moss: Number(dirtMoss.value) }),
+      });
+      const result = await response.json() as { mesh?: string; error?: string };
+      if (!response.ok || !result.mesh) throw new Error(result.error ?? "Dirt and moss generation failed.");
+      if (modelRev !== revision || mode !== "edit")
+        throw new Error("The level changed during generation. Select the shape and generate again.");
+      beginAction();
+      const existing = model.items.find(i => i.object === "geometry" && i.matchId === source.id);
+      const geometry: EdItem = existing ?? {
+        ...source, id: newBodyId(), object: "geometry", shape: cloneShape(source.shape),
+        cam: { ...source.cam }, light: { ...source.light }, note: { ...source.note },
+        matchId: source.id,
+      };
+      geometry.pos = source.pos.clone();
+      geometry.rot = source.rot;
+      geometry.visual = { ...defaultVisual(), kind: "mesh", mesh: result.mesh };
+      if (!existing) addAndSelect([geometry]);
+      else { markDirty(); rebuildInspector(); }
+      dirtStatus.textContent = "Dirt and moss ready. View in 3D + overlay; regenerate after reshaping.";
+    } catch (error) {
+      dirtStatus.textContent = error instanceof Error ? error.message : "Dirt and moss generation failed.";
+    } finally { dirtGenerate.disabled = false; }
+  });
+  dirtGenerate.title = "Generate a dirt block with moss from one collision outline. Seed, visual depth and moss coverage leave collision unchanged.";
+  dirtRow.append(dirtGenerate, labelWrap("seed", dirtSeed), labelWrap("depth (m)", dirtDepth), labelWrap("moss (0–1)", dirtMoss), dirtStatus);
+  bar.appendChild(dirtRow);
+
   const vineRow = el("div", "ed-row");
   const vineSeed = document.createElement("input");
   vineSeed.type = "number";

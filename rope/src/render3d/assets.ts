@@ -37,6 +37,7 @@
 import * as THREE from "three";
 import { generatedRootAsset } from "./generatedRoots";
 import { generatedBoulderAsset } from "./generatedBoulders";
+import { generatedDirtMossAsset } from "./generatedDirtMoss";
 import { generatedVineAsset } from "./generatedVines";
 import { generatedMushroomAsset } from "./generatedMushrooms";
 // Type-only, so the loader's module still lands in its own chunk (`gltfLoader`).
@@ -3448,7 +3449,7 @@ function loadFile(file: string, bytes: number): Promise<THREE.Object3D | null> {
 // null for an unknown key or a load failure, which is the caller's cue to keep
 // its placeholder.
 export function loadMesh(key: string): Promise<THREE.Object3D | null> {
-  const generated = generatedRootAsset(key) ?? generatedBoulderAsset(key) ?? generatedVineAsset(key) ?? generatedMushroomAsset(key);
+  const generated = generatedRootAsset(key) ?? generatedBoulderAsset(key) ?? generatedDirtMossAsset(key) ?? generatedVineAsset(key) ?? generatedMushroomAsset(key);
   const asset = generated ? { ...generated, node: undefined, scale: 1, rotX: 0, rotY: 0, rotZ: 0 } : MESH_ASSETS[key];
   if (!asset) return Promise.resolve(null);
   return loadFile(asset.file, asset.bytes).then((root) => {
