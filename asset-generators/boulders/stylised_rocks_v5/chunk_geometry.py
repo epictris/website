@@ -23,7 +23,8 @@ def build_chunks(spec):
     broad=spec.get('broad_side_chunks',False)
     # Keep the original chunk geometry; only sample fewer, broader cells for
     # the balanced hybrid recipe.
-    count=(max(2,int(spec['slabs']*.90)) if spec.get('balanced_hybrid') else
+    count=(max(2,int(spec['slabs']*.65)) if spec.get('game_low_poly') else
+           max(2,int(spec['slabs']*.90)) if spec.get('balanced_hybrid') else
            (max(16,int(spec['slabs']*.90)) if broad else max(42,int(spec['slabs']*3.0))))
     candidates=[]
     for _ in range(count*200):

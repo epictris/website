@@ -5,7 +5,7 @@ import bpy
 from mathutils import Matrix,Vector
 ROOT=Path(__file__).resolve().parent
 sys.path.insert(0,str(ROOT))
-from stone_materials import stone_material
+from stone_materials import stone_material,worn_edge_color
 from blender_build import export_model,look_at
 out=ROOT/'assets'
 bpy.ops.wm.open_mainfile(filepath=str(out/'polygon_rocks.blend'))
@@ -19,7 +19,10 @@ for f in sorted((out/'evaluated').glob('*.json')):
     obj=bpy.data.objects[spec['name']]
     rocks.append((obj,spec,obj.location.copy()))
     for i,old in enumerate(list(obj.data.materials)):
-        mat=stone_material(spec['name']+f' / structure-aware stone {i}',spec['color'],.91+i*.045,spec)
+        edge='worn bevels' in old.name
+        mat=stone_material(spec['name']+(' / worn bevels' if edge else f' / structure-aware stone {i}'),
+                           worn_edge_color(spec['color']) if edge else spec['color'],
+                           1 if edge else .91+i*.045,spec)
         old.user_remap(mat)
     obj.hide_render=True
 for obj,spec,layout in rocks:

@@ -101,6 +101,7 @@ export function boulderGenerator(): Plugin {
               chunked_sides: true, hybrid_faces: true, balanced_hybrid: true,
               broad_side_chunks: true, soften_thin_edges: true,
               solid_chunk_edges: true, join_undercuts: false,
+              game_low_poly: true,
             },
             rocks: [{ name: "boulder", outer: input.polygon }],
           }));

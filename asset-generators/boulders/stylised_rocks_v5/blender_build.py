@@ -14,7 +14,7 @@ from mathutils import Matrix, Vector, noise
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from stone_materials import stone_material
+from stone_materials import stone_material, worn_edge_color
 
 
 def object_from_part(part, collection, materials):
@@ -79,7 +79,8 @@ def assemble_rock(rock, destination, source_collection, materials):
             bpy.ops.object.modifier_apply(modifier=cut.name)
             if part.get('chunk_bevel') and len(piece.data.polygons):
                 bevel=piece.modifiers.new('Broad broken chunk corners','BEVEL')
-                bevel.width=part['chunk_bevel']; bevel.segments=2 if spec.get('soften_thin_edges') else 1
+                bevel.width=part['chunk_bevel']; bevel.segments=(1 if spec.get('game_low_poly') else
+                    2 if spec.get('soften_thin_edges') else 1)
                 bevel.limit_method='ANGLE'; bevel.angle_limit=math.radians(22)
                 bpy.ops.object.modifier_apply(modifier=bevel.name)
                 for face in piece.data.polygons:
@@ -99,6 +100,8 @@ def assemble_rock(rock, destination, source_collection, materials):
             cut=piece.modifiers.new('Keep tilted chunk inside playable envelope','BOOLEAN')
             cut.operation='INTERSECT'; cut.solver='MANIFOLD'; cut.object=guard
             bpy.ops.object.modifier_apply(modifier=cut.name)
+            if spec.get('game_low_poly') and piece.name.startswith('fracture_chunk_'):
+                clip_pointed_game_chunk_tips(piece,spec)
         bpy.data.objects.remove(guard,do_unlink=True)
         if spec.get('soften_thin_edges'):
             # Round acute projecting lips locally; protect the gameplay band.
@@ -108,7 +111,8 @@ def assemble_rock(rock, destination, source_collection, materials):
                     and e.calc_face_angle(0)>math.radians(70)
                     and all(abs(v.co.z)>spec['depth']*.065 for v in e.verts)]
                 if sharp:
-                    bmesh.ops.bevel(bm,geom=sharp,offset=.045,segments=3,
+                    bmesh.ops.bevel(bm,geom=sharp,offset=.045,
+                        segments=1 if spec.get('game_low_poly') else 3,
                         affect='EDGES',clamp_overlap=True,loop_slide=True)
                 bmesh.ops.recalc_face_normals(bm,faces=list(bm.faces))
                 bm.to_mesh(piece.data); bm.free()
@@ -194,7 +198,11 @@ def assemble_rock(rock, destination, source_collection, materials):
         keep_main_body(result)
     # Simplify the smooth voxel union into larger sculpted planes.
     dec = result.modifiers.new("Broad sculpted facets", "DECIMATE")
-    if spec.get('balanced_hybrid'):
+    if spec.get('game_low_poly'):
+        # Keep broad face placement and the validated gameplay outline, but
+        # budget far fewer triangles before the final edge treatment.
+        dec.ratio=min(1.0, 3000/max(1,len(result.data.polygons)))
+    elif spec.get('balanced_hybrid'):
         # Preserve the broad faces and two-segment rock bevel, while budgeting
         # the surface before the bevel expands its edge loops.
         dec.ratio=min(1.0, 7000/max(1,len(result.data.polygons)))
@@ -202,11 +210,31 @@ def assemble_rock(rock, destination, source_collection, materials):
         dec.ratio = .18 if spec.get('join_undercuts') else (.085 if spec.get('broad_side_chunks') else (.045 if spec.get('hybrid_faces') else .075))
     bpy.context.view_layer.objects.active = result
     bpy.ops.object.modifier_apply(modifier=dec.name)
+    if rock.get('chunk_seeds'):
+        from mathutils.bvhtree import BVHTree
+        result.data.update()
+        source_vertices=[]; source_faces=[]; source_materials=[]
+        for piece in pieces:
+            offset=len(source_vertices)
+            source_vertices.extend([v.co.copy() for v in piece.data.vertices])
+            for face in piece.data.polygons:
+                source_faces.append([offset+i for i in face.vertices])
+                source_materials.append(face.material_index)
+        surface=BVHTree.FromPolygons(source_vertices,source_faces)
+        for face in result.data.polygons:
+            hit=surface.find_nearest(face.center)
+            if hit[2] is not None:
+                face.material_index=source_materials[hit[2]]
     bevel = result.modifiers.new("Chipped light-catching edges", "BEVEL")
-    bevel.width = .020 if spec.get('soften_thin_edges') else .012
-    bevel.segments = 2 if spec.get('soften_thin_edges') else 1
+    bevel.width = (.018 if spec.get('game_low_poly') else
+                   .020 if spec.get('soften_thin_edges') else .012)
+    bevel.segments = (1 if spec.get('game_low_poly') else
+                      2 if spec.get('soften_thin_edges') else 1)
     bevel.limit_method = "ANGLE"
-    bevel.angle_limit = math.radians(27)
+    bevel.angle_limit = math.radians(36 if spec.get('game_low_poly') else 27)
+    # Paint only the actual bevel bands. Mesh Pointiness is unstable after
+    # remeshing and decimation and draws highlights across triangle junctions.
+    bevel.material = len(result.data.materials) - 1
     if spec.get('join_undercuts'):
         result.modifiers.remove(bevel)
     else:
@@ -225,21 +253,6 @@ def assemble_rock(rock, destination, source_collection, materials):
     isolated=[v for v in bm.verts if not v.link_faces]
     if isolated: bmesh.ops.delete(bm,geom=isolated,context='VERTS')
     bm.to_mesh(result.data); bm.free()
-    if rock.get('chunk_seeds'):
-        from mathutils.bvhtree import BVHTree
-        result.data.update()
-        source_vertices=[]; source_faces=[]; source_materials=[]
-        for piece in pieces:
-            offset=len(source_vertices)
-            source_vertices.extend([v.co.copy() for v in piece.data.vertices])
-            for face in piece.data.polygons:
-                source_faces.append([offset+i for i in face.vertices])
-                source_materials.append(face.material_index)
-        surface=BVHTree.FromPolygons(source_vertices,source_faces)
-        for face in result.data.polygons:
-            hit=surface.find_nearest(face.center)
-            if hit[2] is not None:
-                face.material_index=source_materials[hit[2]]
     # (screen x, screen up, depth) -> (world X, -world Y, world Z).
     # Rotation preserves handedness and normal orientation.
     side_rotation = (Matrix(spec["camera_basis"]).to_4x4() if "camera_basis" in spec
@@ -250,7 +263,9 @@ def assemble_rock(rock, destination, source_collection, materials):
         piece.data.transform(side_rotation)
         piece.data.update()
     for face in result.data.polygons:
-        face.use_smooth = False
+        # Only the narrow worn bevels interpolate normals. Larger rock planes
+        # remain faceted and readable at the lower game mesh budget.
+        face.use_smooth = bool(spec.get('game_low_poly') and face.material_index == len(result.data.materials)-1)
     result["input_polygon"] = json.dumps({"outer": spec["outer"], "holes": spec["holes"]})
     result["seed"] = spec["seed"]
     result["depth"] = spec["depth"]
@@ -286,6 +301,64 @@ def keep_main_body(obj):
         groups.sort(key=lambda group: sum(f.calc_area() for f in {f for v in group for f in v.link_faces}), reverse=True)
         bmesh.ops.delete(bm, geom=[v for group in groups[1:] for v in group], context="VERTS")
     bm.to_mesh(obj.data)
+    bm.free()
+
+
+def clip_pointed_game_chunk_tips(obj,spec):
+    """Cap isolated upper/lower depth tips left by clipping structural chunks.
+
+    In the generator's local frame Y is screen-up and Z is visual depth. A
+    short diagonal support band whose X span is tiny compared with its parent
+    chunk identifies a point instead of a broad ridge. Cut only that extreme,
+    well away from the protected gameplay depth plane.
+    """
+    bm=bmesh.new(); bm.from_mesh(obj.data)
+    if not bm.faces:
+        bm.free(); return
+    cuts=0
+    width=max(v.co.x for v in bm.verts)-min(v.co.x for v in bm.verts)
+    band=min(.022,spec['depth']*.015)
+    inset=min(.14,spec['depth']*.09)
+    for up in (-1,1):
+        for toward in (-1,1):
+            normal=Vector((0,up,toward)).normalized()
+            top=max(v.co.dot(normal) for v in bm.verts)
+            extreme=[v for v in bm.verts if v.co.dot(normal)>=top-band]
+            if len(extreme)<2:
+                continue
+            span=max(v.co.x for v in extreme)-min(v.co.x for v in extreme)
+            if span>min(.15,width*.25):
+                continue
+            threshold=top-inset
+            removed=[v for v in bm.verts if v.co.dot(normal)>threshold]
+            if not removed or any(abs(v.co.z)<spec['depth']*.065 for v in removed):
+                continue
+            band_limit=spec['depth']*.065
+            crosses_band=False
+            for edge in bm.edges:
+                a,b=(v.co for v in edge.verts)
+                for depth_plane in (-band_limit,band_limit):
+                    if (a.z-depth_plane)*(b.z-depth_plane)<0:
+                        t=(depth_plane-a.z)/(b.z-a.z)
+                        if (a+(b-a)*t).dot(normal)>threshold:
+                            crosses_band=True
+                            break
+                if crosses_band:
+                    break
+            if crosses_band:
+                continue
+            bmesh.ops.bisect_plane(bm,geom=list(bm.verts)+list(bm.edges)+list(bm.faces),
+                dist=1e-6,plane_co=normal*threshold,plane_no=normal,
+                clear_outer=True,clear_inner=False)
+            open_edges=[e for e in bm.edges if e.is_boundary]
+            if open_edges:
+                bmesh.ops.holes_fill(bm,edges=open_edges,sides=0)
+            cuts+=1
+    if cuts:
+        bmesh.ops.recalc_face_normals(bm,faces=list(bm.faces))
+        bm.to_mesh(obj.data)
+        obj.data.update()
+        print(f'Capped {cuts} pointed tips on {obj.name}',flush=True)
     bm.free()
 
 
@@ -534,6 +607,8 @@ def main():
         sources = bpy.data.collections.new(spec["name"] + " / editable source slabs")
         scene.collection.children.link(sources)
         mats = [stone_material(spec["name"] + f" / stone {i}", spec["color"], (0.88+i*.055 if spec.get('broad_side_chunks') else (0.78+i*.11 if spec.get('chunked_sides') else 0.91+i*.045)), spec) for i in range(5)]
+        mats.append(stone_material(spec["name"] + " / worn bevels",
+                                   worn_edge_color(spec["color"]), 1, spec))
         start = time.monotonic()
         if spec.get("engine")=="nodes":
             from geometry_nodes import assemble_nodes
