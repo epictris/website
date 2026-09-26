@@ -42,3 +42,9 @@ texture IN OUT MAP:
 # Pull the props, textures and generated meshes this checkout's manifests name into rope/public/.
 assets:
     cd rope && bun run assets:fetch
+
+# Publish the generated meshes (rocks, mushroom patches) the levels name to the
+# asset release and pin them in rope/src/render3d/generatedAssets.json. Run it
+# after generating, then commit that file with the level.
+publish:
+    cd rope && bun run assets:publish-generated
