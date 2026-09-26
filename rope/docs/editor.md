@@ -1,5 +1,210 @@
 # Level editor
 
+## Braid a vine
+
+Select a rope made with **+ Vine** and click **Braid selected vine** to give it
+three stems that follow the simulated rope in play. The seed changes the twist;
+the action is undoable and saves with the level. The stems vary in twist spacing,
+separation and thickness, taper to a point at the free end, and carry sparse
+hanging leaves. Change the seed and click again to compare variations. You can also select a circle
+geometry object with a depth to generate a static Blender braid as below.
+
+Select one **geometry object** whose shape is a circle and whose **depth** is
+set, then click **Braid selected vine**. The circle's radius and the geometry
+depth determine a single three-stem braid centred on that cylinder. Its authored
+position, rotation, tilt, scale, body and collision association stay in place.
+The generated GLB replaces that geometry object's primitive look; selecting the
+generated braid and clicking again regenerates it with the current radius, depth
+and seed. Regenerate after changes to the Blender generator to update an older
+asset. The braid has a pointed end and sparse leaves, with no curtain of vines hanging from a
+polygon. The local Blender source is `asset-generators/roots/procedural_vine_braid.py`
+(override its directory with `ROOTS_PROJECT`). Generated files are saved under
+`public/generated-vines/<id>/` and are local, gitignored assets.
+
+## Generate v5 boulders
+
+Select one scene collision polygon or rectangle and click **Generate boulder v5**.
+The editor sends its local outline, seed, and visual depth to the local v5
+generator in `../../../assets/boulders/stylised_rocks_v5` (override with
+`BOULDERS_V5_PROJECT`). The generator uses Python and Blender; set `PYTHON_PATH`
+and `BLENDER_PATH` if they are not on the default paths. The resulting GLB is
+stored in `public/generated-boulders/<id>/` and linked to a matched geometry
+object. Collision remains the selected outline. Generation is available only
+on the dev server; saved levels can load the exported mesh without Blender.
+The generated files are local and gitignored, so copy them with a level when
+moving it to another machine.
+
+## Generate dirt and moss
+
+Select one scene collision polygon or rectangle and click **Generate dirt + moss**.
+Set the seed, visual depth, and moss coverage from 0 (bare dirt) to 1 (full
+coverage). The editor uses the local generator in `asset-generators/dirt_moss`
+(override with `DIRT_MOSS_PROJECT`). It needs Python and Blender, with
+`PYTHON_PATH` and `BLENDER_PATH` set if they are not on the default paths.
+The GLB is saved under `public/generated-dirt-moss/<id>/` and attached to the
+matched geometry object. Collision remains the selected outline. Select the
+same outline or generated mesh and click again to regenerate it. Generated
+files are local and gitignored; copy them with a level when moving it to another
+machine.
+
+## Grow mushroom patches on a model
+
+Arm **+ Mushrooms** and click an outline **onto the faces of a drawn model** - a
+rock, a root, a primitive wall - in **3D + overlay** or **3D**. It works at any
+orbit, which is the point: turn the view (Ctrl+middle drag) to see the top of a
+rock, then click round the part that should grow. Enter or a click on the first
+vertex closes the loop, Backspace drops the last vertex, Esc cancels. Each click
+is a raycast (`Scene3D.pickSurface`) that lands on the nearest drawn geometry
+object that is not itself a patch, so a second patch is drawn on the rock under
+the first. The outline, its vertices and the faces it covers are drawn in the
+scene itself (`SurfaceDraftView`), not on the overlay, so they stay on the model
+at any angle.
+
+**Which faces are covered** (`selectSurface` in `editor/surfacePatch.ts`): the
+loop's plane of best fit (Newell's method, oriented by the surface normals the
+clicks landed on) is the judging plane. Every triangle of the clicked models is
+subdivided down to a step of 1/48 of the outline (1-10 cm), and a piece is kept
+when its centre projects inside the loop, lies within a band of the plane (the
+loop's own deviation plus a third of its size), faces the patch, and is no
+steeper than **max slope°** (default 75; 90 keeps walls, nothing keeps an
+overhang, because stems grow straight up). So a large low-poly facet is cut to
+the drawn edge and the back of a rock is never taken with its front. The panel
+reports the faces, the area and the most mushrooms it can hold.
+
+**Generate mushrooms** posts the covered faces (a triangle soup in metres,
+relative to their centre) with **density /m²**, **height (m)**, **clumping**,
+**detail** and **seed** to `/api/mushrooms`, which runs
+`asset-generators/mushrooms/editor_patch.py` in Blender: the Mushroom Patch
+add-on's Geometry Nodes group grows the patch on the faces, bakes it with No
+Overlaps on and exports one GLB with its baked albedo, emissive (glowing gills,
+`KHR_materials_emissive_strength`) and ORM textures. A generation takes about
+8-15 s. The server refuses a request past 3000 expected mushrooms, because the
+overlap pass is exact and pairwise.
+
+The result is a `mesh` geometry object **in the body of the model it grows on**,
+at the faces' centre with no rotation, so it rides that body and collides with
+nothing. The outline stays open after a Generate so the settings can be tuned on
+the same faces: generating again replaces the patch that outline made (one undo
+step each). A click after that starts the next outline.
+
+Override the generator with `MUSHROOMS_PROJECT` and Blender with `BLENDER_PATH`.
+Files go to `public/generated-mushrooms/<id>/` (`mushrooms.glb` and the
+`patch.json` request that made it), local and gitignored like the other
+generators; mesh keys are `mushroom-patch:<id>:<bytes>`. Checks:
+`node --test scripts/mushroom-generator.test.mjs`.
+
+## Grow grass on a model
+
+In the **Visuals** workspace, **+ Grass** paints an outline onto model faces.
+Close it with Enter or the first vertex, then click **Generate grass**. Its
+settings appear while Grass is armed, with **max slope°** underneath. **+ Grass**
+and **+ Plants** share the outline, so switching between them keeps it and one
+outline can carry both kinds of foliage. Each **Generate** replaces only the
+patch of its own kind that the outline made. Main's **+ Mushrooms** keeps its
+separate saved generator panel and editable loop.
+
+**Generate grass** posts the covered faces with **blades /m²**, **height (m)**,
+**clumping**, **tuft (m)**, **detail** and **seed** to `/api/grass`, which runs
+`asset-generators/grass/editor_patch.py` in Blender. The `GrassPatch` Geometry
+Nodes group (`grass_patch_tools.py`) scatters blade points on the faces, thins
+them by a 2D Voronoi lattice so they gather into tufts (`tuft` is the lattice
+spacing, `clumping` how bare the ground between tufts is), and stores every
+per-blade decision on the point: the middle blades are the tallest and stand
+straight, outer blades are shorter and lean away from the tuft's middle, a few
+slender ones shoot up. Each blade is one flat grid (a quad per segment,
+tapering to a point at the tip) placed on a closed-form arc, twisted about its
+length and shaded flat so every segment catches the light alone. One 128x64
+gradient texture (U base to tip, V one tone row per blade) and one double-sided
+material carry the colour. Nothing culls against neighbours, so the cost is
+linear: the server refuses a request past 40000 expected blades, and about 10
+triangles a blade at the default detail is what the level pays. A generation
+takes about 15 s.
+
+The result is a `mesh` geometry object in the body of the model it grows on,
+exactly as for mushrooms: drawn only, no collision. Override the generator with
+`GRASS_PROJECT` and Blender with `BLENDER_PATH`. Files go to
+`public/generated-grass/<id>/` (`grass.glb` and its `patch.json`), local and
+gitignored; mesh keys are `grass-patch:<id>:<bytes>`. Checks:
+`node --test scripts/grass-generator.test.mjs`.
+
+## Grow cave plants on a model
+
+**+ Plants** is the same on-model outline as **+ Mushrooms** and **+ Grass**
+(same picking, same face selection, one shared outline, and **max slope°** lives
+in the mushroom row). **Generate plants** posts the covered faces with the ticked
+plant types, **plants /m²**, **size**, **ivy (m)**, **detail**, **max slope°**
+and **seed** to `/api/plants`, which runs `asset-generators/plants/editor_patch.py`
+in Blender. It builds the plants of `cave_foliage.py` (the procedural Alocasia,
+bird's-nest fern, sword fern, creeper and ivy vine builders, at the export
+detail) and places them by where each face looks. Rocks and mushrooms are never
+grown here: they have their own tools.
+
+| Type | Grows on | Count |
+|---|---|---|
+| alocasia, bird's nest, fern | faces no steeper than **max slope°**, tilted halfway from vertical toward the surface normal | **plants /m²** of up-facing area, split at random between the ticked kinds |
+| creepers | the same faces, a small leaf patch lying along the normal (`build_creepers` on a flat 0.6 m patch) | **plants /m²** |
+| hanging ivy | faces looking down (normal.z at most -0.5), a vine hanging from each point | 4 x **plants /m²** of underside area, each up to **ivy (m)** long |
+
+Standing plants and creepers keep a spacing of about 0.4 x **size** from each
+other (twenty tries a plant, so a crowded surface simply grows fewer). **size**
+scales the standing plants and creepers; ivy is sized by its own length only.
+Ticking **hanging ivy** makes the outline keep faces that look down as well
+(`selectSurface` with slope 180, see `plantsKeepOverhangs`); every other tool
+keeps cutting at max slope°, and a Generate cuts the faces for its own kind
+whichever tool is armed.
+
+All plants are joined into one mesh with one double-sided vertex-colour material
+(colours baked from the node materials, `COLOR_0`) and keep the `_SWAY` wind
+weight of `cave_foliage.py` (0 at the base, 1 at the tips; the pivot of each
+plant is its base, of a vine its top). The game does not wind-animate a patch:
+`plants/caveFoliage.js` is the reference wind shader, not wired in. The server
+refuses a request past 800 expected plants (`plantEstimate`); a 3 m² patch at
+the defaults is about 30 plants, 15000 triangles and 600 kB, and a generation
+takes 7-15 s.
+
+The result is a `mesh` geometry object in the body of the model it grows on,
+exactly as for mushrooms and grass: drawn only, no collision, and generating
+again replaces the plant patch that outline made. Override the generator with
+`PLANTS_PROJECT` and Blender with `BLENDER_PATH`. Files go to
+`public/generated-plants/<id>/` (`plants.glb` and its `patch.json`), local and
+gitignored; mesh keys are `plant-patch:<id>:<bytes>`. Checks:
+`node --test scripts/plant-generator.test.mjs`.
+
+Two things to know. The faces' normals come from their winding as the editor
+sends it, so a model drawn with a negative scale (a mirror) reads as facing the
+other way and its plants stand on the wrong side (not tested). And a selected object is drawn with a yellow
+highlight, so a fresh patch looks cream until something else is selected.
+
+## Generate procedural roots
+
+Select one collision polygon or rectangle on the scene layer and click
+**Generate roots**. **Seed** changes the bark and volume variation; **depth (m)**
+sets visual thickness (default 0.38 m). Generation uses the local
+`procedural_roots` project's Blender exporter and may take a minute. Inspect the
+result with **3D + overlay**, then use **Test Ball** or **Test Grapple** to play it.
+The local `root-generation-test` level contains a generated branch and a floor
+for trying the workflow; select its root body to regenerate with another seed.
+
+The action adds a mesh geometry object to the same body, or replaces its matched
+geometry. It is one undoable edit. Collision and hook rules stay on the original
+outline; rounding and broken ends are disabled so the generated silhouette agrees
+with it. Regenerate after editing the outline. Selecting the generated mesh also
+finds its matched collision shape. This first integration generates one shape at
+a time; it does not fuse separate bodies into a shared root surface. If the level
+changes while Blender runs, the result is not applied to the changed model.
+
+On this Windows setup the default generator is `../../../assets/roots` relative
+to `rope`, and Blender is `C:/Program Files/Blender Foundation/Blender 5.2/blender.exe`.
+Set `ROOTS_PROJECT` and `BLENDER_PATH` before starting Vite to use other locations.
+Only the dev server offers generation. Exported meshes, source blockouts and
+generation settings are stored in `public/generated-roots/<id>/`; saved levels
+reference immutable mesh keys and work after restarting the editor. This directory
+is gitignored local output. Keep it with the level when sharing or backing up a
+test; a production build copies it into `dist`. Publishing through the shared
+release asset store remains a separate step.
+
+Run the focused request/asset checks with `node --test scripts/root-generator.test.mjs`.
+
 The **`/editor`** page (its own HTML page `editor.html` → `src/editorMain.ts`, distinct
 from the game at `/`) runs an in-browser level editor (`src/editor/`, its own canvas loop +
 DOM overlay). Dev serves `/editor` via a rewrite in `vite.config.ts`; production maps it to

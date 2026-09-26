@@ -1,4 +1,11 @@
 import { defineConfig, type HtmlTagDescriptor, type Plugin } from "vite";
+import { rootGenerator } from "./src/server/rootGenerator";
+import { boulderGenerator } from "./src/server/boulderGenerator";
+import { dirtMossGenerator } from "./src/server/dirtMossGenerator";
+import { vineGenerator } from "./src/server/vineGenerator";
+import { mushroomGenerator } from "./src/server/mushroomGenerator";
+import { grassGenerator } from "./src/server/grassGenerator";
+import { plantGenerator } from "./src/server/plantGenerator";
 import { buildSync } from "esbuild";
 import {
   existsSync,
@@ -532,6 +539,13 @@ export default defineConfig({
         // Generated meshes land here while the editor is open; they are
         // fetched by key, never imported, so a write must not reach HMR.
         "**/public/generated/**",
+        "**/public/generated-roots/**",
+        "**/public/generated-boulders/**",
+        "**/public/generated-dirt-moss/**",
+        "**/public/generated-vines/**",
+        "**/public/generated-mushrooms/**",
+        "**/public/generated-grass/**",
+        "**/public/generated-plants/**",
       ],
     },
     // The playtest store lives in serve.ts, not in Vite. With `bun run serve.ts`
@@ -562,6 +576,13 @@ export default defineConfig({
     },
   },
   plugins: [
+    rootGenerator(),
+    boulderGenerator(),
+    dirtMossGenerator(),
+    vineGenerator(),
+    mushroomGenerator(),
+    grassGenerator(),
+    plantGenerator(),
     treeStampPlugin(),
     levelHashesPlugin(),
     storeScript(),

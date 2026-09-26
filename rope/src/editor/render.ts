@@ -2508,9 +2508,20 @@ export function drawEditor(
       }
       const color = v.color ?? VINE_DEFAULT_COLOR;
       if (layers === "fill") {
-        ctx.strokeStyle = color;
-        ctx.lineWidth = worldLine * 3;
-        tracePath(path);
+        if (v.braidSeed !== null) {
+          ctx.strokeStyle = color;
+          ctx.lineWidth = worldLine * 2;
+          tracePath(path);
+          ctx.strokeStyle = "#8eaa68";
+          ctx.lineWidth = worldLine;
+          ctx.setLineDash([worldLine * 3, worldLine * 3]);
+          tracePath(path);
+          ctx.setLineDash([]);
+        } else {
+          ctx.strokeStyle = color;
+          ctx.lineWidth = worldLine * 3;
+          tracePath(path);
+        }
       }
       // An anchor mark at each bolted end: one for a hanging vine, both for a
       // span.

@@ -1,0 +1,16 @@
+**/__pycache__/
+roots/bark_albedo.png
+roots/bark_albedo_bandguides.png
+roots/bark_height.png
+roots/bark_normal.png
+roots/bark_roughness.png
+roots/*_output/
+roots/previews/
+roots/sideview_samples/
+roots/three/
+boulders/stylised_rocks_v5/assets/
+boulders/stylised_rocks_v5/new_boulders/
+boulders/stylised_rocks_v5/regenerated/
+*.blend
+*.blend1
+*.log

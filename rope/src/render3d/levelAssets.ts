@@ -21,6 +21,13 @@
 // the set do the deduplicating.
 
 import type { RawLevelData } from "../level/levelFormat";
+import { generatedRootAsset } from "./generatedRoots";
+import { generatedBoulderAsset } from "./generatedBoulders";
+import { generatedDirtMossAsset } from "./generatedDirtMoss";
+import { generatedVineAsset } from "./generatedVines";
+import { generatedMushroomAsset } from "./generatedMushrooms";
+import { generatedGrassAsset } from "./generatedGrass";
+import { generatedPlantAsset } from "./generatedPlants";
 import { normalizeLevelData } from "../level/levelFormat";
 import { generatedMeshAsset, parseGeneratedKey } from "./generated";
 import { GENERATED_ASSETS, generatedMeta } from "./generatedMeta";
@@ -53,7 +60,7 @@ export interface StoredFile {
 // answer.
 function meshFile(key: string): StoredFile | undefined {
   const generated = generatedMeshAsset(key);
-  if (!generated) return MESH_ASSETS[key];
+  if (!generated) return generatedRootAsset(key) ?? generatedBoulderAsset(key) ?? generatedDirtMossAsset(key) ?? generatedVineAsset(key) ?? generatedMushroomAsset(key) ?? generatedGrassAsset(key) ?? generatedPlantAsset(key) ?? MESH_ASSETS[key];
   const bytes = GENERATED_ASSETS[key]?.bytes ?? generatedMeta(key)?.bytes;
   if (bytes === undefined) {
     console.warn(`[levelAssets] ${key} is not in the store and has no meta.json; preloading ${generated.file} unweighted`);

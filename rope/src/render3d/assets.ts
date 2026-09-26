@@ -35,6 +35,13 @@
 // mesh that has not arrived yet never blocks the frame or the sim.
 
 import * as THREE from "three";
+import { generatedRootAsset } from "./generatedRoots";
+import { generatedBoulderAsset } from "./generatedBoulders";
+import { generatedDirtMossAsset } from "./generatedDirtMoss";
+import { generatedVineAsset } from "./generatedVines";
+import { generatedMushroomAsset } from "./generatedMushrooms";
+import { generatedGrassAsset } from "./generatedGrass";
+import { generatedPlantAsset } from "./generatedPlants";
 // Type-only, so the loader's module still lands in its own chunk (`gltfLoader`).
 import type { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { withDownload } from "./download";
@@ -3492,9 +3499,9 @@ export function forgetFailedMesh(key: string): boolean {
 // no scale, no turn), and has no manifest entry. Its size is unknown here, so
 // the download is unweighted; a missing file is a failed load like any other.
 export function loadMesh(key: string): Promise<THREE.Object3D | null> {
-  const generated = generatedMeshAsset(key);
+  const generated = generatedMeshAsset(key) ?? generatedRootAsset(key) ?? generatedBoulderAsset(key) ?? generatedDirtMossAsset(key) ?? generatedVineAsset(key) ?? generatedMushroomAsset(key) ?? generatedGrassAsset(key) ?? generatedPlantAsset(key);
   const asset: Pick<MeshAsset, "file" | "bytes" | "node" | "scale" | "rotX" | "rotY" | "rotZ"> | undefined =
-    generated ? { file: generated.file, bytes: 0 } : MESH_ASSETS[key];
+    generated ? { file: generated.file, bytes: "bytes" in generated && typeof generated.bytes === "number" ? generated.bytes : 0 } : MESH_ASSETS[key];
   if (!asset) return Promise.resolve(null);
   return loadFile(asset.file, asset.bytes).then((root) => {
     if (!root) return null;

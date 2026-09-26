@@ -455,6 +455,12 @@ way. Capsules rather than cylinders because the cord bends at every link and the
 hemispherical caps fill the notch two cylinders would leave on the outside of a
 bend, at any angle and with no mitre to compute.
 
+With a braid seed, both renderers lay three stems along the same link path.
+Seeded twist, separation and girth vary along their length; the final 18 cm
+converge to a narrow tip. Sparse leaves and their short stems are placed by arc
+length, so they follow the vine as it moves. These are visual only: the links,
+grab radius and load rope are unchanged.
+
 Drawn in the scene rather than painted flat over it, and that is the whole point
 of the 3D half existing: **the 2D overlay is dropped in every 3D-only view the
 editor has and in every orbited one**, being a projection of the gameplay plane,

@@ -281,3 +281,20 @@ For the generators, the `generator:` cases cover the surface a loop collects on 
 The editor's wiring was driven in the page after the review fixes (2026-09-25, CDP harness, real Blender): a patch generated from the Level workspace's 2D view after its host was nudged switched to Visuals and grew on the host's new pose (its soup is the old one's surface moved by exactly the 0.2 m nudge); a rock duplicated mid-generation and generated again, then moved on to another seed, left the original's job running, and both ended done; a job that finished during a gizmo drag landed after it, one undo step for the drag and one for the landing, and redo intact across a landing; a patch on a rock never generated was refused; the loop point's slop, the re-fit, the disabled mesh picker, W's key repeat, the scene rebuild after a failed load of a key that then landed, and Ctrl+C on the dev server killing a running Blender and the page reading `lost`.
 Not driven: the nudge-run gate, and the collect's refusals of a host with no mesh or a mesh that does not load (the same `hostRefusal` as the never-generated one that was).
 They cannot see the scene: the click on an outline, the loop painted on a real rock, the surface collected from a mesh the scene has just rebuilt, the one-undo-step claims, the panel's layout and the look of a rock or a patch were verified by driving `/editor` through the CDP harness with real Blender runs (2026-09-25), and the look is the owner's to judge.
+
+## Grass and cave foliage
+
+The Visuals scene toolbar also offers **+ Grass** and **+ Plants**. Click points
+onto a model, close with Enter or the first point, then use **Generate grass**
+or **Generate plants** above the toolbar. The active tool shows its settings,
+with a shared **max slope°** and surface status underneath. Backspace removes
+the last point; Esc cancels. Grass and Plants share an outline, so switching
+between them lets both grow on the same patch. Middle-drag orbit and pan keep
+working while painting. Switching back to Level cancels the surface draft.
+
+These tools keep their existing `/api/grass` and `/api/plants` Blender backends
+and local generated assets. They add mesh geometry to the host's body, support
+undo and save, and replace their own patch when generated again from the same
+outline. Their outlines/settings are temporary; they do not yet use the saved
+schema-backed generator panel and editable loops of **+ Mushrooms**. See
+[editor](editor.md#grow-grass-on-a-model) for parameters and Blender setup.

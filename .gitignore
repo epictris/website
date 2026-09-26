@@ -6,3 +6,6 @@ terraform/terraform.tfstate.backup
 terraform/terraform.tfvars
 terraform/backend.hcl
 .env
+asset-generators/boulders/.deps/
+asset-generators/dirt_moss/regenerated/
+asset-generators/dirt_moss/*.log

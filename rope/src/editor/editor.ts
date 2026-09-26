@@ -3,6 +3,7 @@
 // and saves/loads levels from disk through the dev-server API.
 
 import { Vec2 } from "../engine/vec2";
+import { localVertices } from "./model";
 import { PIXELS_PER_METER, PX } from "../engine/units";
 import { BALL_ZOOM, GRAPPLE_ZOOM, screenToWorld, worldToScreen, type Camera } from "../render/camera";
 import { LETTERBOX_COLOR, VIEW_HEIGHT, VIEW_WIDTH, viewTransform } from "../render/viewport";
@@ -238,6 +239,7 @@ import * as THREE from "three";
 import { ROCK_HASH_KEY, ROCK_INDEX_KEY, ROCK_TEXTURES, rockBodies, rockNodeName, rocksUrl } from "../render3d/rocks";
 import { silhouette, type SilTriangle } from "../lib/silhouette";
 import { Scene3D, type Scene3DLevel } from "../render3d/scene";
+import { selectSurface as selectFoliageSurface, SurfaceDraftView, type SurfacePoint as FoliageSurfacePoint, type SurfaceSelection as FoliageSurfaceSelection } from "./surfacePatch";
 import {
   focalLengthFromFov,
   FOV_Y_DEG,
@@ -361,7 +363,13 @@ type Tool =
   // a collision outline dresses it with a generated rock, and a loop painted
   // onto a model's faces grows a mushroom patch there.
   | "rock"
-  | "mushrooms";
+  | "mushrooms"
+  | "mushroom"
+  | "grass"
+  | "plant";
+
+const isSurfaceTool = (t: Tool): boolean => t === "mushroom" || t === "grass" || t === "plant";
+
 
 // Which tools each layer offers. A shape tool has no meaning on the notes layer
 // (a note is a text box or an arrow, never a circle) and vice versa, so the
@@ -383,6 +391,9 @@ const LAYER_TOOLS: Record<EdLayer, Tool[]> = {
     "geometry",
     "rock",
     "mushrooms",
+    "mushroom",
+    "grass",
+    "plant",
     "light",
     "glow",
     "fireflies",
@@ -423,6 +434,9 @@ const TOOL_WORKSPACES: Record<Tool, ToolWorkspace> = {
   fireflies: "both",
   rock: "visuals",
   mushrooms: "visuals",
+  mushroom: "level",
+  grass: "visuals",
+  plant: "visuals",
 };
 
 // Kinds a chain may be tied to. An area is a region, not a body - nothing hangs
@@ -1993,7 +2007,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       vines: model.vines.flatMap((v) => {
         const points = vineRestPath(model, v);
         if (!points) return [];
-        return [{ color: v.color, path: (_alpha: number, out: Vec2[]) => {
+        return [{ color: v.color, braidSeed: v.braidSeed, path: (_alpha: number, out: Vec2[]) => {
           out.length = 0;
           out.push(...points);
         } }];
@@ -2365,6 +2379,614 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   });
   fileRow.append(btnNew, loadSel, btnSave, btnSaveAs, btnDelete);
 
+  const rootsRow = el("div", "ed-row");
+  const rootSeed = document.createElement("input");
+  rootSeed.type = "number";
+  rootSeed.className = "ed-num";
+  rootSeed.value = "1234";
+  rootSeed.min = "0";
+  rootSeed.max = "2147483647";
+  rootSeed.step = "1";
+  rootSeed.setAttribute("aria-label", "Root seed");
+  const rootDepth = document.createElement("input");
+  rootDepth.type = "number";
+  rootDepth.className = "ed-num";
+  rootDepth.value = "0.38";
+  rootDepth.min = "0.02";
+  rootDepth.max = "5";
+  rootDepth.step = "0.01";
+  rootDepth.setAttribute("aria-label", "Root visual depth in metres");
+  const rootStatus = el("span", "ed-root-status");
+  rootStatus.setAttribute("role", "status");
+  rootStatus.textContent = "Select one polygon or rectangle.";
+  const rootGenerate = button("Generate roots", async () => {
+    const selection = operandItems();
+    const sources = new Map<number, EdItem>();
+    for (const item of selection) {
+      const source = item.object === "collision" ? item :
+        model.items.find(i => i.id === item.matchId && i.object === "collision");
+      if (source) sources.set(source.id, source);
+    }
+    const source = [...sources.values()][0];
+    if (sources.size !== 1 || !source || source.layer !== "scene" ||
+        (source.shape.kind !== "poly" && source.shape.kind !== "rect")) {
+      rootStatus.textContent = "Select one collision polygon or rectangle, or its root mesh.";
+      return;
+    }
+    if (!rootSeed.reportValidity() || !rootDepth.reportValidity()) return;
+    const revision = modelRev;
+    rootGenerate.disabled = true;
+    rootStatus.textContent = "Generating roots in Blender…";
+    try {
+      const response = await fetch("/api/roots", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ polygon: localVertices(source).map(p => [p.x, threeY(p.y)]),
+          seed: Number(rootSeed.value), depth: Number(rootDepth.value) }),
+      });
+      const result = await response.json() as { mesh?: string; error?: string };
+      if (!response.ok || !result.mesh) throw new Error(result.error ?? "Root generation failed.");
+      if (modelRev !== revision || mode !== "edit")
+        throw new Error("The level changed during generation. Select the shape and generate again.");
+      beginAction();
+      const existing = model.items.find(i => i.object === "geometry" && i.matchId === source.id);
+      const geometry: EdItem = existing ?? {
+        ...source, id: newBodyId(), object: "geometry", shape: cloneShape(source.shape),
+        cam: { ...source.cam }, light: { ...source.light }, note: { ...source.note },
+        matchId: source.id,
+      };
+      geometry.pos = source.pos.clone();
+      geometry.rot = source.rot;
+      geometry.visual = { ...defaultVisual(), kind: "mesh", mesh: result.mesh };
+      if (!existing) addAndSelect([geometry]);
+      else { markDirty(); rebuildInspector(); }
+      rootStatus.textContent = "Root ready. View in 3D + overlay; regenerate after reshaping.";
+    } catch (error) {
+      rootStatus.textContent = error instanceof Error ? error.message : "Root generation failed.";
+    } finally { rootGenerate.disabled = false; }
+  });
+  rootGenerate.title = "Generate a bark-textured 3D root from one collision outline. Seed and visual depth leave collision unchanged.";
+  rootsRow.append(rootGenerate, labelWrap("seed", rootSeed), labelWrap("depth (m)", rootDepth), rootStatus);
+  bar.appendChild(rootsRow);
+
+  const boulderRow = el("div", "ed-row");
+  const boulderSeed = document.createElement("input");
+  boulderSeed.type = "number";
+  boulderSeed.className = "ed-num";
+  boulderSeed.value = "31";
+  boulderSeed.min = "0";
+  boulderSeed.max = "2147483647";
+  boulderSeed.step = "1";
+  boulderSeed.setAttribute("aria-label", "Boulder seed");
+  const boulderDepth = document.createElement("input");
+  boulderDepth.type = "number";
+  boulderDepth.className = "ed-num";
+  boulderDepth.value = "1.6";
+  boulderDepth.min = "0.02";
+  boulderDepth.max = "5";
+  boulderDepth.step = "0.01";
+  boulderDepth.setAttribute("aria-label", "Boulder visual depth in metres");
+  const boulderStatus = el("span", "ed-root-status");
+  boulderStatus.setAttribute("role", "status");
+  boulderStatus.textContent = "Select one polygon or rectangle.";
+  const boulderGenerate = button("Generate boulder v5", async () => {
+    const sources = new Map<number, EdItem>();
+    for (const item of operandItems()) {
+      const source = item.object === "collision" ? item :
+        model.items.find(i => i.id === item.matchId && i.object === "collision");
+      if (source) sources.set(source.id, source);
+    }
+    const source = [...sources.values()][0];
+    if (sources.size !== 1 || !source || source.layer !== "scene" ||
+        (source.shape.kind !== "poly" && source.shape.kind !== "rect")) {
+      boulderStatus.textContent = "Select one collision polygon or rectangle, or its boulder mesh.";
+      return;
+    }
+    if (!boulderSeed.reportValidity() || !boulderDepth.reportValidity()) return;
+    const revision = modelRev;
+    boulderGenerate.disabled = true;
+    boulderStatus.textContent = "Generating boulder v5 in Blender…";
+    try {
+      const response = await fetch("/api/boulders", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ polygon: localVertices(source).map(p => [p.x, threeY(p.y)]),
+          seed: Number(boulderSeed.value), depth: Number(boulderDepth.value) }),
+      });
+      const result = await response.json() as { mesh?: string; error?: string };
+      if (!response.ok || !result.mesh) throw new Error(result.error ?? "Boulder generation failed.");
+      if (modelRev !== revision || mode !== "edit")
+        throw new Error("The level changed during generation. Select the shape and generate again.");
+      beginAction();
+      const existing = model.items.find(i => i.object === "geometry" && i.matchId === source.id);
+      const geometry: EdItem = existing ?? {
+        ...source, id: newBodyId(), object: "geometry", shape: cloneShape(source.shape),
+        cam: { ...source.cam }, light: { ...source.light }, note: { ...source.note },
+        matchId: source.id,
+      };
+      geometry.pos = source.pos.clone();
+      geometry.rot = source.rot;
+      geometry.visual = { ...defaultVisual(), kind: "mesh", mesh: result.mesh };
+      if (!existing) addAndSelect([geometry]);
+      else { markDirty(); rebuildInspector(); }
+      boulderStatus.textContent = "Boulder ready. View in 3D + overlay; regenerate after reshaping.";
+    } catch (error) {
+      boulderStatus.textContent = error instanceof Error ? error.message : "Boulder generation failed.";
+    } finally { boulderGenerate.disabled = false; }
+  });
+  boulderGenerate.title = "Generate a v5 stylised boulder from one collision outline. Seed and visual depth leave collision unchanged.";
+  boulderRow.append(boulderGenerate, labelWrap("seed", boulderSeed), labelWrap("depth (m)", boulderDepth), boulderStatus);
+  bar.appendChild(boulderRow);
+
+  const dirtRow = el("div", "ed-row");
+  const dirtSeed = document.createElement("input");
+  dirtSeed.type = "number";
+  dirtSeed.className = "ed-num";
+  dirtSeed.value = "31";
+  dirtSeed.min = "0";
+  dirtSeed.max = "2147483647";
+  dirtSeed.step = "1";
+  dirtSeed.setAttribute("aria-label", "Dirt and moss seed");
+  const dirtDepth = document.createElement("input");
+  dirtDepth.type = "number";
+  dirtDepth.className = "ed-num";
+  dirtDepth.value = "1.6";
+  dirtDepth.min = "0.02";
+  dirtDepth.max = "5";
+  dirtDepth.step = "0.01";
+  dirtDepth.setAttribute("aria-label", "Dirt visual depth in metres");
+  const dirtMoss = document.createElement("input");
+  dirtMoss.type = "number";
+  dirtMoss.className = "ed-num";
+  dirtMoss.value = "0.28";
+  dirtMoss.min = "0";
+  dirtMoss.max = "1";
+  dirtMoss.step = "0.01";
+  dirtMoss.setAttribute("aria-label", "Moss coverage fraction");
+  const dirtStatus = el("span", "ed-root-status");
+  dirtStatus.setAttribute("role", "status");
+  dirtStatus.textContent = "Select one polygon or rectangle.";
+  const dirtGenerate = button("Generate dirt + moss", async () => {
+    const sources = new Map<number, EdItem>();
+    for (const item of operandItems()) {
+      const source = item.object === "collision" ? item :
+        model.items.find(i => i.id === item.matchId && i.object === "collision");
+      if (source) sources.set(source.id, source);
+    }
+    const source = [...sources.values()][0];
+    if (sources.size !== 1 || !source || source.layer !== "scene" ||
+        (source.shape.kind !== "poly" && source.shape.kind !== "rect")) {
+      dirtStatus.textContent = "Select one collision polygon or rectangle, or its dirt mesh.";
+      return;
+    }
+    if (!dirtSeed.reportValidity() || !dirtDepth.reportValidity() || !dirtMoss.reportValidity()) return;
+    const revision = modelRev;
+    dirtGenerate.disabled = true;
+    dirtStatus.textContent = "Generating dirt and moss in Blender…";
+    try {
+      const response = await fetch("/api/dirt-moss", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ polygon: localVertices(source).map(p => [p.x, threeY(p.y)]),
+          seed: Number(dirtSeed.value), depth: Number(dirtDepth.value), moss: Number(dirtMoss.value) }),
+      });
+      const result = await response.json() as { mesh?: string; error?: string };
+      if (!response.ok || !result.mesh) throw new Error(result.error ?? "Dirt and moss generation failed.");
+      if (modelRev !== revision || mode !== "edit")
+        throw new Error("The level changed during generation. Select the shape and generate again.");
+      beginAction();
+      const existing = model.items.find(i => i.object === "geometry" && i.matchId === source.id);
+      const geometry: EdItem = existing ?? {
+        ...source, id: newBodyId(), object: "geometry", shape: cloneShape(source.shape),
+        cam: { ...source.cam }, light: { ...source.light }, note: { ...source.note },
+        matchId: source.id,
+      };
+      geometry.pos = source.pos.clone();
+      geometry.rot = source.rot;
+      geometry.visual = { ...defaultVisual(), kind: "mesh", mesh: result.mesh };
+      if (!existing) addAndSelect([geometry]);
+      else { markDirty(); rebuildInspector(); }
+      dirtStatus.textContent = "Dirt and moss ready. View in 3D + overlay; regenerate after reshaping.";
+    } catch (error) {
+      dirtStatus.textContent = error instanceof Error ? error.message : "Dirt and moss generation failed.";
+    } finally { dirtGenerate.disabled = false; }
+  });
+  dirtGenerate.title = "Generate a dirt block with moss from one collision outline. Seed, visual depth and moss coverage leave collision unchanged.";
+  dirtRow.append(dirtGenerate, labelWrap("seed", dirtSeed), labelWrap("depth (m)", dirtDepth), labelWrap("moss (0–1)", dirtMoss), dirtStatus);
+  bar.appendChild(dirtRow);
+
+  const vineRow = el("div", "ed-row");
+  const vineSeed = document.createElement("input");
+  vineSeed.type = "number";
+  vineSeed.className = "ed-num";
+  vineSeed.value = "1701";
+  vineSeed.min = "0";
+  vineSeed.max = "2147483647";
+  vineSeed.step = "1";
+  vineSeed.setAttribute("aria-label", "Vine seed");
+  const vineStatus = el("span", "ed-root-status");
+  vineStatus.setAttribute("role", "status");
+  vineStatus.textContent = "Select one +Vine rope or cylindrical geometry object.";
+  const vineGenerate = button("Braid selected vine", async () => {
+    if (selectedVineIds.size === 1 && selectedIds.size === 0 && selectedBodyIds.size === 0) {
+      if (!vineSeed.reportValidity()) return;
+      const vine = selectedVines()[0]!;
+      beginAction();
+      vine.braidSeed = Number(vineSeed.value);
+      markDirty();
+      rebuildInspector();
+      vineStatus.textContent = "Braid ready on the selected vine.";
+      return;
+    }
+    const selected = operandItems().filter(i => i.object === "geometry");
+    const geometry = selected.length === 1 ? selected[0] : undefined;
+    if (!geometry || geometry.layer !== "scene" || geometry.shape.kind !== "circle" ||
+        geometry.visual.depth === null || geometry.visual.depth <= 0 ||
+        (geometry.visual.kind === "mesh" && !geometry.visual.mesh.startsWith("vine-v3:"))) {
+      vineStatus.textContent = "Select one +Vine rope, or one cylinder geometry object with depth.";
+      return;
+    }
+    if (!vineSeed.reportValidity()) return;
+    const revision = modelRev;
+    vineGenerate.disabled = true;
+    vineStatus.textContent = "Braiding the selected cylinder in Blender…";
+    try {
+      const response = await fetch("/api/vines", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ radius: geometry.shape.r, length: geometry.visual.depth,
+          seed: Number(vineSeed.value) }),
+      });
+      const result = await response.json() as { mesh?: string; error?: string };
+      if (!response.ok || !result.mesh) throw new Error(result.error ?? "Vine generation failed.");
+      if (modelRev !== revision || mode !== "edit")
+        throw new Error("The level changed during generation. Select the shape and generate again.");
+      beginAction();
+      // An authored cylinder surface (often wood) would otherwise replace every
+      // GLB material, including the separate leaf greens.
+      geometry.visual = { ...geometry.visual, kind: "mesh", mesh: result.mesh, texture: "" };
+      markDirty();
+      rebuildInspector();
+      vineStatus.textContent = "Braid ready on the selected cylinder.";
+    } catch (error) {
+      vineStatus.textContent = error instanceof Error ? error.message : "Vine generation failed.";
+    } finally { vineGenerate.disabled = false; }
+  });
+  vineGenerate.title = "Braid a selected +Vine rope so the stems follow its physics, or generate a static cylinder braid in Blender.";
+  vineRow.append(vineGenerate, labelWrap("seed", vineSeed), vineStatus);
+  bar.appendChild(vineRow);
+
+  // --- mushroom, grass and plant patches -------------------------------------
+  // The generators whose outline is drawn ON A MODEL rather than on the
+  // gameplay plane: `+ Mushrooms` (or `+ Grass`, `+ Plants`) clicks a loop out
+  // on the faces of whatever is drawn there (a rock, a root, a wall), the faces
+  // it covers light up, and Generate grows a patch on exactly those faces in
+  // Blender (`asset-generators/mushrooms`, `grass`, `plants`). The result is a
+  // mesh geometry object in the body of the model it grows on, so it rides that
+  // body and collides with nothing.
+  //
+  // The outline outlives a Generate so the settings can be tuned against the
+  // same faces: generating again replaces the patch of that kind it made last,
+  // and one outline can carry a patch of each kind at once.
+  type PatchKind = "mushroom" | "grass" | "plant";
+  // A vertex names the drawn object it landed on (`tag`, which the editor
+  // rebuilds whenever the level changes, adding a patch included) and the item
+  // that object was built from (`item`, which outlives the rebuild).
+  type SurfaceVertex = FoliageSurfacePoint & { item: number };
+  let surfaceDraft: {
+    points: SurfaceVertex[];
+    closed: boolean;
+    selection: FoliageSurfaceSelection | null;
+    generated: Partial<Record<PatchKind, number>>;
+  } | null = null;
+  const surfaceView = scene3d ? new SurfaceDraftView() : null;
+  if (surfaceView) scene3d!.scene.add(surfaceView.group);  let surfaceHoverAt = 0;
+
+  const mushroomRow = el("div", "ed-row");
+  const mushroomNum = (value: string, min: number, max: number, step: number, label: string): HTMLInputElement => {
+    const input = document.createElement("input");
+    input.type = "number";
+    input.className = "ed-num";
+    input.value = value;
+    input.min = String(min);
+    input.max = String(max);
+    input.step = String(step);
+    input.setAttribute("aria-label", label);
+    input.title = label;
+    return input;
+  };
+  const mushroomDensity = mushroomNum("150", 1, 2000, 1, "Mushrooms per square metre inside the densest clumps");
+  const mushroomHeight = mushroomNum("0.16", 0.01, 2, 0.01, "Stem height of the largest mushroom, metres");
+  const mushroomClump = mushroomNum("0.75", 0, 1, 0.05, "0 = even carpet, 1 = tight separate clusters");
+  const mushroomSlope = mushroomNum("75", 0, 90, 1, "Steepest face mushrooms grow on, degrees from level");
+  const mushroomDetail = mushroomNum("0.3", 0, 1, 0.1, "Polygon budget: 0 ~ 90 triangles a mushroom, 0.5 ~ 520, 1 ~ 1300");
+  const mushroomSeed = mushroomNum("0", 0, 2147483647, 1, "Mushroom seed");
+  const grassDensity = mushroomNum("1100", 1, 30000, 1,"Grass blades per square metre inside the middle of a tuft");
+  const grassHeight = mushroomNum("0.3", 0.01, 3, 0.01, "Length of a typical blade in the middle of a tuft, metres");
+  const grassClump = mushroomNum("0.7", 0, 1, 0.05, "0 = an even lawn, 1 = separate tufts with bare ground between them");
+  const grassTuft = mushroomNum("0.35", 0.05, 5, 0.05, "Rough spacing between the middles of neighbouring tufts, metres");
+  const grassDetail = mushroomNum("0.25", 0, 1, 0.05, "Segments per blade: 0 = 3 (6 triangles), 1 = 7 (14 triangles)");
+  const grassSeed = mushroomNum("0", 0, 2147483647, 1, "Grass seed");
+  const plantDensity = mushroomNum("1.5", 0.05, 50, 0.05, "Standing plants and creeper patches per square metre; ivy hangs four to one of these from the undersides");
+  const plantSize = mushroomNum("1", 0.1, 3, 0.05, "Size of the standing plants and creepers, 1 = as built in Blender");
+  const plantIvyLength = mushroomNum("1.2", 0.2, 4, 0.1, "Longest ivy vine, metres");
+  const plantDetail = mushroomNum("0.5", 0, 1, 0.1, "Polygon budget of every plant, 1 = full");
+  const plantSeed = mushroomNum("0", 0, 2147483647, 1, "Plant seed");
+  // Which plants may grow. Rocks and mushrooms are deliberately not among them:
+  // those have their own outline tools.
+  const PLANT_KINDS = [
+    ["alocasia", "alocasia"], ["birdsnest", "bird's nest"], ["fern", "fern"],
+    ["creepers", "creepers"], ["ivy", "hanging ivy"],
+  ] as const;
+  const plantOn = new Set<string>(PLANT_KINDS.map(([k]) => k));
+  const plantChecks = PLANT_KINDS.map(([k, label]) => checkbox(label, true, (v) => {
+    if (v) plantOn.add(k); else plantOn.delete(k);
+    // Ivy hangs from faces that look down, which no other tool keeps.
+    if (k === "ivy") refreshSurfaceSelection();
+    else describeSurface();
+  }));
+  const SURFACE_IDLE = "Arm + Mushrooms, + Grass or + Plants, then click an outline onto a model.";
+  const mushroomStatus = el("span", "ed-root-status");
+  mushroomStatus.setAttribute("role", "status");
+  mushroomStatus.textContent = SURFACE_IDLE;
+  mushroomSlope.addEventListener("change", () => refreshSurfaceSelection());
+  mushroomDensity.addEventListener("change", () => describeSurface());
+  grassDensity.addEventListener("change", () => describeSurface());
+  plantDensity.addEventListener("change", () => describeSurface());
+
+  // A model the outline may be drawn on: any drawn scene object but a patch,
+  // so a second patch beside the first is drawn on the rock under it.
+  function surfaceAccepts(tag: unknown): boolean {
+    const id = itemOfSceneObject.get(tag as SceneObjectData);
+    const item = id === undefined ? undefined : model.items.find((i) => i.id === id);
+    return !!item && item.layer === "scene" && item.object === "geometry" &&
+      !item.visual.mesh.startsWith("mushroom-patch:") && !item.visual.mesh.startsWith("grass-patch:") &&
+      !item.visual.mesh.startsWith("plant-patch:") && !lockedLayers.has(item.layer) && visibleLayers.has(item.layer) && item.visual.generator?.kind !== "mushrooms";
+  }
+  function surfaceNdc(scr: Vec2): [number, number] | null {
+    const r = canvas.getBoundingClientRect();
+    if (!r.width || !r.height) return null;
+    return [(scr.x / r.width) * 2 - 1, 1 - (scr.y / r.height) * 2];
+  }
+  function surfaceToScreen(p: THREE.Vector3): Vec2 | null {
+    if (!scene3d) return null;
+    const r = canvas.getBoundingClientRect();
+    const ndc = p.clone().project(scene3d.camera);
+    if (ndc.z > 1) return null;
+    return new Vec2(((ndc.x + 1) / 2) * r.width, ((1 - ndc.y) / 2) * r.height);
+  }
+  function describeSurface(): void {
+    const draft = surfaceDraft;
+    if (!draft) {
+      mushroomStatus.textContent = SURFACE_IDLE;
+    } else if (!draft.closed) {
+      mushroomStatus.textContent = `${draft.points.length} ${draft.points.length === 1 ? "vertex" : "vertices"}` +
+        (draft.points.length >= 3 ? " · Enter or the first vertex closes" : "");
+    } else if (!draft.selection) {
+      mushroomStatus.textContent = "The outline covers no faces that face it at this slope. Esc and draw again.";
+    } else {
+      const { triangles, area } = draft.selection;
+      const plant = tool === "plant";
+      const grass = tool === "grass";
+      const most = Math.round(area * Number((plant ? plantDensity : grass ? grassDensity : mushroomDensity).value));
+      mushroomStatus.textContent = `${triangles} faces · ${area.toFixed(2)} m² · up to ~${most} ${plant ? "plants" : grass ? "blades" : "mushrooms"}`;
+    }
+  }
+  // Ivy hangs from faces that look down, so the plant tool keeps them (slope
+  // 180 keeps every face) while ivy is ticked; every other tool stays at the
+  // slope the mushroom row says.
+  const plantsKeepOverhangs = (): boolean => tool === "plant" && plantOn.has("ivy");
+  function redrawSurface(cursor: THREE.Vector3 | null = null): void {
+    surfaceView?.update(surfaceDraft?.points ?? [], surfaceDraft?.closed ?? false, cursor,
+      surfaceDraft?.selection ?? null);
+  }
+  // Cut the faces under the outline again, against the scene as drawn NOW.
+  function refreshSurfaceSelection(overhangs = plantsKeepOverhangs()): void {
+    const draft = surfaceDraft;
+    if (!draft || !scene3d) return;
+    draft.selection = null;
+    for (const p of draft.points) p.tag = sceneObjectOfItem.get(p.item) ?? p.tag;
+    if (draft.closed) {
+      const meshes =[...new Set(draft.points.map((p) => p.tag))].flatMap((tag) => scene3d.meshesOf(tag));
+      draft.selection = selectFoliageSurface(meshes, draft.points, {
+        maxSlopeDeg: overhangs ? 180 : Number(mushroomSlope.value) || 0,
+        maxTriangles: 40000,
+      });
+    }
+    redrawSurface();
+    describeSurface();
+  }
+  function surfaceClick(scr: Vec2): void {
+    const ndc = surfaceNdc(scr);
+    if (!scene3d || !sceneShown() || !sceneLevel || !ndc) {
+      mushroomStatus.textContent = "Switch to Visuals to draw on a model.";
+      return;
+    }
+    // A click after a closed outline starts the next patch.
+    if (surfaceDraft?.closed) surfaceDraft = null;
+    const first = surfaceDraft && surfaceDraft.points.length >= 3
+      ? surfaceToScreen(surfaceDraft.points[0]!.point) : null;
+    if (first && scr.distanceTo(first) <= POLY_CLOSE_PX) {
+      closeSurfaceDraft();
+      return;
+    }
+    const hit = scene3d.pickSurface(ndc[0], ndc[1], surfaceAccepts);
+    if (!hit) {
+      mushroomStatus.textContent = "Click on a drawn model to place a vertex.";
+      return;
+    }
+    const item = itemOfSceneObject.get(hit.tag as SceneObjectData);
+    if (item === undefined) return;
+    surfaceDraft ??= { points: [], closed: false, selection: null, generated: {} };
+    surfaceDraft.points.push({ ...hit, item });
+    redrawSurface();
+    describeSurface();
+  }
+  function surfaceHover(scr: Vec2): void {
+    const draft = surfaceDraft;
+    const ndc = surfaceNdc(scr);
+    if (!draft || draft.closed || !scene3d || !ndc) return;
+    // A raycast of the whole scene per mouse event is more than a rubber band
+    // is worth; a few a frame is plenty.
+    const now = performance.now();
+    if (now - surfaceHoverAt < 30) return;
+    surfaceHoverAt = now;
+    redrawSurface(scene3d.pickSurface(ndc[0], ndc[1], surfaceAccepts)?.point ?? null);
+  }
+  function closeSurfaceDraft(): void {
+    if (!surfaceDraft || surfaceDraft.closed || surfaceDraft.points.length < 3) return;
+    surfaceDraft.closed = true;
+    refreshSurfaceSelection();
+  }
+  function undoSurfacePoint(): void {
+    if (!surfaceDraft || surfaceDraft.closed) return;
+    surfaceDraft.points.pop();
+    if (!surfaceDraft.points.length) surfaceDraft = null;
+    redrawSurface();
+    describeSurface();
+  }
+  function cancelSurfaceDraft(): void {
+    if (!surfaceDraft) return;
+    surfaceDraft = null;
+    redrawSurface();
+    describeSurface();
+  }
+
+  // Grow one kind of patch on the closed outline: cut the covered faces, post
+  // them with the kind's settings, and put the returned GLB in the level as a
+  // mesh geometry object (replacing the one this outline made of that kind).
+  async function growPatch(g: {
+    kind: PatchKind; noun: string; endpoint: string; inputs: HTMLInputElement[];
+    settings: () => Record<string, number | string[]>; generate: HTMLButtonElement;
+  }): Promise<void> {
+    const draft = surfaceDraft;
+    if (!draft?.closed) {
+      mushroomStatus.textContent = "Close an outline on a model first (+ Mushrooms, + Grass or + Plants, then Enter).";
+      return;
+    }
+    for (const input of [...g.inputs, mushroomSlope])
+      if (!input.reportValidity()) return;
+    // The faces are cut for the kind being grown, whichever tool is armed.
+    refreshSurfaceSelection(g.kind === "plant" && plantOn.has("ivy"));
+    const selection = draft.selection;
+    const hostId = draft.points[0]!.item;
+    const host = model.items.find((i) => i.id === hostId);
+    if (!selection) return;
+    if (!host) {
+      mushroomStatus.textContent = "The model under the outline is gone. Esc and draw again.";
+      return;
+    }
+    // The patch's origin is the middle of its faces, so the mesh is placed by
+    // an ordinary position and depth and turns about its own centre.
+    const box = new THREE.Box3().setFromArray(selection.positions);
+    const origin = box.getCenter(new THREE.Vector3());
+    const size = box.getSize(new THREE.Vector3());
+    const positions = Array.from(selection.positions,
+      (n, i) => Math.round((n - origin.getComponent(i % 3)) * 1e4) / 1e4);
+    const revision = modelRev;
+    g.generate.disabled = true;
+    mushroomStatus.textContent = `Growing ${g.noun} in Blender…`;
+    try {
+      const response = await fetch(g.endpoint, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ positions, ...g.settings() }),
+      });
+      const result = await response.json() as { mesh?: string; error?: string };
+      if (!response.ok || !result.mesh) throw new Error(result.error ?? `Generating ${g.noun} failed.`);
+      if (modelRev !== revision || mode !== "edit")
+        throw new Error("The level changed during generation. Generate again.");
+      beginAction();
+      const previous = draft.generated[g.kind];
+      const existing = previous === undefined ? undefined
+        : model.items.find((i) => i.id === previous && i.object === "geometry");
+      const patch: EdItem = existing ?? {
+        ...host, id: newBodyId(), object: "geometry", shape: cloneShape(host.shape),
+        cam: { ...host.cam }, light: { ...host.light }, note: { ...host.note },
+        matchId: 0,
+      };
+      patch.pos = new Vec2(origin.x, threeY(origin.y));
+      patch.rot = 0;
+      patch.shape = { kind: "rect", w: Math.max(0.05, size.x), h: Math.max(0.05, size.y) };
+      patch.visual = { ...defaultVisual(), kind: "mesh", mesh: result.mesh, offsetZ: origin.z,
+        depth: Math.max(0.05, size.z) };
+      if (!existing) addAndSelect([patch]);
+      else { markDirty(); rebuildInspector(); }
+      draft.generated[g.kind] = patch.id;
+      mushroomStatus.textContent =
+        `${g.noun[0]!.toUpperCase()}${g.noun.slice(1)} ready. Change a setting and generate again to replace them; Esc to finish.`;
+    } catch (error) {
+      mushroomStatus.textContent = error instanceof Error ? error.message : `Generating ${g.noun} failed.`;
+    } finally { g.generate.disabled = false; }
+  }
+
+  const mushroomGenerate = button("Generate mushrooms", () => growPatch({
+    kind: "mushroom", noun: "mushrooms", endpoint: "/api/mushrooms", generate: mushroomGenerate,
+    inputs: [mushroomDensity, mushroomHeight, mushroomClump, mushroomDetail, mushroomSeed],
+    settings: () => ({
+      seed: Number(mushroomSeed.value),
+      density: Number(mushroomDensity.value),
+      height: Number(mushroomHeight.value),
+      clumping: Number(mushroomClump.value),
+      detail: Number(mushroomDetail.value),
+    }),
+  }));
+  mushroomGenerate.title = "Grow glowing mushrooms in Blender on the faces the + Mushrooms outline covers. The patch is drawn only; collision is unchanged.";
+  mushroomRow.append(mushroomGenerate, labelWrap("density /m²", mushroomDensity), labelWrap("height (m)", mushroomHeight),
+    labelWrap("clumping", mushroomClump), labelWrap("detail", mushroomDetail),
+    labelWrap("seed", mushroomSeed));
+  bar.appendChild(mushroomRow);
+
+  const grassRow = el("div", "ed-row");
+  const grassGenerate = button("Generate grass", () => growPatch({
+    kind: "grass", noun: "grass", endpoint: "/api/grass", generate: grassGenerate,
+    inputs: [grassDensity, grassHeight, grassClump, grassTuft, grassDetail, grassSeed],
+    settings: () => ({
+      seed: Number(grassSeed.value),
+      density: Number(grassDensity.value),
+      height: Number(grassHeight.value),
+      clumping: Number(grassClump.value),
+      tuft: Number(grassTuft.value),
+      detail: Number(grassDetail.value),
+    }),
+  }));
+  grassGenerate.title = "Grow low-poly grass tufts in Blender on the faces the + Grass outline covers (use max slope° below). The patch is drawn only; collision is unchanged.";
+  grassRow.append(grassGenerate, labelWrap("blades /m²", grassDensity), labelWrap("height (m)", grassHeight),
+    labelWrap("clumping", grassClump), labelWrap("tuft (m)", grassTuft), labelWrap("detail", grassDetail),
+    labelWrap("seed", grassSeed));
+  bar.appendChild(grassRow);
+
+  const plantRow = el("div", "ed-row");
+  const plantGenerate = button("Generate plants", () => {
+    if (!plantOn.size) {
+      mushroomStatus.textContent = "Tick at least one plant to grow.";
+      return;
+    }
+    void growPatch({
+      kind: "plant", noun: "plants", endpoint: "/api/plants", generate: plantGenerate,
+      inputs: [plantDensity, plantSize, plantIvyLength, plantDetail, plantSeed],
+      settings: () => ({
+        seed: Number(plantSeed.value),
+        density: Number(plantDensity.value),
+        size: Number(plantSize.value),
+        ivyLength: Number(plantIvyLength.value),
+        detail: Number(plantDetail.value),
+        slope: Number(mushroomSlope.value),
+        types: PLANT_KINDS.map(([k]) => k).filter((k) => plantOn.has(k)),
+      }),
+    });
+  });
+  plantGenerate.title = "Grow the ticked cave plants in Blender on the faces the + Plants outline covers: alocasia, bird's-nest ferns and sword ferns stand on the upward faces (use max slope° below), creepers lie on them, ivy hangs from the undersides. The patch is drawn only; collision is unchanged.";
+  plantRow.append(plantGenerate, ...plantChecks, labelWrap("plants /m²", plantDensity), labelWrap("size", plantSize),
+    labelWrap("ivy (m)", plantIvyLength), labelWrap("detail", plantDetail), labelWrap("seed", plantSeed),
+    mushroomStatus);
+  bar.appendChild(plantRow);
+
+  const surfaceSettingsRow = el("div", "ed-row");
+  surfaceSettingsRow.append(labelWrap("max slope°", mushroomSlope), mushroomStatus);
+  bar.appendChild(surfaceSettingsRow);
+  function refreshFoliageControls(): void {
+    mushroomRow.style.display = tool === "mushroom" ? "" : "none";
+    grassRow.style.display = tool === "grass" ? "" : "none";
+    plantRow.style.display = tool === "plant" ? "" : "none";
+    surfaceSettingsRow.style.display = isSurfaceTool(tool) ? "" : "none";
+  }
+
   const toolRow = el("div", "ed-row");
   bar.appendChild(toolRow);
   const toolBtns: Record<Tool, HTMLButtonElement> = {
@@ -2381,6 +3003,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     chain: button("+ Chain", () => setTool("chain")),
     vine: button("+ Vine", () => setTool("vine")),
     light: button("+ Light", () => setTool("light")),
+    mushroom: button("+ Mushrooms", () => setTool("mushroom")),
+    grass: button("+ Grass", () => setTool("grass")),
+    plant: button("+ Plants", () => setTool("plant")),
     glow: button("+ Glow", () => setTool("glow")),
     fireflies: button("+ Fireflies", () => setTool("fireflies")),
     rock: button("+ Rock", () => setTool("rock")),
@@ -2390,6 +3015,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     "Click a collision outline (a polygon or rect, or the geometry matched to one) to dress it with a GENERATED ROCK: a mesh geometry object matched to the outline, generated in Blender from the parameters on its panel. A plain rectangle can fail the generator's centre check; widen `tolerance` or draw a less regular outline.";
   toolBtns.mushrooms.title =
     "Click a loop onto the faces of a drawn model (a rock, a wall); Enter or the first point closes it, Backspace drops the last point, Esc cancels. Closing it adds a MUSHROOM PATCH in that model's body and generates it on the faces inside the loop.";
+  toolBtns.mushroom.title =
+    "Click an outline onto the faces of a drawn model (a rock, a root, a wall) in the 3D view, at any orbit; Enter or the first vertex closes it, Backspace drops the last vertex, Esc cancels. The covered faces light up, and Generate mushrooms grows a glowing patch on them.";
+  toolBtns.grass.title =
+    "Click an outline onto a model in Visuals, then Enter to close it; Generate grass grows low-poly grass tufts on the covered faces. Switching between Grass and Plants keeps the outline, so one outline can carry both.";
+  toolBtns.plant.title =
+    "Click an outline onto a model in Visuals, then Enter to close it; Generate plants grows the ticked cave plants (alocasia, bird's nest, ferns, creepers, hanging ivy) on the covered faces. With hanging ivy ticked the outline also takes the faces that look down.";
   toolBtns.geometry.title =
     "Click to drop a geometry object; drag to size it. It is DRAWN and never simulated - nothing collides with it, the rope does not wrap it, no force reaches it. Give it a mesh or a texture on the panel; drop it on a selected body to have it ride that body.";
   // The path tool's tooltip is the active layer's (see `refreshToolButtons`):
@@ -2455,6 +3086,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     toolBtns.chain,
     toolBtns.vine,
     toolBtns.light,
+    toolBtns.mushroom,
+    toolBtns.grass,
+    toolBtns.plant,
     toolBtns.glow,
     toolBtns.fireflies,
     kindWrap,
@@ -2559,6 +3193,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     toolBtns.path.textContent = activeLayer === "scene" ? "+ Curve" : "+ Path";
     toolBtns.path.title = PATH_TOOL_TITLE[activeLayer];
     if (!tools.includes(tool)) setTool("select");
+    refreshFoliageControls();
   }
 
   function setLayer(l: EdLayer): void {
@@ -3081,11 +3716,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   }
   // The cursor a drag borrows and must hand back (pan swaps in a grab hand).
   function applyToolCursor(): void {
-    // A turned Level view selects and moves but draws nothing (see the press
-    // handler), so the pointer is the select one whatever the toolbar has armed
-    // rather than a crosshair over a canvas that will not draw. The Visuals
-    // workspace draws, into the scene, so its tools keep their crosshair.
-    canvas.style.cursor = orbited() || tool === "select" ? "default" : "crosshair";
+    // A turned view selects and moves but draws nothing (see the press handler),
+    // so the pointer is the select one whatever the toolbar has armed rather
+    // than a crosshair over a canvas that will not draw.
+    // ...except the mushroom and grass outline, which is drawn IN the scene and
+    // so draws at any orbit.
+    canvas.style.cursor = isSurfaceTool(tool) ? "crosshair"
+      : orbited() || tool === "select" ? "default" : "crosshair";
   }
   // Does the current workspace offer this tool (`TOOL_WORKSPACES`)?
   function toolOffered(t: Tool): boolean {
@@ -3104,8 +3741,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // armed by the keyboard shortcuts any more than by the (hidden) buttons.
     if (t !== "select" && lockedLayers.has(activeLayer)) return;
     if (t !== "poly" && t !== "path") cancelPolyDraft();
+    if (!isSurfaceTool(t)) cancelSurfaceDraft();
     if (t !== "mushrooms") surfaceLoop.clear();
     tool = t;
+    // The plant tool cuts the outline differently (see `plantsKeepOverhangs`).
+    if (surfaceDraft?.closed) refreshSurfaceSelection();
+    describeSurface();
+    refreshFoliageControls();
     for (const [k, b] of Object.entries(toolBtns)) b.classList.toggle("active", k === t);
     applyToolCursor();
   }
@@ -8218,6 +8860,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     model.items.push(a);
     const vine: EdVine = {
       id: newBodyId(),
+      braidSeed: null,
       anchor: a.id,
       anchor2: null,
       length,
@@ -10215,6 +10858,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     }
     if (e.button !== 0) return;
     const scr = pointerScreen(e);
+    // The mushroom and grass outline is clicked onto the models, at any orbit,
+    // and owns the left button while it is armed: nothing on the plane is
+    // selected or dragged under it.
+    if (isSurfaceTool(tool)) {
+      surfaceClick(scr);
+      return;
+    }
     const world = canvasWorld(scr);
     dragMoved = false;
     dragPushed = false;
@@ -10910,6 +11560,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (mode !== "edit") return;
     const scr = pointerScreen(e);
     lastPointerScreen = scr;
+    if (isSurfaceTool(tool)) surfaceHover(scr);
     if (!drag && inVisuals() && tool === "mushrooms" && !surfaceLoop.empty) hoverLoop(scr);
     if (!drag) return;
     // Resolved in the plane the dragged thing is drawn in (see `move`'s
@@ -11494,6 +12145,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   window.addEventListener("keydown", (e) => {
     if (e.code === "Escape") {
       if (mode === "test") stopTest();
+      else if (surfaceDraft) cancelSurfaceDraft();
       else if (polyDraft) cancelPolyDraft();
       else if (!surfaceLoop.empty) {
         surfaceLoop.clear();
@@ -11613,6 +12265,18 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       commitPolyDraft();
       e.preventDefault();
       return;
+    }
+    if (surfaceDraft && !surfaceDraft.closed) {
+      if (e.code === "Enter" || e.code === "NumpadEnter") {
+        closeSurfaceDraft();
+        e.preventDefault();
+        return;
+      }
+      if (e.code === "Backspace" || e.code === "Delete") {
+        undoSurfacePoint();
+        e.preventDefault();
+        return;
+      }
     }
     // The mushroom loop: Enter closes the one being painted, or ends Edit loop.
     if ((e.code === "Enter" || e.code === "NumpadEnter") && (surfaceLoop.closable || loopEdit)) {
@@ -11762,6 +12426,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       what = n
         ? `${n} point${n === 1 ? "" : "s"} on the model${n >= 3 ? " · Enter or the first point closes" : ""} · Backspace drops the last · Esc cancels`
         : "click a loop onto a drawn model's faces · Enter or the first point closes it";
+    } else if (isSurfaceTool(tool)) {
+      what = "click an outline onto the model · Enter closes · Backspace drops the last · Generate above grows the patch · Esc cancels";
     } else if (tool === "geometry") {
       what = `click places ${visuals!.propMesh} on the plane · Shift+click on a surface (Ctrl stands it up)`;
     } else if (tool === "poly" || tool === "path") {
@@ -11783,6 +12449,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   let fps = 0;
 
   function frame(now: number): void {
+    // The mushroom outline is editing chrome in the scene; a test borrows the
+    // same scene and must not show it.
+    if (surfaceView) surfaceView.group.visible = mode !== "test" && !!surfaceDraft?.points.length;
     if (mode === "test" && testLevel) {
       if (lastNow < 0) lastNow = now;
       let dt = (now - lastNow) / 1000;
@@ -12108,6 +12777,7 @@ function injectStyles(): void {
     gap: 6px; background: rgba(31,36,48,0.92); border: 1px solid #313244; padding: 8px;
     border-radius: 2px; }
   .ed-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .ed-root-status { max-width: 48ch; overflow-wrap: anywhere; color: #9aa0ac; }
   .ed-btn { background: #2a2f3d; color: #cbccc6; border: 1px solid #3c445c;
     padding: 3px 8px; font-family: monospace; font-size: 13px; cursor: pointer;
     border-radius: 2px; }
