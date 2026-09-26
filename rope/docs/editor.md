@@ -220,7 +220,11 @@ backdrop's minor-grid spacing) keeps geometry aligned - **moves** snap the body'
 corner, and **corner-resize** anchors the opposite corner (grows toward the drag). Each body
 **Undo/redo** (Ctrl+Z / Ctrl+Shift+Z or Ctrl+Y) keeps 50 model snapshots - one step per
 discrete action (each drag, add/delete/duplicate, kind/colour/opacity/numeric edit); New and
-Load clear the stack. Each body has an editable **colour + opacity** (inspector); defaults to
+Load clear the stack.
+Every colour field in the editor is a swatch that opens the editor's own picker (`src/editor/colorPicker.ts`: saturation/value square, hue strip, hex field; Escape or a click elsewhere closes it), not `<input type="color">`.
+The native picker is a browser popup placed by Chromium from where it thinks its window is, and under Wayland it is never told, so opened from the inspector at the right edge of a maximised window it ran off the screen.
+The page's picker is clamped into the viewport, flips above the swatch when there is no room below, follows the inspector as it scrolls, and takes its undo step on the first change rather than on opening.
+Each body has an editable **colour + opacity** (inspector); defaults to
 dark grey `#555555` at 0.5,
 borders always drawn fully opaque in the same colour (`DEFAULT_BODY_COLOR`/`_OPACITY` in
 `levelFormat.ts`, carried on the engine body as `fillColor`/`fillOpacity`, rendered the same

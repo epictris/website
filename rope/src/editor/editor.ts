@@ -334,6 +334,7 @@ import {
 } from "../render3d/lights";
 import { DEFAULT_WAKE_FALL, DEFAULT_WAKE_RISE } from "../render3d/glow";
 import { DEFAULT_FIREFLY_NOTICE, FIREFLY_MAX } from "../render3d/fireflies";
+import { colorInput } from "./colorPicker";
 
 // `geometry` draws the OTHER kind of scene object: a rect like `rect`, but one
 // that is drawn and never simulated. It is a tool rather than a mode on the rect
@@ -3644,19 +3645,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   ): void {
     const cw = el("label", "ed-field");
     cw.textContent = label;
-    const ci = document.createElement("input");
-    ci.type = "color";
-    ci.className = "ed-color";
     // A colour input has no mixed state; it shows the first item's and writes
     // to all of them, which is the only sane reading of "set the colour".
-    ci.value = items[0]!.color;
-    ci.addEventListener("focus", () => beginAction());
-    ci.addEventListener("input", () => {
-      for (const b of items) b.color = ci.value;
+    const ci = colorInput(items[0]!.color, beginAction, (hex) => {
+      for (const b of items) b.color = hex;
       after?.();
       markDirty();
     });
-    cw.appendChild(ci);
+    cw.appendChild(ci.el);
     g.appendChild(cw);
   }
 
@@ -5541,16 +5537,15 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       if (box.checked || box.indeterminate) {
         const cw = el("label", "ed-field");
         cw.textContent = "glow";
-        const ci = document.createElement("input");
-        ci.type = "color";
-        ci.className = "ed-color";
-        ci.value = items.find((b) => b.visual.emissive)?.visual.emissive || DEFAULT_LIGHT_COLOR;
-        ci.addEventListener("focus", () => beginAction());
-        ci.addEventListener("input", () => {
-          for (const b of items) b.visual.emissive = ci.value;
-          markDirty();
-        });
-        cw.appendChild(ci);
+        const ci = colorInput(
+          items.find((b) => b.visual.emissive)?.visual.emissive || DEFAULT_LIGHT_COLOR,
+          beginAction,
+          (hex) => {
+            for (const b of items) b.visual.emissive = hex;
+            markDirty();
+          },
+        );
+        cw.appendChild(ci.el);
         g.appendChild(cw);
       }
       // The light this shape throws, which a MAP earns as much as a colour does:
@@ -6127,16 +6122,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
 
     const cw = el("label", "ed-field");
     cw.textContent = "color";
-    const ci = document.createElement("input");
-    ci.type = "color";
-    ci.className = "ed-color";
-    ci.value = chains[0]!.color ?? CHAIN_DEFAULT_COLOR;
-    ci.addEventListener("focus", () => beginAction());
-    ci.addEventListener("input", () => {
-      for (const c of chains) c.color = ci.value;
+    const ci = colorInput(chains[0]!.color ?? CHAIN_DEFAULT_COLOR, beginAction, (hex) => {
+      for (const c of chains) c.color = hex;
       markDirty();
     });
-    cw.appendChild(ci);
+    cw.appendChild(ci.el);
     g.appendChild(cw);
 
     const row = el("div", "ed-row");
@@ -6471,16 +6461,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
 
     const cw = el("label", "ed-field");
     cw.textContent = "color";
-    const ci = document.createElement("input");
-    ci.type = "color";
-    ci.className = "ed-color";
-    ci.value = vines[0]!.color ?? VINE_DEFAULT_COLOR;
-    ci.addEventListener("focus", () => beginAction());
-    ci.addEventListener("input", () => {
-      for (const v of vines) v.color = ci.value;
+    const ci = colorInput(vines[0]!.color ?? VINE_DEFAULT_COLOR, beginAction, (hex) => {
+      for (const v of vines) v.color = hex;
       markDirty();
     });
-    cw.appendChild(ci);
+    cw.appendChild(ci.el);
     g.appendChild(cw);
 
     const row = el("div", "ed-row");
@@ -7570,16 +7555,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const colorEnv = (label: string, key: EnvKey): void => {
       const cw = el("label", "ed-field");
       cw.textContent = label;
-      const ci = document.createElement("input");
-      ci.type = "color";
-      ci.className = "ed-color";
-      ci.value = cur(key) as string;
-      ci.addEventListener("focus", () => beginAction());
-      ci.addEventListener("input", () => {
-        env()[key] = ci.value;
+      const ci = colorInput(cur(key) as string, beginAction, (hex) => {
+        env()[key] = hex;
         markDirty();
       });
-      cw.appendChild(ci);
+      cw.appendChild(ci.el);
       g.appendChild(cw);
     };
 
@@ -12147,6 +12127,23 @@ function injectStyles(): void {
     width: 100%; box-sizing: border-box; resize: vertical; }
   .ed-color { width: 44px; height: 22px; padding: 0; background: #1f2430;
     border: 1px solid #3c445c; border-radius: 2px; cursor: pointer; }
+  /* The colour picker (colorPicker.ts). A child of body rather than of the
+     panel, so no scrolling or clipping ancestor can cut it off. */
+  .ed-picker { position: fixed; z-index: 1000; display: flex; flex-direction: column;
+    gap: 6px; padding: 8px; background: #1f2430; border: 1px solid #3c445c;
+    border-radius: 2px; box-shadow: 0 4px 16px rgba(0,0,0,0.5); font-family: monospace;
+    font-size: 13px; color: #cbccc6; }
+  .ed-picker-sv { position: relative; cursor: crosshair; touch-action: none;
+    background-image: linear-gradient(to top, #000, transparent),
+      linear-gradient(to right, #fff, transparent); }
+  .ed-picker-hue { position: relative; cursor: ew-resize; touch-action: none;
+    background: linear-gradient(to right, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00); }
+  .ed-picker-dot { position: absolute; width: 10px; height: 10px; margin: -6px 0 0 -6px;
+    border: 1px solid #fff; border-radius: 50%; box-shadow: 0 0 0 1px #000;
+    pointer-events: none; }
+  .ed-picker-bar { position: absolute; top: -2px; bottom: -2px; width: 4px; margin-left: -3px;
+    border: 1px solid #fff; box-shadow: 0 0 0 1px #000; pointer-events: none; }
+  .ed-picker-hex { width: auto; }
   .ed-inline, .ed-check { display: inline-flex; gap: 4px; align-items: center; color: #9aa0ac; }
   .ed-layers { display: flex; flex-direction: column; gap: 4px; align-self: flex-start; }
   .ed-layer-label { color: #9aa0ac; }

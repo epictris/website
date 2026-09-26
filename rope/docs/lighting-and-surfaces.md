@@ -63,11 +63,15 @@ A light has no geometry, so moving one through z changes nothing on the canvas a
 The authored reach is a **sphere**'s radius and the level is a plane through it, so what the level actually receives is `sqrt(range² - z²)` (`lightPlaneReach`), which shrinks visibly as the lamp is pulled toward the camera and closes entirely once it is further off the plane than it reaches - a reachable authoring mistake that is otherwise silent, and one the label names outright as `MISSES PLANE`.
 The authored `range` stays on screen as a fainter outer ring whenever the two differ, so shrinking one does not hide the other.
 `cli render3d` asserts the arithmetic, since it is the only feedback the field has.
-`levels/ball.json` is the worked example: sun off, environment near zero, small emissive discs throwing their own warm light, and a `LightData` where there is nothing to see - the cool spot, and the fill that has no fitting.
+`levels/ball.json` is the worked example: sun off, small emissive discs throwing their own warm light, and a `LightData` where there is nothing to see - the cool spot, and the fill that has no fitting.
+Its ambient is NOT near zero, and that is a correction rather than a first draft: at a fill of 2 off a near-black ground colour the river rendered at a median of `#070a10`, which is not a cave but an unlit screen.
+Since 2026-09-26 it is matched to a reference painting of a mossy cave (dark, saturated teal-blue shadows, not black): sky `#6a9cc4`, ground `#183a34` (the moss bounce), fill 2.8, env 0.5, background `#0a2438`, fog 0.42 at `#14384f`, which puts the frame's median at `#092337` against the reference's `#0b253c`.
+The nearest slabs stay close to black on purpose - a dark foreground against a hazed teal midground is what the reference is made of.
 
 **There is fog only where a level asks for it.** That is the arrangement the removed version should have had.
 As a default it muted every distant surface at exactly the point where the authored textures and the environment started giving those surfaces something worth seeing, and depth was already being said by parallax, by the sun's shadow, by the environment's own gradient and - in a level lit from inside - by the lights' own falloff, which darkens a distant layer more exactly than a fog density ever states it.
-None of that is an argument against a level ASKING for air, so `fogAmount` (with `fogColor`, defaulting to the background) authors it per level and `levels/ball.json` is the worked example at 0.2.
+None of that is an argument against a level ASKING for air, so `fogAmount` (with `fogColor`, defaulting to the background) authors it per level and `levels/ball.json` is the worked example at 0.42.
+The fog colour sits a step ABOVE the background and in the same hue, so a far layer fades toward the backdrop and reads lighter than the dark foreground, the way the air in a cave does.
 
 Two things about the shape of it are the whole feature, and neither is visible in a picture - a fog measured over the wrong distance still renders a perfectly plausible hazy scene, just not the one that was authored.
 
