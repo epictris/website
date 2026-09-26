@@ -189,6 +189,21 @@ unselected body).
 There is deliberately no body section above a selected object: that is exactly what made a
 collision shape look like it had a `kind: static` and a friction of its own, when the file has
 never had a place to put them.
+
+### Inspector layout: sections and hover help
+
+A selection's panel keeps its title (`Collision #12`, `Body #3 — rigid`) in view, and every property under it sits in a **collapsible section**, collapsed by default: Transform, Surface, Material, Look, Texture, Emission and Fill on an object; Transform, Physics, Bounce, Breakable, Pivot, Spring, Mover, Rock and Fill on a body; and so on for chains, vines, camera regions and paths, lights and notes.
+The level-wide blocks at the top (Level, Player spawn, Environment, 3D camera) are sections of their own.
+Action buttons (Merge, Split, Duplicate, Delete) stay outside the sections, always in view.
+A section's open state is keyed by name per panel kind (`object/Surface`, `body/Mover`), so opening Surface on one wall opens it on the next, and it survives the inspector's rebuilds and a reload (localStorage, `rope.editor.openSections`).
+A section a build leaves empty is dropped (`pruneEmptySections`).
+
+Descriptions are not printed in the panel.
+They are **hover help**: a name with a dotted underline (a field's label, a section's header, a panel's title) shows its description in a popup beside the inspector while the pointer rests on it, and at no other time.
+Live status stays printed: warnings (a vine's light links, a missing firefly path, the shadow budget), readouts, the checkpoint URL, a generator's status line.
+The helpers are `src/editor/panelUi.ts` (`section`, `fieldRow`, `heading`, `describe`); new panel text goes through `describe`, never a paragraph under the field.
+A geometry object's whole placement is in its Transform section: its depth off the plane (`visual.offsetZ`) is `z`, after `x` and `y`; `rot x°` and `rot y°` follow `rot°`; a mesh's `scale` comes last.
+
 The kind picker covers `static`, `rigid`, `killzone`, `force`, `water`; the **hook-proof**
 checkbox is per shape, so one piece of a compound body can be the only place a hook will catch,
 and it stays on the object panel for that reason (see [**Hook-proof surfaces**](hook-surfaces.md#hook-proof-surfaces)).
@@ -273,7 +288,7 @@ Its handle set in a 3D view is the **transform gizmo**, which is in the scene an
 
 A **primitive** is the opposite case and keeps its plane handles in every view, because the rule is "the overlay offers handles for exactly what is drawn" rather than "a geometry object has no outline": a primitive IS its own shape extruded, so the solid under the overlay is that outline and the corner boxes land on its corners.
 Suppressing them cost the cheapest edit a primitive has - drag a corner to resize it - in the view the editor opens in, and offered the gizmo's scale boxes as the only substitute.
-They are projected on the gameplay plane like every other handle, so a primitive pushed off the plane by its `off z` has them where its outline is rather than where the perspective draws its face; an orbited view drops the whole overlay in any case.
+They are projected on the gameplay plane like every other handle, so a primitive pushed off the plane by its `z` has them where its outline is rather than where the perspective draws its face; an orbited view drops the whole overlay in any case.
 
 In the **2D view none of this applies**: there is no scene to ask, the outline is both what is drawn and what is picked, and every handle is back.
 That is not a fallback but the same rule - the overlay picks and offers handles for exactly what it draws.
@@ -304,7 +319,7 @@ A **▶ Test is always perspective**, whatever the toggle says: the point of a t
 
 The toggle is the editor's view of the whole scene.
 The `lens` picker on the geometry panel is a different thing: it is authored, saved and seen by the player, and it draws one object orthographically inside the perspective frame (see [Per-object projection](render3d.md#per-object-projection)).
-An orthographic object's plane handles land on its drawn face at any `off z`, since the overlay is itself an orthographic projection of the plane.
+An orthographic object's plane handles land on its drawn face at any `z`, since the overlay is itself an orthographic projection of the plane.
 The transform gizmo does not follow it yet: the gizmo is drawn in perspective at the object's real position, so off the plane it is not over the object.
 
 ## The transform gizmo
@@ -335,7 +350,7 @@ The two features are a pair - orbit to see the depth, drag the blue arrow to aut
 
 **The handles sit at the depth the object is DRAWN at**, which is `itemDepth` and not the authored `offsetZ`: a geometry object authoring no depth is drawn on the gameplay plane if its body collides and at `DECOR_Z` if it does not.
 Read as a plain 0, the whole gizmo stood 35 cm in front of every piece of decoration it was attached to - invisible head on, and the first thing you see when the view is turned, which is the view it exists for.
-A move that does not go through z then leaves the field alone rather than writing the pose's own z, or nudging a backdrop sideways would stamp that fallback into the file as an authored `off z` nobody asked for.
+A move that does not go through z then leaves the field alone rather than writing the pose's own z, or nudging a backdrop sideways would stamp that fallback into the file as an authored `z` nobody asked for.
 A move that does go through z writes the new depth OUTRIGHT (`offsetZAfterMove` in `editor/model.ts`), because once written `offsetZ` is where the object is rather than a change from where it fell back to.
 Until 2026-09-25 it wrote the displacement into the field as a change, so the first touch of the blue arrow on decoration drawn at `DECOR_Z` jumped it 35 cm toward the camera (found by the Visuals workspace's drop on surface, which goes through the same handler); a group drag had the same fault through its members' authored depths, and a group drag that went out through z and came back left its members where they had been mid-drag.
 The one depth the field cannot hold is exactly 0 on a body that collides with nothing, which the format reads as unset.

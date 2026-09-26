@@ -266,6 +266,7 @@ import { guidePlaneZ, type GuideDraft } from "./visuals/guides";
 import { alignUp, surfacePlacement } from "./visuals/surfaceDrop";
 import { GeneratorJobs, missingTools } from "./visuals/jobs";
 import { buildGeneratorGroup, generatorBadge, GENERATOR_PANEL_CSS, paramIssues } from "./visuals/generatorPanel";
+import { describe, fieldRow, heading, PANEL_UI_CSS, pruneEmptySections, revealInSection, section } from "./panelUi";
 import { existingRock, landMesh, objectPose, patchFor, refitPatch, rockFor, rockSource } from "./visuals/generatorEdits";
 import {
   loopPointToWorld,
@@ -3143,8 +3144,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       prefix?: HTMLElement;
     } = {},
   ): HTMLInputElement {
-    const wrap = el("label", "ed-field");
-    wrap.textContent = label;
+    const wrap = fieldRow(label);
     if (opts.prefix) wrap.appendChild(opts.prefix);
     const input = document.createElement("input");
     input.type = "number";
@@ -3463,8 +3463,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           },
           5,
         );
-        const tw = el("label", "ed-field");
-        tw.textContent = "texture";
+        const tw = fieldRow("texture");
         const ts = document.createElement("select");
         ts.className = "ed-select";
         const keys = new Set<string>([SOLID_SURFACE, ...Object.keys(TEXTURE_ASSETS), ...MATERIAL_NAMES]);
@@ -3493,10 +3492,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         tw.appendChild(ts);
         g.appendChild(tw);
       } else {
-        const hint = el("div", "ed-hint");
-        hint.textContent =
-          "No geometry draws this belt yet, so it has no width or texture: Add geometry gives it a matched twin that does.";
-        g.appendChild(hint);
+        describe(g,
+          "No geometry draws this belt yet, so it has no width or texture: Add geometry gives it a matched twin that does.");
       }
       num(
         "speed m/s",
@@ -3527,18 +3524,15 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         return values.every((v) => v === values[0]) ? values[0]! : "mixed";
       };
       for (const which of ["perimeter", "lap"] as const) {
-        const row = el("label", "ed-field");
-        row.textContent = which;
+        const row = fieldRow(which);
         const val = document.createElement("span");
         val.textContent = lap(which);
         row.appendChild(val);
         g.appendChild(row);
         readouts.push({ el: val, get: () => lap(which) });
       }
-      const hint = el("div", "ed-hint");
-      hint.textContent =
-        "The object's position is wheel 0. Drag a square to move a wheel (click one to edit its r here), a round grip on a wheel's rim to size it, a run's midpoint to add a wheel there; Alt+click a square removes its wheel. Every wheel must touch the band. Speed is signed: positive runs the loop clockwise on screen, negative runs it back. A belt builds only on a static body that does not move.";
-      g.appendChild(hint);
+      describe(g,
+        "The object's position is wheel 0. Drag a square to move a wheel (click one to edit its r here), a round grip on a wheel's rim to size it, a run's midpoint to add a wheel there; Alt+click a square removes its wheel. Every wheel must touch the band. Speed is signed: positive runs the loop clockwise on screen, negative runs it back. A belt builds only on a static body that does not move.");
     } else if (items.every((b) => b.shape.kind === "path" && b.layer === "scene")) {
       // A CURVE has one size and it is the width of the bar: the line itself is
       // edited on the canvas, node by node, exactly as a polygon's outline is.
@@ -3556,17 +3550,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         );
         return counts.every((c) => c === counts[0]) ? String(counts[0]) : "mixed";
       };
-      const prow = el("label", "ed-field");
-      prow.textContent = "pieces";
+      const prow = fieldRow("pieces");
       const pval = document.createElement("span");
       pval.textContent = pieces();
       prow.appendChild(pval);
       g.appendChild(prow);
       readouts.push({ el: pval, get: pieces });
-      const hint = el("div", "ed-hint");
-      hint.textContent =
-        "Drag a node to move it, its round grip to bow the curve either side of it (Alt at the press breaks the pair into a corner), an edge midpoint to add a node, Alt+click a node to remove it. The bar is what the curve strokes out at this width, and a rail's cuff rides the line down its middle.";
-      g.appendChild(hint);
+      describe(g,
+        "Drag a node to move it, its round grip to bow the curve either side of it (Alt at the press breaks the pair into a corner), an edge midpoint to add a node, Alt+click a node to remove it. The bar is what the curve strokes out at this width, and a rail's cuff rides the line down its middle.");
     } else if (items.every((b) => b.shape.kind === "poly")) {
       // A polygon has no width or height to type: it is edited on the canvas,
       // vertex by vertex. The panel says so and reports the count, rather than
@@ -3582,8 +3573,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         const picked = target ? selectedVertIndices(target).length : 0;
         return picked ? `${total} (${picked} selected)` : total;
       };
-      const row = el("label", "ed-field");
-      row.textContent = "vertices";
+      const row = fieldRow("vertices");
       const val = document.createElement("span");
       val.textContent = count();
       row.appendChild(val);
@@ -3604,8 +3594,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           );
           return counts.every((c) => c === counts[0]) ? String(counts[0]) : "mixed";
         };
-        const prow = el("label", "ed-field");
-        prow.textContent = "pieces";
+        const prow = fieldRow("pieces");
         const pval = document.createElement("span");
         pval.textContent = pieces();
         prow.appendChild(pval);
@@ -3613,11 +3602,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         readouts.push({ el: pval, get: pieces });
       }
 
-      const hint = el("div", "ed-hint");
-      hint.textContent = region
+      describe(g, region
         ? "Drag a corner to move it, an edge midpoint to add one, Alt+click a corner to remove it. Click a corner to pick it out (Shift adds, a rubber band from empty space catches several, Esc drops them); Delete removes the picked corners and the arrows nudge them, and dragging any one of them moves the lot. A camera region always stays convex."
-        : "Drag a corner to move it, an edge midpoint to add one, Alt+click a corner to remove it. Click a corner to pick it out (Shift adds, a rubber band from empty space catches several, Esc drops them); Delete removes the picked corners and the arrows nudge them, and dragging any one of them moves the lot. Corners may be dented inward - a concave outline is cut into convex pieces (dashed) for the physics.";
-      g.appendChild(hint);
+        : "Drag a corner to move it, an edge midpoint to add one, Alt+click a corner to remove it. Click a corner to pick it out (Shift adds, a rubber band from empty space catches several, Esc drops them); Delete removes the picked corners and the arrows nudge them, and dragging any one of them moves the lot. Corners may be dented inward - a concave outline is cut into convex pieces (dashed) for the physics.");
     }
   }
 
@@ -3643,8 +3630,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     label: string,
     after?: () => void,
   ): void {
-    const cw = el("label", "ed-field");
-    cw.textContent = label;
+    const cw = fieldRow(label);
     // A colour input has no mixed state; it shows the first item's and writes
     // to all of them, which is the only sane reading of "set the colour".
     const ci = colorInput(items[0]!.color, beginAction, (hex) => {
@@ -3694,14 +3680,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // the box loses its indeterminate state.
       rebuildInspector();
     });
-    const wrap = el("label", "ed-field");
-    wrap.textContent = "hook-proof";
+    const wrap = fieldRow("hook-proof");
     wrap.appendChild(box);
     g.appendChild(wrap);
-    const hint = el("div", "ed-hint");
-    hint.textContent =
-      "The hook is destroyed (grapple) or deflected (ball) on this surface instead of anchoring — drawn with a dashed steel edge. It stays solid: you can stand on it and the rope still wraps its corners. Per shape, so one piece of a compound body can be the only place a hook will catch.";
-    g.appendChild(hint);
+    describe(wrap,
+      "The hook is destroyed (grapple) or deflected (ball) on this surface instead of anchoring — drawn with a dashed steel edge. It stays solid: you can stand on it and the rope still wraps its corners. Per shape, so one piece of a compound body can be the only place a hook will catch.");
   }
 
   // What this piece collides with (see `CollisionObjectData.passes`), as one
@@ -3722,8 +3705,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // mechanism now says both (`CollisionShape2D.wrappable` is the rope bit of
   // the mask), so it belongs beside its siblings rather than on its own.
   function addMaskFields(g: HTMLElement, items: EdItem[]): void {
-    const wrap = el("div", "ed-field");
-    wrap.textContent = "collides with";
+    const wrap = fieldRow("collides with", "div");
     g.appendChild(wrap);
     for (const name of COLLISION_CATEGORIES) {
       const bit = COLLISION_CATEGORY_BITS[name];
@@ -3742,15 +3724,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         // rebuilt so the box loses its indeterminate state.
         rebuildInspector();
       });
-      const cell = el("label", "ed-field ed-sub");
-      cell.textContent = name;
+      const cell = fieldRow(name, "label", "ed-field ed-sub");
       cell.appendChild(box);
       g.appendChild(cell);
     }
-    const hint = el("div", "ed-hint");
-    hint.textContent =
-      "What this piece is in the way of. Untick one and it passes straight through: the player walks between unticked legs, the hook flies past them, chains and ropes neither wrap their corners nor tie to them - drawn with a dotted edge. It still collides with the level, so it stands on the floor and carries its share of the body's weight. Per shape, so a stool's seat can stop the player while the legs it is welded to do not, and a wheel's hub can wind a chain while its rim is ignored.";
-    g.appendChild(hint);
+    describe(wrap,
+      "What this piece is in the way of. Untick one and it passes straight through: the player walks between unticked legs, the hook flies past them, chains and ropes neither wrap their corners nor tie to them - drawn with a dotted edge. It still collides with the level, so it stands on the floor and carries its share of the body's weight. Per shape, so a stool's seat can stop the player while the legs it is welded to do not, and a wheel's hub can wind a chain while its rim is ignored.");
   }
 
   // A rail (see `CollisionObjectData.rail`): the ball's manacle clamps AROUND
@@ -3773,14 +3752,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       markDirty();
       rebuildInspector();
     });
-    const wrap = el("label", "ed-field");
-    wrap.textContent = "rail";
+    const wrap = fieldRow("rail");
     wrap.appendChild(box);
     g.appendChild(wrap);
-    const hint = el("div", "ed-hint");
-    hint.textContent =
-      "The ball's manacle clamps around this bar and slides along it under the chain's pull, held by the body's friction (a zipline, a pipe, a lantern's handle) - drawn with a steel line down its middle, which is the curve itself and where the cuff rides. The cuff stops a half-width in from each end, and where it would meet a piece of the same body that is not part of this bar. Solid for everything else. A bar shorter than it is thick is a peg the ring hangs on without sliding.";
-    g.appendChild(hint);
+    describe(wrap,
+      "The ball's manacle clamps around this bar and slides along it under the chain's pull, held by the body's friction (a zipline, a pipe, a lantern's handle) - drawn with a steel line down its middle, which is the curve itself and where the cuff rides. The cuff stops a half-width in from each end, and where it would meet a piece of the same body that is not part of this bar. Solid for everything else. A bar shorter than it is thick is a peg the ring hangs on without sliding.");
   }
 
   // Viscosity (see `CollisionObjectData.viscosity`): mud the ball's manacle
@@ -3804,8 +3780,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       markDirty();
       rebuildInspector();
     });
-    const wrap = el("label", "ed-field");
-    wrap.textContent = "viscous";
+    const wrap = fieldRow("viscous");
     wrap.appendChild(box);
     g.appendChild(wrap);
     if (items.every((b) => b.viscosity > 0)) {
@@ -3820,10 +3795,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         items.length > 1,
       );
     }
-    const hint = el("div", "ed-hint");
-    hint.textContent =
-      "Mud: the ball's manacle bites this face and then creeps through it in the direction the chain pulls, faster the harder it pulls - a hanging ball draws it slowly toward itself, a falling ball caught on it drags it a long way before it is slowed to a hang - and it drops out once its mouth has crept clear of the geometry. The viscosity is how stiff the mud is: 1 is the reference mud, 2 needs twice the pull for the same creep, 0.5 half. Drawn with a dash-dot ochre edge. Solid for everything else: you can stand on it and the rope still wraps its corners.";
-    g.appendChild(hint);
+    describe(wrap,
+      "Mud: the ball's manacle bites this face and then creeps through it in the direction the chain pulls, faster the harder it pulls - a hanging ball draws it slowly toward itself, a falling ball caught on it drags it a long way before it is slowed to a hang - and it drops out once its mouth has crept clear of the geometry. The viscosity is how stiff the mud is: 1 is the reference mud, 2 needs twice the pull for the same creep, 0.5 half. Drawn with a dash-dot ochre edge. Solid for everything else: you can stand on it and the rope still wraps its corners.");
   }
 
   // The trampoline pair (see `LevelBodyData.bounce`): how much of an arrival the
@@ -3852,17 +3825,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       if (v <= 0) return "-";
       return `${((v * v) / (2 * 9.8)).toFixed(2)} m`;
     };
-    const row = el("label", "ed-field");
-    row.textContent = "throws";
+    const row = fieldRow("throws");
     const val = document.createElement("span");
     val.textContent = height();
     row.appendChild(val);
     g.appendChild(row);
     readouts.push({ el: val, get: height });
-    const hint = el("div", "ed-hint");
-    hint.textContent =
-      "A trampoline. Bounce is the fraction of an impact given back, so what lands gently leaves gently (0 is a dead surface, 1 a perfect bounce). Launch is the spring stored in the pad itself: a floor under the speed anything leaves at, whatever speed it arrived with, so a short drop onto it throws as far as a long one. It fades out on the gentlest touches, so a body that has come to rest on the pad stays put instead of humming. Both are read off both surfaces meeting and the bouncier wins.";
-    g.appendChild(hint);
+    describe(g,
+      "A trampoline. Bounce is the fraction of an impact given back, so what lands gently leaves gently (0 is a dead surface, 1 a perfect bounce). Launch is the spring stored in the pad itself: a floor under the speed anything leaves at, whatever speed it arrived with, so a short drop onto it throws as far as a long one. It fades out on the gentlest touches, so a body that has come to rest on the pad stays put instead of humming. Both are read off both surfaces meeting and the bouncier wins.");
   }
 
   // Breakable geometry (see `LevelBodyData.breakForce`): what it takes to
@@ -3898,8 +3868,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       markDirty();
       rebuildInspector();
     });
-    const wrap = el("label", "ed-field");
-    wrap.textContent = "breakable";
+    const wrap = fieldRow("breakable");
     wrap.appendChild(box);
     g.appendChild(wrap);
     if (leads.every((b) => b.breakForce > 0)) {
@@ -3935,8 +3904,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         ["holds", holds],
         ["ball breaks it at", arrives],
       ] as const) {
-        const row = el("label", "ed-field");
-        row.textContent = label;
+        const row = fieldRow(label);
         const val = document.createElement("span");
         val.textContent = get();
         row.appendChild(val);
@@ -3944,10 +3912,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         readouts.push({ el: val, get });
       }
     }
-    const hint = el("div", "ed-hint");
-    hint.textContent =
-      "Geometry that gives way. The threshold is how hard something has to hit this body to hurt it, in newtons, and the durability is how many such hits it survives before it breaks apart and is gone - in a shower of chunks that fade out, not as rubble you can stand on. Only impacts count: a body resting on it presses once, however long it sits there, and one sliding along it is not hitting it at all. Anything the chain is anchored to when it goes lets go of the chain. A body a scene chain or a vine hangs from cannot be breakable.";
-    g.appendChild(hint);
+    describe(g,
+      "Geometry that gives way. The threshold is how hard something has to hit this body to hurt it, in newtons, and the durability is how many such hits it survives before it breaks apart and is gone - in a shower of chunks that fade out, not as rubble you can stand on. Only impacts count: a body resting on it presses once, however long it sits there, and one sliding along it is not hitting it at all. Anything the chain is anchored to when it goes lets go of the chain. A body a scene chain or a vine hangs from cannot be breakable.");
   }
 
   // Hook-only geometry (see `LevelBodyData.passable`): the hook catches on this
@@ -3979,14 +3945,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // hook-proofing (it exists to be caught on).
       rebuildInspector();
     });
-    const wrap = el("label", "ed-field");
-    wrap.textContent = "hook-only";
+    const wrap = fieldRow("hook-only");
     wrap.appendChild(box);
     g.appendChild(wrap);
-    const hint = el("div", "ed-hint");
-    hint.textContent =
-      "Only the hook can find this body: the player walks and swings straight through it, loose bodies fall through it and the rope never wraps it — drawn with a grate lattice and a dotted edge, behind the solid geometry. A rigid one still falls, still hangs on its spring and is still hauled by a chain; what it stops having is contacts.";
-    g.appendChild(hint);
+    describe(wrap,
+      "Only the hook can find this body: the player walks and swings straight through it, loose bodies fall through it and the rope never wraps it — drawn with a grate lattice and a dotted edge, behind the solid geometry. A rigid one still falls, still hangs on its spring and is still hauled by a chain; what it stops having is contacts.");
   }
 
   // Pivot mounting, rigid bodies only (see `LevelBodyData.pivot`): bolted to a
@@ -4015,8 +3978,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // Rebuilt so the box loses its indeterminate state.
       rebuildInspector();
     });
-    const wrap = el("label", "ed-field");
-    wrap.textContent = "pivot";
+    const wrap = fieldRow("pivot");
     wrap.appendChild(box);
     g.appendChild(wrap);
 
@@ -4099,11 +4061,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
 
     }
 
-    const hint = el("div", "ed-hint");
-    hint.textContent = box.checked
+    describe(g, box.checked
       ? "Bolted to a bearing: the body swings about the pivot point (blank = the centre of mass, where gravity has no leverage) and never translates. An off-centre bearing feels gravity - an unbalanced body hangs from it - and a return frequency makes it a branch: it bends away under a load and springs back to its authored angle when the load leaves."
-      : "Bolted to a bearing at the centre of mass: the body spins freely when torque is applied - a landing, a hook, a chain - but never moves from where it is authored. Gravity does not pull it down.";
-    g.appendChild(hint);
+      : "Bolted to a bearing at the centre of mass: the body spins freely when torque is applied - a landing, a hook, a chain - but never moves from where it is authored. Gravity does not pull it down.");
   }
 
   // SCRIPTED MOTION, static bodies only: the pendulum on a bearing
@@ -4319,8 +4279,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           ? `${legs}, ${route.traverse.toFixed(1)} s`
           : legs;
       };
-      const trow = el("label", "ed-field");
-      trow.textContent = one && moveModeCloses(one.moveMode) ? "lap" : "trip";
+      const trow = fieldRow(one && moveModeCloses(one.moveMode) ? "lap" : "trip");
       const tval = document.createElement("span");
       tval.textContent = trip();
       trow.appendChild(tval);
@@ -4417,8 +4376,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         const cm = peakSurfaceSpeed(model, one) * 100;
         return `${cm.toFixed(2)} cm/frame${cm > 2 ? " - TOO FAST" : ""}`;
       };
-      const srow = el("label", "ed-field");
-      srow.textContent = "surface";
+      const srow = fieldRow("surface");
       const sval = document.createElement("span");
       sval.textContent = speed();
       srow.appendChild(sval);
@@ -4434,11 +4392,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       buildRouteNodeKeys(g, one, pickedNodes);
     }
 
-    const hint = el("div", "ed-hint");
-    hint.textContent = anyTurn || anyRoute
+    describe(g, anyTurn || anyRoute
       ? "Driven by the level rather than by the solver: nothing in the scene can disturb it, and it carries whatever rides it. A route is drawn on the canvas - drag a node to move it, the small handles between them to add one, Alt+click to remove one, a round grip to bow a leg; the body itself is node zero. Click a node to key its angle or its speed there (Shift picks out several); Delete removes the picked nodes, the arrows nudge them and Esc drops them. Keep the surface speed under 2 cm/frame."
-      : "A static that MOVES. A swing angle and a beat make it a pendulum about its bearing; a spin time makes it a rotor that turns about the same bearing for ever, negative the other way round; a route drawn on the canvas makes it a platform, travelled there and back, round and round, or run and repeated. Nothing in the level can disturb any of them, which is what lets a jump be timed against it.";
-    g.appendChild(hint);
+      : "A static that MOVES. A swing angle and a beat make it a pendulum about its bearing; a spin time makes it a rotor that turns about the same bearing for ever, negative the other way round; a route drawn on the canvas makes it a platform, travelled there and back, round and round, or run and repeated. Nothing in the level can disturb any of them, which is what lets a jump be timed against it.");
   }
 
   // Which nodes of the selected routes key `field`, as the sentence the inert
@@ -4472,11 +4428,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // typing a key starts from what it is replacing rather than from a zero that
   // is not what is happening there.
   function buildRouteNodeKeys(g: HTMLElement, item: EdItem, picked: number[]): void {
-    g.appendChild(heading(picked.length === 1 ? `Node ${picked[0]}` : `${picked.length} nodes`));
-    const hint = el("div", "ed-hint");
-    hint.textContent =
-      "Where the body is on the route decides these. A node that carries one keys that field only; between two keys the value is eased by distance along the route, and before the first and past the last it holds. Blank drops the key.";
-    g.appendChild(hint);
+    g = section(g, "body/Mover/Node", picked.length === 1 ? `Node ${picked[0]}` : `${picked.length} nodes`);
+    describe(g,
+      "Where the body is on the route decides these. A node that carries one keys that field only; between two keys the value is eased by distance along the route, and before the first and past the last it holds. Blank drops the key.");
 
     const route = routeOf(model, item);
     const at = (i: number): number => route.index.nodeS[i] ?? 0;
@@ -4563,8 +4517,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // Does changing this change what the rest of the panel offers?
     rebuild: boolean,
   ): HTMLSelectElement {
-    const wrap = el("label", "ed-field");
-    wrap.textContent = label;
+    const wrap = fieldRow(label);
     const sel = document.createElement("select");
     sel.className = "ed-select";
     const agreed = leads.every((b) => get(b) === get(leads[0]!)) ? get(leads[0]!) : null;
@@ -4614,8 +4567,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       markDirty();
       rebuildInspector();
     });
-    const wrap = el("label", "ed-field");
-    wrap.textContent = label;
+    const wrap = fieldRow(label);
     wrap.appendChild(box);
     parent.appendChild(wrap);
   }
@@ -4752,8 +4704,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       return `+${(((Player.MASS * 9.8) / (kg * w * w)) * 100).toFixed(1)} cm`;
     };
     for (const [label, get] of [["droop", droop], ["+ a hanging player", hang]] as const) {
-      const row = el("label", "ed-field");
-      row.textContent = label;
+      const row = fieldRow(label);
       const val = document.createElement("span");
       val.textContent = get();
       row.appendChild(val);
@@ -4761,10 +4712,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       readouts.push({ el: val, get });
     }
 
-    const hint = el("div", "ed-hint");
-    hint.textContent =
-      "Held at the authored position by a spring per axis, so the body sags under its own weight and further under a load — a hanging player, a resting rock, a chain — then springs back past its rest height before settling. 0 on an axis pins that axis instead (a leaf that only bobs vertically). Frequency, not stiffness: the droop under its own weight is the same whatever the body is made of, while a heavier body notices a hung player less. A spring body cannot rotate, so it cannot also be pivot-mounted.";
-    g.appendChild(hint);
+    describe(g,
+      "Held at the authored position by a spring per axis, so the body sags under its own weight and further under a load — a hanging player, a resting rock, a chain — then springs back past its rest height before settling. 0 on an axis pins that axis instead (a leaf that only bobs vertically). Frequency, not stiffness: the droop under its own weight is the same whatever the body is made of, while a heavier body notices a hung player less. A spring body cannot rotate, so it cannot also be pivot-mounted.");
   }
 
   // The standing "match the collision shape" link (see `EdItem.matchId`): while
@@ -4803,14 +4752,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       refreshFields();
       rebuildInspector();
     });
-    const wrap = el("label", "ed-field");
-    wrap.textContent = "match collision";
+    const wrap = fieldRow("match collision");
     wrap.appendChild(box);
     g.appendChild(wrap);
-    const hint = el("div", "ed-hint");
-    hint.textContent =
-      "Keeps this outline equal to the collision shape it dresses, in both directions: resize or move either and the other follows. Ticking it snaps this object onto the collision shape. Untick to author a look that deliberately differs from what the body collides as.";
-    g.appendChild(hint);
+    describe(wrap,
+      "Keeps this outline equal to the collision shape it dresses, in both directions: resize or move either and the other follows. Ticking it snaps this object onto the collision shape. Untick to author a look that deliberately differs from what the body collides as.");
   }
 
   // Which collision object a fresh link ties to: the one already stating the
@@ -5052,8 +4998,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // vertex count is - a canvas resize changes it while the panel is
   // deliberately not rebuilt.
   function addMaterialFields(g: HTMLElement, items: EdItem[]): void {
-    const mw = el("label", "ed-field");
-    mw.textContent = "material";
+    const mw = fieldRow("material");
     const ms = document.createElement("select");
     ms.className = "ed-select";
     const sharedMaterial = items.every((b) => b.material === items[0]!.material)
@@ -5094,8 +5039,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       const first = items[0]!.material;
       return items.every((b) => b.material === first) ? `${MATERIALS[first]} kg/m³` : "mixed";
     };
-    const drow = el("label", "ed-field");
-    drow.textContent = "density";
+    const drow = fieldRow("density");
     const dval = document.createElement("span");
     dval.textContent = density();
     drow.appendChild(dval);
@@ -5120,17 +5064,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // Under a kilogram (a pebble, a shard) the interesting digits are grams.
       return kg < 1 ? `${(kg * 1000).toFixed(0)} g` : `${kg.toFixed(kg < 10 ? 2 : 1)} kg`;
     };
-    const row = el("label", "ed-field");
-    row.textContent = items.length > 1 ? "total mass" : "mass";
+    const row = fieldRow(items.length > 1 ? "total mass" : "mass");
     const val = document.createElement("span");
     val.textContent = mass();
     row.appendChild(val);
     g.appendChild(row);
     readouts.push({ el: val, get: mass });
-    const hint = el("div", "ed-hint");
-    hint.textContent =
-      "Thickness is the shape's depth through z, the dimension the 2D view cannot show: mass is area × thickness × density. Both are per shape, so a compound body's pieces each carry their own. Only a rigid body has a mass, but the material also fixes where a body's centre of mass — the point it rotates about — sits.";
-    g.appendChild(hint);
+    describe(g,
+      "Thickness is the shape's depth through z, the dimension the 2D view cannot show: mass is area × thickness × density. Both are per shape, so a compound body's pieces each carry their own. Only a rigid body has a mass, but the material also fixes where a body's centre of mass — the point it rotates about — sits.");
   }
 
   // How the 3D renderer draws these shapes (see `VisualData`). Per SHAPE like
@@ -5142,9 +5083,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // nothing, so a level author never has to open it; the fields that appear
   // depend on the kind, because a mesh's placement means nothing to an
   // extrusion and an extrusion's depth means nothing to a mesh.
-  function addVisualFields(g: HTMLElement, items: EdItem[]): void {
-    const kw = el("label", "ed-field");
-    kw.textContent = "kind";
+  function addVisualFields(group: HTMLElement, items: EdItem[]): void {
+    // Three sections, and `g` is the one the next fields go in: the placement of
+    // the drawing, then its surface, then what it gives off.
+    const look = section(group, "object/Look", "Look");
+    let g = look;
+    const kw = fieldRow("kind");
     const ks = document.createElement("select");
     ks.className = "ed-select";
     const sharedKind = items.every((b) => b.visual.kind === items[0]!.visual.kind)
@@ -5201,8 +5145,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     };
 
     if (sharedKind === "mesh" || sharedKind === null) {
-      const mw = el("label", "ed-field");
-      mw.textContent = "mesh";
+      const mw = fieldRow("mesh");
       const ms = document.createElement("select");
       ms.className = "ed-select";
       // The manifest, plus a blank for "not chosen yet". An unlisted key already
@@ -5237,43 +5180,22 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         ms.disabled = true;
         ks.disabled = true;
         const why = "Generated: the mesh is made by Generate from the Rock or Mushrooms group below. Delete the object and place a prop to wear a hand-made mesh.";
-        mw.title = why;
-        kw.title = why;
+        describe(mw, why);
+        describe(kw, why);
       }
       mw.appendChild(ms);
       g.appendChild(mw);
-      if (ms.disabled) {
-        const hint = el("div", "ed-hint");
-        hint.textContent = "generated: the mesh is made by Generate below";
-        g.appendChild(hint);
-      }
-
-      // Dimensionless: it multiplies the model's own size, so it is not a length
-      // and does not scale on the way to disk.
-      num("scale", (v) => v.scale, (v, s) => (v.scale = s), 0.1);
     }
 
-    // Depth placement applies whatever the kind is: 0 is the gameplay plane and
-    // negative is away from the camera. On a background panel it is the whole
-    // point of the section - a panel at -20 m parallaxes as the camera pans,
-    // where a panel at 0 is the flat fill the 2D renderer draws.
-    num("off z", (v) => v.offsetZ * M2PX, (v, z) => (v.offsetZ = z * PX), 5);
-
-    // The two rotations the item's own in-plane transform cannot express, and
-    // like `off z` they apply whatever the kind is: a prop's holder and an
-    // extrusion are turned by them alike. Its x, y and rotation are the ITEM's,
-    // edited above like every other object's - a geometry object has a transform
-    // of its own now, so the look does not carry a second one that could
-    // disagree with it. Angles in degrees, as `rot°` is.
-    num("rot x°", (v) => deg(v.rotX), (v, d) => (v.rotX = rad(d)), 5);
-    num("rot y°", (v) => deg(v.rotY), (v, d) => (v.rotY = rad(d)), 5);
+    // (Where it is and how it is turned and sized - `visual.offsetZ`, `rotX`,
+    // `rotY` and a mesh's `scale` - are the Transform section's, beside the x,
+    // y and rot° they complete: see `addPlacementFields`.)
 
     // Which lens the object is drawn through (`GeometryObjectData.projection`),
     // whatever the kind. Orthographic drops the perspective divide for this
     // object alone: it keeps its size at any depth and does not parallax.
     {
-      const pw = el("label", "ed-field");
-      pw.textContent = "lens";
+      const pw = fieldRow("lens");
       const ps = document.createElement("select");
       ps.className = "ed-select";
       const first = items[0]!.visual.projection;
@@ -5352,9 +5274,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // textured with, and it is what a prop wears INSTEAD of the materials its
     // own file carries - which is what dresses a bare geometry-only export as
     // the same stone the walls are made of.
+    const texture = section(group, "object/Texture", "Texture");
+    g = texture;
     {
-      const tw = el("label", "ed-field");
-      tw.textContent = "texture";
+      const tw = fieldRow("texture");
       const ts = document.createElement("select");
       ts.className = "ed-select";
       // One namespace, authored sets first: a level names a surface, and whether
@@ -5405,10 +5328,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // object's own `color`, edited in the fill fields below this section, so
       // the section says where that is rather than restating the swatch.
       if (items.every((b) => isSolidSurface(b.visual.texture))) {
-        const hint = el("div", "ed-hint");
-        hint.textContent =
-          "A flat fill of this object's `color` below - no pattern, nothing to tile, and the colour is worn exactly as picked rather than as a tint.";
-        g.appendChild(hint);
+        describe(tw,
+          "A flat fill of this object's `color` below - no pattern, nothing to tile, and the colour is worn exactly as picked rather than as a tint.");
       } else {
         // How large this shape wears the texture, as a MULTIPLE of the size the
         // texture was authored at: 1 is life size, 2 twice as large. Dimensionless
@@ -5447,8 +5368,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           );
           return `${metres.toFixed(2)} m per repeat`;
         };
-        const trow = el("label", "ed-field");
-        trow.textContent = "";
+        const trow = fieldRow("");
         const tval = document.createElement("span");
         tval.textContent = tileReadout();
         trow.appendChild(tval);
@@ -5484,6 +5404,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // A colour input has no empty state, so the tick is what says whether the
     // shape emits at all; unticking clears the colour rather than leaving a hex
     // string on disk that nothing renders.
+    g = section(group, "object/Emission", "Emission");
     {
       const on = items.map((b) => b.visual.emissive !== "");
       const box = document.createElement("input");
@@ -5498,8 +5419,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         markDirty();
         rebuildInspector(); // the colour and its multiplier appear or go
       });
-      const ew = el("label", "ed-field");
-      ew.textContent = "emissive";
+      const ew = fieldRow("emissive");
       ew.appendChild(box);
       g.appendChild(ew);
       // WHERE it glows: another set's emission map worn over this surface, so a
@@ -5511,8 +5431,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       const glowKeys = new Set<string>(emissiveMapNames());
       for (const b of items) if (b.visual.emissiveTexture) glowKeys.add(b.visual.emissiveTexture);
       if (glowKeys.size > 0) {
-        const gw = el("label", "ed-field");
-        gw.textContent = "glow map";
+        const gw = fieldRow("glow map");
         const gs = document.createElement("select");
         gs.className = "ed-select";
         for (const key of ["", ...[...glowKeys].sort()]) {
@@ -5535,8 +5454,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       const emits =
         box.checked || box.indeterminate || items.some((b) => b.visual.emissiveTexture !== "");
       if (box.checked || box.indeterminate) {
-        const cw = el("label", "ed-field");
-        cw.textContent = "glow";
+        const cw = fieldRow("glow");
         const ci = colorInput(
           items.find((b) => b.visual.emissive)?.visual.emissive || DEFAULT_LIGHT_COLOR,
           beginAction,
@@ -5570,10 +5488,18 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       }
     }
 
-    const hint = el("div", "ed-hint");
-    hint.textContent =
-      "How the 3D renderer draws this shape: `auto` extrudes the shape's own primitive through z and wears the texture below, which is what every body gets for free; `mesh` replaces that with a GLB prop, which wears the texture too if one is named and keeps its own materials otherwise; `none` draws nothing at all (an invisible wall). `tile` is how much world one repeat of the texture covers, so the same stone reads the same on a plank and on a cliff. The texture `color` is the one that names no surface: a flat fill of the shape's own `color`, worn exactly as picked, with nothing to tile. A shape that emits reads as BRIGHT and lights nothing - emission is appearance, and three.js has no global illumination. A lamp that lights the room is this plus a light on the lights layer, grouped into the same body with Ctrl+G, which is what makes the fitting and its light one thing that cannot drift apart. `glow map` makes the emission a pattern (lit windows, cracks) rather than the whole face. Per shape, so a body's pieces each carry their own. Render-only — nothing here reaches the simulation.";
-    g.appendChild(hint);
+    describe(
+      look,
+      "How the 3D renderer draws this shape: `auto` extrudes the shape's own primitive through z and wears the texture below, which is what every body gets for free; `mesh` replaces that with a GLB prop, which wears the texture too if one is named and keeps its own materials otherwise; `none` draws nothing at all (an invisible wall). Per shape, so a body's pieces each carry their own. Render-only — nothing here reaches the simulation.",
+    );
+    describe(
+      texture,
+      "`tile` is how much world one repeat of the texture covers, so the same stone reads the same on a plank and on a cliff. The texture `color` is the one that names no surface: a flat fill of the shape's own `color`, worn exactly as picked, with nothing to tile.",
+    );
+    describe(
+      g,
+      "A shape that emits reads as BRIGHT and lights nothing - emission is appearance, and three.js has no global illumination. A lamp that lights the room is this plus a light on the lights layer, grouped into the same body with Ctrl+G, which is what makes the fitting and its light one thing that cannot drift apart. `glow map` makes the emission a pattern (lit windows, cracks) rather than the whole face.",
+    );
   }
 
   // Every layer's panel ends the same way: the two actions that apply to any
@@ -5631,23 +5557,21 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // object inside a body is the same confusion in the title bar.
     const solid = bodies.some((b) => (b.object === "collision"));
     const noun = solid ? "Collision" : "Geometry";
-    g.appendChild(
-      heading(
-        bodies.length === 1
-          ? `${noun} #${bodies[0]!.id}`
-          : `${bodies.length} ${solid ? "collision shapes" : "geometry objects"} selected`,
-      ),
+    const title = heading(
+      bodies.length === 1
+        ? `${noun} #${bodies[0]!.id}`
+        : `${bodies.length} ${solid ? "collision shapes" : "geometry objects"} selected`,
+      bodies.length > 1
+        ? "Edits apply to all of them. Shift+click adds or removes; rubber-band left→right encloses, right→left touches."
+        : undefined,
     );
-    if (bodies.length > 1) {
-      const hint = el("div", "ed-hint");
-      hint.textContent =
-        "Edits apply to all of them. Shift+click adds or removes; rubber-band left→right encloses, right→left touches.";
-      g.appendChild(hint);
-    }
+    g.appendChild(title);
 
     const sync = () => syncEditedBodies(bodies);
-    const num = groupNum(g, bodies, sync);
-    addTransformFields(g, num, bodies);
+    const transform = section(g, "object/Transform", "Transform");
+    const placeNum = groupNum(transform, bodies, sync);
+    addTransformFields(transform, placeNum, bodies);
+    if (!solid) addPlacementFields(transform, placeNum, bodies);
     // Hook-proof, offered for the solid kinds it means something on: an area is
     // a region the rope passes through, and a hook-only body exists to be caught
     // on, so neither has a hook to repel.
@@ -5655,28 +5579,29 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       solid &&
       bodies.every((b) => (b.kind === "static" || b.kind === "rigid") && !b.passable)
     ) {
-      addImpermeableField(g, bodies);
-      addViscousField(g, bodies);
+      const surface = section(g, "object/Surface", "Surface");
+      addImpermeableField(surface, bodies);
+      addViscousField(surface, bodies);
       // Only a CURVE may be a rail: a rail's centreline is the line the author
       // drew, and there is none to ride on a box or a vertex loop (see
       // `CollisionObjectData.rail`). Offered elsewhere it is a checkbox that
       // writes a field the loader ignores.
-      if (bodies.every((b) => b.shape.kind === "path")) addRailField(g, bodies);
-      addMaskFields(g, bodies);
+      if (bodies.every((b) => b.shape.kind === "path")) addRailField(surface, bodies);
+      addMaskFields(surface, bodies);
     }
     // Material and thickness are what a shape WEIGHS, and decoration weighs
     // nothing - its extrusion depth is `visual.depth` instead.
-    if (solid && !bodies.some(massless)) addMaterialFields(g, bodies);
+    if (solid && !bodies.some(massless)) addMaterialFields(section(g, "object/Material", "Material"), bodies);
     // The link that keeps a look and the collision shape it dresses one
     // outline; beside the transform fields, since it is those it takes over.
-    if (!solid) addMatchField(g, bodies);
+    if (!solid) addMatchField(transform, bodies);
     // ...and the edit that deliberately breaks that link for a generated rock:
     // the collision outline written from the rock itself. One object at a time,
     // since it rewrites that object's body.
     if (!solid && bodies.length === 1 && ROCK_TEXTURES.has(bodies[0]!.visual.texture)) {
       const row = el("div", "ed-row");
       addRockFitButton(row, bodies[0]!.bodyId);
-      if (row.childElementCount) g.appendChild(row);
+      if (row.childElementCount) transform.appendChild(row);
     }
     // What a thing LOOKS like is a geometry object's business and only its own.
     // A collision shape is drawn by whichever geometry object dresses it, and
@@ -5687,15 +5612,59 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // A geometry object carries its OWN fill - `toLevelData` writes its colour
     // and opacity onto the object. A collision shape does not: the colour a wall
     // is painted is its BODY's, and it is edited there.
-    if (!solid) addFillFields(g, num, bodies, sync);
+    if (!solid) {
+      const fill = section(g, "object/Fill", "Fill");
+      addFillFields(fill, groupNum(fill, bodies, sync), bodies, sync);
+    }
 
-    addGroupSection(g);
+    addGroupSection(g, title);
     addActionsRow(g);
     inspector.appendChild(g);
     // A GENERATED object's Rock or Mushrooms group, below its geometry panel:
     // one object at a time, since generating is about one mesh.
     if (!solid && bodies.length === 1 && bodies[0]!.visual.generator) {
       inspector.appendChild(buildGeneratorGroup(generatorPanelHost, bodies[0]!));
+    }
+  }
+
+  // The rest of where a geometry object is drawn, in its Transform section
+  // beside the x, y and rot° it completes: its depth off the plane, the two
+  // rotations the in-plane transform cannot express, and a mesh's scale. All
+  // are `visual` fields, so a collision shape - on the plane by definition, and
+  // drawn by whichever geometry dresses it - has none.
+  function addPlacementFields(transform: HTMLElement, num: GroupNum, items: EdItem[]): void {
+    const rowOf = (name: string): Element | undefined =>
+      [...transform.children].find((r) => r.querySelector(":scope > .ed-name")?.textContent === name);
+    // Each new row is appended, then moved to where it reads: z after y, the
+    // tilts after rot°, and scale last, after whatever size the shape has.
+    const place = (input: HTMLInputElement, after: string): void => {
+      const anchor = rowOf(after);
+      if (anchor) anchor.after(input.parentElement!);
+    };
+    // 0 is the gameplay plane and negative is away from the camera. On a
+    // background panel it is the whole point - a panel at -20 m parallaxes as
+    // the camera pans, where a panel at 0 is the flat fill the 2D renderer draws.
+    const z = num("z", (b) => b.visual.offsetZ * M2PX, (b, v) => (b.visual.offsetZ = v * PX), 5);
+    describe(z, "Depth off the gameplay plane, in scene pixels: 0 is the plane, negative is away from the camera.");
+    place(z, "y");
+    // A prop's holder and an extrusion are turned by them alike. Degrees, as
+    // `rot°` is.
+    const rx = num("rot x°", (b) => deg(b.visual.rotX), (b, d) => (b.visual.rotX = rad(d)), 5);
+    const ry = num("rot y°", (b) => deg(b.visual.rotY), (b, d) => (b.visual.rotY = rad(d)), 5);
+    describe(rx, "Tilt about the x axis (top toward or away from you), which the in-plane `rot°` cannot express.");
+    describe(ry, "Turn about the y axis (a side toward or away from you), which the in-plane `rot°` cannot express.");
+    if (rowOf("rot°")) {
+      place(ry, "rot°");
+      place(rx, "rot°");
+    }
+    // Dimensionless: it multiplies the model's own size, so it is not a length
+    // and does not scale on the way to disk. Offered where the look is (or may
+    // be, in a mixed selection) a mesh, whose size is the model's own.
+    const kind = items[0]!.visual.kind;
+    const sharedKind = items.every((b) => b.visual.kind === kind) ? kind : null;
+    if (sharedKind === "mesh" || sharedKind === null) {
+      const s = num("scale", (b) => b.visual.scale, (b, v) => (b.visual.scale = v), 0.1);
+      describe(s, "A multiple of the mesh's own size.");
     }
   }
 
@@ -5757,11 +5726,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // making a different body than the one on screen. Gated like the actions row:
   // a cross-layer selection carries one shared section above the per-layer
   // panels instead of the same buttons repeated in each of them.
-  function addGroupSection(g: HTMLElement): void {
+  // What it says about the body goes on `title`, the heading of the panel the
+  // buttons sit under.
+  function addGroupSection(g: HTMLElement, title: HTMLElement): void {
     if (selectionSpansLayers) return;
-    appendGroupSection(g);
+    appendGroupSection(g, title);
   }
-  function appendGroupSection(g: HTMLElement): void {
+  function appendGroupSection(g: HTMLElement, title: HTMLElement): void {
     const sel = selectedBodies();
     // Bodies picked in the TREE count here too - selecting two rows and pressing
     // Merge is the plainest way to say "these are one body from now on", and it
@@ -5779,10 +5750,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       b.title = "Take these bodies apart - every object becomes its own body (Ctrl+Shift+G)";
       row.appendChild(b);
     }
-    g.appendChild(row);
+    if (row.childElementCount) g.appendChild(row);
     const only = bodies.size === 1 ? [...bodies][0]! : null;
     if (!row.childElementCount && only === null) return;
-    const hint = el("div", "ed-hint");
     if (only !== null) {
       const members = bodyMembers(model.items, only);
       const shapes = members.filter((m) => m.object === "collision").length;
@@ -5792,14 +5762,18 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       if (shapes) parts.push(`${shapes} ${shapes === 1 ? "shape" : "shapes"}`);
       if (panels) parts.push(`${panels} decoration`);
       if (lights) parts.push(`${lights} ${lights === 1 ? "light" : "lights"}`);
-      hint.textContent = shapes
-        ? `One body of ${parts.join(", ")}: they share a transform, and the rope and ledge grabs treat the seams between the shapes as interior. Alt+click an object to edit it alone.`
-        : `One body of ${parts.join(", ")}, moved and turned as one. Nothing here collides, so it builds no engine body: it stays where it is authored in play. Merge it with a colliding shape to have it ride that.`;
+      describe(
+        title,
+        shapes
+          ? `One body of ${parts.join(", ")}: they share a transform, and the rope and ledge grabs treat the seams between the shapes as interior. Alt+click an object to edit it alone.`
+          : `One body of ${parts.join(", ")}, moved and turned as one. Nothing here collides, so it builds no engine body: it stays where it is authored in play. Merge it with a colliding shape to have it ride that.`,
+      );
     } else {
-      hint.textContent =
-        "Merging puts these objects in ONE body. Its collision shapes build as a single body, so the rope runs straight over the seams between them instead of snagging; kind, fill and friction collapse onto the first shape's, while material, thickness and hook-proof stay per shape. Decoration in the body is carried by it - its own fill, no mass, drawn in the body's frame. A light in it is that body's light, and moving the body moves the light. Without merging anything, the 3D view's gizmo stands at the middle of this selection and moves and turns all of it as one arrangement.";
+      describe(
+        title,
+        "Merging puts these objects in ONE body. Its collision shapes build as a single body, so the rope runs straight over the seams between them instead of snagging; kind, fill and friction collapse onto the first shape's, while material, thickness and hook-proof stay per shape. Decoration in the body is carried by it - its own fill, no mass, drawn in the body's frame. A light in it is that body's light, and moving the body moves the light. Without merging anything, the 3D view's gizmo stands at the middle of this selection and moves and turns all of it as one arrangement.",
+      );
     }
-    g.appendChild(hint);
   }
 
   // A body's position in the outliner, which is what names it everywhere in the
@@ -5823,13 +5797,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // opinion on the body's fill is reading the wrong field.
   function addBodyProps(g: HTMLElement, members: EdItem[]): void {
     const leads = members.filter((b) => b.object === "collision");
-    const num = groupNum(g, leads, () => syncEditedBodies(leads));
+    const sync = () => syncEditedBodies(leads);
     // The physics half exists only for a body that HAS some. A body of pure
     // decoration or a lone light has no kind, no friction and no force, and
     // offering them would be three controls that change nothing.
     if (leads.length) {
-      const kw = el("label", "ed-field");
-      kw.textContent = "kind";
+      const physics = section(g, "body/Physics", "Physics");
+      const num = groupNum(physics, leads, sync);
+      const kw = fieldRow("kind");
       const ks = document.createElement("select");
       ks.className = "ed-select";
       const sharedKind = leads.every((b) => b.kind === leads[0]!.kind) ? leads[0]!.kind : null;
@@ -5858,10 +5833,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         rebuildInspector();
       });
       kw.appendChild(ks);
-      g.appendChild(kw);
+      physics.appendChild(kw);
       if (!leads.some(frictionless)) {
         num("friction", (b) => b.friction, (b, v) => (b.friction = Math.min(1, Math.max(0, v))), 0.1);
-        addBounceFields(g, num, leads);
       }
       if (leads.every((b) => b.kind === "force")) {
         // Acceleration along rot°, authored in px/s² like every other length.
@@ -5897,37 +5871,45 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // - so what its panel carries is the one thing that is not on the canvas:
       // what happens when the player gets there.
       if (leads.every((b) => b.kind === "finish")) {
-        const fin = el("div", "ed-hint");
-        fin.textContent =
-          "The end of the level: the run is over the moment the player touches this region, however they arrive. Draw it across the way out - wide enough that a swing cannot miss it - and put a finish-line prop on the same body so it can be seen. A listed level needs exactly one.";
-        g.appendChild(fin);
+        describe(kw,
+          "The end of the level: the run is over the moment the player touches this region, however they arrive. Draw it across the way out - wide enough that a swing cannot miss it - and put a finish-line prop on the same body so it can be seen. A listed level needs exactly one.");
       }
       // Offered for the kinds that build a BODY: an area is a region the sim
       // walks through already, so "the hook is the only thing that finds it"
       // says nothing about one.
       if (leads.every((b) => b.kind === "static" || b.kind === "rigid")) {
-        addPassableField(g, leads);
-        // Offered for the kinds that build a BODY, like hook-only above: an
-        // area is a region rather than a thing anything can hit.
-        addBreakFields(g, num, leads);
+        addPassableField(physics, leads);
+      }
+      if (!leads.some(frictionless)) {
+        const bounce = section(g, "body/Bounce", "Bounce");
+        addBounceFields(bounce, groupNum(bounce, leads, sync), leads);
+      }
+      // Offered for the kinds that build a BODY, like hook-only above: an
+      // area is a region rather than a thing anything can hit.
+      if (leads.every((b) => b.kind === "static" || b.kind === "rigid")) {
+        const breaks = section(g, "body/Breakable", "Breakable");
+        addBreakFields(breaks, groupNum(breaks, leads, sync), leads);
       }
       if (leads.every((b) => b.kind === "rigid")) {
-        addPivotField(g, leads);
-        addSpringFields(g, leads);
+        addPivotField(section(g, "body/Pivot", "Pivot"), leads);
+        addSpringFields(section(g, "body/Spring", "Spring"), leads);
       }
       // ...and the two motions a static may carry, which are the same shape of
       // thing one kind along: a body the LEVEL drives rather than the solver.
       if (leads.every((b) => b.kind === "static")) {
-        addMoverFields(g, leads);
+        addMoverFields(section(g, "body/Mover", "Mover"), leads);
       }
     }
     // The generated rock's seed, for a rock body whatever it is built of - one
     // of geometry alone has no leads and is still a rock.
-    addRockSeedField(g, members);
+    addRockSeedField(section(g, "body/Rock", "Rock"), members);
     // ...and the fill, which only a body written from a collision lead has: a
     // body of pure decoration is painted by its objects' own colours, and a
     // body that is nothing but a light is not painted at all.
-    if (leads.length) addFillFields(g, num, leads, () => syncEditedBodies(leads));
+    if (leads.length) {
+      const fill = section(g, "body/Fill", "Fill");
+      addFillFields(fill, groupNum(fill, leads, sync), leads, sync);
+    }
   }
 
   // The seed of a body's GENERATED rock (see `LevelBodyData.rockSeed`), offered
@@ -5951,8 +5933,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       1,
     );
     input.min = "0";
-    input.title =
-      "Seeds every random choice in this body's generated rock. Changing it marks the rock stale - play shows the flat extrusion until the rocks are regenerated (bun run assets:rocks <level>).";
+    describe(input,
+      "Seeds every random choice in this body's generated rock. Changing it marks the rock stale - play shows the flat extrusion until the rocks are regenerated (bun run assets:rocks <level>).");
     const row = el("div", "ed-row");
     const next = button("Next seed", () => {
       beginAction();
@@ -5974,7 +5956,17 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (!members.length) return;
     const index = bodyIndexOf(id);
     const g = el("div", "ed-group");
-    g.appendChild(heading(`Body #${index} — ${bodyLabel(members)}`));
+    const kinds = members.map((m) => m.object);
+    const title = heading(
+      `Body #${index} — ${bodyLabel(members)}`,
+      `${members.length} object${members.length === 1 ? "" : "s"}: ` +
+        `${kinds.filter((k) => k === "collision").length} collision, ` +
+        `${kinds.filter((k) => k === "geometry").length} geometry, ` +
+        `${kinds.filter((k) => k === "light").length} light. ` +
+        "A body is the frame they are placed in and the properties they share - what each one IS lives on the object. Expand this body in the panel bottom-left and click an object to edit its shape, material or look.",
+    );
+    g.appendChild(title);
+    const transform = section(g, "body/Transform", "Transform");
 
     // The transform. It is the frame every object in the body is placed from,
     // so moving it moves them: the fields write a DELTA onto the members rather
@@ -5984,16 +5976,16 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // stale the moment the body moves.
     const origin = (): EdBodyFrame => bodyFrameOf(model, id);
     const nudgeBy = (dx: number, dy: number) => translateItems(model, members, new Vec2(dx, dy));
-    numField(g, "x", () => origin().pos.x * M2PX, (v) => nudgeBy(v * PX - origin().pos.x, 0));
-    numField(g, "y", () => origin().pos.y * M2PX, (v) => nudgeBy(0, v * PX - origin().pos.y));
+    numField(transform, "x", () => origin().pos.x * M2PX, (v) => nudgeBy(v * PX - origin().pos.x, 0));
+    numField(transform, "y", () => origin().pos.y * M2PX, (v) => nudgeBy(0, v * PX - origin().pos.y));
     // No z beside them: a body's position is x and y, and depth belongs to the
     // objects that draw (see `LevelBodyData`), where the geometry panel's
-    // `off z` authors it.
+    // `z` authors it.
     // Turning a body turns everything in it about the point it is built to
     // rotate about - its centre of mass, which is where the engine puts the
     // origin (see `bodyCentroid`).
     numField(
-      g,
+      transform,
       "rot°",
       () => deg(origin().rot),
       // About the point the built body actually turns about - its centre of
@@ -6019,25 +6011,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     row.appendChild(centre);
     addRockFitButton(row, id);
     addGenerateRockButton(row, rockSourceOf(members));
-    g.appendChild(row);
+    transform.appendChild(row);
 
     addBodyProps(g, members);
+    // The buttons are not properties: they stay in view under the sections.
+    appendGroupSection(g, title);
+    appendActions(g);
     inspector.appendChild(g);
-
-    const actions = el("div", "ed-group");
-    appendGroupSection(actions);
-    appendActions(actions);
-    inspector.appendChild(actions);
-
-    const hint = el("div", "ed-hint");
-    const kinds = members.map((m) => m.object);
-    hint.textContent =
-      `${members.length} object${members.length === 1 ? "" : "s"}: ` +
-      `${kinds.filter((k) => k === "collision").length} collision, ` +
-      `${kinds.filter((k) => k === "geometry").length} geometry, ` +
-      `${kinds.filter((k) => k === "light").length} light. ` +
-      "A body is the frame they are placed in and the properties they share - what each one IS lives on the object. Expand this body in the panel bottom-left and click an object to edit its shape, material or look.";
-    inspector.appendChild(hint);
   }
 
   // SEVERAL bodies. No transform, because there is no one frame to edit - what
@@ -6046,44 +6026,39 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   function buildBodiesPanel(ids: number[]): void {
     const members = ids.flatMap((id) => bodyMembers(model.items, id));
     const g = el("div", "ed-group");
-    g.appendChild(heading(`${ids.length} bodies selected`));
-    const hint = el("div", "ed-hint");
-    hint.textContent =
-      "Shift or Ctrl+click a body row to add or remove one. Merge puts every object in these bodies into a single body; edits below apply to all of them.";
-    g.appendChild(hint);
+    const title = heading(
+      `${ids.length} bodies selected`,
+      "Shift or Ctrl+click a body row to add or remove one. Merge puts every object in these bodies into a single body; edits below apply to all of them.",
+    );
+    g.appendChild(title);
     addBodyProps(g, members);
+    appendGroupSection(g, title);
+    appendActions(g);
     inspector.appendChild(g);
-
-    const actions = el("div", "ed-group");
-    appendGroupSection(actions);
-    appendActions(actions);
-    inspector.appendChild(actions);
   }
 
   // Chain panel. A chain has no placement of its own - both ends are points on
   // bodies - so the panel is what it holds, how long it is, and its colour.
   function buildChainGroup(chains: EdChain[]): void {
     const g = el("div", "ed-group");
-    g.appendChild(
-      heading(chains.length === 1 ? `Chain #${chains[0]!.id}` : `${chains.length} chains selected`),
+    const title = heading(
+      chains.length === 1 ? `Chain #${chains[0]!.id}` : `${chains.length} chains selected`,
+      "Strung between two bodies and solved every frame: a rigid body on either end hangs and swings from it, a static one just holds. Drag an end handle to move or re-anchor it. Shift-drag the chain itself to pull a wrap point out of it and drop it on a corner the chain should bend around - a beam, a pulley - and drag a wrap point's handle to move it. One wrap point per piece is enough: a circle gets its two tangent points and a beam its corners from that one. The chain winds onto its A end when that body turns.",
     );
-    const hint = el("div", "ed-hint");
-    hint.textContent =
-      "Strung between two bodies and solved every frame: a rigid body on either end hangs and swings from it, a static one just holds. Drag an end handle to move or re-anchor it. Shift-drag the chain itself to pull a wrap point out of it and drop it on a corner the chain should bend around - a beam, a pulley - and drag a wrap point's handle to move it. One wrap point per piece is enough: a circle gets its two tangent points and a beam its corners from that one. The chain winds onto its A end when that body turns.";
-    g.appendChild(hint);
+    describe(
+      title,
+      "Scenery: drawn behind the level, and solved against the level's geometry - it catches on corners as the ball's chain does - but never against the player or the hook, which pass straight through it.",
+    );
+    g.appendChild(title);
 
-    const planeHint = el("div", "ed-hint");
-    planeHint.textContent =
-      "Scenery: drawn behind the level, and solved against the level's geometry - it catches on corners as the ball's chain does - but never against the player or the hook, which pass straight through it.";
-    g.appendChild(planeHint);
-
-    if (chains.length === 1) addWrapPointRows(g, chains[0]!);
+    if (chains.length === 1) addWrapPointRows(section(g, "chain/Wrap points", "Wrap points"), chains[0]!);
 
     // Slack is what a chain is for, so the length is authored in scene pixels
     // like every other length. Blank = exactly taut between the two anchors,
     // re-derived on load, which is what dragging one out gives.
+    const length = section(g, "chain/Length", "Length");
     numField(
-      g,
+      length,
       "length",
       () => {
         const first = chains[0]!.length;
@@ -6112,33 +6087,34 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       const len = c.length ?? straight;
       return `${Math.round((len - straight) * M2PX)} px`;
     };
-    const srow = el("label", "ed-field");
-    srow.textContent = "slack";
+    const srow = fieldRow("slack");
     const sval = document.createElement("span");
     sval.textContent = slack();
     srow.appendChild(sval);
-    g.appendChild(srow);
+    length.appendChild(srow);
     readouts.push({ el: sval, get: slack });
 
-    const cw = el("label", "ed-field");
-    cw.textContent = "color";
+    const color = section(g, "chain/Color", "Color");
+    const cw = fieldRow("color");
     const ci = colorInput(chains[0]!.color ?? CHAIN_DEFAULT_COLOR, beginAction, (hex) => {
       for (const c of chains) c.color = hex;
       markDirty();
     });
     cw.appendChild(ci.el);
-    g.appendChild(cw);
-
-    const row = el("div", "ed-row");
-    row.append(
+    color.appendChild(cw);
+    const reset = el("div", "ed-row");
+    reset.appendChild(
       button("Reset color", () => {
         beginAction();
         for (const c of chains) c.color = null;
         markDirty();
         rebuildInspector();
       }),
-      button("Delete", () => deleteSelected()),
     );
+    color.appendChild(reset);
+
+    const row = el("div", "ed-row");
+    row.appendChild(button("Delete", () => deleteSelected()));
     g.appendChild(row);
     inspector.appendChild(g);
   }
@@ -6226,14 +6202,15 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // a body - so the panel is how long it is, how finely it is made, and its
   // colour.
   function buildVineGroup(vines: EdVine[]): void {
-    const g = el("div", "ed-group");
-    g.appendChild(
-      heading(vines.length === 1 ? `Vine #${vines[0]!.id}` : `${vines.length} vines selected`),
+    const group = el("div", "ed-group");
+    const title = heading(
+      vines.length === 1 ? `Vine #${vines[0]!.id}` : `${vines.length} vines selected`,
+      "Hangs from one anchor, free at the bottom - or spans between two. The player passes straight through it and the hook grabs it anywhere along its length; it drapes over whatever it lands on. Drag the top handle to move it - along the body it hangs from, or onto another one - and the end handle to set how long it is. SHIFT-drag the end handle onto a body to attach it there and make the vine a span (length stays its own, so a span longer than the gap sags); Shift-drop a span's end over empty space to detach it again.",
     );
-    const hint = el("div", "ed-hint");
-    hint.textContent =
-      "Hangs from one anchor, free at the bottom - or spans between two. The player passes straight through it and the hook grabs it anywhere along its length; it drapes over whatever it lands on. Drag the top handle to move it - along the body it hangs from, or onto another one - and the end handle to set how long it is. SHIFT-drag the end handle onto a body to attach it there and make the vine a span (length stays its own, so a span longer than the gap sags); Shift-drop a span's end over empty space to detach it again. Density is kilograms per metre of cord: it sets how the vine answers a hooked player and what it leans on what it hangs from, not how it falls. Stiffness is how hard it is to bend - 0 is a rope, 1 a pole that holds itself straight and springs back to hanging. On a span the ends are pinned and stiffness presses the drape toward straight: 0 rests in the catenary, 1 reads as a taut wire. The ball's manacle threads onto a vine like a ring and creeps down it under the ball's weight, locked to the cord until it slides off the free end - viscosity sets how slowly, as it does for mud: blank is mud's own, 0 never slides.";
-    g.appendChild(hint);
+    group.appendChild(title);
+    // The section the next fields go in: its shape, then how it behaves, then
+    // its colour.
+    let g = section(group, "vine/Shape", "Shape");
 
     numField(
       g,
@@ -6294,8 +6271,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       const segments = Math.max(v.anchor2 !== null ? 2 : 1, Math.ceil(length / spacing));
       return `${v.anchor2 !== null ? segments - 1 : segments}`;
     };
-    const lrow = el("label", "ed-field");
-    lrow.textContent = "links";
+    const lrow = fieldRow("links");
     const lval = document.createElement("span");
     lval.textContent = links();
     lrow.appendChild(lval);
@@ -6314,8 +6290,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       return s > 0 ? `${(s * M2PX).toFixed(0)}` : "taut";
     };
     if (vines.length === 1 && vines[0]!.anchor2 !== null) {
-      const srow = el("label", "ed-field");
-      srow.textContent = "slack";
+      const srow = fieldRow("slack");
       const sval = document.createElement("span");
       sval.textContent = slack();
       srow.appendChild(sval);
@@ -6330,7 +6305,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // It is NOT scaled by `M2PX` on the way in or out: every other number in
     // this panel is a length the file keeps in pixels, and this one is already
     // per metre (see `VineData.density`).
-    numField(
+    g = section(group, "vine/Physics", "Physics");
+    const density = numField(
       g,
       "density",
       () => {
@@ -6349,6 +6325,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         },
       },
     );
+    describe(
+      density,
+      "Kilograms per metre of cord: it sets how the vine answers a hooked player and what it leans on what it hangs from, not how it falls.",
+    );
 
     // What that weighs, whole and per link - the second is the number that
     // matters, because what a hooked player does to a vine is set by the ratio
@@ -6362,8 +6342,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // `white-space: nowrap`: "9.0 kg (0.45 per link)" beside its label ran off
     // the edge of the inspector.
     const readout = (label: string, get: () => string): void => {
-      const row = el("label", "ed-field");
-      row.textContent = label;
+      const row = fieldRow(label);
       const val = document.createElement("span");
       val.textContent = get();
       row.appendChild(val);
@@ -6391,9 +6370,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       vines.length === 1 && linkMass(vines[0]!) < LIGHT_LINK_MASS
         ? "Light: a link this size stretches under a hooked player."
         : "";
+    // Under the title rather than in its section, so a collapsed Physics does
+    // not hide it.
     const warn = el("div", "ed-hint ed-warn");
     warn.textContent = light();
-    g.appendChild(warn);
+    title.after(warn);
     readouts.push({ el: warn, get: light });
 
     // How hard it is to BEND, 0..1 - the one thing on this panel that is not a
@@ -6401,7 +6382,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // builder's default, and blank is a real third state rather than a spelling
     // of zero: a vine that never asked for stiffness builds no bend constraints
     // at all, so it costs what a vine always cost and replays as one.
-    numField(
+    const stiffness = numField(
       g,
       "stiffness",
       () => {
@@ -6419,6 +6400,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           for (const vine of vines) vine.stiffness = null;
         },
       },
+    );
+    describe(
+      stiffness,
+      "How hard it is to bend - 0 is a rope, 1 a pole that holds itself straight and springs back to hanging. On a span the ends are pinned and stiffness presses the drape toward straight: 0 rests in the catenary, 1 reads as a taut wire.",
     );
 
     // What that number reads as in the game, because 0.75 says nothing on its
@@ -6439,7 +6424,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // this scales the load that law reads exactly as a mud patch's viscosity
     // does (see `VineData.viscosity`). Blank is the builder's default, the
     // reference mud; 0 is a ring that never slides.
-    numField(
+    const viscosity = numField(
       g,
       "viscosity",
       () => {
@@ -6458,47 +6443,54 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         },
       },
     );
+    describe(
+      viscosity,
+      "The ball's manacle threads onto a vine like a ring and creeps down it under the ball's weight, locked to the cord until it slides off the free end - viscosity sets how slowly, as it does for mud: blank is mud's own, 0 never slides.",
+    );
 
-    const cw = el("label", "ed-field");
-    cw.textContent = "color";
+    g = section(group, "vine/Color", "Color");
+    const cw = fieldRow("color");
     const ci = colorInput(vines[0]!.color ?? VINE_DEFAULT_COLOR, beginAction, (hex) => {
       for (const v of vines) v.color = hex;
       markDirty();
     });
     cw.appendChild(ci.el);
     g.appendChild(cw);
-
-    const row = el("div", "ed-row");
-    row.append(
+    const reset = el("div", "ed-row");
+    reset.appendChild(
       button("Reset color", () => {
         beginAction();
         for (const v of vines) v.color = null;
         markDirty();
         rebuildInspector();
       }),
-      button("Delete", () => deleteSelected()),
     );
-    g.appendChild(row);
-    inspector.appendChild(g);
+    g.appendChild(reset);
+
+    const row = el("div", "ed-row");
+    row.appendChild(button("Delete", () => deleteSelected()));
+    group.appendChild(row);
+    inspector.appendChild(group);
   }
 
   // Camera-layer panel. Same shape as the body panel — group-wide edits, blank
   // for a value the group disagrees on — over the region's framing properties.
   function buildCameraGroup(regions: EdItem[]): void {
-    const g = el("div", "ed-group");
-    g.appendChild(
+    const group = el("div", "ed-group");
+    group.appendChild(
       heading(
         regions.length === 1 ? `Camera region #${regions[0]!.id}` : `${regions.length} regions selected`,
+        "While the avatar is inside, the camera offsets, rescales the viewport, or pins to a locked axis. Every change eases in.",
       ),
     );
-    const hint = el("div", "ed-hint");
-    hint.textContent =
-      "While the avatar is inside, the camera offsets, rescales the viewport, or pins to a locked axis. Every change eases in.";
-    g.appendChild(hint);
 
-    const num = groupNum(g, regions);
+    // The section the next fields go in, and a field builder bound to it.
+    let g = section(group, "camera/Transform", "Transform");
+    let num = groupNum(g, regions);
     addTransformFields(g, num, regions);
 
+    g = section(group, "camera/Framing", "Framing");
+    num = groupNum(g, regions);
     num("off x", (b) => b.cam.offset.x * M2PX, (b, v) => (b.cam.offset = b.cam.offset.withX(v * PX)), 10);
     num("off y", (b) => b.cam.offset.y * M2PX, (b, v) => (b.cam.offset = b.cam.offset.withY(v * PX)), 10);
     // How much world is on screen: 2 = twice as much (zoomed out).
@@ -6540,7 +6532,32 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     };
     lockField("lock x", "lockX", (b) => b.pos.x);
     lockField("lock y", "lockY", (b) => b.pos.y);
+    // Whether the screen-edge guarantee holds the player in frame while this
+    // region frames the camera. Unticked, they may leave the frame - or fall
+    // into it, which is what a level's opening shot wants.
+    {
+      const box = document.createElement("input");
+      box.type = "checkbox";
+      box.checked = regions.every((b) => b.cam.keepInFrame);
+      box.indeterminate = !box.checked && regions.some((b) => b.cam.keepInFrame);
+      box.addEventListener("change", () => {
+        beginAction();
+        for (const b of regions) b.cam.keepInFrame = box.checked;
+        markDirty();
+        rebuildInspector();
+      });
+      const wrap = fieldRow("keep in frame");
+      describe(
+        wrap,
+        "Hold the player on screen while this region frames the camera. Untick to let them leave the frame - or fall into it, for a level's opening shot.",
+      );
+      wrap.appendChild(box);
+      g.appendChild(wrap);
+    }
 
+    // How it hands the camera over to its neighbours.
+    g = section(group, "camera/Hand-off", "Hand-off");
+    num = groupNum(g, regions);
     // (`blend s` was here. The camera has no hand-off clock any more: a rule
     // change is a step in the aim, and the motion layer answers every step at a
     // bounded acceleration.)
@@ -6604,30 +6621,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     );
     // Lowest number wins outright; rules tied at it blend (see `ruleWeight`).
     num("priority", (b) => b.cam.priority, (b, v) => (b.cam.priority = Math.round(v)), 1);
-    // Whether the screen-edge guarantee holds the player in frame while this
-    // region frames the camera. Unticked, they may leave the frame - or fall
-    // into it, which is what a level's opening shot wants.
-    {
-      const box = document.createElement("input");
-      box.type = "checkbox";
-      box.checked = regions.every((b) => b.cam.keepInFrame);
-      box.indeterminate = !box.checked && regions.some((b) => b.cam.keepInFrame);
-      box.addEventListener("change", () => {
-        beginAction();
-        for (const b of regions) b.cam.keepInFrame = box.checked;
-        markDirty();
-        rebuildInspector();
-      });
-      const wrap = el("label", "ed-field");
-      wrap.textContent = "keep in frame";
-      wrap.title =
-        "Hold the player on screen while this region frames the camera. Untick to let them leave the frame - or fall into it, for a level's opening shot.";
-      wrap.appendChild(box);
-      g.appendChild(wrap);
-    }
 
-    addActionsRow(g);
-    inspector.appendChild(g);
+    addActionsRow(group);
+    inspector.appendChild(group);
   }
 
   // Camera-path panel. `range` and `lookahead` are what an author actually
@@ -6642,15 +6638,35 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   function buildCameraPathGroup(paths: EdItem[]): void {
     const g = el("div", "ed-group");
     g.appendChild(
-      heading(paths.length === 1 ? `Camera path #${paths[0]!.id}` : `${paths.length} paths selected`),
+      heading(
+        paths.length === 1 ? `Camera path #${paths[0]!.id}` : `${paths.length} paths selected`,
+        "The route the camera rides, in the direction it was drawn. The player is projected onto it and the camera targets a point further ALONG it, so the screen leads them the way the level wants them to go - even when they backtrack.",
+      ),
     );
-    const hint = el("div", "ed-hint");
-    hint.textContent =
-      "The route the camera rides, in the direction it was drawn. The player is projected onto it and the camera targets a point further ALONG it, so the screen leads them the way the level wants them to go - even when they backtrack. `lead x`/`lead y` are how far ahead, per axis, because the frame is 16:9; `lead buf x`/`lead buf y` are slack in where that lead is measured FROM, so a swing running back and forth along the route does not slosh the camera - and while the player is on a line that band is one-sided, so a swing wider than it ratchets the camera down the route instead of sawing it back and forth. `range x`/`range y` are the corridor, per axis for the same reason - the pair is an ellipse around the route, so the corridor is screen-shaped. Stray past it and the path's grip fades over `falloff x`/`falloff y`, then lets go, handing the camera to whatever region contains them (or to the plain follow); coming back takes it again. Both hand-offs are bounded by the camera's own acceleration cap rather than blended on a clock. Drag a node to move it, its round grips to shape the curve through it, an edge midpoint to insert one, Alt+click a node to remove it; click a node to pick it out (Shift adds, a rubber band from empty space catches several, Esc drops them), and Delete removes the picked nodes while the arrows nudge them.";
-    g.appendChild(hint);
 
-    const num = groupNum(g, paths);
-    addTransformFields(g, num, paths);
+    const transform = section(g, "campath/Transform", "Transform");
+    describe(
+      transform,
+      "Drag a node to move it, its round grips to shape the curve through it, an edge midpoint to insert one, Alt+click a node to remove it; click a node to pick it out (Shift adds, a rubber band from empty space catches several, Esc drops them), and Delete removes the picked nodes while the arrows nudge them.",
+    );
+    addTransformFields(transform, groupNum(transform, paths), paths);
+    // The fields below fall into three sections but are written in the order
+    // their reasoning runs, so `num` is switched to the one each goes in.
+    const corridor = section(g, "campath/Corridor", "Corridor");
+    describe(
+      corridor,
+      "`range x`/`range y` are the corridor, per axis because the frame is 16:9 - the pair is an ellipse around the route, so the corridor is screen-shaped. Stray past it and the path's grip fades over `falloff x`/`falloff y`, then lets go, handing the camera to whatever region contains them (or to the plain follow); coming back takes it again. Both hand-offs are bounded by the camera's own acceleration cap rather than blended on a clock.",
+    );
+    const lead = section(g, "campath/Lead", "Lead");
+    describe(
+      lead,
+      "`lead x`/`lead y` are how far ahead, per axis, because the frame is 16:9; `lead buf x`/`lead buf y` are slack in where that lead is measured FROM, so a swing running back and forth along the route does not slosh the camera - and while the player is on a line that band is one-sided, so a swing wider than it ratchets the camera down the route instead of sawing it back and forth.",
+    );
+    const framing = section(g, "campath/Framing", "Framing");
+    const corridorNum = groupNum(corridor, paths);
+    const leadNum = groupNum(lead, paths);
+    const framingNum = groupNum(framing, paths);
+    let num = corridorNum;
 
     // The nodes of these paths that KEY a field (see `CameraPathVert`). A keyed
     // field's path-level value is read nowhere - the keys hold at both ends of
@@ -6707,6 +6723,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // than swapping what it frames.
     axisField("falloff x", "falloffX", DEFAULT_PATH_FALLOFF_X);
     axisField("falloff y", "falloffY", DEFAULT_PATH_FALLOFF_Y);
+    num = leadNum;
     axisField("lead x", "lookaheadX", DEFAULT_PATH_LOOKAHEAD_X);
     axisField("lead y", "lookaheadY", DEFAULT_PATH_LOOKAHEAD_Y);
     // Slack in where the lead is measured FROM, not in the lead itself: a swing
@@ -6716,6 +6733,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     axisField("lead buf x", "lookaheadBufferX", DEFAULT_PATH_LOOKAHEAD_BUFFER_X);
     axisField("lead buf y", "lookaheadBufferY", DEFAULT_PATH_LOOKAHEAD_BUFFER_Y);
     // How much world is on screen: 2 = twice as much (zoomed out).
+    num = framingNum;
     const viewKeyed = keyedAt("viewportScale");
     const viewInput = num(
       "view ×",
@@ -6728,6 +6746,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // Extra hysteresis outside `range` before the path lets go, on top of the
     // corridor itself. Blank = the controller's jitter margin, which is the same
     // default a region's buffer falls back to.
+    num = corridorNum;
     const bufKeyed = keyedAt("buffer");
     const bufInput = num(
       "buffer",
@@ -6750,6 +6769,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // the jerk that goes with it; much larger and it cuts a corner before the
     // player does. Not keyable: it is a property of the route's shape rather
     // than of the framing at a place on it.
+    num = framingNum;
     num(
       "softness",
       (b) => (b.cam.softness ?? NaN) * M2PX,
@@ -6768,6 +6788,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // stretch is capped at the authored lead, so a fast player sees at most
     // twice as far and a shaft with a zeroed vertical lead leads by nothing
     // however fast they fall. Blank = the controller's default.
+    num = leadNum;
     const reactKeyed = keyedAt("reactionTime");
     const reactInput = num(
       "reaction s",
@@ -6803,9 +6824,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       },
     );
     if (windKeyed) windInput.title = windKeyed;
-    num("priority", (b) => b.cam.priority, (b, v) => (b.cam.priority = Math.round(v)), 1);
+    framingNum("priority", (b) => b.cam.priority, (b, v) => (b.cam.priority = Math.round(v)), 1);
 
-    appendPathActions(g, paths, "Reverse the direction of travel - the way the camera leads along this path");
+    appendPathActions(transform, paths, "Reverse the direction of travel - the way the camera leads along this path");
 
     // The picked nodes' KEYS, when the path is open for vertex editing and
     // some are picked. Under the path's own fields because a key is one of
@@ -6826,14 +6847,17 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   function buildFireflyPathGroup(paths: EdItem[]): void {
     const g = el("div", "ed-group");
     g.appendChild(
-      heading(paths.length === 1 ? `Firefly path ${paths[0]!.pathId}` : `${paths.length} firefly paths selected`),
+      heading(
+        paths.length === 1 ? `Firefly path ${paths[0]!.pathId}` : `${paths.length} firefly paths selected`,
+        "A route a firefly swarm guides the player along, in the direction it was drawn - instead of the camera paths. A swarm follows it once its `path` field names this path's number. When the player reaches the END (the bar) the swarm stops following, flies back along the path to the START (the ring) and waits there, noticing the player again once they have left its ring and come back.",
+      ),
     );
-    const hint = el("div", "ed-hint");
-    hint.textContent =
-      "A route a firefly swarm guides the player along, in the direction it was drawn - instead of the camera paths. A swarm follows it once its `path` field names this path's number. When the player reaches the END (the bar) the swarm stops following, flies back along the path to the START (the ring) and waits there, noticing the player again once they have left its ring and come back. Edit it like a camera path: drag a node, its round grips to shape the curve, an edge midpoint to insert one, Alt+click to remove one.";
-    g.appendChild(hint);
-    const num = groupNum(g, paths);
-    addTransformFields(g, num, paths);
+    const transform = section(g, "ffpath/Transform", "Transform");
+    describe(
+      transform,
+      "Edit it like a camera path: drag a node, its round grips to shape the curve, an edge midpoint to insert one, Alt+click to remove one.",
+    );
+    addTransformFields(transform, groupNum(transform, paths), paths);
     // Which swarms follow it: a path none names is drawn for nothing.
     const followers = el("div", "ed-hint");
     followers.textContent = paths
@@ -6844,8 +6868,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         return `path ${p.pathId}: ${swarms.length === 0 ? "no swarm names it" : `followed by ${swarms.length} swarm${swarms.length === 1 ? "" : "s"}`}`;
       })
       .join("; ");
-    g.appendChild(followers);
-    appendPathActions(g, paths, "Reverse the direction of travel - which end the swarm waits at, and which it leaves the player at");
+    g.insertBefore(followers, transform.parentElement);
+    appendPathActions(transform, paths, "Reverse the direction of travel - which end the swarm waits at, and which it leaves the player at");
     addActionsRow(g);
     inspector.appendChild(g);
   }
@@ -6888,11 +6912,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   function buildPathNodeKeys(g: HTMLElement, item: EdItem, picked: number[]): void {
     if (item.shape.kind !== "path") return;
     const shape = item.shape;
-    g.appendChild(heading(picked.length === 1 ? `Node ${picked[0]}` : `${picked.length} nodes`));
-    const hint = el("div", "ed-hint");
-    hint.textContent =
-      "Keys: the path's fields, said at these nodes. A keyed field is interpolated along the route between its keyed nodes and held beyond the first and last; a node with no key is transparent to it, and a field no node keys is the path's own. View, lead and reaction are read where the lead is measured from, so a swing across a change does not pump the camera; range, falloff and buffer are read at the player's nearest point on the route, and the corridor is drawn as they vary. Blank drops the key.";
-    g.appendChild(hint);
+    g = section(g, "campath/Node", picked.length === 1 ? `Node ${picked[0]}` : `${picked.length} nodes`);
+    describe(g,
+      "Keys: the path's fields, said at these nodes. A keyed field is interpolated along the route between its keyed nodes and held beyond the first and last; a node with no key is transparent to it, and a field no node keys is the path's own. View, lead and reaction are read where the lead is measured from, so a swing across a change does not pump the camera; range, falloff and buffer are read at the player's nearest point on the route, and the corridor is drawn as they vary. Blank drops the key.");
 
     // What each picked node is effectively at, through the SAME rule the game
     // builds - so the placeholder is the number the camera would use there.
@@ -6950,13 +6972,22 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // ends, and therefore what does the framing.
   function buildLightsGroup(lights: EdItem[]): void {
     const g = el("div", "ed-group");
-    g.appendChild(
-      heading(lights.length === 1 ? `Light #${lights[0]!.id}` : `${lights.length} lights selected`),
+    const title = heading(
+      lights.length === 1 ? `Light #${lights[0]!.id}` : `${lights.length} lights selected`,
+      "Lights the 3D scene from inside the level, with no visible source of its own - a shaft down a grate, a fill, a spot, or the one light that has to cast a shadow. A lamp the player can SEE is a shape carrying an emissive on the geometry layer, which throws its own light and cannot drift away from it. Set the level's sun intensity to 0 (and env intensity near 0) for an interior.",
     );
-    const hint = el("div", "ed-hint");
-    hint.textContent =
-      "Lights the 3D scene from inside the level, with no visible source of its own - a shaft down a grate, a fill, a spot, or the one light that has to cast a shadow. A lamp the player can SEE is a shape carrying an emissive on the geometry layer, which throws its own light and cannot drift away from it. Set the level's sun intensity to 0 (and env intensity near 0) for an interior.";
-    g.appendChild(hint);
+    g.appendChild(title);
+    // A warning is put under the title rather than in a section, so a
+    // collapsed section cannot hide it.
+    let warnAt: Element = title;
+    const warn = (text: string): void => {
+      const w = el("div", "ed-hint ed-warn");
+      w.textContent = text;
+      warnAt.after(w);
+      warnAt = w;
+    };
+    const transform = section(g, "light/Transform", "Transform");
+    const light = section(g, "light/Light", "Light");
 
     const kindSel = document.createElement("select");
     kindSel.className = "ed-select";
@@ -6968,7 +6999,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     }
     const kinds = new Set(lights.map((b) => b.light.kind));
     kindSel.value = kinds.size === 1 ? lights[0]!.light.kind : "point";
-    kindSel.title = "point throws in every direction; spot is a cone (a shaft through a grate)";
     kindSel.addEventListener("change", () => {
       beginAction();
       const kind = kindSel.value as "point" | "spot";
@@ -6993,11 +7023,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       }
       rebuildInspector(); // the cone fields appear or go
     });
-    g.appendChild(labelWrap("kind", kindSel));
+    const kw = fieldRow("kind");
+    kw.appendChild(kindSel);
+    describe(kw, "point throws in every direction; spot is a cone (a shaft through a grate)");
+    transform.appendChild(kw);
 
-    const num = groupNum(g, lights);
-    addTransformFields(g, num, lights); // x, y and the reach (labelled "range")
-    addColorField(g, lights, "color");
+    addTransformFields(transform, groupNum(transform, lights), lights); // x, y and the reach (labelled "range")
+    let num = groupNum(light, lights);
+    addColorField(light, lights, "color");
     // Candela against METRES, and the one number here that is not converted on
     // the way to disk - see `LightData`.
     num("intensity", (b) => b.light.intensity, (b, v) => (b.light.intensity = Math.max(0, v)), 1);
@@ -7011,7 +7044,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       0.1,
     );
 
+    const lightNum = num;
     if (lights.every((b) => b.light.kind === "point")) {
+      num = groupNum(section(g, "light/Wake", "Wake & fireflies"), lights);
       // A FIREFLY SWARM (see `LightObjectData.fireflies`): this many motes
       // hovering at the light until the ball comes within `wake`, then
       // following it. Blank or 0 is an ordinary light.
@@ -7048,8 +7083,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
             },
           },
         );
-        pathInput.title =
-          "The number of a firefly path (the fireflies layer) this swarm guides the player along; blank reads the camera paths.";
+        describe(
+          pathInput,
+          "The number of a firefly path (the fireflies layer) this swarm guides the player along; blank reads the camera paths.",
+        );
         pathInput.addEventListener("change", () => rebuildInspector());
         // A number naming no path is read as blank (see `LightRig.placeFor`),
         // which is silent in play - so it is said here.
@@ -7059,9 +7096,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           ),
         ];
         if (missing.length > 0) {
-          const warn = el("div", "ed-hint");
-          warn.textContent = `No firefly path ${missing.join(", ")} on the fireflies layer: the swarm reads the camera paths until there is one.`;
-          g.appendChild(warn);
+          warn(
+            `No firefly path ${missing.join(", ")} on the fireflies layer: the swarm reads the camera paths until there is one.`,
+          );
         }
       }
 
@@ -7117,6 +7154,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     }
 
     if (lights.every((b) => b.light.kind === "spot")) {
+      num = groupNum(section(g, "light/Spot", "Spot"), lights);
       // The cone made visible, beside the flicker it flickers with: how much
       // the lit air shows, and how thick the dust drifting in it is. The 3D
       // view shows both; the 2D canvas does not draw the cone.
@@ -7160,15 +7198,17 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       (b) => b.light.kind === "point" && (b.light.wake > 0 || b.light.fireflies > 0),
     );
     shadowBox.disabled = waking;
-    const sw = el("label", "ed-field");
-    sw.textContent = "shadows";
+    const sw = fieldRow("shadows");
     if (waking) {
-      sw.title =
-        "A waking light or a firefly swarm casts no shadow (the pool lights that serve them cast none).";
+      describe(
+        sw,
+        "A waking light or a firefly swarm casts no shadow (the pool lights that serve them cast none).",
+      );
       sw.style.opacity = "0.5";
     }
     sw.appendChild(shadowBox);
-    g.appendChild(sw);
+    light.appendChild(sw);
+    num = lightNum;
     if (lights.every((b) => b.light.castShadow)) {
       // The shadow camera's near plane: casters closer than this are not in the
       // map. Author it past a surrounding fitting's radius so a lantern casts
@@ -7191,9 +7231,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       (b) => b.object === "light" && b.light.castShadow,
     ).length;
     if (budget > LIGHT_SHADOW_BUDGET) {
-      const over = el("div", "ed-hint");
-      over.textContent = `${budget} lights ask for shadows and only the first ${LIGHT_SHADOW_BUDGET} get them; the rest still light the scene.`;
-      g.appendChild(over);
+      warn(
+        `${budget} lights ask for shadows and only the first ${LIGHT_SHADOW_BUDGET} get them; the rest still light the scene.`,
+      );
     }
 
     addActionsRow(g);
@@ -7212,6 +7252,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // per-layer panels, so the note's panel need not be on screen.
   function focusNoteText(): void {
     if (!noteText) return;
+    // It is in a section like every other field, which may be collapsed.
+    revealInSection(noteText);
     noteText.scrollIntoView({ block: "nearest" });
     noteText.focus();
     const end = noteText.value.length;
@@ -7228,28 +7270,24 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // `passable` flag now, so an anchor here is only ever a chain's tie point.)
   function buildAnchorsGroup(anchors: EdItem[]): void {
     const g = el("div", "ed-group");
-    g.appendChild(
-      heading(
-        anchors.length === 1
-          ? `Anchor #${anchors[0]!.anchorId}`
-          : `${anchors.length} anchors selected`,
-      ),
-    );
     const tied = model.chains.filter((c) => anchors.some((a) => c.a === a.id || c.b === a.id));
     const routed = model.chains.filter((c) => anchors.some((a) => c.via.includes(a.id)));
     const held = tied.length + routed.filter((c) => !tied.includes(c)).length;
-    const hint = el("div", "ed-hint");
-    hint.textContent =
+    const title = heading(
+      anchors.length === 1
+        ? `Anchor #${anchors[0]!.anchorId}`
+        : `${anchors.length} anchors selected`,
       anchors.length === 1
         ? `${tied.length ? "A chain's tie point on this body" : "A chain's wrap point on this body - a corner the chain bends around"}. It is an object IN the body, so it rides it: moving or turning the body moves the anchor, and the chain follows without anything being re-derived. ${held === 1 ? "One chain" : `${held} chains`} ${tied.length ? "tied here" : "routed over it"}.`
-        : "Chain tie and wrap points. Each is an object in its body and rides it; the chains follow.";
-    g.appendChild(hint);
+        : "Chain tie and wrap points. Each is an object in its body and rides it; the chains follow.",
+    );
+    g.appendChild(title);
 
-    const num = groupNum(g, anchors);
-    addTransformFields(g, num, anchors);
+    const transform = section(g, "anchor/Transform", "Transform");
+    addTransformFields(transform, groupNum(transform, anchors), anchors);
     // No fill, no material, no look: an anchor is a point. Its canvas mark is the
     // ring its chain already draws at it, which is also the handle that drags it.
-    addGroupSection(g);
+    addGroupSection(g, title);
     addActionsRow(g);
     inspector.appendChild(g);
   }
@@ -7257,6 +7295,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   function buildNotesGroup(notes: EdItem[]): void {
     const g = el("div", "ed-group");
     const allCheckpoints = notes.every((n) => n.note.kind === "checkpoint");
+    // The two things this layer holds are used for opposite things, so the help
+    // says which one is selected rather than describing the layer.
     g.appendChild(
       heading(
         notes.length === 1
@@ -7264,23 +7304,20 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
             ? `Checkpoint #${notes[0]!.id}`
             : `Note #${notes[0]!.id}`
           : `${notes.length} ${allCheckpoints ? "checkpoints" : "notes"} selected`,
+        allCheckpoints
+          ? "A named place to start from. Play with ?checkpoint=NAME to spawn here instead of at the level's spawn - a killzone reset comes back here too, so an area can be played over and over. Selecting one and pressing ▶ Test starts the test here. Invisible in play."
+          : "Editor-only: notes record why geometry is placed as it is, so it isn't later removed as arbitrary. They never appear in play.",
       ),
     );
-    const hint = el("div", "ed-hint");
-    // The two things this layer holds are used for opposite things, so the hint
-    // says which one is selected rather than describing the layer.
-    hint.textContent = allCheckpoints
-      ? "A named place to start from. Play with ?checkpoint=NAME to spawn here instead of at the level's spawn - a killzone reset comes back here too, so an area can be played over and over. Selecting one and pressing ▶ Test starts the test here. Invisible in play."
-      : "Editor-only: notes record why geometry is placed as it is, so it isn't later removed as arbitrary. They never appear in play.";
-    g.appendChild(hint);
 
     if (allCheckpoints && notes.length === 1) {
       const n = notes[0]!;
+      const name = section(g, "notes/Name", "Name");
+      describe(name, "What ?checkpoint= asks for. Matched trimmed and ignoring case.");
       const input = document.createElement("input");
       input.className = "ed-text";
       input.value = n.note.text;
       input.placeholder = "name";
-      input.title = "What ?checkpoint= asks for. Matched trimmed and ignoring case.";
       // The URL this checkpoint is reached by, written out in full: the name is
       // half of a query string, and a name that has to be assembled by hand into
       // one is a name that gets mistyped.
@@ -7324,9 +7361,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         updateUrlHint();
       });
       noteText = input;
-      g.appendChild(input);
+      name.appendChild(input);
       updateUrlHint();
-      g.appendChild(url);
+      name.appendChild(url);
     } else if (allCheckpoints) {
       const many = el("div", "ed-hint");
       many.textContent = "Select one checkpoint to name it.";
@@ -7335,7 +7372,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
 
     const allText = notes.every((n) => n.note.kind === "text");
     const allArrows = notes.every((n) => n.note.kind === "arrow");
-    if (allText && notes.length === 1) {
+    const text = allText ? section(g, "notes/Text", "Text") : null;
+    if (text && notes.length === 1) {
       const n = notes[0]!;
       const ta = document.createElement("textarea");
       ta.className = "ed-text";
@@ -7356,24 +7394,25 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         markDirty();
       });
       noteText = ta;
-      g.appendChild(ta);
-    } else if (allText) {
+      text.appendChild(ta);
+    } else if (text) {
       // Merging prose across a group has no sane meaning, so the text stays a
       // single-selection edit while placement stays group-wide.
       const many = el("div", "ed-hint");
       many.textContent = "Select one note to edit its text.";
-      g.appendChild(many);
+      text.appendChild(many);
+    }
+    if (text) {
+      groupNum(text, notes)("text px", (b) => b.note.size * M2PX, (b, v) => (b.note.size = Math.max(4, v) * PX), 1);
     }
 
-    const num = groupNum(g, notes);
-    addTransformFields(g, num, notes);
+    const transform = section(g, "notes/Transform", "Transform");
+    const num = groupNum(transform, notes);
+    addTransformFields(transform, num, notes);
     if (allArrows) {
       num("length", (b) => (b.shape.kind === "rect" ? b.shape.w * M2PX : 0), (b, v) => {
         if (b.shape.kind === "rect") b.shape.w = Math.max(MIN_ARROW_LENGTH, v * PX);
       });
-    }
-    if (allText) {
-      num("text px", (b) => b.note.size * M2PX, (b, v) => (b.note.size = Math.max(4, v) * PX), 1);
     }
 
     addActionsRow(g);
@@ -7391,14 +7430,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // may as well offer. A level that touches nothing here writes no block, which
   // is what keeps every level from before the field byte-identical.
   function buildLevelGroup(): void {
-    const g = el("div", "ed-group");
-    g.appendChild(heading("Level"));
+    const g = section(inspector, "level/Level", "Level", true);
 
     const title = document.createElement("input");
     title.className = "ed-text";
     title.value = model.meta.title ?? "";
     title.placeholder = currentName ?? "the file name";
-    title.title = "What the level select shows. Blank = the level's own id.";
     // One undo step per editing session, snapshotted on the first keystroke -
     // the rule the checkpoint name field and the note textarea both follow.
     let edited = false;
@@ -7415,7 +7452,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       else delete model.meta.title;
       markDirty();
     });
-    g.appendChild(title);
+    const tw = fieldRow("title");
+    tw.appendChild(title);
+    describe(tw, "What the level select shows. Blank = the level's own id.");
+    g.appendChild(tw);
 
     const flag = (
       label: string,
@@ -7423,12 +7463,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       set: (on: boolean) => void,
       tip: string,
     ): void => {
-      const wrap = el("label", "ed-field");
-      wrap.textContent = label;
+      const wrap = fieldRow(label);
+      describe(wrap, tip);
       const box = document.createElement("input");
       box.type = "checkbox";
       box.checked = get();
-      box.title = tip;
       box.addEventListener("change", () => {
         beginAction();
         set(box.checked);
@@ -7458,14 +7497,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       "Keep this level off the level select. It is still played by ?level=ID - which is what the sandboxes are, and what a level that has no finish line yet wants to be.",
     );
 
-    const hint = el("div", "ed-hint");
-    hint.textContent = model.meta.unlisted
+    describe(g, model.meta.unlisted
       ? "Off the level select, reachable by ?level= only."
       : model.meta.intro
         ? "The first level on the level select."
-        : "On the level select, in alphabetical order of title. A listed level needs a finish line to end at.";
-    g.appendChild(hint);
-    inspector.appendChild(g);
+        : "On the level select, in alphabetical order of title. A listed level needs a finish line to end at.");
   }
 
   // The level's light and air (`EnvironmentData`). Level-wide rather than
@@ -7484,9 +7520,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // carries no block until one of these is authored; clearing both fields drops
   // the block again.
   function buildLensGroup(): void {
-    const g = el("div", "ed-group");
-    g.appendChild(heading("3D camera"));
-    const cam = (): LevelCameraData => (model.camera ??= {});
+    const g = section(inspector, "level/3D camera", "3D camera", true);
+    const cam =(): LevelCameraData => (model.camera ??= {});
     const drop = (key: keyof LevelCameraData): void => {
       if (!model.camera) return;
       delete model.camera[key];
@@ -7506,8 +7541,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         onEmpty: () => drop("focalLength"),
       },
     );
-    focal.title =
-      "35 mm-equivalent focal length. Longer flattens the scene toward orthographic, shorter deepens it; the gameplay plane stays framed the same because the camera dollies to keep it so.";
+    describe(
+      focal,
+      "35 mm-equivalent focal length. Longer flattens the scene toward orthographic, shorter deepens it; the gameplay plane stays framed the same because the camera dollies to keep it so.",
+    );
     const z = numField(
       g,
       "cam z",
@@ -7517,20 +7554,18 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       false,
       { placeholder: "0", onEmpty: () => drop("zOffset") },
     );
-    z.title =
-      "How far the camera stands along z from where the zoom puts it, positive toward you. The plane at this depth is framed exactly like the 2D view; at anything but 0 the gameplay plane is drawn smaller (positive) or larger (negative) than the overlay's outlines, handles and reticle.";
-    inspector.appendChild(g);
+    describe(
+      z,
+      "How far the camera stands along z from where the zoom puts it, positive toward you. The plane at this depth is framed exactly like the 2D view; at anything but 0 the gameplay plane is drawn smaller (positive) or larger (negative) than the overlay's outlines, handles and reticle.",
+    );
   }
 
   function buildEnvironmentGroup(): void {
-    const g = el("div", "ed-group");
-    g.appendChild(heading("Environment"));
+    const g = section(inspector, "level/Environment", "Environment", true);
     const authored = model.environment !== undefined;
-    const hint = el("div", "ed-hint");
-    hint.textContent = authored
+    describe(g, authored
       ? "The sun is a light at infinity, so it reaches everything in frame equally: right outdoors, wrong underground. Drop `sun ×` and `env ×` to 0 and the level is lit only by what the lights layer puts in it."
-      : "Using the renderer's own defaults (a warm sun, a cool fill). Edit any field to author a block for this level.";
-    g.appendChild(hint);
+      : "Using the renderer's own defaults (a warm sun, a cool fill). Edit any field to author a block for this level.");
 
     // Reads fall back to the renderer's defaults, so the fields show what the
     // level actually looks like rather than blanks; the first write is what
@@ -7553,8 +7588,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       );
     };
     const colorEnv = (label: string, key: EnvKey): void => {
-      const cw = el("label", "ed-field");
-      cw.textContent = label;
+      const cw = fieldRow(label);
       const ci = colorInput(cur(key) as string, beginAction, (hex) => {
         env()[key] = hex;
         markDirty();
@@ -7587,8 +7621,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // own rather than silently rewritten, exactly as the mesh picker does, so
     // opening a level built against a manifest this build lacks cannot lose what
     // it named.
-    const sw = el("label", "ed-field");
-    sw.textContent = "sky hdr";
+    const sw = fieldRow("sky hdr");
     const ss = document.createElement("select");
     ss.className = "ed-select";
     const skies = new Set(hdriNames());
@@ -7628,13 +7661,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // sky's own sun on the same side as the `sun dir` above, which is what
       // makes the shadow and the light agree about where the light comes from.
       numEnv("hdr °", "hdriRotation", 15);
-      const bw = el("label", "ed-field");
-      bw.textContent = "hdr bg";
+      const bw = fieldRow("hdr bg");
       const bb = document.createElement("input");
       bb.type = "checkbox";
       bb.checked = model.environment?.hdriBackground === true;
-      bb.title =
-        "Draw the sky behind the level as well as reflecting it. A 1k capture is ample for the reflection and visibly soft as a background - re-optimise it larger before leaning on this.";
+      describe(
+        bw,
+        "Draw the sky behind the level as well as reflecting it. A 1k capture is ample for the reflection and visibly soft as a background - re-optimise it larger before leaning on this.",
+      );
       bb.addEventListener("change", () => {
         beginAction();
         if (bb.checked) env().hdriBackground = true;
@@ -7666,10 +7700,20 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       row.appendChild(clear);
       g.appendChild(row);
     }
-    inspector.appendChild(g);
   }
 
   function rebuildInspector(): void {
+    try {
+      buildInspector();
+    } finally {
+      // The builders open a section per concern before they know whether any
+      // field of it applies; the ones left empty go here, whichever way the
+      // build returned.
+      pruneEmptySections(inspector);
+    }
+  }
+
+  function buildInspector(): void {
     refreshOutliner();
     fields.length = 0;
     readouts.length = 0;
@@ -7678,21 +7722,21 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
 
     buildLevelGroup();
 
-    const player = el("div", "ed-group");
-    player.appendChild(heading("Player spawn"));
+    const player = section(inspector, "level/Player spawn", "Player spawn", true);
     numField(player, "x", () => model.player.pos.x * M2PX, (v) => (model.player.pos = model.player.pos.withX(v * PX)));
     numField(player, "y", () => model.player.pos.y * M2PX, (v) => (model.player.pos = model.player.pos.withY(v * PX)));
     numField(player, "radius", () => model.player.radius * M2PX, (v) => (model.player.radius = Math.max(1, v) * PX));
     // Start the run on the anchor rather than on the ground (ball & chain
     // only). Its own checkbox rather than a field on a body, because the spawn
     // is not an item: it is the level's, like the environment block below.
-    const hang = el("label", "ed-field");
-    hang.textContent = "hang";
+    const hang = fieldRow("hang");
     const hangBox = document.createElement("input");
     hangBox.type = "checkbox";
     hangBox.checked = model.player.hang;
-    hangBox.title =
-      "Start the ball & chain already hanging: at build the chain is thrown straight up from the spawn and bites the first surface within its 1.8 m reach. It anchors the chain, it does not lift the ball - put the spawn where the ball should HANG, under something to hang from. With nothing overhead in reach the level starts on the ground as usual. The grapple controller ignores it.";
+    describe(
+      hang,
+      "Start the ball & chain already hanging: at build the chain is thrown straight up from the spawn and bites the first surface within its 1.8 m reach. It anchors the chain, it does not lift the ball - put the spawn where the ball should HANG, under something to hang from. With nothing overhead in reach the level starts on the ground as usual. The grapple controller ignores it.",
+    );
     hangBox.addEventListener("change", () => {
       beginAction();
       model.player.hang = hangBox.checked;
@@ -7709,9 +7753,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       () => model.player.roll * M2PX,
       (v) => (model.player.roll = v * PX),
     );
-    rollField.title =
-      "Open the level on the ball rolling in from this far to the side of the spawn: negative to come in from the left, positive from the right, 0 for a ball that starts standing at its spawn. The ball is placed there and rolls to the spawn at 1.5 m/s, and the player's aim and chain do nothing until it arrives - so the spawn is still where the run starts, it is where the player is handed the ball. The camera stands at the spawn the whole way in rather than following the ball, so the offset is also how far off the standing frame the ball begins: 2 to 4 m rolls it in from the edge, past about 4.8 m it starts out of shot. The grapple controller ignores it, as do a start from a checkpoint and a ▶ Test here - a test starts at the spawn, in your hands, so an edit is not two metres of rolling in away from being checked. Play the level to see the opening.";
-    inspector.appendChild(player);
+    describe(
+      rollField,
+      "Open the level on the ball rolling in from this far to the side of the spawn: negative to come in from the left, positive from the right, 0 for a ball that starts standing at its spawn. The ball is placed there and rolls to the spawn at 1.5 m/s, and the player's aim and chain do nothing until it arrives - so the spawn is still where the run starts, it is where the player is handed the ball. The camera stands at the spawn the whole way in rather than following the ball, so the offset is also how far off the standing frame the ball begins: 2 to 4 m rolls it in from the edge, past about 4.8 m it starts out of shot. The grapple controller ignores it, as do a start from a checkpoint and a ▶ Test here - a test starts at the spawn, in your hands, so an edit is not two metres of rolling in away from being checked. Play the level to see the opening.",
+    );
 
     buildEnvironmentGroup();
     buildLensGroup();
@@ -7744,13 +7789,19 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
 
     const sel = selectedBodies();
     if (!sel.length) {
-      const hint = el("div", "ed-hint");
-      // A locked layer explains itself first: with nothing pickable on it, the
-      // usual "click a body" hint would read as the editor being broken.
-      hint.textContent = lockedLayers.has(activeLayer)
-        ? `The ${activeLayer} layer is locked: it still draws, but nothing on it can be picked, drawn or edited. Use the padlock in the layer list to unlock it.`
-        : EMPTY_HINTS[activeLayer];
-      inspector.appendChild(hint);
+      // One line saying what is (not) selected; how to put something on the
+      // layer is its help. A locked layer explains itself first: with nothing
+      // pickable on it, the usual "click a body" help would read as the editor
+      // being broken.
+      const locked = lockedLayers.has(activeLayer);
+      const line = fieldRow(locked ? `${activeLayer} layer locked` : "No selection", "div", "ed-field ed-hint");
+      describe(
+        line,
+        locked
+          ? `The ${activeLayer} layer is locked: it still draws, but nothing on it can be picked, drawn or edited. Use the padlock in the layer list to unlock it.`
+          : EMPTY_HINTS[activeLayer],
+      );
+      inspector.appendChild(line);
       return;
     }
     // A selection may span KINDS of thing, and their properties have nothing in
@@ -7790,11 +7841,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     selectionSpansLayers = panels.length > 1;
     if (selectionSpansLayers) {
       const g = el("div", "ed-group");
-      g.appendChild(heading(`${sel.length} objects of ${panels.length} kinds`));
-      const hint = el("div", "ed-hint");
-      hint.textContent = `${panels.join(", ")} - each kind's properties are edited in its own panel below. Merge, Duplicate and Delete apply to all of them, and so does the 3D view's gizmo: it stands at the middle of the selection and moves and turns the lot as one arrangement.`;
-      g.appendChild(hint);
-      appendGroupSection(g);
+      const title = heading(
+        `${sel.length} objects of ${panels.length} kinds`,
+        `${panels.join(", ")} - each kind's properties are edited in its own panel below. Merge, Duplicate and Delete apply to all of them, and so does the 3D view's gizmo: it stands at the middle of the selection and moves and turns the lot as one arrangement.`,
+      );
+      g.appendChild(title);
+      appendGroupSection(g, title);
       appendActions(g);
       inspector.appendChild(g);
     }
@@ -12079,11 +12131,6 @@ function lockIcon(locked: boolean): string {
     : svg(`${body}<path d="M9.6 7V4.9a2.3 2.3 0 0 1 4.6 0"/>`);
 }
 
-function heading(text: string): HTMLElement {
-  const h = el("div", "ed-heading");
-  h.textContent = text;
-  return h;
-}
 // Three decimals: enough for a 0.05 friction or opacity step to survive a
 // panel rebuild (1 dp used to redisplay 0.25 as 0.3), and short enough that
 // float noise from the metre/pixel round trip rounds away.
@@ -12179,7 +12226,7 @@ function injectStyles(): void {
      was simply cut off - "2.67 cm/frame - TOO FAST" read "2.67 cm/frame - TO",
      losing exactly the half that was the warning. So the value wraps where the
      label does not, and a long one takes a second line instead of a haircut. */
-  .ed-field > span { white-space: normal; text-align: right; min-width: 0; }
+  .ed-field > span:not(.ed-name) { white-space: normal; text-align: right; min-width: 0; }
   /* A picker is bounded by the row it is in, whatever its longest option says.
      A <select> sizes itself to its widest option and "min-width: auto" refuses
      to shrink below that, so one long name - a sky called after the place it was
@@ -12242,6 +12289,7 @@ function injectStyles(): void {
     background: rgba(31,36,48,0.92); border: 1px solid #65bddb; color: #65bddb;
     font-family: monospace; font-size: 13px; padding: 4px 12px; border-radius: 2px; z-index: 10; }
   ${GENERATOR_PANEL_CSS}
+  ${PANEL_UI_CSS}
   `;
   document.head.appendChild(s);
 }

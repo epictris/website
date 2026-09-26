@@ -270,7 +270,7 @@ const HANDLE_STUB_PX = 26;
 // a corner to resize it - in the view the editor opens in, and offered the
 // gizmo's scale boxes as the only substitute. The handles are projected on the
 // gameplay plane like every other one, so a primitive pushed off the plane by
-// its `off z` has them where its outline is rather than where the perspective
+// its `z` has them where its outline is rather than where the perspective
 // draws its face; an orbited view drops the whole overlay in any case.
 //
 // Everything else - collision shapes, camera regions, notes, lights - keeps its
@@ -826,7 +826,7 @@ function drawDepthHandle(ctx: CanvasRenderingContext2D, p: Vec2, z: number): voi
     ctx.lineTo(p.x + 3, p.y + s * (r - 3));
   }
   ctx.stroke();
-  // Scene pixels, which is what the inspector's `off z` field shows: two
+  // Scene pixels, which is what the inspector's `z` field shows: two
   // readouts of one number in two units is a number nobody trusts.
   ctx.fillStyle = BODY_MEMBER;
   ctx.textBaseline = "middle";

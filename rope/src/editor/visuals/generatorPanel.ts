@@ -39,6 +39,7 @@ import {
 } from "./paramSchema";
 import type { Job } from "./jobs";
 import { colorInput } from "../colorPicker";
+import { describe, fieldRow, heading, section } from "../panelUi";
 
 // --- values ------------------------------------------------------------------
 
@@ -273,10 +274,6 @@ export interface PanelHost {
   notice(text: string): void;
 }
 
-// Which Advanced disclosures are open, per kind and group, so a panel rebuilt
-// by an edit keeps the one the author was working in.
-const openAdvanced = new Set<string>();
-
 function el(tag: string, cls: string, text = ""): HTMLElement {
   const e = document.createElement(tag);
   e.className = cls;
@@ -307,13 +304,13 @@ function defaultText(spec: ParamSpec): string {
 
 // The field's label as an element that can shrink: the panel is 190 px wide
 // and a schema key is as long as its meaning needs, so a long one is cut with
-// an ellipsis and read whole in the tooltip.
+// an ellipsis and read whole in its help, beside the schema's doc.
 function relabel(wrap: HTMLElement, spec: ParamSpec): void {
-  const first = wrap.firstChild;
-  if (first && first.nodeType === Node.TEXT_NODE) wrap.removeChild(first);
-  const label = el("span", "ed-gen-label", paramLabel(spec));
-  wrap.insertBefore(label, wrap.firstChild);
-  wrap.title = `${spec.key}${spec.unit ? ` (${spec.unit === "deg" ? "degrees" : "metres"})` : ""}: ${spec.doc} Default ${defaultText(spec)}.`;
+  wrap.querySelector(":scope > .ed-name")?.classList.add("ed-gen-label");
+  describe(
+    wrap,
+    `\`${spec.key}\`${spec.unit ? ` (${spec.unit === "deg" ? "degrees" : "metres"})` : ""}: ${spec.doc} Default ${defaultText(spec)}.`,
+  );
 }
 
 // One parameter's field, of its schema type.
@@ -342,8 +339,7 @@ function addParamField(host: PanelHost, parent: HTMLElement, item: EdItem, schem
     relabel(input.parentElement!, spec);
     return;
   }
-  const wrap = el("label", "ed-field");
-  wrap.textContent = paramLabel(spec);
+  const wrap = fieldRow(paramLabel(spec));
   if (spec.type === "bool") {
     const box = document.createElement("input");
     box.type = "checkbox";
@@ -404,7 +400,7 @@ export function buildGeneratorGroup(host: PanelHost, item: EdItem): HTMLElement 
   const g = item.visual.generator!;
   const schema = loadSchema(g.kind);
   const group = el("div", "ed-group ed-gen");
-  group.appendChild(el("div", "ed-heading", g.kind === "boulder" ? "Rock" : "Mushrooms"));
+  group.appendChild(heading(g.kind === "boulder" ? "Rock" : "Mushrooms"));
   if (!schema) {
     group.appendChild(
       el("div", "ed-hint ed-warn", `A ${g.kind} generator is not one this editor knows; its block is kept as it is.`),
@@ -504,35 +500,25 @@ export function buildGeneratorGroup(host: PanelHost, item: EdItem): HTMLElement 
   for (const name of schema.groups) {
     const specs = schema.params.filter((p) => p.group === name);
     if (!specs.length) continue;
-    const section = el("div", "ed-group ed-gen-section");
-    section.appendChild(el("div", "ed-gen-subhead", name));
-    for (const spec of specs.filter((p) => p.basic)) addParamField(host, section, item, schema, spec);
+    // Kept open or shut per kind and group, so a panel rebuilt by an edit keeps
+    // the one the author was working in (see `section`).
+    const id = `${g.kind}/${name}`;
+    const body = section(group, id, name);
+    for (const spec of specs.filter((p) => p.basic)) addParamField(host, body, item, schema, spec);
     const advanced = specs.filter((p) => !p.basic);
     if (advanced.length) {
-      const id = `${g.kind}/${name}`;
-      const details = document.createElement("details");
-      details.className = "ed-details";
-      details.open = openAdvanced.has(id);
-      details.addEventListener("toggle", () => {
-        if (details.open) openAdvanced.add(id);
-        else openAdvanced.delete(id);
-      });
-      const summary = document.createElement("summary");
+      const inner = section(body, `${id}/Advanced`, "");
       // Refreshed with the fields, so a value set or cleared inside is counted
       // at once rather than at the next rebuild.
       const count = () => {
         const set = advanced.filter((p) => p.key in item.visual.generator!.params).length;
         return `Advanced (${advanced.length}${set ? `, ${set} set` : ""})`;
       };
-      host.readouts.push({ el: summary, get: count });
-      summary.textContent = count();
-      details.appendChild(summary);
-      const body = el("div", "ed-group");
-      for (const spec of advanced) addParamField(host, body, item, schema, spec);
-      details.appendChild(body);
-      section.appendChild(details);
+      const title = inner.parentElement!.querySelector<HTMLElement>(".ed-sec-head > .ed-name")!;
+      host.readouts.push({ el: title, get: count });
+      title.textContent = count();
+      for (const spec of advanced) addParamField(host, inner, item, schema, spec);
     }
-    group.appendChild(section);
   }
   return group;
 }
@@ -548,17 +534,10 @@ export const GENERATOR_PANEL_CSS = `
   .ed-gen-status[data-tone="fail"] { color: #e06c75; }
   .ed-gen-status[data-tone="busy"] { color: #65bddb; }
   .ed-gen-actions { flex-wrap: wrap; gap: 4px; }
-  .ed-gen-subhead { color: #9aa0ac; border-bottom: 1px dotted #313244; margin-top: 4px; }
-  /* Not the readout rule the inspector gives every span in a field (which wraps
-     and right-aligns a computed sentence): a label stays one line, left, and
-     gives way with an ellipsis. */
+  /* A label stays one line and gives way with an ellipsis; its whole name is
+     in its help. */
   .ed-gen .ed-field > .ed-gen-label { white-space: nowrap; text-align: left; overflow: hidden;
     text-overflow: ellipsis; min-width: 0; flex: 1 1 auto; }
-  .ed-details > summary { color: #6b7280; cursor: pointer; list-style: none; }
-  .ed-details > summary::before { content: "▸ "; }
-  .ed-details[open] > summary::before { content: "▾ "; }
-  .ed-details > summary:hover { color: #cbccc6; }
-  .ed-details > .ed-group { padding-left: 10px; margin-top: 4px; }
   .ed-out-badge { color: #d0a215; margin-left: auto; }
   .ed-out-badge:empty { display: none; }
   .ed-out-badge:not(:empty) + .ed-out-count { margin-left: 6px; }
