@@ -27,6 +27,7 @@ import { generatedDirtMossAsset } from "./generatedDirtMoss";
 import { generatedVineAsset } from "./generatedVines";
 import { generatedMushroomAsset } from "./generatedMushrooms";
 import { generatedGrassAsset } from "./generatedGrass";
+import { generatedPlantAsset } from "./generatedPlants";
 import { normalizeLevelData } from "../level/levelFormat";
 import {
   BALL_MESH,
@@ -97,7 +98,7 @@ export function levelStoredFiles(raw: RawLevelData, controller?: string): Stored
       // glowing in the fallback's).
       const glow = emissiveMapName(object.emissiveTexture);
       if (glow) addSurface(glow);
-      if (object.mesh) add(generatedRootAsset(object.mesh) ?? generatedBoulderAsset(object.mesh) ?? generatedDirtMossAsset(object.mesh) ?? generatedVineAsset(object.mesh) ?? generatedMushroomAsset(object.mesh) ?? generatedGrassAsset(object.mesh) ?? MESH_ASSETS[object.mesh]);
+      if (object.mesh) add(generatedRootAsset(object.mesh) ?? generatedBoulderAsset(object.mesh) ?? generatedDirtMossAsset(object.mesh) ?? generatedVineAsset(object.mesh) ?? generatedMushroomAsset(object.mesh) ?? generatedGrassAsset(object.mesh) ?? generatedPlantAsset(object.mesh) ?? MESH_ASSETS[object.mesh]);
     }
   }
   // The flipbook and the foam mask are loaded when the first water material is

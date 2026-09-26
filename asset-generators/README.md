@@ -1,7 +1,7 @@
 # Procedural asset generators
 
 These source projects power the level editor's **Generate roots**, **Generate
-vine v3**, **Generate boulder v5**, **Generate dirt + moss**, **Generate mushrooms**, and **Generate grass** controls. Generated meshes, renders,
+vine v3**, **Generate boulder v5**, **Generate dirt + moss**, **Generate mushrooms**, **Generate grass**, and **Generate plants** controls. Generated meshes, renders,
 caches, and texture outputs are intentionally excluded from Git.
 
 ## Windows setup
@@ -61,11 +61,19 @@ again after opening a new window.
   mushrooms (`grass_patch_tools.py` is the Geometry Nodes group and material,
   `editor_patch.py` grows a patch on the faces picked in the editor). Override it
   with `GRASS_PROJECT`.
+- `plants/` contains the cave foliage generator. `cave_foliage.py` (copied from
+  `procedural_decor`) builds the Alocasia, bird's-nest fern, sword fern, creeper
+  and ivy plants (and rocks and mushrooms, which the editor does not use);
+  `editor_patch.py` scatters the plants on the faces picked in the editor and
+  exports one vertex-colour GLB. `caveFoliage.js` is the reference three.js wind
+  shader for the `_SWAY` attribute, kept for later. Override the folder with
+  `PLANTS_PROJECT`.
 - `requirements.txt` contains all packages installed into the virtual
   environment.
 
 Output files go into `rope/public/generated-roots`,
 `rope/public/generated-vines`, `rope/public/generated-boulders`,
 `rope/public/generated-dirt-moss`, and
-`rope/public/generated-mushrooms`, and `rope/public/generated-grass`. Those
+`rope/public/generated-mushrooms`, `rope/public/generated-grass`, and
+`rope/public/generated-plants`. Those
 directories remain untracked build output.

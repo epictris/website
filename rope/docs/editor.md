@@ -125,6 +125,54 @@ exactly as for mushrooms: drawn only, no collision. Override the generator with
 gitignored; mesh keys are `grass-patch:<id>:<bytes>`. Checks:
 `node --test scripts/grass-generator.test.mjs`.
 
+## Grow cave plants on a model
+
+**+ Plants** is the same on-model outline as **+ Mushrooms** and **+ Grass**
+(same picking, same face selection, one shared outline, and **max slope°** lives
+in the mushroom row). **Generate plants** posts the covered faces with the ticked
+plant types, **plants /m²**, **size**, **ivy (m)**, **detail**, **max slope°**
+and **seed** to `/api/plants`, which runs `asset-generators/plants/editor_patch.py`
+in Blender. It builds the plants of `cave_foliage.py` (the procedural Alocasia,
+bird's-nest fern, sword fern, creeper and ivy vine builders, at the export
+detail) and places them by where each face looks. Rocks and mushrooms are never
+grown here: they have their own tools.
+
+| Type | Grows on | Count |
+|---|---|---|
+| alocasia, bird's nest, fern | faces no steeper than **max slope°**, tilted halfway from vertical toward the surface normal | **plants /m²** of up-facing area, split at random between the ticked kinds |
+| creepers | the same faces, a small leaf patch lying along the normal (`build_creepers` on a flat 0.6 m patch) | **plants /m²** |
+| hanging ivy | faces looking down (normal.z at most -0.5), a vine hanging from each point | 4 x **plants /m²** of underside area, each up to **ivy (m)** long |
+
+Standing plants and creepers keep a spacing of about 0.4 x **size** from each
+other (twenty tries a plant, so a crowded surface simply grows fewer). **size**
+scales the standing plants and creepers; ivy is sized by its own length only.
+Ticking **hanging ivy** makes the outline keep faces that look down as well
+(`selectSurface` with slope 180, see `plantsKeepOverhangs`); every other tool
+keeps cutting at max slope°, and a Generate cuts the faces for its own kind
+whichever tool is armed.
+
+All plants are joined into one mesh with one double-sided vertex-colour material
+(colours baked from the node materials, `COLOR_0`) and keep the `_SWAY` wind
+weight of `cave_foliage.py` (0 at the base, 1 at the tips; the pivot of each
+plant is its base, of a vine its top). The game does not wind-animate a patch:
+`plants/caveFoliage.js` is the reference wind shader, not wired in. The server
+refuses a request past 800 expected plants (`plantEstimate`); a 3 m² patch at
+the defaults is about 30 plants, 15000 triangles and 600 kB, and a generation
+takes 7-15 s.
+
+The result is a `mesh` geometry object in the body of the model it grows on,
+exactly as for mushrooms and grass: drawn only, no collision, and generating
+again replaces the plant patch that outline made. Override the generator with
+`PLANTS_PROJECT` and Blender with `BLENDER_PATH`. Files go to
+`public/generated-plants/<id>/` (`plants.glb` and its `patch.json`), local and
+gitignored; mesh keys are `plant-patch:<id>:<bytes>`. Checks:
+`node --test scripts/plant-generator.test.mjs`.
+
+Two things to know. The faces' normals come from their winding as the editor
+sends it, so a model drawn with a negative scale (a mirror) reads as facing the
+other way and its plants stand on the wrong side (not tested). And a selected object is drawn with a yellow
+highlight, so a fresh patch looks cream until something else is selected.
+
 ## Generate procedural roots
 
 Select one collision polygon or rectangle on the scene layer and click

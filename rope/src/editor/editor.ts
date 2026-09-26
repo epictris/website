@@ -310,13 +310,14 @@ type Tool =
   | "vine"
   | "light"
   // Clicks an outline out ON THE FACES of a drawn model rather than on the
-  // gameplay plane, for the mushroom and grass patch generators (see
-  // `surfaceDraft`). The two tools draw the same outline; they differ only in
+  // gameplay plane, for the mushroom, grass and plant patch generators (see
+  // `surfaceDraft`). The tools draw the same outline; they differ only in
   // which Generate button the outline is meant for.
   | "mushroom"
-  | "grass";
+  | "grass"
+  | "plant";
 
-const isSurfaceTool = (t: Tool): boolean => t === "mushroom" || t === "grass";
+const isSurfaceTool = (t: Tool): boolean => t === "mushroom" || t === "grass" || t === "plant";
 
 // Which tools each layer offers. A shape tool has no meaning on the notes layer
 // (a note is a text box or an arrow, never a circle) and vice versa, so the
@@ -328,7 +329,7 @@ const isSurfaceTool = (t: Tool): boolean => t === "mushroom" || t === "grass";
 // because that is what a light is: another kind of scene object, dropped into
 // the same layer and welded into a body with the shape it belongs to.
 const LAYER_TOOLS: Record<EdLayer, Tool[]> = {
-  scene: ["select", "rect", "circle", "belt", "poly", "path", "geometry", "light", "chain", "vine", "mushroom", "grass"],
+  scene: ["select", "rect", "circle", "belt", "poly", "path", "geometry", "light", "chain", "vine", "mushroom", "grass", "plant"],
   camera: ["select", "rect", "circle", "poly", "path"],
   notes: ["select", "text", "arrow", "checkpoint"],
 };
@@ -2336,19 +2337,19 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   vineRow.append(vineGenerate, labelWrap("seed", vineSeed), vineStatus);
   bar.appendChild(vineRow);
 
-  // --- mushroom and grass patches --------------------------------------------
+  // --- mushroom, grass and plant patches -------------------------------------
   // The generators whose outline is drawn ON A MODEL rather than on the
-  // gameplay plane: `+ Mushrooms` (or `+ Grass`) clicks a loop out on the faces
-  // of whatever is drawn there (a rock, a root, a wall), the faces it covers
-  // light up, and Generate grows a patch on exactly those faces in Blender
-  // (`asset-generators/mushrooms`, `asset-generators/grass`). The result is a
+  // gameplay plane: `+ Mushrooms` (or `+ Grass`, `+ Plants`) clicks a loop out
+  // on the faces of whatever is drawn there (a rock, a root, a wall), the faces
+  // it covers light up, and Generate grows a patch on exactly those faces in
+  // Blender (`asset-generators/mushrooms`, `grass`, `plants`). The result is a
   // mesh geometry object in the body of the model it grows on, so it rides that
   // body and collides with nothing.
   //
   // The outline outlives a Generate so the settings can be tuned against the
   // same faces: generating again replaces the patch of that kind it made last,
-  // and one outline can carry a mushroom patch and a grass patch at once.
-  type PatchKind = "mushroom" | "grass";
+  // and one outline can carry a patch of each kind at once.
+  type PatchKind = "mushroom" | "grass" | "plant";
   // A vertex names the drawn object it landed on (`tag`, which the editor
   // rebuilds whenever the level changes, adding a patch included) and the item
   // that object was built from (`item`, which outlives the rebuild).
@@ -2387,13 +2388,32 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   const grassTuft = mushroomNum("0.35", 0.05, 5, 0.05, "Rough spacing between the middles of neighbouring tufts, metres");
   const grassDetail = mushroomNum("0.25", 0, 1, 0.05, "Segments per blade: 0 = 3 (6 triangles), 1 = 7 (14 triangles)");
   const grassSeed = mushroomNum("0", 0, 2147483647, 1, "Grass seed");
-  const SURFACE_IDLE = "Arm + Mushrooms or + Grass, then click an outline onto a model.";
+  const plantDensity = mushroomNum("1.5", 0.05, 50, 0.05, "Standing plants and creeper patches per square metre; ivy hangs four to one of these from the undersides");
+  const plantSize = mushroomNum("1", 0.1, 3, 0.05, "Size of the standing plants and creepers, 1 = as built in Blender");
+  const plantIvyLength = mushroomNum("1.2", 0.2, 4, 0.1, "Longest ivy vine, metres");
+  const plantDetail = mushroomNum("0.5", 0, 1, 0.1, "Polygon budget of every plant, 1 = full");
+  const plantSeed = mushroomNum("0", 0, 2147483647, 1, "Plant seed");
+  // Which plants may grow. Rocks and mushrooms are deliberately not among them:
+  // those have their own outline tools.
+  const PLANT_KINDS = [
+    ["alocasia", "alocasia"], ["birdsnest", "bird's nest"], ["fern", "fern"],
+    ["creepers", "creepers"], ["ivy", "hanging ivy"],
+  ] as const;
+  const plantOn = new Set<string>(PLANT_KINDS.map(([k]) => k));
+  const plantChecks = PLANT_KINDS.map(([k, label]) => checkbox(label, true, (v) => {
+    if (v) plantOn.add(k); else plantOn.delete(k);
+    // Ivy hangs from faces that look down, which no other tool keeps.
+    if (k === "ivy") refreshSurfaceSelection();
+    else describeSurface();
+  }));
+  const SURFACE_IDLE = "Arm + Mushrooms, + Grass or + Plants, then click an outline onto a model.";
   const mushroomStatus = el("span", "ed-root-status");
   mushroomStatus.setAttribute("role", "status");
   mushroomStatus.textContent = SURFACE_IDLE;
   mushroomSlope.addEventListener("change", () => refreshSurfaceSelection());
   mushroomDensity.addEventListener("change", () => describeSurface());
   grassDensity.addEventListener("change", () => describeSurface());
+  plantDensity.addEventListener("change", () => describeSurface());
 
   // A model the outline may be drawn on: any drawn scene object but a patch,
   // so a second patch beside the first is drawn on the rock under it.
@@ -2401,7 +2421,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const id = itemOfSceneObject.get(tag as SceneObjectData);
     const item = id === undefined ? undefined : model.items.find((i) => i.id === id);
     return !!item && item.layer === "scene" && item.object === "geometry" &&
-      !item.visual.mesh.startsWith("mushroom-patch:") && !item.visual.mesh.startsWith("grass-patch:");
+      !item.visual.mesh.startsWith("mushroom-patch:") && !item.visual.mesh.startsWith("grass-patch:") &&
+      !item.visual.mesh.startsWith("plant-patch:");
   }
   function surfaceNdc(scr: Vec2): [number, number] | null {
     const r = canvas.getBoundingClientRect();
@@ -2426,17 +2447,22 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       mushroomStatus.textContent = "The outline covers no faces that face it at this slope. Esc and draw again.";
     } else {
       const { triangles, area } = draft.selection;
+      const plant = tool === "plant";
       const grass = tool === "grass";
-      const most = Math.round(area * Number((grass ? grassDensity : mushroomDensity).value));
-      mushroomStatus.textContent = `${triangles} faces · ${area.toFixed(2)} m² · up to ~${most} ${grass ? "blades" : "mushrooms"}`;
+      const most = Math.round(area * Number((plant ? plantDensity : grass ? grassDensity : mushroomDensity).value));
+      mushroomStatus.textContent = `${triangles} faces · ${area.toFixed(2)} m² · up to ~${most} ${plant ? "plants" : grass ? "blades" : "mushrooms"}`;
     }
   }
+  // Ivy hangs from faces that look down, so the plant tool keeps them (slope
+  // 180 keeps every face) while ivy is ticked; every other tool stays at the
+  // slope the mushroom row says.
+  const plantsKeepOverhangs = (): boolean => tool === "plant" && plantOn.has("ivy");
   function redrawSurface(cursor: THREE.Vector3 | null = null): void {
     surfaceView?.update(surfaceDraft?.points ?? [], surfaceDraft?.closed ?? false, cursor,
       surfaceDraft?.selection ?? null);
   }
   // Cut the faces under the outline again, against the scene as drawn NOW.
-  function refreshSurfaceSelection(): void {
+  function refreshSurfaceSelection(overhangs = plantsKeepOverhangs()): void {
     const draft = surfaceDraft;
     if (!draft || !scene3d) return;
     draft.selection = null;
@@ -2444,7 +2470,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (draft.closed) {
       const meshes =[...new Set(draft.points.map((p) => p.tag))].flatMap((tag) => scene3d.meshesOf(tag));
       draft.selection = selectSurface(meshes, draft.points, {
-        maxSlopeDeg: Number(mushroomSlope.value) || 0,
+        maxSlopeDeg: overhangs ? 180 : Number(mushroomSlope.value) || 0,
         maxTriangles: 40000,
       });
     }
@@ -2512,16 +2538,17 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // mesh geometry object (replacing the one this outline made of that kind).
   async function growPatch(g: {
     kind: PatchKind; noun: string; endpoint: string; inputs: HTMLInputElement[];
-    settings: () => Record<string, number>; generate: HTMLButtonElement;
+    settings: () => Record<string, number | string[]>; generate: HTMLButtonElement;
   }): Promise<void> {
     const draft = surfaceDraft;
     if (!draft?.closed) {
-      mushroomStatus.textContent = "Close an outline on a model first (+ Mushrooms or + Grass, then Enter).";
+      mushroomStatus.textContent = "Close an outline on a model first (+ Mushrooms, + Grass or + Plants, then Enter).";
       return;
     }
     for (const input of [...g.inputs, mushroomSlope])
       if (!input.reportValidity()) return;
-    refreshSurfaceSelection();
+    // The faces are cut for the kind being grown, whichever tool is armed.
+    refreshSurfaceSelection(g.kind === "plant" && plantOn.has("ivy"));
     const selection = draft.selection;
     const hostId = draft.points[0]!.item;
     const host = model.items.find((i) => i.id === hostId);
@@ -2606,8 +2633,34 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   grassGenerate.title = "Grow low-poly grass tufts in Blender on the faces the + Grass outline covers (max slope° is the mushroom row's). The patch is drawn only; collision is unchanged.";
   grassRow.append(grassGenerate, labelWrap("blades /m²", grassDensity), labelWrap("height (m)", grassHeight),
     labelWrap("clumping", grassClump), labelWrap("tuft (m)", grassTuft), labelWrap("detail", grassDetail),
-    labelWrap("seed", grassSeed), mushroomStatus);
+    labelWrap("seed", grassSeed));
   bar.appendChild(grassRow);
+
+  const plantRow = el("div", "ed-row");
+  const plantGenerate = button("Generate plants", () => {
+    if (!plantOn.size) {
+      mushroomStatus.textContent = "Tick at least one plant to grow.";
+      return;
+    }
+    void growPatch({
+      kind: "plant", noun: "plants", endpoint: "/api/plants", generate: plantGenerate,
+      inputs: [plantDensity, plantSize, plantIvyLength, plantDetail, plantSeed],
+      settings: () => ({
+        seed: Number(plantSeed.value),
+        density: Number(plantDensity.value),
+        size: Number(plantSize.value),
+        ivyLength: Number(plantIvyLength.value),
+        detail: Number(plantDetail.value),
+        slope: Number(mushroomSlope.value),
+        types: PLANT_KINDS.map(([k]) => k).filter((k) => plantOn.has(k)),
+      }),
+    });
+  });
+  plantGenerate.title = "Grow the ticked cave plants in Blender on the faces the + Plants outline covers: alocasia, bird's-nest ferns and sword ferns stand on the upward faces (max slope° is the mushroom row's), creepers lie on them, ivy hangs from the undersides. The patch is drawn only; collision is unchanged.";
+  plantRow.append(plantGenerate, ...plantChecks, labelWrap("plants /m²", plantDensity), labelWrap("size", plantSize),
+    labelWrap("ivy (m)", plantIvyLength), labelWrap("detail", plantDetail), labelWrap("seed", plantSeed),
+    mushroomStatus);
+  bar.appendChild(plantRow);
 
   const toolRow = el("div", "ed-row");
   bar.appendChild(toolRow);
@@ -2627,11 +2680,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     light: button("+ Light", () => setTool("light")),
     mushroom: button("+ Mushrooms", () => setTool("mushroom")),
     grass: button("+ Grass", () => setTool("grass")),
+    plant: button("+ Plants", () => setTool("plant")),
   };
   toolBtns.mushroom.title =
     "Click an outline onto the faces of a drawn model (a rock, a root, a wall) in the 3D view, at any orbit; Enter or the first vertex closes it, Backspace drops the last vertex, Esc cancels. The covered faces light up, and Generate mushrooms grows a glowing patch on them.";
   toolBtns.grass.title =
     "The same on-model outline as + Mushrooms; Generate grass grows low-poly grass tufts on the covered faces. Switching between the two tools keeps the outline, so one outline can carry both.";
+  toolBtns.plant.title =
+    "The same on-model outline as + Mushrooms; Generate plants grows the ticked cave plants (alocasia, bird's nest, ferns, creepers, hanging ivy) on the covered faces. With hanging ivy ticked the outline also takes the faces that look down.";
   toolBtns.geometry.title =
     "Click to drop a geometry object; drag to size it. It is DRAWN and never simulated - nothing collides with it, the rope does not wrap it, no force reaches it. Give it a mesh or a texture on the panel; drop it on a selected body to have it ride that body.";
   toolBtns.path.title =
@@ -2683,6 +2739,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     toolBtns.light,
     toolBtns.mushroom,
     toolBtns.grass,
+    toolBtns.plant,
     kindWrap,
   );
 
@@ -3226,6 +3283,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (t !== "poly" && t !== "path") cancelPolyDraft();
     if (!isSurfaceTool(t)) cancelSurfaceDraft();
     tool = t;
+    // The plant tool cuts the outline differently (see `plantsKeepOverhangs`).
+    if (surfaceDraft?.closed) refreshSurfaceSelection();
     describeSurface();
     for (const [k, b] of Object.entries(toolBtns)) b.classList.toggle("active", k === t);
     applyToolCursor();

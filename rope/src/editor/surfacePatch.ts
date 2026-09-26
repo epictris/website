@@ -30,7 +30,9 @@ export interface SurfaceSelection {
 
 export interface SurfaceOptions {
   // Steepest face kept, degrees from level ground. 90 keeps walls, and nothing
-  // keeps an overhang: mushrooms grow up, so one under a ledge grows into it.
+  // above 90 keeps an overhang: mushrooms grow up, so one under a ledge grows
+  // into it. The plant tool asks for 180, which keeps every face, because ivy
+  // hangs from the undersides.
   maxSlopeDeg: number;
   maxTriangles: number;
 }
@@ -122,7 +124,7 @@ export function selectSurface(
 ): SurfaceSelection | null {
   const f = frameOf(outline);
   if (!f) return null;
-  const minUp = Math.cos(THREE.MathUtils.degToRad(Math.min(90, Math.max(0, opts.maxSlopeDeg))));
+  const minUp = Math.cos(THREE.MathUtils.degToRad(Math.min(180, Math.max(0, opts.maxSlopeDeg))));
   for (let step = f.step; ; step *= 1.5) {
     const out = collect(meshes, f, step, minUp, opts.maxTriangles);
     if (out) return out.triangles ? out : null;

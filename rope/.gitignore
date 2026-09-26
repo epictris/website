@@ -18,6 +18,7 @@ public/generated-dirt-moss/
 public/generated-vines/
 public/generated-mushrooms/
 public/generated-grass/
+public/generated-plants/
 # Raw, un-optimised models as they were downloaded. Local scratch: the shippable
 # copy is what `assets:publish` uploads, and a raw is re-downloadable from the
 # `source` its manifest entry records.
