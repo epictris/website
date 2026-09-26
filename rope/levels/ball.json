@@ -463,13 +463,13 @@
   ],
   "environment": {
     "sunIntensity": 0,
-    "skyColor": "#3d5a72",
-    "groundColor": "#0c1410",
-    "fillIntensity": 2,
-    "envIntensity": 0.3,
-    "backgroundColor": "#070a10",
-    "fogAmount": 0.4,
-    "fogColor": "#1f2a36",
+    "skyColor": "#5a89ae",
+    "groundColor": "#183a34",
+    "fillIntensity": 2.8,
+    "envIntensity": 0.5,
+    "backgroundColor": "#0a2438",
+    "fogAmount": 0.42,
+    "fogColor": "#14384f",
     "sunColor": "#bababa"
   },
   "camera": {
@@ -16744,7 +16744,7 @@
               },
               {
                 "x": -580.4515680579638,
-                "y": -196.20579035947526
+                "y": -196.2057903594753
               },
               {
                 "x": -515.4515680579638,
@@ -16811,7 +16811,7 @@
               },
               {
                 "x": -580.4515680579638,
-                "y": -196.20579035947526
+                "y": -196.2057903594753
               },
               {
                 "x": -515.4515680579638,
@@ -17474,7 +17474,7 @@
     },
     {
       "kind": "static",
-      "x": 935.0000000000001,
+      "x": 935,
       "y": -250,
       "rot": 0,
       "objects": [
@@ -17483,9 +17483,9 @@
           "kind": "spot",
           "z": 0,
           "color": "#f3ecd8",
-          "intensity": 400,
+          "intensity": 600,
           "range": 2000,
-          "angle": 3,
+          "angle": 5,
           "penumbra": 1,
           "castShadow": true,
           "beam": 0.6,
@@ -17635,6 +17635,7 @@
           "type": "light",
           "z": 90,
           "color": "#ffe5ad",
+          "intensity": 3,
           "wake": 130,
           "fireflies": 2,
           "path": 1

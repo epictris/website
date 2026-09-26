@@ -38,6 +38,7 @@ import {
   type ParamValues,
 } from "./paramSchema";
 import type { Job } from "./jobs";
+import { colorInput } from "../colorPicker";
 
 // --- values ------------------------------------------------------------------
 
@@ -378,26 +379,21 @@ function addParamField(host: PanelHost, parent: HTMLElement, item: EdItem, schem
     host.readouts.push({ el: el("span", ""), get: () => ((sel.value = read()), "") });
     wrap.appendChild(sel);
   } else if (spec.type === "color") {
-    const input = document.createElement("input");
-    input.type = "color";
-    input.className = "ed-color";
     const read = () => hexOfLinear((paramValue(gen().params, spec) ?? spec.default ?? [0, 0, 0]) as number[]);
-    input.value = read();
     // One undo step per editing session, as a number field's.
-    input.addEventListener("focus", () => host.beginAction());
-    input.addEventListener("input", () => {
-      write(linearOfHex(input.value));
+    const input = colorInput(read(), () => host.beginAction(), (hex) => {
+      write(linearOfHex(hex));
       host.markDirty();
       host.refreshFields();
     });
     host.readouts.push({
       el: el("span", ""),
       get: () => {
-        if (document.activeElement !== input) input.value = read();
+        if (!input.editing) input.value = read();
         return "";
       },
     });
-    wrap.appendChild(input);
+    wrap.appendChild(input.el);
   }
   relabel(wrap, spec);
   parent.appendChild(wrap);
