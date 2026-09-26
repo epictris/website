@@ -26,7 +26,7 @@ import type { World } from "../engine/world";
 import type { SceneChain } from "../level/chains";
 import type { VineCord } from "../level/vines";
 import type { LevelVisualSource } from "../level/buildBodies";
-import type { EnvironmentData } from "../level/levelFormat";
+import type { EnvironmentData, FireflyPathData } from "../level/levelFormat";
 import type { Camera } from "../render/camera";
 import type { ViewTransform } from "../render/viewport";
 import { GpuTimer } from "../render/gpuTimer";
@@ -35,10 +35,12 @@ import { BallVisual } from "./ballVisual";
 import { ChainLayer } from "./chainVisual";
 import { VineLayer } from "./vineVisual";
 import type { ChainRetract } from "../render/chainRetract";
+import type { CameraRule } from "../render/cameraController";
 import { configureRenderer, Environment } from "./environment";
 import { LightRig } from "./lights";
 import { cloneWithPatches, isOrthographicMaterial, orthoFramedZ } from "./projection";
 import {
+  applyPose,
   CAMERA_FAR,
   DEFAULT_LENS,
   FOV_Y_DEG,
@@ -46,10 +48,12 @@ import {
   NO_ORBIT,
   placeAt,
   syncCamera,
+  threeY,
   VIEW_ASPECT,
   type CameraOrbit,
   type SceneLens,
   type ViewCamera,
+  type ViewPose,
   type ViewProjection,
 } from "./space";
 import { updateWater, waterTextures } from "./water";
@@ -76,6 +80,14 @@ export interface Scene3DLevel {
   // runs on (`beltRenderTime`). Absent = a host with no running sim (the
   // editor's preview), whose belts stand still.
   readonly frame?: number;
+  // The level's camera rules, whose PATHS are the authored way forward the
+  // fireflies hover ahead of the ball along - as level geometry, read once,
+  // never the camera's state. Absent = no path, which is every host that
+  // predates them and every level that authors none.
+  readonly cameraRules?: readonly CameraRule[];
+  // The level's firefly paths (metres): a swarm that names one guides the
+  // player along it instead of the camera paths. Absent = none.
+  readonly fireflyPaths?: readonly FireflyPathData[];
 }
 
 // Bodies the 3D scene deliberately does not extrude, because something else
@@ -110,8 +122,28 @@ export interface Scene3DOptions {
   diagnostics?: boolean;
 }
 
+// A raycast hit with the depth `pick` sorts by: metres along the view axis of
+// the camera that cast it, which is the quantity the depth buffer ordered the
+// drawn objects by.
+export type SceneHit = THREE.Intersection & { depth: number };
+
+// How far outside a fat line (`Line2`, the editor's guides) a pointer may land
+// and still hit it, in viewport pixels, added to the line's own width. About
+// seven pixels either side of a 1.5 px outline, the band the overlay picks a
+// chain by (`CHAIN_HIT_PX`): a hairline that has to be hit exactly is not
+// something a hand can click.
+const LINE_PICK_PX = 12;
+
 export class Scene3D {
   readonly scene = new THREE.Scene();
+  // What the editor draws into the scene for itself - the Visuals workspace's
+  // guides (collision outlines, light icons, handles, drafts). It lives here
+  // rather than being added to `scene` by the host so that it survives
+  // `setLevel` (every model revision rebuilds the level, and the guides are
+  // rebuilt on their own schedule), so that `pick` answers for it in the same
+  // nearest-first list as the models, and so that `setHighlight` and
+  // `meshesOf` can leave it out: a guide is furniture, never a surface.
+  readonly editorLayer = new THREE.Group();
   // The two lenses (see `ViewProjection`). Both exist for the whole life of the
   // scene rather than one being rebuilt on a toggle: a camera is a transform and
   // a frustum, both rewritten from the 2D camera every frame, so keeping the
@@ -123,6 +155,13 @@ export class Scene3D {
   // The game never touches this: it is played through the perspective camera the
   // levels are framed against, and only the editor offers the other.
   private projection: ViewProjection = "perspective";
+  // A camera the host places itself (the Visuals workspace), or null for the
+  // camera derived from the 2D one, which is every host but that one.
+  private viewPose: ViewPose | null = null;
+  // The sim-frame point the view is centred on when a pose is set: where the
+  // sun's shadow frustum and the light budget's "nearest the view" are
+  // measured from. Rewritten in place, so a frame allocates nothing for it.
+  private readonly poseCentre = { x: 0, y: 0 };
   private readonly renderer: THREE.WebGLRenderer;
   private env: Environment;
   // What the current `Environment` was built from. The editor rebuilds the whole
@@ -211,6 +250,9 @@ export class Scene3D {
     this.envKey = JSON.stringify(null);
     this.chains = new ChainLayer(this.scene);
     this.vines = new VineLayer(this.scene);
+    this.editorLayer.name = "editor-layer";
+    this.scene.add(this.editorLayer);
+    this.raycaster.params.Line2 = { threshold: LINE_PICK_PX };
     // Null wherever the driver has no timer extension (see GpuTimer); the perf
     // HUD says so rather than plotting a zero.
     this.gpuTimer = GpuTimer.create(this.renderer.getContext());
@@ -238,12 +280,15 @@ export class Scene3D {
     // A body that built an engine object is registered under it, so the
     // reconciliation below finds it already made rather than building a second,
     // authorless visual for the same body.
-    for (const built of level.visualSource.built.bodies) {
-      const visual = new BodyVisual(built.body, built, this.lights);
+    level.visualSource.built.bodies.forEach((built, index) => {
+      // The body's index in the level names its own copy of any surface a
+      // waking light drives (see `BodyVisual`'s `instance`), so a rebuild of
+      // the same level (every editor revision) reuses the same cache entries.
+      const visual = new BodyVisual(built.body, built, this.lights, `b${index}`);
       this.scene.add(visual.root);
       if (built.body) this.bodies.set(built.body, visual);
       else this.standing.push(visual);
-    }
+    });
     // Then whatever else the world already holds - the avatar's debris, a
     // sandbox rock spawned before the scene was built.
     for (const body of level.world.bodies) this.ensureBody(body);
@@ -251,6 +296,33 @@ export class Scene3D {
       this.ballVisual = new BallVisual(level.ball);
       this.scene.add(this.ballVisual.root);
     }
+    // The waking lights' pool, sized now that every authored light has been
+    // recorded and before `prewarm` compiles against the scene's lights (see
+    // `LightRig.buildPool`). A level with no waking light builds none.
+    this.lights.buildPool(this.scene);
+    // The authored routes the fireflies read (see `Scene3DLevel.cameraRules`
+    // and `Scene3DLevel.fireflyPaths`).
+    this.lights.setRoutes(
+      (level.cameraRules ?? []).flatMap((r) => (r.kind === "path" ? [r.index] : [])),
+      level.fireflyPaths ?? [],
+    );
+  }
+
+  // Hold every waking light at full, served nearest the view's centre, rather
+  // than waking it for a ball (`LightRig.previewAwake`). The editor's preview,
+  // which has nobody in it to wake anything; its ▶ Test turns it off.
+  setGlowPreview(awake: boolean): void {
+    this.lights.previewAwake = awake;
+  }
+
+  // The waking lights' levels, in authored order, for a probe.
+  glowLevels(): number[] {
+    return this.lights.glowLevels();
+  }
+
+  // The firefly swarms' states, in authored order, for a probe.
+  swarmStates(): ReturnType<LightRig["swarmStates"]> {
+    return this.lights.swarmStates();
   }
 
   // The environment a level authored, so a host that rebuilds the scene without
@@ -683,6 +755,18 @@ export class Scene3D {
     this.projection = projection;
   }
 
+  // Place the camera at `pose` from the next frame on, instead of deriving it
+  // from the 2D camera; null hands it back. The editor's Visuals workspace is
+  // the one caller (see `ViewPose`).
+  //
+  // Both lenses are placed from it, as both are from the 2D camera, so the
+  // orthographic toggle, `pick`, `unprojectToPlane` through `camera` and the
+  // gizmo (attached to `camera`) all see the one view that was drawn. The
+  // aspect still comes from the 2D camera's viewport, which is the canvas's.
+  setViewPose(pose: ViewPose | null): void {
+    this.viewPose = pose;
+  }
+
   // WHAT IS UNDER THE POINTER, nearest first, as the pick tags the drawn objects
   // were built with (see `pickTagOf`). `x`/`y` are normalised device coordinates
   // - the ray is cast through the camera the LAST frame was drawn with, which is
@@ -704,6 +788,11 @@ export class Scene3D {
   // camera's ray - both cameras are synced to the same view every frame - and
   // the two lists are merged by depth along the view axis, the quantity the
   // depth buffer sorted them by when they were drawn.
+  //
+  // The editor's guides (`editorLayer`) are in the same list, sorted by the
+  // same depth: an outline drawn through a wall is behind it here, and which of
+  // the two a click means is the caller's rule to apply, as it already is for a
+  // collision object and the form drawn over it.
   pick(x: number, y: number): unknown[] {
     const out: unknown[] = [];
     const seen = new Set<unknown>();
@@ -716,21 +805,37 @@ export class Scene3D {
     return out;
   }
 
-  // Every ray hit under the pointer, nearest first, by the rules `pick` states.
-  private hitsAt(x: number, y: number): (THREE.Intersection & { depth: number })[] {
+  // Every ray hit under the pointer, nearest first, by the rules `pick` states,
+  // with three's whole intersection kept - the point, the face, the object - for
+  // a caller that wants the surface rather than only what it belongs to.
+  //
+  // The hit's own `point` is left as three reported it. `pick` used to measure
+  // its depth by `hit.point.sub(...)`, which rewrote the point in place into an
+  // offset from the camera: harmless while the point was thrown away, and a
+  // wrong answer the moment anything read it (fixed in the fork's `381b923`,
+  // where the surface tools first did).
+  hitsAt(x: number, y: number): SceneHit[] {
     this.pointer.set(x, y);
     const split = this.camera === this.perspective;
-    const hits: (THREE.Intersection & { depth: number })[] = [];
+    const hits: SceneHit[] = [];
     const cast = (cam: ViewCamera, ortho: boolean): void => {
       cam.getWorldDirection(this.forward);
       this.raycaster.setFromCamera(this.pointer, cam);
       for (const hit of this.raycaster.intersectObjects(this.scene.children, true)) {
         const mesh = hit.object as THREE.Mesh;
-        const drawnOrtho = mesh.isMesh && isOrthographicMaterial(mesh.material);
+        // A boolean, not `mesh.isMesh && ...`: a sprite (a guide's handle or
+        // light icon) has no `isMesh`, and the `undefined` that expression
+        // hands back is `!== false` as well as `!== true`, so every sprite was
+        // dropped by both passes below and no handle could ever be clicked.
+        const drawnOrtho = mesh.isMesh === true && isOrthographicMaterial(mesh.material);
         // Under the orthographic scene camera there is one ray, and every
         // object is answered by it.
         if (split && drawnOrtho !== ortho) continue;
-        hits.push({ ...hit, depth: this.forward.dot(hit.point.clone().sub(cam.position)) });
+        const depth =
+          this.forward.x * (hit.point.x - cam.position.x) +
+          this.forward.y * (hit.point.y - cam.position.y) +
+          this.forward.z * (hit.point.z - cam.position.z);
+        hits.push(Object.assign(hit, { depth }));
       }
     };
     cast(this.camera, false);
@@ -739,9 +844,12 @@ export class Scene3D {
   }
 
   // The nearest drawn SURFACE under the pointer whose pick tag `accept` takes:
-  // the world point the ray met and the face's world normal there. What the
-  // editor's surface tools (the mushroom patch) click out their outline on, so
-  // a vertex lands on the model rather than on the gameplay plane.
+  // the world point the ray met (three's frame) and the face's world normal
+  // there. What a surface tool clicks out its outline on - the mushroom loop -
+  // so a vertex lands on the model rather than on the gameplay plane.
+  //
+  // Only a hit with a face is a surface, which is what keeps the guides out of
+  // it without a rule of their own: a fat line or a sprite has none.
   pickSurface(
     x: number,
     y: number,
@@ -749,22 +857,29 @@ export class Scene3D {
   ): { tag: unknown; point: THREE.Vector3; normal: THREE.Vector3 } | null {
     for (const hit of this.hitsAt(x, y)) {
       const tag = pickTagOf(hit.object);
-      if (tag === undefined || !accept(tag) || !hit.face) continue;
+      if (tag === undefined || !hit.face || !accept(tag)) continue;
       const normal = hit.face.normal.clone().transformDirection(hit.object.matrixWorld);
       return { tag, point: hit.point.clone(), normal };
     }
     return null;
   }
 
-  // Every mesh drawn for one pick tag - a prop's submeshes, or an extrusion.
+  // Every mesh drawn for one pick tag - a prop's submeshes, or an extrusion -
+  // for a tool that reads the geometry itself (the mushroom loop collects the
+  // faces inside it). Instanced meshes are left out: their geometry is one
+  // instance's, not what is drawn. The guides are left out too; nothing a
+  // guide is drawn with is a surface.
   meshesOf(tag: unknown): THREE.Mesh[] {
     const out: THREE.Mesh[] = [];
-    this.scene.traverse((o) => {
-      const mesh = o as THREE.Mesh;
-      if (mesh.isMesh && !(mesh as THREE.InstancedMesh).isInstancedMesh && pickTagOf(mesh) === tag) {
-        out.push(mesh);
-      }
-    });
+    for (const child of this.scene.children) {
+      if (child === this.editorLayer) continue;
+      child.traverse((o) => {
+        const mesh = o as THREE.Mesh;
+        if (mesh.isMesh && !(mesh as THREE.InstancedMesh).isInstancedMesh && pickTagOf(mesh) === tag) {
+          out.push(mesh);
+        }
+      });
+    }
     return out;
   }
 
@@ -782,12 +897,18 @@ export class Scene3D {
   private syncHighlight(): void {
     const want = new Map<THREE.Mesh, string>();
     if (this.highlight.size) {
-      this.scene.traverse((o) => {
-        const mesh = o as THREE.Mesh;
-        if (!mesh.isMesh) return;
-        const color = this.highlight.get(pickTagOf(mesh));
-        if (color !== undefined) want.set(mesh, color);
-      });
+      // Not the guides: a fat line is a mesh too, and one that wore an emissive
+      // clone of a `LineMaterial` would lose the shader that draws it. The
+      // guides say selection in their own colours.
+      for (const child of this.scene.children) {
+        if (child === this.editorLayer) continue;
+        child.traverse((o) => {
+          const mesh = o as THREE.Mesh;
+          if (!mesh.isMesh) return;
+          const color = this.highlight.get(pickTagOf(mesh));
+          if (color !== undefined) want.set(mesh, color);
+        });
+      }
     }
     for (const [mesh, painted] of this.highlighted) {
       if (want.get(mesh) === painted.color) continue;
@@ -864,25 +985,37 @@ export class Scene3D {
       this.renderer.setViewport(0, 0, this.size.x, this.size.y);
       this.renderer.setScissorTest(false);
     }
-    syncCamera(this.camera, camera, this.lens, orbit);
     // The lens not being drawn through is kept on the same view too: an object
     // drawn orthographically inside a perspective frame is where the
     // orthographic camera would put it, and `pick` asks that camera about it.
-    syncCamera(
-      this.camera === this.perspective ? this.orthographic : this.perspective,
-      camera,
-      this.lens,
-      orbit,
-    );
+    const other = this.camera === this.perspective ? this.orthographic : this.perspective;
+    const pose = this.viewPose;
+    // Where the view is centred, in the sim's frame: what the sun's shadow
+    // follows and what the light budget serves nearest.
+    let centre: { x: number; y: number } = camera.position;
+    if (pose) {
+      const aspect = camera.viewportWidth / camera.viewportHeight;
+      applyPose(this.camera, pose, aspect);
+      applyPose(other, pose, aspect);
+      this.poseCentre.x = pose.target.x;
+      this.poseCentre.y = threeY(pose.target.y);
+      centre = this.poseCentre;
+    } else {
+      syncCamera(this.camera, camera, this.lens, orbit);
+      syncCamera(other, camera, this.lens, orbit);
+    }
     // Written every frame rather than at `setLevel`, because it is shared by
-    // every scene on the page (see `orthoFramedZ`).
-    orthoFramedZ.value = this.lens.zOffset;
-    this.env.follow(camera);
+    // every scene on the page (see `orthoFramedZ`). It is the depth the view is
+    // framed at, which a free pose carries in its target: the ortho patch sizes
+    // an object to agree with the orthographic camera at that depth.
+    orthoFramedZ.value = pose ? pose.target.z : this.lens.zOffset;
+    this.env.follow(centre);
     const clock = this.pinnedClock ?? performance.now() / 1000;
-    this.lights.update(clock);
-    // The spray's point sprites are sized in metres and need the viewport's
-    // pixel height to stay that size (see water.ts `updateWater`).
-    updateWater(clock, rect ? rect.h : this.size.y);
+    // The spray's point sprites and a beam's dust are sized in metres and need
+    // the viewport's pixel height to stay that size (see water.ts
+    // `updateWater`).
+    const viewportHeight = rect ? rect.h : this.size.y;
+    updateWater(clock, viewportHeight);
 
     // Bodies come and go at runtime (the hook is destroyed and rebuilt on every
     // throw, the sandbox spawns rocks), so the visual set is reconciled rather
@@ -926,6 +1059,15 @@ export class Scene3D {
     this.chains.sync(level, alpha, retract);
     this.vines.sync(level.vines ?? NO_VINES, alpha);
     this.ballVisual?.sync(alpha);
+    // The lights after the bodies, because a waking light is judged by where
+    // its body is drawn this frame against where the ball is drawn this frame
+    // (`renderPosition`, the pose `BallVisual` just used) - both read, neither
+    // written: nothing here reaches the sim.
+    this.lights.update(clock, viewportHeight, {
+      ball: level.ball ? level.ball.renderPosition(alpha) : null,
+      view: centre,
+      world: level.world,
+    });
     // After the visuals are synced and before the frame is drawn: a highlight is
     // a material swap on meshes the reconciliation above may have only just
     // created, and it costs a traverse only while something is selected.

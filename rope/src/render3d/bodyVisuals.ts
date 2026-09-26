@@ -49,10 +49,13 @@ import {
 } from "../level/levelFormat";
 import { DEFAULT_BEVEL, cylinderSolid, extrudeOutline, taperOutline } from "./extrude";
 import { ROCK_TEXTURES } from "./rocks";
+import { loadSchema } from "../level/generatorParams";
 import { isAuthoredSurface, isSolidSurface, loadMesh, surfaceFor, surfaceName, tileMetres } from "./assets";
 import { buildWater } from "./water";
-import { DEFAULT_LIGHT_Z, LightRig, type MountedLight } from "./lights";
+import { DEFAULT_LIGHT_Z, LightRig, type DrivenEmission, type MountedLight } from "./lights";
+import { isWaking } from "./glow";
 import { applyProjection } from "./projection";
+import { glowProp } from "./propGlow";
 import { BeltRing, BeltTread } from "./beltTread";
 import { beltLoopOf } from "../render/beltTread";
 import { orientTo, placeAt, threeY } from "./space";
@@ -103,6 +106,9 @@ export interface DrawSpec {
   geometry?: GeometryObjectData;
   // The body's own fill, for the tint. A geometry object's own `color` wins.
   color?: string;
+  // Wear the body's own copy of the surface (`SurfaceRequest.instance`): set
+  // only on a body carrying a waking light, whose emission it drives.
+  instance?: string;
 }
 
 // What a primitive falls back to where its geometry object says nothing, which
@@ -129,6 +135,20 @@ function spawnedGeometry(shape: CollisionShape2D): THREE.BufferGeometry {
   return primitiveGeometry(outlineOfShape(s), undefined, SOLID_DEFAULTS);
 }
 
+// How far a generated boulder's stand-in leans in from its outline's wall, in
+// degrees: a chamfer that reads as "a rock goes here", not a claim about the
+// rock's shape (the generator's own taper is `taperSlopeMin`/`Max`).
+const BOULDER_STANDIN_TAPER = 45;
+
+// A boulder block's depth in metres (the level is in metres by the time it is
+// drawn): the authored one, else the schema's default.
+function boulderDepth(g: GeometryObjectData): number {
+  const authored = g.generator?.params?.["depth"];
+  if (typeof authored === "number") return authored;
+  const d = loadSchema("boulder")?.params.find((p) => p.key === "depth")?.default;
+  return typeof d === "number" ? d : DEFAULT_THICKNESS;
+}
+
 // An authored form as the solid it stands for. A rect is a rectangular prism, a
 // circle a cylinder and a polygon that outline extruded, each `depth` thick -
 // which is what the geometry object says it is and NOT what the body's collision
@@ -138,6 +158,13 @@ function primitiveGeometry(
   g: GeometryObjectData | undefined,
   defaults: PrimitiveDefaults,
 ): THREE.BufferGeometry {
+  // A GENERATED BOULDER whose mesh is not there yet (never generated, or its
+  // file still loading or missing) stands in as the solid the generator fills:
+  // its outline at the depth the block asks for, tapered in toward the camera,
+  // so the author sees the rock's volume rather than a 20 cm slab.
+  if (g?.kind === "mesh" && g.generator?.kind === "boulder") {
+    return taperOutline(outline, { depth: boulderDepth(g), taperStart: 0, taperAngle: BOULDER_STANDIN_TAPER });
+  }
   const depth = g?.depth ?? defaults.depth;
   // A ROCK is drawn as the reference solid its generated mesh fills: the
   // outline straight through to the taper's start, then the tapered roof
@@ -197,6 +224,7 @@ export function surfaceOf(spec: DrawSpec): THREE.MeshStandardMaterial {
     emissive: g?.emissive,
     emissiveIntensity: g?.emissiveIntensity,
     emissiveTexture: g?.emissiveTexture,
+    ...(spec.instance ? { instance: spec.instance } : {}),
   });
 }
 
@@ -267,19 +295,26 @@ export function mountVisual(
   holder.scale.setScalar(g?.scale ?? 1);
   parent.add(holder);
 
-  const geo = geometryFor();
-  owned.push(geo);
-  const placeholder = new THREE.Mesh(geo, material);
-  placeholder.castShadow = opts.castShadow;
-  placeholder.receiveShadow = true;
-  holder.add(placeholder);
-  applyProjection(placeholder, g?.projection);
+  // ...except a MUSHROOM PATCH, which has none: its rect is only the extent of
+  // the surface it grows on, and a box of that size would stand over the very
+  // rock the mushrooms are meant to be seen on. Until its mesh is there it is
+  // drawn as nothing (the outliner and the panel still reach it).
+  let placeholder: THREE.Mesh | null = null;
+  if (g?.generator?.kind !== "mushrooms") {
+    const geo = geometryFor();
+    owned.push(geo);
+    placeholder = new THREE.Mesh(geo, material);
+    placeholder.castShadow = opts.castShadow;
+    placeholder.receiveShadow = true;
+    holder.add(placeholder);
+    applyProjection(placeholder, g?.projection);
+  }
 
   const key = g?.mesh;
   if (!key) return { geometry: owned };
   void loadMesh(key).then((obj) => {
     if (!obj || !opts.alive()) return;
-    holder.remove(placeholder);
+    if (placeholder) holder.remove(placeholder);
     // An authored texture is the level saying what this thing is made of, and it
     // outranks whatever the file was exported with - which is the whole point of
     // being able to author one: a bare geometry-only export wears the same
@@ -290,6 +325,12 @@ export function mountVisual(
         const mesh = o as THREE.Mesh;
         if (mesh.isMesh) mesh.material = material;
       });
+    }
+    // A prop that keeps its own materials glows in its own pattern when the
+    // object authors an emission; one wearing an authored texture already has
+    // the emission in `material` above.
+    if (g?.texture === undefined && g?.emissive !== undefined) {
+      glowProp(obj, g.emissive, g.emissiveIntensity ?? 1);
     }
     obj.traverse((o) => {
       const mesh = o as THREE.Mesh;
@@ -302,6 +343,22 @@ export function mountVisual(
     holder.add(obj);
   });
   return { geometry: owned };
+}
+
+// The instance name a body's shapes ask their surfaces under
+// (`SurfaceRequest.instance`): `name` for a body carrying at least one waking
+// light, and undefined for every other body, which therefore asks for exactly
+// the shared materials it always did. Pure, so `cli render3d` can hold the
+// second half of that - the proof that no existing level gains a material.
+export function surfaceInstance(data: LevelBodyData, name: string | undefined): string | undefined {
+  if (name === undefined) return undefined;
+  return data.objects.some((o) => isLightObject(o) && isWaking(o)) ? name : undefined;
+}
+
+// Whether a geometry object authors a glow of its own - the shapes of a waking
+// body whose emission follows its light.
+function glows(g: GeometryObjectData): boolean {
+  return g.emissive !== undefined || g.emissiveTexture !== undefined;
 }
 
 // A unit placeholder for a prop that authors no outline of its own. Small enough
@@ -368,6 +425,10 @@ export class BodyVisual {
     readonly body: CollisionObject2D | null,
     private readonly built: BuiltBody | null,
     private readonly rig?: LightRig,
+    // What names this body's own copies of its surfaces, if a waking light in
+    // it drives their emission (see `buildAuthored`). Unique among the level's
+    // bodies; `Scene3D` passes the authored index.
+    private readonly instance?: string,
   ) {
     const data = built?.data ?? null;
     // Hook-only scenery sits BEHIND the level it decorates by default, because
@@ -418,6 +479,12 @@ export class BodyVisual {
     // body is made of and what it looks like are two authored statements, and
     // this is the file where the second one is the only one consulted.
     const solid = data.objects.some(isCollisionObject);
+    // A body with a waking light draws every shape in its OWN copy of its
+    // surface, so the glowing ones can follow the light without every other
+    // shape of the same stuff in the level following it too. Only then: every
+    // other body asks for exactly the materials it always did.
+    const instance = surfaceInstance(data, this.instance);
+    const driven: DrivenEmission[] = [];
 
     for (const g of drawnObjects(data)) {
       const local = localPlacement(built, g);
@@ -425,7 +492,17 @@ export class BodyVisual {
       const spec: DrawSpec = {
         geometry: g,
         ...(data.color !== undefined ? { color: data.color } : {}),
+        ...(instance !== undefined ? { instance } : {}),
       };
+      // The glowing shapes of a waking body are the set its lights drive; a
+      // shape that authors no emission (the stalk under the cap) is left alone.
+      // `surfaceOf` is the cache, so this is the very material mounted below.
+      if (instance !== undefined && glows(g)) {
+        const material = surfaceOf(spec);
+        if (!driven.some((d) => d.material === material)) {
+          driven.push({ material, authored: g.emissiveIntensity ?? 1 });
+        }
+      }
       // A form on a body with collision is an object among objects and is drawn
       // on the body's own plane; one on a body without is decoration and sits
       // behind it, which is what a flat fill drawn before every body already was.
@@ -499,12 +576,19 @@ export class BodyVisual {
     for (const l of data.objects) {
       if (!isLightObject(l)) continue;
       const local = localPlacement(built, l);
-      const mounted = this.rig.add(this.root, l, {
-        x: local.pos.x,
-        y: local.pos.y,
-        rot: local.rot,
-        z: objectDepth(l.z, DEFAULT_LIGHT_Z),
-      });
+      const mounted = this.rig.add(
+        this.root,
+        l,
+        {
+          x: local.pos.x,
+          y: local.pos.y,
+          rot: local.rot,
+          z: objectDepth(l.z, DEFAULT_LIGHT_Z),
+        },
+        // Only a waking light reads it; an always-on light leaves the
+        // emission as authored.
+        driven,
+      );
       if (mounted) this.lights.push(mounted);
     }
   }

@@ -151,6 +151,7 @@ Every one of them fires once per session and never twice in the same place; a st
 How to see it: record a bundle, then `cli shot <bundle> --frames 1..N --every 40 --3d --probe`.
 Run probes one at a time: four in parallel on SwiftShader took 20-25 s each instead of 8 and reported no uploads at all, which the same bundles alone contradict.
 It skips the precompile a grab normally does (which would answer "the warm frame" for everything) and logs `probe {frame, programs, textures, fresh}` per drawn frame, `fresh` naming each mesh whose program is new since the previous probe, by program, material maps, world position and parent chain.
+On a level with waking lights the line also carries `glow`, each waking light's level in authored order (see [Waking lights](lighting-and-surfaces.md#waking-lights)).
 Narrow with a smaller `--every` once the jump is bracketed.
 A texture-count jump without a program jump is the same class one size smaller: a surface set first seen (three textures) uploads without a compile.
 

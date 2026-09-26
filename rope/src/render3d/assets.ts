@@ -45,6 +45,7 @@ import { generatedPlantAsset } from "./generatedPlants";
 // Type-only, so the loader's module still lands in its own chunk (`gltfLoader`).
 import type { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { withDownload } from "./download";
+import { generatedMeshAsset } from "./generated";
 import { MATERIAL_NAMES, type MaterialName } from "../lib/shapeGeometry";
 
 // How a surface looks. `tile` is the size of one texture repeat in METRES, which
@@ -1950,9 +1951,27 @@ export interface SurfaceRequest {
   // answer different questions - what this is made of, and what is lit on it -
   // and a level pairs them freely.
   emissiveTexture?: string;
+  // The avatar's own copy of this surface (the ball, its loop, the chain, the
+  // manacle - see `render3d/avatarSurface.ts`). The same painted maps, dressed
+  // the same way as the images arrive, under a key of its own so that the
+  // avatar's rule (less fog) can be set on it without leaking onto
+  // a wall that happens to ask for the same steel in the same tint. Cloning the
+  // shared one instead would freeze the clone in the fallback surface, since the
+  // authored maps are swapped into the cached object when they land.
+  avatar?: boolean;
+  // A body's OWN dressed copy of this surface, named by the body (see
+  // `BodyVisual`). Set only on the shapes of a body carrying a waking light,
+  // whose emission follows that light every frame (`lights.ts`): driven through
+  // the shared material, every shape of the same stuff in the level would
+  // pulse with the nearest mushroom. Same reasoning as `avatar` for why it is
+  // a key rather than a clone.
+  instance?: string;
 }
 
-// The shared surface for a request. Callers must not mutate the result.
+// The shared surface for a request. Callers must not mutate the result - with
+// two exceptions: an `avatar` request, whose material is shared with the avatar
+// alone and is dressed by `avatarSurface.ts`, and an `instance` request, whose
+// `emissiveIntensity` a waking light writes every frame (`lights.ts`).
 //
 // Cached on every part of the request that changes what the material IS, so a
 // level of 154 bodies in three colours at two tiling scales is six materials and
@@ -1979,7 +1998,10 @@ export function surfaceKey(req: SurfaceRequest): string {
   // A multiplier on no emission is not a difference: it multiplies black.
   const emits = emissive !== "" || glowMap !== "" || surfaceEmits(name);
   const emissiveIntensity = emits ? (req.emissiveIntensity ?? 1) : 1;
-  return `${name}|${tile}|${ox}|${oy}|${req.color ?? ""}|${emissive}|${emissiveIntensity}|${glowMap}`;
+  // Appended only when set, so every key a level already produces is unchanged.
+  const avatar = req.avatar === true ? "|avatar" : "";
+  const instance = req.instance ? `|instance:${req.instance}` : "";
+  return `${name}|${tile}|${ox}|${oy}|${req.color ?? ""}|${emissive}|${emissiveIntensity}|${glowMap}${avatar}${instance}`;
 }
 
 // Does this surface glow of its own accord - is there an emission map in the
@@ -3441,18 +3463,45 @@ function loadFile(file: string, bytes: number): Promise<THREE.Object3D | null> {
     })
     .catch((err: unknown) => {
       console.warn(`[render3d] mesh file "${file}" failed to load:`, err);
+      failedFiles.add(file);
       return null;
     });
   gltfCache.set(file, track(p, `mesh file "${file}"`));
   return p;
 }
 
+// The files whose load failed. A failure stays cached, so a level naming a
+// file that is not there asks for it once rather than on every scene rebuild
+// (the editor rebuilds on every pointer move of a drag). A GENERATED key's file
+// is the one kind that can appear later in the same page - a job lands under
+// it - so `forgetFailedMesh` drops its failure and the next `loadMesh` fetches
+// it again.
+const failedFiles = new Set<string>();
+
+// Forget a failed load of a generated key's file, so the next `loadMesh` asks
+// again; called when the generator service has just published it. A load that
+// succeeded (or is still in flight) is kept: a key names one mesh for ever.
+// True when there was a failure to forget.
+export function forgetFailedMesh(key: string): boolean {
+  const generated = generatedMeshAsset(key);
+  if (!generated || !failedFiles.has(generated.file)) return false;
+  failedFiles.delete(generated.file);
+  gltfCache.delete(generated.file);
+  return true;
+}
+
 // The prop for a manifest key, as a fresh instance the caller owns. Resolves to
 // null for an unknown key or a load failure, which is the caller's cue to keep
 // its placeholder.
+//
+// A GENERATED key (`boulder:<hash>`, `mushrooms:<hash>`, see generated.ts) is
+// asked first: it names its file itself, is one prop in its own frame (no node,
+// no scale, no turn), and has no manifest entry. Its size is unknown here, so
+// the download is unweighted; a missing file is a failed load like any other.
 export function loadMesh(key: string): Promise<THREE.Object3D | null> {
-  const generated = generatedRootAsset(key) ?? generatedBoulderAsset(key) ?? generatedDirtMossAsset(key) ?? generatedVineAsset(key) ?? generatedMushroomAsset(key) ?? generatedGrassAsset(key) ?? generatedPlantAsset(key);
-  const asset = generated ? { ...generated, node: undefined, scale: 1, rotX: 0, rotY: 0, rotZ: 0 } : MESH_ASSETS[key];
+  const generated = generatedMeshAsset(key) ?? generatedRootAsset(key) ?? generatedBoulderAsset(key) ?? generatedDirtMossAsset(key) ?? generatedVineAsset(key) ?? generatedMushroomAsset(key) ?? generatedGrassAsset(key) ?? generatedPlantAsset(key);
+  const asset: Pick<MeshAsset, "file" | "bytes" | "node" | "scale" | "rotX" | "rotY" | "rotZ"> | undefined =
+    generated ? { file: generated.file, bytes: "bytes" in generated && typeof generated.bytes === "number" ? generated.bytes : 0 } : MESH_ASSETS[key];
   if (!asset) return Promise.resolve(null);
   return loadFile(asset.file, asset.bytes).then((root) => {
     if (!root) return null;

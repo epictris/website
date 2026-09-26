@@ -85,6 +85,83 @@ The reader clamps it to 0..90.
 Both are in the rock's hash, so changing either marks the body stale.
 The object's `bevel` is the flat extrusion's chamfer and nothing else: the rock pipeline no longer reads it.
 
+A geometry object whose mesh is **generated** (a boulder fitted to an outline, or a patch of mushrooms grown on another object's surface; see [plans/visuals-workspace.md](../plans/visuals-workspace.md)) carries a **`generator`** block saying what it is generated from:
+
+```json
+"generator": {
+  "kind": "boulder",
+  "version": 1,
+  "params": { "depth": 120, "weathering": 0.5 },
+  "patch": { "host": 2, "points": [{ "x": -20, "y": 10, "z": 3 }], "facing": { "x": 0, "y": -0.1047, "z": 0.9945 } }
+}
+```
+
+- `kind` is `"boulder"` or `"mushrooms"`, and `version` is the version of that generator's parameter schema (`tools/blender/<kind>/params.json`).
+- `params` holds only the parameters that differ from the schema's defaults, and is absent when none do.
+  A parameter whose schema `unit` is `"m"` is a length, so it is pixels on disk and metres in the sim, and `scaleObject` converts it by the schema; every other value (a count, a ratio, a flag, a degree, a colour, a density per square metre) passes through untouched.
+  A key the schema does not know is carried through unscaled rather than dropped, and the generator refuses it.
+  The editor writes `params` back as it loaded them, so a file stating a default keeps stating it; the mesh key strips defaults on its own.
+- `patch` is a mushroom patch's alone: `points` is the loop it was painted inside, in the object's OWN frame (x and y as its shape's vertices are, z off its own `z`), and `host` is the index, in this body's `objects`, of the geometry object it grows on.
+  The loop is in the object's frame rather than the body's because the editor re-origins a body under its objects, and a loop stated in the body's frame would have to be rewritten, through a rotation and so not exactly, every time it did.
+  The editor resolves `host` to an item on load and rewrites it on save from wherever the host then is, so reordering a body cannot leave it naming the wrong object.
+  An index that names no other geometry object loads as a patch with no host (with a warning); the loop is kept, and a patch saved with no host writes no `host`.
+  `facing` is which side of the loop's plane the loop was painted on: a unit vector in the same frame (y down, as the points), the mean of the normals of the faces it was clicked on, written when the loop is closed at a ten-thousandth.
+  It is a direction, so it is NOT scaled px <-> m, and it is part of the mesh key.
+  A patch saved before it was stored has none; the editor then guesses the side from the host's middle, which a loop near a wide face's edge can get wrong.
+- A boulder's other input is the object's own `shape`, so nothing about the outline is stored in the block.
+
+`mesh` is then the key of the generated file, `boulder:<hash>` or `mushrooms:<hash>`, derived from the block and the outline or loop (see [**Generated meshes**](render3d.md#generated-meshes)).
+The object is **stale** when `mesh` is not the key its current content makes; the editor compares, and never regenerates on its own.
+A block with no `mesh` is an object that has never been generated.
+It is appearance and nothing else, like the rest of the object: a regenerated rock is the same rock to the sim.
+A level with no generated object saves byte-identically, which `cli render3d` holds `levels/ball.json` to; the `generator:` cases there hold the block's px/m trip, the host index, the clipboard, the schemas and the key.
+The block is authored in the editor's Visuals workspace (**+ Rock**, **+ Mushrooms** and their panels, [editor-visuals](editor-visuals.md#rocks-and-mushrooms)), and the files it names are made by the dev server's generator service ([generators](generators.md)).
+They are dev-only for now (`public/generated/`, gitignored), so a level holding a generated object draws its stand-in, or nothing for a patch, wherever the file is not.
+A local `vite build` keeps in `dist` only the generated meshes a registered level names (`generatedMeshesInBuild` in `vite.config.ts`), but a deploy builds from a fresh checkout that has none.
+
+A **light object** (`LightObjectData`, `type: "light"`) sits in a body like any other scene object and rides its pose - see [**Light and air**](lighting-and-surfaces.md#light-and-air).
+Its fields, and what `scaleLevelData` does to each:
+
+| Field | What it is | Scaled px ↔ m |
+|---|---|---|
+| `kind` | `"point"` (absent) or `"spot"` | no |
+| `x`, `y`, `rot` | placement in the body's frame | `x`, `y` yes |
+| `z` | off the body's plane, toward the camera | yes |
+| `color` | the light's colour | no |
+| `intensity` | candela against the sim's metres (see the lighting doc for why it is not scaled) | no |
+| `range` | how far it reaches before it is cut to nothing | yes |
+| `angle`, `penumbra` | spot only: the cone's half-angle in degrees, and its edge softness 0..1 | no |
+| `dirX`, `dirY`, `dirZ` | spot only: the aim, in the object's own frame | no |
+| `castShadow` | whether it occludes (capped by `LIGHT_SHADOW_BUDGET`) | no |
+| `shadowNear` | the shadow camera's near plane | yes |
+| `flicker` | 0 (steady) .. 1 (guttering); render-only, wall-clock driven | no |
+| `beam` | spot only: how visible the lit air in the cone is, 0..1; render-only, wall-clock driven | no |
+| `dust` | spot only: how thick the dust drifting in the beam is, 0..1; render-only, wall-clock driven | no |
+| `wake` | point only: the distance on the gameplay plane the ball has to come within to wake the light; absent or 0 = always on | yes |
+| `wakeDelay` | point only, seconds from the trigger to the start of the rise; absent = 0 | no |
+| `wakeRise` | point only, seconds from dark to full; absent = `DEFAULT_WAKE_RISE` (0.6), 0 = instant | no |
+| `wakeFall` | point only, seconds from full to dark once the ball has left; absent = `DEFAULT_WAKE_FALL` (1.5), 0 = instant | no |
+| `fireflies` | point only: a firefly swarm of this many motes (capped at `FIREFLY_MAX`, 32); absent or 0 = an ordinary light | no |
+| `path` | swarm only: the `id` of the firefly path it guides the player along; absent = the camera paths | no (an id) |
+
+`beam` and `dust` are the spot's cone made visible - see [**Beams**](lighting-and-surfaces.md#beams).
+Both are absent (0) on every light authored before them, and the editor writes them only on a spot and only when nonzero, so a level that never sets one saves byte-identically.
+The beam is not occluded by geometry: a shaft that should stop at a floor is authored with a `range` that stops there.
+
+`wake` makes a point light a **waking light**, dark until the ball comes near and fading after it leaves, with the emission of the glowing shapes in its body following it - see [**Waking lights**](lighting-and-surfaces.md#waking-lights).
+`wake` is a length and converts like `range`; the three times are seconds and pass through untouched.
+The editor writes the four only on a point light with a nonzero `wake`, and each time only when it is set, so a level that never sets one saves byte-identically; a waking light's `castShadow` is ignored.
+
+`fireflies` makes a point light a **firefly swarm**: the light's placement is where the motes hover, and once the ball comes within `wake` (absent = `DEFAULT_FIREFLY_NOTICE`, 2.5 m) they follow it for the rest of the run - see [**Fireflies**](lighting-and-surfaces.md#fireflies).
+A swarm is never a waking light: it reads `wake` as its notice distance and ignores the three times, which the editor does not write for one.
+Its absent `color`, `intensity` and `range` are the firefly's (`FIREFLY_COLOR`, `FIREFLY_INTENSITY`, `FIREFLY_RANGE`) rather than a lamp's, and the editor loads and saves a swarm against those, so a swarm that never sets them saves none of them; its `castShadow` is ignored.
+
+`path` ties a swarm to a **firefly path** (`fireflyPaths`, top-level beside `cameraPaths`): `{ id, x, y, rot, verts }`, the camera path's curve (local verts under the placement, optional Bézier `inX`/`inY`/`outX`/`outY` handles, node order the way forward) with an `id` and nothing else.
+The swarm reads that path alone instead of the camera paths, and when the player reaches its end it flies back along it to its start and waits there - see [**Fireflies**](lighting-and-surfaces.md#fireflies).
+The placement, the nodes and the handles are lengths and convert; `id` and `rot` do not.
+A path with fewer than two distinct nodes, or repeating an earlier path's `id`, is dropped at load with a warning, and a `path` naming no path is warned about by the renderer and read as absent.
+The editor writes `path` only on a swarm, and `fireflyPaths` only when there is one, so a level that uses neither saves byte-identically.
+
 The canonical, hand-editable schema now lives in `src/level/levelFormat.ts` (superset of
 the generated one — adds the `rigid` and `force` kinds, the `cameraRegions` and
 `chains` lists, and bodies made of scene objects); `levelData.ts` stays

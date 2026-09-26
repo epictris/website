@@ -14,6 +14,7 @@ import {
   isKeyed,
   pathDataOf,
   CAMERA_REGION_COLOR,
+  FIREFLY_PATH_COLOR,
   chainEnds,
   chainPath,
   chainViaItems,
@@ -86,10 +87,14 @@ import { decomposeSeams, isSimpleLoop } from "../lib/polygon";
 // For the one number: the multiple of the authored spawn radius the ball is
 // actually played at (see the spawn marker).
 import { BallLevel } from "../level/ballLevel";
+import { DEFAULT_FIREFLY_NOTICE } from "../render3d/fireflies";
 
-const PLAYER = "#65bddb";
-const IMPERMEABLE_EDGE = "#9db8c6"; // hook-proof surfaces: dashed steel border
-const VISCOUS_EDGE = "#c9a066"; // viscous (mud) surfaces: dash-dot ochre border
+// Exported, like the handle colours below, for the Visuals workspace's guides
+// (editor/visuals/guides.ts), which draw the same marks into the 3D scene and
+// must not drift from these.
+export const PLAYER = "#65bddb";
+export const IMPERMEABLE_EDGE = "#9db8c6"; // hook-proof surfaces: dashed steel border
+export const VISCOUS_EDGE = "#c9a066"; // viscous (mud) surfaces: dash-dot ochre border
 // A conveyor's tread ticks and direction arrow: the game's tread grey
 // (`render/renderer.ts`), so the belt reads the same in both.
 const BELT_TREAD = "#e6e8eb";
@@ -129,8 +134,8 @@ const CAMERA_LOCK = "#e6c07b"; // camera-lock guides: warm, distinct from the re
 // backdrop and whatever the shape is filled with, and a neutral edge disappears
 // into one or the other.
 const DECOR_EDGE = "#4ec9b0";
-const HANDLE = "#f4a460";
-const HANDLE_FILL = "#1f2430";
+export const HANDLE = "#f4a460";
+export const HANDLE_FILL = "#1f2430";
 // Where a concave outline is cut into convex pieces: dim and dashed, because a
 // seam is not a surface. It has to read as "this is inside the shape" against
 // the orange handles, which are the things on a polygon that CAN be dragged.
@@ -139,7 +144,7 @@ const SEAM = "#8a93a5";
 // than when it is closed, because closing it is when it stops being fixable by
 // moving the pointer - and a crossed loop is the one draft the poly tool cannot
 // take as drawn (it falls back to the convex hull, which is not what was drawn).
-const DRAFT_CROSSED = "#d4756f";
+export const DRAFT_CROSSED = "#d4756f";
 
 // Chains. Forged iron rather than a saturated editor colour: a chain is played,
 // not editor furniture, so it is drawn as the thing it will be and only its
@@ -196,6 +201,10 @@ export interface Handles {
   rotate: Vec2 | null; // screen
   rotateBase: Vec2 | null; // screen; where the rotate knob's stalk starts
   radius: Vec2 | null; // screen; circle only
+  // screen; a WAKING light only: the grip on its dashed wake ring, dragged to
+  // the trigger distance the way the reach grip drags the reach. On the ring's
+  // left, opposite the reach grip, so the two never sit on each other.
+  wake: Vec2 | null;
   ends: Vec2[] | null; // screen; arrow notes only (tail, head)
   // Screen positions of a polygon's vertices, in loop order. A polygon has no
   // meaningful width and height to resize, so it is edited vertex by vertex —
@@ -279,6 +288,7 @@ export function computeHandles(cam: Camera, body: EdItem): Handles {
     rotate: null,
     rotateBase: null,
     radius: null,
+    wake: null,
     ends: null,
     verts: null,
     vertMids: null,
@@ -325,6 +335,7 @@ export function computeHandles(cam: Camera, body: EdItem): Handles {
       rotate: base ? base.add(up.mul(ROT_OFFSET_PX)) : null,
       rotateBase: base,
       radius: worldToScreen(cam, toWorld(body, new Vec2(r, 0))),
+      wake: lightWakes(body) ? worldToScreen(cam, body.pos.add(new Vec2(-lightTrigger(body), 0))) : null,
       // A light's circle is its REACH, which is as wide as the room it lights,
       // so its depth handle goes beside the source icon instead - the same
       // reason a click on a light lands on the icon and not on the pool.
@@ -550,16 +561,16 @@ export function computeGroupHandles(
 
 // The item's outline — one description, shared with the game renderer, the
 // backdrop pass and the SVG snapshot, so an authored shape is drawn by exactly
-// the same geometry that plays.
-function outlineOf(body: EdItem): Outline {
+// the same geometry that plays - and with the Visuals workspace's guides.
+export function outlineOf(body: EdItem): Outline {
   if (body.shape.kind === "circle") return { kind: "circle", radius: body.shape.r };
   if (body.shape.kind === "poly") return { kind: "poly", verts: body.shape.verts };
   if (body.shape.kind === "path") {
     // A SCENE path is a curve with a width, and its outline is the bar the
     // build strokes it into (`lib/stroke.ts`) - the same geometry, so what is
     // drawn is what plays.
-    if (body.layer !== "camera") return { kind: "poly", verts: strokeOf(body.shape) };
-    // A CAMERA path is an open polyline and has no outline at all - no inside,
+    if (body.layer === "scene") return { kind: "poly", verts: strokeOf(body.shape) };
+    // A CAMERA or FIREFLY path is an open polyline and has no outline at all - no inside,
     // no area, nothing to fill. It is drawn by `drawCameraPath` instead, and
     // every caller here is about a closed shape, so answering its bounding box
     // would be a rectangle that is not the thing.
@@ -859,7 +870,7 @@ function circleHandle(ctx: CanvasRenderingContext2D, p: Vec2): void {
 // position along an edge. It carries the same dark fill as every other handle —
 // a hollow or dimmed ring vanishes into the selection halo it sits on top of,
 // which is the one place these handles always are.
-const MID_HANDLE_RADIUS_PX = 3;
+export const MID_HANDLE_RADIUS_PX = 3;
 function midHandle(ctx: CanvasRenderingContext2D, p: Vec2): void {
   ctx.fillStyle = HANDLE_FILL;
   ctx.strokeStyle = HANDLE;
@@ -947,6 +958,23 @@ function drawLightGizmo(
     ctx.globalAlpha = 1;
   }
 
+  // THE WAKE, for a waking light: a dashed ring in the light's colour at the
+  // distance the ball has to come within to wake it. The trigger is measured
+  // on the gameplay plane (see `LightRig`), so this ring is exactly where the
+  // ball's centre has to reach - not cut by `z` the way the reach is. Longer
+  // dashes than the reach's, so the two rings never read as one.
+  if (lightWakes(l)) {
+    ctx.beginPath();
+    ctx.arc(l.pos.x, l.pos.y, lightTrigger(l), 0, Math.PI * 2);
+    ctx.strokeStyle = l.color;
+    ctx.globalAlpha = 0.8;
+    ctx.lineWidth = worldLine * 1.5;
+    ctx.setLineDash([14 * PX, 6 * PX]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.globalAlpha = 1;
+  }
+
   if (l.light.kind === "spot" && planeReach > 0) {
     const aim = Math.atan2(l.light.dir.y, l.light.dir.x);
     const half = (l.light.angle * Math.PI) / 180;
@@ -1020,6 +1048,25 @@ export function lightPlaneReach(l: EdItem): number {
   return z >= range ? 0 : Math.sqrt(range * range - z * z);
 }
 
+// Is this a WAKING light (see `LightObjectData.wake`)? Point-only, like the
+// renderer's own rule, so a spot that somehow carries a wake draws none.
+export function lightWakes(l: EdItem): boolean {
+  return l.object === "light" && l.light.kind === "point" && lightTrigger(l) > 0;
+}
+
+// Is this a FIREFLY SWARM (see `LightObjectData.fireflies`)? Point-only too.
+export function lightSwarms(l: EdItem): boolean {
+  return l.object === "light" && l.light.kind === "point" && l.light.fireflies > 0;
+}
+
+// The distance the ball has to come within: the authored `wake`, or for a
+// swarm with none, the distance the renderer notices the ball at anyway - so
+// the ring is drawn wherever the game has one.
+export function lightTrigger(l: EdItem): number {
+  if (l.light.wake > 0) return l.light.wake;
+  return l.light.fireflies > 0 ? DEFAULT_FIREFLY_NOTICE : 0;
+}
+
 // What a light does, for the screen-space label beside it. Only what was
 // authored away from the defaults, so an ordinary lamp reads as `light` and a
 // guttering shadow-casting spot says so.
@@ -1037,7 +1084,16 @@ export function lightLabel(l: EdItem): string {
     parts.push(plane > 0 ? `${px(plane)}on plane` : "MISSES PLANE");
   }
   if (l.light.flicker > 0) parts.push(`flicker ${Number(l.light.flicker.toFixed(2))}`);
-  if (l.light.castShadow) parts.push("shadows");
+  // Read only on a spot (see `LightObjectData.beam`), so labelled only there.
+  if (l.light.kind === "spot" && l.light.beam > 0) parts.push(`beam ${Number(l.light.beam.toFixed(2))}`);
+  if (l.light.kind === "spot" && l.light.dust > 0) parts.push(`dust ${Number(l.light.dust.toFixed(2))}`);
+  if (lightSwarms(l)) {
+    parts.push(`${l.light.fireflies} fireflies`, `notice ${px(lightTrigger(l))}`);
+    if (l.light.path !== null) parts.push(`path ${l.light.path}`);
+  }
+  else if (lightWakes(l)) parts.push(`wakes ${px(l.light.wake)}`);
+  // A waking light casts none whatever it says (see `LightRig`).
+  else if (l.light.castShadow) parts.push("shadows");
   return parts.join(" · ");
 }
 
@@ -1122,6 +1178,11 @@ export function cameraRegionLabel(r: EdItem): string {
 // be readable without selecting the path first.
 const PATH_ARROW_SPACING = 1.5;
 const PATH_ARROW_LENGTH = 0.22;
+// Metres: the radius of the ring at a firefly path's start, and half the bar
+// across its end. A little over half an arrowhead, so the ends read as marks
+// on the line rather than as objects of their own (0.2 m was a 40 px ring at
+// the default zoom, bigger than the ball).
+const FIREFLY_PATH_MARK = 0.12;
 
 // The rule a path item builds, kept across frames while its saved form is
 // unchanged. The rule is what the game builds (`pathDataOf` is the one mapping),
@@ -1253,6 +1314,78 @@ function drawCameraPath(
     // would otherwise be solid arrowheads.
     carried = ((carried - len) % PATH_ARROW_SPACING + PATH_ARROW_SPACING) % PATH_ARROW_SPACING;
   }
+}
+
+// A FIREFLY PATH (see `FireflyPathData`): the flattened curve in the
+// firefly's colour, the arrowheads that say which way it runs, a ring at its
+// START - where a swarm waits once it has flown back - and a bar across its
+// END, where it leaves the player. No corridor: a firefly path frames
+// nothing, so there is no range to draw.
+function drawFireflyPath(
+  ctx: CanvasRenderingContext2D,
+  item: EdItem,
+  worldLine: number,
+  selected: boolean,
+): void {
+  if (item.shape.kind !== "path") return;
+  // The camera's rule is built only for its polyline: the same flattening the
+  // rig gives a firefly path, which is what the swarm rides.
+  const rule = editorPathRule(item);
+  if (!rule) return;
+  const world = rule.index.verts;
+  const stroke = FIREFLY_PATH_COLOR;
+  ctx.beginPath();
+  ctx.moveTo(world[0]!.x, world[0]!.y);
+  for (const w of world.slice(1)) ctx.lineTo(w.x, w.y);
+  if (selected) {
+    ctx.strokeStyle = SELECT;
+    ctx.lineWidth = worldLine * 5;
+    ctx.stroke();
+  }
+  ctx.strokeStyle = stroke;
+  ctx.lineWidth = worldLine * 2.5;
+  ctx.setLineDash([8 * PX, 4 * PX]);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  const start = world[0]!;
+  ctx.lineWidth = worldLine * 2;
+  ctx.beginPath();
+  ctx.arc(start.x, start.y, FIREFLY_PATH_MARK, 0, Math.PI * 2);
+  ctx.stroke();
+  const end = world[world.length - 1]!;
+  const before = world[world.length - 2]!;
+  const len = end.distanceTo(before);
+  if (len > 1e-9) {
+    const across = new Vec2(before.y - end.y, end.x - before.x).div(len).mul(FIREFLY_PATH_MARK);
+    ctx.beginPath();
+    ctx.moveTo(end.x + across.x, end.y + across.y);
+    ctx.lineTo(end.x - across.x, end.y - across.y);
+    ctx.stroke();
+  }
+
+  ctx.fillStyle = stroke;
+  let carried = PATH_ARROW_SPACING / 2;
+  for (let i = 0; i + 1 < world.length; i++) {
+    const a = world[i]!;
+    const b = world[i + 1]!;
+    const d0 = a.distanceTo(b);
+    if (d0 < 1e-9) continue;
+    const dir = b.sub(a).div(d0);
+    for (let d = carried; d < d0; d += PATH_ARROW_SPACING) {
+      drawPathArrow(ctx, a.add(dir.mul(d)), dir);
+    }
+    carried = ((carried - d0) % PATH_ARROW_SPACING + PATH_ARROW_SPACING) % PATH_ARROW_SPACING;
+  }
+}
+
+// What a firefly path's label says: its number, and which swarms follow it -
+// a path no swarm names is drawn for nothing, and that is worth seeing.
+export function fireflyPathLabel(item: EdItem, items: readonly EdItem[]): string {
+  const swarms = items.filter(
+    (i) => i.object === "light" && lightSwarms(i) && i.light.path === item.pathId,
+  ).length;
+  return `firefly path ${item.pathId} · ${swarms === 0 ? "no swarm" : `${swarms} swarm${swarms === 1 ? "" : "s"}`}`;
 }
 
 // A filled triangle centred at `at`, pointing along the unit vector `dir`.
@@ -2011,7 +2144,8 @@ export function drawEditor(
   // A camera PATH is excluded: this pass fills and strokes a closed outline, and
   // an open polyline has none - `outlineOf` can only answer its bounding box,
   // which is a rectangle that is not the thing. It is drawn by `drawCameraPath`
-  // in the camera pass instead. Camera REGIONS and notes stay in, because they
+  // in the camera pass instead, and a FIREFLY path by `drawFireflyPath` in the
+  // fireflies pass, for the same reason. Camera REGIONS and notes stay in, because they
   // are closed shapes and this is where their fill has always come from.
   //
   // A SCENE path stays in too, and it is the reason this is a layer test rather
@@ -2026,7 +2160,7 @@ export function drawEditor(
   const geometry = model.items.filter(
     (i) =>
       i.object === "collision" &&
-      !(i.shape.kind === "path" && i.layer === "camera") &&
+      !(i.shape.kind === "path" && i.layer !== "scene") &&
       !isCheckpointNote(i),
   );
   const ordered = visibleLayers.has("scene")
@@ -2491,6 +2625,12 @@ export function drawEditor(
     drawLockMarks(ctx, r, worldLine);
   }
 
+  // Firefly paths, above the geometry for the camera regions' reason.
+  const fireflyPaths = visibleLayers.has("fireflies")
+    ? model.items.filter((i) => i.layer === "fireflies")
+    : [];
+  for (const f of fireflyPaths) drawFireflyPath(ctx, f, worldLine, selectedIds.has(f.id));
+
   // Lights above the geometry they light, for the reason camera regions are:
   // they are a statement ABOUT the scene rather than part of it, and a lamp
   // hidden behind the wall it is mounted on could not be found to be clicked.
@@ -2650,16 +2790,37 @@ export function drawEditor(
     ctx.fillStyle = CAMERA_REGION_COLOR;
     ctx.fillText(cameraRegionLabel(r), anchor.x + 2, anchor.y - 3);
   }
+  // ...and the firefly paths', beside the start - the end a swarm waits at -
+  // on the side AWAY from where the path sets off, so the label never sits on
+  // the line it names.
+  for (const f of fireflyPaths) {
+    if (f.shape.kind !== "path" || f.shape.verts.length < 2) continue;
+    const start = worldToScreen(cam, toWorld(f, f.shape.verts[0]!));
+    const next = worldToScreen(cam, toWorld(f, f.shape.verts[1]!));
+    const clear = FIREFLY_PATH_MARK * cam.zoom * PIXELS_PER_METER + 6;
+    const leftward = next.x >= start.x;
+    ctx.font = "11px monospace";
+    ctx.textBaseline = "middle";
+    ctx.textAlign = leftward ? "right" : "left";
+    ctx.fillStyle = FIREFLY_PATH_COLOR;
+    ctx.fillText(fireflyPathLabel(f, model.items), start.x + (leftward ? -clear : clear), start.y);
+    ctx.textAlign = "left";
+  }
   // ...and the lights', for the same reason: what a lamp does is numbers, and a
   // world-space label would shrink to nothing as the level is zoomed out. Placed
   // beside the source rather than at the edge of the reach, which is where the
   // thing being labelled actually is.
+  //
+  // Clear of the burst: it is drawn `LIGHT_MARK_SIZE` metres across the plane
+  // (36 px at the default zoom), so a label at a fixed 8 px ran through its
+  // rays and read "·oint".
   for (const l of lights) {
     const anchor = worldToScreen(cam, l.pos);
+    const clear = lightPickRadius(1 / scale) * scale;
     ctx.font = "11px monospace";
     ctx.textBaseline = "bottom";
     ctx.fillStyle = l.color;
-    ctx.fillText(lightLabel(l), anchor.x + 8, anchor.y - 6);
+    ctx.fillText(lightLabel(l), anchor.x + clear + 4, anchor.y - 2);
   }
   for (const n of notes) {
     if (n.note.kind === "text") drawNoteText(ctx, cam, n);
@@ -2765,6 +2926,9 @@ export function drawEditor(
     }
     for (const c of hs.corners) square(ctx, c);
     if (hs.radius) square(ctx, hs.radius);
+    // Round, like every grip dragged to a length from a point (a belt wheel's
+    // radius, a curve's tangent), so it does not read as a second reach.
+    if (hs.wake) circleHandle(ctx, hs.wake);
     // A polygon is edited vertex by vertex: square handles on the vertices, and
     // smaller hollow ones at the edge midpoints, which insert a new vertex when
     // dragged. The midpoints are drawn differently on purpose - a uniform row of
@@ -2859,4 +3023,57 @@ function snapMark(ctx: CanvasRenderingContext2D, p: Vec2, r: number): void {
     ctx.lineTo(p.x + dx * r * 1.9, p.y + dy * r * 1.9);
   }
   ctx.stroke();
+}
+
+// The Visuals workspace's one mark on the overlay canvas: a status line along
+// the bottom, between the outliner and the inspector, saying how the free view
+// is driven and what the armed tool or the selection offers there. Everything
+// else the overlay would draw is in the scene (editor/visuals/guides.ts), where
+// it is right from any angle; this is the one thing that is about the SCREEN
+// rather than the level, so it stays on it.
+//
+// CSS pixels: the band the outliner (8 + 230 px wide) and the inspector (8 +
+// 190 px, plus its padding) leave free, wrapped at " · " to fit it.
+const STATUS_LEFT_PX = 252;
+const STATUS_RIGHT_PX = 218;
+const STATUS_BOTTOM_PX = 8;
+const STATUS_LINE_PX = 16;
+const STATUS_PAD_PX = 6;
+const STATUS_BG = "rgba(31,36,48,0.92)";
+const STATUS_BORDER = "#313244";
+const STATUS_TEXT = "#cbccc6";
+
+export function drawVisualsStatus(
+  ctx: CanvasRenderingContext2D,
+  dpr: number,
+  w: number,
+  h: number,
+  text: string,
+): void {
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.font = "12px monospace";
+  const room = Math.max(120, w - STATUS_LEFT_PX - STATUS_RIGHT_PX - STATUS_PAD_PX * 2);
+  const lines: string[] = [];
+  let line = "";
+  for (const part of text.split(" · ")) {
+    const next = line ? `${line} · ${part}` : part;
+    if (line && ctx.measureText(next).width > room) {
+      lines.push(line);
+      line = part;
+    } else line = next;
+  }
+  if (line) lines.push(line);
+  const width = Math.min(room, Math.max(...lines.map((l) => ctx.measureText(l).width))) + STATUS_PAD_PX * 2;
+  const height = lines.length * STATUS_LINE_PX + STATUS_PAD_PX;
+  const x = Math.round(STATUS_LEFT_PX + (w - STATUS_LEFT_PX - STATUS_RIGHT_PX - width) / 2);
+  const y = Math.round(h - STATUS_BOTTOM_PX - height);
+  ctx.fillStyle = STATUS_BG;
+  ctx.fillRect(x, y, width, height);
+  ctx.strokeStyle = STATUS_BORDER;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x + 0.5, y + 0.5, width - 1, height - 1);
+  ctx.fillStyle = STATUS_TEXT;
+  ctx.textBaseline = "top";
+  ctx.textAlign = "left";
+  lines.forEach((l, i) => ctx.fillText(l, x + STATUS_PAD_PX, y + STATUS_PAD_PX / 2 + 2 + i * STATUS_LINE_PX));
 }

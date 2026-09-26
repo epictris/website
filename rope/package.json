@@ -16,12 +16,15 @@
     "assets:optimize-texture": "bun run scripts/optimize-texture.ts",
     "assets:optimize-hdri": "bun run scripts/optimize-hdri.ts",
     "assets:publish": "bun run scripts/publish-asset.ts",
+    "assets:publish-generated": "bun run scripts/publish-generated.ts",
     "assets:paint": "bun run scripts/paint-textures.ts",
     "assets:fetch": "bun run scripts/fetch-assets.ts",
     "assets:credits": "bun run scripts/credits.ts",
     "assets:rocks": "bun run scripts/generate-rocks.ts",
     "assets:rock": "bun run scripts/rock-asset.ts",
-    "assets:rock-texture": "python3 tools/rock-texture.py"
+    "assets:rock-texture": "python3 tools/rock-texture.py",
+    "generators:setup": "python3 -m venv .venv && .venv/bin/python -m pip install -r tools/blender/requirements.txt",
+    "generators:check": "bun run scripts/generators-check.ts"
   },
   "devDependencies": {
     "@gltf-transform/cli": "^4.1.1",

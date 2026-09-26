@@ -7,6 +7,9 @@ This page is written for the agent that models the next one: what the tools are,
 It replaced the procedural per-level rocks of [rocks.md](rocks.md), which the owner rejected ("too messy, the texture doesn't look good").
 Do not resurrect that pipeline or its constants.
 
+Since 2026-09-25 the editor's Visuals workspace has an in-editor alternative: **+ Rock** fits the fork's boulder generator to a collision outline and puts the result on a geometry object whose parameters live in the level ([editor-visuals](editor-visuals.md#rocks-and-mushrooms), [generators](generators.md)).
+It is a different pipeline from this page's and does not replace it: the accepted props (rock-196, moss-192 and those placed with them) stay hand-authored through the loop below, and a new prop may come from either.
+
 ## The loop
 
 1. **The job file** `rocks/<level>-<body>.json` is the authored record of a prop.
@@ -18,6 +21,8 @@ Do not resurrect that pipeline or its constants.
    The Blender previews and the game disagree in two ways worth knowing: the game lights a rock nearly head-on with little fill, so a face tilted away from the sun goes black, and the game draws the rock's LOW mesh while a moss preview shows the rock's high.
 4. **Change one authored thing at a time** (a crack, a job field, a constant), rebuild, look again.
    A build is 15 to 25 seconds including the bake and the previews.
+   `--place` writes the prop object onto the body, keeping whatever was authored on a prop object already there (its glow, its depth).
+   A moss placed for the first time also gets its glow: `emissive` on the prop object and a point light hung 0.3 m off the moss, away from its rock (see [Glowing props](lighting-and-surfaces.md#glowing-props)).
 5. When the owner accepts it: `bun run assets:publish public/meshes/<key>.glb`, then `bun run assets:credits`.
 
 The first rock (body 196 of `ball`) took about twenty rounds; most of what follows is what those rounds found.

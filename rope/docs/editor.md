@@ -95,11 +95,13 @@ generators; mesh keys are `mushroom-patch:<id>:<bytes>`. Checks:
 
 ## Grow grass on a model
 
-**+ Grass** is the same on-model outline as **+ Mushrooms** (same picking, same
-face selection, same **max slope°**, which lives in the mushroom row); the two
-tools share one outline, so switching between them keeps it and one outline can
-carry a mushroom patch and a grass patch. Each **Generate** replaces only the
-patch of its own kind that the outline made.
+In the **Visuals** workspace, **+ Grass** paints an outline onto model faces.
+Close it with Enter or the first vertex, then click **Generate grass**. Its
+settings appear while Grass is armed, with **max slope°** underneath. **+ Grass**
+and **+ Plants** share the outline, so switching between them keeps it and one
+outline can carry both kinds of foliage. Each **Generate** replaces only the
+patch of its own kind that the outline made. Main's **+ Mushrooms** keeps its
+separate saved generator panel and editable loop.
 
 **Generate grass** posts the covered faces with **blades /m²**, **height (m)**,
 **clumping**, **tuft (m)**, **detail** and **seed** to `/api/grass`, which runs
@@ -212,6 +214,7 @@ stable id per body) and manipulates it with the mouse: pan (**middle**-button dr
 right button, or a **left** drag on anything not selected), wheel-zoom about the cursor,
 click-select, drag a *selected* body to move it, corner/rotate/
 radius handles to resize, and `+Rect`/`+Circle`/`+Poly` tools to draw new bodies.
+This page is the editor's **Level** workspace; the toolbar's switcher (**W**) turns the same editor into the **Visuals** workspace, a free 3D view for dressing the level and generating rocks and mushroom patches ([Workspaces](#workspaces-level-and-visuals), [editor-visuals](editor-visuals.md), [generators](generators.md)).
 **Selected first, moved second.**
 A press on something already selected drags it; a press on anything else pans and selects only if the pointer never really moved (`CLICK_SLOP_PX`).
 The level is what you are looking at most of the time, so dragging it about has to be the cheapest gesture there is - and nudging geometry by accident, while reaching for the view, is the one editing mistake that leaves no trace on screen: it still looks like the level, and the level is different.
@@ -240,6 +243,47 @@ cuts one up and both its containment test and its buffer zone read a notch as so
 It used to re-centre on every write, which kept a polygon's origin its own centre of mass and made every corner drag a **move of the object inside its body**: the shape being dragged stayed put on screen while its placement slid by the centroid's own motion, so the inspector's `x`/`y` for it walked away from zero and a `matchCollision` prop - which copies the collision object's placement as well as its outline - walked across the level with them.
 Fitting a collision outline to the mesh it is being fitted *to* moved the mesh, which is the one thing that edit may not do.
 What the re-centring was for is still true and is answered from the outline instead: `shapeCentre` gives a shape's own centre of area (a polygon's centroid, a curve's stroke, a rect's or circle's origin), and `bodyCentroid` weighs the body's pieces at those points, so the point the editor turns a body about is still the one `mountPieces` mounts it at.
+
+## Waking lights: `+ Glow` and the awake preview
+
+A point light's panel has a `wake` field below `flicker` (canvas pixels like the reach, metres on disk; blank or 0 is a light that is always on), and with it set, `delay s`, `rise s` and `fall s` (0.05 steps, floored at 0, blank for the renderer's default).
+They are the fields of a **waking light** - see [**Waking lights**](lighting-and-surfaces.md#waking-lights).
+A spot shows none of them, and turning a waking light into a spot clears its `wake` with a notice in the status line, since the pool that serves waking lights is point lights.
+The `shadows` box greys out while `wake` is set: a waking light casts no shadow, and the authored flag is kept so turning the wake off gives it back.
+
+On the canvas the wake is a dashed ring in the light's colour, with longer dashes than the reach's, drawn at the distance itself rather than cut by `z`, because the trigger is measured on the gameplay plane; a round grip on its left drags it like the reach's grip on the right.
+The label says `wakes N`.
+
+**`+ Glow`** (beside `+ Light`) places a glowing mushroom with one click: one static body holding a solid purple cube (`GLOW_CUBE` 0.3 m square and deep, `GLOW_COLOR` `#8a3fd6`, glowing `GLOW_EMISSIVE` `#b070ff` at 2), the collision rect it mirrors (`matchCollision`), and a waking point light at its centre (colour `GLOW_EMISSIVE`, `range` 4 m, `intensity` 6, `wake` 3 m, `wakeDelay` 0.25, `wakeRise` 0.6, `wakeFall` 1.5).
+It goes through the same loader a level and a paste come in by (`glowModel`), so it is exactly what a file holding that body loads as, and it is one body, so the outliner shows one row and it drags as one.
+Those numbers are editor defaults in `editor/model.ts`, not format defaults, and all of them wait on a play; a mushroom on a far wall can lose its collision object.
+The cube is a stand-in until the mushroom model exists, and nothing about the light changes when it does.
+
+**The 3D preview shows every waking light AWAKE** (`Scene3D.setGlowPreview(true)`, `LightRig.previewAwake`): each source is held at full without stepping its state, and the pool is spent nearest the view's centre instead of the ball.
+There is nobody in the editor's scene to wake anything, and an author has to see what a mushroom lights before anyone does.
+**▶ Test** turns the preview off, so a test wakes them for the ball exactly as the game does.
+
+## Fireflies: `+ Fireflies`
+
+A point light's panel has a `fireflies` field above `wake` (a whole count, blank or 0 for an ordinary light, capped at `FIREFLY_MAX`).
+With it set the light is a **firefly swarm** (see [Fireflies](lighting-and-surfaces.md#fireflies)): `wake` is where the swarm notices the ball (blank = `DEFAULT_FIREFLY_NOTICE`, shown as the placeholder), the three wake times go away since a swarm is never dark, and `shadows` greys out as for a waking light.
+Turning a swarm into a spot clears `fireflies` and `wake` with a notice in the status line.
+On the canvas the notice distance is the same dashed ring and grip as a waking light's, drawn at the default when `wake` is blank, and the label says `N fireflies · notice D`.
+
+**`+ Fireflies`** (beside `+ Glow`) places a swarm with one click: a static body holding only the swarm's light, `FIREFLY_COUNT` (12) motes, `wake` `FIREFLY_NOTICE` (2.5 m), `z` `FIREFLY_HOME_Z` (0.5 m) so the knot hangs in the air in front of the rock, and the firefly's own colour, intensity and reach left to the renderer's defaults.
+There is no collision: the ball flies through fireflies.
+
+In the editor's 3D view a swarm hovers at its home: the ball drawn at the spawn is not a player, and the preview (`LightRig.previewAwake`) hands no ball to the swarms - before 2026-09-25 it did, and a swarm authored within notice of the spawn flew off its home to hover by it; **▶ Test** has them follow the ball as the game does.
+
+### Firefly paths: the `fireflies` layer
+
+A swarm can be given a route of its own instead of the camera paths: a **firefly path** (see [Fireflies](lighting-and-surfaces.md#fireflies)), authored on the `fireflies` layer (between `camera` and `notes`) with **`+ Path`**, which draws it exactly as a camera path is drawn and edited - click out the nodes start to end, Enter to finish, drag a node or its round grips, an edge midpoint to insert one, Alt+click to remove one, and `Reverse` / `Smooth` / `Sharpen` in its panel.
+It carries no framing and no keys, so its panel has only the placement, those three actions, and which swarms follow it.
+Each path is numbered (`firefly path N`, minted on draw, kept through a save, fresh on a duplicate), and a swarm's panel has a `path` field under `fireflies` that takes that number; blank (the `camera` placeholder) is the camera paths.
+A number naming no path is said under the field, since in play it silently reads as blank.
+Duplicating a swarm keeps its `path`; duplicating a swarm together with its path points the copy at the copied path.
+
+On the canvas a firefly path is a dashed line in the firefly's colour with the camera path's direction arrows, a ring at its START (where a swarm that has left the player waits) and a bar across its END (where it leaves them), labelled at the start with its number and how many swarms follow it; a swarm's label gains `path N`.
 
 ## Conveyor belts
 
@@ -400,10 +444,11 @@ So the resize handles, the rubber band and the draw tools' previews all go with 
 
 **What does not go is what a click MEANS.**
 Those two were run together for as long as a pick was resolved on the plane by the 2D camera, and they are different questions: a ray answers for the models (`Scene3D.pick`) and meets the gameplay plane for everything resolved against it (`unprojectToPlane`, `canvasWorld` in `editor.ts`), both at any angle.
-So bodies and objects are **selected in a turned view exactly as they are head on** - the drill-in cycle, Shift, Alt, the outliner - and dragging one carries it along the plane, and the **transform gizmo** the pick puts on it is in the scene and works from any angle.
+So bodies and objects are **selected in a turned view exactly as they are head on** - the drill-in cycle, Shift, Alt, the outliner - and dragging one carries it along the plane it is drawn in (a light at its `z`, a prop at its depth, so it stays under the pointer), and the **transform gizmo** the pick puts on it is in the scene and works from any angle.
 That pairing is the point of the orbit: turn the view to see the depth, then drag the blue arrow to author it, on the thing you turned the view to look at.
 `unprojectToPlane` is `projectToView` backwards, and `cli render3d` asserts it as a round trip through three's own projection at a spread of orbits, plus that it is the 2D answer head on and is NOT it turned - an implementation that quietly returned the 2D answer passes the round trip at zero orbit and puts every turned-view click somewhere else.
 The one thing zoom gives up there is zooming about the cursor: the zoom is a dolly along the view direction rather than a scale about the screen, so the correction would want a ray through a camera that is not built until the frame is drawn, and a turned view zooms about its centre instead.
+The Visuals workspace does zoom about the cursor, because its camera is its own pose rather than the 2D camera, placed the moment a gesture moves it.
 
 Ctrl is on the orbit rather than on the pan because panning is how you get around a level and is wanted in every view, while orbiting is the rarer act and the one you come back from; with no scene to turn (the 2D view) Ctrl+middle simply pans like any other middle drag.
 
@@ -435,6 +480,19 @@ In the **2D view none of this applies**: there is no scene to ask, the outline i
 That is not a fallback but the same rule - the overlay picks and offers handles for exactly what it draws.
 An **orbited** view picks by exactly these rules (above): the ray answers for geometry as it does head on, and the collision shapes, lights, regions and notes it shares the canvas with are resolved against the plane through `unprojectToPlane` rather than through the 2D camera, so the two halves of a pick agree about where the pointer is aimed at any angle.
 What it does not offer there is the plane HANDLES, for the reason this section gives about geometry objects and the orbit section gives about everything else: a handle that is not drawn must not be grabbable either.
+
+## Workspaces: Level and Visuals
+
+The toolbar opens with a switcher, **Level** and **Visuals** (**W** toggles).
+Everything in this document is the **Level** workspace: the editor driven by the 2D camera, with the overlay on top.
+The **Visuals** workspace ([editor-visuals](editor-visuals.md)) is the same editor - the model, undo, the selection, the layer, the tool and the inspector carry across a switch - driven by a free 3D camera navigated Blender's way (middle drag orbits, Shift + middle or right drag pans, the wheel dollies toward what is under the pointer, **F** frames, **Home** faces the plane), with the overlay's marks drawn into the scene as guides instead: collision outlines, light icons and rings, the spawn, regions, paths, notes, the selected polygon's handles and tool drafts, each carrying a guide tag that `Scene3D.pick` returns beside the models.
+It is what the turned view's missing overlay became: where a turned Level view only selects and moves, Visuals edits corners, draws with the plane tools, places props and drops them on surfaces, from any angle.
+Each workspace keeps its own view, and `▶ Test` returns to the one it left.
+Visuals also offers two tools of its own, **+ Rock** (a boulder generated to fit a collision outline) and **+ Mushrooms** (a patch grown inside a loop painted on a model's surface), each a geometry object with a `generator` block and a schema-built panel, generated by Python and headless Blender behind the dev server ([generators](generators.md); `bun run generators:setup` once per machine).
+**+ Chain** and **+ Vine** are Level-only.
+
+The one predicate the press handler asks is `inScene()` - the Visuals workspace, or the Level workspace turned - which says a press is resolved through the scene's camera rather than the 2D camera's scale and offset; where the two differ, each branch says which it is (see [Picking](editor-visuals.md#picking) there).
+**Home** resets the Level workspace's orbit as `⟲ Reset view` does.
 
 ## The lens
 
@@ -478,7 +536,10 @@ The two features are a pair - orbit to see the depth, drag the blue arrow to aut
 
 **The handles sit at the depth the object is DRAWN at**, which is `itemDepth` and not the authored `offsetZ`: a geometry object authoring no depth is drawn on the gameplay plane if its body collides and at `DECOR_Z` if it does not.
 Read as a plain 0, the whole gizmo stood 35 cm in front of every piece of decoration it was attached to - invisible head on, and the first thing you see when the view is turned, which is the view it exists for.
-A move is then written as a CHANGE against where the handles started rather than as the pose's own z, or nudging a backdrop sideways would stamp that fallback into the file as an authored `off z` nobody asked for.
+A move that does not go through z then leaves the field alone rather than writing the pose's own z, or nudging a backdrop sideways would stamp that fallback into the file as an authored `off z` nobody asked for.
+A move that does go through z writes the new depth OUTRIGHT (`offsetZAfterMove` in `editor/model.ts`), because once written `offsetZ` is where the object is rather than a change from where it fell back to.
+Until 2026-09-25 it wrote the displacement into the field as a change, so the first touch of the blue arrow on decoration drawn at `DECOR_Z` jumped it 35 cm toward the camera (found by the Visuals workspace's drop on surface, which goes through the same handler); a group drag had the same fault through its members' authored depths, and a group drag that went out through z and came back left its members where they had been mid-drag.
+The one depth the field cannot hold is exactly 0 on a body that collides with nothing, which the format reads as unset.
 
 **The gizmo never touches the model.** It moves a proxy object and the editor reads that proxy and writes the model, which is what lets it survive the scene being rebuilt from scratch on every model revision - that is, on every drag. A handle attached to a visual is attached to an object that is disposed a frame later, and re-attaching per frame is a gesture that cannot survive its own effect.
 

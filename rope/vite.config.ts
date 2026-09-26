@@ -18,11 +18,13 @@ import {
 } from "node:fs";
 import { execSync } from "node:child_process";
 import { gunzipSync } from "node:zlib";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { levelFileHash, treeStamp, type TreeStamp } from "./src/sim/treeStamp";
 import { DEFAULT_LEVEL, LEVELS } from "./src/level/registry";
 import type { RawLevelData } from "./src/level/levelFormat";
 import { levelStoredFiles } from "./src/render3d/levelAssets";
+import { GENERATED_MESH_FILE, GENERATED_ROOT } from "./src/render3d/generated";
+import { generatorService } from "./src/server/generators/service";
 
 // The identity of the SOURCE this server is serving, exposed to the app as
 // `virtual:tree-stamp` and stamped into every exported bundle.
@@ -333,27 +335,27 @@ function editorRoute(): Plugin {
 // list: the editor and `shot.html` build scenes too, but neither is a page
 // anybody waits on, and a preload for a level they may not open would be a
 // download for nothing.
-function storeScript(): Plugin {
-  // A file-backed level's data as it is ON DISK RIGHT NOW, rather than as it was
-  // when this config was loaded (see `LevelSpec.file`). The dev server does not
-  // restart on a level write any more - that restart was the editor's autosave
-  // cycling the server - and it is the one thing that used to keep this list in
-  // step with what the author is editing.
-  //
-  // A write is not atomic, so a read can land mid-write and get half a file;
-  // the compiled-in copy is the answer then, and is at worst as stale as the
-  // list used to be between restarts.
-  const levelData = (spec: { data: RawLevelData; file?: string }): RawLevelData => {
-    if (!spec.file) return spec.data;
-    try {
-      return JSON.parse(
-        readFileSync(join(import.meta.dirname, "levels", `${spec.file}.json`), "utf8"),
-      ) as RawLevelData;
-    } catch {
-      return spec.data;
-    }
-  };
+// A file-backed level's data as it is ON DISK RIGHT NOW, rather than as it was
+// when this config was loaded (see `LevelSpec.file`). The dev server does not
+// restart on a level write any more - that restart was the editor's autosave
+// cycling the server - and it is the one thing that used to keep the preload
+// list in step with what the author is editing.
+//
+// A write is not atomic, so a read can land mid-write and get half a file;
+// the compiled-in copy is the answer then, and is at worst as stale as the
+// list used to be between restarts.
+function levelData(spec: { data: RawLevelData; file?: string }): RawLevelData {
+  if (!spec.file) return spec.data;
+  try {
+    return JSON.parse(
+      readFileSync(join(import.meta.dirname, "levels", `${spec.file}.json`), "utf8"),
+    ) as RawLevelData;
+  } catch {
+    return spec.data;
+  }
+}
 
+function storeScript(): Plugin {
   // One table of files for every level, since levels share surfaces and this is
   // markup that ships on every page load. ~2 KB gzipped for the whole registry.
   const build = (): string => {
@@ -462,6 +464,58 @@ function storeScript(): Plugin {
   };
 }
 
+// GENERATED MESHES SHIP ONLY WHERE A LEVEL NAMES THEM. Vite copies all of
+// `public/` into `dist`, and `public/generated/` holds every rock and patch the
+// editor has ever made on this machine - every seed tried, every superseded
+// look, each beside a meta.json and (a patch) megabytes of input.json - so a
+// build left alone grows without limit. After the copy (vite copies `public/`
+// before it writes the bundle, and this runs once the bundle is written),
+// every generated directory no registered level's preload list names is
+// removed, and a named one keeps its mesh.glb alone.
+//
+// A fresh checkout (the deployed image's) has only what `assets:fetch` put
+// there, which is exactly these: the published meshes the levels name (see
+// `GENERATED_ASSETS`), so on a deploy this keeps everything and drops nothing.
+function generatedMeshesInBuild(): Plugin {
+  let outDir = "";
+  return {
+    name: "generated-meshes-in-build",
+    apply: "build",
+    configResolved(config) {
+      // `resolve`, not `join`: an `--outDir` given absolute stays absolute.
+      outDir = resolve(config.root, config.build.outDir);
+    },
+    writeBundle() {
+      const root = join(outDir, GENERATED_ROOT.slice(1));
+      if (!existsSync(root)) return;
+      const named = new Set<string>();
+      for (const spec of Object.values(LEVELS)) {
+        for (const f of levelStoredFiles(levelData(spec), spec.controller)) {
+          if (f.file.startsWith(`${GENERATED_ROOT}/`)) named.add(f.file);
+        }
+      }
+      let kept = 0;
+      let dropped = 0;
+      for (const kind of readdirSync(root)) {
+        const kindDir = join(root, kind);
+        for (const hash of readdirSync(kindDir)) {
+          const dir = join(kindDir, hash);
+          if (!named.has(`${GENERATED_ROOT}/${kind}/${hash}/${GENERATED_MESH_FILE}`)) {
+            rmSync(dir, { recursive: true, force: true });
+            dropped++;
+            continue;
+          }
+          for (const name of readdirSync(dir)) if (name !== GENERATED_MESH_FILE) rmSync(join(dir, name), { force: true });
+          kept++;
+        }
+        if (!readdirSync(kindDir).length) rmSync(kindDir, { recursive: true, force: true });
+      }
+      if (!readdirSync(root).length) rmSync(root, { recursive: true, force: true });
+      this.info(`generated meshes: ${kept} named by a level kept, ${dropped} dropped from ${outDir}`);
+    },
+  };
+}
+
 export default defineConfig({
   server: {
     port: 3100,
@@ -480,7 +534,19 @@ export default defineConfig({
       // editor holds the authoritative copy in memory and saves THROUGH
       // /api/levels, and the preload list re-reads the file off disk per page
       // load (see `storeScript`). Reload by hand to pick up a level edit.
-      ignored: ["**/levels/*.json", "**/public/generated-roots/**", "**/public/generated-boulders/**", "**/public/generated-dirt-moss/**", "**/public/generated-vines/**", "**/public/generated-mushrooms/**", "**/public/generated-grass/**", "**/public/generated-plants/**"],
+      ignored: [
+        "**/levels/*.json",
+        // Generated meshes land here while the editor is open; they are
+        // fetched by key, never imported, so a write must not reach HMR.
+        "**/public/generated/**",
+        "**/public/generated-roots/**",
+        "**/public/generated-boulders/**",
+        "**/public/generated-dirt-moss/**",
+        "**/public/generated-vines/**",
+        "**/public/generated-mushrooms/**",
+        "**/public/generated-grass/**",
+        "**/public/generated-plants/**",
+      ],
     },
     // The playtest store lives in serve.ts, not in Vite. With `bun run serve.ts`
     // beside the dev server, `?record=1` streams into it and /admin shows it.
@@ -523,5 +589,7 @@ export default defineConfig({
     levelApi(),
     prodReplays(),
     editorRoute(),
+    generatorService(),
+    generatedMeshesInBuild(),
   ],
 });

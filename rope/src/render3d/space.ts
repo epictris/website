@@ -179,30 +179,94 @@ export function isHeadOn(orbit: CameraOrbit): boolean {
 export type ViewProjection = "perspective" | "orthographic";
 export type ViewCamera = THREE.PerspectiveCamera | THREE.OrthographicCamera;
 
+// WHERE THE 3D CAMERA IS, stated on its own rather than as "wherever the 2D
+// camera puts it". Everything `syncCamera` derives from the 2D camera, the lens
+// and the orbit comes down to these five numbers, and a pose is what a host
+// holds when it wants a camera the 2D one cannot describe - the editor's
+// Visuals workspace, whose target may leave the gameplay plane (see
+// docs/render3d.md, "Free view pose").
+//
+// In THREE's frame (y up, +z toward the viewer), metres and radians.
+//
+// The size of the view is `halfHeight`, the world metres from the centre of the
+// frame to its top edge AT THE TARGET'S DEPTH, and not the camera's distance.
+// It is the quantity both lenses are sized by - the orthographic frustum is it
+// outright, and the perspective camera stands `halfHeight / tan(fov/2)` back -
+// so one number drives both to the bit, as the 2D camera's visible height does
+// today. It is also what a lens change should keep: a new focal length reframes
+// nothing and moves the camera, the rule a level's lens already follows.
+// `poseDistance` is the distance when a caller wants it.
+export interface ViewPose {
+  readonly target: { readonly x: number; readonly y: number; readonly z: number };
+  // Radians: yaw about +y (positive swings the camera out toward +x), pitch
+  // about the camera's right (positive raises it). Both zero is head-on.
+  readonly yaw: number;
+  readonly pitch: number;
+  // Metres, at the target's depth (see above). Positive.
+  readonly halfHeight: number;
+  // Degrees, vertical, as `SceneLens.fovYDeg`.
+  readonly fovYDeg: number;
+}
+
+// Metres from the camera to its target. Written as `cameraDistance` writes it,
+// operation for operation, so a pose taken from the 2D camera stands the camera
+// exactly where `syncCamera` always has.
+export function poseDistance(pose: ViewPose): number {
+  const fovY = (pose.fovYDeg * Math.PI) / 180;
+  return pose.halfHeight / Math.tan(fovY / 2);
+}
+
+// The pose the 2D camera, the level's lens and the editor's orbit describe:
+// the target at the frame's centre on the plane the lens frames (`zOffset`),
+// the view the size the zoom asks for. The orbit is carried as it is, unclamped,
+// so a pose from a turned view turns exactly as the turned view does.
+export function poseFromCamera(
+  camera: Camera,
+  lens: SceneLens = DEFAULT_LENS,
+  orbit: CameraOrbit = NO_ORBIT,
+): ViewPose {
+  return {
+    target: { x: camera.position.x, y: threeY(camera.position.y), z: lens.zOffset },
+    yaw: orbit.yaw,
+    pitch: orbit.pitch,
+    halfHeight: visibleHeightMetres(camera) / 2,
+    fovYDeg: lens.fovYDeg,
+  };
+}
+
 // Drive `threeCam` from the 2D camera. Called every rendered frame, before
 // drawing; the 2D camera has already been updated by the CameraController, so
 // the two are the same view by construction rather than by being kept in step.
-//
-// The camera's PLACEMENT is the same arithmetic for both lenses - an orthographic
-// camera is dollied to exactly the distance the perspective one would be, so it
-// clips the same scene and orbits about the same point - and only the projection
-// differs.
 //
 // The lens's `zOffset` moves the whole placement along z: the camera stands that
 // much nearer or further, looks at (and orbits about) the point that much off
 // the plane, and so frames the plane at `z = zOffset` exactly as the 2D view
 // frames the gameplay plane. At 0 it is the arithmetic it has always been.
+//
+// It is `poseFromCamera` then `applyPose`, and the split must change nothing:
+// `cli render3d` holds the composition to the bit against the arithmetic this
+// function used to do inline.
 export function syncCamera(
   threeCam: ViewCamera,
   camera: Camera,
   lens: SceneLens = DEFAULT_LENS,
   orbit: CameraOrbit = NO_ORBIT,
 ): void {
-  const x = camera.position.x;
-  const y = threeY(camera.position.y);
-  const z = lens.zOffset;
-  const dist = cameraDistance(camera, lens.fovYDeg);
-  const aspect = camera.viewportWidth / camera.viewportHeight;
+  applyPose(threeCam, poseFromCamera(camera, lens, orbit), camera.viewportWidth / camera.viewportHeight);
+}
+
+// Place `threeCam` at a pose. `aspect` is width over height of the viewport it
+// draws into, which a pose does not carry: it belongs to the canvas.
+//
+// The camera's PLACEMENT is the same arithmetic for both lenses - an orthographic
+// camera is dollied to exactly the distance the perspective one would be, so it
+// clips the same scene and orbits about the same point - and only the projection
+// differs.
+export function applyPose(threeCam: ViewCamera, pose: ViewPose, aspect: number): void {
+  const x = pose.target.x;
+  const y = pose.target.y;
+  const z = pose.target.z;
+  const dist = poseDistance(pose);
   // Only ever pushed OUT, so every camera that fitted inside the old constant
   // is drawn with exactly the depth range it always was.
   threeCam.far = Math.max(CAMERA_FAR, dist + z + CAMERA_FAR / 2);
@@ -210,21 +274,21 @@ export function syncCamera(
     // The frustum IS the 2D renderer's transform, read off the same visible
     // height the dolly distance comes from: no divide, so this holds at every
     // depth rather than only on the plane.
-    const halfH = visibleHeightMetres(camera) / 2;
+    const halfH = pose.halfHeight;
     const halfW = halfH * aspect;
     threeCam.left = -halfW;
     threeCam.right = halfW;
     threeCam.top = halfH;
     threeCam.bottom = -halfH;
   } else {
-    threeCam.fov = lens.fovYDeg;
+    threeCam.fov = pose.fovYDeg;
     threeCam.aspect = aspect;
   }
   // The head-on view is written out rather than reached through the orbit path
   // at zero, so the game's camera is the same arithmetic it has always been: a
   // `lookAt` that ought to produce the identity rotation is not a thing to take
   // on trust when every overlay in the project is aligned against it.
-  if (isHeadOn(orbit)) {
+  if (isHeadOn(pose)) {
     threeCam.position.set(x, y, z + dist);
     // Looking straight down -z keeps the gameplay plane parallel to the image
     // plane, which is what makes the alignment with the 2D overlay exact rather
@@ -237,12 +301,12 @@ export function syncCamera(
   // Orbited: the camera swings around the point it was looking at, at exactly
   // the dolly distance the zoom asks for, so turning the view neither zooms it
   // nor slides what it is centred on.
-  const pitch = Math.max(-MAX_ORBIT_PITCH, Math.min(MAX_ORBIT_PITCH, orbit.pitch));
+  const pitch = Math.max(-MAX_ORBIT_PITCH, Math.min(MAX_ORBIT_PITCH, pose.pitch));
   const cp = Math.cos(pitch);
   threeCam.position.set(
-    x + dist * Math.sin(orbit.yaw) * cp,
+    x + dist * Math.sin(pose.yaw) * cp,
     y + dist * Math.sin(pitch),
-    z + dist * Math.cos(orbit.yaw) * cp,
+    z + dist * Math.cos(pose.yaw) * cp,
   );
   threeCam.up.set(0, 1, 0);
   threeCam.lookAt(x, y, z);
@@ -270,10 +334,19 @@ const _hit = new THREE.Vector3();
 // Null where the ray never reaches the plane - behind the camera, or parallel to
 // it. Neither is reachable while the orbit's pitch is clamped short of the poles
 // (see `MAX_ORBIT_PITCH`), but a caller that gets one has no answer to give
-// rather than a wrong one.
-export function unprojectToPlane(cam: ViewCamera, x: number, y: number): Vec2 | null {
+// rather than a wrong one. Under the Visuals workspace's free pose the pitch is
+// clamped the same way, but the camera may stand BEHIND a plane it is asked
+// about (the target moved past it), and that is the case this answers null for.
+//
+// `z` asks about the plane that far off the gameplay plane instead (metres,
+// +z toward the viewer): an object drawn at a depth of its own - a primitive
+// pushed back by its `off z` - is edited on the plane it is drawn in.
+export function unprojectToPlane(cam: ViewCamera, x: number, y: number, z = 0): Vec2 | null {
   _ndc.set(x, y);
   _ray.setFromCamera(_ndc, cam);
+  // Not `-z`, which is -0 at the default and would be a different float from
+  // the constant every existing caller was answered against.
+  _plane.constant = z === 0 ? 0 : -z;
   if (!_ray.ray.intersectPlane(_plane, _hit)) return null;
   return new Vec2(_hit.x, threeY(_hit.y));
 }

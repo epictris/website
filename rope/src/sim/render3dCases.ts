@@ -22,16 +22,44 @@ import { Vec2 } from "../engine/vec2";
 import { VIEW_HEIGHT, VIEW_WIDTH } from "../render/viewport";
 import type { Camera } from "../render/camera";
 import {
+  applyPose,
+  CAMERA_FAR,
   cameraDistance,
   DEFAULT_LENS,
   focalLengthFromFov,
   FOV_Y_DEG,
+  isHeadOn,
   lensOf,
+  MAX_ORBIT_PITCH,
+  NO_ORBIT,
+  poseDistance,
+  poseFromCamera,
+  type CameraOrbit,
   type SceneLens,
+  type ViewCamera,
+  type ViewPose,
   projectToView,
   syncCamera,
+  threeY,
   unprojectToPlane,
+  visibleHeightMetres,
 } from "../render3d/space";
+import { dolly, frame, headOn, orbit, pan } from "../editor/visuals/viewControls";
+import { MIN_VIEW_DISTANCE, poseBasis, poseEye } from "../editor/visuals/viewPose";
+import { Guides, type GuideView } from "../editor/visuals/guides";
+import { guideTag, isGuideTag, SPAWN_GUIDE_ID, type GuideTag } from "../editor/visuals/tags";
+import {
+  draftSignature,
+  handleUnder,
+  itemsBox,
+  itemsUnder,
+  ORBIT_RADIANS_PER_PX,
+  VisualsWorkspace,
+  type WorkspaceScene,
+} from "../editor/visuals/workspace";
+import { SurfaceLoop } from "../editor/visuals/surfaceLoop";
+import { alignUp, surfacePlacement, upOf } from "../editor/visuals/surfaceDrop";
+import { ED_LAYERS, offsetZAfterMove, type EdLayer } from "../editor/model";
 import { cylinderSolid, extrudeOutline } from "../render3d/extrude";
 import { cloneWithPatches, isOrthographicMaterial } from "../render3d/projection";
 import {
@@ -50,12 +78,23 @@ import {
   TEXTURE_SETS,
 } from "../render3d/assets";
 import {
+  DEFAULT_LIGHT_COLOR,
+  DEFAULT_LIGHT_INTENSITY,
   DEFAULT_LIGHT_RANGE,
+  LIGHT_BUDGET,
   LIGHT_SHADOW_NEAR,
   LightRig,
 } from "../render3d/lights";
 import {
+  DEFAULT_FIREFLY_NOTICE,
+  FIREFLY_MAX,
+  FIREFLY_POOL,
+  Swarm,
+  swarmParams,
+} from "../render3d/fireflies";
+import {
   scaleLevelData,
+  scaleObject,
   isLightObject,
   type LevelData,
   isCollisionObject,
@@ -70,7 +109,17 @@ import {
   type SceneObjectData,
   type RawLevelData,
 } from "../level/levelFormat";
-import { BodyVisual, drawnObjects, mountVisual } from "../render3d/bodyVisuals";
+import { BodyVisual, drawnObjects, mountVisual, surfaceInstance } from "../render3d/bodyVisuals";
+import {
+  assignPool,
+  DEFAULT_WAKE_FALL,
+  DEFAULT_WAKE_RISE,
+  GLOW_POOL,
+  GlowState,
+  MAX_GLOW_STEP,
+  WAKE_HYSTERESIS,
+  wakeParams,
+} from "../render3d/glow";
 import {
   beltNearest,
   beltOutline,
@@ -116,12 +165,90 @@ import {
   placeGroup,
   type EdItem,
   type EdModel,
+  glowBody,
+  fireflyBody,
+  FIREFLY_COUNT,
+  FIREFLY_NOTICE,
+  GLOW_COLOR,
+  GLOW_CUBE,
+  GLOW_EMISSIVE,
+  GLOW_EMISSIVE_INTENSITY,
+  GLOW_INTENSITY,
+  GLOW_RANGE,
+  GLOW_WAKE,
+  GLOW_WAKE_DELAY,
+  GLOW_WAKE_FALL,
+  GLOW_WAKE_RISE,
 } from "../editor/model";
 import { lightPlaneReach } from "../editor/render";
 import { readClipboard, writeClipboard } from "../editor/clipboard";
-import { FOG_REFERENCE_DISTANCE, fogDensity } from "../render3d/environment";
+import {
+  EQUIRECT_SIZE,
+  equirectPixels,
+  FOG_REFERENCE_DISTANCE,
+  fogDensity,
+  skyInputs,
+} from "../render3d/environment";
+import { AVATAR_FOG, AVATAR_PROGRAM_KEY, AVATAR_WRAP, wearAvatar } from "../render3d/avatarSurface";
+import { beamFarRadius, beamRadiusAt, BEAM_SOURCE_RADIUS, seedDust } from "../render3d/beam";
+import { IRON_SURFACE } from "../render3d/assets";
+import { glowProp, patchGlow, stretch } from "../render3d/propGlow";
 import { HDRI_ASSETS, hdriNames } from "../render3d/assets";
 import { PIXELS_PER_METER, PX } from "../engine/units";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { canonicalString, generatedKey, generatedMeshAsset, parseGeneratedKey } from "../render3d/generated";
+import { GENERATED_ASSETS, generatedMeta, generatedReleaseName } from "../render3d/generatedMeta";
+import { levelStoredFiles } from "../render3d/levelAssets";
+import {
+  canonicalParams,
+  expectedKey,
+  GENERATOR_KINDS,
+  GENERATOR_SCHEMAS,
+  generatorInput,
+  isStale,
+  itemLookup,
+  mergeDefaults,
+  scaleParams,
+  stripDefaults,
+  validateParams,
+  type GeneratorKind,
+} from "../editor/visuals/paramSchema";
+import { cloneGenerator, cloneVisual, remapPatchHosts } from "../editor/model";
+import { paramSpec, wantedKey, type ParamValues } from "../editor/visuals/paramSchema";
+import {
+  frameOf,
+  loopPointToWorld,
+  patchMatrix,
+  selectSurface,
+  soupInFrame,
+  worldToLoopPoint,
+} from "../editor/visuals/surfacePatch";
+import {
+  existingRock,
+  landMesh,
+  MIN_PATCH_EXTENT,
+  objectPose,
+  patchFor,
+  refitPatch,
+  rockFor,
+  rockSource,
+} from "../editor/visuals/generatorEdits";
+import {
+  clampParam,
+  generatorBadge,
+  generatorStatus,
+  hexOfLinear,
+  linearOfHex,
+  nextSeedParams,
+  paramIssues,
+  paramLabel,
+  paramsPayload,
+  parseParamsPayload,
+  withParam,
+} from "../editor/visuals/generatorPanel";
+import { GeneratorJobs, missingTools, POLL_MISSES, type Fetcher, type Job } from "../editor/visuals/jobs";
 
 export interface CaseResult {
   name: string;
@@ -533,6 +660,758 @@ function orthographicView(): CaseResult[] {
       name: `orthographic: depth does not move a point on screen (${name})`,
       pass: spread <= PIXEL_TOL && perspShift > 1,
       detail: `ortho spread ${spread.toExponential(2)} px over 20 m of depth, perspective ${perspShift.toFixed(1)} px`,
+    });
+  }
+  return out;
+}
+
+// `syncCamera` exactly as it was before the pose was factored out of it
+// (`ViewPose`, `poseFromCamera`, `applyPose`), kept here as the reference the
+// factored version is held to BIT FOR BIT. Every overlay in the project is
+// aligned against the camera this built, so "the same to a tolerance" is not
+// the claim: a float's worth of drift is a change to every level's framing.
+function legacySyncCamera(
+  threeCam: ViewCamera,
+  camera: Camera,
+  lens: SceneLens = DEFAULT_LENS,
+  orbit: CameraOrbit = NO_ORBIT,
+): void {
+  const x = camera.position.x;
+  const y = threeY(camera.position.y);
+  const z = lens.zOffset;
+  const dist = cameraDistance(camera, lens.fovYDeg);
+  const aspect = camera.viewportWidth / camera.viewportHeight;
+  threeCam.far = Math.max(CAMERA_FAR, dist + z + CAMERA_FAR / 2);
+  if (threeCam instanceof THREE.OrthographicCamera) {
+    const halfH = visibleHeightMetres(camera) / 2;
+    const halfW = halfH * aspect;
+    threeCam.left = -halfW;
+    threeCam.right = halfW;
+    threeCam.top = halfH;
+    threeCam.bottom = -halfH;
+  } else {
+    threeCam.fov = lens.fovYDeg;
+    threeCam.aspect = aspect;
+  }
+  if (isHeadOn(orbit)) {
+    threeCam.position.set(x, y, z + dist);
+    threeCam.rotation.set(0, 0, 0);
+    threeCam.updateProjectionMatrix();
+    return;
+  }
+  const pitch = Math.max(-MAX_ORBIT_PITCH, Math.min(MAX_ORBIT_PITCH, orbit.pitch));
+  const cp = Math.cos(pitch);
+  threeCam.position.set(
+    x + dist * Math.sin(orbit.yaw) * cp,
+    y + dist * Math.sin(pitch),
+    z + dist * Math.cos(orbit.yaw) * cp,
+  );
+  threeCam.up.set(0, 1, 0);
+  threeCam.lookAt(x, y, z);
+  threeCam.updateProjectionMatrix();
+}
+
+// Every number a camera is drawn and picked through.
+function cameraBits(c: ViewCamera): number[] {
+  c.updateMatrixWorld(true);
+  const out = [
+    ...c.position.toArray(),
+    ...c.quaternion.toArray(),
+    ...c.up.toArray(),
+    c.near,
+    c.far,
+    ...c.projectionMatrix.elements,
+    ...c.matrixWorld.elements,
+  ];
+  if (c instanceof THREE.OrthographicCamera) out.push(c.left, c.right, c.top, c.bottom);
+  else out.push(c.fov, c.aspect);
+  return out;
+}
+
+function newViewCamera(ortho: boolean): ViewCamera {
+  return ortho
+    ? new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 1000)
+    : new THREE.PerspectiveCamera(FOV_Y_DEG, VIEW_WIDTH / VIEW_HEIGHT, 0.1, 1000);
+}
+
+// A fresh camera placed at a pose, matrices current, as `Scene3D.render`
+// leaves its cameras before a pick.
+function posedCamera(pose: ViewPose, aspect: number, ortho = false): ViewCamera {
+  const c = newViewCamera(ortho);
+  applyPose(c, pose, aspect);
+  c.updateMatrixWorld(true);
+  return c;
+}
+
+// THE VISUALS WORKSPACE'S VIEW (plans/visuals-workspace.md, Phase 1).
+//
+// The workspace holds a camera pose of its own and navigates it by pure
+// functions (`editor/visuals/viewControls.ts`); the Level workspace's camera
+// is now that same pose derived from the 2D camera. So the first claim is that
+// the derivation changed nothing, to the bit, and the rest are the promise
+// each gesture makes - asserted against three's own projection of the camera
+// the pose builds, not against the pose's arithmetic, so a sign error in the
+// gesture and the same one in its helper cannot agree with each other.
+function visualsView(): CaseResult[] {
+  const out: CaseResult[] = [];
+  const placements: Array<{ name: string; cam: Camera; lens: SceneLens }> = [
+    { name: "origin", cam: camera(0, 0, 2), lens: DEFAULT_LENS },
+    { name: "off-centre", cam: camera(13.5, -7.25, 2), lens: DEFAULT_LENS },
+    { name: "zoomed out through 85 mm", cam: camera(-40.3, 12.7, 0.35), lens: lensOf({ focalLength: 85 }) },
+    { name: "zoomed in with a z offset", cam: camera(3.3, 90.1, 7.5), lens: { fovYDeg: FOV_Y_DEG, zOffset: 1.5 } },
+    {
+      name: "an editor window through 24 mm",
+      cam: { position: new Vec2(-2.2, -5.9), zoom: 1.3, viewportWidth: 1283, viewportHeight: 771 },
+      lens: lensOf({ focalLength: 24, zOffset: -0.8 }),
+    },
+  ];
+  // Head on, turned, and turned past the pole (the clamp is part of the camera).
+  const orbits: CameraOrbit[] = [NO_ORBIT, { yaw: 0.45, pitch: 0.2 }, { yaw: -2.6, pitch: 1.6 }];
+  let compared = 0;
+  const mismatches: string[] = [];
+  for (const { name, cam, lens } of placements) {
+    for (const o of orbits) {
+      for (const ortho of [false, true]) {
+        const want = newViewCamera(ortho);
+        legacySyncCamera(want, cam, lens, o);
+        const bits = cameraBits(want);
+        const composed = newViewCamera(ortho);
+        syncCamera(composed, cam, lens, o);
+        const posed = newViewCamera(ortho);
+        applyPose(posed, poseFromCamera(cam, lens, o), cam.viewportWidth / cam.viewportHeight);
+        const tries: Array<[string, ViewCamera]> = [
+          ["syncCamera", composed],
+          ["applyPose(poseFromCamera)", posed],
+        ];
+        // The workspace's Home is `headOn`, which must be the head-on camera.
+        if (isHeadOn(o)) {
+          const home = newViewCamera(ortho);
+          applyPose(home, headOn(cam, lens), cam.viewportWidth / cam.viewportHeight);
+          tries.push(["headOn", home]);
+        }
+        for (const [how, c] of tries) {
+          compared++;
+          const got = cameraBits(c);
+          const i = got.findIndex((v, k) => !Object.is(v, bits[k]));
+          if (i >= 0 || got.length !== bits.length) {
+            mismatches.push(`${how} ${name} yaw ${o.yaw} ${ortho ? "ortho" : "persp"}: [${i}] ${got[i]} vs ${bits[i]}`);
+          }
+        }
+      }
+    }
+  }
+  out.push({
+    name: "visuals: a pose from the 2D camera is today's camera to the bit (5 placements, 3 orbits, both lenses)",
+    pass: mismatches.length === 0 && compared === 5 * 3 * 2 * 2 + 5 * 2,
+    detail: mismatches.length ? mismatches.slice(0, 3).join("; ") : `${compared} cameras identical in every number`,
+  });
+
+  const aspect = VIEW_WIDTH / VIEW_HEIGHT;
+  const ndc = (c: ViewCamera, p: { x: number; y: number; z: number }): THREE.Vector3 =>
+    new THREE.Vector3(p.x, p.y, p.z).project(c);
+  // A pose the Level workspace cannot express: the target 1.7 m behind the
+  // gameplay plane, turned both ways.
+  const free: ViewPose = { target: { x: 4.1, y: -2.3, z: -1.7 }, yaw: 0.7, pitch: 0.35, halfHeight: 3.2, fovYDeg: FOV_Y_DEG };
+
+  // The pose's own geometry is the camera `applyPose` builds.
+  {
+    let worst = 0;
+    for (const p of [free, { ...free, yaw: -2.2, pitch: -0.9 }, { ...free, yaw: 0, pitch: 0 }]) {
+      const c = posedCamera(p, aspect);
+      const eye = poseEye(p);
+      const b = poseBasis(p);
+      const e = c.matrixWorld.elements;
+      const axes: Array<[{ x: number; y: number; z: number }, number]> = [
+        [b.right, 0],
+        [b.up, 4],
+        [b.back, 8],
+      ];
+      worst = Math.max(worst, Math.abs(eye.x - c.position.x), Math.abs(eye.y - c.position.y), Math.abs(eye.z - c.position.z));
+      for (const [v, o] of axes) {
+        worst = Math.max(worst, Math.abs(v.x - e[o]!), Math.abs(v.y - e[o + 1]!), Math.abs(v.z - e[o + 2]!));
+      }
+    }
+    out.push({
+      name: "visuals: the pose's eye and axes are the camera applyPose places",
+      pass: worst <= 1e-12,
+      detail: `worst ${worst.toExponential(2)}`,
+    });
+  }
+
+  // ORBIT keeps the target at the centre of the frame and the camera at its
+  // distance, and clamps the pitch as the Level workspace's orbit does.
+  {
+    let worstCentre = 0;
+    let worstDist = 0;
+    const d0 = poseDistance(free);
+    for (const [dy, dp] of [[0.3, 0.1], [-1.4, -0.6], [2.9, 0.05], [0, -0.3]] as const) {
+      const turned = orbit(free, dy, dp);
+      const c = posedCamera(turned, aspect);
+      const q = ndc(c, turned.target);
+      worstCentre = Math.max(worstCentre, Math.abs(q.x), Math.abs(q.y));
+      worstDist = Math.max(worstDist, Math.abs(c.position.distanceTo(new THREE.Vector3(free.target.x, free.target.y, free.target.z)) - d0));
+    }
+    const pole = orbit(free, 0, 10);
+    out.push({
+      name: "visuals: orbit keeps the target's screen position and the distance, and clamps the pitch",
+      pass: worstCentre <= 1e-9 && worstDist <= 1e-9 && pole.pitch === MAX_ORBIT_PITCH,
+      detail: `target off centre by ${worstCentre.toExponential(2)} ndc, distance by ${worstDist.toExponential(2)} m, pitch at the pole ${pole.pitch.toFixed(4)}`,
+    });
+  }
+
+  // PAN carries the grabbed point with the pointer: head on, a point ON THE
+  // GAMEPLAY PLANE (the target is on it, so it is at the target's depth); turned
+  // and off the plane, a point at the target's depth, through both lenses.
+  {
+    const from = { x: 0.31, y: -0.42 };
+    const to = { x: -0.18, y: 0.27 };
+    let worst = 0;
+    const flat = poseFromCamera(camera(13.5, -7.25, 2));
+    const c0 = posedCamera(flat, aspect);
+    const grabbed = unprojectToPlane(c0, from.x, from.y)!;
+    const c1 = posedCamera(pan(flat, aspect, from, to), aspect);
+    const q = ndc(c1, { x: grabbed.x, y: threeY(grabbed.y), z: 0 });
+    worst = Math.max(worst, Math.abs(q.x - to.x), Math.abs(q.y - to.y));
+    for (const ortho of [false, true]) {
+      const { right, up } = poseBasis(free);
+      const u = from.x * free.halfHeight * aspect;
+      const v = from.y * free.halfHeight;
+      const t = free.target;
+      const p = { x: t.x + right.x * u + up.x * v, y: t.y + right.y * u + up.y * v, z: t.z + right.z * u + up.z * v };
+      const before = ndc(posedCamera(free, aspect, ortho), p);
+      const after = ndc(posedCamera(pan(free, aspect, from, to), aspect, ortho), p);
+      worst = Math.max(worst, Math.abs(before.x - from.x), Math.abs(before.y - from.y));
+      worst = Math.max(worst, Math.abs(after.x - to.x), Math.abs(after.y - to.y));
+    }
+    out.push({
+      name: "visuals: pan keeps the grabbed point under the pointer",
+      pass: worst <= 1e-9,
+      detail: `worst ${worst.toExponential(2)} ndc`,
+    });
+  }
+
+  // DOLLY toward a point keeps that point where it is on screen (it is a zoom
+  // about the cursor), moves the eye along the ray through it, and never
+  // through it - clamped at the near limit, the point is still in front.
+  {
+    let worstScreen = 0;
+    let worstRay = 0;
+    let clamped = true;
+    for (const ortho of [false, true]) {
+      const c0 = posedCamera(free, aspect, ortho);
+      const hitSim = unprojectToPlane(c0, 0.3, -0.2)!;
+      const hit = { x: hitSim.x, y: threeY(hitSim.y), z: 0 };
+      const before = ndc(c0, hit);
+      for (const factor of [0.5, 1.7, 1e-6]) {
+        const after = dolly(free, hit, factor);
+        const c1 = posedCamera(after, aspect, ortho);
+        const q = ndc(c1, hit);
+        worstScreen = Math.max(worstScreen, Math.abs(q.x - before.x), Math.abs(q.y - before.y));
+        if (!ortho) {
+          // The old eye, the new eye and the point are on one line.
+          const a = new THREE.Vector3().subVectors(c0.position, new THREE.Vector3(hit.x, hit.y, hit.z));
+          const b = new THREE.Vector3().subVectors(c1.position, new THREE.Vector3(hit.x, hit.y, hit.z));
+          worstRay = Math.max(worstRay, a.clone().normalize().cross(b.clone().normalize()).length());
+          if (b.dot(a) <= 0) clamped = false;
+        }
+        if (factor === 1e-6) {
+          clamped &&= Math.abs(poseDistance(after) - MIN_VIEW_DISTANCE) <= 1e-12 && q.z > -1 && q.z < 1;
+        }
+      }
+    }
+    out.push({
+      name: "visuals: dolly keeps the point under the pointer on its ray, and never passes it",
+      pass: worstScreen <= 1e-9 && worstRay <= 1e-9 && clamped,
+      detail: `screen drift ${worstScreen.toExponential(2)} ndc, off the ray ${worstRay.toExponential(2)}, clamped ${clamped}`,
+    });
+  }
+
+  // FRAME puts a box's centre at the centre of the frame and all of it in it.
+  {
+    const box = { min: { x: -3, y: 1, z: -2 }, max: { x: 5, y: 4.5, z: 0.5 } };
+    const framed = frame(free, box, aspect);
+    const c = posedCamera(framed, aspect);
+    let inside = true;
+    for (const x of [box.min.x, box.max.x]) {
+      for (const y of [box.min.y, box.max.y]) {
+        for (const z of [box.min.z, box.max.z]) {
+          const q = ndc(c, { x, y, z });
+          inside &&= Math.abs(q.x) < 1 && Math.abs(q.y) < 1;
+        }
+      }
+    }
+    const centre = ndc(c, { x: 1, y: 2.75, z: -0.75 });
+    out.push({
+      name: "visuals: frame centres a box and holds all of it",
+      pass: inside && Math.abs(centre.x) <= 1e-9 && Math.abs(centre.y) <= 1e-9,
+      detail: `corners inside ${inside}, centre at (${centre.x.toExponential(1)}, ${centre.y.toExponential(1)})`,
+    });
+  }
+
+  // UNPROJECT under a free pose: a point drawn on the gameplay plane, or on a
+  // plane `z` off it, comes back as itself - which is what every plane click
+  // in the workspace stands on.
+  {
+    let worst = 0;
+    for (const ortho of [false, true]) {
+      const c = posedCamera(free, aspect, ortho);
+      for (const z of [0, 1.2, -0.6]) {
+        for (const p of [new Vec2(4.1, 2.3), new Vec2(7.9, 0.4), new Vec2(1.2, 5.5)]) {
+          const q = ndc(c, { x: p.x, y: threeY(p.y), z });
+          const back = unprojectToPlane(c, q.x, q.y, z);
+          worst = Math.max(worst, back ? back.sub(p).length() : Infinity);
+        }
+      }
+    }
+    out.push({
+      name: "visuals: a screen point un-projects onto the plane it was drawn from under a free pose",
+      pass: worst <= 1e-9,
+      detail: `worst round trip ${worst.toExponential(2)} m`,
+    });
+  }
+  return out;
+}
+
+// THE GUIDES (`editor/visuals/guides.ts`): what the workspace draws into the
+// scene for a small model, counted by the tags the picks will come back with,
+// and one pick of each kind run through a real raycast. Headless: three's fat
+// lines and the data-texture sprites need no DOM.
+function visualsGuides(): CaseResult[] {
+  const out: CaseResult[] = [];
+  const model = modelFromDisk({
+    player: { x: -600, y: -300, radius: 20 },
+    bodies: [
+      { kind: "static", x: 0, y: 0, rot: 0, shape: { kind: "rect", w: 400, h: 60 } },
+      {
+        kind: "static",
+        x: 300,
+        y: -200,
+        rot: 0,
+        objects: [
+          {
+            type: "collision",
+            shape: {
+              kind: "poly",
+              verts: [
+                { x: -60, y: -40 },
+                { x: 60, y: -40 },
+                { x: 80, y: 30 },
+                { x: 0, y: 10 },
+                { x: -70, y: 40 },
+              ],
+            },
+          },
+        ],
+      },
+      {
+        kind: "static",
+        x: -300,
+        y: -150,
+        rot: 0,
+        objects: [{ type: "light", range: 300, wake: 120, z: 40 }],
+      },
+    ],
+  } as RawLevelData);
+  const poly = model.items.find((i) => i.shape.kind === "poly")!;
+  const rect = model.items.find((i) => i.object === "collision" && i.shape.kind === "rect")!;
+  const light = model.items.find((i) => i.object === "light")!;
+  const all = new Set<EdLayer>(ED_LAYERS);
+  const view = (over: Partial<GuideView> = {}): GuideView => ({
+    model,
+    rev: 1,
+    selectedIds: new Set([poly.id]),
+    selectedBodyIds: new Set(),
+    selectedVerts: new Set([1]),
+    visibleLayers: all,
+    lockedLayers: new Set(),
+    ...over,
+  });
+  const guides = new Guides();
+  const rebuilt = guides.sync(view());
+  const again = guides.sync(view());
+  const tags = guides.tags();
+  const count = (g: GuideTag["guide"], id?: number): number =>
+    tags.filter((t) => t.guide === g && (id === undefined || t.id === id)).length;
+  const vertIdx = tags.filter((t) => t.guide === "vertex").map((t) => t.index);
+  const vertexSprites = guides.named("vertex") as THREE.Sprite[];
+  const pickedLooks = new Set(vertexSprites.map((s) => s.material)).size;
+  const collisions = model.items.filter((i) => i.object === "collision").length;
+  out.push({
+    name: "visuals: the guides of a small model - an outline per collision object, the selected polygon's corners and midpoints, a light's icon and rings, the spawn",
+    pass:
+      rebuilt &&
+      !again &&
+      count("outline") === collisions &&
+      count("outline", rect.id) === 1 &&
+      count("vertex", poly.id) === 5 &&
+      vertIdx.join(",") === "0,1,2,3,4" &&
+      count("midpoint", poly.id) === 5 &&
+      pickedLooks === 2 &&
+      count("light", light.id) === 1 &&
+      guides.named("light-icon").length === 1 &&
+      guides.named("light-reach").length === 1 &&
+      guides.named("light-wake").length === 1 &&
+      guides.named("light-stalk").length === 1 &&
+      count("spawn", SPAWN_GUIDE_ID) === 1 &&
+      tags.every(isGuideTag),
+    detail: `rebuilt ${rebuilt}, rebuilt again unchanged ${again}; outlines ${count("outline")} of ${collisions}, vertices ${count("vertex", poly.id)} [${vertIdx.join(",")}] in ${pickedLooks} looks, midpoints ${count("midpoint", poly.id)}, light icons ${count("light", light.id)} with reach/wake/stalk ${guides.named("light-reach").length}/${guides.named("light-wake").length}/${guides.named("light-stalk").length}, spawn ${count("spawn", SPAWN_GUIDE_ID)}`,
+  });
+
+  // A hidden layer draws nothing; a locked one draws and answers no pick; no
+  // selection, no handles.
+  guides.sync(view({ visibleLayers: new Set<EdLayer>(["camera", "fireflies", "notes"]) }));
+  const hidden = guides.tags().length + guides.named("outline").length;
+  guides.sync(view({ lockedLayers: new Set<EdLayer>(["scene"]) }));
+  const lockedTags = guides.tags().length;
+  const lockedDrawn = guides.named("outline").length;
+  guides.sync(view({ selectedIds: new Set() }));
+  const unselected = guides.tags().filter((t) => t.guide === "vertex" || t.guide === "midpoint").length;
+  out.push({
+    name: "visuals: guides follow the layers - hidden draws nothing, locked draws but is not picked - and handles follow the selection",
+    pass: hidden === 0 && lockedTags === 0 && lockedDrawn === collisions && unselected === 0,
+    detail: `hidden ${hidden} objects, locked ${lockedDrawn} outlines with ${lockedTags} tags, handles with nothing selected ${unselected}`,
+  });
+
+  // A PICK through a real raycast, as `Scene3D.pick` casts it: the selected
+  // polygon's corner under its own pixel, and the rect's outline under a point
+  // on its top edge, from a turned view.
+  //
+  // Both lenses, since a pixel-sized sprite is sized by different arithmetic
+  // through each (see `Guides.update`), and a handle a few pixels off the
+  // corner it is drawn at is the one kind of wrong a picture does not show.
+  guides.sync(view());
+  const pose: ViewPose = { ...poseFromCamera(camera(1, -1, 2)), yaw: 0.35, pitch: 0.25 };
+  const aspect = VIEW_WIDTH / VIEW_HEIGHT;
+  const corner = poly.pos.add((poly.shape as { verts: Vec2[] }).verts[2]!);
+  const verdicts: string[] = [];
+  let picksOk = true;
+  for (const ortho of [false, true]) {
+    const cam = posedCamera(pose, aspect, ortho);
+    guides.setResolution(VIEW_WIDTH, VIEW_HEIGHT);
+    guides.update(cam, VIEW_HEIGHT);
+    guides.group.updateMatrixWorld(true);
+    const ray = new THREE.Raycaster();
+    // Pointer at `p`, nudged `dx` view pixels right.
+    const pickAt = (p: Vec2, dx = 0): GuideTag[] => {
+      const q = new THREE.Vector3(p.x, threeY(p.y), 0).project(cam);
+      ray.setFromCamera(new THREE.Vector2(q.x + (dx * 2) / VIEW_WIDTH, q.y), cam);
+      return ray
+        .intersectObject(guides.group, true)
+        .map((h) => h.object.userData["pickTag"] as unknown)
+        .filter(isGuideTag);
+    };
+    const isCorner = (t: GuideTag): boolean => t.guide === "vertex" && t.id === poly.id && t.index === 2;
+    const atCorner = pickAt(corner);
+    // Inside the 10 px sprite, and just outside it.
+    const inside = pickAt(corner, 4).some(isCorner);
+    const outside = pickAt(corner, 7).some(isCorner);
+    const onEdge = pickAt(rect.pos.add(new Vec2(-1.1, -0.3)));
+    const ok =
+      atCorner.some(isCorner) &&
+      !atCorner.some((t) => t.guide === "vertex" && t.index !== 2) &&
+      inside &&
+      !outside &&
+      onEdge.some((t) => t.guide === "outline" && t.id === rect.id);
+    picksOk &&= ok;
+    verdicts.push(
+      `${ortho ? "ortho" : "persp"}: corner -> ${JSON.stringify(atCorner)}, 4 px off ${inside}, 7 px off ${outside}; edge -> ${JSON.stringify(onEdge)}`,
+    );
+  }
+  out.push({
+    name: "visuals: a raycast picks a corner by its pixel-sized handle and a body by its outline, from a turned view",
+    pass: picksOk,
+    detail: verdicts.join("; "),
+  });
+
+  // A tool's draft: an open run to the cursor, then closed, then gone.
+  guides.setDraft({ points: [{ x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }, { x: 1, y: 1, z: 0.2, normal: { x: 0, y: 0, z: 1 } }], closed: false, cursor: { x: 0, y: 1, z: 0 } });
+  const open = guides.draftCounts();
+  guides.setDraft({ points: [{ x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }, { x: 1, y: 1, z: 0 }], closed: true });
+  const closed = guides.draftCounts();
+  guides.setDraft(null);
+  const none = guides.draftCounts();
+  out.push({
+    name: "visuals: a draft draws its placed points and its run to the cursor, closes, and clears",
+    pass: open.segments === 3 && open.points === 3 && closed.segments === 3 && none.segments === 0 && none.points === 0,
+    detail: `open ${JSON.stringify(open)}, closed ${JSON.stringify(closed)}, cleared ${JSON.stringify(none)}`,
+  });
+
+  // What a drag costs per frame: the grid is built once and survives the
+  // revisions of a drag that stays inside the level's major cells, and is
+  // built again only when the extent crosses one; the draft signature is a
+  // number that tells a moved cursor from a still one; the painted loop hands
+  // back one draft object until a point or its cursor changes.
+  const gridBefore = guides.gridBuilds;
+  const home = poly.pos;
+  for (let rev = 2; rev < 12; rev++) {
+    poly.pos = home.add(new Vec2(rev * 0.01, 0));
+    guides.sync(view({ rev }));
+  }
+  const dragBuilds = guides.gridBuilds - gridBefore;
+  // A body 100 m out widens the level by many cells.
+  poly.pos = home.add(new Vec2(100, 0));
+  guides.sync(view({ rev: 99 }));
+  const farBuilds = guides.gridBuilds - gridBefore;
+  poly.pos = home;
+  guides.sync(view({ rev: 100 }));
+  const gridPasses = guides.named("grid-major").length;
+  const draftA = { points: [{ x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }], closed: false, cursor: { x: 0.5, y: 1, z: 0 } };
+  const sameSig = draftSignature(draftA) === draftSignature({ ...draftA, points: [...draftA.points], cursor: { x: 0.5, y: 1, z: 0 } });
+  const movedSig = draftSignature(draftA) !== draftSignature({ ...draftA, cursor: { x: 0.5, y: 1.001, z: 0 } });
+  const loop = new SurfaceLoop();
+  const n = new THREE.Vector3(0, 1, 0);
+  loop.add({ point: new THREE.Vector3(0, 0, 0), normal: n, hostId: 1 });
+  loop.cursor = new THREE.Vector3(1, 0, 0);
+  const d1 = loop.draft();
+  loop.cursor = new THREE.Vector3(1, 0, 0);
+  const kept = loop.draft() === d1;
+  loop.cursor = new THREE.Vector3(1, 0, 0.5);
+  const renewed = loop.draft() !== d1 && loop.draft()?.cursor?.z === 0.5;
+  const ok = dragBuilds === 0 && farBuilds === 1 && gridPasses === 1 && sameSig && movedSig && kept && renewed;
+  out.push({
+    name: "visuals: a drag rebuilds the outlines but not the grid (rebuilt only when the level's extent crosses a cell), and a still draft is not rebuilt",
+    pass: ok,
+    detail: JSON.stringify({ dragBuilds, farBuilds, gridPasses, sameSig, movedSig, kept, renewed }),
+  });
+  guides.dispose();
+  return out;
+}
+
+// THE VISUALS WORKSPACE IN THE EDITOR (plans/visuals-workspace.md, Phase 4):
+// the controller's pose bookkeeping, which guide a click means, and the drop
+// on surface's arithmetic. The editor's wiring - the press handler, the
+// gizmo, the frame loop - needs the page and is verified there.
+function visualsWorkspace(): CaseResult[] {
+  const out: CaseResult[] = [];
+  const same = (a: ViewPose | null, b: ViewPose | null): boolean =>
+    a !== null &&
+    b !== null &&
+    Object.is(a.target.x, b.target.x) &&
+    Object.is(a.target.y, b.target.y) &&
+    Object.is(a.target.z, b.target.z) &&
+    Object.is(a.yaw, b.yaw) &&
+    Object.is(a.pitch, b.pitch) &&
+    Object.is(a.halfHeight, b.halfHeight) &&
+    Object.is(a.fovYDeg, b.fovYDeg);
+
+  // SEEDING. The first entry is the Level workspace's view to the bit (so a
+  // switch changes nothing on screen), later entries keep the pose that was
+  // left, and Reset returns to head-on framing of the 2D camera as it is NOW.
+  {
+    const editorLayer = new THREE.Group();
+    const sceneCam = new THREE.PerspectiveCamera(FOV_Y_DEG, VIEW_WIDTH / VIEW_HEIGHT, 0.1, 1000);
+    const handed: (ViewPose | null)[] = [];
+    const scene = {
+      editorLayer,
+      camera: sceneCam,
+      setViewPose: (p: ViewPose | null) => handed.push(p),
+      pick: () => [],
+      pickSurface: () => null,
+    } as unknown as WorkspaceScene;
+    const cam2d = camera(3.2, -1.4, 1.7);
+    const lens: SceneLens = { fovYDeg: 38, zOffset: -0.4 };
+    const ws = new VisualsWorkspace({
+      scene,
+      camera2d: () => cam2d,
+      lens: () => lens,
+      canvasSize: () => ({ width: VIEW_WIDTH, height: VIEW_HEIGHT }),
+    });
+    const before = ws.view;
+    ws.enter();
+    const seeded = ws.view;
+    const seededOk = same(seeded, headOn(cam2d, lens)) && handed[handed.length - 1] === seeded;
+    // The scene camera is placed at once, exactly where the frame will place it.
+    const want = newViewCamera(false);
+    applyPose(want, headOn(cam2d, lens), VIEW_WIDTH / VIEW_HEIGHT);
+    const placed = cameraBits(sceneCam).every((v, i) => Object.is(v, cameraBits(want)[i]));
+    const guidesIn = ws.guides.group.parent === editorLayer;
+    // A 50 px drag right and 20 px down orbits at the Level workspace's rate.
+    ws.beginView("orbit", new Vec2(400, 300));
+    ws.moveView(new Vec2(450, 320));
+    ws.endView();
+    const turned = ws.view!;
+    const turnOk = Object.is(turned.yaw, -50 * ORBIT_RADIANS_PER_PX) && Object.is(turned.pitch, 20 * ORBIT_RADIANS_PER_PX);
+    // Leave, move the 2D camera, come back: the pose is the one left behind.
+    ws.leave();
+    const handedBack = handed[handed.length - 1] === null && ws.guides.group.parent === null;
+    cam2d.position = new Vec2(-5, 2);
+    ws.enter();
+    const kept = same(ws.view, turned);
+    ws.resetView();
+    const reset = same(ws.view, headOn(cam2d, lens));
+    ws.leave();
+    ws.guides.dispose();
+    out.push({
+      name: "visuals: the workspace seeds its pose from the 2D camera to the bit, keeps it across a switch, and Reset re-seeds it",
+      pass: before === null && seededOk && placed && guidesIn && turnOk && handedBack && kept && reset,
+      detail: `seeded ${seededOk}, camera placed ${placed}, guides in the scene ${guidesIn}, orbit yaw ${turned.yaw.toFixed(3)} pitch ${turned.pitch.toFixed(3)} (${turnOk}), left ${handedBack}, kept ${kept}, reset ${reset}`,
+    });
+  }
+
+  // WHICH GUIDE A CLICK MEANS. At a corner the outline's segments come back
+  // from the raycast at the very depth of the corner's handle, and in build
+  // order the outline is first; the handle must win. A midpoint loses to a
+  // corner, and a click on an edge away from both is the outline's item.
+  {
+    const model = modelFromDisk({
+      player: { x: -600, y: -300, radius: 20 },
+      bodies: [
+        {
+          kind: "static",
+          x: 0,
+          y: 0,
+          rot: 0,
+          objects: [{ type: "collision", shape: { kind: "poly", verts: [{ x: -80, y: -60 }, { x: 80, y: -60 }, { x: 60, y: 50 }, { x: -70, y: 40 }] } }],
+        },
+      ],
+    } as RawLevelData);
+    const poly = model.items.find((i) => i.shape.kind === "poly")!;
+    const guides = new Guides();
+    guides.sync({
+      model,
+      rev: 1,
+      selectedIds: new Set([poly.id]),
+      selectedBodyIds: new Set(),
+      selectedVerts: new Set(),
+      visibleLayers: new Set<EdLayer>(ED_LAYERS),
+      lockedLayers: new Set(),
+    });
+    const pose: ViewPose = { ...poseFromCamera(camera(0, 0, 2)), yaw: -0.4, pitch: 0.3 };
+    const cam = posedCamera(pose, VIEW_WIDTH / VIEW_HEIGHT);
+    guides.setResolution(VIEW_WIDTH, VIEW_HEIGHT);
+    guides.update(cam, VIEW_HEIGHT);
+    guides.group.updateMatrixWorld(true);
+    const ray = new THREE.Raycaster();
+    const tagsAt = (p: Vec2): unknown[] => {
+      const q = new THREE.Vector3(p.x, threeY(p.y), 0).project(cam);
+      ray.setFromCamera(new THREE.Vector2(q.x, q.y), cam);
+      return ray.intersectObject(guides.group, true).map((h) => h.object.userData["pickTag"] as unknown);
+    };
+    const verts = (poly.shape as { verts: Vec2[] }).verts.map((v) => poly.pos.add(v));
+    const atCorner = tagsAt(verts[1]!);
+    const cornerOrder = atCorner.filter(isGuideTag).map((t) => t.guide).join(",");
+    const corner = handleUnder(atCorner);
+    const atMid = tagsAt(verts[1]!.add(verts[2]!).mul(0.5));
+    const mid = handleUnder(atMid);
+    const onEdge = tagsAt(verts[0]!.mul(0.3).add(verts[1]!.mul(0.7)));
+    const edge = handleUnder(onEdge);
+    const edgeItems = itemsUnder(onEdge, new Set());
+    // A synthetic list in the worst order: a model first, the outline, the
+    // midpoint, then the corner.
+    const listed = handleUnder([{}, guideTag("outline", 7), guideTag("midpoint", 7, 2), guideTag("vertex", 7, 3)]);
+    const spawnOnly = itemsUnder([guideTag("spawn", SPAWN_GUIDE_ID), guideTag("vertex", 7, 0), guideTag("light", 9)], new Set());
+    guides.dispose();
+    out.push({
+      name: "visuals: a click at a corner means the corner's handle over its outline, a midpoint over nothing, an edge its item",
+      pass:
+        atCorner.filter(isGuideTag).some((t) => t.guide === "outline") &&
+        corner?.guide === "vertex" &&
+        corner.index === 1 &&
+        mid?.guide === "midpoint" &&
+        mid.index === 1 &&
+        edge === null &&
+        edgeItems.has(poly.id) &&
+        listed?.guide === "vertex" &&
+        listed.index === 3 &&
+        [...spawnOnly].join(",") === "9",
+      detail: `corner list [${cornerOrder}] -> ${JSON.stringify(corner)}, midpoint -> ${JSON.stringify(mid)}, edge -> ${JSON.stringify(edge)} items [${[...edgeItems]}], worst-order list -> ${JSON.stringify(listed)}, items past spawn and handles [${[...spawnOnly]}]`,
+    });
+  }
+
+  // THE DROP ON SURFACE: the origin lands on the hit point (sim frame, z
+  // toward the camera), and an aligned prop's up is the face normal, reached by
+  // the smallest turn - a prop already standing along the normal is not turned
+  // at all, whatever its heading.
+  {
+    const at = surfacePlacement({ x: 1.25, y: -0.5, z: 0.375 });
+    // A float32 face at -0.2 m is written as -0.2, not its interpolation noise.
+    const noisy = surfacePlacement({ x: 0, y: 0, z: -0.19999999925494215 });
+    const placedOk = at.pos.x === 1.25 && at.pos.y === 0.5 && at.z === 0.375 && noisy.z === -0.2;
+    let worst = 0;
+    const normals = [
+      { x: 0, y: 0, z: 1 },
+      { x: 0.6, y: 0.8, z: 0 },
+      { x: -0.3, y: 0.2, z: 0.9 },
+      { x: 0.1, y: -1, z: 0.05 },
+    ];
+    const tilts = [
+      { rot: 0, rotX: 0, rotY: 0 },
+      { rot: 0.7, rotX: 0.2, rotY: -0.4 },
+      { rot: -2.1, rotX: -0.6, rotY: 0.3 },
+    ];
+    for (const t of tilts) {
+      for (const n of normals) {
+        const len = Math.hypot(n.x, n.y, n.z);
+        const up = upOf(alignUp(t, n));
+        worst = Math.max(worst, Math.abs(up.x - n.x / len), Math.abs(up.y - n.y / len), Math.abs(up.z - n.z / len));
+      }
+    }
+    // Already along the normal: the heading survives exactly (to rounding).
+    const t0 = { rot: 0.9, rotX: 0.25, rotY: -0.15 };
+    const kept = alignUp(t0, upOf(t0));
+    const keptErr = Math.max(Math.abs(kept.rot - t0.rot), Math.abs(kept.rotX - t0.rotX), Math.abs(kept.rotY - t0.rotY));
+    // A level floor: a prop stood on it is upright - no turn in the plane
+    // (`rot`) and no tip (`rotX`) - with its heading about its own up in
+    // `rotY`, which is where the composition keeps a heading.
+    const floor = alignUp({ rot: 1.1, rotX: 0.4, rotY: 0.2 }, { x: 0, y: 1, z: 0 });
+    const floorOk = Math.abs(floor.rot) < 1e-12 && Math.abs(floor.rotX) < 1e-12;
+    out.push({
+      name: "visuals: a drop on a surface stands the origin on the hit and turns a prop's up onto the normal by the smallest turn",
+      // Radians: 1e-7, not 1e-12, because the composition's gimbal is at
+      // rotX = 90 degrees - a prop's up pointing straight at the camera, which
+      // is a drop on the front of a wall - where `asin` hands back half the
+      // digits. A tenth of a micron at a metre.
+      pass: placedOk && worst < 1e-7 && keptErr < 1e-12 && floorOk,
+      detail: `placed ${placedOk}, worst up error ${worst.toExponential(2)} over ${tilts.length * normals.length} tilts x normals, re-aligning changes a standing prop by ${keptErr.toExponential(2)}, on a floor rotX ${floor.rotX.toExponential(2)} rotY ${floor.rotY.toExponential(2)} rot ${floor.rot.toFixed(3)}`,
+    });
+  }
+
+  // A MOVE THROUGH Z writes the new depth outright. Decoration authoring no
+  // `offsetZ` is drawn at DECOR_Z, and the gizmo (and the drop, which goes
+  // through the gizmo's handlers) used to write the displacement into the
+  // field as if it were relative, which jumped the object 35 cm toward the
+  // camera on the first touch of the blue arrow.
+  {
+    const up = offsetZAfterMove(0, DECOR_Z, DECOR_Z + 0.1);
+    const sideways = offsetZAfterMove(0, DECOR_Z, DECOR_Z);
+    const authored = offsetZAfterMove(0.4, 0.4, 0.6);
+    out.push({
+      name: "visuals: a move through z leaves a fallen-back depth alone sideways and writes the new depth outright",
+      pass: Math.abs(up - (DECOR_Z + 0.1)) < 1e-12 && sideways === 0 && authored === 0.6,
+      detail: `decor moved 10 cm toward the camera -> offsetZ ${up.toFixed(3)} (drawn at ${DECOR_Z} before), moved sideways -> ${sideways}, authored 0.4 -> 0.6 gives ${authored}`,
+    });
+  }
+
+  // **F**'s box: a light by its source at its own z (not its reach), a drawn
+  // object by its extrusion either side of the depth it is drawn at.
+  {
+    const model = modelFromDisk({
+      player: { x: 0, y: 0, radius: 20 },
+      bodies: [
+        { kind: "static", x: 100, y: 0, rot: 0, objects: [{ type: "light", range: 400, z: 60 }] },
+        {
+          kind: "static",
+          x: -200,
+          y: 0,
+          rot: 0,
+          objects: [{ type: "geometry", z: -100, depth: 40, shape: { kind: "rect", w: 50, h: 20 } }],
+        },
+      ],
+    } as RawLevelData);
+    const light = model.items.find((i) => i.object === "light")!;
+    const prop = model.items.find((i) => i.object === "geometry")!;
+    const lb = itemsBox(model, [light])!;
+    const pb = itemsBox(model, [prop])!;
+    const near = (a: number, b: number): boolean => Math.abs(a - b) < 1e-9;
+    const ok =
+      near(lb.min.x, 1) && near(lb.max.x, 1) && near(lb.min.z, 0.6) && near(lb.max.z, 0.6) &&
+      near(pb.min.x, -2.25) && near(pb.max.x, -1.75) && near(pb.min.y, -0.1) && near(pb.max.y, 0.1) &&
+      near(pb.min.z, -1.2) && near(pb.max.z, -0.8) &&
+      itemsBox(model, []) === null;
+    out.push({
+      name: "visuals: F frames a light by its source at its z and a drawn object by its extrusion about its depth",
+      pass: ok,
+      detail: `light ${JSON.stringify(lb)}, prop ${JSON.stringify(pb)}`,
     });
   }
   return out;
@@ -2743,6 +3622,71 @@ function propEmission(): CaseResult[] {
       pass: untouched,
       detail: untouched ? "no map, no glow" : "lit a material that ships no emission",
     },
+    ...propGlow(),
+  ];
+}
+
+// A prop whose geometry object authors `emissive` (the river's moss) glows in
+// its own pattern: its materials are swapped for cached copies, the file's own
+// materials are left alone, and the mask is spliced into three's real
+// physical fragment shader.
+function propGlow(): CaseResult[] {
+  const prop = () => {
+    const group = new THREE.Group();
+    const source = new THREE.MeshPhysicalMaterial({ color: 0x44aa44 });
+    group.add(new THREE.Mesh(new THREE.BufferGeometry(), source));
+    group.add(new THREE.Mesh(new THREE.BufferGeometry(), [source, new THREE.MeshBasicMaterial()]));
+    return { group, source };
+  };
+  const { group, source } = prop();
+  const twin = group.clone(true);
+  glowProp(group, "#2fe6d0", 0.6);
+  glowProp(twin, "#2fe6d0", 0.6);
+  const [one, many] = group.children as THREE.Mesh[];
+  const copy = one!.material as THREE.MeshStandardMaterial;
+  const arr = many!.material as THREE.Material[];
+  const swapped =
+    copy !== source &&
+    copy.emissive.getHexString() === "2fe6d0" &&
+    copy.emissiveIntensity === 0.6 &&
+    source.emissive.getHex() === 0 &&
+    arr[0] === copy &&
+    (arr[1] as THREE.MeshBasicMaterial).isMeshBasicMaterial === true &&
+    (twin.children[0] as THREE.Mesh).material === copy;
+
+  const fragment = THREE.ShaderLib.physical.fragmentShader;
+  const patched = patchGlow(fragment);
+  const spliced =
+    patched.includes("uniform vec2 uGlowRange;") &&
+    patched.indexOf("smoothstep( uGlowRange.x") > patched.indexOf("#include <emissivemap_fragment>");
+  let refused = false;
+  try {
+    patchGlow("void main() {}");
+  } catch {
+    refused = true;
+  }
+
+  const lum = Array.from({ length: 100 }, (_, i) => i / 100);
+  const [lo, hi] = stretch(lum);
+  const [flatLo, flatHi] = stretch([0.2, 0.2, 0.2]);
+  const stretched = lo === 0.05 && hi === 0.95 && flatHi > flatLo;
+
+  return [
+    {
+      name: "props: an authored glow swaps a prop's materials for shared glowing copies and leaves the file's own dark",
+      pass: swapped,
+      detail: `copy ${copy !== source} emissive #${copy.emissive.getHexString()} x${copy.emissiveIntensity}, source #${source.emissive.getHexString()}, shared across mounts ${(twin.children[0] as THREE.Mesh).material === copy}`,
+    },
+    {
+      name: "props: the glow mask is spliced after three's emissive chunk, and a three without it is refused",
+      pass: spliced && refused,
+      detail: `spliced ${spliced}, refused ${refused}`,
+    },
+    {
+      name: "props: the glow mask spans its map's 5th to 95th luminance percentile, and a flat map divides by nothing",
+      pass: stretched,
+      detail: `ramp -> ${lo}..${hi}, flat -> ${flatLo}..${flatHi}`,
+    },
   ];
 }
 
@@ -3929,6 +4873,1972 @@ function beltRendering(): CaseResult[] {
   return out;
 }
 
+// THE AVATAR'S OWN SURFACE (render3d/avatarSurface.ts). Two facts, neither
+// visible in a picture that looks fine: the avatar's copy of the painted steel
+// is a cache entry of its own, so its fog and its sky never leak onto a wall of
+// the same steel; and the fog patch really rewrites three's chunk - a renamed
+// chunk would be a `replace` matching nothing, and the ball would quietly go
+// back to the world's air.
+function avatarSurface(): CaseResult[] {
+  const req = { texture: IRON_SURFACE, tileScale: 5, color: "#f2eadf" };
+  const plain = surfaceKey(req);
+  const avatar = surfaceKey({ ...req, avatar: true });
+  const keyed = plain !== avatar && avatar === surfaceKey({ ...req, avatar: true }) && !plain.includes("avatar");
+
+  const mat = wearAvatar(wearAvatar(new THREE.MeshStandardMaterial()));
+  const shader = { fragmentShader: THREE.ShaderLib.standard.fragmentShader, vertexShader: "", uniforms: {} };
+  const hadChunk = shader.fragmentShader.includes("#include <fog_fragment>");
+  mat.onBeforeCompile(shader as never, null as never);
+  const patched = shader.fragmentShader;
+  const scaled = patched.includes(`fogFactor * ${AVATAR_FOG}`);
+  const once = patched.split(`fogFactor * ${AVATAR_FOG}`).length === 2;
+  const replaced = !patched.includes("#include <fog_fragment>");
+  const key = mat.customProgramCacheKey();
+  const programKeyed = key.includes(AVATAR_PROGRAM_KEY) && key.split(AVATAR_PROGRAM_KEY).length === 2;
+  const fogOk = hadChunk && scaled && once && replaced && programKeyed;
+  // The wrap: the direct diffuse term spends the wrapped irradiance and the
+  // specular does not, under the same program key.
+  const wrapLit = `+ ${AVATAR_WRAP}.0 ) / ( 1.0 + ${AVATAR_WRAP}.0 )`;
+  const wrapped = patched.includes(wrapLit) && patched.split(wrapLit).length === 2;
+  const diffuseWrapped = patched.includes("directDiffuse += wrapIrradiance * BRDF_Lambert");
+  const specularPlain = patched.includes("directSpecular += irradiance * BRDF_GGX");
+  const lightsReplaced = !patched.includes("#include <lights_physical_pars_fragment>");
+  const wrapKeyed = key.includes(`avatar-wrap:${AVATAR_WRAP}`);
+  // The bounce part spends the light BEFORE its shadow: each of the three
+  // direct-light reads stashes it, and the wrapped irradiance adds it back.
+  const stashes = patched.split("avatarUnshadowed = directLight.color;").length - 1;
+  const bounceUnshadowed = patched.includes("max( wrapNL - dotNL, 0.0 ) * avatarUnshadowed");
+  const beginReplaced = !patched.includes("#include <lights_fragment_begin>");
+  const wrapOk =
+    wrapped && diffuseWrapped && specularPlain && lightsReplaced && wrapKeyed &&
+    stashes === 3 && bounceUnshadowed && beginReplaced;
+  return [
+    {
+      name: "avatar: its surface key differs from the plain key for the same request, and is stable",
+      pass: keyed,
+      detail: keyed ? `${plain} vs ${avatar}` : `plain ${plain}, avatar ${avatar}`,
+    },
+    {
+      name: "avatar: the patched fog chunk scales the fog factor by AVATAR_FOG, once, under a program key of its own",
+      pass: fogOk,
+      detail: fogOk
+        ? `fogFactor * ${AVATAR_FOG}, key "${key}"`
+        : `chunk present ${hadChunk}, scaled ${scaled}, once ${once}, include replaced ${replaced}, key "${key}"`,
+    },
+    {
+      name: "avatar: the patched light chunk wraps the direct DIFFUSE by AVATAR_WRAP, unshadowed, and leaves the specular alone",
+      pass: wrapOk,
+      detail: wrapOk
+        ? `wrap ${AVATAR_WRAP}, key "${key}"`
+        : `wrapped ${wrapped}, diffuse ${diffuseWrapped}, specular plain ${specularPlain}, include replaced ${lightsReplaced}, keyed ${wrapKeyed}, stashes ${stashes}, bounce unshadowed ${bounceUnshadowed}, begin replaced ${beginReplaced}`,
+    },
+  ];
+}
+
+// THE GENERATED SKIES (environment.ts `equirectPixels`), read the way three
+// reads them. `equirectUv` in three's common.glsl is restated here rather than
+// imported, so the painter is checked against three's convention and not
+// against itself: that is exactly the mistake the painter made until
+// 2026-09-24, painting row 0 as straight up and the azimuth as atan2(x, z), so
+// every generated sky was upside down and mirrored and the sun lobe sat
+// opposite the sun.
+function threeReads(px: Float32Array, dir: THREE.Vector3): [number, number, number] {
+  const { width: W, height: H } = EQUIRECT_SIZE;
+  const d = dir.clone().normalize();
+  const u = Math.atan2(d.z, d.x) / (Math.PI * 2) + 0.5;
+  const v = Math.asin(Math.max(-1, Math.min(1, d.y))) / Math.PI + 0.5;
+  const x = Math.min(W - 1, Math.floor(u * W));
+  const y = Math.min(H - 1, Math.floor(v * H));
+  const i = (y * W + x) * 4;
+  return [px[i]!, px[i + 1]!, px[i + 2]!];
+}
+
+function generatedSkies(): CaseResult[] {
+  // Orientation: straight up reads the sky, straight down the ground, and the
+  // lobe peaks where three looks for the sun. A black-and-white sky with no
+  // sun for the first half, and the default level (which has one) for the
+  // lobe.
+  const bw = equirectPixels(skyInputs({ skyColor: "#ffffff", groundColor: "#000000", sunIntensity: 0 }));
+  const up = threeReads(bw, new THREE.Vector3(0, 1, 0))[0];
+  const down = threeReads(bw, new THREE.Vector3(0, -1, 0))[0];
+  const sunny = skyInputs();
+  const lit = equirectPixels(sunny);
+  const sunward = threeReads(lit, sunny.sunDir)[0];
+  const antisun = threeReads(lit, sunny.sunDir.clone().negate())[0];
+  const upright = up > 0.99 && down < 0.01 && sunward > antisun * 2;
+
+  return [
+    {
+      name: "sky: a generated sky is painted as three reads it - sky overhead, ground below, the lobe toward the sun",
+      pass: upright,
+      detail: `straight up reads ${up.toFixed(3)} (sky 1), down ${down.toFixed(3)} (ground 0); toward the sun ${sunward.toFixed(3)}, away ${antisun.toFixed(3)}`,
+    },
+  ];
+}
+
+// A SPOT'S VISIBLE BEAM (render3d/beam.ts). What is asserted is geometry and
+// format, never the look: the cone is the spot's own cone, the dust starts
+// inside it, the two fields survive both round trips, and a spot asking for
+// neither builds nothing at all - which is the proof that every level authored
+// before the fields draws exactly what it drew.
+function beamCases(): CaseResult[] {
+  const out: CaseResult[] = [];
+
+  // The far radius, and the built cone: lamp at the holder's origin, the far
+  // ring `range` along the authored aim at that radius. Aimed along +x in sim
+  // terms so the aim is not the cone's own default axis.
+  const expected = 10 * Math.tan((7 * Math.PI) / 180);
+  const rig = new LightRig();
+  const scene = new THREE.Group();
+  const mounted = rig.add(
+    scene,
+    { type: "light", kind: "spot", range: 10, angle: 7, dirX: 1, dirY: 0, beam: 0.6, dust: 0.5 },
+    { x: 0, y: 0, rot: 0, z: 0 },
+  );
+  const cone = mounted?.holder.getObjectByName("beam-cone") as THREE.Mesh | undefined;
+  const dust = mounted?.holder.getObjectByName("beam-dust") as THREE.Points | undefined;
+  let farErr = Infinity;
+  let nearErr = Infinity;
+  if (cone) {
+    scene.updateMatrixWorld(true);
+    const pos = cone.geometry.getAttribute("position");
+    const v = new THREE.Vector3();
+    farErr = 0;
+    nearErr = 0;
+    for (let i = 0; i < pos.count; i++) {
+      v.fromBufferAttribute(pos, i).applyMatrix4(cone.matrixWorld);
+      // Along +x, the far ring is at x = 10 and radius `expected` about the axis.
+      const r = Math.hypot(v.y, v.z);
+      if (Math.abs(v.x - 10) < 1e-6) farErr = Math.max(farErr, Math.abs(r - expected));
+      else if (Math.abs(v.x) < 1e-6) nearErr = Math.max(nearErr, Math.abs(r - BEAM_SOURCE_RADIUS));
+    }
+  }
+  const radiusOk = Math.abs(beamFarRadius(10, 7) - expected) < 1e-12 && farErr < 1e-5 && nearErr < 1e-5;
+  out.push({
+    name: "beam: the cone reaches `range` along the spot's aim, at range x tan(angle)",
+    pass: radiusOk && dust !== undefined,
+    detail: cone
+      ? `far radius ${expected.toFixed(4)} m, far ring off by ${farErr.toExponential(2)}, lamp ring off by ${nearErr.toExponential(2)}; dust ${dust ? "built" : "MISSING"}`
+      : "no cone built",
+  });
+  rig.dispose();
+
+  // Every seeded mote inside the cone, over several beams.
+  let worst = -Infinity;
+  let seeded = 0;
+  for (const [range, angle, seed] of [
+    [10, 7, 0],
+    [4, 30, 2.4],
+    [25, 3, 9.6],
+    [1, 60, 17],
+  ] as const) {
+    const far = beamFarRadius(range, angle);
+    const source = Math.min(BEAM_SOURCE_RADIUS, far);
+    const { positions } = seedDust(500, range, source, far, seed);
+    for (let i = 0; i < 500; i++) {
+      const x = positions[i * 3]!;
+      const y = positions[i * 3 + 1]!;
+      const z = positions[i * 3 + 2]!;
+      const along = -y / range;
+      const over = Math.max(
+        Math.hypot(x, z) - beamRadiusAt(along, source, far),
+        -along,
+        along - 1,
+      );
+      worst = Math.max(worst, over);
+      seeded++;
+    }
+  }
+  out.push({
+    name: "beam: every dust mote is seeded inside the cone",
+    pass: worst <= 1e-6,
+    detail: `${seeded} motes over four cones, furthest outside by ${worst.toExponential(2)} m`,
+  });
+
+  // The format: dimensionless, so untouched by px -> m, and carried by the
+  // editor's model on a spot.
+  const authored: RawLevelData = {
+    player: { x: 0, y: 0, radius: 20 },
+    bodies: [
+      {
+        kind: "static",
+        x: 100,
+        y: -300,
+        rot: 0,
+        objects: [
+          {
+            type: "light",
+            kind: "spot",
+            z: 0,
+            color: "#f3ecd8",
+            intensity: 300,
+            range: 1000,
+            angle: 7,
+            penumbra: 0.6,
+            castShadow: true,
+            beam: 0.6,
+            dust: 0.5,
+          },
+        ],
+      },
+    ],
+  };
+  const inMetres = scaleLevelData(authored, PX);
+  const lit = inMetres.bodies[0]!.objects.find(isLightObject)!;
+  const unscaled = lit.beam === 0.6 && lit.dust === 0.5 && lit.range === 10;
+  const a = JSON.stringify(scaleLevelData(authored, 1));
+  const b = JSON.stringify(scaleLevelData(inMetres, PIXELS_PER_METER));
+  const saved = modelToDisk(modelFromDisk(authored)).bodies[0]!.objects.find(isLightObject);
+  const kept = saved?.beam === 0.6 && saved?.dust === 0.5;
+  // On a point light the fields mean nothing, so the editor does not write them.
+  const pointed = modelToDisk(
+    modelFromDisk({
+      ...authored,
+      bodies: [{ ...authored.bodies[0]!, objects: [{ type: "light", beam: 0.6, dust: 0.5 }] }],
+    } as RawLevelData),
+  ).bodies[0]!.objects.find(isLightObject);
+  const pointDropped = pointed !== undefined && pointed.beam === undefined && pointed.dust === undefined;
+  out.push({
+    name: "format: a spot's beam and dust pass px -> m unscaled and survive an editor save",
+    pass: unscaled && a === b && kept && pointDropped,
+    detail: `in metres beam ${lit.beam} dust ${lit.dust} range ${lit.range}; px round trip ${a === b ? "byte-identical" : "DIFFERS"}; editor save ${kept ? "kept" : `became ${JSON.stringify(saved)}`}; on a point light ${pointDropped ? "not written" : JSON.stringify(pointed)}`,
+  });
+
+  // No beam asked for, no beam built: a spot with neither field, with both at
+  // zero, and a point light asking for one.
+  const bare = new LightRig();
+  const kids = (data: LightObjectData): string[] => {
+    const m = bare.add(new THREE.Group(), data, { x: 0, y: 0, rot: 0, z: 0 });
+    const names: string[] = [];
+    m?.holder.traverse((o) => {
+      if (o === m.holder) return;
+      if ((o as THREE.Light).isLight) names.push("light");
+      else if ((o as THREE.Mesh).isMesh || (o as THREE.Points).isPoints || o.name === "beam") names.push(o.name || o.type);
+      else names.push("target");
+    });
+    return names.sort();
+  };
+  const shapes = [
+    kids({ type: "light", kind: "spot", range: 8 }),
+    kids({ type: "light", kind: "spot", range: 8, beam: 0, dust: 0 }),
+    kids({ type: "light", kind: "point", range: 8, beam: 0.6, dust: 0.5 }),
+  ];
+  bare.dispose();
+  const nothing =
+    JSON.stringify(shapes[0]) === JSON.stringify(["light", "target"]) &&
+    JSON.stringify(shapes[1]) === JSON.stringify(["light", "target"]) &&
+    JSON.stringify(shapes[2]) === JSON.stringify(["light"]);
+  out.push({
+    name: "beam: a light asking for no beam builds no beam objects at all",
+    pass: nothing,
+    detail: shapes.map((s) => `[${s.join(", ")}]`).join(" / "),
+  });
+  return out;
+}
+
+// WAKING LIGHTS (render3d/glow.ts, the pool in lights.ts, the instance key, the
+// editor's fields and `+ Glow`). The law, the assignment and the format -
+// never the look: how far apart the mushrooms are, how far they reach and how
+// bright they rise are the play's to decide and get no case.
+function glowCases(): CaseResult[] {
+  const out: CaseResult[] = [];
+  const near = (a: number, b: number): boolean => Math.abs(a - b) < 1e-9;
+  const law = { wake: 3, delay: 0.25, rise: 0.6, fall: 1.5 };
+  const IN = 1;
+  const OUT = 10;
+  // Run a script of (steps, distance) at a fixed dt, recording after each step.
+  const run = (
+    state: GlowState,
+    script: readonly (readonly [number, number])[],
+    dt = 0.05,
+  ): { phase: string; level: number }[] => {
+    const rows: { phase: string; level: number }[] = [];
+    for (const [steps, distance] of script) {
+      for (let i = 0; i < steps; i++) {
+        state.step(distance, dt);
+        rows.push({ phase: state.phase, level: state.level });
+      }
+    }
+    return rows;
+  };
+
+  // The phases in order, at a fixed 50 ms step: inside from t = 0 until
+  // t = 1.0 s, then gone. Delay to 0.25, rise over 0.6 to 0.85, lit, fall over
+  // 1.5 from 1.0 to 2.5, dormant.
+  {
+    const rows = run(new GlowState(law), [
+      [20, IN],
+      [40, OUT],
+    ]);
+    const at = (t: number) => rows[Math.round(t / 0.05) - 1]!;
+    const table: [number, string, number][] = [
+      [0.05, "armed", 0],
+      [0.2, "armed", 0],
+      [0.55, "rising", 0.5],
+      [0.7, "rising", 0.75],
+      [1.0, "lit", 1],
+      [1.05, "falling", 1 - 0.05 / 1.5],
+      [1.75, "falling", 0.5],
+      [2.6, "dormant", 0],
+      [3.0, "dormant", 0],
+    ];
+    const bad = table.filter(([t, phase, level]) => at(t).phase !== phase || !near(at(t).level, level));
+    out.push({
+      name: "glow: dormant, armed, rising, lit, falling, dormant - the levels against time at a fixed step",
+      pass: bad.length === 0,
+      detail:
+        bad.length === 0
+          ? table.map(([t, p, l]) => `${t}s ${p} ${l.toFixed(3)}`).join(", ")
+          : bad.map(([t, p, l]) => `${t}s wanted ${p} ${l.toFixed(3)}, got ${at(t).phase} ${at(t).level.toFixed(4)}`).join("; "),
+    });
+  }
+
+  // Leaving during the delay emits nothing, ever.
+  {
+    const rows = run(new GlowState(law), [
+      [3, IN],
+      [40, OUT],
+    ]);
+    const peak = Math.max(...rows.map((r) => r.level));
+    const last = rows[rows.length - 1]!;
+    out.push({
+      name: "glow: a ball that leaves during the delay wakes nothing",
+      pass: peak === 0 && last.phase === "dormant",
+      detail: `peak level ${peak} over ${rows.length} steps, ends ${last.phase}`,
+    });
+  }
+
+  // Hysteresis: parked just outside `wake` (inside the release band) after
+  // waking it stays lit; parked past the band it falls.
+  {
+    const parked = run(new GlowState(law), [
+      [20, IN],
+      [60, law.wake * 1.05],
+    ]);
+    const beyond = run(new GlowState(law), [
+      [20, IN],
+      [1, law.wake * WAKE_HYSTERESIS * 1.01],
+    ]);
+    const held = parked.slice(20).every((r) => r.phase === "lit" && r.level === 1);
+    const released = beyond[beyond.length - 1]!.phase === "falling";
+    out.push({
+      name: "glow: a ball parked at wake x 1.05 after waking it keeps it lit; past the hysteresis it falls",
+      pass: held && released,
+      detail: `3 s at 1.05 x wake: ${held ? "lit throughout" : "LET GO"}; at ${(WAKE_HYSTERESIS * 1.01).toFixed(3)} x wake: ${beyond[beyond.length - 1]!.phase}`,
+    });
+  }
+
+  // Re-entry during the fall re-arms from the current level with no delay.
+  {
+    const rows = run(new GlowState(law), [
+      [20, IN],
+      [15, OUT],
+      [1, IN],
+    ]);
+    const before = rows[34]!;
+    const after = rows[35]!;
+    const ok =
+      before.phase === "falling" &&
+      near(before.level, 0.5) &&
+      after.phase === "rising" &&
+      near(after.level, 0.5 + 0.05 / 0.6);
+    out.push({
+      name: "glow: coming back during the fall rises again from where it was, with no delay",
+      pass: ok,
+      detail: `falling at ${before.level.toFixed(4)}, one step back inside: ${after.phase} at ${after.level.toFixed(4)} (wanted ${(0.5 + 0.05 / 0.6).toFixed(4)})`,
+    });
+  }
+
+  // The clamp: a 5 s step moves it no further than MAX_GLOW_STEP would, a
+  // backwards clock moves it not at all, and a zero rise or fall is instant.
+  {
+    const lit = new GlowState({ ...law, delay: 0 });
+    run(lit, [[20, IN]]);
+    lit.step(OUT, 5);
+    const clampedFall = near(lit.level, 1 - MAX_GLOW_STEP / law.fall);
+    const fresh = new GlowState({ ...law, delay: 0 });
+    fresh.step(IN, 5);
+    const clampedRise = near(fresh.level, MAX_GLOW_STEP / law.rise);
+    const back = fresh.level;
+    fresh.step(IN, -3);
+    const backwards = fresh.level === back;
+    const snap = new GlowState({ ...law, delay: 0, rise: 0, fall: 0 });
+    snap.step(IN, 0);
+    const onAtOnce = snap.level === 1 && snap.phase === "lit";
+    snap.step(OUT, 0);
+    const offAtOnce = snap.level === 0 && snap.phase === "dormant";
+    out.push({
+      name: "glow: a step is clamped to MAX_GLOW_STEP, a clock running backwards steps nothing, and a rise or fall of 0 is instant",
+      pass: clampedFall && clampedRise && backwards && onAtOnce && offAtOnce,
+      detail: `5 s step: fell to ${lit.level.toFixed(4)}, rose to ${back.toFixed(4)}; -3 s step ${backwards ? "held" : "MOVED"}; rise 0 ${onAtOnce ? "instant" : "NOT"}, fall 0 ${offAtOnce ? "instant" : "NOT"}`,
+    });
+  }
+
+  // The format: `wake` is a length, the times are not.
+  {
+    const scaled = scaleObject(
+      { type: "light", wake: 300, wakeDelay: 0.25, wakeRise: 0.6, wakeFall: 1.5, range: 400 },
+      PX,
+    ) as LightObjectData;
+    const ok =
+      near(scaled.wake!, 3) &&
+      scaled.wakeDelay === 0.25 &&
+      scaled.wakeRise === 0.6 &&
+      scaled.wakeFall === 1.5 &&
+      near(scaled.range!, 4);
+    const defaults = wakeParams({ type: "light", wake: 3 });
+    const spot = wakeParams({ type: "light", kind: "spot", wake: 3 });
+    const off = wakeParams({ type: "light", wake: 0 });
+    const lawOk =
+      defaults !== null &&
+      defaults.delay === 0 &&
+      defaults.rise === DEFAULT_WAKE_RISE &&
+      defaults.fall === DEFAULT_WAKE_FALL &&
+      spot === null &&
+      off === null;
+    out.push({
+      name: "format: scaleObject converts wake like range and passes wakeDelay, wakeRise and wakeFall untouched",
+      pass: ok && lawOk,
+      detail: `300 px -> wake ${scaled.wake} m, delay ${scaled.wakeDelay} s, rise ${scaled.wakeRise} s, fall ${scaled.wakeFall} s; defaults ${JSON.stringify(defaults)}; a spot ${spot === null ? "never wakes" : "WAKES"}; wake 0 ${off === null ? "is always on" : "WAKES"}`,
+    });
+  }
+
+  // The pool's assignment: nearest first, authored order on a tie, a dark
+  // source never served, and never more than n.
+  {
+    const sources = [
+      { level: 1, x: 5, y: 0 }, // 0: 5 m
+      { level: 0.5, x: 1, y: 0 }, // 1: 1 m
+      { level: 0, x: 0.5, y: 0 }, // 2: dark, nearest of all
+      { level: 1, x: -5, y: 0 }, // 3: 5 m, ties with 0
+      { level: 1, x: 0, y: 2 }, // 4: 2 m
+    ];
+    const three = assignPool(sources, { x: 0, y: 0 }, 3);
+    const all = assignPool(sources, { x: 0, y: 0 }, 10);
+    const none = assignPool(sources, { x: 0, y: 0 }, 0);
+    const ok =
+      JSON.stringify(three) === "[1,4,0]" && JSON.stringify(all) === "[1,4,0,3]" && none.length === 0;
+    out.push({
+      name: "glow pool: nearest awake source first, ties in authored order, a dark source never served",
+      pass: ok,
+      detail: `n=3 ${JSON.stringify(three)} (want [1,4,0]), n=10 ${JSON.stringify(all)} (want [1,4,0,3]), n=0 ${JSON.stringify(none)}`,
+    });
+  }
+
+  // The pool the rig builds: none for a level with no waking light (so every
+  // existing level is the scene it was), one per waking source up to
+  // GLOW_POOL, and a waking light mounts no light of its own.
+  {
+    const poolOf = (waking: number, steady: number): { size: number; lights: number; own: number } => {
+      const rig = new LightRig();
+      const scene = new THREE.Scene();
+      const body = new THREE.Group();
+      scene.add(body);
+      let own = 0;
+      for (let i = 0; i < steady; i++) rig.add(body, { type: "light", range: 4 }, { x: i, y: 0, rot: 0, z: 0 });
+      for (let i = 0; i < waking; i++) {
+        const m = rig.add(body, { type: "light", range: 4, wake: 3 }, { x: i, y: 1, rot: 0, z: 0 });
+        m?.holder.traverse((o) => {
+          if ((o as THREE.Light).isLight) own++;
+        });
+      }
+      rig.buildPool(scene);
+      let lights = 0;
+      scene.traverse((o) => {
+        if ((o as THREE.Light).isLight) lights++;
+      });
+      const size = rig.poolSize;
+      rig.dispose();
+      return { size, lights, own };
+    };
+    const none = poolOf(0, 3);
+    const few = poolOf(3, 2);
+    const many = poolOf(GLOW_POOL + 4, 0);
+    const ok =
+      none.size === 0 &&
+      none.lights === 3 &&
+      few.size === 3 &&
+      few.lights === 5 &&
+      many.size === GLOW_POOL &&
+      many.lights === GLOW_POOL &&
+      few.own === 0 &&
+      many.own === 0;
+    out.push({
+      name: "glow pool: a level with no waking light builds none, and the pool never exceeds GLOW_POOL",
+      pass: ok,
+      detail: `0 waking + 3 steady: pool ${none.size}, ${none.lights} lights; 3 + 2: pool ${few.size}, ${few.lights} lights; ${GLOW_POOL + 4} waking: pool ${many.size} (GLOW_POOL ${GLOW_POOL}); a waking source's own lights: ${few.own + many.own}`,
+    });
+  }
+
+  // The instance key: a body of its own, different from the shared material
+  // and from any other body's; and no body without a waking light asks for
+  // one, which is the proof that no existing level gains a material.
+  {
+    const req = { texture: "color", color: "#8a3fd6", emissive: "#b070ff", emissiveIntensity: 2 };
+    const plain = surfaceKey(req);
+    const mine = surfaceKey({ ...req, instance: "b3" });
+    const theirs = surfaceKey({ ...req, instance: "b4" });
+    const keyed = plain !== mine && mine !== theirs && mine === surfaceKey({ ...req, instance: "b3" });
+    const river = scaleLevelData(ballLevelJson as RawLevelData, PX);
+    const wakingBodies = river.bodies.filter((b) => b.objects.some((o) => isLightObject(o) && wakeParams(o) !== null));
+    const asking = river.bodies.filter((b, i) => surfaceInstance(b, `b${i}`) !== undefined);
+    const steady: LevelBodyData = {
+      kind: "static",
+      x: 0,
+      y: 0,
+      rot: 0,
+      objects: [
+        { type: "geometry", shape: { kind: "rect", w: 1, h: 1 }, emissive: "#ffaa00" },
+        { type: "light", range: 4 },
+      ],
+    };
+    const ok =
+      keyed &&
+      surfaceInstance(steady, "b0") === undefined &&
+      surfaceInstance(glowBody(new Vec2(0, 0)), "b0") === "b0" &&
+      surfaceInstance(glowBody(new Vec2(0, 0)), undefined) === undefined &&
+      asking.length === wakingBodies.length &&
+      asking.every((b) => wakingBodies.includes(b));
+    out.push({
+      name: "glow: a waking body's instance key is its own, and a body with no waking light asks for none",
+      pass: ok,
+      detail: `plain ${plain} / b3 ${mine} / b4 ${theirs}; river: ${asking.length} of ${river.bodies.length} bodies ask for an instance, ${wakingBodies.length} carry a waking light`,
+    });
+  }
+
+  // The editor: the four fields round-trip on a point light, a spot never
+  // writes them, a waking light with no times writes only `wake`.
+  {
+    const level = (light: LightObjectData): RawLevelData => ({
+      player: { x: 0, y: 0, radius: 20 },
+      bodies: [{ kind: "static", x: 100, y: -300, rot: 0, objects: [light] }],
+    });
+    const saved = (light: LightObjectData) =>
+      modelToDisk(modelFromDisk(level(light))).bodies[0]!.objects.find(isLightObject)!;
+    const full = saved({ type: "light", range: 400, wake: 300, wakeDelay: 0.25, wakeRise: 0.4, wakeFall: 2 });
+    const bare = saved({ type: "light", range: 400, wake: 250 });
+    const spot = saved({ type: "light", kind: "spot", range: 400, wake: 300, wakeDelay: 0.25 });
+    const steady = saved({ type: "light", range: 400 });
+    const ok =
+      near(full.wake!, 300) &&
+      full.wakeDelay === 0.25 &&
+      full.wakeRise === 0.4 &&
+      full.wakeFall === 2 &&
+      near(bare.wake!, 250) &&
+      bare.wakeDelay === undefined &&
+      bare.wakeRise === undefined &&
+      bare.wakeFall === undefined &&
+      spot.wake === undefined &&
+      spot.wakeDelay === undefined &&
+      steady.wake === undefined;
+    out.push({
+      name: "editor: wake, wakeDelay, wakeRise and wakeFall survive a save; a spot never writes them",
+      pass: ok,
+      detail: `point ${JSON.stringify({ wake: full.wake, wakeDelay: full.wakeDelay, wakeRise: full.wakeRise, wakeFall: full.wakeFall })}; wake alone ${JSON.stringify({ wake: bare.wake, wakeDelay: bare.wakeDelay })}; spot ${JSON.stringify({ wake: spot.wake })}; always-on ${JSON.stringify({ wake: steady.wake })}`,
+    });
+  }
+
+  // `+ Glow`: one body, a solid purple cube with its glow, the collision rect
+  // it mirrors, and a waking point light at the cube's centre with the
+  // editor's defaults.
+  {
+    const body = glowBody(new Vec2(4, -2));
+    const collision = body.objects.filter(isCollisionObject);
+    const geometry = body.objects.filter(isGeometryObject);
+    const light = body.objects.filter(isLightObject);
+    const square = (s: unknown): boolean =>
+      JSON.stringify(s) === JSON.stringify({ kind: "rect", w: GLOW_CUBE, h: GLOW_CUBE });
+    const g = geometry[0];
+    const l = light[0];
+    const ok =
+      body.kind === "static" &&
+      body.x === 4 &&
+      body.y === -2 &&
+      collision.length === 1 &&
+      square(collision[0]!.shape) &&
+      geometry.length === 1 &&
+      square(g!.shape) &&
+      g!.matchCollision === true &&
+      g!.depth === GLOW_CUBE &&
+      g!.texture === "color" &&
+      g!.color === GLOW_COLOR &&
+      g!.emissive === GLOW_EMISSIVE &&
+      g!.emissiveIntensity === GLOW_EMISSIVE_INTENSITY &&
+      light.length === 1 &&
+      (l!.kind ?? "point") === "point" &&
+      (l!.x ?? 0) === 0 &&
+      (l!.y ?? 0) === 0 &&
+      l!.color === GLOW_EMISSIVE &&
+      l!.range === GLOW_RANGE &&
+      l!.intensity === GLOW_INTENSITY &&
+      l!.wake === GLOW_WAKE &&
+      l!.wakeDelay === GLOW_WAKE_DELAY &&
+      l!.wakeRise === GLOW_WAKE_RISE &&
+      l!.wakeFall === GLOW_WAKE_FALL;
+    out.push({
+      name: "editor: + Glow places one static body - a solid purple cube, its collision rect, and a waking point light at its centre",
+      pass: ok,
+      detail: `${body.objects.length} objects; cube ${JSON.stringify(g?.shape)} ${g?.color} glowing ${g?.emissive} x${g?.emissiveIntensity}; light range ${l?.range} m, ${l?.intensity} cd, wake ${l?.wake} m, delay ${l?.wakeDelay} s, rise ${l?.wakeRise} s, fall ${l?.wakeFall} s`,
+    });
+  }
+
+  // FIREFLIES. Only the plumbing has cases here: how a swarm flies (its lag,
+  // its spread, its leashes) is feel, and gets its cases once it has been
+  // played and settled (CLAUDE.md, "Validate the behaviour before writing the
+  // cases").
+
+  // The format: `fireflies` is a count and passes untouched; a swarm reads
+  // `wake` as its notice distance and is never a waking light; a spot never
+  // swarms; the count is clamped.
+  {
+    const scaled = scaleObject({ type: "light", fireflies: 12, wake: 250 }, PX) as LightObjectData;
+    const swarm = swarmParams(scaled);
+    const bare = swarmParams({ type: "light", fireflies: 5 });
+    const spot = swarmParams({ type: "light", kind: "spot", fireflies: 5 });
+    const none = swarmParams({ type: "light", fireflies: 0 });
+    const big = swarmParams({ type: "light", fireflies: FIREFLY_MAX + 10 });
+    const ok =
+      scaled.fireflies === 12 &&
+      swarm !== null &&
+      swarm.count === 12 &&
+      near(swarm.notice, 2.5) &&
+      wakeParams(scaled) === null &&
+      bare !== null &&
+      bare.notice === DEFAULT_FIREFLY_NOTICE &&
+      spot === null &&
+      none === null &&
+      big?.count === FIREFLY_MAX;
+    out.push({
+      name: "format: fireflies is a count, a swarm notices at `wake` and never wakes, a spot never swarms",
+      pass: ok,
+      detail: `12 @ 250 px -> ${JSON.stringify(swarm)}, waking ${wakeParams(scaled) === null ? "no" : "YES"}; bare ${JSON.stringify(bare)}; spot ${JSON.stringify(spot)}; 0 ${JSON.stringify(none)}; ${FIREFLY_MAX + 10} -> ${big?.count}`,
+    });
+  }
+
+  // The rig: a swarm mounts no light of its own and spends none of the budget;
+  // a level with no swarm builds no firefly light and no mote draw (so every
+  // existing level is the scene it was); the pool never exceeds FIREFLY_POOL.
+  {
+    const rigOf = (swarms: number, steady: number) => {
+      const rig = new LightRig();
+      const scene = new THREE.Scene();
+      const body = new THREE.Group();
+      scene.add(body);
+      let own = 0;
+      for (let i = 0; i < steady; i++) rig.add(body, { type: "light", range: 4 }, { x: i, y: 0, rot: 0, z: 0 });
+      for (let i = 0; i < swarms; i++) {
+        const m = rig.add(body, { type: "light", fireflies: 8 }, { x: i, y: 1, rot: 0, z: 0 });
+        m?.holder.traverse((o) => {
+          if ((o as THREE.Light).isLight) own++;
+        });
+      }
+      rig.buildPool(scene);
+      let lights = 0;
+      let draws = 0;
+      scene.traverse((o) => {
+        if ((o as THREE.Light).isLight) lights++;
+        if ((o as THREE.Points).isPoints && o.name === "fireflies") draws++;
+      });
+      rig.dispose();
+      return { lights, draws, own };
+    };
+    const none = rigOf(0, 3);
+    const few = rigOf(2, LIGHT_BUDGET);
+    const many = rigOf(FIREFLY_POOL + 3, 0);
+    const ok =
+      none.lights === 3 &&
+      none.draws === 0 &&
+      few.lights === LIGHT_BUDGET + 2 &&
+      few.draws === 1 &&
+      many.lights === FIREFLY_POOL &&
+      many.draws === 1 &&
+      few.own + many.own === 0;
+    out.push({
+      name: "fireflies: a level with no swarm builds nothing, a swarm spends no light budget, the pool never exceeds FIREFLY_POOL",
+      pass: ok,
+      detail: `0 swarms + 3 steady: ${none.lights} lights, ${none.draws} draws; 2 + ${LIGHT_BUDGET} steady: ${few.lights} lights, ${few.draws} draw; ${FIREFLY_POOL + 3} swarms: ${many.lights} lights (FIREFLY_POOL ${FIREFLY_POOL}); a swarm's own lights: ${few.own + many.own}`,
+    });
+  }
+
+  // The swarm is reproducible (two hatchings of the same seed fly the same
+  // path, so a headless grab is evidence), stays home with no ball to follow,
+  // and follows once the ball has come within its notice - for good.
+  {
+    const params = swarmParams({ type: "light", fireflies: 10 })!;
+    const home = { x: 0, y: 0, z: 0.5 };
+    const a = new Swarm(params, home, 3);
+    const b = new Swarm(params, home, 3);
+    const alone = new Swarm(params, home, 3);
+    for (let i = 0; i < 120; i++) {
+      a.step(1 / 60, home, { x: 1, y: 0, z: 0 });
+      b.step(1 / 60, home, { x: 1, y: 0, z: 0 });
+      alone.step(1 / 60, home, null);
+    }
+    const same = a.positions.every((v, i) => v === b.positions[i]);
+    const far = new Swarm(params, home, 3);
+    far.step(1 / 60, home, { x: DEFAULT_FIREFLY_NOTICE * 1.01, y: 0, z: 0 });
+    const farHome = !far.following;
+    far.step(1 / 60, home, { x: DEFAULT_FIREFLY_NOTICE * 0.99, y: 0, z: 0 });
+    const noticed = far.following;
+    far.step(1 / 60, home, { x: 50, y: 0, z: 0 });
+    const ok = same && a.following && !alone.following && farHome && noticed && far.following;
+    out.push({
+      name: "fireflies: a swarm is reproducible, stays home with no ball, and follows once the ball comes within notice",
+      pass: ok,
+      detail: `same seed ${same ? "same path" : "DIFFERENT PATHS"}; no ball ${alone.following ? "FOLLOWS" : "home"}; just outside notice ${farHome ? "home" : "FOLLOWS"}, just inside ${noticed ? "follows" : "HOME"}, then 50 m away ${far.following ? "still follows" : "LET GO"}`,
+    });
+  }
+
+  // A swarm on a FIREFLY PATH, through the rig that looks the path up by id:
+  // it follows the ball along the path, leaves it at the path's end, flies back
+  // to the start (not its authored home) and waits there - not noticing the
+  // ball, still standing at the end within reach of nothing, until it has
+  // come back. A swarm on the camera paths beside it follows for good.
+  {
+    const rig = new LightRig();
+    const scene = new THREE.Scene();
+    const body = new THREE.Group();
+    scene.add(body);
+    rig.add(body, { type: "light", fireflies: 6, path: 4 }, { x: -1, y: -0.5, rot: 0, z: 0.5 });
+    rig.add(body, { type: "light", fireflies: 6 }, { x: -1, y: -0.5, rot: 0, z: 0.5 });
+    rig.buildPool(scene);
+    // Sim frame, metres: 10 m to the right along y = 0, starting at x = 0.
+    rig.setRoutes([], [{ id: 4, x: 0, y: 0, rot: 0, verts: [{ x: 0, y: 0 }, { x: 10, y: 0 }] }]);
+    let t = 0;
+    const ball = { x: -1.5, y: 0 };
+    const run = (seconds: number, vx: number) => {
+      for (let i = 0; i < seconds * 60; i++) {
+        ball.x += vx / 60;
+        t += 1 / 60;
+        rig.update(t, 1080, { ball, view: ball });
+      }
+      return rig.swarmStates();
+    };
+    const state = (s: { following: boolean; returning: boolean }) =>
+      s.following ? "follow" : s.returning ? "return" : "home";
+    const rolling = run(3, 3); // x 7.5: on the way
+    const atEnd = run(1.5, 3); // x 12: past the end
+    const back = run(8, 0); // 10 m at RETURN_SPEED, and time to settle
+    const [pathed, camera] = back;
+    const waitsAtStart = Math.hypot(pathed!.x - 0, pathed!.y - 0) < 0.6;
+    const returned = run(4.5, -3); // x -1.5: back past the start
+    const ok =
+      state(rolling[0]!) === "follow" &&
+      state(atEnd[0]!) === "return" &&
+      state(pathed!) === "home" &&
+      waitsAtStart &&
+      state(camera!) === "follow" &&
+      state(returned[0]!) === "follow";
+    rig.dispose();
+    out.push({
+      name: "fireflies: a swarm on a firefly path leaves the player at its end, flies back to its start, and waits there until they come back",
+      pass: ok,
+      detail: `rolling ${state(rolling[0]!)}; past the end ${state(atEnd[0]!)}; 8 s later ${state(pathed!)} at ${pathed!.x.toFixed(2)},${pathed!.y.toFixed(2)} (start 0,0; home -1,-0.5); camera-path swarm ${state(camera!)}; back at the start ${state(returned[0]!)}`,
+    });
+  }
+
+  // The editor: a firefly path round-trips with its id and curve (and no
+  // keys), a swarm's `path` round-trips, and a light that is not a swarm never
+  // writes one.
+  {
+    const raw: RawLevelData = {
+      player: { x: 0, y: 0, radius: 20 },
+      bodies: [
+        {
+          kind: "static",
+          x: 100,
+          y: -300,
+          rot: 0,
+          objects: [
+            { type: "light", fireflies: 9, path: 3 },
+            { type: "light", path: 3 },
+          ],
+        },
+      ],
+      fireflyPaths: [{ id: 3, x: 50, y: 60, rot: 0.5, verts: [{ x: 0, y: 0 }, { x: 400, y: 0, inX: -100, inY: 40 }] }],
+    };
+    const disk = modelToDisk(modelFromDisk(raw));
+    const [swarm, lamp] = disk.bodies[0]!.objects.filter(isLightObject);
+    const p = disk.fireflyPaths?.[0];
+    const ok =
+      disk.fireflyPaths?.length === 1 &&
+      p!.id === 3 &&
+      near(p!.x, 50) &&
+      near(p!.y, 60) &&
+      near(p!.rot, 0.5) &&
+      p!.verts.length === 2 &&
+      near(p!.verts[1]!.x, 400) &&
+      near(p!.verts[1]!.inX!, -100) &&
+      near(p!.verts[1]!.inY!, 40) &&
+      Object.keys(p!.verts[1]!).length === 4 &&
+      disk.cameraPaths === undefined &&
+      swarm!.path === 3 &&
+      lamp!.path === undefined;
+    out.push({
+      name: "editor: firefly paths and a swarm's `path` survive a save; only a swarm writes `path`",
+      pass: ok,
+      detail: `paths ${JSON.stringify(disk.fireflyPaths)}; camera paths ${JSON.stringify(disk.cameraPaths)}; swarm path ${swarm!.path}; lamp path ${lamp!.path}`,
+    });
+  }
+
+  // The editor: `fireflies` round-trips on a point light, a swarm's colour,
+  // intensity and reach are omitted at the FIREFLY's defaults (not a lamp's),
+  // a swarm never writes the wake times, a spot never writes it at all; and
+  // `+ Fireflies` places a body holding only the swarm's light.
+  {
+    const level = (light: LightObjectData): RawLevelData => ({
+      player: { x: 0, y: 0, radius: 20 },
+      bodies: [{ kind: "static", x: 100, y: -300, rot: 0, objects: [light] }],
+    });
+    const saved = (light: LightObjectData) =>
+      modelToDisk(modelFromDisk(level(light))).bodies[0]!.objects.find(isLightObject)!;
+    const swarm = saved({ type: "light", fireflies: 9, wake: 300, wakeRise: 0.4 });
+    const spot = saved({ type: "light", kind: "spot", fireflies: 9 });
+    const tinted = saved({ type: "light", fireflies: 9, color: DEFAULT_LIGHT_COLOR, intensity: DEFAULT_LIGHT_INTENSITY });
+    const body = fireflyBody(new Vec2(4, -2));
+    const l = body.objects.filter(isLightObject);
+    const ok =
+      swarm.fireflies === 9 &&
+      near(swarm.wake!, 300) &&
+      swarm.wakeRise === undefined &&
+      swarm.color === undefined &&
+      swarm.intensity === undefined &&
+      swarm.range === undefined &&
+      spot.fireflies === undefined &&
+      tinted.color === DEFAULT_LIGHT_COLOR &&
+      tinted.intensity === DEFAULT_LIGHT_INTENSITY &&
+      body.objects.length === 1 &&
+      l.length === 1 &&
+      l[0]!.fireflies === FIREFLY_COUNT &&
+      l[0]!.wake === FIREFLY_NOTICE &&
+      l[0]!.color === undefined;
+    out.push({
+      name: "editor: fireflies survive a save against the firefly's own defaults; + Fireflies places a body holding only the swarm",
+      pass: ok,
+      detail: `swarm ${JSON.stringify(swarm)}; spot ${JSON.stringify({ fireflies: spot.fireflies })}; lamp-coloured swarm ${JSON.stringify({ color: tinted.color, intensity: tinted.intensity })}; + Fireflies ${JSON.stringify(body.objects)}`,
+    });
+  }
+  return out;
+}
+
+// GENERATED GEOMETRY: the `generator` block on a geometry object, its parameter
+// schemas, and the content-addressed mesh key (plans/visuals-workspace.md,
+// Phase 2).
+//
+// Nothing here is visible in a picture, and every failure is silent in the way
+// the rest of this file guards against: a length parameter left in pixels is a
+// rock a hundred times too deep, a patch's host index that goes stale is a patch
+// growing on the wrong object, and a key that drifts between the editor and the
+// server is every rock in every level reading as stale (or, worse, as current).
+function generatorCases(): CaseResult[] {
+  const out: CaseResult[] = [];
+  // Rounded to a micrometre for comparison, as `flattened` is: px -> m -> px
+  // leaves float noise in the last bits of a length.
+  const r6 = (_k: string, v: unknown): unknown => (typeof v === "number" ? Math.round(v * 1e6) / 1e6 : v);
+  const same = (a: unknown, b: unknown): boolean => JSON.stringify(a, r6) === JSON.stringify(b, r6);
+  // A loader warning is part of what is asserted, never noise in the suite's
+  // output, so a case that expects one catches it.
+  const quietly = <T,>(run: () => T): { value: T; warnings: string[] } => {
+    const warnings: string[] = [];
+    const warn = console.warn;
+    console.warn = (...args: unknown[]) => void warnings.push(args.map(String).join(" "));
+    try {
+      return { value: run(), warnings };
+    } finally {
+      console.warn = warn;
+    }
+  };
+
+  // One body, on disk in pixels: a collision outline, the boulder dressing it
+  // (a length parameter and two that are not), the rock's mushroom patch naming
+  // the rock as its host by index, and a second patch whose index names the
+  // collision object - which is no host at all.
+  const authored: RawLevelData = {
+    player: { x: 0, y: 0, radius: 8 },
+    bodies: [
+      {
+        kind: "static",
+        x: 300,
+        y: -100,
+        rot: 0.25,
+        color: "#555555",
+        opacity: 1,
+        friction: 1,
+        objects: [
+          { type: "collision", shape: { kind: "poly", verts: [{ x: -100, y: -50 }, { x: 100, y: -50 }, { x: 80, y: 60 }, { x: -90, y: 50 }] } },
+          {
+            type: "geometry",
+            x: 20,
+            y: 5,
+            z: 12,
+            kind: "mesh",
+            mesh: "mushrooms:0000000000000000",
+            shape: { kind: "rect", w: 40, h: 30 },
+            generator: {
+              kind: "mushrooms",
+              version: 1,
+              params: { density: 220, height: 25, noOverlaps: false },
+              patch: { host: 2, points: [{ x: -20, y: 10, z: 3 }, { x: 20, y: 10, z: 4 }, { x: 0, y: -15, z: 6 }] },
+            },
+          },
+          {
+            type: "geometry",
+            kind: "mesh",
+            mesh: "boulder:0000000000000000",
+            shape: { kind: "poly", verts: [{ x: -100, y: -50 }, { x: 100, y: -50 }, { x: 80, y: 60 }, { x: -90, y: 50 }] },
+            generator: { kind: "boulder", version: 1, params: { depth: 120, weathering: 0.5, fractureAngle: 10, color: [0.2, 0.2, 0.25] } },
+          },
+          {
+            type: "geometry",
+            kind: "mesh",
+            shape: { kind: "rect", w: 10, h: 10 },
+            generator: { kind: "mushrooms", version: 1, patch: { host: 0, points: [{ x: 1, y: 2, z: 3 }, { x: 4, y: 5, z: 6 }, { x: 7, y: 8, z: 9 }] } },
+          },
+        ],
+      },
+    ],
+  };
+  const geometries = (d: LevelData): GeometryObjectData[] => d.bodies[0]!.objects.filter(isGeometryObject);
+
+  // --- the format: px <-> m by schema unit ---------------------------------
+  {
+    const m = scaleLevelData(authored, PX);
+    const [patch, rock] = geometries(m);
+    const p = rock!.generator!.params!;
+    const unitsRight =
+      same(p.depth, 1.2) &&
+      p.weathering === 0.5 &&
+      p.fractureAngle === 10 &&
+      JSON.stringify(p.color) === "[0.2,0.2,0.25]" &&
+      same(patch!.generator!.params!.height, 0.25) &&
+      patch!.generator!.params!.density === 220 &&
+      patch!.generator!.params!.noOverlaps === false &&
+      patch!.generator!.patch!.host === 2 &&
+      same(patch!.generator!.patch!.points[2], { x: 0, y: -0.15, z: 0.06 });
+    const back = scaleLevelData(m, PIXELS_PER_METER);
+    const trip = same(geometries(back).map((g) => g.generator), geometries(scaleLevelData(authored, 1)).map((g) => g.generator));
+    out.push({
+      name: "generator: the block crosses px -> m by schema unit (a length scales; a count, a flag, an angle, a ratio, a colour and the host index do not) and back",
+      pass: unitsRight && trip,
+      detail: `in metres ${JSON.stringify({ rock: p, patch: patch!.generator })}; round trip ${trip ? "kept" : `became ${JSON.stringify(geometries(back).map((g) => g.generator))}`}`,
+    });
+  }
+
+  // --- the editor: host index <-> item id ----------------------------------
+  {
+    const { value: model, warnings } = quietly(() => modelFromDisk(authored));
+    const items = model.items.filter((i) => i.object === "geometry");
+    const [patch, rock, orphan] = items;
+    const g = patch!.visual.generator!;
+    const loaded =
+      g.kind === "mushrooms" &&
+      g.patch!.hostId === rock!.id &&
+      same(g.params.height, 0.25) &&
+      same(rock!.visual.generator!.params.depth, 1.2) &&
+      orphan!.visual.generator!.patch!.hostId === 0 &&
+      orphan!.visual.generator!.patch!.points.length === 3 &&
+      warnings.length === 1 &&
+      warnings[0]!.includes("no host");
+    out.push({
+      name: "generator: a patch's host index loads as the host's item id; an index naming no other geometry object loads as no host, loop kept, with a warning",
+      pass: loaded,
+      detail: `host ${g.patch!.hostId} (rock ${rock!.id}); orphan ${JSON.stringify(orphan!.visual.generator!.patch)}; warnings ${JSON.stringify(warnings)}`,
+    });
+
+    // Saved back: the host is written as the index it now has, the orphan
+    // writes none, and everything else is what was loaded.
+    const saved = geometries(modelToDisk(model));
+    const want = geometries(scaleLevelData(authored, 1)).map((o) => o.generator);
+    delete want[2]!.patch!.host;
+    const kept = same(saved.map((o) => o.generator), want);
+    out.push({
+      name: "generator: the editor saves the block back in pixels, the host as its index in the body, a hostless patch with no index",
+      pass: kept,
+      detail: kept ? "kept" : `\n  want  ${JSON.stringify(want, r6)}\n  saved ${JSON.stringify(saved.map((o) => o.generator), r6)}`,
+    });
+
+    // The body's objects reordered under the patch: a new object ahead of the
+    // host moves the host's index, and the save follows it.
+    const shifted: RawLevelData = JSON.parse(JSON.stringify(authored));
+    const shiftedObjects = (shifted.bodies[0] as LevelBodyData).objects;
+    shiftedObjects.splice(1, 0, { type: "geometry", shape: { kind: "rect", w: 5, h: 5 } });
+    // The file states the host where it now is; the editor re-derives it.
+    (shiftedObjects[2] as GeometryObjectData).generator!.patch!.host = 3;
+    const moved = geometries(quietly(() => modelToDisk(modelFromDisk(shifted))).value);
+    const follows = moved[1]!.generator!.patch!.host === 3 && moved[2]!.generator?.kind === "boulder";
+    out.push({
+      name: "generator: a patch whose host moved within the body is written with the host's new index",
+      pass: follows,
+      detail: `host ${moved[1]!.generator!.patch!.host}, object 3 is ${moved[2]!.generator?.kind ?? "not generated"}`,
+    });
+
+    // Clipboard: a copy of the whole body pastes as a patch hosted by the
+    // PASTED rock, which is what `toLevelData` writing indexes buys for free.
+    const payload = writeClipboard(model, model.items);
+    const parsed = readClipboard(payload);
+    const pasted = parsed ? quietly(() => modelFromDisk(parsed)).value : null;
+    const pItems = pasted?.items.filter((i) => i.object === "geometry") ?? [];
+    const pasteOk =
+      pItems.length === 3 &&
+      pItems[0]!.visual.generator!.patch!.hostId === pItems[1]!.id &&
+      same(pItems[1]!.visual.generator!.params, rock!.visual.generator!.params) &&
+      same(pItems[0]!.visual.generator!.patch!.points, g.patch!.points);
+    out.push({
+      name: "generator: copy and paste carries the block, the patch hosted by the pasted rock",
+      pass: pasteOk,
+      detail: pasteOk ? "kept" : `pasted ${JSON.stringify(pItems.map((i) => i.visual.generator), r6)}`,
+    });
+
+    // The deep copy the editor's snapshot, duplicate and paste make, and the
+    // host remap a duplicate does: a copy's colour is its own array, its loop
+    // its own list, and a patch copied without its host has none.
+    const copy = cloneVisual(rock!.visual);
+    (copy.generator!.params.color as number[])[0] = 0.9;
+    const patchCopy = { ...patch!, visual: cloneVisual(patch!.visual) };
+    remapPatchHosts([patchCopy], new Map([[patch!.id, 999]]));
+    const detached =
+      (rock!.visual.generator!.params.color as number[])[0] === 0.2 &&
+      copy.generator !== rock!.visual.generator &&
+      patchCopy.visual.generator!.patch !== g.patch &&
+      patchCopy.visual.generator!.patch!.points !== g.patch!.points &&
+      patchCopy.visual.generator!.patch!.hostId === 0 &&
+      g.patch!.hostId === rock!.id &&
+      cloneGenerator(g).patch!.hostId === rock!.id;
+    out.push({
+      name: "generator: cloneVisual detaches the block (params and loop), and a patch copied without its host is re-hosted to nothing",
+      pass: detached,
+      detail: `original colour ${JSON.stringify(rock!.visual.generator!.params.color)}, copy's host ${patchCopy.visual.generator!.patch!.hostId}`,
+    });
+  }
+
+  // --- an untouched level saves byte-identically -----------------------------
+  {
+    const disk = JSON.stringify(BALL_LEVEL, null, 2);
+    const saved = JSON.stringify(modelToDisk(modelFromDisk(BALL_LEVEL as RawLevelData)), null, 2);
+    const identical = disk === saved;
+    let at = 0;
+    while (at < disk.length && disk[at] === saved[at]) at++;
+    out.push({
+      name: "generator: levels/ball.json (no generated objects) saves back byte-identical",
+      pass: identical,
+      detail: identical ? `${disk.length} bytes` : `first difference at ${at}: ${JSON.stringify(disk.slice(at - 40, at + 40))} vs ${JSON.stringify(saved.slice(at - 40, at + 40))}`,
+    });
+  }
+
+  // --- the key ----------------------------------------------------------------
+  {
+    // Two fixed contents, and the keys they must make everywhere, for ever: a
+    // change to either string is every generated mesh in every level going
+    // stale, and is only ever made on purpose (with a schema version bump).
+    const rockInput = { outline: [[-1, -0.5], [1, -0.5], [1, 0.5], [-1, 0.5]] as [number, number][] };
+    const rockParams = { seed: 7, depth: 1.2 };
+    //
+    // The patch's key was re-pinned once, on 2026-09-25 (it was
+    // mushrooms:a63d3184bac129bb): its key INPUT changed shape - the host's
+    // pose became its whole frame relative to the patch (`frame`, both tilts
+    // and scales), and the side the loop was painted on (`facing`) joined it -
+    // before any patch had been saved into a level. The schema `version` is the
+    // parameters' and was not bumped; a changed input shape changes keys by
+    // itself (docs/generators.md, "The editor's side").
+    const patchInput = {
+      loop: [[0, 0, 0.1], [0.5, 0, 0.1], [0.25, 0.4, 0.12]] as [number, number, number][],
+      facing: [0, 0.6, 0.8] as [number, number, number],
+      host: { kind: "mesh" as const, mesh: "boulder:0123456789abcdef", frame: [1, 0, 0, 0.1, 0, 1, 0, -0.2, 0, 0, 1, 0] },
+    };
+    const patchParams = { density: 200, noOverlaps: false };
+    const rockKey = generatedKey("boulder", 1, rockInput, rockParams);
+    const patchKey = generatedKey("mushrooms", 1, patchInput, patchParams);
+    // Also computed under node (V8) when pinned, which agreed with bun (JSC).
+    const ROCK_KEY = "boulder:c82bc75873f0956b";
+    const PATCH_KEY = "mushrooms:b23c95d4426ccdcd";
+    const text = canonicalString({ kind: "boulder", version: 1, input: rockInput, params: rockParams });
+    const TEXT = `{"input":{"outline":[[-1,-0.5],[1,-0.5],[1,0.5],[-1,0.5]]},"kind":"boulder","params":{"depth":1.2,"seed":7},"version":1}`;
+    out.push({
+      name: "generator: generatedKey is pinned on two fixed inputs (a boulder outline, a mushroom patch) and on its canonical string",
+      pass: rockKey === ROCK_KEY && patchKey === PATCH_KEY && text === TEXT,
+      detail: `${rockKey}, ${patchKey}; canonical ${text}`,
+    });
+
+    // One rock, however its parameters are spelled: defaults written out,
+    // float noise from a px round trip, keys in another order. And a different
+    // rock for a different seed, version, outline or kind.
+    const spelled = generatedKey("boulder", 1, rockInput, { depth: 1.2 + 1e-12, edgeVariation: 0.65, seed: 7, tolerance: null });
+    const moved = generatedKey("boulder", 1, { outline: [[-1, -0.5], [1, -0.5], [1, 0.5], [-1, 0.51]] }, rockParams);
+    const distinct = new Set([
+      rockKey,
+      generatedKey("boulder", 1, rockInput, { ...rockParams, seed: 8 }),
+      generatedKey("boulder", 2, rockInput, rockParams),
+      moved,
+      generatedKey("mushrooms", 1, rockInput, {}),
+    ]);
+    const stable = spelled === rockKey && distinct.size === 5;
+    out.push({
+      name: "generator: generatedKey ignores defaults, float noise and key order, and changes with seed, version, outline and kind",
+      pass: stable,
+      detail: `spelled ${spelled}; ${distinct.size} distinct of 5`,
+    });
+
+    const hash = rockKey.split(":")[1]!;
+    const resolved =
+      generatedMeshAsset(rockKey)?.file === `/generated/boulder/${hash}/mesh.glb` &&
+      generatedMeshAsset(patchKey)?.file === `/generated/mushrooms/${patchKey.split(":")[1]}/mesh.glb` &&
+      generatedMeshAsset("rock-196") === null &&
+      generatedMeshAsset("boulder-v5:263a5a5c-58d7-437c-b957-9900893e48b5:5129496") === null &&
+      generatedMeshAsset("boulder:XYZ") === null &&
+      parseGeneratedKey(patchKey)?.kind === "mushrooms";
+    out.push({
+      name: "generator: a generated key resolves to /generated/<kind>/<hash>/mesh.glb, and nothing else does",
+      pass: resolved,
+      detail: `${rockKey} -> ${generatedMeshAsset(rockKey)?.file}`,
+    });
+
+    // The preload list: a generated file is listed at the bytes its meta.json
+    // records, and at 0 with a warning when there is none.
+    const dir = mkdtempSync(join(tmpdir(), "rope-generated-"));
+    mkdirSync(join(dir, "generated", "boulder", hash), { recursive: true });
+    writeFileSync(join(dir, "generated", "boulder", hash, "meta.json"), JSON.stringify({ key: rockKey, bytes: 123456 }));
+    const meta = generatedMeta(rockKey, dir);
+    const missing = generatedMeta(patchKey, dir);
+    rmSync(dir, { recursive: true, force: true });
+    const level: RawLevelData = {
+      player: { x: 0, y: 0, radius: 8 },
+      bodies: [{ kind: "static", x: 0, y: 0, rot: 0, objects: [{ type: "geometry", kind: "mesh", mesh: patchKey }] }],
+    };
+    const { value: files, warnings } = quietly(() => levelStoredFiles(level));
+    const listed = files.find((f) => f.file === generatedMeshAsset(patchKey)!.file);
+    const preload = meta?.bytes === 123456 && missing === null && listed?.bytes === 0 && warnings.some((w) => w.includes("meta.json"));
+    out.push({
+      name: "generator: meta.json gives a generated file its bytes; the preload list names one without it at 0, with a warning",
+      pass: preload,
+      detail: `meta bytes ${meta?.bytes}, missing ${JSON.stringify(missing)}, listed ${JSON.stringify(listed)}, warnings ${warnings.length}`,
+    });
+
+    // A PUBLISHED key is weighed from the store manifest, which a fresh
+    // checkout (the deploy's) has and its meta.json does not; and its release
+    // name is its own, since every generated file is `mesh.glb`.
+    const published = Object.keys(GENERATED_ASSETS)[0];
+    if (published) {
+      const pinned: RawLevelData = {
+        player: { x: 0, y: 0, radius: 8 },
+        bodies: [{ kind: "static", x: 0, y: 0, rot: 0, objects: [{ type: "geometry", kind: "mesh", mesh: published }] }],
+      };
+      const got = quietly(() => levelStoredFiles(pinned));
+      const entry = got.value.find((f) => f.file === generatedMeshAsset(published)!.file);
+      const name = generatedReleaseName(published);
+      out.push({
+        name: "generator: a published key is weighed from the store manifest, under a release name of its own",
+        pass: entry?.bytes === GENERATED_ASSETS[published]!.bytes && got.warnings.length === 0 && /^generated-(boulder|mushrooms)-[0-9a-f]{16}\.glb$/.test(name),
+        detail: `${published}: listed ${JSON.stringify(entry)}, manifest ${GENERATED_ASSETS[published]!.bytes}, release name ${name}`,
+      });
+    }
+  }
+
+  // --- the schemas -------------------------------------------------------------
+  {
+    const problems: string[] = [];
+    const counts: string[] = [];
+    for (const kind of GENERATOR_KINDS) {
+      const s = GENERATOR_SCHEMAS[kind];
+      if (s.kind !== kind || !Number.isInteger(s.version) || s.version < 1) problems.push(`${kind}: kind/version`);
+      if (!Array.isArray(s.notes?.constants) || s.notes.constants.length === 0) problems.push(`${kind}: no constants note`);
+      const keys = new Set<string>();
+      for (const p of s.params) {
+        const where = `${kind}.${p.key}`;
+        if (keys.has(p.key)) problems.push(`${where}: duplicate`);
+        keys.add(p.key);
+        if (!s.groups.includes(p.group)) problems.push(`${where}: group ${p.group}`);
+        if (typeof p.basic !== "boolean" || typeof p.doc !== "string" || p.doc.length < 10) problems.push(`${where}: basic/doc`);
+        if (p.unit !== undefined && p.unit !== "m" && p.unit !== "deg") problems.push(`${where}: unit ${p.unit}`);
+        if (p.type === "int" || p.type === "number" || p.type === "color") {
+          if (typeof p.min !== "number" || typeof p.max !== "number" || typeof p.step !== "number") problems.push(`${where}: min/max/step`);
+        }
+        if (p.type === "enum" && !(p.options ?? []).includes(p.default as number | string)) problems.push(`${where}: default not an option`);
+        // Every default is itself a valid value (null is "derived").
+        if (p.default !== null && validateParams({ [p.key]: p.default }, s).length > 0) problems.push(`${where}: default invalid`);
+      }
+      counts.push(`${kind} ${s.groups.map((g) => `${g} ${s.params.filter((p) => p.group === g).length}`).join(", ")}`);
+    }
+    out.push({
+      name: "generator: both params.json files are well formed (unique keys, known groups and units, ranges, a doc each, defaults valid)",
+      pass: problems.length === 0,
+      detail: problems.length === 0 ? counts.join("; ") : problems.join("; "),
+    });
+
+    // The values the fork's editor actually sent, which is what "the port
+    // changes nothing about an approved rock" rests on.
+    const d = (kind: GeneratorKind) => Object.fromEntries(GENERATOR_SCHEMAS[kind].params.map((p) => [p.key, p.default]));
+    const b = d("boulder");
+    const m = d("mushrooms");
+    const fork =
+      b.seed === 31 && b.depth === 1.6 && b.tolerance === null && b.edgeVariation === 0.65 && b.weathering === 0.38 &&
+      b.fractureAngle === 4 && b.detail === 1 && b.secondarySlabs === 0 && b.slabsPerArea === 10 &&
+      JSON.stringify(b.color) === "[0.13,0.15,0.18]" && b.faceBudget === 3000 && b.bakeSize === 2048 &&
+      m.seed === 0 && m.density === 150 && m.height === 0.16 && m.clumping === 0.75 && m.maxSlope === 75 &&
+      m.detail === 0.3 && m.spacing === 0.02 && m.noOverlaps === true && m.glow === 2 && m.maxTriangles === 40000 &&
+      m.maxEstimate === 3000;
+    out.push({
+      name: "generator: the defaults are the values the fork's editor sent (boulder seed 31, depth 1.6, ...; mushrooms density 150, detail 0.3, ...)",
+      pass: fork,
+      detail: `boulder ${JSON.stringify(b)}; mushrooms ${JSON.stringify(m)}`,
+    });
+  }
+
+  // --- scaling, validation, defaults -----------------------------------------
+  {
+    const boulder = GENERATOR_SCHEMAS.boulder;
+    const mushrooms = GENERATOR_SCHEMAS.mushrooms;
+    const scaled = scaleParams(
+      { depth: 1.2, edgeBevelWidth: 0.02, weathering: 0.5, fractureAngle: 10, faceBudget: 4000, color: [0.1, 0.2, 0.3], mystery: 3 },
+      boulder,
+      100,
+    );
+    const grown = scaleParams({ height: 0.2, spacing: 0.03, gap: 0.004, clumpSize: 0.5, density: 180, maxTilt: 20, noOverlaps: false }, mushrooms, 100);
+    const byUnit =
+      same(scaled, { depth: 120, edgeBevelWidth: 2, weathering: 0.5, fractureAngle: 10, faceBudget: 4000, color: [0.1, 0.2, 0.3], mystery: 3 }) &&
+      same(grown, { height: 20, spacing: 3, gap: 0.4, clumpSize: 50, density: 180, maxTilt: 20, noOverlaps: false });
+    out.push({
+      name: "generator: scaleParams scales exactly the unit-m parameters (a degree, a count, a ratio, a density, a colour and an unknown key pass)",
+      pass: byUnit,
+      detail: `${JSON.stringify(scaled, r6)}; ${JSON.stringify(grown, r6)}`,
+    });
+
+    const bad = validateParams(
+      { depth: 9, seed: 1.5, weathering: "much", bakeSize: 3000, color: [0.1, 2, 0.1], mystery: 1 },
+      boulder,
+    ).map((i) => i.key);
+    const badBool = validateParams({ noOverlaps: 1, density: 0 }, mushrooms).map((i) => i.key);
+    const good = validateParams({ depth: 5, seed: 0, color: [0, 1, 0.5], bakeSize: 4096, tolerance: 0.03 }, boulder);
+    const rejects =
+      JSON.stringify(bad.sort()) === JSON.stringify(["bakeSize", "color", "depth", "mystery", "seed", "weathering"]) &&
+      JSON.stringify(badBool.sort()) === JSON.stringify(["density", "noOverlaps"]) &&
+      good.length === 0;
+    out.push({
+      name: "generator: validateParams rejects out-of-range, mistyped, non-option and unknown values and passes the edges of the range",
+      pass: rejects,
+      detail: `flagged ${JSON.stringify(bad)} and ${JSON.stringify(badBool)}; valid set ${JSON.stringify(good)}`,
+    });
+
+    const authoredParams = { depth: 1.2, color: [0.2, 0.2, 0.25] };
+    const merged = mergeDefaults(authoredParams, boulder);
+    const stripped = stripDefaults(merged, boulder);
+    const allDefaults = stripDefaults(mergeDefaults({}, boulder), boulder);
+    const nearDefault = stripDefaults({ depth: 1.6 + 1e-9, seed: 31, weathering: 0.3801 }, boulder);
+    const mergeOk =
+      Object.keys(merged).length === boulder.params.length &&
+      merged.depth === 1.2 &&
+      merged.seed === 31 &&
+      merged.tolerance === null &&
+      same(stripped, authoredParams) &&
+      Object.keys(allDefaults).length === 0 &&
+      same(nearDefault, { weathering: 0.3801 }) &&
+      same(canonicalParams({ weathering: 0.5, depth: 1.6, seed: 9 }, boulder), { seed: 9, weathering: 0.5 }) &&
+      JSON.stringify(Object.keys(canonicalParams({ weathering: 0.5, seed: 9 }, boulder))) === '["seed","weathering"]';
+    out.push({
+      name: "generator: mergeDefaults fills every parameter and stripDefaults takes it back to what was authored, at 1e-4 resolution",
+      pass: mergeOk,
+      detail: `merged ${Object.keys(merged).length} of ${boulder.params.length}; stripped ${JSON.stringify(stripped)}; near-default ${JSON.stringify(nearDefault)}`,
+    });
+  }
+
+  // --- staleness -----------------------------------------------------------------
+  {
+    const model = quietly(() => modelFromDisk(authored)).value;
+    const lookup = itemLookup(model.items);
+    const [patch, rock] = model.items.filter((i) => i.object === "geometry");
+    // Generated as it stands.
+    rock!.visual.mesh = expectedKey(rock!, lookup)!;
+    patch!.visual.mesh = expectedKey(patch!, lookup)!;
+    const fresh = !isStale(rock!, lookup) && !isStale(patch!, lookup);
+    const plain = model.items.find((i) => i.object === "collision")!;
+    const outline = boulderOutline(rock!);
+
+    // The whole body moved and turned: nothing the generators read changed.
+    const turn = 0.4;
+    const pivot = new Vec2(1, 2);
+    for (const i of model.items) {
+      i.pos = pivot.add(i.pos.sub(pivot).rotated(turn));
+      i.rot += turn;
+    }
+    const bodyMoved = !isStale(rock!, lookup) && !isStale(patch!, lookup);
+
+    // The host alone moved: the patch is stale, the rock is not.
+    const home = rock!.pos;
+    rock!.pos = rock!.pos.add(new Vec2(0.05, 0));
+    const hostMoved = !isStale(rock!, lookup) && isStale(patch!, lookup);
+    rock!.pos = home;
+
+    // The patch tipped or scaled on its own, or the host tipped: the relative
+    // frame the key holds moved, so the patch is stale.
+    const alone = (edit: () => void, undo: () => void): boolean => {
+      edit();
+      const stale = isStale(patch!, lookup);
+      undo();
+      return stale && !isStale(patch!, lookup);
+    };
+    const patchTipped = alone(() => (patch!.visual.rotX = 0.1), () => (patch!.visual.rotX = 0));
+    const patchScaled = alone(() => (patch!.visual.scale = 1.2), () => (patch!.visual.scale = 1));
+    const hostTipped = alone(() => (rock!.visual.rotY = 0.1), () => (rock!.visual.rotY = 0));
+
+    // A primitive host: what it wears and its lens are part of its surface.
+    rock!.visual.kind = "primitive";
+    patch!.visual.mesh = expectedKey(patch!, lookup)!;
+    const retextured = alone(() => (rock!.visual.texture = "moss"), () => (rock!.visual.texture = ""));
+    const lens = rock!.visual.projection;
+    const relensed = alone(
+      () => (rock!.visual.projection = lens === "orthographic" ? "perspective" : "orthographic"),
+      () => (rock!.visual.projection = lens),
+    );
+    rock!.visual.kind = "mesh";
+    patch!.visual.mesh = expectedKey(patch!, lookup)!;
+
+    // Two rocks never generated are two hosts: a patch on one keys the rock's
+    // future key, so a different seed is a different patch; once the rock has
+    // a mesh, its mesh key alone speaks for it.
+    const rockMesh = rock!.visual.mesh;
+    rock!.visual.mesh = "";
+    const unmadeA = expectedKey(patch!, lookup);
+    rock!.visual.generator!.params.seed = 99;
+    const unmadeB = expectedKey(patch!, lookup);
+    delete rock!.visual.generator!.params.seed;
+    rock!.visual.mesh = rockMesh;
+    const unmadeHosts = unmadeA !== null && unmadeB !== null && unmadeA !== unmadeB && !isStale(patch!, lookup);
+
+    // A parameter, a vertex, the version.
+    rock!.visual.generator!.params.depth = 1.3;
+    const paramChanged = isStale(rock!, lookup) && isStale(patch!, lookup) === false;
+    rock!.visual.generator!.params.depth = 1.2;
+    const shape = rock!.shape as Extract<EdItem["shape"], { kind: "poly" }>;
+    const vert = shape.verts[0]!;
+    shape.verts[0] = vert.add(new Vec2(0.01, 0));
+    const vertexChanged = isStale(rock!, lookup);
+    shape.verts[0] = vert;
+    rock!.visual.generator!.version = 2;
+    const versionChanged = isStale(rock!, lookup);
+    rock!.visual.generator!.version = 1;
+    // Stale when the host goes, when never generated, never without a block.
+    patch!.visual.generator!.patch!.hostId = 0;
+    const hostless = isStale(patch!, lookup) && expectedKey(patch!, lookup) === null;
+    const unmade = { ...rock!, visual: { ...rock!.visual, mesh: "" } };
+    const results = {
+      fresh,
+      bodyMoved,
+      hostMoved,
+      patchTipped,
+      patchScaled,
+      hostTipped,
+      retextured,
+      relensed,
+      unmadeHosts,
+      paramChanged,
+      vertexChanged,
+      versionChanged,
+      hostless,
+      neverGenerated: isStale(unmade, lookup),
+      noBlock: !isStale(plain, lookup),
+      outlineUp: same(outline[0], [-1, 0.5]),
+    };
+    const ok = Object.values(results).every(Boolean);
+    out.push({
+      name: "generator: isStale follows the outline, the loop's host (its whole frame relative to the patch, a primitive's texture and lens, an ungenerated rock's future key), the patch's own tilt and scale, the params and the version, and not a move of the whole body",
+      pass: ok,
+      detail: JSON.stringify(results),
+    });
+  }
+  return out;
+}
+
+// A boulder's outline as the key sees it: the object's own shape, y up.
+function boulderOutline(item: EdItem): [number, number][] {
+  const input = generatorInput(item, () => undefined);
+  return input && "outline" in input ? input.outline : [];
+}
+
+// A small level for the tools' cases, on disk in pixels: one static body with
+// an irregular collision polygon (about 2 m across) and the geometry matched
+// to it, and a circle body that no rock can be fitted to.
+function toolLevel(): RawLevelData {
+  return {
+    player: { x: 0, y: 0, radius: 8 },
+    bodies: [
+      {
+        kind: "static",
+        x: 200,
+        y: 100,
+        rot: 0,
+        objects: [
+          {
+            type: "collision",
+            shape: { kind: "poly", verts: [{ x: -100, y: -40 }, { x: -30, y: -70 }, { x: 90, y: -50 }, { x: 110, y: 20 }, { x: 40, y: 60 }, { x: -80, y: 45 }] },
+          },
+          {
+            type: "geometry",
+            matchCollision: true,
+            shape: { kind: "poly", verts: [{ x: -100, y: -40 }, { x: -30, y: -70 }, { x: 90, y: -50 }, { x: 110, y: 20 }, { x: 40, y: 60 }, { x: -80, y: 45 }] },
+          },
+        ],
+      },
+      { kind: "static", x: -300, y: 0, rot: 0, objects: [{ type: "collision", shape: { kind: "circle", r: 30 } }] },
+    ],
+  };
+}
+
+// THE TOOLS' PURE HALVES (Phase 5 of plans/visuals-workspace.md): the surface a
+// mushroom loop covers, the objects + Rock and + Mushrooms add, and the panel's
+// reading and writing of parameters. The editor's wiring (one undo step per
+// gesture, the scene's meshes) is driven in the browser, not here.
+function generatorTools(): CaseResult[] {
+  const out: CaseResult[] = [];
+  const near = (a: number, b: number, tol: number) => Math.abs(a - b) <= tol;
+
+  // --- the surface a loop covers, on a 1 m box at the origin ---------------
+  {
+    const box = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1));
+    box.updateMatrixWorld(true);
+    // A 0.6 m square on the top face, and one on the front face (a wall).
+    const up = new THREE.Vector3(0, 1, 0);
+    const toward = new THREE.Vector3(0, 0, 1);
+    const top = [[-0.3, -0.3], [0.3, -0.3], [0.3, 0.3], [-0.3, 0.3]].map(([x, z]) => ({
+      point: new THREE.Vector3(x!, 0.5, z!),
+      normal: up,
+    }));
+    const front = [[-0.3, -0.3], [0.3, -0.3], [0.3, 0.3], [-0.3, 0.3]].map(([x, y]) => ({
+      point: new THREE.Vector3(x!, y!, 0.5),
+      normal: toward,
+    }));
+    const f = frameOf(top)!;
+    const frameOk = f !== null && near(f.n.y, 1, 1e-9) && near(f.origin.y, 0.5, 1e-9) && f.band >= 0.05 && f.step > 0;
+    const topSel = selectSurface([box], top, { maxSlopeDeg: 75, maxTriangles: 40000 });
+    const topArea = topSel.ok ? topSel.selection.area : 0;
+    const topTris = topSel.ok ? topSel.selection.triangles : 0;
+    // The step cuts the box's two top triangles to the loop's edge: the area is
+    // the loop's own 0.36 m^2 to within the cut's staircase.
+    const areaOk = near(topArea, 0.36, 0.36 * 0.05) && topTris > 2;
+    // A wall: refused at 75 degrees, taken at 90.
+    const wall75 = selectSurface([box], front, { maxSlopeDeg: 75, maxTriangles: 40000 });
+    const wall90 = selectSurface([box], front, { maxSlopeDeg: 90, maxTriangles: 40000 });
+    const slopeOk = !wall75.ok && wall75.reason === "empty" && wall90.ok && near(wall90.selection.area, 0.36, 0.36 * 0.05);
+    // A second box 3 m under the first: its top faces the loop and is inside it
+    // seen from above, but it is far outside the band.
+    const below = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1));
+    below.position.set(0, -3, 0);
+    below.updateMatrixWorld(true);
+    const banded = selectSurface([box, below], top, { maxSlopeDeg: 75, maxTriangles: 40000 });
+    const bandOk = banded.ok && near(banded.selection.area, topArea, 1e-9);
+    // Over the cap: an answer, not a search that never ends.
+    const capped = selectSurface([box], top, { maxSlopeDeg: 75, maxTriangles: 1 });
+    const capOk = !capped.ok && capped.reason === "overflow";
+    // The soup in the patch's frame: world minus the patch origin, 1e-4 m.
+    const pose = { x: 0, y: -0.5, z: 0, rot: 0, rotX: 0, rotY: 0, scale: 1 };
+    const soup = topSel.ok ? soupInFrame(topSel.selection.positions, patchMatrix(pose).invert()) : [];
+    const soupOk = soup.length === topTris * 9 && soup.filter((_, i) => i % 3 === 1).every((y) => y === 0);
+    const ok = frameOk && areaOk && slopeOk && bandOk && capOk && soupOk;
+    out.push({
+      name: "generator: a painted loop collects the faces inside it (area, triangles), leaves a wall past maxSlope, a face outside the band and a soup over the cap",
+      pass: ok,
+      detail: JSON.stringify({ frameOk, topArea, topTris, slopeOk, bandOk, capOk, soupOk }),
+    });
+  }
+
+  // --- the patch frame: a loop stored in it comes back where it was painted --
+  {
+    const pose = { x: 1.2, y: -0.4, z: 0.3, rot: 0.7, rotX: 0.2, rotY: -0.3, scale: 1.5 };
+    const m = patchMatrix(pose);
+    const inv = m.clone().invert();
+    const w = new THREE.Vector3(1.5, 0.9, 0.1);
+    const back = loopPointToWorld(m, worldToLoopPoint(inv, w));
+    // The frame is the one `mountVisual` builds: a piece turned by `rot`, a
+    // holder at `z` tipped (rotX, rotY) and scaled.
+    const piece = new THREE.Group();
+    piece.position.set(pose.x, -pose.y, 0);
+    piece.rotation.z = -pose.rot;
+    const holder = new THREE.Group();
+    holder.position.z = pose.z;
+    holder.rotation.set(pose.rotX, pose.rotY, 0);
+    holder.scale.setScalar(pose.scale);
+    piece.add(holder);
+    piece.updateMatrixWorld(true);
+    const local = new THREE.Vector3(0.1, -0.2, 0.3);
+    const viaScene = local.clone().applyMatrix4(holder.matrixWorld);
+    const viaFrame = local.clone().applyMatrix4(m);
+    const ok = back.distanceTo(w) < 1e-12 && viaScene.distanceTo(viaFrame) < 1e-12;
+    out.push({
+      name: "generator: a patch's frame is the one mountVisual draws its mesh in, and a loop point round-trips through it",
+      pass: ok,
+      detail: `round trip ${back.distanceTo(w).toExponential(2)} m; scene vs frame ${viaScene.distanceTo(viaFrame).toExponential(2)} m`,
+    });
+  }
+
+  // --- + Rock: one body gains one generated object ---------------------------
+  {
+    const model = modelFromDisk(toolLevel());
+    const lookup = itemLookup(model.items);
+    const [coll, matched] = model.items.filter((i) => i.bodyId === model.items[0]!.bodyId);
+    const circle = model.items.find((i) => i.shape.kind === "circle")!;
+    const fromOutline = rockSource(model.items, coll!);
+    const fromMatched = rockSource(model.items, matched!);
+    const noCircle = rockSource(model.items, circle) === null;
+    const before = model.items.length;
+    const rock = rockFor(fromOutline!, 9001);
+    model.items.push(rock);
+    const g = rock.visual.generator!;
+    const block =
+      g.kind === "boulder" &&
+      g.version === GENERATOR_SCHEMAS.boulder.version &&
+      Object.keys(g.params).length === 0 &&
+      g.patch === null &&
+      rock.visual.kind === "mesh" &&
+      rock.visual.mesh === "" &&
+      rock.object === "geometry" &&
+      rock.bodyId === coll!.bodyId &&
+      rock.matchId === coll!.id;
+    // Not yet generated: stale, with a key to generate under.
+    const stale = isStale(rock, itemLookup(model.items)) && wantedKey(rock, itemLookup(model.items)) !== null;
+    const again = existingRock(model.items, coll!) === rock;
+    // On disk: the same body, one more object, the block and the match.
+    const data = toLevelData(model);
+    const body = data.bodies.find((b) => b.objects.length === 3)!;
+    const written = body?.objects.filter(isGeometryObject).find((o) => o.generator);
+    const disk =
+      model.items.length === before + 1 &&
+      written?.generator?.kind === "boulder" &&
+      written.matchCollision === true &&
+      written.generator.params === undefined &&
+      written.mesh === undefined;
+    const ok = fromOutline === coll && fromMatched === coll && noCircle && block && stale && again && disk && lookup(coll!.id) === coll;
+    out.push({
+      name: "generator: + Rock adds one matched mesh object with a default boulder block to the outline's body, and finds it again",
+      pass: ok,
+      detail: JSON.stringify({ fromOutline: fromOutline === coll, fromMatched: fromMatched === coll, noCircle, block, stale, again, disk, written: written?.generator }),
+    });
+  }
+
+  // --- + Mushrooms: the patch in the host's body, its loop in its own frame ---
+  {
+    const model = modelFromDisk(toolLevel());
+    const host = model.items.find((i) => i.object === "geometry")!;
+    // A loop on the host's front face, 0.1 m toward the camera, and a soup
+    // under it.
+    const loop = [
+      new THREE.Vector3(1.8, -0.9, 0.1),
+      new THREE.Vector3(2.2, -0.9, 0.12),
+      new THREE.Vector3(2.1, -1.2, 0.14),
+      new THREE.Vector3(1.85, -1.15, 0.1),
+    ];
+    const soup = new Float32Array([1.8, -1.2, 0.1, 2.2, -1.2, 0.14, 2.2, -0.9, 0.12, 1.8, -1.2, 0.1, 2.2, -0.9, 0.12, 1.8, -0.9, 0.1]);
+    // The painted normals summed: toward the camera, a little up.
+    const patch = patchFor(host, 9002, loop, soup, new THREE.Vector3(0, 0.4, 3.8));
+    model.items.push(patch);
+    const g = patch.visual.generator!;
+    const m = patchMatrix(objectPose(patch, patch.visual.offsetZ));
+    const worst = Math.max(...g.patch!.points.map((p, i) => loopPointToWorld(m, p).distanceTo(loop[i]!)));
+    const lookup = itemLookup(model.items);
+    const input = generatorInput(patch, lookup);
+    const shape = patch.shape.kind === "rect" ? patch.shape : null;
+    // The facing stored unit length, y down like the points, and keyed y up.
+    const f = g.patch!.facing;
+    const facingOk =
+      f !== null && near(Math.hypot(f.x, f.y, f.z), 1, 1e-4) && near(f.y, -0.1047, 1e-4) && f.z > 0.99 &&
+      input !== null && "facing" in input && near(input.facing![1], 0.1047, 1e-4);
+    const placed =
+      patch.bodyId === host.bodyId &&
+      g.kind === "mushrooms" &&
+      g.patch?.hostId === host.id &&
+      patch.matchId === 0 &&
+      patch.visual.mesh === "" &&
+      near(patch.pos.x, 2, 1e-6) &&
+      near(patch.pos.y, 1.05, 1e-6) &&
+      near(patch.visual.offsetZ, 0.12, 1e-6) &&
+      shape !== null && near(shape.w, 0.4, 1e-6) && near(shape.h, 0.3, 1e-6);
+    const data = toLevelData(model);
+    const objects = data.bodies.find((b) => b.objects.some((o) => isGeometryObject(o) && o.generator))!.objects;
+    const written = objects.filter(isGeometryObject).find((o) => o.generator?.kind === "mushrooms");
+    const hostIndex = objects.findIndex((o) => isGeometryObject(o) && !o.generator);
+    const disk = written?.generator?.patch?.host === hostIndex && written.generator.patch.points.length === 4;
+    // The facing is a direction: written as held, and not scaled px <-> m.
+    const px = scaleLevelData(data, PIXELS_PER_METER);
+    const pxPatch = px.bodies.flatMap((b) => b.objects).filter(isGeometryObject).find((o) => o.generator?.kind === "mushrooms");
+    const asText = (v: unknown): string => JSON.stringify(v ?? null);
+    const facingDisk =
+      f !== null && asText(written?.generator?.patch?.facing) === asText(f) && asText(pxPatch?.generator?.patch?.facing) === asText(f);
+    const ok = placed && worst < 1e-9 && input !== null && disk && facingOk && facingDisk;
+    out.push({
+      name: "generator: + Mushrooms adds one patch in the host's body, at the soup's middle and extent, its loop in its own frame naming the host, with the side it was painted on",
+      pass: ok,
+      detail: JSON.stringify({ placed, worst, input: input !== null, disk, facingOk, facingDisk, f, hostIndex, written: written?.generator?.patch?.host }),
+    });
+
+    // Edit loop moved the loop: the patch is fitted to what it covers now, and
+    // the loop stays where it was painted in the world. A turned, tipped and
+    // scaled patch, so the fit is shown in its own frame and not the world's.
+    patch.rot = 0.3;
+    patch.visual.rotX = 0.2;
+    patch.visual.scale = 1.5;
+    const frame = patchMatrix(objectPose(patch, patch.visual.offsetZ));
+    const before = g.patch!.points.map((p) => loopPointToWorld(frame, p));
+    // A soup 0.5 m further right in the patch's own frame, 0.2 x 0.1 x 0.02.
+    const local = [[0.4, -0.05, 0], [0.6, -0.05, 0.02], [0.6, 0.05, 0.01]];
+    const moved = new Float32Array(local.flatMap(([x, y, z]) => new THREE.Vector3(x, y, z).applyMatrix4(frame).toArray()));
+    const fit = refitPatch(patch, frame, moved)!;
+    const refitted = { ...patch, pos: fit.pos, visual: { ...patch.visual, offsetZ: fit.offsetZ } };
+    const after = patchMatrix(objectPose(refitted, fit.offsetZ));
+    const drift = Math.max(...fit.points.map((p, i) => loopPointToWorld(after, p).distanceTo(before[i]!)));
+    const centre = new THREE.Vector3(0.5, 0, 0.01).applyMatrix4(frame);
+    const origin = new THREE.Vector3().applyMatrix4(after);
+    // The soup is a Float32Array (as `selectSurface` makes it), so the box it
+    // gives is good to a few tenths of a micrometre.
+    const refitOk =
+      drift < 1e-9 &&
+      origin.distanceTo(centre) < 1e-6 &&
+      near(fit.w, 0.2, 1e-6) && near(fit.h, 0.1, 1e-6) && near(fit.depth, MIN_PATCH_EXTENT, 1e-9) &&
+      refitPatch(patch, frame, new Float32Array(0)) === null;
+    out.push({
+      name: "generator: Edit loop re-fits the patch to the faces its loop covers now (origin, rect, depth in its own turned, tipped, scaled frame), the loop staying put in the world",
+      pass: refitOk,
+      detail: JSON.stringify({ drift, origin: origin.toArray(), centre: centre.toArray(), w: fit.w, h: fit.h, depth: fit.depth }),
+    });
+  }
+
+  // --- a landing mesh in the redo states ------------------------------------
+  // The swap keeps the redo stack and writes the mesh into every redo state
+  // that wants it, so a redo after a landing keeps the rock; a state whose
+  // content differs is left alone, as is a state without the object.
+  {
+    const redoState = (seed?: number) => {
+      const m = modelFromDisk(toolLevel());
+      const coll = m.items.find((i) => i.object === "collision" && i.shape.kind === "poly")!;
+      const rock = rockFor(coll, 9004);
+      if (seed !== undefined) rock.visual.generator!.params = { seed };
+      m.items.push(rock);
+      return m.items;
+    };
+    const same = redoState();
+    const key = wantedKey(same.find((i) => i.id === 9004)!, itemLookup(same))!;
+    const other = redoState(5);
+    const without = redoState().filter((i) => i.id !== 9004);
+    const landed = landMesh(same, 9004, key) && same.find((i) => i.id === 9004)!.visual.mesh === key;
+    const again = !landMesh(same, 9004, key);
+    const leftAlone = !landMesh(other, 9004, key) && other.find((i) => i.id === 9004)!.visual.mesh === "";
+    const absent = !landMesh(without, 9004, key);
+    out.push({
+      name: "generator: a landed mesh goes into every redo state that wants that very key, and no other",
+      pass: landed && again && leftAlone && absent,
+      detail: JSON.stringify({ landed, again, leftAlone, absent }),
+    });
+  }
+
+  // --- the panel: parameters in and out -------------------------------------
+  {
+    const schema = GENERATOR_SCHEMAS.boulder;
+    const authored: ParamValues = { seed: 7, depth: 1.2, weathering: 0.5, bakeSize: 1024, color: [0.2, 0.2, 0.25] };
+    // Every field written from the merged values, as the panel's setters do,
+    // one at a time over an empty block: the defaults fall away and what was
+    // authored is what is left.
+    let params: ParamValues = {};
+    for (const [key, value] of Object.entries(mergeDefaults(authored, schema))) params = withParam(params, schema, key, value);
+    const sorted = (p: ParamValues) => JSON.stringify(Object.keys(p).sort().map((k) => [k, p[k]]));
+    const trip = sorted(params) === sorted(stripDefaults(authored, schema)) && !("tolerance" in params);
+    // A value set back to its default, and a cleared field, remove the key.
+    const reset = withParam(withParam(params, schema, "depth", 1.6), schema, "seed", null);
+    const resetOk = !("depth" in reset) && !("seed" in reset) && reset.weathering === 0.5;
+    const intSpec = paramSpec(schema, "seed")!;
+    const numSpec = paramSpec(schema, "depth")!;
+    const clampOk = clampParam(intSpec, 7.6) === 8 && clampParam(intSpec, -3) === 0 && clampParam(numSpec, 9) === 5 && clampParam(numSpec, 0) === 0.02;
+    const colour = paramSpec(schema, "color")!.default as number[];
+    const hexTrip = linearOfHex(hexOfLinear(colour)).every((c, i) => Math.abs(c - colour[i]!) < 2e-3);
+    const seeded = nextSeedParams({}, schema).seed === 32 && nextSeedParams({ seed: 2147483647 }, schema).seed === 0;
+    const pasted = parseParamsPayload(paramsPayload("boulder", 1, authored), schema);
+    const pasteOk =
+      "params" in pasted &&
+      JSON.stringify(pasted.params) === JSON.stringify(stripDefaults(authored, schema)) &&
+      "error" in parseParamsPayload(paramsPayload("mushrooms", 1, { density: 10 }), schema) &&
+      "error" in parseParamsPayload(paramsPayload("boulder", 1, { depth: 99 }), schema) &&
+      "error" in parseParamsPayload("not json", schema);
+    const pairs = paramIssues({ slabWidthMin: 0.6 }, schema);
+    const pairOk = pairs.length === 1 && pairs[0]!.startsWith("slabWidthMin:");
+    const labelOk = paramLabel(numSpec) === "depth (m)" && paramLabel(paramSpec(schema, "slabYaw")!) === "slab yaw°";
+    const ok = trip && resetOk && clampOk && hexTrip && seeded && pasteOk && pairOk && labelOk;
+    out.push({
+      name: "generator: the panel writes only non-default values (stripDefaults round trip through the setters), clamps, pastes and flags a Min over its Max",
+      pass: ok,
+      detail: JSON.stringify({ trip, params, resetOk, clampOk, hexTrip, seeded, pasteOk, pairs, labelOk }),
+    });
+  }
+
+  // --- the status line -------------------------------------------------------
+  {
+    const model = modelFromDisk(toolLevel());
+    const coll = model.items.find((i) => i.object === "collision" && i.shape.kind === "poly")!;
+    const rock = rockFor(coll, 9003);
+    model.items.push(rock);
+    const lookup = itemLookup(model.items);
+    const key = wantedKey(rock, lookup)!;
+    const none = () => null;
+    const job = (state: Job["state"], extra: Partial<Job> = {}): Job => ({ itemId: rock.id, key, kind: "boulder", state, elapsed: 12.4, ...extra });
+    const never = generatorStatus(rock, lookup, undefined, none);
+    const running = generatorStatus(rock, lookup, job("running"), none);
+    const failed = generatorStatus(rock, lookup, job("failed", { message: "Boulder generation failed.\nboulder: PASS; outline 0.02\nboulder: FAIL centre slice 0.041790\nkept in /tmp/x" }), none);
+    const unexplained = generatorStatus(rock, lookup, job("failed", { message: "a\nb\nc\nd" }), none);
+    rock.visual.mesh = key;
+    const done = generatorStatus(rock, lookup, job("done"), () => ({ bytes: 1_499_436, triangles: 7504 }));
+    const badgeFresh = generatorBadge(rock, lookup, job("done"));
+    rock.visual.generator!.params = { depth: 1.2 };
+    const stale = generatorStatus(rock, lookup, job("done"), none);
+    // A failure for content the object no longer holds is not its status.
+    const oldFailure = generatorStatus(rock, lookup, job("failed", { message: "x" }), none);
+    // A current key with no file on this machine (the service answers 404).
+    rock.visual.generator!.params = {};
+    const missing = generatorStatus(rock, lookup, undefined, none, () => true);
+    // The job's server restarted under it: lost, said as such.
+    const lost = generatorStatus(rock, lookup, job("lost", { message: "the dev server restarted: press Generate again" }), none);
+    // A value the key cannot be made of: said, never thrown out of the frame
+    // loop that asks every frame. (A field never writes one; a file could.)
+    rock.visual.generator!.params = { depth: Number.NaN };
+    let invalid = { text: "threw", tone: "" } as { text: string; tone: string };
+    let invalidBadge = "threw";
+    try {
+      invalid = generatorStatus(rock, lookup, undefined, none);
+      invalidBadge = generatorBadge(rock, lookup, undefined);
+    } catch {
+      // `invalid` stays "threw"
+    }
+    rock.visual.generator!.params = { depth: 1.2 };
+    const results = {
+      lost: lost.text === "the dev server restarted: press Generate again" && lost.tone === "warn",
+      invalid: invalid.text.startsWith("stale: invalid value") && invalid.tone === "warn" && invalidBadge === "stale",
+      never: never.text === "stale: never generated" && never.tone === "warn",
+      running: running.text === "generating 12 s" && running.tone === "busy",
+      failed:
+        failed.text === "failed: boulder: FAIL centre slice 0.041790\nanother seed or a looser tolerance may pass" &&
+        failed.tone === "fail" &&
+        unexplained.text === "failed: a\nb\nc",
+      done: done.text === "7,504 triangles · 1.5 MB" && badgeFresh === "",
+      stale: stale.text === "stale" && generatorBadge(rock, lookup, undefined) === "stale",
+      oldFailure: oldFailure.text === "stale",
+      missing: missing.text === "stale: file missing" && missing.tone === "warn",
+      // The toolbar's line: nothing when everything is here.
+      health:
+        missingTools({ python: "3.14.0", blender: "5.2.0", deps: true, venv: true, queue: 0 }) === "" &&
+        missingTools({ python: "3.14.0", blender: null, deps: false, venv: true, queue: 0 }) ===
+          "Blender not found (rocks, mushrooms) · rock packages missing: bun run generators:setup",
+    };
+    out.push({
+      name: "generator: the status line says never generated, generating N s, the failing check (and the remedy), the mesh's size, stale once edited, stale: file missing, lost to a restart, and stale: invalid value without throwing",
+      pass: Object.values(results).every(Boolean),
+      detail: JSON.stringify({ results, texts: [never.text, running.text, failed.text, done.text, stale.text] }),
+    });
+  }
+  return out;
+}
+
+// THE JOB CLIENT against a scripted service: what it asks, and what it writes.
+// Async because the client is (its fetches are promises); the timers it sets
+// are a queue drained here in order.
+export async function generatorJobCases(): Promise<CaseResult[]> {
+  const out: CaseResult[] = [];
+  const tick = () => new Promise<void>((r) => setTimeout(r, 0));
+
+  // A fake service: the POST answers `post`, each GET the next of `gets` (the
+  // last repeats), and every request is logged.
+  interface Script {
+    post: { status: number; body: unknown };
+    gets: Record<string, unknown[]>;
+  }
+  const rig = (script: Script, wanted: () => string | null | undefined) => {
+    const log: string[] = [];
+    const timers: (() => void)[] = [];
+    const swaps: string[] = [];
+    let writable = true;
+    const seen = new Map<string, number>();
+    const fetcher: Fetcher = async (url, init) => {
+      const method = init?.method ?? "GET";
+      log.push(`${method} ${url}`);
+      if (method === "POST") {
+        const p = script.post;
+        return { ok: p.status < 400, status: p.status, json: async () => p.body };
+      }
+      const key = decodeURIComponent(url.split("/").pop()!);
+      const list = script.gets[key] ?? [];
+      const n = seen.get(key) ?? 0;
+      seen.set(key, n + 1);
+      const body = list[Math.min(n, list.length - 1)];
+      // "offline": the server does not answer at all (mid-restart).
+      if (body === "offline") throw new Error("fetch failed");
+      return body === undefined
+        ? { ok: false, status: 404, json: async () => ({ error: "No such job." }) }
+        : { ok: true, status: 200, json: async () => body };
+    };
+    const jobs = new GeneratorJobs({
+      fetch: fetcher,
+      later: (fn) => void timers.push(fn),
+      canWrite: () => writable,
+      wantedKey: () => wanted(),
+      swap: (_id, key) => void swaps.push(key),
+      changed: () => {},
+    });
+    const drain = async () => {
+      for (let i = 0; i < 50; i++) {
+        await tick();
+        const fn = timers.shift();
+        if (!fn) {
+          await tick();
+          if (!timers.length) return;
+          continue;
+        }
+        fn();
+      }
+    };
+    return { jobs, log, swaps, drain, setWritable: (w: boolean) => (writable = w) };
+  };
+  const A = "boulder:00000000000000aa";
+  const B = "boulder:00000000000000bb";
+  const req = (key: string) => ({ kind: "boulder" as const, key, input: { outline: [] }, params: {} });
+
+  // submit -> running -> done: one swap, and the mesh's facts kept.
+  {
+    const r = rig(
+      { post: { status: 200, body: { key: A, state: "running" } }, gets: { [A]: [{ state: "running", elapsed: 1 }, { state: "done", elapsed: 6.9, bytes: 1000, triangles: 50 }] } },
+      () => A,
+    );
+    await r.jobs.submit(7, req(A));
+    await r.drain();
+    const job = r.jobs.job(7);
+    const ok = r.swaps.length === 1 && r.swaps[0] === A && job?.state === "done" && job.triangles === 50 && r.jobs.facts(A)?.bytes === 1000;
+    out.push({
+      name: "generator: the job client follows submit -> running -> done and puts the key on the object once",
+      pass: ok,
+      detail: JSON.stringify({ swaps: r.swaps, job, log: r.log }),
+    });
+  }
+
+  // A key the service has no file for (a 404): the facts stay null and the key
+  // reads as missing, where a key with a file does not.
+  {
+    const r = rig({ post: { status: 200, body: { key: A, state: "done" } }, gets: { [A]: [{ state: "done", elapsed: 1, bytes: 10, triangles: 2 }] } }, () => A);
+    r.jobs.facts(A);
+    r.jobs.facts(B);
+    await r.drain();
+    const ok = r.jobs.facts(B) === null && r.jobs.missing(B) && r.jobs.facts(A)?.bytes === 10 && !r.jobs.missing(A);
+    out.push({
+      name: "generator: the job client reads a 404 for a mesh key as a missing file",
+      pass: ok,
+      detail: JSON.stringify({ missingB: r.jobs.missing(B), missingA: r.jobs.missing(A), log: r.log }),
+    });
+  }
+
+  // A newer submit for the same object: the older job is no longer followed,
+  // and only the newer key lands.
+  {
+    const r = rig(
+      {
+        post: { status: 200, body: { state: "queued" } },
+        gets: { [A]: [{ state: "done", elapsed: 1, bytes: 1, triangles: 1 }], [B]: [{ state: "running", elapsed: 0 }, { state: "done", elapsed: 2, bytes: 2, triangles: 2 }] },
+      },
+      () => B,
+    );
+    await r.jobs.submit(7, req(A));
+    await r.jobs.submit(7, req(B));
+    await r.drain();
+    const askedA = r.log.filter((l) => l === `GET /api/generate/${encodeURIComponent(A)}`).length;
+    const ok = r.swaps.length === 1 && r.swaps[0] === B && askedA === 0 && r.jobs.job(7)?.key === B;
+    out.push({
+      name: "generator: a newer submit for the same object supersedes the older job, whose result never lands",
+      pass: ok,
+      detail: JSON.stringify({ swaps: r.swaps, askedA, log: r.log }),
+    });
+  }
+
+  // Failed: the model is untouched and the message is kept; a refused request
+  // (400) is a failure too.
+  {
+    const r = rig(
+      { post: { status: 200, body: { state: "running" } }, gets: { [A]: [{ state: "failed", elapsed: 3, message: "centre: FAIL\nkept in /tmp" }] } },
+      () => A,
+    );
+    await r.jobs.submit(7, req(A));
+    await r.drain();
+    const refused = rig({ post: { status: 400, body: { error: "Invalid boulder parameters: depth: 9 is outside 0.02..5." } }, gets: {} }, () => A);
+    await refused.jobs.submit(8, req(A));
+    await refused.drain();
+    const ok =
+      r.swaps.length === 0 &&
+      r.jobs.job(7)?.state === "failed" &&
+      r.jobs.job(7)?.message === "centre: FAIL\nkept in /tmp" &&
+      refused.swaps.length === 0 &&
+      refused.jobs.job(8)?.state === "failed" &&
+      (refused.jobs.job(8)?.message ?? "").includes("depth: 9 is outside");
+    out.push({
+      name: "generator: a failed job, or a refused request, keeps the model and the service's message",
+      pass: ok,
+      detail: JSON.stringify({ swaps: r.swaps, job: r.jobs.job(7), refused: refused.jobs.job(8) }),
+    });
+  }
+
+  // During a drag the result waits, and lands once on the next flush; an
+  // object deleted or edited away meanwhile gets nothing.
+  {
+    let wanted: string | null | undefined = A;
+    const r = rig({ post: { status: 200, body: { state: "done" } }, gets: { [A]: [{ state: "done", elapsed: 0, bytes: 1, triangles: 1 }] } }, () => wanted);
+    r.setWritable(false);
+    await r.jobs.submit(7, req(A));
+    await r.drain();
+    const held = r.swaps.length === 0;
+    r.jobs.flush();
+    const stillHeld = r.swaps.length === 0;
+    r.setWritable(true);
+    r.jobs.flush();
+    r.jobs.flush();
+    const landedOnce = r.swaps.length === 1;
+    // Deleted (undefined) and moved on (another key).
+    const gone = rig({ post: { status: 200, body: { state: "done" } }, gets: { [A]: [{ state: "done", elapsed: 0, bytes: 1, triangles: 1 }] } }, () => undefined);
+    await gone.jobs.submit(7, req(A));
+    await gone.drain();
+    wanted = B;
+    const moved = rig({ post: { status: 200, body: { state: "done" } }, gets: { [A]: [{ state: "done", elapsed: 0, bytes: 1, triangles: 1 }] } }, () => wanted);
+    await moved.jobs.submit(7, req(A));
+    await moved.drain();
+    const ok = held && stillHeld && landedOnce && gone.swaps.length === 0 && moved.swaps.length === 0;
+    out.push({
+      name: "generator: a result waits out a drag and lands once after it; a deleted or since-edited object gets nothing",
+      pass: ok,
+      detail: JSON.stringify({ held, stillHeld, landedOnce, gone: gone.swaps, moved: moved.swaps }),
+    });
+  }
+
+  // The dev server restarted mid-job: a 404 for a running job is `lost` (not
+  // `failed`: the generator said nothing), and says to Generate again. A few
+  // unanswered polls (the second a restart takes) are asked again rather than
+  // judged, and a server that never answers again is lost after POLL_MISSES.
+  {
+    const running = { state: "running", elapsed: 1 };
+    const post = { status: 200, body: { state: "running" } };
+    const restarted = rig({ post, gets: { [A]: [running, undefined] } }, () => A);
+    await restarted.jobs.submit(7, req(A));
+    await restarted.drain();
+    const blip = rig({ post, gets: { [A]: [running, "offline", "offline", { state: "done", elapsed: 2, bytes: 1, triangles: 1 }] } }, () => A);
+    await blip.jobs.submit(7, req(A));
+    await blip.drain();
+    const gone = rig({ post, gets: { [A]: ["offline"] } }, () => A);
+    await gone.jobs.submit(7, req(A));
+    await gone.drain();
+    const asked = gone.log.filter((l) => l.startsWith("GET ")).length;
+    const lost = restarted.jobs.job(7);
+    const ok =
+      lost?.state === "lost" &&
+      (lost.message ?? "").includes("Generate again") &&
+      restarted.swaps.length === 0 &&
+      blip.jobs.job(7)?.state === "done" &&
+      blip.swaps.length === 1 &&
+      gone.jobs.job(7)?.state === "lost" &&
+      asked === POLL_MISSES;
+    out.push({
+      name: "generator: a job the restarted dev server has no record of is lost (Generate again), not failed; unanswered polls are retried, then lost",
+      pass: ok,
+      detail: JSON.stringify({ lost, blip: blip.jobs.job(7), gone: gone.jobs.job(7), asked }),
+    });
+  }
+  return out;
+}
+
 export function runRender3dCases(): CaseResult[] {
   return [
     ...beltRendering(),
@@ -3940,6 +6850,9 @@ export function runRender3dCases(): CaseResult[] {
     ...blendStability(),
     ...orbitView(),
     ...orthographicView(),
+    ...visualsView(),
+    ...visualsGuides(),
+    ...visualsWorkspace(),
     ...extrusionGeometry(),
     ...tippedPrimitive(),
     ...perObjectProjection(),
@@ -3955,6 +6868,10 @@ export function runRender3dCases(): CaseResult[] {
     ...lightRidesBody(),
     ...lightAim(),
     ...lightShadowNear(),
+    ...avatarSurface(),
+    ...generatedSkies(),
+    ...beamCases(),
+    ...glowCases(),
     ...bodyFrame(),
     ...originToCom(),
     ...emissiveMaps(),
@@ -3966,5 +6883,7 @@ export function runRender3dCases(): CaseResult[] {
     ...checkpointFormat(),
     ...levelMetaFormat(),
     ...clipboardPayload(),
+    ...generatorCases(),
+    ...generatorTools(),
   ];
 }

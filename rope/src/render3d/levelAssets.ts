@@ -29,6 +29,8 @@ import { generatedMushroomAsset } from "./generatedMushrooms";
 import { generatedGrassAsset } from "./generatedGrass";
 import { generatedPlantAsset } from "./generatedPlants";
 import { normalizeLevelData } from "../level/levelFormat";
+import { generatedMeshAsset, parseGeneratedKey } from "./generated";
+import { GENERATED_ASSETS, generatedMeta } from "./generatedMeta";
 import {
   BALL_MESH,
   emissiveMapName,
@@ -46,6 +48,37 @@ import {
 export interface StoredFile {
   file: string;
   bytes: number;
+}
+
+// A mesh key's file, generated or from the manifest, as `loadMesh` resolves it.
+// A generated file's weight is not in its key: a published one has it pinned in
+// the store manifest (`GENERATED_ASSETS`), which a fresh checkout has too; one
+// generated here and not yet published has it in the `meta.json` beside it; one
+// with neither (generated elsewhere and never published, or by a service that
+// died before writing it) is listed at 0 bytes, which only means the bar does
+// not count it, and said out loud because a 0 is otherwise a silent wrong
+// answer.
+function meshFile(key: string): StoredFile | undefined {
+  const generated = generatedMeshAsset(key);
+  if (!generated) return generatedRootAsset(key) ?? generatedBoulderAsset(key) ?? generatedDirtMossAsset(key) ?? generatedVineAsset(key) ?? generatedMushroomAsset(key) ?? generatedGrassAsset(key) ?? generatedPlantAsset(key) ?? MESH_ASSETS[key];
+  const bytes = GENERATED_ASSETS[key]?.bytes ?? generatedMeta(key)?.bytes;
+  if (bytes === undefined) {
+    console.warn(`[levelAssets] ${key} is not in the store and has no meta.json; preloading ${generated.file} unweighted`);
+  }
+  return { file: generated.file, bytes: bytes ?? 0 };
+}
+
+// Every generated mesh key the level names, in authored order, once each: what
+// the store has to hold for the level to draw as it was generated (see
+// `GENERATED_ASSETS`).
+export function levelGeneratedKeys(raw: RawLevelData): string[] {
+  const keys = new Set<string>();
+  for (const body of normalizeLevelData(raw).bodies) {
+    for (const object of body.objects) {
+      if (object.type === "geometry" && object.mesh && parseGeneratedKey(object.mesh)) keys.add(object.mesh);
+    }
+  }
+  return [...keys];
 }
 
 // Every stored file the 3D scene will request for this level, in roughly the
@@ -98,7 +131,7 @@ export function levelStoredFiles(raw: RawLevelData, controller?: string): Stored
       // glowing in the fallback's).
       const glow = emissiveMapName(object.emissiveTexture);
       if (glow) addSurface(glow);
-      if (object.mesh) add(generatedRootAsset(object.mesh) ?? generatedBoulderAsset(object.mesh) ?? generatedDirtMossAsset(object.mesh) ?? generatedVineAsset(object.mesh) ?? generatedMushroomAsset(object.mesh) ?? generatedGrassAsset(object.mesh) ?? generatedPlantAsset(object.mesh) ?? MESH_ASSETS[object.mesh]);
+      if (object.mesh) add(meshFile(object.mesh));
     }
   }
   // The flipbook and the foam mask are loaded when the first water material is

@@ -87,6 +87,8 @@ import {
   cloneChain,
   cloneShape,
   cloneVine,
+  cloneVisual,
+  remapPatchHosts,
   DEFAULT_CURVE_WIDTH,
   convexHull,
   bodyWithinRect,
@@ -113,6 +115,7 @@ import {
   checkpointBox,
   collidingBodyIds,
   itemDepth,
+  offsetZAfterMove,
   newItemStyle,
   type EdObject,
   MIN_ARROW_LENGTH,
@@ -177,9 +180,12 @@ import {
   type EdVine,
   type EdBodyFrame,
   type EdItem,
+  type EdLight,
   type EdShape,
   type EdLayer,
   type EdModel,
+  glowModel,
+  fireflyModel,
   cloneRouteNode,
   peakSurfaceSpeed,
   routeNode,
@@ -193,6 +199,7 @@ import {
   computeGroupHandles,
   computeHandles,
   drawEditor,
+  drawVisualsStatus,
   hasPlaneHandles,
   BODY_MEMBER,
   SELECT,
@@ -205,7 +212,7 @@ import {
   curvePieceCount,
   routeHandlePoints,
   routeMidpoints,
-
+  lightSwarms,
 } from "./render";
 import {
   DEFAULT_MATERIAL,
@@ -232,12 +239,14 @@ import * as THREE from "three";
 import { ROCK_HASH_KEY, ROCK_INDEX_KEY, ROCK_TEXTURES, rockBodies, rockNodeName, rocksUrl } from "../render3d/rocks";
 import { silhouette, type SilTriangle } from "../lib/silhouette";
 import { Scene3D, type Scene3DLevel } from "../render3d/scene";
-import { selectSurface, SurfaceDraftView, type SurfacePoint, type SurfaceSelection } from "./surfacePatch";
+import { selectSurface as selectFoliageSurface, SurfaceDraftView, type SurfacePoint as FoliageSurfacePoint, type SurfaceSelection as FoliageSurfaceSelection } from "./surfacePatch";
 import {
   focalLengthFromFov,
   FOV_Y_DEG,
   isHeadOn,
+  lensOf,
   MAX_ORBIT_PITCH,
+  NO_ORBIT,
   threeY,
   threeRotation,
   unprojectToPlane,
@@ -245,6 +254,42 @@ import {
   type ViewProjection,
 } from "../render3d/space";
 import { EditorGizmo, type GizmoAxes, type GizmoHandlers, type GizmoMode } from "./gizmo";
+import {
+  handleUnder,
+  itemsBox,
+  itemsUnder,
+  levelBox,
+  ORBIT_RADIANS_PER_PX,
+  PROP_FOOTPRINT,
+  spawnUnder,
+  VisualsWorkspace,
+} from "./visuals/workspace";
+import { guidePlaneZ, type GuideDraft } from "./visuals/guides";
+import { alignUp, surfacePlacement } from "./visuals/surfaceDrop";
+import { GeneratorJobs, missingTools } from "./visuals/jobs";
+import { buildGeneratorGroup, generatorBadge, GENERATOR_PANEL_CSS, paramIssues } from "./visuals/generatorPanel";
+import { existingRock, landMesh, objectPose, patchFor, refitPatch, rockFor, rockSource } from "./visuals/generatorEdits";
+import {
+  loopPointToWorld,
+  patchMatrix,
+  selectSurface,
+  soupInFrame,
+  worldToLoopPoint,
+  type SurfacePoint,
+  type SurfaceSelection,
+} from "./visuals/surfacePatch";
+import { closedDraft, SurfaceLoop } from "./visuals/surfaceLoop";
+import { isGuideTag } from "./visuals/tags";
+import {
+  generatorInput,
+  itemLookup,
+  loadSchema,
+  mergeDefaults,
+  stripDefaults,
+  wantedKey,
+  type ItemLookup,
+} from "./visuals/paramSchema";
+import { forgetFailedMesh, loadMesh } from "../render3d/assets";
 import { World } from "../engine/world";
 import { buildLevelBodies, DEFAULT_SPRING_DAMPING, MAX_SPRING_FREQ } from "../level/buildBodies";
 import {
@@ -289,6 +334,8 @@ import {
   DEFAULT_LIGHT_RANGE,
   LIGHT_SHADOW_BUDGET,
 } from "../render3d/lights";
+import { DEFAULT_WAKE_FALL, DEFAULT_WAKE_RISE } from "../render3d/glow";
+import { DEFAULT_FIREFLY_NOTICE, FIREFLY_MAX } from "../render3d/fireflies";
 
 // `geometry` draws the OTHER kind of scene object: a rect like `rect`, but one
 // that is drawn and never simulated. It is a tool rather than a mode on the rect
@@ -309,15 +356,19 @@ type Tool =
   | "chain"
   | "vine"
   | "light"
-  // Clicks an outline out ON THE FACES of a drawn model rather than on the
-  // gameplay plane, for the mushroom, grass and plant patch generators (see
-  // `surfaceDraft`). The tools draw the same outline; they differ only in
-  // which Generate button the outline is meant for.
+  | "glow"
+  | "fireflies"
+  // The Visuals workspace's two generators (see `sceneToolPress`): a click on
+  // a collision outline dresses it with a generated rock, and a loop painted
+  // onto a model's faces grows a mushroom patch there.
+  | "rock"
+  | "mushrooms"
   | "mushroom"
   | "grass"
   | "plant";
 
 const isSurfaceTool = (t: Tool): boolean => t === "mushroom" || t === "grass" || t === "plant";
+
 
 // Which tools each layer offers. A shape tool has no meaning on the notes layer
 // (a note is a text box or an arrow, never a circle) and vice versa, so the
@@ -329,9 +380,62 @@ const isSurfaceTool = (t: Tool): boolean => t === "mushroom" || t === "grass" ||
 // because that is what a light is: another kind of scene object, dropped into
 // the same layer and welded into a body with the shape it belongs to.
 const LAYER_TOOLS: Record<EdLayer, Tool[]> = {
-  scene: ["select", "rect", "circle", "belt", "poly", "path", "geometry", "light", "chain", "vine", "mushroom", "grass", "plant"],
+  scene: [
+    "select",
+    "rect",
+    "circle",
+    "belt",
+    "poly",
+    "path",
+    "geometry",
+    "rock",
+    "mushrooms",
+    "mushroom",
+    "grass",
+    "plant",
+    "light",
+    "glow",
+    "fireflies",
+    "chain",
+    "vine",
+  ],
   camera: ["select", "rect", "circle", "poly", "path"],
+  // A firefly path is a route and nothing else: no regions to draw.
+  fireflies: ["select", "path"],
   notes: ["select", "text", "arrow", "checkpoint"],
+};
+
+// Which workspace offers each tool, on top of the layer's own set above. Every
+// tool whose gesture is on the gameplay plane works in both: a press is
+// resolved on the plane through the camera the view is drawn with, and what it
+// makes is an item the scene or the guides draw. The two that are not are the
+// ones whose gesture and feedback live on the 2D overlay: a chain and a vine
+// are strung from collision outline to collision outline with a draft the
+// overlay draws, and neither is drawn by the guides. A tool for the Visuals
+// workspace alone (one that clicks on model surfaces rather than the plane) is
+// "visuals" here and gets a press handler in `sceneToolPress`.
+type ToolWorkspace = "both" | "level" | "visuals";
+const TOOL_WORKSPACES: Record<Tool, ToolWorkspace> = {
+  select: "both",
+  rect: "both",
+  circle: "both",
+  belt: "both",
+  poly: "both",
+  path: "both",
+  geometry: "both",
+  text: "both",
+  arrow: "both",
+  checkpoint: "both",
+  chain: "level",
+  vine: "level",
+  light: "both",
+  glow: "both",
+  fireflies: "both",
+  rock: "visuals",
+  mushrooms: "visuals",
+  mushroom: "level",
+  grass: "visuals",
+  plant: "visuals",
 };
 
 // Kinds a chain may be tied to. An area is a region, not a body - nothing hangs
@@ -354,6 +458,8 @@ const EMPTY_HINTS: Record<EdLayer, string> = {
     "No selection. Click a body, or pick +Rect / +Circle and drag on the canvas; +Poly clicks out an outline, concave corners and all (Enter or click the first vertex to close, Esc to cancel) - the physics gets it cut into convex pieces, so a notch is one object rather than three overlapping ones. Those draw a COLLISION shape - what the body is made of, simulated and never drawn. +Geometry draws the other half: an object that is drawn and never simulated, which is what carries a mesh or a texture. A body wants one of each, and they are two decisions. +Chain drags a chain from one body to another. Ctrl+G moves the selected objects into ONE body (Ctrl+Shift+G takes bodies apart again; Alt+click picks one object out of a body). The panel bottom-left lists every body and expands it into the objects it is made of, which is the only way to reach an object with no outline - a light, or the mesh a wall is dressed in. Rubber-band from empty space: drag left→right to catch what the box encloses, right→left for anything it touches. +Light drops a lamp - drag as you place it to set how far it reaches. A light with no visible source is a body of its own (a shaft down a grate, a fill); a lamp you can see is a light merged into the body its fitting is in, so moving the fitting moves the light. Any visible layer can be selected.",
   camera:
     "Camera layer. Click a region, drag to rubber-band select, or pick +Rect / +Circle and drag one out (+Poly clicks out an outline). Tab switches layer.",
+  fireflies:
+    "Fireflies layer. +Path clicks out a FIREFLY PATH (Enter to finish), start to end. Give a swarm its number in the swarm's `path` field and the swarm guides the player along it instead of the camera paths; when the player reaches the end, the swarm flies back along it to the start and waits there. Tab switches layer.",
   notes:
     "Notes layer. +Text drops a box to type into, +Arrow drags a pointer out, +Checkpoint drops a named place to start from - play with ?checkpoint=NAME to spawn there instead of at the level's spawn, or select one and press ▶ Test. None of the three is drawn in play. Tab switches layer.",
 };
@@ -373,10 +479,8 @@ const CLICK_SLOP_PX = 4;
 // this as the floor on what a click has to land within. Drawn size is unchanged:
 // this is about what can be hit, not about what is seen.
 const SMALL_MARK_PICK_PX = 12;
-// Orbit sensitivity: a drag across a 1600px window is a bit over a half turn,
-// which is enough to see round a prop without a level swinging past under a
-// nudge.
-const ORBIT_RADIANS_PER_PX = 0.006;
+// (Orbit sensitivity, `ORBIT_RADIANS_PER_PX`, is the Visuals workspace's
+// module's, so the two workspaces' orbits are one constant.)
 
 type Drag =
   | { mode: "pan"; lastScreen: Vec2 }
@@ -387,7 +491,35 @@ type Drag =
   // one editing mistake that is silent (it looks like the level, and the level
   // is different). Selecting first and dragging second is what makes moving a
   // body deliberate.
-  | { mode: "panPick"; lastScreen: Vec2; travel: number; pick: () => void }
+  //
+  // In the Visuals workspace a left drag never navigates (the middle and right
+  // buttons do, Blender's way), so there the press is a click or nothing, and
+  // `still` is what the status line says if it is dragged anyway.
+  | { mode: "panPick"; lastScreen: Vec2; travel: number; pick: () => void; still?: string }
+  // Navigating the Visuals workspace's free view (see `VisualsWorkspace`):
+  // middle drag orbits, Shift + middle or right drag pans.
+  | { mode: "view" }
+  // DROP ON SURFACE (Visuals, Shift-drag of a selected prop or light): the
+  // object's origin follows the nearest model surface under the pointer, and
+  // with Ctrl held a prop also stands up along the face's normal. Written
+  // through the gizmo's own handlers (`handlers`), begun at the first real
+  // movement so the whole drag is one undo step; a press that never travels is
+  // the Shift+click it would otherwise have been (`pick`).
+  | {
+      mode: "surfaceDrop";
+      item: EdItem;
+      press: Vec2;
+      handlers: GizmoHandlers | null;
+      // The item's tilt when the drag began, which an aligned drop turns from.
+      tilt: { rot: number; rotX: number; rotY: number } | null;
+      pick: () => void;
+    }
+  // A mushroom patch's loop point, dragged along its host's surface (Visuals,
+  // **Edit loop**). Model-mutating, so it takes the one undo step at its first
+  // movement like a vertex drag - and like a move, not before the pointer has
+  // left the click's slop (`moved`), so a click that shakes a pixel neither
+  // takes an undo step nor re-picks the surface under the point.
+  | { mode: "loopPoint"; itemId: number; index: number; press: Vec2; moved: boolean }
   // Turning the 3D view about what it is centred on (see `CameraOrbit`). Middle
   // button, and only while a scene is drawn: in the 2D view there is nothing to
   // orbit, so the button keeps panning there.
@@ -415,10 +547,15 @@ type Drag =
       // position (see `moveSnapPoint`). Fixed at the press: a move only
       // translates, so the offset cannot change during the drag.
       snapAt: Vec2;
+      // The plane the drag is resolved in, metres off the gameplay plane: the
+      // one the lead is drawn in (`guidePlaneZ`), so with the view turned the
+      // thing grabbed stays under the pointer. Head on it changes nothing.
+      planeZ: number;
     }
   | { mode: "movePlayer"; grab: Vec2 }
   | { mode: "corner"; body: EdItem; anchor: Vec2 }
   | { mode: "radius"; body: EdItem }
+  | { mode: "wake"; body: EdItem }
   // One of a conveyor's wheels (not wheel 0, which is the item's position),
   // dragged like a path vertex: its centre follows the pointer and the other
   // wheels stay put.
@@ -447,6 +584,8 @@ type Drag =
       index: number;
       others: Array<{ index: number; offset: Vec2 }>;
       accepted: Vec2;
+      // The plane the corner is drawn in (see `move`'s).
+      planeZ?: number;
     }
   // One Bézier tangent grip of a camera path. `mirror` keeps the node smooth by
   // writing the opposite handle as the negation of this one; Alt breaks it, so a
@@ -569,13 +708,26 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     }
   })();
   if (!scene3d) viewMode = "2d";
+  // THE WORKSPACE: Level (the editor as it has always been, driven by the 2D
+  // camera) or Visuals (a free 3D camera, the overlay's marks drawn into the
+  // scene - see editor/visuals/workspace.ts and docs/editor-visuals.md). One
+  // editor either way: the model, the selection, the layer, the tool and the
+  // inspector carry across a switch; what changes is how the view is driven,
+  // what stands in for the overlay, and where a press lands.
+  //
+  // Declared before everything that asks `inScene`, and built lazily below
+  // once the camera and the model exist (`visuals` is null without WebGL).
+  let visuals: VisualsWorkspace | null = null;
+  const inVisuals = (): boolean => visuals?.active ?? false;
+  // Is a scene drawn this frame? The Visuals workspace always draws one, and
+  // keeps the Level workspace's view toggle for when it returns.
+  const sceneShown = (): boolean => scene3d !== null && (inVisuals() || viewMode !== "2d");
   // How much of the scene the 2D overlay is responsible for. With a scene under
   // it the overlay drops every fill - and the geometry objects entirely, since
   // the scene draws those and an outline on the plane describes something else
   // (see `drawEditor` and `hasPlaneHandles`). One statement of it, because what
   // the overlay DRAWS and what it offers handles for have to be the same set.
-  const overlayLayers = (): "fill" | "outline" =>
-    scene3d && viewMode !== "2d" ? "outline" : "fill";
+  const overlayLayers = (): "fill" | "outline" => (sceneShown() ? "outline" : "fill");
   // How far the 3D view is turned from the side-on view the level is authored
   // against. Editor-only, and zero for every other host (see `CameraOrbit`).
   //
@@ -591,7 +743,20 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // and dragging survive the turn and only the drawn chrome - handles, band,
   // draw previews - drops out with the overlay. See the press handler.
   const orbit: CameraOrbit = { yaw: 0, pitch: 0 };
-  const orbited = (): boolean => scene3d !== null && viewMode !== "2d" && !isHeadOn(orbit);
+  // The Level workspace turned: its overlay is off and its plane gestures are
+  // resolved through the scene's camera.
+  const orbited = (): boolean =>
+    scene3d !== null && !inVisuals() && viewMode !== "2d" && !isHeadOn(orbit);
+  // WHERE A PRESS IS RESOLVED. Head on in the Level workspace the 2D camera's
+  // scale and offset are the answer, and the overlay is drawn; anywhere else -
+  // the Level workspace turned, or the Visuals workspace at all - a screen
+  // position means a world point only through the ray that drew it, and the
+  // overlay is not on screen. Every branch that used to ask "is the view
+  // turned" asks this, and then, where the two differ, which of the two it is:
+  // a turned Level view offers only select and move, the Visuals workspace
+  // draws its own chrome into the scene (the guides) and offers the gestures
+  // those marks make possible.
+  const inScene = (): boolean => inVisuals() || orbited();
   // Which lens the scene is drawn through (see `ViewProjection`). Perspective is
   // what the level is played in and so the default; orthographic is the
   // authoring instrument - with no perspective divide, geometry at any depth is
@@ -609,7 +774,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   }
   let resetViewBtn: HTMLButtonElement | null = null;
   function refreshOrbitBtn(): void {
-    resetViewBtn?.classList.toggle("active", orbited());
+    resetViewBtn?.classList.toggle("active", inVisuals() ? (visuals?.turned ?? false) : orbited());
+  }
+  // `⟲ Reset view` and **Home**: the workspace's own way back to head on. Each
+  // workspace keeps its own view, so each resets its own.
+  function resetView(): void {
+    if (inVisuals()) visuals!.resetView();
+    else resetOrbit();
+    refreshOrbitBtn();
   }
   function resetOrbit(): void {
     orbit.yaw = 0;
@@ -669,9 +841,84 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   }
   resize();
   window.addEventListener("resize", resize);
+  if (scene3d) {
+    visuals = new VisualsWorkspace({
+      scene: scene3d,
+      camera2d: () => camera,
+      // The level's own lens, which the head-on pose is framed through exactly
+      // as the Level workspace's scene is (`Scene3D.setLevel` reads the same).
+      lens: () => lensOf(model.camera),
+      canvasSize: () => ({ width: cssW, height: cssH }),
+    });
+  }
 
   // --- state ----------------------------------------------------------------
   let model: EdModel = emptyModel();
+
+  // THE GENERATOR SERVICE'S CLIENT (editor/visuals/jobs.ts): generations run
+  // on the dev server while the editor goes on, and a finished mesh is put on
+  // its object as one undo step - never in the middle of a drag, and never on
+  // an object that has since been deleted or edited away from what was asked.
+  const jobs = new GeneratorJobs({
+    fetch: (url, init) => fetch(url, init),
+    later: (fn, ms) => void setTimeout(fn, ms),
+    // Not in the middle of ANY gesture: a drag, a gizmo drag (three's own, which
+    // never sets `drag`) or a held arrow's nudge run, each of which is one undo
+    // step that a swap landing inside it would split in two.
+    canWrite: () => mode === "edit" && drag === null && !(gizmo?.busy ?? false) && !nudging,
+    wantedKey: (id) => {
+      const it = model.items.find((i) => i.id === id);
+      if (!it) return undefined;
+      try {
+        return wantedKey(it, itemLookup(model.items));
+      } catch {
+        // A value the key cannot be made of (see `generatorStatus`).
+        return null;
+      }
+    },
+    swap: (id, key) => {
+      const it = model.items.find((i) => i.id === id);
+      const g = it?.visual.generator;
+      if (!it || !g) return;
+      // The file behind `key` exists now. An earlier load of it may have failed
+      // and been cached (a level naming a key whose file was missing, or an
+      // undo back to a key never generated here), so that failure goes, and
+      // when the object already names the key nothing in the model moves - the
+      // scene is told to rebuild so the new file is fetched and mounted.
+      const refetch = forgetFailedMesh(key);
+      if (it.visual.mesh === key) {
+        if (refetch) sceneRev = -1;
+        return;
+      }
+      // Not the author's edit but an outside event landing, so it does not
+      // clear the redo stack (an author who undid, then saw a rock land, can
+      // still redo what they undid) - and every redo state that would want this
+      // very mesh gets it too, so a redo does not take the rock back off. The
+      // landing itself is one undo step.
+      beginAction({ keepRedo: true });
+      it.visual.mesh = key;
+      // The key was made at the schema version the server runs, so the block
+      // says that version from now on (an older level is brought up to it by
+      // the generation that made its new mesh).
+      g.version = loadSchema(g.kind)?.version ?? g.version;
+      for (const state of future) landMesh(state.items, id, key);
+      markDirty();
+    },
+    changed: () => {
+      jobsTick++;
+      refreshFields();
+      refreshGeneratorHealth();
+    },
+  });
+  // Moves whenever a job's state does, so the outliner's badges are recomputed
+  // only when the model or a job has changed rather than every frame.
+  let jobsTick = 0;
+  // `+ Mushrooms`' loop while it is being painted (editor/visuals/surfaceLoop.ts).
+  const surfaceLoop = new SurfaceLoop();
+  // The patch whose loop is open for dragging (**Edit loop**), or null. Its
+  // points are the patch's own, drawn and dragged on the host's surface; a drag
+  // writes them back as it goes, one undo step per drag.
+  let loopEdit: { itemId: number } | null = null;
   // Selection is a set: plain click selects one, shift+click toggles a body in
   // or out. Handles and the per-body inspector only apply to a lone selection.
   const selectedIds = new Set<number>();
@@ -779,6 +1026,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // the title rather than thrown, so the editor keeps running and the author
   // sees what to undo; the file still saves, and the game refuses it loudly.
   let buildError: string | null = null;
+  // A one-off message in the status line, for an edit that quietly took
+  // something with it (a waking light turned into a spot loses its `wake`).
+  // Cleared after a few seconds rather than by the next edit, so it is read.
+  let notice: string | null = null;
+  let noticeTimer: ReturnType<typeof setTimeout> | null = null;
   function noteBuildError(err: unknown): void {
     const msg = err === null ? null : err instanceof Error ? err.message : String(err);
     if (msg === buildError) return;
@@ -822,7 +1074,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // The visual is mutated in place by the inspector exactly as `cam`,
       // `light` and `note` are, so an undo snapshot that shared it would alias
       // the state it is meant to be restoring - the known trap on this line.
-      visual: { ...b.visual },
+      // `cloneVisual` because the generator block nests.
+      visual: cloneVisual(b.visual),
     })),
     chains: m.chains.map(cloneChain),
     vines: m.vines.map(cloneVine),
@@ -858,12 +1111,17 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   }
 
   // Record the current state before a mutating action, so it can be undone.
-  function beginAction(): void {
+  //
+  // An author's action clears the redo stack: redoing past a new edit would
+  // replay the undone one over it. `keepRedo` is for an edit the author did not
+  // make - a generated mesh landing on its object (see `jobs`) - which is an
+  // undo step of its own but must not throw away what the author can redo.
+  function beginAction(opts: { keepRedo?: boolean } = {}): void {
     nudging = false; // any other action ends the current nudge run
     pinCompoundFrames();
     history.push(snapshot(model));
     if (history.length > HISTORY_MAX) history.shift();
-    future.length = 0;
+    if (!opts.keepRedo) future.length = 0;
   }
   function undo(): void {
     if (!history.length) return;
@@ -960,6 +1218,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   function vertexEditTarget(): EdItem | null {
     const s = selected();
     if (!s || (s.shape.kind !== "poly" && s.shape.kind !== "path")) return null;
+    // In the Visuals workspace the corners are the guides' handles, which are
+    // drawn for any lone selected polygon or path on a layer that can be
+    // edited (`Guides.vertexHandles`) - a prop's outline included, since its
+    // corners are stored as a primitive's are. A turned Level view draws none.
+    if (inVisuals()) return s;
     if (orbited() || !hasPlaneHandles(s, overlayLayers())) return null;
     return s;
   }
@@ -996,7 +1259,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const id = soleBodyId();
     if (id === null) return null;
     const lead = routeLeadOf(id);
-    return lead && lead.route.length > 1 && !orbited() ? lead : null;
+    // Head on in the Level workspace only: a route's nodes and grips are
+    // overlay handles, and the guides do not draw them (see
+    // docs/editor-visuals.md, "Not in Visuals").
+    return lead && lead.route.length > 1 && !inScene() ? lead : null;
   }
   // ...and the nodes actually picked on it, sorted, empty for any body but the
   // one they were picked on, and with anything past the route's end dropped: an
@@ -1320,11 +1586,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           // Where the handles started, and what the file said about it. The two
           // differ for a piece of decoration authoring no `offsetZ`: it is DRAWN
           // at `DECOR_Z` (see `itemDepth`), which is where the handles have to
-          // be, and the field is 0. A move is therefore written as a CHANGE
-          // against where the handles started rather than as the pose's own z -
-          // which would stamp that default into the file the first time a
-          // backdrop was nudged sideways, an edit nobody asked for that turns a
-          // fallback into an authored number.
+          // be, and the field is 0. A move that does not go through z therefore
+          // leaves the field alone rather than writing the pose's own z - which
+          // would stamp that default into the file the first time a backdrop
+          // was nudged sideways, an edit nobody asked for that turns a fallback
+          // into an authored number - and one that does writes the new depth
+          // outright (`offsetZAfterMove`).
           z: handleZ(it),
           offsetZ: it.visual.offsetZ,
           pos: it.pos,
@@ -1343,7 +1610,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           gizmoSnapPoint = base.snapAt.add(d);
           const z = snap(pos.z);
           if (it.object === "geometry") {
-            it.visual.offsetZ = base.offsetZ + (z - base.z);
+            it.visual.offsetZ = offsetZAfterMove(base.offsetZ, base.z, z);
             // A light's field is written outright rather than as a change, and
             // may be: `light.z` is always a concrete number in the model, so
             // `handleZ` starts the proxy exactly there and there is no fallback
@@ -1419,12 +1686,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // handle and the single-object gizmo have always done to a wall's dressing.
     const anyZ = (list: readonly EdItem[]): boolean =>
       list.some((i) => i.object === "geometry" || i.object === "light");
-    // The item's own authored depth - the field a drag writes - as against
-    // `handleZ`, which is where it is DRAWN (see `itemHandlers`). The two differ
-    // for decoration authoring none, and a group drag has to move the field by
-    // the displacement rather than stamp the drawn fallback onto every member.
+    // The depth each member is DRAWN at, which a drag through z moves by the
+    // displacement and writes outright (`offsetZAfterMove`): decoration
+    // authoring no `offsetZ` is drawn at `DECOR_Z`, and moving the field of 0
+    // by the displacement instead jumped it that far toward the camera. A drag
+    // that does not go through z writes no depth at all (see `apply`), so the
+    // fallback is never stamped into the file by a sideways move.
     const ownZ = (i: EdItem): number =>
-      i.object === "light" ? i.light.z : i.object === "geometry" ? i.visual.offsetZ : 0;
+      i.object === "light" ? i.light.z : i.object === "geometry" ? handleZ(i) : 0;
     let base: {
       pose: GroupPose;
       // Where the handles stood in depth, which is the mean of what the members
@@ -1432,6 +1701,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // axes, and a displacement is measured from there.
       z: number;
       own: Map<number, number>;
+      // Each geometry member's authored `offsetZ` at the press, which a drag
+      // that comes back to no displacement through z hands back.
+      authored: Map<number, number>;
       snapAt: Vec2;
     } | null = null;
     return {
@@ -1468,6 +1740,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           pose: captureGroupPose(model, list, selectionCentre(list)),
           z: list.length ? list.reduce((a, i) => a + handleZ(i), 0) / list.length : 0,
           own: new Map(list.map((i) => [i.id, ownZ(i)])),
+          authored: new Map(list.map((i) => [i.id, i.visual.offsetZ])),
           snapAt: snapOutlineOf(list),
         };
       },
@@ -1484,13 +1757,15 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           // displacement, so a backdrop 6 m back and the sign 20 cm in front of
           // it stay 5.8 m apart; a collision shape in the selection is passed
           // over, the plane being the only place it can be (see `anyZ`).
+          // Every move writes every member's depth from the press, so a drag
+          // that goes out through z and comes back leaves each one as it was.
           const dz = snap(pos.z) - base.z;
-          if (dz !== 0) {
-            for (const i of list) {
-              const was = base.own.get(i.id);
-              if (was === undefined) continue;
-              if (i.object === "light") i.light.z = was + dz;
-              else if (i.object === "geometry") i.visual.offsetZ = was + dz;
+          for (const i of list) {
+            const was = base.own.get(i.id);
+            if (was === undefined) continue;
+            if (i.object === "light") i.light.z = was + dz;
+            else if (i.object === "geometry") {
+              i.visual.offsetZ = offsetZAfterMove(base.authored.get(i.id) ?? 0, was, was + dz);
             }
           }
         } else if (mode === "rotate") {
@@ -1599,7 +1874,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     | { kind: "selection"; ids: number[] };
 
   function gizmoSpec(): GizmoTarget | null {
-    if (mode === "test" || !scene3d || viewMode === "2d") return null;
+    if (mode === "test" || !sceneShown()) return null;
     if (selectedChainIds.size || selectedVineIds.size) return null;
     if (selectedBodyIds.size === 1) return { kind: "body", id: [...selectedBodyIds][0]! };
     if (selectedIds.size === 1) return { kind: "item", id: [...selectedIds][0]! };
@@ -1742,6 +2017,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // and solving them here to draw them would be a second simulation running
       // under the editor.
       sceneChains: [],
+      // Read by no swarm here (nobody is in the preview to follow), but
+      // handed over so a swarm naming a path finds it rather than warning.
+      fireflyPaths: data.fireflyPaths ?? [],
       visualSource: { data, built },
       // THE AVATAR AT THE SPAWN, because a level is authored against the thing
       // that plays it. Every gap, ledge and shelf in the file is a decision
@@ -1926,7 +2204,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // renderer reads. A grapple test keeps its avatar and rope on the 2D canvas
     // (the Player slice is 2D-only), which is what `overlayOnly` leaves there.
     testLevel3d = testLevel;
-    if (scene3d && viewMode !== "2d") scene3d.setLevel(testLevel);
+    if (sceneShown()) scene3d!.setLevel(testLevel);
+    // A test is the player's camera and the player's picture, from whichever
+    // workspace it started in: the Visuals pose and guides are set aside here
+    // and taken up again when the test stops, so Esc returns to the view it
+    // left rather than to the Level workspace.
+    visuals?.suspend();
     accumulator = 0;
     lastNow = -1;
     testSparks.reset();
@@ -2001,7 +2284,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // Leaving the test has to give the cursor back whichever way it was left, or
     // the editor comes back with nothing to click its toolbar with.
     if (document.pointerLockElement === canvas) document.exitPointerLock();
-    // ...and the selection's gizmo comes back with the editor (see startTest).
+    // ...and the selection's gizmo comes back with the editor (see startTest),
+    // and the Visuals workspace's view, if the test was started from there.
+    visuals?.resume();
     syncGizmo();
   }
 
@@ -2020,6 +2305,35 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // Toolbar.
   const bar = el("div", "ed-bar");
   root.appendChild(bar);
+
+  // The workspace switcher, at the top because it changes what everything
+  // below it means: which view is driven, which tools are offered, what the
+  // canvas draws. Only offered with a scene to switch to.
+  type Workspace = "level" | "visuals";
+  const workspaceBtns: Partial<Record<Workspace, HTMLButtonElement>> = {};
+  let generatorHealthEl: HTMLElement | null = null;
+  function refreshGeneratorHealth(): void {
+    if (!generatorHealthEl) return;
+    const missing = inVisuals() ? missingTools(jobs.health) : "";
+    generatorHealthEl.textContent = missing ? `generators: ${missing}` : "";
+    generatorHealthEl.title = missing ? "GET /api/generators on the dev server; see docs/generators.md, Setup." : "";
+  }
+  if (visuals) {
+    const row = el("div", "ed-row");
+    bar.appendChild(row);
+    workspaceBtns.level = button("Level", () => setWorkspace("level"));
+    workspaceBtns.level.title = "Author the level against the gameplay plane: the 2D camera and the overlay (W toggles)";
+    workspaceBtns.visuals = button("Visuals", () => setWorkspace("visuals"));
+    workspaceBtns.visuals.title =
+      "Dress the level in a free 3D view: middle drag orbits, Shift + middle or right drag pans, the wheel dollies, F frames, Home faces the plane (W toggles)";
+    row.append(workspaceBtns.level, workspaceBtns.visuals);
+    workspaceBtns.level.classList.add("active");
+    // What the generators are missing, when something is: `+ Rock` and
+    // `+ Mushrooms` need Blender (and the rock Python and its packages) on the
+    // dev server, and a request made without them fails with a 503 anyway.
+    generatorHealthEl = el("span", "ed-warn");
+    row.appendChild(generatorHealthEl);
+  }
 
   const fileRow = el("div", "ed-row");
   bar.appendChild(fileRow);
@@ -2353,11 +2667,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // A vertex names the drawn object it landed on (`tag`, which the editor
   // rebuilds whenever the level changes, adding a patch included) and the item
   // that object was built from (`item`, which outlives the rebuild).
-  type SurfaceVertex = SurfacePoint & { item: number };
+  type SurfaceVertex = FoliageSurfacePoint & { item: number };
   let surfaceDraft: {
     points: SurfaceVertex[];
     closed: boolean;
-    selection: SurfaceSelection | null;
+    selection: FoliageSurfaceSelection | null;
     generated: Partial<Record<PatchKind, number>>;
   } | null = null;
   const surfaceView = scene3d ? new SurfaceDraftView() : null;
@@ -2422,7 +2736,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const item = id === undefined ? undefined : model.items.find((i) => i.id === id);
     return !!item && item.layer === "scene" && item.object === "geometry" &&
       !item.visual.mesh.startsWith("mushroom-patch:") && !item.visual.mesh.startsWith("grass-patch:") &&
-      !item.visual.mesh.startsWith("plant-patch:");
+      !item.visual.mesh.startsWith("plant-patch:") && !lockedLayers.has(item.layer) && visibleLayers.has(item.layer) && item.visual.generator?.kind !== "mushrooms";
   }
   function surfaceNdc(scr: Vec2): [number, number] | null {
     const r = canvas.getBoundingClientRect();
@@ -2469,7 +2783,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     for (const p of draft.points) p.tag = sceneObjectOfItem.get(p.item) ?? p.tag;
     if (draft.closed) {
       const meshes =[...new Set(draft.points.map((p) => p.tag))].flatMap((tag) => scene3d.meshesOf(tag));
-      draft.selection = selectSurface(meshes, draft.points, {
+      draft.selection = selectFoliageSurface(meshes, draft.points, {
         maxSlopeDeg: overhangs ? 180 : Number(mushroomSlope.value) || 0,
         maxTriangles: 40000,
       });
@@ -2479,8 +2793,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   }
   function surfaceClick(scr: Vec2): void {
     const ndc = surfaceNdc(scr);
-    if (!scene3d || !picks3d() || !ndc) {
-      mushroomStatus.textContent = "Switch to 3D + overlay (or 3D) to draw on a model.";
+    if (!scene3d || !sceneShown() || !sceneLevel || !ndc) {
+      mushroomStatus.textContent = "Switch to Visuals to draw on a model.";
       return;
     }
     // A click after a closed outline starts the next patch.
@@ -2613,7 +2927,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   }));
   mushroomGenerate.title = "Grow glowing mushrooms in Blender on the faces the + Mushrooms outline covers. The patch is drawn only; collision is unchanged.";
   mushroomRow.append(mushroomGenerate, labelWrap("density /m²", mushroomDensity), labelWrap("height (m)", mushroomHeight),
-    labelWrap("clumping", mushroomClump), labelWrap("max slope°", mushroomSlope), labelWrap("detail", mushroomDetail),
+    labelWrap("clumping", mushroomClump), labelWrap("detail", mushroomDetail),
     labelWrap("seed", mushroomSeed));
   bar.appendChild(mushroomRow);
 
@@ -2630,7 +2944,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       detail: Number(grassDetail.value),
     }),
   }));
-  grassGenerate.title = "Grow low-poly grass tufts in Blender on the faces the + Grass outline covers (max slope° is the mushroom row's). The patch is drawn only; collision is unchanged.";
+  grassGenerate.title = "Grow low-poly grass tufts in Blender on the faces the + Grass outline covers (use max slope° below). The patch is drawn only; collision is unchanged.";
   grassRow.append(grassGenerate, labelWrap("blades /m²", grassDensity), labelWrap("height (m)", grassHeight),
     labelWrap("clumping", grassClump), labelWrap("tuft (m)", grassTuft), labelWrap("detail", grassDetail),
     labelWrap("seed", grassSeed));
@@ -2656,11 +2970,21 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       }),
     });
   });
-  plantGenerate.title = "Grow the ticked cave plants in Blender on the faces the + Plants outline covers: alocasia, bird's-nest ferns and sword ferns stand on the upward faces (max slope° is the mushroom row's), creepers lie on them, ivy hangs from the undersides. The patch is drawn only; collision is unchanged.";
+  plantGenerate.title = "Grow the ticked cave plants in Blender on the faces the + Plants outline covers: alocasia, bird's-nest ferns and sword ferns stand on the upward faces (use max slope° below), creepers lie on them, ivy hangs from the undersides. The patch is drawn only; collision is unchanged.";
   plantRow.append(plantGenerate, ...plantChecks, labelWrap("plants /m²", plantDensity), labelWrap("size", plantSize),
     labelWrap("ivy (m)", plantIvyLength), labelWrap("detail", plantDetail), labelWrap("seed", plantSeed),
     mushroomStatus);
   bar.appendChild(plantRow);
+
+  const surfaceSettingsRow = el("div", "ed-row");
+  surfaceSettingsRow.append(labelWrap("max slope°", mushroomSlope), mushroomStatus);
+  bar.appendChild(surfaceSettingsRow);
+  function refreshFoliageControls(): void {
+    mushroomRow.style.display = tool === "mushroom" ? "" : "none";
+    grassRow.style.display = tool === "grass" ? "" : "none";
+    plantRow.style.display = tool === "plant" ? "" : "none";
+    surfaceSettingsRow.style.display = isSurfaceTool(tool) ? "" : "none";
+  }
 
   const toolRow = el("div", "ed-row");
   bar.appendChild(toolRow);
@@ -2681,23 +3005,45 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     mushroom: button("+ Mushrooms", () => setTool("mushroom")),
     grass: button("+ Grass", () => setTool("grass")),
     plant: button("+ Plants", () => setTool("plant")),
+    glow: button("+ Glow", () => setTool("glow")),
+    fireflies: button("+ Fireflies", () => setTool("fireflies")),
+    rock: button("+ Rock", () => setTool("rock")),
+    mushrooms: button("+ Mushrooms", () => setTool("mushrooms")),
   };
+  toolBtns.rock.title =
+    "Click a collision outline (a polygon or rect, or the geometry matched to one) to dress it with a GENERATED ROCK: a mesh geometry object matched to the outline, generated in Blender from the parameters on its panel. A plain rectangle can fail the generator's centre check; widen `tolerance` or draw a less regular outline.";
+  toolBtns.mushrooms.title =
+    "Click a loop onto the faces of a drawn model (a rock, a wall); Enter or the first point closes it, Backspace drops the last point, Esc cancels. Closing it adds a MUSHROOM PATCH in that model's body and generates it on the faces inside the loop.";
   toolBtns.mushroom.title =
     "Click an outline onto the faces of a drawn model (a rock, a root, a wall) in the 3D view, at any orbit; Enter or the first vertex closes it, Backspace drops the last vertex, Esc cancels. The covered faces light up, and Generate mushrooms grows a glowing patch on them.";
   toolBtns.grass.title =
-    "The same on-model outline as + Mushrooms; Generate grass grows low-poly grass tufts on the covered faces. Switching between the two tools keeps the outline, so one outline can carry both.";
+    "Click an outline onto a model in Visuals, then Enter to close it; Generate grass grows low-poly grass tufts on the covered faces. Switching between Grass and Plants keeps the outline, so one outline can carry both.";
   toolBtns.plant.title =
-    "The same on-model outline as + Mushrooms; Generate plants grows the ticked cave plants (alocasia, bird's nest, ferns, creepers, hanging ivy) on the covered faces. With hanging ivy ticked the outline also takes the faces that look down.";
+    "Click an outline onto a model in Visuals, then Enter to close it; Generate plants grows the ticked cave plants (alocasia, bird's nest, ferns, creepers, hanging ivy) on the covered faces. With hanging ivy ticked the outline also takes the faces that look down.";
   toolBtns.geometry.title =
     "Click to drop a geometry object; drag to size it. It is DRAWN and never simulated - nothing collides with it, the rope does not wrap it, no force reaches it. Give it a mesh or a texture on the panel; drop it on a selected body to have it ride that body.";
-  toolBtns.path.title =
-    "Click out a camera path: the route the camera rides, in the direction it is drawn. Enter or double-click finishes it, Esc drops it. The camera targets a point `lookahead` further along than the player, and lets go if they stray more than `range` from it.";
+  // The path tool's tooltip is the active layer's (see `refreshToolButtons`):
+  // the one gesture draws three different things.
+  const PATH_TOOL_TITLE: Record<EdLayer, string> = {
+    scene:
+      "Click out a curve: a bar stroked to its width, which a rail's cuff slides along. Enter or double-click finishes it, Esc drops it.",
+    camera:
+      "Click out a camera path: the route the camera rides, in the direction it is drawn. Enter or double-click finishes it, Esc drops it. The camera targets a point `lookahead` further along than the player, and lets go if they stray more than `range` from it.",
+    fireflies:
+      "Click out a firefly path, start to end: the route a swarm naming it in its `path` field guides the player along. Enter or double-click finishes it, Esc drops it. At the end the swarm leaves the player and flies back to the start.",
+    notes: "",
+  };
+  toolBtns.path.title = PATH_TOOL_TITLE[activeLayer];
   toolBtns.chain.title = "Drag from one body to another to string a chain between them";
   toolBtns.belt.title =
     "Press where the first wheel goes and drag to the second to lay a conveyor belt; a click drops one 1.5 m long. Click a run's midpoint to add a wheel, Alt+click a wheel's square to remove it. The band wraps the outside of every wheel and its surface runs round the loop at the panel's speed (positive = clockwise on screen), carrying whatever rests on it. It builds only on a static body that does not move.";
   toolBtns.vine.title =
     "Press on a body and drag DOWN to hang a vine from it. Shift-drag its end handle onto another body to span between the two. The player passes through a vine and the hook grabs it anywhere along its length.";
   toolBtns.light.title = "Click to drop a light; drag to set how far it reaches";
+  toolBtns.glow.title =
+    "Click to drop a glowing mushroom (a purple cube for now): one static body holding the cube, the collision box it mirrors, and a WAKING light that stays dark until the ball comes within its wake (the dashed ring) and fades out after it leaves. The 3D preview shows it awake.";
+  toolBtns.fireflies.title =
+    "Click to drop a swarm of fireflies: a body holding only the swarm's light, which is where they hover. When the ball comes within the dashed ring they follow it for the rest of the run, looping around it and lighting it wherever it goes - or, given a firefly path (the fireflies layer) in their `path` field, along that path until the player reaches its end.";
   toolBtns.checkpoint.title =
     "Click to drop a named spawn. Playing with ?checkpoint=NAME starts there instead of at the level's spawn - and stays there over a reset - so an area can be playtested without swinging out to it first. Selecting one and pressing ▶ Test starts the test there.";
   const kindSel = document.createElement("select");
@@ -2731,6 +3077,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     toolBtns.poly,
     toolBtns.path,
     toolBtns.geometry,
+    toolBtns.rock,
+    toolBtns.mushrooms,
     toolBtns.text,
     toolBtns.arrow,
     toolBtns.checkpoint,
@@ -2740,6 +3088,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     toolBtns.mushroom,
     toolBtns.grass,
     toolBtns.plant,
+    toolBtns.glow,
+    toolBtns.fireflies,
     kindWrap,
   );
 
@@ -2830,15 +3180,19 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // all while it is locked. An armed tool the new state cannot draw falls back to
   // Select rather than lingering as a lit dead button.
   function refreshToolButtons(): void {
-    const tools: Tool[] = lockedLayers.has(activeLayer) ? ["select"] : LAYER_TOOLS[activeLayer];
+    const tools: Tool[] = lockedLayers.has(activeLayer)
+      ? ["select"]
+      : LAYER_TOOLS[activeLayer].filter(toolOffered);
     for (const [k, b] of Object.entries(toolBtns)) {
       b.style.display = tools.includes(k as Tool) ? "" : "none";
     }
     // The same gesture draws two different things: a camera path is a route the
     // camera rides, and a scene one is a BAR - the curve a rail's cuff slides
     // along, stroked out to its width. The button says which.
-    toolBtns.path.textContent = activeLayer === "camera" ? "+ Path" : "+ Curve";
+    toolBtns.path.textContent = activeLayer === "scene" ? "+ Curve" : "+ Path";
+    toolBtns.path.title = PATH_TOOL_TITLE[activeLayer];
     if (!tools.includes(tool)) setTool("select");
+    refreshFoliageControls();
   }
 
   function setLayer(l: EdLayer): void {
@@ -2900,7 +3254,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       for (const [k, b] of Object.entries(viewBtns)) b.classList.toggle("active", k === m);
       // The 3D canvas keeps its last frame otherwise, showing a stale scene
       // under a 2D view that is meant to be the editor exactly as it was.
-      if (sceneCanvas) sceneCanvas.style.display = m === "2d" ? "none" : "";
+      refreshSceneCanvas();
       // A turned view is only a turned view while a scene is drawn: the 2D mode
       // is the plane itself and edits normally, orbit or no orbit.
       refreshOrbitBtn();
@@ -2913,8 +3267,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // overlay and offers none of its handles (see `orbit`), so this is the only
     // way back to those, and it lights up while the view is turned so it reads
     // as the way back rather than as a button that usually does nothing.
-    resetViewBtn = button("⟲ Reset view", resetOrbit);
-    resetViewBtn.title = "Face the gameplay plane again (Ctrl + middle-drag orbits)";
+    resetViewBtn = button("⟲ Reset view", resetView);
+    resetViewBtn.title =
+      "Face the gameplay plane again (Level: Ctrl + middle-drag orbits; Visuals: middle drag orbits, Home resets)";
     // The lens. One toggle rather than two buttons, because unlike the view
     // modes these are not three jobs: it is one view, drawn with the perspective
     // divide or without it, and what the button says is which.
@@ -2933,6 +3288,46 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     setViewMode(viewMode);
     refreshOrbitBtn();
     setProjection(projection);
+  }
+
+  // The scene canvas is shown whenever a scene is drawn: always in the Visuals
+  // workspace, and by the view toggle in the Level one.
+  function refreshSceneCanvas(): void {
+    if (sceneCanvas) sceneCanvas.style.display = sceneShown() ? "" : "none";
+  }
+
+  // Switch workspace (the toolbar's switcher, and **W**). The selection, the
+  // active layer, the armed tool (where the other workspace offers it) and the
+  // inspector carry across untouched: a switch changes how the level is looked
+  // at, not what is being edited. Each workspace keeps its own view - the
+  // Level one its 2D camera, orbit and view toggle, the Visuals one its pose.
+  function setWorkspace(k: Workspace): void {
+    if (!visuals || mode !== "edit") return;
+    if ((k === "visuals") === inVisuals()) return;
+    // A gesture in flight was measured in the other workspace's view.
+    drag = null;
+    if (k === "visuals") visuals.enter();
+    else {
+      visuals.leave();
+      // A loop is painted and edited on the scene's surfaces, which the Level
+      // workspace does not offer.
+      if (loopEdit) endLoopEdit();
+    }
+    for (const [key, b] of Object.entries(workspaceBtns)) b.classList.toggle("active", key === k);
+    // The Level workspace's view toggle says how IT draws; the Visuals
+    // workspace is always the scene with its guides, so the toggle goes while
+    // it is active and comes back as it was left.
+    for (const b of Object.values(viewBtns)) b.style.display = k === "visuals" ? "none" : "";
+    refreshSceneCanvas();
+    refreshToolButtons();
+    refreshOrbitBtn();
+    applyToolCursor();
+    updateTitle();
+    // The generators are the Visuals workspace's, so it is where their tools
+    // are asked after (once; again after any request the service refuses for a
+    // missing tool).
+    if (k === "visuals" && !jobs.healthChecked) void jobs.checkHealth();
+    refreshGeneratorHealth();
   }
 
   const title = el("div", "ed-title");
@@ -3013,6 +3408,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       row.classList.toggle("sel", on);
       if (on && !first) first = row;
     }
+    refreshBadges();
     const bodyKey = [...selectedBodyIds].sort((a, b) => a - b).join(",");
     const chainKey = [...selectedChainIds].sort((a, b) => a - b).join(",");
     const vineKey = [...selectedVineIds].sort((a, b) => a - b).join(",");
@@ -3032,8 +3428,37 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   const bodyRows: Array<[HTMLElement, number]> = [];
   const chainRows: Array<[HTMLElement, number]> = [];
   const vineRows: Array<[HTMLElement, number]> = [];
+  // The generated objects' badges (`stale`, `generating`, ...), each with the
+  // item ids it speaks for: one on an object's row, and one on its body's row
+  // so a collapsed body still says it holds something stale.
+  const badgeRows: Array<[HTMLElement, number[]]> = [];
+  let badgeKey = "";
+  function refreshBadges(): void {
+    const key = `${modelRev}|${jobsTick}`;
+    if (key === badgeKey) return;
+    badgeKey = key;
+    const lookup = itemLookup(model.items);
+    const cache = new Map<number, string>();
+    const badgeOf = (id: number): string => {
+      if (!cache.has(id)) {
+        const it = lookup(id);
+        cache.set(id, it ? generatorBadge(it, lookup, jobs.job(id)) : "");
+      }
+      return cache.get(id)!;
+    };
+    // The loudest of a row's: a job under way, then a failure, then stale.
+    const RANK = ["generating", "queued", "failed", "stale"];
+    for (const [span, ids] of badgeRows) {
+      const all = ids.map(badgeOf).filter(Boolean);
+      const top = RANK.find((b) => all.includes(b)) ?? "";
+      span.textContent = top;
+      span.className = `ed-out-badge${top === "generating" || top === "queued" ? " busy" : top === "failed" ? " fail" : ""}`;
+    }
+  }
 
   function buildOutliner(): void {
+    badgeRows.length = 0;
+    badgeKey = "";
     outlinerRows.length = 0;
     bodyRows.length = 0;
     chainRows.length = 0;
@@ -3066,7 +3491,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       label.textContent = `${index}  ${bodyLabel(members)}`;
       const count = el("span", "ed-out-count");
       count.textContent = `${members.length}`;
-      row.append(twist, label, count);
+      row.append(twist, label);
+      const generated = members.filter((m) => m.visual.generator).map((m) => m.id);
+      if (generated.length) {
+        const badge = el("span", "ed-out-badge");
+        row.appendChild(badge);
+        badgeRows.push([badge, generated]);
+      }
+      row.appendChild(count);
       // Selecting a body selects THE BODY - not the objects in it. That is the
       // whole point of the row existing: a body has properties of its own, and
       // they are what the inspector should offer when you click one.
@@ -3098,6 +3530,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         const objLabel = el("span", "ed-out-label");
         objLabel.textContent = objectLabel(m, M2PX);
         objRow.append(el("span", "ed-out-twist"), objLabel);
+        if (m.visual.generator) {
+          const badge = el("span", "ed-out-badge");
+          objRow.appendChild(badge);
+          badgeRows.push([badge, [m.id]]);
+        }
         // ...and selecting ONE object selects only it, which is what Alt+click
         // reaches for on the canvas. That is the whole point of the panel: the
         // objects with no outline are not clickable there at all.
@@ -3235,12 +3672,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const checkpoints = model.items.filter(isCheckpointNote).length;
     const extra =
       ([
-        ["camera", "cam"],
-        ["notes", "notes"],
+        ["camera", "cam", "cam"],
+        ["fireflies", "firefly path", "firefly paths"],
+        ["notes", "note", "notes"],
       ] as const)
-        .map(([l, name]) => {
+        .map(([l, one, many]) => {
           const n = l === "notes" ? count(l) - checkpoints : count(l);
-          return n ? ` · ${n} ${name}` : "";
+          return n ? ` · ${n} ${n === 1 ? one : many}` : "";
         })
         .join("") +
       (checkpoints ? ` · ${checkpoints} checkpoint${checkpoints === 1 ? "" : "s"}` : "") +
@@ -3263,7 +3701,17 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
             : " · Enter to close"
           : "")
       : "";
-    title.textContent = `${currentName ?? "(unsaved)"}${state} · ${count("scene")} objects${extra}${draft}`;
+    title.textContent = `${currentName ?? "(unsaved)"}${state} · ${count("scene")} objects${extra}${draft}${notice ? ` · ${notice}` : ""}`;
+  }
+  function flashNotice(text: string): void {
+    notice = text;
+    if (noticeTimer !== null) clearTimeout(noticeTimer);
+    noticeTimer = setTimeout(() => {
+      notice = null;
+      noticeTimer = null;
+      updateTitle();
+    }, 5000);
+    updateTitle();
   }
   // The cursor a drag borrows and must hand back (pan swaps in a grab hand).
   function applyToolCursor(): void {
@@ -3275,17 +3723,30 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     canvas.style.cursor = isSurfaceTool(tool) ? "crosshair"
       : orbited() || tool === "select" ? "default" : "crosshair";
   }
+  // Does the current workspace offer this tool (`TOOL_WORKSPACES`)?
+  function toolOffered(t: Tool): boolean {
+    const w = TOOL_WORKSPACES[t];
+    return w === "both" || w === (inVisuals() ? "visuals" : "level");
+  }
   function setTool(t: Tool): void {
     if (!LAYER_TOOLS[activeLayer].includes(t)) return;
+    // A key for a tool the workspace does not offer says so rather than doing
+    // nothing, since the button it would light is not on screen to explain.
+    if (!toolOffered(t)) {
+      flashNotice(`${toolBtns[t].textContent} is not in ${inVisuals() ? "Visuals" : "Level"} (W switches)`);
+      return;
+    }
     // A locked layer accepts no new geometry either, so its draw tools cannot be
     // armed by the keyboard shortcuts any more than by the (hidden) buttons.
     if (t !== "select" && lockedLayers.has(activeLayer)) return;
     if (t !== "poly" && t !== "path") cancelPolyDraft();
     if (!isSurfaceTool(t)) cancelSurfaceDraft();
+    if (t !== "mushrooms") surfaceLoop.clear();
     tool = t;
     // The plant tool cuts the outline differently (see `plantsKeepOverhangs`).
     if (surfaceDraft?.closed) refreshSurfaceSelection();
     describeSurface();
+    refreshFoliageControls();
     for (const [k, b] of Object.entries(toolBtns)) b.classList.toggle("active", k === t);
     applyToolCursor();
   }
@@ -3719,7 +4180,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       hint.textContent =
         "The object's position is wheel 0. Drag a square to move a wheel (click one to edit its r here), a round grip on a wheel's rim to size it, a run's midpoint to add a wheel there; Alt+click a square removes its wheel. Every wheel must touch the band. Speed is signed: positive runs the loop clockwise on screen, negative runs it back. A belt builds only on a static body that does not move.";
       g.appendChild(hint);
-    } else if (items.every((b) => b.shape.kind === "path" && b.layer !== "camera")) {
+    } else if (items.every((b) => b.shape.kind === "path" && b.layer === "scene")) {
       // A CURVE has one size and it is the width of the bar: the line itself is
       // edited on the canvas, node by node, exactly as a polygon's outline is.
       num("width", (b) => (b.shape.kind === "path" ? b.shape.width * M2PX : 0), (b, v) => {
@@ -5408,11 +5869,30 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       ms.addEventListener("change", () => {
         beginAction();
         for (const b of items) b.visual.mesh = ms.value;
+        // ...and it is what the Visuals workspace's `+ Geometry` places next,
+        // so a run of the same prop is a run of clicks.
+        if (visuals && ms.value) visuals.propMesh = ms.value;
         markDirty();
         refreshFields();
       });
+      // A GENERATED object's mesh is its generator's: a key picked here would
+      // make it stale in silence and be overwritten by the next Generate, so
+      // the picker shows the key and is not offered (nor is `kind`, which
+      // would draw the stand-in the generator block does not describe).
+      if (items.some((b) => b.visual.generator)) {
+        ms.disabled = true;
+        ks.disabled = true;
+        const why = "Generated: the mesh is made by Generate from the Rock or Mushrooms group below. Delete the object and place a prop to wear a hand-made mesh.";
+        mw.title = why;
+        kw.title = why;
+      }
       mw.appendChild(ms);
       g.appendChild(mw);
+      if (ms.disabled) {
+        const hint = el("div", "ed-hint");
+        hint.textContent = "generated: the mesh is made by Generate below";
+        g.appendChild(hint);
+      }
 
       // Dimensionless: it multiplies the model's own size, so it is not a length
       // and does not scale on the way to disk.
@@ -5767,6 +6247,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       b.title =
         "Give this shape a look: a geometry object with its own copy of the outline, in the same body. Nothing draws a collision shape by itself.";
       row.appendChild(b);
+      addGenerateRockButton(row, solids.length === 1 ? rockSourceOf(solids) : null);
     }
     row.append(
       button("Duplicate", () => duplicateSelected()),
@@ -5858,6 +6339,57 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     addGroupSection(g);
     addActionsRow(g);
     inspector.appendChild(g);
+    // A GENERATED object's Rock or Mushrooms group, below its geometry panel:
+    // one object at a time, since generating is about one mesh.
+    if (!solid && bodies.length === 1 && bodies[0]!.visual.generator) {
+      inspector.appendChild(buildGeneratorGroup(generatorPanelHost, bodies[0]!));
+    }
+  }
+
+  // What the generator group is handed of the editor (see `PanelHost`).
+  const generatorPanelHost = {
+    numField: (
+      parent: HTMLElement,
+      label: string,
+      get: () => number | null,
+      set: (v: number) => void,
+      step: number,
+      mixable: boolean,
+      opts: { placeholder?: string; onEmpty?: () => void },
+    ) => numField(parent, label, get, set, step, mixable, opts),
+    readouts,
+    beginAction: () => beginAction(),
+    markDirty: () => markDirty(),
+    refreshFields: () => refreshFields(),
+    lookup: () => itemLookup(model.items),
+    job: (id: number) => jobs.job(id),
+    facts: (key: string) => jobs.facts(key),
+    missing: (key: string) => jobs.missing(key),
+    generate: (it: EdItem) => void generate(it),
+    editLoop: (it: EdItem) => editLoop(it),
+    surfaceSummary: (it: EdItem) => patchSummary(it),
+    notice: (text: string) => flashNotice(text),
+  };
+
+  // **Generate rock** beside **Add geometry** and on the body panel: the one
+  // collision polygon or rect among `items` it applies to (see `rockSource`),
+  // or null when there is none or more than one to choose between.
+  function rockSourceOf(items: readonly EdItem[]): EdItem | null {
+    const sources = items
+      .filter((b) => b.object === "collision")
+      .flatMap((b) => rockSource(model.items, b) ?? []);
+    return sources.length === 1 ? sources[0]! : null;
+  }
+  function addGenerateRockButton(row: HTMLElement, source: EdItem | null): void {
+    if (!source || !visuals) return;
+    const b = button("Generate rock", () => {
+      if (!inVisuals()) setWorkspace("visuals");
+      dressWithRock(source);
+    });
+    b.title = existingRock(model.items, source)
+      ? "This outline already has a generated rock: select it and generate it again."
+      : "Dress this outline with a GENERATED ROCK (the Visuals workspace's + Rock): a mesh geometry object matched to it, generated in Blender from the parameters on its panel.";
+    row.appendChild(b);
   }
 
   // Compound-body controls. A group is one engine body carrying several convex
@@ -6133,6 +6665,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       : "Move this body's origin onto its centre of mass - the point the engine builds it about - and take up the step in every object's offset. Nothing moves in the level.";
     row.appendChild(centre);
     addRockFitButton(row, id);
+    addGenerateRockButton(row, rockSourceOf(members));
     g.appendChild(row);
 
     addBodyProps(g, members);
@@ -6929,7 +7462,53 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (windKeyed) windInput.title = windKeyed;
     num("priority", (b) => b.cam.priority, (b, v) => (b.cam.priority = Math.round(v)), 1);
 
-    // Three whole-path actions, because each is miserable to do node by node.
+    appendPathActions(g, paths, "Reverse the direction of travel - the way the camera leads along this path");
+
+    // The picked nodes' KEYS, when the path is open for vertex editing and
+    // some are picked. Under the path's own fields because a key is one of
+    // those fields said at one place on the route.
+    const sole = paths.length === 1 ? paths[0]! : null;
+    if (sole && sole.shape.kind === "path" && vertexEditTarget() === sole) {
+      const picked = selectedVertIndices(sole);
+      if (picked.length) buildPathNodeKeys(g, sole, picked);
+    }
+
+    addActionsRow(g);
+    inspector.appendChild(g);
+  }
+
+  // A FIREFLY PATH's panel (see `FireflyPathData`): its number, the swarms
+  // that name it, and the curve's own actions. It frames nothing, so there is
+  // nothing else to author on it.
+  function buildFireflyPathGroup(paths: EdItem[]): void {
+    const g = el("div", "ed-group");
+    g.appendChild(
+      heading(paths.length === 1 ? `Firefly path ${paths[0]!.pathId}` : `${paths.length} firefly paths selected`),
+    );
+    const hint = el("div", "ed-hint");
+    hint.textContent =
+      "A route a firefly swarm guides the player along, in the direction it was drawn - instead of the camera paths. A swarm follows it once its `path` field names this path's number. When the player reaches the END (the bar) the swarm stops following, flies back along the path to the START (the ring) and waits there, noticing the player again once they have left its ring and come back. Edit it like a camera path: drag a node, its round grips to shape the curve, an edge midpoint to insert one, Alt+click to remove one.";
+    g.appendChild(hint);
+    const num = groupNum(g, paths);
+    addTransformFields(g, num, paths);
+    // Which swarms follow it: a path none names is drawn for nothing.
+    const followers = el("div", "ed-hint");
+    followers.textContent = paths
+      .map((p) => {
+        const swarms = model.items.filter(
+          (i) => i.object === "light" && lightSwarms(i) && i.light.path === p.pathId,
+        );
+        return `path ${p.pathId}: ${swarms.length === 0 ? "no swarm names it" : `followed by ${swarms.length} swarm${swarms.length === 1 ? "" : "s"}`}`;
+      })
+      .join("; ");
+    g.appendChild(followers);
+    appendPathActions(g, paths, "Reverse the direction of travel - which end the swarm waits at, and which it leaves the player at");
+    addActionsRow(g);
+    inspector.appendChild(g);
+  }
+
+  // Three whole-path actions, because each is miserable to do node by node.
+  function appendPathActions(g: HTMLElement, paths: EdItem[], reverseTitle: string): void {
     const row = el("div", "ed-row");
     const act = (label: string, title: string, apply: (b: EdItem) => void): void => {
       const b = button(label, () => {
@@ -6946,11 +7525,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       row.appendChild(b);
     };
     // Direction is meaning, and re-drawing a long path backwards is miserable.
-    act(
-      "Reverse",
-      "Reverse the direction of travel - the way the camera leads along this path",
-      (b) => void reversePathVerts(b),
-    );
+    act("Reverse", reverseTitle, (b) => void reversePathVerts(b));
     act(
       "Smooth",
       "Round every corner: each node gets the tangent that carries the curve through it (drag a node's round grips to shape one by hand)",
@@ -6960,18 +7535,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       void sharpenPathNodes(b),
     );
     g.appendChild(row);
-
-    // The picked nodes' KEYS, when the path is open for vertex editing and
-    // some are picked. Under the path's own fields because a key is one of
-    // those fields said at one place on the route.
-    const sole = paths.length === 1 ? paths[0]! : null;
-    if (sole && sole.shape.kind === "path" && vertexEditTarget() === sole) {
-      const picked = selectedVertIndices(sole);
-      if (picked.length) buildPathNodeKeys(g, sole, picked);
-    }
-
-    addActionsRow(g);
-    inspector.appendChild(g);
   }
 
   // The keyframe fields of a path's picked nodes (see `CameraPathVert`). Each
@@ -7065,8 +7628,26 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     kindSel.title = "point throws in every direction; spot is a cone (a shaft through a grate)";
     kindSel.addEventListener("change", () => {
       beginAction();
-      for (const b of lights) b.light.kind = kindSel.value as "point" | "spot";
+      const kind = kindSel.value as "point" | "spot";
+      // A waking light is point-only (the pool that serves it is point
+      // lights), so turning one into a spot takes its wake with it - said in
+      // the status line, since the fields that showed it are about to go.
+      // A swarm is point-only for the same reason, and goes the same way.
+      let slept = 0;
+      for (const b of lights) {
+        b.light.kind = kind;
+        if (kind === "spot" && (b.light.wake > 0 || b.light.fireflies > 0)) {
+          b.light.wake = 0;
+          b.light.fireflies = 0;
+          slept++;
+        }
+      }
       markDirty();
+      if (slept > 0) {
+        flashNotice(
+          `a spot cannot wake or swarm: cleared wake and fireflies on ${slept} light${slept === 1 ? "" : "s"}`,
+        );
+      }
       rebuildInspector(); // the cone fields appear or go
     });
     g.appendChild(labelWrap("kind", kindSel));
@@ -7087,8 +7668,118 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       0.1,
     );
 
+    if (lights.every((b) => b.light.kind === "point")) {
+      // A FIREFLY SWARM (see `LightObjectData.fireflies`): this many motes
+      // hovering at the light until the ball comes within `wake`, then
+      // following it. Blank or 0 is an ordinary light.
+      const swarmInput = num(
+        "fireflies",
+        (b) => (b.light.fireflies > 0 ? b.light.fireflies : NaN),
+        (b, v) => (b.light.fireflies = Math.min(FIREFLY_MAX, Math.max(0, Math.round(v)))),
+        1,
+        {
+          placeholder: "none",
+          onEmpty: () => {
+            for (const b of lights) b.light.fireflies = 0;
+          },
+        },
+      );
+      // The times below appear or go with it.
+      swarmInput.addEventListener("change", () => rebuildInspector());
+      const swarming = lights.every((b) => b.light.fireflies > 0);
+
+      // The FIREFLY PATH it guides the player along (see
+      // `LightObjectData.path`), by the number the fireflies layer labels it
+      // with. Blank = the camera paths, followed for the rest of the run.
+      if (swarming) {
+        const ids = new Set(model.items.filter((i) => i.layer === "fireflies").map((i) => i.pathId));
+        const pathInput = num(
+          "path",
+          (b) => b.light.path ?? NaN,
+          (b, v) => (b.light.path = Math.max(1, Math.round(v))),
+          1,
+          {
+            placeholder: "camera",
+            onEmpty: () => {
+              for (const b of lights) b.light.path = null;
+            },
+          },
+        );
+        pathInput.title =
+          "The number of a firefly path (the fireflies layer) this swarm guides the player along; blank reads the camera paths.";
+        pathInput.addEventListener("change", () => rebuildInspector());
+        // A number naming no path is read as blank (see `LightRig.placeFor`),
+        // which is silent in play - so it is said here.
+        const missing = [
+          ...new Set(
+            lights.flatMap((b) => (b.light.path !== null && !ids.has(b.light.path) ? [b.light.path] : [])),
+          ),
+        ];
+        if (missing.length > 0) {
+          const warn = el("div", "ed-hint");
+          warn.textContent = `No firefly path ${missing.join(", ")} on the fireflies layer: the swarm reads the camera paths until there is one.`;
+          g.appendChild(warn);
+        }
+      }
+
+      // A WAKING light (see `LightObjectData.wake`): dark until the ball comes
+      // within `wake`, then rising to its intensity with the glowing shapes of
+      // its body. Canvas pixels here like the reach, metres on disk; blank or 0
+      // is a light that is always on. The canvas draws the wake as a dashed
+      // ring outside the reach; the 3D preview shows every waking light AWAKE.
+      const wakeInput = num(
+        "wake",
+        (b) => (b.light.wake > 0 ? b.light.wake * M2PX : NaN),
+        (b, v) => (b.light.wake = Math.max(0, v * PX)),
+        10,
+        {
+          // A swarm reads the wake as where it notices the ball.
+          placeholder: swarming ? String(Math.round(DEFAULT_FIREFLY_NOTICE * M2PX)) : "always on",
+          onEmpty: () => {
+            for (const b of lights) b.light.wake = 0;
+          },
+        },
+      );
+      // Set or cleared, the times appear or go and the shadow box greys or
+      // not - rebuilt once the value is committed rather than per keystroke,
+      // which would take the caret out of the field being typed into.
+      wakeInput.addEventListener("change", () => rebuildInspector());
+      // A swarm is never dark, so it has no times to author.
+      if (!lights.some((b) => b.light.fireflies > 0) && lights.every((b) => b.light.wake > 0)) {
+        // Seconds, floored at 0; blank is the renderer's default (no delay,
+        // DEFAULT_WAKE_RISE, DEFAULT_WAKE_FALL).
+        const secs = (
+          label: string,
+          get: (l: EdLight) => number | null,
+          set: (l: EdLight, v: number | null) => void,
+          fallback: string,
+        ): void => {
+          num(
+            label,
+            (b) => get(b.light) ?? NaN,
+            (b, v) => set(b.light, Math.max(0, v)),
+            0.05,
+            {
+              placeholder: fallback,
+              onEmpty: () => {
+                for (const b of lights) set(b.light, null);
+              },
+            },
+          );
+        };
+        secs("delay s", (l) => l.wakeDelay, (l, v) => (l.wakeDelay = v), "0");
+        secs("rise s", (l) => l.wakeRise, (l, v) => (l.wakeRise = v), String(DEFAULT_WAKE_RISE));
+        secs("fall s", (l) => l.wakeFall, (l, v) => (l.wakeFall = v), String(DEFAULT_WAKE_FALL));
+      }
+    }
+
     if (lights.every((b) => b.light.kind === "spot")) {
-      num("cone°", (b) => b.light.angle, (b, v) => (b.light.angle = Math.min(89, Math.max(1, v))), 5);
+      // The cone made visible, beside the flicker it flickers with: how much
+      // the lit air shows, and how thick the dust drifting in it is. The 3D
+      // view shows both; the 2D canvas does not draw the cone.
+      num("beam", (b) => b.light.beam, (b, v) => (b.light.beam = Math.min(1, Math.max(0, v))), 0.05);
+      num("dust", (b) => b.light.dust, (b, v) => (b.light.dust = Math.min(1, Math.max(0, v))), 0.05);
+      num("cone°",(b) => b.light.angle, (b, v) => (b.light.angle = Math.min(89, Math.max(1, v))), 5);
       num(
         "penumbra",
         (b) => b.light.penumbra,
@@ -7117,8 +7808,22 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       markDirty();
       rebuildInspector();
     });
+    // A waking light casts none, whatever it says: it is served by a pool light
+    // handed between sources as they wake, and a shadow map swapped with it
+    // would flash (see `render3d/lights.ts`). The box stays, greyed, so the
+    // authored flag is visible and survives turning the wake off again.
+    // A swarm is served by a pool too, and casts none either.
+    const waking = lights.some(
+      (b) => b.light.kind === "point" && (b.light.wake > 0 || b.light.fireflies > 0),
+    );
+    shadowBox.disabled = waking;
     const sw = el("label", "ed-field");
     sw.textContent = "shadows";
+    if (waking) {
+      sw.title =
+        "A waking light or a firefly swarm casts no shadow (the pool lights that serve them cast none).";
+      sw.style.opacity = "0.5";
+    }
     sw.appendChild(shadowBox);
     g.appendChild(sw);
     if (lights.every((b) => b.light.castShadow)) {
@@ -7730,6 +8435,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       "anchor",
       "camera",
       "campath",
+      "ffpath",
       "notes",
     ] as const;
     const panelOf = (b: EdItem): (typeof PANELS)[number] =>
@@ -7737,9 +8443,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         ? b.shape.kind === "path"
           ? "campath"
           : "camera"
-        : b.layer === "notes"
-          ? "notes"
-          : b.object;
+        : b.layer === "fireflies"
+          ? "ffpath"
+          : b.layer === "notes"
+            ? "notes"
+            : b.object;
     const panels = PANELS.filter((k) => sel.some((b) => panelOf(b) === k));
     selectionSpansLayers = panels.length > 1;
     if (selectionSpansLayers) {
@@ -7760,6 +8468,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       const items = sel.filter((b) => panelOf(b) === k);
       if (k === "camera") buildCameraGroup(items);
       else if (k === "campath") buildCameraPathGroup(items);
+      else if (k === "ffpath") buildFireflyPathGroup(items);
       else if (k === "light") buildLightsGroup(items);
       else if (k === "anchor") buildAnchorsGroup(items);
       else if (k === "notes") buildNotesGroup(items);
@@ -7789,7 +8498,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // The model's own for a duplicate; the parsed payload's for a paste out of
     // the clipboard, which is a different model entirely.
     sourceFrames: ReadonlyMap<number, EdBodyFrame> = model.bodyFrames,
-  ): { items: EdItem[]; idOf: Map<number, number>; frames: Map<number, EdBodyFrame> } {
+  ): { items: EdItem[]; idOf: Map<number, number>; frames: Map<number, EdBodyFrame>; orphanedPatches: number } {
     const groups = new Map<number, number>();
     const idOf = new Map<number, number>();
     // A body's frame is NOT in its items, so a copy that does not carry it gets
@@ -7826,7 +8535,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         cam: { ...b.cam },
         light: { ...b.light },
         note: { ...b.note },
-        visual: { ...b.visual },
+        visual: cloneVisual(b.visual),
       };
     });
     // A matched pair copied together stays a pair; a geometry object copied
@@ -7835,6 +8544,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     for (const it of items) {
       if (it.matchId !== 0) it.matchId = idOf.get(it.matchId) ?? 0;
     }
+    // ...and a mushroom patch follows its host the same way: copied together
+    // they stay a pair, and a patch copied without its host is hostless, said
+    // by the caller (`sayOrphanedPatches`).
+    const orphanedPatches = remapPatchHosts(items, idOf);
     // A copied anchor is a NEW anchor and needs an on-disk id of its own:
     // `anchorId` is what chains and vines name their ends by in the file, so a
     // copy carrying the original's id loads with both ends resolving to
@@ -7843,7 +8556,36 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     for (const it of items) {
       if (it.object === "anchor") it.anchorId = nextAnchorId++;
     }
-    return { items, idOf, frames };
+    // ...and a copied firefly path is a new path, for the same reason: two
+    // paths under one id leave a swarm naming it following whichever loads
+    // first (the loader drops the second). A copied SWARM keeps naming the
+    // original's path - two swarms guiding along one path is a fine thing to
+    // author - unless that path was copied with it, when the copy follows the
+    // copy.
+    let nextPathId = newFireflyPathId();
+    const pathOf = new Map<number, number>();
+    for (const it of items) {
+      if (it.layer !== "fireflies") continue;
+      pathOf.set(it.pathId, nextPathId);
+      it.pathId = nextPathId++;
+    }
+    for (const it of items) {
+      const p = it.light.path;
+      if (it.object === "light" && p !== null && pathOf.has(p)) {
+        it.light = { ...it.light, path: pathOf.get(p)! };
+      }
+    }
+    return { items, idOf, frames, orphanedPatches };
+  }
+
+  // A patch copied without its host lands in a body of its own and grows on
+  // nothing; said rather than left for the panel's `no host` to explain.
+  function sayOrphanedPatches(n: number): void {
+    if (n > 0) {
+      flashNotice(
+        `${n === 1 ? "the copied mushroom patch has" : `${n} copied mushroom patches have`} no host: copy the patch together with the model it grows on`,
+      );
+    }
   }
 
   // Copies of the chains whose BOTH ends landed in the copied set. A chain with
@@ -8056,6 +8798,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     return next;
   }
 
+  // The next free firefly path id, unique across the level's firefly paths -
+  // the scope a swarm names its path in.
+  function newFireflyPathId(): number {
+    let next = 1;
+    for (const i of model.items) if (i.layer === "fireflies" && i.pathId >= next) next = i.pathId + 1;
+    return next;
+  }
+
   // A fresh ANCHOR object on `host`, at a world point pushed onto that item's
   // surface. It joins the host's BODY, which is the whole point of the anchor
   // being an object: it rides the body from then on, with nothing to keep in
@@ -8083,6 +8833,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       light: { ...host.light },
       note: { ...host.note },
       anchorId: newAnchorId(),
+      pathId: 0,
     };
   }
 
@@ -8231,7 +8982,27 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // A fresh item for the draw tool, on the active layer. Every layer's item is
   // the same type, so this only picks the appearance and the starting size —
   // the drag that follows resizes it identically whatever it is.
-  function newDrawnItem(t: Exclude<Tool, "select" | "chain">, start: Vec2): EdItem {
+  // `+ Glow`: the body `glowBody` describes, centred on `at`, through the same
+  // loader a level (and a paste) comes in by, so it is exactly what a file
+  // holding that body would load as. Always a body of its own: a mushroom is a
+  // thing in the level, not a part of whatever happens to be selected.
+  function placeGlow(at: Vec2): void {
+    const arrived = glowModel(at);
+    beginAction();
+    const copy = cloneBodies(arrived.items, Vec2.ZERO, arrived.bodyFrames);
+    addAndSelect(copy.items, [], [], copy.frames);
+  }
+
+  // `+ Fireflies`: the body `fireflyBody` describes, the way `placeGlow` places
+  // a mushroom - always a body of its own.
+  function placeFireflies(at: Vec2): void {
+    const arrived = fireflyModel(at);
+    beginAction();
+    const copy = cloneBodies(arrived.items, Vec2.ZERO, arrived.bodyFrames);
+    addAndSelect(copy.items, [], [], copy.frames);
+  }
+
+  function newDrawnItem(t: Exclude<Tool, "select" | "chain" | "glow" | "fireflies">, start: Vec2): EdItem {
     // Which of the three scene objects the tool draws. `+ Geometry` is the only
     // way to get a drawn-and-not-simulated object in one gesture; every other
     // shape tool draws a collision object, and NOTHING is created beside it.
@@ -8331,6 +9102,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       light: defaultLight(),
       note: defaultNote(),
       anchorId: 0,
+      pathId: 0,
       matchId: 0,
     };
     if (t === "light") {
@@ -8379,6 +9151,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // every instant, never a shape with no direction.
       return {
         ...base,
+        // A firefly path is named by an id swarms refer to it by (see
+        // `EdItem.pathId`), minted here so it has one from the first instant.
+        pathId: activeLayer === "fireflies" ? newFireflyPathId() : 0,
         shape: {
           kind: "path",
           verts: [new Vec2(-gridStep, 0), new Vec2(gridStep, 0)],
@@ -8747,6 +9522,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       cloneVinesWithin(model.vines, copy.idOf),
       copy.frames,
     );
+    sayOrphanedPatches(copy.orphanedPatches);
   }
 
   // --- clipboard ------------------------------------------------------------
@@ -8860,6 +9636,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // one gets. The host's own lead comes first in `model.items`, so it is the
     // body that wins, not the arrival.
     if (host !== null) syncBodyProps(bodyMembers(model.items, host));
+    sayOrphanedPatches(copy.orphanedPatches);
   }
 
   // THE DOM'S OWN EVENTS rather than the keydown switch, and that is what the
@@ -9032,16 +9809,38 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // through the same camera `Scene3D.pick` raycasts geometry with, so the plane
   // and the models a click is resolved against cannot disagree about where the
   // pointer is aimed.
-  function canvasWorld(scr: Vec2): Vec2 {
-    if (!orbited() || !scene3d) return screenToWorld(camera, scr.x, scr.y);
+  //
+  // `z` asks about the plane that far in front of the gameplay plane instead
+  // (metres), for a drag of something DRAWN at a depth of its own - a light
+  // hanging at its `z`, a prop's corners on the face it is drawn at - so what is
+  // dragged stays under the pointer rather than sliding at the plane's rate.
+  // Head on every such plane is the same picture, and the answer is the 2D one.
+  //
+  // In the Visuals workspace the camera is the pose's (placed by the workspace
+  // the moment a gesture moves it), and a ray that misses the plane - the
+  // camera standing behind it - falls back to where the pointer last met it
+  // rather than to a 2D camera that is not the view on screen.
+  let lastPlaneHit: Vec2 = Vec2.ZERO;
+  function canvasWorld(scr: Vec2, z = 0): Vec2 {
+    if (!inScene() || !scene3d) return screenToWorld(camera, scr.x, scr.y);
     const r = canvas.getBoundingClientRect();
     if (!r.width || !r.height) return screenToWorld(camera, scr.x, scr.y);
     const hit = unprojectToPlane(
       scene3d.camera,
       (scr.x / r.width) * 2 - 1,
       1 - (scr.y / r.height) * 2,
+      z,
     );
-    return hit ?? screenToWorld(camera, scr.x, scr.y);
+    if (hit) lastPlaneHit = hit;
+    return hit ?? (inVisuals() ? lastPlaneHit : screenToWorld(camera, scr.x, scr.y));
+  }
+  // Where a world point (at depth `z`) is on the canvas, in CSS pixels: the
+  // inverse of `canvasWorld`, for a press tested against something drawn (the
+  // first vertex a polygon draft closes on).
+  function canvasScreen(world: Vec2, z = 0): Vec2 {
+    // Behind the camera it is nowhere on the canvas, so no press is near it.
+    if (inVisuals()) return visuals!.screenOf(world, z) ?? new Vec2(Infinity, Infinity);
+    return worldToScreen(camera, world);
   }
 
   // Last pointer position, kept in screen space so it un-projects through the
@@ -9059,7 +9858,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // toggle. A plain press on a vertex already in the selection keeps the whole
   // set and drags it, so a group of corners is moved by grabbing any of them; a
   // plain press on any other vertex means that vertex alone.
-  function grabVertex(item: EdItem, index: number, shift: boolean): Drag | "consumed" | null {
+  function grabVertex(item: EdItem, index: number, shift: boolean, planeZ = 0): Drag | "consumed" | null {
     if (item.shape.kind !== "poly" && item.shape.kind !== "path") return null;
     const verts = item.shape.verts;
     if (shift) {
@@ -9082,7 +9881,665 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const others = selectedVertIndices(item)
       .filter((i) => i !== index)
       .map((i) => ({ index: i, offset: verts[i]!.sub(lead) }));
-    return { mode: "polyVertex", body: item, index, others, accepted: lead };
+    return { mode: "polyVertex", body: item, index, others, accepted: lead, planeZ };
+  }
+
+  // A press on corner `i` of the shape open for vertex editing: Alt+click
+  // removes it (never below the loop's floor: three for a polygon, two for an
+  // open path), anything else picks it and drags it. One function for the
+  // overlay's square and the Visuals workspace's guide handle, so the two
+  // cannot come to mean different things. `planeZ` is the plane the corner is
+  // drawn in, which a drag of it stays in.
+  function pressVertex(s: EdItem, i: number, alt: boolean, shift: boolean, planeZ = 0): Drag | "consumed" | null {
+    const shape = s.shape;
+    if (shape.kind !== "poly" && shape.kind !== "path") return null;
+    if (!alt) return grabVertex(s, i, shift, planeZ);
+    if (shape.verts.length <= (shape.kind === "path" ? 2 : 3)) return null;
+    beginAction();
+    const ok =
+      shape.kind === "path"
+        ? setPathVerts(
+            s,
+            shape.verts.filter((_, j) => j !== i),
+            shape.handles.filter((_, j) => j !== i),
+            shape.keys.filter((_, j) => j !== i),
+          )
+        : setPolyVerts(s, shape.verts.filter((_, j) => j !== i));
+    if (ok) {
+      // Every index past the removed one has shifted, so the set names corners
+      // nobody picked; it goes rather than being renumbered, since a removal
+      // is the end of the gesture that made it.
+      selectedVerts.clear();
+      markDirty();
+      rebuildInspector();
+    }
+    return "consumed";
+  }
+
+  // A press on the midpoint of edge `i` (from vertex `i` to the next): insert
+  // a vertex there and drag it straight away, so adding a corner and placing it
+  // is one gesture.
+  function pressMidpoint(s: EdItem, i: number, planeZ = 0): Drag | null {
+    const shape = s.shape;
+    let mid: Vec2;
+    if (shape.kind === "path") {
+      // A de Casteljau split at t = 1/2: the two halves are exactly the curve
+      // that was there, so inserting a node on a bowed edge adds a grip and
+      // changes nothing about the shape. Splitting the chord instead would
+      // straighten the edge the moment it was subdivided.
+      const nodes = pathNodes(s);
+      const a = nodes[i]!;
+      const b = nodes[i + 1]!;
+      const c1 = a.p.add(a.out);
+      const c2 = b.p.add(b.in);
+      const m1 = a.p.add(c1).mul(0.5);
+      const m2 = c1.add(c2).mul(0.5);
+      const m3 = c2.add(b.p).mul(0.5);
+      const n1 = m1.add(m2).mul(0.5);
+      const n2 = m2.add(m3).mul(0.5);
+      mid = n1.add(n2).mul(0.5);
+      const verts = [...shape.verts.slice(0, i + 1), mid, ...shape.verts.slice(i + 1)];
+      const handles = shape.handles.map((x) => ({ ...x }));
+      handles[i] = { in: handles[i]!.in, out: m1.sub(a.p) };
+      handles[i + 1] = { in: m3.sub(b.p), out: handles[i + 1]!.out };
+      handles.splice(i + 1, 0, { in: n1.sub(mid), out: n2.sub(mid) });
+      // The new node keys nothing: an unkeyed node is transparent to the
+      // interpolation, so the split changes the framing along the route by
+      // exactly as much as it changes the curve - nothing.
+      const keys = shape.keys.map((k) => ({ ...k }));
+      keys.splice(i + 1, 0, NO_KEY());
+      beginAction();
+      dragPushed = true;
+      if (!setPathVerts(s, verts, handles, keys)) return null;
+    } else if (shape.kind === "poly") {
+      const verts = shape.verts;
+      mid = verts[i]!.add(verts[(i + 1) % verts.length]!).mul(0.5);
+      const next = [...verts.slice(0, i + 1), mid, ...verts.slice(i + 1)];
+      beginAction();
+      dragPushed = true;
+      if (!setPolyVerts(s, next)) return null;
+    } else {
+      return null;
+    }
+    markDirty();
+    // The inserted vertex becomes the selection: it is the one the gesture is
+    // about, and every index past it has just shifted, so carrying the old set
+    // over would name different corners than the ones that were picked.
+    selectedVerts.clear();
+    selectedVerts.add(i + 1);
+    return { mode: "polyVertex", body: s, index: i + 1, others: [], accepted: mid, planeZ };
+  }
+
+  // The Visuals workspace's `pickHandle`: the handles are the guides' own, so
+  // they are found by the raycast that drew them rather than by distance on a
+  // plane. Only the shape open for vertex editing has any (see
+  // `vertexEditTarget`), and a handle anywhere under the pointer wins over the
+  // outlines and models it is drawn over (`handleUnder`).
+  function pickSceneHandle(tags: readonly unknown[], alt: boolean, shift: boolean): Drag | "consumed" | null {
+    const s = vertexEditTarget();
+    const h = handleUnder(tags);
+    if (!s || !h || h.id !== s.id || h.index === undefined) return null;
+    const z = guidePlaneZ(s, bodyCollides(s.bodyId));
+    return h.guide === "vertex" ? pressVertex(s, h.index, alt, shift, z) : pressMidpoint(s, h.index, z);
+  }
+
+  // The nearest level surface under the pointer (Visuals), leaving out the
+  // body `exclude` - the thing being put down must not be put down on itself.
+  // Any drawn geometry object of the level counts; the guides, the gizmo and
+  // the ball at the spawn do not.
+  function surfaceUnder(scr: Vec2, exclude: number | null): { point: THREE.Vector3; normal: THREE.Vector3 } | null {
+    const hit = visuals?.surfaceAt(scr, (tag) => {
+      const id = itemOfSceneObject.get(tag as SceneObjectData);
+      const it = id === undefined ? null : itemOf(id);
+      return it !== null && it.bodyId !== exclude;
+    });
+    return hit ? { point: new THREE.Vector3(hit.point.x, hit.point.y, hit.point.z), normal: new THREE.Vector3(hit.normal.x, hit.normal.y, hit.normal.z) } : null;
+  }
+
+  // Run a write with the grid off. A drop on a surface is exact by nature: the
+  // point it lands on is where the face IS, and rounding it to the 5 cm grid
+  // would sink a prop into the rock it was stood on or float it off.
+  function unsnapped(write: () => void): void {
+    const was = snapOn;
+    snapOn = false;
+    try {
+      write();
+    } finally {
+      snapOn = was;
+    }
+  }
+
+  // One pointer move of a DROP ON SURFACE. Written through the gizmo's own
+  // item handlers - the move and, with Ctrl on a prop, the turn - so the fields
+  // it writes (`pos`, `offsetZ` or a light's `z`, `rot`/`rotX`/`rotY`) are
+  // written exactly as the arrows and rings write them, fallback depth and all.
+  // Begun at the first move past the click's slop, which is the one undo step.
+  //
+  // The tilt is aligned from the one the drag STARTED with every move, rather
+  // than from the last move's, so a sweep across a bumpy face ends up at the
+  // same angle as a jump straight to its last point; releasing Ctrl mid-drag
+  // hands the object its own tilt back.
+  function surfaceDropMove(d: Extract<Drag, { mode: "surfaceDrop" }>, scr: Vec2, align: boolean): void {
+    if (!d.handlers) {
+      if (scr.distanceTo(d.press) < CLICK_SLOP_PX) return;
+      d.handlers = itemHandlers(d.item.id);
+      d.handlers.begin("translate");
+      d.tilt = { rot: d.item.rot, rotX: d.item.visual.rotX, rotY: d.item.visual.rotY };
+    }
+    const it = itemOf(d.item.id);
+    const tilt = d.tilt;
+    if (!it || !tilt) return;
+    const hit = surfaceUnder(scr, it.bodyId);
+    // Over nothing it stays where it last landed: a drop has no plane to fall
+    // back to, and snapping to the gameplay plane would be a move nobody made.
+    if (!hit) return;
+    const at = surfacePlacement(hit.point);
+    const pos = new THREE.Vector3(at.pos.x, threeY(at.pos.y), at.z);
+    const handlers = d.handlers;
+    unsnapped(() => {
+      handlers.apply("translate", pos, itemQuat(it), new THREE.Vector3(1, 1, 1));
+      if (it.object === "geometry" && it.visual.kind === "mesh") {
+        const want = align ? alignUp(tilt, hit.normal) : tilt;
+        if (want.rot !== it.rot || want.rotX !== it.visual.rotX || want.rotY !== it.visual.rotY) {
+          const q = new THREE.Quaternion().setFromEuler(
+            new THREE.Euler(want.rotX, want.rotY, threeRotation(want.rot), "ZXY"),
+          );
+          handlers.apply("rotate", pos, q, new THREE.Vector3(1, 1, 1));
+        }
+      }
+    });
+  }
+
+  // WHAT A PRESS DOES WITH A TOOL OF THE VISUALS WORKSPACE'S OWN: the tools
+  // whose gesture is about the scene rather than the plane. The press handler
+  // asks this before anything a plane tool does, so a tool registers here and
+  // nowhere else in the handler; one the table does not name falls through to
+  // the plane gestures both workspaces share. (`+ Rock` and `+ Mushrooms` land
+  // here.)
+  interface ScenePress {
+    readonly scr: Vec2;
+    // Where the pointer meets the gameplay plane, sim metres.
+    readonly world: Vec2;
+    readonly shift: boolean;
+    readonly ctrl: boolean;
+    // Everything under the pointer, models and guides, nearest first.
+    readonly tags: readonly unknown[];
+  }
+  const sceneToolPress: Partial<Record<Tool, (p: ScenePress) => void>> = {
+    geometry: placeProp,
+    rock: placeRock,
+    mushrooms: paintLoop,
+  };
+
+  // --- the generators (+ Rock, + Mushrooms, the Rock and Mushrooms groups) ---
+  // docs/editor-visuals.md, "Rocks and mushrooms". The pure halves are in
+  // editor/visuals/ (generatorEdits, surfacePatch, surfaceLoop, jobs,
+  // generatorPanel); what is here is the part that needs the live scene.
+
+  // The item a drawn model's pick tag names.
+  function itemOfTag(tag: unknown): EdItem | null {
+    const id = itemOfSceneObject.get(tag as SceneObjectData);
+    return id === undefined ? null : itemOf(id);
+  }
+
+  // `+ Rock`: the nearest collision outline under the pointer (by its guide) or
+  // model matched to one, dressed with a generated rock.
+  function placeRock(p: ScenePress): void {
+    for (const t of p.tags) {
+      const it = isGuideTag(t) ? (t.guide === "outline" ? itemOf(t.id) : null) : itemOfTag(t);
+      const source = it ? rockSource(model.items, it) : null;
+      if (source) {
+        dressWithRock(source);
+        return;
+      }
+    }
+    // ...else inside one, on the plane: a bare collision outline draws nothing
+    // but its line, and a click anywhere in the shape means the shape.
+    for (const it of pickCandidatesAt(p.world, p.scr)) {
+      const source = rockSource(model.items, it);
+      if (source) {
+        dressWithRock(source);
+        return;
+      }
+    }
+    flashNotice("+ Rock: click a collision polygon or rect, or the geometry matched to one");
+  }
+
+  // One undo step: the rock added and selected, then its generation asked for.
+  // An outline already dressed with one has it selected and generated instead.
+  function dressWithRock(source: EdItem): void {
+    const had = existingRock(model.items, source);
+    if (had) {
+      setSelection([had.id]);
+      rebuildInspector();
+      void generate(had);
+      return;
+    }
+    beginAction();
+    const rock = rockFor(source, newBodyId());
+    addAndSelect([rock]);
+    void generate(rock);
+  }
+
+  // What a mushroom loop may be painted on: any drawn scene geometry but a
+  // patch, so a second patch beside the first is painted on the rock under it.
+  const loopHostable = (it: EdItem): boolean =>
+    it.layer === "scene" && it.object === "geometry" && it.visual.generator?.kind !== "mushrooms";
+
+  // Every mesh drawn for an item, as the scene holds it now.
+  function drawnMeshesOf(it: EdItem): THREE.Mesh[] {
+    const tag = sceneObjectOfItem.get(it.id);
+    return scene3d && tag ? scene3d.meshesOf(tag) : [];
+  }
+
+  // `+ Mushrooms`: a click adds a point on the surface under the pointer (on
+  // the loop's host once it has one), and a click on the first point closes it.
+  function paintLoop(p: ScenePress): void {
+    if (surfaceLoop.closable) {
+      const first = surfaceLoop.points[0]!.point;
+      const at = visuals!.screenOf(new Vec2(first.x, threeY(first.y)), first.z);
+      if (at && at.distanceTo(p.scr) <= POLY_CLOSE_PX) {
+        closeSurfaceLoop();
+        return;
+      }
+    }
+    const host = surfaceLoop.hostId;
+    const hit = visuals!.surfaceAt(p.scr, (tag) => {
+      const it = itemOfTag(tag);
+      return it !== null && loopHostable(it) && (host === null || it.id === host);
+    });
+    const on = hit ? itemOfTag(hit.tag) : null;
+    if (!hit || !on) {
+      flashNotice(
+        host === null
+          ? "+ Mushrooms: click on a drawn model to start the loop"
+          : "+ Mushrooms: the loop stays on the model it was started on",
+      );
+      return;
+    }
+    surfaceLoop.add({
+      point: new THREE.Vector3(hit.point.x, hit.point.y, hit.point.z),
+      normal: new THREE.Vector3(hit.normal.x, hit.normal.y, hit.normal.z),
+      hostId: on.id,
+    });
+    updateTitle();
+  }
+
+  // The rubber band from the last point to the surface under the pointer, at
+  // most every `LOOP_HOVER_MS` (ms): a raycast of the whole scene per mouse
+  // event is more than a rubber band is worth.
+  const LOOP_HOVER_MS = 30;
+  let loopHoverAt = 0;
+  function hoverLoop(scr: Vec2): void {
+    const now = performance.now();
+    if (now - loopHoverAt < LOOP_HOVER_MS) return;
+    loopHoverAt = now;
+    const host = surfaceLoop.hostId;
+    const hit = visuals?.surfaceAt(scr, (tag) => itemOfTag(tag)?.id === host) ?? null;
+    surfaceLoop.cursor = hit ? new THREE.Vector3(hit.point.x, hit.point.y, hit.point.z) : null;
+  }
+
+  // What a surface selection that failed means, for the status line.
+  const SURFACE_REFUSALS = {
+    loop: "the loop has no extent",
+    empty: "the loop covers no faces that face it at this slope (maxSlope)",
+    overflow: "the loop covers more faces than maxTriangles allows",
+  } as const;
+
+  // Close the loop: one undo step adds the patch in the host's body, sized to
+  // the faces the loop covers, and asks for its generation. A loop that covers
+  // nothing stays open, so Backspace or Esc can deal with it.
+  function closeSurfaceLoop(): void {
+    const hostId = surfaceLoop.hostId;
+    const host = hostId === null ? null : itemOf(hostId);
+    if (!surfaceLoop.closable || !host) return;
+    const values = mergeDefaults({}, loadSchema("mushrooms")!);
+    const res = selectSurface(drawnMeshesOf(host), surfaceLoop.points, {
+      maxSlopeDeg: values["maxSlope"] as number,
+      maxTriangles: values["maxTriangles"] as number,
+    });
+    if (!res.ok) {
+      flashNotice(`+ Mushrooms: ${SURFACE_REFUSALS[res.reason]}`);
+      return;
+    }
+    beginAction();
+    // The side it was painted on, from the faces it was clicked on: stored with
+    // the loop, since the file holds no normals and the plane of best fit of a
+    // loop near a face's edge could be read either way round.
+    const facing = new THREE.Vector3();
+    for (const p of surfaceLoop.points) facing.add(p.normal);
+    const patch = patchFor(host, newBodyId(), surfaceLoop.points.map((p) => p.point), res.selection.positions, facing);
+    surfaceLoop.clear();
+    addAndSelect([patch]);
+    updateTitle();
+    void generate(patch);
+  }
+
+  // Where a patch is drawn, as a matrix from its own frame to three's world.
+  function patchFrame(it: EdItem): THREE.Matrix4 {
+    return patchMatrix(objectPose(it, guidePlaneZ(it, bodyCollides(it.bodyId))));
+  }
+
+  // A patch's stored loop on its host's surface, in three's world, each point
+  // carrying the side the loop was painted on (`EdPatch.facing`, turned into
+  // the world with the patch): the plane of best fit needs only to know which
+  // of its two sides is out. A patch from a file that did not store its facing
+  // guesses it as away from the host's middle, which a loop on a wide face
+  // near its edge can get wrong - hence the stored one.
+  //
+  // Read every frame while Edit loop is open (the draft) and at every collect,
+  // so it is kept per patch until the model or the scene moves: the guess
+  // walks the host's meshes, and the answer is fresh vectors each time.
+  let loopWorldCache: { id: number; rev: number; scene: number; points: SurfacePoint[] } | null = null;
+  function patchLoopWorld(it: EdItem): SurfacePoint[] {
+    const c = loopWorldCache;
+    if (c && c.id === it.id && c.rev === modelRev && c.scene === sceneRev) return c.points;
+    const points = computePatchLoopWorld(it);
+    loopWorldCache = { id: it.id, rev: modelRev, scene: sceneRev, points };
+    return points;
+  }
+  function computePatchLoopWorld(it: EdItem): SurfacePoint[] {
+    const patch = it.visual.generator?.patch;
+    const host = patch ? itemOf(patch.hostId) : null;
+    if (!patch || !host) return [];
+    const m = patchFrame(it);
+    const points = patch.points.map((p) => loopPointToWorld(m, p));
+    let out: THREE.Vector3;
+    if (patch.facing) {
+      // Stored y down, like the points.
+      out = new THREE.Vector3(patch.facing.x, -patch.facing.y, patch.facing.z).transformDirection(m);
+    } else {
+      const centre = new THREE.Vector3();
+      for (const p of points) centre.add(p);
+      centre.divideScalar(Math.max(1, points.length));
+      const box = new THREE.Box3();
+      for (const mesh of drawnMeshesOf(host)) box.expandByObject(mesh);
+      out = box.isEmpty() ? new THREE.Vector3(0, 0, 1) : centre.clone().sub(box.getCenter(new THREE.Vector3()));
+    }
+    if (out.lengthSq() < 1e-12) out.set(0, 0, 1);
+    out.normalize();
+    return points.map((point) => ({ point, normal: out }));
+  }
+
+  // The faces each patch covered when it was last collected, for the panel's
+  // readout and Edit loop's shading, by item id.
+  const patchSurfaces = new Map<number, SurfaceSelection>();
+
+  // Why a host cannot be grown on as it is drawn now, or null when it can. The
+  // soup is read off the host's DRAWN meshes and sent under a key that names
+  // the host's mesh, so the two must be the same thing: a rock never generated
+  // is drawn as its stand-in extrusion, and a mesh object with no mesh (or one
+  // whose file never loads) as a grey placeholder box - a patch grown on either
+  // would be keyed as the real rock and cached as done.
+  function hostRefusal(host: EdItem): string | null {
+    if (host.visual.generator && !host.visual.mesh) return "the host rock has never been generated: generate the host first";
+    if (host.visual.kind === "mesh" && !host.visual.mesh) return "the host has no mesh to grow on: give it one first";
+    return null;
+  }
+
+  // Collect a patch's surface from its host's CURRENT meshes (a regenerated rock
+  // under it is what it grows on next), waiting for a host mesh still loading.
+  //
+  // Only a scene built from THIS model is read. The frame loop rebuilds the
+  // scene only while one is drawn, so a collect started in the Level
+  // workspace's 2D view would otherwise read the last scene built - a host
+  // nudged since would give a soup from its old pose under its new key, cached
+  // as done for ever. `generate` puts the scene on screen first; here the
+  // scene is built for the model as it stands, one frame is let place it, and
+  // an edit in the frames waited (a drag, an undo, a job landing) abandons the
+  // collect rather than reading a scene that is again not the model's.
+  // A selection change moves nothing the soup is read from and is ignored.
+  async function collectPatch(patchId: number): Promise<{ soup: number[]; selection: SurfaceSelection } | { error: string }> {
+    const first = itemOf(patchId);
+    const firstHost = first?.visual.generator?.patch ? itemOf(first.visual.generator.patch.hostId) : null;
+    if (!firstHost) return { error: "the patch has no host to grow on" };
+    const refused = hostRefusal(firstHost);
+    if (refused) return { error: refused };
+    if (!scene3d || !sceneShown()) return { error: "the patch's surface is read off the drawn scene: open the Visuals workspace" };
+    const rev = modelRev;
+    const changed = { error: "the level changed while the patch's surface was being collected; Generate again" };
+    // Built now from this model if the frame loop has not yet (a no-op when
+    // it has), then every body PLACED, which a fresh build is not until its
+    // first frame - read before that, the host's faces are at its body's
+    // origin and the loop covers none of them. Then the host's mesh if it is
+    // still loading, and one more frame for it to be mounted.
+    syncEditorScene();
+    const nextFrame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    await nextFrame();
+    if (firstHost.visual.kind === "mesh") {
+      const loaded = await loadMesh(firstHost.visual.mesh);
+      if (!loaded) return { error: `the host's mesh ${firstHost.visual.mesh} did not load, so there is no surface to grow on` };
+    }
+    await nextFrame();
+    if (modelRev !== rev) return changed;
+    // The scene on screen is this model's only if its last build succeeded
+    // and nothing took the view away in the frames waited.
+    if (buildError !== null || sceneRev !== modelRev || !sceneShown())
+      return { error: "the scene is not built from the level as it stands, so its surface cannot be read" };
+    const it = itemOf(patchId);
+    const host = it?.visual.generator?.patch ? itemOf(it.visual.generator.patch.hostId) : null;
+    if (!it || !host) return { error: "the patch or its host went while its surface was being collected" };
+    const values = mergeDefaults(it.visual.generator!.params, loadSchema("mushrooms")!);
+    const res = selectSurface(drawnMeshesOf(host), patchLoopWorld(it), {
+      maxSlopeDeg: values["maxSlope"] as number,
+      maxTriangles: values["maxTriangles"] as number,
+    });
+    if (!res.ok) return { error: SURFACE_REFUSALS[res.reason] };
+    patchSurfaces.set(it.id, res.selection);
+    const estimate = res.selection.area * (values["density"] as number);
+    if (estimate > (values["maxEstimate"] as number))
+      return {
+        error: `about ${Math.round(estimate)} mushrooms (${res.selection.area.toFixed(2)} m² at density ${values["density"]}) is over maxEstimate ${values["maxEstimate"]}: paint a smaller loop or lower the density`,
+      };
+    return { soup: soupInFrame(res.selection.positions, patchFrame(it).invert()), selection: res.selection };
+  }
+
+  // The panel's line about a patch's surface.
+  function patchSummary(it: EdItem): string {
+    const s = patchSurfaces.get(it.id);
+    if (!s) return "surface: collected when generated";
+    const density = mergeDefaults(it.visual.generator?.params ?? {}, loadSchema("mushrooms")!)["density"] as number;
+    // Three places for a patch under a tenth of a square metre, which is where
+    // a loop on a steep face ends up once maxSlope has taken the steep faces.
+    const area = s.area.toFixed(s.area < 0.1 ? 3 : 2);
+    return `${s.triangles.toLocaleString("en")} faces · ${area} m² · up to ${Math.round(s.area * density)} mushrooms`;
+  }
+
+  // GENERATE: ask the service for this object's mesh as it now stands. The
+  // request is exactly what the key is made from (`generatorInput`, the params
+  // that differ from the defaults, the schema version the server runs), plus a
+  // patch's surface, collected now.
+  async function generate(item: EdItem): Promise<void> {
+    const id = item.id;
+    const g = item.visual.generator;
+    const schema = g ? loadSchema(g.kind) : undefined;
+    if (!g || !schema) return;
+    const lookup: ItemLookup = itemLookup(model.items);
+    let input: ReturnType<typeof generatorInput>;
+    let key: string | null;
+    try {
+      input = generatorInput(item, lookup);
+      key = wantedKey(item, lookup);
+    } catch {
+      // `generatedKey` refuses a non-finite number rather than hash it.
+      flashNotice("generate: a parameter or the outline is not a finite number");
+      return;
+    }
+    if (!input || !key) {
+      flashNotice(g.kind === "mushrooms" ? "generate: the patch has no host (Edit loop paints it again)" : "generate: a rock needs a polygon or rect outline");
+      return;
+    }
+    const issues = paramIssues(g.params, schema);
+    if (issues.length) {
+      flashNotice(`generate: ${issues[0]}`);
+      return;
+    }
+    const params = stripDefaults(g.params, schema);
+    let soup: number[] | undefined;
+    if (g.kind === "mushrooms") {
+      // The surface is read off the drawn scene, which the Level workspace's 2D
+      // view does not draw (nor rebuild): the patch is generated from the
+      // Visuals workspace, as Edit loop is edited there.
+      if (!sceneShown()) {
+        if (!visuals || mode !== "edit") {
+          flashNotice("generate: a patch's surface is read off the 3D scene, which this page cannot draw");
+          return;
+        }
+        setWorkspace("visuals");
+      }
+      const collected = await collectPatch(id);
+      refreshFields();
+      if ("error" in collected) {
+        flashNotice(`generate: ${collected.error}`);
+        return;
+      }
+      soup = collected.soup;
+      // `collectPatch` refused any edit in the frames it waited, so the patch
+      // is still exactly what `key` was made of.
+    }
+    await jobs.submit(id, { kind: g.kind, key, input, params, ...(soup ? { soup } : {}) });
+  }
+
+  // **Edit loop**: the patch's points as handles on its host's surface.
+  function editLoop(it: EdItem): void {
+    if (!it.visual.generator?.patch || !itemOf(it.visual.generator.patch.hostId)) {
+      flashNotice("Edit loop: the patch has no host; paint a new patch with + Mushrooms");
+      return;
+    }
+    loopEdit = { itemId: it.id };
+    loopEditFill = patchSurfaces.get(it.id)?.positions ?? null;
+    if (!inVisuals()) setWorkspace("visuals");
+    updateTitle();
+  }
+  function endLoopEdit(): void {
+    loopEdit = null;
+    loopEditFill = null;
+    updateTitle();
+  }
+  // The surface Edit loop shades, world frame, kept by identity between frames
+  // (the draft is rebuilt when it changes).
+  let loopEditFill: Float32Array | null = null;
+
+  // A press while a loop is open: a point under the pointer starts a drag of
+  // it. Anything else closes the loop edit and is a press like any other.
+  function pressLoopPoint(scr: Vec2): Drag | null {
+    const it = loopEdit ? itemOf(loopEdit.itemId) : null;
+    if (!it) {
+      endLoopEdit();
+      return null;
+    }
+    const pts = patchLoopWorld(it);
+    for (let i = 0; i < pts.length; i++) {
+      const p = pts[i]!.point;
+      const at = visuals!.screenOf(new Vec2(p.x, threeY(p.y)), p.z);
+      if (at && at.distanceTo(scr) <= HANDLE_HIT_PX) {
+        return { mode: "loopPoint", itemId: it.id, index: i, press: scr, moved: false };
+      }
+    }
+    endLoopEdit();
+    return null;
+  }
+
+  // One move of a loop point's drag: the point goes where the pointer meets its
+  // host's surface, in the patch's own frame. Off the host it stays put.
+  function moveLoopPoint(d: Extract<Drag, { mode: "loopPoint" }>, scr: Vec2): void {
+    const it = itemOf(d.itemId);
+    const patch = it?.visual.generator?.patch;
+    if (!it || !patch) return;
+    const hit = visuals?.surfaceAt(scr, (tag) => itemOfTag(tag)?.id === patch.hostId) ?? null;
+    if (!hit) return;
+    const local = worldToLoopPoint(patchFrame(it).invert(), new THREE.Vector3(hit.point.x, hit.point.y, hit.point.z));
+    patch.points = patch.points.map((p, i) => (i === d.index ? local : p));
+    markDirty();
+  }
+
+  // After a drag of a loop point: shade what the loop covers now, and fit the
+  // patch to it - its origin, rect and depth to the covered faces, as + Mushrooms
+  // placed it - so the gizmo and the selection box stay on the patch rather
+  // than on where the loop used to be. Part of the drag's own undo step.
+  function afterLoopDrag(itemId: number): void {
+    const it = itemOf(itemId);
+    const host = it?.visual.generator?.patch ? itemOf(it.visual.generator.patch.hostId) : null;
+    if (!it || !host) return;
+    const values = mergeDefaults(it.visual.generator!.params, loadSchema("mushrooms")!);
+    const res = selectSurface(drawnMeshesOf(host), patchLoopWorld(it), {
+      maxSlopeDeg: values["maxSlope"] as number,
+      maxTriangles: values["maxTriangles"] as number,
+    });
+    if (res.ok) patchSurfaces.set(itemId, res.selection);
+    else patchSurfaces.delete(itemId);
+    loopEditFill = res.ok ? res.selection.positions : null;
+    const fit = res.ok ? refitPatch(it, patchFrame(it), res.selection.positions) : null;
+    if (fit && it.shape.kind === "rect") {
+      it.pos = fit.pos;
+      it.visual.offsetZ = fit.offsetZ;
+      it.shape = { ...it.shape, w: fit.w, h: fit.h };
+      it.visual.depth = fit.depth;
+      it.visual.generator!.patch!.points = fit.points;
+      markDirty();
+    }
+    refreshFields();
+  }
+
+  // The mushroom loop's draft for the guides: the loop being painted, or the
+  // loop open for editing.
+  // The loop open for editing is kept as one draft object while its points
+  // (`patchLoopWorld`, itself kept per revision) and its shading are the same,
+  // so a frame where nothing moved hands the guides the object they already
+  // hold.
+  let loopEditDraft: { points: readonly SurfacePoint[]; fill: Float32Array | null; draft: GuideDraft } | null = null;
+  function surfaceDraftGuide(): GuideDraft | null {
+    if (loopEdit) {
+      const it = itemOf(loopEdit.itemId);
+      if (!it) return null;
+      const points = patchLoopWorld(it);
+      const d = loopEditDraft;
+      if (d && d.points === points && d.fill === loopEditFill) return d.draft;
+      loopEditDraft = { points, fill: loopEditFill, draft: closedDraft(points, loopEditFill) };
+      return loopEditDraft.draft;
+    }
+    return tool === "mushrooms" ? surfaceLoop.draft() : null;
+  }
+
+  // `+ Geometry` in the Visuals workspace: a click places a PROP - a mesh
+  // geometry object wearing the last mesh chosen (`VisualsWorkspace.propMesh`)
+  // - where the pointer is. Dragging out a box is a plan gesture, and what a
+  // prop is has nothing to do with the box it was placed with. On the plane it
+  // lands under the pointer in the plane it is drawn in; with Shift, on the
+  // surface under the pointer (with Ctrl as well, standing up along its
+  // normal), which is how a rock is put on a ledge in one click.
+  function placeProp(p: ScenePress): void {
+    const hit = p.shift ? surfaceUnder(p.scr, null) : null;
+    if (p.shift && !hit) {
+      flashNotice("no surface under the pointer to place the prop on");
+      return;
+    }
+    beginAction();
+    const item = newDrawnItem("geometry", p.world);
+    item.shape = { kind: "rect", w: PROP_FOOTPRINT, h: PROP_FOOTPRINT };
+    item.visual.kind = "mesh";
+    item.visual.mesh = visuals!.propMesh;
+    model.items.push(item);
+    syncBodyProps(bodyMembers(model.items, item.bodyId));
+    if (hit) {
+      const at = surfacePlacement(hit.point);
+      item.pos = at.pos;
+      item.visual.offsetZ = at.z;
+      if (p.ctrl) {
+        const t = alignUp({ rot: 0, rotX: 0, rotY: 0 }, hit.normal);
+        item.rot = t.rot;
+        item.visual.rotX = t.rotX;
+        item.visual.rotY = t.rotY;
+      }
+    } else {
+      // The plane it is DRAWN in (`itemDepth`: a prop on a body that collides
+      // with nothing stands at the decoration depth), so it appears where it
+      // was clicked rather than that far behind it.
+      item.pos = snapVec(canvasWorld(p.scr, itemDepth(item, bodyCollides(item.bodyId))));
+    }
+    setSelection([item.id]);
+    markDirty();
+    rebuildInspector();
   }
 
   // A press on a mover's route: a node, a tangent grip, or a leg midpoint that
@@ -9282,26 +10739,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // do not join, so the last vert has no edge after it to split and two verts
     // is the floor rather than three.
     if (h.verts && s.shape.kind === "path") {
-      const shape = s.shape;
       for (let i = 0; i < h.verts.length; i++) {
         if (scr.distanceTo(h.verts[i]!) > HANDLE_HIT_PX) continue;
-        if (alt) {
-          if (shape.verts.length <= 2) return null;
-          beginAction();
-          const rest = shape.verts.filter((_, j) => j !== i);
-          const restH = shape.handles.filter((_, j) => j !== i);
-          const restK = shape.keys.filter((_, j) => j !== i);
-          if (setPathVerts(s, rest, restH, restK)) {
-            // Every index past the removed one has shifted, so the set names
-            // corners nobody picked; it goes rather than being renumbered,
-            // since a removal is the end of the gesture that made it.
-            selectedVerts.clear();
-            markDirty();
-            rebuildInspector();
-          }
-          return "consumed";
-        }
-        return grabVertex(s, i, shift);
+        return pressVertex(s, i, alt, shift);
       }
       // Tangent grips after the vertices: a handle pulled back onto its own node
       // sits under it, and the node is what the pointer is far more often after.
@@ -9313,42 +10753,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       }
       for (let i = 0; i < (h.vertMids?.length ?? 0); i++) {
         if (scr.distanceTo(h.vertMids![i]!) > HANDLE_HIT_PX) continue;
-        // A de Casteljau split at t = 1/2: the two halves are exactly the curve
-        // that was there, so inserting a node on a bowed edge adds a grip and
-        // changes nothing about the shape. Splitting the chord instead would
-        // straighten the edge the moment it was subdivided.
-        const nodes = pathNodes(s);
-        const a = nodes[i]!;
-        const b = nodes[i + 1]!;
-        const c1 = a.p.add(a.out);
-        const c2 = b.p.add(b.in);
-        const m1 = a.p.add(c1).mul(0.5);
-        const m2 = c1.add(c2).mul(0.5);
-        const m3 = c2.add(b.p).mul(0.5);
-        const n1 = m1.add(m2).mul(0.5);
-        const n2 = m2.add(m3).mul(0.5);
-        const mid = n1.add(n2).mul(0.5);
-        const verts = [...shape.verts.slice(0, i + 1), mid, ...shape.verts.slice(i + 1)];
-        const handles = shape.handles.map((x) => ({ ...x }));
-        handles[i] = { in: handles[i]!.in, out: m1.sub(a.p) };
-        handles[i + 1] = { in: m3.sub(b.p), out: handles[i + 1]!.out };
-        handles.splice(i + 1, 0, { in: n1.sub(mid), out: n2.sub(mid) });
-        // The new node keys nothing: an unkeyed node is transparent to the
-        // interpolation, so the split changes the framing along the route by
-        // exactly as much as it changes the curve - nothing.
-        const keys = shape.keys.map((k) => ({ ...k }));
-        keys.splice(i + 1, 0, NO_KEY());
-        beginAction();
-        dragPushed = true;
-        if (!setPathVerts(s, verts, handles, keys)) return null;
-        markDirty();
-        // The inserted vertex becomes the selection: it is the one the gesture
-        // is about, and every index past it has just shifted, so carrying the
-        // old set over would name different corners than the ones that were
-        // picked.
-        selectedVerts.clear();
-        selectedVerts.add(i + 1);
-        return { mode: "polyVertex", body: s, index: i + 1, others: [], accepted: mid };
+        return pressMidpoint(s, i);
       }
     }
     // Vertices before the rotate knob: on a small polygon the knob can overlap a
@@ -9356,39 +10761,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (h.verts && s.shape.kind === "poly") {
       for (let i = 0; i < h.verts.length; i++) {
         if (scr.distanceTo(h.verts[i]!) > HANDLE_HIT_PX) continue;
-        // Alt+click removes the vertex instead of dragging it — a triangle is
-        // the floor, so the last three are not removable.
-        if (alt) {
-          if (s.shape.verts.length <= 3) return null;
-          beginAction();
-          const rest = s.shape.verts.filter((_, j) => j !== i);
-          if (setPolyVerts(s, rest)) {
-            selectedVerts.clear();
-            markDirty();
-            rebuildInspector();
-          }
-          return "consumed";
-        }
-        return grabVertex(s, i, shift);
+        return pressVertex(s, i, alt, shift);
       }
       // An edge midpoint splits that edge: insert a vertex there and drag it
       // straight away, so adding a corner and placing it is one gesture.
       for (let i = 0; i < (h.vertMids?.length ?? 0); i++) {
         if (scr.distanceTo(h.vertMids![i]!) > HANDLE_HIT_PX) continue;
-        const verts = s.shape.verts;
-        const mid = verts[i]!.add(verts[(i + 1) % verts.length]!).mul(0.5);
-        const next = [...verts.slice(0, i + 1), mid, ...verts.slice(i + 1)];
-        beginAction();
-        dragPushed = true;
-        if (!setPolyVerts(s, next)) return null;
-        markDirty();
-        // The inserted vertex becomes the selection: it is the one the gesture
-        // is about, and every index past it has just shifted, so carrying the
-        // old set over would name different corners than the ones that were
-        // picked.
-        selectedVerts.clear();
-        selectedVerts.add(i + 1);
-        return { mode: "polyVertex", body: s, index: i + 1, others: [], accepted: mid };
+        return pressMidpoint(s, i);
       }
     }
     // A belt's wheel centres before their radius grips, as a path's vertex is
@@ -9442,6 +10821,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       return { mode: "depth", body: s, base: depthOf(s), press: scr };
     }
     if (h.rotate && scr.distanceTo(h.rotate) <= HANDLE_HIT_PX) return { mode: "rotate", body: s };
+    if (h.wake && scr.distanceTo(h.wake) <= HANDLE_HIT_PX) return { mode: "wake", body: s };
     if (h.radius && scr.distanceTo(h.radius) <= HANDLE_HIT_PX) return { mode: "radius", body: s };
     if (s.shape.kind === "rect") {
       const hw = s.shape.w / 2;
@@ -9465,6 +10845,17 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // and a press that grabs an arrow must not also select, pan or rubber-band
     // whatever happens to be under it.
     if (gizmo?.busy) return;
+    // THE VISUALS WORKSPACE NAVIGATES BLENDER'S WAY: the middle button orbits,
+    // Shift + middle or the right button pans, and the left button is the
+    // level's alone. It is a modelling view rather than a plan, and the turn is
+    // the gesture made most there, so it is the unmodified one.
+    if (inVisuals() && (e.button === 1 || e.button === 2)) {
+      visuals!.beginView(e.button === 2 || e.shiftKey ? "pan" : "orbit", pointerScreen(e));
+      drag = { mode: "view" };
+      canvas.style.cursor = "grabbing";
+      e.preventDefault();
+      return;
+    }
     // Pan is the middle button (right too, as a convenience) and CTRL+middle
     // ORBITS the 3D view; the left button belongs to the level - it selects,
     // drags what is selected, and pans everything else (see `panPick`).
@@ -9512,7 +10903,17 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // drawn at all here: the resize handles, the marquee band and the draw
     // tools' previews would each be somewhere the geometry is not. Those press
     // like empty space, which is a pan.
-    const turned = orbited();
+    //
+    // THE VISUALS WORKSPACE puts that chrome back, drawn into the scene (the
+    // guides): a corner's handle, the outlines, a light's icon and the spawn
+    // are all there to be aimed at, so a press there is resolved by the
+    // raycast that drew them first (`Scene3D.pick`, models and guides nearest
+    // first) and on the plane through the pose's camera second (`canvasWorld`)
+    // - and the draw tools draw, their drafts in the guides.
+    const scene = inVisuals();
+    const turned = inScene();
+    // Everything under the pointer, once per press, for the steps below.
+    const tags = scene ? visuals!.tagsAt(scr) : [];
     if (!turned) {
       // 1. Handles of the current selection.
       const h = pickHandle(scr, e.altKey, e.shiftKey);
@@ -9521,11 +10922,37 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         drag = h;
         return;
       }
+    } else if (scene) {
+      // 0. A mushroom loop open for editing: its points are the handles, and a
+      // press anywhere else closes it and goes on as a press.
+      if (loopEdit) {
+        const d = pressLoopPoint(scr);
+        if (d) {
+          drag = d;
+          return;
+        }
+      }
+      // 1. The guides' handles: the selected shape's corners and midpoints.
+      const h = pickSceneHandle(tags, e.altKey, e.shiftKey);
+      if (h === "consumed") return;
+      if (h) {
+        drag = h;
+        return;
+      }
     }
-    // What this press draws. A turned view draws nothing whatever the toolbar
-    // says: every draw gesture previews on the overlay, and the overlay is not
-    // on screen here, so an armed tool would author geometry blind.
-    const drawTool = turned ? "select" : tool;
+    // What this press draws. A turned Level view draws nothing whatever the
+    // toolbar says: every draw gesture previews on the overlay, and the overlay
+    // is not on screen there, so an armed tool would author geometry blind.
+    const drawTool = turned && !scene ? "select" : tool;
+    // 1a. A tool of the Visuals workspace's own (see `sceneToolPress`), whose
+    // gesture is about the scene rather than the plane.
+    if (scene && drawTool !== "select") {
+      const press = sceneToolPress[drawTool];
+      if (press) {
+        press({ scr, world, shift: e.shiftKey, ctrl: e.ctrlKey || e.metaKey, tags });
+        return;
+      }
+    }
     // 1b. Polygon drafting: a run of clicks, not a drag. Clicking the first
     // vertex again (or Enter) closes the loop; Esc drops it.
     if (drawTool === "poly" || drawTool === "path") {
@@ -9534,7 +10961,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // its first vertex: an open run may legitimately end where it started (a
       // loop of a level), and closing on it would make that unauthorable.
       if (drawTool === "poly" && polyDraft && polyDraft.verts.length >= 3) {
-        const first = worldToScreen(camera, polyDraft.verts[0]!);
+        const first = canvasScreen(polyDraft.verts[0]!);
         if (scr.distanceTo(first) <= POLY_CLOSE_PX) {
           commitPolyDraft();
           return;
@@ -9571,6 +10998,17 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       }
       return;
     }
+    // 1e. Glow tool: one click places a whole body - the cube, its collision
+    // box and its waking light - so there is nothing to drag out.
+    if (drawTool === "glow") {
+      placeGlow(snapVec(world));
+      return;
+    }
+    // ...and the fireflies tool, a body holding the swarm's light.
+    if (drawTool === "fireflies") {
+      placeFireflies(snapVec(world));
+      return;
+    }
     // 2. Draw tool: create a new item on the active layer and drag out its size.
     if (drawTool !== "select") {
       beginAction();
@@ -9603,11 +11041,19 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       return;
     }
     // 3. Player spawn marker (small target — needs pointer within its radius).
-    if (
-      !turned &&
-      world.distanceTo(model.player.pos) <=
-        Math.max(model.player.radius, SMALL_MARK_PICK_PX * worldLine())
-    ) {
+    // In the Visuals workspace it is its guide: the ring (picked a few pixels
+    // either side, as every guide line is) or the disc inside it on the plane.
+    // The 2D floor on its size is in 2D camera pixels, which are not the view
+    // on screen there, so it does not apply. A turned Level view has no spawn
+    // drag: the marker is overlay chrome, and the overlay is not drawn.
+    const spawnHit = scene
+      ? visibleLayers.has("scene") &&
+        !lockedLayers.has("scene") &&
+        (spawnUnder(tags) || world.distanceTo(model.player.pos) <= model.player.radius)
+      : !turned &&
+        world.distanceTo(model.player.pos) <=
+          Math.max(model.player.radius, SMALL_MARK_PICK_PX * worldLine());
+    if (spawnHit) {
       drag = { mode: "movePlayer", grab: model.player.pos.sub(world) };
       return;
     }
@@ -9622,7 +11068,31 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // same rule applied down the stack (`pickCandidatesAt`), so the first of them
     // IS what `topmostAt` answers and the press and the cycle it may turn into
     // cannot disagree about what was under the pointer.
-    const hit = pickCandidatesAt(world, scr)[0] ?? null;
+    const cands = pickCandidatesAt(world, scr);
+    const hit = cands[0] ?? null;
+    // 3b. DROP ON SURFACE (Visuals): Shift-drag of the selected prop or light,
+    // wherever it is in the stack under the pointer - a prop is usually drawn
+    // over the collision box that wins the pick, and the gesture is about the
+    // selected thing, which is plainly what was pressed on.
+    if (scene && e.shiftKey && !e.altKey && selectedIds.size === 1) {
+      const dropped = cands.find(
+        (c) => selectedIds.has(c.id) && (c.object === "geometry" || c.object === "light"),
+      );
+      if (dropped) {
+        drag = {
+          mode: "surfaceDrop",
+          item: dropped,
+          press: scr,
+          handlers: null,
+          tilt: null,
+          pick: () => toggleSelection(dropped.id),
+        };
+        return;
+      }
+    }
+    // The plane a drag of `it` is resolved in: the one it is drawn in, so with
+    // the view turned it stays under the pointer (see `move`'s `planeZ`).
+    const planeOf = (it: EdItem): number => (turned ? guidePlaneZ(it, bodyCollides(it.bodyId)) : 0);
     if (hit) {
       // CLICK THE BODY, THEN CLICK INTO IT. A click on a body that is not the
       // one being edited selects the BODY - the thing with the transform, the
@@ -9656,15 +11126,17 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         const others = members
           .filter((o) => o !== hit)
           .map((o) => ({ body: o, offset: o.pos.sub(hit.pos) }));
+        const planeZ = planeOf(hit);
         drag = {
           mode: "move",
           lead: hit,
           others,
-          grab: hit.pos.sub(world),
+          grab: hit.pos.sub(planeZ ? canvasWorld(scr, planeZ) : world),
           press: scr,
           moved: false,
           pick: pickAt(world, scr),
           snapAt: snapOutlineOf(members).sub(hit.pos),
+          planeZ,
         };
         return;
       }
@@ -9677,15 +11149,17 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         const others = selectedBodies()
           .filter((o) => o !== hit)
           .map((o) => ({ body: o, offset: o.pos.sub(hit.pos) }));
+        const planeZ = planeOf(hit);
         drag = {
           mode: "move",
           lead: hit,
           others,
-          grab: hit.pos.sub(world),
+          grab: hit.pos.sub(planeZ ? canvasWorld(scr, planeZ) : world),
           press: scr,
           moved: false,
           pick: selectedIds.size === 1 ? pickAt(world, scr) : undefined,
           snapAt: moveSnapPoint([hit]).sub(hit.pos),
+          planeZ,
         };
         return;
       }
@@ -9722,13 +11196,24 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         }
         cycle();
       };
-      drag = { mode: "panPick", lastScreen: scr, travel: 0, pick };
+      drag = {
+        mode: "panPick",
+        lastScreen: scr,
+        travel: 0,
+        pick,
+        still: scene ? "a left drag does not navigate in Visuals: middle drag orbits, right drag pans" : undefined,
+      };
       return;
     }
     // 5. A chain under the pointer. Tested after the bodies, since a chain is
     // strung over the geometry it holds and its ends sit inside those bodies -
     // picking it first would swallow every click near an anchor.
-    const chain = topmostChainAt(world);
+    //
+    // Not in the Visuals workspace, and neither is a vine: the guides draw
+    // neither (a chain is not in the editor's scene at all, and a vine is drawn
+    // there untagged), so there is nothing on screen a press could be aimed
+    // at. The outliner and the Level workspace reach them.
+    const chain = scene ? null : topmostChainAt(world);
     if (chain) {
       // Shift-drag on the chain that is already selected pulls a new WRAP POINT
       // out of the span under the pointer (see `chainWrapOut`); a plain press
@@ -9744,7 +11229,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     }
     // ...and a vine, for the same reason and after the same bodies: a vine hangs
     // over the geometry it is bolted to.
-    const vine = topmostVineAt(world);
+    const vine = scene ? null : topmostVineAt(world);
     if (vine) {
       setVineSelection([vine.id]);
       drag = null;
@@ -9758,7 +11243,27 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // overlay, and a screen-aligned rectangle is a slanted quadrilateral on the
     // plane the moment the camera is off axis - so what is dragged out and what
     // is caught could not be the same shape.
-    drag = turned
+    //
+    // The Visuals workspace offers no band either, for that reason, and does
+    // not pan on a left drag (its view is the middle and right buttons'). Its
+    // click on empty space clears as a head-on one does, the picked corners
+    // first and then the selection, so the way out of vertex editing is the
+    // same two clicks; Shift+click on things builds a set instead of a band.
+    drag = scene
+      ? {
+          mode: "panPick",
+          lastScreen: scr,
+          travel: 0,
+          pick: () => {
+            if (e.shiftKey) return;
+            if (selectedVerts.size) {
+              selectedVerts.clear();
+              rebuildInspector();
+            } else setSelection([]);
+          },
+          still: "no rubber band in Visuals: Shift+click builds the selection",
+        }
+      : turned
       ? {
           mode: "panPick",
           lastScreen: scr,
@@ -9802,10 +11307,16 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const r = canvas.getBoundingClientRect();
     if (!r.width || !r.height) return null;
     const ids = new Set<number>();
-    for (const tag of scene3d!.pick((scr.x / r.width) * 2 - 1, 1 - (scr.y / r.height) * 2)) {
+    const tags = scene3d!.pick((scr.x / r.width) * 2 - 1, 1 - (scr.y / r.height) * 2);
+    for (const tag of tags) {
       const id = itemOfSceneObject.get(tag as SceneObjectData);
       if (id !== undefined) ids.add(id);
     }
+    // ...and in the Visuals workspace, what the GUIDES under the pointer name:
+    // an outline, a light's icon, a region, a path, a note. The guides are only
+    // in the scene while that workspace is active, so the Level workspace's
+    // answer is exactly what it was.
+    if (inVisuals()) itemsUnder(tags, ids);
     return ids;
   }
 
@@ -9822,12 +11333,25 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // something else. It is reached by its chain's handle, or by its row in the
     // outliner.
     if (b.object === "anchor") return false;
-    if (b.object === "light") return world.distanceTo(b.pos) <= lightPickRadius(worldLine());
+    // In the Visuals workspace a guide under the pointer names its item
+    // outright (`raycastItems`); an outline is picked a few pixels either side
+    // of its line, so a thin wall is hit by its edge as well as its inside.
+    if (inVisuals() && ray?.has(b.id)) return true;
+    // A light there is its icon and only its icon: it hangs at its own `z`,
+    // and a disc on the plane under it is somewhere the light is not drawn.
+    if (b.object === "light") {
+      return inVisuals() ? false : world.distanceTo(b.pos) <= lightPickRadius(worldLine());
+    }
     // A checkpoint is its RING, and never smaller on screen than a thing can be
     // aimed at: the ring is the avatar's size in world metres (see
     // `checkpointBox`), which at the zoom a level is laid out at is a few pixels
     // across. The level's own spawn marker is picked under exactly this rule.
-    if (isCheckpointNote(b)) return world.distanceTo(b.pos) <= checkpointPickRadius(b);
+    if (isCheckpointNote(b)) {
+      // Its ring, without the 2D floor on its size, which is in 2D camera
+      // pixels and not the view on screen in Visuals (the guide's own pick band
+      // is the floor there).
+      return world.distanceTo(b.pos) <= (inVisuals() ? halfExtents(b).x : checkpointPickRadius(b));
+    }
     if (ray && b.object === "geometry") return ray.has(b.id);
     return pointInBody(b, world);
   }
@@ -10057,15 +11581,21 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const scr = pointerScreen(e);
     lastPointerScreen = scr;
     if (isSurfaceTool(tool)) surfaceHover(scr);
+    if (!drag && inVisuals() && tool === "mushrooms" && !surfaceLoop.empty) hoverLoop(scr);
     if (!drag) return;
-    const world = canvasWorld(scr);
+    // Resolved in the plane the dragged thing is drawn in (see `move`'s
+    // `planeZ`); every other drag is on the gameplay plane.
+    const world = canvasWorld(
+      scr,
+      drag.mode === "move" ? drag.planeZ : drag.mode === "polyVertex" ? (drag.planeZ ?? 0) : 0,
+    );
     dragMoved = true;
 
     // A press on something selected is not a move until the pointer has left the
     // click's slop, so a click that drills into a body cannot also nudge it by
     // the pixel the hand shook by - and, since nothing is written before that,
     // there is no undo step for the nudge that did not happen either.
-    if (drag.mode === "move" && !drag.moved) {
+    if ((drag.mode === "move" || drag.mode === "loopPoint") && !drag.moved) {
       if (scr.distanceTo(drag.press) < CLICK_SLOP_PX) return;
       drag.moved = true;
     }
@@ -10079,6 +11609,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       drag.mode !== "pan" &&
       drag.mode !== "panPick" &&
       drag.mode !== "orbit" &&
+      drag.mode !== "view" &&
+      // Begun through the gizmo's handlers, which take their own snapshot.
+      drag.mode !== "surfaceDrop" &&
       drag.mode !== "marquee" &&
       drag.mode !== "chainDraw" &&
       drag.mode !== "vineDraw"
@@ -10099,8 +11632,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         // Nothing happens at all until the pointer has really travelled: a click
         // that jitters by a pixel is a click, and it must still select what it
         // was aimed at rather than panning the level by a pixel instead.
+        const was = drag.travel;
         drag.travel += scr.distanceTo(drag.lastScreen);
-        if (drag.travel >= CLICK_SLOP_PX) {
+        if (drag.still !== undefined) {
+          // The Visuals workspace: past the slop the press is no longer a
+          // click, and it does nothing - said once, as it crosses.
+          if (was < CLICK_SLOP_PX && drag.travel >= CLICK_SLOP_PX) flashNotice(drag.still);
+        } else if (drag.travel >= CLICK_SLOP_PX) {
           const scale = camera.zoom * PIXELS_PER_METER;
           camera.position = camera.position.sub(scr.sub(drag.lastScreen).div(scale));
           canvas.style.cursor = "grabbing";
@@ -10108,6 +11646,16 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         drag.lastScreen = scr;
         break;
       }
+      case "view":
+        visuals?.moveView(scr);
+        refreshOrbitBtn();
+        break;
+      case "surfaceDrop":
+        surfaceDropMove(drag, scr, e.ctrlKey || e.metaKey);
+        break;
+      case "loopPoint":
+        moveLoopPoint(drag, scr);
+        break;
       case "orbit": {
         const d = scr.sub(drag.lastScreen);
         orbit.yaw -= d.x * ORBIT_RADIANS_PER_PX;
@@ -10257,6 +11805,16 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           markDirty();
           refreshFields();
         }
+        break;
+      }
+      case "wake": {
+        // Floored above 0: dragging the ring onto the source would silently
+        // turn the waking light into an always-on one, which is the field's
+        // job (blank it) rather than a drag's.
+        const b = drag.body;
+        b.light.wake = Math.max(snapLen(world.distanceTo(b.pos)), PX);
+        markDirty();
+        refreshFields();
         break;
       }
       case "beltWheel": {
@@ -10485,6 +12043,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // item has always meant.
     if (drag.mode === "panPick" && drag.travel < CLICK_SLOP_PX) drag.pick();
     if (drag.mode === "move" && !drag.moved) drag.pick?.();
+    if (drag.mode === "view") visuals?.endView();
+    // A point that never left the click's slop was not moved: nothing to fit.
+    if (drag.mode === "loopPoint" && drag.moved) afterLoopDrag(drag.itemId);
+    if (drag.mode === "surfaceDrop") {
+      if (drag.handlers) drag.handlers.end("translate");
+      else drag.pick();
+    }
     if (drag.mode === "marquee") {
       const box = marqueeBand();
       const vertTarget = drag.verts;
@@ -10575,6 +12140,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (mode !== "edit") return;
     e.preventDefault();
     const scr = pointerScreen(e);
+    // The Visuals workspace dollies its own view toward what is under the
+    // pointer; the 2D camera is the Level workspace's and stays as it was left.
+    if (inVisuals()) {
+      visuals!.wheel(scr, e.deltaY);
+      return;
+    }
     const before = screenToWorld(camera, scr.x, scr.y);
     const factor = Math.exp(-e.deltaY * 0.001);
     camera.zoom = Math.min(20, Math.max(0.2, camera.zoom * factor));
@@ -10596,6 +12167,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       if (mode === "test") stopTest();
       else if (surfaceDraft) cancelSurfaceDraft();
       else if (polyDraft) cancelPolyDraft();
+      else if (!surfaceLoop.empty) {
+        surfaceLoop.clear();
+        updateTitle();
+      } else if (loopEdit) endLoopEdit();
       // The vertex selection goes first, for the reason a click on empty space
       // drops it first: it is the innermost thing selected, and dropping it is
       // how the shape stops being open for vertex editing.
@@ -10631,6 +12206,16 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       return;
     }
     if (mode !== "edit") return;
+    // Ctrl+Enter generates the selected generated object - from inside one of
+    // its parameter fields too, so a value can be typed and tried in one go.
+    if ((e.ctrlKey || e.metaKey) && (e.code === "Enter" || e.code === "NumpadEnter")) {
+      const s = selected();
+      if (s && s.object === "geometry" && s.visual.generator) {
+        void generate(s);
+        e.preventDefault();
+        return;
+      }
+    }
     // Ignore shortcuts while a field that consumes keystrokes has focus (let
     // its native editing/undo win). Toggles don't consume them, so clicking the
     // snap checkbox must not leave the editor deaf to shortcuts.
@@ -10712,6 +12297,44 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         e.preventDefault();
         return;
       }
+    }
+    // The mushroom loop: Enter closes the one being painted, or ends Edit loop.
+    if ((e.code === "Enter" || e.code === "NumpadEnter") && (surfaceLoop.closable || loopEdit)) {
+      if (surfaceLoop.closable) closeSurfaceLoop();
+      else endLoopEdit();
+      e.preventDefault();
+      return;
+    }
+    // ...and Backspace takes its last point back, before Backspace deletes.
+    if (e.code === "Backspace" && !surfaceLoop.empty) {
+      surfaceLoop.pop();
+      updateTitle();
+      e.preventDefault();
+      return;
+    }
+    // The workspace switch, and the Visuals workspace's two view keys. Each is
+    // one action per press: a held key's auto-repeat would flip the workspace
+    // back and forth (or re-frame and re-reset the view) until it is let go.
+    if ((e.code === "KeyW" || e.code === "KeyF" || e.code === "Home") && e.repeat) {
+      e.preventDefault();
+      return;
+    }
+    if (e.code === "KeyW" && visuals) {
+      setWorkspace(inVisuals() ? "level" : "visuals");
+      return;
+    }
+    if (inVisuals() && e.code === "KeyF") {
+      // The selection's box, or the level's when nothing is selected.
+      const box = itemsBox(model, operandItems()) ?? levelBox(model);
+      visuals!.frameBox(box);
+      refreshOrbitBtn();
+      e.preventDefault();
+      return;
+    }
+    if (e.code === "Home") {
+      resetView();
+      e.preventDefault();
+      return;
     }
     if (e.code === "Delete" || e.code === "Backspace") {
       // Corners before objects: with vertices picked out of a shape, Delete is
@@ -10796,6 +12419,50 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     return null;
   }
 
+  // The polygon or path being clicked out, as the Visuals workspace's guides
+  // draw it (`Guides.setDraft`): the placed vertices on the gameplay plane and
+  // the run on to where the pointer meets it, in the warning colour once the
+  // loop would cross itself - the overlay's draft, drawn in the scene.
+  function polyDraftGuide(): GuideDraft | null {
+    if (!polyDraft) return null;
+    const v = polyDraft.verts;
+    const cursor = lastPointerScreen ? snapVec(canvasWorld(lastPointerScreen)) : null;
+    const crossed = polyDraft.kind === "poly" && cursor !== null && v.length >= 3 && !isSimpleLoop([...v, cursor]);
+    const three = (p: Vec2) => ({ x: p.x, y: threeY(p.y), z: 0 });
+    return { points: v.map(three), closed: false, cursor: cursor ? three(cursor) : null, crossed };
+  }
+
+  // The Visuals workspace's status line: how to get around, and what the armed
+  // tool or the selection offers there that the Level workspace does not say.
+  function visualsStatus(): string {
+    const nav = "middle drag orbit · Shift+middle or right drag pan · wheel dolly · F frame · Home head-on · W Level";
+    let what = "";
+    if (loopEdit) {
+      what = "Edit loop: drag a point along the surface · Enter or Esc ends · Generate on the panel regrows the patch";
+    } else if (tool === "rock") {
+      what = "click a collision outline (or its matched geometry) to dress it with a generated rock";
+    } else if (tool === "mushrooms") {
+      const n = surfaceLoop.points.length;
+      what = n
+        ? `${n} point${n === 1 ? "" : "s"} on the model${n >= 3 ? " · Enter or the first point closes" : ""} · Backspace drops the last · Esc cancels`
+        : "click a loop onto a drawn model's faces · Enter or the first point closes it";
+    } else if (isSurfaceTool(tool)) {
+      what = "click an outline onto the model · Enter closes · Backspace drops the last · Generate above grows the patch · Esc cancels";
+    } else if (tool === "geometry") {
+      what = `click places ${visuals!.propMesh} on the plane · Shift+click on a surface (Ctrl stands it up)`;
+    } else if (tool === "poly" || tool === "path") {
+      what = "click out the vertices on the plane · Enter finishes · Esc drops it";
+    } else if (tool === "select") {
+      const s = selected();
+      if (s && (s.object === "geometry" || s.object === "light")) {
+        what = "Shift-drag drops it on a surface (Ctrl aligns a prop) · the gizmo moves it through z";
+      } else if (vertexEditTarget()) {
+        what = "drag a corner · a midpoint inserts one · Alt+click removes · Shift+click picks several";
+      }
+    }
+    return `VISUALS · ${what ? `${what} · ` : ""}${nav}`;
+  }
+
   // --- loop -----------------------------------------------------------------
   let accumulator = 0;
   let lastNow = -1;
@@ -10877,12 +12544,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // - drawn into the letterboxed frame rather than the whole canvas, since
       // the bars are not part of the picture the player is shown. WebGL's
       // viewport origin is the BOTTOM left, hence the flipped y.
-      const testIn3d = scene3d !== null && viewMode !== "2d" && testLevel3d !== null;
+      const testIn3d = sceneShown() && testLevel3d !== null;
       if (testIn3d) {
         // A test is the player's view, so it is always the perspective camera:
         // the editor's orthographic lens is an authoring instrument, and a level
         // judged through it would be judged through a lens nobody plays in.
         scene3d!.setProjection("perspective");
+        // ...and the mushrooms wake for the ball, as they do in the game.
+        scene3d!.setGlowPreview(false);
         const w = Math.round(view.width * view.scale);
         const h = Math.round(view.height * view.scale);
         scene3d!.setViewportRect({
@@ -10929,16 +12598,23 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // only on selection. It is a revision check and a class toggle per row
       // unless the model actually moved.
       refreshOutliner();
+      // A generation that finished during a drag lands now that it is over
+      // (free when none is waiting).
+      jobs.flush();
       // The scene first, then the editor's own canvas over it. Both are driven
       // from the SAME free camera through `space.ts`, so an outline drawn on top
       // lands on the geometry it describes underneath at any pan or zoom - which
       // is the whole reason the editor can gain a 3D view without giving up
       // precise collision authoring.
-      if (scene3d && viewMode !== "2d") {
+      if (scene3d && sceneShown()) {
         scene3d.setViewportRect(null);
         // Set per frame rather than only at the toggle, because ▶ Test borrows
         // the same scene and puts it back on the perspective camera.
         scene3d.setProjection(projection);
+        // Every waking light AWAKE while authoring: there is nobody in this
+        // scene to wake one, and an author has to see what a mushroom lights
+        // before anyone does. ▶ Test hands it back to the ball.
+        scene3d.setGlowPreview(true);
         gizmo?.setCamera(scene3d.camera);
         syncEditorScene();
         // What is selected, said on the models themselves - the geometry
@@ -10950,7 +12626,28 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         // a proxy rather than on a visual precisely so a rebuild cannot take
         // them with it, and this is where they pick the model's pose back up.
         syncGizmo();
-        if (sceneLevel) scene3d.render(sceneLevel, camera, 1, orbit);
+        // The Visuals workspace: its pose, and the guides it draws in place of
+        // the overlay, brought up to date with the model, the selection and
+        // the layers (a hash, so a frame where nothing moved rebuilds nothing).
+        if (inVisuals()) {
+          visuals!.apply();
+          visuals!.sync(
+            { model, rev: modelRev, selectedIds, selectedBodyIds, selectedVerts, visibleLayers, lockedLayers },
+            polyDraftGuide() ?? surfaceDraftGuide(),
+          );
+        }
+        if (sceneLevel) scene3d.render(sceneLevel, camera, 1, inVisuals() ? NO_ORBIT : orbit);
+      }
+      // THE VISUALS WORKSPACE draws nothing on the overlay but its status line:
+      // everything the overlay says is in the scene, where it is right from any
+      // angle. The canvas still takes the pointer - it is what every press in
+      // either workspace lands on.
+      if (inVisuals()) {
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        drawVisualsStatus(ctx, dpr, cssW, cssH, visualsStatus());
+        requestAnimationFrame(frame);
+        return;
       }
       // Scene only: the overlay draws nothing at all, so what is on screen is
       // the level as it will be played. Selection chrome goes with it, which is
@@ -11217,6 +12914,7 @@ function injectStyles(): void {
   .ed-test-banner { position: fixed; top: 8px; left: 50%; transform: translateX(-50%);
     background: rgba(31,36,48,0.92); border: 1px solid #65bddb; color: #65bddb;
     font-family: monospace; font-size: 13px; padding: 4px 12px; border-radius: 2px; z-index: 10; }
+  ${GENERATOR_PANEL_CSS}
   `;
   document.head.appendChild(s);
 }

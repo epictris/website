@@ -26,6 +26,7 @@ import type { FrameInput } from "../input/frameInput";
 import {
   scaleLevelData,
   type CameraPathData,
+  type FireflyPathData,
   type CameraRegionData,
   type LevelData,
   type RawLevelData,
@@ -95,6 +96,9 @@ export class Level {
   // The two lists as the one rule set the controller governs with, built once
   // here because a path's polyline index is derived and nothing mutates it.
   readonly cameraRules: CameraRule[];
+  // The routes firefly swarms guide the player along, in metres (see
+  // FireflyPathData). Render-only.
+  readonly fireflyPaths: FireflyPathData[];
   // The authored shapes that are drawn and never simulated, in metres, each
   // resolved against the body it is welded to (see SceneDecor). Read only by
   // the renderer; like the camera regions, the sim never touches them.
@@ -146,7 +150,8 @@ export class Level {
     this.cameraRegions = data.cameraRegions ?? [];
     this.cameraPaths = data.cameraPaths ?? [];
     this.cameraRules = buildCameraRules(this.cameraRegions, this.cameraPaths);
-    this.player = new Player(data.player.radius);
+    this.fireflyPaths = data.fireflyPaths ?? [];
+    this.player =new Player(data.player.radius);
     this.player.globalPosition = new Vec2(data.player.x, data.player.y);
     this.player.spawnBody = (b) => this.spawnBody(b);
     this.world.add(this.player);

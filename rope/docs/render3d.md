@@ -50,6 +50,28 @@ Orthographic objects (see [Per-object projection](#per-object-projection)) scale
 The two projections agreeing is **asserted, not eyeballed**: `cli render3d` runs three.js's own projection against the 2D transform at five camera placements and through a pan, at the corners of the frame where a wrong dolly distance shows first, and holds them to a hundredth of a view pixel.
 `?probe3d=1` is the same claim made visible - a known world rect drawn as a plane in the scene and as an outline on the overlay, which must coincide at any zoom, position or mid-blend frame.
 
+### Free view pose
+
+`syncCamera` is two steps: `poseFromCamera(camera, lens, orbit)` reduces the 2D camera, the level's lens and the editor's orbit to a `ViewPose`, and `applyPose(threeCam, pose, aspect)` places a three.js camera at it.
+A pose is five numbers in three's frame: a `target` (x, y up, z toward the viewer, metres), `yaw` and `pitch` about it (radians, both zero is head-on), `halfHeight` and `fovYDeg`.
+It exists so a host can hold a camera the 2D one cannot describe: the editor's Visuals workspace keeps a pose of its own, whose target may leave the gameplay plane, and hands it to `Scene3D.setViewPose` (null hands the camera back to the 2D one).
+
+- The view is sized by **`halfHeight`**, the world metres from the frame's centre to its top edge at the target's depth, not by the camera's distance.
+  It is the one number both lenses are sized by - the orthographic frustum is it, and the perspective camera stands `poseDistance(pose) = halfHeight / tan(fovY / 2)` back - so a single pose drives both to the bit, and a lens change reframes nothing and moves the camera, which is the rule a level's lens already follows.
+- **The split changed nothing.** `applyPose` keeps the written-out head-on branch, `poseDistance` is `cameraDistance`'s arithmetic operation for operation, and `cli render3d`'s `visuals:` case holds `syncCamera`, `applyPose(poseFromCamera(...))` and the workspace's `headOn` to a verbatim copy of the old `syncCamera` in every number of the camera (position, quaternion, up, near, far, projection and world matrices, frustum) at five placements, three orbits (one past the pitch clamp) and both lenses.
+  A one-ulp change to the distance turns it red.
+- Under a pose, `Scene3D` places both cameras from it (the aspect still from the 2D camera's viewport), so `pick`, `unprojectToPlane` through `scene3d.camera` and the gizmo see the view that was drawn.
+  The sun's shadow frustum and the light budget's "nearest the view" follow the pose's target instead of the 2D camera, and `orthoFramedZ` is the target's depth, which is the depth the orthographic camera is sized at.
+- `unprojectToPlane` takes an optional `z`, the plane that far off the gameplay plane, for guides drawn at an object's own depth.
+  Under a free pose the camera can stand behind a plane it is asked about, and that is the null answer.
+
+`Scene3D` also carries the editor's own layer and the queries its surface tools need, all editor-only:
+
+- `editorLayer`, a group in the scene that survives `setLevel`, is raycast by `pick` (fat lines picked `LINE_PICK_PX` either side) and skipped by `setHighlight` and `meshesOf`.
+- `hitsAt(x, y)` is `pick` with three's whole intersection kept, nearest first; `pickSurface(x, y, accept)` answers the nearest hit with a face whose tag `accept` takes, as a world point and a world normal; `meshesOf(tag)` lists every non-instanced mesh drawn for a tag.
+  All three are ported from the fork (karin_website `381b923`), including its fix of `pick` measuring depth by `hit.point.sub(...)`, which rewrote the hit point in place.
+  A hit on something that is not a mesh (a guide's sprite: a corner handle, a light's icon) is kept by both lens passes: the split tested `mesh.isMesh && ...`, which is `undefined` for a sprite and so unequal to either pass's lens, and until 2026-09-25 no sprite could be picked at all (found driving the Visuals workspace; the `visuals:` cases raycast the guides directly and could not see it).
+
 ## The coordinate mapping
 
 Physics is x right, y **down**, rotation clockwise-positive.
@@ -200,9 +222,45 @@ Cleat placement allocates nothing (`beltFrameAt` is `beltPointAt`/`beltTangentAt
 The first cut drew the extruded loop and cleats only, rejecting a scrolled texture because the extruder's UVs could not carry one and because the side wall is seen nearly edge-on.
 The ring answers the first; the second turned out to matter less than it read, because the camera sees the front cap face on and the inner wall through the hollow, and both carry the moving `u`.
 
+## Generated meshes
+
+A geometry object carrying a `generator` block (see [level-format](level-format.md)) draws a GENERATED mesh: a boulder built from its outline, or a mushroom patch grown on another object, by Python and headless Blender behind the dev server (plans/visuals-workspace.md).
+To the renderer it is an ordinary `kind: "mesh"` object; what differs is where the file comes from.
+
+### Keys and files
+
+The object's `mesh` is the key `<kind>:<hash>`, where `<hash>` is 16 hex digits of 64-bit FNV-1a over a canonical string of everything the generator is given.
+`generatedKey(kind, version, input, params)` in `render3d/generated.ts` makes it, and the same function runs in the browser, in bun and on the dev server:
+
+- The canonical string is the object `{ input, kind, params, version }` with every object's keys sorted, undefined dropped, and every number rounded to a ten-thousandth of its unit (0.1 mm for a length; `-0` prints as `0`).
+  `String` of a double is exactly specified by ECMAScript, so every engine prints the same characters, and the hash is BigInt arithmetic over the UTF-8 bytes; `cli render3d` pins two keys, which node agreed with when they were pinned.
+- `params` is brought to canonical form inside the function (`canonicalParams`: defaults stripped against the current schema, keys sorted), so a parameter written out at its default, a value carrying px/m float noise, or keys in another order make the same key.
+  Changing a default is therefore a schema `version` bump, which is in the key, so every mesh made under the old defaults reads as stale.
+- A boulder's `input` is `{ outline }`: the object's own shape in its own frame, metres, y UP, in the shape's vertex order (`localVertices` with y negated, exactly what the fork's editor sent).
+  That frame is the one `mountVisual` places the GLB in, so the file needs no transform, and moving or turning the object never makes it stale.
+- A mushroom patch's `input` is `{ loop, facing, host }`: the loop in the patch object's own frame (metres, y up, z off its own plane), the side of the loop's plane it was painted on (a unit vector in that frame; absent for a patch saved before it was stored), and the host described by what decides its drawn surface (its mesh key; a primitive's outline or radius, depth, bevel, taper, texture and lens; for a generated host never generated, the key it would be generated under) and its whole frame relative to the patch (`frame`, the top three rows of the affine matrix, with both objects' tilt and scale in it).
+  Moving the patch and its host together changes nothing; moving, tipping or scaling either alone, regenerating the host, or editing the loop makes the patch stale.
+  The triangle soup the generator is handed is collected from the host's drawn meshes at generation time and is not part of the key; the server checks the key against `input`, not against the soup.
+- `editor/visuals/paramSchema.ts` computes an item's input (`generatorInput`), its expected key (`expectedKey`) and `isStale` from the model, so the badge and the job client read one definition.
+
+`generatedMeshAsset(key)` maps a generated key to its file, and `loadMesh` asks it before `MESH_ASSETS`:
+
+```
+public/generated/<kind>/<hash>/mesh.glb    served as /generated/<kind>/<hash>/mesh.glb
+public/generated/<kind>/<hash>/meta.json   { key, kind, version, params, input, bytes, triangles, generatedAt, blender }
+```
+
+A generated file is one prop in its own frame: no node, no scale, no turn, and no `MESH_ASSETS` entry.
+The key carries no size, so the browser fetches it unweighted; the preload list (`levelStoredFiles`, node only) takes `bytes` from the store manifest (`GENERATED_ASSETS`) for a published key and from `meta.json` for one only generated here, both through `render3d/generatedMeta.ts` (kept apart so its `fs` import never reaches the browser), and lists a file with neither at 0 bytes with a warning.
+A key whose file is missing is a failed load like any other, and draws the placeholder.
+The failure stays cached (a missing file is asked for once, not on every rebuild of the editor's scene), except that a GENERATED key's failure is dropped by `forgetFailedMesh(key)` when the service publishes that file, so a mesh generated for a key whose earlier 404 was cached is fetched at the next rebuild rather than staying a stand-in until a reload.
+The placeholder of a generated object is its generator's: a BOULDER with no mesh yet (or one still loading, or missing) stands in as its outline extruded to the block's `depth` and chamfered in toward the camera at `BOULDER_STANDIN_TAPER` (45°), the volume the rock will fill, rather than a 20 cm slab; a MUSHROOM PATCH has none at all, since its rect is only the extent of the surface it grows on and a box of that size would stand over the rock it is on (`mountVisual`, `primitiveGeometry` in `render3d/bodyVisuals.ts`).
+`public/generated/` is gitignored; the meshes the registered levels name are published to the release store and fetched back into the same layout (see [**Generated meshes in the store**](asset-store.md#generated-meshes-in-the-store)).
+A local build copies `public/` into `dist`, and `generatedMeshesInBuild` (`vite.config.ts`) then removes every generated directory no registered level names and every file but `mesh.glb` from the ones kept, so `dist` does not grow with every seed ever tried.
+
 ## Traps
 
 - **`PX`-sized constants do not survive projection.** A fixed on-screen size written as `<px> * PX` assumes the 2D renderer's uniform transform. Everything like that stays on the overlay, and nothing in the 3D scene may depend on `PIXELS_PER_METER` except through `space.ts`.
-- **`Scene3D` must be instantiable twice** - the game page and the editor both have one - so everything mutable lives on the instance. The `playerRig.ts` module-global pattern is the anti-pattern this is written against. The material cache in `assets.ts` is shared deliberately: it is immutable once built and belongs to no scene.
+- **`Scene3D` must be instantiable twice** - the game page and the editor both have one - so everything mutable lives on the instance. The `playerRig.ts` module-global pattern is the anti-pattern this is written against. The material cache in `assets.ts` is shared deliberately: it is immutable once built and belongs to no scene. There are two named exceptions. The first is the avatar's own entry (`SurfaceRequest.avatar`), whose fog `avatarSurface.ts` patches; it is shared with nothing but the avatar, and a page draws one (see [**The avatar's own surface**](lighting-and-surfaces.md#the-avatars-own-surface)). The second is a waking body's own copy of each of its surfaces (`SurfaceRequest.instance`, keyed by the body's index in the level), whose `emissiveIntensity` the light rig writes every frame so the cap brightens with its light; only a body carrying a waking light asks for one, so no other level gains a material, and it is keyed by index rather than minted per build so the editor's rebuild on every edit reuses the same entries (see [**Waking lights**](lighting-and-surfaces.md#waking-lights)). A rig hands the authored intensity back when it lets the body go.
 - **Transform sync must not allocate**, and must read `renderPosition/renderRotation(alpha)` only. The debug overlay is the one deliberate exception (it exists to show what the sim believes) and it stays 2D.
 - **Where the chain's links fall is shared code.** `render/chainMetrics.ts` holds the one continuous arc walk both renderers use, because that is the one part of chain drawing that has ever been wrong (`session-1467f`) and two copies of it would drift.

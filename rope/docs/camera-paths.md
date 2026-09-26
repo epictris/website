@@ -15,6 +15,8 @@ Two **paths** cannot blend - the projection, the lead deadband and the branch wi
 The path is directed by its vert order and always leads toward increasing arc length, so even when the player backtracks the screen keeps arguing for the authored way.
 Smart direction inference was rejected rather than deferred - the whole point is that the camera argues.
 Clamping at the ends is the correct degenerate behaviour: near the goal the camera comes to rest centred on the path's end rather than staring past it.
+The same authored direction is read by the fireflies, as level GEOMETRY: a swarm keeping the ball company hovers ahead of it along the nearest path, from a progress along it that is the swarm's own and not the camera's (see [Fireflies](lighting-and-surfaces.md#fireflies)). Reading the controller's state was tried and rejected - fireflies moving with the camera read as not part of the level - so nothing about the camera's grip, deadband or ratchet reaches them.
+A swarm given a firefly path of its own (`LightObjectData.path`) reads that instead and ignores the camera paths entirely.
 
 ## The lead is a per-axis pair
 

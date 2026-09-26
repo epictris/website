@@ -61,7 +61,6 @@ import * as THREE from "three";
 import type { EnvironmentData } from "../level/levelFormat";
 import { loadedHdri, loadHdri } from "./assets";
 import { threeY } from "./space";
-import type { Camera } from "../render/camera";
 
 // The page's own background (see index.html and LETTERBOX_COLOR): the frame's
 // surround, so the scene fades into it rather than ending at it.
@@ -163,19 +162,13 @@ export class Environment {
     // reflections, which is what this looked like before there were any.
     renderer?: THREE.WebGLRenderer,
   ) {
-    const sunDir = {
-      x: env?.sunX ?? DEFAULT_SUN_DIR.x,
-      y: env?.sunY ?? DEFAULT_SUN_DIR.y,
-      z: env?.sunZ ?? DEFAULT_SUN_DIR.z,
-    };
-    // Two conversions, in this order: into three's frame (the y-negation every
-    // placement in render3d/ goes through), then negated, because the authored
-    // vector is the direction the light TRAVELS and what a DirectionalLight
-    // needs is the direction its lamp sits in.
-    this.dir.set(sunDir.x, threeY(sunDir.y), sunDir.z).normalize().negate();
+    // The authored block with every default applied, read once and shared by
+    // the lights and the generated sky, so the two cannot disagree.
+    const inputs = skyInputs(env);
+    this.dir.copy(inputs.sunDir);
 
     const sunIntensity = env?.sunIntensity ?? DEFAULT_SUN_INTENSITY;
-    this.sunColor = new THREE.Color(env?.sunColor ?? DEFAULT_SUN_COLOR);
+    this.sunColor = inputs.sunColor;
     if (sunIntensity > 0) {
       this.sun = new THREE.DirectionalLight(this.sunColor, sunIntensity);
       this.sun.castShadow = true;
@@ -210,8 +203,8 @@ export class Environment {
       this.sun = null;
     }
 
-    const skyFill = new THREE.Color(env?.skyColor ?? DEFAULT_SKY_FILL);
-    const groundFill = new THREE.Color(env?.groundColor ?? DEFAULT_GROUND_FILL);
+    const skyFill = inputs.sky;
+    const groundFill = inputs.ground;
     this.fill = new THREE.HemisphereLight(
       skyFill,
       groundFill,
@@ -249,10 +242,7 @@ export class Environment {
         // travelling highlight on a rough surface as it turns, and a level lit
         // by its own lamps has no business carrying a bright spot in its sky
         // where a sun it does not have would be.
-        this.useEnvMap(
-          equirectEnvironment(skyFill, groundFill, this.sunColor, this.dir, this.sun !== null),
-          true,
-        );
+        this.useEnvMap(equirectEnvironment({ ...inputs, withSun: this.sun !== null }), true);
         if (named) {
           void loadHdri(named).then((tex) => {
             if (tex && !this.disposed) this.useEnvMap(tex, false);
@@ -309,12 +299,15 @@ export class Environment {
   // it with the camera rather than fitting it to the scene is what keeps the
   // texel density constant as the view zooms, which is what stops shadow edges
   // shimmering during a camera blend.
-  follow(camera: Camera): void {
+  //
+  // `centre` is the sim-frame point the view is centred on: the 2D camera's
+  // position, or the target of the editor's free pose (see `ViewPose`).
+  follow(centre: { x: number; y: number }): void {
     // The fog needs nothing here: its density is a property of the air, and the
     // distance it is applied over is the one three.js already has per fragment.
     if (!this.sun) return;
-    const cx = camera.position.x;
-    const cy = threeY(camera.position.y);
+    const cx = centre.x;
+    const cy = threeY(centre.y);
     this.target.position.set(cx, cy, 0);
     this.target.updateMatrixWorld();
     this.sun.position.set(
@@ -345,28 +338,96 @@ export class Environment {
   }
 }
 
+// What a generated sky is painted from, with every default applied.
+export interface SkyInputs {
+  sky: THREE.Color;
+  ground: THREE.Color;
+  sunColor: THREE.Color;
+  // The direction the sun's LAMP sits in, in three's frame, unit length.
+  sunDir: THREE.Vector3;
+  // Whether the lobe is painted at all.
+  withSun: boolean;
+}
+
+// The level's generated sky, from its authored block. Its lobe is there only
+// when the level has a sun: a level lit by its own lamps has no business
+// carrying a bright spot in its sky where a sun it does not have would be.
+export function skyInputs(env?: EnvironmentData): SkyInputs {
+  const sunDir = new THREE.Vector3(
+    env?.sunX ?? DEFAULT_SUN_DIR.x,
+    // Two conversions, in this order: into three's frame (the y-negation every
+    // placement in render3d/ goes through), then negated, because the authored
+    // vector is the direction the light TRAVELS and what a DirectionalLight
+    // needs is the direction its lamp sits in.
+    threeY(env?.sunY ?? DEFAULT_SUN_DIR.y),
+    env?.sunZ ?? DEFAULT_SUN_DIR.z,
+  )
+    .normalize()
+    .negate();
+  return {
+    sky: new THREE.Color(env?.skyColor ?? DEFAULT_SKY_FILL),
+    ground: new THREE.Color(env?.groundColor ?? DEFAULT_GROUND_FILL),
+    sunColor: new THREE.Color(env?.sunColor ?? DEFAULT_SUN_COLOR),
+    sunDir,
+    withSun: (env?.sunIntensity ?? DEFAULT_SUN_INTENSITY) > 0,
+  };
+}
+
 // The sky as one small equirectangular image: a vertical gradient from the
 // ground colour through the horizon to the sky colour, with a warm lobe where
 // the sun is. PMREM turns it into the mip chain a rough surface samples, so
 // nothing here has to be sharp - what it has to be is DIRECTIONAL, since a
 // uniform environment is indistinguishable from ambient light and puts no
 // highlight anywhere.
-function equirectEnvironment(
-  sky: THREE.Color,
-  ground: THREE.Color,
-  sunColor: THREE.Color,
-  sunDir: THREE.Vector3,
-  withSun: boolean,
-): THREE.DataTexture {
+//
+// Split in two so the painting is pure: `equirectPixels` is the RGBA float
+// image, row 0 straight DOWN (see `equirectDirection`), which `cli render3d`
+// reads without a GPU.
+export const EQUIRECT_SIZE = { width: ENV_MAP_WIDTH, height: ENV_MAP_HEIGHT } as const;
+
+function equirectEnvironment(inputs: SkyInputs): THREE.DataTexture {
+  const data = equirectPixels(inputs);
+  // Float rather than 8-bit: the sun lobe is several times brighter than the
+  // sky, which is exactly the range an LDR texture cannot hold - clipped, the
+  // highlight it puts on a metal is the same white as the sky around it.
+  const tex = new THREE.DataTexture(
+    data,
+    ENV_MAP_WIDTH,
+    ENV_MAP_HEIGHT,
+    THREE.RGBAFormat,
+    THREE.FloatType,
+  );
+  tex.mapping = THREE.EquirectangularReflectionMapping;
+  tex.colorSpace = THREE.LinearSRGBColorSpace;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+// The direction three READS texel (x, y) of the image as: its `equirectUv`
+// (common.glsl) takes u from `atan(z, x)` and v from `asin(y)`, with v = 0
+// straight DOWN, and a `DataTexture` is not flipped, so row 0 is the bottom of
+// the sphere.
+//
+// Painted from this rather than from a convention of its own, because until
+// 2026-09-24 it was: row 0 was painted as straight up and the azimuth as
+// `atan2(x, z)`, so every generated sky was upside down and mirrored - the
+// level's ground colour reflected from above, its sky from below, and the sun
+// lobe exactly opposite the sun (measured: the peak texel read back at a dot
+// of -0.999 with the sun's direction). `cli render3d` holds the two together.
+export function equirectDirection(x: number, y: number, out: THREE.Vector3): THREE.Vector3 {
+  const azimuth = ((x + 0.5) / ENV_MAP_WIDTH) * Math.PI * 2 - Math.PI;
+  const latitude = ((y + 0.5) / ENV_MAP_HEIGHT - 0.5) * Math.PI;
+  const c = Math.cos(latitude);
+  return out.set(c * Math.cos(azimuth), Math.sin(latitude), c * Math.sin(azimuth));
+}
+
+export function equirectPixels({ sky, ground, sunColor, sunDir, withSun }: SkyInputs): Float32Array {
   const data = new Float32Array(ENV_MAP_WIDTH * ENV_MAP_HEIGHT * 4);
   const dir = new THREE.Vector3();
   for (let y = 0; y < ENV_MAP_HEIGHT; y++) {
-    // Equirectangular: v maps to polar angle, u to azimuth.
-    const theta = (y + 0.5) * (Math.PI / ENV_MAP_HEIGHT);
-    const up = Math.cos(theta); // +1 straight up, -1 straight down
     for (let x = 0; x < ENV_MAP_WIDTH; x++) {
-      const phi = (x + 0.5) * ((Math.PI * 2) / ENV_MAP_WIDTH) - Math.PI;
-      dir.set(Math.sin(theta) * Math.sin(phi), up, Math.sin(theta) * Math.cos(phi));
+      equirectDirection(x, y, dir);
+      const up = dir.y; // +1 straight up, -1 straight down
       // Sky above, ground below, mixed smoothly across the horizon rather than
       // meeting at a line - a hard horizon shows up as a seam in the reflection
       // of anything polished.
@@ -387,20 +448,7 @@ function equirectEnvironment(
       data[i + 3] = 1;
     }
   }
-  // Float rather than 8-bit: the sun lobe is several times brighter than the
-  // sky, which is exactly the range an LDR texture cannot hold - clipped, the
-  // highlight it puts on a metal is the same white as the sky around it.
-  const tex = new THREE.DataTexture(
-    data,
-    ENV_MAP_WIDTH,
-    ENV_MAP_HEIGHT,
-    THREE.RGBAFormat,
-    THREE.FloatType,
-  );
-  tex.mapping = THREE.EquirectangularReflectionMapping;
-  tex.colorSpace = THREE.LinearSRGBColorSpace;
-  tex.needsUpdate = true;
-  return tex;
+  return data;
 }
 
 // Renderer-side half of the look: filmic tone mapping and correct colour space,
@@ -411,5 +459,8 @@ export function configureRenderer(renderer: THREE.WebGLRenderer): void {
   renderer.toneMappingExposure = 1.15;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  // PCF, which is what three has drawn for `PCFSoftShadowMap` since it
+  // deprecated it (it swapped the type on the first frame, with a console
+  // warning every page load); asking for it by name changes no pixel.
+  renderer.shadowMap.type = THREE.PCFShadowMap;
 }

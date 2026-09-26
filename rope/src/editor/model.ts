@@ -73,6 +73,7 @@ import {
   movePeakFactor,
   type MoveMode,
   type CameraPathData,
+  type FireflyPathData,
   type CameraRegionData,
   type ChainData,
   type VineData,
@@ -93,7 +94,10 @@ import {
   type LevelCameraData,
   type NoteData,
   type ShapeData,
+  type GeneratorData,
+  type GeneratorPatchData,
 } from "../level/levelFormat";
+import type { GeneratorKind, ParamValue } from "../level/generatorParams";
 import {
   DEFAULT_FILL_INTENSITY,
   DEFAULT_GROUND_FILL,
@@ -112,6 +116,8 @@ import {
   DEFAULT_SPOT_ANGLE,
   DEFAULT_SPOT_PENUMBRA,
 } from "../render3d/lights";
+import { FIREFLY_COLOR, FIREFLY_INTENSITY, FIREFLY_RANGE, FOLLOW_Z } from "../render3d/fireflies";
+import { SOLID_SURFACE } from "../render3d/assets";
 
 // Editor layers, in draw order (the list also stacks bottom-up in the toolbar):
 // `geometry` is the scene's shapes, `camera` the camera-behaviour volumes and
@@ -142,8 +148,13 @@ import {
 // different layers, so one could be hidden or locked without the other, and
 // welding them into a body meant a cross-layer selection. What distinguishes
 // them is `EdItem.object`, which is what the FORMAT distinguishes them by.
-export type EdLayer = "scene" | "camera" | "notes";
-export const ED_LAYERS: EdLayer[] = ["scene", "camera", "notes"];
+//
+// `fireflies` holds the FIREFLY PATHS (`FireflyPathData`): routes a swarm
+// guides the player along, drawn with the camera path's curve tools but
+// belonging to no camera. Editor furniture like the camera layer - nothing on
+// it is a body or drawn in play.
+export type EdLayer = "scene" | "camera" | "fireflies" | "notes";
+export const ED_LAYERS: EdLayer[] = ["scene", "camera", "fireflies", "notes"];
 
 // What KIND of scene object an item is - the SAME set the format has, and one
 // editor item per authored object.
@@ -374,6 +385,24 @@ export interface EdLight {
   // its own light - see `LightObjectData.shadowNear`.
   shadowNear: number | null;
   flicker: number; // 0 (steady) .. 1 (guttering)
+  // Spot only: how visible the lit air in the cone is, and how thick the dust
+  // in it, both 0..1 (see `LightObjectData.beam` / `.dust`).
+  beam: number;
+  dust: number;
+  // Point only: a WAKING light (see `LightObjectData.wake`). `wake` in metres,
+  // 0 = always on; the three times in seconds, null = the renderer's default
+  // (`DEFAULT_WAKE_RISE` / `DEFAULT_WAKE_FALL`, and no delay).
+  wake: number;
+  wakeDelay: number | null;
+  wakeRise: number | null;
+  wakeFall: number | null;
+  // Point only: a FIREFLY SWARM of this many motes (see
+  // `LightObjectData.fireflies`), 0 = an ordinary light. A swarm reads `wake`
+  // as where it notices the ball and never reads the three times.
+  fireflies: number;
+  // Swarm only: the id of the firefly path it guides the player along (see
+  // `LightObjectData.path`), null = the camera paths.
+  path: number | null;
 }
 
 // Notes-layer properties (see NoteData, CheckpointData). A note is always a
@@ -595,6 +624,10 @@ export interface EdItem {
   // that goes through the editor untouched comes back with the same ids it went
   // in with - the id is content, not a handle. 0 on everything else.
   anchorId: number;
+  // Firefly paths only (the fireflies layer): the id a swarm names this path
+  // by (`FireflyPathData.id`, `LightObjectData.path`), preserved through a
+  // load and a save for the anchor's reason. 0 on everything else.
+  pathId: number;
   // Geometry objects only: the item id of the COLLISION object in this body
   // whose outline this one mirrors, 0 for none. While set, the editor keeps the
   // two outlines - `pos`, `rot` and `shape` - equal in BOTH directions
@@ -629,6 +662,22 @@ export function itemDepth(i: EdItem, bodyCollides: boolean): number {
   // The same two answers `depthOf` gives, from the same two facts.
   if (i.visual.offsetZ !== 0) return i.visual.offsetZ;
   return bodyCollides ? 0 : DECOR_Z;
+}
+
+// The `offsetZ` a geometry object is left with after a move through z that
+// started with it drawn at `drawnZ` (`itemDepth`) and authoring `offsetZ`, and
+// ended with it at depth `z`, metres.
+//
+// A move that did not go through z leaves the field exactly as it was, so
+// nudging a backdrop sideways never stamps the depth it falls back to into the
+// file. A move that did is the new depth OUTRIGHT: once written, `offsetZ` is
+// where the object is, not a change from where it fell back to - written as a
+// change instead (`offsetZ + (z - drawnZ)`), a piece of decoration drawn at
+// `DECOR_Z` jumped 35 cm toward the camera on the first touch of the blue
+// arrow. The one depth this cannot say is exactly 0 on a body that collides
+// with nothing, which the format reads as unset (see above).
+export function offsetZAfterMove(offsetZ: number, drawnZ: number, z: number): number {
+  return z === drawnZ ? offsetZ : z;
 }
 
 // Which bodies of a model have a collision object in them - the one fact
@@ -829,6 +878,127 @@ export interface EdVisual {
   // a light item grouped into the same body IS the lamp's light, and it cannot
   // drift from the fitting because they are one body.
   emissiveTexture: string;
+  // What this object's mesh is GENERATED from (see `GeneratorData`); absent on
+  // everything placed by hand. Optional rather than nullable because it is the
+  // rare case: the spread copies of a visual all over the editor carry an
+  // absent field correctly, and `cloneVisual` is what copies a present one.
+  generator?: EdGenerator;
+}
+
+// A generator block as the editor holds it: the on-disk block in metres, with a
+// patch's host resolved from an index in the body to the host's item id, so it
+// survives the body's objects being reordered, added to or split.
+export interface EdGenerator {
+  kind: GeneratorKind;
+  version: number;
+  // As authored and loaded: only what the author set, in metres, keys in the
+  // order they were set. Written back verbatim, so a level saves byte-identical
+  // whatever it holds; defaults are stripped where a value is SET (the panel),
+  // and the mesh key strips them again on its own (`generatedKey`).
+  params: Record<string, ParamValue>;
+  patch: EdPatch | null;
+}
+
+export interface EdPatch {
+  // The host's item id; 0 = no host (the index on disk named nothing usable, or
+  // the host was deleted, or the patch was copied without it). The loop is kept
+  // either way.
+  hostId: number;
+  // The painted loop in the PATCH object's own frame, metres, y DOWN like every
+  // other point in the model (and the file), z toward the camera off the
+  // object's own plane. Points are replaced, never mutated, so a clone copies
+  // the array and shares the points.
+  points: readonly EdPoint3[];
+  // Which side of the loop's plane it was painted on: a unit vector in the
+  // patch's own frame, y DOWN like the points, dimensionless (never scaled).
+  // The mean of the painted faces' normals, written when the loop is closed;
+  // null for a patch loaded from a file that did not store it, whose side is
+  // then guessed from the host's middle. Replaced, never mutated.
+  facing: EdPoint3 | null;
+}
+
+export interface EdPoint3 {
+  readonly x: number;
+  readonly y: number;
+  readonly z: number;
+}
+
+// A generator block no other object shares: the params (a colour is an array
+// the inspector may write into) and the loop are copied. The ONE deep copy the
+// editor's snapshot, duplicate and paste make of it.
+export function cloneGenerator(g: EdGenerator): EdGenerator {
+  const params: Record<string, ParamValue> = {};
+  for (const [k, v] of Object.entries(g.params)) params[k] = Array.isArray(v) ? [...v] : v;
+  return {
+    kind: g.kind,
+    version: g.version,
+    params,
+    patch: g.patch ? { hostId: g.patch.hostId, points: [...g.patch.points], facing: g.patch.facing } : null,
+  };
+}
+
+// A visual no other item shares. Every field but the generator is a primitive
+// or an immutable Vec2, so a spread is a copy; the generator is the nested one.
+export function cloneVisual(v: EdVisual): EdVisual {
+  return v.generator ? { ...v, generator: cloneGenerator(v.generator) } : { ...v };
+}
+
+// After a copy (`idOf` maps each original item id to its copy's), point every
+// copied patch at its host's COPY, or at nothing when the host was not copied:
+// the original host is in another body, where a patch cannot name it.
+// Returns how many copied patches had a host and lost it, for the editor to
+// say (a patch duplicated on its own lands in a body of its own, hostless).
+export function remapPatchHosts(items: readonly EdItem[], idOf: ReadonlyMap<number, number>): number {
+  let orphaned = 0;
+  for (const it of items) {
+    const patch = it.visual.generator?.patch;
+    if (!patch || patch.hostId === 0) continue;
+    patch.hostId = idOf.get(patch.hostId) ?? 0;
+    if (patch.hostId === 0) orphaned++;
+  }
+  return orphaned;
+}
+
+// On-disk generator block -> the editor's, host unresolved (the caller knows the
+// body; see `fromLevelData`).
+function edGenerator(g: GeneratorData): EdGenerator {
+  const params: Record<string, ParamValue> = {};
+  for (const [k, v] of Object.entries(g.params ?? {})) params[k] = Array.isArray(v) ? [...v] : v;
+  return {
+    kind: g.kind,
+    version: g.version,
+    params,
+    patch: g.patch
+      ? {
+          hostId: 0,
+          points: g.patch.points.map((p) => ({ x: p.x, y: p.y, z: p.z })),
+          facing: g.patch.facing ? { x: g.patch.facing.x, y: g.patch.facing.y, z: g.patch.facing.z } : null,
+        }
+      : null,
+  };
+}
+
+// ...and back, host left for `toLevelData`, which is where the body's object
+// order is decided. Params are written as held, and only when there are any.
+function generatorData(g: EdGenerator): GeneratorData {
+  const params = Object.entries(g.params);
+  return {
+    kind: g.kind,
+    version: g.version,
+    ...(params.length > 0
+      ? { params: Object.fromEntries(params.map(([k, v]) => [k, Array.isArray(v) ? [...v] : v])) }
+      : {}),
+    ...(g.patch ? { patch: patchData(g.patch) } : {}),
+  };
+}
+
+// A patch's loop and facing as the file holds them (the host's index is
+// `toLevelData`'s), the facing only when there is one.
+function patchData(p: EdPatch): GeneratorPatchData {
+  return {
+    points: p.points.map((q) => ({ x: q.x, y: q.y, z: q.z })),
+    ...(p.facing ? { facing: { x: p.facing.x, y: p.facing.y, z: p.facing.z } } : {}),
+  };
 }
 
 // A body's own frame: the transform its objects are placed in, and what the file
@@ -989,6 +1159,15 @@ export const defaultLight = (): EdLight => ({
   castShadow: false,
   shadowNear: null,
   flicker: 0,
+  beam: 0,
+  dust: 0,
+  // Always on: a light wakes only when the author says so (or `+ Glow` does).
+  wake: 0,
+  wakeDelay: null,
+  wakeRise: null,
+  wakeFall: null,
+  fireflies: 0,
+  path: null,
 });
 
 export const defaultNote = (): EdNote => ({
@@ -996,6 +1175,116 @@ export const defaultNote = (): EdNote => ({
   text: "",
   size: DEFAULT_NOTE_TEXT_SIZE * PX,
 });
+
+// `+ Glow`: what one click drops. EDITOR defaults, not format defaults - a light
+// object on disk with `wake` and nothing else gets the renderer's
+// `DEFAULT_WAKE_*` - and every number here is a starting point to be played.
+// The mushroom is a purple cube until its model exists; nothing below changes
+// when it does.
+export const GLOW_CUBE = 0.3; // metres, the cube's side and its depth
+export const GLOW_COLOR = "#8a3fd6";
+export const GLOW_EMISSIVE = "#b070ff";
+export const GLOW_EMISSIVE_INTENSITY = 2;
+export const GLOW_RANGE = 4; // metres
+export const GLOW_INTENSITY = 6; // candela
+export const GLOW_WAKE = 3; // metres
+export const GLOW_WAKE_DELAY = 0.25; // seconds
+export const GLOW_WAKE_RISE = 0.6; // seconds
+export const GLOW_WAKE_FALL = 1.5; // seconds
+
+// The body `+ Glow` places at `pos` (metres): one static body holding a solid
+// purple cube with an emissive, the collision rect it mirrors (a mushroom the
+// ball rolls through reads as a ghost; delete the collision object for one on
+// a far wall), and a waking point light at the cube's centre. One body, so the
+// outliner shows one row and the whole thing drags together. Pure, so
+// `cli render3d` can hold its shapes and defaults.
+export function glowBody(pos: Vec2): LevelBodyData {
+  const square: ShapeData = { kind: "rect", w: GLOW_CUBE, h: GLOW_CUBE };
+  return {
+    kind: "static",
+    x: pos.x,
+    y: pos.y,
+    rot: 0,
+    objects: [
+      { type: "collision", shape: { ...square } },
+      {
+        type: "geometry",
+        shape: { ...square },
+        matchCollision: true,
+        depth: GLOW_CUBE,
+        texture: SOLID_SURFACE,
+        color: GLOW_COLOR,
+        emissive: GLOW_EMISSIVE,
+        emissiveIntensity: GLOW_EMISSIVE_INTENSITY,
+      },
+      {
+        type: "light",
+        color: GLOW_EMISSIVE,
+        range: GLOW_RANGE,
+        intensity: GLOW_INTENSITY,
+        wake: GLOW_WAKE,
+        wakeDelay: GLOW_WAKE_DELAY,
+        wakeRise: GLOW_WAKE_RISE,
+        wakeFall: GLOW_WAKE_FALL,
+      },
+    ],
+  };
+}
+
+// ...as editor items, through the same loader a level comes in by, so the
+// `+ Glow` tool adds exactly what a level file holding that body would load as.
+export function glowModel(pos: Vec2): EdModel {
+  return fromLevelData({ player: { x: pos.x, y: pos.y, radius: 0.08 }, bodies: [glowBody(pos)] });
+}
+
+// The values a light object's absent `color`, `intensity` and `range` take in
+// the renderer (`LightRig.add`): a swarm's are the firefly's, anything else's a
+// lamp's. The loader fills an item from these and the save omits a field equal
+// to them, so a swarm reads as a swarm on the panel and on disk alike.
+export function lightDefaultsFor(swarm: boolean): { color: string; intensity: number; range: number } {
+  return swarm
+    ? { color: FIREFLY_COLOR, intensity: FIREFLY_INTENSITY, range: FIREFLY_RANGE }
+    : { color: DEFAULT_LIGHT_COLOR, intensity: DEFAULT_LIGHT_INTENSITY, range: DEFAULT_LIGHT_RANGE };
+}
+
+// `+ Fireflies`: what one click drops. Editor defaults like `+ Glow`'s, to be
+// played; the colour, intensity and reach are left to the renderer's firefly
+// defaults (`lightDefaultsFor`) so tuning those tunes every swarm that did not
+// ask for its own.
+export const FIREFLY_COUNT = 12;
+export const FIREFLY_NOTICE = 2.5; // metres
+// Off the plane like a lamp, so the idle knot hangs in the air in front of the
+// rock rather than inside it: the depth the swarm flies at once it follows
+// (`FOLLOW_Z`), so noticing the ball moves it across the level and not
+// toward the camera.
+export const FIREFLY_HOME_Z = FOLLOW_Z; // metres
+
+// The body `+ Fireflies` places at `pos` (metres): a body holding nothing but
+// the swarm's light, which is its home. No collision - the ball flies through
+// fireflies - and no geometry, since the motes are drawn by the renderer. Pure,
+// so `cli render3d` can hold it.
+export function fireflyBody(pos: Vec2): LevelBodyData {
+  return {
+    kind: "static",
+    x: pos.x,
+    y: pos.y,
+    rot: 0,
+    objects: [
+      {
+        type: "light",
+        z: FIREFLY_HOME_Z,
+        wake: FIREFLY_NOTICE,
+        fireflies: FIREFLY_COUNT,
+      },
+    ],
+  };
+}
+
+// ...as editor items, through the same loader a level comes in by (see
+// `glowModel`).
+export function fireflyModel(pos: Vec2): EdModel {
+  return fromLevelData({ player: { x: pos.x, y: pos.y, radius: 0.08 }, bodies: [fireflyBody(pos)] });
+}
 
 // A fresh look is a `primitive` with everything defaulted: this object's own
 // form given the default depth and wearing the default generated surface.
@@ -1028,6 +1317,9 @@ export const CAMERA_REGION_COLOR = "#c792ea";
 export const CAMERA_REGION_OPACITY = 0.12;
 export const NOTE_COLOR = "#98c379";
 export const NOTE_OPACITY = 0.08;
+// A firefly path is drawn in the firefly's own colour, so it reads as the
+// swarms' and not as the camera's.
+export const FIREFLY_PATH_COLOR = FIREFLY_COLOR;
 
 // Appearance a freshly drawn item starts with, per layer. Geometry is authored
 // from here on; the other two are fixed furniture.
@@ -1052,6 +1344,7 @@ export function newItemStyle(
   object: EdObject,
 ): { color: string; opacity: number } {
   if (layer === "camera") return { color: CAMERA_REGION_COLOR, opacity: CAMERA_REGION_OPACITY };
+  if (layer === "fireflies") return { color: FIREFLY_PATH_COLOR, opacity: CAMERA_REGION_OPACITY };
   if (layer === "notes") return { color: NOTE_COLOR, opacity: NOTE_OPACITY };
   if (object === "light") return { color: DEFAULT_LIGHT_COLOR, opacity: LIGHT_FILL_OPACITY };
   return { color: DEFAULT_BODY_COLOR, opacity: DEFAULT_BODY_OPACITY };
@@ -1141,6 +1434,7 @@ export function edVisual(v: GeometryObjectData | undefined): EdVisual {
     emissive: v.emissive ?? d.emissive,
     emissiveIntensity: v.emissiveIntensity ?? d.emissiveIntensity,
     emissiveTexture: v.emissiveTexture ?? d.emissiveTexture,
+    ...(v.generator ? { generator: edGenerator(v.generator) } : {}),
   };
 }
 
@@ -1193,6 +1487,9 @@ export function visualData(v: EdVisual): GeometryObjectData | undefined {
     // it glows in the colours it was painted in, and the colour beside it is a
     // tint over that rather than the thing being turned on.
     ...(v.emissiveTexture ? { emissiveTexture: v.emissiveTexture } : {}),
+    // A patch's host is an index into the body's objects, which only
+    // `toLevelData` knows the order of; it adds it.
+    ...(v.generator ? { generator: generatorData(v.generator) } : {}),
   };
   // `type` alone means nothing was authored.
   return Object.keys(out).length > 1 ? out : undefined;
@@ -1354,6 +1651,7 @@ function fromLevelData(data: LevelData): EdModel {
       light: defaultLight(),
       note: defaultNote(),
       anchorId: 0,
+      pathId: 0,
       matchId: 0,
     };
     // Geometry objects whose file says they mirror a collision sibling; the
@@ -1430,6 +1728,7 @@ function fromLevelData(data: LevelData): EdModel {
           thickness: DEFAULT_THICKNESS,
           visual: defaultVisual(),
           anchorId: o.id,
+          pathId: 0,
         });
         continue;
       }
@@ -1451,6 +1750,19 @@ function fromLevelData(data: LevelData): EdModel {
       g.matchId = target.id;
       if (!exact) copyMatchedOutline(target, g);
     }
+    // Resolve each mushroom patch's host from its index in this body's objects
+    // (one item per object, in file order, so `made[k]` IS object k). An index
+    // that names nothing, names something other than a geometry object, or
+    // names the patch itself loads as no host: the loop is kept for the author
+    // to re-host, and the panel says so.
+    b.objects.forEach((o, k) => {
+      const host = isGeometryObject(o) ? o.generator?.patch?.host : undefined;
+      const patch = made[k]!.visual.generator?.patch;
+      if (host === undefined || !patch) return;
+      const target = made[host];
+      if (target && host !== k && target.object === "geometry") patch.hostId = target.id;
+      else console.warn(`[editor] body ${data.bodies.indexOf(b)}: patch object ${k} names object ${host} as its host, which is not another geometry object; loaded with no host`);
+    });
     itemOfBody.push(made.find((i) => i.object === "collision") ?? null);
   }
 
@@ -1532,6 +1844,7 @@ function fromLevelData(data: LevelData): EdModel {
     light: defaultLight(),
     note: defaultNote(),
     anchorId: 0,
+    pathId: 0,
     matchId: 0,
   }));
 
@@ -1539,7 +1852,7 @@ function fromLevelData(data: LevelData): EdModel {
   // kind. One item type per layer rather than a union is what keeps a path
   // dragged, rotated, rubber-banded, duplicated and undone by exactly the code
   // a region already goes through.
-  const camPaths: EdItem[] = (data.cameraPaths ?? []).map((c) => ({
+  const camPathItem = (c: CameraPathData): EdItem => ({
     id: newBodyId(),
     layer: "camera",
     object: "collision",
@@ -1633,8 +1946,22 @@ function fromLevelData(data: LevelData): EdModel {
     light: defaultLight(),
     note: defaultNote(),
     anchorId: 0,
+    pathId: 0,
     matchId: 0,
-  }));
+  });
+  const camPaths = (data.cameraPaths ?? []).map(camPathItem);
+  // Firefly paths: the camera path's item moved onto the fireflies layer, with
+  // no keys and no framing - the curve is the same, and so is every gesture
+  // that edits it - carrying the id swarms name it by.
+  const fireflyPaths = (data.fireflyPaths ?? []).map(
+    (p): EdItem => ({
+      ...camPathItem(p),
+      layer: "fireflies",
+      ...newItemStyle("fireflies", "collision"),
+      cam: defaultCamera(),
+      pathId: p.id,
+    }),
+  );
 // One light OBJECT as the editor item that edits it. The lights layer is a view
 // over light objects wherever they live rather than a list of its own: a light
 // with no fitting is a body containing only this, and a lamp's light is this
@@ -1645,6 +1972,7 @@ function lightItem(
   rot: number,
   bodyId: number,
 ): EdItem {
+  const d = lightDefaultsFor(l.kind !== "spot" && (l.fireflies ?? 0) > 0);
   return {
     id: newBodyId(),
     layer: "scene",
@@ -1656,8 +1984,8 @@ function lightItem(
     // spot's aim: the direction is authored in the object's own frame.
     rot,
     // The reach IS the shape - see `EdLight`.
-    shape: { kind: "circle", r: l.range ?? DEFAULT_LIGHT_RANGE },
-    color: l.color ?? DEFAULT_LIGHT_COLOR,
+    shape: { kind: "circle", r: l.range ?? d.range },
+    color: l.color ?? d.color,
     opacity: LIGHT_FILL_OPACITY,
     friction: DEFAULT_SURFACE_FRICTION,
     bounce: DEFAULT_BOUNCE,
@@ -1700,7 +2028,7 @@ function lightItem(
     cam: defaultCamera(),
     light: {
       kind: l.kind ?? "point",
-      intensity: l.intensity ?? DEFAULT_LIGHT_INTENSITY,
+      intensity: l.intensity ?? d.intensity,
       z: l.z ?? DEFAULT_LIGHT_Z,
       angle: l.angle ?? DEFAULT_SPOT_ANGLE,
       penumbra: l.penumbra ?? DEFAULT_SPOT_PENUMBRA,
@@ -1709,9 +2037,18 @@ function lightItem(
       castShadow: l.castShadow === true,
       shadowNear: l.shadowNear ?? null,
       flicker: l.flicker ?? 0,
+      beam: l.beam ?? 0,
+      dust: l.dust ?? 0,
+      wake: l.wake ?? 0,
+      wakeDelay: l.wakeDelay ?? null,
+      wakeRise: l.wakeRise ?? null,
+      wakeFall: l.wakeFall ?? null,
+      fireflies: l.fireflies ?? 0,
+      path: l.path ?? null,
     },
     note: defaultNote(),
     anchorId: 0,
+    pathId: 0,
     matchId: 0,
   };
 }
@@ -1772,6 +2109,7 @@ function lightItem(
     cam: defaultCamera(),
     light: defaultLight(),
     anchorId: 0,
+    pathId: 0,
     matchId: 0,
     note,
   });
@@ -1856,7 +2194,7 @@ function lightItem(
       roll: data.player.roll ?? 0,
       arrival: data.player.arrival ?? "",
     },
-    items: [...bodies, ...regions, ...camPaths, ...notes],
+    items: [...bodies, ...regions, ...camPaths, ...fireflyPaths, ...notes],
     chains,
     vines,
     // Only the bodies whose file frame is somewhere no object sits. Everything
@@ -1969,6 +2307,28 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
   const cameraPaths: CameraPathData[] = model.items
     .filter((i) => i.layer === "camera" && i.shape.kind === "path")
     .map(pathDataOf);
+
+  // A firefly path is the camera path's curve with its id and nothing else: an
+  // item on the fireflies layer never carries keys, and none are written.
+  const fireflyPaths: FireflyPathData[] = model.items
+    .filter((i) => i.layer === "fireflies" && i.shape.kind === "path")
+    .map((i) => {
+      const { x, y, rot, verts } = pathDataOf(i);
+      return {
+        id: i.pathId,
+        x,
+        y,
+        rot,
+        verts: verts.map((v) => ({
+          x: v.x,
+          y: v.y,
+          ...(v.inX !== undefined ? { inX: v.inX } : {}),
+          ...(v.inY !== undefined ? { inY: v.inY } : {}),
+          ...(v.outX !== undefined ? { outX: v.outX } : {}),
+          ...(v.outY !== undefined ? { outY: v.outY } : {}),
+        })),
+      };
+    });
 
   const cameraRegions: CameraRegionData[] = model.items
     .filter((i) => i.layer === "camera" && i.shape.kind !== "path")
@@ -2086,9 +2446,12 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
     };
 
     const objects: SceneObjectData[] = [];
+    // Where each item's object landed in `objects`, for a patch naming its host.
+    const indexOfItem = new Map<number, number>();
     // Every object written goes through this, so one cannot reach the file
     // without `itemOf` recording which item wrote it.
     const emit = (item: EdItem, o: SceneObjectData): void => {
+      indexOfItem.set(item.id, objects.length);
       objects.push(o);
       itemOf?.set(o, item.id);
     };
@@ -2102,6 +2465,9 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
       if (i.object === "light") {
         const d = defaultLight();
         const spot = i.light.kind === "spot";
+        // Against the defaults the renderer will fill in, which for a swarm
+        // are the firefly's rather than a lamp's.
+        const fill = lightDefaultsFor(!spot && i.light.fireflies > 0);
         emit(i, {
           type: "light",
           ...localOf(i),
@@ -2109,12 +2475,12 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
           // what was authored - the rule every other list here is written under.
           ...(spot ? { kind: "spot" as const } : {}),
           ...(i.light.z !== d.z ? { z: i.light.z } : {}),
-          ...(i.color !== DEFAULT_LIGHT_COLOR ? { color: i.color } : {}),
-          ...(i.light.intensity !== d.intensity ? { intensity: i.light.intensity } : {}),
+          ...(i.color !== fill.color ? { color: i.color } : {}),
+          ...(i.light.intensity !== fill.intensity ? { intensity: i.light.intensity } : {}),
           // The reach lives in the shape (see `EdLight`). A light whose item is
           // not a circle cannot happen through any edit path, but the fallback
           // keeps the write total rather than saving a light with no reach.
-          ...(i.shape.kind === "circle" && i.shape.r !== DEFAULT_LIGHT_RANGE
+          ...(i.shape.kind === "circle" && i.shape.r !== fill.range
             ? { range: i.shape.r }
             : {}),
           // The cone and its aim mean nothing on a point light, and a field on
@@ -2136,6 +2502,32 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
             ? { shadowNear: i.light.shadowNear }
             : {}),
           ...(i.light.flicker !== 0 ? { flicker: i.light.flicker } : {}),
+          // A beam is a spot's cone made visible, so - like the cone itself -
+          // it is written only for a spot, and only when it is there at all.
+          ...(spot && i.light.beam !== 0 ? { beam: i.light.beam } : {}),
+          ...(spot && i.light.dust !== 0 ? { dust: i.light.dust } : {}),
+          // A waking light is point-only (the pool is point lights), so - like
+          // the beam on a point light - none of it is written for a spot, and
+          // the times only with a trigger to time.
+          ...(!spot && i.light.wake > 0
+            ? {
+                wake: i.light.wake,
+                // A swarm never reads them (see `LightObjectData.fireflies`).
+                ...(i.light.fireflies > 0
+                  ? {}
+                  : {
+                      ...(i.light.wakeDelay !== null ? { wakeDelay: i.light.wakeDelay } : {}),
+                      ...(i.light.wakeRise !== null ? { wakeRise: i.light.wakeRise } : {}),
+                      ...(i.light.wakeFall !== null ? { wakeFall: i.light.wakeFall } : {}),
+                    }),
+              }
+            : {}),
+          // A swarm is point-only, like the wake it notices the ball by.
+          ...(!spot && i.light.fireflies > 0 ? { fireflies: i.light.fireflies } : {}),
+          // ...and so is the path it guides the player along.
+          ...(!spot && i.light.fireflies > 0 && i.light.path !== null
+            ? { path: i.light.path }
+            : {}),
         });
         continue;
       }
@@ -2189,6 +2581,21 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
           : {}),
         ...(ownFill ? { color: i.color, opacity: i.opacity } : {}),
       });
+    }
+    // Every patch names its host by where the host was just written, now that
+    // the whole body's order is settled. A host that is no longer a geometry
+    // object in this body (deleted, split off, never there) writes no index,
+    // which is what a patch with no host loads from.
+    for (const i of run) {
+      const hostId = i.visual.generator?.patch?.hostId;
+      if (i.object !== "geometry" || !hostId || hostId === i.id) continue;
+      const k = indexOfItem.get(hostId);
+      const own = objects[indexOfItem.get(i.id)!];
+      if (k === undefined || objects[k]!.type !== "geometry" || !own || own.type !== "geometry") continue;
+      const g = own.generator!;
+      // The host first, as the file has always ordered it, then the loop and
+      // its facing as `patchData` wrote them.
+      own.generator = { ...g, patch: { host: k, ...g.patch! } };
     }
 
     return {
@@ -2423,6 +2830,7 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
     // authored before camera regions (or notes) byte-identical.
     ...(cameraRegions.length ? { cameraRegions } : {}),
     ...(cameraPaths.length ? { cameraPaths } : {}),
+    ...(fireflyPaths.length ? { fireflyPaths } : {}),
     // Written back verbatim. It is not derived from anything in the item list,
     // so there is nothing to rebuild - and leaving it out is not "the editor
     // does not support it", it is the editor DELETING a level's lighting the
@@ -3301,6 +3709,7 @@ export function bodyLabel(members: readonly EdItem[]): string {
   if (!first) return "empty";
   if (first.object === "light") return "light";
   if (first.layer === "camera") return "camera";
+  if (first.layer === "fireflies") return "fireflies";
   if (first.layer === "notes") return first.note.kind === "checkpoint" ? "checkpoint" : "note";
   return "decor";
 }
@@ -3324,6 +3733,8 @@ export function objectLabel(item: EdItem, metresToPx: number): string {
     return item.note.kind === "arrow" ? "arrow" : "text";
   }
   if (item.layer === "camera") return item.shape.kind === "path" ? "path" : "region";
+  // A firefly path is named by the number swarms name it by.
+  if (item.layer === "fireflies") return `firefly path ${item.pathId}`;
   const form =
     item.shape.kind === "rect"
       ? `${n(item.shape.w)}×${n(item.shape.h)}`
@@ -3366,7 +3777,7 @@ export function shapeArea(item: EdItem): number {
   // the body's mass are the one answer. A camera path is not a piece of a body
   // and nothing weighs it, which its own zero area says.
   if (item.shape.kind === "path") {
-    if (item.layer === "camera") return 0;
+    if (item.layer !== "scene") return 0;
     return strokeCurve(pathNodes(item), item.shape.width).pieces.reduce(
       (a, piece) => a + Math.abs(polySignedArea2(piece)) / 2,
       0,
@@ -4333,6 +4744,7 @@ export function emptyModel(): EdModel {
         light: defaultLight(),
         note: defaultNote(),
         anchorId: 0,
+        pathId: 0,
         matchId: 0,
       },
     ],

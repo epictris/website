@@ -83,6 +83,7 @@
 // kind on the way through would be a field that forgets.
 import { dmath } from "../engine/dmath";
 import { LAYER_HOOK, LAYER_PLAYER, LAYER_ROPE, MASK_ALL } from "../engine/body";
+import { loadSchema, scaleParams, type GeneratorKind, type ParamValues } from "./generatorParams";
 
 export type BodyKind = "static" | "killzone" | "rigid" | "force" | "water" | "finish";
 
@@ -811,6 +812,60 @@ export interface GeometryObjectData extends ObjectPlacement {
   // shifted by `tileOffset` - so the glow lands on the same grid as the surface
   // under it.
   emissiveTexture?: string;
+  // This object's mesh is GENERATED, and this is what it is generated from (see
+  // `GeneratorData`). `mesh` is then the key of the generated file, derived from
+  // this block, so the file says what the mesh is and "stale" is a comparison.
+  // Absent on every hand-placed object, which is every object authored before it.
+  generator?: GeneratorData;
+}
+
+// What a generated geometry object is generated FROM: which generator, the
+// version of its parameter schema, and the parameters that differ from that
+// schema's defaults (`tools/blender/<kind>/params.json`). A mushroom patch also
+// carries the loop it was painted inside and the object it grows on.
+//
+// It is appearance and nothing else, like every field on a geometry object: the
+// body collides with its collision objects, and a regenerated rock is the same
+// rock to the sim.
+//
+// A boulder's other input is the object's own `shape`, read in its own frame -
+// the outline the rock is fitted to - so there is nothing to store for it here.
+export interface GeneratorData {
+  kind: GeneratorKind;
+  version: number;
+  // Only the values that differ from the schema's defaults. A parameter whose
+  // schema unit is "m" is a length, pixels on disk and metres in the sim, and
+  // `scaleObject` converts it; every other value passes through untouched.
+  params?: ParamValues;
+  patch?: GeneratorPatchData;
+}
+
+// A mushroom patch's painted loop and the object it was painted on.
+export interface GeneratorPatchData {
+  // The index, within this body's `objects`, of the geometry object the patch
+  // grows on. An index rather than a name because objects have none; the
+  // editor re-resolves it on every load and rewrites it on every save, so a
+  // reordered body cannot leave it pointing at the wrong object. Absent (or an
+  // index naming no geometry object) is a patch whose host is gone: the loop is
+  // kept, and nothing can be regenerated until it is given one.
+  host?: number;
+  // The loop, in THIS object's own frame (the frame its `shape` is in): x and y
+  // as a shape's vertices are, and z off this object's own `z`, toward the
+  // camera. Lengths, so pixels on disk and metres in the sim.
+  //
+  // The object's frame rather than the body's, because the body's frame moves
+  // under its objects (the editor re-origins a body onto its centre of mass),
+  // and a loop stated in it would have to be rewritten - through a rotation, so
+  // not exactly - every time that happened. The generated mesh is placed in
+  // this frame anyway.
+  points: { x: number; y: number; z: number }[];
+  // Which side of the loop's plane the loop was painted on: a unit vector in
+  // this object's frame (y down, as the points), the mean of the normals of the
+  // faces it was clicked on. A direction, so it is NOT scaled with the lengths.
+  // Absent in a file saved before it was stored; the editor then guesses the
+  // side from the host's middle, which a loop near a wide face's edge can get
+  // wrong.
+  facing?: { x: number; y: number; z: number };
 }
 
 // A LIGHT: a torch on a wall, a shaft coming down through a grate, the glow off
@@ -923,8 +978,91 @@ export interface LightObjectData extends ObjectPlacement {
   //
   // The LIGHT flickers and the emission does not: a material is shared and
   // cached between every geometry that asked for the same surface (`assets.ts`),
-  // so what can move per lamp is the light.
+  // so what can move per lamp is the light. (A waking light's body is the one
+  // exception: it wears its own copies, and their emission follows the wake -
+  // see `wake` below.)
   flicker?: number;
+  // Spot only. How visible the lit AIR inside the cone is, 0 (invisible, as
+  // every spot authored before the field) .. 1. Absent = 0.
+  //
+  // The beam IS the spot, made visible: a cone of lit air along the spot's own
+  // aim, as long as its `range` and as wide as its `angle`, softened at the
+  // edge by its `penumbra`, in its colour, flickering with it - so a shaft of
+  // daylight is one authored thing that cannot drift off its own light. It is
+  // NOT occluded by geometry: a shaft that should stop at a floor is authored
+  // with a `range` that stops there, and `castShadow` is what gives the pool on
+  // the floor and the shadow of anything hanging in it. There is no switch for
+  // it to look for.
+  //
+  // RENDER-ONLY and driven by the WALL CLOCK, like `flicker`: the rays drift
+  // with a clock the renderer is handed, and nothing here reaches the sim.
+  // Dimensionless, so `scaleLevelData` passes it through untouched.
+  beam?: number;
+  // Spot only. How thick the dust drifting in the beam is, 0 (none) .. 1.
+  // Absent = 0. The motes live inside the cone whether or not `beam` is set, lit
+  // in the light's colour and dimmer toward the cone's edge. Render-only and
+  // wall-clock driven, like `beam`; dimensionless, so never scaled.
+  dust?: number;
+  // Point only. A WAKING light: dark until the ball comes within this distance
+  // of it on the gameplay plane, then rising to `intensity`, and going dark
+  // again once the ball has left. Absent (or 0) = a light that is always on,
+  // which is every light authored before the field. A length like `range`,
+  // converted on load the same way.
+  //
+  // The emission of every glowing geometry object in the same body follows the
+  // light, so a mushroom's cap brightens with the light it throws; a shape with
+  // no `emissive` in that body (the stalk) is left alone. RENDER-ONLY and driven
+  // by the wall clock, like `flicker`: the renderer reads the ball's position
+  // and writes nothing back, so no replay can diverge on it.
+  //
+  // Waking lights mount no light of their own. They share a small fixed POOL
+  // (`GLOW_POOL` in `render3d/glow.ts`), handed each frame to the awake sources
+  // NEAREST THE BALL, so the scene's light count never changes while a level is
+  // played (a light coming and going would recompile every lit material on a
+  // played frame). A level with more awake sources than the pool leaves the
+  // furthest dark: the budget is spent by distance rather than by authored
+  // order, which is the right order for a light that only matters near the
+  // player. They cast no shadow (`castShadow` is ignored): a point light's
+  // shadow is six renders, and a map handed between sources as they swap would
+  // flash.
+  wake?: number;
+  // Seconds after the ball comes within `wake` before the light starts to rise.
+  // Absent = 0. A ball that leaves before it has passed wakes nothing.
+  wakeDelay?: number;
+  // Seconds from dark to full. Absent = DEFAULT_WAKE_RISE; 0 is instant.
+  wakeRise?: number;
+  // Seconds from full to dark once the ball has left (beyond `wake` by the
+  // renderer's hysteresis, so a ball resting on the edge does not strobe).
+  // Absent = DEFAULT_WAKE_FALL; 0 is instant.
+  wakeFall?: number;
+  // Point only. A FIREFLY SWARM of this many glowing motes (capped at
+  // `FIREFLY_MAX`), hovering about the light's placement - its home - until the
+  // ball comes within `wake` of it (absent = `DEFAULT_FIREFLY_NOTICE`), and
+  // from then on following the ball for the rest of the run, looping and
+  // swirling around it. Absent (or 0) = an ordinary light. Dimensionless.
+  //
+  // The light IS the swarm's: `color`, `intensity`, `range` and `flicker` are
+  // the swarm's light, hung at its motes' centroid wherever they fly, and `z`
+  // is the height of its home. Absent, the colour and intensity are the
+  // firefly's own (`FIREFLY_COLOR`, `FIREFLY_INTENSITY`), not a lamp's.
+  // `wakeDelay`, `wakeRise` and `wakeFall` are not read: a swarm is always
+  // lit, and it is its presence that the ball gains. Like a waking light it is
+  // served by a small fixed POOL (`FIREFLY_POOL` in `render3d/fireflies.ts`)
+  // handed to the swarms nearest the ball, and it casts no shadow.
+  //
+  // RENDER-ONLY and driven by the wall clock, like `wake`: the renderer reads
+  // the ball's position and writes nothing back, so no replay can diverge on
+  // it. Its purpose is that the player is always lit, by something the world
+  // gave them rather than a light they carry.
+  fireflies?: number;
+  // Swarm only: the `id` of the FIREFLY PATH (`FireflyPathData`) the swarm
+  // guides the player along, instead of the level's camera paths. When the
+  // player reaches that path's end the swarm stops following, flies back along
+  // the path to its start and waits there, noticing the player again once they
+  // have left its `wake` ring and come back into it. Absent = the camera paths,
+  // followed for the rest of the run. An id naming no path is warned about and
+  // treated as absent. An id, not a length.
+  path?: number;
 }
 
 // A named point ON a body, and the only thing a chain end ties to.
@@ -1972,6 +2110,28 @@ export interface CameraPathData {
   priority?: number;
 }
 
+// One node of a firefly path: a camera path's node without the keys, since a
+// firefly path carries no framing to key.
+export type FireflyPathVert = Pick<CameraPathVert, "x" | "y" | "inX" | "inY" | "outX" | "outY">;
+
+// A FIREFLY PATH: the route a swarm guides the player along, authored apart
+// from the camera's (see `LightObjectData.path`, which names it by `id`, and
+// "Fireflies" in docs/lighting-and-surfaces.md). The same curve as a camera
+// path - local verts under (x, y, rot), cubic Bézier handles, >= 2 distinct
+// nodes, node order the way forward - and nothing else: it frames nothing.
+//
+// Its END is where the swarm leaves the player, and its START is where the
+// swarm goes back to wait. RENDER-ONLY, like everything about fireflies.
+export interface FireflyPathData {
+  // Unique across the level's firefly paths; what a swarm names it by, so
+  // reordering the list re-ties nothing.
+  id: number;
+  x: number;
+  y: number;
+  rot: number;
+  verts: FireflyPathVert[];
+}
+
 // Default glyph height of a text note, in scene pixels.
 export const DEFAULT_NOTE_TEXT_SIZE = 12;
 
@@ -2337,6 +2497,9 @@ export interface LevelData {
   // Camera paths (see CameraPathData). Absent = the rule set is regions-only,
   // which is every level authored before this field.
   cameraPaths?: CameraPathData[];
+  // The routes firefly swarms guide the player along (see FireflyPathData).
+  // Render-only. Absent = none, and every swarm reads the camera paths.
+  fireflyPaths?: FireflyPathData[];
   // Editor-only annotations (see NoteData). Never read by the sim or the game
   // renderer, so a level plays identically with or without them.
   notes?: NoteData[];
@@ -2482,6 +2645,7 @@ export interface RawLevelData {
   lights?: LegacyLightData[];
   cameraRegions?: CameraRegionData[];
   cameraPaths?: CameraPathData[];
+  fireflyPaths?: FireflyPathData[];
   notes?: NoteData[];
   checkpoints?: CheckpointData[];
   chains?: (ChainData | LegacyChainData)[];
@@ -3193,6 +3357,20 @@ export function scaleObject(o: SceneObjectData, factor: number): SceneObjectData
       // A length, like `range`: the shadow camera's near plane.
       ...(o.shadowNear !== undefined ? { shadowNear: o.shadowNear * factor } : {}),
       ...(o.flicker !== undefined ? { flicker: o.flicker } : {}),
+      // How visible the lit air is and how thick the dust in it: fractions,
+      // not lengths.
+      ...(o.beam !== undefined ? { beam: o.beam } : {}),
+      ...(o.dust !== undefined ? { dust: o.dust } : {}),
+      // The trigger distance is a length, like `range`; the three times are
+      // seconds, which are not.
+      ...(o.wake !== undefined ? { wake: o.wake * factor } : {}),
+      ...(o.wakeDelay !== undefined ? { wakeDelay: o.wakeDelay } : {}),
+      ...(o.wakeRise !== undefined ? { wakeRise: o.wakeRise } : {}),
+      ...(o.wakeFall !== undefined ? { wakeFall: o.wakeFall } : {}),
+      // A count.
+      ...(o.fireflies !== undefined ? { fireflies: o.fireflies } : {}),
+      // An id.
+      ...(o.path !== undefined ? { path: o.path } : {}),
     };
   }
   return {
@@ -3234,6 +3412,30 @@ export function scaleObject(o: SceneObjectData, factor: number): SceneObjectData
     ...(o.emissive !== undefined ? { emissive: o.emissive } : {}),
     ...(o.emissiveIntensity !== undefined ? { emissiveIntensity: o.emissiveIntensity } : {}),
     ...(o.emissiveTexture !== undefined ? { emissiveTexture: o.emissiveTexture } : {}),
+    ...(o.generator !== undefined ? { generator: scaleGenerator(o.generator, factor) } : {}),
+  };
+}
+
+// A generator block's lengths are its length PARAMETERS, by the schema's unit,
+// and a patch's loop, which is a set of positions. The kind, the version, the
+// flags, the counts, the angles, the host's index and the loop's facing (a
+// direction) are not lengths. Always a copy, like every other nested thing
+// `scaleObject` returns.
+function scaleGenerator(g: GeneratorData, factor: number): GeneratorData {
+  const f = g.patch?.facing;
+  return {
+    kind: g.kind,
+    version: g.version,
+    ...(g.params !== undefined ? { params: scaleParams(g.params, loadSchema(g.kind), factor) } : {}),
+    ...(g.patch !== undefined
+      ? {
+          patch: {
+            ...(g.patch.host !== undefined ? { host: g.patch.host } : {}),
+            points: g.patch.points.map((p) => ({ x: p.x * factor, y: p.y * factor, z: p.z * factor })),
+            ...(f !== undefined ? { facing: { x: f.x, y: f.y, z: f.z } } : {}),
+          },
+        }
+      : {}),
   };
 }
 
@@ -3409,6 +3611,43 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
     ...(v.viscosity !== undefined ? { viscosity: v.viscosity } : {}),
     ...(v.color !== undefined ? { color: v.color } : {}),
   }));
+  // A firefly path is the camera path's curve alone: its placement, its nodes
+  // and their handles are lengths, `rot` and `id` are not. Degenerate ones are
+  // dropped here for the camera path's reason, as are repeated ids - the first
+  // keeps the id, since a swarm naming it cannot say which it meant.
+  const fireflyIds = new Set<number>();
+  const fireflyPaths = data.fireflyPaths
+    ?.filter((p, i) => {
+      const distinct = p.verts?.some((v) => v.x !== p.verts[0]!.x || v.y !== p.verts[0]!.y);
+      if ((p.verts?.length ?? 0) < 2 || !distinct) {
+        console.warn(
+          `[fireflies] fireflyPaths[${i}] (id ${p.id}) at (${p.x}, ${p.y}) has fewer than 2 distinct verts; dropped.`,
+        );
+        return false;
+      }
+      if (fireflyIds.has(p.id)) {
+        console.warn(`[fireflies] fireflyPaths[${i}] repeats id ${p.id}; dropped.`);
+        return false;
+      }
+      fireflyIds.add(p.id);
+      return true;
+    })
+    .map(
+      (p): FireflyPathData => ({
+        id: p.id,
+        x: p.x * factor,
+        y: p.y * factor,
+        rot: p.rot,
+        verts: p.verts.map((v) => ({
+          x: v.x * factor,
+          y: v.y * factor,
+          ...(v.inX !== undefined ? { inX: v.inX * factor } : {}),
+          ...(v.inY !== undefined ? { inY: v.inY * factor } : {}),
+          ...(v.outX !== undefined ? { outX: v.outX * factor } : {}),
+          ...(v.outY !== undefined ? { outY: v.outY * factor } : {}),
+        })),
+      }),
+    );
   return {
     // A title and two flags: nothing in the block is a length, so it crosses
     // the conversion whole - copied rather than shared, like the environment
@@ -3416,6 +3655,7 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
     ...(data.meta ? { meta: { ...data.meta } } : {}),
     ...(regions ? { cameraRegions: regions } : {}),
     ...(paths ? { cameraPaths: paths } : {}),
+    ...(fireflyPaths ? { fireflyPaths } : {}),
     // Nothing in the environment block is a length (see EnvironmentData), so it
     // is copied rather than scaled - but copied, not shared, since everything
     // else here hands the caller a fresh object.

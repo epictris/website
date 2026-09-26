@@ -2525,8 +2525,10 @@ async function cmdPull(o: Record<string, string>): Promise<void> {
 // GPU, no canvas, no level - which is what lets the claim the whole 3D renderer
 // stands on be a number in the suite rather than a screenshot someone looked at.
 async function cmdRender3d(): Promise<void> {
-  const { runRender3dCases } = await import("../sim/render3dCases");
-  const results = runRender3dCases();
+  const { runRender3dCases, generatorJobCases } = await import("../sim/render3dCases");
+  // The job client's cases are the one asynchronous set: the client's fetches
+  // are promises, answered here by a scripted service.
+  const results = [...runRender3dCases(), ...(await generatorJobCases())];
   let failed = 0;
   for (const r of results) {
     console.log(`  ${r.pass ? "PASS" : "FAIL"}  ${r.name}`);
