@@ -68,8 +68,7 @@ function buildServer(ctx: ToolContext): Server {
       inputSchema: t.inputSchema as { type: "object" },
       annotations: {
         title: t.title,
-        readOnlyHint: t.readOnly === true,
-        destructiveHint: t.destructive === true,
+        readOnlyHint: true,
         // Only add_image reaches outside this server (to fetch a URL).
         openWorldHint: t.name === "add_image",
       },
