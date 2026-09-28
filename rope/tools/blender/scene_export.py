@@ -98,13 +98,37 @@ def skip_reason(ob, excluded):
     if data is not None and getattr(data, "library", None) is not None:
         return f"data linked from {os.path.basename(data.library.filepath)}"
     if ob.type not in EXPORTABLE:
-        return f"a {ob.type.lower()}"
+        kind = ob.type.lower()
+        return f"{'an' if kind[0] in 'aeiou' else 'a'} {kind}"
     for coll in ob.users_collection:
         if coll in excluded:
             return f"in collection {coll.name}"
     if ob.hide_render:
         return "hidden in render"
     return None
+
+
+def carries_vertex_color(node):
+    """Whether a Base Color source is glTF's COLOR_0 - a Color Attribute alone,
+    or one multiplied with an Image Texture (baseColorTexture x COLOR_0). This
+    is the shape Blender's glTF importer builds and its exporter writes back."""
+    if node.type == "VERTEX_COLOR":
+        return True
+    if node.type == "MIX" and node.data_type == "RGBA":
+        by_id = {i.identifier: i for i in node.inputs}
+        factor, inputs = by_id["Factor_Float"], [by_id["A_Color"], by_id["B_Color"]]
+    elif node.type == "MIX_RGB":
+        factor, inputs = node.inputs["Fac"], [node.inputs["Color1"], node.inputs["Color2"]]
+    else:
+        return False
+    if node.blend_type != "MULTIPLY" or factor.is_linked or factor.default_value != 1.0:
+        return False
+    if not all(i.is_linked for i in inputs):
+        return False
+    kinds = sorted(i.links[0].from_node.type for i in inputs)
+    return kinds == ["TEX_IMAGE", "VERTEX_COLOR"] and all(
+        i.links[0].from_node.image is not None for i in inputs if i.links[0].from_node.type == "TEX_IMAGE"
+    )
 
 
 def material_warnings(ob):
@@ -133,6 +157,8 @@ def material_warnings(ob):
                 # nothing.
                 if src.type == "NORMAL_MAP" and src.inputs["Color"].is_linked:
                     src = src.inputs["Color"].links[0].from_node
+                if socket_name == "Base Color" and carries_vertex_color(src):
+                    continue
                 if src.type != "TEX_IMAGE":
                     out.append(
                         f'{ob.name}: material "{mat.name}" wires {socket_name} to a {src.bl_label} node, '

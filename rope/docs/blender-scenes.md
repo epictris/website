@@ -78,6 +78,7 @@ The `.blend` files are raws under `assets-src/`, gitignored like every raw; publ
 ## What Blender cannot carry
 
 - **Procedural materials.** glTF carries a Principled BSDF with image textures and nothing else; a Base Color wired to a noise, a colour ramp or a mix exports as a flat colour.
+  The one exception is vertex colour: a Color Attribute on Base Color, alone or multiplied (factor 1) with an Image Texture, goes out as `COLOR_0`, which is the shape Blender's glTF importer builds for an imported model.
   The exporter warns about every such socket (`meta.json`'s `warnings`, printed by the recipe).
   Bake it to an image, or texture with images to begin with.
 - **Lights.** The level's own lights carry glow and beam semantics and a budget (see [lighting-and-surfaces](lighting-and-surfaces.md)); a Blender light is dropped.
