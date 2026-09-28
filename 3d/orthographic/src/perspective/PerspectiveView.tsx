@@ -67,6 +67,7 @@ type Drag = {
 export function PerspectiveView() {
   let body!: HTMLDivElement;
   let canvas!: HTMLCanvasElement;
+  let outlineCanvas!: HTMLCanvasElement;
   const [gate, setGate] = createSignal<[number, number]>([1, 1], { equals: (a, b) => a[0] === b[0] && a[1] === b[1] });
   const [failure, setFailure] = createSignal<string | null>(null);
   const [labels, setLabels] = createSignal<{ id: string; x: number; y: number; color: string }[]>([]);
@@ -108,7 +109,8 @@ export function PerspectiveView() {
   function draw() {
     if (!renderer) return;
     const input = renderInput();
-    const m = renderer.render(input);
+    // Over a reference image, the solids' outlines are drawn above it at full opacity.
+    const m = renderer.render(input, overlay() ? outlineCanvas : undefined);
     if (!state.display.labels) {
       setLabels([]);
       return;
@@ -157,6 +159,7 @@ export function PerspectiveView() {
         state.scene.size.join(),
         ui.selected.join(),
         gate().join(),
+        !!overlay(),
       ],
       () => {
         layout();
@@ -412,6 +415,7 @@ export function PerspectiveView() {
               )}
             </Show>
           </div>
+          <canvas ref={outlineCanvas} id="pOutline" style={{ display: overlay() ? "block" : "none" }} />
           <div id="pLabels">
             <For each={labels()}>
               {(l) => (

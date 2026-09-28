@@ -3,8 +3,9 @@ import { focalToFov, fovToFocal } from "../orthographic/src/core/camera";
 import { addObject, moveObjects, setCamera, setOutline, setReference } from "../orthographic/src/core/commands";
 import { fromDocument, geometryIssues, toDocument, validateDocument } from "../orthographic/src/core/document";
 import { base64ToBytes, imageSize } from "../orthographic/src/core/images";
+import { buildMesh } from "../orthographic/src/core/mesher";
 import { initialState } from "../orthographic/src/core/model";
-import { worldRing } from "../orthographic/src/core/ring";
+import { presetOutlines, worldRing } from "../orthographic/src/core/ring";
 import type { ImageAsset } from "../orthographic/src/core/types";
 
 const box = (x0: number, x1: number, y0: number, y1: number, z0: number, z1: number) => ({
@@ -314,5 +315,33 @@ describe("image headers", () => {
     );
     expect(imageSize(webp)).toEqual({ width: 1600, height: 900 });
     expect(imageSize(bytes("not an image"))).toBeNull();
+  });
+});
+
+describe("mesher", () => {
+  test("solids are closed, with no zero-area triangles (T-junctions crack on the GPU)", () => {
+    for (const p of ["box", "ellipsoid", "cylinder", "rock"] as const) {
+      const m = buildMesh(presetOutlines(p), 40);
+      const edges = new Map<string, number>();
+      const idx = m.indices;
+      const at = (k: number) => [m.pos[k * 3], m.pos[k * 3 + 1], m.pos[k * 3 + 2]];
+      for (let i = 0; i < idx.length; i += 3) {
+        const t = [idx[i], idx[i + 1], idx[i + 2]];
+        for (const [a, b] of [
+          [t[0], t[1]],
+          [t[1], t[2]],
+          [t[2], t[0]],
+        ]) {
+          const key = a < b ? `${a},${b}` : `${b},${a}`;
+          edges.set(key, (edges.get(key) ?? 0) + 1);
+        }
+        const [A, B, C] = t.map(at);
+        const ab = B.map((v, j) => v - A[j]);
+        const ac = C.map((v, j) => v - A[j]);
+        const cross = [ab[1] * ac[2] - ab[2] * ac[1], ab[2] * ac[0] - ab[0] * ac[2], ab[0] * ac[1] - ab[1] * ac[0]];
+        expect(cross.some((v) => v !== 0)).toBe(true);
+      }
+      expect([...edges.values()].every((n) => n === 2)).toBe(true);
+    }
   });
 });

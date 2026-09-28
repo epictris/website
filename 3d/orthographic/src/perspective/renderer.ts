@@ -51,6 +51,54 @@ void main(){vec3 n=normalize(vNormal);if(!gl_FrontFacing)n=-n;vec3 eye=normalize
 float fill=max(dot(n,normalize(vec3(0.7,0.35,0.3))),0.0);float front=max(dot(n,eye),0.0);float rim=pow(1.0-abs(dot(n,eye)),3.0);
 float shade=0.34+0.40*key+0.19*fill+0.11*front;vec3 col=mix(uColor,uColor*shade+vec3(0.07)*rim,uLit);col=mix(col,vec3(0.81,1.0,0.94),uSelected*.24);gl_FragColor=vec4(col,uAlpha);}`;
 
+// ---- Outlines --------------------------------------------------------------------------
+// The solids' outlines, drawn above the reference image at full opacity so the
+// geometry stays readable however opaque the reference is. A hidden pass
+// renders each pixel's object id with depth; the edge pass then draws a line
+// on the nearer side wherever the object changes (silhouettes against the
+// background or another object) or the depth jumps (an object hiding part of
+// itself). Where two objects meet at the same depth (touching or intersecting)
+// the line goes on the higher id's side, so depth noise cannot dither it.
+// Creases are not drawn: the reconstructed meshes bevel sharp edges
+// into bands of small facets, which read as broken, speckled lines.
+
+const OUTLINE_GEOMETRY = `precision mediump float;uniform float uId;
+void main(){gl_FragColor=vec4(0.0,0.0,floor(uId/256.0)/255.0,mod(uId,256.0)/255.0);}`;
+
+const OUTLINE_VERTEX = `attribute vec2 aCorner;varying vec2 vUv;void main(){vUv=aCorner*0.5+0.5;gl_Position=vec4(aCorner,0.0,1.0);}`;
+
+const OUTLINE_EDGES = `#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
+precision mediump float;
+#endif
+uniform sampler2D uG;uniform sampler2D uD;uniform sampler2D uPal;uniform vec2 uStep;uniform float uNear;uniform float uFar;varying vec2 vUv;
+float idAt(vec2 uv){vec4 g=texture2D(uG,uv);return floor(g.b*255.0+0.5)*256.0+floor(g.a*255.0+0.5);}
+float depthAt(vec2 uv){float z=texture2D(uD,uv).r*2.0-1.0;return 2.0*uNear*uFar/(uFar+uNear-z*(uFar-uNear));}
+float ids(vec2 off,float id,float z){float other=idAt(vUv+off);if(other==id)return 0.0;if(other<0.5)return 1.0;
+float zo=depthAt(vUv+off);return zo>z*1.004||(zo>=z*0.996&&id>other)?1.0:0.0;}
+float fold(vec2 off,float id,float z){vec2 a=vUv+off;vec2 b=vUv-off;if(idAt(a)!=id||idAt(b)!=id)return 0.0;
+float za=depthAt(a);float zb=depthAt(b);return abs(za+zb-2.0*z)>0.03*z&&z<max(za,zb)-0.015*z?1.0:0.0;}
+void main(){float id=idAt(vUv);if(id<0.5){gl_FragColor=vec4(0.0);return;}
+float z=depthAt(vUv);vec2 dx=vec2(uStep.x,0.0);vec2 dy=vec2(0.0,uStep.y);
+float e=ids(dx,id,z)+ids(-dx,id,z)+ids(dy,id,z)+ids(-dy,id,z)+fold(dx,id,z)+fold(dy,id,z);
+if(e<0.5){gl_FragColor=vec4(0.0);return;}
+vec4 pal=texture2D(uPal,vec2((id-0.5)/512.0,0.5));gl_FragColor=vec4(mix(pal.rgb,vec3(1.0),pal.a*0.6),1.0);}`;
+
+interface OutlineGl {
+  geometry: WebGLProgram;
+  edges: WebGLProgram;
+  corners: WebGLBuffer;
+  fbo: WebGLFramebuffer;
+  color: WebGLTexture;
+  depth: WebGLTexture;
+  palette: WebGLTexture;
+  size: [number, number];
+}
+
+/** Palette slots: object ids are 1..MAX_PALETTE (the scene limit is lower). */
+const MAX_PALETTE = 511;
+
 export class PerspectiveRenderer {
   readonly software: boolean;
   private gl: WebGLRenderingContext | null = null;
@@ -59,12 +107,15 @@ export class PerspectiveRenderer {
   private loc: Record<string, WebGLUniformLocation | number> = {};
   private gpu = new Map<string, GpuMesh>();
   private grid: { key: string; buffer: WebGLBuffer | null; count: number } = { key: "", buffer: null, count: 0 };
+  /** Created on first use; null when the GPU lacks what outlines need. */
+  private outlineGl: OutlineGl | null | undefined;
   onContextLost: (() => void) | null = null;
 
   constructor(readonly canvas: HTMLCanvasElement) {
     const gl = canvas.getContext("webgl", {
       antialias: true,
-      alpha: false,
+      // The outline pass is copied out with a transparent background (see renderOutlinesGl).
+      alpha: true,
       preserveDrawingBuffer: true,
       powerPreference: "high-performance",
     });
@@ -84,8 +135,8 @@ export class PerspectiveRenderer {
     }
   }
 
-  private initGl(gl: WebGLRenderingContext) {
-    gl.getExtension("OES_element_index_uint");
+  private link(vertex: string, fragment: string): WebGLProgram {
+    const gl = this.gl!;
     const compile = (type: number, code: string) => {
       const s = gl.createShader(type)!;
       gl.shaderSource(s, code);
@@ -95,11 +146,17 @@ export class PerspectiveRenderer {
       return s;
     };
     const program = gl.createProgram()!;
-    gl.attachShader(program, compile(gl.VERTEX_SHADER, VERTEX));
-    gl.attachShader(program, compile(gl.FRAGMENT_SHADER, FRAGMENT));
+    gl.attachShader(program, compile(gl.VERTEX_SHADER, vertex));
+    gl.attachShader(program, compile(gl.FRAGMENT_SHADER, fragment));
     gl.linkProgram(program);
     if (!gl.getProgramParameter(program, gl.LINK_STATUS))
       throw new Error(gl.getProgramInfoLog(program) || "Shader link failed.");
+    return program;
+  }
+
+  private initGl(gl: WebGLRenderingContext) {
+    gl.getExtension("OES_element_index_uint");
+    const program = this.link(VERTEX, FRAGMENT);
     this.program = program;
     for (const n of ["aPosition", "aNormal"]) this.loc[n] = gl.getAttribLocation(program, n);
     for (const n of ["uVP", "uMin", "uSize", "uColor", "uEye", "uAlpha", "uLit", "uSelected"])
@@ -137,12 +194,155 @@ export class PerspectiveRenderer {
     });
   }
 
-  /** Draw at the canvas's current pixel size. */
-  render(input: RenderInput): CameraMatrices {
+  /**
+   * Draw at the canvas's current pixel size. With `outlines`, also draw the
+   * solids' outlines into that canvas (same pixel size), on a transparent background.
+   */
+  render(input: RenderInput, outlines?: HTMLCanvasElement): CameraMatrices {
     const m = cameraMatrices(input.camera);
+    if (outlines) {
+      if (outlines.width !== this.canvas.width || outlines.height !== this.canvas.height) {
+        outlines.width = this.canvas.width;
+        outlines.height = this.canvas.height;
+      }
+      const ctx = outlines.getContext("2d")!;
+      ctx.clearRect(0, 0, outlines.width, outlines.height);
+      if (this.software) this.outlinesSoftware(input, m, ctx);
+      else if (this.renderOutlinesGl(input, m)) ctx.drawImage(this.canvas, 0, 0);
+    }
     if (this.software) this.renderSoftware(input, m);
     else this.renderGl(input, m);
     return m;
+  }
+
+  /** Line width of outlines in canvas pixels. */
+  private outlineWidth() {
+    return Math.max(
+      1,
+      Math.round((1.5 * this.canvas.width) / Math.max(1, this.canvas.clientWidth || this.canvas.width)),
+    );
+  }
+
+  private initOutlines(): OutlineGl | null {
+    const gl = this.gl!;
+    if (!gl.getExtension("WEBGL_depth_texture")) return null;
+    const texture = () => {
+      const t = gl.createTexture()!;
+      gl.bindTexture(gl.TEXTURE_2D, t);
+      for (const [k, v] of [
+        [gl.TEXTURE_MIN_FILTER, gl.NEAREST],
+        [gl.TEXTURE_MAG_FILTER, gl.NEAREST],
+        [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE],
+        [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE],
+      ])
+        gl.texParameteri(gl.TEXTURE_2D, k, v);
+      return t;
+    };
+    const o: OutlineGl = {
+      geometry: this.link(VERTEX, OUTLINE_GEOMETRY),
+      edges: this.link(OUTLINE_VERTEX, OUTLINE_EDGES),
+      corners: this.buffer(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3])),
+      fbo: gl.createFramebuffer()!,
+      color: texture(),
+      depth: texture(),
+      palette: texture(),
+      size: [0, 0],
+    };
+    gl.bindTexture(gl.TEXTURE_2D, o.palette);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, MAX_PALETTE + 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    return o;
+  }
+
+  /** Draw the outlines into the canvas (transparent elsewhere). False when this GPU cannot. */
+  private renderOutlinesGl(input: RenderInput, m: CameraMatrices): boolean {
+    const gl = this.gl!;
+    if (this.outlineGl === undefined) this.outlineGl = this.initOutlines();
+    const o = this.outlineGl;
+    if (!o) return false;
+    const [w, h] = [this.canvas.width, this.canvas.height];
+    if (o.size[0] !== w || o.size[1] !== h) {
+      gl.bindTexture(gl.TEXTURE_2D, o.color);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+      gl.bindTexture(gl.TEXTURE_2D, o.depth);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.DEPTH_COMPONENT, w, h, 0, gl.DEPTH_COMPONENT, gl.UNSIGNED_INT, null);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, o.fbo);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, o.color, 0);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, o.depth, 0);
+      o.size = [w, h];
+    }
+    const objects = input.objects.slice(0, MAX_PALETTE);
+    // Object colours by id (1-based); alpha marks the selection.
+    const palette = new Uint8Array((MAX_PALETTE + 1) * 4);
+    objects.forEach((e, i) => {
+      palette.set(
+        hexColor(e.color).map((v) => Math.round(v * 255)),
+        i * 4,
+      );
+      palette[i * 4 + 3] = input.selected(e.id) ? 255 : 0;
+    });
+    gl.bindTexture(gl.TEXTURE_2D, o.palette);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, MAX_PALETTE + 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, palette);
+
+    // Pass 1: object id per pixel, with depth.
+    gl.bindFramebuffer(gl.FRAMEBUFFER, o.fbo);
+    gl.viewport(0, 0, w, h);
+    gl.clearColor(0, 0, 0, 0);
+    gl.depthMask(true);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    gl.enable(gl.DEPTH_TEST);
+    gl.disable(gl.BLEND);
+    gl.useProgram(o.geometry);
+    gl.uniformMatrix4fv(gl.getUniformLocation(o.geometry, "uVP"), false, new Float32Array(m.vp));
+    const aPosition = gl.getAttribLocation(o.geometry, "aPosition");
+    const aNormal = gl.getAttribLocation(o.geometry, "aNormal");
+    const uMin = gl.getUniformLocation(o.geometry, "uMin");
+    const uSize = gl.getUniformLocation(o.geometry, "uSize");
+    const uId = gl.getUniformLocation(o.geometry, "uId");
+    objects.forEach((e, i) => {
+      const g = this.gpu.get(e.id);
+      if (!g) return;
+      gl.bindBuffer(gl.ARRAY_BUFFER, g.vbo);
+      gl.enableVertexAttribArray(aPosition);
+      gl.vertexAttribPointer(aPosition, 3, gl.UNSIGNED_SHORT, true, 0, 0);
+      if (aNormal >= 0) {
+        gl.bindBuffer(gl.ARRAY_BUFFER, g.nbo);
+        gl.enableVertexAttribArray(aNormal);
+        gl.vertexAttribPointer(aNormal, 3, gl.BYTE, true, 0, 0);
+      }
+      gl.uniform3fv(uMin, e.min);
+      gl.uniform3fv(uSize, e.size);
+      gl.uniform1f(uId, i + 1);
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, g.ibo);
+      gl.drawElements(gl.TRIANGLES, g.count, g.indexType, 0);
+    });
+
+    // Pass 2: the edges, into the canvas.
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, w, h);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    gl.disable(gl.DEPTH_TEST);
+    gl.useProgram(o.edges);
+    const bind = (unit: number, t: WebGLTexture, name: string) => {
+      gl.activeTexture(gl.TEXTURE0 + unit);
+      gl.bindTexture(gl.TEXTURE_2D, t);
+      gl.uniform1i(gl.getUniformLocation(o.edges, name), unit);
+    };
+    bind(0, o.color, "uG");
+    bind(1, o.depth, "uD");
+    bind(2, o.palette, "uPal");
+    gl.activeTexture(gl.TEXTURE0);
+    const r = this.outlineWidth();
+    gl.uniform2f(gl.getUniformLocation(o.edges, "uStep"), r / w, r / h);
+    gl.uniform1f(gl.getUniformLocation(o.edges, "uNear"), input.camera.near);
+    gl.uniform1f(gl.getUniformLocation(o.edges, "uFar"), input.camera.far);
+    const aCorner = gl.getAttribLocation(o.edges, "aCorner");
+    gl.bindBuffer(gl.ARRAY_BUFFER, o.corners);
+    gl.enableVertexAttribArray(aCorner);
+    gl.vertexAttribPointer(aCorner, 2, gl.FLOAT, false, 0, 0);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.disableVertexAttribArray(aCorner);
+    gl.enable(gl.DEPTH_TEST);
+    return true;
   }
 
   private renderGl(input: RenderInput, m: CameraMatrices) {
@@ -154,7 +354,8 @@ export class PerspectiveRenderer {
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     gl.enable(gl.DEPTH_TEST);
     gl.enable(gl.BLEND);
-    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    // The canvas has an alpha channel (for the outline pass); keep the picture itself opaque.
+    gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
     gl.useProgram(this.program);
     gl.uniformMatrix4fv(L.uVP as WebGLUniformLocation, false, new Float32Array(m.vp));
     gl.uniform3fv(L.uEye as WebGLUniformLocation, input.camera.position);
@@ -236,6 +437,97 @@ export class PerspectiveRenderer {
   }
 
   // ---- Software rasteriser -----------------------------------------------------------
+
+  /** The outline pass without a GPU: the same rules as OUTLINE_EDGES, on CPU buffers. */
+  private outlinesSoftware(input: RenderInput, m: CameraMatrices, ctx: CanvasRenderingContext2D) {
+    const width = this.canvas.width;
+    const height = this.canvas.height;
+    const { near, far } = input.camera;
+    const ids = new Uint16Array(width * height);
+    const zbuf = new Float32Array(width * height).fill(Infinity);
+    const objects = input.objects.slice(0, MAX_PALETTE);
+    objects.forEach((e, oi) => {
+      const geo = input.meshes.get(e.id);
+      if (!geo) return;
+      const world = (i: number): Vec3 => [
+        e.min[0] + (geo.pos[i * 3] / 65535) * e.size[0],
+        e.min[1] + (geo.pos[i * 3 + 1] / 65535) * e.size[1],
+        e.min[2] + (geo.pos[i * 3 + 2] / 65535) * e.size[2],
+      ];
+      const idx = geo.indices;
+      for (let t = 0; t < idx.length; t += 3) {
+        const w = [world(idx[t]), world(idx[t + 1]), world(idx[t + 2])];
+        const p = w.map((v) => transform(m.vp, v));
+        if (p.some((q) => q[3] <= near)) continue;
+        const s = p.map(
+          (q): Vec3 => [((q[0] / q[3]) * 0.5 + 0.5) * width, ((-q[1] / q[3]) * 0.5 + 0.5) * height, q[2] / q[3]],
+        );
+        const [a, b, c] = s;
+        const area = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+        if (Math.abs(area) < 1e-6) continue;
+        const loX = Math.max(0, Math.ceil(Math.min(a[0], b[0], c[0]) - 0.5));
+        const hiX = Math.min(width - 1, Math.floor(Math.max(a[0], b[0], c[0]) - 0.5));
+        const loY = Math.max(0, Math.ceil(Math.min(a[1], b[1], c[1]) - 0.5));
+        const hiY = Math.min(height - 1, Math.floor(Math.max(a[1], b[1], c[1]) - 0.5));
+        for (let y = loY; y <= hiY; y++)
+          for (let x = loX; x <= hiX; x++) {
+            const px = x + 0.5;
+            const py = y + 0.5;
+            const wa = ((b[0] - px) * (c[1] - py) - (b[1] - py) * (c[0] - px)) / area;
+            const wb = ((c[0] - px) * (a[1] - py) - (c[1] - py) * (a[0] - px)) / area;
+            const wc = 1 - wa - wb;
+            if (wa < 0 || wb < 0 || wc < 0) continue;
+            const z = wa * a[2] + wb * b[2] + wc * c[2];
+            const j = y * width + x;
+            if (z < -1 || z > 1 || z >= zbuf[j]) continue;
+            zbuf[j] = z;
+            ids[j] = oi + 1;
+          }
+      }
+    });
+    const depth = (j: number) => (2 * near * far) / (far + near - zbuf[j] * (far - near));
+    const r = this.outlineWidth();
+    const colors = objects.map((e) => {
+      const c = hexColor(e.color);
+      return (input.selected(e.id) ? c.map((v) => v + (1 - v) * 0.6) : c).map((v) => Math.round(v * 255));
+    });
+    const img = ctx.createImageData(width, height);
+    const at = (x: number, y: number) =>
+      Math.min(height - 1, Math.max(0, y)) * width + Math.min(width - 1, Math.max(0, x));
+    for (let y = 0; y < height; y++)
+      for (let x = 0; x < width; x++) {
+        const j = y * width + x;
+        const id = ids[j];
+        if (!id) continue;
+        const z = depth(j);
+        let edge = false;
+        for (const [dx, dy] of [
+          [r, 0],
+          [-r, 0],
+          [0, r],
+          [0, -r],
+        ]) {
+          const k = at(x + dx, y + dy);
+          if (ids[k] === id) continue;
+          const zo = ids[k] ? depth(k) : Infinity;
+          if (zo > z * 1.004 || (zo >= z * 0.996 && id > ids[k])) edge = true;
+        }
+        for (const [dx, dy] of [
+          [r, 0],
+          [0, r],
+        ]) {
+          const a = at(x + dx, y + dy);
+          const b = at(x - dx, y - dy);
+          if (ids[a] === id && ids[b] === id) {
+            const [za, zb] = [depth(a), depth(b)];
+            if (Math.abs(za + zb - 2 * z) > 0.03 * z && z < Math.max(za, zb) - 0.015 * z) edge = true;
+          }
+        }
+        if (!edge) continue;
+        img.data.set([...colors[id - 1], 255], j * 4);
+      }
+    ctx.putImageData(img, 0, 0);
+  }
 
   private renderSoftware(input: RenderInput, m: CameraMatrices) {
     const width = this.canvas.width;

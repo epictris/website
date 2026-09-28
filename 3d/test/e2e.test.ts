@@ -337,6 +337,43 @@ describe("HTTP tools and scenes", () => {
     expect(local.issues[0].code).toBe("invalid-url");
   });
 
+  test("the perspective render outlines the solids above an opaque reference", async () => {
+    const { sceneId } = await tool<{ sceneId: string }>("create_scene", {
+      document: {
+        ...scene,
+        objects: [{ id: "block", color: "#ff00ff", outlines: box(8, 12, 8, 12, 0, 6) }],
+        references: { perspective: { image: "px", opacity: 1 } },
+      },
+    });
+    // Pure #ff00ff pixels: shading always darkens the solid, so only outline pixels are that colour.
+    const magenta = (dataUrl: string) =>
+      page.evaluate(async (url) => {
+        const img = new Image();
+        img.src = url;
+        await img.decode();
+        const c = document.createElement("canvas");
+        c.width = img.width;
+        c.height = img.height;
+        const ctx = c.getContext("2d")!;
+        ctx.drawImage(img, 0, 0);
+        const d = ctx.getImageData(0, 0, c.width, c.height).data;
+        let n = 0;
+        for (let i = 0; i < d.length; i += 4) if (d[i] === 255 && d[i + 1] === 0 && d[i + 2] === 255) n++;
+        return n;
+      }, dataUrl);
+    const shot = async (references: boolean) =>
+      (
+        await tool<{ images: { perspective: string } }>("render", {
+          sceneId,
+          views: ["perspective"],
+          width: 640,
+          references,
+        })
+      ).images.perspective;
+    expect(await magenta(await shot(true))).toBeGreaterThan(100);
+    expect(await magenta(await shot(false))).toBe(0);
+  }, 30000);
+
   test("a save based on an old revision is refused", async () => {
     const { sceneId, revision } = await tool<{ sceneId: string; revision: number }>("create_scene", {
       document: scene,

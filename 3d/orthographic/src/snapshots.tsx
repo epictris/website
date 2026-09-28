@@ -93,15 +93,18 @@ export async function perspectiveCanvas(
   try {
     canvas.width = w;
     canvas.height = h;
-    r.render({ ...renderInput(), selected: () => false });
+    const ref = state.references.perspective;
+    const a = imageOf(ref?.image);
+    const overlaid = !!(ref && a && opts.references !== false);
+    // As in the editor: over the reference, the solids' outlines on top at full opacity.
+    const outlines = overlaid ? document.createElement("canvas") : undefined;
+    r.render({ ...renderInput(), selected: () => false }, outlines);
     const out = document.createElement("canvas");
     out.width = w;
     out.height = h;
     const ctx = out.getContext("2d")!;
     ctx.drawImage(canvas, 0, 0);
-    const ref = state.references.perspective;
-    const a = imageOf(ref?.image);
-    if (ref && a && opts.references !== false) {
+    if (ref && a && overlaid) {
       const g = overlayGeometry(w, h, ref, a);
       ctx.save();
       ctx.globalAlpha = ref.opacity;
@@ -110,6 +113,7 @@ export async function perspectiveCanvas(
       ctx.rotate(g.radians);
       ctx.drawImage(a.element, -g.width / 2, -g.height / 2, g.width, g.height);
       ctx.restore();
+      if (outlines) ctx.drawImage(outlines, 0, 0);
     }
     return out;
   } finally {

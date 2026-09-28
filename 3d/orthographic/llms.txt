@@ -44,7 +44,7 @@ Every tool answers `{ ok, issues, ... }` and never throws; `ok` is false when an
 | `set_display` | Perspective drawing style, grid, labels, crosshair. |
 | `set_reference` | Put an image behind a view, move it, or `remove: true`. |
 | `undo`, `redo` | One shared history for agents and the editor. |
-| `render` | PNGs of `front`, `top`, `side`, `perspective` (as images over MCP, data URLs over HTTP) plus links to them. |
+| `render` | PNGs of `front`, `top`, `side`, `perspective` (as images over MCP, data URLs over HTTP) plus links to them. Over a perspective reference, each solid's outline is drawn on top in its colour at full opacity, so alignment is visible even through an opaque reference. |
 | `export` | Links to `scene.json`, `agent.json`, `objects.csv`, `views.svg`, `editor.html` (the editor with the scene inside, one offline file). |
 
 ## Coordinates

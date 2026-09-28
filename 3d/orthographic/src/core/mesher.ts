@@ -5,7 +5,7 @@
 
 import type { Ring, ViewId } from "./types";
 
-export const MESH_VERSION = "signed-distance-intersection-marching-tetrahedra-v1";
+export const MESH_VERSION = "signed-distance-intersection-marching-tetrahedra-v2";
 
 export interface MeshMeta {
   empty: boolean;
@@ -160,29 +160,49 @@ export function buildMesh(outlines: Record<ViewId, Ring>, res = 40): Mesh {
           }
         }
       }
-  const normal = new Float32Array(pts.length);
+  // Weld vertices that land on the same quantised point. Where an outline runs
+  // along grid lines, many edges interpolate to the same corner; left apart they
+  // join through zero-area triangles, which are T-junctions a GPU rasterises
+  // with pinhole cracks. Welded, those triangles repeat an index and are dropped.
+  const welded = new Map<number, number>();
+  const qpos: number[] = [];
+  const remap = new Int32Array(pts.length / 3);
+  for (let i = 0; i < pts.length / 3; i++) {
+    const q = [0, 1, 2].map((k) => Math.round(Math.max(0, Math.min(1, pts[i * 3 + k])) * 65535));
+    const key = q[0] + 65536 * (q[1] + 65536 * q[2]);
+    let v = welded.get(key);
+    if (v === undefined) {
+      v = qpos.length / 3;
+      qpos.push(...q);
+      welded.set(key, v);
+    }
+    remap[i] = v;
+  }
+  const faces: number[] = [];
   for (let i = 0; i < ind.length; i += 3) {
-    const a = ind[i] * 3;
-    const b = ind[i + 1] * 3;
-    const c = ind[i + 2] * 3;
-    const ab = [pts[b] - pts[a], pts[b + 1] - pts[a + 1], pts[b + 2] - pts[a + 2]];
-    const ac = [pts[c] - pts[a], pts[c + 1] - pts[a + 1], pts[c + 2] - pts[a + 2]];
+    const [a, b, c] = [remap[ind[i]], remap[ind[i + 1]], remap[ind[i + 2]]];
+    if (a !== b && b !== c && a !== c) faces.push(a, b, c);
+  }
+  const normal = new Float32Array(qpos.length);
+  for (let i = 0; i < faces.length; i += 3) {
+    const a = faces[i] * 3;
+    const b = faces[i + 1] * 3;
+    const c = faces[i + 2] * 3;
+    const ab = [qpos[b] - qpos[a], qpos[b + 1] - qpos[a + 1], qpos[b + 2] - qpos[a + 2]];
+    const ac = [qpos[c] - qpos[a], qpos[c + 1] - qpos[a + 1], qpos[c + 2] - qpos[a + 2]];
     const nrm = [ab[1] * ac[2] - ab[2] * ac[1], ab[2] * ac[0] - ab[0] * ac[2], ab[0] * ac[1] - ab[1] * ac[0]];
     for (const j of [a, b, c]) for (let k = 0; k < 3; k++) normal[j + k] += nrm[k];
   }
-  const pos = new Uint16Array(pts.length);
-  const norm = new Int8Array(pts.length);
-  for (let i = 0; i < pts.length; i += 3) {
+  const pos = Uint16Array.from(qpos);
+  const norm = new Int8Array(qpos.length);
+  for (let i = 0; i < qpos.length; i += 3) {
     const len = Math.hypot(normal[i], normal[i + 1], normal[i + 2]) || 1;
-    for (let k = 0; k < 3; k++) {
-      pos[i + k] = Math.round(Math.max(0, Math.min(1, pts[i + k])) * 65535);
-      norm[i + k] = Math.round((normal[i + k] / len) * 127);
-    }
+    for (let k = 0; k < 3; k++) norm[i + k] = Math.round((normal[i + k] / len) * 127);
   }
   return {
     pos,
     norm,
-    indices: pts.length / 3 > 65535 ? new Uint32Array(ind) : new Uint16Array(ind),
+    indices: qpos.length / 3 > 65535 ? new Uint32Array(faces) : new Uint16Array(faces),
     meta: { empty: false, coverage, occupied, grid: res },
   };
 }
