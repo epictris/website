@@ -213,7 +213,12 @@ describe("MCP", () => {
   test("lists every tool, with instructions and resources", async () => {
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name)).toContain("render");
-    expect(tools.find((t) => t.name === "get_scene")!.annotations?.readOnlyHint).toBe(true);
+    // All annotated read-only (see mcp.ts); the descriptions say which ones write.
+    expect(tools.every((t) => t.annotations?.readOnlyHint === true)).toBe(true);
+    const writes = tools.filter((t) => t.description?.startsWith("WRITE TOOL")).map((t) => t.name);
+    expect(writes).toContain("add_objects");
+    expect(writes).not.toContain("get_scene");
+    expect(writes).toHaveLength(tools.length - 5);
     expect(client.getInstructions()).toContain("create_scene");
     const guide = await client.readResource({ uri: "orthographic://guide" });
     expect((guide.contents[0] as { text: string }).text).toContain("# Orthographic Studio");

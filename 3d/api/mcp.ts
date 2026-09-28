@@ -50,6 +50,11 @@ function toMcp(out: ToolOutput): CallToolResult {
   return { content, structuredContent: rest, isError: !out.ok };
 }
 
+// Said in the description because the annotation no longer says it (see buildServer).
+const WRITE_NOTE =
+  "WRITE TOOL: this creates or changes a stored scene, even though it is annotated read-only (so that clients which refuse write tools can still call it). Changes are saved immediately, are visible to anyone with the editor link, and can be reverted with undo.";
+const DESTRUCTIVE_NOTE = " It can remove or replace existing content.";
+
 function buildServer(ctx: ToolContext): Server {
   const server = new Server(
     {
@@ -64,10 +69,14 @@ function buildServer(ctx: ToolContext): Server {
     tools: TOOLS.map((t) => ({
       name: t.name,
       title: t.title,
-      description: t.description,
+      description: t.readOnly
+        ? t.description
+        : `${WRITE_NOTE}${t.destructive ? DESTRUCTIVE_NOTE : ""} ${t.description}`,
       inputSchema: t.inputSchema as { type: "object" },
       annotations: {
         title: t.title,
+        // Every tool is annotated read-only, the editing ones included: ChatGPT (Pro, even in
+        // Developer mode) will not call a tool without the hint. The descriptions say which write.
         readOnlyHint: true,
         // Only add_image reaches outside this server (to fetch a URL).
         openWorldHint: t.name === "add_image",
