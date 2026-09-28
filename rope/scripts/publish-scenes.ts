@@ -22,7 +22,8 @@
 // command to delete it is printed.
 
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { SCENE_ASSETS, sceneFile, sceneMetaFile, sceneReleaseName, type SceneAsset, type SceneMeta } from "../src/render3d/scenes";
@@ -89,9 +90,15 @@ if (named.size) {
       current++;
       continue;
     }
-    const up = spawnSync("gh", ["release", "upload", ASSET_TAG, `${path}#${name}`, "--repo", ASSET_REPO, "--clobber"], {
+    // gh names a release asset after the file (a "#suffix" only sets its display label), so
+    // upload a copy that already carries the release name.
+    const staging = mkdtempSync(join(tmpdir(), "scene-"));
+    const staged = join(staging, name);
+    copyFileSync(path, staged);
+    const up = spawnSync("gh", ["release", "upload", ASSET_TAG, staged, "--repo", ASSET_REPO, "--clobber"], {
       stdio: "inherit",
     });
+    rmSync(staging, { recursive: true, force: true });
     if (up.status !== 0) {
       failures.push(`${scene} (${levels.join(", ")}): upload failed`);
       continue;

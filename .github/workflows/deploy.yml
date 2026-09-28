@@ -82,6 +82,8 @@ jobs:
       contents: read
       packages: write
     strategy:
+      # One service failing should not cancel the others' builds (deploy still waits for all).
+      fail-fast: false
       matrix:
         service: ${{ fromJSON(needs.changes.outputs.matrix) }}
     steps:
