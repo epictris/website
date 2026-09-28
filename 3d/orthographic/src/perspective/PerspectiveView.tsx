@@ -337,7 +337,7 @@ export function PerspectiveView() {
       <header class="view-head">
         <span class="view-number">04</span>
         <span class="view-title">Perspective</span>
-        <span class="view-subtitle grow">3D FROM OUTLINES</span>
+        <span class="view-subtitle grow">3D SOLIDS</span>
         <span class="grow" />
         <label title={reference() ? "Show the perspective reference image" : "Assign a reference image first"}>
           <input

@@ -23,9 +23,21 @@ import {
   saveSvg,
   saveWorkingHtml,
 } from "../io";
+import { live, shareLive } from "../live";
 import { OrthoView } from "../ortho/OrthoView";
 import { PerspectiveView } from "../perspective/PerspectiveView";
-import { historyCounts, type Mode, saveStatus, setMode, setSelection, setUi, state, toastState, ui } from "../store";
+import {
+  historyCounts,
+  type Mode,
+  saveStatus,
+  setMode,
+  setSelection,
+  setUi,
+  state,
+  toast,
+  toastState,
+  ui,
+} from "../store";
 import { CameraTab } from "./CameraTab";
 import { Dialogs, openAddObject, openHelp } from "./dialogs";
 import { ElementList } from "./ElementList";
@@ -35,6 +47,7 @@ import {
   FitIcon,
   FolderIcon,
   HelpIcon,
+  LinkIcon,
   MoveIcon,
   OutlineIcon,
   RedoIcon,
@@ -44,6 +57,17 @@ import {
 } from "./icons";
 import { SceneTab } from "./SceneTab";
 import { TransformTab } from "./TransformTab";
+
+async function share() {
+  const url = await shareLive();
+  if (!url) return;
+  try {
+    await navigator.clipboard.writeText(url);
+    toast(`Live link copied: ${url}`);
+  } catch {
+    toast(`Live link: ${url}`);
+  }
+}
 
 const openProject = async () => {
   const f = await pickFile(".json,application/json");
@@ -78,9 +102,21 @@ function Header() {
         <h1>Orthographic Studio</h1>
         <p>OUTLINES · CAMERA · REFERENCES</p>
       </div>
-      <span class="badge hide-small" title="Runs in the browser; nothing is uploaded.">
-        OFFLINE · 3D
-      </span>
+      <Show
+        when={live()}
+        fallback={
+          <span class="badge hide-small" title="Runs in the browser; nothing is uploaded.">
+            OFFLINE · 3D
+          </span>
+        }
+      >
+        <span
+          class="badge live hide-small"
+          title="This scene is stored on the server: every change saves there, and changes made elsewhere (agents, other tabs) appear here. Anyone with the link can view and edit it."
+        >
+          LIVE · SHARED
+        </span>
+      </Show>
       <span class="badge head-unit" classList={{ warn: !m() }}>
         {m() ? `1 u = ${m()} m` : "ASSUMED SCENE UNITS"}
       </span>
@@ -109,6 +145,19 @@ function Header() {
         <button type="button" class="btn" title="Load a project JSON (Ctrl/⌘ O)" onClick={openProject}>
           <FolderIcon />
           Load
+        </button>
+        <button
+          type="button"
+          class="btn"
+          title={
+            live()
+              ? "Copy this live scene's link"
+              : "Store this scene on the server and copy a link: agents (over MCP or HTTP) and people with the link edit it together"
+          }
+          onClick={share}
+        >
+          <LinkIcon />
+          <span class="hide-small">{live() ? "Copy link" : "Share"}</span>
         </button>
         <div class="export-wrap">
           <div class="export-combo">

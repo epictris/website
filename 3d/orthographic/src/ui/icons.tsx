@@ -113,3 +113,8 @@ export const UnlockIcon = () => (
     <path d="M8 10V7a4 4 0 0 1 8 0 M12 14v3" />
   </Icon>
 );
+export const LinkIcon = () => (
+  <Icon>
+    <path d="M10 14a4.5 4.5 0 0 0 6.4 0l3.2-3.2a4.5 4.5 0 0 0-6.4-6.4L12 5.6 M14 10a4.5 4.5 0 0 0-6.4 0l-3.2 3.2a4.5 4.5 0 0 0 6.4 6.4l1.2-1.2" />
+  </Icon>
+);

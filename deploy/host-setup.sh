@@ -13,6 +13,8 @@ BUCKET=playtests
 
 # The rope container runs as uid 1000 (the image's `bun` user) and writes here.
 install -d -o 1000 -g 1000 -m 750 "$PLAYTESTS"
+# So does the 3d container, for its stored scenes.
+install -d -o 1000 -g 1000 -m 750 /opt/website/3d-scenes
 
 if [ -z "${OCI_OS_NAMESPACE:-}" ]; then
   echo "host-setup: OCI_OS_NAMESPACE unset; playtest backup not configured"

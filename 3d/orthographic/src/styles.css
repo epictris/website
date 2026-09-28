@@ -150,6 +150,10 @@ svg.icon {
   font-weight: 650;
   white-space: nowrap;
 }
+.badge.live {
+  border-color: #2f5f86;
+  color: #8fd0ff;
+}
 .badge.warn {
   border-color: #5b5035;
   color: var(--yellow);
@@ -631,9 +635,11 @@ input[type="checkbox"] {
   flex: none;
 }
 .inspector-tabs button {
-  flex: 1;
+  flex: 1 1 auto;
   height: 29px;
+  padding: 0 6px;
   font-size: 11px;
+  white-space: nowrap;
   background: transparent;
 }
 .inspector-tabs button.active {

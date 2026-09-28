@@ -5,27 +5,15 @@
 
 import { unwrap } from "solid-js/store";
 import { addImageBytes, image } from "./assets";
-import { focalToFov } from "./core/camera";
-import * as cmd from "./core/commands";
+import { issue, type ObjectProps } from "./core/commands";
 import { geometryIssues, validateDocument } from "./core/document";
 import { base64ToBytes, parseDataUrl } from "./core/images";
 import type { MeshMeta } from "./core/mesher";
-import type {
-  Blend,
-  DisplayStyle,
-  DocVec3,
-  EditorState,
-  Issue,
-  Point,
-  ReferenceView,
-  Ring,
-  SceneDocument,
-  ViewId,
-} from "./core/types";
-import { axisNames, VIEW_IDS } from "./core/views";
+import * as ops from "./core/ops";
+import type { DocVec3, EditorState, Issue, ReferenceView, Ring, SceneDocument, ViewId } from "./core/types";
 import { currentDocument, editorConfig, loadDocument } from "./io";
 import { meshStatus, settle, shapeKey } from "./meshes";
-import { orthoPng, orthoSvg, perspectivePng } from "./snapshots";
+import { orthoPng, orthoSvg, perspectivePng, projectionSheet } from "./snapshots";
 import { commit, errors, redo, setSelection, state, ui, undo } from "./store";
 
 export interface ApiResult {
@@ -39,14 +27,7 @@ const result = (issues: Issue[], extra: Record<string, unknown> = {}): ApiResult
   issues,
   ...extra,
 });
-const bad = (code: string, message: string) => result([cmd.issue(code, message)]);
-const vec3 = (v: DocVec3 | undefined): [number, number, number] | undefined => (v ? [v.x, v.y, v.z] : undefined);
-const isView = (v: unknown): v is ViewId => VIEW_IDS.includes(v as ViewId);
-const pairOf = (view: ViewId, o: Record<string, number> | undefined): Point | undefined => {
-  if (!o) return undefined;
-  const [a, b] = axisNames(view);
-  return [o[a], o[b]];
-};
+const bad = (code: string, message: string) => result([issue(code, message)]);
 
 /** Guard every entry point: an unexpected exception becomes an issue, not a thrown error. */
 function safe<A extends unknown[]>(f: (...args: A) => ApiResult | Promise<ApiResult>) {
@@ -59,9 +40,14 @@ function safe<A extends unknown[]>(f: (...args: A) => ApiResult | Promise<ApiRes
   };
 }
 
-function edit(command: (d: EditorState) => Issue[], extra: () => Record<string, unknown> = () => ({})) {
-  const issues = commit(command);
-  return result(issues, errors(issues).length ? {} : extra());
+/** Commit an op as one undoable step and report its values when it applied. */
+function edit(op: (d: EditorState) => ops.OpResult) {
+  let out: ops.OpResult | undefined;
+  const issues = commit((d) => {
+    out = op(d);
+    return out.issues;
+  });
+  return result(issues, errors(issues).length ? {} : (out?.value ?? {}));
 }
 
 const metaFor = (id: string): MeshMeta | undefined => {
@@ -113,106 +99,30 @@ export const api = {
     return result([], { id: a.id, width: a.width, height: a.height });
   }),
 
-  addObject: safe(
-    (spec: {
-      id?: string;
-      name?: string;
-      kind?: string;
-      color?: string;
-      outlines?: Record<ViewId, Ring>;
-      primitive?: "box" | "ellipsoid" | "cylinder" | "rock";
-      center?: DocVec3;
-      size?: DocVec3;
-      visible?: boolean;
-      locked?: boolean;
-      opacity?: number;
-      notes?: string;
-    }) => {
-      let id: string | undefined;
-      return edit(
-        (d) => {
-          const r = cmd.addObject(d, { ...spec, center: vec3(spec.center), size: vec3(spec.size) });
-          id = r.id;
-          return r.issues;
-        },
-        () => ({ id }),
-      );
-    },
-  ),
+  addObject: safe((spec: ops.AddObjectArgs) => edit((d) => ops.addObject(d, spec))),
 
-  updateObject: safe((id: string, patch: cmd.ObjectProps) => edit((d) => cmd.updateObject(d, id, patch))),
+  updateObject: safe((id: string, patch: ObjectProps) => edit((d) => ops.updateObject(d, id, patch))),
 
   /** Replace one view's outline: points in world units, [x, z] front, [x, y] top, [y, z] side. */
-  setOutline: safe((id: string, view: ViewId, points: Ring) => {
-    if (!isView(view)) return bad("invalid-view", 'view must be "front", "top" or "side".');
-    return edit((d) => cmd.setOutline(d, id, view, points));
-  }),
+  setOutline: safe((id: string, view: ViewId, points: Ring) => edit((d) => ops.setOutline(d, id, view, points))),
 
   /** Set the bounding box of one object or a group: any of min / max per axis. Outlines scale with it. */
-  setBounds: safe((ids: string | string[], box: { min?: Partial<DocVec3>; max?: Partial<DocVec3> }) => {
-    const list = Array.isArray(ids) ? ids : [ids];
-    const toArr = (v?: Partial<DocVec3>) => (v ? [v.x, v.y, v.z] : undefined);
-    return edit((d) => cmd.setBounds(d, list, { min: toArr(box.min) as never, max: toArr(box.max) as never }));
-  }),
+  setBounds: safe((ids: string | string[], box: ops.BoundsArgs) => edit((d) => ops.setBounds(d, ids, box))),
 
-  moveObjects: safe((ids: string | string[], delta: DocVec3) =>
-    edit((d) => cmd.moveObjects(d, Array.isArray(ids) ? ids : [ids], vec3(delta)!)),
+  moveObjects: safe((ids: string | string[], delta: DocVec3) => edit((d) => ops.moveObjects(d, ids, delta))),
+
+  deleteObjects: safe((ids: string | string[]) => edit((d) => ops.deleteObjects(d, ids))),
+
+  duplicateObjects: safe((ids: string | string[], offset?: DocVec3) =>
+    edit((d) => ops.duplicateObjects(d, ids, offset)),
   ),
 
-  deleteObjects: safe((ids: string | string[]) => edit((d) => cmd.deleteObjects(d, Array.isArray(ids) ? ids : [ids]))),
-
-  duplicateObjects: safe((ids: string | string[], offset?: DocVec3) => {
-    let created: string[] = [];
-    return edit(
-      (d) => {
-        const r = cmd.duplicateObjects(d, Array.isArray(ids) ? ids : [ids], vec3(offset));
-        created = r.ids;
-        return r.issues;
-      },
-      () => ({ ids: created }),
-    );
-  }),
-
-  setScene: safe((patch: { title?: string; size?: DocVec3; metersPerUnit?: number | null; notes?: string }) =>
-    edit((d) => cmd.setScene(d, { ...patch, size: vec3(patch.size) })),
-  ),
+  setScene: safe((patch: ops.SceneArgs) => edit((d) => ops.setScene(d, patch))),
 
   /** Camera fields as in the document; give the lens as verticalFovDegrees or focalLengthMm35Equivalent. */
-  setCamera: safe(
-    (patch: {
-      position?: DocVec3;
-      target?: DocVec3;
-      verticalFovDegrees?: number;
-      focalLengthMm35Equivalent?: number;
-      rollDegrees?: number;
-      near?: number;
-      far?: number;
-      frame?: { width: number; height: number };
-      locked?: boolean;
-    }) => {
-      if (patch.verticalFovDegrees !== undefined && patch.focalLengthMm35Equivalent !== undefined)
-        return bad("invalid-camera", "Give verticalFovDegrees or focalLengthMm35Equivalent, not both.");
-      return edit((d) =>
-        cmd.setCamera(d, {
-          position: vec3(patch.position),
-          target: vec3(patch.target),
-          fov:
-            patch.focalLengthMm35Equivalent !== undefined
-              ? focalToFov(patch.focalLengthMm35Equivalent)
-              : patch.verticalFovDegrees,
-          roll: patch.rollDegrees,
-          near: patch.near,
-          far: patch.far,
-          frame: patch.frame ? [patch.frame.width, patch.frame.height] : undefined,
-          locked: patch.locked,
-        }),
-      );
-    },
-  ),
+  setCamera: safe((patch: ops.CameraArgs) => edit((d) => ops.setCamera(d, patch))),
 
-  setDisplay: safe((patch: { style?: DisplayStyle; grid?: boolean; labels?: boolean; crosshair?: boolean }) =>
-    edit((d) => cmd.setDisplay(d, patch)),
-  ),
+  setDisplay: safe((patch: ops.DisplayArgs) => edit((d) => ops.setDisplay(d, patch))),
 
   /**
    * Set (or with null remove) a view's reference, as in the document: front /
@@ -220,35 +130,8 @@ export const api = {
    * image without them is fitted to the scene frame. perspective takes
    * offsetPercent {x, y}, scale, rotationDegrees and blend.
    */
-  setReference: safe(
-    (
-      view: ReferenceView,
-      patch: {
-        image?: string;
-        opacity?: number;
-        visible?: boolean;
-        min?: Record<string, number>;
-        size?: Record<string, number>;
-        offsetPercent?: { x: number; y: number };
-        scale?: number;
-        rotationDegrees?: number;
-        blend?: Blend;
-      } | null,
-    ) => {
-      if (view !== "perspective" && !isView(view))
-        return bad("invalid-view", 'view must be "front", "top", "side" or "perspective".');
-      if (patch === null) return edit((d) => cmd.setReference(d, view, null, image));
-      const p =
-        view === "perspective"
-          ? {
-              ...patch,
-              offsetPercent: patch.offsetPercent
-                ? ([patch.offsetPercent.x, patch.offsetPercent.y] as Point)
-                : undefined,
-            }
-          : { ...patch, min: pairOf(view, patch.min), size: pairOf(view, patch.size) };
-      return edit((d) => cmd.setReference(d, view, p as never, image));
-    },
+  setReference: safe((view: ReferenceView, patch: ops.ReferenceArgs | null) =>
+    edit((d) => ops.setReference(d, view, patch, { image })),
   ),
 
   select: (ids: string[]) => {
@@ -287,12 +170,18 @@ export const api = {
       const images: Record<string, string> = {};
       for (const v of views) {
         if (v === "perspective") images[v] = await perspectivePng({ width: opts.width, references: opts.references });
-        else if (isView(v)) images[v] = opts.format === "svg" ? orthoSvg(v, opts) : await orthoPng(v, opts);
+        else if (ops.isView(v)) images[v] = opts.format === "svg" ? orthoSvg(v, opts) : await orthoPng(v, opts);
         else return bad("invalid-view", `Unknown view "${v}".`);
       }
       return result([], { images });
     },
   ),
+
+  /** The three views on one SVG drawing sheet, with the scene document in its metadata. */
+  sheet: safe(async () => {
+    await settle();
+    return result([], { svg: projectionSheet(currentDocument({ images: "metadata" })) });
+  }),
 };
 
 declare global {

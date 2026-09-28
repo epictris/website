@@ -3,8 +3,46 @@
 > Describe a 3D scene as flat outlines in three orthographic views (front, top, right side), traced over reference images, and check the result through a perspective camera. Each object's solid is the intersection of its three outlines extruded along their view directions. Built to be driven by LLM agents: one JSON document format, a validator that reports every problem with a JSON Pointer, and renders of every view for visual self-checks.
 
 - Editor: https://3d.tris.sh/orthographic/
+- MCP server: https://3d.tris.sh/orthographic/mcp (Streamable HTTP, no auth)
 - JSON Schema: https://3d.tris.sh/orthographic/schema.json
 - HTTP API index: https://3d.tris.sh/orthographic/api
+
+No browser is needed: everything the editor does is available as tools, over MCP or plain HTTP.
+
+## Connecting
+
+- Claude Code: `claude mcp add --transport http orthographic https://3d.tris.sh/orthographic/mcp`
+- Claude.ai or ChatGPT: add a custom connector with the URL `https://3d.tris.sh/orthographic/mcp` (no authentication).
+- Any HTTP client: `POST https://3d.tris.sh/orthographic/api/tools/{tool}` with the tool's arguments as a JSON body; `GET https://3d.tris.sh/orthographic/api/tools` lists the tools with their JSON Schemas.
+
+## Scenes and tools
+
+The server stores scenes. `create_scene` returns a `sceneId` and an `editorUrl`; every other tool takes the `sceneId` (or the `editorUrl` itself). Give the `editorUrl` to the person you are working with: the editor at that link shows the scene live, and their edits there are visible to your next call. A person can also start in the editor and press Share, then give you the link.
+
+Anyone with a scene's id can read and edit it, so treat the link as the access key. Scenes unedited for 90 days are deleted.
+
+Every tool answers `{ ok, issues, ... }` and never throws; `ok` is false when an issue is an error, and then nothing changed. Every edit is one undoable step, reports the new `revision`, and returns the objects it touched (with derived bounds) and their geometry problems.
+
+| Tool | Does |
+|------|------|
+| `read_guide` | This guide (`schema: true` adds the JSON Schema). |
+| `create_scene` | A new scene, empty or from `document`. |
+| `get_scene` | The scene as a document (images listed without pixels). |
+| `load_document` | Replace the whole scene with a document: the fastest way to write many objects. |
+| `validate` | Every problem in a scene or a `document`, with JSON Pointer paths, geometry included. |
+| `add_image` | A reference image from a public `url` or base64 `data`; returns its id and pixel size. |
+| `add_object` | An object from world-unit `outlines`, or a `primitive` (`box`, `ellipsoid`, `cylinder`, `rock`) filling `center` ± `size` / 2. |
+| `update_object` | Name, kind, color, visible, locked, reviewed, opacity, notes. |
+| `set_outline` | Replace one view's outline (world units). |
+| `set_bounds` | Set any of min/max per axis for objects or a group; outlines scale. |
+| `move_objects`, `duplicate_objects`, `delete_objects` | As named; offsets are `{x, y, z}`. |
+| `set_scene` | Title, frame `size`, `metersPerUnit`, notes. |
+| `set_camera` | Position, target, lens (`verticalFovDegrees` or `focalLengthMm35Equivalent`), roll, near, far, frame, locked. |
+| `set_display` | Perspective drawing style, grid, labels, crosshair. |
+| `set_reference` | Put an image behind a view, move it, or `remove: true`. |
+| `undo`, `redo` | One shared history for agents and the editor. |
+| `render` | PNGs of `front`, `top`, `side`, `perspective` (as images over MCP, data URLs over HTTP) plus links to them. |
+| `export` | Links to `scene.json`, `agent.json`, `objects.csv`, `views.svg`, `editor.html` (the editor with the scene inside, one offline file). |
 
 ## Coordinates
 
@@ -76,15 +114,16 @@ Required: `format`, `version`, `scene.size`, `objects` (each with `id` and `outl
 
 ## Workflow for turning an image into a scene
 
-1. Decide the scene frame from the image (for a front-facing photo: width = x, height = z, pick a plausible depth y) and set `metersPerUnit` if a scale is known.
-2. Put the image behind the front view (`references.front`, `min` 0, `size` matching the frame's aspect ratio) and, if the camera is known, behind the perspective view too.
-3. For each object, trace its front outline in x/z from the image, then invent consistent top (x/y) and side (y/z) outlines: reuse the front's x range in top and its z range in side.
-4. Validate. Fix every error; read every warning.
-5. Render the views and compare them with the references. Adjust outlines, the camera (position, target, focal length) or the reference placement, then repeat from 4.
+1. `create_scene`, and share its `editorUrl`.
+2. Decide the scene frame from the image (for a front-facing photo: width = x, height = z, pick a plausible depth y) with `set_scene`, including `metersPerUnit` if a scale is known.
+3. `add_image`, then `set_reference` on the front view (without `min`/`size` it is fitted to the frame) and, if the camera is known, on the perspective view too.
+4. For each object, trace its front outline in x/z from the image, then invent consistent top (x/y) and side (y/z) outlines: reuse the front's x range in top and its z range in side. Use `add_object` per object, or write them all with `load_document`.
+5. `validate`. Fix every error; read every warning.
+6. `render` the views and compare them with the references. Adjust outlines, the camera (position, target, focal length) or the reference placement, then repeat from 5.
 
 ## HTTP API
 
-All endpoints accept and return JSON (CORS is open). Errors come back as `{ "ok": false, "issues": [...] }`.
+All endpoints accept and return JSON (CORS is open). Errors come back as `{ "ok": false, "issues": [...] }`. Besides the tools (`/api/tools/{tool}`), a few endpoints take a whole document and store nothing:
 
 - `POST /orthographic/api/validate`: body is a document. Returns `{ ok, issues }`, including the geometry checks (reconstructs every solid).
 - `POST /orthographic/api/render`: body `{ document, views?, width?, height?, references?, labels?, grid? }`. `views` defaults to all of `front`, `top`, `side`, `perspective`. Orthographic views are fitted to the scene at `width` × `height` (default 1200 × 900); perspective uses the camera frame (`width` scales it). References are drawn whenever assigned, unless `references` is false. Returns `{ ok, issues, images: { view: "data:image/png;base64,…" } }`.
@@ -97,9 +136,15 @@ curl -s -X POST --data-binary @scene.json https://3d.tris.sh/orthographic/api/re
 
 Renders run one at a time; a busy server answers 503 with `Retry-After`.
 
+Stored scenes also have plain GET links, handy for tools that can only fetch pages:
+
+- `GET /orthographic/api/scenes/{id}`: `{ sceneId, revision, editorUrl, document }`.
+- `GET /orthographic/api/scenes/{id}/render/{front|top|side|perspective}.png`: a render (query: `width`, `height`, `references`, `labels`, `grid`).
+- `GET /orthographic/api/scenes/{id}/export/{scene.json|agent.json|objects.csv|views.svg|editor.html}`: downloads.
+
 ## In the page: `window.orthographic`
 
-Calls return `{ ok, issues, ... }` (edits, checks and renders as promises) and never throw. Edits use the document's shapes (`{x, y, z}` objects, world-unit outline points), apply as one undoable step, and change nothing when an issue is an error.
+For agents that already drive a browser; the tools above do the same without one. Calls return `{ ok, issues, ... }` (edits, checks and renders as promises) and never throw. Edits use the document's shapes (`{x, y, z}` objects, world-unit outline points), apply as one undoable step, and change nothing when an issue is an error.
 
 - `getDocument({ images: "metadata" | "data" | "none", derived, editor })` → the document (synchronous).
 - `loadDocument(doc)`, `validate(doc?)` (no argument: the current scene, geometry included), `waitForGeometry()`.
@@ -108,7 +153,7 @@ Calls return `{ ok, issues, ... }` (edits, checks and renders as promises) and n
 - `updateObject(id, { name, kind, color, visible, locked, reviewed, opacity, notes })`, `setOutline(id, view, points)`, `setBounds(idOrIds, { min: {x,y,z}, max: {x,y,z} })` (any subset of axes; outlines scale), `moveObjects(ids, {x,y,z})`, `duplicateObjects(ids, offset?)`, `deleteObjects(ids)`.
 - `setScene({ title, size, metersPerUnit, notes })`, `setCamera({ position, target, verticalFovDegrees | focalLengthMm35Equivalent, rollDegrees, near, far, frame, locked })`, `setDisplay({ style, grid, labels, crosshair })`.
 - `setReference(view, { image, opacity, visible, min, size } | null)` for `front`/`top`/`side`; `setReference("perspective", { image, opacity, visible, offsetPercent, scale, rotationDegrees, blend } | null)`.
-- `render({ views, width, height, references, labels, grid, format: "png" | "svg" })` → `{ images }`.
+- `render({ views, width, height, references, labels, grid, format: "png" | "svg" })` → `{ images }`; `sheet()` → `{ svg }` (the three views on one drawing).
 - `select(ids)`, `undo()`, `redo()`.
 
 ## Issues
@@ -121,3 +166,7 @@ Each issue is `{ severity: "error" | "warning", code, path, message, objectId?, 
 - `extent-mismatch` (warning): two views disagree on a shared axis.
 - `no-common-volume` (error) and `low-coverage` (warning): the outlines do not describe one consistent solid.
 - `outside-frame` (warning): an object extends past the scene frame.
+- `argument-*`: a tool's arguments do not match its schema (`argument-additionalProperties` names the unknown argument).
+- `unknown-scene`, `unknown-object`, `unknown-image`, `object-locked`, `revision-conflict` (a save based on an old revision).
+- `invalid-url`, `fetch-failed`, `invalid-image`, `image-too-large`: `add_image` could not use the image.
+- `busy`: the renderer has a queue; retry in a few seconds.

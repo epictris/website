@@ -9,14 +9,29 @@ import { buildMesh, COVERAGE_WARNING, type MeshMeta } from "./mesher";
 import { defaultDisplay, initialState, RESOLUTIONS } from "./model";
 import { worldRing } from "./ring";
 import schema from "./schema.json";
-import type { DocObject, DocVec3, EditorState, ImageAsset, Issue, Point, SceneDocument, Vec3, ViewId } from "./types";
+import type {
+  DocObject,
+  DocVec3,
+  EditorState,
+  ImageAsset,
+  ImageInfo,
+  Issue,
+  Point,
+  SceneDocument,
+  SceneObject,
+  Vec3,
+  ViewId,
+} from "./types";
 import { axisNames, VIEW_IDS } from "./views";
 
 export const FORMAT = "orthographic-scene";
 export const VERSION = 1;
 export const SCHEMA_URL = "https://3d.tris.sh/orthographic/schema.json";
 
-const toVec = (v: Vec3): DocVec3 => ({ x: v[0], y: v[1], z: v[2] });
+/** World values rounded to 1e-9 u: float noise (12.219999999999999) says nothing and costs a reader tokens. */
+const tidy = (v: number) => Math.round(v * 1e9) / 1e9;
+const toVec = (v: Vec3): DocVec3 => ({ x: tidy(v[0]), y: tidy(v[1]), z: tidy(v[2]) });
+const worldPoints = (e: SceneObject, view: ViewId) => worldRing(e, view).map(([a, b]) => [tidy(a), tidy(b)] as Point);
 const fromVec = (v: DocVec3): Vec3 => [v.x, v.y, v.z];
 const pair = (view: ViewId, p: Point) => {
   const [a, b] = axisNames(view);
@@ -40,7 +55,7 @@ export interface ExportOptions {
 
 export function toDocument(
   s: EditorState,
-  images: ReadonlyMap<string, ImageAsset>,
+  images: ReadonlyMap<string, ImageInfo & { data?: string }>,
   opts: ExportOptions = {},
 ): SceneDocument {
   const derived = opts.derived !== false;
@@ -61,7 +76,7 @@ export function toDocument(
         name: e.name,
         kind: e.kind,
         color: e.color,
-        outlines: { front: worldRing(e, "front"), top: worldRing(e, "top"), side: worldRing(e, "side") },
+        outlines: { front: worldPoints(e, "front"), top: worldPoints(e, "top"), side: worldPoints(e, "side") },
         visible: e.visible,
         locked: e.locked,
         reviewed: e.reviewed,
@@ -184,10 +199,7 @@ export interface ReadResult {
  * already holds, so a document may reference an image without embedding it.
  * Returns every problem found; `state` is set only when none is an error.
  */
-export function fromDocument(
-  doc: unknown,
-  known: (id: string) => ImageAsset | undefined = () => undefined,
-): ReadResult {
+export function fromDocument(doc: unknown, known: (id: string) => ImageInfo | undefined = () => undefined): ReadResult {
   const images: ImageAsset[] = [];
   const issues: Issue[] = [];
   if (!validateSchema(doc)) {
@@ -238,7 +250,7 @@ export function fromDocument(
         issues.push(
           issue(
             "image-without-data",
-            `Image "${id}" has no data and is not loaded in the editor; embed it as base64 in data.`,
+            `Image "${id}" has no data and the scene does not have it yet; embed it as base64 in data.`,
             { path },
           ),
         );
@@ -295,7 +307,7 @@ export function fromDocument(
       issues.push(
         issue(
           "unknown-image",
-          `The ${view} reference uses image "${r.image}", which is not in images and not loaded in the editor.`,
+          `The ${view} reference uses image "${r.image}", which is neither in images nor already in the scene.`,
           { path: `${path}/image` },
         ),
       );
@@ -331,10 +343,16 @@ export function fromDocument(
  * Problems that only show once the solids are reconstructed: silhouettes that
  * share no volume, or clip each other so a view is not filled. `meta` gives a
  * mesh's metadata when the caller already has it; otherwise it is rebuilt here.
+ * `only` limits the checks to those objects.
  */
-export function geometryIssues(s: EditorState, meta?: (id: string) => MeshMeta | undefined): Issue[] {
+export function geometryIssues(
+  s: EditorState,
+  meta?: (id: string) => MeshMeta | undefined,
+  only?: ReadonlySet<string>,
+): Issue[] {
   const out: Issue[] = [];
   s.objects.forEach((e, i) => {
+    if (only && !only.has(e.id)) return;
     const m = meta?.(e.id) ?? buildMesh(e.outlines, s.reconstruction.resolution).meta;
     const path = `/objects/${i}/outlines`;
     if (m.empty) {
@@ -360,6 +378,7 @@ export function geometryIssues(s: EditorState, meta?: (id: string) => MeshMeta |
   });
   const [sx, sy, sz] = s.scene.size;
   s.objects.forEach((e, i) => {
+    if (only && !only.has(e.id)) return;
     const max = e.min.map((v, a) => v + e.size[a]);
     const outside = e.min.some((v) => v < -1e-9) || max[0] > sx + 1e-9 || max[1] > sy + 1e-9 || max[2] > sz + 1e-9;
     if (outside)
@@ -377,7 +396,7 @@ export function geometryIssues(s: EditorState, meta?: (id: string) => MeshMeta |
 /** Validate a document: schema, semantics and (optionally) reconstructed geometry. */
 export function validateDocument(
   doc: unknown,
-  opts: { geometry?: boolean; known?: (id: string) => ImageAsset | undefined } = {},
+  opts: { geometry?: boolean; known?: (id: string) => ImageInfo | undefined } = {},
 ) {
   const read = fromDocument(doc, opts.known);
   const issues = [...read.issues];

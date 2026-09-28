@@ -41,6 +41,10 @@ services:
     restart: unless-stopped
     environment:
       - PORT=8080
+    volumes:
+      # Scenes agents and people edit together (3d/api/scenes.ts). A bind mount,
+      # like the playtests, so it survives redeploys and is visible on the host.
+      - /opt/website/3d-scenes:/data
 
   rope:
     image: ${ROPE_IMAGE}

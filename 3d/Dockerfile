@@ -19,7 +19,9 @@ COPY api/ ./api/
 COPY orthographic/llms.txt ./orthographic/llms.txt
 COPY orthographic/src/core/ ./orthographic/src/core/
 COPY --from=builder /app/dist ./dist
-ENV PORT=8080 CHROMIUM_PATH=/usr/bin/chromium
+# Stored scenes (api/scenes.ts); compose mounts the host's copy here.
+RUN mkdir -p /data && chown bun:bun /data
+ENV PORT=8080 CHROMIUM_PATH=/usr/bin/chromium DATA_DIR=/data
 EXPOSE 8080
 USER bun
 CMD ["bun", "run", "server.ts"]

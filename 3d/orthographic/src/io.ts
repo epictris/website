@@ -6,9 +6,10 @@ import { unwrap } from "solid-js/store";
 import { fitView } from "./actions";
 import { allImages, image, registerImage } from "./assets";
 import { type ExportOptions, fromDocument, toDocument } from "./core/document";
-import { fmt } from "./core/math";
+import { objectsCsv } from "./core/table";
 import type { EditorState, Issue, SceneDocument, ViewId } from "./core/types";
 import { VIEW_IDS } from "./core/views";
+import { live, openLiveScene, sceneFromUrl } from "./live";
 import { restoreMeshCache, saveMeshCache, settle } from "./meshes";
 import { perspectiveCanvas, projectionSheet } from "./snapshots";
 import {
@@ -26,7 +27,20 @@ import {
   ui,
 } from "./store";
 
-const STORAGE_KEY = "orthographic-studio-v1";
+/**
+ * The browser session cache's key. A saved working HTML gets its own (by its
+ * embedded document), so opening one never restores another's session: all
+ * file:// pages share one localStorage.
+ */
+let cacheKey: string | undefined;
+function storageKey(): string {
+  if (cacheKey) return cacheKey;
+  const embedded = document.getElementById("embedded-document")?.textContent ?? "null";
+  let h = 0x811c9dc5;
+  for (let i = 0; i < embedded.length; i++) h = Math.imul(h ^ embedded.charCodeAt(i), 0x01000193);
+  cacheKey = embedded.trim() === "null" ? "orthographic-studio-v1" : `orthographic-studio-v1:${(h >>> 0).toString(16)}`;
+  return cacheKey;
+}
 
 // ---- Editor configuration (the document's "editor" section) ------------------------
 
@@ -110,9 +124,13 @@ export const projectDocument = (meshes = true) =>
 
 /**
  * Load a document, replacing the scene (undoable). Resolves with every issue
- * found; nothing changes when any of them is an error.
+ * found; nothing changes when any of them is an error. `keepUi` keeps the
+ * selection and view framing (a live scene's update, not a new project).
  */
-export async function loadDocument(doc: unknown, opts: { undoable?: boolean } = {}): Promise<Issue[]> {
+export async function loadDocument(
+  doc: unknown,
+  opts: { undoable?: boolean; keepUi?: boolean } = {},
+): Promise<Issue[]> {
   const read = fromDocument(doc, (id) => image(id));
   if (!read.state) return read.issues;
   for (const a of read.images) {
@@ -130,11 +148,12 @@ export async function loadDocument(doc: unknown, opts: { undoable?: boolean } = 
       replaceState(read.state!);
       resetHistory();
     } else commitState(read.state!);
-    setUi({ selected: [], pointSelection: null, redrawing: null });
+    if (!opts.keepUi) setUi({ selected: [], pointSelection: null, redrawing: null });
     restoreMeshCache(read.meshCache);
-    applyEditorConfig(read.editor);
+    if (!opts.keepUi) applyEditorConfig(read.editor);
     pruneUi();
   });
+  if (opts.keepUi) return read.issues;
   requestAnimationFrame(() => {
     for (const v of VIEW_IDS) if (ui.orthoCameras[v].autoFit) fitView(v);
   });
@@ -169,12 +188,14 @@ let autosaveTimer: ReturnType<typeof setTimeout> | undefined;
 let changedSinceSave = false;
 
 export function queueAutosave() {
+  // A live scene saves to the server (live.ts).
+  if (live()) return;
   changedSinceSave = true;
   clearTimeout(autosaveTimer);
   setSaveStatus({ message: "Unsaved session changes", cached: true });
   autosaveTimer = setTimeout(() => {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(projectDocument(false)));
+      localStorage.setItem(storageKey(), JSON.stringify(projectDocument(false)));
       setSaveStatus({ message: "Session cached · use Save for a project file", cached: true });
     } catch {
       setSaveStatus({ message: "Use Save · the browser session cache is unavailable", cached: false });
@@ -196,10 +217,11 @@ function embeddedDocument(): unknown {
 }
 
 export async function restoreAtStartup() {
+  if (sceneFromUrl() && (await openLiveScene())) return;
   const embedded = embeddedDocument();
   let cached: unknown = null;
   try {
-    cached = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
+    cached = JSON.parse(localStorage.getItem(storageKey()) || "null");
   } catch {
     setSaveStatus({ message: "Use Save · the browser session cache is unavailable", cached: false });
   }
@@ -306,52 +328,6 @@ export async function savePerspectivePng() {
 }
 
 export function saveCsv() {
-  const header = [
-    "id",
-    "name",
-    "kind",
-    "color",
-    "center_x",
-    "center_y",
-    "center_z",
-    "size_x",
-    "size_y",
-    "size_z",
-    "min_x",
-    "min_y",
-    "min_z",
-    "max_x",
-    "max_y",
-    "max_z",
-    "visible",
-    "locked",
-    "reviewed",
-    "notes",
-  ];
-  const rows: (string | number | boolean)[][] = [header];
-  for (const e of state.objects) {
-    const max = e.min.map((v, i) => v + e.size[i]);
-    const center = e.min.map((v, i) => v + e.size[i] / 2);
-    rows.push([
-      e.id,
-      e.name,
-      e.kind,
-      e.color,
-      ...center,
-      ...e.size,
-      ...e.min,
-      ...max,
-      e.visible,
-      e.locked,
-      e.reviewed,
-      e.notes,
-    ]);
-  }
-  const cell = (v: string | number | boolean) => {
-    let s = typeof v === "number" ? fmt(v, 6) : String(v);
-    if (typeof v === "string" && /^[=+\-@\t\r]/.test(s)) s = `'${s}`;
-    return `"${s.replace(/"/g, '""')}"`;
-  };
-  download(`${slug()}.objects.csv`, `﻿${rows.map((r) => r.map(cell).join(",")).join("\r\n")}`, "text/csv;charset=utf-8");
+  download(`${slug()}.objects.csv`, objectsCsv(unwrap(state) as EditorState), "text/csv;charset=utf-8");
   toast("Coordinate table saved (scene units).");
 }

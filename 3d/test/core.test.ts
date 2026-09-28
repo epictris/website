@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { focalToFov, fovToFocal } from "../orthographic/src/core/camera";
 import { addObject, moveObjects, setCamera, setOutline, setReference } from "../orthographic/src/core/commands";
 import { fromDocument, geometryIssues, toDocument, validateDocument } from "../orthographic/src/core/document";
+import { base64ToBytes, imageSize } from "../orthographic/src/core/images";
 import { initialState } from "../orthographic/src/core/model";
 import { worldRing } from "../orthographic/src/core/ring";
 import type { ImageAsset } from "../orthographic/src/core/types";
@@ -36,6 +37,8 @@ const doc = (objects: unknown[], extra: Record<string, any> = {}): Record<string
   ...extra,
 });
 
+const PNG_1PX = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+
 describe("document", () => {
   test("a minimal document loads", () => {
     const r = fromDocument(doc([{ id: "a", outlines: box(1, 3, 2, 5, 0, 4) }]));
@@ -51,7 +54,10 @@ describe("document", () => {
     expect(out.objects[0].outlines).toEqual(box(1, 3, 2, 5, 0, 4) as never);
     const again = fromDocument(JSON.parse(JSON.stringify(out)));
     expect(again.issues).toEqual([]);
-    expect(again.state).toEqual(r.state);
+    // Exported values are rounded to 1e-9 u, so the document (not the float state) is what round-trips exactly.
+    const plain = { derived: false };
+    expect(toDocument(again.state!, new Map(), plain)).toEqual(toDocument(r.state!, new Map(), plain));
+    expect(again.state!.objects).toEqual(r.state!.objects);
   });
 
   test("schema problems are all reported with paths", () => {
@@ -272,4 +278,41 @@ test("the example in llms.txt is a valid document", async () => {
   const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
   const v = validateDocument(JSON.parse(example.replace("<base64>", png)));
   expect(v.issues).toEqual([]);
+});
+
+describe("image headers", () => {
+  const bytes = (...parts: (number[] | string)[]) =>
+    new Uint8Array(parts.flatMap((p) => (typeof p === "string" ? [...p].map((c) => c.charCodeAt(0)) : p)));
+  const le16 = (v: number) => [v & 255, v >> 8];
+  const be16 = (v: number) => [v >> 8, v & 255];
+
+  test("reads the pixel size of every accepted type", () => {
+    expect(imageSize(base64ToBytes(PNG_1PX))).toEqual({ width: 1, height: 1 });
+    expect(imageSize(bytes("GIF89a", le16(640), le16(480), [0, 0, 0]))).toEqual({ width: 640, height: 480 });
+    // SOI, an APP0 segment to skip, then SOF0 (length, precision, height, width).
+    const jpeg = bytes(
+      [0xff, 0xd8, 0xff, 0xe0],
+      be16(4),
+      [0, 0],
+      [0xff, 0xc0],
+      be16(17),
+      [8],
+      be16(900),
+      be16(1600),
+      [3],
+    );
+    expect(imageSize(jpeg)).toEqual({ width: 1600, height: 900 });
+    const webp = bytes(
+      "RIFF",
+      [0, 0, 0, 0],
+      "WEBP",
+      "VP8X",
+      [10, 0, 0, 0],
+      [0, 0, 0, 0],
+      [0x3f, 0x06, 0],
+      [0x83, 0x03, 0],
+    );
+    expect(imageSize(webp)).toEqual({ width: 1600, height: 900 });
+    expect(imageSize(bytes("not an image"))).toBeNull();
+  });
 });

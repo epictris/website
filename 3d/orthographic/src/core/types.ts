@@ -92,6 +92,9 @@ export interface ImageAsset {
   data: string;
 }
 
+/** What is known about an image without its pixels. */
+export type ImageInfo = Omit<ImageAsset, "data">;
+
 export type ImageMime = "image/png" | "image/jpeg" | "image/webp" | "image/gif";
 
 // ---- Issues ----------------------------------------------------------------

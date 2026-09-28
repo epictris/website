@@ -12,11 +12,13 @@ export default defineConfig({
     port: 3200,
     strictPort: true,
     // The HTTP API and the spec files are served by server.ts (scripts/dev.ts runs both).
-    proxy: {
-      "/orthographic/api": "http://localhost:3201",
-      "/orthographic/llms.txt": "http://localhost:3201",
-      "/orthographic/schema.json": "http://localhost:3201",
-    },
+    // xfwd passes the browser's host along, so links the API returns point back at Vite.
+    proxy: Object.fromEntries(
+      ["/orthographic/api", "/orthographic/mcp", "/orthographic/llms.txt", "/orthographic/schema.json"].map((path) => [
+        path,
+        { target: "http://localhost:3201", xfwd: true },
+      ]),
+    ),
   },
   build: {
     outDir: "../dist/orthographic",
