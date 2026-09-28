@@ -1113,6 +1113,17 @@ export interface LevelBodyData {
   // collision object; a body of pure decoration or a lone light has no physics
   // for a kind to describe.
   kind: BodyKind;
+  // A STABLE NAME for this body, and the one thing about it Blender can refer
+  // to: an object of the same name in the level's scene (`LevelData.scene`) is
+  // this body's dressing, mounted on it and carried by it (see
+  // docs/blender-scenes.md). Nothing in the sim reads it. Absent = unnamed,
+  // which is every body authored before the field, and a body Blender cannot
+  // dress. `cli levels` holds a level's names unique, since a name two bodies
+  // share would dress the first and leave the second bare with nothing to say
+  // why; it is matched as three.js spells a glTF node's name (spaces to `_`,
+  // `.`, `:`, `/` and brackets dropped), so `Ledge.001` in Blender is
+  // `Ledge001` here and `nodeNameOf` in render3d/scenes.ts is the one rule.
+  name?: string;
   // The body's own frame: where its objects are placed from. This is the
   // AUTHORED origin and is deliberately not the engine's - see `ObjectPlacement`.
   x: number;
@@ -2528,6 +2539,16 @@ export interface LevelData {
   // The 3D camera's lens and depth (see LevelCameraData). Render-only like the
   // environment, and absent means the camera every level had before it.
   camera?: LevelCameraData;
+  // The BLENDER SCENE this level is dressed in: `assets-src/scenes/<scene>.blend`,
+  // exported by `just scene <level>` to `public/scenes/<scene>/scene.glb` and
+  // drawn over the level - every object in it named like a body rides that
+  // body, every other one is scenery standing where Blender put it (see
+  // docs/blender-scenes.md). Render-only, like the environment: the sim never
+  // reads it, and absent means a level dressed by its geometry objects alone,
+  // which is every level authored before the field. A name, not a length, so
+  // it crosses `scaleLevelData` unchanged; `SCENE_NAME` in render3d/scenes.ts
+  // is what a name may be spelt as (it is a directory and a release asset).
+  scene?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -2660,6 +2681,7 @@ export interface RawLevelData {
   vines?: VineData[];
   environment?: EnvironmentData;
   camera?: LevelCameraData;
+  scene?: string;
 }
 
 function isLegacyBody(b: LevelBodyData | LegacyBodyData): b is LegacyBodyData {
@@ -3681,6 +3703,8 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
           },
         }
       : {}),
+    // A name, not a length (see `LevelData.scene`).
+    ...(data.scene !== undefined ? { scene: data.scene } : {}),
     ...(notes ? { notes } : {}),
     ...(checkpoints ? { checkpoints } : {}),
     ...(chains ? { chains } : {}),
@@ -3702,6 +3726,8 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
     },
     bodies: data.bodies.map((b) => ({
       kind: b.kind,
+      // A name, not a length (see `LevelBodyData.name`).
+      ...(b.name !== undefined ? { name: b.name } : {}),
       x: b.x * factor,
       y: b.y * factor,
       rot: b.rot,

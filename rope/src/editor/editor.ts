@@ -239,6 +239,7 @@ import { ROCK_HASH_KEY, ROCK_INDEX_KEY, ROCK_TEXTURES, rockBodies, rockNodeName,
 import { silhouette, type SilTriangle } from "../lib/silhouette";
 import { Scene3D, type Scene3DLevel } from "../render3d/scene";
 import { IMAGE_ASSETS, imageNames, registerImageAsset } from "../render3d/images";
+import { nodeNameOf, sceneMetaFile, type SceneMeta } from "../render3d/scenes";
 import {
   cameraDistance,
   focalLengthFromFov,
@@ -1051,6 +1052,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // share.
   const HISTORY_MAX = 50; // undo steps retained
   const history: EdModel[] = [];
+  // The Blender scenes' `meta.json`s, by scene name (see `sceneMetaFor`).
+  const sceneMetas = new Map<string, SceneMeta | null | undefined>();
+  const sceneMetaWaiters = new Map<string, Array<() => void>>();
   const future: EdModel[] = [];
   const snapshot = (m: EdModel): EdModel => ({
     player: {
@@ -1086,6 +1090,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // and for the same reason: a shared reference would alias the state the
     // undo is meant to be restoring.
     meta: { ...m.meta },
+    scene: m.scene,
   });
   const resetHistory = (): void => {
     history.length = 0;
@@ -6045,6 +6050,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         addMoverFields(section(g, "body/Mover", "Mover"), leads);
       }
     }
+    // The body's name, for a body of any make-up: it is what the level's
+    // Blender scene dresses it by.
+    addBodyNameField(section(g, "body/Blender", "Blender"), members);
     // The generated rock's seed, for a rock body whatever it is built of - one
     // of geometry alone has no leads and is still a rock.
     addRockSeedField(section(g, "body/Rock", "Rock"), members);
@@ -6090,6 +6098,99 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     next.title = "Add 1 to the rock seed, then regenerate the rocks to see the new one.";
     row.appendChild(next);
     g.appendChild(row);
+  }
+
+  // The body's NAME (see `LevelBodyData.name`), which is how the level's
+  // Blender scene finds it: an object of the same name in the scene is mounted
+  // on this body and carried by it. Read and written on EVERY member, as the
+  // rock seed is, because a body of geometry alone may be dressed too.
+  //
+  // Offered with the scene's own object names, so a body is bound by picking
+  // rather than by retyping what Blender calls the thing, and with the binding
+  // reported live: this name is an object in the export, or it is not yet.
+  function addBodyNameField(g: HTMLElement, members: EdItem[]): void {
+    const ids = [...new Set(members.map((m) => m.bodyId))];
+    if (ids.length !== 1) return; // a name is one body's; several selected have several
+    const all = bodyMembers(model.items, ids[0]!);
+    const input = document.createElement("input");
+    input.className = "ed-text";
+    input.value = all[0]?.name ?? "";
+    input.placeholder = "unnamed";
+    const listId = `ed-scene-nodes-${ids[0]}`;
+    const list = document.createElement("datalist");
+    list.id = listId;
+    input.setAttribute("list", listId);
+    let edited = false;
+    input.addEventListener("blur", () => (edited = false));
+    input.addEventListener("input", () => {
+      if (!edited) {
+        beginAction();
+        edited = true;
+      }
+      const text = input.value.replace(/\s+/g, " ").trim();
+      for (const b of all) b.name = text;
+      markDirty();
+      hint.textContent = hintText();
+      refreshOutliner();
+    });
+    const row = fieldRow("name");
+    row.appendChild(input);
+    row.appendChild(list);
+    describe(row,
+      "A stable name for this body. An object of the same name in the level's Blender scene (the Level panel's `scene`) is drawn on this body and moves with it. Matched as three.js spells glTF node names: spaces become _ and . : / [ ] are dropped, so `Ledge.001` and `Ledge001` are the same. Must be unique in the level (`cli levels`).");
+    g.appendChild(row);
+    const hint = el("div", "ed-hint");
+    const hintText = (): string => {
+      const name = all[0]?.name ?? "";
+      if (!model.scene) return name ? "Set the level's scene (Level panel) for this name to dress anything." : "Unnamed: the scene cannot dress this body.";
+      const meta = sceneMetaFor(model.scene, () => {
+        hint.textContent = hintText();
+        fillList();
+      });
+      if (!name) return meta ? `Unnamed. Objects in ${model.scene} not on a body: ${meta.scenery.slice(0, 8).join(", ")}${meta.scenery.length > 8 ? "…" : ""}` : "Unnamed: the scene cannot dress this body.";
+      if (meta === undefined) return `Looking for the export of ${model.scene}…`;
+      if (meta === null) return `${model.scene} is not exported yet (\`just scene ${currentName ?? "<level>"}\`).`;
+      const node = nodeNameOf(name);
+      const found = meta.nodes.find((n) => n.node === node);
+      if (!found) return `No object called "${node}" in ${model.scene}; the body is drawn by its geometry objects. Re-export after adding one.`;
+      const twin = model.items.some((i) => i.bodyId !== ids[0] && i.name && nodeNameOf(i.name) === node);
+      return `Dressed by "${found.name}" (${found.triangles.toLocaleString()} triangles).` + (twin ? ` Another body has this name too; only the first is dressed.` : "");
+    };
+    const fillList = (): void => {
+      list.replaceChildren();
+      const meta = model.scene ? sceneMetaFor(model.scene, fillList) : null;
+      if (!meta) return;
+      for (const n of meta.nodes) {
+        const o = document.createElement("option");
+        o.value = n.name;
+        list.appendChild(o);
+      }
+    };
+    hint.textContent = hintText();
+    fillList();
+    g.appendChild(hint);
+  }
+
+  // The exported scene's `meta.json`, fetched once per scene name and kept for
+  // the page (the maps live with the editor's other state, above): undefined
+  // while it is on its way, null when the scene has never been exported here
+  // (a 404). `onChange` is called when the answer lands, so a panel built
+  // before it can redraw its line. A re-export while the editor is open is
+  // picked up on the next page load, like the scene's mesh itself.
+  function sceneMetaFor(scene: string, onChange: () => void): SceneMeta | null | undefined {
+    if (!scene) return null;
+    if (sceneMetas.has(scene)) return sceneMetas.get(scene);
+    sceneMetas.set(scene, undefined);
+    sceneMetaWaiters.set(scene, [onChange]);
+    void fetch(sceneMetaFile(scene), { cache: "no-store" })
+      .then((res) => (res.ok ? (res.json() as Promise<SceneMeta>) : null))
+      .catch(() => null)
+      .then((meta) => {
+        sceneMetas.set(scene, meta);
+        for (const w of sceneMetaWaiters.get(scene) ?? []) w();
+        sceneMetaWaiters.delete(scene);
+      });
+    return undefined;
   }
 
   // THE BODY panel: a container with a transform and the properties a body has
@@ -7602,6 +7703,48 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     describe(tw, "What the level select shows. Blank = the level's own id.");
     g.appendChild(tw);
 
+    // The Blender scene the level is dressed in (`LevelData.scene`). A name,
+    // held to what a scene may be called (`SCENE_NAME`): it is a directory
+    // under `assets-src/scenes/` and a release asset, so the field refuses the
+    // characters those cannot take rather than saving a level that `cli
+    // assets` then fails.
+    const scene = document.createElement("input");
+    scene.className = "ed-text";
+    scene.value = model.scene;
+    scene.placeholder = "none";
+    let sceneEdited = false;
+    scene.addEventListener("blur", () => (sceneEdited = false));
+    scene.addEventListener("input", () => {
+      if (!sceneEdited) {
+        beginAction();
+        sceneEdited = true;
+      }
+      const text = scene.value.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+/, "");
+      if (text !== scene.value) scene.value = text;
+      model.scene = text.replace(/-+$/, "");
+      sceneMetaFor(model.scene, () => refreshFields());
+      markDirty();
+      sceneHint.textContent = sceneHintText();
+    });
+    const sw = fieldRow("scene");
+    sw.appendChild(scene);
+    describe(sw,
+      "The Blender scene this level is dressed in: assets-src/scenes/<scene>.blend, exported by `just scene <level>` and drawn over the level. An object in it named like a body rides that body; everything else is scenery where Blender put it. Blank = dressed by geometry objects alone. `just scene-guide <level>` writes the level's collision into <scene>-guide.blend and creates the scene file if there is none.");
+    g.appendChild(sw);
+    const sceneHint = el("div", "ed-hint");
+    const sceneHintText = (): string => {
+      if (!model.scene) return "No scene: bodies are dressed by their geometry objects.";
+      const meta = sceneMetaFor(model.scene, () => (sceneHint.textContent = sceneHintText()));
+      if (meta === undefined) return `Looking for /scenes/${model.scene}/meta.json…`;
+      if (meta === null) return `Not exported yet: run \`just scene ${currentName ?? "<level>"}\` (after \`just scene-guide\` if assets-src/scenes/${model.scene}.blend does not exist).`;
+      const total = meta.nodes.reduce((n, node) => n + node.triangles, 0);
+      return `${meta.nodes.length} objects (${meta.bound.length} on bodies, ${meta.scenery.length} scenery), ${total.toLocaleString()} triangles, exported ${meta.exportedAt.slice(0, 16).replace("T", " ")}` +
+        (meta.unbound.length ? `. Named but not in the scene: ${meta.unbound.join(", ")}` : "") +
+        (meta.warnings.length ? `. ${meta.warnings.length} exporter warning(s), see meta.json` : "");
+    };
+    sceneHint.textContent = sceneHintText();
+    g.appendChild(sceneHint);
+
     const flag = (
       label: string,
       get: () => boolean,
@@ -8581,6 +8724,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       breakForce: 0,
       durability: 1,
       rockSeed: 0,
+      // Unnamed until the body panel names it for the level's Blender scene.
+      name: "",
       // Hook-proof is opt-in: a fresh shape is one the hook can catch.
       impermeable: false,
       // ...and so is standing out of something's way: a fresh shape is in

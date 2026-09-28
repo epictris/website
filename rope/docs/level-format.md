@@ -119,6 +119,10 @@ The block is authored in the editor's Visuals workspace (**+ Rock**, **+ Mushroo
 They are dev-only for now (`public/generated/`, gitignored), so a level holding a generated object draws its stand-in, or nothing for a patch, wherever the file is not.
 A local `vite build` keeps in `dist` only the generated meshes a registered level names (`generatedMeshesInBuild` in `vite.config.ts`), but a deploy builds from a fresh checkout that has none.
 
+A body may carry a **`name`** (`LevelBodyData.name`): a stable name nothing in the sim reads, which is what the level's Blender scene binds an object to - see [**Blender scenes**](blender-scenes.md).
+The level names that scene once, **`scene`** (`LevelData.scene`, `assets-src/scenes/<scene>.blend`).
+Both are names, so `scaleLevelData` passes them through untouched; the editor offers them on the body panel and the Level panel, and `cli levels` holds a level's body names unique as three spells them (`nodeNameOf`).
+
 A **light object** (`LightObjectData`, `type: "light"`) sits in a body like any other scene object and rides its pose - see [**Light and air**](lighting-and-surfaces.md#light-and-air).
 Its fields, and what `scaleLevelData` does to each:
 

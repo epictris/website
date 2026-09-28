@@ -197,6 +197,15 @@ Publishing is the second step, as for generated meshes: `bun run assets:publish-
 Run it before committing a level that shows a new picture: an entry the release lacks fails `assets:fetch`, and so the deploy.
 `cli assets` fails on a picture a registered level names that the manifest does not hold.
 
+## Blender scenes in the store
+
+A level's Blender scene (see [blender-scenes](blender-scenes.md)) is the seventh kind: `public/scenes/<scene>/scene.glb`, exported by `just scene <level>`, manifest `src/render3d/sceneAssets.json` (scene name to `{ sha256, bytes }`), release name `scene-<scene>.glb`, listed by `storedAssets()` with the others.
+`bun run assets:publish-scenes` (in `just publish`) uploads every scene a registered level names whose local export differs from its pin, **replacing the release asset in place** and re-pinning it: a scene is re-exported for as long as the level is dressed, and a name per export would keep every draft for ever.
+The pin is what says which export a commit meant, `assets:fetch` verifies it, and an older commit whose scene was replaced fails its fetch loudly - the trade this store makes everywhere.
+An entry no level names is dropped from the manifest and left in the release, with the delete line printed, as for a generated mesh.
+`cli assets` fails on a scene a level names that is not pinned, on a pin no level names, and on a scene name the store cannot take.
+The `.blend` files under `assets-src/scenes/` are raws like every other and are not published by any script; publish an accepted one by hand.
+
 ## Generated meshes in the store
 
 The rocks and mushroom patches the editor's Visuals workspace generates (see [generators](generators.md)) are written to `public/generated/<kind>/<hash>/mesh.glb` on the machine that generated them, and the ones the registered levels name are published here so every other checkout, and the deploy, draws them too.

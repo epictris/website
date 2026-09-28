@@ -168,6 +168,12 @@ const r = spawnSync(
     // flatten it depends on merely hoists nodes and keeps their names - so it is
     // the only one turned off.
     ...(keepNodes ? ["--join", "false"] : []),
+    // ...and instancing is the other step that loses a name: five or more
+    // nodes sharing one mesh are folded into one instanced node, and the four
+    // that vanished are exactly the ones a Blender scene binds bodies by
+    // (docs/blender-scenes.md). A pack's props are distinct meshes, so this
+    // changes nothing for one.
+    ...(keepNodes ? ["--instance", "false"] : []),
     ...(simplify === null
       ? ["--simplify", "false"]
       : [

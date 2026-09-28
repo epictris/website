@@ -30,7 +30,8 @@ import {
 import { generatedMeshAsset } from "../src/render3d/generated";
 import { IMAGE_ASSETS } from "../src/render3d/images";
 import { GENERATED_ASSETS, generatedReleaseName } from "../src/render3d/generatedMeta";
-import { levelGeneratedKeys } from "../src/render3d/levelAssets";
+import { levelGeneratedKeys, levelSceneName } from "../src/render3d/levelAssets";
+import { SCENE_ASSETS, sceneFile, sceneReleaseName } from "../src/render3d/scenes";
 import { LEVELS } from "../src/level/registry";
 
 // Overridable so a fork, or a private mirror, does not have to patch source.
@@ -115,6 +116,30 @@ export function storedAssets(): StoredAsset[] {
     const file = generatedMeshAsset(key)?.file;
     if (!file) throw new Error(`generatedAssets.json: "${key}" is not a generated key`);
     out.push({ key, file, sha256: asset.sha256, bytes: asset.bytes, name: generatedReleaseName(key) });
+  }
+  // Blender scenes the levels name, published by `assets:publish-scenes`. One
+  // file per scene, like a prop; every one on disk is `scene.glb`, so the
+  // release name is spelled out of the scene's (see `sceneReleaseName`).
+  for (const [scene, asset] of Object.entries(SCENE_ASSETS)) {
+    out.push({
+      key: `scene:${scene}`,
+      file: sceneFile(scene),
+      sha256: asset.sha256,
+      bytes: asset.bytes,
+      name: sceneReleaseName(scene),
+    });
+  }
+  return out;
+}
+
+// Every Blender scene a registered level names - what the build ships and so
+// what the store must hold (`SCENE_ASSETS`). Registered levels only, as
+// `levelsGeneratedKeys` counts them.
+export function levelsSceneNames(): Map<string, string[]> {
+  const out = new Map<string, string[]>(); // scene -> the levels naming it
+  for (const [id, spec] of Object.entries(LEVELS)) {
+    const scene = levelSceneName(spec.data);
+    if (scene) out.set(scene, [...(out.get(scene) ?? []), id]);
   }
   return out;
 }

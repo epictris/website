@@ -202,6 +202,9 @@ import { canonicalString, generatedKey, generatedMeshAsset, parseGeneratedKey } 
 import { GENERATED_ASSETS, generatedMeta, generatedReleaseName } from "../render3d/generatedMeta";
 import { levelStoredFiles } from "../render3d/levelAssets";
 import { IMAGE_ASSETS, imageFile, registerImageAsset } from "../render3d/images";
+import { nodeNameOf, SCENE_ASSETS, sceneFile, type SceneAsset } from "../render3d/scenes";
+import { castsShadow, dressScene, type DressTarget } from "../render3d/sceneDressing";
+import { orientTo, placeAt } from "../render3d/space";
 import {
   canonicalParams,
   expectedKey,
@@ -6948,8 +6951,161 @@ function imagePlanes(): CaseResult[] {
   return out;
 }
 
+// BLENDER SCENES (docs/blender-scenes.md): a body's `name` and the level's
+// `scene` cross the format and the editor untouched and are written only when
+// set, the preload list names the scene's file at its pinned weight, body
+// names match nodes as three spells them, and `dressScene` hangs a node named
+// like a body under that body's root at the pose that leaves it exactly where
+// Blender put it, leaves everything else as scenery, and takes the outermost
+// match only.
+function blenderScenes(): CaseResult[] {
+  const out: CaseResult[] = [];
+  const near = (a: number, b: number, tol = 1e-6): boolean => Math.abs(a - b) < tol;
+
+  const raw: RawLevelData = {
+    player: { x: 0, y: 0, radius: 20 },
+    scene: "river",
+    bodies: [
+      { kind: "static", name: "Ledge.001", x: 500, y: -200, rot: 0.5, objects: [{ type: "collision", shape: { kind: "rect", w: 100, h: 20 } }] },
+      { kind: "static", x: 0, y: 0, rot: 0, objects: [{ type: "collision", shape: { kind: "rect", w: 100, h: 20 } }] },
+    ],
+  };
+  const metres = scaleLevelData(raw, PX);
+  const saved = modelToDisk(modelFromDisk(raw));
+  const bare = modelToDisk(modelFromDisk({ player: raw.player, bodies: [raw.bodies[1]!] }));
+  out.push({
+    name: "scene: the level's scene and a body's name survive scaling and the editor's round trip, and are written only when set",
+    pass:
+      metres.scene === "river" &&
+      metres.bodies[0]!.name === "Ledge.001" &&
+      metres.bodies[1]!.name === undefined &&
+      near(metres.bodies[0]!.x, 5) &&
+      saved.scene === "river" &&
+      saved.bodies[0]!.name === "Ledge.001" &&
+      !("name" in saved.bodies[1]!) &&
+      !("scene" in bare) &&
+      !("name" in bare.bodies[0]!),
+    detail: `metres ${JSON.stringify({ scene: metres.scene, names: metres.bodies.map((b) => b.name) })}; saved ${JSON.stringify({ scene: saved.scene, names: saved.bodies.map((b) => b.name) })}; bare keys ${Object.keys(bare).join(",")}`,
+  });
+
+  out.push({
+    name: "scene: a body name is matched as three spells a glTF node's name",
+    pass:
+      nodeNameOf("Ledge.001") === "Ledge001" &&
+      nodeNameOf("big rock") === "big_rock" &&
+      nodeNameOf("a/b:c[0]") === "abc0" &&
+      nodeNameOf("Crate") === "Crate",
+    detail: `${nodeNameOf("Ledge.001")}, ${nodeNameOf("big rock")}, ${nodeNameOf("a/b:c[0]")}`,
+  });
+
+  // The preload list: the scene's file at the store's pinned weight, right
+  // after the sky and the avatar, once.
+  const pins = SCENE_ASSETS as Record<string, SceneAsset>;
+  pins["__scene-case"] = { sha256: "0".repeat(64), bytes: 4321 };
+  try {
+    const before = new Set(levelStoredFiles({ player: raw.player, bodies: [] }).map((f) => f.file));
+    const added = levelStoredFiles({ player: raw.player, bodies: [], scene: "__scene-case" }).filter((f) => !before.has(f.file));
+    out.push({
+      name: "scene: the preload list names the scene's file at its pinned size",
+      pass: added.length === 1 && added[0]!.file === sceneFile("__scene-case") && added[0]!.bytes === 4321,
+      detail: `added ${JSON.stringify(added)}`,
+    });
+  } finally {
+    delete pins["__scene-case"];
+  }
+
+  // A loaded file: a ledge turned and placed in the world with a crate nested
+  // inside it (both are body names; the nested one rides its parent), a
+  // backdrop behind the plane, a rock in front of it.
+  const loaded = new THREE.Group();
+  const ledge = new THREE.Group();
+  ledge.name = "Ledge001";
+  ledge.position.set(5, 2, 0.1);
+  ledge.rotation.set(0, 0, 0.3);
+  ledge.add(new THREE.Mesh(new THREE.BoxGeometry(1, 0.2, 0.4)));
+  const crate = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.3, 0.3));
+  crate.name = "Crate";
+  crate.position.set(0.5, 0.25, 0);
+  ledge.add(crate);
+  const backdrop = new THREE.Mesh(new THREE.BoxGeometry(10, 5, 0.5));
+  backdrop.name = "Backdrop";
+  backdrop.position.set(0, 0, -3);
+  backdrop.castShadow = true;
+  const rock = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1));
+  rock.name = "Rock";
+  rock.position.set(-2, 0, 0.4);
+  rock.castShadow = true;
+  loaded.add(ledge, backdrop, rock);
+  loaded.updateMatrixWorld(true);
+  const ledgeWorld = ledge.matrixWorld.clone();
+  const crateWorld = crate.matrixWorld.clone();
+
+  // The ledge's body rests at sim (5, -2) turned -0.3 (clockwise-positive in
+  // the sim, so three's +0.3): its root is where Blender put the node in the
+  // plane, so the node should land under it with only its 10 cm of depth
+  // offset left. The crate's body is elsewhere and must NOT take the nested
+  // node.
+  const ledgeRoot = new THREE.Group();
+  const ledgeOrigin = new Vec2(5, -2);
+  placeAt(ledgeRoot, ledgeOrigin);
+  orientTo(ledgeRoot, -0.3);
+  const crateRoot = new THREE.Group();
+  const targets: DressTarget[] = [
+    { name: "Ledge.001", root: ledgeRoot, origin: ledgeOrigin, rotation: -0.3, tag: "ledge-tag" },
+    { name: "Crate", root: crateRoot, origin: new Vec2(9, 9), rotation: 0 },
+    { name: "Missing", root: new THREE.Group(), origin: Vec2.ZERO, rotation: 0 },
+  ];
+  const dressed = dressScene(loaded, targets);
+  const bound = dressed.bound.get("Ledge001");
+  ledgeRoot.updateMatrixWorld(true);
+  const boundCrate = bound?.getObjectByName("Crate");
+  const same = (a: THREE.Matrix4, b: THREE.Matrix4): boolean => a.elements.every((e, i) => near(e, b.elements[i]!, 1e-6));
+  out.push({
+    name: "scene: a node named like a body hangs under that body's root exactly where Blender put it, nested matches ride it, and a missing node is reported",
+    pass:
+      bound !== undefined &&
+      bound.parent === ledgeRoot &&
+      near(bound.position.x, 0) &&
+      near(bound.position.y, 0) &&
+      near(bound.position.z, 0.1) &&
+      near(bound.quaternion.angleTo(new THREE.Quaternion()), 0, 1e-6) &&
+      same(bound.matrixWorld, ledgeWorld) &&
+      boundCrate !== undefined &&
+      same(boundCrate.matrixWorld, crateWorld) &&
+      crateRoot.children.length === 0 &&
+      bound.userData["pickTag"] === "ledge-tag" &&
+      dressed.unbound.length === 2 &&
+      dressed.unbound.includes("Crate") &&
+      dressed.unbound.includes("Missing"),
+    detail: `bound ${[...dressed.bound.keys()].join(",")}; local pos ${bound?.position.toArray().map((v) => v.toFixed(6)).join(",")}; unbound ${dressed.unbound.join(",")}; crate root children ${crateRoot.children.length}`,
+  });
+
+  // The rest is scenery at its world pose; behind the plane it casts nothing.
+  const sceneryNames = dressed.scenery.children.map((c) => c.name).sort();
+  const sBackdrop = dressed.scenery.getObjectByName("Backdrop") as THREE.Mesh | undefined;
+  const sRock = dressed.scenery.getObjectByName("Rock") as THREE.Mesh | undefined;
+  dressed.scenery.updateMatrixWorld(true);
+  out.push({
+    name: "scene: every other node is scenery where Blender put it, casting a shadow only on or in front of the plane; the loaded file is untouched",
+    pass:
+      sceneryNames.join(",") === "Backdrop,Rock" &&
+      sBackdrop !== undefined &&
+      near(sBackdrop.position.z, -3) &&
+      sBackdrop.castShadow === false &&
+      sRock !== undefined &&
+      sRock.castShadow === true &&
+      castsShadow(sRock) &&
+      !castsShadow(sBackdrop) &&
+      loaded.children.length === 3 &&
+      ledge.children.length === 2,
+    detail: `scenery ${sceneryNames.join(",")}; backdrop casts ${sBackdrop?.castShadow}, rock casts ${sRock?.castShadow}; loaded children ${loaded.children.length}`,
+  });
+  return out;
+}
+
 export function runRender3dCases(): CaseResult[] {
   return [
+    ...blenderScenes(),
     ...imagePlanes(),
     ...beltRendering(),
     ...renderNeedsGeometry(),

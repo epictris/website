@@ -43,7 +43,8 @@ Controls, gamepad and touch mapping, the level list and the aim modes: [docs/run
 - **`expectedFail` is a lie the moment it passes**: the runner fails on a marker whose case goes green, so the fix that closes a gap removes the marker.
 - **Levels are `levels/*.json`** in the on-disk pixel format, imported into `registry.ts`. `levelData.ts` is generated (`bun scripts/extract-level.ts`), never hand-edited. Every retired form is folded in by `normalizeLevelData` inside `scaleLevelData`, the one gate every level passes through.
 - **The editor autosaves 750 ms after any edit**, so an open editor tab is a second author of a level file. Close it before a script touches a level.
-- **Binary assets live in a GitHub release**, not git. Every manifest entry pins `sha256` and `bytes` and names `source`, `author` and `license` (redistributable, NC acceptable here); `CREDITS.md` is generated and checked by `cli assets`. Generated meshes (rocks, mushroom patches) are published with `bun run assets:publish-generated`, which pins them in `src/render3d/generatedAssets.json`; run it before committing a level whose generated objects changed.
+- **Binary assets live in a GitHub release**, not git. Every manifest entry pins `sha256` and `bytes` and names `source`, `author` and `license` (redistributable, NC acceptable here); `CREDITS.md` is generated and checked by `cli assets`. Generated meshes (rocks, mushroom patches) are published with `bun run assets:publish-generated`, which pins them in `src/render3d/generatedAssets.json`; run it before committing a level whose generated objects changed. `just publish` runs it together with the pictures' and the Blender scenes' publishers.
+- **Blender owns appearance, never collision.** A level dressed in Blender ([blender-scenes](docs/blender-scenes.md)) binds objects to bodies by the body's `name`; the collision stays authored in the editor, and no export can change how the ball rolls.
 
 ## Working practices
 
@@ -155,6 +156,7 @@ Rendering
 - [art-style](docs/art-style.md) - the painterly look (no longer the direction since 2026-09-24; the painted light is removed): painted maps, the reproducible bake, how to add a texture, what was rejected.
 - [render3d](docs/render3d.md) - two canvases one camera, the coordinate mapping, geometry objects versus collision, bodies and scene objects, traps.
 - [lighting-and-surfaces](docs/lighting-and-surfaces.md) - environment, light objects in bodies, fog, HDRI skies, beams, waking lights, fireflies that follow the ball (along the camera paths or a firefly path of their own), generated and authored PBR surfaces, tiling.
+- [blender-scenes](docs/blender-scenes.md) - a level dressed in one `.blend`: body `name` binds an object to a body, `scene` names the file, `just scene-guide` / `just scene`, the frame, publishing, what glTF cannot carry.
 - [rock-assets](docs/rock-assets.md) - rock and moss props: a body's outline modelled into a stylised rock in headless Blender, the moss grown from the rock inside the moss body's outline, the job files, the previews, every lesson from the first rock.
 - [rocks](docs/rocks.md) - the earlier generated rocks (rejected; kept as history): the level's outlines turned into boulders, the GLB per level, the staleness hash.
 - [asset-store](docs/asset-store.md) - the release-hosted binaries, budgets, the optimise pipelines, licensing and credits.

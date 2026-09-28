@@ -14,6 +14,9 @@ public/water/
 public/hdri/
 # Pictures for image planes, uploaded through the editor.
 public/images/
+# Blender scenes (`just scene <level>`), published like generated meshes; see
+# docs/blender-scenes.md.
+public/scenes/
 # Raw, un-optimised models as they were downloaded. Local scratch: the shippable
 # copy is what `assets:publish` uploads, and a raw is re-downloadable from the
 # `source` its manifest entry records.

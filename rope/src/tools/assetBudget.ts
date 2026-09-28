@@ -40,8 +40,9 @@ import { HDRI_ASSETS, MESH_ASSETS, RAW_ASSETS, TEXTURE_ASSETS } from "../render3
 import { GENERATED_ASSETS } from "../render3d/generatedMeta";
 import { IMAGE_ASSETS } from "../render3d/images";
 import { levelImageKeys } from "../render3d/levelAssets";
+import { SCENE_ASSETS, isSceneName } from "../render3d/scenes";
 import { LEVELS } from "../level/registry";
-import { assetName, levelsGeneratedKeys, storedAssets } from "../../scripts/assetStore";
+import { assetName, levelsGeneratedKeys, levelsSceneNames, storedAssets } from "../../scripts/assetStore";
 import { CREDITS_PATH, renderCredits } from "../../scripts/credits";
 
 const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
@@ -220,6 +221,28 @@ export function runAssetChecks(): AssetCheck[] {
             ...unnamed.map((key) => `${key} named by no level`),
           ].join(", ")
         : `${named.size} generated mesh(es) published`,
+  });
+
+  // The store holds exactly the Blender scenes the levels name, for the
+  // reason it holds exactly the generated meshes: a scene missing is a level
+  // that deploys undressed (the fetch refuses it too), an extra is bytes the
+  // build fetches and drops. And a level can only name a scene the store can
+  // hold: the name is a directory and a release asset (see `SCENE_NAME`).
+  const scenes = levelsSceneNames();
+  const misnamed = [...scenes].filter(([scene]) => !isSceneName(scene));
+  const unpublishedScenes = [...scenes].filter(([scene]) => !SCENE_ASSETS[scene]);
+  const unnamedScenes = Object.keys(SCENE_ASSETS).filter((scene) => !scenes.has(scene));
+  checks.push({
+    name: "assets: the store holds exactly the Blender scenes the levels name",
+    pass: misnamed.length === 0 && unpublishedScenes.length === 0 && unnamedScenes.length === 0,
+    detail:
+      misnamed.length || unpublishedScenes.length || unnamedScenes.length
+        ? [
+            ...misnamed.map(([scene, levels]) => `"${scene}" (${levels.join(", ")}) is not a scene name (lower-case letters, digits and dashes)`),
+            ...unpublishedScenes.map(([scene, levels]) => `${scene} (${levels.join(", ")}) not published - run \`just publish\``),
+            ...unnamedScenes.map((scene) => `${scene} named by no level - run \`just publish\``),
+          ].join(", ")
+        : `${scenes.size} scene(s) published`,
   });
 
   // Every picture a registered level shows is in the image manifest. One that

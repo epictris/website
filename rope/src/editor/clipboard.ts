@@ -95,6 +95,7 @@ export function writeClipboard(model: EdModel, items: readonly EdItem[]): string
     environment: undefined,
     camera: undefined,
     meta: {},
+    scene: "",
   };
   const { player: _spawn, ...rest } = scaleLevelData(toLevelData(sub), PIXELS_PER_METER);
   return JSON.stringify({ [CLIPBOARD_KEY]: CLIPBOARD_VERSION, ...rest });

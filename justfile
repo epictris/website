@@ -46,6 +46,20 @@ assets:
 # Publish the generated meshes (rocks, mushroom patches) the levels name to the
 # asset release and pin them in rope/src/render3d/generatedAssets.json. Run it
 # after generating, then commit that file with the level. Also uploads the
-# pictures uploaded in the editor (pinned in rope/src/render3d/imageAssets.json).
+# pictures uploaded in the editor (pinned in rope/src/render3d/imageAssets.json)
+# and the Blender scenes the levels name (rope/src/render3d/sceneAssets.json).
 publish:
-    cd rope && bun run assets:publish-generated && bun run assets:publish-images
+    cd rope && bun run assets:publish-generated && bun run assets:publish-images && bun run assets:publish-scenes
+
+# Export a level's Blender scene (rope/assets-src/scenes/<scene>.blend, the
+# level's `scene`) into rope/public/scenes/<scene>/ and report what it dressed.
+# Then refresh the browser. See rope/docs/blender-scenes.md.
+#   just scene ball
+scene LEVEL:
+    cd rope && bun run scene:export {{LEVEL}}
+
+# Write the level's collision into <scene>-guide.blend as a linked guide to
+# model against, and create <scene>.blend linking it if there is none yet.
+#   just scene-guide ball
+scene-guide LEVEL:
+    cd rope && bun run scene:guide {{LEVEL}}

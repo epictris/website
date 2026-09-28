@@ -31,6 +31,7 @@ import type { Camera } from "../render/camera";
 import type { ViewTransform } from "../render/viewport";
 import { GpuTimer } from "../render/gpuTimer";
 import { BodyVisual, pickTagOf, surfaceOf } from "./bodyVisuals";
+import { SceneDressing, type DressTarget } from "./sceneDressing";
 import { BallVisual } from "./ballVisual";
 import { ChainLayer } from "./chainVisual";
 import { VineLayer } from "./vineVisual";
@@ -189,6 +190,8 @@ export class Scene3D {
   // fitting. They are not in the world, so they can neither be found by the
   // reconciliation nor go stale: they live exactly as long as the level does.
   private readonly standing: BodyVisual[] = [];
+  // The level's Blender scene, when it names one (see `SceneDressing`).
+  private dressing: SceneDressing | null = null;
   private ballVisual: BallVisual | null = null;
   private chains: ChainLayer;
   private vines: VineLayer;
@@ -280,6 +283,7 @@ export class Scene3D {
     // A body that built an engine object is registered under it, so the
     // reconciliation below finds it already made rather than building a second,
     // authorless visual for the same body.
+    const targets: DressTarget[] = [];
     level.visualSource.built.bodies.forEach((built, index) => {
       // The body's index in the level names its own copy of any surface a
       // waking light drives (see `BodyVisual`'s `instance`), so a rebuild of
@@ -288,7 +292,26 @@ export class Scene3D {
       this.scene.add(visual.root);
       if (built.body) this.bodies.set(built.body, visual);
       else this.standing.push(visual);
+      // What the level's Blender scene may dress: the body by name, its root
+      // and the pose that root has at rest. A pick on the dressing answers with
+      // the body's first authored object, which is the one the editor can act
+      // on (see `pickTagOf`).
+      targets.push({
+        name: built.data.name,
+        root: visual.root,
+        origin: built.origin,
+        rotation: built.rotation,
+        tag: built.data.objects[0],
+      });
     });
+    // The level's Blender scene, over everything (see docs/blender-scenes.md):
+    // bound nodes land under the roots above when the file arrives, scenery
+    // stands in the world where Blender put it.
+    const sceneName = level.visualSource.data.scene;
+    if (sceneName) {
+      this.dressing = new SceneDressing(sceneName, targets);
+      this.scene.add(this.dressing.root);
+    }
     // Then whatever else the world already holds - the avatar's debris, a
     // sandbox rock spawned before the scene was built.
     for (const body of level.world.bodies) this.ensureBody(body);
@@ -1103,6 +1126,11 @@ export class Scene3D {
       visual.dispose();
     }
     this.standing.length = 0;
+    if (this.dressing) {
+      this.scene.remove(this.dressing.root);
+      this.dressing.dispose();
+      this.dressing = null;
+    }
     if (this.ballVisual) {
       this.scene.remove(this.ballVisual.root);
       this.ballVisual.dispose();

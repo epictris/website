@@ -15,10 +15,12 @@ import { join, resolve } from "node:path";
 import { levelFileHash, treeStamp, type TreeStamp } from "./src/sim/treeStamp";
 import { DEFAULT_LEVEL, LEVELS } from "./src/level/registry";
 import type { RawLevelData } from "./src/level/levelFormat";
-import { levelStoredFiles } from "./src/render3d/levelAssets";
+import { levelSceneName, levelStoredFiles } from "./src/render3d/levelAssets";
 import { GENERATED_MESH_FILE, GENERATED_ROOT } from "./src/render3d/generated";
+import { SCENE_MESH_FILE, SCENES_DIR } from "./src/render3d/scenes";
 import { generatorService } from "./src/server/generators/service";
 import { imageService } from "./src/server/images";
+import { sceneService } from "./src/server/scenes";
 
 // The identity of the SOURCE this server is serving, exposed to the app as
 // `virtual:tree-stamp` and stamped into every exported bundle.
@@ -510,6 +512,44 @@ function generatedMeshesInBuild(): Plugin {
   };
 }
 
+// BLENDER SCENES SHIP ONLY WHERE A LEVEL NAMES THEM, for the reason above:
+// `public/scenes/` holds every scene ever exported on this machine, each with
+// a `meta.json` the game never reads. A named scene keeps its `scene.glb`
+// alone; everything else goes.
+function scenesInBuild(): Plugin {
+  let outDir = "";
+  return {
+    name: "scenes-in-build",
+    apply: "build",
+    configResolved(config) {
+      outDir = resolve(config.root, config.build.outDir);
+    },
+    writeBundle() {
+      const root = join(outDir, SCENES_DIR.slice(1));
+      if (!existsSync(root)) return;
+      const named = new Set<string>();
+      for (const spec of Object.values(LEVELS)) {
+        const scene = levelSceneName(levelData(spec));
+        if (scene) named.add(scene);
+      }
+      let kept = 0;
+      let dropped = 0;
+      for (const scene of readdirSync(root)) {
+        const dir = join(root, scene);
+        if (!named.has(scene) || !existsSync(join(dir, SCENE_MESH_FILE))) {
+          rmSync(dir, { recursive: true, force: true });
+          dropped++;
+          continue;
+        }
+        for (const name of readdirSync(dir)) if (name !== SCENE_MESH_FILE) rmSync(join(dir, name), { force: true });
+        kept++;
+      }
+      if (!readdirSync(root).length) rmSync(root, { recursive: true, force: true });
+      this.info(`scenes: ${kept} named by a level kept, ${dropped} dropped from ${outDir}`);
+    },
+  };
+}
+
 export default defineConfig({
   server: {
     port: 3100,
@@ -538,6 +578,11 @@ export default defineConfig({
         // restart the server; the upload invalidates it by hand instead.
         "**/public/images/**",
         "**/src/render3d/imageAssets.json",
+        // `just scene` writes here while the editor is open, and the manifest
+        // is a config dependency like the image one (src/server/scenes.ts
+        // serves the files; `assets:publish-scenes` writes the manifest).
+        "**/public/scenes/**",
+        "**/src/render3d/sceneAssets.json",
       ],
     },
     // The playtest store lives in serve.ts, not in Vite. With `bun run serve.ts`
@@ -576,6 +621,8 @@ export default defineConfig({
     editorRoute(),
     generatorService(),
     imageService(),
+    sceneService(),
     generatedMeshesInBuild(),
+    scenesInBuild(),
   ],
 });

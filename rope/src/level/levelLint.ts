@@ -33,6 +33,7 @@
 
 import { collides, normalizeLevelData, type LevelData } from "./levelFormat";
 import { LEVELS, listedLevels } from "./registry";
+import { nodeNameOf } from "../render3d/scenes";
 
 export interface LevelCheck {
   name: string;
@@ -130,6 +131,29 @@ export function runLevelChecks(): LevelCheck[] {
       contradictory.length === 0
         ? "every spawn asks for one opening"
         : `${contradictory.map(([id]) => id).join(", ")}: a hanging ball has nothing to roll on, so the entry would be ignored.`,
+  });
+
+  // Body names are what a Blender scene binds its objects to (see
+  // `LevelBodyData.name`), so within a level they must be unique - as three
+  // spells them, since `Ledge.001` and `Ledge001` are one node. Two bodies of
+  // one name would dress the first and leave the second bare, with nothing on
+  // screen to say why. Every level, listed or not, since a sandbox may be
+  // dressed too.
+  const sameName: string[] = [];
+  for (const [id, spec] of Object.entries(LEVELS)) {
+    const seen = new Map<string, number>();
+    normalizeLevelData(spec.data).bodies.forEach((b, i) => {
+      if (!b.name) return;
+      const node = nodeNameOf(b.name);
+      const first = seen.get(node);
+      if (first === undefined) seen.set(node, i);
+      else sameName.push(`${id}: bodies ${first} and ${i} are both "${node}"`);
+    });
+  }
+  checks.push({
+    name: "levels: no two bodies in a level share a name",
+    pass: sameName.length === 0,
+    detail: sameName.length === 0 ? "every named body is the only one of its name" : sameName.join("; "),
   });
 
   return checks;

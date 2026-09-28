@@ -302,6 +302,13 @@ Move, resize and push it through z like any geometry object; with no collision o
 
 Any geometry object can become a picture: **kind → image** on its Look section, which then offers only the picture picker, **Upload…** (adds a picture and assigns it) and **Fit** (height from width, so the picture is undistorted).
 
+## Blender scenes: the `scene` and `name` fields
+
+The Level panel's **`scene`** names the Blender scene the level is dressed in (`LevelData.scene`, held to lower-case letters, digits and dashes as it is typed), with a line under it saying what the current export holds - how many objects, how many on bodies, the triangles, when - or that it is not exported yet.
+The body panel's **`name`** (`LevelBodyData.name`, on every member of the body, as the rock seed is) is what an object in that scene is matched to; the field offers the exported objects' names, and the line under it says whether this name is dressed (`Dressed by "Ledge.001" (1,240 triangles)`), missing from the export, or shared with another body.
+Both read the export's `meta.json`, fetched once per scene per page; a re-export is seen on the next load.
+The whole loop is in [blender-scenes](blender-scenes.md).
+
 ## Workspaces: Level and Visuals
 
 The toolbar opens with a switcher, **Level** and **Visuals** (**W** toggles).

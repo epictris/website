@@ -237,6 +237,13 @@ The picture arrives as a **new mesh** in the grey placeholder's place, as a prop
 The editor's selection paints a clone of whatever material a mesh wears when it is selected (`Scene3D.highlightMaterial`), and a plane added and selected in one gesture otherwise went on wearing the grey clone after its picture had landed.
 An unlit material has no emission to light, so its selection is a tint toward the selection colour instead.
 
+## Blender scenes
+
+A level naming a `scene` is dressed by one GLB exported from `assets-src/scenes/<scene>.blend` (see [blender-scenes](blender-scenes.md)).
+`Scene3D.setLevel` hands `SceneDressing` (`render3d/sceneDressing.ts`) every authored body's name, visual root and rest pose; when the file lands, `dressScene` hangs each node named like a body under that body's root at Blender's pose minus the rest pose, so it is drawn where Blender put it and carried by the body, and adds the rest to the scene as scenery at the identity.
+Bound nodes carry the body's first object as their pick tag; scenery carries none.
+The file is served from `/scenes/<scene>/scene.glb`, cached per page like a prop's, weighted in the preload list by the store's pin or the local `meta.json` (`levelStoredFiles`).
+
 ## Generated meshes
 
 A geometry object carrying a `generator` block (see [level-format](level-format.md)) draws a GENERATED mesh: a boulder built from its outline, or a mushroom patch grown on another object, by Python and headless Blender behind the dev server (plans/visuals-workspace.md).

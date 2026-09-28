@@ -25,6 +25,8 @@ import { normalizeLevelData } from "../level/levelFormat";
 import { generatedMeshAsset, parseGeneratedKey } from "./generated";
 import { GENERATED_ASSETS, generatedMeta } from "./generatedMeta";
 import { IMAGE_ASSETS } from "./images";
+import { SCENE_ASSETS, sceneFile } from "./scenes";
+import { sceneMeta } from "./sceneMeta";
 import {
   BALL_MESH,
   emissiveMapName,
@@ -73,6 +75,23 @@ export function levelGeneratedKeys(raw: RawLevelData): string[] {
     }
   }
   return [...keys];
+}
+
+// The Blender scene the level is dressed in, or undefined (see `LevelData.scene`).
+export function levelSceneName(raw: RawLevelData): string | undefined {
+  return normalizeLevelData(raw).scene || undefined;
+}
+
+// A scene's file for the preloader. Its weight is the published pin's, or the
+// local export's `meta.json` for a scene exported here and not yet published,
+// or 0 with a warning for one with neither (as `meshFile` does for a generated
+// key, and for the same reason: a 0 is otherwise a silent wrong answer).
+function sceneStoredFile(scene: string): StoredFile {
+  const bytes = SCENE_ASSETS[scene]?.bytes ?? sceneMeta(scene)?.bytes;
+  if (bytes === undefined) {
+    console.warn(`[levelAssets] scene "${scene}" is not in the store and has no meta.json; preloading ${sceneFile(scene)} unweighted`);
+  }
+  return { file: sceneFile(scene), bytes: bytes ?? 0 };
 }
 
 // Every picture the level shows (`kind: "image"`), once each - what the image
@@ -124,6 +143,9 @@ export function levelStoredFiles(raw: RawLevelData, controller?: string): Stored
   // `BallVisual` and so fetches no ball. It is named right after the sky
   // because it is what the player is looking at.
   if (controller === "ball") add(MESH_ASSETS[BALL_MESH]);
+  // The Blender scene is most of what a dressed level looks like, and one
+  // file, so it goes ahead of the bodies' own props.
+  if (data.scene) add(sceneStoredFile(data.scene));
 
   let water = false;
   for (const body of data.bodies) {

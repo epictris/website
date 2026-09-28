@@ -475,6 +475,12 @@ export interface EdItem {
   // `+ Geometry` choice, made where the shape is drawn.
   //
   kind: BodyKind;
+  // The body's stable NAME (see `LevelBodyData.name`), "" for unnamed. What a
+  // Blender object in the level's scene is matched to, so it is per BODY, and
+  // like `rockSeed` it is held on EVERY member rather than on the collision
+  // leads alone - a body of geometry alone may be dressed too - and written
+  // from whichever member `toLevelData` writes the body from.
+  name: string;
   friction: number; // surface friction, 0 (ice) .. 1 (rubber)
   // The trampoline pair (see `LevelBodyData.bounce`): the coefficient of
   // restitution, 0 (dead) .. 1 (perfect), and the floor under the outgoing
@@ -1079,6 +1085,11 @@ export interface EdModel {
   // Empty is what a level that authors nothing has, and an empty block is
   // written back as no block at all (see `toLevelData`).
   meta: LevelMetaData;
+  // The Blender scene the level is dressed in (`LevelData.scene`), "" for
+  // none. Carried for the reason the blocks above are - the editor rewrites
+  // the whole file - and offered on the Level panel, since naming the scene is
+  // half of binding a body to it (the other half is the body's `name`).
+  scene: string;
 }
 
 // Every field of the environment block, in the order the inspector shows them,
@@ -1626,6 +1637,7 @@ function fromLevelData(data: LevelData): EdModel {
       breakForce: b.breakForce ?? 0,
       durability: b.durability ?? 1,
       rockSeed: b.rockSeed ?? 0,
+      name: b.name ?? "",
       force: b.force ?? 0,
       flow: b.flow ?? 0,
       drag: b.drag ?? 0,
@@ -1786,6 +1798,7 @@ function fromLevelData(data: LevelData): EdModel {
     breakForce: 0,
     durability: 1,
     rockSeed: 0,
+    name: "",
     impermeable: false,
     mask: MASK_ALL,
     rail: false,
@@ -1886,6 +1899,7 @@ function fromLevelData(data: LevelData): EdModel {
     breakForce: 0,
     durability: 1,
     rockSeed: 0,
+    name: "",
     impermeable: false,
     mask: MASK_ALL,
     rail: false,
@@ -1996,6 +2010,7 @@ function lightItem(
     breakForce: 0,
     durability: 1,
     rockSeed: 0,
+    name: "",
     impermeable: false,
     mask: MASK_ALL,
     rail: false,
@@ -2077,6 +2092,7 @@ function lightItem(
     breakForce: 0,
     durability: 1,
     rockSeed: 0,
+    name: "",
     impermeable: false,
     mask: MASK_ALL,
     rail: false,
@@ -2210,6 +2226,7 @@ function lightItem(
     environment: data.environment ? { ...data.environment } : undefined,
     camera: data.camera ? { ...data.camera } : undefined,
     meta: { ...data.meta },
+    scene: data.scene ?? "",
   };
 }
 
@@ -2738,6 +2755,9 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
       // authored before it means by saying nothing - which keeps such a level
       // byte-identical through a save (see `LevelBodyData.rockSeed`).
       ...(lead.rockSeed ? { rockSeed: lead.rockSeed } : {}),
+      // The name, for the same reason and with the same rule: a body of any
+      // make-up may carry one, and an unnamed body writes nothing.
+      ...(lead.name ? { name: lead.name } : {}),
       objects,
     };
   });
@@ -2838,6 +2858,7 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
     // first time the file is opened.
     ...(model.environment ? { environment: { ...model.environment } } : {}),
     ...(model.camera ? { camera: { ...model.camera } } : {}),
+    ...(model.scene ? { scene: model.scene } : {}),
     ...(notes.length ? { notes } : {}),
     ...(checkpoints.length ? { checkpoints } : {}),
     ...(chains.length ? { chains } : {}),
@@ -3704,6 +3725,13 @@ export function bodyRuns(items: readonly EdItem[]): EdItem[][] {
 // the label is derived, and it is derived from the same things the format
 // distinguishes rather than from anything the editor keeps on the side.
 export function bodyLabel(members: readonly EdItem[]): string {
+  // A named body is told apart by its name, which is what the name is for.
+  const name = members[0]?.name;
+  const kind = bodyKindLabel(members);
+  return name ? `${kind} ${name}` : kind;
+}
+
+function bodyKindLabel(members: readonly EdItem[]): string {
   const lead = bodyLead(members);
   if (lead) return lead.kind;
   const first = members[0];
@@ -4179,6 +4207,7 @@ export function syncBodyProps(members: readonly EdItem[]): void {
     m.breakForce = lead.breakForce;
     m.durability = lead.durability;
     m.rockSeed = lead.rockSeed;
+    m.name = lead.name;
     m.force = lead.force;
     m.flow = lead.flow;
     m.drag = lead.drag;
@@ -4693,6 +4722,8 @@ export function emptyModel(): EdModel {
     // Unnamed and listed: a new level belongs on the menu, and the Level panel
     // is where it is given a title.
     meta: {},
+    // Dressed by nothing but its own geometry objects until a scene is named.
+    scene: "",
     items: [
       {
         id: newBodyId(),
@@ -4700,6 +4731,7 @@ export function emptyModel(): EdModel {
         object: "collision",
         bodyId: newBodyId(),
         kind: "static",
+        name: "",
         pos: new Vec2(0, 0),
         rot: 0,
         shape: { kind: "rect", w: 8, h: 0.6 },
