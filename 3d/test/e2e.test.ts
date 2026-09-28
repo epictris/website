@@ -285,6 +285,43 @@ describe("HTTP tools and scenes", () => {
     expect((await tool<{ document: { objects: unknown[] } }>("get_scene", { sceneId })).document.objects).toEqual([]);
   });
 
+  test("add_objects adds a batch in one step, or nothing when one object is wrong", async () => {
+    const { sceneId } = await tool<{ sceneId: string }>("create_scene", {});
+    const good = { id: "a", outlines: box(0, 2, 0, 2, 0, 2) };
+    const refused = await tool("add_objects", {
+      sceneId,
+      objects: [
+        good,
+        {
+          id: "b",
+          outlines: {
+            ...box(0, 2, 0, 2, 0, 2),
+            top: [
+              [0, 0],
+              [2, 2],
+              [2, 0],
+              [0, 2],
+            ],
+          },
+        },
+      ],
+    });
+    expect(refused.ok).toBe(false);
+    expect(refused.issues.map((i) => `${i.code} ${i.path}`)).toEqual([
+      "ring-self-intersection /objects/1/outlines/top",
+    ]);
+    expect((await tool<{ document: { objects: unknown[] } }>("get_scene", { sceneId })).document.objects).toEqual([]);
+    const added = await tool<{ ids: string[]; revision: number; objects: Record<string, unknown>[] }>("add_objects", {
+      sceneId,
+      objects: [good, { primitive: "box", center: { x: 10, y: 10, z: 1 }, size: { x: 2, y: 2, z: 2 } }],
+    });
+    expect(added.ids).toEqual(["a", "obj-1"]);
+    expect(added.revision).toBe(2);
+    expect(Object.keys(added.objects[0])).toEqual(["id", "derived"]);
+    expect((await tool<{ undone: boolean }>("undo", { sceneId })).undone).toBe(true);
+    expect((await tool<{ document: { objects: unknown[] } }>("get_scene", { sceneId })).document.objects).toEqual([]);
+  });
+
   test("images come from data (not from private URLs) and back references", async () => {
     const { sceneId } = await tool<{ sceneId: string }>("create_scene", {});
     const img = await tool<{ id: string; width: number }>("add_image", { sceneId, data: PNG_1PX, name: "px.png" });

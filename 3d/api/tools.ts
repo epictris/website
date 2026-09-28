@@ -126,6 +126,27 @@ const object = (properties: Record<string, Schema>, required: string[] = []): Sc
   required,
 });
 
+/** Everything add_object and add_objects take to describe one object. */
+const NEW_OBJECT: Record<string, Schema> = {
+  id: str("Letters, digits, _ . -, starting with a letter or digit; unique. Generated when omitted."),
+  outlines: object(
+    {
+      front: ring("[x, z] points."),
+      top: ring("[x, y] points."),
+      side: ring("[y, z] points."),
+    },
+    ["front", "top", "side"],
+  ),
+  primitive: {
+    enum: ["box", "ellipsoid", "cylinder", "rock"],
+    description: "Instead of outlines: a starting shape filling the box given by center and size.",
+  },
+  center: vec3("Box centre for a primitive (default: the scene centre)."),
+  size: vec3("Box size for a primitive (default 4 x 4 x 4)."),
+  ...OBJECT_PROPS,
+};
+const MAX_BATCH = 100;
+
 // ---- Helpers ---------------------------------------------------------------------------------
 
 const done = (issues: Issue[], extra: Record<string, unknown> = {}): ToolOutput => ({
@@ -149,11 +170,13 @@ function objectsOf(scene: Scene, idList: string[]) {
 
 /**
  * Run an op on a scene as one undoable step. On success report the new
- * revision, the op's values, the touched objects and their geometry problems.
+ * revision, the op's values, the touched objects (`brief`: ids and bounds
+ * only) and their geometry problems.
  */
 async function edit(
   args: Record<string, unknown>,
   op: (draft: EditorState, scene: Scene) => ops.OpResult,
+  opts: { brief?: boolean } = {},
 ): Promise<ToolOutput> {
   const scene = requireScene(args.sceneId as string);
   const out = editScene(scene, (d) => op(d, scene));
@@ -164,7 +187,12 @@ async function edit(
   return done([...out.issues, ...geometry.filter((i) => !known.has(`${i.code} ${i.path} ${i.objectId}`))], {
     revision: scene.revision,
     ...out.value,
-    ...(touched.length && { objects: objectsOf(scene, touched) }),
+    // A batch reports bounds only: echoing every outline back would dwarf the request.
+    ...(touched.length && {
+      objects: opts.brief
+        ? objectsOf(scene, touched).map((o) => ({ id: o.id, derived: o.derived }))
+        : objectsOf(scene, touched),
+    }),
   });
 }
 
@@ -324,22 +352,7 @@ export const TOOLS: Tool[] = [
     inputSchema: object(
       {
         sceneId: SCENE_ID,
-        id: str("Letters, digits, _ . -, starting with a letter or digit; unique. Generated when omitted."),
-        outlines: object(
-          {
-            front: ring("[x, z] points."),
-            top: ring("[x, y] points."),
-            side: ring("[y, z] points."),
-          },
-          ["front", "top", "side"],
-        ),
-        primitive: {
-          enum: ["box", "ellipsoid", "cylinder", "rock"],
-          description: "Instead of outlines: a starting shape filling the box given by center and size.",
-        },
-        center: vec3("Box centre for a primitive (default: the scene centre)."),
-        size: vec3("Box size for a primitive (default 4 x 4 x 4)."),
-        ...OBJECT_PROPS,
+        ...NEW_OBJECT,
       },
       ["sceneId"],
     ),
@@ -348,6 +361,25 @@ export const TOOLS: Tool[] = [
         const { sceneId: _, ...spec } = args;
         return ops.addObject(d, spec as ops.AddObjectArgs);
       }),
+  },
+  {
+    name: "add_objects",
+    title: "Add several objects",
+    description: `Add up to ${MAX_BATCH} objects in one call and one undoable step, each specified as for add_object. All or nothing: when any object has an error, none is added, and every problem is reported with a path starting /objects/<index in this list>. Returns the new ids with their bounds (use get_scene for outlines) and any geometry problems. Build a large scene in batches of about 20, checking each with validate or render.`,
+    inputSchema: object(
+      {
+        sceneId: SCENE_ID,
+        objects: {
+          type: "array",
+          minItems: 1,
+          maxItems: MAX_BATCH,
+          items: object(NEW_OBJECT),
+          description: "The objects to add.",
+        },
+      },
+      ["sceneId", "objects"],
+    ),
+    run: (args) => edit(args, (d) => ops.addObjects(d, args.objects as ops.AddObjectArgs[]), { brief: true }),
   },
   {
     name: "update_object",

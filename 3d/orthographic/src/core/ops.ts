@@ -108,6 +108,22 @@ export function addObject(d: EditorState, spec: AddObjectArgs): OpResult {
   return { issues: r.issues, value: { id: r.id }, touched: r.id ? [r.id] : [] };
 }
 
+/**
+ * Add several objects as one edit. Every object is checked and every problem
+ * reported (paths start at /objects/<index> of the list); the caller keeps
+ * none of them unless none has an error.
+ */
+export function addObjects(d: EditorState, specs: AddObjectArgs[]): OpResult {
+  const issues: Issue[] = [];
+  const ids: string[] = [];
+  specs.forEach((spec, i) => {
+    const r = addObject(d, spec);
+    for (const found of r.issues) issues.push({ ...found, path: `/objects/${i}${found.path}` });
+    if (r.value?.id) ids.push(r.value.id as string);
+  });
+  return { issues, value: { ids }, touched: ids };
+}
+
 export function updateObject(d: EditorState, id: string, patch: cmd.ObjectProps): OpResult {
   return { issues: cmd.updateObject(d, id, patch), touched: [id] };
 }

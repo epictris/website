@@ -101,6 +101,9 @@ export const api = {
 
   addObject: safe((spec: ops.AddObjectArgs) => edit((d) => ops.addObject(d, spec))),
 
+  /** Add several objects as one undoable step; none is added when any has an error. */
+  addObjects: safe((specs: ops.AddObjectArgs[]) => edit((d) => ops.addObjects(d, specs))),
+
   updateObject: safe((id: string, patch: ObjectProps) => edit((d) => ops.updateObject(d, id, patch))),
 
   /** Replace one view's outline: points in world units, [x, z] front, [x, y] top, [y, z] side. */

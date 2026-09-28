@@ -21,6 +21,8 @@ The server stores scenes. `create_scene` returns a `sceneId` and an `editorUrl`;
 
 Anyone with a scene's id can read and edit it, so treat the link as the access key. Scenes unedited for 90 days are deleted.
 
+Only tool calls change a scene: a document drafted in your own workspace is not in it until `add_objects` or `load_document` returns `ok`. Confirm with `get_scene` before telling anyone the scene is built.
+
 Every tool answers `{ ok, issues, ... }` and never throws; `ok` is false when an issue is an error, and then nothing changed. Every edit is one undoable step, reports the new `revision`, and returns the objects it touched (with derived bounds) and their geometry problems.
 
 | Tool | Does |
@@ -32,6 +34,7 @@ Every tool answers `{ ok, issues, ... }` and never throws; `ok` is false when an
 | `validate` | Every problem in a scene or a `document`, with JSON Pointer paths, geometry included. |
 | `add_image` | A reference image from a public `url` or base64 `data`; returns its id and pixel size. |
 | `add_object` | An object from world-unit `outlines`, or a `primitive` (`box`, `ellipsoid`, `cylinder`, `rock`) filling `center` ± `size` / 2. |
+| `add_objects` | Up to 100 objects in one call and one undo step, all or nothing; problems are reported per `/objects/<index>`. The way to build a large scene: batches of about 20, checked as you go. |
 | `update_object` | Name, kind, color, visible, locked, reviewed, opacity, notes. |
 | `set_outline` | Replace one view's outline (world units). |
 | `set_bounds` | Set any of min/max per axis for objects or a group; outlines scale. |
@@ -117,7 +120,7 @@ Required: `format`, `version`, `scene.size`, `objects` (each with `id` and `outl
 1. `create_scene`, and share its `editorUrl`.
 2. Decide the scene frame from the image (for a front-facing photo: width = x, height = z, pick a plausible depth y) with `set_scene`, including `metersPerUnit` if a scale is known.
 3. `add_image`, then `set_reference` on the front view (without `min`/`size` it is fitted to the frame) and, if the camera is known, on the perspective view too.
-4. For each object, trace its front outline in x/z from the image, then invent consistent top (x/y) and side (y/z) outlines: reuse the front's x range in top and its z range in side. Use `add_object` per object, or write them all with `load_document`.
+4. For each object, trace its front outline in x/z from the image, then invent consistent top (x/y) and side (y/z) outlines: reuse the front's x range in top and its z range in side. Send them with `add_objects` in batches of about 20 (or `add_object` one at a time), and `render` after the first batch to catch a wrong scale or placement early. `load_document` replaces the whole scene at once.
 5. `validate`. Fix every error; read every warning.
 6. `render` the views and compare them with the references. Adjust outlines, the camera (position, target, focal length) or the reference placement, then repeat from 5.
 
@@ -149,7 +152,7 @@ For agents that already drive a browser; the tools above do the same without one
 - `getDocument({ images: "metadata" | "data" | "none", derived, editor })` → the document (synchronous).
 - `loadDocument(doc)`, `validate(doc?)` (no argument: the current scene, geometry included), `waitForGeometry()`.
 - `addImage({ data, name })` → `{ id }` (base64 or a data: URL; the id is a hash of the bytes).
-- `addObject({ id?, name, kind, color, outlines })` or `addObject({ primitive: "box" | "ellipsoid" | "cylinder" | "rock", center, size })` → `{ id }`.
+- `addObject({ id?, name, kind, color, outlines })` or `addObject({ primitive: "box" | "ellipsoid" | "cylinder" | "rock", center, size })` → `{ id }`; `addObjects([...])` → `{ ids }` (all or nothing).
 - `updateObject(id, { name, kind, color, visible, locked, reviewed, opacity, notes })`, `setOutline(id, view, points)`, `setBounds(idOrIds, { min: {x,y,z}, max: {x,y,z} })` (any subset of axes; outlines scale), `moveObjects(ids, {x,y,z})`, `duplicateObjects(ids, offset?)`, `deleteObjects(ids)`.
 - `setScene({ title, size, metersPerUnit, notes })`, `setCamera({ position, target, verticalFovDegrees | focalLengthMm35Equivalent, rollDegrees, near, far, frame, locked })`, `setDisplay({ style, grid, labels, crosshair })`.
 - `setReference(view, { image, opacity, visible, min, size } | null)` for `front`/`top`/`side`; `setReference("perspective", { image, opacity, visible, offsetPercent, scale, rotationDegrees, blend } | null)`.

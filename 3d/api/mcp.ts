@@ -18,7 +18,9 @@ const MAX_BODY = 48 * 1024 * 1024;
 
 const INSTRUCTIONS = `Orthographic Studio builds 3D scenes from flat outlines: each object is one closed polygon in each of three orthographic views (front x/z, top x/y, right side y/z), and its solid is the intersection of the three outlines extruded along their view directions. Z is up; Y is depth away from the front camera; outline points are world units.
 
-Workflow: call read_guide once. create_scene (optionally from a whole document) gives a sceneId and an editorUrl; share the editorUrl with the user, who can watch and edit the same scene live. Add reference images with add_image (a public URL or base64) and set_reference. Build objects with add_object (outlines or a primitive) or write many at once with load_document. validate reports every problem with a JSON Pointer path; render returns PNGs of the views to compare with the references. Every edit is one undoable step (undo/redo) and reports the objects it touched and their geometry problems.`;
+Workflow: call read_guide once. create_scene (optionally from a whole document) gives a sceneId and an editorUrl; share the editorUrl with the user, who can watch and edit the same scene live. Add reference images with add_image (a public URL or base64) and set_reference. Build objects with add_objects in batches of about 20 (add_object for one; load_document replaces the whole scene). validate reports every problem with a JSON Pointer path; render returns PNGs of the views to compare with the references. Every edit is one undoable step (undo/redo) and reports the objects it touched and their geometry problems.
+
+Only these tool calls change the scene: geometry drafted in your own workspace is not in it until a tool call returns ok. Render after the first batch, and confirm progress with get_scene before reporting it.`;
 
 const RESOURCES = [
   {
