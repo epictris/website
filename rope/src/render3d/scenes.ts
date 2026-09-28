@@ -57,9 +57,21 @@ export function sceneReleaseName(scene: string): string {
 // the release - so the pin is the only thing that says which export a commit
 // meant, and `assets:fetch` verifies it. Written by `assets:publish-scenes`
 // and by nothing else.
+// Someone else's work shipped inside a scene: a texture Blender packed into the
+// export. `name` is the image (or set) as the credits list it. Resolved by the
+// exporter from `tools/blender/image_credits.json` and pinned on publish, so
+// CREDITS.md (scripts/credits.ts) lists what a published scene carries.
+export interface SceneCredit {
+  name: string;
+  author: string;
+  source: string;
+  license: string;
+}
+
 export interface SceneAsset {
   sha256: string;
   bytes: number;
+  credits?: SceneCredit[];
 }
 export const SCENE_ASSETS: Readonly<Record<string, SceneAsset>> = manifest;
 
@@ -106,8 +118,11 @@ export interface SceneMeta {
   // render, a light).
   skipped: { name: string; reason: string }[];
   // What the exporter could not carry as authored (a procedural Base Color, a
-  // material with no image), one line each.
+  // material with no image), one line each - and every shipped image the
+  // credits table does not know.
   warnings: string[];
+  // The third-party work inside the export, one entry per credited set.
+  credits: SceneCredit[];
   // The binding as of the export: node names that matched a body, node names
   // that matched none (scenery), and body names with no object behind them.
   bound: string[];

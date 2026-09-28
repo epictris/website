@@ -58,6 +58,12 @@ publish:
 scene LEVEL:
     cd rope && bun run scene:export {{LEVEL}}
 
+# Install the moss add-on (rope/tools/blender/moss) into this machine's Blender:
+# links it into the user extensions, enables it and saves the preferences. Then
+# the Moss tab is in the 3D viewport's sidebar. See rope/docs/blender-moss.md.
+moss-install:
+    cd rope && blender -b --python tools/blender/moss_install.py
+
 # Write the level's collision into <scene>-guide.blend as a linked guide to
 # model against, and create <scene>.blend linking it if there is none yet.
 #   just scene-guide ball

@@ -25,7 +25,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { SCENE_ASSETS, sceneFile, sceneReleaseName, type SceneAsset } from "../src/render3d/scenes";
+import { SCENE_ASSETS, sceneFile, sceneMetaFile, sceneReleaseName, type SceneAsset, type SceneMeta } from "../src/render3d/scenes";
 import { ASSET_REPO, ASSET_TAG, levelsSceneNames, sha256 } from "./assetStore";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -75,7 +75,17 @@ if (named.size) {
     }
     const bytes = readFileSync(path);
     const hash = sha256(bytes);
+    // The credits of what is inside it ride along with the pin, from the
+    // export's own meta - which must describe this very file.
+    const metaPath = join(PUBLIC_DIR, sceneMetaFile(scene).slice(1));
+    const meta = existsSync(metaPath) ? (JSON.parse(readFileSync(metaPath, "utf8")) as SceneMeta) : null;
+    if (!meta || meta.sha256 !== hash) {
+      failures.push(`${scene} (${levels.join(", ")}): meta.json does not describe this scene.glb; export it again (\`just scene <level>\`)`);
+      continue;
+    }
+    const credits = meta.credits ?? [];
     if (pinned?.sha256 === hash && pinned.bytes === bytes.length && inRelease.has(name)) {
+      if (JSON.stringify(pinned.credits ?? []) !== JSON.stringify(credits)) manifest[scene] = { ...pinned, credits };
       current++;
       continue;
     }
@@ -86,7 +96,7 @@ if (named.size) {
       failures.push(`${scene} (${levels.join(", ")}): upload failed`);
       continue;
     }
-    manifest[scene] = { sha256: hash, bytes: bytes.length };
+    manifest[scene] = { sha256: hash, bytes: bytes.length, credits };
     uploaded++;
     console.log(
       `[scenes] uploaded ${name} (${(bytes.length / 1024).toFixed(0)} KB)` +

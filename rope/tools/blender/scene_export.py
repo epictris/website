@@ -139,7 +139,9 @@ def material_warnings(ob):
     for mat in slots:
         if mat is None:
             continue
-        if not mat.use_nodes or mat.node_tree is None:
+        # Blender 5 materials always have a node tree (`use_nodes` is
+        # deprecated); one without is a legacy flat colour glTF carries as is.
+        if mat.node_tree is None:
             continue
         principled = [n for n in mat.node_tree.nodes if n.type == "BSDF_PRINCIPLED"]
         if not principled:
@@ -169,6 +171,37 @@ def material_warnings(ob):
     return out
 
 
+CREDITS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "image_credits.json")
+
+
+def image_credits(obs, warnings):
+    """The credits of every image the exported objects' materials use, from
+    image_credits.json (by image name, Blender's `.001` suffix ignored). An
+    image the table does not know is a warning: shipping it uncredited is how a
+    licence obligation gets lost without a trace."""
+    with open(CREDITS_FILE, encoding="utf-8") as f:
+        table = json.load(f)
+    images = set()
+    for ob in obs:
+        for mat in getattr(getattr(ob, "data", None), "materials", None) or []:
+            if mat is None or mat.node_tree is None:
+                continue
+            for n in mat.node_tree.nodes:
+                if n.type == "TEX_IMAGE" and n.image is not None:
+                    images.add(n.image)
+    credits, unknown = {}, []
+    for im in sorted(images, key=lambda i: i.name):
+        name = re.sub(r"\.\d{3}$", "", im.name)
+        entry = table["images"].get(name) or table["images"].get(os.path.basename(bpy.path.abspath(im.filepath)))
+        if entry is None:
+            unknown.append(im.name)
+        elif isinstance(entry, str):
+            credits[entry] = {"name": entry, **table["sets"][entry]}
+    for name in unknown:
+        warnings.append(f'image "{name}" has no credit: add it to tools/blender/image_credits.json (or `generated` with the script that made it)')
+    return [credits[k] for k in sorted(credits)]
+
+
 def stats(ob, depsgraph):
     """Triangle count and world bounds of the object as it will export
     (modifiers applied), in the game's frame."""
@@ -193,6 +226,24 @@ def stats(ob, depsgraph):
     return tris, {"min": [round(v, 4) for v in lo], "max": [round(v, 4) for v in hi]}
 
 
+def grow_moss(scene, warnings):
+    """Grow every moss object from its paint and settings (the moss add-on,
+    tools/blender/moss, imported from the repo since the export runs with
+    --factory-startup). The paint is the source; the mesh saved in the .blend
+    is only the last preview, and would be stale against a host edited or
+    re-imported since. A moss whose host is gone is hidden from the export."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import moss
+
+    moss.register()
+    for ob, result in moss.rebuild_all(scene):
+        if result is None:
+            warnings.append(f"{ob.name}: {ob.moss.status}; not exported")
+            ob.hide_render = True
+            continue
+        log(f"moss {ob.name} on {ob.moss.host}: {len(result.triangles)} triangles ({result.curtain_triangles} curtain), {ob.moss.build_ms:.0f} ms")
+
+
 def main():
     argv = sys.argv[sys.argv.index("--") + 1 :]
     if len(argv) < 2:
@@ -205,6 +256,7 @@ def main():
     excluded = excluded_collections(view_layer)
 
     kept, skipped, warnings = [], [], []
+    grow_moss(scene, warnings)
     for ob in scene.objects:
         reason = skip_reason(ob, excluded)
         if reason:
@@ -276,6 +328,7 @@ def main():
     meta = {
         "blender": bpy.app.version_string,
         "nodes": nodes,
+        "credits": image_credits(kept, warnings),
         "skipped": skipped,
         "warnings": warnings,
     }

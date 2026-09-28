@@ -157,6 +157,7 @@ Rendering
 - [render3d](docs/render3d.md) - two canvases one camera, the coordinate mapping, geometry objects versus collision, bodies and scene objects, traps.
 - [lighting-and-surfaces](docs/lighting-and-surfaces.md) - environment, light objects in bodies, fog, HDRI skies, beams, waking lights, fireflies that follow the ball (along the camera paths or a firefly path of their own), generated and authored PBR surfaces, tiling.
 - [blender-scenes](docs/blender-scenes.md) - a level dressed in one `.blend`: body `name` binds an object to a body, `scene` names the file, `just scene-guide` / `just scene`, the frame, publishing, what glTF cannot carry.
+- [blender-moss](docs/blender-moss.md) - the moss add-on: paint moss onto a scene's rocks in Blender, grown as a cushion with hanging curtains, textured, regrown on every export.
 - [rock-assets](docs/rock-assets.md) - rock and moss props: a body's outline modelled into a stylised rock in headless Blender, the moss grown from the rock inside the moss body's outline, the job files, the previews, every lesson from the first rock.
 - [rocks](docs/rocks.md) - the earlier generated rocks (rejected; kept as history): the level's outlines turned into boulders, the GLB per level, the staleness hash.
 - [asset-store](docs/asset-store.md) - the release-hosted binaries, budgets, the optimise pipelines, licensing and credits.

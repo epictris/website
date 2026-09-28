@@ -71,12 +71,14 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
 const argv = process.argv.slice(2);
-// `--center` and `--keep-nodes` are bare flags, so they come out of the argument
-// list before anything positional is read; everything below then sees exactly
-// the arguments it saw before the flags existed.
-const args = argv.filter((a) => a !== "--center" && a !== "--keep-nodes");
+// `--center`, `--keep-nodes` and `--keep-hierarchy` are bare flags, so they come
+// out of the argument list before anything positional is read; everything below
+// then sees exactly the arguments it saw before the flags existed.
+const BARE = new Set(["--center", "--keep-nodes", "--keep-hierarchy"]);
+const args = argv.filter((a) => !BARE.has(a));
 const center = argv.includes("--center");
 const keepNodes = argv.includes("--keep-nodes");
+const keepHierarchy = argv.includes("--keep-hierarchy");
 const simplifyAt = args.indexOf("--simplify");
 // Pulled out of the positionals so the two paths take the same `<in> <out>`.
 // Guarded on the flag being present at all: an absent one is index -1, and
@@ -90,7 +92,7 @@ const [input, output] =
     : args.filter((_, i) => i !== simplifyAt && i !== simplifyAt + 1);
 if (!input || !output) {
   console.error(
-    "usage: bun run assets:optimize <input.glb|gltf> <public/meshes/out.glb> [--simplify <ratio>] [--center] [--keep-nodes]",
+    "usage: bun run assets:optimize <input.glb|gltf> <public/meshes/out.glb> [--simplify <ratio>] [--center] [--keep-nodes] [--keep-hierarchy]",
   );
   process.exit(2);
 }
@@ -174,6 +176,13 @@ const r = spawnSync(
     // (docs/blender-scenes.md). A pack's props are distinct meshes, so this
     // changes nothing for one.
     ...(keepNodes ? ["--instance", "false"] : []),
+    // A Blender SCENE also needs its parenting: an object parented to one a
+    // body is dressed by rides that body (render3d/sceneDressing.ts takes the
+    // outermost named node and carries its children), and grown moss is
+    // parented to the rock it grows on. The flatten step hoists every node to
+    // the root at its world pose, which keeps the pose and loses the ride, so
+    // it is off here - it only exists to feed the join, which is off already.
+    ...(keepHierarchy ? ["--flatten", "false"] : []),
     ...(simplify === null
       ? ["--simplify", "false"]
       : [

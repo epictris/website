@@ -1,0 +1,15 @@
+schema_version = "1.0.0"
+
+id = "moss"
+version = "0.1.0"
+name = "Moss"
+tagline = "Paint procedural moss geometry with hanging curtains"
+maintainer = "Tristan Bray"
+type = "add-on"
+
+blender_version_min = "4.2.0"
+
+license = ["SPDX:GPL-3.0-or-later"]
+
+[build]
+paths_exclude_pattern = ["__pycache__/", "test_*.py"]

@@ -1,0 +1,23 @@
+{
+  "_comment": "Where every image a Blender scene ships comes from. The scene exporter (scene_export.py) looks each packed/linked image up by name (Blender's .001 suffix ignored); a credit lands in the export's meta, is pinned by `just publish` in src/render3d/sceneAssets.json and listed in CREDITS.md; `generated` names the script that made an original image, which needs no credit. An image not listed here is an export warning.",
+  "images": {
+    "moss-grass05-base.png": "grass_05",
+    "moss-grass05-normal.png": "grass_05",
+    "moss-grass05-rough.png": "grass_05",
+    "moss01-base.png": "moss_ground_01",
+    "moss01-normal.png": "moss_ground_01",
+    "basalt_surface.png": { "generated": "assets-src/scenes/cavern/generate_cave.py" }
+  },
+  "sets": {
+    "grass_05": {
+      "author": "FreeStylized",
+      "source": "https://freestylized.com/material/grass_05/",
+      "license": "FreeStylized CC0 (no redistribution of the unmodified pack)"
+    },
+    "moss_ground_01": {
+      "author": "FreeStylized",
+      "source": "https://freestylized.com/material/moss_ground_01/",
+      "license": "FreeStylized CC0 (no redistribution of the unmodified pack)"
+    }
+  }
+}

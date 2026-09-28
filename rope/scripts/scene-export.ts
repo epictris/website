@@ -6,7 +6,8 @@
 // Blender runs `tools/blender/scene_export.py` over it (every object with
 // geometry that is not a guide, linked or hidden in render, world transforms
 // kept), the pinned prop pipeline optimises the result with its node names
-// kept (`assets:optimize --keep-nodes`), and what lands is
+// and parenting kept (`assets:optimize --keep-nodes --keep-hierarchy`), and
+// what lands is
 //
 //   public/scenes/<scene>/scene.glb     what the game draws
 //   public/scenes/<scene>/meta.json     what was exported, and how it binds
@@ -90,7 +91,7 @@ try {
     writeFileSync(shipped, readFileSync(raw));
     console.log(`[scene] --raw: shipped Blender's own file, unoptimised`);
   } else {
-    const opt = spawnSync("bun", ["run", join(ROOT, "scripts", "optimize-asset.ts"), raw, shipped, "--keep-nodes"], {
+    const opt = spawnSync("bun", ["run", join(ROOT, "scripts", "optimize-asset.ts"), raw, shipped, "--keep-nodes", "--keep-hierarchy"], {
       encoding: "utf8",
     });
     // The optimiser's own summary line, and none of its MESH_ASSETS advice,
@@ -104,7 +105,7 @@ try {
 
   // The meta: Blender's account, the shipped file's facts, and the binding
   // against the level as it stands now.
-  const blenderMeta = JSON.parse(readFileSync(rawMeta, "utf8")) as Pick<SceneMeta, "blender" | "nodes" | "skipped" | "warnings">;
+  const blenderMeta = JSON.parse(readFileSync(rawMeta, "utf8")) as Pick<SceneMeta, "blender" | "nodes" | "skipped" | "warnings" | "credits">;
   const bytes = readFileSync(shipped);
   const bodyNodes = new Map<string, string>(); // node name -> body name
   for (const b of level.bodies) if (b.name) bodyNodes.set(nodeNameOf(b.name), b.name);
@@ -125,6 +126,7 @@ try {
     nodes: blenderMeta.nodes,
     skipped: blenderMeta.skipped,
     warnings: blenderMeta.warnings,
+    credits: blenderMeta.credits,
     bound,
     scenery,
     unbound,
@@ -143,6 +145,7 @@ try {
   const linked = meta.skipped.filter((s) => s.reason.startsWith("linked from") || s.reason.startsWith("data linked from"));
   if (linked.length) console.log(`[scene] skipped ${linked.length} linked objects (${[...new Set(linked.map((s) => s.reason))].join("; ")})`);
   for (const s of meta.skipped) if (!linked.includes(s)) console.log(`[scene] skipped ${s.name}: ${s.reason}`);
+  for (const c of meta.credits) console.log(`[scene] credits ${c.name}: "${c.author}", ${c.source}, ${c.license}`);
   for (const w of meta.warnings) console.log(`[scene] WARNING ${w}`);
   if (meta.bytes > 8 * 1024 * 1024) {
     console.log(`[scene] WARNING ${kb} KB is over the store's 8 MB per-file bar (docs/asset-store.md); split the scene or thin it`);

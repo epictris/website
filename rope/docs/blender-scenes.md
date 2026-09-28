@@ -47,7 +47,8 @@ The guide file is overwritten on every run and never exports.
 
 `just scene <level>` (`scripts/scene-export.ts`, `tools/blender/scene_export.py`) runs headless Blender over the scene: every object with geometry goes out with its world transform and modifiers applied, except one **linked** from another file (the guide), one in a collection named `guide*` or **excluded from the view layer**, and one **hidden in render** (the camera icon - render visibility is what ships, viewport visibility is the artist's).
 Lights, cameras, empties and armatures never go out.
-The result goes through the pinned prop pipeline with node names kept (`assets:optimize --keep-nodes`, which also turns instancing off, since an instanced node loses its name) into
+Before anything is selected, every grown moss object is grown again from its paint (see [blender-moss](blender-moss.md)), so the moss that ships always matches the rock it grows on as the file now stands.
+The result goes through the pinned prop pipeline with node names kept (`assets:optimize --keep-nodes`, which also turns instancing off, since an instanced node loses its name) and the parenting kept (`--keep-hierarchy`: the optimiser's flatten step would hoist a child to the root at its world pose, which keeps the pose and loses the ride on its parent's body - it was on until 2026-09-28, so the rule above held only for unparented objects) into
 
 ```
 public/scenes/<scene>/scene.glb    what the game draws
@@ -97,4 +98,11 @@ The level's fog (`fogAmount`, `fogColor`) is half of the look: the far layers ar
 
 - Unplayed: written 2026-09-27 against an empty scene and `cli render3d`; the cavern backdrop of 2026-09-28 was verified with `cli shot` along the camera route, and the play is still the play.
 - One scene per level. Two levels may share a scene, and a level cannot name two.
-- Credits: textures inside a scene are not credited; a scene that ships someone else's textures needs a `CREDITS.md` line by hand.
+- Credits are per image, not per object: a mesh modelled from someone else's work (not a texture) is not caught by the image table below.
+
+## Credits
+
+Every image a scene ships is looked up by name in `tools/blender/image_credits.json` (Blender's `.001` suffix ignored): an image names a credited set (author, source, licence) or says which script `generated` it.
+The export writes the sets it found into `meta.json` (`credits`) and prints them; an image the table does not know is an export warning.
+`just publish` pins the credits beside the scene's sha256 in `src/render3d/sceneAssets.json` (and refuses a `meta.json` that describes a different `scene.glb`), and `bun run assets:credits` lists them in `CREDITS.md` under "Inside Blender scenes".
+So a new texture in a scene is one line in the table; `CREDITS.md` stays generated.
