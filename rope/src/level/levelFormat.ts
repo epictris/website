@@ -607,15 +607,25 @@ export interface GeometryObjectData extends ObjectPlacement {
   //         `tileScale`). No file, no download.
   // "mesh": a named GLTF asset from the manifest (`render3d/assets.ts`) instead,
   //         which may bring its own materials or wear the same surface set.
+  // "image": a flat PICTURE (`image` below) stretched once across this object's
+  //         shape - a painted backdrop, a matte behind the level. It has no
+  //         depth, no surface set and no lighting: it shows the picture as it
+  //         was painted, fog and all left to the painting (see
+  //         docs/render3d.md, "Image planes").
   //
   // There is deliberately no "drawn by nothing": a body draws what its geometry
   // objects say and nothing else, so an invisible wall is a body with collision
   // objects and NO geometry object - which needs no field to say it, and is what
   // an editor draw produces before anything is dressed.
-  kind?: "primitive" | "mesh";
+  kind?: "primitive" | "mesh" | "image";
   // Manifest key. `kind: "mesh"` only; an unknown key draws the placeholder
   // rather than nothing, so a missing asset is visible instead of silent.
   mesh?: string;
+  // `IMAGE_ASSETS` key (render3d/imageAssets.json). `kind: "image"` only. The
+  // picture fills the bounds of `shape` exactly, so a rect of the picture's own
+  // aspect shows it undistorted (the editor's "fit" sizes one so). An unknown
+  // key draws a flat grey plane, visible rather than silent.
+  image?: string;
   // The form this is drawn as, in this object's own frame. A primitive without
   // one draws the unit placeholder, exactly as a prop with no file does - a
   // geometry object that draws nothing at all would be indistinguishable from a
@@ -3376,6 +3386,8 @@ export function scaleObject(o: SceneObjectData, factor: number): SceneObjectData
     ...placed,
     ...(o.kind !== undefined ? { kind: o.kind } : {}),
     ...(o.mesh !== undefined ? { mesh: o.mesh } : {}),
+    // A manifest key, like `mesh`.
+    ...(o.image !== undefined ? { image: o.image } : {}),
     ...(o.shape !== undefined ? { shape: scaleShape(o.shape, factor) } : {}),
     // A link to a sibling, not a length.
     ...(o.matchCollision !== undefined ? { matchCollision: o.matchCollision } : {}),

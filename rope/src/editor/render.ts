@@ -276,7 +276,7 @@ const HANDLE_STUB_PX = 26;
 // Everything else - collision shapes, camera regions, notes, lights - keeps its
 // handles in every view, because the overlay goes on drawing those.
 export function hasPlaneHandles(item: EdItem, layers: "fill" | "outline"): boolean {
-  return layers === "fill" || item.object !== "geometry" || item.visual.kind === "primitive";
+  return layers === "fill" || item.object !== "geometry" || item.visual.kind !== "mesh";
 }
 
 export function computeHandles(cam: Camera, body: EdItem): Handles {

@@ -45,6 +45,7 @@ assets:
 
 # Publish the generated meshes (rocks, mushroom patches) the levels name to the
 # asset release and pin them in rope/src/render3d/generatedAssets.json. Run it
-# after generating, then commit that file with the level.
+# after generating, then commit that file with the level. Also uploads the
+# pictures uploaded in the editor (pinned in rope/src/render3d/imageAssets.json).
 publish:
-    cd rope && bun run assets:publish-generated
+    cd rope && bun run assets:publish-generated && bun run assets:publish-images

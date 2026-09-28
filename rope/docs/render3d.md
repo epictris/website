@@ -222,6 +222,21 @@ Cleat placement allocates nothing (`beltFrameAt` is `beltPointAt`/`beltTangentAt
 The first cut drew the extruded loop and cleats only, rejecting a scrolled texture because the extruder's UVs could not carry one and because the side wall is seen nearly edge-on.
 The ring answers the first; the second turned out to matter less than it read, because the camera sees the front cap face on and the inner wall through the hollow, and both carry the moving `u`.
 
+## Image planes
+
+A geometry object with `kind: "image"` shows a picture (`image`, a key of `src/render3d/imageAssets.json`) stretched once over the bounds of its shape, as a flat plane with no depth (`mountImage` in `bodyVisuals.ts`).
+It is the painted backdrop: a matte behind the level, placed with the editor's `+ Image`.
+
+It is **unlit, unfogged and not tone-mapped** (`MeshBasicMaterial`, `fog: false`, `toneMapped: false`).
+A painting already carries its light, its haze and its grade; the scene's sun would shade it a second time, the level's fog would haze it a second time, and ACES would crush its darks - the picture on screen would stop being the picture that was painted.
+It casts no shadow, and it blends only when the picture has transparency (`ImageAsset.alpha`).
+
+The object's `color` and `opacity` are **not** read: every decoration writes the editor's 2D fill (half-transparent `#555555` by default), and a picture worn through it comes out grey and see-through.
+
+The picture arrives as a **new mesh** in the grey placeholder's place, as a prop does, rather than as a map written into the material already drawn.
+The editor's selection paints a clone of whatever material a mesh wears when it is selected (`Scene3D.highlightMaterial`), and a plane added and selected in one gesture otherwise went on wearing the grey clone after its picture had landed.
+An unlit material has no emission to light, so its selection is a tint toward the selection colour instead.
+
 ## Generated meshes
 
 A geometry object carrying a `generator` block (see [level-format](level-format.md)) draws a GENERATED mesh: a boulder built from its outline, or a mushroom patch grown on another object, by Python and headless Blender behind the dev server (plans/visuals-workspace.md).

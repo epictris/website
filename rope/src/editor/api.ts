@@ -2,6 +2,7 @@
 // on-disk pixel LevelData format.
 
 import type { LevelData } from "../level/levelFormat";
+import type { ImageAsset } from "../render3d/images";
 
 const BASE = "/api/levels";
 
@@ -36,4 +37,30 @@ export async function saveLevel(
 export async function deleteLevel(name: string): Promise<void> {
   const res = await fetch(`${BASE}/${encodeURIComponent(name)}`, { method: "DELETE" });
   if (!res.ok) throw new Error(`delete failed: ${res.status}`);
+}
+
+// Add a picture through the dev server's image upload (src/server/images.ts):
+// the bytes go up as they are, and what comes back is the manifest entry the
+// server pinned for them.
+export async function uploadImage(file: File): Promise<{ key: string; asset: ImageAsset }> {
+  const res = await fetch(`/api/images?name=${encodeURIComponent(file.name)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/octet-stream" },
+    body: file,
+  });
+  // Not JSON at all is a server without the endpoint: one started before it
+  // existed, whose config has not been reloaded since.
+  const text = await res.text();
+  let body: { key: string; asset: ImageAsset } | { error: string };
+  try {
+    body = JSON.parse(text) as typeof body;
+  } catch {
+    throw new Error(
+      res.status === 404
+        ? "this dev server has no picture upload - restart it (`bun run dev`)"
+        : `the server answered ${res.status} with no JSON`,
+    );
+  }
+  if (!res.ok || "error" in body) throw new Error("error" in body ? body.error : `upload failed: ${res.status}`);
+  return body;
 }

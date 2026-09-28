@@ -184,6 +184,19 @@ just assets                                                  # on another machin
 gh release delete-asset assets rock.glb                      # change your mind
 ```
 
+## Pictures
+
+The pictures image planes show (see [render3d](render3d.md#image-planes)) are the sixth kind: `.webp` under `public/images/`, manifest `src/render3d/imageAssets.json`, listed by `storedAssets()` like every other kind.
+The manifest is JSON rather than code because a tool writes it: the editor's **Upload…** (and `+ Image`) posts the file to the dev server (`src/server/images.ts`), which optimises it through ImageMagick (WebP q90, longest side capped at 4096, the texture size every WebGL2 device takes), hashes it, writes it and pins the entry - sha256, bytes, pixel size, alpha and provenance - and regenerates `CREDITS.md`.
+Provenance defaults to the git user as `author`, `own work` as `license` and the uploaded file name as `source`; edit the entry by hand for a picture that is someone else's.
+
+The key is the file name slugged plus the first 8 hex of the optimised bytes' sha256, so an upload never overwrites: a re-painted picture is a new key, and the same bytes uploaded under another name land on the entry they already have.
+The dev server serves `/images/` itself (vite's public handler only knows files its watcher has seen), and both the directory and the manifest are off vite's watcher: the manifest is a config dependency, and a write to one restarts the server.
+
+Publishing is the second step, as for generated meshes: `bun run assets:publish-images` (part of `just publish`) uploads every entry the release does not hold yet, never clobbering.
+Run it before committing a level that shows a new picture: an entry the release lacks fails `assets:fetch`, and so the deploy.
+`cli assets` fails on a picture a registered level names that the manifest does not hold.
+
 ## Generated meshes in the store
 
 The rocks and mushroom patches the editor's Visuals workspace generates (see [generators](generators.md)) are written to `public/generated/<kind>/<hash>/mesh.glb` on the machine that generated them, and the ones the registered levels name are published here so every other checkout, and the deploy, draws them too.

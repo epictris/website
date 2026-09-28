@@ -834,8 +834,9 @@ export interface EdVine {
 // alone: a compound body of a stone head on a wooden shaft is two visuals on
 // one body, each riding its own piece.
 export interface EdVisual {
-  kind: "primitive" | "mesh";
+  kind: "primitive" | "mesh" | "image";
   mesh: string; // manifest key; "" = none named yet
+  image: string; // `IMAGE_ASSETS` key, `kind: "image"` only; "" = none named yet
   // The object's placement is the ITEM's own `pos`/`rot` - a geometry object is
   // an object with a transform like every other, so the look does not carry a
   // second one that could disagree with it. What is left here is the two
@@ -1293,6 +1294,7 @@ export function fireflyModel(pos: Vec2): EdModel {
 export const defaultVisual = (): EdVisual => ({
   kind: "primitive",
   mesh: "",
+  image: "",
   offsetZ: 0,
   rotX: 0,
   rotY: 0,
@@ -1418,6 +1420,7 @@ export function edVisual(v: GeometryObjectData | undefined): EdVisual {
   return {
     kind: v.kind ?? d.kind,
     mesh: v.mesh ?? d.mesh,
+    image: v.image ?? d.image,
     tileScale: v.tileScale ?? d.tileScale,
     tileOffset: new Vec2(v.tileOffsetX ?? 0, v.tileOffsetY ?? 0),
     offsetZ: v.z ?? d.offsetZ,
@@ -1456,6 +1459,7 @@ export function visualData(v: EdVisual): GeometryObjectData | undefined {
     type: "geometry",
     ...(v.kind !== d.kind ? { kind: v.kind } : {}),
     ...(v.kind === "mesh" && v.mesh ? { mesh: v.mesh } : {}),
+    ...(v.kind === "image" && v.image ? { image: v.image } : {}),
     ...(v.offsetZ !== 0 ? { z: v.offsetZ } : {}),
     // Out-of-plane tips are written for EITHER kind: `mountVisual` turns the
     // extrusion by them exactly as it turns a prop's holder, about the same
@@ -3743,6 +3747,7 @@ export function objectLabel(item: EdItem, metresToPx: number): string {
   // A mesh is named by its asset, since that is what tells two props apart -
   // their placeholders are usually identical.
   if (item.visual.kind === "mesh") return `mesh ${item.visual.mesh || "(none)"}`;
+  if (item.visual.kind === "image") return `image ${item.visual.image || "(none)"}`;
   // A geometry object is named by the SOLID it draws rather than by the outline
   // it is authored through, since that is what the player sees and what tells it
   // apart from the collision shape it may be sitting on top of.

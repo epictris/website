@@ -221,7 +221,7 @@ import {
   type MaterialName,
 } from "../lib/shapeGeometry";
 import { decomposeConvex, isSimpleLoop, normalizeWinding } from "../lib/polygon";
-import { deleteLevel, listLevels, loadLevel, saveLevel } from "./api";
+import { deleteLevel, listLevels, loadLevel, saveLevel, uploadImage } from "./api";
 import {
   emissiveMapNames,
   gltfLoader,
@@ -238,7 +238,9 @@ import * as THREE from "three";
 import { ROCK_HASH_KEY, ROCK_INDEX_KEY, ROCK_TEXTURES, rockBodies, rockNodeName, rocksUrl } from "../render3d/rocks";
 import { silhouette, type SilTriangle } from "../lib/silhouette";
 import { Scene3D, type Scene3DLevel } from "../render3d/scene";
+import { IMAGE_ASSETS, imageNames, registerImageAsset } from "../render3d/images";
 import {
+  cameraDistance,
   focalLengthFromFov,
   FOV_Y_DEG,
   isHeadOn,
@@ -654,6 +656,11 @@ const STEP = 1 / 60;
 const MAX_STEPS = 2;
 
 const M2PX = PIXELS_PER_METER;
+
+// How far behind the gameplay plane `+ Image` stands a picture, in metres: far
+// enough to read as distance and parallax gently as the camera pans, near
+// enough that the plane filling the view is not an enormous number.
+const IMAGE_DEPTH = 10;
 
 // The way out of a test, per controller. Esc always works; Space is offered
 // only on the ball, whose input source binds no keyboard at all
@@ -2393,6 +2400,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     "Click a loop onto the faces of a drawn model (a rock, a wall); Enter or the first point closes it, Backspace drops the last point, Esc cancels. Closing it adds a MUSHROOM PATCH in that model's body and generates it on the faces inside the loop.";
   toolBtns.geometry.title =
     "Click to drop a geometry object; drag to size it. It is DRAWN and never simulated - nothing collides with it, the rope does not wrap it, no force reaches it. Give it a mesh or a texture on the panel; drop it on a selected body to have it ride that body.";
+  // Not a tool - there is nothing to click out - but an action beside the tool
+  // that draws the same kind of object, shown wherever that tool is.
+  const imageBtn = button("+ Image", () => addImagePlane());
+  imageBtn.title =
+    "Choose a picture file and stand it up as a BACKDROP: a flat image plane 10 m behind the gameplay plane, sized to fill the view and to the picture's own aspect. Unlit and unfogged - it shows as painted. Move it, resize it and change its z like any geometry object; its panel swaps the picture.";
   // The path tool's tooltip is the active layer's (see `refreshToolButtons`):
   // the one gesture draws three different things.
   const PATH_TOOL_TITLE: Record<EdLayer, string> = {
@@ -2448,6 +2460,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     toolBtns.poly,
     toolBtns.path,
     toolBtns.geometry,
+    imageBtn,
     toolBtns.rock,
     toolBtns.mushrooms,
     toolBtns.text,
@@ -2554,6 +2567,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     for (const [k, b] of Object.entries(toolBtns)) {
       b.style.display = tools.includes(k as Tool) ? "" : "none";
     }
+    imageBtn.style.display = tools.includes("geometry") ? "" : "none";
     // The same gesture draws two different things: a camera path is a route the
     // camera rides, and a scene one is a BAR - the curve a rail's cuff slides
     // along, stroked out to its width. The button says which.
@@ -5105,6 +5119,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     for (const [value, label] of [
       ["primitive", "primitive"],
       ["mesh", "mesh"],
+      ["image", "image"],
     ] as const) {
       const o = document.createElement("option");
       o.value = value;
@@ -5224,7 +5239,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       g.appendChild(pw);
     }
 
-    if (sharedKind !== "mesh") {
+    // A PICTURE has no depth, no surface and no emission: it shows the picture
+    // as painted (see `mountImage`), so the picker is all its look is.
+    if (sharedKind === "image") {
+      addImageFields(g, items);
+      return;
+    }
+
+    if (sharedKind === "primitive" || sharedKind === null) {
       // Extrusion controls. Both are optional overrides with a real third state
       // - "take it from somewhere else" - so clearing the field is meaningful
       // and the placeholder says what the fallback is.
@@ -5625,6 +5647,129 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (!solid && bodies.length === 1 && bodies[0]!.visual.generator) {
       inspector.appendChild(buildGeneratorGroup(generatorPanelHost, bodies[0]!));
     }
+  }
+
+  // A picture's look (`kind: "image"`): which picture, a way to add one, and
+  // the edit that sizes the plane to the picture's own aspect.
+  function addImageFields(g: HTMLElement, items: EdItem[]): void {
+    const iw = fieldRow("image");
+    const is = document.createElement("select");
+    is.className = "ed-select";
+    // An unlisted key already on an item is kept as an option of its own, as
+    // the mesh picker keeps one, so a level naming a picture this checkout has
+    // no entry for cannot lose it by being opened.
+    const keys = new Set<string>(imageNames());
+    for (const b of items) if (b.visual.image) keys.add(b.visual.image);
+    for (const key of ["", ...[...keys].sort()]) {
+      const o = document.createElement("option");
+      o.value = key;
+      o.textContent = key || "(none)";
+      is.appendChild(o);
+    }
+    is.value = items.every((b) => b.visual.image === items[0]!.visual.image) ? items[0]!.visual.image : "";
+    is.addEventListener("change", () => {
+      beginAction();
+      for (const b of items) b.visual.image = is.value;
+      markDirty();
+      rebuildInspector();
+    });
+    iw.appendChild(is);
+    g.appendChild(iw);
+
+    const row = el("div", "ed-row");
+    const upload = button("Upload…", () => {
+      void chooseImage().then((key) => {
+        if (!key) return;
+        beginAction();
+        for (const b of items) {
+          b.visual.image = key;
+          fitToImage(b);
+        }
+        markDirty();
+        rebuildInspector();
+      });
+    });
+    describe(upload, "Add a picture from disk (PNG, JPEG, WebP...): it is optimised to WebP, pinned in imageAssets.json and shown here, sized to its own aspect. `just publish` uploads it to the asset store before the level is committed.");
+    row.appendChild(upload);
+    const fit = button("Fit", () => {
+      beginAction();
+      for (const b of items) fitToImage(b);
+      markDirty();
+      refreshFields();
+    });
+    describe(fit, "Set the height from the width so the picture shows undistorted.");
+    fit.disabled = !items.some((b) => b.shape.kind === "rect" && IMAGE_ASSETS[b.visual.image]);
+    row.appendChild(fit);
+    g.appendChild(row);
+
+    const asset = items.length === 1 ? IMAGE_ASSETS[items[0]!.visual.image] : undefined;
+    if (asset) {
+      const info = el("div", "ed-hint");
+      info.textContent = `${asset.width}×${asset.height} px · ${(asset.bytes / 1024).toFixed(0)} KB`;
+      g.appendChild(info);
+    }
+  }
+
+  // Height from width, so the picture on a rect is undistorted. A picture the
+  // manifest does not know, or a shape that is not a rect, is left alone.
+  function fitToImage(item: EdItem): void {
+    const asset = IMAGE_ASSETS[item.visual.image];
+    if (!asset || item.shape.kind !== "rect") return;
+    item.shape = { ...item.shape, h: (item.shape.w * asset.height) / asset.width };
+  }
+
+  // Ask for a picture file and add it through the dev server's upload
+  // (src/server/images.ts). Resolves to its key once the manifest holds it, or
+  // null if nothing was chosen or the upload failed (said on the notice line).
+  function chooseImage(): Promise<string | null> {
+    return new Promise((resolve) => {
+      const input = document.createElement("input");
+      input.type = "file";
+      input.accept = "image/*";
+      input.addEventListener("change", () => {
+        const file = input.files?.[0];
+        if (!file) return resolve(null);
+        flashNotice(`Uploading ${file.name}…`);
+        void uploadImage(file).then(
+          ({ key, asset }) => {
+            registerImageAsset(key, asset);
+            flashNotice(`Added ${key} (${asset.width}×${asset.height})`);
+            resolve(key);
+          },
+          (e: unknown) => {
+            flashNotice(`Upload failed: ${e instanceof Error ? e.message : String(e)}`);
+            resolve(null);
+          },
+        );
+      });
+      input.addEventListener("cancel", () => resolve(null));
+      input.click();
+    });
+  }
+
+  // `+ Image`: choose a picture and stand it up as a backdrop - a body of its
+  // own with nothing to collide with, filling the view at IMAGE_DEPTH behind the
+  // gameplay plane (so it parallaxes as a distant painting does), undistorted.
+  function addImagePlane(): void {
+    void chooseImage().then((key) => {
+      const asset = key ? IMAGE_ASSETS[key] : undefined;
+      if (!key || !asset) return;
+      // The view's width at the plane, grown by how much further the picture is
+      // from the camera than the plane is: the size it has to be to span the
+      // same width on screen.
+      const planeW = camera.viewportWidth / (camera.zoom * PIXELS_PER_METER);
+      const dist = cameraDistance(camera);
+      const w = (planeW * (dist + IMAGE_DEPTH)) / dist;
+      const item: EdItem = {
+        ...newDrawnItem("geometry", camera.position),
+        layer: "scene",
+        bodyId: newBodyId(),
+        shape: { kind: "rect", w, h: (w * asset.height) / asset.width },
+      };
+      item.visual = { ...item.visual, kind: "image", image: key, offsetZ: -IMAGE_DEPTH };
+      beginAction();
+      addAndSelect([item]);
+    });
   }
 
   // The rest of where a geometry object is drawn, in its Transform section
@@ -9663,6 +9808,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   function hostRefusal(host: EdItem): string | null {
     if (host.visual.generator && !host.visual.mesh) return "the host rock has never been generated: generate the host first";
     if (host.visual.kind === "mesh" && !host.visual.mesh) return "the host has no mesh to grow on: give it one first";
+    if (host.visual.kind === "image") return "a picture is a flat backdrop with nothing to grow on";
     return null;
   }
 

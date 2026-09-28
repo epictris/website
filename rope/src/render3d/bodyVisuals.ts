@@ -51,6 +51,7 @@ import { DEFAULT_BEVEL, cylinderSolid, extrudeOutline, taperOutline } from "./ex
 import { ROCK_TEXTURES } from "./rocks";
 import { loadSchema } from "../level/generatorParams";
 import { isAuthoredSurface, isSolidSurface, loadMesh, surfaceFor, surfaceName, tileMetres } from "./assets";
+import { IMAGE_ASSETS, loadImage } from "./images";
 import { buildWater } from "./water";
 import { DEFAULT_LIGHT_Z, LightRig, type DrivenEmission, type MountedLight } from "./lights";
 import { isWaking } from "./glow";
@@ -232,6 +233,9 @@ export function surfaceOf(spec: DrawSpec): THREE.MeshStandardMaterial {
 // assets.ts), so they are deliberately not in here.
 export interface MountedVisual {
   geometry: THREE.BufferGeometry[];
+  // ...except an image plane's, which is its own (it carries the object's own
+  // tint and opacity); its picture is shared and cached, and not in here.
+  materials?: THREE.Material[];
 }
 
 export interface MountOptions {
@@ -260,6 +264,8 @@ export function mountVisual(
   const g = spec.geometry;
   const kind = g?.kind ?? "primitive";
   const owned: THREE.BufferGeometry[] = [];
+
+  if (kind === "image") return mountImage(parent, g!, opts);
 
   const material = surfaceOf(spec);
   const z = opts.defaultZ;
@@ -343,6 +349,88 @@ export function mountVisual(
     holder.add(obj);
   });
   return { geometry: owned };
+}
+
+// What an image plane shows until its picture arrives, and for ever when the
+// key names nothing: a flat grey, visibly a picture that is missing.
+const IMAGE_PLACEHOLDER = "#808080";
+
+// An IMAGE object (`GeometryObjectData.image`): the picture stretched once over
+// the bounds of the object's shape, as a plane with no depth.
+//
+// It is UNLIT, UNFOGGED and NOT TONE-MAPPED, on purpose. A painted backdrop
+// already carries its light, its haze and its colour grade; lit by the scene it
+// would be shaded twice, fogged it would be hazed twice, and through ACES its
+// darks would be crushed and its highlights desaturated - the picture on screen
+// would stop being the picture that was painted. It casts no shadow: it is a
+// painted distance, not a thing in the scene.
+//
+// The object's `color` and `opacity` are NOT read. They are the editor's 2D fill
+// for the outline, which every decoration writes (half-transparent grey by
+// default), and a picture worn through them would come out grey and see-through.
+// A picture's own transparency is what blends it.
+function mountImage(parent: THREE.Group, g: GeometryObjectData, opts: MountOptions): MountedVisual {
+  const outline = outlineOfData(g.shape ?? { kind: "rect", w: ORPHAN_PLACEHOLDER, h: ORPHAN_PLACEHOLDER });
+  const { w, h, cx, cy } = outlineBounds(outline);
+  const geo = new THREE.PlaneGeometry(w, h);
+  // A polygon's bounds need not be centred on its origin; the plane is.
+  // (Outline y is DOWN, three's is up, as in `extrude.ts`.)
+  geo.translate(cx, -cy, 0);
+  const asset = g.image !== undefined ? IMAGE_ASSETS[g.image] : undefined;
+  const flat = (): THREE.MeshBasicMaterial =>
+    new THREE.MeshBasicMaterial({
+      side: THREE.DoubleSide,
+      fog: false,
+      toneMapped: false,
+      // Blended only where the picture needs it: a transparent object is sorted
+      // and drawn after every opaque one, which an opaque backdrop has no
+      // reason to pay.
+      transparent: asset?.alpha === true,
+    });
+  const placeholderMaterial = flat();
+  placeholderMaterial.color.set(IMAGE_PLACEHOLDER);
+  const pictureMaterial = flat();
+  const mesh = (material: THREE.Material): THREE.Mesh => {
+    const m = new THREE.Mesh(geo, material);
+    m.rotation.set(g.rotX ?? 0, g.rotY ?? 0, 0);
+    m.position.z = opts.defaultZ;
+    applyProjection(m, g.projection);
+    return m;
+  };
+  const placeholder = mesh(placeholderMaterial);
+  parent.add(placeholder);
+
+  // The picture arrives as a NEW mesh in the placeholder's place, as a prop
+  // does, rather than as a map written into the material already drawn: the
+  // editor's selection paints a clone of whatever material a mesh wears when it
+  // is selected (`Scene3D.syncHighlight`), and a plane added and selected in one
+  // gesture would go on wearing the grey clone after its picture had landed.
+  if (g.image !== undefined) {
+    void loadImage(g.image).then((tex) => {
+      if (!tex || !opts.alive()) return;
+      pictureMaterial.map = tex;
+      parent.remove(placeholder);
+      parent.add(mesh(pictureMaterial));
+    });
+  }
+  return { geometry: [geo], materials: [placeholderMaterial, pictureMaterial] };
+}
+
+// An outline's bounds in its own frame: their size and their centre.
+function outlineBounds(o: Outline): { w: number; h: number; cx: number; cy: number } {
+  if (o.kind === "circle") return { w: o.radius * 2, h: o.radius * 2, cx: 0, cy: 0 };
+  if (o.kind === "rect") return { w: o.half.x * 2, h: o.half.y * 2, cx: 0, cy: 0 };
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const v of o.verts) {
+    minX = Math.min(minX, v.x);
+    minY = Math.min(minY, v.y);
+    maxX = Math.max(maxX, v.x);
+    maxY = Math.max(maxY, v.y);
+  }
+  return { w: maxX - minX, h: maxY - minY, cx: (minX + maxX) / 2, cy: (minY + maxY) / 2 };
 }
 
 // The instance name a body's shapes ask their surfaces under
@@ -524,7 +612,7 @@ export class BodyVisual {
       // authored. The width across the pulleys is the object's `depth`. A prop
       // standing in for a belt draws what its file draws.
       const loop =
-        g.shape?.kind === "belt" && (g.kind ?? "primitive") !== "mesh" ? beltLoopOf(g.shape) : null;
+        g.shape?.kind === "belt" && (g.kind ?? "primitive") === "primitive" ? beltLoopOf(g.shape) : null;
       let ring: BeltRing | null = null;
       if (loop && g.shape?.kind === "belt") {
         const width = g.depth ?? defaults.depth;
@@ -619,6 +707,7 @@ export class BodyVisual {
       alive: () => !this.disposed,
     });
     this.owned.push(...mounted.geometry);
+    if (mounted.materials) this.ownedMaterials.push(...mounted.materials);
   }
 
   // The whole per-frame cost of a body: two writes into vectors it already owns,

@@ -947,6 +947,10 @@ export class Scene3D {
       std.emissiveIntensity = 0.5;
       std.emissiveMap = null;
     }
+    // An UNLIT surface (an image plane) has no emission to light: it is tinted
+    // toward the colour instead, which reads as selection over any picture.
+    const basic = clone as THREE.MeshBasicMaterial;
+    if (basic.isMeshBasicMaterial) basic.color.lerp(new THREE.Color(color), 0.35);
     this.highlightMaterials.set(key, clone);
     return clone;
   }

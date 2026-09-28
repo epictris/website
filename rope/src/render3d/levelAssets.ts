@@ -24,6 +24,7 @@ import type { RawLevelData } from "../level/levelFormat";
 import { normalizeLevelData } from "../level/levelFormat";
 import { generatedMeshAsset, parseGeneratedKey } from "./generated";
 import { GENERATED_ASSETS, generatedMeta } from "./generatedMeta";
+import { IMAGE_ASSETS } from "./images";
 import {
   BALL_MESH,
   emissiveMapName,
@@ -74,6 +75,18 @@ export function levelGeneratedKeys(raw: RawLevelData): string[] {
   return [...keys];
 }
 
+// Every picture the level shows (`kind: "image"`), once each - what the image
+// manifest has to hold for the level to draw them.
+export function levelImageKeys(raw: RawLevelData): string[] {
+  const keys = new Set<string>();
+  for (const body of normalizeLevelData(raw).bodies) {
+    for (const object of body.objects) {
+      if (object.type === "geometry" && object.kind === "image" && object.image) keys.add(object.image);
+    }
+  }
+  return [...keys];
+}
+
 // Every stored file the 3D scene will request for this level, in roughly the
 // order it will request them - the sky and the avatar first, then the bodies in
 // authored order - so a connection that cannot carry all of it at once carries
@@ -117,6 +130,11 @@ export function levelStoredFiles(raw: RawLevelData, controller?: string): Stored
     if (body.kind === "water") water = true;
     for (const object of body.objects) {
       if (object.type !== "geometry") continue;
+      // A picture wears no surface set at all (see `mountImage`).
+      if (object.kind === "image") {
+        if (object.image) add(IMAGE_ASSETS[object.image]);
+        continue;
+      }
       addSurface(object.texture);
       // A borrowed emission map is a second set worn for its emissive slot
       // alone, and `emissiveMapName` is what says whether the name resolves to

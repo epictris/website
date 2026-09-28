@@ -18,6 +18,7 @@ import type { RawLevelData } from "./src/level/levelFormat";
 import { levelStoredFiles } from "./src/render3d/levelAssets";
 import { GENERATED_MESH_FILE, GENERATED_ROOT } from "./src/render3d/generated";
 import { generatorService } from "./src/server/generators/service";
+import { imageService } from "./src/server/images";
 
 // The identity of the SOURCE this server is serving, exposed to the app as
 // `virtual:tree-stamp` and stamped into every exported bundle.
@@ -532,6 +533,11 @@ export default defineConfig({
         // Generated meshes land here while the editor is open; they are
         // fetched by key, never imported, so a write must not reach HMR.
         "**/public/generated/**",
+        // The editor's picture upload writes both (src/server/images.ts). The
+        // manifest is a config dependency like a level file, so a write would
+        // restart the server; the upload invalidates it by hand instead.
+        "**/public/images/**",
+        "**/src/render3d/imageAssets.json",
       ],
     },
     // The playtest store lives in serve.ts, not in Vite. With `bun run serve.ts`
@@ -569,6 +575,7 @@ export default defineConfig({
     prodReplays(),
     editorRoute(),
     generatorService(),
+    imageService(),
     generatedMeshesInBuild(),
   ],
 });

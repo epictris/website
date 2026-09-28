@@ -38,6 +38,9 @@ import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { HDRI_ASSETS, MESH_ASSETS, RAW_ASSETS, TEXTURE_ASSETS } from "../render3d/assets";
 import { GENERATED_ASSETS } from "../render3d/generatedMeta";
+import { IMAGE_ASSETS } from "../render3d/images";
+import { levelImageKeys } from "../render3d/levelAssets";
+import { LEVELS } from "../level/registry";
 import { assetName, levelsGeneratedKeys, storedAssets } from "../../scripts/assetStore";
 import { CREDITS_PATH, renderCredits } from "../../scripts/credits";
 
@@ -51,6 +54,7 @@ const ASSET_DIRS = [
   join(PUBLIC_DIR, "textures"),
   join(PUBLIC_DIR, "water"),
   join(PUBLIC_DIR, "hdri"),
+  join(PUBLIC_DIR, "images"),
 ];
 
 // The store itself imposes nothing worth budgeting against - a GitHub Release
@@ -218,6 +222,24 @@ export function runAssetChecks(): AssetCheck[] {
         : `${named.size} generated mesh(es) published`,
   });
 
+  // Every picture a registered level shows is in the image manifest. One that
+  // is not draws as a grey plane in game - visible, but only to someone who
+  // walks past it - and it is what a level committed from a machine whose
+  // upload never reached the manifest looks like.
+  const unknownImages: string[] = [];
+  for (const [id, spec] of Object.entries(LEVELS)) {
+    for (const key of levelImageKeys(spec.data)) {
+      if (!IMAGE_ASSETS[key]) unknownImages.push(`${key} (${id})`);
+    }
+  }
+  checks.push({
+    name: "assets: every picture a level shows is in the image manifest",
+    pass: unknownImages.length === 0,
+    detail: unknownImages.length
+      ? `not in src/render3d/imageAssets.json (upload it in the editor): ${unknownImages.join(", ")}`
+      : `${Object.keys(IMAGE_ASSETS).length} picture(s) in the manifest`,
+  });
+
   const orphans = files.filter((f) => !referenced.has(f));
   checks.push({
     name: "assets: no unreferenced files",
@@ -234,6 +256,7 @@ export function runAssetChecks(): AssetCheck[] {
     ...Object.entries(TEXTURE_ASSETS),
     ...Object.entries(RAW_ASSETS),
     ...Object.entries(HDRI_ASSETS),
+    ...Object.entries(IMAGE_ASSETS),
   ];
   const unsourced = provenance
     .filter(([, a]) => !a.source?.trim() || !a.license?.trim() || !a.author?.trim())

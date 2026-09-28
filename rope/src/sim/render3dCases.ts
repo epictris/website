@@ -201,6 +201,7 @@ import { join } from "node:path";
 import { canonicalString, generatedKey, generatedMeshAsset, parseGeneratedKey } from "../render3d/generated";
 import { GENERATED_ASSETS, generatedMeta, generatedReleaseName } from "../render3d/generatedMeta";
 import { levelStoredFiles } from "../render3d/levelAssets";
+import { IMAGE_ASSETS, imageFile, registerImageAsset } from "../render3d/images";
 import {
   canonicalParams,
   expectedKey,
@@ -6839,8 +6840,117 @@ export async function generatorJobCases(): Promise<CaseResult[]> {
   return out;
 }
 
+// IMAGE PLANES (`kind: "image"`): the picture's key survives the format's
+// scaling and the editor's round trip, the preload list names the picture and
+// no surface set for it, and what is mounted is a flat unlit plane of the
+// shape's size that the scene's light, fog and tone mapping leave alone.
+function imagePlanes(): CaseResult[] {
+  const out: CaseResult[] = [];
+  const near = (a: number, b: number): boolean => Math.abs(a - b) < 1e-9;
+  const plane: GeometryObjectData = {
+    type: "geometry",
+    kind: "image",
+    image: "cave",
+    x: 40,
+    z: -1000,
+    shape: { kind: "rect", w: 3000, h: 1000 },
+  };
+
+  const scaled = scaleObject(plane, PX) as GeometryObjectData;
+  const authored: RawLevelData = {
+    player: { x: 0, y: 0, radius: 20 },
+    bodies: [{ kind: "static", x: 0, y: 0, rot: 0, objects: [plane] }],
+  };
+  const saved = modelToDisk(modelFromDisk(authored)).bodies[0]!.objects.filter(isGeometryObject)[0];
+  // A mesh object keeps no picture key: `image` is the image kind's field.
+  const meshSaved = modelToDisk(
+    modelFromDisk({ ...authored, bodies: [{ ...authored.bodies[0]!, objects: [{ ...plane, kind: "mesh", mesh: "rock-a" }] }] }),
+  ).bodies[0]!.objects.filter(isGeometryObject)[0];
+  out.push({
+    name: "image: the picture key survives scaling and the editor's round trip, and only on an image object",
+    pass:
+      scaled.kind === "image" &&
+      scaled.image === "cave" &&
+      near(scaled.shape?.kind === "rect" ? scaled.shape.w : 0, 30) &&
+      near(scaled.z!, -10) &&
+      saved?.kind === "image" &&
+      saved.image === "cave" &&
+      meshSaved !== undefined &&
+      !("image" in meshSaved),
+    detail: `scaled ${JSON.stringify(scaled)}; saved ${JSON.stringify(saved)}; as a mesh ${JSON.stringify(meshSaved)}`,
+  });
+
+  // The preload list: the picture's file, and nothing else for the object - a
+  // picture wears no surface set, and an absent `texture` would otherwise
+  // resolve to the default one and fetch it for nothing.
+  const key = "__image-case";
+  registerImageAsset(key, {
+    file: imageFile(key),
+    sha256: "0".repeat(64),
+    bytes: 4321,
+    width: 3,
+    height: 1,
+    source: "render3dCases",
+    author: "render3dCases",
+    license: "CC0",
+  });
+  try {
+    const bare: RawLevelData = { player: { x: 0, y: 0, radius: 20 }, bodies: [] };
+    const withPlane: RawLevelData = {
+      ...bare,
+      bodies: [{ kind: "static", x: 0, y: 0, rot: 0, objects: [{ ...plane, image: key }] }],
+    };
+    const before = new Set(levelStoredFiles(bare).map((f) => f.file));
+    const added = levelStoredFiles(withPlane).filter((f) => !before.has(f.file));
+    out.push({
+      name: "image: the preload list names the picture at its manifest size and no surface set for it",
+      pass: added.length === 1 && added[0]!.file === imageFile(key) && added[0]!.bytes === 4321,
+      detail: `added ${JSON.stringify(added)}`,
+    });
+  } finally {
+    delete IMAGE_ASSETS[key];
+  }
+
+  // What is mounted: a key the manifest does not hold draws the grey plane at
+  // once (and asks for nothing), at the shape's own size and the given depth.
+  const parent = new THREE.Group();
+  const mounted = mountVisual(
+    parent,
+    () => {
+      throw new Error("an image plane must not ask for the extrusion");
+    },
+    { geometry: { ...scaled, image: "__no-such-picture" }, color: "#ff0000" },
+    { defaultZ: -10, castShadow: true, alive: () => true },
+  );
+  const mesh = parent.children[0] as THREE.Mesh | undefined;
+  const mat = mesh?.material as THREE.MeshBasicMaterial | undefined;
+  mesh?.geometry.computeBoundingBox();
+  const box = mesh?.geometry.boundingBox;
+  out.push({
+    name: "image: a flat, unlit, unfogged, un-tone-mapped plane of the shape's size, grey until its picture arrives",
+    pass:
+      parent.children.length === 1 &&
+      mat?.isMeshBasicMaterial === true &&
+      !mat.fog &&
+      !mat.toneMapped &&
+      !mat.transparent &&
+      mat.color.getHexString() === "808080" &&
+      !mesh!.castShadow &&
+      near(mesh!.position.z, -10) &&
+      box !== null &&
+      box !== undefined &&
+      near(box.max.x - box.min.x, 30) &&
+      near(box.max.y - box.min.y, 10) &&
+      box.max.z === box.min.z &&
+      (mounted.materials?.length ?? 0) === 2,
+    detail: `children ${parent.children.length}, basic ${mat?.isMeshBasicMaterial}, fog ${mat?.fog}, toneMapped ${mat?.toneMapped}, colour #${mat?.color.getHexString()}, z ${mesh?.position.z}, size ${box ? `${box.max.x - box.min.x}×${box.max.y - box.min.y}×${box.max.z - box.min.z}` : "none"}`,
+  });
+  return out;
+}
+
 export function runRender3dCases(): CaseResult[] {
   return [
+    ...imagePlanes(),
     ...beltRendering(),
     ...renderNeedsGeometry(),
     ...chainAnchors(),

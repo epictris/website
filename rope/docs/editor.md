@@ -295,6 +295,13 @@ That is not a fallback but the same rule - the overlay picks and offers handles 
 An **orbited** view picks by exactly these rules (above): the ray answers for geometry as it does head on, and the collision shapes, lights, regions and notes it shares the canvas with are resolved against the plane through `unprojectToPlane` rather than through the 2D camera, so the two halves of a pick agree about where the pointer is aimed at any angle.
 What it does not offer there is the plane HANDLES, for the reason this section gives about geometry objects and the orbit section gives about everything else: a handle that is not drawn must not be grabbable either.
 
+## Pictures: `+ Image`
+
+`+ Image` (beside `+ Geometry`) asks for a picture file, adds it to the image store (see [asset-store](asset-store.md#pictures)) and stands it up as a backdrop: a body of its own holding one `kind: "image"` geometry object, 10 m behind the gameplay plane (`IMAGE_DEPTH`), sized to span the view's width at that depth and to the picture's own aspect.
+Move, resize and push it through z like any geometry object; with no collision object it is never simulated.
+
+Any geometry object can become a picture: **kind → image** on its Look section, which then offers only the picture picker, **Upload…** (adds a picture and assigns it) and **Fit** (height from width, so the picture is undistorted).
+
 ## Workspaces: Level and Visuals
 
 The toolbar opens with a switcher, **Level** and **Visuals** (**W** toggles).

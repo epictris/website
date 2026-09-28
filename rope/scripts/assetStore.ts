@@ -28,6 +28,7 @@ import {
   textureMaps,
 } from "../src/render3d/assets";
 import { generatedMeshAsset } from "../src/render3d/generated";
+import { IMAGE_ASSETS } from "../src/render3d/images";
 import { GENERATED_ASSETS, generatedReleaseName } from "../src/render3d/generatedMeta";
 import { levelGeneratedKeys } from "../src/render3d/levelAssets";
 import { LEVELS } from "../src/level/registry";
@@ -90,6 +91,11 @@ export function storedAssets(): StoredAsset[] {
   }
   // The captured skies - one file per entry, like a prop.
   for (const [key, asset] of Object.entries(HDRI_ASSETS)) {
+    out.push({ key, file: asset.file, sha256: asset.sha256, bytes: asset.bytes });
+  }
+  // The pictures image planes show (the editor's upload pins them) - one file
+  // per entry, like a prop.
+  for (const [key, asset] of Object.entries(IMAGE_ASSETS)) {
     out.push({ key, file: asset.file, sha256: asset.sha256, bytes: asset.bytes });
   }
   for (const [key, asset] of Object.entries(TEXTURE_ASSETS)) {
