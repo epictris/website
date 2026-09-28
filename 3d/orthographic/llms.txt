@@ -1,0 +1,123 @@
+# Orthographic Studio
+
+> Describe a 3D scene as flat outlines in three orthographic views (front, top, right side), traced over reference images, and check the result through a perspective camera. Each object's solid is the intersection of its three outlines extruded along their view directions. Built to be driven by LLM agents: one JSON document format, a validator that reports every problem with a JSON Pointer, and renders of every view for visual self-checks.
+
+- Editor: https://3d.tris.sh/orthographic/
+- JSON Schema: https://3d.tris.sh/orthographic/schema.json
+- HTTP API index: https://3d.tris.sh/orthographic/api
+
+## Coordinates
+
+- Right-handed, Z up, one scene unit (u) per unit. `scene.metersPerUnit` records a real-world scale, or null.
+- X is right in the front view, Y is depth away from the front camera, Z is up.
+- The scene frame is the box from (0, 0, 0) to `scene.size`. It is a drawing guide, not a boundary.
+
+| View | Looks along | Point order | Horizontal | Vertical |
+|------|-------------|-------------|------------|----------|
+| `front` | +Y | `[x, z]` | x (right) | z (up) |
+| `top` | −Z (down) | `[x, y]` | x (right) | y (away from the front camera) |
+| `side` | −X (the right side) | `[y, z]` | y (right) | z (up) |
+
+## How a solid is made
+
+An object has exactly one outline per view: a simple closed polygon in world units, 3–512 points, no repeated closing point, no self-intersections, no holes. The solid is every point (x, y, z) whose front projection (x, z), top projection (x, y) and side projection (y, z) all fall inside their outlines.
+
+Consequences worth planning for:
+
+- Views share axes: front and top share x, top and side share y, front and side share z. Both views of an axis should span the same range; if they do not, the box uses the union and the narrower outline clips the solid (`extent-mismatch` warning).
+- The outlines must agree on where the object is thick and thin. If the front says the top is narrow and the side says the top is wide, the solid is narrow there and the side outline is not filled (`low-coverage` warning, per view). If they share no volume at all, there is no solid (`no-common-volume` error).
+- Concave detail survives only when every view allows it. A hole through an object cannot be represented; split it into several objects instead.
+- Anything the three silhouettes cannot capture (a dent seen from no axis) is not captured. Prefer several simple objects over one complicated one.
+
+## The document
+
+```json
+{
+  "$schema": "https://3d.tris.sh/orthographic/schema.json",
+  "format": "orthographic-scene",
+  "version": 1,
+  "scene": { "title": "Cave entrance", "size": { "x": 40, "y": 30, "z": 20 }, "metersPerUnit": null },
+  "objects": [
+    {
+      "id": "pillar",
+      "name": "Stone pillar",
+      "kind": "rock",
+      "color": "#efc875",
+      "outlines": {
+        "front": [[8, 2], [12, 2], [11, 16], [9, 16]],
+        "top": [[8, 8], [12, 8], [12, 12], [8, 12]],
+        "side": [[8, 2], [12, 2], [11, 16], [9, 16]]
+      }
+    }
+  ],
+  "camera": {
+    "position": { "x": 20, "y": -30, "z": 12 },
+    "target": { "x": 20, "y": 15, "z": 8 },
+    "focalLengthMm35Equivalent": 35,
+    "frame": { "width": 1600, "height": 900 }
+  },
+  "references": {
+    "front": { "image": "photo", "opacity": 0.6, "min": { "x": 0, "z": 0 }, "size": { "x": 40, "z": 22.5 } },
+    "perspective": { "image": "photo", "opacity": 0.5 }
+  },
+  "images": {
+    "photo": { "name": "entrance.jpg", "mimeType": "image/jpeg", "width": 1600, "height": 900, "data": "<base64>" }
+  }
+}
+```
+
+Required: `format`, `version`, `scene.size`, `objects` (each with `id` and `outlines`). Everything else has defaults.
+
+- `objects[].id`: letters, digits, `_ . -`, starting with a letter or digit, unique. `name`, `kind` (free tag), `color` (`#rrggbb`), `visible`, `locked`, `reviewed`, `opacity` (0.05–1, below 1 renders translucent), `notes`.
+- `camera`: `position`, `target`, and the lens as `verticalFovDegrees` (5–140) or `focalLengthMm35Equivalent` (f = 12 mm / tan(vertical FOV / 2); if both are given they must agree), plus `rollDegrees`, `near`, `far`, `frame` (pixels, fixes the aspect ratio).
+- `references`: one optional image per view. `front`/`top`/`side` place the image on the view plane: its lower-left corner at `min`, stretched to `size`, both named by that view's axes (`{x, z}` for front, `{x, y}` for top, `{y, z}` for side). Image right is the view's horizontal axis, image up its vertical axis. `perspective` is a screen overlay on the camera frame: `offsetPercent {x, y}`, `scale` (1 fits the frame), `rotationDegrees`, `blend`.
+- `images`: keyed by id. `data` is the base64 file (PNG, JPEG, WebP or GIF). It may be omitted only when the editor already holds that image.
+- Documents the editor writes also contain `derived` blocks (bounds, center, size, camera matrices), `display`, `reconstruction`, `editor` and `meshCache`. They are read-only or optional; `derived` is ignored on load.
+
+## Workflow for turning an image into a scene
+
+1. Decide the scene frame from the image (for a front-facing photo: width = x, height = z, pick a plausible depth y) and set `metersPerUnit` if a scale is known.
+2. Put the image behind the front view (`references.front`, `min` 0, `size` matching the frame's aspect ratio) and, if the camera is known, behind the perspective view too.
+3. For each object, trace its front outline in x/z from the image, then invent consistent top (x/y) and side (y/z) outlines: reuse the front's x range in top and its z range in side.
+4. Validate. Fix every error; read every warning.
+5. Render the views and compare them with the references. Adjust outlines, the camera (position, target, focal length) or the reference placement, then repeat from 4.
+
+## HTTP API
+
+All endpoints accept and return JSON (CORS is open). Errors come back as `{ "ok": false, "issues": [...] }`.
+
+- `POST /orthographic/api/validate`: body is a document. Returns `{ ok, issues }`, including the geometry checks (reconstructs every solid).
+- `POST /orthographic/api/render`: body `{ document, views?, width?, height?, references?, labels?, grid? }`. `views` defaults to all of `front`, `top`, `side`, `perspective`. Orthographic views are fitted to the scene at `width` × `height` (default 1200 × 900); perspective uses the camera frame (`width` scales it). References are drawn whenever assigned, unless `references` is false. Returns `{ ok, issues, images: { view: "data:image/png;base64,…" } }`.
+- `POST /orthographic/api/render/{front|top|side|perspective}.png`: body is a document; returns the PNG itself. Query: `width`, `height`, `references=false`. Issues are in the `X-Issues` header (URL-encoded JSON).
+
+```sh
+curl -s -X POST --data-binary @scene.json https://3d.tris.sh/orthographic/api/validate
+curl -s -X POST --data-binary @scene.json https://3d.tris.sh/orthographic/api/render/front.png -o front.png
+```
+
+Renders run one at a time; a busy server answers 503 with `Retry-After`.
+
+## In the page: `window.orthographic`
+
+Calls return `{ ok, issues, ... }` (edits, checks and renders as promises) and never throw. Edits use the document's shapes (`{x, y, z}` objects, world-unit outline points), apply as one undoable step, and change nothing when an issue is an error.
+
+- `getDocument({ images: "metadata" | "data" | "none", derived, editor })` → the document (synchronous).
+- `loadDocument(doc)`, `validate(doc?)` (no argument: the current scene, geometry included), `waitForGeometry()`.
+- `addImage({ data, name })` → `{ id }` (base64 or a data: URL; the id is a hash of the bytes).
+- `addObject({ id?, name, kind, color, outlines })` or `addObject({ primitive: "box" | "ellipsoid" | "cylinder" | "rock", center, size })` → `{ id }`.
+- `updateObject(id, { name, kind, color, visible, locked, reviewed, opacity, notes })`, `setOutline(id, view, points)`, `setBounds(idOrIds, { min: {x,y,z}, max: {x,y,z} })` (any subset of axes; outlines scale), `moveObjects(ids, {x,y,z})`, `duplicateObjects(ids, offset?)`, `deleteObjects(ids)`.
+- `setScene({ title, size, metersPerUnit, notes })`, `setCamera({ position, target, verticalFovDegrees | focalLengthMm35Equivalent, rollDegrees, near, far, frame, locked })`, `setDisplay({ style, grid, labels, crosshair })`.
+- `setReference(view, { image, opacity, visible, min, size } | null)` for `front`/`top`/`side`; `setReference("perspective", { image, opacity, visible, offsetPercent, scale, rotationDegrees, blend } | null)`.
+- `render({ views, width, height, references, labels, grid, format: "png" | "svg" })` → `{ images }`.
+- `select(ids)`, `undo()`, `redo()`.
+
+## Issues
+
+Each issue is `{ severity: "error" | "warning", code, path, message, objectId?, view? }`; `path` is a JSON Pointer into the document. Common codes:
+
+- `schema-*`: the document does not match the schema (`schema-additionalProperties` names the unknown key).
+- `ring-self-intersection`, `ring-repeated-point`, `ring-too-few-points`, `ring-too-many-points`, `ring-zero-area`, `ring-not-finite`: an outline is not a simple polygon.
+- `duplicate-id`, `collapsed-axis` (an object thinner than 0.001 u), `unknown-image`, `image-without-data`, `invalid-camera`, `camera-lens-mismatch`.
+- `extent-mismatch` (warning): two views disagree on a shared axis.
+- `no-common-volume` (error) and `low-coverage` (warning): the outlines do not describe one consistent solid.
+- `outside-frame` (warning): an object extends past the scene frame.

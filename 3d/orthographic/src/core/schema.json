@@ -1,0 +1,554 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://3d.tris.sh/orthographic/schema.json",
+  "title": "Orthographic scene",
+  "description": "A 3D scene described by one closed silhouette per object in each of three orthographic views (front, top, right side), plus a perspective camera and per-view reference images. Right-handed, Z up, all lengths in scene units (u). Each object's solid is the intersection of its three silhouettes extruded along their view directions. Guide: https://3d.tris.sh/orthographic/llms.txt",
+  "type": "object",
+  "required": ["format", "version", "scene", "objects"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Optional link to this schema."
+    },
+    "format": {
+      "const": "orthographic-scene"
+    },
+    "version": {
+      "const": 1
+    },
+    "scene": {
+      "$ref": "#/$defs/scene"
+    },
+    "objects": {
+      "type": "array",
+      "maxItems": 300,
+      "description": "Every object in the scene. Order is irrelevant; ids must be unique.",
+      "items": {
+        "$ref": "#/$defs/object"
+      }
+    },
+    "camera": {
+      "$ref": "#/$defs/camera"
+    },
+    "references": {
+      "$ref": "#/$defs/references"
+    },
+    "images": {
+      "type": "object",
+      "description": "Images used by references, keyed by image id. `data` may be omitted when the editor already holds that image (for example in a compact agent view).",
+      "maxProperties": 100,
+      "propertyNames": {
+        "$ref": "#/$defs/imageId"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/image"
+      }
+    },
+    "display": {
+      "$ref": "#/$defs/display"
+    },
+    "reconstruction": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "resolution": {
+          "enum": [24, 40, 56, 72],
+          "description": "Sampling cells per axis when the 3D solid is reconstructed. Higher keeps smaller features."
+        }
+      }
+    },
+    "editor": {
+      "type": "object",
+      "description": "Opaque editor UI state (selection, panel layout, view zoom). Safe to omit; never needed by agents."
+    },
+    "meshCache": {
+      "type": "array",
+      "description": "Opaque cache of reconstructed meshes so a reload is instant. Safe to omit; rebuilt from the outlines."
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$"
+    },
+    "imageId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$"
+    },
+    "coordinate": {
+      "type": "number",
+      "minimum": -1000000,
+      "maximum": 1000000
+    },
+    "length": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "maximum": 1000000
+    },
+    "vec3": {
+      "type": "object",
+      "required": ["x", "y", "z"],
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "$ref": "#/$defs/coordinate"
+        },
+        "y": {
+          "$ref": "#/$defs/coordinate"
+        },
+        "z": {
+          "$ref": "#/$defs/coordinate"
+        }
+      }
+    },
+    "point": {
+      "type": "array",
+      "prefixItems": [
+        {
+          "$ref": "#/$defs/coordinate"
+        },
+        {
+          "$ref": "#/$defs/coordinate"
+        }
+      ],
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "ring": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 512,
+      "items": {
+        "$ref": "#/$defs/point"
+      },
+      "description": "One simple closed polygon in world units: no repeated closing point, no self-intersections, no holes."
+    },
+    "scene": {
+      "type": "object",
+      "required": ["size"],
+      "additionalProperties": false,
+      "properties": {
+        "title": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "size": {
+          "description": "The scene frame: the box from (0,0,0) to size. A drawing guide, not a boundary.",
+          "type": "object",
+          "required": ["x", "y", "z"],
+          "additionalProperties": false,
+          "properties": {
+            "x": {
+              "type": "number",
+              "minimum": 0.1,
+              "maximum": 1000000
+            },
+            "y": {
+              "type": "number",
+              "minimum": 0.1,
+              "maximum": 1000000
+            },
+            "z": {
+              "type": "number",
+              "minimum": 0.1,
+              "maximum": 1000000
+            }
+          }
+        },
+        "metersPerUnit": {
+          "type": ["number", "null"],
+          "exclusiveMinimum": 0,
+          "description": "Real-world scale of one scene unit, or null when unknown."
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 4000
+        }
+      }
+    },
+    "object": {
+      "type": "object",
+      "required": ["id", "outlines"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 180
+        },
+        "kind": {
+          "type": "string",
+          "maxLength": 40,
+          "description": "Free-form tag such as rock, plant or wall."
+        },
+        "color": {
+          "type": "string",
+          "pattern": "^#[0-9a-fA-F]{6}$"
+        },
+        "outlines": {
+          "type": "object",
+          "required": ["front", "top", "side"],
+          "additionalProperties": false,
+          "description": "The object's silhouette in each view, in world units. front points are [x, z], top points are [x, y], side points are [y, z]. The views that share an axis should span the same range on it (front and top share x, top and side share y, front and side share z).",
+          "properties": {
+            "front": {
+              "$ref": "#/$defs/ring"
+            },
+            "top": {
+              "$ref": "#/$defs/ring"
+            },
+            "side": {
+              "$ref": "#/$defs/ring"
+            }
+          }
+        },
+        "visible": {
+          "type": "boolean"
+        },
+        "locked": {
+          "type": "boolean"
+        },
+        "reviewed": {
+          "type": "boolean"
+        },
+        "opacity": {
+          "type": "number",
+          "minimum": 0.05,
+          "maximum": 1,
+          "description": "Below 1 renders translucent in perspective."
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "derived": {
+          "type": "object",
+          "description": "Read-only values computed from the outlines (bounds, center, size). Ignored on load."
+        }
+      }
+    },
+    "camera": {
+      "type": "object",
+      "required": ["position", "target"],
+      "additionalProperties": false,
+      "description": "The perspective camera. Give the lens as verticalFovDegrees or focalLengthMm35Equivalent (f = 12 mm / tan(verticalFov / 2)); if both are given they must agree.",
+      "properties": {
+        "position": {
+          "$ref": "#/$defs/vec3"
+        },
+        "target": {
+          "$ref": "#/$defs/vec3"
+        },
+        "verticalFovDegrees": {
+          "type": "number",
+          "minimum": 5,
+          "maximum": 140
+        },
+        "focalLengthMm35Equivalent": {
+          "type": "number",
+          "minimum": 4.36,
+          "maximum": 275
+        },
+        "rollDegrees": {
+          "type": "number",
+          "minimum": -180,
+          "maximum": 180
+        },
+        "near": {
+          "type": "number",
+          "minimum": 0.0001
+        },
+        "far": {
+          "type": "number",
+          "maximum": 10000000
+        },
+        "frame": {
+          "type": "object",
+          "required": ["width", "height"],
+          "additionalProperties": false,
+          "description": "Output frame in pixels; fixes the aspect ratio.",
+          "properties": {
+            "width": {
+              "type": "integer",
+              "minimum": 128,
+              "maximum": 4096
+            },
+            "height": {
+              "type": "integer",
+              "minimum": 128,
+              "maximum": 4096
+            }
+          }
+        },
+        "locked": {
+          "type": "boolean"
+        },
+        "derived": {
+          "type": "object",
+          "description": "Read-only values computed from the camera (up vector, horizontal FOV, matrices). Ignored on load."
+        }
+      }
+    },
+    "references": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One optional reference image per view, drawn behind that view. Omit a view to leave it without a reference.",
+      "properties": {
+        "front": {
+          "$ref": "#/$defs/frontReference"
+        },
+        "top": {
+          "$ref": "#/$defs/topReference"
+        },
+        "side": {
+          "$ref": "#/$defs/sideReference"
+        },
+        "perspective": {
+          "$ref": "#/$defs/perspectiveReference"
+        }
+      }
+    },
+    "referenceCommon": {
+      "type": "object",
+      "required": ["image"],
+      "properties": {
+        "image": {
+          "$ref": "#/$defs/imageId"
+        },
+        "opacity": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "visible": {
+          "type": "boolean"
+        }
+      }
+    },
+    "frontReference": {
+      "description": "Placed on the front (x/z) plane: the image's lower-left corner at min, stretched to size. Image right is +x, image up is +z.",
+      "allOf": [
+        {
+          "$ref": "#/$defs/referenceCommon"
+        }
+      ],
+      "required": ["min", "size"],
+      "unevaluatedProperties": false,
+      "properties": {
+        "min": {
+          "$ref": "#/$defs/xz"
+        },
+        "size": {
+          "$ref": "#/$defs/xzSize"
+        }
+      }
+    },
+    "topReference": {
+      "description": "Placed on the top (x/y) plane: lower-left corner at min. Image right is +x, image up is +y (away from the front camera).",
+      "allOf": [
+        {
+          "$ref": "#/$defs/referenceCommon"
+        }
+      ],
+      "required": ["min", "size"],
+      "unevaluatedProperties": false,
+      "properties": {
+        "min": {
+          "$ref": "#/$defs/xy"
+        },
+        "size": {
+          "$ref": "#/$defs/xySize"
+        }
+      }
+    },
+    "sideReference": {
+      "description": "Placed on the right-side (y/z) plane: lower-left corner at min. Image right is +y, image up is +z.",
+      "allOf": [
+        {
+          "$ref": "#/$defs/referenceCommon"
+        }
+      ],
+      "required": ["min", "size"],
+      "unevaluatedProperties": false,
+      "properties": {
+        "min": {
+          "$ref": "#/$defs/yz"
+        },
+        "size": {
+          "$ref": "#/$defs/yzSize"
+        }
+      }
+    },
+    "perspectiveReference": {
+      "description": "A screen overlay on the camera frame (not placed in 3D). Scale 1 fits the image inside the frame; offsets are percentages of the frame.",
+      "allOf": [
+        {
+          "$ref": "#/$defs/referenceCommon"
+        }
+      ],
+      "unevaluatedProperties": false,
+      "properties": {
+        "offsetPercent": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["x", "y"],
+          "properties": {
+            "x": {
+              "type": "number",
+              "minimum": -10000,
+              "maximum": 10000
+            },
+            "y": {
+              "type": "number",
+              "minimum": -10000,
+              "maximum": 10000
+            }
+          }
+        },
+        "scale": {
+          "type": "number",
+          "minimum": 0.05,
+          "maximum": 8
+        },
+        "rotationDegrees": {
+          "type": "number",
+          "minimum": -180,
+          "maximum": 180
+        },
+        "blend": {
+          "enum": ["normal", "difference", "screen", "multiply"]
+        }
+      }
+    },
+    "xz": {
+      "type": "object",
+      "required": ["x", "z"],
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "$ref": "#/$defs/coordinate"
+        },
+        "z": {
+          "$ref": "#/$defs/coordinate"
+        }
+      }
+    },
+    "xy": {
+      "type": "object",
+      "required": ["x", "y"],
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "$ref": "#/$defs/coordinate"
+        },
+        "y": {
+          "$ref": "#/$defs/coordinate"
+        }
+      }
+    },
+    "yz": {
+      "type": "object",
+      "required": ["y", "z"],
+      "additionalProperties": false,
+      "properties": {
+        "y": {
+          "$ref": "#/$defs/coordinate"
+        },
+        "z": {
+          "$ref": "#/$defs/coordinate"
+        }
+      }
+    },
+    "xzSize": {
+      "type": "object",
+      "required": ["x", "z"],
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "$ref": "#/$defs/length"
+        },
+        "z": {
+          "$ref": "#/$defs/length"
+        }
+      }
+    },
+    "xySize": {
+      "type": "object",
+      "required": ["x", "y"],
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "$ref": "#/$defs/length"
+        },
+        "y": {
+          "$ref": "#/$defs/length"
+        }
+      }
+    },
+    "yzSize": {
+      "type": "object",
+      "required": ["y", "z"],
+      "additionalProperties": false,
+      "properties": {
+        "y": {
+          "$ref": "#/$defs/length"
+        },
+        "z": {
+          "$ref": "#/$defs/length"
+        }
+      }
+    },
+    "image": {
+      "type": "object",
+      "required": ["mimeType", "width", "height"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "maxLength": 180
+        },
+        "mimeType": {
+          "enum": ["image/png", "image/jpeg", "image/webp", "image/gif"]
+        },
+        "width": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16000
+        },
+        "height": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16000
+        },
+        "data": {
+          "type": "string",
+          "maxLength": 36000000,
+          "contentEncoding": "base64",
+          "description": "The image file, base64 encoded."
+        }
+      }
+    },
+    "display": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "How the perspective view is drawn.",
+      "properties": {
+        "style": {
+          "enum": ["solid", "clay", "wire", "ghost"]
+        },
+        "grid": {
+          "type": "boolean"
+        },
+        "labels": {
+          "type": "boolean"
+        },
+        "crosshair": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

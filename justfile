@@ -10,7 +10,7 @@ _setup-app:
 _setup-swing:
     rope/scripts/setup.sh
 
-# Run a subproject's dev server: just run [app|rope|pool]
+# Run a subproject's dev server: just run [app|rope|pool|3d]
 run PROJECT="app":
     bun run --cwd {{PROJECT}} dev
 

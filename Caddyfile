@@ -14,6 +14,10 @@ pool.tris.sh {
 	reverse_proxy pool:8080
 }
 
+3d.tris.sh {
+	reverse_proxy 3d:8080
+}
+
 swing.tris.sh {
 	# The playtest admin page and its API sit behind a password; the game and
 	# the ingest route it posts to stay open. The hash comes from the
