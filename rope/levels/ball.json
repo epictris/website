@@ -309,8 +309,8 @@
     "fillIntensity": 2.8,
     "envIntensity": 0.5,
     "backgroundColor": "#0a2438",
-    "fogAmount": 0,
-    "fogColor": "#14384f",
+    "fogAmount": 0.42,
+    "fogColor": "#324858",
     "sunColor": "#bababa"
   },
   "camera": {
@@ -5185,11 +5185,11 @@
           "color": "#f3ecd8",
           "intensity": 600,
           "range": 2000,
-          "angle": 5,
+          "angle": 8,
           "penumbra": 1,
           "castShadow": true,
-          "beam": 0.6,
-          "dust": 0.5
+          "beam": 0.85,
+          "dust": 0.7
         }
       ]
     },

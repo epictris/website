@@ -87,8 +87,14 @@ The `.blend` files are raws under `assets-src/`, gitignored like every raw; publ
 - **Size.** The per-file bar is 8 MB and textures are capped at 1k by the optimiser; the recipe warns past the bar.
   Splitting a level into a foreground and a backdrop scene is the release valve, and is not supported yet: a level names one scene.
 
+## The river's scene
+
+`river.blend`'s `Cavern` collection is generated, not modelled: `assets-src/scenes/cavern/generate_cave.py` builds the backdrop in the game frame, composed against the camera the level opens on (the start chamber is traced from the reference painting as frame-fraction polygons; the rest of the cavern continues the same faceted slabs along the level), and `import_into_river.py` replaces the collection with it.
+The recipe, the frame, the depths and what each part of the file does are in [assets-src/scenes/cavern/README.md](../assets-src/scenes/cavern/README.md); the point of keeping it a generator is that a change to the painting's reading, the fog or the level's camera is a number, not a remodel.
+The level's fog (`fogAmount`, `fogColor`) is half of the look: the far layers are built at 22-45 m so the fog pales them the way the painting's haze does.
+
 ## Not yet
 
-- Unplayed: written 2026-09-27 against an empty scene and `cli render3d`; the first real dressing of the river level is the play.
+- Unplayed: written 2026-09-27 against an empty scene and `cli render3d`; the cavern backdrop of 2026-09-28 was verified with `cli shot` along the camera route, and the play is still the play.
 - One scene per level. Two levels may share a scene, and a level cannot name two.
 - Credits: textures inside a scene are not credited; a scene that ships someone else's textures needs a `CREDITS.md` line by hand.
