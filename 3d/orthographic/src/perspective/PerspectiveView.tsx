@@ -75,13 +75,16 @@ export function PerspectiveView() {
 
   const reference = () => state.references.perspective;
   const referenceImage = createMemo(() => image(reference()?.image));
+  const depthImage = createMemo(() => image(reference()?.depth));
   const overlay = createMemo(() => {
     const r = reference();
     const a = referenceImage();
     if (!r || !a || !r.visible) return null;
+    // The depth map covers the whole image, whatever its own resolution: it takes the image's place.
+    const depth = ui.prefs.depth ? depthImage() : undefined;
     return {
       ...overlayGeometry(...gate(), r, a),
-      url: a.url,
+      url: (depth ?? a).url,
       opacity: r.opacity,
       rotation: r.rotationDegrees,
       blend: r.blend,
@@ -385,7 +388,9 @@ export function PerspectiveView() {
       <header class="view-head">
         <span class="view-number">04</span>
         <span class="view-title">Perspective</span>
-        <span class="view-subtitle grow">3D SOLIDS</span>
+        <span class="view-subtitle whole grow">
+          <span>3D SOLIDS</span>
+        </span>
         <span class="grow" />
         <label title={reference() ? "Show the perspective reference image" : "Assign a reference image first"}>
           <input
@@ -398,6 +403,17 @@ export function PerspectiveView() {
           />
           Reference
         </label>
+        <Show when={depthImage()}>
+          <label title="Show the reference's estimated depth map (nearer lighter) in place of the image">
+            <input
+              type="checkbox"
+              checked={ui.prefs.depth}
+              disabled={!reference()?.visible}
+              onChange={(e) => setUi("prefs", "depth", e.currentTarget.checked)}
+            />
+            Depth
+          </label>
+        </Show>
         <Show when={state.objects.some((e) => e.trace)}>
           <label title="Draw each object's trace over the reference: dashed where traced, dotted where guessed">
             <input

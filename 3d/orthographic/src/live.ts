@@ -9,6 +9,7 @@
 import { createSignal } from "solid-js";
 import { image } from "./assets";
 import { base64ToBytes } from "./core/images";
+import { referencedImages } from "./core/model";
 import type { Issue } from "./core/types";
 import { currentDocument, loadDocument } from "./io";
 import { errors, onSceneChange, setSaveStatus, state, toast } from "./store";
@@ -16,7 +17,31 @@ import { errors, onSceneChange, setSaveStatus, state, toast } from "./store";
 const SAVE_DELAY_MS = 300;
 const RETRY_MS = 5000;
 
-const api = (path: string) => new URL(`api/${path}`, location.href).href;
+/**
+ * The editor's own address on this origin (server.ts serves it there, and the
+ * API under it), whatever URL the page was opened at. Not Vite's BASE_URL:
+ * the dev server leaves that at /.
+ */
+const editorBase = () => new URL("/orthographic/", location.origin);
+
+const api = (path: string) => new URL(`api/${path}`, editorBase()).href;
+
+/**
+ * A response's JSON body. An answer without one (the dev proxy's reply while
+ * the API server is down or restarting) becomes an error that says so.
+ */
+async function json<T>(res: Response): Promise<T> {
+  const text = await res.text();
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    throw new Error(
+      res.ok
+        ? "The server's answer could not be read."
+        : `The server did not answer (HTTP ${res.status}). It may be starting or restarting; try again in a moment.`,
+    );
+  }
+}
 
 export const [live, setLive] = createSignal<{ id: string; revision: number } | null>(null);
 
@@ -24,9 +49,8 @@ export const [live, setLive] = createSignal<{ id: string; revision: number } | n
 export const liveUrl = () => {
   const l = live();
   if (!l) return null;
-  const url = new URL(location.href);
+  const url = editorBase();
   url.search = `?scene=${l.id}`;
-  url.hash = "";
   return url.href;
 };
 
@@ -53,7 +77,7 @@ interface SceneResponse {
 
 async function fetchScene(id: string): Promise<SceneResponse> {
   const res = await fetch(api(`scenes/${id}?images=data&derived=false`));
-  const body = (await res.json()) as SceneResponse;
+  const body = await json<SceneResponse>(res);
   if (!res.ok) throw new Error(body.issues?.[0]?.message ?? `The server answered ${res.status}.`);
   return body;
 }
@@ -70,7 +94,7 @@ async function apply(body: SceneResponse, undoable: boolean): Promise<boolean> {
   } finally {
     applyingRemote = false;
   }
-  for (const r of Object.values(state.references)) if (r) uploaded.add(r.image);
+  for (const id of referencedImages(state)) uploaded.add(id);
   setLive((l) => (l ? { ...l, revision: body.revision } : l));
   return true;
 }
@@ -98,7 +122,7 @@ async function upload(id: string) {
   if (!a) return;
   const url = api(`scenes/${live()!.id}/images?name=${encodeURIComponent(a.name)}&id=${encodeURIComponent(id)}`);
   const res = await fetch(url, { method: "POST", body: base64ToBytes(a.data) as BlobPart });
-  if (!res.ok) throw new Error(((await res.json()) as SceneResponse).issues?.[0]?.message ?? `upload ${res.status}`);
+  if (!res.ok) throw new Error((await json<SceneResponse>(res)).issues?.[0]?.message ?? `upload ${res.status}`);
   uploaded.add(id);
 }
 
@@ -106,7 +130,7 @@ async function save() {
   const l = live();
   if (!l) return;
   status("saving…");
-  for (const r of Object.values(state.references)) if (r && !uploaded.has(r.image)) await upload(r.image);
+  for (const id of referencedImages(state)) if (!uploaded.has(id)) await upload(id);
   const res = await fetch(api(`scenes/${l.id}`), {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
@@ -115,7 +139,7 @@ async function save() {
       document: currentDocument({ images: "metadata", derived: false }),
     }),
   });
-  const body = (await res.json()) as SceneResponse;
+  const body = await json<SceneResponse>(res);
   if (res.status === 409) {
     toast("Someone else changed this scene at the same time; it now shows their version.", true);
     await apply(await fetchScene(l.id), true);
@@ -217,10 +241,10 @@ export async function shareLive(): Promise<string | null> {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(currentDocument({ images: "data", derived: false })),
     });
-    const body = (await res.json()) as SceneResponse & { sceneId: string };
+    const body = await json<SceneResponse & { sceneId: string }>(res);
     if (!res.ok) throw new Error(body.issues?.[0]?.message ?? `The server answered ${res.status}.`);
-    for (const r of Object.values(state.references)) if (r) uploaded.add(r.image);
-    history.replaceState(null, "", `?scene=${body.sceneId}`);
+    for (const id of referencedImages(state)) uploaded.add(id);
+    history.replaceState(null, "", `${editorBase().pathname}?scene=${body.sceneId}`);
     start(body.sceneId, body.revision);
     return liveUrl();
   } catch (e) {

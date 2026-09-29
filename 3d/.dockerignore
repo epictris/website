@@ -5,3 +5,5 @@ dist
 test
 scripts
 data
+models
+!scripts/fetch-models.ts

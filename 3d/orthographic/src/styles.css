@@ -539,6 +539,20 @@ input[type="checkbox"] {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* Shown whole or not at all: when it does not fit it wraps onto a second line, which is clipped. */
+.view-subtitle.whole {
+  white-space: normal;
+  height: 13px;
+  line-height: 13px;
+}
+.view-subtitle.whole::before {
+  content: "";
+  display: inline-block;
+}
+.view-subtitle.whole > span {
+  display: inline-block;
+  white-space: nowrap;
+}
 .view-head .iconbtn {
   height: 25px;
   width: 25px;

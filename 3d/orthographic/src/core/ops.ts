@@ -96,6 +96,8 @@ export interface ReferenceArgs {
   scale?: number;
   rotationDegrees?: number;
   blend?: Blend;
+  /** perspective only: a depth map of the image (an image id), or null to remove it. */
+  depth?: string | null;
 }
 
 const bad = (code: string, message: string): OpResult => ({ issues: [cmd.issue(code, message)] });

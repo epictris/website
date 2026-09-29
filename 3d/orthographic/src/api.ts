@@ -7,6 +7,7 @@ import { unwrap } from "solid-js/store";
 import { addImageBytes, image } from "./assets";
 import { issue, type ObjectProps, type TraceSpec } from "./core/commands";
 import { compareToReference, referenceIssues } from "./core/compare";
+import { depthOrderIssues } from "./core/depthmap";
 import { geometryIssues, validateDocument } from "./core/document";
 import { base64ToBytes, parseDataUrl } from "./core/images";
 import type { MeshMeta } from "./core/mesher";
@@ -23,6 +24,7 @@ import type {
   SceneObject,
   ViewId,
 } from "./core/types";
+import { depthMapOf } from "./depth";
 import { currentDocument, editorConfig, loadDocument } from "./io";
 import { meshes, meshStatus, settle, shapeKey } from "./meshes";
 import { orthoPng, orthoSvg, perspectiveDepth, perspectiveIds, perspectivePng, projectionSheet } from "./snapshots";
@@ -100,7 +102,8 @@ export const api = {
 
   /**
    * Check a document without loading it, or (no argument) the current scene.
-   * Includes geometry: outlines that share no volume or clip each other.
+   * Includes geometry: outlines that share no volume or clip each other; and
+   * for the current scene, when its reference has a depth map, depth-order.
    */
   validate: safe(async (doc?: unknown) => {
     if (doc !== undefined) {
@@ -109,7 +112,13 @@ export const api = {
     }
     await settle();
     const s = unwrap(state) as EditorState;
-    return result([...geometryIssues(s, metaFor), ...referenceIssues(s, meshOf, referenceImage())]);
+    const depth = await depthMapOf(s);
+    const reference = referenceImage();
+    return result([
+      ...geometryIssues(s, metaFor),
+      ...referenceIssues(s, meshOf, reference),
+      ...(depth && reference ? depthOrderIssues(s, meshOf, depth, reference) : []),
+    ]);
   }),
 
   /**

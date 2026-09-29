@@ -10,6 +10,14 @@ import { deflateSync } from "node:zlib";
 import Ajv2020 from "ajv/dist/2020";
 import { issue } from "../orthographic/src/core/commands";
 import { compareToReference } from "../orthographic/src/core/compare";
+import {
+  type Calibration,
+  calibrate,
+  type DepthMap,
+  depthOrderIssues,
+  depthRangeFor,
+  depthToGrey16,
+} from "../orthographic/src/core/depthmap";
 import { validateDocument } from "../orthographic/src/core/document";
 import { base64ToBytes, parseDataUrl } from "../orthographic/src/core/images";
 import * as ops from "../orthographic/src/core/ops";
@@ -25,15 +33,18 @@ import {
   changesSince,
   createScene,
   editScene,
+  imageBytes,
   readDocument,
   redo,
   replaceScene,
   requireScene,
   type Scene,
+  type SceneImage,
   StoreError,
   sceneDocument,
   undo,
 } from "./scenes";
+import { decodeDepthImage, estimateDepth, VisionUnavailable } from "./vision";
 
 export interface ToolContext {
   /** Where this server is reached from the caller's side, e.g. https://3d.tris.sh. */
@@ -294,7 +305,79 @@ async function validateScene(scene: Scene): Promise<Issue[]> {
     geometry: false,
     known: imageOf(scene),
   });
-  return [...read.issues, ...(read.state ? await checkGeometry(read.state, imageOf(scene)) : [])];
+  if (!read.state) return read.issues;
+  return [
+    ...read.issues,
+    ...(await checkGeometry(read.state, imageOf(scene))),
+    ...(await depthIssues(read.state, imageOf(scene), (id) => imageBytes(scene.images[id]))),
+  ];
+}
+
+// ---- Depth maps -------------------------------------------------------------------------
+
+/** Decoded depth pictures by content, so checking a scene again costs no decode. */
+const depthCache = new Map<string, DepthMap>();
+
+async function depthPicture(key: string, bytes: () => Uint8Array): Promise<DepthMap> {
+  const hit = depthCache.get(key);
+  if (hit) return hit;
+  const map = await decodeDepthImage(bytes());
+  depthCache.set(key, map);
+  while (depthCache.size > 8) depthCache.delete(depthCache.keys().next().value!);
+  return map;
+}
+
+/** The perspective reference's depth map, when it has one whose picture can be read. */
+async function depthMapOf(
+  s: EditorState,
+  images: (id: string) => { width: number; height: number; sha?: string } | undefined,
+  bytes: (id: string) => Uint8Array,
+): Promise<DepthMap | null> {
+  const id = s.references.perspective?.depth;
+  const info = id ? images(id) : undefined;
+  if (!id || !info) return null;
+  try {
+    const data = info.sha ? undefined : bytes(id);
+    return await depthPicture(info.sha ?? String(Bun.hash(data!)), () => data ?? bytes(id));
+  } catch {
+    return null;
+  }
+}
+
+/** Where the depth map says the scene's occlusion order is wrong (nothing without a depth map). */
+async function depthIssues(
+  s: EditorState,
+  images: (id: string) => { width: number; height: number; sha?: string } | undefined,
+  bytes: (id: string) => Uint8Array,
+): Promise<Issue[]> {
+  const map = await depthMapOf(s, images, bytes);
+  const image = perspectiveImage(s, images);
+  return map && image ? depthOrderIssues(s, meshOf, map, image) : [];
+}
+
+const sceneDepthMap = (scene: Scene) => depthMapOf(scene.state, imageOf(scene), (id) => imageBytes(scene.images[id]));
+
+const round = (v: number, places: number) => Math.round(v * 10 ** places) / 10 ** places;
+
+/** A calibration as reported: metres to the millimetre. */
+const calibrationOut = (c: Calibration) => ({
+  a: round(c.a, 6),
+  b: round(c.b, 6),
+  r2: round(c.r2, 4),
+  objects: c.objects.map((o) => ({
+    id: o.id,
+    sceneDepth: round(o.sceneDepth, 3),
+    estimatedDepth: o.estimatedDepth === null ? null : round(o.estimatedDepth, 3),
+  })),
+});
+
+/** The scene's perspective reference image, or an issue saying there is none. */
+function referenceOf(scene: Scene): { image: SceneImage } | ToolOutput {
+  const ref = scene.state.references.perspective;
+  const image = ref && scene.images[ref.image];
+  return image
+    ? { image }
+    : failed("no-reference", "The scene has no perspective reference image; set one with set_reference.");
 }
 
 // ---- Guide ---------------------------------------------------------------------------------
@@ -402,7 +485,7 @@ export const TOOLS: Tool[] = [
     name: "validate",
     title: "Validate",
     description:
-      "Check a scene (sceneId) or a document (document) and report every problem at once, each with a JSON Pointer path: schema errors, outlines that are not simple polygons, and geometry (outlines that share no volume or clip each other).",
+      "Check a scene (sceneId) or a document (document) and report every problem at once, each with a JSON Pointer path: schema errors, outlines that are not simple polygons, geometry (outlines that share no volume or clip each other), traced objects against the reference, and, when the perspective reference has a depth map, object pairs whose occlusion order the map contradicts (depth-order).",
     inputSchema: object({ sceneId: SCENE_ID, document: DOCUMENT }),
     readOnly: true,
     async run(args) {
@@ -410,7 +493,17 @@ export const TOOLS: Tool[] = [
         const known = args.sceneId ? imageOf(requireScene(args.sceneId as string)) : undefined;
         const read = validateDocument(args.document, { geometry: false, known });
         const images = documentImages(args.document, known);
-        return done([...read.issues, ...(read.state ? await checkGeometry(read.state, images) : [])]);
+        if (!read.state) return done(read.issues);
+        const scene = args.sceneId ? requireScene(args.sceneId as string) : undefined;
+        const bytes = (id: string) => {
+          const data = (args.document as { images?: Record<string, { data?: string }> }).images?.[id]?.data;
+          return data !== undefined ? base64ToBytes(data) : imageBytes(scene!.images[id]);
+        };
+        return done([
+          ...read.issues,
+          ...(await checkGeometry(read.state, images)),
+          ...(await depthIssues(read.state, (id) => images(id) ?? scene?.images[id], bytes)),
+        ]);
       }
       if (!args.sceneId) return failed("missing-argument", "Give sceneId or document.");
       const scene = requireScene(args.sceneId as string);
@@ -644,20 +737,104 @@ export const TOOLS: Tool[] = [
     name: "suggest_views",
     title: "Suggest views from the trace",
     description:
-      "A starting point for fit_front: plain box outlines for an object from its trace and the depth range it occupies (world y, metres, from depth.min to depth.max): the box between those depths that the trace's rays pass through. Applies them as one undoable step (dryRun: true only reports them). Then shape the top and side, and fit_front the front.",
+      "A starting point for fit_front: plain box outlines for an object from its trace and the depth range it occupies (world y, metres, from depth.min to depth.max): the box between those depths that the trace's rays pass through. depth: \"estimate\" reads the range from the reference's depth map (estimate_depth) calibrated against the other placed objects (at least 3): the visible surface's 5th to 95th percentile of y, deepened to half the object's smaller extent across the picture when thinner, since a picture never shows an object's back; the answer gives the range used, the visible range and the calibration. Applies them as one undoable step (dryRun: true only reports them). Then shape the top and side, and fit_front the front.",
     inputSchema: object(
       {
         sceneId: SCENE_ID,
         id: str("The object's id; it needs a trace."),
-        depth: object({ min: num(), max: num() }, ["min", "max"]),
+        depth: {
+          anyOf: [object({ min: num(), max: num() }, ["min", "max"]), { const: "estimate" }],
+          description: 'World y range in metres, { min, max }, or "estimate" to read it from the depth map.',
+        },
         dryRun: bool("Report the outlines without changing the scene."),
       },
       ["sceneId", "id", "depth"],
     ),
-    run: (args, ctx) =>
-      fitTool(args, ctx, (d, scene) =>
-        ops.suggestViews(d, args.id as string, args.depth as { min: number; max: number }, { image: imageOf(scene) }),
-      ),
+    async run(args, ctx) {
+      if (args.depth !== "estimate")
+        return fitTool(args, ctx, (d, scene) =>
+          ops.suggestViews(d, args.id as string, args.depth as { min: number; max: number }, {
+            image: imageOf(scene),
+          }),
+        );
+      const scene = requireScene(args.sceneId as string);
+      const id = args.id as string;
+      const e = scene.state.objects.find((o) => o.id === id);
+      if (!e) return done([issue("unknown-object", `There is no object with id "${id}".`, { objectId: id })]);
+      if (!e.trace) return failed("no-trace", `${id} has no trace; record one with set_trace first.`);
+      const ref = referenceOf(scene);
+      if ("ok" in ref) return ref;
+      const map = await sceneDepthMap(scene);
+      if (!map)
+        return failed(
+          "calibration-needed",
+          "The perspective reference has no depth map: run estimate_depth first, or give depth as { min, max }.",
+        );
+      // Calibrate on everything else: the object's own current placement is what is being guessed.
+      const others: EditorState = { ...scene.state, objects: scene.state.objects.filter((o) => o.id !== id) };
+      const calibration = calibrate(others, meshOf, map, ref.image);
+      if (!calibration || !(calibration.a > 0))
+        return failed(
+          "calibration-needed",
+          calibration
+            ? `The depth map runs backwards against the placed objects (r² ${round(calibration.r2, 3)}): check they are placed at the right depths, or give depth as { min, max }.`
+            : "Calibrating the depth map needs at least 3 other placed objects, visible on the camera frame at different depths. Place some by hand first, or give depth as { min, max }.",
+        );
+      const range = depthRangeFor(scene.state, map, calibration, e.trace, ref.image);
+      if (!range)
+        return failed(
+          "depth-unknown",
+          `Too little of ${id}'s trace has a usable depth (too small, or beyond the depths the calibration can place); give depth as { min, max }.`,
+        );
+      const depth = { min: range.min, max: range.max };
+      const out = await fitTool(args, ctx, (d, s) => ops.suggestViews(d, id, depth, { image: imageOf(s) }));
+      return {
+        ...out,
+        depth: {
+          min: round(range.min, 3),
+          max: round(range.max, 3),
+          visible: { min: round(range.visible.min, 3), max: round(range.visible.max, 3) },
+          ...(range.assumedThickness !== undefined && { assumedThickness: round(range.assumedThickness, 3) }),
+        },
+        calibration: { a: round(calibration.a, 6), b: round(calibration.b, 6), r2: round(calibration.r2, 4) },
+      };
+    },
+  },
+  {
+    name: "estimate_depth",
+    title: "Estimate the reference's depth",
+    description:
+      "Estimate the depth of the perspective reference image with a monocular depth model (Depth Anything V2 Small, on the server; about a second, then cached): a relative map, nearer lighter, stored as a 16-bit grey image and set as references.perspective.depth (one undoable step; dryRun: true only reports). It gives order and rough depth, never geometry on its own, and it knows nothing of metres until calibrated against objects already placed: with at least 3, the answer includes the calibration (value ≈ a / depth + b by least squares, r², and each object's estimated depth beside its scene depth). From then on validate and compare_to_reference report depth-order where the map contradicts the scene's occlusion order, and suggest_views takes depth: \"estimate\".",
+    inputSchema: object({ sceneId: SCENE_ID, dryRun: bool("Report without storing the map.") }, ["sceneId"]),
+    async run(args, ctx) {
+      const scene = requireScene(args.sceneId as string);
+      const ref = referenceOf(scene);
+      if ("ok" in ref) return ref;
+      const map = await estimateDepth(ref.image);
+      const calibration = calibrate(scene.state, meshOf, map, ref.image);
+      const issues = depthOrderIssues(scene.state, meshOf, map, ref.image);
+      const report = {
+        width: map.width,
+        height: map.height,
+        calibration: calibration && calibrationOut(calibration),
+        ...(!calibration && {
+          note: "No calibration yet: it needs at least 3 placed objects visible on the camera frame at different depths.",
+        }),
+      };
+      if (args.dryRun === true) return done(issues, { revision: scene.revision, dryRun: true, ...report });
+      // The image may have been replaced while the model ran.
+      if (scene.state.references.perspective?.image !== ref.image.id)
+        return failed(
+          "revision-conflict",
+          "The perspective reference image changed while its depth was estimated; run it again.",
+        );
+      const png = await encodePng(map.width, map.height, { grey16: depthToGrey16(map) }, (d) => deflateSync(d));
+      const stored = await addImage(scene, png, `depth of ${ref.image.name}`, `depth-${ref.image.id}`.slice(0, 100));
+      const out = await edit(args, ctx, (d, s) =>
+        ops.setReference(d, "perspective", { depth: stored.id }, { image: imageOf(s) }),
+      );
+      return out.ok ? { ...out, issues: [...out.issues, ...issues], image: stored.id, ...report } : out;
+    },
   },
   {
     name: "set_bounds",
@@ -813,6 +990,11 @@ export const TOOLS: Tool[] = [
         scale: num("perspective: 0.05 to 8."),
         rotationDegrees: num("perspective: -180 to 180."),
         blend: { enum: ["normal", "difference", "screen", "multiply"] },
+        depth: {
+          anyOf: [{ type: "string" }, { type: "null" }],
+          description:
+            "perspective: a depth map of the reference image (an image id: grey, nearer lighter, 0 for no value, covering the whole image), or null to remove it. estimate_depth makes one.",
+        },
       },
       ["sceneId", "view"],
     ),
@@ -981,7 +1163,7 @@ export const TOOLS: Tool[] = [
     name: "compare_to_reference",
     title: "Compare with the reference",
     description:
-      "Score every object that has a trace (or those in ids) against the perspective reference, on the camera frame: spill (pixels drawn outside its trace; always wrong), missing (pixels of its trace, away from hidden runs, where the background or an object whose own trace does not contain them shows instead), iou (visible region against the trace, less what nearer traced objects rightly cover) and order (pixels where an inFrontOf hint is contradicted), each count with its bounding box in frame pixels. Also returns the trace-spill, trace-missing and occlusion-order issues validate reports. diff: true adds a picture: correct in grey, spill in red, missing in blue, other geometry dark grey. Needs no browser; takes well under a second.",
+      "Score every object that has a trace (or those in ids) against the perspective reference, on the camera frame: spill (pixels drawn outside its trace; always wrong), missing (pixels of its trace, away from hidden runs, where the background or an object whose own trace does not contain them shows instead), iou (visible region against the trace, less what nearer traced objects rightly cover) and order (pixels where an inFrontOf hint is contradicted), each count with its bounding box in frame pixels. Also returns the trace-spill, trace-missing and occlusion-order issues validate reports, and depth-order where the reference has a depth map (estimate_depth). diff: true adds a picture: correct in grey, spill in red, missing in blue, other geometry dark grey. Needs no browser; takes well under a second.",
     inputSchema: object(
       {
         sceneId: SCENE_ID,
@@ -1012,7 +1194,8 @@ export const TOOLS: Tool[] = [
       const images = c.diff && {
         diff: `data:image/png;base64,${Buffer.from(await encodePng(c.width, c.height, { rgba: c.diff }, (d) => deflateSync(d))).toString("base64")}`,
       };
-      return done(c.issues, {
+      const map = await sceneDepthMap(scene);
+      return done([...c.issues, ...(map ? depthOrderIssues(s, meshOf, map, image) : [])], {
         revision: scene.revision,
         frame: { width: c.width, height: c.height },
         objects: c.objects,
@@ -1101,6 +1284,7 @@ export async function callTool(name: string, args: unknown, ctx: ToolContext): P
     if (e instanceof StoreError) return failed(e.code, e.message);
     if (e instanceof BadRequest) return failed("bad-request", e.message);
     if (e instanceof Busy) return failed("busy", `${e.message} (retry in a few seconds)`);
+    if (e instanceof VisionUnavailable) return failed("vision-unavailable", e.message);
     console.error(`tool ${name}:`, e);
     return failed("internal-error", `${name} failed: ${(e as Error).message}`);
   }

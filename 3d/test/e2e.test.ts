@@ -1140,3 +1140,81 @@ describe("live scenes", () => {
     expect(stored.document.objects).toHaveLength(2);
   });
 });
+
+describe("depth estimation (the vision model)", () => {
+  const missing = !existsSync(join(process.env.MODELS_DIR ?? join(ROOT, "models"), "depth-anything-v2-small.onnx"));
+  const needs = missing ? " (SKIPPED: no model; run bun run models)" : "";
+  if (missing) console.warn("depth estimation test skipped: the model is missing; run bun run models");
+
+  // The frame is the image, so image pixels are frame pixels.
+  const [W, H] = [640, 480];
+  const picture = async (colour: (x: number, y: number) => number[]) => {
+    const rgba = new Uint8Array(W * H * 4);
+    for (let y = 0; y < H; y++)
+      for (let x = 0; x < W; x++) rgba.set([...colour(x + 0.5, y + 0.5), 255], (y * W + x) * 4);
+    return Buffer.from(await encodePng(W, H, { rgba }, (d) => deflateSync(d))).toString("base64");
+  };
+  const sceneOver = (data: string, objects: unknown[] = []) => ({
+    ...scene,
+    objects,
+    camera: {
+      position: { x: 10, y: -20, z: 5 },
+      target: { x: 10, y: 10, z: 5 },
+      verticalFovDegrees: 40,
+      frame: { width: W, height: H },
+    },
+    references: { perspective: { image: "painting" } },
+    images: { ...scene.images, painting: { mimeType: "image/png", width: W, height: H, data } },
+  });
+  test.skipIf(missing)(
+    `estimate_depth stores a depth map the document keeps${needs}`,
+    async () => {
+      // Two overlapping rectangles, the upper one darker.
+      const data = await picture((x, y) =>
+        x > 260 && x < 560 && y > 60 && y < 300
+          ? [40, 44, 52]
+          : x > 80 && x < 380 && y > 180 && y < 420
+            ? [200, 190, 170]
+            : [120, 150, 190],
+      );
+      const { sceneId } = await tool<{ sceneId: string }>("create_scene", { document: sceneOver(data) });
+      const dry = await tool<{ dryRun: boolean; width: number; height: number; calibration: unknown }>(
+        "estimate_depth",
+        {
+          sceneId,
+          dryRun: true,
+        },
+      );
+      expect(dry.dryRun).toBe(true);
+      // Short side 518, both sides multiples of 14.
+      expect([dry.width, dry.height]).toEqual([686, 518]);
+      // Nothing placed, nothing to calibrate against.
+      expect(dry.calibration).toBeNull();
+      const r = await tool<{ image: string; revision: number }>("estimate_depth", { sceneId });
+      expect(r.issues).toEqual([]);
+      expect(r.image).toBe("depth-painting");
+      const got = await tool<{
+        document: { references: { perspective: { depth?: string } }; images: Record<string, { width: number }> };
+      }>("get_scene", { sceneId });
+      expect(got.document.references.perspective.depth).toBe("depth-painting");
+      expect(got.document.images["depth-painting"].width).toBe(686);
+      const png = Buffer.from(await (await fetch(`${BASE}/api/scenes/${sceneId}/export/scene.json`)).arrayBuffer());
+      const exported = JSON.parse(png.toString());
+      expect(exported.images["depth-painting"].data.length).toBeGreaterThan(100);
+      // Round trip: a scene made from the export keeps the depth map.
+      const copy = await tool<{ sceneId: string }>("create_scene", { document: exported });
+      expect(copy.issues.filter((i) => i.severity === "error")).toEqual([]);
+      const back = await tool<{ document: { references: { perspective: { depth?: string } } } }>("get_scene", {
+        sceneId: copy.sceneId,
+      });
+      expect(back.document.references.perspective.depth).toBe("depth-painting");
+      // A new perspective image drops the map: it belonged to the old one.
+      await tool("set_reference", { sceneId, view: "perspective", image: "px" });
+      const after = await tool<{ document: { references: { perspective: { depth?: string } } } }>("get_scene", {
+        sceneId,
+      });
+      expect(after.document.references.perspective.depth).toBeUndefined();
+    },
+    30000,
+  );
+});

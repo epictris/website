@@ -12,12 +12,27 @@ const noNodeModule: Plugin = {
   load: (id) => (id === "\0no-node-module" ? "export {};" : null),
 };
 
+// As server.ts does: / and /orthographic redirect to /orthographic/ (query kept),
+// so the editor has one address in development as in production.
+const editorAddress: Plugin = {
+  name: "orthographic-editor-address",
+  configureServer(server) {
+    server.middlewares.use((req, res, next) => {
+      const [path, query] = (req.url ?? "").split(/\?(.*)/s);
+      if (path !== "/" && path !== "/orthographic") return next();
+      res.statusCode = 301;
+      res.setHeader("Location", `/orthographic/${query ? `?${query}` : ""}`);
+      res.end();
+    });
+  },
+};
+
 // The editor builds to ONE self-contained HTML file: it works offline, and
 // "Save working editor" can copy the running page into a portable file.
 export default defineConfig({
   root: "orthographic",
   base: "/orthographic/",
-  plugins: [noNodeModule, solid(), viteSingleFile()],
+  plugins: [editorAddress, noNodeModule, solid(), viteSingleFile()],
   server: {
     port: 3200,
     strictPort: true,

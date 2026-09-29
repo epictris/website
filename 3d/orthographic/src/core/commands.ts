@@ -750,6 +750,8 @@ export interface PerspectiveReferencePatch {
   scale?: number;
   rotationDegrees?: number;
   blend?: Blend;
+  /** A depth map of the image (an image id), or null to remove it. */
+  depth?: string | null;
 }
 
 export interface ImageSize {
@@ -825,6 +827,17 @@ export function setReference(
       return [issue("invalid-reference", "blend must be normal, difference, screen or multiply.")];
     for (const k of ["opacity", "visible", "offsetPercent", "scale", "rotationDegrees", "blend"] as const)
       if (p[k] !== undefined) (next as unknown as Record<string, unknown>)[k] = clone(p[k]);
+    // A depth map belongs to the image it was made from.
+    if (p.depth === null || (p.depth === undefined && current && current.image !== image)) delete next.depth;
+    else if (p.depth !== undefined) {
+      if (!images(p.depth))
+        return [
+          issue("unknown-image", `There is no image with id "${p.depth}" for the depth map. Add it first.`, {
+            path: "/references/perspective/depth",
+          }),
+        ];
+      next.depth = p.depth;
+    }
     s.references.perspective = next;
     return [];
   }

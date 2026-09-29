@@ -515,6 +515,10 @@
         },
         "blend": {
           "enum": ["normal", "difference", "screen", "multiply"]
+        },
+        "depth": {
+          "$ref": "#/$defs/imageId",
+          "description": "A depth map of this reference image: an image id, grey (16-bit, or 8-bit), nearer lighter, 0 for no value, covering the whole image at any resolution. Relative only (a monocular estimate: it gives order and rough depth, not metres); estimate_depth makes one. It belongs to one image: setting a new perspective image removes it."
         }
       }
     },

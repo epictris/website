@@ -75,6 +75,8 @@ export interface PerspectiveReference {
   scale: number;
   rotationDegrees: number;
   blend: Blend;
+  /** A relative depth map of this image (an image id), nearer lighter; it belongs to this image alone. */
+  depth?: string;
 }
 
 export interface Camera {
@@ -203,6 +205,7 @@ export interface DocPerspectiveReference {
   scale?: number;
   rotationDegrees?: number;
   blend?: Blend;
+  depth?: string;
 }
 
 export interface DocImage {

@@ -11,6 +11,13 @@ export function defaultDisplay(): Display {
   return { style: "solid", grid: true, labels: false, crosshair: false };
 }
 
+/** Every image a state's references use: each view's picture, and the perspective depth map. */
+export function referencedImages(s: EditorState): string[] {
+  const ids = Object.values(s.references).flatMap((r) => (r ? [r.image] : []));
+  const depth = s.references.perspective?.depth;
+  return depth ? [...ids, depth] : ids;
+}
+
 export function initialState(): EditorState {
   const size = [...DEFAULT_SCENE_SIZE] as Vec3;
   return {

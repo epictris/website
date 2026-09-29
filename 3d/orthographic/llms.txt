@@ -47,7 +47,8 @@ Pass `baseRevision` whenever you replace something a person may have touched, `l
 | `set_outline` | Replace one view's outline (metres); the other views stretch to keep shared axes consistent. `part` for one part of an object in parts. |
 | `set_outlines` | Replace all three outlines of an object (or of one `part`) at once: the box comes from the three together, as one step. |
 | `set_trace` | Record the object's silhouette as traced in the perspective reference (image pixels), or `remove: true`. |
-| `suggest_views` | Plain box outlines from the trace and the depth range (world y) the object occupies: a starting point. |
+| `estimate_depth` | A relative depth map of the perspective reference (Depth Anything V2), stored as `references.perspective.depth`, and its calibration against the placed objects. See Depth from the reference. |
+| `suggest_views` | Plain box outlines from the trace and the depth range (world y) the object occupies, `{ min, max }` or `"estimate"` from the depth map: a starting point. |
 | `fit_front` | Solve the front outline from the trace and the top and side views, and apply all three (see Fitting). |
 | `compare_to_reference` | Score traced objects against the reference: spill, missing, IoU, occlusion order, and a difference picture. |
 | `raycast` | What each pixel sees: object, world point, normal, distance, depth. |
@@ -58,7 +59,7 @@ Pass `baseRevision` whenever you replace something a person may have touched, `l
 | `rescale_scene` | Multiply every length (objects, frame, reference placements, camera) by `factor`, for a corrected scale estimate. |
 | `set_camera` | Position, target, lens (`verticalFovDegrees` or `focalLengthMm35Equivalent`), roll, lens `shift`, near, far, frame, locked. |
 | `set_display` | Perspective drawing style, grid, labels, crosshair. |
-| `set_reference` | Put an image behind a view, move it, or `remove: true`. |
+| `set_reference` | Put an image behind a view, move it, or `remove: true`; `depth` sets (or with null removes) the perspective reference's depth map. |
 | `undo`, `redo` | One shared history for agents and the editor. |
 | `render` | PNGs of `front`, `top`, `side`, `perspective` (as images over MCP, data URLs over HTTP) plus links to them. The orthographic views share one scale (`pixelsPerMeter`) and report where each picture lies in metres (`placements`); see Scale. The perspective view can be shaded (default), an id picture or a depth picture (see Pictures for checking). |
 | `export` | Links to `scene.json`, `agent.json`, `objects.csv`, `views.svg`, `editor.html` (the editor with the scene inside, one offline file). |
@@ -168,6 +169,19 @@ It applies the three outlines as one step (`dryRun` only reports them) and retur
 
 The trace fixes where the object is across the picture; only the top and side say how deep it is.
 `suggest_views { depth: { min, max } }` gives plain boxes between two depths (world y) as a starting point; shape the top and side from what you know of the scene, then fit.
+`depth: "estimate"` reads the range from the reference's depth map instead (see Depth from the reference).
+
+## Depth from the reference
+
+`estimate_depth { dryRun? }` runs a depth model (Depth Anything V2 Small) on the server, on the perspective reference image, to save guessing depth blind.
+It is not geometry: it suggests depths and checks the order of what is built, and everything else works as before.
+The editor only shows a depth map the server made; `window.orthographic` cannot make one.
+
+- A monocular estimate of the whole picture: relative inverse depth (nearer is lighter), up to an unknown scale and offset. It gets the order of things and their rough depth; it never knows metres by itself.
+- It is stored as a 16-bit grey image (`depth-<image id>`) and set as `references.perspective.depth`; the editor's Depth checkbox shows it in place of the picture. It belongs to that image: a new perspective image removes it.
+- With at least 3 objects placed at different depths, the answer calibrates it: value ≈ a / depth + b by least squares over the objects' median depths, with r² and each object's estimated depth beside its scene depth. On a painted cave with 20 placed objects r² was 0.85, and most objects landed within 1 to 3 m of where they were placed: good for order and a first guess, not for final placement.
+- From then on `validate` and `compare_to_reference` report `depth-order` where two objects meet and the map disagrees with the scene on which is nearer (read 6 px into each side of every boundary where the rendered depths differ by 10 cm or more; reported under 30 % agreement over at least 40 samples). Ambiguous places in a picture produce these too: look before moving anything.
+- `suggest_views { depth: "estimate" }` calibrates against every other placed object and places the trace's pixels at their estimated depths: the 5th to 95th percentile of their world y is the visible surface. A picture never shows an object's back, so when that is thinner than half the object's smaller extent across the picture, that thickness is assumed. The answer gives the range used, the visible range, any `assumedThickness`, and the calibration.
 
 ## Measuring
 
@@ -261,7 +275,7 @@ Required: `format`, `version`, `scene.size`, `objects` (each with `id`, and `out
 - `objects[].outlines`, or `objects[].parts`: `[{ id?, outlines }]`, a union of solids (see Objects in parts).
 - `objects[].trace`: `{ points, hidden? }` in the perspective reference image's pixels; `objects[].inFrontOf`: ids of objects it stands in front of (see Traces and the comparison).
 - `camera`: `position`, `target`, and the lens as `verticalFovDegrees` (5–140) or `focalLengthMm35Equivalent` (f = 12 mm / tan(vertical FOV / 2); if both are given they must agree), plus `rollDegrees`, `shift` (lens shift, fractions of the frame), `near`, `far`, `frame` (pixels, fixes the aspect ratio).
-- `references`: one optional image per view. `front`/`top`/`side` place the image on the view plane: its lower-left corner at `min`, stretched to `size`, both named by that view's axes (`{x, z}` for front, `{x, y}` for top, `{y, z}` for side). Image right is the view's horizontal axis, image up its vertical axis. `perspective` is a screen overlay on the camera frame: `offsetPercent {x, y}`, `scale` (1 fits the frame), `rotationDegrees`, `blend`.
+- `references`: one optional image per view. `front`/`top`/`side` place the image on the view plane: its lower-left corner at `min`, stretched to `size`, both named by that view's axes (`{x, z}` for front, `{x, y}` for top, `{y, z}` for side). Image right is the view's horizontal axis, image up its vertical axis. `perspective` is a screen overlay on the camera frame: `offsetPercent {x, y}`, `scale` (1 fits the frame), `rotationDegrees`, `blend`, and `depth`: an image id, a depth map of the picture (grey, nearer lighter, 0 for no value, covering the whole image at any resolution; see Depth from the reference).
 - `images`: keyed by id. `data` is the base64 file (PNG, JPEG, WebP or GIF). It may be omitted only when the editor already holds that image.
 - Documents the editor writes also contain `derived` blocks (bounds, center, size, camera matrices), `display` and `editor`. They are read-only or optional; `derived` is ignored on load.
 
@@ -270,10 +284,11 @@ Required: `format`, `version`, `scene.size`, `objects` (each with `id`, and `out
 1. `create_scene`, and share its `editorUrl`. `add_image` the picture and `set_reference` it on the perspective view (and the front view, if it is front-on).
 2. Set the camera and the scale. Match the camera to the picture (position, target, focal length; `shift` rather than a tilt when the horizon is not at mid-frame), then size the frame from things of known size (`measure` helps once the ground is placed), and record the evidence in `scale.basis` (see Scale).
 3. Trace each object's silhouette in the picture with `set_trace` (or in `add_objects`), as if nothing stood in front of it. Where it is covered, continue the edge as your best guess and mark those edges `hidden`. Record `inFrontOf` where traces overlap.
-4. Design each object's top and side views from your understanding of the scene: how deep it is and where it stands. `suggest_views` gives plain boxes to start from.
-5. `fit_front` each object (`restOn` for what it stands on). It shapes the front so the solid shows exactly inside the trace.
-6. `compare_to_reference` (with `diff: true` to see it) and `validate`. Fix every error; read every warning.
-7. Adjust the top and side views, the depth, the traces or the camera, and repeat from 5.
+4. Once a few objects are placed at different depths, `estimate_depth`: its calibration says how far the rest are, and `depth-order` warnings point at objects in the wrong order.
+5. Design each object's top and side views from your understanding of the scene: how deep it is and where it stands. `suggest_views` gives plain boxes to start from (`depth: "estimate"` from the depth map).
+6. `fit_front` each object (`restOn` for what it stands on). It shapes the front so the solid shows exactly inside the trace.
+7. `compare_to_reference` (with `diff: true` to see it) and `validate`. Fix every error; read every warning.
+8. Adjust the top and side views, the depth, the traces or the camera, and repeat from 6.
 
 Lessons from building scenes this way:
 
@@ -309,14 +324,15 @@ Stored scenes also have plain GET links, handy for tools that can only fetch pag
 For agents that already drive a browser; the tools above do the same without one. Calls return `{ ok, issues, ... }` (edits, checks and renders as promises) and never throw. Edits use the document's shapes (`{x, y, z}` objects, outline points in metres), apply as one undoable step, and change nothing when an issue is an error.
 
 - `getDocument({ images: "metadata" | "data" | "none", derived, editor })` → the document (synchronous).
-- `loadDocument(doc)`, `validate(doc?)` (no argument: the current scene, geometry included), `waitForGeometry()`.
+- `loadDocument(doc)`, `validate(doc?)` (no argument: the current scene, geometry included, and `depth-order` when the reference has a depth map), `waitForGeometry()`.
+- The page cannot run the depth model (`estimate_depth`): use the tool.
 - `addImage({ data, name })` → `{ id }` (base64 or a data: URL; the id is a hash of the bytes).
 - `addObject({ id?, name, kind, color, outlines | parts, trace?, inFrontOf? })` or `addObject({ primitive: "box" | "ellipsoid" | "cylinder" | "rock", center, size })` → `{ id }`; `addObjects([...])` → `{ ids }`; `upsertObjects([...])` → `{ added, changed }` (all or nothing).
 - `updateObject(id, { name, kind, color, visible, locked, reviewed, opacity, notes, inFrontOf })`, `setOutline(id, view, points, part?)`, `setOutlines(id, { front, top, side }, part?)`, `setBounds(idOrIds, { min: {x,y,z}, max: {x,y,z} })` (any subset of axes; outlines scale), `moveObjects(ids, {x,y,z})`, `duplicateObjects(ids, offset?)`, `deleteObjects(ids)`.
 - `setTrace(id, { points, hidden? } | null)`, `suggestViews(id, { min, max })`, `fitFront(id, { top?, side?, restOn?, trim?, maxPoints?, part? })`, `compareToReference({ ids?, diff? })`.
 - `raycast(points, space?)`, `measure({ from, to, space?, at })`.
 - `setScene({ title, size, scale: { basis }, notes })`, `rescaleScene(factor, { basis }?)`, `setCamera({ position, target, verticalFovDegrees | focalLengthMm35Equivalent, rollDegrees, shift, near, far, frame, locked })`, `setDisplay({ style, grid, labels, crosshair })`.
-- `setReference(view, { image, opacity, visible, min, size } | null)` for `front`/`top`/`side`; `setReference("perspective", { image, opacity, visible, offsetPercent, scale, rotationDegrees, blend } | null)`.
+- `setReference(view, { image, opacity, visible, min, size } | null)` for `front`/`top`/`side`; `setReference("perspective", { image, opacity, visible, offsetPercent, scale, rotationDegrees, blend, depth } | null)`.
 - `render({ views, width, height, pixelsPerMeter, references, labels, grid, format: "png" | "svg", mode, outlines, referenceOpacity })` → `{ images, pixelsPerMeter, placements, legend?, depthRange? }`; `sheet()` → `{ svg }` (the three views on one drawing).
 - `select(ids)`, `undo()`, `redo()`.
 
@@ -339,4 +355,6 @@ Each issue is `{ severity: "error" | "warning", code, path, message, objectId?, 
 - `argument-*`: a tool's arguments do not match its schema (`argument-additionalProperties` names the unknown argument).
 - `unknown-scene`, `unknown-object`, `unknown-image`, `object-locked`, `revision-conflict` (an edit based on an old revision; `get_changes` says what happened).
 - `invalid-url`, `fetch-failed`, `invalid-image`, `image-too-large`: `add_image` could not use the image.
-- `busy`: the renderer has a queue; retry in a few seconds.
+- `depth-order` (warning): where two objects meet, the reference's depth map disagrees with the scene on which is nearer (see Depth from the reference).
+- `vision-unavailable`: the server does not have the depth model. `calibration-needed`: `suggest_views { depth: "estimate" }` needs a depth map and at least 3 other placed objects at different depths. `depth-unknown`: too little of the trace has a usable depth. 
+- `busy`: the renderer and the depth model each have a queue; retry in a few seconds.

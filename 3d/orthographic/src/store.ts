@@ -130,6 +130,8 @@ export interface Prefs {
   pointIds: boolean;
   /** Draw objects' traces over the perspective reference. */
   traces: boolean;
+  /** Draw the perspective reference's depth map in place of the image. */
+  depth: boolean;
 }
 
 export interface OrthoCamera {
@@ -181,6 +183,7 @@ export const [ui, setUi] = createStore<UiState>({
     isolate: false,
     pointIds: false,
     traces: true,
+    depth: false,
   },
   pointSelection: null,
   part: 0,

@@ -165,7 +165,9 @@ export function toDocument(
       scale: p.scale,
       rotationDegrees: p.rotationDegrees,
       blend: p.blend,
+      ...(p.depth && { depth: p.depth }),
     };
+    if (p.depth) used.add(p.depth);
   }
   if (opts.images !== "none" && used.size) {
     doc.images = {};

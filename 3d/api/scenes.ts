@@ -33,11 +33,11 @@ import {
   MAX_IMAGE_BYTES,
   sniffMime,
 } from "../orthographic/src/core/images";
-import { initialState } from "../orthographic/src/core/model";
+import { initialState, referencedImages } from "../orthographic/src/core/model";
 import { upgradeObject } from "../orthographic/src/core/parts";
 import type { EditorState, ImageInfo, ImageMime, Issue, SceneDocument } from "../orthographic/src/core/types";
 
-const DATA_DIR = process.env.DATA_DIR ?? new URL("../data", import.meta.url).pathname;
+export const DATA_DIR = process.env.DATA_DIR ?? new URL("../data", import.meta.url).pathname;
 const SCENE_TTL_DAYS = Number(process.env.SCENE_TTL_DAYS ?? 90);
 const IMAGE_BUDGET_BYTES = Number(process.env.IMAGE_BUDGET_MB ?? 4096) * 1024 * 1024;
 const MAX_SCENES = Number(process.env.MAX_SCENES ?? 20000);
@@ -252,9 +252,8 @@ export function imageBytes(image: SceneImage): Uint8Array {
   return readFileSync(blobPath(image.sha));
 }
 
-function referencedImages(s: EditorState): string[] {
-  return Object.values(s.references).flatMap((r) => (r ? [r.image] : []));
-}
+/** Where an image's bytes are on disk. */
+export const imagePath = (image: SceneImage) => blobPath(image.sha);
 
 /** Drop images that no state (current or in history) uses and that are past their grace period. */
 function pruneImages(scene: Scene) {

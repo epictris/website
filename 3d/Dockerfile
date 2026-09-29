@@ -6,6 +6,14 @@ COPY vite.config.ts tsconfig.json ./
 COPY orthographic/ ./orthographic/
 RUN bun run build
 
+# The depth model (api/vision.ts), pinned by sha256 in api/models.ts: fetched at
+# build time so a running server never depends on Hugging Face being up.
+FROM oven/bun:1 AS models
+WORKDIR /app
+COPY api/models.ts ./api/models.ts
+COPY scripts/fetch-models.ts ./scripts/fetch-models.ts
+RUN MODELS_DIR=/app/models bun run scripts/fetch-models.ts
+
 FROM oven/bun:1-slim AS runner
 # Chromium renders the editor for the /api/render endpoints; the fonts draw its labels.
 RUN apt-get update \
@@ -19,9 +27,10 @@ COPY api/ ./api/
 COPY orthographic/llms.txt ./orthographic/llms.txt
 COPY orthographic/src/core/ ./orthographic/src/core/
 COPY --from=builder /app/dist ./dist
+COPY --from=models /app/models ./models
 # Stored scenes (api/scenes.ts); compose mounts the host's copy here.
 RUN mkdir -p /data && chown bun:bun /data
-ENV PORT=8080 CHROMIUM_PATH=/usr/bin/chromium DATA_DIR=/data
+ENV PORT=8080 CHROMIUM_PATH=/usr/bin/chromium DATA_DIR=/data MODELS_DIR=/app/models
 EXPOSE 8080
 USER bun
 CMD ["bun", "run", "server.ts"]

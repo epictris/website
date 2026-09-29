@@ -1,6 +1,8 @@
 // PNG encoding for pictures made without a canvas (the server's id, depth and
-// comparison pictures). The zlib compression is the caller's: node:zlib on the
-// server, CompressionStream("deflate") in a page.
+// comparison pictures), and decoding of the plain kinds a depth map is stored
+// as (a canvas would round 16 bits to 8). The zlib step is the caller's:
+// node:zlib on the server, CompressionStream / DecompressionStream("deflate")
+// in a page.
 
 export type Deflate = (data: Uint8Array) => Uint8Array | Promise<Uint8Array>;
 
@@ -75,4 +77,79 @@ export async function encodePng(
     at += p.length;
   }
   return out;
+}
+
+export type Inflate = (data: Uint8Array) => Uint8Array | Promise<Uint8Array>;
+
+export interface DecodedPng {
+  width: number;
+  height: number;
+  /** Samples per pixel: 1 grey, 2 grey + alpha, 3 RGB, 4 RGBA. */
+  channels: number;
+  /** 8 or 16. */
+  bitDepth: number;
+  /** Every sample, row by row, at its own bit depth. */
+  samples: Uint16Array;
+}
+
+/**
+ * Decode a PNG of 8- or 16-bit samples (grey, RGB, with or without alpha),
+ * not interlaced: what a depth map is stored as. Null for anything else
+ * (palettes, fewer bits, interlacing), which a caller decodes another way.
+ */
+export async function decodePng(bytes: Uint8Array, inflate: Inflate): Promise<DecodedPng | null> {
+  const signature = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+  if (bytes.length < 33 || signature.some((b, i) => bytes[i] !== b)) return null;
+  const v = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const width = v.getUint32(16);
+  const height = v.getUint32(20);
+  const bitDepth = bytes[24];
+  const channels = ({ 0: 1, 2: 3, 4: 2, 6: 4 } as Record<number, number>)[bytes[25]];
+  if (!channels || (bitDepth !== 8 && bitDepth !== 16) || bytes[28] !== 0 || !width || !height) return null;
+  const idat: Uint8Array[] = [];
+  for (let at = 8; at + 8 <= bytes.length; ) {
+    const length = v.getUint32(at);
+    const type = String.fromCharCode(...bytes.subarray(at + 4, at + 8));
+    if (type === "IDAT") idat.push(bytes.subarray(at + 8, at + 8 + length));
+    if (type === "IEND") break;
+    at += 12 + length;
+  }
+  const joined = new Uint8Array(idat.reduce((n, c) => n + c.length, 0));
+  let filled = 0;
+  for (const c of idat) {
+    joined.set(c, filled);
+    filled += c.length;
+  }
+  const raw = await inflate(joined);
+  const bpp = (channels * bitDepth) / 8;
+  const row = width * bpp;
+  if (raw.length < (row + 1) * height) return null;
+  // Undo each row's filter in place, against the row above (already unfiltered).
+  const out = new Uint8Array(row * height);
+  for (let y = 0; y < height; y++) {
+    const filter = raw[y * (row + 1)];
+    const src = y * (row + 1) + 1;
+    const dst = y * row;
+    for (let x = 0; x < row; x++) {
+      const a = x >= bpp ? out[dst + x - bpp] : 0;
+      const b = y ? out[dst - row + x] : 0;
+      const c = x >= bpp && y ? out[dst - row + x - bpp] : 0;
+      let p = raw[src + x];
+      if (filter === 1) p += a;
+      else if (filter === 2) p += b;
+      else if (filter === 3) p += (a + b) >> 1;
+      else if (filter === 4) {
+        const e = a + b - c;
+        const pa = Math.abs(e - a);
+        const pb = Math.abs(e - b);
+        const pc = Math.abs(e - c);
+        p += pa <= pb && pa <= pc ? a : pb <= pc ? b : c;
+      } else if (filter !== 0) return null;
+      out[dst + x] = p & 0xff;
+    }
+  }
+  const samples = new Uint16Array(width * height * channels);
+  if (bitDepth === 8) samples.set(out);
+  else for (let i = 0; i < samples.length; i++) samples[i] = (out[i * 2] << 8) | out[i * 2 + 1];
+  return { width, height, channels, bitDepth, samples };
 }
