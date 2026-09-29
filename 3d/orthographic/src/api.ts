@@ -1,5 +1,5 @@
 // window.orthographic: the agent API. It speaks the document's vocabulary
-// ({x, y, z} objects, world-unit outline points), every edit goes through the
+// ({x, y, z} objects, outline points in metres), every edit goes through the
 // same core commands as the UI (one undoable step each), and every call
 // returns { ok, issues } instead of throwing.
 
@@ -10,6 +10,7 @@ import { geometryIssues, validateDocument } from "./core/document";
 import { base64ToBytes, parseDataUrl } from "./core/images";
 import type { MeshMeta } from "./core/mesher";
 import * as ops from "./core/ops";
+import { placements, projection } from "./core/projection";
 import type { DocVec3, EditorState, Issue, ReferenceView, Ring, SceneDocument, ViewId } from "./core/types";
 import { currentDocument, editorConfig, loadDocument } from "./io";
 import { meshStatus, settle, shapeKey } from "./meshes";
@@ -106,7 +107,7 @@ export const api = {
 
   updateObject: safe((id: string, patch: ObjectProps) => edit((d) => ops.updateObject(d, id, patch))),
 
-  /** Replace one view's outline: points in world units, [x, z] front, [x, y] top, [y, z] side. */
+  /** Replace one view's outline: points in metres, [x, z] front, [x, y] top, [y, z] side. */
   setOutline: safe((id: string, view: ViewId, points: Ring) => edit((d) => ops.setOutline(d, id, view, points))),
 
   /** Set the bounding box of one object or a group: any of min / max per axis. Outlines scale with it. */
@@ -121,6 +122,9 @@ export const api = {
   ),
 
   setScene: safe((patch: ops.SceneArgs) => edit((d) => ops.setScene(d, patch))),
+
+  /** Scale the whole scene about the origin (objects, frame, reference placements, camera); scale.basis records why. */
+  rescaleScene: safe((factor: number, scale?: { basis?: string }) => edit((d) => ops.rescaleScene(d, factor, scale))),
 
   /** Camera fields as in the document; give the lens as verticalFovDegrees or focalLengthMm35Equivalent. */
   setCamera: safe((patch: ops.CameraArgs) => edit((d) => ops.setCamera(d, patch))),
@@ -152,9 +156,13 @@ export const api = {
   }),
 
   /**
-   * Pictures for checking the scene against its references. Orthographic views
-   * are fitted to the scene; perspective uses the camera frame. Returns
-   * PNG data: URLs (or SVG markup with format "svg" for orthographic views).
+   * Pictures for checking the scene against its references, or for making
+   * reference views from. Orthographic views share one scale (pixelsPerMeter,
+   * or the largest round scale at which every view fits width x height) and
+   * cover the scene frame and every object, so views sharing an axis line up;
+   * placements says where each picture lies in metres. Perspective uses the
+   * camera frame. Returns PNG data: URLs (or SVG markup with format "svg" for
+   * orthographic views).
    */
   render: safe(
     async (
@@ -162,6 +170,7 @@ export const api = {
         views?: ReferenceView[];
         width?: number;
         height?: number;
+        pixelsPerMeter?: number;
         references?: boolean;
         labels?: boolean;
         grid?: boolean;
@@ -169,14 +178,20 @@ export const api = {
       } = {},
     ) => {
       const views = opts.views ?? ["front", "top", "side", "perspective"];
+      const unknown = views.find((v) => v !== "perspective" && !ops.isView(v));
+      if (unknown) return bad("invalid-view", `Unknown view "${unknown}".`);
+      if (opts.pixelsPerMeter !== undefined && !(Number.isFinite(opts.pixelsPerMeter) && opts.pixelsPerMeter > 0))
+        return bad("invalid-scale", "pixelsPerMeter must be a positive number.");
       await settle();
+      const ortho = views.filter(ops.isView);
+      const p = ortho.length ? projection(unwrap(state) as EditorState, opts) : undefined;
+      if (typeof p === "string") return bad("render-too-large", p);
       const images: Record<string, string> = {};
       for (const v of views) {
         if (v === "perspective") images[v] = await perspectivePng({ width: opts.width, references: opts.references });
-        else if (ops.isView(v)) images[v] = opts.format === "svg" ? orthoSvg(v, opts) : await orthoPng(v, opts);
-        else return bad("invalid-view", `Unknown view "${v}".`);
+        else images[v] = opts.format === "svg" ? orthoSvg(v, p!, opts) : await orthoPng(v, p!, opts);
       }
-      return result([], { images });
+      return result([], { images, ...(p && { pixelsPerMeter: p.pixelsPerMeter, placements: placements(p, ortho) }) });
     },
   ),
 

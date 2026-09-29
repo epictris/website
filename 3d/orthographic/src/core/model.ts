@@ -15,7 +15,7 @@ export function defaultDisplay(): Display {
 export function initialState(): EditorState {
   const size = [...DEFAULT_SCENE_SIZE] as Vec3;
   return {
-    scene: { title: "Untitled scene", size, metersPerUnit: null, notes: "" },
+    scene: { title: "Untitled scene", size, scaleBasis: "", notes: "" },
     objects: [],
     camera: presetCamera(defaultCamera(), "overview", { min: [0, 0, 0], max: size }),
     references: { front: null, top: null, side: null, perspective: null },

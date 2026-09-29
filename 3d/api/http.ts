@@ -14,7 +14,7 @@ import { objectsCsv } from "../orthographic/src/core/table";
 import { Busy } from "./browser";
 import { checkGeometry } from "./geometry";
 import { handleMcp } from "./mcp";
-import { BadRequest, pngBytes, projectionSheet, render } from "./render";
+import { BadRequest, pngBytes, projectionSheet, type RenderOutcome, render } from "./render";
 import {
   addImage,
   createScene,
@@ -34,7 +34,7 @@ export const CORS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "Content-Type, Mcp-Session-Id, Mcp-Protocol-Version, Last-Event-ID, If-Match",
   "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-  "Access-Control-Expose-Headers": "Mcp-Session-Id, ETag, X-Issues",
+  "Access-Control-Expose-Headers": "Mcp-Session-Id, ETag, X-Issues, X-Pixels-Per-Meter, X-Placement",
 };
 const json = (body: unknown, status = 200, headers: Record<string, string> = {}) =>
   Response.json(body, { status, headers: { ...CORS, ...headers } });
@@ -70,9 +70,9 @@ const API_INDEX = (ctx: ToolContext) => ({
     "POST /orthographic/api/tools/{name}": "Run a tool; body is its arguments. Returns { ok, issues, ... }.",
     "POST /orthographic/api/validate": "Body: a scene document. Returns { ok, issues } including geometry checks.",
     "POST /orthographic/api/render":
-      "Body: { document, views?, width?, height?, references?, labels?, grid? }. Returns { ok, issues, images: { view: PNG data URL } }.",
+      "Body: { document, views?, width?, height?, pixelsPerMeter?, references?, labels?, grid? }. Returns { ok, issues, images: { view: PNG data URL }, pixelsPerMeter, placements: { view: { min, size, width, height } } }; orthographic views share one scale.",
     "POST /orthographic/api/render/{front|top|side|perspective}.png":
-      "Body: a scene document. Returns the PNG itself (issues in the X-Issues header).",
+      "Body: a scene document. Returns the PNG itself (issues in the X-Issues header; orthographic views: X-Pixels-Per-Meter and X-Placement, the pictured area's { min, size } in metres).",
     "POST /orthographic/api/scenes": "Body: a scene document (or nothing). Stores it; returns { sceneId, editorUrl }.",
     "GET /orthographic/api/scenes/{id}":
       "The stored scene: { sceneId, revision, editorUrl, document }; ?images=data embeds pixels.",
@@ -82,7 +82,7 @@ const API_INDEX = (ctx: ToolContext) => ({
     "GET /orthographic/api/scenes/{id}/events":
       "Server-sent events: event revision, data { revision }, once now and on every change.",
     "GET /orthographic/api/scenes/{id}/render/{view}.png":
-      "A render of the stored scene (?width, height, references, labels, grid).",
+      "A render of the stored scene (?width, height, pixelsPerMeter, references, labels, grid); headers as for POST /render/{view}.png.",
     "GET /orthographic/api/scenes/{id}/export/{file}":
       "scene.json, agent.json, objects.csv, views.svg or editor.html (the editor with the scene inside).",
   },
@@ -96,12 +96,17 @@ async function validate(req: Request) {
   return json({ ok: !issues.some((i) => i.severity === "error"), issues });
 }
 
-function pngResponse(out: { ok: boolean; issues: unknown[]; images?: Record<string, string> }, view: string) {
+function pngResponse(out: RenderOutcome, view: string) {
   if (!out.ok || !out.images?.[view]) return json(out, 422);
+  const placement = out.placements?.[view];
   return new Response(pngBytes(out.images[view]), {
     headers: {
       "Content-Type": "image/png",
       "X-Issues": encodeURIComponent(JSON.stringify(out.issues)).slice(0, 7000),
+      ...(placement && {
+        "X-Pixels-Per-Meter": String(out.pixelsPerMeter),
+        "X-Placement": JSON.stringify({ min: placement.min, size: placement.size }),
+      }),
       ...CORS,
     },
   });
@@ -112,6 +117,7 @@ const numParam = (url: URL, k: string) => (url.searchParams.has(k) ? Number(url.
 const renderQuery = (url: URL) => ({
   width: numParam(url, "width"),
   height: numParam(url, "height"),
+  pixelsPerMeter: numParam(url, "pixelsPerMeter"),
   references: boolParam(url, "references"),
   labels: boolParam(url, "labels"),
   grid: boolParam(url, "grid"),
@@ -330,7 +336,7 @@ async function route(req: Request, path: string, server: Server<unknown>): Promi
   if (head === "render" && !rest.length) {
     const body = (await readJson(req)) as { document?: unknown } | undefined;
     if (!body || typeof body !== "object" || !("document" in body))
-      throw new BadRequest("Send { document, views?, width?, height? }.");
+      throw new BadRequest("Send { document, views?, width?, height?, pixelsPerMeter? }.");
     const { document, ...options } = body as { document: unknown };
     const out = await render(document, options);
     return json(out, out.ok ? 200 : 422);

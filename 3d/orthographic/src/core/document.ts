@@ -28,7 +28,7 @@ export const FORMAT = "orthographic-scene";
 export const VERSION = 1;
 export const SCHEMA_URL = "https://3d.tris.sh/orthographic/schema.json";
 
-/** World values rounded to 1e-9 u: float noise (12.219999999999999) says nothing and costs a reader tokens. */
+/** World values rounded to 1e-9 m: float noise (12.219999999999999) says nothing and costs a reader tokens. */
 const tidy = (v: number) => Math.round(v * 1e9) / 1e9;
 const toVec = (v: Vec3): DocVec3 => ({ x: tidy(v[0]), y: tidy(v[1]), z: tidy(v[2]) });
 const worldPoints = (e: SceneObject, view: ViewId) => worldRing(e, view).map(([a, b]) => [tidy(a), tidy(b)] as Point);
@@ -67,7 +67,8 @@ export function toDocument(
     scene: {
       title: s.scene.title,
       size: toVec(s.scene.size),
-      metersPerUnit: s.scene.metersPerUnit,
+      // Scenes stored before the scale existed have no scaleBasis.
+      scale: { basis: s.scene.scaleBasis ?? "" },
       notes: s.scene.notes,
     },
     objects: s.objects.map((e) => {
@@ -221,9 +222,17 @@ export function fromDocument(doc: unknown, known: (id: string) => ImageInfo | un
   s.scene = {
     title: d.scene.title ?? "Untitled scene",
     size: fromVec(d.scene.size),
-    metersPerUnit: d.scene.metersPerUnit ?? null,
+    scaleBasis: d.scene.scale?.basis ?? "",
     notes: d.scene.notes ?? "",
   };
+  if (!s.scene.scaleBasis.trim() && d.objects.length)
+    issues.push({
+      severity: "warning",
+      code: "scale-not-set",
+      path: "/scene/scale",
+      message:
+        "The scene's scale is not set: every length is in metres, but scene.scale.basis does not say what they were measured from. Size the scene from things of known size in the reference (a door is about 2 m tall, a person about 1.7 m) and record that evidence in scene.scale.basis.",
+    });
 
   const ids = new Map<string, number>();
   d.objects.forEach((o, i) => {

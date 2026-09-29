@@ -14,6 +14,7 @@ import {
   redo,
   undo,
 } from "../actions";
+import { lengthText } from "../core/math";
 import {
   importFile,
   saveAgentDocument,
@@ -92,7 +93,7 @@ function Header() {
     document.addEventListener("click", close);
     onCleanup(() => document.removeEventListener("click", close));
   });
-  const m = () => state.scene.metersPerUnit;
+  const basis = () => state.scene.scaleBasis.trim();
   return (
     <header class="app-header">
       <div class="brandmark" aria-hidden="true">
@@ -117,8 +118,16 @@ function Header() {
           LIVE · SHARED
         </span>
       </Show>
-      <span class="badge head-unit" classList={{ warn: !m() }}>
-        {m() ? `1 u = ${m()} m` : "ASSUMED SCENE UNITS"}
+      <span
+        class="badge head-unit"
+        classList={{ warn: !basis() }}
+        title={
+          basis()
+            ? `Lengths in metres. Scale basis: ${basis()}`
+            : "Lengths are in metres, but nothing says what they were measured from: fill in Scene / scale basis."
+        }
+      >
+        {basis() ? "METRES" : "METRES · SCALE NOT SET"}
       </span>
       <div class="header-actions">
         <button
@@ -246,7 +255,7 @@ function Toolbar() {
         value={ui.prefs.snapStep}
         onChange={(e) => setUi("prefs", "snapStep", Number(e.currentTarget.value))}
       >
-        <For each={[0.05, 0.1, 0.25, 0.5, 1, 2]}>{(s) => <option value={s}>{s} u</option>}</For>
+        <For each={[0.01, 0.05, 0.1, 0.25, 0.5, 1, 2]}>{(s) => <option value={s}>{lengthText(s)}</option>}</For>
       </select>
       <div class="divider" />
       {toggle("grid", "Grid")}
@@ -329,7 +338,6 @@ function Inspector() {
 
 function StatusBar() {
   const reviewed = () => state.objects.filter((e) => e.reviewed).length;
-  const m = () => state.scene.metersPerUnit;
   return (
     <footer class="statusbar">
       <span>
@@ -339,7 +347,7 @@ function StatusBar() {
       <span>
         {state.objects.length} objects · {reviewed()} reviewed
       </span>
-      <span class="unit-status">{m() ? `1 u = ${m()} m` : "1 u = arbitrary scene unit"}</span>
+      <span class="unit-status">Lengths in metres</span>
       <span class="instructions">V: outline · Double-click edge: add point · Ctrl/⌘ S: save</span>
     </footer>
   );

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://3d.tris.sh/orthographic/schema.json",
   "title": "Orthographic scene",
-  "description": "A 3D scene described by one closed silhouette per object in each of three orthographic views (front, top, right side), plus a perspective camera and per-view reference images. Right-handed, Z up, all lengths in scene units (u). Each object's solid is the intersection of its three silhouettes extruded along their view directions. Guide: https://3d.tris.sh/orthographic/llms.txt",
+  "description": "A 3D scene described by one closed silhouette per object in each of three orthographic views (front, top, right side), plus a perspective camera and per-view reference images. Right-handed, Z up, every length in metres. Each object's solid is the intersection of its three silhouettes extruded along their view directions. Guide: https://3d.tris.sh/orthographic/llms.txt",
   "type": "object",
   "required": ["format", "version", "scene", "objects"],
   "additionalProperties": false,
@@ -122,7 +122,7 @@
       "items": {
         "$ref": "#/$defs/point"
       },
-      "description": "One simple closed polygon in world units: no repeated closing point, no self-intersections, no holes."
+      "description": "One simple closed polygon in metres: no repeated closing point, no self-intersections, no holes."
     },
     "scene": {
       "type": "object",
@@ -134,32 +134,39 @@
           "maxLength": 100
         },
         "size": {
-          "description": "The scene frame: the box from (0,0,0) to size. A drawing guide, not a boundary.",
+          "description": "The scene frame in metres: the box from (0,0,0) to size. A drawing guide, not a boundary.",
           "type": "object",
           "required": ["x", "y", "z"],
           "additionalProperties": false,
           "properties": {
             "x": {
               "type": "number",
-              "minimum": 0.1,
+              "minimum": 0.01,
               "maximum": 1000000
             },
             "y": {
               "type": "number",
-              "minimum": 0.1,
+              "minimum": 0.01,
               "maximum": 1000000
             },
             "z": {
               "type": "number",
-              "minimum": 0.1,
+              "minimum": 0.01,
               "maximum": 1000000
             }
           }
         },
-        "metersPerUnit": {
-          "type": ["number", "null"],
-          "exclusiveMinimum": 0,
-          "description": "Real-world scale of one scene unit, or null when unknown."
+        "scale": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "How the scene's real-world size was established. Every length in the document is in metres; this records the evidence for them, so whoever builds on the scene knows how far to trust its dimensions.",
+          "properties": {
+            "basis": {
+              "type": "string",
+              "maxLength": 1000,
+              "description": "The known sizes the scale was taken from, e.g. \"doorway 2.1 m tall; the figure at left about 1.7 m\". Empty when the scale is not set yet."
+            }
+          }
         },
         "notes": {
           "type": "string",
@@ -192,7 +199,7 @@
           "type": "object",
           "required": ["front", "top", "side"],
           "additionalProperties": false,
-          "description": "The object's silhouette in each view, in world units. front points are [x, z], top points are [x, y], side points are [y, z]. The views that share an axis should span the same range on it (front and top share x, top and side share y, front and side share z).",
+          "description": "The object's silhouette in each view, in metres. front points are [x, z], top points are [x, y], side points are [y, z]. The views that share an axis should span the same range on it (front and top share x, top and side share y, front and side share z).",
           "properties": {
             "front": {
               "$ref": "#/$defs/ring"

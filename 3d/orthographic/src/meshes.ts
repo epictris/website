@@ -3,7 +3,7 @@
 // a key of the outlines and resolution, so undo and reloads are instant.
 
 import { createSignal } from "solid-js";
-import { createStore, reconcile } from "solid-js/store";
+import { createStore, reconcile, unwrap } from "solid-js/store";
 import { base64ToBytes, bytesToBase64 } from "./core/images";
 import { buildMesh, MESH_VERSION, type Mesh, type MeshMeta } from "./core/mesher";
 import type { SceneObject } from "./core/types";
@@ -169,14 +169,28 @@ export function saveMeshCache(): CachedMesh[] {
   return out;
 }
 
-/** Install cached meshes that still match their outlines; anything else is rebuilt. */
+/**
+ * After the scene is replaced: keep the meshes that still match their outlines
+ * (a live update usually changes few objects), install cached meshes that do,
+ * and rebuild the rest.
+ */
 export function restoreMeshCache(cache: unknown) {
-  for (const id of [...meshes.keys()]) install(id, null);
-  setMeshStatus(reconcile({}));
-  if (!Array.isArray(cache)) return;
-  for (const c of cache as CachedMesh[]) {
+  const current = (id: string, key: string) => {
+    const e = state.objects.find((o) => o.id === id);
+    return !!e && key === shapeKey(e);
+  };
+  for (const [id, m] of [...meshes]) if (!current(id, m.key)) install(id, null);
+  setMeshStatus(
+    reconcile(Object.fromEntries(Object.entries(unwrap(meshStatus)).filter(([id, s]) => current(id, s.key)))),
+  );
+  if (Array.isArray(cache)) installCached(cache as CachedMesh[]);
+  schedule(true);
+}
+
+function installCached(cache: CachedMesh[]) {
+  for (const c of cache) {
     const e = state.objects.find((o) => o.id === c?.id);
-    if (!e || c.key !== shapeKey(e)) continue;
+    if (!e || c.key !== shapeKey(e) || meshes.get(e.id)?.key === c.key) continue;
     try {
       const buf = (s: string) => base64ToBytes(s).buffer as ArrayBuffer;
       const pos = new Uint16Array(buf(c.positions));

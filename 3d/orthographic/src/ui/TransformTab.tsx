@@ -146,8 +146,8 @@ export function TransformTab() {
           </div>
           <div class="transform-grid">
             <span />
-            <span class="column-label">Position · u</span>
-            <span class="column-label">Dimensions · u</span>
+            <span class="column-label">Position · m</span>
+            <span class="column-label">Dimensions · m</span>
             <For each={[0, 1, 2]}>
               {(a) => (
                 <>
@@ -334,7 +334,7 @@ function OutlineTools() {
         <div class="point-grid">
           <span class="mono">#{point()!.index + 1}</span>
           <label>
-            <span>{axisLabel(0)} · u</span>
+            <span>{axisLabel(0)} · m</span>
             <Field
               type="number"
               step="0.01"
@@ -344,7 +344,7 @@ function OutlineTools() {
             />
           </label>
           <label>
-            <span>{axisLabel(1)} · u</span>
+            <span>{axisLabel(1)} · m</span>
             <Field
               type="number"
               step="0.01"

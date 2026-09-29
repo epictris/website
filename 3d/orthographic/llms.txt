@@ -1,6 +1,6 @@
 # Orthographic Studio
 
-> Describe a 3D scene as flat outlines in three orthographic views (front, top, right side), traced over reference images, and check the result through a perspective camera. Each object's solid is the intersection of its three outlines extruded along their view directions. Built to be driven by LLM agents: one JSON document format, a validator that reports every problem with a JSON Pointer, and renders of every view for visual self-checks.
+> Describe a 3D scene as flat outlines in three orthographic views (front, top, right side), traced over reference images, and check the result through a perspective camera. Every length is in metres, so the three views share one real-world scale that other models can build on. Each object's solid is the intersection of its three outlines extruded along their view directions. Built to be driven by LLM agents: one JSON document format, a validator that reports every problem with a JSON Pointer, and renders of every view for visual self-checks.
 
 - Editor: https://3d.tris.sh/orthographic/
 - MCP server: https://3d.tris.sh/orthographic/mcp (Streamable HTTP, no auth)
@@ -36,20 +36,21 @@ Every tool answers `{ ok, issues, ... }` and never throws; `ok` is false when an
 | `add_object` | An object from world-unit `outlines`, or a `primitive` (`box`, `ellipsoid`, `cylinder`, `rock`) filling `center` ± `size` / 2. |
 | `add_objects` | Up to 100 objects in one call and one undo step, all or nothing; problems are reported per `/objects/<index>`. The way to build a large scene: batches of about 20, checked as you go. |
 | `update_object` | Name, kind, color, visible, locked, reviewed, opacity, notes. |
-| `set_outline` | Replace one view's outline (world units). |
+| `set_outline` | Replace one view's outline (metres). |
 | `set_bounds` | Set any of min/max per axis for objects or a group; outlines scale. |
 | `move_objects`, `duplicate_objects`, `delete_objects` | As named; offsets are `{x, y, z}`. |
-| `set_scene` | Title, frame `size`, `metersPerUnit`, notes. |
+| `set_scene` | Title, frame `size` (metres), `scale.basis` (what the metres were taken from), notes. |
+| `rescale_scene` | Multiply every length (objects, frame, reference placements, camera) by `factor`, for a corrected scale estimate. |
 | `set_camera` | Position, target, lens (`verticalFovDegrees` or `focalLengthMm35Equivalent`), roll, near, far, frame, locked. |
 | `set_display` | Perspective drawing style, grid, labels, crosshair. |
 | `set_reference` | Put an image behind a view, move it, or `remove: true`. |
 | `undo`, `redo` | One shared history for agents and the editor. |
-| `render` | PNGs of `front`, `top`, `side`, `perspective` (as images over MCP, data URLs over HTTP) plus links to them. Over a perspective reference, each solid's outline is drawn on top in its colour at full opacity, so alignment is visible even through an opaque reference. |
+| `render` | PNGs of `front`, `top`, `side`, `perspective` (as images over MCP, data URLs over HTTP) plus links to them. The orthographic views share one scale (`pixelsPerMeter`) and report where each picture lies in metres (`placements`); see Scale. Over a perspective reference, each solid's outline is drawn on top in its colour at full opacity, so alignment is visible even through an opaque reference. |
 | `export` | Links to `scene.json`, `agent.json`, `objects.csv`, `views.svg`, `editor.html` (the editor with the scene inside, one offline file). |
 
 ## Coordinates
 
-- Right-handed, Z up, one scene unit (u) per unit. `scene.metersPerUnit` records a real-world scale, or null.
+- Right-handed, Z up, every length in metres (outlines, sizes, offsets, reference placements, the camera).
 - X is right in the front view, Y is depth away from the front camera, Z is up.
 - The scene frame is the box from (0, 0, 0) to `scene.size`. It is a drawing guide, not a boundary.
 
@@ -59,9 +60,49 @@ Every tool answers `{ ok, issues, ... }` and never throws; `ok` is false when an
 | `top` | −Z (down) | `[x, y]` | x (right) | y (away from the front camera) |
 | `side` | −X (the right side) | `[y, z]` | y (right) | z (up) |
 
+## Scale
+
+The scene is in metres so that everyone who builds on it agrees on sizes: the three orthographic views share one real-world scale, and a model that later paints a view, or generates an asset from an outline, can rely on "this rock is 3.2 m wide" without guessing.
+
+Setting the scale is the first decision when interpreting a reference image, before tracing anything:
+
+1. Find things of known size in the image: a door (about 2 m tall), a person (about 1.7 m), a car (about 4.5 m long), a stair step (about 18 cm), a tree trunk, a brick course. Prefer several and check that they agree.
+2. Size the scene frame and the reference placement from them: if the doorway is 2.1 m tall and spans 180 px of a 1600 px wide image, the image is 1600 × 2.1 / 180 ≈ 18.7 m wide.
+3. Record the evidence in `scene.scale.basis` (`set_scene`), e.g. `"doorway 2.1 m tall; the figure at left about 1.7 m; image about 18.7 m wide"`. Until it is set, `validate` warns `scale-not-set`.
+4. Invent the depth (y) at the same scale: the top and side outlines are in the same metres as the front.
+
+If the estimate changes, `rescale_scene` multiplies every length at once (factor = right size / built size) and keeps everything in place relative to everything else; changing `scene.size` alone moves nothing.
+
+### Pictures at one scale
+
+`render` draws `front`, `top` and `side` at one `pixelsPerMeter` over the same box (the scene frame and every visible object, plus a 48 px margin), so views that share an axis cover the same range of it at the same size: front and top show the same x range, top and side the same y range, front and side the same z range. The result reports:
+
+```json
+{
+  "pixelsPerMeter": 25,
+  "placements": {
+    "front": { "min": { "x": -1.92, "z": -1.92 }, "size": { "x": 43.84, "z": 23.84 }, "width": 1096, "height": 596 },
+    "top": { "min": { "x": -1.92, "y": -1.92 }, "size": { "x": 43.84, "y": 33.84 }, "width": 1096, "height": 846 },
+    "side": { "min": { "y": -1.92, "z": -1.92 }, "size": { "y": 33.84, "z": 23.84 }, "width": 846, "height": 596 }
+  }
+}
+```
+
+Each placement is the picture's area on its view plane in metres, named by the view's axes, exactly as `set_reference` takes it. Pass `pixelsPerMeter` for a fixed scale (say 50, one pixel per 2 cm); without it the scale is the largest round value (1, 2, 2.5, 4, 5 or 8 × 10ⁿ) at which every view fits `width` × `height` (default 1200 × 900). No picture may exceed 4096 px. The scene frame, grid labels and the scale bar are drawn in metres; `labels: false` (which also leaves out the scale bar), `grid: false` and `references: false` give a clean outline drawing for an image model to work from.
+
+### Making reference views from the projections
+
+To have a model paint a detailed reference for a view that has none (typically the top and side, invented from a front photo):
+
+1. `render` the view with `references: false`, `labels: false`, `grid: false`, at a fixed `pixelsPerMeter`.
+2. Give the picture to the image model with its placement: it shows `size.x` × `size.z` metres (front), one pixel is 1 / `pixelsPerMeter` m. Keep the output at the same pixel size, or the same aspect ratio.
+3. `add_image` the result and `set_reference` it on the same view with the placement's `min` and `size`. It lines up with the outlines and with the other views' references.
+
+The `views.svg` export draws the three views the same way on one sheet, in third-angle projection (the plan above the front elevation, the right side to its right).
+
 ## How a solid is made
 
-An object has exactly one outline per view: a simple closed polygon in world units, 3–512 points, no repeated closing point, no self-intersections, no holes. The solid is every point (x, y, z) whose front projection (x, z), top projection (x, y) and side projection (y, z) all fall inside their outlines.
+An object has exactly one outline per view: a simple closed polygon in metres, 3–512 points, no repeated closing point, no self-intersections, no holes. The solid is every point (x, y, z) whose front projection (x, z), top projection (x, y) and side projection (y, z) all fall inside their outlines.
 
 Consequences worth planning for:
 
@@ -77,7 +118,11 @@ Consequences worth planning for:
   "$schema": "https://3d.tris.sh/orthographic/schema.json",
   "format": "orthographic-scene",
   "version": 1,
-  "scene": { "title": "Cave entrance", "size": { "x": 40, "y": 30, "z": 20 }, "metersPerUnit": null },
+  "scene": {
+    "title": "Cave entrance",
+    "size": { "x": 40, "y": 30, "z": 20 },
+    "scale": { "basis": "cave mouth about 16 m tall; the figure at its foot about 1.7 m" }
+  },
   "objects": [
     {
       "id": "pillar",
@@ -107,7 +152,9 @@ Consequences worth planning for:
 }
 ```
 
-Required: `format`, `version`, `scene.size`, `objects` (each with `id` and `outlines`). Everything else has defaults.
+Required: `format`, `version`, `scene.size`, `objects` (each with `id` and `outlines`). Everything else has defaults. All lengths are metres.
+
+- `scene.size`: the frame, at least 0.01 m per axis. `scene.scale.basis`: the known sizes the metres were taken from (see Scale).
 
 - `objects[].id`: letters, digits, `_ . -`, starting with a letter or digit, unique. `name`, `kind` (free tag), `color` (`#rrggbb`), `visible`, `locked`, `reviewed`, `opacity` (0.05–1, below 1 renders translucent), `notes`.
 - `camera`: `position`, `target`, and the lens as `verticalFovDegrees` (5–140) or `focalLengthMm35Equivalent` (f = 12 mm / tan(vertical FOV / 2); if both are given they must agree), plus `rollDegrees`, `near`, `far`, `frame` (pixels, fixes the aspect ratio).
@@ -118,8 +165,8 @@ Required: `format`, `version`, `scene.size`, `objects` (each with `id` and `outl
 ## Workflow for turning an image into a scene
 
 1. `create_scene`, and share its `editorUrl`.
-2. Decide the scene frame from the image (for a front-facing photo: width = x, height = z, pick a plausible depth y) with `set_scene`, including `metersPerUnit` if a scale is known.
-3. `add_image`, then `set_reference` on the front view (without `min`/`size` it is fitted to the frame) and, if the camera is known, on the perspective view too.
+2. Set the scale (see Scale): from things of known size in the image, decide the frame in metres (for a front-facing photo: width = x, height = z, a plausible depth y) and send it with `set_scene`, the evidence in `scale.basis`.
+3. `add_image`, then `set_reference` on the front view (without `min`/`size` it is fitted to the frame; give them to place the image at its measured size) and, if the camera is known, on the perspective view too.
 4. For each object, trace its front outline in x/z from the image, then invent consistent top (x/y) and side (y/z) outlines: reuse the front's x range in top and its z range in side. Send them with `add_objects` in batches of about 20 (or `add_object` one at a time), and `render` after the first batch to catch a wrong scale or placement early. `load_document` replaces the whole scene at once.
 5. `validate`. Fix every error; read every warning.
 6. `render` the views and compare them with the references. Adjust outlines, the camera (position, target, focal length) or the reference placement, then repeat from 5.
@@ -129,8 +176,8 @@ Required: `format`, `version`, `scene.size`, `objects` (each with `id` and `outl
 All endpoints accept and return JSON (CORS is open). Errors come back as `{ "ok": false, "issues": [...] }`. Besides the tools (`/api/tools/{tool}`), a few endpoints take a whole document and store nothing:
 
 - `POST /orthographic/api/validate`: body is a document. Returns `{ ok, issues }`, including the geometry checks (reconstructs every solid).
-- `POST /orthographic/api/render`: body `{ document, views?, width?, height?, references?, labels?, grid? }`. `views` defaults to all of `front`, `top`, `side`, `perspective`. Orthographic views are fitted to the scene at `width` × `height` (default 1200 × 900); perspective uses the camera frame (`width` scales it). References are drawn whenever assigned, unless `references` is false. Returns `{ ok, issues, images: { view: "data:image/png;base64,…" } }`.
-- `POST /orthographic/api/render/{front|top|side|perspective}.png`: body is a document; returns the PNG itself. Query: `width`, `height`, `references=false`. Issues are in the `X-Issues` header (URL-encoded JSON).
+- `POST /orthographic/api/render`: body `{ document, views?, width?, height?, pixelsPerMeter?, references?, labels?, grid? }`. `views` defaults to all of `front`, `top`, `side`, `perspective`. Orthographic views share one scale (see Scale); perspective uses the camera frame (`width` scales it). References are drawn whenever assigned, unless `references` is false. Returns `{ ok, issues, images: { view: "data:image/png;base64,…" }, pixelsPerMeter, placements }`.
+- `POST /orthographic/api/render/{front|top|side|perspective}.png`: body is a document; returns the PNG itself. Query: `width`, `height`, `pixelsPerMeter`, `references=false`. Issues are in the `X-Issues` header (URL-encoded JSON); an orthographic view's scale and placement in `X-Pixels-Per-Meter` and `X-Placement` (JSON `{ min, size }` in metres).
 
 ```sh
 curl -s -X POST --data-binary @scene.json https://3d.tris.sh/orthographic/api/validate
@@ -142,21 +189,21 @@ Renders run one at a time; a busy server answers 503 with `Retry-After`.
 Stored scenes also have plain GET links, handy for tools that can only fetch pages:
 
 - `GET /orthographic/api/scenes/{id}`: `{ sceneId, revision, editorUrl, document }`.
-- `GET /orthographic/api/scenes/{id}/render/{front|top|side|perspective}.png`: a render (query: `width`, `height`, `references`, `labels`, `grid`).
+- `GET /orthographic/api/scenes/{id}/render/{front|top|side|perspective}.png`: a render (query: `width`, `height`, `pixelsPerMeter`, `references`, `labels`, `grid`), with the same headers.
 - `GET /orthographic/api/scenes/{id}/export/{scene.json|agent.json|objects.csv|views.svg|editor.html}`: downloads.
 
 ## In the page: `window.orthographic`
 
-For agents that already drive a browser; the tools above do the same without one. Calls return `{ ok, issues, ... }` (edits, checks and renders as promises) and never throw. Edits use the document's shapes (`{x, y, z}` objects, world-unit outline points), apply as one undoable step, and change nothing when an issue is an error.
+For agents that already drive a browser; the tools above do the same without one. Calls return `{ ok, issues, ... }` (edits, checks and renders as promises) and never throw. Edits use the document's shapes (`{x, y, z}` objects, outline points in metres), apply as one undoable step, and change nothing when an issue is an error.
 
 - `getDocument({ images: "metadata" | "data" | "none", derived, editor })` → the document (synchronous).
 - `loadDocument(doc)`, `validate(doc?)` (no argument: the current scene, geometry included), `waitForGeometry()`.
 - `addImage({ data, name })` → `{ id }` (base64 or a data: URL; the id is a hash of the bytes).
 - `addObject({ id?, name, kind, color, outlines })` or `addObject({ primitive: "box" | "ellipsoid" | "cylinder" | "rock", center, size })` → `{ id }`; `addObjects([...])` → `{ ids }` (all or nothing).
 - `updateObject(id, { name, kind, color, visible, locked, reviewed, opacity, notes })`, `setOutline(id, view, points)`, `setBounds(idOrIds, { min: {x,y,z}, max: {x,y,z} })` (any subset of axes; outlines scale), `moveObjects(ids, {x,y,z})`, `duplicateObjects(ids, offset?)`, `deleteObjects(ids)`.
-- `setScene({ title, size, metersPerUnit, notes })`, `setCamera({ position, target, verticalFovDegrees | focalLengthMm35Equivalent, rollDegrees, near, far, frame, locked })`, `setDisplay({ style, grid, labels, crosshair })`.
+- `setScene({ title, size, scale: { basis }, notes })`, `rescaleScene(factor, { basis }?)`, `setCamera({ position, target, verticalFovDegrees | focalLengthMm35Equivalent, rollDegrees, near, far, frame, locked })`, `setDisplay({ style, grid, labels, crosshair })`.
 - `setReference(view, { image, opacity, visible, min, size } | null)` for `front`/`top`/`side`; `setReference("perspective", { image, opacity, visible, offsetPercent, scale, rotationDegrees, blend } | null)`.
-- `render({ views, width, height, references, labels, grid, format: "png" | "svg" })` → `{ images }`; `sheet()` → `{ svg }` (the three views on one drawing).
+- `render({ views, width, height, pixelsPerMeter, references, labels, grid, format: "png" | "svg" })` → `{ images, pixelsPerMeter, placements }`; `sheet()` → `{ svg }` (the three views on one drawing).
 - `select(ids)`, `undo()`, `redo()`.
 
 ## Issues
@@ -165,10 +212,12 @@ Each issue is `{ severity: "error" | "warning", code, path, message, objectId?, 
 
 - `schema-*`: the document does not match the schema (`schema-additionalProperties` names the unknown key).
 - `ring-self-intersection`, `ring-repeated-point`, `ring-too-few-points`, `ring-too-many-points`, `ring-zero-area`, `ring-not-finite`: an outline is not a simple polygon.
-- `duplicate-id`, `collapsed-axis` (an object thinner than 0.001 u), `unknown-image`, `image-without-data`, `invalid-camera`, `camera-lens-mismatch`.
+- `duplicate-id`, `collapsed-axis` (an object thinner than 1 mm), `unknown-image`, `image-without-data`, `invalid-camera`, `camera-lens-mismatch`.
 - `extent-mismatch` (warning): two views disagree on a shared axis.
 - `no-common-volume` (error) and `low-coverage` (warning): the outlines do not describe one consistent solid.
 - `outside-frame` (warning): an object extends past the scene frame.
+- `scale-not-set` (warning): `scene.scale.basis` is empty, so nothing says what the metres were measured from.
+- `invalid-scale`, `render-too-large`: a bad `pixelsPerMeter` or `rescale_scene` factor, or a picture that would exceed 4096 px (the message gives the largest scale that fits).
 - `argument-*`: a tool's arguments do not match its schema (`argument-additionalProperties` names the unknown argument).
 - `unknown-scene`, `unknown-object`, `unknown-image`, `object-locked`, `revision-conflict` (a save based on an old revision).
 - `invalid-url`, `fetch-failed`, `invalid-image`, `image-too-large`: `add_image` could not use the image.

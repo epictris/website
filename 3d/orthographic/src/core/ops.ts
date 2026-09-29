@@ -1,5 +1,5 @@
-// Scene edits in the document's vocabulary ({x, y, z} objects, world-unit
-// outline points, views by name), translated to the core commands. The page
+// Scene edits in the document's vocabulary ({x, y, z} objects, outline points
+// in metres, views by name), translated to the core commands. The page
 // API (window.orthographic) and the server's tools (HTTP and MCP) both call
 // these, so an edit means the same thing wherever it comes from.
 //
@@ -55,7 +55,7 @@ export interface BoundsArgs {
 export interface SceneArgs {
   title?: string;
   size?: DocVec3;
-  metersPerUnit?: number | null;
+  scale?: { basis?: string };
   notes?: string;
 }
 
@@ -128,7 +128,7 @@ export function updateObject(d: EditorState, id: string, patch: cmd.ObjectProps)
   return { issues: cmd.updateObject(d, id, patch), touched: [id] };
 }
 
-/** Replace one view's outline: points in world units, [x, z] front, [x, y] top, [y, z] side. */
+/** Replace one view's outline: points in metres, [x, z] front, [x, y] top, [y, z] side. */
 export function setOutline(d: EditorState, id: string, view: ViewId, points: Ring): OpResult {
   if (!isView(view)) return bad("invalid-view", 'view must be "front", "top" or "side".');
   return { issues: cmd.setOutline(d, id, view, points), touched: [id] };
@@ -154,7 +154,19 @@ export function duplicateObjects(d: EditorState, ids: Ids, offset?: DocVec3): Op
 }
 
 export function setScene(d: EditorState, patch: SceneArgs): OpResult {
-  return { issues: cmd.setScene(d, { ...patch, size: vec3(patch.size) }) };
+  const { scale, ...rest } = patch;
+  return { issues: cmd.setScene(d, { ...rest, size: vec3(patch.size), scaleBasis: scale?.basis }) };
+}
+
+/**
+ * Scale the whole scene by a factor about the origin (objects, frame,
+ * reference placement, camera), optionally recording the new scale basis in
+ * the same step.
+ */
+export function rescaleScene(d: EditorState, factor: number, scale?: { basis?: string }): OpResult {
+  const issues = cmd.rescaleScene(d, factor);
+  if (issues.length || scale?.basis === undefined) return { issues };
+  return { issues: cmd.setScene(d, { scaleBasis: scale.basis }) };
 }
 
 /** Camera fields as in the document; the lens as verticalFovDegrees or focalLengthMm35Equivalent. */

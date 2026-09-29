@@ -4,31 +4,28 @@
 import { unwrap } from "solid-js/store";
 import { render } from "solid-js/web";
 import { dataUrl, image as imageOf } from "./assets";
-import { fmt } from "./core/math";
-import { sceneBounds } from "./core/model";
+import { fmt, lengthText } from "./core/math";
+import { MARGIN_PX, type Projection, pictureBox, projection, roundScale } from "./core/projection";
 import type { EditorState, ViewId } from "./core/types";
 import { VIEW_IDS, VIEWS } from "./core/views";
 import { settle } from "./meshes";
-import { fitCamera, frameOf } from "./ortho/frame";
+import { windowFrame } from "./ortho/frame";
 import { OrthoScene } from "./ortho/OrthoScene";
 import { overlayGeometry, perspectiveRenderer, renderInput } from "./perspective/PerspectiveView";
 import { state } from "./store";
 
 export interface OrthoSnapshotOptions {
-  width?: number;
-  height?: number;
   /** Draw the view's reference image when one is assigned (default true, even if hidden in the editor). */
   references?: boolean;
   labels?: boolean;
   grid?: boolean;
 }
 
-/** One orthographic view, fitted to the scene, as standalone SVG markup. */
-export function orthoSvg(view: ViewId, opts: OrthoSnapshotOptions = {}): string {
-  const W = opts.width ?? 1200;
-  const H = opts.height ?? 900;
+/** One orthographic view's picture at the projection's shared scale, as standalone SVG markup. */
+export function orthoSvg(view: ViewId, p: Projection, opts: OrthoSnapshotOptions = {}): string {
+  const w = p.views[view];
   const s = unwrap(state) as EditorState;
-  const frame = frameOf(fitCamera(view, sceneBounds(s), W, H), W, H);
+  const frame = windowFrame(w, p.pixelsPerMeter);
   const holder = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   // A reference is drawn whenever one is assigned (even if hidden in the editor), unless references is false.
   const r = s.references[view];
@@ -46,6 +43,7 @@ export function orthoSvg(view: ViewId, opts: OrthoSnapshotOptions = {}): string 
         selected={() => false}
         showGrid={opts.grid !== false}
         showLabels={opts.labels !== false}
+        showScaleBar={opts.labels !== false}
         showBounds={false}
         exportMode
         imageHref={dataUrl}
@@ -55,7 +53,7 @@ export function orthoSvg(view: ViewId, opts: OrthoSnapshotOptions = {}): string 
   );
   const body = holder.innerHTML;
   dispose();
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${body}</svg>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${w.width}" height="${w.height}" viewBox="0 0 ${w.width} ${w.height}">${body}</svg>`;
 }
 
 async function svgToPng(svg: string, W: number, H: number): Promise<string> {
@@ -74,8 +72,8 @@ async function svgToPng(svg: string, W: number, H: number): Promise<string> {
   }
 }
 
-export async function orthoPng(view: ViewId, opts: OrthoSnapshotOptions = {}): Promise<string> {
-  return svgToPng(orthoSvg(view, opts), opts.width ?? 1200, opts.height ?? 900);
+export async function orthoPng(view: ViewId, p: Projection, opts: OrthoSnapshotOptions = {}): Promise<string> {
+  return svgToPng(orthoSvg(view, p, opts), p.views[view].width, p.views[view].height);
 }
 
 /** The perspective camera frame as a canvas, with the reference overlay unless references is false. */
@@ -130,37 +128,67 @@ export async function perspectivePng(opts: { width?: number; references?: boolea
 const esc = (x: string) =>
   x.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 
-/** All three views on one sheet, with the scene document in the SVG metadata. */
+/**
+ * All three views on one sheet at one scale, in third-angle projection: the
+ * plan above the front elevation, the right side to its right, so shared axes
+ * line up across views. The scene document is in the SVG metadata.
+ */
 export function projectionSheet(metadata: unknown): string {
-  const sheetW = 2200;
-  const sheetH = 1760;
-  const layouts: Record<ViewId, { x: number; y: number; w: number; h: number }> = {
-    front: { x: 30, y: 135, w: 2140, h: 710 },
-    top: { x: 30, y: 865, w: 1060, h: 795 },
-    side: { x: 1110, y: 865, w: 1060, h: 795 },
+  const s = unwrap(state) as EditorState;
+  const pad = 30;
+  const gap = 24;
+  const head = 40;
+  const top = 128;
+  const foot = 56;
+  const b = pictureBox(s);
+  const ext = [0, 1, 2].map((a) => b.max[a] - b.min[a]);
+  // The largest round scale that keeps the drawing within about 2400 x 1800 px.
+  const ppm = roundScale(
+    Math.min(
+      (2400 - 2 * pad - gap - 4 * MARGIN_PX) / (ext[0] + ext[1]),
+      (1800 - top - 2 * head - gap - foot - 4 * MARGIN_PX) / (ext[1] + ext[2]),
+    ),
+  );
+  const p = projection(s, { pixelsPerMeter: ppm });
+  if (typeof p === "string") throw new Error(p);
+  const { front, side } = p.views;
+  const col = [pad, pad + front.width + gap];
+  const row = [top, top + head + p.views.top.height + gap];
+  const cells: Record<ViewId, [number, number]> = {
+    top: [col[0], row[0]],
+    front: [col[0], row[1]],
+    side: [col[1], row[1]],
   };
-  const m = state.scene.metersPerUnit;
+  const sheetW = Math.max(col[1] + side.width + pad, 1000);
+  const sheetH = row[1] + head + front.height + foot;
+  const basis = s.scene.scaleBasis.trim();
   const out = [
     `<svg xmlns="http://www.w3.org/2000/svg" width="${sheetW}" height="${sheetH}" viewBox="0 0 ${sheetW} ${sheetH}" font-family="Arial, sans-serif">`,
     `<metadata>${esc(JSON.stringify(metadata))}</metadata><rect width="100%" height="100%" fill="#091321"/>`,
-    `<text x="34" y="45" fill="#deedf7" font-size="28" font-weight="700">${esc(state.scene.title)} · orthographic views</text>`,
-    `<text x="35" y="75" fill="#8eaac1" font-size="15">Linked X / Y / Z layout · scene units (u) · ${m ? `1 u = ${fmt(m, 6)} m` : "no real-world scale"}</text>`,
+    `<text x="34" y="45" fill="#deedf7" font-size="28" font-weight="700">${esc(s.scene.title)} · orthographic views</text>`,
+    `<text x="35" y="75" fill="#8eaac1" font-size="15">Third-angle projection, every view at one scale: ${fmt(ppm, 6)} px = 1 m (1 px = ${lengthText(1 / ppm)}) · lengths in metres</text>`,
+    `<text x="35" y="100" fill="${basis ? "#8eaac1" : "#e2c16d"}" font-size="15">Scale basis: ${esc(basis ? (basis.length > 180 ? `${basis.slice(0, 179)}…` : basis) : "not set")}</text>`,
   ];
   for (const view of VIEW_IDS) {
-    const l = layouts[view];
-    const W = l.w - 30;
-    const H = l.h - 75;
-    const inner = orthoSvg(view, { width: W, height: H, references: false }).replace(/^<svg[^>]*>|<\/svg>$/g, "");
+    const w = p.views[view];
+    const [x, y] = cells[view];
+    const inner = orthoSvg(view, p, { references: false }).replace(/^<svg[^>]*>|<\/svg>$/g, "");
     out.push(
-      `<g transform="translate(${l.x},${l.y})"><rect width="${l.w}" height="${l.h}" rx="8" fill="#0b1625" stroke="#30475f"/>`,
-      `<text x="20" y="31" font-size="19" font-weight="700" fill="#dfedf7">${VIEWS[view].title}</text>`,
-      `<text x="${l.w - 20}" y="30" font-size="12" fill="#8eaac1" text-anchor="end">${esc(VIEWS[view].description)}</text>`,
-      `<svg x="15" y="48" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${inner}</svg></g>`,
+      `<g transform="translate(${x},${y})"><clipPath id="panel-${view}"><rect width="${w.width}" height="${head + w.height}" rx="8"/></clipPath>`,
+      `<g clip-path="url(#panel-${view})"><rect width="${w.width}" height="${head + w.height}" fill="#0b1625"/>`,
+      `<svg y="${head}" width="${w.width}" height="${w.height}" viewBox="0 0 ${w.width} ${w.height}">${inner}</svg></g>`,
+      `<rect width="${w.width}" height="${head + w.height}" rx="8" fill="none" stroke="#30475f"/>`,
+      `<text x="16" y="26" font-size="17" font-weight="700" fill="#dfedf7">${VIEWS[view].title}</text>`,
+      // A narrow view keeps its title only.
+      w.width >= 460
+        ? `<text x="${w.width - 16}" y="26" font-size="12" fill="#8eaac1" text-anchor="end">${esc(VIEWS[view].description)}</text>`
+        : "",
+      `<line x1="0" y1="${head}" x2="${w.width}" y2="${head}" stroke="#30475f"/></g>`,
     );
   }
   out.push(
-    `<text x="35" y="1712" fill="#abc4d9" font-size="14">Coordinates: X right, Y depth away from the front camera, Z up. Front = XZ; top = XY; right side = YZ. The scene document is in this file's metadata.</text>`,
-    `<text x="2160" y="1730" fill="#839eb5" font-size="12" text-anchor="end">${new Date().toISOString().slice(0, 10)}</text></svg>`,
+    `<text x="35" y="${sheetH - 30}" fill="#abc4d9" font-size="14">Coordinates: X right, Y depth away from the front camera, Z up. Front = XZ; top = XY; right side = YZ. The scene document is in this file's metadata.</text>`,
+    `<text x="${sheetW - 30}" y="${sheetH - 12}" fill="#839eb5" font-size="12" text-anchor="end">${new Date().toISOString().slice(0, 10)}</text></svg>`,
   );
   return out.join("");
 }

@@ -51,7 +51,7 @@ export function Dialogs() {
   const create = () => {
     const f = addForm();
     if (!f.center.every(Number.isFinite) || !f.size.every((v) => Number.isFinite(v) && v >= MIN_SIZE)) {
-      toast("Use finite coordinates and dimensions of at least 0.001 u.", true);
+      toast("Use finite coordinates and dimensions of at least 0.001 m.", true);
       return;
     }
     const id = createObject({
@@ -121,7 +121,7 @@ export function Dialogs() {
               <h3>Reference images</h3>
               <p>
                 Each view can have its own reference image: use the image button in its header or drop an image onto it.
-                Front, top and side place the image on the view plane in scene units (Scene / scale); perspective
+                Front, top and side place the image on the view plane in metres (Scene / reference images); perspective
                 overlays it on the camera frame (Camera / image).
               </p>
             </div>
@@ -200,11 +200,11 @@ export function Dialogs() {
               onInput={(e) => setAddForm((f) => ({ ...f, color: e.currentTarget.value }))}
             />
           </label>
-          <h3>Bounding-box centre · scene units</h3>
+          <h3>Bounding-box centre · m</h3>
           <div class="triplet">
             <For each={[0, 1, 2]}>{(a) => vecInput("center", a, AXES[a].toUpperCase())}</For>
           </div>
-          <h3>Dimensions · scene units</h3>
+          <h3>Dimensions · m</h3>
           <div class="triplet">
             <For each={[0, 1, 2]}>{(a) => vecInput("size", a, ["Width X", "Depth Y", "Height Z"][a])}</For>
           </div>

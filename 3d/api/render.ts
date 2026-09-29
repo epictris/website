@@ -14,6 +14,7 @@ export interface RenderOptions {
   views?: string[];
   width?: number;
   height?: number;
+  pixelsPerMeter?: number;
   references?: boolean;
   labels?: boolean;
   grid?: boolean;
@@ -23,6 +24,7 @@ interface Normalised {
   views: RenderView[];
   width?: number;
   height?: number;
+  pixelsPerMeter?: number;
   references?: boolean;
   labels?: boolean;
   grid?: boolean;
@@ -33,6 +35,16 @@ export interface RenderOutcome {
   issues: Issue[];
   /** PNG data: URLs by view. */
   images?: Record<string, string>;
+  /** The orthographic views' shared scale, and where each of their pictures lies in metres. */
+  pixelsPerMeter?: number;
+  placements?: Record<string, Placement>;
+}
+
+export interface Placement {
+  min: Record<string, number>;
+  size: Record<string, number>;
+  width: number;
+  height: number;
 }
 
 type PageApi = Record<string, (...a: unknown[]) => Promise<RenderOutcome & { svg?: string }>>;
@@ -49,6 +61,8 @@ async function renderInEditor(job: { document: unknown; options: Normalised }): 
     ok: rendered.ok,
     issues: [...loaded.issues, ...rendered.issues, ...checked.issues.filter((i) => !known.has(`${i.code} ${i.path}`))],
     images: rendered.images,
+    pixelsPerMeter: rendered.pixelsPerMeter,
+    placements: rendered.placements,
   };
 }
 
@@ -65,10 +79,14 @@ export function renderOptions(req: RenderOptions): Normalised {
     throw new BadRequest(`views must be a list of ${VIEWS.join(", ")}.`);
   const clamp = (v: unknown, lo: number, hi: number) =>
     typeof v === "number" && Number.isFinite(v) ? Math.round(Math.min(hi, Math.max(lo, v))) : undefined;
+  const ppm = req.pixelsPerMeter;
+  if (ppm !== undefined && !(typeof ppm === "number" && Number.isFinite(ppm) && ppm > 0 && ppm <= 1e6))
+    throw new BadRequest("pixelsPerMeter must be a positive number (at most 1,000,000).");
   return {
     views: [...new Set(views)] as RenderView[],
     width: clamp(req.width, 128, 4096),
     height: clamp(req.height, 128, 4096),
+    pixelsPerMeter: ppm,
     references: req.references,
     labels: req.labels,
     grid: req.grid,

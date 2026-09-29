@@ -69,7 +69,8 @@ export interface Display {
 }
 
 export interface EditorState {
-  scene: { title: string; size: Vec3; metersPerUnit: number | null; notes: string };
+  /** Every length is in metres; scaleBasis records how that size was established ("" when not yet). */
+  scene: { title: string; size: Vec3; scaleBasis: string; notes: string };
   objects: SceneObject[];
   camera: Camera;
   references: {
@@ -183,7 +184,7 @@ export interface SceneDocument {
   $schema?: string;
   format: "orthographic-scene";
   version: 1;
-  scene: { title?: string; size: DocVec3; metersPerUnit?: number | null; notes?: string };
+  scene: { title?: string; size: DocVec3; scale?: { basis?: string }; notes?: string };
   objects: DocObject[];
   camera?: DocCamera;
   references?: {

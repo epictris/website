@@ -4,7 +4,7 @@
 // UI and the agent API share one set of rules.
 
 import { cameraProblem, focalToFov } from "./camera";
-import { clone, finite, MAX_VALUE, MIN_SIZE } from "./math";
+import { clone, finite, MAX_VALUE, MIN_FRAME, MIN_SIZE } from "./math";
 import { boundsOf, DEFAULT_COLOR, initialState, MAX_OBJECTS, objectById, RESOLUTIONS, uniqueId } from "./model";
 import { assignRing, type Primitive, presetOutlines, RING_PROBLEMS, ringProblem, toNormalized } from "./ring";
 import type {
@@ -121,7 +121,7 @@ export function objectFromWorld(
     size[axis] = hi - lo;
     if (size[axis] < MIN_SIZE) {
       issues.push(
-        issue("collapsed-axis", `${id} has no extent along ${AXES[axis]} (at least ${MIN_SIZE} u is needed).`, {
+        issue("collapsed-axis", `${id} has no extent along ${AXES[axis]} (at least ${MIN_SIZE} m is needed).`, {
           objectId: id,
           path: `${pathPrefix}/outlines`,
         }),
@@ -190,7 +190,7 @@ export function addObject(s: EditorState, spec: NewObject): { id?: string; issue
     const size = spec.size ?? [4, 4, 4];
     const center = spec.center ?? (s.scene.size.map((v) => v / 2) as Vec3);
     if (!size.every((v) => finite(v) && v >= MIN_SIZE) || !center.every((v) => finite(v)))
-      return { issues: [issue("invalid-box", "center must be finite and every size at least 0.001 u.")] };
+      return { issues: [issue("invalid-box", "center must be finite and every size at least 0.001 m.")] };
     const min = center.map((c, i) => c - size[i] / 2);
     const preset = presetOutlines(spec.primitive ?? "box");
     outlines = {} as Record<ViewId, Ring>;
@@ -235,7 +235,7 @@ export function setOutline(s: EditorState, id: string, view: ViewId, points: Rin
     )
   )
     return [
-      issue("collapsed-axis", `That ${view} outline collapses an axis to less than ${MIN_SIZE} u.`, {
+      issue("collapsed-axis", `That ${view} outline collapses an axis to less than ${MIN_SIZE} m.`, {
         objectId: id,
         view,
       }),
@@ -273,7 +273,7 @@ function withinLimits(items: SceneObject[]): Issue[] {
   );
   return ok
     ? []
-    : [issue("out-of-range", "Objects must stay within ±1,000,000 u, with every dimension at least 0.001 u.")];
+    : [issue("out-of-range", "Objects must stay within ±1,000,000 m, with every dimension at least 0.001 m.")];
 }
 
 /** Translate objects by a world-unit offset. */
@@ -295,7 +295,7 @@ export function setGroupAxis(s: EditorState, ids: string[], axis: number, lo: nu
   const { items, issues } = unlocked(s, ids);
   if (issues.length) return issues;
   if (!finite(lo) || !finite(hi) || hi - lo < MIN_SIZE)
-    return [issue("invalid-box", "The new extent must be finite and at least 0.001 u.")];
+    return [issue("invalid-box", "The new extent must be finite and at least 0.001 m.")];
   const b = boundsOf(items)!;
   const factor = (hi - lo) / (b.max[axis] - b.min[axis]);
   for (const e of items) {
@@ -357,7 +357,7 @@ export function duplicateObjects(
 export interface ScenePatch {
   title?: string;
   size?: Vec3;
-  metersPerUnit?: number | null;
+  scaleBasis?: string;
   notes?: string;
 }
 
@@ -366,17 +366,56 @@ export function setScene(s: EditorState, p: ScenePatch): Issue[] {
     return [issue("invalid-scene", "title must be text of at most 100 characters.")];
   if (
     p.size !== undefined &&
-    !(Array.isArray(p.size) && p.size.length === 3 && p.size.every((v) => finite(v) && v >= 0.1))
+    !(Array.isArray(p.size) && p.size.length === 3 && p.size.every((v) => finite(v) && v >= MIN_FRAME))
   )
-    return [issue("invalid-scene", "size needs three finite values of at least 0.1 u.")];
-  if (p.metersPerUnit !== undefined && p.metersPerUnit !== null && !(finite(p.metersPerUnit) && p.metersPerUnit > 0))
-    return [issue("invalid-scene", "metersPerUnit must be positive, or null for an unknown scale.")];
+    return [issue("invalid-scene", `size needs three finite values of at least ${MIN_FRAME} m.`)];
+  if (p.scaleBasis !== undefined && (typeof p.scaleBasis !== "string" || p.scaleBasis.length > 1000))
+    return [issue("invalid-scene", "scale basis must be text of at most 1000 characters.")];
   if (p.notes !== undefined && (typeof p.notes !== "string" || p.notes.length > 4000))
     return [issue("invalid-scene", "notes must be text of at most 4000 characters.")];
   if (p.title !== undefined) s.scene.title = p.title;
   if (p.size !== undefined) s.scene.size = [...p.size];
-  if (p.metersPerUnit !== undefined) s.scene.metersPerUnit = p.metersPerUnit;
+  if (p.scaleBasis !== undefined) s.scene.scaleBasis = p.scaleBasis;
   if (p.notes !== undefined) s.scene.notes = p.notes;
+  return [];
+}
+
+/**
+ * Scale the whole scene about the origin: the frame, every object (locked ones
+ * too: this corrects the scene's size, not an object's shape), the placement
+ * of the orthographic references and the camera. For when the scale estimate
+ * changes: everything keeps its place relative to everything else.
+ */
+export function rescaleScene(s: EditorState, factor: number): Issue[] {
+  if (!(finite(factor) && factor > 0)) return [issue("invalid-scale", "factor must be a positive number.")];
+  const scale = (v: number[]) => v.map((x) => x * factor);
+  s.scene.size = scale(s.scene.size) as Vec3;
+  for (const e of s.objects) {
+    e.min = scale(e.min) as Vec3;
+    e.size = scale(e.size) as Vec3;
+  }
+  for (const view of VIEW_IDS) {
+    const r = s.references[view];
+    if (!r) continue;
+    r.min = scale(r.min) as Point;
+    r.size = scale(r.size) as Point;
+  }
+  const c = s.camera;
+  c.position = scale(c.position) as Vec3;
+  c.target = scale(c.target) as Vec3;
+  c.near = Math.max(0.0001, c.near * factor);
+  c.far *= factor;
+  const refs = VIEW_IDS.flatMap((v) => s.references[v] ?? []);
+  const fits =
+    s.scene.size.every((v) => v >= MIN_FRAME && v <= MAX_VALUE) &&
+    refs.every((r) => r.size.every((v) => v >= MIN_SIZE) && [...r.min, ...r.size].every((v) => finite(v)));
+  if (!fits || withinLimits(s.objects).length || cameraProblem(c))
+    return [
+      issue(
+        "out-of-range",
+        `Scaling by ${factor} takes the scene out of range: the frame must stay ${MIN_FRAME} m to 1,000,000 m, objects and references at least ${MIN_SIZE} m and within ±1,000,000 m.`,
+      ),
+    ];
   return [];
 }
 
@@ -555,7 +594,7 @@ export function setReference(
   }
   if (p.size !== undefined) {
     if (!(p.size.length === 2 && p.size.every((v) => finite(v) && v >= MIN_SIZE)))
-      return [issue("invalid-reference", `size needs ${ua} and ${va} of at least ${MIN_SIZE} u.`)];
+      return [issue("invalid-reference", `size needs ${ua} and ${va} of at least ${MIN_SIZE} m.`)];
     next.size = [...p.size];
   }
   if (p.opacity !== undefined) next.opacity = p.opacity;

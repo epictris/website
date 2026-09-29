@@ -323,7 +323,7 @@ export function OrthoView(props: { view: ViewId }) {
     const px = local(ev);
     const point = toWorld(frame(), ...px);
     const delta = ev.deltaY * (ev.deltaMode === 1 ? 18 : 1);
-    const scale = Math.max(0.001, Math.min(1200, ui.orthoCameras[view].scale * Math.exp(-delta * 0.0015)));
+    const scale = Math.max(1e-4, Math.min(1e5, ui.orthoCameras[view].scale * Math.exp(-delta * 0.0015)));
     const { W, H } = size();
     setUi("orthoCameras", view, {
       scale,
@@ -466,8 +466,8 @@ function selectionBox(view: ViewId, frame: Frame) {
     ...s,
     cx: (s.left + s.right) / 2,
     cy: (s.top + s.bottom) / 2,
-    w: `${fmt(bb.max[a] - bb.min[a], 3)} u`,
-    h: `${fmt(bb.max[d] - bb.min[d], 3)} u`,
+    w: `${fmt(bb.max[a] - bb.min[a], 3)} m`,
+    h: `${fmt(bb.max[d] - bb.min[d], 3)} m`,
     locked: items.some((e) => e.locked),
   };
 }

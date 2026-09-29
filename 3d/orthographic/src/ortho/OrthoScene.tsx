@@ -4,7 +4,7 @@
 
 import { createMemo, For, type JSX, Show } from "solid-js";
 import { image, type LoadedImage } from "../assets";
-import { fmt, niceStep } from "../core/math";
+import { fmt, lengthText, niceStep } from "../core/math";
 import type { EditorState, SceneObject, ViewId } from "../core/types";
 import { VIEWS } from "../core/views";
 import { type Frame, layoutLabels, objectScreenBox, outlinePath, type Rect, toScreen } from "./frame";
@@ -18,6 +18,8 @@ export interface OrthoSceneProps {
   showGrid: boolean;
   showLabels: boolean;
   showBounds: boolean;
+  /** Draw the scale bar (default true). */
+  showScaleBar?: boolean;
   /** Export drawings leave out hit targets and selection emphasis. */
   exportMode?: boolean;
   /** How the reference image is addressed; exports inline it as a data URL. */
@@ -89,20 +91,20 @@ function Grid(props: { frame: Frame }) {
   );
 }
 
-function ScaleBar(props: { frame: Frame; metersPerUnit: number | null }) {
+function ScaleBar(props: { frame: Frame }) {
   const bar = createMemo(() => {
     const f = props.frame;
     let length = niceStep(75 / f.s);
     if (length * f.s > 130) length /= 2;
-    return { length, pixels: length * f.s, x: 14, y: f.H - 30 };
+    return { length, pixels: length * f.s, x: 14, y: f.H - 16 };
   });
   return (
     <g pointer-events="none" font-family="monospace" font-size="9">
       <rect
         x="7"
         y={bar().y - 17}
-        width={Math.max(bar().pixels + 28, 125)}
-        height="40"
+        width={Math.max(bar().pixels + 28, 90)}
+        height="26"
         rx="4"
         fill="#0b1625"
         fill-opacity=".94"
@@ -117,15 +119,8 @@ function ScaleBar(props: { frame: Frame; metersPerUnit: number | null }) {
         0
       </text>
       <text x={bar().x + bar().pixels} y={bar().y - 7} text-anchor="end" fill="#c0d5e7">
-        {fmt(bar().length, 5)} u
+        {lengthText(bar().length)}
       </text>
-      <Show when={props.metersPerUnit}>
-        {(m) => (
-          <text x={bar().x} y={bar().y + 16} fill="#7999b2">
-            {fmt(bar().length * m(), 4)} m
-          </text>
-        )}
-      </Show>
     </g>
   );
 }
@@ -296,7 +291,9 @@ export function OrthoScene(props: OrthoSceneProps) {
         )}
       </For>
       {props.children}
-      <ScaleBar frame={props.frame} metersPerUnit={props.state.scene.metersPerUnit} />
+      <Show when={props.showScaleBar !== false}>
+        <ScaleBar frame={props.frame} />
+      </Show>
     </>
   );
 }

@@ -2,7 +2,10 @@
 
 import type { Vec3 } from "./types";
 
+// Every length is in metres.
 export const MIN_SIZE = 0.001;
+/** The smallest scene frame: a centimetre on each axis. */
+export const MIN_FRAME = 0.01;
 export const MAX_VALUE = 1e6;
 
 export const vec = {
@@ -51,3 +54,12 @@ export const finite = (v: unknown, max = MAX_VALUE): v is number =>
 /** Format a number with at most d decimals and no grouping. */
 export const fmt = (n: number, d = 3) =>
   Number(n.toFixed(d)).toLocaleString("en-US", { maximumFractionDigits: d, useGrouping: false });
+
+/** A length in metres as a person reads it: in km, m, cm or mm, whichever keeps it short. */
+export function lengthText(m: number): string {
+  const a = Math.abs(m);
+  if (a >= 1000) return `${fmt(m / 1000, 3)} km`;
+  if (a >= 1 || a === 0) return `${fmt(m, 3)} m`;
+  if (a >= 0.01) return `${fmt(m * 100, 3)} cm`;
+  return `${fmt(m * 1000, 3)} mm`;
+}

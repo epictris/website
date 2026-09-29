@@ -36,10 +36,12 @@ const box = (x0: number, x1: number, y0: number, y1: number, z0: number, z1: num
   ],
 });
 const PNG_1PX = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+/** Width and height from a PNG's IHDR chunk. */
+const pngSize = (b: Buffer) => [b.readUInt32BE(16), b.readUInt32BE(20)];
 const scene = {
   format: "orthographic-scene",
   version: 1,
-  scene: { size: { x: 20, y: 20, z: 10 } },
+  scene: { size: { x: 20, y: 20, z: 10 }, scale: { basis: "the slab is a 20 m square" } },
   objects: [
     { id: "block", color: "#efc875", outlines: box(2, 8, 2, 8, 0, 6) },
     { id: "slab", outlines: box(0, 20, 0, 20, 0, 1) },
@@ -141,6 +143,44 @@ describe("HTTP", () => {
     });
     expect(png.headers.get("content-type")).toBe("image/png");
     expect(new Uint8Array(await png.arrayBuffer()).subarray(1, 4)).toEqual(new TextEncoder().encode("PNG"));
+  }, 30000);
+
+  test("orthographic renders share one scale and say where they lie", async () => {
+    const r = await (
+      await fetch(`${BASE}/api/render`, {
+        method: "POST",
+        body: JSON.stringify({ document: scene, views: ["front", "top", "side"], pixelsPerMeter: 20 }),
+      })
+    ).json();
+    expect(r.issues).toEqual([]);
+    expect(r.pixelsPerMeter).toBe(20);
+    // The 20 x 20 x 10 m frame plus a 48 px (2.4 m) margin on every side.
+    expect(r.placements).toEqual({
+      front: { min: { x: -2.4, z: -2.4 }, size: { x: 24.8, z: 14.8 }, width: 496, height: 296 },
+      top: { min: { x: -2.4, y: -2.4 }, size: { x: 24.8, y: 24.8 }, width: 496, height: 496 },
+      side: { min: { y: -2.4, z: -2.4 }, size: { y: 24.8, z: 14.8 }, width: 496, height: 296 },
+    });
+    for (const v of ["front", "top", "side"])
+      expect(pngSize(Buffer.from(r.images[v].split(",")[1], "base64"))).toEqual([
+        r.placements[v].width,
+        r.placements[v].height,
+      ]);
+    const png = await fetch(`${BASE}/api/render/top.png?pixelsPerMeter=20`, {
+      method: "POST",
+      body: JSON.stringify(scene),
+    });
+    expect(png.headers.get("x-pixels-per-meter")).toBe("20");
+    expect(JSON.parse(png.headers.get("x-placement")!)).toEqual({
+      min: { x: -2.4, y: -2.4 },
+      size: { x: 24.8, y: 24.8 },
+    });
+    const huge = await (
+      await fetch(`${BASE}/api/render`, {
+        method: "POST",
+        body: JSON.stringify({ document: scene, views: ["front"], pixelsPerMeter: 1000 }),
+      })
+    ).json();
+    expect(huge.issues.map((i: { code: string }) => i.code)).toEqual(["render-too-large"]);
   }, 30000);
 });
 
@@ -374,6 +414,75 @@ describe("HTTP tools and scenes", () => {
     expect(await magenta(await shot(false))).toBe(0);
   }, 30000);
 
+  test("a render placed back as its view's reference lines up with the drawing", async () => {
+    const { sceneId } = await tool<{ sceneId: string }>("create_scene", { document: scene });
+    const clean = { sceneId, views: ["top"], pixelsPerMeter: 20, labels: false, grid: false };
+    type Rendered = { images: { top: string }; placements: { top: { min: object; size: object } } };
+    const drawing = await tool<Rendered>("render", { ...clean, references: false });
+    const img = await tool<{ id: string }>("add_image", { sceneId, data: drawing.images.top, name: "top.png" });
+    const { min, size } = drawing.placements.top;
+    // Hidden objects leave only the picture of them, so the comparison is picture against drawing.
+    for (const id of ["block", "slab"]) await tool("update_object", { sceneId, id, visible: false });
+    // Pixels that differ clearly: the frame and scale bar, drawn over their own picture, change by at most ~20.
+    const clearDifferences = (a: string, b: string) =>
+      page.evaluate(
+        async (urls) => {
+          const pixels = async (url: string) => {
+            const img = new Image();
+            img.src = url;
+            await img.decode();
+            const c = document.createElement("canvas");
+            c.width = img.width;
+            c.height = img.height;
+            const ctx = c.getContext("2d")!;
+            ctx.drawImage(img, 0, 0);
+            return ctx.getImageData(0, 0, c.width, c.height).data;
+          };
+          const [p, q] = await Promise.all(urls.map(pixels));
+          if (p.length !== q.length) return -1;
+          let n = 0;
+          for (let i = 0; i < p.length; i += 4)
+            if (Math.max(...[0, 1, 2].map((k) => Math.abs(p[i + k] - q[i + k]))) > 40) n++;
+          return n;
+        },
+        [a, b],
+      );
+    const over = async (placement: { min: object; size: object }) => {
+      expect((await tool("set_reference", { sceneId, view: "top", image: img.id, opacity: 1, ...placement })).ok).toBe(
+        true,
+      );
+      return (await tool<Rendered>("render", { ...clean, references: true })).images.top;
+    };
+    expect(await clearDifferences(drawing.images.top, await over({ min, size }))).toBe(0);
+    // The control: one pixel (5 cm) off shows up.
+    const shifted = { ...(min as { x: number; y: number }), x: (min as { x: number }).x + 0.05 };
+    expect(await clearDifferences(drawing.images.top, await over({ min: shifted, size }))).toBeGreaterThan(1000);
+  }, 30000);
+
+  test("rescale_scene corrects the scale of everything built", async () => {
+    const { sceneId } = await tool<{ sceneId: string }>("create_scene", { document: scene });
+    const out = await tool<{ revision: number }>("rescale_scene", {
+      sceneId,
+      factor: 0.5,
+      scale: { basis: "the slab is a 10 m square" },
+    });
+    expect(out.ok).toBe(true);
+    const { document } = await tool<{
+      document: {
+        scene: { size: object; scale: object };
+        objects: { derived: { size: object } }[];
+        references: { front: object };
+      };
+    }>("get_scene", { sceneId });
+    expect(document.scene).toMatchObject({
+      size: { x: 10, y: 10, z: 5 },
+      scale: { basis: "the slab is a 10 m square" },
+    });
+    expect(document.objects[0].derived.size).toEqual({ x: 3, y: 3, z: 3 });
+    expect(document.references.front).toMatchObject({ min: { x: 0, z: 0 }, size: { x: 10, z: 5 } });
+    expect((await tool("rescale_scene", { sceneId, factor: 0 })).issues[0].code).toBe("argument-exclusiveMinimum");
+  });
+
   test("a save based on an old revision is refused", async () => {
     const { sceneId, revision } = await tool<{ sceneId: string; revision: number }>("create_scene", {
       document: scene,
@@ -420,6 +529,24 @@ describe("live scenes", () => {
           .name;
       }
       expect(name).toBe("Edited in the editor");
+    } finally {
+      await tab.close();
+    }
+  }, 30000);
+
+  test("an agent edit keeps the solids it did not change", async () => {
+    const { sceneId } = await tool<{ sceneId: string }>("create_scene", { document: scene });
+    const tab = await browser.newPage();
+    const shown = () => tab.evaluate(() => /· (\d+) objects ·/.exec(document.body.innerText)?.[1]);
+    try {
+      await tab.goto(`${BASE}/?scene=${sceneId}`);
+      await tab.waitForFunction(() => /· 2 objects ·/.test(document.body.innerText), { timeout: 10000 });
+      await tool("set_scene", { sceneId, title: "Retitled" });
+      await tab.waitForFunction('window.orthographic.getDocument().scene.title === "Retitled"', { timeout: 5000 });
+      // The reload used to drop every mesh and rebuild none of them (the outlines had not changed).
+      expect(await shown()).toBe("2");
+      await Bun.sleep(500);
+      expect(await shown()).toBe("2");
     } finally {
       await tab.close();
     }

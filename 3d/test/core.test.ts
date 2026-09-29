@@ -1,10 +1,19 @@
 import { describe, expect, test } from "bun:test";
 import { focalToFov, fovToFocal } from "../orthographic/src/core/camera";
-import { addObject, moveObjects, setCamera, setOutline, setReference } from "../orthographic/src/core/commands";
+import {
+  addObject,
+  moveObjects,
+  rescaleScene,
+  setCamera,
+  setOutline,
+  setReference,
+} from "../orthographic/src/core/commands";
 import { fromDocument, geometryIssues, toDocument, validateDocument } from "../orthographic/src/core/document";
 import { base64ToBytes, imageSize } from "../orthographic/src/core/images";
+import { clone, lengthText } from "../orthographic/src/core/math";
 import { buildMesh } from "../orthographic/src/core/mesher";
 import { initialState } from "../orthographic/src/core/model";
+import { type Projection, projection, roundScale } from "../orthographic/src/core/projection";
 import { presetOutlines, worldRing } from "../orthographic/src/core/ring";
 import type { ImageAsset } from "../orthographic/src/core/types";
 
@@ -33,7 +42,7 @@ const box = (x0: number, x1: number, y0: number, y1: number, z0: number, z1: num
 const doc = (objects: unknown[], extra: Record<string, any> = {}): Record<string, any> => ({
   format: "orthographic-scene",
   version: 1,
-  scene: { size: { x: 10, y: 10, z: 10 } },
+  scene: { size: { x: 10, y: 10, z: 10 }, scale: { basis: "a 1 m test cube" } },
   objects,
   ...extra,
 });
@@ -55,7 +64,7 @@ describe("document", () => {
     expect(out.objects[0].outlines).toEqual(box(1, 3, 2, 5, 0, 4) as never);
     const again = fromDocument(JSON.parse(JSON.stringify(out)));
     expect(again.issues).toEqual([]);
-    // Exported values are rounded to 1e-9 u, so the document (not the float state) is what round-trips exactly.
+    // Exported values are rounded to 1e-9 m, so the document (not the float state) is what round-trips exactly.
     const plain = { derived: false };
     expect(toDocument(again.state!, new Map(), plain)).toEqual(toDocument(r.state!, new Map(), plain));
     expect(again.state!.objects).toEqual(r.state!.objects);
@@ -237,6 +246,64 @@ describe("commands", () => {
   });
 });
 
+describe("scale", () => {
+  const cube = { id: "a", outlines: box(1, 3, 2, 5, 0, 4) };
+  const unscaled = { scene: { size: { x: 10, y: 10, z: 10 } } };
+
+  test("the scale basis round-trips; objects without one warn", () => {
+    const r = fromDocument(doc([cube]));
+    expect(r.state!.scene.scaleBasis).toBe("a 1 m test cube");
+    expect(toDocument(r.state!, new Map()).scene.scale).toEqual({ basis: "a 1 m test cube" });
+    expect(fromDocument(doc([cube], unscaled)).issues.map((i) => `${i.severity} ${i.code} ${i.path}`)).toEqual([
+      "warning scale-not-set /scene/scale",
+    ]);
+    expect(fromDocument(doc([], unscaled)).issues).toEqual([]);
+    // Lengths are metres; there is no unit to convert.
+    const legacy = fromDocument(doc([], { scene: { size: { x: 10, y: 10, z: 10 }, metersPerUnit: 2 } }));
+    expect(legacy.issues.map((i) => i.code)).toEqual(["schema-additionalProperties"]);
+  });
+
+  test("rescaleScene multiplies every length, locked objects included", () => {
+    const s = initialState();
+    addObject(s, { ...cube, outlines: cube.outlines as never, locked: true });
+    setReference(s, "top", { image: "p", min: [1, 2], size: [4, 2] }, () => ({ width: 200, height: 100 }));
+    const camera = clone(s.camera);
+    const front = worldRing(s.objects[0], "front");
+    expect(rescaleScene(s, 0.5)).toEqual([]);
+    expect(s.scene.size).toEqual([20, 15, 10]);
+    expect(s.objects[0]).toMatchObject({ min: [0.5, 1, 0], size: [1, 1.5, 2] });
+    expect(worldRing(s.objects[0], "front")).toEqual(front.map(([a, b]) => [a / 2, b / 2]));
+    expect(s.references.top).toMatchObject({ min: [0.5, 1], size: [2, 1] });
+    expect(s.camera.position).toEqual(camera.position.map((v) => v / 2) as never);
+    expect(s.camera.target).toEqual(camera.target.map((v) => v / 2) as never);
+    expect(s.camera.far).toBe(camera.far / 2);
+    expect(rescaleScene(s, 0)[0].code).toBe("invalid-scale");
+    expect(rescaleScene(clone(s), 1e-9)[0].code).toBe("out-of-range");
+  });
+
+  test("every orthographic view is pictured at one scale, shared axes aligned", () => {
+    const s = initialState(); // frame 40 x 30 x 20 m
+    addObject(s, { id: "far", center: [50, 5, 5], size: [2, 2, 2] }); // grows x to 51 m
+    const p = projection(s) as Projection;
+    // The largest round scale at which 51 m (+ margins) fits 1200 px.
+    expect(p.pixelsPerMeter).toBe(20);
+    const { front, top, side } = p.views;
+    expect([front.min[0], front.size[0], front.width]).toEqual([top.min[0], top.size[0], top.width]);
+    expect([top.min[1], top.size[1], top.height]).toEqual([side.min[0], side.size[0], side.width]);
+    expect([front.min[1], front.size[1], front.height]).toEqual([side.min[1], side.size[1], side.height]);
+    expect(front.width).toBe(51 * 20 + 96);
+    expect(front.size[0] * 20).toBeCloseTo(front.width, 9);
+    expect(front.min[0]).toBeCloseTo(-48 / 20, 9);
+    expect((projection(s, { pixelsPerMeter: 50 }) as Projection).views.top.width).toBe(51 * 50 + 96);
+    expect(projection(s, { pixelsPerMeter: 100 })).toMatch(/fits at up to 50 px\/m/);
+  });
+
+  test("round scales and lengths for people", () => {
+    expect([26.8, 46, 199, 4.9, 9.99, 0.03, 1].map(roundScale)).toEqual([25, 40, 100, 4, 8, 0.025, 1]);
+    expect([2500, 1.5, 0.5, 0.004, 0].map(lengthText)).toEqual(["2.5 km", "1.5 m", "50 cm", "4 mm", "0 m"]);
+  });
+});
+
 test("unknown properties do not hide other problems", () => {
   const bow = [
     [0, 0],
@@ -247,7 +314,7 @@ test("unknown properties do not hide other problems", () => {
   const r = fromDocument({
     format: "orthographic-scene",
     version: 1,
-    scene: { size: { x: 10, y: 10, z: 10 } },
+    scene: { size: { x: 10, y: 10, z: 10 }, scale: { basis: "a 1 m test cube" } },
     objects: [
       {
         id: "a",
@@ -274,7 +341,8 @@ test("unknown properties do not hide other problems", () => {
 
 test("the example in llms.txt is a valid document", async () => {
   const guide = await Bun.file(new URL("../orthographic/llms.txt", import.meta.url)).text();
-  const example = /```json\n([\s\S]*?)```/.exec(guide)![1];
+  // The document example, not the other JSON blocks (a render result, say).
+  const example = /```json\n(\{\n {2}"\$schema"[\s\S]*?)```/.exec(guide)![1];
   // A 1x1 PNG stands in for the elided image data.
   const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
   const v = validateDocument(JSON.parse(example.replace("<base64>", png)));

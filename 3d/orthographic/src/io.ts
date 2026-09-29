@@ -329,5 +329,5 @@ export async function savePerspectivePng() {
 
 export function saveCsv() {
   download(`${slug()}.objects.csv`, objectsCsv(unwrap(state) as EditorState), "text/csv;charset=utf-8");
-  toast("Coordinate table saved (scene units).");
+  toast("Coordinate table saved (metres).");
 }

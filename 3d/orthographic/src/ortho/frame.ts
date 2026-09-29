@@ -2,6 +2,8 @@
 // SVG pixels, with v up.
 
 import type { Box } from "../core/camera";
+import { MIN_FRAME } from "../core/math";
+import type { ViewWindow } from "../core/projection";
 import type { Point, SceneObject, ViewId } from "../core/types";
 import { VIEWS } from "../core/views";
 import type { OrthoCamera } from "../store";
@@ -18,6 +20,15 @@ export function frameOf(cam: { scale: number; center: Point }, W: number, H: num
   return { W, H, s: cam.scale, tx: W / 2 - cam.center[0] * cam.scale, ty: H / 2 + cam.center[1] * cam.scale };
 }
 
+/** The frame of a picture of a fixed world window at a fixed scale (core/projection.ts). */
+export const windowFrame = (w: ViewWindow, pixelsPerMeter: number): Frame => ({
+  W: w.width,
+  H: w.height,
+  s: pixelsPerMeter,
+  tx: -w.min[0] * pixelsPerMeter,
+  ty: (w.min[1] + w.size[1]) * pixelsPerMeter,
+});
+
 export const toScreen = (f: Frame, u: number, v: number): Point => [f.tx + u * f.s, f.ty - v * f.s];
 export const toWorld = (f: Frame, x: number, y: number): Point => [(x - f.tx) / f.s, (f.ty - y) / f.s];
 
@@ -25,10 +36,10 @@ export const toWorld = (f: Frame, x: number, y: number): Point => [(x - f.tx) / 
 export function fitCamera(view: ViewId, box: Box, W: number, H: number): OrthoCamera {
   const [a, b] = VIEWS[view].axes;
   let scale = Math.min(
-    Math.max(W - 80, 30) / Math.max(box.max[a] - box.min[a], 1),
-    Math.max(H - 72, 25) / Math.max(box.max[b] - box.min[b], 1),
+    Math.max(W - 80, 30) / Math.max(box.max[a] - box.min[a], MIN_FRAME),
+    Math.max(H - 72, 25) / Math.max(box.max[b] - box.min[b], MIN_FRAME),
   );
-  scale = Math.max(0.01, Math.min(500, scale));
+  scale = Math.max(1e-4, Math.min(1e5, scale));
   return { scale, center: [(box.min[a] + box.max[a]) / 2, (box.min[b] + box.max[b]) / 2], autoFit: true };
 }
 

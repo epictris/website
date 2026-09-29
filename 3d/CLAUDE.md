@@ -23,9 +23,10 @@ bun run typecheck && bun run check
   - `schema.json` is the published document schema **and** the validator (ajv). Change the format here first, then `types.ts`.
   - `document.ts`: state ⇄ document, validation (`fromDocument` collects every issue), geometry checks.
   - `commands.ts`: every scene edit, as a function on a draft state returning issues. The UI and the agent API both go through these.
-  - `ops.ts`: the same edits in the document's vocabulary (`{x, y, z}`, world units); `window.orthographic` and the server tools both call these.
+  - `ops.ts`: the same edits in the document's vocabulary (`{x, y, z}`, metres); `window.orthographic` and the server tools both call these.
   - `mesher.ts`: the silhouette-intersection reconstruction (pure; runs in a worker in the editor).
-  - Internally outlines are normalised to the object's bounding box (`ring.ts`); documents use world units.
+  - `projection.ts`: the one scale every orthographic picture (renders, the views sheet) is drawn at, and where each lies in metres.
+  - Internally outlines are normalised to the object's bounding box (`ring.ts`); documents use metres.
 - `orthographic/src/`: the Solid app. `store.ts` (undoable scene state + UI state; `commit` runs a command on a copy), `actions.ts` (UI operations), `ortho/` (SVG views), `perspective/` (WebGL + software renderer), `ui/` (panels, dialogs), `io.ts` (load, save, autosave, exports), `snapshots.tsx` (off-screen renders), `api.ts` (`window.orthographic`).
 - `orthographic/llms.txt`: the guide for agents. A test validates its example document.
 - `orthographic/src/live.ts`: live scenes in the editor (load `?scene=`, save each change with its base revision, follow server-sent events, Share).
@@ -48,4 +49,5 @@ The build (`vite-plugin-singlefile`) inlines everything into `dist/orthographic/
 - Match the existing dark UI (`styles.css` came from the original single-file editor; its class names are load-bearing).
 - Scene edits go through a core command, never by writing the store directly, so validation and undo stay in one place.
 - A new editor capability agents should have gets an op in `core/ops.ts`, a tool in `api/tools.ts` and a line in `llms.txt`.
+- Every length is in metres; `scene.scale.basis` records what they were measured from. There is no abstract unit.
 - Vertical FOV is stored; focal length is derived as the full-frame equivalent, f = 12 mm / tan(fov / 2).

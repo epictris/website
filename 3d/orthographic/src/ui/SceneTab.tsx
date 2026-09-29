@@ -3,7 +3,14 @@
 import { createSignal, For } from "solid-js";
 import { chooseReference } from "../actions";
 import { image } from "../assets";
-import { clearScene, fitReferencePlacement, setReference, setResolution, setScene } from "../core/commands";
+import {
+  clearScene,
+  fitReferencePlacement,
+  rescaleScene,
+  setReference,
+  setResolution,
+  setScene,
+} from "../core/commands";
 import { fmt } from "../core/math";
 import { RESOLUTIONS } from "../core/model";
 import type { OrthoReference, Point, ViewId } from "../core/types";
@@ -101,7 +108,7 @@ function ReferenceSection() {
         <For each={[0, 1]}>
           {(j) => (
             <label>
-              <span>Min {names()[j]} · u</span>
+              <span>Min {names()[j]} · m</span>
               <Field
                 type="number"
                 step="0.1"
@@ -115,7 +122,7 @@ function ReferenceSection() {
         <For each={[0, 1]}>
           {(j) => (
             <label>
-              <span>Size {names()[j]} · u</span>
+              <span>Size {names()[j]} · m</span>
               <Field
                 type="number"
                 step="0.1"
@@ -148,7 +155,7 @@ function ReferenceSection() {
         </button>
       </div>
       <p class="note">
-        Each orthographic view has its own image, placed on that view's plane in scene units (
+        Each orthographic view has its own image, placed on that view's plane in metres (
         {VIEW_IDS.map(
           (v) => `${VIEWS[v].name.replace("Right side", "side").toLowerCase()} ${axisNames(v).join("/")}`,
         ).join(", ")}
@@ -192,7 +199,7 @@ export function SceneTab() {
             onCommit={(v) => report(commit((d) => setScene(d, { title: v.trim() || "Untitled scene" })))}
           />
         </label>
-        <div class="section-title">Scene frame · u</div>
+        <div class="section-title">Scene frame · metres</div>
         <div class="triplet">
           <For each={[0, 1, 2]}>
             {(a) => (
@@ -200,7 +207,7 @@ export function SceneTab() {
                 {["Width X", "Depth Y", "Height Z"][a]}
                 <Field
                   type="number"
-                  min="0.1"
+                  min="0.01"
                   step="1"
                   value={fmt(s().size[a], 5)}
                   onCommit={(v) => {
@@ -221,20 +228,33 @@ export function SceneTab() {
         </p>
       </section>
       <section class="inspect-section">
-        <div class="section-title">Real-world scale</div>
+        <label class="section-title" for="scale-basis">
+          Scale basis
+        </label>
+        <TextArea
+          id="scale-basis"
+          maxLength={1000}
+          placeholder="What the sizes were taken from, e.g. doorway 2.1 m tall…"
+          value={s().scaleBasis}
+          onCommit={(v) => report(commit((d) => setScene(d, { scaleBasis: v.trim() })))}
+        />
         <label class="labelled">
-          Metres per scene unit
+          Rescale everything by
           <Field
             type="number"
             min="0.000001"
-            step="0.01"
-            placeholder="Unknown / arbitrary"
-            value={s().metersPerUnit ?? ""}
-            onCommit={(v) => report(commit((d) => setScene(d, { metersPerUnit: v.trim() === "" ? null : Number(v) })))}
+            step="0.1"
+            placeholder="Factor, e.g. 0.5"
+            value=""
+            onCommit={(v) => {
+              const n = num(v);
+              if (n !== null) report(commit((d) => rescaleScene(d, n)));
+            }}
           />
         </label>
         <p class="note">
-          For example, 2 means 1 u = 2 m. Coordinates stay in scene units; the scale is saved with the project.
+          Every length is in metres. Rescaling multiplies the objects, the frame, the reference placements and the
+          camera together, for when the size estimate changes.
         </p>
       </section>
       <section class="inspect-section">

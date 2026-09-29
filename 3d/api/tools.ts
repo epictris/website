@@ -105,8 +105,10 @@ const SCENE_ID: Schema = str(
 const DOCUMENT: Schema = {
   type: "object",
   description:
-    'A scene document: { format: "orthographic-scene", version: 1, scene: { size }, objects: [...], camera?, references?, images? }. See read_guide for the full format.',
+    'A scene document, every length in metres: { format: "orthographic-scene", version: 1, scene: { size, scale?: { basis } }, objects: [...], camera?, references?, images? }. See read_guide for the full format.',
 };
+const SCALE_BASIS =
+  'What the scene\'s metres were taken from: things of known size in the reference, e.g. "doorway 2.1 m tall; the figure at left about 1.7 m".';
 const VIEW: Schema = { enum: ["front", "top", "side"], description: "front = x/z, top = x/y, side = y/z." };
 const OBJECT_PROPS: Record<string, Schema> = {
   name: str("Display name.", { maxLength: 180 }),
@@ -142,7 +144,7 @@ const NEW_OBJECT: Record<string, Schema> = {
     description: "Instead of outlines: a starting shape filling the box given by center and size.",
   },
   center: vec3("Box centre for a primitive (default: the scene centre)."),
-  size: vec3("Box size for a primitive (default 4 x 4 x 4)."),
+  size: vec3("Box size for a primitive in metres (default 4 x 4 x 4)."),
   ...OBJECT_PROPS,
 };
 const MAX_BATCH = 100;
@@ -251,7 +253,7 @@ export const TOOLS: Tool[] = [
     name: "get_scene",
     title: "Get the scene document",
     description:
-      "The scene as a document in world units, with derived bounds per object and the camera's derived values (focal length, matrices). Images are listed without their pixels.",
+      "The scene as a document in metres, with derived bounds per object and the camera's derived values (focal length, matrices). Images are listed without their pixels.",
     inputSchema: object(
       {
         sceneId: SCENE_ID,
@@ -348,7 +350,7 @@ export const TOOLS: Tool[] = [
     name: "add_object",
     title: "Add an object",
     description:
-      "Add an object from world-unit outlines (front [x, z], top [x, y], side [y, z]; each a simple polygon of 3-512 points without a repeated closing point), or from a primitive filling a box (center and size). Returns its id, its bounds and any geometry problems.",
+      "Add an object from outlines in metres (front [x, z], top [x, y], side [y, z]; each a simple polygon of 3-512 points without a repeated closing point), or from a primitive filling a box (center and size). Returns its id, its bounds and any geometry problems.",
     inputSchema: object(
       {
         sceneId: SCENE_ID,
@@ -396,7 +398,7 @@ export const TOOLS: Tool[] = [
     name: "set_outline",
     title: "Set an outline",
     description:
-      "Replace one view's outline of an object with world-unit points: [x, z] for front, [x, y] for top, [y, z] for side. The object's box follows the new outline and the other views stretch to keep shared axes consistent.",
+      "Replace one view's outline of an object with points in metres: [x, z] for front, [x, y] for top, [y, z] for side. The object's box follows the new outline and the other views stretch to keep shared axes consistent.",
     inputSchema: object(
       {
         sceneId: SCENE_ID,
@@ -429,8 +431,8 @@ export const TOOLS: Tool[] = [
   {
     name: "move_objects",
     title: "Move objects",
-    description: "Translate objects by a world-unit offset.",
-    inputSchema: object({ sceneId: SCENE_ID, ids: ids(), offset: vec3("World-unit offset.") }, [
+    description: "Translate objects by an offset in metres.",
+    inputSchema: object({ sceneId: SCENE_ID, ids: ids(), offset: vec3("Offset in metres.") }, [
       "sceneId",
       "ids",
       "offset",
@@ -440,7 +442,7 @@ export const TOOLS: Tool[] = [
   {
     name: "duplicate_objects",
     title: "Duplicate objects",
-    description: "Copy objects, offset by a world-unit vector (default {x: 1, y: 1, z: 0}). Returns the new ids.",
+    description: "Copy objects, offset by a vector in metres (default {x: 1, y: 1, z: 0}). Returns the new ids.",
     inputSchema: object({ sceneId: SCENE_ID, ids: ids(), offset: vec3() }, ["sceneId", "ids"]),
     run: (args) => edit(args, (d) => ops.duplicateObjects(d, args.ids as string[], args.offset as never)),
   },
@@ -456,13 +458,13 @@ export const TOOLS: Tool[] = [
     name: "set_scene",
     title: "Set scene properties",
     description:
-      "Set the title, the scene frame (size: the drawing guide from (0, 0, 0) to size, not a boundary), the real-world scale metersPerUnit (null when unknown) and notes.",
+      "Set the title, the scene frame (size in metres: the drawing guide from (0, 0, 0) to size, not a boundary), the scale basis (scale.basis: the known sizes the scene's metres were taken from) and notes. Changing size moves nothing; to correct the scale of what is built, use rescale_scene.",
     inputSchema: object(
       {
         sceneId: SCENE_ID,
         title: str(undefined, { maxLength: 100 }),
-        size: vec3("Frame size in scene units; at least 0.1 on every axis."),
-        metersPerUnit: { type: ["number", "null"], description: "Metres per scene unit, or null." },
+        size: vec3("Frame size in metres; at least 0.01 on every axis."),
+        scale: object({ basis: str(SCALE_BASIS, { maxLength: 1000 }) }),
         notes: str(undefined, { maxLength: 4000 }),
       },
       ["sceneId"],
@@ -472,6 +474,22 @@ export const TOOLS: Tool[] = [
         const { sceneId: _, ...patch } = args;
         return ops.setScene(d, patch as ops.SceneArgs);
       }),
+  },
+  {
+    name: "rescale_scene",
+    title: "Rescale the scene",
+    description:
+      "Multiply every length in the scene by factor, about the origin: the frame, every object (locked ones too), the placement of the front/top/side references and the camera, so everything keeps its place relative to everything else. For when the scale estimate changes: if an object built 10 m tall is really 4 m, factor is 0.4. Give scale.basis to record the new evidence in the same step.",
+    inputSchema: object(
+      {
+        sceneId: SCENE_ID,
+        factor: { type: "number", exclusiveMinimum: 0, description: "The multiplier, e.g. 0.4." },
+        scale: object({ basis: str(SCALE_BASIS, { maxLength: 1000 }) }),
+      },
+      ["sceneId", "factor"],
+    ),
+    run: (args) =>
+      edit(args, (d) => ops.rescaleScene(d, args.factor as number, args.scale as { basis?: string } | undefined)),
   },
   {
     name: "set_camera",
@@ -573,15 +591,29 @@ export const TOOLS: Tool[] = [
     name: "render",
     title: "Render views",
     description:
-      "Pictures of the scene for checking it against its references: front, top and side fitted to the scene (with their reference images unless references is false), and perspective through the camera frame with its overlay. Returns PNG images, links to them, and every issue found. Takes a few seconds.",
+      "Pictures of the scene, for checking it against its references or for making reference views from. front, top and side are drawn at one shared scale (pixelsPerMeter) over the scene frame and every object plus a margin, so views sharing an axis cover the same range of it: front and top the same x, top and side the same y, front and side the same z. placements gives each picture's area on its view plane in metres ({min, size}, named by the view's axes, exactly what set_reference takes) and its pixel size: an image made from a picture, at the same pixel size, goes back in as that view's reference with that min and size. Reference images are drawn unless references is false. perspective is the camera frame with its overlay. Returns PNG images, links to them, and every issue found. Takes a few seconds.",
     inputSchema: object(
       {
         sceneId: SCENE_ID,
         views: { type: "array", items: { enum: [...VIEWS] }, description: "Default: all four." },
-        width: { type: "integer", description: "128 to 4096; default 1200 (perspective: the camera frame width)." },
-        height: { type: "integer", description: "128 to 4096; default 900 (orthographic views only)." },
+        pixelsPerMeter: {
+          type: "number",
+          exclusiveMinimum: 0,
+          description:
+            "The orthographic views' scale. Default: the largest round scale (1, 2, 2.5, 4, 5 or 8 x 10^n) at which every orthographic view fits width x height. No picture may exceed 4096 px.",
+        },
+        width: {
+          type: "integer",
+          description:
+            "128 to 4096. Orthographic: the largest picture width when pixelsPerMeter is not given (default 1200). Perspective: the frame width.",
+        },
+        height: {
+          type: "integer",
+          description:
+            "128 to 4096; the largest orthographic picture height when pixelsPerMeter is not given (default 900).",
+        },
         references: bool("Draw reference images (default true)."),
-        labels: bool("Label objects in orthographic views (default true)."),
+        labels: bool("Label objects and draw the scale bar in orthographic views (default true)."),
         grid: bool("Draw the grid in orthographic views (default true)."),
       },
       ["sceneId"],
@@ -592,7 +624,7 @@ export const TOOLS: Tool[] = [
       const { sceneId: _, ...options } = args;
       const out = await render(sceneDocument(scene, { images: "data" }), options, `${scene.id}@${scene.revision}`);
       const query = new URLSearchParams();
-      for (const k of ["width", "height", "references", "labels", "grid"])
+      for (const k of ["width", "height", "pixelsPerMeter", "references", "labels", "grid"])
         if (args[k] !== undefined) query.set(k, String(args[k]));
       const urls = Object.fromEntries(
         Object.keys(out.images ?? {}).map((v) => [
@@ -600,7 +632,13 @@ export const TOOLS: Tool[] = [
           `${sceneUrl(ctx, scene, `render/${v}.png`)}?rev=${scene.revision}${query.size ? `&${query}` : ""}`,
         ]),
       );
-      return { ...done(out.issues), revision: scene.revision, urls, images: out.images };
+      return {
+        ...done(out.issues),
+        revision: scene.revision,
+        ...(out.placements && { pixelsPerMeter: out.pixelsPerMeter, placements: out.placements }),
+        urls,
+        images: out.images,
+      };
     },
   },
   {
