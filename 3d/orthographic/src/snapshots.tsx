@@ -4,14 +4,18 @@
 import { unwrap } from "solid-js/store";
 import { render } from "solid-js/web";
 import { dataUrl, image as imageOf } from "./assets";
+import { bytesToBase64 } from "./core/images";
 import { fmt, lengthText } from "./core/math";
+import { overlayGeometry } from "./core/overlay";
+import { encodePng } from "./core/png";
 import { MARGIN_PX, type Projection, pictureBox, projection, roundScale } from "./core/projection";
+import { depthPixels, idLegend, idPixels, rasterize } from "./core/raster";
 import type { EditorState, ViewId } from "./core/types";
 import { VIEW_IDS, VIEWS } from "./core/views";
 import { settle } from "./meshes";
 import { windowFrame } from "./ortho/frame";
 import { OrthoScene } from "./ortho/OrthoScene";
-import { overlayGeometry, perspectiveRenderer, renderInput } from "./perspective/PerspectiveView";
+import { perspectiveRenderer, renderInput } from "./perspective/PerspectiveView";
 import { state } from "./store";
 
 export interface OrthoSnapshotOptions {
@@ -76,16 +80,29 @@ export async function orthoPng(view: ViewId, p: Projection, opts: OrthoSnapshotO
   return svgToPng(orthoSvg(view, p, opts), p.views[view].width, p.views[view].height);
 }
 
+export interface PerspectiveSnapshotOptions {
+  /** Frame width in pixels (default the camera frame's); the height follows its aspect ratio. */
+  width?: number;
+  /** Draw the reference overlay when one is assigned (default true). */
+  references?: boolean;
+  /** The reference's opacity for this picture only (default the scene's). */
+  referenceOpacity?: number;
+  /** Over a reference: every edge (default) or only each object's outer silhouette. */
+  outlines?: "all" | "silhouette";
+}
+
+const frameSize = (width?: number): [number, number] => {
+  const c = state.camera;
+  const w = width ?? c.frame[0];
+  return [w, Math.round((w * c.frame[1]) / c.frame[0])];
+};
+
 /** The perspective camera frame as a canvas, with the reference overlay unless references is false. */
-export async function perspectiveCanvas(
-  opts: { width?: number; references?: boolean } = {},
-): Promise<HTMLCanvasElement> {
+export async function perspectiveCanvas(opts: PerspectiveSnapshotOptions = {}): Promise<HTMLCanvasElement> {
   const r = perspectiveRenderer();
   if (!r) throw new Error("3D rendering is unavailable in this browser.");
   await settle();
-  const c = state.camera;
-  const w = opts.width ?? c.frame[0];
-  const h = Math.round((w * c.frame[1]) / c.frame[0]);
+  const [w, h] = frameSize(opts.width);
   const canvas = r.canvas;
   const old = [canvas.width, canvas.height];
   try {
@@ -96,7 +113,7 @@ export async function perspectiveCanvas(
     const overlaid = !!(ref && a && opts.references !== false);
     // As in the editor: over the reference, the solids' outlines on top at full opacity.
     const outlines = overlaid ? document.createElement("canvas") : undefined;
-    r.render({ ...renderInput(), selected: () => false }, outlines);
+    r.render({ ...renderInput(), selected: () => false, outlines: opts.outlines }, outlines);
     const out = document.createElement("canvas");
     out.width = w;
     out.height = h;
@@ -105,7 +122,7 @@ export async function perspectiveCanvas(
     if (ref && a && overlaid) {
       const g = overlayGeometry(w, h, ref, a);
       ctx.save();
-      ctx.globalAlpha = ref.opacity;
+      ctx.globalAlpha = opts.referenceOpacity ?? ref.opacity;
       ctx.globalCompositeOperation = ref.blend === "normal" ? "source-over" : ref.blend;
       ctx.translate(g.cx, g.cy);
       ctx.rotate(g.radians);
@@ -121,8 +138,43 @@ export async function perspectiveCanvas(
   }
 }
 
-export async function perspectivePng(opts: { width?: number; references?: boolean } = {}): Promise<string> {
+export async function perspectivePng(opts: PerspectiveSnapshotOptions = {}): Promise<string> {
   return (await perspectiveCanvas(opts)).toDataURL("image/png");
+}
+
+/**
+ * The camera frame as an object-id picture, drawn by the GPU: flat colours,
+ * one per object, no anti-aliasing, on black. The legend maps each colour to
+ * its object's id.
+ */
+export async function perspectiveIds(
+  opts: { width?: number } = {},
+): Promise<{ png: string; legend: Record<string, string> }> {
+  const r = perspectiveRenderer();
+  if (!r) throw new Error("3D rendering is unavailable in this browser.");
+  await settle();
+  const [w, h] = frameSize(opts.width);
+  const input = { ...renderInput(), selected: () => false };
+  const objects = input.objects.map((e) => e.id);
+  const canvas = r.canvas;
+  const old = [canvas.width, canvas.height];
+  let ids: Uint16Array;
+  try {
+    canvas.width = w;
+    canvas.height = h;
+    ids = r.software
+      ? rasterize(input.camera, input.objects, (e) => input.meshes.get(e.id), w, h).ids
+      : r.objectIds(input);
+  } finally {
+    canvas.width = old[0];
+    canvas.height = old[1];
+    r.render(renderInput());
+  }
+  const out = document.createElement("canvas");
+  out.width = w;
+  out.height = h;
+  out.getContext("2d")!.putImageData(new ImageData(idPixels({ width: w, height: h, ids, objects }), w, h), 0, 0);
+  return { png: out.toDataURL("image/png"), legend: idLegend(objects) };
 }
 
 const esc = (x: string) =>
@@ -191,4 +243,25 @@ export function projectionSheet(metadata: unknown): string {
     `<text x="${sheetW - 30}" y="${sheetH - 12}" fill="#839eb5" font-size="12" text-anchor="end">${new Date().toISOString().slice(0, 10)}</text></svg>`,
   );
   return out.join("");
+}
+
+async function deflate(data: Uint8Array): Promise<Uint8Array> {
+  const stream = new Blob([data as BlobPart]).stream().pipeThrough(new CompressionStream("deflate"));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+/**
+ * The camera frame as a 16-bit depth picture (near white, far dark, nothing
+ * black), with the depths in metres its grey values span.
+ */
+export async function perspectiveDepth(
+  opts: { width?: number } = {},
+): Promise<{ png: string; depthRange: { near: number; far: number } }> {
+  await settle();
+  const [w, h] = frameSize(opts.width);
+  const input = renderInput();
+  const raster = rasterize(input.camera, input.objects, (e) => input.meshes.get(e.id), w, h);
+  const { grey16, near, far } = depthPixels(raster);
+  const png = await encodePng(w, h, { grey16 }, deflate);
+  return { png: `data:image/png;base64,${bytesToBase64(png)}`, depthRange: { near, far } };
 }

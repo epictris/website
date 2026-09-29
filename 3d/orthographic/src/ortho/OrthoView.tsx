@@ -67,6 +67,7 @@ type Drag =
       before: string;
       id: string;
       index: number;
+      part: number;
       start: SceneObject;
       moved: boolean;
       invalid: boolean;
@@ -189,7 +190,8 @@ export function OrthoView(props: { view: ViewId }) {
       return;
     }
     const index = Number(vertex.dataset.vertex);
-    setUi("pointSelection", { id, view, index });
+    const part = ui.part;
+    setUi("pointSelection", { id, view, index, part });
     svg.setPointerCapture(ev.pointerId);
     drag = {
       type: "vertex",
@@ -198,6 +200,7 @@ export function OrthoView(props: { view: ViewId }) {
       before: beginGesture(),
       id,
       index,
+      part,
       start: clone(e),
       moved: false,
       invalid: false,
@@ -223,16 +226,17 @@ export function OrthoView(props: { view: ViewId }) {
     d.moved = true;
     if (d.type === "vertex") {
       const start = d.start;
-      const old = outlineToWorld(start, view, start.outlines[view][d.index]);
+      const ring = start.parts[d.part].outlines[view];
+      const old = outlineToWorld(start, view, ring[d.index], d.part);
       let q: Point = [...world];
       if (ev.shiftKey) {
         if (Math.abs(q[0] - old[0]) >= Math.abs(q[1] - old[1])) q[1] = old[1];
         else q[0] = old[0];
       }
       q = q.map((n) => snap(n, ev.altKey)) as Point;
-      const raw = clone(start.outlines[view]) as Ring;
-      raw[d.index] = toNormalized(start, view, q);
-      d.invalid = preview(d.before, (s) => setNormalizedOutline(s, d.id, view, raw)).length > 0;
+      const raw = clone(ring) as Ring;
+      raw[d.index] = toNormalized(start, view, q, d.part);
+      d.invalid = preview(d.before, (s) => setNormalizedOutline(s, d.id, view, raw, d.part)).length > 0;
       setCoords(
         d.invalid
           ? "Crossing or collapsed edges are rejected"
@@ -340,10 +344,12 @@ export function OrthoView(props: { view: ViewId }) {
     const f = frame();
     const screen = local(ev);
     let best = { distance: Infinity, index: 0, world: [0, 0] as Point };
-    const ring = e.outlines[view];
+    const part = ui.part;
+    const ring = e.parts[part]?.outlines[view];
+    if (!ring) return;
     ring.forEach((p, i) => {
-      const pa = toScreen(f, ...outlineToWorld(e, view, p));
-      const pb = toScreen(f, ...outlineToWorld(e, view, ring[(i + 1) % ring.length]));
+      const pa = toScreen(f, ...outlineToWorld(e, view, p, part));
+      const pb = toScreen(f, ...outlineToWorld(e, view, ring[(i + 1) % ring.length], part));
       const dx = pb[0] - pa[0];
       const dy = pb[1] - pa[1];
       const t = Math.max(
@@ -589,12 +595,15 @@ function SelectionOverlay(props: { view: ViewId; frame: Frame }) {
 }
 
 function VertexHandles(props: { view: ViewId; frame: Frame; e: SceneObject }) {
-  const points = createMemo(() =>
-    props.e.outlines[props.view].map((p) => toScreen(props.frame, ...outlineToWorld(props.e, props.view, p))),
+  const points = createMemo(
+    () =>
+      props.e.parts[ui.part]?.outlines[props.view].map((p) =>
+        toScreen(props.frame, ...outlineToWorld(props.e, props.view, p, ui.part)),
+      ) ?? [],
   );
   const selectedIndex = () => {
     const p = ui.pointSelection;
-    return p && p.id === props.e.id && p.view === props.view ? p.index : -1;
+    return p && p.id === props.e.id && p.view === props.view && p.part === ui.part ? p.index : -1;
   };
   const insertAt = createMemo(() => {
     const i = selectedIndex();

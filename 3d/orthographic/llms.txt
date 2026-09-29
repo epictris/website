@@ -23,29 +23,44 @@ Anyone with a scene's id can read and edit it, so treat the link as the access k
 
 Only tool calls change a scene: a document drafted in your own workspace is not in it until `add_objects` or `load_document` returns `ok`. Confirm with `get_scene` before telling anyone the scene is built.
 
-Every tool answers `{ ok, issues, ... }` and never throws; `ok` is false when an issue is an error, and then nothing changed. Every edit is one undoable step, reports the new `revision`, and returns the objects it touched (with derived bounds) and their geometry problems.
+Every tool answers `{ ok, issues, ... }` and never throws; `ok` is false when an issue is an error, and then nothing changed. Every edit is one undoable step, reports the new `revision`, and returns the objects it touched (with derived bounds) and their geometry problems (for traced objects, how they match the reference too).
+
+A person may be editing the same scene between your calls.
+Every tool that changes a scene takes `baseRevision`: the revision your picture of the scene is based on (from your last result or `get_scene`).
+If the scene has moved on, nothing changes and the answer is `revision-conflict` with the current revision.
+`get_changes { since }` then lists what changed in between: per revision, who made it (a tool's name, `editor` for a person, `undo`, `redo`), the objects added, removed and changed (with the fields), and the scene, camera, reference and display settings.
+Pass `baseRevision` whenever you replace something a person may have touched, `load_document` above all.
 
 | Tool | Does |
 |------|------|
 | `read_guide` | This guide (`schema: true` adds the JSON Schema). |
 | `create_scene` | A new scene, empty or from `document`. |
 | `get_scene` | The scene as a document (images listed without pixels). |
-| `load_document` | Replace the whole scene with a document: the fastest way to write many objects. |
-| `validate` | Every problem in a scene or a `document`, with JSON Pointer paths, geometry included. |
+| `get_changes` | What changed after revision `since`, one entry per revision. |
+| `load_document` | Replace the whole scene with a document. Destroys what others changed since you read it: pass `baseRevision`, or prefer `upsert_objects`. |
+| `validate` | Every problem in a scene or a `document`, with JSON Pointer paths, geometry and traces included. |
 | `add_image` | A reference image from a public `url` or base64 `data`; returns its id and pixel size. |
-| `add_object` | An object from world-unit `outlines`, or a `primitive` (`box`, `ellipsoid`, `cylinder`, `rock`) filling `center` ± `size` / 2. |
+| `add_object` | An object from world-unit `outlines`, from `parts` (a union of solids), or a `primitive` (`box`, `ellipsoid`, `cylinder`, `rock`) filling `center` ± `size` / 2. |
 | `add_objects` | Up to 100 objects in one call and one undo step, all or nothing; problems are reported per `/objects/<index>`. The way to build a large scene: batches of about 20, checked as you go. |
-| `update_object` | Name, kind, color, visible, locked, reviewed, opacity, notes. |
-| `set_outline` | Replace one view's outline (metres). |
+| `upsert_objects` | Add or change up to 100 objects by id in one step: new ids are added, existing objects take the properties given and keep the rest (`outlines` or `parts` replace the shape, `trace: null` removes a trace). The tool for "change these objects, keep the rest of the scene". |
+| `update_object` | Name, kind, color, visible, locked, reviewed, opacity, notes, `inFrontOf`. |
+| `set_outline` | Replace one view's outline (metres); the other views stretch to keep shared axes consistent. `part` for one part of an object in parts. |
+| `set_outlines` | Replace all three outlines of an object (or of one `part`) at once: the box comes from the three together, as one step. |
+| `set_trace` | Record the object's silhouette as traced in the perspective reference (image pixels), or `remove: true`. |
+| `suggest_views` | Plain box outlines from the trace and the depth range (world y) the object occupies: a starting point. |
+| `fit_front` | Solve the front outline from the trace and the top and side views, and apply all three (see Fitting). |
+| `compare_to_reference` | Score traced objects against the reference: spill, missing, IoU, occlusion order, and a difference picture. |
+| `raycast` | What each pixel sees: object, world point, normal, distance, depth. |
+| `measure` | The length in metres between two pixels, at an object's depth, a given depth, or on the surfaces hit. |
 | `set_bounds` | Set any of min/max per axis for objects or a group; outlines scale. |
 | `move_objects`, `duplicate_objects`, `delete_objects` | As named; offsets are `{x, y, z}`. |
 | `set_scene` | Title, frame `size` (metres), `scale.basis` (what the metres were taken from), notes. |
 | `rescale_scene` | Multiply every length (objects, frame, reference placements, camera) by `factor`, for a corrected scale estimate. |
-| `set_camera` | Position, target, lens (`verticalFovDegrees` or `focalLengthMm35Equivalent`), roll, near, far, frame, locked. |
+| `set_camera` | Position, target, lens (`verticalFovDegrees` or `focalLengthMm35Equivalent`), roll, lens `shift`, near, far, frame, locked. |
 | `set_display` | Perspective drawing style, grid, labels, crosshair. |
 | `set_reference` | Put an image behind a view, move it, or `remove: true`. |
 | `undo`, `redo` | One shared history for agents and the editor. |
-| `render` | PNGs of `front`, `top`, `side`, `perspective` (as images over MCP, data URLs over HTTP) plus links to them. The orthographic views share one scale (`pixelsPerMeter`) and report where each picture lies in metres (`placements`); see Scale. Over a perspective reference, each solid's outline is drawn on top in its colour at full opacity, so alignment is visible even through an opaque reference. |
+| `render` | PNGs of `front`, `top`, `side`, `perspective` (as images over MCP, data URLs over HTTP) plus links to them. The orthographic views share one scale (`pixelsPerMeter`) and report where each picture lies in metres (`placements`); see Scale. The perspective view can be shaded (default), an id picture or a depth picture (see Pictures for checking). |
 | `export` | Links to `scene.json`, `agent.json`, `objects.csv`, `views.svg`, `editor.html` (the editor with the scene inside, one offline file). |
 
 ## Coordinates
@@ -53,6 +68,9 @@ Every tool answers `{ ok, issues, ... }` and never throws; `ok` is false when an
 - Right-handed, Z up, every length in metres (outlines, sizes, offsets, reference placements, the camera).
 - X is right in the front view, Y is depth away from the front camera, Z is up.
 - The scene frame is the box from (0, 0, 0) to `scene.size`. It is a drawing guide, not a boundary.
+- Pixels of the perspective picture come in two spaces, origin top-left, v down.
+  `frame` pixels are the camera frame's (`camera.frame` wide and high).
+  `reference` pixels are the perspective reference image's own, whatever its placement over the frame; traces are stored in them, so they stay put when the reference is moved, scaled or rotated.
 
 | View | Looks along | Point order | Horizontal | Vertical |
 |------|-------------|-------------|------------|----------|
@@ -102,14 +120,72 @@ The `views.svg` export draws the three views the same way on one sheet, in third
 
 ## How a solid is made
 
-An object has exactly one outline per view: a simple closed polygon in metres, 3–512 points, no repeated closing point, no self-intersections, no holes. The solid is every point (x, y, z) whose front projection (x, z), top projection (x, y) and side projection (y, z) all fall inside their outlines.
+An object has exactly one outline per view: a simple closed polygon in metres, 3–512 points, no repeated closing point, no self-intersections, no holes.
+The solid is every point (x, y, z) whose front projection (x, z), top projection (x, y) and side projection (y, z) all fall inside their outlines.
+It is built exactly (a polyhedron, no sampling), so what the perspective view draws is exactly what the three outlines define, and edges where faces meet at more than 35° are drawn sharp.
 
 Consequences worth planning for:
 
 - Views share axes: front and top share x, top and side share y, front and side share z. Both views of an axis should span the same range; if they do not, the box uses the union and the narrower outline clips the solid (`extent-mismatch` warning).
 - The outlines must agree on where the object is thick and thin. If the front says the top is narrow and the side says the top is wide, the solid is narrow there and the side outline is not filled (`low-coverage` warning, per view). If they share no volume at all, there is no solid (`no-common-volume` error).
 - Concave detail survives only when every view allows it. A hole through an object cannot be represented; split it into several objects instead.
-- Anything the three silhouettes cannot capture (a dent seen from no axis) is not captured. Prefer several simple objects over one complicated one.
+- Anything the three silhouettes cannot capture (a dent seen from no axis) is not captured.
+
+### Objects in parts
+
+Three outlines capture a shape that varies in one direction at a time.
+When it varies in more than one at once (a wall with a ledge along its top, stepped rocks), give the object `parts` instead of `outlines`: each part has its own three outlines (and optionally an `id`), and the object's solid is the union of the parts' solids.
+The object is still one object: selected, coloured, traced, compared and fitted as one; `set_outline`, `set_outlines` and `fit_front` take `part` (counted from 0) to work on one part.
+The views draw the union's silhouette with each part's outline inside it.
+Prefer parts to several objects that share one trace: there are no seams between them, and the comparison sees one object.
+
+## Traces and the comparison
+
+The reliable way to match a picture is to trace each object's silhouette in it, build geometry, and check that the rendered silhouette lands on the trace.
+The scene holds the traces, so the check is repeatable and nothing is lost between sessions.
+
+- `trace` on an object: `{ points, hidden? }`. `points` is the object's silhouette in the perspective reference image's own pixels (origin top-left, v down), as if nothing stood in front of it; parts may continue off the image.
+  `hidden` marks runs of edges that are guesses because something covers the object in the image: `[a, b]` covers the edges from vertex a forward to vertex b (wrapping past the last vertex). They are drawn dotted, and pixels nearer a hidden edge than a traced one are not counted as missing.
+- `inFrontOf` on an object: ids of objects it stands in front of. Where traces overlap, the picture alone cannot say which is nearer; the hint does, and the comparison checks it.
+
+`compare_to_reference` (and `validate`, whenever objects have traces) renders the scene through the camera, without a browser, and for each traced object reports, in frame pixels with bounding boxes:
+
+- `spill`: pixels where the object is visible but outside its trace. Always wrong, whatever is in front.
+- `missing`: pixels inside its trace, away from hidden runs, where the background shows, or an object whose own trace does not contain the pixel.
+- `iou`: its visible region against its trace, less the parts nearer traced objects rightly cover.
+- `order`: per `inFrontOf` hint, the pixels where the other object is nearer.
+
+The issues are `trace-spill`, `trace-missing` (above 25 pixels and 1% of the trace) and `occlusion-order`.
+`diff: true` adds a picture: correct in grey, spill in red, missing in blue, other geometry dark grey.
+
+## Fitting
+
+Matching a trace is an inverse projection: given the silhouette in the picture, and the top and side views designed from understanding the scene, find the front outline whose solid shows exactly inside the trace.
+`fit_front` solves it: every depth the top and side allow is projected through the camera, a front cell is kept when all of it lands inside the trace (off the image too, against the trace's continuation), and the kept region becomes the front outline.
+With `restOn`, the solid also keeps out of the named objects, so a rock fitted onto a platform stops at its top.
+With `trim` (the default) the top and side are then replaced by the solid's own shadows, so all three views agree exactly.
+It applies the three outlines as one step (`dryRun` only reports them) and returns the object's comparison with its trace.
+
+The trace fixes where the object is across the picture; only the top and side say how deep it is.
+`suggest_views { depth: { min, max } }` gives plain boxes between two depths (world y) as a starting point; shape the top and side from what you know of the scene, then fit.
+
+## Measuring
+
+- `raycast { points, space }`: for each pixel, the object hit, the world point, the surface normal, the distance from the camera and the depth along its view axis.
+- `measure { from, to, space, at }`: the length in metres between two pixels. `at` is an object id (both ends at the depth, along the view axis, of that object's surface under `from`), a depth in metres, or `"surface"` (each end where its own ray meets the nearest surface).
+  A fern 160 px tall standing on a platform is `measure { from: foot, to: tip, at: "platform" }`: the way to size things of known size in the picture once the camera and the ground are placed.
+- `camera.shift { x, y }`: lens shift, as fractions of the frame (y > 0 shows more above, so the horizon sits lower). A painting's horizon is rarely at mid-frame; tilting the camera to move it leans every vertical edge, while shift keeps verticals vertical, as painters and architectural photographers do.
+
+## Pictures for checking
+
+`render` of the perspective view takes:
+
+- `mode: "ids"`: flat colours, one per object, no anti-aliasing, on black, with `legend` `{ "#rrggbb": objectId }`. Which object covers which pixel, exactly.
+- `mode: "depth"`: 16-bit grey, the nearest surface white, nothing black, with `depthRange` `{ near, far }` in metres; a value v ≥ 1 is far − (v − 1) / 65534 × (far − near).
+- `outlines: "silhouette"`: over the reference, only each object's outer silhouette (no creases, no folds where an object hides part of itself).
+- `referenceOpacity`: the reference's opacity for this picture only; the scene keeps its own.
+
+`ids` and `depth` pictures are drawn without a browser, in a fraction of a second.
 
 ## The document
 
@@ -133,13 +209,38 @@ Consequences worth planning for:
         "front": [[8, 2], [12, 2], [11, 16], [9, 16]],
         "top": [[8, 8], [12, 8], [12, 12], [8, 12]],
         "side": [[8, 2], [12, 2], [11, 16], [9, 16]]
-      }
+      },
+      "trace": { "points": [[393, 764], [425, 286], [493, 286], [508, 293], [554, 732], [529, 764]] },
+      "inFrontOf": ["ledge-wall"]
+    },
+    {
+      "id": "ledge-wall",
+      "kind": "rock",
+      "parts": [
+        {
+          "id": "wall",
+          "outlines": {
+            "front": [[20, 0], [26, 0], [26, 14], [20, 14]],
+            "top": [[20, 14], [26, 14], [26, 18], [20, 18]],
+            "side": [[14, 0], [18, 0], [18, 14], [14, 14]]
+          }
+        },
+        {
+          "id": "ledge",
+          "outlines": {
+            "front": [[14, 8], [26, 8], [26, 9], [14, 9]],
+            "top": [[14, 12], [26, 12], [26, 14], [14, 14]],
+            "side": [[12, 8], [14, 8], [14, 9], [12, 9]]
+          }
+        }
+      ]
     }
   ],
   "camera": {
     "position": { "x": 20, "y": -30, "z": 12 },
     "target": { "x": 20, "y": 15, "z": 8 },
     "focalLengthMm35Equivalent": 35,
+    "shift": { "x": 0, "y": 0.1 },
     "frame": { "width": 1600, "height": 900 }
   },
   "references": {
@@ -152,32 +253,43 @@ Consequences worth planning for:
 }
 ```
 
-Required: `format`, `version`, `scene.size`, `objects` (each with `id` and `outlines`). Everything else has defaults. All lengths are metres.
+Required: `format`, `version`, `scene.size`, `objects` (each with `id`, and `outlines` or `parts`). Everything else has defaults. All lengths are metres.
 
 - `scene.size`: the frame, at least 0.01 m per axis. `scene.scale.basis`: the known sizes the metres were taken from (see Scale).
 
 - `objects[].id`: letters, digits, `_ . -`, starting with a letter or digit, unique. `name`, `kind` (free tag), `color` (`#rrggbb`), `visible`, `locked`, `reviewed`, `opacity` (0.05–1, below 1 renders translucent), `notes`.
-- `camera`: `position`, `target`, and the lens as `verticalFovDegrees` (5–140) or `focalLengthMm35Equivalent` (f = 12 mm / tan(vertical FOV / 2); if both are given they must agree), plus `rollDegrees`, `near`, `far`, `frame` (pixels, fixes the aspect ratio).
+- `objects[].outlines`, or `objects[].parts`: `[{ id?, outlines }]`, a union of solids (see Objects in parts).
+- `objects[].trace`: `{ points, hidden? }` in the perspective reference image's pixels; `objects[].inFrontOf`: ids of objects it stands in front of (see Traces and the comparison).
+- `camera`: `position`, `target`, and the lens as `verticalFovDegrees` (5–140) or `focalLengthMm35Equivalent` (f = 12 mm / tan(vertical FOV / 2); if both are given they must agree), plus `rollDegrees`, `shift` (lens shift, fractions of the frame), `near`, `far`, `frame` (pixels, fixes the aspect ratio).
 - `references`: one optional image per view. `front`/`top`/`side` place the image on the view plane: its lower-left corner at `min`, stretched to `size`, both named by that view's axes (`{x, z}` for front, `{x, y}` for top, `{y, z}` for side). Image right is the view's horizontal axis, image up its vertical axis. `perspective` is a screen overlay on the camera frame: `offsetPercent {x, y}`, `scale` (1 fits the frame), `rotationDegrees`, `blend`.
 - `images`: keyed by id. `data` is the base64 file (PNG, JPEG, WebP or GIF). It may be omitted only when the editor already holds that image.
-- Documents the editor writes also contain `derived` blocks (bounds, center, size, camera matrices), `display`, `reconstruction`, `editor` and `meshCache`. They are read-only or optional; `derived` is ignored on load.
+- Documents the editor writes also contain `derived` blocks (bounds, center, size, camera matrices), `display` and `editor`. They are read-only or optional; `derived` is ignored on load.
 
 ## Workflow for turning an image into a scene
 
-1. `create_scene`, and share its `editorUrl`.
-2. Set the scale (see Scale): from things of known size in the image, decide the frame in metres (for a front-facing photo: width = x, height = z, a plausible depth y) and send it with `set_scene`, the evidence in `scale.basis`.
-3. `add_image`, then `set_reference` on the front view (without `min`/`size` it is fitted to the frame; give them to place the image at its measured size) and, if the camera is known, on the perspective view too.
-4. For each object, trace its front outline in x/z from the image, then invent consistent top (x/y) and side (y/z) outlines: reuse the front's x range in top and its z range in side. Send them with `add_objects` in batches of about 20 (or `add_object` one at a time), and `render` after the first batch to catch a wrong scale or placement early. `load_document` replaces the whole scene at once.
-5. `validate`. Fix every error; read every warning.
-6. `render` the views and compare them with the references. Adjust outlines, the camera (position, target, focal length) or the reference placement, then repeat from 5.
+1. `create_scene`, and share its `editorUrl`. `add_image` the picture and `set_reference` it on the perspective view (and the front view, if it is front-on).
+2. Set the camera and the scale. Match the camera to the picture (position, target, focal length; `shift` rather than a tilt when the horizon is not at mid-frame), then size the frame from things of known size (`measure` helps once the ground is placed), and record the evidence in `scale.basis` (see Scale).
+3. Trace each object's silhouette in the picture with `set_trace` (or in `add_objects`), as if nothing stood in front of it. Where it is covered, continue the edge as your best guess and mark those edges `hidden`. Record `inFrontOf` where traces overlap.
+4. Design each object's top and side views from your understanding of the scene: how deep it is and where it stands. `suggest_views` gives plain boxes to start from.
+5. `fit_front` each object (`restOn` for what it stands on). It shapes the front so the solid shows exactly inside the trace.
+6. `compare_to_reference` (with `diff: true` to see it) and `validate`. Fix every error; read every warning.
+7. Adjust the top and side views, the depth, the traces or the camera, and repeat from 5.
+
+Lessons from building scenes this way:
+
+- Trace hidden edges on, under whatever is in front: the trace is the object's own silhouette, and the comparison accounts for what covers it.
+- Walls recede along camera rays: a wall the picture shows nearly edge-on runs away from the camera along the rays through its traced edge, so design its top view along those rays, not parallel to the frame.
+- Put an object meant to be in front nearer than the one behind it at every pixel their traces share, not just on average; an `inFrontOf` hint turns a mistake into an `occlusion-order` warning.
+- Use `parts` for one thing that varies in two directions at once, rather than several objects sharing a trace.
+- Pass `baseRevision` with your edits; a person may be working in the same scene.
 
 ## HTTP API
 
 All endpoints accept and return JSON (CORS is open). Errors come back as `{ "ok": false, "issues": [...] }`. Besides the tools (`/api/tools/{tool}`), a few endpoints take a whole document and store nothing:
 
-- `POST /orthographic/api/validate`: body is a document. Returns `{ ok, issues }`, including the geometry checks (reconstructs every solid).
-- `POST /orthographic/api/render`: body `{ document, views?, width?, height?, pixelsPerMeter?, references?, labels?, grid? }`. `views` defaults to all of `front`, `top`, `side`, `perspective`. Orthographic views share one scale (see Scale); perspective uses the camera frame (`width` scales it). References are drawn whenever assigned, unless `references` is false. Returns `{ ok, issues, images: { view: "data:image/png;base64,…" }, pixelsPerMeter, placements }`.
-- `POST /orthographic/api/render/{front|top|side|perspective}.png`: body is a document; returns the PNG itself. Query: `width`, `height`, `pixelsPerMeter`, `references=false`. Issues are in the `X-Issues` header (URL-encoded JSON); an orthographic view's scale and placement in `X-Pixels-Per-Meter` and `X-Placement` (JSON `{ min, size }` in metres).
+- `POST /orthographic/api/validate`: body is a document. Returns `{ ok, issues }`, including the geometry checks (builds every solid) and, for traced objects, the comparison with the reference.
+- `POST /orthographic/api/render`: body `{ document, views?, width?, height?, pixelsPerMeter?, references?, labels?, grid?, mode?, outlines?, referenceOpacity? }`. `views` defaults to all of `front`, `top`, `side`, `perspective`. Orthographic views share one scale (see Scale); perspective uses the camera frame (`width` scales it), and `mode`, `outlines`, `referenceOpacity` as in Pictures for checking. References are drawn whenever assigned, unless `references` is false. Returns `{ ok, issues, images: { view: "data:image/png;base64,…" }, pixelsPerMeter, placements, legend?, depthRange? }`.
+- `POST /orthographic/api/render/{front|top|side|perspective}.png`: body is a document; returns the PNG itself. Query: `width`, `height`, `pixelsPerMeter`, `references=false`, `mode`, `outlines`, `referenceOpacity`. Issues are in the `X-Issues` header (URL-encoded JSON); an orthographic view's scale and placement in `X-Pixels-Per-Meter` and `X-Placement` (JSON `{ min, size }` in metres); an id picture's legend in `X-Legend` (URL-encoded JSON), a depth picture's range in `X-Depth-Range`.
 
 ```sh
 curl -s -X POST --data-binary @scene.json https://3d.tris.sh/orthographic/api/validate
@@ -189,7 +301,7 @@ Renders run one at a time; a busy server answers 503 with `Retry-After`.
 Stored scenes also have plain GET links, handy for tools that can only fetch pages:
 
 - `GET /orthographic/api/scenes/{id}`: `{ sceneId, revision, editorUrl, document }`.
-- `GET /orthographic/api/scenes/{id}/render/{front|top|side|perspective}.png`: a render (query: `width`, `height`, `pixelsPerMeter`, `references`, `labels`, `grid`), with the same headers.
+- `GET /orthographic/api/scenes/{id}/render/{front|top|side|perspective}.png`: a render (query: `width`, `height`, `pixelsPerMeter`, `references`, `labels`, `grid`, `mode`, `outlines`, `referenceOpacity`), with the same headers.
 - `GET /orthographic/api/scenes/{id}/export/{scene.json|agent.json|objects.csv|views.svg|editor.html}`: downloads.
 
 ## In the page: `window.orthographic`
@@ -199,11 +311,13 @@ For agents that already drive a browser; the tools above do the same without one
 - `getDocument({ images: "metadata" | "data" | "none", derived, editor })` → the document (synchronous).
 - `loadDocument(doc)`, `validate(doc?)` (no argument: the current scene, geometry included), `waitForGeometry()`.
 - `addImage({ data, name })` → `{ id }` (base64 or a data: URL; the id is a hash of the bytes).
-- `addObject({ id?, name, kind, color, outlines })` or `addObject({ primitive: "box" | "ellipsoid" | "cylinder" | "rock", center, size })` → `{ id }`; `addObjects([...])` → `{ ids }` (all or nothing).
-- `updateObject(id, { name, kind, color, visible, locked, reviewed, opacity, notes })`, `setOutline(id, view, points)`, `setBounds(idOrIds, { min: {x,y,z}, max: {x,y,z} })` (any subset of axes; outlines scale), `moveObjects(ids, {x,y,z})`, `duplicateObjects(ids, offset?)`, `deleteObjects(ids)`.
-- `setScene({ title, size, scale: { basis }, notes })`, `rescaleScene(factor, { basis }?)`, `setCamera({ position, target, verticalFovDegrees | focalLengthMm35Equivalent, rollDegrees, near, far, frame, locked })`, `setDisplay({ style, grid, labels, crosshair })`.
+- `addObject({ id?, name, kind, color, outlines | parts, trace?, inFrontOf? })` or `addObject({ primitive: "box" | "ellipsoid" | "cylinder" | "rock", center, size })` → `{ id }`; `addObjects([...])` → `{ ids }`; `upsertObjects([...])` → `{ added, changed }` (all or nothing).
+- `updateObject(id, { name, kind, color, visible, locked, reviewed, opacity, notes, inFrontOf })`, `setOutline(id, view, points, part?)`, `setOutlines(id, { front, top, side }, part?)`, `setBounds(idOrIds, { min: {x,y,z}, max: {x,y,z} })` (any subset of axes; outlines scale), `moveObjects(ids, {x,y,z})`, `duplicateObjects(ids, offset?)`, `deleteObjects(ids)`.
+- `setTrace(id, { points, hidden? } | null)`, `suggestViews(id, { min, max })`, `fitFront(id, { top?, side?, restOn?, trim?, maxPoints?, part? })`, `compareToReference({ ids?, diff? })`.
+- `raycast(points, space?)`, `measure({ from, to, space?, at })`.
+- `setScene({ title, size, scale: { basis }, notes })`, `rescaleScene(factor, { basis }?)`, `setCamera({ position, target, verticalFovDegrees | focalLengthMm35Equivalent, rollDegrees, shift, near, far, frame, locked })`, `setDisplay({ style, grid, labels, crosshair })`.
 - `setReference(view, { image, opacity, visible, min, size } | null)` for `front`/`top`/`side`; `setReference("perspective", { image, opacity, visible, offsetPercent, scale, rotationDegrees, blend } | null)`.
-- `render({ views, width, height, pixelsPerMeter, references, labels, grid, format: "png" | "svg" })` → `{ images, pixelsPerMeter, placements }`; `sheet()` → `{ svg }` (the three views on one drawing).
+- `render({ views, width, height, pixelsPerMeter, references, labels, grid, format: "png" | "svg", mode, outlines, referenceOpacity })` → `{ images, pixelsPerMeter, placements, legend?, depthRange? }`; `sheet()` → `{ svg }` (the three views on one drawing).
 - `select(ids)`, `undo()`, `redo()`.
 
 ## Issues
@@ -214,11 +328,15 @@ Each issue is `{ severity: "error" | "warning", code, path, message, objectId?, 
 - `ring-self-intersection`, `ring-repeated-point`, `ring-too-few-points`, `ring-too-many-points`, `ring-zero-area`, `ring-not-finite`: an outline is not a simple polygon.
 - `duplicate-id`, `collapsed-axis` (an object thinner than 1 mm), `unknown-image`, `image-without-data`, `invalid-camera`, `camera-lens-mismatch`.
 - `extent-mismatch` (warning): two views disagree on a shared axis.
-- `no-common-volume` (error) and `low-coverage` (warning): the outlines do not describe one consistent solid.
+- `no-common-volume` (error) and `low-coverage` (warning): the outlines do not describe one consistent solid (for an object in parts, the path names the part).
+- `trace-spill`, `trace-missing`, `occlusion-order` (warnings): a traced object does not match its trace, or an `inFrontOf` hint is contradicted (see Traces and the comparison). `trace-*` ring codes and `invalid-hidden-run`: a trace is not a simple polygon, or a hidden run names vertices it does not have.
+- `no-reference`, `nothing-to-compare`, `no-trace`, `fit-empty`, `no-common-depth`: there is no perspective reference, no traced object, or nothing of the front plane lands inside the trace with those top and side views.
+- `part-required`, `unknown-part`, `last-part`, `too-many-parts`, `invalid-part-id`, `invalid-shape` (outlines and parts both given): objects in parts.
+- `no-hit`, `invalid-depth`, `invalid-space`, `invalid-point`: `measure` and `raycast`.
 - `outside-frame` (warning): an object extends past the scene frame.
 - `scale-not-set` (warning): `scene.scale.basis` is empty, so nothing says what the metres were measured from.
 - `invalid-scale`, `render-too-large`: a bad `pixelsPerMeter` or `rescale_scene` factor, or a picture that would exceed 4096 px (the message gives the largest scale that fits).
 - `argument-*`: a tool's arguments do not match its schema (`argument-additionalProperties` names the unknown argument).
-- `unknown-scene`, `unknown-object`, `unknown-image`, `object-locked`, `revision-conflict` (a save based on an old revision).
+- `unknown-scene`, `unknown-object`, `unknown-image`, `object-locked`, `revision-conflict` (an edit based on an old revision; `get_changes` says what happened).
 - `invalid-url`, `fetch-failed`, `invalid-image`, `image-too-large`: `add_image` could not use the image.
 - `busy`: the renderer has a queue; retry in a few seconds.

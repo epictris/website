@@ -9,6 +9,8 @@
 
 import { focalToFov } from "./camera";
 import * as cmd from "./commands";
+import { FitError, fitFront as fitFrontOutline, suggestViews as suggestPrisms } from "./fit";
+import { framePixel, hitAt, type MeshOf, type PixelSpace, pointAtDepth } from "./raycast";
 import type { Primitive } from "./ring";
 import type {
   Blend,
@@ -19,6 +21,7 @@ import type {
   Point,
   ReferenceView,
   Ring,
+  SceneObject,
   Vec3,
   ViewId,
 } from "./types";
@@ -42,6 +45,8 @@ type Ids = string | string[];
 export interface AddObjectArgs extends cmd.ObjectProps {
   id?: string;
   outlines?: Record<ViewId, Ring>;
+  /** Instead of outlines: the object as a union of parts. */
+  parts?: { id?: string; outlines: Record<ViewId, Ring> }[];
   primitive?: Primitive;
   center?: DocVec3;
   size?: DocVec3;
@@ -65,6 +70,7 @@ export interface CameraArgs {
   verticalFovDegrees?: number;
   focalLengthMm35Equivalent?: number;
   rollDegrees?: number;
+  shift?: { x: number; y: number };
   near?: number;
   far?: number;
   frame?: { width: number; height: number };
@@ -105,7 +111,8 @@ const pairOf = (view: ViewId, o: Record<string, number> | undefined): Point | un
 
 export function addObject(d: EditorState, spec: AddObjectArgs): OpResult {
   const r = cmd.addObject(d, { ...spec, center: vec3(spec.center), size: vec3(spec.size) });
-  return { issues: r.issues, value: { id: r.id }, touched: r.id ? [r.id] : [] };
+  const issues = [...r.issues, ...(r.id ? cmd.inFrontOfIssues(d, new Set([r.id])) : [])];
+  return { issues, value: { id: r.id }, touched: r.id ? [r.id] : [] };
 }
 
 /**
@@ -117,21 +124,182 @@ export function addObjects(d: EditorState, specs: AddObjectArgs[]): OpResult {
   const issues: Issue[] = [];
   const ids: string[] = [];
   specs.forEach((spec, i) => {
-    const r = addObject(d, spec);
+    const r = cmd.addObject(d, { ...spec, center: vec3(spec.center), size: vec3(spec.size) });
     for (const found of r.issues) issues.push({ ...found, path: `/objects/${i}${found.path}` });
-    if (r.value?.id) ids.push(r.value.id as string);
+    if (r.id) ids.push(r.id);
   });
+  // Objects in the batch may stand in front of one another, so references are checked once all are in.
+  for (const found of cmd.inFrontOfIssues(d, new Set(ids)))
+    issues.push({ ...found, path: found.path.replace(/^\/objects\/\d+/, `/objects/${ids.indexOf(found.objectId!)}`) });
   return { issues, value: { ids }, touched: ids };
 }
 
 export function updateObject(d: EditorState, id: string, patch: cmd.ObjectProps): OpResult {
-  return { issues: cmd.updateObject(d, id, patch), touched: [id] };
+  const issues = cmd.updateObject(d, id, patch);
+  if (issues.length) return { issues, touched: [id] };
+  // inFrontOf must name objects in the scene; paths are relative to the object, as for its other properties.
+  const refs = cmd
+    .inFrontOfIssues(d, new Set([id]))
+    .map((i) => ({ ...i, path: i.path.replace(/^\/objects\/\d+/, "") }));
+  return { issues: refs, touched: [id] };
+}
+
+/** Set (or with null remove) the silhouette traced in the perspective reference, in its image's pixels. */
+export function setTrace(d: EditorState, id: string, trace: cmd.TraceSpec | null): OpResult {
+  return { issues: cmd.updateObject(d, id, { trace }), touched: [id] };
+}
+
+export interface FitArgs {
+  /** For an object of several parts: the part to fit (counted from 0). */
+  part?: number;
+  /** Top [x, y] and side [y, z] outlines to fit with, in metres (default: the object's own). */
+  top?: Ring;
+  side?: Ring;
+  /** Ids of objects the fitted solid rests on and must not enter. */
+  restOn?: string[];
+  /** Replace the top and side by the fitted solid's own shadows (default true). */
+  trim?: boolean;
+  maxPoints?: number;
+}
+
+/** The perspective reference image's size, or an issue saying why there is none. */
+function referenceImage(d: EditorState, ctx: OpContext): cmd.ImageSize | OpResult {
+  const ref = d.references.perspective;
+  const image = ref && ctx.image(ref.image);
+  return image ?? bad("no-reference", "The scene has no perspective reference image: traces are in its pixels.");
+}
+
+/** Run a fit and apply its outlines, turning its failures into issues. */
+function fitting(
+  d: EditorState,
+  id: string,
+  f: () => { outlines: Record<ViewId, Ring>; extra?: Record<string, unknown> },
+  part?: number,
+): OpResult {
+  let fit: ReturnType<typeof f>;
+  try {
+    fit = f();
+  } catch (e) {
+    if (e instanceof FitError) return { issues: [cmd.issue(e.code, e.message, { objectId: id })] };
+    throw e;
+  }
+  const issues = cmd.setOutlines(d, id, fit.outlines, part);
+  const tidy = (v: number) => Math.round(v * 1e9) / 1e9;
+  const outlines = Object.fromEntries(VIEW_IDS.map((v) => [v, fit.outlines[v].map((p) => p.map(tidy))]));
+  return { issues, value: { outlines, ...fit.extra }, touched: [id] };
+}
+
+/**
+ * Fit the front outline to the object's trace, keeping its (or the given) top
+ * and side views, and apply all three outlines as one step. See core/fit.ts.
+ */
+export function fitFront(d: EditorState, id: string, args: FitArgs, ctx: OpContext): OpResult {
+  const e = d.objects.find((o) => o.id === id);
+  if (!e) return { issues: [cmd.issue("unknown-object", `There is no object with id "${id}".`, { objectId: id })] };
+  const image = referenceImage(d, ctx);
+  if ("issues" in image) return image;
+  if (args.part === undefined && e.parts.length > 1)
+    return bad("part-required", `${id} has ${e.parts.length} parts: say which part to fit.`);
+  const part = args.part ?? 0;
+  if (!e.parts[part]) return bad("unknown-part", `${id} has no part ${part} (parts count from 0).`);
+  const restOn: SceneObject[] = [];
+  for (const other of args.restOn ?? []) {
+    const q = d.objects.find((o) => o.id === other);
+    if (!q) return bad("unknown-object", `restOn names "${other}", which is not in the scene.`);
+    restOn.push(q);
+  }
+  return fitting(
+    d,
+    id,
+    () => {
+      const r = fitFrontOutline(d, e, image, { ...args, part, restOn });
+      return { outlines: r.outlines, extra: { cell: r.cell } };
+    },
+    part,
+  );
+}
+
+/** Plain prisms from the trace between two depths (y, metres): a starting point for fitFront. */
+export function suggestViews(
+  d: EditorState,
+  id: string,
+  depth: { min: number; max: number },
+  ctx: OpContext,
+): OpResult {
+  const e = d.objects.find((o) => o.id === id);
+  if (!e) return { issues: [cmd.issue("unknown-object", `There is no object with id "${id}".`, { objectId: id })] };
+  const image = referenceImage(d, ctx);
+  if ("issues" in image) return image;
+  // An object of several parts becomes one plain box: a fresh start.
+  return fitting(d, id, () => {
+    const outlines = suggestPrisms(d, e, image, depth.min, depth.max);
+    if (e.parts.length > 1) cmd.setParts(d, id, [{ outlines }]);
+    return { outlines };
+  });
+}
+
+/** Replace all three outlines of an object at once (metres), as one step; the box follows the three together. */
+export function setOutlines(d: EditorState, id: string, outlines: Record<ViewId, Ring>, part?: number): OpResult {
+  if (!outlines || !VIEW_IDS.every((v) => outlines[v]))
+    return bad("missing-argument", "Give outlines with front, top and side.");
+  return { issues: cmd.setOutlines(d, id, outlines, part), touched: [id] };
+}
+
+/**
+ * Add or change objects by id, as one edit. A new id is added (outlines or a
+ * primitive required); an existing object gets the given properties and
+ * keeps the rest (outlines, or parts, replace its whole shape; trace: null
+ * removes the trace). All or nothing; problems are reported under /objects/<index>.
+ */
+export function upsertObjects(d: EditorState, specs: AddObjectArgs[]): OpResult {
+  const issues: Issue[] = [];
+  const added: string[] = [];
+  const changed: string[] = [];
+  const indexOf = new Map<string, number>();
+  specs.forEach((spec, i) => {
+    const at = (list: Issue[]) => {
+      for (const found of list) issues.push({ ...found, path: `/objects/${i}${found.path}` });
+    };
+    const existing = spec.id !== undefined && d.objects.some((e) => e.id === spec.id);
+    if (!existing) {
+      const r = cmd.addObject(d, { ...spec, center: vec3(spec.center), size: vec3(spec.size) });
+      at(r.issues);
+      if (r.id) {
+        added.push(r.id);
+        indexOf.set(r.id, i);
+      }
+      return;
+    }
+    const id = spec.id!;
+    if (spec.primitive !== undefined || spec.center !== undefined || spec.size !== undefined) {
+      at([cmd.issue("invalid-argument", `${id} exists: give it outlines, not a primitive, center or size.`)]);
+      return;
+    }
+    const { id: _, outlines, parts, primitive: __, center: ___, size: ____, ...props } = spec;
+    // Unlock first, so an object can be unlocked and changed in one step; lock last.
+    const { locked, ...rest } = props;
+    if (locked === false) at(cmd.updateObject(d, id, { locked }));
+    if (outlines && parts) at([cmd.issue("invalid-shape", "Give outlines or parts, not both.")]);
+    else if (outlines) at(cmd.setParts(d, id, [{ outlines }]));
+    else if (parts) at(cmd.setParts(d, id, parts));
+    if (Object.keys(rest).length) at(cmd.updateObject(d, id, rest));
+    if (locked === true) at(cmd.updateObject(d, id, { locked }));
+    changed.push(id);
+    indexOf.set(id, i);
+  });
+  const touched = [...added, ...changed];
+  for (const found of cmd.inFrontOfIssues(d, new Set(touched)))
+    issues.push({
+      ...found,
+      path: found.path.replace(/^\/objects\/\d+/, `/objects/${indexOf.get(found.objectId!)}`),
+    });
+  return { issues, value: { added, changed }, touched };
 }
 
 /** Replace one view's outline: points in metres, [x, z] front, [x, y] top, [y, z] side. */
-export function setOutline(d: EditorState, id: string, view: ViewId, points: Ring): OpResult {
+export function setOutline(d: EditorState, id: string, view: ViewId, points: Ring, part = 0): OpResult {
   if (!isView(view)) return bad("invalid-view", 'view must be "front", "top" or "side".');
-  return { issues: cmd.setOutline(d, id, view, points), touched: [id] };
+  return { issues: cmd.setOutline(d, id, view, points, part), touched: [id] };
 }
 
 /** Set the bounding box of one object or a group: any of min / max per axis. Outlines scale with it. */
@@ -182,6 +350,7 @@ export function setCamera(d: EditorState, patch: CameraArgs): OpResult {
           ? focalToFov(patch.focalLengthMm35Equivalent)
           : patch.verticalFovDegrees,
       roll: patch.rollDegrees,
+      shift: patch.shift ? [patch.shift.x, patch.shift.y] : undefined,
       near: patch.near,
       far: patch.far,
       frame: patch.frame ? [patch.frame.width, patch.frame.height] : undefined,
@@ -212,4 +381,102 @@ export function setReference(d: EditorState, view: ReferenceView, patch: Referen
         }
       : { ...patch, min: pairOf(view, patch.min), size: pairOf(view, patch.size) };
   return { issues: cmd.setReference(d, view, p as never, ctx.image) };
+}
+
+// ---- Queries (change nothing) ----------------------------------------------------------------
+
+const docVec = (v: Vec3): DocVec3 => ({
+  x: Math.round(v[0] * 1e6) / 1e6,
+  y: Math.round(v[1] * 1e6) / 1e6,
+  z: Math.round(v[2] * 1e6) / 1e6,
+});
+const metres = (v: number) => Math.round(v * 1e6) / 1e6;
+
+export interface QueryContext {
+  meshOf: MeshOf;
+  /** The perspective reference image's pixel size, when there is one. */
+  referenceImage?: cmd.ImageSize;
+}
+
+/** Pixels as frame points, or an issue naming the first that cannot be placed. */
+function framePoints(d: EditorState, points: Point[], space: PixelSpace, ctx: QueryContext): Point[] | OpResult {
+  if (space !== "frame" && space !== "reference") return bad("invalid-space", 'space must be "frame" or "reference".');
+  const out: Point[] = [];
+  for (const p of points) {
+    if (!(Array.isArray(p) && p.length === 2 && p.every((v) => Number.isFinite(v))))
+      return bad("invalid-point", "Points are [u, v] pixel pairs.");
+    const q = framePixel(d, p, space, ctx.referenceImage);
+    if (!q) return bad("no-reference", "reference pixels need a perspective reference image.");
+    out.push(q);
+  }
+  return out;
+}
+
+/**
+ * What each pixel sees: the object hit, the world point (metres), the
+ * surface normal, the distance from the camera and the depth along its view
+ * axis; null where nothing is hit.
+ */
+export function raycastPoints(d: EditorState, points: Point[], space: PixelSpace, ctx: QueryContext): OpResult {
+  const frame = framePoints(d, points, space, ctx);
+  if (!Array.isArray(frame)) return frame;
+  const hits = frame.map((p) => {
+    const h = hitAt(d, ctx.meshOf, p);
+    return h
+      ? {
+          id: h.id,
+          point: docVec(h.point),
+          normal: docVec(h.normal),
+          distance: metres(h.distance),
+          depth: metres(h.depth),
+        }
+      : null;
+  });
+  return { issues: [], value: { hits } };
+}
+
+/**
+ * The length in metres between two pixels. `at` places both ends: an object
+ * id (both at the depth along the view axis where that object's surface is at
+ * `from`), a depth in metres, or "surface" (each end where its ray meets the
+ * nearest surface).
+ */
+export function measure(
+  d: EditorState,
+  args: { from: Point; to: Point; space?: PixelSpace; at: string | number },
+  ctx: QueryContext,
+): OpResult {
+  const frame = framePoints(d, [args.from, args.to], args.space ?? "frame", ctx);
+  if (!Array.isArray(frame)) return frame;
+  const [from, to] = frame;
+  let a: Vec3;
+  let b: Vec3;
+  let depth: number | undefined;
+  if (args.at === "surface") {
+    const [ha, hb] = [hitAt(d, ctx.meshOf, from), hitAt(d, ctx.meshOf, to)];
+    if (!ha || !hb) return bad("no-hit", `The ${ha ? "to" : "from"} pixel meets no surface.`);
+    [a, b] = [ha.point, hb.point];
+  } else {
+    if (typeof args.at === "number") {
+      if (!(Number.isFinite(args.at) && args.at > 0))
+        return bad("invalid-depth", "A depth must be a positive number of metres.");
+      depth = args.at;
+    } else {
+      const e = d.objects.find((o) => o.id === args.at);
+      if (!e) return bad("unknown-object", `There is no object with id "${args.at}".`);
+      const h = hitAt(d, ctx.meshOf, from, [e]);
+      if (!h) return bad("no-hit", `The from pixel does not meet ${e.id}'s surface.`);
+      depth = h.depth;
+    }
+    [a, b] = [pointAtDepth(d, from, depth), pointAtDepth(d, to, depth)];
+  }
+  return {
+    issues: [],
+    value: {
+      length: metres(Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2])),
+      from: docVec(a),
+      to: docVec(b),
+      ...(depth !== undefined && { depth: metres(depth) }),
+    },
+  };
 }

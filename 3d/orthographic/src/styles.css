@@ -805,6 +805,9 @@ input[type="checkbox"] {
   margin-top: 5px;
   padding: 4px 6px;
 }
+.triplet.shift-pair {
+  grid-template-columns: 1fr 1fr;
+}
 .assumption-box {
   background: #241f15;
   border: 1px solid #51482e;
@@ -1416,6 +1419,16 @@ dialog::backdrop {
   height: 100%;
   pointer-events: none;
 }
+#pTraces {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: visible;
+}
+#pTraces .trace-handle {
+  pointer-events: all;
+  cursor: move;
+}
 #pLabels {
   position: absolute;
   inset: 0;
@@ -1673,6 +1686,35 @@ dialog::backdrop {
   flex: 1;
   font-size: 11px;
   height: 30px;
+}
+.part-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+.part-label {
+  font-size: 10px;
+  color: var(--muted);
+  width: 34px;
+  flex: none;
+}
+.part-tabs {
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+}
+.part-tabs button {
+  flex: 1 0 30px;
+  min-width: 30px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.part-btn {
+  flex: none;
+  border: 1px solid var(--border);
+  font-size: 15px;
 }
 .point-grid {
   display: grid;

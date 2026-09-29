@@ -12,7 +12,7 @@ import type { Server } from "bun";
 import { validateDocument } from "../orthographic/src/core/document";
 import { objectsCsv } from "../orthographic/src/core/table";
 import { Busy } from "./browser";
-import { checkGeometry } from "./geometry";
+import { checkGeometry, documentImages } from "./geometry";
 import { handleMcp } from "./mcp";
 import { BadRequest, pngBytes, projectionSheet, type RenderOutcome, render } from "./render";
 import {
@@ -34,7 +34,8 @@ export const CORS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "Content-Type, Mcp-Session-Id, Mcp-Protocol-Version, Last-Event-ID, If-Match",
   "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-  "Access-Control-Expose-Headers": "Mcp-Session-Id, ETag, X-Issues, X-Pixels-Per-Meter, X-Placement",
+  "Access-Control-Expose-Headers":
+    "Mcp-Session-Id, ETag, X-Issues, X-Pixels-Per-Meter, X-Placement, X-Legend, X-Depth-Range",
 };
 const json = (body: unknown, status = 200, headers: Record<string, string> = {}) =>
   Response.json(body, { status, headers: { ...CORS, ...headers } });
@@ -70,9 +71,9 @@ const API_INDEX = (ctx: ToolContext) => ({
     "POST /orthographic/api/tools/{name}": "Run a tool; body is its arguments. Returns { ok, issues, ... }.",
     "POST /orthographic/api/validate": "Body: a scene document. Returns { ok, issues } including geometry checks.",
     "POST /orthographic/api/render":
-      "Body: { document, views?, width?, height?, pixelsPerMeter?, references?, labels?, grid? }. Returns { ok, issues, images: { view: PNG data URL }, pixelsPerMeter, placements: { view: { min, size, width, height } } }; orthographic views share one scale.",
+      "Body: { document, views?, width?, height?, pixelsPerMeter?, references?, labels?, grid?, mode?, outlines?, referenceOpacity? }. Returns { ok, issues, images: { view: PNG data URL }, pixelsPerMeter, placements: { view: { min, size, width, height } }, legend? (mode ids), depthRange? (mode depth) }; orthographic views share one scale.",
     "POST /orthographic/api/render/{front|top|side|perspective}.png":
-      "Body: a scene document. Returns the PNG itself (issues in the X-Issues header; orthographic views: X-Pixels-Per-Meter and X-Placement, the pictured area's { min, size } in metres).",
+      "Body: a scene document. Returns the PNG itself (issues in the X-Issues header; orthographic views: X-Pixels-Per-Meter and X-Placement, the pictured area's { min, size } in metres; perspective ?mode=ids: X-Legend, ?mode=depth: X-Depth-Range).",
     "POST /orthographic/api/scenes": "Body: a scene document (or nothing). Stores it; returns { sceneId, editorUrl }.",
     "GET /orthographic/api/scenes/{id}":
       "The stored scene: { sceneId, revision, editorUrl, document }; ?images=data embeds pixels.",
@@ -82,7 +83,7 @@ const API_INDEX = (ctx: ToolContext) => ({
     "GET /orthographic/api/scenes/{id}/events":
       "Server-sent events: event revision, data { revision }, once now and on every change.",
     "GET /orthographic/api/scenes/{id}/render/{view}.png":
-      "A render of the stored scene (?width, height, pixelsPerMeter, references, labels, grid); headers as for POST /render/{view}.png.",
+      "A render of the stored scene (?width, height, pixelsPerMeter, references, labels, grid, mode, outlines, referenceOpacity); headers as for POST /render/{view}.png.",
     "GET /orthographic/api/scenes/{id}/export/{file}":
       "scene.json, agent.json, objects.csv, views.svg or editor.html (the editor with the scene inside).",
   },
@@ -91,8 +92,9 @@ const API_INDEX = (ctx: ToolContext) => ({
 // ---- Stateless document endpoints ------------------------------------------------------------
 
 async function validate(req: Request) {
-  const read = validateDocument(await readJson(req), { geometry: false });
-  const issues = [...read.issues, ...(read.state ? await checkGeometry(read.state) : [])];
+  const doc = await readJson(req);
+  const read = validateDocument(doc, { geometry: false });
+  const issues = [...read.issues, ...(read.state ? await checkGeometry(read.state, documentImages(doc)) : [])];
   return json({ ok: !issues.some((i) => i.severity === "error"), issues });
 }
 
@@ -107,6 +109,8 @@ function pngResponse(out: RenderOutcome, view: string) {
         "X-Pixels-Per-Meter": String(out.pixelsPerMeter),
         "X-Placement": JSON.stringify({ min: placement.min, size: placement.size }),
       }),
+      ...(out.legend && { "X-Legend": encodeURIComponent(JSON.stringify(out.legend)).slice(0, 7000) }),
+      ...(out.depthRange && { "X-Depth-Range": JSON.stringify(out.depthRange) }),
       ...CORS,
     },
   });
@@ -121,6 +125,9 @@ const renderQuery = (url: URL) => ({
   references: boolParam(url, "references"),
   labels: boolParam(url, "labels"),
   grid: boolParam(url, "grid"),
+  mode: url.searchParams.get("mode") ?? undefined,
+  outlines: url.searchParams.get("outlines") ?? undefined,
+  referenceOpacity: numParam(url, "referenceOpacity"),
 });
 
 // ---- Stored scenes ----------------------------------------------------------------------------
@@ -260,7 +267,7 @@ async function sceneRoutes(req: Request, rest: string[], server: Server<unknown>
         );
       const read = await readDocument(body.document, scene);
       if (!read.state) return json({ ok: false, issues: read.issues, revision: scene.revision }, 422);
-      replaceScene(scene, read.state, read.images);
+      replaceScene(scene, read.state, read.images, "editor");
       return json({ ok: true, issues: read.issues, revision: scene.revision });
     }
     return problem(405, "method-not-allowed", "GET or PUT a scene.");

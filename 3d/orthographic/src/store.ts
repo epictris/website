@@ -128,6 +128,8 @@ export interface Prefs {
   bounds: boolean;
   isolate: boolean;
   pointIds: boolean;
+  /** Draw objects' traces over the perspective reference. */
+  traces: boolean;
 }
 
 export interface OrthoCamera {
@@ -143,9 +145,15 @@ export interface UiState {
   anchor: "center" | "min";
   focusView: ActiveView | null;
   prefs: Prefs;
-  pointSelection: { id: string; view: ViewId; index: number } | null;
+  pointSelection: { id: string; view: ViewId; index: number; part: number } | null;
+  /** The part of the selected object whose outlines are edited. */
+  part: number;
   contourView: ViewId;
-  redrawing: { id: string; view: ViewId; points: Point[] } | null;
+  redrawing: { id: string; view: ViewId; points: Point[]; part: number } | null;
+  /** The selected vertex of an object's trace (perspective view, outline mode). */
+  tracePoint: { id: string; index: number } | null;
+  /** A trace being drawn in the perspective view: points in the reference image's pixels. */
+  tracing: { id: string; points: Point[] } | null;
   inspectorTab: InspectorTab;
   referenceTab: ViewId;
   panels: { layersHidden: boolean; inspectorHidden: boolean; showLayers: boolean; showInspector: boolean };
@@ -164,10 +172,22 @@ export const [ui, setUi] = createStore<UiState>({
   mode: "move",
   anchor: "center",
   focusView: null,
-  prefs: { snap: false, snapStep: 0.25, grid: true, labels: true, bounds: false, isolate: false, pointIds: false },
+  prefs: {
+    snap: false,
+    snapStep: 0.25,
+    grid: true,
+    labels: true,
+    bounds: false,
+    isolate: false,
+    pointIds: false,
+    traces: true,
+  },
   pointSelection: null,
+  part: 0,
   contourView: "front",
   redrawing: null,
+  tracePoint: null,
+  tracing: null,
   inspectorTab: "transform",
   referenceTab: "front",
   panels: { layersHidden: false, inspectorHidden: false, showLayers: false, showInspector: false },
@@ -189,9 +209,12 @@ export const selectedObjects = () => state.objects.filter((e) => ui.selected.inc
 export function setSelection(ids: string[]) {
   const valid = ids.filter((id) => obj(id));
   batch(() => {
+    if (valid.join() !== ui.selected.join()) setUi("part", 0);
     setUi("selected", valid);
     if (ui.pointSelection && !valid.includes(ui.pointSelection.id)) setUi("pointSelection", null);
     if (ui.redrawing && !valid.includes(ui.redrawing.id)) setUi("redrawing", null);
+    if (ui.tracePoint && !valid.includes(ui.tracePoint.id)) setUi("tracePoint", null);
+    if (ui.tracing && !valid.includes(ui.tracing.id)) setUi("tracing", null);
   });
 }
 
@@ -210,7 +233,8 @@ export function setActiveView(id: ActiveView) {
 
 export function setMode(m: Mode) {
   batch(() => {
-    setUi({ mode: m, redrawing: null });
+    setUi({ mode: m, redrawing: null, tracing: null });
+    if (m !== "outline") setUi("tracePoint", null);
     if (m === "outline") {
       if (ui.selected.length > 1) setUi("selected", [ui.selected[0]]);
       if (ui.activeView !== "perspective") setUi("contourView", ui.activeView);
@@ -237,8 +261,13 @@ export function pruneUi() {
         ui.selected.filter((id) => ids.has(id)),
       );
     const p = ui.pointSelection;
-    if (p && (!ids.has(p.id) || !obj(p.id)!.outlines[p.view][p.index])) setUi("pointSelection", null);
+    if (p && (!ids.has(p.id) || !obj(p.id)!.parts[p.part]?.outlines[p.view][p.index])) setUi("pointSelection", null);
+    const e = ui.selected.length === 1 ? obj(ui.selected[0]) : undefined;
+    if (ui.part && (!e || ui.part >= e.parts.length)) setUi("part", 0);
     if (ui.redrawing && !ids.has(ui.redrawing.id)) setUi("redrawing", null);
+    const t = ui.tracePoint;
+    if (t && !obj(t.id)?.trace?.points[t.index]) setUi("tracePoint", null);
+    if (ui.tracing && !ids.has(ui.tracing.id)) setUi("tracing", null);
   });
 }
 

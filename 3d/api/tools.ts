@@ -6,19 +6,23 @@
 // core ops as the editor, and answers { ok, issues, ... }: an issue list rather
 // than an exception, so a caller always learns what to fix.
 
+import { deflateSync } from "node:zlib";
 import Ajv2020 from "ajv/dist/2020";
 import { issue } from "../orthographic/src/core/commands";
+import { compareToReference } from "../orthographic/src/core/compare";
 import { validateDocument } from "../orthographic/src/core/document";
 import { base64ToBytes, parseDataUrl } from "../orthographic/src/core/images";
 import * as ops from "../orthographic/src/core/ops";
+import { encodePng } from "../orthographic/src/core/png";
 import { objectsCsv } from "../orthographic/src/core/table";
-import type { EditorState, Issue, ReferenceView, ViewId } from "../orthographic/src/core/types";
+import type { EditorState, Issue, ReferenceView, Ring, ViewId } from "../orthographic/src/core/types";
 import { Busy } from "./browser";
 import { fetchImage } from "./fetchImage";
-import { checkGeometry } from "./geometry";
+import { checkGeometry, documentImages, meshOf, perspectiveImage } from "./geometry";
 import { BadRequest, render, VIEWS } from "./render";
 import {
   addImage,
+  changesSince,
   createScene,
   editScene,
   readDocument,
@@ -34,6 +38,8 @@ import {
 export interface ToolContext {
   /** Where this server is reached from the caller's side, e.g. https://3d.tris.sh. */
   origin: string;
+  /** The tool being run (set by callTool): the change log records it. */
+  tool?: string;
 }
 
 export interface ToolOutput {
@@ -110,6 +116,31 @@ const DOCUMENT: Schema = {
 const SCALE_BASIS =
   'What the scene\'s metres were taken from: things of known size in the reference, e.g. "doorway 2.1 m tall; the figure at left about 1.7 m".';
 const VIEW: Schema = { enum: ["front", "top", "side"], description: "front = x/z, top = x/y, side = y/z." };
+const PIXEL_SPACE: Schema = {
+  enum: ["frame", "reference"],
+  description:
+    "Whose pixels: frame (the camera frame's, camera.frame wide; default) or reference (the perspective reference image's own, as traces use).",
+};
+const TRACE: Schema = object(
+  {
+    points: ring(
+      "The silhouette in the perspective reference image's own pixels: [u, v], origin top-left, v down, as if nothing stood in front. Parts may continue off the image.",
+    ),
+    hidden: {
+      type: "array",
+      items: { type: "array", items: { type: "integer", minimum: 0 }, minItems: 2, maxItems: 2 },
+      description:
+        "Runs of guessed edges where something covers the object in the image: [a, b] covers the edges from vertex a forward to vertex b (wrapping). Pixels nearer a hidden edge than a traced one are not counted as missing.",
+    },
+  },
+  ["points"],
+);
+const IN_FRONT_OF: Schema = {
+  type: "array",
+  items: { type: "string" },
+  description:
+    "Ids of objects this one stands in front of where their traces overlap; compare_to_reference reports occlusion-order where the render disagrees.",
+};
 const OBJECT_PROPS: Record<string, Schema> = {
   name: str("Display name.", { maxLength: 180 }),
   kind: str("Free-form tag such as rock, plant or wall.", { maxLength: 40 }),
@@ -119,35 +150,61 @@ const OBJECT_PROPS: Record<string, Schema> = {
   reviewed: bool("Marks the object as checked against its references."),
   opacity: num("0.05 to 1; below 1 renders translucent."),
   notes: str(undefined, { maxLength: 2000 }),
+  inFrontOf: IN_FRONT_OF,
 };
 
-const object = (properties: Record<string, Schema>, required: string[] = []): Schema => ({
-  type: "object",
-  additionalProperties: false,
-  properties,
-  required,
-});
+function object(properties: Record<string, Schema>, required: string[] = []): Schema {
+  return { type: "object", additionalProperties: false, properties, required };
+}
+
+const OUTLINES: Schema = object(
+  {
+    front: ring("[x, z] points."),
+    top: ring("[x, y] points."),
+    side: ring("[y, z] points."),
+  },
+  ["front", "top", "side"],
+);
+const PART: Schema = {
+  type: "integer",
+  minimum: 0,
+  description: "For an object of several parts: which one (from 0).",
+};
 
 /** Everything add_object and add_objects take to describe one object. */
 const NEW_OBJECT: Record<string, Schema> = {
   id: str("Letters, digits, _ . -, starting with a letter or digit; unique. Generated when omitted."),
-  outlines: object(
-    {
-      front: ring("[x, z] points."),
-      top: ring("[x, y] points."),
-      side: ring("[y, z] points."),
-    },
-    ["front", "top", "side"],
-  ),
+  outlines: OUTLINES,
+  parts: {
+    type: "array",
+    minItems: 1,
+    maxItems: 32,
+    items: object({ id: str("Optional name, unique within the object."), outlines: OUTLINES }, ["outlines"]),
+    description:
+      "Instead of outlines: the object as a union of parts, each with its own three outlines, for a shape that varies in more than one direction at once (a wall with a ledge, stepped rocks). It is selected, coloured, traced and fitted as one.",
+  },
   primitive: {
     enum: ["box", "ellipsoid", "cylinder", "rock"],
     description: "Instead of outlines: a starting shape filling the box given by center and size.",
   },
   center: vec3("Box centre for a primitive (default: the scene centre)."),
   size: vec3("Box size for a primitive in metres (default 4 x 4 x 4)."),
+  trace: TRACE,
   ...OBJECT_PROPS,
 };
 const MAX_BATCH = 100;
+/** Render options that can ride along on a render link. */
+export const RENDER_QUERY = [
+  "width",
+  "height",
+  "pixelsPerMeter",
+  "references",
+  "labels",
+  "grid",
+  "mode",
+  "outlines",
+  "referenceOpacity",
+];
 
 // ---- Helpers ---------------------------------------------------------------------------------
 
@@ -163,6 +220,10 @@ const sceneUrl = (ctx: ToolContext, scene: Scene, path: string) =>
   `${ctx.origin}/orthographic/api/scenes/${scene.id}/${path}`;
 
 const imageOf = (scene: Scene) => (id: string) => scene.images[id];
+const queryContext = (scene: Scene): ops.QueryContext => ({
+  meshOf,
+  referenceImage: perspectiveImage(scene.state, imageOf(scene)),
+});
 
 /** The document form of some objects, with their derived bounds. */
 function objectsOf(scene: Scene, idList: string[]) {
@@ -177,14 +238,15 @@ function objectsOf(scene: Scene, idList: string[]) {
  */
 async function edit(
   args: Record<string, unknown>,
+  ctx: ToolContext,
   op: (draft: EditorState, scene: Scene) => ops.OpResult,
   opts: { brief?: boolean } = {},
 ): Promise<ToolOutput> {
   const scene = requireScene(args.sceneId as string);
-  const out = editScene(scene, (d) => op(d, scene));
+  const out = editScene(scene, (d) => op(d, scene), ctx.tool);
   if (out.issues.some((i) => i.severity === "error")) return done(out.issues, { revision: scene.revision });
   const touched = (out.touched ?? []).filter((id) => scene.state.objects.some((e) => e.id === id));
-  const geometry = touched.length ? await checkGeometry(scene.state, new Set(touched)) : [];
+  const geometry = touched.length ? await checkGeometry(scene.state, imageOf(scene), new Set(touched)) : [];
   const known = new Set(out.issues.map((i) => `${i.code} ${i.path} ${i.objectId}`));
   return done([...out.issues, ...geometry.filter((i) => !known.has(`${i.code} ${i.path} ${i.objectId}`))], {
     revision: scene.revision,
@@ -198,12 +260,41 @@ async function edit(
   });
 }
 
+/**
+ * Run a fitting op: applied as an edit, or with dryRun on a copy. Either way
+ * the answer carries the object's comparison with its trace.
+ */
+async function fitTool(
+  args: Record<string, unknown>,
+  ctx: ToolContext,
+  op: (draft: EditorState, scene: Scene) => ops.OpResult,
+): Promise<ToolOutput> {
+  const scene = requireScene(args.sceneId as string);
+  const id = args.id as string;
+  const compare = (s: EditorState) =>
+    compareToReference(s, meshOf, perspectiveImage(s, imageOf(scene)), { ids: [id] })?.objects[0];
+  if (args.dryRun !== true) {
+    const out = await edit(args, ctx, op);
+    return out.ok ? { ...out, comparison: compare(scene.state) } : out;
+  }
+  const draft = JSON.parse(JSON.stringify(scene.state)) as EditorState;
+  const r = op(draft, scene);
+  if (r.issues.some((i) => i.severity === "error")) return done(r.issues, { revision: scene.revision });
+  const geometry = await checkGeometry(draft, imageOf(scene), new Set([id]));
+  return done([...r.issues, ...geometry], {
+    revision: scene.revision,
+    dryRun: true,
+    ...r.value,
+    comparison: compare(draft),
+  });
+}
+
 async function validateScene(scene: Scene): Promise<Issue[]> {
   const read = validateDocument(sceneDocument(scene, { images: "metadata" }), {
     geometry: false,
     known: imageOf(scene),
   });
-  return [...read.issues, ...(read.state ? await checkGeometry(read.state) : [])];
+  return [...read.issues, ...(read.state ? await checkGeometry(read.state, imageOf(scene)) : [])];
 }
 
 // ---- Guide ---------------------------------------------------------------------------------
@@ -242,7 +333,7 @@ export const TOOLS: Tool[] = [
       const read = await readDocument(args.document);
       if (!read.state) return done(read.issues);
       const scene = createScene(read.state, read.images);
-      return done([...read.issues, ...(await checkGeometry(scene.state))], {
+      return done([...read.issues, ...(await checkGeometry(scene.state, imageOf(scene)))], {
         sceneId: scene.id,
         revision: scene.revision,
         editorUrl: editorUrl(ctx, scene),
@@ -276,6 +367,21 @@ export const TOOLS: Tool[] = [
     },
   },
   {
+    name: "get_changes",
+    title: "Get changes since a revision",
+    description:
+      "What changed in the scene after revision since, one entry per revision: who made it (a tool's name, editor for a person's edit, undo, redo), when, the objects added, removed and changed (with the fields that changed, outlines per view), and the scene, camera, reference and display settings that changed. complete is false when the log no longer reaches back that far. Use it after a revision-conflict, or before replacing anything a person may have been working on.",
+    inputSchema: object(
+      { sceneId: SCENE_ID, since: { type: "integer", minimum: 0, description: "The revision to start after." } },
+      ["sceneId", "since"],
+    ),
+    readOnly: true,
+    async run(args) {
+      const scene = requireScene(args.sceneId as string);
+      return done([], { revision: scene.revision, since: args.since, ...changesSince(scene, args.since as number) });
+    },
+  },
+  {
     name: "load_document",
     title: "Replace the scene with a document",
     description:
@@ -286,8 +392,10 @@ export const TOOLS: Tool[] = [
       const scene = requireScene(args.sceneId as string);
       const read = await readDocument(args.document, scene);
       if (!read.state) return done(read.issues, { revision: scene.revision });
-      replaceScene(scene, read.state, read.images);
-      return done([...read.issues, ...(await checkGeometry(scene.state))], { revision: scene.revision });
+      replaceScene(scene, read.state, read.images, "load_document");
+      return done([...read.issues, ...(await checkGeometry(scene.state, imageOf(scene)))], {
+        revision: scene.revision,
+      });
     },
   },
   {
@@ -301,7 +409,8 @@ export const TOOLS: Tool[] = [
       if (args.document !== undefined) {
         const known = args.sceneId ? imageOf(requireScene(args.sceneId as string)) : undefined;
         const read = validateDocument(args.document, { geometry: false, known });
-        return done([...read.issues, ...(read.state ? await checkGeometry(read.state) : [])]);
+        const images = documentImages(args.document, known);
+        return done([...read.issues, ...(read.state ? await checkGeometry(read.state, images) : [])]);
       }
       if (!args.sceneId) return failed("missing-argument", "Give sceneId or document.");
       const scene = requireScene(args.sceneId as string);
@@ -350,7 +459,7 @@ export const TOOLS: Tool[] = [
     name: "add_object",
     title: "Add an object",
     description:
-      "Add an object from outlines in metres (front [x, z], top [x, y], side [y, z]; each a simple polygon of 3-512 points without a repeated closing point), or from a primitive filling a box (center and size). Returns its id, its bounds and any geometry problems.",
+      "Add an object from outlines in metres (front [x, z], top [x, y], side [y, z]; each a simple polygon of 3-512 points without a repeated closing point), from parts (a union of solids, each with its own three outlines), or from a primitive filling a box (center and size). Returns its id, its bounds and any geometry problems.",
     inputSchema: object(
       {
         sceneId: SCENE_ID,
@@ -358,8 +467,8 @@ export const TOOLS: Tool[] = [
       },
       ["sceneId"],
     ),
-    run: (args) =>
-      edit(args, (d) => {
+    run: (args, ctx) =>
+      edit(args, ctx, (d) => {
         const { sceneId: _, ...spec } = args;
         return ops.addObject(d, spec as ops.AddObjectArgs);
       }),
@@ -381,15 +490,36 @@ export const TOOLS: Tool[] = [
       },
       ["sceneId", "objects"],
     ),
-    run: (args) => edit(args, (d) => ops.addObjects(d, args.objects as ops.AddObjectArgs[]), { brief: true }),
+    run: (args, ctx) => edit(args, ctx, (d) => ops.addObjects(d, args.objects as ops.AddObjectArgs[]), { brief: true }),
+  },
+  {
+    name: "upsert_objects",
+    title: "Add or change objects",
+    description: `Add or change up to ${MAX_BATCH} objects by id in one call and one undoable step: the tool for "change these objects, keep the rest of the scene". A new id is added as by add_object; an existing object takes the properties given and keeps the others (outlines replace all three views; trace: null removes its trace; locked: false unlocks it first). All or nothing, with problems reported under /objects/<index in this list>. Returns the added and changed ids with their bounds.`,
+    inputSchema: object(
+      {
+        sceneId: SCENE_ID,
+        objects: {
+          type: "array",
+          minItems: 1,
+          maxItems: MAX_BATCH,
+          items: object({ ...NEW_OBJECT, trace: { anyOf: [TRACE, { type: "null" }] } }),
+          description: "The objects to add or change.",
+        },
+      },
+      ["sceneId", "objects"],
+    ),
+    run: (args, ctx) =>
+      edit(args, ctx, (d) => ops.upsertObjects(d, args.objects as ops.AddObjectArgs[]), { brief: true }),
   },
   {
     name: "update_object",
     title: "Update an object's properties",
-    description: "Change an object's name, kind, color, visibility, lock, reviewed flag, opacity or notes.",
+    description:
+      "Change an object's name, kind, color, visibility, lock, reviewed flag, opacity, notes or inFrontOf (the objects it stands in front of).",
     inputSchema: object({ sceneId: SCENE_ID, id: str("The object's id."), ...OBJECT_PROPS }, ["sceneId", "id"]),
-    run: (args) =>
-      edit(args, (d) => {
+    run: (args, ctx) =>
+      edit(args, ctx, (d) => {
         const { sceneId: _, id, ...patch } = args;
         return ops.updateObject(d, id as string, patch);
       }),
@@ -398,18 +528,136 @@ export const TOOLS: Tool[] = [
     name: "set_outline",
     title: "Set an outline",
     description:
-      "Replace one view's outline of an object with points in metres: [x, z] for front, [x, y] for top, [y, z] for side. The object's box follows the new outline and the other views stretch to keep shared axes consistent.",
+      "Replace one view's outline of an object (or of one of its parts) with points in metres: [x, z] for front, [x, y] for top, [y, z] for side. The box follows the new outline and the other views stretch to keep shared axes consistent; to change all three views, use set_outlines.",
     inputSchema: object(
       {
         sceneId: SCENE_ID,
         id: str("The object's id."),
         view: VIEW,
         points: ring("A simple closed polygon, no repeated closing point."),
+        part: PART,
       },
       ["sceneId", "id", "view", "points"],
     ),
-    run: (args) =>
-      edit(args, (d) => ops.setOutline(d, args.id as string, args.view as ViewId, args.points as [number, number][])),
+    run: (args, ctx) =>
+      edit(args, ctx, (d) =>
+        ops.setOutline(
+          d,
+          args.id as string,
+          args.view as ViewId,
+          args.points as [number, number][],
+          (args.part as number | undefined) ?? 0,
+        ),
+      ),
+  },
+  {
+    name: "set_trace",
+    title: "Set a trace",
+    description:
+      "Record the object's silhouette as traced in the perspective reference image (image pixels, origin top-left, v down), or remove it (remove: true). Traced objects are compared with the reference by validate and compare_to_reference: spill (drawn outside the trace), missing (trace not covered), IoU.",
+    inputSchema: object(
+      {
+        sceneId: SCENE_ID,
+        id: str("The object's id."),
+        points: (TRACE as { properties: Record<string, Schema> }).properties.points,
+        hidden: (TRACE as { properties: Record<string, Schema> }).properties.hidden,
+        remove: bool("Remove the trace."),
+      },
+      ["sceneId", "id"],
+    ),
+    run: (args, ctx) =>
+      edit(args, ctx, (d) => {
+        if (args.remove === true) return ops.setTrace(d, args.id as string, null);
+        if (!args.points) return { issues: [issue("missing-argument", "Give points, or remove: true.")] };
+        return ops.setTrace(d, args.id as string, {
+          points: args.points as [number, number][],
+          hidden: args.hidden as [number, number][] | undefined,
+        });
+      }),
+  },
+  {
+    name: "set_outlines",
+    title: "Set all three outlines",
+    description:
+      "Replace all three outlines of an object (or of one of its parts: part) at once, in metres (front [x, z], top [x, y], side [y, z]), as one undoable step. The box comes from the three together, so no view is stretched along the way (setting them one at a time with set_outline stretches the others each time).",
+    inputSchema: object(
+      {
+        sceneId: SCENE_ID,
+        id: str("The object's id."),
+        outlines: OUTLINES,
+        part: PART,
+      },
+      ["sceneId", "id", "outlines"],
+    ),
+    run: (args, ctx) =>
+      edit(args, ctx, (d) =>
+        ops.setOutlines(
+          d,
+          args.id as string,
+          args.outlines as Record<ViewId, [number, number][]>,
+          args.part as number | undefined,
+        ),
+      ),
+  },
+  {
+    name: "fit_front",
+    title: "Fit the front outline to the trace",
+    description:
+      "Solve the object's front outline from its trace and its top and side views (its own, or top and side given here in metres): the front whose solid, front ∩ top ∩ side, shows exactly inside the trace through the camera. Every depth the top and side allow is tested, and points off the image must stay inside the trace too. restOn: ids of objects the solid rests on and must not enter. trim (default true) then replaces the top and side by the solid's own shadows, so all three views agree exactly. Applies the three outlines as one undoable step (dryRun: true only reports them) and returns them with the front plane's cell size and the object's comparison with its trace (spill, missing, iou). Design the top and side first: they carry the depth the picture cannot.",
+    inputSchema: object(
+      {
+        sceneId: SCENE_ID,
+        id: str("The object's id; it needs a trace (set_trace) and the scene a perspective reference."),
+        top: ring("Top outline [x, y] in metres to fit with (default: the object's own)."),
+        side: ring("Side outline [y, z] in metres to fit with (default: the object's own)."),
+        restOn: ids("Objects the fitted solid rests on and must not enter."),
+        trim: bool("Replace the top and side by the solid's own shadows (default true)."),
+        maxPoints: {
+          type: "integer",
+          minimum: 4,
+          maximum: 512,
+          description: "Most points in a fitted outline (default 160).",
+        },
+        part: PART,
+        dryRun: bool("Report the fit without changing the scene."),
+      },
+      ["sceneId", "id"],
+    ),
+    run: (args, ctx) =>
+      fitTool(args, ctx, (d, scene) =>
+        ops.fitFront(
+          d,
+          args.id as string,
+          {
+            top: args.top as Ring | undefined,
+            side: args.side as Ring | undefined,
+            restOn: args.restOn as string[] | undefined,
+            trim: args.trim as boolean | undefined,
+            maxPoints: args.maxPoints as number | undefined,
+            part: args.part as number | undefined,
+          },
+          { image: imageOf(scene) },
+        ),
+      ),
+  },
+  {
+    name: "suggest_views",
+    title: "Suggest views from the trace",
+    description:
+      "A starting point for fit_front: plain box outlines for an object from its trace and the depth range it occupies (world y, metres, from depth.min to depth.max): the box between those depths that the trace's rays pass through. Applies them as one undoable step (dryRun: true only reports them). Then shape the top and side, and fit_front the front.",
+    inputSchema: object(
+      {
+        sceneId: SCENE_ID,
+        id: str("The object's id; it needs a trace."),
+        depth: object({ min: num(), max: num() }, ["min", "max"]),
+        dryRun: bool("Report the outlines without changing the scene."),
+      },
+      ["sceneId", "id", "depth"],
+    ),
+    run: (args, ctx) =>
+      fitTool(args, ctx, (d, scene) =>
+        ops.suggestViews(d, args.id as string, args.depth as { min: number; max: number }, { image: imageOf(scene) }),
+      ),
   },
   {
     name: "set_bounds",
@@ -425,8 +673,10 @@ export const TOOLS: Tool[] = [
       },
       ["sceneId", "ids"],
     ),
-    run: (args) =>
-      edit(args, (d) => ops.setBounds(d, args.ids as string[], { min: args.min as never, max: args.max as never })),
+    run: (args, ctx) =>
+      edit(args, ctx, (d) =>
+        ops.setBounds(d, args.ids as string[], { min: args.min as never, max: args.max as never }),
+      ),
   },
   {
     name: "move_objects",
@@ -437,14 +687,14 @@ export const TOOLS: Tool[] = [
       "ids",
       "offset",
     ]),
-    run: (args) => edit(args, (d) => ops.moveObjects(d, args.ids as string[], args.offset as never)),
+    run: (args, ctx) => edit(args, ctx, (d) => ops.moveObjects(d, args.ids as string[], args.offset as never)),
   },
   {
     name: "duplicate_objects",
     title: "Duplicate objects",
     description: "Copy objects, offset by a vector in metres (default {x: 1, y: 1, z: 0}). Returns the new ids.",
     inputSchema: object({ sceneId: SCENE_ID, ids: ids(), offset: vec3() }, ["sceneId", "ids"]),
-    run: (args) => edit(args, (d) => ops.duplicateObjects(d, args.ids as string[], args.offset as never)),
+    run: (args, ctx) => edit(args, ctx, (d) => ops.duplicateObjects(d, args.ids as string[], args.offset as never)),
   },
   {
     name: "delete_objects",
@@ -452,7 +702,7 @@ export const TOOLS: Tool[] = [
     description: "Delete objects (undo restores them).",
     inputSchema: object({ sceneId: SCENE_ID, ids: ids() }, ["sceneId", "ids"]),
     destructive: true,
-    run: (args) => edit(args, (d) => ops.deleteObjects(d, args.ids as string[])),
+    run: (args, ctx) => edit(args, ctx, (d) => ops.deleteObjects(d, args.ids as string[])),
   },
   {
     name: "set_scene",
@@ -469,8 +719,8 @@ export const TOOLS: Tool[] = [
       },
       ["sceneId"],
     ),
-    run: (args) =>
-      edit(args, (d) => {
+    run: (args, ctx) =>
+      edit(args, ctx, (d) => {
         const { sceneId: _, ...patch } = args;
         return ops.setScene(d, patch as ops.SceneArgs);
       }),
@@ -488,14 +738,14 @@ export const TOOLS: Tool[] = [
       },
       ["sceneId", "factor"],
     ),
-    run: (args) =>
-      edit(args, (d) => ops.rescaleScene(d, args.factor as number, args.scale as { basis?: string } | undefined)),
+    run: (args, ctx) =>
+      edit(args, ctx, (d) => ops.rescaleScene(d, args.factor as number, args.scale as { basis?: string } | undefined)),
   },
   {
     name: "set_camera",
     title: "Set the camera",
     description:
-      "Set the perspective camera: position, target, the lens as verticalFovDegrees or focalLengthMm35Equivalent (f = 12 mm / tan(vertical FOV / 2); give one), rollDegrees, near, far, frame (output pixels, fixes the aspect ratio) and locked.",
+      "Set the perspective camera: position, target, the lens as verticalFovDegrees or focalLengthMm35Equivalent (f = 12 mm / tan(vertical FOV / 2); give one), rollDegrees, shift (lens shift as fractions of the frame: y > 0 shows more above and lowers the horizon while verticals stay vertical, as a painter's or architect's view does), near, far, frame (output pixels, fixes the aspect ratio) and locked.",
     inputSchema: object(
       {
         sceneId: SCENE_ID,
@@ -504,6 +754,13 @@ export const TOOLS: Tool[] = [
         verticalFovDegrees: num("5 to 140."),
         focalLengthMm35Equivalent: num("Full-frame equivalent focal length, 4.36 to 275 mm."),
         rollDegrees: num("-180 to 180."),
+        shift: object(
+          {
+            x: num("Frame widths, -1 to 1: the frame moves right."),
+            y: num("Frame heights, -1 to 1: the frame moves up."),
+          },
+          ["x", "y"],
+        ),
         near: num(),
         far: num(),
         frame: object({ width: { type: "integer" }, height: { type: "integer" } }, ["width", "height"]),
@@ -511,8 +768,8 @@ export const TOOLS: Tool[] = [
       },
       ["sceneId"],
     ),
-    run: (args) =>
-      edit(args, (d) => {
+    run: (args, ctx) =>
+      edit(args, ctx, (d) => {
         const { sceneId: _, ...patch } = args;
         return ops.setCamera(d, patch as ops.CameraArgs);
       }),
@@ -531,8 +788,8 @@ export const TOOLS: Tool[] = [
       },
       ["sceneId"],
     ),
-    run: (args) =>
-      edit(args, (d) => {
+    run: (args, ctx) =>
+      edit(args, ctx, (d) => {
         const { sceneId: _, ...patch } = args;
         return ops.setDisplay(d, patch as ops.DisplayArgs);
       }),
@@ -559,8 +816,8 @@ export const TOOLS: Tool[] = [
       },
       ["sceneId", "view"],
     ),
-    run: (args) =>
-      edit(args, (d, scene) => {
+    run: (args, ctx) =>
+      edit(args, ctx, (d, scene) => {
         const { sceneId: _, view, remove, ...patch } = args;
         return ops.setReference(d, view as ReferenceView, remove === true ? null : (patch as ops.ReferenceArgs), {
           image: imageOf(scene),
@@ -615,6 +872,19 @@ export const TOOLS: Tool[] = [
         references: bool("Draw reference images (default true)."),
         labels: bool("Label objects and draw the scale bar in orthographic views (default true)."),
         grid: bool("Draw the grid in orthographic views (default true)."),
+        mode: {
+          enum: ["shaded", "ids", "depth"],
+          description:
+            'Perspective only. shaded (default): lit solids, outlined over the reference. ids: flat colours, one per object, no anti-aliasing, on black, with a legend { "#rrggbb": objectId }. depth: 16-bit grey, the nearest surface white, nothing black, with depthRange { near, far } in metres (v >= 1 is far - (v - 1) / 65534 * (far - near)). ids and depth are drawn without a browser, in a fraction of a second.',
+        },
+        outlines: {
+          enum: ["all", "silhouette"],
+          description:
+            "Perspective over a reference: every edge (default: silhouettes, folds where an object hides part of itself, and creases) or only each object's outer silhouette.",
+        },
+        referenceOpacity: num(
+          "Perspective: the reference's opacity for this picture only (0 to 1); the scene keeps its own.",
+        ),
       },
       ["sceneId"],
     ),
@@ -624,8 +894,7 @@ export const TOOLS: Tool[] = [
       const { sceneId: _, ...options } = args;
       const out = await render(sceneDocument(scene, { images: "data" }), options, `${scene.id}@${scene.revision}`);
       const query = new URLSearchParams();
-      for (const k of ["width", "height", "pixelsPerMeter", "references", "labels", "grid"])
-        if (args[k] !== undefined) query.set(k, String(args[k]));
+      for (const k of RENDER_QUERY) if (args[k] !== undefined) query.set(k, String(args[k]));
       const urls = Object.fromEntries(
         Object.keys(out.images ?? {}).map((v) => [
           v,
@@ -636,9 +905,119 @@ export const TOOLS: Tool[] = [
         ...done(out.issues),
         revision: scene.revision,
         ...(out.placements && { pixelsPerMeter: out.pixelsPerMeter, placements: out.placements }),
+        ...(out.legend && { legend: out.legend }),
+        ...(out.depthRange && { depthRange: out.depthRange }),
         urls,
         images: out.images,
       };
+    },
+  },
+  {
+    name: "raycast",
+    title: "What pixels see",
+    description:
+      "For each pixel, what the camera sees there: the object hit, the world point in metres, the surface normal, the distance from the camera and the depth along its view axis (null where nothing is hit). space: frame (the camera frame's pixels, the default) or reference (the perspective reference image's own pixels, as traces use). Needs no browser.",
+    inputSchema: object(
+      {
+        sceneId: SCENE_ID,
+        points: {
+          type: "array",
+          minItems: 1,
+          maxItems: 1000,
+          items: { type: "array", items: { type: "number" }, minItems: 2, maxItems: 2 },
+          description: "[u, v] pixels, origin top-left.",
+        },
+        space: PIXEL_SPACE,
+      },
+      ["sceneId", "points"],
+    ),
+    readOnly: true,
+    async run(args) {
+      const scene = requireScene(args.sceneId as string);
+      const r = ops.raycastPoints(
+        scene.state,
+        args.points as [number, number][],
+        (args.space as never) ?? "frame",
+        queryContext(scene),
+      );
+      return done(r.issues, { revision: scene.revision, ...r.value });
+    },
+  },
+  {
+    name: "measure",
+    title: "Measure between two pixels",
+    description:
+      'The length in metres between two pixels. at places both ends in depth: an object id (both at the depth, along the view axis, of that object\'s surface under from: "a fern 160 px tall standing on the platform" is from its foot to its tip at the platform), a depth in metres, or "surface" (each end where its own ray meets the nearest surface). Returns the length, both world points and the depth used. Use it to size things of known size in the reference when setting the scale.',
+    inputSchema: object(
+      {
+        sceneId: SCENE_ID,
+        from: { type: "array", items: { type: "number" }, minItems: 2, maxItems: 2, description: "[u, v] pixel." },
+        to: { type: "array", items: { type: "number" }, minItems: 2, maxItems: 2, description: "[u, v] pixel." },
+        space: PIXEL_SPACE,
+        at: {
+          anyOf: [{ type: "string" }, { type: "number", exclusiveMinimum: 0 }],
+          description: 'An object id, a depth in metres, or "surface".',
+        },
+      },
+      ["sceneId", "from", "to", "at"],
+    ),
+    readOnly: true,
+    async run(args) {
+      const scene = requireScene(args.sceneId as string);
+      const r = ops.measure(
+        scene.state,
+        {
+          from: args.from as [number, number],
+          to: args.to as [number, number],
+          space: args.space as never,
+          at: args.at as string | number,
+        },
+        queryContext(scene),
+      );
+      return done(r.issues, { revision: scene.revision, ...r.value });
+    },
+  },
+  {
+    name: "compare_to_reference",
+    title: "Compare with the reference",
+    description:
+      "Score every object that has a trace (or those in ids) against the perspective reference, on the camera frame: spill (pixels drawn outside its trace; always wrong), missing (pixels of its trace, away from hidden runs, where the background or an object whose own trace does not contain them shows instead), iou (visible region against the trace, less what nearer traced objects rightly cover) and order (pixels where an inFrontOf hint is contradicted), each count with its bounding box in frame pixels. Also returns the trace-spill, trace-missing and occlusion-order issues validate reports. diff: true adds a picture: correct in grey, spill in red, missing in blue, other geometry dark grey. Needs no browser; takes well under a second.",
+    inputSchema: object(
+      {
+        sceneId: SCENE_ID,
+        ids: ids("Compare only these objects (default: every visible object with a trace)."),
+        diff: bool("Also return the difference picture."),
+      },
+      ["sceneId"],
+    ),
+    readOnly: true,
+    async run(args) {
+      const scene = requireScene(args.sceneId as string);
+      const s = scene.state;
+      const image = perspectiveImage(s, imageOf(scene));
+      if (!s.references.perspective || !image)
+        return failed(
+          "no-reference",
+          "The scene has no perspective reference image to compare with; set one with set_reference.",
+        );
+      const c = compareToReference(s, meshOf, image, {
+        ids: args.ids as string[] | undefined,
+        diff: args.diff === true,
+      });
+      if (!c)
+        return failed(
+          "nothing-to-compare",
+          "No visible object has a trace. Record each object's silhouette in the reference with set_trace first.",
+        );
+      const images = c.diff && {
+        diff: `data:image/png;base64,${Buffer.from(await encodePng(c.width, c.height, { rgba: c.diff }, (d) => deflateSync(d))).toString("base64")}`,
+      };
+      return done(c.issues, {
+        revision: scene.revision,
+        frame: { width: c.width, height: c.height },
+        objects: c.objects,
+        ...(images && { images }),
+      });
     },
   },
   {
@@ -666,6 +1045,17 @@ export const TOOLS: Tool[] = [
 
 // ---- Dispatch ---------------------------------------------------------------------------------
 
+// Every tool that changes a stored scene takes the revision the caller's picture of it is based on.
+for (const t of TOOLS) {
+  const properties = t.inputSchema.properties as Record<string, Schema> | undefined;
+  if (!t.readOnly && properties?.sceneId)
+    properties.baseRevision = {
+      type: "integer",
+      description:
+        "The revision your view of the scene is based on (from the last result or get_scene). If the scene has moved on since (a person editing it, say), nothing changes and the answer is revision-conflict; get_changes says what changed.",
+    };
+}
+
 const ajv = new Ajv2020({ allErrors: true, strict: false });
 const validators = new Map(TOOLS.map((t) => [t.name, ajv.compile(t.inputSchema)]));
 export const toolByName = (name: string) => TOOLS.find((t) => t.name === name);
@@ -692,7 +1082,21 @@ export async function callTool(name: string, args: unknown, ctx: ToolContext): P
       }),
     );
   try {
-    return await tool.run(input, ctx);
+    const { baseRevision, ...rest } = input;
+    if (baseRevision !== undefined) {
+      const scene = requireScene(rest.sceneId as string);
+      if (scene.revision !== baseRevision)
+        return done(
+          [
+            issue(
+              "revision-conflict",
+              `The scene changed: it is at revision ${scene.revision}, not ${baseRevision}. Nothing was changed. get_changes { since: ${baseRevision} } lists what changed; retry based on revision ${scene.revision}.`,
+            ),
+          ],
+          { revision: scene.revision },
+        );
+    }
+    return await tool.run(rest, { ...ctx, tool: name });
   } catch (e) {
     if (e instanceof StoreError) return failed(e.code, e.message);
     if (e instanceof BadRequest) return failed("bad-request", e.message);

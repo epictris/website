@@ -3,6 +3,7 @@
 
 import { type CameraMatrices, cameraMatrices } from "../core/camera";
 import { niceStep, transform, vec } from "../core/math";
+import { frameRay, raycast } from "../core/raycast";
 import type { Display, SceneObject, Vec3 } from "../core/types";
 import type { MeshEntry } from "../meshes";
 
@@ -13,6 +14,8 @@ export interface RenderInput {
   objects: SceneObject[];
   meshes: ReadonlyMap<string, MeshEntry>;
   selected: (id: string) => boolean;
+  /** Which outlines to draw over a reference: every edge (default), or only each object's outer silhouette. */
+  outlines?: "all" | "silhouette";
 }
 
 const CLAY: Vec3 = [0.48, 0.63, 0.69];
@@ -54,16 +57,21 @@ float shade=0.34+0.40*key+0.19*fill+0.11*front;vec3 col=mix(uColor,uColor*shade+
 // ---- Outlines --------------------------------------------------------------------------
 // The solids' outlines, drawn above the reference image at full opacity so the
 // geometry stays readable however opaque the reference is. A hidden pass
-// renders each pixel's object id with depth; the edge pass then draws a line
-// on the nearer side wherever the object changes (silhouettes against the
-// background or another object) or the depth jumps (an object hiding part of
-// itself). Where two objects meet at the same depth (touching or intersecting)
-// the line goes on the higher id's side, so depth noise cannot dither it.
-// Creases are not drawn: the reconstructed meshes bevel sharp edges
-// into bands of small facets, which read as broken, speckled lines.
+// renders each pixel's object id and surface normal with depth; the edge pass
+// then draws a line on the nearer side wherever the object changes
+// (silhouettes against the background or another object), the depth jumps (an
+// object hiding part of itself: a fold) or the normal turns sharply (a crease,
+// drawn fainter). Where two objects meet at the same depth (touching or
+// intersecting) the line goes on the higher id's side, so depth noise cannot
+// dither it. "silhouette" outlines draw only the first kind.
 
-const OUTLINE_GEOMETRY = `precision mediump float;uniform float uId;
-void main(){gl_FragColor=vec4(0.0,0.0,floor(uId/256.0)/255.0,mod(uId,256.0)/255.0);}`;
+/** Neighbouring normals further apart than this (cos 20°) are a crease; smooth shading never turns that fast. */
+const CREASE_COS = 0.94;
+const CREASE_ALPHA = 0.6;
+
+const OUTLINE_GEOMETRY = `precision mediump float;uniform float uId;varying vec3 vNormal;
+vec2 oct(vec3 n){n/=abs(n.x)+abs(n.y)+abs(n.z);vec2 p=n.xy;if(n.z<0.0)p=(1.0-abs(n.yx))*vec2(n.x>=0.0?1.0:-1.0,n.y>=0.0?1.0:-1.0);return p*0.5+0.5;}
+void main(){gl_FragColor=vec4(oct(normalize(vNormal)),floor(uId/256.0)/255.0,mod(uId,256.0)/255.0);}`;
 
 const OUTLINE_VERTEX = `attribute vec2 aCorner;varying vec2 vUv;void main(){vUv=aCorner*0.5+0.5;gl_Position=vec4(aCorner,0.0,1.0);}`;
 
@@ -72,18 +80,23 @@ precision highp float;
 #else
 precision mediump float;
 #endif
-uniform sampler2D uG;uniform sampler2D uD;uniform sampler2D uPal;uniform vec2 uStep;uniform float uNear;uniform float uFar;varying vec2 vUv;
+uniform sampler2D uG;uniform sampler2D uD;uniform sampler2D uPal;uniform vec2 uStep;uniform float uNear;uniform float uFar;
+uniform float uInner;varying vec2 vUv;
 float idAt(vec2 uv){vec4 g=texture2D(uG,uv);return floor(g.b*255.0+0.5)*256.0+floor(g.a*255.0+0.5);}
 float depthAt(vec2 uv){float z=texture2D(uD,uv).r*2.0-1.0;return 2.0*uNear*uFar/(uFar+uNear-z*(uFar-uNear));}
+vec3 normalAt(vec2 uv){vec2 e=texture2D(uG,uv).rg*2.0-1.0;vec3 n=vec3(e,1.0-abs(e.x)-abs(e.y));
+if(n.z<0.0)n.xy=(1.0-abs(n.yx))*vec2(n.x>=0.0?1.0:-1.0,n.y>=0.0?1.0:-1.0);return normalize(n);}
 float ids(vec2 off,float id,float z){float other=idAt(vUv+off);if(other==id)return 0.0;if(other<0.5)return 1.0;
 float zo=depthAt(vUv+off);return zo>z*1.004||(zo>=z*0.996&&id>other)?1.0:0.0;}
 float fold(vec2 off,float id,float z){vec2 a=vUv+off;vec2 b=vUv-off;if(idAt(a)!=id||idAt(b)!=id)return 0.0;
 float za=depthAt(a);float zb=depthAt(b);return abs(za+zb-2.0*z)>0.03*z&&z<max(za,zb)-0.015*z?1.0:0.0;}
+float crease(vec2 off,float id,vec3 n){vec2 a=vUv+off;if(idAt(a)!=id)return 0.0;return dot(n,normalAt(a))<${CREASE_COS}?1.0:0.0;}
 void main(){float id=idAt(vUv);if(id<0.5){gl_FragColor=vec4(0.0);return;}
 float z=depthAt(vUv);vec2 dx=vec2(uStep.x,0.0);vec2 dy=vec2(0.0,uStep.y);
-float e=ids(dx,id,z)+ids(-dx,id,z)+ids(dy,id,z)+ids(-dy,id,z)+fold(dx,id,z)+fold(dy,id,z);
-if(e<0.5){gl_FragColor=vec4(0.0);return;}
-vec4 pal=texture2D(uPal,vec2((id-0.5)/512.0,0.5));gl_FragColor=vec4(mix(pal.rgb,vec3(1.0),pal.a*0.6),1.0);}`;
+float e=ids(dx,id,z)+ids(-dx,id,z)+ids(dy,id,z)+ids(-dy,id,z)+uInner*(fold(dx,id,z)+fold(dy,id,z));
+float alpha=1.0;
+if(e<0.5){vec3 n=normalAt(vUv);if(uInner<0.5||crease(dx,id,n)+crease(dy,id,n)<0.5){gl_FragColor=vec4(0.0);return;}alpha=${CREASE_ALPHA};}
+vec4 pal=texture2D(uPal,vec2((id-0.5)/512.0,0.5));gl_FragColor=vec4(mix(pal.rgb,vec3(1.0),pal.a*0.6)*alpha,alpha);}`;
 
 interface OutlineGl {
   geometry: WebGLProgram;
@@ -253,12 +266,12 @@ export class PerspectiveRenderer {
     return o;
   }
 
-  /** Draw the outlines into the canvas (transparent elsewhere). False when this GPU cannot. */
-  private renderOutlinesGl(input: RenderInput, m: CameraMatrices): boolean {
+  /** Pass 1 of the outlines: object id and normal per pixel, with depth, into the offscreen buffer. */
+  private idPass(input: RenderInput, m: CameraMatrices): OutlineGl | null {
     const gl = this.gl!;
     if (this.outlineGl === undefined) this.outlineGl = this.initOutlines();
     const o = this.outlineGl;
-    if (!o) return false;
+    if (!o) return null;
     const [w, h] = [this.canvas.width, this.canvas.height];
     if (o.size[0] !== w || o.size[1] !== h) {
       gl.bindTexture(gl.TEXTURE_2D, o.color);
@@ -271,19 +284,6 @@ export class PerspectiveRenderer {
       o.size = [w, h];
     }
     const objects = input.objects.slice(0, MAX_PALETTE);
-    // Object colours by id (1-based); alpha marks the selection.
-    const palette = new Uint8Array((MAX_PALETTE + 1) * 4);
-    objects.forEach((e, i) => {
-      palette.set(
-        hexColor(e.color).map((v) => Math.round(v * 255)),
-        i * 4,
-      );
-      palette[i * 4 + 3] = input.selected(e.id) ? 255 : 0;
-    });
-    gl.bindTexture(gl.TEXTURE_2D, o.palette);
-    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, MAX_PALETTE + 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, palette);
-
-    // Pass 1: object id per pixel, with depth.
     gl.bindFramebuffer(gl.FRAMEBUFFER, o.fbo);
     gl.viewport(0, 0, w, h);
     gl.clearColor(0, 0, 0, 0);
@@ -315,6 +315,48 @@ export class PerspectiveRenderer {
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, g.ibo);
       gl.drawElements(gl.TRIANGLES, g.count, g.indexType, 0);
     });
+    return o;
+  }
+
+  /**
+   * Which object covers each pixel of the canvas, as the GPU rasterises it:
+   * 1 + the index into input.objects, 0 for none; row 0 is the top.
+   */
+  objectIds(input: RenderInput): Uint16Array {
+    const [w, h] = [this.canvas.width, this.canvas.height];
+    const m = cameraMatrices(input.camera);
+    const gl = this.gl;
+    const o = gl && this.idPass(input, m);
+    if (!gl || !o) throw new Error("This browser cannot read object ids from the GPU.");
+    const rgba = new Uint8Array(w * h * 4);
+    gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, rgba);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    const ids = new Uint16Array(w * h);
+    for (let y = 0; y < h; y++)
+      for (let x = 0; x < w; x++) {
+        const k = ((h - 1 - y) * w + x) * 4;
+        ids[y * w + x] = rgba[k + 2] * 256 + rgba[k + 3];
+      }
+    return ids;
+  }
+
+  /** Draw the outlines into the canvas (transparent elsewhere). False when this GPU cannot. */
+  private renderOutlinesGl(input: RenderInput, m: CameraMatrices): boolean {
+    const gl = this.gl!;
+    const o = this.idPass(input, m);
+    if (!o) return false;
+    const [w, h] = [this.canvas.width, this.canvas.height];
+    // Object colours by id (1-based); alpha marks the selection.
+    const palette = new Uint8Array((MAX_PALETTE + 1) * 4);
+    input.objects.slice(0, MAX_PALETTE).forEach((e, i) => {
+      palette.set(
+        hexColor(e.color).map((v) => Math.round(v * 255)),
+        i * 4,
+      );
+      palette[i * 4 + 3] = input.selected(e.id) ? 255 : 0;
+    });
+    gl.bindTexture(gl.TEXTURE_2D, o.palette);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, MAX_PALETTE + 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, palette);
 
     // Pass 2: the edges, into the canvas.
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -335,6 +377,7 @@ export class PerspectiveRenderer {
     gl.uniform2f(gl.getUniformLocation(o.edges, "uStep"), r / w, r / h);
     gl.uniform1f(gl.getUniformLocation(o.edges, "uNear"), input.camera.near);
     gl.uniform1f(gl.getUniformLocation(o.edges, "uFar"), input.camera.far);
+    gl.uniform1f(gl.getUniformLocation(o.edges, "uInner"), input.outlines === "silhouette" ? 0 : 1);
     const aCorner = gl.getAttribLocation(o.edges, "aCorner");
     gl.bindBuffer(gl.ARRAY_BUFFER, o.corners);
     gl.enableVertexAttribArray(aCorner);
@@ -445,6 +488,7 @@ export class PerspectiveRenderer {
     const { near, far } = input.camera;
     const ids = new Uint16Array(width * height);
     const zbuf = new Float32Array(width * height).fill(Infinity);
+    const normals = new Float32Array(width * height * 3);
     const objects = input.objects.slice(0, MAX_PALETTE);
     objects.forEach((e, oi) => {
       const geo = input.meshes.get(e.id);
@@ -454,14 +498,17 @@ export class PerspectiveRenderer {
         e.min[1] + (geo.pos[i * 3 + 1] / 65535) * e.size[1],
         e.min[2] + (geo.pos[i * 3 + 2] / 65535) * e.size[2],
       ];
+      const normal = (i: number): Vec3 =>
+        vec.norm([geo.norm[i * 3] / e.size[0], geo.norm[i * 3 + 1] / e.size[1], geo.norm[i * 3 + 2] / e.size[2]]);
       const idx = geo.indices;
       for (let t = 0; t < idx.length; t += 3) {
-        const w = [world(idx[t]), world(idx[t + 1]), world(idx[t + 2])];
-        const p = w.map((v) => transform(m.vp, v));
+        const corner = [idx[t], idx[t + 1], idx[t + 2]];
+        const p = corner.map((i) => transform(m.vp, world(i)));
         if (p.some((q) => q[3] <= near)) continue;
         const s = p.map(
           (q): Vec3 => [((q[0] / q[3]) * 0.5 + 0.5) * width, ((-q[1] / q[3]) * 0.5 + 0.5) * height, q[2] / q[3]],
         );
+        const n = corner.map(normal);
         const [a, b, c] = s;
         const area = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
         if (Math.abs(area) < 1e-6) continue;
@@ -482,11 +529,14 @@ export class PerspectiveRenderer {
             if (z < -1 || z > 1 || z >= zbuf[j]) continue;
             zbuf[j] = z;
             ids[j] = oi + 1;
+            const nn = vec.norm([0, 1, 2].map((k) => wa * n[0][k] + wb * n[1][k] + wc * n[2][k]) as Vec3);
+            normals.set(nn, j * 3);
           }
       }
     });
     const depth = (j: number) => (2 * near * far) / (far + near - zbuf[j] * (far - near));
     const r = this.outlineWidth();
+    const inner = input.outlines !== "silhouette";
     const colors = objects.map((e) => {
       const c = hexColor(e.color);
       return (input.selected(e.id) ? c.map((v) => v + (1 - v) * 0.6) : c).map((v) => Math.round(v * 255));
@@ -494,6 +544,10 @@ export class PerspectiveRenderer {
     const img = ctx.createImageData(width, height);
     const at = (x: number, y: number) =>
       Math.min(height - 1, Math.max(0, y)) * width + Math.min(width - 1, Math.max(0, x));
+    const turn = (j: number, k: number) =>
+      normals[j * 3] * normals[k * 3] +
+      normals[j * 3 + 1] * normals[k * 3 + 1] +
+      normals[j * 3 + 2] * normals[k * 3 + 2];
     for (let y = 0; y < height; y++)
       for (let x = 0; x < width; x++) {
         const j = y * width + x;
@@ -512,19 +566,22 @@ export class PerspectiveRenderer {
           const zo = ids[k] ? depth(k) : Infinity;
           if (zo > z * 1.004 || (zo >= z * 0.996 && id > ids[k])) edge = true;
         }
-        for (const [dx, dy] of [
-          [r, 0],
-          [0, r],
-        ]) {
-          const a = at(x + dx, y + dy);
-          const b = at(x - dx, y - dy);
-          if (ids[a] === id && ids[b] === id) {
-            const [za, zb] = [depth(a), depth(b)];
-            if (Math.abs(za + zb - 2 * z) > 0.03 * z && z < Math.max(za, zb) - 0.015 * z) edge = true;
+        let crease = false;
+        if (inner)
+          for (const [dx, dy] of [
+            [r, 0],
+            [0, r],
+          ]) {
+            const a = at(x + dx, y + dy);
+            const b = at(x - dx, y - dy);
+            if (ids[a] === id && ids[b] === id) {
+              const [za, zb] = [depth(a), depth(b)];
+              if (Math.abs(za + zb - 2 * z) > 0.03 * z && z < Math.max(za, zb) - 0.015 * z) edge = true;
+            }
+            if (ids[a] === id && turn(j, a) < CREASE_COS) crease = true;
           }
-        }
-        if (!edge) continue;
-        img.data.set([...colors[id - 1], 255], j * 4);
+        if (!edge && !crease) continue;
+        img.data.set([...colors[id - 1], edge ? 255 : Math.round(255 * CREASE_ALPHA)], j * 4);
       }
     ctx.putImageData(img, 0, 0);
   }
@@ -676,69 +733,9 @@ export class PerspectiveRenderer {
 
 // ---- Picking ----------------------------------------------------------------------------
 
-function rayBox(origin: Vec3, dir: Vec3): number | null {
-  let lo = 0;
-  let hi = Infinity;
-  for (let a = 0; a < 3; a++) {
-    if (Math.abs(dir[a]) < 1e-12) {
-      if (origin[a] < 0 || origin[a] > 1) return null;
-    } else {
-      let x = -origin[a] / dir[a];
-      let y = (1 - origin[a]) / dir[a];
-      if (x > y) [x, y] = [y, x];
-      lo = Math.max(lo, x);
-      hi = Math.min(hi, y);
-      if (lo > hi) return null;
-    }
-  }
-  return lo;
-}
-
-function rayTriangle(o: Vec3, d: Vec3, a: Vec3, b: Vec3, c: Vec3): number {
-  const e1 = vec.sub(b, a);
-  const e2 = vec.sub(c, a);
-  const p = vec.cross(d, e2);
-  const det = vec.dot(e1, p);
-  if (Math.abs(det) < 1e-12) return Infinity;
-  const inv = 1 / det;
-  const tv = vec.sub(o, a);
-  const u = vec.dot(tv, p) * inv;
-  if (u < 0 || u > 1) return Infinity;
-  const q = vec.cross(tv, e1);
-  const v = vec.dot(d, q) * inv;
-  if (v < 0 || u + v > 1) return Infinity;
-  const t = vec.dot(e2, q) * inv;
-  return t > 0 ? t : Infinity;
-}
-
 /** The object under a point of the camera frame (pixels in a gate of the given size), or null. */
 export function pick(input: RenderInput, px: number, py: number, gateW: number, gateH: number): string | null {
   const c = input.camera;
-  const m = cameraMatrices(c);
-  const t = Math.tan((c.fov * Math.PI) / 360);
-  const sx = ((2 * px) / gateW - 1) * t * m.aspect;
-  const sy = (1 - (2 * py) / gateH) * t;
-  const dir = vec.norm(vec.add(m.forward, vec.add(vec.mul(m.right, sx), vec.mul(m.up, sy))));
-  let best: string | null = null;
-  let nearest = Infinity;
-  for (const e of input.objects) {
-    // Ray in the object's unit box, where the quantised vertices live.
-    const o = c.position.map((x, i) => (x - e.min[i]) / e.size[i]) as Vec3;
-    const d = dir.map((x, i) => x / e.size[i]) as Vec3;
-    const tBox = rayBox(o, d);
-    if (tBox === null || tBox > nearest) continue;
-    const geo = input.meshes.get(e.id);
-    if (!geo) continue;
-    const p = geo.pos;
-    const idx = geo.indices;
-    const vtx = (i: number): Vec3 => [p[i * 3] / 65535, p[i * 3 + 1] / 65535, p[i * 3 + 2] / 65535];
-    for (let j = 0; j < idx.length; j += 3) {
-      const hit = rayTriangle(o, d, vtx(idx[j]), vtx(idx[j + 1]), vtx(idx[j + 2]));
-      if (hit < nearest && hit >= c.near && hit <= c.far) {
-        nearest = hit;
-        best = e.id;
-      }
-    }
-  }
-  return best;
+  const ray = frameRay(c, px, py, gateW, gateH);
+  return raycast(input.objects, (e) => input.meshes.get(e.id), ray, c.near, c.far)?.id ?? null;
 }

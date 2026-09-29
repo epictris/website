@@ -19,6 +19,7 @@ export function defaultCamera(): Camera {
     target: [20, 15, 10],
     fov: 36,
     roll: 0,
+    shift: [0, 0],
     near: 0.05,
     far: 2000,
     frame: [1600, 900],
@@ -30,6 +31,8 @@ export function defaultCamera(): Camera {
 export function cameraProblem(c: Camera): string | null {
   const nums = [c.fov, c.roll, c.near, c.far, ...c.position, ...c.target];
   if (!nums.every((v) => Number.isFinite(v) && Math.abs(v) <= 1e7)) return "Camera values must be finite.";
+  if (c.shift && !(c.shift.length === 2 && c.shift.every((v) => Number.isFinite(v) && Math.abs(v) <= 1)))
+    return "The lens shift must be two fractions of the frame from -1 to 1.";
   if (vec.len(vec.sub(c.position, c.target)) <= 1e-5) return "The camera position and target must differ.";
   if (c.fov < FOV_RANGE[0] || c.fov > FOV_RANGE[1]) return "The vertical FOV must be 5–140° (focal length 4.4–275 mm).";
   if (c.near < 0.0001 || c.far <= c.near) return "Clipping planes need 0.0001 ≤ near < far.";
@@ -81,6 +84,8 @@ export function cameraMatrices(c: Camera): CameraMatrices {
   const aspect = c.frame[0] / c.frame[1];
   const f = 1 / Math.tan((c.fov * Math.PI) / 360);
   const nf = 1 / (c.near - c.far);
+  // Lens shift slides the frame across the image plane: an off-axis frustum.
+  const [sx, sy] = c.shift ?? [0, 0];
   const projection = [
     f / aspect,
     0,
@@ -90,8 +95,8 @@ export function cameraMatrices(c: Camera): CameraMatrices {
     f,
     0,
     0,
-    0,
-    0,
+    2 * sx,
+    2 * sy,
     (c.far + c.near) * nf,
     -1,
     0,
@@ -124,6 +129,7 @@ export function presetCamera(c: Camera, which: "front" | "overview", b: Box): Ca
     position,
     fov: 36,
     roll: 0,
+    shift: [0, 0],
     near: Math.max(0.001, extent * 0.001),
     far: Math.max(2000, extent * 50),
   };

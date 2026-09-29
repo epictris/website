@@ -10,7 +10,7 @@ import { objectsCsv } from "./core/table";
 import type { EditorState, Issue, SceneDocument, ViewId } from "./core/types";
 import { VIEW_IDS } from "./core/views";
 import { live, openLiveScene, sceneFromUrl } from "./live";
-import { restoreMeshCache, saveMeshCache, settle } from "./meshes";
+import { refreshMeshes } from "./meshes";
 import { perspectiveCanvas, projectionSheet } from "./snapshots";
 import {
   commitState,
@@ -69,7 +69,7 @@ function applyEditorConfig(raw: Record<string, unknown> | undefined) {
   const views = [...VIEW_IDS, "perspective"];
   batch(() => {
     if (r.prefs && typeof r.prefs === "object")
-      for (const k of ["snap", "grid", "labels", "bounds", "isolate", "pointIds"] as const)
+      for (const k of ["snap", "grid", "labels", "bounds", "isolate", "pointIds", "traces"] as const)
         if (typeof r.prefs[k] === "boolean") setUi("prefs", k, r.prefs[k]);
     if (r.prefs && [0.05, 0.1, 0.25, 0.5, 1, 2].includes(r.prefs.snapStep))
       setUi("prefs", "snapStep", r.prefs.snapStep);
@@ -118,9 +118,8 @@ export function currentDocument(opts: ExportOptions = {}): SceneDocument {
   return toDocument(unwrap(state) as EditorState, allImages(), opts);
 }
 
-/** The full project file: every image embedded, editor layout, and the mesh cache. */
-export const projectDocument = (meshes = true) =>
-  currentDocument({ images: "data", editor: editorConfig(), meshCache: meshes ? saveMeshCache() : undefined });
+/** The full project file: every image embedded, and the editor layout. */
+export const projectDocument = () => currentDocument({ images: "data", editor: editorConfig() });
 
 /**
  * Load a document, replacing the scene (undoable). Resolves with every issue
@@ -149,7 +148,7 @@ export async function loadDocument(
       resetHistory();
     } else commitState(read.state!);
     if (!opts.keepUi) setUi({ selected: [], pointSelection: null, redrawing: null });
-    restoreMeshCache(read.meshCache);
+    refreshMeshes();
     if (!opts.keepUi) applyEditorConfig(read.editor);
     pruneUi();
   });
@@ -195,7 +194,7 @@ export function queueAutosave() {
   setSaveStatus({ message: "Unsaved session changes", cached: true });
   autosaveTimer = setTimeout(() => {
     try {
-      localStorage.setItem(storageKey(), JSON.stringify(projectDocument(false)));
+      localStorage.setItem(storageKey(), JSON.stringify(projectDocument()));
       setSaveStatus({ message: "Session cached · use Save for a project file", cached: true });
     } catch {
       setSaveStatus({ message: "Use Save · the browser session cache is unavailable", cached: false });
@@ -273,7 +272,6 @@ export async function saveProject() {
     return;
   }
   try {
-    await settle();
     download(`${slug()}.scene.json`, JSON.stringify(projectDocument(), null, 1), "application/json");
     saved("Project saved");
     toast("Project saved: objects, outlines, images, camera and editor layout.");
@@ -298,7 +296,6 @@ export async function saveWorkingHtml() {
     return;
   }
   try {
-    await settle();
     const html = document.documentElement.cloneNode(true) as HTMLElement;
     html.querySelector("#embedded-document")!.textContent = JSON.stringify(projectDocument()).replace(/</g, "\\u003c");
     html.querySelector("#root")!.innerHTML = "";

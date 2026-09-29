@@ -48,23 +48,9 @@
     "display": {
       "$ref": "#/$defs/display"
     },
-    "reconstruction": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "resolution": {
-          "enum": [24, 40, 56, 72],
-          "description": "Sampling cells per axis when the 3D solid is reconstructed. Higher keeps smaller features."
-        }
-      }
-    },
     "editor": {
       "type": "object",
       "description": "Opaque editor UI state (selection, panel layout, view zoom). Safe to omit; never needed by agents."
-    },
-    "meshCache": {
-      "type": "array",
-      "description": "Opaque cache of reconstructed meshes so a reload is instant. Safe to omit; rebuilt from the outlines."
     }
   },
   "$defs": {
@@ -176,7 +162,7 @@
     },
     "object": {
       "type": "object",
-      "required": ["id", "outlines"],
+      "required": ["id"],
       "additionalProperties": false,
       "properties": {
         "id": {
@@ -196,21 +182,28 @@
           "pattern": "^#[0-9a-fA-F]{6}$"
         },
         "outlines": {
-          "type": "object",
-          "required": ["front", "top", "side"],
-          "additionalProperties": false,
-          "description": "The object's silhouette in each view, in metres. front points are [x, z], top points are [x, y], side points are [y, z]. The views that share an axis should span the same range on it (front and top share x, top and side share y, front and side share z).",
-          "properties": {
-            "front": {
-              "$ref": "#/$defs/ring"
-            },
-            "top": {
-              "$ref": "#/$defs/ring"
-            },
-            "side": {
-              "$ref": "#/$defs/ring"
-            }
-          }
+          "$ref": "#/$defs/outlines"
+        },
+        "parts": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": {
+            "$ref": "#/$defs/part"
+          },
+          "description": "Instead of outlines: the object as a union of parts, each with its own three outlines, for shapes that vary in more than one direction at once (a wall with a ledge, stepped rocks). The object is selected, coloured, traced and fitted as one."
+        },
+        "trace": {
+          "$ref": "#/$defs/trace"
+        },
+        "inFrontOf": {
+          "type": "array",
+          "maxItems": 300,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/id"
+          },
+          "description": "Ids of objects this one stands in front of, where their traces overlap: the intent the comparison checks (occlusion-order) where the picture alone cannot say which is nearer."
         },
         "visible": {
           "type": "boolean"
@@ -234,6 +227,83 @@
         "derived": {
           "type": "object",
           "description": "Read-only values computed from the outlines (bounds, center, size). Ignored on load."
+        }
+      },
+      "oneOf": [
+        {
+          "required": ["outlines"]
+        },
+        {
+          "required": ["parts"]
+        }
+      ],
+      "description": "Give the object's shape as outlines (one solid) or parts (a union of solids)."
+    },
+    "outlines": {
+      "type": "object",
+      "required": ["front", "top", "side"],
+      "additionalProperties": false,
+      "description": "The object's silhouette in each view, in metres. front points are [x, z], top points are [x, y], side points are [y, z]. The views that share an axis should span the same range on it (front and top share x, top and side share y, front and side share z).",
+      "properties": {
+        "front": {
+          "$ref": "#/$defs/ring"
+        },
+        "top": {
+          "$ref": "#/$defs/ring"
+        },
+        "side": {
+          "$ref": "#/$defs/ring"
+        }
+      }
+    },
+    "part": {
+      "type": "object",
+      "required": ["outlines"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id",
+          "description": "Optional name for the part, unique within the object."
+        },
+        "outlines": {
+          "$ref": "#/$defs/outlines"
+        }
+      }
+    },
+    "trace": {
+      "type": "object",
+      "required": ["points"],
+      "additionalProperties": false,
+      "description": "The object's silhouette as traced in the perspective reference image, in the image's own pixels (origin top-left, v down), as if nothing stood in front of it. Parts may continue off the image. Compared with the rendered solid by validate and compare_to_reference.",
+      "properties": {
+        "points": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 512,
+          "items": {
+            "$ref": "#/$defs/point"
+          },
+          "description": "One simple closed polygon, [u, v] image pixels, no repeated closing point."
+        },
+        "hidden": {
+          "type": "array",
+          "maxItems": 256,
+          "items": {
+            "type": "array",
+            "prefixItems": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "integer",
+                "minimum": 0
+              }
+            ],
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "description": "Runs of guessed edges, where something covers the object in the image: [a, b] covers the edges from vertex a forward to vertex b (wrapping past the last vertex). Drawn dashed; pixels nearer a hidden edge than a traced one are not counted as missing."
         }
       }
     },
@@ -263,6 +333,24 @@
           "type": "number",
           "minimum": -180,
           "maximum": 180
+        },
+        "shift": {
+          "type": "object",
+          "required": ["x", "y"],
+          "additionalProperties": false,
+          "description": "Lens shift, as fractions of the frame: x moves the frame right, y moves it up (showing more above, so the horizon sits lower). An off-axis projection: verticals stay vertical, unlike tilting the camera. Default {x: 0, y: 0}.",
+          "properties": {
+            "x": {
+              "type": "number",
+              "minimum": -1,
+              "maximum": 1
+            },
+            "y": {
+              "type": "number",
+              "minimum": -1,
+              "maximum": 1
+            }
+          }
         },
         "near": {
           "type": "number",

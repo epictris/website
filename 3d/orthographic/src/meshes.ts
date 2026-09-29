@@ -1,14 +1,13 @@
-// Keeps each object's reconstructed mesh up to date with its outlines. Builds
-// run one at a time in a worker (selected objects first); results are cached by
-// a key of the outlines and resolution, so undo and reloads are instant.
+// Keeps each object's solid up to date with its outlines. Exact meshing takes
+// milliseconds, so it runs on the page in short slices (selected objects
+// first) that leave the UI responsive on large scenes; results are kept by a
+// key of the outlines, so undo is instant.
 
 import { createSignal } from "solid-js";
 import { createStore, reconcile, unwrap } from "solid-js/store";
-import { base64ToBytes, bytesToBase64 } from "./core/images";
 import { buildMesh, MESH_VERSION, type Mesh, type MeshMeta } from "./core/mesher";
 import type { SceneObject } from "./core/types";
-import MeshWorker from "./mesher.worker?worker&inline";
-import { state, toast, ui } from "./store";
+import { state, ui } from "./store";
 
 export interface MeshEntry extends Mesh {
   key: string;
@@ -22,13 +21,12 @@ export const [meshStatus, setMeshStatus] = createStore<
 /** Bumps whenever a mesh is installed or removed; renderers track it. */
 export const [meshVersion, setMeshVersion] = createSignal(0);
 
-export const shapeKey = (e: SceneObject, resolution = state.reconstruction.resolution) =>
-  `${MESH_VERSION}|${resolution}|${JSON.stringify(e.outlines)}`;
+/** The mesh depends on the parts, and (through which edges are creases) on the box's proportions. */
+export const shapeKey = (e: SceneObject) => `${MESH_VERSION}|${e.size.join(",")}|${JSON.stringify(e.parts)}`;
 
-let worker: Worker | null = null;
-let busy: { id: string; key: string } | null = null;
+/** Build for at most this long before yielding to the page. */
+const SLICE_MS = 12;
 let timer: ReturnType<typeof setTimeout> | undefined;
-const waiters: (() => void)[] = [];
 const installListeners: ((id: string, mesh: MeshEntry | null) => void)[] = [];
 
 /** Renderers upload GPU buffers here. */
@@ -43,138 +41,60 @@ function install(id: string, mesh: MeshEntry | null) {
   setMeshVersion((v) => v + 1);
 }
 
-export function initMesher() {
+function build(e: SceneObject) {
+  const key = shapeKey(e);
   try {
-    worker = new MeshWorker();
-    worker.onmessage = (e: MessageEvent) => finished(e.data);
-    worker.onerror = () => {
-      worker?.terminate();
-      worker = null;
-      busy = null;
-      toast("Building 3D on the main thread (the worker failed).", true);
-      schedule(true);
-    };
-  } catch {
-    worker = null;
+    install(e.id, { ...buildMesh(unwrap(e).parts, [...e.size]), key });
+  } catch (error) {
+    install(e.id, null);
+    setMeshStatus(e.id, {
+      key,
+      meta: { empty: true, parts: [] },
+      triangles: 0,
+      error: (error as Error).message || String(error),
+    });
   }
 }
 
-function finished(d: { id: string; key: string; error?: string } & Partial<Mesh>) {
-  busy = null;
-  const e = state.objects.find((o) => o.id === d.id);
-  if (e && d.key === shapeKey(e)) {
-    if (d.error) {
-      setMeshStatus(d.id, {
-        key: d.key,
-        meta: {
-          empty: true,
-          coverage: { front: 0, top: 0, side: 0 },
-          occupied: 0,
-          grid: state.reconstruction.resolution,
-        },
-        triangles: 0,
-        error: d.error,
-      });
-      toast(`Could not build ${d.id}: ${d.error}`, true);
-    } else install(d.id, { pos: d.pos!, norm: d.norm!, indices: d.indices!, meta: d.meta!, key: d.key });
-  }
-  schedule(true);
-}
-
-/** Queue the next out-of-date object. */
-export function schedule(immediate = false) {
+/** Build out-of-date solids, a slice at a time. */
+export function schedule() {
   for (const id of [...meshes.keys()]) if (!state.objects.some((e) => e.id === id)) install(id, null);
   for (const id of Object.keys(meshStatus)) if (!state.objects.some((e) => e.id === id)) setMeshStatus(id, undefined!);
-  if (busy) return;
-  if (timer) {
-    if (!immediate) return;
-    clearTimeout(timer);
-  }
-  timer = setTimeout(
-    () => {
-      timer = undefined;
-      if (busy) return;
-      const ordered = [...state.objects].sort(
-        (a, b) => Number(ui.selected.includes(b.id)) - Number(ui.selected.includes(a.id)),
-      );
-      const e = ordered.find((o) => meshStatus[o.id]?.key !== shapeKey(o));
-      if (!e) {
-        for (const f of waiters.splice(0)) f();
+  if (timer) return;
+  timer = setTimeout(() => {
+    timer = undefined;
+    const start = performance.now();
+    const stale = [...state.objects]
+      .filter((e) => meshStatus[e.id]?.key !== shapeKey(e))
+      .sort((a, b) => Number(ui.selected.includes(b.id)) - Number(ui.selected.includes(a.id)));
+    for (const e of stale) {
+      if (performance.now() - start > SLICE_MS) {
+        schedule();
         return;
       }
-      const job = {
-        id: e.id,
-        key: shapeKey(e),
-        outlines: JSON.parse(JSON.stringify(e.outlines)),
-        resolution: state.reconstruction.resolution,
-      };
-      busy = { id: e.id, key: job.key };
-      if (worker) worker.postMessage(job);
-      else
-        setTimeout(() => {
-          try {
-            finished({ ...job, ...buildMesh(job.outlines, job.resolution) });
-          } catch (error) {
-            finished({ ...job, error: (error as Error).message });
-          }
-        }, 0);
-    },
-    immediate ? 0 : 90,
-  );
+      build(e);
+    }
+  }, 0);
+}
+
+/**
+ * Install the solids that are out of date right now, without yielding. For
+ * the few places that need every mesh before continuing (renders, the API).
+ */
+export function buildNow() {
+  for (const e of state.objects) if (meshStatus[e.id]?.key !== shapeKey(e)) build(e);
 }
 
 export const allMeshesCurrent = () => state.objects.every((e) => meshStatus[e.id]?.key === shapeKey(e));
 
 /** Resolves once every object's mesh matches its outlines. */
-export function settle(timeoutMs = 120000): Promise<void> {
-  schedule(true);
-  if (allMeshesCurrent()) return Promise.resolve();
-  return new Promise((resolve, reject) => {
-    const t = setTimeout(() => reject(new Error("The 3D geometry is still rebuilding; try again shortly.")), timeoutMs);
-    waiters.push(() => {
-      clearTimeout(t);
-      resolve();
-    });
-  });
+export function settle(): Promise<void> {
+  buildNow();
+  return Promise.resolve();
 }
 
-// ---- Cache in saved projects ---------------------------------------------------------
-
-export interface CachedMesh {
-  id: string;
-  key: string;
-  positions: string;
-  normals: string;
-  indices: string;
-  indexType: "uint16" | "uint32";
-  meta: MeshMeta;
-}
-
-export function saveMeshCache(): CachedMesh[] {
-  const out: CachedMesh[] = [];
-  for (const e of state.objects) {
-    const m = meshes.get(e.id);
-    if (!m || m.key !== shapeKey(e)) continue;
-    const b = (a: ArrayBufferView) => bytesToBase64(new Uint8Array(a.buffer, a.byteOffset, a.byteLength));
-    out.push({
-      id: e.id,
-      key: m.key,
-      positions: b(m.pos),
-      normals: b(m.norm),
-      indices: b(m.indices),
-      indexType: m.indices instanceof Uint32Array ? "uint32" : "uint16",
-      meta: m.meta,
-    });
-  }
-  return out;
-}
-
-/**
- * After the scene is replaced: keep the meshes that still match their outlines
- * (a live update usually changes few objects), install cached meshes that do,
- * and rebuild the rest.
- */
-export function restoreMeshCache(cache: unknown) {
+/** After the scene is replaced: drop the meshes that no longer match their outlines, and rebuild. */
+export function refreshMeshes() {
   const current = (id: string, key: string) => {
     const e = state.objects.find((o) => o.id === id);
     return !!e && key === shapeKey(e);
@@ -183,30 +103,5 @@ export function restoreMeshCache(cache: unknown) {
   setMeshStatus(
     reconcile(Object.fromEntries(Object.entries(unwrap(meshStatus)).filter(([id, s]) => current(id, s.key)))),
   );
-  if (Array.isArray(cache)) installCached(cache as CachedMesh[]);
-  schedule(true);
-}
-
-function installCached(cache: CachedMesh[]) {
-  for (const c of cache) {
-    const e = state.objects.find((o) => o.id === c?.id);
-    if (!e || c.key !== shapeKey(e) || meshes.get(e.id)?.key === c.key) continue;
-    try {
-      const buf = (s: string) => base64ToBytes(s).buffer as ArrayBuffer;
-      const pos = new Uint16Array(buf(c.positions));
-      const norm = new Int8Array(buf(c.normals));
-      const indices = c.indexType === "uint32" ? new Uint32Array(buf(c.indices)) : new Uint16Array(buf(c.indices));
-      if (
-        pos.length !== norm.length ||
-        pos.length % 3 ||
-        indices.length % 3 ||
-        indices.some((i) => i >= pos.length / 3) ||
-        !c.meta?.coverage
-      )
-        continue;
-      install(e.id, { pos, norm, indices, meta: c.meta, key: c.key });
-    } catch {
-      // A damaged cache entry is rebuilt from the outlines.
-    }
-  }
+  schedule();
 }

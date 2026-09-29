@@ -23,6 +23,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
+import { type ChangeSummary, diffStates } from "../orthographic/src/core/diff";
 import { fromDocument, toDocument } from "../orthographic/src/core/document";
 import {
   bytesToBase64,
@@ -33,6 +34,7 @@ import {
   sniffMime,
 } from "../orthographic/src/core/images";
 import { initialState } from "../orthographic/src/core/model";
+import { upgradeObject } from "../orthographic/src/core/parts";
 import type { EditorState, ImageInfo, ImageMime, Issue, SceneDocument } from "../orthographic/src/core/types";
 
 const DATA_DIR = process.env.DATA_DIR ?? new URL("../data", import.meta.url).pathname;
@@ -40,6 +42,8 @@ const SCENE_TTL_DAYS = Number(process.env.SCENE_TTL_DAYS ?? 90);
 const IMAGE_BUDGET_BYTES = Number(process.env.IMAGE_BUDGET_MB ?? 4096) * 1024 * 1024;
 const MAX_SCENES = Number(process.env.MAX_SCENES ?? 20000);
 const HISTORY_LIMIT = 40;
+/** Change summaries are small; keep many more of them than undo steps. */
+const LOG_LIMIT = 1000;
 /** Undo steps are whole states, so a large scene keeps fewer of them. */
 const HISTORY_BYTES = 16 * 1024 * 1024;
 const CACHE_LIMIT = 64;
@@ -64,6 +68,16 @@ export interface Scene {
   images: Record<string, SceneImage>;
   past: string[];
   future: string[];
+  /** What each recent revision changed (scenes stored before the log existed have none). */
+  log?: ChangeEntry[];
+}
+
+/** One revision's change: who made it and what it touched. */
+export interface ChangeEntry extends ChangeSummary {
+  revision: number;
+  at: string;
+  /** The tool that made it, "editor" for a person's edit, "undo" or "redo". */
+  by: string;
 }
 
 export class StoreError extends Error {
@@ -110,9 +124,19 @@ export function getScene(id: string): Scene | undefined {
   const path = join(scenesDir, `${id}.json`);
   if (!existsSync(path)) return undefined;
   const scene = JSON.parse(readFileSync(path, "utf8")) as Scene;
+  upgradeState(scene.state);
   remember(scene);
   return scene;
 }
+
+/** A state stored by an older server, brought to the current form (objects as parts). */
+function upgradeState(s: EditorState): EditorState {
+  for (const e of s.objects) upgradeObject(e);
+  return s;
+}
+
+/** A state from the undo history, which may be older than the current form. */
+const historyState = (snapshot: string) => upgradeState(JSON.parse(snapshot));
 
 /** A scene id from the id itself or an editor link that carries it (?scene=...). */
 export function sceneIdFrom(ref: string): string {
@@ -142,9 +166,14 @@ export function subscribe(id: string, f: (revision: number) => void): () => void
   };
 }
 
-function changed(scene: Scene) {
+function changed(scene: Scene, before: EditorState, by: string) {
   scene.revision++;
   scene.updated = new Date().toISOString();
+  scene.log = [
+    ...(scene.log ?? []),
+    { revision: scene.revision, at: scene.updated, by, ...diffStates(before, scene.state) },
+  ];
+  if (scene.log.length > LOG_LIMIT) scene.log = scene.log.slice(-LOG_LIMIT);
   pruneImages(scene);
   persist(scene);
   for (const f of listeners.get(scene.id) ?? []) f(scene.revision);
@@ -332,7 +361,11 @@ export function createScene(state: EditorState = initialState(), images: Record<
  * Run an edit on a copy of the scene's state and keep it as one undoable step
  * unless it reported an error. Returns the edit's result.
  */
-export function editScene<R extends { issues: Issue[] }>(scene: Scene, edit: (draft: EditorState) => R): R {
+export function editScene<R extends { issues: Issue[] }>(
+  scene: Scene,
+  edit: (draft: EditorState) => R,
+  by = "edit",
+): R {
   const before = JSON.stringify(scene.state);
   const draft = JSON.parse(before) as EditorState;
   const out = edit(draft);
@@ -343,26 +376,32 @@ export function editScene<R extends { issues: Issue[] }>(scene: Scene, edit: (dr
   let bytes = scene.past.reduce((n, p) => n + p.length, 0);
   while (scene.past.length > HISTORY_LIMIT || (bytes > HISTORY_BYTES && scene.past.length > 1))
     bytes -= scene.past.shift()!.length;
+  const previous = scene.state;
   scene.state = draft;
-  changed(scene);
+  changed(scene, previous, by);
   return out;
 }
 
 /** Replace the scene's state and image table (a document load) as one undoable step. */
-export function replaceScene(scene: Scene, state: EditorState, images: Record<string, SceneImage>) {
+export function replaceScene(scene: Scene, state: EditorState, images: Record<string, SceneImage>, by: string) {
   scene.images = images;
-  editScene(scene, (draft) => {
-    Object.assign(draft, state);
-    return { issues: [] };
-  });
+  editScene(
+    scene,
+    (draft) => {
+      Object.assign(draft, state);
+      return { issues: [] };
+    },
+    by,
+  );
 }
 
 export function undo(scene: Scene): boolean {
   const previous = scene.past.pop();
   if (previous === undefined) return false;
   scene.future.push(JSON.stringify(scene.state));
-  scene.state = JSON.parse(previous);
-  changed(scene);
+  const before = scene.state;
+  scene.state = historyState(previous);
+  changed(scene, before, "undo");
   return true;
 }
 
@@ -370,9 +409,22 @@ export function redo(scene: Scene): boolean {
   const next = scene.future.pop();
   if (next === undefined) return false;
   scene.past.push(JSON.stringify(scene.state));
-  scene.state = JSON.parse(next);
-  changed(scene);
+  const before = scene.state;
+  scene.state = historyState(next);
+  changed(scene, before, "redo");
   return true;
+}
+
+/**
+ * The changes after revision `since`, one entry per revision. `complete` is
+ * false when the log no longer reaches back that far (the oldest entries are
+ * dropped first).
+ */
+export function changesSince(scene: Scene, since: number): { complete: boolean; changes: ChangeEntry[] } {
+  const log = scene.log ?? [];
+  const changes = log.filter((c) => c.revision > since);
+  const complete = since >= scene.revision || (log.length > 0 && log[0].revision <= since + 1);
+  return { complete, changes };
 }
 
 // ---- Expiry ----------------------------------------------------------------------------

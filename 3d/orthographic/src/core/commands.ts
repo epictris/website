@@ -5,7 +5,8 @@
 
 import { cameraProblem, focalToFov } from "./camera";
 import { clone, finite, MAX_VALUE, MIN_FRAME, MIN_SIZE } from "./math";
-import { boundsOf, DEFAULT_COLOR, initialState, MAX_OBJECTS, objectById, RESOLUTIONS, uniqueId } from "./model";
+import { boundsOf, DEFAULT_COLOR, initialState, MAX_OBJECTS, objectById, uniqueId } from "./model";
+import { setWorldParts, type WorldPart, worldParts } from "./parts";
 import { assignRing, type Primitive, presetOutlines, RING_PROBLEMS, ringProblem, toNormalized } from "./ring";
 import type {
   Blend,
@@ -44,6 +45,12 @@ const lockedIssue = (e: SceneObject): Issue[] => [
 
 // ---- Objects ---------------------------------------------------------------
 
+/** A trace as documents and tools give it: hidden runs are optional. */
+export interface TraceSpec {
+  points: Point[];
+  hidden?: [number, number][];
+}
+
 export interface ObjectProps {
   name?: string;
   kind?: string;
@@ -53,12 +60,57 @@ export interface ObjectProps {
   reviewed?: boolean;
   opacity?: number;
   notes?: string;
+  /** The silhouette traced in the perspective reference, or null to remove it. */
+  trace?: TraceSpec | null;
+  inFrontOf?: string[];
+}
+
+/** Why a trace is unusable (one issue per problem), with paths under `path`. */
+function traceIssues(t: TraceSpec, objectId?: string, path = "/trace"): Issue[] {
+  const problem = ringProblem(t?.points);
+  if (problem)
+    return [
+      issue(`trace-${problem}`, `The trace of ${objectId ?? "the object"} ${RING_PROBLEMS[problem]}.`, {
+        objectId,
+        path: `${path}/points`,
+      }),
+    ];
+  const n = t.points.length;
+  const out: Issue[] = [];
+  (t.hidden ?? []).forEach((run, i) => {
+    if (!(Array.isArray(run) && run.length === 2 && run.every((k) => Number.isInteger(k) && k >= 0 && k < n)))
+      out.push(
+        issue("invalid-hidden-run", `hidden[${i}] must be two vertex indices from 0 to ${n - 1}.`, {
+          objectId,
+          path: `${path}/hidden/${i}`,
+        }),
+      );
+    else if (run[0] === run[1])
+      out.push(
+        issue("invalid-hidden-run", `hidden[${i}] starts and ends at vertex ${run[0]}; a run needs two vertices.`, {
+          objectId,
+          path: `${path}/hidden/${i}`,
+        }),
+      );
+  });
+  return out;
 }
 
 function propsIssues(p: ObjectProps, objectId?: string): Issue[] {
   const out: Issue[] = [];
   const bad = (field: string, what: string) =>
     out.push(issue("invalid-property", `${field} ${what}.`, { objectId, path: `/${field}` }));
+  if (p.trace !== undefined && p.trace !== null) out.push(...traceIssues(p.trace, objectId));
+  if (
+    p.inFrontOf !== undefined &&
+    !(
+      Array.isArray(p.inFrontOf) &&
+      p.inFrontOf.every((id) => typeof id === "string" && ID_PATTERN.test(id)) &&
+      new Set(p.inFrontOf).size === p.inFrontOf.length
+    )
+  )
+    bad("inFrontOf", "must be a list of distinct object ids");
+  else if (objectId !== undefined && p.inFrontOf?.includes(objectId)) bad("inFrontOf", "cannot name the object itself");
   if (p.name !== undefined && (typeof p.name !== "string" || p.name.length > 180))
     bad("name", "must be text of at most 180 characters");
   if (p.kind !== undefined && (typeof p.kind !== "string" || p.kind.length > 40))
@@ -77,28 +129,62 @@ function propsIssues(p: ObjectProps, objectId?: string): Issue[] {
 function applyProps(e: SceneObject, p: ObjectProps) {
   for (const k of ["name", "kind", "color", "visible", "locked", "reviewed", "opacity", "notes"] as const)
     if (p[k] !== undefined) (e as unknown as Record<string, unknown>)[k] = p[k];
+  if (p.trace !== undefined)
+    e.trace = p.trace && { points: clone(p.trace.points), hidden: clone(p.trace.hidden ?? []) };
+  if (p.inFrontOf !== undefined) e.inFrontOf = [...p.inFrontOf];
 }
 
+/** inFrontOf entries naming objects the scene does not have (errors, for edits; `only` limits the check). */
+export function inFrontOfIssues(
+  s: EditorState,
+  only?: ReadonlySet<string>,
+  severity: Issue["severity"] = "error",
+): Issue[] {
+  const ids = new Set(s.objects.map((e) => e.id));
+  const out: Issue[] = [];
+  s.objects.forEach((e, i) => {
+    if (only && !only.has(e.id)) return;
+    (e.inFrontOf ?? []).forEach((other, j) => {
+      if (!ids.has(other))
+        out.push({
+          severity,
+          code: "unknown-object",
+          path: `/objects/${i}/inFrontOf/${j}`,
+          objectId: e.id,
+          message: `${e.id} is said to be in front of "${other}", which is not in the scene.`,
+        });
+    });
+  });
+  return out;
+}
+
+/** An object's shape in metres, as documents give it: one solid, or a union of parts. */
+export type WorldShape =
+  | { outlines: Record<ViewId, Ring> }
+  | { parts: { id?: string; outlines: Record<ViewId, Ring> }[] };
+
+const MAX_PARTS = 32;
+
 /**
- * Build an object from world-unit outlines. The bounding box on each axis is
- * the union of the two views that show it; a mismatch between them is a
- * warning, because the narrower silhouette clips the solid.
+ * One part from world-unit outlines: its box on each axis is the union of the
+ * two views that show it; a mismatch between them is a warning, because the
+ * narrower silhouette clips the solid. `name` and `path` say where problems are.
  */
-export function objectFromWorld(
-  id: string,
+function partFromWorld(
   outlines: Record<ViewId, Ring>,
-  props: ObjectProps = {},
-  pathPrefix = "",
-): { object?: SceneObject; issues: Issue[] } {
+  id: string,
+  name: string,
+  path: string,
+): { part?: WorldPart; issues: Issue[] } {
   const issues: Issue[] = [];
   for (const view of VIEW_IDS) {
     const problem = ringProblem(outlines?.[view]);
     if (problem)
       issues.push(
-        issue(`ring-${problem}`, `The ${view} outline of ${id} ${RING_PROBLEMS[problem]}.`, {
+        issue(`ring-${problem}`, `The ${view} outline of ${name} ${RING_PROBLEMS[problem]}.`, {
           objectId: id,
           view,
-          path: `${pathPrefix}/outlines/${view}`,
+          path: `${path}/outlines/${view}`,
         }),
       );
   }
@@ -121,9 +207,9 @@ export function objectFromWorld(
     size[axis] = hi - lo;
     if (size[axis] < MIN_SIZE) {
       issues.push(
-        issue("collapsed-axis", `${id} has no extent along ${AXES[axis]} (at least ${MIN_SIZE} m is needed).`, {
+        issue("collapsed-axis", `${name} has no extent along ${AXES[axis]} (at least ${MIN_SIZE} m is needed).`, {
           objectId: id,
-          path: `${pathPrefix}/outlines`,
+          path: `${path}/outlines`,
         }),
       );
       continue;
@@ -133,27 +219,81 @@ export function objectFromWorld(
       issues.push({
         severity: "warning",
         code: "extent-mismatch",
-        path: `${pathPrefix}/outlines`,
+        path: `${path}/outlines`,
         objectId: id,
-        message: `The ${p.view} and ${q.view} outlines of ${id} disagree along ${AXES[axis]}: ${p.view} spans ${p.lo}..${p.hi}, ${q.view} spans ${q.lo}..${q.hi}. The box uses ${lo}..${hi}; the narrower outline clips the solid. Make both span the same range.`,
+        message: `The ${p.view} and ${q.view} outlines of ${name} disagree along ${AXES[axis]}: ${p.view} spans ${p.lo}..${p.hi}, ${q.view} spans ${q.lo}..${q.hi}. The box uses ${lo}..${hi}; the narrower outline clips the solid. Make both span the same range.`,
       });
   }
   if (issues.some((i) => i.severity === "error")) return { issues };
+  const normalised = {} as Record<ViewId, Ring>;
+  for (const view of VIEW_IDS) {
+    const [a, b] = VIEWS[view].axes;
+    normalised[view] = outlines[view].map((p) => [(p[0] - min[a]) / size[a], (p[1] - min[b]) / size[b]] as Point);
+  }
+  return { part: { min, size, outlines: normalised }, issues };
+}
+
+/** The parts of a shape in world units, or the problems that stop them. */
+function partsFromWorld(id: string, shape: WorldShape, pathPrefix = ""): { parts?: WorldPart[]; issues: Issue[] } {
+  const issues: Issue[] = [];
+  if ("parts" in shape && shape.parts) {
+    const list = shape.parts;
+    if (!Array.isArray(list) || !list.length || list.length > MAX_PARTS)
+      return {
+        issues: [
+          issue("invalid-parts", `parts needs 1 to ${MAX_PARTS} parts.`, { objectId: id, path: `${pathPrefix}/parts` }),
+        ],
+      };
+    const parts: WorldPart[] = [];
+    const ids = new Map<string, number>();
+    list.forEach((spec, k) => {
+      const path = `${pathPrefix}/parts/${k}`;
+      if (spec.id !== undefined) {
+        if (!ID_PATTERN.test(spec.id) || ids.has(spec.id))
+          issues.push(
+            issue("invalid-part-id", `Part ${k} of ${id} needs a valid id unused by its other parts.`, {
+              objectId: id,
+              path: `${path}/id`,
+            }),
+          );
+        ids.set(spec.id, k);
+      }
+      const r = partFromWorld(spec.outlines, id, `${id} part ${spec.id ?? k}`, path);
+      issues.push(...r.issues);
+      if (r.part) parts.push({ ...(spec.id !== undefined && { id: spec.id }), ...r.part });
+    });
+    return issues.some((i) => i.severity === "error") ? { issues } : { parts, issues };
+  }
+  const r = partFromWorld((shape as { outlines: Record<ViewId, Ring> }).outlines, id, id, pathPrefix);
+  return r.part ? { parts: [r.part], issues: r.issues } : { issues: r.issues };
+}
+
+/** Build an object from a shape in world units (outlines, or parts) and its properties. */
+export function objectFromWorld(
+  id: string,
+  shape: WorldShape,
+  props: ObjectProps = {},
+  pathPrefix = "",
+): { object?: SceneObject; issues: Issue[] } {
+  const built = partsFromWorld(id, shape, pathPrefix);
+  const issues = [...built.issues];
+  for (const found of propsIssues(props, id)) issues.push({ ...found, path: `${pathPrefix}${found.path}` });
+  if (!built.parts || issues.some((i) => i.severity === "error")) return { issues };
   const object: SceneObject = {
     id,
     name: id,
     kind: "",
     color: DEFAULT_COLOR,
-    min,
-    size,
-    outlines: { front: [], top: [], side: [] },
+    min: [0, 0, 0],
+    size: [1, 1, 1],
+    parts: [],
     visible: true,
     locked: false,
     reviewed: false,
     opacity: 1,
     notes: "",
   };
-  for (const view of VIEW_IDS) object.outlines[view] = outlines[view].map((p) => toNormalized(object, view, p));
+  setWorldParts(object, built.parts);
   applyProps(object, props);
   return { object, issues };
 }
@@ -162,6 +302,8 @@ export interface NewObject extends ObjectProps {
   id?: string;
   /** World-unit outlines for all three views. */
   outlines?: Record<ViewId, Ring>;
+  /** Or the object as a union of parts, each with world-unit outlines. */
+  parts?: { id?: string; outlines: Record<ViewId, Ring> }[];
   /** Or a starting shape filling a box. */
   primitive?: Primitive;
   center?: Vec3;
@@ -185,8 +327,9 @@ export function addObject(s: EditorState, spec: NewObject): { id?: string; issue
     return { issues: [issue("duplicate-id", `An object with id "${id}" already exists.`, { objectId: id })] };
   const issues = propsIssues(spec, id);
   if (issues.length) return { issues };
+  if (spec.outlines && spec.parts) return { issues: [issue("invalid-shape", "Give outlines or parts, not both.")] };
   let outlines = spec.outlines;
-  if (!outlines) {
+  if (!outlines && !spec.parts) {
     const size = spec.size ?? [4, 4, 4];
     const center = spec.center ?? (s.scene.size.map((v) => v / 2) as Vec3);
     if (!size.every((v) => finite(v) && v >= MIN_SIZE) || !center.every((v) => finite(v)))
@@ -199,7 +342,7 @@ export function addObject(s: EditorState, spec: NewObject): { id?: string; issue
       outlines[view] = preset[view].map((p) => [min[a] + p[0] * size[a], min[b] + p[1] * size[b]] as Point);
     }
   }
-  const built = objectFromWorld(id, outlines, spec);
+  const built = objectFromWorld(id, spec.parts ? { parts: spec.parts } : { outlines: outlines! }, spec);
   if (!built.object) return { issues: built.issues };
   s.objects.push(built.object);
   return { id, issues: built.issues };
@@ -217,11 +360,26 @@ export function updateObject(s: EditorState, id: string, patch: ObjectProps): Is
   return [];
 }
 
-/** Replace one view's outline with world-unit points. */
-export function setOutline(s: EditorState, id: string, view: ViewId, points: Ring): Issue[] {
+/** The part an edit names, or the issue that says it does not exist. */
+function partIssue(e: SceneObject, part: number): Issue[] {
+  return Number.isInteger(part) && part >= 0 && part < e.parts.length
+    ? []
+    : [
+        issue(
+          "unknown-part",
+          `${e.id} has ${e.parts.length} part${e.parts.length === 1 ? "" : "s"}; part ${part} is not one of them (they count from 0).`,
+          { objectId: e.id },
+        ),
+      ];
+}
+
+/** Replace one view's outline of a part (default the first) with world-unit points. */
+export function setOutline(s: EditorState, id: string, view: ViewId, points: Ring, part = 0): Issue[] {
   const e = objectById(s, id);
   if (!e) return missing(id);
   if (e.locked) return lockedIssue(e);
+  const wrong = partIssue(e, part);
+  if (wrong.length) return wrong;
   const problem = ringProblem(points);
   if (problem)
     return [issue(`ring-${problem}`, `That ${view} outline ${RING_PROBLEMS[problem]}.`, { objectId: id, view })];
@@ -231,7 +389,8 @@ export function setOutline(s: EditorState, id: string, view: ViewId, points: Rin
       e,
       start,
       view,
-      points.map((p) => toNormalized(start, view, p)),
+      points.map((p) => toNormalized(start, view, p, part)),
+      part,
     )
   )
     return [
@@ -243,12 +402,106 @@ export function setOutline(s: EditorState, id: string, view: ViewId, points: Rin
   return [];
 }
 
-/** Replace one view's outline with points normalised to the object's current box (editor internals). */
-export function setNormalizedOutline(s: EditorState, id: string, view: ViewId, raw: Ring): Issue[] {
+/**
+ * Replace all three outlines of a part at once, with world-unit points: the
+ * part's box comes from the three together, so no view is stretched to fit
+ * another on the way. An object of several parts needs `part` said.
+ */
+export function setOutlines(s: EditorState, id: string, outlines: Record<ViewId, Ring>, part?: number): Issue[] {
   const e = objectById(s, id);
   if (!e) return missing(id);
   if (e.locked) return lockedIssue(e);
-  if (!assignRing(e, clone(e), view, raw))
+  if (part === undefined && e.parts.length > 1)
+    return [
+      issue("part-required", `${e.id} has ${e.parts.length} parts: say which part these outlines are for.`, {
+        objectId: id,
+      }),
+    ];
+  const k = part ?? 0;
+  const wrong = partIssue(e, k);
+  if (wrong.length) return wrong;
+  const built = partsFromWorld(id, { outlines });
+  if (!built.parts) return built.issues;
+  const parts = worldParts(e);
+  parts[k] = { ...(parts[k].id !== undefined && { id: parts[k].id }), ...built.parts[0] };
+  setWorldParts(e, parts);
+  e.reviewed = false;
+  return built.issues;
+}
+
+/** Replace every part of an object (world-unit outlines per part); one part with no id is a plain object. */
+export function setParts(
+  s: EditorState,
+  id: string,
+  parts: { id?: string; outlines: Record<ViewId, Ring> }[],
+): Issue[] {
+  const e = objectById(s, id);
+  if (!e) return missing(id);
+  if (e.locked) return lockedIssue(e);
+  const built = partsFromWorld(id, { parts });
+  if (!built.parts) return built.issues;
+  setWorldParts(e, built.parts);
+  e.reviewed = false;
+  return built.issues;
+}
+
+/** Add a part: a box filling the middle half of the object's box, or the given outlines. Returns its index. */
+export function addPart(
+  s: EditorState,
+  id: string,
+  outlines?: Record<ViewId, Ring>,
+): { part?: number; issues: Issue[] } {
+  const e = objectById(s, id);
+  if (!e) return { issues: missing(id) };
+  if (e.locked) return { issues: lockedIssue(e) };
+  if (e.parts.length >= MAX_PARTS)
+    return { issues: [issue("too-many-parts", `An object has at most ${MAX_PARTS} parts.`)] };
+  let shape = outlines;
+  if (!shape) {
+    const lo = e.min.map((v, a) => v + e.size[a] / 4);
+    const hi = e.min.map((v, a) => v + (3 * e.size[a]) / 4);
+    shape = {} as Record<ViewId, Ring>;
+    for (const view of VIEW_IDS) {
+      const [a, b] = VIEWS[view].axes;
+      shape[view] = [
+        [lo[a], lo[b]],
+        [hi[a], lo[b]],
+        [hi[a], hi[b]],
+        [lo[a], hi[b]],
+      ];
+    }
+  }
+  const built = partsFromWorld(id, { outlines: shape });
+  if (!built.parts) return { issues: built.issues };
+  setWorldParts(e, [...worldParts(e), built.parts[0]]);
+  e.reviewed = false;
+  return { part: e.parts.length - 1, issues: built.issues };
+}
+
+/** Remove a part; an object keeps at least one. */
+export function removePart(s: EditorState, id: string, part: number): Issue[] {
+  const e = objectById(s, id);
+  if (!e) return missing(id);
+  if (e.locked) return lockedIssue(e);
+  const wrong = partIssue(e, part);
+  if (wrong.length) return wrong;
+  if (e.parts.length === 1) return [issue("last-part", `${e.id} has only this part; delete the object instead.`)];
+  setWorldParts(
+    e,
+    worldParts(e).filter((_, k) => k !== part),
+  );
+  e.reviewed = false;
+  return [];
+}
+
+/** Replace one view's outline of a part with points normalised to the part's current box (editor internals). */
+export function setNormalizedOutline(s: EditorState, id: string, view: ViewId, raw: Ring, part = 0): Issue[] {
+  const e = objectById(s, id);
+  if (!e) return missing(id);
+  if (e.locked) return lockedIssue(e);
+  const wrong = partIssue(e, part);
+  if (wrong.length) return wrong;
+  if (!assignRing(e, clone(e), view, raw, part))
     return [issue("ring-invalid", "Edges cannot cross, and an outline cannot collapse.", { objectId: id, view })];
   return [];
 }
@@ -326,6 +579,9 @@ export function deleteObjects(s: EditorState, ids: string[]): Issue[] {
   if (issues.length) return issues;
   const drop = new Set(items.map((e) => e.id));
   s.objects = s.objects.filter((e) => !drop.has(e.id));
+  // Nothing can stand in front of an object that is gone.
+  for (const e of s.objects)
+    if (e.inFrontOf?.some((id) => drop.has(id))) e.inFrontOf = e.inFrontOf.filter((id) => !drop.has(id));
   return [];
 }
 
@@ -344,6 +600,8 @@ export function duplicateObjects(
     e.id = uniqueId(s, original.id.replace(/-\d+$/, "") || "obj");
     e.name = `${original.name} copy`;
     e.min = e.min.map((v, i) => v + offset[i]) as Vec3;
+    // Moved away from what was traced, the trace no longer describes it.
+    e.trace = null;
     e.locked = false;
     e.reviewed = false;
     s.objects.push(e);
@@ -425,6 +683,7 @@ export interface CameraPatch {
   fov?: number;
   focalLengthMm?: number;
   roll?: number;
+  shift?: [number, number];
   near?: number;
   far?: number;
   frame?: [number, number];
@@ -440,7 +699,7 @@ export function setCamera(s: EditorState, p: CameraPatch): Issue[] {
       return [issue("invalid-camera", "focalLengthMm must be positive.")];
     c.fov = focalToFov(p.focalLengthMm);
   }
-  for (const k of ["position", "target", "fov", "roll", "near", "far", "frame", "locked"] as const)
+  for (const k of ["position", "target", "fov", "roll", "shift", "near", "far", "frame", "locked"] as const)
     if (p[k] !== undefined) (c as unknown as Record<string, unknown>)[k] = clone(p[k]);
   const problem = cameraProblem(c);
   if (problem) return [issue("invalid-camera", problem)];
@@ -469,13 +728,6 @@ export function setDisplay(s: EditorState, p: Partial<Display>): Issue[] {
     if (p[k] !== undefined && typeof p[k] !== "boolean")
       return [issue("invalid-display", `${k} must be true or false.`)];
   Object.assign(s.display, p);
-  return [];
-}
-
-export function setResolution(s: EditorState, resolution: number): Issue[] {
-  if (!RESOLUTIONS.includes(resolution))
-    return [issue("invalid-resolution", `resolution must be one of ${RESOLUTIONS.join(", ")}.`)];
-  s.reconstruction.resolution = resolution;
   return [];
 }
 

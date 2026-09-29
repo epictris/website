@@ -6,7 +6,6 @@ import type { Display, EditorState, SceneObject, Vec3 } from "./types";
 export const DEFAULT_SCENE_SIZE: Vec3 = [40, 30, 20];
 export const DEFAULT_COLOR = "#5ee9cf";
 export const MAX_OBJECTS = 300;
-export const RESOLUTIONS = [24, 40, 56, 72];
 
 export function defaultDisplay(): Display {
   return { style: "solid", grid: true, labels: false, crosshair: false };
@@ -20,7 +19,6 @@ export function initialState(): EditorState {
     camera: presetCamera(defaultCamera(), "overview", { min: [0, 0, 0], max: size }),
     references: { front: null, top: null, side: null, perspective: null },
     display: defaultDisplay(),
-    reconstruction: { resolution: 40 },
   };
 }
 

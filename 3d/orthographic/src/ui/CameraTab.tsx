@@ -5,7 +5,7 @@ import { cameraPreset, chooseReference, frameScene } from "../actions";
 import { image } from "../assets";
 import { fovToFocal, horizontalFov } from "../core/camera";
 import { type CameraPatch, setCamera, setDisplay, setReference } from "../core/commands";
-import { fmt, vec } from "../core/math";
+import { fmt, lengthText, vec } from "../core/math";
 import type { Blend, DisplayStyle, Vec3 } from "../core/types";
 import { AXES } from "../core/views";
 import { savePerspectivePng } from "../io";
@@ -72,7 +72,7 @@ export function CameraTab() {
           Orbit in the 3D view, or enter an exact pose here. Objects are edited in the three orthographic views.
         </p>
         <div class="section-title" style={{ "margin-top": "16px" }}>
-          Position / look-at target · u
+          Position / look-at target · m
         </div>
         <div class="transform-grid">
           <span />
@@ -149,8 +149,36 @@ export function CameraTab() {
         </div>
         <p class="note">
           {fmt(c().fov, 1)}° vertical / {fmt(horizontalFov(c()), 1)}° horizontal · {fmt(fovToFocal(c().fov), 1)} mm
-          full-frame · distance {fmt(vec.len(vec.sub(c().position, c().target)), 2)} u
+          full-frame · distance {lengthText(vec.len(vec.sub(c().position, c().target)))}
         </p>
+        <div class="section-title" style={{ "margin-top": "12px" }}>
+          <span title="Slides the frame across the image plane: the horizon moves while verticals stay vertical">
+            Lens shift · frame
+          </span>
+        </div>
+        <div class="triplet shift-pair">
+          <For each={[0, 1] as const}>
+            {(axis) => (
+              <label>
+                {axis === 0 ? "Right" : "Up"}
+                <Field
+                  type="number"
+                  min="-1"
+                  max="1"
+                  step="0.01"
+                  value={fmt(c().shift?.[axis] ?? 0, 4)}
+                  onCommit={(v) => {
+                    const n = num(v);
+                    if (n === null) return;
+                    const shift: [number, number] = [...(c().shift ?? [0, 0])];
+                    shift[axis] = n;
+                    cam({ shift });
+                  }}
+                />
+              </label>
+            )}
+          </For>
+        </div>
         <div class="triplet" style={{ "margin-top": "12px" }}>
           <label>
             Roll °

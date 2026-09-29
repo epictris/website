@@ -12,9 +12,31 @@ export type Blend = "normal" | "difference" | "screen" | "multiply";
 export type DisplayStyle = "solid" | "clay" | "wire" | "ghost";
 
 // ---- Internal editor state -------------------------------------------------
-// Outlines are stored normalised to the object's bounding box: a point p in a
-// view with axes (a, b) sits at world (min[a] + p[0] * size[a], min[b] + p[1] * size[b]).
-// That keeps the shared axes of the three views consistent by construction.
+// An object is a union of parts (a plain object has one). Each part's box is
+// stored as fractions of the object's box, and its outlines normalised to its
+// own box: a point p in a view with axes (a, b) sits at part-box
+// (min[a] + p[0] * size[a], min[b] + p[1] * size[b]), and the part box within
+// the object's the same way. That keeps the shared axes of the three views
+// consistent by construction, and lets an object move and scale as one.
+
+export interface Part {
+  /** Optional name, unique within the object. */
+  id?: string;
+  /** The part's box as fractions of the object's box (0..1 on each axis). */
+  min: Vec3;
+  size: Vec3;
+  outlines: Record<ViewId, Ring>;
+}
+
+/**
+ * An object's silhouette as traced in the perspective reference image, in
+ * that image's pixels (origin top-left, v down). `hidden` lists runs of
+ * guessed edges: [a, b] covers the edges from vertex a forward to vertex b.
+ */
+export interface Trace {
+  points: Point[];
+  hidden: [number, number][];
+}
 
 export interface SceneObject {
   id: string;
@@ -23,7 +45,12 @@ export interface SceneObject {
   color: string;
   min: Vec3;
   size: Vec3;
-  outlines: Record<ViewId, Ring>;
+  /** At least one; their boxes together make the object's box. */
+  parts: Part[];
+  /** Scenes stored before traces existed have neither of these. */
+  trace?: Trace | null;
+  /** Objects this one stands in front of, where their traces overlap. */
+  inFrontOf?: string[];
   visible: boolean;
   locked: boolean;
   reviewed: boolean;
@@ -55,6 +82,8 @@ export interface Camera {
   target: Vec3;
   fov: number;
   roll: number;
+  /** Lens shift as fractions of the frame, x right and y up (scenes stored before it existed have none). */
+  shift?: [number, number];
   near: number;
   far: number;
   frame: [number, number];
@@ -80,7 +109,6 @@ export interface EditorState {
     perspective: PerspectiveReference | null;
   };
   display: Display;
-  reconstruction: { resolution: number };
 }
 
 export interface ImageAsset {
@@ -132,7 +160,11 @@ export interface DocObject {
   name?: string;
   kind?: string;
   color?: string;
-  outlines: Record<ViewId, Ring>;
+  /** One solid; or parts, a union of solids. */
+  outlines?: Record<ViewId, Ring>;
+  parts?: { id?: string; outlines: Record<ViewId, Ring> }[];
+  trace?: { points: Point[]; hidden?: [number, number][] };
+  inFrontOf?: string[];
   visible?: boolean;
   locked?: boolean;
   reviewed?: boolean;
@@ -147,6 +179,7 @@ export interface DocCamera {
   verticalFovDegrees?: number;
   focalLengthMm35Equivalent?: number;
   rollDegrees?: number;
+  shift?: { x: number; y: number };
   near?: number;
   far?: number;
   frame?: { width: number; height: number };
@@ -195,7 +228,5 @@ export interface SceneDocument {
   };
   images?: Record<string, DocImage>;
   display?: Partial<Display>;
-  reconstruction?: { resolution?: number };
   editor?: Record<string, unknown>;
-  meshCache?: unknown[];
 }

@@ -1,13 +1,23 @@
-import { defineConfig } from "vite";
+import { defineConfig, type Plugin } from "vite";
 import { viteSingleFile } from "vite-plugin-singlefile";
 import solid from "vite-plugin-solid";
+
+// manifold-3d imports node:module only when it runs under Node; the browser
+// build gets an empty module for it rather than a compatibility warning.
+const noNodeModule: Plugin = {
+  name: "no-node-module",
+  apply: "build",
+  enforce: "pre",
+  resolveId: (id) => (id === "node:module" ? "\0no-node-module" : null),
+  load: (id) => (id === "\0no-node-module" ? "export {};" : null),
+};
 
 // The editor builds to ONE self-contained HTML file: it works offline, and
 // "Save working editor" can copy the running page into a portable file.
 export default defineConfig({
   root: "orthographic",
   base: "/orthographic/",
-  plugins: [solid(), viteSingleFile()],
+  plugins: [noNodeModule, solid(), viteSingleFile()],
   server: {
     port: 3200,
     strictPort: true,

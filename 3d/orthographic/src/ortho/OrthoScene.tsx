@@ -7,7 +7,7 @@ import { image, type LoadedImage } from "../assets";
 import { fmt, lengthText, niceStep } from "../core/math";
 import type { EditorState, SceneObject, ViewId } from "../core/types";
 import { VIEWS } from "../core/views";
-import { type Frame, layoutLabels, objectScreenBox, outlinePath, type Rect, toScreen } from "./frame";
+import { type Frame, layoutLabels, objectScreenBox, outlinePath, partPath, type Rect, toScreen } from "./frame";
 
 export interface OrthoSceneProps {
   view: ViewId;
@@ -199,7 +199,11 @@ export function OrthoScene(props: OrthoSceneProps) {
       />
       <For each={ordered()}>
         {(e) => {
-          const d = () => outlinePath(props.frame, props.view, e);
+          const d = createMemo(() => outlinePath(props.frame, props.view, e));
+          // An object of several parts shows each part's outline inside its silhouette.
+          const parts = createMemo(() =>
+            e.parts.length > 1 ? e.parts.map((_, k) => partPath(props.frame, props.view, e, k)) : [],
+          );
           const sel = () => !props.exportMode && props.selected(e.id);
           return (
             <g data-feature={e.id}>
@@ -207,6 +211,7 @@ export function OrthoScene(props: OrthoSceneProps) {
                 class={`feature-shape${e.locked ? " locked-shape" : ""}`}
                 data-id={e.id}
                 d={d()}
+                fill-rule="evenodd"
                 fill={e.color}
                 fill-opacity={sel() ? 0.13 : 0.035}
                 stroke={e.color}
@@ -214,6 +219,20 @@ export function OrthoScene(props: OrthoSceneProps) {
                 stroke-width={sel() ? 2 : 1.2}
                 stroke-linejoin="round"
               />
+              <For each={parts()}>
+                {(p) => (
+                  <path
+                    class="feature-part"
+                    d={p}
+                    fill="none"
+                    stroke={e.color}
+                    stroke-opacity={sel() ? 0.75 : 0.45}
+                    stroke-width=".8"
+                    stroke-dasharray="4 3"
+                    pointer-events="none"
+                  />
+                )}
+              </For>
               <Show when={!props.exportMode}>
                 {/* A transparent, wider hit target; not a second outline. */}
                 <path

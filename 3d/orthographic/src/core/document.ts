@@ -3,10 +3,11 @@
 
 import Ajv2020, { type ErrorObject } from "ajv/dist/2020";
 import { cameraMatrices, cameraProblem, focalToFov, fovToFocal, horizontalFov, presetCamera } from "./camera";
-import { issue, objectFromWorld, setReference } from "./commands";
+import { inFrontOfIssues, issue, objectFromWorld, setReference } from "./commands";
+import { referenceIssues } from "./compare";
 import { clone } from "./math";
-import { buildMesh, COVERAGE_WARNING, type MeshMeta } from "./mesher";
-import { defaultDisplay, initialState, RESOLUTIONS } from "./model";
+import { buildMesh, COVERAGE_WARNING, type MeshMeta, solidMeta } from "./mesher";
+import { defaultDisplay, initialState } from "./model";
 import { worldRing } from "./ring";
 import schema from "./schema.json";
 import type {
@@ -31,7 +32,17 @@ export const SCHEMA_URL = "https://3d.tris.sh/orthographic/schema.json";
 /** World values rounded to 1e-9 m: float noise (12.219999999999999) says nothing and costs a reader tokens. */
 const tidy = (v: number) => Math.round(v * 1e9) / 1e9;
 const toVec = (v: Vec3): DocVec3 => ({ x: tidy(v[0]), y: tidy(v[1]), z: tidy(v[2]) });
-const worldPoints = (e: SceneObject, view: ViewId) => worldRing(e, view).map(([a, b]) => [tidy(a), tidy(b)] as Point);
+const worldPoints = (e: SceneObject, view: ViewId, part: number) =>
+  worldRing(e, view, part).map(([a, b]) => [tidy(a), tidy(b)] as Point);
+const worldOutlines = (e: SceneObject, part: number) =>
+  Object.fromEntries(VIEW_IDS.map((v) => [v, worldPoints(e, v, part)])) as Record<ViewId, Point[]>;
+
+/** Whether an object is written as plain outlines: one part, unnamed. */
+const isPlain = (e: SceneObject) => e.parts.length === 1 && e.parts[0].id === undefined;
+
+/** Where an object's (or a part's) outlines are in its document form. */
+const outlinesPath = (e: SceneObject, index: number, part: number) =>
+  isPlain(e) ? `/objects/${index}/outlines` : `/objects/${index}/parts/${part}/outlines`;
 const fromVec = (v: DocVec3): Vec3 => [v.x, v.y, v.z];
 const pair = (view: ViewId, p: Point) => {
   const [a, b] = axisNames(view);
@@ -50,7 +61,6 @@ export interface ExportOptions {
   /** Include read-only derived values (bounds, camera matrices). Default true. */
   derived?: boolean;
   editor?: Record<string, unknown>;
-  meshCache?: unknown[];
 }
 
 export function toDocument(
@@ -77,7 +87,18 @@ export function toDocument(
         name: e.name,
         kind: e.kind,
         color: e.color,
-        outlines: { front: worldPoints(e, "front"), top: worldPoints(e, "top"), side: worldPoints(e, "side") },
+        ...(isPlain(e)
+          ? { outlines: worldOutlines(e, 0) }
+          : {
+              parts: e.parts.map((p, k) => ({
+                ...(p.id !== undefined && { id: p.id }),
+                outlines: worldOutlines(e, k),
+              })),
+            }),
+        ...(e.trace && {
+          trace: { points: clone(e.trace.points), ...(e.trace.hidden.length && { hidden: clone(e.trace.hidden) }) },
+        }),
+        ...(e.inFrontOf?.length && { inFrontOf: [...e.inFrontOf] }),
         visible: e.visible,
         locked: e.locked,
         reviewed: e.reviewed,
@@ -100,6 +121,7 @@ export function toDocument(
       target: toVec(s.camera.target),
       verticalFovDegrees: s.camera.fov,
       rollDegrees: s.camera.roll,
+      shift: { x: s.camera.shift?.[0] ?? 0, y: s.camera.shift?.[1] ?? 0 },
       near: s.camera.near,
       far: s.camera.far,
       frame: { width: s.camera.frame[0], height: s.camera.frame[1] },
@@ -118,7 +140,6 @@ export function toDocument(
     },
     references: {},
     display: clone(s.display),
-    reconstruction: clone(s.reconstruction),
   };
   const used = new Set<string>();
   for (const view of VIEW_IDS) {
@@ -161,7 +182,6 @@ export function toDocument(
     }
   }
   if (opts.editor) doc.editor = opts.editor;
-  if (opts.meshCache) doc.meshCache = opts.meshCache;
   return doc;
 }
 
@@ -192,7 +212,6 @@ export interface ReadResult {
   images: ImageAsset[];
   issues: Issue[];
   editor?: Record<string, unknown>;
-  meshCache?: unknown[];
 }
 
 /**
@@ -247,10 +266,13 @@ export function fromDocument(doc: unknown, known: (id: string) => ImageInfo | un
       return;
     }
     ids.set(o.id, i);
-    const { object, issues: found } = objectFromWorld(o.id, o.outlines, o, path);
+    const shape = o.parts ? { parts: o.parts } : { outlines: o.outlines! };
+    const { object, issues: found } = objectFromWorld(o.id, shape, o, path);
     issues.push(...found);
     if (object) s.objects.push(object);
   });
+
+  issues.push(...inFrontOfIssues(s, undefined, "warning"));
 
   for (const [id, img] of Object.entries(d.images ?? {})) {
     const path = `/images/${id}`;
@@ -298,6 +320,7 @@ export function fromDocument(doc: unknown, known: (id: string) => ImageInfo | un
       target: fromVec(c.target),
       fov: fov ?? 36,
       roll: c.rollDegrees ?? 0,
+      shift: (c.shift ? [c.shift.x, c.shift.y] : [0, 0]) as [number, number],
       near: c.near ?? 0.05,
       far: c.far ?? 2000,
       frame: (c.frame ? [c.frame.width, c.frame.height] : [1600, 900]) as [number, number],
@@ -339,11 +362,9 @@ export function fromDocument(doc: unknown, known: (id: string) => ImageInfo | un
   }
 
   if (d.display) Object.assign(s.display, { ...defaultDisplay(), ...d.display });
-  if (d.reconstruction?.resolution && RESOLUTIONS.includes(d.reconstruction.resolution))
-    s.reconstruction.resolution = d.reconstruction.resolution;
 
   const ok = !issues.some((i) => i.severity === "error");
-  return { state: ok ? s : undefined, images, issues, editor: d.editor, meshCache: d.meshCache };
+  return { state: ok ? s : undefined, images, issues, editor: d.editor };
 }
 
 // ---- Geometry checks ---------------------------------------------------------------
@@ -362,28 +383,31 @@ export function geometryIssues(
   const out: Issue[] = [];
   s.objects.forEach((e, i) => {
     if (only && !only.has(e.id)) return;
-    const m = meta?.(e.id) ?? buildMesh(e.outlines, s.reconstruction.resolution).meta;
-    const path = `/objects/${i}/outlines`;
-    if (m.empty) {
-      out.push(
-        issue(
-          "no-common-volume",
-          `The three outlines of ${e.id} share no volume, so it has no 3D solid. Make the silhouettes overlap along their shared axes.`,
-          { objectId: e.id, path },
-        ),
-      );
-      return;
-    }
-    for (const view of VIEW_IDS)
-      if (m.coverage[view] < COVERAGE_WARNING)
-        out.push({
-          severity: "warning",
-          code: "low-coverage",
-          objectId: e.id,
-          view,
-          path: `${path}/${view}`,
-          message: `The solid of ${e.id} fills only ${Math.round(m.coverage[view] * 100)}% of its ${view} outline: the other two views cut away the rest. Make the views agree on where the object is thick and thin.`,
-        });
+    const m = meta?.(e.id) ?? solidMeta(e.parts);
+    m.parts.forEach((p, k) => {
+      const path = outlinesPath(e, i, k);
+      const name = isPlain(e) ? e.id : `${e.id} part ${e.parts[k]?.id ?? k}`;
+      if (p.empty) {
+        out.push(
+          issue(
+            "no-common-volume",
+            `The three outlines of ${name} share no volume, so it has no 3D solid. Make the silhouettes overlap along their shared axes.`,
+            { objectId: e.id, path },
+          ),
+        );
+        return;
+      }
+      for (const view of VIEW_IDS)
+        if (p.coverage[view] < COVERAGE_WARNING)
+          out.push({
+            severity: "warning",
+            code: "low-coverage",
+            objectId: e.id,
+            view,
+            path: `${path}/${view}`,
+            message: `The solid of ${name} fills only ${Math.round(p.coverage[view] * 100)}% of its ${view} outline: the other two views cut away the rest. Make the views agree on where the object is thick and thin.`,
+          });
+    });
   });
   const [sx, sy, sz] = s.scene.size;
   s.objects.forEach((e, i) => {
@@ -402,13 +426,24 @@ export function geometryIssues(
   return out;
 }
 
-/** Validate a document: schema, semantics and (optionally) reconstructed geometry. */
+/**
+ * Validate a document: schema, semantics and (optionally) geometry: the
+ * solids, and traced objects against the perspective reference.
+ */
 export function validateDocument(
   doc: unknown,
   opts: { geometry?: boolean; known?: (id: string) => ImageInfo | undefined } = {},
 ) {
   const read = fromDocument(doc, opts.known);
   const issues = [...read.issues];
-  if (read.state && opts.geometry !== false) issues.push(...geometryIssues(read.state));
-  return { ok: !issues.some((i) => i.severity === "error"), issues, state: read.state };
+  const s = read.state;
+  if (s && opts.geometry !== false) {
+    issues.push(...geometryIssues(s));
+    const ref = s.references.perspective;
+    if (ref && s.objects.some((e) => e.trace)) {
+      const image = (doc as SceneDocument).images?.[ref.image] ?? opts.known?.(ref.image);
+      issues.push(...referenceIssues(s, (e) => buildMesh(e.parts, e.size), image));
+    }
+  }
+  return { ok: !issues.some((i) => i.severity === "error"), issues, state: s };
 }

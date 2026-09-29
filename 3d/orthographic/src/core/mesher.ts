@@ -1,211 +1,254 @@
-// Reconstructs an object's solid from its three normalised silhouettes: each
-// view's outline becomes a signed-distance mask, the solid is where all three
-// masks are inside, and marching tetrahedra extracts its surface. Pure; runs in
-// a worker in the editor and directly in Bun for validation.
+// Reconstructs an object's solid from its three normalised silhouettes,
+// exactly: each view's outline is extruded along the view's direction across
+// the unit box, and the solid is the intersection of the three prisms
+// (manifold-3d). Pure; runs in the editor and in Bun alike, in milliseconds.
 
-import type { Ring, ViewId } from "./types";
+import { type CrossSection, type Manifold, type ManifoldVec3, manifold } from "./manifold";
+import { polyArea } from "./ring";
+import type { Part, Ring, Vec3, ViewId } from "./types";
+import { VIEW_IDS } from "./views";
 
-export const MESH_VERSION = "signed-distance-intersection-marching-tetrahedra-v2";
+export const MESH_VERSION = "manifold-intersection-v2";
+
+export interface PartMeta {
+  /** The part's three outlines share no volume. */
+  empty: boolean;
+  /** Per view: the fraction of that silhouette the part's solid actually fills. */
+  coverage: Record<ViewId, number>;
+}
 
 export interface MeshMeta {
+  /** No part has a solid. */
   empty: boolean;
-  /** Per view: the fraction of that silhouette the reconstructed solid actually fills. */
-  coverage: Record<ViewId, number>;
-  occupied: number;
-  grid: number;
+  parts: PartMeta[];
 }
 
 export interface Mesh {
   /** Vertex positions in the unit box, quantised to 0..65535. */
   pos: Uint16Array;
-  /** Vertex normals, quantised to -127..127. */
+  /** Vertex normals in unit-box space (world normal times the object's size), quantised to -127..127. */
   norm: Int8Array;
   indices: Uint16Array | Uint32Array;
   meta: MeshMeta;
 }
 
-function sdf(poly: Ring, x: number, y: number): number {
-  let inside = false;
-  let min = 1e20;
-  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-    const a = poly[j];
-    const b = poly[i];
-    const dx = b[0] - a[0];
-    const dy = b[1] - a[1];
-    const den = dx * dx + dy * dy;
-    const t = den ? Math.max(0, Math.min(1, ((x - a[0]) * dx + (y - a[1]) * dy) / den)) : 0;
-    min = Math.min(min, (x - a[0] - t * dx) ** 2 + (y - a[1] - t * dy) ** 2);
-    if (a[1] > y !== b[1] > y && x < ((b[0] - a[0]) * (y - a[1])) / (b[1] - a[1]) + a[0]) inside = !inside;
+/** Faces meeting at more than this angle keep separate normals: a crease, drawn sharp. */
+const CREASE_DEGREES = 35;
+/** How far the prisms reach past the unit box, so their caps never coincide with another prism's faces. */
+const REACH = 0.01;
+
+// Each view's prism is built with its outline in the XY plane, extruded along
+// +Z; these column-major matrices take that frame to the unit box, placing the
+// outline's (horizontal, vertical) on the view's axes and Z on its depth axis.
+const TO_BOX: Record<ViewId, number[]> = {
+  // (u, v, depth) -> (x = u, y = depth, z = v)
+  front: [1, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 1],
+  // (u, v, depth) -> (x = u, y = v, z = depth)
+  top: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
+  // (u, v, depth) -> (x = depth, y = u, z = v)
+  side: [0, 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 1],
+};
+/** The inverse of TO_BOX (each is a permutation, so its transpose). */
+const FROM_BOX: Record<ViewId, number[]> = Object.fromEntries(
+  VIEW_IDS.map((v) => {
+    const m = TO_BOX[v];
+    const t = [...m];
+    for (let c = 0; c < 3; c++) for (let r = 0; r < 3; r++) t[c * 4 + r] = m[r * 4 + c];
+    return [v, t];
+  }),
+) as Record<ViewId, number[]>;
+
+/** A ring as a manifold cross-section (either winding). */
+const crossSection = (ring: Ring): CrossSection =>
+  manifold.CrossSection.ofPolygons([ring as [number, number][]], "NonZero");
+
+/**
+ * The exact solid of normalised outlines, in the unit box. The caller owns
+ * the result and must delete() it.
+ */
+export function buildSolid(outlines: Record<ViewId, Ring>): Manifold {
+  let solid: Manifold | null = null;
+  for (const view of VIEW_IDS) {
+    const section = crossSection(outlines[view]);
+    const extruded = section.extrude(1 + 2 * REACH);
+    const prism = extruded.translate([0, 0, -REACH]).transform(TO_BOX[view] as never);
+    section.delete();
+    extruded.delete();
+    if (!solid) solid = prism;
+    else {
+      const next: Manifold = solid.intersect(prism);
+      solid.delete();
+      prism.delete();
+      solid = next;
+    }
   }
-  return (inside ? 1 : -1) * Math.sqrt(min);
+  return solid!;
 }
 
-export function buildMesh(outlines: Record<ViewId, Ring>, res = 40): Mesh {
-  const n = res + 3;
-  const nn = n * n;
-  const total = nn * n;
-  const coords = Array.from({ length: n }, (_, i) => (i - 1) / res);
-  const field = new Float32Array(total);
-  const masks = {} as Record<ViewId, Float32Array>;
-  for (const v of ["front", "top", "side"] as ViewId[]) {
-    const a = new Float32Array(nn);
-    for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) a[i + n * j] = sdf(outlines[v], coords[i], coords[j]);
-    masks[v] = a;
-  }
-  let occupied = 0;
-  const projected = { front: new Uint8Array(nn), top: new Uint8Array(nn), side: new Uint8Array(nn) };
-  for (let z = 0; z < n; z++)
-    for (let y = 0; y < n; y++)
-      for (let x = 0; x < n; x++) {
-        const d = Math.min(masks.front[x + n * z], masks.top[x + n * y], masks.side[y + n * z]);
-        field[x + n * y + nn * z] = Math.abs(d) < 1e-9 ? -1e-9 : d;
-        if (d > 0) {
-          occupied++;
-          projected.front[x + n * z] = 1;
-          projected.top[x + n * y] = 1;
-          projected.side[y + n * z] = 1;
-        }
-      }
-  const coverage = {} as Record<ViewId, number>;
-  for (const v of ["front", "top", "side"] as ViewId[]) {
-    let demand = 0;
-    let hit = 0;
-    for (let i = 0; i < nn; i++)
-      if (masks[v][i] > 0.6 / res) {
-        demand++;
-        if (projected[v][i]) hit++;
-      }
-    coverage[v] = demand ? hit / demand : 1;
-  }
-  if (!occupied)
-    return {
-      pos: new Uint16Array(),
-      norm: new Int8Array(),
-      indices: new Uint16Array(),
-      meta: { empty: true, coverage, occupied: 0, grid: res },
-    };
+/** The solid's shadow on a view's plane, in that view's normalised (horizontal, vertical) coordinates. Caller deletes. */
+export function projectSolid(solid: Manifold, view: ViewId): CrossSection {
+  const turned = solid.transform(FROM_BOX[view] as never);
+  const shadow = turned.project();
+  turned.delete();
+  return shadow;
+}
 
-  const pts: number[] = [];
-  const ind: number[] = [];
-  const edgeMap = new Map<number, number>();
-  const cornerOffsets = [0, 1, 1 + n, n, nn, nn + 1, nn + n + 1, nn + n];
-  const tets = [
-    [0, 5, 1, 6],
-    [0, 1, 2, 6],
-    [0, 2, 3, 6],
-    [0, 3, 7, 6],
-    [0, 7, 4, 6],
-    [0, 4, 5, 6],
-  ];
-  const at = (index: number) => {
-    const z = Math.floor(index / nn);
-    const y = Math.floor((index - z * nn) / n);
-    const x = index - z * nn - y * n;
-    return [coords[x], coords[y], coords[z]];
-  };
-  const vertex = (i: number, j: number) => {
-    if (i > j) [i, j] = [j, i];
-    const key = i * total + j;
-    let v = edgeMap.get(key);
-    if (v !== undefined) return v;
-    const a = at(i);
-    const b = at(j);
-    const t = field[i] / (field[i] - field[j]);
-    v = pts.length / 3;
-    pts.push(a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1]), a[2] + t * (b[2] - a[2]));
-    edgeMap.set(key, v);
-    return v;
-  };
-  const tri = (a: number, b: number, c: number, out: number[]) => {
-    if (a === b || b === c || a === c) return;
-    const ia = a * 3;
-    const ib = b * 3;
-    const ic = c * 3;
-    const ab = [pts[ib] - pts[ia], pts[ib + 1] - pts[ia + 1], pts[ib + 2] - pts[ia + 2]];
-    const ac = [pts[ic] - pts[ia], pts[ic + 1] - pts[ia + 1], pts[ic + 2] - pts[ia + 2]];
-    const normal = [ab[1] * ac[2] - ab[2] * ac[1], ab[2] * ac[0] - ab[0] * ac[2], ab[0] * ac[1] - ab[1] * ac[0]];
-    if (normal[0] * out[0] + normal[1] * out[1] + normal[2] * out[2] < 0) [b, c] = [c, b];
-    ind.push(a, b, c);
-  };
-  const center = (ids: number[]) => ids.map(at).reduce((s, p) => s.map((v, i) => v + p[i] / ids.length), [0, 0, 0]);
-  for (let z = 0; z < n - 1; z++)
-    for (let y = 0; y < n - 1; y++)
-      for (let x = 0; x < n - 1; x++) {
-        const base = x + n * y + nn * z;
-        const ci = cornerOffsets.map((q) => base + q);
-        let count = 0;
-        for (const k of ci) if (field[k] > 0) count++;
-        if (count === 0 || count === 8) continue;
-        for (const tet of tets) {
-          const ins: number[] = [];
-          const outs: number[] = [];
-          for (const k of tet) (field[ci[k]] > 0 ? ins : outs).push(ci[k]);
-          if (!ins.length || !outs.length) continue;
-          const a = center(ins);
-          const b = center(outs);
-          const out = b.map((v, i) => v - a[i]);
-          if (ins.length === 1) {
-            const i = ins[0];
-            tri(vertex(i, outs[0]), vertex(i, outs[1]), vertex(i, outs[2]), out);
-          } else if (ins.length === 3) {
-            const o = outs[0];
-            tri(vertex(o, ins[0]), vertex(o, ins[1]), vertex(o, ins[2]), out);
-          } else {
-            const p = vertex(ins[0], outs[0]);
-            const q = vertex(ins[0], outs[1]);
-            const r = vertex(ins[1], outs[1]);
-            const s = vertex(ins[1], outs[0]);
-            tri(p, q, r, out);
-            tri(p, r, s, out);
-          }
-        }
-      }
-  // Weld vertices that land on the same quantised point. Where an outline runs
-  // along grid lines, many edges interpolate to the same corner; left apart they
-  // join through zero-area triangles, which are T-junctions a GPU rasterises
-  // with pinhole cracks. Welded, those triangles repeat an index and are dropped.
-  const welded = new Map<number, number>();
+/**
+ * An object's solid, the union of its parts' (each placed in its box within
+ * the object's unit box), with each part's facts. The caller deletes it.
+ */
+export function objectSolid(parts: Part[]): { solid: Manifold; meta: MeshMeta } {
+  const metas: PartMeta[] = [];
+  const pieces: Manifold[] = [];
+  for (const part of parts) {
+    const unit = buildSolid(part.outlines);
+    if (unit.isEmpty()) {
+      metas.push({ empty: true, coverage: { front: 0, top: 0, side: 0 } });
+      unit.delete();
+      continue;
+    }
+    metas.push({ empty: false, coverage: coverageOf(unit, part.outlines) });
+    const scaled = unit.scale(part.size as ManifoldVec3);
+    unit.delete();
+    pieces.push(scaled.translate(part.min as ManifoldVec3));
+    scaled.delete();
+  }
+  const solid = pieces.length === 1 ? pieces[0] : manifold.Manifold.union(pieces);
+  if (pieces.length !== 1) for (const p of pieces) p.delete();
+  return { solid, meta: { empty: metas.every((m) => m.empty), parts: metas } };
+}
+
+/** Per view, the fraction of the outline's area the solid's shadow fills. */
+function coverageOf(solid: Manifold, outlines: Record<ViewId, Ring>): Record<ViewId, number> {
+  const out = {} as Record<ViewId, number>;
+  for (const view of VIEW_IDS) {
+    const shadow = projectSolid(solid, view);
+    const want = Math.abs(polyArea(outlines[view]));
+    out[view] = want > 0 ? Math.min(1, shadow.area() / want) : 1;
+    shadow.delete();
+  }
+  return out;
+}
+
+const emptyMesh = (meta: MeshMeta): Mesh => ({
+  pos: new Uint16Array(),
+  norm: new Int8Array(),
+  indices: new Uint16Array(),
+  meta: { ...meta, empty: true },
+});
+
+/**
+ * The object's surface for drawing. `size` (the object's box in metres) only
+ * decides which edges are creases, since angles depend on the box's
+ * proportions; the positions are in the unit box.
+ */
+export function buildMesh(parts: Part[], size: Vec3 = [1, 1, 1]): Mesh {
+  const { solid, meta } = objectSolid(parts);
+  try {
+    if (solid.isEmpty()) return emptyMesh(meta);
+    const m = solid.getMesh();
+    return surface(m.vertProperties, m.numProp, m.triVerts, size, meta);
+  } finally {
+    solid.delete();
+  }
+}
+
+/**
+ * Quantise positions, drop triangles that quantising flattens, and give each
+ * corner the normal of the faces around its vertex that meet its own face
+ * within the crease angle, so curved outlines shade smoothly and corners stay
+ * sharp.
+ */
+function surface(props: Float32Array, numProp: number, tris: Uint32Array, size: Vec3, meta: MeshMeta): Mesh {
+  const count = props.length / numProp;
+  // Quantise and weld: vertices that land on one quantised point become one.
   const qpos: number[] = [];
-  const remap = new Int32Array(pts.length / 3);
-  for (let i = 0; i < pts.length / 3; i++) {
-    const q = [0, 1, 2].map((k) => Math.round(Math.max(0, Math.min(1, pts[i * 3 + k])) * 65535));
+  const remap = new Int32Array(count);
+  const welded = new Map<number, number>();
+  for (let i = 0; i < count; i++) {
+    const q = [0, 1, 2].map((k) => Math.round(Math.max(0, Math.min(1, props[i * numProp + k])) * 65535));
     const key = q[0] + 65536 * (q[1] + 65536 * q[2]);
     let v = welded.get(key);
     if (v === undefined) {
       v = qpos.length / 3;
-      qpos.push(...q);
+      qpos.push(q[0], q[1], q[2]);
       welded.set(key, v);
     }
     remap[i] = v;
   }
   const faces: number[] = [];
-  for (let i = 0; i < ind.length; i += 3) {
-    const [a, b, c] = [remap[ind[i]], remap[ind[i + 1]], remap[ind[i + 2]]];
-    if (a !== b && b !== c && a !== c) faces.push(a, b, c);
+  const faceNormals: number[] = [];
+  for (let i = 0; i < tris.length; i += 3) {
+    const [a, b, c] = [remap[tris[i]], remap[tris[i + 1]], remap[tris[i + 2]]];
+    if (a === b || b === c || a === c) continue;
+    // The world-space normal, area weighted: edges scaled by the box.
+    const e1 = [0, 1, 2].map((k) => ((qpos[b * 3 + k] - qpos[a * 3 + k]) / 65535) * size[k]);
+    const e2 = [0, 1, 2].map((k) => ((qpos[c * 3 + k] - qpos[a * 3 + k]) / 65535) * size[k]);
+    const n = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]];
+    if (n[0] === 0 && n[1] === 0 && n[2] === 0) continue;
+    faces.push(a, b, c);
+    faceNormals.push(n[0], n[1], n[2]);
   }
-  const normal = new Float32Array(qpos.length);
-  for (let i = 0; i < faces.length; i += 3) {
-    const a = faces[i] * 3;
-    const b = faces[i + 1] * 3;
-    const c = faces[i + 2] * 3;
-    const ab = [qpos[b] - qpos[a], qpos[b + 1] - qpos[a + 1], qpos[b + 2] - qpos[a + 2]];
-    const ac = [qpos[c] - qpos[a], qpos[c + 1] - qpos[a + 1], qpos[c + 2] - qpos[a + 2]];
-    const nrm = [ab[1] * ac[2] - ab[2] * ac[1], ab[2] * ac[0] - ab[0] * ac[2], ab[0] * ac[1] - ab[1] * ac[0]];
-    for (const j of [a, b, c]) for (let k = 0; k < 3; k++) normal[j + k] += nrm[k];
+  if (!faces.length) return emptyMesh(meta);
+  const nf = faces.length / 3;
+  const unit = new Float64Array(nf * 3);
+  for (let f = 0; f < nf; f++) {
+    const len = Math.hypot(faceNormals[f * 3], faceNormals[f * 3 + 1], faceNormals[f * 3 + 2]);
+    for (let k = 0; k < 3; k++) unit[f * 3 + k] = faceNormals[f * 3 + k] / len;
   }
-  const pos = Uint16Array.from(qpos);
-  const norm = new Int8Array(qpos.length);
-  for (let i = 0; i < qpos.length; i += 3) {
-    const len = Math.hypot(normal[i], normal[i + 1], normal[i + 2]) || 1;
-    for (let k = 0; k < 3; k++) norm[i + k] = Math.round((normal[i + k] / len) * 127);
-  }
+  // Faces around each vertex.
+  const around: number[][] = Array.from({ length: qpos.length / 3 }, () => []);
+  for (let f = 0; f < nf; f++) for (let k = 0; k < 3; k++) around[faces[f * 3 + k]].push(f);
+  const cosCrease = Math.cos((CREASE_DEGREES * Math.PI) / 180);
+  const outPos: number[] = [];
+  const outNorm: number[] = [];
+  const outIndex: number[] = [];
+  const corners = new Map<string, number>();
+  for (let f = 0; f < nf; f++)
+    for (let k = 0; k < 3; k++) {
+      const v = faces[f * 3 + k];
+      const n = [0, 0, 0];
+      for (const g of around[v]) {
+        const d = unit[f * 3] * unit[g * 3] + unit[f * 3 + 1] * unit[g * 3 + 1] + unit[f * 3 + 2] * unit[g * 3 + 2];
+        if (d >= cosCrease) for (let j = 0; j < 3; j++) n[j] += faceNormals[g * 3 + j];
+      }
+      // Unit-box normal: the renderer divides by the size to get back to world space.
+      const u = n.map((x, j) => x * size[j]);
+      const len = Math.hypot(u[0], u[1], u[2]) || 1;
+      const q = u.map((x) => Math.round((x / len) * 127));
+      const key = `${v} ${q[0]} ${q[1]} ${q[2]}`;
+      let index = corners.get(key);
+      if (index === undefined) {
+        index = outPos.length / 3;
+        outPos.push(qpos[v * 3], qpos[v * 3 + 1], qpos[v * 3 + 2]);
+        outNorm.push(q[0], q[1], q[2]);
+        corners.set(key, index);
+      }
+      outIndex.push(index);
+    }
   return {
-    pos,
-    norm,
-    indices: qpos.length / 3 > 65535 ? new Uint32Array(faces) : new Uint16Array(faces),
-    meta: { empty: false, coverage, occupied, grid: res },
+    pos: Uint16Array.from(outPos),
+    norm: Int8Array.from(outNorm),
+    indices: outPos.length / 3 > 65535 ? Uint32Array.from(outIndex) : Uint16Array.from(outIndex),
+    meta,
   };
 }
 
 /** Coverage below this fraction means the other views clip a noticeable part of a silhouette. */
 export const COVERAGE_WARNING = 0.85;
+
+/** Whether each part makes a solid, and how much of each outline it fills, without building a surface. */
+export function solidMeta(parts: Part[]): MeshMeta {
+  const { solid, meta } = objectSolid(parts);
+  solid.delete();
+  return meta;
+}
+
+/** The union of rings in one plane, as the polygons that bound it (outer outlines and holes, by winding). */
+export function unionRings(rings: Ring[]): Ring[] {
+  const sections = rings.map(crossSection);
+  const union = manifold.CrossSection.union(sections);
+  const out = union.toPolygons() as Ring[];
+  for (const c of [...sections, union]) c.delete();
+  return out;
+}

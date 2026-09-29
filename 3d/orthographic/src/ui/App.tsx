@@ -4,9 +4,11 @@ import { createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import {
   deletePoint,
   deleteSelection,
+  deleteTracePoint,
   duplicateSelection,
   expandView,
   finishRedraw,
+  finishTrace,
   fitAll,
   frameScene,
   nudgeSelection,
@@ -385,13 +387,19 @@ function useKeyboard() {
       }
       if (e.key === "Escape") {
         return take(() => {
-          if (ui.redrawing) setUi("redrawing", null);
+          if (ui.tracing) setUi("tracing", null);
+          else if (ui.redrawing) setUi("redrawing", null);
           else setSelection([]);
         });
       }
+      if (e.key === "Enter" && ui.tracing) return take(finishTrace);
       if (e.key === "Enter" && ui.redrawing) return take(finishRedraw);
       if (e.key === "Delete" || e.key === "Backspace")
-        return take(() => (ui.mode === "outline" && ui.pointSelection ? deletePoint() : deleteSelection()));
+        return take(() => {
+          if (ui.mode === "outline" && ui.activeView === "perspective" && ui.tracePoint) deleteTracePoint();
+          else if (ui.mode === "outline" && ui.pointSelection) deletePoint();
+          else deleteSelection();
+        });
       if (e.key.startsWith("Arrow")) {
         const view = ui.activeView === "perspective" ? "front" : ui.activeView;
         return take(() => nudgeSelection(view, e.key, e.shiftKey));

@@ -3,8 +3,10 @@
 
 import type { Box } from "../core/camera";
 import { MIN_FRAME } from "../core/math";
+import { unionRings } from "../core/mesher";
 import type { ViewWindow } from "../core/projection";
-import type { Point, SceneObject, ViewId } from "../core/types";
+import { worldRing } from "../core/ring";
+import type { Point, Ring, SceneObject, ViewId } from "../core/types";
 import { VIEWS } from "../core/views";
 import type { OrthoCamera } from "../store";
 
@@ -67,14 +69,26 @@ export const objectScreenBox = (f: Frame, view: ViewId, e: SceneObject) =>
     e.min.map((v, i) => v + e.size[i]),
   );
 
-export function outlinePath(f: Frame, view: ViewId, e: SceneObject): string {
-  const [a, b] = VIEWS[view].axes;
-  return `${e.outlines[view]
+const ringPath = (f: Frame, ring: Ring) =>
+  `${ring
     .map((p, i) => {
-      const q = toScreen(f, e.min[a] + p[0] * e.size[a], e.min[b] + p[1] * e.size[b]);
+      const q = toScreen(f, p[0], p[1]);
       return `${i ? "L" : "M"}${q[0].toFixed(2)},${q[1].toFixed(2)}`;
     })
     .join("")}Z`;
+
+/** One part's outline in a view, as an SVG path. */
+export const partPath = (f: Frame, view: ViewId, e: SceneObject, part: number) => ringPath(f, worldRing(e, view, part));
+
+/**
+ * An object's silhouette in a view, as an SVG path (fill it even-odd): its
+ * outline, or for an object of several parts the union of their outlines.
+ */
+export function outlinePath(f: Frame, view: ViewId, e: SceneObject): string {
+  if (e.parts.length === 1) return partPath(f, view, e, 0);
+  return unionRings(e.parts.map((_, k) => worldRing(e, view, k)))
+    .map((r) => ringPath(f, r))
+    .join("");
 }
 
 export interface LabelBox {

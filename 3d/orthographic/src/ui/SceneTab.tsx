@@ -1,24 +1,14 @@
-// Inspector: reconstruction quality, per-view reference images, the scene frame and scale.
+// Inspector: per-view reference images, the scene frame and scale.
 
 import { createSignal, For } from "solid-js";
 import { chooseReference } from "../actions";
 import { image } from "../assets";
-import {
-  clearScene,
-  fitReferencePlacement,
-  rescaleScene,
-  setReference,
-  setResolution,
-  setScene,
-} from "../core/commands";
+import { clearScene, fitReferencePlacement, rescaleScene, setReference, setScene } from "../core/commands";
 import { fmt } from "../core/math";
-import { RESOLUTIONS } from "../core/model";
 import type { OrthoReference, Point, ViewId } from "../core/types";
 import { AXES, axisNames, VIEW_IDS, VIEWS } from "../core/views";
 import { beginGesture, commit, endGesture, preview, report, setUi, state, ui } from "../store";
 import { Field, num, TextArea } from "./fields";
-
-const RESOLUTION_LABELS: Record<number, string> = { 24: "Draft", 40: "Standard", 56: "Detailed", 72: "Fine" };
 
 export const [referenceDialog, setReferenceDialog] = createSignal<ViewId | null>(null);
 
@@ -170,25 +160,6 @@ export function SceneTab() {
   const s = () => state.scene;
   return (
     <div class="scene-tab">
-      <section class="inspect-section">
-        <div class="section-title">3D reconstruction</div>
-        <label class="labelled">
-          Surface sampling
-          <select
-            value={state.reconstruction.resolution}
-            onChange={(e) => report(commit((d) => setResolution(d, Number(e.currentTarget.value))))}
-          >
-            <For each={RESOLUTIONS}>
-              {(r) => <option value={r}>{`${RESOLUTION_LABELS[r]} · ${r} cells / axis`}</option>}
-            </For>
-          </select>
-        </label>
-        <p class="note">
-          Each solid is the intersection of its three outline extrusions and rebuilds after an edit. Finer sampling
-          keeps smaller features. Outlines that disagree clip each other; the object inspector reports how much of each
-          outline the solid fills.
-        </p>
-      </section>
       <ReferenceSection />
       <section class="inspect-section">
         <label class="labelled">

@@ -15,11 +15,14 @@ import {
   setGroupAxis,
   setNormalizedOutline,
   setReference,
+  type TraceSpec,
+  updateObject,
 } from "./core/commands";
+import { hiddenEdges, hiddenRuns } from "./core/compare";
 import { clone } from "./core/math";
 import { boundsOf, sceneBounds } from "./core/model";
 import { simplifyRing, toNormalized, toWorld } from "./core/ring";
-import type { Point, ReferenceView, Ring, ViewId } from "./core/types";
+import type { Point, ReferenceView, Ring, SceneObject, ViewId } from "./core/types";
 import { VIEW_IDS, VIEWS } from "./core/views";
 import { fitCamera } from "./ortho/frame";
 import {
@@ -168,9 +171,11 @@ export function nudgeSelection(view: ViewId, key: string, large: boolean) {
     const e = obj(p.id);
     if (!e || e.locked) return;
     const step = (ui.prefs.snap ? ui.prefs.snapStep : 0.05) * (large ? 10 : 1);
-    const q = toWorld(e, p.view, e.outlines[p.view][p.index]);
+    const ring = e.parts[p.part]?.outlines[p.view];
+    if (!ring?.[p.index]) return;
+    const q = toWorld(e, p.view, ring[p.index], p.part);
     q[horizontal ? 0 : 1] += step * direction;
-    movePoint(p.id, p.view, p.index, q);
+    movePoint(p.id, p.view, p.index, q, p.part);
     return;
   }
   const items = selectedObjects();
@@ -192,60 +197,63 @@ export function nudgeSelection(view: ViewId, key: string, large: boolean) {
 
 // ---- Outline points -----------------------------------------------------------------
 
-/** Move one outline point to a world position. */
-export function movePoint(id: string, view: ViewId, index: number, world: Point): boolean {
+/** Move one outline point of a part to a world position. */
+export function movePoint(id: string, view: ViewId, index: number, world: Point, part: number): boolean {
   const e = obj(id);
-  if (!e) return false;
-  const raw = clone(e.outlines[view]) as Ring;
-  raw[index] = toNormalized(e, view, world);
-  return report(commit((d) => setNormalizedOutline(d, id, view, raw)));
+  if (!e?.parts[part]) return false;
+  const raw = clone(e.parts[part].outlines[view]) as Ring;
+  raw[index] = toNormalized(e, view, world, part);
+  return report(commit((d) => setNormalizedOutline(d, id, view, raw, part)));
 }
 
 export function insertPoint(after: number | null = null, world: Point | null = null) {
   const e = selectedObjects()[0];
   const view = ui.contourView;
-  if (ui.mode !== "outline" || ui.selected.length !== 1 || !e || e.locked) return;
-  const r = e.outlines[view];
+  const part = ui.part;
+  if (ui.mode !== "outline" || ui.selected.length !== 1 || !e?.parts[part] || e.locked) return;
+  const r = e.parts[part].outlines[view];
   if (r.length >= 512) {
     toast("An outline has at most 512 points.", true);
     return;
   }
-  const i = after ?? (ui.pointSelection?.view === view ? ui.pointSelection.index : 0);
+  const p = ui.pointSelection;
+  const i = after ?? (p?.view === view && p.part === part ? p.index : 0);
   const q: Point = world
-    ? toNormalized(e, view, world)
+    ? toNormalized(e, view, world, part)
     : [(r[i][0] + r[(i + 1) % r.length][0]) / 2, (r[i][1] + r[(i + 1) % r.length][1]) / 2];
   const raw = clone(r) as Ring;
   raw.splice(i + 1, 0, q);
-  if (report(commit((d) => setNormalizedOutline(d, e.id, view, raw))))
-    setUi("pointSelection", { id: e.id, view, index: i + 1 });
+  if (report(commit((d) => setNormalizedOutline(d, e.id, view, raw, part))))
+    setUi("pointSelection", { id: e.id, view, index: i + 1, part });
 }
 
 export function deletePoint() {
   const p = ui.pointSelection;
   const e = p && obj(p.id);
-  if (!p || !e || e.locked) return;
-  const r = e.outlines[p.view];
+  if (!p || !e?.parts[p.part] || e.locked) return;
+  const r = e.parts[p.part].outlines[p.view];
   if (r.length <= 3) {
     toast("A closed outline needs at least three points.", true);
     return;
   }
   const raw = clone(r) as Ring;
   raw.splice(p.index, 1);
-  const issues = commit((d) => setNormalizedOutline(d, e.id, p.view, raw));
+  const issues = commit((d) => setNormalizedOutline(d, e.id, p.view, raw, p.part));
   if (issues.length) toast("Removing that point would cross the outline. Move nearby points first.", true);
   else setUi("pointSelection", { ...p, index: Math.min(p.index, raw.length - 1) });
 }
 
 export function simplifyOutline() {
   const e = selectedObjects()[0];
-  if (!e || e.locked || ui.selected.length !== 1) return;
+  const part = ui.part;
+  if (!e?.parts[part] || e.locked || ui.selected.length !== 1) return;
   const view = ui.contourView;
-  const { ring, removed } = simplifyRing(e.outlines[view], ui.simplifyTolerance);
+  const { ring, removed } = simplifyRing(e.parts[part].outlines[view], ui.simplifyTolerance);
   if (!removed) {
     toast("No redundant points at this tolerance.");
     return;
   }
-  if (report(commit((d) => setNormalizedOutline(d, e.id, view, ring)))) {
+  if (report(commit((d) => setNormalizedOutline(d, e.id, view, ring, part)))) {
     setUi("pointSelection", null);
     toast(`Removed ${removed} points from the ${view} outline.`);
   }
@@ -255,7 +263,7 @@ export function startRedraw() {
   const e = selectedObjects()[0];
   if (ui.selected.length !== 1 || !e || e.locked) return;
   setMode("outline");
-  setUi("redrawing", { id: e.id, view: ui.contourView, points: [] });
+  setUi("redrawing", { id: e.id, view: ui.contourView, points: [], part: ui.part });
   toast("Click successive corners. Enter closes the outline; Escape cancels.");
 }
 
@@ -263,20 +271,118 @@ export function finishRedraw() {
   const d = ui.redrawing;
   if (!d) return;
   const e = obj(d.id);
-  if (!e) return;
+  if (!e?.parts[d.part]) return;
   const points = d.points.slice();
   while (
     points.length > 1 &&
     Math.hypot(points.at(-1)![0] - points.at(-2)![0], points.at(-1)![1] - points.at(-2)![1]) < 1e-6
   )
     points.pop();
-  const raw = points.map((p) => toNormalized(e, d.view, p));
-  const issues = commit((s) => setNormalizedOutline(s, d.id, d.view, raw));
+  const raw = points.map((p) => toNormalized(e, d.view, p, d.part));
+  const issues = commit((s) => setNormalizedOutline(s, d.id, d.view, raw, d.part));
   if (issues.length) {
     toast("Draw a non-crossing loop with at least three corners.", true);
     return;
   }
   setUi({ redrawing: null, pointSelection: null });
+}
+
+// ---- Traces --------------------------------------------------------------------------
+// An object's silhouette in the perspective reference image, edited in the
+// perspective view in outline mode. Points are in the image's pixels; hidden
+// runs are kept as per-edge flags while points come and go.
+
+/** The trace with one point moved, inserted or removed, hidden edges carried along. */
+function withTrace(e: SceneObject, edit: (points: Point[], hidden: boolean[]) => void): TraceSpec {
+  const points = clone(e.trace!.points) as Point[];
+  const hidden = hiddenEdges(points.length, e.trace!.hidden);
+  edit(points, hidden);
+  return { points, hidden: hiddenRuns(hidden) };
+}
+
+export const tracePointMoved = (e: SceneObject, index: number, to: Point): TraceSpec =>
+  withTrace(e, (points) => {
+    points[index] = to;
+  });
+
+/** Insert a trace point after vertex `after`; the split edge keeps its hidden flag. */
+export function insertTracePoint(id: string, after: number, at: Point) {
+  const e = obj(id);
+  if (!e?.trace || e.locked) return;
+  if (e.trace.points.length >= 512) {
+    toast("A trace has at most 512 points.", true);
+    return;
+  }
+  const trace = withTrace(e, (points, hidden) => {
+    points.splice(after + 1, 0, at);
+    hidden.splice(after + 1, 0, hidden[after]);
+  });
+  if (report(commit((d) => updateObject(d, id, { trace })))) setUi("tracePoint", { id, index: after + 1 });
+}
+
+export function deleteTracePoint() {
+  const p = ui.tracePoint;
+  const e = p && obj(p.id);
+  if (!p || !e?.trace || e.locked) return;
+  if (e.trace.points.length <= 3) {
+    toast("A trace needs at least three points.", true);
+    return;
+  }
+  // The two edges at the point become one, hidden only if both were.
+  const trace = withTrace(e, (points, hidden) => {
+    const n = points.length;
+    const before = (p.index - 1 + n) % n;
+    hidden[before] = hidden[before] && hidden[p.index];
+    points.splice(p.index, 1);
+    hidden.splice(p.index, 1);
+  });
+  const issues = commit((d) => updateObject(d, e.id, { trace }));
+  if (issues.length) toast("Removing that point would cross the trace. Move nearby points first.", true);
+  else setUi("tracePoint", { id: e.id, index: Math.min(p.index, trace.points.length - 1) });
+}
+
+/** Mark the edge from the selected trace point to the next as guessed (hidden), or as traced again. */
+export function toggleHiddenEdge() {
+  const p = ui.tracePoint;
+  const e = p && obj(p.id);
+  if (!p || !e?.trace || e.locked) return;
+  const trace = withTrace(e, (_, hidden) => {
+    hidden[p.index] = !hidden[p.index];
+  });
+  report(commit((d) => updateObject(d, e.id, { trace })));
+}
+
+/** Start drawing the selected object's trace: clicks in the perspective view add corners. */
+export function startTrace() {
+  const e = selectedObjects()[0];
+  if (ui.selected.length !== 1 || !e || e.locked) return;
+  if (!state.references.perspective || !image(state.references.perspective.image)) {
+    toast("Assign a perspective reference image first: a trace is drawn over it.", true);
+    return;
+  }
+  setMode("outline");
+  setUi({ tracing: { id: e.id, points: [] }, tracePoint: null });
+  toast("Click the silhouette's corners in the perspective view. Enter closes the trace; Escape cancels.");
+}
+
+export function finishTrace() {
+  const t = ui.tracing;
+  if (!t) return;
+  const points = t.points.filter(
+    (p, i) => i === 0 || Math.hypot(p[0] - t.points[i - 1][0], p[1] - t.points[i - 1][1]) > 1e-6,
+  );
+  const issues = commit((d) => updateObject(d, t.id, { trace: { points } }));
+  if (issues.length) {
+    toast("Draw a non-crossing loop with at least three corners.", true);
+    return;
+  }
+  setUi({ tracing: null, tracePoint: null });
+}
+
+export function removeTrace() {
+  const e = selectedObjects()[0];
+  if (!e?.trace) return;
+  if (report(commit((d) => updateObject(d, e.id, { trace: null })))) setUi("tracePoint", null);
 }
 
 // ---- References ---------------------------------------------------------------------

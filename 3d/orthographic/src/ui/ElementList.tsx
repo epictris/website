@@ -119,7 +119,7 @@ export function ElementList() {
           {ui.selected.length} selected · {state.objects.filter((e) => !e.visible).length} hidden ·{" "}
           {state.objects.filter((e) => e.locked).length} locked
         </div>
-        <p class="note">One closed outline per object in each orthographic view.</p>
+        <p class="note">One closed outline per object (or per part) in each orthographic view.</p>
       </div>
     </aside>
   );

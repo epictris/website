@@ -1,13 +1,23 @@
 // The perspective panel: the camera frame ("gate") with the rendered solids,
 // the reference overlay, 3D labels and orbit / pan / dolly navigation.
 
-import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show } from "solid-js";
-import { assignReferenceFile, cameraPreset, chooseReference, expandView, frameScene } from "../actions";
-import { image, type LoadedImage } from "../assets";
+import { createEffect, createMemo, createSignal, For, Index, on, onCleanup, onMount, Show } from "solid-js";
+import {
+  assignReferenceFile,
+  cameraPreset,
+  chooseReference,
+  expandView,
+  frameScene,
+  insertTracePoint,
+  tracePointMoved,
+} from "../actions";
+import { image } from "../assets";
 import { cameraMatrices } from "../core/camera";
-import { replaceCamera, setReference } from "../core/commands";
+import { replaceCamera, setReference, updateObject } from "../core/commands";
+import { hiddenEdges } from "../core/compare";
 import { clone, fmt, transform, vec } from "../core/math";
-import type { Camera, PerspectiveReference, Vec3 } from "../core/types";
+import { frameToImage, imageToFrame, overlayGeometry } from "../core/overlay";
+import type { Camera, Point, SceneObject, Vec3 } from "../core/types";
 import { meshes, meshVersion, onMeshChange } from "../meshes";
 import {
   beginGesture,
@@ -20,6 +30,7 @@ import {
   selectId,
   setActiveView,
   setSelection,
+  setUi,
   showInspectorTab,
   snapshot,
   state,
@@ -39,18 +50,6 @@ export function renderInput(): RenderInput {
     objects: state.objects.filter((e) => e.visible && meshes.get(e.id)?.indices.length),
     meshes,
     selected: isSelected,
-  };
-}
-
-/** Where the reference overlay sits in a gate of the given size. */
-export function overlayGeometry(width: number, height: number, r: PerspectiveReference, a: LoadedImage) {
-  const factor = Math.min(width / a.width, height / a.height) * r.scale;
-  return {
-    width: a.width * factor,
-    height: a.height * factor,
-    cx: width * (0.5 + r.offsetPercent[0] / 100),
-    cy: height * (0.5 + r.offsetPercent[1] / 100),
-    radians: (r.rotationDegrees * Math.PI) / 180,
   };
 }
 
@@ -173,10 +172,28 @@ export function PerspectiveView() {
     return [ev.clientX - r.left, ev.clientY - r.top];
   };
 
+  /** The trace mapping for the current gate: image pixels to gate pixels and back. */
+  const traceSpace = createMemo(() => {
+    const r = reference();
+    const a = referenceImage();
+    if (!r || !a) return null;
+    const g = overlayGeometry(...gate(), r, a);
+    return {
+      toGate: (p: Point) => imageToFrame(g, a, p),
+      toImage: (p: Point) => frameToImage(g, a, p),
+    };
+  });
+
   function pointerDown(ev: PointerEvent) {
     if (![0, 1, 2].includes(ev.button)) return;
     ev.preventDefault();
     setActiveView("perspective");
+    const t = ui.tracing;
+    const space = traceSpace();
+    if (t && space && ev.button === 0) {
+      setUi("tracing", "points", (pts) => [...pts, space.toImage(local(ev))]);
+      return;
+    }
     const type = aligning()
       ? "overlay"
       : ev.shiftKey || ev.button === 1 || ev.button === 2 || ui.spaceHeld
@@ -323,7 +340,35 @@ export function PerspectiveView() {
     assignReferenceFile("perspective", f);
   }
 
+  /** Double-click near an edge of the selected object's trace (outline mode) inserts a point there. */
+  function doubleClick(ev: MouseEvent) {
+    const e = traceEditing();
+    const space = traceSpace();
+    if (!e?.trace || !space) return;
+    const q = local(ev);
+    const pts = e.trace.points.map(space.toGate);
+    let best = { distance: Infinity, index: 0, at: q };
+    pts.forEach((a, i) => {
+      const b = pts[(i + 1) % pts.length];
+      const dx = b[0] - a[0];
+      const dy = b[1] - a[1];
+      const t = Math.max(0.01, Math.min(0.99, ((q[0] - a[0]) * dx + (q[1] - a[1]) * dy) / (dx * dx + dy * dy || 1)));
+      const h: Point = [a[0] + dx * t, a[1] + dy * t];
+      const distance = Math.hypot(h[0] - q[0], h[1] - q[1]);
+      if (distance < best.distance) best = { distance, index: i, at: h };
+    });
+    if (best.distance < 18) insertTracePoint(e.id, best.index, space.toImage(best.at));
+  }
+
+  /** The object whose trace is being edited: the one selected in outline mode, unlocked, with a trace. */
+  const traceEditing = createMemo(() => {
+    if (ui.mode !== "outline" || ui.selected.length !== 1 || ui.tracing) return null;
+    const e = state.objects.find((o) => o.id === ui.selected[0]);
+    return e?.trace && e.visible && !e.locked ? e : null;
+  });
+
   const hud = () => {
+    if (ui.tracing) return `TRACE · ${ui.tracing.points.length} corners · click to add, Enter closes, Escape cancels`;
     if (aligning()) return "ALIGN REFERENCE · drag image / wheel to scale";
     meshVersion(); // the object count depends on which meshes exist
     const shown = state.objects.filter((e) => e.visible && meshes.get(e.id)?.indices.length).length;
@@ -353,6 +398,16 @@ export function PerspectiveView() {
           />
           Reference
         </label>
+        <Show when={state.objects.some((e) => e.trace)}>
+          <label title="Draw each object's trace over the reference: dashed where traced, dotted where guessed">
+            <input
+              type="checkbox"
+              checked={ui.prefs.traces}
+              onChange={(e) => setUi("prefs", "traces", e.currentTarget.checked)}
+            />
+            Traces
+          </label>
+        </Show>
         <button
           type="button"
           class="phead-btn"
@@ -392,6 +447,7 @@ export function PerspectiveView() {
             onPointerUp={pointerUp}
             onPointerCancel={cancel}
             onWheel={wheel}
+            onDblClick={doubleClick}
             onContextMenu={(e) => e.preventDefault()}
           />
           <div id="pOverlayClip" style={{ "mix-blend-mode": overlay()?.blend ?? "normal" }}>
@@ -416,6 +472,9 @@ export function PerspectiveView() {
             </Show>
           </div>
           <canvas ref={outlineCanvas} id="pOutline" style={{ display: overlay() ? "block" : "none" }} />
+          <Show when={traceSpace()}>
+            {(space) => <TraceLayer space={space()} editing={traceEditing()} gate={gate()} local={local} />}
+          </Show>
           <div id="pLabels">
             <For each={labels()}>
               {(l) => (
@@ -451,5 +510,117 @@ export function PerspectiveView() {
         </span>
       </footer>
     </article>
+  );
+}
+
+interface TraceSpace {
+  toGate: (p: Point) => Point;
+  toImage: (p: Point) => Point;
+}
+
+/**
+ * Objects' traces over the perspective view, in their colours: traced edges
+ * dashed, hidden (guessed) edges dotted. In outline mode the selected object's
+ * trace has handles: drag to move a point, double-click an edge to add one,
+ * Delete to remove the selected one. A trace being drawn shows its corners.
+ */
+function TraceLayer(props: {
+  space: TraceSpace;
+  editing: SceneObject | null;
+  gate: [number, number];
+  local: (ev: MouseEvent) => [number, number];
+}) {
+  const traced = createMemo(() =>
+    ui.prefs.traces ? state.objects.filter((e) => e.visible && e.trace && e.trace.points.length >= 3) : [],
+  );
+  const paths = (e: SceneObject) => {
+    const pts = e.trace!.points.map(props.space.toGate);
+    const hidden = hiddenEdges(pts.length, e.trace!.hidden);
+    const seg = (want: boolean) =>
+      pts
+        .map((a, i) => {
+          if (hidden[i] !== want) return "";
+          const b = pts[(i + 1) % pts.length];
+          return `M${a[0]},${a[1]}L${b[0]},${b[1]}`;
+        })
+        .join("");
+    return { traced: seg(false), hidden: seg(true) };
+  };
+  let drag: { pointer: number; id: string; index: number; before: string; start: SceneObject; moved: boolean } | null =
+    null;
+  const down = (ev: PointerEvent, e: SceneObject, index: number) => {
+    if (ev.button !== 0) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    setUi("tracePoint", { id: e.id, index });
+    (ev.currentTarget as Element).setPointerCapture(ev.pointerId);
+    drag = { pointer: ev.pointerId, id: e.id, index, before: beginGesture(), start: clone(e), moved: false };
+  };
+  const move = (ev: PointerEvent) => {
+    const d = drag;
+    if (!d || d.pointer !== ev.pointerId) return;
+    d.moved = true;
+    const to = props.space.toImage(props.local(ev));
+    preview(d.before, (s) => updateObject(s, d.id, { trace: tracePointMoved(d.start, d.index, to) }));
+  };
+  const up = (ev: PointerEvent) => {
+    const d = drag;
+    if (!d || d.pointer !== ev.pointerId) return;
+    drag = null;
+    if (d.moved) endGesture(d.before);
+  };
+  const drawing = createMemo(() => ui.tracing?.points.map(props.space.toGate) ?? []);
+  // Handles are keyed by index, so the one being dragged (it holds the pointer capture) survives each update.
+  return (
+    <svg id="pTraces" width={props.gate[0]} height={props.gate[1]} aria-hidden="true">
+      <For each={traced()}>
+        {(e) => {
+          const d = () => paths(e);
+          const selected = () => isSelected(e.id);
+          return (
+            <g stroke={e.color} fill="none" stroke-width={selected() ? 2 : 1.3} stroke-linecap="round">
+              <path d={d().traced} stroke-dasharray="7 4" />
+              <path d={d().hidden} stroke-dasharray="0.5 4.5" stroke-width={selected() ? 2.6 : 2} />
+            </g>
+          );
+        }}
+      </For>
+      <Show when={props.editing}>
+        {(e) => (
+          <Index each={e().trace!.points.map(props.space.toGate)}>
+            {(q, i) => {
+              const is = () => ui.tracePoint?.id === e().id && ui.tracePoint.index === i;
+              return (
+                <circle
+                  class="trace-handle"
+                  cx={q()[0]}
+                  cy={q()[1]}
+                  r={is() ? 5 : 3.5}
+                  fill={is() ? "#fff5c8" : "#102a3a"}
+                  stroke={is() ? "#ffe497" : e().color}
+                  stroke-width={is() ? 2 : 1.4}
+                  onPointerDown={(ev) => down(ev, e(), i)}
+                  onPointerMove={move}
+                  onPointerUp={up}
+                  onPointerCancel={up}
+                />
+              );
+            }}
+          </Index>
+        )}
+      </Show>
+      <Show when={drawing().length}>
+        <path
+          d={drawing()
+            .map((q, i) => `${i ? "L" : "M"}${q[0]},${q[1]}`)
+            .join("")}
+          fill="none"
+          stroke="#fff1aa"
+          stroke-width="2"
+          stroke-dasharray="4 3"
+        />
+        <For each={drawing()}>{(q) => <circle cx={q[0]} cy={q[1]} r="3.5" fill="#fff1aa" />}</For>
+      </Show>
+    </svg>
   );
 }
