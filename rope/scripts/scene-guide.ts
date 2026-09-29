@@ -1,6 +1,6 @@
 // Write a level's collision into Blender to model against (`just scene-guide <level>`).
 //
-//   bun run scene:guide <level> [--blender PATH]
+//   bun run scene:guide <level> [--ride BUNDLE] [--speed M/S] [--blender PATH]
 //
 // Reads the level, turns every body's collision objects into world-space
 // outlines (metres, the game's frame: x right, y up, z toward the camera),
@@ -13,9 +13,15 @@
 // so the scene file always shows the current colliders when it is opened, and
 // a dressed body is modelled on the very outline the ball rolls on. The guide
 // never exports (docs/blender-scenes.md).
+//
+// The guide also carries the GAME CAMERA, `guide.camera`: the level's lens,
+// animated through the real camera controller along the level's camera paths
+// (`src/sim/cameraTrack.ts`), or along a recorded run with `--ride`. Looking
+// through it in Blender is looking through the game.
 
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { gunzipSync } from "node:zlib";
 import { tmpdir } from "node:os";
 import { basename, join, relative, resolve } from "node:path";
 import { PX } from "../src/engine/units";
@@ -33,6 +39,9 @@ import {
 import { DEFAULT_THICKNESS } from "../src/lib/shapeGeometry";
 import { outlineOfData } from "../src/render/shapePath";
 import { isSceneName } from "../src/render3d/scenes";
+import { LEVELS } from "../src/level/registry";
+import { trackAlongPaths, trackFromRecording, WALK_SPEED, type CameraTrack } from "../src/sim/cameraTrack";
+import type { Recording } from "../src/sim/trace";
 
 const ROOT = resolve(import.meta.dirname, "..");
 const SCENES_SRC = join(ROOT, "assets-src", "scenes");
@@ -51,7 +60,8 @@ const flag = (name: string): string | undefined => {
   return i >= 0 ? args[i + 1] : undefined;
 };
 
-const levelArg = positional[0] ?? fail("usage: bun run scene:guide <level> [--blender PATH]");
+const levelArg =
+  positional[0] ?? fail("usage: bun run scene:guide <level> [--ride BUNDLE] [--speed M/S] [--blender PATH]");
 const levelPath = levelArg.endsWith(".json") ? resolve(levelArg) : join(ROOT, "levels", `${levelArg}.json`);
 if (!existsSync(levelPath)) fail(`no level at ${levelPath}`);
 const levelName = basename(levelPath, ".json");
@@ -126,12 +136,35 @@ if (!bodies.length) fail(`${levelName} has no collision to guide against`);
 
 const xs = bodies.flatMap((b) => b.outlines.flat().map((p) => p[0]));
 const ys = bodies.flatMap((b) => b.outlines.flat().map((p) => p[1]));
+// The game camera: along the level's camera paths, or along a recorded run.
+function cameraTrack(): CameraTrack {
+  const spec = Object.entries(LEVELS).find(([, s]) => s.file === levelName);
+  const ride = flag("ride");
+  if (ride) {
+    const bytes = readFileSync(resolve(ride));
+    const rec = JSON.parse((ride.endsWith(".gz") ? gunzipSync(bytes) : bytes).toString("utf8")) as Recording;
+    if (spec && rec.level !== spec[0]) {
+      console.warn(`[scene-guide] ${basename(ride)} is a run of ${rec.level}, not ${spec[0]}; its camera is that level's`);
+    }
+    return trackFromRecording(rec, rec.data ?? raw, `ride of ${basename(ride)} (${rec.frames.length} frames)`);
+  }
+  const speed = Number(flag("speed") ?? WALK_SPEED);
+  if (!(speed > 0)) fail(`--speed must be a positive number of m/s`);
+  return trackAlongPaths(raw, (spec?.[1].controller ?? "ball") === "ball", speed);
+}
+const camera = cameraTrack();
+const cameraJob = {
+  ...camera,
+  frames: camera.frames.map((f) => ({ eye: f.eye.map(round), halfHeight: round(f.halfHeight) })),
+};
+
 const job = {
   level: levelName,
   scene,
   bounds: { min: [Math.min(...xs), Math.min(...ys)], max: [Math.max(...xs), Math.max(...ys)] },
   spawn: { x: round(level.player.x), y: round(-level.player.y), r: round(level.player.radius) },
   bodies,
+  camera: cameraJob,
 };
 
 const blender = flag("blender") ?? process.env["BLENDER_PATH"] ?? process.env["BLENDER"] ?? "blender";
@@ -159,4 +192,7 @@ try {
 
 const named = bodies.filter((b) => b.name).length;
 console.log(`[scene-guide] ${bodies.length} bodies (${named} named) from ${relative(ROOT, levelPath)}`);
+console.log(
+  `[scene-guide] game camera: ${camera.frames.length} frames at ${camera.fps} fps, ${camera.focalLength.toFixed(1)} mm, ${camera.source}`,
+);
 console.log(`[scene-guide] open ${relative(ROOT, scenePath)}, model on the guide, then \`just scene ${levelName}\``);

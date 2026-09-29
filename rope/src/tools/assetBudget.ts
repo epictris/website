@@ -115,8 +115,14 @@ export function runAssetChecks(): AssetCheck[] {
   // every seed ever tried, and a file there no manifest names is expected. The
   // published ones are the store's, so they are held to it and to the budget
   // like any prop (the build ships them).
+  //
+  // `public/scenes/` is not walked either, for the same kind of reason: beside
+  // each `scene.glb` is the export's `meta.json`, and a scene no level names
+  // any more stays on disk until someone deletes it. The pinned ones are held
+  // like the published generated meshes. (Until this, every pinned scene read
+  // as missing, since no walked directory held it.)
   const generatedFiles = stored
-    .filter((a) => a.name?.startsWith("generated-"))
+    .filter((a) => a.name?.startsWith("generated-") || a.key.startsWith("scene:"))
     .map((a) => join(PUBLIC_DIR, a.file.replace(/^\//, "")))
     .filter((path) => existsSync(path));
   const files = [...ASSET_DIRS.flatMap(walk), ...generatedFiles].sort();

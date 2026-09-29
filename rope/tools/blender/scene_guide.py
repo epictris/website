@@ -11,6 +11,8 @@ The job (metres, the GAME's frame: x right, y up, z toward the camera):
     {"level": "ball", "scene": "river",
      "bounds": {"min": [x, y], "max": [x, y]},
      "spawn": {"x": .., "y": .., "r": ..},
+     "camera": {"fps": 60, "focalLength": 70.0, "aspect": 1.78, "far": 400,
+                "source": "...", "frames": [{"eye": [x, y, z], "halfHeight": ..}, ...]},
      "bodies": [{"index": 3, "name": "Ledge_03" | null, "kind": "static", "solid": true,
                  "origin": [x, y], "depth": 0.2,
                  "outlines": [[[x, y], ...], ...]}, ...]}
@@ -26,6 +28,13 @@ What is written, all in one collection called `Guide`:
 - an empty on every body's origin, `guide.<name>.origin`, plain axes.
 - `guide.plane`: the gameplay plane's extent as a wire rectangle.
 - `guide.spawn`: a sphere of the avatar's radius at the spawn.
+- `guide.camera`: the GAME camera - the level's lens, its location keyed on
+  every frame the job's `camera` track holds (the real camera controller along
+  the level's camera paths, or along a recorded run; see
+  src/sim/cameraTrack.ts). It looks along +y (the game's -z) and never turns, as
+  the game's never does. Its `game_fps` and frame count are what the scene
+  takes when the Formations panel's "Look through game camera" makes it the
+  scene camera.
 
 None of it ever exports: the exporter skips linked objects and any collection
 named `guide*`. The guide file is OVERWRITTEN on every run - it is the level's,
@@ -37,6 +46,7 @@ Frames: the game's (x, y, z) is Blender's (x, -z, y) - see scene_export.py.
 """
 
 import json
+import math
 import os
 import sys
 
@@ -171,6 +181,43 @@ def build_guide(job, coll):
         link(coll, ball)
 
 
+def build_camera(track, coll):
+    """The game camera, animated. Blender states a lens as a focal length
+    against a sensor; the game's is 35 mm-equivalent against the 24 mm height,
+    so the vertical fit reproduces its field of view exactly."""
+    cam = bpy.data.cameras.new("guide.camera")
+    cam.lens = track["focalLength"]
+    cam.sensor_fit = "VERTICAL"
+    cam.sensor_height = 24.0
+    cam.sensor_width = 24.0 * track["aspect"]
+    cam.clip_start = 0.1
+    cam.clip_end = track["far"]
+    ob = bpy.data.objects.new("guide.camera", cam)
+    # Looking along Blender +y (the game's -z) with z up: head-on, as always.
+    ob.rotation_euler = (math.pi / 2, 0.0, 0.0)
+    frames = track["frames"]
+    ob.location = to_blender(*frames[0]["eye"])
+    ob["game_fps"] = track["fps"]
+    ob["game_frames"] = len(frames)
+    ob["game_aspect"] = track["aspect"]
+    ob["game_source"] = track["source"]
+    link(coll, ob)
+
+    ob.animation_data_create()
+    action = bpy.data.actions.new("guide.camera")
+    ob.animation_data.action = action
+    for axis in range(3):
+        fc = action.fcurve_ensure_for_datablock(ob, "location", index=axis)
+        fc.keyframe_points.add(len(frames))
+        co = []
+        for i, f in enumerate(frames):
+            co += [i + 1, to_blender(*f["eye"])[axis]]
+        fc.keyframe_points.foreach_set("co", co)
+        fc.keyframe_points.foreach_set("interpolation", [1] * len(frames))  # LINEAR
+        fc.update()
+    log(f"game camera: {len(frames)} frames at {track['fps']} fps, {cam.lens:.1f} mm, {track['source']}")
+
+
 def fresh_file():
     bpy.ops.wm.read_factory_settings(use_empty=True)
     # No `.blend1` beside a file this script rewrites on every run.
@@ -194,6 +241,8 @@ def main():
     coll = bpy.data.collections.new(GUIDE_COLLECTION)
     scene.collection.children.link(coll)
     build_guide(job, coll)
+    if job.get("camera", {}).get("frames"):
+        build_camera(job["camera"], coll)
     os.makedirs(os.path.dirname(os.path.abspath(guide_path)), exist_ok=True)
     bpy.ops.wm.save_as_mainfile(filepath=os.path.abspath(guide_path))
     log(f"wrote {guide_path}: {len(job['bodies'])} bodies")

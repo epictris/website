@@ -13,10 +13,10 @@ surface, a text, a metaball), except:
   from `<scene>-guide.blend`), or an override of one;
 - one in a collection whose name starts with "guide" (any case), or in a
   collection excluded from the view layer (the checkbox in the outliner);
-- one hidden in RENDER (the camera icon). Render visibility is what ships;
-  viewport visibility is the artist's own business and is ignored, so a
-  reference hidden to get it out of the way is still hidden from the game only
-  if it is hidden from the render.
+- one hidden in RENDER (the camera icon), itself or through a collection it is
+  in. Render visibility is what ships; viewport visibility is the artist's own
+  business and is ignored, so a reference hidden to get it out of the way is
+  still hidden from the game only if it is hidden from the render.
 
 Lights, cameras, empties, armatures never go out: the level's own lights carry
 a budget and semantics glTF cannot (see docs/lighting-and-surfaces.md), and an
@@ -26,8 +26,11 @@ WHAT IS KEPT. Every object's WORLD transform, because that is the whole
 binding: the renderer mounts an object named like a body at Blender's pose
 minus the body's rest pose and lets the body carry it (render3d/sceneDressing.ts).
 Modifiers are applied. Materials go as glTF can carry them - a Principled BSDF
-with image textures - and everything else is reported in `warnings`: a Base
-Color wired to anything but an Image Texture exports as a flat colour.
+with image textures, a constant tint on one, alpha clipped by a threshold - and
+a PROCEDURAL Base Color (noise, ramps, mixes: what the formations' stone is) is
+baked by Cycles into a vertex colour on the exported copy and wired back in, so
+it goes as `COLOR_0` (`bake_procedural_color`). Everything else glTF cannot
+carry is reported in `warnings`.
 
 Frames: Blender is z-up, the exporter writes y-up (Blender x, y, z -> glTF
 x, z, -y), and the game draws in glTF's frame (x right, y up, z toward the
@@ -70,7 +73,8 @@ def to_game(v):
 
 def excluded_collections(view_layer):
     """Every collection whose objects stay out: excluded from the view layer,
-    named as a guide, or linked - and every collection inside one of those."""
+    hidden in render, named as a guide, or linked - and every collection
+    inside one of those."""
     out = set()
 
     def walk(layer_coll, inherited):
@@ -78,6 +82,7 @@ def excluded_collections(view_layer):
         skip = (
             inherited
             or layer_coll.exclude
+            or coll.hide_render
             or coll.name.lower().startswith(GUIDE_PREFIX)
             or coll.library is not None
         )
@@ -131,6 +136,84 @@ def carries_vertex_color(node):
     )
 
 
+def carries_tint(node):
+    """Whether a Base Color source is an Image Texture times a constant colour
+    - a Mix (Multiply, factor 1) with one side an image and the other unlinked -
+    which glTF carries as baseColorTexture x baseColorFactor."""
+    if node.type != "MIX" or node.data_type != "RGBA" or node.blend_type != "MULTIPLY":
+        return False
+    by_id = {i.identifier: i for i in node.inputs}
+    factor, a, b = by_id["Factor_Float"], by_id["A_Color"], by_id["B_Color"]
+    if factor.is_linked or factor.default_value != 1.0:
+        return False
+    linked = [i for i in (a, b) if i.is_linked]
+    return (len(linked) == 1 and linked[0].links[0].from_node.type == "TEX_IMAGE"
+            and linked[0].links[0].from_node.image is not None)
+
+
+def procedural_base_colors(mat):
+    """The Principled BSDFs of `mat` whose Base Color glTF cannot carry."""
+    if mat is None or mat.node_tree is None:
+        return []
+    out = []
+    for node in mat.node_tree.nodes:
+        if node.type != "BSDF_PRINCIPLED" or not node.inputs["Base Color"].is_linked:
+            continue
+        src = node.inputs["Base Color"].links[0].from_node
+        if src.type != "TEX_IMAGE" and not carries_vertex_color(src) and not carries_tint(src):
+            out.append(node)
+    return out
+
+
+# The colour attribute a procedural Base Color is baked into.
+BAKED_COLOR = "SceneBaseColor"
+BAKE_SAMPLES = 4
+
+
+def bake_procedural_color(kept):
+    """Bake every procedural Base Color the kept meshes use into a vertex
+    colour, and wire it into Base Color, so glTF carries the stone's colour as
+    COLOR_0 instead of dropping it to a flat default.
+
+    Only the colour is baked - Cycles' diffuse COLOR pass, no light - so the
+    game still lights the surface. It works on the export's own copies: each
+    target gets a mesh with its modifiers applied (the attribute has to match
+    the topology that is written), and the file is never saved. The resolution
+    is the mesh's: a colour field finer than the vertices is averaged away.
+    Returns how many objects were baked."""
+    targets = [ob for ob in kept if ob.type == "MESH"
+               and any(procedural_base_colors(m) for m in ob.data.materials)]
+    if not targets:
+        return 0
+    t0 = time.time()
+    scene = bpy.context.scene
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    for ob in targets:
+        mesh = bpy.data.meshes.new_from_object(ob.evaluated_get(depsgraph), preserve_all_data_layers=True,
+                                               depsgraph=depsgraph)
+        ob.modifiers.clear()
+        ob.data = mesh
+        mesh.color_attributes.active_color = mesh.color_attributes.new(BAKED_COLOR, "BYTE_COLOR", "CORNER")
+    scene.render.engine = "CYCLES"
+    scene.cycles.device = "CPU"
+    scene.cycles.samples = BAKE_SAMPLES
+    scene.render.bake.target = "VERTEX_COLORS"
+    for ob in scene.objects:
+        try:
+            ob.select_set(ob in targets)
+        except RuntimeError:
+            pass
+    bpy.context.view_layer.objects.active = targets[0]
+    bpy.ops.object.bake(type="DIFFUSE", pass_filter={"COLOR"}, target="VERTEX_COLORS")
+    for mat in {m for ob in targets for m in ob.data.materials if m is not None}:
+        for node in procedural_base_colors(mat):
+            attr = mat.node_tree.nodes.new("ShaderNodeVertexColor")
+            attr.layer_name = BAKED_COLOR
+            mat.node_tree.links.new(attr.outputs["Color"], node.inputs["Base Color"])
+    log(f"baked the procedural colour of {len(targets)} objects into {BAKED_COLOR}, {time.time() - t0:.1f}s")
+    return len(targets)
+
+
 def material_warnings(ob):
     """What glTF cannot carry of this object's materials, one line each."""
     out = []
@@ -159,7 +242,12 @@ def material_warnings(ob):
                 # nothing.
                 if src.type == "NORMAL_MAP" and src.inputs["Color"].is_linked:
                     src = src.inputs["Color"].links[0].from_node
-                if socket_name == "Base Color" and carries_vertex_color(src):
+                if socket_name == "Base Color" and (carries_vertex_color(src) or carries_tint(src)):
+                    continue
+                # A bump of strength 0 (the boulder generator's stone at its
+                # default) changes nothing, so losing it loses nothing.
+                if (src.type == "BUMP" and not src.inputs["Strength"].is_linked
+                        and src.inputs["Strength"].default_value == 0):
                     continue
                 if src.type != "TEX_IMAGE":
                     out.append(
@@ -244,6 +332,31 @@ def grow_moss(scene, warnings):
         log(f"moss {ob.name} on {ob.moss.host}: {len(result.triangles)} triangles ({result.curtain_triangles} curtain), {ob.moss.build_ms:.0f} ms")
 
 
+def formation_warnings(scene, warnings):
+    """Formations (the Formations add-on, tools/blender/formations) whose rock
+    or growth lags their source: an outline edited and not rebuilt ships the
+    old rock, and growth planted before the rock was rebuilt or moved floats
+    off it or sinks into it. Both are fixed in Blender, never here: a rebuild
+    is the generator's to run, and a replant may undo the artist's touch-ups."""
+    if not any("formation_recipe" in ob for ob in scene.objects):
+        return
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import formations
+    from formations import core, growth
+
+    formations.register()
+    for ob in core.formations(scene):
+        if ob.hide_render:
+            continue
+        try:
+            if core.pending(ob):
+                warnings.append(f"{ob.name}: outline edited but not rebuilt (Formations > Rebuild Changed)")
+        except ValueError as e:
+            warnings.append(f"{ob.name}: {e}")
+        if growth.stale(ob):
+            warnings.append(f"{ob.name}: rock changed since its growth was planted (Formations > Growth > Stale)")
+
+
 def main():
     argv = sys.argv[sys.argv.index("--") + 1 :]
     if len(argv) < 2:
@@ -257,13 +370,13 @@ def main():
 
     kept, skipped, warnings = [], [], []
     grow_moss(scene, warnings)
+    formation_warnings(scene, warnings)
     for ob in scene.objects:
         reason = skip_reason(ob, excluded)
         if reason:
             skipped.append({"name": ob.name, "reason": reason})
             continue
         kept.append(ob)
-        warnings.extend(material_warnings(ob))
 
     # An empty scene is a legitimate export - the file a level is first wired
     # to, before anything is modelled - so it ships as an empty GLB with a
@@ -284,6 +397,17 @@ def main():
         ob.hide_set(False)
         ob.select_set(True)
     view_layer.update()
+
+    # Baking selects its own targets; the export selection is restored after.
+    if bake_procedural_color(kept):
+        for ob in scene.objects:
+            try:
+                ob.select_set(ob in kept)
+            except RuntimeError:
+                pass
+        view_layer.update()
+    for ob in kept:
+        warnings.extend(material_warnings(ob))
 
     depsgraph = bpy.context.evaluated_depsgraph_get()
     nodes = []

@@ -1,0 +1,18 @@
+{
+  "scenes/grotto.blend": {
+    "sha256": "a90c0d5b1ec7956338da7ccd8890df6a447fb2ec204ac3b91c9d6922493e080f",
+    "bytes": 8671379
+  },
+  "scenes/textures/foliage-components-v3.png": {
+    "sha256": "bbd46bc1aa504c2857fc2d38853584daad04b2007bc69c36e55d9f3309a10296",
+    "bytes": 533540
+  },
+  "scenes/textures/hanging-moss-soft-strands-v5.png": {
+    "sha256": "a9b2e671f1cd3596f4dc49056bc7f76dadd7e77834ba929e7cd61a7d3c8779db",
+    "bytes": 826897
+  },
+  "scenes/textures/soft-moss-v2.png": {
+    "sha256": "dbc1db41cb641473eec6179d7f59a63b749648b61d2759480c8a33df91c47947",
+    "bytes": 1363845
+  }
+}

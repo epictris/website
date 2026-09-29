@@ -1,0 +1,15 @@
+schema_version = "1.0.0"
+
+id = "formations"
+version = "0.1.0"
+name = "Formations"
+tagline = "Rock formations from outlines, edited through the game camera"
+maintainer = "Tristan Bray"
+type = "add-on"
+
+blender_version_min = "4.2.0"
+
+license = ["SPDX:GPL-3.0-or-later"]
+
+[build]
+paths_exclude_pattern = ["__pycache__/", "test_*.py"]

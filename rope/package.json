@@ -19,6 +19,8 @@
     "assets:publish-generated": "bun run scripts/publish-generated.ts",
     "assets:publish-images": "bun run scripts/publish-images.ts",
     "assets:publish-scenes": "bun run scripts/publish-scenes.ts",
+    "assets:publish-sources": "bun run scripts/publish-scene-sources.ts",
+    "assets:fetch-sources": "bun run scripts/fetch-scene-sources.ts",
     "scene:export": "bun run scripts/scene-export.ts",
     "scene:guide": "bun run scripts/scene-guide.ts",
     "assets:paint": "bun run scripts/paint-textures.ts",

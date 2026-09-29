@@ -1,4 +1,4 @@
-import { defineConfig, type HtmlTagDescriptor, type Plugin } from "vite";
+import { defineConfig, normalizePath, type HtmlTagDescriptor, type Plugin } from "vite";
 import { buildSync } from "esbuild";
 import {
   existsSync,
@@ -163,8 +163,11 @@ function levelApi(): Plugin {
       // load, which is the contract everywhere else here: a level is read once,
       // when the scene is built.
       const invalidate = (file: string) => {
+        // The graph keys files with forward slashes on every platform; a
+        // Windows path from `join` or `watch` would silently match nothing.
+        const id = normalizePath(file);
         for (const env of Object.values(server.environments)) {
-          for (const mod of env.moduleGraph.getModulesByFile(file) ?? []) {
+          for (const mod of env.moduleGraph.getModulesByFile(id) ?? []) {
             env.moduleGraph.invalidateModule(mod);
           }
         }

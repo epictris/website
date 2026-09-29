@@ -42,12 +42,14 @@ just publish              # before committing a level that shows the scene
 
 `just scene-guide <level>` (`scripts/scene-guide.ts`, `tools/blender/scene_guide.py`) writes the level's collision into **`<scene>-guide.blend`**: one object per body, its collision outlines extruded through the body's drawn depth (its first geometry object's `depth`, a generated boulder's `depth` parameter or that schema's default, else the extruder's 20 cm) and centred on the gameplay plane, with the object's origin on the body's origin (`guide.<name>`, or `guide.body-<index>` for an unnamed one), an empty on every origin, the gameplay plane's extent as a wire rectangle, and a sphere of the avatar's radius at the spawn.
 Solids draw translucent with their wire, areas as wire.
+The guide also carries the **game camera**, `guide.camera`: the level's lens, keyed on every frame at 60 fps through the real camera controller along the level's camera paths (or along a recorded run, `--ride <bundle>`), so looking through it in Blender is looking through the game ([blender-formations](blender-formations.md#the-game-camera)).
 It **creates `<scene>.blend`** when there is none, with the `Guide` collection linked from the guide file, so reopening the scene after a level edit shows the current colliders and the dressing is always modelled against the outline the ball actually rolls on.
 The guide file is overwritten on every run and never exports.
 
-`just scene <level>` (`scripts/scene-export.ts`, `tools/blender/scene_export.py`) runs headless Blender over the scene: every object with geometry goes out with its world transform and modifiers applied, except one **linked** from another file (the guide), one in a collection named `guide*` or **excluded from the view layer**, and one **hidden in render** (the camera icon - render visibility is what ships, viewport visibility is the artist's).
+`just scene <level>` (`scripts/scene-export.ts`, `tools/blender/scene_export.py`) runs headless Blender over the scene: every object with geometry goes out with its world transform and modifiers applied, except one **linked** from another file (the guide), one in a collection named `guide*` or **excluded from the view layer**, and one **hidden in render**, itself or through a collection it is in (the camera icon - render visibility is what ships, viewport visibility is the artist's).
 Lights, cameras, empties and armatures never go out.
 Before anything is selected, every grown moss object is grown again from its paint (see [blender-moss](blender-moss.md)), so the moss that ships always matches the rock it grows on as the file now stands.
+A formation whose outline was edited and not rebuilt, or whose growth predates its rock, is a warning ([blender-formations](blender-formations.md)).
 The result goes through the pinned prop pipeline with node names kept (`assets:optimize --keep-nodes`, which also turns instancing off, since an instanced node loses its name) and the parenting kept (`--keep-hierarchy`: the optimiser's flatten step would hoist a child to the root at its world pose, which keeps the pose and loses the ride on its parent's body - it was on until 2026-09-28, so the rule above held only for unparented objects) into
 
 ```
@@ -74,19 +76,28 @@ The pin is what says which export a commit meant; `assets:fetch` verifies it, so
 `cli assets` fails on a scene a registered level names that the manifest lacks, on a manifest entry no level names, and on a scene name the store cannot take (`SCENE_NAME`: lower-case letters, digits, dashes).
 A build keeps only the `scene.glb` of scenes registered levels name (`scenesInBuild` in `vite.config.ts`).
 
-The `.blend` files are raws under `assets-src/`, gitignored like every raw; publish them to the release by hand when a scene is accepted, or the recipe of the dressing is lost with the machine.
+The `.blend` files are raws under `assets-src/`, gitignored like every raw, and they are the only copy of how a scene's dressing was made.
+So they are stored too, as **sources**: `bun run assets:publish-sources` (in `just publish`) uploads the `.blend` of every scene a registered level names, and every source already pinned, as `source-<path>` in the same release, replaced in place like a scene, and pins its sha256 and size in `scripts/sceneSources.json` (keyed by the path under `assets-src/`).
+Another file becomes a source by naming it once: `bun run assets:publish-sources scenes/textures/soft-moss-v2.png`.
+`just sources` (`bun run assets:fetch-sources`) brings them back, and never overwrites a local file that differs from its pin, since that is unpublished work; the build does not fetch them, since a deploy draws exports.
 
 ## What Blender cannot carry
 
-- **Procedural materials.** glTF carries a Principled BSDF with image textures and nothing else; a Base Color wired to a noise, a colour ramp or a mix exports as a flat colour.
-  The one exception is vertex colour: a Color Attribute on Base Color, alone or multiplied (factor 1) with an Image Texture, goes out as `COLOR_0`, which is the shape Blender's glTF importer builds for an imported model.
-  The exporter warns about every such socket (`meta.json`'s `warnings`, printed by the recipe).
-  Bake it to an image, or texture with images to begin with.
+- **Procedural materials.** glTF carries a Principled BSDF with image textures and little else.
+  What it does carry: a Color Attribute on Base Color, alone or multiplied (factor 1) with an Image Texture, goes out as `COLOR_0` (the shape Blender's glTF importer builds); an Image Texture multiplied by a constant colour in a Mix node (Multiply, factor 1) goes out as the texture times `baseColorFactor`; and an alpha run through Less Than and Subtract (`1 - (alpha < cutoff)`) goes out as `alphaMode: MASK` at that cutoff.
+  A **Base Color** wired to anything else (noise, ramps, mixes) is **baked**: the export runs Cycles' diffuse colour pass into a vertex colour (`SceneBaseColor`) on its own copy of the mesh, modifiers applied, and wires it in, so it ships as `COLOR_0` at the mesh's resolution - a colour field finer than the vertices is averaged away (about 1 s for the grotto's 13 rocks).
+  Only the colour is baked, never light: the game lights it.
+  Roughness, metallic, normal and emission wired to anything but an image still export as flat values, and the exporter warns about each (`meta.json`'s `warnings`, printed by the recipe); a Bump of strength 0 is no loss and is not reported.
 - **Lights.** The level's own lights carry glow and beam semantics and a budget (see [lighting-and-surfaces](lighting-and-surfaces.md)); a Blender light is dropped.
   Emissive materials do export.
 - **Volumetrics, fog, compositing.** The level's environment block is where the air is authored.
 - **Size.** The per-file bar is 8 MB and textures are capped at 1k by the optimiser; the recipe warns past the bar.
   Splitting a level into a foreground and a backdrop scene is the release valve, and is not supported yet: a level names one scene.
+
+## The grotto
+
+Since 2026-09-29 `ball` names **`grotto`**, the Sunken Grotto: formations built with the formations add-on, converted from karin_website's v5 background pipeline, described in [blender-formations](blender-formations.md#the-sunken-grotto).
+`river.blend`, below, is still on disk and is one field away (`scene: "river"`).
 
 ## The river's scene
 

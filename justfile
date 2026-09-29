@@ -43,13 +43,20 @@ texture IN OUT MAP:
 assets:
     cd rope && bun run assets:fetch
 
+# Pull the Blender scenes' sources (their .blend files and the pictures their
+# tools paint with) into rope/assets-src/. Never overwrites a file with
+# unpublished edits. See rope/scripts/sceneSources.ts.
+sources:
+    cd rope && bun run assets:fetch-sources
+
 # Publish the generated meshes (rocks, mushroom patches) the levels name to the
 # asset release and pin them in rope/src/render3d/generatedAssets.json. Run it
 # after generating, then commit that file with the level. Also uploads the
-# pictures uploaded in the editor (pinned in rope/src/render3d/imageAssets.json)
-# and the Blender scenes the levels name (rope/src/render3d/sceneAssets.json).
+# pictures uploaded in the editor (pinned in rope/src/render3d/imageAssets.json),
+# the Blender scenes the levels name (rope/src/render3d/sceneAssets.json) and
+# those scenes' sources (rope/scripts/sceneSources.json).
 publish:
-    cd rope && bun run assets:publish-generated && bun run assets:publish-images && bun run assets:publish-scenes
+    cd rope && bun run assets:publish-generated && bun run assets:publish-images && bun run assets:publish-scenes && bun run assets:publish-sources
 
 # Export a level's Blender scene (rope/assets-src/scenes/<scene>.blend, the
 # level's `scene`) into rope/public/scenes/<scene>/ and report what it dressed.
@@ -64,8 +71,17 @@ scene LEVEL:
 moss-install:
     cd rope && blender -b --python tools/blender/moss_install.py
 
-# Write the level's collision into <scene>-guide.blend as a linked guide to
-# model against, and create <scene>.blend linking it if there is none yet.
+# Install the formations add-on (rope/tools/blender/formations): rock masses
+# from outlines, edited through the game camera, and what grows on them. Then
+# the Formations tab is in the 3D viewport's sidebar.
+# See rope/docs/blender-formations.md.
+formations-install:
+    cd rope && blender -b --python tools/blender/addon_install.py -- formations
+
+# Write the level's collision and its game camera (along the camera paths, or
+# along a recorded run: just scene-guide ball --ride playtests/x.json.gz) into
+# <scene>-guide.blend as a linked guide to model against, and create
+# <scene>.blend linking it if there is none yet.
 #   just scene-guide ball
-scene-guide LEVEL:
-    cd rope && bun run scene:guide {{LEVEL}}
+scene-guide LEVEL *ARGS:
+    cd rope && bun run scene:guide {{LEVEL}} {{ARGS}}

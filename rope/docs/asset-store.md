@@ -204,7 +204,10 @@ A level's Blender scene (see [blender-scenes](blender-scenes.md)) is the seventh
 The pin is what says which export a commit meant, `assets:fetch` verifies it, and an older commit whose scene was replaced fails its fetch loudly - the trade this store makes everywhere.
 An entry no level names is dropped from the manifest and left in the release, with the delete line printed, as for a generated mesh.
 `cli assets` fails on a scene a level names that is not pinned, on a pin no level names, and on a scene name the store cannot take.
-The `.blend` files under `assets-src/scenes/` are raws like every other and are not published by any script; publish an accepted one by hand.
+The `.blend` files under `assets-src/scenes/` are the scenes' **sources**, and are stored beside them: `bun run assets:publish-sources` (in `just publish`) uploads the `.blend` of every scene a level names and every source already pinned, as `source-<path with "/" as "-">`, replaced in place, pinned in `scripts/sceneSources.json` (path under `assets-src/` to `{ sha256, bytes }`).
+They are not in `storedAssets()`: the build never fetches a source, and the budget is the game's download, not the authoring files'.
+`just sources` fetches them, and leaves a local file that differs from its pin alone (unpublished work).
+See `scripts/sceneSources.ts`.
 
 ## Generated meshes in the store
 
