@@ -1,12 +1,12 @@
 // What a level will download, worked out from the level data alone.
 //
 // This is the same question `Scene3D.setLevel` answers by BUILDING the scene -
-// every geometry object's surface, every prop, the sky, the water maps - asked
-// without a canvas, a GPU or a body. It exists because the answer is needed
-// before any of that: the preload list inlined into `index.html` (see
-// `preloadManifest` in vite.config.ts) is what lets the page start fetching
-// 26 MB at first paint instead of after the whole module graph has landed, and
-// a build step cannot build a scene.
+// the Blender scene, the sky, the avatar, the water maps, a belt's surface -
+// asked without a canvas, a GPU or a body. It exists because the answer is
+// needed before any of that: the preload list inlined into `index.html` (see
+// `preloadManifest` in vite.config.ts) is what lets the page start fetching at
+// first paint instead of after the whole module graph has landed, and a build
+// step cannot build a scene.
 //
 // IT MUST AGREE WITH THE SCENE, and nothing here can prove that it does - the
 // two walk the same data by different routes. The guard is at the other end:
@@ -22,14 +22,10 @@
 
 import type { RawLevelData } from "../level/levelFormat";
 import { normalizeLevelData } from "../level/levelFormat";
-import { generatedMeshAsset, parseGeneratedKey } from "./generated";
-import { GENERATED_ASSETS, generatedMeta } from "./generatedMeta";
-import { IMAGE_ASSETS } from "./images";
 import { SCENE_ASSETS, sceneFile } from "./scenes";
 import { sceneMeta } from "./sceneMeta";
 import {
   BALL_MESH,
-  emissiveMapName,
   HDRI_ASSETS,
   IRON_SURFACE,
   MESH_ASSETS,
@@ -46,37 +42,6 @@ export interface StoredFile {
   bytes: number;
 }
 
-// A mesh key's file, generated or from the manifest, as `loadMesh` resolves it.
-// A generated file's weight is not in its key: a published one has it pinned in
-// the store manifest (`GENERATED_ASSETS`), which a fresh checkout has too; one
-// generated here and not yet published has it in the `meta.json` beside it; one
-// with neither (generated elsewhere and never published, or by a service that
-// died before writing it) is listed at 0 bytes, which only means the bar does
-// not count it, and said out loud because a 0 is otherwise a silent wrong
-// answer.
-function meshFile(key: string): StoredFile | undefined {
-  const generated = generatedMeshAsset(key);
-  if (!generated) return MESH_ASSETS[key];
-  const bytes = GENERATED_ASSETS[key]?.bytes ?? generatedMeta(key)?.bytes;
-  if (bytes === undefined) {
-    console.warn(`[levelAssets] ${key} is not in the store and has no meta.json; preloading ${generated.file} unweighted`);
-  }
-  return { file: generated.file, bytes: bytes ?? 0 };
-}
-
-// Every generated mesh key the level names, in authored order, once each: what
-// the store has to hold for the level to draw as it was generated (see
-// `GENERATED_ASSETS`).
-export function levelGeneratedKeys(raw: RawLevelData): string[] {
-  const keys = new Set<string>();
-  for (const body of normalizeLevelData(raw).bodies) {
-    for (const object of body.objects) {
-      if (object.type === "geometry" && object.mesh && parseGeneratedKey(object.mesh)) keys.add(object.mesh);
-    }
-  }
-  return [...keys];
-}
-
 // The Blender scene the level is dressed in, or undefined (see `LevelData.scene`).
 export function levelSceneName(raw: RawLevelData): string | undefined {
   return normalizeLevelData(raw).scene || undefined;
@@ -84,8 +49,8 @@ export function levelSceneName(raw: RawLevelData): string | undefined {
 
 // A scene's file for the preloader. Its weight is the published pin's, or the
 // local export's `meta.json` for a scene exported here and not yet published,
-// or 0 with a warning for one with neither (as `meshFile` does for a generated
-// key, and for the same reason: a 0 is otherwise a silent wrong answer).
+// or 0 with a warning for one with neither: a 0 is otherwise a silent wrong
+// answer, and it only means the bar does not count the file.
 function sceneStoredFile(scene: string): StoredFile {
   const bytes = SCENE_ASSETS[scene]?.bytes ?? sceneMeta(scene)?.bytes;
   if (bytes === undefined) {
@@ -94,28 +59,13 @@ function sceneStoredFile(scene: string): StoredFile {
   return { file: sceneFile(scene), bytes: bytes ?? 0 };
 }
 
-// Every picture the level shows (`kind: "image"`), once each - what the image
-// manifest has to hold for the level to draw them.
-export function levelImageKeys(raw: RawLevelData): string[] {
-  const keys = new Set<string>();
-  for (const body of normalizeLevelData(raw).bodies) {
-    for (const object of body.objects) {
-      if (object.type === "geometry" && object.kind === "image" && object.image) keys.add(object.image);
-    }
-  }
-  return [...keys];
-}
-
 // Every stored file the 3D scene will request for this level, in roughly the
-// order it will request them - the sky and the avatar first, then the bodies in
-// authored order - so a connection that cannot carry all of it at once carries
-// the most visible parts first.
+// order it will request them - the sky and the avatar first, then the scene,
+// then what the bodies draw themselves - so a connection that cannot carry all
+// of it at once carries the most visible parts first.
 export function levelStoredFiles(raw: RawLevelData, controller?: string): StoredFile[] {
-  // Normalised, not scaled: the units are irrelevant here, but a level still in
-  // the retired flat form only grows its geometry objects (and so its texture
-  // names) on the way through this gate. `LEVEL_2` is one - it comes from the
-  // Godot extractor - so skipping it would report a level with no surfaces at
-  // all.
+  // Normalised, not scaled: the units are irrelevant here, and the retired forms
+  // only read as the level they now are on the way through this gate.
   const data = normalizeLevelData(raw);
   const out: StoredFile[] = [];
   const seen = new Set<string>();
@@ -143,28 +93,16 @@ export function levelStoredFiles(raw: RawLevelData, controller?: string): Stored
   // `BallVisual` and so fetches no ball. It is named right after the sky
   // because it is what the player is looking at.
   if (controller === "ball") add(MESH_ASSETS[BALL_MESH]);
-  // The Blender scene is most of what a dressed level looks like, and one
-  // file, so it goes ahead of the bodies' own props.
+  // The Blender scene is what a level looks like, and one file.
   if (data.scene) add(sceneStoredFile(data.scene));
 
   let water = false;
   for (const body of data.bodies) {
     if (body.kind === "water") water = true;
+    // A conveyor's band wears its own surface, drawn by the game (see
+    // `BodyVisual.mountBelt`).
     for (const object of body.objects) {
-      if (object.type !== "geometry") continue;
-      // A picture wears no surface set at all (see `mountImage`).
-      if (object.kind === "image") {
-        if (object.image) add(IMAGE_ASSETS[object.image]);
-        continue;
-      }
-      addSurface(object.texture);
-      // A borrowed emission map is a second set worn for its emissive slot
-      // alone, and `emissiveMapName` is what says whether the name resolves to
-      // one at all (an unknown key leaves the shape unmapped rather than
-      // glowing in the fallback's).
-      const glow = emissiveMapName(object.emissiveTexture);
-      if (glow) addSurface(glow);
-      if (object.mesh) add(meshFile(object.mesh));
+      if (object.type === "collision" && object.shape.kind === "belt") addSurface(object.shape.texture);
     }
   }
   // The flipbook and the foam mask are loaded when the first water material is

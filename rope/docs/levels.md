@@ -24,7 +24,7 @@ It is the lesson `SpawnData.hang` and the `environment` block each paid for sepa
 File-backed and ball-driven are both deliberate - the hand-written `TEST_*` specs are rigs with no file to hash and no finish line to cross, and the grapple levels are a controller the completion flow has never been through.
 Both stay reachable by `?level=`.
 
-`cli levels` is the lint over all of it, and every failure it names is one that is silent in play: a listed level with no finish line, a finish body carrying only decoration and so building no region at all, no introduction or two, and two levels the player cannot tell apart in the list.
+`cli levels` is the lint over all of it, and every failure it names is one that is silent in play: a listed level with no finish line, a finish body with no collision object and so building no region at all, no introduction or two, and two levels the player cannot tell apart in the list.
 It is pure and fast - no world is built and no frame is stepped - in the spirit of `cli assets`.
 The mechanic those files are checked against is stepped by `cli finish` instead.
 
@@ -32,7 +32,7 @@ The mechanic those files are checked against is stepped by `cli finish` instead.
 
 A level ends at a finish line, and touching it is the level's win condition.
 
-It is **one body**: `kind: "finish"`, with a collision object for the region the player crosses and a geometry object carrying the gantry that marks it.
+It is **one body**: `kind: "finish"`, with a collision object for the region the player crosses, dressed with the gantry that marks it by the level's Blender scene (an object named like the body, see [blender-scenes](blender-scenes.md)).
 A `finish` body builds an `Area2D` (`classes/finishLine.ts`), and the crossing is decided by the same overlap test in the same place as a killzone's (`World.notifyAreas`, an exact SAT test rather than a bounding circle).
 It is the killzone's mirror: the same volume, entered, with the opposite meaning.
 
@@ -45,8 +45,8 @@ A line you touch needs none of it, reads from across the level, and cannot be ar
 
 - The **region** is the piece the player crosses, and it is drawn across the way out: tall and wide enough that a swing cannot miss it.
   It may be as **thin** as you like - `ball.json`'s own is 10 px, the width of the gantry it marks seen edge-on - because the crossing is swept rather than sampled (below).
-- The **gantry** is a geometry object on the same body: `mesh: "finish-line"`, a chequered arch whose origin sits on the ground between its posts, so the body is placed where the gate stands.
-  It is 6.5 x 6.2 m in the file's own metres - a real gantry beside real people, and enormous beside a 24 cm ball - so a level states its own `scale`, and `rotY` turns it to be run through in depth rather than across.
+- The **gantry** is the body's dressing in the level's Blender scene: `ball` and `rails` carry the chequered arch (hyd's `finish-line`, credited through the object's `credits` property) as `finish-line-1`, exported from what the level drew until 2026-09-29, when it was a `mesh: "finish-line"` geometry object scaled down from its 6.5 x 6.2 m and turned to be run through in depth.
+  A level with no scene has no gantry: its finish region, being an area, draws nothing in 3D.
 - Nothing about the region collides, and **nothing draws it in play**.
   An area is not a `PhysicsBody2D` at all, so the player, the hook and the chain pass through it with no mask to author and nothing to get wrong - which is what `cli finish`'s `finish-inert` holds to, bit for bit.
   It is the one area with no glyph on it in the game: every other one is stamped because it must not be mistaken for solid geometry, and a region that does nothing to what is inside it cannot be misread (see [**Area glyphs**](areas-and-friction.md#area-glyphs)).

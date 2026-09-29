@@ -29,7 +29,7 @@ The patch for that was to **derive** a light from the glowing shape, out of seve
 All of it is gone.
 A light object in the same body as the fitting is a **child of the group that body is drawn in**, so it rides that body's pose for nothing at all: a lantern welded into a swinging crate swings with its light, and there is no per-frame transform in the light rig. One authored thing cannot disagree with itself, and this time that is structural rather than derived.
 
-Emission is therefore **appearance and nothing else**: `emissive`, `emissiveIntensity` and `emissiveTexture` on a geometry object say that this thing reads as bright, and three.js has no global illumination, so they reach nothing. What lights the room is the light object beside them. That separation is what makes both halves say what they mean - a deep-orange flame that lights a whole room is a dim emissive and a wide, bright light, which the fused version could only reach by fighting one knob against the other.
+Emission is therefore **appearance and nothing else**: an emissive material on an object in the level's Blender scene says that this thing reads as bright, and three.js has no global illumination, so it reaches nothing. What lights the room is the light object beside them. That separation is what makes both halves say what they mean - a deep-orange flame that lights a whole room is a dim emissive and a wide, bright light, which the fused version could only reach by fighting one knob against the other.
 
 Two things follow for authoring, and both are the light's own fields rather than a second spelling of them.
 A **spot** is what a wall fitting wants: it has a real **distance**, so `range` is a hard edge and the light ends where the author says the room does (an area light has no cutoff at all, and a point light's is a sphere in every direction, including back through the wall the lamp is bolted to), and its shadow is **one render** where a point light's is a cube of six - which is why a lamp can occlude at all.
@@ -188,9 +188,9 @@ The river (`levels/ball.json`) is the worked example: a light-only static body 8
 
 A dark level is lit by the world itself rather than by anything the player carries: persistent glowing lichen, and mushrooms that come alight as the player approaches, lighting the ball and the rock around it together.
 The mushroom is a **waking light**: a point light object with a `wake` distance, whose body's glowing shapes follow it (`render3d/glow.ts` for the law, `render3d/lights.ts` for the pool).
-There is no new object type: the lantern pattern (a glowing geometry object and a light object in one body) is already how the format says "this thing is a source", and a mushroom is that pattern with a light that starts dark.
+There is no new object type: the lantern pattern (a glowing object and a light object in one body - since 2026-09-29 the glowing object is the body's dressing in the level's Blender scene) is already how the format says "this thing is a source", and a mushroom is that pattern with a light that starts dark.
 A separate `glow` type was rejected because it would be every editor touchpoint for lights again, and a source that could disagree with its own light.
-Lichen is the same light without `wake`; the river's moss props are it (see **Glowing props**).
+Lichen is the same light without `wake`.
 
 **It is render-side, driven by the clock the rig is handed**, exactly like flicker and the beams.
 The renderer reads the ball's drawn position (`renderPosition(alpha)`) and writes nothing back, so no replay can diverge on it; putting it in the sim would only give it a path into replays and the determinism contract, for a glow that has no effect on the ball.
@@ -226,11 +226,12 @@ Pool lights cast none, `castShadow` on a waking light is ignored, and the editor
 A light is point-only to wake at all (`wakeParams` answers null for a spot), because the pool is point lights; the editor clears `wake` when a light is turned into a spot.
 
 **The emission follows the light.**
-Materials are cached by `surfaceKey` and shared, which is why a flickering lamp's emission does not flicker.
-A body carrying a waking light is the exception: every geometry object in it asks for its surface under `SurfaceRequest.instance` (the body's index in the level, appended to the key as `|instance:bN`), so it wears its own dressed copy - still dressed as the images arrive, and shared with nothing else.
-The rig drives `emissiveIntensity = authored * level` on the copies of the shapes that author a glow (`emissive` or `emissiveTexture`), a uniform write with no recompile; the stalk under the cap, with no emission, is left alone.
+What glows is the body's dressing in the level's Blender scene, whose materials are shared by every object that wears them, which is why a flickering lamp's emission does not flicker.
+A body carrying a waking light is the exception: when its dressing node lands, `BodyVisual.adoptDressing` gives it its own copy of every emissive material in the node (an emissive colour that is not black, or an emission map), shared with nothing else and freed with the body, and hands the copies to its lights (`DrivenEmission`).
+The rig drives `emissiveIntensity = authored * level` on them, a uniform write with no recompile; a material with no emission, the stalk under the cap, is left alone.
 A body with several waking lights follows the brightest.
-`authored` comes from the level rather than off the material, which the rig has been writing, and the rig hands it back when the body goes.
+`authored` is the intensity the scene was exported with, taken when the copy is made rather than read off the material, which the rig has been writing, and the rig hands it back when the body goes.
+The dressing lands after the lights are mounted (a scene file arrives asynchronously), which is why the set is handed to the rig as an array it keeps by reference and is filled in when the node arrives.
 Driving the shared material instead was rejected: every purple cube in the level would pulse with the nearest one.
 
 **The editor's preview shows them awake** (`LightRig.previewAwake`): every source held at full without stepping, the pool spent nearest the view's centre, because there is nobody in that scene to wake anything; **▶ Test** hands them back to the ball.
@@ -241,7 +242,7 @@ A single-frame grab therefore draws every waking light as it is before any time 
 `--probe` prints each drawn frame's levels as `glow: [...]` beside the program counts.
 Measured on the river (`--frames 100..580 --every 6 --3d --probe all` over a run that rolls up to the first mushroom and back): nothing fresh on any drawn frame, 24 programs throughout, and the first mushroom dark to f148, rising f154-f190, lit to f406, falling f412-f490, dark from f496.
 
-`cli render3d` holds the law (the phases against time, the cancelled delay, the hysteresis, the re-entry, the clamp), the scaling (`wake` like `range`, the times untouched), the pool's assignment and size, the instance key, and the editor's fields and `+ Glow` body; none of the spacing, reach or brightness has a case, because those are the play's to decide.
+`cli render3d` holds the law (the phases against time, the cancelled delay, the hysteresis, the re-entry, the clamp), the scaling (`wake` like `range`, the times untouched), the pool's assignment and size, and the editor's fields and `+ Glow` body; none of the spacing, reach or brightness has a case, because those are the play's to decide.
 The river (`levels/ball.json`) carries four `+ Glow` bodies along the route from the spawn, unplayed.
 
 ## Fireflies
@@ -359,26 +360,11 @@ Measured on the river (`--frames 6..420 --every 6 --3d --probe all` over a run t
 
 The river (`levels/ball.json`) carries one swarm just ahead of where the arrival hands the ball over, authored in the editor.
 
-## Glowing props
+## Glowing props (removed)
 
-The river's moss props (bodies 145, 160, 190, 191 and 192 of `levels/ball.json`) are bioluminescent: they glow, and they light the rock they grow on and the ball that passes them.
-Each is the lantern pattern with nothing new in the format: the mesh geometry object authors `emissive` and `emissiveIntensity`, and the body carries an always-on point light of the same colour.
-
-**The glow** (`render3d/propGlow.ts`).
-A mesh prop keeps the materials its file was exported with, so an authored emission cannot go through `surfaceFor` as a primitive's does.
-When the object authors `emissive` and no `texture`, `mountVisual` swaps every material of the loaded prop for a copy that emits the authored colour, masked by the luminance of the prop's own base colour map.
-Three's `emissiveMap = map` was tried first and rejected: it multiplies the glow by the albedo's colour, so the moss glowed the green it is painted and read as green paint.
-The mask is stretched over the map's own 5th to 95th luminance percentile (measured once per material on a 64 px thumbnail), because the moss set's albedo spans only 0.12 to 0.23 linear luminance and unstretched the pattern is a flat wash.
-It is read `GLOW_MIP_BIAS` (2.5) mip levels coarse, because at the map's own detail it is single-texel white speckle and moss glows in clumps, and it never goes below `GLOW_FLOOR` (0.3), so the hollows glow faintly rather than not at all.
-The copies are cached by source material and glow and never mutated, so the editor's rebuild on every revision does not leak them; the patch is one program (`prop-glow`), compiled under the loading screen like any other.
-A prop wearing an authored `texture` glows through `surfaceFor` as a primitive does, and a waking light does not drive a prop's glow (only primitives are in its driven set).
-
-**The light** hangs 0.3 m off the moss's outline centroid, away from its rock's centroid, 0.7 m in front of the plane: `#2fe6d0`, 3 cd, 3.5 m reach, no shadow.
-At the moss itself (z 0.3 m) it was an inverse-square white hot spot on the rock right beside it; out in the air the rock and the moss are lit evenly.
-The glow and the light are one colour on purpose, and the emission is 0.6: higher tone-maps the teal to pale mint, which reads as lit rather than glowing.
-These are always-on lights and spend `LIGHT_BUDGET` in authored order: the river has 15 of its 16 after them.
-`bun run assets:rock ... --moss-of N --place` writes both for a moss placed for the first time (`MOSS_*` in `scripts/rock-asset.ts`).
-None of the colour, strength or placement has a case, because those are the play's to decide; `cli render3d` holds the material swap, the shader splice and the stretch.
+From 2026-09-24 to 2026-09-29 the river's moss props glowed: a mesh geometry object authoring `emissive` had every material of its loaded prop swapped for a copy (`render3d/propGlow.ts`) that emitted the authored colour masked by the luminance of the prop's own base colour, stretched over the map's 5th to 95th percentile and read a few mip levels coarse, so the moss glowed in clumps rather than as green paint.
+It went with the geometry objects: the mask was a shader patch, which glTF cannot carry, so the moss came into `river.blend` with its plain materials and does not glow.
+A glow re-authored in Blender is an emissive material (an emission map where the moss should glow), and a light object in the moss's body is still what makes it light the rock around it.
 
 ## Painted light (removed)
 
@@ -389,11 +375,12 @@ Judge that by playing on a real GPU, not off a headless still.
 
 ## Surfaces
 
-Generated rocks are the one surface outside this namespace: they wear their own composed material, baked masks from the GLB over the `seaside rock` and `quarry wall` tiles, described under [**The rock material**](rocks.md#the-rock-material).
+The surfaces here are what the GAME wears: the ball and chain's (`painted steel`), a conveyor band's (`BeltLook.texture`), and the flat fill of a level's grey box.
+A level's own surfaces are materials in its Blender scene (see [blender-scenes](blender-scenes.md)), and since 2026-09-29 the authored manifest holds only `painted steel`; the rest of this section is still how either kind resolves, whichever sets are in it.
 
 A surface comes from one of two places and a level cannot tell which, because both are keyed into **one namespace** that `surfaceFor` looks up authored-first:
 
-- **Generated** (`TEXTURE_SETS`), keyed by the `MATERIALS` names the format already has, so naming the stuff a thing is made of is all it takes to get a sensible surface - a geometry object's `texture` takes a material name as readily as an authored set's, which is what the migration wrote onto every primitive it made. The maps are a **painted patch field** (`paintField`, since 2026-09-17) → albedo, normal map and roughness map from the same field: `cells` x `cells` irregular patches on a wrapped jittered lattice, each patch one tone with a gentle gradient across it and a little low-frequency drift crossing them, a dark seam drawn between patches in the albedo, and the normal built from each patch's own tilt so the patches are facets meeting at an angle with no rim. One field driving all three is what makes them agree - a dark patch is also a dip and also a rougher spot, as it is on the real material - for a few hundred bytes of code and no download. The normal is deliberately not the height's finite difference: the height steps at every seam, and a step differenced is a bevel under the normal map, lit on one side and dark on the other, which made the first version's wood read as chocolate tiles rather than paint. Before this the field was fractal value noise, and noise at four octaves is grain - exactly what the authored sets are baked to remove (see [**Painted surfaces**](asset-store.md)).
+- **Generated** (`TEXTURE_SETS`), keyed by the `MATERIALS` names the format already has, so naming the stuff a thing is made of is all it takes to get a sensible surface - a belt's `texture` takes a material name as readily as an authored set's. The maps are a **painted patch field** (`paintField`, since 2026-09-17) → albedo, normal map and roughness map from the same field: `cells` x `cells` irregular patches on a wrapped jittered lattice, each patch one tone with a gentle gradient across it and a little low-frequency drift crossing them, a dark seam drawn between patches in the albedo, and the normal built from each patch's own tilt so the patches are facets meeting at an angle with no rim. One field driving all three is what makes them agree - a dark patch is also a dip and also a rougher spot, as it is on the real material - for a few hundred bytes of code and no download. The normal is deliberately not the height's finite difference: the height steps at every seam, and a step differenced is a bevel under the normal map, lit on one side and dark on the other, which made the first version's wood read as chocolate tiles rather than paint. Before this the field was fractal value noise, and noise at four octaves is grain - exactly what the authored sets are baked to remove (see [**Painted surfaces**](asset-store.md)).
 - **Authored** (`TEXTURE_ASSETS`), a real PBR set: **base, normal, roughness, metallic, ambient occlusion and emission**, each optional, each a `.webp` fetched from the release store and pinned by `sha256` exactly as a prop is. Channels are three.js's, which are glTF's: albedo and emission in sRGB (they are pictures) and everything else linear, roughness read from green, metallic from blue, AO from red and from the same UV set as everything else (there is only one).
 
 That the two share a namespace is the point of the arrangement: replacing a generated surface with an authored one is **adding a manifest entry under the material's own name**, and every level already naming that material picks it up with no edit at all. An unknown name still lands on a generated surface, so a hand-edited level naming a texture this build does not have looks ordinary rather than invisible.
@@ -402,9 +389,9 @@ A **scalar map's channel is not a detail**: roughness, metallic and AO are one n
 
 **An emission map is where a surface glows**, as against how much - lit windows in a dark wall, cracks in cooling slag, a strip along a machine, none of which a flat emissive colour can say at all.
 It is a picture like the albedo, so it is sRGB and encoded lossy; three.js multiplies it by the material's emissive colour, which means the default black renders the map as *nothing at all* and looks exactly like the map having failed to load.
-So a surface carrying one is given a white emissive unless the geometry object names a tint. What it does NOT do is light the room: emission is appearance, and what lights is a light object in the same body (see **Light and air**).
+So a surface carrying one is given a white emissive unless the request names a tint. What it does NOT do is light the room: emission is appearance, and what lights is a light object in the same body (see **Light and air**).
 
-A geometry object may also **borrow another set's** emission map with `emissiveTexture`, which is how a brick wall gets lit windows without the brick becoming a different surface: the base stays whatever it was and only the emission slot comes from elsewhere, tiled by the capture size of the set it is *in* at this shape's `tileScale`, so life size means the same thing for both pictures.
+A surface request may also **borrow another set's** emission map (`SurfaceRequest.emissiveTexture`; nothing in a level asks for one since the geometry objects went), which is how a brick wall gets lit windows without the brick becoming a different surface: the base stays whatever it was and only the emission slot comes from elsewhere, tiled by the capture size of the set it is *in* at this shape's `tileScale`, so life size means the same thing for both pictures.
 Two rules hold it together.
 The emission slot has exactly **one owner** (`dressEmissive`) rather than being written by the general dressing as well - two async paths writing one slot is a race whose winner is whichever image arrived first.
 And an unknown key resolves to **no map** rather than to a fallback surface's, which is the one place the texture resolution rules deliberately differ from `texture`'s: an ordinary wall is a fine answer for a missing surface, and a borrowed glow the author never asked for is not.
@@ -415,11 +402,12 @@ An authored set is **drawn in its generated fallback until its images arrive** a
 
 **Tiling is a length in the manifest and a multiple in the level.** The extruder writes its UVs in **metres** (`extrude.ts`), so one repeat covers a world distance rather than a fraction of a face: two walls of the same stuff show the same brick and only the count differs, whether they are 0.4 m or 40 m long.
 
-Which distance is a **fact about the texture**, and lives once, in the manifest: `TextureAsset.tile` is the size the surface was captured over in metres (Poly Haven publishes it per asset - `factory_brick` is 1.5 m). A geometry object then says only how large it wants it, as a **dimensionless multiple** of that: `tileScale`, 1 (and absent) being life size, 2 twice as large. `tileMetres(name, scale)` is the one multiply, and the editor readout, the material and `cli render3d` all take their answer from it.
+Which distance is a **fact about the texture**, and lives once, in the manifest: `TextureAsset.tile` is the size the surface was captured over in metres (Poly Haven publishes it per asset - `factory_brick` is 1.5 m). A belt then says only how large it wants it, as a **dimensionless multiple** of that: `tileScale`, 1 (and absent) being life size, 2 twice as large. `tileMetres(name, scale)` is the one multiply, and the editor readout, the material and `cli render3d` all take their answer from it.
 
 Authoring the multiple rather than the metres is what makes `1` mean the same thing everywhere and keeps meaning it after a texture is swapped for one captured at a different size - where an absolute value in every level would silently become wrong. It is also why `tileScale` is one of the two fields `scaleObject` must NOT touch (with `scale`): a dimensionless number scaled on the way in and back out again is the identity, so the round-trip case cannot see the mistake and `cli render3d` asserts the non-scaling directly instead.
 
-**Where the pattern starts** is the other half, and it is a length: a geometry object's `tileOffsetX` / `tileOffsetY` shift the texture in level coordinates (+x right, +y down), in scene pixels on disk - which on this project's scale is centimetres exactly, 100 px to the metre. It is what lines a course of bricks up with the edge of the wall it is on rather than with the world origin, and it moves the pattern only: the collision geometry, which the shape's own `x`/`y` would have moved, stays put. Measured in world distance rather than in repeats, so it means the same thing at any `tileScale`.
+**Where the pattern starts** is the other half, and it is a length: a surface request's `offsetX` / `offsetY` shift the texture in level coordinates (+x right, +y down), in metres, measured in world distance rather than in repeats, so it means the same thing at any `tileScale`.
+Until 2026-09-29 a geometry object authored it (`tileOffsetX` / `tileOffsetY`), to line a course of bricks up with the edge of its wall; nothing in a level authors it now.
 
 `applyTiling` is the one place both land on a texture (`uv * repeat + offset`), and the y sign is the extruder's negation into three's frame showing through - u shifts back where v shifts forward.
 
@@ -434,7 +422,7 @@ So a course of bricks crossing from a cap onto a return does not jump, a `tileOf
 `cli render3d` asserts all three - upright, continuous, and measured along a diagonal rather than across it - because none of it is visible to anything else here: the solid is the authored size, wound the right way and lit correctly whichever way its texture is turned.
 
 **A CHAMFER IS THE CAP, UNROLLED**, and the depth mapping above is not the rim's.
-Three lays a bevel out as a quarter-round, so the ring nearest the cap covers most of the arc while advancing almost nothing through z: measured by depth, that band was compressed to 37% of its own surface and the band past it to 90%, which drew the rim of every bevelled solid as two mismatched stripes smeared round the edge of it - `levels/ball.json`'s rocks are half chamfer by depth (a 0.5 m rock bevelled to the extruder's quarter-depth ceiling either side), so it is most of what is on screen for them.
+Three lays a bevel out as a quarter-round, so the ring nearest the cap covers most of the arc while advancing almost nothing through z: measured by depth, that band was compressed to 37% of its own surface and the band past it to 90%, which drew the rim of every bevelled solid as two mismatched stripes smeared round the edge of it - `levels/ball.json`'s rocks were half chamfer by depth (a 0.5 m rock bevelled to the extruder's quarter-depth ceiling either side), so it is most of what is on screen for them.
 So the rim is rolled flat into the cap's plane instead: a point is carried outward along its own bevel offset by the arc it has swept less the distance that sweep covered in the plane, `bevel * (phi - sin phi)`, and then wears the cap's own world x/y rule.
 That is an **isometry** - the flattened point moves at exactly the rate the surface does, in every direction - so the rim neither stretches nor bands, and the correction is exactly zero at the cap ring, whose vertices ARE the cap's: the two meet with no seam at all.
 What is left over lands where the chamfer meets the straight wall, which is the silhouette, and that is where it belongs - the camera looks along the depth axis, so the rim is seen nearly face on and foreshortens to nothing at its outer edge, where a break is a break in the pixels the solid was about to end in anyway. Anchoring the other way round, continuing the wall's depth mapping inward, puts the same break in the middle of the rim in full view.

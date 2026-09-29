@@ -33,7 +33,6 @@ import {
 import { buildLevelBodies, type LevelVisualSource } from "./buildBodies";
 import type { MoverScript } from "./movers";
 import type { ConveyorBody } from "../lib/belt";
-import { collectDecor, type SceneDecor } from "./decor";
 import {
   buildVines,
   stepVines,
@@ -97,8 +96,6 @@ export class BallLevel {
   // The routes firefly swarms guide the player along, in metres (see
   // FireflyPathData). Render-only.
   readonly fireflyPaths: FireflyPathData[];
-  // The authored shapes that are drawn and never simulated (see Level.decor).
-  readonly decor: SceneDecor[];
   // Chains strung between authored bodies (see Level.sceneChains).
   readonly sceneChains: SceneChain[];
   // Vines hanging from authored anchors (see `level/vines.ts`). The ball level
@@ -484,7 +481,6 @@ export class BallLevel {
     // A hook that strikes a link threads onto the whole vine (see
     // `lib/vineClamp.ts`), and the level is what knows which vine a link is.
     this.ball.vineFor = (link) => this.vines.find((v) => v.links.includes(link)) ?? null;
-    this.decor = collectDecor(built);
     this.visualSource = { data, built };
 
     // A spawn that says so opens the level already on its anchor (see

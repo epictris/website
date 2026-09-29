@@ -28,7 +28,6 @@ import {
   type ViewPose,
 } from "../../render3d/space";
 import {
-  collidingBodyIds,
   itemBounds,
   type EdItem,
   type EdModel,
@@ -49,14 +48,6 @@ export const ORBIT_RADIANS_PER_PX = 0.006;
 // either workspace.
 export const DOLLY_PER_WHEEL = 0.001;
 
-// The mesh `+ Geometry` places in this workspace until one is chosen: a stock
-// rock from the always-present `rocks.glb`, so the first click draws something
-// rather than an empty holder (see `VisualsWorkspace.propMesh`).
-export const DEFAULT_PROP_MESH = "rock-1";
-// The size of the rect a placed prop is given, metres: the footprint the
-// accepted rock props are authored at (a mesh draws at its own size; the rect
-// is what its collision twin would be matched to and what the 2D view draws).
-export const PROP_FOOTPRINT = 0.3;
 
 // The parts of `Scene3D` the workspace drives. A type rather than the class so
 // `cli render3d` can hand it a scene with no WebGL behind it.
@@ -140,24 +131,22 @@ export interface Box3 {
 }
 
 // The box `items` occupy, three's frame: each item's world bounds on the plane,
-// at the depth it is drawn at (`guidePlaneZ`), a drawn object's extrusion depth
-// either side of it. A light is its source, not its reach, as a click on it is.
-export function itemsBox(model: EdModel, items: readonly EdItem[]): Box3 | null {
+// at the depth it is drawn at (`guidePlaneZ`). A light is its source, not its
+// reach, as a click on it is.
+export function itemsBox(items: readonly EdItem[]): Box3 | null {
   if (!items.length) return null;
-  const colliding = collidingBodyIds(model.items);
   const min = { x: Infinity, y: Infinity, z: Infinity };
   const max = { x: -Infinity, y: -Infinity, z: -Infinity };
   for (const it of items) {
     const b = it.object === "light" ? { min: it.pos, max: it.pos } : itemBounds(it);
-    const z = guidePlaneZ(it, colliding.has(it.bodyId));
-    const half = it.object === "geometry" ? (it.visual.depth ?? it.thickness) / 2 : 0;
+    const z = guidePlaneZ(it);
     min.x = Math.min(min.x, b.min.x);
     max.x = Math.max(max.x, b.max.x);
     // Sim y is down: the sim box's max is three's min.
     min.y = Math.min(min.y, threeY(b.max.y));
     max.y = Math.max(max.y, threeY(b.min.y));
-    min.z = Math.min(min.z, z - half);
-    max.z = Math.max(max.z, z + half);
+    min.z = Math.min(min.z, z);
+    max.z = Math.max(max.z, z);
   }
   return { min, max };
 }
@@ -167,7 +156,7 @@ export function itemsBox(model: EdModel, items: readonly EdItem[]): Box3 | null 
 // it small.
 export function levelBox(model: EdModel): Box3 {
   const p = { x: model.player.pos.x, y: threeY(model.player.pos.y), z: 0 };
-  const box = itemsBox(model, model.items.filter((i) => i.layer === "scene")) ?? { min: { ...p }, max: { ...p } };
+  const box = itemsBox(model.items.filter((i) => i.layer === "scene")) ?? { min: { ...p }, max: { ...p } };
   return {
     min: { x: Math.min(box.min.x, p.x), y: Math.min(box.min.y, p.y), z: Math.min(box.min.z, p.z) },
     max: { x: Math.max(box.max.x, p.x), y: Math.max(box.max.y, p.y), z: Math.max(box.max.z, p.z) },
@@ -176,17 +165,12 @@ export function levelBox(model: EdModel): Box3 {
 
 export class VisualsWorkspace {
   readonly guides = new Guides();
-  // The mesh `+ Geometry` places here: the last one the author chose or placed
-  // (the editor tells it), so dressing a ledge with ten of the same rock is ten
-  // clicks rather than ten trips to the inspector.
-  propMesh = DEFAULT_PROP_MESH;
   private pose: ViewPose | null = null;
   private on = false;
   private gesture: { kind: ViewGesture; last: Vec2 } | null = null;
   private draftSig = draftSignature(null);
-  private draftFill: Float32Array | null = null;
   // The draft last handed over, by identity: a tool that keeps its draft
-  // object while nothing changed (the loop tools do) costs nothing at all.
+  // object while nothing changed costs nothing at all.
   private draftRef: GuideDraft | null = null;
   private readonly project3 = new THREE.Vector3();
 
@@ -228,7 +212,6 @@ export class VisualsWorkspace {
     this.gesture = null;
     this.guides.setDraft(null);
     this.draftSig = draftSignature(null);
-    this.draftFill = null;
     this.draftRef = null;
     this.guides.group.removeFromParent();
     this.host.scene.setViewPose(null);
@@ -283,15 +266,11 @@ export class VisualsWorkspace {
     // A draft is rebuilt only when it changed (a click, a pointer move): it is
     // fresh geometry every time (see `DraftView.set`), which a frame loop must
     // not make sixty times a second for a pointer that is standing still.
-    // A surface soup is compared by identity: the tool that collects one makes
-    // a new array when it collects again.
     if (draft === this.draftRef) return;
     this.draftRef = draft;
     const sig = draftSignature(draft);
-    const fill = draft?.fill ?? null;
-    if (sig === this.draftSig && fill === this.draftFill) return;
+    if (sig === this.draftSig) return;
     this.draftSig = sig;
-    this.draftFill = fill;
     this.guides.setDraft(draft);
   }
 

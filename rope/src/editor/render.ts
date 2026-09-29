@@ -6,7 +6,6 @@ import { Vec2 } from "../engine/vec2";
 import { PIXELS_PER_METER, PX } from "../engine/units";
 import { worldToScreen, type Camera } from "../render/camera";
 import { drawTrainingGrid } from "../render/trainingGrid";
-import { fillDecor } from "../render/decor";
 import { fillAnchor, fillFinish, fillForceArea, fillKillZone, fillWaterArea } from "../render/areaFill";
 import { hexToRgba } from "../render/color";
 import {
@@ -30,8 +29,6 @@ import {
   halfExtents,
   isArrowNote,
   isCheckpointNote,
-  collidingBodyIds,
-  itemDepth,
   NOTE_COLOR,
   polyMustBeConvex,
   toWorld,
@@ -118,22 +115,8 @@ const BREAK_EDGE = "#c96a6a";
 const BREAK_DASH = [3 * PX, 5 * PX];
 const BREAK_HALO = 3;
 export const SELECT = "#f4a460";
-// Marks a shape whose 3D visual is NOT its own outline (see the badge pass): a
-// muted violet, distinct from the selection orange and the hook-proof steel, and
-// from the camera layer's own violet by being fully saturated rather than a fill.
-const VISUAL_BADGE = "#b07cff";
 const MARQUEE_FILL = "rgba(244,164,96,0.10)";
 const CAMERA_LOCK = "#e6c07b"; // camera-lock guides: warm, distinct from the region violet
-// Editor-only outline of a non-colliding shape. In game decoration is drawn
-// with no border at all — that is what keeps it from reading as an object — but
-// an author still has to see where a dark or near-transparent panel ends, has to
-// be able to find one to click, and above all has to be able to tell at a glance
-// which shapes on the canvas are part of the level and which are only drawn.
-// Dashed, like every other volume the player passes through, and a saturated
-// teal rather than a grey: the outline has to carry against both the pale grid
-// backdrop and whatever the shape is filled with, and a neutral edge disappears
-// into one or the other.
-const DECOR_EDGE = "#4ec9b0";
 export const HANDLE = "#f4a460";
 export const HANDLE_FILL = "#1f2430";
 // Where a concave outline is cut into convex pieces: dim and dashed, because a
@@ -183,16 +166,16 @@ export const HANDLE_HIT_PX = 9; // pointer pick radius
 const ROT_OFFSET_PX = 26; // rotate handle distance beyond the top edge
 const DEPTH_OFFSET_PX = 26; // depth handle distance beyond the right edge
 
-// Which objects have a z at all: the ones that are DRAWN, and lights. A
-// collision shape has none - it is the gameplay plane, which is what makes it
-// collision - so it gets no depth handle rather than one that writes nothing.
+// Which objects have a z at all: lights. A collision shape has none - it is
+// the gameplay plane, which is what makes it collision - so it gets no depth
+// handle rather than one that writes nothing.
 export function hasDepth(item: EdItem): boolean {
-  return item.object === "geometry" || item.object === "light";
+  return item.object === "light";
 }
 
 // What that handle is dragging, in metres off the plane.
 export function depthOf(item: EdItem): number {
-  return item.object === "geometry" ? item.visual.offsetZ : item.object === "light" ? item.light.z : 0;
+  return item.object === "light" ? item.light.z : 0;
 }
 
 export interface Handles {
@@ -214,7 +197,7 @@ export interface Handles {
   vertMids: Vec2[] | null;
   // Screen position of the DEPTH handle: the one axis the canvas cannot show,
   // dragged up and down beside the shape (see `drawDepthHandle`). Only the
-  // objects that have a z - a drawn form and a light - get one.
+  // objects that have a z - lights - get one.
   //
   // The 3D gizmo has a blue z arrow and it is not a substitute: three's
   // `TransformControls` hides an axis pointing at the camera, which is exactly
@@ -250,35 +233,6 @@ export interface PathHandlePoint {
 const HANDLE_STUB_PX = 26;
 
 // Screen-space handle points for a body, used for both drawing and hit-testing.
-// Does this item offer handles on the gameplay plane at all?
-//
-// Every one of them - the corner boxes, the rotate knob, the radius grip, a
-// polygon's vertices, the depth arrow - is a point on an OUTLINE, so the
-// question is whether the thing drawn on this canvas HAS that outline.
-//
-// A MESH does not, and once a scene is drawn underneath there is nothing on the
-// canvas standing for it: the handles are the box that was just taken away,
-// drawn as four squares floating in empty space with nothing between them,
-// sitting metres from the prop, and since the file has one `scale` for a mesh
-// and no width at all, most of them edit nothing visible either. So in a 3D view
-// a mesh's handle set IS the transform gizmo, which is in the scene and
-// therefore on the thing being edited.
-//
-// A PRIMITIVE is the opposite case: it is its own shape extruded, so the solid
-// drawn under the overlay is exactly that outline and the handles land on its
-// corners. Suppressing them there cost the cheapest edit a primitive has - drag
-// a corner to resize it - in the view the editor opens in, and offered the
-// gizmo's scale boxes as the only substitute. The handles are projected on the
-// gameplay plane like every other one, so a primitive pushed off the plane by
-// its `z` has them where its outline is rather than where the perspective
-// draws its face; an orbited view drops the whole overlay in any case.
-//
-// Everything else - collision shapes, camera regions, notes, lights - keeps its
-// handles in every view, because the overlay goes on drawing those.
-export function hasPlaneHandles(item: EdItem, layers: "fill" | "outline"): boolean {
-  return layers === "fill" || item.object !== "geometry" || item.visual.kind !== "mesh";
-}
-
 export function computeHandles(cam: Camera, body: EdItem): Handles {
   // An arrow is a segment, so it is edited by its endpoints: dragging either one
   // sets the position, length and direction at once, which is what a corner box
@@ -1754,7 +1708,6 @@ function drawMoverMarks(
     const members = bodyMembers(all, id);
     const lead = members.find((m) => m.object === "collision");
     if (!lead || lead.kind !== "static") continue;
-    const frame = bodyFrameOf(model, id);
     const picked = selectedBodyIds.has(id);
 
     if ((lead.swingAmp !== 0 && lead.swingPeriod > 0) || lead.spinPeriod !== 0) {
@@ -1962,17 +1915,12 @@ function drawBodyMembers(
   bodyIds: ReadonlySet<number>,
   visibleLayers: ReadonlySet<EdLayer>,
   worldLine: number,
-  // A geometry object's outline is not drawn on this canvas at all while a scene
-  // is under it (see the decoration pass), so neither is this ring round it -
-  // the scene paints the body's objects instead (`Scene3D.setHighlight`).
-  drawGeometry: boolean,
 ): void {
   if (!bodyIds.size) return;
   ctx.strokeStyle = BODY_MEMBER;
   ctx.lineWidth = worldLine * 3;
   for (const i of items) {
     if (!bodyIds.has(i.bodyId) || !visibleLayers.has(i.layer)) continue;
-    if (i.object === "geometry" && !drawGeometry) continue;
     if (i.object === "light" || i.object === "anchor") {
       ctx.beginPath();
       ctx.arc(i.pos.x, i.pos.y, lightPickRadius(worldLine) * 1.6, 0, Math.PI * 2);
@@ -2077,63 +2025,6 @@ export function drawEditor(
   ctx.translate(-cam.position.x, -cam.position.y);
 
   const worldLine = 1 / scale;
-  // Decoration first, exactly as the game draws it: a non-colliding shape is
-  // under everything, whatever its position in the list, so nothing the player
-  // can touch is ever hidden behind it.
-  // Back to front by the same depth the game draws (and a click selects) by, so
-  // the panel on top on screen is the panel on top everywhere. `sort` is stable,
-  // so decoration at one depth keeps its authored order.
-  // Whether an object's BODY collides, which decides both how deep it is drawn
-  // and whether its fill is drawn here at all. Computed once for the model
-  // rather than per item, since this covers the whole geometry layer.
-  const collidingBodies = collidingBodyIds(model.items);
-  const depth = (i: EdItem) => itemDepth(i, collidingBodies.has(i.bodyId));
-  const decor = (
-    visibleLayers.has("scene")
-      ? model.items.filter((i) => i.object === "geometry")
-      : []
-  ).sort((a, b) => depth(a) - depth(b));
-  // A GEOMETRY OBJECT HAS NO OUTLINE HERE ONCE THERE IS A SCENE UNDER IT.
-  //
-  // What this loop draws is a rectangle (or circle, or loop) on the gameplay
-  // plane, and that is not what a geometry object IS: a primitive is a solid
-  // extruded through z and a mesh is a prop whose silhouette the outline never
-  // described at all, so the box round a lamp bracket says the bracket is a
-  // metre wide and the box round a pipe says it is where the pipe is not. In the
-  // 2D view the outline is all there is and it stays; in a 3D view the model is
-  // on screen, it is what a click lands on (see `raycastItems`), and drawing a
-  // second, wrong shape over it is the editor stating something the level does
-  // not contain. Selection is said on the model instead (`Scene3D.setHighlight`).
-  for (const g of layers === "fill" ? decor : []) {
-    // FILLED ONLY WHERE NOTHING ELSE FILLS IT, which is the rule the game's 2D
-    // view is drawn under (`collectDecor`): a body that collides has a primitive
-    // per collision shape, stating the same outline in the same place, and this
-    // canvas already fills that outline as the body. Painting it twice darkens
-    // every wall in the editor by its own opacity - and shows the author a level
-    // that is not what plays.
-    //
-    // The dashed teal edge below is drawn either way, so the object is still
-    // visible, still clickable and still says where its 3D form is: one that has
-    // been resized or moved off its collision shape reads as exactly that, an
-    // outline with no fill of its own standing away from the solid.
-    const paintedByBody = collidingBodies.has(g.bodyId) && depth(g) === 0;
-    if (!paintedByBody) {
-      fillDecor(ctx, g.pos, g.rot, outlineOf(g), paint(hexToRgba(g.color, g.opacity)));
-    }
-    if (selectedIds.has(g.id)) {
-      pathBody(ctx, g);
-      ctx.strokeStyle = SELECT;
-      ctx.lineWidth = worldLine * 5;
-      ctx.stroke();
-    }
-    pathBody(ctx, g);
-    ctx.strokeStyle = DECOR_EDGE;
-    ctx.lineWidth = worldLine * 1.5;
-    ctx.setLineDash([6 * PX, 4 * PX]);
-    ctx.stroke();
-    ctx.setLineDash([]);
-  }
-
   // Every visible layer draws at full strength, whether or not it is the one
   // being edited: a dimmed layer is harder to read against the geometry it
   // annotates, and the toolbar's layer list already says which one a click
@@ -2343,48 +2234,13 @@ export function drawEditor(
     drawBeltGlyph(ctx, body, worldLine);
   }
 
-  // What the 3D renderer will do with a shape, marked on the 2D view - which
-  // cannot otherwise show it at all. Only `mesh` is marked, since that is the
-  // one kind whose outline is NOT what the player sees: a prop stands in for it.
-  // A primitive is drawn as exactly the shape on screen, so a badge on it would
-  // be a mark on almost every object saying nothing.
-  // ...and only where the prop is NOT drawn. In a 3D view the prop itself is on
-  // screen, so a badge saying "a prop is drawn here" is a mark pointing at the
-  // thing it is standing on.
-  const badged =
-    layers === "fill" ? [...(visibleLayers.has("scene") ? geometry : []), ...decor] : [];
-  for (const body of badged) {
-    const kind = body.visual.kind;
-    if (kind !== "mesh") continue;
-    const r = 6 * PX;
-    ctx.lineWidth = worldLine * 1.5;
-    ctx.strokeStyle = VISUAL_BADGE;
-    ctx.beginPath();
-    {
-      // A cube seen in three-quarter: the mark for "a prop is drawn here".
-      ctx.rect(body.pos.x - r, body.pos.y - r, r * 2, r * 2);
-      ctx.moveTo(body.pos.x - r, body.pos.y - r);
-      ctx.lineTo(body.pos.x - r * 0.4, body.pos.y - r * 1.6);
-      ctx.lineTo(body.pos.x + r * 1.6, body.pos.y - r * 1.6);
-      ctx.lineTo(body.pos.x + r, body.pos.y - r);
-      ctx.moveTo(body.pos.x + r, body.pos.y + r);
-      ctx.lineTo(body.pos.x + r * 1.6, body.pos.y + r * 0.4);
-      ctx.lineTo(body.pos.x + r * 1.6, body.pos.y - r * 1.6);
-    }
-    ctx.stroke();
-  }
-
   // Compound-body marks, over the geometry they describe. A group is one body,
   // and nothing about the drawn shapes says so on their own - they are simply
   // several shapes touching - so the marks are what make the seam rule visible
-  // while a level is being laid out.
-  //
-  // Decoration is in the same pass, spokes and hull included: a panel welded
-  // into a body rides it in play, and the spoke reaching down to a backdrop is
-  // the only thing on screen that says so. Only the VISIBLE members are marked,
-  // so hiding a layer really does take it out of the picture; the diamond stays
+  // while a level is being laid out. Only the VISIBLE members are marked, so
+  // hiding a layer really does take it out of the picture; the diamond stays
   // put whatever is hidden, since it is the shapes' centre of mass alone.
-  const markable = [...(visibleLayers.has("scene") ? geometry : []), ...decor];
+  const markable = visibleLayers.has("scene") ? geometry : [];
   drawGroupMarks(ctx, model, markable, model.items, selectedIds, worldLine);
 
   // ...and how the level DRIVES a body: a pendulum's arc and a platform's route.
@@ -2633,7 +2489,7 @@ export function drawEditor(
   // Over every object it marks - a body's pieces are drawn in several passes and
   // an outline under one of them would be half hidden - and under the handles,
   // which are still the topmost thing on the canvas.
-  drawBodyMembers(ctx, model.items, selectedBodyIds, visibleLayers, worldLine, layers === "fill");
+  drawBodyMembers(ctx, model.items, selectedBodyIds, visibleLayers, worldLine);
 
   // Notes on top of everything they annotate — they are commentary on the
   // scene, and a note hidden behind the geometry it explains would be useless.
@@ -2874,8 +2730,7 @@ export function drawEditor(
     ctx.stroke();
     circleHandle(ctx, gh.rotate);
   }
-  const selected =
-    selection.length === 1 && hasPlaneHandles(selection[0]!, layers) ? selection[0]! : null;
+  const selected = selection.length === 1 ? selection[0]! : null;
   // The cut, before the handles so a vertex handle is never hidden under it: an
   // authored concave outline is one object here and several convex pieces in the
   // simulation, and these dashed lines are where it divides. Worth drawing

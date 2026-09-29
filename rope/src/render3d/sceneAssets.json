@@ -1,7 +1,74 @@
 {
-  "grotto": {
-    "sha256": "7f7185bd09d506042695e4a583d77f29bd70971f2cbad190e67d9f6d010d0820",
-    "bytes": 1810308,
-    "credits": []
+  "rails": {
+    "sha256": "fc83bf0fde751d822b6a0aa3f988ecf6404c00d6a000a828cab59e321daf0763",
+    "bytes": 413068,
+    "credits": [
+      {
+        "name": "dark_rock_02",
+        "author": "Amal Kumar",
+        "source": "https://polyhaven.com/a/dark_rock_02",
+        "license": "CC0"
+      },
+      {
+        "name": "finish_line",
+        "author": "hyd (@hydroh)",
+        "source": "https://sketchfab.com/3d-models/finish-line-7ec1d8194ddf46e6b398d336df0b5d7a",
+        "license": "Sketchfab Standard"
+      },
+      {
+        "name": "metal_053b",
+        "author": "ambientCG (Lennart Demes)",
+        "source": "https://ambientcg.com/view?id=Metal053B",
+        "license": "CC0"
+      },
+      {
+        "name": "moss_003",
+        "author": "ambientCG (Lennart Demes)",
+        "source": "https://ambientcg.com/view?id=Moss003",
+        "license": "CC0"
+      }
+    ]
+  },
+  "river": {
+    "sha256": "38e3893b637ad7d3247a914db516e45841590be30f2d0daa8e3da9cfc6466a02",
+    "bytes": 7055688,
+    "credits": [
+      {
+        "name": "dark_rock_02",
+        "author": "Amal Kumar",
+        "source": "https://polyhaven.com/a/dark_rock_02",
+        "license": "CC0"
+      },
+      {
+        "name": "finish_line",
+        "author": "hyd (@hydroh)",
+        "source": "https://sketchfab.com/3d-models/finish-line-7ec1d8194ddf46e6b398d336df0b5d7a",
+        "license": "Sketchfab Standard"
+      },
+      {
+        "name": "moss_003",
+        "author": "ambientCG (Lennart Demes)",
+        "source": "https://ambientcg.com/view?id=Moss003",
+        "license": "CC0"
+      },
+      {
+        "name": "moss_ground_01",
+        "author": "FreeStylized",
+        "source": "https://freestylized.com/material/moss_ground_01/",
+        "license": "FreeStylized CC0 (no redistribution of the unmodified pack)"
+      },
+      {
+        "name": "pbr_rock_cliffs_pack",
+        "author": "Maksim Batyrev (@c3posw01)",
+        "source": "https://sketchfab.com/3d-models/pbr-rock-cliffs-pack-8fa6cabbbf0c431a9f5ffe91eb0b9090",
+        "license": "CC BY 4.0"
+      },
+      {
+        "name": "wooden_stool",
+        "author": "yoyo83710",
+        "source": "https://sketchfab.com/3d-models/wooden-stool-528f72346b2f4a1096c1d5104b731d04",
+        "license": "CC BY 4.0"
+      }
+    ]
   }
 }

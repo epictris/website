@@ -36,7 +36,6 @@ import { MANACLE_BAND, MANACLE_RADIUS, MANACLE_REACH, MANACLE_THICKNESS } from "
 import { railPolyline } from "../lib/rail";
 import { beltBand, beltRenderTime, beltTreadPhase, beltTreadTicks } from "./beltTread";
 import { drawTrainingGrid } from "./trainingGrid";
-import { drawDecor } from "./decor";
 import { drawVines } from "./vines";
 import { fillAnchor, fillForceArea, fillKillZone, fillWaterArea } from "./areaFill";
 import {
@@ -753,12 +752,8 @@ export function render(
   ctx.translate(-camera.position.x, -camera.position.y);
 
   if (!overlayOnly) {
-    // Authored decoration, under everything: nothing the player can touch may be
-    // hidden behind a backdrop.
-    drawDecor(ctx, level.decor, alpha);
-
-    // Chains hang among the decoration, behind every solid thing - which is the
-    // same statement as their passing through it (see `SceneChain`).
+    // Chains hang behind every solid thing - which is the same statement as
+    // their passing through it (see `SceneChain`).
     drawSceneChains(ctx, level.sceneChains, alpha);
   }
 
@@ -1128,9 +1123,6 @@ export function renderBall(
   ctx.translate(-camera.position.x, -camera.position.y);
 
   if (!overlayOnly) {
-    // Authored decoration under everything (see `render`).
-    drawDecor(ctx, level.decor, alpha);
-
     // Chains behind the solid geometry they pass through (see `render`).
     drawSceneChains(ctx, level.sceneChains, alpha);
   }

@@ -34,7 +34,6 @@ import {
 import { buildLevelBodies, type LevelVisualSource } from "./buildBodies";
 import type { MoverScript } from "./movers";
 import type { ConveyorBody } from "../lib/belt";
-import { collectDecor, type SceneDecor } from "./decor";
 import {
   awakeChains,
   buildSceneChains,
@@ -99,10 +98,6 @@ export class Level {
   // The routes firefly swarms guide the player along, in metres (see
   // FireflyPathData). Render-only.
   readonly fireflyPaths: FireflyPathData[];
-  // The authored shapes that are drawn and never simulated, in metres, each
-  // resolved against the body it is welded to (see SceneDecor). Read only by
-  // the renderer; like the camera regions, the sim never touches them.
-  readonly decor: SceneDecor[];
   // Chains strung between authored bodies, solved every frame after the world
   // integrates (see SceneChain). AUTHORED chains only - a vine's pair chains are
   // `SceneChain`s too and are swept with these, but they are the vine's and are
@@ -176,7 +171,6 @@ export class Level {
     // so what this buys is that the list is what the world holds, rather than a
     // second, quieter definition of the scene.
     for (const vine of this.vines) this.bodies.push(...vine.links);
-    this.decor = collectDecor(built);
     this.visualSource = { data, built };
 
     init?.(this);

@@ -34,12 +34,10 @@ import {
   PATH_FLATTEN_STEP,
   buildPolylineIndex,
   flattenPath,
-  pathNodesOf,
   projectOntoPolyline,
   type PathNode,
 } from "../lib/path";
 import { PATH_KEY_FIELDS, type PathKeyField } from "../render/cameraController";
-import { DECOR_Z } from "../level/decor";
 import { catenaryPolyline } from "../level/catenary";
 import { buildMoveRoute, moveAngleAt, type MoveRoute } from "../level/movers";
 import { DEFAULT_SPRING_DAMPING, buildLevelBodies, worldPlacement } from "../level/buildBodies";
@@ -82,22 +80,17 @@ import {
   type LevelData,
   type RawLevelData,
   type LevelBodyData,
-  type GeometryObjectData,
   type LightObjectData,
   type SceneObjectData,
   hasBearing,
   isCollisionObject,
   isAnchorObject,
-  isGeometryObject,
   type CheckpointData,
-  type GeometryProjection,
   type LevelCameraData,
   type NoteData,
   type ShapeData,
-  type GeneratorData,
-  type GeneratorPatchData,
+  type BeltLook,
 } from "../level/levelFormat";
-import type { GeneratorKind, ParamValue } from "../level/generatorParams";
 import {
   DEFAULT_FILL_INTENSITY,
   DEFAULT_GROUND_FILL,
@@ -117,19 +110,15 @@ import {
   DEFAULT_SPOT_PENUMBRA,
 } from "../render3d/lights";
 import { FIREFLY_COLOR, FIREFLY_INTENSITY, FIREFLY_RANGE, FOLLOW_Z } from "../render3d/fireflies";
-import { SOLID_SURFACE } from "../render3d/assets";
 
 // Editor layers, in draw order (the list also stacks bottom-up in the toolbar):
-// `geometry` is the scene's shapes, `camera` the camera-behaviour volumes and
+// `scene` is the level's bodies, `camera` the camera-behaviour volumes and
 // `notes` the authoring annotations (invisible in play).
 //
-// There is deliberately NO decoration layer. A drawn-but-not-simulated shape is
-// a GEOMETRY OBJECT (`EdItem.object`), drawn with `+ Geometry` and living in the
-// same body, on the same layer, as the collision shapes beside it - rather than
-// a second kind of item with its own layer, its own inspector and its own
-// resolve path. What a level actually wants is the two of them TOGETHER: a wall
-// is a collision shape you cannot see and a geometry object you cannot touch,
-// and putting them on separate layers would split one body across two.
+// There is deliberately NO decoration layer, and no drawn shape at all: what a
+// level LOOKS like is its Blender scene (`LevelData.scene`,
+// docs/blender-scenes.md), bound to the bodies here by their `name`. The editor
+// authors what the game simulates and lights.
 //
 // `lights` is the level's own light sources (see `LightData`). It is a layer
 // rather than a property of a body because a light is not a piece of stuff: it
@@ -159,20 +148,12 @@ export const ED_LAYERS: EdLayer[] = ["scene", "camera", "fireflies", "notes"];
 // What KIND of scene object an item is - the SAME set the format has, and one
 // editor item per authored object.
 //
-// It used to be two, with a geometry object that had no shape of its own folded
-// onto the collision object it dressed as that object's `visual`. That is the
-// conflation this whole refactor exists to remove, seen from the other end: a
-// barrel is a body holding a collision box and a mesh, and an editor that shows
-// it as one thing called "mesh yellow_barrel" is teaching that a body, a
-// collision shape and a model are all the same object. They are different
-// things, and the outliner has to be able to say so.
-//
 // `anchor` joined last and is the smallest of them: a point on a body that a
 // chain end ties to (`AnchorObjectData`). It is an item rather than a pair of
 // numbers on the chain for the same reason - a chain end is a thing on a body,
 // so it rides that body, shows up in the outliner, and is dragged like anything
 // else instead of only being reachable by grabbing the rope.
-export type EdObject = "collision" | "geometry" | "light" | "anchor";
+export type EdObject = "collision" | "light" | "anchor";
 
 // `poly` vertices are metres in the item's own local frame, kept a **simple**
 // outline (one that never crosses itself) - `setPolyVerts` is the one writer, so
@@ -231,8 +212,9 @@ export type EdShape =
   // item's own `pos`, so the ordinary move gesture places the belt, and every
   // other wheel's centre is a grip dragged like a path vertex. `speed` is the
   // signed surface speed in m/s (positive turns the loop clockwise on screen).
-  // Scene layer only, and collision or geometry.
-  | { kind: "belt"; wheels: EdWheel[]; thickness: number; speed: number };
+  // `look` is how the band is drawn (`BeltLook`, its `width` in metres): the
+  // game draws a belt's band itself, since its surface runs. Scene layer only.
+  | { kind: "belt"; wheels: EdWheel[]; thickness: number; speed: number; look: BeltLook };
 
 // One wheel of an editor belt: its centre in the item's frame and its radius,
 // metres. Replaced wholesale by `setBelt`, never mutated in place, so an undo
@@ -464,22 +446,17 @@ export interface EdItem {
   pos: Vec2; // metres
   rot: number; // radians
   shape: EdShape; // metres
-  // The geometry layer authors these; camera regions and notes take the fixed
+  // The scene layer authors these (the 2D view's fill, and the grey box a level
+  // with no scene is drawn as); camera regions and notes take the fixed
   // editor-furniture colours below.
   color: string; // hex fill colour
   opacity: number; // 0..1 fill opacity (a body's border draws fully opaque)
-  // Whether this shape takes part in the simulation is not a field: it is which
-  // OBJECT this is (`object` above). A collision object collides because that is
-  // what it is, a geometry object does not for the same reason, and there is no
-  // conversion between them - authoring one or the other is the `+ Rect` /
-  // `+ Geometry` choice, made where the shape is drawn.
-  //
   kind: BodyKind;
   // The body's stable NAME (see `LevelBodyData.name`), "" for unnamed. What a
   // Blender object in the level's scene is matched to, so it is per BODY, and
-  // like `rockSeed` it is held on EVERY member rather than on the collision
-  // leads alone - a body of geometry alone may be dressed too - and written
-  // from whichever member `toLevelData` writes the body from.
+  // it is held on EVERY member rather than on the collision leads alone - a body
+  // of lights alone may be dressed too - and written from whichever member
+  // `toLevelData` writes the body from.
   name: string;
   friction: number; // surface friction, 0 (ice) .. 1 (rubber)
   // The trampoline pair (see `LevelBodyData.bounce`): the coefficient of
@@ -496,16 +473,9 @@ export interface EdItem {
   // `syncBodyProps` carries both across a compound one.
   breakForce: number;
   durability: number;
-  // The seed of the body's GENERATED rock (see `LevelBodyData.rockSeed`), 0 for
-  // the default. Unlike the physics above it is held on EVERY member, geometry
-  // included, because a rock body may be nothing but geometry - there is then
-  // no collision lead to carry it - and it is written from whichever member
-  // `toLevelData` writes the body from.
-  rockSeed: number;
   // There is no body depth here, and none on a collision item either: a body is
   // a thing in the gameplay plane and so is the shape it collides as (see
-  // `LevelBodyData`). Depth is `EdVisual.offsetZ`, on the geometry objects and
-  // lights that draw, measured from the plane itself.
+  // `LevelBodyData`). Depth is a light's `z`, and a water body's slab below.
   // Hook-proof (see `LevelBodyData.impermeable`): still solid, but the grapple
   // hook is destroyed on it and the ball's is deflected. Per SHAPE, so it is
   // among the properties `syncBodyProps` leaves alone - a compound wall with
@@ -541,10 +511,6 @@ export interface EdItem {
   // pieces, and a piece brings its own material to them.
   material: MaterialName;
   thickness: number; // metres
-  // What the 3D renderer draws for this shape (see `EdVisual`). On decoration
-  // its `offsetZ` is what turns a flat backdrop into a parallax layer; the
-  // camera and notes layers keep the default and never write it.
-  visual: EdVisual;
   force: number; // force areas only: m/s² along the item's rotation
   // Water areas only: the current's speed in m/s along the item's rotation, and
   // how hard the water takes hold in 1/s (see `LevelBodyData.flow` / `drag`).
@@ -555,6 +521,11 @@ export interface EdItem {
   // `LevelBodyData.spill` / `spillSpeed`.
   spill: number;
   spillSpeed: number | null;
+  // Water areas only: the slab through z - its middle's offset from the plane
+  // in metres, + toward the camera, and its depth (null = the renderer's
+  // default). See `LevelBodyData.waterZ` / `waterDepth`.
+  waterZ: number;
+  waterDepth: number | null;
   // Hook-only (see `LevelBodyData.passable`): the hook catches on it and
   // everything else - the avatar, the rope, loose debris - passes through. Per
   // BODY, so `syncBodyProps` carries it across a group: a body half in the way
@@ -634,62 +605,6 @@ export interface EdItem {
   // by (`FireflyPathData.id`, `LightObjectData.path`), preserved through a
   // load and a save for the anchor's reason. 0 on everything else.
   pathId: number;
-  // Geometry objects only: the item id of the COLLISION object in this body
-  // whose outline this one mirrors, 0 for none. While set, the editor keeps the
-  // two outlines - `pos`, `rot` and `shape` - equal in BOTH directions
-  // (`syncMatchedOutlines`), so resizing either resizes both; this is the
-  // standing form of the "match the collision shape" edit the
-  // collision/geometry decoupling priced in. Editor-local like every item id:
-  // the file records only `GeometryObjectData.matchCollision`, and the partner
-  // is re-found at load by the identical outline the link itself guarantees.
-  matchId: number;
-}
-
-// How far toward the camera this item is drawn, in metres - the editor's side of
-// `depthOf` (`level/decor.ts`), which is the rule the game renders by.
-//
-// It is what orders overlapping shapes, both on the canvas and under a click:
-// the surface nearest the viewport is the one you see, so it is the one a click
-// has to select. Without it a parallax panel 20 m behind the level could swallow
-// a click meant for the wall drawn on top of it, purely because it was authored
-// later.
-//
-// Only the geometry layer has a depth at all; camera regions and notes are
-// editor furniture drawn in their own fixed order, and answering 0 for them
-// leaves the layer ordering to decide, which is what did decide before.
-export function itemDepth(i: EdItem, bodyCollides: boolean): number {
-  if (i.layer !== "scene" || i.object === "light") return 0;
-  if (i.object !== "geometry") return 0;
-  // An `offsetZ` of exactly 0 is indistinguishable from an unset one both here
-  // and on disk (`visualData` omits a zero), and what the renderer draws that
-  // case at depends on the BODY: a geometry object on something solid is on that
-  // body's own plane, and one on a body that collides with nothing falls back to
-  // `DECOR_Z` - which is what a flat fill drawn before every body already was.
-  // The same two answers `depthOf` gives, from the same two facts.
-  if (i.visual.offsetZ !== 0) return i.visual.offsetZ;
-  return bodyCollides ? 0 : DECOR_Z;
-}
-
-// The `offsetZ` a geometry object is left with after a move through z that
-// started with it drawn at `drawnZ` (`itemDepth`) and authoring `offsetZ`, and
-// ended with it at depth `z`, metres.
-//
-// A move that did not go through z leaves the field exactly as it was, so
-// nudging a backdrop sideways never stamps the depth it falls back to into the
-// file. A move that did is the new depth OUTRIGHT: once written, `offsetZ` is
-// where the object is, not a change from where it fell back to - written as a
-// change instead (`offsetZ + (z - drawnZ)`), a piece of decoration drawn at
-// `DECOR_Z` jumped 35 cm toward the camera on the first touch of the blue
-// arrow. The one depth this cannot say is exactly 0 on a body that collides
-// with nothing, which the format reads as unset (see above).
-export function offsetZAfterMove(offsetZ: number, drawnZ: number, z: number): number {
-  return z === drawnZ ? offsetZ : z;
-}
-
-// Which bodies of a model have a collision object in them - the one fact
-// `itemDepth` needs about a body and an item cannot answer about itself.
-export function collidingBodyIds(items: readonly EdItem[]): Set<number> {
-  return new Set(items.filter((i) => i.object === "collision").map((i) => i.bodyId));
 }
 
 // A detached copy of a shape. Undo snapshots, duplicate, copy/paste and the
@@ -712,7 +627,7 @@ export function cloneShape(s: EdShape): EdShape {
   }
   // A belt's wheel list is cloned for the same reason: `setBelt` writes a new
   // array, but a snapshot sharing the old one must not see a later edit.
-  if (s.kind === "belt") return { ...s, wheels: [...s.wheels] };
+  if (s.kind === "belt") return { ...s, wheels: [...s.wheels], look: { ...s.look } };
   return { ...s };
 }
 
@@ -827,184 +742,6 @@ export interface EdVine {
   viscosity: number | null;
   // Hex cord colour; null = the renderer's own vine colours.
   color: string | null;
-}
-
-// How the 3D renderer draws this shape (see `VisualData`). Every field has a
-// value here rather than being optional, because the inspector edits a live
-// object and a `undefined` field is a control with nothing to bind to; the
-// nulls are the two fields whose default is "take it from somewhere else"
-// (`depth` from the shape's thickness, `bevel` from the extruder's own), which
-// is a real third state and not a missing value.
-//
-// Per SHAPE like `material` and `thickness`, so `syncBodyProps` leaves it
-// alone: a compound body of a stone head on a wooden shaft is two visuals on
-// one body, each riding its own piece.
-export interface EdVisual {
-  kind: "primitive" | "mesh" | "image";
-  mesh: string; // manifest key; "" = none named yet
-  image: string; // `IMAGE_ASSETS` key, `kind: "image"` only; "" = none named yet
-  // The object's placement is the ITEM's own `pos`/`rot` - a geometry object is
-  // an object with a transform like every other, so the look does not carry a
-  // second one that could disagree with it. What is left here is the two
-  // rotations and the depth the item's in-plane transform cannot express.
-  offsetZ: number; // metres off the gameplay plane, positive toward the camera
-  rotX: number;
-  rotY: number;
-  scale: number; // dimensionless
-  // Which lens this is drawn through (see `GeometryObjectData.projection`).
-  projection: GeometryProjection;
-  depth: number | null; // metres; null = the shape's own thickness
-  texture: string; // texture key (authored set or material); "" = from material
-  tileScale: number | null; // multiple of the texture's own size; null = 1 (life size)
-  // Where the pattern starts, metres in level coordinates (+x right, +y down).
-  // A plain number rather than nullable: 0 is both the default and a perfectly
-  // ordinary authored value, so there is no third state to represent.
-  tileOffset: Vec2;
-  bevel: number | null; // metres; null = the extruder's default
-  // A generated rock's taper (see `GeometryObjectData.taperStart`/`taperAngle`):
-  // metres in front of the object's plane where it starts, and degrees it leans
-  // in by. Plain numbers like `tileOffset`: 0 is both the default and an
-  // ordinary value, so there is no third state, and a 0 is not written.
-  taperStart: number;
-  taperAngle: number;
-  // What the shape GIVES OFF (see `VisualData.emissive`). "" = nothing, which is
-  // every shape: emission is what makes a lamp's own geometry read as lit, and
-  // it is a statement rather than an appearance, so there is no sensible
-  // non-empty default.
-  emissive: string;
-  emissiveIntensity: number;
-  // A texture set whose EMISSION MAP this shape wears - where it glows, as
-  // against how much. "" = none named, which leaves the shape's own surface to
-  // decide (see `GeometryObjectData.emissiveTexture`).
-  //
-  // These three are ALL of emission now, and they are appearance and nothing
-  // else. A shape that emits used to derive a light out of seven more fields
-  // here - its reach, its cone, its aim, its shadow, its flicker - because a
-  // light had no way to be attached to the thing it belonged to. It has one now:
-  // a light item grouped into the same body IS the lamp's light, and it cannot
-  // drift from the fitting because they are one body.
-  emissiveTexture: string;
-  // What this object's mesh is GENERATED from (see `GeneratorData`); absent on
-  // everything placed by hand. Optional rather than nullable because it is the
-  // rare case: the spread copies of a visual all over the editor carry an
-  // absent field correctly, and `cloneVisual` is what copies a present one.
-  generator?: EdGenerator;
-}
-
-// A generator block as the editor holds it: the on-disk block in metres, with a
-// patch's host resolved from an index in the body to the host's item id, so it
-// survives the body's objects being reordered, added to or split.
-export interface EdGenerator {
-  kind: GeneratorKind;
-  version: number;
-  // As authored and loaded: only what the author set, in metres, keys in the
-  // order they were set. Written back verbatim, so a level saves byte-identical
-  // whatever it holds; defaults are stripped where a value is SET (the panel),
-  // and the mesh key strips them again on its own (`generatedKey`).
-  params: Record<string, ParamValue>;
-  patch: EdPatch | null;
-}
-
-export interface EdPatch {
-  // The host's item id; 0 = no host (the index on disk named nothing usable, or
-  // the host was deleted, or the patch was copied without it). The loop is kept
-  // either way.
-  hostId: number;
-  // The painted loop in the PATCH object's own frame, metres, y DOWN like every
-  // other point in the model (and the file), z toward the camera off the
-  // object's own plane. Points are replaced, never mutated, so a clone copies
-  // the array and shares the points.
-  points: readonly EdPoint3[];
-  // Which side of the loop's plane it was painted on: a unit vector in the
-  // patch's own frame, y DOWN like the points, dimensionless (never scaled).
-  // The mean of the painted faces' normals, written when the loop is closed;
-  // null for a patch loaded from a file that did not store it, whose side is
-  // then guessed from the host's middle. Replaced, never mutated.
-  facing: EdPoint3 | null;
-}
-
-export interface EdPoint3 {
-  readonly x: number;
-  readonly y: number;
-  readonly z: number;
-}
-
-// A generator block no other object shares: the params (a colour is an array
-// the inspector may write into) and the loop are copied. The ONE deep copy the
-// editor's snapshot, duplicate and paste make of it.
-export function cloneGenerator(g: EdGenerator): EdGenerator {
-  const params: Record<string, ParamValue> = {};
-  for (const [k, v] of Object.entries(g.params)) params[k] = Array.isArray(v) ? [...v] : v;
-  return {
-    kind: g.kind,
-    version: g.version,
-    params,
-    patch: g.patch ? { hostId: g.patch.hostId, points: [...g.patch.points], facing: g.patch.facing } : null,
-  };
-}
-
-// A visual no other item shares. Every field but the generator is a primitive
-// or an immutable Vec2, so a spread is a copy; the generator is the nested one.
-export function cloneVisual(v: EdVisual): EdVisual {
-  return v.generator ? { ...v, generator: cloneGenerator(v.generator) } : { ...v };
-}
-
-// After a copy (`idOf` maps each original item id to its copy's), point every
-// copied patch at its host's COPY, or at nothing when the host was not copied:
-// the original host is in another body, where a patch cannot name it.
-// Returns how many copied patches had a host and lost it, for the editor to
-// say (a patch duplicated on its own lands in a body of its own, hostless).
-export function remapPatchHosts(items: readonly EdItem[], idOf: ReadonlyMap<number, number>): number {
-  let orphaned = 0;
-  for (const it of items) {
-    const patch = it.visual.generator?.patch;
-    if (!patch || patch.hostId === 0) continue;
-    patch.hostId = idOf.get(patch.hostId) ?? 0;
-    if (patch.hostId === 0) orphaned++;
-  }
-  return orphaned;
-}
-
-// On-disk generator block -> the editor's, host unresolved (the caller knows the
-// body; see `fromLevelData`).
-function edGenerator(g: GeneratorData): EdGenerator {
-  const params: Record<string, ParamValue> = {};
-  for (const [k, v] of Object.entries(g.params ?? {})) params[k] = Array.isArray(v) ? [...v] : v;
-  return {
-    kind: g.kind,
-    version: g.version,
-    params,
-    patch: g.patch
-      ? {
-          hostId: 0,
-          points: g.patch.points.map((p) => ({ x: p.x, y: p.y, z: p.z })),
-          facing: g.patch.facing ? { x: g.patch.facing.x, y: g.patch.facing.y, z: g.patch.facing.z } : null,
-        }
-      : null,
-  };
-}
-
-// ...and back, host left for `toLevelData`, which is where the body's object
-// order is decided. Params are written as held, and only when there are any.
-function generatorData(g: EdGenerator): GeneratorData {
-  const params = Object.entries(g.params);
-  return {
-    kind: g.kind,
-    version: g.version,
-    ...(params.length > 0
-      ? { params: Object.fromEntries(params.map(([k, v]) => [k, Array.isArray(v) ? [...v] : v])) }
-      : {}),
-    ...(g.patch ? { patch: patchData(g.patch) } : {}),
-  };
-}
-
-// A patch's loop and facing as the file holds them (the host's index is
-// `toLevelData`'s), the facing only when there is one.
-function patchData(p: EdPatch): GeneratorPatchData {
-  return {
-    points: p.points.map((q) => ({ x: q.x, y: q.y, z: q.z })),
-    ...(p.facing ? { facing: { x: p.facing.x, y: p.facing.y, z: p.facing.z } } : {}),
-  };
 }
 
 // A body's own frame: the transform its objects are placed in, and what the file
@@ -1190,12 +927,12 @@ export const defaultNote = (): EdNote => ({
 // `+ Glow`: what one click drops. EDITOR defaults, not format defaults - a light
 // object on disk with `wake` and nothing else gets the renderer's
 // `DEFAULT_WAKE_*` - and every number here is a starting point to be played.
-// The mushroom is a purple cube until its model exists; nothing below changes
-// when it does.
-export const GLOW_CUBE = 0.3; // metres, the cube's side and its depth
-export const GLOW_COLOR = "#8a3fd6";
-export const GLOW_EMISSIVE = "#b070ff";
-export const GLOW_EMISSIVE_INTENSITY = 2;
+// What it looks like is the Blender scene's: an object named like the body is
+// its dressing, and whatever glows in that dressing follows the light
+// (`BodyVisual.adoptDressing`).
+export const GLOW_CUBE = 0.3; // metres, the collision square's side
+export const GLOW_COLOR = "#8a3fd6"; // the body's fill: the 2D view and the grey box
+export const GLOW_EMISSIVE = "#b070ff"; // the light's colour
 export const GLOW_RANGE = 4; // metres
 export const GLOW_INTENSITY = 6; // candela
 export const GLOW_WAKE = 3; // metres
@@ -1203,12 +940,11 @@ export const GLOW_WAKE_DELAY = 0.25; // seconds
 export const GLOW_WAKE_RISE = 0.6; // seconds
 export const GLOW_WAKE_FALL = 1.5; // seconds
 
-// The body `+ Glow` places at `pos` (metres): one static body holding a solid
-// purple cube with an emissive, the collision rect it mirrors (a mushroom the
-// ball rolls through reads as a ghost; delete the collision object for one on
-// a far wall), and a waking point light at the cube's centre. One body, so the
-// outliner shows one row and the whole thing drags together. Pure, so
-// `cli render3d` can hold its shapes and defaults.
+// The body `+ Glow` places at `pos` (metres): one static body holding a
+// collision square (a mushroom the ball rolls against; delete it for one on a
+// far wall) and a waking point light at its centre. One body, so the outliner
+// shows one row and the whole thing drags together. Pure, so `cli render3d`
+// can hold its shapes and defaults.
 export function glowBody(pos: Vec2): LevelBodyData {
   const square: ShapeData = { kind: "rect", w: GLOW_CUBE, h: GLOW_CUBE };
   return {
@@ -1216,18 +952,9 @@ export function glowBody(pos: Vec2): LevelBodyData {
     x: pos.x,
     y: pos.y,
     rot: 0,
+    color: GLOW_COLOR,
     objects: [
       { type: "collision", shape: { ...square } },
-      {
-        type: "geometry",
-        shape: { ...square },
-        matchCollision: true,
-        depth: GLOW_CUBE,
-        texture: SOLID_SURFACE,
-        color: GLOW_COLOR,
-        emissive: GLOW_EMISSIVE,
-        emissiveIntensity: GLOW_EMISSIVE_INTENSITY,
-      },
       {
         type: "light",
         color: GLOW_EMISSIVE,
@@ -1297,32 +1024,6 @@ export function fireflyModel(pos: Vec2): EdModel {
   return fromLevelData({ player: { x: pos.x, y: pos.y, radius: 0.08 }, bodies: [fireflyBody(pos)] });
 }
 
-// A fresh look is a `primitive` with everything defaulted: this object's own
-// form given the default depth and wearing the default generated surface.
-// `visualData` writes nothing at all for one in this state beyond the object's
-// own shape, so a level that never touches the section stays as small on disk as
-// its geometry allows.
-export const defaultVisual = (): EdVisual => ({
-  kind: "primitive",
-  mesh: "",
-  image: "",
-  offsetZ: 0,
-  rotX: 0,
-  rotY: 0,
-  scale: 1,
-  projection: "perspective",
-  depth: null,
-  texture: "",
-  tileScale: null,
-  tileOffset: Vec2.ZERO,
-  bevel: null,
-  taperStart: 0,
-  taperAngle: 0,
-  emissive: "",
-  emissiveIntensity: 1,
-  emissiveTexture: "",
-});
-
 // Camera regions and notes are editor-only furniture — they are never drawn in
 // game, so their appearance is fixed here rather than authored and saved.
 export const CAMERA_REGION_COLOR = "#c792ea";
@@ -1341,10 +1042,10 @@ export const FIREFLY_PATH_COLOR = FIREFLY_COLOR;
 // legible is the ring and the star at its centre, not the fill.
 export const LIGHT_FILL_OPACITY = 0.06;
 
-// Half-size of the placeholder a DRESSING carries, in metres. It has no authored
+// Size of the placeholder an ANCHOR carries, in metres. A point has no
 // outline, so this is only what the editor draws and picks it by - the save
 // writes no `shape` at all.
-export const DRESSING_GIZMO = 0.3;
+export const ANCHOR_GIZMO = 0.3;
 
 // Keyed by what is being DRAWN rather than by the layer alone, since the scene
 // layer draws two different things: a shape starts at the body defaults and a
@@ -1409,104 +1110,23 @@ function edShape(s: ShapeData): EdShape {
     };
   }
   // A BELT keeps every field it has on disk (docs/conveyors.md): each wheel's
-  // centre in the object's frame and its radius, the band's thickness and the
-  // signed speed. Wheel 0 is the item's own position.
+  // centre in the object's frame and its radius, the band's thickness, the
+  // signed speed and the band's look. Wheel 0 is the item's own position.
   if (s.kind === "belt") {
     return {
       kind: "belt",
       wheels: s.wheels.map((w) => ({ c: new Vec2(w.x, w.y), r: w.r })),
       thickness: s.thickness,
       speed: s.speed,
+      look: {
+        ...(s.width !== undefined ? { width: s.width } : {}),
+        ...(s.texture !== undefined ? { texture: s.texture } : {}),
+        ...(s.color !== undefined ? { color: s.color } : {}),
+        ...(s.tileScale !== undefined ? { tileScale: s.tileScale } : {}),
+      },
     };
   }
   return { kind: "poly", verts: s.verts.map((v) => new Vec2(v.x, v.y)) };
-}
-
-// An on-disk visual, filled out into the live object the inspector edits. An
-// absent field takes the default, so a file that authored one number does not
-// come back with ten.
-export function edVisual(v: GeometryObjectData | undefined): EdVisual {
-  const d = defaultVisual();
-  if (!v) return d;
-  return {
-    kind: v.kind ?? d.kind,
-    mesh: v.mesh ?? d.mesh,
-    image: v.image ?? d.image,
-    tileScale: v.tileScale ?? d.tileScale,
-    tileOffset: new Vec2(v.tileOffsetX ?? 0, v.tileOffsetY ?? 0),
-    offsetZ: v.z ?? d.offsetZ,
-    rotX: v.rotX ?? d.rotX,
-    rotY: v.rotY ?? d.rotY,
-    scale: v.scale ?? d.scale,
-    projection: v.projection ?? d.projection,
-    depth: v.depth ?? null,
-    texture: v.texture ?? d.texture,
-    bevel: v.bevel ?? null,
-    taperStart: v.taperStart ?? d.taperStart,
-    taperAngle: v.taperAngle ?? d.taperAngle,
-    emissive: v.emissive ?? d.emissive,
-    emissiveIntensity: v.emissiveIntensity ?? d.emissiveIntensity,
-    emissiveTexture: v.emissiveTexture ?? d.emissiveTexture,
-    ...(v.generator ? { generator: edGenerator(v.generator) } : {}),
-  };
-}
-
-// ...and back, writing ONLY what differs from the default. A body whose visual
-// section was never touched writes no `visual` key at all, which is what keeps
-// every level authored before the field byte-identical through a save - the same
-// rule `material` and `thickness` are written under.
-// ...and back, as the GEOMETRY OBJECT the look becomes, writing ONLY what
-// differs from the default. A body whose visual section was never touched
-// produces no geometry object at all, which is what keeps every level authored
-// before the field byte-identical through a save - the same rule `material` and
-// `thickness` are written under.
-//
-// `shape` is the caller's to add: a form of its own carries one and a dressing
-// does not, and that is the difference between decoration and a wall wearing
-// brick (see `GeometryObjectData.shape`).
-export function visualData(v: EdVisual): GeometryObjectData | undefined {
-  const d = defaultVisual();
-  const out: GeometryObjectData = {
-    type: "geometry",
-    ...(v.kind !== d.kind ? { kind: v.kind } : {}),
-    ...(v.kind === "mesh" && v.mesh ? { mesh: v.mesh } : {}),
-    ...(v.kind === "image" && v.image ? { image: v.image } : {}),
-    ...(v.offsetZ !== 0 ? { z: v.offsetZ } : {}),
-    // Out-of-plane tips are written for EITHER kind: `mountVisual` turns the
-    // extrusion by them exactly as it turns a prop's holder, about the same
-    // point, so the field records a pose that is drawn whichever way the object
-    // gets its look. (They were a prop's alone while a primitive had nowhere to
-    // put them, and the gizmo's x and y rings on one were a dial connected to
-    // nothing; the renderer carries them now, so the ring, the number and the
-    // picture agree.)
-    ...(v.rotX !== 0 ? { rotX: v.rotX } : {}),
-    ...(v.rotY !== 0 ? { rotY: v.rotY } : {}),
-    ...(v.scale !== d.scale ? { scale: v.scale } : {}),
-    ...(v.projection !== d.projection ? { projection: v.projection } : {}),
-    ...(v.depth !== null ? { depth: v.depth } : {}),
-    ...(v.texture ? { texture: v.texture } : {}),
-    ...(v.tileScale !== null ? { tileScale: v.tileScale } : {}),
-    ...(v.tileOffset.x !== 0 ? { tileOffsetX: v.tileOffset.x } : {}),
-    ...(v.tileOffset.y !== 0 ? { tileOffsetY: v.tileOffset.y } : {}),
-    ...(v.bevel !== null ? { bevel: v.bevel } : {}),
-    ...(v.taperStart !== 0 ? { taperStart: v.taperStart } : {}),
-    ...(v.taperAngle !== 0 ? { taperAngle: v.taperAngle } : {}),
-    ...(v.emissive ? { emissive: v.emissive } : {}),
-    // Only written alongside an emissive colour: a multiplier on nothing is a
-    // field that reads as meaningful and is not.
-    ...(v.emissive && v.emissiveIntensity !== d.emissiveIntensity
-      ? { emissiveIntensity: v.emissiveIntensity }
-      : {}),
-    // Not gated on the colour: an emission MAP is emission in its own right -
-    // it glows in the colours it was painted in, and the colour beside it is a
-    // tint over that rather than the thing being turned on.
-    ...(v.emissiveTexture ? { emissiveTexture: v.emissiveTexture } : {}),
-    // A patch's host is an index into the body's objects, which only
-    // `toLevelData` knows the order of; it adds it.
-    ...(v.generator ? { generator: generatorData(v.generator) } : {}),
-  };
-  // `type` alone means nothing was authored.
-  return Object.keys(out).length > 1 ? out : undefined;
 }
 
 // An on-disk material name resolved to one the editor can put in its picker.
@@ -1519,27 +1139,10 @@ function materialName(name: string | undefined): MaterialName {
 
 // Metre-space LevelData → editor model.
 function fromLevelData(data: LevelData): EdModel {
-  // On-disk group tags are arbitrary strings; the editor works in numeric ids,
-  // so each distinct tag mints one.
-  const groupIds = new Map<string, number>();
-  const groupIdFor = (tag: string | undefined): number | null => {
-    if (!tag) return null;
-    const existing = groupIds.get(tag);
-    if (existing !== undefined) return existing;
-    const id = newBodyId();
-    groupIds.set(tag, id);
-    return id;
-  };
   // ONE ITEM PER SCENE OBJECT, and the objects of one body share a group id.
   // That is exactly what the retired `group` TAG meant, so the editor's grouping
   // machinery - selecting, moving and rotating a body as one - carries over
   // unchanged, and what it gains is that a LIGHT can be in the group too.
-  //
-  // The two ways an item becomes a geometry object are the two things a geometry
-  // object is (see `GeometryObjectData.shape`): one with a shape of its own is a
-  // FORM, and becomes an item of its own; one without DRESSES the body's
-  // collision outlines, and is folded onto the collision item it dresses as that
-  // item's `visual`, since the editor has no way to draw a look with no outline.
   //
   // Placement is flattened to WORLD here and re-derived on the way out. The
   // editor manipulates items in world metres throughout - every drag, handle and
@@ -1636,13 +1239,14 @@ function fromLevelData(data: LevelData): EdModel {
       launch: b.launch ?? DEFAULT_LAUNCH,
       breakForce: b.breakForce ?? 0,
       durability: b.durability ?? 1,
-      rockSeed: b.rockSeed ?? 0,
       name: b.name ?? "",
       force: b.force ?? 0,
       flow: b.flow ?? 0,
       drag: b.drag ?? 0,
       spill: b.spill ?? 0,
       spillSpeed: b.spillSpeed ?? null,
+      waterZ: b.waterZ ?? 0,
+      waterDepth: b.waterDepth ?? null,
       passable: b.passable === true,
       pivot: b.pivot === true,
       pivotAt,
@@ -1667,11 +1271,7 @@ function fromLevelData(data: LevelData): EdModel {
       note: defaultNote(),
       anchorId: 0,
       pathId: 0,
-      matchId: 0,
     };
-    // Geometry objects whose file says they mirror a collision sibling; the
-    // partner is resolved once the whole body is in, below.
-    const matched: EdItem[] = [];
     for (const o of b.objects) {
       const w = worldPlacement(b, o);
       if (isCollisionObject(o)) {
@@ -1691,38 +1291,7 @@ function fromLevelData(data: LevelData): EdModel {
           viscosity: typeof o.viscosity === "number" && o.viscosity > 0 ? o.viscosity : 0,
           material: materialName(o.material),
           thickness: o.thickness ?? DEFAULT_THICKNESS,
-          visual: defaultVisual(),
         });
-        continue;
-      }
-      if (isGeometryObject(o)) {
-        const g: EdItem = {
-          ...base,
-          id: newBodyId(),
-          object: "geometry",
-          pos: w.pos,
-          rot: w.rot,
-          // Every geometry object carries its own form. One from a file that
-          // predates that (a dressing, which drew the body's collision
-          // outlines) gets the same placeholder gizmo an orphan prop does, and
-          // is saved with it - the editor is where such a file is finished
-          // being migrated, and a shape it can neither see nor drag is worse
-          // than a small one it can.
-          shape: o.shape ? edShape(o.shape) : { kind: "rect", w: DRESSING_GIZMO, h: DRESSING_GIZMO },
-          impermeable: false,
-          mask: MASK_ALL,
-          rail: false,
-          viscosity: 0,
-          material: DEFAULT_MATERIAL,
-          thickness: DEFAULT_THICKNESS,
-          // Its own fill, which decoration carries rather than taking the
-          // body's - a backdrop is authored to sit behind the geometry.
-          color: o.color ?? base.color,
-          opacity: o.opacity ?? base.opacity,
-          visual: edVisual(o),
-        };
-        bodies.push(g);
-        if (o.matchCollision === true) matched.push(g);
         continue;
       }
       if (isAnchorObject(o)) {
@@ -1733,15 +1302,14 @@ function fromLevelData(data: LevelData): EdModel {
           pos: w.pos,
           rot: w.rot,
           // A point has no size. The gizmo is what the canvas draws and what a
-          // click has to land on, and it is the same one a dressing gets.
-          shape: { kind: "rect", w: DRESSING_GIZMO, h: DRESSING_GIZMO },
+          // click has to land on.
+          shape: { kind: "rect", w: ANCHOR_GIZMO, h: ANCHOR_GIZMO },
           impermeable: false,
           mask: MASK_ALL,
           rail: false,
           viscosity: 0,
           material: DEFAULT_MATERIAL,
           thickness: DEFAULT_THICKNESS,
-          visual: defaultVisual(),
           anchorId: o.id,
           pathId: 0,
         });
@@ -1749,35 +1317,7 @@ function fromLevelData(data: LevelData): EdModel {
       }
       bodies.push(lightItem(o, w.pos, w.rot, bodyId));
     }
-    // Re-tie each matched geometry object to its collision partner. The link's
-    // own invariant means an editor-written file always holds an EXACT twin, so
-    // the outline is the identity and no index is stored to go stale. A
-    // hand-edited file may have let them drift: with one collision object the
-    // intent is unambiguous, so the geometry snaps back onto it; with several
-    // there is nothing safe to guess and the link is dropped rather than tied
-    // to a piece nobody chose.
     const made = bodies.slice(firstOfBody);
-    const collisions = made.filter((i) => i.object === "collision");
-    for (const g of matched) {
-      const exact = collisions.find((c) => outlinesEqual(c, g));
-      const target = exact ?? (collisions.length === 1 ? collisions[0]! : undefined);
-      if (!target) continue;
-      g.matchId = target.id;
-      if (!exact) copyMatchedOutline(target, g);
-    }
-    // Resolve each mushroom patch's host from its index in this body's objects
-    // (one item per object, in file order, so `made[k]` IS object k). An index
-    // that names nothing, names something other than a geometry object, or
-    // names the patch itself loads as no host: the loop is kept for the author
-    // to re-host, and the panel says so.
-    b.objects.forEach((o, k) => {
-      const host = isGeometryObject(o) ? o.generator?.patch?.host : undefined;
-      const patch = made[k]!.visual.generator?.patch;
-      if (host === undefined || !patch) return;
-      const target = made[host];
-      if (target && host !== k && target.object === "geometry") patch.hostId = target.id;
-      else console.warn(`[editor] body ${data.bodies.indexOf(b)}: patch object ${k} names object ${host} as its host, which is not another geometry object; loaded with no host`);
-    });
     itemOfBody.push(made.find((i) => i.object === "collision") ?? null);
   }
 
@@ -1797,21 +1337,20 @@ function fromLevelData(data: LevelData): EdModel {
     launch: DEFAULT_LAUNCH,
     breakForce: 0,
     durability: 1,
-    rockSeed: 0,
     name: "",
     impermeable: false,
     mask: MASK_ALL,
     rail: false,
     viscosity: 0,
-    // Unused off the geometry layer; keeps the field total.
     material: DEFAULT_MATERIAL,
     thickness: DEFAULT_THICKNESS,
-    visual: defaultVisual(),
     force: 0,
     flow: 0,
     drag: 0,
     spill: 0,
     spillSpeed: null,
+    waterZ: 0,
+    waterDepth: null,
     passable: false,
     pivot: false,
     pivotAt: null,
@@ -1861,7 +1400,6 @@ function fromLevelData(data: LevelData): EdModel {
     note: defaultNote(),
     anchorId: 0,
     pathId: 0,
-    matchId: 0,
   }));
 
   // Camera paths: the same item type as a region, distinguished by its shape
@@ -1898,21 +1436,20 @@ function fromLevelData(data: LevelData): EdModel {
     launch: DEFAULT_LAUNCH,
     breakForce: 0,
     durability: 1,
-    rockSeed: 0,
     name: "",
     impermeable: false,
     mask: MASK_ALL,
     rail: false,
     viscosity: 0,
-    // Unused off the geometry layer; keeps the field total.
     material: DEFAULT_MATERIAL,
     thickness: DEFAULT_THICKNESS,
-    visual: defaultVisual(),
     force: 0,
     flow: 0,
     drag: 0,
     spill: 0,
     spillSpeed: null,
+    waterZ: 0,
+    waterDepth: null,
     passable: false,
     pivot: false,
     pivotAt: null,
@@ -1964,7 +1501,6 @@ function fromLevelData(data: LevelData): EdModel {
     note: defaultNote(),
     anchorId: 0,
     pathId: 0,
-    matchId: 0,
   });
   const camPaths = (data.cameraPaths ?? []).map(camPathItem);
   // Firefly paths: the camera path's item moved onto the fireflies layer, with
@@ -2009,21 +1545,20 @@ function lightItem(
     launch: DEFAULT_LAUNCH,
     breakForce: 0,
     durability: 1,
-    rockSeed: 0,
     name: "",
     impermeable: false,
     mask: MASK_ALL,
     rail: false,
     viscosity: 0,
-    // Unused off the geometry layer; keeps the field total.
     material: DEFAULT_MATERIAL,
     thickness: DEFAULT_THICKNESS,
-    visual: defaultVisual(),
     force: 0,
     flow: 0,
     drag: 0,
     spill: 0,
     spillSpeed: null,
+    waterZ: 0,
+    waterDepth: null,
     passable: false,
     pivot: false,
     pivotAt: null,
@@ -2067,7 +1602,6 @@ function lightItem(
     note: defaultNote(),
     anchorId: 0,
     pathId: 0,
-    matchId: 0,
   };
 }
 
@@ -2091,21 +1625,20 @@ function lightItem(
     launch: DEFAULT_LAUNCH,
     breakForce: 0,
     durability: 1,
-    rockSeed: 0,
     name: "",
     impermeable: false,
     mask: MASK_ALL,
     rail: false,
     viscosity: 0,
-    // Unused off the geometry layer; keeps the field total.
     material: DEFAULT_MATERIAL,
     thickness: DEFAULT_THICKNESS,
-    visual: defaultVisual(),
     force: 0,
     flow: 0,
     drag: 0,
     spill: 0,
     spillSpeed: null,
+    waterZ: 0,
+    waterDepth: null,
     passable: false,
     pivot: false,
     pivotAt: null,
@@ -2129,7 +1662,6 @@ function lightItem(
     light: defaultLight(),
     anchorId: 0,
     pathId: 0,
-    matchId: 0,
     note,
   });
 
@@ -2417,9 +1949,9 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
   // so the body order is the item order and a chain's index is stable across a
   // save.
   //
-  // Geometry first and then lights, so a body's collision objects come before
+  // Collision first and then lights, so a body's collision objects come before
   // the light in it - which is the order the renderers walk and the order the
-  // light budgets are spent in. A light grouped into a geometry body joins that
+  // light budgets are spent in. A light grouped into a solid body joins that
   // body rather than making one of its own, which is the whole of what welding a
   // lamp's light to its fitting now takes.
   const runs = bodyRuns(
@@ -2428,7 +1960,7 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
   // A run's members are written in layer order within the run, so a light
   // authored before the wall it hangs on still lands after it.
   for (const run of runs) {
-    run.sort((a, b) => (a.object === b.object ? 0 : a.object === "collision" ? -1 : a.object === "geometry" ? 0 : 1));
+    run.sort((a, b) => (a.object === b.object ? 0 : a.object === "collision" ? -1 : b.object === "collision" ? 1 : 0));
   }
 
   // The body's own frame (`EdModel.bodyFrames`), with its objects written local
@@ -2465,12 +1997,9 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
     };
 
     const objects: SceneObjectData[] = [];
-    // Where each item's object landed in `objects`, for a patch naming its host.
-    const indexOfItem = new Map<number, number>();
     // Every object written goes through this, so one cannot reach the file
     // without `itemOf` recording which item wrote it.
     const emit = (item: EdItem, o: SceneObjectData): void => {
-      indexOfItem.set(item.id, objects.length);
       objects.push(o);
       itemOf?.set(o, item.id);
     };
@@ -2550,71 +2079,33 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
         });
         continue;
       }
-      if (i.object === "collision") {
-        emit(i, {
-          type: "collision",
-          ...localOf(i),
-          shape: shapeOf(i),
-          // Absent means "an ordinary surface", so only a hook-proof one says so.
-          ...(i.impermeable ? { impermeable: true } : {}),
-          // Absent means a piece everything collides with, so only one that
-          // something passes through says so - and it says it in the fixed
-          // category order, so an edit that changes nothing writes nothing.
-          ...(passesFromMask(i.mask).length > 0 ? { passes: passesFromMask(i.mask) } : {}),
-          // Absent means a face the hook bites, so only a rail says so - and
-          // only a CURVE can be one, so a flag left on a shape of any other
-          // kind (a level authored before rails were curves) is dropped rather
-          // than written for the loader to ignore.
-          ...(i.rail && i.shape.kind === "path" ? { rail: true } : {}),
-          // Absent means a face that holds the cuff still, so only mud says so.
-          ...(i.viscosity > 0 ? { viscosity: i.viscosity } : {}),
-          // Written only when the piece is something other than the default
-          // 20 cm of oak, so every level authored before materials stays
-          // byte-identical. Per COLLISION OBJECT and nowhere else: a body's
-          // mass, centre of mass and inertia are sums over its pieces, and what
-          // a thing is made of is a fact about the shape rather than about the
-          // model drawn over it.
-          ...(i.material !== DEFAULT_MATERIAL ? { material: i.material } : {}),
-          ...(i.thickness !== DEFAULT_THICKNESS ? { thickness: i.thickness } : {}),
-        });
-        continue;
-      }
-      // A geometry object: its own transform, its own form, and its own look.
-      const look = visualData(i.visual) ?? { type: "geometry" as const };
-      // Its fill is written only where it DIFFERS from the body's, which is what
-      // a body-level fill is for: a wall's primitive takes the colour the wall
-      // is painted and writes nothing, and a backdrop welded into that body -
-      // authored to sit behind the geometry rather than to match it - carries
-      // its own. A body with no collision object has no fill of its own to
-      // inherit, so its decoration always states one.
-      const bodyFill = lead.object === "collision" ? lead : undefined;
-      const ownFill = i.color !== bodyFill?.color || i.opacity !== bodyFill?.opacity;
+      // Everything else is a collision object.
       emit(i, {
-        ...look,
+        type: "collision",
         ...localOf(i),
         shape: shapeOf(i),
-        // Written only while the partner is still a collision object in this
-        // body, so a stale link an edit has not yet pruned cannot reach disk.
-        ...(i.matchId !== 0 && run.some((m) => m.id === i.matchId && m.object === "collision")
-          ? { matchCollision: true }
-          : {}),
-        ...(ownFill ? { color: i.color, opacity: i.opacity } : {}),
+        // Absent means "an ordinary surface", so only a hook-proof one says so.
+        ...(i.impermeable ? { impermeable: true } : {}),
+        // Absent means a piece everything collides with, so only one that
+        // something passes through says so - and it says it in the fixed
+        // category order, so an edit that changes nothing writes nothing.
+        ...(passesFromMask(i.mask).length > 0 ? { passes: passesFromMask(i.mask) } : {}),
+        // Absent means a face the hook bites, so only a rail says so - and
+        // only a CURVE can be one, so a flag left on a shape of any other
+        // kind (a level authored before rails were curves) is dropped rather
+        // than written for the loader to ignore.
+        ...(i.rail && i.shape.kind === "path" ? { rail: true } : {}),
+        // Absent means a face that holds the cuff still, so only mud says so.
+        ...(i.viscosity > 0 ? { viscosity: i.viscosity } : {}),
+        // Written only when the piece is something other than the default
+        // 20 cm of oak, so every level authored before materials stays
+        // byte-identical. Per COLLISION OBJECT and nowhere else: a body's
+        // mass, centre of mass and inertia are sums over its pieces, and what
+        // a thing is made of is a fact about the shape rather than about the
+        // model drawn over it.
+        ...(i.material !== DEFAULT_MATERIAL ? { material: i.material } : {}),
+        ...(i.thickness !== DEFAULT_THICKNESS ? { thickness: i.thickness } : {}),
       });
-    }
-    // Every patch names its host by where the host was just written, now that
-    // the whole body's order is settled. A host that is no longer a geometry
-    // object in this body (deleted, split off, never there) writes no index,
-    // which is what a patch with no host loads from.
-    for (const i of run) {
-      const hostId = i.visual.generator?.patch?.hostId;
-      if (i.object !== "geometry" || !hostId || hostId === i.id) continue;
-      const k = indexOfItem.get(hostId);
-      const own = objects[indexOfItem.get(i.id)!];
-      if (k === undefined || objects[k]!.type !== "geometry" || !own || own.type !== "geometry") continue;
-      const g = own.generator!;
-      // The host first, as the file has always ordered it, then the loop and
-      // its facing as `patchData` wrote them.
-      own.generator = { ...g, patch: { host: k, ...g.patch! } };
     }
 
     return {
@@ -2622,7 +2113,7 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
       x: origin.pos.x,
       y: origin.pos.y,
       rot: origin.rot,
-      // Only a GEOMETRY lead has a body fill to give. A body that is nothing but
+      // Only a SOLID lead has a body fill to give. A body that is nothing but
       // a light has no fill at all, and writing the light's own faint editor
       // colour as one would put a body colour on disk that nothing draws.
       ...(lead.object === "collision" ? { color: lead.color, opacity: lead.opacity } : {}),
@@ -2658,6 +2149,10 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
                   ...(lead.spillSpeed !== null ? { spillSpeed: lead.spillSpeed } : {}),
                 }
               : {}),
+            // The slab through z, only where it differs from the renderer's
+            // own placement: on the plane, at the default depth.
+            ...(lead.kind === "water" && lead.waterZ !== 0 ? { waterZ: lead.waterZ } : {}),
+            ...(lead.kind === "water" && lead.waterDepth !== null ? { waterDepth: lead.waterDepth } : {}),
             // Hook-only geometry, and only when set: an absent field is the
             // colliding body every level authored before the flag has. Written
             // for every kind that builds a body - a static one is the retired
@@ -2750,13 +2245,8 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
               : {}),
           }
         : {}),
-      // The generated rock's seed, outside the physics half because a rock body
-      // may be geometry alone, and only when it is not the 0 every level
-      // authored before it means by saying nothing - which keeps such a level
-      // byte-identical through a save (see `LevelBodyData.rockSeed`).
-      ...(lead.rockSeed ? { rockSeed: lead.rockSeed } : {}),
-      // The name, for the same reason and with the same rule: a body of any
-      // make-up may carry one, and an unnamed body writes nothing.
+      // The name, outside the physics half because a body of any make-up may
+      // carry one, and only when set: an unnamed body writes nothing.
       ...(lead.name ? { name: lead.name } : {}),
       objects,
     };
@@ -3061,6 +2551,7 @@ export function beltShapeData(s: EdBelt): Extract<ShapeData, { kind: "belt" }> {
     wheels: s.wheels.map((w) => ({ x: w.c.x, y: w.c.y, r: w.r })),
     thickness: s.thickness,
     speed: s.speed,
+    ...s.look,
   };
 }
 
@@ -3176,9 +2667,7 @@ export function polyMustBeConvex(item: EdItem): boolean {
 // centroid and `pos` moved to compensate, which kept an item's `pos` its own
 // centre of mass at the price of making every corner drag a MOVE of the object
 // inside its body. Everything else in the body stayed put while the polygon's
-// placement slid out from under it - visibly so for a `matchCollision` prop,
-// which copies the collision object's placement and so walked across the level
-// as its outline was fitted to the mesh it was being fitted TO. `pos` is the
+// placement slid out from under it. `pos` is the
 // placement the author put the shape at; where its mass is, is a question about
 // the outline, and `shapeCentre` derives it (`bodyCentroid` is the one caller
 // that needs it). A shape being CREATED still starts centred - see
@@ -3772,31 +3261,8 @@ export function objectLabel(item: EdItem, metresToPx: number): string {
         : item.shape.kind === "belt"
           ? `${item.shape.wheels.length} wheels t${n(item.shape.thickness)}`
           : `${item.shape.verts.length}v`;
-  // A mesh is named by its asset, since that is what tells two props apart -
-  // their placeholders are usually identical.
-  if (item.visual.kind === "mesh") return `mesh ${item.visual.mesh || "(none)"}`;
-  if (item.visual.kind === "image") return `image ${item.visual.image || "(none)"}`;
-  // A geometry object is named by the SOLID it draws rather than by the outline
-  // it is authored through, since that is what the player sees and what tells it
-  // apart from the collision shape it may be sitting on top of.
-  const what =
-    item.object === "collision" || item.shape.kind === "path"
-      ? item.shape.kind
-      : PRIMITIVE_NAME[item.shape.kind];
-  return `${what} ${form}`;
+  return `${item.shape.kind} ${form}`;
 }
-
-// What a primitive's outline is drawn as in 3D - the same mapping
-// `primitiveGeometry` makes, said in words for the outliner.
-// A camera path is never a geometry object, so it has no solid to be named
-// after and is not in this table.
-const PRIMITIVE_NAME: Record<"rect" | "circle" | "poly" | "belt", string> = {
-  rect: "box",
-  circle: "cylinder",
-  poly: "prism",
-  // A belt's loop extruded, with the tread riding it (`render3d/beltTread.ts`).
-  belt: "belt",
-};
 
 // Area of an item's shape, in m².
 export function shapeArea(item: EdItem): number {
@@ -4182,17 +3648,15 @@ export function bodyLead(members: readonly EdItem[]): EdItem | null {
 // the lead's onto the rest rather than letting a file disagree with what it
 // draws.
 //
-// `material`, `thickness` and `visual` are deliberately NOT among them: they
-// are per shape, and a body whose pieces are made of different things is the
-// case that motivates them (a stone head on a wooden shaft). The build reads
-// every piece's own (`makePiece`, and `render3d/scene.ts` for the visual), so
-// copying the lead's would be the editor overwriting what was authored.
+// `material` and `thickness` are deliberately NOT among them: they are per
+// shape, and a body whose pieces are made of different things is the case that
+// motivates them (a stone head on a wooden shaft). The build reads every
+// piece's own (`makePiece`), so copying the lead's would be the editor
+// overwriting what was authored.
 //
-// Non-colliding members are left alone entirely: decoration is not a piece of
-// the body, it is carried by it, and it has none of these properties - its fill
-// is its own (a backdrop is authored to sit behind the geometry, so painting it
-// the geometry's colour is exactly wrong), and kind, friction and force mean
-// nothing on a shape nothing collides with.
+// Non-colliding members (lights, anchors) are left alone entirely: they are
+// carried by the body rather than pieces of it, and kind, friction and force
+// mean nothing on them.
 export function syncBodyProps(members: readonly EdItem[]): void {
   const lead = bodyLead(members);
   if (!lead) return;
@@ -4206,13 +3670,14 @@ export function syncBodyProps(members: readonly EdItem[]): void {
     m.launch = lead.launch;
     m.breakForce = lead.breakForce;
     m.durability = lead.durability;
-    m.rockSeed = lead.rockSeed;
     m.name = lead.name;
     m.force = lead.force;
     m.flow = lead.flow;
     m.drag = lead.drag;
     m.spill = lead.spill;
     m.spillSpeed = lead.spillSpeed;
+    m.waterZ = lead.waterZ;
+    m.waterDepth = lead.waterDepth;
     m.passable = lead.passable;
     m.pivot = lead.pivot;
     m.pivotAt = lead.pivotAt;
@@ -4411,129 +3876,6 @@ function shapeCorners(item: EdItem): Vec2[] {
   return local.map((v) => item.pos.add(v.rotated(item.rot)));
 }
 
-// --- matched outlines -------------------------------------------------------
-
-// Do two items state the SAME outline - position, rotation and shape? It is the
-// identity a matched pair is resolved by at load, so it takes an epsilon: the
-// editor writes the pair byte-equal, but a hand-edited file is allowed a
-// rounding error without silently losing its link.
-export function outlinesEqual(a: EdItem, b: EdItem, eps = 1e-9): boolean {
-  if (Math.abs(a.pos.x - b.pos.x) > eps || Math.abs(a.pos.y - b.pos.y) > eps) return false;
-  if (Math.abs(a.rot - b.rot) > eps) return false;
-  const s = a.shape;
-  const t = b.shape;
-  if (s.kind === "rect" && t.kind === "rect")
-    return Math.abs(s.w - t.w) <= eps && Math.abs(s.h - t.h) <= eps;
-  if (s.kind === "circle" && t.kind === "circle") return Math.abs(s.r - t.r) <= eps;
-  if (s.kind === "poly" && t.kind === "poly")
-    return (
-      s.verts.length === t.verts.length &&
-      s.verts.every(
-        (v, i) => Math.abs(v.x - t.verts[i]!.x) <= eps && Math.abs(v.y - t.verts[i]!.y) <= eps,
-      )
-    );
-  // The speed is part of a belt's outline for this purpose: a matched pair
-  // mirrors the WHOLE shape, and a drawn belt running at a different speed from
-  // the one it collides as would show a tread that lies about the carry.
-  if (s.kind === "belt" && t.kind === "belt")
-    return (
-      s.wheels.length === t.wheels.length &&
-      s.wheels.every(
-        (w, i) =>
-          Math.abs(w.c.x - t.wheels[i]!.c.x) <= eps &&
-          Math.abs(w.c.y - t.wheels[i]!.c.y) <= eps &&
-          Math.abs(w.r - t.wheels[i]!.r) <= eps,
-      ) &&
-      Math.abs(s.thickness - t.thickness) <= eps &&
-      Math.abs(s.speed - t.speed) <= eps
-    );
-  return false;
-}
-
-// Write one item's outline onto the other - the whole of what a matched pair
-// shares. The shape is cloned, never aliased: both sides' shapes are mutated in
-// place by every resize path, and a shared object would turn "kept equal" into
-// "secretly one shape", which no edit could ever diverge again.
-export function copyMatchedOutline(from: EdItem, to: EdItem): void {
-  to.pos = new Vec2(from.pos.x, from.pos.y);
-  to.rot = from.rot;
-  to.shape = cloneShape(from.shape);
-}
-
-// An item's outline as one comparable string - what `syncMatchedOutlines` uses
-// to tell WHICH side of a pair an edit touched. The bodyId is in it so a
-// membership change reads as a change too.
-function outlineSig(i: EdItem): string {
-  const s = i.shape;
-  const shape =
-    s.kind === "rect"
-      ? `r${s.w},${s.h}`
-      : s.kind === "circle"
-        ? `c${s.r}`
-        : s.kind === "path"
-          ? // A curve's outline is its nodes, their tangent HANDLES and the
-            // width of the bar - all three are the shape, so an edit to any of
-            // them has to read as one.
-            `L${s.width}:${s.verts
-              .map((v, k) => {
-                const h = s.handles[k];
-                return `${v.x},${v.y},${h?.in.x ?? 0},${h?.in.y ?? 0},${h?.out.x ?? 0},${h?.out.y ?? 0}`;
-              })
-              .join(";")}`
-          : s.kind === "belt"
-            ? `b${beltKey(s)}|${s.speed}`
-            : `p${s.verts.map((v) => `${v.x},${v.y}`).join(";")}`;
-  return `${i.pos.x},${i.pos.y},${i.rot},${i.bodyId}|${shape}`;
-}
-
-// Keep every matched pair's outlines equal, in whichever direction the last
-// edit went. Called from the editor's one dirty funnel (`markDirty`), so every
-// edit path - inspector field, corner handle, gizmo, nudge, vertex drag - flows
-// through it without knowing the link exists.
-//
-// `sigs` is the caller's memory of each linked item's outline as of the last
-// sync: the side that differs from its record is the side that was edited, and
-// the other side follows it. Both differing means they moved together (a body
-// drag) or the model was replaced wholesale (undo, load) - in either case the
-// pair is already consistent, and the collision side leads if it somehow is
-// not, since collision is what the level PLAYS as. A link whose partner is
-// gone, is not a collision object, or has left the body is dropped here, which
-// is what lets Delete and Split not know about it either.
-//
-// The pass repeats until nothing moves (two geometry objects may mirror one
-// collision shape, so a copy can make a second pair stale); it converges
-// because every copy makes two outlines equal and none makes any unequal.
-export function syncMatchedOutlines(model: EdModel, sigs: Map<number, string>): void {
-  const byId = new Map(model.items.map((i) => [i.id, i]));
-  const pairs: Array<[EdItem, EdItem]> = [];
-  for (const g of model.items) {
-    if (g.object !== "geometry" || g.matchId === 0) continue;
-    const c = byId.get(g.matchId);
-    if (!c || c.object !== "collision" || c.bodyId !== g.bodyId) {
-      g.matchId = 0;
-      continue;
-    }
-    pairs.push([g, c]);
-  }
-  for (let pass = 0; pass < 4; pass++) {
-    let changed = false;
-    for (const [g, c] of pairs) {
-      if (outlineSig(g) === outlineSig(c)) continue;
-      const gEdited = sigs.get(g.id) !== outlineSig(g);
-      const cEdited = sigs.get(c.id) !== outlineSig(c);
-      const lead = gEdited && !cEdited ? g : c;
-      copyMatchedOutline(lead, lead === g ? c : g);
-      changed = true;
-    }
-    if (!changed) break;
-  }
-  sigs.clear();
-  for (const [g, c] of pairs) {
-    sigs.set(g.id, outlineSig(g));
-    sigs.set(c.id, outlineSig(c));
-  }
-}
-
 // --- chains -----------------------------------------------------------------
 
 export function cloneChain(c: EdChain): EdChain {
@@ -4722,7 +4064,7 @@ export function emptyModel(): EdModel {
     // Unnamed and listed: a new level belongs on the menu, and the Level panel
     // is where it is given a title.
     meta: {},
-    // Dressed by nothing but its own geometry objects until a scene is named.
+    // Drawn as its collision (a grey box) until a scene is named.
     scene: "",
     items: [
       {
@@ -4742,19 +4084,19 @@ export function emptyModel(): EdModel {
         launch: DEFAULT_LAUNCH,
         breakForce: 0,
         durability: 1,
-        rockSeed: 0,
         impermeable: false,
         mask: MASK_ALL,
         rail: false,
         viscosity: 0,
         material: DEFAULT_MATERIAL,
         thickness: DEFAULT_THICKNESS,
-        visual: defaultVisual(),
         force: 0,
         flow: 0,
         drag: 0,
         spill: 0,
         spillSpeed: null,
+        waterZ: 0,
+        waterDepth: null,
         passable: false,
         pivot: false,
         pivotAt: null,
@@ -4779,7 +4121,6 @@ export function emptyModel(): EdModel {
         note: defaultNote(),
         anchorId: 0,
         pathId: 0,
-        matchId: 0,
       },
     ],
   };

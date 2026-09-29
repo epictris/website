@@ -23,12 +23,11 @@
       "objects": [
         {
           "type": "collision",
-          "shape": { "kind": "rect", "w": 6000, "h": 40 }
-        },
-        {
-          "type": "geometry",
-          "shape": { "kind": "rect", "w": 6000, "h": 40 },
-          "matchCollision": true
+          "shape": {
+            "kind": "rect",
+            "w": 6000,
+            "h": 40
+          }
         }
       ]
     },
@@ -43,12 +42,11 @@
       "objects": [
         {
           "type": "collision",
-          "shape": { "kind": "rect", "w": 300, "h": 40 }
-        },
-        {
-          "type": "geometry",
-          "shape": { "kind": "rect", "w": 300, "h": 40 },
-          "matchCollision": true
+          "shape": {
+            "kind": "rect",
+            "w": 300,
+            "h": 40
+          }
         }
       ]
     },
@@ -63,12 +61,11 @@
       "objects": [
         {
           "type": "collision",
-          "shape": { "kind": "rect", "w": 300, "h": 40 }
-        },
-        {
-          "type": "geometry",
-          "shape": { "kind": "rect", "w": 300, "h": 40 },
-          "matchCollision": true
+          "shape": {
+            "kind": "rect",
+            "w": 300,
+            "h": 40
+          }
         }
       ]
     },
@@ -83,12 +80,11 @@
       "objects": [
         {
           "type": "collision",
-          "shape": { "kind": "rect", "w": 300, "h": 40 }
-        },
-        {
-          "type": "geometry",
-          "shape": { "kind": "rect", "w": 300, "h": 40 },
-          "matchCollision": true
+          "shape": {
+            "kind": "rect",
+            "w": 300,
+            "h": 40
+          }
         }
       ]
     },
@@ -103,12 +99,11 @@
       "objects": [
         {
           "type": "collision",
-          "shape": { "kind": "rect", "w": 2200, "h": 40 }
-        },
-        {
-          "type": "geometry",
-          "shape": { "kind": "rect", "w": 2200, "h": 40 },
-          "matchCollision": true
+          "shape": {
+            "kind": "rect",
+            "w": 2200,
+            "h": 40
+          }
         }
       ]
     },
@@ -125,12 +120,11 @@
       "objects": [
         {
           "type": "collision",
-          "shape": { "kind": "rect", "w": 400, "h": 30 }
-        },
-        {
-          "type": "geometry",
-          "shape": { "kind": "rect", "w": 400, "h": 30 },
-          "matchCollision": true
+          "shape": {
+            "kind": "rect",
+            "w": 400,
+            "h": 30
+          }
         }
       ]
     },
@@ -147,12 +141,11 @@
       "objects": [
         {
           "type": "collision",
-          "shape": { "kind": "rect", "w": 400, "h": 30 }
-        },
-        {
-          "type": "geometry",
-          "shape": { "kind": "rect", "w": 400, "h": 30 },
-          "matchCollision": true
+          "shape": {
+            "kind": "rect",
+            "w": 400,
+            "h": 30
+          }
         }
       ]
     },
@@ -169,12 +162,11 @@
       "objects": [
         {
           "type": "collision",
-          "shape": { "kind": "rect", "w": 400, "h": 40 }
-        },
-        {
-          "type": "geometry",
-          "shape": { "kind": "rect", "w": 400, "h": 40 },
-          "matchCollision": true
+          "shape": {
+            "kind": "rect",
+            "w": 400,
+            "h": 40
+          }
         }
       ]
     },
@@ -193,27 +185,21 @@
           "type": "collision",
           "x": 0,
           "y": 0,
-          "shape": { "kind": "rect", "w": 300, "h": 30 }
+          "shape": {
+            "kind": "rect",
+            "w": 300,
+            "h": 30
+          }
         },
         {
           "type": "collision",
           "x": 135,
           "y": -85,
-          "shape": { "kind": "rect", "w": 30, "h": 200 }
-        },
-        {
-          "type": "geometry",
-          "x": 0,
-          "y": 0,
-          "shape": { "kind": "rect", "w": 300, "h": 30 },
-          "matchCollision": true
-        },
-        {
-          "type": "geometry",
-          "x": 135,
-          "y": -85,
-          "shape": { "kind": "rect", "w": 30, "h": 200 },
-          "matchCollision": true
+          "shape": {
+            "kind": "rect",
+            "w": 30,
+            "h": 200
+          }
         }
       ]
     },
@@ -228,13 +214,12 @@
       "objects": [
         {
           "type": "collision",
-          "shape": { "kind": "rect", "w": 80, "h": 80 },
+          "shape": {
+            "kind": "rect",
+            "w": 80,
+            "h": 80
+          },
           "material": "stone"
-        },
-        {
-          "type": "geometry",
-          "shape": { "kind": "rect", "w": 80, "h": 80 },
-          "matchCollision": true
         }
       ]
     }

@@ -27,11 +27,8 @@ import { basename, join, relative, resolve } from "node:path";
 import { PX } from "../src/engine/units";
 import { Vec2 } from "../src/engine/vec2";
 import { worldPlacement } from "../src/level/buildBodies";
-import { DECOR_DEPTH } from "../src/level/decor";
-import { loadSchema } from "../src/level/generatorParams";
 import {
   isCollisionObject,
-  isGeometryObject,
   scaleLevelData,
   type LevelBodyData,
   type RawLevelData,
@@ -101,22 +98,14 @@ function outlines(b: LevelBodyData): [number, number][][] {
   return out;
 }
 
-// How thick the body is DRAWN, which is what a dressing is modelled to: its
-// first geometry object's depth - a generated boulder's being its generator's
-// `depth` parameter, or the schema's default when the level states none -
-// else the extruder's default for a body that collides.
+// How thick the body IS: the thickest of its pieces (`CollisionObjectData.
+// thickness`, what its mass is computed from), which is also what a level with
+// no scene draws it as (`BodyVisual`'s grey box). The guide extrudes one depth
+// per body, so a body of several thicknesses is guided at its thickest.
 function depthOf(b: LevelBodyData): number {
-  for (const o of b.objects) {
-    if (!isGeometryObject(o)) continue;
-    if (o.generator?.kind === "boulder") {
-      const authored = o.generator.params?.["depth"];
-      if (typeof authored === "number") return authored;
-      const spec = loadSchema("boulder")?.params.find((p) => p.key === "depth");
-      if (typeof spec?.default === "number") return spec.default;
-    }
-    if (o.depth !== undefined) return o.depth;
-  }
-  return b.objects.some(isCollisionObject) ? DEFAULT_THICKNESS : DECOR_DEPTH;
+  let depth = 0;
+  for (const o of b.objects) if (isCollisionObject(o)) depth = Math.max(depth, o.thickness ?? DEFAULT_THICKNESS);
+  return depth;
 }
 
 const SOLID_KINDS = new Set(["static", "rigid"]);

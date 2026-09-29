@@ -39,7 +39,7 @@ asset IN OUT:
 texture IN OUT MAP:
     cd rope && bun run assets:optimize-texture {{IN}} {{OUT}} --map {{MAP}} && bun run assets:publish {{OUT}}
 
-# Pull the props, textures and generated meshes this checkout's manifests name into rope/public/.
+# Pull the props, textures and Blender scenes this checkout's manifests name into rope/public/.
 assets:
     cd rope && bun run assets:fetch
 
@@ -49,14 +49,12 @@ assets:
 sources:
     cd rope && bun run assets:fetch-sources
 
-# Publish the generated meshes (rocks, mushroom patches) the levels name to the
-# asset release and pin them in rope/src/render3d/generatedAssets.json. Run it
-# after generating, then commit that file with the level. Also uploads the
-# pictures uploaded in the editor (pinned in rope/src/render3d/imageAssets.json),
-# the Blender scenes the levels name (rope/src/render3d/sceneAssets.json) and
-# those scenes' sources (rope/scripts/sceneSources.json).
+# Publish the Blender scenes the levels name to the asset release and pin them in
+# rope/src/render3d/sceneAssets.json, and those scenes' sources (their .blend
+# files, pinned in rope/scripts/sceneSources.json). Run it after `just scene`,
+# then commit the pins with the level.
 publish:
-    cd rope && bun run assets:publish-generated && bun run assets:publish-images && bun run assets:publish-scenes && bun run assets:publish-sources
+    cd rope && bun run assets:publish-scenes && bun run assets:publish-sources
 
 # Export a level's Blender scene (rope/assets-src/scenes/<scene>.blend, the
 # level's `scene`) into rope/public/scenes/<scene>/ and report what it dressed.

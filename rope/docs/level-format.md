@@ -57,70 +57,33 @@ The editor carries it through `EdModel.meta` and offers it as the **Level** pane
 
 A body may be the level's **finish line**: `kind: "finish"`, the region the player crosses to complete the level - see [**The finish line**](levels.md#the-finish-line).
 A KIND rather than a flag, because it is what the body is: a `finish` body builds an `Area2D` and nothing else, exactly as a `killzone` does, and there is no body a finish line and a wall could both be pieces of (`isAreaKind`).
-The gantry that marks it is an ordinary geometry object on the same body (`mesh: "finish-line"`), so what is drawn and what is crossed are one thing to place.
+The gantry that marks it is the body's dressing in the level's Blender scene (an object named like the body), so what is drawn and what is crossed still move together.
 
 A body may also state what it takes to DESTROY it: **`breakForce`** (newtons) and **`durability`** (hits), the breakable pair - see [**Breakable geometry**](breakable.md).
 Both are stated in the sim's own units and `scaleLevelData` leaves them alone, for the reason `drag` is left alone: the file's lengths are pixels because the editor draws in pixels, and neither a force nor a count is a length.
 
-A rock body may carry **`rockSeed`**, an integer seed for its [generated rock](rocks.md): absent is 0, the rock every body was generated with before the field.
-Only the rock generator reads it, and it changes every random choice in that body's rock, so an author can ask for another set of boulders without touching the outline.
-It is in the rock hash, so changing it marks the body stale until the rocks are regenerated; it is dimensionless and `scaleLevelData` passes it through untouched.
-The editor writes it only when it is nonzero, so a level that never sets one saves byte-identically.
-
 A collision object's shape may be a **`belt`**: `{ kind: "belt", wheels: [{ x, y, r }, ...], thickness, speed }`, a conveyor - see [**Conveyor belts**](conveyors.md).
 Each wheel is a centre in the object's frame and the WHEEL's own radius; `wheels[0]` is at `(0, 0)`, the object's own origin, and is written out anyway because it carries a radius.
 There are two or more, and every one must lie on the convex hull of the discs of radius `r + thickness`: the band wraps the outside of all of them.
-`thickness` is the band's depth in the plane, `> 0`, so the running surface round each wheel is at `r + thickness`; how wide the band is across the pulleys is the geometry twin's `depth`, a look.
+`thickness` is the band's depth in the plane, `> 0`, so the running surface round each wheel is at `r + thickness`.
 `speed` is one signed number whose sign is the direction (positive turns the loop clockwise on screen).
 Every field is a length or a length per second, so `scaleLevelData` scales them all; a belt builds only on a `static` body that is not a mover, and fails the build anywhere else, as it does for a wheel inside the hull, a disc inside another or a zero thickness, naming the wheel.
-A geometry object may carry a `belt` shape too: it draws the band as its own ring, with its `texture` scrolling at its own `speed` (the flat `color` fill keeps a ring of cleats instead; see [**Conveyor belts**](render3d.md#conveyor-belts)), and in the editor `+ Belt` draws the collision object and `Add geometry` gives it its matched twin, as for any shape.
+A belt also carries its band's LOOK (`BeltLook`), because the game draws the band rather than the level's Blender scene - its surface moves (see [**Conveyor belts**](render3d.md#conveyor-belts)):
+**`width`**, how wide the band is across the pulleys (a length, absent `DEFAULT_THICKNESS`); **`texture`**, the surface it wears, whose pattern scrolls at `speed` (the reserved `"color"` is a flat fill of **`color`** and carries a ring of cleats instead); and **`tileScale`**, how large it wears the texture, a multiple of the texture's own size and so not a length.
+Until 2026-09-29 these were a geometry object's, the belt's matched twin; `withoutLook` moves them onto the shape when a file still has one.
 There is no retired two-roller form: nothing committed ever used it, so it was replaced rather than folded.
 `levels/belt-test.json` (`?level=TEST_BELT`) is the sandbox.
 
-A geometry object that becomes a [generated rock](rocks.md) may state the rock's **taper**: **`taperStart`** and **`taperAngle`**, read by the rock generator and by nothing else.
-`taperStart` is how far in FRONT of the object's own plane (its `z`) the taper begins, a length (pixels on disk, metres in the sim, scaled by `scaleLevelData` like `depth`); behind it the rock's side walls stand exactly on the outline, and from it forward the surface leans inward.
-Absent is 0: the taper begins at the gameplay plane, the line the ball travels.
-`taperAngle` is how far that surface leans in from the outline's wall, in degrees, dimensionless and passed through scaling untouched: 0 (or absent) is no taper at all, a straight extrusion of the outline; 45 is a 45-degree chamfer; 90 is a flat top at `taperStart`.
-The reader clamps it to 0..90.
-Both are in the rock's hash, so changing either marks the body stale.
-The object's `bevel` is the flat extrusion's chamfer and nothing else: the rock pipeline no longer reads it.
+A **water** body carries its slab's placement through z, since water is drawn by the game rather than by the Blender scene (the current moves its surface): **`waterZ`**, the slab's middle off the gameplay plane (+ toward the camera, absent 0), and **`waterDepth`**, its extent through z (absent `DEFAULT_WATER_DEPTH`).
+Both are lengths and scale; its tint is the body's `color`.
 
-A geometry object whose mesh is **generated** (a boulder fitted to an outline, or a patch of mushrooms grown on another object's surface; see [plans/visuals-workspace.md](../plans/visuals-workspace.md)) carries a **`generator`** block saying what it is generated from:
-
-```json
-"generator": {
-  "kind": "boulder",
-  "version": 1,
-  "params": { "depth": 120, "weathering": 0.5 },
-  "patch": { "host": 2, "points": [{ "x": -20, "y": 10, "z": 3 }], "facing": { "x": 0, "y": -0.1047, "z": 0.9945 } }
-}
-```
-
-- `kind` is `"boulder"` or `"mushrooms"`, and `version` is the version of that generator's parameter schema (`tools/blender/<kind>/params.json`).
-- `params` holds only the parameters that differ from the schema's defaults, and is absent when none do.
-  A parameter whose schema `unit` is `"m"` is a length, so it is pixels on disk and metres in the sim, and `scaleObject` converts it by the schema; every other value (a count, a ratio, a flag, a degree, a colour, a density per square metre) passes through untouched.
-  A key the schema does not know is carried through unscaled rather than dropped, and the generator refuses it.
-  The editor writes `params` back as it loaded them, so a file stating a default keeps stating it; the mesh key strips defaults on its own.
-- `patch` is a mushroom patch's alone: `points` is the loop it was painted inside, in the object's OWN frame (x and y as its shape's vertices are, z off its own `z`), and `host` is the index, in this body's `objects`, of the geometry object it grows on.
-  The loop is in the object's frame rather than the body's because the editor re-origins a body under its objects, and a loop stated in the body's frame would have to be rewritten, through a rotation and so not exactly, every time it did.
-  The editor resolves `host` to an item on load and rewrites it on save from wherever the host then is, so reordering a body cannot leave it naming the wrong object.
-  An index that names no other geometry object loads as a patch with no host (with a warning); the loop is kept, and a patch saved with no host writes no `host`.
-  `facing` is which side of the loop's plane the loop was painted on: a unit vector in the same frame (y down, as the points), the mean of the normals of the faces it was clicked on, written when the loop is closed at a ten-thousandth.
-  It is a direction, so it is NOT scaled px <-> m, and it is part of the mesh key.
-  A patch saved before it was stored has none; the editor then guesses the side from the host's middle, which a loop near a wide face's edge can get wrong.
-- A boulder's other input is the object's own `shape`, so nothing about the outline is stored in the block.
-
-`mesh` is then the key of the generated file, `boulder:<hash>` or `mushrooms:<hash>`, derived from the block and the outline or loop (see [**Generated meshes**](render3d.md#generated-meshes)).
-The object is **stale** when `mesh` is not the key its current content makes; the editor compares, and never regenerates on its own.
-A block with no `mesh` is an object that has never been generated.
-It is appearance and nothing else, like the rest of the object: a regenerated rock is the same rock to the sim.
-A level with no generated object saves byte-identically, which `cli render3d` holds `levels/ball.json` to; the `generator:` cases there hold the block's px/m trip, the host index, the clipboard, the schemas and the key.
-The block is authored in the editor's Visuals workspace (**+ Rock**, **+ Mushrooms** and their panels, [editor-visuals](editor-visuals.md#rocks-and-mushrooms)), and the files it names are made by the dev server's generator service ([generators](generators.md)).
-They are dev-only for now (`public/generated/`, gitignored), so a level holding a generated object draws its stand-in, or nothing for a patch, wherever the file is not.
-A local `vite build` keeps in `dist` only the generated meshes a registered level names (`generatedMeshesInBuild` in `vite.config.ts`), but a deploy builds from a fresh checkout that has none.
+**A level states no look.**
+Until 2026-09-29 a body could carry **geometry objects** (`type: "geometry"`: primitives, meshes from the manifest, image planes, generated boulders and mushroom patches, with their `z`, tilt, texture, taper and `generator` block), and that is how every level was drawn.
+They are retired: a level's look is its Blender scene (see [**Blender scenes**](blender-scenes.md)), and `normalizeLevelData` drops them from any file that still carries them (`withoutLook`), keeping only a water body's slab and a belt's band look (above), and dropping a body left with nothing in it.
+Every file in `levels/` was rewritten in the new form the same day, and bundles recorded before it still load: a body of nothing but geometry objects built no engine body, so no build index moved.
 
 A body may carry a **`name`** (`LevelBodyData.name`): a stable name nothing in the sim reads, which is what the level's Blender scene binds an object to - see [**Blender scenes**](blender-scenes.md).
-The level names that scene once, **`scene`** (`LevelData.scene`, `assets-src/scenes/<scene>.blend`).
+The level names that scene once, **`scene`** (`LevelData.scene`, `assets-src/scenes/<scene>.blend`); a level that names none is drawn as its collision, a grey box of each piece's `thickness`.
 Both are names, so `scaleLevelData` passes them through untouched; the editor offers them on the body panel and the Level panel, and `cli levels` holds a level's body names unique as three spells them (`nodeNameOf`).
 
 A **light object** (`LightObjectData`, `type: "light"`) sits in a body like any other scene object and rides its pose - see [**Light and air**](lighting-and-surfaces.md#light-and-air).

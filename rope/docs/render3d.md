@@ -44,7 +44,6 @@ It sits beside the environment block rather than inside it because `zOffset` is 
 Both resolve to one `SceneLens` (`lensOf` in `space.ts`), which `syncCamera` takes in place of the old bare field of view.
 The far plane is pushed out, never in, when a long lens stands the camera far back, so no default camera changes its depth range.
 Fog is measured from the camera, so moving the camera changes how much fog the gameplay plane takes on.
-Orthographic objects (see [Per-object projection](#per-object-projection)) scale to the framed plane, which is the scale the orthographic camera and the overlay use.
 `cli render3d`'s `lens:` cases assert all of this: the focal-length conversion, an 85 mm lens still framing the plane to a hundredth of a pixel, the z offset moving the correspondence to its own plane (and off z = 0), a 2 m lens not clipping the plane, and the block's px/m and editor round trips.
 
 The two projections agreeing is **asserted, not eyeballed**: `cli render3d` runs three.js's own projection against the 2D transform at five camera placements and through a pan, at the corners of the frame where a wrong dolly distance shows first, and holds them to a hundredth of a view pixel.
@@ -61,7 +60,7 @@ It exists so a host can hold a camera the 2D one cannot describe: the editor's V
 - **The split changed nothing.** `applyPose` keeps the written-out head-on branch, `poseDistance` is `cameraDistance`'s arithmetic operation for operation, and `cli render3d`'s `visuals:` case holds `syncCamera`, `applyPose(poseFromCamera(...))` and the workspace's `headOn` to a verbatim copy of the old `syncCamera` in every number of the camera (position, quaternion, up, near, far, projection and world matrices, frustum) at five placements, three orbits (one past the pitch clamp) and both lenses.
   A one-ulp change to the distance turns it red.
 - Under a pose, `Scene3D` places both cameras from it (the aspect still from the 2D camera's viewport), so `pick`, `unprojectToPlane` through `scene3d.camera` and the gizmo see the view that was drawn.
-  The sun's shadow frustum and the light budget's "nearest the view" follow the pose's target instead of the 2D camera, and `orthoFramedZ` is the target's depth, which is the depth the orthographic camera is sized at.
+  The sun's shadow frustum and the light budget's "nearest the view" follow the pose's target instead of the 2D camera.
 - `unprojectToPlane` takes an optional `z`, the plane that far off the gameplay plane, for guides drawn at an object's own depth.
   Under a free pose the camera can stand behind a plane it is asked about, and that is the null answer.
 
@@ -70,7 +69,7 @@ It exists so a host can hold a camera the 2D one cannot describe: the editor's V
 - `editorLayer`, a group in the scene that survives `setLevel`, is raycast by `pick` (fat lines picked `LINE_PICK_PX` either side) and skipped by `setHighlight` and `meshesOf`.
 - `hitsAt(x, y)` is `pick` with three's whole intersection kept, nearest first; `pickSurface(x, y, accept)` answers the nearest hit with a face whose tag `accept` takes, as a world point and a world normal; `meshesOf(tag)` lists every non-instanced mesh drawn for a tag.
   All three are ported from the fork (karin_website `381b923`), including its fix of `pick` measuring depth by `hit.point.sub(...)`, which rewrote the hit point in place.
-  A hit on something that is not a mesh (a guide's sprite: a corner handle, a light's icon) is kept by both lens passes: the split tested `mesh.isMesh && ...`, which is `undefined` for a sprite and so unequal to either pass's lens, and until 2026-09-25 no sprite could be picked at all (found driving the Visuals workspace; the `visuals:` cases raycast the guides directly and could not see it).
+  A hit on something that is not a mesh (a guide's sprite: a corner handle, a light's icon) is kept like any other; until 2026-09-25 a lens test on `mesh.isMesh` dropped every sprite, so no handle could be picked at all (found driving the Visuals workspace; the `visuals:` cases raycast the guides directly and could not see it).
 
 ## The coordinate mapping
 
@@ -88,201 +87,100 @@ three.rotation.z = -body.rot
 The y-negation also mirrors a polygon loop, which is why `extrude.ts` measures the loop's signed area and re-winds it: physics polygons are wound clockwise-on-screen with y down (see [**Shapes**](physics-foundations.md#shapes)), and `ExtrudeGeometry` wants counter-clockwise in its own frame for the front cap to face the camera.
 That happens to be what the negation produces, which is a coincidence worth stating rather than relying on - `cli render3d` asserts the cap's normals.
 
-## Nothing draws a collision shape but a geometry object
+## What the scene draws
 
-A collision object is what a body is **made of**; a geometry object is what it **looks like**; and a body with no geometry object is drawn by nothing at all - a solid, invisible wall, which is a thing a level may want.
-They used to be one authored thing: a collision shape drew itself whenever nobody said otherwise, which meant there was no way to say "this collides differently from how it looks" without also saying how it looks, and every question about appearance had to be asked of a shape that had opinions about mass.
+**A level's look is its Blender scene, and the level itself draws almost nothing** (see [blender-scenes](blender-scenes.md)).
+Since 2026-09-29 the level format has no geometry objects: a collision object is what a body is made of, and what it looks like is whatever object in the level's scene carries the body's `name`.
+`BodyVisual` (`render3d/bodyVisuals.ts`) is the ONE class for every body, and what it builds is only what a mesh cannot be:
 
-**AND IT IS DECOUPLED IN BOTH DIRECTIONS.** A geometry object carries its own `shape` and its own placement, always, and nothing about what is drawn is read off a collision object - not the form, not the position, not the rotation, not the depth, not the surface.
-A primitive nudged 10 cm left, turned 5° and made twice as wide moves, turns and grows on screen while the body goes on colliding exactly as it did.
+- **Water** (`render3d/water.ts`), whose surface the current runs across; its slab is the body's `waterZ`/`waterDepth` and its tint the body's `color`.
+- **A conveyor's band** (see [Conveyor belts](#conveyor-belts)), built from the belt collision object itself.
+- **The body's lights** (see [lighting-and-surfaces](lighting-and-surfaces.md)).
+- In a level that names **no scene**, a **grey box**: every collision piece of a body that is not an area, extruded through its `thickness` (default `DEFAULT_THICKNESS`) and filled with the body's `color` as a flat surface (`texture: "color"`).
+  It is derived and never authored, and it is what a level with no look is seen by (the test levels, a level being blocked out).
+- A body the **sim spawned** (a sandbox rock, the hook) extrudes its own shapes, scene or not.
 
-It was not always: a geometry object with no shape used to draw the body's collision outlines, which is how a wall wore brick without restating its outline and what every migrated body was given.
-The saving was real and the cost was that the two were not actually separate things - the geometry object's own `x`, `y`, `rot`, `w` and `h` were **dead fields on the commonest object in every level**, silently overridden by the shape it was standing in for, and "this collides differently from how it looks" was still unsayable for the one case (a different SIZE or PLACE) an author reaches for first.
+In a level that names a scene, a body the scene does not dress draws nothing: an invisible wall stays invisible, and `just scene` reports the names with no object behind them.
 
-The old default is still written down, twice, and both halves state the outline rather than borrowing it:
-
-- `withGeometryPrimitives` (`levelFormat.ts`) gives a body converted from a **legacy flat entry** one primitive per collision object, each carrying that piece's shape, placement, `thickness` as its `depth` and `material` as its `texture`. That is the only form the old default was ever authored in, and `levelData.ts` still arrives that way from the Godot extractor.
-- `scripts/migrate-primitives.ts` did the same thing **once, on disk**, to the levels already in the nested form (`levels/*.json`: 159 dressings became primitives). It inverts the retired `outlineDressings` pairing, so a compound body dressed by one geometry object gets one primitive per piece, and it is kept because it is the record of what those files were.
-
-Both are pixel-identical by construction, and the second is why there is no load-time migration for the nested form at all: a file says what it draws, and the loader does not edit it on the way past.
-
-"No geometry object **at all**" is the load-bearing half of the legacy one. Any geometry object is the body saying how it looks, and that answer stands: a lamp whose collision box carries an authored mesh looks like the lamp, and twinning it too extrudes a grey brick inside the fitting - visible in play, invisible in the editor, and exactly the kind of thing a migration must never invent.
-It is idempotent because it has to be - the legacy path is reached by any file still carrying retired panels or lights.
-
-The editor holds the same line at the other end: **Add geometry** on a selected collision shape makes the primitive that draws it (`addGeometryFor`), copying the same five things `primitiveOf` copies, and a draw alone still produces a collision object and nothing else.
-The look fields sit on the geometry panel alone; on a collision shape they edited a value `toLevelData` has never written for a collision object, which is a dial connected to nothing.
-
-What this costs, stated plainly because it is the trade the decoupling makes: **a wall widened after it is dressed is widened twice** - there is no longer a single edit that silently means both.
-The fix for when that bites is the **matched-outline link**, and it is an editor feature rather than a fallback in the format, which is what keeps the decoupling honest.
-`GeometryObjectData.matchCollision` marks a primitive as MIRRORING a collision object in its own body, and the editor keeps the two outlines - `pos`, `rot` and `shape` - equal in **both directions** (`syncMatchedOutlines`, run from `markDirty` so every edit path flows through it without knowing the link exists): resize, move or turn either and the other follows.
-The outline is still stated in full on both objects - the game and every loader read a matched file exactly as an unmatched one - and the partner is not named on disk: the editor re-finds the collision object with the identical outline at load, which the link's own invariant guarantees exists, so there is no index to go stale when a body's objects are reordered.
-A hand-edited file whose halves have drifted snaps the look back onto the collision shape when the body has one collision object (the collision outline is what the level plays as), and drops the link rather than guessing when it has several.
-**Add geometry** creates its twin already matched, since starting in step is what "give this shape a look" almost always wants; the `match collision` checkbox on the geometry panel is where the link is dropped to diverge the two on purpose, and ticking it back snaps the geometry onto the collision shape.
-A matched pair follows its collision partner through **Ctrl+Shift+G** the way an anchor follows its shape - the pair is one authored thing, and a gesture about bodies must not break the link as a side effect.
-`cli render3d`'s `matchedOutline` cases are the detectors, because none of this is visible in a picture: a level renders identically with or without the link, so a save that drops the flag or a sync that stops propagating is exactly the double-edit pain back again, behind a checkbox claiming otherwise.
-
-A body is a `THREE.Group` carrying the interpolated pose, with one child per collision shape at that piece's `localOffset`/`localRotation` - rigid within the body, so written **once** at build.
+A body is a `THREE.Group` carrying the interpolated pose, with one child per drawn piece at that piece's placement - rigid within the body, so written **once** at build.
 The per-frame sync is therefore two writes per body into vectors it already owns; chain links go through one `InstancedMesh` with `count` set per frame rather than per-link `Mesh` churn.
+A body that built no engine body (one with no collision object: a lone light) stands at its authored transform, and `sync` has nothing to do.
+Each piece carries the collision object it was built from as its pick tag (`pickTagOf`), and a scene's dressing node carries its body's first object, so a raycast in the editor answers with something the editor can act on.
 
 Two rules are inherited from elsewhere rather than invented here:
 
-- A **code-built circle is a sphere and an authored one is a disc**, which is the same split `lib/shapeGeometry.ts` makes about mass (`computeMass` versus `prismMass`). Drawing them by the rule they are weighed by is what stops a 4 cm hook being drawn as a 20 cm slab.
-- A geometry object's `depth` is its own, and the migration seeded it from the collision object's **`thickness`** - so a migrated body is as thick as it weighs, and stays that way only for as long as an author wants it to. `thickness` is what a piece's MASS is computed from and is never read for the look again.
+- A **code-built circle is a sphere and an authored one is a disc** (a cylinder), which is the same split `lib/shapeGeometry.ts` makes about mass (`computeMass` versus `prismMass`).
+  Drawing them by the rule they are weighed by is what stops a 4 cm hook being drawn as a 20 cm slab.
+- The grey box is as thick as the piece **weighs**: `thickness` is what a piece's mass is computed from, and it is the only depth a level states.
 
-Authored colours are kept, but as a **tint with a brightness floor**: the levels were authored for a flat renderer where a body's colour *is* its appearance and most of them are near-black greys, so multiplying a stone texture by `#000000` leaves a hole where a wall should be. The hue is kept exactly and only the lightness is remapped into `TINT_FLOOR..1`, which preserves the authored ordering while leaving every surface enough albedo to show its grain and respond to the sun.
+A belt's authored colour is kept as a **tint with a brightness floor** over a generated surface: colours were authored for a flat renderer where a colour *is* the appearance and most of them are near-black greys, so multiplying a texture by `#000000` leaves a hole.
+The hue is kept exactly and only the lightness is remapped into `TINT_FLOOR..1`.
+A flat fill (`"color"`) wears its colour exactly, and an authored set wears none.
+
+An **extruded solid is contained by the outline it states.**
+Three's bevel runs from the caps *outward*, so a 2 cm bevel put every drawn body 2 cm proud of its own shape on all four sides - a floor slab taller than the collision box the ball rests on, seen as the ball sinking into the ground.
+`bevelOffset: -bevelSize` makes it a chamfer off the outline instead, and `cli render3d` asserts the bounding box against the authored size *with the bevel on*.
 
 Areas stay on the 2D overlay in both modes - a killzone's skulls and a force area's arrows are flat marks on a region of *space* (see [**Area glyphs**](areas-and-friction.md#area-glyphs), and "pass-through geometry must read as pass-through" in `docs/game-design.md`).
-Hook-only bodies do **not**: they extrude a quarter of a metre behind the plane, and in 3D that setback is the whole cue, so the grate lattice is drawn in 2D mode only rather than stamped flat over a body the scene has already put behind the level.
+Hook-only bodies do **not**: in a level with no scene their grey box sits a quarter of a metre behind the plane, and in 3D that setback is the whole cue, so the grate lattice is drawn in 2D mode only (a scene puts their dressing wherever Blender does).
 
 ## Bodies and scene objects
 
-A level is a list of **bodies**, and a body is a list of **scene objects**: a collision shape, a piece of 3D geometry, a light, or a chain **anchor**. Everything a body has exactly one of - what it collides as, its fill, its friction, a force area's magnitude - lives on the body; everything it may have several of lives on its objects, placed in the body's own frame.
+A level is a list of **bodies**, and a body is a list of **scene objects**: a collision shape, a light, or a chain **anchor**.
+Everything a body has exactly one of - what it collides as, its fill, its friction, a force area's magnitude, its `name` - lives on the body; everything it may have several of lives on its objects, placed in the body's own frame.
 
 That shape replaced three separate mechanisms at once, and each of them was working around the same missing thing:
 
 - A **compound body** was a `group` STRING TAG on several flat entries, matched by name at load. It is now one body with several collision objects, so nothing has to agree about a tag and the properties a body has one of cannot be authored several times and then quietly collapsed onto the first member's (`syncGroupProps` is gone with it, and the editor's own "grouping" with it: an item carries the body it is IN, always, so "ungrouped" stopped being a state).
-- [**Decoration**](editor-model.md#decoration) was `collision: false` on a body-shaped entry - a shape that had to carry, and then ignore, every physics field. It is now a body with a geometry object and no collision object, so there is nothing to ignore.
+- **Decoration** was `collision: false` on a body-shaped entry, then a body with a geometry object and no collision object; now it is not in the level at all, since the look is the scene's.
 - A **light** was its own top-level list with no parent, so it could not ride anything (see [**Light and air**](lighting-and-surfaces.md#light-and-air)).
 
-The body's **authored** frame and its **engine** frame are deliberately different points. The engine origin has to be the collision objects' combined centre of mass - every lever arm in the engine is measured from `globalPosition` - and it moves as pieces are added; the authored one has to stay put, or every offset in a body would shift whenever a piece was added to it. `buildLevelBodies` absorbs the difference once, at load (`BuiltBody.origin`), which is the same job the retired `resolveDecor` did for decoration and `buildSceneChains` still does for chain anchors.
-
-A **geometry object** is the choice between the two ways a thing gets a look:
-
-- `kind: "primitive"` (or absent) draws its own `shape` as a solid: a **rect is a rectangular prism**, a **circle is a cylinder** (three's own lathe rather than a 24-gon extrusion, so a barrel's highlight travels round it smoothly) and a polygon is that outline extruded. `depth`, `bevel`, `texture` and `tileScale` are its own; `depth` defaults to `DEFAULT_THICKNESS` on a body that collides and `DECOR_DEPTH` on one that does not, and `bevel` to none.
-- `kind: "mesh"` replaces it with a named **GLB prop** from the manifest, placed by the object's own `x`/`y`/`rot` plus `z`, `rotX`, `rotY` and a dimensionless `scale`. It keeps the materials its own file carries **unless** the object names a `texture`, in which case it wears that instead - which is what lets a bare, geometry-only export (~20 KB) be dressed as the same stone the walls are made of, and what makes "a GLB **or** a primitive" the real choice rather than "a GLB or a textured primitive".
-
-**Out of the plane, both kinds tip the same way.**
-`rotX`/`rotY` turn the drawn thing inside its piece - a prop's holder, an extrusion itself - about the object's own origin, and since an extrusion is built centred on z the pivot is the solid's middle rather than its back face: a rect canted about x is a ramp hinged on itself.
-It is a look and nothing more, like every other field on the object: the body collides with the outline its collision objects state, in the plane, and the 2D renderer draws that outline face on.
-A surface the ball can actually run up is `rot` on a collision shape; this is what makes a panel read as one seen slightly from the side.
-
-There is deliberately no third answer for "drawn by nothing": a body draws its geometry objects and nothing else, so an invisible wall is a body with **no geometry object**, which is also what an editor draw produces before anything dresses it.
-A primitive with no `shape` at all draws the same unit placeholder an unfetched prop does - visible and obviously wrong, rather than silently absent.
-
-`drawnObjects` (`render3d/bodyVisuals.ts`) is the whole rule and is one line - a body's geometry objects, in authored order - and it is exported so the claim can be checked without a GPU, a canvas or a DOM: a collision object never appears in it, however bare the body.
-
-The **2D** renderer draws the other half - a body's collision shapes - so it must not also fill the primitive stating the same outline in the same place, which would lay the same colour down twice and darken every wall by its own opacity.
-`collectDecor` is where that is decided: a form on a colliding body reaches the 2D pass only if it is **off that body's plane** (a backdrop welded into a swinging crate, which is what a welded `z` means), and a body that collides with nothing is drawn whatever its depth, nothing else in that view standing for it at all.
-The 3D renderer needs no such rule, since it never draws a collision shape.
-
-An **extruded solid is contained by the outline it states.** Three's bevel runs from the caps *outward*, so the old 2 cm default put every drawn body 2 cm proud of its own shape on all four sides - a floor slab taller than the collision box the ball rests on, seen as the ball sinking into the ground, and invisible to every check here because the sim was right throughout. `bevelOffset: -bevelSize` makes it a chamfer off the outline instead, and `cli render3d` asserts the bounding box against the authored size *with the bevel on*, which is the case the old size assertions could not make (both asked for `bevel: 0`).
-
-`mountVisual` (`render3d/bodyVisuals.ts`) is the single place that choice is cashed out, and `BodyVisual` is now the ONE class for every body - a wall, a swinging crate, a backdrop 20 m behind the plane and a lamp with no fitting are all a body with objects in it. What used to be a second class for decoration is the case where the body built no engine body: its root stands at the authored transform instead of tracking one, and `sync` has nothing to do.
+The body's **authored** frame and its **engine** frame are deliberately different points.
+The engine origin has to be the collision objects' combined centre of mass - every lever arm in the engine is measured from `globalPosition` - and it moves as pieces are added; the authored one has to stay put, or every offset in a body would shift whenever a piece was added to it.
+`buildLevelBodies` absorbs the difference once, at load (`BuiltBody.origin`), which is the same job `buildSceneChains` does for chain anchors and `dressScene` for a scene's bound nodes.
 
 `material` and `thickness` stay **per collision object**, which is the one property a body does not have just one of: its mass, centre of mass and inertia are sums over its pieces, so a stone head on a wooden shaft is exactly what those sums are for.
 
 Every length goes through `scaleObject` both ways.
 Forgetting one is silent (the editor rewrites the whole file every 750 ms, so a dropped field is gone from disk before anyone notices it was read), which is why `cli render3d` asserts both round trips: the format's px → m → px, and the editor's `modelFromDisk`/`modelToDisk`, which goes through a different shape entirely. Both are compared over **flattened** placements rather than bytes, because a body's transform and its objects' placements are two halves of one answer and the editor legitimately re-origins a body onto its first object when it saves; a byte comparison would read that as a lost field.
 
-**The retired flat form is still an input**, and permanently: the Godot extractor writes it, so `levelData.ts` arrives that way. `normalizeLevelData` folds every retired form - the flat entries, the `impermeable` kind, the `backgrounds` list and the top-level `lights` list - into this one, inside `scaleLevelData`, which is the one gate a level cannot reach the sim or the editor without passing through. It is **bit-identical by construction**: a migrated body's own origin is (0, 0, 0) and its objects keep the world placements the flat entries carried, so the centre-of-mass arithmetic reads exactly the numbers it read before, and a group's body is emitted where its first member sat so `World.add` stamps the same build index. The whole committed bundle corpus replays byte-for-byte across the change, which is the test that this is a re-shaping and not a rewrite.
-
-## Per-object projection
-
-A geometry object may be drawn through an **orthographic** lens inside a scene drawn through the perspective one: `GeometryObjectData.projection`, `"perspective"` when absent, and the `lens` picker on the editor's geometry panel.
-An orthographic object has no perspective divide, so it keeps its size at every depth, shows none of its side faces head on, and does not parallax as the camera pans.
-The two lenses agree exactly on the gameplay plane, so an object at `z = 0` only looks different where its extrusion leaves the plane.
-
-It is **not a second camera and a second pass**.
-A perspective depth buffer is hyperbolic and an orthographic one is linear, so two passes cannot sort against each other honestly, and every light, shadow and fog term would have to be kept in step across both.
-Instead the object is drawn through the same camera, wearing an orthographic twin of its material (`render3d/projection.ts`) whose vertex shader changes one line: before the projection matrix, the view-space `xy` is scaled by `-z_view / plane`, where `plane` is the distance along the view axis to the framed plane (`z = 0`, or the level's camera `zOffset`, passed in the shared `orthoFramedZ` uniform that `Scene3D.render` writes before each draw).
-That cancels the perspective divide, so each vertex lands exactly where the editor's orthographic camera would put it.
-The depth it writes is still the true perspective depth, so it sorts against every other object by where it really is.
-
-Everything except the screen position is still the object's real position: `mvPosition` itself is untouched, so lighting, the shadow lookup and fog read the authored placement.
-The shadow pass uses three's own depth materials, which are never patched, so **an orthographic object casts the shadow its real position throws**, and that shadow is not under what is drawn if the object sits off the plane.
-Under the editor's orthographic camera the patch does nothing (it tests three's `isOrthographic`), because the whole scene is already orthographic.
-
-The rest follows from that:
-
-- Twins are cached one per source material and share its program cache key with `|ortho` appended, so a hundred orthographic bricks compile one program.
-- Orthographic meshes are not frustum-culled, because culling tests the true bounds against the perspective frustum, and in front of the plane that frustum is narrower than the one the mesh is drawn through.
-- `Scene3D.pick` casts a second ray through the orthographic camera, which is synced to the same view every frame, for objects drawn orthographically, and merges the hits by view depth.
-- `cloneWithPatches` is the clone that keeps `onBeforeCompile` and `customProgramCacheKey`, which three's own `clone()` drops.
-  The editor's selection highlight uses it, so a selected orthographic object stays where it is drawn.
-  It also fixes a highlighted object losing its shader patches (water, rocks), which it did before.
-
-`cli render3d`'s `format:` and `render:` projection cases assert the field survives the px-to-m gate and an editor save, that the twin is shared and keyed apart, that its hook really rewrites three's `project_vertex` chunk (a renamed chunk would be a `replace` matching nothing, and the object would silently draw in perspective), and that the highlight keeps it.
-What they cannot see is the picture, so the shader was checked with a `cli shot --3d` of a probe level: pairs of boxes at z = -6, -2, 0 and +1.5 m, one of each lens.
+**The retired forms are still an input**, and permanently: the Godot extractor writes the flat form, so `levelData.ts` arrives that way, and every bundle recorded before 2026-09-29 embeds a level with geometry objects in it.
+`normalizeLevelData` folds every retired form - the flat entries, the `impermeable` kind, the `backgrounds` list, the top-level `lights` list and the geometry objects (`withoutLook`) - into this one, inside `scaleLevelData`, which is the one gate a level cannot reach the sim or the editor without passing through.
+It is **bit-identical by construction**: a migrated body's own origin is (0, 0, 0) and its objects keep the world placements the flat entries carried, so the centre-of-mass arithmetic reads exactly the numbers it read before, and a group's body is emitted where its first member sat so `World.add` stamps the same build index.
+A body that held nothing but geometry objects is dropped, and since such a body never built an engine body, no build index moves.
 
 ## Conveyor belts
 
-A geometry object whose shape is a `belt` (see [**Conveyor belts**](conveyors.md)) draws its BAND as its own geometry (`BeltRing`, `render3d/beltTread.ts`), not an extruded outline: the extruder's side-wall UVs are anchored in the object's own x and y so a wall's texture meets the cap's, which on a loop runs u along the runs and turns it into the depth axis wherever the outline goes vertical, and a belt's running surface wants u by ARC LENGTH.
-The ring is an outer wall on the loop, an inner wall `thickness` inside it, and front and back caps (the band's edge) at `±depth / 2`, the object's `depth` being the band's width across the pulleys; each face has its own normals, so the edges are creases and no two faces share a plane.
+A collision object whose shape is a `belt` (see [**Conveyor belts**](conveyors.md)) draws its BAND as its own geometry (`BeltRing`, `render3d/beltTread.ts`), in every level, scene or not: the band's surface moves, which a scene's mesh cannot.
+The band's look is on the belt shape itself (`BeltLook`: `width`, `texture`, `color`, `tileScale`), because the belt is the one thing that draws it.
+It is not an extruded outline: the extruder's side-wall UVs are anchored in the object's own x and y so a wall's texture meets the cap's, which on a loop runs u along the runs and turns it into the depth axis wherever the outline goes vertical, and a belt's running surface wants u by ARC LENGTH.
+The ring is an outer wall on the loop, an inner wall `thickness` inside it, and front and back caps (the band's edge) at `±width / 2`; each face has its own normals, so the edges are creases and no two faces share a plane.
 Its UVs are metres, as the extruder's are: `u` is arc length along the outer surface at the rate that makes the surface's repeat (`tileMetres`) the nearest length going round a whole number of times, so there is no seam where `s` wraps and nothing stretches round a wheel, and the caps and the inner wall carry the same `u` as the surface they stand on; `v` runs on round the cross-section, continuous over every rim but the back of the outer wall.
-Inside the band is the hollow: nothing is drawn at the wheels, which an author dresses with props of their own.
+Inside the band is the hollow: nothing is drawn at the wheels, which the level's scene dresses.
 
 What says the belt runs is its surface.
 A textured band **scrolls**: every frame its `u` is `(s - speed · t) · rate` with `t` the SIM clock, `(frame - 1 + alpha) / 60` (`beltRenderTime`, the instant the bodies are interpolated to), so a replay shows the same belt at the same frame and a paused game shows it standing.
 The scroll is written into the ring's own UV buffer rather than a map's `offset`, because materials are shared through the cache in `assets.ts` and an authored set's maps are swapped into that shared material as they arrive; a belt whose phase has not changed skips the write.
 An UNTEXTURED band - the flat fill, `texture: "color"` - has nothing to scroll and keeps its **cleats**: a ring of thin pale slats (one `InstancedMesh` per belt) set 4 mm inside the surface (or a fifth of the band, if less), through the whole width and 4 mm out past both caps, so what shows is a slat end on the rim of the front cap, and a slat never reaches the band's inner face.
-Both run at the geometry object's own `speed`; `Scene3DLevel.frame` is how the clock reaches the scene, and a host with none (the editor's preview) draws the belts still.
+Both run at the belt's `speed`; `Scene3DLevel.frame` is how the clock reaches the scene, and a host with none (the editor's preview) draws the belts still.
 Cleat placement allocates nothing (`beltFrameAt` is `beltPointAt`/`beltTangentAt` written into a scratch record, and `cli render3d` holds the two to agree).
 `cli render3d`'s `belt:` cases hold the ring's walls, caps and normals against the loop, `u` against arc length with a whole number of repeats, and the scroll's rate and sign; `cli shot --3d --frames` on `TEST_BELT` is the evidence for how it looks.
-
-The first cut drew the extruded loop and cleats only, rejecting a scrolled texture because the extruder's UVs could not carry one and because the side wall is seen nearly edge-on.
-The ring answers the first; the second turned out to matter less than it read, because the camera sees the front cap face on and the inner wall through the hollow, and both carry the moving `u`.
-
-## Image planes
-
-A geometry object with `kind: "image"` shows a picture (`image`, a key of `src/render3d/imageAssets.json`) stretched once over the bounds of its shape, as a flat plane with no depth (`mountImage` in `bodyVisuals.ts`).
-It is the painted backdrop: a matte behind the level, placed with the editor's `+ Image`.
-
-It is **unlit, unfogged and not tone-mapped** (`MeshBasicMaterial`, `fog: false`, `toneMapped: false`).
-A painting already carries its light, its haze and its grade; the scene's sun would shade it a second time, the level's fog would haze it a second time, and ACES would crush its darks - the picture on screen would stop being the picture that was painted.
-It casts no shadow, and it blends only when the picture has transparency (`ImageAsset.alpha`).
-
-The object's `color` and `opacity` are **not** read: every decoration writes the editor's 2D fill (half-transparent `#555555` by default), and a picture worn through it comes out grey and see-through.
-
-The picture arrives as a **new mesh** in the grey placeholder's place, as a prop does, rather than as a map written into the material already drawn.
-The editor's selection paints a clone of whatever material a mesh wears when it is selected (`Scene3D.highlightMaterial`), and a plane added and selected in one gesture otherwise went on wearing the grey clone after its picture had landed.
-An unlit material has no emission to light, so its selection is a tint toward the selection colour instead.
 
 ## Blender scenes
 
 A level naming a `scene` is dressed by one GLB exported from `assets-src/scenes/<scene>.blend` (see [blender-scenes](blender-scenes.md)).
-`Scene3D.setLevel` hands `SceneDressing` (`render3d/sceneDressing.ts`) every authored body's name, visual root and rest pose; when the file lands, `dressScene` hangs each node named like a body under that body's root at Blender's pose minus the rest pose, so it is drawn where Blender put it and carried by the body, and adds the rest to the scene as scenery at the identity.
+`Scene3D.setLevel` hands `SceneDressing` (`render3d/sceneDressing.ts`) every authored body's name, visual root, rest pose and whether it collides; when the file lands, `dressScene` hangs each node named like a body under that body's root at Blender's pose minus the rest pose, so it is drawn where Blender put it and carried by the body, and adds the rest to the scene as scenery at the identity.
 Bound nodes carry the body's first object as their pick tag; scenery carries none.
+A bound node is handed to its body (`BodyVisual.adoptDressing`), which gives a body carrying a waking light its own copies of the node's emissive materials for the light to drive.
+A node on a body that collides always casts a shadow; any other node casts only if it is not wholly behind the plane.
 The file is served from `/scenes/<scene>/scene.glb`, cached per page like a prop's, weighted in the preload list by the store's pin or the local `meta.json` (`levelStoredFiles`).
 
-## Generated meshes
-
-A geometry object carrying a `generator` block (see [level-format](level-format.md)) draws a GENERATED mesh: a boulder built from its outline, or a mushroom patch grown on another object, by Python and headless Blender behind the dev server (plans/visuals-workspace.md).
-To the renderer it is an ordinary `kind: "mesh"` object; what differs is where the file comes from.
-
-### Keys and files
-
-The object's `mesh` is the key `<kind>:<hash>`, where `<hash>` is 16 hex digits of 64-bit FNV-1a over a canonical string of everything the generator is given.
-`generatedKey(kind, version, input, params)` in `render3d/generated.ts` makes it, and the same function runs in the browser, in bun and on the dev server:
-
-- The canonical string is the object `{ input, kind, params, version }` with every object's keys sorted, undefined dropped, and every number rounded to a ten-thousandth of its unit (0.1 mm for a length; `-0` prints as `0`).
-  `String` of a double is exactly specified by ECMAScript, so every engine prints the same characters, and the hash is BigInt arithmetic over the UTF-8 bytes; `cli render3d` pins two keys, which node agreed with when they were pinned.
-- `params` is brought to canonical form inside the function (`canonicalParams`: defaults stripped against the current schema, keys sorted), so a parameter written out at its default, a value carrying px/m float noise, or keys in another order make the same key.
-  Changing a default is therefore a schema `version` bump, which is in the key, so every mesh made under the old defaults reads as stale.
-- A boulder's `input` is `{ outline }`: the object's own shape in its own frame, metres, y UP, in the shape's vertex order (`localVertices` with y negated, exactly what the fork's editor sent).
-  That frame is the one `mountVisual` places the GLB in, so the file needs no transform, and moving or turning the object never makes it stale.
-- A mushroom patch's `input` is `{ loop, facing, host }`: the loop in the patch object's own frame (metres, y up, z off its own plane), the side of the loop's plane it was painted on (a unit vector in that frame; absent for a patch saved before it was stored), and the host described by what decides its drawn surface (its mesh key; a primitive's outline or radius, depth, bevel, taper, texture and lens; for a generated host never generated, the key it would be generated under) and its whole frame relative to the patch (`frame`, the top three rows of the affine matrix, with both objects' tilt and scale in it).
-  Moving the patch and its host together changes nothing; moving, tipping or scaling either alone, regenerating the host, or editing the loop makes the patch stale.
-  The triangle soup the generator is handed is collected from the host's drawn meshes at generation time and is not part of the key; the server checks the key against `input`, not against the soup.
-- `editor/visuals/paramSchema.ts` computes an item's input (`generatorInput`), its expected key (`expectedKey`) and `isStale` from the model, so the badge and the job client read one definition.
-
-`generatedMeshAsset(key)` maps a generated key to its file, and `loadMesh` asks it before `MESH_ASSETS`:
-
-```
-public/generated/<kind>/<hash>/mesh.glb    served as /generated/<kind>/<hash>/mesh.glb
-public/generated/<kind>/<hash>/meta.json   { key, kind, version, params, input, bytes, triangles, generatedAt, blender }
-```
-
-A generated file is one prop in its own frame: no node, no scale, no turn, and no `MESH_ASSETS` entry.
-The key carries no size, so the browser fetches it unweighted; the preload list (`levelStoredFiles`, node only) takes `bytes` from the store manifest (`GENERATED_ASSETS`) for a published key and from `meta.json` for one only generated here, both through `render3d/generatedMeta.ts` (kept apart so its `fs` import never reaches the browser), and lists a file with neither at 0 bytes with a warning.
-A key whose file is missing is a failed load like any other, and draws the placeholder.
-The failure stays cached (a missing file is asked for once, not on every rebuild of the editor's scene), except that a GENERATED key's failure is dropped by `forgetFailedMesh(key)` when the service publishes that file, so a mesh generated for a key whose earlier 404 was cached is fetched at the next rebuild rather than staying a stand-in until a reload.
-The placeholder of a generated object is its generator's: a BOULDER with no mesh yet (or one still loading, or missing) stands in as its outline extruded to the block's `depth` and chamfered in toward the camera at `BOULDER_STANDIN_TAPER` (45°), the volume the rock will fill, rather than a 20 cm slab; a MUSHROOM PATCH has none at all, since its rect is only the extent of the surface it grows on and a box of that size would stand over the rock it is on (`mountVisual`, `primitiveGeometry` in `render3d/bodyVisuals.ts`).
-`public/generated/` is gitignored; the meshes the registered levels name are published to the release store and fetched back into the same layout (see [**Generated meshes in the store**](asset-store.md#generated-meshes-in-the-store)).
-A local build copies `public/` into `dist`, and `generatedMeshesInBuild` (`vite.config.ts`) then removes every generated directory no registered level names and every file but `mesh.glb` from the ones kept, so `dist` does not grow with every seed ever tried.
+Retired with the geometry objects on 2026-09-29, and recorded here so they are not rebuilt by accident: **per-object projection** (a geometry object drawn through an orthographic lens inside the perspective scene, by a vertex patch on a twin material), **image planes** (an unlit picture stretched over a shape, `imageAssets.json`), **generated meshes** (boulders and mushroom patches generated behind the dev server and keyed by a hash of their input, `generatedAssets.json`) and the 2D renderer's **decor** layer.
+A painted backdrop, a generated rock or a mushroom patch is now made in Blender (the formations add-on builds rocks with the same boulder generator, [blender-formations](blender-formations.md)).
 
 ## Traps
 
 - **`PX`-sized constants do not survive projection.** A fixed on-screen size written as `<px> * PX` assumes the 2D renderer's uniform transform. Everything like that stays on the overlay, and nothing in the 3D scene may depend on `PIXELS_PER_METER` except through `space.ts`.
-- **`Scene3D` must be instantiable twice** - the game page and the editor both have one - so everything mutable lives on the instance. The `playerRig.ts` module-global pattern is the anti-pattern this is written against. The material cache in `assets.ts` is shared deliberately: it is immutable once built and belongs to no scene. There are two named exceptions. The first is the avatar's own entry (`SurfaceRequest.avatar`), whose fog `avatarSurface.ts` patches; it is shared with nothing but the avatar, and a page draws one (see [**The avatar's own surface**](lighting-and-surfaces.md#the-avatars-own-surface)). The second is a waking body's own copy of each of its surfaces (`SurfaceRequest.instance`, keyed by the body's index in the level), whose `emissiveIntensity` the light rig writes every frame so the cap brightens with its light; only a body carrying a waking light asks for one, so no other level gains a material, and it is keyed by index rather than minted per build so the editor's rebuild on every edit reuses the same entries (see [**Waking lights**](lighting-and-surfaces.md#waking-lights)). A rig hands the authored intensity back when it lets the body go.
+- **`Scene3D` must be instantiable twice** - the game page and the editor both have one - so everything mutable lives on the instance. The `playerRig.ts` module-global pattern is the anti-pattern this is written against. The material cache in `assets.ts` is shared deliberately: it is immutable once built and belongs to no scene. There are two named exceptions. The first is the avatar's own entry (`SurfaceRequest.avatar`), whose fog `avatarSurface.ts` patches; it is shared with nothing but the avatar, and a page draws one (see [**The avatar's own surface**](lighting-and-surfaces.md#the-avatars-own-surface)). The second is outside the cache altogether: a waking body's own copy of each emissive material of its scene dressing (`BodyVisual.adoptDressing`), whose `emissiveIntensity` the light rig writes every frame so the dressing brightens with its light; the body owns and frees the copies, so nothing shared is ever written (see [**Waking lights**](lighting-and-surfaces.md#waking-lights)). A rig hands the authored intensity back when it lets the body go.
 - **Transform sync must not allocate**, and must read `renderPosition/renderRotation(alpha)` only. The debug overlay is the one deliberate exception (it exists to show what the sim believes) and it stays 2D.
 - **Where the chain's links fall is shared code.** `render/chainMetrics.ts` holds the one continuous arc walk both renderers use, because that is the one part of chain drawing that has ever been wrong (`session-1467f`) and two copies of it would drift.

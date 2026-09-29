@@ -99,18 +99,6 @@
             "kind": "circle",
             "r": 170.00000000000003
           }
-        },
-        {
-          "type": "geometry",
-          "kind": "mesh",
-          "mesh": "water-wheel",
-          "shape": {
-            "kind": "circle",
-            "r": 170.00000000000003
-          },
-          "matchCollision": true,
-          "scale": 0.5,
-          "depth": 20
         }
       ]
     },
@@ -126,6 +114,7 @@
       "drag": 5,
       "spill": 400,
       "spillSpeed": 100,
+      "waterDepth": 50,
       "objects": [
         {
           "type": "collision",
@@ -136,19 +125,6 @@
             "w": 1355,
             "h": 90
           }
-        },
-        {
-          "type": "geometry",
-          "x": 327.4999999999999,
-          "y": -340.00000000000006,
-          "shape": {
-            "kind": "rect",
-            "w": 1355,
-            "h": 90
-          },
-          "matchCollision": true,
-          "depth": 50,
-          "texture": "wood"
         }
       ]
     },
@@ -192,41 +168,6 @@
               }
             ]
           }
-        },
-        {
-          "type": "geometry",
-          "shape": {
-            "kind": "poly",
-            "verts": [
-              {
-                "x": 216.00529100529099,
-                "y": 103.95502645502752
-              },
-              {
-                "x": -8.994708994709022,
-                "y": -86.04497354497252
-              },
-              {
-                "x": -213.99470899470904,
-                "y": 93.95502645502751
-              },
-              {
-                "x": -223.99470899470901,
-                "y": 88.95502645502748
-              },
-              {
-                "x": -8.994708994709022,
-                "y": -101.04497354497255
-              },
-              {
-                "x": 226.00529100529099,
-                "y": 98.9550264550275
-              }
-            ]
-          },
-          "matchCollision": true,
-          "depth": 20,
-          "texture": "wood"
         }
       ]
     },
@@ -246,17 +187,6 @@
             "w": 270.0000000000001,
             "h": 690
           }
-        },
-        {
-          "type": "geometry",
-          "shape": {
-            "kind": "rect",
-            "w": 270.0000000000001,
-            "h": 690
-          },
-          "matchCollision": true,
-          "depth": 20,
-          "texture": "dark rock"
         }
       ]
     },
@@ -276,17 +206,6 @@
             "w": 25,
             "h": 560
           }
-        },
-        {
-          "type": "geometry",
-          "shape": {
-            "kind": "rect",
-            "w": 25,
-            "h": 560
-          },
-          "matchCollision": true,
-          "depth": 20,
-          "texture": "wood"
         }
       ]
     },
@@ -316,30 +235,6 @@
             "w": 160.00000000000014,
             "h": 19.99999999999993
           }
-        },
-        {
-          "type": "geometry",
-          "shape": {
-            "kind": "rect",
-            "w": 160.00000000000014,
-            "h": 19.99999999999993
-          },
-          "matchCollision": true,
-          "depth": 20,
-          "texture": "wood"
-        },
-        {
-          "type": "geometry",
-          "x": -4.999999999999716,
-          "y": 44.99999999999993,
-          "shape": {
-            "kind": "rect",
-            "w": 160.00000000000014,
-            "h": 19.99999999999993
-          },
-          "matchCollision": true,
-          "depth": 20,
-          "texture": "wood"
         }
       ]
     },
@@ -359,17 +254,6 @@
             "w": 25,
             "h": 560
           }
-        },
-        {
-          "type": "geometry",
-          "shape": {
-            "kind": "rect",
-            "w": 25,
-            "h": 560
-          },
-          "matchCollision": true,
-          "depth": 20,
-          "texture": "wood"
         }
       ]
     },
@@ -399,30 +283,6 @@
             "w": 160.00000000000014,
             "h": 19.99999999999993
           }
-        },
-        {
-          "type": "geometry",
-          "shape": {
-            "kind": "rect",
-            "w": 160.00000000000014,
-            "h": 19.99999999999993
-          },
-          "matchCollision": true,
-          "depth": 20,
-          "texture": "wood"
-        },
-        {
-          "type": "geometry",
-          "x": -4.999999999999716,
-          "y": 44.99999999999993,
-          "shape": {
-            "kind": "rect",
-            "w": 160.00000000000014,
-            "h": 19.99999999999993
-          },
-          "matchCollision": true,
-          "depth": 20,
-          "texture": "wood"
         }
       ]
     },
@@ -452,26 +312,6 @@
             ]
           },
           "rail": true
-        },
-        {
-          "type": "geometry",
-          "shape": {
-            "kind": "curve",
-            "width": 7.3,
-            "verts": [
-              {
-                "x": -544.9999999999999,
-                "y": -152.50000000000003
-              },
-              {
-                "x": 545.0000000000001,
-                "y": 152.49999999999994
-              }
-            ]
-          },
-          "matchCollision": true,
-          "depth": 20,
-          "texture": "steel"
         }
       ]
     },
@@ -501,31 +341,10 @@
               }
             ],
             "thickness": 5,
-            "speed": -200
+            "speed": -200,
+            "width": 40,
+            "texture": "rubber"
           }
-        },
-        {
-          "type": "geometry",
-          "shape": {
-            "kind": "belt",
-            "wheels": [
-              {
-                "x": 0,
-                "y": 0,
-                "r": 10
-              },
-              {
-                "x": 385,
-                "y": -20.000000000000018,
-                "r": 20
-              }
-            ],
-            "thickness": 5,
-            "speed": -200
-          },
-          "matchCollision": true,
-          "depth": 40,
-          "texture": "rubber"
         }
       ]
     }

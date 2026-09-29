@@ -1,13 +1,11 @@
 // The editor's 3D transform gizmo: the red/green/blue arrows, rings and boxes
 // that move, turn and size an object in the scene rather than on the plane.
 //
-// It exists because the overlay cannot answer the questions a prop asks. The 2D
-// canvas is the gameplay plane seen head on, so it has handles for the two axes
-// that lie in it and no way at all to say "10 cm toward the camera", "tipped 15°
-// about x", or "a bit bigger" about a mesh whose outline is not what is drawn.
-// Those are exactly the fields a level dresses itself with (`EdVisual.offsetZ`,
-// `rotX`, `rotY`, `scale`), and until now every one of them was a number typed
-// into the inspector and checked by looking.
+// It exists because the overlay cannot answer every question an object asks. The
+// 2D canvas is the gameplay plane seen head on, so it has handles for the two
+// axes that lie in it and no way at all to say "10 cm toward the camera" about a
+// light, which is a number otherwise typed into the inspector and checked by
+// looking.
 //
 // It is also the only thing that still works while the view is ORBITED (see
 // `CameraOrbit`), which is the view those fields are judged in: the gizmo is in
@@ -257,9 +255,7 @@ export class EditorGizmo {
     // and BEFORE the "is there a target at all" test rather than after it. Two
     // reasons, and the second is why it is not merely tidier: what a target can
     // record is a property of the target, and an edit can change it without
-    // changing what is selected (the inspector's `collision` tick turns a
-    // collision shape into a geometry object, which gains a rotation about x and
-    // a depth); and asked unconditionally, what is on screen is a pure function
+    // changing what is selected; and asked unconditionally, what is on screen is a pure function
     // of what is selected, so no missed `attach` can leave handles standing over
     // nothing. Every write is guarded on the value actually differing (three's
     // own reactive properties), so a frame that changed nothing costs three

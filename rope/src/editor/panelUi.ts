@@ -220,8 +220,7 @@ function installHelp(): void {
 
 export const PANEL_UI_CSS = `
   /* A name keeps its width and the control beside it gives way (a picker
-     shrinks, see the inspector's own rule); a generator's schema key, which
-     can be longer than the panel, is the exception (ed-gen-label). */
+     shrinks, see the inspector's own rule). */
   .ed-name { flex: none; overflow: hidden; text-overflow: ellipsis; }
   .ed-name.has-help { text-decoration: underline dotted #5b6172; text-underline-offset: 3px;
     cursor: help; }

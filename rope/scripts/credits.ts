@@ -20,7 +20,6 @@ import {
   TEXTURE_ASSETS,
   textureMaps,
 } from "../src/render3d/assets";
-import { IMAGE_ASSETS } from "../src/render3d/images";
 import { SCENE_ASSETS } from "../src/render3d/scenes";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -73,18 +72,6 @@ export function renderCredits(): string {
       lines.push(
         `- **${key}** - "${a.author}", [source](${a.source.split(" ")[0]!}), ${a.license}`,
       );
-    }
-    lines.push("");
-  }
-  lines.push("## Pictures", "");
-  const images = Object.keys(IMAGE_ASSETS).sort();
-  if (images.length === 0) {
-    lines.push("_None yet._", "");
-  } else {
-    for (const key of images) {
-      const a = IMAGE_ASSETS[key]!;
-      const src = a.source.startsWith("http") ? `[source](${a.source.split(" ")[0]!})` : a.source;
-      lines.push(`- **${key}** - "${a.author}", ${src}, ${a.license}`);
     }
     lines.push("");
   }

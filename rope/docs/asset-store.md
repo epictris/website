@@ -1,6 +1,8 @@
 # The asset store
 
-Five kinds of binary: props (`.glb` under `public/meshes/`), authored texture maps (`.webp` under `public/textures/`), the water renderer's raw maps (`public/water/`), captured skies (`.hdr` under `public/hdri/`) and the generated meshes the levels name (`public/generated/`, see [below](#generated-meshes-in-the-store)).
+Five kinds of binary: props (`.glb` under `public/meshes/`), authored texture maps (`.webp` under `public/textures/`), the water renderer's raw maps (`public/water/`), captured skies (`.hdr` under `public/hdri/`) and the levels' Blender scenes (`public/scenes/`, see [below](#blender-scenes-in-the-store)).
+Since 2026-09-29 a level's props and surfaces live in its Blender scene (see [blender-scenes](blender-scenes.md)), so the prop and texture manifests hold only what the GAME draws itself: the ball (`iron-ball`), its iron (`painted steel`), and whatever surface a conveyor band names.
+Every set and prop the levels used to name was pruned then (the release still holds their files, which older commits pin); the pipeline below is still how one is added.
 Every one of those directories is **gitignored**: the bytes live in a permanent GitHub Release (tag `assets`) on this repo and are fetched at build time (`bun run assets:fetch`, run by the Dockerfile before `bun run build`).
 They are the only binaries this tree has - every other surface is generated in code - which is why they carry a process the rest of the project does not need.
 `storedAssets()` (`scripts/assetStore.ts`) flattens all five manifests into one list of files, and the fetch, the budget, the sha check, the basename-collision check and the orphan sweep all iterate **that** rather than a manifest, so no kind can be checked while another quietly is not.
@@ -46,7 +48,7 @@ The rule of thumb the sewer set establishes: **check a prop's triangle count aga
 Typically 5-10× off an unoptimised export, looking identical.
 
 `--center` is the same shape of flag about a prop's **origin**, and it is opt-in and recorded for the same reason.
-`mountVisual` does not recentre a prop, which is deliberate: a pivot at a cage's base or two thirds of the way up a doorway is information about the prop, and a level places it by that point.
+Nothing recentres a prop on load, which is deliberate: a pivot at a cage's base or two thirds of the way up a doorway is information about the prop, and whatever places it places it by that point.
 What that assumes is that the origin is somewhere on the prop at all, and an asset exported out of a level rather than modelled as a prop carries the world coordinates of wherever it stood in that level instead.
 `metal-bars` arrived with its geometry 8.9 m from its own origin, which places as a prop that is most of a room away from where it was put - read as the prop having failed to load rather than as a pivot.
 The flag runs `gltf-transform center --pivot center` into a temp file the optimise then reads, and `center: true` goes in that prop's `MESH_ASSETS` entry beside its sha256: a centred prop and a prop modelled about its own centre are the same file, so without the record the raw cannot be re-optimised into the same asset.
@@ -105,7 +107,7 @@ So a new texture is:
 
 An albedo's `cavity` is taken from the set's **own** `ao` map's raw and channel, so there is nothing to name twice; a set with no AO cannot ask for cracks.
 A set that must stay **photographic** leaves `paint` (and `strokes`) off every map, and `assets:paint` bakes it as a plain optimise.
-`seaside rock` and `quarry wall`, the detail tiles the generated rocks compose in their own material, were that until 2026-09-24; they now record `paint: { brush: 36 }` on every map and no strokes, since the rocks became stylised (see [**Rocks**](rocks.md#the-painted-tiles)).
+`seaside rock` and `quarry wall`, the detail tiles the retired generated rocks composed in their own material, were that until 2026-09-24, and then recorded `paint: { brush: 36 }` on every map and no strokes, since the rocks became stylised.
 The older sets (the `rock-*` family, `moss`, `forest-floor`, `factory-brick`) predate the record and have no `raw`; `assets:paint` names them as not reproducible rather than guessing.
 A set may also be **generated** rather than photographed: `painted steel`, the avatar's oil strokes, is baked by `scripts/bake-strokes.ts` into `assets-src/painted-steel/` (deterministic, so the same script is the same bytes) and from there is an ordinary set with a `raw`, optimised, hashed and published like any other.
 
@@ -141,15 +143,14 @@ Note that the generated file discharges the *record*; a CC-BY asset shipping in 
 
 A grab through `cli shot --3d` **waits for every asset** before it draws (`assetsSettled`), and that is not a convenience: a screenshot that races the loads photographs whichever props and maps happened to have arrived, so the same command produces the placeholder box one run and the real prop the next - evidence of nothing. The game deliberately does not wait, since the placeholder and the generated surface exist precisely to cover that gap.
 
-`cli assets` separates five failures because they have five different fixes: a manifest key with no **file** (usually an unfetched clone, but also what a deleted release asset looks like - in game it draws the grey placeholder, which is deliberate and therefore easy to ship without noticing), a **stale** file whose bytes are not the sha256 its entry names, two entries **colliding** on a basename (one flat namespace in the release, so the second would overwrite the first), an **orphan** file no entry names (bytes in the budget nothing can draw), and a **missing licence**.
+`cli assets` separates its failures because they have different fixes: a manifest key with no **file** (usually an unfetched clone, but also what a deleted release asset looks like), a **stale** file whose bytes are not the sha256 its entry names, two entries **colliding** on a basename (one flat namespace in the release, so the second would overwrite the first), an **orphan** file no entry names (bytes in the budget nothing can draw), a **missing licence**, a Blender scene a registered level names that is **unpublished** (or a pin no level names), and an **undrawn** entry: a prop or texture set nothing draws - named neither by the code that draws the game's own things (`BALL_MESH`, `IRON_SURFACE`) nor by a registered level's conveyor (`BeltLook.texture`).
+The last is what the move to Blender scenes left behind in bulk, and it keeps the manifest from growing entries the game will never ask for.
 It is not part of `cli render3d`, which is deliberately pure - no GPU, no canvas, no level, and no filesystem.
 
 **A prop's own emission needs waking.** glTF's default `emissiveFactor` is black and three.js multiplies the emission map by it, so a prop exported with a beautiful emission map and no factor - which is what a modelling tool will happily write - renders exactly as if the map were not there, and looks like a texture that failed to load rather than like a value that is zero.
 `wakeEmission` lifts that one case (a map, and a factor that is exactly black) to white on load; a prop that authors any emissive colour of its own is left alone, and one with no map is untouched.
 It is the same rule `surfaceFor` applies to this project's own texture sets, which is the point - a prop and a surface that both ship an emission map should not need different knowledge to light up.
 What it does **not** do is light the room: emission is appearance, and what lights is a LIGHT OBJECT in the same body (see [**Light and air**](lighting-and-surfaces.md#light-and-air)), never a prop's materials - reading a light's colour, reach and aim out of a picture is guessing at all three.
-
-The cheapest prop is still the one with **no textures at all**: a `.glb` exported bare and given a `visual.texture` wears that surface (`mountVisual` assigns it over the file's own materials), so a boulder can be ~20 KB of geometry wearing the same stone the extruded walls wear - which also makes it look like it belongs to the level rather than like an import. A prop that names no texture keeps the materials it was exported with.
 
 The output directories and the split that matters: `public/meshes/`, `public/textures/`, `public/water/` and `public/hdri/` are **build output** - only ever the optimised copy, only ever written by `assets:fetch` or the `assets:optimize*` scripts - while `assets-src/` holds the **raw downloads** as they arrived.
 Both are gitignored. A raw is kept because re-optimising is what you do when the pipeline's settings change, and it is re-downloadable from the `source` its manifest entry records if it is ever lost.
@@ -184,48 +185,14 @@ just assets                                                  # on another machin
 gh release delete-asset assets rock.glb                      # change your mind
 ```
 
-## Pictures
-
-The pictures image planes show (see [render3d](render3d.md#image-planes)) are the sixth kind: `.webp` under `public/images/`, manifest `src/render3d/imageAssets.json`, listed by `storedAssets()` like every other kind.
-The manifest is JSON rather than code because a tool writes it: the editor's **Upload…** (and `+ Image`) posts the file to the dev server (`src/server/images.ts`), which optimises it through ImageMagick (WebP q90, longest side capped at 4096, the texture size every WebGL2 device takes), hashes it, writes it and pins the entry - sha256, bytes, pixel size, alpha and provenance - and regenerates `CREDITS.md`.
-Provenance defaults to the git user as `author`, `own work` as `license` and the uploaded file name as `source`; edit the entry by hand for a picture that is someone else's.
-
-The key is the file name slugged plus the first 8 hex of the optimised bytes' sha256, so an upload never overwrites: a re-painted picture is a new key, and the same bytes uploaded under another name land on the entry they already have.
-The dev server serves `/images/` itself (vite's public handler only knows files its watcher has seen), and both the directory and the manifest are off vite's watcher: the manifest is a config dependency, and a write to one restarts the server.
-
-Publishing is the second step, as for generated meshes: `bun run assets:publish-images` (part of `just publish`) uploads every entry the release does not hold yet, never clobbering.
-Run it before committing a level that shows a new picture: an entry the release lacks fails `assets:fetch`, and so the deploy.
-`cli assets` fails on a picture a registered level names that the manifest does not hold.
-
 ## Blender scenes in the store
 
-A level's Blender scene (see [blender-scenes](blender-scenes.md)) is the seventh kind: `public/scenes/<scene>/scene.glb`, exported by `just scene <level>`, manifest `src/render3d/sceneAssets.json` (scene name to `{ sha256, bytes }`), release name `scene-<scene>.glb`, listed by `storedAssets()` with the others.
+A level's Blender scene (see [blender-scenes](blender-scenes.md)) is the fifth kind: `public/scenes/<scene>/scene.glb`, exported by `just scene <level>`, manifest `src/render3d/sceneAssets.json` (scene name to `{ sha256, bytes }`), release name `scene-<scene>.glb`, listed by `storedAssets()` with the others.
 `bun run assets:publish-scenes` (in `just publish`) uploads every scene a registered level names whose local export differs from its pin, **replacing the release asset in place** and re-pinning it: a scene is re-exported for as long as the level is dressed, and a name per export would keep every draft for ever.
 The pin is what says which export a commit meant, `assets:fetch` verifies it, and an older commit whose scene was replaced fails its fetch loudly - the trade this store makes everywhere.
-An entry no level names is dropped from the manifest and left in the release, with the delete line printed, as for a generated mesh.
-`cli assets` fails on a scene a level names that is not pinned, on a pin no level names, and on a scene name the store cannot take.
+An entry no level names is dropped from the manifest and left in the release, since an older commit may pin it; the script prints the `gh release delete-asset` line for when that stops mattering.
+`cli assets` fails on a scene a level names that is not pinned, on a pin no level names, and on a scene name the store cannot take, and `assets:fetch` refuses to run with a scene a level names unpinned, which stops the Docker build rather than deploying a level with no look.
 The `.blend` files under `assets-src/scenes/` are the scenes' **sources**, and are stored beside them: `bun run assets:publish-sources` (in `just publish`) uploads the `.blend` of every scene a level names and every source already pinned, as `source-<path with "/" as "-">`, replaced in place, pinned in `scripts/sceneSources.json` (path under `assets-src/` to `{ sha256, bytes }`).
 They are not in `storedAssets()`: the build never fetches a source, and the budget is the game's download, not the authoring files'.
 `just sources` fetches them, and leaves a local file that differs from its pin alone (unpublished work).
 See `scripts/sceneSources.ts`.
-
-## Generated meshes in the store
-
-The rocks and mushroom patches the editor's Visuals workspace generates (see [generators](generators.md)) are written to `public/generated/<kind>/<hash>/mesh.glb` on the machine that generated them, and the ones the registered levels name are published here so every other checkout, and the deploy, draws them too.
-Their manifest is `src/render3d/generatedAssets.json`, mesh key to `{ sha256, bytes }`, and `storedAssets()` lists it with the others, so the fetch, the sha and size checks, the name-collision check and the budget cover generated meshes as they cover props.
-The release name is spelled out of the key (`generated-boulder-<hash>.glb`, `generatedReleaseName`), because every file on disk is called `mesh.glb` and the release is one flat namespace.
-
-The key cannot stand in for the sha256.
-It is content-addressed over what the generator is GIVEN, and Blender is not a pure function of that across versions and machines, so two runs of one key can write different files; the store holds the one that was published, and the pinned hash is what says which.
-
-`bun run assets:publish-generated` is the one writer of the manifest, and unlike `assets:publish` it writes rather than prints: an entry is a hash and a size, and which keys need one is decided by the levels, so there is nothing in it for a person to look at.
-It uploads every key a registered level names that the manifest lacks, from this machine's `public/generated/`.
-It never clobbers: a key already in the release (published from another machine whose manifest entry has not reached this tree) is fetched and pinned as published, and the local copy is replaced by it.
-An entry no level names any more is dropped from the manifest but left in the release, since an older commit may pin it; the script prints the `gh release delete-asset` line for when that stops mattering.
-
-So a level whose generated objects changed is committed together with `generatedAssets.json`, after running the script.
-Forgetting is loud twice over: `cli assets` fails on a key a level names that the store does not hold (and on an entry no level names), and `assets:fetch` refuses to run with one, which stops the Docker build rather than deploying the level in stand-ins.
-The build then ships exactly these (`generatedMeshesInBuild` in `vite.config.ts` drops any other generated directory a dev machine's `public/` carries).
-
-The older generated rock files (`public/rocks/`, see [rocks](rocks.md)) are not in the store.
-When they are, the shipping build passes `--no-debug-attributes`: the `_SHARD` and `_PROVENANCE` attributes the dev loop keeps cost about 5 bytes a vertex before compression and more in the vertices they split.

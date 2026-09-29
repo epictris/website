@@ -57,15 +57,11 @@ import {
   VisualsWorkspace,
   type WorkspaceScene,
 } from "../editor/visuals/workspace";
-import { SurfaceLoop } from "../editor/visuals/surfaceLoop";
-import { alignUp, surfacePlacement, upOf } from "../editor/visuals/surfaceDrop";
-import { ED_LAYERS, offsetZAfterMove, type EdLayer } from "../editor/model";
+import { surfacePlacement } from "../editor/visuals/surfaceDrop";
+import { ED_LAYERS, type EdLayer } from "../editor/model";
 import { cylinderSolid, extrudeOutline } from "../render3d/extrude";
-import { cloneWithPatches, isOrthographicMaterial } from "../render3d/projection";
 import {
   DEFAULT_TEXTURE,
-  emissiveMapName,
-  emissiveMapNames,
   isSolidSurface,
   SOLID_SURFACE,
   surfaceKey,
@@ -80,7 +76,6 @@ import {
 import {
   DEFAULT_LIGHT_COLOR,
   DEFAULT_LIGHT_INTENSITY,
-  DEFAULT_LIGHT_RANGE,
   LIGHT_BUDGET,
   LIGHT_SHADOW_NEAR,
   LightRig,
@@ -99,17 +94,14 @@ import {
   type LevelData,
   isCollisionObject,
   isAnchorObject,
-  isGeometryObject,
   normalizeLevelData,
   spawnAtCheckpoint,
-  type GeometryObjectData,
-  type GeometryProjection,
   type LightObjectData,
   type LevelBodyData,
   type SceneObjectData,
   type RawLevelData,
 } from "../level/levelFormat";
-import { BodyVisual, drawnObjects, mountVisual, surfaceInstance } from "../render3d/bodyVisuals";
+import { BodyVisual, pickTagOf } from "../render3d/bodyVisuals";
 import {
   assignPool,
   DEFAULT_WAKE_FALL,
@@ -138,8 +130,8 @@ import {
 } from "../render/beltTread";
 import { BeltRing, beltRingStations } from "../render3d/beltTread";
 import { outlineOfData } from "../render/shapePath";
+import { DEFAULT_THICKNESS } from "../lib/shapeGeometry";
 import { loopContainsPoint } from "../lib/polygon";
-import { DECOR_Z, depthOf } from "../level/decor";
 import ballLevelJson from "../../levels/ball.json";
 const BALL_LEVEL = ballLevelJson as unknown;
 import { World } from "../engine/world";
@@ -148,7 +140,6 @@ import {
   modelFromDisk,
   modelToDisk,
   toLevelData,
-  syncMatchedOutlines,
   setPolyVerts,
   setBelt,
   beltShapeData,
@@ -156,6 +147,7 @@ import {
   beltInsertWheel,
   beltRemoveWheel,
   bodyCentroid,
+  itemBounds,
   bodyMembers,
   bodyFrameOf,
   originToCentroid,
@@ -172,7 +164,6 @@ import {
   GLOW_COLOR,
   GLOW_CUBE,
   GLOW_EMISSIVE,
-  GLOW_EMISSIVE_INTENSITY,
   GLOW_INTENSITY,
   GLOW_RANGE,
   GLOW_WAKE,
@@ -192,67 +183,12 @@ import {
 import { AVATAR_FOG, AVATAR_PROGRAM_KEY, AVATAR_WRAP, wearAvatar } from "../render3d/avatarSurface";
 import { beamFarRadius, beamRadiusAt, BEAM_SOURCE_RADIUS, seedDust } from "../render3d/beam";
 import { IRON_SURFACE } from "../render3d/assets";
-import { glowProp, patchGlow, stretch } from "../render3d/propGlow";
 import { HDRI_ASSETS, hdriNames } from "../render3d/assets";
 import { PIXELS_PER_METER, PX } from "../engine/units";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { canonicalString, generatedKey, generatedMeshAsset, parseGeneratedKey } from "../render3d/generated";
-import { GENERATED_ASSETS, generatedMeta, generatedReleaseName } from "../render3d/generatedMeta";
 import { levelStoredFiles } from "../render3d/levelAssets";
-import { IMAGE_ASSETS, imageFile, registerImageAsset } from "../render3d/images";
 import { nodeNameOf, SCENE_ASSETS, sceneFile, type SceneAsset } from "../render3d/scenes";
-import { castsShadow, dressScene, type DressTarget } from "../render3d/sceneDressing";
+import { castsShadow, dressScene, SCENERY_TAG, type DressTarget } from "../render3d/sceneDressing";
 import { orientTo, placeAt } from "../render3d/space";
-import {
-  canonicalParams,
-  expectedKey,
-  GENERATOR_KINDS,
-  GENERATOR_SCHEMAS,
-  generatorInput,
-  isStale,
-  itemLookup,
-  mergeDefaults,
-  scaleParams,
-  stripDefaults,
-  validateParams,
-  type GeneratorKind,
-} from "../editor/visuals/paramSchema";
-import { cloneGenerator, cloneVisual, remapPatchHosts } from "../editor/model";
-import { paramSpec, wantedKey, type ParamValues } from "../editor/visuals/paramSchema";
-import {
-  frameOf,
-  loopPointToWorld,
-  patchMatrix,
-  selectSurface,
-  soupInFrame,
-  worldToLoopPoint,
-} from "../editor/visuals/surfacePatch";
-import {
-  existingRock,
-  landMesh,
-  MIN_PATCH_EXTENT,
-  objectPose,
-  patchFor,
-  refitPatch,
-  rockFor,
-  rockSource,
-} from "../editor/visuals/generatorEdits";
-import {
-  clampParam,
-  generatorBadge,
-  generatorStatus,
-  hexOfLinear,
-  linearOfHex,
-  nextSeedParams,
-  paramIssues,
-  paramLabel,
-  paramsPayload,
-  parseParamsPayload,
-  withParam,
-} from "../editor/visuals/generatorPanel";
-import { GeneratorJobs, missingTools, POLL_MISSES, type Fetcher, type Job } from "../editor/visuals/jobs";
 
 export interface CaseResult {
   name: string;
@@ -1128,7 +1064,7 @@ function visualsGuides(): CaseResult[] {
   });
 
   // A tool's draft: an open run to the cursor, then closed, then gone.
-  guides.setDraft({ points: [{ x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }, { x: 1, y: 1, z: 0.2, normal: { x: 0, y: 0, z: 1 } }], closed: false, cursor: { x: 0, y: 1, z: 0 } });
+  guides.setDraft({ points: [{ x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }, { x: 1, y: 1, z: 0.2 }], closed: false, cursor: { x: 0, y: 1, z: 0 } });
   const open = guides.draftCounts();
   guides.setDraft({ points: [{ x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }, { x: 1, y: 1, z: 0 }], closed: true });
   const closed = guides.draftCounts();
@@ -1143,8 +1079,7 @@ function visualsGuides(): CaseResult[] {
   // What a drag costs per frame: the grid is built once and survives the
   // revisions of a drag that stays inside the level's major cells, and is
   // built again only when the extent crosses one; the draft signature is a
-  // number that tells a moved cursor from a still one; the painted loop hands
-  // back one draft object until a point or its cursor changes.
+  // number that tells a moved cursor from a still one.
   const gridBefore = guides.gridBuilds;
   const home = poly.pos;
   for (let rev = 2; rev < 12; rev++) {
@@ -1162,20 +1097,11 @@ function visualsGuides(): CaseResult[] {
   const draftA = { points: [{ x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }], closed: false, cursor: { x: 0.5, y: 1, z: 0 } };
   const sameSig = draftSignature(draftA) === draftSignature({ ...draftA, points: [...draftA.points], cursor: { x: 0.5, y: 1, z: 0 } });
   const movedSig = draftSignature(draftA) !== draftSignature({ ...draftA, cursor: { x: 0.5, y: 1.001, z: 0 } });
-  const loop = new SurfaceLoop();
-  const n = new THREE.Vector3(0, 1, 0);
-  loop.add({ point: new THREE.Vector3(0, 0, 0), normal: n, hostId: 1 });
-  loop.cursor = new THREE.Vector3(1, 0, 0);
-  const d1 = loop.draft();
-  loop.cursor = new THREE.Vector3(1, 0, 0);
-  const kept = loop.draft() === d1;
-  loop.cursor = new THREE.Vector3(1, 0, 0.5);
-  const renewed = loop.draft() !== d1 && loop.draft()?.cursor?.z === 0.5;
-  const ok = dragBuilds === 0 && farBuilds === 1 && gridPasses === 1 && sameSig && movedSig && kept && renewed;
+  const ok = dragBuilds === 0 && farBuilds === 1 && gridPasses === 1 && sameSig && movedSig;
   out.push({
-    name: "visuals: a drag rebuilds the outlines but not the grid (rebuilt only when the level's extent crosses a cell), and a still draft is not rebuilt",
+    name: "visuals: a drag rebuilds the outlines but not the grid (rebuilt only when the level's extent crosses a cell), and a draft's signature tells a moved cursor from a still one",
     pass: ok,
-    detail: JSON.stringify({ dragBuilds, farBuilds, gridPasses, sameSig, movedSig, kept, renewed }),
+    detail: JSON.stringify({ dragBuilds, farBuilds, gridPasses, sameSig, movedSig }),
   });
   guides.dispose();
   return out;
@@ -1323,99 +1249,43 @@ function visualsWorkspace(): CaseResult[] {
   }
 
   // THE DROP ON SURFACE: the origin lands on the hit point (sim frame, z
-  // toward the camera), and an aligned prop's up is the face normal, reached by
-  // the smallest turn - a prop already standing along the normal is not turned
-  // at all, whatever its heading.
+  // toward the camera).
   {
     const at = surfacePlacement({ x: 1.25, y: -0.5, z: 0.375 });
     // A float32 face at -0.2 m is written as -0.2, not its interpolation noise.
     const noisy = surfacePlacement({ x: 0, y: 0, z: -0.19999999925494215 });
     const placedOk = at.pos.x === 1.25 && at.pos.y === 0.5 && at.z === 0.375 && noisy.z === -0.2;
-    let worst = 0;
-    const normals = [
-      { x: 0, y: 0, z: 1 },
-      { x: 0.6, y: 0.8, z: 0 },
-      { x: -0.3, y: 0.2, z: 0.9 },
-      { x: 0.1, y: -1, z: 0.05 },
-    ];
-    const tilts = [
-      { rot: 0, rotX: 0, rotY: 0 },
-      { rot: 0.7, rotX: 0.2, rotY: -0.4 },
-      { rot: -2.1, rotX: -0.6, rotY: 0.3 },
-    ];
-    for (const t of tilts) {
-      for (const n of normals) {
-        const len = Math.hypot(n.x, n.y, n.z);
-        const up = upOf(alignUp(t, n));
-        worst = Math.max(worst, Math.abs(up.x - n.x / len), Math.abs(up.y - n.y / len), Math.abs(up.z - n.z / len));
-      }
-    }
-    // Already along the normal: the heading survives exactly (to rounding).
-    const t0 = { rot: 0.9, rotX: 0.25, rotY: -0.15 };
-    const kept = alignUp(t0, upOf(t0));
-    const keptErr = Math.max(Math.abs(kept.rot - t0.rot), Math.abs(kept.rotX - t0.rotX), Math.abs(kept.rotY - t0.rotY));
-    // A level floor: a prop stood on it is upright - no turn in the plane
-    // (`rot`) and no tip (`rotX`) - with its heading about its own up in
-    // `rotY`, which is where the composition keeps a heading.
-    const floor = alignUp({ rot: 1.1, rotX: 0.4, rotY: 0.2 }, { x: 0, y: 1, z: 0 });
-    const floorOk = Math.abs(floor.rot) < 1e-12 && Math.abs(floor.rotX) < 1e-12;
     out.push({
-      name: "visuals: a drop on a surface stands the origin on the hit and turns a prop's up onto the normal by the smallest turn",
-      // Radians: 1e-7, not 1e-12, because the composition's gimbal is at
-      // rotX = 90 degrees - a prop's up pointing straight at the camera, which
-      // is a drop on the front of a wall - where `asin` hands back half the
-      // digits. A tenth of a micron at a metre.
-      pass: placedOk && worst < 1e-7 && keptErr < 1e-12 && floorOk,
-      detail: `placed ${placedOk}, worst up error ${worst.toExponential(2)} over ${tilts.length * normals.length} tilts x normals, re-aligning changes a standing prop by ${keptErr.toExponential(2)}, on a floor rotX ${floor.rotX.toExponential(2)} rotY ${floor.rotY.toExponential(2)} rot ${floor.rot.toFixed(3)}`,
+      name: "visuals: a drop on a surface stands the origin on the hit",
+      pass: placedOk,
+      detail: `at ${at.pos.x},${at.pos.y},${at.z}; noisy z ${noisy.z}`,
     });
   }
 
-  // A MOVE THROUGH Z writes the new depth outright. Decoration authoring no
-  // `offsetZ` is drawn at DECOR_Z, and the gizmo (and the drop, which goes
-  // through the gizmo's handlers) used to write the displacement into the
-  // field as if it were relative, which jumped the object 35 cm toward the
-  // camera on the first touch of the blue arrow.
-  {
-    const up = offsetZAfterMove(0, DECOR_Z, DECOR_Z + 0.1);
-    const sideways = offsetZAfterMove(0, DECOR_Z, DECOR_Z);
-    const authored = offsetZAfterMove(0.4, 0.4, 0.6);
-    out.push({
-      name: "visuals: a move through z leaves a fallen-back depth alone sideways and writes the new depth outright",
-      pass: Math.abs(up - (DECOR_Z + 0.1)) < 1e-12 && sideways === 0 && authored === 0.6,
-      detail: `decor moved 10 cm toward the camera -> offsetZ ${up.toFixed(3)} (drawn at ${DECOR_Z} before), moved sideways -> ${sideways}, authored 0.4 -> 0.6 gives ${authored}`,
-    });
-  }
-
-  // **F**'s box: a light by its source at its own z (not its reach), a drawn
-  // object by its extrusion either side of the depth it is drawn at.
+  // **F**'s box: a light by its source at its own z (not its reach), a
+  // collision piece by its outline on the plane.
   {
     const model = modelFromDisk({
       player: { x: 0, y: 0, radius: 20 },
       bodies: [
         { kind: "static", x: 100, y: 0, rot: 0, objects: [{ type: "light", range: 400, z: 60 }] },
-        {
-          kind: "static",
-          x: -200,
-          y: 0,
-          rot: 0,
-          objects: [{ type: "geometry", z: -100, depth: 40, shape: { kind: "rect", w: 50, h: 20 } }],
-        },
+        { kind: "static", x: -200, y: 0, rot: 0, objects: [{ type: "collision", shape: { kind: "rect", w: 50, h: 20 } }] },
       ],
     } as RawLevelData);
     const light = model.items.find((i) => i.object === "light")!;
-    const prop = model.items.find((i) => i.object === "geometry")!;
-    const lb = itemsBox(model, [light])!;
-    const pb = itemsBox(model, [prop])!;
+    const wall = model.items.find((i) => i.object === "collision")!;
+    const lb = itemsBox([light])!;
+    const wb = itemsBox([wall])!;
     const near = (a: number, b: number): boolean => Math.abs(a - b) < 1e-9;
     const ok =
       near(lb.min.x, 1) && near(lb.max.x, 1) && near(lb.min.z, 0.6) && near(lb.max.z, 0.6) &&
-      near(pb.min.x, -2.25) && near(pb.max.x, -1.75) && near(pb.min.y, -0.1) && near(pb.max.y, 0.1) &&
-      near(pb.min.z, -1.2) && near(pb.max.z, -0.8) &&
-      itemsBox(model, []) === null;
+      near(wb.min.x, -2.25) && near(wb.max.x, -1.75) && near(wb.min.y, -0.1) && near(wb.max.y, 0.1) &&
+      near(wb.min.z, 0) && near(wb.max.z, 0) &&
+      itemsBox([]) === null;
     out.push({
-      name: "visuals: F frames a light by its source at its z and a drawn object by its extrusion about its depth",
+      name: "visuals: F frames a light by its source at its z and a collision piece by its outline on the plane",
       pass: ok,
-      detail: `light ${JSON.stringify(lb)}, prop ${JSON.stringify(pb)}`,
+      detail: `light ${JSON.stringify(lb)}, wall ${JSON.stringify(wb)}`,
     });
   }
   return out;
@@ -1696,204 +1566,6 @@ function extrusionGeometry(): CaseResult[] {
   return out;
 }
 
-// A GEOMETRY OBJECT DRAWN THROUGH ITS OWN LENS (`GeometryObjectData.projection`).
-//
-// Every way this breaks is silent in the picture's favour - the object is simply
-// drawn in perspective, which is what it looked like before anyone asked - so
-// each link in the chain is asserted: the field survives the px -> m gate and the
-// editor's save, the mounted mesh wears an orthographic twin that compiles to a
-// program of its own, the twin's hook actually finds the chunk it rewrites in
-// three's shader (a renamed chunk is a `replace` that matches nothing), and the
-// editor's selection highlight - a clone - keeps the lens rather than moving the
-// selected object back to where perspective would put it.
-function perObjectProjection(): CaseResult[] {
-  const geometry = (projection?: GeometryProjection): GeometryObjectData => ({
-    type: "geometry",
-    shape: { kind: "rect", w: 1, h: 1 },
-    // A flat fill, for the reason `tippedPrimitive` gives: it builds headlessly.
-    texture: SOLID_SURFACE,
-    color: "#ff0000",
-    ...(projection ? { projection } : {}),
-  });
-  const authored: RawLevelData = {
-    player: { x: 0, y: 0, radius: 8 },
-    bodies: [
-      {
-        kind: "static",
-        x: 0,
-        y: 0,
-        rot: 0,
-        objects: [
-          { ...geometry("orthographic"), shape: { kind: "rect", w: 100, h: 100 }, z: -300 },
-          { ...geometry(), shape: { kind: "rect", w: 100, h: 100 } },
-        ],
-      },
-    ],
-  };
-  const scaled = scaleLevelData(authored, 1 / PIXELS_PER_METER).bodies[0]!.objects.filter(isGeometryObject);
-  const scaledKept = scaled[0]?.projection === "orthographic" && scaled[1]?.projection === undefined;
-  const saved = modelToDisk(modelFromDisk(authored)).bodies[0]!.objects.filter(isGeometryObject);
-  const savedKept = saved[0]?.projection === "orthographic" && !("projection" in (saved[1] ?? {}));
-
-  const mount = (projection?: GeometryProjection): THREE.Mesh => {
-    const parent = new THREE.Group();
-    mountVisual(
-      parent,
-      () => extrudeOutline({ kind: "rect", half: new Vec2(0.5, 0.5) }, { depth: 0.2, bevel: 0 }),
-      { geometry: geometry(projection) },
-      { defaultZ: 0, castShadow: true, alive: () => true },
-    );
-    return parent.children[0] as THREE.Mesh;
-  };
-  const ortho = mount("orthographic");
-  const orthoAgain = mount("orthographic");
-  const persp = mount();
-  const om = ortho.material as THREE.Material;
-  const pm = persp.material as THREE.Material;
-  const twinned =
-    isOrthographicMaterial(om) &&
-    !isOrthographicMaterial(pm) &&
-    om !== pm &&
-    orthoAgain.material === om &&
-    om.customProgramCacheKey() !== pm.customProgramCacheKey() &&
-    !ortho.frustumCulled &&
-    persp.frustumCulled;
-
-  const patchedText = (m: THREE.Material): string => {
-    const shader = {
-      uniforms: {},
-      vertexShader: THREE.ShaderLib.physical.vertexShader,
-      fragmentShader: THREE.ShaderLib.physical.fragmentShader,
-    } as unknown as THREE.WebGLProgramParametersWithUniforms;
-    m.onBeforeCompile(shader, undefined as unknown as THREE.WebGLRenderer);
-    return shader.vertexShader;
-  };
-  const rewrites = (m: THREE.Material): boolean => patchedText(m).includes("orthoPosition");
-  const patched = rewrites(om) && !rewrites(pm);
-  const highlight = cloneWithPatches(om);
-  const highlightKept =
-    isOrthographicMaterial(highlight) &&
-    rewrites(highlight) &&
-    highlight.customProgramCacheKey() === om.customProgramCacheKey();
-
-  return [
-    {
-      name: "format: a geometry object's projection survives the px -> m gate and an editor save",
-      pass: scaledKept && savedKept,
-      detail: `scaled ${scaled.map((g) => g.projection)}, saved ${saved.map((g) => g.projection)}`,
-    },
-    {
-      name: "render: an orthographic object wears one shared twin with a program of its own",
-      pass: twinned,
-      detail: `tagged ${isOrthographicMaterial(om)}, shared ${orthoAgain.material === om}, keys ${om.customProgramCacheKey()} / ${pm.customProgramCacheKey()}, culled ${ortho.frustumCulled}`,
-    },
-    {
-      name: "render: the orthographic twin rewrites three's projection chunk",
-      pass: patched,
-      detail: patched ? "project_vertex rewritten for the twin alone" : "the chunk was not found or not rewritten",
-    },
-    {
-      name: "render: a selection highlight keeps an orthographic object's lens",
-      pass: highlightKept,
-      detail: highlightKept ? "clone carries the tag, the hook and the key" : "the clone lost the patch",
-    },
-  ];
-}
-
-// A PRIMITIVE TIPPED OUT OF THE PLANE (`GeometryObjectData.rotX`/`rotY`).
-//
-// The two angles were a prop's alone for as long as nothing in the extrusion
-// path read them, which is a bug with no symptom: the editor's rings turned, the
-// inspector's numbers changed, `visualData` wrote them for a mesh and dropped
-// them for a primitive, and the level went on looking exactly as it did. The
-// only thing that can catch that class is asserting what `mountVisual` BUILT,
-// because every other signal in the project says the pose is fine.
-//
-// It runs headlessly - which nothing else about a `BodyVisual` does (see
-// `pickIndex`) - because a FLAT FILL builds no maps: `buildSurface` returns a
-// bare `MeshStandardMaterial` for `SOLID_SURFACE` and never reaches the canvas
-// the generated surfaces are drawn on. Any textured object here would need a DOM
-// and this case would not exist.
-function tippedPrimitive(): CaseResult[] {
-  const half = new Vec2(1, 0.2);
-  const depth = 0.4;
-  const drawnAt = 0.7;
-  const rotX = 0.35;
-  const rotY = -0.8;
-  const mount = (tip: boolean): THREE.Mesh => {
-    const parent = new THREE.Group();
-    mountVisual(
-      parent,
-      () => extrudeOutline({ kind: "rect", half }, { depth, bevel: 0 }),
-      {
-        geometry: {
-          type: "geometry",
-          shape: { kind: "rect", w: half.x * 2, h: half.y * 2 },
-          // A flat fill, for the reason above, and the one surface that needs
-          // nothing downloaded either.
-          texture: SOLID_SURFACE,
-          color: "#ff0000",
-          ...(tip ? { rotX, rotY } : {}),
-        },
-      },
-      { defaultZ: drawnAt, castShadow: true, alive: () => true },
-    );
-    const mesh = parent.children[0] as THREE.Mesh;
-    mesh.updateMatrixWorld(true);
-    return mesh;
-  };
-
-  const tipped = mount(true);
-  const flat = mount(false);
-  const turned =
-    Math.abs(tipped.rotation.x - rotX) < F32 &&
-    Math.abs(tipped.rotation.y - rotY) < F32 &&
-    // Never z: the piece the object is mounted in carries `rot` (`BodyVisual`'s
-    // own child group), so writing it here would turn the thing twice.
-    tipped.rotation.z === 0;
-
-  // WHERE THE PIVOT IS. An extrusion is built centred on z, so turning the mesh
-  // about its own origin and then placing it at `defaultZ` swings the solid
-  // about its MIDDLE and leaves that middle at the depth the object is drawn at.
-  // Turning it about the piece's origin instead - the obvious alternative, and
-  // what folding the angles into the parent group would do - would carry the
-  // whole solid round an axis `drawnAt` metres behind it, which on a backdrop at
-  // -6 m is a panel that leaves the frame rather than one that tips.
-  const box = new THREE.Box3().setFromObject(tipped);
-  const centre = box.getCenter(new THREE.Vector3());
-  const centred =
-    Math.abs(centre.x) < F32 && Math.abs(centre.y) < F32 && Math.abs(centre.z - drawnAt) < F32;
-
-  // The control, and the claim that matters to every level already authored: an
-  // object that tips by nothing is mounted exactly as it was before the two
-  // angles were read at all.
-  const unchanged =
-    flat.rotation.x === 0 &&
-    flat.rotation.y === 0 &&
-    flat.rotation.z === 0 &&
-    flat.position.x === 0 &&
-    flat.position.y === 0 &&
-    flat.position.z === drawnAt;
-
-  return [
-    {
-      name: "render: a primitive is tipped out of the plane by rotX and rotY",
-      pass: turned,
-      detail: `rotation (${tipped.rotation.x}, ${tipped.rotation.y}, ${tipped.rotation.z}), want (${rotX}, ${rotY}, 0)`,
-    },
-    {
-      name: "render: a tipped primitive turns about its own middle, at the depth it is drawn at",
-      pass: centred,
-      detail: `centre (${centre.x.toFixed(6)}, ${centre.y.toFixed(6)}, ${centre.z.toFixed(6)}), want (0, 0, ${drawnAt})`,
-    },
-    {
-      name: "render: a primitive that tips by nothing is mounted exactly as before",
-      pass: unchanged,
-      detail: `rotation (${flat.rotation.x}, ${flat.rotation.y}, ${flat.rotation.z}) at z ${flat.position.z}`,
-    },
-  ];
-}
-
 // A level with every body's frame pushed onto its objects and the body left at
 // the origin. It is what makes the round trips below comparable at all: a body's
 // transform and its objects' placements are two halves of ONE answer, and the
@@ -1933,18 +1605,12 @@ function flattened(data: LevelData): string {
   );
 }
 
-// What a body is drawn as: its geometry object, which is what the retired
-// per-entry `visual` became - so the round-trip assertions below read it where
-// they used to read that field.
-function lookOf(b: LevelBodyData): GeometryObjectData | undefined {
-  return b.objects.find(isGeometryObject);
-}
-
-// Every length in a `visual` has to survive the px -> m -> px round trip, or the
-// field is silently dropped or double-scaled on the next save. `scaleLevelData`
-// rebuilds objects field by field, so a field it does not enumerate is simply
-// gone - and the editor writes the file back every 750 ms, so the loss lands on
-// disk before anyone notices it was ever read.
+// A level in the RETIRED flat form, `visual`s and `backgrounds` and all, is
+// folded by `normalizeLevelData` into the level it now is: its collision and
+// the lights its glowing visuals threw, and nothing of its look, which is a
+// Blender scene's to carry (plans/blender-owns-appearance.md). The fold has to
+// be exact both ways - px -> m -> px byte-identical - and it has to leave no
+// look behind: a body of pure decoration is gone, and so is the panel list.
 function visualRoundTrip(): CaseResult[] {
   const authored: RawLevelData = {
     player: { x: 0, y: 0, radius: 20 },
@@ -2016,27 +1682,21 @@ function visualRoundTrip(): CaseResult[] {
   // What is being asserted is that every value survives the trip.
   const a = flattened(scaleLevelData(authored, 1));
   const b = flattened(scaleLevelData(scaleLevelData(authored, PX), PIXELS_PER_METER));
-  // A DIMENSIONLESS field cannot be checked by that round trip at all: scaling it
-  // on the way in and back out again is the identity, so `tileScale * factor`
-  // would be invisible here while silently making every authored tiling scale a
-  // hundred times off in the game. It has to be asserted one way.
   const inMetres = scaleLevelData(authored, PX);
-  const dimensionless =
-    lookOf(inMetres.bodies[0]!)!.tileScale === 2 &&
-    lookOf(inMetres.bodies[0]!)!.scale === 1.4 &&
-    lookOf(inMetres.bodies[2]!)!.tileScale === 0.5;
+  const kinds = inMetres.bodies.map((body) => body.objects.map((o) => o.type).join("+"));
+  const lookless =
+    kinds.join(",") === "collision+light,collision" &&
+    inMetres.bodies.every((body) => body.objects.every((o) => (o.type as string) !== "geometry"));
   return [
     {
-      name: "level format: visual round-trips px -> m -> px",
+      name: "level format: a legacy level round-trips px -> m -> px",
       pass: a === b,
       detail: a === b ? "byte-identical" : `\n  authored ${a}\n  round    ${b}`,
     },
     {
-      name: "level format: `scale` and `tileScale` are not scaled by the px -> m conversion",
-      pass: dimensionless,
-      detail: dimensionless
-        ? "unchanged in metres"
-        : `tileScale ${lookOf(inMetres.bodies[0]!)?.tileScale} / ${lookOf(inMetres.bodies[2]!)?.tileScale}, scale ${lookOf(inMetres.bodies[0]!)?.scale}`,
+      name: "level format: a legacy level keeps its collision and its derived light, and nothing of its look",
+      pass: lookless,
+      detail: `bodies ${JSON.stringify(kinds)}`,
     },
   ];
 }
@@ -2045,104 +1705,62 @@ function visualRoundTrip(): CaseResult[] {
 // rewrites the whole file every 750 ms while a level is open, so a field it
 // drops is a field that is gone from disk before anyone notices it was read.
 // `modelFromDisk`/`modelToDisk` go through `EdItem`, which is a different shape
-// from `LevelBodyData` entirely - the visual becomes a live object the inspector
-// mutates - so the format round trip above says nothing about this one.
+// from `LevelBodyData` entirely, so the format round trip above says nothing
+// about this one.
 function editorRoundTrip(): CaseResult[] {
   const authored: RawLevelData = {
     player: { x: 0, y: 0, radius: 20 },
     bodies: [
-      // A mesh visual with every placement field set...
       {
         kind: "static",
         x: 100,
         y: -250,
         rot: 0.3,
-        shape: { kind: "rect", w: 400, h: 60 },
         color: "#555555",
         opacity: 0.5,
         friction: 1,
-        visual: {
-          kind: "mesh",
-          mesh: "rock-a",
-          offsetX: 12,
-          offsetY: -8,
-          offsetZ: 35,
-          rotX: 0.2,
-          rotY: -1.1,
-          rotZ: 0.75,
-          scale: 1.4,
-        },
+        objects: [{ type: "collision", shape: { kind: "rect", w: 400, h: 60 }, material: "stone", thickness: 30 }],
       },
-      // ...an extrusion override...
+      // A water body's slab (`waterZ`, `waterDepth`)...
       {
-        kind: "rigid",
+        kind: "water",
         x: 0,
-        y: 0,
+        y: 300,
         rot: 0,
-        shape: { kind: "circle", r: 25 },
         color: "#555555",
         opacity: 0.5,
         friction: 1,
-        material: "stone",
-        visual: {
-          depth: 90,
-          texture: "brick",
-          tileScale: 1.5,
-          bevel: 3,
-          emissive: "#ff8844",
-          emissiveIntensity: 2.5,
-        },
+        flow: 150,
+        drag: 5,
+        waterZ: 25,
+        waterDepth: 150,
+        objects: [{ type: "collision", shape: { kind: "rect", w: 600, h: 40 } }],
       },
-      // ...an invisible wall...
+      // ...and a conveyor's band (`BeltLook`): the two looks the game still
+      // draws, so the two the level still carries.
       {
         kind: "static",
-        x: -300,
-        y: 40,
-        rot: 0,
-        shape: { kind: "rect", w: 100, h: 100 },
-        color: "#555555",
-        opacity: 0.5,
-        friction: 1,
-        visual: { kind: "none" },
-      },
-      // ...a body with no visual at all, which must come back with the
-      // geometry object that draws it and nothing more.
-      {
-        kind: "static",
-        x: 500,
+        x: 900,
         y: 0,
         rot: 0,
-        shape: { kind: "rect", w: 80, h: 80 },
         color: "#555555",
         opacity: 0.5,
         friction: 1,
-      },
-      // ...and a PRIMITIVE tipped out of the plane. The two angles were a
-      // prop's alone while nothing in the extrusion path read them, and
-      // `visualData` dropped them for a primitive on the way out to say so -
-      // so a save that goes back to dropping them silently flattens every
-      // canted panel in a level 750 ms after it is opened.
-      {
-        kind: "static",
-        x: 700,
-        y: 0,
-        rot: 0,
-        shape: { kind: "rect", w: 200, h: 40 },
-        color: "#555555",
-        opacity: 0.5,
-        friction: 1,
-        visual: { rotX: 0.35, rotY: -0.8 },
-      },
-    ],
-    backgrounds: [
-      {
-        x: -400,
-        y: 120,
-        rot: 0,
-        shape: { kind: "rect", w: 900, h: 600 },
-        color: "#313244",
-        opacity: 1,
-        visual: { offsetZ: -600 },
+        objects: [
+          {
+            type: "collision",
+            shape: {
+              kind: "belt",
+              wheels: [{ x: 0, y: 0, r: 20 }, { x: 300, y: 0, r: 20 }],
+              thickness: 6,
+              speed: 120,
+              width: 40,
+              texture: "rubber",
+              color: "#34373d",
+              tileScale: 0.5,
+            },
+          },
+        ],
       },
     ],
   };
@@ -2153,21 +1771,20 @@ function editorRoundTrip(): CaseResult[] {
   // two builders chose the same origin to measure from.
   const a = flattened(scaleLevelData(authored, 1));
   const b = flattened(scaleLevelData(back, 1));
-  // Nothing draws a collision shape but a geometry object, so a body authored
-  // under the old default must come back carrying the PRIMITIVE that states it:
-  // the same outline, stated once on each object, which is what decoupling the
-  // two costs and what makes either of them separately editable.
-  const twinned = JSON.stringify(back.bodies[3]!.objects) ===
-    JSON.stringify([
-      { type: "collision", shape: { kind: "rect", w: 80, h: 80 } },
-      { type: "geometry", shape: { kind: "rect", w: 80, h: 80 } },
-    ]);
+  const water = back.bodies[1]!;
+  const band = back.bodies[2]!.objects[0]!;
+  const belt = band.type === "collision" && band.shape.kind === "belt" ? band.shape : null;
+  const looksKept =
+    water.waterZ === 25 &&
+    water.waterDepth === 150 &&
+    belt?.width === 40 &&
+    belt.texture === "rubber" &&
+    belt.color === "#34373d" &&
+    belt.tileScale === 0.5;
   // A shape DRAWN in the editor is a collision object and nothing else, and this
-  // is the trip that has to leave it that way. It is the same assertion as
-  // "a body authored with a bare collision shape keeps it bare" one level down,
-  // made against the round trip an author actually performs: draw, save, reopen.
-  // Both halves could undo it independently - the save could invent a look, the
-  // load could migrate one in - so it is checked where they meet.
+  // is the trip that has to leave it that way: draw, save, reopen. Both halves
+  // could undo it independently - the save could invent a look, the load could
+  // migrate one in - so it is checked where they meet.
   const drawn: RawLevelData = {
     player: { x: 0, y: 0, radius: 8 },
     bodies: [
@@ -2188,24 +1805,16 @@ function editorRoundTrip(): CaseResult[] {
     JSON.stringify(reopened.bodies[0]!.objects) ===
     JSON.stringify([{ type: "collision", shape: { kind: "rect", w: 80, h: 80 } }]);
 
-  // The tipped primitive, read back off the object the editor wrote. The
-  // byte-identity above already covers it, but it covers it as one difference
-  // in a blob of twenty fields; this says which field went.
-  const tipped = lookOf(back.bodies[4]!);
-  const keptTip = tipped?.rotX === 0.35 && tipped?.rotY === -0.8;
-
   return [
     {
-      name: "editor: a level with visuals saves back byte-identical",
+      name: "editor: a level saves back byte-identical",
       pass: a === b,
       detail: a === b ? "byte-identical" : `\n  authored ${a}\n  saved    ${b}`,
     },
     {
-      name: "editor: a body with no visual gains the geometry object that draws it",
-      pass: twinned,
-      detail: twinned
-        ? "one collision object and one primitive stating the same outline"
-        : `wrote ${JSON.stringify(back.bodies[3]!.objects)}`,
+      name: "editor: a water body's slab and a belt's band survive a save",
+      pass: looksKept,
+      detail: `water ${JSON.stringify({ z: water.waterZ, depth: water.waterDepth })}, belt ${JSON.stringify(belt)}`,
     },
     {
       name: "editor: a drawn collision shape survives a save and reopen still bare",
@@ -2213,13 +1822,6 @@ function editorRoundTrip(): CaseResult[] {
       detail: stayedBare
         ? "one collision object, nothing added"
         : `wrote ${JSON.stringify(reopened.bodies[0]!.objects)}`,
-    },
-    {
-      name: "editor: a primitive's out-of-plane tip survives a save",
-      pass: keptTip,
-      detail: keptTip
-        ? "rotX and rotY written for a primitive as for a prop"
-        : `wrote rotX ${tipped?.rotX}, rotY ${tipped?.rotY}`,
     },
   ];
 }
@@ -2358,156 +1960,6 @@ function groupTransform(): CaseResult[] {
   ];
 }
 
-// The MATCHED-OUTLINE link (`GeometryObjectData.matchCollision`): a geometry
-// object the editor keeps outline-equal to a collision sibling, in both
-// directions, so resizing either resizes both - the standing form of the "match
-// the collision shape" edit the collision/geometry decoupling priced in.
-//
-// Everything here is the half no picture can see. The link is editor state: a
-// level renders identically with or without it, so a save that drops the flag,
-// a load that ties it to the wrong piece, or a sync that stops propagating all
-// leave a level that looks right and quietly stops staying in step - which is
-// exactly the double-edit pain the feature exists to remove, back again with a
-// checkbox claiming otherwise.
-function matchedOutline(): CaseResult[] {
-  const level = (objects: SceneObjectData[]): RawLevelData => ({
-    player: { x: 0, y: 0, radius: 8 },
-    bodies: [
-      {
-        kind: "static",
-        x: 0,
-        y: 0,
-        rot: 0,
-        color: "#555555",
-        opacity: 0.5,
-        friction: 1,
-        objects,
-      },
-    ],
-  });
-
-  // A pair already in step survives the editor round trip byte-identical, flag
-  // included - the same trip every other field is held to, since the editor
-  // rewrites the file every 750 ms.
-  const paired = level([
-    { type: "collision", shape: { kind: "rect", w: 80, h: 40 }, x: 10, y: -20, rot: 0.25 },
-    {
-      type: "geometry",
-      shape: { kind: "rect", w: 80, h: 40 },
-      x: 10,
-      y: -20,
-      rot: 0.25,
-      matchCollision: true,
-    },
-  ]);
-  const a = flattened(scaleLevelData(paired, 1));
-  const b = flattened(scaleLevelData(modelToDisk(modelFromDisk(paired)), 1));
-
-  // A hand-edited file whose halves have DRIFTED: with one collision object the
-  // intent is unambiguous, so the load snaps the look back onto the shape - the
-  // collision outline is what the level plays as - rather than dropping the
-  // link or, worse, keeping a "matched" pair that is not.
-  const drifted = level([
-    { type: "collision", shape: { kind: "rect", w: 80, h: 40 } },
-    { type: "geometry", shape: { kind: "rect", w: 120, h: 40 }, x: 15, matchCollision: true },
-  ]);
-  const snappedBodies = modelToDisk(modelFromDisk(drifted)).bodies[0]!.objects;
-  const snapped =
-    JSON.stringify(snappedBodies) ===
-    JSON.stringify([
-      { type: "collision", shape: { kind: "rect", w: 80, h: 40 } },
-      { type: "geometry", shape: { kind: "rect", w: 80, h: 40 }, matchCollision: true },
-    ]);
-
-  // ...but with SEVERAL collision objects and no exact twin there is nothing
-  // safe to guess, so the link is dropped rather than tied to a piece nobody
-  // chose - and the geometry keeps the outline it authored.
-  const ambiguous = level([
-    { type: "collision", shape: { kind: "rect", w: 80, h: 40 } },
-    { type: "collision", shape: { kind: "rect", w: 60, h: 40 }, x: 200 },
-    { type: "geometry", shape: { kind: "rect", w: 50, h: 50 }, x: 90, matchCollision: true },
-  ]);
-  const ambiguousGeo = modelToDisk(modelFromDisk(ambiguous))
-    .bodies[0]!.objects.find(isGeometryObject)!;
-  const dropped =
-    ambiguousGeo.matchCollision === undefined &&
-    ambiguousGeo.shape?.kind === "rect" &&
-    ambiguousGeo.shape.w === 50;
-
-  // The flag means nothing in a body with no collision object at all, and a
-  // meaningless field must not reach disk.
-  const aloneGeo = modelToDisk(
-    modelFromDisk(level([{ type: "geometry", shape: { kind: "rect", w: 80, h: 40 }, matchCollision: true }])),
-  ).bodies[0]!.objects.find(isGeometryObject)!;
-  const droppedAlone = aloneGeo.matchCollision === undefined;
-
-  // The live sync, in BOTH directions - the half the round trips cannot see.
-  // Which side an edit touched is what `syncMatchedOutlines` works out from the
-  // signatures of the last sync, so the seed pass comes first, exactly as the
-  // editor's dirty funnel runs it.
-  const model = modelFromDisk(paired);
-  const sigs = new Map<number, string>();
-  syncMatchedOutlines(model, sigs);
-  const g = model.items.find((i) => i.object === "geometry")!;
-  const c = model.items.find((i) => i.object === "collision")!;
-  if (c.shape.kind === "rect") c.shape.w = 2;
-  syncMatchedOutlines(model, sigs);
-  const followedCollision = g.shape.kind === "rect" && g.shape.w === 2;
-  g.rot = 1.5;
-  g.pos = new Vec2(3, -1);
-  syncMatchedOutlines(model, sigs);
-  const followedGeometry = c.rot === 1.5 && c.pos.x === 3 && c.pos.y === -1;
-  // A link whose partner is gone is dropped, which is what lets Delete not
-  // know the link exists.
-  model.items = model.items.filter((i) => i !== c);
-  syncMatchedOutlines(model, sigs);
-  const pruned = g.matchId === 0;
-
-  return [
-    {
-      name: "editor: a matched pair saves back byte-identical, link included",
-      pass: a === b,
-      detail: a === b ? "byte-identical" : `\n  authored ${a}\n  saved    ${b}`,
-    },
-    {
-      name: "editor: a drifted matched pair snaps onto its collision shape at load",
-      pass: snapped,
-      detail: snapped
-        ? "geometry back on the collision outline, link kept"
-        : `wrote ${JSON.stringify(snappedBodies)}`,
-    },
-    {
-      name: "editor: an ambiguous match is dropped rather than guessed",
-      pass: dropped,
-      detail: dropped
-        ? "link dropped, authored outline kept"
-        : `wrote ${JSON.stringify(ambiguousGeo)}`,
-    },
-    {
-      name: "editor: matchCollision in a body with no collision object is not written",
-      pass: droppedAlone,
-      detail: droppedAlone ? "flag dropped" : `wrote ${JSON.stringify(aloneGeo)}`,
-    },
-    {
-      name: "editor: resizing the collision shape resizes its matched geometry",
-      pass: followedCollision,
-      detail: followedCollision ? "w followed" : `geometry shape ${JSON.stringify(g.shape)}`,
-    },
-    {
-      name: "editor: moving the matched geometry moves its collision shape",
-      pass: followedGeometry,
-      detail: followedGeometry
-        ? "pos and rot followed"
-        : `collision at ${c.pos.x},${c.pos.y} rot ${c.rot}`,
-    },
-    {
-      name: "editor: a match whose partner is deleted is dropped",
-      pass: pruned,
-      detail: pruned ? "matchId cleared" : `matchId still ${g.matchId}`,
-    },
-  ];
-}
-
 // A CORNER EDIT MOVES THE CORNER AND NOTHING ELSE.
 //
 // `setPolyVerts` used to re-centre the loop on its area centroid and shift the
@@ -2543,25 +1995,17 @@ function vertexEditMoves(): CaseResult[] {
         rot: 0,
         objects: [
           { type: "collision", shape: { kind: "poly", verts: square } },
-          // The prop being fitted to, at its own offset in the body...
-          { type: "geometry", kind: "mesh", mesh: "rock-13", x: 200, z: 30 },
-          // ...and a matched primitive, which follows the outline by design and
-          // is the piece the placement copy used to drag off its body.
-          {
-            type: "geometry",
-            shape: { kind: "poly", verts: square },
-            matchCollision: true,
-          },
+          // Another object at its own offset in the body, which a placement
+          // copy would drag off it.
+          { type: "light", x: 200, z: 30 },
         ],
       },
     ],
   };
   const model = modelFromDisk(authored);
-  const sigs = new Map<number, string>();
-  syncMatchedOutlines(model, sigs);
   const poly = model.items.find((i) => i.object === "collision")!;
-  const prop = model.items.find((i) => i.object === "geometry" && i.visual.kind === "mesh")!;
-  const propBefore = prop.pos.clone();
+  const lamp = model.items.find((i) => i.object === "light")!;
+  const lampBefore = lamp.pos.clone();
 
   // The drag: one corner out by a metre and a half in each axis, written the way
   // every vertex gesture writes one.
@@ -2571,12 +2015,10 @@ function vertexEditMoves(): CaseResult[] {
     poly,
     poly.shape.verts.map((v, i) => (i === 0 ? pulled : v)),
   );
-  syncMatchedOutlines(model, sigs);
 
   const saved = modelToDisk(model).bodies[0]!;
   const collision = saved.objects.find(isCollisionObject)!;
-  const matched = saved.objects.find((o) => isGeometryObject(o) && o.matchCollision === true)!;
-  const mesh = saved.objects.find((o) => isGeometryObject(o) && o.mesh !== undefined)!;
+  const light = saved.objects.find(isLightObject)!;
   // An absent x/y IS zero on disk, which is what "it never moved" looks like
   // here - the body's own origin included.
   const still =
@@ -2584,11 +2026,9 @@ function vertexEditMoves(): CaseResult[] {
     saved.y === -100 &&
     (collision.x ?? 0) === 0 &&
     (collision.y ?? 0) === 0 &&
-    (matched.x ?? 0) === 0 &&
-    (matched.y ?? 0) === 0 &&
-    (mesh.x ?? 0) === 200 &&
-    (mesh.y ?? 0) === 0 &&
-    prop.pos.distanceTo(propBefore) === 0;
+    (light.x ?? 0) === 200 &&
+    (light.y ?? 0) === 0 &&
+    lamp.pos.distanceTo(lampBefore) === 0;
   // ...and the corner really is where it was dragged, or "nothing moved" is a
   // case that passes on an edit that did not happen.
   const dragged =
@@ -2608,8 +2048,8 @@ function vertexEditMoves(): CaseResult[] {
       name: "editor: a corner drag moves neither its own object nor anything else in the body",
       pass: still,
       detail: still
-        ? "body, collision, matched prop and mesh all where they were authored"
-        : `body (${saved.x}, ${saved.y}), collision (${collision.x ?? 0}, ${collision.y ?? 0}), matched (${matched.x ?? 0}, ${matched.y ?? 0}), mesh (${mesh.x ?? 0}, ${mesh.y ?? 0})`,
+        ? "body, collision and light all where they were authored"
+        : `body (${saved.x}, ${saved.y}), collision (${collision.x ?? 0}, ${collision.y ?? 0}), light (${light.x ?? 0}, ${light.y ?? 0})`,
     },
     {
       name: "editor: the dragged corner lands exactly where it was put",
@@ -2629,71 +2069,39 @@ function vertexEditMoves(): CaseResult[] {
   ];
 }
 
-// WHAT A 3D PICK ANSWERS WITH. The editor selects scene geometry by raycasting
-// the scene rather than by testing an outline on the gameplay plane, and the
+// WHAT A 3D PICK ANSWERS WITH. The editor selects what the scene draws by
+// raycasting it rather than by testing an outline on the gameplay plane, and the
 // whole chain from a mesh under the pointer back to a row in the outliner is:
-// the drawn object carries the authored object it was built from
-// (`BodyVisual`'s pick tag), and `toLevelData` is the only thing that knows
+// the drawn piece carries the authored object it was built from (`BodyVisual`'s
+// pick tag - a collision object, whose grey box it is, or a body's first object
+// for its Blender dressing), and `toLevelData` is the only thing that knows
 // which ITEM wrote that object.
 //
 // That second half is what is asserted here, because it is the half that can
 // break silently. `toLevelData` writes one scene object per item, in item order,
 // and a future edit that skips one, writes two, or reorders them leaves a level
 // that saves, loads and renders exactly as before while every click past the
-// mistake selects the wrong thing - or nothing. Nothing else in the suite can
-// see it, and the 3D half cannot be checked headlessly at all (building a
-// `BodyVisual` needs a DOM for the generated textures).
+// mistake selects the wrong thing - or nothing.
 function pickIndex(): CaseResult[] {
   const authored: RawLevelData = {
     player: { x: 0, y: 0, radius: 8 },
     bodies: [
-      // A compound body with two pieces, each dressed, plus a light: the case
-      // where an object's place in its body is the only thing telling two of
-      // them apart.
+      // A compound body with three pieces of three sizes and a light: the case
+      // where an object's place in its body is the only thing telling them
+      // apart.
       {
         kind: "static",
         x: 0,
         y: 0,
         rot: 0,
-        color: "#555555",
-        opacity: 0.5,
-        friction: 1,
         objects: [
           { type: "collision", shape: { kind: "rect", w: 80, h: 80 } },
-          {
-            type: "geometry",
-            x: 10,
-            shape: { kind: "rect", w: 80, h: 80 },
-            kind: "mesh",
-            mesh: "prop-a",
-          },
-          { type: "collision", x: 120, shape: { kind: "rect", w: 40, h: 40 } },
-          {
-            type: "geometry",
-            x: 120,
-            shape: { kind: "rect", w: 40, h: 40 },
-            kind: "mesh",
-            mesh: "prop-b",
-          },
           { type: "light", x: 60 },
+          { type: "collision", x: 120, shape: { kind: "rect", w: 40, h: 40 } },
+          { type: "collision", x: 240, shape: { kind: "rect", w: 20, h: 20 } },
         ],
       },
-      // ...and a body that is nothing but a prop, which has no collision object
-      // to be found by instead.
-      {
-        kind: "static",
-        x: 400,
-        y: -200,
-        rot: 0.4,
-        objects: [
-          {
-            type: "geometry",
-            shape: { kind: "rect", w: 200, h: 200 },
-            kind: "mesh",
-            mesh: "prop-c",
-          },
-        ],
-      },
+      { kind: "static", x: 400, y: -200, rot: 0.4, objects: [{ type: "collision", shape: { kind: "circle", r: 30 } }] },
     ],
   };
   const model = modelFromDisk(authored);
@@ -2704,17 +2112,18 @@ function pickIndex(): CaseResult[] {
   const written = data.bodies.reduce((n, b) => n + b.objects.length, 0);
   const missed = data.bodies.flatMap((b) => b.objects).filter((o) => !itemOf.has(o));
 
-  // Every DRAWN object resolves to the geometry item that authored it, told
-  // apart by the prop each one names - a mapping that is off by one still
-  // answers with a geometry item, and only the name says which.
+  // Every collision object resolves to the collision item that authored it, told
+  // apart by its size - a mapping that is off by one still answers with a
+  // collision item, and only the outline says which.
+  const size = (shape: { kind: string; w?: number; r?: number }): number => shape.w ?? (shape.r ?? 0) * 2;
   const wrong: string[] = [];
-  for (const g of data.bodies.flatMap((b) => drawnObjects(b))) {
-    const id = itemOf.get(g);
+  for (const o of data.bodies.flatMap((b) => b.objects).filter(isCollisionObject)) {
+    const id = itemOf.get(o);
     const item = id === undefined ? undefined : items.get(id);
-    if (item?.object === "geometry" && item.visual.mesh === g.mesh) continue;
-    wrong.push(
-      `${g.mesh ?? "(none)"} -> ${item ? `#${item.id} ${item.object} ${item.visual.mesh ?? "(none)"}` : "nothing"}`,
-    );
+    const want = size(o.shape as { kind: string; w?: number; r?: number });
+    const got = item?.object === "collision" ? Math.round(itemBounds(item).max.x * 1e6 - itemBounds(item).min.x * 1e6) / 1e6 : NaN;
+    if (Math.abs(got - want) < 1e-9) continue;
+    wrong.push(`${want} m -> ${item ? `#${item.id} ${item.object} ${got} m` : "nothing"}`);
   }
 
   return [
@@ -2727,55 +2136,11 @@ function pickIndex(): CaseResult[] {
           : `${missed.length} of ${written} unindexed (${itemOf.size} indexed)`,
     },
     {
-      name: "pick: a drawn object resolves to the geometry item that authored it",
+      name: "pick: a collision object resolves to the collision item that authored it",
       pass: wrong.length === 0,
-      detail: wrong.length === 0 ? "3 props, each its own item" : wrong.join("; "),
+      detail: wrong.length === 0 ? "4 pieces, each its own item" : wrong.join("; "),
     },
   ];
-}
-
-// How deep a shape is drawn, which is what orders two overlapping ones - on both
-// canvases and under a click in the editor (see `pickOrder`). One rule, asserted
-// here because a wrong answer is not an error anywhere: the level still draws,
-// and a backdrop simply swallows clicks meant for the wall in front of it.
-function depthOrdering(): CaseResult[] {
-  const shape = { kind: "rect" as const, w: 100, h: 100 };
-  const body = (objects: SceneObjectData[]): LevelBodyData => ({
-    kind: "static",
-    x: 0,
-    y: 0,
-    rot: 0,
-    objects,
-  });
-  const solid = body([{ type: "collision", shape }]);
-  const decoration = body([{ type: "geometry", shape }]);
-  const solidAt = (z: number) =>
-    body([{ type: "collision", shape }, { type: "geometry", z }]);
-  const decorAt = (z: number) => body([{ type: "geometry", shape, z }]);
-  const depth = (b: LevelBodyData) =>
-    depthOf(b, b.objects.find((o) => o.type === "geometry") as GeometryObjectData | undefined);
-  const checks: Array<[string, boolean, string]> = [
-    ["solid geometry sits on the gameplay plane", depth(solid) === 0, `${depth(solid)} m`],
-    [
-      "a body with no collision falls back behind it rather than to zero",
-      depth(decoration) === DECOR_Z,
-      `${depth(decoration)} m`,
-    ],
-    [
-      "an authored z wins for either",
-      depth(decorAt(3)) === 3 && depth(solidAt(-20)) === -20,
-      "authored depth used as given",
-    ],
-    [
-      "nearest the viewport sorts last, which is what a click takes first",
-      [solidAt(-20), decoration, solidAt(0.5)]
-        .sort((a, b) => depth(a) - depth(b))
-        .map(depth)
-        .join(",") === `-20,${DECOR_Z},0.5`,
-      "back to front",
-    ],
-  ];
-  return checks.map(([name, pass, detail]) => ({ name: `depth: ${name}`, pass, detail }));
 }
 
 // Which surface a name resolves to, and at what tiling scale. Pure arithmetic
@@ -3518,79 +2883,6 @@ function originToCom(): CaseResult[] {
   ];
 }
 
-// An emission MAP is where a shape glows, as against how much: another set's
-// map worn over whatever surface the shape has (`VisualData.emissiveTexture`).
-// Two things about it are invisible everywhere else and are asserted here.
-function emissiveMaps(): CaseResult[] {
-  // It changes what the material IS - three.js reads the map from the material,
-  // not from the mesh - so two shapes differing only in the map they wear may
-  // not share one. Getting this wrong is silent: whichever was built first wins,
-  // so either every wall glows or the lit one does not.
-  const plain = surfaceKey({ material: "brick" });
-  const lit = surfaceKey({ material: "brick", emissiveTexture: "brick" });
-  // ...but only for a key that HAS an emission map. `brick` in this build does
-  // not, so naming it must land on the plain material rather than on a second
-  // one that renders identically - a cache split by a field that changes nothing
-  // is a draw call per shape for no picture at all.
-  const mapped = emissiveMapName("brick") !== "";
-  const keyed = mapped ? plain !== lit : plain === lit;
-  // An unknown key is nothing rather than a fallback surface's map, which is the
-  // one place the texture resolution rules deliberately differ: `texture` falls
-  // back so an unknown name is an ordinary wall, and this does not, because a
-  // borrowed glow the author never asked for is not ordinary.
-  const unknown = emissiveMapName("no such set") === "" && emissiveMapName(undefined) === "";
-  const listed = emissiveMapNames().every((k) => emissiveMapName(k) === k);
-  return [
-    {
-      name: "surfaces: an emission map is part of the material key exactly when it exists",
-      pass: keyed,
-      detail: keyed
-        ? mapped
-          ? "keyed apart"
-          : "no emission map in this manifest, so no split"
-        : `${plain} vs ${lit}`,
-    },
-    {
-      name: "surfaces: an unknown emission map is no map at all",
-      pass: unknown && listed,
-      detail: unknown && listed ? `${emissiveMapNames().length} set(s) carry one` : "resolved to something",
-    },
-  ];
-}
-
-
-// Emission changes what a material IS, so it has to change the material CACHE
-// KEY. Getting it wrong is invisible in every other check: the level renders,
-// every round trip passes, and what happens is that whichever of the two was
-// built first wins - so either every wall of that stone glows, or the lamp made
-// of it does not.
-function emissiveMaterials(): CaseResult[] {
-  const plain = surfaceKey({ material: "stone" });
-  const glowing = surfaceKey({ material: "stone", emissive: "#ff8844", emissiveIntensity: 3 });
-  const dimmer = surfaceKey({ material: "stone", emissive: "#ff8844", emissiveIntensity: 1 });
-  const again = surfaceKey({ material: "stone", emissive: "#ff8844", emissiveIntensity: 3 });
-  const distinct = plain !== glowing && glowing !== dimmer;
-  const stable = glowing === again;
-  // A brightness multiplier on a shape that emits nothing multiplies black, so
-  // it may NOT split the cache: every ordinary wall would otherwise get its own
-  // material the moment the editor started writing a default alongside.
-  const notSplit = plain === surfaceKey({ material: "stone", emissiveIntensity: 4 });
-  return [
-    {
-      name: "surfaces: emission is part of the material key",
-      pass: distinct && stable,
-      detail:
-        distinct && stable
-          ? "one material per (surface, tint, emission)"
-          : `distinct ${distinct}, cached ${stable}`,
-    },
-    {
-      name: "surfaces: a glow multiplier with no glow colour does not split the cache",
-      pass: notSplit,
-      detail: notSplit ? "same key" : `${plain} vs ${surfaceKey({ material: "stone", emissiveIntensity: 4 })}`,
-    },
-  ];
-}
 
 // A prop that ships an emission MAP but no emissive FACTOR emits nothing, since
 // glTF's default factor is black and three.js multiplies the two. `wakeEmission`
@@ -3626,71 +2918,6 @@ function propEmission(): CaseResult[] {
       pass: untouched,
       detail: untouched ? "no map, no glow" : "lit a material that ships no emission",
     },
-    ...propGlow(),
-  ];
-}
-
-// A prop whose geometry object authors `emissive` (the river's moss) glows in
-// its own pattern: its materials are swapped for cached copies, the file's own
-// materials are left alone, and the mask is spliced into three's real
-// physical fragment shader.
-function propGlow(): CaseResult[] {
-  const prop = () => {
-    const group = new THREE.Group();
-    const source = new THREE.MeshPhysicalMaterial({ color: 0x44aa44 });
-    group.add(new THREE.Mesh(new THREE.BufferGeometry(), source));
-    group.add(new THREE.Mesh(new THREE.BufferGeometry(), [source, new THREE.MeshBasicMaterial()]));
-    return { group, source };
-  };
-  const { group, source } = prop();
-  const twin = group.clone(true);
-  glowProp(group, "#2fe6d0", 0.6);
-  glowProp(twin, "#2fe6d0", 0.6);
-  const [one, many] = group.children as THREE.Mesh[];
-  const copy = one!.material as THREE.MeshStandardMaterial;
-  const arr = many!.material as THREE.Material[];
-  const swapped =
-    copy !== source &&
-    copy.emissive.getHexString() === "2fe6d0" &&
-    copy.emissiveIntensity === 0.6 &&
-    source.emissive.getHex() === 0 &&
-    arr[0] === copy &&
-    (arr[1] as THREE.MeshBasicMaterial).isMeshBasicMaterial === true &&
-    (twin.children[0] as THREE.Mesh).material === copy;
-
-  const fragment = THREE.ShaderLib.physical.fragmentShader;
-  const patched = patchGlow(fragment);
-  const spliced =
-    patched.includes("uniform vec2 uGlowRange;") &&
-    patched.indexOf("smoothstep( uGlowRange.x") > patched.indexOf("#include <emissivemap_fragment>");
-  let refused = false;
-  try {
-    patchGlow("void main() {}");
-  } catch {
-    refused = true;
-  }
-
-  const lum = Array.from({ length: 100 }, (_, i) => i / 100);
-  const [lo, hi] = stretch(lum);
-  const [flatLo, flatHi] = stretch([0.2, 0.2, 0.2]);
-  const stretched = lo === 0.05 && hi === 0.95 && flatHi > flatLo;
-
-  return [
-    {
-      name: "props: an authored glow swaps a prop's materials for shared glowing copies and leaves the file's own dark",
-      pass: swapped,
-      detail: `copy ${copy !== source} emissive #${copy.emissive.getHexString()} x${copy.emissiveIntensity}, source #${source.emissive.getHexString()}, shared across mounts ${(twin.children[0] as THREE.Mesh).material === copy}`,
-    },
-    {
-      name: "props: the glow mask is spliced after three's emissive chunk, and a three without it is refused",
-      pass: spliced && refused,
-      detail: `spliced ${spliced}, refused ${refused}`,
-    },
-    {
-      name: "props: the glow mask spans its map's 5th to 95th luminance percentile, and a flat map divides by nothing",
-      pass: stretched,
-      detail: `ramp -> ${lo}..${hi}, flat -> ${flatLo}..${flatHi}`,
-    },
   ];
 }
 
@@ -3702,9 +2929,8 @@ function propGlow(): CaseResult[] {
 // while a level is open, so anything its round trip does not carry is gone from
 // disk before anyone notices it was read - and the failure is invisible in the
 // editor itself, which goes on drawing the model it holds. It is asserted on
-// COUNTS rather than bytes because the editor legitimately re-origins bodies and
-// folds a dressing onto the object it dresses; what may never change is how much
-// of the level there is.
+// COUNTS rather than bytes because the editor legitimately re-origins bodies;
+// what may never change is how much of the level there is.
 //
 // The level arrives through the registry's own import rather than off disk, so
 // this case keeps `cli render3d` pure - no filesystem, no canvas, no GPU.
@@ -3713,7 +2939,6 @@ function realLevelRoundTrip(): CaseResult[] {
     bodies: d.bodies.length,
     objects: d.bodies.reduce((n, b) => n + b.objects.length, 0),
     collision: d.bodies.reduce((n, b) => n + b.objects.filter(isCollisionObject).length, 0),
-    geometry: d.bodies.reduce((n, b) => n + b.objects.filter(isGeometryObject).length, 0),
     lights: d.bodies.reduce((n, b) => n + b.objects.filter(isLightObject).length, 0),
     chains: d.chains?.length ?? 0,
   });
@@ -3725,7 +2950,7 @@ function realLevelRoundTrip(): CaseResult[] {
       name: "editor: the authored ball level survives a save with nothing dropped",
       pass: same,
       detail: same
-        ? `${before.bodies} bodies, ${before.objects} objects (${before.collision} collision, ${before.geometry} geometry, ${before.lights} lights), ${before.chains} chains`
+        ? `${before.bodies} bodies, ${before.objects} objects (${before.collision} collision, ${before.lights} lights), ${before.chains} chains`
         : `\n  before ${JSON.stringify(before)}\n  after  ${JSON.stringify(after)}`,
     },
   ];
@@ -3760,10 +2985,9 @@ function waterFormat(): CaseResult[] {
         drag: 5,
         spill: 200,
         spillSpeed: 100,
-        objects: [
-          { type: "collision", shape: { kind: "rect", w: 2430, h: 46 } },
-          { type: "geometry" },
-        ],
+        waterZ: 25,
+        waterDepth: 150,
+        objects: [{ type: "collision", shape: { kind: "rect", w: 2430, h: 46 } }],
       },
     ],
   };
@@ -3773,18 +2997,23 @@ function waterFormat(): CaseResult[] {
   );
   const inMetres = normalizeLevelData(authored);
   const scaled = scaleLevelData(inMetres, PX);
-  // The spill is a drop and a speed - two more lengths that convert.
+  // The spill is a drop and a speed, and the slab a place and an extent
+  // through z - four more lengths that convert.
   const units =
     scaled.bodies[0]!.flow === -1.5 &&
     scaled.bodies[0]!.drag === 5 &&
     scaled.bodies[0]!.spill === 2 &&
-    scaled.bodies[0]!.spillSpeed === 1;
+    scaled.bodies[0]!.spillSpeed === 1 &&
+    scaled.bodies[0]!.waterZ === 0.25 &&
+    scaled.bodies[0]!.waterDepth === 1.5;
   const saved = modelToDisk(modelFromDisk(authored));
   const kept =
     saved.bodies[0]!.flow === -150 &&
     saved.bodies[0]!.drag === 5 &&
     saved.bodies[0]!.spill === 200 &&
-    saved.bodies[0]!.spillSpeed === 100;
+    saved.bodies[0]!.spillSpeed === 100 &&
+    saved.bodies[0]!.waterZ === 25 &&
+    saved.bodies[0]!.waterDepth === 150;
 
   return [
     {
@@ -3796,13 +3025,13 @@ function waterFormat(): CaseResult[] {
       name: "level format: a water current is a speed and its drag is a rate",
       pass: units,
       detail: units
-        ? "flow -150 px/s -> -1.5 m/s, drag 5/s unchanged"
-        : `flow ${scaled.bodies[0]!.flow}, drag ${scaled.bodies[0]!.drag}`,
+        ? "flow -150 px/s -> -1.5 m/s, drag 5/s unchanged, the slab's z and depth in metres"
+        : `flow ${scaled.bodies[0]!.flow}, drag ${scaled.bodies[0]!.drag}, z ${scaled.bodies[0]!.waterZ}, depth ${scaled.bodies[0]!.waterDepth}`,
     },
     {
-      name: "editor: a water area keeps its current through a save",
+      name: "editor: a water area keeps its current, its spill and its slab through a save",
       pass: kept,
-      detail: kept ? "flow and drag survive" : JSON.stringify(saved.bodies[0]),
+      detail: kept ? "flow, drag, spill and slab survive" : JSON.stringify(saved.bodies[0]),
     },
   ];
 }
@@ -3834,10 +3063,7 @@ function bounceFormat(): CaseResult[] {
         friction: 1,
         bounce: 0.6,
         launch: 900,
-        objects: [
-          { type: "collision", shape: { kind: "rect", w: 300, h: 40 } },
-          { type: "geometry" },
-        ],
+        objects: [{ type: "collision", shape: { kind: "rect", w: 300, h: 40 } }],
       },
       // A body that authors NEITHER, so the conditional write is asserted in
       // both directions: a wall must not come back from the editor carrying a
@@ -3884,131 +3110,6 @@ function bounceFormat(): CaseResult[] {
       detail: kept
         ? "bounce and launch survive, and stay off a body that authors neither"
         : JSON.stringify([saved.bodies[0], saved.bodies[1]]),
-    },
-  ];
-}
-
-// NOTHING BUT A GEOMETRY OBJECT DRAWS. A collision shape used to draw itself
-// whenever no one said otherwise, and this is the case that keeps that from
-// creeping back: the old default was invisible by construction (a level that
-// relied on it looked right, so nothing reported it), and the same is true of a
-// regression - a stray extrusion beside an authored mesh reads as a level that
-// needs its geometry nudged rather than as a renderer drawing twice.
-//
-// The migration half matters just as much. Every level on disk was authored
-// under the old default, so `withGeometryTwin` is the only thing standing
-// between the split and a hundred and twenty-eight invisible bodies.
-function renderNeedsGeometry(): CaseResult[] {
-  // Built as `LevelData` rather than through `normalizeLevelData`, deliberately:
-  // the gate would hand this body the geometry object it is asserting the
-  // absence of.
-  const level = (objects: SceneObjectData[]): LevelData => ({
-    player: { x: 0, y: 0, radius: 8 * PX },
-    bodies: [{ kind: "static", x: 0, y: 0, rot: 0, objects }],
-  });
-  const shape = { kind: "rect" as const, w: 1, h: 1 };
-  const drawnBy = (objects: SceneObjectData[]) => drawnObjects(level(objects).bodies[0]!);
-
-  const bare = drawnBy([{ type: "collision", shape }]);
-  // A geometry object draws its OWN form, wherever the collision objects are and
-  // however many of them there are. A compound body of two pieces dressed by one
-  // primitive draws ONE thing - the primitive - and not one per piece.
-  const compound = drawnBy([
-    { type: "collision", shape },
-    { type: "collision", x: 2, shape },
-    { type: "geometry", texture: "brick", shape: { kind: "rect", w: 3, h: 1 } },
-  ]);
-  const decoupled =
-    compound.length === 1 &&
-    compound[0]!.shape?.kind === "rect" &&
-    (compound[0]!.shape as { w: number }).w === 3;
-
-  // ...and the migration that keeps every level authored under the old default
-  // looking as it did. It is asked of a LEGACY body - a flat entry carrying its
-  // own shape - because that is the only form the old default was ever expressed
-  // in, and the only form the migration still runs on.
-  //
-  // What it must produce is the whole claim of the decoupling: a PRIMITIVE that
-  // states the outline, the placement, the depth and the surface the extrusion
-  // used to read off the collision object, so the level looks identical while
-  // nothing is being read off anything any more.
-  const legacy: RawLevelData = {
-    player: { x: 0, y: 0, radius: 8 * PX },
-    bodies: [
-      { kind: "static", x: 3, y: -5, rot: 0.25, shape, thickness: 0.4, material: "stone" },
-    ],
-  };
-  const once = normalizeLevelData(legacy);
-  const twice = normalizeLevelData(once);
-  const twin = once.bodies[0]!.objects.filter(isGeometryObject);
-  const collision = once.bodies[0]!.objects.filter(isCollisionObject)[0]!;
-  const g = twin[0];
-  const migrated =
-    twin.length === 1 &&
-    JSON.stringify(g!.shape) === JSON.stringify(collision.shape) &&
-    g!.x === collision.x &&
-    g!.y === collision.y &&
-    g!.rot === collision.rot &&
-    g!.depth === collision.thickness &&
-    g!.texture === collision.material;
-  const stable = twice.bodies[0]!.objects.length === once.bodies[0]!.objects.length;
-  // ...and the other half of that rule, which is what makes a bare collision
-  // shape an authorable thing rather than a state the loader edits away. A body
-  // already in the nested form said what objects it has; a load that added a
-  // geometry object to it would mean an author could draw a collision shape,
-  // save, and get back a level saying something they did not write.
-  const nested = normalizeLevelData(level([{ type: "collision", shape }]));
-  const leftBare = nested.bodies[0]!.objects.filter(isGeometryObject).length === 0;
-  // A body that already says how it looks is left alone. Twinning it too puts an
-  // extrusion of the collision box inside the authored prop - a grey brick in the
-  // middle of a lamp, drawn in play and absent from the editor.
-  const authored = level([
-    { type: "collision", shape },
-    { type: "geometry", kind: "mesh", mesh: "bulkhead-lamp", shape },
-  ]);
-  const untouched =
-    normalizeLevelData(authored).bodies[0]!.objects.length === authored.bodies[0]!.objects.length;
-
-  return [
-    {
-      name: "render: a collision shape with no geometry object draws nothing",
-      pass: bare.length === 0,
-      detail: bare.length === 0 ? "not drawn" : "drawn by something",
-    },
-    {
-      name: "render: a geometry object draws its own form, not the body's outlines",
-      pass: decoupled,
-      detail: decoupled
-        ? "one primitive, its own 3 m shape"
-        : `${compound.length} drawn: ${JSON.stringify(compound.map((o) => o.shape))}`,
-    },
-    {
-      name: "render: a level authored under the old default gains the primitive that draws it",
-      pass: migrated,
-      detail: migrated
-        ? "one primitive stating the outline, placement, depth and surface"
-        : `wrote ${JSON.stringify(twin)}`,
-    },
-    {
-      name: "render: and gains it exactly once, however many times it is loaded",
-      pass: stable,
-      detail: stable
-        ? `${once.bodies[0]!.objects.length} objects, unchanged on a second pass`
-        : `${once.bodies[0]!.objects.length} then ${twice.bodies[0]!.objects.length}`,
-    },
-    {
-      name: "render: a body authored with a bare collision shape keeps it bare",
-      pass: leftBare,
-      detail: leftBare
-        ? "no geometry object invented at load"
-        : "the loader added a geometry object nobody authored",
-    },
-    {
-      name: "render: a body that already says how it looks is left alone",
-      pass: untouched,
-      detail: untouched
-        ? "authored geometry stands; no extrusion added beside it"
-        : "an extrusion was added inside the authored prop",
     },
   ];
 }
@@ -4326,22 +3427,13 @@ function levelMetaFormat(): CaseResult[] {
         objects: [{ type: "collision", shape: { kind: "rect", w: 300, h: 40 } }],
       },
       {
-        // The finish line: a region across the way out, with the gantry that
-        // marks it mounted on the same body.
+        // The finish line: a region across the way out. The gantry that marks
+        // it is the level's Blender scene's to draw.
         kind: "finish",
         x: 100,
         y: -100,
         rot: 0,
-        objects: [
-          { type: "collision", shape: { kind: "rect", w: 520, h: 450 } },
-          {
-            type: "geometry",
-            kind: "mesh",
-            mesh: "finish-line",
-            shape: { kind: "rect", w: 259, h: 247 },
-            scale: 0.4,
-          },
-        ],
+        objects: [{ type: "collision", shape: { kind: "rect", w: 520, h: 450 } }],
       },
     ],
   };
@@ -4369,26 +3461,12 @@ function levelMetaFormat(): CaseResult[] {
     saved.meta?.title === "The Long Fall" &&
     saved.meta.intro === true &&
     saved.meta.unlisted === undefined &&
-    savedGate.kind === "finish" &&
-    savedGate.objects.some((o) => o.type === "geometry" && o.mesh === "finish-line");
+    savedGate.kind === "finish";
   // ...and a level that authors NO block writes none, which is what keeps every
   // level from before the field byte-identical through a save.
   const { meta: _dropped, ...bare } = authored;
   const bareSaved = modelToDisk(modelFromDisk(bare as RawLevelData));
   const silent = bareSaved.meta === undefined;
-
-  // The gantry's own SCALE, which is the second not-a-length on this body and
-  // the one with nowhere else to be recovered from: a prop's size in a level is
-  // a decision somebody made by eye, and a scaler or a save that dropped it
-  // would put a 6.5 m gate where a 2.6 m one was authored, with nothing to say
-  // what happened.
-  const savedMesh = savedGate.objects.find((o) => o.type === "geometry");
-  const scaledMesh = gate.objects.find((o) => o.type === "geometry");
-  const propScale =
-    savedMesh?.type === "geometry" &&
-    savedMesh.scale === 0.4 &&
-    scaledMesh?.type === "geometry" &&
-    scaledMesh.scale === 0.4;
 
   return [
     {
@@ -4407,20 +3485,13 @@ function levelMetaFormat(): CaseResult[] {
       name: "editor: the level block and the finish line survive a save",
       pass: kept,
       detail: kept
-        ? "title, intro, the `finish` kind and its gantry all written back"
+        ? "title, intro and the `finish` kind all written back"
         : JSON.stringify({ meta: saved.meta, kind: savedGate.kind, objects: savedGate.objects.length }),
     },
     {
       name: "editor: a level that authors no level block still writes none",
       pass: silent,
       detail: silent ? "no `meta` key" : JSON.stringify(bareSaved.meta),
-    },
-    {
-      name: "level format: the gantry's scale is not a length either, through the scaler and through a save",
-      pass: propScale,
-      detail: propScale
-        ? "`scale` 0.4 unchanged by both"
-        : JSON.stringify({ scaled: scaledMesh, saved: savedMesh }),
     },
   ];
 }
@@ -4430,8 +3501,8 @@ function levelMetaFormat(): CaseResult[] {
 //
 // What is asserted here is that the payload is LOSSLESS, because that is where
 // the failure is silent: a copy is a save of a sub-model, so anything the
-// serialisation forgets - a chain, a vine, a wrap point, a matched outline, a
-// body's own frame - comes back as an assembly that is missing a piece, with
+// serialisation forgets - a chain, a vine, a wrap point, a body's own frame -
+// comes back as an assembly that is missing a piece, with
 // nothing to report. It is the same trap the format's own round trips cover,
 // one scope down.
 //
@@ -4440,9 +3511,8 @@ function levelMetaFormat(): CaseResult[] {
 // pure case. That half is checked in a real browser, two tabs, which is the
 // only place the system clipboard exists at all.
 function clipboardPayload(): CaseResult[] {
-  // A beam with a chain to a crate, a vine off the beam, a matched geometry
-  // object, and a wrap point on a third body - one of everything a payload has
-  // to carry.
+  // A beam with a chain to a crate, a vine off the beam, and a wrap point on a
+  // third body - one of everything a payload has to carry.
   const authored: RawLevelData = {
     player: { x: 0, y: 0, radius: 8 },
     bodies: [
@@ -4453,7 +3523,6 @@ function clipboardPayload(): CaseResult[] {
         rot: 0.2,
         objects: [
           { type: "collision", shape: { kind: "rect", w: 200, h: 20 } },
-          { type: "geometry", shape: { kind: "rect", w: 200, h: 20 }, matchCollision: true, texture: "brick" },
           { type: "anchor", id: 1, x: -90, y: 0 },
           { type: "anchor", id: 4, x: 90, y: 0 },
         ],
@@ -4627,8 +3696,8 @@ function beltRendering(): CaseResult[] {
     detail: `P ${loop.total.toFixed(4)} m = ${n.toFixed(6)} x ${pitch.toFixed(4)} m; one frame at +/-1.5 m/s: ${fwd.toFixed(4)} / ${back.toFixed(4)}`,
   });
 
-  // A body with a belt, collided AND drawn (a matched pair, as `Add geometry`
-  // makes it), through the real build and the real visual.
+  // A body with a belt, collided and drawn from the one shape (its band's look
+  // is on the shape, `BeltLook`), through the real build and the real visual.
   const px = PIXELS_PER_METER;
   const belt = {
     kind: "belt" as const,
@@ -4648,9 +3717,8 @@ function beltRendering(): CaseResult[] {
         opacity: 0.5,
         friction: 1,
         objects: [
-          { type: "collision", shape: belt },
           // A flat fill: the one surface that needs no canvas and no download.
-          { type: "geometry", shape: belt, matchCollision: true, depth: 0.5 * px, texture: SOLID_SURFACE },
+          { type: "collision", shape: { ...belt, width: 0.5 * px, texture: SOLID_SURFACE } },
         ],
       },
     ],
@@ -4666,7 +3734,7 @@ function beltRendering(): CaseResult[] {
     | THREE.InstancedMesh
     | undefined;
   const solids = meshes.filter((m) => m !== cleats);
-  // The cleat ring in the geometry object's own frame, where the loop is
+  // The cleat ring in the belt's own frame, where the loop is
   // (wheel 0 at the origin): every centre inside the outline, within a
   // tread's depth of it, and never on it.
   const outline = beltOutline(loop);
@@ -5374,39 +4442,66 @@ function glowCases(): CaseResult[] {
     });
   }
 
-  // The instance key: a body of its own, different from the shared material
-  // and from any other body's; and no body without a waking light asks for
-  // one, which is the proof that no existing level gains a material.
+  // A waking body's DRESSING glows with its light (`BodyVisual.adoptDressing`):
+  // the node's emissive materials become this body's own copies - one per
+  // material, however many meshes wear it - and join the set its light drives,
+  // while the file's shared materials are left exactly as they were (a second
+  // mount of the scene, or another body in the same stone, must not pulse with
+  // it). A body with no waking light takes nothing.
   {
-    const req = { texture: "color", color: "#8a3fd6", emissive: "#b070ff", emissiveIntensity: 2 };
-    const plain = surfaceKey(req);
-    const mine = surfaceKey({ ...req, instance: "b3" });
-    const theirs = surfaceKey({ ...req, instance: "b4" });
-    const keyed = plain !== mine && mine !== theirs && mine === surfaceKey({ ...req, instance: "b3" });
-    const river = scaleLevelData(ballLevelJson as RawLevelData, PX);
-    const wakingBodies = river.bodies.filter((b) => b.objects.some((o) => isLightObject(o) && wakeParams(o) !== null));
-    const asking = river.bodies.filter((b, i) => surfaceInstance(b, `b${i}`) !== undefined);
-    const steady: LevelBodyData = {
-      kind: "static",
-      x: 0,
-      y: 0,
-      rot: 0,
-      objects: [
-        { type: "geometry", shape: { kind: "rect", w: 1, h: 1 }, emissive: "#ffaa00" },
-        { type: "light", range: 4 },
+    const raw: RawLevelData = {
+      player: { x: 0, y: 0, radius: 8 },
+      bodies: [
+        {
+          kind: "static",
+          x: 0,
+          y: 0,
+          rot: 0,
+          objects: [{ type: "collision", shape: { kind: "rect", w: 30, h: 30 } }, { type: "light", range: 400, wake: 300 }],
+        },
+        {
+          kind: "static",
+          x: 200,
+          y: 0,
+          rot: 0,
+          objects: [{ type: "collision", shape: { kind: "rect", w: 30, h: 30 } }, { type: "light", range: 400 }],
+        },
       ],
     };
+    const built = buildLevelBodies(new World(), scaleLevelData(raw, PX), () => {});
+    const glow = new THREE.MeshStandardMaterial({ emissive: "#b070ff", emissiveIntensity: 2 });
+    const stone = new THREE.MeshStandardMaterial({ color: "#777777" });
+    const node = (): { root: THREE.Group; meshes: THREE.Mesh[] } => {
+      const box = new THREE.BoxGeometry(0.3, 0.3, 0.3);
+      const meshes = [new THREE.Mesh(box, glow), new THREE.Mesh(box, glow), new THREE.Mesh(box, stone)];
+      const root = new THREE.Group();
+      root.add(...meshes);
+      return { root, meshes };
+    };
+    const waking = new BodyVisual(built.bodies[0]!.body, built.bodies[0]!);
+    const steady = new BodyVisual(built.bodies[1]!.body, built.bodies[1]!);
+    const a = node();
+    const b = node();
+    waking.adoptDressing(a.root);
+    steady.adoptDressing(b.root);
+    const driven = (waking as unknown as { driven: { material: THREE.Material; authored: number }[] }).driven;
+    const copy = a.meshes[0]!.material as THREE.MeshStandardMaterial;
     const ok =
-      keyed &&
-      surfaceInstance(steady, "b0") === undefined &&
-      surfaceInstance(glowBody(new Vec2(0, 0)), "b0") === "b0" &&
-      surfaceInstance(glowBody(new Vec2(0, 0)), undefined) === undefined &&
-      asking.length === wakingBodies.length &&
-      asking.every((b) => wakingBodies.includes(b));
+      copy !== glow &&
+      a.meshes[1]!.material === copy &&
+      a.meshes[2]!.material === stone &&
+      copy.emissive.getHexString() === "b070ff" &&
+      driven.length === 1 &&
+      driven[0]!.material === copy &&
+      driven[0]!.authored === 2 &&
+      glow.emissiveIntensity === 2 &&
+      b.meshes.every((m, i) => m.material === (i < 2 ? glow : stone));
+    waking.dispose();
+    steady.dispose();
     out.push({
-      name: "glow: a waking body's instance key is its own, and a body with no waking light asks for none",
+      name: "glow: a waking body's dressing glows on its own copy of each emissive material; the file's materials and a steady body's are untouched",
       pass: ok,
-      detail: `plain ${plain} / b3 ${mine} / b4 ${theirs}; river: ${asking.length} of ${river.bodies.length} bodies ask for an instance, ${wakingBodies.length} carry a waking light`,
+      detail: `copy ${copy !== glow}, shared by both glowing meshes ${a.meshes[1]!.material === copy}, stone kept ${a.meshes[2]!.material === stone}, driven ${driven.length} (authored ${driven[0]?.authored}), steady body kept its materials ${b.meshes.every((m, i) => m.material === (i < 2 ? glow : stone))}`,
     });
   }
 
@@ -5442,32 +4537,24 @@ function glowCases(): CaseResult[] {
     });
   }
 
-  // `+ Glow`: one body, a solid purple cube with its glow, the collision rect
-  // it mirrors, and a waking point light at the cube's centre with the
-  // editor's defaults.
+  // `+ Glow`: one body - the collision square, filled purple for the 2D view
+  // and the grey box, and a waking point light at its centre with the editor's
+  // defaults. What it LOOKS like in a dressed level is the scene's to say.
   {
     const body = glowBody(new Vec2(4, -2));
     const collision = body.objects.filter(isCollisionObject);
-    const geometry = body.objects.filter(isGeometryObject);
     const light = body.objects.filter(isLightObject);
     const square = (s: unknown): boolean =>
       JSON.stringify(s) === JSON.stringify({ kind: "rect", w: GLOW_CUBE, h: GLOW_CUBE });
-    const g = geometry[0];
     const l = light[0];
     const ok =
       body.kind === "static" &&
       body.x === 4 &&
       body.y === -2 &&
+      body.color === GLOW_COLOR &&
+      body.objects.length === 2 &&
       collision.length === 1 &&
       square(collision[0]!.shape) &&
-      geometry.length === 1 &&
-      square(g!.shape) &&
-      g!.matchCollision === true &&
-      g!.depth === GLOW_CUBE &&
-      g!.texture === "color" &&
-      g!.color === GLOW_COLOR &&
-      g!.emissive === GLOW_EMISSIVE &&
-      g!.emissiveIntensity === GLOW_EMISSIVE_INTENSITY &&
       light.length === 1 &&
       (l!.kind ?? "point") === "point" &&
       (l!.x ?? 0) === 0 &&
@@ -5480,9 +4567,9 @@ function glowCases(): CaseResult[] {
       l!.wakeRise === GLOW_WAKE_RISE &&
       l!.wakeFall === GLOW_WAKE_FALL;
     out.push({
-      name: "editor: + Glow places one static body - a solid purple cube, its collision rect, and a waking point light at its centre",
+      name: "editor: + Glow places one static body - its collision square, filled purple, and a waking point light at its centre",
       pass: ok,
-      detail: `${body.objects.length} objects; cube ${JSON.stringify(g?.shape)} ${g?.color} glowing ${g?.emissive} x${g?.emissiveIntensity}; light range ${l?.range} m, ${l?.intensity} cd, wake ${l?.wake} m, delay ${l?.wakeDelay} s, rise ${l?.wakeRise} s, fall ${l?.wakeFall} s`,
+      detail: `${body.objects.length} objects; fill ${body.color}; light range ${l?.range} m, ${l?.intensity} cd, wake ${l?.wake} m, delay ${l?.wakeDelay} s, rise ${l?.wakeRise} s, fall ${l?.wakeFall} s`,
     });
   }
 
@@ -5725,1232 +4812,6 @@ function glowCases(): CaseResult[] {
   return out;
 }
 
-// GENERATED GEOMETRY: the `generator` block on a geometry object, its parameter
-// schemas, and the content-addressed mesh key (plans/visuals-workspace.md,
-// Phase 2).
-//
-// Nothing here is visible in a picture, and every failure is silent in the way
-// the rest of this file guards against: a length parameter left in pixels is a
-// rock a hundred times too deep, a patch's host index that goes stale is a patch
-// growing on the wrong object, and a key that drifts between the editor and the
-// server is every rock in every level reading as stale (or, worse, as current).
-function generatorCases(): CaseResult[] {
-  const out: CaseResult[] = [];
-  // Rounded to a micrometre for comparison, as `flattened` is: px -> m -> px
-  // leaves float noise in the last bits of a length.
-  const r6 = (_k: string, v: unknown): unknown => (typeof v === "number" ? Math.round(v * 1e6) / 1e6 : v);
-  const same = (a: unknown, b: unknown): boolean => JSON.stringify(a, r6) === JSON.stringify(b, r6);
-  // A loader warning is part of what is asserted, never noise in the suite's
-  // output, so a case that expects one catches it.
-  const quietly = <T,>(run: () => T): { value: T; warnings: string[] } => {
-    const warnings: string[] = [];
-    const warn = console.warn;
-    console.warn = (...args: unknown[]) => void warnings.push(args.map(String).join(" "));
-    try {
-      return { value: run(), warnings };
-    } finally {
-      console.warn = warn;
-    }
-  };
-
-  // One body, on disk in pixels: a collision outline, the boulder dressing it
-  // (a length parameter and two that are not), the rock's mushroom patch naming
-  // the rock as its host by index, and a second patch whose index names the
-  // collision object - which is no host at all.
-  const authored: RawLevelData = {
-    player: { x: 0, y: 0, radius: 8 },
-    bodies: [
-      {
-        kind: "static",
-        x: 300,
-        y: -100,
-        rot: 0.25,
-        color: "#555555",
-        opacity: 1,
-        friction: 1,
-        objects: [
-          { type: "collision", shape: { kind: "poly", verts: [{ x: -100, y: -50 }, { x: 100, y: -50 }, { x: 80, y: 60 }, { x: -90, y: 50 }] } },
-          {
-            type: "geometry",
-            x: 20,
-            y: 5,
-            z: 12,
-            kind: "mesh",
-            mesh: "mushrooms:0000000000000000",
-            shape: { kind: "rect", w: 40, h: 30 },
-            generator: {
-              kind: "mushrooms",
-              version: 1,
-              params: { density: 220, height: 25, noOverlaps: false },
-              patch: { host: 2, points: [{ x: -20, y: 10, z: 3 }, { x: 20, y: 10, z: 4 }, { x: 0, y: -15, z: 6 }] },
-            },
-          },
-          {
-            type: "geometry",
-            kind: "mesh",
-            mesh: "boulder:0000000000000000",
-            shape: { kind: "poly", verts: [{ x: -100, y: -50 }, { x: 100, y: -50 }, { x: 80, y: 60 }, { x: -90, y: 50 }] },
-            generator: { kind: "boulder", version: 1, params: { depth: 120, weathering: 0.5, fractureAngle: 10, color: [0.2, 0.2, 0.25] } },
-          },
-          {
-            type: "geometry",
-            kind: "mesh",
-            shape: { kind: "rect", w: 10, h: 10 },
-            generator: { kind: "mushrooms", version: 1, patch: { host: 0, points: [{ x: 1, y: 2, z: 3 }, { x: 4, y: 5, z: 6 }, { x: 7, y: 8, z: 9 }] } },
-          },
-        ],
-      },
-    ],
-  };
-  const geometries = (d: LevelData): GeometryObjectData[] => d.bodies[0]!.objects.filter(isGeometryObject);
-
-  // --- the format: px <-> m by schema unit ---------------------------------
-  {
-    const m = scaleLevelData(authored, PX);
-    const [patch, rock] = geometries(m);
-    const p = rock!.generator!.params!;
-    const unitsRight =
-      same(p.depth, 1.2) &&
-      p.weathering === 0.5 &&
-      p.fractureAngle === 10 &&
-      JSON.stringify(p.color) === "[0.2,0.2,0.25]" &&
-      same(patch!.generator!.params!.height, 0.25) &&
-      patch!.generator!.params!.density === 220 &&
-      patch!.generator!.params!.noOverlaps === false &&
-      patch!.generator!.patch!.host === 2 &&
-      same(patch!.generator!.patch!.points[2], { x: 0, y: -0.15, z: 0.06 });
-    const back = scaleLevelData(m, PIXELS_PER_METER);
-    const trip = same(geometries(back).map((g) => g.generator), geometries(scaleLevelData(authored, 1)).map((g) => g.generator));
-    out.push({
-      name: "generator: the block crosses px -> m by schema unit (a length scales; a count, a flag, an angle, a ratio, a colour and the host index do not) and back",
-      pass: unitsRight && trip,
-      detail: `in metres ${JSON.stringify({ rock: p, patch: patch!.generator })}; round trip ${trip ? "kept" : `became ${JSON.stringify(geometries(back).map((g) => g.generator))}`}`,
-    });
-  }
-
-  // --- the editor: host index <-> item id ----------------------------------
-  {
-    const { value: model, warnings } = quietly(() => modelFromDisk(authored));
-    const items = model.items.filter((i) => i.object === "geometry");
-    const [patch, rock, orphan] = items;
-    const g = patch!.visual.generator!;
-    const loaded =
-      g.kind === "mushrooms" &&
-      g.patch!.hostId === rock!.id &&
-      same(g.params.height, 0.25) &&
-      same(rock!.visual.generator!.params.depth, 1.2) &&
-      orphan!.visual.generator!.patch!.hostId === 0 &&
-      orphan!.visual.generator!.patch!.points.length === 3 &&
-      warnings.length === 1 &&
-      warnings[0]!.includes("no host");
-    out.push({
-      name: "generator: a patch's host index loads as the host's item id; an index naming no other geometry object loads as no host, loop kept, with a warning",
-      pass: loaded,
-      detail: `host ${g.patch!.hostId} (rock ${rock!.id}); orphan ${JSON.stringify(orphan!.visual.generator!.patch)}; warnings ${JSON.stringify(warnings)}`,
-    });
-
-    // Saved back: the host is written as the index it now has, the orphan
-    // writes none, and everything else is what was loaded.
-    const saved = geometries(modelToDisk(model));
-    const want = geometries(scaleLevelData(authored, 1)).map((o) => o.generator);
-    delete want[2]!.patch!.host;
-    const kept = same(saved.map((o) => o.generator), want);
-    out.push({
-      name: "generator: the editor saves the block back in pixels, the host as its index in the body, a hostless patch with no index",
-      pass: kept,
-      detail: kept ? "kept" : `\n  want  ${JSON.stringify(want, r6)}\n  saved ${JSON.stringify(saved.map((o) => o.generator), r6)}`,
-    });
-
-    // The body's objects reordered under the patch: a new object ahead of the
-    // host moves the host's index, and the save follows it.
-    const shifted: RawLevelData = JSON.parse(JSON.stringify(authored));
-    const shiftedObjects = (shifted.bodies[0] as LevelBodyData).objects;
-    shiftedObjects.splice(1, 0, { type: "geometry", shape: { kind: "rect", w: 5, h: 5 } });
-    // The file states the host where it now is; the editor re-derives it.
-    (shiftedObjects[2] as GeometryObjectData).generator!.patch!.host = 3;
-    const moved = geometries(quietly(() => modelToDisk(modelFromDisk(shifted))).value);
-    const follows = moved[1]!.generator!.patch!.host === 3 && moved[2]!.generator?.kind === "boulder";
-    out.push({
-      name: "generator: a patch whose host moved within the body is written with the host's new index",
-      pass: follows,
-      detail: `host ${moved[1]!.generator!.patch!.host}, object 3 is ${moved[2]!.generator?.kind ?? "not generated"}`,
-    });
-
-    // Clipboard: a copy of the whole body pastes as a patch hosted by the
-    // PASTED rock, which is what `toLevelData` writing indexes buys for free.
-    const payload = writeClipboard(model, model.items);
-    const parsed = readClipboard(payload);
-    const pasted = parsed ? quietly(() => modelFromDisk(parsed)).value : null;
-    const pItems = pasted?.items.filter((i) => i.object === "geometry") ?? [];
-    const pasteOk =
-      pItems.length === 3 &&
-      pItems[0]!.visual.generator!.patch!.hostId === pItems[1]!.id &&
-      same(pItems[1]!.visual.generator!.params, rock!.visual.generator!.params) &&
-      same(pItems[0]!.visual.generator!.patch!.points, g.patch!.points);
-    out.push({
-      name: "generator: copy and paste carries the block, the patch hosted by the pasted rock",
-      pass: pasteOk,
-      detail: pasteOk ? "kept" : `pasted ${JSON.stringify(pItems.map((i) => i.visual.generator), r6)}`,
-    });
-
-    // The deep copy the editor's snapshot, duplicate and paste make, and the
-    // host remap a duplicate does: a copy's colour is its own array, its loop
-    // its own list, and a patch copied without its host has none.
-    const copy = cloneVisual(rock!.visual);
-    (copy.generator!.params.color as number[])[0] = 0.9;
-    const patchCopy = { ...patch!, visual: cloneVisual(patch!.visual) };
-    remapPatchHosts([patchCopy], new Map([[patch!.id, 999]]));
-    const detached =
-      (rock!.visual.generator!.params.color as number[])[0] === 0.2 &&
-      copy.generator !== rock!.visual.generator &&
-      patchCopy.visual.generator!.patch !== g.patch &&
-      patchCopy.visual.generator!.patch!.points !== g.patch!.points &&
-      patchCopy.visual.generator!.patch!.hostId === 0 &&
-      g.patch!.hostId === rock!.id &&
-      cloneGenerator(g).patch!.hostId === rock!.id;
-    out.push({
-      name: "generator: cloneVisual detaches the block (params and loop), and a patch copied without its host is re-hosted to nothing",
-      pass: detached,
-      detail: `original colour ${JSON.stringify(rock!.visual.generator!.params.color)}, copy's host ${patchCopy.visual.generator!.patch!.hostId}`,
-    });
-  }
-
-  // --- an untouched level saves byte-identically -----------------------------
-  {
-    const disk = JSON.stringify(BALL_LEVEL, null, 2);
-    const saved = JSON.stringify(modelToDisk(modelFromDisk(BALL_LEVEL as RawLevelData)), null, 2);
-    const identical = disk === saved;
-    let at = 0;
-    while (at < disk.length && disk[at] === saved[at]) at++;
-    out.push({
-      name: "generator: levels/ball.json (no generated objects) saves back byte-identical",
-      pass: identical,
-      detail: identical ? `${disk.length} bytes` : `first difference at ${at}: ${JSON.stringify(disk.slice(at - 40, at + 40))} vs ${JSON.stringify(saved.slice(at - 40, at + 40))}`,
-    });
-  }
-
-  // --- the key ----------------------------------------------------------------
-  {
-    // Two fixed contents, and the keys they must make everywhere, for ever: a
-    // change to either string is every generated mesh in every level going
-    // stale, and is only ever made on purpose (with a schema version bump).
-    const rockInput = { outline: [[-1, -0.5], [1, -0.5], [1, 0.5], [-1, 0.5]] as [number, number][] };
-    const rockParams = { seed: 7, depth: 1.2 };
-    //
-    // The patch's key was re-pinned once, on 2026-09-25 (it was
-    // mushrooms:a63d3184bac129bb): its key INPUT changed shape - the host's
-    // pose became its whole frame relative to the patch (`frame`, both tilts
-    // and scales), and the side the loop was painted on (`facing`) joined it -
-    // before any patch had been saved into a level. The schema `version` is the
-    // parameters' and was not bumped; a changed input shape changes keys by
-    // itself (docs/generators.md, "The editor's side").
-    const patchInput = {
-      loop: [[0, 0, 0.1], [0.5, 0, 0.1], [0.25, 0.4, 0.12]] as [number, number, number][],
-      facing: [0, 0.6, 0.8] as [number, number, number],
-      host: { kind: "mesh" as const, mesh: "boulder:0123456789abcdef", frame: [1, 0, 0, 0.1, 0, 1, 0, -0.2, 0, 0, 1, 0] },
-    };
-    const patchParams = { density: 200, noOverlaps: false };
-    const rockKey = generatedKey("boulder", 1, rockInput, rockParams);
-    const patchKey = generatedKey("mushrooms", 1, patchInput, patchParams);
-    // Also computed under node (V8) when pinned, which agreed with bun (JSC).
-    const ROCK_KEY = "boulder:c82bc75873f0956b";
-    const PATCH_KEY = "mushrooms:b23c95d4426ccdcd";
-    const text = canonicalString({ kind: "boulder", version: 1, input: rockInput, params: rockParams });
-    const TEXT = `{"input":{"outline":[[-1,-0.5],[1,-0.5],[1,0.5],[-1,0.5]]},"kind":"boulder","params":{"depth":1.2,"seed":7},"version":1}`;
-    out.push({
-      name: "generator: generatedKey is pinned on two fixed inputs (a boulder outline, a mushroom patch) and on its canonical string",
-      pass: rockKey === ROCK_KEY && patchKey === PATCH_KEY && text === TEXT,
-      detail: `${rockKey}, ${patchKey}; canonical ${text}`,
-    });
-
-    // One rock, however its parameters are spelled: defaults written out,
-    // float noise from a px round trip, keys in another order. And a different
-    // rock for a different seed, version, outline or kind.
-    const spelled = generatedKey("boulder", 1, rockInput, { depth: 1.2 + 1e-12, edgeVariation: 0.65, seed: 7, tolerance: null });
-    const moved = generatedKey("boulder", 1, { outline: [[-1, -0.5], [1, -0.5], [1, 0.5], [-1, 0.51]] }, rockParams);
-    const distinct = new Set([
-      rockKey,
-      generatedKey("boulder", 1, rockInput, { ...rockParams, seed: 8 }),
-      generatedKey("boulder", 2, rockInput, rockParams),
-      moved,
-      generatedKey("mushrooms", 1, rockInput, {}),
-    ]);
-    const stable = spelled === rockKey && distinct.size === 5;
-    out.push({
-      name: "generator: generatedKey ignores defaults, float noise and key order, and changes with seed, version, outline and kind",
-      pass: stable,
-      detail: `spelled ${spelled}; ${distinct.size} distinct of 5`,
-    });
-
-    const hash = rockKey.split(":")[1]!;
-    const resolved =
-      generatedMeshAsset(rockKey)?.file === `/generated/boulder/${hash}/mesh.glb` &&
-      generatedMeshAsset(patchKey)?.file === `/generated/mushrooms/${patchKey.split(":")[1]}/mesh.glb` &&
-      generatedMeshAsset("rock-196") === null &&
-      generatedMeshAsset("boulder-v5:263a5a5c-58d7-437c-b957-9900893e48b5:5129496") === null &&
-      generatedMeshAsset("boulder:XYZ") === null &&
-      parseGeneratedKey(patchKey)?.kind === "mushrooms";
-    out.push({
-      name: "generator: a generated key resolves to /generated/<kind>/<hash>/mesh.glb, and nothing else does",
-      pass: resolved,
-      detail: `${rockKey} -> ${generatedMeshAsset(rockKey)?.file}`,
-    });
-
-    // The preload list: a generated file is listed at the bytes its meta.json
-    // records, and at 0 with a warning when there is none.
-    const dir = mkdtempSync(join(tmpdir(), "rope-generated-"));
-    mkdirSync(join(dir, "generated", "boulder", hash), { recursive: true });
-    writeFileSync(join(dir, "generated", "boulder", hash, "meta.json"), JSON.stringify({ key: rockKey, bytes: 123456 }));
-    const meta = generatedMeta(rockKey, dir);
-    const missing = generatedMeta(patchKey, dir);
-    rmSync(dir, { recursive: true, force: true });
-    const level: RawLevelData = {
-      player: { x: 0, y: 0, radius: 8 },
-      bodies: [{ kind: "static", x: 0, y: 0, rot: 0, objects: [{ type: "geometry", kind: "mesh", mesh: patchKey }] }],
-    };
-    const { value: files, warnings } = quietly(() => levelStoredFiles(level));
-    const listed = files.find((f) => f.file === generatedMeshAsset(patchKey)!.file);
-    const preload = meta?.bytes === 123456 && missing === null && listed?.bytes === 0 && warnings.some((w) => w.includes("meta.json"));
-    out.push({
-      name: "generator: meta.json gives a generated file its bytes; the preload list names one without it at 0, with a warning",
-      pass: preload,
-      detail: `meta bytes ${meta?.bytes}, missing ${JSON.stringify(missing)}, listed ${JSON.stringify(listed)}, warnings ${warnings.length}`,
-    });
-
-    // A PUBLISHED key is weighed from the store manifest, which a fresh
-    // checkout (the deploy's) has and its meta.json does not; and its release
-    // name is its own, since every generated file is `mesh.glb`.
-    const published = Object.keys(GENERATED_ASSETS)[0];
-    if (published) {
-      const pinned: RawLevelData = {
-        player: { x: 0, y: 0, radius: 8 },
-        bodies: [{ kind: "static", x: 0, y: 0, rot: 0, objects: [{ type: "geometry", kind: "mesh", mesh: published }] }],
-      };
-      const got = quietly(() => levelStoredFiles(pinned));
-      const entry = got.value.find((f) => f.file === generatedMeshAsset(published)!.file);
-      const name = generatedReleaseName(published);
-      out.push({
-        name: "generator: a published key is weighed from the store manifest, under a release name of its own",
-        pass: entry?.bytes === GENERATED_ASSETS[published]!.bytes && got.warnings.length === 0 && /^generated-(boulder|mushrooms)-[0-9a-f]{16}\.glb$/.test(name),
-        detail: `${published}: listed ${JSON.stringify(entry)}, manifest ${GENERATED_ASSETS[published]!.bytes}, release name ${name}`,
-      });
-    }
-  }
-
-  // --- the schemas -------------------------------------------------------------
-  {
-    const problems: string[] = [];
-    const counts: string[] = [];
-    for (const kind of GENERATOR_KINDS) {
-      const s = GENERATOR_SCHEMAS[kind];
-      if (s.kind !== kind || !Number.isInteger(s.version) || s.version < 1) problems.push(`${kind}: kind/version`);
-      if (!Array.isArray(s.notes?.constants) || s.notes.constants.length === 0) problems.push(`${kind}: no constants note`);
-      const keys = new Set<string>();
-      for (const p of s.params) {
-        const where = `${kind}.${p.key}`;
-        if (keys.has(p.key)) problems.push(`${where}: duplicate`);
-        keys.add(p.key);
-        if (!s.groups.includes(p.group)) problems.push(`${where}: group ${p.group}`);
-        if (typeof p.basic !== "boolean" || typeof p.doc !== "string" || p.doc.length < 10) problems.push(`${where}: basic/doc`);
-        if (p.unit !== undefined && p.unit !== "m" && p.unit !== "deg") problems.push(`${where}: unit ${p.unit}`);
-        if (p.type === "int" || p.type === "number" || p.type === "color") {
-          if (typeof p.min !== "number" || typeof p.max !== "number" || typeof p.step !== "number") problems.push(`${where}: min/max/step`);
-        }
-        if (p.type === "enum" && !(p.options ?? []).includes(p.default as number | string)) problems.push(`${where}: default not an option`);
-        // Every default is itself a valid value (null is "derived").
-        if (p.default !== null && validateParams({ [p.key]: p.default }, s).length > 0) problems.push(`${where}: default invalid`);
-      }
-      counts.push(`${kind} ${s.groups.map((g) => `${g} ${s.params.filter((p) => p.group === g).length}`).join(", ")}`);
-    }
-    out.push({
-      name: "generator: both params.json files are well formed (unique keys, known groups and units, ranges, a doc each, defaults valid)",
-      pass: problems.length === 0,
-      detail: problems.length === 0 ? counts.join("; ") : problems.join("; "),
-    });
-
-    // The values the fork's editor actually sent, which is what "the port
-    // changes nothing about an approved rock" rests on.
-    const d = (kind: GeneratorKind) => Object.fromEntries(GENERATOR_SCHEMAS[kind].params.map((p) => [p.key, p.default]));
-    const b = d("boulder");
-    const m = d("mushrooms");
-    const fork =
-      b.seed === 31 && b.depth === 1.6 && b.tolerance === null && b.edgeVariation === 0.65 && b.weathering === 0.38 &&
-      b.fractureAngle === 4 && b.detail === 1 && b.secondarySlabs === 0 && b.slabsPerArea === 10 &&
-      JSON.stringify(b.color) === "[0.13,0.15,0.18]" && b.faceBudget === 3000 && b.bakeSize === 2048 &&
-      m.seed === 0 && m.density === 150 && m.height === 0.16 && m.clumping === 0.75 && m.maxSlope === 75 &&
-      m.detail === 0.3 && m.spacing === 0.02 && m.noOverlaps === true && m.glow === 2 && m.maxTriangles === 40000 &&
-      m.maxEstimate === 3000;
-    out.push({
-      name: "generator: the defaults are the values the fork's editor sent (boulder seed 31, depth 1.6, ...; mushrooms density 150, detail 0.3, ...)",
-      pass: fork,
-      detail: `boulder ${JSON.stringify(b)}; mushrooms ${JSON.stringify(m)}`,
-    });
-  }
-
-  // --- scaling, validation, defaults -----------------------------------------
-  {
-    const boulder = GENERATOR_SCHEMAS.boulder;
-    const mushrooms = GENERATOR_SCHEMAS.mushrooms;
-    const scaled = scaleParams(
-      { depth: 1.2, edgeBevelWidth: 0.02, weathering: 0.5, fractureAngle: 10, faceBudget: 4000, color: [0.1, 0.2, 0.3], mystery: 3 },
-      boulder,
-      100,
-    );
-    const grown = scaleParams({ height: 0.2, spacing: 0.03, gap: 0.004, clumpSize: 0.5, density: 180, maxTilt: 20, noOverlaps: false }, mushrooms, 100);
-    const byUnit =
-      same(scaled, { depth: 120, edgeBevelWidth: 2, weathering: 0.5, fractureAngle: 10, faceBudget: 4000, color: [0.1, 0.2, 0.3], mystery: 3 }) &&
-      same(grown, { height: 20, spacing: 3, gap: 0.4, clumpSize: 50, density: 180, maxTilt: 20, noOverlaps: false });
-    out.push({
-      name: "generator: scaleParams scales exactly the unit-m parameters (a degree, a count, a ratio, a density, a colour and an unknown key pass)",
-      pass: byUnit,
-      detail: `${JSON.stringify(scaled, r6)}; ${JSON.stringify(grown, r6)}`,
-    });
-
-    const bad = validateParams(
-      { depth: 9, seed: 1.5, weathering: "much", bakeSize: 3000, color: [0.1, 2, 0.1], mystery: 1 },
-      boulder,
-    ).map((i) => i.key);
-    const badBool = validateParams({ noOverlaps: 1, density: 0 }, mushrooms).map((i) => i.key);
-    const good = validateParams({ depth: 5, seed: 0, color: [0, 1, 0.5], bakeSize: 4096, tolerance: 0.03 }, boulder);
-    const rejects =
-      JSON.stringify(bad.sort()) === JSON.stringify(["bakeSize", "color", "depth", "mystery", "seed", "weathering"]) &&
-      JSON.stringify(badBool.sort()) === JSON.stringify(["density", "noOverlaps"]) &&
-      good.length === 0;
-    out.push({
-      name: "generator: validateParams rejects out-of-range, mistyped, non-option and unknown values and passes the edges of the range",
-      pass: rejects,
-      detail: `flagged ${JSON.stringify(bad)} and ${JSON.stringify(badBool)}; valid set ${JSON.stringify(good)}`,
-    });
-
-    const authoredParams = { depth: 1.2, color: [0.2, 0.2, 0.25] };
-    const merged = mergeDefaults(authoredParams, boulder);
-    const stripped = stripDefaults(merged, boulder);
-    const allDefaults = stripDefaults(mergeDefaults({}, boulder), boulder);
-    const nearDefault = stripDefaults({ depth: 1.6 + 1e-9, seed: 31, weathering: 0.3801 }, boulder);
-    const mergeOk =
-      Object.keys(merged).length === boulder.params.length &&
-      merged.depth === 1.2 &&
-      merged.seed === 31 &&
-      merged.tolerance === null &&
-      same(stripped, authoredParams) &&
-      Object.keys(allDefaults).length === 0 &&
-      same(nearDefault, { weathering: 0.3801 }) &&
-      same(canonicalParams({ weathering: 0.5, depth: 1.6, seed: 9 }, boulder), { seed: 9, weathering: 0.5 }) &&
-      JSON.stringify(Object.keys(canonicalParams({ weathering: 0.5, seed: 9 }, boulder))) === '["seed","weathering"]';
-    out.push({
-      name: "generator: mergeDefaults fills every parameter and stripDefaults takes it back to what was authored, at 1e-4 resolution",
-      pass: mergeOk,
-      detail: `merged ${Object.keys(merged).length} of ${boulder.params.length}; stripped ${JSON.stringify(stripped)}; near-default ${JSON.stringify(nearDefault)}`,
-    });
-  }
-
-  // --- staleness -----------------------------------------------------------------
-  {
-    const model = quietly(() => modelFromDisk(authored)).value;
-    const lookup = itemLookup(model.items);
-    const [patch, rock] = model.items.filter((i) => i.object === "geometry");
-    // Generated as it stands.
-    rock!.visual.mesh = expectedKey(rock!, lookup)!;
-    patch!.visual.mesh = expectedKey(patch!, lookup)!;
-    const fresh = !isStale(rock!, lookup) && !isStale(patch!, lookup);
-    const plain = model.items.find((i) => i.object === "collision")!;
-    const outline = boulderOutline(rock!);
-
-    // The whole body moved and turned: nothing the generators read changed.
-    const turn = 0.4;
-    const pivot = new Vec2(1, 2);
-    for (const i of model.items) {
-      i.pos = pivot.add(i.pos.sub(pivot).rotated(turn));
-      i.rot += turn;
-    }
-    const bodyMoved = !isStale(rock!, lookup) && !isStale(patch!, lookup);
-
-    // The host alone moved: the patch is stale, the rock is not.
-    const home = rock!.pos;
-    rock!.pos = rock!.pos.add(new Vec2(0.05, 0));
-    const hostMoved = !isStale(rock!, lookup) && isStale(patch!, lookup);
-    rock!.pos = home;
-
-    // The patch tipped or scaled on its own, or the host tipped: the relative
-    // frame the key holds moved, so the patch is stale.
-    const alone = (edit: () => void, undo: () => void): boolean => {
-      edit();
-      const stale = isStale(patch!, lookup);
-      undo();
-      return stale && !isStale(patch!, lookup);
-    };
-    const patchTipped = alone(() => (patch!.visual.rotX = 0.1), () => (patch!.visual.rotX = 0));
-    const patchScaled = alone(() => (patch!.visual.scale = 1.2), () => (patch!.visual.scale = 1));
-    const hostTipped = alone(() => (rock!.visual.rotY = 0.1), () => (rock!.visual.rotY = 0));
-
-    // A primitive host: what it wears and its lens are part of its surface.
-    rock!.visual.kind = "primitive";
-    patch!.visual.mesh = expectedKey(patch!, lookup)!;
-    const retextured = alone(() => (rock!.visual.texture = "moss"), () => (rock!.visual.texture = ""));
-    const lens = rock!.visual.projection;
-    const relensed = alone(
-      () => (rock!.visual.projection = lens === "orthographic" ? "perspective" : "orthographic"),
-      () => (rock!.visual.projection = lens),
-    );
-    rock!.visual.kind = "mesh";
-    patch!.visual.mesh = expectedKey(patch!, lookup)!;
-
-    // Two rocks never generated are two hosts: a patch on one keys the rock's
-    // future key, so a different seed is a different patch; once the rock has
-    // a mesh, its mesh key alone speaks for it.
-    const rockMesh = rock!.visual.mesh;
-    rock!.visual.mesh = "";
-    const unmadeA = expectedKey(patch!, lookup);
-    rock!.visual.generator!.params.seed = 99;
-    const unmadeB = expectedKey(patch!, lookup);
-    delete rock!.visual.generator!.params.seed;
-    rock!.visual.mesh = rockMesh;
-    const unmadeHosts = unmadeA !== null && unmadeB !== null && unmadeA !== unmadeB && !isStale(patch!, lookup);
-
-    // A parameter, a vertex, the version.
-    rock!.visual.generator!.params.depth = 1.3;
-    const paramChanged = isStale(rock!, lookup) && isStale(patch!, lookup) === false;
-    rock!.visual.generator!.params.depth = 1.2;
-    const shape = rock!.shape as Extract<EdItem["shape"], { kind: "poly" }>;
-    const vert = shape.verts[0]!;
-    shape.verts[0] = vert.add(new Vec2(0.01, 0));
-    const vertexChanged = isStale(rock!, lookup);
-    shape.verts[0] = vert;
-    rock!.visual.generator!.version = 2;
-    const versionChanged = isStale(rock!, lookup);
-    rock!.visual.generator!.version = 1;
-    // Stale when the host goes, when never generated, never without a block.
-    patch!.visual.generator!.patch!.hostId = 0;
-    const hostless = isStale(patch!, lookup) && expectedKey(patch!, lookup) === null;
-    const unmade = { ...rock!, visual: { ...rock!.visual, mesh: "" } };
-    const results = {
-      fresh,
-      bodyMoved,
-      hostMoved,
-      patchTipped,
-      patchScaled,
-      hostTipped,
-      retextured,
-      relensed,
-      unmadeHosts,
-      paramChanged,
-      vertexChanged,
-      versionChanged,
-      hostless,
-      neverGenerated: isStale(unmade, lookup),
-      noBlock: !isStale(plain, lookup),
-      outlineUp: same(outline[0], [-1, 0.5]),
-    };
-    const ok = Object.values(results).every(Boolean);
-    out.push({
-      name: "generator: isStale follows the outline, the loop's host (its whole frame relative to the patch, a primitive's texture and lens, an ungenerated rock's future key), the patch's own tilt and scale, the params and the version, and not a move of the whole body",
-      pass: ok,
-      detail: JSON.stringify(results),
-    });
-  }
-  return out;
-}
-
-// A boulder's outline as the key sees it: the object's own shape, y up.
-function boulderOutline(item: EdItem): [number, number][] {
-  const input = generatorInput(item, () => undefined);
-  return input && "outline" in input ? input.outline : [];
-}
-
-// A small level for the tools' cases, on disk in pixels: one static body with
-// an irregular collision polygon (about 2 m across) and the geometry matched
-// to it, and a circle body that no rock can be fitted to.
-function toolLevel(): RawLevelData {
-  return {
-    player: { x: 0, y: 0, radius: 8 },
-    bodies: [
-      {
-        kind: "static",
-        x: 200,
-        y: 100,
-        rot: 0,
-        objects: [
-          {
-            type: "collision",
-            shape: { kind: "poly", verts: [{ x: -100, y: -40 }, { x: -30, y: -70 }, { x: 90, y: -50 }, { x: 110, y: 20 }, { x: 40, y: 60 }, { x: -80, y: 45 }] },
-          },
-          {
-            type: "geometry",
-            matchCollision: true,
-            shape: { kind: "poly", verts: [{ x: -100, y: -40 }, { x: -30, y: -70 }, { x: 90, y: -50 }, { x: 110, y: 20 }, { x: 40, y: 60 }, { x: -80, y: 45 }] },
-          },
-        ],
-      },
-      { kind: "static", x: -300, y: 0, rot: 0, objects: [{ type: "collision", shape: { kind: "circle", r: 30 } }] },
-    ],
-  };
-}
-
-// THE TOOLS' PURE HALVES (Phase 5 of plans/visuals-workspace.md): the surface a
-// mushroom loop covers, the objects + Rock and + Mushrooms add, and the panel's
-// reading and writing of parameters. The editor's wiring (one undo step per
-// gesture, the scene's meshes) is driven in the browser, not here.
-function generatorTools(): CaseResult[] {
-  const out: CaseResult[] = [];
-  const near = (a: number, b: number, tol: number) => Math.abs(a - b) <= tol;
-
-  // --- the surface a loop covers, on a 1 m box at the origin ---------------
-  {
-    const box = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1));
-    box.updateMatrixWorld(true);
-    // A 0.6 m square on the top face, and one on the front face (a wall).
-    const up = new THREE.Vector3(0, 1, 0);
-    const toward = new THREE.Vector3(0, 0, 1);
-    const top = [[-0.3, -0.3], [0.3, -0.3], [0.3, 0.3], [-0.3, 0.3]].map(([x, z]) => ({
-      point: new THREE.Vector3(x!, 0.5, z!),
-      normal: up,
-    }));
-    const front = [[-0.3, -0.3], [0.3, -0.3], [0.3, 0.3], [-0.3, 0.3]].map(([x, y]) => ({
-      point: new THREE.Vector3(x!, y!, 0.5),
-      normal: toward,
-    }));
-    const f = frameOf(top)!;
-    const frameOk = f !== null && near(f.n.y, 1, 1e-9) && near(f.origin.y, 0.5, 1e-9) && f.band >= 0.05 && f.step > 0;
-    const topSel = selectSurface([box], top, { maxSlopeDeg: 75, maxTriangles: 40000 });
-    const topArea = topSel.ok ? topSel.selection.area : 0;
-    const topTris = topSel.ok ? topSel.selection.triangles : 0;
-    // The step cuts the box's two top triangles to the loop's edge: the area is
-    // the loop's own 0.36 m^2 to within the cut's staircase.
-    const areaOk = near(topArea, 0.36, 0.36 * 0.05) && topTris > 2;
-    // A wall: refused at 75 degrees, taken at 90.
-    const wall75 = selectSurface([box], front, { maxSlopeDeg: 75, maxTriangles: 40000 });
-    const wall90 = selectSurface([box], front, { maxSlopeDeg: 90, maxTriangles: 40000 });
-    const slopeOk = !wall75.ok && wall75.reason === "empty" && wall90.ok && near(wall90.selection.area, 0.36, 0.36 * 0.05);
-    // A second box 3 m under the first: its top faces the loop and is inside it
-    // seen from above, but it is far outside the band.
-    const below = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1));
-    below.position.set(0, -3, 0);
-    below.updateMatrixWorld(true);
-    const banded = selectSurface([box, below], top, { maxSlopeDeg: 75, maxTriangles: 40000 });
-    const bandOk = banded.ok && near(banded.selection.area, topArea, 1e-9);
-    // Over the cap: an answer, not a search that never ends.
-    const capped = selectSurface([box], top, { maxSlopeDeg: 75, maxTriangles: 1 });
-    const capOk = !capped.ok && capped.reason === "overflow";
-    // The soup in the patch's frame: world minus the patch origin, 1e-4 m.
-    const pose = { x: 0, y: -0.5, z: 0, rot: 0, rotX: 0, rotY: 0, scale: 1 };
-    const soup = topSel.ok ? soupInFrame(topSel.selection.positions, patchMatrix(pose).invert()) : [];
-    const soupOk = soup.length === topTris * 9 && soup.filter((_, i) => i % 3 === 1).every((y) => y === 0);
-    const ok = frameOk && areaOk && slopeOk && bandOk && capOk && soupOk;
-    out.push({
-      name: "generator: a painted loop collects the faces inside it (area, triangles), leaves a wall past maxSlope, a face outside the band and a soup over the cap",
-      pass: ok,
-      detail: JSON.stringify({ frameOk, topArea, topTris, slopeOk, bandOk, capOk, soupOk }),
-    });
-  }
-
-  // --- the patch frame: a loop stored in it comes back where it was painted --
-  {
-    const pose = { x: 1.2, y: -0.4, z: 0.3, rot: 0.7, rotX: 0.2, rotY: -0.3, scale: 1.5 };
-    const m = patchMatrix(pose);
-    const inv = m.clone().invert();
-    const w = new THREE.Vector3(1.5, 0.9, 0.1);
-    const back = loopPointToWorld(m, worldToLoopPoint(inv, w));
-    // The frame is the one `mountVisual` builds: a piece turned by `rot`, a
-    // holder at `z` tipped (rotX, rotY) and scaled.
-    const piece = new THREE.Group();
-    piece.position.set(pose.x, -pose.y, 0);
-    piece.rotation.z = -pose.rot;
-    const holder = new THREE.Group();
-    holder.position.z = pose.z;
-    holder.rotation.set(pose.rotX, pose.rotY, 0);
-    holder.scale.setScalar(pose.scale);
-    piece.add(holder);
-    piece.updateMatrixWorld(true);
-    const local = new THREE.Vector3(0.1, -0.2, 0.3);
-    const viaScene = local.clone().applyMatrix4(holder.matrixWorld);
-    const viaFrame = local.clone().applyMatrix4(m);
-    const ok = back.distanceTo(w) < 1e-12 && viaScene.distanceTo(viaFrame) < 1e-12;
-    out.push({
-      name: "generator: a patch's frame is the one mountVisual draws its mesh in, and a loop point round-trips through it",
-      pass: ok,
-      detail: `round trip ${back.distanceTo(w).toExponential(2)} m; scene vs frame ${viaScene.distanceTo(viaFrame).toExponential(2)} m`,
-    });
-  }
-
-  // --- + Rock: one body gains one generated object ---------------------------
-  {
-    const model = modelFromDisk(toolLevel());
-    const lookup = itemLookup(model.items);
-    const [coll, matched] = model.items.filter((i) => i.bodyId === model.items[0]!.bodyId);
-    const circle = model.items.find((i) => i.shape.kind === "circle")!;
-    const fromOutline = rockSource(model.items, coll!);
-    const fromMatched = rockSource(model.items, matched!);
-    const noCircle = rockSource(model.items, circle) === null;
-    const before = model.items.length;
-    const rock = rockFor(fromOutline!, 9001);
-    model.items.push(rock);
-    const g = rock.visual.generator!;
-    const block =
-      g.kind === "boulder" &&
-      g.version === GENERATOR_SCHEMAS.boulder.version &&
-      Object.keys(g.params).length === 0 &&
-      g.patch === null &&
-      rock.visual.kind === "mesh" &&
-      rock.visual.mesh === "" &&
-      rock.object === "geometry" &&
-      rock.bodyId === coll!.bodyId &&
-      rock.matchId === coll!.id;
-    // Not yet generated: stale, with a key to generate under.
-    const stale = isStale(rock, itemLookup(model.items)) && wantedKey(rock, itemLookup(model.items)) !== null;
-    const again = existingRock(model.items, coll!) === rock;
-    // On disk: the same body, one more object, the block and the match.
-    const data = toLevelData(model);
-    const body = data.bodies.find((b) => b.objects.length === 3)!;
-    const written = body?.objects.filter(isGeometryObject).find((o) => o.generator);
-    const disk =
-      model.items.length === before + 1 &&
-      written?.generator?.kind === "boulder" &&
-      written.matchCollision === true &&
-      written.generator.params === undefined &&
-      written.mesh === undefined;
-    const ok = fromOutline === coll && fromMatched === coll && noCircle && block && stale && again && disk && lookup(coll!.id) === coll;
-    out.push({
-      name: "generator: + Rock adds one matched mesh object with a default boulder block to the outline's body, and finds it again",
-      pass: ok,
-      detail: JSON.stringify({ fromOutline: fromOutline === coll, fromMatched: fromMatched === coll, noCircle, block, stale, again, disk, written: written?.generator }),
-    });
-  }
-
-  // --- + Mushrooms: the patch in the host's body, its loop in its own frame ---
-  {
-    const model = modelFromDisk(toolLevel());
-    const host = model.items.find((i) => i.object === "geometry")!;
-    // A loop on the host's front face, 0.1 m toward the camera, and a soup
-    // under it.
-    const loop = [
-      new THREE.Vector3(1.8, -0.9, 0.1),
-      new THREE.Vector3(2.2, -0.9, 0.12),
-      new THREE.Vector3(2.1, -1.2, 0.14),
-      new THREE.Vector3(1.85, -1.15, 0.1),
-    ];
-    const soup = new Float32Array([1.8, -1.2, 0.1, 2.2, -1.2, 0.14, 2.2, -0.9, 0.12, 1.8, -1.2, 0.1, 2.2, -0.9, 0.12, 1.8, -0.9, 0.1]);
-    // The painted normals summed: toward the camera, a little up.
-    const patch = patchFor(host, 9002, loop, soup, new THREE.Vector3(0, 0.4, 3.8));
-    model.items.push(patch);
-    const g = patch.visual.generator!;
-    const m = patchMatrix(objectPose(patch, patch.visual.offsetZ));
-    const worst = Math.max(...g.patch!.points.map((p, i) => loopPointToWorld(m, p).distanceTo(loop[i]!)));
-    const lookup = itemLookup(model.items);
-    const input = generatorInput(patch, lookup);
-    const shape = patch.shape.kind === "rect" ? patch.shape : null;
-    // The facing stored unit length, y down like the points, and keyed y up.
-    const f = g.patch!.facing;
-    const facingOk =
-      f !== null && near(Math.hypot(f.x, f.y, f.z), 1, 1e-4) && near(f.y, -0.1047, 1e-4) && f.z > 0.99 &&
-      input !== null && "facing" in input && near(input.facing![1], 0.1047, 1e-4);
-    const placed =
-      patch.bodyId === host.bodyId &&
-      g.kind === "mushrooms" &&
-      g.patch?.hostId === host.id &&
-      patch.matchId === 0 &&
-      patch.visual.mesh === "" &&
-      near(patch.pos.x, 2, 1e-6) &&
-      near(patch.pos.y, 1.05, 1e-6) &&
-      near(patch.visual.offsetZ, 0.12, 1e-6) &&
-      shape !== null && near(shape.w, 0.4, 1e-6) && near(shape.h, 0.3, 1e-6);
-    const data = toLevelData(model);
-    const objects = data.bodies.find((b) => b.objects.some((o) => isGeometryObject(o) && o.generator))!.objects;
-    const written = objects.filter(isGeometryObject).find((o) => o.generator?.kind === "mushrooms");
-    const hostIndex = objects.findIndex((o) => isGeometryObject(o) && !o.generator);
-    const disk = written?.generator?.patch?.host === hostIndex && written.generator.patch.points.length === 4;
-    // The facing is a direction: written as held, and not scaled px <-> m.
-    const px = scaleLevelData(data, PIXELS_PER_METER);
-    const pxPatch = px.bodies.flatMap((b) => b.objects).filter(isGeometryObject).find((o) => o.generator?.kind === "mushrooms");
-    const asText = (v: unknown): string => JSON.stringify(v ?? null);
-    const facingDisk =
-      f !== null && asText(written?.generator?.patch?.facing) === asText(f) && asText(pxPatch?.generator?.patch?.facing) === asText(f);
-    const ok = placed && worst < 1e-9 && input !== null && disk && facingOk && facingDisk;
-    out.push({
-      name: "generator: + Mushrooms adds one patch in the host's body, at the soup's middle and extent, its loop in its own frame naming the host, with the side it was painted on",
-      pass: ok,
-      detail: JSON.stringify({ placed, worst, input: input !== null, disk, facingOk, facingDisk, f, hostIndex, written: written?.generator?.patch?.host }),
-    });
-
-    // Edit loop moved the loop: the patch is fitted to what it covers now, and
-    // the loop stays where it was painted in the world. A turned, tipped and
-    // scaled patch, so the fit is shown in its own frame and not the world's.
-    patch.rot = 0.3;
-    patch.visual.rotX = 0.2;
-    patch.visual.scale = 1.5;
-    const frame = patchMatrix(objectPose(patch, patch.visual.offsetZ));
-    const before = g.patch!.points.map((p) => loopPointToWorld(frame, p));
-    // A soup 0.5 m further right in the patch's own frame, 0.2 x 0.1 x 0.02.
-    const local = [[0.4, -0.05, 0], [0.6, -0.05, 0.02], [0.6, 0.05, 0.01]];
-    const moved = new Float32Array(local.flatMap(([x, y, z]) => new THREE.Vector3(x, y, z).applyMatrix4(frame).toArray()));
-    const fit = refitPatch(patch, frame, moved)!;
-    const refitted = { ...patch, pos: fit.pos, visual: { ...patch.visual, offsetZ: fit.offsetZ } };
-    const after = patchMatrix(objectPose(refitted, fit.offsetZ));
-    const drift = Math.max(...fit.points.map((p, i) => loopPointToWorld(after, p).distanceTo(before[i]!)));
-    const centre = new THREE.Vector3(0.5, 0, 0.01).applyMatrix4(frame);
-    const origin = new THREE.Vector3().applyMatrix4(after);
-    // The soup is a Float32Array (as `selectSurface` makes it), so the box it
-    // gives is good to a few tenths of a micrometre.
-    const refitOk =
-      drift < 1e-9 &&
-      origin.distanceTo(centre) < 1e-6 &&
-      near(fit.w, 0.2, 1e-6) && near(fit.h, 0.1, 1e-6) && near(fit.depth, MIN_PATCH_EXTENT, 1e-9) &&
-      refitPatch(patch, frame, new Float32Array(0)) === null;
-    out.push({
-      name: "generator: Edit loop re-fits the patch to the faces its loop covers now (origin, rect, depth in its own turned, tipped, scaled frame), the loop staying put in the world",
-      pass: refitOk,
-      detail: JSON.stringify({ drift, origin: origin.toArray(), centre: centre.toArray(), w: fit.w, h: fit.h, depth: fit.depth }),
-    });
-  }
-
-  // --- a landing mesh in the redo states ------------------------------------
-  // The swap keeps the redo stack and writes the mesh into every redo state
-  // that wants it, so a redo after a landing keeps the rock; a state whose
-  // content differs is left alone, as is a state without the object.
-  {
-    const redoState = (seed?: number) => {
-      const m = modelFromDisk(toolLevel());
-      const coll = m.items.find((i) => i.object === "collision" && i.shape.kind === "poly")!;
-      const rock = rockFor(coll, 9004);
-      if (seed !== undefined) rock.visual.generator!.params = { seed };
-      m.items.push(rock);
-      return m.items;
-    };
-    const same = redoState();
-    const key = wantedKey(same.find((i) => i.id === 9004)!, itemLookup(same))!;
-    const other = redoState(5);
-    const without = redoState().filter((i) => i.id !== 9004);
-    const landed = landMesh(same, 9004, key) && same.find((i) => i.id === 9004)!.visual.mesh === key;
-    const again = !landMesh(same, 9004, key);
-    const leftAlone = !landMesh(other, 9004, key) && other.find((i) => i.id === 9004)!.visual.mesh === "";
-    const absent = !landMesh(without, 9004, key);
-    out.push({
-      name: "generator: a landed mesh goes into every redo state that wants that very key, and no other",
-      pass: landed && again && leftAlone && absent,
-      detail: JSON.stringify({ landed, again, leftAlone, absent }),
-    });
-  }
-
-  // --- the panel: parameters in and out -------------------------------------
-  {
-    const schema = GENERATOR_SCHEMAS.boulder;
-    const authored: ParamValues = { seed: 7, depth: 1.2, weathering: 0.5, bakeSize: 1024, color: [0.2, 0.2, 0.25] };
-    // Every field written from the merged values, as the panel's setters do,
-    // one at a time over an empty block: the defaults fall away and what was
-    // authored is what is left.
-    let params: ParamValues = {};
-    for (const [key, value] of Object.entries(mergeDefaults(authored, schema))) params = withParam(params, schema, key, value);
-    const sorted = (p: ParamValues) => JSON.stringify(Object.keys(p).sort().map((k) => [k, p[k]]));
-    const trip = sorted(params) === sorted(stripDefaults(authored, schema)) && !("tolerance" in params);
-    // A value set back to its default, and a cleared field, remove the key.
-    const reset = withParam(withParam(params, schema, "depth", 1.6), schema, "seed", null);
-    const resetOk = !("depth" in reset) && !("seed" in reset) && reset.weathering === 0.5;
-    const intSpec = paramSpec(schema, "seed")!;
-    const numSpec = paramSpec(schema, "depth")!;
-    const clampOk = clampParam(intSpec, 7.6) === 8 && clampParam(intSpec, -3) === 0 && clampParam(numSpec, 9) === 5 && clampParam(numSpec, 0) === 0.02;
-    const colour = paramSpec(schema, "color")!.default as number[];
-    const hexTrip = linearOfHex(hexOfLinear(colour)).every((c, i) => Math.abs(c - colour[i]!) < 2e-3);
-    const seeded = nextSeedParams({}, schema).seed === 32 && nextSeedParams({ seed: 2147483647 }, schema).seed === 0;
-    const pasted = parseParamsPayload(paramsPayload("boulder", 1, authored), schema);
-    const pasteOk =
-      "params" in pasted &&
-      JSON.stringify(pasted.params) === JSON.stringify(stripDefaults(authored, schema)) &&
-      "error" in parseParamsPayload(paramsPayload("mushrooms", 1, { density: 10 }), schema) &&
-      "error" in parseParamsPayload(paramsPayload("boulder", 1, { depth: 99 }), schema) &&
-      "error" in parseParamsPayload("not json", schema);
-    const pairs = paramIssues({ slabWidthMin: 0.6 }, schema);
-    const pairOk = pairs.length === 1 && pairs[0]!.startsWith("slabWidthMin:");
-    const labelOk = paramLabel(numSpec) === "depth (m)" && paramLabel(paramSpec(schema, "slabYaw")!) === "slab yaw°";
-    const ok = trip && resetOk && clampOk && hexTrip && seeded && pasteOk && pairOk && labelOk;
-    out.push({
-      name: "generator: the panel writes only non-default values (stripDefaults round trip through the setters), clamps, pastes and flags a Min over its Max",
-      pass: ok,
-      detail: JSON.stringify({ trip, params, resetOk, clampOk, hexTrip, seeded, pasteOk, pairs, labelOk }),
-    });
-  }
-
-  // --- the status line -------------------------------------------------------
-  {
-    const model = modelFromDisk(toolLevel());
-    const coll = model.items.find((i) => i.object === "collision" && i.shape.kind === "poly")!;
-    const rock = rockFor(coll, 9003);
-    model.items.push(rock);
-    const lookup = itemLookup(model.items);
-    const key = wantedKey(rock, lookup)!;
-    const none = () => null;
-    const job = (state: Job["state"], extra: Partial<Job> = {}): Job => ({ itemId: rock.id, key, kind: "boulder", state, elapsed: 12.4, ...extra });
-    const never = generatorStatus(rock, lookup, undefined, none);
-    const running = generatorStatus(rock, lookup, job("running"), none);
-    const failed = generatorStatus(rock, lookup, job("failed", { message: "Boulder generation failed.\nboulder: PASS; outline 0.02\nboulder: FAIL centre slice 0.041790\nkept in /tmp/x" }), none);
-    const unexplained = generatorStatus(rock, lookup, job("failed", { message: "a\nb\nc\nd" }), none);
-    rock.visual.mesh = key;
-    const done = generatorStatus(rock, lookup, job("done"), () => ({ bytes: 1_499_436, triangles: 7504 }));
-    const badgeFresh = generatorBadge(rock, lookup, job("done"));
-    rock.visual.generator!.params = { depth: 1.2 };
-    const stale = generatorStatus(rock, lookup, job("done"), none);
-    // A failure for content the object no longer holds is not its status.
-    const oldFailure = generatorStatus(rock, lookup, job("failed", { message: "x" }), none);
-    // A current key with no file on this machine (the service answers 404).
-    rock.visual.generator!.params = {};
-    const missing = generatorStatus(rock, lookup, undefined, none, () => true);
-    // The job's server restarted under it: lost, said as such.
-    const lost = generatorStatus(rock, lookup, job("lost", { message: "the dev server restarted: press Generate again" }), none);
-    // A value the key cannot be made of: said, never thrown out of the frame
-    // loop that asks every frame. (A field never writes one; a file could.)
-    rock.visual.generator!.params = { depth: Number.NaN };
-    let invalid = { text: "threw", tone: "" } as { text: string; tone: string };
-    let invalidBadge = "threw";
-    try {
-      invalid = generatorStatus(rock, lookup, undefined, none);
-      invalidBadge = generatorBadge(rock, lookup, undefined);
-    } catch {
-      // `invalid` stays "threw"
-    }
-    rock.visual.generator!.params = { depth: 1.2 };
-    const results = {
-      lost: lost.text === "the dev server restarted: press Generate again" && lost.tone === "warn",
-      invalid: invalid.text.startsWith("stale: invalid value") && invalid.tone === "warn" && invalidBadge === "stale",
-      never: never.text === "stale: never generated" && never.tone === "warn",
-      running: running.text === "generating 12 s" && running.tone === "busy",
-      failed:
-        failed.text === "failed: boulder: FAIL centre slice 0.041790\nanother seed or a looser tolerance may pass" &&
-        failed.tone === "fail" &&
-        unexplained.text === "failed: a\nb\nc",
-      done: done.text === "7,504 triangles · 1.5 MB" && badgeFresh === "",
-      stale: stale.text === "stale" && generatorBadge(rock, lookup, undefined) === "stale",
-      oldFailure: oldFailure.text === "stale",
-      missing: missing.text === "stale: file missing" && missing.tone === "warn",
-      // The toolbar's line: nothing when everything is here.
-      health:
-        missingTools({ python: "3.14.0", blender: "5.2.0", deps: true, venv: true, queue: 0 }) === "" &&
-        missingTools({ python: "3.14.0", blender: null, deps: false, venv: true, queue: 0 }) ===
-          "Blender not found (rocks, mushrooms) · rock packages missing: bun run generators:setup",
-    };
-    out.push({
-      name: "generator: the status line says never generated, generating N s, the failing check (and the remedy), the mesh's size, stale once edited, stale: file missing, lost to a restart, and stale: invalid value without throwing",
-      pass: Object.values(results).every(Boolean),
-      detail: JSON.stringify({ results, texts: [never.text, running.text, failed.text, done.text, stale.text] }),
-    });
-  }
-  return out;
-}
-
-// THE JOB CLIENT against a scripted service: what it asks, and what it writes.
-// Async because the client is (its fetches are promises); the timers it sets
-// are a queue drained here in order.
-export async function generatorJobCases(): Promise<CaseResult[]> {
-  const out: CaseResult[] = [];
-  const tick = () => new Promise<void>((r) => setTimeout(r, 0));
-
-  // A fake service: the POST answers `post`, each GET the next of `gets` (the
-  // last repeats), and every request is logged.
-  interface Script {
-    post: { status: number; body: unknown };
-    gets: Record<string, unknown[]>;
-  }
-  const rig = (script: Script, wanted: () => string | null | undefined) => {
-    const log: string[] = [];
-    const timers: (() => void)[] = [];
-    const swaps: string[] = [];
-    let writable = true;
-    const seen = new Map<string, number>();
-    const fetcher: Fetcher = async (url, init) => {
-      const method = init?.method ?? "GET";
-      log.push(`${method} ${url}`);
-      if (method === "POST") {
-        const p = script.post;
-        return { ok: p.status < 400, status: p.status, json: async () => p.body };
-      }
-      const key = decodeURIComponent(url.split("/").pop()!);
-      const list = script.gets[key] ?? [];
-      const n = seen.get(key) ?? 0;
-      seen.set(key, n + 1);
-      const body = list[Math.min(n, list.length - 1)];
-      // "offline": the server does not answer at all (mid-restart).
-      if (body === "offline") throw new Error("fetch failed");
-      return body === undefined
-        ? { ok: false, status: 404, json: async () => ({ error: "No such job." }) }
-        : { ok: true, status: 200, json: async () => body };
-    };
-    const jobs = new GeneratorJobs({
-      fetch: fetcher,
-      later: (fn) => void timers.push(fn),
-      canWrite: () => writable,
-      wantedKey: () => wanted(),
-      swap: (_id, key) => void swaps.push(key),
-      changed: () => {},
-    });
-    const drain = async () => {
-      for (let i = 0; i < 50; i++) {
-        await tick();
-        const fn = timers.shift();
-        if (!fn) {
-          await tick();
-          if (!timers.length) return;
-          continue;
-        }
-        fn();
-      }
-    };
-    return { jobs, log, swaps, drain, setWritable: (w: boolean) => (writable = w) };
-  };
-  const A = "boulder:00000000000000aa";
-  const B = "boulder:00000000000000bb";
-  const req = (key: string) => ({ kind: "boulder" as const, key, input: { outline: [] }, params: {} });
-
-  // submit -> running -> done: one swap, and the mesh's facts kept.
-  {
-    const r = rig(
-      { post: { status: 200, body: { key: A, state: "running" } }, gets: { [A]: [{ state: "running", elapsed: 1 }, { state: "done", elapsed: 6.9, bytes: 1000, triangles: 50 }] } },
-      () => A,
-    );
-    await r.jobs.submit(7, req(A));
-    await r.drain();
-    const job = r.jobs.job(7);
-    const ok = r.swaps.length === 1 && r.swaps[0] === A && job?.state === "done" && job.triangles === 50 && r.jobs.facts(A)?.bytes === 1000;
-    out.push({
-      name: "generator: the job client follows submit -> running -> done and puts the key on the object once",
-      pass: ok,
-      detail: JSON.stringify({ swaps: r.swaps, job, log: r.log }),
-    });
-  }
-
-  // A key the service has no file for (a 404): the facts stay null and the key
-  // reads as missing, where a key with a file does not.
-  {
-    const r = rig({ post: { status: 200, body: { key: A, state: "done" } }, gets: { [A]: [{ state: "done", elapsed: 1, bytes: 10, triangles: 2 }] } }, () => A);
-    r.jobs.facts(A);
-    r.jobs.facts(B);
-    await r.drain();
-    const ok = r.jobs.facts(B) === null && r.jobs.missing(B) && r.jobs.facts(A)?.bytes === 10 && !r.jobs.missing(A);
-    out.push({
-      name: "generator: the job client reads a 404 for a mesh key as a missing file",
-      pass: ok,
-      detail: JSON.stringify({ missingB: r.jobs.missing(B), missingA: r.jobs.missing(A), log: r.log }),
-    });
-  }
-
-  // A newer submit for the same object: the older job is no longer followed,
-  // and only the newer key lands.
-  {
-    const r = rig(
-      {
-        post: { status: 200, body: { state: "queued" } },
-        gets: { [A]: [{ state: "done", elapsed: 1, bytes: 1, triangles: 1 }], [B]: [{ state: "running", elapsed: 0 }, { state: "done", elapsed: 2, bytes: 2, triangles: 2 }] },
-      },
-      () => B,
-    );
-    await r.jobs.submit(7, req(A));
-    await r.jobs.submit(7, req(B));
-    await r.drain();
-    const askedA = r.log.filter((l) => l === `GET /api/generate/${encodeURIComponent(A)}`).length;
-    const ok = r.swaps.length === 1 && r.swaps[0] === B && askedA === 0 && r.jobs.job(7)?.key === B;
-    out.push({
-      name: "generator: a newer submit for the same object supersedes the older job, whose result never lands",
-      pass: ok,
-      detail: JSON.stringify({ swaps: r.swaps, askedA, log: r.log }),
-    });
-  }
-
-  // Failed: the model is untouched and the message is kept; a refused request
-  // (400) is a failure too.
-  {
-    const r = rig(
-      { post: { status: 200, body: { state: "running" } }, gets: { [A]: [{ state: "failed", elapsed: 3, message: "centre: FAIL\nkept in /tmp" }] } },
-      () => A,
-    );
-    await r.jobs.submit(7, req(A));
-    await r.drain();
-    const refused = rig({ post: { status: 400, body: { error: "Invalid boulder parameters: depth: 9 is outside 0.02..5." } }, gets: {} }, () => A);
-    await refused.jobs.submit(8, req(A));
-    await refused.drain();
-    const ok =
-      r.swaps.length === 0 &&
-      r.jobs.job(7)?.state === "failed" &&
-      r.jobs.job(7)?.message === "centre: FAIL\nkept in /tmp" &&
-      refused.swaps.length === 0 &&
-      refused.jobs.job(8)?.state === "failed" &&
-      (refused.jobs.job(8)?.message ?? "").includes("depth: 9 is outside");
-    out.push({
-      name: "generator: a failed job, or a refused request, keeps the model and the service's message",
-      pass: ok,
-      detail: JSON.stringify({ swaps: r.swaps, job: r.jobs.job(7), refused: refused.jobs.job(8) }),
-    });
-  }
-
-  // During a drag the result waits, and lands once on the next flush; an
-  // object deleted or edited away meanwhile gets nothing.
-  {
-    let wanted: string | null | undefined = A;
-    const r = rig({ post: { status: 200, body: { state: "done" } }, gets: { [A]: [{ state: "done", elapsed: 0, bytes: 1, triangles: 1 }] } }, () => wanted);
-    r.setWritable(false);
-    await r.jobs.submit(7, req(A));
-    await r.drain();
-    const held = r.swaps.length === 0;
-    r.jobs.flush();
-    const stillHeld = r.swaps.length === 0;
-    r.setWritable(true);
-    r.jobs.flush();
-    r.jobs.flush();
-    const landedOnce = r.swaps.length === 1;
-    // Deleted (undefined) and moved on (another key).
-    const gone = rig({ post: { status: 200, body: { state: "done" } }, gets: { [A]: [{ state: "done", elapsed: 0, bytes: 1, triangles: 1 }] } }, () => undefined);
-    await gone.jobs.submit(7, req(A));
-    await gone.drain();
-    wanted = B;
-    const moved = rig({ post: { status: 200, body: { state: "done" } }, gets: { [A]: [{ state: "done", elapsed: 0, bytes: 1, triangles: 1 }] } }, () => wanted);
-    await moved.jobs.submit(7, req(A));
-    await moved.drain();
-    const ok = held && stillHeld && landedOnce && gone.swaps.length === 0 && moved.swaps.length === 0;
-    out.push({
-      name: "generator: a result waits out a drag and lands once after it; a deleted or since-edited object gets nothing",
-      pass: ok,
-      detail: JSON.stringify({ held, stillHeld, landedOnce, gone: gone.swaps, moved: moved.swaps }),
-    });
-  }
-
-  // The dev server restarted mid-job: a 404 for a running job is `lost` (not
-  // `failed`: the generator said nothing), and says to Generate again. A few
-  // unanswered polls (the second a restart takes) are asked again rather than
-  // judged, and a server that never answers again is lost after POLL_MISSES.
-  {
-    const running = { state: "running", elapsed: 1 };
-    const post = { status: 200, body: { state: "running" } };
-    const restarted = rig({ post, gets: { [A]: [running, undefined] } }, () => A);
-    await restarted.jobs.submit(7, req(A));
-    await restarted.drain();
-    const blip = rig({ post, gets: { [A]: [running, "offline", "offline", { state: "done", elapsed: 2, bytes: 1, triangles: 1 }] } }, () => A);
-    await blip.jobs.submit(7, req(A));
-    await blip.drain();
-    const gone = rig({ post, gets: { [A]: ["offline"] } }, () => A);
-    await gone.jobs.submit(7, req(A));
-    await gone.drain();
-    const asked = gone.log.filter((l) => l.startsWith("GET ")).length;
-    const lost = restarted.jobs.job(7);
-    const ok =
-      lost?.state === "lost" &&
-      (lost.message ?? "").includes("Generate again") &&
-      restarted.swaps.length === 0 &&
-      blip.jobs.job(7)?.state === "done" &&
-      blip.swaps.length === 1 &&
-      gone.jobs.job(7)?.state === "lost" &&
-      asked === POLL_MISSES;
-    out.push({
-      name: "generator: a job the restarted dev server has no record of is lost (Generate again), not failed; unanswered polls are retried, then lost",
-      pass: ok,
-      detail: JSON.stringify({ lost, blip: blip.jobs.job(7), gone: gone.jobs.job(7), asked }),
-    });
-  }
-  return out;
-}
-
-// IMAGE PLANES (`kind: "image"`): the picture's key survives the format's
-// scaling and the editor's round trip, the preload list names the picture and
-// no surface set for it, and what is mounted is a flat unlit plane of the
-// shape's size that the scene's light, fog and tone mapping leave alone.
-function imagePlanes(): CaseResult[] {
-  const out: CaseResult[] = [];
-  const near = (a: number, b: number): boolean => Math.abs(a - b) < 1e-9;
-  const plane: GeometryObjectData = {
-    type: "geometry",
-    kind: "image",
-    image: "cave",
-    x: 40,
-    z: -1000,
-    shape: { kind: "rect", w: 3000, h: 1000 },
-  };
-
-  const scaled = scaleObject(plane, PX) as GeometryObjectData;
-  const authored: RawLevelData = {
-    player: { x: 0, y: 0, radius: 20 },
-    bodies: [{ kind: "static", x: 0, y: 0, rot: 0, objects: [plane] }],
-  };
-  const saved = modelToDisk(modelFromDisk(authored)).bodies[0]!.objects.filter(isGeometryObject)[0];
-  // A mesh object keeps no picture key: `image` is the image kind's field.
-  const meshSaved = modelToDisk(
-    modelFromDisk({ ...authored, bodies: [{ ...authored.bodies[0]!, objects: [{ ...plane, kind: "mesh", mesh: "rock-a" }] }] }),
-  ).bodies[0]!.objects.filter(isGeometryObject)[0];
-  out.push({
-    name: "image: the picture key survives scaling and the editor's round trip, and only on an image object",
-    pass:
-      scaled.kind === "image" &&
-      scaled.image === "cave" &&
-      near(scaled.shape?.kind === "rect" ? scaled.shape.w : 0, 30) &&
-      near(scaled.z!, -10) &&
-      saved?.kind === "image" &&
-      saved.image === "cave" &&
-      meshSaved !== undefined &&
-      !("image" in meshSaved),
-    detail: `scaled ${JSON.stringify(scaled)}; saved ${JSON.stringify(saved)}; as a mesh ${JSON.stringify(meshSaved)}`,
-  });
-
-  // The preload list: the picture's file, and nothing else for the object - a
-  // picture wears no surface set, and an absent `texture` would otherwise
-  // resolve to the default one and fetch it for nothing.
-  const key = "__image-case";
-  registerImageAsset(key, {
-    file: imageFile(key),
-    sha256: "0".repeat(64),
-    bytes: 4321,
-    width: 3,
-    height: 1,
-    source: "render3dCases",
-    author: "render3dCases",
-    license: "CC0",
-  });
-  try {
-    const bare: RawLevelData = { player: { x: 0, y: 0, radius: 20 }, bodies: [] };
-    const withPlane: RawLevelData = {
-      ...bare,
-      bodies: [{ kind: "static", x: 0, y: 0, rot: 0, objects: [{ ...plane, image: key }] }],
-    };
-    const before = new Set(levelStoredFiles(bare).map((f) => f.file));
-    const added = levelStoredFiles(withPlane).filter((f) => !before.has(f.file));
-    out.push({
-      name: "image: the preload list names the picture at its manifest size and no surface set for it",
-      pass: added.length === 1 && added[0]!.file === imageFile(key) && added[0]!.bytes === 4321,
-      detail: `added ${JSON.stringify(added)}`,
-    });
-  } finally {
-    delete IMAGE_ASSETS[key];
-  }
-
-  // What is mounted: a key the manifest does not hold draws the grey plane at
-  // once (and asks for nothing), at the shape's own size and the given depth.
-  const parent = new THREE.Group();
-  const mounted = mountVisual(
-    parent,
-    () => {
-      throw new Error("an image plane must not ask for the extrusion");
-    },
-    { geometry: { ...scaled, image: "__no-such-picture" }, color: "#ff0000" },
-    { defaultZ: -10, castShadow: true, alive: () => true },
-  );
-  const mesh = parent.children[0] as THREE.Mesh | undefined;
-  const mat = mesh?.material as THREE.MeshBasicMaterial | undefined;
-  mesh?.geometry.computeBoundingBox();
-  const box = mesh?.geometry.boundingBox;
-  out.push({
-    name: "image: a flat, unlit, unfogged, un-tone-mapped plane of the shape's size, grey until its picture arrives",
-    pass:
-      parent.children.length === 1 &&
-      mat?.isMeshBasicMaterial === true &&
-      !mat.fog &&
-      !mat.toneMapped &&
-      !mat.transparent &&
-      mat.color.getHexString() === "808080" &&
-      !mesh!.castShadow &&
-      near(mesh!.position.z, -10) &&
-      box !== null &&
-      box !== undefined &&
-      near(box.max.x - box.min.x, 30) &&
-      near(box.max.y - box.min.y, 10) &&
-      box.max.z === box.min.z &&
-      (mounted.materials?.length ?? 0) === 2,
-    detail: `children ${parent.children.length}, basic ${mat?.isMeshBasicMaterial}, fog ${mat?.fog}, toneMapped ${mat?.toneMapped}, colour #${mat?.color.getHexString()}, z ${mesh?.position.z}, size ${box ? `${box.max.x - box.min.x}×${box.max.y - box.min.y}×${box.max.z - box.min.z}` : "none"}`,
-  });
-  return out;
-}
-
 // BLENDER SCENES (docs/blender-scenes.md): a body's `name` and the level's
 // `scene` cross the format and the editor untouched and are written only when
 // set, the preload list names the scene's file at its pinned weight, body
@@ -7050,10 +4911,11 @@ function blenderScenes(): CaseResult[] {
   placeAt(ledgeRoot, ledgeOrigin);
   orientTo(ledgeRoot, -0.3);
   const crateRoot = new THREE.Group();
+  const adopted: THREE.Object3D[] = [];
   const targets: DressTarget[] = [
-    { name: "Ledge.001", root: ledgeRoot, origin: ledgeOrigin, rotation: -0.3, tag: "ledge-tag" },
-    { name: "Crate", root: crateRoot, origin: new Vec2(9, 9), rotation: 0 },
-    { name: "Missing", root: new THREE.Group(), origin: Vec2.ZERO, rotation: 0 },
+    { name: "Ledge.001", root: ledgeRoot, origin: ledgeOrigin, rotation: -0.3, solid: true, tag: "ledge-tag", adopt: (n) => adopted.push(n) },
+    { name: "Crate", root: crateRoot, origin: new Vec2(9, 9), rotation: 0, solid: true },
+    { name: "Missing", root: new THREE.Group(), origin: Vec2.ZERO, rotation: 0, solid: true },
   ];
   const dressed = dressScene(loaded, targets);
   const bound = dressed.bound.get("Ledge001");
@@ -7074,6 +4936,8 @@ function blenderScenes(): CaseResult[] {
       same(boundCrate.matrixWorld, crateWorld) &&
       crateRoot.children.length === 0 &&
       bound.userData["pickTag"] === "ledge-tag" &&
+      adopted.length === 1 &&
+      adopted[0] === bound &&
       dressed.unbound.length === 2 &&
       dressed.unbound.includes("Crate") &&
       dressed.unbound.includes("Missing"),
@@ -7100,15 +4964,199 @@ function blenderScenes(): CaseResult[] {
       ledge.children.length === 2,
     detail: `scenery ${sceneryNames.join(",")}; backdrop casts ${sBackdrop?.castShadow}, rock casts ${sRock?.castShadow}; loaded children ${loaded.children.length}`,
   });
+
+  // A pick on scenery answers `SCENERY_TAG` - in no body, but a surface a
+  // light can be dropped on - and a bound node its body's tag.
+  const hitTag = (o: THREE.Object3D | undefined): unknown => (o ? pickTagOf(o) : undefined);
+  out.push({
+    name: "scene: a pick on scenery answers the scenery tag, a pick on a bound node its body's",
+    pass: hitTag(sRock) === SCENERY_TAG && hitTag(boundCrate) === "ledge-tag",
+    detail: `rock ${String(hitTag(sRock))}, crate ${String(hitTag(boundCrate))}`,
+  });
+
+  // WHAT COLLIDES, CASTS: a node bound to a colliding body casts wherever it
+  // was set back to, and one bound to a body that collides with nothing keeps
+  // the scenery's rule - behind the plane it is a painted distance.
+  const setBack = (name: string): THREE.Group => {
+    const g = new THREE.Group();
+    g.name = name;
+    const m = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 0.2));
+    m.castShadow = true;
+    g.add(m);
+    g.position.set(0, 0, -0.5);
+    return g;
+  };
+  const file = new THREE.Group();
+  file.add(setBack("Cage"), setBack("Banner"));
+  file.updateMatrixWorld(true);
+  const shadowTargets: DressTarget[] = [
+    { name: "Cage", root: new THREE.Group(), origin: Vec2.ZERO, rotation: 0, solid: true },
+    { name: "Banner", root: new THREE.Group(), origin: Vec2.ZERO, rotation: 0, solid: false },
+  ];
+  const shadows = dressScene(file, shadowTargets);
+  const casts = (name: string): boolean | undefined =>
+    (shadows.bound.get(name)?.children[0] as THREE.Mesh | undefined)?.castShadow;
+  out.push({
+    name: "scene: a node on a colliding body casts wherever it is set back to; on a body that collides with nothing, not behind the plane",
+    pass: casts("Cage") === true && casts("Banner") === false,
+    detail: `cage (collides) ${casts("Cage")}, banner (does not) ${casts("Banner")}`,
+  });
   return out;
+}
+
+// A LEVEL WITH NO SCENE is seen by its collision: every piece of a body the
+// player meets, extruded through its `thickness` and filled with the body's own
+// colour, is the grey box a level is blocked out in (plans/blender-owns-
+// appearance.md). What is asserted is the rule, through the real build and the
+// real visual: one solid per piece at the piece's thickness, nothing for a
+// volume the player enters, hook-only scenery set back behind the plane - and
+// nothing at all for the same body in a level that names a scene, where the
+// look is Blender's and an invisible wall stays invisible.
+function greybox(): CaseResult[] {
+  const raw: RawLevelData = {
+    player: { x: 0, y: -300, radius: 8 },
+    bodies: [
+      {
+        kind: "static",
+        x: 0,
+        y: 0,
+        rot: 0,
+        color: "#406080",
+        objects: [
+          { type: "collision", shape: { kind: "rect", w: 200, h: 40 }, thickness: 30 },
+          { type: "collision", x: 150, shape: { kind: "circle", r: 20 } },
+        ],
+      },
+      { kind: "killzone", x: 0, y: 500, rot: 0, objects: [{ type: "collision", shape: { kind: "rect", w: 900, h: 50 } }] },
+      { kind: "static", x: 400, y: 0, rot: 0, passable: true, objects: [{ type: "collision", shape: { kind: "rect", w: 50, h: 50 } }] },
+    ],
+  };
+  const built = buildLevelBodies(new World(), scaleLevelData(raw, PX), () => {});
+  const meshesOf = (visual: BodyVisual): THREE.Mesh[] => {
+    const out: THREE.Mesh[] = [];
+    visual.root.updateMatrixWorld(true);
+    visual.root.traverse((o) => {
+      if ((o as THREE.Mesh).isMesh) out.push(o as THREE.Mesh);
+    });
+    return out;
+  };
+  const depthOf = (m: THREE.Mesh): number => {
+    m.geometry.computeBoundingBox();
+    const b = m.geometry.boundingBox!;
+    return b.max.z - b.min.z;
+  };
+  const wall = new BodyVisual(built.bodies[0]!.body, built.bodies[0]!, undefined, true);
+  const kill = new BodyVisual(built.bodies[1]!.body, built.bodies[1]!, undefined, true);
+  const leaf = new BodyVisual(built.bodies[2]!.body, built.bodies[2]!, undefined, true);
+  const dressed = new BodyVisual(built.bodies[0]!.body, built.bodies[0]!, undefined, false);
+  const pieces = meshesOf(wall);
+  const tags = pieces.map((m) => pickTagOf(m));
+  const collisions = built.bodies[0]!.data.objects.filter(isCollisionObject);
+  const color = (pieces[0]?.material as THREE.MeshStandardMaterial | undefined)?.color.getHexString();
+  const leafZ = meshesOf(leaf)[0]?.position.z;
+  const ok =
+    pieces.length === 2 &&
+    Math.abs(depthOf(pieces[0]!) - 0.3) < 1e-6 &&
+    Math.abs(depthOf(pieces[1]!) - DEFAULT_THICKNESS) < 1e-6 &&
+    tags[0] === collisions[0] &&
+    tags[1] === collisions[1] &&
+    color === "406080" &&
+    meshesOf(kill).length === 0 &&
+    leafZ !== undefined &&
+    leafZ < 0 &&
+    meshesOf(dressed).length === 0;
+  for (const v of [wall, kill, leaf, dressed]) v.dispose();
+  return [
+    {
+      name: "greybox: a level with no scene draws each piece at its thickness in the body's colour, picked as that piece; an area draws nothing; hook-only scenery sits behind the plane; a dressed level draws none of it",
+      pass: ok,
+      detail: `${pieces.length} pieces, depths ${pieces.map((m) => depthOf(m).toFixed(3)).join(", ")}, tagged ${tags.map((t, i) => t === collisions[i]).join(",")}, colour #${color}; killzone ${meshesOf(kill).length}; passable z ${leafZ}; in a dressed level ${meshesOf(dressed).length}`,
+    },
+  ];
+}
+
+// THE RETIRED GEOMETRY OBJECT, folded at load (`withoutLook` in levelFormat.ts):
+// every one is gone, and the two looks that were never a mesh are kept where
+// they now live - a water body's slab on the body, a belt's band on its shape -
+// without overwriting what the body already says. A body that held nothing
+// else is gone too, and the fold is idempotent, since a level crosses the gate
+// on the way in and again on the way out.
+function retiredGeometry(): CaseResult[] {
+  const belt = { kind: "belt" as const, wheels: [{ x: 0, y: 0, r: 20 }, { x: 300, y: 0, r: 20 }], thickness: 6, speed: 100 };
+  const raw = {
+    player: { x: 0, y: 0, radius: 8 },
+    bodies: [
+      {
+        kind: "water",
+        x: 0,
+        y: 0,
+        rot: 0,
+        objects: [
+          { type: "collision", shape: { kind: "rect", w: 400, h: 40 } },
+          { type: "geometry", matchCollision: true, z: 25, depth: 150, texture: "wood" },
+        ],
+      },
+      {
+        kind: "water",
+        x: 0,
+        y: 200,
+        rot: 0,
+        waterDepth: 90,
+        objects: [{ type: "collision", shape: { kind: "rect", w: 400, h: 40 } }, { type: "geometry", depth: 150 }],
+      },
+      {
+        kind: "static",
+        x: 500,
+        y: 0,
+        rot: 0,
+        objects: [
+          { type: "collision", shape: belt },
+          { type: "geometry", shape: belt, matchCollision: true, depth: 30, texture: "rubber", tileScale: 0.5, color: "#34373d" },
+        ],
+      },
+      // A backdrop and nothing else...
+      { kind: "static", x: -500, y: 0, rot: 0, objects: [{ type: "geometry", shape: { kind: "rect", w: 900, h: 600 }, z: -600 }] },
+      // ...and a lamp whose fitting was geometry.
+      {
+        kind: "static",
+        x: -800,
+        y: 0,
+        rot: 0,
+        objects: [{ type: "geometry", kind: "mesh", mesh: "lantern" }, { type: "light", range: 300 }],
+      },
+    ],
+  } as unknown as RawLevelData;
+  const once = normalizeLevelData(raw);
+  const twice = normalizeLevelData(once);
+  const types = once.bodies.map((b) => b.objects.map((o) => o.type).join("+"));
+  const band = once.bodies[2]!.objects[0]!;
+  const shape = band.type === "collision" && band.shape.kind === "belt" ? band.shape : null;
+  const ok =
+    types.join(",") === "collision,collision,collision,light" &&
+    once.bodies[0]!.waterZ === 25 &&
+    once.bodies[0]!.waterDepth === 150 &&
+    once.bodies[1]!.waterDepth === 90 &&
+    once.bodies[1]!.waterZ === undefined &&
+    shape?.width === 30 &&
+    shape.texture === "rubber" &&
+    shape.tileScale === 0.5 &&
+    shape.color === "#34373d" &&
+    JSON.stringify(twice) === JSON.stringify(once);
+  return [
+    {
+      name: "level format: a retired geometry object is dropped, water keeps its slab and a belt its band, a body of nothing else goes, and the fold is idempotent",
+      pass: ok,
+      detail: `bodies ${JSON.stringify(types)}; water ${JSON.stringify({ z: once.bodies[0]!.waterZ, depth: once.bodies[0]!.waterDepth })}, authored depth kept ${once.bodies[1]!.waterDepth}; belt ${JSON.stringify(shape)}; idempotent ${JSON.stringify(twice) === JSON.stringify(once)}`,
+    },
+  ];
 }
 
 export function runRender3dCases(): CaseResult[] {
   return [
     ...blenderScenes(),
-    ...imagePlanes(),
+    ...greybox(),
+    ...retiredGeometry(),
     ...beltRendering(),
-    ...renderNeedsGeometry(),
     ...chainAnchors(),
     ...chainWrapPoints(),
     ...cameraCorrespondence(),
@@ -7120,13 +5168,9 @@ export function runRender3dCases(): CaseResult[] {
     ...visualsGuides(),
     ...visualsWorkspace(),
     ...extrusionGeometry(),
-    ...tippedPrimitive(),
-    ...perObjectProjection(),
-    ...depthOrdering(),
     ...surfaceResolution(),
     ...visualRoundTrip(),
     ...editorRoundTrip(),
-    ...matchedOutline(),
     ...groupTransform(),
     ...vertexEditMoves(),
     ...pickIndex(),
@@ -7140,16 +5184,12 @@ export function runRender3dCases(): CaseResult[] {
     ...glowCases(),
     ...bodyFrame(),
     ...originToCom(),
-    ...emissiveMaps(),
     ...propEmission(),
-    ...emissiveMaterials(),
     ...realLevelRoundTrip(),
     ...waterFormat(),
     ...bounceFormat(),
     ...checkpointFormat(),
     ...levelMetaFormat(),
     ...clipboardPayload(),
-    ...generatorCases(),
-    ...generatorTools(),
   ];
 }

@@ -5,9 +5,10 @@
 #
 #   bun packages          bun install
 #   binary assets         bun run assets:fetch (props, textures, skies, and the
-#                         generated meshes the levels name; docs/asset-store.md)
-#   generator Python      bun run generators:setup (rope/.venv; docs/generators.md)
-#   Blender               the version the generators were built against, into
+#                         Blender scenes the levels name; docs/asset-store.md)
+#   the tools' Python     bun run generators:setup (rope/.venv: the formations
+#                         add-on's boulder generator; docs/blender-formations.md)
+#   Blender               the version the scene tools are built against, into
 #                         ~/.local/opt with ~/.local/bin/blender pointing at it
 #
 # ImageMagick (the asset pipeline) and the GitHub CLI (publishing to the store)
@@ -17,8 +18,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-# The generators' output is pinned to this version (docs/generators.md), and
-# the sha256 is the one download.blender.org publishes for the Linux tarball.
+# The scene tools' output is pinned to this version (docs/blender-scenes.md),
+# and the sha256 is the one download.blender.org publishes for the Linux tarball.
 BLENDER_VERSION=5.2.0
 BLENDER_SERIES=5.2
 BLENDER_LINUX_SHA256=96f6c181a30f4950607839dc84d42a354b250d8a0231b098b59b7bc69c351c48
@@ -33,7 +34,7 @@ bun install
 step "binary assets from the release store"
 bun run assets:fetch
 
-step "Python environment for the generators"
+step "Python environment for the Blender tools"
 command -v python3 >/dev/null || fail "python3 is required (the boulder generator runs in it)"
 bun run generators:setup
 
@@ -67,13 +68,13 @@ elif [[ "$(uname -s)-$(uname -m)" == "Linux-x86_64" ]]; then
   fi
 else
   warn "install Blender $BLENDER_VERSION from https://www.blender.org/download/ and put it on PATH or set BLENDER_PATH"
-  warn "(needed only to generate rocks and mushroom patches in the editor; published ones are fetched above)"
+  warn "(needed only to export and dress the Blender scenes; published ones are fetched above)"
 fi
 
 step "tools for adding assets (optional)"
 command -v magick >/dev/null && echo "[setup] ImageMagick: $(command -v magick)" \
   || warn "ImageMagick (magick) not found: needed by assets:optimize-texture and the scalar-map check in cli assets"
 command -v gh >/dev/null && echo "[setup] GitHub CLI: $(command -v gh)" \
-  || warn "GitHub CLI (gh) not found: needed by assets:publish and assets:publish-generated"
+  || warn "GitHub CLI (gh) not found: needed by assets:publish and just publish"
 
 step "done - \`just swing\` starts the dev server on http://localhost:3100"

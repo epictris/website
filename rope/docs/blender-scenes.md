@@ -1,13 +1,35 @@
 # Blender scenes
 
-Since 2026-09-27 a level can be **dressed in Blender**: one `.blend` holds the level's look, foreground ledges and backdrop alike, and one recipe puts it in the game.
+A level is **dressed in Blender**: one `.blend` holds the level's whole look, and one recipe puts it in the game.
 The loop is: edit the scene in Blender, `just scene <level>`, refresh the browser.
 This page is what a scene is, how it binds to the level, how the files move, and what Blender cannot carry.
-The plan is [plans/blender-scenes.md](../plans/blender-scenes.md).
+The plans are [plans/blender-scenes.md](../plans/blender-scenes.md) (2026-09-27, the pipeline) and [plans/blender-owns-appearance.md](../plans/blender-owns-appearance.md) (2026-09-29, the ownership below).
 
-**Blender owns appearance and nothing else.**
-Collision is authored in the editor exactly as before, and nothing about the sim can change from a Blender edit; a scene is to a level what a geometry object is to a body, at the scale of the whole level.
+**Blender owns every rendered mesh; the editor owns collision.**
+Since 2026-09-29 a level carries no look of its own.
+The geometry objects it used to draw with are gone from the format, and `withoutLook` (`level/levelFormat.ts`) drops them from any file that still has them.
+Collision is authored in the editor exactly as before, and nothing about the sim can change from a Blender edit.
 Deriving outlines from the meshes was considered and rejected: a geometry tweak would have been a physics change.
+
+There is no foreground and no backdrop, only meshes.
+A ledge the ball rolls past and a wall 40 m back in the fog are objects in the same file, and the file has no layers a level has to know about.
+
+## What the game still draws
+
+Blender cannot own a surface the sim moves every frame, so the game draws these itself, from the level (`render3d/bodyVisuals.ts`):
+
+- **Water** (`render3d/water.ts`): the current runs across its surface.
+  Its slab is the water body's own `waterZ` and `waterDepth`, and its tint is the body's `color`.
+- **A conveyor's band** (`render3d/beltTread.ts`): the texture, or on a flat colour the cleats, run round the loop at the belt's `speed`.
+  Its look is the belt shape's own `BeltLook` (`width`, `texture`, `color`, `tileScale`, see [conveyors](conveyors.md)).
+- **Lights, fireflies, vines, chains, the ball**, and any body the sim spawns (a sandbox rock, the hook).
+
+A level that names **no scene** has no look at all, so it is seen by its collision.
+Every piece of every body that is not an area (`killzone`, `finish`, `force`, `water`) is extruded through its `thickness` (default `DEFAULT_THICKNESS`) and filled with the body's `color`.
+That grey box is derived at build and never authored: it is what the test levels are played in and what a new level is blocked out in.
+
+In a level that names a scene, a body the scene does not dress draws **nothing**.
+An invisible wall stays invisible, and `just scene` lists the body names with no object behind them, which is where a misspelt name shows.
 
 ## Binding
 
@@ -15,7 +37,6 @@ Deriving outlines from the meshes was considered and rejected: a geometry tweak 
 - The level names its scene once: **`scene`** (`LevelData.scene`, the Level panel's `scene` field) is `assets-src/scenes/<scene>.blend`.
 - An object in the exported scene whose name is a body's name is **that body's dressing**: mounted under the body's visual root and carried by it, so a rigid crate, a mover or a pivot takes its dressing along, and moving a body in the editor moves its mesh.
 - Every other object is **scenery**, standing in the world where Blender put it.
-- A body may still carry geometry objects, and a dressed body usually carries none; the two draw side by side, so a level is dressed a body at a time.
 
 Names are matched as three.js spells a glTF node's name (`nodeNameOf` in `render3d/scenes.ts`, which is `PropertyBinding.sanitizeNodeName`): whitespace becomes `_`, and `.`, `:`, `/` and square brackets are dropped.
 So Blender's `Ledge.001` is the node `Ledge001`, and a body called either is dressed by it.
@@ -27,8 +48,13 @@ At rest the node is drawn exactly where Blender put it; nothing is written back 
 Only the outermost match is taken: an object named like a body inside another such object rides its parent, as it did in Blender.
 A bound node answers a pick with the body's first authored object, so clicking the dressing in the editor's 3D view selects the body; scenery answers nothing.
 
-Scenery keeps the shadow rule decoration has: behind the gameplay plane it is a painted distance and casts nothing, on or in front of it (its nearest point past `SHADOW_Z`) it casts like anything else.
-A bound node is the body and always casts.
+**Shadows.**
+A node bound to a body that collides always casts: a cage set back 20 cm so the ball reads in front of it is still the thing the ball is standing in, and without its shadow it reads as a sticker.
+A node bound to a body that collides with nothing, and every piece of scenery, keeps the decoration rule: wholly behind the gameplay plane (its front past `SHADOW_Z`) it is a painted distance and casts nothing, and on or in front of it it casts like anything else.
+
+**Glow.**
+A body carrying a **waking light** (a light with `wake`, see [lighting-and-surfaces](lighting-and-surfaces.md)) drives the glow of its dressing, as it drove the glow of the shapes it used to carry.
+When the node lands, `BodyVisual.adoptDressing` gives the body its own copy of every emissive material in it, so nothing else in the level pulses with it, and hands them to the light rig; the authored emission is the one the scene was exported with.
 
 ## The loop
 
@@ -40,7 +66,7 @@ just scene ball           # export, optimise, report
 just publish              # before committing a level that shows the scene
 ```
 
-`just scene-guide <level>` (`scripts/scene-guide.ts`, `tools/blender/scene_guide.py`) writes the level's collision into **`<scene>-guide.blend`**: one object per body, its collision outlines extruded through the body's drawn depth (its first geometry object's `depth`, a generated boulder's `depth` parameter or that schema's default, else the extruder's 20 cm) and centred on the gameplay plane, with the object's origin on the body's origin (`guide.<name>`, or `guide.body-<index>` for an unnamed one), an empty on every origin, the gameplay plane's extent as a wire rectangle, and a sphere of the avatar's radius at the spawn.
+`just scene-guide <level>` (`scripts/scene-guide.ts`, `tools/blender/scene_guide.py`) writes the level's collision into **`<scene>-guide.blend`**: one object per body, its collision outlines extruded through the body's thickness (the thickest of its pieces' `thickness`, else `DEFAULT_THICKNESS` - what the grey box draws) and centred on the gameplay plane, with the object's origin on the body's origin (`guide.<name>`, or `guide.body-<index>` for an unnamed one), an empty on every origin, the gameplay plane's extent as a wire rectangle, and a sphere of the avatar's radius at the spawn.
 Solids draw translucent with their wire, areas as wire.
 The guide also carries the **game camera**, `guide.camera`: the level's lens, keyed on every frame at 60 fps through the real camera controller along the level's camera paths (or along a recorded run, `--ride <bundle>`), so looking through it in Blender is looking through the game ([blender-formations](blender-formations.md#the-game-camera)).
 It **creates `<scene>.blend`** when there is none, with the `Guide` collection linked from the guide file, so reopening the scene after a level edit shows the current colliders and the dressing is always modelled against the outline the ball actually rolls on.
@@ -71,8 +97,9 @@ The guide stands in this frame, so none of it has to be remembered while modelli
 ## Publishing
 
 The scene is a stored binary like every other (see [asset-store](asset-store.md)): `public/scenes/` is gitignored, and `bun run assets:publish-scenes` (in `just publish`) uploads `scene-<scene>.glb` to the release and pins its sha256 and size in `src/render3d/sceneAssets.json`, which is committed with the level.
-Unlike a generated mesh a scene is **replaced in place** on publish: it is exported again and again while the level is dressed, and a name per export would leave every draft in the release for ever.
+A scene is **replaced in place** on publish: it is exported again and again while the level is dressed, and a name per export would leave every draft in the release for ever.
 The pin is what says which export a commit meant; `assets:fetch` verifies it, so an older commit whose scene was replaced fails its fetch loudly rather than drawing a different level - the store's stated trade.
+`assets:fetch` also refuses a registered level naming a scene the manifest lacks, since that level would ship with no look at all.
 `cli assets` fails on a scene a registered level names that the manifest lacks, on a manifest entry no level names, and on a scene name the store cannot take (`SCENE_NAME`: lower-case letters, digits, dashes).
 A build keeps only the `scene.glb` of scenes registered levels name (`scenesInBuild` in `vite.config.ts`).
 
@@ -84,36 +111,41 @@ Another file becomes a source by naming it once: `bun run assets:publish-sources
 ## What Blender cannot carry
 
 - **Procedural materials.** glTF carries a Principled BSDF with image textures and little else.
-  What it does carry: a Color Attribute on Base Color, alone or multiplied (factor 1) with an Image Texture, goes out as `COLOR_0` (the shape Blender's glTF importer builds); an Image Texture multiplied by a constant colour in a Mix node (Multiply, factor 1) goes out as the texture times `baseColorFactor`; and an alpha run through Less Than and Subtract (`1 - (alpha < cutoff)`) goes out as `alphaMode: MASK` at that cutoff.
+  What it does carry: a Color Attribute on Base Color, alone or multiplied (factor 1) with an Image Texture, goes out as `COLOR_0` (the shape Blender's glTF importer builds); an Image Texture multiplied by a constant colour in a Mix node (Multiply, factor 1) goes out as the texture times `baseColorFactor`; an alpha run through Less Than and Subtract (`1 - (alpha < cutoff)`) goes out as `alphaMode: MASK` at that cutoff; and a Roughness or Metallic taken from one channel of an Image Texture by a Separate Color, alone or times a constant (a Math Multiply), goes out as glTF's packed metallic-roughness texture (`carries_channel` - the graph Blender's own glTF importer builds).
   A **Base Color** wired to anything else (noise, ramps, mixes) is **baked**: the export runs Cycles' diffuse colour pass into a vertex colour (`SceneBaseColor`) on its own copy of the mesh, modifiers applied, and wires it in, so it ships as `COLOR_0` at the mesh's resolution - a colour field finer than the vertices is averaged away (about 1 s for the grotto's 13 rocks).
   Only the colour is baked, never light: the game lights it.
-  Roughness, metallic, normal and emission wired to anything but an image still export as flat values, and the exporter warns about each (`meta.json`'s `warnings`, printed by the recipe); a Bump of strength 0 is no loss and is not reported.
+  Roughness, metallic, normal and emission wired to anything else still export as flat values, and the exporter warns about each (`meta.json`'s `warnings`, printed by the recipe); a Bump of strength 0 is no loss and is not reported.
 - **Lights.** The level's own lights carry glow and beam semantics and a budget (see [lighting-and-surfaces](lighting-and-surfaces.md)); a Blender light is dropped.
-  Emissive materials do export.
+  Emissive materials do export, and a waking light in the body they dress drives them (above).
 - **Volumetrics, fog, compositing.** The level's environment block is where the air is authored.
+- **A moving surface.** Water and conveyor bands are the game's to draw (above).
 - **Size.** The per-file bar is 8 MB and textures are capped at 1k by the optimiser; the recipe warns past the bar.
-  Splitting a level into a foreground and a backdrop scene is the release valve, and is not supported yet: a level names one scene.
 
-## The grotto
+## The levels' scenes
 
-Since 2026-09-29 `ball` names **`grotto`**, the Sunken Grotto: formations built with the formations add-on, converted from karin_website's v5 background pipeline, described in [blender-formations](blender-formations.md#the-sunken-grotto).
-`river.blend`, below, is still on disk and is one field away (`scene: "river"`).
+- **`ball`** names **`river`**.
+  `river.blend` holds the `Guide`, the level's own dressing in `Dressing` (one mesh object per named body) and the generated cavern in `Cavern`.
+- **`rails`** names **`rails`**: `rails.blend` holds the `Guide` and the level's dressing in `Dressing`.
+- **`grotto.blend`**, the Sunken Grotto (formations built with the formations add-on, converted from karin_website's v5 background pipeline, [blender-formations](blender-formations.md#the-sunken-grotto)), is on disk and named by no level.
+- Every other level names no scene and is drawn as its grey box.
 
-## The river's scene
+Both `Dressing` collections were written once, on 2026-09-29, by a one-shot export of what the game then drew from the levels' geometry objects: each named body's visual, built by the game's own renderer, written to glTF by three's `GLTFExporter` and imported into the `.blend`, each body's meshes joined into one object with its origin on the body's rest pose.
+Before-and-after `cli shot --3d` along both routes differed by a few thousand pixels of texture re-encoding.
+From then on they are ordinary Blender objects: edit them, replace them, or model the level afresh around them.
 
-`river.blend`'s `Cavern` collection is generated, not modelled: `assets-src/scenes/cavern/generate_cave.py` builds the backdrop in the game frame, composed against the camera the level opens on (the start chamber is traced from the reference painting as frame-fraction polygons; the rest of the cavern continues the same faceted slabs along the level), and `import_into_river.py` replaces the collection with it.
+`river.blend`'s `Cavern` collection is generated, not modelled: `assets-src/scenes/cavern/generate_cave.py` builds it in the game frame, composed against the camera the level opens on (the start chamber is traced from the reference painting as frame-fraction polygons; the rest of the cavern continues the same faceted slabs along the level), and `import_into_river.py` replaces the collection with it.
 The recipe, the frame, the depths and what each part of the file does are in [assets-src/scenes/cavern/README.md](../assets-src/scenes/cavern/README.md); the point of keeping it a generator is that a change to the painting's reading, the fog or the level's camera is a number, not a remodel.
 The level's fog (`fogAmount`, `fogColor`) is half of the look: the far layers are built at 22-45 m so the fog pales them the way the painting's haze does.
 
 ## Not yet
 
-- Unplayed: written 2026-09-27 against an empty scene and `cli render3d`; the cavern backdrop of 2026-09-28 was verified with `cli shot` along the camera route, and the play is still the play.
+- Unplayed: the pipeline was written 2026-09-27 against an empty scene and `cli render3d`, the cavern of 2026-09-28 and the migrated dressing of 2026-09-29 were verified with `cli shot` along the camera routes, and the play is still the play.
 - One scene per level. Two levels may share a scene, and a level cannot name two.
-- Credits are per image, not per object: a mesh modelled from someone else's work (not a texture) is not caught by the image table below.
 
 ## Credits
 
 Every image a scene ships is looked up by name in `tools/blender/image_credits.json` (Blender's `.001` suffix ignored): an image names a credited set (author, source, licence) or says which script `generated` it.
-The export writes the sets it found into `meta.json` (`credits`) and prints them; an image the table does not know is an export warning.
+A **model** that is someone else's work has no image to be found by, so it carries its credit itself: a `credits` custom property on the Blender object, naming sets of the same table, comma-separated.
+The export writes the sets it found into `meta.json` (`credits`) and prints them; an image the table does not know, or a `credits` name that is not a set, is an export warning.
 `just publish` pins the credits beside the scene's sha256 in `src/render3d/sceneAssets.json` (and refuses a `meta.json` that describes a different `scene.glb`), and `bun run assets:credits` lists them in `CREDITS.md` under "Inside Blender scenes".
 So a new texture in a scene is one line in the table; `CREDITS.md` stays generated.

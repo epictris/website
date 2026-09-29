@@ -16,10 +16,7 @@ import { levelFileHash, treeStamp, type TreeStamp } from "./src/sim/treeStamp";
 import { DEFAULT_LEVEL, LEVELS } from "./src/level/registry";
 import type { RawLevelData } from "./src/level/levelFormat";
 import { levelSceneName, levelStoredFiles } from "./src/render3d/levelAssets";
-import { GENERATED_MESH_FILE, GENERATED_ROOT } from "./src/render3d/generated";
 import { SCENE_MESH_FILE, SCENES_DIR } from "./src/render3d/scenes";
-import { generatorService } from "./src/server/generators/service";
-import { imageService } from "./src/server/images";
 import { sceneService } from "./src/server/scenes";
 
 // The identity of the SOURCE this server is serving, exposed to the app as
@@ -463,59 +460,8 @@ function storeScript(): Plugin {
   };
 }
 
-// GENERATED MESHES SHIP ONLY WHERE A LEVEL NAMES THEM. Vite copies all of
-// `public/` into `dist`, and `public/generated/` holds every rock and patch the
-// editor has ever made on this machine - every seed tried, every superseded
-// look, each beside a meta.json and (a patch) megabytes of input.json - so a
-// build left alone grows without limit. After the copy (vite copies `public/`
-// before it writes the bundle, and this runs once the bundle is written),
-// every generated directory no registered level's preload list names is
-// removed, and a named one keeps its mesh.glb alone.
-//
-// A fresh checkout (the deployed image's) has only what `assets:fetch` put
-// there, which is exactly these: the published meshes the levels name (see
-// `GENERATED_ASSETS`), so on a deploy this keeps everything and drops nothing.
-function generatedMeshesInBuild(): Plugin {
-  let outDir = "";
-  return {
-    name: "generated-meshes-in-build",
-    apply: "build",
-    configResolved(config) {
-      // `resolve`, not `join`: an `--outDir` given absolute stays absolute.
-      outDir = resolve(config.root, config.build.outDir);
-    },
-    writeBundle() {
-      const root = join(outDir, GENERATED_ROOT.slice(1));
-      if (!existsSync(root)) return;
-      const named = new Set<string>();
-      for (const spec of Object.values(LEVELS)) {
-        for (const f of levelStoredFiles(levelData(spec), spec.controller)) {
-          if (f.file.startsWith(`${GENERATED_ROOT}/`)) named.add(f.file);
-        }
-      }
-      let kept = 0;
-      let dropped = 0;
-      for (const kind of readdirSync(root)) {
-        const kindDir = join(root, kind);
-        for (const hash of readdirSync(kindDir)) {
-          const dir = join(kindDir, hash);
-          if (!named.has(`${GENERATED_ROOT}/${kind}/${hash}/${GENERATED_MESH_FILE}`)) {
-            rmSync(dir, { recursive: true, force: true });
-            dropped++;
-            continue;
-          }
-          for (const name of readdirSync(dir)) if (name !== GENERATED_MESH_FILE) rmSync(join(dir, name), { force: true });
-          kept++;
-        }
-        if (!readdirSync(kindDir).length) rmSync(kindDir, { recursive: true, force: true });
-      }
-      if (!readdirSync(root).length) rmSync(root, { recursive: true, force: true });
-      this.info(`generated meshes: ${kept} named by a level kept, ${dropped} dropped from ${outDir}`);
-    },
-  };
-}
-
-// BLENDER SCENES SHIP ONLY WHERE A LEVEL NAMES THEM, for the reason above:
+// BLENDER SCENES SHIP ONLY WHERE A LEVEL NAMES THEM. Vite copies all of
+// `public/` into `dist` (before it writes the bundle; this runs after), and
 // `public/scenes/` holds every scene ever exported on this machine, each with
 // a `meta.json` the game never reads. A named scene keeps its `scene.glb`
 // alone; everything else goes.
@@ -573,17 +519,10 @@ export default defineConfig({
       // load (see `storeScript`). Reload by hand to pick up a level edit.
       ignored: [
         "**/levels/*.json",
-        // Generated meshes land here while the editor is open; they are
-        // fetched by key, never imported, so a write must not reach HMR.
-        "**/public/generated/**",
-        // The editor's picture upload writes both (src/server/images.ts). The
-        // manifest is a config dependency like a level file, so a write would
-        // restart the server; the upload invalidates it by hand instead.
-        "**/public/images/**",
-        "**/src/render3d/imageAssets.json",
         // `just scene` writes here while the editor is open, and the manifest
-        // is a config dependency like the image one (src/server/scenes.ts
-        // serves the files; `assets:publish-scenes` writes the manifest).
+        // is a config dependency like a level file, so a write would restart
+        // the server (src/server/scenes.ts serves the files;
+        // `assets:publish-scenes` writes the manifest).
         "**/public/scenes/**",
         "**/src/render3d/sceneAssets.json",
       ],
@@ -622,10 +561,7 @@ export default defineConfig({
     levelApi(),
     prodReplays(),
     editorRoute(),
-    generatorService(),
-    imageService(),
     sceneService(),
-    generatedMeshesInBuild(),
     scenesInBuild(),
   ],
 });

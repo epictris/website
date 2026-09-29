@@ -44,13 +44,11 @@ import {
   arrowEnds,
   bodyBounds,
   CAMERA_REGION_COLOR,
-  collidingBodyIds,
   ED_LAYERS,
   FIREFLY_PATH_COLOR,
   halfExtents,
   isArrowNote,
   isCheckpointNote,
-  itemDepth,
   NOTE_COLOR,
   pathPolyline,
   toWorld,
@@ -182,16 +180,11 @@ function circleLoop(c: Vec2, r: number): Vec2[] {
 }
 
 // Where an item's guides sit through z, metres: the plane its outline is drawn
-// in. A collision object is the gameplay plane by definition; a drawn object
-// is its own depth (`itemDepth`, the rule the renderer places it by), so a
-// primitive pushed back by its `off z` has its corners on the face it is
-// drawn at rather than floating in front of it; a light is at its own `z`.
-// Exported so a gesture that drags a guide drags it in the same plane
+// in. A collision object is the gameplay plane by definition; a light is at its
+// own `z`. Exported so a gesture that drags a guide drags it in the same plane
 // (`unprojectToPlane`'s `z`).
-export function guidePlaneZ(item: EdItem, bodyCollides: boolean): number {
-  if (item.object === "light") return item.light.z;
-  if (item.object === "geometry") return itemDepth(item, bodyCollides);
-  return 0;
+export function guidePlaneZ(item: EdItem): number {
+  return item.object === "light" ? item.light.z : 0;
 }
 
 // Linear-light copy of an sRGB hex colour's bytes, for writing an icon texture
@@ -527,7 +520,6 @@ export class Guides {
     const { model } = view;
     const visible = (l: EdLayer): boolean => view.visibleLayers.has(l);
     const pickable = (l: EdLayer): boolean => !view.lockedLayers.has(l);
-    const colliding = collidingBodyIds(model.items);
     this.buildGrid(model);
 
     // Collision outlines.
@@ -618,7 +610,7 @@ export class Guides {
       const [id] = view.selectedIds;
       const item = model.items.find((i) => i.id === id);
       if (item && visible(item.layer) && pickable(item.layer)) {
-        this.vertexHandles(item, guidePlaneZ(item, colliding.has(item.bodyId)), view.selectedVerts);
+        this.vertexHandles(item, guidePlaneZ(item), view.selectedVerts);
       }
     }
   }

@@ -33,7 +33,7 @@
 
 import * as THREE from "three";
 import { WaterArea } from "../engine/body";
-import type { GeometryObjectData, LevelBodyData } from "../level/levelFormat";
+import type { LevelBodyData } from "../level/levelFormat";
 import { RAW_ASSETS, trackPending } from "./assets";
 import { withDownload } from "./download";
 
@@ -854,14 +854,6 @@ interface WaterLook {
   // Half-length of the run along its local flow axis, for the pale band at
   // its two ends.
   halfX: number;
-  // Dimensionless multiple over the stroke and ripple tiling, the same meaning
-  // `tileScale` has on every other surface: 1 (and absent) is the tuned size,
-  // 2 twice as large.
-  tileScale: number;
-  // Glow override: the geometry object's `emissive`/`emissiveIntensity`, when
-  // authored, replace the default trace derived from the water's own colour.
-  emissive: string | undefined;
-  emissiveIntensity: number | undefined;
 }
 
 interface Palette {
@@ -921,10 +913,6 @@ function waterMaterial(look: WaterLook): THREE.MeshStandardMaterial {
     shader.uniforms.uFlip = { value: flip };
     shader.uniforms.uFlipReady = flipReady;
     shader.uniforms.uFlow = { value: look.flow };
-    // Tiling as UNIFORMS rather than baked into the shader text: every water
-    // material shares one program (see customProgramCacheKey), and a baked
-    // constant would hand every body whichever tiling compiled first.
-    shader.uniforms.uTileScale = { value: look.tileScale };
     shader.uniforms.uFoam = { value: foam };
     shader.uniforms.uFoamReady = foamReady;
     shader.uniforms.uHalfX = { value: look.halfX };
@@ -933,11 +921,7 @@ function waterMaterial(look: WaterLook): THREE.MeshStandardMaterial {
     shader.uniforms.uLight = { value: palette.light };
     shader.uniforms.uPale = { value: palette.pale };
     shader.uniforms.uWhite = { value: new THREE.Color(FALL_WHITE) };
-    shader.uniforms.uGlowColor = {
-      value: (look.emissive ? new THREE.Color(look.emissive) : palette.body.clone()).multiplyScalar(
-        look.emissiveIntensity ?? GLOW_INTENSITY,
-      ),
-    };
+    shader.uniforms.uGlowColor = { value: palette.body.clone().multiplyScalar(GLOW_INTENSITY) };
 
     shader.vertexShader = `
       attribute float aWave;
@@ -1001,7 +985,6 @@ function waterMaterial(look: WaterLook): THREE.MeshStandardMaterial {
       uniform float uFlipReady;
       uniform float uTime;
       uniform float uFlow;
-      uniform float uTileScale;
       uniform vec3 uGlowColor;
       uniform sampler2D uFoam;
       uniform float uFoamReady;
@@ -1050,10 +1033,10 @@ function waterMaterial(look: WaterLook): THREE.MeshStandardMaterial {
       // different rates.
       vec2 wUvA = vec2(
         (vAlongAcross.x - uFlow * uTime * ${fmt(DRIFT_COARSE)}),
-        vAlongAcross.y) / (${fmt(TILE_COARSE)} * uTileScale);
+        vAlongAcross.y) / ${fmt(TILE_COARSE)};
       vec2 wUvB = vec2(
         (vAlongAcross.x - uFlow * uTime * ${fmt(DRIFT_FINE)}),
-        vAlongAcross.y) / (${fmt(TILE_FINE)} * uTileScale) + vec2(0.0, 0.37);
+        vAlongAcross.y) / ${fmt(TILE_FINE)} + vec2(0.0, 0.37);
       vec3 wNa = waterFlipNormal(wUvA) * uFlipReady;
       vec3 wNb = waterFlipNormal(wUvB) * uFlipReady;
       // The strokes: the cellular web stretched along the flow, carried by
@@ -1061,10 +1044,10 @@ function waterMaterial(look: WaterLook): THREE.MeshStandardMaterial {
       // breaks the hairlines along their length.
       vec2 wCarried = vec2(vAlongAcross.x - uFlow * uTime, vAlongAcross.y);
       float wStroke = texture(uFoam,
-        wCarried / (vec2(${fmt(STROKE_STRETCH)}, 1.0) * ${fmt(STROKE_TILE)} * uTileScale)
+        wCarried / (vec2(${fmt(STROKE_STRETCH)}, 1.0) * ${fmt(STROKE_TILE)})
           + wNa.xy * ${fmt(STROKE_DISTORT)}).r * uFoamReady;
       float wBreak = texture(uFoam,
-        wCarried / (${fmt(STROKE_BREAK_TILE)} * uTileScale) + vec2(0.5, 0.41)
+        wCarried / ${fmt(STROKE_BREAK_TILE)} + vec2(0.5, 0.41)
           + wNb.xy * 0.02).r * uFoamReady;
 
       // ---- the tone ----------------------------------------------------
@@ -1283,22 +1266,12 @@ export interface WaterBuild {
 // the body's pose). Rects only - every authored water body is one, and the 2D
 // overlay's streak glyphs remain the fallback for anything else.
 //
-// Water is a visual effect, so its RENDER controls live on the body's geometry
-// object like every other look in the format - `z`/`depth` place the slab
-// through z, `color` overrides the tint, `tileScale` scales the strokes,
-// `emissive`/`emissiveIntensity` override the glow - while the physics (flow,
-// drag) stays on the body, and so does the SPILL (`data.spill`, the drop off
-// the downstream end, and `spillSpeed`, the lip speed): where the current goes
-// is a fact about the current. The fields a geometry object aims at
-// extrusions (`kind`, `mesh`, `texture`, `bevel`) mean nothing here and are
-// ignored: water is the one body whose look is not a surface worn over an
-// outline.
-export function buildWater(
-  root: THREE.Group,
-  body: WaterArea,
-  data: LevelBodyData,
-  visual: GeometryObjectData | undefined,
-): WaterBuild {
+// Everything it reads is on the body: the physics (flow, drag), the SPILL
+// (`spill`, the drop off the downstream end, and `spillSpeed`, the lip speed),
+// the slab through z (`waterZ`, `waterDepth`) and the tint (`color`). Water is
+// drawn by the game rather than by the level's Blender scene, because the
+// current moves its surface every frame (plans/blender-owns-appearance.md).
+export function buildWater(root: THREE.Group, body: WaterArea, data: LevelBodyData): WaterBuild {
   const shape = body.primaryShape();
   const s = shape.shape;
   if (s.kind !== "circle" && s.kind !== "rect") return { geometries: [], materials: [] };
@@ -1306,8 +1279,8 @@ export function buildWater(
   const halfY = s.kind === "rect" ? s.size.y / 2 : s.radius;
   // The slab through z, in the extruder's convention: depth centred on the
   // plane, shifted by `z`.
-  const depth = visual?.depth ?? DEFAULT_WATER_DEPTH;
-  const frontZ = (visual?.z ?? 0) + depth / 2;
+  const depth = data.waterDepth ?? DEFAULT_WATER_DEPTH;
+  const frontZ = (data.waterZ ?? 0) + depth / 2;
   const backZ = frontZ - depth;
   // The spill: off the end the flow points at, at the flow's own speed unless
   // told otherwise. A run with no current spills off its +x end.
@@ -1321,12 +1294,9 @@ export function buildWater(
         }
       : null;
   const look: WaterLook = {
-    color: visual?.color ?? body.fillColor ?? undefined,
+    color: body.fillColor ?? undefined,
     flow: body.flow,
     halfX,
-    tileScale: visual?.tileScale ?? 1,
-    emissive: visual?.emissive,
-    emissiveIntensity: visual?.emissiveIntensity,
   };
   const geometries: THREE.BufferGeometry[] = [];
   const materials: THREE.Material[] = [];

@@ -19,7 +19,7 @@ import { SparkSystem } from "./render/sparks";
 import { DebrisSystem } from "./render/debris";
 import { ChainRetract } from "./render/chainRetract";
 import { NO_ORBIT } from "./render3d/space";
-import type { ViewCapture } from "./render3d/rocks";
+import type { ViewCapture } from "./render3d/viewCapture";
 import { DEFAULT_LEVEL, LEVELS, listedLevels } from "./level/registry";
 import { spawnAtCheckpoint } from "./level/levelFormat";
 import {

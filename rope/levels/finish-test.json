@@ -47,16 +47,6 @@
             "w": 2400,
             "h": 40
           }
-        },
-        {
-          "type": "geometry",
-          "shape": {
-            "kind": "rect",
-            "w": 2400,
-            "h": 40
-          },
-          "matchCollision": true,
-          "texture": "rock wall"
         }
       ]
     },
@@ -76,16 +66,6 @@
             "w": 600,
             "h": 40
           }
-        },
-        {
-          "type": "geometry",
-          "shape": {
-            "kind": "rect",
-            "w": 600,
-            "h": 40
-          },
-          "matchCollision": true,
-          "texture": "rock wall"
         }
       ]
     },
@@ -103,17 +83,6 @@
             "w": 210,
             "h": 240
           }
-        },
-        {
-          "type": "geometry",
-          "kind": "mesh",
-          "mesh": "finish-line",
-          "shape": {
-            "kind": "rect",
-            "w": 259,
-            "h": 247
-          },
-          "scale": 0.4
         }
       ]
     }

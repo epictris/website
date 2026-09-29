@@ -6,15 +6,23 @@
     "envIntensity": 0.6,
     "hdri": "golden-gate-hills"
   },
+  "checkpoints": [
+    {
+      "name": "top-run",
+      "x": 200,
+      "y": -345
+    },
+    {
+      "name": "under-belt",
+      "x": 0,
+      "y": -180
+    }
+  ],
   "player": {
     "x": -520,
     "y": 0,
     "radius": 8
   },
-  "checkpoints": [
-    { "name": "top-run", "x": 200, "y": -345 },
-    { "name": "under-belt", "x": 0, "y": -180 }
-  ],
   "bodies": [
     {
       "kind": "static",
@@ -32,15 +40,6 @@
             "w": 4000,
             "h": 40
           }
-        },
-        {
-          "type": "geometry",
-          "shape": {
-            "kind": "rect",
-            "w": 4000,
-            "h": 40
-          },
-          "matchCollision": true
         }
       ]
     },
@@ -60,15 +59,6 @@
             "w": 40,
             "h": 760
           }
-        },
-        {
-          "type": "geometry",
-          "shape": {
-            "kind": "rect",
-            "w": 40,
-            "h": 760
-          },
-          "matchCollision": true
         }
       ]
     },
@@ -88,15 +78,6 @@
             "w": 40,
             "h": 760
           }
-        },
-        {
-          "type": "geometry",
-          "shape": {
-            "kind": "rect",
-            "w": 40,
-            "h": 760
-          },
-          "matchCollision": true
         }
       ]
     },
@@ -114,27 +95,22 @@
           "shape": {
             "kind": "belt",
             "wheels": [
-              { "x": 0, "y": 0, "r": 14 },
-              { "x": 520, "y": 0, "r": 14 }
+              {
+                "x": 0,
+                "y": 0,
+                "r": 14
+              },
+              {
+                "x": 520,
+                "y": 0,
+                "r": 14
+              }
             ],
             "thickness": 6,
-            "speed": 150
+            "speed": 150,
+            "texture": "color",
+            "color": "#34373d"
           }
-        },
-        {
-          "type": "geometry",
-          "shape": {
-            "kind": "belt",
-            "wheels": [
-              { "x": 0, "y": 0, "r": 14 },
-              { "x": 520, "y": 0, "r": 14 }
-            ],
-            "thickness": 6,
-            "speed": 150
-          },
-          "matchCollision": true,
-          "texture": "color",
-          "color": "#34373d"
         }
       ]
     },
@@ -155,15 +131,6 @@
             "h": 40
           },
           "material": "wood"
-        },
-        {
-          "type": "geometry",
-          "shape": {
-            "kind": "rect",
-            "w": 40,
-            "h": 40
-          },
-          "matchCollision": true
         }
       ]
     },
@@ -181,27 +148,22 @@
           "shape": {
             "kind": "belt",
             "wheels": [
-              { "x": 0, "y": 0, "r": 19 },
-              { "x": 700, "y": 0, "r": 19 }
+              {
+                "x": 0,
+                "y": 0,
+                "r": 19
+              },
+              {
+                "x": 700,
+                "y": 0,
+                "r": 19
+              }
             ],
             "thickness": 6,
-            "speed": 100
+            "speed": 100,
+            "texture": "color",
+            "color": "#34373d"
           }
-        },
-        {
-          "type": "geometry",
-          "shape": {
-            "kind": "belt",
-            "wheels": [
-              { "x": 0, "y": 0, "r": 19 },
-              { "x": 700, "y": 0, "r": 19 }
-            ],
-            "thickness": 6,
-            "speed": 100
-          },
-          "matchCollision": true,
-          "texture": "color",
-          "color": "#34373d"
         }
       ]
     },
@@ -221,15 +183,6 @@
             "w": 30,
             "h": 200
           }
-        },
-        {
-          "type": "geometry",
-          "shape": {
-            "kind": "rect",
-            "w": 30,
-            "h": 200
-          },
-          "matchCollision": true
         }
       ]
     },
@@ -247,27 +200,22 @@
           "shape": {
             "kind": "belt",
             "wheels": [
-              { "x": 0, "y": 0, "r": 14 },
-              { "x": 500, "y": -120, "r": 24 }
+              {
+                "x": 0,
+                "y": 0,
+                "r": 14
+              },
+              {
+                "x": 500,
+                "y": -120,
+                "r": 24
+              }
             ],
             "thickness": 6,
-            "speed": -120
+            "speed": -120,
+            "texture": "color",
+            "color": "#34373d"
           }
-        },
-        {
-          "type": "geometry",
-          "shape": {
-            "kind": "belt",
-            "wheels": [
-              { "x": 0, "y": 0, "r": 14 },
-              { "x": 500, "y": -120, "r": 24 }
-            ],
-            "thickness": 6,
-            "speed": -120
-          },
-          "matchCollision": true,
-          "texture": "color",
-          "color": "#34373d"
         }
       ]
     },
@@ -288,15 +236,6 @@
             "h": 40
           },
           "material": "wood"
-        },
-        {
-          "type": "geometry",
-          "shape": {
-            "kind": "rect",
-            "w": 40,
-            "h": 40
-          },
-          "matchCollision": true
         }
       ]
     },
@@ -314,30 +253,28 @@
           "shape": {
             "kind": "belt",
             "wheels": [
-              { "x": 0, "y": 0, "r": 15 },
-              { "x": 420, "y": 60, "r": 60 },
-              { "x": 40, "y": 230, "r": 40 }
+              {
+                "x": 0,
+                "y": 0,
+                "r": 15
+              },
+              {
+                "x": 420,
+                "y": 60,
+                "r": 60
+              },
+              {
+                "x": 40,
+                "y": 230,
+                "r": 40
+              }
             ],
             "thickness": 6,
-            "speed": 80
+            "speed": 80,
+            "width": 30,
+            "texture": "rubber",
+            "tileScale": 0.5
           }
-        },
-        {
-          "type": "geometry",
-          "shape": {
-            "kind": "belt",
-            "wheels": [
-              { "x": 0, "y": 0, "r": 15 },
-              { "x": 420, "y": 60, "r": 60 },
-              { "x": 40, "y": 230, "r": 40 }
-            ],
-            "thickness": 6,
-            "speed": 80
-          },
-          "matchCollision": true,
-          "depth": 30,
-          "texture": "rubber",
-          "tileScale": 0.5
         }
       ]
     }

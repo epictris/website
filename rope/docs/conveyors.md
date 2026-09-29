@@ -26,11 +26,13 @@ Three lengths describe a belt, named so they cannot be confused.
 - **`thickness`**, on the shape: the band's depth IN THE PLANE, a length, `> 0`.
   It is collision: the surface stands this far off every wheel and the run quads are this deep.
   A band of no thickness has no inside and no outside to draw, and is refused.
-- **`width`**: how wide the band is ACROSS the pulleys, the 3D extrusion depth.
-  It is rendering only and lives where every geometry object's depth lives, on the belt's geometry twin (`depth`).
-  The editor's belt panel shows it as `width` beside `thickness` and writes the twin's `depth`, so an author never has to know which object holds it.
+- **`width`**, on the shape: how wide the band is ACROSS the pulleys, the 3D extrusion depth (absent `DEFAULT_THICKNESS`).
+  It is rendering only.
 
-The texture is a look too: the twin's `texture`, from the manifest as for any geometry object ([lighting-and-surfaces](lighting-and-surfaces.md)), offered on the belt panel for the same reason.
+The band's look is on the shape too (`BeltLook`: `width`, `texture`, `color`, `tileScale`), because the game draws the band itself rather than the level's Blender scene: its surface moves, which a mesh cannot (see [blender-scenes](blender-scenes.md#what-the-game-still-draws)).
+`texture` is a surface key, resolved as any surface is ([lighting-and-surfaces](lighting-and-surfaces.md#surfaces)); the reserved `"color"` is a flat fill of `color`, which keeps the cleats below.
+Until 2026-09-29 the look was on the belt's matched geometry twin (`depth` as the width); `withoutLook` moves it onto the shape for a file that still has one.
+The wheels, the frame and anything else round the band are the level's Blender scene's to dress.
 
 ## The loop is a hull
 
@@ -205,8 +207,8 @@ UVs are in metres, the extruder's convention that `applyTiling` turns into repea
 It is written into the ring's OWN UV buffer rather than the material's map offset, because materials are shared and cached (`assets.ts`) and an authored set's maps are swapped into the shared material when they arrive; a UV write is a few hundred floats a frame and touches nothing else, and a belt whose phase has not changed skips it.
 **Untextured** - the flat colour, `texture: "color"` - the band has nothing to scroll, so it keeps the cleats: a ring of thin pale slats (one `InstancedMesh` per belt) set just inside the surface (4 mm, or a fifth of the band if that is less), through the whole width and 4 mm out past both caps, so what shows is a slat end on the rim of the front cap.
 Cleat placement allocates nothing (`beltFrameAt` is `beltPointAt`/`beltTangentAt` written into a scratch record, and `cli render3d` holds the two to agree).
-The tread runs at the geometry object's own `speed`, which a matched twin mirrors from the collision object; `Scene3DLevel.frame` is how the clock reaches the scene, and a host with none (the editor's preview) draws the belts still.
-A mesh prop standing in for a belt draws what its file draws, with neither.
+The tread runs at the belt's `speed`; `Scene3DLevel.frame` is how the clock reaches the scene, and a host with none (the editor's preview) draws the belts still.
+The band is drawn in every level, whether it names a Blender scene or not.
 
 All of it reads the world and writes nothing.
 
@@ -221,8 +223,7 @@ More wheels come from the band itself.
 - **Size a wheel:** a round grip on each wheel's rim, facing away from the middle of the belt, drags its radius.
 - **Pick a wheel:** pressing a wheel's square or its radius grip picks it (the square fills), and the panel then shows that wheel's `r`.
 
-The panel has `thickness` (px), `width` (px, the geometry twin's `depth`), the twin's `texture` (with `color` meaning the flat fill and the cleats), `speed m/s` (signed: positive runs the loop clockwise on screen), the picked wheel's `r`, and readouts of the loop's **perimeter** and one **lap** of its surface, `P / |speed|` ([editor](editor.md#conveyor-belts), [editor-model](editor-model.md)).
-A belt with no geometry twin has no look to edit, and the panel says `Add geometry` gives it one.
+The panel has `thickness` (px), the band's look (`width` in px, `texture` with `color` meaning the flat fill and the cleats, `color`, `tileScale`), `speed m/s` (signed: positive runs the loop clockwise on screen), the picked wheel's `r`, and readouts of the loop's **perimeter** and one **lap** of its surface, `P / |speed|` ([editor](editor.md#conveyor-belts), [editor-model](editor-model.md)).
 
 Every edit of the wheels or the thickness goes through `setBelt`, which refuses a wheel off the hull, a disc inside another, or a thickness or a radius under a pixel, so no gesture can hand the build a belt it throws on: a drag stalls at the last valid belt.
 Wheel 0 staying at the item's origin is kept by the gestures (it has no drag grip of its own, and removing it re-origins the item) rather than demanded by `setBelt`, so a hand-edited file with wheel 0 elsewhere is still editable.

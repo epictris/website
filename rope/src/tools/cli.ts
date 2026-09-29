@@ -23,7 +23,6 @@
 //   bun run src/tools/cli.ts shot      bundle.json --frames A..B [--every K] [--3d]
 //   bun run src/tools/cli.ts shot      bundle.json --dump A..B   (chain state per frame, as JSON lines)
 //   bun run src/tools/cli.ts shot      --view capture.json   (an F4 view capture)
-//   bun run src/tools/cli.ts rocks-check public/rocks/ball.glb [--body I] [--no-geometry] [--json]
 //   bun run src/tools/cli.ts shot      --diff a.png b.png [--out diff.png]
 //   bun run src/tools/cli.ts chainpath bundle.json [--from A] [--to B] [--every N]
 //   bun run src/tools/cli.ts fork      bundle.json --frame N [--frames M] [--out prefix]
@@ -35,7 +34,6 @@
 //   bun run src/tools/cli.ts clicks    bundle.json [--all] [--evdev log] [--wayland log]   (the DOM button story beside the frames)
 //   bun run src/tools/cli.ts corners
 //   bun run src/tools/cli.ts decompose
-//   bun run src/tools/cli.ts silhouette   (the rock-fit outline tracer)
 //   bun run src/tools/cli.ts dmath     [--write]   (the deterministic libm: bit-exact vectors + source scan)
 //   bun run src/tools/cli.ts contacts
 //   bun run src/tools/cli.ts spring
@@ -101,16 +99,7 @@ import { Vec2 } from "../engine/vec2";
 import { PIXELS_PER_METER } from "../engine/units";
 import { findChromium, grab, PageNotReady, type PageLogEntry } from "./shotRunner";
 import { VIEW_HEIGHT, VIEW_WIDTH } from "../render/viewport";
-import type { ViewCapture } from "../render3d/rocks";
-import {
-  checkRockFile,
-  faceLines,
-  printBuildReport,
-  printRockFileCheck,
-  readBuildReport,
-  rockFileDefects,
-  shardStages,
-} from "./rockCheck";
+import type { ViewCapture } from "../render3d/viewCapture";
 import {
   ACTIONS,
   checkBallInvariants,
@@ -2257,13 +2246,6 @@ switch (cmd) {
   case "decompose":
     void cmdDecompose();
     break;
-  case "silhouette":
-    void cmdSilhouette();
-    break;
-  case "rocks-check":
-    if (!arg) fail("usage: cli rocks-check <file.glb> [--body I[,J]] [--no-geometry] [--cameras head,above,left,right] [--face BODY:FACE] [--shard N] [--json]");
-    cmdRocksCheck(arg, opts(rest));
-    break;
   case "dmath":
     void cmdDmath([arg, ...rest].includes("--write"));
     break;
@@ -2317,7 +2299,7 @@ switch (cmd) {
     break;
   default:
     fail(
-      "usage: cli <play|record|replay|dump|query|scan|trace|settle|compare|continue|render|shot|chainpath|fork|bundles|pull|playtest|restamp|selftest|latch|transport|clicks|ledges|corners|tangents|decompose|silhouette|rocks-check|dmath|contacts|spring|movers|vines|rails|belts|viscous|breaks|render3d|camera|assets|levels|finish|entry> [file] [options]",
+      "usage: cli <play|record|replay|dump|query|scan|trace|settle|compare|continue|render|shot|chainpath|fork|bundles|pull|playtest|restamp|selftest|latch|transport|clicks|ledges|corners|tangents|decompose|dmath|contacts|spring|movers|vines|rails|belts|viscous|breaks|render3d|camera|assets|levels|finish|entry> [file] [options]",
     );
 }
 
@@ -2521,14 +2503,13 @@ async function cmdPull(o: Record<string, string>): Promise<void> {
 
 // 3D rendering cases (src/sim/render3dCases.ts): the camera correspondence
 // between the WebGL scene and the 2D overlay stacked on it, the extrusion's
-// winding and depth, and the level format's `visual` round trip. All pure - no
-// GPU, no canvas, no level - which is what lets the claim the whole 3D renderer
-// stands on be a number in the suite rather than a screenshot someone looked at.
+// winding and depth, the grey box and the Blender scene's binding, and the
+// level format's round trips. All pure - no GPU, no canvas, no level - which is
+// what lets the claim the whole 3D renderer stands on be a number in the suite
+// rather than a screenshot someone looked at.
 async function cmdRender3d(): Promise<void> {
-  const { runRender3dCases, generatorJobCases } = await import("../sim/render3dCases");
-  // The job client's cases are the one asynchronous set: the client's fetches
-  // are promises, answered here by a scripted service.
-  const results = [...runRender3dCases(), ...(await generatorJobCases())];
+  const { runRender3dCases } = await import("../sim/render3dCases");
+  const results = runRender3dCases();
   let failed = 0;
   for (const r of results) {
     console.log(`  ${r.pass ? "PASS" : "FAIL"}  ${r.name}`);
@@ -2904,117 +2885,6 @@ async function cmdDecompose(): Promise<void> {
     if (!r.passed) failed++;
   }
   console.log(`[decompose] ${results.length - failed}/${results.length} cases passed`);
-  process.exit(failed > 0 ? 1 : 0);
-}
-
-// A generated rock file checked (docs/rocks.md, "Diagnosing"): the build
-// report `rocks.py` wrote beside it, the file-level checks in bun
-// (rockCheck.ts), and the geometric ones in headless Blender
-// (tools/blender/check.py) - back faces seen from four cameras, coincident
-// coplanar faces, degenerate triangles, dark caps. Exits 1 on a file defect or
-// a chunk left open by the build; the geometric findings are reported for a
-// human to judge and never fail it (a notch seen from above is a legitimate
-// back face).
-//
-// `--face 150:9021` prints one triangle (the `face` a pick logs); `--shard N`
-// on a `--dump-stages` file prints that shard's story through the build.
-function cmdRocksCheck(file: string, o: Record<string, string>): void {
-  const path = resolve(file);
-  if (!existsSync(path)) fail(`no file at ${path}`);
-  if (o.shard !== undefined) {
-    console.log(`[rocks-check] ${file}: shard ${o.shard} per stage`);
-    for (const line of shardStages(path, Number(o.shard))) console.log(line);
-    process.exit(0);
-  }
-  if (o.face !== undefined) {
-    const m = /^(\d+):(\d+)$/.exec(o.face);
-    if (!m) fail("--face BODY:FACE");
-    for (const line of faceLines(path, Number(m[1]), Number(m[2]))) console.log(line);
-    process.exit(0);
-  }
-  const only = o.body !== undefined ? new Set(o.body.split(",").map(Number)) : undefined;
-  const check = checkRockFile(path, ROPE_DIR, only);
-  const report = readBuildReport(path);
-  let geometry: unknown[] = [];
-  if (o["no-geometry"] === undefined) geometry = rocksGeometry(path, only, o.cameras?.split(","), o.blender);
-  if (o.json !== undefined) {
-    console.log(JSON.stringify({ file: check, build: report, geometry }, null, 1));
-  } else {
-    printRockFileCheck(check);
-    if (report) printBuildReport(report, only);
-    else console.log("[rocks-check] no build report beside the file (built before the report existed, or by hand)");
-    for (const g of geometry) printGeometry(g as GeometryReport);
-  }
-  const open = report ? report.bodies.filter((b) => !only || only.has(b.index)).reduce((n, b) => n + b.pieces.reduce((m, p) => m + p.open, 0), 0) : 0;
-  const defects = rockFileDefects(check) + open;
-  console.log(defects > 0 ? `[rocks-check] FAIL: ${defects} defect(s)` : "[rocks-check] no defects (geometric findings are for a human to judge)");
-  process.exit(defects > 0 ? 1 : 0);
-}
-
-interface GeometryReport {
-  body: number;
-  spacing?: number;
-  backFaces: { camera: string; rays: number; back: number; spacing: number; clusters: { count: number; at: number[] }[] }[];
-  coincident: { pairs: number; tested: number; shardAware: boolean; top: { faces: number[]; shards: number[] | null; area: number; at: number[] }[] };
-  degenerate: { area: number; edge: number; of: number };
-  darkCaps: { checked: boolean; caps?: number; dark?: number; top?: { face: number; area: number; ao: number; at: number[] }[] };
-}
-
-// The Blender half, one `[check] {json}` line per body.
-function rocksGeometry(path: string, only: Set<number> | undefined, cameras: string[] | undefined, blenderArg?: string): unknown[] {
-  const optsPath = join(tmpdir(), `rocks-check-${process.pid}.json`);
-  writeFileSync(optsPath, JSON.stringify({ bodies: only ? [...only] : null, cameras: cameras ?? null }));
-  const blender = blenderArg ?? process.env["BLENDER"] ?? "blender";
-  const r = spawnSync(
-    blender,
-    ["-b", "--factory-startup", "--python", join(ROPE_DIR, "tools", "blender", "check.py"), "--", path, optsPath],
-    { encoding: "utf8", maxBuffer: 256 * 1024 * 1024 },
-  );
-  rmSync(optsPath, { force: true });
-  if (r.error) fail(`could not run ${blender}: ${r.error.message}`);
-  const lines = `${r.stdout}\n${r.stderr}`.split("\n");
-  if (r.status !== 0) {
-    console.error(lines.slice(-30).join("\n"));
-    fail(`blender exited ${r.status}`, 1);
-  }
-  return lines.filter((l) => l.startsWith("[check] ")).map((l) => JSON.parse(l.slice(8)) as unknown);
-}
-
-// Metres in the importer's Blender frame (x, -game z, game y) are printed back
-// in three's (x, game y, game z) and the sim's (x, -game y) so a finding can be
-// fed to `cli shot --at`.
-function printGeometry(g: GeometryReport): void {
-  const at = (p: number[]): string => `(${p[0]!.toFixed(2)}, ${p[2]!.toFixed(2)}, ${(-p[1]!).toFixed(2)}) sim --at ${p[0]!.toFixed(2)},${(-p[2]!).toFixed(2)}`;
-  console.log(`  body ${g.body} geometry:`);
-  for (const b of g.backFaces) {
-    const top = b.clusters.slice(0, 5).map((c) => `${c.count} at ${at(c.at)}`).join("; ");
-    console.log(`    back faces from ${b.camera.padEnd(5)} ${b.back}/${b.rays} rays at ${(b.spacing * 100).toFixed(0)} cm${b.back ? `, ${b.clusters.length} cluster(s): ${top}` : ""}`);
-  }
-  const c = g.coincident;
-  console.log(`    coincident coplanar pairs: ${c.pairs}${c.shardAware ? " (different shards)" : " (any, no _SHARD)"} of ${c.tested} tested`);
-  for (const p of c.top.slice(0, 5)) console.log(`      faces ${p.faces.join(",")}${p.shards ? ` shards ${p.shards.join(",")}` : ""}: ${p.area} cm^2 at ${at(p.at)}`);
-  console.log(`    degenerate: ${g.degenerate.area} by area, ${g.degenerate.edge} by edge, of ${g.degenerate.of}`);
-  const d = g.darkCaps;
-  if (!d.checked) console.log("    dark caps: not checked (no AO atlas)");
-  else {
-    console.log(`    dark caps: ${d.dark} of ${d.caps} up-facing faces over 10 cm^2 read AO < 0.05 (seen from above or head-on)`);
-    for (const f of (d.top ?? []).slice(0, 5)) console.log(`      face ${f.face}: ${f.area} cm^2, ao ${f.ao} at ${at(f.at)}`);
-  }
-}
-
-// Silhouette cases (src/sim/silhouetteCases.ts): the outline tracer the
-// editor's "fit collision to rock" writes a collision outline with. Pure
-// geometry over flat triangles, so it needs no GLB and no browser.
-async function cmdSilhouette(): Promise<void> {
-  const { runSilhouetteCases } = await import("../sim/silhouetteCases");
-  const results = runSilhouetteCases();
-  let failed = 0;
-  for (const r of results) {
-    console.log(`  ${r.passed ? "PASS" : "FAIL"}  ${r.name}`);
-    for (const d of r.details) console.log(`        ${d}`);
-    if (!r.passed) failed++;
-  }
-  console.log(`[silhouette] ${results.length - failed}/${results.length} cases passed`);
   process.exit(failed > 0 ? 1 : 0);
 }
 

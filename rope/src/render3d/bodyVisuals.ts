@@ -1,31 +1,31 @@
 // One body's 3D presence, and its per-frame transform sync.
 //
-// A body is a Group holding one child per drawn OBJECT. The group carries the
-// body's interpolated pose; the children carry their objects' placements in that
+// A body is a Group holding one child per drawn piece. The group carries the
+// body's interpolated pose; the children carry their pieces' placements in that
 // frame, which are rigid within the body and therefore set ONCE at build. That
 // is not a micro-optimisation, it is what makes the sync a two-number write per
 // body per frame with no allocation at all (see "Allocation per frame" in
 // docs/3d-rendering-plan.md).
 //
-// ONE CLASS FOR EVERY BODY. A wall, a swinging crate, a backdrop 20 m behind the
-// plane and a lamp with no fitting are all a body with objects in it, so they
-// are all this. What used to be a second class for decoration is now the case
-// where the body has no collision objects and therefore built no engine body:
-// its root stands at the authored transform instead of tracking one, and
-// `sync` has nothing to do. Nothing else about it differs, which is the point -
-// a prop, its light and the wall behind it are drawn by one path.
+// WHAT A BODY LOOKS LIKE IS NOT THE LEVEL'S TO SAY. A level's look is its
+// Blender scene (docs/blender-scenes.md): a scene object named like a body is
+// that body's dressing, mounted under this group's root when the file lands
+// (`sceneDressing.ts`), and a level names the scene once. What is drawn HERE is
+// only what the sim moves in a way a mesh cannot follow, and what a level with
+// no scene is seen by:
 //
-// WHAT A BODY LOOKS LIKE is decided by its geometry objects and by NOTHING
-// ELSE. A collision object is never drawn and is never read for a form, a
-// placement, a depth or a surface: a geometry object states its own, so a body
-// can be drawn as something other than what it collides as, which is the whole
-// point of there being two kinds of object. A body with no geometry object is
-// drawn by nothing at all - a solid, invisible wall, which is a thing a level
-// may perfectly well want and which needs no field to say it.
+// - WATER, whose surface the current runs across every frame (`water.ts`);
+// - a CONVEYOR's band, whose texture or cleats run round its loop at the belt's
+//   own speed (`beltTread.ts`);
+// - the body's LIGHTS;
+// - and, in a level that names NO scene, every piece the body collides as,
+//   extruded through its `thickness` and filled with the body's own colour -
+//   the grey box a level is blocked out in before it has a look, derived from
+//   the collision and never authored (plans/blender-owns-appearance.md).
 //
-// `mountVisual` is where the mesh-or-primitive choice is cashed out, and the one
-// remaining case that is not authored at all is a body the SIM spawned (a rock,
-// the hook), which has no authored objects and simply extrudes its own shapes.
+// The one case that is not authored at all is a body the SIM spawned (a rock,
+// the hook), which has no authored objects and simply extrudes its own shapes,
+// scene or no scene.
 //
 // Interpolation discipline: every transform read here is
 // `renderPosition/renderRotation(alpha)`, never raw sim state. A body drawn at
@@ -38,40 +38,33 @@ import type { CollisionObject2D, CollisionShape2D } from "../engine/body";
 import { WaterArea } from "../engine/body";
 import { DEFAULT_THICKNESS } from "../lib/shapeGeometry";
 import { outlineOfData, outlineOfShape, type Outline } from "../render/shapePath";
-import { DECOR_DEPTH, DECOR_Z } from "../level/decor";
 import { localPlacement, objectDepth, type BuiltBody } from "../level/buildBodies";
 import {
+  DEFAULT_BODY_COLOR,
   isCollisionObject,
-  isGeometryObject,
   isLightObject,
-  type GeometryObjectData,
+  type BeltLook,
+  type BodyKind,
+  type CollisionObjectData,
   type LevelBodyData,
 } from "../level/levelFormat";
-import { DEFAULT_BEVEL, cylinderSolid, extrudeOutline, taperOutline } from "./extrude";
-import { ROCK_TEXTURES } from "./rocks";
-import { loadSchema } from "../level/generatorParams";
-import { isAuthoredSurface, isSolidSurface, loadMesh, surfaceFor, surfaceName, tileMetres } from "./assets";
-import { IMAGE_ASSETS, loadImage } from "./images";
+import { DEFAULT_BEVEL, cylinderSolid, extrudeOutline } from "./extrude";
+import { isAuthoredSurface, isSolidSurface, surfaceFor, surfaceName, tileMetres } from "./assets";
 import { buildWater } from "./water";
 import { DEFAULT_LIGHT_Z, LightRig, type DrivenEmission, type MountedLight } from "./lights";
 import { isWaking } from "./glow";
-import { applyProjection } from "./projection";
-import { glowProp } from "./propGlow";
 import { BeltRing, BeltTread } from "./beltTread";
 import { beltLoopOf } from "../render/beltTread";
 import { orientTo, placeAt, threeY } from "./space";
 
-// The floor an authored colour's brightness is lifted to before it tints the
-// material. The levels were authored for a flat 2D renderer, where a body's
-// colour IS its appearance and most of them are dark greys - so multiplying a
-// stone texture by `#000000` leaves a hole where a dark wall is meant to be, and
-// the level reads as an unlit cave.
+// The floor an authored colour's brightness is lifted to before it tints a
+// generated surface. A belt's `color` was authored for a flat 2D renderer, where
+// a colour IS the appearance and most of them are dark greys - so multiplying a
+// generated texture by `#000000` leaves a hole where a dark band is meant to be.
 //
-// The HUE is kept exactly (a gold ledge stays gold, a green bank stays green)
-// and only the lightness is remapped, from 0..1 into TINT_FLOOR..1. That keeps
-// the authored ORDERING - a black wall is still darker than a grey one - while
-// leaving every surface enough albedo to show its own grain and to respond to
-// the sun, which is the whole reason there is a material under the tint.
+// The HUE is kept exactly and only the lightness is remapped, from 0..1 into
+// TINT_FLOOR..1. That keeps the authored ORDERING - a black band is still darker
+// than a grey one - while leaving the surface enough albedo to show its grain.
 const TINT_FLOOR = 0.6;
 
 // What a flat fill falls back to where nothing named a colour at all - a body
@@ -98,31 +91,25 @@ function tintFor(color: string | undefined): string | undefined {
   return `#${c.getHexString()}`;
 }
 
-// What one drawn thing wears: the object that draws it, and the one thing its
-// BODY contributes to how it looks - the fill the level authored, which a
-// geometry object may override and usually does not.
-export interface DrawSpec {
-  // The geometry object, when there is one. A body the sim spawned has none, and
-  // is the only thing drawn without one.
-  geometry?: GeometryObjectData;
-  // The body's own fill, for the tint. A geometry object's own `color` wins.
-  color?: string;
-  // Wear the body's own copy of the surface (`SurfaceRequest.instance`): set
-  // only on a body carrying a waking light, whose emission it drives.
-  instance?: string;
+// The surface a drawn thing wears: a texture set (an authored PBR set or a
+// generated one) at a tiling scale, tinted by a fill colour - three answers,
+// each the same rule read against what the author said. A SOLID fill (`"color"`)
+// wears the colour exactly: naming it is saying "this is that colour". An
+// AUTHORED set wears none: its albedo is a photograph of real stuff and a flat
+// renderer's grey is not an opinion about it. A GENERATED surface is tinted,
+// floored, because noise has no colour of its own worth defending.
+export function surfaceOf(req: { texture?: string; tileScale?: number; color?: string }): THREE.MeshStandardMaterial {
+  const name = surfaceName(req.texture);
+  return surfaceFor({
+    texture: req.texture,
+    tileScale: req.tileScale,
+    color: isSolidSurface(name)
+      ? (req.color ?? DEFAULT_SOLID_COLOR)
+      : isAuthoredSurface(name)
+        ? undefined
+        : tintFor(req.color),
+  });
 }
-
-// What a primitive falls back to where its geometry object says nothing, which
-// is a property of the BODY rather than of any collision shape: something solid
-// is a slab on the gameplay plane, and something that collides with nothing is
-// the thin backdrop a flat fill drawn before every body already was.
-interface PrimitiveDefaults {
-  depth: number;
-  bevel: number;
-}
-
-const SOLID_DEFAULTS: PrimitiveDefaults = { depth: DEFAULT_THICKNESS, bevel: DEFAULT_BEVEL };
-const DECOR_DEFAULTS: PrimitiveDefaults = { depth: DECOR_DEPTH, bevel: 0 };
 
 // A code-built circle is a SPHERE and an authored one is a disc seen face on.
 // That is not a rendering choice, it is the same split `lib/shapeGeometry.ts`
@@ -133,346 +120,36 @@ const DECOR_DEFAULTS: PrimitiveDefaults = { depth: DECOR_DEPTH, bevel: 0 };
 function spawnedGeometry(shape: CollisionShape2D): THREE.BufferGeometry {
   const s = shape.shape;
   if (s.kind === "circle") return new THREE.SphereGeometry(s.radius, 24, 16);
-  return primitiveGeometry(outlineOfShape(s), undefined, SOLID_DEFAULTS);
+  return solidOf(outlineOfShape(s), DEFAULT_THICKNESS);
 }
 
-// How far a generated boulder's stand-in leans in from its outline's wall, in
-// degrees: a chamfer that reads as "a rock goes here", not a claim about the
-// rock's shape (the generator's own taper is `taperSlopeMin`/`Max`).
-const BOULDER_STANDIN_TAPER = 45;
-
-// A boulder block's depth in metres (the level is in metres by the time it is
-// drawn): the authored one, else the schema's default.
-function boulderDepth(g: GeometryObjectData): number {
-  const authored = g.generator?.params?.["depth"];
-  if (typeof authored === "number") return authored;
-  const d = loadSchema("boulder")?.params.find((p) => p.key === "depth")?.default;
-  return typeof d === "number" ? d : DEFAULT_THICKNESS;
-}
-
-// An authored form as the solid it stands for. A rect is a rectangular prism, a
-// circle a cylinder and a polygon that outline extruded, each `depth` thick -
-// which is what the geometry object says it is and NOT what the body's collision
-// weighs, those having been separate statements since the two objects were.
-function primitiveGeometry(
-  outline: Outline,
-  g: GeometryObjectData | undefined,
-  defaults: PrimitiveDefaults,
-): THREE.BufferGeometry {
-  // A GENERATED BOULDER whose mesh is not there yet (never generated, or its
-  // file still loading or missing) stands in as the solid the generator fills:
-  // its outline at the depth the block asks for, tapered in toward the camera,
-  // so the author sees the rock's volume rather than a 20 cm slab.
-  if (g?.kind === "mesh" && g.generator?.kind === "boulder") {
-    return taperOutline(outline, { depth: boulderDepth(g), taperStart: 0, taperAngle: BOULDER_STANDIN_TAPER });
-  }
-  const depth = g?.depth ?? defaults.depth;
-  // A ROCK is drawn as the reference solid its generated mesh fills: the
-  // outline straight through to the taper's start, then the tapered roof
-  // (`taperOutline`). Its `bevel` is not drawn, because the generator does not
-  // read it; the taper is the rock's edge treatment, and this extrusion is how
-  // the author sees it while setting it in the editor.
-  if (g?.texture !== undefined && ROCK_TEXTURES.has(g.texture)) {
-    return taperOutline(outline, { depth, taperStart: g.taperStart ?? 0, taperAngle: g.taperAngle ?? 0 });
-  }
+// An outline as the prism it stands for: a circle a cylinder, anything else the
+// outline extruded, `depth` thick and centred on z = 0.
+function solidOf(outline: Outline, depth: number): THREE.BufferGeometry {
   if (outline.kind === "circle") return cylinderSolid(outline.radius, depth);
-  return extrudeOutline(outline, { depth, bevel: g?.bevel ?? defaults.bevel });
+  return extrudeOutline(outline, { depth, bevel: DEFAULT_BEVEL });
 }
 
-// The surface a drawn thing wears: its texture set (an authored PBR set or a
-// generated one), at its tiling scale and offset, tinted by the authored fill
-// colour - UNLESS the surface is an authored one.
+// The kinds that are VOLUMES rather than things: the player passes into them
+// and nothing is drawn for them in 3D (the 2D overlay has their glyphs). Water
+// is one, and draws its own surface instead.
+const AREAS: ReadonlySet<BodyKind> = new Set(["killzone", "finish", "force", "water"]);
+
+// Whether a body is drawn as its collision in a level that names no scene: a
+// thing the player meets, as against a volume it enters.
+export function drawsGreybox(data: LevelBodyData): boolean {
+  return !AREAS.has(data.kind) && data.objects.some(isCollisionObject);
+}
+
+// WHAT A PICK LANDS ON. A drawn piece's group carries the authored object it
+// was built from, so a raycast that hits any mesh under it answers with the one
+// thing an editor can act on - and a scene's dressing node carries its body's
+// first object the same way (`DressTarget.tag`).
 //
-// That exception is the whole reason the tint exists. Levels were authored for a
-// flat 2D renderer where a body's colour IS its appearance, so the 3D scene
-// keeps that colour as a tint over the generated noise, which has no colour of
-// its own worth defending (see TINT_FLOOR). A photographed brick does: its
-// albedo is the measured colour of a real wall, and multiplying it by the grey
-// somebody typed to tell a flat renderer "this is a wall" makes it darker, less
-// saturated and flatter - the exact opposite of what the photograph was added
-// for. Naming an authored texture is the author saying what this thing looks
-// like, and it outranks the stand-in.
-export function surfaceOf(spec: DrawSpec): THREE.MeshStandardMaterial {
-  const g = spec.geometry;
-  // The geometry object's own `texture` and nothing else. A collision object's
-  // `material` is what its MASS is computed from; reading it as a statement
-  // about the look is the coupling these two objects exist to keep apart, and a
-  // migrated level names the material here explicitly instead.
-  const name = surfaceName(g?.texture);
-  const fill = g?.color ?? spec.color;
-  return surfaceFor({
-    texture: g?.texture,
-    tileScale: g?.tileScale,
-    offsetX: g?.tileOffsetX,
-    offsetY: g?.tileOffsetY,
-    // Three answers, and each is the same rule read against what the author
-    // actually said. A SOLID fill wears the colour exactly: naming it is saying
-    // "this is that colour", and lifting it to the tint floor would hand back a
-    // paler one than the swatch showed. An AUTHORED set wears none: its albedo
-    // is a photograph of real stuff and the flat renderer's grey is not an
-    // opinion about it. A GENERATED surface is tinted, floored, because noise
-    // has no colour of its own worth defending.
-    color: isSolidSurface(name)
-      ? (fill ?? DEFAULT_SOLID_COLOR)
-      : isAuthoredSurface(name)
-        ? undefined
-        : tintFor(fill),
-    // Emission is NOT subject to the authored-surface exception above. The tint
-    // stands in for a flat renderer's "colour is appearance" and a photographed
-    // brick has its own colour to defend; emission is not an appearance at all,
-    // it is a statement that this thing is a source, and a photographed brick
-    // has no opinion about whether it is on fire.
-    emissive: g?.emissive,
-    emissiveIntensity: g?.emissiveIntensity,
-    emissiveTexture: g?.emissiveTexture,
-    ...(spec.instance ? { instance: spec.instance } : {}),
-  });
-}
-
-// What a mounted visual owns and must free. Materials are shared and cached (see
-// assets.ts), so they are deliberately not in here.
-export interface MountedVisual {
-  geometry: THREE.BufferGeometry[];
-  // ...except an image plane's, which is its own (it carries the object's own
-  // tint and opacity); its picture is shared and cached, and not in here.
-  materials?: THREE.Material[];
-}
-
-export interface MountOptions {
-  // Where the thing sits through z, ALREADY composed through the body's own
-  // depth: the gameplay plane for anything solid, further back for scenery the
-  // player passes through and for a form with no collision behind it.
-  defaultZ: number;
-  // Whether this throws a shadow. Everything receives one.
-  castShadow: boolean;
-  // A live handle on whether the owner is still around, since a prop arrives
-  // asynchronously and may outlive the thing that asked for it.
-  alive: () => boolean;
-}
-
-// Mount ONE drawn thing's look under `parent`, by whichever of the three answers
-// its geometry object names. The single place `GeometryObjectData.kind` is
-// cashed out: a body's own outline and a drawn-only form both come through here,
-// so "mesh or primitive" cannot mean two different things depending on which of
-// them is asking.
-export function mountVisual(
-  parent: THREE.Group,
-  geometryFor: () => THREE.BufferGeometry,
-  spec: DrawSpec,
-  opts: MountOptions,
-): MountedVisual {
-  const g = spec.geometry;
-  const kind = g?.kind ?? "primitive";
-  const owned: THREE.BufferGeometry[] = [];
-
-  if (kind === "image") return mountImage(parent, g!, opts);
-
-  const material = surfaceOf(spec);
-  const z = opts.defaultZ;
-
-  if (kind !== "mesh") {
-    const geo = geometryFor();
-    owned.push(geo);
-    const mesh = new THREE.Mesh(geo, material);
-    mesh.castShadow = opts.castShadow;
-    mesh.receiveShadow = true;
-    // Tipped out of the gameplay plane by the same two angles a prop is, and
-    // about the same point: an extrusion is built centred on z (extrude.ts), so
-    // turning it about its own origin swings the solid about its middle rather
-    // than about its back face, and the `z` below then places that middle at the
-    // depth the object is drawn at - which is exactly what the prop's holder
-    // does one line down. A rect on its own becomes a ramp, a slab, a panel
-    // canted toward the camera; with `matchCollision` off it is a look and
-    // nothing else, so the body goes on colliding with the outline it states.
-    mesh.rotation.set(g?.rotX ?? 0, g?.rotY ?? 0, 0);
-    mesh.position.z = z;
-    applyProjection(mesh, g?.projection);
-    parent.add(mesh);
-    return { geometry: owned };
-  }
-
-  // A prop replaces the extrusion. Until it arrives the object shows a neutral
-  // placeholder of its own size: an asset that fails to load is then a visibly
-  // wrong grey box rather than a hole in the level, and nothing about loading it
-  // can block the sim.
-  const holder = new THREE.Group();
-  holder.position.z = z;
-  holder.rotation.set(g?.rotX ?? 0, g?.rotY ?? 0, 0);
-  holder.scale.setScalar(g?.scale ?? 1);
-  parent.add(holder);
-
-  // ...except a MUSHROOM PATCH, which has none: its rect is only the extent of
-  // the surface it grows on, and a box of that size would stand over the very
-  // rock the mushrooms are meant to be seen on. Until its mesh is there it is
-  // drawn as nothing (the outliner and the panel still reach it).
-  let placeholder: THREE.Mesh | null = null;
-  if (g?.generator?.kind !== "mushrooms") {
-    const geo = geometryFor();
-    owned.push(geo);
-    placeholder = new THREE.Mesh(geo, material);
-    placeholder.castShadow = opts.castShadow;
-    placeholder.receiveShadow = true;
-    holder.add(placeholder);
-    applyProjection(placeholder, g?.projection);
-  }
-
-  const key = g?.mesh;
-  if (!key) return { geometry: owned };
-  void loadMesh(key).then((obj) => {
-    if (!obj || !opts.alive()) return;
-    if (placeholder) holder.remove(placeholder);
-    // An authored texture is the level saying what this thing is made of, and it
-    // outranks whatever the file was exported with - which is the whole point of
-    // being able to author one: a bare geometry-only export wears the same
-    // surface as the walls around it instead of glTF's default white. A prop
-    // that authors no texture keeps its own materials untouched.
-    if (g?.texture !== undefined) {
-      obj.traverse((o) => {
-        const mesh = o as THREE.Mesh;
-        if (mesh.isMesh) mesh.material = material;
-      });
-    }
-    // A prop that keeps its own materials glows in its own pattern when the
-    // object authors an emission; one wearing an authored texture already has
-    // the emission in `material` above.
-    if (g?.texture === undefined && g?.emissive !== undefined) {
-      glowProp(obj, g.emissive, g.emissiveIntensity ?? 1);
-    }
-    obj.traverse((o) => {
-      const mesh = o as THREE.Mesh;
-      if (!mesh.isMesh) return;
-      mesh.castShadow = opts.castShadow;
-      mesh.receiveShadow = true;
-    });
-    // After the texture override, so the lens is applied to what it wears.
-    applyProjection(obj, g?.projection);
-    holder.add(obj);
-  });
-  return { geometry: owned };
-}
-
-// What an image plane shows until its picture arrives, and for ever when the
-// key names nothing: a flat grey, visibly a picture that is missing.
-const IMAGE_PLACEHOLDER = "#808080";
-
-// An IMAGE object (`GeometryObjectData.image`): the picture stretched once over
-// the bounds of the object's shape, as a plane with no depth.
-//
-// It is UNLIT, UNFOGGED and NOT TONE-MAPPED, on purpose. A painted backdrop
-// already carries its light, its haze and its colour grade; lit by the scene it
-// would be shaded twice, fogged it would be hazed twice, and through ACES its
-// darks would be crushed and its highlights desaturated - the picture on screen
-// would stop being the picture that was painted. It casts no shadow: it is a
-// painted distance, not a thing in the scene.
-//
-// The object's `color` and `opacity` are NOT read. They are the editor's 2D fill
-// for the outline, which every decoration writes (half-transparent grey by
-// default), and a picture worn through them would come out grey and see-through.
-// A picture's own transparency is what blends it.
-function mountImage(parent: THREE.Group, g: GeometryObjectData, opts: MountOptions): MountedVisual {
-  const outline = outlineOfData(g.shape ?? { kind: "rect", w: ORPHAN_PLACEHOLDER, h: ORPHAN_PLACEHOLDER });
-  const { w, h, cx, cy } = outlineBounds(outline);
-  const geo = new THREE.PlaneGeometry(w, h);
-  // A polygon's bounds need not be centred on its origin; the plane is.
-  // (Outline y is DOWN, three's is up, as in `extrude.ts`.)
-  geo.translate(cx, -cy, 0);
-  const asset = g.image !== undefined ? IMAGE_ASSETS[g.image] : undefined;
-  const flat = (): THREE.MeshBasicMaterial =>
-    new THREE.MeshBasicMaterial({
-      side: THREE.DoubleSide,
-      fog: false,
-      toneMapped: false,
-      // Blended only where the picture needs it: a transparent object is sorted
-      // and drawn after every opaque one, which an opaque backdrop has no
-      // reason to pay.
-      transparent: asset?.alpha === true,
-    });
-  const placeholderMaterial = flat();
-  placeholderMaterial.color.set(IMAGE_PLACEHOLDER);
-  const pictureMaterial = flat();
-  const mesh = (material: THREE.Material): THREE.Mesh => {
-    const m = new THREE.Mesh(geo, material);
-    m.rotation.set(g.rotX ?? 0, g.rotY ?? 0, 0);
-    m.position.z = opts.defaultZ;
-    applyProjection(m, g.projection);
-    return m;
-  };
-  const placeholder = mesh(placeholderMaterial);
-  parent.add(placeholder);
-
-  // The picture arrives as a NEW mesh in the placeholder's place, as a prop
-  // does, rather than as a map written into the material already drawn: the
-  // editor's selection paints a clone of whatever material a mesh wears when it
-  // is selected (`Scene3D.syncHighlight`), and a plane added and selected in one
-  // gesture would go on wearing the grey clone after its picture had landed.
-  if (g.image !== undefined) {
-    void loadImage(g.image).then((tex) => {
-      if (!tex || !opts.alive()) return;
-      pictureMaterial.map = tex;
-      parent.remove(placeholder);
-      parent.add(mesh(pictureMaterial));
-    });
-  }
-  return { geometry: [geo], materials: [placeholderMaterial, pictureMaterial] };
-}
-
-// An outline's bounds in its own frame: their size and their centre.
-function outlineBounds(o: Outline): { w: number; h: number; cx: number; cy: number } {
-  if (o.kind === "circle") return { w: o.radius * 2, h: o.radius * 2, cx: 0, cy: 0 };
-  if (o.kind === "rect") return { w: o.half.x * 2, h: o.half.y * 2, cx: 0, cy: 0 };
-  let minX = Infinity;
-  let minY = Infinity;
-  let maxX = -Infinity;
-  let maxY = -Infinity;
-  for (const v of o.verts) {
-    minX = Math.min(minX, v.x);
-    minY = Math.min(minY, v.y);
-    maxX = Math.max(maxX, v.x);
-    maxY = Math.max(maxY, v.y);
-  }
-  return { w: maxX - minX, h: maxY - minY, cx: (minX + maxX) / 2, cy: (minY + maxY) / 2 };
-}
-
-// The instance name a body's shapes ask their surfaces under
-// (`SurfaceRequest.instance`): `name` for a body carrying at least one waking
-// light, and undefined for every other body, which therefore asks for exactly
-// the shared materials it always did. Pure, so `cli render3d` can hold the
-// second half of that - the proof that no existing level gains a material.
-export function surfaceInstance(data: LevelBodyData, name: string | undefined): string | undefined {
-  if (name === undefined) return undefined;
-  return data.objects.some((o) => isLightObject(o) && isWaking(o)) ? name : undefined;
-}
-
-// Whether a geometry object authors a glow of its own - the shapes of a waking
-// body whose emission follows its light.
-function glows(g: GeometryObjectData): boolean {
-  return g.emissive !== undefined || g.emissiveTexture !== undefined;
-}
-
-// A unit placeholder for a prop that authors no outline of its own. Small enough
-// to read as "something is missing here" rather than as a wall.
-const ORPHAN_PLACEHOLDER = 0.3;
-
-// What a body draws, in authored order - its geometry objects and nothing else.
-//
-// It is a one-line filter and it is exported all the same, because the claim it
-// makes is the one this file exists to keep: a collision object never appears in
-// this list however bare the body is, so "does a collision shape draw?" can be
-// answered without a GPU, a canvas or a DOM, all three of which building a
-// `BodyVisual` needs.
-export function drawnObjects(data: LevelBodyData): GeometryObjectData[] {
-  return data.objects.filter(isGeometryObject);
-}
-
-// WHAT A PICK LANDS ON. A drawn object's piece group carries the authored object
-// it was built from, so a raycast that hits any mesh under it - the extrusion, a
-// prop's twentieth submesh, the placeholder standing in for one that has not
-// arrived - answers with the one thing an editor can act on.
-//
-// It is the authored `GeometryObjectData` by IDENTITY rather than an id, because
-// the format has no id to carry and inventing one would put a field on disk that
-// exists only for the editor. Whoever built the level data holds the map from
-// those objects back to whatever it calls them (see the editor's
+// It is the authored object by IDENTITY rather than an id, because the format
+// has no id to carry and inventing one would put a field on disk that exists
+// only for the editor. Whoever built the level data holds the map from those
+// objects back to whatever it calls them (see the editor's
 // `itemOfSceneObject`), and a host that built no map simply gets nothing back.
 export function pickTagOf(obj: THREE.Object3D): unknown {
   for (let o: THREE.Object3D | null = obj; o; o = o.parent) {
@@ -492,62 +169,59 @@ export class BodyVisual {
   // (see assets.ts), so they are deliberately NOT in here.
   private readonly owned: THREE.BufferGeometry[] = [];
   // The exception: water's material is built per body (it carries the body's
-  // own flow and colour in its uniforms), so this visual frees it.
+  // own flow and colour in its uniforms), and so is a dressing's copy of a
+  // material a waking light drives, so this visual frees them.
   private readonly ownedMaterials: THREE.Material[] = [];
   // Lights this body's light objects hang on it. Children of the root, so they
   // ride the pose with no per-frame cost; handed back to the rig at dispose,
   // which is what frees the budget slot as well as the objects.
   private readonly lights: MountedLight[] = [];
-  // The conveyor cleat rings this body draws, one per untextured belt geometry
-  // object, and the textured bands whose surface it scrolls, one per textured
-  // one. A band's geometry is in `owned` like any other.
+  // The glowing materials this body's WAKING lights drive (see `adoptDressing`).
+  // Handed to the rig by reference when the lights are mounted and filled when
+  // the scene lands, since a scene arrives after its bodies are built.
+  private readonly driven: DrivenEmission[] = [];
+  private readonly waking: boolean;
+  // The conveyor cleat rings this body draws, one per untextured belt, and the
+  // textured bands whose surface it scrolls, one per textured one. A band's
+  // geometry is in `owned` like any other.
   private readonly treads: BeltTread[] = [];
   private readonly rings: BeltRing[] = [];
-  private disposed = false;
 
   // `body` is what moves and is null for an authored body that built nothing;
   // `built` is the authored side and is null for a body the sim spawned at
   // runtime (a rock, the hook), which has no authored objects and simply
-  // extrudes its own shapes.
+  // extrudes its own shapes. `greybox` is whether the level names no scene, so
+  // the body is seen by its collision (see the header).
   constructor(
     readonly body: CollisionObject2D | null,
     private readonly built: BuiltBody | null,
     private readonly rig?: LightRig,
-    // What names this body's own copies of its surfaces, if a waking light in
-    // it drives their emission (see `buildAuthored`). Unique among the level's
-    // bodies; `Scene3D` passes the authored index.
-    private readonly instance?: string,
+    greybox = false,
   ) {
     const data = built?.data ?? null;
+    this.waking = data?.objects.some((o) => isLightObject(o) && isWaking(o)) ?? false;
     // Hook-only scenery sits BEHIND the level it decorates by default, because
     // the player passes straight through it - and in 3D that setback is what
     // says so, the flat grate lattice being 2D-mode only (see docs/game-design.md
-    // and `render/renderer.ts`). Anything else sits on the gameplay plane unless
-    // the level says otherwise.
+    // and `render/renderer.ts`). Anything else sits on the gameplay plane.
     const solidZ = body?.passable === true ? ANCHOR_Z : 0;
 
     if (data?.kind === "water") {
-      // Water has its own renderer (see `water.ts`) rather than the dressing
-      // machinery: its look is not a surface worn over an outline, so a
-      // geometry object stating a depth, a texture and a material describes
-      // none of it. Routing it through `buildAuthored` would extrude its
-      // collision outline and dress it in ordinary stone.
+      // Water has its own renderer (see `water.ts`): its look is not a surface
+      // worn over an outline.
       if (body instanceof WaterArea) {
-        // The render controls live on the body's geometry object (water is a
-        // visual effect); flow and drag stay on the body. Every water body has
-        // one - `withGeometryTwin` gives a body that authors none its twin.
-        const water = buildWater(this.root, body, data, data.objects.find(isGeometryObject));
+        const water = buildWater(this.root, body, data);
         this.owned.push(...water.geometries);
         this.ownedMaterials.push(...water.materials);
       }
     } else if (data) {
-      this.buildAuthored(data, solidZ);
+      this.buildAuthored(data, solidZ, greybox && drawsGreybox(data));
     } else if (body) {
       // A body the level never authored: extrude what it collides as, which is
       // every default.
       body.getShapes().forEach((shape) => {
         const piece = this.piece(shape.localOffset.x, shape.localOffset.y, shape.localRotation);
-        this.mount(piece, () => spawnedGeometry(shape), {}, solidZ, true);
+        this.mount(piece, spawnedGeometry(shape), surfaceOf({}), solidZ);
       });
     }
 
@@ -560,106 +234,25 @@ export class BodyVisual {
     }
   }
 
-  private buildAuthored(data: LevelBodyData, solidZ: number): void {
+  private buildAuthored(data: LevelBodyData, solidZ: number, greybox: boolean): void {
     const built = this.built!;
-    // Whether the BODY collides, which is what the placement and depth defaults
-    // turn on. Nothing past this line reads a collision object at all: what a
-    // body is made of and what it looks like are two authored statements, and
-    // this is the file where the second one is the only one consulted.
-    const solid = data.objects.some(isCollisionObject);
-    // A body with a waking light draws every shape in its OWN copy of its
-    // surface, so the glowing ones can follow the light without every other
-    // shape of the same stuff in the level following it too. Only then: every
-    // other body asks for exactly the materials it always did.
-    const instance = surfaceInstance(data, this.instance);
-    const driven: DrivenEmission[] = [];
-
-    for (const g of drawnObjects(data)) {
-      const local = localPlacement(built, g);
-      const piece = this.piece(local.pos.x, local.pos.y, local.rot, g);
-      const spec: DrawSpec = {
-        geometry: g,
-        ...(data.color !== undefined ? { color: data.color } : {}),
-        ...(instance !== undefined ? { instance } : {}),
-      };
-      // The glowing shapes of a waking body are the set its lights drive; a
-      // shape that authors no emission (the stalk under the cap) is left alone.
-      // `surfaceOf` is the cache, so this is the very material mounted below.
-      if (instance !== undefined && glows(g)) {
-        const material = surfaceOf(spec);
-        if (!driven.some((d) => d.material === material)) {
-          driven.push({ material, authored: g.emissiveIntensity ?? 1 });
-        }
+    for (const o of data.objects) {
+      if (!isCollisionObject(o)) continue;
+      const local = localPlacement(built, o);
+      if (o.shape.kind === "belt") {
+        this.mountBelt(this.piece(local.pos.x, local.pos.y, local.rot, o), o.shape, data.color, solidZ);
+      } else if (greybox) {
+        this.mount(
+          this.piece(local.pos.x, local.pos.y, local.rot, o),
+          solidOf(outlineOfData(o.shape), o.thickness ?? DEFAULT_THICKNESS),
+          surfaceOf({ texture: "color", color: data.color ?? DEFAULT_BODY_COLOR }),
+          solidZ,
+        );
       }
-      // A form on a body with collision is an object among objects and is drawn
-      // on the body's own plane; one on a body without is decoration and sits
-      // behind it, which is what a flat fill drawn before every body already was.
-      const defaultZ = objectDepth(g.z, solid ? solidZ : DECOR_Z);
-      // A primitive with no form of its own draws the same unit placeholder a
-      // prop with no file does: something is missing HERE, said visibly rather
-      // than by drawing nothing, which is what a body with no geometry object
-      // means and is a different statement.
-      const outline = outlineOfData(
-        g.shape ?? { kind: "rect", w: ORPHAN_PLACEHOLDER, h: ORPHAN_PLACEHOLDER },
-      );
-      const defaults = solid ? SOLID_DEFAULTS : DECOR_DEFAULTS;
-      // A CONVEYOR is its own geometry, not an extruded outline: the band as a
-      // ring whose running surface carries its texture round the loop, and on
-      // a band with no texture to move (the flat colour) a ring of cleats
-      // instead (`beltTread.ts`). Both run at the geometry object's own
-      // `speed`, for the reason every other look field is its own: a matched
-      // pair states the collision object's, and a drawn-only belt runs as it is
-      // authored. The width across the pulleys is the object's `depth`. A prop
-      // standing in for a belt draws what its file draws.
-      const loop =
-        g.shape?.kind === "belt" && (g.kind ?? "primitive") === "primitive" ? beltLoopOf(g.shape) : null;
-      let ring: BeltRing | null = null;
-      if (loop && g.shape?.kind === "belt") {
-        const width = g.depth ?? defaults.depth;
-        const surface = surfaceName(g.texture);
-        const flat = isSolidSurface(surface);
-        ring = new BeltRing(loop, width, tileMetres(surface, g.tileScale), flat ? 0 : g.shape.speed);
-        if (flat) {
-          const tread = new BeltTread(loop, g.shape.speed, width);
-          // Placed and tipped exactly as `mountVisual` places the band, so the
-          // cleats stay on it whatever the object's depth and angles.
-          tread.mesh.position.z = defaultZ;
-          tread.mesh.rotation.set(g.rotX ?? 0, g.rotY ?? 0, 0);
-          applyProjection(tread.mesh, g.projection);
-          piece.add(tread.mesh);
-          this.treads.push(tread);
-          this.owned.push(tread.geometry);
-        } else {
-          this.rings.push(ring);
-        }
-      }
-      const band = ring;
-      this.mount(
-        piece,
-        () => band?.geometry ?? primitiveGeometry(outline, g, defaults),
-        spec,
-        defaultZ,
-        // WHAT COLLIDES, CASTS - wherever its dressing has been nudged to.
-        // A body with a collision object is a thing in the play space, and how
-        // far behind its own plane the form drawn for it happens to sit is a
-        // decision about how it READS, not about whether it is there: a hanging
-        // cage set back 20 cm so the ball reads in front of it is still the
-        // object the ball is standing in. Testing its depth is what silently
-        // took the shadow off every prop authored that way, and a prop with no
-        // shadow does not look like a prop set back - it looks like a sticker.
-        //
-        // Decoration keeps the rule the retired background layer had, because
-        // the reason there is unchanged: a backdrop is a painted distance rather
-        // than an object, and one throwing a shadow across the level in front of
-        // it reads as geometry the player ought to be able to touch. Behind the
-        // gameplay plane it casts nothing; on or in front of it, it is in the
-        // scene and casts like anything else.
-        solid || defaultZ >= 0,
-      );
     }
 
-    // Lights last, so the budgets are spent on geometry-bearing bodies in
-    // authored order and a light is never built for a body that failed above.
+    // Lights last, so the budgets are spent in authored order and a light is
+    // never built for a body that failed above.
     if (!this.rig) return;
     for (const l of data.objects) {
       if (!isLightObject(l)) continue;
@@ -675,10 +268,73 @@ export class BodyVisual {
         },
         // Only a waking light reads it; an always-on light leaves the
         // emission as authored.
-        driven,
+        this.driven,
       );
       if (mounted) this.lights.push(mounted);
     }
+  }
+
+  // A CONVEYOR is its own geometry, not an extruded outline: the band as a ring
+  // whose running surface carries its texture round the loop, and on a band
+  // with no texture to move (the flat colour) a ring of cleats as well
+  // (`beltTread.ts`). Both run at the belt's own `speed`. Drawn in every level,
+  // scene or not: what the scene cannot draw is a surface that moves.
+  private mountBelt(
+    piece: THREE.Group,
+    shape: Extract<CollisionObjectData["shape"], { kind: "belt" }> & BeltLook,
+    bodyColor: string | undefined,
+    z: number,
+  ): void {
+    const loop = beltLoopOf(shape);
+    if (!loop) return;
+    const width = shape.width ?? DEFAULT_THICKNESS;
+    const surface = surfaceName(shape.texture);
+    const flat = isSolidSurface(surface);
+    const ring = new BeltRing(loop, width, tileMetres(surface, shape.tileScale), flat ? 0 : shape.speed);
+    if (flat) {
+      const tread = new BeltTread(loop, shape.speed, width);
+      tread.mesh.position.z = z;
+      piece.add(tread.mesh);
+      this.treads.push(tread);
+      this.owned.push(tread.geometry);
+    } else {
+      this.rings.push(ring);
+    }
+    this.mount(
+      piece,
+      ring.geometry,
+      surfaceOf({ texture: shape.texture, tileScale: shape.tileScale, color: shape.color ?? bodyColor }),
+      z,
+    );
+  }
+
+  // Take a dressing node from the level's scene, now a child of `root`
+  // (`dressScene`). Only one thing about it is this body's business: a body
+  // with a WAKING light drives the glow of what it is dressed in, as it drove
+  // the glow of the shapes it used to carry (see `LightRig`), so the node's
+  // emissive materials become this body's own copies - shared with nothing
+  // else in the level, which would otherwise light up with it - and join the
+  // set its lights drive.
+  adoptDressing(node: THREE.Object3D): void {
+    if (!this.waking) return;
+    const copies = new Map<THREE.Material, THREE.MeshStandardMaterial>();
+    node.traverse((o) => {
+      const mesh = o as THREE.Mesh;
+      if (!mesh.isMesh) return;
+      const own = (m: THREE.Material): THREE.Material => {
+        const std = m as THREE.MeshStandardMaterial;
+        if (!std.isMeshStandardMaterial || (std.emissive.getHex() === 0 && !std.emissiveMap)) return m;
+        let copy = copies.get(m);
+        if (!copy) {
+          copy = std.clone();
+          copies.set(m, copy);
+          this.ownedMaterials.push(copy);
+          this.driven.push({ material: copy, authored: copy.emissiveIntensity });
+        }
+        return copy;
+      };
+      mesh.material = Array.isArray(mesh.material) ? mesh.material.map(own) : own(mesh.material);
+    });
   }
 
   // One child group at a placement in the body's frame. Rigid, so written once.
@@ -694,20 +350,15 @@ export class BodyVisual {
     return piece;
   }
 
-  private mount(
-    piece: THREE.Group,
-    geometryFor: () => THREE.BufferGeometry,
-    spec: DrawSpec,
-    defaultZ: number,
-    castShadow: boolean,
-  ): void {
-    const mounted = mountVisual(piece, geometryFor, spec, {
-      defaultZ,
-      castShadow,
-      alive: () => !this.disposed,
-    });
-    this.owned.push(...mounted.geometry);
-    if (mounted.materials) this.ownedMaterials.push(...mounted.materials);
+  // A solid on a piece, at `z` through the plane. Everything drawn here is a
+  // thing in the play space, so everything casts.
+  private mount(piece: THREE.Group, geometry: THREE.BufferGeometry, material: THREE.Material, z: number): void {
+    this.owned.push(geometry);
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    mesh.position.z = z;
+    piece.add(mesh);
   }
 
   // The whole per-frame cost of a body: two writes into vectors it already owns,
@@ -723,9 +374,9 @@ export class BodyVisual {
   }
 
   dispose(): void {
-    this.disposed = true;
     for (const l of this.lights) this.rig?.drop(l);
     this.lights.length = 0;
+    this.driven.length = 0;
     for (const g of this.owned) g.dispose();
     this.owned.length = 0;
     for (const t of this.treads) t.mesh.dispose();

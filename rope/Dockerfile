@@ -32,11 +32,6 @@ COPY package.json serve.ts ./
 # which is why there is no node_modules here.
 COPY src ./src
 COPY levels ./levels
-# The generator parameter schemas: src/level/generatorParams.ts imports them, and
-# the level registry the server loads reaches that module. They are data shared
-# with the Blender Python, which is why they live outside src/.
-COPY tools/blender/boulders/params.json ./tools/blender/boulders/params.json
-COPY tools/blender/mushrooms/params.json ./tools/blender/mushrooms/params.json
 COPY --from=builder /app/dist ./dist
 # Resolve every import the server reaches against exactly what this stage ships.
 # A file the runner forgot then fails the build, rather than passing the deploy

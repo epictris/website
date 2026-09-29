@@ -52,7 +52,6 @@ import {
   MOVE_MODES,
   moveModeCloses,
   moveModeEases,
-  type MoveEase,
   type MoveMode,
   spawnWithoutEntry,
 } from "../level/levelFormat";
@@ -73,7 +72,6 @@ import {
   bodyIntersectsRect,
   anchorItem,
   chainEnds,
-  chainEndWorld,
   chainPath,
   chainViaItems,
   nearestChainSpan,
@@ -86,15 +84,11 @@ import {
   cloneChain,
   cloneShape,
   cloneVine,
-  cloneVisual,
-  remapPatchHosts,
   DEFAULT_CURVE_WIDTH,
   convexHull,
   bodyWithinRect,
   defaultCamera,
   defaultNote,
-  defaultVisual,
-  type EdVisual,
   distanceToChain,
   ED_LAYERS,
   emptyModel,
@@ -103,7 +97,6 @@ import {
   itemBounds,
   bodyCentroid,
   bodyLabel,
-  bodyLead,
   bodyMembers,
   bodyRuns,
   objectLabel,
@@ -112,9 +105,6 @@ import {
   isArrowNote,
   isCheckpointNote,
   checkpointBox,
-  collidingBodyIds,
-  itemDepth,
-  offsetZAfterMove,
   newItemStyle,
   type EdObject,
   MIN_ARROW_LENGTH,
@@ -128,7 +118,7 @@ import {
   NOTE_DEFAULT_ARROW_LENGTH,
   NOTE_DEFAULT_SIZE,
   nearestSurfaceLocal,
-  DRESSING_GIZMO,
+  ANCHOR_GIZMO,
   pickBodyOf,
   pointInBody,
   rotateItemsAbout,
@@ -147,7 +137,6 @@ import {
   polyMustBeConvex,
   PATH_PICK_HALF_WIDTH,
   pathNodes,
-  pathPolyline,
   reversePathVerts,
   sharpenPathNodes,
   smoothPathNodes,
@@ -169,11 +158,7 @@ import {
   centreShapeOrigin,
   scaleShape,
   syncBodyProps,
-  syncMatchedOutlines,
-  copyMatchedOutline,
-  outlinesEqual,
   toWorld,
-  visualData,
   worldVertices,
   type EdChain,
   type EdVine,
@@ -199,7 +184,6 @@ import {
   computeHandles,
   drawEditor,
   drawVisualsStatus,
-  hasPlaneHandles,
   BODY_MEMBER,
   SELECT,
   CHAIN_DEFAULT_COLOR,
@@ -221,27 +205,18 @@ import {
   type MaterialName,
 } from "../lib/shapeGeometry";
 import { decomposeConvex, isSimpleLoop, normalizeWinding } from "../lib/polygon";
-import { deleteLevel, listLevels, loadLevel, saveLevel, uploadImage } from "./api";
+import { deleteLevel, listLevels, loadLevel, saveLevel } from "./api";
 import {
-  emissiveMapNames,
-  gltfLoader,
   HDRI_ASSETS,
   hdriNames,
-  isSolidSurface,
-  MESH_ASSETS,
   SOLID_SURFACE,
-  surfaceName,
-  tileMetres,
   TEXTURE_ASSETS,
 } from "../render3d/assets";
 import * as THREE from "three";
-import { ROCK_HASH_KEY, ROCK_INDEX_KEY, ROCK_TEXTURES, rockBodies, rockNodeName, rocksUrl } from "../render3d/rocks";
-import { silhouette, type SilTriangle } from "../lib/silhouette";
 import { Scene3D, type Scene3DLevel } from "../render3d/scene";
-import { IMAGE_ASSETS, imageNames, registerImageAsset } from "../render3d/images";
+import { SCENERY_TAG } from "../render3d/sceneDressing";
 import { nodeNameOf, sceneMetaFile, type SceneMeta } from "../render3d/scenes";
 import {
-  cameraDistance,
   focalLengthFromFov,
   FOV_Y_DEG,
   isHeadOn,
@@ -254,49 +229,23 @@ import {
   type CameraOrbit,
   type ViewProjection,
 } from "../render3d/space";
-import { EditorGizmo, type GizmoAxes, type GizmoHandlers, type GizmoMode } from "./gizmo";
+import { EditorGizmo, type GizmoAxes, type GizmoHandlers } from "./gizmo";
 import {
   handleUnder,
   itemsBox,
   itemsUnder,
   levelBox,
   ORBIT_RADIANS_PER_PX,
-  PROP_FOOTPRINT,
   spawnUnder,
   VisualsWorkspace,
 } from "./visuals/workspace";
 import { guidePlaneZ, type GuideDraft } from "./visuals/guides";
-import { alignUp, surfacePlacement } from "./visuals/surfaceDrop";
-import { GeneratorJobs, missingTools } from "./visuals/jobs";
-import { buildGeneratorGroup, generatorBadge, GENERATOR_PANEL_CSS, paramIssues } from "./visuals/generatorPanel";
+import { surfacePlacement } from "./visuals/surfaceDrop";
 import { describe, fieldRow, heading, PANEL_UI_CSS, pruneEmptySections, revealInSection, section } from "./panelUi";
-import { existingRock, landMesh, objectPose, patchFor, refitPatch, rockFor, rockSource } from "./visuals/generatorEdits";
-import {
-  loopPointToWorld,
-  patchMatrix,
-  selectSurface,
-  soupInFrame,
-  worldToLoopPoint,
-  type SurfacePoint,
-  type SurfaceSelection,
-} from "./visuals/surfacePatch";
-import { closedDraft, SurfaceLoop } from "./visuals/surfaceLoop";
-import { isGuideTag } from "./visuals/tags";
-import {
-  generatorInput,
-  itemLookup,
-  loadSchema,
-  mergeDefaults,
-  stripDefaults,
-  wantedKey,
-  type ItemLookup,
-} from "./visuals/paramSchema";
-import { forgetFailedMesh, loadMesh } from "../render3d/assets";
 import { World } from "../engine/world";
 import { buildLevelBodies, DEFAULT_SPRING_DAMPING, MAX_SPRING_FREQ } from "../level/buildBodies";
 import {
   DEFAULT_VINE_DENSITY,
-  DEFAULT_VINE_SPACING,
   vineTargetSpacing,
   DEFAULT_VINE_STIFFNESS,
   DEFAULT_VINE_VISCOSITY,
@@ -332,7 +281,6 @@ import {
   srcHash as treeSrcHash,
 } from "virtual:tree-stamp";
 import {
-  DEFAULT_LIGHT_COLOR,
   DEFAULT_LIGHT_RANGE,
   LIGHT_SHADOW_BUDGET,
 } from "../render3d/lights";
@@ -340,11 +288,6 @@ import { DEFAULT_WAKE_FALL, DEFAULT_WAKE_RISE } from "../render3d/glow";
 import { DEFAULT_FIREFLY_NOTICE, FIREFLY_MAX } from "../render3d/fireflies";
 import { colorInput } from "./colorPicker";
 
-// `geometry` draws the OTHER kind of scene object: a rect like `rect`, but one
-// that is drawn and never simulated. It is a tool rather than a mode on the rect
-// tool because what a shape IS is the first thing an author decides about it, and
-// a draw that has to be corrected afterwards in the inspector is the coupling
-// this pair of objects exists to avoid.
 type Tool =
   | "select"
   | "rect"
@@ -352,7 +295,6 @@ type Tool =
   | "belt"
   | "poly"
   | "path"
-  | "geometry"
   | "text"
   | "arrow"
   | "checkpoint"
@@ -360,12 +302,7 @@ type Tool =
   | "vine"
   | "light"
   | "glow"
-  | "fireflies"
-  // The Visuals workspace's two generators (see `sceneToolPress`): a click on
-  // a collision outline dresses it with a generated rock, and a loop painted
-  // onto a model's faces grows a mushroom patch there.
-  | "rock"
-  | "mushrooms";
+  | "fireflies";
 
 // Which tools each layer offers. A shape tool has no meaning on the notes layer
 // (a note is a text box or an arrow, never a circle) and vice versa, so the
@@ -384,9 +321,6 @@ const LAYER_TOOLS: Record<EdLayer, Tool[]> = {
     "belt",
     "poly",
     "path",
-    "geometry",
-    "rock",
-    "mushrooms",
     "light",
     "glow",
     "fireflies",
@@ -405,10 +339,8 @@ const LAYER_TOOLS: Record<EdLayer, Tool[]> = {
 // makes is an item the scene or the guides draw. The two that are not are the
 // ones whose gesture and feedback live on the 2D overlay: a chain and a vine
 // are strung from collision outline to collision outline with a draft the
-// overlay draws, and neither is drawn by the guides. A tool for the Visuals
-// workspace alone (one that clicks on model surfaces rather than the plane) is
-// "visuals" here and gets a press handler in `sceneToolPress`.
-type ToolWorkspace = "both" | "level" | "visuals";
+// overlay draws, and neither is drawn by the guides.
+type ToolWorkspace = "both" | "level";
 const TOOL_WORKSPACES: Record<Tool, ToolWorkspace> = {
   select: "both",
   rect: "both",
@@ -416,7 +348,6 @@ const TOOL_WORKSPACES: Record<Tool, ToolWorkspace> = {
   belt: "both",
   poly: "both",
   path: "both",
-  geometry: "both",
   text: "both",
   arrow: "both",
   checkpoint: "both",
@@ -425,16 +356,12 @@ const TOOL_WORKSPACES: Record<Tool, ToolWorkspace> = {
   light: "both",
   glow: "both",
   fireflies: "both",
-  rock: "visuals",
-  mushrooms: "visuals",
 };
 
 // Kinds a chain may be tied to. An area is a region, not a body - nothing hangs
 // off a killzone or a current - so the chain tool passes straight through one.
 const CHAINABLE_KINDS: BodyKind[] = ["static", "rigid"];
-// Decoration is excluded for the plainer reason that it builds no body at all:
-// a chain tied to one would have nothing to constrain, and the loader drops it.
-// ...and a piece the rope passes through (the `chain` box unticked) cannot hold
+// A piece the rope passes through (the `chain` box unticked) cannot hold
 // a chain either: the loader lands an anchor authored on one on the nearest
 // piece the rope CAN hold (`tieablePieces` in level/chains.ts), so the editor
 // offers only what the level will actually build - which for a wheel is its
@@ -446,7 +373,7 @@ const chainable = (b: EdItem): boolean =>
 // for, and how to put something on it.
 const EMPTY_HINTS: Record<EdLayer, string> = {
   scene:
-    "No selection. Click a body, or pick +Rect / +Circle and drag on the canvas; +Poly clicks out an outline, concave corners and all (Enter or click the first vertex to close, Esc to cancel) - the physics gets it cut into convex pieces, so a notch is one object rather than three overlapping ones. Those draw a COLLISION shape - what the body is made of, simulated and never drawn. +Geometry draws the other half: an object that is drawn and never simulated, which is what carries a mesh or a texture. A body wants one of each, and they are two decisions. +Chain drags a chain from one body to another. Ctrl+G moves the selected objects into ONE body (Ctrl+Shift+G takes bodies apart again; Alt+click picks one object out of a body). The panel bottom-left lists every body and expands it into the objects it is made of, which is the only way to reach an object with no outline - a light, or the mesh a wall is dressed in. Rubber-band from empty space: drag left→right to catch what the box encloses, right→left for anything it touches. +Light drops a lamp - drag as you place it to set how far it reaches. A light with no visible source is a body of its own (a shaft down a grate, a fill); a lamp you can see is a light merged into the body its fitting is in, so moving the fitting moves the light. Any visible layer can be selected.",
+    "No selection. Click a body, or pick +Rect / +Circle and drag on the canvas; +Poly clicks out an outline, concave corners and all (Enter or click the first vertex to close, Esc to cancel) - the physics gets it cut into convex pieces, so a notch is one object rather than three overlapping ones. Those draw a COLLISION shape - what the body is made of. What a level LOOKS like is its Blender scene (Level panel, `scene`): an object there named like a body (the body's `name`) is that body's look, and a level with no scene is drawn as its collision. +Chain drags a chain from one body to another. Ctrl+G moves the selected objects into ONE body (Ctrl+Shift+G takes bodies apart again; Alt+click picks one object out of a body). The panel bottom-left lists every body and expands it into the objects it is made of, which is the only way to reach an object with no outline, like a light. Rubber-band from empty space: drag left→right to catch what the box encloses, right→left for anything it touches. +Light drops a lamp - drag as you place it to set how far it reaches. A light with no visible source is a body of its own (a shaft down a grate, a fill); a lamp you can see is a light merged into the body its fitting is in, so moving the fitting moves the light. Any visible layer can be selected.",
   camera:
     "Camera layer. Click a region, drag to rubber-band select, or pick +Rect / +Circle and drag one out (+Poly clicks out an outline). Tab switches layer.",
   fireflies:
@@ -490,27 +417,18 @@ type Drag =
   // Navigating the Visuals workspace's free view (see `VisualsWorkspace`):
   // middle drag orbits, Shift + middle or right drag pans.
   | { mode: "view" }
-  // DROP ON SURFACE (Visuals, Shift-drag of a selected prop or light): the
-  // object's origin follows the nearest model surface under the pointer, and
-  // with Ctrl held a prop also stands up along the face's normal. Written
-  // through the gizmo's own handlers (`handlers`), begun at the first real
-  // movement so the whole drag is one undo step; a press that never travels is
-  // the Shift+click it would otherwise have been (`pick`).
+  // DROP ON SURFACE (Visuals, Shift-drag of a selected light): the light
+  // follows the nearest model surface under the pointer. Written through the
+  // gizmo's own handlers (`handlers`), begun at the first real movement so the
+  // whole drag is one undo step; a press that never travels is the Shift+click
+  // it would otherwise have been (`pick`).
   | {
       mode: "surfaceDrop";
       item: EdItem;
       press: Vec2;
       handlers: GizmoHandlers | null;
-      // The item's tilt when the drag began, which an aligned drop turns from.
-      tilt: { rot: number; rotX: number; rotY: number } | null;
       pick: () => void;
     }
-  // A mushroom patch's loop point, dragged along its host's surface (Visuals,
-  // **Edit loop**). Model-mutating, so it takes the one undo step at its first
-  // movement like a vertex drag - and like a move, not before the pointer has
-  // left the click's slop (`moved`), so a click that shakes a pixel neither
-  // takes an undo step nor re-picks the surface under the point.
-  | { mode: "loopPoint"; itemId: number; index: number; press: Vec2; moved: boolean }
   // Turning the 3D view about what it is centred on (see `CameraOrbit`). Middle
   // button, and only while a scene is drawn: in the 2D view there is nothing to
   // orbit, so the button keeps panning there.
@@ -658,10 +576,6 @@ const MAX_STEPS = 2;
 
 const M2PX = PIXELS_PER_METER;
 
-// How far behind the gameplay plane `+ Image` stands a picture, in metres: far
-// enough to read as distance and parallax gently as the camera pans, near
-// enough that the plane filling the view is not an enormous number.
-const IMAGE_DEPTH = 10;
 
 // The way out of a test, per controller. Esc always works; Space is offered
 // only on the ball, whose input source binds no keyboard at all
@@ -719,10 +633,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // keeps the Level workspace's view toggle for when it returns.
   const sceneShown = (): boolean => scene3d !== null && (inVisuals() || viewMode !== "2d");
   // How much of the scene the 2D overlay is responsible for. With a scene under
-  // it the overlay drops every fill - and the geometry objects entirely, since
-  // the scene draws those and an outline on the plane describes something else
-  // (see `drawEditor` and `hasPlaneHandles`). One statement of it, because what
-  // the overlay DRAWS and what it offers handles for have to be the same set.
+  // it the overlay drops every fill, since the scene draws the level (see
+  // `drawEditor`).
   const overlayLayers = (): "fill" | "outline" => (sceneShown() ? "outline" : "fill");
   // How far the 3D view is turned from the side-on view the level is authored
   // against. Editor-only, and zero for every other host (see `CameraOrbit`).
@@ -851,70 +763,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // --- state ----------------------------------------------------------------
   let model: EdModel = emptyModel();
 
-  // THE GENERATOR SERVICE'S CLIENT (editor/visuals/jobs.ts): generations run
-  // on the dev server while the editor goes on, and a finished mesh is put on
-  // its object as one undo step - never in the middle of a drag, and never on
-  // an object that has since been deleted or edited away from what was asked.
-  const jobs = new GeneratorJobs({
-    fetch: (url, init) => fetch(url, init),
-    later: (fn, ms) => void setTimeout(fn, ms),
-    // Not in the middle of ANY gesture: a drag, a gizmo drag (three's own, which
-    // never sets `drag`) or a held arrow's nudge run, each of which is one undo
-    // step that a swap landing inside it would split in two.
-    canWrite: () => mode === "edit" && drag === null && !(gizmo?.busy ?? false) && !nudging,
-    wantedKey: (id) => {
-      const it = model.items.find((i) => i.id === id);
-      if (!it) return undefined;
-      try {
-        return wantedKey(it, itemLookup(model.items));
-      } catch {
-        // A value the key cannot be made of (see `generatorStatus`).
-        return null;
-      }
-    },
-    swap: (id, key) => {
-      const it = model.items.find((i) => i.id === id);
-      const g = it?.visual.generator;
-      if (!it || !g) return;
-      // The file behind `key` exists now. An earlier load of it may have failed
-      // and been cached (a level naming a key whose file was missing, or an
-      // undo back to a key never generated here), so that failure goes, and
-      // when the object already names the key nothing in the model moves - the
-      // scene is told to rebuild so the new file is fetched and mounted.
-      const refetch = forgetFailedMesh(key);
-      if (it.visual.mesh === key) {
-        if (refetch) sceneRev = -1;
-        return;
-      }
-      // Not the author's edit but an outside event landing, so it does not
-      // clear the redo stack (an author who undid, then saw a rock land, can
-      // still redo what they undid) - and every redo state that would want this
-      // very mesh gets it too, so a redo does not take the rock back off. The
-      // landing itself is one undo step.
-      beginAction({ keepRedo: true });
-      it.visual.mesh = key;
-      // The key was made at the schema version the server runs, so the block
-      // says that version from now on (an older level is brought up to it by
-      // the generation that made its new mesh).
-      g.version = loadSchema(g.kind)?.version ?? g.version;
-      for (const state of future) landMesh(state.items, id, key);
-      markDirty();
-    },
-    changed: () => {
-      jobsTick++;
-      refreshFields();
-      refreshGeneratorHealth();
-    },
-  });
-  // Moves whenever a job's state does, so the outliner's badges are recomputed
-  // only when the model or a job has changed rather than every frame.
-  let jobsTick = 0;
-  // `+ Mushrooms`' loop while it is being painted (editor/visuals/surfaceLoop.ts).
-  const surfaceLoop = new SurfaceLoop();
-  // The patch whose loop is open for dragging (**Edit loop**), or null. Its
-  // points are the patch's own, drawn and dragged on the host's surface; a drag
-  // writes them back as it goes, one undo step per drag.
-  let loopEdit: { itemId: number } | null = null;
   // Selection is a set: plain click selects one, shift+click toggles a body in
   // or out. Handles and the per-body inspector only apply to a lone selection.
   const selectedIds = new Set<number>();
@@ -1070,11 +918,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       cam: { ...b.cam },
       light: { ...b.light },
       note: { ...b.note },
-      // The visual is mutated in place by the inspector exactly as `cam`,
-      // `light` and `note` are, so an undo snapshot that shared it would alias
-      // the state it is meant to be restoring - the known trap on this line.
-      // `cloneVisual` because the generator block nests.
-      visual: cloneVisual(b.visual),
     })),
     chains: m.chains.map(cloneChain),
     vines: m.vines.map(cloneVine),
@@ -1111,17 +954,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   }
 
   // Record the current state before a mutating action, so it can be undone.
-  //
-  // An author's action clears the redo stack: redoing past a new edit would
-  // replay the undone one over it. `keepRedo` is for an edit the author did not
-  // make - a generated mesh landing on its object (see `jobs`) - which is an
-  // undo step of its own but must not throw away what the author can redo.
-  function beginAction(opts: { keepRedo?: boolean } = {}): void {
+  // It clears the redo stack: redoing past a new edit would replay the undone
+  // one over it.
+  function beginAction(): void {
     nudging = false; // any other action ends the current nudge run
     pinCompoundFrames();
     history.push(snapshot(model));
     if (history.length > HISTORY_MAX) history.shift();
-    if (!opts.keepRedo) future.length = 0;
+    future.length = 0;
   }
   function undo(): void {
     if (!history.length) return;
@@ -1166,41 +1006,18 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   const pickableItems = () =>
     model.items.filter((b) => visibleLayers.has(b.layer) && !lockedLayers.has(b.layer));
   // The same set in click order, bottom-first (callers walk it backwards to take
-  // the topmost hit): draw order — layer, then DEPTH, then model order — with the
-  // active layer lifted above the rest, so a camera region drawn over a wall does
-  // not swallow the click while geometry is the layer being edited.
-  //
-  // Depth is what makes a click mean what it looks like it means. Two shapes
-  // whose outlines overlap are not ambiguous on screen - one of them is in front
-  // - so the pick takes the one nearest the viewport (`itemDepth`, the same rule
-  // both renderers draw by) rather than whichever happened to be authored later.
-  // A backdrop 20 m behind the level can no longer swallow a click meant for the
-  // wall drawn over it.
-  // Does this body have a collision object in it? The one fact about a BODY that
-  // `itemDepth` needs and an item cannot answer about itself: a geometry object
-  // with no authored `offsetZ` is drawn on the gameplay plane if its body
-  // collides and at `DECOR_Z` if it does not (see `depthOf`).
-  const bodyCollides = (bodyId: number): boolean =>
-    model.items.some((o) => o.bodyId === bodyId && o.object === "collision");
-
+  // the topmost hit): draw order — layer, then model order — with the active
+  // layer lifted above the rest, so a camera region drawn over a wall does not
+  // swallow the click while the scene is the layer being edited.
   const pickOrder = (): EdItem[] => {
-    // What a geometry object's depth means turns on whether its body collides
-    // (see `itemDepth`), which is a fact about the model rather than the item.
-    const colliding = collidingBodyIds(model.items);
-    const depth = (b: EdItem) => itemDepth(b, colliding.has(b.bodyId));
     return pickableItems()
       .map((b, i) => ({ b, i }))
       .sort(
         (p, q) =>
           Number(p.b.layer === activeLayer) - Number(q.b.layer === activeLayer) ||
           ED_LAYERS.indexOf(p.b.layer) - ED_LAYERS.indexOf(q.b.layer) ||
-          depth(p.b) - depth(q.b) ||
-          // At the same depth a COLLISION object wins, and that tie is now the
-          // common case: a body's primitive states the same outline in the same
-          // place, so on the canvas the two are one shape. A click means the
-          // thing that decides where the player can go; the form drawn over it
-          // is one row away in the tree, which a canvas pick has already
-          // unfolded and scrolled to.
+          // A COLLISION object wins over a light whose reach it sits inside: a
+          // click means the thing that decides where the player can go.
           Number(p.b.object === "collision") - Number(q.b.object === "collision") ||
           p.i - q.i,
       )
@@ -1220,11 +1037,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (!s || (s.shape.kind !== "poly" && s.shape.kind !== "path")) return null;
     // In the Visuals workspace the corners are the guides' handles, which are
     // drawn for any lone selected polygon or path on a layer that can be
-    // edited (`Guides.vertexHandles`) - a prop's outline included, since its
-    // corners are stored as a primitive's are. A turned Level view draws none.
+    // edited (`Guides.vertexHandles`). A turned Level view draws none.
     if (inVisuals()) return s;
-    if (orbited() || !hasPlaneHandles(s, overlayLayers())) return null;
-    return s;
+    return orbited() ? null : s;
   }
   // The vertices actually selected on that shape, sorted and with anything past
   // its end dropped: an index outlives the loop it indexes only until the next
@@ -1440,11 +1255,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   const snapVec = (v: Vec2) => new Vec2(snap(v.x), snap(v.y));
   // Snap a shape dimension (width/height/radius) to the grid, never below one cell.
   const snapLen = (v: number) => Math.max(gridStep, snap(v));
-  // What a move lines up with the grid (see `moveSnapPoint`): a body's colliders
-  // and geometry, whichever piece was grabbed - a light or an anchor is not the
+  // What a move lines up with the grid (see `moveSnapPoint`): a body's
+  // colliders, whichever piece was grabbed - a light or an anchor is not the
   // outline being lined up - or everything, where there is nothing else.
   const snapOutlineOf = (items: readonly EdItem[]): Vec2 => {
-    const outline = items.filter((m) => m.object === "collision" || m.object === "geometry");
+    const outline = items.filter((m) => m.object === "collision");
     return moveSnapPoint(outline.length ? outline : items);
   };
   // A move's displacement, adjusted so the point it lines up (`at`, taken at
@@ -1463,38 +1278,17 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // --- the 3D gizmo's side of the model -------------------------------------
   //
   // Nothing below writes anything the 2D handles do not also write; what it adds
-  // is the axes the plane has none: `EdVisual.offsetZ`, `rotX`, `rotY` and a
-  // mesh's `scale`. Every one of them was a number typed into the inspector.
+  // is the one axis the plane has none of: a light's `z`, which was a number
+  // typed into the inspector.
   //
   // A handle is offered ONLY where the format has somewhere to put its answer -
-  // a collision shape has no rotation about x, a body has no z of its own, a
-  // light has no size - so the gizmo shows a level's real degrees of freedom
-  // rather than three of everything, two thirds of which would do nothing.
+  // a collision shape has no rotation about x and no z, a body has no z of its
+  // own, a light has no size - so the gizmo shows a level's real degrees of
+  // freedom rather than three of everything, most of which would do nothing.
 
-  // The smallest a gizmo drag may make a shape: one on-disk pixel. Zero is a
-  // shape that can never be grabbed again, and negative is a shape inside out.
-  const MIN_EXTENT = PX;
-
-  // Does this item tip out of the gameplay plane? Anything that is DRAWN does,
-  // whichever way it gets its look: `mountVisual` turns a prop's holder and an
-  // extrusion itself by `rotX`/`rotY`, about the same point. A collision shape
-  // and a light have nowhere to put the answer, so neither is offered the rings.
-  const tips = (i: EdItem): boolean => i.object === "geometry";
-
-  // The item's orientation as three sees it: the same composition the renderer
-  // builds (`mountVisual` turns the piece about z and the drawn thing inside it
-  // about x and y), which is why the decomposition below reads Euler order ZXY
-  // and gets exactly `rotX`, `rotY` and `-rot` back.
+  // The item's orientation as three sees it: a turn in the plane, about z.
   function itemQuat(i: EdItem): THREE.Quaternion {
-    const geo = tips(i);
-    return new THREE.Quaternion().setFromEuler(
-      new THREE.Euler(
-        geo ? i.visual.rotX : 0,
-        geo ? i.visual.rotY : 0,
-        threeRotation(i.rot),
-        "ZXY",
-      ),
-    );
+    return new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, threeRotation(i.rot), "ZXY"));
   }
 
   // A gizmo drag is one undo step and one save, exactly like a 2D drag.
@@ -1505,19 +1299,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   }
 
   // Where an item's handles stand in z: the depth the thing they are attached to
-  // is DRAWN at, which is the only place a handle may be.
-  //
-  // `itemDepth` answers for a geometry object - including the `DECOR_Z` fallback
-  // a body that collides with nothing draws at - and answers 0 for a LIGHT,
-  // deliberately: it is the pick order's rule, and a light is picked by the burst
-  // on the plane rather than by where it hangs in z. Read as a depth, that 0 put
-  // the whole gizmo on the gameplay plane while the light was lit at `light.z`,
-  // and since a translate drag writes the proxy's z straight onto the field, a
-  // light's z was re-based to the drag's own displacement every time - so an
-  // arrow dragged twice the same way left it exactly where the first drag had
-  // put it, and a press on any other handle set it to zero.
-  const handleZ = (it: EdItem): number =>
-    it.object === "light" ? it.light.z : itemDepth(it, bodyCollides(it.bodyId));
+  // is at - a light's own `z`, and the gameplay plane for everything else. A
+  // translate drag writes the proxy's z straight onto a light's field, so the
+  // handles have to start exactly there.
+  const handleZ = (it: EdItem): number => (it.object === "light" ? it.light.z : 0);
 
   // The item the handles are on, resolved by id every time rather than held:
   // undo and redo replace the model wholesale, so a captured object is a stale
@@ -1525,78 +1310,32 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   function itemHandlers(id: number): GizmoHandlers {
     const find = (): EdItem | null => model.items.find((b) => b.id === id) ?? null;
     // The sizes a scale drag is measured against (see `GizmoHandlers.apply`).
-    let base: {
-      shape: EdShape;
-      depth: number;
-      scale: number;
-      z: number;
-      offsetZ: number;
-      pos: Vec2;
-      snapAt: Vec2;
-    } | null = null;
+    let base: { shape: EdShape; pos: Vec2; snapAt: Vec2 } | null = null;
     return {
       pose() {
         const it = find();
         if (!it) return { pos: new THREE.Vector3(), quat: new THREE.Quaternion() };
-        return {
-          // `handleZ` rather than the authored field, because the handles have
-          // to sit on the thing they move and that is decided by the BODY: a
-          // geometry object with no authored `offsetZ` is drawn on the plane if
-          // its body collides and at `DECOR_Z` if it does not. Read as a plain
-          // 0, the whole gizmo stood 35 cm in front of every piece of decoration
-          // it was attached to - invisible head on, and the first thing you see
-          // when the view is turned, which is the view it exists for.
-          pos: new THREE.Vector3(it.pos.x, threeY(it.pos.y), handleZ(it)),
-          quat: itemQuat(it),
-        };
+        return { pos: new THREE.Vector3(it.pos.x, threeY(it.pos.y), handleZ(it)), quat: itemQuat(it) };
       },
       axes(mode): GizmoAxes {
         const it = find();
         if (!it) return null;
-        // Off-plane placement and tipping belong to the things that are DRAWN.
-        // A light is placed through z as well - a lamp pulled toward the camera
-        // lights a smaller circle of the plane (see `lightPlaneReach`).
-        const offPlane = it.object === "geometry" || it.object === "light";
-        if (mode === "translate") return { x: true, y: true, z: offPlane };
-        if (mode === "rotate") {
-          // A shape's rotation in the plane is the only one the level records
-          // for it; the two out-of-plane ones belong to what is DRAWN, prop or
-          // primitive alike, and a collision shape has neither (see `tips`).
-          return { x: tips(it), y: tips(it), z: true };
-        }
+        // A light is placed through z - a lamp pulled toward the camera lights
+        // a smaller circle of the plane (see `lightPlaneReach`).
+        if (mode === "translate") return { x: true, y: true, z: it.object === "light" };
+        // A shape's rotation in the plane is the only one the level records.
+        if (mode === "rotate") return { x: false, y: false, z: true };
         // Scale. An anchor is a point and a light is a reach authored by its own
-        // radius handle, so neither has a size this could write.
+        // radius handle, so neither has a size this could write; a collision
+        // shape has no depth - `thickness` is what its mass is computed from.
         if (it.object === "anchor" || it.object === "light") return null;
-        // A mesh has ONE scale, so any axis scales it; a primitive's third axis
-        // is its extrusion depth, and a collision shape has no depth at all -
-        // `thickness` is what its mass is computed from and is not a size on
-        // screen.
-        return { x: true, y: true, z: it.object === "geometry" };
+        return { x: true, y: true, z: false };
       },
       begin() {
         const it = find();
         gizmoBegin();
         if (!it) return;
-        base = {
-          shape: cloneShape(it.shape),
-          // `null` depth means the shape's own thickness, which is what the
-          // extrusion falls back to - so that is what a scale starts from.
-          depth: it.visual.depth ?? it.thickness,
-          scale: it.visual.scale,
-          // Where the handles started, and what the file said about it. The two
-          // differ for a piece of decoration authoring no `offsetZ`: it is DRAWN
-          // at `DECOR_Z` (see `itemDepth`), which is where the handles have to
-          // be, and the field is 0. A move that does not go through z therefore
-          // leaves the field alone rather than writing the pose's own z - which
-          // would stamp that default into the file the first time a backdrop
-          // was nudged sideways, an edit nobody asked for that turns a fallback
-          // into an authored number - and one that does writes the new depth
-          // outright (`offsetZAfterMove`).
-          z: handleZ(it),
-          offsetZ: it.visual.offsetZ,
-          pos: it.pos,
-          snapAt: moveSnapPoint([it]),
-        };
+        base = { shape: cloneShape(it.shape), pos: it.pos, snapAt: moveSnapPoint([it]) };
       },
       apply(mode, pos, quat, scale) {
         const it = find();
@@ -1608,36 +1347,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           const d = snapMove(base.snapAt, new Vec2(pos.x, threeY(pos.y)).sub(base.pos));
           it.pos = base.pos.add(d);
           gizmoSnapPoint = base.snapAt.add(d);
-          const z = snap(pos.z);
-          if (it.object === "geometry") {
-            it.visual.offsetZ = offsetZAfterMove(base.offsetZ, base.z, z);
-            // A light's field is written outright rather than as a change, and
-            // may be: `light.z` is always a concrete number in the model, so
-            // `handleZ` starts the proxy exactly there and there is no fallback
-            // for a drag to stamp into the file.
-          } else if (it.object === "light") it.light.z = z;
+          if (it.object === "light") it.light.z = snap(pos.z);
         } else if (mode === "rotate") {
           const e = new THREE.Euler().setFromQuaternion(quat, "ZXY");
           it.rot = threeRotation(e.z);
-          if (tips(it)) {
-            it.visual.rotX = e.x;
-            it.visual.rotY = e.y;
-          }
         } else if (base) {
-          if (it.object === "geometry" && it.visual.kind === "mesh") {
-            // One number, so every axis of the handle drives it: the mean of the
-            // three factors, which makes the uniform (centre) handle exact and
-            // any single axis a sensible approximation of "bigger".
-            const f = (scale.x + scale.y + scale.z) / 3;
-            it.visual.scale = Math.max(0.01, base.scale * f);
-          } else {
-            const round = snapOn ? snapLen : undefined;
-            scaleShape(it, base.shape, scale.x, scale.y, round);
-            if (it.object === "geometry") {
-              const depth = base.depth * scale.z;
-              it.visual.depth = Math.max(MIN_EXTENT, round ? round(depth) : depth);
-            }
-          }
+          scaleShape(it, base.shape, scale.x, scale.y, snapOn ? snapLen : undefined);
         }
         gizmoTouched();
       },
@@ -1655,10 +1370,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   //
   // It is the one gesture the plane could never offer. The 2D overlay draws
   // handles on ONE shape and a rotate knob on ONE body (`computeGroupHandles`),
-  // so laying out a run of pillars, a stack of crates or a dressed doorway meant
-  // turning each piece about its own centre and then dragging every one of them
-  // back into formation - an arrangement is a thing with a pose, and nothing in
-  // the editor could say so.
+  // so laying out a run of pillars or a stack of crates meant turning each piece
+  // about its own centre and then dragging every one of them back into
+  // formation - an arrangement is a thing with a pose, and nothing in the editor
+  // could say so.
   //
   // What it writes is exactly what a single body's gizmo writes, member by
   // member: each item's `pos` and `rot`, plus the frame of any body wholly
@@ -1673,37 +1388,18 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // undone.
     const items = (): EdItem[] => model.items.filter((i) => wanted.has(i.id));
     // Has ANY member somewhere to put a depth? The blue arrow is offered as soon
-    // as one has, and it moves every member that has one.
-    //
-    // The alternative was to offer it only where the WHOLE selection could move
-    // - a set with a collision shape in it then has no depth handle at all - and
-    // that is the stricter reading of "a handle is offered only where the format
-    // has somewhere to put its answer". It is the wrong one here. A level's
+    // as one has (a light), and it moves every member that has one: a level's
     // collision is the gameplay PLANE and is never anywhere else, so a selection
-    // holding one piece of collision would be a selection that could never be
-    // pushed back, which is most of them; and z moving what is DRAWN and leaving
-    // what collides is not a special case of this gizmo, it is what the depth
-    // handle and the single-object gizmo have always done to a wall's dressing.
-    const anyZ = (list: readonly EdItem[]): boolean =>
-      list.some((i) => i.object === "geometry" || i.object === "light");
-    // The depth each member is DRAWN at, which a drag through z moves by the
-    // displacement and writes outright (`offsetZAfterMove`): decoration
-    // authoring no `offsetZ` is drawn at `DECOR_Z`, and moving the field of 0
-    // by the displacement instead jumped it that far toward the camera. A drag
-    // that does not go through z writes no depth at all (see `apply`), so the
-    // fallback is never stamped into the file by a sideways move.
-    const ownZ = (i: EdItem): number =>
-      i.object === "light" ? i.light.z : i.object === "geometry" ? handleZ(i) : 0;
+    // holding one piece of collision would otherwise be one that could never
+    // move its lamps through z.
+    const anyZ = (list: readonly EdItem[]): boolean => list.some((i) => i.object === "light");
     let base: {
       pose: GroupPose;
-      // Where the handles stood in depth, which is the mean of what the members
-      // are drawn at: the gizmo sits in the middle of the selection in all three
-      // axes, and a displacement is measured from there.
+      // Where the handles stood in depth, which is the mean of the members':
+      // the gizmo sits in the middle of the selection in all three axes, and a
+      // displacement is measured from there.
       z: number;
       own: Map<number, number>;
-      // Each geometry member's authored `offsetZ` at the press, which a drag
-      // that comes back to no displacement through z hands back.
-      authored: Map<number, number>;
       snapAt: Vec2;
     } | null = null;
     return {
@@ -1719,18 +1415,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         const list = items();
         if (list.length < 2) return null;
         if (mode === "translate") return { x: true, y: true, z: anyZ(list) };
-        // In the plane only. The two out-of-plane turns are a DRAWN thing's own
-        // (`GeometryObjectData.rotX`/`rotY`, and a prop or a primitive is turned
-        // about its own origin by them); tipping an arrangement would have to
-        // lift its members out of the plane to do it, and a member's placement
-        // is two numbers and an angle in that plane. There is nowhere to put the
-        // answer, so the rings are not offered - the same rule every other
-        // target here follows.
+        // In the plane only: a member's placement is two numbers and an angle in
+        // that plane, so there is nowhere to put a tip.
         if (mode === "rotate") return { x: false, y: false, z: true };
         // Size is deliberately absent. Every member has its own, in its own
-        // units - an outline, an extrusion depth, a mesh's one factor, a light's
-        // reach - and one handle over the lot of them would have to invent a
-        // rule for each. The members' own handles say it exactly.
+        // units - an outline, a light's reach - and one handle over the lot of
+        // them would have to invent a rule for each. The members' own handles
+        // say it exactly.
         return null;
       },
       begin() {
@@ -1739,8 +1430,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         base = {
           pose: captureGroupPose(model, list, selectionCentre(list)),
           z: list.length ? list.reduce((a, i) => a + handleZ(i), 0) / list.length : 0,
-          own: new Map(list.map((i) => [i.id, ownZ(i)])),
-          authored: new Map(list.map((i) => [i.id, i.visual.offsetZ])),
+          own: new Map(list.map((i) => [i.id, handleZ(i)])),
           snapAt: snapOutlineOf(list),
         };
       },
@@ -1752,21 +1442,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           const d = snapMove(base.snapAt, new Vec2(pos.x - centre.x, threeY(pos.y) - centre.y));
           placeGroup(model, list, base.pose, d, 0);
           gizmoSnapPoint = base.snapAt.add(d);
-          // Depth, for every member that has one - a drawn form's `offsetZ`, a
-          // light's own `z`. Each keeps what it had and moves by the drag's
-          // displacement, so a backdrop 6 m back and the sign 20 cm in front of
-          // it stay 5.8 m apart; a collision shape in the selection is passed
-          // over, the plane being the only place it can be (see `anyZ`).
-          // Every move writes every member's depth from the press, so a drag
-          // that goes out through z and comes back leaves each one as it was.
+          // A light's depth moves by the drag's displacement from where it was
+          // at the press, so a drag that goes out through z and comes back
+          // leaves each one as it was; a collision shape is passed over, the
+          // plane being the only place it can be.
           const dz = snap(pos.z) - base.z;
           for (const i of list) {
             const was = base.own.get(i.id);
-            if (was === undefined) continue;
-            if (i.object === "light") i.light.z = was + dz;
-            else if (i.object === "geometry") {
-              i.visual.offsetZ = offsetZAfterMove(base.authored.get(i.id) ?? 0, was, was + dz);
-            }
+            if (was !== undefined && i.object === "light") i.light.z = was + dz;
           }
         } else if (mode === "rotate") {
           // The ring returns to zero when the drag ends (`pose` answers the
@@ -1916,16 +1599,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     gizmo.follow();
   }
 
-  // Each matched item's outline as of the last sync, which is how
-  // `syncMatchedOutlines` tells which side of a pair an edit touched. Held here
-  // rather than on the model because it is edit-session memory, not level
-  // content: an undo restores the items and the next sync re-reads them.
-  const matchedSigs = new Map<number, string>();
-
   function markDirty(): void {
-    // Before the rev moves: the scene is rebuilt from the model, so a matched
-    // partner has to be brought up to date before anything reads it.
-    syncMatchedOutlines(model, matchedSigs);
     dirty = true;
     modelRev++;
     scheduleAutosave();
@@ -2038,15 +1712,15 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     highlightKey = null; // a fresh scene holds none of the last one's paint
   }
 
-  // WHAT IS SELECTED, SAID IN THE SCENE. A geometry object has no outline on the
-  // overlay any more (see `drawEditor`'s outline mode) precisely because the
-  // outline described a rectangle rather than the thing drawn, and the same
-  // argument says where the selection has to be shown: on the model.
+  // WHAT IS SELECTED, SAID IN THE SCENE: on the model as well as on the
+  // overlay's outline, since with a scene drawn the model is what is looked at.
   //
   // The colours are the overlay's own, so the two views say the same thing -
   // orange is "an edit applies to this", blue is "this is what the selected body
-  // is made of". Only geometry objects carry a pick tag, so naming a collision
-  // object or a light here is simply nothing to paint.
+  // is made of". What carries a pick tag is a collision object's grey box (a
+  // level with no scene) and a body's Blender dressing, which answers as the
+  // body's first object (`DressTarget.tag`); a light or an anchor is simply
+  // nothing to paint.
   let highlightKey: string | null = null;
   function syncHighlight(): void {
     if (!scene3d) return;
@@ -2311,13 +1985,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // canvas draws. Only offered with a scene to switch to.
   type Workspace = "level" | "visuals";
   const workspaceBtns: Partial<Record<Workspace, HTMLButtonElement>> = {};
-  let generatorHealthEl: HTMLElement | null = null;
-  function refreshGeneratorHealth(): void {
-    if (!generatorHealthEl) return;
-    const missing = inVisuals() ? missingTools(jobs.health) : "";
-    generatorHealthEl.textContent = missing ? `generators: ${missing}` : "";
-    generatorHealthEl.title = missing ? "GET /api/generators on the dev server; see docs/generators.md, Setup." : "";
-  }
   if (visuals) {
     const row = el("div", "ed-row");
     bar.appendChild(row);
@@ -2325,14 +1992,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     workspaceBtns.level.title = "Author the level against the gameplay plane: the 2D camera and the overlay (W toggles)";
     workspaceBtns.visuals = button("Visuals", () => setWorkspace("visuals"));
     workspaceBtns.visuals.title =
-      "Dress the level in a free 3D view: middle drag orbits, Shift + middle or right drag pans, the wheel dollies, F frames, Home faces the plane (W toggles)";
+      "See the level in a free 3D view, against its Blender scene: middle drag orbits, Shift + middle or right drag pans, the wheel dollies, F frames, Home faces the plane (W toggles)";
     row.append(workspaceBtns.level, workspaceBtns.visuals);
     workspaceBtns.level.classList.add("active");
-    // What the generators are missing, when something is: `+ Rock` and
-    // `+ Mushrooms` need Blender (and the rock Python and its packages) on the
-    // dev server, and a request made without them fails with a 503 anyway.
-    generatorHealthEl = el("span", "ed-warn");
-    row.appendChild(generatorHealthEl);
   }
 
   const fileRow = el("div", "ed-row");
@@ -2387,7 +2049,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     belt: button("+ Belt", () => setTool("belt")),
     poly: button("+ Poly", () => setTool("poly")),
     path: button("+ Path", () => setTool("path")),
-    geometry: button("+ Geometry", () => setTool("geometry")),
     text: button("+ Text", () => setTool("text")),
     arrow: button("+ Arrow", () => setTool("arrow")),
     checkpoint: button("+ Checkpoint", () => setTool("checkpoint")),
@@ -2396,20 +2057,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     light: button("+ Light", () => setTool("light")),
     glow: button("+ Glow", () => setTool("glow")),
     fireflies: button("+ Fireflies", () => setTool("fireflies")),
-    rock: button("+ Rock", () => setTool("rock")),
-    mushrooms: button("+ Mushrooms", () => setTool("mushrooms")),
   };
-  toolBtns.rock.title =
-    "Click a collision outline (a polygon or rect, or the geometry matched to one) to dress it with a GENERATED ROCK: a mesh geometry object matched to the outline, generated in Blender from the parameters on its panel. A plain rectangle can fail the generator's centre check; widen `tolerance` or draw a less regular outline.";
-  toolBtns.mushrooms.title =
-    "Click a loop onto the faces of a drawn model (a rock, a wall); Enter or the first point closes it, Backspace drops the last point, Esc cancels. Closing it adds a MUSHROOM PATCH in that model's body and generates it on the faces inside the loop.";
-  toolBtns.geometry.title =
-    "Click to drop a geometry object; drag to size it. It is DRAWN and never simulated - nothing collides with it, the rope does not wrap it, no force reaches it. Give it a mesh or a texture on the panel; drop it on a selected body to have it ride that body.";
-  // Not a tool - there is nothing to click out - but an action beside the tool
-  // that draws the same kind of object, shown wherever that tool is.
-  const imageBtn = button("+ Image", () => addImagePlane());
-  imageBtn.title =
-    "Choose a picture file and stand it up as a BACKDROP: a flat image plane 10 m behind the gameplay plane, sized to fill the view and to the picture's own aspect. Unlit and unfogged - it shows as painted. Move it, resize it and change its z like any geometry object; its panel swaps the picture.";
   // The path tool's tooltip is the active layer's (see `refreshToolButtons`):
   // the one gesture draws three different things.
   const PATH_TOOL_TITLE: Record<EdLayer, string> = {
@@ -2429,7 +2077,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     "Press on a body and drag DOWN to hang a vine from it. Shift-drag its end handle onto another body to span between the two. The player passes through a vine and the hook grabs it anywhere along its length.";
   toolBtns.light.title = "Click to drop a light; drag to set how far it reaches";
   toolBtns.glow.title =
-    "Click to drop a glowing mushroom (a purple cube for now): one static body holding the cube, the collision box it mirrors, and a WAKING light that stays dark until the ball comes within its wake (the dashed ring) and fades out after it leaves. The 3D preview shows it awake.";
+    "Click to drop a glowing mushroom: one static body holding a collision box and a WAKING light that stays dark until the ball comes within its wake (the dashed ring) and fades out after it leaves. Name the body and model it in the level's Blender scene; what glows in its model follows the light. The 3D preview shows it awake.";
   toolBtns.fireflies.title =
     "Click to drop a swarm of fireflies: a body holding only the swarm's light, which is where they hover. When the ball comes within the dashed ring they follow it for the rest of the run, looping around it and lighting it wherever it goes - or, given a firefly path (the fireflies layer) in their `path` field, along that path until the player reaches its end.";
   toolBtns.checkpoint.title =
@@ -2464,10 +2112,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     toolBtns.belt,
     toolBtns.poly,
     toolBtns.path,
-    toolBtns.geometry,
-    imageBtn,
-    toolBtns.rock,
-    toolBtns.mushrooms,
     toolBtns.text,
     toolBtns.arrow,
     toolBtns.checkpoint,
@@ -2572,7 +2216,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     for (const [k, b] of Object.entries(toolBtns)) {
       b.style.display = tools.includes(k as Tool) ? "" : "none";
     }
-    imageBtn.style.display = tools.includes("geometry") ? "" : "none";
     // The same gesture draws two different things: a camera path is a route the
     // camera rides, and a scene one is a BAR - the curve a rail's cuff slides
     // along, stroked out to its width. The button says which.
@@ -2693,12 +2336,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // A gesture in flight was measured in the other workspace's view.
     drag = null;
     if (k === "visuals") visuals.enter();
-    else {
-      visuals.leave();
-      // A loop is painted and edited on the scene's surfaces, which the Level
-      // workspace does not offer.
-      if (loopEdit) endLoopEdit();
-    }
+    else visuals.leave();
     for (const [key, b] of Object.entries(workspaceBtns)) b.classList.toggle("active", key === k);
     // The Level workspace's view toggle says how IT draws; the Visuals
     // workspace is always the scene with its guides, so the toggle goes while
@@ -2709,11 +2347,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     refreshOrbitBtn();
     applyToolCursor();
     updateTitle();
-    // The generators are the Visuals workspace's, so it is where their tools
-    // are asked after (once; again after any request the service refuses for a
-    // missing tool).
-    if (k === "visuals" && !jobs.healthChecked) void jobs.checkHealth();
-    refreshGeneratorHealth();
   }
 
   const title = el("div", "ed-title");
@@ -2794,7 +2427,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       row.classList.toggle("sel", on);
       if (on && !first) first = row;
     }
-    refreshBadges();
     const bodyKey = [...selectedBodyIds].sort((a, b) => a - b).join(",");
     const chainKey = [...selectedChainIds].sort((a, b) => a - b).join(",");
     const vineKey = [...selectedVineIds].sort((a, b) => a - b).join(",");
@@ -2814,37 +2446,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   const bodyRows: Array<[HTMLElement, number]> = [];
   const chainRows: Array<[HTMLElement, number]> = [];
   const vineRows: Array<[HTMLElement, number]> = [];
-  // The generated objects' badges (`stale`, `generating`, ...), each with the
-  // item ids it speaks for: one on an object's row, and one on its body's row
-  // so a collapsed body still says it holds something stale.
-  const badgeRows: Array<[HTMLElement, number[]]> = [];
-  let badgeKey = "";
-  function refreshBadges(): void {
-    const key = `${modelRev}|${jobsTick}`;
-    if (key === badgeKey) return;
-    badgeKey = key;
-    const lookup = itemLookup(model.items);
-    const cache = new Map<number, string>();
-    const badgeOf = (id: number): string => {
-      if (!cache.has(id)) {
-        const it = lookup(id);
-        cache.set(id, it ? generatorBadge(it, lookup, jobs.job(id)) : "");
-      }
-      return cache.get(id)!;
-    };
-    // The loudest of a row's: a job under way, then a failure, then stale.
-    const RANK = ["generating", "queued", "failed", "stale"];
-    for (const [span, ids] of badgeRows) {
-      const all = ids.map(badgeOf).filter(Boolean);
-      const top = RANK.find((b) => all.includes(b)) ?? "";
-      span.textContent = top;
-      span.className = `ed-out-badge${top === "generating" || top === "queued" ? " busy" : top === "failed" ? " fail" : ""}`;
-    }
-  }
-
   function buildOutliner(): void {
-    badgeRows.length = 0;
-    badgeKey = "";
     outlinerRows.length = 0;
     bodyRows.length = 0;
     chainRows.length = 0;
@@ -2877,14 +2479,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       label.textContent = `${index}  ${bodyLabel(members)}`;
       const count = el("span", "ed-out-count");
       count.textContent = `${members.length}`;
-      row.append(twist, label);
-      const generated = members.filter((m) => m.visual.generator).map((m) => m.id);
-      if (generated.length) {
-        const badge = el("span", "ed-out-badge");
-        row.appendChild(badge);
-        badgeRows.push([badge, generated]);
-      }
-      row.appendChild(count);
+      row.append(twist, label, count);
       // Selecting a body selects THE BODY - not the objects in it. That is the
       // whole point of the row existing: a body has properties of its own, and
       // they are what the inspector should offer when you click one.
@@ -2904,23 +2499,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         const objRow = el(
           "div",
           `ed-out-row obj ${
-            m.object === "light"
-              ? "light"
-              : m.object === "anchor"
-                ? "anchor"
-                : m.object === "collision"
-                  ? "solid"
-                  : "decor"
+            m.object === "light" ? "light" : m.object === "anchor" ? "anchor" : "solid"
           }`,
         );
         const objLabel = el("span", "ed-out-label");
         objLabel.textContent = objectLabel(m, M2PX);
         objRow.append(el("span", "ed-out-twist"), objLabel);
-        if (m.visual.generator) {
-          const badge = el("span", "ed-out-badge");
-          objRow.appendChild(badge);
-          badgeRows.push([badge, [m.id]]);
-        }
         // ...and selecting ONE object selects only it, which is what Alt+click
         // reaches for on the canvas. That is the whole point of the panel: the
         // objects with no outline are not clickable there at all.
@@ -3110,7 +2694,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // Does the current workspace offer this tool (`TOOL_WORKSPACES`)?
   function toolOffered(t: Tool): boolean {
     const w = TOOL_WORKSPACES[t];
-    return w === "both" || w === (inVisuals() ? "visuals" : "level");
+    return w === "both" || !inVisuals();
   }
   function setTool(t: Tool): void {
     if (!LAYER_TOOLS[activeLayer].includes(t)) return;
@@ -3124,7 +2708,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // armed by the keyboard shortcuts any more than by the (hidden) buttons.
     if (t !== "select" && lockedLayers.has(activeLayer)) return;
     if (t !== "poly" && t !== "path") cancelPolyDraft();
-    if (t !== "mushrooms") surfaceLoop.clear();
     tool = t;
     for (const [k, b] of Object.entries(toolBtns)) b.classList.toggle("active", k === t);
     applyToolCursor();
@@ -3426,14 +3009,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // An arrow is stored as a box, but its height is only a pick band and its
     // width is its length — the notes panel exposes that instead.
     if (items.some(isArrowNote)) return;
-    // A MESH has no size to type either. What is drawn is the model's own
-    // geometry at its own dimensions, sized by `scale` on the visual panel; the
-    // outline it still carries is the editor's handle on it and the placeholder
-    // drawn until the file arrives, neither of which is a number an author
-    // authors. Offering w/h here is a pair of fields that appear to resize the
-    // prop and do not - the shape they change is invisible the moment the mesh
-    // loads.
-    if (items.every((b) => b.object === "geometry" && b.visual.kind === "mesh")) return;
     // Size is per-shape, so it only appears when the group is all one shape.
     if (items.every((b) => b.shape.kind === "rect")) {
       num("w", (b) => (b.shape.kind === "rect" ? b.shape.w * M2PX : 0), (b, v) => {
@@ -3456,7 +3031,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // must not be confused, named so they cannot be: `thickness` is the
       // band's depth IN THE PLANE (collision: the running surface stands that
       // far off every wheel), `width` how wide the band is ACROSS the pulleys
-      // (the 3D look, which is the geometry twin's `depth`), and `r` one
+      // (the 3D look, `BeltLook.width`), and `r` one
       // wheel's own radius, shown for the wheel whose square is picked. A value
       // the belt cannot take - a zero thickness, a wheel swallowing another or
       // falling inside the hull - is refused by `setBelt`, and the field reads
@@ -3464,56 +3039,65 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       num("thickness", (b) => (b.shape.kind === "belt" ? b.shape.thickness * M2PX : 0), (b, v) => {
         setBelt(b, { thickness: Math.max(1, v) * PX });
       });
-      // The look lives on the geometry object that draws the belt: the item
-      // itself when it IS one, else its matched twin. With no twin there is no
-      // look to edit, which `Add geometry` fixes, and the fields say so.
-      const lookOf = (b: EdItem): EdItem | null =>
-        b.object === "geometry"
-          ? b
-          : (model.items.find((i) => i.object === "geometry" && i.matchId === b.id) ?? null);
-      const looks = items.map(lookOf);
-      if (looks.every((l): l is EdItem => l !== null)) {
-        num(
-          "width",
-          (b) => (lookOf(b)?.visual.depth ?? DEFAULT_THICKNESS) * M2PX,
-          (b, v) => {
-            const look = lookOf(b);
-            if (look) look.visual.depth = Math.max(1, v) * PX;
-          },
-          5,
-        );
-        const tw = fieldRow("texture");
-        const ts = document.createElement("select");
-        ts.className = "ed-select";
-        const keys = new Set<string>([SOLID_SURFACE, ...Object.keys(TEXTURE_ASSETS), ...MATERIAL_NAMES]);
-        for (const l of looks) if (l.visual.texture) keys.add(l.visual.texture);
-        for (const key of ["", ...keys]) {
-          const o = document.createElement("option");
-          o.value = key;
-          o.textContent = key
-            ? key === SOLID_SURFACE
-              ? `${key} (flat, cleats)`
-              : key in TEXTURE_ASSETS
-                ? `${key} (authored)`
-                : key
-            : "(default)";
-          ts.appendChild(o);
-        }
-        ts.value = looks.every((l) => l.visual.texture === looks[0]!.visual.texture)
-          ? looks[0]!.visual.texture
-          : "";
-        ts.addEventListener("change", () => {
-          beginAction();
-          for (const l of looks) l.visual.texture = ts.value;
-          markDirty();
-          rebuildInspector();
-        });
-        tw.appendChild(ts);
-        g.appendChild(tw);
-      } else {
-        describe(g,
-          "No geometry draws this belt yet, so it has no width or texture: Add geometry gives it a matched twin that does.");
+      // The band's LOOK (`BeltLook`): the game draws a belt's band itself, since
+      // its surface runs, so it is authored here rather than in Blender. Held on
+      // the shape, like the speed that moves it.
+      const looks = items.flatMap((b) => (b.shape.kind === "belt" ? [b.shape.look] : []));
+      num(
+        "width",
+        (b) => (b.shape.kind === "belt" ? (b.shape.look.width ?? DEFAULT_THICKNESS) : 0) * M2PX,
+        (b, v) => {
+          if (b.shape.kind === "belt") b.shape.look.width = Math.max(1, v) * PX;
+        },
+        5,
+      );
+      const tw = fieldRow("texture");
+      const ts = document.createElement("select");
+      ts.className = "ed-select";
+      const keys = new Set<string>([SOLID_SURFACE, ...Object.keys(TEXTURE_ASSETS), ...MATERIAL_NAMES]);
+      for (const l of looks) if (l.texture) keys.add(l.texture);
+      for (const key of ["", ...keys]) {
+        const o = document.createElement("option");
+        o.value = key;
+        o.textContent = key
+          ? key === SOLID_SURFACE
+            ? `${key} (flat, cleats)`
+            : key in TEXTURE_ASSETS
+              ? `${key} (authored)`
+              : key
+          : "(default)";
+        ts.appendChild(o);
       }
+      ts.value = looks.every((l) => l.texture === looks[0]!.texture) ? (looks[0]!.texture ?? "") : "";
+      ts.addEventListener("change", () => {
+        beginAction();
+        for (const l of looks) {
+          if (ts.value) l.texture = ts.value;
+          else delete l.texture;
+        }
+        markDirty();
+        rebuildInspector();
+      });
+      tw.appendChild(ts);
+      g.appendChild(tw);
+      // The flat band's colour, or the tint a generated surface wears; absent
+      // takes the body's own fill.
+      const cw = fieldRow("band colour");
+      const ci = colorInput(looks[0]!.color ?? items[0]!.color, beginAction, (hex) => {
+        for (const l of looks) l.color = hex;
+        markDirty();
+      });
+      cw.appendChild(ci.el);
+      g.appendChild(cw);
+      // A multiple of the texture's own size, so not a length and not scaled.
+      num(
+        "tile scale",
+        (b) => (b.shape.kind === "belt" ? (b.shape.look.tileScale ?? 1) : 1),
+        (b, v) => {
+          if (b.shape.kind === "belt") b.shape.look.tileScale = Math.max(0.01, v);
+        },
+        0.1,
+      );
       num(
         "speed m/s",
         (b) => (b.shape.kind === "belt" ? b.shape.speed : 0),
@@ -4735,274 +4319,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       "Held at the authored position by a spring per axis, so the body sags under its own weight and further under a load — a hanging player, a resting rock, a chain — then springs back past its rest height before settling. 0 on an axis pins that axis instead (a leaf that only bobs vertically). Frequency, not stiffness: the droop under its own weight is the same whatever the body is made of, while a heavier body notices a hung player less. A spring body cannot rotate, so it cannot also be pivot-mounted.");
   }
 
-  // The standing "match the collision shape" link (see `EdItem.matchId`): while
-  // ticked, this geometry object's outline and its collision partner's are kept
-  // equal in both directions, so resizing or moving either does both. Offered
-  // only where a partner exists to link to - decoration in a body with no
-  // collision object has nothing to match.
-  function addMatchField(g: HTMLElement, items: EdItem[]): void {
-    const linkable = items.filter(
-      (b) =>
-        b.layer === "scene" &&
-        b.object === "geometry" &&
-        bodyMembers(model.items, b.bodyId).some((m) => m.object === "collision"),
-    );
-    if (!linkable.length) return;
-    const box = document.createElement("input");
-    box.type = "checkbox";
-    box.checked = linkable.every((b) => b.matchId !== 0);
-    box.indeterminate = !box.checked && linkable.some((b) => b.matchId !== 0);
-    box.addEventListener("change", () => {
-      beginAction();
-      for (const b of linkable) {
-        if (!box.checked) {
-          b.matchId = 0;
-          continue;
-        }
-        const target = matchTargetFor(b);
-        if (!target) continue;
-        b.matchId = target.id;
-        // Ticking the box is the one edit that SNAPS: the collision shape is
-        // what the level plays as, so the look moves onto it rather than the
-        // gameplay being dragged to wherever the look was left.
-        copyMatchedOutline(target, b);
-      }
-      markDirty();
-      refreshFields();
-      rebuildInspector();
-    });
-    const wrap = fieldRow("match collision");
-    wrap.appendChild(box);
-    g.appendChild(wrap);
-    describe(wrap,
-      "Keeps this outline equal to the collision shape it dresses, in both directions: resize or move either and the other follows. Ticking it snaps this object onto the collision shape. Untick to author a look that deliberately differs from what the body collides as.");
-  }
-
-  // Which collision object a fresh link ties to: the one already stating the
-  // same outline when there is one, else the nearest - the piece the author is
-  // most plausibly dressing.
-  function matchTargetFor(b: EdItem): EdItem | null {
-    const cs = bodyMembers(model.items, b.bodyId).filter((m) => m.object === "collision");
-    if (!cs.length) return null;
-    const exact = cs.find((c) => outlinesEqual(c, b));
-    if (exact) return exact;
-    let best = cs[0]!;
-    for (const c of cs) {
-      if (c.pos.sub(b.pos).length() < best.pos.sub(b.pos).length()) best = c;
-    }
-    return best;
-  }
-
-  // FIT COLLISION TO ROCK (docs/rocks.md, "Reference and actual outlines"). A
-  // rock body's geometry object is the REFERENCE outline its rock is generated
-  // from, and its collision object the ACTUAL outline the ball meets; this
-  // writes the actual one from the generated rock's own head-on silhouette.
-  //
-  // Which rock body of the level an editor body is, asked through the same
-  // `toLevelData` the save writes and the same `rockBodies` the generator
-  // reads, so the index and the hash are the ones the GLB was stamped with -
-  // never a second reckoning of the body order that could disagree with it.
-  function rockBodyOf(bodyId: number): {
-    rock: ReturnType<typeof rockBodies>[number];
-    itemOf: Map<SceneObjectData, number>;
-  } | null {
-    const itemOf = new Map<SceneObjectData, number>();
-    const data = toLevelData(model, itemOf);
-    const byId = new Map(model.items.map((i) => [i.id, i]));
-    const index = data.bodies.findIndex((b) =>
-      b.objects.some((o) => {
-        const id = itemOf.get(o);
-        return id !== undefined && byId.get(id)?.bodyId === bodyId;
-      }),
-    );
-    if (index < 0) return null;
-    const rock = rockBodies(data).find((r) => r.index === index);
-    return rock ? { rock, itemOf } : null;
-  }
-
-  // Which level's generated rocks the fit reads: `?rocks=NAME` on the editor's
-  // URL borrows another file's - the fast loop builds a few bodies to
-  // `public/rocks/test.glb` - and otherwise the file this level saves to.
-  function rocksNameForFit(): string | null {
-    const param = new URLSearchParams(location.search).get("rocks");
-    if (param === "0") return null;
-    return param ?? currentName;
-  }
-
-  // Offered on a rock body's geometry object and on its body panel. What it
-  // needs to go right is only known once the file is read (is there one, is it
-  // current), so the button is shown for any rock body and the refusals are
-  // said when it is pressed.
-  function addRockFitButton(row: HTMLElement, bodyId: number): void {
-    if (!rockBodyOf(bodyId)) return;
-    const b = button("Fit collision to rock", () => void fitCollisionToRock(bodyId));
-    b.title =
-      "Replace this body's collision outline with the head-on silhouette of its GENERATED rock (public/rocks/<level>.glb, or ?rocks=NAME): every triangle projected along z, rasterised at 1 cm, traced and simplified at 2 cm. The geometry object's outline stays as authored - it is the reference the rock is generated from - so its 'match collision' link is switched off. Refuses when the rock is missing or stale (regenerate with bun run assets:rocks <level>), or when the body has more than one rock geometry object or collision object.";
-    row.appendChild(b);
-  }
-
-  let fittingRock = false;
-  async function fitCollisionToRock(bodyId: number): Promise<void> {
-    if (fittingRock) return;
-    const refuse = (why: string): void => showToast(`fit collision to rock: ${why}`, "warn");
-    const name = rocksNameForFit();
-    if (name === null) {
-      refuse(
-        new URLSearchParams(location.search).get("rocks") === "0"
-          ? "rocks are off on this page (?rocks=0)"
-          : "this level has no file name yet - save it and generate its rocks first",
-      );
-      return;
-    }
-    const url = rocksUrl(name);
-    // The command that rebuilds what was read: the level's own file, written
-    // to the borrowed name when `?rocks=` named another.
-    const level = currentName ?? "<level>";
-    const regen = `bun run assets:rocks ${level}${name !== currentName ? ` --out public/rocks/${name}.glb` : ""}`;
-    fittingRock = true;
-    let root: THREE.Object3D;
-    try {
-      // Fetched by hand and uncached: a missing file is told apart from a
-      // broken one by its status, the dev server's HTML fallback is not handed
-      // to the decoder, and a GLB regenerated a moment ago is the one read
-      // rather than the page's first copy.
-      const [res, loader] = await Promise.all([fetch(url, { cache: "no-store" }), gltfLoader()]);
-      const type = res.headers.get("content-type") ?? "";
-      if (!res.ok || type.startsWith("text/html")) {
-        // The dev server answers a missing file with its HTML page and a 200,
-        // so that case is named for what it is rather than by its status.
-        const why = res.ok ? "not found" : String(res.status);
-        refuse(`no generated rocks at ${url} (${why}) - run: ${regen}`);
-        return;
-      }
-      root = (await loader.parseAsync(await res.arrayBuffer(), "")).scene;
-    } catch (err) {
-      refuse(`${url} failed to load: ${err instanceof Error ? err.message : String(err)}`);
-      return;
-    } finally {
-      fittingRock = false;
-    }
-
-    // Everything below reads the model as it is NOW, after the load: an edit
-    // made while the file was in flight is what the hash is checked against.
-    const found = rockBodyOf(bodyId);
-    if (!found) {
-      refuse("this body is no longer a rock body");
-      return;
-    }
-    const { rock, itemOf } = found;
-    if (rock.objects.length !== 1) {
-      refuse(
-        `body #${rock.index} has ${rock.objects.length} rock geometry objects; the fit handles a body with exactly one`,
-      );
-      return;
-    }
-    const collisions = bodyMembers(model.items, bodyId).filter((i) => i.object === "collision");
-    if (collisions.length !== 1) {
-      refuse(
-        `body #${rock.index} has ${collisions.length} collision objects; the fit handles a body with exactly one`,
-      );
-      return;
-    }
-    const collision = collisions[0]!;
-    if (collision.shape.kind === "path" || collision.shape.kind === "belt") {
-      refuse(`body #${rock.index}'s collision object is a ${collision.shape.kind === "path" ? "curve" : "belt"}, not an outline`);
-      return;
-    }
-    const geomId = itemOf.get(rock.objects[0]!);
-    const geom = model.items.find((i) => i.id === geomId);
-    if (!geom) {
-      refuse("could not find the rock's geometry object");
-      return;
-    }
-
-    // The body's node, found by the index the generator stamped on it, with
-    // its name as the fallback.
-    let node: THREE.Object3D | undefined;
-    root.traverse((o) => {
-      if (!node && o.userData[ROCK_INDEX_KEY] === rock.index) node = o;
-    });
-    node ??= root.getObjectByName(rockNodeName(rock.index));
-    if (!node) {
-      refuse(`${url} has no rock for body #${rock.index} - run: ${regen}`);
-      return;
-    }
-    if (node.userData[ROCK_HASH_KEY] !== rock.hash) {
-      refuse(
-        `rock is stale, regenerate: body #${rock.index} has changed since ${url} was built - run: ${regen}`,
-      );
-      return;
-    }
-
-    // Every triangle of the node in the file's world space (three's frame: x
-    // right, y UP, z toward the camera, metres), projected ORTHOGRAPHICALLY
-    // along z - z dropped - and turned into the sim's y-down world metres (see
-    // `threeY`). A generated node is exported at the identity, but its
-    // matrices are applied anyway so a transformed one is read right too.
-    root.updateMatrixWorld(true);
-    const tris: SilTriangle[] = [];
-    const m = new THREE.Matrix4();
-    const inst = new THREE.Matrix4();
-    const a = new THREE.Vector3();
-    const b = new THREE.Vector3();
-    const c = new THREE.Vector3();
-    const flat = (v: THREE.Vector3): { x: number; y: number } => ({ x: v.x, y: -v.y });
-    node.traverse((o) => {
-      const mesh = o as THREE.Mesh;
-      if (!mesh.isMesh) return;
-      const pos = mesh.geometry.getAttribute("position");
-      if (!pos) return;
-      const index = mesh.geometry.getIndex();
-      const count = index ? index.count : pos.count;
-      const im = o as THREE.InstancedMesh;
-      const instances = im.isInstancedMesh ? im.count : 1;
-      for (let k = 0; k < instances; k++) {
-        m.copy(mesh.matrixWorld);
-        if (im.isInstancedMesh) {
-          im.getMatrixAt(k, inst);
-          m.multiply(inst);
-        }
-        for (let t = 0; t + 2 < count; t += 3) {
-          const i0 = index ? index.getX(t) : t;
-          const i1 = index ? index.getX(t + 1) : t + 1;
-          const i2 = index ? index.getX(t + 2) : t + 2;
-          a.fromBufferAttribute(pos, i0).applyMatrix4(m);
-          b.fromBufferAttribute(pos, i1).applyMatrix4(m);
-          c.fromBufferAttribute(pos, i2).applyMatrix4(m);
-          tris.push([flat(a), flat(b), flat(c)]);
-        }
-      }
-    });
-    if (!tris.length) {
-      refuse(`body #${rock.index}'s rock has no triangles`);
-      return;
-    }
-    let outline: { x: number; y: number }[];
-    try {
-      outline = silhouette(tris).verts;
-    } catch (err) {
-      refuse(err instanceof Error ? err.message : String(err));
-      return;
-    }
-    const local = outline.map((p) => toLocal(collision, new Vec2(p.x, p.y)));
-    if (local.length < 3 || !isSimpleLoop(local)) {
-      refuse(`the traced silhouette (${local.length} vertices) is not a simple outline`);
-      return;
-    }
-
-    beginAction();
-    // The reference stays as authored - that is the point - so the link that
-    // would copy the new outline straight back onto it goes first.
-    geom.matchId = 0;
-    collision.shape = { kind: "poly", verts: normalizeWinding(local) };
-    markDirty();
-    rebuildInspector();
-    showToast(
-      `fit collision to rock: body #${rock.index} now collides as its rock's silhouette (${local.length} vertices, from ${tris.length} triangles)`,
-      "ok",
-    );
-  }
-
   // What the shapes are made of: a material, a thickness through the z axis the
   // 2D view cannot show, and the mass those two work out to. Per SHAPE, not per
   // body - the one geometry property a compound body does not collapse onto its
@@ -5093,442 +4409,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       "Thickness is the shape's depth through z, the dimension the 2D view cannot show: mass is area × thickness × density. Both are per shape, so a compound body's pieces each carry their own. Only a rigid body has a mass, but the material also fixes where a body's centre of mass — the point it rotates about — sits.");
   }
 
-  // How the 3D renderer draws these shapes (see `VisualData`). Per SHAPE like
-  // material and thickness, and left alone by `syncBodyProps` for the same
-  // reason: a compound body of a stone head on a wooden shaft is two visuals on
-  // one body, each riding its own piece.
-  //
-  // The section is deliberately shallow. `auto` is the default and needs
-  // nothing, so a level author never has to open it; the fields that appear
-  // depend on the kind, because a mesh's placement means nothing to an
-  // extrusion and an extrusion's depth means nothing to a mesh.
-  function addVisualFields(group: HTMLElement, items: EdItem[]): void {
-    // Three sections, and `g` is the one the next fields go in: the placement of
-    // the drawing, then its surface, then what it gives off.
-    const look = section(group, "object/Look", "Look");
-    let g = look;
-    const kw = fieldRow("kind");
-    const ks = document.createElement("select");
-    ks.className = "ed-select";
-    const sharedKind = items.every((b) => b.visual.kind === items[0]!.visual.kind)
-      ? items[0]!.visual.kind
-      : null;
-    if (!sharedKind) {
-      // Mixed: a blank entry holds the selection until one is picked, exactly as
-      // the kind and material pickers do.
-      const o = document.createElement("option");
-      o.value = "";
-      o.textContent = "mixed";
-      ks.appendChild(o);
-    }
-    for (const [value, label] of [
-      ["primitive", "primitive"],
-      ["mesh", "mesh"],
-      ["image", "image"],
-    ] as const) {
-      const o = document.createElement("option");
-      o.value = value;
-      o.textContent = label;
-      ks.appendChild(o);
-    }
-    ks.value = sharedKind ?? "";
-    ks.addEventListener("change", () => {
-      if (!ks.value) return;
-      beginAction();
-      for (const b of items) b.visual.kind = ks.value as EdVisual["kind"];
-      markDirty();
-      // Which fields apply depends on the kind, so the panel is rebuilt rather
-      // than revalued - the same reason the body kind picker rebuilds.
-      rebuildInspector();
-    });
-    kw.appendChild(ks);
-    g.appendChild(kw);
-
-    const num = (
-      label: string,
-      get: (v: EdVisual) => number,
-      set: (v: EdVisual, x: number) => void,
-      step = 1,
-      opts: { placeholder?: string; onEmpty?: () => void } = {},
-    ): void => {
-      numField(
-        g,
-        label,
-        () => shared(items, (b) => get(b.visual)),
-        (x) => {
-          for (const b of items) set(b.visual, x);
-        },
-        step,
-        items.length > 1,
-        opts,
-      );
-    };
-
-    if (sharedKind === "mesh" || sharedKind === null) {
-      const mw = fieldRow("mesh");
-      const ms = document.createElement("select");
-      ms.className = "ed-select";
-      // The manifest, plus a blank for "not chosen yet". An unlisted key already
-      // on the item is kept as an option of its own rather than silently
-      // rewritten, so opening a level built against a manifest this build does
-      // not have cannot lose what it named.
-      const keys = new Set<string>(Object.keys(MESH_ASSETS));
-      for (const b of items) if (b.visual.mesh) keys.add(b.visual.mesh);
-      for (const key of ["", ...[...keys].sort()]) {
-        const o = document.createElement("option");
-        o.value = key;
-        o.textContent = key || "(none)";
-        ms.appendChild(o);
-      }
-      ms.value = items.every((b) => b.visual.mesh === items[0]!.visual.mesh)
-        ? items[0]!.visual.mesh
-        : "";
-      ms.addEventListener("change", () => {
-        beginAction();
-        for (const b of items) b.visual.mesh = ms.value;
-        // ...and it is what the Visuals workspace's `+ Geometry` places next,
-        // so a run of the same prop is a run of clicks.
-        if (visuals && ms.value) visuals.propMesh = ms.value;
-        markDirty();
-        refreshFields();
-      });
-      // A GENERATED object's mesh is its generator's: a key picked here would
-      // make it stale in silence and be overwritten by the next Generate, so
-      // the picker shows the key and is not offered (nor is `kind`, which
-      // would draw the stand-in the generator block does not describe).
-      if (items.some((b) => b.visual.generator)) {
-        ms.disabled = true;
-        ks.disabled = true;
-        const why = "Generated: the mesh is made by Generate from the Rock or Mushrooms group below. Delete the object and place a prop to wear a hand-made mesh.";
-        describe(mw, why);
-        describe(kw, why);
-      }
-      mw.appendChild(ms);
-      g.appendChild(mw);
-    }
-
-    // (Where it is and how it is turned and sized - `visual.offsetZ`, `rotX`,
-    // `rotY` and a mesh's `scale` - are the Transform section's, beside the x,
-    // y and rot° they complete: see `addPlacementFields`.)
-
-    // Which lens the object is drawn through (`GeometryObjectData.projection`),
-    // whatever the kind. Orthographic drops the perspective divide for this
-    // object alone: it keeps its size at any depth and does not parallax.
-    {
-      const pw = fieldRow("lens");
-      const ps = document.createElement("select");
-      ps.className = "ed-select";
-      const first = items[0]!.visual.projection;
-      const shared = items.every((b) => b.visual.projection === first) ? first : null;
-      if (!shared) {
-        const o = document.createElement("option");
-        o.value = "";
-        o.textContent = "mixed";
-        ps.appendChild(o);
-      }
-      for (const value of ["perspective", "orthographic"] as const) {
-        const o = document.createElement("option");
-        o.value = value;
-        o.textContent = value;
-        ps.appendChild(o);
-      }
-      ps.value = shared ?? "";
-      ps.addEventListener("change", () => {
-        if (!ps.value) return;
-        beginAction();
-        for (const b of items) b.visual.projection = ps.value as EdVisual["projection"];
-        markDirty();
-        refreshFields();
-      });
-      pw.appendChild(ps);
-      g.appendChild(pw);
-    }
-
-    // A PICTURE has no depth, no surface and no emission: it shows the picture
-    // as painted (see `mountImage`), so the picker is all its look is.
-    if (sharedKind === "image") {
-      addImageFields(g, items);
-      return;
-    }
-
-    if (sharedKind === "primitive" || sharedKind === null) {
-      // Extrusion controls. Both are optional overrides with a real third state
-      // - "take it from somewhere else" - so clearing the field is meaningful
-      // and the placeholder says what the fallback is.
-      num("depth", (v) => (v.depth ?? 0) * M2PX, (v, d) => (v.depth = Math.max(1, d) * PX), 5, {
-        placeholder: items.length > 1 ? "mixed" : "default",
-        onEmpty: () => {
-          for (const b of items) b.visual.depth = null;
-        },
-      });
-      // The bevel is the flat extrusion's edge break, and a ROCK has a taper in
-      // its place (below): a rock's extrusion draws the taper and not the bevel
-      // (`primitiveGeometry`), so the field is offered only where something
-      // selected is not a rock.
-      const rocks = items.filter((b) => ROCK_TEXTURES.has(b.visual.texture));
-      if (rocks.length < items.length) {
-        num("bevel", (v) => (v.bevel ?? 0) * M2PX, (v, b) => (v.bevel = Math.max(0, b) * PX), 1, {
-          placeholder: items.length > 1 ? "mixed" : "none",
-          onEmpty: () => {
-            for (const b of items) b.visual.bevel = null;
-          },
-        });
-      }
-      // A GENERATED ROCK's taper (docs/rocks.md), offered only where one of the
-      // selected objects wears a rock texture - the only thing that reads it.
-      // Where it starts, in front of the object's own plane, in scene pixels
-      // like `bevel`; and how far the surface leans in from the outline's wall,
-      // in degrees (0 = a straight extrusion of the outline, 90 = a flat top at
-      // the start). Both are in the rock's hash, so an edit marks it stale, and
-      // the 3D view draws the tapered solid as they change.
-      if (rocks.length > 0) {
-        num(
-          "taper start",
-          (v) => v.taperStart * M2PX,
-          (v, x) => (v.taperStart = Math.max(0, x) * PX),
-          1,
-        );
-        num(
-          "taper angle",
-          (v) => v.taperAngle,
-          (v, a) => (v.taperAngle = Math.max(0, Math.min(90, a))),
-          1,
-        );
-      }
-    }
-
-    // The surface, offered whatever the kind. It is what an extrusion is
-    // textured with, and it is what a prop wears INSTEAD of the materials its
-    // own file carries - which is what dresses a bare geometry-only export as
-    // the same stone the walls are made of.
-    const texture = section(group, "object/Texture", "Texture");
-    g = texture;
-    {
-      const tw = fieldRow("texture");
-      const ts = document.createElement("select");
-      ts.className = "ed-select";
-      // One namespace, authored sets first: a level names a surface, and whether
-      // it is a downloaded set of maps or generated noise is not a distinction
-      // the author has to carry (see `surfaceFor`). A key already on the item
-      // that this build has no manifest entry for is kept as an option of its
-      // own rather than silently rewritten, exactly as the mesh picker does.
-      const keys = new Set<string>([
-        SOLID_SURFACE,
-        ...Object.keys(TEXTURE_ASSETS),
-        ...MATERIAL_NAMES,
-      ]);
-      for (const b of items) if (b.visual.texture) keys.add(b.visual.texture);
-      for (const key of ["", ...keys]) {
-        const o = document.createElement("option");
-        o.value = key;
-        // Blank is the default generated surface. It is NOT "whatever the
-        // collision object's material says" any more: what a piece is made of is
-        // a fact about its mass, and a geometry object states its own surface -
-        // one made with **Add geometry** starts out carrying the material's name
-        // here explicitly, which is the same thing said where it can be edited.
-        o.textContent = key
-          ? key === SOLID_SURFACE
-            ? `${key} (solid fill)`
-            : key in TEXTURE_ASSETS
-              ? `${key} (authored)`
-              : key
-          : "(default)";
-        ts.appendChild(o);
-      }
-      ts.value = items.every((b) => b.visual.texture === items[0]!.visual.texture)
-        ? items[0]!.visual.texture
-        : "";
-      ts.addEventListener("change", () => {
-        beginAction();
-        for (const b of items) b.visual.texture = ts.value;
-        markDirty();
-        // A flat fill has no tiling, so the three fields below it appear and go
-        // with the choice rather than sitting there editing numbers nothing
-        // reads.
-        rebuildInspector();
-      });
-      tw.appendChild(ts);
-      g.appendChild(tw);
-
-      // Everything from here down is about a PATTERN - how large it is worn,
-      // where it starts - and a solid fill has none. The colour it wears is the
-      // object's own `color`, edited in the fill fields below this section, so
-      // the section says where that is rather than restating the swatch.
-      if (items.every((b) => isSolidSurface(b.visual.texture))) {
-        describe(tw,
-          "A flat fill of this object's `color` below - no pattern, nothing to tile, and the colour is worn exactly as picked rather than as a tint.");
-      } else {
-        // How large this shape wears the texture, as a MULTIPLE of the size the
-        // texture was authored at: 1 is life size, 2 twice as large. Dimensionless
-        // like `scale`, so it is typed as written and never converted - and blank
-        // is 1, which is why the placeholder says so rather than naming a fallback
-        // the author would have to go and look up.
-        num(
-          "tile scale",
-          (v) => v.tileScale ?? 1,
-          (v, x) => (v.tileScale = Math.max(0.01, x)),
-          0.1,
-          {
-            placeholder: items.length > 1 ? "mixed" : "1",
-            onEmpty: () => {
-              for (const b of items) b.visual.tileScale = null;
-            },
-          },
-        );
-        // What that multiple works out to on the ground. The scale is the right
-        // thing to AUTHOR - it survives swapping the texture for one captured at a
-        // different size, and 1 always means life size - but "×2" says nothing
-        // about whether these bricks will read as bricks, and the metres do. Same
-        // trick the material picker uses for density, re-derived per refresh so it
-        // tracks both this field and the texture picker above it.
-        const tileReadout = () => {
-          const first = items[0]!;
-          const same = items.every(
-            (b) =>
-              b.visual.tileScale === first.visual.tileScale &&
-              b.visual.texture === first.visual.texture,
-          );
-          if (!same) return "mixed";
-          const metres = tileMetres(
-            surfaceName(first.visual.texture || first.material),
-            first.visual.tileScale,
-          );
-          return `${metres.toFixed(2)} m per repeat`;
-        };
-        const trow = fieldRow("");
-        const tval = document.createElement("span");
-        tval.textContent = tileReadout();
-        trow.appendChild(tval);
-        g.appendChild(trow);
-        readouts.push({ el: tval, get: tileReadout });
-
-        // Where the pattern starts on this shape, so a course of bricks can be
-        // lined up with the edge of the wall rather than with the world origin.
-        // In scene pixels like every other length here, which on this project's
-        // scale is centimetres exactly (100 px to the metre), and it shifts the
-        // texture rather than the geometry: +x right, +y down.
-        num(
-          "tile off x",
-          (v) => v.tileOffset.x * M2PX,
-          (v, x) => (v.tileOffset = new Vec2(x * PX, v.tileOffset.y)),
-          5,
-        );
-        num(
-          "tile off y",
-          (v) => v.tileOffset.y * M2PX,
-          (v, y) => (v.tileOffset = new Vec2(v.tileOffset.x, y * PX)),
-          5,
-        );
-      }
-    }
-
-    // Emission: what this shape gives off, as against what it reflects. It is
-    // the whole of a lamp - the shape reads as bright AND throws a light of this
-    // colour that reaches the walls (see `EmissiveRig`), so a sconce is one
-    // authored thing rather than a glowing shape and a `LightData` beside it
-    // that nothing keeps in step.
-    //
-    // A colour input has no empty state, so the tick is what says whether the
-    // shape emits at all; unticking clears the colour rather than leaving a hex
-    // string on disk that nothing renders.
-    g = section(group, "object/Emission", "Emission");
-    {
-      const on = items.map((b) => b.visual.emissive !== "");
-      const box = document.createElement("input");
-      box.type = "checkbox";
-      box.checked = on.every(Boolean);
-      box.indeterminate = !box.checked && on.some(Boolean);
-      box.addEventListener("change", () => {
-        beginAction();
-        for (const b of items) {
-          b.visual.emissive = box.checked ? b.visual.emissive || DEFAULT_LIGHT_COLOR : "";
-        }
-        markDirty();
-        rebuildInspector(); // the colour and its multiplier appear or go
-      });
-      const ew = fieldRow("emissive");
-      ew.appendChild(box);
-      g.appendChild(ew);
-      // WHERE it glows: another set's emission map worn over this surface, so a
-      // brick wall gets lit windows without the brick becoming a different
-      // surface. Offered only when there is something to offer - a manifest with
-      // no emission map in it would otherwise show a picker whose only entry is
-      // "(none)" - and always when the shape already names one, so a level built
-      // against a manifest this build lacks cannot lose what it named.
-      const glowKeys = new Set<string>(emissiveMapNames());
-      for (const b of items) if (b.visual.emissiveTexture) glowKeys.add(b.visual.emissiveTexture);
-      if (glowKeys.size > 0) {
-        const gw = fieldRow("glow map");
-        const gs = document.createElement("select");
-        gs.className = "ed-select";
-        for (const key of ["", ...[...glowKeys].sort()]) {
-          const o = document.createElement("option");
-          o.value = key;
-          o.textContent = key || "(none)";
-          gs.appendChild(o);
-        }
-        const first = items[0]!.visual.emissiveTexture;
-        gs.value = items.every((b) => b.visual.emissiveTexture === first) ? first : "";
-        gs.addEventListener("change", () => {
-          beginAction();
-          for (const b of items) b.visual.emissiveTexture = gs.value;
-          markDirty();
-          rebuildInspector(); // a map is emission, so the reach and flicker appear
-        });
-        gw.appendChild(gs);
-        g.appendChild(gw);
-      }
-      const emits =
-        box.checked || box.indeterminate || items.some((b) => b.visual.emissiveTexture !== "");
-      if (box.checked || box.indeterminate) {
-        const cw = fieldRow("glow");
-        const ci = colorInput(
-          items.find((b) => b.visual.emissive)?.visual.emissive || DEFAULT_LIGHT_COLOR,
-          beginAction,
-          (hex) => {
-            for (const b of items) b.visual.emissive = hex;
-            markDirty();
-          },
-        );
-        cw.appendChild(ci.el);
-        g.appendChild(cw);
-      }
-      // The light this shape throws, which a MAP earns as much as a colour does:
-      // an emission map glows in the colours it was painted in, so a shape
-      // wearing one is a lamp whether or not a tint was ticked on.
-      if (emits) {
-        // Above 1 pushes the colour past white into the headroom ACES tone
-        // mapping still has, which is what makes a small flame read as a source
-        // rather than as a pale patch of paint - and, since the light this shape
-        // throws is scaled from it, lights further by the same act.
-        num("glow ×", (v) => v.emissiveIntensity, (v, x) => (v.emissiveIntensity = Math.max(0, x)), 0.5);
-        // ...and that is ALL of emission. It is appearance: what this shape
-        // gives off, so it reads as bright whatever is shining on it. What it
-        // does NOT do is light the room - three.js has no global illumination,
-        // so an emissive material reaches nothing at all.
-        //
-        // A lamp that lights is this plus a LIGHT on the lights layer, grouped
-        // into the same body (Ctrl+G). That used to be impossible to keep in
-        // step, which is why a glowing shape derived its own light out of seven
-        // fields here - a reach, a cone, an aim, a shadow, a flicker. A light in
-        // the same body cannot drift from the fitting, because it IS the body.
-      }
-    }
-
-    describe(
-      look,
-      "How the 3D renderer draws this shape: `auto` extrudes the shape's own primitive through z and wears the texture below, which is what every body gets for free; `mesh` replaces that with a GLB prop, which wears the texture too if one is named and keeps its own materials otherwise; `none` draws nothing at all (an invisible wall). Per shape, so a body's pieces each carry their own. Render-only — nothing here reaches the simulation.",
-    );
-    describe(
-      texture,
-      "`tile` is how much world one repeat of the texture covers, so the same stone reads the same on a plank and on a cliff. The texture `color` is the one that names no surface: a flat fill of the shape's own `color`, worn exactly as picked, with nothing to tile.",
-    );
-    describe(
-      g,
-      "A shape that emits reads as BRIGHT and lights nothing - emission is appearance, and three.js has no global illumination. A lamp that lights the room is this plus a light on the lights layer, grouped into the same body with Ctrl+G, which is what makes the fitting and its light one thing that cannot drift apart. `glow map` makes the emission a pattern (lit windows, cracks) rather than the whole face.",
-    );
-  }
-
   // Every layer's panel ends the same way: the two actions that apply to any
   // selection, whatever it is made of. Duplicate and Delete act on the *whole*
   // selection, so a cross-layer one carries a single shared row above the
@@ -5541,20 +4421,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   }
   function appendActions(g: HTMLElement): void {
     const row = el("div", "ed-row");
-    // On a COLLISION shape, and only there: it is the object that has no look of
-    // its own, and giving it one is the step a draw no longer takes for you.
-    // A geometry object already is the look, and offering it a second one would
-    // stack two extrusions in the same place.
-    const solids = selectedBodies().filter(
-      (b) => b.object === "collision" && b.layer === "scene",
-    );
-    if (solids.length && solids.length === selectedBodies().length) {
-      const b = button("Add geometry", () => addGeometryFor(solids));
-      b.title =
-        "Give this shape a look: a geometry object with its own copy of the outline, in the same body. Nothing draws a collision shape by itself.";
-      row.appendChild(b);
-      addGenerateRockButton(row, solids.length === 1 ? rockSourceOf(solids) : null);
-    }
     row.append(
       button("Duplicate", () => duplicateSelected()),
       button("Delete", () => deleteSelected()),
@@ -5574,20 +4440,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // own friction; it did not, and the file it saves to has never had a place to
   // put them.
   //
-  // A LOOK is the same story one level down. Nothing draws a collision shape but
-  // a geometry object, so the visual fields belong to the geometry panel: on a
-  // collision shape they were controls that wrote to a field `toLevelData` has
-  // never written for a collision object, which is a dial connected to nothing.
+  // A LOOK is not here at all: what a body looks like is its Blender scene's
+  // (the body's `name` binds it), so a collision shape has none to edit.
   function buildBodyGroup(bodies: EdItem[]): void {
     const g = el("div", "ed-group");
     // Named for what it IS. A panel headed "Body #12" on something that is one
     // object inside a body is the same confusion in the title bar.
-    const solid = bodies.some((b) => (b.object === "collision"));
-    const noun = solid ? "Collision" : "Geometry";
     const title = heading(
-      bodies.length === 1
-        ? `${noun} #${bodies[0]!.id}`
-        : `${bodies.length} ${solid ? "collision shapes" : "geometry objects"} selected`,
+      bodies.length === 1 ? `Collision #${bodies[0]!.id}` : `${bodies.length} collision shapes selected`,
       bodies.length > 1
         ? "Edits apply to all of them. Shift+click adds or removes; rubber-band left→right encloses, right→left touches."
         : undefined,
@@ -5598,14 +4458,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const transform = section(g, "object/Transform", "Transform");
     const placeNum = groupNum(transform, bodies, sync);
     addTransformFields(transform, placeNum, bodies);
-    if (!solid) addPlacementFields(transform, placeNum, bodies);
     // Hook-proof, offered for the solid kinds it means something on: an area is
     // a region the rope passes through, and a hook-only body exists to be caught
     // on, so neither has a hook to repel.
-    if (
-      solid &&
-      bodies.every((b) => (b.kind === "static" || b.kind === "rigid") && !b.passable)
-    ) {
+    if (bodies.every((b) => (b.kind === "static" || b.kind === "rigid") && !b.passable)) {
       const surface = section(g, "object/Surface", "Surface");
       addImpermeableField(surface, bodies);
       addViscousField(surface, bodies);
@@ -5616,252 +4472,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       if (bodies.every((b) => b.shape.kind === "path")) addRailField(surface, bodies);
       addMaskFields(surface, bodies);
     }
-    // Material and thickness are what a shape WEIGHS, and decoration weighs
-    // nothing - its extrusion depth is `visual.depth` instead.
-    if (solid && !bodies.some(massless)) addMaterialFields(section(g, "object/Material", "Material"), bodies);
-    // The link that keeps a look and the collision shape it dresses one
-    // outline; beside the transform fields, since it is those it takes over.
-    if (!solid) addMatchField(transform, bodies);
-    // ...and the edit that deliberately breaks that link for a generated rock:
-    // the collision outline written from the rock itself. One object at a time,
-    // since it rewrites that object's body.
-    if (!solid && bodies.length === 1 && ROCK_TEXTURES.has(bodies[0]!.visual.texture)) {
-      const row = el("div", "ed-row");
-      addRockFitButton(row, bodies[0]!.bodyId);
-      if (row.childElementCount) transform.appendChild(row);
-    }
-    // What a thing LOOKS like is a geometry object's business and only its own.
-    // A collision shape is drawn by whichever geometry object dresses it, and
-    // `toLevelData` writes no look for a collision object at all - so these
-    // fields on one edited a value that never reached disk.
-    if (!solid) addVisualFields(g, bodies);
-
-    // A geometry object carries its OWN fill - `toLevelData` writes its colour
-    // and opacity onto the object. A collision shape does not: the colour a wall
-    // is painted is its BODY's, and it is edited there.
-    if (!solid) {
-      const fill = section(g, "object/Fill", "Fill");
-      addFillFields(fill, groupNum(fill, bodies, sync), bodies, sync);
-    }
+    // Material and thickness are what a shape WEIGHS.
+    if (!bodies.some(massless)) addMaterialFields(section(g, "object/Material", "Material"), bodies);
 
     addGroupSection(g, title);
     addActionsRow(g);
     inspector.appendChild(g);
-    // A GENERATED object's Rock or Mushrooms group, below its geometry panel:
-    // one object at a time, since generating is about one mesh.
-    if (!solid && bodies.length === 1 && bodies[0]!.visual.generator) {
-      inspector.appendChild(buildGeneratorGroup(generatorPanelHost, bodies[0]!));
-    }
-  }
-
-  // A picture's look (`kind: "image"`): which picture, a way to add one, and
-  // the edit that sizes the plane to the picture's own aspect.
-  function addImageFields(g: HTMLElement, items: EdItem[]): void {
-    const iw = fieldRow("image");
-    const is = document.createElement("select");
-    is.className = "ed-select";
-    // An unlisted key already on an item is kept as an option of its own, as
-    // the mesh picker keeps one, so a level naming a picture this checkout has
-    // no entry for cannot lose it by being opened.
-    const keys = new Set<string>(imageNames());
-    for (const b of items) if (b.visual.image) keys.add(b.visual.image);
-    for (const key of ["", ...[...keys].sort()]) {
-      const o = document.createElement("option");
-      o.value = key;
-      o.textContent = key || "(none)";
-      is.appendChild(o);
-    }
-    is.value = items.every((b) => b.visual.image === items[0]!.visual.image) ? items[0]!.visual.image : "";
-    is.addEventListener("change", () => {
-      beginAction();
-      for (const b of items) b.visual.image = is.value;
-      markDirty();
-      rebuildInspector();
-    });
-    iw.appendChild(is);
-    g.appendChild(iw);
-
-    const row = el("div", "ed-row");
-    const upload = button("Upload…", () => {
-      void chooseImage().then((key) => {
-        if (!key) return;
-        beginAction();
-        for (const b of items) {
-          b.visual.image = key;
-          fitToImage(b);
-        }
-        markDirty();
-        rebuildInspector();
-      });
-    });
-    describe(upload, "Add a picture from disk (PNG, JPEG, WebP...): it is optimised to WebP, pinned in imageAssets.json and shown here, sized to its own aspect. `just publish` uploads it to the asset store before the level is committed.");
-    row.appendChild(upload);
-    const fit = button("Fit", () => {
-      beginAction();
-      for (const b of items) fitToImage(b);
-      markDirty();
-      refreshFields();
-    });
-    describe(fit, "Set the height from the width so the picture shows undistorted.");
-    fit.disabled = !items.some((b) => b.shape.kind === "rect" && IMAGE_ASSETS[b.visual.image]);
-    row.appendChild(fit);
-    g.appendChild(row);
-
-    const asset = items.length === 1 ? IMAGE_ASSETS[items[0]!.visual.image] : undefined;
-    if (asset) {
-      const info = el("div", "ed-hint");
-      info.textContent = `${asset.width}×${asset.height} px · ${(asset.bytes / 1024).toFixed(0)} KB`;
-      g.appendChild(info);
-    }
-  }
-
-  // Height from width, so the picture on a rect is undistorted. A picture the
-  // manifest does not know, or a shape that is not a rect, is left alone.
-  function fitToImage(item: EdItem): void {
-    const asset = IMAGE_ASSETS[item.visual.image];
-    if (!asset || item.shape.kind !== "rect") return;
-    item.shape = { ...item.shape, h: (item.shape.w * asset.height) / asset.width };
-  }
-
-  // Ask for a picture file and add it through the dev server's upload
-  // (src/server/images.ts). Resolves to its key once the manifest holds it, or
-  // null if nothing was chosen or the upload failed (said on the notice line).
-  function chooseImage(): Promise<string | null> {
-    return new Promise((resolve) => {
-      const input = document.createElement("input");
-      input.type = "file";
-      input.accept = "image/*";
-      input.addEventListener("change", () => {
-        const file = input.files?.[0];
-        if (!file) return resolve(null);
-        flashNotice(`Uploading ${file.name}…`);
-        void uploadImage(file).then(
-          ({ key, asset }) => {
-            registerImageAsset(key, asset);
-            flashNotice(`Added ${key} (${asset.width}×${asset.height})`);
-            resolve(key);
-          },
-          (e: unknown) => {
-            flashNotice(`Upload failed: ${e instanceof Error ? e.message : String(e)}`);
-            resolve(null);
-          },
-        );
-      });
-      input.addEventListener("cancel", () => resolve(null));
-      input.click();
-    });
-  }
-
-  // `+ Image`: choose a picture and stand it up as a backdrop - a body of its
-  // own with nothing to collide with, filling the view at IMAGE_DEPTH behind the
-  // gameplay plane (so it parallaxes as a distant painting does), undistorted.
-  function addImagePlane(): void {
-    void chooseImage().then((key) => {
-      const asset = key ? IMAGE_ASSETS[key] : undefined;
-      if (!key || !asset) return;
-      // The view's width at the plane, grown by how much further the picture is
-      // from the camera than the plane is: the size it has to be to span the
-      // same width on screen.
-      const planeW = camera.viewportWidth / (camera.zoom * PIXELS_PER_METER);
-      const dist = cameraDistance(camera);
-      const w = (planeW * (dist + IMAGE_DEPTH)) / dist;
-      const item: EdItem = {
-        ...newDrawnItem("geometry", camera.position),
-        layer: "scene",
-        bodyId: newBodyId(),
-        shape: { kind: "rect", w, h: (w * asset.height) / asset.width },
-      };
-      item.visual = { ...item.visual, kind: "image", image: key, offsetZ: -IMAGE_DEPTH };
-      beginAction();
-      addAndSelect([item]);
-    });
-  }
-
-  // The rest of where a geometry object is drawn, in its Transform section
-  // beside the x, y and rot° it completes: its depth off the plane, the two
-  // rotations the in-plane transform cannot express, and a mesh's scale. All
-  // are `visual` fields, so a collision shape - on the plane by definition, and
-  // drawn by whichever geometry dresses it - has none.
-  function addPlacementFields(transform: HTMLElement, num: GroupNum, items: EdItem[]): void {
-    const rowOf = (name: string): Element | undefined =>
-      [...transform.children].find((r) => r.querySelector(":scope > .ed-name")?.textContent === name);
-    // Each new row is appended, then moved to where it reads: z after y, the
-    // tilts after rot°, and scale last, after whatever size the shape has.
-    const place = (input: HTMLInputElement, after: string): void => {
-      const anchor = rowOf(after);
-      if (anchor) anchor.after(input.parentElement!);
-    };
-    // 0 is the gameplay plane and negative is away from the camera. On a
-    // background panel it is the whole point - a panel at -20 m parallaxes as
-    // the camera pans, where a panel at 0 is the flat fill the 2D renderer draws.
-    const z = num("z", (b) => b.visual.offsetZ * M2PX, (b, v) => (b.visual.offsetZ = v * PX), 5);
-    describe(z, "Depth off the gameplay plane, in scene pixels: 0 is the plane, negative is away from the camera.");
-    place(z, "y");
-    // A prop's holder and an extrusion are turned by them alike. Degrees, as
-    // `rot°` is.
-    const rx = num("rot x°", (b) => deg(b.visual.rotX), (b, d) => (b.visual.rotX = rad(d)), 5);
-    const ry = num("rot y°", (b) => deg(b.visual.rotY), (b, d) => (b.visual.rotY = rad(d)), 5);
-    describe(rx, "Tilt about the x axis (top toward or away from you), which the in-plane `rot°` cannot express.");
-    describe(ry, "Turn about the y axis (a side toward or away from you), which the in-plane `rot°` cannot express.");
-    if (rowOf("rot°")) {
-      place(ry, "rot°");
-      place(rx, "rot°");
-    }
-    // Dimensionless: it multiplies the model's own size, so it is not a length
-    // and does not scale on the way to disk. Offered where the look is (or may
-    // be, in a mixed selection) a mesh, whose size is the model's own.
-    const kind = items[0]!.visual.kind;
-    const sharedKind = items.every((b) => b.visual.kind === kind) ? kind : null;
-    if (sharedKind === "mesh" || sharedKind === null) {
-      const s = num("scale", (b) => b.visual.scale, (b, v) => (b.visual.scale = v), 0.1);
-      describe(s, "A multiple of the mesh's own size.");
-    }
-  }
-
-  // What the generator group is handed of the editor (see `PanelHost`).
-  const generatorPanelHost = {
-    numField: (
-      parent: HTMLElement,
-      label: string,
-      get: () => number | null,
-      set: (v: number) => void,
-      step: number,
-      mixable: boolean,
-      opts: { placeholder?: string; onEmpty?: () => void },
-    ) => numField(parent, label, get, set, step, mixable, opts),
-    readouts,
-    beginAction: () => beginAction(),
-    markDirty: () => markDirty(),
-    refreshFields: () => refreshFields(),
-    lookup: () => itemLookup(model.items),
-    job: (id: number) => jobs.job(id),
-    facts: (key: string) => jobs.facts(key),
-    missing: (key: string) => jobs.missing(key),
-    generate: (it: EdItem) => void generate(it),
-    editLoop: (it: EdItem) => editLoop(it),
-    surfaceSummary: (it: EdItem) => patchSummary(it),
-    notice: (text: string) => flashNotice(text),
-  };
-
-  // **Generate rock** beside **Add geometry** and on the body panel: the one
-  // collision polygon or rect among `items` it applies to (see `rockSource`),
-  // or null when there is none or more than one to choose between.
-  function rockSourceOf(items: readonly EdItem[]): EdItem | null {
-    const sources = items
-      .filter((b) => b.object === "collision")
-      .flatMap((b) => rockSource(model.items, b) ?? []);
-    return sources.length === 1 ? sources[0]! : null;
-  }
-  function addGenerateRockButton(row: HTMLElement, source: EdItem | null): void {
-    if (!source || !visuals) return;
-    const b = button("Generate rock", () => {
-      if (!inVisuals()) setWorkspace("visuals");
-      dressWithRock(source);
-    });
-    b.title = existingRock(model.items, source)
-      ? "This outline already has a generated rock: select it and generate it again."
-      : "Dress this outline with a GENERATED ROCK (the Visuals workspace's + Rock): a mesh geometry object matched to it, generated in Blender from the parameters on its panel.";
-    row.appendChild(b);
   }
 
   // Compound-body controls. A group is one engine body carrying several convex
@@ -5871,7 +4487,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // panel says it rather than offering a bare button.
   //
   // It reads the WHOLE selection rather than the panel's own layer, because a
-  // group may span layers - a backdrop welded to the body it decorates is the
+  // group may span layers - a light welded to the body it hangs on is the
   // case - and a Group button that silently left the panels out of it would be
   // making a different body than the one on screen. Gated like the actions row:
   // a cross-layer selection carries one shared section above the per-layer
@@ -6016,13 +4632,29 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
             },
           },
         );
+        // The slab through z, drawn by the game (see `LevelBodyData.waterZ`):
+        // its middle's offset from the plane and its depth, both in px. An
+        // empty depth is the renderer's own.
+        num("water z", (b) => b.waterZ * M2PX, (b, v) => (b.waterZ = v * PX), 5);
+        num(
+          "water depth",
+          (b) => (b.waterDepth ?? 0) * M2PX,
+          (b, v) => (b.waterDepth = Math.max(1, v) * PX),
+          10,
+          {
+            placeholder: leads.length > 1 ? "mixed" : "default",
+            onEmpty: () => {
+              for (const b of leads) b.waterDepth = null;
+            },
+          },
+        );
       }
       // The finish line has nothing to tune - being entered IS the whole of it
       // - so what its panel carries is the one thing that is not on the canvas:
       // what happens when the player gets there.
       if (leads.every((b) => b.kind === "finish")) {
         describe(kw,
-          "The end of the level: the run is over the moment the player touches this region, however they arrive. Draw it across the way out - wide enough that a swing cannot miss it - and put a finish-line prop on the same body so it can be seen. A listed level needs exactly one.");
+          "The end of the level: the run is over the moment the player touches this region, however they arrive. Draw it across the way out - wide enough that a swing cannot miss it - and name the body so the level's Blender scene can put a finish gantry on it. A listed level needs exactly one.");
       }
       // Offered for the kinds that build a BODY: an area is a region the sim
       // walks through already, so "the hook is the only thing that finds it"
@@ -6053,51 +4685,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // The body's name, for a body of any make-up: it is what the level's
     // Blender scene dresses it by.
     addBodyNameField(section(g, "body/Blender", "Blender"), members);
-    // The generated rock's seed, for a rock body whatever it is built of - one
-    // of geometry alone has no leads and is still a rock.
-    addRockSeedField(section(g, "body/Rock", "Rock"), members);
     // ...and the fill, which only a body written from a collision lead has: a
-    // body of pure decoration is painted by its objects' own colours, and a
-    // body that is nothing but a light is not painted at all.
+    // body that is nothing but a light is not painted at all. It is the 2D
+    // view's fill, and the grey box a level with no scene is drawn as.
     if (leads.length) {
       const fill = section(g, "body/Fill", "Fill");
       addFillFields(fill, groupNum(fill, leads, sync), leads, sync);
     }
-  }
-
-  // The seed of a body's GENERATED rock (see `LevelBodyData.rockSeed`), offered
-  // only where every selected body is one `rockBodies` counts - the question
-  // the fit button asks. Read and written on EVERY member rather than on the
-  // leads, because a rock body of geometry alone has none (see `EdItem.rockSeed`).
-  //
-  // The loop it serves is regenerate, look, bump: so beside the number is the
-  // bump itself, which moves each body on to its own next seed. Changing it
-  // marks the body's rock stale, and play shows the extrusion until
-  // `bun run assets:rocks <level>` is run again.
-  function addRockSeedField(g: HTMLElement, members: EdItem[]): void {
-    const ids = [...new Set(members.map((m) => m.bodyId))];
-    if (ids.length === 0 || !ids.every((id) => rockBodyOf(id))) return;
-    const all = ids.flatMap((id) => bodyMembers(model.items, id));
-    const num = groupNum(g, all);
-    const input = num(
-      "rock seed",
-      (b) => b.rockSeed,
-      (b, v) => (b.rockSeed = Math.max(0, Math.round(v))),
-      1,
-    );
-    input.min = "0";
-    describe(input,
-      "Seeds every random choice in this body's generated rock. Changing it marks the rock stale - play shows the flat extrusion until the rocks are regenerated (bun run assets:rocks <level>).");
-    const row = el("div", "ed-row");
-    const next = button("Next seed", () => {
-      beginAction();
-      for (const b of all) b.rockSeed += 1;
-      markDirty();
-      refreshFields();
-    });
-    next.title = "Add 1 to the rock seed, then regenerate the rocks to see the new one.";
-    row.appendChild(next);
-    g.appendChild(row);
   }
 
   // The body's NAME (see `LevelBodyData.name`), which is how the level's
@@ -6152,7 +4746,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       if (meta === null) return `${model.scene} is not exported yet (\`just scene ${currentName ?? "<level>"}\`).`;
       const node = nodeNameOf(name);
       const found = meta.nodes.find((n) => n.node === node);
-      if (!found) return `No object called "${node}" in ${model.scene}; the body is drawn by its geometry objects. Re-export after adding one.`;
+      if (!found) return `No object called "${node}" in ${model.scene}; the body is not dressed: nothing in this scene draws it. Re-export after adding one.`;
       const twin = model.items.some((i) => i.bodyId !== ids[0] && i.name && nodeNameOf(i.name) === node);
       return `Dressed by "${found.name}" (${found.triangles.toLocaleString()} triangles).` + (twin ? ` Another body has this name too; only the first is dressed.` : "");
     };
@@ -6207,9 +4801,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       `Body #${index} — ${bodyLabel(members)}`,
       `${members.length} object${members.length === 1 ? "" : "s"}: ` +
         `${kinds.filter((k) => k === "collision").length} collision, ` +
-        `${kinds.filter((k) => k === "geometry").length} geometry, ` +
         `${kinds.filter((k) => k === "light").length} light. ` +
-        "A body is the frame they are placed in and the properties they share - what each one IS lives on the object. Expand this body in the panel bottom-left and click an object to edit its shape, material or look.",
+        "A body is the frame they are placed in and the properties they share - what each one IS lives on the object. Expand this body in the panel bottom-left and click an object to edit its shape or material. What it LOOKS like is the object named like it in the level's Blender scene.",
     );
     g.appendChild(title);
     const transform = section(g, "body/Transform", "Transform");
@@ -6255,8 +4848,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       ? "This body's origin is already on its centre of mass."
       : "Move this body's origin onto its centre of mass - the point the engine builds it about - and take up the step in every object's offset. Nothing moves in the level.";
     row.appendChild(centre);
-    addRockFitButton(row, id);
-    addGenerateRockButton(row, rockSourceOf(members));
     transform.appendChild(row);
 
     addBodyProps(g, members);
@@ -7729,11 +6320,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const sw = fieldRow("scene");
     sw.appendChild(scene);
     describe(sw,
-      "The Blender scene this level is dressed in: assets-src/scenes/<scene>.blend, exported by `just scene <level>` and drawn over the level. An object in it named like a body rides that body; everything else is scenery where Blender put it. Blank = dressed by geometry objects alone. `just scene-guide <level>` writes the level's collision into <scene>-guide.blend and creates the scene file if there is none.");
+      "The Blender scene this level is dressed in: assets-src/scenes/<scene>.blend, exported by `just scene <level>` and drawn over the level. An object in it named like a body rides that body; everything else is scenery where Blender put it. Blank = no look yet: the level is drawn as its collision, grey boxes in each body's fill. `just scene-guide <level>` writes the level's collision into <scene>-guide.blend and creates the scene file if there is none.");
     g.appendChild(sw);
     const sceneHint = el("div", "ed-hint");
     const sceneHintText = (): string => {
-      if (!model.scene) return "No scene: bodies are dressed by their geometry objects.";
+      if (!model.scene) return "No scene: the level is drawn as its collision.";
       const meta = sceneMetaFor(model.scene, () => (sceneHint.textContent = sceneHintText()));
       if (meta === undefined) return `Looking for /scenes/${model.scene}/meta.json…`;
       if (meta === null) return `Not exported yet: run \`just scene ${currentName ?? "<level>"}\` (after \`just scene-guide\` if assets-src/scenes/${model.scene}.blend does not exist).`;
@@ -8176,7 +6767,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // The model's own for a duplicate; the parsed payload's for a paste out of
     // the clipboard, which is a different model entirely.
     sourceFrames: ReadonlyMap<number, EdBodyFrame> = model.bodyFrames,
-  ): { items: EdItem[]; idOf: Map<number, number>; frames: Map<number, EdBodyFrame>; orphanedPatches: number } {
+  ): { items: EdItem[]; idOf: Map<number, number>; frames: Map<number, EdBodyFrame> } {
     const groups = new Map<number, number>();
     const idOf = new Map<number, number>();
     // A body's frame is NOT in its items, so a copy that does not carry it gets
@@ -8213,19 +6804,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         cam: { ...b.cam },
         light: { ...b.light },
         note: { ...b.note },
-        visual: cloneVisual(b.visual),
       };
     });
-    // A matched pair copied together stays a pair; a geometry object copied
-    // WITHOUT its partner drops the link rather than pointing at the original,
-    // which is in another body and would be pruned as stale anyway.
-    for (const it of items) {
-      if (it.matchId !== 0) it.matchId = idOf.get(it.matchId) ?? 0;
-    }
-    // ...and a mushroom patch follows its host the same way: copied together
-    // they stay a pair, and a patch copied without its host is hostless, said
-    // by the caller (`sayOrphanedPatches`).
-    const orphanedPatches = remapPatchHosts(items, idOf);
     // A copied anchor is a NEW anchor and needs an on-disk id of its own:
     // `anchorId` is what chains and vines name their ends by in the file, so a
     // copy carrying the original's id loads with both ends resolving to
@@ -8253,17 +6833,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         it.light = { ...it.light, path: pathOf.get(p)! };
       }
     }
-    return { items, idOf, frames, orphanedPatches };
-  }
-
-  // A patch copied without its host lands in a body of its own and grows on
-  // nothing; said rather than left for the panel's `no host` to explain.
-  function sayOrphanedPatches(n: number): void {
-    if (n > 0) {
-      flashNotice(
-        `${n === 1 ? "the copied mushroom patch has" : `${n} copied mushroom patches have`} no host: copy the patch together with the model it grows on`,
-      );
-    }
+    return { items, idOf, frames };
   }
 
   // Copies of the chains whose BOTH ends landed in the copied set. A chain with
@@ -8423,26 +6993,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // bolted to in the first place.
     const wasIn = new Map<EdItem, number>(affected.map((b) => [b, b.bodyId]));
     const leadOf = new Map<number, number>();
-    // A geometry object MATCHED to a collision sibling follows that sibling out
-    // for the same reason an anchor follows a shape: the pair is one authored
-    // thing (a wall and the look that mirrors it), and splitting them into two
-    // bodies would break the link as a side effect of a gesture about bodies.
-    const follows = (b: EdItem): boolean =>
-      b.object === "geometry" && b.matchId !== 0 && affected.some((o) => o.id === b.matchId);
-    const bodyOf = new Map<number, number>();
     for (const b of affected) {
-      if (b.object === "anchor" || follows(b)) continue;
+      if (b.object === "anchor") continue;
       const id = newBodyId();
       const old = wasIn.get(b)!;
       if (b.object === "collision" && !leadOf.has(old)) leadOf.set(old, id);
-      bodyOf.set(b.id, id);
       b.bodyId = id;
     }
     for (const b of affected) {
-      if (follows(b)) {
-        b.bodyId = bodyOf.get(b.matchId) ?? b.bodyId;
-        continue;
-      }
       if (b.object !== "anchor") continue;
       b.bodyId = leadOf.get(wasIn.get(b)!) ?? b.bodyId;
     }
@@ -8505,8 +7063,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       object: "anchor",
       pos: toWorld(host, snap(host, world)),
       rot: host.rot,
-      shape: { kind: "rect", w: DRESSING_GIZMO, h: DRESSING_GIZMO },
-      visual: defaultVisual(),
+      shape: { kind: "rect", w: ANCHOR_GIZMO, h: ANCHOR_GIZMO },
       cam: { ...host.cam },
       light: { ...host.light },
       note: { ...host.note },
@@ -8680,15 +7237,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   }
 
   function newDrawnItem(t: Exclude<Tool, "select" | "chain" | "glow" | "fireflies">, start: Vec2): EdItem {
-    // Which of the three scene objects the tool draws. `+ Geometry` is the only
-    // way to get a drawn-and-not-simulated object in one gesture; every other
-    // shape tool draws a collision object, and NOTHING is created beside it.
-    const object: EdObject =
-      t === "light" ? "light" : t === "geometry" ? "geometry" : "collision";
+    // Which scene object the tool draws: `+ Light` a light, every shape tool a
+    // collision object.
+    const object: EdObject = t === "light" ? "light" : "collision";
     const style = newItemStyle(activeLayer, object);
     // Drawn INTO the selected body, when one is selected. With a body selected
-    // the thing being authored is a part of it - the collision box under a mesh,
-    // a second shape for a compound wall, the light a lamp throws - and making it
+    // the thing being authored is a part of it - a second shape for a compound
+    // wall, the light a lamp throws - and making it
     // a body of its own would mean drawing it, selecting both and merging, every
     // single time. An area is refused for the reason `canShareBody` gives: it is
     // single-shape wherever it is used.
@@ -8723,7 +7278,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // the "nothing can" every body has until one is made.
       breakForce: 0,
       durability: 1,
-      rockSeed: 0,
       // Unnamed until the body panel names it for the level's Blender scene.
       name: "",
       // Hook-proof is opt-in: a fresh shape is one the hook can catch.
@@ -8741,9 +7295,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // materials existed is made of.
       material: DEFAULT_MATERIAL,
       thickness: DEFAULT_THICKNESS,
-      // A fresh shape is drawn as its own outline extruded, which is what every
-      // body authored before the 3D renderer existed is drawn as.
-      visual: defaultVisual(),
       // Only meaningful on a force area, but a new one needs a non-zero pull
       // or it would draw no arrows and do nothing until the field is touched.
       force: DEFAULT_FORCE_MAGNITUDE * PX,
@@ -8754,6 +7305,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // A fresh run ends against its bank; a fall is opted into on the panel.
       spill: 0,
       spillSpeed: null,
+      waterZ: 0,
+      waterDepth: null,
       // A fresh body is free; the bearing and the spring are both opted into on
       // the panel, and a spring of no frequency is no spring at all.
       // Hook-only is opt-in: a fresh body is one that collides.
@@ -8782,7 +7335,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       note: defaultNote(),
       anchorId: 0,
       pathId: 0,
-      matchId: 0,
     };
     if (t === "light") {
       // Placed with a click at a reach worth having, and a drag overrides it -
@@ -8875,58 +7427,17 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           ],
           thickness: DEFAULT_BELT_THICKNESS,
           speed: DEFAULT_BELT_SPEED,
+          // A fresh band draws at the defaults (`BeltLook`), set on the panel.
+          look: {},
         },
       };
     }
-    // A geometry object is a rect like `+ Rect`, so a click drops one at the grid
-    // step and a drag sizes it - the drag itself reads `shape.kind` and needs to
-    // know nothing about which tool drew it.
+    // A click drops one at the grid step and a drag sizes it - the drag itself
+    // reads `shape.kind` and needs to know nothing about which tool drew it.
     return {
       ...base,
-      shape:
-        t === "rect" || t === "geometry"
-          ? { kind: "rect", w: gridStep, h: gridStep }
-          : { kind: "circle", r: gridStep },
+      shape: t === "rect" ? { kind: "rect", w: gridStep, h: gridStep } : { kind: "circle", r: gridStep },
     };
-  }
-
-  // A geometry object for an existing collision shape: what makes a drawn body
-  // visible, on request. Drawing a shape creates the collision object and NOTHING
-  // else, so being drawn and being simulated are two decisions an author makes
-  // separately - which is the whole of the collision/geometry split, and was
-  // undermined by a draw that quietly made one of each.
-  //
-  // It carries its OWN copy of the outline, and of the two things the extrusion
-  // used to read off the collision object: how thick it is (`thickness`, which
-  // is the number that piece's MASS is computed from) and what it is made of
-  // (`material`, which names a surface). Copied ONCE, here, so the two objects
-  // are independent in both directions from the moment they exist - the
-  // collision shape can be resized, re-materialled or deleted and the look stays
-  // exactly as authored. The cost is real and is the point: a wall widened after
-  // it is dressed is widened twice.
-  //
-  // The same statement `primitiveOf` (`levelFormat.ts`) makes for a level
-  // migrated from the legacy form, which is why the two copy the same fields.
-  function addGeometryFor(items: EdItem[]): void {
-    const made = items.map((item) => ({
-      ...item,
-      id: newBodyId(),
-      object: "geometry" as const,
-      shape: cloneShape(item.shape),
-      cam: { ...item.cam },
-      light: { ...item.light },
-      note: { ...item.note },
-      visual: { ...item.visual, depth: item.thickness, texture: item.material },
-      // Born MATCHED to the shape it dresses (see `EdItem.matchId`): the two
-      // start out identical, and the link is what keeps them so - resizing
-      // either resizes both, which is what "give this shape a look" almost
-      // always wants. Untick "match collision" on the geometry panel to
-      // diverge them on purpose.
-      matchId: item.id,
-    }));
-    if (!made.length) return;
-    beginAction();
-    addAndSelect(made);
   }
 
   // How close (in screen px) a click must land to the draft's first vertex to
@@ -9201,7 +7712,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       cloneVinesWithin(model.vines, copy.idOf),
       copy.frames,
     );
-    sayOrphanedPatches(copy.orphanedPatches);
   }
 
   // --- clipboard ------------------------------------------------------------
@@ -9315,7 +7825,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // one gets. The host's own lead comes first in `model.items`, so it is the
     // body that wins, not the arrival.
     if (host !== null) syncBodyProps(bodyMembers(model.items, host));
-    sayOrphanedPatches(copy.orphanedPatches);
   }
 
   // THE DOM'S OWN EVENTS rather than the keydown switch, and that is what the
@@ -9658,16 +8167,19 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const s = vertexEditTarget();
     const h = handleUnder(tags);
     if (!s || !h || h.id !== s.id || h.index === undefined) return null;
-    const z = guidePlaneZ(s, bodyCollides(s.bodyId));
+    const z = guidePlaneZ(s);
     return h.guide === "vertex" ? pressVertex(s, h.index, alt, shift, z) : pressMidpoint(s, h.index, z);
   }
 
   // The nearest level surface under the pointer (Visuals), leaving out the
   // body `exclude` - the thing being put down must not be put down on itself.
-  // Any drawn geometry object of the level counts; the guides, the gizmo and
-  // the ball at the spawn do not.
+  // Whatever the level draws counts - the Blender scene's dressing and scenery,
+  // or the grey boxes of a level with none; the guides, the gizmo and the ball
+  // at the spawn do not.
   function surfaceUnder(scr: Vec2, exclude: number | null): { point: THREE.Vector3; normal: THREE.Vector3 } | null {
     const hit = visuals?.surfaceAt(scr, (tag) => {
+      // Scenery is in no body, so nothing excludes it.
+      if (tag === SCENERY_TAG) return true;
       const id = itemOfSceneObject.get(tag as SceneObjectData);
       const it = id === undefined ? null : itemOf(id);
       return it !== null && it.bodyId !== exclude;
@@ -9677,7 +8189,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
 
   // Run a write with the grid off. A drop on a surface is exact by nature: the
   // point it lands on is where the face IS, and rounding it to the 5 cm grid
-  // would sink a prop into the rock it was stood on or float it off.
+  // would sink a lamp into the rock it was stood on or float it off.
   function unsnapped(write: () => void): void {
     const was = snapOn;
     snapOn = false;
@@ -9689,25 +8201,17 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   }
 
   // One pointer move of a DROP ON SURFACE. Written through the gizmo's own
-  // item handlers - the move and, with Ctrl on a prop, the turn - so the fields
-  // it writes (`pos`, `offsetZ` or a light's `z`, `rot`/`rotX`/`rotY`) are
-  // written exactly as the arrows and rings write them, fallback depth and all.
-  // Begun at the first move past the click's slop, which is the one undo step.
-  //
-  // The tilt is aligned from the one the drag STARTED with every move, rather
-  // than from the last move's, so a sweep across a bumpy face ends up at the
-  // same angle as a jump straight to its last point; releasing Ctrl mid-drag
-  // hands the object its own tilt back.
-  function surfaceDropMove(d: Extract<Drag, { mode: "surfaceDrop" }>, scr: Vec2, align: boolean): void {
+  // item handler - the move - so what it writes (`pos` and a light's `z`) is
+  // written exactly as the arrows write it. Begun at the first move past the
+  // click's slop, which is the one undo step.
+  function surfaceDropMove(d: Extract<Drag, { mode: "surfaceDrop" }>, scr: Vec2): void {
     if (!d.handlers) {
       if (scr.distanceTo(d.press) < CLICK_SLOP_PX) return;
       d.handlers = itemHandlers(d.item.id);
       d.handlers.begin("translate");
-      d.tilt = { rot: d.item.rot, rotX: d.item.visual.rotX, rotY: d.item.visual.rotY };
     }
     const it = itemOf(d.item.id);
-    const tilt = d.tilt;
-    if (!it || !tilt) return;
+    if (!it) return;
     const hit = surfaceUnder(scr, it.bodyId);
     // Over nothing it stays where it last landed: a drop has no plane to fall
     // back to, and snapping to the gameplay plane would be a move nobody made.
@@ -9715,511 +8219,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const at = surfacePlacement(hit.point);
     const pos = new THREE.Vector3(at.pos.x, threeY(at.pos.y), at.z);
     const handlers = d.handlers;
-    unsnapped(() => {
-      handlers.apply("translate", pos, itemQuat(it), new THREE.Vector3(1, 1, 1));
-      if (it.object === "geometry" && it.visual.kind === "mesh") {
-        const want = align ? alignUp(tilt, hit.normal) : tilt;
-        if (want.rot !== it.rot || want.rotX !== it.visual.rotX || want.rotY !== it.visual.rotY) {
-          const q = new THREE.Quaternion().setFromEuler(
-            new THREE.Euler(want.rotX, want.rotY, threeRotation(want.rot), "ZXY"),
-          );
-          handlers.apply("rotate", pos, q, new THREE.Vector3(1, 1, 1));
-        }
-      }
-    });
-  }
-
-  // WHAT A PRESS DOES WITH A TOOL OF THE VISUALS WORKSPACE'S OWN: the tools
-  // whose gesture is about the scene rather than the plane. The press handler
-  // asks this before anything a plane tool does, so a tool registers here and
-  // nowhere else in the handler; one the table does not name falls through to
-  // the plane gestures both workspaces share. (`+ Rock` and `+ Mushrooms` land
-  // here.)
-  interface ScenePress {
-    readonly scr: Vec2;
-    // Where the pointer meets the gameplay plane, sim metres.
-    readonly world: Vec2;
-    readonly shift: boolean;
-    readonly ctrl: boolean;
-    // Everything under the pointer, models and guides, nearest first.
-    readonly tags: readonly unknown[];
-  }
-  const sceneToolPress: Partial<Record<Tool, (p: ScenePress) => void>> = {
-    geometry: placeProp,
-    rock: placeRock,
-    mushrooms: paintLoop,
-  };
-
-  // --- the generators (+ Rock, + Mushrooms, the Rock and Mushrooms groups) ---
-  // docs/editor-visuals.md, "Rocks and mushrooms". The pure halves are in
-  // editor/visuals/ (generatorEdits, surfacePatch, surfaceLoop, jobs,
-  // generatorPanel); what is here is the part that needs the live scene.
-
-  // The item a drawn model's pick tag names.
-  function itemOfTag(tag: unknown): EdItem | null {
-    const id = itemOfSceneObject.get(tag as SceneObjectData);
-    return id === undefined ? null : itemOf(id);
-  }
-
-  // `+ Rock`: the nearest collision outline under the pointer (by its guide) or
-  // model matched to one, dressed with a generated rock.
-  function placeRock(p: ScenePress): void {
-    for (const t of p.tags) {
-      const it = isGuideTag(t) ? (t.guide === "outline" ? itemOf(t.id) : null) : itemOfTag(t);
-      const source = it ? rockSource(model.items, it) : null;
-      if (source) {
-        dressWithRock(source);
-        return;
-      }
-    }
-    // ...else inside one, on the plane: a bare collision outline draws nothing
-    // but its line, and a click anywhere in the shape means the shape.
-    for (const it of pickCandidatesAt(p.world, p.scr)) {
-      const source = rockSource(model.items, it);
-      if (source) {
-        dressWithRock(source);
-        return;
-      }
-    }
-    flashNotice("+ Rock: click a collision polygon or rect, or the geometry matched to one");
-  }
-
-  // One undo step: the rock added and selected, then its generation asked for.
-  // An outline already dressed with one has it selected and generated instead.
-  function dressWithRock(source: EdItem): void {
-    const had = existingRock(model.items, source);
-    if (had) {
-      setSelection([had.id]);
-      rebuildInspector();
-      void generate(had);
-      return;
-    }
-    beginAction();
-    const rock = rockFor(source, newBodyId());
-    addAndSelect([rock]);
-    void generate(rock);
-  }
-
-  // What a mushroom loop may be painted on: any drawn scene geometry but a
-  // patch, so a second patch beside the first is painted on the rock under it.
-  const loopHostable = (it: EdItem): boolean =>
-    it.layer === "scene" && it.object === "geometry" && it.visual.generator?.kind !== "mushrooms";
-
-  // Every mesh drawn for an item, as the scene holds it now.
-  function drawnMeshesOf(it: EdItem): THREE.Mesh[] {
-    const tag = sceneObjectOfItem.get(it.id);
-    return scene3d && tag ? scene3d.meshesOf(tag) : [];
-  }
-
-  // `+ Mushrooms`: a click adds a point on the surface under the pointer (on
-  // the loop's host once it has one), and a click on the first point closes it.
-  function paintLoop(p: ScenePress): void {
-    if (surfaceLoop.closable) {
-      const first = surfaceLoop.points[0]!.point;
-      const at = visuals!.screenOf(new Vec2(first.x, threeY(first.y)), first.z);
-      if (at && at.distanceTo(p.scr) <= POLY_CLOSE_PX) {
-        closeSurfaceLoop();
-        return;
-      }
-    }
-    const host = surfaceLoop.hostId;
-    const hit = visuals!.surfaceAt(p.scr, (tag) => {
-      const it = itemOfTag(tag);
-      return it !== null && loopHostable(it) && (host === null || it.id === host);
-    });
-    const on = hit ? itemOfTag(hit.tag) : null;
-    if (!hit || !on) {
-      flashNotice(
-        host === null
-          ? "+ Mushrooms: click on a drawn model to start the loop"
-          : "+ Mushrooms: the loop stays on the model it was started on",
-      );
-      return;
-    }
-    surfaceLoop.add({
-      point: new THREE.Vector3(hit.point.x, hit.point.y, hit.point.z),
-      normal: new THREE.Vector3(hit.normal.x, hit.normal.y, hit.normal.z),
-      hostId: on.id,
-    });
-    updateTitle();
-  }
-
-  // The rubber band from the last point to the surface under the pointer, at
-  // most every `LOOP_HOVER_MS` (ms): a raycast of the whole scene per mouse
-  // event is more than a rubber band is worth.
-  const LOOP_HOVER_MS = 30;
-  let loopHoverAt = 0;
-  function hoverLoop(scr: Vec2): void {
-    const now = performance.now();
-    if (now - loopHoverAt < LOOP_HOVER_MS) return;
-    loopHoverAt = now;
-    const host = surfaceLoop.hostId;
-    const hit = visuals?.surfaceAt(scr, (tag) => itemOfTag(tag)?.id === host) ?? null;
-    surfaceLoop.cursor = hit ? new THREE.Vector3(hit.point.x, hit.point.y, hit.point.z) : null;
-  }
-
-  // What a surface selection that failed means, for the status line.
-  const SURFACE_REFUSALS = {
-    loop: "the loop has no extent",
-    empty: "the loop covers no faces that face it at this slope (maxSlope)",
-    overflow: "the loop covers more faces than maxTriangles allows",
-  } as const;
-
-  // Close the loop: one undo step adds the patch in the host's body, sized to
-  // the faces the loop covers, and asks for its generation. A loop that covers
-  // nothing stays open, so Backspace or Esc can deal with it.
-  function closeSurfaceLoop(): void {
-    const hostId = surfaceLoop.hostId;
-    const host = hostId === null ? null : itemOf(hostId);
-    if (!surfaceLoop.closable || !host) return;
-    const values = mergeDefaults({}, loadSchema("mushrooms")!);
-    const res = selectSurface(drawnMeshesOf(host), surfaceLoop.points, {
-      maxSlopeDeg: values["maxSlope"] as number,
-      maxTriangles: values["maxTriangles"] as number,
-    });
-    if (!res.ok) {
-      flashNotice(`+ Mushrooms: ${SURFACE_REFUSALS[res.reason]}`);
-      return;
-    }
-    beginAction();
-    // The side it was painted on, from the faces it was clicked on: stored with
-    // the loop, since the file holds no normals and the plane of best fit of a
-    // loop near a face's edge could be read either way round.
-    const facing = new THREE.Vector3();
-    for (const p of surfaceLoop.points) facing.add(p.normal);
-    const patch = patchFor(host, newBodyId(), surfaceLoop.points.map((p) => p.point), res.selection.positions, facing);
-    surfaceLoop.clear();
-    addAndSelect([patch]);
-    updateTitle();
-    void generate(patch);
-  }
-
-  // Where a patch is drawn, as a matrix from its own frame to three's world.
-  function patchFrame(it: EdItem): THREE.Matrix4 {
-    return patchMatrix(objectPose(it, guidePlaneZ(it, bodyCollides(it.bodyId))));
-  }
-
-  // A patch's stored loop on its host's surface, in three's world, each point
-  // carrying the side the loop was painted on (`EdPatch.facing`, turned into
-  // the world with the patch): the plane of best fit needs only to know which
-  // of its two sides is out. A patch from a file that did not store its facing
-  // guesses it as away from the host's middle, which a loop on a wide face
-  // near its edge can get wrong - hence the stored one.
-  //
-  // Read every frame while Edit loop is open (the draft) and at every collect,
-  // so it is kept per patch until the model or the scene moves: the guess
-  // walks the host's meshes, and the answer is fresh vectors each time.
-  let loopWorldCache: { id: number; rev: number; scene: number; points: SurfacePoint[] } | null = null;
-  function patchLoopWorld(it: EdItem): SurfacePoint[] {
-    const c = loopWorldCache;
-    if (c && c.id === it.id && c.rev === modelRev && c.scene === sceneRev) return c.points;
-    const points = computePatchLoopWorld(it);
-    loopWorldCache = { id: it.id, rev: modelRev, scene: sceneRev, points };
-    return points;
-  }
-  function computePatchLoopWorld(it: EdItem): SurfacePoint[] {
-    const patch = it.visual.generator?.patch;
-    const host = patch ? itemOf(patch.hostId) : null;
-    if (!patch || !host) return [];
-    const m = patchFrame(it);
-    const points = patch.points.map((p) => loopPointToWorld(m, p));
-    let out: THREE.Vector3;
-    if (patch.facing) {
-      // Stored y down, like the points.
-      out = new THREE.Vector3(patch.facing.x, -patch.facing.y, patch.facing.z).transformDirection(m);
-    } else {
-      const centre = new THREE.Vector3();
-      for (const p of points) centre.add(p);
-      centre.divideScalar(Math.max(1, points.length));
-      const box = new THREE.Box3();
-      for (const mesh of drawnMeshesOf(host)) box.expandByObject(mesh);
-      out = box.isEmpty() ? new THREE.Vector3(0, 0, 1) : centre.clone().sub(box.getCenter(new THREE.Vector3()));
-    }
-    if (out.lengthSq() < 1e-12) out.set(0, 0, 1);
-    out.normalize();
-    return points.map((point) => ({ point, normal: out }));
-  }
-
-  // The faces each patch covered when it was last collected, for the panel's
-  // readout and Edit loop's shading, by item id.
-  const patchSurfaces = new Map<number, SurfaceSelection>();
-
-  // Why a host cannot be grown on as it is drawn now, or null when it can. The
-  // soup is read off the host's DRAWN meshes and sent under a key that names
-  // the host's mesh, so the two must be the same thing: a rock never generated
-  // is drawn as its stand-in extrusion, and a mesh object with no mesh (or one
-  // whose file never loads) as a grey placeholder box - a patch grown on either
-  // would be keyed as the real rock and cached as done.
-  function hostRefusal(host: EdItem): string | null {
-    if (host.visual.generator && !host.visual.mesh) return "the host rock has never been generated: generate the host first";
-    if (host.visual.kind === "mesh" && !host.visual.mesh) return "the host has no mesh to grow on: give it one first";
-    if (host.visual.kind === "image") return "a picture is a flat backdrop with nothing to grow on";
-    return null;
-  }
-
-  // Collect a patch's surface from its host's CURRENT meshes (a regenerated rock
-  // under it is what it grows on next), waiting for a host mesh still loading.
-  //
-  // Only a scene built from THIS model is read. The frame loop rebuilds the
-  // scene only while one is drawn, so a collect started in the Level
-  // workspace's 2D view would otherwise read the last scene built - a host
-  // nudged since would give a soup from its old pose under its new key, cached
-  // as done for ever. `generate` puts the scene on screen first; here the
-  // scene is built for the model as it stands, one frame is let place it, and
-  // an edit in the frames waited (a drag, an undo, a job landing) abandons the
-  // collect rather than reading a scene that is again not the model's.
-  // A selection change moves nothing the soup is read from and is ignored.
-  async function collectPatch(patchId: number): Promise<{ soup: number[]; selection: SurfaceSelection } | { error: string }> {
-    const first = itemOf(patchId);
-    const firstHost = first?.visual.generator?.patch ? itemOf(first.visual.generator.patch.hostId) : null;
-    if (!firstHost) return { error: "the patch has no host to grow on" };
-    const refused = hostRefusal(firstHost);
-    if (refused) return { error: refused };
-    if (!scene3d || !sceneShown()) return { error: "the patch's surface is read off the drawn scene: open the Visuals workspace" };
-    const rev = modelRev;
-    const changed = { error: "the level changed while the patch's surface was being collected; Generate again" };
-    // Built now from this model if the frame loop has not yet (a no-op when
-    // it has), then every body PLACED, which a fresh build is not until its
-    // first frame - read before that, the host's faces are at its body's
-    // origin and the loop covers none of them. Then the host's mesh if it is
-    // still loading, and one more frame for it to be mounted.
-    syncEditorScene();
-    const nextFrame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-    await nextFrame();
-    if (firstHost.visual.kind === "mesh") {
-      const loaded = await loadMesh(firstHost.visual.mesh);
-      if (!loaded) return { error: `the host's mesh ${firstHost.visual.mesh} did not load, so there is no surface to grow on` };
-    }
-    await nextFrame();
-    if (modelRev !== rev) return changed;
-    // The scene on screen is this model's only if its last build succeeded
-    // and nothing took the view away in the frames waited.
-    if (buildError !== null || sceneRev !== modelRev || !sceneShown())
-      return { error: "the scene is not built from the level as it stands, so its surface cannot be read" };
-    const it = itemOf(patchId);
-    const host = it?.visual.generator?.patch ? itemOf(it.visual.generator.patch.hostId) : null;
-    if (!it || !host) return { error: "the patch or its host went while its surface was being collected" };
-    const values = mergeDefaults(it.visual.generator!.params, loadSchema("mushrooms")!);
-    const res = selectSurface(drawnMeshesOf(host), patchLoopWorld(it), {
-      maxSlopeDeg: values["maxSlope"] as number,
-      maxTriangles: values["maxTriangles"] as number,
-    });
-    if (!res.ok) return { error: SURFACE_REFUSALS[res.reason] };
-    patchSurfaces.set(it.id, res.selection);
-    const estimate = res.selection.area * (values["density"] as number);
-    if (estimate > (values["maxEstimate"] as number))
-      return {
-        error: `about ${Math.round(estimate)} mushrooms (${res.selection.area.toFixed(2)} m² at density ${values["density"]}) is over maxEstimate ${values["maxEstimate"]}: paint a smaller loop or lower the density`,
-      };
-    return { soup: soupInFrame(res.selection.positions, patchFrame(it).invert()), selection: res.selection };
-  }
-
-  // The panel's line about a patch's surface.
-  function patchSummary(it: EdItem): string {
-    const s = patchSurfaces.get(it.id);
-    if (!s) return "surface: collected when generated";
-    const density = mergeDefaults(it.visual.generator?.params ?? {}, loadSchema("mushrooms")!)["density"] as number;
-    // Three places for a patch under a tenth of a square metre, which is where
-    // a loop on a steep face ends up once maxSlope has taken the steep faces.
-    const area = s.area.toFixed(s.area < 0.1 ? 3 : 2);
-    return `${s.triangles.toLocaleString("en")} faces · ${area} m² · up to ${Math.round(s.area * density)} mushrooms`;
-  }
-
-  // GENERATE: ask the service for this object's mesh as it now stands. The
-  // request is exactly what the key is made from (`generatorInput`, the params
-  // that differ from the defaults, the schema version the server runs), plus a
-  // patch's surface, collected now.
-  async function generate(item: EdItem): Promise<void> {
-    const id = item.id;
-    const g = item.visual.generator;
-    const schema = g ? loadSchema(g.kind) : undefined;
-    if (!g || !schema) return;
-    const lookup: ItemLookup = itemLookup(model.items);
-    let input: ReturnType<typeof generatorInput>;
-    let key: string | null;
-    try {
-      input = generatorInput(item, lookup);
-      key = wantedKey(item, lookup);
-    } catch {
-      // `generatedKey` refuses a non-finite number rather than hash it.
-      flashNotice("generate: a parameter or the outline is not a finite number");
-      return;
-    }
-    if (!input || !key) {
-      flashNotice(g.kind === "mushrooms" ? "generate: the patch has no host (Edit loop paints it again)" : "generate: a rock needs a polygon or rect outline");
-      return;
-    }
-    const issues = paramIssues(g.params, schema);
-    if (issues.length) {
-      flashNotice(`generate: ${issues[0]}`);
-      return;
-    }
-    const params = stripDefaults(g.params, schema);
-    let soup: number[] | undefined;
-    if (g.kind === "mushrooms") {
-      // The surface is read off the drawn scene, which the Level workspace's 2D
-      // view does not draw (nor rebuild): the patch is generated from the
-      // Visuals workspace, as Edit loop is edited there.
-      if (!sceneShown()) {
-        if (!visuals || mode !== "edit") {
-          flashNotice("generate: a patch's surface is read off the 3D scene, which this page cannot draw");
-          return;
-        }
-        setWorkspace("visuals");
-      }
-      const collected = await collectPatch(id);
-      refreshFields();
-      if ("error" in collected) {
-        flashNotice(`generate: ${collected.error}`);
-        return;
-      }
-      soup = collected.soup;
-      // `collectPatch` refused any edit in the frames it waited, so the patch
-      // is still exactly what `key` was made of.
-    }
-    await jobs.submit(id, { kind: g.kind, key, input, params, ...(soup ? { soup } : {}) });
-  }
-
-  // **Edit loop**: the patch's points as handles on its host's surface.
-  function editLoop(it: EdItem): void {
-    if (!it.visual.generator?.patch || !itemOf(it.visual.generator.patch.hostId)) {
-      flashNotice("Edit loop: the patch has no host; paint a new patch with + Mushrooms");
-      return;
-    }
-    loopEdit = { itemId: it.id };
-    loopEditFill = patchSurfaces.get(it.id)?.positions ?? null;
-    if (!inVisuals()) setWorkspace("visuals");
-    updateTitle();
-  }
-  function endLoopEdit(): void {
-    loopEdit = null;
-    loopEditFill = null;
-    updateTitle();
-  }
-  // The surface Edit loop shades, world frame, kept by identity between frames
-  // (the draft is rebuilt when it changes).
-  let loopEditFill: Float32Array | null = null;
-
-  // A press while a loop is open: a point under the pointer starts a drag of
-  // it. Anything else closes the loop edit and is a press like any other.
-  function pressLoopPoint(scr: Vec2): Drag | null {
-    const it = loopEdit ? itemOf(loopEdit.itemId) : null;
-    if (!it) {
-      endLoopEdit();
-      return null;
-    }
-    const pts = patchLoopWorld(it);
-    for (let i = 0; i < pts.length; i++) {
-      const p = pts[i]!.point;
-      const at = visuals!.screenOf(new Vec2(p.x, threeY(p.y)), p.z);
-      if (at && at.distanceTo(scr) <= HANDLE_HIT_PX) {
-        return { mode: "loopPoint", itemId: it.id, index: i, press: scr, moved: false };
-      }
-    }
-    endLoopEdit();
-    return null;
-  }
-
-  // One move of a loop point's drag: the point goes where the pointer meets its
-  // host's surface, in the patch's own frame. Off the host it stays put.
-  function moveLoopPoint(d: Extract<Drag, { mode: "loopPoint" }>, scr: Vec2): void {
-    const it = itemOf(d.itemId);
-    const patch = it?.visual.generator?.patch;
-    if (!it || !patch) return;
-    const hit = visuals?.surfaceAt(scr, (tag) => itemOfTag(tag)?.id === patch.hostId) ?? null;
-    if (!hit) return;
-    const local = worldToLoopPoint(patchFrame(it).invert(), new THREE.Vector3(hit.point.x, hit.point.y, hit.point.z));
-    patch.points = patch.points.map((p, i) => (i === d.index ? local : p));
-    markDirty();
-  }
-
-  // After a drag of a loop point: shade what the loop covers now, and fit the
-  // patch to it - its origin, rect and depth to the covered faces, as + Mushrooms
-  // placed it - so the gizmo and the selection box stay on the patch rather
-  // than on where the loop used to be. Part of the drag's own undo step.
-  function afterLoopDrag(itemId: number): void {
-    const it = itemOf(itemId);
-    const host = it?.visual.generator?.patch ? itemOf(it.visual.generator.patch.hostId) : null;
-    if (!it || !host) return;
-    const values = mergeDefaults(it.visual.generator!.params, loadSchema("mushrooms")!);
-    const res = selectSurface(drawnMeshesOf(host), patchLoopWorld(it), {
-      maxSlopeDeg: values["maxSlope"] as number,
-      maxTriangles: values["maxTriangles"] as number,
-    });
-    if (res.ok) patchSurfaces.set(itemId, res.selection);
-    else patchSurfaces.delete(itemId);
-    loopEditFill = res.ok ? res.selection.positions : null;
-    const fit = res.ok ? refitPatch(it, patchFrame(it), res.selection.positions) : null;
-    if (fit && it.shape.kind === "rect") {
-      it.pos = fit.pos;
-      it.visual.offsetZ = fit.offsetZ;
-      it.shape = { ...it.shape, w: fit.w, h: fit.h };
-      it.visual.depth = fit.depth;
-      it.visual.generator!.patch!.points = fit.points;
-      markDirty();
-    }
-    refreshFields();
-  }
-
-  // The mushroom loop's draft for the guides: the loop being painted, or the
-  // loop open for editing.
-  // The loop open for editing is kept as one draft object while its points
-  // (`patchLoopWorld`, itself kept per revision) and its shading are the same,
-  // so a frame where nothing moved hands the guides the object they already
-  // hold.
-  let loopEditDraft: { points: readonly SurfacePoint[]; fill: Float32Array | null; draft: GuideDraft } | null = null;
-  function surfaceDraftGuide(): GuideDraft | null {
-    if (loopEdit) {
-      const it = itemOf(loopEdit.itemId);
-      if (!it) return null;
-      const points = patchLoopWorld(it);
-      const d = loopEditDraft;
-      if (d && d.points === points && d.fill === loopEditFill) return d.draft;
-      loopEditDraft = { points, fill: loopEditFill, draft: closedDraft(points, loopEditFill) };
-      return loopEditDraft.draft;
-    }
-    return tool === "mushrooms" ? surfaceLoop.draft() : null;
-  }
-
-  // `+ Geometry` in the Visuals workspace: a click places a PROP - a mesh
-  // geometry object wearing the last mesh chosen (`VisualsWorkspace.propMesh`)
-  // - where the pointer is. Dragging out a box is a plan gesture, and what a
-  // prop is has nothing to do with the box it was placed with. On the plane it
-  // lands under the pointer in the plane it is drawn in; with Shift, on the
-  // surface under the pointer (with Ctrl as well, standing up along its
-  // normal), which is how a rock is put on a ledge in one click.
-  function placeProp(p: ScenePress): void {
-    const hit = p.shift ? surfaceUnder(p.scr, null) : null;
-    if (p.shift && !hit) {
-      flashNotice("no surface under the pointer to place the prop on");
-      return;
-    }
-    beginAction();
-    const item = newDrawnItem("geometry", p.world);
-    item.shape = { kind: "rect", w: PROP_FOOTPRINT, h: PROP_FOOTPRINT };
-    item.visual.kind = "mesh";
-    item.visual.mesh = visuals!.propMesh;
-    model.items.push(item);
-    syncBodyProps(bodyMembers(model.items, item.bodyId));
-    if (hit) {
-      const at = surfacePlacement(hit.point);
-      item.pos = at.pos;
-      item.visual.offsetZ = at.z;
-      if (p.ctrl) {
-        const t = alignUp({ rot: 0, rotX: 0, rotY: 0 }, hit.normal);
-        item.rot = t.rot;
-        item.visual.rotX = t.rotX;
-        item.visual.rotY = t.rotY;
-      }
-    } else {
-      // The plane it is DRAWN in (`itemDepth`: a prop on a body that collides
-      // with nothing stands at the decoration depth), so it appears where it
-      // was clicked rather than that far behind it.
-      item.pos = snapVec(canvasWorld(p.scr, itemDepth(item, bodyCollides(item.bodyId))));
-    }
-    setSelection([item.id]);
-    markDirty();
-    rebuildInspector();
+    unsnapped(() => handlers.apply("translate", pos, itemQuat(it), new THREE.Vector3(1, 1, 1)));
   }
 
   // A press on a mover's route: a node, a tangent grip, or a leg midpoint that
@@ -10399,9 +8399,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       return null;
     }
     const s = selected();
-    // A handle that is not DRAWN must not be grabbable either, or a click in
-    // what looks like empty space starts a resize (see `hasPlaneHandles`).
-    if (!s || !hasPlaneHandles(s, overlayLayers())) return null;
+    if (!s) return null;
     const h = computeHandles(camera, s);
     if (h.ends) {
       // Head first, so a zero-length arrow (a click that never dragged) still
@@ -10596,15 +8594,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         return;
       }
     } else if (scene) {
-      // 0. A mushroom loop open for editing: its points are the handles, and a
-      // press anywhere else closes it and goes on as a press.
-      if (loopEdit) {
-        const d = pressLoopPoint(scr);
-        if (d) {
-          drag = d;
-          return;
-        }
-      }
       // 1. The guides' handles: the selected shape's corners and midpoints.
       const h = pickSceneHandle(tags, e.altKey, e.shiftKey);
       if (h === "consumed") return;
@@ -10617,15 +8606,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // toolbar says: every draw gesture previews on the overlay, and the overlay
     // is not on screen there, so an armed tool would author geometry blind.
     const drawTool = turned && !scene ? "select" : tool;
-    // 1a. A tool of the Visuals workspace's own (see `sceneToolPress`), whose
-    // gesture is about the scene rather than the plane.
-    if (scene && drawTool !== "select") {
-      const press = sceneToolPress[drawTool];
-      if (press) {
-        press({ scr, world, shift: e.shiftKey, ctrl: e.ctrlKey || e.metaKey, tags });
-        return;
-      }
-    }
     // 1b. Polygon drafting: a run of clicks, not a drag. Clicking the first
     // vertex again (or Enter) closes the loop; Esc drops it.
     if (drawTool === "poly" || drawTool === "path") {
@@ -10743,21 +8723,17 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // cannot disagree about what was under the pointer.
     const cands = pickCandidatesAt(world, scr);
     const hit = cands[0] ?? null;
-    // 3b. DROP ON SURFACE (Visuals): Shift-drag of the selected prop or light,
-    // wherever it is in the stack under the pointer - a prop is usually drawn
-    // over the collision box that wins the pick, and the gesture is about the
+    // 3b. DROP ON SURFACE (Visuals): Shift-drag of the selected light,
+    // wherever it is in the stack under the pointer - the gesture is about the
     // selected thing, which is plainly what was pressed on.
     if (scene && e.shiftKey && !e.altKey && selectedIds.size === 1) {
-      const dropped = cands.find(
-        (c) => selectedIds.has(c.id) && (c.object === "geometry" || c.object === "light"),
-      );
+      const dropped = cands.find((c) => selectedIds.has(c.id) && c.object === "light");
       if (dropped) {
         drag = {
           mode: "surfaceDrop",
           item: dropped,
           press: scr,
           handlers: null,
-          tilt: null,
           pick: () => toggleSelection(dropped.id),
         };
         return;
@@ -10765,7 +8741,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     }
     // The plane a drag of `it` is resolved in: the one it is drawn in, so with
     // the view turned it stays under the pointer (see `move`'s `planeZ`).
-    const planeOf = (it: EdItem): number => (turned ? guidePlaneZ(it, bodyCollides(it.bodyId)) : 0);
+    const planeOf = (it: EdItem): number => (turned ? guidePlaneZ(it) : 0);
     if (hit) {
       // CLICK THE BODY, THEN CLICK INTO IT. A click on a body that is not the
       // one being edited selects the BODY - the thing with the transform, the
@@ -10964,14 +8940,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // pick target has to be measured in.
   const worldLine = (): number => 1 / (camera.zoom * PIXELS_PER_METER);
 
-  // Whether a pick asks the SCENE rather than the gameplay plane. With a 3D view
-  // on screen a geometry object is drawn as a solid - an extrusion through z, or
-  // a prop that is not its authored outline at all - so where that solid is on
-  // screen is where it is clickable. In the 2D view there is no scene to ask and
-  // the outline is both what is drawn and what is picked, exactly as before.
+  // Whether a pick asks the SCENE rather than the gameplay plane: with a 3D view
+  // on screen there are models to ask (a body's Blender dressing, a grey box).
+  // In the 2D view there is no scene to ask and the outline is both what is
+  // drawn and what is picked.
   const picks3d = (): boolean => overlayLayers() === "outline" && sceneLevel !== null;
 
-  // The geometry objects under the pointer in the 3D scene, as item ids, nearest
+  // The items under the pointer in the 3D scene, as item ids, nearest
   // first collapsed into a set - the ORDER a pick prefers them in is `pickOrder`'s
   // and is not this function's to have an opinion about. Null when the scene is
   // not what is on screen, which is what leaves the 2D view untouched.
@@ -10995,9 +8970,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
 
   // Does a click at `world` land on this item? Everything is its own outline
   // except a LIGHT, which is its icon rather than its reach - see
-  // `lightPickRadius` - and a GEOMETRY OBJECT once there is a scene to ask, which
-  // is the model that was drawn for it rather than the rectangle it was placed
-  // with (see `raycastItems`).
+  // `lightPickRadius` - and, in the Visuals workspace, whatever the scene's
+  // models and guides under the pointer name (see `raycastItems`).
   function hitsItem(b: EdItem, world: Vec2, ray: ReadonlySet<number> | null = null): boolean {
     // An anchor is never picked as an ITEM. Its canvas presence is the ring its
     // chain draws at it, and that ring is already a drag handle - two things
@@ -11025,7 +8999,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // is the floor there).
       return world.distanceTo(b.pos) <= (inVisuals() ? halfExtents(b).x : checkpointPickRadius(b));
     }
-    if (ray && b.object === "geometry") return ray.has(b.id);
     return pointInBody(b, world);
   }
 
@@ -11253,7 +9226,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (mode !== "edit") return;
     const scr = pointerScreen(e);
     lastPointerScreen = scr;
-    if (!drag && inVisuals() && tool === "mushrooms" && !surfaceLoop.empty) hoverLoop(scr);
     if (!drag) return;
     // Resolved in the plane the dragged thing is drawn in (see `move`'s
     // `planeZ`); every other drag is on the gameplay plane.
@@ -11267,7 +9239,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // click's slop, so a click that drills into a body cannot also nudge it by
     // the pixel the hand shook by - and, since nothing is written before that,
     // there is no undo step for the nudge that did not happen either.
-    if ((drag.mode === "move" || drag.mode === "loopPoint") && !drag.moved) {
+    if (drag.mode === "move" && !drag.moved) {
       if (scr.distanceTo(drag.press) < CLICK_SLOP_PX) return;
       drag.moved = true;
     }
@@ -11323,10 +9295,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         refreshOrbitBtn();
         break;
       case "surfaceDrop":
-        surfaceDropMove(drag, scr, e.ctrlKey || e.metaKey);
-        break;
-      case "loopPoint":
-        moveLoopPoint(drag, scr);
+        surfaceDropMove(drag, scr);
         break;
       case "orbit": {
         const d = scr.sub(drag.lastScreen);
@@ -11464,8 +9433,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         // depth is a metre of the level on screen.
         const dz = (drag.press.y - scr.y) / (camera.zoom * PIXELS_PER_METER);
         const z = snap(drag.base + dz);
-        if (drag.body.object === "geometry") drag.body.visual.offsetZ = z;
-        else if (drag.body.object === "light") drag.body.light.z = z;
+        if (drag.body.object === "light") drag.body.light.z = z;
         markDirty();
         refreshFields();
         break;
@@ -11716,8 +9684,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (drag.mode === "panPick" && drag.travel < CLICK_SLOP_PX) drag.pick();
     if (drag.mode === "move" && !drag.moved) drag.pick?.();
     if (drag.mode === "view") visuals?.endView();
-    // A point that never left the click's slop was not moved: nothing to fit.
-    if (drag.mode === "loopPoint" && drag.moved) afterLoopDrag(drag.itemId);
     if (drag.mode === "surfaceDrop") {
       if (drag.handlers) drag.handlers.end("translate");
       else drag.pick();
@@ -11838,10 +9804,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (e.code === "Escape") {
       if (mode === "test") stopTest();
       else if (polyDraft) cancelPolyDraft();
-      else if (!surfaceLoop.empty) {
-        surfaceLoop.clear();
-        updateTitle();
-      } else if (loopEdit) endLoopEdit();
       // The vertex selection goes first, for the reason a click on empty space
       // drops it first: it is the innermost thing selected, and dropping it is
       // how the shape stops being open for vertex editing.
@@ -11877,16 +9839,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       return;
     }
     if (mode !== "edit") return;
-    // Ctrl+Enter generates the selected generated object - from inside one of
-    // its parameter fields too, so a value can be typed and tried in one go.
-    if ((e.ctrlKey || e.metaKey) && (e.code === "Enter" || e.code === "NumpadEnter")) {
-      const s = selected();
-      if (s && s.object === "geometry" && s.visual.generator) {
-        void generate(s);
-        e.preventDefault();
-        return;
-      }
-    }
     // Ignore shortcuts while a field that consumes keystrokes has focus (let
     // its native editing/undo win). Toggles don't consume them, so clicking the
     // snap checkbox must not leave the editor deaf to shortcuts.
@@ -11957,20 +9909,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       e.preventDefault();
       return;
     }
-    // The mushroom loop: Enter closes the one being painted, or ends Edit loop.
-    if ((e.code === "Enter" || e.code === "NumpadEnter") && (surfaceLoop.closable || loopEdit)) {
-      if (surfaceLoop.closable) closeSurfaceLoop();
-      else endLoopEdit();
-      e.preventDefault();
-      return;
-    }
-    // ...and Backspace takes its last point back, before Backspace deletes.
-    if (e.code === "Backspace" && !surfaceLoop.empty) {
-      surfaceLoop.pop();
-      updateTitle();
-      e.preventDefault();
-      return;
-    }
     // The workspace switch, and the Visuals workspace's two view keys. Each is
     // one action per press: a held key's auto-repeat would flip the workspace
     // back and forth (or re-frame and re-reset the view) until it is let go.
@@ -11984,7 +9922,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     }
     if (inVisuals() && e.code === "KeyF") {
       // The selection's box, or the level's when nothing is selected.
-      const box = itemsBox(model, operandItems()) ?? levelBox(model);
+      const box = itemsBox(operandItems()) ?? levelBox(model);
       visuals!.frameBox(box);
       refreshOrbitBtn();
       e.preventDefault();
@@ -12096,23 +10034,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   function visualsStatus(): string {
     const nav = "middle drag orbit · Shift+middle or right drag pan · wheel dolly · F frame · Home head-on · W Level";
     let what = "";
-    if (loopEdit) {
-      what = "Edit loop: drag a point along the surface · Enter or Esc ends · Generate on the panel regrows the patch";
-    } else if (tool === "rock") {
-      what = "click a collision outline (or its matched geometry) to dress it with a generated rock";
-    } else if (tool === "mushrooms") {
-      const n = surfaceLoop.points.length;
-      what = n
-        ? `${n} point${n === 1 ? "" : "s"} on the model${n >= 3 ? " · Enter or the first point closes" : ""} · Backspace drops the last · Esc cancels`
-        : "click a loop onto a drawn model's faces · Enter or the first point closes it";
-    } else if (tool === "geometry") {
-      what = `click places ${visuals!.propMesh} on the plane · Shift+click on a surface (Ctrl stands it up)`;
-    } else if (tool === "poly" || tool === "path") {
+    if (tool === "poly" || tool === "path") {
       what = "click out the vertices on the plane · Enter finishes · Esc drops it";
     } else if (tool === "select") {
       const s = selected();
-      if (s && (s.object === "geometry" || s.object === "light")) {
-        what = "Shift-drag drops it on a surface (Ctrl aligns a prop) · the gizmo moves it through z";
+      if (s && s.object === "light") {
+        what = "Shift-drag drops it on a surface · the gizmo moves it through z";
       } else if (vertexEditTarget()) {
         what = "drag a corner · a midpoint inserts one · Alt+click removes · Shift+click picks several";
       }
@@ -12252,9 +10179,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // only on selection. It is a revision check and a class toggle per row
       // unless the model actually moved.
       refreshOutliner();
-      // A generation that finished during a drag lands now that it is over
-      // (free when none is waiting).
-      jobs.flush();
       // The scene first, then the editor's own canvas over it. Both are driven
       // from the SAME free camera through `space.ts`, so an outline drawn on top
       // lands on the geometry it describes underneath at any pan or zoom - which
@@ -12287,7 +10211,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           visuals!.apply();
           visuals!.sync(
             { model, rev: modelRev, selectedIds, selectedBodyIds, selectedVerts, visibleLayers, lockedLayers },
-            polyDraftGuide() ?? surfaceDraftGuide(),
+            polyDraftGuide(),
           );
         }
         if (sceneLevel) scene3d.render(sceneLevel, camera, 1, inVisuals() ? NO_ORBIT : orbit);
@@ -12564,7 +10488,6 @@ function injectStyles(): void {
      geometry plain, decoration teal (its dashed editor outline), a light amber
      (it is the one furniture layer whose colour is authored), an anchor the
      forged iron of the chain it ties. */
-  .ed-out-row.obj.decor .ed-out-label { color: #6fb3a8; }
   .ed-out-row.obj.light .ed-out-label { color: #e5c07b; }
   .ed-out-row.obj.anchor .ed-out-label { color: #9a8c7a; }
   .ed-out-row.obj.chain .ed-out-label { color: #9a8c7a; }
@@ -12579,7 +10502,6 @@ function injectStyles(): void {
   .ed-test-banner { position: fixed; top: 8px; left: 50%; transform: translateX(-50%);
     background: rgba(31,36,48,0.92); border: 1px solid #65bddb; color: #65bddb;
     font-family: monospace; font-size: 13px; padding: 4px 12px; border-radius: 2px; z-index: 10; }
-  ${GENERATOR_PANEL_CSS}
   ${PANEL_UI_CSS}
   `;
   document.head.appendChild(s);

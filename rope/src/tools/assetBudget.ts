@@ -25,9 +25,14 @@
 //                that nothing can draw; a `.glb` is self-contained, so there is
 //                no sidecar that would legitimately be unreferenced.
 //   PROVENANCE - an entry with no `source`/`license`. See `MeshAsset`.
-//   UNPUBLISHED - a generated mesh a registered level names that the store
-//                does not hold (`bun run assets:publish-generated`), or a
-//                store entry no level names any more.
+//   UNPUBLISHED - a Blender scene a registered level names that the store
+//                does not hold (`just publish`), or a store entry no level
+//                names any more.
+//   UNDRAWN    - a prop or texture entry nothing draws: not named by the code
+//                that draws the game's own things (`BALL_MESH`,
+//                `IRON_SURFACE`) nor worn by a registered level's conveyor. A
+//                level's look is its Blender scene, so an entry the levels
+//                used to name is left behind by the scene taking it over.
 //
 // Then the budget itself.
 
@@ -36,13 +41,19 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
-import { HDRI_ASSETS, MESH_ASSETS, RAW_ASSETS, TEXTURE_ASSETS } from "../render3d/assets";
-import { GENERATED_ASSETS } from "../render3d/generatedMeta";
-import { IMAGE_ASSETS } from "../render3d/images";
-import { levelImageKeys } from "../render3d/levelAssets";
+import {
+  BALL_MESH,
+  HDRI_ASSETS,
+  IRON_SURFACE,
+  MESH_ASSETS,
+  RAW_ASSETS,
+  surfaceName,
+  TEXTURE_ASSETS,
+} from "../render3d/assets";
 import { SCENE_ASSETS, isSceneName } from "../render3d/scenes";
+import { normalizeLevelData } from "../level/levelFormat";
 import { LEVELS } from "../level/registry";
-import { assetName, levelsGeneratedKeys, levelsSceneNames, storedAssets } from "../../scripts/assetStore";
+import { assetName, levelsSceneNames, storedAssets } from "../../scripts/assetStore";
 import { CREDITS_PATH, renderCredits } from "../../scripts/credits";
 
 const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
@@ -55,7 +66,6 @@ const ASSET_DIRS = [
   join(PUBLIC_DIR, "textures"),
   join(PUBLIC_DIR, "water"),
   join(PUBLIC_DIR, "hdri"),
-  join(PUBLIC_DIR, "images"),
 ];
 
 // The store itself imposes nothing worth budgeting against - a GitHub Release
@@ -111,21 +121,15 @@ function mb(bytes: number): string {
 
 export function runAssetChecks(): AssetCheck[] {
   const stored = storedAssets();
-  // `public/generated/` is not walked: it is the generator service's scratch,
-  // every seed ever tried, and a file there no manifest names is expected. The
-  // published ones are the store's, so they are held to it and to the budget
-  // like any prop (the build ships them).
-  //
-  // `public/scenes/` is not walked either, for the same kind of reason: beside
-  // each `scene.glb` is the export's `meta.json`, and a scene no level names
-  // any more stays on disk until someone deletes it. The pinned ones are held
-  // like the published generated meshes. (Until this, every pinned scene read
-  // as missing, since no walked directory held it.)
-  const generatedFiles = stored
-    .filter((a) => a.name?.startsWith("generated-") || a.key.startsWith("scene:"))
+  // `public/scenes/` is not walked: beside each `scene.glb` is the export's
+  // `meta.json`, and a scene no level names any more stays on disk until
+  // someone deletes it. The pinned ones are the store's, so they are held to it
+  // and to the budget like any prop (the build ships them).
+  const sceneFiles = stored
+    .filter((a) => a.key.startsWith("scene:"))
     .map((a) => join(PUBLIC_DIR, a.file.replace(/^\//, "")))
     .filter((path) => existsSync(path));
-  const files = [...ASSET_DIRS.flatMap(walk), ...generatedFiles].sort();
+  const files = [...ASSET_DIRS.flatMap(walk), ...sceneFiles].sort();
   const checks: AssetCheck[] = [];
 
   // Props and texture maps in one list (`storedAssets`), so neither manifest can
@@ -191,7 +195,7 @@ export function runAssetChecks(): AssetCheck[] {
   });
 
   // One flat namespace in the release, keyed by name (the basename, or a
-  // generated mesh's `generatedReleaseName`) - so two entries whose files
+  // scene's `sceneReleaseName`) - so two entries whose files
   // differ only by directory would overwrite each other on publish and then
   // both fetch the same bytes, which is a level quietly wearing the wrong prop
   // rather than any kind of error.
@@ -209,30 +213,10 @@ export function runAssetChecks(): AssetCheck[] {
       : `${byName.size} distinct filename(s)`,
   });
 
-  // The store holds exactly the generated meshes the levels name. One missing
-  // is a level that deploys with stand-ins (the fetch refuses it too, so this
-  // is the same failure found before the push rather than in the build); one
-  // extra is bytes the build fetches and then drops.
-  const named = levelsGeneratedKeys();
-  const unpublished = [...named].filter(([key]) => !GENERATED_ASSETS[key]);
-  const unnamed = Object.keys(GENERATED_ASSETS).filter((key) => !named.has(key));
-  checks.push({
-    name: "assets: the store holds exactly the generated meshes the levels name",
-    pass: unpublished.length === 0 && unnamed.length === 0,
-    detail:
-      unpublished.length || unnamed.length
-        ? "run `bun run assets:publish-generated`: " +
-          [
-            ...unpublished.map(([key, levels]) => `${key} (${levels.join(", ")}) not published`),
-            ...unnamed.map((key) => `${key} named by no level`),
-          ].join(", ")
-        : `${named.size} generated mesh(es) published`,
-  });
-
-  // The store holds exactly the Blender scenes the levels name, for the
-  // reason it holds exactly the generated meshes: a scene missing is a level
-  // that deploys undressed (the fetch refuses it too), an extra is bytes the
-  // build fetches and drops. And a level can only name a scene the store can
+  // The store holds exactly the Blender scenes the levels name: a scene
+  // missing is a level that deploys with no look at all (the fetch refuses it
+  // too, so this is the same failure found before the push rather than in the
+  // build), an extra is bytes the build fetches and drops. And a level can only name a scene the store can
   // hold: the name is a directory and a release asset (see `SCENE_NAME`).
   const scenes = levelsSceneNames();
   const misnamed = [...scenes].filter(([scene]) => !isSceneName(scene));
@@ -251,22 +235,27 @@ export function runAssetChecks(): AssetCheck[] {
         : `${scenes.size} scene(s) published`,
   });
 
-  // Every picture a registered level shows is in the image manifest. One that
-  // is not draws as a grey plane in game - visible, but only to someone who
-  // walks past it - and it is what a level committed from a machine whose
-  // upload never reached the manifest looks like.
-  const unknownImages: string[] = [];
-  for (const [id, spec] of Object.entries(LEVELS)) {
-    for (const key of levelImageKeys(spec.data)) {
-      if (!IMAGE_ASSETS[key]) unknownImages.push(`${key} (${id})`);
+  // Every prop and texture entry is drawn by something (UNDRAWN above). The
+  // game's own things are named in code; a conveyor's band wears the surface
+  // its level names (`BeltLook.texture`), resolved as the renderer resolves it.
+  const worn = new Set<string>([IRON_SURFACE]);
+  for (const spec of Object.values(LEVELS)) {
+    for (const body of normalizeLevelData(spec.data).bodies) {
+      for (const o of body.objects) {
+        if (o.type === "collision" && o.shape.kind === "belt") worn.add(surfaceName(o.shape.texture));
+      }
     }
   }
+  const undrawn = [
+    ...Object.keys(MESH_ASSETS).filter((key) => key !== BALL_MESH),
+    ...Object.keys(TEXTURE_ASSETS).filter((key) => !worn.has(key)),
+  ];
   checks.push({
-    name: "assets: every picture a level shows is in the image manifest",
-    pass: unknownImages.length === 0,
-    detail: unknownImages.length
-      ? `not in src/render3d/imageAssets.json (upload it in the editor): ${unknownImages.join(", ")}`
-      : `${Object.keys(IMAGE_ASSETS).length} picture(s) in the manifest`,
+    name: "assets: every prop and texture entry is drawn by something",
+    pass: undrawn.length === 0,
+    detail: undrawn.length
+      ? `drawn by nothing (a level's look is its Blender scene) - remove the entry: ${undrawn.join(", ")}`
+      : `${Object.keys(MESH_ASSETS).length + Object.keys(TEXTURE_ASSETS).length} entr(ies) drawn`,
   });
 
   const orphans = files.filter((f) => !referenced.has(f));
@@ -285,7 +274,6 @@ export function runAssetChecks(): AssetCheck[] {
     ...Object.entries(TEXTURE_ASSETS),
     ...Object.entries(RAW_ASSETS),
     ...Object.entries(HDRI_ASSETS),
-    ...Object.entries(IMAGE_ASSETS),
   ];
   const unsourced = provenance
     .filter(([, a]) => !a.source?.trim() || !a.license?.trim() || !a.author?.trim())

@@ -1,5 +1,5 @@
 {
-  "_comment": "Where every image a Blender scene ships comes from. The scene exporter (scene_export.py) looks each packed/linked image up by name (Blender's .001 suffix ignored); a credit lands in the export's meta, is pinned by `just publish` in src/render3d/sceneAssets.json and listed in CREDITS.md; `generated` names the script that made an original image, which needs no credit. An image not listed here is an export warning.",
+  "_comment": "Where every image a Blender scene ships comes from. The scene exporter (scene_export.py) looks each packed/linked image up by name (Blender's .001 suffix ignored); a credit lands in the export's meta, is pinned by `just publish` in src/render3d/sceneAssets.json and listed in CREDITS.md; `generated` names the script that made an original image, which needs no credit. An image not listed here is an export warning. A mesh that is someone else's model names its sets in the object's `credits` custom property (comma-separated), which is how a model's credit survives with no image to find it by.",
   "images": {
     "moss-grass05-base.png": "grass_05",
     "moss-grass05-normal.png": "grass_05",
@@ -7,7 +7,38 @@
     "moss01-base.png": "moss_ground_01",
     "moss01-normal.png": "moss_ground_01",
     "basalt_surface.png": { "generated": "assets-src/scenes/cavern/generate_cave.py" },
-    "moss-cutout-atlas.png": { "generated": "tools/blender/moss/mesh_io.py" }
+    "moss-cutout-atlas.png": { "generated": "tools/blender/moss/mesh_io.py" },
+    "generated": { "generated": "src/render3d/assets.ts" },
+    "boulder_BaseColor": { "generated": "tools/blender/boulders/blender_build.py" },
+    "boulder_Normal": { "generated": "tools/blender/boulders/blender_build.py" },
+    "T_Mushroom_Albedo": { "generated": "tools/blender/mushrooms/mushroom_patch_tools.py" },
+    "T_Mushroom_Emissive": { "generated": "tools/blender/mushrooms/mushroom_patch_tools.py" },
+    "T_Mushroom_ORM": { "generated": "tools/blender/mushrooms/mushroom_patch_tools.py" },
+    "dark rock-base": "dark_rock_02",
+    "dark rock-normal": "dark_rock_02",
+    "dark rock-roughness": "dark_rock_02",
+    "moss-dark-base": "moss_003",
+    "moss-dark-normal": "moss_003",
+    "moss-dark-roughness": "moss_003",
+    "rusted iron-base": "metal_053b",
+    "rusted iron-normal": "metal_053b",
+    "rusted iron-roughness": "metal_053b",
+    "rusted iron-metallic": "metal_053b",
+    "moss-145-basecolor": "moss_ground_01",
+    "moss-145-normal": "moss_ground_01",
+    "moss-145-ao-moss-145-roughness": "moss_ground_01",
+    "moss-160-basecolor": "moss_ground_01",
+    "moss-160-normal": "moss_ground_01",
+    "moss-160-ao-moss-160-roughness": "moss_ground_01",
+    "moss-190-basecolor": "moss_ground_01",
+    "moss-190-normal": "moss_ground_01",
+    "moss-190-ao-moss-190-roughness": "moss_ground_01",
+    "moss-191-basecolor": "moss_ground_01",
+    "moss-191-normal": "moss_ground_01",
+    "moss-191-ao-moss-191-roughness": "moss_ground_01",
+    "rock-14-map": "pbr_rock_cliffs_pack",
+    "rock-14-normalMap": "pbr_rock_cliffs_pack",
+    "rock-14-roughnessMap": "pbr_rock_cliffs_pack"
   },
   "sets": {
     "grass_05": {
@@ -19,6 +50,36 @@
       "author": "FreeStylized",
       "source": "https://freestylized.com/material/moss_ground_01/",
       "license": "FreeStylized CC0 (no redistribution of the unmodified pack)"
+    },
+    "dark_rock_02": {
+      "author": "Amal Kumar",
+      "source": "https://polyhaven.com/a/dark_rock_02",
+      "license": "CC0"
+    },
+    "moss_003": {
+      "author": "ambientCG (Lennart Demes)",
+      "source": "https://ambientcg.com/view?id=Moss003",
+      "license": "CC0"
+    },
+    "metal_053b": {
+      "author": "ambientCG (Lennart Demes)",
+      "source": "https://ambientcg.com/view?id=Metal053B",
+      "license": "CC0"
+    },
+    "wooden_stool": {
+      "author": "yoyo83710",
+      "source": "https://sketchfab.com/3d-models/wooden-stool-528f72346b2f4a1096c1d5104b731d04",
+      "license": "CC BY 4.0"
+    },
+    "finish_line": {
+      "author": "hyd (@hydroh)",
+      "source": "https://sketchfab.com/3d-models/finish-line-7ec1d8194ddf46e6b398d336df0b5d7a",
+      "license": "Sketchfab Standard"
+    },
+    "pbr_rock_cliffs_pack": {
+      "author": "Maksim Batyrev (@c3posw01)",
+      "source": "https://sketchfab.com/3d-models/pbr-rock-cliffs-pack-8fa6cabbbf0c431a9f5ffe91eb0b9090",
+      "license": "CC BY 4.0"
     }
   }
 }

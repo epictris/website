@@ -56,9 +56,3 @@ export function isGuideTag(tag: unknown): tag is GuideTag {
   const t = tag as Partial<GuideTag>;
   return typeof t.guide === "string" && typeof t.id === "number";
 }
-
-// Equality by what a tag names rather than by identity: two rebuilds of the
-// guides tag the same corner with two different objects.
-export function sameGuide(a: GuideTag, b: GuideTag): boolean {
-  return a.guide === b.guide && a.id === b.id && a.index === b.index;
-}

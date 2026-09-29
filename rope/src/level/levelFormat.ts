@@ -9,7 +9,7 @@
 // `scaleLevelData(data, PIXELS_PER_METER)` converts back for saving to disk.
 //
 // THE SHAPE OF A LEVEL. A level is a list of BODIES, and a body is a list of
-// SCENE OBJECTS: a collision shape, a light source, or a piece of 3D geometry.
+// SCENE OBJECTS: a collision shape, a light source, or a chain anchor.
 // Everything a body has that is one-per-body — what it collides as, what colour
 // it is, how much a current in it pushes — lives on the body; everything a body
 // may have several of lives on its objects.
@@ -23,8 +23,10 @@
 //   body has exactly one of cannot be authored several times and then quietly
 //   collapsed onto the first member's (`syncGroupProps` is gone with it).
 // - DECORATION was `collision: false` on a body-shaped entry - a shape that had
-//   to carry, and then ignore, every physics field. Now it is a body with a
-//   geometry object and no collision object, so there is nothing to ignore.
+//   to carry, and then ignore, every physics field. Then it was a body with a
+//   geometry object and no collision object. Now it is not in the level at all:
+//   what a level LOOKS like is its Blender scene (`scene`, docs/blender-scenes.md)
+//   and the level holds what the game simulates and lights.
 // - A LIGHT was its own top-level list with no parent, so it could not ride
 //   anything, and a lamp was TWO authored objects at the same point that nothing
 //   kept in step. That gap was patched by deriving a light from a glowing shape,
@@ -83,7 +85,6 @@
 // kind on the way through would be a field that forgets.
 import { dmath } from "../engine/dmath";
 import { LAYER_HOOK, LAYER_PLAYER, LAYER_ROPE, MASK_ALL } from "../engine/body";
-import { loadSchema, scaleParams, type GeneratorKind, type ParamValues } from "./generatorParams";
 
 export type BodyKind = "static" | "killzone" | "rigid" | "force" | "water" | "finish";
 
@@ -328,19 +329,37 @@ export const LEGACY_IMPERMEABLE = "impermeable";
 // of those discs, every wheel on it. `wheels[0]` is at (0, 0), the object's own
 // origin, so placing the object places the belt (the argument `moveNodes`
 // makes for node zero), and is written out anyway because it carries a radius.
-// `thickness` is the band's depth IN THE PLANE, a length, > 0; how wide the
-// band is across the pulleys is a look, the geometry twin's `depth`. `speed`
+// `thickness` is the band's depth IN THE PLANE, a length, > 0. `speed`
 // is ONE SIGNED NUMBER - px/s on disk, m/s in the sim - and its sign is the
 // direction, as `spinPeriod`'s is: positive turns the loop clockwise on
 // screen. It builds one disc per wheel and one thin quad per run, nothing
 // between the wheels, on a STATIC body that does not move; anything else fails
 // the build.
+//
+// A belt also carries its BAND's look, because the band is drawn by the game
+// rather than by the level's Blender scene: its surface runs round the loop at
+// `speed`, which a mesh cannot (`render3d/beltTread.ts`, docs/conveyors.md).
+// See `BeltLook`.
 export type ShapeData =
   | { kind: "rect"; w: number; h: number }
   | { kind: "circle"; r: number }
   | { kind: "poly"; verts: { x: number; y: number }[] }
   | { kind: "curve"; verts: CurveVertData[]; width: number }
-  | { kind: "belt"; wheels: BeltWheelData[]; thickness: number; speed: number };
+  | ({ kind: "belt"; wheels: BeltWheelData[]; thickness: number; speed: number } & BeltLook);
+
+// How a belt's band looks. `width` is how wide the band is across the pulleys,
+// a length through z (absent = `DEFAULT_THICKNESS`); `texture` the surface it
+// wears, a `TEXTURE_ASSETS`/`TEXTURE_SETS` key, whose pattern scrolls with the
+// band - or the reserved `"color"`, a flat fill of `color` carrying a ring of
+// cleats instead, since flat paint has nothing to be seen moving; `tileScale`
+// how large it wears that texture, a multiple of the texture's own size and so
+// not a length.
+export interface BeltLook {
+  width?: number;
+  texture?: string;
+  color?: string;
+  tileScale?: number;
+}
 
 // One wheel of an authored BELT (`ShapeData`'s `belt`): its centre in the
 // object's frame and the wheel's own radius, which the band lies on.
@@ -558,324 +577,6 @@ export interface CollisionObjectData extends ObjectPlacement {
   material?: string;
   // Metres in the sim, scene pixels on disk like every other length.
   thickness?: number;
-}
-
-// A piece of 3D GEOMETRY: what the body looks like, as opposed to what it
-// collides as. Render-only throughout — `sim/*`, the mass computation in
-// `buildBodies.ts` and `contactCases.ts` all ignore it, and a level with none of
-// it plays identically.
-//
-// NOTHING ELSE DRAWS. A collision object is what a body is made of and a
-// geometry object is what it looks like, and a body with no geometry object is
-// drawn by nothing at all - an invisible wall, which is a thing a level may
-// perfectly well want. The two used to be one authored thing (a collision shape
-// drew itself whenever nobody said otherwise), which meant there was no way to
-// say "this collides differently from how it looks" without also saying how it
-// looks. Levels written in the LEGACY form are given the geometry object that
-// states it, once, at load (`withGeometryTwin` in this file), so nothing on disk
-// changed appearance when the default went away. A body in the current form is
-// left exactly as authored, however bare: an editor draw makes a collision object
-// and nothing else, and a loader that invented a look for it would make "drawn"
-// and "simulated" one decision again by the back door.
-//
-// A GEOMETRY OBJECT CARRIES ITS OWN FORM, always. Its `shape` and its placement
-// are what is drawn and where, and no part of them is read off a collision
-// object: a primitive nudged 10 cm left, turned 5° and made twice as wide moves,
-// turns and grows on screen while the body goes on colliding exactly as it did.
-//
-// It used to be able to have NO shape, and then it drew the body's collision
-// outlines - which is how a wall wore brick without restating its outline, and
-// what every migrated body was given. The saving was real and the cost was that
-// the two were not actually separate things: the geometry object's own `x`, `y`,
-// `rot`, `w` and `h` were dead fields on the commonest object in every level,
-// silently overridden by the shape it was standing in for. Levels are migrated
-// to primitives that state the outline they were drawing (see
-// `scripts/migrate-primitives.ts`), so nothing changed appearance and every one
-// of those fields now means what it says.
-// The two lenses a geometry object can be drawn through (see
-// `GeometryObjectData.projection`).
-export type GeometryProjection = "perspective" | "orthographic";
-
-export interface GeometryObjectData extends ObjectPlacement {
-  type: "geometry";
-  // How this is turned into something the GPU draws. The two answers are the two
-  // ways a thing gets a look in this game, and they are a choice:
-  //
-  // "primitive" (and an absent `kind`): this object's own `shape`, given depth -
-  //         a rect is a rectangular prism, a circle a cylinder, a polygon that
-  //         outline extruded - wearing a tileable PBR surface (`texture` +
-  //         `tileScale`). No file, no download.
-  // "mesh": a named GLTF asset from the manifest (`render3d/assets.ts`) instead,
-  //         which may bring its own materials or wear the same surface set.
-  // "image": a flat PICTURE (`image` below) stretched once across this object's
-  //         shape - a painted backdrop, a matte behind the level. It has no
-  //         depth, no surface set and no lighting: it shows the picture as it
-  //         was painted, fog and all left to the painting (see
-  //         docs/render3d.md, "Image planes").
-  //
-  // There is deliberately no "drawn by nothing": a body draws what its geometry
-  // objects say and nothing else, so an invisible wall is a body with collision
-  // objects and NO geometry object - which needs no field to say it, and is what
-  // an editor draw produces before anything is dressed.
-  kind?: "primitive" | "mesh" | "image";
-  // Manifest key. `kind: "mesh"` only; an unknown key draws the placeholder
-  // rather than nothing, so a missing asset is visible instead of silent.
-  mesh?: string;
-  // `IMAGE_ASSETS` key (render3d/imageAssets.json). `kind: "image"` only. The
-  // picture fills the bounds of `shape` exactly, so a rect of the picture's own
-  // aspect shows it undistorted (the editor's "fit" sizes one so). An unknown
-  // key draws a flat grey plane, visible rather than silent.
-  image?: string;
-  // The form this is drawn as, in this object's own frame. A primitive without
-  // one draws the unit placeholder, exactly as a prop with no file does - a
-  // geometry object that draws nothing at all would be indistinguishable from a
-  // body that authors no look, which is a different statement with its own
-  // spelling (no geometry object).
-  shape?: ShapeData;
-  // This primitive MIRRORS a collision object in its own body: the editor keeps
-  // its `shape`, placement and `rot` equal to that piece's, in both directions,
-  // so resizing either resizes both. It is the standing form of the "match the
-  // collision shape" edit the decoupling priced in ("a wall widened after it is
-  // dressed is widened twice") - a LINK, not a fallback: the outline is still
-  // stated here in full, and the game and every loader read it exactly as they
-  // read an unlinked one. The partner is not named - the editor re-finds the
-  // collision object with the identical outline at load, which the link's own
-  // invariant guarantees exists - so there is no index to go stale when a
-  // body's objects are reordered.
-  matchCollision?: boolean;
-  // Depth placement, as an OFFSET from the body's own `z` (which is 0 unless
-  // the body says otherwise). Positive is toward the camera. Absent = the
-  // body's own plane for a body with collision, and a little behind it for
-  // decoration (`DECOR_Z`), which is what a flat fill drawn before every body
-  // already was.
-  z?: number;
-  // Rotation about the two axes the body's own `rot` cannot express. (Rotation
-  // in the gameplay plane is `ObjectPlacement.rot`, shared with every other
-  // object kind, so a prop and the light beside it are turned by the same field.)
-  //
-  // BOTH kinds tip: `mountVisual` turns a prop's holder and an extrusion itself
-  // by these, about the object's own origin, and an extrusion is built centred
-  // on z - so a rect tipped about x is a ramp hinged on its own middle rather
-  // than on its back face. It is APPEARANCE, like every other field here: what a
-  // body collides with is its collision objects, which stay in the plane.
-  rotX?: number;
-  rotY?: number;
-  // Uniform mesh scale, dimensionless: it multiplies a model's own size and is
-  // not a length, so it does NOT scale on the way in or out.
-  scale?: number;
-  // Which lens THIS object is drawn through. Absent = "perspective", the scene
-  // camera's own, which is what every object was before the field existed.
-  //
-  // "orthographic" draws it with no perspective divide: a metre is the same
-  // number of pixels at every depth, so it neither shrinks toward the vanishing
-  // point behind the gameplay plane nor swells in front of it, and it does not
-  // parallax as the camera pans. The two lenses agree exactly ON the plane
-  // (z = 0), so a form there looks the same either way; the difference is
-  // entirely in how its off-plane parts, and its `z`, read.
-  //
-  // It is a statement about the PICTURE and nothing else, like every field
-  // here. The object is still lit, shadowed, fogged and depth-tested at the
-  // place it is authored - only where its vertices land on screen changes (see
-  // render3d/projection.ts) - so it sorts against perspective objects by true
-  // depth, and the shadow it casts is the one its real position throws.
-  projection?: GeometryProjection;
-  // Depth through z. Absent = `DEFAULT_THICKNESS` on a body that collides and
-  // `DECOR_DEPTH` on one that does not, which is what a flat fill drawn before
-  // every body already was. It is NOT the collision object's `thickness`: that
-  // is the number a piece's MASS is computed from and this is how thick the
-  // thing looks, and a migrated body states its own so the two start out
-  // agreeing (see `scripts/migrate-primitives.ts`).
-  depth?: number;
-  // Edge break, metres. Absent = none: a level is boxes meeting boxes, and a
-  // chamfer on every one of them softens the corners its silhouette is made
-  // of, so this is authored where a solid actually wants one.
-  //
-  // It is the FLAT EXTRUSION's field and nothing else's: a generated rock
-  // (render3d/rocks.ts) does not read it, and takes its edge from the taper
-  // below instead.
-  bevel?: number;
-  // Where a GENERATED ROCK's taper begins, metres in FRONT of this object's own
-  // plane (its `z`), + toward the camera. Behind it the rock's side walls stand
-  // exactly on the outline; from it forward the surface leans inward by
-  // `taperAngle`. Absent = 0: the taper begins at the gameplay plane, the line
-  // the ball travels, so the rock meets the ball at its outline and swells
-  // toward the camera from there.
-  //
-  // Read only by the rock generator (docs/rocks.md), and part of the rock's
-  // hash, so changing it marks the body stale. A LENGTH, so it scales with the
-  // geometry on the way in and out.
-  taperStart?: number;
-  // How far the tapered surface leans in from the outline's wall, in DEGREES:
-  // 0 (or absent) is no taper at all, the rock a straight extrusion of its
-  // outline; 45 a 45-degree chamfer; 90 a flat top at `taperStart`. Values
-  // outside 0..90 are clamped by the reader. Dimensionless, so it passes
-  // through scaling untouched. Read only by the rock generator, like
-  // `taperStart`.
-  taperAngle?: number;
-  // Which surface to wear. A key of `TEXTURE_ASSETS` (an authored PBR set:
-  // albedo, normal, roughness, metallic, ambient-occlusion and emission maps) or
-  // of `TEXTURE_SETS` (the generated surfaces, keyed by material name) - one
-  // namespace, looked up in that order by `render3d/assets.ts`.
-  //
-  // The reserved key `"color"` is the one entry that names no surface at all: it
-  // draws a FLAT FILL of this object's own `color` (or the body's), with no
-  // pattern and nothing to tile, and it wears that colour EXACTLY rather than as
-  // a tint over noise. It is what a block of solid colour is authored as - a
-  // backdrop, a UI-ish panel, a shape being blocked out before it is dressed -
-  // and it is spelled as a texture key so that swapping a wall between brick and
-  // flat paint is one string and not a different kind of object.
-  //
-  // Absent = the generated surface `DEFAULT_MATERIAL` names. A collision
-  // object's `material` is NOT consulted: what a piece is made of is a fact
-  // about its mass, and reading it as a statement about the look is the coupling
-  // this object was separated out to remove. A migrated body carries the
-  // material name here explicitly, so nothing on disk changed appearance.
-  //
-  // It applies to BOTH visual kinds: an extrusion is textured with it, and a
-  // `mesh` wears it instead of the materials its own file carries. A mesh that
-  // authors none keeps its own, which is what lets a fully-textured prop drop in
-  // untouched and a bare one (geometry only, ~20 KB) be dressed as level stuff.
-  texture?: string;
-  // Tiling scale: how large this wears the texture, as a MULTIPLE of the size
-  // the texture itself was authored at. 1 is life size - one repeat covers
-  // exactly the world distance the surface was captured over - 2 is twice as
-  // large, 0.5 is half. Absent is 1.
-  //
-  // DIMENSIONLESS, like `scale` and unlike every other number in this block, so
-  // it does NOT convert between pixels and metres. That is the whole point of
-  // expressing it this way: the absolute size lives once in the manifest, where
-  // it is a fact about the texture (`TextureAsset.tile`, in metres - Poly Haven
-  // publishes the capture size of every set), and a level says only whether this
-  // wall wants it bigger or smaller than intended. A level authoring absolute
-  // metres would restate that fact everywhere, and get it wrong wherever the
-  // texture was later swapped for one captured at a different size.
-  //
-  // It works because the extruder writes UVs in METRES (extrude.ts): a repeat is
-  // a world distance rather than a fraction of a face, so a 0.4 m plank and a
-  // 40 m wall of the same stuff show the same brick, and only the count differs.
-  tileScale?: number;
-  // Where the texture STARTS, as a shift in world space: +x moves it right, +y
-  // moves it down (level coordinates, the same sense as an object's own `x`/`y`).
-  // Absent is 0.
-  //
-  // It is what aligns a pattern to the thing it is on rather than to the world
-  // origin: brick courses meeting a window head, a tiled floor whose grout lines
-  // land on the edges of the floor. Without it the only lever is the shape's own
-  // position, which moves the collision geometry too.
-  //
-  // A LENGTH, so it is scene pixels on disk and metres in the sim like every
-  // other - and since a scene pixel IS a centimetre here (PIXELS_PER_METER is
-  // 100), authoring it in centimetres and authoring it in the file's own units
-  // are the same act: `25` is 25 cm.
-  //
-  // The shift is applied in the SURFACE's frame after tiling, so it moves the
-  // pattern and never the geometry, and it is measured in world distance rather
-  // than in repeats: 25 cm is 25 cm whatever `tileScale` is set to, which is what
-  // makes the two fields independently adjustable instead of one undoing the
-  // other.
-  tileOffsetX?: number;
-  tileOffsetY?: number;
-  // Fill colour and 0..1 opacity for THIS geometry, overriding the body's.
-  // Decoration is what wants it: a backdrop is authored to sit behind the
-  // geometry, so painting it the body's colour is exactly wrong.
-  color?: string;
-  opacity?: number;
-  // What this GIVES OFF, as opposed to what it reflects: a hex colour added to
-  // the surface after all lighting, so it reads as bright whatever is (or is
-  // not) shining on it. Absent = it emits nothing, which is almost everything.
-  //
-  // It is APPEARANCE and nothing more. Three.js has no global illumination, so
-  // an emissive material reaches nothing at all - it is a bright pixel and no
-  // more - and a lamp that lights the room is this plus a LIGHT OBJECT beside it
-  // in the same body.
-  //
-  // That pairing used to be the problem this field solved badly. A lamp was an
-  // emissive shape and a light in the top-level light list at the same point,
-  // nothing kept the two in step, and moving the sconce left the light behind -
-  // so a glowing shape was made to DERIVE a light, with seven more fields here
-  // describing its reach, its cone, its aim, its shadow and its flicker. Those
-  // are gone. A light in the same body cannot drift from the thing that looks
-  // lit, because it is inside it; and a light says what a light says, in a light's
-  // own fields, rather than in a second vocabulary spelled `emissive*`.
-  //
-  // Dimensionless and unscaled, both of them.
-  emissive?: string;
-  // Multiplier on `emissive`. Above 1 pushes the colour past white into the
-  // range ACES tone mapping still has headroom in, which is what makes a small
-  // flame read as a SOURCE rather than as a pale patch of paint. Absent = 1.
-  emissiveIntensity?: number;
-  // WHERE this glows: a `TEXTURE_ASSETS` key whose EMISSION MAP is worn over
-  // whatever surface this already has, multiplied by `emissive` as a tint.
-  // Absent = the surface itself decides - a set carrying an emission map glows by
-  // being worn, and one that does not glows over its whole face if `emissive`
-  // says so.
-  //
-  // It is what makes emission a pattern rather than a paint: lit windows in a
-  // dark wall, cracks in cooling slag, a strip of instrument lights. The base
-  // surface stays whatever it was, so the wall is still brick.
-  //
-  // A key naming a set with no emission map leaves this unmapped rather than
-  // blank, which is the same rule an unknown `texture` follows: a level authored
-  // against a manifest this build does not have looks ordinary.
-  //
-  // Tiled like everything else - the set's own `tile`, scaled by `tileScale` and
-  // shifted by `tileOffset` - so the glow lands on the same grid as the surface
-  // under it.
-  emissiveTexture?: string;
-  // This object's mesh is GENERATED, and this is what it is generated from (see
-  // `GeneratorData`). `mesh` is then the key of the generated file, derived from
-  // this block, so the file says what the mesh is and "stale" is a comparison.
-  // Absent on every hand-placed object, which is every object authored before it.
-  generator?: GeneratorData;
-}
-
-// What a generated geometry object is generated FROM: which generator, the
-// version of its parameter schema, and the parameters that differ from that
-// schema's defaults (`tools/blender/<kind>/params.json`). A mushroom patch also
-// carries the loop it was painted inside and the object it grows on.
-//
-// It is appearance and nothing else, like every field on a geometry object: the
-// body collides with its collision objects, and a regenerated rock is the same
-// rock to the sim.
-//
-// A boulder's other input is the object's own `shape`, read in its own frame -
-// the outline the rock is fitted to - so there is nothing to store for it here.
-export interface GeneratorData {
-  kind: GeneratorKind;
-  version: number;
-  // Only the values that differ from the schema's defaults. A parameter whose
-  // schema unit is "m" is a length, pixels on disk and metres in the sim, and
-  // `scaleObject` converts it; every other value passes through untouched.
-  params?: ParamValues;
-  patch?: GeneratorPatchData;
-}
-
-// A mushroom patch's painted loop and the object it was painted on.
-export interface GeneratorPatchData {
-  // The index, within this body's `objects`, of the geometry object the patch
-  // grows on. An index rather than a name because objects have none; the
-  // editor re-resolves it on every load and rewrites it on every save, so a
-  // reordered body cannot leave it pointing at the wrong object. Absent (or an
-  // index naming no geometry object) is a patch whose host is gone: the loop is
-  // kept, and nothing can be regenerated until it is given one.
-  host?: number;
-  // The loop, in THIS object's own frame (the frame its `shape` is in): x and y
-  // as a shape's vertices are, and z off this object's own `z`, toward the
-  // camera. Lengths, so pixels on disk and metres in the sim.
-  //
-  // The object's frame rather than the body's, because the body's frame moves
-  // under its objects (the editor re-origins a body onto its centre of mass),
-  // and a loop stated in it would have to be rewritten - through a rotation, so
-  // not exactly - every time that happened. The generated mesh is placed in
-  // this frame anyway.
-  points: { x: number; y: number; z: number }[];
-  // Which side of the loop's plane the loop was painted on: a unit vector in
-  // this object's frame (y down, as the points), the mean of the normals of the
-  // faces it was clicked on. A direction, so it is NOT scaled with the lengths.
-  // Absent in a file saved before it was stored; the editor then guesses the
-  // side from the host's middle, which a loop near a wide face's edge can get
-  // wrong.
-  facing?: { x: number; y: number; z: number };
 }
 
 // A LIGHT: a torch on a wall, a shaft coming down through a grate, the glow off
@@ -1102,11 +803,7 @@ export interface AnchorObjectData extends ObjectPlacement {
   id: number;
 }
 
-export type SceneObjectData =
-  | CollisionObjectData
-  | GeometryObjectData
-  | LightObjectData
-  | AnchorObjectData;
+export type SceneObjectData = CollisionObjectData | LightObjectData | AnchorObjectData;
 
 export interface LevelBodyData {
   // What this body IS, physically. Consulted only when the body has at least one
@@ -1225,6 +922,17 @@ export interface LevelBodyData {
   // level wants one, is a second water area turned to point down.
   spill?: number;
   spillSpeed?: number;
+  // Water areas only: where the water's slab sits through z and how deep it
+  // is, in pixels (metres once scaled) - `waterZ` offsets its middle from the
+  // gameplay plane, + toward the camera, and `waterDepth` is its extent
+  // through z. Absent = on the plane, `DEFAULT_WATER_DEPTH` deep.
+  //
+  // The one place a body carries a depth, and for the reason the spill above
+  // is here: water is drawn by the game (`render3d/water.ts`), whose surface
+  // the current moves every frame, rather than by the level's Blender scene,
+  // so its look has nowhere else to live (plans/blender-owns-appearance.md).
+  waterZ?: number;
+  waterDepth?: number;
   // Hook-only: the hook attaches to this body and everything else passes
   // straight through it. The avatar walks and swings through it, loose debris
   // falls through it, the rope never wraps it - a background leaf the hook can
@@ -1478,17 +1186,7 @@ export interface LevelBodyData {
   // and read nowhere downstream of it.
   movePath?: { x: number; y: number }[];
   moveClosed?: boolean;
-  // Rock bodies only: the seed of this body's GENERATED rock, an integer, so an
-  // author who does not like the boulders the generator cut can ask for another
-  // set without touching the outline. Read by the rock generator and nothing
-  // else - the sim and the extrusion never see it - and it changes every random
-  // choice in that body's rock (docs/rocks.md). It is in the rock hash, so
-  // changing it marks the body stale, and the body stands on its extrusion until
-  // the rocks are generated again. Dimensionless: it crosses `scaleLevelData`
-  // untouched. Absent = 0, which is the rock every body was generated with
-  // before the field.
-  rockSeed?: number;
-  // What this body is made of, looks like and lights with. Order is authored
+  // What this body is made of and lights with. Order is authored
   // order, and it is what the build and both renderers walk: a body's collision
   // objects become its shapes in this order (which is what `setCompoundInertia`
   // relies on to weigh each piece by its own material), and the light budgets are
@@ -1498,10 +1196,6 @@ export interface LevelBodyData {
 
 export function isCollisionObject(o: SceneObjectData): o is CollisionObjectData {
   return o.type === "collision";
-}
-
-export function isGeometryObject(o: SceneObjectData): o is GeometryObjectData {
-  return o.type === "geometry";
 }
 
 export function isLightObject(o: SceneObjectData): o is LightObjectData {
@@ -2655,15 +2349,6 @@ export interface LegacyLightData {
   flicker?: number;
 }
 
-// Appearance a retired background panel is migrated with: an opaque dark slate,
-// deliberately distinct from the geometry grey so a backdrop does not read as a
-// wall. It was the default of a list that no longer exists, so it is written out
-// EXPLICITLY by the migration rather than left to a default - the body defaults
-// are the grey, and a decoration silently changing colour on load is exactly the
-// kind of migration that looks like a rendering bug.
-export const LEGACY_BACKGROUND_COLOR = "#313244";
-export const LEGACY_BACKGROUND_OPACITY = 1;
-
 // What a file may contain: either form, in any mixture. Everything downstream of
 // `normalizeLevelData` sees `LevelData` and none of this.
 export interface RawLevelData {
@@ -2686,61 +2371,6 @@ export interface RawLevelData {
 
 function isLegacyBody(b: LevelBodyData | LegacyBodyData): b is LegacyBodyData {
   return !Array.isArray((b as LevelBodyData).objects);
-}
-
-// The appearance half of a retired visual, as a geometry object.
-//
-// A retired entry drew ONE shape, whether it collided or not, so that shape is
-// what the geometry object is - stated outright rather than borrowed from the
-// collision object beside it. `depth` and `texture` fall back to what the entry
-// collided as (`thickness`, `material`), which is what the extruded outline used
-// to read off it: the migration is where that reading happens, once, instead of
-// on every frame for ever.
-function geometryFromLegacy(
-  v: LegacyVisualData | undefined,
-  shape: ShapeData | undefined,
-  decorZ: number | undefined,
-  color: string | undefined,
-  opacity: number | undefined,
-  solid?: { thickness?: number; material?: string },
-): GeometryObjectData {
-  return {
-    type: "geometry",
-    ...(v?.depth === undefined && solid?.thickness !== undefined
-      ? { depth: solid.thickness }
-      : {}),
-    ...(v?.texture === undefined && solid?.material !== undefined
-      ? { texture: solid.material }
-      : {}),
-    // The retired `auto` is what a primitive is now called, and it is the
-    // default either way. `none` never reaches here - a legacy entry that drew
-    // nothing produces no geometry object at all (`objectsOfLegacy`), which is
-    // how that state is spelt now.
-    ...(v?.kind === "mesh" ? { kind: "mesh" as const } : {}),
-    ...(v?.mesh !== undefined ? { mesh: v.mesh } : {}),
-    ...(shape !== undefined ? { shape } : {}),
-    // The retired visual placed itself in the BODY's frame with its own
-    // `offset*`/`rot*`; the object placement it becomes says the same thing in
-    // the fields every object kind shares.
-    ...(v?.offsetX !== undefined ? { x: v.offsetX } : {}),
-    ...(v?.offsetY !== undefined ? { y: v.offsetY } : {}),
-    ...(v?.rotZ !== undefined ? { rot: v.rotZ } : {}),
-    ...(v?.offsetZ !== undefined ? { z: v.offsetZ } : decorZ !== undefined ? { z: decorZ } : {}),
-    ...(v?.rotX !== undefined ? { rotX: v.rotX } : {}),
-    ...(v?.rotY !== undefined ? { rotY: v.rotY } : {}),
-    ...(v?.scale !== undefined ? { scale: v.scale } : {}),
-    ...(v?.depth !== undefined ? { depth: v.depth } : {}),
-    ...(v?.bevel !== undefined ? { bevel: v.bevel } : {}),
-    ...(v?.texture !== undefined ? { texture: v.texture } : {}),
-    ...(v?.tileScale !== undefined ? { tileScale: v.tileScale } : {}),
-    ...(v?.tileOffsetX !== undefined ? { tileOffsetX: v.tileOffsetX } : {}),
-    ...(v?.tileOffsetY !== undefined ? { tileOffsetY: v.tileOffsetY } : {}),
-    ...(color !== undefined ? { color } : {}),
-    ...(opacity !== undefined ? { opacity } : {}),
-    ...(v?.emissive !== undefined ? { emissive: v.emissive } : {}),
-    ...(v?.emissiveIntensity !== undefined ? { emissiveIntensity: v.emissiveIntensity } : {}),
-    ...(v?.emissiveTexture !== undefined ? { emissiveTexture: v.emissiveTexture } : {}),
-  };
 }
 
 // The DERIVED light a glowing shape used to throw, written out as the light
@@ -2796,12 +2426,6 @@ const LEGACY_EMISSIVE_GAIN = 14;
 const LEGACY_EMISSIVE_RANGE = 600;
 const LEGACY_EMISSIVE_ANGLE = 55;
 const LEGACY_EMISSIVE_PENUMBRA = 0.6;
-
-// Where decoration sat when its visual said nothing, in scene pixels: just
-// behind the gameplay plane. Written out by the migration rather than left to a
-// default, since the default now belongs to a body with no collision objects and
-// a migrated panel should not depend on that rule staying put.
-const LEGACY_DECOR_Z = -35;
 
 // Fold every retired form into what it now is. Idempotent, and a no-op for a
 // level already in the nested form, so it costs nothing to run on the way out as
@@ -2864,11 +2488,6 @@ export function normalizeLevelData(raw: RawLevelData): LevelData {
         y: p.y,
         rot: p.rot,
         shape: p.shape,
-        // Written out rather than left to the body defaults: the panel list had
-        // its own, and decoration that quietly turns grey on load is a migration
-        // that looks exactly like a rendering bug.
-        color: p.color ?? LEGACY_BACKGROUND_COLOR,
-        opacity: p.opacity ?? LEGACY_BACKGROUND_OPACITY,
         ...(p.group !== undefined ? { group: p.group } : {}),
         ...(p.visual !== undefined ? { visual: p.visual } : {}),
       }),
@@ -2896,11 +2515,7 @@ export function normalizeLevelData(raw: RawLevelData): LevelData {
     }
     const legacy = members as LegacyBodyData[];
     const lead = legacy.find((e) => e.collision !== false) ?? first;
-    // `withGeometryPrimitives` here and nowhere else: a legacy entry is exactly
-    // a body authored when a collision shape drew itself, so this is where that
-    // default has to be written down. A body already in the nested form (above)
-    // is left with the objects it has, however few.
-    bodies.push(withGeometryPrimitives({
+    bodies.push({
       // A retired `impermeable` KIND is a static whose shapes are hook-proof;
       // `objectsOfLegacy` has already put the flag on the collision object.
       kind: lead.kind === LEGACY_IMPERMEABLE ? "static" : lead.kind,
@@ -2908,9 +2523,7 @@ export function normalizeLevelData(raw: RawLevelData): LevelData {
       y: 0,
       rot: 0,
       // Only a body with something SOLID in it has a body-level fill: a body of
-      // pure decoration has its colour on the geometry object itself, and
-      // writing it in both places is a second copy that nothing reads and that
-      // the editor would drop on the first save.
+      // pure decoration has nothing left to fill.
       ...(lead.collision !== false
         ? {
             ...(lead.color !== undefined ? { color: lead.color } : {}),
@@ -2922,7 +2535,7 @@ export function normalizeLevelData(raw: RawLevelData): LevelData {
           }
         : {}),
       objects: legacy.flatMap(objectsOfLegacy),
-    }));
+    });
   }
 
   // The retired light list: each becomes a body containing nothing but a light,
@@ -2968,13 +2581,9 @@ export function normalizeLevelData(raw: RawLevelData): LevelData {
 // yesterday is exactly as legacy as one saved last year, in the only sense that
 // matters.
 //
-// What is NOT here any more is the geometry twin. It used to run over every body
-// on every load, which made "a body with collision and no geometry" a state a
-// file could not hold: drawing a bare collision shape, saving and loading it back
-// returned a dressing nobody asked for. It now runs where the default it migrates
-// actually applied - on a body converted from a LEGACY entry, in
-// `normalizeLevelData` - so a body authored under the current rule keeps the
-// objects it was authored with.
+// It is also where the retired GEOMETRY OBJECT leaves (`withoutLook`): a level's
+// look is its Blender scene, so a file saved before that is folded here, on
+// every load, into the level it now is.
 function finish(
   raw: RawLevelData,
   bodies: LevelBodyData[],
@@ -2987,10 +2596,17 @@ function finish(
   // caller's level in place: for a file already in the nested form the bodies
   // here ARE the input's, so a second load found the anchors of the first and
   // added another set beside them.
-  const out = bodies.map((b, i) => {
+  //
+  // A body left with NO objects is dropped: decoration was all it ever held
+  // (a retired panel, a visual with no collision, a backdrop of geometry
+  // objects), and a body with nothing in it builds nothing, lights nothing and
+  // draws nothing. It builds no engine body either, so no build index moves
+  // and no recorded replay is renumbered.
+  const out = bodies.flatMap((b, i) => {
     const extra = added.get(i);
     const withAnchors = extra ? { ...b, objects: [...b.objects, ...extra] } : b;
-    return withoutConflictingSpring(withMigratedMask(withAnchors));
+    const body = withoutLook(withAnchors);
+    return body.objects.length > 0 ? [withoutConflictingSpring(withMigratedMask(body))] : [];
   });
   const { backgrounds: _panels, lights: _lights, chains: _chains, ...rest } = raw;
   return { ...rest, bodies: out, ...(chains ? { chains } : {}) };
@@ -3029,6 +2645,67 @@ function withMigratedMask(b: LevelBodyData): LevelBodyData {
       );
       const passes = passesFromMask(mask);
       return passes.length > 0 ? { ...rest, passes } : rest;
+    }),
+  };
+}
+
+// A retired GEOMETRY OBJECT, as a file saved before the level's look moved to
+// its Blender scene still carries one. Only the fields `withoutLook` reads.
+interface RetiredGeometryData {
+  type: "geometry";
+  x?: number;
+  y?: number;
+  z?: number;
+  depth?: number;
+  texture?: string;
+  color?: string;
+  tileScale?: number;
+  shape?: ShapeData;
+}
+
+function isRetiredGeometry(o: SceneObjectData | RetiredGeometryData): o is RetiredGeometryData {
+  return o.type === "geometry";
+}
+
+// Take the retired geometry objects out of a body, keeping the two looks that
+// were never a mesh and so have not moved to Blender: a WATER body's slab
+// (`waterZ`, `waterDepth`) and a BELT's band (`BeltLook`), both drawn by the
+// game because the sim moves their surfaces (plans/blender-owns-appearance.md).
+// Each is taken from the object that drew it, and only where the body does not
+// already say: a file part-way through is exactly what this has to survive.
+// A body that held nothing else is left empty, which `finish` drops.
+//
+// Returns the body UNCHANGED when it holds no geometry object, so a level in the
+// current form is the same object it went in as.
+function withoutLook(b: LevelBodyData): LevelBodyData {
+  const objects = b.objects as (SceneObjectData | RetiredGeometryData)[];
+  const retired = objects.filter(isRetiredGeometry);
+  if (retired.length === 0) return b;
+  const kept = objects.filter((o): o is SceneObjectData => !isRetiredGeometry(o));
+  const slab = b.kind === "water" ? retired[0] : undefined;
+  return {
+    ...b,
+    ...(slab?.z !== undefined && b.waterZ === undefined ? { waterZ: slab.z } : {}),
+    ...(slab?.depth !== undefined && b.waterDepth === undefined ? { waterDepth: slab.depth } : {}),
+    objects: kept.map((o) => {
+      if (o.type !== "collision" || o.shape.kind !== "belt") return o;
+      // The band that drew this belt: the geometry object standing where it
+      // stands with a belt of its own (a matched pair, as every belt was drawn).
+      const band = retired.find(
+        (g) => g.shape?.kind === "belt" && (g.x ?? 0) === (o.x ?? 0) && (g.y ?? 0) === (o.y ?? 0),
+      );
+      if (!band) return o;
+      const s = o.shape;
+      return {
+        ...o,
+        shape: {
+          ...s,
+          ...(band.depth !== undefined && s.width === undefined ? { width: band.depth } : {}),
+          ...(band.texture !== undefined && s.texture === undefined ? { texture: band.texture } : {}),
+          ...(band.color !== undefined && s.color === undefined ? { color: band.color } : {}),
+          ...(band.tileScale !== undefined && s.tileScale === undefined ? { tileScale: band.tileScale } : {}),
+        },
+      };
     }),
   };
 }
@@ -3116,53 +2793,6 @@ function withChainAnchors(
   );
 }
 
-// Drawing is a GEOMETRY object's job, and collision is a collision object's. A
-// file written before that split has bodies whose outlines were drawn BECAUSE
-// they collided, so they get the geometry objects that say so: one PRIMITIVE per
-// collision object, standing exactly where that piece stands, in its form, as
-// thick as its `thickness` and wearing the surface its `material` names. The
-// level looks exactly as it did and the file now says why.
-//
-// The outline IS copied, which is the change decoupling made and the cost it
-// carries: a second copy is a second thing to resize, and the two drift apart
-// the first time only one of them is. That is the point - a body may now look
-// like something other than what it collides as - and the editor makes the pair
-// together on a draw so the common case still needs one gesture.
-//
-// Applied ONLY to a body converted from a legacy entry (see `finish`), which is
-// what stops it inventing a look for a body deliberately authored without one.
-// Idempotent all the same: the legacy path is reached by a file that still
-// carries retired panels or lights, and a run through it must not stack twins.
-function withGeometryPrimitives(body: LevelBodyData): LevelBodyData {
-  const collisions = body.objects.filter(isCollisionObject);
-  if (!collisions.length) return body;
-  // ANY geometry object at all is the body saying how it looks, and that answer
-  // stands. A lamp whose collision box carries an authored mesh looks like the
-  // lamp; adding an extrusion of the box beside it draws a grey brick inside the
-  // fitting - visible in play, invisible in the editor, and exactly the kind of
-  // thing a migration should never invent. Only a body that says NOTHING about
-  // its appearance is given the objects stating what it used to look like.
-  if (body.objects.some(isGeometryObject)) return body;
-  return { ...body, objects: [...body.objects, ...collisions.map(primitiveOf)] };
-}
-
-// The primitive a collision object used to be drawn as: its form, at its
-// placement, with the depth and surface the extrusion read off it. The one place
-// that reading is written down, shared by the legacy migration here and by the
-// editor's own draw (`geometryTwinFor`), so a body migrated from disk and a body
-// drawn in the editor start out saying the same thing.
-export function primitiveOf(c: CollisionObjectData): GeometryObjectData {
-  return {
-    type: "geometry",
-    shape: c.shape,
-    ...(c.x !== undefined ? { x: c.x } : {}),
-    ...(c.y !== undefined ? { y: c.y } : {}),
-    ...(c.rot !== undefined ? { rot: c.rot } : {}),
-    ...(c.thickness !== undefined ? { depth: c.thickness } : {}),
-    ...(c.material !== undefined ? { texture: c.material } : {}),
-  };
-}
-
 // The retired `group` tag was geometry-only: an area that carried one was built
 // as its own body instead, because an area was single-shape everywhere it was
 // used and a grouped one would have acted through its first piece alone.
@@ -3210,12 +2840,12 @@ function legacyRuns(bodies: readonly (LevelBodyData | LegacyBodyData)[]): number
   return runs;
 }
 
-// One retired entry's objects, in the order the renderers walk them: what it
-// collides as first, then what it looks like, then what it lights with.
+// One retired entry's objects: what it collides as, then what it lights with.
+// What it LOOKED like is not carried: a level's look is its Blender scene now
+// (docs/blender-scenes.md), and a retired visual has nowhere to go.
 function objectsOfLegacy(b: LegacyBodyData): SceneObjectData[] {
-  const drawn = b.collision === false;
   const objects: SceneObjectData[] = [];
-  if (!drawn) {
+  if (b.collision !== false) {
     objects.push({
       type: "collision",
       shape: b.shape,
@@ -3225,29 +2855,6 @@ function objectsOfLegacy(b: LegacyBodyData): SceneObjectData[] {
       ...(b.material !== undefined ? { material: b.material } : {}),
       ...(b.thickness !== undefined ? { thickness: b.thickness } : {}),
     });
-  }
-  // The entry's own shape, either way: a colliding entry's geometry is the
-  // outline it drew because it collided, and decoration was only ever the shape.
-  // Written only when the entry authored a visual at all - a plain wall gets the
-  // one `withGeometryPrimitives` states, and a `none` visual is a wall that drew
-  // nothing, which is now spelt as having no geometry object rather than as a
-  // kind that means "ignore me".
-  //
-  // Decoration carries its OWN fill and not the body's, which is the rule
-  // `syncGroupProps` had for exactly the reason material and thickness were per
-  // entry: a backdrop is authored to sit behind the geometry, so painting it the
-  // lead shape's colour is precisely wrong.
-  if ((b.visual !== undefined && b.visual.kind !== "none") || drawn) {
-    objects.push(
-      geometryFromLegacy(
-        b.visual,
-        b.shape,
-        drawn ? LEGACY_DECOR_Z : undefined,
-        drawn ? b.color : undefined,
-        drawn ? b.opacity : undefined,
-        drawn ? undefined : { thickness: b.thickness, material: b.material },
-      ),
-    );
   }
   const light = lightFromLegacyEmissive(b.visual);
   if (light) objects.push(light);
@@ -3320,6 +2927,12 @@ function scaleShape(s: ShapeData, factor: number): ShapeData {
       wheels: s.wheels.map((w) => ({ x: w.x * factor, y: w.y * factor, r: w.r * factor })),
       thickness: s.thickness * factor,
       speed: s.speed * factor,
+      // The band's look (`BeltLook`): a width through z is a length; a surface
+      // key, a colour and a multiple of the texture's own size are not.
+      ...(s.width !== undefined ? { width: s.width * factor } : {}),
+      ...(s.texture !== undefined ? { texture: s.texture } : {}),
+      ...(s.color !== undefined ? { color: s.color } : {}),
+      ...(s.tileScale !== undefined ? { tileScale: s.tileScale } : {}),
     };
   }
   return { kind: "poly", verts: s.verts.map((v) => ({ x: v.x * factor, y: v.y * factor })) };
@@ -3403,72 +3016,9 @@ export function scaleObject(o: SceneObjectData, factor: number): SceneObjectData
       ...(o.path !== undefined ? { path: o.path } : {}),
     };
   }
-  return {
-    type: "geometry",
-    ...placed,
-    ...(o.kind !== undefined ? { kind: o.kind } : {}),
-    ...(o.mesh !== undefined ? { mesh: o.mesh } : {}),
-    // A manifest key, like `mesh`.
-    ...(o.image !== undefined ? { image: o.image } : {}),
-    ...(o.shape !== undefined ? { shape: scaleShape(o.shape, factor) } : {}),
-    // A link to a sibling, not a length.
-    ...(o.matchCollision !== undefined ? { matchCollision: o.matchCollision } : {}),
-    ...(o.z !== undefined ? { z: o.z * factor } : {}),
-    // Rotations about the two off-plane axes, and a dimensionless multiplier of
-    // a model's own size. None of them is a length.
-    ...(o.rotX !== undefined ? { rotX: o.rotX } : {}),
-    ...(o.rotY !== undefined ? { rotY: o.rotY } : {}),
-    ...(o.scale !== undefined ? { scale: o.scale } : {}),
-    // A choice of lens, not a length.
-    ...(o.projection !== undefined ? { projection: o.projection } : {}),
-    ...(o.depth !== undefined ? { depth: o.depth * factor } : {}),
-    ...(o.bevel !== undefined ? { bevel: o.bevel * factor } : {}),
-    // Where a generated rock's taper begins is a length; the angle it leans
-    // in by is not.
-    ...(o.taperStart !== undefined ? { taperStart: o.taperStart * factor } : {}),
-    ...(o.taperAngle !== undefined ? { taperAngle: o.taperAngle } : {}),
-    ...(o.texture !== undefined ? { texture: o.texture } : {}),
-    // A MULTIPLE of the texture's own size rather than a length - see
-    // `GeometryObjectData.tileScale` - so it passes through untouched, as
-    // `scale` does. The absolute size it multiplies lives in the manifest, in
-    // metres, and never reaches this function at all: it is code rather than
-    // level.
-    ...(o.tileScale !== undefined ? { tileScale: o.tileScale } : {}),
-    // These two ARE lengths (see `tileOffsetX`), so unlike the scale above they
-    // convert like the geometry does.
-    ...(o.tileOffsetX !== undefined ? { tileOffsetX: o.tileOffsetX * factor } : {}),
-    ...(o.tileOffsetY !== undefined ? { tileOffsetY: o.tileOffsetY * factor } : {}),
-    ...(o.color !== undefined ? { color: o.color } : {}),
-    ...(o.opacity !== undefined ? { opacity: o.opacity } : {}),
-    // A colour, a multiplier of it, and a manifest key. None is a length.
-    ...(o.emissive !== undefined ? { emissive: o.emissive } : {}),
-    ...(o.emissiveIntensity !== undefined ? { emissiveIntensity: o.emissiveIntensity } : {}),
-    ...(o.emissiveTexture !== undefined ? { emissiveTexture: o.emissiveTexture } : {}),
-    ...(o.generator !== undefined ? { generator: scaleGenerator(o.generator, factor) } : {}),
-  };
-}
-
-// A generator block's lengths are its length PARAMETERS, by the schema's unit,
-// and a patch's loop, which is a set of positions. The kind, the version, the
-// flags, the counts, the angles, the host's index and the loop's facing (a
-// direction) are not lengths. Always a copy, like every other nested thing
-// `scaleObject` returns.
-function scaleGenerator(g: GeneratorData, factor: number): GeneratorData {
-  const f = g.patch?.facing;
-  return {
-    kind: g.kind,
-    version: g.version,
-    ...(g.params !== undefined ? { params: scaleParams(g.params, loadSchema(g.kind), factor) } : {}),
-    ...(g.patch !== undefined
-      ? {
-          patch: {
-            ...(g.patch.host !== undefined ? { host: g.patch.host } : {}),
-            points: g.patch.points.map((p) => ({ x: p.x * factor, y: p.y * factor, z: p.z * factor })),
-            ...(f !== undefined ? { facing: { x: f.x, y: f.y, z: f.z } } : {}),
-          },
-        }
-      : {}),
-  };
+  // Every kind is above. A retired geometry object never reaches here:
+  // `normalizeLevelData` has already taken it out of the body (`withoutLook`).
+  return o satisfies never;
 }
 
 export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData {
@@ -3753,6 +3303,9 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
       // A drop and a speed: both lengths, both convert.
       ...(b.spill !== undefined ? { spill: b.spill * factor } : {}),
       ...(b.spillSpeed !== undefined ? { spillSpeed: b.spillSpeed * factor } : {}),
+      // Where the slab sits through z and how deep it is: both lengths.
+      ...(b.waterZ !== undefined ? { waterZ: b.waterZ * factor } : {}),
+      ...(b.waterDepth !== undefined ? { waterDepth: b.waterDepth * factor } : {}),
       ...(b.passable !== undefined ? { passable: b.passable } : {}),
       ...(b.pivot !== undefined ? { pivot: b.pivot } : {}),
       // The bearing is a POINT, so both halves are lengths and both convert;
@@ -3815,8 +3368,6 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
       ...(b.movePhase !== undefined ? { movePhase: b.movePhase } : {}),
       ...(b.moveEase !== undefined ? { moveEase: b.moveEase } : {}),
       ...(b.moveAlign !== undefined ? { moveAlign: b.moveAlign } : {}),
-      // A seed, not a length (see `LevelBodyData.rockSeed`).
-      ...(b.rockSeed !== undefined ? { rockSeed: b.rockSeed } : {}),
       objects: b.objects.map((o) => scaleObject(o, factor)),
     })),
   };

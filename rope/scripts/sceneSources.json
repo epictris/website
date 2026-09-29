@@ -3,6 +3,14 @@
     "sha256": "a90c0d5b1ec7956338da7ccd8890df6a447fb2ec204ac3b91c9d6922493e080f",
     "bytes": 8671379
   },
+  "scenes/rails.blend": {
+    "sha256": "dca028a1ff23495d3d0c4d0e9ecd94808674e06e98c47351f10c60d43f3c11cd",
+    "bytes": 10716270
+  },
+  "scenes/river.blend": {
+    "sha256": "6f770a826e5cc7dc13351c4ebbd15c03642f0e83ae3a8945be17c2de75d76f44",
+    "bytes": 29894294
+  },
   "scenes/textures/foliage-components-v3.png": {
     "sha256": "bbd46bc1aa504c2857fc2d38853584daad04b2007bc69c36e55d9f3309a10296",
     "bytes": 533540

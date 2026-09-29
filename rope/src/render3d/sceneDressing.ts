@@ -3,8 +3,8 @@
 //
 // One file, two kinds of node. A node named like a body is BOUND: lifted out of
 // the file and hung under that body's visual root, so it rides the body - a
-// rigid crate, a mover, a pivot - exactly as the body's own geometry objects
-// do. Every other node is SCENERY and stays in the file's own root, standing in
+// rigid crate, a mover, a pivot. Every other node is SCENERY and stays in the
+// file's own root, standing in
 // the world where Blender placed it. Blender is the author of WHERE everything
 // is, in both cases: a bound node is mounted at Blender's pose minus the body's
 // rest pose, so at rest it is drawn exactly where Blender put it, and the body
@@ -25,12 +25,16 @@ import { nodeNameOf, SCENE_ASSETS, sceneFile } from "./scenes";
 // built body, the authored ones for a body that built nothing - see
 // `BuiltBody.origin`). `tag` is what a raycast onto the node answers with
 // (see `pickTagOf`), so the editor's pick lands on the body it dresses.
+// `solid` is whether the body collides, which decides its shadow (below), and
+// `adopt` is handed the node once it is on the body (`BodyVisual.adoptDressing`).
 export interface DressTarget {
   name: string | undefined;
   root: THREE.Object3D;
   origin: Vec2;
   rotation: number;
+  solid: boolean;
   tag?: unknown;
+  adopt?: (node: THREE.Object3D) => void;
 }
 
 export interface Dressed {
@@ -41,6 +45,12 @@ export interface Dressed {
   // Body names (as node names) that matched no node in the file.
   unbound: string[];
 }
+
+// What a raycast onto SCENERY answers with (see `pickTagOf`): it is in no body,
+// so there is nothing an editor can select by it, but it is a surface a light
+// can be dropped on (`Scene3D.pickSurface`), which a hit with no tag at all -
+// the ball, a chain - is not.
+export const SCENERY_TAG: unique symbol = Symbol("scenery");
 
 // Toward the camera is +z; a node whose nearest point is behind this casts no
 // shadow (see `castsShadow`). A hair behind the plane rather than exactly on
@@ -54,6 +64,7 @@ const SHADOW_Z = -0.05;
 export function dressScene(loaded: THREE.Object3D, targets: readonly DressTarget[]): Dressed {
   const scenery = new THREE.Group();
   scenery.name = "scenery";
+  scenery.userData["pickTag"] = SCENERY_TAG;
   const clone = loaded.clone(true);
   clone.updateMatrixWorld(true);
 
@@ -90,6 +101,13 @@ export function dressScene(loaded: THREE.Object3D, targets: readonly DressTarget
     local.decompose(node.position, node.quaternion, node.scale);
     if (t.tag !== undefined) node.userData["pickTag"] = t.tag;
     t.root.add(node);
+    // WHAT COLLIDES, CASTS, wherever its dressing has been set back to: a
+    // hanging cage modelled 20 cm behind the plane so the ball reads in front
+    // of it is still the thing the ball is standing in, and without its shadow
+    // it reads as a sticker. A body that collides with nothing is decoration
+    // and keeps the scenery's rule below.
+    if (!t.solid) noShadowBehindPlane(node);
+    t.adopt?.(node);
   }
 
   // What is left is scenery. Reparented under a group of our own rather than
@@ -99,15 +117,7 @@ export function dressScene(loaded: THREE.Object3D, targets: readonly DressTarget
     child.removeFromParent();
     child.updateMatrixWorld(true);
     scenery.add(child);
-    // Scenery keeps the rule decoration has (see `BodyVisual.buildAuthored`):
-    // behind the gameplay plane it is a painted distance and casts nothing; on
-    // or in front of it, it is in the scene and casts like anything else. A
-    // bound node is the body and always casts.
-    if (!castsShadow(child)) {
-      child.traverse((o) => {
-        if ((o as THREE.Mesh).isMesh) (o as THREE.Mesh).castShadow = false;
-      });
-    }
+    noShadowBehindPlane(child);
   }
   clone.updateMatrixWorld(true);
 
@@ -127,6 +137,17 @@ const box = new THREE.Box3();
 export function castsShadow(node: THREE.Object3D): boolean {
   box.setFromObject(node, true);
   return !box.isEmpty() && box.max.z >= SHADOW_Z;
+}
+
+// The rule scenery and decoration keep: behind the gameplay plane a node is a
+// painted distance and casts nothing - one throwing a shadow across the level in
+// front of it reads as geometry the player ought to be able to touch - and on
+// or in front of it, it is in the scene and casts like anything else.
+function noShadowBehindPlane(node: THREE.Object3D): void {
+  if (castsShadow(node)) return;
+  node.traverse((o) => {
+    if ((o as THREE.Mesh).isMesh) (o as THREE.Mesh).castShadow = false;
+  });
 }
 
 // One decoded file per scene, shared by every mount of it on the page. A

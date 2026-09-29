@@ -9,7 +9,8 @@ stable id per body) and manipulates it with the mouse: pan (**middle**-button dr
 right button, or a **left** drag on anything not selected), wheel-zoom about the cursor,
 click-select, drag a *selected* body to move it, corner/rotate/
 radius handles to resize, and `+Rect`/`+Circle`/`+Poly` tools to draw new bodies.
-This page is the editor's **Level** workspace; the toolbar's switcher (**W**) turns the same editor into the **Visuals** workspace, a free 3D view for dressing the level and generating rocks and mushroom patches ([Workspaces](#workspaces-level-and-visuals), [editor-visuals](editor-visuals.md), [generators](generators.md)).
+This page is the editor's **Level** workspace; the toolbar's switcher (**W**) turns the same editor into the **Visuals** workspace, a free 3D view of the collision, lights and cameras against the level's Blender scene ([Workspaces](#workspaces-level-and-visuals), [editor-visuals](editor-visuals.md)).
+The editor authors what the game simulates and lights; what a level LOOKS like is its Blender scene ([blender-scenes](blender-scenes.md)), and a level with no scene is drawn as its collision, each piece a grey box in its body's fill.
 **Selected first, moved second.**
 A press on something already selected drags it; a press on anything else pans and selects only if the pointer never really moved (`CLICK_SLOP_PX`).
 The level is what you are looking at most of the time, so dragging it about has to be the cheapest gesture there is - and nudging geometry by accident, while reaching for the view, is the one editing mistake that leaves no trace on screen: it still looks like the level, and the level is different.
@@ -35,8 +36,7 @@ cuts one up and both its containment test and its buffer zone read a notch as so
 
 **A corner edit moves the corner and nothing else.**
 `setPolyVerts` leaves the item's `pos` exactly where it is, and the shape's origin is placed once - by `centreShapeOrigin`, when the outline is first clicked out, onto the drawn loop's centroid (a curve's onto its node average).
-It used to re-centre on every write, which kept a polygon's origin its own centre of mass and made every corner drag a **move of the object inside its body**: the shape being dragged stayed put on screen while its placement slid by the centroid's own motion, so the inspector's `x`/`y` for it walked away from zero and a `matchCollision` prop - which copies the collision object's placement as well as its outline - walked across the level with them.
-Fitting a collision outline to the mesh it is being fitted *to* moved the mesh, which is the one thing that edit may not do.
+It used to re-centre on every write, which kept a polygon's origin its own centre of mass and made every corner drag a **move of the object inside its body**: the shape being dragged stayed put on screen while its placement slid by the centroid's own motion, so the inspector's `x`/`y` for it walked away from zero, and everything drawn against that placement walked across the level with them.
 What the re-centring was for is still true and is answered from the outline instead: `shapeCentre` gives a shape's own centre of area (a polygon's centroid, a curve's stroke, a rect's or circle's origin), and `bodyCentroid` weighs the body's pieces at those points, so the point the editor turns a body about is still the one `mountPieces` mounts it at.
 
 ## Waking lights: `+ Glow` and the awake preview
@@ -49,10 +49,10 @@ The `shadows` box greys out while `wake` is set: a waking light casts no shadow,
 On the canvas the wake is a dashed ring in the light's colour, with longer dashes than the reach's, drawn at the distance itself rather than cut by `z`, because the trigger is measured on the gameplay plane; a round grip on its left drags it like the reach's grip on the right.
 The label says `wakes N`.
 
-**`+ Glow`** (beside `+ Light`) places a glowing mushroom with one click: one static body holding a solid purple cube (`GLOW_CUBE` 0.3 m square and deep, `GLOW_COLOR` `#8a3fd6`, glowing `GLOW_EMISSIVE` `#b070ff` at 2), the collision rect it mirrors (`matchCollision`), and a waking point light at its centre (colour `GLOW_EMISSIVE`, `range` 4 m, `intensity` 6, `wake` 3 m, `wakeDelay` 0.25, `wakeRise` 0.6, `wakeFall` 1.5).
+**`+ Glow`** (beside `+ Light`) places a glowing mushroom with one click: one static body filled `GLOW_COLOR` `#8a3fd6`, holding a collision square (`GLOW_CUBE`, 0.3 m) and a waking point light at its centre (colour `GLOW_EMISSIVE` `#b070ff`, `range` 4 m, `intensity` 6, `wake` 3 m, `wakeDelay` 0.25, `wakeRise` 0.6, `wakeFall` 1.5).
 It goes through the same loader a level and a paste come in by (`glowModel`), so it is exactly what a file holding that body loads as, and it is one body, so the outliner shows one row and it drags as one.
 Those numbers are editor defaults in `editor/model.ts`, not format defaults, and all of them wait on a play; a mushroom on a far wall can lose its collision object.
-The cube is a stand-in until the mushroom model exists, and nothing about the light changes when it does.
+What it looks like is the scene's: a Blender object named like the body is its dressing, and its emissive materials follow the light as it wakes (see [blender-scenes](blender-scenes.md)); a level with no scene shows the square as a grey box in the body's purple.
 
 **The 3D preview shows every waking light AWAKE** (`Scene3D.setGlowPreview(true)`, `LightRig.previewAwake`): each source is held at full without stepping its state, and the pool is spent nearest the view's centre instead of the ball.
 There is nobody in the editor's scene to wake anything, and an author has to see what a mushroom lights before anyone does.
@@ -92,10 +92,11 @@ The item's own position IS wheel 0, so the ordinary move gesture places the belt
 - Pressing a wheel's square or its radius grip **picks** it (the square fills), and the panel shows that wheel's `r`.
 
 Every one of those, the inspector's fields and the gizmo's scale go through `setBelt`, which **refuses wheels that make no belt** - a wheel inside the hull the others make, a disc inside another, a radius or a thickness under a pixel - asking the build's own loop, so the grip stalls at the last belt, as a polygon's corner stalls at the last simple loop, because the editor rebuilds the level from the model on every edit and a belt the build refuses would take the preview down mid-drag.
-The panel has `thickness` (the band's depth in the plane, px as every length there), `width` (how wide the band is across the pulleys: it writes the geometry twin's `depth`), the twin's `texture` (`color` is the flat fill, which keeps the cleats), `speed m/s` (signed: positive runs the loop clockwise on screen), the picked wheel's `r`, and two readouts, the loop's **perimeter** and one **lap** of its surface, `P / |speed|`; a belt with no geometry twin says `Add geometry` gives it one instead of `width` and `texture`.
+The panel has `thickness` (the band's depth in the plane, px as every length there), `speed m/s` (signed: positive runs the loop clockwise on screen), the picked wheel's `r`, two readouts, the loop's **perimeter** and one **lap** of its surface, `P / |speed|`, and the band's look (`BeltLook`, on the shape): `width` (how wide the band is across the pulleys), `texture` (`color` is the flat fill, which keeps the cleats), `band colour` (absent takes the body's fill) and `tile scale`.
+The band is the one look the editor authors, because the game draws it itself: its surface runs round the loop, which a mesh in the Blender scene cannot.
 The outline is `outlineOfData`'s, the one the game draws - the band, hollow inside - with the tread ticks STANDING STILL (nothing runs in the editor) and a small arrowhead over the middle of the longest run saying which way it runs, which a still tread cannot.
 The wheels are drawn as editor marks the game does not draw: a thin circle at each wheel's own radius and a dot at its centre.
-A click in the hollow between the wheels passes through the belt to whatever an author has put inside it; the band and the wheels pick it, which is where it collides.
+A click in the hollow between the wheels passes through the belt to whatever is inside it; the band and the wheels pick it, which is where it collides.
 A belt builds only on a static body that does not move, and that is a fact about the BODY: a kind change or a merge can break it after the belt is drawn.
 The editor does not throw on it - the title says `DOES NOT BUILD:` and the build's own message, the 3D view keeps the last scene that built, and ▶ Test refuses to start - so the author sees what to undo.
 The file still saves, and the game refuses it as loudly as the build does.
@@ -183,7 +184,7 @@ key is released.
 
 Panels are split the way the format is, and **each is reached by selecting the thing it edits**.
 An object panel carries what an object has - its form, its placement in its body, its material,
-thickness, hook-proof flag and look - and nothing else; kind, friction, force and fill are the
+thickness and hook-proof flag - and nothing else; kind, friction, force and fill are the
 body's, and they appear only when the **body** is selected (outliner row, or a canvas click on an
 unselected body).
 There is deliberately no body section above a selected object: that is exactly what made a
@@ -192,7 +193,7 @@ never had a place to put them.
 
 ### Inspector layout: sections and hover help
 
-A selection's panel keeps its title (`Collision #12`, `Body #3 — rigid`) in view, and every property under it sits in a **collapsible section**, collapsed by default: Transform, Surface, Material, Look, Texture, Emission and Fill on an object; Transform, Physics, Bounce, Breakable, Pivot, Spring, Mover, Rock and Fill on a body; and so on for chains, vines, camera regions and paths, lights and notes.
+A selection's panel keeps its title (`Collision #12`, `Body #3 — rigid`) in view, and every property under it sits in a **collapsible section**, collapsed by default: Transform, Surface and Material on an object; Transform, Physics, Bounce, Breakable, Pivot, Spring, Mover, Blender and Fill on a body; and so on for chains, vines, camera regions and paths, lights and notes.
 The level-wide blocks at the top (Level, Player spawn, Environment, 3D camera) are sections of their own.
 Action buttons (Merge, Split, Duplicate, Delete) stay outside the sections, always in view.
 A section's open state is keyed by name per panel kind (`object/Surface`, `body/Mover`), so opening Surface on one wall opens it on the next, and it survives the inspector's rebuilds and a reload (localStorage, `rope.editor.openSections`).
@@ -200,9 +201,8 @@ A section a build leaves empty is dropped (`pruneEmptySections`).
 
 Descriptions are not printed in the panel.
 They are **hover help**: a name with a dotted underline (a field's label, a section's header, a panel's title) shows its description in a popup beside the inspector while the pointer rests on it, and at no other time.
-Live status stays printed: warnings (a vine's light links, a missing firefly path, the shadow budget), readouts, the checkpoint URL, a generator's status line.
+Live status stays printed: warnings (a vine's light links, a missing firefly path, the shadow budget), readouts, the checkpoint URL, the scene's binding.
 The helpers are `src/editor/panelUi.ts` (`section`, `fieldRow`, `heading`, `describe`); new panel text goes through `describe`, never a paragraph under the field.
-A geometry object's whole placement is in its Transform section: its depth off the plane (`visual.offsetZ`) is `z`, after `x` and `y`; `rot x°` and `rot y°` follow `rot°`; a mesh's `scale` comes last.
 
 The kind picker covers `static`, `rigid`, `killzone`, `force`, `water`; the **hook-proof**
 checkbox is per shape, so one piece of a compound body can be the only place a hook will catch,
@@ -214,14 +214,7 @@ Both the arc and the circle are drawn at `sweptReach` - the farthest CORNER from
 Measured off the shapes' centres instead, which is what it did first, a cross drawn round its own axle has every piece centred on the bearing and draws a circle of no radius at all.
 The route is shaped on the canvas rather than in the panel: an amber dashed polyline with a square at every waypoint, dragged to move one, its midpoint handles clicked to insert one and Alt+click to remove one, and the body itself is waypoint zero - so moving the body carries the whole route with it, which is what makes the waypoints frame-local in the model (the same argument `pivotAt` makes).
 Body fields read and write the body's **collision lead** - the object its record is written from -
-and `syncBodyProps` pushes the values to the rest. Going through all the members instead put a
-`mixed` in the opacity field of a body whose decoration is deliberately a different opacity from
-its walls: that decoration's own opacity is not the body's, and reading it as a second opinion on
-the body's fill is reading the wrong field.
-The one fill that is *not* the body's is a geometry object's, which `toLevelData`
-writes onto the object - and only where it DIFFERS from the body's, so a wall's primitive
-takes the colour the wall is painted and states nothing, while a backdrop welded into that
-body carries its own.
+and `syncBodyProps` pushes the values to the rest.
 Every body that can be stood on carries a **surface friction** (0 = ice, 1 = rubber; see below).
 Everything that is a piece of stuff rather than a region of space - every kind but the three areas, hook-only bodies included - also carries a **material** and a **thickness**, the shape's depth through the z axis the 2D view cannot show, with a live **mass** readout under them (`area × thickness × density`).
 The readout is what makes either number authorable: an author is choosing a weight, and a density and a depth only become one once the shape's own size is in it. See [**Mass and materials**](physics-foundations.md#mass-and-materials); both are per shape, so a selection spanning a compound body edits its pieces individually.
@@ -230,7 +223,7 @@ A
 knob steers the current, and force-kind circles get that knob too (a plain circle's rotation
 is invisible, so it has none). A `water` area is aimed the same way and carries the two
 numbers a current is made of instead: a signed **flow** speed and the **drag** rate it takes
-hold at (see [**Water**](water.md)). A toggleable snap (fixed 10 cm, the
+hold at (see [**Water**](water.md)), and the slab the game draws it as: `water z`, where it sits through z, and `water depth`, how deep it is (blank for the renderer's default). A toggleable snap (fixed 10 cm, the
 backdrop's minor-grid spacing) keeps geometry aligned - **moves** snap the body's top-left
 corner, and **corner-resize** anchors the opposite corner (grows toward the drag). Each body
 **Undo/redo** (Ctrl+Z / Ctrl+Shift+Z or Ctrl+Y) keeps 50 model snapshots - one step per
@@ -249,7 +242,7 @@ The editor gains the same stacked WebGL canvas the game page has, and a three-st
 The editor's free camera drives the same correspondence the game's does (see [**3D rendering**](render3d.md)), so the overlay stays pixel-locked at any pan or zoom and collision authoring is exactly as precise as it was.
 
 **Ctrl + middle-drag ORBITS** that view (`CameraOrbit` in `render3d/space.ts`, editor-only - the game's camera is always head-on), and `⟲ Reset view` in the toolbar faces the gameplay plane again.
-It is the one question the authoring view cannot answer on its own: how deep a prop reads, whether a light pool falls where the ring on the plane says it does, what a wall looks like from the side it will be seen from.
+It is the one question the authoring view cannot answer on its own: how deep the scene reads behind the collision, whether a light pool falls where the ring on the plane says it does, what a ledge looks like from the side it will be seen from.
 The camera swings about the point it is centred on at exactly the dolly distance the zoom asks for, so a turn is a turn - it neither zooms nor slides what it is looking at, and the reset is a return to the picture the level was authored against rather than an approximation of it (`cli render3d` asserts all three, plus that a zero orbit is the head-on camera to the bit).
 
 **A turned view draws no overlay**, and that is the whole cost of it.
@@ -258,7 +251,7 @@ So the resize handles, the rubber band and the draw tools' previews all go with 
 
 **What does not go is what a click MEANS.**
 Those two were run together for as long as a pick was resolved on the plane by the 2D camera, and they are different questions: a ray answers for the models (`Scene3D.pick`) and meets the gameplay plane for everything resolved against it (`unprojectToPlane`, `canvasWorld` in `editor.ts`), both at any angle.
-So bodies and objects are **selected in a turned view exactly as they are head on** - the drill-in cycle, Shift, Alt, the outliner - and dragging one carries it along the plane it is drawn in (a light at its `z`, a prop at its depth, so it stays under the pointer), and the **transform gizmo** the pick puts on it is in the scene and works from any angle.
+So bodies and objects are **selected in a turned view exactly as they are head on** - the drill-in cycle, Shift, Alt, the outliner - and dragging one carries it along the plane it is drawn in (a light at its `z`, so it stays under the pointer), and the **transform gizmo** the pick puts on it is in the scene and works from any angle.
 That pairing is the point of the orbit: turn the view to see the depth, then drag the blue arrow to author it, on the thing you turned the view to look at.
 `unprojectToPlane` is `projectToView` backwards, and `cli render3d` asserts it as a round trip through three's own projection at a spread of orbits, plus that it is the 2D answer head on and is NOT it turned - an implementation that quietly returned the 2D answer passes the round trip at zero orbit and puts every turned-view click somewhere else.
 The one thing zoom gives up there is zooming about the cursor: the zoom is a dolly along the view direction rather than a scale about the screen, so the correction would want a ray through a camera that is not built until the frame is drawn, and a turned view zooms about its centre instead.
@@ -266,46 +259,33 @@ The Visuals workspace does zoom about the cursor, because its camera is its own 
 
 Ctrl is on the orbit rather than on the pan because panning is how you get around a level and is wanted in every view, while orbiting is the rarer act and the one you come back from; with no scene to turn (the 2D view) Ctrl+middle simply pans like any other middle drag.
 
-## Geometry is picked by its model, not by an outline
+## Picking what the scene draws
 
-**A geometry object has no outline on the overlay while a scene is drawn underneath, and is selected by clicking the thing that IS drawn** (`Scene3D.pick`, `raycastItems` in `editor.ts`).
-The overlay's answer to "where is this object" was a rectangle on the gameplay plane, and that is not what a geometry object is: a primitive is a solid extruded through z, and a **mesh is a prop whose silhouette the authored outline never described at all**.
-A lamp bracket 10 cm across placed in a 4 m box was therefore clickable by four metres of empty air around it, and a pipe running behind a wall was clickable through the wall - the box being both the only thing drawn for it and the only thing a click could land on.
-Measured on a 4 m box wearing `bulkhead-lamp`: **722 of 729 sample points inside the box selected the prop before, and 1 after** - the one that is the lamp.
+**With a scene drawn underneath, a pick is a raycast through the camera the last frame was drawn with** (`Scene3D.pick`, `raycastItems` in `editor.ts`), so it is about the picture the pointer was actually aimed at, and it holds at any depth.
+What the ray can meet, and what each answers with (`pickTagOf`):
 
-The pick is a **raycast through the camera the last frame was drawn with**, so it is about the picture the pointer was actually aimed at, and it holds at any depth and through either lens where an outline test on the plane cannot.
-Everything else about picking is untouched: the ray only decides whether a geometry object is HIT, and `pickOrder`'s rules (the active layer, then depth, then a collision object winning a tie with the form drawn over it) still decide which of the things under the pointer wins, so **click the body, then click into it, then into what is behind it** cycles exactly as before.
+- a **grey box** (a level with no scene) answers with the collision object it is the extrusion of;
+- a body's **Blender dressing** answers with the body's first object, so a click on a dressed ledge selects the ledge's body;
+- the scene's **scenery** answers with `SCENERY_TAG`, which names no item and so selects nothing;
+- in the Visuals workspace, a **guide** answers with its guide tag.
+
+`pickOrder`'s rules (the active layer, then a collision object winning over a light whose reach it sits inside) still decide which of the things under the pointer wins, so **click the body, then click into it, then into what is behind it** cycles exactly as before.
 The chain tool still asks the plane, because an anchor is placed on a body's collision outline.
 
-The chain from a mesh under the pointer back to a row in the outliner is three links, and each is somewhere different: `BodyVisual` stamps every drawn object's group with the authored object it was built from (`pickTagOf`), `toLevelData` records which ITEM wrote each object it writes, and the editor rebuilds that map with the scene so it can never name an item the picture was not built from.
+The chain from a mesh under the pointer back to a row in the outliner is three links: `BodyVisual` (or `dressScene`) stamps the drawn group with the authored object it stands for, `toLevelData` records which ITEM wrote each object it writes, and the editor rebuilds that map with the scene so it can never name an item the picture was not built from.
 The middle link is the one that can break silently - `toLevelData` writing one object per item, in item order, is an invariant nothing else in the suite depends on - so `cli render3d`'s `pick:` cases assert it directly.
-The 3D half cannot be checked headlessly at all: building a `BodyVisual` needs a DOM for the generated textures, so the raycast itself is verified by driving the real page (see `reference_editor_cdp_harness`).
 
-Two things follow from taking the outline away, and both are the same statement said again.
-**Selection is shown on the model** (`Scene3D.setHighlight`), in the overlay's own colours - the selection orange, and the blue that means "this is what the selected body is made of" - applied as an emissive over the surface the object already wears, so what is lit up is the shape being judged rather than a box around it.
-And **a MESH offers no handles on the plane there** (`hasPlaneHandles`), because every one of them - the corner boxes, the rotate knob, the radius grip, the depth arrow - is a point on an outline that is not drawn and that never described the prop anyway, so left in they are the box that was just taken away redrawn as squares floating in empty space.
-Its handle set in a 3D view is the **transform gizmo**, which is in the scene and therefore on the thing being edited, and which covers every field a mesh has.
+**Selection is shown on the model** (`Scene3D.setHighlight`), in the overlay's own colours - the selection orange, and the blue that means "this is what the selected body is made of" - applied as an emissive over the surface the piece already wears.
 
-A **primitive** is the opposite case and keeps its plane handles in every view, because the rule is "the overlay offers handles for exactly what is drawn" rather than "a geometry object has no outline": a primitive IS its own shape extruded, so the solid under the overlay is that outline and the corner boxes land on its corners.
-Suppressing them cost the cheapest edit a primitive has - drag a corner to resize it - in the view the editor opens in, and offered the gizmo's scale boxes as the only substitute.
-They are projected on the gameplay plane like every other handle, so a primitive pushed off the plane by its `z` has them where its outline is rather than where the perspective draws its face; an orbited view drops the whole overlay in any case.
-
-In the **2D view none of this applies**: there is no scene to ask, the outline is both what is drawn and what is picked, and every handle is back.
-That is not a fallback but the same rule - the overlay picks and offers handles for exactly what it draws.
-An **orbited** view picks by exactly these rules (above): the ray answers for geometry as it does head on, and the collision shapes, lights, regions and notes it shares the canvas with are resolved against the plane through `unprojectToPlane` rather than through the 2D camera, so the two halves of a pick agree about where the pointer is aimed at any angle.
-What it does not offer there is the plane HANDLES, for the reason this section gives about geometry objects and the orbit section gives about everything else: a handle that is not drawn must not be grabbable either.
-
-## Pictures: `+ Image`
-
-`+ Image` (beside `+ Geometry`) asks for a picture file, adds it to the image store (see [asset-store](asset-store.md#pictures)) and stands it up as a backdrop: a body of its own holding one `kind: "image"` geometry object, 10 m behind the gameplay plane (`IMAGE_DEPTH`), sized to span the view's width at that depth and to the picture's own aspect.
-Move, resize and push it through z like any geometry object; with no collision object it is never simulated.
-
-Any geometry object can become a picture: **kind → image** on its Look section, which then offers only the picture picker, **Upload…** (adds a picture and assigns it) and **Fit** (height from width, so the picture is undistorted).
+In the **2D view** there is no scene to ask, and the outline is both what is drawn and what is picked.
+An **orbited** view picks by exactly these rules: the ray answers for what the scene draws as it does head on, and the collision shapes, lights, regions and notes it shares the canvas with are resolved against the plane through `unprojectToPlane` rather than through the 2D camera, so the two halves of a pick agree about where the pointer is aimed at any angle.
+What it does not offer there is the plane HANDLES: a handle that is not drawn must not be grabbable either.
 
 ## Blender scenes: the `scene` and `name` fields
 
 The Level panel's **`scene`** names the Blender scene the level is dressed in (`LevelData.scene`, held to lower-case letters, digits and dashes as it is typed), with a line under it saying what the current export holds - how many objects, how many on bodies, the triangles, when - or that it is not exported yet.
-The body panel's **`name`** (`LevelBodyData.name`, on every member of the body, as the rock seed is) is what an object in that scene is matched to; the field offers the exported objects' names, and the line under it says whether this name is dressed (`Dressed by "Ledge.001" (1,240 triangles)`), missing from the export, or shared with another body.
+With the field blank the line says `No scene: the level is drawn as its collision.`
+The body panel's **`name`** (`LevelBodyData.name`, held on every member of the body) is what an object in that scene is matched to; the field offers the exported objects' names, and the line under it says whether this name is dressed (`Dressed by "Ledge.001" (1,240 triangles)`), missing from the export (the body is then not dressed: nothing in the scene draws it), or shared with another body.
 Both read the export's `meta.json`, fetched once per scene per page; a re-export is seen on the next load.
 The whole loop is in [blender-scenes](blender-scenes.md).
 
@@ -314,9 +294,8 @@ The whole loop is in [blender-scenes](blender-scenes.md).
 The toolbar opens with a switcher, **Level** and **Visuals** (**W** toggles).
 Everything in this document is the **Level** workspace: the editor driven by the 2D camera, with the overlay on top.
 The **Visuals** workspace ([editor-visuals](editor-visuals.md)) is the same editor - the model, undo, the selection, the layer, the tool and the inspector carry across a switch - driven by a free 3D camera navigated Blender's way (middle drag orbits, Shift + middle or right drag pans, the wheel dollies toward what is under the pointer, **F** frames, **Home** faces the plane), with the overlay's marks drawn into the scene as guides instead: collision outlines, light icons and rings, the spawn, regions, paths, notes, the selected polygon's handles and tool drafts, each carrying a guide tag that `Scene3D.pick` returns beside the models.
-It is what the turned view's missing overlay became: where a turned Level view only selects and moves, Visuals edits corners, draws with the plane tools, places props and drops them on surfaces, from any angle.
+It is what the turned view's missing overlay became: where a turned Level view only selects and moves, Visuals edits corners, draws with the plane tools and drops lights on surfaces, from any angle.
 Each workspace keeps its own view, and `▶ Test` returns to the one it left.
-Visuals also offers two tools of its own, **+ Rock** (a boulder generated to fit a collision outline) and **+ Mushrooms** (a patch grown inside a loop painted on a model's surface), each a geometry object with a `generator` block and a schema-built panel, generated by Python and headless Blender behind the dev server ([generators](generators.md); `bun run generators:setup` once per machine).
 **+ Chain** and **+ Vine** are Level-only.
 
 The one predicate the press handler asks is `inScene()` - the Visuals workspace, or the Level workspace turned - which says a press is resolved through the scene's camera rather than the 2D camera's scale and offset; where the two differ, each branch says which it is (see [Picking](editor-visuals.md#picking) there).
@@ -325,16 +304,13 @@ The one predicate the press handler asks is `inScene()` - the Visuals workspace,
 ## The lens
 
 `⧉ Ortho` (**O**) draws the scene through an **orthographic** camera instead of the perspective one (`ViewProjection` in `render3d/space.ts`).
-It is an authoring instrument, not a look: a perspective camera divides by depth, so a prop 2 m behind the plane is drawn a little smaller and pulled toward the centre of the frame - which means two things that are exactly in line in the level do not look it, and two that look it are not.
+It is an authoring instrument, not a look: a perspective camera divides by depth, so a ledge 2 m behind the plane is drawn a little smaller and pulled toward the centre of the frame - which means two things that are exactly in line in the level do not look it, and two that look it are not.
 Orthographic removes the divide, so a metre is the same number of pixels at every depth and what is on screen IS the plan, which is what makes aligning off-plane geometry by eye possible at all.
 Both lenses are driven from the same visible height, so the gameplay plane is framed identically through either and the overlay, the handles and the picking are unchanged by the toggle (`cli render3d` asserts both halves: the plane matches the 2D renderer to a hundredth of a view pixel, and 20 m of depth moves a point by nothing).
 The two cameras both live on `Scene3D` for the life of the scene rather than one being rebuilt on the toggle, since the gizmo raycasts against whichever is current and wants something stable to be handed.
 A **▶ Test is always perspective**, whatever the toggle says: the point of a test is that the framing is the player's, and the player has no lens button.
 
-The toggle is the editor's view of the whole scene.
-The `lens` picker on the geometry panel is a different thing: it is authored, saved and seen by the player, and it draws one object orthographically inside the perspective frame (see [Per-object projection](render3d.md#per-object-projection)).
-An orthographic object's plane handles land on its drawn face at any `z`, since the overlay is itself an orthographic projection of the plane.
-The transform gizmo does not follow it yet: the gizmo is drawn in perspective at the object's real position, so off the plane it is not over the object.
+The toggle is the editor's view of the whole scene, never saved and never seen by the player.
 
 ## The transform gizmo
 
@@ -346,11 +322,11 @@ A mode toggle is a thing to remember and to get wrong, and reaching for a ring a
 Nested, the answer to "what will this drag do" is whatever is drawn under the pointer.
 
 The sizes are read off the geometry three actually builds rather than chosen by eye: an axis handle sits at `0.5 x size` with a picker cone reaching `0.6`, and a rotation ring is drawn at `0.5` with a picker tube `0.1` thick, so `HANDLE_SIZE` puts the scale boxes at 0.056, the move arrows at 0.113 with their pickers stopping at 0.135, and the rings at 0.175 with their pickers starting at 0.14.
-The **ratios** between the three are what the nesting rests on, so they are the part that must not be edited one at a time; the overall footprint is a taste call, and it is a quarter of what it first was, which puts the gizmo inside the prop it is transforming rather than around it.
+The **ratios** between the three are what the nesting rests on, so they are the part that must not be edited one at a time; the overall footprint is a taste call, and it is a quarter of what it first was, which puts the gizmo inside the thing it is transforming rather than around it.
 The move arrows are what that costs - their heads are a `0.04` cone, so at this size they are a couple of pixels of drawn arrow - but what is grabbed is the picker, the full-width cone from the origin out, so they stay pickable at sizes they stop being legible at.
 
 Two handles are dropped because the three sets would otherwise bury each other.
-The **centre belongs to uniform scale**, that being the one handle a mesh genuinely has (its `scale` is one number, so the centre drag is exact and every single axis is an approximation of it), so the move gizmo's own free-in-the-view-plane centre handle goes - its `XY` plane handle already covers the gameplay plane, which is what that one was wanted for.
+The **centre belongs to uniform scale**, so the move gizmo's own free-in-the-view-plane centre handle goes - its `XY` plane handle already covers the gameplay plane, which is what that one was wanted for.
 Rotation's free-rotation ball goes for the plainer reason that it is a quarter-radius sphere sitting exactly where the move and scale handles are, and scale's plane handles because two axes at once is what the MOVE gizmo means.
 
 What the nesting cannot separate is the **pickers**, because an axis picker is a cone that is widest AT THE ORIGIN: the scale box's cone lies wholly inside the move arrow's and both cover the centre.
@@ -358,65 +334,49 @@ So a press is arbitrated (`EditorGizmo.winner`) - innermost drawn first, since a
 Both arbitration listeners are on the **window**, and the phase is what makes each work: three's own handlers are on the canvas, so a capturing `pointerdown` runs before them (a losing set is held off with `enabled`, since three re-runs its own hover inside its press handler and would overwrite anything decided earlier) and a bubbling `pointermove` runs after them (two lit handles under one pointer is the gizmo saying it does not know what a press would do).
 
 It is the answer to the question the overlay cannot even ask.
-The 2D canvas is the gameplay plane seen head on, so it has handles for the two axes that lie in it and no way to say "10 cm toward the camera", "tipped 15° about x" or "a bit bigger" about a mesh whose outline is not what is drawn - and those are exactly the fields a level is dressed with (`EdVisual.offsetZ`, `rotX`, `rotY`, `scale`), every one of which was a number typed into the inspector and checked by looking.
-It is also the only editing there is while the view is **orbited**, which is the view those fields are judged in: the gizmo is in the scene, so it is drawn from wherever the camera is.
+The 2D canvas is the gameplay plane seen head on, so it has handles for the two axes that lie in it and no way to say "10 cm toward the camera" about a lamp.
+It is also the only editing there is while the view is **orbited**: the gizmo is in the scene, so it is drawn from wherever the camera is.
 The two features are a pair - orbit to see the depth, drag the blue arrow to author it.
 
-**The handles sit at the depth the object is DRAWN at**, which is `itemDepth` and not the authored `offsetZ`: a geometry object authoring no depth is drawn on the gameplay plane if its body collides and at `DECOR_Z` if it does not.
-Read as a plain 0, the whole gizmo stood 35 cm in front of every piece of decoration it was attached to - invisible head on, and the first thing you see when the view is turned, which is the view it exists for.
-A move that does not go through z then leaves the field alone rather than writing the pose's own z, or nudging a backdrop sideways would stamp that fallback into the file as an authored `z` nobody asked for.
-A move that does go through z writes the new depth OUTRIGHT (`offsetZAfterMove` in `editor/model.ts`), because once written `offsetZ` is where the object is rather than a change from where it fell back to.
-Until 2026-09-25 it wrote the displacement into the field as a change, so the first touch of the blue arrow on decoration drawn at `DECOR_Z` jumped it 35 cm toward the camera (found by the Visuals workspace's drop on surface, which goes through the same handler); a group drag had the same fault through its members' authored depths, and a group drag that went out through z and came back left its members where they had been mid-drag.
-The one depth the field cannot hold is exactly 0 on a body that collides with nothing, which the format reads as unset.
+**The handles sit at the depth the object is drawn at** (`handleZ`): a light's `z`, and the gameplay plane for everything else, which is where collision is.
 
 **The gizmo never touches the model.** It moves a proxy object and the editor reads that proxy and writes the model, which is what lets it survive the scene being rebuilt from scratch on every model revision - that is, on every drag. A handle attached to a visual is attached to an object that is disposed a frame later, and re-attaching per frame is a gesture that cannot survive its own effect.
 
-**The gizmo is offered for one object, one body, or the whole selection** (`gizmoSpec`), ordered by how much is known about the target rather than by how many things it holds: one object offers its own depth, tip and size; one body turns about the centre of mass the engine mounts it at; anything wider is an ARRANGEMENT, and what an arrangement has is a place and an angle.
+**The gizmo is offered for one object, one body, or the whole selection** (`gizmoSpec`), ordered by how much is known about the target rather than by how many things it holds: one object offers what it has of a depth, a turn and a size; one body turns about the centre of mass the engine mounts it at; anything wider is an ARRANGEMENT, and what an arrangement has is a place and an angle.
 
 **A handle is offered only where the format has somewhere to put its answer** (`GizmoHandlers.axes`), so what is on screen is the level's real degrees of freedom rather than three of everything:
 
 | Target | move | rotate | scale |
 |---|---|---|---|
-| geometry: mesh | x, y, z | x, y, z | its one `scale` |
-| geometry: primitive | x, y, z | x, y, z | w/h + depth |
 | collision shape | x, y | z | w/h |
 | light | x, y, z | z (its aim) | - (its reach is the 2D radius handle) |
 | body | x, y | z, as a delta about the centre of mass | - (a body has no size; its objects do) |
 | several of either | x, y, z (what has a z) | z, as a delta about the selection's centre | - (each member's own handles) |
 
-**A primitive tips like a prop does**, and that is this table's rule rather than an exception to it: `EdVisual.rotX`/`rotY` belong to what is DRAWN, so `mountVisual` turns an extrusion by them exactly as it turns a prop's holder, and `visualData` writes them for either kind.
-The pivot is the object's own origin, and an extrusion is built centred on z (`extrude.ts`), so a rect tipped about x is a ramp hinged on its own middle rather than on its back face.
-It was a prop's field alone while nothing in the extrusion path read it - the ring turned, `rot x°` changed, and the level went on looking exactly as it did - which is the shape of the bug this closes, not a reason the plane is special.
-
-What a tipped primitive does NOT do is move the collision: the body still collides with the outline its collision objects state, in the plane, and the 2D renderer still draws that outline face on.
-A ramp the ball can actually run up is a collision shape turned by `rot`; this is the look.
-
-**Several things move as one arrangement.** Selecting a handful of objects (or a handful of bodies, which means every object in them - the same set `operandItems` hands Delete, Duplicate and a nudge) puts the handles at their middle, and a drag moves or turns the lot about that point: a run of pillars, a stack of crates, a dressed doorway.
+**Several things move as one arrangement.** Selecting a handful of objects (or a handful of bodies, which means every object in them - the same set `operandItems` hands Delete, Duplicate and a nudge) puts the handles at their middle, and a drag moves or turns the lot about that point: a run of pillars, a stack of crates, a doorway and its lamp.
 It is the one gesture the plane could never offer, the overlay having handles on one shape and a rotate knob on one body, so laying out an arrangement meant turning every piece about its own centre and dragging each of them back into formation.
 
 Three things decide whether it behaves:
 
 - **The centre is a MEAN of the members' own centres** (`selectionCentre`), not the middle of their bounding box and not `bodyCentroid`.
-  A mean is a fixed point of its own rotation, so the handles stay put across a turn where a bounding box would hop sideways the moment one was released; and `bodyCentroid` answers a different question - it is mass-weighted over the COLLIDING shapes alone, because a body has to turn about the point the engine mounts it at, so a backdrop selected beside a wall would be ignored entirely and a small dense block would drag the handles off the middle of what is lit up.
+  A mean is a fixed point of its own rotation, so the handles stay put across a turn where a bounding box would hop sideways the moment one was released; and `bodyCentroid` answers a different question - it is mass-weighted over the COLLIDING shapes alone, because a body has to turn about the point the engine mounts it at, so a lamp selected beside a wall would be ignored entirely and a small dense block would drag the handles off the middle of what is lit up.
 - **The transform is measured from the pose the drag began in** (`captureGroupPose` / `placeGroup`), because a drag re-applies its whole displacement on every pointer move.
   A delta-per-move reads identically for one move and accumulates the snap grid's rounding over a slow one.
 - **A body carries its frame only when the whole body is in the selection**, which is `carryBodyFrames`' rule and the one every other group edit already follows: dragging two objects out of a compound body moves those two and leaves the body they came from where it was.
 
-**The blue arrow moves what has a depth and passes over what does not.** It is offered as soon as ONE member has a z - a drawn form's `offsetZ`, a light's own `z` - and every member that has one moves by the drag while a collision shape in the selection stays in the plane.
-The stricter reading (no depth handle unless every member could move) was rejected because a level's collision IS the gameplay plane and is never anywhere else, so it would mean that a selection holding one piece of collision could never be pushed back - which is most of them.
-Each member keeps its own depth and moves by the displacement, so a backdrop 6 m back and the sign 20 cm in front of it stay 5.8 m apart.
+**The blue arrow moves what has a depth and passes over what does not.** It is offered as soon as ONE member has a z - a light's own `z` - and every member that has one moves by the drag while a collision shape in the selection stays in the plane.
+The stricter reading (no depth handle unless every member could move) was rejected because a level's collision IS the gameplay plane and is never anywhere else, so it would mean that a lamp selected with its bracket's collision could never be pulled forward.
+Each member keeps its own depth and moves by the displacement, so two lamps 50 cm apart through z stay 50 cm apart.
 
-**Size is deliberately absent from a selection.** Every member has its own, in its own units - an outline, an extrusion depth, a mesh's one factor, a light's reach - and one handle over the lot would have to invent a rule for each; the members' own handles say it exactly.
+**Size is deliberately absent from a selection.** Every member has its own, in its own units - an outline, a light's reach - and one handle over the lot would have to invent a rule for each; the members' own handles say it exactly.
 
-Two consequences worth knowing before reaching for it.
-A **mesh has one `scale`**, so any axis of the handle drives it, by the mean of the three factors - the uniform centre handle is exact and a single axis is an approximation of "bigger", because the file has one number and cannot record more.
-And **an axis pointing at the camera cannot be dragged**, which head on is z for a move and the ring for a turn: `TransformControls` hides a handle within a few degrees of the view direction, and maps a ring drag onto the screen direction perpendicular to both the axis and the view, which degenerates as the two line up.
-Turning about z head on is therefore the 2D rotate knob's job (or the outer screen-space ring, which anything drawn gets since all three of its axes are authorable), and moving through z head on is the **depth handle** below.
+One consequence worth knowing before reaching for it: **an axis pointing at the camera cannot be dragged**, which head on is z for a move and the ring for a turn: `TransformControls` hides a handle within a few degrees of the view direction, and maps a ring drag onto the screen direction perpendicular to both the axis and the view, which degenerates as the two line up.
+Turning about z head on is therefore the 2D rotate knob's job, and moving through z head on is the **depth handle** below.
 Orbited, both gizmo handles behave normally - which is the pairing: orbit to see the depth, drag the blue arrow to author it.
 
 ## The depth handle
 
-A selected object that HAS a z - a geometry object or a light - carries one more 2D handle: a small blue up/down arrow beside its right edge, labelled with the value in the inspector's own units.
+A selected object that HAS a z - a light - carries one more 2D handle: a small blue up/down arrow beside its right edge, labelled with the value in the inspector's own units.
 Dragging it up moves the object toward the camera, at the same scale x and y move at, snapped to the same grid.
 
 It exists because z is the one axis the authoring view has no direction for, and the gizmo cannot cover it in that view for exactly the same reason (above).
@@ -432,30 +392,8 @@ Chains stay on the 2D canvas there, and deliberately: the editor draws a chain *
 Every gap, ledge and shelf in the file is a decision about a 12 cm iron ball, and a ring on the overlay says where a run starts without saying how much room it takes - so a slot judged by eye was judged against nothing until it was played.
 It is built here from the model rather than borrowed from a `BallLevel`, at the radius it is actually PLAYED at (`BallLevel.BALL_RADIUS_SCALE` over the authored spawn radius, which is the grapple avatar's), and nothing steps it: with no chain thrown there is nothing else of the assembly to draw, so what stands in the scene is the sphere and its mounting loop in the pose a run opens in.
 The spawn marker on the overlay gained the same size as a second, fainter ring outside its own: the inner one is the marker - the thing dragged to move the spawn - and the outer one is the ball's footprint, which lands on the drawn sphere's silhouette in a 3D view and is the only thing that says the ball's size in the 2D one.
-A geometry object's panel authors what it is drawn as (**kind** - `primitive` or `mesh` - plus mesh, depth, bevel, texture) alongside the placement and size every object has, since a geometry object states its own form and those fields are what say it.
 
-**Generated rocks** add two fields and one button (see [rocks](rocks.md#reference-and-actual-outlines)).
-When a selected primitive wears a rock texture (`ROCK_TEXTURES`), **taper start** and **taper angle** take the place of **bevel**: where the rock's taper begins, in pixels in front of the object's plane, and how far its surface leans in, in degrees clamped to 0..90.
-The 3D view draws a rock as the solid its generated mesh fills, the outline straight through to the start and then the tapered roof (`taperOutline` in `render3d/extrude.ts`), so the taper is read off the picture as it is set; the bevel is not drawn on a rock, because the generator does not read it.
-**bevel** stays for everything else, and a mixed selection offers both.
-Both default to 0 and are written to the file only when nonzero, so a level that never touches them saves byte-identically.
-They only change the generated rock, which needs `bun run assets:rocks <level>` to see; the editor's own 3D view still draws the flat extrusion.
-
-**Fit collision to rock** sits under **match collision** on a rock's geometry object panel (a single object selected) and beside **Origin to COM** on its body panel.
-It is offered on any body `rockBodies` counts as rock; whether it can work is only known once the file is read, so the refusals are said when it is pressed, as a toast.
-It reads `/rocks/<level>.glb` (the file this level saves to, or `?rocks=NAME` on the editor's URL), finds the body's node, and refuses with "rock is stale, regenerate" when the node's hash is not the hash of the body as the editor holds it now.
-Otherwise it projects every triangle of the node straight along z, traces the silhouette (rasterised at 1 cm, simplified at 2 cm, holes ignored, the largest blob kept), and writes it as the body's collision object's outline, a `poly` in that object's own frame; the object keeps its placement and every other field.
-The geometry object's **match collision** is switched off in the same edit, so the reference outline the rock was generated from stays as authored; it is one undo step.
-Its limits: a body with exactly one rock geometry object and exactly one collision object (anything else is refused, naming the counts), a collision object that is an outline rather than a curve or a belt, and a missing file (404) is a message and no change.
-The projection has no depth cut: a shard far behind the gameplay plane widens the outline as much as one standing on it, and a fragment the raster does not join to the main blob is dropped.
-
-**rock seed** sits in the body properties (the body panel, and the panel for several bodies) when every selected body is one `rockBodies` counts as rock, below the physics fields and above the fill.
-It is the body's `rockSeed`: an integer, step 1, never below 0, written to the file only when nonzero, and one undo step per edit like every other field.
-It is held on every member of the body rather than only the collision lead, because a rock body may be geometry alone.
-**Next seed** below it adds 1 to each selected body's seed, for the loop it exists for: regenerate, look, bump.
-Changing the seed marks the rock stale, so play shows the extrusion until `bun run assets:rocks <level>` is run again.
-`mesh` gets a badge on the canvas in the **2D view**, being the one kind whose outline is not what the player sees; a primitive is drawn as exactly the shape on screen, so a badge on it would be a mark on almost every object saying nothing.
-In a 3D view the prop itself is drawn, so the badge would be a mark pointing at the thing it is standing on, and it is not drawn (see **Geometry is picked by its model**).
+**Retired 2026-09-29**: the panel fields and tools for how a level looks - geometry objects (primitive, mesh and image), `+ Geometry`, `+ Image`, the per-object lens, match collision, the rock taper, **Fit collision to rock** and the rock seed - went when the level's look moved to its Blender scene ([blender-scenes](blender-scenes.md)); the full text is at commit `bfa6597`.
 
 `▶ Test Grapple` / `▶ Test Ball` build a real `Level`/`BallLevel` from
 the current model and run it inline (with the real camera, so a camera region is felt exactly as it will play); **Esc** returns to editing.

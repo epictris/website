@@ -26,7 +26,7 @@ import type { World } from "../engine/world";
 import type { SceneChain } from "../level/chains";
 import type { VineCord } from "../level/vines";
 import type { LevelVisualSource } from "../level/buildBodies";
-import type { EnvironmentData, FireflyPathData } from "../level/levelFormat";
+import { isCollisionObject, type EnvironmentData, type FireflyPathData } from "../level/levelFormat";
 import type { Camera } from "../render/camera";
 import type { ViewTransform } from "../render/viewport";
 import { GpuTimer } from "../render/gpuTimer";
@@ -39,7 +39,6 @@ import type { ChainRetract } from "../render/chainRetract";
 import type { CameraRule } from "../render/cameraController";
 import { configureRenderer, Environment } from "./environment";
 import { LightRig } from "./lights";
-import { cloneWithPatches, isOrthographicMaterial, orthoFramedZ } from "./projection";
 import {
   applyPose,
   CAMERA_FAR,
@@ -142,8 +141,8 @@ export class Scene3D {
   // rather than being added to `scene` by the host so that it survives
   // `setLevel` (every model revision rebuilds the level, and the guides are
   // rebuilt on their own schedule), so that `pick` answers for it in the same
-  // nearest-first list as the models, and so that `setHighlight` and
-  // `meshesOf` can leave it out: a guide is furniture, never a surface.
+  // nearest-first list as the models, and so that `setHighlight` can leave it
+  // out: a guide is furniture, never a surface.
   readonly editorLayer = new THREE.Group();
   // The two lenses (see `ViewProjection`). Both exist for the whole life of the
   // scene rather than one being rebuilt on a toggle: a camera is a transform and
@@ -284,11 +283,11 @@ export class Scene3D {
     // reconciliation below finds it already made rather than building a second,
     // authorless visual for the same body.
     const targets: DressTarget[] = [];
-    level.visualSource.built.bodies.forEach((built, index) => {
-      // The body's index in the level names its own copy of any surface a
-      // waking light drives (see `BodyVisual`'s `instance`), so a rebuild of
-      // the same level (every editor revision) reuses the same cache entries.
-      const visual = new BodyVisual(built.body, built, this.lights, `b${index}`);
+    // A level with no scene has no look at all, so it is seen by its collision
+    // (see `BodyVisual`'s header).
+    const sceneName = level.visualSource.data.scene;
+    level.visualSource.built.bodies.forEach((built) => {
+      const visual = new BodyVisual(built.body, built, this.lights, !sceneName);
       this.scene.add(visual.root);
       if (built.body) this.bodies.set(built.body, visual);
       else this.standing.push(visual);
@@ -301,13 +300,14 @@ export class Scene3D {
         root: visual.root,
         origin: built.origin,
         rotation: built.rotation,
+        solid: built.data.objects.some(isCollisionObject),
         tag: built.data.objects[0],
+        adopt: (node) => visual.adoptDressing(node),
       });
     });
     // The level's Blender scene, over everything (see docs/blender-scenes.md):
     // bound nodes land under the roots above when the file arrives, scenery
     // stands in the world where Blender put it.
-    const sceneName = level.visualSource.data.scene;
     if (sceneName) {
       this.dressing = new SceneDressing(sceneName, targets);
       this.scene.add(this.dressing.root);
@@ -806,12 +806,6 @@ export class Scene3D {
   // Duplicates are dropped rather than repeated: a prop is many meshes and one
   // thing, and a caller walking the list wants the next OBJECT down.
   //
-  // An object drawn through the orthographic lens (`GeometryObjectData.projection`)
-  // is on screen where the ORTHOGRAPHIC camera puts it, so it is picked by that
-  // camera's ray - both cameras are synced to the same view every frame - and
-  // the two lists are merged by depth along the view axis, the quantity the
-  // depth buffer sorted them by when they were drawn.
-  //
   // The editor's guides (`editorLayer`) are in the same list, sorted by the
   // same depth: an outline drawn through a wall is behind it here, and which of
   // the two a click means is the caller's rule to apply, as it already is for a
@@ -839,37 +833,26 @@ export class Scene3D {
   // where the surface tools first did).
   hitsAt(x: number, y: number): SceneHit[] {
     this.pointer.set(x, y);
-    const split = this.camera === this.perspective;
+    const cam = this.camera;
+    cam.getWorldDirection(this.forward);
+    this.raycaster.setFromCamera(this.pointer, cam);
     const hits: SceneHit[] = [];
-    const cast = (cam: ViewCamera, ortho: boolean): void => {
-      cam.getWorldDirection(this.forward);
-      this.raycaster.setFromCamera(this.pointer, cam);
-      for (const hit of this.raycaster.intersectObjects(this.scene.children, true)) {
-        const mesh = hit.object as THREE.Mesh;
-        // A boolean, not `mesh.isMesh && ...`: a sprite (a guide's handle or
-        // light icon) has no `isMesh`, and the `undefined` that expression
-        // hands back is `!== false` as well as `!== true`, so every sprite was
-        // dropped by both passes below and no handle could ever be clicked.
-        const drawnOrtho = mesh.isMesh === true && isOrthographicMaterial(mesh.material);
-        // Under the orthographic scene camera there is one ray, and every
-        // object is answered by it.
-        if (split && drawnOrtho !== ortho) continue;
-        const depth =
-          this.forward.x * (hit.point.x - cam.position.x) +
-          this.forward.y * (hit.point.y - cam.position.y) +
-          this.forward.z * (hit.point.z - cam.position.z);
-        hits.push(Object.assign(hit, { depth }));
-      }
-    };
-    cast(this.camera, false);
-    if (split) cast(this.orthographic, true);
+    for (const hit of this.raycaster.intersectObjects(this.scene.children, true)) {
+      const depth =
+        this.forward.x * (hit.point.x - cam.position.x) +
+        this.forward.y * (hit.point.y - cam.position.y) +
+        this.forward.z * (hit.point.z - cam.position.z);
+      hits.push(Object.assign(hit, { depth }));
+    }
     return hits.sort((a, b) => a.depth - b.depth);
   }
 
   // The nearest drawn SURFACE under the pointer whose pick tag `accept` takes:
   // the world point the ray met (three's frame) and the face's world normal
-  // there. What a surface tool clicks out its outline on - the mushroom loop -
-  // so a vertex lands on the model rather than on the gameplay plane.
+  // there. What a light is dropped onto, so it lands on the model rather than
+  // on the gameplay plane. The scene's scenery answers with `SCENERY_TAG`
+  // (a ledge in the backdrop is a surface a lamp can hang on); what carries no
+  // tag at all - the ball, a chain - is never one.
   //
   // Only a hit with a face is a surface, which is what keeps the guides out of
   // it without a rule of their own: a fat line or a sprite has none.
@@ -885,25 +868,6 @@ export class Scene3D {
       return { tag, point: hit.point.clone(), normal };
     }
     return null;
-  }
-
-  // Every mesh drawn for one pick tag - a prop's submeshes, or an extrusion -
-  // for a tool that reads the geometry itself (the mushroom loop collects the
-  // faces inside it). Instanced meshes are left out: their geometry is one
-  // instance's, not what is drawn. The guides are left out too; nothing a
-  // guide is drawn with is a surface.
-  meshesOf(tag: unknown): THREE.Mesh[] {
-    const out: THREE.Mesh[] = [];
-    for (const child of this.scene.children) {
-      if (child === this.editorLayer) continue;
-      child.traverse((o) => {
-        const mesh = o as THREE.Mesh;
-        if (mesh.isMesh && !(mesh as THREE.InstancedMesh).isInstancedMesh && pickTagOf(mesh) === tag) {
-          out.push(mesh);
-        }
-      });
-    }
-    return out;
   }
 
   // Paint the drawn objects named by these tags, each in its own colour. It is
@@ -960,9 +924,8 @@ export class Scene3D {
     const existing = this.highlightMaterials.get(key);
     if (existing) return existing;
     // Keeping the source's shader patches: a plain clone drops a patched
-    // surface's shader (water, rocks) and an orthographic object's lens, so
-    // selecting a thing would change what it looks like and, for an ortho one,
-    // where it is drawn.
+    // surface's shader (water), so selecting a thing would change what it
+    // looks like.
     const clone = cloneWithPatches(src);
     const std = clone as THREE.MeshStandardMaterial;
     if (std.isMeshStandardMaterial) {
@@ -1031,11 +994,6 @@ export class Scene3D {
       syncCamera(this.camera, camera, this.lens, orbit);
       syncCamera(other, camera, this.lens, orbit);
     }
-    // Written every frame rather than at `setLevel`, because it is shared by
-    // every scene on the page (see `orthoFramedZ`). It is the depth the view is
-    // framed at, which a free pose carries in its target: the ortho patch sizes
-    // an object to agree with the orthographic camera at that depth.
-    orthoFramedZ.value = pose ? pose.target.z : this.lens.zOffset;
     this.env.follow(centre);
     const clock = this.pinnedClock ?? performance.now() / 1000;
     // The spray's point sprites and a beam's dust are sized in metres and need
@@ -1160,4 +1118,16 @@ export class Scene3D {
 // they are each responsible for.
 export function isPassThroughScenery(body: CollisionObject2D): boolean {
   return body.passable;
+}
+
+// `clone()` that keeps a material's shader patches. Three's `copy` carries every
+// parameter but NOT `onBeforeCompile` or `customProgramCacheKey`, which are
+// instance overrides - so a plain clone of a patched material (the water's) is
+// silently an unpatched one.
+function cloneWithPatches<M extends THREE.Material>(src: M): M {
+  const clone = src.clone() as M;
+  const own = (k: string): boolean => Object.prototype.hasOwnProperty.call(src, k);
+  if (own("onBeforeCompile")) clone.onBeforeCompile = src.onBeforeCompile;
+  if (own("customProgramCacheKey")) clone.customProgramCacheKey = src.customProgramCacheKey;
+  return clone;
 }

@@ -43,7 +43,7 @@ The authored pose keeps its whole meaning - it is the spring's anchor and the to
 A centre-of-mass pivot and a plain rigid body spawn EXACTLY at their authored pose, which is the bit-identity rule; recorded bundles containing spring bodies legitimately diverge (informational, per the usual bundle semantics).
 
 Two frame correspondences are load-bearing.
-`BuiltBody.origin` is captured BEFORE the displacement, because `localPlacement` resolves every geometry object, decoration and chain anchor against the frame the authored placements were written in - captured after, a leaf's visual stands at the authored spot while its body hangs below it.
+`BuiltBody.origin` is captured BEFORE the displacement, because `localPlacement` resolves every light and chain anchor against the frame the authored placements were written in, and a scene's dressing is mounted against it (`dressScene`) - captured after, a leaf's visual stands at the authored spot while its body hangs below it.
 And a chain or vine anchor on a sprung body resolves its material point through `anchorWorldPoint` (`chains.ts`): the authored placement mapped through that correspondence onto the body's spawned transform, so the anchor rides the settle and a taut chain's derived length is the distance between the anchors AS THEY LAND - resolved through the authored placement instead, the chain spawns slack by the droop and yanks on frame one.
 The undisplaced path deliberately keeps the plain `worldPlacement` answer, since the local round trip costs two rotations of float noise and every level with no sprung body must stay bit-identical.
 

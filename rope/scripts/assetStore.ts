@@ -27,10 +27,7 @@ import {
   TEXTURE_ASSETS,
   textureMaps,
 } from "../src/render3d/assets";
-import { generatedMeshAsset } from "../src/render3d/generated";
-import { IMAGE_ASSETS } from "../src/render3d/images";
-import { GENERATED_ASSETS, generatedReleaseName } from "../src/render3d/generatedMeta";
-import { levelGeneratedKeys, levelSceneName } from "../src/render3d/levelAssets";
+import { levelSceneName } from "../src/render3d/levelAssets";
 import { SCENE_ASSETS, sceneFile, sceneReleaseName } from "../src/render3d/scenes";
 import { LEVELS } from "../src/level/registry";
 
@@ -54,7 +51,7 @@ export interface StoredAsset {
   // for what the number is for).
   bytes: number;
   // The file's name in the release, when it is not the basename of `file`: a
-  // generated mesh is always `mesh.glb` on disk (see `generatedReleaseName`).
+  // scene is always `scene.glb` on disk (see `sceneReleaseName`).
   name?: string;
 }
 
@@ -94,11 +91,6 @@ export function storedAssets(): StoredAsset[] {
   for (const [key, asset] of Object.entries(HDRI_ASSETS)) {
     out.push({ key, file: asset.file, sha256: asset.sha256, bytes: asset.bytes });
   }
-  // The pictures image planes show (the editor's upload pins them) - one file
-  // per entry, like a prop.
-  for (const [key, asset] of Object.entries(IMAGE_ASSETS)) {
-    out.push({ key, file: asset.file, sha256: asset.sha256, bytes: asset.bytes });
-  }
   for (const [key, asset] of Object.entries(TEXTURE_ASSETS)) {
     const maps = asset.maps;
     for (const [slot, map] of Object.entries(maps)) {
@@ -109,13 +101,6 @@ export function storedAssets(): StoredAsset[] {
     if (textureMaps(asset).length !== Object.values(maps).filter(Boolean).length) {
       throw new Error(`texture "${key}": textureMaps() disagrees with its own map slots`);
     }
-  }
-  // Generated meshes the levels name, published by `assets:publish-generated`.
-  // One file per key, like a prop.
-  for (const [key, asset] of Object.entries(GENERATED_ASSETS)) {
-    const file = generatedMeshAsset(key)?.file;
-    if (!file) throw new Error(`generatedAssets.json: "${key}" is not a generated key`);
-    out.push({ key, file, sha256: asset.sha256, bytes: asset.bytes, name: generatedReleaseName(key) });
   }
   // Blender scenes the levels name, published by `assets:publish-scenes`. One
   // file per scene, like a prop; every one on disk is `scene.glb`, so the
@@ -133,25 +118,14 @@ export function storedAssets(): StoredAsset[] {
 }
 
 // Every Blender scene a registered level names - what the build ships and so
-// what the store must hold (`SCENE_ASSETS`). Registered levels only, as
-// `levelsGeneratedKeys` counts them.
+// what the store must hold (`SCENE_ASSETS`). Registered levels only, as the
+// build's own `scenesInBuild` counts them: a file in `levels/` is not a level
+// until `registry.ts` lists it.
 export function levelsSceneNames(): Map<string, string[]> {
   const out = new Map<string, string[]>(); // scene -> the levels naming it
   for (const [id, spec] of Object.entries(LEVELS)) {
     const scene = levelSceneName(spec.data);
     if (scene) out.set(scene, [...(out.get(scene) ?? []), id]);
-  }
-  return out;
-}
-
-// Every generated mesh key a registered level names - what the build ships and
-// so what the store must hold (`GENERATED_ASSETS`). Registered levels only, as
-// the build's own `generatedMeshesInBuild` counts them: a file in `levels/` is
-// not a level until `registry.ts` lists it.
-export function levelsGeneratedKeys(): Map<string, string[]> {
-  const out = new Map<string, string[]>(); // key -> the levels naming it
-  for (const [id, spec] of Object.entries(LEVELS)) {
-    for (const key of levelGeneratedKeys(spec.data)) out.set(key, [...(out.get(key) ?? []), id]);
   }
   return out;
 }

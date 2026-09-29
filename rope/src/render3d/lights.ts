@@ -217,11 +217,11 @@ interface BuiltLight {
   beam: Beam | null;
 }
 
-// A material whose emission follows a waking light: a glowing shape in the same
-// body (see `BodyVisual`), on its own instance-keyed copy of its surface so no
-// other shape in the level pulses with it. `authored` is the geometry object's
-// own `emissiveIntensity`, taken from the level rather than read off the
-// material, which this rig has been writing.
+// A material whose emission follows a waking light: a glowing part of the same
+// body's Blender dressing (see `BodyVisual.adoptDressing`), on the body's own
+// copy of it so no other object in the level pulses with it. `authored` is the
+// emission the scene was exported with, taken when the copy was made rather
+// than read off the material, which this rig has been writing.
 export interface DrivenEmission {
   material: THREE.MeshStandardMaterial;
   authored: number;
@@ -554,8 +554,7 @@ export class LightRig {
     const g = this.glows.findIndex((s) => s.holder === mounted.holder);
     if (g >= 0) {
       const s = this.glows[g]!;
-      // Handed back as authored: the materials are cached by their instance
-      // key and outlive this rig (the editor rebuilds the scene on every edit).
+      // Handed back as authored, since a visual may outlive the rig.
       for (const d of s.driven) d.material.emissiveIntensity = d.authored;
       s.holder.removeFromParent();
       this.glows.splice(g, 1);

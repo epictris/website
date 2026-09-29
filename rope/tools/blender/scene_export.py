@@ -214,6 +214,23 @@ def bake_procedural_color(kept):
     return len(targets)
 
 
+def carries_channel(src):
+    """Whether `src` is one channel of an image, as glTF packs roughness (G)
+    and metallic (B) into one: a Separate Color fed by an Image Texture, or that
+    times a constant (a Math Multiply with one input unlinked). It is the graph
+    Blender's own glTF importer builds for a metallic-roughness texture and
+    factor, and its exporter writes it back as exactly that."""
+    if src.type == "MATH" and src.operation == "MULTIPLY":
+        linked = [s for s in src.inputs[:2] if s.is_linked]
+        if len(linked) != 1:
+            return False
+        src = linked[0].links[0].from_node
+    if src.type != "SEPARATE_COLOR" or not src.inputs["Color"].is_linked:
+        return False
+    image = src.inputs["Color"].links[0].from_node
+    return image.type == "TEX_IMAGE" and image.image is not None
+
+
 def material_warnings(ob):
     """What glTF cannot carry of this object's materials, one line each."""
     out = []
@@ -243,6 +260,8 @@ def material_warnings(ob):
                 if src.type == "NORMAL_MAP" and src.inputs["Color"].is_linked:
                     src = src.inputs["Color"].links[0].from_node
                 if socket_name == "Base Color" and (carries_vertex_color(src) or carries_tint(src)):
+                    continue
+                if socket_name in ("Roughness", "Metallic") and carries_channel(src):
                     continue
                 # A bump of strength 0 (the boulder generator's stone at its
                 # default) changes nothing, so losing it loses nothing.
@@ -285,6 +304,15 @@ def image_credits(obs, warnings):
             unknown.append(im.name)
         elif isinstance(entry, str):
             credits[entry] = {"name": entry, **table["sets"][entry]}
+    # A MESH that is someone else's work carries its credit on the object: a
+    # `credits` custom property naming sets of the table, comma-separated. An
+    # image is found by name, a model's geometry has nothing to be found by.
+    for ob in obs:
+        for entry in filter(None, (s.strip() for s in str(ob.get("credits", "")).split(","))):
+            if entry in table["sets"]:
+                credits[entry] = {"name": entry, **table["sets"][entry]}
+            else:
+                warnings.append(f'{ob.name}: credit "{entry}" is not a set in tools/blender/image_credits.json')
     for name in unknown:
         warnings.append(f'image "{name}" has no credit: add it to tools/blender/image_credits.json (or `generated` with the script that made it)')
     return [credits[k] for k in sorted(credits)]
