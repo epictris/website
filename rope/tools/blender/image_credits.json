@@ -6,7 +6,8 @@
     "moss-grass05-rough.png": "grass_05",
     "moss01-base.png": "moss_ground_01",
     "moss01-normal.png": "moss_ground_01",
-    "basalt_surface.png": { "generated": "assets-src/scenes/cavern/generate_cave.py" }
+    "basalt_surface.png": { "generated": "assets-src/scenes/cavern/generate_cave.py" },
+    "moss-cutout-atlas.png": { "generated": "tools/blender/moss/mesh_io.py" }
   },
   "sets": {
     "grass_05": {

@@ -1,5 +1,5 @@
-"""Moss: paint procedurally grown moss geometry onto meshes, with hanging
-curtains where it runs off a drop. See rope/docs/blender-moss.md.
+"""Moss: paint a carpet of flat leaf blobs onto meshes, layered like paper
+cutouts, with vines of leaves hanging off its front edge. See rope/docs/blender-moss.md.
 
 A Blender add-on (an extension in Blender's 4.2+ packaging, blender_manifest.toml
 beside this file). The scene exporter imports this package directly and calls

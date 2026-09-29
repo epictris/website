@@ -329,7 +329,7 @@ def grow_moss(scene, warnings):
             warnings.append(f"{ob.name}: {ob.moss.status}; not exported")
             ob.hide_render = True
             continue
-        log(f"moss {ob.name} on {ob.moss.host}: {len(result.triangles)} triangles ({result.curtain_triangles} curtain), {ob.moss.build_ms:.0f} ms")
+        log(f"moss {ob.name} on {ob.moss.host}: {len(result.triangles)} triangles ({result.blobs} blobs, {result.vines} vines), {ob.moss.build_ms:.0f} ms")
 
 
 def formation_warnings(scene, warnings):

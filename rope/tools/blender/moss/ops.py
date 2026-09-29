@@ -60,6 +60,7 @@ def create_moss(host, scene, template=None):
     s.host = host.name
     s.stamps = mesh_io.new_stamps_mesh(f"{host.name}.moss.stamps")
     s.live = True
+    ob.visible_shadow = False  # the moss casts no shadow, in Blender as in the game: a cast shadow between leaves reads as a hole
     attach(ob, host)
     return ob
 
@@ -101,7 +102,8 @@ def rebuild(ob, depsgraph=None):
         ev.to_mesh_clear()
     mesh_io.write_result(ob.data, result)
     s.triangles = len(result.triangles)
-    s.curtain_triangles = result.curtain_triangles
+    s.blobs = result.blobs
+    s.vine_count = result.vines
     s.build_ms = (time.perf_counter() - t0) * 1000.0
     s.status = ""
     return result

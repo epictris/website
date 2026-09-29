@@ -2,6 +2,7 @@
 
 Research scripts behind the "Moss Collar Study" report: four ways of growing a painterly carpet of leaves over a faceted rock, built headlessly in Blender 5.2 and proven in three.js.
 They are experiments, not the pipeline; nothing here is imported by the game.
+Since 2026-09-29 the moss add-on (`tools/blender/moss`) grows the `e_cutout.py` process from the brush's stamps; these scripts stay as the record of how it was arrived at and as a quick bench for changing the look outside a scene.
 
 - `common.py` - the shared scene: a chiselled rock, a brush-style stamp mask (centre, normal, radius, strength composited in painting order, as the moss add-on records it), the hull normal, the leaf atlas, Eevee render, glTF export, stats.
 - `a_cards.py` - leaf-card clusters scattered by the mask, every card shaded with the hull normal.

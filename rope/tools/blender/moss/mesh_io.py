@@ -1,15 +1,15 @@
 """Moving moss data in and out of Blender datablocks: the stamps a moss object
 keeps, the generated mesh it shows, and the one material every moss shares."""
 
+import math
 import os
+import random
 
 import bpy
 import numpy as np
 
 from .build import Stamps
 
-# Not "Moss": the river's generated cavern already has a material of that name.
-MATERIAL = "MossGrown"
 COLOR = "Col"
 UV = "UVMap"
 
@@ -63,7 +63,8 @@ def new_stamps_mesh(name):
 
 
 # --------------------------------------------------------------------------
-# The generated mesh
+# The generated mesh: one mesh, three material slots (blobs, underlay, stems),
+# custom normals (the hull normal on every corner) and a per-vertex colour.
 
 
 def write_result(me, result):
@@ -79,6 +80,7 @@ def write_result(me, result):
     me.polygons.foreach_set("loop_start", np.arange(0, len(t) * 3, 3, dtype=np.int32))
     me.update(calc_edges=True)
     me.validate(clean_customdata=False)
+    me.polygons.foreach_set("material_index", result.material.astype(np.int32))
     attr = me.color_attributes.get(COLOR) or me.color_attributes.new(COLOR, "FLOAT_COLOR", "POINT")
     if len(attr.data) == len(result.colors):
         attr.data.foreach_set("color", result.colors.astype(np.float32).ravel())
@@ -87,93 +89,206 @@ def write_result(me, result):
     uv = me.uv_layers.get(UV) or me.uv_layers.new(name=UV)
     uv.data.foreach_set("uv", result.uvs.astype(np.float32).ravel())
     me.shade_smooth()
-    mat = material()
-    if list(me.materials) != [mat]:
+    if len(result.normals) == len(v):
+        me.normals_split_custom_set_from_vertices(result.normals.astype(np.float32).tolist())
+    mats = materials()
+    if list(me.materials) != mats:
         me.materials.clear()
-        me.materials.append(mat)
+        for mat in mats:
+            me.materials.append(mat)
 
 
 # --------------------------------------------------------------------------
-# The material: the moss texture (grass_05) multiplied by the vertex colour
-# tint, with its normal and roughness maps, both faces drawn. Every node in it
-# is one the scene exporter carries to glTF (baseColorTexture x COLOR_0,
-# normalTexture, the roughness channel, doubleSided); anything else would be
-# baked to a flat colour. The maps are 1k copies of the 4k download - the
-# optimiser caps a scene's textures at 1k anyway - packed into the .blend so
-# the scene exports on any machine.
+# The atlas: a 3 x 3 sheet of silhouettes, white everywhere (the vertex colour
+# owns the hue; a black background under the alpha bleeds a dark fringe into
+# every edge through filtering) with the alpha as the shape. Six angular blob
+# cells for the carpet, three heart-shaped leaves with a faint midrib for the
+# vines. Generated once into assets-src/scenes/textures and packed into the
+# .blend, so a scene exports on any machine. Bump ATLAS_VERSION to redraw it.
 
-MATERIAL_VERSION = 2
+MATERIAL_VERSION = 3
+ATLAS_VERSION = 1
+ATLAS_NAME = "moss-cutout-atlas.png"
+ATLAS_SIZE = 768
 REPO = os.path.realpath(os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..", ".."))
-TEXTURE_SOURCE = os.path.join(REPO, "assets-src", "grass-05")
-TEXTURE_1K = os.path.join(REPO, "assets-src", "scenes", "textures")
-MAPS = {
-    # slot: (4k source, 1k copy, colour space)
-    "base": ("grass_05_basecolor_4k.png", "moss-grass05-base.png", "sRGB"),
-    "normal": ("grass_05_normal_gl_4k.png", "moss-grass05-normal.png", "Non-Color"),
-    "rough": ("grass_05_roughness_4k.png", "moss-grass05-rough.png", "Non-Color"),
-}
+TEXTURE_DIR = os.path.join(REPO, "assets-src", "scenes", "textures")
+ATLAS_CUTOFF = 0.35  # alpha below this is cut; below 0.5 so mipmaps do not eat the leaf edges at a distance
 
 
-def _map(slot):
-    """The packed 1k image for a slot, made from the 4k source the first time.
-    None when neither exists (the material then falls back to the tint)."""
-    src, small, space = MAPS[slot]
-    name = small
-    img = bpy.data.images.get(name)
-    if img is not None:
+def _raster_polygon(poly, cs):
+    """Point-in-polygon over a cs x cs grid; poly in cell units (x right, y down)."""
+    yy, xx = np.mgrid[0:cs, 0:cs].astype(np.float32) / cs + 0.5 / cs
+    inside = np.zeros((cs, cs), bool)
+    n = len(poly)
+    for i in range(n):
+        x0, y0 = poly[i]
+        x1, y1 = poly[(i + 1) % n]
+        cond = (yy > min(y0, y1)) & (yy <= max(y0, y1)) & (abs(y1 - y0) > 1e-9)
+        xs = x0 + (yy - y0) * (x1 - x0) / (y1 - y0 + 1e-12)
+        inside ^= cond & (xx < xs)
+    return inside
+
+
+def _spiky(rnd):
+    n = rnd.randint(7, 10)
+    pts = []
+    for i in range(n):
+        a = (i + rnd.uniform(-0.25, 0.25)) / n * math.tau
+        r = 0.42 * (0.95 if i % 2 == 0 else rnd.uniform(0.72, 0.84))
+        pts.append((0.5 + r * math.cos(a), 0.5 + r * math.sin(a)))
+    return [pts]
+
+
+def _faceted(rnd):
+    n = rnd.randint(6, 8)
+    pts = []
+    for i in range(n):
+        a = (i + rnd.uniform(-0.2, 0.2)) / n * math.tau
+        r = 0.42 * rnd.uniform(0.82, 1.0)
+        pts.append((0.5 + r * math.cos(a), 0.5 + r * math.sin(a)))
+    return [pts]
+
+
+def _leaf_poly(cx, cy, length, width, angle, notch=0.06):
+    """A broad heart-shaped leaf pointing along `angle`: widest at a third, a short
+    pointed tip, a small base notch."""
+    prof = [(0.0, 0.0), (0.05, 0.5), (0.18, 0.85), (0.38, 1.0), (0.6, 0.88), (0.8, 0.55), (0.92, 0.22), (1.0, 0.0),
+            (0.92, -0.22), (0.8, -0.55), (0.6, -0.88), (0.38, -1.0), (0.18, -0.85), (0.05, -0.5), (notch, 0.0)]
+    ca, sa = math.cos(angle), math.sin(angle)
+    out = []
+    for u, v in prof:
+        x = u * length
+        y = v * width / 2
+        out.append((cx + x * ca - y * sa, cy + x * sa + y * ca))
+    return out
+
+
+def _cluster(rnd):
+    """Three to five pointed leaves fanning from one base, tips outward."""
+    k = rnd.randint(3, 5)
+    base = rnd.uniform(0, math.tau)
+    polys = []
+    for i in range(k):
+        a = base + (i - (k - 1) / 2) * rnd.uniform(0.55, 0.8)
+        L = rnd.uniform(0.5, 0.56)
+        w = rnd.uniform(0.34, 0.42)
+        polys.append(_leaf_poly(0.5 - 0.1 * math.cos(a), 0.5 - 0.1 * math.sin(a), L, w, a, notch=0.0))
+    return polys
+
+
+def _soften(mask, r):
+    """Blur the mask and re-threshold it: every corner rounds by about r pixels."""
+    a = mask.astype(np.float32)
+    k = np.ones(2 * r + 1, np.float32) / (2 * r + 1)
+    for _ in range(3):
+        a = np.apply_along_axis(lambda x: np.convolve(x, k, mode="same"), 0, a)
+        a = np.apply_along_axis(lambda x: np.convolve(x, k, mode="same"), 1, a)
+    return a > 0.5
+
+
+def _draw_atlas(size=ATLAS_SIZE, cells=3, seed=9):
+    """The atlas as float RGBA (rows top first)."""
+    rnd = random.Random(seed)
+    img = np.zeros((size, size, 4), np.float32)
+    img[..., 0:3] = 1.0
+    cs = size // cells
+    kinds = ["spiky", "cluster", "faceted", "leaf", "spiky", "cluster", "faceted", "leaf", "leaf"]
+    for i, kind in enumerate(kinds):
+        cy, cx = divmod(i, cells)
+        if kind == "spiky":
+            polys = _spiky(rnd)
+        elif kind == "faceted":
+            polys = _faceted(rnd)
+        elif kind == "cluster":
+            polys = _cluster(rnd)
+        else:  # a vine leaf, tip toward the top of the cell (spun tip-down by the vine)
+            polys = [_leaf_poly(0.5, 0.95, 0.9, rnd.uniform(0.74, 0.84), -math.pi / 2, notch=0.09)]
+        inside = np.zeros((cs, cs), bool)
+        for pl in polys:
+            inside |= _raster_polygon(pl, cs)
+        inside = _soften(inside, int(cs * (0.018 if kind == "cluster" else 0.03)))
+        img[cy * cs:(cy + 1) * cs, cx * cs:(cx + 1) * cs, 3] = inside
+        if kind == "leaf":  # a faint midrib so the leaf reads as one
+            yy, xx = np.mgrid[0:cs, 0:cs].astype(np.float32) / cs
+            rib = inside & (abs(xx - 0.5) < 0.012) & (yy > 0.12) & (yy < 0.9)
+            img[cy * cs:(cy + 1) * cs, cx * cs:(cx + 1) * cs, 0:3][rib] = 0.86
+    return img
+
+
+def atlas():
+    """The packed atlas image, drawn the first time (or when ATLAS_VERSION moves)."""
+    img = bpy.data.images.get(ATLAS_NAME)
+    if img is not None and img.get("moss_atlas") == ATLAS_VERSION:
         return img
-    small_path = os.path.join(TEXTURE_1K, small)
-    if not os.path.exists(small_path):
-        src_path = os.path.join(TEXTURE_SOURCE, src)
-        if not os.path.exists(src_path):
-            print(f"[moss] no {src_path}: the moss material has no {slot} map")
-            return None
-        os.makedirs(TEXTURE_1K, exist_ok=True)
-        big = bpy.data.images.load(src_path)
-        big.colorspace_settings.name = space
-        big.scale(1024, 1024)
-        big.filepath_raw = small_path
-        big.file_format = "PNG"
-        big.save()
-        bpy.data.images.remove(big)
-    img = bpy.data.images.load(small_path)
-    img.name = name
-    img.colorspace_settings.name = space
+    path = os.path.join(TEXTURE_DIR, ATLAS_NAME)
+    if img is not None:
+        bpy.data.images.remove(img)
+    if not os.path.exists(path):
+        os.makedirs(TEXTURE_DIR, exist_ok=True)
+        pixels = _draw_atlas()
+        tmp = bpy.data.images.new("moss-atlas-draw", ATLAS_SIZE, ATLAS_SIZE, alpha=True)
+        tmp.pixels.foreach_set(pixels[::-1].ravel())
+        tmp.filepath_raw = path
+        tmp.file_format = "PNG"
+        tmp.save()
+        bpy.data.images.remove(tmp)
+    img = bpy.data.images.load(path)
+    img.name = ATLAS_NAME
+    img.alpha_mode = "STRAIGHT"
+    img["moss_atlas"] = ATLAS_VERSION
     img.pack()
     return img
 
 
-def material():
-    mat = bpy.data.materials.get(MATERIAL)
+# --------------------------------------------------------------------------
+# The materials. Every node is one the scene exporter carries to glTF: the
+# blobs are baseColorTexture x COLOR_0 with the alpha cut by a threshold
+# (alphaMode MASK) and back faces culled; the underlay and stems are COLOR_0
+# alone. None of them casts a shadow in the game (render3d/sceneDressing.ts
+# turns casting off for a `.moss` node); in Blender that is the object's
+# `visible_shadow`, set by ops.create_moss.
+
+MATERIALS = ("MossBlobs", "MossUnder", "MossStem")  # in the result's material order
+
+
+def _fresh(name):
+    mat = bpy.data.materials.get(name)
     if mat is not None and mat.get("moss_material") == MATERIAL_VERSION:
-        return mat
+        return mat, None
     if mat is None:
-        mat = bpy.data.materials.new(MATERIAL)
+        mat = bpy.data.materials.new(name)
     if mat.node_tree is None:
         mat.use_nodes = True
     mat["moss_material"] = MATERIAL_VERSION
-    mat.use_backface_culling = False
-    mat.diffuse_color = (0.3, 0.38, 0.12, 1.0)
     nt = mat.node_tree
     for n in list(nt.nodes):
         if n.type not in {"BSDF_PRINCIPLED", "OUTPUT_MATERIAL"}:
             nt.nodes.remove(n)
     bsdf = next(n for n in nt.nodes if n.type == "BSDF_PRINCIPLED")
-    x, y = bsdf.location.x, bsdf.location.y
-    bsdf.inputs["Roughness"].default_value = 0.95
+    bsdf.inputs["Roughness"].default_value = 0.9
     if "Specular IOR Level" in bsdf.inputs:
-        bsdf.inputs["Specular IOR Level"].default_value = 0.2
+        bsdf.inputs["Specular IOR Level"].default_value = 0.15
+    return mat, bsdf
 
+
+def _tint_node(nt, bsdf):
     tint = nt.nodes.new("ShaderNodeVertexColor")
     tint.layer_name = COLOR
-    tint.location = (x - 600, y - 200)
-    base = _map("base")
-    if base is None:
-        nt.links.new(tint.outputs["Color"], bsdf.inputs["Base Color"])
-    else:
+    tint.location = (bsdf.location.x - 600, bsdf.location.y - 200)
+    return tint
+
+
+def materials():
+    blobs, bsdf = _fresh(MATERIALS[0])
+    if bsdf is not None:
+        nt = blobs.node_tree
+        blobs.use_backface_culling = True
+        blobs.diffuse_color = (0.3, 0.45, 0.1, 1.0)
+        x, y = bsdf.location.x, bsdf.location.y
+        tint = _tint_node(nt, bsdf)
         tex = nt.nodes.new("ShaderNodeTexImage")
-        tex.image = base
-        tex.location = (x - 600, y + 100)
+        tex.image = atlas()
+        tex.location = (x - 600, y + 150)
         mix = nt.nodes.new("ShaderNodeMix")
         mix.data_type = "RGBA"
         mix.blend_type = "MULTIPLY"
@@ -183,19 +298,29 @@ def material():
         nt.links.new(tex.outputs["Color"], by_id["A_Color"])
         nt.links.new(tint.outputs["Color"], by_id["B_Color"])
         nt.links.new(mix.outputs["Result"], bsdf.inputs["Base Color"])
-    rough = _map("rough")
-    if rough is not None:
-        tex = nt.nodes.new("ShaderNodeTexImage")
-        tex.image = rough
-        tex.location = (x - 600, y - 450)
-        nt.links.new(tex.outputs["Color"], bsdf.inputs["Roughness"])
-    normal = _map("normal")
-    if normal is not None:
-        tex = nt.nodes.new("ShaderNodeTexImage")
-        tex.image = normal
-        tex.location = (x - 600, y - 750)
-        nm = nt.nodes.new("ShaderNodeNormalMap")
-        nm.location = (x - 250, y - 600)
-        nt.links.new(tex.outputs["Color"], nm.inputs["Color"])
-        nt.links.new(nm.outputs["Normal"], bsdf.inputs["Normal"])
-    return mat
+        cut = nt.nodes.new("ShaderNodeMath")
+        cut.operation = "GREATER_THAN"
+        cut.inputs[1].default_value = ATLAS_CUTOFF
+        cut.location = (x - 250, y - 300)
+        nt.links.new(tex.outputs["Alpha"], cut.inputs[0])
+        nt.links.new(cut.outputs[0], bsdf.inputs["Alpha"])
+        try:  # the legacy setting the glTF exporter still reads on some versions
+            blobs.blend_method = "CLIP"
+            blobs.alpha_threshold = ATLAS_CUTOFF
+        except Exception:
+            pass
+    out = [blobs]
+    for name in MATERIALS[1:]:
+        mat, bsdf = _fresh(name)
+        if bsdf is not None:
+            mat.use_backface_culling = False
+            mat.diffuse_color = (0.2, 0.4, 0.1, 1.0)
+            tint = _tint_node(mat.node_tree, bsdf)
+            mat.node_tree.links.new(tint.outputs["Color"], bsdf.inputs["Base Color"])
+        out.append(mat)
+    return out
+
+
+def material():
+    """The blobs' material (kept for callers that want one material)."""
+    return materials()[0]

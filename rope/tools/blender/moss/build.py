@@ -1,39 +1,53 @@
-"""Moss geometry: a painted mask on a host mesh becomes a cushion of moss, with
-curtains hanging wherever the moss reaches a drop.
+"""Moss geometry: a painted mask on a host mesh becomes a carpet of flat leaf
+blobs, layered like paper cutouts, with vines of leaves hanging off its front
+edge. The look is the painted-foliage one (Genshin, Breath of the Wild, The
+Witness): every blob is one flat colour, shaded by a smooth "hull" normal
+borrowed from the rock, so the carpet reads as one soft mass of distinct
+colour blocks. See rope/docs/blender-moss.md for the history of the choices.
 
-Everything here is a pure function of (host mesh, host matrix, stamps, params,
-seed) - no bpy state is read or written - so the add-on's live rebuild and the
-scene exporter's rebuild produce the same mesh bit for bit.
+Everything here is a pure function of (host mesh, host matrix, stamps, params)
+- no bpy state is read or written - so the add-on's live rebuild and the scene
+exporter's rebuild produce the same mesh bit for bit.
 
-THE PIPELINE (all in world space, metres; the result is returned in the host's
+THE PIPELINE (in world space, metres; the result is returned in the host's
 local frame, because the moss object is parented to the host with an identity
 transform):
 
-1. The host's evaluated triangles, welded (a glTF import splits vertices at
-   every hard edge, and the moss must not crack along them).
-2. The triangles near a stamp, refined by edge bisection until every edge near
-   the paint is shorter than `resolution`. Far from the paint nothing is split,
-   so a 5 m cavern facet costs nothing where no moss is.
-3. The mask: the stamps composited in the order they were painted (paint lays
-   `m += (1 - m) a w`, erase `m *= 1 - a w`), `w` a smooth radial falloff times
-   how far the vertex faces the way the stamp's surface did.
-4. The outline: triangles clipped on the iso-line `m = threshold + noise`, so
-   the edge is lobed at `edge_scale` whatever the host's facets are.
-5. The cushion: every vertex lifted along a smoothed normal (the rock's creases
-   rounded over at `rounding`) by `thickness`, ramped up from the outline over
-   `feather` and modulated by two octaves of lumps.
-6. The curtains: outline vertices where the moss runs off a drop (the ground
-   falls away beyond a top, or the outline runs downhill on a wall) grow
-   columns that crawl over the lip and hang, pushed out of the rock, to a
-   length shaped per column by fingers, strands and an end taper; neighbouring
-   columns are zipped into one sheet whose top row IS the cushion's outline.
-7. Vertex colour: base at the outline to crown at full thickness, curtains
-   from the crown's colour to the tip colour, all varied by a low noise.
+1. The host's evaluated triangles, welded.
+2. The triangles near a stamp, refined by edge bisection to `resolution`.
+3. The mask: the stamps composited in painting order, and a lobed threshold.
+4. The hull normal: the host's vertex normals smoothed over `rounding`, so a
+   blob on a facet shades with the rock's rounded volume, not the facet.
+5. The underlay: the painted part of the host, clipped on the iso-line and
+   lifted 2 cm, in the leaf colour. Where blobs thin out it is moss, not rock.
+6. Candidates: points on the refined triangles inside the paint, thousands per
+   square metre; the layers pick from them.
+7. Layers: `layers` heights from 8 mm up to `thickness`, each with three
+   sub-heights 2 mm apart. Each layer lays `fill` times its area in blobs.
+   A blob is a quad lying on the hull (NO random tilt: neighbours share a
+   plane, so they overlap like scales and never cut through each other).
+   In the outer half of the paint the blob sits on a quarter-round shoulder
+   that stands against the rock at the paint's edge, so the mass rolls into
+   the stone instead of ending as a shelf. Finally every blob is rotated the
+   least that makes it face the game's camera (Blender -y) by `facing`, so
+   the silhouette is made of blob faces, never of edges.
+8. Vines: from front-facing points on the paint's edge, a thin stem hangs
+   with heart-shaped leaves alternating sides and tapering to the tip. Every
+   vine point is held in front of the rock's front-most surface by a ray
+   cast, because a rock bulges below its shoulder.
+9. Colour: a vertex colour the material multiplies into a white atlas. Three
+   green tones patch across the rock by a slow noise, lit toward `light`
+   where the hull faces up, darkened and cooled in the deep layers, then a
+   small value jitter per blob so neighbouring blocks differ.
+
+The atlas (mesh_io.atlas) is a 3 x 3 sheet of silhouettes: six angular blob
+shapes for the carpet and three heart-shaped leaves for the vines.
 """
 
 import heapq
 import math
 import random
+from collections import defaultdict
 from dataclasses import dataclass
 
 import numpy as np
@@ -41,57 +55,53 @@ from mathutils import Vector, geometry, noise
 from mathutils.bvhtree import BVHTree
 from mathutils.kdtree import KDTree
 
-DOWN = np.array((0.0, 0.0, -1.0))
+# Toward the game's camera. The game looks along glTF -z, which is Blender -y.
+FACE = np.array((0.0, -1.0, 0.0))
+UP = np.array((0.0, 0.0, 1.0))
+
+ATLAS_CELLS = 3
+BLOB_CELLS = (0, 1, 2, 4, 5, 6)  # the carpet never wears a vine leaf
+LEAF_CELLS = (3, 7, 8)
 
 
 @dataclass
 class Params:
-    """Every knob of a moss object. Lengths are metres, angles radians."""
+    """Every knob of a moss object. Lengths are metres, colours linear RGB."""
 
     seed: int = 0
     resolution: float = 0.04
     # Outline
-    threshold: float = 0.45
-    edge_noise: float = 0.3
+    threshold: float = 0.35
+    edge_noise: float = 0.15
     edge_scale: float = 0.18
     min_patch: float = 0.01  # m^2; islands smaller than this are dropped
-    # Cushion
-    thickness: float = 0.06
-    edge_thickness: float = 0.004
-    feather: float = 0.12
-    rounding: float = 0.12
-    lump_amount: float = 0.6
-    lump_scale: float = 0.25
-    fuzz_amount: float = 0.25
-    fuzz_scale: float = 0.05
-    # Curtains
-    curtains: bool = True
-    lip_drop: float = 0.1
-    curtain_length: float = 0.22
-    length_variation: float = 0.5
-    finger_width: float = 0.12
-    finger_length: float = 0.5
-    finger_taper: float = 1.2
-    strand_density: float = 4.0  # per metre of lip
-    strand_length: float = 0.6
-    strand_width: float = 0.04
-    free_keep: float = 0.25  # of the sheet that still hangs once off the rock
-    end_taper: float = 0.25
-    curtain_thickness: float = 0.8  # of the cushion's thickness where it leaves
-    thickness_taper: float = 1.3
-    bend_radius: float = 0.05
-    hug: float = 0.004
-    cling: float = 0.5  # per step, toward a wall within cling_reach
-    cling_reach: float = 0.25
-    sway: float = 0.03
-    # Tint (linear RGB): the vertex colour, which the material multiplies with
-    # the moss texture (grass_05, mean sRGB (0.41, 0.69, 0.29)); the defaults
-    # pull that bright green down to the olive of the reference.
-    crown_color: tuple = (1.0, 0.65, 0.48)
-    base_color: tuple = (0.34, 0.19, 0.25)
-    tip_color: tuple = (1.0, 0.76, 0.68)
-    color_variation: float = 0.25
-    texture_scale: float = 0.6  # metres per texture tile
+    rounding: float = 0.12  # how far the host's creases are rounded in the hull normal
+    # Carpet
+    thickness: float = 0.07
+    layers: int = 8
+    blob_min: float = 0.07
+    blob_max: float = 0.13
+    fill: float = 1.8  # blob area laid per layer, as a multiple of the layer's area
+    density: float = 6000.0  # candidate points per m^2 of paint
+    facing: float = 0.5  # every blob faces the camera by at least acos(facing)
+    shoulder: float = 0.5  # the outer share of the paint (in mask units) that rolls into the rock
+    underlay: float = 0.02
+    # Vines
+    vines: bool = True
+    vine_density: float = 6.0  # per m^2 of paint
+    vine_length: float = 0.55
+    vine_variation: float = 0.3
+    leaf_size: float = 0.078  # leaf length at the top of a vine
+    leaf_tip: float = 0.022  # ... and at its tip
+    # Colour (linear RGB)
+    tone_a: tuple = (0.62, 0.78, 0.06)  # yellow-green
+    tone_b: tuple = (0.24, 0.60, 0.06)  # leaf green
+    tone_c: tuple = (0.12, 0.48, 0.20)  # blue-green
+    light: tuple = (0.80, 0.84, 0.10)  # the sunward crown
+    shade: tuple = (0.10, 0.36, 0.24)  # what the deep layers cool toward
+    tone_scale: float = 0.22
+    variation: float = 0.16
+    depth_shade: float = 0.28
 
 
 @dataclass
@@ -111,20 +121,24 @@ class Stamps:
         return len(self.radius)
 
 
+MAT_BLOBS, MAT_UNDER, MAT_STEM = 0, 1, 2
+
+
 @dataclass
 class Result:
     vertices: np.ndarray  # (V, 3) host-local
     triangles: np.ndarray  # (T, 3)
     colors: np.ndarray  # (V, 4) linear RGBA
     uvs: np.ndarray  # (T, 3, 2) per corner
-    cushion_triangles: int = 0
-    curtain_triangles: int = 0
-    lip_vertices: int = 0
+    normals: np.ndarray  # (V, 3) host-local custom normals (the hull normal)
+    material: np.ndarray  # (T,) MAT_BLOBS / MAT_UNDER / MAT_STEM
+    blobs: int = 0
+    vines: int = 0
+    leaves: int = 0
 
 
 def _empty_result():
-    return Result(np.zeros((0, 3)), np.zeros((0, 3), np.int64), np.zeros((0, 4)), np.zeros((0, 3, 2)))
-
+    return Result(np.zeros((0, 3)), np.zeros((0, 3), np.int64), np.zeros((0, 4)), np.zeros((0, 3, 2)), np.zeros((0, 3)), np.zeros(0, np.int64))
 
 def _normalize(v):
     n = np.linalg.norm(v, axis=-1, keepdims=True)
@@ -453,193 +467,163 @@ def _compact(v, t, attrs):
 # 5. Outline, lips and distance
 
 
-def _boundary_loops(t):
-    """Directed boundary edges chained into loops (or open chains at a
-    non-manifold vertex). Each loop is a list of vertex indices, following the
-    triangles' winding."""
-    directed = np.concatenate([t[:, [0, 1]], t[:, [1, 2]], t[:, [2, 0]]])
-    third = np.concatenate([t[:, 2], t[:, 0], t[:, 1]])
-    key = np.sort(directed, axis=1)
-    _, inv, counts = np.unique(key, axis=0, return_inverse=True, return_counts=True)
-    inv = inv.reshape(-1)
-    bmask = counts[inv] == 1
-    bedges, bthird = directed[bmask], third[bmask]
-    nxt = {}
-    for (a, b), c in zip(bedges.tolist(), bthird.tolist()):
-        nxt.setdefault(a, []).append((b, c))
-    loops, used = [], set()
-    for (a0, b0), _c in zip(bedges.tolist(), bthird.tolist()):
-        if (a0, b0) in used:
-            continue
-        loop = [a0]
-        a, b = a0, b0
-        while (a, b) not in used:
-            used.add((a, b))
-            loop.append(b)
-            cands = [e for e in nxt.get(b, []) if (b, e[0]) not in used]
-            if not cands:
-                break
-            a, b = b, cands[0][0]
-        closed = loop[-1] == loop[0] and len(loop) > 2
-        if closed:
-            loop.pop()
-        loops.append((loop, closed))
-    return loops, bedges, bthird
+
+# --------------------------------------------------------------------------
+# 5. Colour
 
 
-def _outward(v, n, bedges, bthird):
-    """Per boundary vertex: the direction off the moss, in its tangent plane."""
-    out = {}
-    for (a, b), c in zip(bedges.tolist(), bthird.tolist()):
-        e = v[b] - v[a]
-        mid = (v[a] + v[b]) * 0.5
-        d = mid - v[c]
-        el = e / max(np.linalg.norm(e), 1e-12)
-        d = d - el * (d @ el)
-        for i in (a, b):
-            out[i] = out.get(i, 0.0) + d
-    res = {}
-    for i, d in out.items():
-        d = d - n[i] * (d @ n[i])
-        ln = np.linalg.norm(d)
-        res[i] = d / ln if ln > 1e-12 else np.zeros(3)
-    return res
+def _tone_at(P, tones, scale, seed):
+    """The local green: two slow noises pick a soft mixture of the three tones."""
+    off = Vector((7.1 + seed * 0.37, 3.3, 9.7))
+    a = np.array([noise.noise(Vector(p) / scale) for p in P]) * 0.5 + 0.5
+    b = np.array([noise.noise(Vector(p) / scale + off) for p in P]) * 0.5 + 0.5
+    w = np.stack([a * a, (1 - a) * (1 - b) + 0.35, (1 - a) * b], 1)
+    w /= w.sum(1, keepdims=True)
+    return w @ np.asarray(tones)
 
 
-def _geodesic(v, edges, sources, cap):
-    """Distance along the mesh from the source vertices, capped (vertices
-    further than `cap` read `cap`)."""
-    dist = np.full(len(v), cap)
-    adj = [[] for _ in range(len(v))]
-    lengths = np.linalg.norm(v[edges[:, 0]] - v[edges[:, 1]], axis=1)
-    for (a, b), ln in zip(edges.tolist(), lengths.tolist()):
-        adj[a].append((b, ln))
-        adj[b].append((a, ln))
-    heap = []
-    for s in sources:
-        dist[s] = 0.0
-        heap.append((0.0, s))
-    heapq.heapify(heap)
-    while heap:
-        d, a = heapq.heappop(heap)
-        if d > dist[a]:
-            continue
-        for b, ln in adj[a]:
-            nd = d + ln
-            if nd < dist[b]:
-                dist[b] = nd
-                heapq.heappush(heap, (nd, b))
-    return dist
+def _tint(hn, depth, var, base, p):
+    """Vertex colour: the local tone lit toward `light` where the hull faces up,
+    darkened and cooled with depth into the carpet, then a value jitter."""
+    up = np.clip(hn[..., 2] * 0.5 + 0.5, 0, 1)
+    light = np.asarray(p.light)
+    shade = np.asarray(p.shade)
+    c = base * (0.75 + 0.45 * up[..., None]) + (light - base) * (up[..., None] ** 2) * 0.25
+    c = c * (1 - depth[..., None] * p.depth_shade) + shade * depth[..., None] * (p.depth_shade * 0.65)
+    c = c * (1 + var[..., None])
+    return np.clip(c, 0, 1)
 
 
 # --------------------------------------------------------------------------
-# 6. Curtains
+# 6. Quads
 
 
-def _column_lengths(s, total, closed, p, rng):
-    """Curtain length at each arc position `s` along a lip of length `total`,
-    as (sheet, fingers): the continuous sheet's part and the part the fingers
-    and strands add below it."""
-    base = p.curtain_length * np.maximum(
-        0.0, 1.0 + p.length_variation * _fbm(np.stack([s, np.zeros_like(s), np.zeros_like(s)], axis=1), p.finger_width * 4, p.seed, 11 + rng.randrange(1000), 2)
-    )
-    extra = np.zeros_like(s)
-    fw = max(p.finger_width, 1e-3)
-    c = -rng.uniform(0, fw)
-    while c < total + fw:
-        width = fw * rng.uniform(0.4, 1.6)
-        length = p.finger_length * rng.random() ** 0.7
-        extra = np.maximum(extra, length * np.clip(1.0 - np.abs(s - c) / width, 0.0, 1.0) ** p.finger_taper)
-        c += fw * rng.uniform(0.6, 1.4)
-    for _ in range(int(round(p.strand_density * total))):
-        c = rng.uniform(0, total)
-        width = max(p.strand_width, 1e-3)
-        length = p.strand_length * rng.uniform(0.5, 1.0)
-        extra = np.maximum(extra, length * np.clip(1.0 - np.abs(s - c) / width, 0.0, 1.0))
-    if not closed and p.end_taper > 0:
-        taper = _smoothstep(0.0, p.end_taper, np.minimum(s, total - s))
-        base, extra = base * taper, extra * taper
-    return base, extra
+class _Quads:
+    """Cards accumulated as quads, turned into the result's triangles at the end."""
+
+    def __init__(self):
+        self.co, self.nrm, self.col, self.uv, self.mat = [], [], [], [], []
+
+    def add(self, corners, normal, color, uv, material):
+        self.co.append(corners)
+        self.nrm.append(np.repeat(normal[None], 4, 0))
+        self.col.append(np.repeat(np.asarray(color)[None], 4, 0))
+        self.uv.append(uv)
+        self.mat.append(material)
+
+    def __len__(self):
+        return len(self.co)
+
+    def arrays(self):
+        n = len(self.co)
+        if n == 0:
+            return np.zeros((0, 3)), np.zeros((0, 3), np.int64), np.zeros((0, 3)), np.zeros((0, 3)), np.zeros((0, 3, 2)), np.zeros(0, np.int64)
+        co = np.asarray(self.co).reshape(-1, 3)
+        nrm = np.asarray(self.nrm).reshape(-1, 3)
+        col = np.asarray(self.col).reshape(-1, 3)
+        base = np.arange(n) * 4
+        tri = np.stack([np.stack([base, base + 1, base + 2], 1), np.stack([base, base + 2, base + 3], 1)], 1).reshape(-1, 3)
+        uvq = np.asarray(self.uv)  # (n, 4, 2)
+        uv = np.stack([uvq[:, [0, 1, 2]], uvq[:, [0, 2, 3]]], 1).reshape(-1, 3, 2)
+        mat = np.repeat(np.asarray(self.mat), 2)
+        return co, tri, nrm, col, uv, mat
 
 
-def _hang(bvh, start, direction, normal, sheet, fingers, p):
-    """March one curtain column from `start`: over the lip, down under gravity,
-    pushed out of the rock, for `sheet + fingers`. Once it hangs clear of any
-    wall only `free_keep` of the sheet goes on (the fingers keep all of
-    theirs), so a sheet off an undercut breaks up into drips. Returns
-    (backs, normals, ts)."""
-    length = sheet + fingers
-    h = p.resolution
-    pos = np.array(start, dtype=np.float64)
-    d = np.array(direction, dtype=np.float64)
-    nrm = np.array(normal, dtype=np.float64)
-    backs, normals, ts = [pos.copy()], [nrm.copy()], [0.0]
-    t = 0.0
-    turn = h / max(p.bend_radius, 1e-3)
-    descended = 0.0
-    crawl = 0.0
-    while t < length - 1e-9:
-        step = min(h, length - t)
-        d = d + DOWN * turn
-        d /= np.linalg.norm(d)
-        q = pos + d * step
-        hit, hn, _i, dist = bvh.find_nearest(Vector(q))
-        if hit is not None:
-            hit, hn = np.array(hit), np.array(hn)
-            side = (q - hit) @ hn
-            if side < p.hug:
-                q = hit + hn * p.hug
-                dn = d @ hn
-                if dn < 0:
-                    d = d - hn * dn
-                    ln = np.linalg.norm(d)
-                    d = d / ln if ln > 1e-9 else -DOWN * 0 + DOWN
-                nrm = hn
-                # Resting on ground that faces up: before the lip it may crawl
-                # a little; after having hung it has landed.
-                if hn[2] > 0.6:
-                    if descended > 2 * h:
-                        break
-                    crawl += step
-                    if crawl > 3 * h + 0.05:
-                        break
-            elif dist is not None and dist < p.cling_reach and hn[2] > -0.3:
-                # A wall within reach draws the sheet back onto it: moss
-                # follows an undercut rather than hanging out over it. A
-                # ceiling does not - the underside of the overhang it just
-                # came over is always within reach, and is not a wall.
-                target = hit + hn * p.hug
-                q = q + (target - q) * p.cling
-                nrm = hn
-            elif descended > 2 * h:
-                length = min(length, t + sheet * p.free_keep + fingers)
-        elif descended > 2 * h:
-            length = min(length, t + sheet * p.free_keep + fingers)
-        descended += max(0.0, pos[2] - q[2])
-        t += step
-        pos = q
-        backs.append(pos.copy())
-        normals.append(nrm.copy())
-        ts.append(t)
-    return np.array(backs), np.array(normals), np.array(ts)
+def _quad(centre, normal, w, h, spin):
+    """A w x h quad whose face normal is `normal`, spun by `spin` about it.
+    Winding gives the front face toward `normal` (the material culls the back)."""
+    n = normal / np.linalg.norm(normal)
+    t = np.cross(n, UP)
+    if np.linalg.norm(t) < 1e-4:
+        t = np.cross(n, np.array((1.0, 0.0, 0.0)))
+    t /= np.linalg.norm(t)
+    b = np.cross(n, t)
+    ca, sa = math.cos(spin), math.sin(spin)
+    x = t * ca + b * sa
+    y = -t * sa + b * ca
+    return np.array([centre - x * w / 2 - y * h / 2, centre + x * w / 2 - y * h / 2, centre + x * w / 2 + y * h / 2, centre - x * w / 2 + y * h / 2])
 
 
-def _zip(a_idx, a_t, b_idx, b_t):
-    """Triangles between two neighbouring columns of different lengths."""
-    tris = []
-    i = j = 0
-    while i < len(a_idx) - 1 or j < len(b_idx) - 1:
-        adv_a = j >= len(b_idx) - 1 or (i < len(a_idx) - 1 and a_t[i + 1] <= b_t[j + 1])
-        if adv_a:
-            tris.append((a_idx[i], b_idx[j], a_idx[i + 1]))
-            i += 1
-        else:
-            tris.append((a_idx[i], b_idx[j], b_idx[j + 1]))
-            j += 1
-    return tris
+def _uv_cell(idx):
+    """The atlas cell's UV corners. The atlas is written top row first, so cell
+    row r of the sheet is UV row (cells - 1 - r)."""
+    cy, cx = divmod(idx, ATLAS_CELLS)
+    cy = ATLAS_CELLS - 1 - cy
+    s = 1.0 / ATLAS_CELLS
+    return np.array([[cx * s, cy * s], [(cx + 1) * s, cy * s], [(cx + 1) * s, (cy + 1) * s], [cx * s, (cy + 1) * s]])
+
+
+def _faced(n, facing):
+    """`n` rotated the least that makes it face the camera by `facing`: a card
+    seen nearly edge-on is a spike, not a blob. Smooth, so neighbours agree."""
+    d = float(n @ FACE)
+    if d >= facing:
+        return n
+    perp = FACE - n * d
+    L = np.linalg.norm(perp)
+    if L < 1e-6:
+        return n
+    perp /= L
+    ang = math.acos(max(-1.0, min(1.0, d))) - math.acos(facing)
+    m = n * math.cos(ang) + perp * math.sin(ang)
+    return m / np.linalg.norm(m)
 
 
 # --------------------------------------------------------------------------
+# 7. Sampling the paint
+
+
+def _sample(v, t, f, hn, nr, density, rng):
+    """Candidate points on the refined triangles inside the paint (f > 0), in
+    proportion to area, with the field, hull normal and raw normal interpolated.
+    Returns P, F, HN, NR, GRAD (the field's in-plane gradient per point)."""
+    A = v[t[:, 0]], v[t[:, 1]], v[t[:, 2]]
+    cross = np.cross(A[1] - A[0], A[2] - A[0])
+    area = np.linalg.norm(cross, axis=1) * 0.5
+    fc = f[t].max(1)
+    expect = np.where(fc > -0.05, area * density, 0.0)
+    count = np.floor(expect).astype(int) + (rng.random(len(t)) < (expect % 1.0))
+    if count.sum() == 0:
+        return (np.zeros((0, 3)),) * 5
+    tri_idx = np.repeat(np.arange(len(t)), count)
+    u = rng.random(len(tri_idx))
+    w = rng.random(len(tri_idx))
+    flip = u + w > 1
+    u[flip], w[flip] = 1 - u[flip], 1 - w[flip]
+    bary = np.stack([1 - u - w, u, w], 1)
+    tt = t[tri_idx]
+
+    def interp(attr):
+        return (attr[tt] * bary[..., None]).sum(1) if attr.ndim == 2 else (attr[tt] * bary).sum(1)
+
+    P = interp(v)
+    F = interp(f)
+    # The field's gradient on each triangle (planar), for the shoulder's outward direction.
+    e1, e2 = A[1] - A[0], A[2] - A[0]
+    n = cross / np.maximum(np.linalg.norm(cross, axis=1, keepdims=True), 1e-12)
+    f1, f2 = f[t[:, 1]] - f[t[:, 0]], f[t[:, 2]] - f[t[:, 0]]
+    g = (np.cross(n, e1) * f2[:, None] - np.cross(n, e2) * f1[:, None]) / np.maximum(2 * area, 1e-12)[:, None]
+    keep = F > 0
+    return P[keep], F[keep], _normalize(interp(hn))[keep], _normalize(interp(nr))[keep], g[tri_idx][keep]
+
+
+def _crowd(P, r):
+    """How many candidates lie within r of each: a blob with no neighbours would float alone."""
+    if len(P) == 0:
+        return np.zeros(0, int)
+    keys = np.floor(P / r).astype(np.int64)
+    buckets = defaultdict(list)
+    for i, k in enumerate(map(tuple, keys)):
+        buckets[k].append(i)
+    out = np.zeros(len(P), int)
+    for i, k in enumerate(map(tuple, keys)):
+        near = [j for dx in (-1, 0, 1) for dy in (-1, 0, 1) for dz in (-1, 0, 1) for j in buckets.get((k[0] + dx, k[1] + dy, k[2] + dz), ())]
+        out[i] = int((np.linalg.norm(P[near] - P[i], axis=1) < r).sum())
+    return out
+
+
+# --------------------------------------------------------------------------
+# 8. The build
 
 
 def build(host_mesh, host_matrix, stamps, p):
@@ -652,208 +636,186 @@ def build(host_mesh, host_matrix, stamps, p):
     centres, snormals = stamps_world(stamps, host_matrix)
     radii = stamps.radius.astype(np.float64)
     res = max(p.resolution, 0.005)
+    rnd = random.Random(p.seed)
+    rng = np.random.default_rng(p.seed)
 
     v, t = _refine(co, tri, centres, radii, res)
     if len(t) == 0:
         return _empty_result()
     n_raw = _vertex_normals(v, t)
     edges = _edges(t)
-
     m = _mask(v, n_raw, centres, snormals, radii, stamps.strength)
     thr = np.clip(p.threshold + p.edge_noise * _fbm(v, p.edge_scale, p.seed, 1), 0.03, 0.97)
+    f = m - thr  # > 0 inside the paint
     iters = int(min(200, round((p.rounding / res) ** 2)))
-    n_smooth = _normalize(_smooth_field(n_raw, edges, len(v), iters))
+    hull = _normalize(_smooth_field(n_raw, edges, len(v), iters))
 
-    v, t, (n_s, n_r) = _clip(v, t, m - thr, [n_smooth, n_raw])
-    t = _drop_islands(v, t, p.min_patch)
-    if len(t) == 0:
-        return _empty_result()
-    v, t, (n_s, n_r) = _compact(v, t, [n_s, n_r])
-    n_s, n_r = _normalize(n_s), _normalize(n_r)
-    edges = _edges(t)
+    # Order-independence: the helpers above may return triangles in a hash
+    # order that differs between processes, and every random draw below walks
+    # them in order. Sort by position so the same paint always grows the same moss.
+    order = np.lexsort((v[t].mean(1)[:, 2], v[t].mean(1)[:, 1], v[t].mean(1)[:, 0]))
+    t = t[order]
 
-    bvh = BVHTree.FromPolygons([tuple(x) for x in co], [tuple(x) for x in tri.tolist()])
+    quads = _Quads()
 
-    # Lips: outline vertices the moss runs off.
-    loops, bedges, bthird = _boundary_loops(t)
-    out = _outward(v, n_r, bedges, bthird)
-    lip = np.zeros(len(v), bool)
-    if p.curtains:
-        for i, o in out.items():
-            nz = n_r[i][2]
-            if nz < 0.5 and o @ DOWN > 0.5:
-                lip[i] = True  # the outline runs downhill on a wall
-            elif nz > 0.3:
-                q = v[i] + o * (2 * res + 0.02) + n_r[i] * 0.02
-                hit, hn, _k, dist = bvh.find_nearest(Vector(q))
-                if hit is not None and (q - np.array(hit)) @ np.array(hn) <= 0:
-                    continue  # the probe is inside the rock: a wall rises there
-                hit, _hn, _k, dist = bvh.ray_cast(Vector(q), Vector(DOWN))
-                if hit is None or dist > p.lip_drop:
-                    lip[i] = True  # the ground falls away beyond a top
-        # Lips are runs, not specks: close one-vertex gaps, drop singletons.
-        for loop, closed in loops:
-            k = len(loop)
-            flags = [lip[i] for i in loop]
-            for _pass in range(2):
-                new = flags[:]
-                for j in range(k):
-                    prv = flags[j - 1] if (closed or j > 0) else flags[j]
-                    nxt = flags[(j + 1) % k] if (closed or j < k - 1) else flags[j]
-                    if not flags[j] and prv and nxt:
-                        new[j] = True
-                    elif flags[j] and not prv and not nxt:
-                        new[j] = False
-                flags = new
-            for i, f in zip(loop, flags):
-                lip[i] = f
+    # 5. The underlay: the paint's own outline, a little beyond where the blobs start.
+    uv_, ut, (uh, uf) = _clip(v, t, f + 0.02, [hull, f])
+    ut = _drop_islands(uv_, ut, p.min_patch)
+    under_v = under_t = under_n = under_c = None
+    if len(ut):
+        uv_, ut, (uh, uf) = _compact(uv_, ut, [uh, uf])
+        uh = _normalize(uh)
+        lift = p.underlay * _smoothstep(0.0, 0.15, uf + 0.02)
+        under_v = uv_ + uh * lift[:, None]
+        under_t, under_n = ut, uh
+        under_c = _tint(uh, np.full(len(uv_), 0.15), np.zeros(len(uv_)), _tone_at(uv_, (p.tone_a, p.tone_b, p.tone_c), p.tone_scale, p.seed), p)
 
-    boundary = np.zeros(len(v), bool)
-    boundary[bedges.ravel()] = True
-    sources = np.nonzero(boundary & ~lip)[0].tolist()
-    cap = max(p.feather, 1e-4)
-    dist = _geodesic(v, edges, sources, cap) if sources else np.full(len(v), cap)
-    profile = _smoothstep(0.0, cap, dist)
+    # 6. Candidates.
+    P, F, HN, NR, G = _sample(v, t, f, hull, n_raw, p.density, rng)
+    if len(P):
+        order = np.lexsort((P[:, 2], P[:, 1], P[:, 0]))
+        P, F, HN, NR, G = P[order], F[order], HN[order], NR[order], G[order]
+    if len(P) == 0:
+        return _assemble(quads, under_v, under_t, under_n, under_c, host_matrix, 0, 0)
+    area = len(P) / p.density  # the painted area, from the sampling density
+    Mn = np.clip(F / 0.5, 0, 1)  # 0 at the paint's edge, 1 well inside
+    tones = _tone_at(P, (p.tone_a, p.tone_b, p.tone_c), p.tone_scale, p.seed)
+    crowd = _crowd(P, 0.06)
+    seen = (HN @ FACE >= -0.35) & (crowd >= 4)  # the game never sees the back of a rock
+    # The outward direction of the paint: down the field's gradient, in the tangent plane.
+    Gt = G - HN * (G * HN).sum(1, keepdims=True)
+    Gl = np.linalg.norm(Gt, axis=1)
+    OUT = np.where((Gl > 0.2)[:, None], -Gt / np.maximum(Gl, 1e-12)[:, None], 0.0)
 
-    lumps = 1.0 + p.lump_amount * _fbm(v, p.lump_scale, p.seed, 2, 2) + p.fuzz_amount * _fbm(v, p.fuzz_scale, p.seed, 3, 1)
-    lumps = np.maximum(lumps, 0.2)
-    offset = p.edge_thickness + (p.thickness - p.edge_thickness) * profile * lumps
-    offset[boundary & ~lip] = p.edge_thickness
-    top = v + n_s * offset[:, None]
+    band = max(p.shoulder, 1e-3)
+    thick = max(p.thickness, 0.012)
 
-    shade = _fbm(v, 0.35, p.seed, 4, 2) * p.color_variation
-    crown, basec, tip = (np.array(c, dtype=np.float64) for c in (p.crown_color, p.base_color, p.tip_color))
-    glow = np.clip(profile * (0.75 + 0.25 * (lumps - 1.0) / max(p.lump_amount, 1e-3)), 0.0, 1.0)
-    colors = basec + (crown - basec) * glow[:, None]
-    colors *= (1.0 + shade)[:, None]
+    def shoulder(i, dL):
+        """Where a card at height dL sits in the outer band, and which way it
+        faces: a quarter-round of radius `thickness`, flat on top of the mass,
+        standing against the rock at the paint's edge; a card below the
+        surface tilts in proportion to its depth. None when dL is above the
+        mass here."""
+        hn = HN[i]
+        o = OUT[i]
+        if Mn[i] >= band or not o.any():
+            return (P[i] + hn * dL, hn) if dL <= thick else (None, None)
+        x = Mn[i] / band
+        phi = min(math.radians(65), math.asin(max(0.0, 1 - x)))
+        h_surface = thick * math.cos(phi)
+        if dL > max(h_surface, 0.012):
+            return None, None
+        frac = min(1.0, dL / max(h_surface, 0.012))
+        a = phi * frac
+        n = hn * math.cos(a) + o * math.sin(a)
+        c = P[i] + hn * dL * math.cos(a) + o * dL * math.sin(a) * 0.3
+        return c, n / np.linalg.norm(n)
 
-    verts = [top]
-    cols = [colors]
-    tris_out = [t]
-    cushion_tris = len(t)
-    next_index = len(top)
-    curtain_tris = []
-    curtain_uv = {}  # vertex -> (along the lip, down the curtain), metres
-
-    if p.curtains and lip.any():
-        rng = random.Random(p.seed * 104729 + 17)
-        for loop, closed in loops:
-            flags = [lip[i] for i in loop]
-            if not any(flags):
+    # 7. Layers.
+    idx = np.flatnonzero(seen).tolist()
+    layers = max(int(p.layers), 1)
+    heights = [0.008 + (thick - 0.008) * i / max(layers - 1, 1) for i in range(layers)]
+    subh = 0.002
+    blob_mean = (p.blob_min + p.blob_max) / 2
+    n_blobs = 0
+    for L, dL in enumerate(heights):
+        rnd.shuffle(idx)
+        allowed = [i for i in idx if shoulder(i, dL)[0] is not None]
+        if not allowed:
+            continue
+        mean_size = blob_mean * (0.6 + 0.4 * float(np.mean(Mn[allowed])))
+        want = p.fill * area * (len(allowed) / len(idx)) / (math.pi * (mean_size / 2) ** 2)
+        p_take = min(1.0, want / len(allowed))
+        depth_L = max(0.0, 1 - L / 4)
+        for j, i in enumerate(allowed):
+            if rnd.random() > p_take:
                 continue
-            # Runs of lip vertices; a closed loop all lip is one closed run.
-            k = len(loop)
-            if closed and all(flags):
-                runs = [(loop[:], True)]
-            else:
-                start = 0
-                if closed:
-                    start = next(j for j in range(k) if not flags[j])
-                    order = loop[start + 1 :] + loop[: start + 1]
-                    oflags = flags[start + 1 :] + flags[: start + 1]
-                else:
-                    order, oflags = loop, flags
-                runs, cur = [], []
-                for i, f in zip(order, oflags):
-                    if f:
-                        cur.append(i)
-                    elif cur:
-                        runs.append((cur, False))
-                        cur = []
-                if cur:
-                    runs.append((cur, False))
-            for run, run_closed in runs:
-                if len(run) < 2:
-                    continue
-                pts = v[run]
-                seg = np.linalg.norm(np.diff(pts, axis=0), axis=1)
-                s = np.concatenate([[0.0], np.cumsum(seg)])
-                total = s[-1] + (np.linalg.norm(pts[0] - pts[-1]) if run_closed else 0.0)
-                sheets, fingers = _column_lengths(s, max(total, 1e-6), run_closed, p, rng)
-                tangent = _normalize(np.gradient(pts, axis=0)) if len(run) > 2 else _normalize(np.repeat((pts[1] - pts[0])[None], 2, 0))
-                cols_idx, cols_t = [], []
-                for j, i in enumerate(run):
-                    backs, nrms, ts = _hang(bvh, v[i], out[i], n_r[i], sheets[j], fingers[j], p)
-                    ln = ts[-1] if len(ts) else 0.0
-                    th0 = offset[i] * p.curtain_thickness
-                    idx = [i]
-                    curtain_uv[i] = (s[j], 0.0)
-                    for r in range(1, len(ts)):
-                        u = ts[r] / max(ln, 1e-9)
-                        th = th0 * max(0.0, 1.0 - u) ** p.thickness_taper
-                        sway = p.sway * u * noise.noise(Vector((s[j] * 6.0, ts[r] * 4.0, p.seed * 1.37)))
-                        front = backs[r] + nrms[r] * (p.hug + th) + tangent[j] * sway
-                        # The first rows ease out of the cushion's own surface
-                        # (its smoothed normal) into the rock-hugging sheet.
-                        if r <= 2:
-                            w = r / 3.0
-                            front = top[i] * (1.0 - w) + front * w
-                        verts.append(front[None])
-                        col = crown + (tip - crown) * _smoothstep(0.3, 1.0, u)
-                        col = col * (1.0 + shade[i] + 0.1 * noise.noise(Vector((s[j] * 3.0, ts[r] * 3.0, 7.0 + p.seed))))
-                        cols.append(col[None] * (1.0 - 0.35 * (1 - u) * (1 - glow[i])))
-                        curtain_uv[next_index] = (s[j], ts[r])
-                        idx.append(next_index)
-                        next_index += 1
-                    cols_idx.append(idx)
-                    cols_t.append(ts)
-                pairs = list(zip(range(len(run) - 1), range(1, len(run))))
-                if run_closed:
-                    pairs.append((len(run) - 1, 0))
-                for a, b in pairs:
-                    curtain_tris.extend(_zip(cols_idx[a], cols_t[a], cols_idx[b], cols_t[b]))
+            size = rnd.uniform(p.blob_min, p.blob_max) * (0.6 + 0.4 * Mn[i])
+            c, n = shoulder(i, dL + subh * (j % 3))
+            if c is None:
+                continue
+            n = _faced(n, p.facing)
+            col = _tint(HN[i], np.array(depth_L * Mn[i]), np.array(rnd.uniform(-p.variation, p.variation)), tones[i], p)
+            quads.add(_quad(c, n, size, size * rnd.uniform(0.85, 1.0), rnd.uniform(0, math.tau)), HN[i], col, _uv_cell(rnd.choice(BLOB_CELLS)), MAT_BLOBS)
+            n_blobs += 1
 
-    V = np.concatenate(verts)
-    C = np.concatenate(cols)
-    if curtain_tris:
-        ct = np.array(curtain_tris, dtype=np.int64)
-        # Face the sheet out of the rock: compare each triangle's normal with
-        # the direction from the rock (cushion vertices use their normal).
-        fn = np.cross(V[ct[:, 1]] - V[ct[:, 0]], V[ct[:, 2]] - V[ct[:, 0]])
-        centre = V[ct].mean(axis=1)
-        away = np.zeros_like(centre)
-        for k, c in enumerate(centre):
-            hit, hn, _i, _d = bvh.find_nearest(Vector(c))
-            away[k] = np.array(hn) if hit is not None else (0, 0, 1)
-        flip = (fn * away).sum(axis=1) < 0
-        ct[flip] = ct[flip][:, [0, 2, 1]]
-        area = np.linalg.norm(fn, axis=1)
-        ct = ct[area > 1e-12]
-        tris_out.append(ct)
-    T = np.concatenate(tris_out)
+    # 8. Vines.
+    n_vines = n_leaves = 0
+    if p.vines and p.vine_density > 0:
+        bvh = BVHTree.FromPolygons([tuple(x) for x in co], [tuple(x) for x in tri.tolist()])
+        front = [i for i in range(len(P)) if NR[i] @ FACE > 0.55 and 0.0 < F[i] < 0.35]
+        rnd.shuffle(front)
+        want = int(round(p.vine_density * area))
+        chosen = []
+        for i in front:
+            if len(chosen) >= want:
+                break
+            if all(np.linalg.norm(P[i] - P[j]) > 0.15 for j in chosen):
+                chosen.append(i)
+        for i in chosen:
+            hn = HN[i]
+            origin = P[i]
+            length = p.vine_length * rnd.uniform(1 - p.vine_variation, 1 + p.vine_variation)
+            sway = rnd.uniform(0.006, 0.015)
+            phase = rnd.uniform(0, 6)
 
-    # UVs, per corner. The cushion is projected along the axis its triangle
-    # faces most (the moss texture is noise, so the seams where the axis
-    # changes do not read); a curtain is unrolled - along its lip and down
-    # its length - so its fingers are never stretched.
-    inv_tile = 1.0 / max(p.texture_scale, 1e-3)
-    ctri = T[:cushion_tris]
-    face_n = np.abs(n_r[ctri].sum(axis=1))
-    axis = np.argmax(face_n, axis=1)
-    drop = np.array([[1, 2], [0, 2], [0, 1]])[axis]  # the two axes kept
-    pos = V[ctri]  # (C, 3, 3)
-    uvs = np.empty((len(T), 3, 2))
-    uvs[:cushion_tris, :, 0] = np.take_along_axis(pos, drop[:, None, 0:1].repeat(3, 1), axis=2)[..., 0]
-    uvs[:cushion_tris, :, 1] = np.take_along_axis(pos, drop[:, None, 1:2].repeat(3, 1), axis=2)[..., 0]
-    if len(T) > cushion_tris:
-        cu = np.zeros((len(V), 2))
-        keys = np.fromiter(curtain_uv.keys(), dtype=np.int64)
-        cu[keys] = np.array(list(curtain_uv.values()))
-        cu[:, 1] *= -1.0  # down the curtain is down the texture
-        uvs[cushion_tris:] = cu[T[cushion_tris:]]
-    uvs *= inv_tile
+            def at(z, clear=0.02):
+                """The stem's point z metres below the start, held in FRONT of the rock."""
+                q = origin + np.array((sway * math.sin(z * 12 + phase), 0.0, -z)) + FACE * (0.02 + 0.03 * z / length)
+                hit = bvh.ray_cast(Vector(q + FACE * 5.0), Vector(-FACE))
+                if hit[0] is not None:
+                    front_y = float(np.array(hit[0]) @ FACE)  # how far toward the camera the rock reaches here
+                    if q @ FACE < front_y + clear:
+                        q = q + FACE * (front_y + clear - q @ FACE)
+                return q
 
-    # Back into the host's frame.
-    mw = np.array(host_matrix, dtype=np.float64)
-    inv = np.linalg.inv(mw)
-    local = V @ inv[:3, :3].T + inv[:3, 3]
-    rgba = np.concatenate([np.clip(C, 0.0, 1.0), np.ones((len(C), 1))], axis=1)
-    return Result(
-        local,
-        T,
-        rgba,
-        uvs,
-        cushion_triangles=cushion_tris,
-        curtain_triangles=len(T) - cushion_tris,
-        lip_vertices=int(lip.sum()),
-    )
+            zs = np.linspace(0.09, length, max(2, int((length - 0.09) / 0.03) + 1))
+            pts = np.array([at(z) for z in zs])
+            side = np.array((0.0015, 0.0, 0.0))
+            stem_col = np.asarray(p.tone_b) * 0.75
+            for k in range(len(pts) - 1):
+                a, b = pts[k], pts[k + 1]
+                quads.add(np.array([a - side, a + side, b + side, b - side]), hn, stem_col, np.zeros((4, 2)), MAT_STEM)
+            vn = hn * 0.5 + FACE * 0.5
+            vn /= np.linalg.norm(vn)
+            vn = _faced(vn, p.facing)
+            z = 0.07
+            sgn = rnd.choice((-1, 1))
+            k = 0
+            while z < length:
+                tt = z / length
+                size = p.leaf_size + (p.leaf_tip - p.leaf_size) * tt
+                c = at(z + size * 0.42, clear=0.03 + 0.004 * (k % 2 + 1)) + np.array((sgn * size * 0.24, 0.0, 0.0))
+                spin = sgn * math.radians(rnd.uniform(15, 28))
+                col = _tint(hn, np.array(0.1 + 0.4 * tt), np.array(rnd.uniform(-0.1, 0.1)), tones[i], p)
+                quads.add(_quad(c, vn, size * 0.8, size, spin), hn, col, _uv_cell(rnd.choice(LEAF_CELLS)), MAT_BLOBS)
+                n_leaves += 1
+                z += size * 0.62
+                sgn = -sgn
+                k += 1
+            n_vines += 1
+
+    r = _assemble(quads, under_v, under_t, under_n, under_c, host_matrix, n_vines, n_leaves)
+    r.blobs = n_blobs
+    return r
+
+
+def _assemble(quads, under_v, under_t, under_n, under_c, host_matrix, n_vines, n_leaves):
+    co, tri, nrm, col, uv, mat = quads.arrays()
+    if under_v is not None and len(under_t):
+        off = len(co)
+        co = np.vstack([co, under_v])
+        nrm = np.vstack([nrm, under_n])
+        col = np.vstack([col, under_c])
+        tri = np.vstack([tri, under_t + off])
+        uv = np.vstack([uv, np.zeros((len(under_t), 3, 2))])
+        mat = np.concatenate([mat, np.full(len(under_t), MAT_UNDER)])
+    if len(tri) == 0:
+        return _empty_result()
+    # Back to the host's local frame.
+    M = np.array(host_matrix, dtype=np.float64)
+    R = M[:3, :3]
+    co_local = (co - M[:3, 3]) @ np.linalg.inv(R).T
+    n_local = _normalize(nrm @ R)
+    colors = np.concatenate([col, np.ones((len(col), 1))], 1)
+    return Result(co_local, tri.astype(np.int64), colors, uv, n_local, mat.astype(np.int64), 0, n_vines, n_leaves)

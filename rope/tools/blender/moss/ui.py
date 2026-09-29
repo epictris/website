@@ -37,7 +37,7 @@ class MOSS_PT_main(bpy.types.Panel):
             if s.status:
                 box.label(text=s.status, icon="ERROR")
             else:
-                box.label(text=f"{s.triangles:,} tris ({s.curtain_triangles:,} curtain), {s.build_ms:.0f} ms")
+                box.label(text=f"{s.triangles:,} tris, {s.blobs:,} blobs, {s.vine_count} vines, {s.build_ms:.0f} ms")
             row = box.row(align=True)
             row.prop(s, "live")
             row.operator("moss.rebuild", icon="FILE_REFRESH").all = False
@@ -60,31 +60,27 @@ class _Sub:
 
 
 class MOSS_PT_surface(_Sub, bpy.types.Panel):
-    bl_label = "Cushion"
+    bl_label = "Carpet"
 
     def draw(self, context):
         s = ops.active_moss(context).moss
         _grid(self.layout, s, ("seed", "resolution"))
         self.layout.label(text="Outline")
-        _grid(self.layout, s, ("threshold", "edge_noise", "edge_scale", "min_patch"))
-        self.layout.label(text="Shape")
-        _grid(self.layout, s, ("thickness", "edge_thickness", "feather", "rounding", "lump_amount", "lump_scale", "fuzz_amount", "fuzz_scale"))
+        _grid(self.layout, s, ("threshold", "edge_noise", "edge_scale", "min_patch", "rounding"))
+        self.layout.label(text="Blobs")
+        _grid(self.layout, s, ("thickness", "layers", "blob_min", "blob_max", "fill", "density", "facing", "shoulder", "underlay"))
 
 
-class MOSS_PT_curtains(_Sub, bpy.types.Panel):
-    bl_label = "Curtains"
+class MOSS_PT_vines(_Sub, bpy.types.Panel):
+    bl_label = "Vines"
 
     def draw_header(self, context):
-        self.layout.prop(ops.active_moss(context).moss, "curtains", text="")
+        self.layout.prop(ops.active_moss(context).moss, "vines", text="")
 
     def draw(self, context):
         s = ops.active_moss(context).moss
-        self.layout.active = s.curtains
-        _grid(self.layout, s, ("lip_drop", "curtain_length", "length_variation"))
-        self.layout.label(text="Feathering")
-        _grid(self.layout, s, ("finger_width", "finger_length", "finger_taper", "strand_density", "strand_length", "strand_width", "free_keep", "end_taper"))
-        self.layout.label(text="Drape")
-        _grid(self.layout, s, ("curtain_thickness", "thickness_taper", "bend_radius", "cling", "cling_reach", "hug", "sway"))
+        self.layout.active = s.vines
+        _grid(self.layout, s, ("vine_density", "vine_length", "vine_variation", "leaf_size", "leaf_tip"))
 
 
 class MOSS_PT_color(_Sub, bpy.types.Panel):
@@ -93,7 +89,7 @@ class MOSS_PT_color(_Sub, bpy.types.Panel):
 
     def draw(self, context):
         s = ops.active_moss(context).moss
-        _grid(self.layout, s, ("texture_scale", "crown_color", "base_color", "tip_color", "color_variation"))
+        _grid(self.layout, s, ("tone_a", "tone_b", "tone_c", "light", "shade", "tone_scale", "variation", "depth_shade"))
 
 
-CLASSES = (MOSS_PT_main, MOSS_PT_surface, MOSS_PT_curtains, MOSS_PT_color)
+CLASSES = (MOSS_PT_main, MOSS_PT_surface, MOSS_PT_vines, MOSS_PT_color)

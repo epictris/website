@@ -118,6 +118,11 @@ export function dressScene(loaded: THREE.Object3D, targets: readonly DressTarget
   };
 }
 
+function underMoss(o: THREE.Object3D): boolean {
+  for (let p: THREE.Object3D | null = o; p; p = p.parent) if (/\.moss$/.test(p.name)) return true;
+  return false;
+}
+
 const box = new THREE.Box3();
 export function castsShadow(node: THREE.Object3D): boolean {
   box.setFromObject(node, true);
@@ -144,7 +149,11 @@ export function loadSceneFile(scene: string): Promise<THREE.Object3D | null> {
         gltf.scene.traverse((o) => {
           const mesh = o as THREE.Mesh;
           if (!mesh.isMesh) return;
-          mesh.castShadow = true;
+          // Moss (the Blender add-on's `<host>.moss` objects) casts nothing:
+          // its leaves are alpha-cut cards shaded by a borrowed normal, and a
+          // shadow between them reads as a hole in the carpet. glTF has no
+          // flag for it, so the rule lives here, by the node's name.
+          mesh.castShadow = !underMoss(mesh);
           mesh.receiveShadow = true;
         });
         return gltf.scene as THREE.Object3D;

@@ -33,48 +33,55 @@ The moss object finds its rock by **name** (`moss.host`) and sits in its own col
 
 ## What is grown
 
-All of it is `build.py`, a pure function of the rock's evaluated mesh, its world matrix, the stamps and the settings; the same inputs give the same mesh bit for bit.
+Since 2026-09-29 the moss is a **carpet of flat leaf blobs layered like paper cutouts**, after the painted-foliage look of Genshin, Breath of the Wild and The Witness: every blob is one flat colour, shaded by a smooth normal borrowed from the rock, so the carpet reads as one soft mass of distinct colour blocks; vines of heart-shaped leaves hang off its front edge.
+It replaced the cushion-and-curtains grower of 2026-09-28, which the owner judged not to work ("the only nice part is the ability to paint").
+The research that arrived at it, with the rejected alternatives (shell texturing, a solid cushion, leaf-clump cards, camera-facing cards), is the Moss Collar Study report and `tools/blender/moss-experiments/`.
 
-1. **Refinement.** The rock's triangles near a stamp are split by Rivara's longest-edge bisection (with LEPP propagation) until every edge there is at most `Resolution` long; far from the paint nothing is split.
-   Plain edge splitting on a 5 m facet fans slivers out to the far corner without end, and a bmesh operator per split walks the whole mesh each call (14 s for a patch); the bisection runs on plain Python lists.
-2. **Mask.** The stamps composited in painting order: paint lays `m += (1 - m) a w`, erase `m *= 1 - a w`, with `w` a smooth radial falloff times how far the vertex faces the way the stamped surface did (a stamp on a ledge's top does not paint its underside).
-3. **Outline.** The mesh is clipped at `m = Threshold + Edge Noise x noise(Edge Scale)`, so the edge is lobed at a size of its own rather than following facets; islands under `Min Patch` are dropped.
-4. **Cushion.** Every vertex rises along a smoothed normal (the rock's creases rounded over at `Rounding`) by `Thickness`, ramped up from the outline over `Feather` (a geodesic distance) and modulated by `Lumps` and `Fuzz`.
-5. **Lips.** An outline vertex is a lip when the moss runs off a drop: on a top, the ground falls more than `Lip Drop` just beyond it; on a wall, the outline runs downhill.
-6. **Curtains.** Every lip vertex grows a column that crawls over the lip (turning down at `Bend Radius`), hangs under gravity, is pushed out of the rock (with a `Gap`) and drawn back onto a wall within `Cling Reach` (so it follows an undercut; a ceiling never draws it).
-   A column stops when it lands on ground that faces up.
-   Its length is the sheet's (`Length`, varied broadly by `Length Variation`) plus the fingers' (`Finger Width`/`Finger Length`/`Finger Taper` - below 1 rounded lobes, above 1 spikes) and the strands' (`Strands` per metre, `Strand Length`, `Strand Width`), tapered to nothing over `End Taper` at the ends of a lip.
-   Once a column hangs clear of any wall only `Free Sheet` of its sheet goes on while its fingers keep their length, so a sheet off an overhang breaks up into drips.
-   Neighbouring columns of different lengths are zipped into one sheet whose top row is the cushion's own outline, so the two are one surface; it thins toward the tips (`Curtain Thickness`, `Thinning`) and its fingers wander sideways (`Sway`).
-7. **Surface.** UVs per corner: the cushion is projected along the axis each triangle faces most (the texture is noise, so the seams do not read), and a curtain is unrolled along its lip and down its length, so its fingers are never stretched (`Texture Scale` is metres per tile).
-   Vertex colour is a **tint** the material multiplies with the texture: `Base` at the outline to `Crown` at full thickness, curtains from the crown's tint to `Tips`, varied by `Variation`.
+All of it is `build.py`, a pure function of the rock's evaluated mesh, its world matrix, the stamps and the settings; the same inputs give the same mesh bit for bit, in one process or across processes (the candidates are sorted by position before any random draw).
+
+1. **Refinement and mask.** As before: the rock's triangles near a stamp are bisected to `Resolution`; the stamps are composited in painting order into a coverage `m`; the outline is `m = Threshold + Edge Noise x noise(Edge Scale)`.
+2. **Hull normal.** The rock's vertex normals smoothed over `Rounding`. Every blob shades with this normal, whatever facet it sits on, which is what makes a thousand flat quads read as one rounded mass.
+3. **Underlay.** The painted part of the rock, clipped on the iso-line a little outside where the blobs start, lifted `Underlay` (2 cm), in the leaf colour. Where blobs thin out it is moss, not rock.
+4. **Candidates.** `Candidates` points per square metre on the refined triangles inside the paint; the layers pick from them. A candidate with fewer than four neighbours within 6 cm is dropped (a blob alone would float), as is any on the back of the rock, which the game never sees.
+5. **Layers.** `Layers` heights from 8 mm up to `Thickness`, each with three sub-heights 2 mm apart. Each layer takes a random share of the candidates sized to lay `Fill` times its area in blobs. A blob is a quad of `Blob Min` to `Blob Max` lying flat on the hull with **no random tilt**: neighbours share a plane, so they overlap like scales and never cut through each other (a card tilted at random slices the blob behind it and breaks the block of colour).
+6. **Shoulder.** In the outer `Shoulder` of the paint (in coverage units) a blob sits on a quarter-round of radius `Thickness`: flat on top of the mass, standing against the rock at the paint's edge, a card below the surface tilting in proportion to its depth. The mass rolls into the stone instead of ending as a shelf. The outward direction is the coverage field's gradient, so neighbours agree.
+7. **Facing.** Finally every blob is rotated the least that makes it face the game's camera (Blender -y) by `Facing` (a cosine, 0.5 = 60 deg), so the silhouette is made of blob faces, never of edges; a blob seen edge-on is a spike.
+8. **Vines.** `Vines per m²` of paint, from front-facing points on the paint's edge at least 15 cm apart: a 3 mm stem starting below the carpet, `Length` long, with heart-shaped leaves alternating sides, tapering from `Leaf Size` to `Leaf Tip` and closing up as they shrink, each hanging tip-down from its base on the stem and leaning out. Every vine point is held in front of the rock's front-most surface by a ray cast from the camera side, because a rock bulges below its shoulder and a vine placed by the nearest surface ends up inside it.
+9. **Colour.** A vertex colour the material multiplies into a white atlas. Three tones (`Yellow-green`, `Leaf green`, `Blue-green`) patch across the rock by a slow noise at `Tone Scale`, lit toward `Crown` where the hull faces up, darkened by `Depth Shade` and cooled toward `Shade` in the four lowest layers, then `Variation` of value per blob so neighbouring blocks differ.
+
+Nothing in the moss casts a shadow: `create_moss` turns the object's shadow off, and the game does the same for any `.moss` node (`render3d/sceneDressing.ts`). A cast shadow between leaves reads as a black hole in the carpet, and the borrowed normal carries the depth on its own.
 
 ## Material and texture
 
-Every moss shares the material `MossGrown` (not `Moss`: the generated cavern has one of that name): the moss texture's base colour multiplied by the vertex tint, its normal map and its roughness, both faces drawn.
-Each node is one the exporter carries to glTF - `baseColorTexture x COLOR_0`, `normalTexture`, roughness, `doubleSided` - so `just scene` prints no warning for it.
-The texture is `grass_05` from [FreeStylized](https://freestylized.com/material/grass_05/) (royalty free, credited through `tools/blender/image_credits.json`, see [blender-scenes](blender-scenes.md#credits)), a painterly grass of mean sRGB (0.41, 0.69, 0.29); the tint defaults pull it to the reference's olive.
-The 4k download lives in `assets-src/grass-05/`; the add-on makes 1k copies in `assets-src/scenes/textures/moss-grass05-*.png` the first time the material is built (the optimiser caps a scene's textures at 1k anyway) and packs them into the `.blend`, so the scene exports on any machine.
-Both folders are raws under `assets-src/`, gitignored like every raw.
-Changing `MATERIAL_VERSION` in `mesh_io.py` rebuilds the material in every file on its next use.
+One mesh, three material slots: `MossBlobs` (the atlas's colour times the vertex colour, alpha cut at 0.35, back faces culled), `MossUnder` and `MossStem` (the vertex colour alone).
+Each node is one the exporter carries to glTF - `baseColorTexture x COLOR_0`, `alphaMode MASK` with `alphaCutoff`, no `doubleSided` - so `just scene` prints no warning, and three's GLTFLoader builds a `MeshStandardMaterial` with `alphaTest 0.35`, `FrontSide` and `vertexColors`.
+The cutoff sits below 0.5 because mipmapping eats alpha-tested leaves at a distance.
+
+The atlas is **generated**, not downloaded: `mesh_io.atlas()` draws a 3 x 3 sheet of polygon silhouettes (spiky blobs, fanned clusters of pointed leaves, faceted rounds, and three heart-shaped leaves with a faint midrib for the vines), softens them by blurring the alpha and re-thresholding, and writes it once to `assets-src/scenes/textures/moss-cutout-atlas.png`, packed into the `.blend`.
+It is white everywhere with the alpha as the shape: a black background under the alpha bleeds a dark fringe into every edge through filtering.
+It is credited as generated in `tools/blender/image_credits.json`.
+A hand-painted atlas can replace it under the same name; bump `ATLAS_VERSION` in `mesh_io.py` to redraw the generated one, `MATERIAL_VERSION` to rebuild the materials in every file.
 
 ## Export
 
 `scene_export.py` grows every moss object again before it selects anything, so the moss that ships is grown from the paint against the rock as it is now, never the preview saved in the file.
 A moss whose rock is gone is hidden from the export with a warning.
-Each moss's triangle count and build time is printed as a `[scene_export] moss` line.
+Each moss's triangle, blob and vine count and build time is printed as a `[scene_export] moss` line.
 The moss node stays a child of its rock through the optimiser (`--keep-hierarchy`), so moss on a rock that dresses a body rides the body.
 
 **Bake to Plain Mesh** copies a moss into an ordinary mesh to hand-edit, and hides the moss object from the render so only the copy exports; the copy is never regrown.
 
 ## Verified, and not
 
-2026-09-28: headless, a painted stripe on the river's `01_Near_Ledges_Basalt_R1_Block` built in 0.35 s and went through `scene_export.py` and the optimiser with `POSITION`, `NORMAL`, `TEXCOORD_0`, `COLOR_0`, its textures and its parent intact, and was drawn by `cli shot --3d` at the level's start camera.
-The brush was driven for real - GUI Blender on a private headless sway (`WLR_BACKENDS=headless`, a short `XDG_RUNTIME_DIR`, since the socket path is limited to 108 characters) with `--enable-event-simulate` and a simulated left-drag - and laid stamps, created the moss object, grew it, and regrew it on a setting change.
-Not yet judged by eye in a play; the look's defaults are a first pass.
+2026-09-29: headless, the reworked grower ran through `ops.create_moss`, `mesh_io.write_stamps` and `ops.rebuild` on a 300-triangle test rock with 20 stamps: 6,937 triangles (1,479 blobs, 4 vines) in 0.32 s, the three materials with no `material_warnings`, a glTF export that the asset optimiser took to 110 KB and that three's GLTFLoader built as `alphaTest 0.35`, `FrontSide`, vertex colours; two processes on the same host produced the same bytes.
+The look itself was settled over fourteen review rounds on the study's own rock (see the report), rendered in Eevee from the game's side-on camera and in three.js.
+Not yet: painted on a river rock through the brush, exported by `just scene`, or seen in a play.
+
+2026-09-28 (the previous grower): the brush was driven for real on a private headless sway with `--enable-event-simulate`, laid stamps, created the moss object and regrew it on a setting change; that machinery is unchanged.
 
 ## Not yet
 
-- The texture has small pink and yellow flowers, which show as specks in the moss.
-- The optimiser encodes a scene's normal maps as lossy WebP, which [asset-store](asset-store.md) says a normal map must not be; true of every scene, not only moss.
+- The atlas is generated; the reference's brushwork wants a hand-painted one.
+- The facing rule assumes the game's side-on camera. A level that looks at a rock far off-axis would see the sides thin out.
+- The optimiser encodes a scene's normal maps as lossy WebP, which [asset-store](asset-store.md) says a normal map must not be; true of every scene, not only moss (the moss has no normal map now).
 - No vertex-group mask; a dense, hand-modelled rock might be easier to weight paint.

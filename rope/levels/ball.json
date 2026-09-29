@@ -309,14 +309,14 @@
     "fillIntensity": 2.8,
     "envIntensity": 0.5,
     "backgroundColor": "#0a2438",
-    "fogAmount": 0.42,
+    "fogAmount": 0.32,
     "fogColor": "#4e7088",
     "sunColor": "#bababa"
   },
   "camera": {
     "focalLength": 70
   },
-  "scene": "grotto",
+  "scene": "river",
   "notes": [
     {
       "kind": "text",
