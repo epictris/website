@@ -1,11 +1,11 @@
 """Moss geometry: a painted mask on a host mesh becomes a carpet of flat leaf
-blobs, layered like paper cutouts, with vines of leaves hanging off its front
-edge. The look is the painted-foliage one (Genshin, Breath of the Wild, The
+blobs, layered like paper cutouts, and vines of lobed leaves hang from anchors
+placed on the host by hand. The look is the painted-foliage one (Genshin, Breath of the Wild, The
 Witness): every blob is one flat colour, shaded by a smooth "hull" normal
 borrowed from the rock, so the carpet reads as one soft mass of distinct
 colour blocks. See rope/docs/blender-moss.md for the history of the choices.
 
-Everything here is a pure function of (host mesh, host matrix, stamps, params)
+Everything here is a pure function of (host mesh, host matrix, stamps, vines, params)
 - no bpy state is read or written - so the add-on's live rebuild and the scene
 exporter's rebuild produce the same mesh bit for bit.
 
@@ -40,8 +40,13 @@ transform):
    where the hull faces up, darkened and cooled in the deep layers, then a
    small value jitter per blob so neighbouring blocks differ.
 
-The atlas (mesh_io.atlas) is a 3 x 3 sheet of silhouettes: six angular blob
-shapes for the carpet and three heart-shaped leaves for the vines.
+9. Vines: one per anchor, a 3 mm stem hanging straight down from the anchor,
+   held in front of the rock by a ray cast, with lobed leaves alternating
+   sides and tapering toward the tip. Nothing places a vine but the artist.
+
+The atlas (mesh_io.atlas) is a 4 x 4 sheet of silhouettes: eight angular blob
+shapes for the carpet, four lobed ivy leaves for the vines, and solid cells the
+underlay and stems point at, so the whole moss is one material and one draw.
 """
 
 import heapq
@@ -59,9 +64,16 @@ from mathutils.kdtree import KDTree
 FACE = np.array((0.0, -1.0, 0.0))
 UP = np.array((0.0, 0.0, 1.0))
 
-ATLAS_CELLS = 3
-BLOB_CELLS = (0, 1, 2, 4, 5, 6)  # the carpet never wears a vine leaf
-LEAF_CELLS = (3, 7, 8)
+ATLAS_CELLS = 4
+BLOB_CELLS = (0, 1, 2, 3, 4, 5, 6, 7, 12, 13, 14, 15)  # the carpet never wears a vine leaf
+LEAF_CELLS = (8, 9, 10, 11)
+FILL_CELL = 2  # a faceted round: alpha 1 at its centre, where the underlay and the stems sample
+# A card's UV quad covers only the inner part of its cell, and the shape is
+# drawn inside that: the outer ATLAS_INSET of every cell is transparent on
+# both sides of every cell border, so bilinear filtering and the first mip
+# levels never blend a neighbouring cell's alpha into a card's edge. Cells
+# packed edge to edge drew a faint outline of every card square.
+ATLAS_INSET = 0.12
 
 
 @dataclass
@@ -82,17 +94,15 @@ class Params:
     blob_min: float = 0.07
     blob_max: float = 0.13
     fill: float = 1.8  # blob area laid per layer, as a multiple of the layer's area
+    edge_fill: float = 2.5  # extra fill toward the paint's edge, where the underlay would otherwise show
     density: float = 6000.0  # candidate points per m^2 of paint
     facing: float = 0.5  # every blob faces the camera by at least acos(facing)
     shoulder: float = 0.5  # the outer share of the paint (in mask units) that rolls into the rock
     underlay: float = 0.02
-    # Vines
-    vines: bool = True
-    vine_density: float = 6.0  # per m^2 of paint
-    vine_length: float = 0.55
-    vine_variation: float = 0.3
-    leaf_size: float = 0.078  # leaf length at the top of a vine
-    leaf_tip: float = 0.022  # ... and at its tip
+    # Vines (each one is placed by hand; these are the leaves it wears)
+    vine_length: float = 0.55  # the length a newly placed vine is given
+    leaf_size: float = 0.15  # leaf length at the top of a vine
+    leaf_tip: float = 0.045  # ... and at its tip
     # Colour (linear RGB)
     tone_a: tuple = (0.62, 0.78, 0.06)  # yellow-green
     tone_b: tuple = (0.24, 0.60, 0.06)  # leaf green
@@ -121,7 +131,20 @@ class Stamps:
         return len(self.radius)
 
 
-MAT_BLOBS, MAT_UNDER, MAT_STEM = 0, 1, 2
+@dataclass
+class Vines:
+    """Vine anchors in the host's LOCAL frame: where each vine hangs from, and
+    how long it is (world metres)."""
+
+    position: np.ndarray  # (N, 3)
+    length: np.ndarray  # (N,)
+
+    @staticmethod
+    def empty():
+        return Vines(np.zeros((0, 3)), np.zeros(0))
+
+    def __len__(self):
+        return len(self.length)
 
 
 @dataclass
@@ -131,14 +154,13 @@ class Result:
     colors: np.ndarray  # (V, 4) linear RGBA
     uvs: np.ndarray  # (T, 3, 2) per corner
     normals: np.ndarray  # (V, 3) host-local custom normals (the hull normal)
-    material: np.ndarray  # (T,) MAT_BLOBS / MAT_UNDER / MAT_STEM
     blobs: int = 0
     vines: int = 0
     leaves: int = 0
 
 
 def _empty_result():
-    return Result(np.zeros((0, 3)), np.zeros((0, 3), np.int64), np.zeros((0, 4)), np.zeros((0, 3, 2)), np.zeros((0, 3)), np.zeros(0, np.int64))
+    return Result(np.zeros((0, 3)), np.zeros((0, 3), np.int64), np.zeros((0, 4)), np.zeros((0, 3, 2)), np.zeros((0, 3)))
 
 def _normalize(v):
     n = np.linalg.norm(v, axis=-1, keepdims=True)
@@ -502,14 +524,13 @@ class _Quads:
     """Cards accumulated as quads, turned into the result's triangles at the end."""
 
     def __init__(self):
-        self.co, self.nrm, self.col, self.uv, self.mat = [], [], [], [], []
+        self.co, self.nrm, self.col, self.uv = [], [], [], []
 
-    def add(self, corners, normal, color, uv, material):
+    def add(self, corners, normal, color, uv):
         self.co.append(corners)
         self.nrm.append(np.repeat(normal[None], 4, 0))
         self.col.append(np.repeat(np.asarray(color)[None], 4, 0))
         self.uv.append(uv)
-        self.mat.append(material)
 
     def __len__(self):
         return len(self.co)
@@ -517,7 +538,7 @@ class _Quads:
     def arrays(self):
         n = len(self.co)
         if n == 0:
-            return np.zeros((0, 3)), np.zeros((0, 3), np.int64), np.zeros((0, 3)), np.zeros((0, 3)), np.zeros((0, 3, 2)), np.zeros(0, np.int64)
+            return np.zeros((0, 3)), np.zeros((0, 3), np.int64), np.zeros((0, 3)), np.zeros((0, 3)), np.zeros((0, 3, 2))
         co = np.asarray(self.co).reshape(-1, 3)
         nrm = np.asarray(self.nrm).reshape(-1, 3)
         col = np.asarray(self.col).reshape(-1, 3)
@@ -525,8 +546,7 @@ class _Quads:
         tri = np.stack([np.stack([base, base + 1, base + 2], 1), np.stack([base, base + 2, base + 3], 1)], 1).reshape(-1, 3)
         uvq = np.asarray(self.uv)  # (n, 4, 2)
         uv = np.stack([uvq[:, [0, 1, 2]], uvq[:, [0, 2, 3]]], 1).reshape(-1, 3, 2)
-        mat = np.repeat(np.asarray(self.mat), 2)
-        return co, tri, nrm, col, uv, mat
+        return co, tri, nrm, col, uv
 
 
 def _quad(centre, normal, w, h, spin):
@@ -550,7 +570,14 @@ def _uv_cell(idx):
     cy, cx = divmod(idx, ATLAS_CELLS)
     cy = ATLAS_CELLS - 1 - cy
     s = 1.0 / ATLAS_CELLS
-    return np.array([[cx * s, cy * s], [(cx + 1) * s, cy * s], [(cx + 1) * s, (cy + 1) * s], [cx * s, (cy + 1) * s]])
+    lo, hi = ATLAS_INSET * s, (1.0 - ATLAS_INSET) * s
+    return np.array([[cx * s + lo, cy * s + lo], [cx * s + hi, cy * s + lo], [cx * s + hi, cy * s + hi], [cx * s + lo, cy * s + hi]])
+
+
+def _uv_solid():
+    """One UV for every corner: the centre of a round blob, alpha 1 with no
+    derivative, so the sampler reads mip 0 there and never leaves the blob."""
+    return np.repeat(_uv_cell(FILL_CELL).mean(0, keepdims=True), 4, 0)
 
 
 def _faced(n, facing):
@@ -626,57 +653,74 @@ def _crowd(P, r):
 # 8. The build
 
 
-def build(host_mesh, host_matrix, stamps, p):
-    """The moss for one host. `host_mesh` is the host's evaluated mesh."""
-    if len(stamps) == 0 or not (stamps.strength > 0).any():
+def build(host_mesh, host_matrix, stamps, vines, p):
+    """The moss for one host: the carpet its paint covers, and a vine at every
+    anchor. `host_mesh` is the host's evaluated mesh."""
+    painted = len(stamps) > 0 and bool((stamps.strength > 0).any())
+    if not painted and len(vines) == 0:
         return _empty_result()
     co, tri = host_world(host_mesh, host_matrix)
     if len(tri) == 0:
         return _empty_result()
-    centres, snormals = stamps_world(stamps, host_matrix)
-    radii = stamps.radius.astype(np.float64)
-    res = max(p.resolution, 0.005)
     rnd = random.Random(p.seed)
     rng = np.random.default_rng(p.seed)
-
-    v, t = _refine(co, tri, centres, radii, res)
-    if len(t) == 0:
-        return _empty_result()
-    n_raw = _vertex_normals(v, t)
-    edges = _edges(t)
-    m = _mask(v, n_raw, centres, snormals, radii, stamps.strength)
-    thr = np.clip(p.threshold + p.edge_noise * _fbm(v, p.edge_scale, p.seed, 1), 0.03, 0.97)
-    f = m - thr  # > 0 inside the paint
-    iters = int(min(200, round((p.rounding / res) ** 2)))
-    hull = _normalize(_smooth_field(n_raw, edges, len(v), iters))
-
-    # Order-independence: the helpers above may return triangles in a hash
-    # order that differs between processes, and every random draw below walks
-    # them in order. Sort by position so the same paint always grows the same moss.
-    order = np.lexsort((v[t].mean(1)[:, 2], v[t].mean(1)[:, 1], v[t].mean(1)[:, 0]))
-    t = t[order]
-
     quads = _Quads()
+    under = None
+    n_blobs = 0
+    v = np.zeros((0, 3))
+    hull = np.zeros((0, 3))
 
-    # 5. The underlay: the paint's own outline, a little beyond where the blobs start.
-    uv_, ut, (uh, uf) = _clip(v, t, f + 0.02, [hull, f])
+    if painted:
+        centres, snormals = stamps_world(stamps, host_matrix)
+        radii = stamps.radius.astype(np.float64)
+        res = max(p.resolution, 0.005)
+        v, t = _refine(co, tri, centres, radii, res)
+        if len(t):
+            n_raw = _vertex_normals(v, t)
+            edges = _edges(t)
+            m = _mask(v, n_raw, centres, snormals, radii, stamps.strength)
+            thr = np.clip(p.threshold + p.edge_noise * _fbm(v, p.edge_scale, p.seed, 1), 0.03, 0.97)
+            f = m - thr  # > 0 inside the paint
+            iters = int(min(200, round((p.rounding / res) ** 2)))
+            hull = _normalize(_smooth_field(n_raw, edges, len(v), iters))
+            # Order-independence: the helpers above may return triangles in a
+            # hash order that differs between processes, and every random draw
+            # below walks them in order. Sort by position so the same paint
+            # always grows the same moss.
+            order = np.lexsort((v[t].mean(1)[:, 2], v[t].mean(1)[:, 1], v[t].mean(1)[:, 0]))
+            t = t[order]
+            under = _underlay(v, t, f, hull, p)
+            n_blobs = _carpet(quads, v, t, f, hull, n_raw, p, rnd, rng)
+
+    n_vines, n_leaves = _vines(quads, co, tri, v, hull, vines, host_matrix, p, rnd)
+    r = _assemble(quads, under, host_matrix)
+    r.blobs, r.vines, r.leaves = n_blobs, n_vines, n_leaves
+    return r
+
+
+def _underlay(v, t, f, hull, p):
+    """The underlay: the paint's own outline, a little INSIDE where the blobs
+    start, lifted `underlay` and coloured as a leaf. None when nothing is left.
+    Inside, so the carpet's silhouette is blobs and never the underlay's
+    smooth edge; the blobs on the shoulder roll down to the rock outside it."""
+    uv_, ut, (uh, uf) = _clip(v, t, f - 0.015, [hull, f])
     ut = _drop_islands(uv_, ut, p.min_patch)
-    under_v = under_t = under_n = under_c = None
-    if len(ut):
-        uv_, ut, (uh, uf) = _compact(uv_, ut, [uh, uf])
-        uh = _normalize(uh)
-        lift = p.underlay * _smoothstep(0.0, 0.15, uf + 0.02)
-        under_v = uv_ + uh * lift[:, None]
-        under_t, under_n = ut, uh
-        under_c = _tint(uh, np.full(len(uv_), 0.15), np.zeros(len(uv_)), _tone_at(uv_, (p.tone_a, p.tone_b, p.tone_c), p.tone_scale, p.seed), p)
+    if len(ut) == 0:
+        return None
+    uv_, ut, (uh, uf) = _compact(uv_, ut, [uh, uf])
+    uh = _normalize(uh)
+    lift = p.underlay * _smoothstep(0.0, 0.15, uf + 0.02)
+    col = _tint(uh, np.full(len(uv_), 0.15), np.zeros(len(uv_)), _tone_at(uv_, (p.tone_a, p.tone_b, p.tone_c), p.tone_scale, p.seed), p)
+    return uv_ + uh * lift[:, None], ut, uh, col
 
-    # 6. Candidates.
+
+def _carpet(quads, v, t, f, hull, n_raw, p, rnd, rng):
+    """The layers of blobs over the paint. Returns how many were laid."""
     P, F, HN, NR, G = _sample(v, t, f, hull, n_raw, p.density, rng)
-    if len(P):
-        order = np.lexsort((P[:, 2], P[:, 1], P[:, 0]))
-        P, F, HN, NR, G = P[order], F[order], HN[order], NR[order], G[order]
     if len(P) == 0:
-        return _assemble(quads, under_v, under_t, under_n, under_c, host_matrix, 0, 0)
+        return 0
+    order = np.lexsort((P[:, 2], P[:, 1], P[:, 0]))
+    P, F, HN, NR, G = P[order], F[order], HN[order], NR[order], G[order]
     area = len(P) / p.density  # the painted area, from the sampling density
     Mn = np.clip(F / 0.5, 0, 1)  # 0 at the paint's edge, 1 well inside
     tones = _tone_at(P, (p.tone_a, p.tone_b, p.tone_c), p.tone_scale, p.seed)
@@ -686,6 +730,10 @@ def build(host_mesh, host_matrix, stamps, p):
     Gt = G - HN * (G * HN).sum(1, keepdims=True)
     Gl = np.linalg.norm(Gt, axis=1)
     OUT = np.where((Gl > 0.2)[:, None], -Gt / np.maximum(Gl, 1e-12)[:, None], 0.0)
+    # Toward the edge a candidate is taken this much more readily: the outer
+    # band is where the shoulder thins the upper layers, and a gap there shows
+    # the underlay as a rim around the mass.
+    edge_w = 1.0 + p.edge_fill * (1.0 - Mn) ** 2
 
     band = max(p.shoulder, 1e-3)
     thick = max(p.thickness, 0.012)
@@ -711,7 +759,6 @@ def build(host_mesh, host_matrix, stamps, p):
         c = P[i] + hn * dL * math.cos(a) + o * dL * math.sin(a) * 0.3
         return c, n / np.linalg.norm(n)
 
-    # 7. Layers.
     idx = np.flatnonzero(seen).tolist()
     layers = max(int(p.layers), 1)
     heights = [0.008 + (thick - 0.008) * i / max(layers - 1, 1) for i in range(layers)]
@@ -728,7 +775,7 @@ def build(host_mesh, host_matrix, stamps, p):
         p_take = min(1.0, want / len(allowed))
         depth_L = max(0.0, 1 - L / 4)
         for j, i in enumerate(allowed):
-            if rnd.random() > p_take:
+            if rnd.random() > p_take * edge_w[i]:
                 continue
             size = rnd.uniform(p.blob_min, p.blob_max) * (0.6 + 0.4 * Mn[i])
             c, n = shoulder(i, dL + subh * (j % 3))
@@ -736,80 +783,96 @@ def build(host_mesh, host_matrix, stamps, p):
                 continue
             n = _faced(n, p.facing)
             col = _tint(HN[i], np.array(depth_L * Mn[i]), np.array(rnd.uniform(-p.variation, p.variation)), tones[i], p)
-            quads.add(_quad(c, n, size, size * rnd.uniform(0.85, 1.0), rnd.uniform(0, math.tau)), HN[i], col, _uv_cell(rnd.choice(BLOB_CELLS)), MAT_BLOBS)
+            quads.add(_quad(c, n, size, size * rnd.uniform(0.85, 1.0), rnd.uniform(0, math.tau)), HN[i], col, _uv_cell(rnd.choice(BLOB_CELLS)))
             n_blobs += 1
+    return n_blobs
 
-    # 8. Vines.
+
+def _vines(quads, co, tri, v, hull, vines, host_matrix, p, rnd):
+    """A vine at every anchor: a stem hanging straight down, held in front of
+    the rock, wearing lobed leaves that alternate sides and taper toward the
+    tip. Anchors are walked in a fixed order so the draw is reproducible.
+    Returns (vines, leaves)."""
+    if len(vines) == 0:
+        return 0, 0
+    M = np.array(host_matrix, dtype=np.float64)
+    origins = vines.position @ M[:3, :3].T + M[:3, 3]
+    order = np.lexsort((origins[:, 2], origins[:, 1], origins[:, 0]))
+    bvh = BVHTree.FromPolygons([tuple(x) for x in co], [tuple(x) for x in tri.tolist()])
+    hull_kd = None
+    if len(v):
+        hull_kd = KDTree(len(v))
+        for i, q in enumerate(v):
+            hull_kd.insert(q, i)
+        hull_kd.balance()
+    tones = _tone_at(origins, (p.tone_a, p.tone_b, p.tone_c), p.tone_scale, p.seed)
     n_vines = n_leaves = 0
-    if p.vines and p.vine_density > 0:
-        bvh = BVHTree.FromPolygons([tuple(x) for x in co], [tuple(x) for x in tri.tolist()])
-        front = [i for i in range(len(P)) if NR[i] @ FACE > 0.55 and 0.0 < F[i] < 0.35]
-        rnd.shuffle(front)
-        want = int(round(p.vine_density * area))
-        chosen = []
-        for i in front:
-            if len(chosen) >= want:
-                break
-            if all(np.linalg.norm(P[i] - P[j]) > 0.15 for j in chosen):
-                chosen.append(i)
-        for i in chosen:
-            hn = HN[i]
-            origin = P[i]
-            length = p.vine_length * rnd.uniform(1 - p.vine_variation, 1 + p.vine_variation)
-            sway = rnd.uniform(0.006, 0.015)
-            phase = rnd.uniform(0, 6)
+    for k_v in order.tolist():
+        origin = origins[k_v]
+        length = max(float(vines.length[k_v]), 0.05)
+        # The normal the leaves shade with: the carpet's hull where the anchor
+        # sits in paint, else the rock's own surface.
+        hn = None
+        if hull_kd is not None:
+            _q, i, d = hull_kd.find(Vector(origin))
+            if i is not None and d < 0.3:
+                hn = hull[i]
+        if hn is None:
+            near = bvh.find_nearest(Vector(origin))
+            hn = np.array(near[1]) if near[0] is not None else -FACE
+            hn = _normalize(hn)
+        sway = rnd.uniform(0.006, 0.015)
+        phase = rnd.uniform(0, 6)
 
-            def at(z, clear=0.02):
-                """The stem's point z metres below the start, held in FRONT of the rock."""
-                q = origin + np.array((sway * math.sin(z * 12 + phase), 0.0, -z)) + FACE * (0.02 + 0.03 * z / length)
-                hit = bvh.ray_cast(Vector(q + FACE * 5.0), Vector(-FACE))
-                if hit[0] is not None:
-                    front_y = float(np.array(hit[0]) @ FACE)  # how far toward the camera the rock reaches here
-                    if q @ FACE < front_y + clear:
-                        q = q + FACE * (front_y + clear - q @ FACE)
-                return q
+        def at(z, clear=0.02):
+            """The stem's point z metres below the anchor, held in FRONT of the rock."""
+            q = origin + np.array((sway * math.sin(z * 12 + phase), 0.0, -z)) + FACE * (0.02 + 0.03 * z / length)
+            hit = bvh.ray_cast(Vector(q + FACE * 5.0), Vector(-FACE))
+            if hit[0] is not None:
+                front_y = float(np.array(hit[0]) @ FACE)  # how far toward the camera the rock reaches here
+                if q @ FACE < front_y + clear:
+                    q = q + FACE * (front_y + clear - q @ FACE)
+            return q
 
-            zs = np.linspace(0.09, length, max(2, int((length - 0.09) / 0.03) + 1))
-            pts = np.array([at(z) for z in zs])
-            side = np.array((0.0015, 0.0, 0.0))
-            stem_col = np.asarray(p.tone_b) * 0.75
-            for k in range(len(pts) - 1):
-                a, b = pts[k], pts[k + 1]
-                quads.add(np.array([a - side, a + side, b + side, b - side]), hn, stem_col, np.zeros((4, 2)), MAT_STEM)
-            vn = hn * 0.5 + FACE * 0.5
-            vn /= np.linalg.norm(vn)
-            vn = _faced(vn, p.facing)
-            z = 0.07
-            sgn = rnd.choice((-1, 1))
-            k = 0
-            while z < length:
-                tt = z / length
-                size = p.leaf_size + (p.leaf_tip - p.leaf_size) * tt
-                c = at(z + size * 0.42, clear=0.03 + 0.004 * (k % 2 + 1)) + np.array((sgn * size * 0.24, 0.0, 0.0))
-                spin = sgn * math.radians(rnd.uniform(15, 28))
-                col = _tint(hn, np.array(0.1 + 0.4 * tt), np.array(rnd.uniform(-0.1, 0.1)), tones[i], p)
-                quads.add(_quad(c, vn, size * 0.8, size, spin), hn, col, _uv_cell(rnd.choice(LEAF_CELLS)), MAT_BLOBS)
-                n_leaves += 1
-                z += size * 0.62
-                sgn = -sgn
-                k += 1
-            n_vines += 1
-
-    r = _assemble(quads, under_v, under_t, under_n, under_c, host_matrix, n_vines, n_leaves)
-    r.blobs = n_blobs
-    return r
+        zs = np.linspace(0.0, length, max(2, int(length / 0.03) + 1))
+        pts = np.array([at(z) for z in zs])
+        side = np.array((0.0015, 0.0, 0.0))
+        stem_col = np.asarray(p.tone_b) * 0.75
+        for k in range(len(pts) - 1):
+            a, b = pts[k], pts[k + 1]
+            # Wound so the face looks toward the camera: the material culls the back.
+            quads.add(np.array([a + side, a - side, b - side, b + side]), hn, stem_col, _uv_solid())
+        vn = hn * 0.5 + FACE * 0.5
+        vn /= np.linalg.norm(vn)
+        vn = _faced(vn, p.facing)
+        z = p.leaf_size * 0.25
+        sgn = rnd.choice((-1, 1))
+        k = 0
+        while z < length:
+            tt = z / length
+            size = p.leaf_size + (p.leaf_tip - p.leaf_size) * tt
+            c = at(z + size * 0.42, clear=0.03 + 0.004 * (k % 2 + 1)) + np.array((sgn * size * 0.3, 0.0, 0.0))
+            spin = sgn * math.radians(rnd.uniform(18, 34))
+            col = _tint(hn, np.array(0.1 + 0.4 * tt), np.array(rnd.uniform(-0.1, 0.1)), tones[k_v], p)
+            quads.add(_quad(c, vn, size, size, spin), hn, col, _uv_cell(rnd.choice(LEAF_CELLS)))
+            n_leaves += 1
+            z += size * 0.55
+            sgn = -sgn
+            k += 1
+        n_vines += 1
+    return n_vines, n_leaves
 
 
-def _assemble(quads, under_v, under_t, under_n, under_c, host_matrix, n_vines, n_leaves):
-    co, tri, nrm, col, uv, mat = quads.arrays()
-    if under_v is not None and len(under_t):
+def _assemble(quads, under, host_matrix):
+    co, tri, nrm, col, uv = quads.arrays()
+    if under is not None:
+        under_v, under_t, under_n, under_c = under
         off = len(co)
         co = np.vstack([co, under_v])
         nrm = np.vstack([nrm, under_n])
         col = np.vstack([col, under_c])
         tri = np.vstack([tri, under_t + off])
-        uv = np.vstack([uv, np.zeros((len(under_t), 3, 2))])
-        mat = np.concatenate([mat, np.full(len(under_t), MAT_UNDER)])
+        uv = np.vstack([uv, np.repeat(_uv_solid()[:3][None], len(under_t), 0)])
     if len(tri) == 0:
         return _empty_result()
     # Back to the host's local frame.
@@ -818,4 +881,4 @@ def _assemble(quads, under_v, under_t, under_n, under_c, host_matrix, n_vines, n
     co_local = (co - M[:3, 3]) @ np.linalg.inv(R).T
     n_local = _normalize(nrm @ R)
     colors = np.concatenate([col, np.ones((len(col), 1))], 1)
-    return Result(co_local, tri.astype(np.int64), colors, uv, n_local, mat.astype(np.int64), 0, n_vines, n_leaves)
+    return Result(co_local, tri.astype(np.int64), colors, uv, n_local)

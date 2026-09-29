@@ -21,11 +21,16 @@ class MOSS_PT_main(bpy.types.Panel):
         layout = self.layout
         brush = context.scene.moss_brush
         col = layout.column(align=True)
-        col.operator("moss.paint", icon="BRUSH_DATA")
+        row = col.row(align=True)
+        row.operator("moss.paint", text="Paint Moss", icon="BRUSH_DATA").erase = False
+        row.operator("moss.paint", text="Erase Moss", icon="X").erase = True
         col.prop(brush, "radius")
         col.prop(brush, "strength")
         col.prop(brush, "spacing")
         col.prop(brush, "show_stamps")
+        # Here as well as in the Vines panel, which only shows for a moss: a
+        # bare rock gets its first vine from here.
+        layout.operator("moss.place_vines", icon="CURVE_PATH")
 
         ob = ops.active_moss(context)
         box = layout.box()
@@ -68,19 +73,20 @@ class MOSS_PT_surface(_Sub, bpy.types.Panel):
         self.layout.label(text="Outline")
         _grid(self.layout, s, ("threshold", "edge_noise", "edge_scale", "min_patch", "rounding"))
         self.layout.label(text="Blobs")
-        _grid(self.layout, s, ("thickness", "layers", "blob_min", "blob_max", "fill", "density", "facing", "shoulder", "underlay"))
+        _grid(self.layout, s, ("thickness", "layers", "blob_min", "blob_max", "fill", "edge_fill", "density", "facing", "shoulder", "underlay"))
 
 
 class MOSS_PT_vines(_Sub, bpy.types.Panel):
     bl_label = "Vines"
 
-    def draw_header(self, context):
-        self.layout.prop(ops.active_moss(context).moss, "vines", text="")
-
     def draw(self, context):
-        s = ops.active_moss(context).moss
-        self.layout.active = s.vines
-        _grid(self.layout, s, ("vine_density", "vine_length", "vine_variation", "leaf_size", "leaf_tip"))
+        ob = ops.active_moss(context)
+        s = ob.moss
+        host = bpy.data.objects.get(s.host)
+        n = len(ops.vine_objects(host)) if host is not None else 0
+        self.layout.operator("moss.place_vines", icon="CURVE_PATH")
+        self.layout.label(text=f"{n} placed; move (G), lengthen (S) or delete (X) an anchor", icon="EMPTY_SINGLE_ARROW")
+        _grid(self.layout, s, ("vine_length", "leaf_size", "leaf_tip"))
 
 
 class MOSS_PT_color(_Sub, bpy.types.Panel):

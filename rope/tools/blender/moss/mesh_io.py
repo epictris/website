@@ -8,7 +8,7 @@ import random
 import bpy
 import numpy as np
 
-from .build import Stamps
+from .build import ATLAS_CELLS, ATLAS_INSET, Stamps
 
 COLOR = "Col"
 UV = "UVMap"
@@ -63,8 +63,14 @@ def new_stamps_mesh(name):
 
 
 # --------------------------------------------------------------------------
-# The generated mesh: one mesh, three material slots (blobs, underlay, stems),
-# custom normals (the hull normal on every corner) and a per-vertex colour.
+# The generated mesh: one mesh, ONE material, custom normals (the hull normal
+# on every corner) and a per-vertex colour. One material on purpose: Blender
+# 5.2's glTF exporter, given a second material slot that reads the same colour
+# attribute, records it under the attribute's name where it later looks for
+# the glTF name, decides that slot does not use the colour, and writes its
+# COLOR_0 as white (io_scene_gltf2 primitive_extract.py, `materials_use_vc`).
+# That is how the underlay shipped white. With one slot there is nothing to
+# mismatch, and the moss is one draw call.
 
 
 def write_result(me, result):
@@ -80,7 +86,6 @@ def write_result(me, result):
     me.polygons.foreach_set("loop_start", np.arange(0, len(t) * 3, 3, dtype=np.int32))
     me.update(calc_edges=True)
     me.validate(clean_customdata=False)
-    me.polygons.foreach_set("material_index", result.material.astype(np.int32))
     attr = me.color_attributes.get(COLOR) or me.color_attributes.new(COLOR, "FLOAT_COLOR", "POINT")
     if len(attr.data) == len(result.colors):
         attr.data.foreach_set("color", result.colors.astype(np.float32).ravel())
@@ -91,25 +96,30 @@ def write_result(me, result):
     me.shade_smooth()
     if len(result.normals) == len(v):
         me.normals_split_custom_set_from_vertices(result.normals.astype(np.float32).tolist())
-    mats = materials()
-    if list(me.materials) != mats:
+    mat = material()
+    if list(me.materials) != [mat]:
         me.materials.clear()
-        for mat in mats:
-            me.materials.append(mat)
+        me.materials.append(mat)
+        _purge_old_materials()
 
 
 # --------------------------------------------------------------------------
-# The atlas: a 3 x 3 sheet of silhouettes, white everywhere (the vertex colour
+# The atlas: a 4 x 4 sheet of silhouettes, white everywhere (the vertex colour
 # owns the hue; a black background under the alpha bleeds a dark fringe into
-# every edge through filtering) with the alpha as the shape. Six angular blob
-# cells for the carpet, three heart-shaped leaves with a faint midrib for the
-# vines. Generated once into assets-src/scenes/textures and packed into the
-# .blend, so a scene exports on any machine. Bump ATLAS_VERSION to redraw it.
+# every edge through filtering) with the alpha as the shape. Twelve angular
+# blob cells for the carpet and four lobed ivy leaves with veins for the
+# vines; the underlay and the stems sample the centre of a round blob. Every
+# shape sits inside its cell's inner (1 - 2 * ATLAS_INSET), the part a card's
+# UV quad covers, so there is a transparent gutter either side of every cell
+# border (see build.ATLAS_INSET). Generated once into assets-src/scenes/
+# textures and packed into the .blend, so a scene exports on any machine.
+# Bump ATLAS_VERSION to redraw it: the file is named by version, so a stale
+# sheet is never picked up.
 
-MATERIAL_VERSION = 3
-ATLAS_VERSION = 1
-ATLAS_NAME = "moss-cutout-atlas.png"
-ATLAS_SIZE = 768
+MATERIAL_VERSION = 4
+ATLAS_VERSION = 3
+ATLAS_NAME = f"moss-cutout-atlas-v{ATLAS_VERSION}.png"
+ATLAS_SIZE = 1024
 REPO = os.path.realpath(os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..", ".."))
 TEXTURE_DIR = os.path.join(REPO, "assets-src", "scenes", "textures")
 ATLAS_CUTOFF = 0.35  # alpha below this is cut; below 0.5 so mipmaps do not eat the leaf edges at a distance
@@ -176,6 +186,78 @@ def _cluster(rnd):
     return polys
 
 
+# The ivy leaf, as (u, v) along and across a unit leaf, right half from the
+# base to the tip: a broad rounded middle lobe, two rounded side lobes at the
+# widest point, a small basal bump either side of a notched base. |v| peaks at
+# IVY_HALF, so the outline is scaled by width / (2 * IVY_HALF).
+IVY_HALF = 0.55
+IVY_RIGHT = (
+    (0.06, 0.0),
+    (0.02, 0.14),
+    (0.0, 0.26),
+    (0.04, 0.34),
+    (0.12, 0.36),
+    (0.19, 0.31),  # sinus between the basal bump and the side lobe
+    (0.26, 0.42),
+    (0.32, 0.52),
+    (0.38, 0.55),  # the side lobe's rounded tip
+    (0.45, 0.50),
+    (0.50, 0.40),
+    (0.54, 0.30),  # sinus between the side and middle lobes
+    (0.62, 0.30),
+    (0.74, 0.25),
+    (0.86, 0.16),
+    (0.95, 0.07),
+    (1.0, 0.0),
+)
+IVY_TIPS = ((1.0, 0.0), (0.38, 0.55), (0.38, -0.55), (0.0, 0.26), (0.0, -0.26))  # where the veins run to
+
+
+def _ivy_frame(cx, cy, length, width, angle, rnd):
+    """(u, v) -> cell coordinates for a leaf `length` long and `width` wide,
+    its base at (cx, cy), pointing along `angle`; every leaf drawn a little
+    differently in how far its side lobes reach and how deep its sinuses cut."""
+    lat = rnd.uniform(0.92, 1.08)
+    deep = rnd.uniform(0.9, 1.1)
+    ca, sa = math.cos(angle), math.sin(angle)
+
+    def at(u, v):
+        if 0.2 <= u <= 0.5:
+            v *= lat
+        if abs(v) < 0.32 and 0.15 < u < 0.6:
+            v /= deep
+        x = u * length
+        y = v / (2 * IVY_HALF) * width
+        return cx + x * ca - y * sa, cy + x * sa + y * ca
+
+    return at
+
+
+def _ivy_poly(at):
+    """The leaf's outline through the frame `at`."""
+    prof = list(IVY_RIGHT) + [(u, -v) for u, v in reversed(IVY_RIGHT[1:-1])]
+    return [at(u, v) for u, v in prof]
+
+
+def _ivy_veins(at):
+    """Veins from the base toward every lobe's tip, as (x0, y0, x1, y1)."""
+    base = at(0.06, 0.0)
+    return [base + at(0.06 + (u - 0.06) * 0.88, v * 0.88) for u, v in IVY_TIPS]
+
+
+def _segments_mask(segs, cs, half_width):
+    """Pixels within `half_width` (cell units) of any segment."""
+    yy, xx = np.mgrid[0:cs, 0:cs].astype(np.float32) / cs + 0.5 / cs
+    out = np.zeros((cs, cs), bool)
+    for x0, y0, x1, y1 in segs:
+        dx, dy = x1 - x0, y1 - y0
+        L2 = max(dx * dx + dy * dy, 1e-9)
+        t = np.clip(((xx - x0) * dx + (yy - y0) * dy) / L2, 0.0, 1.0)
+        d = np.hypot(xx - (x0 + t * dx), yy - (y0 + t * dy))
+        out |= d < half_width
+    return out
+
+
 def _soften(mask, r):
     """Blur the mask and re-threshold it: every corner rounds by about r pixels."""
     a = mask.astype(np.float32)
@@ -186,32 +268,56 @@ def _soften(mask, r):
     return a > 0.5
 
 
-def _draw_atlas(size=ATLAS_SIZE, cells=3, seed=9):
+# The sheet, top row first. build.py's BLOB_CELLS, LEAF_CELLS and FILL_CELL
+# index into this order; FILL_CELL must be a "faceted" cell (solid at its centre).
+ATLAS_KINDS = (
+    "spiky", "cluster", "faceted", "spiky",
+    "cluster", "faceted", "spiky", "cluster",
+    "leaf", "leaf", "leaf", "leaf",
+    "faceted", "spiky", "cluster", "faceted",
+)
+
+
+def _inset(poly):
+    """A polygon in cell units drawn into the cell's inner square, the part a
+    card's UV quad covers (build.ATLAS_INSET)."""
+    k = 1.0 - 2.0 * ATLAS_INSET
+    return [(0.5 + (x - 0.5) * k, 0.5 + (y - 0.5) * k) for x, y in poly]
+
+
+def _inset_segments(segs):
+    k = 1.0 - 2.0 * ATLAS_INSET
+    return [(0.5 + (x0 - 0.5) * k, 0.5 + (y0 - 0.5) * k, 0.5 + (x1 - 0.5) * k, 0.5 + (y1 - 0.5) * k) for x0, y0, x1, y1 in segs]
+
+
+def _draw_atlas(size=ATLAS_SIZE, cells=ATLAS_CELLS, seed=9):
     """The atlas as float RGBA (rows top first)."""
     rnd = random.Random(seed)
     img = np.zeros((size, size, 4), np.float32)
     img[..., 0:3] = 1.0
     cs = size // cells
-    kinds = ["spiky", "cluster", "faceted", "leaf", "spiky", "cluster", "faceted", "leaf", "leaf"]
-    for i, kind in enumerate(kinds):
+    k = 1.0 - 2.0 * ATLAS_INSET
+    for i, kind in enumerate(ATLAS_KINDS):
         cy, cx = divmod(i, cells)
+        cell = img[cy * cs:(cy + 1) * cs, cx * cs:(cx + 1) * cs]
+        leaf = None
         if kind == "spiky":
             polys = _spiky(rnd)
         elif kind == "faceted":
             polys = _faceted(rnd)
         elif kind == "cluster":
             polys = _cluster(rnd)
-        else:  # a vine leaf, tip toward the top of the cell (spun tip-down by the vine)
-            polys = [_leaf_poly(0.5, 0.95, 0.9, rnd.uniform(0.74, 0.84), -math.pi / 2, notch=0.09)]
+        else:  # a vine leaf, base near the bottom of the card, tip toward its top (the vine hangs it tip-down)
+            leaf = _ivy_frame(0.5, 0.91, 0.82, rnd.uniform(0.8, 0.88), -math.pi / 2, rnd)
+            polys = [_ivy_poly(leaf)]
         inside = np.zeros((cs, cs), bool)
         for pl in polys:
-            inside |= _raster_polygon(pl, cs)
-        inside = _soften(inside, int(cs * (0.018 if kind == "cluster" else 0.03)))
-        img[cy * cs:(cy + 1) * cs, cx * cs:(cx + 1) * cs, 3] = inside
-        if kind == "leaf":  # a faint midrib so the leaf reads as one
-            yy, xx = np.mgrid[0:cs, 0:cs].astype(np.float32) / cs
-            rib = inside & (abs(xx - 0.5) < 0.012) & (yy > 0.12) & (yy < 0.9)
-            img[cy * cs:(cy + 1) * cs, cx * cs:(cx + 1) * cs, 0:3][rib] = 0.86
+            inside |= _raster_polygon(_inset(pl), cs)
+        inside = _soften(inside, int(cs * k * {"cluster": 0.018, "leaf": 0.012}.get(kind, 0.03)))
+        cell[..., 3] = inside
+        if leaf is not None:  # veins to every lobe, a shade darker, so the leaf reads as one
+            veins = inside & _segments_mask(_inset_segments(_ivy_veins(leaf)), cs, 0.006 * k)
+            cell[..., 0:3][veins] = 0.84
     return img
 
 
@@ -221,8 +327,9 @@ def atlas():
     if img is not None and img.get("moss_atlas") == ATLAS_VERSION:
         return img
     path = os.path.join(TEXTURE_DIR, ATLAS_NAME)
-    if img is not None:
-        bpy.data.images.remove(img)
+    # A sheet of another version, or a same-named image without the mark, goes.
+    for stale in [i for i in bpy.data.images if i.name == ATLAS_NAME or i.get("moss_atlas") is not None]:
+        bpy.data.images.remove(stale)
     if not os.path.exists(path):
         os.makedirs(TEXTURE_DIR, exist_ok=True)
         pixels = _draw_atlas()
@@ -241,14 +348,15 @@ def atlas():
 
 
 # --------------------------------------------------------------------------
-# The materials. Every node is one the scene exporter carries to glTF: the
-# blobs are baseColorTexture x COLOR_0 with the alpha cut by a threshold
-# (alphaMode MASK) and back faces culled; the underlay and stems are COLOR_0
-# alone. None of them casts a shadow in the game (render3d/sceneDressing.ts
-# turns casting off for a `.moss` node); in Blender that is the object's
-# `visible_shadow`, set by ops.create_moss.
+# The material. Every node is one the scene exporter carries to glTF:
+# baseColorTexture x COLOR_0 with the alpha cut by a threshold (alphaMode
+# MASK) and back faces culled. The underlay and the stems wear it too, on a
+# solid cell of the atlas. It casts no shadow in the game
+# (render3d/sceneDressing.ts turns casting off for a `.moss` node); in Blender
+# that is the object's `visible_shadow`, set by ops.create_moss.
 
-MATERIALS = ("MossBlobs", "MossUnder", "MossStem")  # in the result's material order
+MATERIAL_NAME = "Moss"
+OLD_MATERIALS = ("MossBlobs", "MossUnder", "MossStem")  # the three slots before 2026-09-30
 
 
 def _fresh(name):
@@ -278,12 +386,13 @@ def _tint_node(nt, bsdf):
     return tint
 
 
-def materials():
-    blobs, bsdf = _fresh(MATERIALS[0])
+def material():
+    """The one material every moss shares, rebuilt when MATERIAL_VERSION moves."""
+    mat, bsdf = _fresh(MATERIAL_NAME)
     if bsdf is not None:
-        nt = blobs.node_tree
-        blobs.use_backface_culling = True
-        blobs.diffuse_color = (0.3, 0.45, 0.1, 1.0)
+        nt = mat.node_tree
+        mat.use_backface_culling = True
+        mat.diffuse_color = (0.3, 0.45, 0.1, 1.0)
         x, y = bsdf.location.x, bsdf.location.y
         tint = _tint_node(nt, bsdf)
         tex = nt.nodes.new("ShaderNodeTexImage")
@@ -305,22 +414,16 @@ def materials():
         nt.links.new(tex.outputs["Alpha"], cut.inputs[0])
         nt.links.new(cut.outputs[0], bsdf.inputs["Alpha"])
         try:  # the legacy setting the glTF exporter still reads on some versions
-            blobs.blend_method = "CLIP"
-            blobs.alpha_threshold = ATLAS_CUTOFF
+            mat.blend_method = "CLIP"
+            mat.alpha_threshold = ATLAS_CUTOFF
         except Exception:
             pass
-    out = [blobs]
-    for name in MATERIALS[1:]:
-        mat, bsdf = _fresh(name)
-        if bsdf is not None:
-            mat.use_backface_culling = False
-            mat.diffuse_color = (0.2, 0.4, 0.1, 1.0)
-            tint = _tint_node(mat.node_tree, bsdf)
-            mat.node_tree.links.new(tint.outputs["Color"], bsdf.inputs["Base Color"])
-        out.append(mat)
-    return out
+    return mat
 
 
-def material():
-    """The blobs' material (kept for callers that want one material)."""
-    return materials()[0]
+def _purge_old_materials():
+    """The three-slot materials of an older file, once nothing uses them."""
+    for name in OLD_MATERIALS:
+        old = bpy.data.materials.get(name)
+        if old is not None and old.get("moss_material") is not None and old.users == 0:
+            bpy.data.materials.remove(old)

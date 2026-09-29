@@ -1,5 +1,6 @@
 """Moss: paint a carpet of flat leaf blobs onto meshes, layered like paper
-cutouts, with vines of leaves hanging off its front edge. See rope/docs/blender-moss.md.
+cutouts, and hang vines of lobed leaves wherever they are placed.
+See rope/docs/blender-moss.md.
 
 A Blender add-on (an extension in Blender's 4.2+ packaging, blender_manifest.toml
 beside this file). The scene exporter imports this package directly and calls
@@ -20,9 +21,11 @@ def register():
     settings.register()
     for c in CLASSES:
         bpy.utils.register_class(c)
+    ops.register_handlers()
 
 
 def unregister():
+    ops.unregister_handlers()
     for c in reversed(CLASSES):
         bpy.utils.unregister_class(c)
     settings.unregister()

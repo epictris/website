@@ -7,7 +7,7 @@
     "moss01-base.png": "moss_ground_01",
     "moss01-normal.png": "moss_ground_01",
     "basalt_surface.png": { "generated": "assets-src/scenes/cavern/generate_cave.py" },
-    "moss-cutout-atlas.png": { "generated": "tools/blender/moss/mesh_io.py" },
+    "moss-cutout-atlas-v3.png": { "generated": "tools/blender/moss/mesh_io.py" },
     "generated": { "generated": "src/render3d/assets.ts" },
     "boulder_BaseColor": { "generated": "tools/blender/boulders/blender_build.py" },
     "boulder_Normal": { "generated": "tools/blender/boulders/blender_build.py" },

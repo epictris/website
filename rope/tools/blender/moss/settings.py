@@ -53,17 +53,17 @@ class MossSettings(bpy.types.PropertyGroup):
     blob_min: _length("Blob Min", _D.blob_min, 0.01, 0.5, "Smallest blob")
     blob_max: _length("Blob Max", _D.blob_max, 0.01, 0.5, "Largest blob")
     fill: _factor("Fill", _D.fill, "Blob area laid per layer, as a multiple of the layer's area", 4.0)
+    edge_fill: _factor("Edge Fill", _D.edge_fill, "Extra fill toward the paint's edge, so the underlay never shows as a rim", 4.0)
     density: FloatProperty(name="Candidates", default=_D.density, min=100.0, soft_max=20000.0, description="Candidate points per square metre the layers pick blobs from", update=_changed)
     facing: _factor("Facing", _D.facing, "Every blob faces the game's camera by at least this (cosine); a blob seen edge-on is a spike")
     shoulder: _factor("Shoulder", _D.shoulder, "The outer share of the paint that rolls into the rock, in coverage units")
     underlay: _length("Underlay", _D.underlay, 0.0, 0.1, "Height of the solid green skin under the blobs")
 
-    vines: BoolProperty(name="Vines", default=_D.vines, description="Hang vines of leaves from the paint's front edge", update=_changed)
-    vine_density: FloatProperty(name="Vines per m²", default=_D.vine_density, min=0.0, soft_max=30.0, description="Vines per square metre of paint", update=_changed)
-    vine_length: _length("Length", _D.vine_length, 0.05, 3.0, "Length of a vine")
-    vine_variation: _factor("Length Variation", _D.vine_variation, "Variation of the length between vines")
-    leaf_size: _length("Leaf Size", _D.leaf_size, 0.01, 0.3, "Leaf length at the top of a vine")
-    leaf_tip: _length("Leaf Tip", _D.leaf_tip, 0.005, 0.2, "Leaf length at the tip of a vine")
+    # A vine is placed by hand (Place Vines); each is an arrow empty parented
+    # to the host, and the arrow's length is the vine's.
+    vine_length: _length("New Length", _D.vine_length, 0.05, 3.0, "Length a newly placed vine is given; scale its arrow (S) to change one")
+    leaf_size: _length("Leaf Size", _D.leaf_size, 0.01, 0.5, "Leaf length at the top of a vine")
+    leaf_tip: _length("Leaf Tip", _D.leaf_tip, 0.005, 0.3, "Leaf length at the tip of a vine")
 
     # Colours in the panel are sRGB; params() makes them linear.
     tone_a: _color("Yellow-green", (0.81, 0.90, 0.28), "The first of three tones that patch across the carpet")

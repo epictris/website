@@ -1,12 +1,18 @@
-"""The moss brush: a modal operator in the 3D viewport. Left-drag paints on
-whatever mesh is under the cursor, Ctrl+left-drag erases, [ and ] resize,
-Escape (or right-click, or Enter) ends. Navigation passes through.
+"""The moss brush and the vine placer: modal operators in the 3D viewport.
+
+Paint Moss: left-drag paints on whatever mesh is under the cursor, Ctrl+left-
+drag erases, [ and ] resize, Escape (or right-click, or Enter) ends. Erase
+Moss is the same brush the other way round: left-drag erases, Ctrl+left-drag
+paints. Navigation passes through.
 
 Every stroke lays stamps (centre, surface normal, radius, signed strength) on
 the moss object of the host it hit, creating one the first time a host is
 painted - with the settings of the moss the panel showed when painting began,
 so a style carries from rock to rock. Moss already grown is transparent to the
-brush: the ray passes through it to the rock."""
+brush: the ray passes through it to the rock.
+
+Place Vines: a click on a mesh hangs a vine from that point (an arrow Empty,
+see ops.create_vine); Ctrl+click on an anchor removes it."""
 
 import math
 
@@ -57,15 +63,21 @@ def _circle(centre, normal, radius, n=48):
     return [centre + lift + (u * math.cos(t) + v * math.sin(t)) * radius for t in (2 * math.pi * k / n for k in range(n + 1))]
 
 
+def _in_viewport(context):
+    return context.area is not None and context.area.type == "VIEW_3D" and context.mode == "OBJECT"
+
+
 class MOSS_OT_paint(bpy.types.Operator):
     bl_idname = "moss.paint"
     bl_label = "Paint Moss"
     bl_description = "Paint moss onto meshes in the viewport: drag to paint, Ctrl+drag to erase, [ ] radius, Esc to finish"
     bl_options = {"REGISTER", "UNDO"}
 
+    erase: bpy.props.BoolProperty(name="Erase", default=False, options={"SKIP_SAVE"}, description="Start as the eraser: drag erases, Ctrl+drag paints")
+
     @classmethod
     def poll(cls, context):
-        return context.area is not None and context.area.type == "VIEW_3D" and context.mode == "OBJECT"
+        return _in_viewport(context)
 
     def invoke(self, context, event):
         self.template = ops.active_moss(context)
@@ -80,9 +92,8 @@ class MOSS_OT_paint(bpy.types.Operator):
 
     def _header(self, context):
         b = context.scene.moss_brush
-        context.area.header_text_set(
-            f"Moss   LMB paint   Ctrl+LMB erase   [ ] radius {b.radius:.3f} m   strength {b.strength:.2f}   Esc/RMB done"
-        )
+        keys = "LMB erase   Ctrl+LMB paint" if self.erase else "LMB paint   Ctrl+LMB erase"
+        context.area.header_text_set(f"Moss   {keys}   [ ] radius {b.radius:.3f} m   strength {b.strength:.2f}   Esc/RMB done")
 
     def _finish(self, context):
         self._flush(context, rebuild=True)
@@ -116,7 +127,7 @@ class MOSS_OT_paint(bpy.types.Operator):
             if event.value == "PRESS":
                 if not inside:
                     return {"PASS_THROUGH"}
-                self.stroke = {"erase": event.ctrl, "last": None, "coord": coord}
+                self.stroke = {"erase": self.erase != event.ctrl, "last": None, "coord": coord}
                 self._stamp_at(context, coord)
             elif event.value == "RELEASE" and self.stroke is not None:
                 self.stroke = None
@@ -208,7 +219,7 @@ class MOSS_OT_paint(bpy.types.Operator):
         shader.uniform_float("lineWidth", 2.0)
         if self.hover is not None:
             loc, nrm, _ob = self.hover
-            erase = self.stroke["erase"] if self.stroke else False
+            erase = self.stroke["erase"] if self.stroke else self.erase
             color = (1.0, 0.35, 0.3, 0.9) if erase else (0.7, 1.0, 0.35, 0.9)
             shader.uniform_float("color", color)
             batch_for_shader(shader, "LINE_STRIP", {"pos": _circle(loc, nrm, brush.radius)}).draw(shader)
@@ -228,4 +239,109 @@ class MOSS_OT_paint(bpy.types.Operator):
         gpu.state.blend_set("NONE")
 
 
-CLASSES = (MOSS_OT_paint,)
+VINE_PICK = 0.25  # Ctrl+click within this (m) of an anchor removes it
+
+
+class MOSS_OT_place_vines(bpy.types.Operator):
+    bl_idname = "moss.place_vines"
+    bl_label = "Place Vines"
+    bl_description = (
+        "Click a mesh to hang a vine from that point, Ctrl+click an anchor to remove it, Esc to finish. "
+        "Afterwards move an anchor with G or lengthen it with S: the arrow's length is the vine's"
+    )
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        return _in_viewport(context)
+
+    def invoke(self, context, event):
+        self.template = ops.active_moss(context)
+        self.hover = None
+        self.ctrl = False
+        self.handle = bpy.types.SpaceView3D.draw_handler_add(self._draw, (context,), "WINDOW", "POST_VIEW")
+        context.window_manager.modal_handler_add(self)
+        context.area.header_text_set("Vines   LMB place a vine   Ctrl+LMB remove the nearest   Esc/RMB done")
+        return {"RUNNING_MODAL"}
+
+    def _finish(self, context):
+        bpy.types.SpaceView3D.draw_handler_remove(self.handle, "WINDOW")
+        context.area.header_text_set(None)
+        context.area.tag_redraw()
+
+    def modal(self, context, event):
+        context.area.tag_redraw()
+        if event.type in {"MIDDLEMOUSE", "WHEELUPMOUSE", "WHEELDOWNMOUSE", "TRACKPADPAN", "TRACKPADZOOM", "MOUSEROTATE", "MOUSESMARTZOOM"} or event.type.startswith(("NDOF", "NUMPAD")):
+            return {"PASS_THROUGH"}
+        region = context.region
+        inside = 0 <= event.mouse_x - region.x < region.width and 0 <= event.mouse_y - region.y < region.height
+        coord = (event.mouse_region_x, event.mouse_region_y)
+        self.ctrl = event.ctrl
+        if event.type in {"ESC", "RIGHTMOUSE", "RET"} and event.value == "PRESS":
+            self._finish(context)
+            return {"FINISHED"}
+        if event.type == "MOUSEMOVE":
+            self.hover = _cast(context, coord) if inside else None
+            return {"RUNNING_MODAL"}
+        if event.type == "LEFTMOUSE" and event.value == "PRESS":
+            if not inside:
+                return {"PASS_THROUGH"}
+            hit = _cast(context, coord)
+            if hit is None:
+                return {"RUNNING_MODAL"}
+            loc, _nrm, host = hit
+            if event.ctrl:
+                self._remove(context, loc)
+            else:
+                self._place(context, host, loc)
+            bpy.ops.ed.undo_push(message="Moss vine")
+            return {"RUNNING_MODAL"}
+        if not inside:
+            return {"PASS_THROUGH"}
+        return {"RUNNING_MODAL"}
+
+    def _place(self, context, host, loc):
+        moss = ops.moss_for_host(host)
+        if moss is None:
+            # A vine on a rock with no paint yet: the moss object holds the
+            # vine's leaves and settings, with nothing painted.
+            moss = ops.create_moss(host, context.scene, self.template)
+            if self.template is None:
+                self.template = moss
+        ops.create_vine(host, context.scene, loc, moss.moss.vine_length)
+        ops.rebuild(moss)
+
+    def _remove(self, context, loc):
+        vine = ops.nearest_vine(loc, VINE_PICK)
+        if vine is None:
+            return
+        host = bpy.data.objects.get(vine[ops.VINE_PROP])
+        bpy.data.objects.remove(vine)
+        moss = ops.moss_for_host(host) if host is not None else None
+        if moss is not None:
+            ops.rebuild(moss)
+
+    def _draw(self, context):
+        if self.hover is None:
+            return
+        loc, nrm, _ob = self.hover
+        shader = gpu.shader.from_builtin("POLYLINE_UNIFORM_COLOR")
+        gpu.state.blend_set("ALPHA")
+        gpu.state.depth_test_set("NONE")
+        shader.uniform_float("viewportSize", gpu.state.viewport_get()[2:])
+        shader.uniform_float("lineWidth", 2.0)
+        near = ops.nearest_vine(loc, VINE_PICK) if self.ctrl else None
+        if self.ctrl:
+            shader.uniform_float("color", (1.0, 0.35, 0.3, 0.9))
+            centre = near.matrix_world.translation if near is not None else loc
+            batch_for_shader(shader, "LINE_STRIP", {"pos": _circle(centre, nrm, 0.06)}).draw(shader)
+        else:
+            shader.uniform_float("color", (0.7, 1.0, 0.35, 0.9))
+            batch_for_shader(shader, "LINE_STRIP", {"pos": _circle(loc, nrm, 0.04)}).draw(shader)
+            # The vine to come, as a plumb line.
+            length = (self.template.moss.vine_length if self.template is not None else build.Params().vine_length)
+            batch_for_shader(shader, "LINE_STRIP", {"pos": [loc, loc + Vector((0.0, 0.0, -length))]}).draw(shader)
+        gpu.state.blend_set("NONE")
+
+
+CLASSES = (MOSS_OT_paint, MOSS_OT_place_vines)

@@ -3,7 +3,7 @@ schema_version = "1.0.0"
 id = "moss"
 version = "0.1.0"
 name = "Moss"
-tagline = "Paint procedural moss geometry with hanging curtains"
+tagline = "Paint carpets of leaf-blob moss and place hanging vines"
 maintainer = "Tristan Bray"
 type = "add-on"
 

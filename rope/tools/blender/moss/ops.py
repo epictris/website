@@ -1,12 +1,17 @@
-"""Finding, creating and rebuilding moss objects, and the panel's operators."""
+"""Finding, creating and rebuilding moss objects, the vine anchors a moss
+hangs vines from, and the panel's operators."""
 
+import math
 import time
 
 import bpy
+import numpy as np
+from mathutils import Euler, Matrix, Vector
 
 from . import build, mesh_io
 
 COLLECTION = "Moss"
+VINE_PROP = "moss_vine"  # on an Empty: the name of the host its vine hangs from
 
 
 def is_moss(ob):
@@ -83,6 +88,64 @@ def resolve_host(ob):
     return host
 
 
+# --------------------------------------------------------------------------
+# Vines. Nothing places a vine but the artist: each is an arrow Empty in the
+# Moss collection, parented to its host, pointing down, and the arrow's length
+# in the world is the vine's - move it with G, lengthen it with S, delete it
+# with X, as any object. A vine object is found by its `moss_vine` property
+# (the host's name), so it survives the host being re-imported, like the paint.
+
+
+def is_vine(ob):
+    return ob is not None and ob.type == "EMPTY" and VINE_PROP in ob
+
+
+def vine_objects(host):
+    """This host's vine anchors, in a fixed order so a build is reproducible."""
+    return sorted((ob for ob in bpy.data.objects if is_vine(ob) and ob[VINE_PROP] == host.name), key=lambda o: o.name)
+
+
+def vine_length(ob):
+    """The arrow's length in the world."""
+    return (ob.matrix_world.to_3x3() @ Vector((0.0, 0.0, ob.empty_display_size))).length
+
+
+def create_vine(host, scene, at, length):
+    """An anchor at the world point `at`, hanging a vine `length` long."""
+    ob = bpy.data.objects.new(f"{host.name}.vine", None)
+    ob.empty_display_type = "SINGLE_ARROW"
+    ob.empty_display_size = max(length, 0.05)
+    ob[VINE_PROP] = host.name
+    _collection(scene).objects.link(ob)
+    ob.parent = host
+    ob.matrix_parent_inverse.identity()
+    # The arrow is +z; turned over it hangs the way the vine will.
+    ob.matrix_world = Matrix.LocRotScale(Vector(at), Euler((math.pi, 0.0, 0.0)), Vector((1.0, 1.0, 1.0)))
+    return ob
+
+
+def read_vines(host):
+    """The host's anchors as the builder takes them: host-local positions and
+    world lengths."""
+    obs = vine_objects(host)
+    if not obs:
+        return build.Vines.empty()
+    inv = host.matrix_world.inverted()
+    pos = np.array([(inv @ ob.matrix_world.translation)[:] for ob in obs], dtype=np.float64)
+    return build.Vines(pos, np.array([vine_length(ob) for ob in obs], dtype=np.float64))
+
+
+def nearest_vine(at, within):
+    """The anchor closest to the world point `at`, if one is within `within`."""
+    best, bd = None, within
+    for ob in bpy.data.objects:
+        if is_vine(ob):
+            d = (ob.matrix_world.translation - Vector(at)).length
+            if d < bd:
+                best, bd = ob, d
+    return best
+
+
 def rebuild(ob, depsgraph=None):
     """Grow the moss object's mesh again from its stamps and settings. Returns
     the build result, or None when the host is missing."""
@@ -97,7 +160,7 @@ def rebuild(ob, depsgraph=None):
     host_mesh = ev.to_mesh()
     try:
         stamps = mesh_io.read_stamps(s.stamps)
-        result = build.build(host_mesh, host.matrix_world, stamps, s.params())
+        result = build.build(host_mesh, host.matrix_world, stamps, read_vines(host), s.params())
     finally:
         ev.to_mesh_clear()
     mesh_io.write_result(ob.data, result)
@@ -138,6 +201,64 @@ def _flush():
         if ob is not None and is_moss(ob):
             rebuild(ob)
     return None
+
+
+# --------------------------------------------------------------------------
+# A vine anchor moved, scaled, added or deleted regrows its host's moss. The
+# anchors are plain objects, so nothing tells the add-on about them; after
+# every depsgraph update the anchors' names and matrices are compared with
+# the last look, and a host whose set changed is scheduled. The comparison
+# walks the objects once and is far cheaper than a build; the build itself
+# runs from a timer, never inside the handler.
+
+_vine_sig = {}
+
+
+def _vines_signature():
+    sig = {}
+    for ob in bpy.data.objects:
+        if is_vine(ob):
+            m = ob.matrix_world
+            sig.setdefault(ob[VINE_PROP], []).append((ob.name, tuple(round(x, 5) for row in m for x in row), round(ob.empty_display_size, 5)))
+    return {host: tuple(sorted(v)) for host, v in sig.items()}
+
+
+def _on_depsgraph(scene, depsgraph):
+    global _vine_sig
+    if bpy.app.background:
+        return
+    sig = _vines_signature()
+    if sig == _vine_sig:
+        return
+    changed = {h for h in set(sig) | set(_vine_sig) if sig.get(h) != _vine_sig.get(h)}
+    _vine_sig = sig
+    for name in changed:
+        host = bpy.data.objects.get(name)
+        moss = moss_for_host(host) if host is not None else None
+        if moss is not None and moss.moss.live:
+            schedule_rebuild(moss)
+
+
+def _on_load(*_args):
+    """A file just opened: take its anchors as the baseline, so opening a file
+    regrows nothing."""
+    global _vine_sig
+    _vine_sig = _vines_signature()
+
+
+def register_handlers():
+    if _on_depsgraph not in bpy.app.handlers.depsgraph_update_post:
+        bpy.app.handlers.depsgraph_update_post.append(_on_depsgraph)
+    if _on_load not in bpy.app.handlers.load_post:
+        bpy.app.handlers.load_post.append(_on_load)
+    _on_load()
+
+
+def unregister_handlers():
+    if _on_depsgraph in bpy.app.handlers.depsgraph_update_post:
+        bpy.app.handlers.depsgraph_update_post.remove(_on_depsgraph)
+    if _on_load in bpy.app.handlers.load_post:
+        bpy.app.handlers.load_post.remove(_on_load)
 
 
 # --------------------------------------------------------------------------
