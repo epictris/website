@@ -85,6 +85,11 @@ export const DEFAULT_SUN_DIR = { x: 0.55, y: 0.8, z: -0.5 };
 // shadow frustum is. One cascade following the camera is enough at this scene
 // scale (a frame is ~10 m of world), and a second would cost more than it buys.
 const SHADOW_DISTANCE = 30;
+// Scratch for `follow`, which runs every frame.
+const _centre = new THREE.Vector3();
+const _lightZ = new THREE.Vector3();
+const _lightX = new THREE.Vector3();
+const _lightY = new THREE.Vector3();
 const SHADOW_MAP_SIZE = 2048;
 
 // The generated environment, and how much of it is let in.
@@ -196,6 +201,12 @@ export class Environment {
       // the note in `lights.ts`.
       this.sun.shadow.bias = -0.0008;
       this.sun.shadow.normalBias = 0.03;
+      // A soft edge (2026-09-30): the sun is a disc, not a point, and the
+      // reference paintings have light crossing a rock mass gently rather than
+      // with a razor terminator on every facet. `radius` is the PCF kernel's
+      // width in texels, honoured by `PCFShadowMap` (and ignored by the soft
+      // variant, which is why the renderer asks for plain PCF).
+      this.sun.shadow.radius = 3;
       scene.add(this.sun);
       scene.add(this.target);
       this.sun.target = this.target;
@@ -306,15 +317,27 @@ export class Environment {
     // The fog needs nothing here: its density is a property of the air, and the
     // distance it is applied over is the one three.js already has per fragment.
     if (!this.sun) return;
-    const cx = centre.x;
-    const cy = threeY(centre.y);
-    this.target.position.set(cx, cy, 0);
+    // IN WHOLE TEXELS (2026-09-30). Slid continuously, the frustum lands on a
+    // different sub-texel offset every frame the camera moves, and every shadow
+    // edge crawls with it - a shimmer the ivy's leaf shadows made plain. The
+    // centre is snapped to the shadow map's own grid: its components along the
+    // light's right and up axes (the ones `lookAt` will give the shadow camera,
+    // z = toward the sun, x = up cross z) are rounded to the texel, so the map
+    // moves by whole texels and a shadow stays where it was in the world.
+    const c = _centre.set(centre.x, threeY(centre.y), 0);
+    const z = _lightZ.copy(this.dir).normalize();
+    const x = _lightX.set(0, 1, 0).cross(z);
+    if (x.lengthSq() < 1e-8) x.set(1, 0, 0);
+    x.normalize();
+    const y = _lightY.crossVectors(z, x);
+    const texel = SHADOW_DISTANCE / SHADOW_MAP_SIZE;
+    const dx = Math.round(c.dot(x) / texel) * texel - c.dot(x);
+    const dy = Math.round(c.dot(y) / texel) * texel - c.dot(y);
+    const dz = Math.round(c.dot(z) / texel) * texel - c.dot(z); // along the light: no grid, but a target that only ever steps
+    c.addScaledVector(x, dx).addScaledVector(y, dy).addScaledVector(z, dz);
+    this.target.position.copy(c);
     this.target.updateMatrixWorld();
-    this.sun.position.set(
-      cx + this.dir.x * SHADOW_DISTANCE,
-      cy + this.dir.y * SHADOW_DISTANCE,
-      this.dir.z * SHADOW_DISTANCE,
-    );
+    this.sun.position.copy(c).addScaledVector(this.dir, SHADOW_DISTANCE);
     this.sun.updateMatrixWorld();
   }
 
@@ -456,7 +479,10 @@ export function equirectPixels({ sky, ground, sunColor, sunDir, withSun }: SkyIn
 // highlight. Applied once, when the renderer is created.
 export function configureRenderer(renderer: THREE.WebGLRenderer): void {
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.15;
+  // Unity exposure (2026-09-30, was 1.15): brightness is the key light's job,
+  // so a bright top face and a genuinely dark recess both fit in the curve;
+  // raising the exposure instead lifts the shadows the look depends on.
+  renderer.toneMappingExposure = 1.0;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.shadowMap.enabled = true;
   // PCF, which is what three has drawn for `PCFSoftShadowMap` since it

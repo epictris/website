@@ -11,8 +11,9 @@ const server = Bun.serve({ port: 0, async fetch(req) {
   return new Response("nope", { status: 404 });
 } });
 const chromium = findChromium(); if (!chromium) throw new Error("no chromium");
-const out = here + "/../out/three_" + glb.replace(".glb", ".png");
-const r = await grab(chromium, { url: `http://localhost:${server.port}/?glb=${glb}`, out, gpu: true, width: 1500, height: 500, timeoutMs: 25000 });
-for (const l of r.log) if (/materials|info|stress|rror|warn/i.test(l.text)) console.log(l.level, l.text);
+const out = here + "/../out/three_" + glb.replace(".glb", "") + (process.argv[3] ? "_nb" + process.argv[3] : "") + (process.argv[4] ? "_mb" + process.argv[4] : "") + (process.argv[5] ? process.argv[5].replace(/[^a-z0-9]/g, "_") : "") + ".png";
+const nb = process.argv[3] ?? "0.03"; const mb = process.argv[4] ?? "1"; const extra = process.argv[5] ?? "";
+const r = await grab(chromium, { url: `http://localhost:${server.port}/?glb=${glb}&nb=${nb}&mb=${mb}${extra}`, out, gpu: true, width: 1500, height: 500, timeoutMs: 25000 });
+for (const l of r.log) if (/materials|info|stress|shadow|rror|warn/i.test(l.text)) console.log(l.level, l.text);
 console.log("wrote", out, r.elapsedMs, "ms");
 server.stop(true); process.exit(0);

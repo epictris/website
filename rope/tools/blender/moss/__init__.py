@@ -1,6 +1,6 @@
-"""Moss: paint a carpet of flat leaf blobs onto meshes, layered like paper
-cutouts, and hang vines of lobed leaves wherever they are placed.
-See rope/docs/blender-moss.md.
+"""Moss: paint a carpet of flat ivy leaves onto meshes, grown out from an
+origin point so every leaf lies over the leaf beyond it, and hang vines of
+the same leaves wherever they are placed. See rope/docs/blender-moss.md.
 
 A Blender add-on (an extension in Blender's 4.2+ packaging, blender_manifest.toml
 beside this file). The scene exporter imports this package directly and calls

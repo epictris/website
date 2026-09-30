@@ -12,7 +12,11 @@ so a style carries from rock to rock. Moss already grown is transparent to the
 brush: the ray passes through it to the rock.
 
 Place Vines: a click on a mesh hangs a vine from that point (an arrow Empty,
-see ops.create_vine); Ctrl+click on an anchor removes it."""
+see ops.create_vine); Ctrl+click on an anchor removes it.
+
+Set Origin: a click on a mesh puts the origin its carpet grows out from there
+(a sphere Empty, see ops.set_origin); Ctrl+click removes it, so the carpet
+grows from the top of its paint again."""
 
 import math
 
@@ -32,7 +36,7 @@ def _paintable(ob):
     return (
         ob is not None
         and ob.type == "MESH"
-        and not ops.is_moss(ob)
+        and not ops.is_grown(ob)
         and ob.library is None
         and ob.override_library is None
         and not any(c.name.lower().startswith("guide") or c.library is not None for c in ob.users_collection)
@@ -344,4 +348,92 @@ class MOSS_OT_place_vines(bpy.types.Operator):
         gpu.state.blend_set("NONE")
 
 
-CLASSES = (MOSS_OT_paint, MOSS_OT_place_vines)
+class MOSS_OT_set_origin(bpy.types.Operator):
+    bl_idname = "moss.set_origin"
+    bl_label = "Set Origin"
+    bl_description = (
+        "Click a painted mesh to put the point its ivy grows out from there: every leaf points away from it and "
+        "lies over the leaf beyond it. Ctrl+click removes the origin (the carpet then grows from the top of its "
+        "paint), Esc finishes. Afterwards move the origin with G like any object"
+    )
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        return _in_viewport(context)
+
+    def invoke(self, context, event):
+        self.hover = None
+        self.ctrl = False
+        self.handle = bpy.types.SpaceView3D.draw_handler_add(self._draw, (context,), "WINDOW", "POST_VIEW")
+        context.window_manager.modal_handler_add(self)
+        context.area.header_text_set("Origin   LMB set the origin of the ivy under the cursor   Ctrl+LMB remove it   Esc/RMB done")
+        return {"RUNNING_MODAL"}
+
+    def _finish(self, context):
+        bpy.types.SpaceView3D.draw_handler_remove(self.handle, "WINDOW")
+        context.area.header_text_set(None)
+        context.area.tag_redraw()
+
+    def modal(self, context, event):
+        context.area.tag_redraw()
+        if event.type in {"MIDDLEMOUSE", "WHEELUPMOUSE", "WHEELDOWNMOUSE", "TRACKPADPAN", "TRACKPADZOOM", "MOUSEROTATE", "MOUSESMARTZOOM"} or event.type.startswith(("NDOF", "NUMPAD")):
+            return {"PASS_THROUGH"}
+        region = context.region
+        inside = 0 <= event.mouse_x - region.x < region.width and 0 <= event.mouse_y - region.y < region.height
+        coord = (event.mouse_region_x, event.mouse_region_y)
+        self.ctrl = event.ctrl
+        if event.type in {"ESC", "RIGHTMOUSE", "RET"} and event.value == "PRESS":
+            self._finish(context)
+            return {"FINISHED"}
+        if event.type == "MOUSEMOVE":
+            self.hover = _cast(context, coord) if inside else None
+            return {"RUNNING_MODAL"}
+        if event.type == "LEFTMOUSE" and event.value == "PRESS":
+            if not inside:
+                return {"PASS_THROUGH"}
+            hit = _cast(context, coord)
+            if hit is None:
+                return {"RUNNING_MODAL"}
+            loc, _nrm, host = hit
+            moss = ops.moss_for_host(host)
+            if moss is None:
+                self.report({"WARNING"}, f"{host.name} has no moss: paint it first")
+                return {"RUNNING_MODAL"}
+            if event.ctrl:
+                origin = ops.origin_object(host)
+                if origin is not None:
+                    bpy.data.objects.remove(origin)
+            else:
+                ops.set_origin(host, context.scene, loc)
+            ops.rebuild(moss)
+            bpy.ops.ed.undo_push(message="Moss origin")
+            return {"RUNNING_MODAL"}
+        if not inside:
+            return {"PASS_THROUGH"}
+        return {"RUNNING_MODAL"}
+
+    def _draw(self, context):
+        if self.hover is None:
+            return
+        loc, nrm, host = self.hover
+        shader = gpu.shader.from_builtin("POLYLINE_UNIFORM_COLOR")
+        gpu.state.blend_set("ALPHA")
+        gpu.state.depth_test_set("NONE")
+        shader.uniform_float("viewportSize", gpu.state.viewport_get()[2:])
+        shader.uniform_float("lineWidth", 2.0)
+        current = ops.origin_object(host)
+        if self.ctrl:
+            shader.uniform_float("color", (1.0, 0.35, 0.3, 0.9))
+            centre = current.matrix_world.translation if current is not None else loc
+            batch_for_shader(shader, "LINE_STRIP", {"pos": _circle(centre, nrm, 0.06)}).draw(shader)
+        else:
+            shader.uniform_float("color", (0.7, 1.0, 0.35, 0.9))
+            batch_for_shader(shader, "LINE_STRIP", {"pos": _circle(loc, nrm, 0.04)}).draw(shader)
+            # Spokes: the way the leaves will grow out from here.
+            for tip in _circle(loc, nrm, 0.16, n=8)[:-1]:
+                batch_for_shader(shader, "LINE_STRIP", {"pos": [loc + nrm * 0.003, tip]}).draw(shader)
+        gpu.state.blend_set("NONE")
+
+
+CLASSES = (MOSS_OT_paint, MOSS_OT_place_vines, MOSS_OT_set_origin)

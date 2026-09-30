@@ -1,5 +1,6 @@
 """Finding, creating and rebuilding moss objects, the vine anchors a moss
-hangs vines from, and the panel's operators."""
+hangs vines from, the origin its carpet grows out from, and the panel's
+operators."""
 
 import math
 import time
@@ -12,10 +13,52 @@ from . import build, mesh_io
 
 COLLECTION = "Moss"
 VINE_PROP = "moss_vine"  # on an Empty: the name of the host its vine hangs from
+ORIGIN_PROP = "moss_origin"  # on an Empty: the name of the host whose carpet grows out from it
+SHADOW_PROP = "moss_shadow"  # on a mesh: the shadow decal of the moss it is parented to
 
 
 def is_moss(ob):
     return ob is not None and ob.type == "MESH" and ob.moss.is_moss
+
+
+def is_shadow(ob):
+    return ob is not None and ob.type == "MESH" and SHADOW_PROP in ob
+
+
+def is_grown(ob):
+    """Anything the add-on grows: a moss mesh or its shadow decal. The brush
+    passes through these to the rock beneath."""
+    return is_moss(ob) or is_shadow(ob)
+
+
+def shadow_object(moss):
+    """The moss object's shadow decal, if it has one."""
+    for ch in moss.children:
+        if is_shadow(ch):
+            return ch
+    return None
+
+
+def write_shadow(moss, scene, shadow):
+    """Keep the moss object's shadow decal in step with a build: written from
+    `shadow`, created when first needed, removed when the build grew none."""
+    ob = shadow_object(moss)
+    if shadow is None or len(shadow.triangles) == 0:
+        if ob is not None:
+            me = ob.data
+            bpy.data.objects.remove(ob)
+            bpy.data.meshes.remove(me)
+        return
+    if ob is None:
+        me = bpy.data.meshes.new(f"{moss.name}.shadow")
+        ob = bpy.data.objects.new(f"{moss.name}.shadow", me)
+        ob[SHADOW_PROP] = moss.moss.host
+        _collection(scene).objects.link(ob)
+        ob.parent = moss
+        ob.matrix_parent_inverse.identity()
+        ob.matrix_basis.identity()
+        ob.visible_shadow = False
+    mesh_io.write_shadow(ob.data, shadow)
 
 
 def moss_objects(scene=None):
@@ -65,7 +108,7 @@ def create_moss(host, scene, template=None):
     s.host = host.name
     s.stamps = mesh_io.new_stamps_mesh(f"{host.name}.moss.stamps")
     s.live = True
-    ob.visible_shadow = False  # the moss casts no shadow, in Blender as in the game: a cast shadow between leaves reads as a hole
+    ob.visible_shadow = True  # the leaves cast, in Blender as in the game (since 2026-09-30): shadows between leaves
     attach(ob, host)
     return ob
 
@@ -146,6 +189,48 @@ def nearest_vine(at, within):
     return best
 
 
+# --------------------------------------------------------------------------
+# The origin. A carpet grows out from one point: every leaf points away from
+# it and lies over the leaf beyond it. It is a small sphere Empty in the Moss
+# collection, `<rock>.origin`, parented to the rock and carrying the rock's
+# name in `moss_origin`, placed by Set Origin and moved with G like any
+# object; without one the carpet grows from the top of its paint. It only
+# orients and layers the leaves - the paint alone decides where ivy grows.
+
+
+def is_origin(ob):
+    return ob is not None and ob.type == "EMPTY" and ORIGIN_PROP in ob
+
+
+def origin_object(host):
+    """This host's origin, if one is placed."""
+    obs = sorted((ob for ob in bpy.data.objects if is_origin(ob) and ob[ORIGIN_PROP] == host.name), key=lambda o: o.name)
+    return obs[0] if obs else None
+
+
+def set_origin(host, scene, at):
+    """Put the host's origin at the world point `at`, placing one if it has none."""
+    ob = origin_object(host)
+    if ob is None:
+        ob = bpy.data.objects.new(f"{host.name}.origin", None)
+        ob.empty_display_type = "SPHERE"
+        ob.empty_display_size = 0.05
+        ob[ORIGIN_PROP] = host.name
+        _collection(scene).objects.link(ob)
+        ob.parent = host
+        ob.matrix_parent_inverse.identity()
+    ob.matrix_world = Matrix.Translation(Vector(at))
+    return ob
+
+
+def read_origin(host):
+    """The host's origin as the builder takes it: a host-local point, or None."""
+    ob = origin_object(host)
+    if ob is None:
+        return None
+    return np.array((host.matrix_world.inverted() @ ob.matrix_world.translation)[:], dtype=np.float64)
+
+
 def rebuild(ob, depsgraph=None):
     """Grow the moss object's mesh again from its stamps and settings. Returns
     the build result, or None when the host is missing."""
@@ -154,18 +239,27 @@ def rebuild(ob, depsgraph=None):
     if host is None:
         s.status = f'host "{s.host}" not found'
         return None
+    # A moss saved before today's defaults may carry yesterday's as stored
+    # values (the template copy stored every one); let it follow the defaults.
+    live, s.live = s.live, False
+    try:
+        s.migrate()
+    finally:
+        s.live = live
     t0 = time.perf_counter()
     depsgraph = depsgraph or bpy.context.evaluated_depsgraph_get()
     ev = host.evaluated_get(depsgraph)
     host_mesh = ev.to_mesh()
     try:
         stamps = mesh_io.read_stamps(s.stamps)
-        result = build.build(host_mesh, host.matrix_world, stamps, read_vines(host), s.params())
+        result = build.build(host_mesh, host.matrix_world, stamps, read_vines(host), read_origin(host), s.params())
     finally:
         ev.to_mesh_clear()
     mesh_io.write_result(ob.data, result)
+    ob.visible_shadow = True  # a moss made before 2026-09-30 was created not casting
+    write_shadow(ob, bpy.context.scene, result.shadow)
     s.triangles = len(result.triangles)
-    s.blobs = result.blobs
+    s.leaves = result.leaves
     s.vine_count = result.vines
     s.build_ms = (time.perf_counter() - t0) * 1000.0
     s.status = ""
@@ -204,34 +298,35 @@ def _flush():
 
 
 # --------------------------------------------------------------------------
-# A vine anchor moved, scaled, added or deleted regrows its host's moss. The
-# anchors are plain objects, so nothing tells the add-on about them; after
-# every depsgraph update the anchors' names and matrices are compared with
-# the last look, and a host whose set changed is scheduled. The comparison
-# walks the objects once and is far cheaper than a build; the build itself
-# runs from a timer, never inside the handler.
+# A vine anchor or an origin moved, scaled, added or deleted regrows its
+# host's moss. They are plain objects, so nothing tells the add-on about
+# them; after every depsgraph update their names and matrices are compared
+# with the last look, and a host whose set changed is scheduled. The
+# comparison walks the objects once and is far cheaper than a build; the
+# build itself runs from a timer, never inside the handler.
 
-_vine_sig = {}
+_anchor_sig = {}
 
 
-def _vines_signature():
+def _anchors_signature():
     sig = {}
     for ob in bpy.data.objects:
-        if is_vine(ob):
+        prop = VINE_PROP if is_vine(ob) else ORIGIN_PROP if is_origin(ob) else None
+        if prop is not None:
             m = ob.matrix_world
-            sig.setdefault(ob[VINE_PROP], []).append((ob.name, tuple(round(x, 5) for row in m for x in row), round(ob.empty_display_size, 5)))
+            sig.setdefault(ob[prop], []).append((ob.name, tuple(round(x, 5) for row in m for x in row), round(ob.empty_display_size, 5)))
     return {host: tuple(sorted(v)) for host, v in sig.items()}
 
 
 def _on_depsgraph(scene, depsgraph):
-    global _vine_sig
+    global _anchor_sig
     if bpy.app.background:
         return
-    sig = _vines_signature()
-    if sig == _vine_sig:
+    sig = _anchors_signature()
+    if sig == _anchor_sig:
         return
-    changed = {h for h in set(sig) | set(_vine_sig) if sig.get(h) != _vine_sig.get(h)}
-    _vine_sig = sig
+    changed = {h for h in set(sig) | set(_anchor_sig) if sig.get(h) != _anchor_sig.get(h)}
+    _anchor_sig = sig
     for name in changed:
         host = bpy.data.objects.get(name)
         moss = moss_for_host(host) if host is not None else None
@@ -242,8 +337,8 @@ def _on_depsgraph(scene, depsgraph):
 def _on_load(*_args):
     """A file just opened: take its anchors as the baseline, so opening a file
     regrows nothing."""
-    global _vine_sig
-    _vine_sig = _vines_signature()
+    global _anchor_sig
+    _anchor_sig = _anchors_signature()
 
 
 def register_handlers():

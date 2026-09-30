@@ -17,6 +17,7 @@ import * as THREE from "three";
 import type { Vec2 } from "../engine/vec2";
 import { gltfLoader, trackPending } from "./assets";
 import { withDownload } from "./download";
+import { wearMossShadowBias } from "./mossShadow";
 import { threeRotation, threeY } from "./space";
 import { nodeNameOf, SCENE_ASSETS, sceneFile } from "./scenes";
 
@@ -128,9 +129,17 @@ export function dressScene(loaded: THREE.Object3D, targets: readonly DressTarget
   };
 }
 
-function underMoss(o: THREE.Object3D): boolean {
-  for (let p: THREE.Object3D | null = o; p; p = p.parent) if (/\.moss$/.test(p.name)) return true;
-  return false;
+// The Blender names of a loaded object and its ancestors, nearest first:
+// GLTFLoader keeps a node's original name in `userData.name` (its `name` has
+// the dots stripped), and an unnamed node made by the optimiser is known only
+// by the named node above it.
+function blenderNames(o: THREE.Object3D): string[] {
+  const out: string[] = [];
+  for (let p: THREE.Object3D | null = o; p; p = p.parent) {
+    const n = typeof p.userData.name === "string" ? p.userData.name : p.name;
+    if (n) out.push(n);
+  }
+  return out;
 }
 
 const box = new THREE.Box3();
@@ -167,16 +176,40 @@ export function loadSceneFile(scene: string): Promise<THREE.Object3D | null> {
   const p = trackPending(
     withDownload(file, bytes, (href) => loading.then((loader) => loader.loadAsync(href)))
       .then((gltf) => {
+        let mossMeshes = 0;
         gltf.scene.traverse((o) => {
           const mesh = o as THREE.Mesh;
           if (!mesh.isMesh) return;
-          // Moss (the Blender add-on's `<host>.moss` objects) casts nothing:
-          // its leaves are alpha-cut cards shaded by a borrowed normal, and a
-          // shadow between them reads as a hole in the carpet. glTF has no
-          // flag for it, so the rule lives here, by the node's name.
-          mesh.castShadow = !underMoss(mesh);
+          // Moss (the Blender add-on's `<host>.moss` objects) casts since
+          // 2026-09-30: the ivy's leaves are alpha-cut cards, and the depth
+          // pass cuts them by the same mask, so a leaf throws a leaf-shaped
+          // shadow on the leaves and the stone below it, which is the look
+          // asked for ("shadows between leaves"). Its shadow decal (the
+          // `.moss.shadow` child, a blended skin on the rock) casts nothing:
+          // a translucent sheet 3 mm off a surface would shadow that surface
+          // entirely. glTF has no flag for either, so the rule lives here.
+          // Tested on the Blender names of the mesh AND its ancestors, as the
+          // loader kept them. GLTFLoader strips the dots from a node's name
+          // (`rock.moss` arrives as `rockmoss`) and keeps the original in
+          // `userData.name`; and the optimiser's quantisation moves the mesh
+          // of any node that has children onto a new, unnamed child of it (the
+          // rock carries its moss, the moss its decal), so the mesh itself has
+          // no Blender name at all - only its parent does. The old `.moss`
+          // test on `mesh.name` never matched, so the moss cast all along.
+          const names = blenderNames(mesh);
+          const decal = names.some((n) => /\.moss\.shadow$/.test(n));
+          const moss = !decal && names.some((n) => /\.moss$/.test(n));
+          mesh.castShadow = !decal;
           mesh.receiveShadow = true;
+          // ...and the leaves receive with finer biases than the sun's, so a
+          // leaf shadows the leaf below it (mossShadow.ts).
+          if (moss) {
+            const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+            for (const m of mats) wearMossShadowBias(m);
+            mossMeshes++;
+          }
         });
+        if (mossMeshes > 0) console.log(`[render3d] scene "${scene}": ${mossMeshes} moss meshes cast and receive leaf shadows`);
         return gltf.scene as THREE.Object3D;
       })
       .catch((err: unknown) => {

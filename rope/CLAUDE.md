@@ -157,7 +157,7 @@ Rendering
 - [render3d](docs/render3d.md) - two canvases one camera, the coordinate mapping, what the game draws beside the Blender scene (water, belts, the grey box), bodies and scene objects, what was retired, traps.
 - [lighting-and-surfaces](docs/lighting-and-surfaces.md) - environment, light objects in bodies, fog, HDRI skies, beams, waking lights, fireflies that follow the ball (along the camera paths or a firefly path of their own), generated and authored PBR surfaces, tiling.
 - [blender-scenes](docs/blender-scenes.md) - a level's whole look in one `.blend`: what the game still draws, body `name` binds an object to a body, `scene` names the file, shadows and waking glow, `just scene-guide` / `just scene`, the frame, publishing, what glTF cannot carry, credits.
-- [blender-moss](docs/blender-moss.md) - the moss add-on: paint (and erase) moss onto a scene's rocks in Blender, grown as a carpet of leaf blobs, vines placed by hand as arrow empties, one material, regrown on every export.
+- [blender-moss](docs/blender-moss.md) - the moss add-on: paint (and erase) ivy onto a scene's rocks in Blender, grown as a carpet of leaves out from a placed origin, vines placed by hand as arrow empties, one material, regrown on every export.
 - [blender-formations](docs/blender-formations.md) - the formations add-on: rock masses from outlines, the game camera baked into the guide, outlines edited as that camera sees them, depth moves that keep screen size, planted growth; the Sunken Grotto.
 - [rock-assets](docs/rock-assets.md) - retired 2026-09-29: the hand-authored rock and moss props (now in `river.blend`), and where their lessons are.
 - [rocks](docs/rocks.md) - retired: the earlier generated rocks, rejected 2026-09-24.

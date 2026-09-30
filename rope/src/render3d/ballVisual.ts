@@ -102,9 +102,21 @@ export function forgedMetal(tileScale?: number): THREE.MeshStandardMaterial {
 // highlight a lamp puts on the sphere spreads across more of it instead of
 // sitting as one tight patch, and it softens the view-fixed highlight the
 // rolling ball would otherwise wear as a sticker.
-const MODEL_ROUGHNESS = 0.65;
-const MODEL_METALNESS = 0.5;
-const MODEL_ALBEDO_LIFT = 5;
+//
+// Dark iron again (2026-09-30): the river is now lit by a warm top-down sun
+// (docs/lighting-and-surfaces.md), so the ball no longer needs a pale albedo
+// to be seen, and at a x5 lift it read as a light grey stone against the
+// reference painting's near-black cannonball. The lift is what says how dark
+// the iron is: ~0.3 grey keeps the sphere's form under the sun and leaves it
+// black-iron in the shade. Metalness back UP (0.75) and roughness down (0.4)
+// because the painting's ball is gunmetal, not rubber: a broad, soft
+// reflection of the cave's blue across its upper half and a warm patch where
+// the sun catches it, which only a mostly-specular surface gives. The reason
+// half-metal was chosen (nothing to reflect) no longer holds: the generated
+// sky is now a lit blue and the sun is on, so there is a room to reflect.
+const MODEL_ROUGHNESS = 0.4;
+const MODEL_METALNESS = 0.75;
+const MODEL_ALBEDO_LIFT = 4.5;
 
 // The model's materials, worn as the avatar: its shine, and the avatar's rules
 // (see `avatarSurface.ts`).

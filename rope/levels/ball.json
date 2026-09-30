@@ -303,15 +303,18 @@
     }
   ],
   "environment": {
-    "sunIntensity": 0,
-    "skyColor": "#5a89ae",
-    "groundColor": "#183a34",
-    "fillIntensity": 2.8,
+    "sunIntensity": 6.5,
+    "sunColor": "#ffe4bd",
+    "sunX": 0.5,
+    "sunY": 1,
+    "sunZ": -0.6,
+    "skyColor": "#7ab8e0",
+    "groundColor": "#2a3f56",
+    "fillIntensity": 3,
     "envIntensity": 0.5,
-    "backgroundColor": "#0a2438",
-    "fogAmount": 0.32,
-    "fogColor": "#4e7088",
-    "sunColor": "#bababa"
+    "backgroundColor": "#1c3856",
+    "fogColor": "#2a5075",
+    "fogAmount": 0.34
   },
   "camera": {
     "focalLength": 70
@@ -470,7 +473,7 @@
       "x": 2779.9999999999977,
       "y": 982.9999999999998,
       "rot": 0,
-      "color": "#0a4247",
+      "color": "#1e7382",
       "opacity": 0.5,
       "friction": 1,
       "flow": 0,
@@ -1566,7 +1569,7 @@
       "x": 2559.9999999999977,
       "y": 900.0000000000006,
       "rot": 0,
-      "color": "#0a4247",
+      "color": "#1e7382",
       "opacity": 0.5,
       "friction": 1,
       "flow": -120,
@@ -1974,7 +1977,7 @@
       "x": 3640.0000000000005,
       "y": 760.0000000000003,
       "rot": 0,
-      "color": "#0a4247",
+      "color": "#1e7382",
       "opacity": 0.5,
       "friction": 1,
       "flow": -120,
@@ -3019,27 +3022,6 @@
     },
     {
       "kind": "static",
-      "x": 935,
-      "y": -250,
-      "rot": 0,
-      "objects": [
-        {
-          "type": "light",
-          "kind": "spot",
-          "z": 0,
-          "color": "#f3ecd8",
-          "intensity": 600,
-          "range": 2000,
-          "angle": 8,
-          "penumbra": 1,
-          "castShadow": true,
-          "beam": 0.85,
-          "dust": 0.7
-        }
-      ]
-    },
-    {
-      "kind": "static",
       "name": "color-1",
       "x": 1950,
       "y": 625,
@@ -3130,23 +3112,6 @@
     },
     {
       "kind": "static",
-      "x": 1280,
-      "y": 825,
-      "rot": 0,
-      "objects": [
-        {
-          "type": "light",
-          "z": 90,
-          "color": "#ffe5ad",
-          "intensity": 3,
-          "wake": 130,
-          "fireflies": 2,
-          "path": 1
-        }
-      ]
-    },
-    {
-      "kind": "static",
       "name": "boulder-7",
       "x": 1715.4515680579652,
       "y": 1081.2057903594753,
@@ -3215,6 +3180,25 @@
             "w": 5,
             "h": 5
           }
+        }
+      ]
+    },
+    {
+      "kind": "static",
+      "x": 900,
+      "y": 300,
+      "rot": 0,
+      "objects": [
+        {
+          "type": "light",
+          "kind": "spot",
+          "z": -100,
+          "color": "#ffe0b8",
+          "intensity": 220,
+          "range": 1200,
+          "angle": 28,
+          "penumbra": 1,
+          "castShadow": true
         }
       ]
     }

@@ -8,7 +8,7 @@ import random
 import bpy
 import numpy as np
 
-from .build import ATLAS_CELLS, ATLAS_INSET, Stamps
+from .build import ATLAS_CELLS, ATLAS_INSET, LEAF_BASE, LEAF_SPAN, Stamps
 
 COLOR = "Col"
 UV = "UVMap"
@@ -104,11 +104,17 @@ def write_result(me, result):
 
 
 # --------------------------------------------------------------------------
-# The atlas: a 4 x 4 sheet of silhouettes, white everywhere (the vertex colour
-# owns the hue; a black background under the alpha bleeds a dark fringe into
-# every edge through filtering) with the alpha as the shape. Twelve angular
-# blob cells for the carpet and four lobed ivy leaves with veins for the
-# vines; the underlay and the stems sample the centre of a round blob. Every
+# The atlas: a 4 x 4 sheet of silhouettes, the alpha as the shape and the
+# colour white everywhere - the vertex colour owns the hue, no darkness is
+# baked into a leaf (the owner: it comes from the shadows alone), and a black
+# background under the alpha would bleed a dark fringe into every edge
+# through filtering. Fifteen ivy
+# leaves for the carpet and the vines - three- and five-lobed, each drawn a
+# little differently in how far its lobes reach, how deep its sinuses cut, how
+# blunt its tip is and which way it leans, one flat colour with no veins
+# (the owner asked for the lines to go) - base at the bottom of the card
+# (build.LEAF_BASE) and tip at the top (build.LEAF_TIP), and one faceted
+# round the underlay and the stems sample the centre of. Every
 # shape sits inside its cell's inner (1 - 2 * ATLAS_INSET), the part a card's
 # UV quad covers, so there is a transparent gutter either side of every cell
 # border (see build.ATLAS_INSET). Generated once into assets-src/scenes/
@@ -116,8 +122,8 @@ def write_result(me, result):
 # Bump ATLAS_VERSION to redraw it: the file is named by version, so a stale
 # sheet is never picked up.
 
-MATERIAL_VERSION = 4
-ATLAS_VERSION = 3
+MATERIAL_VERSION = 6
+ATLAS_VERSION = 6
 ATLAS_NAME = f"moss-cutout-atlas-v{ATLAS_VERSION}.png"
 ATLAS_SIZE = 1024
 REPO = os.path.realpath(os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..", ".."))
@@ -139,16 +145,6 @@ def _raster_polygon(poly, cs):
     return inside
 
 
-def _spiky(rnd):
-    n = rnd.randint(7, 10)
-    pts = []
-    for i in range(n):
-        a = (i + rnd.uniform(-0.25, 0.25)) / n * math.tau
-        r = 0.42 * (0.95 if i % 2 == 0 else rnd.uniform(0.72, 0.84))
-        pts.append((0.5 + r * math.cos(a), 0.5 + r * math.sin(a)))
-    return [pts]
-
-
 def _faceted(rnd):
     n = rnd.randint(6, 8)
     pts = []
@@ -156,48 +152,23 @@ def _faceted(rnd):
         a = (i + rnd.uniform(-0.2, 0.2)) / n * math.tau
         r = 0.42 * rnd.uniform(0.82, 1.0)
         pts.append((0.5 + r * math.cos(a), 0.5 + r * math.sin(a)))
-    return [pts]
-
-
-def _leaf_poly(cx, cy, length, width, angle, notch=0.06):
-    """A broad heart-shaped leaf pointing along `angle`: widest at a third, a short
-    pointed tip, a small base notch."""
-    prof = [(0.0, 0.0), (0.05, 0.5), (0.18, 0.85), (0.38, 1.0), (0.6, 0.88), (0.8, 0.55), (0.92, 0.22), (1.0, 0.0),
-            (0.92, -0.22), (0.8, -0.55), (0.6, -0.88), (0.38, -1.0), (0.18, -0.85), (0.05, -0.5), (notch, 0.0)]
-    ca, sa = math.cos(angle), math.sin(angle)
-    out = []
-    for u, v in prof:
-        x = u * length
-        y = v * width / 2
-        out.append((cx + x * ca - y * sa, cy + x * sa + y * ca))
-    return out
-
-
-def _cluster(rnd):
-    """Three to five pointed leaves fanning from one base, tips outward."""
-    k = rnd.randint(3, 5)
-    base = rnd.uniform(0, math.tau)
-    polys = []
-    for i in range(k):
-        a = base + (i - (k - 1) / 2) * rnd.uniform(0.55, 0.8)
-        L = rnd.uniform(0.5, 0.56)
-        w = rnd.uniform(0.34, 0.42)
-        polys.append(_leaf_poly(0.5 - 0.1 * math.cos(a), 0.5 - 0.1 * math.sin(a), L, w, a, notch=0.0))
-    return polys
+    return pts
 
 
 # The ivy leaf, as (u, v) along and across a unit leaf, right half from the
-# base to the tip: a broad rounded middle lobe, two rounded side lobes at the
-# widest point, a small basal bump either side of a notched base. |v| peaks at
-# IVY_HALF, so the outline is scaled by width / (2 * IVY_HALF).
+# base to the tip. Five lobes: a broad rounded middle lobe, two rounded side
+# lobes at the widest point, a small basal lobe either side behind a sinus, a
+# notched base. Three lobes: the same without the basal sinus, so the base is
+# heart-shaped. |v| peaks at IVY_HALF, so the outline is scaled by
+# width / (2 * IVY_HALF).
 IVY_HALF = 0.55
-IVY_RIGHT = (
+IVY_FIVE = (
     (0.06, 0.0),
     (0.02, 0.14),
     (0.0, 0.26),
     (0.04, 0.34),
     (0.12, 0.36),
-    (0.19, 0.31),  # sinus between the basal bump and the side lobe
+    (0.19, 0.31),  # sinus between the basal lobe and the side lobe
     (0.26, 0.42),
     (0.32, 0.52),
     (0.38, 0.55),  # the side lobe's rounded tip
@@ -210,71 +181,84 @@ IVY_RIGHT = (
     (0.95, 0.07),
     (1.0, 0.0),
 )
-IVY_TIPS = ((1.0, 0.0), (0.38, 0.55), (0.38, -0.55), (0.0, 0.26), (0.0, -0.26))  # where the veins run to
+IVY_THREE = (
+    (0.07, 0.0),
+    (0.02, 0.12),
+    (0.0, 0.24),
+    (0.05, 0.36),
+    (0.14, 0.45),
+    (0.24, 0.52),
+    (0.34, 0.55),  # the side lobe's rounded tip
+    (0.43, 0.50),
+    (0.49, 0.40),
+    (0.54, 0.30),  # sinus between the side and middle lobes
+    (0.62, 0.30),
+    (0.74, 0.25),
+    (0.86, 0.16),
+    (0.95, 0.07),
+    (1.0, 0.0),
+)
 
 
 def _ivy_frame(cx, cy, length, width, angle, rnd):
     """(u, v) -> cell coordinates for a leaf `length` long and `width` wide,
     its base at (cx, cy), pointing along `angle`; every leaf drawn a little
-    differently in how far its side lobes reach and how deep its sinuses cut."""
-    lat = rnd.uniform(0.92, 1.08)
-    deep = rnd.uniform(0.9, 1.1)
+    differently: how far each side lobe reaches (not the same on both sides),
+    how deep its sinuses cut, how blunt its middle lobe is and how far it
+    leans to one side."""
+    lat = (rnd.uniform(0.92, 1.06), rnd.uniform(0.92, 1.06))
+    deep = rnd.uniform(0.88, 1.12)
+    blunt = rnd.uniform(0.86, 1.0)  # the middle lobe's reach past the sinus
+    lean = rnd.uniform(-0.07, 0.07)
     ca, sa = math.cos(angle), math.sin(angle)
 
     def at(u, v):
         if 0.2 <= u <= 0.5:
-            v *= lat
+            v *= lat[v >= 0]
         if abs(v) < 0.32 and 0.15 < u < 0.6:
             v /= deep
-        x = u * length
+        if u > 0.54:
+            u = 0.54 + (u - 0.54) * blunt
+        x = (u + v * lean) * length
         y = v / (2 * IVY_HALF) * width
         return cx + x * ca - y * sa, cy + x * sa + y * ca
 
     return at
 
 
-def _ivy_poly(at):
-    """The leaf's outline through the frame `at`."""
-    prof = list(IVY_RIGHT) + [(u, -v) for u, v in reversed(IVY_RIGHT[1:-1])]
+def _ivy_poly(at, half):
+    """The leaf's outline through the frame `at`, from its right half."""
+    prof = list(half) + [(u, -v) for u, v in reversed(half[1:-1])]
     return [at(u, v) for u, v in prof]
 
 
-def _ivy_veins(at):
-    """Veins from the base toward every lobe's tip, as (x0, y0, x1, y1)."""
-    base = at(0.06, 0.0)
-    return [base + at(0.06 + (u - 0.06) * 0.88, v * 0.88) for u, v in IVY_TIPS]
-
-
-def _segments_mask(segs, cs, half_width):
-    """Pixels within `half_width` (cell units) of any segment."""
-    yy, xx = np.mgrid[0:cs, 0:cs].astype(np.float32) / cs + 0.5 / cs
-    out = np.zeros((cs, cs), bool)
-    for x0, y0, x1, y1 in segs:
-        dx, dy = x1 - x0, y1 - y0
-        L2 = max(dx * dx + dy * dy, 1e-9)
-        t = np.clip(((xx - x0) * dx + (yy - y0) * dy) / L2, 0.0, 1.0)
-        d = np.hypot(xx - (x0 + t * dx), yy - (y0 + t * dy))
-        out |= d < half_width
-    return out
-
-
-def _soften(mask, r):
-    """Blur the mask and re-threshold it: every corner rounds by about r pixels."""
+def _blur(mask, r):
+    """The mask box-blurred three times by r pixels: 0.5 on its edge, 1 deep inside."""
     a = mask.astype(np.float32)
     k = np.ones(2 * r + 1, np.float32) / (2 * r + 1)
     for _ in range(3):
         a = np.apply_along_axis(lambda x: np.convolve(x, k, mode="same"), 0, a)
         a = np.apply_along_axis(lambda x: np.convolve(x, k, mode="same"), 1, a)
-    return a > 0.5
+    return a
 
 
-# The sheet, top row first. build.py's BLOB_CELLS, LEAF_CELLS and FILL_CELL
-# index into this order; FILL_CELL must be a "faceted" cell (solid at its centre).
+def _soften(mask, r):
+    """Blur the mask and re-threshold it: every corner rounds by about r pixels."""
+    return _blur(mask, r) > 0.5
+
+
+# (A dark rim painted just inside every leaf's edge was tried on 2026-09-30
+# for softer-looking edges and rejected the same hour: at game distance the
+# mips turned it into a hard outline round every leaf.)
+
+
+# The sheet, top row first. build.py's LEAF_CELLS and FILL_CELL index into
+# this order; FILL_CELL must be the "faceted" cell (solid at its centre).
 ATLAS_KINDS = (
-    "spiky", "cluster", "faceted", "spiky",
-    "cluster", "faceted", "spiky", "cluster",
-    "leaf", "leaf", "leaf", "leaf",
-    "faceted", "spiky", "cluster", "faceted",
+    "five", "three", "five", "three",
+    "three", "five", "three", "five",
+    "five", "three", "five", "three",
+    "three", "five", "three", "faceted",
 )
 
 
@@ -283,11 +267,6 @@ def _inset(poly):
     card's UV quad covers (build.ATLAS_INSET)."""
     k = 1.0 - 2.0 * ATLAS_INSET
     return [(0.5 + (x - 0.5) * k, 0.5 + (y - 0.5) * k) for x, y in poly]
-
-
-def _inset_segments(segs):
-    k = 1.0 - 2.0 * ATLAS_INSET
-    return [(0.5 + (x0 - 0.5) * k, 0.5 + (y0 - 0.5) * k, 0.5 + (x1 - 0.5) * k, 0.5 + (y1 - 0.5) * k) for x0, y0, x1, y1 in segs]
 
 
 def _draw_atlas(size=ATLAS_SIZE, cells=ATLAS_CELLS, seed=9):
@@ -300,24 +279,15 @@ def _draw_atlas(size=ATLAS_SIZE, cells=ATLAS_CELLS, seed=9):
     for i, kind in enumerate(ATLAS_KINDS):
         cy, cx = divmod(i, cells)
         cell = img[cy * cs:(cy + 1) * cs, cx * cs:(cx + 1) * cs]
-        leaf = None
-        if kind == "spiky":
-            polys = _spiky(rnd)
-        elif kind == "faceted":
-            polys = _faceted(rnd)
-        elif kind == "cluster":
-            polys = _cluster(rnd)
-        else:  # a vine leaf, base near the bottom of the card, tip toward its top (the vine hangs it tip-down)
-            leaf = _ivy_frame(0.5, 0.91, 0.82, rnd.uniform(0.8, 0.88), -math.pi / 2, rnd)
-            polys = [_ivy_poly(leaf)]
-        inside = np.zeros((cs, cs), bool)
-        for pl in polys:
-            inside |= _raster_polygon(_inset(pl), cs)
-        inside = _soften(inside, int(cs * k * {"cluster": 0.018, "leaf": 0.012}.get(kind, 0.03)))
-        cell[..., 3] = inside
-        if leaf is not None:  # veins to every lobe, a shade darker, so the leaf reads as one
-            veins = inside & _segments_mask(_inset_segments(_ivy_veins(leaf)), cs, 0.006 * k)
-            cell[..., 0:3][veins] = 0.84
+        if kind == "faceted":
+            inside = _soften(_raster_polygon(_inset(_faceted(rnd)), cs), int(cs * k * 0.03))
+            cell[..., 3] = inside
+            continue
+        # A leaf, base at LEAF_BASE of the card from its bottom (the cell's y
+        # runs down, so 1 - LEAF_BASE), tip at LEAF_TIP, pointing up the card.
+        half = IVY_FIVE if kind == "five" else IVY_THREE
+        leaf = _ivy_frame(0.5, 1.0 - LEAF_BASE, LEAF_SPAN, rnd.uniform(0.76, 0.86), -math.pi / 2, rnd)
+        cell[..., 3] = _soften(_raster_polygon(_inset(_ivy_poly(leaf, half)), cs), int(cs * k * 0.018))
     return img
 
 
@@ -418,6 +388,77 @@ def material():
             mat.alpha_threshold = ATLAS_CUTOFF
         except Exception:
             pass
+    return mat
+
+
+# --------------------------------------------------------------------------
+# The shadow decal: its own mesh and its own blended material, `MossShadow`,
+# white times the vertex colour with the vertex colour's alpha as the
+# opacity - no texture, no second slot on the moss mesh (see above for why a
+# second slot is out). The exporter writes it as alphaMode BLEND with
+# COLOR_0 carrying the alpha; three.js draws it transparent, depth-tested
+# under the leaves, without writing depth.
+
+SHADOW_MATERIAL_NAME = "MossShadow"
+SHADOW_MATERIAL_VERSION = 1
+
+
+def write_shadow(me, shadow):
+    me.clear_geometry()
+    v, t = shadow.vertices, shadow.triangles
+    if len(t) == 0:
+        return
+    me.vertices.add(len(v))
+    me.vertices.foreach_set("co", v.astype(np.float32).ravel())
+    me.loops.add(len(t) * 3)
+    me.loops.foreach_set("vertex_index", t.astype(np.int32).ravel())
+    me.polygons.add(len(t))
+    me.polygons.foreach_set("loop_start", np.arange(0, len(t) * 3, 3, dtype=np.int32))
+    me.update(calc_edges=True)
+    me.validate(clean_customdata=False)
+    attr = me.color_attributes.get(COLOR) or me.color_attributes.new(COLOR, "FLOAT_COLOR", "POINT")
+    if len(attr.data) == len(shadow.colors):
+        attr.data.foreach_set("color", shadow.colors.astype(np.float32).ravel())
+    me.color_attributes.active_color = attr
+    me.color_attributes.render_color_index = me.color_attributes.find(COLOR)
+    me.shade_smooth()
+    if len(shadow.normals) == len(v):
+        me.normals_split_custom_set_from_vertices(shadow.normals.astype(np.float32).tolist())
+    mat = shadow_material()
+    if list(me.materials) != [mat]:
+        me.materials.clear()
+        me.materials.append(mat)
+
+
+def shadow_material():
+    mat = bpy.data.materials.get(SHADOW_MATERIAL_NAME)
+    if mat is not None and mat.get("moss_material") == SHADOW_MATERIAL_VERSION:
+        return mat
+    if mat is None:
+        mat = bpy.data.materials.new(SHADOW_MATERIAL_NAME)
+    if mat.node_tree is None:
+        mat.use_nodes = True
+    mat["moss_material"] = SHADOW_MATERIAL_VERSION
+    nt = mat.node_tree
+    for n in list(nt.nodes):
+        if n.type not in {"BSDF_PRINCIPLED", "OUTPUT_MATERIAL"}:
+            nt.nodes.remove(n)
+    bsdf = next(n for n in nt.nodes if n.type == "BSDF_PRINCIPLED")
+    bsdf.inputs["Base Color"].default_value = (1.0, 1.0, 1.0, 1.0)
+    bsdf.inputs["Roughness"].default_value = 1.0
+    if "Specular IOR Level" in bsdf.inputs:
+        bsdf.inputs["Specular IOR Level"].default_value = 0.0
+    tint = _tint_node(nt, bsdf)
+    nt.links.new(tint.outputs["Color"], bsdf.inputs["Base Color"])
+    nt.links.new(tint.outputs["Alpha"], bsdf.inputs["Alpha"])
+    mat.surface_render_method = "BLENDED"
+    mat.use_backface_culling = True
+    mat.show_transparent_back = False
+    mat.diffuse_color = (0.02, 0.03, 0.06, 0.6)
+    try:
+        mat.blend_method = "BLEND"
+    except Exception:
+        pass
     return mat
 
 

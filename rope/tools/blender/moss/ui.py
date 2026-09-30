@@ -42,7 +42,7 @@ class MOSS_PT_main(bpy.types.Panel):
             if s.status:
                 box.label(text=s.status, icon="ERROR")
             else:
-                box.label(text=f"{s.triangles:,} tris, {s.blobs:,} blobs, {s.vine_count} vines, {s.build_ms:.0f} ms")
+                box.label(text=f"{s.triangles:,} tris, {s.leaves:,} leaves, {s.vine_count} vines, {s.build_ms:.0f} ms")
             row = box.row(align=True)
             row.prop(s, "live")
             row.operator("moss.rebuild", icon="FILE_REFRESH").all = False
@@ -68,12 +68,22 @@ class MOSS_PT_surface(_Sub, bpy.types.Panel):
     bl_label = "Carpet"
 
     def draw(self, context):
-        s = ops.active_moss(context).moss
+        ob = ops.active_moss(context)
+        s = ob.moss
         _grid(self.layout, s, ("seed", "resolution"))
         self.layout.label(text="Outline")
         _grid(self.layout, s, ("threshold", "edge_noise", "edge_scale", "min_patch", "rounding"))
-        self.layout.label(text="Blobs")
-        _grid(self.layout, s, ("thickness", "layers", "blob_min", "blob_max", "fill", "edge_fill", "density", "facing", "shoulder", "underlay"))
+        self.layout.label(text="Growth")
+        host = bpy.data.objects.get(s.host)
+        origin = ops.origin_object(host) if host is not None else None
+        self.layout.operator("moss.set_origin", icon="EMPTY_AXIS")
+        if origin is None:
+            self.layout.label(text="No origin: the carpet grows from the top of its paint", icon="INFO")
+        else:
+            self.layout.label(text=f"{origin.name}; move it (G) or delete it (X)", icon="EMPTY_DATA")
+        _grid(self.layout, s, ("thickness", "tilt", "spread", "taper"))
+        self.layout.label(text="Leaves")
+        _grid(self.layout, s, ("sheets", "leaf_min", "leaf_max", "leaf_fill", "edge_fill", "density", "facing", "shoulder", "underlay"))
 
 
 class MOSS_PT_vines(_Sub, bpy.types.Panel):
@@ -98,4 +108,14 @@ class MOSS_PT_color(_Sub, bpy.types.Panel):
         _grid(self.layout, s, ("tone_a", "tone_b", "tone_c", "light", "shade", "tone_scale", "variation", "depth_shade"))
 
 
-CLASSES = (MOSS_PT_main, MOSS_PT_surface, MOSS_PT_vines, MOSS_PT_color)
+class MOSS_PT_shadow(_Sub, bpy.types.Panel):
+    bl_label = "Shadow"
+    bl_options = {"DEFAULT_CLOSED"}
+
+    def draw(self, context):
+        s = ops.active_moss(context).moss
+        self.layout.label(text="A soft decal on the rock under and around the carpet", icon="LIGHT_SUN")
+        _grid(self.layout, s, ("shadow_strength", "shadow_reach", "shadow_drop", "shadow_color"))
+
+
+CLASSES = (MOSS_PT_main, MOSS_PT_surface, MOSS_PT_vines, MOSS_PT_color, MOSS_PT_shadow)
