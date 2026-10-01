@@ -30,15 +30,9 @@
     ]
   },
   "river": {
-    "sha256": "8910433ee55fc0e92603ee0939c70a98c425202777958c65bebfacce88cfd959",
-    "bytes": 4642328,
+    "sha256": "613753b0133922172999b4cb2c33351942df94bccc3ea3ab8f1ebc8234a4a471",
+    "bytes": 4424984,
     "credits": [
-      {
-        "name": "dark_rock_02",
-        "author": "Amal Kumar",
-        "source": "https://polyhaven.com/a/dark_rock_02",
-        "license": "CC0"
-      },
       {
         "name": "finish_line",
         "author": "hyd (@hydroh)",
@@ -50,12 +44,6 @@
         "author": "ambientCG (Lennart Demes)",
         "source": "https://ambientcg.com/view?id=Moss003",
         "license": "CC0"
-      },
-      {
-        "name": "moss_ground_01",
-        "author": "FreeStylized",
-        "source": "https://freestylized.com/material/moss_ground_01/",
-        "license": "FreeStylized CC0 (no redistribution of the unmodified pack)"
       },
       {
         "name": "pbr_rock_cliffs_pack",
