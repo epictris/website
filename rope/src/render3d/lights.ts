@@ -84,7 +84,7 @@ import {
 } from "./fireflies";
 import { FireflyVisual } from "./fireflyVisual";
 import { assignPool, GlowState, poolSizeFor, wakeParams, type PoolCandidate } from "./glow";
-import { threeY } from "./space";
+import { POINT_VIEW_HALF_HEIGHT, threeY } from "./space";
 import { Vec2 } from "../engine/vec2";
 import { LAYER_SCENERY } from "../engine/body";
 import { circleOverlap } from "../engine/collision";
@@ -304,10 +304,10 @@ export class LightRig {
   // Handed out in build order and never reused, so a light dropped and re-added
   // cannot land in step with a neighbour that outlived it.
   private nextPhase = 0;
-  // The clock and the viewport's half height, shared by reference with every
-  // beam in the rig so a frame writes them once (see `update`).
+  // The clock, shared by reference with every beam in the rig so a frame
+  // writes it once (see `update`). Their dust is sized by the scene-wide
+  // `POINT_VIEW_HALF_HEIGHT`.
   private readonly beamTime = { value: 0 };
-  private readonly beamViewHalfHeight = { value: 540 };
   // Waking lights, in the order they were added (which is authored order, the
   // pool's tie-break), and the pool of real lights that serves them.
   private readonly glows: GlowSource[] = [];
@@ -476,7 +476,7 @@ export class LightRig {
         dir,
         phase,
         time: this.beamTime,
-        viewHalfHeight: this.beamViewHalfHeight,
+        viewHalfHeight: POINT_VIEW_HALF_HEIGHT,
       });
       if (beam) holder.add(beam.root);
     }
@@ -573,16 +573,13 @@ export class LightRig {
   }
 
   // Advance the flicker and the beams. `seconds` is a wall clock and never the
-  // sim's - see the header. `viewportHeight` is the drawn viewport's height in
-  // device pixels, which the beams' dust needs to draw its motes a size in
-  // metres (see `beam.ts`, and the water's `updateWater`). Two shared writes,
-  // and nothing else for a rig with no flickering light in it.
+  // sim's - see the header. One shared write, and nothing else for a rig with
+  // no flickering light in it.
   //
   // `focus` is where the waking lights are judged from (see `updateGlows`);
   // absent, they are not stepped at all.
-  update(seconds: number, viewportHeight: number, focus?: GlowFocus): void {
+  update(seconds: number, focus?: GlowFocus): void {
     this.beamTime.value = seconds;
-    this.beamViewHalfHeight.value = viewportHeight / 2;
     const dt = this.lastSeconds === null ? 0 : seconds - this.lastSeconds;
     this.lastSeconds = seconds;
     if (focus && this.glows.length > 0) this.updateGlows(seconds, dt, focus);
@@ -631,7 +628,7 @@ export class LightRig {
       this.fireflyPool.push(light);
     }
     if (this.swarms.length > 0) {
-      this.fireflyVisual = new FireflyVisual(this.swarms, this.beamViewHalfHeight);
+      this.fireflyVisual = new FireflyVisual(this.swarms, POINT_VIEW_HALF_HEIGHT);
       scene.add(this.fireflyVisual.root);
     }
   }

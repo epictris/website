@@ -16,7 +16,9 @@
 // for it (the level's colours lifted toward white, a sun lobe always on) was
 // built and played on 2026-09-24 and rejected: a ball reflecting a brighter sky
 // than the room it is in looks pasted on. What lights the player is the world
-// itself - see "Waking lights" in docs/lighting-and-surfaces.md.
+// itself - see "Waking lights" in docs/lighting-and-surfaces.md. The ball
+// model goes one further and reflects the level's actual geometry around it,
+// through a probe at its centre (see reflectionProbe.ts).
 //
 // THE AVATAR IS LIT ROUND THE BACK. A lamp's diffuse light on it keeps going
 // past the terminator (`AVATAR_WRAP`), so a mushroom beside the ball lights

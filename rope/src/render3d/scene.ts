@@ -47,6 +47,7 @@ import {
   lensOf,
   NO_ORBIT,
   placeAt,
+  POINT_VIEW_HALF_HEIGHT,
   syncCamera,
   threeY,
   VIEW_ASPECT,
@@ -56,6 +57,7 @@ import {
   type ViewPose,
   type ViewProjection,
 } from "./space";
+import { ReflectionProbe } from "./reflectionProbe";
 import { updateWater, waterTextures } from "./water";
 import { beltRenderTime } from "../render/beltTread";
 
@@ -227,6 +229,9 @@ export class Scene3D {
   // asynchronous query is a couple of GL calls a frame, and it is the only
   // reading that distinguishes a GPU-bound frame from a CPU-bound one.
   private readonly gpuTimer: GpuTimer | null;
+  // What the ball reflects: the level around it, from its centre, every frame
+  // (see reflectionProbe.ts).
+  private readonly reflectionProbe: ReflectionProbe;
 
   constructor(canvas: HTMLCanvasElement, opts: Scene3DOptions = {}) {
     this.diagnostics = opts.diagnostics === true;
@@ -258,6 +263,7 @@ export class Scene3D {
     // Null wherever the driver has no timer extension (see GpuTimer); the perf
     // HUD says so rather than plotting a zero.
     this.gpuTimer = GpuTimer.create(this.renderer.getContext());
+    this.reflectionProbe = new ReflectionProbe(this.renderer);
   }
 
   // GPU milliseconds for the most recently retired frame, or null while the
@@ -1000,7 +1006,8 @@ export class Scene3D {
     // the viewport's pixel height to stay that size (see water.ts
     // `updateWater`).
     const viewportHeight = rect ? rect.h : this.size.y;
-    updateWater(clock, viewportHeight);
+    POINT_VIEW_HALF_HEIGHT.value = viewportHeight / 2;
+    updateWater(clock);
 
     // Bodies come and go at runtime (the hook is destroyed and rebuilt on every
     // throw, the sandbox spawns rocks), so the visual set is reconciled rather
@@ -1048,7 +1055,7 @@ export class Scene3D {
     // its body is drawn this frame against where the ball is drawn this frame
     // (`renderPosition`, the pose `BallVisual` just used) - both read, neither
     // written: nothing here reaches the sim.
-    this.lights.update(clock, viewportHeight, {
+    this.lights.update(clock, {
       ball: level.ball ? level.ball.renderPosition(alpha) : null,
       view: centre,
       world: level.world,
@@ -1058,9 +1065,34 @@ export class Scene3D {
     // created, and it costs a traverse only while something is selected.
     this.syncHighlight();
 
+    // Inside the timer: the probe is six more draws of the scene, and the
+    // perf HUD should say what the frame costs, not what the main view does.
     this.gpuTimer?.begin();
+    this.captureReflection(level);
     this.renderer.render(this.scene, this.camera);
     this.gpuTimer?.end();
+  }
+
+  // The ball's view of the level, with the avatar and the editor's guides out
+  // of it (see reflectionProbe.ts), worn as the ball's reflection.
+  private captureReflection(level: Scene3DLevel): void {
+    const visual = this.ballVisual;
+    const ball = level.ball;
+    if (!visual || !ball) return;
+    const ballShown = visual.root.visible;
+    const editorShown = this.editorLayer.visible;
+    visual.root.visible = false;
+    this.editorLayer.visible = false;
+    try {
+      this.chains.withoutAvatar(() => {
+        // Half the radius: nothing but the ball is inside it, and the floor
+        // it rests on - a radius below the centre - must not be clipped.
+        visual.setReflection(this.reflectionProbe.capture(this.scene, visual.root.position, ball.radius / 2));
+      });
+    } finally {
+      visual.root.visible = ballShown;
+      this.editorLayer.visible = editorShown;
+    }
   }
 
   private dropStaleBodies(): void {
@@ -1108,6 +1140,7 @@ export class Scene3D {
     this.vines.dispose();
     this.lights.dispose();
     this.env.dispose();
+    this.reflectionProbe.dispose();
     this.renderer.dispose();
   }
 }

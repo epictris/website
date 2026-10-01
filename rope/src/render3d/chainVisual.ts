@@ -53,6 +53,9 @@ export class ChainLayer {
   private mesh: THREE.InstancedMesh;
   private capacity = INITIAL_LINKS;
   private count = 0;
+  // How many of this frame's links are the level's own chains: they are laid
+  // first, so everything past this index is the avatar's (see `withoutAvatar`).
+  private sceneLinks = 0;
   private readonly geometry: THREE.BufferGeometry;
   private readonly manacle: THREE.Group;
   private readonly manacleGeometry: THREE.BufferGeometry[] = [];
@@ -117,6 +120,7 @@ export class ChainLayer {
       this.tint.set(chain.color ?? DEFAULT_CHAIN_COLOR);
       this.lay(this.path);
     }
+    this.sceneLinks = this.count;
 
     const ball = level.ball;
     const chain = ball?.chain;
@@ -201,8 +205,25 @@ export class ChainLayer {
     this.manacle.visible = true;
   }
 
+  // Run `draw` with only the level's own chains showing - the ball's chain, a
+  // reeling one and the manacle hidden - and put them back. The ball's
+  // reflection probe draws through this (see reflectionProbe.ts).
+  withoutAvatar(draw: () => void): void {
+    const count = this.mesh.count;
+    const manacle = this.manacle.visible;
+    this.mesh.count = Math.min(this.sceneLinks, count);
+    this.manacle.visible = false;
+    try {
+      draw();
+    } finally {
+      this.mesh.count = count;
+      this.manacle.visible = manacle;
+    }
+  }
+
   clear(): void {
     this.count = 0;
+    this.sceneLinks = 0;
     this.mesh.count = 0;
     this.manacle.visible = false;
   }

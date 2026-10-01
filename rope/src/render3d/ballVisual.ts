@@ -81,8 +81,8 @@ export function forgedMetal(tileScale?: number): THREE.MeshStandardMaterial {
   return wearAvatar(surfaceFor({ texture: FORGED, tileScale, color: FORGED_TINT, avatar: true }));
 }
 
-// How the model's own materials are worn, over its maps. Its packed roughness
-// reads a 0.49 mean and its albedo a 0.15 grey, which under plain PBR is a
+// How the model's own materials are worn, over its maps. The first deliveries'
+// packed roughness read a 0.49 mean and their albedo a 0.15 grey, which under plain PBR is a
 // dull, near-black iron: a metal's colour IS its reflection, so a 0.15 albedo
 // reflects 15% of the room, and in a dark cave the ball was a silhouette.
 // Half the roughness tightens the reflection into a shine; the albedo lifted
@@ -114,9 +114,19 @@ export function forgedMetal(tileScale?: number): THREE.MeshStandardMaterial {
 // the sun catches it, which only a mostly-specular surface gives. The reason
 // half-metal was chosen (nothing to reflect) no longer holds: the generated
 // sky is now a lit blue and the sun is on, so there is a room to reflect.
-const MODEL_ROUGHNESS = 0.4;
-const MODEL_METALNESS = 0.75;
-const MODEL_ALBEDO_LIFT = 4.5;
+//
+// The fifth delivery (2026-10-01) arrived with that lift already in its maps:
+// a 0.098 linear albedo mean against the old 0.021, roughness 0.37 and
+// metalness 0.86 against 0.49 and 0.74, and a cool blue-grey. Then darker, to
+// Tris's reference of a near-black, faintly warm cannonball whose facets show
+// only where they catch the sky: the albedo is now a TINT rather than a
+// scalar, ~0.35 and warm so the blue in the maps goes neutral, landing near
+// 0.033 linear. Metalness stays short of 1 (0.62 worn): at full metal the
+// river has too little to reflect and the facets vanish into a black ball.
+const MODEL_ROUGHNESS = 0.5;
+const MODEL_METALNESS = 0.72;
+// Linear RGB, multiplied into the albedo map.
+const MODEL_ALBEDO = new THREE.Color().setRGB(0.38, 0.34, 0.27, THREE.LinearSRGBColorSpace);
 
 // The model's materials, worn as the avatar: its shine, and the avatar's rules
 // (see `avatarSurface.ts`).
@@ -130,7 +140,7 @@ function shine(obj: THREE.Object3D): void {
     std.userData.shined = true;
     std.roughness = MODEL_ROUGHNESS;
     std.metalness = MODEL_METALNESS;
-    std.color.multiplyScalar(MODEL_ALBEDO_LIFT);
+    std.color.multiply(MODEL_ALBEDO);
   }
 }
 
@@ -141,6 +151,11 @@ export class BallVisual {
   // is a remove rather than a search. Null once it has happened.
   private stand: THREE.Group | null = new THREE.Group();
   private disposed = false;
+  // The model's materials once it has landed, and what they reflect: the
+  // level around the ball (`ReflectionProbe`), handed in every frame by the
+  // scene. The stand-in does not wear it - its iron is the chain's, shared.
+  private modelMaterials: THREE.MeshStandardMaterial[] = [];
+  private reflection: THREE.Texture | null = null;
 
   constructor(private readonly ball: BallPlayer) {
     const stand = this.stand as THREE.Group;
@@ -168,6 +183,8 @@ export class BallVisual {
       // file, since a level may author a different radius than the model's.
       obj.scale.multiplyScalar(ball.radius / BALL_MESH_RADIUS);
       shine(obj);
+      this.modelMaterials = standardMaterialsOf(obj);
+      if (this.reflection) this.setReflection(this.reflection);
       obj.traverse((o) => {
         const mesh = o as THREE.Mesh;
         if (!mesh.isMesh) return;
@@ -182,6 +199,18 @@ export class BallVisual {
     });
   }
 
+  // Wear `texture` as the model's reflection in place of the scene's sky. The
+  // probe hands back the same texture every frame, so this recompiles nothing
+  // past the first call.
+  setReflection(texture: THREE.Texture): void {
+    this.reflection = texture;
+    for (const mat of this.modelMaterials) {
+      if (mat.envMap === texture) continue;
+      mat.envMap = texture;
+      mat.needsUpdate = true;
+    }
+  }
+
   sync(alpha: number): void {
     placeAt(this.root, this.ball.renderPosition(alpha));
     orientTo(this.root, this.ball.renderRotation(alpha));
@@ -189,6 +218,8 @@ export class BallVisual {
 
   dispose(): void {
     this.disposed = true;
+    this.modelMaterials = [];
+    this.reflection = null;
     for (const g of this.owned) g.dispose();
     this.owned.length = 0;
     this.stand = null;

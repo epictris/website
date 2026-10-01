@@ -36,6 +36,7 @@ import { WaterArea } from "../engine/body";
 import type { LevelBodyData } from "../level/levelFormat";
 import { RAW_ASSETS, trackPending } from "./assets";
 import { withDownload } from "./download";
+import { POINT_VIEW_HALF_HEIGHT } from "./space";
 
 // ---------------------------------------------------------------------------
 // The flipbook
@@ -182,12 +183,6 @@ function ensureFoam(): THREE.Texture {
 // one level can never drift apart. Written once per frame by `Scene3D`, from
 // the same clock (pinnable) the light flicker reads.
 const waterTime = { value: 0 };
-// The viewport's height in device pixels, for the spray: a point sprite's size
-// is set in pixels, and a droplet authored in metres needs the projection's
-// pixels-per-metre at its depth to stay the same size when the window
-// changes. Written beside the clock.
-const waterViewHalfHeight = { value: 540 };
-
 // The textures the water shader samples, for the prewarm (see
 // `Scene3D.prewarm`): they ride the material as uniforms rather than as map
 // slots, so a sweep of the scene's materials cannot see them. Empty until the
@@ -199,9 +194,8 @@ export function waterTextures(): THREE.Texture[] {
   return out;
 }
 
-export function updateWater(seconds: number, viewportHeight: number): void {
+export function updateWater(seconds: number): void {
   waterTime.value = seconds;
-  waterViewHalfHeight.value = viewportHeight / 2;
 }
 
 // ---------------------------------------------------------------------------
@@ -1155,7 +1149,10 @@ function sprayPoints(
       THREE.UniformsLib.fog,
       {
         uTime: waterTime,
-        uViewHalfHeight: waterViewHalfHeight,
+        // A point sprite's size is set in pixels, and a droplet authored in
+        // metres needs the projection's pixels-per-metre at its depth to stay
+        // the same size when the window changes (see `POINT_VIEW_HALF_HEIGHT`).
+        uViewHalfHeight: POINT_VIEW_HALF_HEIGHT,
         uColor: { value: color },
         uXEnd: { value: shape.xEnd },
         uSide: { value: shape.side },

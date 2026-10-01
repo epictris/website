@@ -64,6 +64,15 @@
 // the same file, so without it the raw in `assets-src/` cannot be re-optimised
 // into the same asset, and the next person through the pipeline ships a prop
 // whose origin moved.
+//
+// `--lossless-normals` keeps the normal map out of lossy WebP. Lossy is right
+// for nearly every map here, but it codes in blocks, and a normal map whose
+// detail is SUBTLE - a smooth hammered sphere, nearly flat blue - comes out as
+// a grid of them: on a glossy surface the specular highlight is where the
+// normal is read most sharply, and it drew with stair-stepped edges (the fifth
+// iron-ball delivery, 2026-10-01; lossy at 2k was no better). Lossless at the
+// same 1k fixed it for ~0.7 MB more, so it is opt-in and recorded in the
+// prop's MESH_ASSETS entry, like the two above.
 
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
@@ -74,11 +83,12 @@ const argv = process.argv.slice(2);
 // `--center`, `--keep-nodes` and `--keep-hierarchy` are bare flags, so they come
 // out of the argument list before anything positional is read; everything below
 // then sees exactly the arguments it saw before the flags existed.
-const BARE = new Set(["--center", "--keep-nodes", "--keep-hierarchy"]);
+const BARE = new Set(["--center", "--keep-nodes", "--keep-hierarchy", "--lossless-normals"]);
 const args = argv.filter((a) => !BARE.has(a));
 const center = argv.includes("--center");
 const keepNodes = argv.includes("--keep-nodes");
 const keepHierarchy = argv.includes("--keep-hierarchy");
+const losslessNormals = argv.includes("--lossless-normals");
 const simplifyAt = args.indexOf("--simplify");
 // Pulled out of the positionals so the two paths take the same `<in> <out>`.
 // Guarded on the flag being present at all: an absent one is index -1, and
@@ -92,7 +102,7 @@ const [input, output] =
     : args.filter((_, i) => i !== simplifyAt && i !== simplifyAt + 1);
 if (!input || !output) {
   console.error(
-    "usage: bun run assets:optimize <input.glb|gltf> <public/meshes/out.glb> [--simplify <ratio>] [--center] [--keep-nodes] [--keep-hierarchy]",
+    "usage: bun run assets:optimize <input.glb|gltf> <public/meshes/out.glb> [--simplify <ratio>] [--center] [--keep-nodes] [--keep-hierarchy] [--lossless-normals]",
   );
   process.exit(2);
 }
@@ -158,7 +168,9 @@ const r = spawnSync(
     "--compress",
     "meshopt",
     "--texture-compress",
-    "webp",
+    // With `--lossless-normals` the maps leave `optimize` resized but not yet
+    // encoded, and the two `webp` passes below encode them per slot.
+    losslessNormals ? "false" : "webp",
     "--texture-size",
     "1024",
     // A PACK - one file serving several manifest keys, each addressing a node
@@ -203,6 +215,22 @@ const r = spawnSync(
 if (tmp) rmSync(tmp, { recursive: true, force: true });
 if (r.status !== 0) process.exit(r.status ?? 1);
 
+if (losslessNormals) {
+  // In place on the output: every map but the normal map lossy, as `optimize`
+  // would have encoded it, then the normal map lossless.
+  for (const pass of [
+    ["--slots", "!normalTexture"],
+    ["--slots", "normalTexture", "--lossless", "true"],
+  ]) {
+    const w = spawnSync(
+      "bunx",
+      ["@gltf-transform/cli", "webp", resolve(output), resolve(output), ...pass],
+      { stdio: "inherit" },
+    );
+    if (w.status !== 0) process.exit(w.status ?? 1);
+  }
+}
+
 const after = statSync(output).size;
 const mb = (b: number) => `${(b / (1024 * 1024)).toFixed(2)} MB`;
 console.log(`[assets] ${mb(before)} -> ${mb(after)} (${(after / before * 100).toFixed(0)}%)  ${output}`);
@@ -213,6 +241,10 @@ if (simplify !== null) {
 if (center) {
   console.log(`[assets] centred on its own bounds - record it as \`center: true\` in this`);
   console.log(`[assets] prop's MESH_ASSETS entry, beside its sha256.`);
+}
+if (losslessNormals) {
+  console.log(`[assets] normal map kept lossless - record it as \`losslessNormals: true\``);
+  console.log(`[assets] in this prop's MESH_ASSETS entry, beside its sha256.`);
 }
 if (keepNodes) {
   console.log(`[assets] node names kept - each prop in here wants its own MESH_ASSETS entry,`);

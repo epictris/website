@@ -163,6 +163,14 @@ Played 2026-09-24 after the river's mushrooms at 30 cd lit one side of the ball 
 A private sky for it (the level's sky and ground lifted toward white, with a sun lobe always on, handed to the ball and chain as their own `envMap`) was built and played on 2026-09-24 and rejected: a ball reflecting a brighter sky than the room it is in looks pasted on.
 Do not build it again; what lights the player in a dark level is the world itself, the lichen and the mushrooms of **Waking lights** below.
 
+**The ball reflects the level around it** (2026-10-01, `render3d/reflectionProbe.ts`).
+A cube camera at the ball's centre draws the scene into six 128 px faces every frame, `PMREMGenerator.fromCubemap` filters them for roughness, and the result is the ball model's own `envMap` (`BallVisual.setReflection`).
+The material is untouched, so how mirror-like the ball is stays its roughness and metalness; only what it mirrors changed, from the one sky everywhere to the rock, water and props actually around it.
+Where no geometry is in view the probe draws `scene.environment` as its background, so open sky reflects exactly what it did before.
+The probe leaves out the avatar (the ball, its chain and the manacle; a cube map is a picture at infinity and a link centimetres away would smear across the sphere) and the editor's guides, skips the shadow pass (last frame's maps are reused), and sizes point sprites for its faces (`POINT_VIEW_HALF_HEIGHT` in `space.ts`, the one uniform every metre-sized sprite reads).
+In the river it is 116 draw calls and ~0.8 M triangles against the main view's 59 and ~0.5 M, inside the GPU timer the perf HUD reads.
+The chain and manacle still reflect the sky: they wear the shared `painted steel`, and the probe is centred on the ball.
+
 ## Beams
 
 A spot light may show its beam: `beam` (0..1) is how visible the lit air inside its cone is, and `dust` (0..1) how thick the motes drifting in it are, both absent (0) on every spot authored before them, which therefore draws exactly what it drew.

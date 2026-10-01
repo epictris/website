@@ -4701,7 +4701,7 @@ function glowCases(): CaseResult[] {
       for (let i = 0; i < seconds * 60; i++) {
         ball.x += vx / 60;
         t += 1 / 60;
-        rig.update(t, 1080, { ball, view: ball });
+        rig.update(t, { ball, view: ball });
       }
       return rig.swarmStates();
     };

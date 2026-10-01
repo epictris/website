@@ -98,7 +98,7 @@ export const IRON_SURFACE = "painted steel";
 // dragging the sim and three into a build step.
 export const BALL_MESH = "iron-ball";
 // The radius, in metres, the ball in that model is modelled at (the mean over
-// its hammered surface is 99.95 mm). `BallVisual` scales by the ball's own
+// its hammered surface is 99.86 mm). `BallVisual` scales by the ball's own
 // radius over this.
 export const BALL_MESH_RADIUS = 0.1;
 
@@ -947,6 +947,11 @@ export interface MeshAsset {
   // about the shipped bytes that cannot be recovered from them, and without it
   // the raw in `assets-src/` cannot be re-optimised into the same asset.
   center?: boolean;
+  // Whether the normal map was kept out of lossy WebP
+  // (`assets:optimize --lossless-normals`), absent if it went lossy with every
+  // other map. Recorded for the reason the two above are: re-optimising the
+  // raw without it silently brings back the blocky highlight it removed.
+  losslessNormals?: boolean;
   // Uniform scale from the model's own units to metres. A model authored at a
   // real-world size in metres is 1; anything else states its conversion here
   // rather than every level that uses it restating it in `visual.scale`.
@@ -988,27 +993,29 @@ export const MESH_ASSETS: Record<string, MeshAsset> = {
   // it and the preload resolver address it by).
   //
   // Metres, Y up, the ball centred on the origin at `BALL_MESH_RADIUS` (10 cm)
-  // and the loop in the XY plane at +Y, its top at 1.40 radii - a centimetre
-  // proud of the collision lug's reach (`radius + BallPlayer.LOOP_EXCESS`,
-  // 1.29 radii at the level's 12 cm ball), which the previous delivery matched
-  // at 1.30. `BallVisual` scales the whole assembly from the modelled radius
-  // to the ball's own, so a level that authors a different one
-  // (`SpawnData.radius`) needs no second asset, and the loop rides the ball's
-  // rotation as the material point it is.
+  // and the loop in the XY plane at +Y, its top at 1.24 radii - just inside
+  // the collision lug's reach (`radius + BallPlayer.LOOP_EXCESS`, 1.29 radii
+  // at the level's 12 cm ball), where the previous delivery stood at 1.40, a
+  // centimetre proud of it. `BallVisual` scales the whole assembly from the
+  // modelled radius to the ball's own, so a level that authors a different
+  // one (`SpawnData.radius`) needs no second asset, and the loop rides the
+  // ball's rotation as the material point it is.
   //
-  // The fourth delivery (`improved_LOD0.glb`, raw at `assets-src/iron-ball.glb`),
-  // through `assets:optimize --keep-nodes` with nothing else. Two nodes, `Ball`
-  // (101,760 triangles) and `Loop` (34,560), and no `simplify`: a sphere's
-  // silhouette IS the thing, this one is drawn once and it is the closest
-  // object to the camera in every frame - and the hammer facets are in the
-  // geometry here, the normal maps being all but flat. Each node has its own
+  // The fifth delivery (`hammered_iron_ball_LOD0_stylized.glb`, raw at
+  // `assets-src/iron-ball.glb`), through `assets:optimize --keep-nodes
+  // --lossless-normals`: its hammering is a subtle normal map on a glossy
+  // sphere, and lossy WebP drew the highlight in stair-stepped blocks. One
+  // node, `HammeredIronBall` (40,752 triangles, ball and loop in one mesh),
+  // and no `simplify`: a sphere's silhouette IS the thing, this one is drawn
+  // once and it is the closest object to the camera in every frame. One
   // material with a full PBR set - albedo, normal, and packed AO/roughness/
-  // metalness - on its own UV wrap with no background (the ball's equirect),
-  // so nothing bleeds in down the mips.
+  // metalness - on a UV wrap with no background, so nothing bleeds in down
+  // the mips.
   "iron-ball": {
     file: "/meshes/iron-ball.glb",
-    sha256: "141414c00dacbddf298750c66b60fc57aca1fd749731e8ff34997525c2149e54",
-    bytes: 702608,
+    sha256: "3f9385d050f3b17bde38eaa883d96cb096c3024c0207410066bde1ab740b3fa0",
+    bytes: 899120,
+    losslessNormals: true,
     // A private commission rather than a download, so `source` is what it is
     // rather than a URL, and the author is deliberately unnamed - the modeller
     // asked for no credit. It still states a person and a permission, because

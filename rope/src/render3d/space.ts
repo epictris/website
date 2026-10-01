@@ -31,6 +31,15 @@ import { VIEW_HEIGHT, VIEW_WIDTH } from "../render/viewport";
 import type { Camera } from "../render/camera";
 import type { LevelCameraData } from "../level/levelFormat";
 
+// Half the height, in device pixels, of the target being drawn into: what every
+// point sprite sized in METRES (the water's spray, a beam's dust, the
+// fireflies) needs to turn its size into `gl_PointSize`. One uniform object,
+// shared by reference with all of their materials, so a pass into a target of
+// another size - the ball's reflection probe draws the scene into 128 px cube
+// faces - sets it once for everybody and puts it back, instead of drawing every
+// mote eight times its size. `Scene3D.render` writes the viewport's.
+export const POINT_VIEW_HALF_HEIGHT = { value: 540 };
+
 // Vertical field of view, degrees. Deliberately narrow: at ~34 deg the gameplay
 // plane reads almost orthographic - a wall at the top of the frame is barely
 // foreshortened, so the collision outline the level was authored against is
