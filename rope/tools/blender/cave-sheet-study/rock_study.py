@@ -519,6 +519,22 @@ VARIANTS = {
 
 
 # ---------------------------------------------------------------- main
+def light_v6(key_energy=3600):
+    """The 2026-10-01 v6 look Tris picked: warm area key high front-left,
+    dim blue fill and rim, dark blue world, dark ground, AgX."""
+    key = bpy.data.objects["key"]
+    key.location = (-1.9, -2.4, 8.6)
+    key.rotation_euler = (Vector((0, 0, 0.8)) - Vector(key.location)).to_track_quat("-Z", "Y").to_euler()
+    key.data.color = (1.0, 0.74, 0.45)
+    key.data.energy = key_energy
+    bpy.data.lights["fill"].color = (0.45, 0.6, 1.0)
+    bpy.data.lights["fill"].energy = 150
+    bpy.data.lights["rim"].color = (0.6, 0.75, 1.0)
+    bpy.data.lights["rim"].energy = 90
+    bpy.data.worlds[0].node_tree.nodes["Background"].inputs[0].default_value = (0.008, 0.014, 0.03, 1)
+    bpy.data.objects["ground"].data.materials[0].node_tree.nodes["Principled BSDF"].inputs["Base Color"].default_value = cf.srgb("#141a21")
+
+
 def main():
     argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
     ap = argparse.ArgumentParser()
@@ -576,19 +592,7 @@ def main():
            "stone": lambda: cf.mat_rock("Stone"),
            "plain": lambda: mat_plain("Painted", args.plain_debug, args.albedo, args.spec)}[args.material]()
     if args.light == "v6":
-        # the 2026-10-01 v6 look Tris picked: warm area key high front-left,
-        # dim blue fill and rim, dark blue world, dark ground, AgX
-        key = bpy.data.objects["key"]
-        key.location = (-1.9, -2.4, 8.6)
-        key.rotation_euler = (Vector((0, 0, 0.8)) - Vector(key.location)).to_track_quat("-Z", "Y").to_euler()
-        key.data.color = (1.0, 0.74, 0.45)
-        key.data.energy = args.key
-        bpy.data.lights["fill"].color = (0.45, 0.6, 1.0)
-        bpy.data.lights["fill"].energy = 150
-        bpy.data.lights["rim"].color = (0.6, 0.75, 1.0)
-        bpy.data.lights["rim"].energy = 90
-        bpy.data.worlds[0].node_tree.nodes["Background"].inputs[0].default_value = (0.008, 0.014, 0.03, 1)
-        bpy.data.objects["ground"].data.materials[0].node_tree.nodes["Principled BSDF"].inputs["Base Color"].default_value = cf.srgb("#141a21")
+        light_v6(args.key)
     if args.light == "warm":
         # the texture references read as sun + sky: a narrow warm sun from
         # nearly overhead (tops warm, sides untouched) and a blue sky dome
