@@ -53,18 +53,20 @@ See [**Painted light (removed)**](lighting-and-surfaces.md#painted-light-removed
 ## The ball and chain: painted steel
 
 **Since 2026-09-22 the BALL itself is a modelled prop** (`iron-ball` in `MESH_ASSETS`, see [**The asset store**](asset-store.md)) wearing the maps it was modelled with, and everything below is the surface the rest of the assembly wears - the chain, the manacle, and the ball's own stand-in until the model lands.
-It is a commissioned hammered cast-iron ball with a thin forged loop at its pole, wearing a full PBR set of its own: a dark iron albedo with pale seams between the hammer facets, the facets themselves modelled in the geometry (the normal map is all but flat), and packed AO/roughness/metalness in which the roughness averages 0.49 and the metalness 0.74, so it reads as worked iron rather than as chrome.
+It is a commissioned hammered cast-iron ball with a thin forged loop at its pole, wearing a full PBR set of its own.
+Since 2026-10-01 (the sixth delivery) its albedo is HAND-PAINTED - brush blotches and fine scratches on a neutral grey, on a second UV set of its own - and its hammering is a subtle normal map, with packed AO/roughness/metalness beside it.
 
 That is a **deliberate exception to this file rather than a revision of it**, and the two claims it puts under strain are named here because they were paid for: the avatar's surface is now a photograph rather than strokes (the argument against which is the whole of "Painting the photographed iron" below), and where the roughness map dips the environment is reflected sharply enough to test "nothing that stays put on a rolling ball" above.
-Since 2026-09-24 it is worn shiny (`MODEL_*` in `render3d/ballVisual.ts`): half its roughness, its 0.15 albedo lifted five times so a lit side and the hammer facets read in a dark cave, and metalness 0.85 so the lamps light it diffusely as well as in its reflection.
-The chain wears `painted steel` at half its map's roughness and 0.9 metalness under a near-white tint, for the same reason.
+It is worn as near-black, glossy iron (`MODEL_*` in `render3d/ballVisual.ts`, to Tris's 2026-10-01 reference of a dark cannonball whose facets show only where they catch the sky): a worn albedo of ~0.033 linear, roughness ~0.18 and metalness ~0.62, so half the surface is a diffuse lobe that keeps its form under the sun and the facets do not vanish into a black mirror.
+It reflects the level's geometry around it, not just the sky (`render3d/reflectionProbe.ts`, see lighting-and-surfaces.md).
+The chain and the manacle wear `painted steel` matched to those three numbers, so the assembly reads as one iron.
 What remains to be judged is whether a highlight now sits on the ball as a patch, and that is a judgement to be made by PLAYING it on a real GPU rather than off a headless still.
 
 The avatar wears its own set, **`painted steel`**, and it is the one surface in the game that is strokes rather than a photograph flattened: `scripts/bake-strokes.ts` lays a few thousand soft, part-opacity dabs over a steel-grey ground on a wrapped canvas, with a faint ridge along each stroke for the normal map and a dab-by-dab roughness, and writes the result into `assets-src/painted-steel/` as the set's raw, from where the ordinary pipeline (`bun run assets:paint "painted steel"`) optimises and hashes it like any other.
 The reference is an oil painting of a clean polished steel ball on a chain: a mid grey covered in broad low-contrast strokes that follow the form, and a shine that is the room reflected softly - warm ground below, pale sky above, a soft horizon.
 The strokes are paint on the object and turn with it; the reflection is the scene's own, soft and with its sun clipped (above), so the ball has a sheen and no sticker.
 Two numbers carry the read and both were wrong first: the **tile** is 2 m, so a stroke is a third of the ball (at half a metre the strokes were three pixels at play size - grain again), and the **metalness** is 0.6, so the strokes' own mid grey carries the ball's value in a dark level, where a mirror of a dark cave is a dark ball.
-The chain wears the same set at a multiple (`FORGED_SMALL`) that puts a link at the ball's grain, and the tint (`FORGED_TINT`) is nearly white since the strokes are baked at the steel's own value.
+The chain wears the same set at a multiple (`FORGED_SMALL`) that puts a link at the ball's grain, and the tint (`FORGED_TINT`, `#81817a` since 2026-10-01) darkens the strokes' mid grey to the ball's worn albedo; `roughness` 0.39 and `metalness` 0.62 on the set give the ball's gloss.
 
 Before this the avatar wore the photographed `rusted iron`, and everything tried on it is in the list below: its rust flecks were photographic detail on a painted ball whatever brush flattened them, and no treatment of its reflection was both metal and free of a fixed patch.
 

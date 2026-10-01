@@ -66,12 +66,20 @@ export const FORGED_SMALL = 5;
 // the links are metal, so this is their reflectance, and anything darker
 // turned them into black beads against a dark cave.
 //
+// Darkened to the ball (2026-10-01): next to the painted near-black model the
+// pale links read as a different metal. The strokes' 0.156 linear grey times
+// this tint lands the links at ~0.033, neutral - the ball's own worn albedo
+// (`MODEL_ALBEDO` over its map) - so ball, chain and cuff are one iron again.
+// The river's warm sun and lit sky are what keep that from being the black
+// beads above; the matching roughness and metalness are on the set itself
+// (`TEXTURE_ASSETS["painted steel"]`).
+//
 // It is NOT the authored-fill tint the surfaces rule keeps off authored sets
 // (see `TEXTURE_ASSETS`): that one is a level's flat colour leaking onto a
 // picture. This is the avatar's own material saying what shade of steel it is,
 // stated once here rather than baked into the shipped bytes, so it can be
 // changed by editing a constant instead of re-baking and re-publishing.
-const FORGED_TINT = "#f2eadf";
+const FORGED_TINT = "#81817a";
 
 // The assembly's surface, at the ball's own scale or a small part's. The
 // avatar's OWN copy of it (`avatar: true`), wearing the avatar's thinner air,
@@ -123,10 +131,15 @@ export function forgedMetal(tileScale?: number): THREE.MeshStandardMaterial {
 // scalar, ~0.35 and warm so the blue in the maps goes neutral, landing near
 // 0.033 linear. Metalness stays short of 1 (0.62 worn): at full metal the
 // river has too little to reflect and the facets vanish into a black ball.
+//
+// The sixth delivery (same day) swapped the albedo for a hand-painted,
+// neutral grey one (0.072 linear where the UVs land), so the tint is
+// re-derived to hold the worn iron where the approved look put it - about
+// 0.033, neutral - with the painted blotches now carrying the variation.
 const MODEL_ROUGHNESS = 0.5;
 const MODEL_METALNESS = 0.72;
 // Linear RGB, multiplied into the albedo map.
-const MODEL_ALBEDO = new THREE.Color().setRGB(0.38, 0.34, 0.27, THREE.LinearSRGBColorSpace);
+const MODEL_ALBEDO = new THREE.Color().setRGB(0.44, 0.47, 0.48, THREE.LinearSRGBColorSpace);
 
 // The model's materials, worn as the avatar: its shine, and the avatar's rules
 // (see `avatarSurface.ts`).
