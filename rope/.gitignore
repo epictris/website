@@ -30,3 +30,7 @@ public/generated/
 # bytecode Blender's own interpreter leaves beside the sources.
 .venv/
 __pycache__/
+# The cave-sheet study's renders: rebuilt by its scripts. The reference sheets
+# and the reviewed sheets are published sources under assets-src/studies/
+# instead. See docs/cave-look.md.
+tools/blender/cave-sheet-study/out/

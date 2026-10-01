@@ -22,5 +22,113 @@
   "scenes/textures/soft-moss-v2.png": {
     "sha256": "dbc1db41cb641473eec6179d7f59a63b749648b61d2759480c8a33df91c47947",
     "bytes": 1363845
+  },
+  "studies/cave-sheets/review/cmp_1_facets.png": {
+    "sha256": "e2737e9389d4341aafeeec9f8b2ee67faa02ce65470fb3ec07800a0e3f9527bd",
+    "bytes": 657051
+  },
+  "studies/cave-sheets/review/cmp_2_surface.png": {
+    "sha256": "13fa22e1a2604efaf042eefa274df1722cbc1ec408da327ca56009cca945d714",
+    "bytes": 672048
+  },
+  "studies/cave-sheets/review/cmp_3_moss.png": {
+    "sha256": "6440148ea0632bf4e4acf6e052e925fb4c66668539bf07c586903e8a63be1db4",
+    "bytes": 749460
+  },
+  "studies/cave-sheets/review/cmp_4_vines.png": {
+    "sha256": "09fa2930ffc37bdf6405fd6fe04f023eb41bff385699bb8219a7fc46d0862202",
+    "bytes": 734680
+  },
+  "studies/cave-sheets/review/cmp_5_plants.png": {
+    "sha256": "68ba0a14426de2d60940761d02885ce4cc0e36c8041f626dfc4f70c93fa62832",
+    "bytes": 668650
+  },
+  "studies/cave-sheets/review/cmp_6_mushrooms.png": {
+    "sha256": "09f804a71d7521b0c0127bcdf460e046f45177843b30ae7141ccf155b7ccd247",
+    "bytes": 743010
+  },
+  "studies/cave-sheets/review/cmp_7_sheet.png": {
+    "sha256": "38ea99422dd7516c4a64664c7b65872102d641a331821a3684441c2646ac8028",
+    "bytes": 2161353
+  },
+  "studies/cave-sheets/review/cmp_rock_attempts.png": {
+    "sha256": "2d4a1f8f7acaefaa32ef75c4d35db7a3672d49a3c7d0686629eed65f151989cc",
+    "bytes": 1331142
+  },
+  "studies/cave-sheets/review/cmp_rock_before.png": {
+    "sha256": "97d796f4c94e3eaf1a70a4a43d35a6ac4eeeed58a0864f0b9f629053145f5940",
+    "bytes": 659887
+  },
+  "studies/cave-sheets/review/cmp_rock_best.png": {
+    "sha256": "78173303ddd3732cb52fd9f270a2644a0550940be8d8c3188db83173088c48ca",
+    "bytes": 662721
+  },
+  "studies/cave-sheets/review/cmp_rock_sheet.png": {
+    "sha256": "063751442f4d32ac73d4999157cd4e1ea9cd6726bf5f893bafa8d74f07156824",
+    "bytes": 1907406
+  },
+  "studies/cave-sheets/review/cmp_texture_doc.png": {
+    "sha256": "1ccb60b4d4e4a795602e69d642cdd084604a828f8627a75ed3dcae59c2109206",
+    "bytes": 1401178
+  },
+  "studies/cave-sheets/review/cmp_v6_angles.png": {
+    "sha256": "93d2eeb5d78b291604b47a7a20f31b9a5e6ae6c094edb3f55f3aa4dcdc0489e4",
+    "bytes": 968974
+  },
+  "studies/cave-sheets/sheets/a_clean_concept_art_asset_sheet_style_image_on_a.png": {
+    "sha256": "dbaed58e1f55bb151eb82f13b8be5b92c255858fda6bb7d627c2e1204e8412f1",
+    "bytes": 2017123
+  },
+  "studies/cave-sheets/sheets/mid_ledge_rock_asset_sheet.png": {
+    "sha256": "0ff909c82dd2d2cfd56f9dff3876ada1413c7769407761981ddb80d5b3265492",
+    "bytes": 2000777
+  },
+  "studies/cave-sheets/sheets/mossy_boulder_turnaround_sheet.png": {
+    "sha256": "88c7e36ed38bb75686bf32e99eb8dd8ab67b18d1f8bcb668584ff85d878fa809",
+    "bytes": 1828538
+  },
+  "studies/cave-sheets/sheets/mossy_cave_arch_asset_sheet.png": {
+    "sha256": "94f53b448ee26d9f148f60b2f518c43c20f4fb5326f13e3e42a48048c0185fe0",
+    "bytes": 2128981
+  },
+  "studies/cave-sheets/sheets/mossy_cave_back_wall_asset_sheet.png": {
+    "sha256": "e88d1899577af8dd94d849b1ffe6fe06792490134f18845a0f7f05cdb948f5a2",
+    "bytes": 2172671
+  },
+  "studies/cave-sheets/sheets/mossy_cave_roof_asset_turnaround.png": {
+    "sha256": "370e4f8a6fc1b0efd342bcaf9d7e6270905a2fdac892489b591fe3a49d802200",
+    "bytes": 1946101
+  },
+  "studies/cave-sheets/sheets/mossy_right_ledge_rock_asset_sheet.png": {
+    "sha256": "76f03e4e660f5c6eab6f9fc61abf70cfc28ecdc7947bec857dd78a35e252121a",
+    "bytes": 1981946
+  },
+  "studies/cave-sheets/sheets/mossy_rock_asset_sheet_views.png": {
+    "sha256": "a613a61dffae9ccc577d14eccb226f65efe0133ae446566c01c3b53d2c0657c2",
+    "bytes": 2014381
+  },
+  "studies/cave-sheets/sheets/mossy_rock_ledge_asset_sheet.png": {
+    "sha256": "0c5f354972263dbe40493afbb034f4a70c6183d0cd7ddb424c5b3b2fc2e66fa5",
+    "bytes": 1838706
+  },
+  "studies/cave-sheets/sheets/mossy_rock_shelf_asset_sheet.png": {
+    "sha256": "15ff5c35d24c4f1e684f4c365e4b06330da370d812ffbc40a01ca72d732a554f",
+    "bytes": 1978599
+  },
+  "studies/cave-sheets/sheets/waterfall_cliff_asset_sheet.png": {
+    "sha256": "0fc45f3bf5a96c5d28fd5c277e661dabc33fe691124410e07a2639c59112ef07",
+    "bytes": 2154270
+  },
+  "studies/cave-sheets/texture/rock-texture-ref1.png": {
+    "sha256": "2ae3f23577e92273187ea5b646fed905747d9ba77004046850cdc1b083325af5",
+    "bytes": 199916
+  },
+  "studies/cave-sheets/texture/rock-texture-ref2.png": {
+    "sha256": "4cdd93070dea7135722d5644f1c6979b5c41f6c06ddb96f638b55b980d34b695",
+    "bytes": 394464
+  },
+  "studies/cave-sheets/texture/rock-texture-ref3.png": {
+    "sha256": "7f91011bdbeb10233375d2dee3aece910b4d6939a49a3a50459d08591cc3d696",
+    "bytes": 609440
   }
 }

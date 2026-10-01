@@ -161,6 +161,7 @@ Rendering
 - [blender-formations](docs/blender-formations.md) - the formations add-on: rock masses from outlines, the game camera baked into the guide, outlines edited as that camera sees them, depth moves that keep screen size, planted growth; the Sunken Grotto.
 - [rock-assets](docs/rock-assets.md) - retired 2026-09-29: the hand-authored rock and moss props (now in `river.blend`), and where their lessons are.
 - [rocks](docs/rocks.md) - retired: the earlier generated rocks, rejected 2026-09-24.
+- [cave-look](docs/cave-look.md) - the 2026-10-01 cave asset sheet study: the chosen rock recipe and painted slate shader with every number, the attempts that were dropped and why, where the references and reviewed sheets live.
 - [asset-store](docs/asset-store.md) - the release-hosted binaries, budgets, the optimise pipelines, licensing and credits.
 - [loading-screen](docs/loading-screen.md) - the inlined store, the two-halves bar, the warm frame.
 
