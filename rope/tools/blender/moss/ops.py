@@ -346,7 +346,10 @@ def register_handlers():
         bpy.app.handlers.depsgraph_update_post.append(_on_depsgraph)
     if _on_load not in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.append(_on_load)
-    _on_load()
+    # At startup the add-on registers while bpy.data is still restricted
+    # (reading objects raises), so the baseline is taken from a one-shot
+    # timer once Blender is up; enabled from the preferences it runs at once.
+    bpy.app.timers.register(_on_load, first_interval=0.0)
 
 
 def unregister_handlers():
