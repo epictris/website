@@ -66,8 +66,11 @@ just scene ball           # export, optimise, report
 just publish              # before committing a level that shows the scene
 ```
 
-`just scene-guide <level>` (`scripts/scene-guide.ts`, `tools/blender/scene_guide.py`) writes the level's collision into **`<scene>-guide.blend`**: one object per body, its collision outlines extruded through the body's thickness (the thickest of its pieces' `thickness`, else `DEFAULT_THICKNESS` - what the grey box draws) and centred on the gameplay plane, with the object's origin on the body's origin (`guide.<name>`, or `guide.body-<index>` for an unnamed one), an empty on every origin, the gameplay plane's extent as a wire rectangle, and a sphere of the avatar's radius at the spawn.
-Solids draw translucent with their wire, areas as wire.
+`just scene-guide <level>` (`scripts/scene-guide.ts`, `tools/blender/scene_guide.py`) writes the level's collision into **`<scene>-guide.blend`**: one flat curve per collision piece on the gameplay plane, a closed POLY spline on exactly the editor's points (and a second for a belt's hole), with the object's origin on the body's origin (`guide.<name>`, or `guide.body-<index>` for an unnamed one, then `.1`, `.2`, ... when the body has several pieces), an empty on every body's origin, the gameplay plane's extent as a wire rectangle, and a sphere of the avatar's radius at the spawn.
+Solids are filled, areas are the outline alone.
+The guide has no depth: it says where the collision is on the plane, and the dressing decides how deep it is.
+A piece is a ready outline for the formations add-on's **New Formation** ([blender-formations](blender-formations.md#formations)).
+Until 2026-10-02 the guide was meshes, each body's outlines extruded through its thickness; Blender filled their faces along a normal that was never computed, so concave outlines came out as fans of triangles outside the collision.
 The guide also carries the **game camera**, `guide.camera`: the level's lens, keyed on every frame at 60 fps through the real camera controller along the level's camera paths (or along a recorded run, `--ride <bundle>`), so looking through it in Blender is looking through the game ([blender-formations](blender-formations.md#the-game-camera)).
 It **creates `<scene>.blend`** when there is none, with the `Guide` collection linked from the guide file, so reopening the scene after a level edit shows the current colliders and the dressing is always modelled against the outline the ball actually rolls on.
 The guide file is overwritten on every run and never exports.

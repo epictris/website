@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import math
+
 import bpy
+from mathutils import Matrix
 from bpy.props import BoolProperty, EnumProperty, FloatProperty, IntProperty, StringProperty
 
 from . import core, growth, view
@@ -53,6 +56,24 @@ class FORMATIONS_OT_look(bpy.types.Operator):
             return {"CANCELLED"}
 
 
+def outline_of_curve(ob):
+    """The outline a new formation takes from a selected curve, and the frame
+    its rock is placed in. A 3D curve keeps its outline in its local X/Z plane,
+    as a formation's own outline does; a flat (2D) curve - a scene guide's
+    collision piece - keeps it in its local X/Y, so the rock is turned a quarter
+    about X to stand on it, its front where the curve faces."""
+    if not ob or ob.type != "CURVE" or len(ob.data.splines) != 1:
+        raise ValueError("Select a curve with a single outline (a guide piece with a hole will not do)")
+    sp = ob.data.splines[0]
+    if sp.type != "POLY" or not sp.use_cyclic_u:
+        raise ValueError("Use a closed POLY curve")
+    if ob.data.dimensions == "2D":
+        return [[p.co.x, p.co.y] for p in sp.points], ob.matrix_world @ Matrix.Rotation(-math.pi / 2, 4, "X")
+    if any(abs(p.co.y) > .001 for p in sp.points):
+        raise ValueError("Use a flat curve, or a 3D curve in its local X/Z plane")
+    return [[p.co.x, p.co.z] for p in sp.points], ob.matrix_world.copy()
+
+
 class FORMATIONS_OT_generate(bpy.types.Operator):
     """Build a formation's rock in a separate process; the scene stays editable"""
     bl_idname = "formations.generate"
@@ -60,33 +81,66 @@ class FORMATIONS_OT_generate(bpy.types.Operator):
     bl_options = {"REGISTER", "UNDO"}
 
     mode: EnumProperty(items=[("CREATE", "Create", ""), ("REBUILD", "Rebuild", ""), ("VARIANT", "New variant", "")])
-    preset: EnumProperty(items=[(x.upper(), x.title(), "") for x in ("terrace", "pillar", "wall", "arch", "distant")])
+    generator: EnumProperty(name="Generator", items=[
+        ("FITTED", "Fitted slate", "Recipe F rocks sized and turned to fit the outline, fused into one mass: "
+                                   "the cave look (docs/cave-look.md)"),
+        ("BOULDERS", "Boulder generator", "The fork's slab generator, cut to the outline"),
+    ])
+    preset: EnumProperty(name="Starting outline",
+                         items=[(x.upper(), x.title(), "") for x in ("terrace", "pillar", "wall", "arch", "distant")])
     seed: IntProperty(default=31, min=0)
     depth: FloatProperty(name="Thickness", default=1.05, min=.02, max=50)
+    smallest_rock: FloatProperty(name="Smallest rock", description="A rock's smallest long half-length",
+                                 default=.25, min=.05, max=10, subtype="DISTANCE")
+    largest_rock: FloatProperty(name="Largest rock", description="A rock's largest long half-length",
+                                default=3.0, min=.1, max=50, subtype="DISTANCE")
     fractures: FloatProperty(default=1.3, min=.5, max=30)
     weathering: FloatProperty(default=.25, min=0, max=1)
     detail: IntProperty(name="Face budget", default=1000, min=200, max=10000)
-    use_outline: BoolProperty(name="From the selected closed poly curve", default=False)
+    use_outline: BoolProperty(name="From the selected outline (a curve or guide piece)", default=False)
 
     def invoke(self, context, event):
-        if self.mode != "CREATE":
+        if self.mode == "CREATE":
+            ob = context.active_object
+            self.use_outline = bool(ob and ob.type == "CURVE" and ob.select_get())
+        else:
             try:
                 r = core.recipe_for(active_formation(context))
                 self.preset = r["preset"].upper()
+                self.generator = r.get("generator", "boulders").upper()
                 p = r["params"]
-                self.seed, self.depth, self.fractures = p["seed"], p["depth"], p["slabsPerArea"]
-                self.weathering, self.detail = p["weathering"], p["faceBudget"]
+                self.seed, self.depth = p["seed"], p["depth"]
+                self.smallest_rock = p.get("smallestRock", self.smallest_rock)
+                self.largest_rock = p.get("largestRock", self.largest_rock)
+                self.fractures = p.get("slabsPerArea", self.fractures)
+                self.weathering = p.get("weathering", self.weathering)
+                self.detail = p.get("faceBudget", self.detail)
             except (KeyError, ValueError) as e:
                 self.report({"ERROR"}, str(e))
                 return {"CANCELLED"}
         return context.window_manager.invoke_props_dialog(self, width=340)
 
     def draw(self, context):
-        for field in ("preset", "seed", "depth", "fractures", "weathering", "detail"):
+        fields = ["generator"]
+        if self.mode == "CREATE" and not self.use_outline:
+            fields.append("preset")
+        fields += ["seed", "depth"]
+        fields += (["smallest_rock", "largest_rock"] if self.generator == "FITTED"
+                   else ["fractures", "weathering", "detail"])
+        for field in fields:
             self.layout.prop(self, field)
         if self.mode == "CREATE":
             self.layout.prop(self, "use_outline")
         self.layout.label(text="Builds in a separate process; Esc discards the result.")
+
+    def params(self):
+        if self.generator == "FITTED":
+            if self.smallest_rock > self.largest_rock:
+                raise ValueError("The smallest rock is larger than the largest")
+            return {"seed": self.seed, "depth": self.depth,
+                    "smallestRock": self.smallest_rock, "largestRock": self.largest_rock}
+        return {"seed": self.seed, "depth": self.depth, "slabsPerArea": self.fractures,
+                "weathering": self.weathering, "faceBudget": self.detail}
 
     def execute(self, context):
         try:
@@ -98,16 +152,10 @@ class FORMATIONS_OT_generate(bpy.types.Operator):
             if self.mode != "CREATE":
                 recipe = core.recipe_for(self._target)
             elif self.use_outline:
-                ob = self._target
-                if not ob or ob.type != "CURVE" or len(ob.data.splines) != 1:
-                    raise ValueError("Select a single closed poly curve")
-                sp = ob.data.splines[0]
-                if sp.type != "POLY" or not sp.use_cyclic_u or any(abs(p.co.y) > .001 for p in sp.points):
-                    raise ValueError("Use a closed POLY curve in its local X/Z plane")
-                recipe["outline"] = [[p.co.x, p.co.z] for p in sp.points]
+                recipe["outline"], self._frame = outline_of_curve(self._target)
             recipe["preset"] = self.preset.lower()
-            recipe.setdefault("params", {}).update(seed=self.seed, depth=self.depth, slabsPerArea=self.fractures,
-                                                   weathering=self.weathering, faceBudget=self.detail)
+            recipe["generator"] = self.generator.lower()
+            recipe["params"] = self.params()
             self._proc, self._out, self._log = core.launch_worker(recipe)
             self._timer = context.window_manager.event_timer_add(.5, window=context.window)
             context.window_manager.modal_handler_add(self)
@@ -131,9 +179,10 @@ class FORMATIONS_OT_generate(bpy.types.Operator):
             if self._proc.returncode:
                 raise ValueError(core.worker_failure(self._out))
             if self.mode == "CREATE":
-                ob = core.append_rock(self._out / "rock.blend", self.preset.title())
+                name = "Fitted slate" if self.generator == "FITTED" else self.preset.title()
+                ob = core.append_rock(self._out / "rock.blend", name)
                 if self._target is not None:
-                    ob.parent.matrix_world = self._target.matrix_world.copy()
+                    ob.parent.matrix_world = self._frame
                 else:
                     ob.parent.location = context.scene.cursor.location
             else:

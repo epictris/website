@@ -33,7 +33,6 @@ import {
   type LevelBodyData,
   type RawLevelData,
 } from "../src/level/levelFormat";
-import { DEFAULT_THICKNESS } from "../src/lib/shapeGeometry";
 import { outlineOfData } from "../src/render/shapePath";
 import { isSceneName } from "../src/render3d/scenes";
 import { LEVELS } from "../src/level/registry";
@@ -74,13 +73,18 @@ const level = scaleLevelData(raw, PX);
 const game = (p: Vec2): [number, number] => [round(p.x), round(-p.y)];
 const round = (v: number): number => Math.round(v * 10000) / 10000;
 
-function outlines(b: LevelBodyData): [number, number][][] {
-  const out: [number, number][][] = [];
+// A body's collision pieces as world-space outlines, each with its hole if it
+// has one (a belt's band).
+type Piece = { outline: [number, number][]; hole: [number, number][] | null };
+function pieces(b: LevelBodyData): Piece[] {
+  const out: Piece[] = [];
   for (const o of b.objects) {
     if (!isCollisionObject(o)) continue;
     const w = worldPlacement(b, o);
+    const toGame = (vs: readonly Vec2[]) => vs.map((v) => game(v.rotated(w.rot).add(w.pos)));
     const shape = outlineOfData(o.shape);
     let local: Vec2[];
+    let hole: readonly Vec2[] | undefined;
     if (shape.kind === "circle") {
       local = [];
       for (let i = 0; i < CIRCLE_SEGMENTS; i++) {
@@ -92,20 +96,11 @@ function outlines(b: LevelBodyData): [number, number][][] {
       local = [new Vec2(-h.x, -h.y), new Vec2(h.x, -h.y), new Vec2(h.x, h.y), new Vec2(-h.x, h.y)];
     } else {
       local = [...shape.verts];
+      hole = shape.hole;
     }
-    out.push(local.map((v) => game(v.rotated(w.rot).add(w.pos))));
+    out.push({ outline: toGame(local), hole: hole ? toGame(hole) : null });
   }
   return out;
-}
-
-// How thick the body IS: the thickest of its pieces (`CollisionObjectData.
-// thickness`, what its mass is computed from), which is also what a level with
-// no scene draws it as (`BodyVisual`'s grey box). The guide extrudes one depth
-// per body, so a body of several thicknesses is guided at its thickest.
-function depthOf(b: LevelBodyData): number {
-  let depth = 0;
-  for (const o of b.objects) if (isCollisionObject(o)) depth = Math.max(depth, o.thickness ?? DEFAULT_THICKNESS);
-  return depth;
 }
 
 const SOLID_KINDS = new Set(["static", "rigid"]);
@@ -118,13 +113,13 @@ const bodies = level.bodies
     kind: b.kind,
     solid: SOLID_KINDS.has(b.kind),
     origin: game(new Vec2(b.x, b.y)),
-    depth: round(depthOf(b)),
-    outlines: outlines(b),
+    pieces: pieces(b),
   }));
 if (!bodies.length) fail(`${levelName} has no collision to guide against`);
 
-const xs = bodies.flatMap((b) => b.outlines.flat().map((p) => p[0]));
-const ys = bodies.flatMap((b) => b.outlines.flat().map((p) => p[1]));
+const points = bodies.flatMap((b) => b.pieces.flatMap((p) => p.outline));
+const xs = points.map((p) => p[0]);
+const ys = points.map((p) => p[1]);
 // The game camera: along the level's camera paths, or along a recorded run.
 function cameraTrack(): CameraTrack {
   const spec = Object.entries(LEVELS).find(([, s]) => s.file === levelName);

@@ -14,17 +14,20 @@ The job (metres, the GAME's frame: x right, y up, z toward the camera):
      "camera": {"fps": 60, "focalLength": 70.0, "aspect": 1.78, "far": 400,
                 "source": "...", "frames": [{"eye": [x, y, z], "halfHeight": ..}, ...]},
      "bodies": [{"index": 3, "name": "Ledge_03" | null, "kind": "static", "solid": true,
-                 "origin": [x, y], "depth": 0.2,
-                 "outlines": [[[x, y], ...], ...]}, ...]}
+                 "origin": [x, y],
+                 "pieces": [{"outline": [[x, y], ...], "hole": [[x, y], ...] | null}, ...]}, ...]}
 
 What is written, all in one collection called `Guide`:
 
-- one object per body, its collision outlines extruded through the body's drawn
-  depth, centred on the gameplay plane, with the object's origin at the BODY's
-  origin - so the artist snaps to it, and an object placed on the body's origin
-  needs no offset. Named `guide.<name>`, or `guide.body-<index>` for an
-  unnamed body. A solid draws as a translucent grey with its wire; an area
-  (water, a force, a killzone, the finish) draws as wire alone.
+- one flat curve per collision piece on the gameplay plane: a closed POLY
+  spline on exactly the editor's points (and a second for a belt's hole), with
+  the object's origin at the BODY's origin - so the artist snaps to it, and an
+  object placed on the body's origin needs no offset. Named `guide.<name>`, or
+  `guide.body-<index>` for an unnamed body, with `.1`, `.2`, ... after it when
+  the body has several pieces. A solid is filled translucent grey with its
+  wire; an area (water, a force, a killzone, the finish) is the outline alone.
+  The formations add-on builds a rock from one ("New Formation", from the
+  selected outline).
 - an empty on every body's origin, `guide.<name>.origin`, plain axes.
 - `guide.plane`: the gameplay plane's extent as a wire rectangle.
 - `guide.spawn`: a sphere of the avatar's radius at the spawn.
@@ -59,6 +62,9 @@ SOLID_COLOR = (0.55, 0.58, 0.68, 0.35)
 AREA_COLOR = (0.35, 0.65, 0.75, 1.0)
 PLANE_MARGIN = 2.0  # metres past the level's extent
 ORIGIN_SIZE = 0.25
+# A flat curve lies in its object's X/Y plane; turned a quarter about X, its
+# (x, y) is Blender's (x, 0, y), the game's (x, y) on the gameplay plane.
+CURVE_UPRIGHT = (math.pi / 2, 0.0, 0.0)
 
 
 def log(msg):
@@ -92,37 +98,23 @@ def guide_material():
     return mat
 
 
-def body_mesh(body):
-    """The body's outlines extruded through its depth, about the body's origin."""
-    bm = bmesh.new()
-    ox, oy = body["origin"]
-    half = body["depth"] / 2
-    for outline in body["outlines"]:
-        if len(outline) < 3:
+def piece_curve(name, piece, origin):
+    """One collision piece as a flat curve: its outline, and its hole if it has
+    one, each a closed POLY spline exactly on the editor's points, about the
+    body's origin. Blender fills a flat curve itself and leaves a nested spline
+    empty."""
+    ox, oy = origin
+    curve = bpy.data.curves.new(name, "CURVE")
+    curve.dimensions = "2D"
+    for ring in (piece["outline"], piece["hole"]):
+        if not ring or len(ring) < 3:
             continue
-        # Front toward the camera is +z in the game, so Blender -y.
-        front = [bm.verts.new(to_blender(x - ox, y - oy, half)) for x, y in outline]
-        back = [bm.verts.new(to_blender(x - ox, y - oy, -half)) for x, y in outline]
-        caps = []
-        try:
-            caps.append(bm.faces.new(front))
-            caps.append(bm.faces.new(list(reversed(back))))
-        except ValueError:
-            pass  # a degenerate outline (repeated vertex); the sides still say where it is
-        n = len(outline)
-        for i in range(n):
-            j = (i + 1) % n
-            try:
-                bm.faces.new((front[i], front[j], back[j], back[i]))
-            except ValueError:
-                pass
-        if caps:
-            bmesh.ops.triangulate(bm, faces=caps)
-    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
-    me = bpy.data.meshes.new(f"guide.{body_label(body)}")
-    bm.to_mesh(me)
-    bm.free()
-    return me
+        spline = curve.splines.new("POLY")
+        spline.points.add(len(ring) - 1)
+        for pt, (x, y) in zip(spline.points, ring):
+            pt.co = (x - ox, y - oy, 0.0, 1.0)
+        spline.use_cyclic_u = True
+    return curve
 
 
 def body_label(body):
@@ -133,22 +125,27 @@ def build_guide(job, coll):
     mat = guide_material()
     for body in job["bodies"]:
         label = body_label(body)
-        me = body_mesh(body)
-        ob = bpy.data.objects.new(f"guide.{label}", me)
-        ob.location = to_blender(*body["origin"])
-        ob.show_wire = True
-        if body["solid"]:
-            me.materials.append(mat)
-            ob.color = SOLID_COLOR
-        else:
-            ob.display_type = "WIRE"
-            ob.color = AREA_COLOR
-        link(coll, ob)
+        location = to_blender(*body["origin"])
+        pieces = body["pieces"]
+        for k, piece in enumerate(pieces):
+            name = f"guide.{label}" if len(pieces) == 1 else f"guide.{label}.{k + 1}"
+            curve = piece_curve(name, piece, body["origin"])
+            ob = bpy.data.objects.new(name, curve)
+            ob.location = location
+            ob.rotation_euler = CURVE_UPRIGHT
+            if body["solid"]:
+                curve.fill_mode = "BOTH"
+                curve.materials.append(mat)
+                ob.color = SOLID_COLOR
+            else:
+                curve.fill_mode = "NONE"
+                ob.color = AREA_COLOR
+            link(coll, ob)
 
         origin = bpy.data.objects.new(f"guide.{label}.origin", None)
         origin.empty_display_type = "PLAIN_AXES"
         origin.empty_display_size = ORIGIN_SIZE
-        origin.location = ob.location
+        origin.location = location
         link(coll, origin)
 
     lo, hi = job["bounds"]["min"], job["bounds"]["max"]

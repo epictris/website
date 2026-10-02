@@ -62,7 +62,27 @@ Growth rides along (it hangs from the placement), and is then stale: it is sized
 
 A formation is a mesh carrying `formation_recipe` (the outline and the generator's parameters), under a **placement** empty that positions it.
 **New Formation** builds one from a preset outline, or from a selected closed poly curve; **Rebuild** and **New Variant** rerun the generator with changed parameters.
-The generator is `tools/blender/boulders`, unmodified, driven by `formations/worker.py` in ordinary Python (rope/.venv) and `formations/assemble.py` in a headless Blender, so the scene stays editable while a rock builds.
+A selected curve ticks "From the selected outline" on its own.
+A 3D curve gives its outline in its local X/Z plane, as a formation's own outline does; a flat (2D) curve gives it in its local X/Y, and the rock is turned a quarter about X to stand on it.
+So a **guide piece** is a ready outline: select `guide.boulder-3` (linked, it need not be made local) and New Formation builds a rock on exactly the collision the ball rolls on, placed on the body's origin.
+A piece with a hole (a belt's band) is two splines and is refused.
+The rock is built out of process, by `formations/worker.py` in ordinary Python (rope/.venv) and `formations/assemble.py` in a headless Blender, so the scene stays editable while it builds.
+The dialog's **Generator** picks how (the recipe's `generator`; a recipe without one is the boulder generator's), and the **starting outline** (terrace, pillar, wall, arch, distant) is only an outline and a thickness to start from when no curve is selected:
+
+- **Fitted slate** (`fitted`, the default since 2026-10-02, `formations/fitted.py`): [cave-look](cave-look.md)'s recipe F rocks of many sizes, fitted to the outline and fused into one mass.
+  Over a grid of the outline as the game camera sees it, it finds the deepest part no rock covers yet, builds a rock a little bigger than that gap (between **Smallest rock** and **Largest rock**, long half-lengths), and keeps the spot and turn about the view axis that covers the most new outline, less what spills past it; so big areas take big rocks and the slivers left between them are not filled with rubble.
+  Rocks are built at their real size: their form (corner cuts, bevel) in proportion, their detail (2.5 cm remesh, chisel, relief) in metres, so a big rock is as finely worked as a small one.
+  Recipe F's chisel is bounded here, each cut a box reaching 0.2 to 0.5 m, since the study's unbounded planes would take a 45 cm wedge off a 3 m face.
+  Behind the rocks is the **core**, the outline extruded, rounded and shrunk 30 cm inside it, so the rock has no hole through it and the collision outline itself is never seen (where it showed, it was a flat end and a straight edge); edge rocks are let spill a little so they reach the outline; a voxel remesh then fuses rocks and core into one body (as the boulder generator fuses its slabs), and the facets are cut over the whole at recipe F's density.
+  Nothing is clipped to the outline: clipping looks artificial.
+  On `dark-rock-4` (18 m²) it is 14 rocks, about 3900 faces, in about 5 s.
+  Tried and dropped on the way, the same day: rocks in fixed tiers (read as a pile of stones, and large areas cut into small rocks), backing layers of bigger stones (their seams met the front's and left holes), a core held inside the outline (the silhouette fell short), and rocks built at 1 m and scaled up (detail grows with the rock).
+- **Boulder generator** (`boulders`): `tools/blender/boulders`, unmodified, slabs cut to the outline and unioned.
+
+A new rock is one material, the **painted slate** ([cave-look](cave-look.md#surface-the-painted-slate-shader-and-the-v6-rig)), built by `formations/slate.py`, with a random per-face `facet` float for its per-facet tone.
+The generator's own tinted stones (five slots and a worn edge, the fork's dark teal `[.028, .063, .082]`) are not used since 2026-10-02.
+The shader's Ambient Occlusion and Bevel nodes are Cycles only: the export bakes the whole Base Color to vertex colour in Cycles, so the game gets the darkened crevices and the edge line, while EEVEE's Material Preview shows the stone without them.
+A rebuild keeps the formation's materials, so a rock made before then keeps its teal until its material is replaced (or it is made again).
 
 A generated mesh is sealed (`formation_mesh_hash`); one edited by hand is protected from being rebuilt over, and **Keep As Manual Mesh** says so on purpose.
 **Show Source Slabs** and **Assemble Edited Slabs** expose the generator's pieces and join edited ones into a manual mesh.

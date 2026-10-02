@@ -64,7 +64,7 @@ Rock-b ends at 6 objects, 678 faces, 1566 triangles.
 
 | Node | Setting | Role |
 |---|---|---|
-| Principled BSDF | roughness 0.95, Specular IOR Level 0.1 (`--spec 0.1`) | matte; the Bevel node's normal feeds Normal |
+| Principled BSDF | roughness 1.0, Specular IOR Level 0.1 (`--spec 0.1`) | matte; the Bevel node's normal feeds Normal (not in the formations port, `formations/slate.py`: glTF cannot carry it) |
 | Mix of two colours by a Noise (scale 0.9, detail 2) | `#2f3546` cool, `#3b3e4a` warm (`--albedo v6`) | a slow drift across the block |
 | Attribute `facet`, Map Range to 0.92 to 1.08 | multiplies | a slightly different tone per facet |
 | Noise scale 35, detail 3, Map Range to 0.96 to 1.04 | multiplies | faint grain |

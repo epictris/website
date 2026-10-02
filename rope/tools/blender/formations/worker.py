@@ -6,6 +6,8 @@ Run with ORDINARY Python (rope/.venv: numpy, scipy, shapely), never Blender's:
 the boulder generator (tools/blender/boulders, unmodified) cuts the outline
 into slabs here, and a headless Blender (`assemble.py`) joins them into
 `OUT_DIR/rock.blend`, which the Formations panel then validates and swaps in.
+The fitted slate generator (`fitted.py`) needs nothing here: it is built
+entirely in that headless Blender.
 Running out of process is what keeps the artist's scene editable, and
 cancellable, while a rock builds.
 """
@@ -36,38 +38,57 @@ PRESETS = {
 }
 
 # The generator's parameters for scenery: the approved boulder construction at
-# scenery scale and detail. A recipe's own `params` override these.
+# scenery scale and detail. A recipe's own `params` override these. Its
+# material parameters are not here: a formation's stone is the painted slate
+# (slate.py), not the generator's tinted stones.
 DEFAULT_PARAMS = {
     "seed": 31, "slabsPerArea": 1.3, "faceBudget": 1000, "detail": .25, "voxelCap": .045,
-    "tolerance": .07, "weathering": .25, "variation": .025, "grainScale": 0, "bumpStrength": 0,
-    "wornEdgeLift": 1.12, "color": [.028, .063, .082],
+    "tolerance": .07, "weathering": .25,
+}
+
+# What builds the rock, by the recipe's `generator` (a recipe without one is
+# the boulder generator's): its parameters and their defaults. `fitted` is
+# recipe F's rocks fitted to the outline and fused (fitted.py); a rock's long
+# half-length runs from `smallestRock` to `largestRock`, in metres.
+GENERATORS = {
+    "boulders": DEFAULT_PARAMS,
+    "fitted": {"seed": 31, "smallestRock": 0.25, "largestRock": 3.0},
 }
 
 
 def fingerprint():
-    """What built the rock: this adapter and the generator, byte for byte."""
+    """What built the rock: this adapter and the generators, byte for byte."""
     h = hashlib.sha256()
-    for p in [Path(__file__), HERE / "assemble.py", *sorted(GENERATOR.glob("*.py")), GENERATOR / "params.json"]:
+    for p in [Path(__file__), HERE / "assemble.py", HERE / "fitted.py", HERE / "slate.py",
+              *sorted(GENERATOR.glob("*.py")), GENERATOR / "params.json"]:
         h.update(p.name.encode())
         h.update(p.read_bytes())
     return h.hexdigest()
 
 
 def prepare(recipe, output):
-    sys.path.insert(0, str(GENERATOR))
-    import rockgen
-
     kind = recipe.get("preset", "terrace")
     base = PRESETS[kind]
-    params = {**DEFAULT_PARAMS, "depth": base["depth"], **recipe.get("params", {})}
+    generator = recipe.get("generator", "boulders")
+    defaults = GENERATORS[generator]
+    # Only the chosen generator's parameters: a rebuild that switches
+    # generator does not carry the other's into the recipe.
+    given = {k: v for k, v in recipe.get("params", {}).items() if k in defaults or k == "depth"}
+    params = {**defaults, "depth": base["depth"], **given}
     outline = recipe.get("outline", base["outline"])
-    source = output / "request.json"
-    source.write_text(json.dumps({"outline": outline, "params": params}))
-    spec = rockgen.read_specs(source)[0]
-    spec["name"] = "SceneryRock"
-    rock = rockgen.make_rock(spec)
-    (output / "geometry.json").write_text(json.dumps({"rocks": [rock]}, separators=(",", ":")))
-    resolved = {"version": 1, "preset": kind, "outline": outline, "params": params, "generatorHash": fingerprint()}
+    if generator == "boulders":
+        sys.path.insert(0, str(GENERATOR))
+        import rockgen
+
+        source = output / "request.json"
+        source.write_text(json.dumps({"outline": outline, "params": params}))
+        spec = rockgen.read_specs(source)[0]
+        spec["name"] = "SceneryRock"
+        rock = rockgen.make_rock(spec)
+        (output / "geometry.json").write_text(json.dumps({"rocks": [rock]}, separators=(",", ":")))
+    # The fitted slate is all Blender: assemble.py builds it from the recipe.
+    resolved = {"version": 1, "preset": kind, "generator": generator, "outline": outline, "params": params,
+                "generatorHash": fingerprint()}
     (output / "recipe.json").write_text(json.dumps(resolved, indent=2))
 
 
