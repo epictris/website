@@ -91,7 +91,7 @@ try {
     writeFileSync(shipped, readFileSync(raw));
     console.log(`[scene] --raw: shipped Blender's own file, unoptimised`);
   } else {
-    const opt = spawnSync("bun", ["run", join(ROOT, "scripts", "optimize-asset.ts"), raw, shipped, "--keep-nodes", "--keep-hierarchy"], {
+    const opt = spawnSync("bun", ["run", join(ROOT, "scripts", "optimize-asset.ts"), raw, shipped, "--keep-nodes", "--keep-hierarchy", "--baked-maps"], {
       encoding: "utf8",
     });
     // The optimiser's own summary line, and none of its MESH_ASSETS advice,

@@ -8,7 +8,7 @@ import bpy
 from mathutils import Matrix
 from bpy.props import BoolProperty, EnumProperty, FloatProperty, IntProperty, StringProperty
 
-from . import core, growth, view
+from . import core, growth, slate, view
 
 
 def redraw(context):
@@ -346,6 +346,27 @@ class FORMATIONS_OT_plant(bpy.types.Operator):
             return {"CANCELLED"}
 
 
+class FORMATIONS_OT_tone_facets(bpy.types.Operator):
+    """Tone each face by its orientation, so faces pointing almost the same way share a colour, and shade the rocks flat"""
+    bl_idname = "formations.tone_facets"
+    bl_label = "Tone Facets"
+    bl_options = {"REGISTER", "UNDO"}
+
+    scope: EnumProperty(items=[("SELECTED", "Selected", ""), ("ALL", "All", "")])
+
+    def execute(self, context):
+        rocks = selected_formations(context) if self.scope == "SELECTED" else core.formations()
+        if not rocks:
+            self.report({"INFO"}, "No formations to tone")
+            return {"FINISHED"}
+        # A rock built since 2026-10-02 is toned by its build already; this
+        # brings an older one to the same state, and moves no vertex, so growth
+        # and rebuild state stay as they were.
+        faces = sum(slate.tone_facets(ob, core.recipe_for(ob)["params"]["seed"]) for ob in rocks)
+        self.report({"INFO"}, f"Toned {len(rocks)} formations ({faces} faces)")
+        return {"FINISHED"}
+
+
 class FORMATIONS_OT_edit(bpy.types.Operator):
     """Edit outlines as the game camera sees them"""
     bl_idname = "formations.edit"
@@ -433,4 +454,4 @@ class FORMATIONS_OT_depth(bpy.types.Operator):
 
 
 CLASSES = (FORMATIONS_OT_look, FORMATIONS_OT_generate, FORMATIONS_OT_rebuild_changed, FORMATIONS_OT_action,
-           FORMATIONS_OT_plant, FORMATIONS_OT_edit, FORMATIONS_OT_polygon, FORMATIONS_OT_depth)
+           FORMATIONS_OT_plant, FORMATIONS_OT_tone_facets, FORMATIONS_OT_edit, FORMATIONS_OT_polygon, FORMATIONS_OT_depth)

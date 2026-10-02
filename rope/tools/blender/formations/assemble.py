@@ -26,7 +26,7 @@ from blender_build import assemble_rock, mesh_health  # noqa: E402
 
 from formations.core import validate_worker  # noqa: E402
 from formations import fitted  # noqa: E402
-from formations.slate import add_facets, painted_slate  # noqa: E402
+from formations.slate import painted_slate, tone_facets  # noqa: E402
 
 out = Path(sys.argv[sys.argv.index("--") + 1])
 recipe = json.loads((out / "recipe.json").read_text())
@@ -62,7 +62,7 @@ try:
     obj.data.update()
 finally:
     bm.free()
-add_facets(obj, recipe["params"]["seed"])
+tone_facets(obj, recipe["params"]["seed"])
 
 validate_worker(obj, src)
 src.hide_render = True

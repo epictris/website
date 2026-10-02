@@ -3194,7 +3194,7 @@
           "kind": "spot",
           "z": -100,
           "color": "#ffe0b8",
-          "intensity": 220,
+          "intensity": 500,
           "range": 1200,
           "angle": 28,
           "penumbra": 1,

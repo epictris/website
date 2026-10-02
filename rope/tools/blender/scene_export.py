@@ -27,10 +27,11 @@ binding: the renderer mounts an object named like a body at Blender's pose
 minus the body's rest pose and lets the body carry it (render3d/sceneDressing.ts).
 Modifiers are applied. Materials go as glTF can carry them - a Principled BSDF
 with image textures, a constant tint on one, alpha clipped by a threshold - and
-a PROCEDURAL Base Color (noise, ramps, mixes: what the formations' stone is) is
-baked by Cycles into a vertex colour on the exported copy and wired back in, so
-it goes as `COLOR_0` (`bake_procedural_color`). Everything else glTF cannot
-carry is reported in `warnings`.
+a PROCEDURAL Base Color or Normal (noise, ramps, mixes, bumps: what the
+formations' stone is) is baked by Cycles into an image of the exported copy's
+own, through a fresh unwrap, and wired back in, so it goes as a
+baseColorTexture or normalTexture (`bake_procedural_textures`). Everything else
+glTF cannot carry is reported in `warnings`.
 
 Frames: Blender is z-up, the exporter writes y-up (Blender x, y, z -> glTF
 x, z, -y), and the game draws in glTF's frame (x right, y up, z toward the
@@ -40,13 +41,16 @@ level exports stands in this frame, so nothing here has to be remembered.
 """
 
 import json
+import math
 import os
 import re
 import sys
 import time
 
+import bmesh
 import bpy
-from mathutils import Vector
+import numpy as np
+from mathutils import Vector, kdtree
 
 # Object types with geometry the glTF exporter carries.
 EXPORTABLE = {"MESH", "CURVE", "SURFACE", "FONT", "META"}
@@ -165,52 +169,281 @@ def procedural_base_colors(mat):
     return out
 
 
-# The colour attribute a procedural Base Color is baked into.
-BAKED_COLOR = "SceneBaseColor"
-BAKE_SAMPLES = 4
+def procedural_normals(mat):
+    """The Principled BSDFs of `mat` whose Normal glTF cannot carry: anything
+    but a Normal Map fed by an image, except a Bump of strength 0 (the boulder
+    generator's stone at its default), which changes nothing."""
+    if mat is None or mat.node_tree is None:
+        return []
+    out = []
+    for node in mat.node_tree.nodes:
+        if node.type != "BSDF_PRINCIPLED" or not node.inputs["Normal"].is_linked:
+            continue
+        src = node.inputs["Normal"].links[0].from_node
+        if src.type == "NORMAL_MAP" and src.inputs["Color"].is_linked \
+                and src.inputs["Color"].links[0].from_node.type == "TEX_IMAGE":
+            continue
+        if src.type == "BUMP" and not src.inputs["Strength"].is_linked and src.inputs["Strength"].default_value == 0:
+            continue
+        out.append(node)
+    return out
 
 
-def bake_procedural_color(kept):
-    """Bake every procedural Base Color the kept meshes use into a vertex
-    colour, and wire it into Base Color, so glTF carries the stone's colour as
-    COLOR_0 instead of dropping it to a flat default.
+# The UV map the bake unwraps each target into; its images read through it.
+BAKE_UV = "SceneBake"
+# The painted slate's edge line (a Bevel node) and crevices (Ambient
+# Occlusion) are ray traced, so the bake is a render: at 4 samples the edge line
+# came out as speckle that drew hairy and blurred once magnified. 32 is clean;
+# 64 differed from it by 0.3 levels rms (the Terrace, 2026-10-02).
+BAKE_SAMPLES = 32
+# Cycles GPU backends, best first. The bake runs on the first one with a
+# device and on the CPU without: the Terrace's 2k map took 3.4 s on an
+# RTX 4070 SUPER (OptiX) and 24.5 s on the CPU, with the same result to
+# 0.008 levels rms.
+GPU_BACKENDS = ("OPTIX", "CUDA", "HIP", "ONEAPI", "METAL")
+
+
+def bake_device():
+    """Point Cycles at the best GPU backend that has a device, and say which;
+    "CPU" when none does. `--factory-startup` leaves the preferences at their
+    defaults (no compute device), so the export chooses for itself."""
+    prefs = bpy.context.preferences.addons["cycles"].preferences
+    for kind in GPU_BACKENDS:
+        try:
+            prefs.compute_device_type = kind
+        except TypeError:
+            # A backend this build of Blender does not have.
+            continue
+        prefs.get_devices()
+        devices = [d for d in prefs.devices if d.type == kind]
+        if devices:
+            for d in prefs.devices:
+                d.use = d.type == kind
+            return f"{kind} {', '.join(d.name for d in devices)}"
+    prefs.compute_device_type = "NONE"
+    return "CPU"
+# Texture resolution follows the surface: this many texels per metre of the
+# unwrapped surface, rounded up to a power of two, between these bounds. The
+# game frame shows 200 pixels a metre at the gameplay plane (BALL_ZOOM at
+# 1080p), and the painted slate's edge line is a texel or two wide, so a map
+# under that density draws it magnified and blurred (the Terrace at 1024 got
+# 136 texels a metre). The top is the optimiser's cap for baked maps
+# (`--baked-maps`, scripts/encode-textures.mjs).
+TEXELS_PER_METRE = 256
+BAKE_SIZE_MIN, BAKE_SIZE_MAX = 64, 2048
+# The share of the image an unwrap's islands cover after packing.
+UV_COVERAGE = 0.6
+# Pixels between islands in the pack. Every texel outside the islands is
+# filled afterwards (`fill_background`), so this gap is only what keeps two
+# islands from sharing a texel at full resolution.
+PACK_GAP_PX = 2
+# How far apart two vertices may be and still be one for the unwrap.
+WELD_DISTANCE = 1e-5
+# The corner attribute that carries each corner's index through the weld.
+UNWRAP_TAG = "scene_bake_corner"
+
+
+def bake_size(mesh):
+    area = sum(p.area for p in mesh.polygons)
+    side = math.sqrt(area / UV_COVERAGE) * TEXELS_PER_METRE
+    return int(min(BAKE_SIZE_MAX, max(BAKE_SIZE_MIN, 2 ** math.ceil(math.log2(max(side, 1))))))
+
+
+def select_only(obs, active):
+    view_layer = bpy.context.view_layer
+    for ob in view_layer.objects:
+        try:
+            ob.select_set(ob in obs)
+        except RuntimeError:
+            pass
+    view_layer.objects.active = active
+
+
+def unwrap(ob, size):
+    """A fresh UV map BAKE_UV on `ob`, islands packed PACK_GAP_PX apart at
+    `size`.
+
+    The unwrap runs on a WELDED copy: a flat-shaded mesh that came in through
+    glTF (the river's boulders) has every face's vertices split from its
+    neighbours', and Smart UV Project then makes every face its own island -
+    thousands of specks, most of the image background. Every corner is tagged
+    with its index before the weld, so the UVs go back corner for corner and
+    the exported mesh, its normals included, is untouched. The weld drops the
+    faces it collapses (zero area, so nothing of them is ever drawn); their
+    corners take the UV of the nearest welded corner. It runs on one object at
+    a time, because Smart UV Project in a multi-object edit packs every object
+    into one shared square."""
+    bm = bmesh.new()
+    bm.from_mesh(ob.data)
+    tag = bm.loops.layers.int.new(UNWRAP_TAG)
+    i = 0
+    for face in bm.faces:
+        for loop in face.loops:
+            loop[tag] = i
+            i += 1
+    bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=WELD_DISTANCE)
+    welded = bpy.data.meshes.new(f"{ob.name} unwrap")
+    bm.to_mesh(welded)
+    bm.free()
+    tmp = bpy.data.objects.new(f"{ob.name} unwrap", welded)
+    bpy.context.scene.collection.objects.link(tmp)
+    select_only([tmp], tmp)
+    bpy.ops.object.mode_set(mode="EDIT")
+    bpy.ops.mesh.select_all(action="SELECT")
+    # Smart UV Project packs as it goes. Repacking with rotation won 7 points
+    # of coverage (0.62 -> 0.69 on the Terrace) for 9 s an object; not worth it.
+    bpy.ops.uv.smart_project(angle_limit=math.radians(66), island_margin=PACK_GAP_PX / size, scale_to_bounds=False)
+    bpy.ops.object.mode_set(mode="OBJECT")
+    n = len(welded.loops)
+    uv_welded = np.empty(2 * n, dtype=np.float32)
+    welded.uv_layers.active.data.foreach_get("uv", uv_welded)
+    origin = np.empty(n, dtype=np.int32)
+    welded.attributes[UNWRAP_TAG].data.foreach_get("value", origin)
+    corner_vert = np.empty(n, dtype=np.int32)
+    welded.loops.foreach_get("vertex_index", corner_vert)
+    co = np.empty(3 * len(welded.vertices), dtype=np.float32)
+    welded.vertices.foreach_get("co", co)
+    corner_co = co.reshape(-1, 3)[corner_vert]
+    bpy.data.objects.remove(tmp)
+    bpy.data.meshes.remove(welded)
+
+    uvs = np.full((len(ob.data.loops), 2), np.nan, dtype=np.float32)
+    uvs[origin] = uv_welded.reshape(-1, 2)
+    lost = np.flatnonzero(np.isnan(uvs[:, 0]))
+    if len(lost):
+        tree = kdtree.KDTree(n)
+        for j, c in enumerate(corner_co):
+            tree.insert(c, j)
+        tree.balance()
+        verts = np.empty(len(ob.data.loops), dtype=np.int32)
+        ob.data.loops.foreach_get("vertex_index", verts)
+        for j in lost:
+            uvs[j] = uv_welded[2 * tree.find(ob.data.vertices[verts[j]].co)[1]:][:2]
+    uv = ob.data.uv_layers.new(name=BAKE_UV)
+    uv.data.foreach_set("uv", uvs.ravel())
+
+
+def fill_background(im):
+    """Fill every texel no island covers, so no mip level reads background
+    (docs/blender-scenes.md#what-blender-cannot-carry). A margin ring is not
+    enough: at a distance the GPU samples a mip where one texel averages
+    dozens of the source's, and any background among them shows as a dark
+    line along every seam. Pull-push: average the baked texels down a pyramid
+    to one, then walk back up filling each unbaked texel from the level above.
+    The bake leaves an unbaked texel's alpha at 0, which is the mask."""
+    w, h = im.size
+    px = np.empty(w * h * 4, dtype=np.float32)
+    im.pixels.foreach_get(px)
+    px = px.reshape(h, w, 4)
+    known = px[..., 3] > 0.5
+    levels = [(px[..., :3] * known[..., None], known.astype(np.float32))]
+    while levels[-1][1].shape[0] > 1 and levels[-1][1].shape[1] > 1:
+        c, k = levels[-1]
+        hh, ww = k.shape[0] // 2, k.shape[1] // 2
+        c = c[:hh * 2, :ww * 2].reshape(hh, 2, ww, 2, 3).sum(axis=(1, 3))
+        k = k[:hh * 2, :ww * 2].reshape(hh, 2, ww, 2).sum(axis=(1, 3))
+        levels.append((c, k))
+    color = levels[-1][0] / np.maximum(levels[-1][1], 1e-6)[..., None]
+    for c, k in reversed(levels[:-1]):
+        up = np.repeat(np.repeat(color, 2, axis=0), 2, axis=1)
+        up = np.pad(up, ((0, k.shape[0] - up.shape[0]), (0, k.shape[1] - up.shape[1]), (0, 0)), mode="edge")
+        color = np.where(k[..., None] > 0, c / np.maximum(k, 1e-6)[..., None], up)
+    px[..., :3] = color
+    px[..., 3] = 1.0
+    im.pixels.foreach_set(px.ravel())
+
+
+def bake_pass(targets, images, bake_type, **bake_args):
+    """One Cycles bake of every target into its own image: each material
+    gets an Image Texture of its object's image as the ACTIVE node, which is
+    where a bake writes. Returns the nodes, keyed by material."""
+    nodes = {}
+    for ob in targets:
+        for mat in ob.data.materials:
+            node = mat.node_tree.nodes.new("ShaderNodeTexImage")
+            node.image = images[ob]
+            uv = mat.node_tree.nodes.new("ShaderNodeUVMap")
+            uv.uv_map = BAKE_UV
+            mat.node_tree.links.new(uv.outputs["UV"], node.inputs["Vector"])
+            mat.node_tree.nodes.active = node
+            nodes[mat] = node
+    select_only(targets, targets[0])
+    bpy.ops.object.bake(type=bake_type, target="IMAGE_TEXTURES", uv_layer=BAKE_UV, margin=0, **bake_args)
+    for im in set(images.values()):
+        fill_background(im)
+        im.pack()
+    return nodes
+
+
+def bake_procedural_textures(kept):
+    """Bake every procedural Base Color (and Normal) the kept meshes use into
+    an image of the object's own, and wire it in, so glTF carries the stone as
+    a baseColorTexture (and normalTexture) instead of dropping it to a flat
+    default.
 
     Only the colour is baked - Cycles' diffuse COLOR pass, no light - so the
-    game still lights the surface. It works on the export's own copies: each
-    target gets a mesh with its modifiers applied (the attribute has to match
-    the topology that is written), and the file is never saved. The resolution
-    is the mesh's: a colour field finer than the vertices is averaged away.
-    Returns how many objects were baked."""
+    game still lights the surface; a procedural normal (a bump) goes as a
+    tangent-space normal map. It works on the export's own copies: each target
+    gets a mesh with its modifiers applied and a fresh unwrap (BAKE_UV), its
+    materials are copied so each object's point at its own images, and the file
+    is never saved. The resolution is TEXELS_PER_METRE up to
+    BAKE_SIZE_MAX. Returns how many objects were baked."""
     targets = [ob for ob in kept if ob.type == "MESH"
-               and any(procedural_base_colors(m) for m in ob.data.materials)]
+               and any(procedural_base_colors(m) or procedural_normals(m) for m in ob.data.materials)]
     if not targets:
         return 0
     t0 = time.time()
     scene = bpy.context.scene
     depsgraph = bpy.context.evaluated_depsgraph_get()
+    sizes = {}
     for ob in targets:
         mesh = bpy.data.meshes.new_from_object(ob.evaluated_get(depsgraph), preserve_all_data_layers=True,
                                                depsgraph=depsgraph)
         ob.modifiers.clear()
         ob.data = mesh
-        mesh.color_attributes.active_color = mesh.color_attributes.new(BAKED_COLOR, "BYTE_COLOR", "CORNER")
+        for i, mat in enumerate(mesh.materials):
+            if mat is not None:
+                mesh.materials[i] = mat.copy()
+        if any(m is None for m in mesh.materials) or not mesh.materials:
+            # A bake needs a material to write through on every face.
+            raise SystemExit(f"{ob.name}: a procedural material shares the object with an empty material slot")
+        sizes[ob] = bake_size(mesh)
+        unwrap(ob, sizes[ob])
     scene.render.engine = "CYCLES"
-    scene.cycles.device = "CPU"
+    device = bake_device()
+    scene.cycles.device = "CPU" if device == "CPU" else "GPU"
     scene.cycles.samples = BAKE_SAMPLES
-    scene.render.bake.target = "VERTEX_COLORS"
-    for ob in scene.objects:
-        try:
-            ob.select_set(ob in targets)
-        except RuntimeError:
-            pass
-    bpy.context.view_layer.objects.active = targets[0]
-    bpy.ops.object.bake(type="DIFFUSE", pass_filter={"COLOR"}, target="VERTEX_COLORS")
-    for mat in {m for ob in targets for m in ob.data.materials if m is not None}:
-        for node in procedural_base_colors(mat):
-            attr = mat.node_tree.nodes.new("ShaderNodeVertexColor")
-            attr.layer_name = BAKED_COLOR
-            mat.node_tree.links.new(attr.outputs["Color"], node.inputs["Base Color"])
-    log(f"baked the procedural colour of {len(targets)} objects into {BAKED_COLOR}, {time.time() - t0:.1f}s")
+
+    def images(obs, kind, colorspace):
+        out = {}
+        for ob in obs:
+            # With alpha, cleared to 0: the bake writes 1 where it baked, which
+            # is the mask `fill_background` fills the rest by.
+            im = bpy.data.images.new(f"{ob.name} {kind}", sizes[ob], sizes[ob], alpha=True)
+            im.generated_color = (0, 0, 0, 0)
+            im.colorspace_settings.name = colorspace
+            # Drawn by this export for this object: an original, no credit owed.
+            im["generated_by"] = "tools/blender/scene_export.py"
+            out[ob] = im
+        return out
+
+    colored = [ob for ob in targets if any(procedural_base_colors(m) for m in ob.data.materials)]
+    if colored:
+        nodes = bake_pass(colored, images(colored, "baked colour", "sRGB"), "DIFFUSE", pass_filter={"COLOR"})
+        for mat, node in nodes.items():
+            for bsdf in procedural_base_colors(mat):
+                mat.node_tree.links.new(node.outputs["Color"], bsdf.inputs["Base Color"])
+    bumped = [ob for ob in targets if any(procedural_normals(m) for m in ob.data.materials)]
+    if bumped:
+        nodes = bake_pass(bumped, images(bumped, "baked normal", "Non-Color"), "NORMAL", normal_space="TANGENT")
+        for mat, node in nodes.items():
+            for bsdf in procedural_normals(mat):
+                normal_map = mat.node_tree.nodes.new("ShaderNodeNormalMap")
+                normal_map.uv_map = BAKE_UV
+                mat.node_tree.links.new(node.outputs["Color"], normal_map.inputs["Color"])
+                mat.node_tree.links.new(normal_map.outputs["Normal"], bsdf.inputs["Normal"])
+    texels = ", ".join(f"{ob.name} {sizes[ob]}" for ob in targets)
+    log(f"baked {len(colored)} colour and {len(bumped)} normal maps ({texels}) on {device}, {time.time() - t0:.1f}s")
     return len(targets)
 
 
@@ -443,7 +676,7 @@ def main():
     view_layer.update()
 
     # Baking selects its own targets; the export selection is restored after.
-    if bake_procedural_color(kept):
+    if bake_procedural_textures(kept):
         for ob in scene.objects:
             try:
                 ob.select_set(ob in kept)

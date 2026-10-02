@@ -73,6 +73,13 @@
 // iron-ball delivery, 2026-10-01; lossy at 2k was no better). Lossless at the
 // same 1k fixed it for ~0.7 MB more, so it is opt-in and recorded in the
 // prop's MESH_ASSETS entry, like the two above.
+//
+// `--baked-maps` gives the maps a Blender scene export baked ("<object> baked
+// colour" / "baked normal", tools/blender/scene_export.py) their own encoding,
+// up to 2k: the colour as AVIF with full-resolution chroma, the normal map
+// lossless. Lossy WebP turned that dark, low-contrast painted stone into blocks
+// and colour blotches; the measurements are in `encode-textures.mjs`.
+// `scene-export.ts` always passes it.
 
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
@@ -83,12 +90,14 @@ const argv = process.argv.slice(2);
 // `--center`, `--keep-nodes` and `--keep-hierarchy` are bare flags, so they come
 // out of the argument list before anything positional is read; everything below
 // then sees exactly the arguments it saw before the flags existed.
-const BARE = new Set(["--center", "--keep-nodes", "--keep-hierarchy", "--lossless-normals"]);
+const BARE = new Set(["--center", "--keep-nodes", "--keep-hierarchy", "--lossless-normals", "--baked-maps"]);
 const args = argv.filter((a) => !BARE.has(a));
 const center = argv.includes("--center");
 const keepNodes = argv.includes("--keep-nodes");
 const keepHierarchy = argv.includes("--keep-hierarchy");
 const losslessNormals = argv.includes("--lossless-normals");
+const bakedMaps = argv.includes("--baked-maps");
+const ownEncoding = losslessNormals || bakedMaps;
 const simplifyAt = args.indexOf("--simplify");
 // Pulled out of the positionals so the two paths take the same `<in> <out>`.
 // Guarded on the flag being present at all: an absent one is index -1, and
@@ -102,7 +111,7 @@ const [input, output] =
     : args.filter((_, i) => i !== simplifyAt && i !== simplifyAt + 1);
 if (!input || !output) {
   console.error(
-    "usage: bun run assets:optimize <input.glb|gltf> <public/meshes/out.glb> [--simplify <ratio>] [--center] [--keep-nodes] [--keep-hierarchy] [--lossless-normals]",
+    "usage: bun run assets:optimize <input.glb|gltf> <public/meshes/out.glb> [--simplify <ratio>] [--center] [--keep-nodes] [--keep-hierarchy] [--lossless-normals] [--baked-maps]",
   );
   process.exit(2);
 }
@@ -168,9 +177,10 @@ const r = spawnSync(
     "--compress",
     "meshopt",
     "--texture-compress",
-    // With `--lossless-normals` the maps leave `optimize` resized but not yet
-    // encoded, and the two `webp` passes below encode them per slot.
-    losslessNormals ? "false" : "webp",
+    // With either flag the maps leave `optimize` untouched (it neither resizes
+    // nor encodes with compression off), and `encode-textures.mjs` below
+    // resizes and encodes each by its rule.
+    ownEncoding ? "false" : "webp",
     "--texture-size",
     "1024",
     // A PACK - one file serving several manifest keys, each addressing a node
@@ -215,20 +225,21 @@ const r = spawnSync(
 if (tmp) rmSync(tmp, { recursive: true, force: true });
 if (r.status !== 0) process.exit(r.status ?? 1);
 
-if (losslessNormals) {
-  // In place on the output: every map but the normal map lossy, as `optimize`
-  // would have encoded it, then the normal map lossless.
-  for (const pass of [
-    ["--slots", "!normalTexture"],
-    ["--slots", "normalTexture", "--lossless", "true"],
-  ]) {
-    const w = spawnSync(
-      "bunx",
-      ["@gltf-transform/cli", "webp", resolve(output), resolve(output), ...pass],
-      { stdio: "inherit" },
-    );
-    if (w.status !== 0) process.exit(w.status ?? 1);
-  }
+if (ownEncoding) {
+  // In place on the output, in Node (see the script for why neither the `webp`
+  // command nor Bun): the flagged maps by their rules, every other map lossy
+  // at 1k as `optimize` would have encoded it.
+  const w = spawnSync(
+    "node",
+    [
+      join(import.meta.dir, "encode-textures.mjs"),
+      resolve(output),
+      ...(losslessNormals ? ["--lossless-normals"] : []),
+      ...(bakedMaps ? ["--baked-maps"] : []),
+    ],
+    { stdio: "inherit" },
+  );
+  if (w.status !== 0) process.exit(w.status ?? 1);
 }
 
 const after = statSync(output).size;

@@ -79,9 +79,15 @@ The dialog's **Generator** picks how (the recipe's `generator`; a recipe without
   Tried and dropped on the way, the same day: rocks in fixed tiers (read as a pile of stones, and large areas cut into small rocks), backing layers of bigger stones (their seams met the front's and left holes), a core held inside the outline (the silhouette fell short), and rocks built at 1 m and scaled up (detail grows with the rock).
 - **Boulder generator** (`boulders`): `tools/blender/boulders`, unmodified, slabs cut to the outline and unioned.
 
-A new rock is one material, the **painted slate** ([cave-look](cave-look.md#surface-the-painted-slate-shader-and-the-v6-rig)), built by `formations/slate.py`, with a random per-face `facet` float for its per-facet tone.
+A new rock is one material, the **painted slate** ([cave-look](cave-look.md#surface-the-painted-slate-shader-and-the-v6-rig)), built by `formations/slate.py`, with a random `facet` float for its per-facet tone.
+The tone is a function of the face's **orientation** (`slate.tone_facets`): Perlin noise of the object-space face normal times `TONE_SCALE` (1.5), offset by the seed, rank-mapped onto [0, 1], so faces that point almost the same way get almost the same tone and facets at clearly different angles still differ.
+The fused rock is a planar dissolve of a remeshed surface, so one visible facet is many faces a few degrees apart; with a random tone per face every triangle of it drew (2026-10-02).
+On the river's Terrace the mean tone step across an edge is 0.02 under 5°, 0.11 at 5-10° and 0.23 at 10-20°, against about 0.33 at every angle for a random tone; scale 2.5 left 0.17 at 5-10°.
+The rock stays flat shaded, crisp at every edge, with the study's edge line: smooth shading across edges under 20° was tried the same day and was too smooth.
+A build tones its rock; **Tone Facets** (Selected / All) brings a rock built earlier to the same state, flat shading included.
+Neither moves a vertex, so it leaves the growth and the rebuild state alone (`core.mesh_hash` reads only positions and faces).
 The generator's own tinted stones (five slots and a worn edge, the fork's dark teal `[.028, .063, .082]`) are not used since 2026-10-02.
-The shader's Ambient Occlusion and Bevel nodes are Cycles only: the export bakes the whole Base Color to vertex colour in Cycles, so the game gets the darkened crevices and the edge line, while EEVEE's Material Preview shows the stone without them.
+The shader's Ambient Occlusion and Bevel nodes are Cycles only: the export bakes the whole Base Color to an image texture in Cycles ([blender-scenes](blender-scenes.md#what-blender-cannot-carry)), so the game gets the darkened crevices and the edge line, while EEVEE's Material Preview shows the stone without them.
 A rebuild keeps the formation's materials, so a rock made before then keeps its teal until its material is replaced (or it is made again).
 
 A generated mesh is sealed (`formation_mesh_hash`); one edited by hand is protected from being rebuilt over, and **Keep As Manual Mesh** says so on purpose.
@@ -111,7 +117,7 @@ The images are packed into the scene; a scene without them loads them from `asse
 
 `grotto.blend` was converted from the fork's accepted artist master (`river_dream_layer_editor.blend`) on 2026-09-29: its 13 formations and 56 growth pieces, the "distant ravine" matte 240 m back, and the level's guide linked in.
 Dropped with the layers: the reference foreground, the cameras, the Cycles lights, the rock libraries and bootstrap, the mesh backups and the construction data only those referred to.
-The stone's emission (a Cycles ambient term) was removed, since the level lights it now; its procedural colour is baked to vertex colours by the export.
+The stone's emission (a Cycles ambient term) was removed, since the level lights it now; its procedural colour is baked to an image texture by the export.
 The fork's two "far" formations were planted by rules that are gone; the one floor formation among them (`cyan twin ridge`) keeps its accepted sprig until it is replanted.
 
 ## Not yet

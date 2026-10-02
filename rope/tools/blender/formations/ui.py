@@ -70,6 +70,12 @@ class FORMATIONS_PT_main(bpy.types.Panel):
         row.operator("formations.plant", text="Stale").scope = "STALE"
         row.operator("formations.plant", text="All").scope = "ALL"
 
+        box = layout.box()
+        box.label(text="Tone facets by orientation")
+        row = box.row(align=True)
+        row.operator("formations.tone_facets", text="Selected").scope = "SELECTED"
+        row.operator("formations.tone_facets", text="All").scope = "ALL"
+
         layout.operator("formations.generate", text="New Formation", icon="ADD").mode = "CREATE"
 
         ob = context.active_object

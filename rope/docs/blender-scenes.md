@@ -115,14 +115,25 @@ Another file becomes a source by naming it once: `bun run assets:publish-sources
 
 - **Procedural materials.** glTF carries a Principled BSDF with image textures and little else.
   What it does carry: a Color Attribute on Base Color, alone or multiplied (factor 1) with an Image Texture, goes out as `COLOR_0` (the shape Blender's glTF importer builds); an Image Texture multiplied by a constant colour in a Mix node (Multiply, factor 1) goes out as the texture times `baseColorFactor`; an alpha run through Less Than and Subtract (`1 - (alpha < cutoff)`) goes out as `alphaMode: MASK` at that cutoff; and a Roughness or Metallic taken from one channel of an Image Texture by a Separate Color, alone or times a constant (a Math Multiply), goes out as glTF's packed metallic-roughness texture (`carries_channel` - the graph Blender's own glTF importer builds).
-  A **Base Color** wired to anything else (noise, ramps, mixes) is **baked**: the export runs Cycles' diffuse colour pass into a vertex colour (`SceneBaseColor`) on its own copy of the mesh, modifiers applied, and wires it in, so it ships as `COLOR_0` at the mesh's resolution - a colour field finer than the vertices is averaged away (about 1 s for the grotto's 13 rocks).
+  A **Base Color** or **Normal** wired to anything else (noise, ramps, mixes, a Bump) is **baked** (`bake_procedural_textures`): on its own copy of the mesh, modifiers applied, the export unwraps the object afresh (Smart UV Project into a UV map `SceneBake`, islands 2 px apart), runs Cycles' diffuse colour pass into an image of the object's own and a tangent-space normal bake into a second, copies the object's materials and wires the images in, so they ship as `baseColorTexture` and `normalTexture`.
+  The unwrap runs on a welded copy, the UVs carried back corner by corner: the river's boulders came in through glTF split at every face, and unwrapped as they are they made one speck of an island per face, 21 % of the image covered instead of 54 %.
+  Every texel no island covers is filled (pull-push from the baked texels), since a mip level that averages in background draws a dark line along every seam.
+  The image is sized by the surface, 256 texels per metre rounded up to a power of two, between 64 and 2048: the game frame shows 200 pixels a metre at the gameplay plane (`BALL_ZOOM` at 1080p), and the painted slate's pale edge line is a texel or two wide, so a map under that density draws it magnified and blurred (the Terrace's 34 m² at a 1024 cap got 136 texels a metre). A 1000 m² wall still gets only about 50.
+  The bake is a render (the edge line is a Bevel node, the crevices Ambient Occlusion, both ray traced) at 32 samples: at 4 the edge line came out as speckle that drew hairy and blurred; 64 differed from 32 by 0.3 levels rms.
+  It runs on the first Cycles GPU backend with a device (OptiX, CUDA, HIP, oneAPI, Metal) and on the CPU without, with the same result to 0.008 levels rms; the log line names the device.
+  Measured 2026-10-02 on an RTX 4070 SUPER: the river's 15 baked objects (9 of them at 2k) in 30 s, 4.7 MB optimised.
+  An Ambient Occlusion node bakes what Cycles sees, other exported objects included, so a rock pushed into or under another darkens where they meet (boulder-1 under the river's floor slabs).
   Only the colour is baked, never light: the game lights it.
-  Roughness, metallic, normal and emission wired to anything else still export as flat values, and the exporter warns about each (`meta.json`'s `warnings`, printed by the recipe); a Bump of strength 0 is no loss and is not reported.
+  Until 2026-10-02 the colour was baked into a vertex colour instead, which averaged every grain, stain and edge line finer than the faceted mesh's vertices into a smooth tone; a faceted rock has big flat faces, so nothing of the painted stone survived.
+  Roughness, metallic and emission wired to anything else still export as flat values, and the exporter warns about each (`meta.json`'s `warnings`, printed by the recipe); a Bump of strength 0 is no loss and is neither baked nor reported.
 - **Lights.** The level's own lights carry glow and beam semantics and a budget (see [lighting-and-surfaces](lighting-and-surfaces.md)); a Blender light is dropped.
   Emissive materials do export, and a waking light in the body they dress drives them (above).
 - **Volumetrics, fog, compositing.** The level's environment block is where the air is authored.
 - **A moving surface.** Water and conveyor bands are the game's to draw (above).
 - **Size.** The per-file bar is 8 MB and textures are capped at 1k by the optimiser; the recipe warns past the bar.
+  The baked maps have their own encoding (`--baked-maps`, which `just scene` always passes; every other map stays lossy WebP at 1k): a baked colour map ships as **AVIF with full-resolution colour (4:4:4) at quality 90**, up to 2k, and a baked normal map as lossless WebP.
+  Lossy WebP turned the Terrace's dark, low-contrast 1k bake into 15 KB of blocks and purple-green blotches (it codes colour at half resolution, so even quality 100 kept the blotches); lossless WebP is exact but 1.17 MB at 2k, which would have put the river near 13 MB; AVIF 4:4:4 q90 is 114 KB, 0.77 levels rms off, and keeps the edge lines.
+  three's GLTFLoader reads `EXT_texture_avif` itself.
 
 ## The levels' scenes
 

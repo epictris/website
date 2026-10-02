@@ -5,19 +5,28 @@ Ported from `mat_plain` in cave-sheet-study/rock_study.py as Tris chose it on
 block, a slightly different tone per facet, faint grain, soft vertical stains,
 crevices darkened and a pale line on the facet edges.
 
-The per-facet tone reads a FACE float attribute `facet` (random in [0, 1));
-`add_facets` writes it. The Ambient Occlusion and Bevel nodes are Cycles only:
-the scene export bakes the whole Base Color to vertex colour in Cycles, so the
-game gets them; EEVEE's viewport shows the stone without its crevices and edges.
+The per-facet tone reads a FACE float attribute `facet` in [0, 1];
+`tone_facets` writes it from each face's ORIENTATION, so faces that point
+almost the same way get almost the same tone. The Ambient Occlusion and Bevel
+nodes are Cycles only: the scene export bakes the whole Base Color to an image
+texture in Cycles, so the game gets them; EEVEE's viewport shows the stone without its crevices and edges.
 """
 
 import random
 
 import bpy
+from mathutils import Vector, noise
 
 NAME = "Painted slate"
 COOL, WARM, LINE = "#2f3546", "#3b3e4a", "#5c6070"
 SPECULAR = 0.1
+# How fast the per-facet tone changes with a face's orientation: the tone is
+# a smooth noise of the face normal times this. The fused rock's faces are a
+# planar dissolve (fitted.py) of a remeshed surface, so one visible facet is
+# many faces a few degrees apart; a random tone per face drew every one of
+# them (Tris, 2026-10-02: "no significantly different colours on adjacent
+# faces with almost the same orientation", flat shading and crisp edges kept).
+TONE_SCALE = 1.5
 
 
 def srgb(h):
@@ -29,12 +38,31 @@ def srgb(h):
     return (lin(r), lin(g), lin(b), 1.0)
 
 
-def add_facets(ob, seed):
-    """A random value per face for the shader's per-facet tone."""
+def tone_facets(ob, seed):
+    """Write each face's tone into the `facet` attribute as a smooth function
+    of its orientation, and shade the rock flat (undoing the smooth shading a
+    2026-10-02 build gave it, which Tris found too smooth).
+
+    The tone is Perlin noise of the object-space face normal scaled by
+    TONE_SCALE, offset by the seed so rocks differ, then rank-mapped onto
+    [0, 1] so the tones span the shader's whole range whatever the noise's
+    spread on this rock; ranking keeps the order, so near orientations stay
+    near tones. No vertex moves, so the growth and rebuild state are untouched
+    (core.mesh_hash). Returns the faces toned."""
     me = ob.data
-    attr = me.attributes.get("facet") or me.attributes.new("facet", "FLOAT", "FACE")
+    me.shade_flat()
+    if me.attributes.get("sharp_edge") is not None:
+        me.attributes.remove(me.attributes["sharp_edge"])
     rng = random.Random(seed)
-    attr.data.foreach_set("value", [rng.random() for _ in range(len(me.polygons))])
+    offset = Vector((rng.uniform(-100, 100), rng.uniform(-100, 100), rng.uniform(-100, 100)))
+    raw = [noise.noise(p.normal * TONE_SCALE + offset) for p in me.polygons]
+    order = sorted(range(len(raw)), key=raw.__getitem__)
+    tone = [0.0] * len(raw)
+    for rank, i in enumerate(order):
+        tone[i] = rank / max(len(raw) - 1, 1)
+    attr = me.attributes.get("facet") or me.attributes.new("facet", "FLOAT", "FACE")
+    attr.data.foreach_set("value", tone)
+    return len(tone)
 
 
 def painted_slate(name=NAME):
