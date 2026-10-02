@@ -17,7 +17,7 @@ import * as THREE from "three";
 import type { Vec2 } from "../engine/vec2";
 import { gltfLoader, trackPending } from "./assets";
 import { withDownload } from "./download";
-import { wearMossShadowBias } from "./mossShadow";
+import { wearIvyShadowBias } from "./ivyShadow";
 import { threeRotation, threeY } from "./space";
 import { nodeNameOf, SCENE_ASSETS, sceneFile } from "./scenes";
 
@@ -176,40 +176,47 @@ export function loadSceneFile(scene: string): Promise<THREE.Object3D | null> {
   const p = trackPending(
     withDownload(file, bytes, (href) => loading.then((loader) => loader.loadAsync(href)))
       .then((gltf) => {
-        let mossMeshes = 0;
+        let ivyMeshes = 0;
         gltf.scene.traverse((o) => {
           const mesh = o as THREE.Mesh;
           if (!mesh.isMesh) return;
-          // Moss (the Blender add-on's `<host>.moss` objects) casts since
+          // Ivy (the Blender ivy add-on's `<host>.ivy` objects) casts since
           // 2026-09-30: the ivy's leaves are alpha-cut cards, and the depth
           // pass cuts them by the same mask, so a leaf throws a leaf-shaped
           // shadow on the leaves and the stone below it, which is the look
           // asked for ("shadows between leaves"). Its shadow decal (the
-          // `.moss.shadow` child, a blended skin on the rock) casts nothing:
+          // `.ivy.shadow` child, a blended skin on the rock) casts nothing:
           // a translucent sheet 3 mm off a surface would shadow that surface
           // entirely. glTF has no flag for either, so the rule lives here.
           // Tested on the Blender names of the mesh AND its ancestors, as the
           // loader kept them. GLTFLoader strips the dots from a node's name
-          // (`rock.moss` arrives as `rockmoss`) and keeps the original in
+          // (`rock.ivy` arrives as `rockivy`) and keeps the original in
           // `userData.name`; and the optimiser's quantisation moves the mesh
           // of any node that has children onto a new, unnamed child of it (the
-          // rock carries its moss, the moss its decal), so the mesh itself has
-          // no Blender name at all - only its parent does. The old `.moss`
-          // test on `mesh.name` never matched, so the moss cast all along.
+          // rock carries its ivy, the ivy its decal), so the mesh itself has
+          // no Blender name at all - only its parent does. (A test on
+          // `mesh.name` never matched, so until 2026-09-30 the ivy cast all along.)
+          // Until 2026-10-02 the ivy add-on was "moss", and a scene exported
+          // before then names its ivy `.moss` and `.moss.shadow`. That name
+          // now belongs to the painterly moss mound, an opaque mesh that must
+          // NOT wear the leaf biases, so an old `.moss` mesh counts as ivy only
+          // when it is alpha-cut, as the leaf cards are and the mound never
+          // is. This can go once every published scene is re-exported.
           const names = blenderNames(mesh);
-          const decal = names.some((n) => /\.moss\.shadow$/.test(n));
-          const moss = !decal && names.some((n) => /\.moss$/.test(n));
+          const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+          const decal = names.some((n) => /\.(ivy|moss)\.shadow$/.test(n));
+          const legacyIvy = names.some((n) => /\.moss$/.test(n)) && mats.some((m) => m.alphaTest > 0);
+          const ivy = !decal && (legacyIvy || names.some((n) => /\.ivy$/.test(n)));
           mesh.castShadow = !decal;
           mesh.receiveShadow = true;
           // ...and the leaves receive with finer biases than the sun's, so a
-          // leaf shadows the leaf below it (mossShadow.ts).
-          if (moss) {
-            const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-            for (const m of mats) wearMossShadowBias(m);
-            mossMeshes++;
+          // leaf shadows the leaf below it (ivyShadow.ts).
+          if (ivy) {
+            for (const m of mats) wearIvyShadowBias(m);
+            ivyMeshes++;
           }
         });
-        if (mossMeshes > 0) console.log(`[render3d] scene "${scene}": ${mossMeshes} moss meshes cast and receive leaf shadows`);
+        if (ivyMeshes > 0) console.log(`[render3d] scene "${scene}": ${ivyMeshes} ivy meshes cast and receive leaf shadows`);
         return gltf.scene as THREE.Object3D;
       })
       .catch((err: unknown) => {

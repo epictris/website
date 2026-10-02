@@ -6,7 +6,7 @@ import * as THREE from "three";
 // shadow camera, plus 3 cm along the normal), which is more than the gap
 // between the ivy's sheets of leaves, so with them a leaf could never shadow
 // the leaf below it and the carpet read flat. A bias is a property of the
-// light, not the receiver, in three; this scales it inside the moss
+// light, not the receiver, in three; this scales it inside the ivy
 // material's own program, where the receiver is known. The leaves are flat
 // cards whose normal is the rock's rounded hull, pointing out of the stack
 // toward the light, so the small push is enough against acne on them.
@@ -14,16 +14,16 @@ import * as THREE from "three";
 // Constant bias x 0.1 and normal bias x 0.5: 6 mm + 1.5 cm, against sheets
 // 3 cm apart (build.STRATUM_GAP); more bias (x 0.3 / x 1) only thinned the
 // shade between leaves. The filter radius is x 0.33: the sun's 3 texels
-// spread three's nine PCF taps 4.5 cm apart on the moss, which drew every
+// spread three's nine PCF taps 4.5 cm apart on the ivy, which drew every
 // penumbra as a dither over the whole carpet (the carpet is all penumbra);
 // at one texel the taps are adjacent and the penumbra is a smooth 4.5 cm.
 let CONSTANT_SCALE = 0.1;
 let NORMAL_SCALE = 0.5;
 let RADIUS_SCALE = 0.33;
-const PROGRAM_KEY = "moss-shadow-bias";
+const PROGRAM_KEY = "ivy-shadow-bias";
 
-/** For the moss harness's experiments only: the scales, before any moss material is worn. */
-export function setMossShadowScales(s: { constant?: number; normal?: number; radius?: number }): void {
+/** For the ivy harness's experiments only (tools/blender/moss-experiments/harness): the scales, before any ivy material is worn. */
+export function setIvyShadowScales(s: { constant?: number; normal?: number; radius?: number }): void {
   CONSTANT_SCALE = s.constant ?? CONSTANT_SCALE;
   NORMAL_SCALE = s.normal ?? NORMAL_SCALE;
   RADIUS_SCALE = s.radius ?? RADIUS_SCALE;
@@ -43,7 +43,7 @@ function patched(): { vertex: string; fragment: string } {
   // A text patch on three's chunks: say so the moment a three upgrade moves
   // the text, rather than silently shading the ivy flat again.
   if (!v.includes(VERTEX_NEEDLE) || !f.includes(FRAGMENT_NEEDLE)) {
-    console.warn("[render3d] mossShadow: three's shadow chunks changed; the ivy receives with the sun's full biases");
+    console.warn("[render3d] ivyShadow: three's shadow chunks changed; the ivy receives with the sun's full biases");
   }
   return {
     vertex: v.replace(VERTEX_NEEDLE, `( ${VERTEX_NEEDLE} * ${NORMAL_SCALE.toFixed(3)} )`),
@@ -54,10 +54,10 @@ function patched(): { vertex: string; fragment: string } {
   };
 }
 
-/** Make the moss material cast, and receive with its finer shadow biases. Idempotent: the material is shared. */
-export function wearMossShadowBias(mat: THREE.Material): THREE.Material {
-  if (mat.userData.mossShadowBias === true) return mat;
-  mat.userData.mossShadowBias = true;
+/** Make the ivy material cast, and receive with its finer shadow biases. Idempotent: the material is shared. */
+export function wearIvyShadowBias(mat: THREE.Material): THREE.Material {
+  if (mat.userData.ivyShadowBias === true) return mat;
+  mat.userData.ivyShadowBias = true;
   // CAST: for a PCF map three draws the shadow pass with the OPPOSITE side
   // of the material (WebGLShadowMap's `shadowSide` table), its trick against
   // acne on a closed mesh. The leaves are single-sided cards, so that drew

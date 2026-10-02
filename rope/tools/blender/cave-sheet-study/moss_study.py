@@ -465,16 +465,23 @@ def grow_clumps(rock, seed, voxel=0.012, thick=0.09, taper=0.35, dab=0.3, finger
 def grow_layers(rock, seed, voxel=0.012, layers=5, base_r=(0.032, 0.05), shrink=0.92, frac=0.6,
                 seeds=10.0, step=0.006, dab=0.18, min_island=30, gain=None, jitter=0.1, spacing=0.4, buffer=0.035, clump_jitter=0.1,
                 min_clump=6, curve=1.3, mottle=0.6, mottle_scale=4.0, erode_noise=0.9, erode_scale=14.0, steps_deep=5.0, min_k=4, first_buffer=0.012,
-                fracs=(1.0, 1.0, 0.55, 0.3, 0.18), field_mix=0.55, edge=0.010, cblur=0, levels=8,
-                ref_depth=0.42, ref_layers=5, inner_u=0.88, decimate=0.01, card_lift=0.004, bake_px=1024):
+                fracs=(1.0, 1.0, 0.55, 0.3, 0.18), field_mix=0.55, levels=8,
+                ref_depth=0.42, ref_layers=5, inner_u=0.88, decimate=0.02,
+                lift_base=0.0, lift_h=0.09, lift_blur=40, sink=0.006, rim=0.10, solid=0.04, up_floor=0.3,
+                texel=0.0015, tex_edge=0.002, combine=False):
     """Tris's construction (2026-10-01): the carpet is dabs all the way down.
 
-    Layer 0 fills the painted area with dark dabs, and the geometry is their union, so
-    the outline is dab-shaped. Layer k grows `seeds[k-1]` connected clumps of dabs, each
-    a step lighter, seeded deep inside layer k-1 and only ever placed inside it, until the
-    layer holds `frac` of the dabs below it; dabs shrink by `shrink` a layer. A dab is a
-    main disc with 2-4 lobes. Height: 2 mm skin, `step` per layer, plus each dab's dome
-    (`dab` of its radius), so the carpet mounds where the light is. Colour baked as `col`."""
+    Layer 0 fills the painted area with dark dabs; layer k grows clumps of lighter dabs
+    inside layer k-1 (seeded at the summits of an uneven erosion field).
+    Since 2026-10-02 the moss is a low-poly mound, as tall as the paint is light
+    (`lift_base` under the darkest, + `lift_h` under the lightest) and sunk `sink` into the
+    rock, so it shows only where it stands proud; its outline is where it leaves the rock.
+    The dabs are PRINTED on the mound's texture (`print_moss`), not built. The rock stays
+    bare slate: a print of the dab fringe on the rock too was tried and dropped (Tris
+    preferred the mound's own edge). In Blender the mound is its own object
+    `<rock>.moss`; with `combine` (the game asset) it is unioned into the rock and the
+    two share one texture, moss only on the faces that came from the mound.
+    Returns the mound, or the rock when combined."""
     from mathutils.kdtree import KDTree
     bias = MOSS_BIAS.get(rock.name, 0.0)
     if bias < -1:
@@ -822,17 +829,10 @@ def grow_layers(rock, seed, voxel=0.012, layers=5, base_r=(0.032, 0.05), shrink=
         all_layers.append(layer)
         print("[layers] k=%d %s: %d seeds, %d dabs" % (k, "fill" if fill else "islands", len(seeds_at), len(layer)))
 
-    # ---- paint and lift: lower layers first, higher on top
-    col = [None] * len(verts)
-    lift = [0.0] * len(verts)
-    covered = [0.0] * len(verts)
+    # ---- tone every dab, and paint its tone on the vertices (lower layers first, higher
+    # on top): that per-vertex tone is what raises the mound, the lighter the taller
+    tval = [None] * len(verts)
     inner = [0.0] * len(verts)
-    # the tone climbs to the lightest over each patch's own layers (a patch that only
-    # managed a few stays mid-green)
-    kmax = {}
-    for k, layer in enumerate(all_layers):
-        for d in layer:
-            kmax[d["patch"]] = max(kmax.get(d["patch"], 0), k)
     flay = bm.verts.layers.float.new("hf")
     for v in bm.verts:
         v[flay] = hfield[v[ilay]]
@@ -866,40 +866,34 @@ def grow_layers(rock, seed, voxel=0.012, layers=5, base_r=(0.032, 0.05), shrink=
             # layer, a coarse mottle), so it changes only along a curve that many dabs share
             tq = t ** curve + mot
             tq = round(min(1.0, max(0.0, tq)) * (levels - 1)) / (levels - 1)
-            tn = tone(tq)
-            d["tone"] = tn
-            cover = {}
+            d["t"] = tq
+            d["tone"] = tone(tq)
             for (co, i, dist) in kd.find_range(d["c"], d["rmax"]):
                 u, rr = dab_u(d, co)
                 if u > 1.0:
                     continue
-                w = smoothstep(1.0, 1.0 - edge / rr, u)
-                cover[i] = (w, u)
-            for i, (w, u) in cover.items():
-                col[i] = tn if col[i] is None else tuple(col[i][q] + (tn[q] - col[i][q]) * w for q in range(3))
-                lift[i] = max(lift[i], k * step)
-                covered[i] = max(covered[i], w)
-                if u <= inner_u:                      # the shell is cut inside the dab fringe;
-                    inner[i] = 1.0                    # the edge cards draw the fringe
+                w = smoothstep(1.0, 1.0 - 0.01 / rr, u)
+                tval[i] = tq if tval[i] is None else tval[i] + (tq - tval[i]) * w
+                if u <= inner_u:                      # the mound stops inside the dab fringe;
+                    inner[i] = 1.0                    # the printed texture draws the fringe
 
+    lift = [0.0] * len(verts)
     llay = bm.verts.layers.float.new("lift")
     clay = bm.verts.layers.float.new("cov")
-    rl, gll, bl = (bm.verts.layers.float.new(n) for n in ("cr", "cg", "cb"))
     for v in bm.verts:
-        v[llay] = lift[v[ilay]]
+        t = tval[v[ilay]]
+        # moss piles where it can rest: full height on a top, `up_floor` of it on a wall.
+        # A full-height pile on a wall rises toward the ridge above it, and that slope faces
+        # down, out of the key: a dark band along the moss edge (Tris, 2026-10-02)
+        up = up_floor + (1 - up_floor) * smoothstep(0.0, 0.7, N[v[ilay]].z)
+        v[llay] = 0.0 if t is None else (lift_base + lift_h * t) * up
         v[clay] = inner[v[ilay]]
-        c = col[v[ilay]] or dark
-        v[rl], v[gll], v[bl] = c[0], c[1], c[2]
-    for lay in (rl, gll, bl):
-        blur_field(bm, lay, cblur)   # the vertex grid's staircase on every blotch edge goes
-    for v in bm.verts:
-        col[v[ilay]] = (v[rl], v[gll], v[bl])
-    blur_field(bm, llay, 12)           # a smooth mound: no dab shows in the geometry
+    blur_field(bm, llay, lift_blur)    # a soft pillow under each light blotch, no terraces
     blur_field(bm, clay, 2)            # closes the pinholes between three dabs, keeps the lobes
     for v in bm.verts:
         lift[v[ilay]] = v[llay]
         inner[v[ilay]] = v[clay]
-    # ---- the geometry is the union of the dabs
+    # ---- the mound: the fine shell cut inside the dabs, raised by the tone
     kill = [f for f in bm.faces if sum(inner[v[ilay]] for v in f.verts) / len(f.verts) <= 0.5]
     bmesh.ops.delete(bm, geom=kill, context="FACES")
     seen = set()
@@ -923,7 +917,17 @@ def grow_layers(rock, seed, voxel=0.012, layers=5, base_r=(0.032, 0.05), shrink=
     for _ in range(3):
         bmesh.ops.smooth_vert(bm, verts=bm.verts[:], factor=0.5, use_axis_x=True, use_axis_y=True, use_axis_z=True)
     bm.normal_update()
-    # the rim feathers: the skin is 2 mm at the edge, the dab lift fades in over 4 cm
+    # the mound stands on the ROCK's surface, not on the voxel shell (which sits up to a
+    # centimetre off the facets: where it stood proud, the rim was a ledge with a dark
+    # shadow under it). Each vertex stands on the rock where its smooth normal leaves it
+    # and is lifted along that normal from there; the rim sinks `sink` and the lift fades
+    # in over `rim`, so the mound leaves the rock at a shallow angle and the print
+    # carries the outline
+    from mathutils.bvhtree import BVHTree
+    rbm = bmesh.new()
+    rbm.from_mesh(rock.data)
+    bvh = BVHTree.FromBMesh(rbm)          # rock-local, like the shell
+    rbm.free()
     edge = {v: 0 for v in bm.verts if any(e.is_boundary for e in v.link_edges)}
     frontier = list(edge)
     kk = 0
@@ -937,203 +941,306 @@ def grow_layers(rock, seed, voxel=0.012, layers=5, base_r=(0.032, 0.05), shrink=
                     edge[o] = kk
                     nxt.append(o)
         frontier = nxt
+    # the whole field drops by `sink`: moss thinner than that lies UNDER the rock and is
+    # print only. A mound left flush with the rock (within a few mm) decimates into
+    # slivers whose normals are noise; some face the ground and shade a dark strip along
+    # the moss edge (Tris's "dark patch at the edge", measured 2026-10-02: verts within
+    # 2 mm of the rock, faces tilted 35 deg down). So the mound is either clearly proud
+    # of the rock or hidden in it, and only crosses it along a line
+    offs = {}
     for v in bm.verts:
-        rimf = smoothstep(0.0, 0.04, edge.get(v, 99) * voxel)
-        v.co += v.normal * (0.002 + lift[v[ilay]] * rimf)
+        rimf = smoothstep(0.0, rim, edge.get(v, 99) * voxel)
+        offs[v] = lift[v[ilay]] * rimf - sink
+    for v in bm.verts:
+        # out along the smooth normal to where it leaves the rock (the nearest point would
+        # jump between the two faces of a convex edge and fold the mound into a slit); a
+        # vertex already clear of the rock (a crease the shell bridges) stays where it is
+        on = bvh.ray_cast(v.co + v.normal * 0.05, -v.normal, 0.1)[0]
+        base = on if on is not None and (on - v.co).dot(v.normal) > 0 else v.co
+        v.co = base + v.normal * offs[v]
     for _ in range(2):
         bmesh.ops.smooth_vert(bm, verts=bm.verts[:], factor=0.4, use_axis_x=True, use_axis_y=True, use_axis_z=True)
-    keep = [v[ilay] for v in bm.verts]
     out = bpy.data.meshes.new(rock.name + ".moss")
     bm.to_mesh(out)
     bm.free()
-    attr = out.attributes.new("col", "FLOAT_COLOR", "POINT")
-    flat = []
-    for i in keep:
-        c = col[i] or dark
-        flat += [c[0], c[1], c[2], 1.0]
-    attr.data.foreach_set("color", flat)
     for pg in out.polygons:
         pg.use_smooth = True
     ob = cf.new_object(rock.name + ".moss", out)
     ob.matrix_world = rock.matrix_world.copy()
-    ob.pass_index = 2
     if decimate < 1.0:
-        # the colour lives on the fine mesh's vertices; a decimated shell would smear it
-        # across 3 cm triangles, so bake it to a texture on the low-poly shell instead
-        fine = bpy.data.objects.new(ob.name + ".fine", ob.data.copy())
-        bpy.context.scene.collection.objects.link(fine)
-        fine.matrix_world = ob.matrix_world.copy()
-        fine.data.materials.clear()
-        fine.data.materials.append(mat_vcol("MossVcolBake"))
-        dm = ob.modifiers.new("decimate", "DECIMATE")
+        dm = ob.modifiers.new("decimate", "DECIMATE")   # the print carries every detail
         dm.ratio = decimate
         rs.apply_modifiers(ob)
         for pg in ob.data.polygons:
             pg.use_smooth = True
-        bake_colour(ob, fine, bake_px)
-    ob.data.calc_loop_triangles()
-    print("[build] %s: layers %s, shell %d tris" % (ob.name, [len(l) for l in all_layers], len(ob.data.loop_triangles)))
-    # ---- the edge cards: one alpha card per layer-0 dab near the carpet's edge, carrying
-    # a blob silhouette from the atlas in the dab's tone, tangent to the rock, just above it
-    dep0 = layer_depth(all_layers[0])
-    cards = []
-    tone_of = {}
-    for layer in all_layers:
-        for d in layer:
-            tone_of[id(d)] = d.get("tone")
-    for d in all_layers[0]:
-        i = kd.find(d["c"])[1]
-        if dep0[i] < d["rmax"] * 0.9:
-            cards.append(d)
-    if cards:
-        card_bm = bmesh.new()
-        uv_lay = card_bm.loops.layers.uv.new("uv")
-        tones = []
-        cols_n = ATLAS_N
-        for d in cards:
-            c, n, ax, ay = d["c"], d["n"], d["ax"], d["ay"]
-            R = d["rmax"] * 1.1
-            lift_c = card_lift
-            vs = [card_bm.verts.new(c + n * lift_c + ax * sx * R + ay * sy * R) for sx, sy in ((-1, -1), (1, -1), (1, 1), (-1, 1))]
-            f = card_bm.faces.new(vs)
-            cell = rng.randrange(cols_n * cols_n)
-            cx, cy = cell % cols_n, cell // cols_n
-            for loop, (ux, uy) in zip(f.loops, ((0, 0), (1, 0), (1, 1), (0, 1))):
-                loop[uv_lay].uv = ((cx + ux) / cols_n, (cy + uy) / cols_n)
-            tones.append(d.get("tone") or dark)
-        cme = bpy.data.meshes.new(rock.name + ".moss.edge")
-        card_bm.to_mesh(cme)
-        card_bm.free()
-        attr = cme.attributes.new("col", "FLOAT_COLOR", "FACE")
-        attr.data.foreach_set("color", [c for t in tones for c in (t[0], t[1], t[2], 1.0)])
-        cob = cf.new_object(rock.name + ".moss.edge", cme)
-        cob.pass_index = 2
-        cob.visible_shadow = False          # a decal: it draws the silhouette and casts nothing
-        cob.data.materials.append(mat_edge_cards())
-        ob["edge_cards"] = cob.name
-        print("[build] %s: %d edge cards" % (cob.name, len(cards)))
+    # the smoothing after the lift and the decimate both drag the open edge up off the
+    # rock, and a raised edge shows its unlit underside as a dark slit: the last step
+    # seats every boundary vertex `sink` under the rock's surface again
+    ebm = bmesh.new()
+    ebm.from_mesh(ob.data)
+    for v in ebm.verts:
+        if v.is_boundary:
+            on, n, _i, _d = bvh.find_nearest(v.co)
+            if on is not None:
+                v.co = on - n * sink
+    # the dark-strip check: visible mound faces that look at the ground while the rock
+    # under them looks up (moss on a rock that faces up has no business facing down)
+    ebm.normal_update()
+    under = 0.0
+    R3 = rock.matrix_world.to_3x3()
+    for f in ebm.faces:
+        c = f.calc_center_median()
+        on, n_rock, _i, _d = bvh.find_nearest(c)
+        if on is None or (c - on).dot(n_rock) <= 0:
+            continue                                   # buried in the rock: never seen
+        if (R3 @ f.normal).z < 0 and (R3 @ n_rock).z > 0:
+            under += f.calc_area()
+    ebm.to_mesh(ob.data)
+    ebm.free()
     import json
     json.dump([{"k": d["k"], "c": list(d["c"]), "r": d["r"]} for layer in all_layers for d in layer],
               open(os.path.join("out", "moss", "dabs_%s.json" % rock.name), "w"))
+    # the check that the light stands tallest: the mound's height over the rock's own
+    # surface, averaged per tone step (the tone from the nearest painted vertex)
+    from mathutils.bvhtree import BVHTree
+    rbm = bmesh.new()
+    rbm.from_mesh(rock.data)
+    rbm.transform(rock.matrix_world)
+    bvh = BVHTree.FromBMesh(rbm)
+    rbm.free()
+    by_step = {}
+    for v in ob.data.vertices:
+        p = ob.matrix_world @ v.co
+        hit = bvh.find_nearest(p)
+        if hit[0] is None:
+            continue
+        hgt = (p - hit[0]).dot(hit[1])
+        t = tval[kd.find(p)[1]]
+        if t is None:
+            continue
+        s = round(t * (levels - 1))
+        by_step.setdefault(s, []).append(hgt)
+    print("[height] %s: mm over the rock by tone step (dark->light): %s" % (rock.name, "  ".join(
+        "%d:%.0f(n%d)" % (s, 1000 * sum(h) / len(h), len(h)) for s, h in sorted(by_step.items()))))
+    rock.data.calc_loop_triangles()
+    ob.data.calc_loop_triangles()
+    tris = (len(rock.data.loop_triangles), len(ob.data.loop_triangles))
+    if combine:
+        # the game asset: the mound closed into a solid that reaches into the rock, then
+        # unioned with it, so the rock and its moss are one mesh under one texture; the
+        # mound's faces carry `moss` through the union, the print's mask
+        ob.data.attributes.new("moss", "FLOAT", "FACE").data.foreach_set("value", [1.0] * len(ob.data.polygons))
+        so = ob.modifiers.new("solid", "SOLIDIFY")
+        so.thickness = solid
+        so.offset = -1.0
+        so.use_rim = True
+        rs.apply_modifiers(ob)
+        bo = rock.modifiers.new("moss", "BOOLEAN")
+        bo.operation = "UNION"
+        bo.solver = "EXACT"
+        bo.object = ob
+        rs.apply_modifiers(rock)
+        me = ob.data
+        bpy.data.objects.remove(ob)
+        bpy.data.meshes.remove(me)
+        rock.data.calc_loop_triangles()
+        print("[build] %s: layers %s, rock %d + mound %d tris -> combined %d" % (
+            rock.name, [len(l) for l in all_layers], tris[0], tris[1], len(rock.data.loop_triangles)))
+        print_moss(rock, all_layers, dark, texel=texel, edge=tex_edge, mask_attr="moss")
+        rock["baked"] = True
+        return rock
+    print("[build] %s: layers %s, rock %d + mound %d tris, %.1f cm2 facing down" % (rock.name, [len(l) for l in all_layers], tris[0], tris[1], under * 1e4))
+    print_moss(ob, all_layers, dark, texel=texel, edge=tex_edge, base_mat=False)
+    ob["baked"] = True
     return ob
 
 
-# ---------------------------------------------------------------- edge cards
-ATLAS_N = 8          # blob silhouettes per side of the atlas
-ATLAS_PX = 64        # pixels per cell
-
-
-def blob_atlas(seed=7):
-    """An ATLAS_N x ATLAS_N sheet of rounded irregular blob silhouettes (the same polar
-    harmonics as the painted dabs), white with the shape in the alpha, soft 1.5 px edge."""
-    name = "MossBlobAtlas"
-    if name in bpy.data.images:
-        return bpy.data.images[name]
-    import numpy as np
-    rng = random.Random(seed)
-    size = ATLAS_N * ATLAS_PX
-    px = np.zeros((size, size, 4), dtype=np.float32)
-    px[..., :3] = 1.0
-    ys, xs = np.mgrid[0:ATLAS_PX, 0:ATLAS_PX]
-    cx = cy = (ATLAS_PX - 1) / 2
-    for cell in range(ATLAS_N * ATLAS_N):
-        harm = ((rng.uniform(0.08, 0.3), rng.uniform(0, 2 * math.pi)),
-                (rng.uniform(0.1, 0.35), rng.uniform(0, 2 * math.pi)),
-                (rng.uniform(0.0, 0.18), rng.uniform(0, 2 * math.pi)))
-        r0 = (ATLAS_PX / 2) / (1.1 * (1 + sum(a for a, _ in harm)))
-        th = np.arctan2(ys - cy, xs - cx)
-        rr = r0 * (1 + sum(a * np.cos((j + 1) * th - ph) for j, (a, ph) in enumerate(harm)))
-        dist = np.hypot(xs - cx, ys - cy)
-        alpha = np.clip((rr - dist) / 1.5 + 0.5, 0, 1)
-        x0, y0 = (cell % ATLAS_N) * ATLAS_PX, (cell // ATLAS_N) * ATLAS_PX
-        px[y0:y0 + ATLAS_PX, x0:x0 + ATLAS_PX, 3] = alpha
-    img = bpy.data.images.new(name, size, size, alpha=True)
-    img.pixels.foreach_set(px.ravel())
-    img.pack()
-    return img
-
-
-def mat_edge_cards():
-    name = "MossEdgeCards"
-    if name in bpy.data.materials:
-        return bpy.data.materials[name]
-    mat = bpy.data.materials.new(name)
+# ---------------------------------------------------------------- the print
+def bake_field(ob, what, lo, span, img):
+    """Write the world-space `what` ("Position" or "Normal", or "attr:<name>" for a mesh
+    attribute) of every texel of `ob`'s UV map into the float image `img`, mapped into
+    0..1 by (x - lo) / span: an emission bake."""
+    sc = bpy.context.scene
+    mat = bpy.data.materials.new("bake." + what)
     nt = cf._nodes(mat)
     N = nt.nodes.new
     L = nt.links.new
     out = N("ShaderNodeOutputMaterial")
-    bsdf = N("ShaderNodeBsdfDiffuse")
-    bsdf.inputs["Roughness"].default_value = 1.0
-    attr = N("ShaderNodeAttribute")
-    attr.attribute_name = "col"
-    L(attr.outputs["Color"], bsdf.inputs["Color"])
+    em = N("ShaderNodeEmission")
+    if what.startswith("attr:"):
+        attr = N("ShaderNodeAttribute")
+        attr.attribute_name = what[5:]
+        src = attr.outputs["Fac"]
+    else:
+        src = N("ShaderNodeNewGeometry").outputs[what]
+    sub = N("ShaderNodeVectorMath")
+    sub.operation = "SUBTRACT"
+    sub.inputs[1].default_value = lo
+    div = N("ShaderNodeVectorMath")
+    div.operation = "DIVIDE"
+    div.inputs[1].default_value = span
+    L(src, sub.inputs[0])
+    L(sub.outputs[0], div.inputs[0])
+    L(div.outputs[0], em.inputs["Color"])
+    L(em.outputs[0], out.inputs[0])
     tex = N("ShaderNodeTexImage")
-    tex.image = blob_atlas()
-    tex.interpolation = "Linear"
-    trans = N("ShaderNodeBsdfTransparent")
-    mix = N("ShaderNodeMixShader")
-    L(tex.outputs["Alpha"], mix.inputs[0])
-    L(trans.outputs[0], mix.inputs[1])
-    L(bsdf.outputs[0], mix.inputs[2])
-    # a card seen from behind (overhanging the rock's silhouette) is transparent, or its
-    # unlit back shows as a black sliver against the world
-    geo = N("ShaderNodeNewGeometry")
-    back = N("ShaderNodeMixShader")
-    L(geo.outputs["Backfacing"], back.inputs[0])
-    L(mix.outputs[0], back.inputs[1])
-    L(trans.outputs[0], back.inputs[2])
-    L(back.outputs[0], out.inputs[0])
-    mat.surface_render_method = "DITHERED"
-    mat.use_backface_culling = False
-    return mat
+    tex.image = img
+    nt.nodes.active = tex
+    keep = list(ob.data.materials)
+    ob.data.materials.clear()
+    ob.data.materials.append(mat)
+    for o in sc.objects:
+        o.select_set(False)
+    bpy.context.view_layer.objects.active = ob
+    ob.select_set(True)
+    samples = sc.cycles.samples
+    sc.cycles.samples = 1
+    sc.render.bake.use_selected_to_active = False
+    sc.render.bake.margin = 4
+    bpy.ops.object.bake(type="EMIT")
+    sc.cycles.samples = samples
+    ob.select_set(False)
+    ob.data.materials.clear()
+    for m in keep:
+        ob.data.materials.append(m)
+    bpy.data.materials.remove(mat)
 
 
-def bake_colour(low, fine, px=1024):
-    """Bake the fine mesh's vertex colour onto a texture on the low-poly shell: a UV
-    unwrap of the shell, then Cycles' selected-to-active diffuse bake (colour only)."""
+def print_moss(ob, layers, base, texel=0.0015, edge=0.002, base_mat=True, zmax=0.08, cell=0.08, mask_attr=None):
+    """Print the dabs onto `ob`'s own texture. The object is UV-unwrapped, the world
+    position and normal of every texel are baked, and every dab (lower layers first) is
+    evaluated per texel: its polar-blob outline in its tangent plane, a 1-`edge` ramp of
+    anti-aliasing, its flat tone over what is below. The texture holds the moss colour
+    and, in alpha, the moss mask: the face attribute `mask_attr` when given (the combined
+    asset: moss on the mound's faces only), else the dabs' coverage. With `base_mat` the
+    object's own material (the slate) shows where the mask is 0; without, all moss."""
+    import numpy as np
     sc = bpy.context.scene
     for o in sc.objects:
         o.select_set(False)
-    bpy.context.view_layer.objects.active = low
-    low.select_set(True)
+    bpy.context.view_layer.objects.active = ob
+    ob.select_set(True)
     bpy.ops.object.mode_set(mode="EDIT")
     bpy.ops.mesh.select_all(action="SELECT")
-    bpy.ops.uv.smart_project(angle_limit=math.radians(66), island_margin=0.003)
+    bpy.ops.uv.smart_project(angle_limit=math.radians(66), island_margin=0.002)
     bpy.ops.object.mode_set(mode="OBJECT")
-    img = bpy.data.images.new(low.name + ".col", px, px, alpha=False)
-    mat = bpy.data.materials.new(low.name + ".baked")
-    nt = cf._nodes(mat)
+    ob.select_set(False)
+    # the texture's side from the surface area at `texel` metres a texel, assuming the
+    # islands fill about 60 % of the square
+    M = ob.matrix_world
+    area = sum(pg.area for pg in ob.data.polygons)   # local; the rocks carry no scale
+    px = 1 << max(8, min(12, math.ceil(math.log2(math.sqrt(area / 0.6) / texel))))
+    pts = [M @ Vector(c) for c in ob.bound_box]
+    lo = Vector((min(p.x for p in pts), min(p.y for p in pts), min(p.z for p in pts))) - Vector((0.01, 0.01, 0.01))
+    span = Vector((max(p.x for p in pts), max(p.y for p in pts), max(p.z for p in pts))) + Vector((0.01, 0.01, 0.01)) - lo
+    fields = []
+    bakes = [("Position", lo, span), ("Normal", Vector((-1, -1, -1)), Vector((2, 2, 2)))]
+    if mask_attr:
+        bakes.append(("attr:" + mask_attr, Vector((0, 0, 0)), Vector((1, 1, 1))))
+    for what, l0, s0 in bakes:
+        img = bpy.data.images.new("%s.%s" % (ob.name, what), px, px, alpha=True, float_buffer=True)
+        img.colorspace_settings.name = "Non-Color"
+        img.pixels.foreach_set(np.zeros(px * px * 4, dtype=np.float32))
+        bake_field(ob, what, l0, s0, img)
+        a = np.empty(px * px * 4, dtype=np.float32)
+        img.pixels.foreach_get(a)
+        bpy.data.images.remove(img)
+        fields.append(a.reshape(-1, 4))
+    valid = np.nonzero(fields[0][:, 3] > 0.5)[0]
+    p = fields[0][valid, :3] * np.array(span) + np.array(lo)
+    nrm = fields[1][valid, :3] * 2 - 1
+    # a spatial hash of the texels, `cell` metres a bucket
+    g = np.floor((p - np.array(lo)) / cell).astype(np.int64)
+    dims = g.max(0) + 1
+    key = (g[:, 0] * dims[1] + g[:, 1]) * dims[2] + g[:, 2]
+    order = np.argsort(key, kind="stable")
+    uk, start, count = np.unique(key[order], return_index=True, return_counts=True)
+    bucket = {int(k): order[s:s + c] for k, s, c in zip(uk, start, count)}
+    col = np.tile(np.array(base[:3], dtype=np.float64), (len(valid), 1))
+    cov = np.zeros(len(valid))
+    lo_a = np.array(lo)
+    for layer in layers:
+        for d in layer:
+            c = np.array(d["c"])
+            reach = np.array((d["rmax"] + edge,) * 3) + zmax
+            g0 = np.floor((c - reach - lo_a) / cell).astype(np.int64)
+            g1 = np.floor((c + reach - lo_a) / cell).astype(np.int64)
+            parts = []
+            for gx in range(max(g0[0], 0), min(g1[0], dims[0] - 1) + 1):
+                for gy in range(max(g0[1], 0), min(g1[1], dims[1] - 1) + 1):
+                    for gz in range(max(g0[2], 0), min(g1[2], dims[2] - 1) + 1):
+                        b = bucket.get(int((gx * dims[1] + gy) * dims[2] + gz))
+                        if b is not None:
+                            parts.append(b)
+            if not parts:
+                continue
+            sel = np.concatenate(parts)
+            v = p[sel] - c
+            x = v @ np.array(d["ax"])
+            y = v @ np.array(d["ay"])
+            z = v @ np.array(d["n"])
+            th = np.arctan2(y, x)
+            rr = d["r"] * (1 + sum(a * np.cos((j + 1) * th - ph) for j, (a, ph) in enumerate(d["harm"])))
+            w = np.clip((rr - np.hypot(x, y)) / edge + 0.5, 0.0, 1.0)
+            # the dab's own side of the rock only: near its plane and facing its way
+            w *= (np.abs(z) < zmax) & ((nrm[sel] @ np.array(d["n"])) > 0.2)
+            hit = w > 0
+            if not hit.any():
+                continue
+            sel, w = sel[hit], w[hit]
+            tn = np.array(d["tone"])
+            first = cov[sel] == 0          # bare rock takes the dab's tone whole; the
+            cur = np.where(first[:, None], tn, col[sel])   # coverage carries its edge
+            col[sel] = cur + (tn - cur) * w[:, None]
+            cov[sel] = np.maximum(cov[sel], w)
+    # into an 8-bit sRGB texture, the coverage in alpha (channel-packed: no premultiply)
+    srgb = np.where(col <= 0.0031308, col * 12.92, 1.055 * np.power(np.maximum(col, 0), 1 / 2.4) - 0.055)
+    out = np.zeros((px * px, 4), dtype=np.float32)
+    out[valid, :3] = srgb
+    if mask_attr:
+        cov = np.clip(fields[2][valid, 0], 0.0, 1.0)
+    out[valid, 3] = cov
+    img = bpy.data.images.new(ob.name + ".moss", px, px, alpha=True)
+    img.alpha_mode = "CHANNEL_PACKED"
+    img.pixels.foreach_set(out.ravel())
+    img.pack()
+    print("[print] %s: %d px, %.1f mm a texel, %d dabs, %.0f %% of texels moss" % (
+        ob.name, px, 1000 * math.sqrt(area / max(len(valid), 1)), sum(len(l) for l in layers), 100 * (cov > 0.5).mean()))
+    base = ob.data.materials[0] if base_mat and ob.data.materials else None
+    ob.data.materials.clear()
+    ob.data.materials.append(mat_printed(ob.name + ".printed", img, base))
+    ob["baked"] = True
+
+
+def mat_printed(name, img, base=None):
+    """The print under a pure diffuse (the moss is matte), over `base` by the print's
+    coverage; without a base, all moss."""
+    mat = base.copy() if base else bpy.data.materials.new(name)
+    mat.name = name
+    if base:
+        nt = mat.node_tree
+    else:
+        nt = cf._nodes(mat)
+        nt.nodes.new("ShaderNodeOutputMaterial")
     N = nt.nodes.new
     L = nt.links.new
-    out = N("ShaderNodeOutputMaterial")
-    bsdf = N("ShaderNodeBsdfDiffuse")
-    bsdf.inputs["Roughness"].default_value = 1.0
+    out = next(n for n in nt.nodes if n.type == "OUTPUT_MATERIAL")
+    under = out.inputs[0].links[0].from_socket if out.inputs[0].links else None
     tex = N("ShaderNodeTexImage")
     tex.image = img
-    tex.interpolation = "Closest"       # the dab edges stay crisp at the texel
+    tex.interpolation = "Linear"
+    bsdf = N("ShaderNodeBsdfDiffuse")
+    bsdf.inputs["Roughness"].default_value = 1.0
     L(tex.outputs["Color"], bsdf.inputs["Color"])
-    L(bsdf.outputs[0], out.inputs[0])
-    nt.nodes.active = tex
-    low.data.materials.clear()
-    low.data.materials.append(mat)
-    fine.select_set(True)
-    keep = (sc.cycles.samples, sc.render.bake.use_selected_to_active, sc.render.bake.cage_extrusion)
-    sc.cycles.samples = 4
-    sc.render.bake.use_selected_to_active = True
-    sc.render.bake.cage_extrusion = 0.03
-    sc.render.bake.max_ray_distance = 0.08
-    sc.render.bake.margin = 8
-    sc.render.bake.use_pass_direct = False
-    sc.render.bake.use_pass_indirect = False
-    sc.render.bake.use_pass_color = True
-    bpy.ops.object.bake(type="DIFFUSE")
-    sc.cycles.samples, sc.render.bake.use_selected_to_active, sc.render.bake.cage_extrusion = keep
-    img.pack()
-    fme = fine.data
-    bpy.data.objects.remove(fine)
-    bpy.data.meshes.remove(fme)
-    low.select_set(False)
-    low["baked"] = True
+    if under is None:
+        L(bsdf.outputs[0], out.inputs[0])
+        return mat
+    mix = N("ShaderNodeMixShader")
+    L(tex.outputs["Alpha"], mix.inputs[0])
+    L(under, mix.inputs[1])
+    L(bsdf.outputs[0], mix.inputs[2])
+    L(mix.outputs[0], out.inputs[0])
+    return mat
 
 
 def mat_vcol(name):
@@ -1611,8 +1718,12 @@ def main():
     ap.add_argument("--surface", default="paint")
     ap.add_argument("--geom", default="layers", choices=["cushion", "mound", "clump", "clumpflat", "layers"])
     ap.add_argument("--layers", type=int, default=5)
-    ap.add_argument("--edge", type=float, default=0.010, help="layers: a dab's soft edge width, m")
-    ap.add_argument("--cblur", type=int, default=0, help="layers: passes of colour averaging over the mesh")
+    ap.add_argument("--edge", type=float, default=0.002, help="layers: a printed dab's anti-aliased edge, m")
+    ap.add_argument("--texel", type=float, default=0.0015, help="layers: the print's texel size, m")
+    ap.add_argument("--lift", type=float, default=0.09, help="layers: the mound's height under the lightest moss over the darkest, m")
+    ap.add_argument("--decimate", type=float, default=0.02, help="layers: the mound's decimate ratio")
+    ap.add_argument("--lift-blur", type=int, default=40, help="layers: passes of averaging on the mound's height field (6 mm a pass)")
+    ap.add_argument("--combine", action="store_true", help="layers: the game asset - the mound unioned into the rock, one texture")
     ap.add_argument("--levels", type=int, default=8, help="layers: tone steps from darkest to lightest")
     ap.add_argument("--light", default="v6", choices=["v6", "soft", "overcast"])
     ap.add_argument("--view", default="agx", choices=["agx", "neutral", "filmic", "standard"], help="view transform: AgX desaturates bright greens")
@@ -1666,7 +1777,8 @@ def main():
     carpets = []
     for i, r in enumerate(rocks):
         if args.geom == "layers":
-            c = grow_layers(r, seed=100 + i, voxel=args.voxel, layers=args.layers, gain=gain, edge=args.edge, cblur=args.cblur, levels=args.levels)
+            c = grow_layers(r, seed=100 + i, voxel=args.voxel, layers=args.layers, gain=gain, levels=args.levels,
+                            tex_edge=args.edge, texel=args.texel, lift_h=args.lift, lift_blur=args.lift_blur, decimate=args.decimate, combine=args.combine)
         elif args.geom.startswith("clump"):
             c = grow_clumps(r, seed=100 + i, voxel=args.voxel, thick=args.thick, taper=args.taper, dab=args.clump,
                             fingers=args.fingers, light_reach=args.reach, flat=args.geom == "clumpflat", gain=gain, spread=args.spread)

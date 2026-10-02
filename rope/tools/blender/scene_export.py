@@ -298,6 +298,11 @@ def image_credits(obs, warnings):
                     images.add(n.image)
     credits, unknown = {}, []
     for im in sorted(images, key=lambda i: i.name):
+        # An image a tool drew for one object (the moss add-on prints one per
+        # rock) carries the script that drew it: an original, no credit owed,
+        # and no name the table could list in advance.
+        if im.get("generated_by"):
+            continue
         name = re.sub(r"\.\d{3}$", "", im.name)
         entry = table["images"].get(name) or table["images"].get(os.path.basename(bpy.path.abspath(im.filepath)))
         if entry is None:
@@ -342,22 +347,33 @@ def stats(ob, depsgraph):
     return tris, {"min": [round(v, 4) for v in lo], "max": [round(v, 4) for v in hi]}
 
 
-def grow_moss(scene, warnings):
-    """Grow every moss object from its paint and settings (the moss add-on,
-    tools/blender/moss, imported from the repo since the export runs with
-    --factory-startup). The paint is the source; the mesh saved in the .blend
-    is only the last preview, and would be stale against a host edited or
-    re-imported since. A moss whose host is gone is hidden from the export."""
+def grow_painted(scene, warnings):
+    """Grow every ivy and moss object from its paint and settings (the ivy and
+    moss add-ons, tools/blender/ivy and tools/blender/moss, imported from the
+    repo since the export runs with --factory-startup). The paint is the source;
+    the mesh saved in the .blend is only the last preview, and would be stale
+    against a host edited or re-imported since. One whose host is gone is hidden
+    from the export. The ivy goes first: its rebuild carries a file from before
+    2026-10-02 (when the ivy add-on was called moss) to the ivy names, which the
+    moss add-on must not mistake for its own."""
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import ivy
     import moss
 
+    ivy.register()
+    for ob, result in ivy.rebuild_all(scene):
+        if result is None:
+            warnings.append(f"{ob.name}: {ob.ivy.status}; not exported")
+            ob.hide_render = True
+            continue
+        log(f"ivy {ob.name} on {ob.ivy.host}: {len(result.triangles)} triangles ({result.leaves} leaves, {result.vines} vines), {ob.ivy.build_ms:.0f} ms")
     moss.register()
     for ob, result in moss.rebuild_all(scene):
         if result is None:
             warnings.append(f"{ob.name}: {ob.moss.status}; not exported")
             ob.hide_render = True
             continue
-        log(f"moss {ob.name} on {ob.moss.host}: {len(result.triangles)} triangles ({result.leaves} leaves, {result.vines} vines), {ob.moss.build_ms:.0f} ms")
+        log(f"moss {ob.name} on {ob.moss.host}: {len(result.triangles)} triangles, {result.dabs} dabs, print {result.image.shape[0]} px, {ob.moss.build_ms:.0f} ms")
 
 
 def formation_warnings(scene, warnings):
@@ -397,7 +413,7 @@ def main():
     excluded = excluded_collections(view_layer)
 
     kept, skipped, warnings = [], [], []
-    grow_moss(scene, warnings)
+    grow_painted(scene, warnings)
     formation_warnings(scene, warnings)
     for ob in scene.objects:
         reason = skip_reason(ob, excluded)

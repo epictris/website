@@ -1,565 +1,451 @@
-"""Ivy geometry: a painted mask on a host mesh becomes a carpet of flat ivy
-leaves that has grown out from one origin point, every leaf pointing away
-from it and lying over the leaf beyond it, and vines of the same leaves hang
-from anchors placed on the host by hand. The look is the painted-foliage one
-(Genshin, Breath of the Wild, The Witness): every leaf is one flat colour,
-shaded by a smooth "hull" normal borrowed from the rock, so the carpet reads
-as one soft mass of distinct colour blocks. See rope/docs/blender-moss.md for
-the history of the choices.
+"""Painterly moss: a painted mask on a host mesh becomes a low mound of moss whose
+colour is printed dab by dab, darkest at its rim and lightest in a few clumps, and
+whose height follows its colour - the lighter, the taller.
 
-Everything here is a pure function of (host mesh, host matrix, stamps, vines,
-origin, params) - no bpy state is read or written - so the add-on's live
-rebuild and the scene exporter's rebuild produce the same mesh bit for bit.
+It is the cave sheet study's moss (rope/tools/blender/cave-sheet-study/moss_study.py,
+`grow_layers`, settled with the owner over many rounds on 2026-10-01/02; the history
+is rope/docs/blender-moss.md) made into a pure function of (host mesh, host matrix,
+stamps, params): no bpy state is read or written, except through the `decimate`
+callable the caller passes, so the add-on's rebuild and the scene exporter's grow
+the same moss.
 
-THE PIPELINE (in world space, metres; the result is returned in the host's
-local frame, because the moss object is parented to the host with an identity
-transform):
+THE PIPELINE (world space, metres; the result is returned in the host's local frame,
+because the moss object is parented to the host with an identity transform):
 
-1. The host's evaluated triangles, welded.
-2. The triangles near a stamp, refined by edge bisection to `resolution`.
-3. The mask: the stamps composited in painting order, and a lobed threshold.
-   The paint is the only thing that decides WHERE ivy grows.
-4. The hull normal: the host's vertex normals smoothed over `rounding`, so a
-   leaf on a facet shades with the rock's rounded volume, not the facet.
-5. The underlay: the painted part of the host, clipped on the iso-line and
-   lifted 2 cm, in the leaf colour. Where leaves thin out it is ivy, not rock.
-6. The origin and the growth field: the origin (placed by hand, else the top
-   of the paint) is snapped to the refined mesh and the distance from it along
-   the mesh is found (Dijkstra over the refined edges, then smoothed). Its
-   gradient is the growth direction: which way the runners went.
-7. Candidates: points on the refined triangles inside the paint, thousands per
-   square metre, with the paint field, the growth distance and their gradients.
-8. Strata: `sheets` sheets of leaves, 3 cm apart, each laying a share of
-   `leaf_fill` times the paint's area in leaves. A leaf is a card lying on
-   the hull with its BASE at the candidate and its tip pointing down the growth
-   field (away from the origin, strayed by up to `spread`), raised `thickness`
-   at the origin and sloping down to the rock at the far end of the carpet,
-   and pitched tip-up by `tilt`. Cards near one another share the growth
-   direction and the pitch, so they are parallel planes offset along the
-   growth: a leaf's tip lies OVER the base of the leaf beyond it and never cuts
-   through it. At the paint's edge the leaves tilt outer-edge-down onto the
-   rock (about the field's outward gradient), so the mass rolls into the stone
-   instead of ending as a shelf. Finally every card is rotated the least that
-   makes it face the game's camera (Blender -y) by `facing`, so the silhouette
-   is made of leaf faces, never of edges.
-9. Vines: one per anchor, a 3 mm stem hanging straight down from the anchor,
-   held in front of the rock by a ray cast, with ivy leaves alternating sides
-   and tapering toward the tip. Nothing places a vine but the artist.
-10. Colour: a vertex colour the material multiplies into a white atlas. Three
-   green tones patch across the rock by a slow noise, lit toward `light`
-   where the hull faces up, darkened and cooled in the lower strata, then a
-   small value jitter per leaf so neighbouring blocks differ.
-11. Shadow: a second mesh, a decal lying 3 mm off the rock around the paint,
-   `shadow_color` at `shadow_strength` under the carpet and fading out over
-   `shadow_reach` from the paint's edge - further below it than beside it by
-   `shadow_drop`, as a shadow from above falls. The leaves cast real shadows
-   too (Blender: visible_shadow; the game: render3d/mossShadow.ts), but the
-   game's sun biases hide a shadow within a few centimetres of the stone, and
-   the decal is that near shade. Its alpha is the vertex colour's, so it is
-   one blended material with no texture.
-
-The atlas (mesh_io.atlas) is a 4 x 4 sheet of silhouettes: fifteen ivy leaves,
-three- and five-lobed, each drawn a little differently, base at the bottom of
-the card and tip at the top, and one faceted round the underlay and the stems
-point at, so the whole ivy is one material and one draw.
+1. The host's triangles under the stamps (and a dab's reach beyond them), refined
+   to `resolution`, sorted by position so every random draw is reproducible.
+2. The paint: the stamps composited into a coverage; `threshold` cuts the painted
+   area. The paint decides WHERE moss grows; the dabs draw its outline.
+3. Layer 0: the painted area packed with dark dabs. A dab is a rounded irregular
+   blob - a polar curve r(t) = r (1 + a1 cos(t - p1) + a2 cos(2t - p2) +
+   a3 cos(3t - p3)) - and always CONCAVE: a draw whose solidity (area over convex
+   hull area) is above SOLIDITY_MAX (0.97) is drawn again (the owner: "the blobs look too
+   round ... remove all the convex shapes").
+4. The erosion field: the painted area eroded inward pass after pass by an uneven
+   step (a slow noise decides where a pass bites, a fast one roughs the outline);
+   a vertex scores how many passes it survives, continuously. Its ridges and
+   summits are where the light belongs. The step is one fixed reference for every
+   rock (`ref_depth` / `steps_deep`), so a small patch scores low and stays
+   mid-green, as small patches do.
+5. Layers 1..`layers`: lighter clumps grown dab by dab inside the layer below,
+   seeded at the field's summits, each kept `buffer` inside the parent layer's
+   extent; the first two fill to that buffer, the rest are islands holding a
+   shrinking share of the parent's dabs. Clumps under `min_clump` dabs go.
+6. Tone: per dab, from the field at the dab and its layer, plus a slow positional
+   mottle, quantised to `levels` steps from `dark` to `light` (spaced in sRGB), so
+   neighbours share a step and merge into one blotch. No per-dab randomness.
+7. Height: `floor` for the darkest moss plus the tone painted onto the vertices
+   times `lift` (the lightest moss stands `floor + lift` proud), the tone's share
+   times how much the surface faces up (`up_floor` of it on a wall: a full pile on
+   a wall faces the ground on its way down), blurred over `height_blur`. At the
+   rim the mound starts `sink` under the rock and rises to that height over `rim`,
+   so it crosses the rock along one line: a mound left flush with the rock across
+   an area decimates into slivers with noise normals that shade a dark strip along
+   the moss edge. (While the dabs were also printed on the rock, moss thinner
+   than `sink` was print only; without that print it would be a hole.)
+8. The mound: the refined mesh where the dabs reach (`inner_u` of a dab's outline),
+   offset along the smoothed normal from the rock surface, decimated to
+   `mound_density` triangles a square metre, its open edge seated `sink` under the
+   rock again.
+9. The print: the mound's own texture. Every mound triangle gets its own chart in
+   a shelf-packed atlas at `texel` metres a texel; each texel's world position and
+   normal are interpolated, and every dab is evaluated per texel - its outline in
+   its tangent plane, a `print_edge` anti-aliased edge, its flat tone over what is
+   below. The outline of the moss is where the mound leaves the rock.
 """
 
 import heapq
 import math
 import random
-from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
-from mathutils import Vector, geometry, noise
+from mathutils import Vector, noise
 from mathutils.bvhtree import BVHTree
 from mathutils.kdtree import KDTree
 
-# Toward the game's camera. The game looks along glTF -z, which is Blender -y.
-FACE = np.array((0.0, -1.0, 0.0))
-UP = np.array((0.0, 0.0, 1.0))
+from .stampbrush.geometry import edges as mesh_edges
+from .stampbrush.geometry import mask, normalize, refine, smooth_field, smoothstep, stamps_world, vertex_normals
 
-ATLAS_CELLS = 4
-LEAF_CELLS = tuple(range(15))  # ivy leaves, base at the bottom of the card and tip at the top
-FILL_CELL = 15  # a faceted round: alpha 1 at its centre, where the underlay and the stems sample
-# Where a leaf sits in its card, as fractions of the card's height from the
-# bottom: its base (the stalk) and its tip. mesh_io draws the leaves to this.
-LEAF_BASE = 0.09
-LEAF_TIP = 0.91
-LEAF_SPAN = LEAF_TIP - LEAF_BASE  # a card is leaf length / LEAF_SPAN tall
-# A card's UV quad covers only the inner part of its cell, and the shape is
-# drawn inside that: the outer ATLAS_INSET of every cell is transparent on
-# both sides of every cell border, so bilinear filtering and the first mip
-# levels never blend a neighbouring cell's alpha into a card's edge. Cells
-# packed edge to edge drew a faint outline of every card square.
-ATLAS_INSET = 0.12
-STRATUM_GAP = 0.03  # between the sheets of leaves: room for one to shadow the next past the game's shadow biases (render3d/mossShadow.ts)
-LEAF_CLEAR = 0.004  # the lowest sheet's height over the underlay
-EDGE_TILT = math.radians(45)  # how far a leaf at the paint's very edge tilts outer-edge-down onto the rock
+# A dab must be at least this concave (area over its convex hull's). Measured over
+# 2000 draws of HARMONICS: median 0.985, 5th percentile 0.956, and 18 % at or under
+# 0.97 - enough of a dent to see, at about five draws a dab.
+SOLIDITY_MAX = 0.97
+MAX_DRAWS = 200
+DEBUG = bool(__import__("os").environ.get("MOSS_DEBUG"))
+HARMONICS = ((0.08, 0.3), (0.1, 0.35), (0.0, 0.18))  # a1, a2, a3 ranges
+FRACS = (1.0, 1.0, 0.55, 0.3, 0.18)  # each layer's share of its parent's dabs; 1 = fill to the buffer
+FILL_SEED_AREA = 0.0144  # m^2 of eligible area per extra seed in a fill layer (400 study voxels)
+# The study measured every depth in hops over its 6 mm voxel remesh, a Manhattan-like
+# metric: 1.42x the straight-line distance (median over 5-25 cm on the study's column,
+# 2026-10-02), where paths over this refined mesh run 1.06x. Its buffers, erosion steps
+# and rim were settled in that unit, so depths here are scaled to it.
+STUDY_METRIC = 1.35
+MOUND_LIFT_ROOM = 0.03  # how far off the slab of mound over its plane a texel may sit and still take a dab
 
 
 @dataclass
 class Params:
-    """Every knob of a moss object. Lengths are metres, angles degrees, colours linear RGB."""
+    """Every knob of a moss object. Lengths are metres, colours linear RGB."""
 
     seed: int = 0
-    resolution: float = 0.04
-    # Outline
-    threshold: float = 0.35
-    edge_noise: float = 0.15
-    edge_scale: float = 0.18
-    min_patch: float = 0.01  # m^2; islands smaller than this are dropped
-    rounding: float = 0.12  # how far the host's creases are rounded in the hull normal
-    # Carpet
-    thickness: float = 0.04  # how high the leaves stand over the underlay at the origin; they slope to the rock at the far end
-    # `sheets` and `leaf_fill` are new names (2026-09-30): the blob carpet's
-    # `layers` (8, 8 mm apart) and `fill` (per layer) live on in old files, and
-    # read by the ivy they made 8 sheets 3 cm apart with a thin fill - leaves
-    # floating in the air. A renamed property leaves those values behind.
-    sheets: int = 3  # sheets of leaves
-    leaf_min: float = 0.07  # leaf length
-    leaf_max: float = 0.12
-    leaf_fill: float = 3.5  # leaf area laid over the paint, as a multiple of the paint's area, shared by the sheets
-    edge_fill: float = 2.5  # extra fill toward the paint's edge, where the underlay would otherwise show
-    density: float = 6000.0  # candidate points per m^2 of paint
-    facing: float = 0.5  # every leaf faces the camera by at least acos(facing)
-    shoulder: float = 0.5  # the outer share of the paint (in mask units) that rolls into the rock
-    underlay: float = 0.02
-    tilt: float = 8.0  # degrees a leaf pitches tip-up off the hull
-    spread: float = 25.0  # degrees a leaf may stray from the growth direction
-    taper: float = 0.3  # how much smaller the leaves at the far end of the carpet are
-    # Vines (each one is placed by hand; these are the leaves it wears)
-    vine_length: float = 0.55  # the length a newly placed vine is given
-    leaf_size: float = 0.15  # leaf length at the top of a vine
-    leaf_tip: float = 0.045  # ... and at its tip
-    # Colour (linear RGB). Since 2026-09-30 about a third of the study's tones
-    # in green and a fifth in red and blue: under the river's sun and fill the
-    # old leaf (0.78 green) lit and shaded alike clipped to near-white after
-    # tone mapping, and the leaves' shadows vanished with the contrast; a
-    # sixth all round was "too dark", so the green came back up further than
-    # the rest ("a bit more vibrant"). Real foliage sits at 0.1-0.3.
-    tone_a: tuple = (0.151, 0.240, 0.010)  # yellow-green
-    tone_b: tuple = (0.059, 0.184, 0.010)  # leaf green
-    tone_c: tuple = (0.029, 0.147, 0.033)  # blue-green
-    light: tuple = (0.196, 0.257, 0.017)  # the sunward crown
-    shade: tuple = (0.025, 0.110, 0.040)  # what the deep layers cool toward
-    tone_scale: float = 0.22
-    variation: float = 0.16
-    depth_shade: float = 0.0  # off since 2026-09-30: darkness comes from the shadows, not the sheet (the owner)
-    # Shadow (the decal on the rock under and around the carpet)
-    shadow_strength: float = 0.7  # opacity under the carpet; 0 grows no shadow
-    shadow_reach: float = 0.25  # how far beside the paint's edge it fades out
-    shadow_drop: float = 1.5  # how much further it reaches below the paint than beside it
-    shadow_color: tuple = (0.012, 0.03, 0.06)  # linear RGB, a cool dark
-
-
-@dataclass
-class Stamps:
-    """Brush stamps in the host's LOCAL frame, in painting order."""
-
-    position: np.ndarray  # (S, 3)
-    normal: np.ndarray  # (S, 3)
-    radius: np.ndarray  # (S,) world metres
-    strength: np.ndarray  # (S,) > 0 paints, < 0 erases
-
-    @staticmethod
-    def empty():
-        return Stamps(np.zeros((0, 3)), np.zeros((0, 3)), np.zeros(0), np.zeros(0))
-
-    def __len__(self):
-        return len(self.radius)
-
-
-@dataclass
-class Vines:
-    """Vine anchors in the host's LOCAL frame: where each vine hangs from, and
-    how long it is (world metres)."""
-
-    position: np.ndarray  # (N, 3)
-    length: np.ndarray  # (N,)
-
-    @staticmethod
-    def empty():
-        return Vines(np.zeros((0, 3)), np.zeros(0))
-
-    def __len__(self):
-        return len(self.length)
+    resolution: float = 0.012  # edge length the host is refined to under the paint
+    threshold: float = 0.35  # paint coverage at which moss starts
+    # Dabs
+    dab_min: float = 0.032
+    dab_max: float = 0.05
+    layers: int = 5
+    shrink: float = 0.92  # dab radius per layer (floored at 0.65)
+    buffer: float = 0.035  # how far inside the layer below a lighter layer stays
+    first_buffer: float = 0.012  # ... for the first lighter layer
+    min_clump: int = 6
+    # Erosion field and tone
+    ref_depth: float = 0.42  # a patch this deep reaches the full range (the same for every rock)
+    steps_deep: float = 5.0
+    erode_scale: float = 14.0  # 1/m: the fast noise that roughs each pass's outline
+    field_mix: float = 0.55  # tone from the field vs from the layer
+    curve: float = 1.3
+    mottle: float = 0.6  # of a tone step
+    mottle_scale: float = 4.0  # 1/m
+    levels: int = 8
+    dark: tuple = (0.0237, 0.0567, 0.0419)  # the study's darkest (sRGB 0.167, 0.264, 0.226)
+    light: tuple = (0.0882, 0.1758, 0.0179)  # the study's lightest (sRGB 0.329, 0.456, 0.142)
+    # Height
+    floor: float = 0.008  # the darkest moss stands this proud, away from the rim
+    lift: float = 0.09  # the lightest moss stands this much prouder than the darkest
+    up_floor: float = 0.3  # share of the height a wall keeps
+    height_blur: float = 0.027
+    sink: float = 0.006
+    rim: float = 0.10
+    inner_u: float = 0.88  # the mound stops this far out in a dab's outline
+    min_patch: float = 0.002  # m^2: mound islands smaller than this go
+    mound_density: float = 1500.0  # triangles per m^2 of mound
+    # Print
+    texel: float = 0.0015
+    max_texture: int = 2048
+    print_edge: float = 0.002
 
 
 @dataclass
 class Result:
     vertices: np.ndarray  # (V, 3) host-local
     triangles: np.ndarray  # (T, 3)
-    colors: np.ndarray  # (V, 4) linear RGBA
     uvs: np.ndarray  # (T, 3, 2) per corner
-    normals: np.ndarray  # (V, 3) host-local custom normals (the hull normal)
-    leaves: int = 0  # in the carpet
-    vines: int = 0
-    vine_leaves: int = 0
-    shadow: "Shadow | None" = None
+    image: np.ndarray  # (S, S, 4) linear RGB + coverage, row 0 at the bottom (Blender's order)
+    dabs: int = 0
+    layers: list = field(default_factory=list)  # dabs per layer
+    heights: dict = field(default_factory=dict)  # tone step -> mean mm over the rock (the check: rising)
+    texel: float = 0.0
 
 
-@dataclass
-class Shadow:
-    """The shadow decal, a mesh of its own: host-local vertices, triangles,
-    the colour with the shadow's opacity in its alpha, and the rock's normals."""
-
-    vertices: np.ndarray  # (V, 3)
-    triangles: np.ndarray  # (T, 3)
-    colors: np.ndarray  # (V, 4)
-    normals: np.ndarray  # (V, 3)
+def empty_result():
+    return Result(np.zeros((0, 3)), np.zeros((0, 3), np.int64), np.zeros((0, 3, 2)), np.zeros((0, 0, 4)))
 
 
-def _empty_result():
-    return Result(np.zeros((0, 3)), np.zeros((0, 3), np.int64), np.zeros((0, 4)), np.zeros((0, 3, 2)), np.zeros((0, 3)))
-
-def _normalize(v):
-    n = np.linalg.norm(v, axis=-1, keepdims=True)
-    return v / np.maximum(n, 1e-12)
+def _lin(c):
+    return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
 
 
-def _smoothstep(e0, e1, x):
-    t = np.clip((x - e0) / (e1 - e0), 0.0, 1.0)
-    return t * t * (3.0 - 2.0 * t)
-
-
-def _seed_offset(seed, salt):
-    rng = random.Random(seed * 7919 + salt)
-    return Vector((rng.uniform(-500, 500), rng.uniform(-500, 500), rng.uniform(-500, 500)))
-
-
-def _fbm(points, scale, seed, salt, octaves=3):
-    """Fractal noise in about [-1, 1] at every point, deterministic in seed."""
-    off = _seed_offset(seed, salt)
-    inv = 1.0 / max(scale, 1e-6)
-    out = np.empty(len(points))
-    fractal = noise.fractal
-    for i, p in enumerate(points):
-        out[i] = fractal(Vector((p[0] * inv, p[1] * inv, p[2] * inv)) + off, 0.8, 2.0, octaves, noise_basis="PERLIN_NEW")
-    return out * 0.9
+def _srgb(c):
+    return c * 12.92 if c <= 0.0031308 else 1.055 * (c ** (1 / 2.4)) - 0.055
 
 
 # --------------------------------------------------------------------------
-# 1. Host
+# Dab shapes
 
 
-def host_world(mesh, matrix):
-    """The host's triangles in world space, welded at 10 um."""
-    mesh.calc_loop_triangles()
-    co = np.empty(len(mesh.vertices) * 3, np.float32)
-    mesh.vertices.foreach_get("co", co)
-    tri = np.empty(len(mesh.loop_triangles) * 3, np.int32)
-    mesh.loop_triangles.foreach_get("vertices", tri)
-    co = co.reshape(-1, 3).astype(np.float64)
-    m = np.array(matrix, dtype=np.float64)
-    co = co @ m[:3, :3].T + m[:3, 3]
-    tri = tri.reshape(-1, 3)
-    if len(co) == 0 or len(tri) == 0:
-        return co, tri
-    key = np.round(co / 1e-5).astype(np.int64)
-    _, first, inv = np.unique(key, axis=0, return_index=True, return_inverse=True)
-    inv = inv.reshape(-1)
-    co = co[first]
-    tri = inv[tri]
-    keep = (tri[:, 0] != tri[:, 1]) & (tri[:, 1] != tri[:, 2]) & (tri[:, 0] != tri[:, 2])
-    return co, tri[keep]
+def _outline(harm, n=96):
+    th = np.linspace(0.0, 2 * math.pi, n, endpoint=False)
+    rr = 1 + sum(a * np.cos((j + 1) * th - ph) for j, (a, ph) in enumerate(harm))
+    return np.stack([rr * np.cos(th), rr * np.sin(th)], 1)
 
 
-def stamps_world(stamps, matrix):
-    m = np.array(matrix, dtype=np.float64)
-    pos = stamps.position @ m[:3, :3].T + m[:3, 3]
-    nrm = _normalize(stamps.normal @ np.linalg.inv(m[:3, :3]))
-    return pos, nrm
+def _area(pts):
+    x, y = pts[:, 0], pts[:, 1]
+    return 0.5 * abs(float(np.dot(x, np.roll(y, -1)) - np.dot(np.roll(x, -1), y)))
 
 
-# --------------------------------------------------------------------------
-# 2. Refinement
+def _hull(pts):
+    """Convex hull of a star-shaped outline already in angular order about the
+    origin: one Graham pass, no sort (a sort per draw was most of a build's time)."""
+    start = int(np.argmin(pts[:, 1] * 1e6 + pts[:, 0]))  # the lowest point is on the hull
+    seq = [tuple(x) for x in np.roll(pts, -start, axis=0).tolist()]
+    h = []
+    for p in seq + [seq[0]]:
+        while len(h) >= 2 and (h[-1][0] - h[-2][0]) * (p[1] - h[-2][1]) - (h[-1][1] - h[-2][1]) * (p[0] - h[-2][0]) <= 0:
+            h.pop()
+        h.append(p)
+    return np.array(h[:-1])
 
 
-def _refine(co, tri, centres, radii, res, keep_all=False):
-    """Triangles within reach of a stamp, bisected until every edge in reach is
-    at most `res` long. Returns (vertices, triangles) as arrays. With
-    `keep_all` every input triangle is kept (only those in reach are still
-    refined): the second pass over a mesh the first pass already trimmed."""
-    # Which host triangles can a stamp touch: bounding sphere against stamp sphere.
-    c = co[tri].mean(axis=1)
-    rb = np.linalg.norm(co[tri] - c[:, None, :], axis=2).max(axis=1)
-    near = np.zeros(len(tri), bool)
-    for s in range(0, len(centres), 64):
-        d = np.linalg.norm(c[:, None, :] - centres[None, s : s + 64, :], axis=2)
-        near |= (d - rb[:, None] - radii[None, s : s + 64] < 0).any(axis=1)
-    sel = tri if keep_all else tri[near]
-    if len(sel) == 0:
-        return np.zeros((0, 3)), np.zeros((0, 3), np.int64)
+def solidity(harm):
+    pts = _outline(harm)
+    return _area(pts) / _area(_hull(pts))
 
-    kd = KDTree(len(centres))
-    for i, p in enumerate(centres):
-        kd.insert(p, i)
-    kd.balance()
-    rmax = float(radii.max())
 
-    used, local = np.unique(sel, return_inverse=True)
-    verts = [Vector(co[i]) for i in used]
-    tris = [tuple(x) for x in local.reshape(-1, 3).tolist()]
-    alive = [True] * len(tris)
-    by_edge = {}  # (min, max) -> triangle ids
+def dab_shape(rng):
+    """The harmonics of a concave blob: convex (or barely dented) draws are drawn
+    again, and after MAX_DRAWS the most concave seen is taken."""
+    best, best_s = None, 2.0
+    for _ in range(MAX_DRAWS):
+        harm = tuple((rng.uniform(*r), rng.uniform(0, 2 * math.pi)) for r in HARMONICS)
+        s = solidity(harm)
+        if s <= SOLIDITY_MAX:
+            return harm
+        if s < best_s:
+            best, best_s = harm, s
+    return best
 
-    def key(a, b):
-        return (a, b) if a < b else (b, a)
 
-    def add(t):
-        i = len(tris)
-        tris.append(t)
-        alive.append(True)
-        for a, b in ((t[0], t[1]), (t[1], t[2]), (t[2], t[0])):
-            by_edge.setdefault(key(a, b), []).append(i)
-        return i
+class Dab:
+    __slots__ = ("c", "n", "r", "k", "ax", "ay", "harm", "rmax", "t", "tone", "h")
 
-    def kill(i):
-        alive[i] = False
-        t = tris[i]
-        for a, b in ((t[0], t[1]), (t[1], t[2]), (t[2], t[0])):
-            by_edge[key(a, b)].remove(i)
+    def __init__(self, c, n, r, k, rng):
+        self.c, self.n, self.r, self.k = c, n, r, k
+        tx = n.cross(Vector((0.3, 0.7, 0.2))).normalized()
+        ty = n.cross(tx)
+        a = rng.uniform(0, 2 * math.pi)
+        self.ax = tx * math.cos(a) + ty * math.sin(a)
+        self.ay = ty * math.cos(a) - tx * math.sin(a)
+        self.harm = dab_shape(rng)
+        self.rmax = r * (1 + sum(h[0] for h in self.harm))
+        self.t = 0.0
+        self.tone = (0.0, 0.0, 0.0)
+        self.h = 0.0  # how far the mound stands over this dab's plane (for the print's search)
 
-    for i, t in enumerate(tris):
-        for a, b in ((t[0], t[1]), (t[1], t[2]), (t[2], t[0])):
-            by_edge.setdefault(key(a, b), []).append(i)
+    def u(self, pts):
+        """How far out each point is in this dab's outline (1 = on it), and the
+        outline's radius there, for points (N, 3) projected on its plane."""
+        d = pts - np.asarray(self.c)
+        x = d @ np.asarray(self.ax)
+        y = d @ np.asarray(self.ay)
+        th = np.arctan2(y, x)
+        rr = self.r * (1 + sum(a * np.cos((j + 1) * th - ph) for j, (a, ph) in enumerate(self.harm)))
+        return np.hypot(x, y) / np.maximum(rr, 1e-9), rr
 
-    # Rivara's longest-edge bisection with LEPP propagation: a triangle that
-    # touches a stamp and is too coarse has its longest edge split, after
-    # walking to the pair of neighbours that share their longest edge (the
-    # "terminal" edge), so every split halves the longest edge of both of its
-    # triangles. Plain edge splitting on a 5 m facet fans slivers out to the
-    # far corner forever; this keeps the angles bounded and terminates. (Kept
-    # off bmesh: a bmesh operator walks the whole mesh per call, and one call
-    # per split made a patch take seconds.)
-    closest = geometry.closest_point_on_tri
 
-    def longest(i):
-        t = tris[i]
-        best, bl = None, -1.0
-        for a, b in ((t[0], t[1]), (t[1], t[2]), (t[2], t[0])):
-            ln = (verts[a] - verts[b]).length_squared
-            if ln > bl:
-                best, bl = key(a, b), ln
-        return best, math.sqrt(bl)
+class _Grid:
+    """Dabs hashed by centre, for 'is any dab within d' tests."""
 
-    def touches(i):
-        a, b, c = (verts[k] for k in tris[i])
-        mid = (a + b + c) / 3.0
-        r = max((a - mid).length, (b - mid).length, (c - mid).length)
-        for sc, j, _d in kd.find_range(mid, r + rmax):
-            if (closest(sc, a, b, c) - sc).length < radii[j]:
-                return True
-        return False
+    def __init__(self, cell):
+        self.cell = cell
+        self.cells = {}
 
-    def split(e):
-        a, b = e
-        m = len(verts)
-        verts.append((verts[a] + verts[b]) * 0.5)
-        made = []
-        for i in list(by_edge.get(e, ())):
-            t = tris[i]
-            # Rotate so the split edge is (t[0], t[1]) in the winding.
-            while key(t[0], t[1]) != e:
-                t = (t[1], t[2], t[0])
-            kill(i)
-            made.append(add((t[0], m, t[2])))
-            made.append(add((m, t[1], t[2])))
-        del by_edge[e]
-        return made
+    def _key(self, p):
+        return (int(math.floor(p[0] / self.cell)), int(math.floor(p[1] / self.cell)), int(math.floor(p[2] / self.cell)))
 
-    queue = list(range(len(tris)))
-    while queue:
-        i = queue.pop()
-        if not alive[i]:
-            continue
-        e, ln = longest(i)
-        if ln <= res or not touches(i):
-            continue
-        g = i
-        for _ in range(64):
-            nb = [h for h in by_edge[e] if h != g]
-            if not nb:
-                break
-            e2, _l = longest(nb[0])
-            if e2 == e:
-                break
-            g, e = nb[0], e2
-        queue.extend(split(e))
-        if alive[i]:
-            queue.append(i)
+    def add(self, d):
+        self.cells.setdefault(self._key(d.c), []).append(d)
 
-    v = np.array([p[:] for p in verts], dtype=np.float64)
-    t = np.array([t for t, ok in zip(tris, alive) if ok], dtype=np.int64).reshape(-1, 3)
-    return v, t
+    def near(self, c, reach):
+        kx, ky, kz = self._key(c)
+        span = int(math.ceil(reach / self.cell))
+        for x in range(kx - span, kx + span + 1):
+            for y in range(ky - span, ky + span + 1):
+                for z in range(kz - span, kz + span + 1):
+                    yield from self.cells.get((x, y, z), ())
 
 
 # --------------------------------------------------------------------------
-# Mesh helpers
+# Graph helpers over the refined mesh
 
 
-def _vertex_normals(v, t):
-    fn = np.cross(v[t[:, 1]] - v[t[:, 0]], v[t[:, 2]] - v[t[:, 0]])  # area weighted
-    n = np.zeros_like(v)
-    for k in range(3):
-        np.add.at(n, t[:, k], fn)
-    return _normalize(n)
+class _Graph:
+    def __init__(self, v, t):
+        self.n = len(v)
+        e = mesh_edges(t)
+        self.edges = e
+        L = np.linalg.norm(v[e[:, 1]] - v[e[:, 0]], axis=1)
+        adj = [[] for _ in range(self.n)]
+        for (a, b), ln in zip(e.tolist(), L.tolist()):
+            adj[a].append((b, ln))
+            adj[b].append((a, ln))
+        self.adj = adj
+        # each vertex's share of the area around it
+        area = 0.5 * np.linalg.norm(np.cross(v[t[:, 1]] - v[t[:, 0]], v[t[:, 2]] - v[t[:, 0]]), axis=1)
+        self.area = np.zeros(self.n)
+        for k in range(3):
+            np.add.at(self.area, t[:, k], area / 3.0)
+
+    def dijkstra(self, sources):
+        """Distance along the edges from the nearest source (a bool mask)."""
+        dist = np.full(self.n, np.inf)
+        idx = np.nonzero(sources)[0]
+        dist[idx] = 0.0
+        heap = [(0.0, int(i)) for i in idx]
+        heapq.heapify(heap)
+        adj = self.adj
+        while heap:
+            d, i = heapq.heappop(heap)
+            if d > dist[i]:
+                continue
+            for j, ln in adj[i]:
+                nd = d + ln
+                if nd < dist[j]:
+                    dist[j] = nd
+                    heapq.heappush(heap, (nd, j))
+        return dist
+
+    def flood(self, start, through):
+        """Every vertex reachable from `start` (mask) through `through` (mask)."""
+        seen = start.copy()
+        stack = list(np.nonzero(start)[0])
+        adj = self.adj
+        while stack:
+            i = stack.pop()
+            for j, _l in adj[i]:
+                if not seen[j] and through[j]:
+                    seen[j] = True
+                    stack.append(j)
+        return seen
+
+    def components(self, members):
+        """Connected components of the vertices in `members` (mask), each a list."""
+        comp = np.full(self.n, -1)
+        out = []
+        adj = self.adj
+        for i in np.nonzero(members)[0]:
+            if comp[i] >= 0:
+                continue
+            comp[i] = len(out)
+            group, stack = [], [int(i)]
+            while stack:
+                a = stack.pop()
+                group.append(a)
+                for b, _l in adj[a]:
+                    if members[b] and comp[b] < 0:
+                        comp[b] = len(out)
+                        stack.append(b)
+            out.append(group)
+        return out
+
+    def depth_inside(self, painted, inside):
+        """How far each vertex is in from the outside of `inside`, where the
+        outside is only what connects to the unpainted rock: a pocket between two
+        clumps is not an edge, or every layer above would widen it. A vertex the
+        walk never reaches counts as outside (it would grow specks)."""
+        outside = self.flood(~painted, ~inside)
+        d = self.dijkstra(outside) * STUDY_METRIC
+        d[np.isinf(d)] = 0.0
+        return d
 
 
-def _edges(t):
-    e = np.concatenate([t[:, [0, 1]], t[:, [1, 2]], t[:, [2, 0]]])
-    e.sort(axis=1)
-    return np.unique(e, axis=0)
-
-
-def _smooth_field(field, edges, n, iterations):
-    """Umbrella smoothing of a per-vertex field over the mesh edges."""
-    if iterations <= 0 or len(edges) == 0:
-        return field
-    deg = np.bincount(edges.ravel(), minlength=n).astype(np.float64)
-    deg = np.maximum(deg, 1.0)
-    shape = (n,) + field.shape[1:]
-    for _ in range(iterations):
-        acc = np.zeros(shape)
-        np.add.at(acc, edges[:, 0], field[edges[:, 1]])
-        np.add.at(acc, edges[:, 1], field[edges[:, 0]])
-        acc /= deg.reshape((-1,) + (1,) * (field.ndim - 1))
-        field = 0.5 * field + 0.5 * acc
-    return field
-
-
-def _geodesic(v, edges, sources, drop=0.0):
-    """Distance from the nearest of `sources` (vertex indices) to every vertex
-    along the mesh edges (Dijkstra). A vertex the edges do not reach (another
-    island of the paint) takes its straight-line distance to the first source
-    instead. With `drop` > 0 the metric is squashed downward: an edge going
-    down counts shorter and one going up longer, by drop / (1 + drop) of its
-    rise, so a threshold on the distance reaches (1 + drop) times further
-    straight down than sideways."""
-    n = len(v)
-    adj = [[] for _ in range(n)]
-    d3 = v[edges[:, 1]] - v[edges[:, 0]]
-    L = np.linalg.norm(d3, axis=1)
-    k = drop / (1.0 + drop)
-    floor = 0.15 * L
-    # The cost of walking the edge a -> b, and b -> a.
-    ab = np.maximum(L + k * d3[:, 2], floor)
-    ba = np.maximum(L - k * d3[:, 2], floor)
-    for (a, b), cab, cba in zip(edges.tolist(), ab.tolist(), ba.tolist()):
-        adj[a].append((b, cab))
-        adj[b].append((a, cba))
-    dist = np.full(n, np.inf)
-    heap = []
-    for s in np.atleast_1d(sources).tolist():
-        dist[s] = 0.0
-        heap.append((0.0, s))
-    heapq.heapify(heap)
-    while heap:
-        d, i = heapq.heappop(heap)
-        if d > dist[i]:
-            continue
-        for j, l in adj[i]:
-            nd = d + l
-            if nd < dist[j]:
-                dist[j] = nd
-                heapq.heappush(heap, (nd, j))
-    far = np.isinf(dist)
-    if far.any():
-        dist[far] = np.linalg.norm(v[far] - v[int(np.atleast_1d(sources)[0])], axis=1)
-    return dist
-
-
-def _rotate(vec, axis, angle):
-    """`vec` turned by `angle` about the unit `axis` (Rodrigues)."""
-    c, s = math.cos(angle), math.sin(angle)
-    return vec * c + np.cross(axis, vec) * s + axis * (axis @ vec) * (1.0 - c)
-
-
-# --------------------------------------------------------------------------
-# 3. Mask
-
-
-def _mask(v, n, centres, snormals, radii, strength):
-    """Stamps composited in painting order at every vertex."""
-    m = np.zeros(len(v))
-    order = np.argsort(v[:, 0], kind="stable")
-    xs = v[order, 0]
-    for c, sn, r, a in zip(centres, snormals, radii, strength):
-        lo, hi = np.searchsorted(xs, c[0] - r), np.searchsorted(xs, c[0] + r, side="right")
-        if lo == hi:
-            continue
-        idx = order[lo:hi]
-        d = np.linalg.norm(v[idx] - c, axis=1)
-        inside = d < r
-        idx, d = idx[inside], d[inside]
-        if len(idx) == 0:
-            continue
-        w = _smoothstep(0.0, 1.0, 1.0 - d / r)
-        # A stamp on a ledge's top does not paint the ledge's underside.
-        w *= _smoothstep(-0.2, 0.35, n[idx] @ sn)
-        aw = abs(a) * w
-        if a >= 0:
-            m[idx] += (1.0 - m[idx]) * aw
-        else:
-            m[idx] *= 1.0 - aw
-    return m
+def _passes(blur, res):
+    """Umbrella-smoothing passes that blur a field over about `blur` metres."""
+    return int(max(0, round(2.0 * (blur / max(res, 1e-6)) ** 2)))
 
 
 # --------------------------------------------------------------------------
-# 4. Clipping
+# The build
 
 
-def _clip(v, t, f, attrs):
-    """Keep the part of the mesh where f >= 0 (marching triangles). `attrs`
-    are per-vertex arrays interpolated onto the new vertices. Winding kept."""
-    f = np.where(np.abs(f) < 1e-7, 1e-7, f)
-    inside = f >= 0
-    cnt = inside[t].sum(axis=1)
-    full = t[cnt == 3]
-
-    # Canonical rotation: the odd vertex first.
-    part = t[(cnt == 1) | (cnt == 2)]
-    pin = inside[part]
-    pc = pin.sum(axis=1)
-    odd = np.where(pc[:, None] == 1, pin, ~pin)
-    k = np.argmax(odd, axis=1)
-    idx = (np.arange(3)[None, :] + k[:, None]) % 3
-    rot = np.take_along_axis(part, idx, axis=1)
-    one, two = rot[pc == 1], rot[pc == 2]
-
-    # Crossing edges and their new vertices, shared between neighbours.
-    cross = np.concatenate([one[:, [0, 1]], one[:, [0, 2]], two[:, [0, 1]], two[:, [0, 2]]])
-    key = np.sort(cross, axis=1)
-    uk, inv = np.unique(key, axis=0, return_inverse=True)
-    inv = inv.reshape(-1)
-    a, b = uk[:, 0], uk[:, 1]
-    s = f[a] / (f[a] - f[b])
-    base = len(v)
-    new_v = v[a] + (v[b] - v[a]) * s[:, None]
-    new_attrs = [np.concatenate([x, x[a] + (x[b] - x[a]) * s.reshape((-1,) + (1,) * (x.ndim - 1))]) for x in attrs]
-    ids = base + inv
-    n1, n2 = len(one), len(two)
-    e01_one, e02_one = ids[:n1], ids[n1 : 2 * n1]
-    e01_two, e02_two = ids[2 * n1 : 2 * n1 + n2], ids[2 * n1 + n2 :]
-
-    tris = [full, np.stack([one[:, 0], e01_one, e02_one], axis=1)]
-    # (o, i1, i2): quad i1, i2, p(o,i2), p(o,i1)
-    tris.append(np.stack([two[:, 1], two[:, 2], e02_two], axis=1))
-    tris.append(np.stack([two[:, 1], e02_two, e01_two], axis=1))
-    out_t = np.concatenate(tris).astype(np.int64)
-    out_v = np.concatenate([v, new_v])
-
-    used = np.unique(out_t)
-    remap = np.full(len(out_v), -1, np.int64)
-    remap[used] = np.arange(len(used))
-    return out_v[used], remap[out_t], [x[used] for x in new_attrs]
-
-
-def _drop_islands(v, t, min_area):
+def build(co, tri, host_matrix, stamps, p, decimate):
+    """The moss for one host, from the host's welded world triangles (`co`, `tri`:
+    stampbrush.geometry.host_world). `decimate(v, t, ratio) -> (v, t)` reduces a
+    mesh (the caller's Blender decimate; the build itself touches no bpy state)."""
+    if len(stamps) == 0 or not bool((stamps.strength > 0).any()):
+        return empty_result()
+    if len(tri) == 0:
+        return empty_result()
+    rng = random.Random(p.seed)
+    centres, snormals = stamps_world(stamps, host_matrix)
+    radii = stamps.radius.astype(np.float64)
+    res = max(p.resolution, 0.004)
+    reach = p.dab_max * 1.9  # a dab's outline reaches past its centre, which is in the paint
+    v, t = refine(co, tri, centres, radii + reach, res)
     if len(t) == 0:
-        return t
-    parent = list(range(len(v)))
+        return empty_result()
+    # Canonical order: vertices and triangles by position, so the draws below
+    # walk the same mesh the same way in any process.
+    vo = np.lexsort((v[:, 2], v[:, 1], v[:, 0]))
+    remap = np.empty(len(v), np.int64)
+    remap[vo] = np.arange(len(v))
+    v, t = v[vo], remap[t]
+    tc = v[t].mean(1)
+    t = t[np.lexsort((tc[:, 2], tc[:, 1], tc[:, 0]))]
+
+    n_raw = vertex_normals(v, t)
+    g = _Graph(v, t)
+    hull = normalize(smooth_field(n_raw, g.edges, len(v), _passes(0.02, res)))
+    painted = mask(v, n_raw, centres, snormals, radii, stamps.strength) >= p.threshold
+    if g.area[painted].sum() < 0.002:
+        return empty_result()
+    P = [Vector(x) for x in v]
+    N = [Vector(x) for x in hull]
+    kd = KDTree(len(v))
+    for i, x in enumerate(P):
+        kd.insert(x, i)
+    kd.balance()
+    off = Vector((rng.uniform(0, 50), rng.uniform(0, 50), rng.uniform(0, 50)))
+
+    layers = _grow(p, rng, g, P, N, kd, painted, off, res)
+    _tone(p, layers, P, kd, g, painted, off, res)
+
+    # ---- height, and the mound
+    tval = np.full(len(v), np.nan)
+    inner = np.zeros(len(v))
+    for layer in layers:
+        for d in layer:
+            idx = np.array([i for (_c, i, _d) in kd.find_range(d.c, d.rmax)], dtype=np.int64)
+            if len(idx) == 0:
+                continue
+            u, rr = d.u(v[idx])
+            ok = u <= 1.0
+            idx, u, rr = idx[ok], u[ok], rr[ok]
+            w = smoothstep(1.0, 1.0 - 0.01 / np.maximum(rr, 1e-6), u)
+            cur = tval[idx]
+            tval[idx] = np.where(np.isnan(cur), d.t, cur + (d.t - np.nan_to_num(cur)) * w)
+            inner[idx[u <= p.inner_u]] = 1.0
+    up = p.up_floor + (1 - p.up_floor) * smoothstep(0.0, 0.7, hull[:, 2])
+    lift = np.where(np.isnan(tval), 0.0, p.floor + p.lift * np.nan_to_num(tval) * up)
+    lift = smooth_field(lift, g.edges, len(v), _passes(p.height_blur, res))
+    for layer in layers:
+        for d in layer:
+            d.h = max(0.0, float(lift[kd.find(d.c)[1]]))
+    inner = smooth_field(inner, g.edges, len(v), max(1, _passes(0.006, res)))
+
+    keep = inner[t].mean(1) > 0.5
+    mt = t[keep]
+    if len(mt) == 0:
+        return empty_result()
+    mt = _drop_small(v, mt, p.min_patch)
+    if len(mt) == 0:
+        return empty_result()
+    used = np.unique(mt)
+    m_remap = np.full(len(v), -1, np.int64)
+    m_remap[used] = np.arange(len(used))
+    mv, mt = v[used], m_remap[mt]
+    mg = _Graph(mv, mt)
+    boundary = _boundary(mt, len(mv))
+    rimf = smoothstep(0.0, p.rim, mg.dijkstra(boundary) * STUDY_METRIC)
+    # under the rock at the rim, and from there up to the moss's height: it crosses
+    # the rock along one line and is never flush with it across an area
+    offset = -p.sink + (p.sink + lift[used]) * rimf
+    offset = smooth_field(offset, mg.edges, len(mv), 1)
+    mv = mv + hull[used] * offset[:, None]
+
+    # ---- low poly, its edge back under the rock
+    area = 0.5 * np.linalg.norm(np.cross(mv[mt[:, 1]] - mv[mt[:, 0]], mv[mt[:, 2]] - mv[mt[:, 0]]), axis=1).sum()
+    ratio = min(1.0, max(0.005, p.mound_density * area / max(len(mt), 1)))
+    if ratio < 1.0:
+        mv, mt = decimate(mv, mt, ratio)
+    bvh = BVHTree.FromPolygons([tuple(x) for x in co], [tuple(x) for x in tri.tolist()])
+    for i in np.nonzero(_boundary(mt, len(mv)))[0]:
+        on, nr, _i, _d = bvh.find_nearest(Vector(mv[i]))
+        if on is not None:
+            mv[i] = np.array(on - nr * p.sink)
+
+    heights = _heights(mv, bvh, kd, tval, p.levels)
+    uvs, image, texel = _print(mv, mt, layers, p)
+    M = np.array(host_matrix, dtype=np.float64)
+    inv = np.linalg.inv(M)
+    local = mv @ inv[:3, :3].T + inv[:3, 3]
+    return Result(local, mt, uvs, image, dabs=sum(len(x) for x in layers), layers=[len(x) for x in layers], heights=heights, texel=texel)
+
+
+def _drop_small(v, t, min_area):
+    """Triangles of the mesh islands (connected by shared vertices) of at least `min_area`."""
+    parent = np.arange(len(v))
 
     def find(x):
         while parent[x] != x:
@@ -568,500 +454,412 @@ def _drop_islands(v, t, min_area):
         return x
 
     for a, b, c in t.tolist():
-        ra, rb, rc = find(a), find(b), find(c)
-        parent[rb] = ra
-        parent[find(rc)] = ra
+        ra = find(a)
+        parent[find(b)] = ra
+        parent[find(c)] = ra
     roots = np.array([find(a) for a in t[:, 0].tolist()])
     area = 0.5 * np.linalg.norm(np.cross(v[t[:, 1]] - v[t[:, 0]], v[t[:, 2]] - v[t[:, 0]]), axis=1)
-    _, inv = np.unique(roots, return_inverse=True)
+    _u, inv = np.unique(roots, return_inverse=True)
     total = np.bincount(inv.reshape(-1), weights=area)
     return t[total[inv.reshape(-1)] >= min_area]
 
 
-def _compact(v, t, attrs):
-    used = np.unique(t)
-    remap = np.full(len(v), -1, np.int64)
-    remap[used] = np.arange(len(used))
-    return v[used], remap[t], [x[used] for x in attrs]
-
-
-# --------------------------------------------------------------------------
-# 5. Colour
-
-
-def _tone_at(P, tones, scale, seed):
-    """The local green: two slow noises pick a soft mixture of the three tones."""
-    off = Vector((7.1 + seed * 0.37, 3.3, 9.7))
-    a = np.array([noise.noise(Vector(p) / scale) for p in P]) * 0.5 + 0.5
-    b = np.array([noise.noise(Vector(p) / scale + off) for p in P]) * 0.5 + 0.5
-    w = np.stack([a * a, (1 - a) * (1 - b) + 0.35, (1 - a) * b], 1)
-    w /= w.sum(1, keepdims=True)
-    return w @ np.asarray(tones)
-
-
-def _tint(hn, depth, var, base, p):
-    """Vertex colour: the local tone lit toward `light` where the hull faces up,
-    darkened and cooled with depth into the carpet, then a value jitter."""
-    up = np.clip(hn[..., 2] * 0.5 + 0.5, 0, 1)
-    light = np.asarray(p.light)
-    shade = np.asarray(p.shade)
-    c = base * (0.75 + 0.45 * up[..., None]) + (light - base) * (up[..., None] ** 2) * 0.25
-    c = c * (1 - depth[..., None] * p.depth_shade) + shade * depth[..., None] * (p.depth_shade * 0.65)
-    c = c * (1 + var[..., None])
-    return np.clip(c, 0, 1)
-
-
-# --------------------------------------------------------------------------
-# 6. Cards
-
-
-class _Quads:
-    """Cards accumulated as quads, turned into the result's triangles at the end."""
-
-    def __init__(self):
-        self.co, self.nrm, self.col, self.uv = [], [], [], []
-
-    def add(self, corners, normal, color, uv):
-        self.co.append(corners)
-        self.nrm.append(np.repeat(normal[None], 4, 0))
-        self.col.append(np.repeat(np.asarray(color)[None], 4, 0))
-        self.uv.append(uv)
-
-    def __len__(self):
-        return len(self.co)
-
-    def arrays(self):
-        n = len(self.co)
-        if n == 0:
-            return np.zeros((0, 3)), np.zeros((0, 3), np.int64), np.zeros((0, 3)), np.zeros((0, 3)), np.zeros((0, 3, 2))
-        co = np.asarray(self.co).reshape(-1, 3)
-        nrm = np.asarray(self.nrm).reshape(-1, 3)
-        col = np.asarray(self.col).reshape(-1, 3)
-        base = np.arange(n) * 4
-        tri = np.stack([np.stack([base, base + 1, base + 2], 1), np.stack([base, base + 2, base + 3], 1)], 1).reshape(-1, 3)
-        uvq = np.asarray(self.uv)  # (n, 4, 2)
-        uv = np.stack([uvq[:, [0, 1, 2]], uvq[:, [0, 2, 3]]], 1).reshape(-1, 3, 2)
-        return co, tri, nrm, col, uv
-
-
-def _corners(centre, x, y, w, h):
-    """A w x h card about `centre` with in-plane axes x (across) and y (base to
-    tip); the winding gives the front face toward x cross y (the material
-    culls the back). The corners match _uv_cell's: -y is the card's bottom."""
-    return np.array([centre - x * w / 2 - y * h / 2, centre + x * w / 2 - y * h / 2, centre + x * w / 2 + y * h / 2, centre - x * w / 2 + y * h / 2])
-
-
-def _quad(centre, normal, w, h, spin):
-    """A w x h quad whose face normal is `normal`, spun by `spin` about it."""
-    n = normal / np.linalg.norm(normal)
-    t = np.cross(n, UP)
-    if np.linalg.norm(t) < 1e-4:
-        t = np.cross(n, np.array((1.0, 0.0, 0.0)))
-    t /= np.linalg.norm(t)
-    b = np.cross(n, t)
-    ca, sa = math.cos(spin), math.sin(spin)
-    x = t * ca + b * sa
-    y = -t * sa + b * ca
-    return _corners(centre, x, y, w, h)
-
-
-def _uv_cell(idx):
-    """The atlas cell's UV corners. The atlas is written top row first, so cell
-    row r of the sheet is UV row (cells - 1 - r)."""
-    cy, cx = divmod(idx, ATLAS_CELLS)
-    cy = ATLAS_CELLS - 1 - cy
-    s = 1.0 / ATLAS_CELLS
-    lo, hi = ATLAS_INSET * s, (1.0 - ATLAS_INSET) * s
-    return np.array([[cx * s + lo, cy * s + lo], [cx * s + hi, cy * s + lo], [cx * s + hi, cy * s + hi], [cx * s + lo, cy * s + hi]])
-
-
-def _uv_solid():
-    """One UV for every corner: the centre of a round blob, alpha 1 with no
-    derivative, so the sampler reads mip 0 there and never leaves the blob."""
-    return np.repeat(_uv_cell(FILL_CELL).mean(0, keepdims=True), 4, 0)
-
-
-def _facing_turn(n, facing):
-    """The least rotation (axis, angle) that makes `n` face the camera by
-    `facing`, or None when it already does: a card seen nearly edge-on is a
-    spike, not a leaf. Smooth, so neighbours agree."""
-    d = float(n @ FACE)
-    if d >= facing:
-        return None
-    axis = np.cross(n, FACE)
-    L = np.linalg.norm(axis)
-    if L < 1e-6:
-        return None
-    return axis / L, math.acos(max(-1.0, min(1.0, d))) - math.acos(facing)
-
-
-def _faced(n, facing):
-    """`n` rotated the least that makes it face the camera by `facing`."""
-    turn = _facing_turn(n, facing)
-    return n if turn is None else _rotate(n, *turn)
-
-
-# --------------------------------------------------------------------------
-# 7. Sampling the paint
-
-
-def _sample(v, t, fields, hn, nr, density, rng):
-    """Candidate points on the refined triangles inside the paint (fields[0]
-    > 0), in proportion to area, with every field, the hull normal and the
-    raw normal interpolated. Returns P, HN, NR, [field values], [field
-    in-plane gradients per point]."""
-    A = v[t[:, 0]], v[t[:, 1]], v[t[:, 2]]
-    cross = np.cross(A[1] - A[0], A[2] - A[0])
-    area = np.linalg.norm(cross, axis=1) * 0.5
-    fc = fields[0][t].max(1)
-    expect = np.where(fc > -0.05, area * density, 0.0)
-    count = np.floor(expect).astype(int) + (rng.random(len(t)) < (expect % 1.0))
-    if count.sum() == 0:
-        z = np.zeros((0, 3))
-        return z, z, z, [np.zeros(0) for _ in fields], [z for _ in fields]
-    tri_idx = np.repeat(np.arange(len(t)), count)
-    u = rng.random(len(tri_idx))
-    w = rng.random(len(tri_idx))
-    flip = u + w > 1
-    u[flip], w[flip] = 1 - u[flip], 1 - w[flip]
-    bary = np.stack([1 - u - w, u, w], 1)
-    tt = t[tri_idx]
-
-    def interp(attr):
-        return (attr[tt] * bary[..., None]).sum(1) if attr.ndim == 2 else (attr[tt] * bary).sum(1)
-
-    P = interp(v)
-    vals = [interp(f) for f in fields]
-    # Each field's gradient on each triangle (planar).
-    e1, e2 = A[1] - A[0], A[2] - A[0]
-    n = cross / np.maximum(np.linalg.norm(cross, axis=1, keepdims=True), 1e-12)
-    grads = []
-    for f in fields:
-        f1, f2 = f[t[:, 1]] - f[t[:, 0]], f[t[:, 2]] - f[t[:, 0]]
-        g = (np.cross(n, e1) * f2[:, None] - np.cross(n, e2) * f1[:, None]) / np.maximum(2 * area, 1e-12)[:, None]
-        grads.append(g[tri_idx])
-    keep = vals[0] > 0
-    return P[keep], _normalize(interp(hn))[keep], _normalize(interp(nr))[keep], [x[keep] for x in vals], [g[keep] for g in grads]
-
-
-def _crowd(P, r):
-    """How many candidates lie within r of each: a leaf with no neighbours would float alone."""
-    if len(P) == 0:
-        return np.zeros(0, int)
-    keys = np.floor(P / r).astype(np.int64)
-    buckets = defaultdict(list)
-    for i, k in enumerate(map(tuple, keys)):
-        buckets[k].append(i)
-    out = np.zeros(len(P), int)
-    for i, k in enumerate(map(tuple, keys)):
-        near = [j for dx in (-1, 0, 1) for dy in (-1, 0, 1) for dz in (-1, 0, 1) for j in buckets.get((k[0] + dx, k[1] + dy, k[2] + dz), ())]
-        out[i] = int((np.linalg.norm(P[near] - P[i], axis=1) < r).sum())
+def _boundary(t, n):
+    """Vertices on an open edge of the mesh."""
+    e = np.sort(np.concatenate([t[:, [0, 1]], t[:, [1, 2]], t[:, [2, 0]]]), axis=1)
+    uk, cnt = np.unique(e, axis=0, return_counts=True)
+    out = np.zeros(n, bool)
+    out[uk[cnt == 1].ravel()] = True
     return out
 
 
 # --------------------------------------------------------------------------
-# 8. The build
+# Growth: layer 0, the erosion field, the lighter layers
 
 
-def build(host_mesh, host_matrix, stamps, vines, origin, p):
-    """The ivy for one host: the carpet its paint covers, grown out from
-    `origin` (a host-local point, or None for the top of the paint), and a
-    vine at every anchor. `host_mesh` is the host's evaluated mesh."""
-    painted = len(stamps) > 0 and bool((stamps.strength > 0).any())
-    if not painted and len(vines) == 0:
-        return _empty_result()
-    co, tri = host_world(host_mesh, host_matrix)
-    if len(tri) == 0:
-        return _empty_result()
-    rnd = random.Random(p.seed)
-    rng = np.random.default_rng(p.seed)
-    quads = _Quads()
-    under = None
-    n_leaves = 0
-    v = np.zeros((0, 3))
-    hull = np.zeros((0, 3))
+def _grow(p, rng, g, P, N, kd, painted, off, res):
+    n = g.n
+    painted_idx = np.nonzero(painted)[0]
 
-    shadow = None
-    if painted:
-        centres, snormals = stamps_world(stamps, host_matrix)
-        radii = stamps.radius.astype(np.float64)
-        res = max(p.resolution, 0.005)
-        # The shadow decal reaches past the paint, further below it: refine a
-        # margin around the stamps coarsely first, then the paint itself.
-        margin = p.shadow_reach * (1.0 + p.shadow_drop) if p.shadow_strength > 0 else 0.0
-        if margin > 0:
-            v, t = _refine(co, tri, centres, radii + margin, max(res * 2.5, margin / 4))
-            v, t = _refine(v, t, centres, radii, res, keep_all=True)
-        else:
-            v, t = _refine(co, tri, centres, radii, res)
-        if len(t):
-            n_raw = _vertex_normals(v, t)
-            edges = _edges(t)
-            m = _mask(v, n_raw, centres, snormals, radii, stamps.strength)
-            thr = np.clip(p.threshold + p.edge_noise * _fbm(v, p.edge_scale, p.seed, 1), 0.03, 0.97)
-            f = m - thr  # > 0 inside the paint
-            iters = int(min(200, round((p.rounding / res) ** 2)))
-            hull = _normalize(_smooth_field(n_raw, edges, len(v), iters))
-            # Order-independence: the helpers above may return triangles in a
-            # hash order that differs between processes, and every random draw
-            # below walks them in order. Sort by position so the same paint
-            # always grows the same ivy.
-            order = np.lexsort((v[t].mean(1)[:, 2], v[t].mean(1)[:, 1], v[t].mean(1)[:, 0]))
-            t = t[order]
-            under = _underlay(v, t, f, hull, p)
-            M = np.array(host_matrix, dtype=np.float64)
-            origin_w = None if origin is None else np.asarray(origin, dtype=np.float64) @ M[:3, :3].T + M[:3, 3]
-            n_leaves = _carpet(quads, v, t, edges, f, hull, n_raw, origin_w, p, rnd, rng)
-            if margin > 0:
-                shadow = _shadow(v, t, edges, f, n_raw, host_matrix, p)
+    # ---- layer 0: fill the painted area, packed tight (no pinholes)
+    layer0 = []
+    grid = _Grid(0.6 * p.dab_max)  # the packing test's reach
+    for _ in range(len(painted_idx)):
+        i = int(painted_idx[rng.randrange(len(painted_idx))])
+        c, nr = P[i], N[i]
+        r = rng.uniform(p.dab_min, p.dab_max)
+        if any((c - d.c).length < 0.3 * (r + d.r) for d in grid.near(c, 0.3 * (r + p.dab_max))):
+            continue
+        d = Dab(c, nr, r, 0, rng)
+        layer0.append(d)
+        grid.add(d)
+    layers = [layer0]
 
-    n_vines, n_vine_leaves = _vines(quads, co, tri, v, hull, vines, host_matrix, p, rnd)
-    r = _assemble(quads, under, host_matrix)
-    r.leaves, r.vines, r.vine_leaves, r.shadow = n_leaves, n_vines, n_vine_leaves, shadow
-    return r
+    # ---- the erosion field: how many passes of uneven erosion each vertex survives
+    off3 = off + Vector((4.4, 9.2, 1.7))
+    hfield = np.zeros(n)
+    alive = painted.copy()
+    base0 = max(p.buffer, p.ref_depth / p.steps_deep)
+    for kk in range(1, 40):
+        dep = g.depth_inside(painted, alive)
+        scale = rng.uniform(0.45, 1.7)
+        idx = np.nonzero(alive)[0]
+        if len(idx) == 0:
+            break
+        st = np.empty(len(idx))
+        for j, i in enumerate(idx.tolist()):
+            n_slow = min(1.0, max(0.0, 0.5 + 1.3 * noise.noise(P[i] * (p.erode_scale * 0.35) + off3 + Vector((0, 0, 2.7 * kk)))))
+            n_fast = min(1.0, max(0.0, 0.5 + 1.3 * noise.noise(P[i] * p.erode_scale + off3 + Vector((1.3, 0, 4.1 * kk)))))
+            n01 = 0.6 * n_slow + 0.4 * n_fast
+            st[j] = base0 * scale * (0.15 + 2.6 * n01 * n01)
+        kept = dep[idx] >= st
+        gone = idx[~kept]
+        hfield[gone] = (kk - 1) + dep[gone] / np.maximum(st[~kept], 1e-6)
+        if not kept.any():
+            break
+        alive = np.zeros(n, bool)
+        alive[idx[kept]] = True
+    hfield = smooth_field(hfield, g.edges, n, _passes(0.010, res))
+    g.hfield = hfield
 
-
-def _shadow(v, t, edges, f, n_raw, host_matrix, p):
-    """The shadow decal: the part of the refined rock within `shadow_reach`
-    of the paint (further below it by `shadow_drop`), lifted 3 mm off the
-    rock's own surface, in `shadow_color` with an alpha of `shadow_strength`
-    under the paint fading to nothing at the reach. None when there is none."""
-    inside = np.flatnonzero(f > 0)
-    if len(inside) == 0:
-        return None
-    d = _geodesic(v, edges, inside, drop=p.shadow_drop)
-    reach = max(p.shadow_reach, 1e-3)
-    sv, st, (sd, sn) = _clip(v, t, reach - d, [d, n_raw])
-    st = _drop_islands(sv, st, p.min_patch)
-    if len(st) == 0:
-        return None
-    sv, st, (sd, sn) = _compact(sv, st, [sd, sn])
-    sn = _normalize(sn)
-    alpha = p.shadow_strength * (1.0 - np.clip(sd / reach, 0.0, 1.0)) ** 2
-    col = np.concatenate([np.repeat(np.asarray(p.shadow_color)[None], len(sv), 0), alpha[:, None]], 1)
-    M = np.array(host_matrix, dtype=np.float64)
-    R = M[:3, :3]
-    return Shadow((sv + sn * 0.003 - M[:3, 3]) @ np.linalg.inv(R).T, st.astype(np.int64), col, _normalize(sn @ R))
-
-
-def _underlay(v, t, f, hull, p):
-    """The underlay: the paint's own outline, a little INSIDE where the leaves
-    start, lifted `underlay` and coloured as a leaf. None when nothing is left.
-    Inside, so the carpet's silhouette is leaves and never the underlay's
-    smooth edge; the leaves at the edge roll down to the rock outside it."""
-    uv_, ut, (uh, uf) = _clip(v, t, f - 0.015, [hull, f])
-    ut = _drop_islands(uv_, ut, p.min_patch)
-    if len(ut) == 0:
-        return None
-    uv_, ut, (uh, uf) = _compact(uv_, ut, [uh, uf])
-    uh = _normalize(uh)
-    lift = p.underlay * _underlay_ramp(uf)
-    col = _tint(uh, np.full(len(uv_), 0.15), np.zeros(len(uv_)), _tone_at(uv_, (p.tone_a, p.tone_b, p.tone_c), p.tone_scale, p.seed), p)
-    return uv_ + uh * lift[:, None], ut, uh, col
-
-
-def _underlay_ramp(f):
-    """How much of `underlay` the skin is lifted at paint field f: down to the
-    rock at the paint's edge."""
-    return _smoothstep(0.0, 0.15, f + 0.02)
-
-
-def _carpet(quads, v, t, edges, f, hull, n_raw, origin, p, rnd, rng):
-    """The sheets of leaves over the paint, grown out from the origin. Returns
-    how many were laid."""
-    inside = np.flatnonzero(f > 0)
-    if len(inside) == 0:
-        return 0
-    # The origin, on the refined mesh: the placed point's nearest vertex, else
-    # the top of the paint (ivy that came over the crown of the rock).
-    if origin is not None:
-        src = int(np.argmin(np.linalg.norm(v - origin, axis=1)))
-    else:
-        src = int(inside[np.argmax(v[inside, 2])])
-    growth = _smooth_field(_geodesic(v, edges, src), edges, len(v), 4)
-    P, HN, NR, (F, D), (GF, GD) = _sample(v, t, [f, growth], hull, n_raw, p.density, rng)
-    if len(P) == 0:
-        return 0
-    order = np.lexsort((P[:, 2], P[:, 1], P[:, 0]))
-    P, HN, NR, F, D, GF, GD = P[order], HN[order], NR[order], F[order], D[order], GF[order], GD[order]
-    area = len(P) / p.density  # the painted area, from the sampling density
-    Mn = np.clip(F / 0.5, 0, 1)  # 0 at the paint's edge, 1 well inside
-    tones = _tone_at(P, (p.tone_a, p.tone_b, p.tone_c), p.tone_scale, p.seed)
-    crowd = _crowd(P, 0.06)
-    seen = (HN @ FACE >= -0.35) & (crowd >= 4)  # the game never sees the back of a rock
-    idx = np.flatnonzero(seen).tolist()
-    if not idx:
-        return 0
-
-    def tangent(G):
-        """A field's gradient in the hull's tangent plane, unit, and its length."""
-        Gt = G - HN * (G * HN).sum(1, keepdims=True)
-        Gl = np.linalg.norm(Gt, axis=1)
-        return Gt / np.maximum(Gl, 1e-12)[:, None], Gl
-
-    # The outward direction of the paint: down the field's gradient.
-    OUTd, OUTl = tangent(GF)
-    OUT = np.where((OUTl > 0.2)[:, None], -OUTd, 0.0)
-    # The growth direction: up the distance field, away from the origin. Where
-    # it is degenerate (at the origin, or a flat spot of the smoothed field)
-    # the leaf takes a random direction: a rosette at the origin.
-    GROW, GROWl = tangent(GD)
-    grown = GROWl > 0.3
-    # How far along the carpet each candidate is, 0 at the origin, 1 at the far end.
-    lo, hi = float(D[idx].min()), float(D[idx].max())
-    T = np.clip((D - lo) / max(hi - lo, 1e-6), 0.0, 1.0)
-    # Toward the edge a candidate is taken this much more readily: the outer
-    # band is where the leaves thin out, and a gap there shows the underlay
-    # as a rim around the mass.
-    edge_w = 1.0 + p.edge_fill * (1.0 - Mn) ** 2
-    band = max(p.shoulder, 1e-3)
-    ramp = _smoothstep(0.0, band, Mn)  # 0 at the paint's edge, 1 inside the shoulder band
-    # The height of a leaf's base over the rock: the underlay, a clearance,
-    # the sheet's own step and the mound that slopes from `thickness` at the
-    # origin to nothing at the far end. Near the paint's edge the mound
-    # drops away too, so the origin at an edge is a rise, not a shelf.
-    base_h = p.underlay * _underlay_ramp(F) + LEAF_CLEAR + p.thickness * (1.0 - T) * (0.25 + 0.75 * ramp)
-    # A leaf pitches tip-up off the hull, less toward the edge, where it lies
-    # down on the rock; at the very edge it tilts outer-edge-down instead.
-    pitch = math.radians(p.tilt) * (0.3 + 0.7 * ramp)
-    edge_tilt = EDGE_TILT * (1.0 - ramp) ** 1.5
-    spread = math.radians(p.spread)
-
-    K = max(int(p.sheets), 1)
-    n_leaves = 0
-    for k in range(K):
-        rnd.shuffle(idx)
-        mean_len = (p.leaf_min + p.leaf_max) / 2 * (1.0 - p.taper * 0.5)
-        want = p.leaf_fill / K * area / (0.6 * mean_len * mean_len)  # a leaf covers about 0.6 of its card
-        p_take = min(1.0, want / len(idx))
-        depth_k = (1.0 - k / max(K - 1, 1)) * 0.7
-        for i in idx:
-            if rnd.random() > p_take * edge_w[i]:
+    # ---- the lighter layers, seeded at the field's summits
+    for k in range(1, p.layers + 1):
+        parent = layers[-1]
+        inside = np.zeros(n, bool)
+        for d in parent:
+            idx = np.array([i for (_c, i, _d) in kd.find_range(d.c, d.rmax)], dtype=np.int64)
+            if len(idx):
+                inside[idx[d.u(np.array([P[i][:] for i in idx]))[0] <= 1.0]] = True
+        pdepth = g.depth_inside(painted, inside)
+        sh = max(p.shrink ** k, 0.65)
+        r_k = (p.dab_min * sh, p.dab_max * sh)
+        b_k = p.first_buffer if k == 1 else p.buffer
+        frac_k = FRACS[min(k - 1, len(FRACS) - 1)]
+        fill = frac_k >= 1.0
+        elig = painted & (pdepth >= b_k + 1.5 * r_k[1])
+        if g.area[elig].sum() < 0.0007:
+            break
+        seeds_at = []
+        for members in g.components(elig):
+            if g.area[members].sum() < 0.00036:
                 continue
-            hn = HN[i]
-            if grown[i]:
-                u = GROW[i]
-                stray = rnd.uniform(-spread, spread)
-            else:
-                u = OUTd[i] if OUTl[i] > 0.2 else np.cross(hn, UP if abs(hn[2]) < 0.9 else np.array((1.0, 0.0, 0.0)))
-                u = u / np.linalg.norm(u)
-                stray = rnd.uniform(0, math.tau)
-            u = _rotate(u, hn, stray)
-            n = hn
-            # The edge tilt: the whole frame turned about the axis across the
-            # outward direction, so the outer part of the leaf goes down.
-            if edge_tilt[i] > 1e-4 and OUT[i].any():
-                axis = np.cross(hn, OUT[i])
-                axis /= np.linalg.norm(axis)
-                u, n = _rotate(u, axis, edge_tilt[i]), _rotate(n, axis, edge_tilt[i])
-            side = np.cross(u, n)
-            # The pitch: tip up about the leaf's own side axis.
-            u, n = _rotate(u, side, pitch[i]), _rotate(n, side, pitch[i])
-            length = rnd.uniform(p.leaf_min, p.leaf_max) * (1.0 - p.taper * T[i]) * (0.75 + 0.25 * Mn[i])
-            card_h = length / LEAF_SPAN
-            card_w = card_h * rnd.uniform(0.92, 1.06)
-            base = P[i] + hn * (base_h[i] + k * STRATUM_GAP + rnd.uniform(-0.001, 0.001))
-            centre = base + u * (0.5 - LEAF_BASE) * card_h
-            turn = _facing_turn(n, p.facing)
-            if turn is not None:
-                side, u, n = _rotate(side, *turn), _rotate(u, *turn), _rotate(n, *turn)
-            col = _tint(hn, np.array(depth_k * Mn[i]), np.array(rnd.uniform(-p.variation, p.variation)), tones[i], p)
-            quads.add(_corners(centre, side, u, card_w, card_h), hn, col, _uv_cell(rnd.choice(LEAF_CELLS)))
-            n_leaves += 1
-    return n_leaves
+            level = k + 1
+            mset = np.zeros(n, bool)
+            mset[members] = True
+            high = mset & (hfield >= level)
+            if not high.any():
+                high = np.zeros(n, bool)
+                high[max(members, key=lambda m: hfield[m])] = True
+            n_high = int(high.sum())
+            for isl in g.components(high):
+                if g.area[isl].sum() < 0.0002 and len(isl) < n_high:
+                    continue
+                seeds_at.append(max(sorted(isl), key=lambda m: (hfield[m], rng.random())))
+            if fill:
+                # a fill layer also seeds the component's far ends, or growth
+                # from one summit takes many stalls to reach them
+                ms = sorted(members)
+                for _ in range(max(1, int(g.area[members].sum() / FILL_SEED_AREA))):
+                    seeds_at.append(ms[rng.randrange(len(ms))])
+        if not seeds_at:
+            break
+        if DEBUG:
+            print("[moss.debug] layer %d: eligible %.3f m2 of %.3f painted, %d seeds, parent %d dabs, pdepth max %.3f" % (
+                k, g.area[elig].sum(), g.area[painted].sum(), len(seeds_at), len(parent), pdepth[painted].max()))
+        target = int(len(parent) * (1.3 if fill else frac_k))
+        layer, queues, caps = [], [], []
+        lgrid = _Grid(0.8 * r_k[1])  # the spacing test's reach
+        for i in seeds_at:
+            d = Dab(P[i], N[i], rng.uniform(*r_k), k, rng)
+            layer.append(d)
+            lgrid.add(d)
+            queues.append([d])
+            caps.append(10**9 if fill else int(target / len(seeds_at) * rng.uniform(0.5, 1.5)) + 1)
+        stalls = 0
+        spacing = 0.4
+        while len(layer) < target and stalls < (80 if fill else 400):
+            grew = False
+            for qi, q in enumerate(queues):
+                if len(q) >= caps[qi]:
+                    continue
+                src = q[rng.randrange(len(q))]
+                tx = src.n.cross(Vector((0.3, 0.7, 0.2))).normalized()
+                ty = src.n.cross(tx)
+                for _ in range(6):
+                    a = rng.uniform(0, 2 * math.pi)
+                    r = rng.uniform(*r_k)
+                    c = src.c + (tx * math.cos(a) + ty * math.sin(a)) * (src.r + r) * spacing
+                    _co, i, _dd = kd.find(c)  # snap to the rock
+                    if not elig[i]:
+                        continue
+                    c = P[i]
+                    if any((c - o.c).length < spacing * (r + o.r) for o in lgrid.near(c, spacing * (r + r_k[1]))):
+                        continue
+                    d = Dab(c, N[i], r, k, rng)
+                    layer.append(d)
+                    lgrid.add(d)
+                    q.append(d)
+                    grew = True
+                    break
+            stalls = 0 if grew else stalls + 1
+        if DEBUG:
+            print("[moss.debug]   grew %d (target %d, stalls %d), clumps %s" % (len(layer), target, stalls, sorted((len(q) for q in queues), reverse=True)[:12]))
+        layer = [d for q in queues if len(q) >= p.min_clump for d in q]
+        if not layer:
+            break
+        layers.append(layer)
+    return layers
 
 
-def _vines(quads, co, tri, v, hull, vines, host_matrix, p, rnd):
-    """A vine at every anchor: a stem hanging straight down, held in front of
-    the rock, wearing ivy leaves that alternate sides and taper toward the
-    tip. Anchors are walked in a fixed order so the draw is reproducible.
-    Returns (vines, leaves)."""
-    if len(vines) == 0:
-        return 0, 0
-    M = np.array(host_matrix, dtype=np.float64)
-    origins = vines.position @ M[:3, :3].T + M[:3, 3]
-    order = np.lexsort((origins[:, 2], origins[:, 1], origins[:, 0]))
-    bvh = BVHTree.FromPolygons([tuple(x) for x in co], [tuple(x) for x in tri.tolist()])
-    hull_kd = None
-    if len(v):
-        hull_kd = KDTree(len(v))
-        for i, q in enumerate(v):
-            hull_kd.insert(q, i)
-        hull_kd.balance()
-    tones = _tone_at(origins, (p.tone_a, p.tone_b, p.tone_c), p.tone_scale, p.seed)
-    n_vines = n_leaves = 0
-    for k_v in order.tolist():
-        origin = origins[k_v]
-        length = max(float(vines.length[k_v]), 0.05)
-        # The normal the leaves shade with: the carpet's hull where the anchor
-        # sits in paint, else the rock's own surface.
-        hn = None
-        if hull_kd is not None:
-            _q, i, d = hull_kd.find(Vector(origin))
-            if i is not None and d < 0.3:
-                hn = hull[i]
-        if hn is None:
-            near = bvh.find_nearest(Vector(origin))
-            hn = np.array(near[1]) if near[0] is not None else -FACE
-            hn = _normalize(hn)
-        sway = rnd.uniform(0.006, 0.015)
-        phase = rnd.uniform(0, 6)
-
-        def at(z, clear=0.02):
-            """The stem's point z metres below the anchor, held in FRONT of the rock."""
-            q = origin + np.array((sway * math.sin(z * 12 + phase), 0.0, -z)) + FACE * (0.02 + 0.03 * z / length)
-            hit = bvh.ray_cast(Vector(q + FACE * 5.0), Vector(-FACE))
-            if hit[0] is not None:
-                front_y = float(np.array(hit[0]) @ FACE)  # how far toward the camera the rock reaches here
-                if q @ FACE < front_y + clear:
-                    q = q + FACE * (front_y + clear - q @ FACE)
-            return q
-
-        zs = np.linspace(0.0, length, max(2, int(length / 0.03) + 1))
-        pts = np.array([at(z) for z in zs])
-        side = np.array((0.0015, 0.0, 0.0))
-        stem_col = np.asarray(p.tone_b) * 0.75
-        for k in range(len(pts) - 1):
-            a, b = pts[k], pts[k + 1]
-            # Wound so the face looks toward the camera: the material culls the back.
-            quads.add(np.array([a + side, a - side, b - side, b + side]), hn, stem_col, _uv_solid())
-        vn = hn * 0.5 + FACE * 0.5
-        vn /= np.linalg.norm(vn)
-        vn = _faced(vn, p.facing)
-        z = p.leaf_size * 0.25
-        sgn = rnd.choice((-1, 1))
-        k = 0
-        while z < length:
-            tt = z / length
-            size = p.leaf_size + (p.leaf_tip - p.leaf_size) * tt
-            c = at(z + size * 0.42, clear=0.03 + 0.004 * (k % 2 + 1)) + np.array((sgn * size * 0.3, 0.0, 0.0))
-            spin = sgn * math.radians(rnd.uniform(18, 34))
-            col = _tint(hn, np.array(0.1 + 0.4 * tt), np.array(rnd.uniform(-0.1, 0.1)), tones[k_v], p)
-            quads.add(_quad(c, vn, size, size, spin), hn, col, _uv_cell(rnd.choice(LEAF_CELLS)))
-            n_leaves += 1
-            z += size * 0.55
-            sgn = -sgn
-            k += 1
-        n_vines += 1
-    return n_vines, n_leaves
+def _tone(p, layers, P, kd, g, painted, off, res):
+    """Each dab's tone step: the erosion field at the dab and its layer, a slow
+    mottle, quantised. Scaled against the fixed reference, never the patch."""
+    dark_s = [_srgb(c) for c in p.dark]
+    light_s = [_srgb(c) for c in p.light]
+    tstep = 1.0 / max(p.layers, 1)
+    off2 = off + Vector((13.1, 7.7, 3.9))
+    for k, layer in enumerate(layers):
+        for d in layer:
+            mot = p.mottle * tstep * noise.noise(d.c * p.mottle_scale + off2)
+            t_layer = min(1.0, k / max(p.layers, 1))
+            hf = min(1.0, g.hfield[kd.find(d.c)[1]] / p.steps_deep)
+            tq = (p.field_mix * hf + (1 - p.field_mix) * t_layer) ** p.curve + mot
+            tq = round(min(1.0, max(0.0, tq)) * (p.levels - 1)) / max(p.levels - 1, 1)
+            d.t = tq
+            d.tone = tuple(_lin(dark_s[i] + (light_s[i] - dark_s[i]) * tq) for i in range(3))
 
 
-def _assemble(quads, under, host_matrix):
-    co, tri, nrm, col, uv = quads.arrays()
-    if under is not None:
-        under_v, under_t, under_n, under_c = under
-        off = len(co)
-        co = np.vstack([co, under_v])
-        nrm = np.vstack([nrm, under_n])
-        col = np.vstack([col, under_c])
-        tri = np.vstack([tri, under_t + off])
-        uv = np.vstack([uv, np.repeat(_uv_solid()[:3][None], len(under_t), 0)])
-    if len(tri) == 0:
-        return _empty_result()
-    # Back to the host's local frame.
-    M = np.array(host_matrix, dtype=np.float64)
-    R = M[:3, :3]
-    co_local = (co - M[:3, 3]) @ np.linalg.inv(R).T
-    n_local = _normalize(nrm @ R)
-    colors = np.concatenate([col, np.ones((len(col), 1))], 1)
-    return Result(co_local, tri.astype(np.int64), colors, uv, n_local)
+def _heights(mv, bvh, kd, tval, levels):
+    """Mean height (mm) of the mound over the rock per tone step: the check that
+    the light stands tallest."""
+    by = {}
+    for x in mv:
+        on, nr, _i, _d = bvh.find_nearest(Vector(x))
+        if on is None:
+            continue
+        tv = tval[kd.find(Vector(x))[1]]
+        if np.isnan(tv):
+            continue
+        by.setdefault(int(round(tv * (levels - 1))), []).append((Vector(x) - on).dot(nr) * 1000.0)
+    return {s: round(sum(h) / len(h), 1) for s, h in sorted(by.items())}
+
+
+# --------------------------------------------------------------------------
+# The print
+
+
+CHART_ANGLE = 40.0  # degrees: a chart takes neighbours whose normal is within this of its first face's
+CHART_PAD = 2  # texels of gutter around every chart, filled from the chart's edge
+
+
+def _charts(mv, mt):
+    """Group the triangles into charts of neighbours that face within CHART_ANGLE of
+    the chart's first face, and project each chart flat onto that face's plane:
+    per-corner 2D coordinates in metres, and each triangle's chart."""
+    fn = normalize(np.cross(mv[mt[:, 1]] - mv[mt[:, 0]], mv[mt[:, 2]] - mv[mt[:, 0]]))
+    e = np.concatenate([mt[:, [0, 1]], mt[:, [1, 2]], mt[:, [2, 0]]])
+    e.sort(axis=1)
+    owner = np.tile(np.arange(len(mt)), 3)
+    order = np.lexsort((e[:, 1], e[:, 0]))
+    es, os_ = e[order], owner[order]
+    same = (es[1:] == es[:-1]).all(1)
+    nbr = [[] for _ in range(len(mt))]
+    for a, b in zip(os_[:-1][same].tolist(), os_[1:][same].tolist()):
+        nbr[a].append(b)
+        nbr[b].append(a)
+    chart = np.full(len(mt), -1)
+    cos_lim = math.cos(math.radians(CHART_ANGLE))
+    seeds = []
+    for f0 in range(len(mt)):
+        if chart[f0] >= 0:
+            continue
+        c = len(seeds)
+        seeds.append(f0)
+        chart[f0] = c
+        stack = [f0]
+        while stack:
+            f = stack.pop()
+            for g in nbr[f]:
+                if chart[g] < 0 and fn[g] @ fn[f0] >= cos_lim:
+                    chart[g] = c
+                    stack.append(g)
+    uv = np.zeros((len(mt), 3, 2))
+    for c, f0 in enumerate(seeds):
+        n = fn[f0]
+        a = np.array((1.0, 0.0, 0.0)) if abs(n[0]) < 0.9 else np.array((0.0, 1.0, 0.0))
+        e1 = normalize(np.cross(n, a))
+        e2 = np.cross(n, e1)
+        fs = np.nonzero(chart == c)[0]
+        pts = mv[mt[fs]]
+        flat = np.stack([pts @ e1, pts @ e2], -1)
+        # turned to its principal axes, so its bounding box (what is packed) is tight
+        xy = flat.reshape(-1, 2)
+        xy = xy - xy.mean(0)
+        _w, vecs = np.linalg.eigh(xy.T @ xy)
+        uv[fs] = flat @ vecs
+    return uv, chart, len(seeds)
+
+
+def _print(mv, mt, layers, p):
+    """UVs and the texture: the mound in flat charts packed into one square, every
+    dab evaluated per texel."""
+    q, chart, n_charts = _charts(mv, mt)
+    lo_c = np.full((n_charts, 2), np.inf)
+    hi_c = np.full((n_charts, 2), -np.inf)
+    np.minimum.at(lo_c, chart, q.min(1))
+    np.maximum.at(hi_c, chart, q.max(1))
+    pad = CHART_PAD
+    texel = p.texel
+    while True:
+        wh = np.ceil((hi_c - lo_c) / texel).astype(np.int64) + 2 * pad
+        size, place = _shelf_pack(wh, p.max_texture)
+        if place is not None:
+            break
+        texel *= 1.2  # does not fit: coarser texels
+    if DEBUG:
+        print("[moss.debug] charts %d, box area %d texels (%.0f%% of %d^2), largest box %s" % (
+            n_charts, int((wh[:, 0] * wh[:, 1]).sum()), 100 * (wh[:, 0] * wh[:, 1]).sum() / size ** 2, size, wh.max(0).tolist()))
+    # every corner in texels of the square
+    px_uv = (q - lo_c[chart][:, None, :]) / texel + (place[chart] + pad)[:, None, :]
+    uvs = px_uv / size
+    # vertex normals of the mound (area weighted) for the texel normal
+    vn = vertex_normals(mv, mt)
+    img = np.zeros((size, size, 4))
+    pos = np.zeros((size, size, 3))
+    nrm = np.zeros((size, size, 3))
+    valid = np.zeros((size, size), bool)
+    for f in range(len(mt)):
+        (ax_, ay_), (bx, by_), (cx, cy) = px_uv[f]
+        den = (by_ - cy) * (ax_ - cx) + (cx - bx) * (ay_ - cy)
+        if abs(den) < 1e-12:
+            continue
+        x0 = int(math.floor(min(ax_, bx, cx)))
+        y0 = int(math.floor(min(ay_, by_, cy)))
+        x1 = int(math.ceil(max(ax_, bx, cx)))
+        y1 = int(math.ceil(max(ay_, by_, cy)))
+        ys, xs = np.mgrid[y0:y1, x0:x1]
+        tx, ty = xs + 0.5, ys + 0.5
+        l1 = ((by_ - cy) * (tx - cx) + (cx - bx) * (ty - cy)) / den
+        l2 = ((cy - ay_) * (tx - cx) + (ax_ - cx) * (ty - cy)) / den
+        lam = np.stack([l1, l2, 1 - l1 - l2], -1)
+        inside = (lam >= -1e-6).all(-1)
+        if not inside.any():
+            continue
+        lam = lam[inside]
+        yy_, xx_ = ys[inside], xs[inside]
+        pos[yy_, xx_] = lam @ mv[mt[f]]
+        nrm[yy_, xx_] = lam @ vn[mt[f]]
+        valid[yy_, xx_] = True
+    # the gutter: every chart grown by `pad` texels from its own edge, so filtering
+    # and the first mips at a chart's border read the chart's colour
+    for _ in range(pad):
+        grow = np.zeros_like(valid)
+        src_pos = np.zeros_like(pos)
+        src_nrm = np.zeros_like(nrm)
+        for dy, dx in ((0, 1), (0, -1), (1, 0), (-1, 0)):
+            sh_valid = np.roll(valid, (dy, dx), axis=(0, 1))
+            take = sh_valid & ~valid & ~grow
+            src_pos[take] = np.roll(pos, (dy, dx), axis=(0, 1))[take]
+            src_nrm[take] = np.roll(nrm, (dy, dx), axis=(0, 1))[take]
+            grow |= take
+        pos[grow] = src_pos[grow]
+        nrm[grow] = src_nrm[grow]
+        valid |= grow
+    yy, xx = np.nonzero(valid)
+    tp = pos[yy, xx]
+    tn = normalize(nrm[yy, xx])
+    col = np.tile(np.array(p.dark, dtype=np.float64), (len(tp), 1))
+    cov = np.zeros(len(tp))
+    # a spatial hash of the texels: sorted by bucket, so a dab gathers the texels
+    # of every bucket its sphere touches in one numpy step
+    cell = max(0.01, p.dab_max * 0.3)
+    lo = tp.min(0)
+    gk = np.floor((tp - lo) / cell).astype(np.int64)
+    dims = gk.max(0) + 1
+    key = (gk[:, 0] * dims[1] + gk[:, 1]) * dims[2] + gk[:, 2]
+    order = np.argsort(key, kind="stable")
+    uk, start, count = np.unique(key[order], return_index=True, return_counts=True)
+    room = MOUND_LIFT_ROOM
+    tp_sq = np.einsum("ij,ij->i", tp, tp)
+    for layer in layers:
+        for d in layer:
+            cc = np.asarray(d.c)
+            dn = np.asarray(d.n)
+            # The mound stands up to `d.h` over the dab's plane here: fetch the
+            # texels in a sphere about the middle of that slab, not a box as
+            # tall as the tallest moss anywhere (that fetched 3x the texels).
+            mid = cc + dn * (0.5 * d.h)
+            half = 0.5 * d.h + room
+            reach = math.sqrt((d.rmax + p.print_edge) ** 2 + half * half)
+            g0 = np.maximum(np.floor((mid - reach - lo) / cell).astype(np.int64), 0)
+            g1 = np.minimum(np.floor((mid + reach - lo) / cell).astype(np.int64), dims - 1)
+            if (g1 < g0).any():
+                continue
+            gx, gy, gz = np.meshgrid(np.arange(g0[0], g1[0] + 1), np.arange(g0[1], g1[1] + 1), np.arange(g0[2], g1[2] + 1), indexing="ij")
+            # buckets whose centre is within the sphere (plus a bucket's half-diagonal)
+            centre = (np.stack([gx, gy, gz], -1).reshape(-1, 3) + 0.5) * cell + lo
+            near = np.linalg.norm(centre - mid, axis=1) < reach + 0.87 * cell
+            want = ((gx * dims[1] + gy) * dims[2] + gz).ravel()[near]
+            pos = np.searchsorted(uk, want)
+            ok = pos < len(uk)
+            ok[ok] = uk[pos[ok]] == want[ok]  # only buckets that hold texels
+            pos = pos[ok]
+            if len(pos) == 0:
+                continue
+            st, cn = start[pos], count[pos]
+            total = int(cn.sum())
+            sel = order[np.repeat(st - np.concatenate([[0], np.cumsum(cn)[:-1]]), cn) + np.arange(total)]
+            # cheap culls first: within the slab, inside the dab's outer radius,
+            # facing the dab's way (the dab's own side of the rock)
+            rel = tp[sel] @ dn - cc @ dn
+            sq = tp_sq[sel] - 2.0 * (tp[sel] @ cc) + cc @ cc - rel * rel
+            ok = (rel > -room) & (rel < d.h + room) & (sq < (d.rmax + p.print_edge) ** 2) & ((tn[sel] @ dn) > 0.2)
+            sel = sel[ok]
+            if len(sel) == 0:
+                continue
+            u, rr = d.u(tp[sel])
+            w = np.clip((rr - u * rr) / p.print_edge + 0.5, 0.0, 1.0)
+            hit = w > 0
+            if not hit.any():
+                continue
+            sel, w = sel[hit], w[hit]
+            tone = np.array(d.tone)
+            first = cov[sel] == 0  # untouched texels take the dab's tone whole
+            cur = np.where(first[:, None], tone, col[sel])
+            col[sel] = cur + (tone - cur) * w[:, None]
+            cov[sel] = np.maximum(cov[sel], w)
+    img[yy, xx, :3] = col
+    img[yy, xx, 3] = 1.0
+    return uvs, img, texel
+
+
+def _shelf_pack(wh, max_size):
+    """Place rectangles (w, h texels) on shelves in the smallest power-of-two
+    square that holds them; (size, positions) or (max_size, None)."""
+    order = np.lexsort((-wh[:, 0], -wh[:, 1]))  # tallest first
+    total = int((wh[:, 0] * wh[:, 1]).sum())
+    size = 64
+    while size * size < total and size < max_size:
+        size *= 2
+    while size <= max_size:
+        place = np.zeros((len(wh), 2), np.int64)
+        x = y = shelf = 0
+        ok = True
+        for i in order.tolist():
+            w, h = int(wh[i, 0]), int(wh[i, 1])
+            if w > size:
+                ok = False
+                break
+            if x + w > size:
+                y += shelf
+                x = shelf = 0
+            if y + h > size:
+                ok = False
+                break
+            place[i] = (x, y)
+            x += w
+            shelf = max(shelf, h)
+        if ok:
+            return size, place
+        size *= 2
+    return max_size, None

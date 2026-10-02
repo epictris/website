@@ -17,7 +17,7 @@ just sources              # the scenes' .blend files and the growth textures, fr
 ```
 
 The add-on is the **Formations** tab in the 3D viewport's sidebar (N).
-`tools/blender/addon_install.py` links the package into Blender's `user_default` extension repository, as the moss add-on's installer does.
+`tools/blender/addon_install.py` links the package into Blender's `user_default` extension repository, as it does the ivy and moss add-ons.
 The scene exporter imports the package from the repo itself and needs none of this.
 
 ## The game camera

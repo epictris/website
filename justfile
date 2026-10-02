@@ -63,11 +63,18 @@ publish:
 scene LEVEL:
     cd rope && bun run scene:export {{LEVEL}}
 
-# Install the moss add-on (rope/tools/blender/moss) into this machine's Blender:
-# links it into the user extensions, enables it and saves the preferences. Then
-# the Moss tab is in the 3D viewport's sidebar. See rope/docs/blender-moss.md.
+# Install the moss add-on (rope/tools/blender/moss): paint painterly moss onto a
+# scene's rocks. Links it into the user extensions, enables it and saves the
+# preferences; then the Moss tab is in the 3D viewport's sidebar.
+# See rope/docs/blender-moss.md.
 moss-install:
-    cd rope && blender -b --python tools/blender/moss_install.py
+    cd rope && blender -b --python tools/blender/addon_install.py -- moss
+
+# Install the ivy add-on (rope/tools/blender/ivy; the "moss" add-on until
+# 2026-10-02): paint carpets of flat ivy leaves and hang vines. Then the Ivy
+# tab is in the 3D viewport's sidebar. See rope/docs/blender-ivy.md.
+ivy-install:
+    cd rope && blender -b --python tools/blender/addon_install.py -- ivy
 
 # Install the formations add-on (rope/tools/blender/formations): rock masses
 # from outlines, edited through the game camera, and what grows on them. Then
