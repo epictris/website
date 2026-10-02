@@ -1,6 +1,7 @@
 # The cave look study
 
 A record of the 2026-10-01 study that replicated Tris's cave asset sheets in Blender, feature by feature, and then redid the rock geometry and the rock surface until he picked a look.
+The moss carpet followed on 2026-10-01 and 2026-10-02, and its final state became the moss add-on ([blender-moss](blender-moss.md)).
 This page is the durable version: every number, every attempt that was dropped and why, and where the bytes are.
 The illustrated review is a Claude Doc, [Cave Asset Sheets: Blender Replication Report](https://claude.ai/code/artifact/5c4cbc08-0037-4a98-828a-6fdb9067132c); it is not versioned with the code, so when the two disagree this page wins.
 
@@ -8,7 +9,9 @@ The illustrated review is a Claude Doc, [Cave Asset Sheets: Blender Replication 
 
 | What | Where | Versioned by |
 |---|---|---|
-| The scripts | `tools/blender/cave-sheet-study/` (`cave_features.py`, `rock_study.py`, `rock_compare.py`, `compose.py`, `grid.py`) | git |
+| The scripts | `tools/blender/cave-sheet-study/` (`cave_features.py`, `rock_study.py`, `rock_compare.py`, `moss_study.py`, `moss_compare.py`, `compose.py`, `grid.py`) | git |
+| The moss add-on the study became | `tools/blender/moss/` | git |
+| Tris's crop of rock-a's crown, the moss reference | `tools/blender/cave-sheet-study/out/moss/ref_crown.png` | nobody yet (see Open) |
 | The 11 reference sheets and the 3 texture crops | `assets-src/studies/cave-sheets/sheets/`, `.../texture/` | the release, pinned in `scripts/sceneSources.json` |
 | The sheets Tris reviewed (reference beside render) | `assets-src/studies/cave-sheets/review/` | the release, same pin |
 | Renders | `tools/blender/cave-sheet-study/out/` | nobody: gitignored, rebuilt by the scripts |
@@ -27,6 +30,8 @@ blender -b --python rock_study.py -- --variant pillow --corners 14 --bevel 0.08 
     --target 1200 --angle 9 --material plain --albedo v6 --spec 0.1 --light v6 --key 3600 \
     --views 3q,front,side,top --save
 python3 rock_compare.py                        # out/rock/cmp_*.png, reference beside render
+blender -b --python moss_study.py -- --geom layers --views 3q,front,close   # the moss on rock-b, out/moss/
+python3 moss_compare.py                        # out/moss/cmp_moss.png and the colour bands
 blender -b --python cave_features.py -- --out out && python3 compose.py out   # the first pass, all seven features
 ```
 
@@ -81,6 +86,16 @@ View transform AgX Base Contrast, exposure 0, Cycles OptiX, 64 samples at 640 px
 
 The Bevel node and the Ambient Occlusion node are Cycles only and neither exports: for the game the edge line and the crevice darkening have to be baked to vertex colour or a texture.
 
+### Moss, the dab-painted mound
+
+Settled with Tris over many rounds on 2026-10-01 and 2026-10-02 in `moss_study.py` (`--geom layers`), then ported to the moss add-on, which is now the reference implementation; [blender-moss](blender-moss.md) has every step and setting.
+In short: the painted area is packed with dark concave polar-blob dabs (3.2 to 5 cm), an uneven erosion field scores how deep each point sits in its patch, five layers of smaller, lighter dabs grow clump by clump at that field's summits, each kept a buffer inside the one below, and every dab takes one flat tone from the field and its layer, quantised to 8 steps spaced in sRGB with no per-dab randomness so neighbours merge into blotches.
+The geometry is one low-poly mound per rock (about 1500 triangles per square metre), 8 mm proud under the darkest moss and up to 9 cm more under the lightest, scaled down on walls, sunk 6 mm under the rock at its rim; the dabs are printed onto the mound's own texture at a 1.5 mm texel with a crisp 2 mm edge, on a matte Principled BSDF (roughness 1, no specular).
+
+The reference is a soft mottled pillow, sampled shade (60, 81, 52), mid (102, 128, 72), lit (148, 172, 86); Tris's crown crop added "patches of light moss that spread out radially, fading to darker moss - not random blotches", "very matte", height tapering to almost nothing at the edges, and colour in blotches, "never as a smooth gradient".
+The lightest tone is (154, 169, 77).
+Under the v6 rig the albedos are the reference colours times the gains in `out/moss/calib_v6_agx.json` (dark 0.507/0.689/1.176, light 0.308/0.481/0.391, the light then pulled by (0.9, 0.92, 0.6) to the swatch).
+
 ## What was tried and dropped
 
 Every row is still runnable: the base forms and light modes stay in `rock_study.py` so a dead end is a command, not a memory.
@@ -114,6 +129,22 @@ Each pass was judged by sampling the render's brightest 8 percent of rock pixels
 | v13 | Yellower sun (1.0, 0.72, 0.2) | Olive |
 | v14 | Sun straight behind, hue (1.0, 0.66, 0.22) | Tan tops at (177, 161, 127), but the shade a navy far darker than the reference |
 
+### Moss
+
+Each surface below is still a `moss_study.py` flag (`--surface`, `--geom`); the later steps of the layered carpet are only in the script's history.
+
+| Attempt | Recipe | Why dropped |
+|---|---|---|
+| Sludge | The first pass's voxel shell with a 2 cm Voronoi displacement (`cave_features.mat_moss`, `--surface sludge`) | Clumps read as popcorn |
+| Paint, Kuwahara, toon, SSS, card dabs, shells | Up-facing ramp of the reference greens with blotches and dabs; the compositor's anisotropic Kuwahara over the moss; emission ramped by key direction; subsurface; ~3000/m2 flat cards; 5 thinned offset shells | Tris: "None of the approaches you showed come close" |
+| Quantised clumps | `--geom clump`: round dabs per voxel cell, tone rising from the rim | Jagged edges, outlines too intricate, too few shades |
+| Seeded layers | Each lighter layer grown from pre-placed seeds | "The seed approach is flawed": light areas should come from the patch's shape; replaced by the erosion field, which now places the seeds |
+| Dab domes | A dome of geometry per dab | "Each dab creates new geometry": the carpet should be one low-poly shell |
+| Edge cards | One alpha card per rim dab along the carpet's edge | Read as a 3D leaf fringe with a dark gap; "remove the png cards" |
+| Rock print | The dab fringe printed onto the rock's own texture around the mound, `--combine` unioning the two | Tris: "I like how it is without it" |
+| Colour blur | Blurring the tone between dabs | "Ruins the painted effect"; the edges should be crisp, just not jagged |
+| Light rigs | `--light soft`, `overcast`, `--view neutral`, `filmic` | Soft equals v6 once calibrated, neutral darkens the rock; stay on v6 and AgX |
+
 ## Lessons
 
 - `mathutils.noise.noise_vector` and `noise.random_unit_vector` are seeded per Blender process; `noise.noise`, `noise.voronoi` and `noise.turbulence` are stable.
@@ -127,10 +158,18 @@ Each pass was judged by sampling the render's brightest 8 percent of rock pixels
 - Measure, do not eyeball: sample the reference by region and the render by percentile, and compare the triples.
 - A rock that renders white under any light has no material (Cycles' default surface), not too much light.
 - In zsh a `$VAR` holding several flags does not word-split; pass flags as an array.
+- `mathutils.noise.noise` returns -1 to 1, not 0 to 1; a `2 n - 1` wrapper made the moss erosion negative and its mottle dark-biased, and cost two rounds.
+- `bmesh.ops.delete` re-indexes vertices; colours mapped by a stale `v.index` came out in voxel-row stripes. Keep the original index in an int layer.
+- A mound left flush with the rock (within 2 mm) decimates into slivers whose normals are noise, some 35 degrees downward, and shades a dark strip along the moss edge; never leave it flush (the 6 mm sink at the rim). A slope cap on the thinning made it worse.
+- Under the v6 key the slate's ~0.04 albedo already renders near 177, on AgX's shoulder, so the moss albedo had to drop to about 0.35 of the reference colours before hue and mottling showed. Space tone steps in sRGB; linear spacing is invisible under AgX.
+- Depth in hops over a voxel grid is 1.42 times the straight-line distance, over a refined mesh 1.06; the add-on scales every study depth by 1.35 (`STUDY_METRIC`) so its layers grow as the study's did.
+- A small patch must not run the whole tone range: scale the erosion field and the layer tone against one fixed reference depth (0.42 m over 5 steps), not the patch's or the rock's own.
 
 ## Open
 
 - v6's fronts are lighter and warmer than reference 3's slate blue (sampled (70, 66, 64) against (33, 42, 59)); the sun-and-sky rig never gave tan tops and slate sides at once, so the next idea is a non-physical two-tone mix driven by how far a facet faces up.
 - The rock-b column is squatter than the reference because the corner cuts eat its top: author its box taller.
 - The sheet pieces are mostly cliff faces; the next piece to build from recipe F is a tall column.
+- The moss is verified headless on rock-b only: not yet on a river or grotto rock, in the game's light, or in play, and its colours are the v6 rig's.
+- The moss reference crop (`out/moss/ref_crown.png`) lives only in a gitignored folder; publish it beside the sheets (`bun run assets:publish-sources studies/cave-sheets/...`) so the moss renders keep the picture they were judged against.
 - Ground plants are the one feature of the first pass that still needs a different approach (a painted leaf-card atlas); the vines need only new numbers.
