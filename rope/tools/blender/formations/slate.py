@@ -1,15 +1,26 @@
 """The painted slate: every formation's stone (docs/cave-look.md, "Surface").
 
-Ported from `mat_plain` in cave-sheet-study/rock_study.py as Tris chose it on
-2026-10-01 (`--albedo v6 --spec 0.1`): matte, a slow warm/cool drift across the
-block, a slightly different tone per facet, faint grain, soft vertical stains,
-crevices darkened and a pale line on the facet edges.
+Flat tones, as the cave sheets paint stone: inside a facet there is no
+texture at all. What varies is BETWEEN facets, by orientation - up-facing
+planes light, fronts the mid slate, undersides dark - with a slightly
+different tone per facet on top of that, the seams darkened and a pale line
+on the facet edges.
+
+Until 2026-10-02 the shader also carried three low-frequency noises (a
+warm/cool drift, a fine grain and stretched vertical stains) and a 0.5 m
+Ambient Occlusion. Baked at the export's 136 to 200 texels per metre and
+bilinearly filtered, those read as cloudy blotches across every face (Tris:
+"I don't like this blotchy texture"), while the per-facet step was too small
+(0.92 to 1.08) for neighbouring planes to separate. The reference rocks have
+no such pattern, so the noises went; the orientation ramp and a wider facet
+step carry the look instead, and flat tones survive any texel density.
 
 The per-facet tone reads a FACE float attribute `facet` in [0, 1];
 `tone_facets` writes it from each face's ORIENTATION, so faces that point
 almost the same way get almost the same tone. The Ambient Occlusion and Bevel
 nodes are Cycles only: the scene export bakes the whole Base Color to an image
-texture in Cycles, so the game gets them; EEVEE's viewport shows the stone without its crevices and edges.
+texture in Cycles, so the game gets them; EEVEE's viewport shows the stone
+without its seams and edges.
 """
 
 import random
@@ -18,8 +29,19 @@ import bpy
 from mathutils import Vector, noise
 
 NAME = "Painted slate"
-COOL, WARM, LINE = "#2f3546", "#3b3e4a", "#5c6070"
+# The orientation ramp's three stops: what faces down, what faces the camera
+# (the 2026-10-01 v6 slate), what faces up. The game's sun lights the tops
+# again on top of this, so TOP is only twice SIDE in linear light.
+BOTTOM, SIDE, TOP = "#1e2230", "#2f3546", "#474c5a"
+LINE = "#5c6070"
 SPECULAR = 0.1
+# The per-facet step: multiplies the ramp, so neighbouring facets at nearly
+# the same orientation still read as two planes.
+FACET_TONE = (0.85, 1.15)
+# The seam darkening: how far from a concave join it reaches, and how dark.
+# Only the join itself; a longer reach drew the plumes the noises were blamed for.
+AO_DISTANCE = 0.12
+AO_TONE = (0.6, 1.0)
 # How fast the per-facet tone changes with a face's orientation: the tone is
 # a smooth noise of the face normal times this. The fused rock's faces are a
 # planar dissolve (fitted.py) of a remeshed surface, so one visible facet is
@@ -67,14 +89,31 @@ def tone_facets(ob, seed):
 
 def painted_slate(name=NAME):
     mat = bpy.data.materials.new(name)
+    paint(mat)
+    return mat
+
+
+def repaint():
+    """Rebuild every painted slate in the open file (`Painted slate` and the
+    `.001`-style copies an append makes) to this module's graph, in place, so
+    every slot keeps its material and the rocks need no rebuild. Returns the
+    materials repainted."""
+    mats = [m for m in bpy.data.materials if m.name == NAME or m.name.startswith(NAME + ".")]
+    for m in mats:
+        paint(m)
+    return len(mats)
+
+
+def paint(mat):
+    """Replace `mat`'s node tree with the painted slate."""
     mat.use_nodes = True
     nt = mat.node_tree
     for n in list(nt.nodes):
         nt.nodes.remove(n)
     N = nt.nodes.new
     L = nt.links.new
-    # Solid view: between the two albedos.
-    mat.diffuse_color = tuple((a + b) / 2 for a, b in zip(srgb(COOL), srgb(WARM)))
+    # Solid view: the front tone.
+    mat.diffuse_color = srgb(SIDE)
     mat.roughness = 1.0
 
     out = N("ShaderNodeOutputMaterial")
@@ -83,16 +122,21 @@ def painted_slate(name=NAME):
     bsdf.inputs["Specular IOR Level"].default_value = SPECULAR
     L(bsdf.outputs[0], out.inputs[0])
 
-    coord = N("ShaderNodeTexCoord")
-    drift = N("ShaderNodeTexNoise")
-    drift.inputs["Scale"].default_value = 0.9
-    drift.inputs["Detail"].default_value = 2.0
-    L(coord.outputs["Object"], drift.inputs["Vector"])
-    base = N("ShaderNodeMix")
-    base.data_type = "RGBA"
-    base.inputs[6].default_value = srgb(COOL)
-    base.inputs[7].default_value = srgb(WARM)
-    L(drift.outputs["Fac"], base.inputs[0])
+    # The orientation ramp: the face's true (flat) normal's world Z, -1 down
+    # to 1 up, onto the three stops. A flat face has one normal, so one tone.
+    geo = N("ShaderNodeNewGeometry")
+    nz = N("ShaderNodeSeparateXYZ")
+    L(geo.outputs["True Normal"], nz.inputs[0])
+    up = N("ShaderNodeMapRange")
+    up.inputs["From Min"].default_value = -1.0
+    up.inputs["From Max"].default_value = 1.0
+    L(nz.outputs["Z"], up.inputs["Value"])
+    ramp = N("ShaderNodeValToRGB")
+    ramp.color_ramp.elements[0].color = srgb(BOTTOM)
+    ramp.color_ramp.elements[1].color = srgb(TOP)
+    mid = ramp.color_ramp.elements.new(0.5)
+    mid.color = srgb(SIDE)
+    L(up.outputs[0], ramp.inputs["Fac"])
 
     def scalar_mul(a, b):
         m = N("ShaderNodeMath")
@@ -104,42 +148,20 @@ def painted_slate(name=NAME):
     facet = N("ShaderNodeAttribute")
     facet.attribute_name = "facet"
     ftone = N("ShaderNodeMapRange")
-    ftone.inputs["To Min"].default_value = 0.92
-    ftone.inputs["To Max"].default_value = 1.08
+    ftone.inputs["To Min"].default_value = FACET_TONE[0]
+    ftone.inputs["To Max"].default_value = FACET_TONE[1]
     L(facet.outputs["Fac"], ftone.inputs["Value"])
 
-    grain = N("ShaderNodeTexNoise")
-    grain.inputs["Scale"].default_value = 35.0
-    grain.inputs["Detail"].default_value = 3.0
-    L(coord.outputs["Object"], grain.inputs["Vector"])
-    gtone = N("ShaderNodeMapRange")
-    gtone.inputs["To Min"].default_value = 0.96
-    gtone.inputs["To Max"].default_value = 1.04
-    L(grain.outputs["Fac"], gtone.inputs["Value"])
-
-    stretch = N("ShaderNodeMapping")
-    stretch.inputs["Scale"].default_value = (3.0, 3.0, 0.7)
-    L(coord.outputs["Object"], stretch.inputs["Vector"])
-    stain = N("ShaderNodeTexNoise")
-    stain.inputs["Scale"].default_value = 1.0
-    stain.inputs["Detail"].default_value = 2.0
-    L(stretch.outputs[0], stain.inputs["Vector"])
-    stone = N("ShaderNodeMapRange")
-    stone.inputs["From Min"].default_value = 0.35
-    stone.inputs["From Max"].default_value = 0.65
-    stone.inputs["To Min"].default_value = 0.75
-    stone.inputs["To Max"].default_value = 1.0
-    L(stain.outputs["Fac"], stone.inputs["Value"])
-
     ao = N("ShaderNodeAmbientOcclusion")
-    ao.inputs["Distance"].default_value = 0.5
+    ao.inputs["Distance"].default_value = AO_DISTANCE
     ao.samples = 8
     atone = N("ShaderNodeMapRange")
-    atone.inputs["To Min"].default_value = 0.55
-    atone.inputs["To Max"].default_value = 1.0
+    atone.inputs["From Max"].default_value = 0.8
+    atone.inputs["To Min"].default_value = AO_TONE[0]
+    atone.inputs["To Max"].default_value = AO_TONE[1]
     L(ao.outputs["AO"], atone.inputs["Value"])
 
-    tone = scalar_mul(scalar_mul(scalar_mul(ftone.outputs[0], gtone.outputs[0]), atone.outputs[0]), stone.outputs[0])
+    tone = scalar_mul(ftone.outputs[0], atone.outputs[0])
     tone_rgb = N("ShaderNodeCombineColor")
     for i in range(3):
         L(tone, tone_rgb.inputs[i])
@@ -147,13 +169,12 @@ def painted_slate(name=NAME):
     toned.data_type = "RGBA"
     toned.blend_type = "MULTIPLY"
     toned.inputs[0].default_value = 1.0
-    L(base.outputs[2], toned.inputs[6])
+    L(ramp.outputs["Color"], toned.inputs[6])
     L(tone_rgb.outputs[0], toned.inputs[7])
 
     bev = N("ShaderNodeBevel")
     bev.samples = 8
     bev.inputs["Radius"].default_value = 0.03
-    geo = N("ShaderNodeNewGeometry")
     dot = N("ShaderNodeVectorMath")
     dot.operation = "DOT_PRODUCT"
     L(bev.outputs["Normal"], dot.inputs[0])
@@ -172,4 +193,3 @@ def painted_slate(name=NAME):
     L(edged.outputs[2], bsdf.inputs["Base Color"])
     # The study also fed the Bevel normal to the BSDF's Normal; glTF cannot
     # carry it (the export warns), and the edge line is in the colour anyway.
-    return mat

@@ -367,6 +367,23 @@ class FORMATIONS_OT_tone_facets(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class FORMATIONS_OT_repaint_slate(bpy.types.Operator):
+    """Rebuild every painted slate material in this file to the add-on's current shader, in place; no rock is rebuilt"""
+    bl_idname = "formations.repaint_slate"
+    bl_label = "Repaint Slate"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        # A rock's stone comes in with its build; a file built before the
+        # shader changed keeps the old graph until it is repainted.
+        count = slate.repaint()
+        if not count:
+            self.report({"INFO"}, "No painted slate in this file")
+            return {"FINISHED"}
+        self.report({"INFO"}, f"Repainted {count} materials")
+        return {"FINISHED"}
+
+
 class FORMATIONS_OT_edit(bpy.types.Operator):
     """Edit outlines as the game camera sees them"""
     bl_idname = "formations.edit"
@@ -454,4 +471,5 @@ class FORMATIONS_OT_depth(bpy.types.Operator):
 
 
 CLASSES = (FORMATIONS_OT_look, FORMATIONS_OT_generate, FORMATIONS_OT_rebuild_changed, FORMATIONS_OT_action,
-           FORMATIONS_OT_plant, FORMATIONS_OT_tone_facets, FORMATIONS_OT_edit, FORMATIONS_OT_polygon, FORMATIONS_OT_depth)
+           FORMATIONS_OT_plant, FORMATIONS_OT_tone_facets, FORMATIONS_OT_repaint_slate, FORMATIONS_OT_edit,
+           FORMATIONS_OT_polygon, FORMATIONS_OT_depth)

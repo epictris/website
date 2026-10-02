@@ -85,6 +85,7 @@ The fused rock is a planar dissolve of a remeshed surface, so one visible facet 
 On the river's Terrace the mean tone step across an edge is 0.02 under 5°, 0.11 at 5-10° and 0.23 at 10-20°, against about 0.33 at every angle for a random tone; scale 2.5 left 0.17 at 5-10°.
 The rock stays flat shaded, crisp at every edge, with the study's edge line: smooth shading across edges under 20° was tried the same day and was too smooth.
 A build tones its rock; **Tone Facets** (Selected / All) brings a rock built earlier to the same state, flat shading included.
+A build also brings its stone in with it, so a file built before `slate.py` changed keeps the old graph; **Repaint Slate** rebuilds every `Painted slate*` material in the file to the current shader in place, no rebuild (the 2026-10-02 flat-tone shader is in [cave-look](cave-look.md#surface-the-painted-slate-shader-and-the-v6-rig)).
 Neither moves a vertex, so it leaves the growth and the rebuild state alone (`core.mesh_hash` reads only positions and faces).
 The generator's own tinted stones (five slots and a worn edge, the fork's dark teal `[.028, .063, .082]`) are not used since 2026-10-02.
 The shader's Ambient Occlusion and Bevel nodes are Cycles only: the export bakes the whole Base Color to an image texture in Cycles ([blender-scenes](blender-scenes.md#what-blender-cannot-carry)), so the game gets the darkened crevices and the edge line, while EEVEE's Material Preview shows the stone without them.

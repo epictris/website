@@ -60,17 +60,20 @@ Rock-b ends at 6 objects, 678 faces, 1566 triangles.
 
 ### Surface, the painted slate shader and the v6 rig
 
-`mat_plain` in `rock_study.py`, Object coordinates throughout:
+`painted_slate` in `formations/slate.py` since 2026-10-02, flat tones only:
 
 | Node | Setting | Role |
 |---|---|---|
-| Principled BSDF | roughness 1.0, Specular IOR Level 0.1 (`--spec 0.1`) | matte; the Bevel node's normal feeds Normal (not in the formations port, `formations/slate.py`: glTF cannot carry it) |
-| Mix of two colours by a Noise (scale 0.9, detail 2) | `#2f3546` cool, `#3b3e4a` warm (`--albedo v6`) | a slow drift across the block |
-| Attribute `facet`, Map Range to 0.92 to 1.08 | multiplies | a slightly different tone per facet |
-| Noise scale 35, detail 3, Map Range to 0.96 to 1.04 | multiplies | faint grain |
-| Noise scale 1 behind a Mapping scale (3, 3, 0.7), Map Range 0.35 to 0.65 onto 0.75 to 1 | multiplies | soft vertical stains |
-| Ambient Occlusion distance 0.5 m, 8 samples, Map Range onto 0.55 to 1 | multiplies | crevices darken |
+| Principled BSDF | roughness 1.0, Specular IOR Level 0.1 (`--spec 0.1`) | matte; the study also fed the Bevel node's normal to Normal, the port does not (glTF cannot carry it) |
+| Geometry True Normal Z, Map Range -1 to 1, Color Ramp | `#1e2230` down, `#2f3546` facing (the v6 slate), `#474c5a` up | the orientation ramp: one flat tone per facet, light tops and dark undersides, as the sheets paint them |
+| Attribute `facet`, Map Range to 0.85 to 1.15 | multiplies | a different tone per facet, wide enough for neighbouring planes to separate |
+| Ambient Occlusion distance 0.12 m, 8 samples, Map Range 0 to 0.8 onto 0.6 to 1 | multiplies | the seam itself darkens, nothing beyond it |
 | Bevel node radius 3 cm, 8 samples; dot with the true normal, Map Range 0.995 to 0.92 onto 0 to 0.35 | mixes toward `#5c6070` | the pale line on facet edges |
+
+The study's `mat_plain` (`rock_study.py`, Object coordinates) is what Tris picked on 2026-10-01 and what the port carried until 2026-10-02: the same albedo and edge line, but a 0.92 to 1.08 facet step and three noises on top - a cool/warm drift (Noise scale 0.9 mixing `#2f3546` and `#3b3e4a`), a grain (Noise scale 35, 0.96 to 1.04) and stretched vertical stains (Noise scale 1 behind a Mapping scale (3, 3, 0.7), 0.35 to 0.65 onto 0.75 to 1) - with a 0.5 m Ambient Occlusion onto 0.55 to 1.
+Baked at the export's 136 to 200 texels per metre those noises read as cloudy blotches across every face in the game, and the facet step was too small to tell adjacent planes apart (Tris, 2026-10-02: "I don't like this blotchy texture").
+The reference stone has no pattern inside a facet, so the noises went and the orientation ramp took over; flat tones also survive any texel density.
+The after shot, before Tris's verdict, is in the session's A/B (the Terrace at `cli shot --view` `{"level":"BALL","at":[10.2,9.1],"zoom":5}`).
 
 The v6 rig (`--light v6`), on the study stage from `cave_features.build_stage`:
 

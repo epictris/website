@@ -75,6 +75,7 @@ class FORMATIONS_PT_main(bpy.types.Panel):
         row = box.row(align=True)
         row.operator("formations.tone_facets", text="Selected").scope = "SELECTED"
         row.operator("formations.tone_facets", text="All").scope = "ALL"
+        box.operator("formations.repaint_slate", text="Repaint Slate")
 
         layout.operator("formations.generate", text="New Formation", icon="ADD").mode = "CREATE"
 
