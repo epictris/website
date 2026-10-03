@@ -3193,7 +3193,7 @@
           "type": "light",
           "kind": "spot",
           "z": -100,
-          "color": "#ffe0b8",
+          "color": "#ffcb87",
           "intensity": 500,
           "range": 1200,
           "angle": 28,

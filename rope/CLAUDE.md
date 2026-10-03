@@ -163,6 +163,7 @@ Rendering
 - [rock-assets](docs/rock-assets.md) - retired 2026-09-29: the hand-authored rock and moss props (now in `river.blend`), and where their lessons are.
 - [rocks](docs/rocks.md) - retired: the earlier generated rocks, rejected 2026-09-24.
 - [cave-look](docs/cave-look.md) - the 2026-10-01 cave asset sheet study: the chosen rock recipe and painted slate shader with every number, the attempts that were dropped and why, where the references and reviewed sheets live.
+- [rock-detail](docs/rock-detail.md) - the 2026-10-03 rock detail study: sub-facets and chips as a normal map the export bakes from a detail high poly, the occlusion gradient and the dots and ticks in the slate, the calibrated review rig, and the edge wear and patches that were rejected.
 - [asset-store](docs/asset-store.md) - the release-hosted binaries, budgets, the optimise pipelines, licensing and credits.
 - [loading-screen](docs/loading-screen.md) - the inlined store, the two-halves bar, the warm frame.
 

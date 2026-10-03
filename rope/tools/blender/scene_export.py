@@ -227,10 +227,12 @@ def bake_device():
 # game frame shows 200 pixels a metre at the gameplay plane (BALL_ZOOM at
 # 1080p), and the painted slate's edge line is a texel or two wide, so a map
 # under that density draws it magnified and blurred (the Terrace at 1024 got
-# 136 texels a metre). The top is the optimiser's cap for baked maps
-# (`--baked-maps`, scripts/encode-textures.mjs).
-TEXELS_PER_METRE = 256
-BAKE_SIZE_MIN, BAKE_SIZE_MAX = 64, 2048
+# 136 texels a metre). Doubled on 2026-10-03 (Tris: "about double the
+# resolution"), so the edge line and the chips stay crisp up close. The top is
+# the optimiser's cap for baked maps (`--baked-maps`,
+# scripts/encode-textures.mjs).
+TEXELS_PER_METRE = 512
+BAKE_SIZE_MIN, BAKE_SIZE_MAX = 64, 4096
 # The share of the image an unwrap's islands cover after packing.
 UV_COVERAGE = 0.6
 # Pixels between islands in the pack. Every texel outside the islands is
@@ -239,6 +241,8 @@ UV_COVERAGE = 0.6
 PACK_GAP_PX = 2
 # How far apart two vertices may be and still be one for the unwrap.
 WELD_DISTANCE = 1e-5
+# Faces smaller than this (square metres) get one UV for all their corners.
+DEGENERATE_AREA = 1e-8
 # The corner attribute that carries each corner's index through the weld.
 UNWRAP_TAG = "scene_bake_corner"
 
@@ -319,6 +323,22 @@ def unwrap(ob, size):
         ob.data.loops.foreach_get("vertex_index", verts)
         for j in lost:
             uvs[j] = uv_welded[2 * tree.find(ob.data.vertices[verts[j]].co)[1]:][:2]
+    # A face with no area (the dissolve's collinear slivers) can have its
+    # corners land on different islands, a streak across the atlas. Flat it
+    # draws nothing; bent open after the bake (formations/curve.py) it drew
+    # that streak as a pale stair-stepped band. Collapse it onto one corner
+    # that came through the weld, so it takes the colour of where it sits.
+    start = np.empty(len(ob.data.polygons), dtype=np.int32)
+    total = np.empty(len(ob.data.polygons), dtype=np.int32)
+    ob.data.polygons.foreach_get("loop_start", start)
+    ob.data.polygons.foreach_get("loop_total", total)
+    area = np.empty(len(ob.data.polygons))
+    ob.data.polygons.foreach_get("area", area)
+    found = set(range(len(uvs))) - set(lost.tolist())
+    for f in np.flatnonzero(area < DEGENERATE_AREA):
+        corners = range(start[f], start[f] + total[f])
+        keep = next((c for c in corners if c in found), start[f])
+        uvs[list(corners)] = uvs[keep]
     uv = ob.data.uv_layers.new(name=BAKE_UV)
     uv.data.foreach_set("uv", uvs.ravel())
 
@@ -351,6 +371,58 @@ def fill_background(im):
     px[..., :3] = color
     px[..., 3] = 1.0
     im.pixels.foreach_set(px.ravel())
+
+
+def is_slate(mat):
+    """Whether `mat` is the formations add-on's painted slate (or a `.001`
+    copy an append makes): the stone that gets the detail normal map."""
+    from formations import slate
+    return mat is not None and (mat.name == slate.NAME or mat.name.startswith(slate.NAME + "."))
+
+
+def bake_detail_normals(targets, images, straight):
+    """Bake each painted slate rock's chips and sub-facets (formations/
+    detail.py, built here from the rock's own mesh and removed after) into
+    its normal image, one selected-to-active bake per rock, and return the
+    image nodes keyed by material. The high poly is built from the rock's
+    `straight` mesh (the rock is split for its bows but not yet bent, so the
+    two line up exactly). It stands at the rock's world transform; the bake casts from detail.CAGE outside the rock inward to
+    detail.RAY_DISTANCE."""
+    from formations import detail
+    scene = bpy.context.scene
+    nodes = {}
+    for ob in targets:
+        high, report = detail.build(straight.get(ob, ob.data), seed_for(ob), scene.collection, f"{ob.name} detail")
+        high.matrix_world = ob.matrix_world.copy()
+        for mat in ob.data.materials:
+            node = mat.node_tree.nodes.new("ShaderNodeTexImage")
+            node.image = images[ob]
+            uv = mat.node_tree.nodes.new("ShaderNodeUVMap")
+            uv.uv_map = BAKE_UV
+            mat.node_tree.links.new(uv.outputs["UV"], node.inputs["Vector"])
+            mat.node_tree.nodes.active = node
+            nodes[mat] = node
+        select_only([high, ob], ob)
+        t0 = time.time()
+        bpy.ops.object.bake(type="NORMAL", normal_space="TANGENT", use_selected_to_active=True,
+                            cage_extrusion=detail.CAGE, max_ray_distance=detail.RAY_DISTANCE,
+                            target="IMAGE_TEXTURES", uv_layer=BAKE_UV, margin=0)
+        log(f"detail {ob.name}: {report}; baked in {time.time() - t0:.1f}s")
+        me = high.data
+        bpy.data.objects.remove(high)
+        bpy.data.meshes.remove(me)
+        fill_background(images[ob])
+        images[ob].pack()
+    return nodes
+
+
+def seed_for(ob):
+    """The detail's seed: the formation's own, else a hash of the name, so
+    the same rock gets the same chips on every export."""
+    try:
+        return int(json.loads(ob["formation_recipe"])["params"]["seed"])
+    except (KeyError, TypeError, ValueError):
+        return sum(ord(c) for c in ob.name)
 
 
 def bake_pass(targets, images, bake_type, **bake_args):
@@ -395,12 +467,21 @@ def bake_procedural_textures(kept):
     t0 = time.time()
     scene = bpy.context.scene
     depsgraph = bpy.context.evaluated_depsgraph_get()
-    sizes = {}
+    sizes, straight, bows = {}, {}, {}
     for ob in targets:
         mesh = bpy.data.meshes.new_from_object(ob.evaluated_get(depsgraph), preserve_all_data_layers=True,
                                                depsgraph=depsgraph)
         ob.modifiers.clear()
         ob.data = mesh
+        if any(is_slate(m) for m in mesh.materials):
+            # Long straight creases (formations/curve.py): split now, before
+            # the unwrap; every map is baked on the straight rock, which the
+            # detail high poly matches exactly, and the rock is bent after.
+            from formations import curve, slate
+            log(f"strips {ob.name}: {slate.mark_strips(mesh)} chamfer strips painted as edge line")
+            bows[ob] = curve.find_bows(mesh, seed_for(ob))
+            log(f"curve {ob.name}: {curve.rebuild_mesh(mesh, bows[ob], seed_for(ob), smooth=True)}")
+            straight[ob] = mesh.copy()
         for i, mat in enumerate(mesh.materials):
             if mat is not None:
                 mesh.materials[i] = mat.copy()
@@ -433,17 +514,34 @@ def bake_procedural_textures(kept):
         for mat, node in nodes.items():
             for bsdf in procedural_base_colors(mat):
                 mat.node_tree.links.new(node.outputs["Color"], bsdf.inputs["Base Color"])
+    def wire_normal(mat, node, bsdf):
+        normal_map = mat.node_tree.nodes.new("ShaderNodeNormalMap")
+        normal_map.uv_map = BAKE_UV
+        mat.node_tree.links.new(node.outputs["Color"], normal_map.inputs["Color"])
+        mat.node_tree.links.new(normal_map.outputs["Normal"], bsdf.inputs["Normal"])
+
+    # The painted slate's chips and sub-facets: a normal map baked from a
+    # detail high poly (docs/rock-detail.md), put under the slate's shading
+    # Bevel (slate.add_detail), so the normal pass below bakes the detail and
+    # the rounded facet edges into one map. The detail map itself is a step
+    # and never reaches the glTF.
+    from formations import slate
+    detailed = [ob for ob in targets if any(is_slate(m) for m in ob.data.materials)]
+    if detailed:
+        nodes = bake_detail_normals(detailed, images(detailed, "detail normal", "Non-Color"), straight)
+        for mat, node in nodes.items():
+            slate.add_detail(mat, node.outputs["Color"], BAKE_UV)
     bumped = [ob for ob in targets if any(procedural_normals(m) for m in ob.data.materials)]
     if bumped:
         nodes = bake_pass(bumped, images(bumped, "baked normal", "Non-Color"), "NORMAL", normal_space="TANGENT")
         for mat, node in nodes.items():
             for bsdf in procedural_normals(mat):
-                normal_map = mat.node_tree.nodes.new("ShaderNodeNormalMap")
-                normal_map.uv_map = BAKE_UV
-                mat.node_tree.links.new(node.outputs["Color"], normal_map.inputs["Color"])
-                mat.node_tree.links.new(normal_map.outputs["Normal"], bsdf.inputs["Normal"])
+                wire_normal(mat, node, bsdf)
+    for ob, rock_bows in bows.items():
+        # Bent only now that every map is baked (formations/curve.py).
+        log(f"curve {ob.name}: {curve.bend(ob.data, rock_bows)}")
     texels = ", ".join(f"{ob.name} {sizes[ob]}" for ob in targets)
-    log(f"baked {len(colored)} colour and {len(bumped)} normal maps ({texels}) on {device}, {time.time() - t0:.1f}s")
+    log(f"baked {len(colored)} colour, {len(detailed)} detail and {len(bumped)} normal maps ({texels}) on {device}, {time.time() - t0:.1f}s")
     return len(targets)
 
 
@@ -634,6 +732,18 @@ def formation_warnings(scene, warnings):
             warnings.append(f"{ob.name}: rock changed since its growth was planted (Formations > Growth > Stale)")
 
 
+def repaint_slate():
+    """Rebuild every painted slate material to the formations add-on's
+    current shader before baking (never saved), as the ivy and moss are
+    regrown: the add-on's graph is the source, and a file saved before the
+    shader last changed would otherwise ship the old stone."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from formations import slate
+    n = slate.repaint()
+    if n:
+        log(f"repainted {n} painted slate material{'s' if n != 1 else ''} to the add-on's shader")
+
+
 def main():
     argv = sys.argv[sys.argv.index("--") + 1 :]
     if len(argv) < 2:
@@ -648,6 +758,7 @@ def main():
     kept, skipped, warnings = [], [], []
     grow_painted(scene, warnings)
     formation_warnings(scene, warnings)
+    repaint_slate()
     for ob in scene.objects:
         reason = skip_reason(ob, excluded)
         if reason:

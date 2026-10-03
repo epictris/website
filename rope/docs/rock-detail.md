@@ -10,12 +10,17 @@ Three things, all deterministic in the rock's seed, none of them in the shipped 
 
 | What | Where it is made | How the game gets it |
 |---|---|---|
-| Sub-facets and chips | `tools/blender/formations/detail.py`, built by the export from the rock's own mesh | a tangent-space normal map baked from that high poly onto the rock's unwrap (`bake_detail_normals` in `scene_export.py`) |
+| Sub-facets and chips | `tools/blender/formations/detail.py`, built by the export from the rock's own mesh | a tangent-space normal map baked from that high poly onto the rock's unwrap (`bake_detail_normals` in `scene_export.py`), then combined with the slate's Bevel normal (below) |
 | Occlusion gradient | the painted slate shader, `formations/slate.py` | baked into the colour map with the rest of the stone |
 | Dots and ticks | the painted slate shader | baked into the colour map |
 
 The export repaints every painted slate material to the add-on's current shader before baking (`repaint_slate`), as it regrows the ivy and moss, so a file saved before the shader last changed still ships the current stone.
 The pale Bevel edge line the slate carried since 2026-10-01 is gone: Tris rejected every edge wear the study tried (below).
+
+Later on 2026-10-03 Tris put the cave-sheet report's painted slate v6 back as the stone ([cave-look](cave-look.md#surface-the-painted-slate-shader-and-the-v6-rig)), so the occlusion gradient and the dots and ticks are no longer in `slate.py` (they stay in this study's `paint.py`), and the Bevel edge line and Bevel normal are back.
+The chips and sub-facets are combined with the Bevel normal (Tris: "they should be combined"): the detail map goes in under the slate's shading Bevel (`slate.add_detail`), which rounds the facet edges starting from the detailed normal, and the export bakes that material's normal as the one map the game gets; the detail map is only a step.
+The edge line keeps a Bevel of its own on the plain facets, so it never traces a chip.
+The Terrace's shipped map: median tilt 0.3 degrees (the flat planes and the 0.5 to 1 degree sub-facets), a tenth of its texels past 5 degrees (chips and rounded edges), 23 degrees at the 99th percentile.
 
 ### Sub-facets
 
@@ -26,13 +31,13 @@ Cycles 7 to 9 of the study drew patch outlines with noise and Voronoi cells and 
 `detail.crumple` retriangulates the high poly's planes.
 Faces are grouped into visible planes by region growing (within `PLANE_ANGLE` 10 degrees of the region's running normal; a small region bordered by one large one is absorbed, so a bump inside a plane is no hole).
 Every edge longer than 1.5 spacings is split to the spacing, in both its faces, so the mesh stays closed and no boundary stretch fans into slivers.
-Each plane gets interior points on a jittered hexagonal grid at `SPACING` (10 cm; smaller planes finer, down to `SPACING_MIN`; a narrow plane the grid misses gets one point at its deepest spot), and is triangulated from its boundary and those points by a constrained Delaunay (`mathutils.geometry.delaunay_2d_cdt`, holes respected by dropping the triangles inside them).
+Each plane gets interior points on a jittered hexagonal grid at `SPACING` (20 cm since 2026-10-03, was 10; smaller planes finer, down to `SPACING_MIN` 10 cm; a narrow plane the grid misses gets one point at its deepest spot), and is triangulated from its boundary and those points by a constrained Delaunay (`mathutils.geometry.delaunay_2d_cdt`, holes respected by dropping the triangles inside them).
 Every interior point steps a full half-spacing times tan(`TILT`) in or out, `TILT` 0.5 to 1 degree, never a spread in between: neighbours at the same level merge into one flat patch of a few triangles, neighbours at opposite levels meet at the full tilt.
 A spread left most neighbours under a degree apart and the structure vanished.
 Outward steps are capped at `PROUD_MAX` 4 mm, inside the bake's 5 mm cage.
 A plane whose projected boundary crosses itself (a zigzag of sub-millimetre dissolve slivers) is left flat; about a tenth of the Terrace's surface.
 
-Tris picked the size and tilt from sweeps: 5, 10, 15, 20 and 28 cm at one tilt (cycle 12), then 10 cm at 0.25 to 4 degrees (cycle 13).
+Tris picked the size and tilt from sweeps: 5, 10, 15, 20 and 28 cm at one tilt (cycle 12), then 10 cm at 0.25 to 4 degrees (cycle 13), and later on 2026-10-03 asked for them more spaced out: 20 cm at the same tilt (488 points on the Terrace instead of 2310; slate-tone page #14).
 Under a key light from above a given tilt reads about half as strong as under a low key, since the lit tops sit near the cosine's flat top.
 
 ### Chips

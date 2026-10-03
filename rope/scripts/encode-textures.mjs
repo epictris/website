@@ -47,6 +47,9 @@ const rules = [];
 // - AVIF with full-resolution colour (4:4:4) at quality 90 is 114 KB, off by
 //   0.77 levels (rms) of 255 and 8 at worst, and keeps the edge lines.
 // A baked normal map stays lossless, for the reason `--lossless-normals` exists.
+// The baked maps' cap: scene_export.py's BAKE_SIZE_MAX (512 texels a metre
+// since 2026-10-03, twice the 256 above).
+const BAKED_MAX = 4096;
 if (argv.includes("--baked-maps")) {
   rules.push({
     name: "baked colour, AVIF 4:4:4",
@@ -54,9 +57,9 @@ if (argv.includes("--baked-maps")) {
     targetFormat: "avif",
     quality: 90,
     chromaSubsampling: "4:4:4",
-    resize: [2048, 2048],
+    resize: [BAKED_MAX, BAKED_MAX],
   });
-  rules.push({ name: "baked normal, lossless", pattern: / baked normal$/, targetFormat: "webp", lossless: true, resize: [2048, 2048] });
+  rules.push({ name: "baked normal, lossless", pattern: / baked normal$/, targetFormat: "webp", lossless: true, resize: [BAKED_MAX, BAKED_MAX] });
 }
 // A normal map whose detail is subtle codes as a grid of blocks (optimize-asset.ts).
 if (argv.includes("--lossless-normals")) {

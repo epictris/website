@@ -36,11 +36,11 @@ PLANE_ANGLE = 10.0
 # Planes smaller than this (square metres) are left alone.
 MIN_AREA = 0.02
 # Sub-facet size: the grid's point spacing and the longest boundary stretch
-# left unsplit, metres (Tris, cycle 13: 10 cm). Smaller planes get a finer
-# grid down to SPACING_MIN. Grid points jitter by JITTER of the spacing and
+# left unsplit, metres (Tris, cycle 13: 10 cm; 2026-10-03 night: 20 cm, more
+# spaced out). Smaller planes get a finer grid down to SPACING_MIN. Grid points jitter by JITTER of the spacing and
 # stay MARGIN of it clear of the boundary; a narrow plane the grid misses
 # gets one point at its deepest spot if that is DEEPEST clear.
-SPACING, SPACING_MIN = 0.10, 0.10
+SPACING, SPACING_MIN = 0.20, 0.10
 JITTER, MARGIN, DEEPEST = 0.3, 0.45, 0.04
 # How far neighbouring triangles tilt against each other, degrees (Tris,
 # cycle 13: 0.5 to 1): a point's height is half the spacing times tan(TILT),

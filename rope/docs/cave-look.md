@@ -60,20 +60,29 @@ Rock-b ends at 6 objects, 678 faces, 1566 triangles.
 
 ### Surface, the painted slate shader and the v6 rig
 
-`painted_slate` in `formations/slate.py` since 2026-10-02, flat tones only:
+`painted_slate` in `formations/slate.py` is the study's v6 itself since 2026-10-03 (Tris: "follow the process documented" in this report), all on Object coordinates:
 
 | Node | Setting | Role |
 |---|---|---|
-| Principled BSDF | roughness 1.0, Specular IOR Level 0.1 (`--spec 0.1`) | matte; the study also fed the Bevel node's normal to Normal, the port does not (glTF cannot carry it) |
-| Geometry True Normal Z, Map Range -1 to 1, Color Ramp | `#1e2230` down, `#2f3546` facing (the v6 slate), `#474c5a` up | the orientation ramp: one flat tone per facet, light tops and dark undersides, as the sheets paint them |
-| Attribute `facet`, Map Range to 0.85 to 1.15 | multiplies | a different tone per facet, wide enough for neighbouring planes to separate |
-| Ambient Occlusion distance 0.12 m, 8 samples, Map Range 0 to 0.8 onto 0.6 to 1 | multiplies | the seam itself darkens, nothing beyond it |
-| Bevel node radius 3 cm, 8 samples; dot with the true normal, Map Range 0.995 to 0.92 onto 0 to 0.35 | mixes toward `#5c6070` | the pale line on facet edges |
+| Principled BSDF | roughness 1.0, Specular IOR Level 0.1 (`--spec 0.1`), Normal from a Bevel node (radius 3 cm) | matte; the Bevel normal rounds the facet edges into each other, and since 2026-10-03 it starts from the rock detail study's chips and sub-facets ([rock-detail](rock-detail.md)) |
+| Noise scale 0.9, detail 2, mixing two colours | `#2f3546` cool, `#3b3e4a` warm | a slow drift across the block |
+| Attribute `facet`, Map Range to 0.92 to 1.08 | multiplies | a slightly different tone per facet |
+| Noise scale 35, detail 3, Map Range to 0.96 to 1.04 | multiplies | faint grain |
+| Noise scale 1 behind a Mapping scale (3, 3, 0.7), Map Range 0.35 to 0.65 onto 0.75 to 1 | multiplies | soft vertical stains |
+| Ambient Occlusion distance 0.5 m, 8 samples, Map Range onto 0.55 to 1 | multiplies | crevices and seams darken |
+| Bevel node radius 3 cm, 8 samples; dot with the normal, Map Range 0.995 to 0.92 onto 0 to 0.35 | mixes toward `#5c6070` | the pale line along facet edges |
 
-The study's `mat_plain` (`rock_study.py`, Object coordinates) is what Tris picked on 2026-10-01 and what the port carried until 2026-10-02: the same albedo and edge line, but a 0.92 to 1.08 facet step and three noises on top - a cool/warm drift (Noise scale 0.9 mixing `#2f3546` and `#3b3e4a`), a grain (Noise scale 35, 0.96 to 1.04) and stretched vertical stains (Noise scale 1 behind a Mapping scale (3, 3, 0.7), 0.35 to 0.65 onto 0.75 to 1) - with a 0.5 m Ambient Occlusion onto 0.55 to 1.
-Baked at the export's 136 to 200 texels per metre those noises read as cloudy blotches across every face in the game, and the facet step was too small to tell adjacent planes apart (Tris, 2026-10-02: "I don't like this blotchy texture").
-The reference stone has no pattern inside a facet, so the noises went and the orientation ramp took over; flat tones also survive any texel density.
-The after shot, before Tris's verdict, is in the session's A/B (the Terrace at `cli shot --view` `{"level":"BALL","at":[10.2,9.1],"zoom":5}`).
+The export also bows a rock's long straight creases ([blender-formations](blender-formations.md), curved creases).
+Concave creases get no line and a crease shadow instead (Tris, 2026-10-03): a 6 cm Ambient Occlusion reads about 1 on an open convex edge and darker in a fold, so it darkens the fold (0.5 to 1 onto 0.55 to 1) and fades the line and the strips out below 0.97 (gone by 0.85); the Bevel that draws the line turns both ways and could not tell them apart.
+Chamfer strips are painted as the edge line (`slate.mark_strips`, 2026-10-03, Tris's option 1): a narrow plane between convex creases (1.5 to 8 cm across its principal axis, fading from 4 cm; at least 30 cm long; filling at least a quarter of its length x width, so wedges count and dissolve sliver chains do not) gets a `strip` weight the shader paints toward `#5c6070` like the line. Without it, an edge made of two creases with a strip between kept its line on the sharper crease while the light only turned dark at the other, and the highlight read as beside the edge (slate-tone page #17 and #18). If it looks wrong in play, option 2 is lowering the line's angle so both creases get one.
+One adaptation: the study wrote a random `facet` per face, and a formation's visible plane is many faces a few degrees apart, so `tone_facets` writes it from each face's orientation.
+`cave-sheet-study/slate_check.py` renders the shipped `slate.py` the way the study rendered v6 (the saved `out/rock/pillow_v6.blend` with its material swapped, or any formation on the study stage under the v6 rig), and `slate_measure.py` samples the result by luminance band over a rock mask.
+The port matches `pillow_v6_3q.png` to 0.09 levels a pixel; the Terrace under the same rig reads lit (119, 111, 109) and shade (40, 38, 39) against the recipe F render's (114, 107, 106) and (44, 40, 40).
+
+What the shader was in between, for the record.
+From 2026-10-02 the port dropped the three noises, which baked at the export's 136 to 200 texels per metre read as cloudy blotches in the game (Tris: "I don't like this blotchy texture"), and put an orientation ramp (`#1e2230` down, `#2f3546` facing, `#474c5a` up) and a 0.85 to 1.15 facet step in their place.
+The 2026-10-03 rock detail study then removed the edge line and added an occlusion gradient and dots and ticks ([rock-detail](rock-detail.md)).
+Earlier on 2026-10-03 the ramp's stops were also fitted to the references under the rock detail study's calibrated warm rig (to `#202637`, `#323a4f`, `#484d56`; `rock-detail-study/slate_fit.py`), with one lesson that stands: a harness ground that bounces light turned the fronts brown, (57, 53, 50), so a harness with bounce light measures the harness.
 
 The v6 rig (`--light v6`), on the study stage from `cave_features.build_stage`:
 
@@ -171,6 +180,7 @@ Each surface below is still a `moss_study.py` flag (`--surface`, `--geom`); the 
 ## Open
 
 - v6's fronts are lighter and warmer than reference 3's slate blue (sampled (70, 66, 64) against (33, 42, 59)); the sun-and-sky rig never gave tan tops and slate sides at once, so the next idea is a non-physical two-tone mix driven by how far a facet faces up.
+  Answered on 2026-10-03 by the rock detail study's calibrated rig ([rock-detail](rock-detail.md#the-light)): tan tops and slate fronts at once take a deep orange key from above and a near-neutral sky fill about four times the first rig's, since the slate's own blue supplies the shade; the slate's edge line went in the same study.
 - The rock-b column is squatter than the reference because the corner cuts eat its top: author its box taller.
 - The sheet pieces are mostly cliff faces; the next piece to build from recipe F is a tall column.
 - The moss is verified headless on rock-b only: not yet on a river or grotto rock, in the game's light, or in play, and its colours are the v6 rig's.
