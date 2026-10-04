@@ -5,7 +5,8 @@
 Reads OUT_DIR/geometry.json and recipe.json (written by worker.py), assembles
 the rock with the boulder generator's own `assemble_rock` - or, for the
 `fitted` generator, builds recipe F's rocks fitted to the outline and fuses
-them (fitted.py) -
+them (fitted.py), or for the `solid` generator cuts recipe F stones from the
+recipe's guide mesh (solidfit.py) -
 gives it the painted slate (slate.py), dissolves the
 microscopic faces its bevel and remesh can leave, validates it exactly as the
 Formations panel will before swapping it in, and saves OUT_DIR/rock.blend
@@ -25,7 +26,7 @@ sys.path.insert(0, str(HERE.parent))
 from blender_build import assemble_rock, mesh_health  # noqa: E402
 
 from formations.core import validate_worker  # noqa: E402
-from formations import fitted  # noqa: E402
+from formations import fitted, render, slate as slate_module, solidfit  # noqa: E402
 from formations.slate import painted_slate, tone_facets  # noqa: E402
 
 out = Path(sys.argv[sys.argv.index("--") + 1])
@@ -36,7 +37,16 @@ bpy.context.scene.collection.children.link(dst)
 src = bpy.data.collections.new("SOURCE_SLABS")
 bpy.context.scene.collection.children.link(src)
 slate = painted_slate()
-if recipe.get("generator", "boulders") == "fitted":
+generator = recipe.get("generator", "boulders")
+if generator == "solid":
+    obj, scale = solidfit.build_from_recipe(recipe, src)
+    dst.objects.link(obj)
+    # Its lengths times its depth over the gameplay plane's, so it is worked
+    # as finely on screen as a rock on the plane (scene_export.detail_scale).
+    slate[slate_module.SCALE_PROP] = scale
+    slate_module.paint(slate)
+    obj[render.DEPTH_SCALE] = round(scale, 4)
+elif generator == "fitted":
     # Recipe F's rocks and the core are the slabs; the rock is them fused.
     obj, _ = fitted.build(recipe["outline"], recipe["params"], src)
     dst.objects.link(obj)

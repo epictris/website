@@ -9,6 +9,14 @@ rock) is a rebuild, and a mesh edited by hand is protected from being rebuilt
 over (`formation_mesh_hash` seals the generated mesh; `formation_mode` MANUAL
 keeps an edited one).
 
+A SOLID formation (generator `solid`, a backdrop rock: docs/blender-backdrop.md)
+has a GUIDE instead of an outline: a closed mesh, parented to the rock, that
+recipe F stones are cut from (solidfit.py). It takes the outline's place
+(`formation_outline` names it), so backups, copies and removal carry it the
+same way; its recipe holds the guide's geometry, the game's start camera
+(`scene[CAMERA]`, written by tools/blender/backdrop.py from the level) and the
+rock's world frame, because a stone's size goes with its depth from that eye.
+
 Construction helpers never ship and never render: every formation's outline
 curve and the generator's source slabs live under RECIPES, and the mesh a
 rebuild replaced is kept under BACKUPS. Both collections are hidden in render,
@@ -34,7 +42,7 @@ import bmesh
 import bpy
 from mathutils import Matrix, Vector
 
-from . import params
+from . import params, render
 
 HERE = Path(__file__).resolve().parent
 ROPE = HERE.parents[2]
@@ -42,6 +50,12 @@ ROPE = HERE.parents[2]
 FORMATIONS = "Formations"
 RECIPES = "Formation recipes"
 BACKUPS = "Formation backups"
+# The scene property holding the game's start camera and water for solid
+# formations: {"eye", "distance", "tanHalf", "waterZ"}.
+CAMERA = "backdrop_camera"
+# Guide colours: saturated, far from the slate's blue-grey, one per guide.
+GUIDE_COLOURS = [(1.0, .25, .1), (.1, .9, .2), (1.0, .85, .05), (.95, .15, .85), (.1, .85, 1.0),
+                 (1.0, .55, 0.0), (.6, .2, 1.0), (.55, 1.0, .1)]
 
 
 def collection(name, parent=None):
@@ -53,10 +67,14 @@ def collection(name, parent=None):
 
 
 def helper_collection(name):
-    """A never-rendered collection for construction data."""
+    """A never-rendered collection for construction data, hidden in the
+    viewport when it is made (Show Guides shows it, and a rebuild leaves it
+    as it was)."""
+    new = bpy.data.collections.get(name) is None
     c = collection(name)
     c.hide_render = True
-    c.hide_viewport = True
+    if new:
+        c.hide_viewport = True
     return c
 
 
@@ -178,6 +196,13 @@ def validate_worker(ob, slabs):
         bm.free()
     try:
         recipe = json.loads(ob["formation_recipe"])
+        if recipe.get("generator") == "solid":
+            guide = recipe["guide"]
+            if not guide["verts"] or not guide["faces"] or not isinstance(recipe["params"], dict):
+                raise ValueError()
+            if not any(s.type == "MESH" and len(s.data.polygons) for s in slabs.objects):
+                raise ValueError()
+            return recipe
         outline, params = recipe["outline"], recipe["params"]
         if not isinstance(outline, list) or not isinstance(params, dict) or not isinstance(recipe["preset"], str):
             raise ValueError()
@@ -213,6 +238,81 @@ def outline_object(outline, name, owner):
     return ob
 
 
+def is_solid(ob):
+    """Whether formation `ob` is cut from a guide mesh (generator `solid`)."""
+    return json.loads(ob["formation_recipe"]).get("generator") == "solid"
+
+
+def guide_object(guide, name, owner):
+    """A solid formation's editable guide: a closed mesh in the rock's frame,
+    parented to it, drawn in a colour of its own (`show_guides`)."""
+    me = bpy.data.meshes.new(name)
+    me.from_pydata([tuple(v) for v in guide["verts"]], [], [tuple(f) for f in guide["faces"]])
+    me.validate()
+    ob = bpy.data.objects.new(name, me)
+    helper_collection(RECIPES).objects.link(ob)
+    ob.parent = owner
+    ob.matrix_parent_inverse = Matrix.Identity(4)
+    ob["formation_outline_owner"] = owner["formation_id"]
+    ob.hide_render = True
+    colour_guide(ob)
+    return ob
+
+
+def colour_guide(ob):
+    """Give a guide its high-visibility colour: a viewport-only material,
+    which Solid shading shows (it never renders: guides are hidden in render)."""
+    owner = ob.get("formation_outline_owner", ob.name)
+    colour = GUIDE_COLOURS[int(hashlib.sha256(owner.encode()).hexdigest(), 16) % len(GUIDE_COLOURS)]
+    name = "Formation guide %.2f %.2f %.2f" % colour
+    mat = bpy.data.materials.get(name) or bpy.data.materials.new(name)
+    mat.diffuse_color = (*colour, 1.0)
+    ob.data.materials.clear()
+    ob.data.materials.append(mat)
+    ob.color = (*colour, 1.0)
+
+
+def show_guides(scene, on):
+    """Show every formation's guide (and outline) in the viewport, in its
+    colour, or hide them again. Their collection stays hidden in render,
+    which the export honours."""
+    helper_collection(RECIPES).hide_viewport = not on
+    if on:
+        for ob in formations(scene):
+            guide = bpy.data.objects.get(ob.get("formation_outline", ""))
+            if guide is not None and guide.type == "MESH":
+                colour_guide(guide)
+                guide.hide_set(False)
+
+
+def rocks_wire(scene, on):
+    """Draw the solid formations as wireframe, so their guides show through."""
+    for ob in formations(scene):
+        if is_solid(ob):
+            ob.display_type = "WIRE" if on else "TEXTURED"
+
+
+def guide_geometry(ob):
+    """The guide as it now stands, in the rock's frame: `verts`, `faces`."""
+    guide = bpy.data.objects.get(ob.get("formation_outline", ""))
+    if guide is None:
+        return json.loads(ob["formation_recipe"])["guide"]
+    if guide.type != "MESH":
+        raise ValueError(ob.name + ": its guide must be a mesh")
+    mat = (guide.matrix_parent_inverse @ guide.matrix_basis if guide.parent == ob
+           else authored_world(ob).inverted() @ authored_world(guide))
+    return {"verts": [[round(c, 6) for c in mat @ v.co] for v in guide.data.vertices],
+            "faces": [list(p.vertices) for p in guide.data.polygons]}
+
+
+def scene_camera(scene=None):
+    """The game's start camera and water for solid formations (CAMERA)."""
+    scene = scene or bpy.context.scene
+    if CAMERA not in scene:
+        raise ValueError("No start camera for solid formations: run tools/blender/backdrop.py on this scene once")
+    return json.loads(scene[CAMERA])
+
+
 def append_rock(file, name):
     """Bring a worker's rock into the scene as a new formation under its own
     placement, at the world origin."""
@@ -244,7 +344,10 @@ def append_rock(file, name):
             s.parent = ob
             s.matrix_parent_inverse = Matrix.Identity(4)
         ob["formation_sources"] = slabs.name
-        ob["formation_outline"] = outline_object(recipe["outline"], name + " / outline", ob).name
+        if recipe.get("generator") == "solid":
+            ob["formation_outline"] = guide_object(recipe["guide"], name + " / guide", ob).name
+        else:
+            ob["formation_outline"] = outline_object(recipe["outline"], name + " / outline", ob).name
         params.load(ob)
         seal(ob)
         return ob
@@ -332,7 +435,13 @@ def recipe_for(ob):
     """The recipe a rebuild would run: the built one with the current outline
     and parameters."""
     recipe = json.loads(ob["formation_recipe"])
-    recipe["outline"] = outline_points(ob)
+    if recipe.get("generator") == "solid":
+        recipe["guide"] = guide_geometry(ob)
+        recipe["camera"] = scene_camera()
+        recipe["frame"] = [list(r) for r in authored_world(ob)]
+        recipe.pop("generatorHash", None)
+    else:
+        recipe["outline"] = outline_points(ob)
     recipe["generator"], recipe["params"] = params.current(ob)
     return recipe
 
@@ -356,8 +465,15 @@ def write_outline(ob, outline):
 
 
 def pending(ob):
-    """Whether the outline or the parameters differ from the ones the mesh was
-    built from."""
+    """Whether the outline (or guide, camera and frame) or the parameters
+    differ from the ones the mesh was built from."""
+    if is_solid(ob):
+        built = json.loads(ob["formation_recipe"])
+        now = recipe_for(ob)
+        same = (now["guide"] == built["guide"] and now["camera"] == built["camera"]
+                and all(math.isclose(a, b, abs_tol=1e-5) for ra, rb in zip(now["frame"], built["frame"])
+                        for a, b in zip(ra, rb)))
+        return bool(ob.get("formation_new")) or not same or params.changed(ob)
     current = outline_points(ob)
     built = json.loads(ob["formation_recipe"])["outline"]
     return bool(ob.get("formation_new")) or len(current) != len(built) or any(
@@ -443,10 +559,17 @@ def replace_from_worker(ob, file, variant=False):
     ob["formation_recipe"] = fresh["formation_recipe"]
     ob["formation_mode"] = "PROCEDURAL"
     ob.pop("formation_new", None)
-    # Keep the artist's materials slot for slot.
-    for i, mat in enumerate(old_mesh.materials):
-        if i < len(ob.data.materials):
-            ob.data.materials[i] = mat
+    # Keep the artist's materials slot for slot; a solid rock's slate is
+    # scaled to its depth, which the rebuild may have changed, so it keeps
+    # the fresh one (and its scale).
+    if is_solid(ob):
+        ob[render.DEPTH_SCALE] = fresh.get(render.DEPTH_SCALE, 1.0)
+        # A detail scale set by hand outlives the rebuild.
+        render.repaint_scale(ob)
+    else:
+        for i, mat in enumerate(old_mesh.materials):
+            if i < len(ob.data.materials):
+                ob.data.materials[i] = mat
     sources = bpy.data.collections[fresh["formation_sources"]]
     for s in sources.objects:
         s.parent = ob
@@ -461,6 +584,9 @@ def replace_from_worker(ob, file, variant=False):
     bpy.data.objects.remove(fresh, do_unlink=True)
     bpy.data.objects.remove(root, do_unlink=True)
     remove_unused_helpers(previous_sources, previous_guide)
+    # The fresh one was named for "<name> / new"; the old one has gone.
+    guide.name = ob.name + (" / guide" if is_solid(ob) else " / outline")
+    ob["formation_outline"] = guide.name
     seal(ob)
     return ob
 

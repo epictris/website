@@ -2,7 +2,8 @@
 
     blender -b assets-src/scenes/river.blend --python tools/blender/backdrop_check.py
 
-Per backdrop rock, from the start camera its recipe names:
+Per solid formation (a backdrop rock), against its guide, from the start
+camera the scene records (`backdrop_camera`, written by backdrop.py):
 
 - GAPS: over the solid's silhouette (above the water), the share of rays
   whose first backdrop hit is the core (a fissure) and the share that meet
@@ -30,7 +31,7 @@ from mathutils import Vector
 from mathutils.bvhtree import BVHTree
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from formations import solidfit  # noqa: E402
+from formations import render, solidfit  # noqa: E402
 
 GRID = (480, 270)  # rays across and up the 16:9 frame
 # A hit this much (screen metres, times depth) behind the solid's surface
@@ -42,7 +43,7 @@ def tree(obs):
     bm = bmesh.new()
     for o in obs:
         me = o.data.copy()
-        me.transform(o.matrix_world)
+        me.transform(solidfit.world_matrix(o))
         bm.from_mesh(me)
         bpy.data.meshes.remove(me)
     t = BVHTree.FromBMesh(bm)
@@ -88,14 +89,18 @@ def parts(ob):
 
 
 def main():
-    rocks = sorted((o for o in bpy.data.objects if o.get("backdrop_recipe") and o.type == "MESH"),
-                   key=lambda o: o.name)
+    # The solid formations (formations/core.py), each checked against its
+    # guide, from the start camera the scene records.
+    def solid(o):
+        return (o.type == "MESH" and "formation_recipe" in o and not o.get("formation_backup")
+                and json.loads(o["formation_recipe"]).get("generator") == "solid")
+    rocks = sorted((o for o in bpy.context.scene.objects if solid(o)), key=lambda o: o.name)
     if not rocks:
-        raise SystemExit("no backdrop rocks in this file")
-    recipe = json.loads(rocks[0]["backdrop_recipe"])
-    eye = Vector(recipe["camera"]["eye"])
-    distance, tan_half, water_z = recipe["camera"]["distance"], recipe["camera"]["tanHalf"], recipe["waterZ"]
-    solids = {o.name: bpy.data.objects.get(f"{o.name} / solid") for o in rocks}
+        raise SystemExit("no solid formations in this file")
+    cam = json.loads(bpy.context.scene["backdrop_camera"])
+    eye = Vector(cam["eye"])
+    distance, tan_half, water_z = cam["distance"], cam["tanHalf"], cam["waterZ"]
+    solids = {o.name: bpy.data.objects.get(o.get("formation_outline", "")) for o in rocks}
     solid_trees = {n: tree([s]) for n, s in solids.items() if s is not None}
     built = {}
     for o in rocks:
@@ -133,7 +138,7 @@ def main():
         rays, core, holes = stats.get(o.name, (0, 0, 0))
         sharp, open_ = edges(o)
         sizes = parts(o)
-        least = solidfit.SCRAP_SIZE * float(o.get("detail_scale", 1.0))
+        least = solidfit.SCRAP_SIZE * float(o.get(render.DEPTH_SCALE, 1.0))  # the scale it was built at
         bad = sharp or open_ or (sizes and min(sizes) < least)
         failed |= bool(bad)
         gaps = f"core {100 * core / rays:4.1f}% holes {100 * holes / rays:4.1f}%" if rays else "not in view"

@@ -51,7 +51,11 @@ def migrate():
             values = {k: g[k] for k in g.keys()}
             values["is_ivy"] = values.pop("is_moss")
             del sysp["moss"]
-            sysp["ivy"] = {}
+            # The file may already hold an (empty) `ivy` group, materialised by
+            # the registered pointer property; a group can't be reassigned, so
+            # fill it in place.
+            if sysp.get("ivy") is None:
+                sysp["ivy"] = {}
             dst = sysp["ivy"]
             for k, v in values.items():
                 dst[k] = v

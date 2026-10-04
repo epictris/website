@@ -1,5 +1,5 @@
 // An Orthographic Studio scene's rocks as exact solids, for the Blender
-// backdrop (tools/blender/backdrop.py, docs/blender-backdrop.md).
+// backdrop: seeds a blockout once (tools/blender/backdrop.py --import, docs/blender-backdrop.md).
 //
 //   bun scripts/ortho-solids.ts <scene id | scene.json> out.json
 //

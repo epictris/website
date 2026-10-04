@@ -1,34 +1,36 @@
-"""Build a level's backdrop in its Blender scene from an Orthographic Studio
-scene: every rock of it as a recipe F mass in the painted slate, standing
-where the game camera, at the level's start, sees the studio's picture.
+"""A level's backdrop: SOLID formations (formations/core.py, generator `solid`),
+recipe F stones cut from closed guide meshes, sized by their depth from where
+the level opens. This is their headless front end, for a script or an LLM; the
+Formations panel does the same in Blender (docs/blender-backdrop.md).
 
-    bun scripts/ortho-solids.ts <scene id> solids.json
     blender -b assets-src/scenes/river.blend --python-exit-code 1 \\
-        --python tools/blender/backdrop.py -- solids.json levels/ball.json [--only id,id] [--save]
+        --python tools/blender/backdrop.py -- levels/ball.json [COMMANDS] [--save]
 
-docs/blender-backdrop.md is the record; in short:
+Every run writes the level's start camera and water onto the scene
+(`backdrop_camera`, which the panel's builds read), then, in this order:
 
-- THE CAMERA. The level opens with the camera locked by the camera region
-  the spawn stands in (`lockX`, `lockY`); the guide's `guide.camera` gives
-  its distance from the gameplay plane and its lens.
-- THE MAPPING. The studio's picture was drawn through a 40 degree lens, the
-  game's is 19.5 degrees, so the solids cannot simply be scaled: every point
-  keeps the angle it makes with the studio camera's axis, times `s` (the
-  ratio of the two lenses' half-heights, so the picture fills the frame top
-  to bottom), at `k` times its depth. That is a scale of `s k` across and up
-  and `k` along the view, about the eye, and it is exactly the picture from
-  the eye. `k` puts the studio's pool on the level's own water.
-- THE ROCKS. formations/solidfit.py: recipe F rocks fitted to each solid as
-  the camera sees it and fused with the solid as their core, scaled with
-  depth so the backdrop is as finely worked on screen as a formation.
-- THE POOL. A plane at the water's height under the whole backdrop, behind
-  the level's own water (which reaches WATER_BACK behind the plane), so the
-  backdrop's feet stand in water across the frame.
+    --adopt                 turn the meshes in `Backdrop sources` (the backdrop
+                            before 2026-10-05) into solid formations, replacing
+                            the rocks built from them
+    --import solids.json    seed guides from an Orthographic Studio export
+                            (scripts/ortho-solids.ts) for the pieces the scene
+                            does not have yet, or those --only names, and build
+    --set NAME key=value,.. a formation's parameters (solidfit.PARAMS: seed,
+                            stoneSize, facets, chisel, knub, curveTurn, floor,
+                            fixedScale, facetFalloff)
+    --render NAME key=value,..  its render settings (formations/render.py:
+                            detail_scale, export_strips, export_creases,
+                            export_chips, export_map_max, export_texels;
+                            `auto` forgets one)
+    --rebuild changed|all|NAME,NAME   regenerate solid formations
+    --list                  print every solid formation: guide, parameters,
+                            render settings, whether it is pending
+    --only id,id            limits --import (and --adopt) to those pieces
 
-Idempotent: it replaces what it built before (by the `backdrop_recipe`
-property), and saves only with --save. The rocks carry their recipe; the
-solids stay in `Backdrop sources` (hidden) as the blockout they were fitted
-to.
+NAME is a formation's object name (`backdrop.roof`) or its piece id (`roof`).
+Building runs the Formations worker (formations/worker.py), one headless
+Blender per rock, exactly as the panel's Regenerate does; then the pool under
+the backdrop is rebuilt. Saves only with --save.
 """
 
 import json
@@ -40,14 +42,17 @@ import zlib
 
 import bmesh
 import bpy
-from mathutils import Vector
+from mathutils import Matrix, Vector
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "boulders"))
-from formations import solidfit, slate  # noqa: E402
+import formations  # noqa: E402
+from formations import core, fitted, render, slate, worker  # noqa: E402
+from formations import params as params_module  # noqa: E402
 
 COLLECTION, SOURCES = "Backdrop", "Backdrop sources"
+PREFIX = "backdrop."
 PIXELS_PER_METRE = 100  # the level format's
 # The level's water slab reaches this far behind the plane (water.ts: depth
 # centred on the plane, `waterDepth` 12 m); the pool starts there, a hair
@@ -56,6 +61,17 @@ POOL_DROP = 0.02
 POOL_COLOUR = "#1b4657"  # water.ts's deep stop
 # How far under the water the solids' feet are sunk, screen metres (`sink`).
 SINK = 0.4
+# Pieces whose ceiling runs forward to the foreground, and the world y it
+# runs to: the formations' back (the Terraces and dark rocks stand 0.5 either
+# side of the plane). `extend`.
+EXTEND = {"roof": 0.5}
+# The extension stands this far (screen metres) above the start frame's top.
+EXTEND_CLEAR = 0.1
+# On an extended piece's solid: the least scale its stones are cut at, the
+# piece's own before the sweep (its vertices' median depth over the plane's).
+FLOOR_PROP = "backdrop_floor"
+# Sections tried along the view for the one the extension is swept from.
+EXTEND_SECTIONS = 40
 
 
 def log(msg):
@@ -64,19 +80,25 @@ def log(msg):
 
 def args():
     argv = sys.argv[sys.argv.index("--") + 1:]
-    opts = {"only": None, "save": False}
+    opts = {"only": None, "save": False, "import": None, "adopt": False, "rebuild": None, "list": False,
+            "set": [], "render": []}
     pos = []
     it = iter(argv)
     for a in it:
         if a == "--only":
             opts["only"] = set(next(it).split(","))
-        elif a == "--save":
-            opts["save"] = True
+        elif a in ("--import", "--rebuild"):
+            opts[a[2:]] = next(it)
+        elif a in ("--set", "--render"):
+            opts[a[2:]].append((next(it), next(it)))
+        elif a in ("--save", "--adopt", "--list"):
+            opts[a[2:]] = True
         else:
             pos.append(a)
-    if len(pos) != 2:
-        raise SystemExit("usage: backdrop.py -- solids.json level.json [--only id,id] [--save]")
-    return pos[0], pos[1], opts
+    if len(pos) != 1:
+        raise SystemExit("usage: backdrop.py -- level.json [--adopt] [--import solids.json] [--set NAME k=v,..] "
+                         "[--render NAME k=v,..] [--rebuild changed|all|NAME,..] [--list] [--only id,..] [--save]")
+    return pos[0], opts
 
 
 def start_camera(level):
@@ -148,6 +170,107 @@ def sink(points, water_z, eye, distance):
     return [(x, y, water_z - SINK * (y - eye[1]) / distance) if z < water_z else (x, y, z) for x, y, z in points]
 
 
+def _section(bm, y):
+    """The solid's section at depth `y`, filled, as its own bmesh."""
+    c = bm.copy()
+    cut = bmesh.ops.bisect_plane(c, geom=c.verts[:] + c.edges[:] + c.faces[:],
+                                 plane_co=(0, y, 0), plane_no=(0, 1, 0))
+    edges = [e for e in cut["geom_cut"] if isinstance(e, bmesh.types.BMEdge)]
+    out = bmesh.new()
+    verts = {}
+    for e in edges:
+        for v in e.verts:
+            if v not in verts:
+                verts[v] = out.verts.new((v.co.x, y, v.co.z))
+    out_edges = [out.edges.new((verts[a], verts[b])) for a, b in (e.verts for e in edges) if verts[a] is not verts[b]]
+    c.free()
+    bmesh.ops.triangle_fill(out, use_beauty=True, use_dissolve=False, edges=out_edges, normal=(0, 1, 0))
+    return out
+
+
+def _volume(ob):
+    bm = bmesh.new()
+    bm.from_mesh(ob.data)
+    v = bm.calc_volume()
+    bm.free()
+    return v
+
+
+def _boolean(ob, other, operation):
+    mod = ob.modifiers.new(operation.lower(), "BOOLEAN")
+    mod.operation = operation
+    mod.object = other
+    mod.solver = "MANIFOLD"
+    fitted._apply_modifiers(ob)
+
+
+def extend(ob, to_y, eye, distance, tan_half):
+    """Run the piece's ceiling forward to `to_y` (Tris, 2026-10-04: the roof
+    arch should "extend out all the way to the foreground geometry"). The
+    studio's roof is a slab 25 m back with only its stem and right wall
+    reaching forward, so from the side the sky showed between it and the
+    level. Its largest section along the view is swept forward to `to_y`
+    and cut off under the start frame's top edge (a plane through the eye),
+    EXTEND_CLEAR above it: from the start camera nothing of the sweep shows
+    and the opening shot is the studio's as before; from anywhere else the
+    ceiling runs on overhead to the level's own rock."""
+    bm = bmesh.new()
+    bm.from_mesh(ob.data)
+    ys = [v.co.y for v in bm.verts]
+    lo, hi = min(ys), max(ys)
+    best = None
+    for i in range(1, EXTEND_SECTIONS):
+        sec = _section(bm, lo + (hi - lo) * i / EXTEND_SECTIONS)
+        area = sum(f.calc_area() for f in sec.faces)
+        if best is None or area > best[0]:
+            if best is not None:
+                best[1].free()
+            best = (area, sec, lo + (hi - lo) * i / EXTEND_SECTIONS)
+        else:
+            sec.free()
+    bm.free()
+    _, sweep, y_sec = best
+    grown = bmesh.ops.extrude_face_region(sweep, geom=sweep.faces[:])
+    bmesh.ops.translate(sweep, vec=(0, to_y - y_sec, 0),
+                        verts=[g for g in grown["geom"] if isinstance(g, bmesh.types.BMVert)])
+    bmesh.ops.recalc_face_normals(sweep, faces=sweep.faces)
+    if sweep.calc_volume(signed=True) < 0:
+        bmesh.ops.reverse_faces(sweep, faces=sweep.faces)
+    me = bpy.data.meshes.new("extension")
+    sweep.to_mesh(me)
+    sweep.free()
+    ext = bpy.data.objects.new("extension", me)
+    bpy.context.scene.collection.objects.link(ext)
+    # Above the start frame's top: a box standing on the plane through the
+    # eye, tilted up by EXTEND_CLEAR at the gameplay plane.
+    tilt = math.atan(tan_half + EXTEND_CLEAR / distance)
+    size = 200.0
+    box = bmesh.new()
+    bmesh.ops.create_cube(box, size=1.0)
+    frame = Matrix.Translation(eye) @ Matrix.Rotation(tilt, 4, "X")
+    bmesh.ops.transform(box, verts=box.verts,
+                        matrix=frame @ Matrix.Translation((0, 0, size / 2)) @ Matrix.Diagonal((size, size, size, 1)))
+    bme = bpy.data.meshes.new("above")
+    box.to_mesh(bme)
+    box.free()
+    above = bpy.data.objects.new("above", bme)
+    bpy.context.scene.collection.objects.link(above)
+    _boolean(ext, above, "INTERSECT")
+    # The union is made on the sweep and handed to the solid: the solid's
+    # collection is hidden, and the depsgraph does not evaluate a hidden
+    # object's modifiers (the union added nothing).
+    before = _volume(ob)
+    _boolean(ext, ob, "UNION")
+    ob.data, ext.data = ext.data, ob.data
+    if _volume(ob) <= before:
+        raise SystemExit(f"{ob.name}: the ceiling's sweep added nothing")
+    for o in (ext, above):
+        me = o.data
+        bpy.data.objects.remove(o)
+        bpy.data.meshes.remove(me)
+    log(f"{ob.get('backdrop_id')}: ceiling swept forward from y {y_sec:.2f} to {to_y:.2f}")
+
+
 def mesh_object(name, verts, faces, collection):
     me = bpy.data.meshes.new(name)
     me.from_pydata(verts, [], faces)
@@ -177,15 +300,6 @@ def collection(name, hidden):
     return col
 
 
-def clear(col, only):
-    for ob in list(col.objects):
-        if only is None or ob.get("backdrop_id") in only:
-            me = ob.data
-            bpy.data.objects.remove(ob)
-            if me is not None and me.users == 0:
-                bpy.data.meshes.remove(me)
-
-
 def pool(name, rocks, z, back, col):
     """A plane at the water's height from the level's water slab's back to
     behind the farthest rock, as wide as the backdrop."""
@@ -194,7 +308,6 @@ def pool(name, rocks, z, back, col):
     x0, x1, y1 = min(xs), max(xs), max(ys) + 1.0
     ob = mesh_object(name, [(x0, back, z), (x1, back, z), (x1, y1, z), (x0, y1, z)], [(0, 1, 2, 3)], col)
     mat = bpy.data.materials.get("Backdrop pool") or bpy.data.materials.new("Backdrop pool")
-    mat.use_nodes = True
     bsdf = mat.node_tree.nodes["Principled BSDF"]
     bsdf.inputs["Base Color"].default_value = slate.srgb(POOL_COLOUR)
     bsdf.inputs["Roughness"].default_value = 0.35
@@ -203,78 +316,242 @@ def pool(name, rocks, z, back, col):
     return ob
 
 
-def main():
-    solids_path, level_path, opts = args()
+def piece_id(name):
+    return name[len(PREFIX):] if name.startswith(PREFIX) else name
+
+
+def solid_formations():
+    return [ob for ob in core.formations() if core.is_solid(ob)]
+
+
+def find(name):
+    """The solid formation called `name`, or `backdrop.<name>`."""
+    for ob in solid_formations():
+        if ob.name in (name, PREFIX + name):
+            return ob
+    raise SystemExit(f"no solid formation {name!r}: --list shows them")
+
+
+def parse(pairs):
+    out = {}
+    for pair in pairs.split(","):
+        key, _, value = pair.partition("=")
+        if not value:
+            raise SystemExit(f"{pair!r}: want key=value")
+        out[key.strip()] = value.strip()
+    return out
+
+
+def number(value):
+    if value.lower() in ("true", "false"):
+        return value.lower() == "true"
+    return float(value) if any(c in value for c in ".e") else int(value)
+
+
+def run_worker(recipe):
+    """Build one rock in the Formations worker; the rock.blend it wrote."""
+    proc, out, log_file = core.launch_worker(recipe)
+    code = proc.wait()
+    log_file.close()
+    text = (out / "worker.log").read_text(errors="replace")
+    for line in text.splitlines():
+        if line.startswith("SOLID_REPORT"):
+            log(f"  {line[len('SOLID_REPORT '):]}")
+    if code:
+        print(text[-3000:])
+        raise SystemExit(core.worker_failure(out))
+    return out / "rock.blend"
+
+
+def create(name, guide_ob, params):
+    """A new solid formation `name` from the mesh `guide_ob` (world space),
+    built now. The mesh itself is left as it was."""
+    world = core.authored_world(guide_ob)
+    settings = {**worker.GENERATORS["solid"], **params}
+    recipe = {"generator": "solid", "params": settings, "camera": core.scene_camera(),
+              "frame": [list(r) for r in Matrix.Identity(4)],
+              "guide": {"verts": [[round(c, 6) for c in world @ v.co] for v in guide_ob.data.vertices],
+                        "faces": [list(p.vertices) for p in guide_ob.data.polygons]}}
+    t0 = time.time()
+    ob = core.append_rock(run_worker(recipe), name)
+    log(f"{name}: built, {len(ob.data.polygons)} faces, {time.time() - t0:.1f}s")
+    return ob
+
+
+def replace(name):
+    """Remove an old-style backdrop rock (`backdrop_id`, no recipe) or a solid
+    formation of that name, so a new one takes the name."""
+    old = bpy.data.objects.get(name)
+    if old is None:
+        return
+    if core.is_formation(old):
+        core.remove_formation(old)
+    else:
+        me = old.data
+        bpy.data.objects.remove(old)
+        if me is not None and me.users == 0:
+            bpy.data.meshes.remove(me)
+
+
+def adopt(opts):
+    """The backdrop as it was built before 2026-10-05 (a mesh per piece in
+    `Backdrop sources`, its rock in `Backdrop`) as solid formations, with the
+    seed and depth floor it was built with."""
+    src = bpy.data.collections.get(SOURCES)
+    if src is None:
+        log("adopt: no Backdrop sources")
+        return
+    for ob in sorted(src.objects, key=lambda o: o.name):
+        id = ob.get("backdrop_id") or ob.name
+        if opts["only"] is not None and id not in opts["only"]:
+            continue
+        params = {"seed": zlib.crc32(id.encode()) % 100000, "floor": float(ob.get(FLOOR_PROP, 0.0))}
+        replace(PREFIX + id)
+        create(PREFIX + id, ob, params)
+        me = ob.data
+        bpy.data.objects.remove(ob)
+        bpy.data.meshes.remove(me)
+    if not src.objects:
+        bpy.data.collections.remove(src)
+
+
+def seed_from_studio(solids_path, opts, eye, distance, tan_half, water_z):
+    """New guides from the studio's solids (docstring), built."""
     solids = json.load(open(solids_path))
+    s, studio_height, place = mapping(solids, eye, tan_half)
+    k = (eye[2] - water_z) / (studio_height * s)
+    log(f"import {solids.get('source')}: s {s:.4f}, k {k:.4f}: across x{s * k:.3f}, along x{k:.3f}")
+    have = {piece_id(ob.name) for ob in solid_formations()}
+    tmp = bpy.data.collections.new("Backdrop import")
+    bpy.context.scene.collection.children.link(tmp)
+    try:
+        for o in solids["objects"]:
+            if o["kind"] != "rock":
+                continue
+            named = opts["only"] is not None and o["id"] in opts["only"]
+            if opts["only"] is not None and not named:
+                continue
+            if o["id"] in have and not named:
+                log(f"{o['id']}: kept the scene's formation")
+                continue
+            guide = mesh_object("guide", sink(place(o["verts"], k), water_z, eye, distance), o["tris"], tmp)
+            params = {"seed": zlib.crc32(o["id"].encode()) % 100000}
+            if o["id"] in EXTEND:
+                # The sweep is cut as the piece was before it (solidfit.cells).
+                ys = sorted(v.co.y for v in guide.data.vertices)
+                params["floor"] = round((ys[len(ys) // 2] - eye[1]) / distance, 4)
+                extend(guide, EXTEND[o["id"]], eye, distance, tan_half)
+            replace(PREFIX + o["id"])
+            ob = create(PREFIX + o["id"], guide, params)
+            ob["formation_import"] = json.dumps({"source": solids.get("source"), "object": o["id"],
+                                                 "mapping": {"across": s * k, "along": k}})
+    finally:
+        for ob in list(tmp.objects):
+            me = ob.data
+            bpy.data.objects.remove(ob)
+            bpy.data.meshes.remove(me)
+        bpy.data.collections.remove(tmp)
+
+
+def set_params(name, pairs):
+    ob = find(name)
+    if not params_module.editable(ob):
+        params_module.load(ob)
+    settings = ob.formation_params
+    for key, value in parse(pairs).items():
+        field = params_module.FIELDS["solid"].get(key)
+        if field is None:
+            raise SystemExit(f"{key!r} is not a solid parameter: {', '.join(params_module.FIELDS['solid'])}")
+        setattr(settings, field, number(value))
+    log(f"{ob.name}: {params_module.from_settings(settings)[1]}{' (pending)' if core.pending(ob) else ''}")
+
+
+def set_render(name, pairs):
+    ob = find(name)
+    for key, value in parse(pairs).items():
+        if key not in render.SETTINGS:
+            raise SystemExit(f"{key!r} is not a render setting: {', '.join(render.SETTINGS)}")
+        if value == "auto":
+            ob.pop(key, None)
+        else:
+            setattr(ob, render.FIELDS[key], number(value))
+    log(f"{ob.name}: {describe_render(ob)}")
+
+
+def describe_render(ob):
+    return ", ".join(f"{n} {render.setting(ob, n)}{'' if n in ob else ' (auto)'}" for n in render.SETTINGS)
+
+
+def rebuild(which):
+    obs = solid_formations()
+    if which == "changed":
+        targets = [ob for ob in obs if core.pending(ob)]
+    elif which == "all":
+        targets = obs
+    else:
+        targets = [find(n) for n in which.split(",")]
+    for ob in targets:
+        t0 = time.time()
+        core.replace_from_worker(ob, run_worker(core.recipe_for(ob)))
+        log(f"{ob.name}: rebuilt, {len(ob.data.polygons)} faces, {time.time() - t0:.1f}s")
+    return targets
+
+
+def list_all():
+    for ob in solid_formations():
+        guide = bpy.data.objects.get(ob.get("formation_outline", ""))
+        recipe = json.loads(ob["formation_recipe"])
+        log(f"{ob.name}: guide {guide.name if guide else '-'} ({len(guide.data.polygons) if guide else 0} faces), "
+            f"{len(ob.data.polygons)} faces{', PENDING' if core.pending(ob) else ''}")
+        log(f"  built with {recipe['params']}")
+        if params_module.editable(ob) and params_module.changed(ob):
+            log(f"  next build {params_module.current(ob)[1]}")
+        log(f"  render: {describe_render(ob)}")
+
+
+def main():
+    level_path, opts = args()
+    # The add-on's properties: registered already when Blender loaded the
+    # installed extension (no --factory-startup), else registered here.
+    if not hasattr(bpy.types.Object, "formation_params"):
+        formations.register()
     level = json.load(open(level_path))
     eye, distance, tan_half = start_camera(level)
     water_z, water_back = water_top(level, eye, distance * tan_half * 16 / 9)
-    s, studio_height, place = mapping(solids, eye, tan_half)
-    k = (eye[2] - water_z) / (studio_height * s)
-    log(f"eye {tuple(round(c, 3) for c in eye)}, plane {distance:.3f} m away, water z {water_z:.3f}; "
-        f"s {s:.4f}, k {k:.4f}: across x{s * k:.3f}, along x{k:.3f}")
-
-    rocks_col, src_col = collection(COLLECTION, False), collection(SOURCES, True)
-    clear(rocks_col, opts["only"])
-    clear(src_col, opts["only"])
-    pieces = [o for o in solids["objects"] if o["kind"] == "rock"]
-    sources = {}
-    for o in pieces:
-        name = f"backdrop.{o['id']} / solid"
-        ob = bpy.data.objects.get(name)
-        if ob is None:
-            ob = mesh_object(name, sink(place(o["verts"], k), water_z, eye, distance), o["tris"], src_col)
-            ob["backdrop_id"] = o["id"]
-        sources[o["id"]] = ob
-
-    camera = solidfit.Camera(eye, distance)
-    tmp = bpy.data.collections.new("Backdrop pieces")
-    bpy.context.scene.collection.children.link(tmp)
-    for o in pieces:
-        if opts["only"] is not None and o["id"] not in opts["only"]:
-            continue
-        t0 = time.time()
-        seed = zlib.crc32(o["id"].encode()) % 100000
-        params = {"seed": seed, "core": os.environ.get("BACKDROP_CORE", "1") == "1"}
-        rock, parts, scale, report = solidfit.build(sources[o["id"]], camera, params, tmp, water_z)
-        for p in parts:
-            me = p.data
-            bpy.data.objects.remove(p)
+    log(f"eye {tuple(round(c, 3) for c in eye)}, plane {distance:.3f} m away, water z {water_z:.3f}")
+    bpy.context.scene[core.CAMERA] = json.dumps({"eye": list(eye), "distance": distance, "tanHalf": tan_half,
+                                                 "waterZ": water_z})
+    for ob in solid_formations():
+        if not params_module.editable(ob):
+            params_module.load(ob)
+    built = False
+    if opts["adopt"]:
+        adopt(opts)
+        built = True
+    if opts["import"]:
+        seed_from_studio(opts["import"], opts, eye, distance, tan_half, water_z)
+        built = True
+    for name, pairs in opts["set"]:
+        set_params(name, pairs)
+    for name, pairs in opts["render"]:
+        set_render(name, pairs)
+    if opts["rebuild"]:
+        built = bool(rebuild(opts["rebuild"])) or built
+    if opts["list"]:
+        list_all()
+    if built:
+        col = collection(COLLECTION, False)
+        for ob in [o for o in col.objects if o.get("backdrop_id") == "pool"]:
+            me = ob.data
+            bpy.data.objects.remove(ob)
             bpy.data.meshes.remove(me)
-        bm = bmesh.new()
-        bm.from_mesh(rock.data)
-        bmesh.ops.dissolve_degenerate(bm, dist=1e-5, edges=list(bm.edges))
-        bm.normal_update()
-        bm.to_mesh(rock.data)
-        bm.free()
-        rock.name = rock.data.name = f"backdrop.{o['id']}"
-        # Its own slate, its lengths scaled with the piece's depth, so the
-        # viewport shows what the export bakes (scene_export.detail_scale).
-        material = bpy.data.materials.new(slate.NAME)
-        material[slate.SCALE_PROP] = scale
-        slate.paint(material)
-        rock.data.materials.clear()
-        rock.data.materials.append(material)
-        slate.tone_facets(rock, seed)
-        rocks_col.objects.link(rock)
-        rock["backdrop_id"] = o["id"]
-        rock[slate.OBJECT_SCALE_PROP] = round(scale, 4)
-        rock["backdrop_recipe"] = json.dumps({
-            "source": solids.get("source"), "object": o["id"], "params": params,
-            "camera": {"eye": eye, "distance": distance, "tanHalf": tan_half},
-            "mapping": {"across": s * k, "along": k, "studioEye": solids["camera"]["position"]},
-            "waterZ": water_z,
-        })
-        log(f"{o['id']}: {len(parts) - 1} stones, {len(rock.data.polygons)} faces, scale {scale:.2f}, "
-            f"{report['merged']} slivers merged, {report['thickened open']} open edges thickened, {report['floating']} floating, {report['lost to folds']} stones lost to folds{f", {report['core sharp']} sharp core edges" if report['core sharp'] else ''}, "
-            f"{time.time() - t0:.1f}s")
-    bpy.data.collections.remove(tmp)
-    if opts["only"] is None or "pool" in opts["only"]:
-        built = [ob for ob in rocks_col.objects if ob.get("backdrop_id") != "pool"]
-        pool("backdrop pool", built, water_z - POOL_DROP, water_back, rocks_col)
+        rocks = solid_formations()
+        if rocks:
+            pool("backdrop pool", rocks, water_z - POOL_DROP, water_back, col)
     if opts["save"]:
         bpy.ops.wm.save_mainfile()
         log(f"saved {bpy.data.filepath}")
 
 
-main()
+if __name__ == "__main__":
+    main()

@@ -247,10 +247,12 @@ class Cache:
         self._near[ob.name] = h.digest()
         return self._near[ob.name]
 
-    def key(self, ob, size, seed, scene, depsgraph):
-        """The key of `ob`'s maps, baked at `size` with detail seed `seed`."""
+    def key(self, ob, size, seed, scene, depsgraph, passes=()):
+        """The key of `ob`'s maps, baked at `size` with detail seed `seed` and
+        the export's optional `passes` on or off (scene_export.render_setting:
+        the chips change the normal map without changing the mesh)."""
         h = hashlib.sha256()
-        _put(h, self.code, size, seed, [tuple(r) for r in ob.matrix_world])
+        _put(h, self.code, size, seed, [tuple(r) for r in ob.matrix_world], list(passes))
         seen = set()
         rna_digest(h, scene.cycles, 0, seen)
         rna_digest(h, scene.render.bake, 0, seen)

@@ -2,7 +2,7 @@
 
 import bpy
 
-from . import core, params, view
+from . import core, params, render, view
 
 
 class FORMATIONS_PT_main(bpy.types.Panel):
@@ -78,7 +78,13 @@ class FORMATIONS_PT_main(bpy.types.Panel):
         row.operator("formations.tone_facets", text="All").scope = "ALL"
         box.operator("formations.repaint_slate", text="Repaint Slate")
 
+        box = layout.box()
+        box.label(text="Guides")
+        box.prop(scene, "formations_show_guides")
+        box.prop(scene, "formations_rocks_wire")
+
         layout.operator("formations.generate", text="New Formation", icon="ADD").mode = "CREATE"
+        layout.label(text="With a closed mesh selected: a Solid guide formation")
 
         ob = core.formation_of(context.active_object)
         if ob is not None:
@@ -99,7 +105,19 @@ class FORMATIONS_PT_main(bpy.types.Panel):
             row = box.row(align=True)
             row.operator("formations.generate", text="Regenerate", icon="FILE_REFRESH").mode = "REBUILD"
             row.operator("formations.generate", text="New Variant").mode = "VARIANT"
-            for key, title in (("OUTLINE", "Select Outline"), ("UNIQUE", "Make Unique"),
+            solid = core.is_solid(ob)
+            if solid and core.pending(ob):
+                box.label(text="Guide or parameters changed: regenerate", icon="INFO")
+            sub = box.box()
+            sub.label(text="Render (export)")
+            col = sub.column()
+            col.use_property_split = True
+            col.use_property_decorate = False
+            for field in render.FIELDS.values():
+                col.prop(ob, field)
+            if render.explicit(ob):
+                sub.operator("formations.action", text="Passes and Maps From Depth").action = "RESET_RENDER"
+            for key, title in (("OUTLINE", "Select Guide" if solid else "Select Outline"), ("UNIQUE", "Make Unique"),
                                ("MANUAL", "Keep As Manual Mesh"), ("SOURCES", "Show Source Slabs"),
                                ("ASSEMBLE", "Assemble Edited Slabs")):
                 box.operator("formations.action", text=title).action = key

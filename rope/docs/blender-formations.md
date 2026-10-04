@@ -89,6 +89,11 @@ The dialog's **Generator** picks how (the recipe's `generator`; a recipe without
   Its defaults are the generator's own (`params.json`: 10 slabs per m², a 3000-face budget, detail 1, a 1.2 cm voxel cap, weathering 0.38, the tolerance derived from the outline), the many crisp slabs the editor's boulder service built.
   From 2026-09-29 to 2026-10-04 they were Karin's scenery adapter's (1.3 slabs per m², 1000 faces, detail 0.25, 4.5 cm voxels), which cut a formation into a few big, softly remeshed chunks; Tris preferred the slabs.
   A rock built in that window keeps every one of them in its recipe and its fields, and a regenerate keeps them until they are changed; tolerance is never a field and is always derived from the outline.
+- **Solid guide** (`solid`, since 2026-10-05, `formations/solidfit.py`): recipe F stones cut from a closed **guide mesh** instead of an outline, sized and worked by their depth from the game's start camera; the backdrop is made of these ([blender-backdrop](blender-backdrop.md)).
+  New Formation with a closed mesh selected makes one (the dialog ticks "From the selected mesh" and picks the generator): the mesh becomes the rock's guide, in world space, and the rock stands at the world origin, since its stones are sized by their depth from the eye.
+  Its recipe holds the guide's geometry, the start camera and water (`backdrop_camera` on the scene, which `tools/blender/backdrop.py` writes from the level: a scene without it cannot build one) and the rock's world frame; moving the guide, editing its mesh, moving the rock or changing the start camera makes it pending.
+  Its fields: **Seed**, **Stone size** (times every stone's on-screen size; stones on a curve still split down to the small sizes), **Facets** and **Chisel** (shares of recipe F's), **Merge small** (the knub share), **Curve split** (degrees of gentle turning before a cell splits), **Depth floor**, **Fixed LOD** (over 0, every stone is cut, weathered and faceted as if it stood that many times the plane's distance back, instead of at its own depth) and **Facet falloff** (how much coarser on screen the facets get with depth; 0 keeps them as fine at any depth).
+  A guide formation stays one: its generator cannot be switched to an outline's, nor an outline's to it.
 
 A new rock is one material, the **painted slate** ([cave-look](cave-look.md#surface-the-painted-slate-shader-and-the-v6-rig)), built by `formations/slate.py`, with a random `facet` float for its per-facet tone.
 The tone is a function of the face's **orientation** (`slate.tone_facets`): Perlin noise of the object-space face normal times `TONE_SCALE` (1.5), offset by the seed, rank-mapped onto [0, 1], so faces that point almost the same way get almost the same tone and facets at clearly different angles still differ.
@@ -125,6 +130,13 @@ A generated mesh is sealed (`formation_mesh_hash`); one edited by hand is protec
 **Show Source Slabs** and **Assemble Edited Slabs** expose the generator's pieces and join edited ones into a manual mesh.
 **Make Unique** gives a duplicate its own mesh, id, outline and slabs.
 The outline curves and slabs live in `Formation recipes`, hidden in render, which the exporter honours.
+**Guides** (since 2026-10-05): **Show guides** shows that collection in the viewport, every guide mesh in a saturated colour of its own (a viewport-only material: Solid shading in Material colour shows it), and **Solid rocks as wireframe** draws the solid formations' rocks as wire so their guides show through.
+**Select Guide** (Select Outline on an outline's formation) selects it for editing; it is an ordinary mesh, edited in Edit Mode or by script, and it never renders or exports.
+
+**Render (export)**, in the formation's box (`formations/render.py`): how the scene export draws the rock, each an ID property on it that overrides what its depth would decide, so a change needs an export and no rebuild.
+**Detail scale** (its texel density and largest map divided by it, the slate's lengths multiplied by it; unset, the depth scale a solid formation's build measured, `formation_depth_scale`, else 1), **Chamfer strips**, **Curved creases** and **Chips and sub-facets** (the export's three finer passes; unset, on unless the detail scale is over 1), **Largest map** and **Texels per metre** (0: 4096 and 512 over the detail scale).
+A field shows what the export will do; setting one makes it the rock's own, and **Passes and Maps From Depth** forgets them all.
+The bake cache keys on the three passes too, since the chips change the normal map without changing the mesh.
 
 Each formation has an **Attachment**, which decides what grows on it, and a **Moisture** (how much).
 

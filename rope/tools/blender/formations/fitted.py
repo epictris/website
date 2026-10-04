@@ -349,7 +349,7 @@ def _pillow(ob, voxel, iters, bevel=0.0):
     _apply_modifiers(ob)
 
 
-def _chisel(ob, seed, scale=1.0):
+def _chisel(ob, seed, scale=1.0, density=CUT_DENSITY):
     """Recipe F's chisel at its own scale on a rock of any size: CUT_DENSITY
     shallow cuts per square metre, each a plane CUT_DEPTH under a point of the
     surface, tilted off its normal by up to CUT_TILT, the tops mostly spared.
@@ -363,14 +363,14 @@ def _chisel(ob, seed, scale=1.0):
     box standing on the plane - so a chisel blow is the same size on every
     rock, and its edge is a crisp step. All of a rock's boxes go in one
     Manifold boolean (cutting one by one, as the study did, is a full pass
-    over the mesh per cut)."""
+    over the mesh per cut). `density` is the cuts per square metre."""
     bmesh, bpy, Matrix, Vector, _ = _bpy()
     rng = random.Random(seed)
     bm = bmesh.new()
     bm.from_mesh(ob.data)
     bm.normal_update()
     faces = list(bm.faces)  # a voxel remesh: about even faces, so a uniform pick is by area
-    count = round(CUT_DENSITY * sum(f.calc_area() for f in faces) / scale ** 2)
+    count = round(density * sum(f.calc_area() for f in faces) / scale ** 2)
     cutters = bpy.data.collections.new("Chisel")
     bpy.context.scene.collection.children.link(cutters)
     made = tries = 0

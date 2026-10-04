@@ -29,8 +29,12 @@ FIELDS = {
     "fitted": {"seed": "seed", "depth": "depth", "smallestRock": "smallest_rock", "largestRock": "largest_rock"},
     "boulders": {"seed": "seed", "depth": "depth", "slabsPerArea": "slabs_per_area", "weathering": "weathering",
                  "faceBudget": "face_budget", "detail": "detail", "voxelCap": "voxel_cap"},
+    "solid": {"seed": "seed", "stoneSize": "stone_size", "facets": "facets", "chisel": "chisel", "knub": "knub",
+              "curveTurn": "curve_turn", "floor": "floor", "fixedScale": "fixed_scale",
+              "facetFalloff": "facet_falloff"},
 }
 FITTED = GENERATORS["fitted"]
+SOLID = GENERATORS["solid"]
 
 
 class FormationParams(bpy.types.PropertyGroup):
@@ -39,6 +43,8 @@ class FormationParams(bpy.types.PropertyGroup):
         ("fitted", "Fitted slate", "Recipe F rocks sized and turned to fit the outline, fused into one mass: "
                                    "the cave look (docs/cave-look.md)"),
         ("boulders", "Boulder generator", "The fork's slab generator, cut to the outline"),
+        ("solid", "Solid guide", "Recipe F stones cut from a closed guide mesh, sized by their depth from the "
+                                 "game's start camera: the backdrop (docs/blender-backdrop.md)"),
     ])
     seed: IntProperty(name="Seed", default=FITTED["seed"], min=0)
     depth: FloatProperty(name="Thickness", default=1.05, min=.02, max=50, precision=3, subtype="DISTANCE")
@@ -54,6 +60,28 @@ class FormationParams(bpy.types.PropertyGroup):
                              default=DEFAULT_PARAMS["faceBudget"], min=200, max=100000, soft_max=10000)
     detail: FloatProperty(name="Remesh detail", description="Remesh resolution: finer as it rises",
                           default=DEFAULT_PARAMS["detail"], min=.25, max=4)
+    stone_size: FloatProperty(name="Stone size", description="Every stone's size times this (on screen, so the "
+                              "same at any depth); stones on a curve still split down to the small sizes",
+                              default=SOLID["stoneSize"], min=.25, max=4)
+    facets: FloatProperty(name="Facets", description="Facet density on flat stones, as a share of recipe F's "
+                          "(stones on a curve take its full density)", default=SOLID["facets"], min=.05, max=2)
+    chisel: FloatProperty(name="Chisel", description="Chisel cuts, as a share of recipe F's: the small steps "
+                          "on a stone's faces", default=SOLID["chisel"], min=0, max=2)
+    knub: FloatProperty(name="Merge small", description="A stone under this share of its kind's median volume "
+                        "is joined to its neighbour instead of standing as a knub", default=SOLID["knub"], min=0, max=1)
+    curve_turn: FloatProperty(name="Curve split", description="Degrees a cell's surface must turn in gentle bends "
+                              "before it splits into smaller stones; lower keeps more curves round",
+                              default=SOLID["curveTurn"], min=5, max=1000)
+    floor: FloatProperty(name="Depth floor", description="The least depth scale a stone is cut at: 0 sizes every "
+                         "stone by its own depth; above it, a part near the gameplay plane is cut as if this far "
+                         "back (the roof's ceiling, run forward to the level)", default=SOLID["floor"], min=0, max=20)
+    fixed_scale: FloatProperty(name="Fixed LOD", description="When over 0, every stone is cut, weathered and "
+                               "faceted as if it stood this many times the gameplay plane's distance from the eye, "
+                               "whatever its depth: the level of detail set by hand (0: from each stone's depth)",
+                               default=SOLID["fixedScale"], min=0, max=20)
+    facet_falloff: FloatProperty(name="Facet falloff", description="How much coarser on screen the facets get per "
+                                 "unit of depth scale: 0 keeps them as fine on screen at any depth",
+                                 default=SOLID["facetFalloff"], min=0, max=3)
     voxel_cap: FloatProperty(name="Voxel cap", description="Largest remesh voxel, whatever the outline",
                              default=DEFAULT_PARAMS["voxelCap"], min=.002, max=.1, precision=3, subtype="DISTANCE")
 
@@ -111,6 +139,10 @@ def current(ob):
     if settings is None:
         return built(ob)
     validate(settings)
+    # A guide mesh is no outline, and an outline no guide.
+    if (settings.generator == "solid") != (built(ob)[0] == "solid"):
+        raise ValueError(ob.name + ": a formation built from a guide mesh stays a Solid guide, and one built "
+                                   "from an outline cannot become one")
     return from_settings(settings)
 
 

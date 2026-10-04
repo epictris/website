@@ -11,7 +11,7 @@ scene, which `just scene <level>` exports like any other scenery."""
 import bpy
 from bpy.props import BoolProperty, EnumProperty, FloatProperty, PointerProperty
 
-from . import growth, ops, params, ui
+from . import core, growth, ops, params, render, ui
 
 CLASSES = ops.CLASSES + ui.CLASSES
 
@@ -34,6 +34,15 @@ def register():
     bpy.types.Scene.formations_depth_keep_size = BoolProperty(
         name="Keep screen size", default=True,
         description="Scale about the game camera's eye, so a move in depth keeps a formation's size on screen")
+    bpy.types.Scene.formations_show_guides = BoolProperty(
+        name="Show guides", default=False, update=lambda self, _: core.show_guides(self, self.formations_show_guides),
+        description="Show every formation's guide mesh (and outline) in the viewport, each in a colour of its own. "
+                    "Solid shading in Material colour shows them; they never render or export")
+    bpy.types.Scene.formations_rocks_wire = BoolProperty(
+        name="Solid rocks as wireframe", default=False,
+        update=lambda self, _: core.rocks_wire(self, self.formations_rocks_wire),
+        description="Draw the solid formations' rocks as wireframe, so their guides show through")
+    render.register()
     for c in CLASSES:
         bpy.utils.register_class(c)
     if params.on_load not in bpy.app.handlers.load_post:
@@ -47,6 +56,9 @@ def unregister():
         bpy.app.handlers.load_post.remove(params.on_load)
     for c in reversed(CLASSES):
         bpy.utils.unregister_class(c)
+    render.unregister()
+    del bpy.types.Scene.formations_rocks_wire
+    del bpy.types.Scene.formations_show_guides
     del bpy.types.Scene.formations_depth_keep_size
     del bpy.types.Scene.formations_depth_step
     del bpy.types.Object.formation_moisture

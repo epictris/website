@@ -56,6 +56,17 @@ class FORMATIONS_OT_look(bpy.types.Operator):
             return {"CANCELLED"}
 
 
+def guide_of_mesh(ob):
+    """The guide a new solid formation takes from a selected closed mesh, in
+    world space (the rock stands at the world origin: its stones are sized by
+    their depth from the game's eye)."""
+    if not ob or ob.type != "MESH" or core.is_formation(ob):
+        raise ValueError("Select a closed mesh that is not a formation")
+    world = core.authored_world(ob)
+    return {"verts": [[round(c, 6) for c in world @ v.co] for v in ob.data.vertices],
+            "faces": [list(p.vertices) for p in ob.data.polygons]}
+
+
 def outline_of_curve(ob):
     """The outline a new formation takes from a selected curve, and the frame
     its rock is placed in. A 3D curve keeps its outline in its local X/Z plane,
@@ -86,36 +97,50 @@ class FORMATIONS_OT_generate(bpy.types.Operator):
                          items=[(x.upper(), x.title(), "") for x in ("terrace", "pillar", "wall", "arch", "distant")])
     settings: PointerProperty(type=params.FormationParams)
     use_outline: BoolProperty(name="From the selected outline (a curve or guide piece)", default=False)
+    use_guide: BoolProperty(name="From the selected mesh, as its guide (Solid guide)", default=False)
 
     def invoke(self, context, event):
         if self.mode != "CREATE":
             return self.execute(context)
         ob = context.active_object
         self.use_outline = bool(ob and ob.type == "CURVE" and ob.select_get())
+        self.use_guide = bool(ob and ob.type == "MESH" and ob.select_get() and not core.is_formation(ob))
+        if self.use_guide:
+            self.settings.generator = "solid"
         return context.window_manager.invoke_props_dialog(self, width=340)
 
     def draw(self, context):
         col = self.layout.column()
         col.use_property_split = True
         col.use_property_decorate = False
-        if not self.use_outline:
+        if not self.use_outline and not self.use_guide:
             col.prop(self, "preset")
         params.draw(col, self.settings)
         self.layout.prop(self, "use_outline")
+        self.layout.prop(self, "use_guide")
         self.layout.label(text="Builds in a separate process; Esc discards the result.")
 
     def execute(self, context):
         try:
-            self._target = None if self.mode == "CREATE" and not self.use_outline else (
+            from_selected = self.use_outline or self.use_guide
+            self._target = None if self.mode == "CREATE" and not from_selected else (
                 context.active_object if self.mode == "CREATE" else active_formation(context))
             if self.mode == "REBUILD":
                 core.assert_rebuildable(self._target)
             if self.mode == "CREATE":
                 params.validate(self.settings)
+                if (self.settings.generator == "solid") != self.use_guide:
+                    raise ValueError("A Solid guide formation is made from a selected closed mesh, and only it")
                 recipe = {"preset": self.preset.lower()}
                 recipe["generator"], recipe["params"] = params.from_settings(self.settings)
                 if self.use_outline:
                     recipe["outline"], self._frame = outline_of_curve(self._target)
+                elif self.use_guide:
+                    recipe["guide"] = guide_of_mesh(self._target)
+                    recipe["camera"] = core.scene_camera(context.scene)
+                    recipe["frame"] = [list(r) for r in Matrix.Identity(4)]
+                    self._frame = Matrix.Identity(4)
+                    self._target_name = self._target.name
             else:
                 recipe = core.recipe_for(self._target)
                 # Held by name: a reference to the object goes stale if it is
@@ -145,9 +170,19 @@ class FORMATIONS_OT_generate(bpy.types.Operator):
             if self._proc.returncode:
                 raise ValueError(core.worker_failure(self._out))
             if self.mode == "CREATE":
-                name = "Fitted slate" if self.settings.generator == "fitted" else self.preset.title()
+                name = {"fitted": "Fitted slate", "solid": getattr(self, "_target_name", "Solid")}.get(
+                    self.settings.generator, self.preset.title())
                 ob = core.append_rock(self._out / "rock.blend", name)
-                if self._target is not None:
+                if self.use_guide:
+                    # The mesh is now the rock's guide (a copy of it, in the
+                    # rock's frame): the original goes.
+                    source = bpy.data.objects.get(self._target_name)
+                    if source is not None and not core.is_formation(source):
+                        data = source.data
+                        bpy.data.objects.remove(source, do_unlink=True)
+                        if data.users == 0:
+                            bpy.data.meshes.remove(data)
+                elif self._target is not None:
                     ob.parent.matrix_world = self._frame
                 else:
                     ob.parent.location = context.scene.cursor.location
@@ -185,7 +220,8 @@ class FORMATIONS_OT_rebuild_changed(bpy.types.Operator):
             view.finish(context.scene, apply=True)
             self._targets = [ob for ob in core.formations() if core.pending(ob)]
             for ob in self._targets:
-                core.validate_polygon(core.outline_points(ob))
+                if not core.is_solid(ob):
+                    core.validate_polygon(core.outline_points(ob))
                 core.assert_rebuildable(ob)
             if not self._targets:
                 self.report({"INFO"}, "No outline or parameters have changed")
@@ -273,6 +309,9 @@ class FORMATIONS_OT_action(bpy.types.Operator):
                 core.make_unique(ob)
             elif self.action == "LOAD_PARAMS":
                 params.load(ob)
+            elif self.action == "RESET_RENDER":
+                from . import render
+                render.reset(ob)
             elif self.action == "MANUAL":
                 ob["formation_mode"] = "MANUAL"
             elif self.action == "ASSEMBLE":
@@ -371,7 +410,8 @@ class FORMATIONS_OT_edit(bpy.types.Operator):
             if context.scene.get("formations_busy"):
                 raise ValueError("Wait for the rebuild to finish")
             if self.action == "START":
-                targets = selected_formations(context) or core.formations()
+                # A solid formation has a guide mesh, edited as any mesh is.
+                targets = [r for r in selected_formations(context) or core.formations() if not core.is_solid(r)]
                 view.start(context, targets)
             elif self.action == "APPLY":
                 editing = context.mode == "EDIT_CURVE"

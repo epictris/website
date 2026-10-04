@@ -57,13 +57,18 @@ DEFAULT_PARAMS = {
 GENERATORS = {
     "boulders": DEFAULT_PARAMS,
     "fitted": {"seed": 31, "smallestRock": 0.25, "largestRock": 3.0},
+    # Recipe F stones cut from a closed guide mesh instead of an outline
+    # (solidfit.py; the backdrop, docs/blender-backdrop.md). Its defaults
+    # are solidfit.PARAMS, repeated here because this runs outside Blender.
+    "solid": {"seed": 0, "stoneSize": 1.0, "facets": 0.55, "chisel": 0.25, "knub": 0.3, "curveTurn": 60.0,
+              "floor": 0.0, "fixedScale": 0.0, "facetFalloff": 1.0},
 }
 
 
 def fingerprint():
     """What built the rock: this adapter and the generators, byte for byte."""
     h = hashlib.sha256()
-    for p in [Path(__file__), HERE / "assemble.py", HERE / "fitted.py", HERE / "slate.py",
+    for p in [Path(__file__), HERE / "assemble.py", HERE / "fitted.py", HERE / "solidfit.py", HERE / "slate.py",
               *sorted(GENERATOR.glob("*.py")), GENERATOR / "params.json"]:
         h.update(p.name.encode())
         h.update(p.read_bytes())
@@ -71,6 +76,14 @@ def fingerprint():
 
 
 def prepare(recipe, output):
+    if recipe.get("generator") == "solid":
+        # All Blender, from the recipe's own guide, camera and frame.
+        given = {k: v for k, v in recipe.get("params", {}).items() if k in GENERATORS["solid"]}
+        resolved = {"version": 1, "generator": "solid", "guide": recipe["guide"], "camera": recipe["camera"],
+                    "frame": recipe["frame"], "params": {**GENERATORS["solid"], **given},
+                    "generatorHash": fingerprint()}
+        (output / "recipe.json").write_text(json.dumps(resolved, separators=(",", ":")))
+        return
     kind = recipe.get("preset", "terrace")
     base = PRESETS[kind]
     generator = recipe.get("generator", "boulders")
