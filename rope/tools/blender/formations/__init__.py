@@ -9,14 +9,19 @@ separate process; everything else is ordinary, undoable edits of the open
 scene, which `just scene <level>` exports like any other scenery."""
 
 import bpy
-from bpy.props import BoolProperty, EnumProperty, FloatProperty
+from bpy.props import BoolProperty, EnumProperty, FloatProperty, PointerProperty
 
-from . import growth, ops, ui
+from . import growth, ops, params, ui
 
 CLASSES = ops.CLASSES + ui.CLASSES
 
 
 def register():
+    for c in params.CLASSES:
+        bpy.utils.register_class(c)
+    bpy.types.Object.formation_params = PointerProperty(
+        type=params.FormationParams, name="Generator parameters",
+        description="What the next build of this formation uses")
     bpy.types.Object.formation_attachment = EnumProperty(
         name="Attachment", items=growth.ATTACHMENTS, default="FLOOR",
         description="Where the formation hangs from, which decides what grows on it")
@@ -31,12 +36,21 @@ def register():
         description="Scale about the game camera's eye, so a move in depth keeps a formation's size on screen")
     for c in CLASSES:
         bpy.utils.register_class(c)
+    if params.on_load not in bpy.app.handlers.load_post:
+        bpy.app.handlers.load_post.append(params.on_load)
+    # The file open when the add-on is enabled had no load to hear.
+    bpy.app.timers.register(params.load_all, first_interval=0)
 
 
 def unregister():
+    if params.on_load in bpy.app.handlers.load_post:
+        bpy.app.handlers.load_post.remove(params.on_load)
     for c in reversed(CLASSES):
         bpy.utils.unregister_class(c)
     del bpy.types.Scene.formations_depth_keep_size
     del bpy.types.Scene.formations_depth_step
     del bpy.types.Object.formation_moisture
     del bpy.types.Object.formation_attachment
+    del bpy.types.Object.formation_params
+    for c in reversed(params.CLASSES):
+        bpy.utils.unregister_class(c)

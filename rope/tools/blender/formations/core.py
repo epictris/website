@@ -1,12 +1,13 @@
 """Formations: rock masses generated from an outline, and what grows on them.
 
 A FORMATION is a mesh object carrying `formation_recipe` - the outline (a
-closed polygon in the rock's local X/Z plane) and the boulder generator's
-parameters that built it - under a PLACEMENT empty that positions, tilts and
-scales it in the scene. The recipe is the source: the mesh is the generator's
-answer to it, so an outline edit is a rebuild, and a mesh edited by hand is
-protected from being rebuilt over (`formation_mesh_hash` seals the generated
-mesh; `formation_mode` MANUAL keeps an edited one).
+closed polygon in the rock's local X/Z plane) and the generator's parameters
+that built it - under a PLACEMENT empty that positions, tilts and scales it in
+the scene. The recipe is the source: the mesh is the generator's answer to it,
+so an outline or parameter edit (`params.py`: the parameters are fields on the
+rock) is a rebuild, and a mesh edited by hand is protected from being rebuilt
+over (`formation_mesh_hash` seals the generated mesh; `formation_mode` MANUAL
+keeps an edited one).
 
 Construction helpers never ship and never render: every formation's outline
 curve and the generator's source slabs live under RECIPES, and the mesh a
@@ -32,6 +33,8 @@ from pathlib import Path
 import bmesh
 import bpy
 from mathutils import Matrix, Vector
+
+from . import params
 
 HERE = Path(__file__).resolve().parent
 ROPE = HERE.parents[2]
@@ -66,6 +69,20 @@ def move(ob, col):
 def is_formation(ob):
     return (ob is not None and ob.type == "MESH" and "formation_recipe" in ob
             and not ob.get("formation_backup"))
+
+
+def formation_of(ob):
+    """The formation `ob` belongs to: itself, the rock under its placement, or
+    the rock its outline or growth belongs to."""
+    if ob is None or is_formation(ob):
+        return ob
+    rid = ob.get("formation_root") or ob.get("formation_outline_owner") or ob.get("formation_growth_owner")
+    if not rid:
+        return None
+    # A duplicate shares its original's id until Make Unique: try the
+    # parent and children first, so the placement or outline clicked decides.
+    near = [c for c in ob.children if is_formation(c)] + ([ob.parent] if is_formation(ob.parent) else [])
+    return next((r for r in near + formations() if r["formation_id"] == rid), None)
 
 
 def formations(scene=None):
@@ -228,6 +245,7 @@ def append_rock(file, name):
             s.matrix_parent_inverse = Matrix.Identity(4)
         ob["formation_sources"] = slabs.name
         ob["formation_outline"] = outline_object(recipe["outline"], name + " / outline", ob).name
+        params.load(ob)
         seal(ob)
         return ob
     except Exception:
@@ -311,9 +329,11 @@ def outline_points(ob):
 
 
 def recipe_for(ob):
-    """The recipe a rebuild would run: the built one with the current outline."""
+    """The recipe a rebuild would run: the built one with the current outline
+    and parameters."""
     recipe = json.loads(ob["formation_recipe"])
     recipe["outline"] = outline_points(ob)
+    recipe["generator"], recipe["params"] = params.current(ob)
     return recipe
 
 
@@ -336,11 +356,12 @@ def write_outline(ob, outline):
 
 
 def pending(ob):
-    """Whether the outline differs from the one the mesh was built from."""
+    """Whether the outline or the parameters differ from the ones the mesh was
+    built from."""
     current = outline_points(ob)
     built = json.loads(ob["formation_recipe"])["outline"]
     return bool(ob.get("formation_new")) or len(current) != len(built) or any(
-        math.dist(a, b) > 1e-5 for a, b in zip(current, built))
+        math.dist(a, b) > 1e-5 for a, b in zip(current, built)) or params.changed(ob)
 
 
 def assert_rebuildable(ob):

@@ -51,7 +51,7 @@ It edits the selected formations, or every formation when none is selected; noth
 Every change is validated (a simple polygon, finite, not edge-on to the camera, the formation not moved meanwhile, its mesh not hand-edited) before any outline is written.
 The projection is from ONE frame, shown in the panel: scrubbing while editing moves the camera and not the handles.
 
-**Rebuild Changed** rebuilds every formation whose outline differs from the one its mesh was built from, one rock at a time in separate processes; the meshes are swapped only once every rock has built and validated, and Esc discards the lot.
+**Rebuild Changed** rebuilds every formation whose outline or parameters differ from the ones its mesh was built from, one rock at a time in separate processes; the meshes are swapped only once every rock has built and validated, and Esc discards the lot.
 A rebuild keeps the formation's materials, placement, name and id, and keeps the replaced mesh in `Formation backups`.
 
 **Depth**: Forward and Back move the selected formations toward or away from the camera by the step.
@@ -61,7 +61,15 @@ Growth rides along (it hangs from the placement), and is then stale: it is sized
 ## Formations
 
 A formation is a mesh carrying `formation_recipe` (the outline and the generator's parameters), under a **placement** empty that positions it.
-**New Formation** builds one from a preset outline, or from a selected closed poly curve; **Rebuild** and **New Variant** rerun the generator with changed parameters.
+**New Formation** builds one from a preset outline, or from a selected closed poly curve.
+
+The parameters are also fields on the rock (`Object.formation_params`, `formations/params.py`), shown in the panel whenever the rock, its placement or its outline is the active object.
+The recipe records what built the mesh; the fields are what the next build uses.
+They are loaded from the recipe when a rock is built, when a file opens and when the add-on is enabled, so they start equal; editing a field makes the formation pending, like an outline edit.
+**Regenerate** rebuilds the rock from its fields and current outline at once (no dialog), **New Variant** builds them as a new rock beside it and leaves this one as built, and **Revert to Built** (shown once a field differs) puts the fields back.
+Rebuild Changed takes parameter edits along with outline edits.
+A rock appended from another file has no fields loaded yet: **Edit Parameters** loads them, and until then it builds from its recipe, as it does in the scene exporter, which never loads them.
+The grotto's rocks were built by Karin's pipeline, which recorded `generator` as the boulder generator's directory (`C:\...\boulders`); `params.generator_of` reads that as `boulders`, so they regenerate too (before 2026-10-04 they could not be rebuilt at all).
 A selected curve ticks "From the selected outline" on its own.
 A 3D curve gives its outline in its local X/Z plane, as a formation's own outline does; a flat (2D) curve gives it in its local X/Y, and the rock is turned a quarter about X to stand on it.
 So a **guide piece** is a ready outline: select `guide.boulder-3` (linked, it need not be made local) and New Formation builds a rock on exactly the collision the ball rolls on, placed on the body's origin.
@@ -80,7 +88,7 @@ The dialog's **Generator** picks how (the recipe's `generator`; a recipe without
 - **Boulder generator** (`boulders`): `tools/blender/boulders`, unmodified, slabs cut to the outline and unioned.
   Its defaults are the generator's own (`params.json`: 10 slabs per m², a 3000-face budget, detail 1, a 1.2 cm voxel cap, weathering 0.38, the tolerance derived from the outline), the many crisp slabs the editor's boulder service built.
   From 2026-09-29 to 2026-10-04 they were Karin's scenery adapter's (1.3 slabs per m², 1000 faces, detail 0.25, 4.5 cm voxels), which cut a formation into a few big, softly remeshed chunks; Tris preferred the slabs.
-  A rock built in that window keeps its slab density, face budget and weathering in its recipe, and the Rebuild dialog offers them again; set them there (detail, voxel cap and tolerance are not in the dialog and take the new defaults on any rebuild).
+  A rock built in that window keeps every one of them in its recipe and its fields, and a regenerate keeps them until they are changed; tolerance is never a field and is always derived from the outline.
 
 A new rock is one material, the **painted slate** ([cave-look](cave-look.md#surface-the-painted-slate-shader-and-the-v6-rig)), built by `formations/slate.py`, with a random `facet` float for its per-facet tone.
 The tone is a function of the face's **orientation** (`slate.tone_facets`): Perlin noise of the object-space face normal times `TONE_SCALE` (1.5), offset by the seed, rank-mapped onto [0, 1], so faces that point almost the same way get almost the same tone and facets at clearly different angles still differ.

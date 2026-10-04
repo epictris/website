@@ -818,7 +818,7 @@ def formation_warnings(scene, warnings):
             continue
         try:
             if core.pending(ob):
-                warnings.append(f"{ob.name}: outline edited but not rebuilt (Formations > Rebuild Changed)")
+                warnings.append(f"{ob.name}: outline or parameters edited but not rebuilt (Formations > Rebuild Changed)")
         except ValueError as e:
             warnings.append(f"{ob.name}: {e}")
         if growth.stale(ob):

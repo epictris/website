@@ -2,7 +2,7 @@
 
 import bpy
 
-from . import core, view
+from . import core, params, view
 
 
 class FORMATIONS_PT_main(bpy.types.Panel):
@@ -18,7 +18,8 @@ class FORMATIONS_PT_main(bpy.types.Panel):
         cam = view.game_camera(scene)
         box = layout.box()
         if cam is None:
-            box.label(text="No game camera: just scene-guide <level>", icon="ERROR")
+            box.label(text="No game camera", icon="ERROR")
+            box.label(text="Run: just scene-guide <level>")
         else:
             box.operator("formations.look", icon="VIEW_CAMERA")
             box.label(text=str(cam.get("game_source", "")))
@@ -79,14 +80,24 @@ class FORMATIONS_PT_main(bpy.types.Panel):
 
         layout.operator("formations.generate", text="New Formation", icon="ADD").mode = "CREATE"
 
-        ob = context.active_object
-        if core.is_formation(ob):
+        ob = core.formation_of(context.active_object)
+        if ob is not None:
             box = layout.box()
             box.label(text=f"{ob.name}: {ob.get('formation_mode', 'PROCEDURAL').lower()}", icon="MESH_ICOSPHERE")
-            box.prop(ob, "formation_attachment")
-            box.prop(ob, "formation_moisture")
+            col = box.column()
+            col.use_property_split = True
+            col.use_property_decorate = False
+            col.prop(ob, "formation_attachment")
+            col.prop(ob, "formation_moisture")
+            sub = box.box()
+            if params.editable(ob) is None:
+                sub.operator("formations.action", text="Edit Parameters").action = "LOAD_PARAMS"
+            else:
+                params.draw(sub, ob.formation_params)
+                if params.changed(ob):
+                    sub.operator("formations.action", text="Revert to Built", icon="LOOP_BACK").action = "LOAD_PARAMS"
             row = box.row(align=True)
-            row.operator("formations.generate", text="Rebuild").mode = "REBUILD"
+            row.operator("formations.generate", text="Regenerate", icon="FILE_REFRESH").mode = "REBUILD"
             row.operator("formations.generate", text="New Variant").mode = "VARIANT"
             for key, title in (("OUTLINE", "Select Outline"), ("UNIQUE", "Make Unique"),
                                ("MANUAL", "Keep As Manual Mesh"), ("SOURCES", "Show Source Slabs"),

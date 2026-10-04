@@ -6,9 +6,9 @@ import math
 
 import bpy
 from mathutils import Matrix
-from bpy.props import BoolProperty, EnumProperty, FloatProperty, IntProperty, StringProperty
+from bpy.props import BoolProperty, EnumProperty, FloatProperty, PointerProperty, StringProperty
 
-from . import core, growth, slate, view
+from . import core, growth, params, slate, view
 
 
 def redraw(context):
@@ -32,8 +32,8 @@ def selected_formations(context):
 
 
 def active_formation(context):
-    ob = context.active_object
-    if not core.is_formation(ob):
+    ob = core.formation_of(context.active_object)
+    if ob is None:
         found = selected_formations(context)
         ob = found[0] if len(found) == 1 else None
     if ob is None:
@@ -75,87 +75,53 @@ def outline_of_curve(ob):
 
 
 class FORMATIONS_OT_generate(bpy.types.Operator):
-    """Build a formation's rock in a separate process; the scene stays editable"""
+    """Build a formation's rock in a separate process; the scene stays editable.
+    Regenerate and New Variant build from the parameters on the rock"""
     bl_idname = "formations.generate"
     bl_label = "Generate Formation"
     bl_options = {"REGISTER", "UNDO"}
 
-    mode: EnumProperty(items=[("CREATE", "Create", ""), ("REBUILD", "Rebuild", ""), ("VARIANT", "New variant", "")])
-    generator: EnumProperty(name="Generator", items=[
-        ("FITTED", "Fitted slate", "Recipe F rocks sized and turned to fit the outline, fused into one mass: "
-                                   "the cave look (docs/cave-look.md)"),
-        ("BOULDERS", "Boulder generator", "The fork's slab generator, cut to the outline"),
-    ])
+    mode: EnumProperty(items=[("CREATE", "Create", ""), ("REBUILD", "Regenerate", ""), ("VARIANT", "New variant", "")])
     preset: EnumProperty(name="Starting outline",
                          items=[(x.upper(), x.title(), "") for x in ("terrace", "pillar", "wall", "arch", "distant")])
-    seed: IntProperty(default=31, min=0)
-    depth: FloatProperty(name="Thickness", default=1.05, min=.02, max=50)
-    smallest_rock: FloatProperty(name="Smallest rock", description="A rock's smallest long half-length",
-                                 default=.25, min=.05, max=10, subtype="DISTANCE")
-    largest_rock: FloatProperty(name="Largest rock", description="A rock's largest long half-length",
-                                default=3.0, min=.1, max=50, subtype="DISTANCE")
-    fractures: FloatProperty(default=10, min=.5, max=30)
-    weathering: FloatProperty(default=.38, min=0, max=1)
-    detail: IntProperty(name="Face budget", default=3000, min=200, max=10000)
+    settings: PointerProperty(type=params.FormationParams)
     use_outline: BoolProperty(name="From the selected outline (a curve or guide piece)", default=False)
 
     def invoke(self, context, event):
-        if self.mode == "CREATE":
-            ob = context.active_object
-            self.use_outline = bool(ob and ob.type == "CURVE" and ob.select_get())
-        else:
-            try:
-                r = core.recipe_for(active_formation(context))
-                self.preset = r["preset"].upper()
-                self.generator = r.get("generator", "boulders").upper()
-                p = r["params"]
-                self.seed, self.depth = p["seed"], p["depth"]
-                self.smallest_rock = p.get("smallestRock", self.smallest_rock)
-                self.largest_rock = p.get("largestRock", self.largest_rock)
-                self.fractures = p.get("slabsPerArea", self.fractures)
-                self.weathering = p.get("weathering", self.weathering)
-                self.detail = p.get("faceBudget", self.detail)
-            except (KeyError, ValueError) as e:
-                self.report({"ERROR"}, str(e))
-                return {"CANCELLED"}
+        if self.mode != "CREATE":
+            return self.execute(context)
+        ob = context.active_object
+        self.use_outline = bool(ob and ob.type == "CURVE" and ob.select_get())
         return context.window_manager.invoke_props_dialog(self, width=340)
 
     def draw(self, context):
-        fields = ["generator"]
-        if self.mode == "CREATE" and not self.use_outline:
-            fields.append("preset")
-        fields += ["seed", "depth"]
-        fields += (["smallest_rock", "largest_rock"] if self.generator == "FITTED"
-                   else ["fractures", "weathering", "detail"])
-        for field in fields:
-            self.layout.prop(self, field)
-        if self.mode == "CREATE":
-            self.layout.prop(self, "use_outline")
+        col = self.layout.column()
+        col.use_property_split = True
+        col.use_property_decorate = False
+        if not self.use_outline:
+            col.prop(self, "preset")
+        params.draw(col, self.settings)
+        self.layout.prop(self, "use_outline")
         self.layout.label(text="Builds in a separate process; Esc discards the result.")
-
-    def params(self):
-        if self.generator == "FITTED":
-            if self.smallest_rock > self.largest_rock:
-                raise ValueError("The smallest rock is larger than the largest")
-            return {"seed": self.seed, "depth": self.depth,
-                    "smallestRock": self.smallest_rock, "largestRock": self.largest_rock}
-        return {"seed": self.seed, "depth": self.depth, "slabsPerArea": self.fractures,
-                "weathering": self.weathering, "faceBudget": self.detail}
 
     def execute(self, context):
         try:
             self._target = None if self.mode == "CREATE" and not self.use_outline else (
                 context.active_object if self.mode == "CREATE" else active_formation(context))
-            recipe = {"preset": self.preset.lower()}
             if self.mode == "REBUILD":
                 core.assert_rebuildable(self._target)
-            if self.mode != "CREATE":
+            if self.mode == "CREATE":
+                params.validate(self.settings)
+                recipe = {"preset": self.preset.lower()}
+                recipe["generator"], recipe["params"] = params.from_settings(self.settings)
+                if self.use_outline:
+                    recipe["outline"], self._frame = outline_of_curve(self._target)
+            else:
                 recipe = core.recipe_for(self._target)
-            elif self.use_outline:
-                recipe["outline"], self._frame = outline_of_curve(self._target)
-            recipe["preset"] = self.preset.lower()
-            recipe["generator"] = self.generator.lower()
-            recipe["params"] = self.params()
+                # Held by name: a reference to the object goes stale if it is
+                # deleted, or undone over, while the rock builds.
+                self._target_name = self._target.name
+            self._request = recipe
             self._proc, self._out, self._log = core.launch_worker(recipe)
             self._timer = context.window_manager.event_timer_add(.5, window=context.window)
             context.window_manager.modal_handler_add(self)
@@ -179,16 +145,22 @@ class FORMATIONS_OT_generate(bpy.types.Operator):
             if self._proc.returncode:
                 raise ValueError(core.worker_failure(self._out))
             if self.mode == "CREATE":
-                name = "Fitted slate" if self.generator == "FITTED" else self.preset.title()
+                name = "Fitted slate" if self.settings.generator == "fitted" else self.preset.title()
                 ob = core.append_rock(self._out / "rock.blend", name)
                 if self._target is not None:
                     ob.parent.matrix_world = self._frame
                 else:
                     ob.parent.location = context.scene.cursor.location
             else:
-                if self._target.name not in bpy.data.objects:
+                target = bpy.data.objects.get(self._target_name)
+                if not core.is_formation(target):
                     raise ValueError("The formation was deleted; the result is in " + str(self._out))
-                ob = core.replace_from_worker(self._target, self._out / "rock.blend", self.mode == "VARIANT")
+                ob = core.replace_from_worker(target, self._out / "rock.blend", self.mode == "VARIANT")
+                # The variant took the edited parameters; the rock it came
+                # from is still the one its recipe built.
+                asked = (self._request["generator"], self._request["params"])
+                if self.mode == "VARIANT" and params.current(target) == asked:
+                    params.load(target)
             bpy.ops.object.select_all(action="DESELECT")
             ob.select_set(True)
             context.view_layer.objects.active = ob
@@ -200,8 +172,8 @@ class FORMATIONS_OT_generate(bpy.types.Operator):
 
 
 class FORMATIONS_OT_rebuild_changed(bpy.types.Operator):
-    """Rebuild every formation whose outline changed, one rock at a time; the
-    meshes are swapped only once every rock has built and validated"""
+    """Rebuild every formation whose outline or parameters changed, one rock at
+    a time; the meshes are swapped only once every rock has built and validated"""
     bl_idname = "formations.rebuild_changed"
     bl_label = "Rebuild Changed"
     bl_options = {"REGISTER", "UNDO"}
@@ -216,7 +188,7 @@ class FORMATIONS_OT_rebuild_changed(bpy.types.Operator):
                 core.validate_polygon(core.outline_points(ob))
                 core.assert_rebuildable(ob)
             if not self._targets:
-                self.report({"INFO"}, "No outline has changed")
+                self.report({"INFO"}, "No outline or parameters have changed")
                 return {"FINISHED"}
             self._done, self._index, self._cancelled = [], 0, False
             self._launch(context)
@@ -264,7 +236,7 @@ class FORMATIONS_OT_rebuild_changed(bpy.types.Operator):
             for ob, file, request in self._done:
                 core.assert_rebuildable(ob)
                 if core.recipe_for(ob) != request:
-                    raise ValueError(ob.name + ": outline changed while it built; rebuild again")
+                    raise ValueError(ob.name + ": changed while it built; rebuild again")
                 before = core.datablocks()
                 try:
                     with bpy.data.libraries.load(str(file), link=False) as (_, dst):
@@ -299,6 +271,8 @@ class FORMATIONS_OT_action(bpy.types.Operator):
             ob = active_formation(context)
             if self.action == "UNIQUE":
                 core.make_unique(ob)
+            elif self.action == "LOAD_PARAMS":
+                params.load(ob)
             elif self.action == "MANUAL":
                 ob["formation_mode"] = "MANUAL"
             elif self.action == "ASSEMBLE":
@@ -334,7 +308,7 @@ class FORMATIONS_OT_plant(bpy.types.Operator):
                      "ALL": core.formations()}[self.scope]
             pending = [r.name for r in rocks if core.pending(r)]
             if pending:
-                raise ValueError("Rebuild changed outlines first: " + ", ".join(pending))
+                raise ValueError("Rebuild changed formations first: " + ", ".join(pending))
             if not rocks:
                 self.report({"INFO"}, "Nothing to replant")
                 return {"FINISHED"}
@@ -362,7 +336,7 @@ class FORMATIONS_OT_tone_facets(bpy.types.Operator):
         # A rock built since 2026-10-02 is toned by its build already; this
         # brings an older one to the same state, and moves no vertex, so growth
         # and rebuild state stay as they were.
-        faces = sum(slate.tone_facets(ob, core.recipe_for(ob)["params"]["seed"]) for ob in rocks)
+        faces = sum(slate.tone_facets(ob, params.built(ob)[1]["seed"]) for ob in rocks)
         self.report({"INFO"}, f"Toned {len(rocks)} formations ({faces} faces)")
         return {"FINISHED"}
 

@@ -29,7 +29,7 @@ import uuid
 import bpy
 from mathutils import Matrix, Vector
 
-from . import core
+from . import core, params
 
 HANDLES = "Formation outline handles"
 STATE = "formations_edit_state"
@@ -344,6 +344,7 @@ def create_polygon(context, entry, offset=(0., 0.)):
     recipe["outline"] = [unproject(p, center, rock) for p in points]
     rock["formation_recipe"] = json.dumps(recipe)
     rock["formation_outline"] = core.outline_object(recipe["outline"], rock.name + " / outline", rock).name
+    params.load(rock)
     core.seal(rock)
     for ob in (rock, root):
         s["selectable"][ob.name] = True
