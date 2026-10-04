@@ -25,7 +25,8 @@ They are also the one thing here that gets **worse silently**.
 A level renders identically whether its props are 40 KB or 6 MB, every test stays green, and what changes is how long the first frame takes and how much of the LFS bandwidth quota a month of CI spends - neither of which anybody reads off a build.
 So three things are asserted rather than advised.
 
-**A budget, in the suite.** `cli assets` holds the whole directory to **100 MB**, and any single file to **8 MB**.
+**A budget, in the suite.** `cli assets` holds the whole directory to **100 MB**, and any single prop or texture map to **8 MB**.
+A level's Blender scene is not held to the per-file bar, only to the total: it is the whole level in one file, and the bar was meant for single props (Tris, 2026-10-04, when the river's backdrop took its scene to 9.6 MB).
 The store imposes nothing worth budgeting against - a release caps one asset at 2 GiB and neither total size nor download bandwidth at all - so the bar is an engineering one and has to be argued rather than quoted.
 Two things pay for these bytes: the Docker image the VM pulls on every deploy, since props are baked in at build, and the time a level takes to dress itself once it is open.
 100 MB is roughly where the image stops being something you rebuild and redeploy without thinking about it, and at ~1 MB a prop that is a hundred-odd props - a lot more level than exists.

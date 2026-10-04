@@ -159,9 +159,6 @@ try {
   for (const s of meta.skipped) if (!linked.includes(s)) console.log(`[scene] skipped ${s.name}: ${s.reason}`);
   for (const c of meta.credits) console.log(`[scene] credits ${c.name}: "${c.author}", ${c.source}, ${c.license}`);
   for (const w of meta.warnings) console.log(`[scene] WARNING ${w}`);
-  if (meta.bytes > 8 * 1024 * 1024) {
-    console.log(`[scene] WARNING ${kb} KB is over the store's 8 MB per-file bar (docs/asset-store.md); split the scene or thin it`);
-  }
   const pinned = SCENE_ASSETS[scene];
   console.log(
     pinned?.sha256 === meta.sha256

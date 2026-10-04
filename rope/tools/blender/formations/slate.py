@@ -35,6 +35,10 @@ import bpy
 from mathutils import Vector, noise
 
 NAME = "Painted slate"
+# A material's custom property scaling every length of its graph (`paint`),
+# and the OBJECT property it comes from at export (scene_export.py), which
+# also scales the rock's texel density and its detail high poly.
+SCALE_PROP, OBJECT_SCALE_PROP = "slate_scale", "detail_scale"
 # The v6 albedo: the drift's two ends (dark slate blue, a hair less blue)
 # and the edge line's colour.
 COOL, WARM, LINE = "#2f3546", "#3b3e4a", "#5c6070"
@@ -205,7 +209,12 @@ def repaint():
 
 
 def paint(mat):
-    """Replace `mat`'s node tree with the painted slate."""
+    """Replace `mat`'s node tree with the painted slate. A material carrying
+    SCALE_PROP (a backdrop rock's, docs/blender-backdrop.md) has every length
+    in the graph multiplied by it - the noises' periods, the occlusion reach,
+    the bevels - so a rock standing that many times further back than the
+    gameplay plane looks on screen as one on the plane does."""
+    scale = float(mat.get(SCALE_PROP, 1.0))
     mat.use_nodes = True
     nt = mat.node_tree
     for n in list(nt.nodes):
@@ -243,6 +252,12 @@ def paint(mat):
     bsdf.inputs["Specular IOR Level"].default_value = SPECULAR
     L(bsdf.outputs[0], out.inputs[0])
     coord = N("ShaderNodeTexCoord").outputs["Object"]
+    if scale != 1.0:
+        shrink = N("ShaderNodeVectorMath")
+        shrink.operation = "SCALE"
+        shrink.inputs["Scale"].default_value = 1.0 / scale
+        L(coord, shrink.inputs[0])
+        coord = shrink.outputs[0]
 
     # The drift: cool to warm slate across the block.
     base = N("ShaderNodeMix")
@@ -260,7 +275,7 @@ def paint(mat):
     L(coord, stretch.inputs["Vector"])
     stone = remap(noise_tex(stretch.outputs[0], 1.0, 2.0), *STAIN_BAND, *STAIN_TONE)
     ao = N("ShaderNodeAmbientOcclusion")
-    ao.inputs["Distance"].default_value = AO_DISTANCE
+    ao.inputs["Distance"].default_value = AO_DISTANCE * scale
     ao.samples = 8
     atone = remap(ao.outputs["AO"], 0.0, 1.0, *AO_TONE)
 
@@ -269,7 +284,7 @@ def paint(mat):
     # edges ... should get ambient occlusion shadows") and gates the line off
     # there (below), which the Bevel alone cannot: it turns both ways.
     crease = N("ShaderNodeAmbientOcclusion")
-    crease.inputs["Distance"].default_value = CONCAVE_REACH
+    crease.inputs["Distance"].default_value = CONCAVE_REACH * scale
     crease.samples = 8
     shadow = remap(crease.outputs["AO"], *CONCAVE_AO, *CONCAVE_TONE)
     convex = remap(crease.outputs["AO"], *CONVEX_GATE, 0.0, 1.0)
@@ -294,7 +309,7 @@ def paint(mat):
         b = N("ShaderNodeBevel")
         b.name = b.label = name
         b.samples = 8
-        b.inputs["Radius"].default_value = BEVEL_RADIUS
+        b.inputs["Radius"].default_value = BEVEL_RADIUS * scale
         return b
 
     line = bevel(LINE_BEVEL)

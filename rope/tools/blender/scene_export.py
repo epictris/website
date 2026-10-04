@@ -255,10 +255,37 @@ DEGENERATE_AREA = 1e-8
 UNWRAP_TAG = "scene_bake_corner"
 
 
-def bake_size(mesh):
+def detail_scale(ob):
+    """How many times further back than the gameplay plane `ob` is drawn as
+    if it stood (the backdrop's rocks, docs/blender-backdrop.md; 1 for
+    everything else): its texel density is divided by it, and its painted
+    slate's lengths are multiplied by it, so it is as fine on screen as a
+    rock on the plane and no finer (and see `far_back`)."""
+    from formations import slate
+    return float(ob.get(slate.OBJECT_SCALE_PROP, 1.0))
+
+
+def far_back(ob):
+    """Whether `ob` stands behind the gameplay plane as a backdrop rock
+    (`detail_scale` over 1). Such a rock skips the chamfer strips, the
+    curved creases and the chips and sub-facets: 30 to 45 m back they are a
+    pixel or two on screen, and on the river's 155k backdrop faces they held
+    the export in Python for over half an hour (Tris, 2026-10-04: skip
+    them)."""
+    return detail_scale(ob) > 1.0
+
+
+def bake_size(mesh, scale=1.0):
+    """The colour map's side: TEXELS_PER_METRE over the surface, divided by
+    the object's `detail_scale`, up to BAKE_SIZE_MAX, which a rock standing
+    further back is divided by too (rounded down to a power of two). The
+    backdrop's rocks are big (their hidden backs and sides included), so a
+    density over the depth alone still took every one to 4096 and the river
+    scene to 19.4 MB against the store's 8 MB bar (2026-10-04)."""
     area = sum(p.area for p in mesh.polygons)
-    side = math.sqrt(area / UV_COVERAGE) * TEXELS_PER_METRE
-    return int(min(BAKE_SIZE_MAX, max(BAKE_SIZE_MIN, 2 ** math.ceil(math.log2(max(side, 1))))))
+    side = math.sqrt(area / UV_COVERAGE) * TEXELS_PER_METRE / scale
+    cap = 2 ** math.floor(math.log2(BAKE_SIZE_MAX / max(scale, 1.0)))
+    return int(min(cap, max(BAKE_SIZE_MIN, 2 ** math.ceil(math.log2(max(side, 1))))))
 
 
 def map_size(size, kind):
@@ -513,7 +540,7 @@ def bake_procedural_textures(kept, cache_dir=None):
                                                depsgraph=depsgraph)
         ob.modifiers.clear()
         ob.data = mesh
-        if any(is_slate(m) for m in mesh.materials):
+        if any(is_slate(m) for m in mesh.materials) and not far_back(ob):
             # Long straight creases (formations/curve.py): split now, before
             # the unwrap; every map is baked on the straight rock, which the
             # detail high poly matches exactly, and the rock is bent after.
@@ -525,10 +552,14 @@ def bake_procedural_textures(kept, cache_dir=None):
         for i, mat in enumerate(mesh.materials):
             if mat is not None:
                 mesh.materials[i] = mat.copy()
+                if is_slate(mat) and detail_scale(ob) != 1.0:
+                    from formations import slate
+                    mesh.materials[i][slate.SCALE_PROP] = detail_scale(ob)
+                    slate.paint(mesh.materials[i])
         if any(m is None for m in mesh.materials) or not mesh.materials:
             # A bake needs a material to write through on every face.
             raise SystemExit(f"{ob.name}: a procedural material shares the object with an empty material slot")
-        sizes[ob] = bake_size(mesh)
+        sizes[ob] = bake_size(mesh, detail_scale(ob))
         bumps = any(procedural_normals(m) for m in mesh.materials)
         unwrap(ob, map_size(sizes[ob], "baked normal") if bumps else sizes[ob])
     scene.render.engine = "CYCLES"
@@ -602,7 +633,7 @@ def bake_procedural_textures(kept, cache_dir=None):
     # the rounded facet edges into one map. The detail map itself is a step
     # and never reaches the glTF; a cached rock needs none of it.
     from formations import slate
-    detailed = [ob for ob in targets if any(is_slate(m) for m in ob.data.materials)]
+    detailed = [ob for ob in targets if any(is_slate(m) for m in ob.data.materials) and not far_back(ob)]
     to_detail = [ob for ob in detailed if ob not in loaded]
     if to_detail:
         nodes = bake_detail_normals(to_detail, images(to_detail, "detail normal", "Non-Color"), straight)

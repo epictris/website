@@ -314,7 +314,7 @@
     "envIntensity": 0.5,
     "backgroundColor": "#1c3856",
     "fogColor": "#2a5075",
-    "fogAmount": 0.34
+    "fogAmount": 0.54
   },
   "camera": {
     "focalLength": 70
@@ -3175,7 +3175,7 @@
           "kind": "spot",
           "z": -100,
           "color": "#ffcb87",
-          "intensity": 500,
+          "intensity": 1000,
           "range": 1200,
           "angle": 28,
           "penumbra": 1,

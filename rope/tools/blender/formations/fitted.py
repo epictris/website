@@ -349,10 +349,12 @@ def _pillow(ob, voxel, iters, bevel=0.0):
     _apply_modifiers(ob)
 
 
-def _chisel(ob, seed):
+def _chisel(ob, seed, scale=1.0):
     """Recipe F's chisel at its own scale on a rock of any size: CUT_DENSITY
     shallow cuts per square metre, each a plane CUT_DEPTH under a point of the
     surface, tilted off its normal by up to CUT_TILT, the tops mostly spared.
+    `scale` multiplies every length (a backdrop stone far back, worked as
+    finely on screen as one on the gameplay plane: solidfit.py).
 
     The study sliced each plane right through its ~1 m stones, so a cut's
     wedge grew with the stone (2.5 cm deep at the point, about 17 cm at the
@@ -368,7 +370,7 @@ def _chisel(ob, seed):
     bm.from_mesh(ob.data)
     bm.normal_update()
     faces = list(bm.faces)  # a voxel remesh: about even faces, so a uniform pick is by area
-    count = round(CUT_DENSITY * sum(f.calc_area() for f in faces))
+    count = round(CUT_DENSITY * sum(f.calc_area() for f in faces) / scale ** 2)
     cutters = bpy.data.collections.new("Chisel")
     bpy.context.scene.collection.children.link(cutters)
     made = tries = 0
@@ -379,13 +381,13 @@ def _chisel(ob, seed):
         if n.z > 0.85 and rng.random() < 0.6:
             continue  # spare most of the top, so it stays a shelf
         n = (n + _unit_vector(rng, Vector) * rng.uniform(0.3, 1.0) * CUT_TILT).normalized()
-        d = rng.uniform(CUT_DEPTH * 0.4, CUT_DEPTH)
-        reach = rng.uniform(*CUT_REACH)
+        d = rng.uniform(CUT_DEPTH * 0.4, CUT_DEPTH) * scale
+        reach = rng.uniform(*CUT_REACH) * scale
         # The box's local Z is the plane's normal; it stands from the plane
         # out past anything the surface can raise within its reach.
         frame = n.to_track_quat("Z", "Y").to_matrix().to_4x4()
         frame.translation = f.calc_center_median() - n * d
-        tall = CUT_CLEAR + reach
+        tall = CUT_CLEAR * scale + reach
         box = bmesh.new()
         bmesh.ops.create_cube(box, size=1.0)
         bmesh.ops.transform(box, verts=box.verts, matrix=frame @ Matrix.Translation((0, 0, tall / 2))
@@ -410,7 +412,7 @@ def _chisel(ob, seed):
     bpy.data.collections.remove(cutters)
 
 
-def _relief(ob, seed):
+def _relief(ob, seed, scale=1.0):
     bmesh, _, _, Vector, noise = _bpy()
     rng = random.Random(seed)
     off = Vector((rng.uniform(0, 100), rng.uniform(0, 100), rng.uniform(0, 100)))
@@ -420,15 +422,16 @@ def _relief(ob, seed):
     bm.normal_update()
     moves = []
     for v in bm.verts:
-        p = v.co
-        moves.append(v.normal * (BIG * noise.noise((p + off2) * BIG_SCALE) + GRIT * noise.noise((p + off) * 25.0)))
+        p = v.co / scale
+        moves.append(v.normal * scale
+                     * (BIG * noise.noise((p + off2) * BIG_SCALE) + GRIT * noise.noise((p + off) * 25.0)))
     for v, d in zip(bm.verts, moves):
         v.co += d
     bm.to_mesh(ob.data)
     bm.free()
 
 
-def _facets(ob, target):
+def _facets(ob, target, angle=None):
     ob.data.calc_loop_triangles()
     ratio = min(1.0, target / max(len(ob.data.loop_triangles), 1))
     if ratio < 1.0:
@@ -438,7 +441,7 @@ def _facets(ob, target):
         d1.use_collapse_triangulate = True
     d2 = ob.modifiers.new("planar", "DECIMATE")
     d2.decimate_type = "DISSOLVE"
-    d2.angle_limit = math.radians(ANGLE)
+    d2.angle_limit = math.radians(ANGLE if angle is None else angle)
     d2.use_dissolve_boundaries = True
     _apply_modifiers(ob)
     # The planar dissolve can leave a loose edge behind (1 stone in 27 on
@@ -464,12 +467,18 @@ def build_stone(name, half, seed, collection):
     (Tris, 2026-10-02: scaling a small rock up would look weird; better
     geometry over a constant build cost)."""
     ob = _box(name, (0, 0, 0), half, 0.0, collection)
-    _corner_cuts(ob, half, seed + 70)
-    _pillow(ob, voxel=0.025, iters=ROUND, bevel=BEVEL * min(half))
-    _chisel(ob, seed + 50)
-    _pillow(ob, voxel=0.02, iters=CUT_SOFT)
-    _relief(ob, seed + 60)
+    weather(ob, half, seed)
     return ob
+
+
+def weather(ob, half, seed, scale=1.0):
+    """Recipe F up to its relief on a stone of half-size `half` (its corner
+    cuts and bevel in proportion to it), its detail lengths times `scale`."""
+    _corner_cuts(ob, half, seed + 70)
+    _pillow(ob, voxel=0.025 * scale, iters=ROUND, bevel=BEVEL * min(half))
+    _chisel(ob, seed + 50, scale)
+    _pillow(ob, voxel=0.02 * scale, iters=CUT_SOFT)
+    _relief(ob, seed + 60, scale)
 
 
 def fuse(stones, name):

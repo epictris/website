@@ -82,7 +82,8 @@ const ASSET_DIRS = [
 // deciding those two costs are worth paying, not because the number was in the
 // way.
 export const TOTAL_BUDGET_BYTES = 100 * 1024 * 1024;
-// A single prop this big has not been through `gltf-transform`. The style this
+// A single prop or texture map this big has not been through `gltf-transform`
+// (a level's Blender scene is not held to it, only to the total). The style this
 // game is drawn in (see docs/asset-store.md) puts a textured prop at well under 1 MB, so
 // 8 MB is not a target to author up to - it is the bar that catches a raw
 // Blender export with 2k PNGs in it before that becomes the habit.
@@ -361,9 +362,13 @@ export function runAssetChecks(): AssetCheck[] {
   const sizes = files.map((f) => ({ file: relative(ROOT, f), bytes: statSync(f).size }));
   const total = sizes.reduce((a, s) => a + s.bytes, 0);
 
-  const oversized = sizes.filter((s) => s.bytes > FILE_BUDGET_BYTES);
+  // The per-file bar is a prop's. A level's Blender scene is the whole level
+  // in one file (Tris, 2026-10-04: "that was intended for single props, not
+  // for entire levels"), so it answers only to the total.
+  const sceneGlbs = new Set(sceneFiles.map((f) => relative(ROOT, f)));
+  const oversized = sizes.filter((s) => !sceneGlbs.has(s.file) && s.bytes > FILE_BUDGET_BYTES);
   checks.push({
-    name: `assets: no single file over ${mb(FILE_BUDGET_BYTES)}`,
+    name: `assets: no single prop or map over ${mb(FILE_BUDGET_BYTES)} (scenes answer to the total)`,
     pass: oversized.length === 0,
     detail: oversized.length
       ? `run \`bun run assets:optimize\`: ` +

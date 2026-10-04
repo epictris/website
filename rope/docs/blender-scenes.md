@@ -141,13 +141,14 @@ Another file becomes a source by naming it once: `bun run assets:publish-sources
   An Ambient Occlusion node bakes what Cycles sees, other exported objects included, so a rock pushed into or under another darkens where they meet (boulder-1 under the river's floor slabs).
   Only the colour is baked, never light: the game lights it.
   A **painted slate** rock also gets a normal map the export bakes from a detail high poly it builds from the rock's own mesh and removes after (sub-facets and chips, `bake_detail_normals`; [rock-detail](rock-detail.md)), which goes in under the slate's shading Bevel so the normal the game gets is both combined, and every painted slate material is rebuilt to the formations add-on's current shader before the bake (`repaint_slate`), as the ivy and moss are regrown.
+  An object with a `detail_scale` (a backdrop rock, [blender-backdrop](blender-backdrop.md)) is baked at the texel density divided by it and its slate's lengths multiplied by it, so it is as fine on screen as a rock on the gameplay plane, and skips the chamfer strips, the curved creases and the detail high poly (`far_back`).
   Until 2026-10-02 the colour was baked into a vertex colour instead, which averaged every grain, stain and edge line finer than the faceted mesh's vertices into a smooth tone; a faceted rock has big flat faces, so nothing of the painted stone survived.
   Roughness, metallic and emission wired to anything else still export as flat values, and the exporter warns about each (`meta.json`'s `warnings`, printed by the recipe); a Bump of strength 0 is no loss and is neither baked nor reported.
 - **Lights.** The level's own lights carry glow and beam semantics and a budget (see [lighting-and-surfaces](lighting-and-surfaces.md)); a Blender light is dropped.
   Emissive materials do export, and a waking light in the body they dress drives them (above).
 - **Volumetrics, fog, compositing.** The level's environment block is where the air is authored.
 - **A moving surface.** Water and conveyor bands are the game's to draw (above).
-- **Size.** The per-file bar is 8 MB and textures are capped at 1k by the optimiser; the recipe warns past the bar.
+- **Size.** A scene answers to the store's 100 MB total, not to its 8 MB per-file bar, which is a single prop's (2026-10-04); the export prints its size.
   The baked maps have their own encoding (`--baked-maps`, which `just scene` always passes; every other map stays lossy WebP at 1k): a baked colour map ships as **AVIF with full-resolution colour (4:4:4) at quality 90**, up to 4k, and since 2026-10-04 a baked normal map the same way (it was lossless WebP; see below).
   Lossy WebP turned the Terrace's dark, low-contrast 1k bake into 15 KB of blocks and purple-green blotches (it codes colour at half resolution, so even quality 100 kept the blotches); lossless WebP is exact but 1.17 MB at 2k, which would have put the river near 13 MB; AVIF 4:4:4 q90 is 114 KB, 0.77 levels rms off, and keeps the edge lines.
   three's GLTFLoader reads `EXT_texture_avif` itself.
