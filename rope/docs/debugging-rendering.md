@@ -50,6 +50,9 @@ with a low `gpu` row is the main thread, and `sim` splits the physics out of bot
   still draws at its own size; nothing supersamples), which makes the renderer's
   fill cost the same number for every player and is the ceiling every other
   reading in this doc should be taken under.
+  A player can move the cap in the **S** settings panel (960x540 up to the
+  display's own size, kept in `localStorage` as `rope.settings`), so a frame-time
+  report from the field is a reading at the bundle's viewport AND that setting.
   `?dpr=N` is the escape hatch from the cap, and the way the trade is measured:
   `?dpr=2` on a 1080p display pays exactly what the uncapped 4K path used to.
   Chromium's `--force-device-scale-factor` does NOT do this: it scales CSS pixels

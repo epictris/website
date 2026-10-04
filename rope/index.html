@@ -402,6 +402,70 @@
         #complete-buttons { flex-wrap: wrap; }
         #complete-buttons button { flex: 1 1 auto; }
       }
+
+      /* THE SETTINGS PANEL, toggled by S over a level (see
+         src/render/settingsMenu.ts). The completion panel's idiom again: the
+         same veil, the same panel, #65bddb only on the option chosen. */
+      #settings {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(31, 36, 48, 0.88);
+        color: #cbccc6;
+        font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+        letter-spacing: 0.04em;
+        padding: 2rem 16px;
+        box-sizing: border-box;
+        z-index: 10;
+      }
+      #settings-panel {
+        width: min(420px, 100%);
+        border: 1px solid #313244;
+        background: #1f2430;
+        padding: 1.5rem;
+        box-sizing: border-box;
+      }
+      #settings-heading {
+        margin: 0 0 1.25rem;
+        font: inherit;
+        font-weight: normal;
+        color: #65bddb;
+        letter-spacing: 0.22em;
+      }
+      .settings-label { margin: 0 0 0.5rem; color: #8a8f98; }
+      #settings-resolutions {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(12ch, 1fr));
+        gap: 0.5ch;
+      }
+      .settings-option {
+        min-height: 44px;
+        padding: 0 1ch;
+        border: 1px solid #313244;
+        background: transparent;
+        color: #8a8f98;
+        font: inherit;
+        letter-spacing: inherit;
+        cursor: pointer;
+      }
+      .settings-option[aria-checked="true"] { color: #65bddb; border-color: #65bddb; }
+      .settings-option:hover, .settings-option:focus-visible {
+        border-color: #65bddb;
+        color: #cbccc6;
+        outline: none;
+      }
+      .settings-option[aria-checked="true"]:hover,
+      .settings-option[aria-checked="true"]:focus-visible { color: #65bddb; }
+      #settings-note { margin: 0.75rem 0 0; color: #8a8f98; }
+      #settings-note:empty { display: none; }
+      #settings-hint {
+        margin: 1.5rem 0 0;
+        border-top: 1px solid #313244;
+        padding-top: 1rem;
+        color: #5b6068;
+      }
     </style>
   </head>
   <body>
@@ -436,6 +500,15 @@
           </div>
         </div>
         <div id="complete-buttons"></div>
+      </div>
+    </div>
+    <div id="settings" hidden>
+      <div id="settings-panel" role="dialog" aria-labelledby="settings-heading">
+        <h2 id="settings-heading">SETTINGS</h2>
+        <p class="settings-label" id="settings-resolution-label">Resolution</p>
+        <div id="settings-resolutions" role="radiogroup" aria-labelledby="settings-resolution-label"></div>
+        <p id="settings-note"></p>
+        <p id="settings-hint">S or Esc to close</p>
       </div>
     </div>
     <!-- THE APP IS LOADED ONLY WHERE THERE IS SOMETHING TO PLAY. A bare `/` is

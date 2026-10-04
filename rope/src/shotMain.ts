@@ -138,7 +138,7 @@ const camera: Camera = {
 // what was actually drawn.
 const scene3d = use3d ? new Scene3D(sceneCanvas, { diagnostics: true }) : null;
 if (scene3d) {
-  scene3d.resize(view);
+  scene3d.resize();
   scene3d.setLevel(level);
   // Props and authored texture maps arrive asynchronously, and in the GAME that
   // is the point - the placeholder box and the generated surface cover the gap.

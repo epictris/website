@@ -54,6 +54,7 @@ import { showCompletionForm } from "./render/completionForm";
 import { readProgress, writeProgress } from "./render/progress";
 import { submitFeedback } from "./playtest/feedback";
 import { LoadingScreen } from "./render/loadingScreen";
+import { SettingsMenu } from "./render/settingsMenu";
 // The tree this page was served from, not the commit the dev server booted at
 // (see src/sim/treeStamp.ts).
 import { commit, dirty, srcHash } from "virtual:tree-stamp";
@@ -171,11 +172,33 @@ const dprOverride = ((): number | null => {
   return Number.isFinite(n) && n > 0 ? Math.min(n, 4) : null;
 })();
 
+// The S panel (see render/settingsMenu.ts). Opening it pauses a live run, the
+// way the completion panel's freeze does and for the same reason: the player is
+// pointing at a panel, not playing.
+const settingsMenu = new SettingsMenu({
+  apply: () => resize(),
+  drawnSize: () => ({ width: canvas.width, height: canvas.height }),
+  opened: () => {
+    // The cursor comes back so the panel can be pointed at (see
+    // `completeLevel`); the lock is re-taken by the next press in the level.
+    document.exitPointerLock?.();
+    document.documentElement.style.cursor = "";
+  },
+  closed: () => {
+    // Time spent in the panel is not time the sim is behind by (see
+    // `retryLevel`).
+    accumulator = 0;
+    hidePointer();
+  },
+});
+
 function resize(): void {
+  const maxWidth = settingsMenu.current.resolution.width;
   view = scene3d
-    ? fitCanvas([sceneCanvas, canvas], dprOverride)
-    : fitCanvas(canvas, dprOverride);
-  scene3d?.resize(view);
+    ? fitCanvas([sceneCanvas, canvas], dprOverride, maxWidth)
+    : fitCanvas(canvas, dprOverride, maxWidth);
+  scene3d?.resize();
+  settingsMenu.refresh();
 }
 
 resize();
@@ -522,6 +545,17 @@ function downloadRecording(): void {
 // deterministic FrameInput stream so toggling never affects recordings.
 let showDebug = false;
 window.addEventListener("keydown", (e) => {
+  // A key typed into a field is text, not a command: the completion panel's
+  // comment box used to download a bundle on every "p" in it.
+  const t = e.target as HTMLElement | null;
+  if (t && (t.tagName === "TEXTAREA" || t.tagName === "INPUT" || t.isContentEditable)) return;
+  // S is the settings panel, on the ball controller only: the grapple
+  // controller has S as extend (see `LiveInputSource`). Not over the
+  // completion panel, which has stopped the level and owns the screen.
+  if (e.code === "KeyS" && isBall && !frozen && !e.repeat && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    e.preventDefault();
+    settingsMenu.toggle();
+  }
   if (e.code === "KeyP") downloadRecording();
   if (e.code === "KeyL") showDebug = !showDebug;
   if (e.code === "F3") {
@@ -1002,7 +1036,7 @@ function frame(now: number): void {
     // A replay's steps are the transport's to schedule: it may run none
     // (paused), sixteen (fast-forward) or fifty-five (paying off a seek).
     replay.pump(dt);
-  } else if (replayName === null && !frozen) {
+  } else if (replayName === null && !frozen && !settingsMenu.isOpen) {
     while (accumulator >= STEP && frameSteps < MAX_STEPS_PER_FRAME) {
       stepLevel(input.sample(), false);
       accumulator -= STEP;

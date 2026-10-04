@@ -16,8 +16,8 @@
 // phone in landscape saw a different level again.
 //
 // The window decides one thing: how large that frame is drawn - and only how
-// large it is DRAWN, since the pixels behind it are capped at the frame's own
-// 1920x1080 (see `fitCanvas`). A larger display is shown a larger picture, not
+// large it is DRAWN, since the pixels behind it are capped at the player's
+// resolution setting, the frame's own 1920x1080 by default (see `fitCanvas`). A larger display is shown a larger picture, not
 // charged for a more expensive one. It is centred and
 // scaled by the tighter of the two axes, and whatever is left over on the other
 // axis is background — letterbox bars above and below on a 4:3 display,
@@ -90,9 +90,14 @@ export function viewTransform(width: number, height: number): ViewTransform {
 // CSS pixels too, so `window.innerWidth` halves as the DPR doubles, the fit
 // shrinks by exactly as much as the DPR grows, and the backing store comes out
 // the same size. The override has to be applied where the multiply happens.
+//
+// `maxWidth` is the cap itself, in device pixels across the frame: the player's
+// resolution setting (see render/settings.ts), and the frame's own 1920 for
+// every page that has no such setting.
 export function fitCanvas(
   canvas: HTMLCanvasElement | HTMLCanvasElement[],
   dprOverride?: number | null,
+  maxWidth: number = VIEW_WIDTH,
 ): ViewTransform {
   const canvases = Array.isArray(canvas) ? canvas : [canvas];
   const dpr = dprOverride ?? (window.devicePixelRatio || 1);
@@ -105,7 +110,7 @@ export function fitCanvas(
   // single uniform scale, so the two dimensions have to agree about what that
   // scale is or the bottom of the frame is drawn a pixel outside it.
   //
-  // It is CAPPED at the frame's own size. The scene is authored, framed and
+  // It is CAPPED, by default at the frame's own size. The scene is authored, framed and
   // tuned as 1920x1080 view pixels, so beyond that a player is not being shown
   // any more of the world and not being shown it in any more detail - only
   // paying for more fragments carrying the same picture. Uncapped, that bill
@@ -118,14 +123,16 @@ export function fitCanvas(
   // frame is drawn at 1080p and the browser scales it up to the window, so both
   // canvases - the scene and the 2D overlay on top of it - are resampled there.
   // That is the same trade every resolution-scale slider makes, taken by
-  // default, and `?dpr=` is how it is measured either way.
+  // default, and `?dpr=` is how it is measured either way. A player who wants
+  // the sharpness back (or less fill on a weak GPU) moves the cap in the
+  // settings panel.
   //
-  // Below the cap nothing changes: a window smaller than the frame still draws
-  // at its own size rather than supersampling up to 1920.
+  // Below the cap nothing changes: a window smaller than the cap still draws
+  // at its own size rather than supersampling up to it.
   const requestedWidth = Math.round(cssWidth * dpr);
   const pixelWidth = Math.max(
     1,
-    dprOverride == null ? Math.min(requestedWidth, VIEW_WIDTH) : requestedWidth,
+    dprOverride == null ? Math.min(requestedWidth, maxWidth) : requestedWidth,
   );
   const pixelHeight = Math.max(1, Math.round((pixelWidth * VIEW_HEIGHT) / VIEW_WIDTH));
 

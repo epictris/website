@@ -28,7 +28,6 @@ import type { VineCord } from "../level/vines";
 import type { LevelVisualSource } from "../level/buildBodies";
 import { isCollisionObject, type EnvironmentData, type FireflyPathData } from "../level/levelFormat";
 import type { Camera } from "../render/camera";
-import type { ViewTransform } from "../render/viewport";
 import { GpuTimer } from "../render/gpuTimer";
 import { BodyVisual, pickTagOf, surfaceOf } from "./bodyVisuals";
 import { SceneDressing, type DressTarget } from "./sceneDressing";
@@ -749,11 +748,17 @@ export class Scene3D {
     this.probe = mesh;
   }
 
-  // Size the drawing buffer. `view` is the same transform the 2D canvas is drawn
-  // with, so the two buffers are the same size in device pixels and a pixel on
-  // one is a pixel on the other.
-  resize(view: ViewTransform): void {
-    this.renderer.setSize(view.width * view.scale, view.height * view.scale, false);
+  // Adopt the drawing buffer `fitCanvas` has just sized, which is the size the
+  // 2D canvas over it was given by the same arithmetic, so a pixel on one is a
+  // pixel on the other.
+  //
+  // Read off the canvas rather than worked back out of the view transform:
+  // `view.scale` is the tighter axis of the ROUNDED buffer, so `size * scale`
+  // lands a fraction short of a whole pixel on the other axis and three FLOORS
+  // it - at a 390 px phone width the scene was 389 wide under a 390 overlay.
+  resize(): void {
+    const canvas = this.renderer.domElement;
+    this.renderer.setSize(canvas.width, canvas.height, false);
   }
 
   // Size the drawing buffer to a canvas outright. The editor's canvas IS the
