@@ -94,9 +94,9 @@ class FORMATIONS_OT_generate(bpy.types.Operator):
                                  default=.25, min=.05, max=10, subtype="DISTANCE")
     largest_rock: FloatProperty(name="Largest rock", description="A rock's largest long half-length",
                                 default=3.0, min=.1, max=50, subtype="DISTANCE")
-    fractures: FloatProperty(default=1.3, min=.5, max=30)
-    weathering: FloatProperty(default=.25, min=0, max=1)
-    detail: IntProperty(name="Face budget", default=1000, min=200, max=10000)
+    fractures: FloatProperty(default=10, min=.5, max=30)
+    weathering: FloatProperty(default=.38, min=0, max=1)
+    detail: IntProperty(name="Face budget", default=3000, min=200, max=10000)
     use_outline: BoolProperty(name="From the selected outline (a curve or guide piece)", default=False)
 
     def invoke(self, context, event):

@@ -37,13 +37,17 @@ PRESETS = {
     "distant": {"outline": [[-.95, 1.7], [.85, 1.65], [1.1, .2], [.65, -1.8], [-.8, -1.7], [-1.15, .1]], "depth": 1.0},
 }
 
-# The generator's parameters for scenery: the approved boulder construction at
-# scenery scale and detail. A recipe's own `params` override these. Its
-# material parameters are not here: a formation's stone is the painted slate
+# The generator's parameters: its own defaults (boulders/params.json), the
+# construction the editor's boulder service built from 2026-09-25. A recipe's
+# own `params` override these; `tolerance` is left out so the generator derives
+# it from the outline, as it did there. Karin's scenery adapter (slabsPerArea
+# 1.3, faceBudget 1000, detail 0.25, voxelCap 0.045, tolerance 0.07, weathering
+# 0.25), the default from 2026-09-29, cut a formation into a few big, softly
+# remeshed chunks; Tris prefers the many crisp slabs (2026-10-04). Its material
+# parameters are not here: a formation's stone is the painted slate
 # (slate.py), not the generator's tinted stones.
 DEFAULT_PARAMS = {
-    "seed": 31, "slabsPerArea": 1.3, "faceBudget": 1000, "detail": .25, "voxelCap": .045,
-    "tolerance": .07, "weathering": .25,
+    "seed": 31, "slabsPerArea": 10, "faceBudget": 3000, "detail": 1, "voxelCap": .012, "weathering": .38,
 }
 
 # What builds the rock, by the recipe's `generator` (a recipe without one is
