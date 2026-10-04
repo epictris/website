@@ -1,7 +1,7 @@
 """Export a level's Blender scene as the game's dressing.
 
     blender -b assets-src/scenes/<scene>.blend --factory-startup --python-exit-code 1 \
-        --python tools/blender/scene_export.py -- out.glb meta.json
+        --python tools/blender/scene_export.py -- out.glb meta.json [--cache DIR]
 
 Run by `scripts/scene-export.ts` (`just scene <level>`), which optimises the
 result and finishes the meta; see docs/blender-scenes.md.
@@ -233,11 +233,19 @@ def bake_device():
 # scripts/encode-textures.mjs).
 TEXELS_PER_METRE = 512
 BAKE_SIZE_MIN, BAKE_SIZE_MAX = 64, 4096
+# The baked normal map's side, as a share of the colour map's (Tris,
+# 2026-10-04). Lossless, the normals were 16 of the river's 20.7 MB, the
+# five Terraces' 3.4 to 4.3 MB each at 4096, against the store's 8 MB a file.
+# The detail high poly is still baked at the colour's size: the normal pass
+# averages it down rather than resampling a coarse one.
+NORMAL_SCALE = 0.5
 # The share of the image an unwrap's islands cover after packing.
 UV_COVERAGE = 0.6
 # Pixels between islands in the pack. Every texel outside the islands is
 # filled afterwards (`fill_background`), so this gap is only what keeps two
-# islands from sharing a texel at full resolution.
+# islands from sharing a texel at full resolution. It is kept at the object's
+# smallest map (the normal map, NORMAL_SCALE), where islands 1 px apart would
+# filter into each other.
 PACK_GAP_PX = 2
 # How far apart two vertices may be and still be one for the unwrap.
 WELD_DISTANCE = 1e-5
@@ -251,6 +259,12 @@ def bake_size(mesh):
     area = sum(p.area for p in mesh.polygons)
     side = math.sqrt(area / UV_COVERAGE) * TEXELS_PER_METRE
     return int(min(BAKE_SIZE_MAX, max(BAKE_SIZE_MIN, 2 ** math.ceil(math.log2(max(side, 1))))))
+
+
+def map_size(size, kind):
+    """The side of an object's `kind` map ("baked colour", ...) when its colour
+    map is `size`."""
+    return max(BAKE_SIZE_MIN, int(size * NORMAL_SCALE)) if kind == "baked normal" else size
 
 
 def select_only(obs, active):
@@ -431,10 +445,20 @@ def seed_for(ob):
         return sum(ord(c) for c in ob.name)
 
 
-def bake_pass(targets, images, bake_type, **bake_args):
-    """One Cycles bake of every target into its own image: each material
-    gets an Image Texture of its object's image as the ACTIVE node, which is
-    where a bake writes. Returns the nodes, keyed by material."""
+def image_name(ob, kind):
+    """The name of `ob`'s `kind` map ("baked colour", ...). No dot in it: the
+    glTF exporter takes everything after the last dot for an extension, so
+    "Terrace.003 baked colour" shipped as "Terrace", missed the optimiser's
+    " baked colour" rule and went out as lossy WebP at 1k, a quarter of its
+    texels (2026-10-04; scene-export.ts now checks every baked map is
+    matched)."""
+    return f"{ob.name.replace('.', '-')} {kind}"
+
+
+def image_nodes(targets, images):
+    """An Image Texture of its object's image in each of the targets'
+    materials, read through BAKE_UV and ACTIVE (where a bake writes). Returns
+    the nodes, keyed by material."""
     nodes = {}
     for ob in targets:
         for mat in ob.data.materials:
@@ -445,6 +469,14 @@ def bake_pass(targets, images, bake_type, **bake_args):
             mat.node_tree.links.new(uv.outputs["UV"], node.inputs["Vector"])
             mat.node_tree.nodes.active = node
             nodes[mat] = node
+    return nodes
+
+
+def bake_pass(targets, images, bake_type, **bake_args):
+    """One Cycles bake of every target into its own image: each material
+    gets an Image Texture of its object's image as the ACTIVE node, which is
+    where a bake writes. Returns the nodes, keyed by material."""
+    nodes = image_nodes(targets, images)
     select_only(targets, targets[0])
     bpy.ops.object.bake(type=bake_type, target="IMAGE_TEXTURES", uv_layer=BAKE_UV, margin=0, **bake_args)
     for im in set(images.values()):
@@ -453,7 +485,7 @@ def bake_pass(targets, images, bake_type, **bake_args):
     return nodes
 
 
-def bake_procedural_textures(kept):
+def bake_procedural_textures(kept, cache_dir=None):
     """Bake every procedural Base Color (and Normal) the kept meshes use into
     an image of the object's own, and wire it in, so glTF carries the stone as
     a baseColorTexture (and normalTexture) instead of dropping it to a flat
@@ -465,7 +497,9 @@ def bake_procedural_textures(kept):
     gets a mesh with its modifiers applied and a fresh unwrap (BAKE_UV), its
     materials are copied so each object's point at its own images, and the file
     is never saved. The resolution is TEXELS_PER_METRE up to
-    BAKE_SIZE_MAX. Returns how many objects were baked."""
+    BAKE_SIZE_MAX. With `cache_dir`, an object whose maps are in the bake
+    cache (bake_cache.py) loads them instead of baking. Returns how many
+    objects were baked or loaded."""
     targets = [ob for ob in kept if ob.type == "MESH"
                and any(procedural_base_colors(m) or procedural_normals(m) for m in ob.data.materials)]
     if not targets:
@@ -495,7 +529,8 @@ def bake_procedural_textures(kept):
             # A bake needs a material to write through on every face.
             raise SystemExit(f"{ob.name}: a procedural material shares the object with an empty material slot")
         sizes[ob] = bake_size(mesh)
-        unwrap(ob, sizes[ob])
+        bumps = any(procedural_normals(m) for m in mesh.materials)
+        unwrap(ob, map_size(sizes[ob], "baked normal") if bumps else sizes[ob])
     scene.render.engine = "CYCLES"
     device = bake_device()
     scene.cycles.device = "CPU" if device == "CPU" else "GPU"
@@ -506,7 +541,8 @@ def bake_procedural_textures(kept):
         for ob in obs:
             # With alpha, cleared to 0: the bake writes 1 where it baked, which
             # is the mask `fill_background` fills the rest by.
-            im = bpy.data.images.new(f"{ob.name} {kind}", sizes[ob], sizes[ob], alpha=True)
+            side = map_size(sizes[ob], kind)
+            im = bpy.data.images.new(image_name(ob, kind), side, side, alpha=True)
             im.generated_color = (0, 0, 0, 0)
             im.colorspace_settings.name = colorspace
             # Drawn by this export for this object: an original, no credit owed.
@@ -515,8 +551,42 @@ def bake_procedural_textures(kept):
         return out
 
     colored = [ob for ob in targets if any(procedural_base_colors(m) for m in ob.data.materials)]
+    bumped = [ob for ob in targets if any(procedural_normals(m) for m in ob.data.materials)]
+    # The maps each object ships, as (kind, colour space).
+    ships = {ob: [k for k, among in (("baked colour", colored), ("baked normal", bumped)) if ob in among]
+             for ob in targets}
+    space = {"baked colour": "sRGB", "baked normal": "Non-Color"}
+
+    # Objects whose maps are cached load them and are left out of every bake.
+    cache, keys, loaded = None, {}, {}
+    if cache_dir:
+        import bake_cache
+        cache = bake_cache.Cache(cache_dir)
+        depsgraph = bpy.context.evaluated_depsgraph_get()
+        for ob in targets:
+            keys[ob] = cache.key(ob, sizes[ob], seed_for(ob), scene, depsgraph)
+            files = cache.get(keys[ob], [image_name(ob, k) for k in ships[ob]])
+            if files is not None:
+                loaded[ob] = {k: bake_cache.load(files[image_name(ob, k)], image_name(ob, k), space[k]) for k in ships[ob]}
+    fresh = {}  # ob -> the images baked for it here, to cache
+
+    def bake_or_load(obs, kind, bake):
+        """Nodes reading `kind` in every material of `obs`: baked by
+        `bake(those, images)` for the objects not cached, loaded for the rest."""
+        todo = [ob for ob in obs if ob not in loaded]
+        nodes = {}
+        if todo:
+            made = images(todo, kind, space[kind])
+            nodes.update(bake(todo, made))
+            for ob in todo:
+                fresh.setdefault(ob, []).append(made[ob])
+        done = [ob for ob in obs if ob in loaded]
+        nodes.update(image_nodes(done, {ob: loaded[ob][kind] for ob in done}))
+        return nodes
+
     if colored:
-        nodes = bake_pass(colored, images(colored, "baked colour", "sRGB"), "DIFFUSE", pass_filter={"COLOR"})
+        nodes = bake_or_load(colored, "baked colour",
+                             lambda obs, ims: bake_pass(obs, ims, "DIFFUSE", pass_filter={"COLOR"}))
         for mat, node in nodes.items():
             for bsdf in procedural_base_colors(mat):
                 mat.node_tree.links.new(node.outputs["Color"], bsdf.inputs["Base Color"])
@@ -530,24 +600,32 @@ def bake_procedural_textures(kept):
     # detail high poly (docs/rock-detail.md), put under the slate's shading
     # Bevel (slate.add_detail), so the normal pass below bakes the detail and
     # the rounded facet edges into one map. The detail map itself is a step
-    # and never reaches the glTF.
+    # and never reaches the glTF; a cached rock needs none of it.
     from formations import slate
     detailed = [ob for ob in targets if any(is_slate(m) for m in ob.data.materials)]
-    if detailed:
-        nodes = bake_detail_normals(detailed, images(detailed, "detail normal", "Non-Color"), straight)
+    to_detail = [ob for ob in detailed if ob not in loaded]
+    if to_detail:
+        nodes = bake_detail_normals(to_detail, images(to_detail, "detail normal", "Non-Color"), straight)
         for mat, node in nodes.items():
             slate.add_detail(mat, node.outputs["Color"], BAKE_UV)
-    bumped = [ob for ob in targets if any(procedural_normals(m) for m in ob.data.materials)]
     if bumped:
-        nodes = bake_pass(bumped, images(bumped, "baked normal", "Non-Color"), "NORMAL", normal_space="TANGENT")
+        nodes = bake_or_load(bumped, "baked normal",
+                             lambda obs, ims: bake_pass(obs, ims, "NORMAL", normal_space="TANGENT"))
         for mat, node in nodes.items():
             for bsdf in procedural_normals(mat):
                 wire_normal(mat, node, bsdf)
+    if cache:
+        for ob, made in fresh.items():
+            cache.put(keys[ob], made, ob.name)
+        pruned = cache.prune()
     for ob, rock_bows in bows.items():
         # Bent only now that every map is baked (formations/curve.py).
         log(f"curve {ob.name}: {curve.bend(ob.data, rock_bows)}")
     texels = ", ".join(f"{ob.name} {sizes[ob]}" for ob in targets)
-    log(f"baked {len(colored)} colour, {len(detailed)} detail and {len(bumped)} normal maps ({texels}) on {device}, {time.time() - t0:.1f}s")
+    cached = (f"{len(loaded)} of {len(targets)} objects from the cache ({pruned} stale entries removed)"
+              if cache else "cache off")
+    log(f"baked {len(colored)} colour, {len(detailed)} detail and {len(bumped)} normal maps ({texels}) on {device}; "
+        f"{cached}; {time.time() - t0:.1f}s")
     return len(targets)
 
 
@@ -697,18 +775,27 @@ def grow_painted(scene, warnings):
     import ivy
     import moss
 
+    def drop(ob):
+        # With everything parented to it: render visibility is not inherited
+        # from a parent, and an ivy's shadow decal is its child. Hiding the
+        # ivy alone shipped the river's five orphaned decals, the skins of
+        # deleted boulders, as ghostly shading at the level's origin
+        # (2026-10-04).
+        for o in [ob, *ob.children_recursive]:
+            o.hide_render = True
+
     ivy.register()
     for ob, result in ivy.rebuild_all(scene):
         if result is None:
-            warnings.append(f"{ob.name}: {ob.ivy.status}; not exported")
-            ob.hide_render = True
+            warnings.append(f"{ob.name}: {ob.ivy.status}; not exported (nor its shadow)")
+            drop(ob)
             continue
         log(f"ivy {ob.name} on {ob.ivy.host}: {len(result.triangles)} triangles ({result.leaves} leaves, {result.vines} vines), {ob.ivy.build_ms:.0f} ms")
     moss.register()
     for ob, result in moss.rebuild_all(scene):
         if result is None:
             warnings.append(f"{ob.name}: {ob.moss.status}; not exported")
-            ob.hide_render = True
+            drop(ob)
             continue
         log(f"moss {ob.name} on {ob.moss.host}: {len(result.triangles)} triangles, {result.dabs} dabs, print {result.image.shape[0]} px, {ob.moss.build_ms:.0f} ms")
 
@@ -752,9 +839,11 @@ def repaint_slate():
 
 def main():
     argv = sys.argv[sys.argv.index("--") + 1 :]
-    if len(argv) < 2:
-        raise SystemExit("usage: scene_export.py -- out.glb meta.json")
+    if len(argv) not in (2, 4) or (len(argv) == 4 and argv[2] != "--cache"):
+        raise SystemExit("usage: scene_export.py -- out.glb meta.json [--cache DIR]")
     out_glb, out_meta = argv[0], argv[1]
+    cache_dir = argv[3] if len(argv) == 4 else None
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     t0 = time.time()
 
     scene = bpy.context.scene
@@ -793,7 +882,7 @@ def main():
     view_layer.update()
 
     # Baking selects its own targets; the export selection is restored after.
-    if bake_procedural_textures(kept):
+    if bake_procedural_textures(kept, cache_dir):
         for ob in scene.objects:
             try:
                 ob.select_set(ob in kept)

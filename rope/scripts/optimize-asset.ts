@@ -76,8 +76,8 @@
 //
 // `--baked-maps` gives the maps a Blender scene export baked ("<object> baked
 // colour" / "baked normal", tools/blender/scene_export.py) their own encoding,
-// up to 2k: the colour as AVIF with full-resolution chroma, the normal map
-// lossless. Lossy WebP turned that dark, low-contrast painted stone into blocks
+// up to 4k: both as AVIF with full-resolution chroma (the normal map was
+// lossless until 2026-10-04). Lossy WebP turned that dark, low-contrast painted stone into blocks
 // and colour blotches; the measurements are in `encode-textures.mjs`.
 // `scene-export.ts` always passes it.
 

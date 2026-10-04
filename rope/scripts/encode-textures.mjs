@@ -46,7 +46,14 @@ const rules = [];
 //   against the store's 8 MB bar;
 // - AVIF with full-resolution colour (4:4:4) at quality 90 is 114 KB, off by
 //   0.77 levels (rms) of 255 and 8 at worst, and keeps the edge lines.
-// A baked normal map stays lossless, for the reason `--lossless-normals` exists.
+// A baked normal map goes the same way since 2026-10-04 (it was lossless, for
+// the reason `--lossless-normals` exists). Lossless, the river's five Terraces'
+// normals were 16 of its 20.7 MB; at half the colour's size (NORMAL_SCALE in
+// scene_export.py) and this AVIF, Terrace.003's is 503 KB against 4,242 KB, and
+// its in-game render moves by at most 3 levels of 255 for the encoding (44 for
+// the halving, along chip edges): the slate is matte, and the blocks the iron
+// ball showed were in a glossy highlight. Tris compared all four, "barely any
+// difference".
 // The baked maps' cap: scene_export.py's BAKE_SIZE_MAX (512 texels a metre
 // since 2026-10-03, twice the 256 above).
 const BAKED_MAX = 4096;
@@ -59,7 +66,14 @@ if (argv.includes("--baked-maps")) {
     chromaSubsampling: "4:4:4",
     resize: [BAKED_MAX, BAKED_MAX],
   });
-  rules.push({ name: "baked normal, lossless", pattern: / baked normal$/, targetFormat: "webp", lossless: true, resize: [BAKED_MAX, BAKED_MAX] });
+  rules.push({
+    name: "baked normal, AVIF 4:4:4",
+    pattern: / baked normal$/,
+    targetFormat: "avif",
+    quality: 90,
+    chromaSubsampling: "4:4:4",
+    resize: [BAKED_MAX, BAKED_MAX],
+  });
 }
 // A normal map whose detail is subtle codes as a grid of blocks (optimize-asset.ts).
 if (argv.includes("--lossless-normals")) {

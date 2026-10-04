@@ -60,8 +60,10 @@ publish:
 # level's `scene`) into rope/public/scenes/<scene>/ and report what it dressed.
 # Then refresh the browser. See rope/docs/blender-scenes.md.
 #   just scene ball
-scene LEVEL:
-    cd rope && bun run scene:export {{LEVEL}}
+# Unchanged objects load their maps from the bake cache instead of baking;
+# `just scene ball --no-cache` bakes every one afresh.
+scene LEVEL *FLAGS:
+    cd rope && bun run scene:export {{LEVEL}} {{FLAGS}}
 
 # Install the moss add-on (rope/tools/blender/moss): paint painterly moss onto a
 # scene's rocks. Links it into the user extensions, enables it and saves the

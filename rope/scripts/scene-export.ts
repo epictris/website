@@ -1,6 +1,6 @@
 // Export a level's Blender scene into the game (`just scene <level>`).
 //
-//   bun run scene:export <level> [--blender PATH] [--raw]
+//   bun run scene:export <level> [--blender PATH] [--raw] [--no-cache]
 //
 // The level's `scene` names `assets-src/scenes/<scene>.blend`. Headless
 // Blender runs `tools/blender/scene_export.py` over it (every object with
@@ -17,6 +17,10 @@
 //
 // `--raw` skips the optimiser and ships Blender's own file, for telling an
 // optimiser problem from an export one. Never publish one.
+//
+// An object whose baked maps are in the bake cache (`.cache/scene-bake/<scene>/`,
+// tools/blender/bake_cache.py) is not baked again; `--no-cache` bakes every
+// one afresh (the cache's key is in that file).
 
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -34,7 +38,7 @@ function fail(msg: string): never {
 }
 
 const args = process.argv.slice(2);
-const bare = new Set(["--raw"]);
+const bare = new Set(["--raw", "--no-cache"]);
 const positional = args.filter(
   (a, i) => !a.startsWith("--") && !(i > 0 && args[i - 1]!.startsWith("--") && !bare.has(args[i - 1]!)),
 );
@@ -43,7 +47,7 @@ const flag = (name: string): string | undefined => {
   return i >= 0 ? args[i + 1] : undefined;
 };
 
-const levelArg = positional[0] ?? fail("usage: bun run scene:export <level> [--blender PATH] [--raw]");
+const levelArg = positional[0] ?? fail("usage: bun run scene:export <level> [--blender PATH] [--raw] [--no-cache]");
 const levelPath = levelArg.endsWith(".json") ? resolve(levelArg) : join(ROOT, "levels", `${levelArg}.json`);
 if (!existsSync(levelPath)) fail(`no level at ${levelPath}`);
 const levelName = basename(levelPath, ".json");
@@ -75,7 +79,7 @@ try {
   const t0 = Date.now();
   const run = spawnSync(
     blender,
-    ["-b", blend, "--factory-startup", "--python-exit-code", "1", "--python", join(ROOT, "tools", "blender", "scene_export.py"), "--", raw, rawMeta],
+    ["-b", blend, "--factory-startup", "--python-exit-code", "1", "--python", join(ROOT, "tools", "blender", "scene_export.py"), "--", raw, rawMeta, ...(args.includes("--no-cache") ? [] : ["--cache", join(ROOT, ".cache", "scene-bake", scene)])],
     { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
   );
   if (run.error) fail(`could not run ${blender}: ${run.error.message} (install Blender 5.2, or name it with --blender or BLENDER_PATH)`);
@@ -100,6 +104,14 @@ try {
     if (opt.status !== 0) {
       console.error(opt.stderr);
       fail("the optimiser failed; `--raw` ships Blender's file as is, to tell whose problem it is");
+    }
+    // Every map Blender baked must be encoded as one: the optimiser finds them
+    // by name, and a baked map it misses goes out as lossy WebP at 1k without
+    // a word (the four dotted Terraces did until 2026-10-04).
+    const baked = /baked (\d+) colour, \d+ detail and (\d+) normal maps/.exec(run.stdout);
+    const encoded = (kind: string) => Number(new RegExp(`^\\[assets\\] (\\d+) texture\\(s\\): baked ${kind}`, "m").exec(opt.stdout)?.[1] ?? 0);
+    if (baked && (encoded("colour") !== Number(baked[1]) || encoded("normal") !== Number(baked[2]))) {
+      fail(`Blender baked ${baked[1]} colour and ${baked[2]} normal maps but the optimiser encoded ${encoded("colour")} and ${encoded("normal")} as baked maps; the rest shipped at 1k (an image name the glTF exporter cut short?)`);
     }
   }
 

@@ -78,6 +78,7 @@ The guide file is overwritten on every run and never exports.
 `just scene <level>` (`scripts/scene-export.ts`, `tools/blender/scene_export.py`) runs headless Blender over the scene: every object with geometry goes out with its world transform and modifiers applied, except one **linked** from another file (the guide), one in a collection named `guide*` or **excluded from the view layer**, and one **hidden in render**, itself or through a collection it is in (the camera icon - render visibility is what ships, viewport visibility is the artist's).
 Lights, cameras, empties and armatures never go out.
 Before anything is selected, every grown ivy and moss object is grown again from its paint (see [blender-ivy](blender-ivy.md) and [blender-moss](blender-moss.md)), so what ships always matches the rock it grows on as the file now stands.
+One whose host is gone is a warning and stays out, with everything parented to it: render visibility is not inherited, and until 2026-10-04 the river shipped the shadow decals of five deleted boulders' ivy as ghostly shading at the level's origin.
 A formation whose outline was edited and not rebuilt, or whose growth predates its rock, is a warning ([blender-formations](blender-formations.md)).
 The result goes through the pinned prop pipeline with node names kept (`assets:optimize --keep-nodes`, which also turns instancing off, since an instanced node loses its name) and the parenting kept (`--keep-hierarchy`: the optimiser's flatten step would hoist a child to the root at its world pose, which keeps the pose and loses the ride on its parent's body - it was on until 2026-09-28, so the rule above held only for unparented objects) into
 
@@ -89,6 +90,17 @@ public/scenes/<scene>/meta.json    what was exported, and how it binds
 and the recipe prints the binding: which objects landed on bodies, which are scenery, which body names have no object behind them, what Blender skipped and why, and every exporter warning.
 The dev server serves `/scenes/` itself, uncached (`src/server/scenes.ts`), because vite's public handler knows only the files its watcher saw at startup and the directory is off the watcher; a refresh shows the new export.
 The Level panel shows the export's summary and the body panel offers the exported object names in the `name` field and says whether the name is dressed.
+
+## The bake cache
+
+Baking is most of an export, and an edit usually touches one or two objects, so every baked object's final maps (its `baked colour` and `baked normal` images, as the glTF gets them) are kept in `rope/.cache/scene-bake/<scene>/` (gitignored) and an object whose key has not changed loads them instead of baking (`tools/blender/bake_cache.py`, since 2026-10-04).
+A cached slate rock skips its detail high poly too.
+The key is everything that decides the pixels: the bake code (`scene_export.py`, `bake_cache.py` and `formations/*.py`) and Blender's version; the scene's Cycles and bake settings; the object's prepared mesh as the bake sees it (modifiers applied, creases rebuilt and still straight, every attribute, the bake unwrap), its world transform, detail seed and map size; every node tree of its materials, groups and images included; and every object within reach of its Ambient Occlusion nodes, since the slate's 0.5 m occlusion darkens where a neighbour comes close.
+When in doubt the key takes more in: a missed input ships a stale map without a word, an extra one costs a bake.
+Any edit to the bake code therefore re-bakes everything.
+Entries the latest export did not use are removed, so the cache holds one export per scene; the log line says how many objects came from it.
+`just scene <level> --no-cache` bakes every object afresh and leaves the cache alone.
+After every export `scene-export.ts` checks that the optimiser encoded every baked map as one (`baked colour` and `baked normal`, both AVIF): it finds them by image name, and a name the glTF exporter cut short at a dot (`Terrace.003 baked colour` went out as `Terrace`) shipped the four dotted Terraces as lossy WebP at 1k until 2026-10-04.
 
 ## Frames and units
 
@@ -118,6 +130,7 @@ Another file becomes a source by naming it once: `bun run assets:publish-sources
   A **Base Color** or **Normal** wired to anything else (noise, ramps, mixes, a Bump) is **baked** (`bake_procedural_textures`): on its own copy of the mesh, modifiers applied, the export unwraps the object afresh (Smart UV Project into a UV map `SceneBake`, islands 2 px apart), runs Cycles' diffuse colour pass into an image of the object's own and a tangent-space normal bake into a second, copies the object's materials and wires the images in, so they ship as `baseColorTexture` and `normalTexture`.
   The unwrap runs on a welded copy, the UVs carried back corner by corner: the river's boulders came in through glTF split at every face, and unwrapped as they are they made one speck of an island per face, 21 % of the image covered instead of 54 %.
   Baked maps are 512 texels a metre up to 4096 since 2026-10-03 (were 256 up to 2048; `TEXELS_PER_METRE`, `BAKE_SIZE_MAX`, and `BAKED_MAX` in scripts/encode-textures.mjs).
+  The baked normal map is half the colour map's side and lossy AVIF since 2026-10-04 (`NORMAL_SCALE`, scripts/encode-textures.mjs): lossless at the colour's size the five Terraces' normals were 16 of the river's 20.7 MB against the store's 8 MB a file. Tris compared all four on Terrace.003 in the game frame (full or half, lossless or lossy: "barely any difference"); the encoding moved the render by at most 3 levels of 255, the halving by up to 44 along chip edges at twice the game's zoom, and the map went from 4,242 KB to 503 KB. The unwrap keeps its islands `PACK_GAP_PX` apart at the normal map's size, and the detail high poly still bakes at the colour's.
   A face with no area (the planar dissolve leaves collinear slivers) gets one UV for all its corners: after the weld its corners could land on different islands, a streak across the atlas, which drew nothing while the face was flat but became a pale stair-stepped band once the curved creases bent it open after the bake (2026-10-03; `DEGENERATE_AREA`).
   Every texel no island covers is filled (pull-push from the baked texels), since a mip level that averages in background draws a dark line along every seam.
   The image is sized by the surface, 512 texels per metre rounded up to a power of two, between 64 and 4096: the game frame shows 200 pixels a metre at the gameplay plane (`BALL_ZOOM` at 1080p), and the painted slate's pale edge line is a texel or two wide, so a map under that density draws it magnified and blurred (the Terrace's 34 m² at a 1024 cap got 136 texels a metre). A 1000 m² wall still gets only about 100.
@@ -135,7 +148,7 @@ Another file becomes a source by naming it once: `bun run assets:publish-sources
 - **Volumetrics, fog, compositing.** The level's environment block is where the air is authored.
 - **A moving surface.** Water and conveyor bands are the game's to draw (above).
 - **Size.** The per-file bar is 8 MB and textures are capped at 1k by the optimiser; the recipe warns past the bar.
-  The baked maps have their own encoding (`--baked-maps`, which `just scene` always passes; every other map stays lossy WebP at 1k): a baked colour map ships as **AVIF with full-resolution colour (4:4:4) at quality 90**, up to 2k, and a baked normal map as lossless WebP.
+  The baked maps have their own encoding (`--baked-maps`, which `just scene` always passes; every other map stays lossy WebP at 1k): a baked colour map ships as **AVIF with full-resolution colour (4:4:4) at quality 90**, up to 4k, and since 2026-10-04 a baked normal map the same way (it was lossless WebP; see below).
   Lossy WebP turned the Terrace's dark, low-contrast 1k bake into 15 KB of blocks and purple-green blotches (it codes colour at half resolution, so even quality 100 kept the blotches); lossless WebP is exact but 1.17 MB at 2k, which would have put the river near 13 MB; AVIF 4:4:4 q90 is 114 KB, 0.77 levels rms off, and keeps the edge lines.
   three's GLTFLoader reads `EXT_texture_avif` itself.
 

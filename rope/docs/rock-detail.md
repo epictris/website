@@ -58,7 +58,7 @@ Chips chained end to end along a crease (cycle 5), long shallow "bends" that kin
 ### The bake
 
 `bake_detail_normals` builds the high poly per rock (the Terrace: 125 of 136 planes, 2279 points, 303 chips, 11.8 k faces, under a second), stands it at the rock's world transform, and bakes `NORMAL` selected-to-active onto the rock's `SceneBake` unwrap from `CAGE` 5 mm outside the rock inward to `RAY_DISTANCE` 8 cm, then removes it.
-The image is the export's usual size (256 texels per metre up to 2048, so about 258 on the Terrace) and goes through the same background fill and lossless WebP as any baked normal map.
+The image is the export's usual size (256 texels per metre up to 2048, so about 258 on the Terrace) and goes through the same background fill as any baked map; it is a step, never shipped, so its encoding does not matter (the shipped normal map, half the colour's size and AVIF since 2026-10-04, is in [blender-scenes](blender-scenes.md)).
 A rock that came in through glTF is split at every face, so the bake source is welded first; the shipped mesh is untouched.
 
 ### Occlusion gradient

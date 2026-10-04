@@ -30,8 +30,8 @@
     ]
   },
   "river": {
-    "sha256": "d0093188e96ba71cb15b2ba4902ead4ece0cff2381b951adedf5cd16a43399b4",
-    "bytes": 8162008,
+    "sha256": "bc3740fd085076f1063fc3f8b32946518e07790440112141f90b4187ced5dad5",
+    "bytes": 6585608,
     "credits": [
       {
         "name": "finish_line",
