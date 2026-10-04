@@ -9,6 +9,7 @@ import { BallInputSource } from "./input/ballInput";
 import { BUTTON_BITS, InputTrace } from "./input/inputTrace";
 import { drawProbeOutline, render, renderBall } from "./render/renderer";
 import { Scene3D } from "./render3d/scene";
+import { DEPTH_OF_FIELD_LEVELS, type DepthOfFieldLevel } from "./render3d/depthOfField";
 import { BALL_ZOOM, GRAPPLE_ZOOM, type Camera } from "./render/camera";
 import { clientToView, fitCanvas, VIEW_HEIGHT, VIEW_WIDTH, viewTransform } from "./render/viewport";
 import { CameraController } from "./render/cameraController";
@@ -154,6 +155,16 @@ const scene3d = ((): Scene3D | null => {
   }
 })();
 if (!scene3d) sceneCanvas.style.display = "none";
+
+// `?dof=low|medium|high` blurs the scenery behind the gameplay plane (see
+// render3d/depthOfField.ts). A URL switch while its cost is being measured.
+const dofParam = params.get("dof");
+if (scene3d && DEPTH_OF_FIELD_LEVELS.includes(dofParam as DepthOfFieldLevel)) {
+  scene3d.setDepthOfField(dofParam as DepthOfFieldLevel);
+}
+// `?probe=0` turns the ball's reflection probe off, for measuring its cost in a
+// live frame (see render3d/reflectionProbe.ts).
+if (scene3d && params.get("probe") === "0") scene3d.setReflectionProbe(false);
 
 // `?dpr=N` draws the frame at a device pixel ratio this display does not have,
 // so the fill cost a 4K or HiDPI player pays can be read on a 1080p desk (see

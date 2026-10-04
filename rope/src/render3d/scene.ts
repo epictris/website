@@ -57,6 +57,7 @@ import {
   type ViewProjection,
 } from "./space";
 import { ReflectionProbe } from "./reflectionProbe";
+import { DepthOfField, type DepthOfFieldLevel } from "./depthOfField";
 import { updateWater, waterTextures } from "./water";
 import { beltRenderTime } from "../render/beltTread";
 
@@ -231,6 +232,9 @@ export class Scene3D {
   // What the ball reflects: the level around it, from its centre, every frame
   // (see reflectionProbe.ts).
   private readonly reflectionProbe: ReflectionProbe;
+  // The background blur behind the gameplay plane (see depthOfField.ts).
+  private readonly depthOfField: DepthOfField;
+  private reflectionOn = true;
 
   constructor(canvas: HTMLCanvasElement, opts: Scene3DOptions = {}) {
     this.diagnostics = opts.diagnostics === true;
@@ -263,6 +267,19 @@ export class Scene3D {
     // HUD says so rather than plotting a zero.
     this.gpuTimer = GpuTimer.create(this.renderer.getContext());
     this.reflectionProbe = new ReflectionProbe(this.renderer);
+    this.depthOfField = new DepthOfField(this.renderer);
+  }
+
+  // How much the scenery behind the gameplay plane is blurred, from the next
+  // frame on. The plane itself stays in focus at every level.
+  setDepthOfField(level: DepthOfFieldLevel): void {
+    this.depthOfField.setLevel(level);
+  }
+
+  // Off, the ball reflects the scene's environment as it did before the probe:
+  // a switch for measuring what the probe costs in a live frame (`?probe=0`).
+  setReflectionProbe(on: boolean): void {
+    this.reflectionOn = on;
   }
 
   // GPU milliseconds for the most recently retired frame, or null while the
@@ -1074,7 +1091,10 @@ export class Scene3D {
     // perf HUD should say what the frame costs, not what the main view does.
     this.gpuTimer?.begin();
     this.captureReflection(level);
-    this.renderer.render(this.scene, this.camera);
+    // Depth of field draws the whole canvas, so never into the editor's
+    // letterboxed sub-rect (which never asks for it anyway).
+    const blurred = this.depthOfField.active && !rect && this.depthOfField.render(this.scene, this.camera);
+    if (!blurred) this.renderer.render(this.scene, this.camera);
     this.gpuTimer?.end();
   }
 
@@ -1083,7 +1103,7 @@ export class Scene3D {
   private captureReflection(level: Scene3DLevel): void {
     const visual = this.ballVisual;
     const ball = level.ball;
-    if (!visual || !ball) return;
+    if (!visual || !ball || !this.reflectionOn) return;
     const ballShown = visual.root.visible;
     const editorShown = this.editorLayer.visible;
     visual.root.visible = false;
@@ -1146,6 +1166,7 @@ export class Scene3D {
     this.lights.dispose();
     this.env.dispose();
     this.reflectionProbe.dispose();
+    this.depthOfField.dispose();
     this.renderer.dispose();
   }
 }

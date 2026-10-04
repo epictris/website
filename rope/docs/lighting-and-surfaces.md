@@ -164,11 +164,18 @@ A private sky for it (the level's sky and ground lifted toward white, with a sun
 Do not build it again; what lights the player in a dark level is the world itself, the lichen and the mushrooms of **Waking lights** below.
 
 **The ball reflects the level around it** (2026-10-01, `render3d/reflectionProbe.ts`).
-A cube camera at the ball's centre draws the scene into six 128 px faces every frame, `PMREMGenerator.fromCubemap` filters them for roughness, and the result is the ball model's own `envMap` (`BallVisual.setReflection`).
+A cube camera at the ball's centre draws the scene into six 128 px faces, the GPU builds the cube's mipmaps, and the ball model's materials read the mip their roughness asks for (`wearProbe` patches three's indirect-light chunk, `BallVisual.setReflection` hands the cube over; until the first capture they fall back to the scene's environment).
+A roughness r reads mip log2(128 · 4r² / π), the face resolution at which a texel is as wide as a GGX lobe (about 2r² radians); the worn iron (~0.3) reads about 3.9.
+Since 2026-10-04 it redraws **one face a frame**, in turn, and sees only **5 m** (`PROBE_FAR`); all six are drawn on the first capture and after a jump of more than a metre (`RECAPTURE_JUMP`: a respawn, a new level).
+Past 5 m the ball reflects the environment, so lit rock further off no longer shows in it: against the 200 m probe the start view's ball lost a warm reflection low on its left side and reads darker and bluer.
+Measured on an RTX 4070 SUPER at 4K on the river's start view (interleaved A/B, `cli shot --gl angle --query scale=2&bench=N`): the six-face, 200 m probe cost 2.0-2.8 ms of the 4.8-5.7 ms frame. One face and 5 m brought the frame to about 3.8 ms, and of the ~1 ms the probe still cost nearly all was `PMREMGenerator.fromCubemap` every frame, a fixed train of small passes that took the same time at 128, 64 and 32 px faces.
+The mipmaps replaced it the same day: the frame is 2.95-3.13 ms, the same as with no probe at all (2.8-3.0).
+What the box mips give up is the GGX lobe's shape, a rough reflection being a box blur of the right width; on the start view the ball's mean colour moved by 0.1 of a level (27.6, 33.2, 37.1 against 27.7, 33.2, 37.1) and its contrast by 0.2.
+Tris's machine holds 144 Hz at 4K up to between 5.7 and 6.7 ms of GPU a frame (a bare test page with a tunable load), and before this the game sat at 6.1 ms (worst 6.64) with Medium depth of field.
 The material is untouched, so how mirror-like the ball is stays its roughness and metalness; only what it mirrors changed, from the one sky everywhere to the rock, water and props actually around it.
 Where no geometry is in view the probe draws `scene.environment` as its background, so open sky reflects exactly what it did before.
 The probe leaves out the avatar (the ball, its chain and the manacle; a cube map is a picture at infinity and a link centimetres away would smear across the sphere) and the editor's guides, skips the shadow pass (last frame's maps are reused), and sizes point sprites for its faces (`POINT_VIEW_HALF_HEIGHT` in `space.ts`, the one uniform every metre-sized sprite reads).
-In the river it is 116 draw calls and ~0.8 M triangles against the main view's 59 and ~0.5 M, inside the GPU timer the perf HUD reads.
+With all six faces at 200 m it was 116 draw calls and ~0.8 M triangles in the river against the main view's 59 and ~0.5 M, inside the GPU timer the perf HUD reads.
 The chain and manacle still reflect the sky: they wear the shared `painted steel`, and the probe is centred on the ball.
 
 ## Beams

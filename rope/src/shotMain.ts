@@ -35,6 +35,7 @@ import { levelFromRecording } from "./sim/replay";
 import { recordingDeserializer, type Recording } from "./sim/trace";
 import { BALL_ZOOM, GRAPPLE_ZOOM, type Camera } from "./render/camera";
 import { fitCanvas, LETTERBOX_COLOR, VIEW_HEIGHT, VIEW_WIDTH } from "./render/viewport";
+import { DEPTH_OF_FIELD_LEVELS, type DepthOfFieldLevel } from "./render3d/depthOfField";
 import { Vec2 } from "./engine/vec2";
 
 interface ShotLogEntry {
@@ -65,7 +66,13 @@ const use3d = q.get("render") === "3d";
 // The same fixed 16:9 frame the game draws into, so a grab is what the player is
 // shown — a window-shaped canvas would frame the scene differently from the game
 // and quietly change what the picture is evidence of.
-const view = use3d ? fitCanvas([sceneCanvas, canvas]) : fitCanvas(canvas);
+//
+// `scale=N` draws it at N times the frame's pixels (2 is 4K), the way a player
+// with the resolution setting raised does: for a fill-cost reading (`bench`).
+const pixelScale = Math.min(Math.max(Number(q.get("scale") ?? 1) || 1, 0.25), 4);
+const view = use3d
+  ? fitCanvas([sceneCanvas, canvas], pixelScale, VIEW_WIDTH * pixelScale)
+  : fitCanvas(canvas, pixelScale, VIEW_WIDTH * pixelScale);
 
 const rec = (await (await fetch(q.get("bundle")!)).json()) as Recording;
 const level = levelFromRecording(rec);
@@ -172,6 +179,86 @@ if (scene3d) {
     if (probe === "all") {
       console.log(`probe ${JSON.stringify({ frame: "all", ...scene3d.programProbe() })}`);
     }
+  }
+  // `dof=low|medium|high` draws through the depth of field (see
+  // render3d/depthOfField.ts); absent is off, as the game's default is.
+  const dof = q.get("dof");
+  if (dof !== null && !DEPTH_OF_FIELD_LEVELS.includes(dof as DepthOfFieldLevel)) {
+    console.error(`dof=${dof} is not one of ${DEPTH_OF_FIELD_LEVELS.join("|")}; off`);
+  }
+  // `bench=N` draws this frame N times at every depth-of-field setting and logs
+  // what each cost the GPU, before the grab below. Only meaningful on a real
+  // GPU (`cli shot --gl angle`); the log names the one it ran on.
+  const bench = Number(q.get("bench") ?? 0);
+  if (bench > 0) await benchDepthOfField(scene3d, bench);
+  scene3d.setDepthOfField(DEPTH_OF_FIELD_LEVELS.includes(dof as DepthOfFieldLevel) ? (dof as DepthOfFieldLevel) : "off");
+}
+
+async function benchDepthOfField(scene: Scene3D, frames: number): Promise<void> {
+  const gl = sceneCanvas.getContext("webgl2");
+  if (!gl) return;
+  const info = gl.getExtension("WEBGL_debug_renderer_info");
+  const gpu = info ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
+  console.log(`bench gpu ${String(gpu)}, ${sceneCanvas.width}x${sceneCanvas.height}`);
+  const pixel = new Uint8Array(4);
+  const median = (xs: number[]): number => {
+    const s = [...xs].sort((a, b) => a - b);
+    return s.length ? s[Math.floor(s.length / 2)]! : NaN;
+  };
+  // One block of frames at a setting: the median GPU time of its frames.
+  // The CPU's own time inside `render` (issuing the frame, not waiting for
+  // it), per block, beside the GPU timer's: the timer counts the GPU idling
+  // while the CPU is still issuing, so a frame the CPU cannot issue fast
+  // enough reads as GPU time.
+  let cpuMs: number[] = [];
+  const block = async (setting: DepthOfFieldLevel, count: number): Promise<number> => {
+    scene.setDepthOfField(setting);
+    const gpuMs: number[] = [];
+    for (let i = 0; i < count; i++) {
+      const t0 = performance.now();
+      scene.render(level, camera, 1);
+      if (i >= 3) cpuMs.push(performance.now() - t0);
+      // A one-pixel readback waits for the GPU to finish the frame, and the
+      // yield lets its timer query retire.
+      gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      // The reading lags a frame, so the first ones still describe the last
+      // setting (and its first frame allocates).
+      const g = scene.gpuFrameMs();
+      if (i >= 3 && g !== null) gpuMs.push(g);
+    }
+    return median(gpuMs);
+  };
+  // Warm every setting once: the first frames compile and allocate.
+  for (const setting of DEPTH_OF_FIELD_LEVELS) await block(setting, 10);
+  // Each setting against off in alternating blocks, so the GPU's clocks and
+  // whatever else drifts over a run fall on both sides alike; the answer is
+  // the median of the paired differences, not a difference of two medians.
+  const rounds = Math.max(4, Math.round(frames / 32));
+  // `benchonly=medium` pairs just that setting with off, for more rounds in
+  // the same time.
+  const only = q.get("benchonly");
+  for (const setting of DEPTH_OF_FIELD_LEVELS.filter((s) => s !== "off" && (!only || s === only))) {
+    const offs: number[] = [];
+    const ons: number[] = [];
+    const deltas: number[] = [];
+    const offCpu: number[] = [];
+    const onCpu: number[] = [];
+    for (let i = 0; i < rounds; i++) {
+      cpuMs = [];
+      const off = await block("off", 16);
+      offCpu.push(median(cpuMs));
+      cpuMs = [];
+      const on = await block(setting, 16);
+      onCpu.push(median(cpuMs));
+      offs.push(off);
+      ons.push(on);
+      deltas.push(on - off);
+    }
+    const ms = (xs: number[]): number => Number(median(xs).toFixed(3));
+    console.log(
+      `bench ${JSON.stringify({ dof: setting, offMs: ms(offs), onMs: ms(ons), addedMs: ms(deltas), offCpuMs: ms(offCpu), onCpuMs: ms(onCpu), rounds })}`,
+    );
   }
 }
 

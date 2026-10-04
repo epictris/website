@@ -70,6 +70,7 @@ The origin only orients and layers the leaves.
 ## What is grown
 
 Since 2026-09-30 the ivy is an **ivy carpet of flat leaves grown out from an origin**, after the painted-foliage look of Genshin, Breath of the Wild and The Witness: every leaf is one flat colour, shaded by a smooth normal borrowed from the rock, so the carpet reads as one soft mass of distinct colour blocks; vines of the same leaves hang wherever they are placed.
+Since 2026-10-04 the leaves are the owner's painted stamps and carry their brushwork over that colour ([Painted leaf stamps](#painted-leaf-stamps)).
 The owner's brief: "it's more of an ivy carpet I'm going for ... the leaves generate in a realistic way - starting from a point on the carpet and expanding outwards, with leaves further from that point layered underneath the tips of leaves closer to the point".
 It replaced the paper-cutout blob carpet of 2026-09-29 (angular blobs in eight hull-parallel layers on a quarter-round shoulder), which in turn replaced the cushion-and-curtains grower of 2026-09-28 that the owner judged not to work ("the only nice part is the ability to paint").
 The research behind the cutout look, with the rejected alternatives (shell texturing, a solid cushion, leaf-clump cards, camera-facing cards), is the Moss Collar Study report and `tools/blender/moss-experiments/`; the ivy keeps its hull normal, underlay, facing rule and colour.
@@ -98,9 +99,30 @@ The rock still receives with the sun's own biases, so the collar's shade on the 
 
 **Black slivers in Blender's render are Blender's, not the mesh's.** Where several cards sit at the same depth (a flat host with `Tilt` 0 is the worst case) Eevee draws a black hole instead of one of them, and Cycles goes black where a camera ray crosses more than its transparent-bounce limit of card gutters (8; 128 renders clean). The game's renderer does neither: the same export drawn by three.js shows no black. The pitch keeps the default carpet clear of the Eevee case on a rock; the tell-tale is that the marks move when `Tilt` changes.
 
+## Detail: leaves or clumps
+
+Since 2026-10-04 every ivy has a **Detail** (top of the Carpet panel): `Leaves`, everything above, or `Clumps`, for ivy on the backdrop.
+The owner asked for it before painting ivy along the edges of the backdrop rocks: "my concern is that the number of cards drawn will be too much. I want an option for drawing less detailed but more performant cards for background ivy effects."
+The reference was a far ledge with a soft green mass on its top and short strands hanging over its lip.
+
+The concern was right.
+On `backdrop.right-ledge` (6.8 m), the silhouette's top edge painted as the game camera sees it grew, in `Leaves`, 11,906 leaf cards and 59,794 triangles in 3.7 s, plus a 70,432-triangle shadow decal.
+In `Clumps` the same paint grows 448 clumps, 7,319 triangles (about 6,400 of them underlay), a 11,985-triangle decal, in 0.45 s.
+At the backdrop's distance (depth scale 2-4, so 120-150 px a metre on a 1080-line screen) the leaf carpet reads as a flat green band, and the clumps as the lumpy mass with a scalloped, hanging edge of the reference.
+
+What `Clumps` changes, all in `build._clumps`:
+
+- **A card is a clump.** Each card carries 40-50 ivy leaves fanned out of a base low in the card (`build.CLUMP_BASE`), and is laid like a leaf: base at the candidate, fanning down the growth from the origin, pitched by `Tilt`, rolled onto the rock in the `Shoulder`, turned to face the camera by `Facing`. Cards are `Clump Min` to `Clump Max` (0.3-0.55 m), one sheet, `Fill` (1.8) times the paint's area; the sheet rises a random share of each clump's size (`CLUMP_LIFT`) so clumps side by side never share a plane at the backdrop's depth precision. Half are mirrored, so the atlas's eight read as sixteen.
+- **Leaves only; nothing hangs unless placed.** The first version also scattered a fringe of hanging strands along the paint's lower edge; the owner rejected it the same day: "the clumps shouldn't automatically generate hanging vines. Just leaves". A vine placed by hand is still honoured, as one strand card of the arrow's length (`build._strand`), bent at four points (`STRAND_SEGMENTS`) by the vines' ray cast to stay in front of the rock, because the clump atlas has no single leaves to dress a stem with.
+- **Coarser refinement.** The rock is refined to at least a quarter of a clump (`CLUMP_RES`) instead of `Resolution`, because the underlay and the decal are cut from that mesh and at 4 cm they would cost more than the clumps save. The candidates scale with the clump too (`CLUMP_CANDIDATES` per clump's area).
+- **Its own atlas and material.** `IvyClumps` on `ivy-clump-atlas-v<CLUMP_ATLAS_VERSION>.png` (`mesh_io.clump_atlas`, drawn from the painted stamps and credited like the leaf atlas): eight clumps, seven strands and the solid round the underlay samples, each inside a gutter of `CLUMP_GUTTER` grid units. A mesh still has one slot, so the exporter's colour bug (below) cannot reach it. The clump's leaves are not all white: each is up to `CLUMP_VALUE` (18 %) darker than the next, because one flat card cannot shade its own leaves with the real shadows the leaf sheets cast, and with no variation a clump read as a blob with a scalloped edge. That is darkness baked into the texture, which the leaf carpet refuses; set `CLUMP_VALUE` to 0 if it is unwanted here too.
+
+`Leaves` builds bit-identical to the code before the switch (checked on river's three Terrace carpets).
+Everything else - paint, origin, outline, underlay, colour, the decal and the game's leaf shadows - is the same for both.
+
 ## Material and texture
 
-One mesh, **one material**, `Ivy`: the atlas's colour times the vertex colour, alpha cut at 0.35, back faces culled.
+One mesh, **one material**, `Ivy` (or `IvyClumps`, see above): the atlas's colour times the vertex colour, alpha cut at 0.35, back faces culled.
 The shadow decal is a second mesh with a second material, `IvyShadow`: white times the vertex colour, with the vertex colour's **alpha** as the opacity and no texture, blended (`surface_render_method` BLENDED, back faces culled, no transparent back). The exporter writes it as `alphaMode BLEND` with a four-component `COLOR_0`, the optimiser keeps the alpha through its quantisation (checked: 0 to 0.6 before and after), and three's GLTFLoader draws it transparent without writing depth, depth-tested under the leaves. Its material links the vertex colour's alpha, which is what makes the exporter write four components; the ivy mesh's own `COLOR_0` stays three.
 The underlay and the stems wear it too, sampling the centre of a round blob cell (alpha 1 there, and with no UV derivative the sampler reads mip 0); the stems are wound to face the camera.
 Each node is one the exporter carries to glTF - `baseColorTexture x COLOR_0`, `alphaMode MASK` with `alphaCutoff`, no `doubleSided` - so `just scene` prints no warning, and three's GLTFLoader builds a `MeshStandardMaterial` with `alphaTest 0.35`, `FrontSide` and `vertexColors`.
@@ -111,14 +133,32 @@ Blender 5.2's glTF exporter, given a second slot that reads the same colour attr
 The `.blend` held the right greens; the `.glb` did not.
 With one slot there is nothing to mismatch, and the ivy is one draw call; the old materials are removed from a file once nothing uses them.
 
-The atlas is **generated**, not downloaded: `mesh_io.atlas()` draws a 4 x 4 sheet of polygon silhouettes - fifteen ivy leaves, three- and five-lobed, each drawn a little differently in how far its lobes reach, how deep its sinuses cut, how blunt its tip is and which way it leans, base at the bottom of the card (`build.LEAF_BASE`) and tip at the top (`build.LEAF_TIP`), and one faceted round for the underlay and the stems - softens them by blurring the alpha and re-thresholding, and writes it once to `assets-src/scenes/textures/ivy-cutout-atlas-v<ATLAS_VERSION>.png`, packed into the `.blend`.
-The leaves carry no veins: v4 drew them and the owner asked for the lines to go the same day.
-It is white everywhere with the alpha as the shape: a black background under the alpha bleeds a dark fringe into every edge through filtering.
+### Painted leaf stamps
+
+Since 2026-10-04 the leaves are **the owner's painted leaf stamps**: "use the stamps in leavves.png for my ivy generator tool instead of the current stamp cards", then "try with ~/Downloads/leaves_more.png instead", then "try with ~/Downloads/fluffy_leaves.png instead".
+The sheet is a 2048 px transparent PNG with 29 painted leaves on it in one flat green, painted with a dry brush whose alpha is grainy, each a separate blob (hearts, lobed leaves, rounder leaves), kept as the scene source `assets-src/scenes/textures/ivy-leaf-stamps.png`.
+`mesh_io.STAMPS` gives each leaf's box in the sheet's pixels and the way it points, base to tip, in degrees clockwise from straight up; base and tip are the leaf's own extremes along that line, found from its alpha.
+A sheet repainted with leaves elsewhere needs the table edited to match. Only the stamp's own blob is kept (`_blob`, grown over a coarse grid so the holed edge stays one piece), so a speck of paint inside a box is dropped. The stamp's alpha is then blurred by `STAMP_SOFTEN` (2 sheet pixels) before the cut: the dry brush's grain otherwise cuts into pinholes, and a stroke run thin into a gap through the leaf; blurred that little the outline stays fuzzy, about a pixel at atlas size. One heart (166, 634) still has a thin band across it and is kept out of the leaf atlas, where it would show whole.
+`mesh_io._cutouts` reads the sheet once a session and turns each leaf base down, tip up in a 256 px square (base 90 %, tip 10 % from the top, room either side for a leaf wider than long), sampling it premultiplied so the transparent black round a stamp never darkens its edge; a leaf wider than the square has room for is drawn smaller from the same base rather than cut off.
+
+**What a stamp keeps.** Its brushwork, not its colour: each channel is scaled so the leaf averages `LEAF_MEAN` (0.88, linear) through a curve that keeps everything up to the average proportional and rolls the brightest strokes off below white, so the vertex colour (the tones, crown and variation) still decides the green.
+The scale is solved through the curve per channel, because the curve pulls a channel with brighter strokes further down and a plain division left a cast.
+At 0.88 a leaf is about an eighth darker than the white silhouettes were at the same tones.
+
+`mesh_io` draws both atlases from the cutouts (`_put`: an affine map from base and tip in the atlas to the cutout's, bilinear from the cutout's mip level nearest the shrink, so a 50 px clump leaf does not alias), then bleeds the colour out under the alpha (`_bleed`) so that filtering at an edge blends leaf with leaf: a white or black background under the alpha bleeds a fringe into every edge.
+The leaf atlas holds the first fifteen stamps of `STAMPS`, the hearts and lobed leaves; a stamp wider than its cell allows is drawn shorter from the same base.
+The clumps and strands draw from all 29, half of them mirrored.
+It writes the leaf atlas once to `assets-src/scenes/textures/ivy-cutout-atlas-v<ATLAS_VERSION>.png`, packed into the `.blend`, and the clump atlas the same way.
+The stamps are rounder than the ivy silhouettes, so they cover more of their card: 0.37 of the UV quad on the v6 atlas, 0.43 on v7 (`build.LEAF_COVER`, which `Fill` divides by; it was a hard-coded 0.6 of the leaf's length squared).
+So a carpet covers the same share of its paint with fewer cards: `Terrace.002.ivy` in `river.blend` went from 8,255 to 8,065 faces (947 leaves; the underlay is the rest).
+Clumps cover 0.50 of their card on clump atlas v3 (`CLUMP_COVER`).
+
 **Every cell has a transparent gutter.** A card's UV quad covers only the inner 76 % of its cell (`build.ATLAS_INSET`, 12 % a side) and the shape is drawn inside that, so on both sides of every cell border the alpha is 0 for 30 texels: bilinear filtering and the first four mip levels never blend a neighbour into a card's edge.
 Cells packed edge to edge (v2, one evening) drew a faint dotted outline of every card square, in Blender and in the game, because the solid alpha-1 cells sat right under the leaf row and each blob touched its cell's border.
-It is credited as generated in `tools/blender/image_credits.json`.
+The atlases are drawn from the stamp sheet and are left out of `tools/blender/image_credits.json` until the sheet's source is confirmed, so every export warns about them.
 The file is named by version, so bumping `ATLAS_VERSION` in `mesh_io.py` redraws it and a file that packed the old sheet drops it; `MATERIAL_VERSION` rebuilds the material in every file.
-A hand-painted atlas can replace the generated one under the current name.
+`mesh_io.material` also hands an up-to-date material the current atlas: until 2026-10-04 only a material rebuilt by `MATERIAL_VERSION` picked up a new sheet, so an atlas bump never reached a file that already had `Ivy`.
+A repainted stamp sheet takes a bump of both atlas versions (and `STAMPS` edited if a leaf moved).
 
 ## Export
 
@@ -130,6 +170,13 @@ The ivy node stays a child of its rock through the optimiser (`--keep-hierarchy`
 **Bake to Plain Mesh** copies an ivy into an ordinary mesh to hand-edit, and hides the ivy object from the render so only the copy exports; the copy is never regrown.
 
 ## Verified, and not
+
+2026-10-04, painted leaf stamps: both atlases drawn headless in Blender 5.2 from the 29-stamp sheet (1.8 s and 0.6 s, the stamps read and turned once) and checked as images, each stamp tip up with its notch at the base; `river.blend` opened headless (never saved), every ivy regrown in 4.4 s, and `Terrace.002.ivy` and `backdrop.arch.ivy` rendered in Eevee before and after.
+The stamps' directions in `STAMPS` were read off the sheet by eye; on the round ones the base is the notch.
+Not yet: the owner's look at it, a `just scene` export and a look in the game, a play, the sheet's credit, and the sheet published (`bun run assets:publish-sources scenes/textures/ivy-leaf-stamps.png`).
+
+2026-10-04, detail `Clumps`: headless on a copy of `river.blend` in memory (never saved), the top edge of `backdrop.right-ledge` painted by script from the game camera's side (90 stamps), built in both details, rendered in Eevee close up and from the stored `backdrop_camera`, and the clump ivy exported to glTF: `IvyClumps` arrives as `alphaMode MASK`, cutoff 0.35, the clump atlas as `baseColorTexture`, `COLOR_0` and normals - the shape `Ivy` has. The exporter's "more than one shader node tex image" warning is printed for `Ivy` too.
+Not yet: the brush or the panel driven in a real Blender session, a `just scene` export and a look in the game, a play, a real backdrop painted by the owner; the clump and atlas numbers are a first pass. A placed vine in `Clumps` was built only by script (two anchors on a bare rock: two strands, 16 triangles, UVs inside the strand cells), never rendered.
 
 2026-09-30, cast shadows: the study harness (`moss-experiments/harness`) now lights the rock as the game does (a 2048 map over a 30 m box, near 0.5, far 75, the sun's biases and radius, `ivyShadow.ts` applied to the ivy by its Blender name) and takes `?ground=1` for a floor, `?cb=`, `?nb=`, `?rad=`, `?sd=`, `?ms=` for the sun and `?cs=&ns=&rs=` for the ivy's scales. With those the leaves shade the leaves below them, the collar shades the rock and the vines throw leaf shadows; a grid over the scales chose the defaults above. The same in Eevee, where the shadows were always right. `tsc --noEmit` passes. Not yet: a play, or the sun of a real level (its softness and angle are the level's).
 
@@ -152,7 +199,6 @@ Not yet: painted on a river rock through the brush, exported by `just scene`, or
 
 ## Not yet
 
-- The atlas is generated; the reference's brushwork wants a hand-painted one.
 - The facing rule assumes the game's side-on camera. A level that looks at a rock far off-axis would see the sides thin out.
 - The optimiser encodes a scene's normal maps as lossy WebP, which [asset-store](asset-store.md) says a normal map must not be; true of every scene, not only ivy (the ivy has no normal map now).
 - No vertex-group mask; a dense, hand-modelled rock might be easier to weight paint.

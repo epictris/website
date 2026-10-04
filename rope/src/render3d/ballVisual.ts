@@ -29,6 +29,7 @@ import * as THREE from "three";
 import { BallPlayer } from "../classes/ballPlayer";
 import { BALL_MESH, BALL_MESH_RADIUS, IRON_SURFACE, loadMesh, surfaceFor } from "./assets";
 import { standardMaterialsOf, wearAvatar } from "./avatarSurface";
+import { setProbe, wearProbe } from "./reflectionProbe";
 import { orientTo, placeAt, threeY } from "./space";
 
 // How much thicker than the collision radius the mounting loop's ring is drawn.
@@ -149,6 +150,9 @@ function shine(obj: THREE.Object3D): void {
     // so a second ball on the page must not lift the albedo twice.
     // `wearAvatar` has the same guard of its own.
     wearAvatar(std);
+    // Lit from the reflection probe's cube rather than an envMap (see
+    // reflectionProbe.ts `wearProbe`).
+    wearProbe(std);
     if (std.userData.shined) continue;
     std.userData.shined = true;
     std.roughness = MODEL_ROUGHNESS;
@@ -168,7 +172,7 @@ export class BallVisual {
   // level around the ball (`ReflectionProbe`), handed in every frame by the
   // scene. The stand-in does not wear it - its iron is the chain's, shared.
   private modelMaterials: THREE.MeshStandardMaterial[] = [];
-  private reflection: THREE.Texture | null = null;
+  private reflection: THREE.CubeTexture | null = null;
 
   constructor(private readonly ball: BallPlayer) {
     const stand = this.stand as THREE.Group;
@@ -215,13 +219,9 @@ export class BallVisual {
   // Wear `texture` as the model's reflection in place of the scene's sky. The
   // probe hands back the same texture every frame, so this recompiles nothing
   // past the first call.
-  setReflection(texture: THREE.Texture): void {
+  setReflection(texture: THREE.CubeTexture): void {
     this.reflection = texture;
-    for (const mat of this.modelMaterials) {
-      if (mat.envMap === texture) continue;
-      mat.envMap = texture;
-      mat.needsUpdate = true;
-    }
+    for (const mat of this.modelMaterials) setProbe(mat, texture);
   }
 
   sync(alpha: number): void {

@@ -5,7 +5,7 @@ are the source, and any rebuild (the panel's, or the scene exporter's)
 produces it again."""
 
 import bpy
-from bpy.props import BoolProperty, FloatProperty, FloatVectorProperty, IntProperty, PointerProperty, StringProperty
+from bpy.props import BoolProperty, EnumProperty, FloatProperty, FloatVectorProperty, IntProperty, PointerProperty, StringProperty
 
 from .build import Params
 
@@ -40,6 +40,15 @@ class IvySettings(bpy.types.PropertyGroup):
     live: BoolProperty(name="Live", default=True, description="Rebuild whenever a setting changes")
 
     seed: IntProperty(name="Seed", default=0, min=0, update=_changed)
+    detail: EnumProperty(
+        name="Detail",
+        items=(
+            ("LEAVES", "Leaves", "A card per leaf, in sheets that shade one another: ivy near the gameplay plane"),
+            ("CLUMPS", "Clumps", "A card per clump of leaves: ivy on the backdrop, at a fraction of the cards"),
+        ),
+        default=_D.detail,
+        update=_changed,
+    )
     resolution: _length("Resolution", _D.resolution, 0.005, 0.2, "Edge length the host is refined to under the paint; the underlay's and the candidates' resolution")
 
     threshold: _factor("Threshold", _D.threshold, "Paint coverage at which ivy starts; higher shrinks the patch inside the painted area")
@@ -65,6 +74,11 @@ class IvySettings(bpy.types.PropertyGroup):
     tilt: FloatProperty(name="Tilt", default=_D.tilt, min=0.0, soft_max=30.0, description="Degrees a leaf pitches tip-up off the rock, so its tip rides over the leaf beyond it", update=_changed)
     spread: FloatProperty(name="Spread", default=_D.spread, min=0.0, max=180.0, description="Degrees a leaf may stray from pointing straight away from the origin", update=_changed)
     taper: _factor("Taper", _D.taper, "How much smaller the leaves at the far end of the carpet are than those at the origin")
+
+    # Detail "Clumps" only.
+    clump_min: _length("Clump Min", _D.clump_min, 0.05, 2.0, "Smallest clump card")
+    clump_max: _length("Clump Max", _D.clump_max, 0.05, 2.0, "Largest clump card")
+    clump_fill: _factor("Fill", _D.clump_fill, "Clump area laid over the paint, as a multiple of the paint's area", 4.0)
 
     # A vine is placed by hand (Place Vines); each is an arrow empty parented
     # to the host, and the arrow's length is the vine's.

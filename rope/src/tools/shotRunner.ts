@@ -41,6 +41,9 @@ export interface GrabRequest {
   // default) and a readable drawing buffer; the 2D path wants neither. Which
   // implementation is `GL_BACKENDS`, tried in order.
   gpu: boolean;
+  // Skip straight to the host's own GL (the last of `GL_BACKENDS`), for a
+  // frame-time reading: SwiftShader's numbers describe SwiftShader.
+  realGpu?: boolean;
   width: number;
   height: number;
   // Wall-clock ceiling on the whole run. A page that never becomes ready must
@@ -98,6 +101,7 @@ function webglRefused(log: readonly PageLogEntry[]): boolean {
 
 export async function grab(chromium: string, req: GrabRequest): Promise<GrabResult> {
   if (!req.gpu) return grabWith(chromium, req, []);
+  if (req.realGpu) return grabWith(chromium, req, GL_BACKENDS[GL_BACKENDS.length - 1]!);
   let last: unknown;
   for (const [i, flags] of GL_BACKENDS.entries()) {
     const lastBackend = i === GL_BACKENDS.length - 1;

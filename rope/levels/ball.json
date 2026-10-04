@@ -3182,6 +3182,29 @@
           "castShadow": true
         }
       ]
+    },
+    {
+      "kind": "static",
+      "x": 900,
+      "y": 500,
+      "rot": 0,
+      "objects": [
+        {
+          "type": "light",
+          "kind": "spot",
+          "z": -1350,
+          "color": "#ffcb87",
+          "intensity": 500,
+          "range": 2000,
+          "angle": 10,
+          "penumbra": 1,
+          "dirX": 0.3,
+          "dirZ": 0.3,
+          "castShadow": true,
+          "beam": 1,
+          "dust": 1
+        }
+      ]
     }
   ]
 }

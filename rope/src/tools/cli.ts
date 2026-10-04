@@ -1048,6 +1048,9 @@ async function cmdShot(first: string, o: Record<string, string>, extra: string[]
         url,
         out: dumpRange ? null : out,
         gpu: o["3d"] !== undefined,
+        // `--gl angle` skips SwiftShader for the machine's own GPU: the one
+        // backend a frame-time reading (`--query bench=N`) means anything on.
+        realGpu: o.gl === "angle",
         width: VIEW_WIDTH,
         height: VIEW_HEIGHT,
         // The 30s discipline: a page that is not ready by then is hung, and a

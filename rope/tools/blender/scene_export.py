@@ -824,7 +824,8 @@ def grow_painted(scene, warnings):
             warnings.append(f"{ob.name}: {ob.ivy.status}; not exported (nor its shadow)")
             drop(ob)
             continue
-        log(f"ivy {ob.name} on {ob.ivy.host}: {len(result.triangles)} triangles ({result.leaves} leaves, {result.vines} vines), {ob.ivy.build_ms:.0f} ms")
+        cards = f"{result.leaves} clumps" if result.detail == "CLUMPS" else f"{result.leaves} leaves"
+        log(f"ivy {ob.name} on {ob.ivy.host}: {len(result.triangles)} triangles ({cards}, {result.vines} vines), {ob.ivy.build_ms:.0f} ms")
     moss.register()
     for ob, result in moss.rebuild_all(scene):
         if result is None:

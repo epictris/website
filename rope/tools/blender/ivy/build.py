@@ -58,6 +58,11 @@ transform):
    the decal is that near shade. Its alpha is the vertex colour's, so it is
    one blended material with no texture.
 
+Detail "CLUMPS" (for the backdrop) swaps step 8 for _clumps: one sheet of
+cards that each carry a clump of leaves, laid the same way; a vine placed by
+hand is one strand card (_strand). The rock is refined no finer than CLUMP_RES of a clump, and the
+cards index the clump atlas (mesh_io.clump_atlas) instead.
+
 The atlas (mesh_io.atlas) is a 4 x 4 sheet of silhouettes: fifteen ivy leaves,
 three- and five-lobed, each drawn a little differently, base at the bottom of
 the card and tip at the top, and one faceted round the underlay and the stems
@@ -101,12 +106,31 @@ FILL_CELL = 15  # a faceted round: alpha 1 at its centre, where the underlay and
 LEAF_BASE = 0.09
 LEAF_TIP = 0.91
 LEAF_SPAN = LEAF_TIP - LEAF_BASE  # a card is leaf length / LEAF_SPAN tall
+LEAF_COVER = 0.43  # the share of its card a leaf covers (measured on atlas v7, the painted stamps of fluffy_leaves.png: 0.30-0.52; the ivy silhouettes of v6 covered 0.37)
 # A card's UV quad covers only the inner part of its cell, and the shape is
 # drawn inside that: the outer ATLAS_INSET of every cell is transparent on
 # both sides of every cell border, so bilinear filtering and the first mip
 # levels never blend a neighbouring cell's alpha into a card's edge. Cells
 # packed edge to edge drew a faint outline of every card square.
 ATLAS_INSET = 0.12
+# The clump atlas (detail "CLUMPS"; mesh_io.clump_atlas), a sheet of its own
+# on a CLUMP_GRID x CLUMP_GRID grid of units, top row first: eight square
+# clumps of leaves fanned out from a base low in the card, seven tall strands
+# hanging from their top, and a solid round the underlay samples. A rect is
+# (column, row, columns, rows); every shape is drawn inside the rect less
+# CLUMP_GUTTER units a side, the part a card's UV quad covers.
+CLUMP_GRID = 8
+CLUMP_GUTTER = 0.2
+CLUMP_RECTS = tuple((2 * c, 2 * r, 2, 2) for r in range(2) for c in range(4))
+STRAND_RECTS = tuple((k, 4, 1, 4) for k in range(7))
+CLUMP_FILL_RECT = (7, 4, 1, 1)
+CLUMP_BASE = 0.16  # where a clump's leaves fan out from, as a fraction of its card's height from the bottom
+STRAND_ASPECT = (1 - 2 * CLUMP_GUTTER) / (4 - 2 * CLUMP_GUTTER)  # a strand card's width over its length
+STRAND_SEGMENTS = 4  # a strand is bent this many times to stay in front of the rock
+CLUMP_RES = 0.25  # the coarsest the rock is refined under clumps, as a fraction of a clump
+CLUMP_CANDIDATES = 120.0  # candidates per clump's area (a leaf carpet has about 40 per leaf's)
+CLUMP_COVER = 0.50  # the share of its card a clump's silhouette covers (measured on clump atlas v3: 0.46-0.54)
+CLUMP_LIFT = 0.12  # a clump's base rises up to this share of its size more, so neighbours never share a plane
 STRATUM_GAP = 0.03  # between the sheets of leaves: room for one to shadow the next past the game's shadow biases (render3d/ivyShadow.ts)
 LEAF_CLEAR = 0.004  # the lowest sheet's height over the underlay
 EDGE_TILT = math.radians(45)  # how far a leaf at the paint's very edge tilts outer-edge-down onto the rock
@@ -117,6 +141,10 @@ class Params:
     """Every knob of an ivy object. Lengths are metres, angles degrees, colours linear RGB."""
 
     seed: int = 0
+    # "LEAVES": a card per leaf, for ivy near the gameplay plane. "CLUMPS": a
+    # card per clump of leaves, for ivy on the backdrop, where a carpet of
+    # single leaves is tens of thousands of cards that read as a flat band.
+    detail: str = "LEAVES"
     resolution: float = 0.04
     # Outline
     threshold: float = 0.35
@@ -142,6 +170,10 @@ class Params:
     tilt: float = 8.0  # degrees a leaf pitches tip-up off the hull
     spread: float = 25.0  # degrees a leaf may stray from the growth direction
     taper: float = 0.3  # how much smaller the leaves at the far end of the carpet are
+    # Clumps (detail "CLUMPS" only; the carpet's other knobs still apply)
+    clump_min: float = 0.3  # clump card size
+    clump_max: float = 0.55
+    clump_fill: float = 1.8  # clump area laid over the paint, as a multiple of the paint's area
     # Vines (each one is placed by hand; these are the leaves it wears)
     vine_length: float = 0.55  # the length a newly placed vine is given
     leaf_size: float = 0.15  # leaf length at the top of a vine
@@ -190,10 +222,11 @@ class Result:
     colors: np.ndarray  # (V, 4) linear RGBA
     uvs: np.ndarray  # (T, 3, 2) per corner
     normals: np.ndarray  # (V, 3) host-local custom normals (the hull normal)
-    leaves: int = 0  # in the carpet
+    leaves: int = 0  # in the carpet (clumps, when the detail is "CLUMPS")
     vines: int = 0
     vine_leaves: int = 0
     shadow: "Shadow | None" = None
+    detail: str = "LEAVES"  # which atlas the UVs index, so which material the mesh wears
 
 
 @dataclass
@@ -327,10 +360,25 @@ def _uv_cell(idx):
     return np.array([[cx * s + lo, cy * s + lo], [cx * s + hi, cy * s + lo], [cx * s + hi, cy * s + hi], [cx * s + lo, cy * s + hi]])
 
 
+def _uv_rect(rect):
+    """A clump-atlas rect's inner UV corners, in _corners' order (bottom left,
+    bottom right, top right, top left)."""
+    c, r, w, h = rect
+    g, n = CLUMP_GUTTER, float(CLUMP_GRID)
+    u0, u1 = (c + g) / n, (c + w - g) / n
+    v0, v1 = 1.0 - (r + h - g) / n, 1.0 - (r + g) / n
+    return np.array([[u0, v0], [u1, v0], [u1, v1], [u0, v1]])
+
+
 def _uv_solid():
     """One UV for every corner: the centre of a round blob, alpha 1 with no
     derivative, so the sampler reads mip 0 there and never leaves the blob."""
     return np.repeat(_uv_cell(FILL_CELL).mean(0, keepdims=True), 4, 0)
+
+
+def _uv_clump_solid():
+    """_uv_solid for the clump atlas."""
+    return np.repeat(_uv_rect(CLUMP_FILL_RECT).mean(0, keepdims=True), 4, 0)
 
 
 def _facing_turn(n, facing):
@@ -427,6 +475,7 @@ def build(host_mesh, host_matrix, stamps, vines, origin, p):
         return _empty_result()
     rnd = random.Random(p.seed)
     rng = np.random.default_rng(p.seed)
+    clumps = p.detail == "CLUMPS"
     quads = _Quads()
     under = None
     n_leaves = 0
@@ -438,6 +487,11 @@ def build(host_mesh, host_matrix, stamps, vines, origin, p):
         centres, snormals = stamps_world(stamps, host_matrix)
         radii = stamps.radius.astype(np.float64)
         res = max(p.resolution, 0.005)
+        if clumps:
+            # A clump is ten leaves across: refining the rock (and so the
+            # underlay and the decal) to a leaf's resolution under it would
+            # spend on triangles what the clumps save on cards.
+            res = max(res, (p.clump_min + p.clump_max) / 2 * CLUMP_RES)
         # The shadow decal reaches past the paint, further below it: refine a
         # margin around the stamps coarsely first, then the paint itself.
         margin = p.shadow_reach * (1.0 + p.shadow_drop) if p.shadow_strength > 0 else 0.0
@@ -463,13 +517,17 @@ def build(host_mesh, host_matrix, stamps, vines, origin, p):
             under = _underlay(v, t, f, hull, p)
             M = np.array(host_matrix, dtype=np.float64)
             origin_w = None if origin is None else np.asarray(origin, dtype=np.float64) @ M[:3, :3].T + M[:3, 3]
-            n_leaves = _carpet(quads, v, t, edges, f, hull, n_raw, origin_w, p, rnd, rng)
+            if clumps:
+                n_leaves = _clumps(quads, v, t, edges, f, hull, n_raw, origin_w, p, rnd, rng)
+            else:
+                n_leaves = _carpet(quads, v, t, edges, f, hull, n_raw, origin_w, p, rnd, rng)
             if margin > 0:
                 shadow = _shadow(v, t, edges, f, n_raw, host_matrix, p)
 
     n_vines, n_vine_leaves = _vines(quads, co, tri, v, hull, vines, host_matrix, p, rnd)
-    r = _assemble(quads, under, host_matrix)
+    r = _assemble(quads, under, host_matrix, _uv_clump_solid() if clumps else _uv_solid())
     r.leaves, r.vines, r.vine_leaves, r.shadow = n_leaves, n_vines, n_vine_leaves, shadow
+    r.detail = p.detail
     return r
 
 
@@ -518,12 +576,33 @@ def _underlay_ramp(f):
     return _smoothstep(0.0, 0.15, f + 0.02)
 
 
-def _carpet(quads, v, t, edges, f, hull, n_raw, origin, p, rnd, rng):
-    """The sheets of leaves over the paint, grown out from the origin. Returns
-    how many were laid."""
+@dataclass
+class _Field:
+    """The candidates a carpet picks its cards from, with what every card
+    needs to know about its spot: the hull normal, the paint, how far along
+    the growth it is and which ways are outward and onward."""
+
+    P: np.ndarray  # (N, 3) positions
+    HN: np.ndarray  # hull normals
+    F: np.ndarray  # the paint field, > 0 inside
+    Mn: np.ndarray  # 0 at the paint's edge, 1 well inside
+    T: np.ndarray  # 0 at the origin, 1 at the far end of the carpet
+    tones: np.ndarray  # the local green
+    OUTd: np.ndarray  # the outward direction in the hull's tangent plane, unit
+    OUTl: np.ndarray  # ... and the paint gradient's length there
+    OUT: np.ndarray  # OUTd where it is defined, else 0
+    GROW: np.ndarray  # the growth direction, unit
+    grown: np.ndarray  # where GROW is defined
+    idx: list  # the candidates the game can see that have neighbours
+    area: float  # the painted area
+
+
+def _field(v, t, edges, f, hull, n_raw, origin, p, rng, density, crowd_r):
+    """The candidates over the paint, grown out from the origin; None when
+    there are none."""
     inside = np.flatnonzero(f > 0)
     if len(inside) == 0:
-        return 0
+        return None
     # The origin, on the refined mesh: the placed point's nearest vertex, else
     # the top of the paint (ivy that came over the crown of the rock).
     if origin is not None:
@@ -531,19 +610,19 @@ def _carpet(quads, v, t, edges, f, hull, n_raw, origin, p, rnd, rng):
     else:
         src = int(inside[np.argmax(v[inside, 2])])
     growth = _smooth_field(_geodesic(v, edges, src), edges, len(v), 4)
-    P, HN, NR, (F, D), (GF, GD) = _sample(v, t, [f, growth], hull, n_raw, p.density, rng)
+    P, HN, NR, (F, D), (GF, GD) = _sample(v, t, [f, growth], hull, n_raw, density, rng)
     if len(P) == 0:
-        return 0
+        return None
     order = np.lexsort((P[:, 2], P[:, 1], P[:, 0]))
     P, HN, NR, F, D, GF, GD = P[order], HN[order], NR[order], F[order], D[order], GF[order], GD[order]
-    area = len(P) / p.density  # the painted area, from the sampling density
+    area = len(P) / density  # the painted area, from the sampling density
     Mn = np.clip(F / 0.5, 0, 1)  # 0 at the paint's edge, 1 well inside
     tones = _tone_at(P, (p.tone_a, p.tone_b, p.tone_c), p.tone_scale, p.seed)
-    crowd = _crowd(P, 0.06)
+    crowd = _crowd(P, crowd_r)
     seen = (HN @ FACE >= -0.35) & (crowd >= 4)  # the game never sees the back of a rock
     idx = np.flatnonzero(seen).tolist()
     if not idx:
-        return 0
+        return None
 
     def tangent(G):
         """A field's gradient in the hull's tangent plane, unit, and its length."""
@@ -562,6 +641,17 @@ def _carpet(quads, v, t, edges, f, hull, n_raw, origin, p, rnd, rng):
     # How far along the carpet each candidate is, 0 at the origin, 1 at the far end.
     lo, hi = float(D[idx].min()), float(D[idx].max())
     T = np.clip((D - lo) / max(hi - lo, 1e-6), 0.0, 1.0)
+    return _Field(P, HN, F, Mn, T, tones, OUTd, OUTl, OUT, GROW, grown, idx, area)
+
+
+def _carpet(quads, v, t, edges, f, hull, n_raw, origin, p, rnd, rng):
+    """The sheets of leaves over the paint, grown out from the origin. Returns
+    how many were laid."""
+    fl = _field(v, t, edges, f, hull, n_raw, origin, p, rng, p.density, 0.06)
+    if fl is None:
+        return 0
+    P, HN, F, Mn, T, tones, OUTd, OUTl, OUT, GROW, grown, idx = fl.P, fl.HN, fl.F, fl.Mn, fl.T, fl.tones, fl.OUTd, fl.OUTl, fl.OUT, fl.GROW, fl.grown, fl.idx
+    area = fl.area
     # Toward the edge a candidate is taken this much more readily: the outer
     # band is where the leaves thin out, and a gap there shows the underlay
     # as a rim around the mass.
@@ -584,7 +674,7 @@ def _carpet(quads, v, t, edges, f, hull, n_raw, origin, p, rnd, rng):
     for k in range(K):
         rnd.shuffle(idx)
         mean_len = (p.leaf_min + p.leaf_max) / 2 * (1.0 - p.taper * 0.5)
-        want = p.leaf_fill / K * area / (0.6 * mean_len * mean_len)  # a leaf covers about 0.6 of its card
+        want = p.leaf_fill / K * area / (LEAF_COVER * (mean_len / LEAF_SPAN) ** 2)
         p_take = min(1.0, want / len(idx))
         depth_k = (1.0 - k / max(K - 1, 1)) * 0.7
         for i in idx:
@@ -623,6 +713,100 @@ def _carpet(quads, v, t, edges, f, hull, n_raw, origin, p, rnd, rng):
     return n_leaves
 
 
+def _clumps(quads, v, t, edges, f, hull, n_raw, origin, p, rnd, rng):
+    """Detail "CLUMPS": one sheet of clump cards over the paint, laid like the
+    leaves (base at the candidate, fanning down the growth, pitched by `tilt`,
+    rolled onto the rock at the edge). Nothing hangs from it but the vines
+    placed by hand. Returns how many clumps."""
+    mean = (p.clump_min + p.clump_max) / 2
+    density = CLUMP_CANDIDATES / (mean * mean)
+    fl = _field(v, t, edges, f, hull, n_raw, origin, p, rng, density, mean * 0.5)
+    if fl is None:
+        return 0
+    P, HN, F, Mn, T, tones, OUTd, OUTl, OUT, GROW, grown, idx = fl.P, fl.HN, fl.F, fl.Mn, fl.T, fl.tones, fl.OUTd, fl.OUTl, fl.OUT, fl.GROW, fl.grown, fl.idx
+    edge_w = 1.0 + p.edge_fill * (1.0 - Mn) ** 2
+    ramp = _smoothstep(0.0, max(p.shoulder, 1e-3), Mn)
+    base_h = p.underlay * _underlay_ramp(F) + LEAF_CLEAR + p.thickness * (1.0 - T) * (0.25 + 0.75 * ramp)
+    pitch = math.radians(p.tilt) * (0.3 + 0.7 * ramp)
+    edge_tilt = EDGE_TILT * (1.0 - ramp) ** 1.5
+    spread = math.radians(p.spread)
+
+    rnd.shuffle(idx)
+    mean_size = mean * (1.0 - p.taper * 0.5)
+    want = p.clump_fill * fl.area / (CLUMP_COVER * mean_size * mean_size)
+    p_take = min(1.0, want / len(idx))
+    n_clumps = 0
+    for i in idx:
+        if rnd.random() > p_take * edge_w[i]:
+            continue
+        hn = HN[i]
+        if grown[i]:
+            u = GROW[i]
+            stray = rnd.uniform(-spread, spread)
+        else:
+            u = OUTd[i] if OUTl[i] > 0.2 else np.cross(hn, UP if abs(hn[2]) < 0.9 else np.array((1.0, 0.0, 0.0)))
+            u = u / np.linalg.norm(u)
+            stray = rnd.uniform(0, math.tau)
+        u = _rotate(u, hn, stray)
+        n = hn
+        if edge_tilt[i] > 1e-4 and OUT[i].any():
+            axis = np.cross(hn, OUT[i])
+            axis /= np.linalg.norm(axis)
+            u, n = _rotate(u, axis, edge_tilt[i]), _rotate(n, axis, edge_tilt[i])
+        side = np.cross(u, n)
+        u, n = _rotate(u, side, pitch[i]), _rotate(n, side, pitch[i])
+        size = rnd.uniform(p.clump_min, p.clump_max) * (1.0 - p.taper * T[i]) * (0.75 + 0.25 * Mn[i])
+        # Clumps side by side are near-parallel planes at one height: a lift
+        # of their own keeps them a depth apart at the backdrop's distance.
+        base = P[i] + hn * (base_h[i] + rnd.uniform(0.0, CLUMP_LIFT) * size)
+        centre = base + u * (0.5 - CLUMP_BASE) * size
+        turn = _facing_turn(n, p.facing)
+        if turn is not None:
+            side, u, n = _rotate(side, *turn), _rotate(u, *turn), _rotate(n, *turn)
+        uv = _uv_rect(rnd.choice(CLUMP_RECTS))
+        if rnd.random() < 0.5:
+            uv = uv[[1, 0, 3, 2]]  # mirrored: sixteen clumps from eight
+        col = _tint(hn, np.array(0.0), np.array(rnd.uniform(-p.variation, p.variation)), tones[i], p)
+        quads.add(_corners(centre, side, u, size, size), hn, col, uv)
+        n_clumps += 1
+    return n_clumps
+
+
+def _bvh(co, tri):
+    return BVHTree.FromPolygons([tuple(x) for x in co], [tuple(x) for x in tri.tolist()])
+
+
+def _in_front(bvh, q, clear):
+    """q held `clear` in front of the rock's front-most surface at its spot
+    (seen from the camera), because a rock bulges below its shoulder and a
+    strand hung by the nearest surface ends up inside it."""
+    hit = bvh.ray_cast(Vector(q + FACE * 50.0), Vector(-FACE))
+    if hit[0] is not None:
+        front = float(np.array(hit[0]) @ FACE)
+        if q @ FACE < front + clear:
+            q = q + FACE * (front + clear - q @ FACE)
+    return q
+
+
+def _strand(quads, bvh, top, length, hn, col, rnd):
+    """One strand card of the clump atlas hanging `length` straight down from
+    `top`, facing the camera, bent at STRAND_SEGMENTS points to stay in front
+    of the rock: a ledge's top folds over its brink and down its face."""
+    half = np.array((length * STRAND_ASPECT / 2, 0.0, 0.0))
+    rect = _uv_rect(rnd.choice(STRAND_RECTS))
+    if rnd.random() < 0.5:
+        rect = rect[[1, 0, 3, 2]]
+    (u0, v0), (u1, _), _, (_, v1) = rect
+    zs = np.linspace(0.0, length, STRAND_SEGMENTS + 1)
+    pts = [_in_front(bvh, top + np.array((0.0, 0.0, -z)) + FACE * 0.01, 0.02 + 0.03 * z / length) for z in zs]
+    vs = v1 + (v0 - v1) * zs / length
+    vn = _normalize((hn * 0.5 + FACE * 0.5)[None])[0]
+    for k in range(STRAND_SEGMENTS):
+        a, b = pts[k], pts[k + 1]  # a above b; wound to face the camera
+        quads.add(np.array([b - half, b + half, a + half, a - half]), vn, col,
+                  np.array([[u0, vs[k + 1]], [u1, vs[k + 1]], [u1, vs[k]], [u0, vs[k]]]))
+
+
 def _vines(quads, co, tri, v, hull, vines, host_matrix, p, rnd):
     """A vine at every anchor: a stem hanging straight down, held in front of
     the rock, wearing ivy leaves that alternate sides and taper toward the
@@ -633,7 +817,7 @@ def _vines(quads, co, tri, v, hull, vines, host_matrix, p, rnd):
     M = np.array(host_matrix, dtype=np.float64)
     origins = vines.position @ M[:3, :3].T + M[:3, 3]
     order = np.lexsort((origins[:, 2], origins[:, 1], origins[:, 0]))
-    bvh = BVHTree.FromPolygons([tuple(x) for x in co], [tuple(x) for x in tri.tolist()])
+    bvh = _bvh(co, tri)
     hull_kd = None
     if len(v):
         hull_kd = KDTree(len(v))
@@ -656,6 +840,11 @@ def _vines(quads, co, tri, v, hull, vines, host_matrix, p, rnd):
             near = bvh.find_nearest(Vector(origin))
             hn = np.array(near[1]) if near[0] is not None else -FACE
             hn = _normalize(hn)
+        if p.detail == "CLUMPS":
+            # The clump atlas has no single leaves: a vine is one strand.
+            _strand(quads, bvh, origin, length, hn, _tint(hn, np.array(0.0), np.array(rnd.uniform(-p.variation, p.variation)), tones[k_v], p), rnd)
+            n_vines += 1
+            continue
         sway = rnd.uniform(0.006, 0.015)
         phase = rnd.uniform(0, 6)
 
@@ -698,7 +887,7 @@ def _vines(quads, co, tri, v, hull, vines, host_matrix, p, rnd):
     return n_vines, n_leaves
 
 
-def _assemble(quads, under, host_matrix):
+def _assemble(quads, under, host_matrix, solid):
     co, tri, nrm, col, uv = quads.arrays()
     if under is not None:
         under_v, under_t, under_n, under_c = under
@@ -707,7 +896,7 @@ def _assemble(quads, under, host_matrix):
         nrm = np.vstack([nrm, under_n])
         col = np.vstack([col, under_c])
         tri = np.vstack([tri, under_t + off])
-        uv = np.vstack([uv, np.repeat(_uv_solid()[:3][None], len(under_t), 0)])
+        uv = np.vstack([uv, np.repeat(solid[:3][None], len(under_t), 0)])
     if len(tri) == 0:
         return _empty_result()
     # Back to the host's local frame.
