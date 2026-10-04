@@ -185,6 +185,17 @@ just assets                                                  # on another machin
 gh release delete-asset assets rock.glb                      # change your mind
 ```
 
+### Keeping the release in step with the pins
+
+`assets:publish <file>` uploads at the moment it is run, so a commit that re-pins an entry and is pushed without it leaves the release holding the old bytes.
+Nothing notices until the Docker build's `assets:fetch` fails on `sha256 mismatch` - on the deploy, after the push.
+That is how the deploy of 2f534c9 (the sixth ball delivery) failed on 2026-10-04.
+
+`bun run assets:publish-stored` (the last step of `just publish`) closes it: for every entry in `storedAssets()` it reads the sha256 digest GitHub records for the release copy, and when that is not the pin it uploads `public/`'s file - but only when that file IS the pinned bytes.
+So a sync with nothing to do downloads nothing, and it never re-pins: a local file that differs from its pin is printed as a `NOTE` and left alone, because publishing it would break the fetch of the commit that pins the old bytes.
+An entry whose release copy is stale and that this machine cannot supply is a `FAIL` naming it, to be published from the machine that made it.
+Run `just publish` before pushing any commit that changes a pin.
+
 ## Blender scenes in the store
 
 A level's Blender scene (see [blender-scenes](blender-scenes.md)) is the fifth kind: `public/scenes/<scene>/scene.glb`, exported by `just scene <level>`, manifest `src/render3d/sceneAssets.json` (scene name to `{ sha256, bytes }`), release name `scene-<scene>.glb`, listed by `storedAssets()` with the others.

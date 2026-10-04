@@ -51,10 +51,12 @@ sources:
 
 # Publish the Blender scenes the levels name to the asset release and pin them in
 # rope/src/render3d/sceneAssets.json, and those scenes' sources (their .blend
-# files, pinned in rope/scripts/sceneSources.json). Run it after `just scene`,
-# then commit the pins with the level.
+# files, pinned in rope/scripts/sceneSources.json), then upload every other pinned
+# asset (props, texture maps, skies) the release does not hold yet. Run it after
+# `just scene`, then commit the pins with the level; run it before pushing any
+# commit that re-pins an asset.
 publish:
-    cd rope && bun run assets:publish-scenes && bun run assets:publish-sources
+    cd rope && bun run assets:publish-scenes && bun run assets:publish-sources && bun run assets:publish-stored
 
 # Export a level's Blender scene (rope/assets-src/scenes/<scene>.blend, the
 # level's `scene`) into rope/public/scenes/<scene>/ and report what it dressed.
