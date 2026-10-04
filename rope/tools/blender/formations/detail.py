@@ -78,6 +78,11 @@ WIDE = (0.4, 0.7)
 # A crease folding inward by more than this, degrees, is a valley no chip
 # may reach (the cut would leave a wall, a pit).
 VALLEY = 3.0
+# A crease folding outward by more than this, degrees, is a fin: two faces
+# folded flat onto each other (the dissolve leaves a few; the river's
+# Terrace has 3 at 180), with no width to chip, and the chip plane between
+# two opposite normals is undefined (2026-10-04: the export died on it).
+FIN = 170.0
 
 # ------------------------------------------------------------------- bake
 # The bake casts from CAGE outside the low poly inward; every chip lies
@@ -335,12 +340,18 @@ def crumple(src, rng):
             stats["skipped"] += 1
             stats["skipped_area"] += area
             continue
-        bmesh.ops.delete(bm, geom=region, context="FACES")
+        # FACES_ONLY: a boundary corner on an open edge belongs to this
+        # plane's faces alone and the plane is made again on it (FACES freed
+        # it, and the export died on a pinched Terrace, 2026-10-04); what is
+        # still loose after is dropped below.
+        bmesh.ops.delete(bm, geom=region, context="FACES_ONLY")
         created = {}
         for vs in new_faces:
             bm.faces.new([v if isinstance(v, bmesh.types.BMVert) else created.setdefault(id(v), bm.verts.new(v)) for v in vs])
         stats["rebuilt"] += 1
         stats["points"] += len(points)
+    bmesh.ops.delete(bm, geom=[e for e in bm.edges if not e.link_faces], context="EDGES")
+    bmesh.ops.delete(bm, geom=[v for v in bm.verts if not v.link_faces], context="VERTS")
     bm.normal_update()
     return bm, stats
 
@@ -448,7 +459,7 @@ def build_cutters(rock_bm, rng):
             continue
         ang = math.degrees(e.calc_face_angle_signed(0))
         weight = smoothstep(CREASE_MIN, CREASE_FULL, ang)
-        if weight <= 0:
+        if weight <= 0 or ang > FIN:
             continue
         length = e.calc_length()
         f1, f2 = e.link_faces

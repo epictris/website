@@ -155,22 +155,52 @@ def find_bows(mesh, seed):
     return bows
 
 
+class Bows:
+    """`find_bows`'s list as arrays, one row a bow, packed once: the rebuild
+    asks for the field thousands of times, and a loop over the bows with
+    their Vectors converted on every call was nine tenths of the export's
+    curve time (Terrace.003: 110 bows, 57 k calls, 32 of 35 s; 2026-10-04)."""
+
+    def __init__(self, bows):
+        self.a = np.array([a for a, _, _, _ in bows], dtype=float).reshape(-1, 3)
+        b = np.array([b for _, b, _, _ in bows], dtype=float).reshape(-1, 3)
+        self.bow = np.array([bow for _, _, bow, _ in bows], dtype=float).reshape(-1, 3)
+        self.reach = np.array([r for _, _, _, r in bows], dtype=float)
+        self.ab = b - self.a
+        self.ab2 = np.maximum(np.einsum("ij,ij->i", self.ab, self.ab), 1e-12)
+        # Each bow's reach as a box: one that misses a block of points moves
+        # none of them.
+        self.lo = np.minimum(self.a, b) - self.reach[:, None]
+        self.hi = np.maximum(self.a, b) + self.reach[:, None]
+
+    def __len__(self):
+        return len(self.reach)
+
+
+# Points x bows evaluated at once; more are done in blocks of this many.
+FIELD_BLOCK = 1 << 18
+
+
 def field(points, bows):
-    """The bow field at `points` (an N x 3 array): how far the bows move each."""
+    """The bow field at `points` (an N x 3 array): how far the bows move each.
+    `bows` is `find_bows`'s list or a `Bows`."""
+    if not isinstance(bows, Bows):
+        bows = Bows(bows)
     off = np.zeros_like(points)
-    if not len(points):
+    if not len(points) or not len(bows):
         return off
-    lo, hi = points.min(axis=0), points.max(axis=0)
-    for a, b, bow, reach in bows:
-        a, b, bow = np.array(a), np.array(b), np.array(bow)
-        # A bow whose reach misses the points' bounds moves none of them.
-        if (np.minimum(a, b) - reach > hi).any() or (np.maximum(a, b) + reach < lo).any():
+    step = max(1, FIELD_BLOCK // len(bows))
+    for at in range(0, len(points), step):
+        p = points[at:at + step]
+        near = np.flatnonzero(((bows.lo <= p.max(axis=0)) & (bows.hi >= p.min(axis=0))).all(axis=1))
+        if not len(near):
             continue
-        ab = b - a
-        t = np.clip((points - a) @ ab / max(ab @ ab, 1e-12), 0.0, 1.0)
-        d = np.linalg.norm(points - (a + t[:, None] * ab), axis=1)
+        a, ab, reach = bows.a[near], bows.ab[near], bows.reach[near]
+        rel = p[:, None, :] - a[None]
+        t = np.clip(np.einsum("nbk,bk->nb", rel, ab) / bows.ab2[near], 0.0, 1.0)
+        d = np.linalg.norm(rel - t[..., None] * ab, axis=2)
         x = np.clip(1 - d / reach, 0.0, 1.0)
-        off += (np.sin(np.pi * t) * x * x * (3 - 2 * x))[:, None] * bow
+        off[at:at + step] = (np.sin(np.pi * t) * x * x * (3 - 2 * x)) @ bows.bow[near]
     return off
 
 
@@ -181,13 +211,14 @@ def sizing(points, bows):
     edge can run; the axes alone missed the bend across them by up to 4x),
     clamped to SIZE; SIZE's top where the field is flat."""
     step = 0.02
-    bend = np.zeros(len(points))
-    mid = field(points, bows)
-    ways = [np.array(w, dtype=float) for w in itertools.product((-1, 0, 1), repeat=3) if w > (0, 0, 0)]
-    for way in ways:
-        way = way / np.linalg.norm(way)
-        d2 = field(points + way * step, bows) - 2 * mid + field(points - way * step, bows)
-        bend = np.maximum(bend, np.linalg.norm(d2, axis=1) / step ** 2)
+    ways = np.array([w for w in itertools.product((-1, 0, 1), repeat=3) if w > (0, 0, 0)], dtype=float)
+    ways /= np.linalg.norm(ways, axis=1)[:, None]
+    # One field call for the points and both sides of every way.
+    probes = np.concatenate([points[None], points[None] + ways[:, None] * step, points[None] - ways[:, None] * step])
+    f = field(probes.reshape(-1, 3), bows).reshape(probes.shape)
+    mid, plus, minus = f[0], f[1:1 + len(ways)], f[1 + len(ways):]
+    d2 = plus - 2 * mid[None] + minus
+    bend = (np.linalg.norm(d2, axis=2) / step ** 2).max(axis=0)
     # An edge of length L bends by about bend x L^2 / 8 in its middle.
     return np.clip(np.sqrt(8 * TOLERANCE / np.maximum(bend, 1e-9)), *SIZE)
 
@@ -221,6 +252,19 @@ def patches(bm, reached):
     return planes
 
 
+def collapsible(e):
+    """Whether welding `e`'s two ends keeps the surface closed (the link
+    condition): the ends share no neighbour but the far corners of the two
+    triangles on `e`. Welded with a third shared neighbour, the two edges to
+    it become one with four faces, and the river's Terrace opened 14 holes
+    that the detail high poly then failed on (2026-10-04)."""
+    if e is None or len(e.link_faces) != 2 or any(len(f.verts) != 3 for f in e.link_faces):
+        return False
+    v, w = e.verts
+    shared = {x.other_vert(v) for x in v.link_edges} & {x.other_vert(w) for x in w.link_edges}
+    return len(shared) == 2
+
+
 def fold_slivers(bm, passes=8):
     """Fold away every triangle under SLIVER high over its longest edge: its
     far corner moves onto that edge (by at most SLIVER) and the edge turns
@@ -250,8 +294,12 @@ def fold_slivers(bm, passes=8):
             # A needle, its corner beside one end: merged into that end.
             end = a if t * ab.length < SLIVER else b if (1 - t) * ab.length < SLIVER else None
             if end is not None:
+                if not collapsible(bm.edges.get((apex, end))):
+                    continue
                 weld[apex] = end
-                touched |= {a, b, apex}
+                # The rings too: a weld beside this one could break its
+                # link condition before the pass applies both.
+                touched |= {a, b, apex} | {x.other_vert(v) for v in (apex, end) for x in v.link_edges}
                 done += 1
                 continue
             other = next(g for g in e.link_faces if g is not f)
@@ -299,6 +347,7 @@ def rebuild(bm, bows, seed):
     from mathutils.geometry import delaunay_2d_cdt
 
     rng = random.Random(seed)
+    bows = Bows(bows)
     bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=MERGE)
     bm.normal_update()
     folded = fold_slivers(bm)

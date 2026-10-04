@@ -357,16 +357,22 @@ def fill_background(im):
     px = px.reshape(h, w, 4)
     known = px[..., 3] > 0.5
     levels = [(px[..., :3] * known[..., None], known.astype(np.float32))]
+    def down(a):
+        # Each 2 x 2 block summed as four slices: a strided reshape-and-sum
+        # was most of the fill's time, 18 s over the river's 4k maps.
+        hh, ww = a.shape[0] // 2 * 2, a.shape[1] // 2 * 2
+        return a[0:hh:2, 0:ww:2] + a[1:hh:2, 0:ww:2] + a[0:hh:2, 1:ww:2] + a[1:hh:2, 1:ww:2]
+
     while levels[-1][1].shape[0] > 1 and levels[-1][1].shape[1] > 1:
         c, k = levels[-1]
-        hh, ww = k.shape[0] // 2, k.shape[1] // 2
-        c = c[:hh * 2, :ww * 2].reshape(hh, 2, ww, 2, 3).sum(axis=(1, 3))
-        k = k[:hh * 2, :ww * 2].reshape(hh, 2, ww, 2).sum(axis=(1, 3))
-        levels.append((c, k))
+        levels.append((down(c), down(k)))
     color = levels[-1][0] / np.maximum(levels[-1][1], 1e-6)[..., None]
     for c, k in reversed(levels[:-1]):
-        up = np.repeat(np.repeat(color, 2, axis=0), 2, axis=1)
-        up = np.pad(up, ((0, k.shape[0] - up.shape[0]), (0, k.shape[1] - up.shape[1]), (0, 0)), mode="edge")
+        # Each texel reads its parent; an odd last row or column the one
+        # before it, as the edge would be padded.
+        rows = np.minimum(np.arange(k.shape[0]) // 2, color.shape[0] - 1)
+        cols = np.minimum(np.arange(k.shape[1]) // 2, color.shape[1] - 1)
+        up = color[rows[:, None], cols[None, :]]
         color = np.where(k[..., None] > 0, c / np.maximum(k, 1e-6)[..., None], up)
     px[..., :3] = color
     px[..., 3] = 1.0
