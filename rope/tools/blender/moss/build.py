@@ -997,7 +997,10 @@ def paint_texels(layers, p, tp, tn):
         return col, cov
     # a spatial hash of the texels: sorted by bucket, so a dab gathers the texels
     # of every bucket its sphere touches in one numpy step
-    cell = max(0.01, p.dab_max * 0.3)
+    # A bucket of one dab_max: a dab looks up ~30 of them, not ~1300 at 0.3
+    # (which bucket a texel is in decides nothing: every test after is per
+    # texel). Measured on mid-ledge: 0.3 x 2.35 s, 0.6 x 1.91, 1.0 x 1.71, 1.6 x 2.03.
+    cell = max(0.01, p.dab_max)
     lo = tp.min(0)
     gk = np.floor((tp - lo) / cell).astype(np.int64)
     dims = gk.max(0) + 1
@@ -1007,10 +1010,12 @@ def paint_texels(layers, p, tp, tn):
     room = MOUND_LIFT_ROOM
     tp_sq = np.einsum("ij,ij->i", tp, tp)
 
-    def texels(d):
-        """The texels a dab paints and its weight at each, or None. Reads only
-        what is fixed by now, so dabs run on a thread pool; their painting
-        (below) stays in dab order, so the print does not depend on it."""
+    def texels(d, open_, open_buckets):
+        """The texels a dab paints and its weight at each, or None, among the
+        texels still `open_` (not yet hidden under a dab above), in the
+        buckets that still hold one (`open_buckets`, per entry of `uk`). Reads only
+        what is fixed while its chunk runs, so dabs run on a thread pool; their
+        painting (below) stays in order, so the print does not depend on it."""
         cc = np.asarray(d.c)
         dn = np.asarray(d.n)
         # The mound stands up to `d.h` over the dab's plane here: fetch the
@@ -1032,11 +1037,13 @@ def paint_texels(layers, p, tp, tn):
         ok = pos < len(uk)
         ok[ok] = uk[pos[ok]] == want[ok]  # only buckets that hold texels
         pos = pos[ok]
+        pos = pos[open_buckets[pos]]  # ... and still hold an open one
         if len(pos) == 0:
             return None
         st, cn = start[pos], count[pos]
         total = int(cn.sum())
         sel = order[np.repeat(st - np.concatenate([[0], np.cumsum(cn)[:-1]]), cn) + np.arange(total)]
+        sel = sel[open_[sel]]
         # cheap culls first, each on what the last left: within the slab,
         # inside the dab's outer radius, facing the dab's way (the dab's own
         # side of the rock); every test is per texel, so culling in stages
@@ -1057,19 +1064,36 @@ def paint_texels(layers, p, tp, tn):
             return None
         return sel[hit], w[hit]
 
-    dabs = [d for layer in layers for d in layer]
+    # Painted front to back. Bottom to top, each dab mixes its tone over what
+    # is below by its weight w, and the first dab a texel meets lays its tone
+    # whole; so a texel's colour is the sum of each dab's tone times w times
+    # the (1 - w) of every dab above it, the lowest dab's taking 1 for its w.
+    # Top down that is: `acc` += `see` * w * tone, `see` *= 1 - w, and at the
+    # end `acc` += `see` * the lowest tone. A texel a dab covers whole (w = 1)
+    # is then final: the dabs below add `see` = 0 times their tone, and their
+    # coverage cannot raise `cov` past the 1 it holds. Nine in ten dab-texel
+    # pairs were under such a dab (river's mid-ledge, 2026-10-05: 13.3M pairs
+    # over 1.09M texels), so they are skipped before their culls and outline.
+    acc = np.zeros((len(tp), 3))
+    see = np.ones(len(tp))
+    low = np.zeros((len(tp), 3))  # the tone of the lowest dab met so far
+    dabs = [d for layer in layers for d in layer][::-1]
     with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as pool:
         for at in range(0, len(dabs), PRINT_CHUNK):
             chunk = dabs[at : at + PRINT_CHUNK]
-            for d, got in zip(chunk, pool.map(texels, chunk)):
+            open_ = see > 0.0
+            open_buckets = np.add.reduceat(open_[order], start) > 0
+            for d, got in zip(chunk, pool.map(lambda d: texels(d, open_, open_buckets), chunk)):
                 if got is None:
                     continue
                 sel, w = got
                 tone = np.array(d.tone)
-                first = cov[sel] == 0  # untouched texels take the dab's tone whole
-                cur = np.where(first[:, None], tone, col[sel])
-                col[sel] = cur + (tone - cur) * w[:, None]
+                acc[sel] += (see[sel] * w)[:, None] * tone
+                see[sel] *= 1.0 - w
+                low[sel] = tone
                 cov[sel] = np.maximum(cov[sel], w)
+    met = cov > 0
+    col[met] = acc[met] + see[met][:, None] * low[met]
     return col, cov
 
 

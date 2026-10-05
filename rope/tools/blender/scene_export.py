@@ -539,8 +539,8 @@ def paint_moss(ob, im, paints):
     tri_pos = world[verts].reshape(n, 3, 3)
     for mo, _host, layers, p, _key in paints:
         t0 = time.time()
-        texels = moss.paint_map(px, uv_px, tri_pos, layers, p)
-        log(f"moss {mo.name}: painted into {im.name}, {texels} texels, {time.time() - t0:.1f}s")
+        texels = moss.paint_map(px, uv_px, tri_pos, layers(), p)
+        log(f"moss {mo.name}: grown in {mo.moss.build_ms / 1000:.1f}s and painted into {im.name}, {texels} texels, {time.time() - t0:.1f}s")
     im.pixels.foreach_set(px.ravel())
 
 
@@ -885,19 +885,20 @@ def grow_painted(scene, warnings):
         cards = f"{result.leaves} clumps" if result.detail == "CLUMPS" else f"{result.leaves} leaves"
         log(f"ivy {ob.name} on {ob.ivy.host}: {len(result.triangles)} triangles ({cards}, {result.vines} vines), {ob.ivy.build_ms:.0f} ms")
     moss.register()
-    for ob, result in moss.rebuild_all(scene):
-        if result is None:
-            warnings.append(f"{ob.name}: {ob.moss.status}; not exported")
+    for ob, what in moss.prepare_export(scene):
+        s = ob.moss
+        if what is None:
+            warnings.append(f"{ob.name}: {s.status}; not exported")
             drop(ob)
-            continue
-        if ob.moss.kind == "TEXTURE":
+        elif what == "texture":
             # Its decal is Blender's preview: never shipped, and out of the
             # bake's rays (3 mm off the rock, it would shade the rock's own
             # occlusion and bevel). The dabs go into the rock's colour map.
             drop(ob)
-            log(f"moss {ob.name} on {ob.moss.host}: texture only, {result.dabs} dabs, {ob.moss.build_ms:.0f} ms")
-            continue
-        log(f"moss {ob.name} on {ob.moss.host}: {len(result.triangles)} triangles, {result.dabs} dabs, print {result.image.shape[0]} px, {ob.moss.build_ms:.0f} ms")
+            log(f"moss {ob.name} on {s.host}: texture only, painted into the rock's colour map")
+        else:
+            took = f"rebuilt in {s.build_ms:.0f} ms" if what == "rebuilt" else "kept: built from this paint, rock and code"
+            log(f"moss {ob.name} on {s.host}: {s.triangles} triangles, {s.dabs} dabs, print {s.texture} px, {took}")
 
 
 def formation_warnings(scene, warnings):

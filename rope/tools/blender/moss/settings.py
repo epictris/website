@@ -107,6 +107,9 @@ class MossSettings(bpy.types.PropertyGroup):
     reused: BoolProperty(options={"HIDDEN"})  # the last rebuild finished a cached growth
     build_ms: FloatProperty(options={"HIDDEN"})
     status: StringProperty(options={"HIDDEN"})
+    # ops._build_key of the build the saved mesh and print came from, so the
+    # scene export keeps them while nothing that made them has changed.
+    built_key: StringProperty(options={"HIDDEN"})
 
     def params(self):
         """The build's parameters. Colours go from the panel's sRGB to linear."""

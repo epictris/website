@@ -3,7 +3,7 @@
 Since 2026-10-02 moss is **painted onto a scene in Blender** with the moss add-on, `tools/blender/moss/`, and grown as a low mound whose colour is printed dab by dab: a dark base at its rim, lighter clumps inside, and the lighter the moss, the taller it stands.
 It is the cave sheet study's moss carpet (the record is `cave-sheet-study/moss_study.py` and [cave-look](cave-look.md)), settled with the owner over many rounds on 2026-10-01 and 2026-10-02, made into a tool.
 Until that day "moss" was the name of the ivy add-on; it is now [blender-ivy](blender-ivy.md), and the owner's words on the difference were "the current moss pipeline is actually an ivy carpet pipeline. They are different effects".
-Like the ivy it lives entirely in Blender: the paint and the settings are saved in the `.blend`, the mound and its print are exported by `just scene <level>`, and the exporter grows them again from the paint first.
+Like the ivy it lives entirely in Blender: the paint and the settings are saved in the `.blend`, the mound and its print are exported by `just scene <level>`, and the exporter first rebuilds any moss whose saved mound is not what its paint, settings and rock make now (see "The export keeps what is current").
 
 ## Install
 
@@ -46,6 +46,13 @@ The finish from a cached growth is identical to a fresh build, mesh and print.
 2026-10-05, measured on river's rocks, every change checked bit-identical (mesh, UVs, print) against the build before it: mid-ledge 25.5 s to 17.2 s, central-rock 37.7 s to 22.2 s.
 The wins, in order: the KD-tree of the refined rock is filled in a shuffled order (`stampbrush.geometry.kdtree`; Blender's balance degrades on the position-sorted vertices, 9 s against 0.04 s for 300k points); the packing and spacing tests of every layer skip a vertex already closer to a placed dab than any draw could pass (marked with a margin over float32 rounding, the draws still made, so the random stream is unchanged); the print finds each dab's texels on a thread pool and paints them in dab order; the gutter copies neighbours instead of rolling whole images; the erosion's distance walks start from the paint's border instead of every unpainted vertex.
 What is left is Python spread thin, roughly equal parts: the growth loop (KD-tree lookups and dab shape draws), the distance walks, the refinement, the print. Measure with wall-clock timers, not cProfile: its per-call overhead made the growth loop look like layer 0 packing and sent the first fix to the wrong loop.
+
+The print (`paint_texels`) paints **front to back**: dabs are packed so tightly that a texel met 12 dabs on average and 91 % of the dab-texel pairs lay under a later dab that covers the texel whole (mid-ledge: 13.3M pairs over 1.09M texels). Top down, each texel keeps how much of what is below still shows; a texel a dab covers whole is final and the dabs below skip it, as does a texel bucket with none open. The algebra is the bottom-up mix's (the comment in `paint_texels` has it); the order of the float sums is not, so the floats differ by under 1e-16 and the 8-bit print is identical (checked on three rocks). With buckets of one `dab_max` instead of 0.3 (fewer lookups a dab, the same texels), mid-ledge's print went from 4.3 s to 1.7 s.
+
+### The export keeps what is current
+
+Every build stores `built_key` on its moss: a hash of the growth's inputs (the rock's evaluated world triangles, the stamps, every setting), the Quality settings, `build.py`, `mesh_io.py`, `stampbrush/geometry.py` and the Blender version. `scene_export.py` calls `prepare_export`, which keeps a mound whose key matches what its inputs make now and rebuilds only the rest; until 2026-10-05 it rebuilt every moss, 162 s of the river's 380 s export.
+A texture-only moss grows nothing at that point: its key is part of its rock's bake-cache key, so a cached map already holds it, and its dabs are grown only when the rock is baked. A moss painted in a file from before `built_key` (or with code changed since) is rebuilt by the export until it is rebuilt in Blender and the file saved.
 A file load clears the cache, and the scene exporter, a fresh process, always grows.
 
 ## What is grown

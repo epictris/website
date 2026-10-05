@@ -1,6 +1,7 @@
 """Finding, creating and rebuilding moss objects, and the panel's operators."""
 
 import hashlib
+import os
 import time
 
 import bpy
@@ -118,6 +119,58 @@ def _growth_key(co, tri, matrix, stamps, p):
     return h.hexdigest()
 
 
+_code = None
+
+
+def _code_digest():
+    """What a build's output depends on besides its inputs: the code that
+    grows, decimates and writes it, and Blender (its decimate)."""
+    global _code
+    if _code is None:
+        h = hashlib.sha1(bpy.app.version_string.encode())
+        for path in (build.__file__, mesh_io.__file__, os.path.join(os.path.dirname(build.__file__), "stampbrush", "geometry.py")):
+            with open(path, "rb") as f:
+                h.update(hashlib.sha1(f.read()).digest())
+        _code = h.hexdigest()
+    return _code
+
+
+def _build_key(growth_key, p):
+    """The key of a whole build: its growth, the FINISH_PARAMS and the code.
+    Stored on the moss after every build (`built_key`), so the scene export
+    can tell a saved mound is what a build would make now and keep it."""
+    finish = repr([(k, getattr(p, k)) for k in build.FINISH_PARAMS])
+    return hashlib.sha1(f"{growth_key} {finish} {_code_digest()}".encode()).hexdigest()
+
+
+class _Inputs:
+    """A moss's build inputs as they stand: its host's world triangles, its
+    stamps and settings, and the growth key over them."""
+
+    def __init__(self, ob, host, depsgraph):
+        ev = host.evaluated_get(depsgraph)
+        host_mesh = ev.to_mesh()
+        try:
+            self.co, self.tri = host_world(host_mesh, host.matrix_world)  # copied out before the build re-evaluates
+        finally:
+            ev.to_mesh_clear()
+        self.matrix = host.matrix_world.copy()
+        self.p = ob.moss.params()
+        self.stamps = stamp_io.read(ob.moss.stamps)
+        self.key = _growth_key(self.co, self.tri, self.matrix, self.stamps, self.p)
+
+
+def _grow(ob, inputs, regrow=False):
+    """(growth, reused): the cached growth when its key matches, else grown."""
+    cached = _grown.get(ob.session_uid)
+    if not regrow and cached is not None and cached[0] == inputs.key:
+        return cached[1], True
+    _grown.pop(ob.session_uid, None)
+    grown = build.grow(inputs.co, inputs.tri, inputs.matrix, inputs.stamps, inputs.p)
+    _grown[ob.session_uid] = (inputs.key, grown)
+    return grown, False
+
+
 def rebuild(ob, depsgraph=None, regrow=False):
     """Grow the moss object's mound and print again from its stamps and
     settings. Returns the build result, or None when the host is missing.
@@ -128,24 +181,9 @@ def rebuild(ob, depsgraph=None, regrow=False):
         s.status = f'host "{s.host}" not found'
         return None
     t0 = time.perf_counter()
-    depsgraph = depsgraph or bpy.context.evaluated_depsgraph_get()
-    ev = host.evaluated_get(depsgraph)
-    host_mesh = ev.to_mesh()
-    try:
-        co, tri = host_world(host_mesh, host.matrix_world)  # copied out before the build re-evaluates
-    finally:
-        ev.to_mesh_clear()
-    p = s.params()
-    stamps = stamp_io.read(s.stamps)
-    key = _growth_key(co, tri, host.matrix_world, stamps, p)
-    cached = _grown.get(ob.session_uid)
-    reused = not regrow and cached is not None and cached[0] == key
-    if reused:
-        grown = cached[1]
-    else:
-        _grown.pop(ob.session_uid, None)
-        grown = build.grow(co, tri, host.matrix_world, stamps, p)
-        _grown[ob.session_uid] = (key, grown)
+    inputs = _Inputs(ob, host, depsgraph or bpy.context.evaluated_depsgraph_get())
+    p = inputs.p
+    grown, reused = _grow(ob, inputs, regrow)
     result = build.finish(grown, p, mesh_io.decimate) if grown is not None else build.empty_result()
     mesh_io.write_result(ob, result)
     s.triangles = len(result.triangles)
@@ -156,37 +194,82 @@ def rebuild(ob, depsgraph=None, regrow=False):
     s.texel_used = result.texel
     s.area = result.area
     s.reused = reused
+    s.built_key = _build_key(inputs.key, p)
     s.build_ms = (time.perf_counter() - t0) * 1000.0
     s.status = ""
     return result
-
-
-def texture_paints(scene):
-    """[(moss, host, layers, params, key)] for every texture-only moss in the
-    scene grown in this session: what scene_export.py paints into the host's
-    colour map (build.paint_map). `key` changes with anything that changes the
-    painting - the growth's inputs, the dab edge, and build.py itself - for
-    the export's bake cache."""
-    with open(build.__file__, "rb") as f:
-        code = hashlib.sha1(f.read()).hexdigest()
-    out = []
-    for ob in moss_objects(scene):
-        if ob.moss.kind != "TEXTURE":
-            continue
-        host = resolve_host(ob)
-        cached = _grown.get(ob.session_uid)
-        if host is None or cached is None or cached[1] is None:
-            continue
-        p = ob.moss.params()
-        key = hashlib.sha1(f"{cached[0]} {p.print_edge!r} {code}".encode()).hexdigest()
-        out.append((ob, host, cached[1].layers, p, key))
-    return out
 
 
 def rebuild_all(scene):
     """Rebuild every moss object in the scene. Returns [(object, result)]."""
     depsgraph = bpy.context.evaluated_depsgraph_get()
     return [(ob, rebuild(ob, depsgraph)) for ob in moss_objects(scene)]
+
+
+# --------------------------------------------------------------------------
+# The scene export (tools/blender/scene_export.py)
+
+_export = {}  # session_uid -> _Inputs of a texture-only moss, for texture_paints
+
+
+def prepare_export(scene):
+    """Make every moss in the scene current for an export, doing no more work
+    than that needs. Returns [(object, what)], `what` one of:
+
+    - "kept": a mound whose saved mesh and print were built from exactly
+      these inputs by this code (`built_key`); left as it is.
+    - "rebuilt": a mound rebuilt (`s.build_ms` says how long it took).
+    - "texture": a texture-only moss. Nothing is grown here: its decal is not
+      exported, and its dabs are only needed if its rock's colour map misses
+      the bake cache, whose key holds the moss's (`texture_paints`).
+    - None: its host is missing (`s.status` says so).
+
+    Before 2026-10-05 the export rebuilt every moss: 162 s of the river's
+    380 s export, nearly all of it rebuilding mosses nobody had changed."""
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    out = []
+    _export.clear()
+    for ob in moss_objects(scene):
+        s = ob.moss
+        host = resolve_host(ob)
+        if host is None:
+            s.status = f'host "{s.host}" not found'
+            out.append((ob, None))
+            continue
+        inputs = _Inputs(ob, host, depsgraph)
+        if s.kind == "TEXTURE":
+            _export[ob.session_uid] = (host, inputs)
+            out.append((ob, "texture"))
+        elif s.built_key == _build_key(inputs.key, inputs.p) and len(ob.data.polygons) > 0:
+            out.append((ob, "kept"))
+        else:
+            out.append((ob, "rebuilt" if rebuild(ob, depsgraph) is not None else None))
+    return out
+
+
+def texture_paints(scene):
+    """[(moss, host, layers, params, key)] for every texture-only moss
+    `prepare_export` saw: what scene_export.py paints into the host's colour
+    map (build.paint_map). `layers()` grows the moss on its first call (only a
+    rock that misses the bake cache calls it); `key` changes with anything
+    that changes the painting - the growth's inputs, the dab edge, the code -
+    and is part of the rock's bake-cache key."""
+    out = []
+    for ob in moss_objects(scene):
+        entry = _export.get(ob.session_uid)
+        if entry is None:
+            continue
+        host, inputs = entry
+
+        def layers(ob=ob, inputs=inputs):
+            t0 = time.perf_counter()
+            grown, _reused = _grow(ob, inputs)
+            ob.moss.build_ms = (time.perf_counter() - t0) * 1000.0
+            return grown.layers if grown is not None else []
+
+        key = hashlib.sha1(f"{inputs.key} {inputs.p.print_edge!r} {_code_digest()}".encode()).hexdigest()
+        out.append((ob, host, layers, inputs.p, key))
+    return out
 
 
 # --------------------------------------------------------------------------

@@ -5,9 +5,9 @@ rope/docs/blender-moss.md.
 
 A Blender add-on (an extension in Blender's 4.2+ packaging, blender_manifest.toml
 beside this file). The scene exporter imports this package directly and calls
-`rebuild_all` so every export grows the moss from its paint afresh, then
-`texture_paints` and `paint_map` to paint each texture-only moss into its
-rock's baked colour map.
+`prepare_export`, which rebuilds every moss whose saved mound is not what its
+paint, settings and rock make now, then `texture_paints` and `paint_map` to
+paint each texture-only moss into its rock's baked colour map.
 
 Until 2026-10-02 "moss" was the name of the ivy add-on (tools/blender/ivy), which
 carries an older file across (its migrate.py)."""
@@ -21,6 +21,10 @@ CLASSES = ops.CLASSES + paint.CLASSES + ui.CLASSES
 
 def rebuild_all(scene):
     return ops.rebuild_all(scene)
+
+
+def prepare_export(scene):
+    return ops.prepare_export(scene)
 
 
 def texture_paints(scene):
