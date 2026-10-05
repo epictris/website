@@ -86,10 +86,10 @@ class IVY_PT_surface(_Sub, bpy.types.Panel):
         _grid(self.layout, s, ("thickness", "tilt", "spread", "taper"))
         if s.detail == "CLUMPS":
             self.layout.label(text="Clumps")
-            _grid(self.layout, s, ("clump_min", "clump_max", "clump_fill", "edge_fill", "facing", "shoulder", "underlay"))
+            _grid(self.layout, s, ("clump_min", "clump_max", "clump_fill", "edge_fill", "edge_round", "underlay"))
         else:
             self.layout.label(text="Leaves")
-            _grid(self.layout, s, ("sheets", "leaf_min", "leaf_max", "leaf_fill", "edge_fill", "density", "facing", "shoulder", "underlay"))
+            _grid(self.layout, s, ("sheets", "leaf_min", "leaf_max", "leaf_fill", "edge_fill", "density", "edge_round", "underlay"))
 
 
 class IVY_PT_vines(_Sub, bpy.types.Panel):

@@ -165,6 +165,8 @@ const dofOverride = isDepthOfFieldLevel(dofParam) ? dofParam : null;
 // `?probe=0` turns the ball's reflection probe off, for measuring its cost in a
 // live frame (see render3d/reflectionProbe.ts).
 if (scene3d && params.get("probe") === "0") scene3d.setReflectionProbe(false);
+// `?mirror=0` turns the pools' mirror off, likewise (render3d/planarReflection.ts).
+if (scene3d && params.get("mirror") === "0") scene3d.setPoolMirror(false);
 
 // `?dpr=N` draws the frame at a device pixel ratio this display does not have,
 // so the fill cost a 4K or HiDPI player pays can be read on a 1080p desk (see
@@ -752,7 +754,7 @@ const perf = new PerfProbe();
 // reference would be of a run that has ended.
 Object.defineProperty(window, "__level", { get: () => level, configurable: true });
 // And one on the 3D scene, so a script measuring frame time on a real GPU can
-// switch a renderer setting (`setDepthOfField`, `setReflectionProbe`) inside one
+// switch a renderer setting (`setDepthOfField`, `setReflectionProbe`, `setPoolMirror`) inside one
 // page and interleave the readings, rather than reloading between them.
 (window as unknown as { __scene3d: Scene3D | null }).__scene3d = scene3d;
 // The visual chain drape may not cost gameplay a frame: past this much of a

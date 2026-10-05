@@ -1,15 +1,15 @@
-// Still water as a painting: a pool with no current (see docs/water.md,
-// "Still water"), the splash the ball throws up when it falls in, and the
-// wake it leaves moving through.
+// Still water: a pool with no current (see docs/water.md, "Still water"), the
+// splash the ball throws up when it falls in, and the wake it leaves moving
+// through.
 //
-// THE SURFACE (`stillWaterMaterial`) is after the calm-lake painting Tris gave
-// on 2026-10-05: a colour ramp over the view's grazing angle - teal looking
-// down into the water, a darker blue in the middle distance, sky blue at
-// grazing - under horizontal wavelets, flat lighter and darker dashes with a
-// lit camera-side rim. (A caustic net after his Blender reference files came
-// first and was replaced; its star glints were rejected outright.) The
-// channel's soft digital painting (water.ts) is a current's look; this is a
-// pool's.
+// THE SURFACE (`stillWaterMaterial`) is Tris's cave-pool study of 2026-10-05
+// ported: continuous rippling normals driving soft turquoise light bands and
+// a mirror of the scene (planarReflection.ts) that bends with them, deep blue
+// at the back of the pool to shallow teal at the front. (A caustic net after
+// his Blender reference files came first, then a calm-lake painting of
+// wavelet dashes; both were replaced, and the net's star glints were rejected
+// outright.) The channel's soft digital painting (water.ts) is a current's
+// look; this is a pool's.
 //
 // THE SPLASH (`WaterSplashes`) is the reference's splash, staged once rather
 // than looped under a waterfall: a cel-shaded crown that rises, flares and
@@ -24,12 +24,13 @@ import * as THREE from "three";
 import { WaterArea } from "../engine/body";
 import { Vec2 } from "../engine/vec2";
 import { LIGHT_FALLOFF, paletteOf, waterTime } from "./water";
+import { reflectionUniforms } from "./planarReflection";
 import { POINT_VIEW_HALF_HEIGHT, threeY } from "./space";
 
 const fmt = (n: number): string => n.toFixed(4);
 
 // ---------------------------------------------------------------------------
-// Shared GLSL: hashing, value noise, the caustic Voronoi
+// Shared GLSL: hashing and value noise, for the splash
 // ---------------------------------------------------------------------------
 
 const NOISE_GLSL = `
@@ -65,247 +66,419 @@ const NOISE_GLSL = `
   }
 `;
 
-// The ripple facets: a 3D Voronoi walk (the third axis is time, so the cells
-// morph rather than slide) answering F1, F2, the nearest cell's own random
-// number, and which side of its feature point the pixel is on along the
-// plane's second axis - the side facing the camera on the surface, where the
-// light catches a wavelet's rim.
-const FACET_GLSL = `
-  vec4 swFacet(vec3 p) {
-    vec3 cell = floor(p);
-    vec3 local = p - cell;
-    float f1 = 8.0;
-    float f2 = 8.0;
-    float id = 0.0;
-    float side = 0.0;
-    for (int z = -1; z <= 1; z++)
-    for (int y = -1; y <= 1; y++)
-    for (int x = -1; x <= 1; x++) {
-      vec3 o = vec3(float(x), float(y), float(z));
-      vec3 h = swHash3(cell + o);
-      vec3 pt = o + h;
-      float d = distance(pt, local);
-      if (d < f1) {
-        f2 = f1;
-        f1 = d;
-        id = h.z;
-        side = local.y - pt.y;
-      } else if (d < f2) {
-        f2 = d;
-      }
-    }
-    return vec4(f1, f2, id, side);
-  }
-`;
-
 // ---------------------------------------------------------------------------
 // The surface
 // ---------------------------------------------------------------------------
 
-// THE LOOK, after the painting Tris gave on 2026-10-05 in place of the caustic
-// net (a calm blue lake between low-poly rocks). Measured from it by k-means
-// over three bands of its water:
-// - looking DOWN into it, near the viewer: teal, #257e8b to #2da5b8 on the
-//   lit facets (hue 188, s 0.57-0.60, l 0.35-0.45) - which is the BALL
-//   pool's own authored #1e7382 almost exactly, so the near colour IS the
-//   authored colour;
-// - the middle distance: a darker blue, #204d69 to #357ca5 (hue 201, l 0.27-
-//   0.43) - the water reflecting the dark rocks and the cave;
-// - far off, at a grazing angle: a lighter sky blue, #2a6488 to #4898c5
-//   (hue 202, l 0.35-0.53).
-// So the colour is a ramp over the view's grazing angle (a Fresnel term)
-// that turns the hue 13 degrees toward blue as it goes from looking into the
-// water to looking at its reflection; and over it, the ripples: wavelets
-// stretched along x, each a FLAT facet of one of three shades, with a light
-// rim on the side facing the camera - the low-poly water of the painting.
-// The caustic net before this (the Blender reference files') and its star
-// glints were both dropped (glints: "they look bad").
+// THE LOOK is Tris's cave-pool study of 2026-10-05 (cave-pool-water-v2.html,
+// "A quiet cave pool", with his exported settings), ported shader for shader:
+// continuous wave normals rather than any cellular pattern - three layers of a
+// band-limited wave spectrum drifting against each other plus three long sine
+// waves - and the SAME slopes drive everything drawn on the water:
+// - broad soft turquoise light bands where the ripples face the light, a
+//   slight shade where they face away, and a brighter crest on the steepest;
+// - the scene mirrored in the surface (planarReflection.ts), pushed about by
+//   the slopes so a reflected rock edge bends and breaks as the ripples pass,
+//   strong where what it mirrors is near and faint for the far cave, which is
+//   what keeps the water teal rather than a dark mirror;
+// - a Fresnel term, so the mirror strengthens toward grazing;
+// - deep blue at the back of the pool turning to shallow teal at its front.
+// The water is unlit and not tone mapped: its colours are the study's own, and
+// the reflection is the frame as the player sees it. The study's shoreline
+// glints (a field built from the rocks' waterline outlines) are not ported.
+//
+// Before this (the same day) the pool was a calm-lake painting - a grazing-
+// angle colour ramp under flat light and dark wavelet dashes - and before that
+// a caustic net after Tris's Blender files, whose star glints were rejected
+// ("they look bad").
 
-// The wavelets: metres across the plane's second axis, stretched STRETCH
-// times along x; how fast they morph (cells per second, through the 3D
-// field's time axis) and drift (metres per second).
-const FACET_CELL = 0.2;
-const FACET_STRETCH = 5;
-const FACET_MORPH = 0.3;
-const FACET_DRIFT = 0.025;
-// The dashes: the share of cells carrying a lit one and a dark one, their
-// radius range and edge softness in the field's units (a cell is ~1), how far
-// each shade goes, and the lit dashes' camera-side rim. Big enough that the
-// wavelets cover most of the water, as the painting's do - smaller read as
-// scratches on a flat sheet.
-const FACET_LIT = 0.4;
-const FACET_DARK = 0.3;
-const DASH_R = [0.42, 0.62] as const;
-const DASH_SOFT = 0.05;
-const FACET_W = 0.6;
-const RIM_W = 0.25;
-// The view ramp: the grazing term (1 - cos of the view against the normal)
-// at which the near teal has turned to the middle blue, and the middle blue
-// to the far sky; and how far the facets fade at grazing, where perspective
-// crushes them into a shimmer.
-const GRAZE_MID = [0.45, 0.8] as const;
-const GRAZE_FAR = [0.88, 0.99] as const;
-const GRAZE_FACET_FADE = 0.5;
-// The ramp's stops, from the authored colour: hue turned toward blue,
-// lightness and saturation as multiples of the authored colour's (measured
-// ratios: mid 0.27/0.35, far 0.44/0.35; saturation 0.52/0.58).
-const BLUE_TURN = 13 / 360;
-const MID_L = 0.8;
-const FAR_L = 1.25;
-const BLUE_S = 0.9;
-// The facet shades about whatever the ramp gives: lit +0.10 lightness, dark
-// -0.06 (the painting's near clusters); the rim lifted toward white.
-const LIT_DL = 0.1;
-const DARK_DL = -0.06;
-const RIM_LIFT = 0.45;
-// How much of the colour is the water's own light rather than the scene's:
-// the painting's water is luminous, a pool in a lit cave mostly lit.
-const SELF_LIGHT = 0.35;
-// The front sheet, looking into the water: the near teal deepening toward the
-// bed under a pale line at the waterline.
-const FRONT_DEEP_W = 0.65;
+// Game metres per study metre. The study's world is a 75 m lake seen from
+// 35 m and the BALL pool is 6.4 m across, framed ~0.18 as large - but at 0.18
+// the ripples were hairlines, because the game sees its pool far more edge-on
+// (see DEPTH_STRETCH); 0.5 gives bands the size of the study's on screen. Its
+// speeds are in the pattern's own units, so they scale with it.
+const STUDY_SCALE = 0.5;
+// Tris's settings (cave-pool-v2-settings.json): the pattern's size (study
+// metres), "painterly light", "ripple strength", the clock's rate, the
+// reflection's strength and how far the ripples push it about.
+const PATCH_SIZE = 0.82 * STUDY_SCALE;
+// The game looks at its pools far more edge-on than the study's camera did
+// (the BALL pool's 12 m of depth is ~200 px of a 1080 px frame), so a pattern
+// round in plan is crushed into hairlines on screen. Stretched this much
+// along the depth, its ripples read as the study's broad bands.
+const DEPTH_STRETCH = 2.5;
+const CONTRAST = 0.6;
+const RIPPLE_STRENGTH = 1.01;
+const SPEED = 1;
+const REFLECTION = 0.61;
+const DISTORTION = 0.51;
+// The long sine waves' amplitude, in the pattern's units (a slope, so it does
+// not scale). They only tilt the normals: the study also displaced its mesh
+// by them, by 4 mm at this scale, which no pixel shows and the slab's 1.2 m
+// rows could not carry anyway.
+const WAVE_HEIGHT = 0.022;
+// The palette: Tris's three colours. The pool's authored colour stands in for
+// the shallow one, and the deep and the light are moved from it in HSL by
+// whatever separates them from the shallow in the study, so an authored pool
+// keeps its own colour and BALL's (#1e7382) lands near the study.
+const STUDY_SHALLOW = "#178b96";
+const STUDY_DEEP = "#13506b";
+const STUDY_LIGHT = "#55bec7";
+// How the mirror's strength follows what it mirrors: full for what stands
+// within NEAR metres of the water, the study's faint reflection of its open
+// background past FAR (study: rocks reflected, the far cave wall left out).
+const REFLECT_NEAR = 1.5;
+const REFLECT_FAR = 6;
+// The study's deep-to-shallow ramp was over its world z; here it is over the
+// slab's own depth, back (0) to front (1), the same stretch of it that the
+// study showed: deep at the back wall, ~0.8 at the near edge of the frame.
+const SHALLOW_RAMP = [0.16, 1.21] as const;
+// The front sheet, looking into the water: how far from the shallow colour to
+// the deep one it starts at the waterline, and the deep colour's brightness at
+// the bed. Unlit and unfogged, a front as bright as the surface read as a
+// block of teal glass.
+const FRONT_TOP_DEEP = 0.5;
+const FRONT_BED = 0.7;
 const RIM_WIDTH = 0.008;
 const RIM_SOFT = 0.016;
 const WATERLINE_W = 0.5;
 
-// One colour moved in HSL, in sRGB, as paletteOf does (water.ts).
-function shifted(c: THREE.Color, dh: number, sMul: number, lMul: number, dl = 0): THREE.Color {
+// `c` moved in HSL (in sRGB, as paletteOf does in water.ts) by what separates
+// `to` from `from`: hue turned by the difference, saturation and lightness
+// scaled by the ratio.
+function relative(c: THREE.Color, from: string, to: string): THREE.Color {
   const hsl = { h: 0, s: 0, l: 0 };
+  const a = { h: 0, s: 0, l: 0 };
+  const b = { h: 0, s: 0, l: 0 };
   c.getHSL(hsl, THREE.SRGBColorSpace);
+  new THREE.Color(from).getHSL(a, THREE.SRGBColorSpace);
+  new THREE.Color(to).getHSL(b, THREE.SRGBColorSpace);
   return new THREE.Color().setHSL(
-    (hsl.h + dh + 1) % 1,
-    Math.min(1, hsl.s * sMul),
-    Math.min(1, Math.max(0, hsl.l * lMul + dl)),
+    (hsl.h + b.h - a.h + 1) % 1,
+    Math.min(1, (hsl.s * b.s) / a.s),
+    Math.min(1, (hsl.l * b.l) / a.l),
     THREE.SRGBColorSpace,
   );
 }
 
-export function stillWaterMaterial(color: string | undefined): THREE.MeshStandardMaterial {
-  const palette = paletteOf(color);
-  const near = palette.body;
-  const mid = shifted(near, BLUE_TURN, BLUE_S, MID_L);
-  const far = shifted(near, BLUE_TURN, BLUE_S, FAR_L);
-  const mat = new THREE.MeshStandardMaterial({
-    color: palette.body,
-    roughness: 0.55,
-    metalness: 0,
-    transparent: true,
-    depthWrite: false,
+// The wave spectrum the ripples are read from, generated here rather than
+// stored (the study's `createSurfaceTextureData`, number for number): a sum of
+// twelve plane waves on whole-number wave vectors, so it tiles. R and G are the
+// two slopes, B the height, A a soft value noise; data, not colour.
+function hash2(x: number, y: number, seed = 0): number {
+  let h = Math.imul(x ^ seed, 374761393) ^ Math.imul(y + seed, 668265263);
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967295;
+}
+
+function tileNoise(u: number, v: number, n: number, seed: number): number {
+  const mod = (x: number): number => ((x % n) + n) % n;
+  const x = u * n;
+  const y = v * n;
+  const ix = Math.floor(x);
+  const iy = Math.floor(y);
+  let fx = x - ix;
+  let fy = y - iy;
+  fx = fx * fx * (3 - 2 * fx);
+  fy = fy * fy * (3 - 2 * fy);
+  const a = hash2(mod(ix), mod(iy), seed);
+  const b = hash2(mod(ix + 1), mod(iy), seed);
+  const c = hash2(mod(ix), mod(iy + 1), seed);
+  const d = hash2(mod(ix + 1), mod(iy + 1), seed);
+  return (a + (b - a) * fx) * (1 - fy) + (c + (d - c) * fx) * fy;
+}
+
+const SURFACE_MAP_SIZE = 256;
+const SURFACE_MODES: readonly (readonly [number, number, number])[] = [
+  [2, 5, 0.2], [-3, 7, 0.16], [1, 9, 0.13], [4, 3, 0.12], [-2, 13, 0.095],
+  [5, 11, 0.075], [-4, 17, 0.055], [8, 6, 0.05], [1, 21, 0.035],
+  [7, 19, 0.03], [-9, 11, 0.03], [11, 23, 0.018],
+];
+
+let surfaceMap: THREE.DataTexture | null = null;
+
+function stillSurfaceMap(): THREE.DataTexture {
+  if (surfaceMap) return surfaceMap;
+  const size = SURFACE_MAP_SIZE;
+  const data = new Uint8Array(size * size * 4);
+  const terms = SURFACE_MODES.map(([x, y, w], i) => ({
+    x,
+    y,
+    w,
+    phi: hash2(i, 17, 819) * Math.PI * 2,
+    dx: x / Math.hypot(x, y),
+    dy: y / Math.hypot(x, y),
+  }));
+  const total = SURFACE_MODES.reduce((s, m) => s + m[2], 0);
+  const byte = (v: number): number => Math.round(255 * Math.max(0, Math.min(1, v)));
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const u = x / size;
+      const v = y / size;
+      let dx = 0;
+      let dy = 0;
+      let h = 0;
+      for (const m of terms) {
+        const phase = Math.PI * 2 * (m.x * u + m.y * v) + m.phi;
+        const c = Math.cos(phase) * m.w;
+        dx += c * m.dx;
+        dy += c * m.dy;
+        h += Math.sin(phase) * m.w;
+      }
+      const i = (y * size + x) * 4;
+      data[i] = byte(0.5 + (dx / total) * 0.9);
+      data[i + 1] = byte(0.5 + (dy / total) * 0.9);
+      data[i + 2] = byte(0.5 + (h / total) * 0.75);
+      data[i + 3] = byte(tileNoise(u, v, 8, 109) * 0.6 + tileNoise(u, v, 16, 41) * 0.4);
+    }
+  }
+  const map = new THREE.DataTexture(data, size, size, THREE.RGBAFormat);
+  map.wrapS = THREE.RepeatWrapping;
+  map.wrapT = THREE.RepeatWrapping;
+  map.magFilter = THREE.LinearFilter;
+  map.minFilter = THREE.LinearMipmapLinearFilter;
+  map.generateMipmaps = true;
+  map.colorSpace = THREE.NoColorSpace;
+  map.needsUpdate = true;
+  surfaceMap = map;
+  return map;
+}
+
+// A pool's material and the switch for its mirror: on only for the pool the
+// scene drew the reflection for this frame (see `Scene3D.mirrorPool`), so a
+// pool never reads a reflection taken in another pool's plane. And the world z
+// behind which the slab's end caps are not drawn: where the scene's own water
+// continues the pool past its ends (`Scene3D.adoptSceneryWater`), a cap is a
+// wall standing in open water, and its waterline showed as a pale seam. And
+// the pool's top face in the world (min x, max x, min z, max z), set by the
+// scene every frame (`Scene3D.mirrorPool`): the scene's water continuing the
+// pool is not drawn under it.
+export interface StillWaterMaterial {
+  material: THREE.MeshBasicMaterial;
+  reflect: { value: number };
+  openBehind: { value: number };
+  footprint: { value: THREE.Vector4 };
+}
+
+// `openBehind` with nothing continuing the pool: every cap drawn.
+const CAPS_CLOSED = -1e9;
+// How far the scene's water reaches in under the pool's top face, metres.
+const FOOTPRINT_OVERLAP = 0.01;
+
+// `backZ`/`frontZ` are the slab's z range, which is the world's: a water body's
+// root stands on the gameplay plane. The deep-to-shallow ramp runs over it in
+// world z, so anything else wearing a pool's water continues its colours.
+//
+// `plane` is that anything else: the scene's own flat water beyond the pool
+// (the backdrop's "backdrop pool", see `Scene3D.adoptSceneryWater`), worn with
+// the pool's colour, slab and mirror switch so the two meet without a seam.
+// It is a plain surface with none of the slab's attributes, opaque, drawn
+// before the slab, at the pool's own height and not under the pool's top face
+// (`footprint`): one surface at one height, so there is no step at the join
+// and the mirror is sampled from the same plane on both sides of it.
+export function stillWaterMaterial(
+  color: string | undefined,
+  backZ: number,
+  frontZ: number,
+  plane: { reflect: { value: number }; footprint: { value: THREE.Vector4 } } | null = null,
+): StillWaterMaterial {
+  const shallow = paletteOf(color).body;
+  const deep = relative(shallow, STUDY_SHALLOW, STUDY_DEEP);
+  const light = relative(shallow, STUDY_SHALLOW, STUDY_LIGHT);
+  const reflect = plane ? plane.reflect : { value: 0 };
+  const openBehind = { value: CAPS_CLOSED };
+  const footprint = plane ? plane.footprint : { value: new THREE.Vector4() };
+  // Unlit (the water's colour is the study's, not the cave lights') and not
+  // tone mapped (the study's colours are display colours, and so is the
+  // reflection it mixes with; see planarReflection.ts).
+  //
+  // NOT FOGGED. The study's air was thin where its camera stood (7% at its
+  // pool), and the game's stands ~3x as far off at the study's scale: BALL's
+  // haze (54% at 20 m) took half the teal's saturation and left a grey-blue
+  // sheet (2026-10-05, measured front of pool 29,81,102 fogged vs the study's
+  // 47,147,159). The mirror is still the fogged scene, so the level's air is in
+  // what the water reflects; only the water's own colour stands clear of it.
+  //
+  // WRITES DEPTH, translucent front sheet and all. The depth of field draws
+  // anything see-through that writes none sharp over its blur, whole (it
+  // cannot blur what it has no depth for); a pool reaching back to the far
+  // wall then stayed crisp against the blurred rocks it meets, and a shade
+  // off the scene's water beyond its ends, which blurs (Tris, 2026-10-05).
+  // With depth, the blur reads the water's own: sharp at the plane, soft
+  // toward the far wall, as the rocks standing in it are.
+  const mat = new THREE.MeshBasicMaterial({
+    color: shallow,
+    transparent: !plane,
+    depthWrite: true,
     side: THREE.DoubleSide,
+    toneMapped: false,
+    fog: false,
   });
-  mat.envMapIntensity = 0.15;
+  if (plane) mat.defines = { SW_PLANE: "" };
   mat.onBeforeCompile = (shader) => {
+    Object.assign(shader.uniforms, reflectionUniforms);
     shader.uniforms.uTime = waterTime;
-    shader.uniforms.uDeep = { value: palette.deep };
-    shader.uniforms.uNear = { value: near };
-    shader.uniforms.uMid = { value: mid };
-    shader.uniforms.uFar = { value: far };
-    shader.uniforms.uNearLit = { value: shifted(near, 0, 1, 1, LIT_DL) };
-    shader.uniforms.uMidLit = { value: shifted(mid, 0, 1, 1, LIT_DL) };
-    shader.uniforms.uFarLit = { value: shifted(far, 0, 1, 1, LIT_DL) };
+    shader.uniforms.uSurfaceMap = { value: stillSurfaceMap() };
+    shader.uniforms.uReflect = reflect;
+    shader.uniforms.uOpenBehind = openBehind;
+    shader.uniforms.uFootprint = footprint;
+    shader.uniforms.uSlabZ = { value: new THREE.Vector2(backZ, Math.max(frontZ - backZ, 1e-3)) };
+    shader.uniforms.uDeep = { value: deep };
+    shader.uniforms.uShallow = { value: shallow };
+    shader.uniforms.uLight = { value: light };
 
     shader.vertexShader = `
-      attribute float aLit;
-      attribute float aAlpha;
-      attribute float aUp;
+      #ifndef SW_PLANE
+        attribute float aLit;
+        attribute float aAlpha;
+        attribute float aUp;
+      #endif
+      uniform mat4 uReflectionMatrix;
+      uniform vec2 uSlabZ;
       varying float vLit;
       varying float vAlpha;
       varying float vUp;
+      varying float vDepth;
+      varying float vCap;
       varying vec3 vWorld;
+      varying vec4 vReflection;
     ${shader.vertexShader}`.replace(
       "#include <begin_vertex>",
       `#include <begin_vertex>
-      vLit = aLit;
-      vAlpha = aAlpha;
-      vUp = aUp;
-      vWorld = (modelMatrix * vec4(position, 1.0)).xyz;`,
+      #ifdef SW_PLANE
+        vLit = 1.0;
+        vAlpha = 1.0;
+        vUp = 1.0;
+        vCap = 0.0;
+      #else
+        vLit = aLit;
+        vAlpha = aAlpha;
+        vUp = aUp;
+        // The end caps face along x; the top and the front sheet do not.
+        vCap = abs(normal.x);
+      #endif
+      vWorld = (modelMatrix * vec4(position, 1.0)).xyz;
+      // Back of the slab 0, front 1.
+      vDepth = (vWorld.z - uSlabZ.x) / uSlabZ.y;
+      vReflection = uReflectionMatrix * vec4(vWorld, 1.0);`,
     );
 
     shader.fragmentShader = `
       uniform float uTime;
+      uniform sampler2D uSurfaceMap;
+      uniform sampler2D uReflection;
+      uniform sampler2D uReflectionDepth;
+      uniform mat4 uReflectionInverse;
+      uniform float uReflect;
+      uniform float uOpenBehind;
+      uniform vec4 uFootprint;
       uniform vec3 uDeep;
-      uniform vec3 uNear;
-      uniform vec3 uMid;
-      uniform vec3 uFar;
-      uniform vec3 uNearLit;
-      uniform vec3 uMidLit;
-      uniform vec3 uFarLit;
+      uniform vec3 uShallow;
+      uniform vec3 uLight;
       varying float vLit;
       varying float vAlpha;
       varying float vUp;
+      varying float vDepth;
+      varying float vCap;
       varying vec3 vWorld;
-      ${NOISE_GLSL}
-      ${FACET_GLSL}
-      // The view ramp: into the water near, its dark reflection in the middle,
-      // the sky's at grazing.
-      vec3 swRamp(float g, vec3 n, vec3 m, vec3 f) {
-        vec3 c = mix(n, m, smoothstep(${fmt(GRAZE_MID[0])}, ${fmt(GRAZE_MID[1])}, g));
-        return mix(c, f, smoothstep(${fmt(GRAZE_FAR[0])}, ${fmt(GRAZE_FAR[1])}, g));
+      varying vec4 vReflection;
+      // The reflection is stored as the canvas is, sRGB encoded.
+      vec3 swDecode(vec3 c) {
+        return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(0.04045, c));
+      }
+      vec3 swReflection(vec2 uv) {
+        return swDecode(texture2D(uReflection, clamp(uv, 0.003, 0.997)).rgb);
       }
     ${shader.fragmentShader}`
       .replace(
         "#include <color_fragment>",
         `#include <color_fragment>
-      // The plan frame on the surface (x, z), the elevation frame on the front
-      // sheet (x, y) - one shared coordinate is constant on whichever face it
-      // is not built from (docs/water.md).
-      vec2 swPlane = mix(vWorld.xy, vWorld.xz, vUp);
-      // How far below the waterline a front-sheet pixel is, in metres: the
-      // geometry's light falloff (aLit, 1 at the waterline to 0 LIGHT_FALLOFF
-      // below) read back as a distance.
-      float swBelow = (1.0 - vUp) * (1.0 - vLit) * ${fmt(LIGHT_FALLOFF)};
+      // An end cap where the scene's water carries on past it.
+      if (vCap > 0.5 && vWorld.z < uOpenBehind) discard;
+      #ifdef SW_PLANE
+        // The scene's water under the pool's top face, which draws there. A
+        // hair inside it, so the two overlap rather than leave a crack; where
+        // they overlap they are the same colour at the same height.
+        if (vWorld.x > uFootprint.x + ${fmt(FOOTPRINT_OVERLAP)} && vWorld.x < uFootprint.y - ${fmt(FOOTPRINT_OVERLAP)}
+          && vWorld.z > uFootprint.z + ${fmt(FOOTPRINT_OVERLAP)} && vWorld.z < uFootprint.w - ${fmt(FOOTPRINT_OVERLAP)}) discard;
+      #endif
+      // THE SURFACE, the study's shader (see the header). Lengths are in the
+      // pattern's units.
+      vec2 swP = vWorld.xz / vec2(${fmt(PATCH_SIZE)}, ${fmt(PATCH_SIZE * DEPTH_STRETCH)});
+      float swT = uTime * ${fmt(SPEED)};
+      // Three layers of the wave spectrum on independent, opposing drifts, so
+      // their sum changes shape rather than sliding.
+      vec4 swA = texture2D(uSurfaceMap, swP * vec2(0.048, 0.064) + vec2(0.011, -0.014) * swT);
+      vec4 swB = texture2D(uSurfaceMap, swP * vec2(0.067, 0.086) + vec2(-0.009, 0.010) * swT + vec2(0.31, 0.57));
+      vec4 swC = texture2D(uSurfaceMap, swP * vec2(0.11, 0.14) + vec2(0.016, 0.005) * swT + 0.73);
+      // The finest layer fades out where a pixel spans too much of it.
+      float swFine = 1.0 - smoothstep(0.14, 0.8, length(fwidth(swP)));
+      vec2 swSlope = (swA.rg * 2.0 - 1.0) * vec2(0.11, 0.17)
+                   + (swB.rg * 2.0 - 1.0) * vec2(0.085, 0.14)
+                   + (swC.rg * 2.0 - 1.0) * vec2(0.035, 0.045) * swFine;
+      // And three long waves, as slopes only.
+      swSlope += ${fmt(WAVE_HEIGHT)} * (
+          vec2(0.23, 1.12) * cos(dot(swP, vec2(0.23, 1.12)) - swT * 0.94)
+        + vec2(-0.86, 1.58) * 0.55 * cos(dot(swP, vec2(-0.86, 1.58)) + swT * 1.17)
+        + vec2(1.65, 0.93) * 0.28 * cos(dot(swP, vec2(1.65, 0.93)) - swT * 1.36));
+      swSlope *= ${fmt(RIPPLE_STRENGTH)};
 
-      // The view: how grazing it is against this face's normal (up on the
-      // surface, toward the camera on the front sheet).
-      vec3 swView = normalize(cameraPosition - vWorld);
-      float swGraze = 1.0 - clamp(mix(swView.z, swView.y, vUp), 0.0, 1.0);
+      vec3 swN = normalize(vec3(-swSlope.x, 1.0, -swSlope.y));
+      vec3 swEye = normalize(cameraPosition - vWorld);
+      float swNV = clamp(dot(swN, swEye), 0.0, 1.0);
+      float swFresnel = 0.02 + 0.98 * pow(1.0 - swNV, 5.0);
+      float swFore = smoothstep(${fmt(SHALLOW_RAMP[0])}, ${fmt(SHALLOW_RAMP[1])}, vDepth);
+      vec3 swCol = mix(uDeep, uShallow, swFore * 0.91);
 
-      // The wavelets.
-      vec3 swQ = vec3(
-        (swPlane.x + uTime * ${fmt(FACET_DRIFT)}) / ${fmt(FACET_CELL * FACET_STRETCH)},
-        swPlane.y / ${fmt(FACET_CELL)},
-        uTime * ${fmt(FACET_MORPH)});
-      vec4 swF = swFacet(swQ);
-      // A dash in some cells - an ellipse about the feature point, long
-      // along x because the field is - lighter or darker than the water, and
-      // nothing in the rest: separate strokes on smooth water, never a mesh
-      // of outlined cells (which is what rimming every cell drew: cracked
-      // ice). The dash's size wanders a little so they are not all one stamp.
-      float swSize = mix(${fmt(DASH_R[0])}, ${fmt(DASH_R[1])}, fract(swF.z * 17.31));
-      float swDash = 1.0 - smoothstep(swSize - ${fmt(DASH_SOFT)}, swSize, swF.x);
-      float swShade = swDash * (step(1.0 - ${fmt(FACET_LIT)}, swF.z) - step(swF.z, ${fmt(FACET_DARK)}));
-      // The lit rim: the camera-facing side of a lit dash catches the light
-      // (+z on the surface; on the front sheet, the top of each band).
-      float swRimLit = max(swShade, 0.0) * smoothstep(swSize * 0.35, swSize * 0.75, swF.x)
-        * step(0.0, swF.w * mix(-1.0, 1.0, vUp));
-      // Facets fade at grazing, where perspective crushes them, and the front
-      // sheet has none: it is a cross-section, and wavelets drawn on it read
-      // as lily pads stuck to a wall.
-      float swFacetW = vUp * (1.0 - ${fmt(GRAZE_FACET_FADE)} * smoothstep(0.7, 0.98, swGraze));
+      // Broad soft light bands on the ripples facing the light, shade on the
+      // ones facing away, a crest on the steepest.
+      float swFacing = swSlope.y + swSlope.x * 0.24;
+      float swBroad = smoothstep(0.012, 0.052, swFacing);
+      float swCrest = smoothstep(0.078, 0.125, swFacing) * smoothstep(0.28, 0.65, swB.b);
+      float swShade = smoothstep(0.015, 0.14, -swFacing);
+      swCol *= 1.0 - swShade * 0.22;
+      swCol = mix(swCol, uLight, swBroad * ${fmt(CONTRAST)} * (0.12 + swFore * 0.36));
 
-      vec3 swBase = swRamp(swGraze, uNear, uMid, uFar);
-      vec3 swLit = swRamp(swGraze, uNearLit, uMidLit, uFarLit);
-      vec3 swCol = swBase;
-      swCol = mix(swCol, swLit, ${fmt(FACET_W)} * swFacetW * max(swShade, 0.0));
-      swCol = mix(swCol, swBase * ${fmt(1 + DARK_DL / 0.35)}, ${fmt(FACET_W)} * swFacetW * max(-swShade, 0.0));
-      swCol = mix(swCol, mix(swLit, vec3(1.0), ${fmt(RIM_LIFT)}), ${fmt(RIM_W)} * swFacetW * swRimLit);
+      // The mirror, pushed about by the same slopes, three taps along the
+      // ripples. Strong for what stands near the water, faint for the far
+      // cave: the mirrored point is recovered from the reflection's depth.
+      vec2 swUV = vReflection.xy / vReflection.w + swSlope * vec2(0.11, 0.075) * ${fmt(DISTORTION)};
+      vec3 swMirror = swReflection(swUV) * 0.5
+                    + swReflection(swUV + vec2(0.0015, 0.0007)) * 0.25
+                    + swReflection(swUV - vec2(0.0015, 0.0007)) * 0.25;
+      vec2 swDepthUV = clamp(swUV, 0.003, 0.997);
+      vec4 swHit = uReflectionInverse
+        * vec4(vec3(swDepthUV, texture2D(uReflectionDepth, swDepthUV).r) * 2.0 - 1.0, 1.0);
+      float swNear = 1.0 - smoothstep(${fmt(REFLECT_NEAR)}, ${fmt(REFLECT_FAR)}, length(swHit.xyz / swHit.w - vWorld));
+      float swMirrorW = ${fmt(REFLECTION)} * mix(0.13 + swFresnel * 0.32, 0.82 + swFresnel * 0.16, swNear) * uReflect;
+      swCol = mix(swCol, swMirror, clamp(swMirrorW, 0.0, 0.92));
 
-      // The front sheet: the near teal deepening toward the bed, under a
-      // pale line at the waterline.
-      swCol = mix(swCol, uDeep, (1.0 - vUp) * ${fmt(FRONT_DEEP_W)} * smoothstep(0.0, 0.5, swBelow));
-      float swLine = (1.0 - vUp) * (1.0 - smoothstep(${fmt(RIM_WIDTH)}, ${fmt(RIM_WIDTH + RIM_SOFT)}, swBelow));
-      swCol = mix(swCol, mix(uNearLit, vec3(1.0), 0.5), ${fmt(WATERLINE_W)} * swLine);
-      diffuseColor.rgb = swCol * (1.0 - ${fmt(SELF_LIGHT)});
-      diffuseColor.a = vAlpha;`,
-      )
-      .replace(
-        "#include <emissivemap_fragment>",
-        `#include <emissivemap_fragment>
-      totalEmissiveRadiance += swCol * ${fmt(SELF_LIGHT)};`,
+      // A broad highlight from the cave's opening rather than a sun's hot
+      // spot, and the crests.
+      vec3 swHalf = normalize(swEye + normalize(vec3(-0.36, 0.78, -0.43)));
+      swCol += uLight * pow(max(0.0, dot(swN, swHalf)), 100.0) * 0.16 * ${fmt(RIPPLE_STRENGTH)};
+      swCol += uLight * swCrest * ${fmt(CONTRAST * 0.16)};
+
+      // THE FRONT SHEET, a cross-section looking into the water: between the
+      // shallow and the deep colour under the waterline, darkening toward the
+      // bed, under a pale line at the waterline. How far below the waterline
+      // a pixel is, in metres: the geometry's light falloff (aLit, 1 at the
+      // waterline to 0 LIGHT_FALLOFF below) read back as a distance.
+      float swBelow = (1.0 - vLit) * ${fmt(LIGHT_FALLOFF)};
+      vec3 swFront = mix(mix(uShallow, uDeep, ${fmt(FRONT_TOP_DEEP)}), uDeep * ${fmt(FRONT_BED)},
+        smoothstep(0.0, 0.5, swBelow));
+      float swLine = 1.0 - smoothstep(${fmt(RIM_WIDTH)}, ${fmt(RIM_WIDTH + RIM_SOFT)}, swBelow);
+      swFront = mix(swFront, mix(uLight, vec3(1.0), 0.5), ${fmt(WATERLINE_W)} * swLine);
+
+      diffuseColor.rgb = max(mix(swFront, swCol, vUp), vec3(0.0));
+      // The top face opaque, as the study's water and the scene's water
+      // continuing it are: at the slab's 0.97 the bed showed through and the
+      // pool read a shade off the water beyond its ends.
+      diffuseColor.a = mix(vAlpha, 1.0, vUp);`,
       );
   };
-  mat.customProgramCacheKey = () => "still-water";
-  return mat;
+  mat.customProgramCacheKey = () => (plane ? "still-water-plane" : "still-water");
+  return { material: mat, reflect, openBehind, footprint };
 }
 
 // ---------------------------------------------------------------------------
@@ -314,13 +487,23 @@ export function stillWaterMaterial(color: string | undefined): THREE.MeshStandar
 
 // A pool the splash can happen on, in the frames the detector needs: the body
 // (its pose, in the sim's metres, y down), the rect's half extents, and the
-// slab's z range in the body's frame (three's, +z toward the camera).
+// slab's z range in the body's frame (three's, +z toward the camera). And for
+// the mirror (planarReflection.ts): the drawn slab, which the reflection
+// leaves out, and its material's switch.
 export interface StillSurface {
   body: WaterArea;
   halfX: number;
   halfY: number;
   backZ: number;
   frontZ: number;
+  mesh: THREE.Mesh;
+  reflect: { value: number };
+  openBehind: { value: number };
+  footprint: { value: THREE.Vector4 };
+  // The pool's colour, for the scene's own water that continues it, and that
+  // water once adopted (see `Scene3D.adoptSceneryWater`).
+  color: string | undefined;
+  scenery: THREE.Mesh[];
 }
 
 // The ball as the detector reads it: where it is DRAWN this frame and how fast

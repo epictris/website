@@ -142,6 +142,20 @@ function blenderNames(o: THREE.Object3D): string[] {
   return out;
 }
 
+// The scene's own flat water: the plane the backdrop tool lays at the pool's
+// height, 2 cm under it, across the backdrop (tools/blender/backdrop.py,
+// `pool`). The game draws it as the pool it continues (see
+// `Scene3D.adoptSceneryWater`).
+const SCENERY_WATER = "backdrop pool";
+
+export function sceneryWater(root: THREE.Object3D): THREE.Mesh[] {
+  const out: THREE.Mesh[] = [];
+  root.traverse((o) => {
+    if ((o as THREE.Mesh).isMesh && blenderNames(o).includes(SCENERY_WATER)) out.push(o as THREE.Mesh);
+  });
+  return out;
+}
+
 const box = new THREE.Box3();
 export function castsShadow(node: THREE.Object3D): boolean {
   box.setFromObject(node, true);
@@ -239,7 +253,9 @@ export class SceneDressing {
   bound: Map<string, THREE.Object3D> = new Map();
   unbound: string[] = [];
 
-  constructor(scene: string, targets: readonly DressTarget[]) {
+  // `landed` is handed the scenery once it is mounted, for what the scene
+  // itself still draws over it (the pool's water, `Scene3D.adoptSceneryWater`).
+  constructor(scene: string, targets: readonly DressTarget[], landed?: (scenery: THREE.Group) => void) {
     this.root.name = `scene:${scene}`;
     void loadSceneFile(scene).then((loaded) => {
       if (!loaded || this.disposed) return;
@@ -247,6 +263,7 @@ export class SceneDressing {
       this.bound = dressed.bound;
       this.unbound = dressed.unbound;
       this.root.add(dressed.scenery);
+      landed?.(dressed.scenery);
       // Where each bound node landed, in the world, so a headless grab's log
       // says whether the dressing is on its body (see docs/blender-scenes.md).
       const placed = [...dressed.bound].map(([name, node]) => {

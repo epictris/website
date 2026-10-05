@@ -1303,9 +1303,9 @@ export function buildWater(root: THREE.Group, body: WaterArea, data: LevelBodyDa
 
   const built = waterGeometry(halfX, halfY, frontZ, backZ, spill);
   // Water with no current and nothing pouring off it is a POOL, and a pool is
-  // drawn as the anime caustic net (stillWater.ts) rather than as a current.
-  const still = body.flow === 0 && !spill;
-  const mat = still ? stillWaterMaterial(look.color) : waterMaterial(look);
+  // drawn as the cave-pool study (stillWater.ts) rather than as a current.
+  const pool = body.flow === 0 && !spill ? stillWaterMaterial(look.color, backZ, frontZ) : null;
+  const mat = pool ? pool.material : waterMaterial(look);
   const mesh = new THREE.Mesh(built.geometry, mat);
   mesh.castShadow = false;
   mesh.receiveShadow = true;
@@ -1338,5 +1338,23 @@ export function buildWater(root: THREE.Group, body: WaterArea, data: LevelBodyDa
     geometries.push(spray.geometry);
     materials.push(spray.material);
   }
-  return { geometries, materials, still: still ? { body, halfX, halfY, backZ, frontZ } : null };
+  return {
+    geometries,
+    materials,
+    still: pool
+      ? {
+          body,
+          halfX,
+          halfY,
+          backZ,
+          frontZ,
+          mesh,
+          reflect: pool.reflect,
+          openBehind: pool.openBehind,
+          footprint: pool.footprint,
+          color: look.color,
+          scenery: [],
+        }
+      : null,
+  };
 }

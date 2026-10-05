@@ -59,6 +59,7 @@ The picture's horizon is a little above its middle (the studio camera's `shift`)
 
 **The pool**: the level draws its own water only where its water bodies are, 6 m behind the plane at most (`waterDepth`), so the backdrop gets a plane at the water's height, 2 cm under it, from there to behind the far wall, in the water's deep colour (`#1b4657`, flat, not baked).
 Everything under it is left unbuilt.
+The game draws it as the pool's own water (ripples, mirror and colour carried on without a seam; [water](water.md#still-water)), so its Blender colour is only what Blender and an export preview show; it must keep the name `backdrop pool` for the game to find it.
 
 ## The rocks
 

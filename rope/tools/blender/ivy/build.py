@@ -28,7 +28,8 @@ transform):
    the mesh is found (Dijkstra over the refined edges, then smoothed). Its
    gradient is the growth direction: which way the runners went.
 7. Candidates: points on the refined triangles inside the paint, thousands per
-   square metre, with the paint field, the growth distance and their gradients.
+   square metre, with the paint field, the growth distance, the distance in
+   from the paint's outline and their gradients.
 8. Strata: `sheets` sheets of leaves, 3 cm apart, each laying a share of
    `leaf_fill` times the paint's area in leaves. A leaf is a card lying on
    the hull with its BASE at the candidate and its tip pointing down the growth
@@ -37,11 +38,11 @@ transform):
    and pitched tip-up by `tilt`. Cards near one another share the growth
    direction and the pitch, so they are parallel planes offset along the
    growth: a leaf's tip lies OVER the base of the leaf beyond it and never cuts
-   through it. At the paint's edge the leaves tilt outer-edge-down onto the
-   rock (about the field's outward gradient), so the mass rolls into the stone
-   instead of ending as a shelf. Finally every card is rotated the least that
-   makes it face the game's camera (Blender -y) by `facing`, so the silhouette
-   is made of leaf faces, never of edges.
+   through it. Over `edge_round` in from the paint's outline (a distance
+   along the mesh) the carpet's cross-section rounds down onto the rock: every
+   sheet's height eases to the underlay's at the outline, and a leaf there is
+   laid along that arc - turned with its slope and aimed so its tip lands on
+   it - so the mass curves into the stone instead of ending as a shelf.
 9. Vines: one per anchor, a 3 mm stem hanging straight down from the anchor,
    held in front of the rock by a ray cast, with ivy leaves alternating sides
    and tapering toward the tip. Nothing places a vine but the artist.
@@ -133,7 +134,6 @@ CLUMP_COVER = 0.50  # the share of its card a clump's silhouette covers (measure
 CLUMP_LIFT = 0.12  # a clump's base rises up to this share of its size more, so neighbours never share a plane
 STRATUM_GAP = 0.03  # between the sheets of leaves: room for one to shadow the next past the game's shadow biases (render3d/ivyShadow.ts)
 LEAF_CLEAR = 0.004  # the lowest sheet's height over the underlay
-EDGE_TILT = math.radians(45)  # how far a leaf at the paint's very edge tilts outer-edge-down onto the rock
 
 
 @dataclass
@@ -164,8 +164,7 @@ class Params:
     leaf_fill: float = 3.5  # leaf area laid over the paint, as a multiple of the paint's area, shared by the sheets
     edge_fill: float = 2.5  # extra fill toward the paint's edge, where the underlay would otherwise show
     density: float = 6000.0  # candidate points per m^2 of paint
-    facing: float = 0.5  # every leaf faces the camera by at least acos(facing)
-    shoulder: float = 0.5  # the outer share of the paint (in mask units) that rolls into the rock
+    edge_round: float = 0.15  # the distance in from the paint's outline over which the carpet rounds down onto the rock
     underlay: float = 0.02
     tilt: float = 8.0  # degrees a leaf pitches tip-up off the hull
     spread: float = 25.0  # degrees a leaf may stray from the growth direction
@@ -381,26 +380,6 @@ def _uv_clump_solid():
     return np.repeat(_uv_rect(CLUMP_FILL_RECT).mean(0, keepdims=True), 4, 0)
 
 
-def _facing_turn(n, facing):
-    """The least rotation (axis, angle) that makes `n` face the camera by
-    `facing`, or None when it already does: a card seen nearly edge-on is a
-    spike, not a leaf. Smooth, so neighbours agree."""
-    d = float(n @ FACE)
-    if d >= facing:
-        return None
-    axis = np.cross(n, FACE)
-    L = np.linalg.norm(axis)
-    if L < 1e-6:
-        return None
-    return axis / L, math.acos(max(-1.0, min(1.0, d))) - math.acos(facing)
-
-
-def _faced(n, facing):
-    """`n` rotated the least that makes it face the camera by `facing`."""
-    turn = _facing_turn(n, facing)
-    return n if turn is None else _rotate(n, *turn)
-
-
 # --------------------------------------------------------------------------
 # 7. Sampling the paint
 
@@ -576,6 +555,63 @@ def _underlay_ramp(f):
     return _smoothstep(0.0, 0.15, f + 0.02)
 
 
+def _rim(v, edges, f):
+    """The distance from the paint's outline (f = 0) along the mesh: positive
+    inside, negative outside. The outline crosses an edge between its
+    vertices, so each vertex either side starts at its own share of that edge;
+    a mesh painted all over has no outline and is everywhere far inside."""
+    a, b = edges[:, 0], edges[:, 1]
+    fa, fb = f[a], f[b]
+    cut = (fa > 0) != (fb > 0)
+    if not cut.any():
+        return np.where(f > 0, 1e3, -1e3)
+    a, b, fa, fb = a[cut], b[cut], fa[cut], fb[cut]
+    L = np.linalg.norm(v[b] - v[a], axis=1)
+    at = fa / (fa - fb)  # where the outline crosses, from a
+    start = np.full(len(v), np.inf)
+    np.minimum.at(start, a, at * L)
+    np.minimum.at(start, b, (1.0 - at) * L)
+    src = np.flatnonzero(np.isfinite(start))
+    d = _geodesic(v, edges, src, start=start[src])
+    return np.where(f > 0, d, -d)
+
+
+def _round(x):
+    """The carpet's cross-section at its edge: 0 at the outline (x = 0) and 1
+    from `edge_round` in (x = 1), easing in, so it is steepest at the outline
+    and level where it meets the top."""
+    x = np.clip(x, 0.0, 1.0)
+    return 1.0 - (1.0 - x) ** 2
+
+
+def _lay(at, hn, u, rim, r, floor, rest, reach, width):
+    """A card on the carpet's rounded edge: its base `rest` over `floor` at
+    the full height, less toward the outline (_round over `width` of the rim
+    distance `r`); its normal turned with the slope of that arc, and its
+    length aimed from the base to where the arc is under its tip, `reach`
+    along `u` (in the hull's tangent plane), so the leaves at the edge follow
+    the curve down onto the rock. `rim` is the way out to the outline (0
+    where there is none). Returns the base, the card's up, side and normal."""
+    width = max(width, 1e-4)
+    h_base = floor + rest * _round(r / width)
+    h_tip = h_base
+    up = hn
+    if rim.any():
+        # Only ever down the arc: a leaf pointing in from the edge, aimed at
+        # the arc over its tip, stood up the whole height of the carpet in a
+        # fan along the outline. Laid level, it lies under the leaves above.
+        h_tip = min(h_base, floor + rest * _round((r - reach * float(u @ rim)) / width))
+        x = min(max(r / width, 0.0), 1.0)
+        up = hn + rim * (rest * 2.0 * (1.0 - x) / width)  # the arc's normal: tilted out by its slope
+        up = up / np.linalg.norm(up)
+    u = u * reach + hn * (h_tip - h_base)
+    u = u / np.linalg.norm(u)
+    side = np.cross(u, up)
+    L = np.linalg.norm(side)
+    side = side / L if L > 1e-6 else _normalize(np.cross(u, hn)[None])[0]
+    return at + hn * h_base, u, side, np.cross(side, u)
+
+
 @dataclass
 class _Field:
     """The candidates a carpet picks its cards from, with what every card
@@ -590,7 +626,8 @@ class _Field:
     tones: np.ndarray  # the local green
     OUTd: np.ndarray  # the outward direction in the hull's tangent plane, unit
     OUTl: np.ndarray  # ... and the paint gradient's length there
-    OUT: np.ndarray  # OUTd where it is defined, else 0
+    R: np.ndarray  # the distance in from the paint's outline, along the mesh
+    RIM: np.ndarray  # the way out to the outline in the hull's tangent plane, unit, else 0
     GROW: np.ndarray  # the growth direction, unit
     grown: np.ndarray  # where GROW is defined
     idx: list  # the candidates the game can see that have neighbours
@@ -610,11 +647,12 @@ def _field(v, t, edges, f, hull, n_raw, origin, p, rng, density, crowd_r):
     else:
         src = int(inside[np.argmax(v[inside, 2])])
     growth = _smooth_field(_geodesic(v, edges, src), edges, len(v), 4)
-    P, HN, NR, (F, D), (GF, GD) = _sample(v, t, [f, growth], hull, n_raw, density, rng)
+    rim = _smooth_field(_rim(v, edges, f), edges, len(v), 2)
+    P, HN, NR, (F, D, R), (GF, GD, GR) = _sample(v, t, [f, growth, rim], hull, n_raw, density, rng)
     if len(P) == 0:
         return None
     order = np.lexsort((P[:, 2], P[:, 1], P[:, 0]))
-    P, HN, NR, F, D, GF, GD = P[order], HN[order], NR[order], F[order], D[order], GF[order], GD[order]
+    P, HN, NR, F, D, R, GF, GD, GR = (x[order] for x in (P, HN, NR, F, D, R, GF, GD, GR))
     area = len(P) / density  # the painted area, from the sampling density
     Mn = np.clip(F / 0.5, 0, 1)  # 0 at the paint's edge, 1 well inside
     tones = _tone_at(P, (p.tone_a, p.tone_b, p.tone_c), p.tone_scale, p.seed)
@@ -632,7 +670,11 @@ def _field(v, t, edges, f, hull, n_raw, origin, p, rng, density, crowd_r):
 
     # The outward direction of the paint: down the field's gradient.
     OUTd, OUTl = tangent(GF)
-    OUT = np.where((OUTl > 0.2)[:, None], -OUTd, 0.0)
+    # The way out to the outline: down the rim distance's gradient, which is
+    # unit length but for the ridge between two outlines, where it is not
+    # defined and the carpet is at its top anyway.
+    RIMd, RIMl = tangent(GR)
+    RIM = np.where((RIMl > 0.3)[:, None], -RIMd, 0.0)
     # The growth direction: up the distance field, away from the origin. Where
     # it is degenerate (at the origin, or a flat spot of the smoothed field)
     # the leaf takes a random direction: a rosette at the origin.
@@ -641,7 +683,7 @@ def _field(v, t, edges, f, hull, n_raw, origin, p, rng, density, crowd_r):
     # How far along the carpet each candidate is, 0 at the origin, 1 at the far end.
     lo, hi = float(D[idx].min()), float(D[idx].max())
     T = np.clip((D - lo) / max(hi - lo, 1e-6), 0.0, 1.0)
-    return _Field(P, HN, F, Mn, T, tones, OUTd, OUTl, OUT, GROW, grown, idx, area)
+    return _Field(P, HN, F, Mn, T, tones, OUTd, OUTl, R, RIM, GROW, grown, idx, area)
 
 
 def _carpet(quads, v, t, edges, f, hull, n_raw, origin, p, rnd, rng):
@@ -650,23 +692,22 @@ def _carpet(quads, v, t, edges, f, hull, n_raw, origin, p, rnd, rng):
     fl = _field(v, t, edges, f, hull, n_raw, origin, p, rng, p.density, 0.06)
     if fl is None:
         return 0
-    P, HN, F, Mn, T, tones, OUTd, OUTl, OUT, GROW, grown, idx = fl.P, fl.HN, fl.F, fl.Mn, fl.T, fl.tones, fl.OUTd, fl.OUTl, fl.OUT, fl.GROW, fl.grown, fl.idx
+    P, HN, F, Mn, T, tones, OUTd, OUTl, R, RIM, GROW, grown, idx = fl.P, fl.HN, fl.F, fl.Mn, fl.T, fl.tones, fl.OUTd, fl.OUTl, fl.R, fl.RIM, fl.GROW, fl.grown, fl.idx
     area = fl.area
     # Toward the edge a candidate is taken this much more readily: the outer
     # band is where the leaves thin out, and a gap there shows the underlay
     # as a rim around the mass.
     edge_w = 1.0 + p.edge_fill * (1.0 - Mn) ** 2
-    band = max(p.shoulder, 1e-3)
-    ramp = _smoothstep(0.0, band, Mn)  # 0 at the paint's edge, 1 inside the shoulder band
-    # The height of a leaf's base over the rock: the underlay, a clearance,
-    # the sheet's own step and the mound that slopes from `thickness` at the
-    # origin to nothing at the far end. Near the paint's edge the mound
-    # drops away too, so the origin at an edge is a rise, not a shelf.
-    base_h = p.underlay * _underlay_ramp(F) + LEAF_CLEAR + p.thickness * (1.0 - T) * (0.25 + 0.75 * ramp)
-    # A leaf pitches tip-up off the hull, less toward the edge, where it lies
-    # down on the rock; at the very edge it tilts outer-edge-down instead.
-    pitch = math.radians(p.tilt) * (0.3 + 0.7 * ramp)
-    edge_tilt = EDGE_TILT * (1.0 - ramp) ** 1.5
+    edge = _round(R / max(p.edge_round, 1e-4))  # 0 at the outline, 1 over the top
+    # The height of a leaf's base over the rock: the underlay and a clearance
+    # (the floor), then the sheet's own step and the mound that slopes from
+    # `thickness` at the origin to nothing at the far end (the rest), which
+    # rounds down to the floor at the outline (_lay).
+    floor = p.underlay * _underlay_ramp(F) + LEAF_CLEAR
+    mound = p.thickness * (1.0 - T)
+    # A leaf pitches tip-up off the arc, less toward the outline, where its
+    # tip comes down onto the rock.
+    pitch = math.radians(p.tilt) * edge
     spread = math.radians(p.spread)
 
     K = max(int(p.sheets), 1)
@@ -689,24 +730,14 @@ def _carpet(quads, v, t, edges, f, hull, n_raw, origin, p, rnd, rng):
                 u = u / np.linalg.norm(u)
                 stray = rnd.uniform(0, math.tau)
             u = _rotate(u, hn, stray)
-            n = hn
-            # The edge tilt: the whole frame turned about the axis across the
-            # outward direction, so the outer part of the leaf goes down.
-            if edge_tilt[i] > 1e-4 and OUT[i].any():
-                axis = np.cross(hn, OUT[i])
-                axis /= np.linalg.norm(axis)
-                u, n = _rotate(u, axis, edge_tilt[i]), _rotate(n, axis, edge_tilt[i])
-            side = np.cross(u, n)
-            # The pitch: tip up about the leaf's own side axis.
-            u, n = _rotate(u, side, pitch[i]), _rotate(n, side, pitch[i])
             length = rnd.uniform(p.leaf_min, p.leaf_max) * (1.0 - p.taper * T[i]) * (0.75 + 0.25 * Mn[i])
             card_h = length / LEAF_SPAN
             card_w = card_h * rnd.uniform(0.92, 1.06)
-            base = P[i] + hn * (base_h[i] + k * STRATUM_GAP + rnd.uniform(-0.001, 0.001))
+            rest = mound[i] + k * STRATUM_GAP + rnd.uniform(-0.001, 0.001)
+            base, u, side, n = _lay(P[i], hn, u, RIM[i], R[i], floor[i], rest, length, p.edge_round)
+            # The pitch: tip up about the leaf's own side axis.
+            u, n = _rotate(u, side, pitch[i]), _rotate(n, side, pitch[i])
             centre = base + u * (0.5 - LEAF_BASE) * card_h
-            turn = _facing_turn(n, p.facing)
-            if turn is not None:
-                side, u, n = _rotate(side, *turn), _rotate(u, *turn), _rotate(n, *turn)
             col = _tint(hn, np.array(depth_k * Mn[i]), np.array(rnd.uniform(-p.variation, p.variation)), tones[i], p)
             quads.add(_corners(centre, side, u, card_w, card_h), hn, col, _uv_cell(rnd.choice(LEAF_CELLS)))
             n_leaves += 1
@@ -723,12 +754,12 @@ def _clumps(quads, v, t, edges, f, hull, n_raw, origin, p, rnd, rng):
     fl = _field(v, t, edges, f, hull, n_raw, origin, p, rng, density, mean * 0.5)
     if fl is None:
         return 0
-    P, HN, F, Mn, T, tones, OUTd, OUTl, OUT, GROW, grown, idx = fl.P, fl.HN, fl.F, fl.Mn, fl.T, fl.tones, fl.OUTd, fl.OUTl, fl.OUT, fl.GROW, fl.grown, fl.idx
+    P, HN, F, Mn, T, tones, OUTd, OUTl, R, RIM, GROW, grown, idx = fl.P, fl.HN, fl.F, fl.Mn, fl.T, fl.tones, fl.OUTd, fl.OUTl, fl.R, fl.RIM, fl.GROW, fl.grown, fl.idx
     edge_w = 1.0 + p.edge_fill * (1.0 - Mn) ** 2
-    ramp = _smoothstep(0.0, max(p.shoulder, 1e-3), Mn)
-    base_h = p.underlay * _underlay_ramp(F) + LEAF_CLEAR + p.thickness * (1.0 - T) * (0.25 + 0.75 * ramp)
-    pitch = math.radians(p.tilt) * (0.3 + 0.7 * ramp)
-    edge_tilt = EDGE_TILT * (1.0 - ramp) ** 1.5
+    edge = _round(R / max(p.edge_round, 1e-4))
+    floor = p.underlay * _underlay_ramp(F) + LEAF_CLEAR
+    mound = p.thickness * (1.0 - T)
+    pitch = math.radians(p.tilt) * edge
     spread = math.radians(p.spread)
 
     rnd.shuffle(idx)
@@ -748,21 +779,13 @@ def _clumps(quads, v, t, edges, f, hull, n_raw, origin, p, rnd, rng):
             u = u / np.linalg.norm(u)
             stray = rnd.uniform(0, math.tau)
         u = _rotate(u, hn, stray)
-        n = hn
-        if edge_tilt[i] > 1e-4 and OUT[i].any():
-            axis = np.cross(hn, OUT[i])
-            axis /= np.linalg.norm(axis)
-            u, n = _rotate(u, axis, edge_tilt[i]), _rotate(n, axis, edge_tilt[i])
-        side = np.cross(u, n)
-        u, n = _rotate(u, side, pitch[i]), _rotate(n, side, pitch[i])
         size = rnd.uniform(p.clump_min, p.clump_max) * (1.0 - p.taper * T[i]) * (0.75 + 0.25 * Mn[i])
         # Clumps side by side are near-parallel planes at one height: a lift
         # of their own keeps them a depth apart at the backdrop's distance.
-        base = P[i] + hn * (base_h[i] + rnd.uniform(0.0, CLUMP_LIFT) * size)
+        rest = mound[i] + rnd.uniform(0.0, CLUMP_LIFT) * size
+        base, u, side, n = _lay(P[i], hn, u, RIM[i], R[i], floor[i], rest, (1.0 - CLUMP_BASE) * size, p.edge_round)
+        u, n = _rotate(u, side, pitch[i]), _rotate(n, side, pitch[i])
         centre = base + u * (0.5 - CLUMP_BASE) * size
-        turn = _facing_turn(n, p.facing)
-        if turn is not None:
-            side, u, n = _rotate(side, *turn), _rotate(u, *turn), _rotate(n, *turn)
         uv = _uv_rect(rnd.choice(CLUMP_RECTS))
         if rnd.random() < 0.5:
             uv = uv[[1, 0, 3, 2]]  # mirrored: sixteen clumps from eight
@@ -868,7 +891,6 @@ def _vines(quads, co, tri, v, hull, vines, host_matrix, p, rnd):
             quads.add(np.array([a + side, a - side, b - side, b + side]), hn, stem_col, _uv_solid())
         vn = hn * 0.5 + FACE * 0.5
         vn /= np.linalg.norm(vn)
-        vn = _faced(vn, p.facing)
         z = p.leaf_size * 0.25
         sgn = rnd.choice((-1, 1))
         k = 0

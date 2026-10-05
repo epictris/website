@@ -68,8 +68,8 @@ class IvySettings(bpy.types.PropertyGroup):
     leaf_fill: _factor("Fill", _D.leaf_fill, "Leaf area laid over the paint, as a multiple of the paint's area, shared by the sheets", 8.0)
     edge_fill: _factor("Edge Fill", _D.edge_fill, "Extra fill toward the paint's edge, so the underlay never shows as a rim", 4.0)
     density: FloatProperty(name="Candidates", default=_D.density, min=100.0, soft_max=20000.0, description="Candidate points per square metre the sheets pick leaves from", update=_changed)
-    facing: _factor("Facing", _D.facing, "Every leaf faces the game's camera by at least this (cosine); a leaf seen edge-on is a spike")
-    shoulder: _factor("Shoulder", _D.shoulder, "The outer share of the paint where the leaves tilt down onto the rock, in coverage units")
+    # `edge_round` is a distance, not `shoulder`'s share of the paint's coverage (2026-10-05).
+    edge_round: _length("Edge Round", _D.edge_round, 0.0, 1.0, "Distance in from the paint's edge over which the carpet curves down onto the rock: shorter is a steeper edge")
     underlay: _length("Underlay", _D.underlay, 0.0, 0.1, "Height of the solid green skin under the leaves")
     tilt: FloatProperty(name="Tilt", default=_D.tilt, min=0.0, soft_max=30.0, description="Degrees a leaf pitches tip-up off the rock, so its tip rides over the leaf beyond it", update=_changed)
     spread: FloatProperty(name="Spread", default=_D.spread, min=0.0, max=180.0, description="Degrees a leaf may stray from pointing straight away from the origin", update=_changed)
@@ -148,7 +148,7 @@ class IvySettings(bpy.types.PropertyGroup):
         "thickness": 0.07,
         "edge_fill": 2.5,
     }
-    STALE_KEYS = ("layers", "fill", "blob_min", "blob_max")
+    STALE_KEYS = ("layers", "fill", "blob_min", "blob_max", "shoulder")
 
     def migrate(self):
         """Forget stored values that are only an old default. Returns how many."""

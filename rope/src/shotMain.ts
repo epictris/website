@@ -211,8 +211,9 @@ async function benchDepthOfField(scene: Scene3D, frames: number): Promise<void> 
   // while the CPU is still issuing, so a frame the CPU cannot issue fast
   // enough reads as GPU time.
   let cpuMs: number[] = [];
-  const block = async (setting: DepthOfFieldLevel, count: number): Promise<number> => {
+  const block = async (setting: DepthOfFieldLevel, count: number, mirror = true): Promise<number> => {
     scene.setDepthOfField(setting);
+    scene.setPoolMirror(mirror);
     const gpuMs: number[] = [];
     for (let i = 0; i < count; i++) {
       const t0 = performance.now();
@@ -235,6 +236,36 @@ async function benchDepthOfField(scene: Scene3D, frames: number): Promise<void> 
   // whatever else drifts over a run fall on both sides alike; the answer is
   // the median of the paired differences, not a difference of two medians.
   const rounds = Math.max(4, Math.round(frames / 32));
+  const ms = (xs: number[]): number => Number(median(xs).toFixed(3));
+  // `benchmirror=1` pairs the pools' mirror (planarReflection.ts) off and on,
+  // and `benchpools=1` the pools' water hidden and drawn (the mirror still
+  // drawn: the water's own cost, and what it costs the depth of field),
+  // instead of the depth-of-field settings, which `benchdof=low|medium|high`
+  // holds for both (off by default).
+  const pair = q.get("benchmirror") === "1" ? "mirror" : q.get("benchpools") === "1" ? "pools" : null;
+  if (pair) {
+    const held = q.get("benchdof");
+    const dof = DEPTH_OF_FIELD_LEVELS.includes(held as DepthOfFieldLevel) ? (held as DepthOfFieldLevel) : "off";
+    const offs: number[] = [];
+    const ons: number[] = [];
+    const deltas: number[] = [];
+    const side = async (on: boolean, count: number): Promise<number> => {
+      scene.setPoolsShown(pair === "pools" ? on : true);
+      return block(dof, count, pair === "mirror" ? on : true);
+    };
+    await side(false, 10);
+    for (let i = 0; i < rounds; i++) {
+      const off = await side(false, 16);
+      const on = await side(true, 16);
+      offs.push(off);
+      ons.push(on);
+      deltas.push(on - off);
+    }
+    scene.setPoolMirror(true);
+    scene.setPoolsShown(true);
+    console.log(`bench ${JSON.stringify({ pair, dof, offMs: ms(offs), onMs: ms(ons), addedMs: ms(deltas), rounds })}`);
+    return;
+  }
   // `benchonly=medium` pairs just that setting with off, for more rounds in
   // the same time.
   const only = q.get("benchonly");
@@ -255,7 +286,6 @@ async function benchDepthOfField(scene: Scene3D, frames: number): Promise<void> 
       ons.push(on);
       deltas.push(on - off);
     }
-    const ms = (xs: number[]): number => Number(median(xs).toFixed(3));
     console.log(
       `bench ${JSON.stringify({ dof: setting, offMs: ms(offs), onMs: ms(ons), addedMs: ms(deltas), offCpuMs: ms(offCpu), onCpuMs: ms(onCpu), rounds })}`,
     );

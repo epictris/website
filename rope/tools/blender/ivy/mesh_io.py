@@ -89,7 +89,7 @@ def write_result(me, result):
 # ATLAS_VERSION to redraw it: the file is named by version, so a stale sheet
 # is never picked up.
 
-MATERIAL_VERSION = 6
+MATERIAL_VERSION = 7  # 7: two-sided (2026-10-05)
 ATLAS_VERSION = 7
 ATLAS_NAME = f"ivy-cutout-atlas-v{ATLAS_VERSION}.png"
 ATLAS_SIZE = 1024
@@ -642,7 +642,7 @@ def clump_atlas():
 
 MATERIAL_NAME = "Ivy"
 CLUMP_MATERIAL_NAME = "IvyClumps"
-CLUMP_MATERIAL_VERSION = 1
+CLUMP_MATERIAL_VERSION = 2  # 2: two-sided (2026-10-05)
 OLD_MATERIALS = ("MossBlobs", "MossUnder", "MossStem")  # the three slots before 2026-09-30, when the ivy was the moss add-on
 
 
@@ -691,7 +691,9 @@ def material(detail="LEAVES"):
                 n.image = img
     else:
         nt = mat.node_tree
-        mat.use_backface_culling = True
+        # Both sides, as the game draws them (render3d/ivyLeaves.ts): a card
+        # no longer turns to face the camera, so its back is often the side seen.
+        mat.use_backface_culling = False
         mat.diffuse_color = (0.3, 0.45, 0.1, 1.0)
         x, y = bsdf.location.x, bsdf.location.y
         tint = _tint_node(nt, bsdf)

@@ -122,22 +122,54 @@ A channel has end caps where nothing pours off it, because an open box was the f
 
 ### Still water
 
-A water body with `flow: 0` and no `spill` is a **pool**, and `render3d/stillWater.ts` draws it as a painting rather than as a current (2026-10-05).
-It wears the same geometry as a channel (`waterGeometry`) and the same palette (`paletteOf`), under its own material.
+A water body with `flow: 0` and no `spill` is a **pool**, and `render3d/stillWater.ts` draws it after Tris's cave-pool study rather than as a current (2026-10-05).
+It wears the same geometry as a channel (`waterGeometry`) and takes its shallow colour from the same palette (`paletteOf`), under its own material.
 
-The surface is after a painting Tris gave of a calm blue lake between low-poly rocks, read by k-means over three bands of its water.
-Looking down into it near the viewer it is teal (hue 188, l 0.35-0.45), which is the BALL pool's own authored `#1e7382` almost exactly, so the **near colour is the authored colour**; the middle distance is a darker blue (hue 201, l 0.27-0.43), the water reflecting the rocks; far off at a grazing angle it is a lighter sky blue (hue 202, l 0.35-0.53).
-So the colour is a ramp over the view's grazing angle (`swRamp`, a Fresnel term) that turns the hue 13 degrees toward blue, with the mid and far stops' lightness as the measured ratios to the near one.
-Over it are the **wavelets**: a 3D Voronoi field (its third axis is time, so the cells morph rather than slide) stretched five times along x, with an ellipse about the feature point in 40% of the cells drawn lighter and in 30% darker, and a lit rim on the camera-facing side of the light ones.
-Separate dashes on smooth water, never every cell: rimming every cell edge drew a network of outlines like cracked ice, and dashes much smaller than half a cell read as scratches on a flat sheet.
-They fade at grazing, where perspective crushes them into a shimmer.
-The front sheet has no wavelets - it is a cross-section, and they read as lily pads stuck to a wall - only the near teal deepening toward the bed under a pale line at the waterline.
-The water is mostly lit by the scene with a third of its own light (`SELF_LIGHT`), so it reads luminous without becoming a sticker.
+The study is `cave-pool-water-v2.html` ("A quiet cave pool", a self-contained WebGL page) with Tris's exported settings, and the port is shader for shader.
+The surface is **continuous rippling normals**, never a cellular pattern: three layers of a band-limited wave spectrum (a 256 px tiling texture of twelve plane waves, generated at load by `stillSurfaceMap`, R/G the slopes and B the height) drifting against each other, plus three long sine waves as slopes.
+The same slopes drive everything on the water: broad soft turquoise **light bands** where the ripples face the light, a little shade where they face away, a brighter crest on the steepest, a broad highlight from a fixed cave-opening direction, and the **mirror**, pushed about by them so a reflected rock edge bends and breaks as the ripples pass.
+The colour runs from deep blue at the back of the slab to shallow teal at its front.
+The mirror is strong for what stands within `REFLECT_NEAR` metres of the water and faint past `REFLECT_FAR` (the study reflected its rocks and left its far cave wall out), which is what keeps the water teal rather than a dark mirror of the cave; the distance is the mirrored point recovered from the reflection's depth.
+A Fresnel term strengthens it toward grazing.
 
-Not done, and what each would take: the painting's **reflections** of the rocks need a planar reflection, which is a second render of the scene (the cost `transmission` was rejected for below); its thin bright **contact lines** where rock meets water need the scene's depth behind the water, which the forward pass does not have.
+The palette is the study's three colours, carried onto the authored one: the authored colour stands for the study's shallow `#178b96`, and the deep (`#13506b`) and the light (`#55bec7`) are moved from it in HSL by whatever separates them from the shallow in the study.
+BALL's pool is authored `#1e7382`, darker and less saturated than the study's shallow; authoring `#178b96` gives the study's own colours.
 
-Before this the pool was a **caustic net** after Tris's reference Blender files (a 3D Voronoi read as F1 minus Blender's smooth F1, white glowing lines over a soft tint); it was replaced by the painting above the same day.
-Its star glints were built and **rejected on sight** ("they look bad").
+What had to change from the study, each measured on BALL:
+- **Scale.** The study's lake is 75 m seen from 35 m, and BALL's pool is 6.4 m across at ~0.18 of the study's framing, but at 0.18 the ripples were hairlines: the game sees its pool far more edge-on (12 m of depth is ~200 px of a 1080 px frame). `STUDY_SCALE` is 0.5, and the pattern is stretched `DEPTH_STRETCH` (2.5) times along the depth so its ripples read as the study's broad bands rather than streaks.
+- **No mesh displacement.** The study displaced its mesh by the long waves; at this scale that is 4 mm, which no pixel shows and the slab's 1.2 m rows could not carry (see the Nyquist note below). They tilt the normals only.
+- **Not fogged.** BALL's air (54% at 20 m) halved the teal's saturation into a grey-blue sheet (front of the pool 29,81,102 fogged against the study's 47,147,159): the study's camera stood in thin air, the game's ~3x as far off. The mirror is the fogged scene, so the level's air is still in what the water reflects; only the water's own colour stands clear of it.
+- **Unlit, not tone mapped.** The study's colours are display colours and the mirror is the frame as the player sees it, so neither goes through ACES again.
+- **The front sheet** is a cross-section the study never had: between the shallow and the deep colour at the waterline, darkening toward the bed, under a pale waterline. As bright as the surface, unlit and unfogged, it read as a block of teal glass.
+
+**The backdrop's water is the pool's too.** A pool is only as wide as its body's rect, which is also where the ball feels water, so the basin beyond its ends is the Blender scene's own flat plane (`backdrop pool`, laid by `tools/blender/backdrop.py` 2 cm under the water across the whole backdrop, from 6 m behind the gameplay plane to behind the far wall).
+`Scene3D.adoptSceneryWater` gives that plane the pool's material (`stillWaterMaterial` with `plane`: no slab attributes, opaque) in the pool's colour, slab ramp and mirror switch, matched to the pool whose surface it lies within `SCENERY_WATER_REACH` of.
+The ripples and the deep-to-shallow ramp are both in world x and z, so where the two meet nothing changes but which mesh draws.
+The plane is lifted to the pool's own height and not drawn under the pool's top face (`footprint`, set every frame, reaching 1 cm in under it so no crack opens), and the pool's top is opaque: left 2-5 cm under, with the slab at 0.97 alpha over it, the join showed close up as a step with a shade change across it, the mirror being sampled from two different heights (Tris's first report).
+Behind the plane's front edge the slab's end caps are not drawn (`openBehind`), since their pale waterline poked above the plane as a dashed seam.
+
+The pool **writes depth**, though its front sheet is translucent. The depth of field draws anything see-through that writes no depth sharp over its blur, whole; a pool reaching the far wall then stayed crisp against the blurred rocks it meets, and disagreed with the plane, which blurs. With depth the blur reads the water's own: sharp at the gameplay plane, soft toward the far wall.
+The plane is left out of the mirror with the pool and counts toward whether the pool is in view.
+To reach the far wall BALL's pool is authored `waterZ -1500`, `waterDepth 4200` (front edge 6 m in front of the plane, back 36 m behind); in front of the 6 m line beside the pool there is no scene water, only the rock banks.
+
+The study's **shoreline glints** (a field baked from the rocks' waterline outlines) are not ported: here they would need the waterline of every scene mesh standing in the pool, sliced out of the Blender scene at load.
+
+**The mirror** (`render3d/planarReflection.ts`, `Scene3D.mirrorPool`) is the scene drawn again from the camera's reflection in the pool's surface, into a half-resolution target, with the near plane skewed onto the waterline (Lengyel's oblique clip, as three's `Reflector`) so nothing under the water stands up out of the mirror, and the same skewed frustum culls whatever is wholly under it.
+It is drawn as the canvas is (flagged as three's XR target, RGBA8, as `FrameTarget` is), so every program is one the frame already compiled.
+One pass a frame, for the pool in view nearest the camera and only while the camera is above its water; any other pool goes without its mirror that frame rather than read one taken in another plane.
+It leaves out every pool, the editor's guides, the shafts and the depth of field, and reuses last frame's shadow maps.
+It runs before the ball's probe, so the pool the ball reflects carries its mirror.
+`?mirror=0` turns it off in the game, `setPoolMirror` on `window.__scene3d`, and `cli shot --gl angle --query "scale=2&bench=256&benchmirror=1"` measures it paired off and on (`benchpools=1` pairs the water itself hidden and drawn; `benchdof=low|medium|high` holds a depth-of-field setting for either).
+The paired readings are only worth anything with the GPU otherwise idle: close the game's tab first.
+**Cropped to the water** (`Scene3D.screenWindow`): a water pixel reads the mirror at its own screen position plus the ripples' push, so the mirror camera's projection is narrowed to the water's screen rectangle (padded `MIRROR_WINDOW_PAD`), which culls whatever reflects outside it and spends the whole target on the water; the target is half the drawing buffer and at most 270 lines.
+On BALL's gameplay view the water is the band from -0.73 to -0.07 of the screen's height: the pass went from 49 draws, 334k triangles and 1920x1080 at 4K to 44 draws, 264k triangles and (after the line cap) 480x270.
+**Its cost is pixels, not draws.** Measured live in Tris's own Chrome on 2026-10-05 (4K fullscreen, RTX 4070 SUPER, settings interleaved in 1.5 s blocks via `window.__scene3d`): leaving the ivy, the moss or the ball out of the mirror saved under 0.05 ms each; 540 lines -> 270 saved 0.17 ms of the mirror's ~0.33 and took the frames over 7.5 ms from 17% to 7%; 135 saved only 0.04 more and the picture at 270 is indistinguishable at 1080p.
+The shipped result: no water 5.42 ms GPU (4.0% of frames over 7.5 ms), water without its mirror 5.47 ms (5.0%), water and mirror 5.57 ms (6.6%). The rest of the frame is the budget pressure at 4K/144, not the water.
+Measured 2026-10-05 at 4K, RTX 4070 SUPER, before the crop and with the pool reaching the far wall: mirror 0.41 ms (depth of field off) and 0.47 ms (high), the water's own drawing 0.13 and 0.09 ms (`benchpools=1`); with the old 12 m pool the mirror was 0.32 ms. Headless benches after that were spoiled by a game running on the same GPU (the live measurement above replaced them). `--probe all` found no program compiled after the prewarm.
+The headless `--gl angle` grab picks the integrated AMD GPU on Tris's machine unless `__EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/10_nvidia.json` is set.
+
+Before this, the same day, the pool was a **calm-lake painting** (a colour ramp over the view's grazing angle under flat lighter and darker wavelet dashes in 40%/30% of stretched Voronoi cells; rimming every cell drew "cracked ice") whose reflections and contact lines were left undone; before that a **caustic net** after Tris's reference Blender files (a 3D Voronoi read as F1 minus Blender's smooth F1, white glowing lines over a soft tint).
+The net's star glints were built and **rejected on sight** ("they look bad").
 
 **The splash** (`WaterSplashes`, owned by `Scene3D`) is render-side by construction, like the sparks: it reads where the ball is drawn and how fast it moves, and writes nothing back.
 When the ball's bottom crosses a pool's surface going in faster than `SPLASH_MIN` it throws a splash scaled by the entry speed; coming out fast, a smaller one.

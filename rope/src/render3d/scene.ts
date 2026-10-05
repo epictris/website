@@ -30,7 +30,7 @@ import { isCollisionObject, type EnvironmentData, type FireflyPathData } from ".
 import type { Camera } from "../render/camera";
 import { GpuTimer } from "../render/gpuTimer";
 import { BodyVisual, pickTagOf, surfaceOf } from "./bodyVisuals";
-import { SceneDressing, type DressTarget } from "./sceneDressing";
+import { SceneDressing, sceneryWater, type DressTarget } from "./sceneDressing";
 import { BallVisual } from "./ballVisual";
 import { ChainLayer } from "./chainVisual";
 import { VineLayer } from "./vineVisual";
@@ -57,12 +57,13 @@ import {
   type ViewProjection,
 } from "./space";
 import { ReflectionProbe } from "./reflectionProbe";
+import { PlanarReflection } from "./planarReflection";
 import type { DepthOfFieldLevel } from "../render/settings";
 import { DepthOfField } from "./depthOfField";
 import { FrameTarget } from "./frameTarget";
 import { LightShafts } from "./lightShafts";
 import { updateWater, waterTextures } from "./water";
-import { WaterSplashes, type StillSurface } from "./stillWater";
+import { stillWaterMaterial, WaterSplashes, type StillSurface } from "./stillWater";
 import { beltRenderTime } from "../render/beltTread";
 
 // What the 3D renderer needs of a level. Deliberately structural rather than
@@ -139,6 +140,22 @@ export type SceneHit = THREE.Intersection & { depth: number };
 // chain by (`CHAIN_HIT_PX`): a hairline that has to be hit exactly is not
 // something a hand can click.
 const LINE_PICK_PX = 12;
+
+// How far from a pool's surface the scene's own flat water may lie and still
+// be taken for its continuation, metres (the backdrop tool lays it 2 cm under).
+const SCENERY_WATER_REACH = 0.1;
+
+// How far past the water's edge on screen the mirror is drawn, in normalised
+// device coordinates: the ripples push a lookup up to ~0.02 of the screen
+// (stillWater.ts, slope x 0.11 x DISTORTION) and the taps a little more.
+const MIRROR_WINDOW_PAD = 0.05;
+
+// A pool's surface height in three's frame, from the body's pose: the visual's
+// root is first posed by the frame's sync, after the scene may already have
+// landed.
+function top(surface: StillSurface): number {
+  return threeY(surface.body.globalPosition.y) + surface.halfY;
+}
 
 export class Scene3D {
   readonly scene = new THREE.Scene();
@@ -239,6 +256,22 @@ export class Scene3D {
   // What the ball reflects: the level around it, from its centre, every frame
   // (see reflectionProbe.ts).
   private readonly reflectionProbe: ReflectionProbe;
+  // What a pool mirrors (see planarReflection.ts), and scratch for choosing
+  // the pool.
+  private readonly poolMirror: PlanarReflection;
+  private readonly frustum = new THREE.Frustum();
+  private readonly viewProjection = new THREE.Matrix4();
+  private readonly poolBox = new THREE.Box3();
+  private readonly sceneryBox = new THREE.Box3();
+  private readonly chosenBox = new THREE.Box3();
+  private readonly corner = new THREE.Vector3();
+  private readonly clipCorner = new THREE.Vector4();
+  private readonly mirrorWindow = new THREE.Vector4();
+  private readonly poolHidden: THREE.Object3D[] = [];
+  private poolMirrorOn = true;
+  // The pool's water worn by the scene's own flat water (`adoptSceneryWater`),
+  // freed with the level.
+  private readonly sceneryWaterMaterials: THREE.Material[] = [];
   // The background blur behind the gameplay plane (see depthOfField.ts).
   private readonly depthOfField: DepthOfField;
   // The spots' lit air (see lightShafts.ts).
@@ -281,6 +314,7 @@ export class Scene3D {
     // HUD says so rather than plotting a zero.
     this.gpuTimer = GpuTimer.create(this.renderer.getContext());
     this.reflectionProbe = new ReflectionProbe(this.renderer);
+    this.poolMirror = new PlanarReflection(this.renderer);
     this.depthOfField = new DepthOfField(this.renderer);
     this.lightShafts = new LightShafts(this.renderer);
     this.frame = new FrameTarget(this.renderer);
@@ -296,6 +330,21 @@ export class Scene3D {
   // a switch for measuring what the probe costs in a live frame (`?probe=0`).
   setReflectionProbe(on: boolean): void {
     this.reflectionOn = on;
+  }
+
+  // Off, no pool draws its mirror: a switch for measuring what the pass costs
+  // in a live frame (`?mirror=0`, and the shot bench's `benchmirror`).
+  setPoolMirror(on: boolean): void {
+    this.poolMirrorOn = on;
+  }
+
+  // Hides every pool's water and the scene's water continuing it, for
+  // measuring what drawing it costs (the shot bench's `benchpools`).
+  setPoolsShown(on: boolean): void {
+    for (const surface of this.stillSurfaces()) {
+      surface.mesh.visible = on;
+      for (const mesh of surface.scenery) mesh.visible = on;
+    }
   }
 
   // GPU milliseconds for the most recently retired frame, or null while the
@@ -347,7 +396,7 @@ export class Scene3D {
     // bound nodes land under the roots above when the file arrives, scenery
     // stands in the world where Blender put it.
     if (sceneName) {
-      this.dressing = new SceneDressing(sceneName, targets);
+      this.dressing = new SceneDressing(sceneName, targets, (scenery) => this.adoptSceneryWater(scenery));
       this.scene.add(this.dressing.root);
     }
     // Then whatever else the world already holds - the avatar's debris, a
@@ -1118,6 +1167,8 @@ export class Scene3D {
     // also where the shafts' glow lights are set for the frame.
     const fog = this.scene.fog as THREE.Fog | THREE.FogExp2 | null;
     const shafts = this.lightShafts.select(this.lights.shafts(), this.camera, fog);
+    // Before the ball's probe, so the pool the ball sees carries its mirror.
+    this.mirrorPool();
     this.captureReflection(level);
     // Depth of field reads the whole frame, so never in the editor's
     // letterboxed sub-rect (which never asks for it anyway).
@@ -1141,6 +1192,128 @@ export class Scene3D {
   // The pools the splashes watch: every still water body's surface.
   private *stillSurfaces(): Iterable<StillSurface> {
     for (const visual of this.bodies.values()) if (visual.stillSurface) yield visual.stillSurface;
+  }
+
+  // The scene's own flat water (the backdrop's pool plane, `sceneryWater`)
+  // drawn as the pool it continues: the pool whose surface it lies just under
+  // (the backdrop tool lays it 2 cm down), in the pool's colour, slab ramp and
+  // mirror switch. The ripples are in world x and z and so is the ramp, so
+  // where the two meet nothing changes but which mesh is drawing.
+  private adoptSceneryWater(scenery: THREE.Group): void {
+    const box = this.poolBox;
+    for (const mesh of sceneryWater(scenery)) {
+      box.setFromObject(mesh);
+      let pool: StillSurface | null = null;
+      let gap = SCENERY_WATER_REACH;
+      for (const surface of this.stillSurfaces()) {
+        const d = Math.abs(top(surface) - box.max.y);
+        if (d < gap) {
+          gap = d;
+          pool = surface;
+        }
+      }
+      if (!pool) {
+        console.warn(`[render3d] scenery water at y ${box.max.y.toFixed(2)} lies under no pool; drawn as authored`);
+        continue;
+      }
+      const water = stillWaterMaterial(pool.color, pool.backZ, pool.frontZ, {
+        reflect: pool.reflect,
+        footprint: pool.footprint,
+      });
+      mesh.material = water.material;
+      // Up to the pool's own surface (it was laid a little under it), so the
+      // two are one surface at one height; moved in its parent's frame.
+      const parent = mesh.parent;
+      if (parent) {
+        mesh.updateWorldMatrix(true, false);
+        const at = new THREE.Vector3().setFromMatrixPosition(mesh.matrixWorld);
+        const lifted = at.clone();
+        lifted.y += top(pool) - box.max.y;
+        mesh.position.add(parent.worldToLocal(lifted).sub(parent.worldToLocal(at)));
+        mesh.updateMatrixWorld(true);      }
+      mesh.castShadow = false;
+      mesh.receiveShadow = false;
+      this.sceneryWaterMaterials.push(water.material);
+      pool.scenery.push(mesh);
+      // Behind the scenery water's front edge the pool's ends stand in open
+      // water, so their caps go (see `StillWaterMaterial.openBehind`).
+      pool.openBehind.value = Math.max(pool.openBehind.value, box.max.z);
+    }
+  }
+
+  // The scene mirrored in a pool (see planarReflection.ts): one pass a frame,
+  // for the pool in view nearest the camera, and only while the camera is above
+  // its water - from below, or with no pool in view, nothing is drawn. Every
+  // other pool goes without its mirror this frame rather than reading one
+  // taken in another plane. Pools and the editor's guides are left out of it.
+  private mirrorPool(): void {
+    const camera = this.camera;
+    camera.updateMatrixWorld();
+    this.viewProjection.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+    this.frustum.setFromProjectionMatrix(this.viewProjection);
+    const eye = camera.position;
+    let chosen: StillSurface | null = null;
+    let plane = 0;
+    let nearest = Infinity;
+    const hidden = this.poolHidden;
+    hidden.length = 0;
+    hidden.push(this.editorLayer);
+    for (const surface of this.stillSurfaces()) {
+      surface.reflect.value = 0;
+      hidden.push(surface.mesh, ...surface.scenery);
+      // The top face, in three's frame, and the scene's water continuing it.
+      surface.mesh.updateWorldMatrix(true, false);
+      const box = this.poolBox;
+      box.min.set(-surface.halfX, surface.halfY, surface.backZ);
+      box.max.set(surface.halfX, surface.halfY, surface.frontZ);
+      box.applyMatrix4(surface.mesh.matrixWorld);
+      const y = box.max.y;
+      surface.footprint.value.set(box.min.x, box.max.x, box.min.z, box.max.z);
+      for (const mesh of surface.scenery) box.union(this.sceneryBox.setFromObject(mesh));
+      if (!this.poolMirrorOn || eye.y <= y || !this.frustum.intersectsBox(box)) continue;
+      const distance = box.distanceToPoint(eye);
+      if (distance >= nearest) continue;
+      nearest = distance;
+      chosen = surface;
+      plane = y;
+      this.chosenBox.copy(box);
+    }
+    if (!chosen) return;
+    const onScreen = this.screenWindow(this.chosenBox);
+    if (onScreen === "offscreen") return;
+    this.poolMirror.capture(this.scene, camera, plane, hidden, onScreen);
+    chosen.reflect.value = 1;
+  }
+
+  // Where a box falls on the screen, in normalised device coordinates (x0,
+  // x1, y0, y1), padded by `MIRROR_WINDOW_PAD` for the ripples' push on the
+  // mirror and clipped to the screen: what the mirror must cover (see
+  // `PlanarReflection.capture`). Null (the whole view) when part of the box
+  // is behind the camera, where its corners do not bound its picture.
+  private screenWindow(box: THREE.Box3): THREE.Vector4 | null | "offscreen" {
+    let x0 = Infinity;
+    let x1 = -Infinity;
+    let y0 = Infinity;
+    let y1 = -Infinity;
+    for (let i = 0; i < 8; i++) {
+      const c = this.corner.set(
+        i & 1 ? box.max.x : box.min.x,
+        i & 2 ? box.max.y : box.min.y,
+        i & 4 ? box.max.z : box.min.z,
+      );
+      const clip = this.clipCorner.set(c.x, c.y, c.z, 1).applyMatrix4(this.viewProjection);
+      if (clip.w <= 0) return null;
+      x0 = Math.min(x0, clip.x / clip.w);
+      x1 = Math.max(x1, clip.x / clip.w);
+      y0 = Math.min(y0, clip.y / clip.w);
+      y1 = Math.max(y1, clip.y / clip.w);
+    }
+    x0 = Math.max(-1, x0 - MIRROR_WINDOW_PAD);
+    x1 = Math.min(1, x1 + MIRROR_WINDOW_PAD);
+    y0 = Math.max(-1, y0 - MIRROR_WINDOW_PAD);
+    y1 = Math.min(1, y1 + MIRROR_WINDOW_PAD);
+    if (x0 >= x1 || y0 >= y1) return "offscreen";
+    return this.mirrorWindow.set(x0, x1, y0, y1);
   }
 
   // The ball's view of the level, with the avatar and the editor's guides out
@@ -1191,6 +1364,8 @@ export class Scene3D {
       this.dressing.dispose();
       this.dressing = null;
     }
+    for (const m of this.sceneryWaterMaterials) m.dispose();
+    this.sceneryWaterMaterials.length = 0;
     if (this.ballVisual) {
       this.scene.remove(this.ballVisual.root);
       this.ballVisual.dispose();
@@ -1212,6 +1387,7 @@ export class Scene3D {
     this.lights.dispose();
     this.env.dispose();
     this.reflectionProbe.dispose();
+    this.poolMirror.dispose();
     this.depthOfField.dispose();
     this.lightShafts.dispose();
     this.splashes.dispose();

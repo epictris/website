@@ -204,11 +204,12 @@ def smooth_field(field, edges, n, iterations):
     return field
 
 
-def geodesic(v, edges, sources, drop=0.0):
+def geodesic(v, edges, sources, drop=0.0, start=None):
     """Distance from the nearest of `sources` (vertex indices) to every vertex
-    along the mesh edges (Dijkstra). A vertex the edges do not reach (another
-    island of the paint) takes its straight-line distance to the first source
-    instead. With `drop` > 0 the metric is squashed downward: an edge going
+    along the mesh edges (Dijkstra), each source starting at its `start`
+    distance (0 when None), so a line that runs between the vertices can be a
+    source. A vertex the edges do not reach (another island of the paint)
+    takes its straight-line distance to the first source instead. With `drop` > 0 the metric is squashed downward: an edge going
     down counts shorter and one going up longer, by drop / (1 + drop) of its
     rise, so a threshold on the distance reaches (1 + drop) times further
     straight down than sideways."""
@@ -226,9 +227,12 @@ def geodesic(v, edges, sources, drop=0.0):
         adj[b].append((a, cba))
     dist = np.full(n, np.inf)
     heap = []
-    for s in np.atleast_1d(sources).tolist():
-        dist[s] = 0.0
-        heap.append((0.0, s))
+    sources = np.atleast_1d(sources)
+    start = np.zeros(len(sources)) if start is None else np.asarray(start, dtype=np.float64)
+    for s, d0 in zip(sources.tolist(), start.tolist()):
+        if d0 < dist[s]:
+            dist[s] = d0
+            heap.append((d0, s))
     heapq.heapify(heap)
     while heap:
         d, i = heapq.heappop(heap)
