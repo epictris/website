@@ -52,11 +52,18 @@ because the moss object is parented to the host with an identity transform):
    normal are interpolated, and every dab is evaluated per texel - its outline in
    its tangent plane, a `print_edge` anti-aliased edge, its flat tone over what is
    below. The outline of the moss is where the mound leaves the rock.
+
+`build` is `finish(grow(...))`: `grow` is steps 1-8 up to the decimate, `finish`
+the decimate and the print. FINISH_PARAMS are the parameters only `finish`
+reads, so the add-on can finish a cached growth again when only the poly count
+or the texture changed.
 """
 
 import heapq
 import math
+import os
 import random
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -65,14 +72,14 @@ from mathutils.bvhtree import BVHTree
 from mathutils.kdtree import KDTree
 
 from .stampbrush.geometry import edges as mesh_edges
-from .stampbrush.geometry import mask, normalize, refine, smooth_field, smoothstep, stamps_world, vertex_normals
+from .stampbrush.geometry import kdtree, mask, normalize, refine, smooth_field, smoothstep, stamps_world, vertex_normals
 
 # A dab must be at least this concave (area over its convex hull's). Measured over
 # 2000 draws of HARMONICS: median 0.985, 5th percentile 0.956, and 18 % at or under
 # 0.97 - enough of a dent to see, at about five draws a dab.
 SOLIDITY_MAX = 0.97
 MAX_DRAWS = 200
-DEBUG = bool(__import__("os").environ.get("MOSS_DEBUG"))
+DEBUG = bool(os.environ.get("MOSS_DEBUG"))
 HARMONICS = ((0.08, 0.3), (0.1, 0.35), (0.0, 0.18))  # a1, a2, a3 ranges
 FRACS = (1.0, 1.0, 0.55, 0.3, 0.18)  # each layer's share of its parent's dabs; 1 = fill to the buffer
 FILL_SEED_AREA = 0.0144  # m^2 of eligible area per extra seed in a fill layer (400 study voxels)
@@ -82,6 +89,7 @@ FILL_SEED_AREA = 0.0144  # m^2 of eligible area per extra seed in a fill layer (
 # and rim were settled in that unit, so depths here are scaled to it.
 STUDY_METRIC = 1.35
 MOUND_LIFT_ROOM = 0.03  # how far off the slab of mound over its plane a texel may sit and still take a dab
+DECAL_LIFT = 0.003  # a texture-only moss's decal stands this far off the rock (viewport only; clear of depth fighting)
 
 
 @dataclass
@@ -89,6 +97,9 @@ class Params:
     """Every knob of a moss object. Lengths are metres, colours linear RGB."""
 
     seed: int = 0
+    # "MOUND": a mound of moss with its own printed texture; "TEXTURE": no
+    # geometry, the dabs painted into the rock's colour map on export.
+    kind: str = "MOUND"
     resolution: float = 0.012  # edge length the host is refined to under the paint
     threshold: float = 0.35  # paint coverage at which moss starts
     # Dabs
@@ -135,7 +146,8 @@ class Result:
     dabs: int = 0
     layers: list = field(default_factory=list)  # dabs per layer
     heights: dict = field(default_factory=dict)  # tone step -> mean mm over the rock (the check: rising)
-    texel: float = 0.0
+    texel: float = 0.0  # the print's texel: `texel`, or coarser where the mound did not fit `max_texture`
+    area: float = 0.0  # m^2 of mound
 
 
 def empty_result():
@@ -154,15 +166,21 @@ def _srgb(c):
 # Dab shapes
 
 
-def _outline(harm, n=96):
-    th = np.linspace(0.0, 2 * math.pi, n, endpoint=False)
-    rr = 1 + sum(a * np.cos((j + 1) * th - ph) for j, (a, ph) in enumerate(harm))
-    return np.stack([rr * np.cos(th), rr * np.sin(th)], 1)
+_TH = np.linspace(0.0, 2 * math.pi, 96, endpoint=False)
+_TH_K = [(j + 1) * _TH for j in range(len(HARMONICS))]  # the angles of each harmonic
+_COS, _SIN = np.cos(_TH), np.sin(_TH)
+
+
+def _outline(harm):
+    # 35k calls a build: the angle tables are made once, the same values.
+    rr = 1 + sum(a * np.cos(_TH_K[j] - ph) for j, (a, ph) in enumerate(harm))
+    return np.stack([rr * _COS, rr * _SIN], 1)
 
 
 def _area(pts):
     x, y = pts[:, 0], pts[:, 1]
-    return 0.5 * abs(float(np.dot(x, np.roll(y, -1)) - np.dot(np.roll(x, -1), y)))
+    # np.roll(a, -1), without its overhead
+    return 0.5 * abs(float(np.dot(x, np.concatenate((y[1:], y[:1]))) - np.dot(np.concatenate((x[1:], x[:1])), y)))
 
 
 def _hull(pts):
@@ -267,21 +285,24 @@ class _Graph:
         for k in range(3):
             np.add.at(self.area, t[:, k], area / 3.0)
 
-    def dijkstra(self, sources):
-        """Distance along the edges from the nearest source (a bool mask)."""
+    def dijkstra(self, sources, within=None):
+        """Distance along the edges from the nearest source (a bool mask),
+        walking only into `within` (a bool mask; everywhere when None).
+        Outside it, a vertex that is not a source stays at inf."""
         dist = np.full(self.n, np.inf)
         idx = np.nonzero(sources)[0]
         dist[idx] = 0.0
         heap = [(0.0, int(i)) for i in idx]
         heapq.heapify(heap)
         adj = self.adj
+        walk = np.ones(self.n, bool) if within is None else within
         while heap:
             d, i = heapq.heappop(heap)
             if d > dist[i]:
                 continue
             for j, ln in adj[i]:
                 nd = d + ln
-                if nd < dist[j]:
+                if nd < dist[j] and walk[j]:
                     dist[j] = nd
                     heapq.heappush(heap, (nd, j))
         return dist
@@ -319,13 +340,30 @@ class _Graph:
             out.append(group)
         return out
 
+    def _border(self, members):
+        """The vertices of `members` with a neighbour outside it."""
+        e = self.edges
+        cut = members[e[:, 0]] != members[e[:, 1]]
+        out = np.zeros(self.n, bool)
+        out[e[cut].ravel()] = True
+        return out & members
+
     def depth_inside(self, painted, inside):
         """How far each vertex is in from the outside of `inside`, where the
         outside is only what connects to the unpainted rock: a pocket between two
         clumps is not an edge, or every layer above would widen it. A vertex the
         walk never reaches counts as outside (it would grow specks)."""
-        outside = self.flood(~painted, ~inside)
-        d = self.dijkstra(outside) * STUDY_METRIC
+        # Both walks start only where they can go somewhere: every unpainted
+        # vertex is outside, but only one next to the paint can lead the flood
+        # in, and every outside vertex is at 0, but only one next to the rest
+        # can start a shortest path into it (a path through another outside
+        # vertex is longer than one starting there). The same sets and
+        # distances, for a fraction of the walk over the unpainted margin.
+        outside = self.flood(self._border(~painted), ~inside)
+        outside |= ~painted
+        d = self.dijkstra(self._border(outside), within=~outside)
+        d[outside] = 0.0
+        d = d * STUDY_METRIC
         d[np.isinf(d)] = 0.0
         return d
 
@@ -339,14 +377,41 @@ def _passes(blur, res):
 # The build
 
 
+@dataclass
+class Grown:
+    """The moss before its low poly and its print: the dabs and the full-resolution
+    mound (world space), and what `finish` measures them against. It depends on
+    every parameter except FINISH_PARAMS, so a change to those finishes it again
+    without growing it again. `finish` never changes it."""
+
+    vertices: np.ndarray  # (V, 3) world, the mound at the refined resolution
+    triangles: np.ndarray  # (T, 3)
+    layers: list  # [[Dab]] lowest first, toned and with their heights
+    bvh: BVHTree  # the host
+    kd: KDTree  # the refined host's vertices
+    tval: np.ndarray  # tone at each refined vertex (nan: no dab)
+    host_matrix: np.ndarray  # (4, 4)
+
+
+# The parameters only `finish` reads: the mound's triangle budget and the print.
+FINISH_PARAMS = ("mound_density", "texel", "max_texture", "print_edge")
+
+
 def build(co, tri, host_matrix, stamps, p, decimate):
     """The moss for one host, from the host's welded world triangles (`co`, `tri`:
     stampbrush.geometry.host_world). `decimate(v, t, ratio) -> (v, t)` reduces a
     mesh (the caller's Blender decimate; the build itself touches no bpy state)."""
+    grown = grow(co, tri, host_matrix, stamps, p)
+    return finish(grown, p, decimate) if grown is not None else empty_result()
+
+
+def grow(co, tri, host_matrix, stamps, p):
+    """Steps 1-8 short of the decimate: the dabs and the full-resolution mound, or
+    None when there is no moss to grow."""
     if len(stamps) == 0 or not bool((stamps.strength > 0).any()):
-        return empty_result()
+        return None
     if len(tri) == 0:
-        return empty_result()
+        return None
     rng = random.Random(p.seed)
     centres, snormals = stamps_world(stamps, host_matrix)
     radii = stamps.radius.astype(np.float64)
@@ -354,7 +419,7 @@ def build(co, tri, host_matrix, stamps, p, decimate):
     reach = p.dab_max * 1.9  # a dab's outline reaches past its centre, which is in the paint
     v, t = refine(co, tri, centres, radii + reach, res)
     if len(t) == 0:
-        return empty_result()
+        return None
     # Canonical order: vertices and triangles by position, so the draws below
     # walk the same mesh the same way in any process.
     vo = np.lexsort((v[:, 2], v[:, 1], v[:, 0]))
@@ -369,13 +434,10 @@ def build(co, tri, host_matrix, stamps, p, decimate):
     hull = normalize(smooth_field(n_raw, g.edges, len(v), _passes(0.02, res)))
     painted = mask(v, n_raw, centres, snormals, radii, stamps.strength) >= p.threshold
     if g.area[painted].sum() < 0.002:
-        return empty_result()
+        return None
     P = [Vector(x) for x in v]
     N = [Vector(x) for x in hull]
-    kd = KDTree(len(v))
-    for i, x in enumerate(P):
-        kd.insert(x, i)
-    kd.balance()
+    kd = kdtree(v)
     off = Vector((rng.uniform(0, 50), rng.uniform(0, 50), rng.uniform(0, 50)))
 
     layers = _grow(p, rng, g, P, N, kd, painted, off, res)
@@ -396,6 +458,8 @@ def build(co, tri, host_matrix, stamps, p, decimate):
             cur = tval[idx]
             tval[idx] = np.where(np.isnan(cur), d.t, cur + (d.t - np.nan_to_num(cur)) * w)
             inner[idx[u <= p.inner_u]] = 1.0
+    if p.kind == "TEXTURE":
+        return _grown_decal(co, tri, host_matrix, v, t, hull, g, kd, tval, layers)
     up = p.up_floor + (1 - p.up_floor) * smoothstep(0.0, 0.7, hull[:, 2])
     lift = np.where(np.isnan(tval), 0.0, p.floor + p.lift * np.nan_to_num(tval) * up)
     lift = smooth_field(lift, g.edges, len(v), _passes(p.height_blur, res))
@@ -407,10 +471,10 @@ def build(co, tri, host_matrix, stamps, p, decimate):
     keep = inner[t].mean(1) > 0.5
     mt = t[keep]
     if len(mt) == 0:
-        return empty_result()
+        return None
     mt = _drop_small(v, mt, p.min_patch)
     if len(mt) == 0:
-        return empty_result()
+        return None
     used = np.unique(mt)
     m_remap = np.full(len(v), -1, np.int64)
     m_remap[used] = np.arange(len(used))
@@ -424,23 +488,62 @@ def build(co, tri, host_matrix, stamps, p, decimate):
     offset = smooth_field(offset, mg.edges, len(mv), 1)
     mv = mv + hull[used] * offset[:, None]
 
+    bvh = BVHTree.FromPolygons([tuple(x) for x in co], [tuple(x) for x in tri.tolist()])
+    return Grown(mv, mt, layers, bvh, kd, tval, np.array(host_matrix, dtype=np.float64))
+
+
+def _grown_decal(co, tri, host_matrix, v, t, hull, g, kd, tval, layers):
+    """A texture-only moss: no mound. Its dabs are painted into the rock's own
+    colour map when the scene is exported (`paint_texels`, called by
+    scene_export.py); in Blender they show on a decal, the refined rock under
+    the dabs (and a ring of triangles more, which a dab's outline can cross
+    with no vertex inside) lifted DECAL_LIFT along the smoothed normal."""
+    covered = ~np.isnan(tval)
+    e = g.edges
+    ring = covered.copy()
+    ring[e[covered[e[:, 0]], 1]] = True
+    ring[e[covered[e[:, 1]], 0]] = True
+    mt = t[ring[t].any(1)]
+    if len(mt) == 0:
+        return None
+    for layer in layers:
+        for d in layer:
+            d.h = 0.0  # flat: the print looks for texels on the dab's own plane
+    used = np.unique(mt)
+    m_remap = np.full(len(v), -1, np.int64)
+    m_remap[used] = np.arange(len(used))
+    mv, mt = v[used] + hull[used] * DECAL_LIFT, m_remap[mt]
+    bvh = BVHTree.FromPolygons([tuple(x) for x in co], [tuple(x) for x in tri.tolist()])
+    return Grown(mv, mt, layers, bvh, kd, tval, np.array(host_matrix, dtype=np.float64))
+
+
+def finish(grown, p, decimate):
+    """Step 8's decimate and step 9's print: the moss at `mound_density` and
+    `texel`, in the host's local frame. A texture-only moss's decal is not
+    decimated (collapsing it would cut across the rock's creases) and its
+    print carries the dabs' coverage as alpha."""
+    mv, mt, layers, bvh = grown.vertices.copy(), grown.triangles, grown.layers, grown.bvh
+    if p.kind == "TEXTURE":
+        area = 0.5 * np.linalg.norm(np.cross(mv[mt[:, 1]] - mv[mt[:, 0]], mv[mt[:, 2]] - mv[mt[:, 0]]), axis=1).sum()
+        uvs, image, texel = _print(mv, mt, layers, p)
+        inv = np.linalg.inv(grown.host_matrix)
+        local = mv @ inv[:3, :3].T + inv[:3, 3]
+        return Result(local, mt, uvs, image, dabs=sum(len(x) for x in layers), layers=[len(x) for x in layers], heights={}, texel=texel, area=area)
     # ---- low poly, its edge back under the rock
     area = 0.5 * np.linalg.norm(np.cross(mv[mt[:, 1]] - mv[mt[:, 0]], mv[mt[:, 2]] - mv[mt[:, 0]]), axis=1).sum()
     ratio = min(1.0, max(0.005, p.mound_density * area / max(len(mt), 1)))
     if ratio < 1.0:
         mv, mt = decimate(mv, mt, ratio)
-    bvh = BVHTree.FromPolygons([tuple(x) for x in co], [tuple(x) for x in tri.tolist()])
     for i in np.nonzero(_boundary(mt, len(mv)))[0]:
         on, nr, _i, _d = bvh.find_nearest(Vector(mv[i]))
         if on is not None:
             mv[i] = np.array(on - nr * p.sink)
 
-    heights = _heights(mv, bvh, kd, tval, p.levels)
+    heights = _heights(mv, bvh, grown.kd, grown.tval, p.levels)
     uvs, image, texel = _print(mv, mt, layers, p)
-    M = np.array(host_matrix, dtype=np.float64)
-    inv = np.linalg.inv(M)
+    inv = np.linalg.inv(grown.host_matrix)
     local = mv @ inv[:3, :3].T + inv[:3, 3]
-    return Result(local, mt, uvs, image, dabs=sum(len(x) for x in layers), layers=[len(x) for x in layers], heights=heights, texel=texel)
+    return Result(local, mt, uvs, image, dabs=sum(len(x) for x in layers), layers=[len(x) for x in layers], heights=heights, texel=texel, area=area)
 
 
 def _drop_small(v, t, min_area):
@@ -484,15 +587,29 @@ def _grow(p, rng, g, P, N, kd, painted, off, res):
     # ---- layer 0: fill the painted area, packed tight (no pinholes)
     layer0 = []
     grid = _Grid(0.6 * p.dab_max)  # the packing test's reach
+    # A vertex closer to a placed dab than 0.3 (dab_min + its r) fails the
+    # packing test whatever r is drawn, so it is marked and later tries there
+    # skip the scan (still drawing r, so the random stream is unchanged). The
+    # mark keeps a margin far over float32 rounding, so it only ever claims
+    # what the exact test (Vector lengths, float32) rejects. It was most of
+    # layer 0's time: a try per painted vertex, nearly all of them rejected.
+    blocked = np.zeros(n, bool)
+    v32 = np.array([x[:] for x in P])
     for _ in range(len(painted_idx)):
         i = int(painted_idx[rng.randrange(len(painted_idx))])
         c, nr = P[i], N[i]
         r = rng.uniform(p.dab_min, p.dab_max)
+        if blocked[i]:
+            continue
         if any((c - d.c).length < 0.3 * (r + d.r) for d in grid.near(c, 0.3 * (r + p.dab_max))):
             continue
         d = Dab(c, nr, r, 0, rng)
         layer0.append(d)
         grid.add(d)
+        sure = 0.3 * (p.dab_min + r) - 1e-6
+        near = np.array([j for (_co, j, _dd) in kd.find_range(c, sure + 1e-5)], dtype=np.int64)
+        if len(near):
+            blocked[near[np.linalg.norm(v32[near] - v32[i], axis=1) < sure]] = True
     layers = [layer0]
 
     # ---- the erosion field: how many passes of uneven erosion each vertex survives
@@ -500,6 +617,10 @@ def _grow(p, rng, g, P, N, kd, painted, off, res):
     hfield = np.zeros(n)
     alive = painted.copy()
     base0 = max(p.buffer, p.ref_depth / p.steps_deep)
+    # The noise lookups' pass-independent part, once per painted vertex: the
+    # same Vector arithmetic in the same order, so the same float32 values.
+    at_slow = {i: P[i] * (p.erode_scale * 0.35) + off3 for i in painted_idx.tolist()}
+    at_fast = {i: P[i] * p.erode_scale + off3 for i in painted_idx.tolist()}
     for kk in range(1, 40):
         dep = g.depth_inside(painted, alive)
         scale = rng.uniform(0.45, 1.7)
@@ -507,9 +628,11 @@ def _grow(p, rng, g, P, N, kd, painted, off, res):
         if len(idx) == 0:
             break
         st = np.empty(len(idx))
+        shift_slow = Vector((0, 0, 2.7 * kk))
+        shift_fast = Vector((1.3, 0, 4.1 * kk))
         for j, i in enumerate(idx.tolist()):
-            n_slow = min(1.0, max(0.0, 0.5 + 1.3 * noise.noise(P[i] * (p.erode_scale * 0.35) + off3 + Vector((0, 0, 2.7 * kk)))))
-            n_fast = min(1.0, max(0.0, 0.5 + 1.3 * noise.noise(P[i] * p.erode_scale + off3 + Vector((1.3, 0, 4.1 * kk)))))
+            n_slow = min(1.0, max(0.0, 0.5 + 1.3 * noise.noise(at_slow[i] + shift_slow)))
+            n_fast = min(1.0, max(0.0, 0.5 + 1.3 * noise.noise(at_fast[i] + shift_fast)))
             n01 = 0.6 * n_slow + 0.4 * n_fast
             st[j] = base0 * scale * (0.15 + 2.6 * n01 * n01)
         kept = dep[idx] >= st
@@ -577,6 +700,20 @@ def _grow(p, rng, g, P, N, kd, painted, off, res):
             caps.append(10**9 if fill else int(target / len(seeds_at) * rng.uniform(0.5, 1.5)) + 1)
         stalls = 0
         spacing = 0.4
+        # As in layer 0: a vertex closer to a dab of this layer than spacing
+        # (r_k min + its r) fails the spacing test whatever r is drawn, so it is
+        # marked and skipped (the draws before the test still happen). Most of
+        # the build's time went to this test.
+        lblocked = np.zeros(n, bool)
+
+        def block(d):
+            sure = spacing * (r_k[0] + d.r) - 1e-6
+            near = np.array([j for (_co, j, _dd) in kd.find_range(d.c, sure + 1e-5)], dtype=np.int64)
+            if len(near):
+                lblocked[near[np.linalg.norm(v32[near] - np.array(d.c[:]), axis=1) < sure]] = True
+
+        for d in layer:
+            block(d)
         while len(layer) < target and stalls < (80 if fill else 400):
             grew = False
             for qi, q in enumerate(queues):
@@ -590,7 +727,7 @@ def _grow(p, rng, g, P, N, kd, painted, off, res):
                     r = rng.uniform(*r_k)
                     c = src.c + (tx * math.cos(a) + ty * math.sin(a)) * (src.r + r) * spacing
                     _co, i, _dd = kd.find(c)  # snap to the rock
-                    if not elig[i]:
+                    if not elig[i] or lblocked[i]:
                         continue
                     c = P[i]
                     if any((c - o.c).length < spacing * (r + o.r) for o in lgrid.near(c, spacing * (r + r_k[1]))):
@@ -599,6 +736,7 @@ def _grow(p, rng, g, P, N, kd, painted, off, res):
                     layer.append(d)
                     lgrid.add(d)
                     q.append(d)
+                    block(d)
                     grew = True
                     break
             stalls = 0 if grew else stalls + 1
@@ -650,6 +788,8 @@ def _heights(mv, bvh, kd, tval, levels):
 
 CHART_ANGLE = 40.0  # degrees: a chart takes neighbours whose normal is within this of its first face's
 CHART_PAD = 2  # texels of gutter around every chart, filled from the chart's edge
+PRINT_CHUNK = 256  # dabs whose texels are found at once on the pool (bounds the memory held)
+MAP_DILATE = 0.75  # texels: how far outside a triangle a rock map's texel still counts as on it
 
 
 def _charts(mv, mt):
@@ -752,24 +892,109 @@ def _print(mv, mt, layers, p):
         valid[yy_, xx_] = True
     # the gutter: every chart grown by `pad` texels from its own edge, so filtering
     # and the first mips at a chart's border read the chart's colour
+    # (Each new texel copies its neighbour's texel directly: rolling the whole
+    # position and normal images per direction was a second of a build.)
     for _ in range(pad):
         grow = np.zeros_like(valid)
-        src_pos = np.zeros_like(pos)
-        src_nrm = np.zeros_like(nrm)
+        ty, tx, sy, sx = [], [], [], []
         for dy, dx in ((0, 1), (0, -1), (1, 0), (-1, 0)):
             sh_valid = np.roll(valid, (dy, dx), axis=(0, 1))
-            take = sh_valid & ~valid & ~grow
-            src_pos[take] = np.roll(pos, (dy, dx), axis=(0, 1))[take]
-            src_nrm[take] = np.roll(nrm, (dy, dx), axis=(0, 1))[take]
-            grow |= take
-        pos[grow] = src_pos[grow]
-        nrm[grow] = src_nrm[grow]
+            yy_, xx_ = np.nonzero(sh_valid & ~valid & ~grow)
+            ty.append(yy_)
+            tx.append(xx_)
+            sy.append((yy_ - dy) % size)
+            sx.append((xx_ - dx) % size)
+            grow[yy_, xx_] = True
+        ty, tx, sy, sx = (np.concatenate(a) for a in (ty, tx, sy, sx))
+        pos[ty, tx] = pos[sy, sx]
+        nrm[ty, tx] = nrm[sy, sx]
         valid |= grow
     yy, xx = np.nonzero(valid)
-    tp = pos[yy, xx]
-    tn = normalize(nrm[yy, xx])
+    col, cov = paint_texels(layers, p, pos[yy, xx], normalize(nrm[yy, xx]))
+    img[yy, xx, :3] = col
+    # A mound's print is opaque; a texture-only moss's decal shows the rock
+    # wherever no dab reaches.
+    img[yy, xx, 3] = cov if p.kind == "TEXTURE" else 1.0
+    return uvs, img, texel
+
+
+def paint_map(px, uv_px, tri_pos, layers, p):
+    """Paint a texture-only moss into a rock's colour map, in place. `px` is
+    the map (H, W, 4; sRGB-encoded colour, as a byte image's pixels read,
+    row 0 at the bottom), its alpha over 0.5 where a texel was baked; `uv_px`
+    (T, 3, 2) the rock's triangles in texels of the map and `tri_pos` (T, 3, 3)
+    the same triangles in the world. Every baked texel of a triangle the dabs
+    can reach takes the dabs' colour by their coverage. A texel counts for a
+    triangle within MAP_DILATE texels of it, positions extrapolated, so the
+    texels the bake rasterised on a triangle's edge are painted too; the map's
+    background fill then carries the moss into the seams. Returns how many
+    texels the moss covers."""
+    dabs = [d for layer in layers for d in layer]
+    if not dabs or len(tri_pos) == 0:
+        return 0
+    h, w = px.shape[:2]
+    reach = max(d.rmax for d in dabs) + p.print_edge + MOUND_LIFT_ROOM
+    kd = kdtree(np.array([d.c[:] for d in dabs]))
+    centre = tri_pos.mean(1)
+    radius = np.linalg.norm(tri_pos - centre[:, None, :], axis=2).max(1)
+    fn = normalize(np.cross(tri_pos[:, 1] - tri_pos[:, 0], tri_pos[:, 2] - tri_pos[:, 0]))
+    ys, xs, ps, ns = [], [], [], []
+    for f in range(len(tri_pos)):
+        if not kd.find_range(Vector(centre[f]), radius[f] + reach):
+            continue
+        (ax_, ay_), (bx, by_), (cx, cy) = uv_px[f]
+        den = (by_ - cy) * (ax_ - cx) + (cx - bx) * (ay_ - cy)
+        if abs(den) < 1e-12:
+            continue
+        x0 = max(0, int(math.floor(min(ax_, bx, cx) - MAP_DILATE)))
+        y0 = max(0, int(math.floor(min(ay_, by_, cy) - MAP_DILATE)))
+        x1 = min(w, int(math.ceil(max(ax_, bx, cx) + MAP_DILATE)))
+        y1 = min(h, int(math.ceil(max(ay_, by_, cy) + MAP_DILATE)))
+        if x1 <= x0 or y1 <= y0:
+            continue
+        yy, xx = np.mgrid[y0:y1, x0:x1]
+        tx, ty = xx + 0.5, yy + 0.5
+        l1 = ((by_ - cy) * (tx - cx) + (cx - bx) * (ty - cy)) / den
+        l2 = ((cy - ay_) * (tx - cx) + (ax_ - cx) * (ty - cy)) / den
+        lam = np.stack([l1, l2, 1 - l1 - l2], -1)
+        # each barycentric over its height is the distance (texels) from that edge
+        corners = uv_px[f]
+        edge = np.array([np.linalg.norm(corners[(i + 2) % 3] - corners[(i + 1) % 3]) for i in range(3)])
+        dist = lam * (abs(den) / np.maximum(edge, 1e-12))
+        inside = (dist >= -MAP_DILATE).all(-1) & (px[yy, xx, 3] > 0.5)
+        if not inside.any():
+            continue
+        ys.append(yy[inside])
+        xs.append(xx[inside])
+        ps.append(lam[inside] @ tri_pos[f])
+        ns.append(np.broadcast_to(fn[f], (int(inside.sum()), 3)))
+    if not ys:
+        return 0
+    ys, xs, ps, ns = (np.concatenate(a) for a in (ys, xs, ps, ns))
+    # a texel two triangles claim is painted once, from the first
+    _u, first = np.unique(ys * w + xs, return_index=True)
+    ys, xs, ps, ns = ys[first], xs[first], ps[first], ns[first]
+    col, cov = paint_texels(layers, p, ps, ns)
+    hit = cov > 0
+    if not hit.any():
+        return 0
+    ys, xs, col, cov = ys[hit], xs[hit], col[hit], cov[hit]
+    s = np.clip(px[ys, xs, :3].astype(np.float64), 0.0, 1.0)
+    base = np.where(s <= 0.04045, s / 12.92, ((s + 0.055) / 1.055) ** 2.4)
+    out = np.clip(base + (col - base) * cov[:, None], 0.0, 1.0)
+    px[ys, xs, :3] = np.where(out <= 0.0031308, out * 12.92, 1.055 * np.power(out, 1 / 2.4) - 0.055)
+    return int(len(ys))
+
+
+def paint_texels(layers, p, tp, tn):
+    """Every dab evaluated at texels at world points `tp` facing `tn` (unit),
+    lower layers first: (linear colour, coverage) per texel, the colour `dark`
+    where no dab reaches. The mound's print and, on export, a texture-only
+    moss's rock colour map (scene_export.py) both paint through this."""
     col = np.tile(np.array(p.dark, dtype=np.float64), (len(tp), 1))
     cov = np.zeros(len(tp))
+    if len(tp) == 0:
+        return col, cov
     # a spatial hash of the texels: sorted by bucket, so a dab gathers the texels
     # of every bucket its sphere touches in one numpy step
     cell = max(0.01, p.dab_max * 0.3)
@@ -781,56 +1006,71 @@ def _print(mv, mt, layers, p):
     uk, start, count = np.unique(key[order], return_index=True, return_counts=True)
     room = MOUND_LIFT_ROOM
     tp_sq = np.einsum("ij,ij->i", tp, tp)
-    for layer in layers:
-        for d in layer:
-            cc = np.asarray(d.c)
-            dn = np.asarray(d.n)
-            # The mound stands up to `d.h` over the dab's plane here: fetch the
-            # texels in a sphere about the middle of that slab, not a box as
-            # tall as the tallest moss anywhere (that fetched 3x the texels).
-            mid = cc + dn * (0.5 * d.h)
-            half = 0.5 * d.h + room
-            reach = math.sqrt((d.rmax + p.print_edge) ** 2 + half * half)
-            g0 = np.maximum(np.floor((mid - reach - lo) / cell).astype(np.int64), 0)
-            g1 = np.minimum(np.floor((mid + reach - lo) / cell).astype(np.int64), dims - 1)
-            if (g1 < g0).any():
-                continue
-            gx, gy, gz = np.meshgrid(np.arange(g0[0], g1[0] + 1), np.arange(g0[1], g1[1] + 1), np.arange(g0[2], g1[2] + 1), indexing="ij")
-            # buckets whose centre is within the sphere (plus a bucket's half-diagonal)
-            centre = (np.stack([gx, gy, gz], -1).reshape(-1, 3) + 0.5) * cell + lo
-            near = np.linalg.norm(centre - mid, axis=1) < reach + 0.87 * cell
-            want = ((gx * dims[1] + gy) * dims[2] + gz).ravel()[near]
-            pos = np.searchsorted(uk, want)
-            ok = pos < len(uk)
-            ok[ok] = uk[pos[ok]] == want[ok]  # only buckets that hold texels
-            pos = pos[ok]
-            if len(pos) == 0:
-                continue
-            st, cn = start[pos], count[pos]
-            total = int(cn.sum())
-            sel = order[np.repeat(st - np.concatenate([[0], np.cumsum(cn)[:-1]]), cn) + np.arange(total)]
-            # cheap culls first: within the slab, inside the dab's outer radius,
-            # facing the dab's way (the dab's own side of the rock)
-            rel = tp[sel] @ dn - cc @ dn
-            sq = tp_sq[sel] - 2.0 * (tp[sel] @ cc) + cc @ cc - rel * rel
-            ok = (rel > -room) & (rel < d.h + room) & (sq < (d.rmax + p.print_edge) ** 2) & ((tn[sel] @ dn) > 0.2)
-            sel = sel[ok]
-            if len(sel) == 0:
-                continue
-            u, rr = d.u(tp[sel])
-            w = np.clip((rr - u * rr) / p.print_edge + 0.5, 0.0, 1.0)
-            hit = w > 0
-            if not hit.any():
-                continue
-            sel, w = sel[hit], w[hit]
-            tone = np.array(d.tone)
-            first = cov[sel] == 0  # untouched texels take the dab's tone whole
-            cur = np.where(first[:, None], tone, col[sel])
-            col[sel] = cur + (tone - cur) * w[:, None]
-            cov[sel] = np.maximum(cov[sel], w)
-    img[yy, xx, :3] = col
-    img[yy, xx, 3] = 1.0
-    return uvs, img, texel
+
+    def texels(d):
+        """The texels a dab paints and its weight at each, or None. Reads only
+        what is fixed by now, so dabs run on a thread pool; their painting
+        (below) stays in dab order, so the print does not depend on it."""
+        cc = np.asarray(d.c)
+        dn = np.asarray(d.n)
+        # The mound stands up to `d.h` over the dab's plane here: fetch the
+        # texels in a sphere about the middle of that slab, not a box as
+        # tall as the tallest moss anywhere (that fetched 3x the texels).
+        mid = cc + dn * (0.5 * d.h)
+        half = 0.5 * d.h + room
+        reach = math.sqrt((d.rmax + p.print_edge) ** 2 + half * half)
+        g0 = np.maximum(np.floor((mid - reach - lo) / cell).astype(np.int64), 0)
+        g1 = np.minimum(np.floor((mid + reach - lo) / cell).astype(np.int64), dims - 1)
+        if (g1 < g0).any():
+            return None
+        gx, gy, gz = np.meshgrid(np.arange(g0[0], g1[0] + 1), np.arange(g0[1], g1[1] + 1), np.arange(g0[2], g1[2] + 1), indexing="ij")
+        # buckets whose centre is within the sphere (plus a bucket's half-diagonal)
+        centre = (np.stack([gx, gy, gz], -1).reshape(-1, 3) + 0.5) * cell + lo
+        near = np.linalg.norm(centre - mid, axis=1) < reach + 0.87 * cell
+        want = ((gx * dims[1] + gy) * dims[2] + gz).ravel()[near]
+        pos = np.searchsorted(uk, want)
+        ok = pos < len(uk)
+        ok[ok] = uk[pos[ok]] == want[ok]  # only buckets that hold texels
+        pos = pos[ok]
+        if len(pos) == 0:
+            return None
+        st, cn = start[pos], count[pos]
+        total = int(cn.sum())
+        sel = order[np.repeat(st - np.concatenate([[0], np.cumsum(cn)[:-1]]), cn) + np.arange(total)]
+        # cheap culls first, each on what the last left: within the slab,
+        # inside the dab's outer radius, facing the dab's way (the dab's own
+        # side of the rock); every test is per texel, so culling in stages
+        # keeps the same texels
+        pts = tp[sel]
+        rel = pts @ dn - cc @ dn
+        ok = (rel > -room) & (rel < d.h + room)
+        sel, pts, rel = sel[ok], pts[ok], rel[ok]
+        sq = tp_sq[sel] - 2.0 * (pts @ cc) + cc @ cc - rel * rel
+        ok = (sq < (d.rmax + p.print_edge) ** 2) & ((tn[sel] @ dn) > 0.2)
+        sel, pts = sel[ok], pts[ok]
+        if len(sel) == 0:
+            return None
+        u, rr = d.u(pts)
+        w = np.clip((rr - u * rr) / p.print_edge + 0.5, 0.0, 1.0)
+        hit = w > 0
+        if not hit.any():
+            return None
+        return sel[hit], w[hit]
+
+    dabs = [d for layer in layers for d in layer]
+    with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as pool:
+        for at in range(0, len(dabs), PRINT_CHUNK):
+            chunk = dabs[at : at + PRINT_CHUNK]
+            for d, got in zip(chunk, pool.map(texels, chunk)):
+                if got is None:
+                    continue
+                sel, w = got
+                tone = np.array(d.tone)
+                first = cov[sel] == 0  # untouched texels take the dab's tone whole
+                cur = np.where(first[:, None], tone, col[sel])
+                col[sel] = cur + (tone - cur) * w[:, None]
+                cov[sel] = np.maximum(cov[sel], w)
+    return col, cov
 
 
 def _shelf_pack(wh, max_size):

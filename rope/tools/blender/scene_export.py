@@ -495,20 +495,56 @@ def image_nodes(targets, images):
     return nodes
 
 
-def bake_pass(targets, images, bake_type, **bake_args):
+def bake_pass(targets, images, bake_type, before_fill=None, **bake_args):
     """One Cycles bake of every target into its own image: each material
     gets an Image Texture of its object's image as the ACTIVE node, which is
-    where a bake writes. Returns the nodes, keyed by material."""
+    where a bake writes. `before_fill(ob, image)` runs on each image while its
+    alpha still marks the baked texels. Returns the nodes, keyed by material."""
     nodes = image_nodes(targets, images)
     select_only(targets, targets[0])
     bpy.ops.object.bake(type=bake_type, target="IMAGE_TEXTURES", uv_layer=BAKE_UV, margin=0, **bake_args)
+    if before_fill is not None:
+        for ob in targets:
+            before_fill(ob, images[ob])
     for im in set(images.values()):
         fill_background(im)
         im.pack()
     return nodes
 
 
-def bake_procedural_textures(kept, cache_dir=None):
+def paint_moss(ob, im, paints):
+    """Paint the texture-only mosses of `ob` (moss.texture_paints entries)
+    into its freshly baked colour map `im`, before the background fill, so
+    the fill carries the moss into the seams like any baked texel."""
+    import moss
+
+    w, h = im.size
+    px = np.empty(w * h * 4, dtype=np.float32)
+    im.pixels.foreach_get(px)
+    px = px.reshape(h, w, 4)
+    me = ob.data
+    me.calc_loop_triangles()
+    n = len(me.loop_triangles)
+    loops = np.empty(n * 3, np.int32)
+    me.loop_triangles.foreach_get("loops", loops)
+    verts = np.empty(n * 3, np.int32)
+    me.loop_triangles.foreach_get("vertices", verts)
+    uv = np.empty(len(me.loops) * 2, np.float32)
+    me.uv_layers[BAKE_UV].data.foreach_get("uv", uv)
+    co = np.empty(len(me.vertices) * 3, np.float32)
+    me.vertices.foreach_get("co", co)
+    m = np.array(ob.matrix_world, dtype=np.float64)
+    world = co.reshape(-1, 3).astype(np.float64) @ m[:3, :3].T + m[:3, 3]
+    uv_px = uv.reshape(-1, 2)[loops].reshape(n, 3, 2).astype(np.float64) * (w, h)
+    tri_pos = world[verts].reshape(n, 3, 3)
+    for mo, _host, layers, p, _key in paints:
+        t0 = time.time()
+        texels = moss.paint_map(px, uv_px, tri_pos, layers, p)
+        log(f"moss {mo.name}: painted into {im.name}, {texels} texels, {time.time() - t0:.1f}s")
+    im.pixels.foreach_set(px.ravel())
+
+
+def bake_procedural_textures(kept, cache_dir=None, paints=(), warnings=None):
     """Bake every procedural Base Color (and Normal) the kept meshes use into
     an image of the object's own, and wire it in, so glTF carries the stone as
     a baseColorTexture (and normalTexture) instead of dropping it to a flat
@@ -522,9 +558,21 @@ def bake_procedural_textures(kept, cache_dir=None):
     is never saved. The resolution is TEXELS_PER_METRE up to
     BAKE_SIZE_MAX. With `cache_dir`, an object whose maps are in the bake
     cache (bake_cache.py) loads them instead of baking. Returns how many
-    objects were baked or loaded."""
+    objects were baked or loaded.
+
+    `paints` (moss.texture_paints) are texture-only mosses: a rock one grows
+    on has its colour baked whatever its material, and the moss painted into
+    the bake (`paint_moss`); a cached map holds its moss, the moss's key
+    being part of the cache key."""
+    by_host = {}
+    for entry in paints:
+        mo, host = entry[0], entry[1]
+        if host in kept and host.type == "MESH":
+            by_host.setdefault(host, []).append(entry)
+        elif warnings is not None:
+            warnings.append(f"{mo.name}: its rock {host.name} is not exported; the moss painted on it is not either")
     targets = [ob for ob in kept if ob.type == "MESH"
-               and any(procedural_base_colors(m) or procedural_normals(m) for m in ob.data.materials)]
+               and (ob in by_host or any(procedural_base_colors(m) or procedural_normals(m) for m in ob.data.materials))]
     if not targets:
         return 0
     t0 = time.time()
@@ -582,7 +630,7 @@ def bake_procedural_textures(kept, cache_dir=None):
             out[ob] = im
         return out
 
-    colored = [ob for ob in targets if any(procedural_base_colors(m) for m in ob.data.materials)]
+    colored = [ob for ob in targets if ob in by_host or any(procedural_base_colors(m) for m in ob.data.materials)]
     bumped = [ob for ob in targets if any(procedural_normals(m) for m in ob.data.materials)]
     # The maps each object ships, as (kind, colour space).
     ships = {ob: [k for k, among in (("baked colour", colored), ("baked normal", bumped)) if ob in among]
@@ -597,7 +645,8 @@ def bake_procedural_textures(kept, cache_dir=None):
         depsgraph = bpy.context.evaluated_depsgraph_get()
         for ob in targets:
             keys[ob] = cache.key(ob, sizes[ob], seed_for(ob), scene, depsgraph,
-                                 [bool(render_setting(ob, n)) for n in ("export_strips", "export_creases", "export_chips")])
+                                 [bool(render_setting(ob, n)) for n in ("export_strips", "export_creases", "export_chips")]
+                                 + [entry[4] for entry in by_host.get(ob, ())])
             files = cache.get(keys[ob], [image_name(ob, k) for k in ships[ob]])
             if files is not None:
                 loaded[ob] = {k: bake_cache.load(files[image_name(ob, k)], image_name(ob, k), space[k]) for k in ships[ob]}
@@ -618,10 +667,19 @@ def bake_procedural_textures(kept, cache_dir=None):
         return nodes
 
     if colored:
+        def moss_into(ob, im):
+            if ob in by_host:
+                paint_moss(ob, im, by_host[ob])
+
         nodes = bake_or_load(colored, "baked colour",
-                             lambda obs, ims: bake_pass(obs, ims, "DIFFUSE", pass_filter={"COLOR"}))
+                             lambda obs, ims: bake_pass(obs, ims, "DIFFUSE", before_fill=moss_into, pass_filter={"COLOR"}))
+        mossed = {m for ob in by_host for m in ob.data.materials}
         for mat, node in nodes.items():
-            for bsdf in procedural_base_colors(mat):
+            # A mossed rock's map replaces every Base Color, procedural or
+            # not: the moss is only in the map.
+            bsdfs = ([n for n in mat.node_tree.nodes if n.type == "BSDF_PRINCIPLED"] if mat in mossed
+                     else procedural_base_colors(mat))
+            for bsdf in bsdfs:
                 mat.node_tree.links.new(node.outputs["Color"], bsdf.inputs["Base Color"])
     def wire_normal(mat, node, bsdf):
         normal_map = mat.node_tree.nodes.new("ShaderNodeNormalMap")
@@ -832,6 +890,13 @@ def grow_painted(scene, warnings):
             warnings.append(f"{ob.name}: {ob.moss.status}; not exported")
             drop(ob)
             continue
+        if ob.moss.kind == "TEXTURE":
+            # Its decal is Blender's preview: never shipped, and out of the
+            # bake's rays (3 mm off the rock, it would shade the rock's own
+            # occlusion and bevel). The dabs go into the rock's colour map.
+            drop(ob)
+            log(f"moss {ob.name} on {ob.moss.host}: texture only, {result.dabs} dabs, {ob.moss.build_ms:.0f} ms")
+            continue
         log(f"moss {ob.name} on {ob.moss.host}: {len(result.triangles)} triangles, {result.dabs} dabs, print {result.image.shape[0]} px, {ob.moss.build_ms:.0f} ms")
 
 
@@ -887,6 +952,8 @@ def main():
 
     kept, skipped, warnings = [], [], []
     grow_painted(scene, warnings)
+    import moss
+    paints = moss.texture_paints(scene)
     formation_warnings(scene, warnings)
     repaint_slate()
     for ob in scene.objects:
@@ -917,7 +984,7 @@ def main():
     view_layer.update()
 
     # Baking selects its own targets; the export selection is restored after.
-    if bake_procedural_textures(kept, cache_dir):
+    if bake_procedural_textures(kept, cache_dir, paints, warnings):
         for ob in scene.objects:
             try:
                 ob.select_set(ob in kept)

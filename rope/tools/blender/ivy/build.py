@@ -79,14 +79,13 @@ from dataclasses import dataclass
 import numpy as np
 from mathutils import Vector, geometry, noise
 from mathutils.bvhtree import BVHTree
-from mathutils.kdtree import KDTree
 
 from .stampbrush.geometry import clip as _clip
 from .stampbrush.geometry import compact as _compact
 from .stampbrush.geometry import drop_islands as _drop_islands
 from .stampbrush.geometry import edges as _edges
 from .stampbrush.geometry import geodesic as _geodesic
-from .stampbrush.geometry import host_world, stamps_world
+from .stampbrush.geometry import host_world, kdtree, stamps_world
 from .stampbrush.geometry import mask as _mask
 from .stampbrush.geometry import normalize as _normalize
 from .stampbrush.geometry import refine as _refine
@@ -843,10 +842,7 @@ def _vines(quads, co, tri, v, hull, vines, host_matrix, p, rnd):
     bvh = _bvh(co, tri)
     hull_kd = None
     if len(v):
-        hull_kd = KDTree(len(v))
-        for i, q in enumerate(v):
-            hull_kd.insert(q, i)
-        hull_kd.balance()
+        hull_kd = kdtree(v)
     tones = _tone_at(origins, (p.tone_a, p.tone_b, p.tone_c), p.tone_scale, p.seed)
     n_vines = n_leaves = 0
     for k_v in order.tolist():

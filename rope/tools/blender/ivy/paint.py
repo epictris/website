@@ -57,6 +57,9 @@ class IVY_OT_paint(StampBrush, bpy.types.Operator):
     def build_ms(self, ob):
         return ob.ivy.build_ms
 
+    def coverage_threshold(self, ob):
+        return ob.ivy.threshold  # the preview leaves out the lobed edge noise
+
 
 VINE_PICK = 0.25  # Ctrl+click within this (m) of an anchor removes it
 

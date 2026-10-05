@@ -1,8 +1,10 @@
 """Finding, creating and rebuilding moss objects, and the panel's operators."""
 
+import hashlib
 import time
 
 import bpy
+import numpy as np
 
 from . import build, mesh_io
 from .stampbrush import stamps as stamp_io
@@ -28,15 +30,27 @@ def moss_for_host(host):
     return None
 
 
+def moss_of(ob):
+    """The object if it is moss, else the moss growing on it."""
+    if ob is None:
+        return None
+    return ob if is_moss(ob) else moss_for_host(ob)
+
+
 def active_moss(context):
     """The moss the panel shows: the active object if it is moss, else the
     active object's moss."""
-    ob = context.active_object
-    if ob is None:
-        return None
-    if is_moss(ob):
-        return ob
-    return moss_for_host(ob)
+    return moss_of(context.active_object)
+
+
+def selected_moss(context):
+    """Every moss selected, or growing on a selected object, the active one first."""
+    out = []
+    for ob in [context.active_object, *context.selected_objects]:
+        m = moss_of(ob)
+        if m is not None and m not in out:
+            out.append(m)
+    return out
 
 
 def _collection(scene):
@@ -86,9 +100,28 @@ def resolve_host(ob):
     return host
 
 
-def rebuild(ob, depsgraph=None):
+# The last growth of each moss object (by session_uid), with the key of what it
+# was grown from: a rebuild whose inputs differ only in build.FINISH_PARAMS (the
+# triangle budget and the print) finishes the cached growth again, which takes a
+# fraction of the time (2026-10-05, river's mid-ledge: 26 s whole, 7 s finish).
+# Memory only; a file load clears it.
+_grown = {}
+
+
+def _growth_key(co, tri, matrix, stamps, p):
+    h = hashlib.sha1()
+    for a in (co, tri, np.array(matrix, dtype=np.float64), stamps.position, stamps.normal, stamps.radius, stamps.strength):
+        a = np.ascontiguousarray(a)
+        h.update(str((a.dtype, a.shape)).encode())
+        h.update(a.tobytes())
+    h.update(repr([(k, getattr(p, k)) for k in build.Params.__dataclass_fields__ if k not in build.FINISH_PARAMS]).encode())
+    return h.hexdigest()
+
+
+def rebuild(ob, depsgraph=None, regrow=False):
     """Grow the moss object's mound and print again from its stamps and
-    settings. Returns the build result, or None when the host is missing."""
+    settings. Returns the build result, or None when the host is missing.
+    The growth is reused when only FINISH_PARAMS changed, unless `regrow`."""
     s = ob.moss
     host = resolve_host(ob)
     if host is None:
@@ -102,16 +135,52 @@ def rebuild(ob, depsgraph=None):
         co, tri = host_world(host_mesh, host.matrix_world)  # copied out before the build re-evaluates
     finally:
         ev.to_mesh_clear()
-    result = build.build(co, tri, host.matrix_world, stamp_io.read(s.stamps), s.params(), mesh_io.decimate)
+    p = s.params()
+    stamps = stamp_io.read(s.stamps)
+    key = _growth_key(co, tri, host.matrix_world, stamps, p)
+    cached = _grown.get(ob.session_uid)
+    reused = not regrow and cached is not None and cached[0] == key
+    if reused:
+        grown = cached[1]
+    else:
+        _grown.pop(ob.session_uid, None)
+        grown = build.grow(co, tri, host.matrix_world, stamps, p)
+        _grown[ob.session_uid] = (key, grown)
+    result = build.finish(grown, p, mesh_io.decimate) if grown is not None else build.empty_result()
     mesh_io.write_result(ob, result)
     s.triangles = len(result.triangles)
     s.dabs = result.dabs
     s.layer_dabs = " ".join(str(n) for n in result.layers)
-    s.heights = "  ".join(f"{k}:{v:.0f}" for k, v in result.heights.items())
+    s.heights = " ".join(f"{k}:{v:.0f}" for k, v in result.heights.items())
     s.texture = result.image.shape[0] if result.image.size else 0
+    s.texel_used = result.texel
+    s.area = result.area
+    s.reused = reused
     s.build_ms = (time.perf_counter() - t0) * 1000.0
     s.status = ""
     return result
+
+
+def texture_paints(scene):
+    """[(moss, host, layers, params, key)] for every texture-only moss in the
+    scene grown in this session: what scene_export.py paints into the host's
+    colour map (build.paint_map). `key` changes with anything that changes the
+    painting - the growth's inputs, the dab edge, and build.py itself - for
+    the export's bake cache."""
+    with open(build.__file__, "rb") as f:
+        code = hashlib.sha1(f.read()).hexdigest()
+    out = []
+    for ob in moss_objects(scene):
+        if ob.moss.kind != "TEXTURE":
+            continue
+        host = resolve_host(ob)
+        cached = _grown.get(ob.session_uid)
+        if host is None or cached is None or cached[1] is None:
+            continue
+        p = ob.moss.params()
+        key = hashlib.sha1(f"{cached[0]} {p.print_edge!r} {code}".encode()).hexdigest()
+        out.append((ob, host, cached[1].layers, p, key))
+    return out
 
 
 def rebuild_all(scene):
@@ -158,7 +227,9 @@ def _legacy_ivy():
 
 def _on_load(*_args):
     """A file from before 2026-10-02 holds its ivy under this add-on's old name;
-    the ivy add-on carries it across when it loads. Without it, say so."""
+    the ivy add-on carries it across when it loads. Without it, say so. A
+    loaded file's objects are new, so the cached growths go."""
+    _grown.clear()
     legacy = _legacy_ivy()
     if legacy and "bl_ext.user_default.ivy" not in bpy.context.preferences.addons:
         print(f"[moss] {len(legacy)} object(s) hold ivy from when the ivy add-on was called moss ({', '.join(legacy[:4])}...); "
@@ -181,19 +252,29 @@ def unregister_handlers():
 class MOSS_OT_rebuild(bpy.types.Operator):
     bl_idname = "moss.rebuild"
     bl_label = "Rebuild"
-    bl_description = "Grow this moss again from its paint and settings"
+    bl_description = ("Grow the selected moss (and the moss of the selected rocks) again from its paint and settings. "
+                      "A change to Quality alone reuses the last growth and only remakes the mesh and the print")
     bl_options = {"REGISTER", "UNDO"}
 
-    all: bpy.props.BoolProperty(name="All", default=False)
+    all: bpy.props.BoolProperty(name="All", default=False, description="Every moss in the scene, not only the selected")
+    regrow: bpy.props.BoolProperty(name="Regrow", default=False, description="Grow from scratch even where the last growth could be reused")
 
     def execute(self, context):
-        targets = moss_objects(context.scene) if self.all else [active_moss(context)]
+        targets = moss_objects(context.scene) if self.all else selected_moss(context)
+        if not targets:
+            self.report({"WARNING"}, "no moss selected")
+            return {"CANCELLED"}
         n = 0
-        for ob in targets:
-            if ob is not None:
-                if rebuild(ob) is None:
+        wm = context.window_manager
+        wm.progress_begin(0, len(targets))
+        try:
+            for i, ob in enumerate(targets):
+                if rebuild(ob, regrow=self.regrow) is None:
                     self.report({"WARNING"}, ob.moss.status)
                 n += 1
+                wm.progress_update(i + 1)
+        finally:
+            wm.progress_end()
         self.report({"INFO"}, f"rebuilt {n} moss object{'s' if n != 1 else ''}")
         return {"FINISHED"}
 

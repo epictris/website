@@ -22,8 +22,31 @@ Anything grown, moss or ivy, is transparent to the brush (it carries `grown_by`)
 
 The first stroke on a rock creates its moss object, `<rock>.moss`, in a `Moss` collection, parented to the rock with an identity transform and found again by the rock's **name** (`moss.host`), as the ivy is.
 It takes the settings of the moss the panel showed when painting began; **Copy to Selected** hands one moss's settings to others.
-A build takes seconds, not milliseconds, so **Live** (rebuild on every settings change) is off by default and the paint rebuilds when a stroke ends; **Rebuild** and **Rebuild All** are in the panel.
+A build takes seconds, not milliseconds (river's rocks: 1-25 s each since 2026-10-05), so **Live** (rebuild on every settings change) is off by default, and **the moss never grows while you paint**: a painted moss is hidden and its paint drawn as green points where the coverage passes `Threshold` (the build's own composite of the stamps, at points 1.2 cm apart over the rock, a stroke adding only its own stamps), and every moss the strokes touched grows when painting ends (Esc, right-click or Enter; the header says "growing N objects" and the cursor waits).
+Until 2026-10-05 the moss grew at the end of every stroke, which held Blender for the whole build each time; a guess from the last build's time is no help, because a build grows with its paint (a new moss built in 0.8 s took 8.8 s three strokes on). The ivy, whose builds are quick, still grows while painted (`GROW_WHILE_PAINTING` in stampbrush/brush.py).
+**Rebuild** and **Rebuild All** are in the panel.
 The panel shows the triangle count, the dabs, the print's size, the build time, the dabs per layer and the mound's mean height over the rock per tone step (the check that the light stands tallest).
+**Rebuild** acts on every selected moss and the moss of every selected rock (the button says how many); **Rebuild All** on every moss in the scene.
+
+### Quality: poly count and texture
+
+The **Quality** sub-panel holds what the export pays for, and nothing that changes the look's design:
+
+- `Triangles / m²` (1500): the poly count; the mound is decimated to this density, at most what `Resolution` refines to.
+- `Texel Size` (1.5 mm): the texture quality; the print's texel in the world.
+- `Max Texture` (256 to 4096 px, 2048): the print's largest side. A mound that does not fit at `Texel Size` gets coarser texels (x1.2 until it fits), and the panel says so with the texel it got; the export encodes at most 4096.
+
+The panel reads back the triangles and the density reached over the mound's area, and the print's size and texel.
+These are `build.FINISH_PARAMS`, and `build.build` is `finish(grow(...))`: `grow` places and tones the dabs and makes the full-resolution mound, `finish` decimates it and prints it.
+The add-on keeps each moss's last growth in memory, keyed by a hash of the rock's world triangles, its matrix, the stamps and every other parameter, so a rebuild after a Quality change only finishes again (river's mid-ledge, 2026-10-05: 26 s grown, about 7 s finished at the defaults); the panel says "growth reused".
+The finish from a cached growth is identical to a fresh build, mesh and print.
+
+### Build speed
+
+2026-10-05, measured on river's rocks, every change checked bit-identical (mesh, UVs, print) against the build before it: mid-ledge 25.5 s to 17.2 s, central-rock 37.7 s to 22.2 s.
+The wins, in order: the KD-tree of the refined rock is filled in a shuffled order (`stampbrush.geometry.kdtree`; Blender's balance degrades on the position-sorted vertices, 9 s against 0.04 s for 300k points); the packing and spacing tests of every layer skip a vertex already closer to a placed dab than any draw could pass (marked with a margin over float32 rounding, the draws still made, so the random stream is unchanged); the print finds each dab's texels on a thread pool and paints them in dab order; the gutter copies neighbours instead of rolling whole images; the erosion's distance walks start from the paint's border instead of every unpainted vertex.
+What is left is Python spread thin, roughly equal parts: the growth loop (KD-tree lookups and dab shape draws), the distance walks, the refinement, the print. Measure with wall-clock timers, not cProfile: its per-call overhead made the growth loop look like layer 0 packing and sent the first fix to the wrong loop.
+A file load clears the cache, and the scene exporter, a fresh process, always grows.
 
 ## What is grown
 
@@ -46,6 +69,16 @@ Each moss has its **own material and image**, `<rock>.moss` and `<rock>.moss.pri
 The image is 8-bit sRGB, packed, and tagged `generated_by`, which `scene_export.py` takes as an original that owes no credit (the per-rock names could not be listed in `image_credits.json` in advance).
 The mound is an ordinary opaque mesh: it casts and receives like the rock.
 `sceneDressing.ts` gives the ivy's leaf-shadow biases to `.ivy` meshes, and to an old `.moss` mesh only when its material is alpha-cut, which the mound never is.
+
+## Texture only
+
+**Kind** at the top of a moss's box is **Mound** (everything above) or **Texture Only** (since 2026-10-05, the owner: "a moss painting option that exclusively paints texture onto the rock ... no actual moss geometry - it's just a texture that gets baked onto the rock on export").
+A texture-only moss grows the same dabs, layers and tones from the same paint and settings (steps 1-6); there is no mound, so the Height panel is hidden.
+
+- **In Blender** the dabs show on a decal: the refined rock under them, and one ring of triangles more (a dab's outline can cross a triangle with no vertex inside), lifted `DECAL_LIFT` (3 mm) along the smoothed normal, not decimated (a collapse would cut across the rock's creases), printed like a mound with the dabs' coverage as alpha and drawn BLENDED, casting no shadow. The Quality settings only set this decal's print.
+- **On export** the decal is hidden from render (`grow_painted`): never shipped, and out of the bake's rays, where 3 mm off the rock it would darken the slate's occlusion and bevel. The rock is a bake target whatever its material. Right after Cycles bakes its colour map, while the map's alpha still marks the baked texels, `scene_export.paint_moss` rasterises the export's own unwrap (`SceneBake`) and `build.paint_map` paints every dab over every baked texel within reach, a texel counting for a triangle within 0.75 texel of it so the bake's edge texels are painted too, with `build.paint_texels`, the mound print's own per-texel code; the colour is mixed over the rock's in linear by coverage. The background fill then pads the moss into the seams like any baked texel, and every Base Color of the rock's export materials reads the map.
+- It works on the export's copy after its mesh work (the crease rebuild, the unwrap), so the `.blend`'s rock is never touched. The moss's key (`moss.texture_paints`: its growth's inputs, the dab edge and `build.py`) is part of the rock's bake-cache key, so a cached map holds its moss.
+- The map's density is the rock's (`TEXELS_PER_METRE`, 512 a metre, about 2 mm, up to the rock's map cap), not the moss's `Texel Size`; on a big backdrop rock capped at a smaller map the dabs' 2 mm edge is under a texel and softens.
 
 ## What was tried in the study and dropped
 

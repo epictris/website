@@ -17,6 +17,7 @@ class MOSS_OT_paint(StampBrush, bpy.types.Operator):
     bl_options = {"REGISTER", "UNDO"}
 
     LABEL = "Moss"
+    GROW_WHILE_PAINTING = False  # builds take seconds: the paint is previewed, the moss grows on Esc
     COLOR = (0.55, 0.85, 0.3, 0.9)
 
     def brush(self, context):
@@ -42,6 +43,9 @@ class MOSS_OT_paint(StampBrush, bpy.types.Operator):
 
     def build_ms(self, ob):
         return ob.moss.build_ms
+
+    def coverage_threshold(self, ob):
+        return ob.moss.threshold
 
 
 CLASSES = (MOSS_OT_paint,)

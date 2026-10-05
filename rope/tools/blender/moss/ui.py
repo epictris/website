@@ -38,19 +38,32 @@ class MOSS_PT_main(bpy.types.Panel):
             box.label(text=s.host, icon="OUTLINER_OB_MESH")
             if s.status:
                 box.label(text=s.status, icon="ERROR")
-            else:
-                box.label(text=f"{s.triangles:,} tris, {s.dabs:,} dabs, print {s.texture} px, {s.build_ms / 1000:.1f} s")
+            box.row(align=True).prop(s, "kind", expand=True)
+            if s.kind == "TEXTURE":
+                box.label(text="Painted into the rock on export", icon="TEXTURE")
+            if not s.status:
+                took = f"{s.build_ms / 1000:.1f} s" + (", growth reused" if s.reused else "")
+                col = box.column(align=True)
+                col.label(text=f"{s.dabs:,} dabs, {s.texture} px" if s.kind == "TEXTURE" else f"{s.triangles:,} tris, {s.dabs:,} dabs, {s.texture} px")
+                col.label(text=took)
                 if s.layer_dabs:
-                    box.label(text=f"dabs per layer: {s.layer_dabs}")
+                    col.label(text="Dabs per layer:")
+                    col.label(text=s.layer_dabs)
                 if s.heights:
-                    box.label(text=f"mm over the rock by tone: {s.heights}")
+                    col.label(text="Height (mm) by tone:")
+                    col.label(text=s.heights)
+            n = len(ops.selected_moss(context))
             row = box.row(align=True)
             row.prop(s, "live")
-            row.operator("moss.rebuild", icon="FILE_REFRESH").all = False
+            op = row.operator("moss.rebuild", text="Rebuild" if n < 2 else f"Rebuild ({n})", icon="FILE_REFRESH")
+            op.all = False
+            op.regrow = False
             row = box.row(align=True)
             row.operator("moss.clear", icon="TRASH")
             row.operator("moss.copy_settings", text="Copy to Selected", icon="COPYDOWN")
-        layout.operator("moss.rebuild", text="Rebuild All", icon="FILE_REFRESH").all = True
+        op = layout.operator("moss.rebuild", text="Rebuild All", icon="FILE_REFRESH")
+        op.all = True
+        op.regrow = False
 
 
 class _Sub:
@@ -62,6 +75,32 @@ class _Sub:
     @classmethod
     def poll(cls, context):
         return ops.active_moss(context) is not None
+
+
+class MOSS_PT_quality(_Sub, bpy.types.Panel):
+    bl_label = "Quality"
+
+    def draw(self, context):
+        layout = self.layout
+        s = ops.active_moss(context).moss
+        if s.kind == "TEXTURE":
+            # No geometry ships, and the export paints at the rock map's own
+            # resolution: these only set the decal Blender shows.
+            layout.label(text="Viewport decal only; the export", icon="INFO")
+            layout.label(text="paints at the rock map's texels")
+        else:
+            col = layout.column(align=True)
+            col.prop(s, "mound_density")
+            if s.triangles and s.area > 0:
+                col.label(text=f"{s.triangles:,} tris, {s.triangles / s.area:,.0f} / m²")
+        col = layout.column(align=True)
+        col.prop(s, "texel")
+        col.label(text="Max Texture")
+        col.row(align=True).prop(s, "max_texture", expand=True)
+        if s.texture and s.texel_used > 0:
+            col.label(text=f"{s.texture} px, {s.texel_used * 1000:.2f} mm texels")
+            if s.texel_used > s.texel * 1.001:
+                col.label(text="Capped: raise Max Texture", icon="INFO")
 
 
 class MOSS_PT_dabs(_Sub, bpy.types.Panel):
@@ -85,6 +124,11 @@ class MOSS_PT_tone(_Sub, bpy.types.Panel):
 class MOSS_PT_height(_Sub, bpy.types.Panel):
     bl_label = "Height"
 
+    @classmethod
+    def poll(cls, context):
+        ob = ops.active_moss(context)
+        return ob is not None and ob.moss.kind == "MOUND"
+
     def draw(self, context):
         s = ops.active_moss(context).moss
         _grid(self.layout, s, ("floor", "lift", "up_floor", "height_blur", "sink", "rim", "inner_u"))
@@ -96,7 +140,7 @@ class MOSS_PT_mesh(_Sub, bpy.types.Panel):
 
     def draw(self, context):
         s = ops.active_moss(context).moss
-        _grid(self.layout, s, ("mound_density", "min_patch", "texel", "max_texture", "print_edge"))
+        _grid(self.layout, s, ("min_patch", "print_edge"))
 
 
-CLASSES = (MOSS_PT_main, MOSS_PT_dabs, MOSS_PT_tone, MOSS_PT_height, MOSS_PT_mesh)
+CLASSES = (MOSS_PT_main, MOSS_PT_quality, MOSS_PT_dabs, MOSS_PT_tone, MOSS_PT_height, MOSS_PT_mesh)

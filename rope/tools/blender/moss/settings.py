@@ -9,7 +9,7 @@ the ivy's settings there (with `is_moss` set) until the ivy add-on migrates it.
 A moss object is told apart by `grown_by == "moss"`, never by this group."""
 
 import bpy
-from bpy.props import BoolProperty, FloatProperty, FloatVectorProperty, IntProperty, PointerProperty, StringProperty
+from bpy.props import BoolProperty, EnumProperty, FloatProperty, FloatVectorProperty, IntProperty, PointerProperty, StringProperty
 
 from .build import Params
 
@@ -43,6 +43,12 @@ class MossSettings(bpy.types.PropertyGroup):
     # Off by default: a build takes seconds, too long to follow a slider.
     live: BoolProperty(name="Live", default=False, description="Rebuild whenever a setting changes (a build takes seconds)")
 
+    kind: EnumProperty(
+        name="Kind", default=_D.kind, update=_changed,
+        items=[("MOUND", "Mound", "A low mound of moss with its own printed texture", 0),
+               ("TEXTURE", "Texture Only", "No geometry: the dabs are painted into the rock's colour map when the scene is "
+                                           "exported (Blender shows them on a decal that is not exported)", 1)],
+        description="Grow a mound of moss, or only paint its colour onto the rock")
     seed: IntProperty(name="Seed", default=0, min=0, update=_changed)
     resolution: _length("Resolution", _D.resolution, 0.004, 0.05, "Edge length the rock is refined to under the paint")
     threshold: _factor("Threshold", _D.threshold, "Paint coverage at which moss starts")
@@ -76,9 +82,18 @@ class MossSettings(bpy.types.PropertyGroup):
     inner_u: _factor("Mound Reach", _D.inner_u, "How far out in a dab's outline the mound reaches", 1.0)
 
     min_patch: FloatProperty(name="Min Patch", default=_D.min_patch, min=0.0, soft_max=0.1, unit="AREA", description="Mound islands smaller than this are dropped", update=_changed)
-    mound_density: FloatProperty(name="Triangles / m²", default=_D.mound_density, min=50.0, soft_max=20000.0, description="The mound is decimated to this many triangles per square metre", update=_changed)
-    texel: _length("Texel", _D.texel, 0.0003, 0.02, "Size of a texel of the print in the world")
-    max_texture: IntProperty(name="Max Texture", default=_D.max_texture, min=256, max=8192, description="Largest side of the print; texels grow if the mound does not fit", update=_changed)
+
+    # Quality: what build.finish reads (build.FINISH_PARAMS), so a change here
+    # remakes the mesh and the print from the last growth, without growing again.
+    mound_density: FloatProperty(name="Triangles / m²", default=_D.mound_density, min=50.0, soft_max=20000.0,
+                                 description="Poly count: the mound is decimated to this many triangles per square metre "
+                                             "(at most what Resolution gives)", update=_changed)
+    texel: _length("Texel Size", _D.texel, 0.0003, 0.02, "Texture quality: the size of a texel of the print in the world; smaller is sharper")
+    # The item's number is the size, so a file from when this was an int keeps its value.
+    max_texture: EnumProperty(name="Max Texture", default=str(_D.max_texture),
+                              items=[(str(n), str(n), f"At most {n} x {n} px", n) for n in (256, 512, 1024, 2048, 4096)],
+                              description="Largest side of the print; where the mound does not fit at Texel Size, its texels grow. "
+                                          "The export encodes at most 4096", update=_changed)
     print_edge: _length("Dab Edge", _D.print_edge, 0.0, 0.02, "Anti-aliased width of a dab's edge in the print")
 
     # Read back after a build, for the panel.
@@ -87,6 +102,9 @@ class MossSettings(bpy.types.PropertyGroup):
     layer_dabs: StringProperty(options={"HIDDEN"})
     heights: StringProperty(options={"HIDDEN"})
     texture: IntProperty(options={"HIDDEN"})
+    texel_used: FloatProperty(options={"HIDDEN"})
+    area: FloatProperty(options={"HIDDEN"})
+    reused: BoolProperty(options={"HIDDEN"})  # the last rebuild finished a cached growth
     build_ms: FloatProperty(options={"HIDDEN"})
     status: StringProperty(options={"HIDDEN"})
 
@@ -99,6 +117,7 @@ class MossSettings(bpy.types.PropertyGroup):
         kw = {k: getattr(self, k) for k in Params.__dataclass_fields__ if hasattr(self, k)}
         kw["dark"] = lin(self.dark)
         kw["light"] = lin(self.light)
+        kw["max_texture"] = int(self.max_texture)
         return Params(**kw)
 
     def copy_from(self, other):

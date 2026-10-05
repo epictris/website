@@ -61,45 +61,55 @@ def write_result(ob, result):
     uv = me.uv_layers.get(UV) or me.uv_layers.new(name=UV)
     uv.data.foreach_set("uv", result.uvs.astype(np.float32).ravel())
     me.shade_smooth()
-    img = _image(ob, result.image)
-    mat = material(ob, img)
+    decal = ob.moss.kind == "TEXTURE"
+    # A texture-only moss's decal is a preview of paint on the rock: it casts
+    # no shadow (the export hides it from the bake, and never ships it).
+    ob.visible_shadow = not decal
+    img = _image(ob, result.image, alpha=decal)
+    mat = material(ob, img, decal)
     if list(me.materials) != [mat]:
         me.materials.clear()
         me.materials.append(mat)
 
 
-def _image(ob, pixels):
+def _image(ob, pixels, alpha=False):
     """The print as a packed 8-bit sRGB image named after the moss. The pixels
-    of a byte image are its stored (sRGB) values, so the linear print is encoded."""
+    of a byte image are its stored (sRGB) values, so the linear print is encoded.
+    With `alpha`, the print's coverage is the image's alpha."""
     name = f"{ob.name}.print"
     size = pixels.shape[0]
     img = bpy.data.images.get(name)
-    if img is not None and tuple(img.size) != (size, size):
+    if img is not None and (tuple(img.size) != (size, size) or img.get("moss_alpha", False) != alpha):
         bpy.data.images.remove(img)
         img = None
     if img is None:
-        img = bpy.data.images.new(name, size, size, alpha=False)
+        img = bpy.data.images.new(name, size, size, alpha=alpha)
+        img["moss_alpha"] = alpha
     rgb = np.clip(pixels[..., :3], 0.0, 1.0)
     srgb = np.where(rgb <= 0.0031308, rgb * 12.92, 1.055 * np.power(rgb, 1 / 2.4) - 0.055)
     out = np.ones((size, size, 4), np.float32)
     out[..., :3] = srgb
+    if alpha:
+        out[..., 3] = np.clip(pixels[..., 3], 0.0, 1.0)
     img.pixels.foreach_set(out.ravel())
     img["generated_by"] = GENERATED_BY
     img.pack()
     return img
 
 
-def material(ob, img):
+def material(ob, img, decal=False):
     """The moss's matte material: the print as the base colour, nothing else. Every
-    node is one the glTF exporter carries (baseColorTexture, roughness 1, no specular)."""
+    node is one the glTF exporter carries (baseColorTexture, roughness 1, no specular).
+    A decal's (a texture-only moss's) is blended by the print's alpha."""
     name = f"{ob.name}"
     mat = bpy.data.materials.get(name)
-    if mat is None or mat.get("moss_print_material") != MATERIAL_VERSION:
+    if mat is None or mat.get("moss_print_material") != MATERIAL_VERSION or mat.get("moss_decal", False) != decal:
         if mat is None:
             mat = bpy.data.materials.new(name)
         if mat.node_tree is None:
             mat.use_nodes = True
         mat["moss_print_material"] = MATERIAL_VERSION
+        mat["moss_decal"] = decal
         nt = mat.node_tree
         for n in list(nt.nodes):
             if n.type not in {"BSDF_PRINCIPLED", "OUTPUT_MATERIAL"}:
@@ -113,6 +123,11 @@ def material(ob, img):
         tex.location = (bsdf.location.x - 400, bsdf.location.y)
         tex.interpolation = "Linear"
         nt.links.new(tex.outputs["Color"], bsdf.inputs["Base Color"])
+        bsdf.inputs["Alpha"].default_value = 1.0
+        if decal:
+            nt.links.new(tex.outputs["Alpha"], bsdf.inputs["Alpha"])
+        if hasattr(mat, "surface_render_method"):
+            mat.surface_render_method = "BLENDED" if decal else "DITHERED"
         mat.diffuse_color = (0.15, 0.25, 0.1, 1.0)
     tex = mat.node_tree.nodes.get("print")
     if tex is not None and tex.image != img:

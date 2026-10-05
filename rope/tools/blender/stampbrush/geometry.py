@@ -26,6 +26,19 @@ def smoothstep(e0, e1, x):
     return t * t * (3.0 - 2.0 * t)
 
 
+def kdtree(points):
+    """A balanced KDTree of `points`, point i under index i. They go in in a
+    fixed shuffled order: Blender's balance degrades on sorted input, and the
+    builds sort their vertices by position (300k points: 9 s sorted, 0.04 s
+    shuffled; 2026-10-05)."""
+    pts = np.asarray(points, dtype=np.float64)
+    kd = KDTree(len(pts))
+    for i in np.random.default_rng(0).permutation(len(pts)).tolist():
+        kd.insert(pts[i], i)
+    kd.balance()
+    return kd
+
+
 def host_world(mesh, matrix):
     """The host's triangles in world space, welded at 10 um."""
     mesh.calc_loop_triangles()
@@ -253,7 +266,15 @@ def mask(v, n, centres, snormals, radii, strength):
     """Stamps composited in painting order at every vertex."""
     m = np.zeros(len(v))
     order = np.argsort(v[:, 0], kind="stable")
-    xs = v[order, 0]
+    composite(m, v, n, order, v[order, 0], centres, snormals, radii, strength)
+    return m
+
+
+def composite(m, v, n, order, xs, centres, snormals, radii, strength):
+    """Composite stamps, in order, onto the coverage `m` (in place). `order`
+    sorts the points by x and `xs` is their sorted x. Painting is sequential,
+    so later stamps can be composited onto an earlier result: the brush's
+    preview adds a stroke's stamps without compositing the rest again."""
     for c, sn, r, a in zip(centres, snormals, radii, strength):
         lo, hi = np.searchsorted(xs, c[0] - r), np.searchsorted(xs, c[0] + r, side="right")
         if lo == hi:
@@ -272,7 +293,6 @@ def mask(v, n, centres, snormals, radii, strength):
             m[idx] += (1.0 - m[idx]) * aw
         else:
             m[idx] *= 1.0 - aw
-    return m
 
 
 def clip(v, t, f, attrs):
