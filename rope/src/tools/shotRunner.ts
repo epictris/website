@@ -27,6 +27,45 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+// Every detached process group a grab started (chromium's tree, `cli shot`'s
+// vite), killed however this process ends. The `finally` blocks that kill them
+// do not run when the process is itself killed - an outer `timeout`, Ctrl+C -
+// and a detached group outlives its parent by design, so a SwiftShader chromium
+// went on rendering the page on the CPU, three to four cores apiece, for as
+// long as nobody noticed (2026-10-05: four of them, an hour old, spun up the
+// owner's fan).
+const heldGroups = new Set<number>();
+let exitHooked = false;
+
+function killHeld(): void {
+  for (const pid of heldGroups) {
+    try {
+      process.kill(-pid, "SIGKILL");
+    } catch {
+      // Already gone.
+    }
+  }
+  heldGroups.clear();
+}
+
+/** Kill `pid`'s process group whenever this process exits, signals included, until the returned release is called. */
+export function holdProcessGroup(pid: number): () => void {
+  if (!exitHooked) {
+    exitHooked = true;
+    process.on("exit", killHeld);
+    for (const [signal, code] of [["SIGINT", 130], ["SIGTERM", 143], ["SIGHUP", 129]] as const) {
+      process.on(signal, () => {
+        killHeld();
+        process.exit(code);
+      });
+    }
+  }
+  heldGroups.add(pid);
+  return () => {
+    heldGroups.delete(pid);
+  };
+}
+
 export interface PageLogEntry {
   level: string;
   text: string;
@@ -131,6 +170,7 @@ async function grabWith(
   const started = Date.now();
   const profile = mkdtempSync(join(tmpdir(), "rope-shot-"));
   let child: ChildProcess | null = null;
+  let release = (): void => {};
   let cdp: CDP | null = null;
   try {
     child = spawn(
@@ -165,6 +205,7 @@ async function grabWith(
         env: { ...process.env, WAYLAND_DISPLAY: undefined, DISPLAY: undefined },
       },
     );
+    if (child.pid) release = holdProcessGroup(child.pid);
     // chromium's stderr is kept as a last resort for a launch that never gets as
     // far as speaking the protocol.
     let stderr = "";
@@ -271,6 +312,7 @@ async function grabWith(
       } catch {
         child.kill("SIGKILL");
       }
+      release();
     }
     rmSync(profile, { recursive: true, force: true });
   }

@@ -14,7 +14,8 @@
 // frameTarget.ts), which the canvas receives afterwards:
 //
 //   1. The scene into the frame, its colour and depth resolved - minus the
-//      see-through things near the plane (step 4).
+//      see-through things near the plane (step 4) - and then the spots' lit
+//      air (lightShafts.ts), so it blurs with what it is seen against.
 //   2. Small (see `BLUR_LINES`): each block's colour (the out-of-focus pixels
 //      in it) and its largest circle of confusion.
 //   3. Small: a gather blur (Gustafsson's single pass, a golden-angle spiral)
@@ -24,7 +25,7 @@
 //      first, over the out-of-focus pixels only (an in-focus one keeps its
 //      samples untouched), upsampled from the small texels that are themselves
 //      out of focus, so no in-focus colour leaks in at an edge; then the
-//      water, the fireflies, the spray and the beams near the plane, sharp,
+//      water, the fireflies, the spray and the beams' dust near the plane, sharp,
 //      depth-tested against the scene's own multisampled depth, still there.
 //      They write no depth, so step 2 would read the scenery BEHIND the water
 //      and blur the water with it.
@@ -285,6 +286,8 @@ export class DepthOfField {
   private readonly fittedTo = new THREE.Vector2();
   private readonly forward = new THREE.Vector3();
   private readonly sphere = new THREE.Sphere();
+  private readonly toView = new THREE.Matrix4();
+  private readonly corner = new THREE.Vector3();
 
   constructor(private readonly renderer: THREE.WebGLRenderer) {
     this.compositeMesh.name = "depth-of-field";
@@ -312,10 +315,14 @@ export class DepthOfField {
 
   // Draw `scene` into `frame` (see frameTarget.ts) through the lens, the view
   // having been checked with `faces`. The frame must keep its depth.
+  // `afterScene` draws into the frame between steps 1 and 2, so what it adds
+  // (the light shafts, see lightShafts.ts) is blurred with the scenery behind
+  // it.
   render(
     scene: THREE.Scene,
     camera: THREE.PerspectiveCamera | THREE.OrthographicCamera,
     frame: THREE.WebGLRenderTarget,
+    afterScene?: () => void,
   ): void {
     camera.getWorldDirection(this.forward);
     // The view depth of the gameplay plane straight ahead, which for the
@@ -342,6 +349,7 @@ export class DepthOfField {
       // 1. The scene, without the overlays.
       r.setRenderTarget(frame);
       r.render(scene, camera);
+      afterScene?.();
 
       // 2. Small: colour and circle of confusion.
       for (const m of [this.prepMaterial, this.blurMaterial, this.compositeMaterial]) {
@@ -429,25 +437,36 @@ export class DepthOfField {
     });
   }
 
+  // Measured on the nearest corner of the object's bounding BOX in view space
+  // where it has one: a long thing seen across its length (a beam's dust, 20 m
+  // down a shaft 13 m behind the plane) has a sphere that reaches the plane
+  // when nothing in it comes near, and was drawn sharp over the blur.
   private reachesFocus(o: THREE.Object3D, camera: THREE.Camera, sharpTo: number): boolean {
-    const instanced = o as THREE.InstancedMesh;
-    let bounds: THREE.Sphere | null = null;
-    if (instanced.isInstancedMesh) {
-      if (!instanced.boundingSphere) instanced.computeBoundingSphere();
-      bounds = instanced.boundingSphere;
-    } else {
-      const geometry = (o as THREE.Mesh).geometry;
-      if (!geometry) return true;
-      if (!geometry.boundingSphere) geometry.computeBoundingSphere();
-      bounds = geometry.boundingSphere;
-    }
-    if (!bounds) return true;
     // This object's own matrix, current: three only brings the whole scene's
     // up to date inside `render`, and an object made this frame has none yet.
     o.updateWorldMatrix(true, false);
-    this.sphere.copy(bounds).applyMatrix4(o.matrixWorld);
-    const depth = -this.sphere.center.applyMatrix4(camera.matrixWorldInverse).z;
-    return depth - this.sphere.radius <= sharpTo;
+    const instanced = o as THREE.InstancedMesh;
+    if (instanced.isInstancedMesh) {
+      if (!instanced.boundingSphere) instanced.computeBoundingSphere();
+      const bounds = instanced.boundingSphere;
+      if (!bounds) return true;
+      this.sphere.copy(bounds).applyMatrix4(o.matrixWorld);
+      const depth = -this.sphere.center.applyMatrix4(camera.matrixWorldInverse).z;
+      return depth - this.sphere.radius <= sharpTo;
+    }
+    const geometry = (o as THREE.Mesh).geometry;
+    if (!geometry) return true;
+    if (!geometry.boundingBox) geometry.computeBoundingBox();
+    const box = geometry.boundingBox;
+    if (!box || box.isEmpty()) return true;
+    this.toView.multiplyMatrices(camera.matrixWorldInverse, o.matrixWorld);
+    for (let i = 0; i < 8; i++) {
+      this.corner
+        .set(i & 1 ? box.max.x : box.min.x, i & 2 ? box.max.y : box.min.y, i & 4 ? box.max.z : box.min.z)
+        .applyMatrix4(this.toView);
+      if (-this.corner.z <= sharpTo) return true;
+    }
+    return false;
   }
 
   private restoreOverlays(): void {

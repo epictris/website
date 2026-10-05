@@ -3185,24 +3185,22 @@
     },
     {
       "kind": "static",
-      "x": 900,
-      "y": 500,
+      "x": 509.99999999999994,
+      "y": 89.99999999999994,
       "rot": 0,
       "objects": [
         {
           "type": "light",
           "kind": "spot",
-          "z": -1350,
-          "color": "#ffcb87",
+          "z": -1840.0000000000002,
+          "color": "#ffffff",
           "intensity": 500,
-          "range": 2000,
-          "angle": 10,
-          "penumbra": 1,
+          "range": 800,
+          "angle": 15,
+          "penumbra": 0.2,
           "dirX": 0.3,
           "dirZ": 0.3,
-          "castShadow": true,
-          "beam": 1,
-          "dust": 1
+          "beam": 1
         }
       ]
     }

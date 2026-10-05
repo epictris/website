@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
-import { setIvyShadowScales, wearIvyShadowBias } from "/home/tris/projects/website/rope/src/render3d/ivyShadow";
+import { setIvyLeafScales, wearIvyLeaves } from "/home/tris/projects/website/rope/src/render3d/ivyLeaves";
 declare global { interface Window { shotReady?: boolean } }
 const q = new URLSearchParams(location.search);
 const file = q.get("glb") ?? "d_hybrid.glb";
@@ -23,8 +23,8 @@ sun.position.set(-1.5 * 10, 2.2 * 10, 2.0 * 10);
 if (q.get("sun")) { const [x, y, z] = q.get("sun")!.split(",").map(Number); sun.position.set(x! * 30, y! * 30, z! * 30); } // `?sun=x,y,z`: a level's sun direction (ball.json sunX/Y/Z, the game's frame)
 sun.shadow.normalBias = nb; sun.shadow.bias = Number(q.get("cb") ?? "-0.0008"); sun.shadow.radius = Number(q.get("rad") ?? "3"); scene.add(sun);
 const mossBias = q.get("mb") !== "0";
-// `?cs=&ns=&rs=` try other scales of the ivy's biases and filter (ivyShadow.ts's defaults otherwise).
-setIvyShadowScales({ constant: q.has("cs") ? Number(q.get("cs")) : undefined, normal: q.has("ns") ? Number(q.get("ns")) : undefined, radius: q.has("rs") ? Number(q.get("rs")) : undefined });
+// `?cs=&ns=&rs=` try other scales of the ivy's biases and filter (ivyLeaves.ts's defaults otherwise).
+setIvyLeafScales({ constant: q.has("cs") ? Number(q.get("cs")) : undefined, normal: q.has("ns") ? Number(q.get("ns")) : undefined, radius: q.has("rs") ? Number(q.get("rs")) : undefined });
 scene.add(new THREE.HemisphereLight(0x7fa6cc, 0x22301f, 0.55));
 const gltf = await new GLTFLoader().loadAsync("/out/" + file);
 const root = gltf.scene;
@@ -36,7 +36,7 @@ root.traverse((o) => { if ((o as THREE.Mesh).isMesh) { const m = o as THREE.Mesh
   const names: string[] = []; for (let p: THREE.Object3D | null = m; p; p = p.parent) { const n = (p.userData.name as string | undefined) ?? p.name; if (n) names.push(n); }
   const decal = names.some((n) => /\.(ivy|moss)\.shadow$/.test(n));
   if (decal) m.castShadow = false; /* the leaves cast (since 2026-09-30); the shadow decal does not */
-  if (mossBias && !decal && names.some((n) => /\.(ivy|moss)$/.test(n))) wearIvyShadowBias(mat);
+  if (mossBias && !decal && names.some((n) => /\.(ivy|moss)$/.test(n))) wearIvyLeaves(mat);
   mats.push(`${m.name}: alphaTest=${mat.alphaTest} transparent=${mat.transparent} side=${mat.side} vertexColors=${mat.vertexColors} map=${mat.map ? mat.map.image.width : "none"}`); } });
 scene.add(root);
 if (q.get("ground") === "1") { // a floor under the rock: the rock's own shadow on it says whether the sun shadows at all

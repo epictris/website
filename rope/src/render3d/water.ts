@@ -37,6 +37,7 @@ import type { LevelBodyData } from "../level/levelFormat";
 import { RAW_ASSETS, trackPending } from "./assets";
 import { withDownload } from "./download";
 import { POINT_VIEW_HALF_HEIGHT } from "./space";
+import { stillWaterMaterial, type StillSurface } from "./stillWater";
 
 // ---------------------------------------------------------------------------
 // The flipbook
@@ -182,7 +183,7 @@ function ensureFoam(): THREE.Texture {
 // Wall-clock seconds, shared by every water material so two bodies of water in
 // one level can never drift apart. Written once per frame by `Scene3D`, from
 // the same clock (pinnable) the light flicker reads.
-const waterTime = { value: 0 };
+export const waterTime = { value: 0 };
 // The textures the water shader samples, for the prewarm (see
 // `Scene3D.prewarm`): they ride the material as uniforms rather than as map
 // slots, so a sweep of the scene's materials cannot see them. Empty until the
@@ -279,7 +280,7 @@ const WAVE_END_TAPER = 0.5;
 // How far below the waterline the front sheet keeps waving before it hangs
 // still, and how far down the light gets.
 const WAVE_FALLOFF = 0.22;
-const LIGHT_FALLOFF = 0.5;
+export const LIGHT_FALLOFF = 0.5;
 // The two flipbook layers: metres per repeat, and how fast each pattern drifts
 // as a fraction of the authored current. Under 1 on purpose - surface texture
 // visibly lags the water carrying it, and at the current's full speed a
@@ -740,13 +741,13 @@ function appendFall(
   quadIndices(g.index, base, FALL_STEPS, FALL_RING, face.dot(n0) < 0);
 }
 
-interface WaterGeometry {
+export interface WaterGeometry {
   geometry: THREE.BufferGeometry;
   // Where the fall meets the pool, in the body's frame, or null without one.
   impact: THREE.Vector3 | null;
 }
 
-function waterGeometry(
+export function waterGeometry(
   halfX: number,
   halfY: number,
   frontZ: number,
@@ -850,7 +851,7 @@ interface WaterLook {
   halfX: number;
 }
 
-interface Palette {
+export interface Palette {
   deep: THREE.Color;
   body: THREE.Color;
   light: THREE.Color;
@@ -862,7 +863,7 @@ interface Palette {
 // SRGB rather than the working space, because HSL is a statement about the
 // colour as authored - the hex a level types - and the same lightness step
 // taken in linear space lands somewhere else entirely.
-function paletteOf(color: string | undefined): Palette {
+export function paletteOf(color: string | undefined): Palette {
   const tint = new THREE.Color(color ?? WATER_DEFAULT_COLOR);
   const hsl = { h: 0, s: 0, l: 0 };
   tint.getHSL(hsl, THREE.SRGBColorSpace);
@@ -1257,6 +1258,8 @@ function sprayPoints(
 export interface WaterBuild {
   geometries: THREE.BufferGeometry[];
   materials: THREE.Material[];
+  // A pool's surface, for the splash (stillWater.ts); null for a current.
+  still: StillSurface | null;
 }
 
 // Build a water body's look under `root` (the BodyVisual's group, which carries
@@ -1271,7 +1274,7 @@ export interface WaterBuild {
 export function buildWater(root: THREE.Group, body: WaterArea, data: LevelBodyData): WaterBuild {
   const shape = body.primaryShape();
   const s = shape.shape;
-  if (s.kind !== "circle" && s.kind !== "rect") return { geometries: [], materials: [] };
+  if (s.kind !== "circle" && s.kind !== "rect") return { geometries: [], materials: [], still: null };
   const halfX = s.kind === "rect" ? s.size.x / 2 : s.radius;
   const halfY = s.kind === "rect" ? s.size.y / 2 : s.radius;
   // The slab through z, in the extruder's convention: depth centred on the
@@ -1299,7 +1302,10 @@ export function buildWater(root: THREE.Group, body: WaterArea, data: LevelBodyDa
   const materials: THREE.Material[] = [];
 
   const built = waterGeometry(halfX, halfY, frontZ, backZ, spill);
-  const mat = waterMaterial(look);
+  // Water with no current and nothing pouring off it is a POOL, and a pool is
+  // drawn as the anime caustic net (stillWater.ts) rather than as a current.
+  const still = body.flow === 0 && !spill;
+  const mat = still ? stillWaterMaterial(look.color) : waterMaterial(look);
   const mesh = new THREE.Mesh(built.geometry, mat);
   mesh.castShadow = false;
   mesh.receiveShadow = true;
@@ -1332,5 +1338,5 @@ export function buildWater(root: THREE.Group, body: WaterArea, data: LevelBodyDa
     geometries.push(spray.geometry);
     materials.push(spray.material);
   }
-  return { geometries, materials };
+  return { geometries, materials, still: still ? { body, halfX, halfY, backZ, frontZ } : null };
 }

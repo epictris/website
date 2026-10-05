@@ -60,7 +60,9 @@ import { ReflectionProbe } from "./reflectionProbe";
 import type { DepthOfFieldLevel } from "../render/settings";
 import { DepthOfField } from "./depthOfField";
 import { FrameTarget } from "./frameTarget";
+import { LightShafts } from "./lightShafts";
 import { updateWater, waterTextures } from "./water";
+import { WaterSplashes, type StillSurface } from "./stillWater";
 import { beltRenderTime } from "../render/beltTread";
 
 // What the 3D renderer needs of a level. Deliberately structural rather than
@@ -196,6 +198,9 @@ export class Scene3D {
   // The level's Blender scene, when it names one (see `SceneDressing`).
   private dressing: SceneDressing | null = null;
   private ballVisual: BallVisual | null = null;
+  // The splash the ball throws up falling into still water (stillWater.ts):
+  // render-side, reading where the ball is drawn and never writing back.
+  private readonly splashes = new WaterSplashes();
   private chains: ChainLayer;
   private vines: VineLayer;
   private probe: THREE.Mesh | null = null;
@@ -236,6 +241,8 @@ export class Scene3D {
   private readonly reflectionProbe: ReflectionProbe;
   // The background blur behind the gameplay plane (see depthOfField.ts).
   private readonly depthOfField: DepthOfField;
+  // The spots' lit air (see lightShafts.ts).
+  private readonly lightShafts: LightShafts;
   // Where every frame is drawn before the canvas gets it (see frameTarget.ts).
   private readonly frame: FrameTarget;
   private reflectionOn = true;
@@ -268,12 +275,14 @@ export class Scene3D {
     this.vines = new VineLayer(this.scene);
     this.editorLayer.name = "editor-layer";
     this.scene.add(this.editorLayer);
+    this.scene.add(this.splashes.root);
     this.raycaster.params.Line2 = { threshold: LINE_PICK_PX };
     // Null wherever the driver has no timer extension (see GpuTimer); the perf
     // HUD says so rather than plotting a zero.
     this.gpuTimer = GpuTimer.create(this.renderer.getContext());
     this.reflectionProbe = new ReflectionProbe(this.renderer);
     this.depthOfField = new DepthOfField(this.renderer);
+    this.lightShafts = new LightShafts(this.renderer);
     this.frame = new FrameTarget(this.renderer);
   }
 
@@ -1080,6 +1089,13 @@ export class Scene3D {
     this.chains.sync(level, alpha, retract);
     this.vines.sync(level.vines ?? NO_VINES, alpha);
     this.ballVisual?.sync(alpha);
+    this.splashes.update(
+      clock,
+      this.stillSurfaces(),
+      level.ball
+        ? { position: level.ball.renderPosition(alpha), velocity: level.ball.linearVelocity, radius: level.ball.radius }
+        : null,
+    );
     // The lights after the bodies, because a waking light is judged by where
     // its body is drawn this frame against where the ball is drawn this frame
     // (`renderPosition`, the pose `BallVisual` just used) - both read, neither
@@ -1097,19 +1113,34 @@ export class Scene3D {
     // Inside the timer: the probe is six more draws of the scene, and the
     // perf HUD should say what the frame costs, not what the main view does.
     this.gpuTimer?.begin();
+    // The spots' lit air reads the scene's depth, so the frame keeps it only
+    // when a shaft is in view. Chosen before the reflection, because this is
+    // also where the shafts' glow lights are set for the frame.
+    const fog = this.scene.fog as THREE.Fog | THREE.FogExp2 | null;
+    const shafts = this.lightShafts.select(this.lights.shafts(), this.camera, fog);
     this.captureReflection(level);
     // Depth of field reads the whole frame, so never in the editor's
     // letterboxed sub-rect (which never asks for it anyway).
     const blurred = this.depthOfField.active && !rect && this.depthOfField.faces(this.camera);
-    const frame = this.frame.begin(rect, blurred);
+    const frame = this.frame.begin(rect, blurred || shafts);
+    const addShafts = (): void => {
+      const v = frame.viewport;
+      this.lightShafts.render(frame, this.camera, fog, clock, { x: v.x, y: v.y, w: v.z, h: v.w });
+    };
     if (blurred) {
-      this.depthOfField.render(this.scene, this.camera, frame);
+      this.depthOfField.render(this.scene, this.camera, frame, shafts ? addShafts : undefined);
     } else {
       this.renderer.setRenderTarget(frame);
       this.renderer.render(this.scene, this.camera);
+      if (shafts) addShafts();
     }
     this.frame.present();
     this.gpuTimer?.end();
+  }
+
+  // The pools the splashes watch: every still water body's surface.
+  private *stillSurfaces(): Iterable<StillSurface> {
+    for (const visual of this.bodies.values()) if (visual.stillSurface) yield visual.stillSurface;
   }
 
   // The ball's view of the level, with the avatar and the editor's guides out
@@ -1165,6 +1196,7 @@ export class Scene3D {
       this.ballVisual.dispose();
       this.ballVisual = null;
     }
+    this.splashes.reset();
     this.chains.clear();
     this.vines.clear();
     // Every visual has handed its lights back on the way through, so this is the
@@ -1181,6 +1213,8 @@ export class Scene3D {
     this.env.dispose();
     this.reflectionProbe.dispose();
     this.depthOfField.dispose();
+    this.lightShafts.dispose();
+    this.splashes.dispose();
     this.frame.dispose();
     this.renderer.dispose();
   }

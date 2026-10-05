@@ -17,7 +17,7 @@ import * as THREE from "three";
 import type { Vec2 } from "../engine/vec2";
 import { gltfLoader, trackPending } from "./assets";
 import { withDownload } from "./download";
-import { wearIvyShadowBias } from "./ivyShadow";
+import { wearIvyLeaves } from "./ivyLeaves";
 import { threeRotation, threeY } from "./space";
 import { nodeNameOf, SCENE_ASSETS, sceneFile } from "./scenes";
 
@@ -210,9 +210,9 @@ export function loadSceneFile(scene: string): Promise<THREE.Object3D | null> {
           mesh.castShadow = !decal;
           mesh.receiveShadow = true;
           // ...and the leaves receive with finer biases than the sun's, so a
-          // leaf shadows the leaf below it (ivyShadow.ts).
+          // leaf shadows the leaf below it; two-sided and translucent (ivyLeaves.ts).
           if (ivy) {
-            for (const m of mats) wearIvyShadowBias(m);
+            for (const m of mats) wearIvyLeaves(m);
             ivyMeshes++;
           }
         });

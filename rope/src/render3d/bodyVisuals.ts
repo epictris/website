@@ -51,6 +51,7 @@ import {
 import { DEFAULT_BEVEL, cylinderSolid, extrudeOutline } from "./extrude";
 import { isAuthoredSurface, isSolidSurface, surfaceFor, surfaceName, tileMetres } from "./assets";
 import { buildWater } from "./water";
+import type { StillSurface } from "./stillWater";
 import { DEFAULT_LIGHT_Z, LightRig, type DrivenEmission, type MountedLight } from "./lights";
 import { isWaking } from "./glow";
 import { BeltRing, BeltTread } from "./beltTread";
@@ -172,6 +173,9 @@ export class BodyVisual {
   // own flow and colour in its uniforms), and so is a dressing's copy of a
   // material a waking light drives, so this visual frees them.
   private readonly ownedMaterials: THREE.Material[] = [];
+  // A still water body's surface, which the scene's splashes watch the ball
+  // cross (see stillWater.ts). Null for everything else.
+  stillSurface: StillSurface | null = null;
   // Lights this body's light objects hang on it. Children of the root, so they
   // ride the pose with no per-frame cost; handed back to the rig at dispose,
   // which is what frees the budget slot as well as the objects.
@@ -213,6 +217,7 @@ export class BodyVisual {
         const water = buildWater(this.root, body, data);
         this.owned.push(...water.geometries);
         this.ownedMaterials.push(...water.materials);
+        this.stillSurface = water.still;
       }
     } else if (data) {
       this.buildAuthored(data, solidZ, greybox && drawsGreybox(data));

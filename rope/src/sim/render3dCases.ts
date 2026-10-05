@@ -4067,31 +4067,33 @@ function beamCases(): CaseResult[] {
     { type: "light", kind: "spot", range: 10, angle: 7, dirX: 1, dirY: 0, beam: 0.6, dust: 0.5 },
     { x: 0, y: 0, rot: 0, z: 0 },
   );
-  const cone = mounted?.holder.getObjectByName("beam-cone") as THREE.Mesh | undefined;
+  // The shaft is drawn by `LightShafts` straight off the spot, so what is held
+  // here is that the rig hands over THIS spot, at its reach and level, and
+  // that the dust's bounds are the spot's cone along its aim.
   const dust = mounted?.holder.getObjectByName("beam-dust") as THREE.Points | undefined;
+  const shafts = rig.shafts();
+  const spot = mounted?.holder.children.find((c) => c instanceof THREE.SpotLight);
+  const shaftOk =
+    shafts.length === 1 && shafts[0]!.light === spot && shafts[0]!.range === 10 && shafts[0]!.level === 0.6;
   let farErr = Infinity;
   let nearErr = Infinity;
-  if (cone) {
+  if (dust) {
     scene.updateMatrixWorld(true);
-    const pos = cone.geometry.getAttribute("position");
-    const v = new THREE.Vector3();
-    farErr = 0;
-    nearErr = 0;
-    for (let i = 0; i < pos.count; i++) {
-      v.fromBufferAttribute(pos, i).applyMatrix4(cone.matrixWorld);
-      // Along +x, the far ring is at x = 10 and radius `expected` about the axis.
-      const r = Math.hypot(v.y, v.z);
-      if (Math.abs(v.x - 10) < 1e-6) farErr = Math.max(farErr, Math.abs(r - expected));
-      else if (Math.abs(v.x) < 1e-6) nearErr = Math.max(nearErr, Math.abs(r - BEAM_SOURCE_RADIUS));
-    }
+    const box = dust.geometry.boundingBox!;
+    // The box's far face, turned onto the aim, is at x = 10 with half-width
+    // `expected`; its lamp face at x = 0.
+    const far = new THREE.Vector3(box.max.x, box.min.y, box.max.z).applyMatrix4(dust.matrixWorld);
+    const near = new THREE.Vector3(0, box.max.y, 0).applyMatrix4(dust.matrixWorld);
+    farErr = Math.max(Math.abs(far.x - 10), Math.abs(Math.hypot(far.y, far.z) - expected * Math.SQRT2));
+    nearErr = near.length();
   }
   const radiusOk = Math.abs(beamFarRadius(10, 7) - expected) < 1e-12 && farErr < 1e-5 && nearErr < 1e-5;
   out.push({
-    name: "beam: the cone reaches `range` along the spot's aim, at range x tan(angle)",
-    pass: radiusOk && dust !== undefined,
-    detail: cone
-      ? `far radius ${expected.toFixed(4)} m, far ring off by ${farErr.toExponential(2)}, lamp ring off by ${nearErr.toExponential(2)}; dust ${dust ? "built" : "MISSING"}`
-      : "no cone built",
+    name: "beam: the shaft is the spot's own, and the dust's cone reaches `range` along its aim at range x tan(angle)",
+    pass: radiusOk && shaftOk,
+    detail: dust
+      ? `far radius ${expected.toFixed(4)} m, far corner off by ${farErr.toExponential(2)}, lamp off by ${nearErr.toExponential(2)}; shaft ${shaftOk ? "handed over" : JSON.stringify(shafts.map((s) => [s.range, s.level]))}`
+      : "no dust built",
   });
   rig.dispose();
 
@@ -4195,8 +4197,10 @@ function beamCases(): CaseResult[] {
     kids({ type: "light", kind: "spot", range: 8, beam: 0, dust: 0 }),
     kids({ type: "light", kind: "point", range: 8, beam: 0.6, dust: 0.5 }),
   ];
+  const noShafts = bare.shafts().length === 0;
   bare.dispose();
   const nothing =
+    noShafts &&
     JSON.stringify(shapes[0]) === JSON.stringify(["light", "target"]) &&
     JSON.stringify(shapes[1]) === JSON.stringify(["light", "target"]) &&
     JSON.stringify(shapes[2]) === JSON.stringify(["light"]);

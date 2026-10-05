@@ -97,7 +97,7 @@ import { BallLevel } from "../level/ballLevel";
 import { RigidBody2D } from "../engine/body";
 import { Vec2 } from "../engine/vec2";
 import { PIXELS_PER_METER } from "../engine/units";
-import { findChromium, grab, PageNotReady, type PageLogEntry } from "./shotRunner";
+import { findChromium, grab, holdProcessGroup, PageNotReady, type PageLogEntry } from "./shotRunner";
 import { VIEW_HEIGHT, VIEW_WIDTH } from "../render/viewport";
 import type { ViewCapture } from "../render3d/viewCapture";
 import {
@@ -1008,6 +1008,7 @@ async function cmdShot(first: string, o: Record<string, string>, extra: string[]
     stdio: "ignore",
     detached: true,
   });
+  const releaseVite = vite.pid ? holdProcessGroup(vite.pid) : () => {};
   let failure: string | null = null;
   try {
     waitForServer(port);
@@ -1093,6 +1094,7 @@ async function cmdShot(first: string, o: Record<string, string>, extra: string[]
     } catch {
       vite.kill("SIGTERM");
     }
+    releaseVite();
     rmSync(served, { force: true });
     if (bundleArg === undefined) rmSync(bundle, { force: true });
   }

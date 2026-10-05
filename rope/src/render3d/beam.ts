@@ -1,33 +1,23 @@
-// A spot light's beam made visible: a cone of lit air along the spot's own aim,
-// as long as its reach and as wide as its cone, with dust drifting in it.
+// A spot light's beam made visible: the lit air inside the spot's own cone
+// (the shaft), and dust drifting in it.
 //
-// NOTHING NEW TO PLACE, AND NOTHING THAT CAN DISAGREE WITH THE LIGHT. The shaft
+// NOTHING NEW TO PLACE, AND NOTHING THAT CAN DISAGREE WITH THE LIGHT. The beam
 // is not an object of its own with a position and a direction that could drift
-// off the lamp it belongs to; it is two extra draws hung on the spot's own
-// holder (see `LightRig.add`), built from the spot's own `range`, `angle`,
-// `penumbra` and colour, flickering with its intensity. `beam` and `dust` on
-// `LightObjectData` say only how much of it shows.
+// off the lamp it belongs to. The shaft is read straight off the spot itself
+// (its place, aim, `range`, cone, penumbra, colour and shadow map) by
+// `lightShafts.ts`, which draws it as lit fog; the dust is one draw hung on the
+// spot's own holder (see `LightRig.add`). Both flicker with its intensity.
+// `beam` and `dust` on `LightObjectData` say only how much of each shows.
 //
-// It is NOT occluded by geometry, on purpose: a shaft that should stop at a
-// floor is authored with a `range` that stops there, and the spot's own
-// `castShadow` gives the pool on the floor and the shadow of anything hanging
-// in the shaft. What was rejected instead, and why, is in
-// docs/lighting-and-surfaces.md (screen-space god rays need the source on
-// screen, and the camera never stops panning).
+// A shaft that should stop at a floor is authored with a `range` that stops
+// there, or let the spot cast shadows: the shaft is then cut by whatever stands
+// in its light, the way the reference's cave mouth cuts its beams. Screen-space
+// god rays were rejected because they need the source on screen, and the
+// camera never stops panning.
 //
-// The cone is ADDITIVE lit air: what a view ray through it collects is
-// proportional to how much of the cone it crosses, and for a cone seen from the
-// side that chord is proportional to how squarely the surface faces the view.
-// So the alpha of each face is that facing term, and the front and back faces
-// summed are the chord - which is also what makes the cone's own silhouette
-// fade to nothing instead of showing as a line. The spot's penumbra shapes the
-// same term: a hard-edged spot keeps its brightness out to the rim, a soft one
-// concentrates it on the axis.
-//
-// The fog is applied as ATTENUATION rather than as three's mix toward the fog
-// colour: added light seen through haze is dimmed by it, and mixing toward the
-// fog colour would ADD fog colour wherever the beam is, drawing the cone's
-// outline in fog.
+// Until 2026-10-05 the shaft was an additive cone MESH here, which the fog
+// attenuated like a surface and the depth of field could not place; see
+// `lightShafts.ts` for why it became a volume.
 //
 // Everything moving is a pure function of the clock and a seed, like the
 // water's spray (`water.ts`): no CPU update beyond two shared uniforms, nothing
@@ -35,14 +25,9 @@
 
 import * as THREE from "three";
 
-// The alpha of one face of the cone at `beam = 1`, squarely facing the view, at
-// full length strength. The front and back faces add, so the axis of a fully
-// visible beam collects about twice this.
-export const BEAM_ALPHA = 0.16;
-
-// The cone's radius at the lamp, in metres: a point source is a degenerate cone
-// whose first ring would be one vertex, and a beam that starts from a disc the
-// size of a lamp's lens is also what a lamp looks like.
+// The dust's cone's radius at the lamp, in metres: a point source is a
+// degenerate cone, and dust seeded in a disc the size of a lamp's lens is also
+// what a lamp looks like.
 export const BEAM_SOURCE_RADIUS = 0.06;
 
 // Along the cone, as fractions of `range`: the beam fades IN from nothing at the
@@ -53,19 +38,14 @@ export const BEAM_FADE_OUT_FROM = 0.35;
 
 // The rays: two octaves of a smooth wave around the cone's azimuth, drifting
 // slowly with the clock, so the shaft reads as a bundle of soft rays rather
-// than one flat cone. Integer counts, so the waves close on themselves with no
-// seam; a depth, the fraction of the brightness the darkest gap loses; and a
-// drift in radians per second. No grain: the rule in docs/art-style.md stands.
+// than one flat cone even where no shadow breaks it up. Integer counts, so the
+// waves close on themselves with no seam; a depth, the fraction of the
+// brightness the darkest gap loses; and a drift in radians per second. No
+// grain: the rule in docs/art-style.md stands.
 export const BEAM_RAYS = 7;
 export const BEAM_RAYS_FINE = 17;
 export const BEAM_RAY_DEPTH = 0.55;
 export const BEAM_RAY_DRIFT = 0.05;
-
-// How the spot's penumbra shapes the facing term: an exponent from
-// BEAM_EDGE_HARD (penumbra 0, bright to the rim) to BEAM_EDGE_SOFT (penumbra 1,
-// gathered on the axis).
-const BEAM_EDGE_HARD = 0.6;
-const BEAM_EDGE_SOFT = 2.2;
 
 // The dust. Motes per metre of beam at `dust = 1`, and a cap on one beam's
 // count so a 30 m shaft does not become thirty thousand points.
@@ -81,7 +61,7 @@ export const DUST_WANDER_RATE: readonly [number, number] = [0.12, 0.45];
 // A mote's brightness at `dust = 1` on the beam's axis.
 export const DUST_ALPHA = 0.85;
 
-// Above the water's spray (11), so a shaft falling on a fall is drawn over its
+// Above the water's spray (11), so dust falling on a fall is drawn over its
 // mist rather than sorted under it.
 const BEAM_RENDER_ORDER = 12;
 
@@ -142,11 +122,39 @@ export function seedDust(
   return { positions, seeds };
 }
 
-// What a beam is built from: the spot's own numbers, and the rig's clock.
+// A spot whose air shows, as `lightShafts.ts` draws it: everything else (place,
+// aim, cone, penumbra, colour, shadow) is read off the light every frame.
+export interface Shaft {
+  light: THREE.SpotLight;
+  range: number;
+  // `beam` times the light's current flicker fraction.
+  level: number;
+  phase: number;
+  // The lit air lighting the surfaces around it (see SHAFT_SURFACE_GLOW), and
+  // each light's intensity at level 1.
+  glow: THREE.PointLight[];
+  glowIntensity: number;
+}
+
+// THE LIT AIR LIGHTS ITS SURROUNDINGS: a shaft is a long glowing body of fog,
+// and the rock beside it is lit by it, the way a skylit cave's walls are bright
+// around the beam (Tris, 2026-10-05). Three shadowless point lights down the
+// axis, at these fractions of the reach (inside the length fade, where the
+// shaft is brightest), share SHAFT_SURFACE_GLOW of the spot's intensity at
+// `beam = 1`, each reaching SHAFT_GLOW_REACH metres past the cone's far
+// radius. Shadowless, so they light the back of a rock too; their reach is
+// what keeps that local. Three lights per beam is three more lights in every
+// lit program, which is the price.
+export const SHAFT_SURFACE_GLOW = 0.4;
+export const SHAFT_GLOW_AT: readonly number[] = [0.2, 0.4, 0.6];
+export const SHAFT_GLOW_REACH = 6;
+
+// What a beam is built from: the spot itself, its own numbers, and the rig's
+// clock.
 export interface BeamSpec {
+  light: THREE.SpotLight;
   range: number;
   angleDeg: number;
-  penumbra: number;
   color: THREE.Color;
   beam: number;
   dust: number;
@@ -162,9 +170,10 @@ export interface BeamSpec {
 export class Beam {
   // Hung on the spot's holder, turned so its -y is the spot's aim.
   readonly root = new THREE.Group();
+  // The lit air, or null for a spot asking only for dust.
+  readonly shaft: Shaft | null = null;
   private readonly geometries: THREE.BufferGeometry[] = [];
   private readonly materials: THREE.ShaderMaterial[] = [];
-  private readonly coneLevel: { value: number } | null = null;
   private readonly dustLevel: { value: number } | null = null;
   private readonly beam: number;
   private readonly dust: number;
@@ -176,30 +185,29 @@ export class Beam {
     this.root.quaternion.setFromUnitVectors(DOWN, spec.dir);
     const far = beamFarRadius(spec.range, spec.angleDeg);
     const source = Math.min(BEAM_SOURCE_RADIUS, far);
-    // Bounds for the frustum test, around the whole cone rather than around
-    // wherever the motes happen to have been seeded.
-    const bounds = new THREE.Sphere(
-      new THREE.Vector3(0, -spec.range / 2, 0),
-      Math.hypot(spec.range / 2, far),
-    );
 
     if (this.beam > 0) {
-      const geometry = new THREE.CylinderGeometry(source, far, spec.range, 48, 8, true);
-      // Lamp at the origin, reach down -y.
-      geometry.translate(0, -spec.range / 2, 0);
-      geometry.boundingSphere = bounds.clone();
-      const level = { value: this.beam };
-      const material = coneMaterial(spec, level);
-      const mesh = new THREE.Mesh(geometry, material);
-      mesh.name = "beam-cone";
-      mesh.renderOrder = BEAM_RENDER_ORDER;
-      // Lit air is not a thing to click: the editor's 3D pick must go through
-      // a shaft to the wall behind it.
-      mesh.raycast = noRaycast;
-      this.root.add(mesh);
-      this.geometries.push(geometry);
-      this.materials.push(material);
-      this.coneLevel = level;
+      // The lit air as a light on what is around it: shadowless points down
+      // the axis where the shaft is brightest, coloured and driven each frame
+      // by `LightShafts.select` (the fog's tint is the scene's, not the rig's).
+      const glow: THREE.PointLight[] = [];
+      const far = beamFarRadius(spec.range, spec.angleDeg);
+      for (const along of SHAFT_GLOW_AT) {
+        const g = new THREE.PointLight(0xffffff, 0, far + SHAFT_GLOW_REACH, 2);
+        g.name = "beam-glow";
+        g.castShadow = false;
+        g.position.set(0, -along * spec.range, 0);
+        this.root.add(g);
+        glow.push(g);
+      }
+      this.shaft = {
+        light: spec.light,
+        range: spec.range,
+        level: this.beam,
+        phase: spec.phase,
+        glow,
+        glowIntensity: (spec.light.intensity * SHAFT_SURFACE_GLOW) / SHAFT_GLOW_AT.length,
+      };
     }
 
     const count = dustCount(this.dust, spec.range);
@@ -208,7 +216,17 @@ export class Beam {
       const geometry = new THREE.BufferGeometry();
       geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
       geometry.setAttribute("aSeed", new THREE.Float32BufferAttribute(seeds, 4));
-      geometry.boundingSphere = bounds.clone();
+      // Bounds around the whole cone rather than around wherever the motes
+      // happen to have been seeded: the frustum test reads the sphere, and the
+      // depth of field's "does this reach the sharp plane" reads the box.
+      geometry.boundingSphere = new THREE.Sphere(
+        new THREE.Vector3(0, -spec.range / 2, 0),
+        Math.hypot(spec.range / 2, far),
+      );
+      geometry.boundingBox = new THREE.Box3(
+        new THREE.Vector3(-far, -spec.range, -far),
+        new THREE.Vector3(far, 0, far),
+      );
       const level = { value: this.dust };
       const material = dustMaterial(spec, level, source, far);
       const points = new THREE.Points(geometry, material);
@@ -225,7 +243,7 @@ export class Beam {
   // The light's current intensity as a fraction of its authored one, so a
   // guttering lamp's beam and dust gutter with it.
   setLevel(fraction: number): void {
-    if (this.coneLevel) this.coneLevel.value = this.beam * fraction;
+    if (this.shaft) this.shaft.level = this.beam * fraction;
     if (this.dustLevel) this.dustLevel.value = this.dust * fraction;
   }
 
@@ -264,8 +282,9 @@ function f(v: number): string {
 
 // Additive light seen through the level's haze: dimmed by the fraction of the
 // fog a surface at this depth would take, computed exactly as three's own
-// `fog_fragment` computes it. Shared with the fireflies (`fireflyVisual.ts`),
-// which are the same additive light in the same haze.
+// `fog_fragment` computes it. Mixing toward the fog colour instead would ADD
+// fog colour wherever a mote is. Shared with the fireflies
+// (`fireflyVisual.ts`), which are the same additive light in the same haze.
 export const FOG_ATTENUATE = /* glsl */ `
   #ifdef USE_FOG
     #ifdef FOG_EXP2
@@ -284,76 +303,7 @@ const ALONG_FADE = /* glsl */ `
   }
 `;
 
-function coneMaterial(spec: BeamSpec, level: { value: number }): THREE.ShaderMaterial {
-  const material = new THREE.ShaderMaterial({
-    uniforms: THREE.UniformsUtils.merge([
-      THREE.UniformsLib.fog,
-      {
-        uColor: { value: spec.color.clone() },
-        uLength: { value: spec.range },
-        uPenumbra: { value: clamp01(spec.penumbra) },
-        uPhase: { value: spec.phase },
-      },
-    ]),
-    vertexShader: /* glsl */ `
-      #include <common>
-      #include <fog_pars_vertex>
-      uniform float uLength;
-      varying float vAlong;
-      varying vec2 vAround;
-      varying vec3 vNormalView;
-      varying vec3 vToCamera;
-      void main() {
-        vAlong = -position.y / uLength;
-        vAround = position.xz;
-        vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
-        vNormalView = normalMatrix * normal;
-        vToCamera = -mvPosition.xyz;
-        gl_Position = projectionMatrix * mvPosition;
-        #include <fog_vertex>
-      }`,
-    fragmentShader: /* glsl */ `
-      #include <common>
-      #include <fog_pars_fragment>
-      uniform vec3 uColor;
-      uniform float uLevel;
-      uniform float uTime;
-      uniform float uPenumbra;
-      uniform float uPhase;
-      varying float vAlong;
-      varying vec2 vAround;
-      varying vec3 vNormalView;
-      varying vec3 vToCamera;
-      ${ALONG_FADE}
-      void main() {
-        // How squarely this face looks at the camera: the chord of the cone a
-        // view ray crosses here, and zero along the cone's own silhouette.
-        float facing = abs(dot(normalize(vNormalView), normalize(vToCamera)));
-        float edge = pow(facing, mix(${f(BEAM_EDGE_HARD)}, ${f(BEAM_EDGE_SOFT)}, uPenumbra));
-        // The rays, around the cone's azimuth, read per fragment so the seam
-        // where the angle wraps is never interpolated across.
-        float turn = atan(vAround.y, vAround.x);
-        float waves = 0.6 * sin(turn * ${f(BEAM_RAYS)} + uTime * ${f(BEAM_RAY_DRIFT)} + uPhase)
-          + 0.4 * sin(turn * ${f(BEAM_RAYS_FINE)} - uTime * ${f(BEAM_RAY_DRIFT * 1.7)} + uPhase * 2.3);
-        float rays = 1.0 - ${f(BEAM_RAY_DEPTH)} * (0.5 + 0.5 * waves);
-        float a = ${f(BEAM_ALPHA)} * uLevel * alongFade(clamp(vAlong, 0.0, 1.0)) * edge * rays;
-        ${FOG_ATTENUATE}
-        if (a < 0.0005) discard;
-        gl_FragColor = vec4(uColor, a);
-        #include <tonemapping_fragment>
-        #include <colorspace_fragment>
-      }`,
-    transparent: true,
-    blending: THREE.AdditiveBlending,
-    depthWrite: false,
-    side: THREE.DoubleSide,
-    fog: true,
-  });
-  shareUniforms(material, spec, level);
-  return material;
-}
-
-// Attached by REFERENCE after the merge above (which clones): the rig writes the
+// Attached by REFERENCE after the merge below (which clones): the rig writes the
 // clock and the viewport once a frame for every beam at once, and `setLevel`
 // writes this beam's level.
 function shareUniforms(material: THREE.ShaderMaterial, spec: BeamSpec, level: { value: number }): void {

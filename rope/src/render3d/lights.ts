@@ -70,7 +70,7 @@
 
 import * as THREE from "three";
 import type { FireflyPathData, LightObjectData } from "../level/levelFormat";
-import { Beam, buildBeam } from "./beam";
+import { Beam, buildBeam, type Shaft } from "./beam";
 import {
   FIREFLY_COLOR,
   FIREFLY_INTENSITY,
@@ -308,6 +308,8 @@ export class LightRig {
   // writes it once (see `update`). Their dust is sized by the scene-wide
   // `POINT_VIEW_HALF_HEIGHT`.
   private readonly beamTime = { value: 0 };
+  // `shafts()`'s answer, kept so a frame allocates nothing.
+  private readonly shaftList: Shaft[] = [];
   // Waking lights, in the order they were added (which is authored order, the
   // pool's tie-break), and the pool of real lights that serves them.
   private readonly glows: GlowSource[] = [];
@@ -467,9 +469,9 @@ export class LightRig {
       // off the lamp it belongs to. Nothing at all for a spot asking for
       // neither field, which is every spot authored before them.
       beam = buildBeam({
+        light,
         range,
         angleDeg: data.angle ?? DEFAULT_SPOT_ANGLE,
-        penumbra: data.penumbra ?? DEFAULT_SPOT_PENUMBRA,
         color,
         beam: data.beam ?? 0,
         dust: data.dust ?? 0,
@@ -586,6 +588,14 @@ export class LightRig {
     if (focus && this.swarms.length > 0) this.updateFireflies(seconds, dt, focus);
     if (!this.flickers) return;
     for (const b of this.built) flick(b, seconds);
+  }
+
+  // The spots whose air shows, for `LightShafts` to draw, in authored order.
+  // A light past the budget built nothing and is not here.
+  shafts(): Shaft[] {
+    this.shaftList.length = 0;
+    for (const b of this.built) if (b.beam?.shaft) this.shaftList.push(b.beam.shaft);
+    return this.shaftList;
   }
 
   // How many pool lights this rig carries (0 until `buildPool`).

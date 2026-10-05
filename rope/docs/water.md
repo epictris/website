@@ -120,6 +120,36 @@ A channel has end caps where nothing pours off it, because an open box was the f
 
 `levels/ball.json`'s upper channel spills 2 m at 1 m/s onto the lower one.
 
+### Still water
+
+A water body with `flow: 0` and no `spill` is a **pool**, and `render3d/stillWater.ts` draws it as a painting rather than as a current (2026-10-05).
+It wears the same geometry as a channel (`waterGeometry`) and the same palette (`paletteOf`), under its own material.
+
+The surface is after a painting Tris gave of a calm blue lake between low-poly rocks, read by k-means over three bands of its water.
+Looking down into it near the viewer it is teal (hue 188, l 0.35-0.45), which is the BALL pool's own authored `#1e7382` almost exactly, so the **near colour is the authored colour**; the middle distance is a darker blue (hue 201, l 0.27-0.43), the water reflecting the rocks; far off at a grazing angle it is a lighter sky blue (hue 202, l 0.35-0.53).
+So the colour is a ramp over the view's grazing angle (`swRamp`, a Fresnel term) that turns the hue 13 degrees toward blue, with the mid and far stops' lightness as the measured ratios to the near one.
+Over it are the **wavelets**: a 3D Voronoi field (its third axis is time, so the cells morph rather than slide) stretched five times along x, with an ellipse about the feature point in 40% of the cells drawn lighter and in 30% darker, and a lit rim on the camera-facing side of the light ones.
+Separate dashes on smooth water, never every cell: rimming every cell edge drew a network of outlines like cracked ice, and dashes much smaller than half a cell read as scratches on a flat sheet.
+They fade at grazing, where perspective crushes them into a shimmer.
+The front sheet has no wavelets - it is a cross-section, and they read as lily pads stuck to a wall - only the near teal deepening toward the bed under a pale line at the waterline.
+The water is mostly lit by the scene with a third of its own light (`SELF_LIGHT`), so it reads luminous without becoming a sticker.
+
+Not done, and what each would take: the painting's **reflections** of the rocks need a planar reflection, which is a second render of the scene (the cost `transmission` was rejected for below); its thin bright **contact lines** where rock meets water need the scene's depth behind the water, which the forward pass does not have.
+
+Before this the pool was a **caustic net** after Tris's reference Blender files (a 3D Voronoi read as F1 minus Blender's smooth F1, white glowing lines over a soft tint); it was replaced by the painting above the same day.
+Its star glints were built and **rejected on sight** ("they look bad").
+
+**The splash** (`WaterSplashes`, owned by `Scene3D`) is render-side by construction, like the sparks: it reads where the ball is drawn and how fast it moves, and writes nothing back.
+When the ball's bottom crosses a pool's surface going in faster than `SPLASH_MIN` it throws a splash scaled by the entry speed; coming out fast, a smaller one.
+The entry speed is the larger of the sim's velocity and the velocity **as drawn** between the two frames: the BALL pool's floor is 5 cm under its surface, so the ball stops inside the frame it goes in and the sim's velocity on the frame the crossing is seen is zero.
+A splash is a cel-shaded **crown** (an open ring wall with a jagged rim of periodic sines, rising, flaring and tearing into holes as it falls), a **lace** ring of foam over the surface (Voronoi edges in log-polar space, so its cells stretch along the spokes, breaking into torn flecks at the rim, with two broken ripple rings ahead) clipped to the pool's footprint, and **droplets** thrown up ballistically, some solid, some hollow rings.
+
+**The wake**: while the ball moves along the water with its bottom no deeper than `WAKE_DEPTH` under the top, it sheds a ripple ring every `WAKE_SPACING` metres travelled (by distance, so the spacing does not depend on the frame rate), each spreading and fading on its own: loose rings for a slow ball, a V for a fast one.
+
+All of it is three draw calls plus one for the wake, always in the scene so the prewarm compiles them: up to `SLOTS` splashes and `RIPPLES` rings live in uniform tables, every particle is a pure function of the clock and its slot's start time, and an idle slot collapses outside the clip volume in the vertex shader.
+A pinned clock (`cli shot`) draws the same splash twice.
+Unplayed; no cases until it has been.
+
 ### The photographic renderer this replaced
 
 The first 3D water was photographic - flipbook normals feeding specular under the lamps, an environment reflection, a smooth murk gradient - and it was a dark glossy surface with sparkle on it, the opposite of the look wanted.
