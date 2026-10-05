@@ -137,8 +137,8 @@ export function forgedMetal(tileScale?: number): THREE.MeshStandardMaterial {
 // neutral grey one (0.072 linear where the UVs land), so the tint is
 // re-derived to hold the worn iron where the approved look put it - about
 // 0.033, neutral - with the painted blotches now carrying the variation.
-const MODEL_ROUGHNESS = 0.8;
-const MODEL_METALNESS = 0.92;
+const MODEL_ROUGHNESS = 1;
+const MODEL_METALNESS = 1;
 // Linear RGB, multiplied into the albedo map.
 const MODEL_ALBEDO = new THREE.Color().setRGB(0.44, 0.47, 0.48, THREE.LinearSRGBColorSpace);
 

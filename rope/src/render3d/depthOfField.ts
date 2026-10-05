@@ -1,6 +1,7 @@
 // DEPTH OF FIELD: the scenery behind the gameplay plane drawn out of focus, and
-// the plane itself never. Off unless asked for (`?dof=low|medium|high` for
-// now, while its cost is measured).
+// the plane itself never. A player setting (the S panel, see
+// render/settings.ts), off by default; `?dof=off|low|medium|high` overrides it
+// for one visit.
 //
 // THE FOCUS IS THE PLANE. Where the lens is focused is fixed at the gameplay
 // plane (z = 0) plus `FOCUS_BAND` behind it, wherever a level's lens has put the
@@ -9,35 +10,34 @@
 // and depth d: zero at the band, rising through the near scenery, levelling off
 // toward the sky at the setting's size.
 //
-// A FRAME WITH IT ON:
+// A FRAME WITH IT ON, all in the scene's own multisampled frame (see
+// frameTarget.ts), which the canvas receives afterwards:
 //
-//   1. The scene, as the canvas would draw it, into a multisampled target that
-//      keeps its depth - minus the see-through things near the plane (step 5).
-//      The target is flagged as three's XR target and stored as plain RGBA8, so
-//      every program is the canvas's own (tone mapped, sRGB encoded) and
-//      translucent layers blend in the same space: with no blur, the frame IS
-//      the direct path's. Drawn into an ordinary linear float target instead,
-//      the sky moved from (20,40,62) to (2,29,56) with no blur at all.
+//   1. The scene into the frame, its colour and depth resolved - minus the
+//      see-through things near the plane (step 4).
 //   2. Small (see `BLUR_LINES`): each block's colour (the out-of-focus pixels
 //      in it) and its largest circle of confusion.
 //   3. Small: a gather blur (Gustafsson's single pass, a golden-angle spiral)
 //      in which a tap counts only if its own circle reaches the pixel, so the
 //      sharp plane never smears into the blur around it.
-//   4. Full size, onto the canvas: an in-focus pixel is the scene's own, bit
-//      for bit; an out-of-focus one is the blur, upsampled from the small
-//      texels that are themselves out of focus (so no in-focus colour leaks
-//      in at an edge). The scene's depth goes onto the canvas with it.
-//   5. The water, the fireflies, the spray and the beams near the plane, sharp,
-//      depth-tested against that. They write no depth, so step 2 would read the
-//      scenery BEHIND the water and blur the water with it.
+//   4. Back into the frame's own samples, in one draw of the scene: the blur
+//      first, over the out-of-focus pixels only (an in-focus one keeps its
+//      samples untouched), upsampled from the small texels that are themselves
+//      out of focus, so no in-focus colour leaks in at an edge; then the
+//      water, the fireflies, the spray and the beams near the plane, sharp,
+//      depth-tested against the scene's own multisampled depth, still there.
+//      They write no depth, so step 2 would read the scenery BEHIND the water
+//      and blur the water with it.
 //
-// Off is the direct path, untouched: nothing here is allocated or run.
+// Until 2026-10-05 step 4 was a full-size pass onto an antialiased canvas,
+// rewriting every pixel's four samples and its depth: 0.45 ms of the 0.7 the
+// effect cost at 4K, and enough to take an RTX 4070 SUPER from 144 Hz to ~136.
+//
+// Off, nothing here is allocated or run.
 
 import * as THREE from "three";
 import { FullScreenQuad } from "three/examples/jsm/postprocessing/Pass.js";
-
-export type DepthOfFieldLevel = "off" | "low" | "medium" | "high";
-export const DEPTH_OF_FIELD_LEVELS: readonly DepthOfFieldLevel[] = ["off", "low", "medium", "high"];
+import type { DepthOfFieldLevel } from "../render/settings";
 
 // The largest blur RADIUS, reached at infinity, as a fraction of the frame's
 // height, so a setting is the same look at every resolution. At 1080 lines:
@@ -67,9 +67,19 @@ const MAX_FACTOR = 4;
 const MAX_SAMPLES = 48;
 
 // The layer the see-through things near the plane are moved onto for a frame,
-// so step 1 leaves them out and step 5 draws only them. Lights carry it too,
-// or step 5 would draw the water unlit. Restored after every frame.
+// so step 1 leaves them out and step 4 draws only them (and the blur). Lights
+// carry it too, or step 4 would draw the water unlit. Restored after every
+// frame.
 const OVERLAY_LAYER = 31;
+
+// The composite's own: drawn as a mesh inside the overlay pass rather than by
+// a quad's camera, so its triangle is already in clip space.
+const CLIP_VERTEX = /* glsl */ `
+  varying vec2 vUv;
+  void main() {
+    vUv = position.xy * 0.5 + 0.5;
+    gl_Position = vec4(position.xy, 0.0, 1.0);
+  }`;
 
 const VERTEX = /* glsl */ `
   varying vec2 vUv;
@@ -172,13 +182,10 @@ const COMPOSITE_FRAGMENT = /* glsl */ `
   uniform float factor;
   varying vec2 vUv;
   void main() {
-    vec4 sharp = texture2D(tColor, vUv);
-    gl_FragDepth = texture2D(tDepth, vUv).x;
     float coc = cocAt(vUv);
-    if (coc < 0.5) {
-      gl_FragColor = sharp;
-      return;
-    }
+    // In focus: the frame's own samples stay as they are.
+    if (coc < 0.5) discard;
+    vec4 sharp = texture2D(tColor, vUv);
     // Bilinear by hand over the four nearest small texels, leaving out the
     // in-focus ones: at the plane's edge they hold the plane's colour. In
     // small-texel units, from this pixel's place in the blocks step 2 made.
@@ -221,7 +228,6 @@ export class DepthOfField {
   private maxBlur = 0;
   // Full-size pixels per small one, each way (see `BLUR_LINES`).
   private factor = 2;
-  private sceneTarget: THREE.WebGLRenderTarget | null = null;
   private prepTarget: THREE.WebGLRenderTarget | null = null;
   private blurTarget: THREE.WebGLRenderTarget | null = null;
   private readonly prepMaterial = new THREE.ShaderMaterial({
@@ -246,7 +252,7 @@ export class DepthOfField {
     depthWrite: false,
   });
   private readonly compositeMaterial = new THREE.ShaderMaterial({
-    vertexShader: VERTEX,
+    vertexShader: CLIP_VERTEX,
     fragmentShader: COMPOSITE_FRAGMENT,
     uniforms: {
       ...cocUniforms(),
@@ -256,23 +262,36 @@ export class DepthOfField {
       factor: { value: 2 },
     },
     toneMapped: false,
-    // The depth is written whatever is under it: a write needs the test on.
-    depthTest: true,
-    depthFunc: THREE.AlwaysDepth,
-    depthWrite: true,
+    // Over whatever is there; the scene's depth under it is left as it is.
+    depthTest: false,
+    depthWrite: false,
   });
   private readonly prepQuad = new FullScreenQuad(this.prepMaterial);
   private readonly blurQuad = new FullScreenQuad(this.blurMaterial);
-  private readonly compositeQuad = new FullScreenQuad(this.compositeMaterial);
+  // Step 4's blur, as a member of the scene for that one draw, so it and the
+  // overlays are one render and the frame is resolved once for both. One
+  // triangle over the whole of clip space, drawn before anything else in the
+  // pass: it is opaque, and nothing opaque is ever an overlay.
+  private readonly compositeGeometry = new THREE.BufferGeometry().setAttribute(
+    "position",
+    new THREE.Float32BufferAttribute([-1, -1, 0, 3, -1, 0, -1, 3, 0], 3),
+  );
+  private readonly compositeMesh = new THREE.Mesh(this.compositeGeometry, this.compositeMaterial);
   // The see-through objects moved onto `OVERLAY_LAYER` this frame and the
   // layer masks they had. Kept on the instance so a frame allocates nothing.
   private readonly overlays: THREE.Object3D[] = [];
   private readonly overlayMasks: number[] = [];
-  private readonly size = new THREE.Vector2();
+  // The frame size the small targets were made for.
+  private readonly fittedTo = new THREE.Vector2();
   private readonly forward = new THREE.Vector3();
   private readonly sphere = new THREE.Sphere();
 
-  constructor(private readonly renderer: THREE.WebGLRenderer) {}
+  constructor(private readonly renderer: THREE.WebGLRenderer) {
+    this.compositeMesh.name = "depth-of-field";
+    this.compositeMesh.frustumCulled = false;
+    this.compositeMesh.renderOrder = Number.MIN_SAFE_INTEGER;
+    this.compositeMesh.layers.set(OVERLAY_LAYER);
+  }
 
   setLevel(level: DepthOfFieldLevel): void {
     this.maxBlur = DOF_MAX_BLUR[level];
@@ -283,26 +302,34 @@ export class DepthOfField {
     return this.maxBlur > 0;
   }
 
-  // Draw `scene` onto the whole canvas through the lens. False, having drawn
-  // nothing, when the view does not face the gameplay plane (an orbit past
-  // edge-on), where there is no plane to focus on; the caller draws directly.
-  render(scene: THREE.Scene, camera: THREE.PerspectiveCamera | THREE.OrthographicCamera): boolean {
+  // Whether this view can be drawn through the lens: it has to face the
+  // gameplay plane, and an orbit past edge-on has no plane to focus on.
+  faces(camera: THREE.Camera): boolean {
     camera.updateMatrixWorld();
     camera.getWorldDirection(this.forward);
-    if (this.forward.z > -1e-6) return false;
+    return this.forward.z < -1e-6;
+  }
+
+  // Draw `scene` into `frame` (see frameTarget.ts) through the lens, the view
+  // having been checked with `faces`. The frame must keep its depth.
+  render(
+    scene: THREE.Scene,
+    camera: THREE.PerspectiveCamera | THREE.OrthographicCamera,
+    frame: THREE.WebGLRenderTarget,
+  ): void {
+    camera.getWorldDirection(this.forward);
     // The view depth of the gameplay plane straight ahead, which for the
     // game's head-on camera is the depth of every point on it.
     const sharpTo = -camera.position.z / this.forward.z + FOCUS_BAND;
 
-    this.fitTargets();
-    const sceneTarget = this.sceneTarget!;
+    this.fitTargets(frame);
     const prepTarget = this.prepTarget!;
     const blurTarget = this.blurTarget!;
     const r = this.renderer;
     this.takeOverlays(scene, camera, sharpTo);
 
-    const target = r.getRenderTarget();
     const autoClear = r.autoClear;
+    const resolveDepth = frame.resolveDepthBuffer;
     const autoReset = r.info.autoReset;
     const shadowsUpdate = r.shadowMap.autoUpdate;
     const cameraMask = camera.layers.mask;
@@ -313,7 +340,7 @@ export class DepthOfField {
     r.info.autoReset = false;
     try {
       // 1. The scene, without the overlays.
-      r.setRenderTarget(sceneTarget);
+      r.setRenderTarget(frame);
       r.render(scene, camera);
 
       // 2. Small: colour and circle of confusion.
@@ -322,18 +349,15 @@ export class DepthOfField {
       }
       for (const m of [this.prepMaterial, this.compositeMaterial]) {
         const u = m.uniforms;
-        u.tDepth!.value = sceneTarget.depthTexture;
+        u.tDepth!.value = frame.depthTexture;
         u.cameraNear!.value = camera.near;
         u.cameraFar!.value = camera.far;
         u.orthographic!.value = camera instanceof THREE.OrthographicCamera;
         u.sharpTo!.value = sharpTo;
-        u.maxCoc!.value = this.maxBlur * sceneTarget.height;
-        u.tColor!.value = sceneTarget.texture;
+        u.maxCoc!.value = this.maxBlur * frame.height;
+        u.tColor!.value = frame.texture;
       }
-      (this.prepMaterial.uniforms.fullSize!.value as THREE.Vector2).set(
-        sceneTarget.width,
-        sceneTarget.height,
-      );
+      (this.prepMaterial.uniforms.fullSize!.value as THREE.Vector2).set(frame.width, frame.height);
       r.setRenderTarget(prepTarget);
       this.prepQuad.render(r);
 
@@ -346,25 +370,28 @@ export class DepthOfField {
       r.setRenderTarget(blurTarget);
       this.blurQuad.render(r);
 
-      // 4. Onto the canvas, depth and all.
+      // 4. Back into the frame, without clearing it: the blur, then the
+      //    overlays, sharp, in one render. The sky was drawn in step 1, and
+      //    the shadow maps are this frame's already. Reading the frame's
+      //    resolved texture while drawing into its multisampled buffer is no
+      //    feedback loop (they are different storage), and the depth it reads
+      //    is not resolved over again here.
       this.compositeMaterial.uniforms.tBlur!.value = blurTarget.texture;
       (this.compositeMaterial.uniforms.blurSize!.value as THREE.Vector2).set(
         blurTarget.width,
         blurTarget.height,
       );
-      r.setRenderTarget(target);
-      this.compositeQuad.render(r);
-
-      // 5. The overlays, sharp. The sky was drawn in step 1, and the shadow
-      //    maps are this frame's already.
-      if (this.overlays.length > 0) {
-        r.autoClear = false;
-        camera.layers.set(OVERLAY_LAYER);
-        scene.background = null;
-        r.shadowMap.autoUpdate = false;
-        r.render(scene, camera);
-      }
+      r.setRenderTarget(frame);
+      frame.resolveDepthBuffer = false;
+      r.autoClear = false;
+      camera.layers.set(OVERLAY_LAYER);
+      scene.background = null;
+      r.shadowMap.autoUpdate = false;
+      scene.add(this.compositeMesh);
+      r.render(scene, camera);
     } finally {
+      scene.remove(this.compositeMesh);
+      frame.resolveDepthBuffer = resolveDepth;
       r.autoClear = autoClear;
       r.info.autoReset = autoReset;
       r.shadowMap.autoUpdate = shadowsUpdate;
@@ -372,7 +399,6 @@ export class DepthOfField {
       scene.background = background;
       this.restoreOverlays();
     }
-    return true;
   }
 
   dispose(): void {
@@ -382,7 +408,7 @@ export class DepthOfField {
     this.compositeMaterial.dispose();
     this.prepQuad.dispose();
     this.blurQuad.dispose();
-    this.compositeQuad.dispose();
+    this.compositeGeometry.dispose();
   }
 
   // Every see-through object any part of which reaches the sharp band (or
@@ -432,26 +458,14 @@ export class DepthOfField {
     this.overlayMasks.length = 0;
   }
 
-  // The targets at the drawing buffer's size, made on first use and remade
-  // when the canvas is resized.
-  private fitTargets(): void {
-    this.renderer.getDrawingBufferSize(this.size);
-    const w = Math.max(1, this.size.x);
-    const h = Math.max(1, this.size.y);
-    if (this.sceneTarget && this.sceneTarget.width === w && this.sceneTarget.height === h) return;
+  // The small targets for a frame of `frame`'s size, made on first use and
+  // remade when the canvas is resized.
+  private fitTargets(frame: THREE.WebGLRenderTarget): void {
+    const w = frame.width;
+    const h = frame.height;
+    if (this.prepTarget && this.fittedTo.x === w && this.fittedTo.y === h) return;
     this.freeTargets();
-    // Four samples, as the canvas's own `antialias: true`.
-    const scene = new THREE.WebGLRenderTarget(w, h, {
-      samples: 4,
-      colorSpace: THREE.SRGBColorSpace,
-      depthTexture: new THREE.DepthTexture(w, h),
-    });
-    // Drawn exactly as the canvas is (see the header): three tone maps and
-    // sRGB-encodes for an XR target, and plain RGBA8 storage keeps the
-    // hardware from decoding for blending, as a canvas does not.
-    (scene as { isXRRenderTarget?: boolean }).isXRRenderTarget = true;
-    scene.texture.internalFormat = "RGBA8";
-    this.sceneTarget = scene;
+    this.fittedTo.set(w, h);
     this.factor = Math.min(MAX_FACTOR, Math.max(2, Math.round(h / BLUR_LINES)));
     const sw = Math.ceil(w / this.factor);
     const sh = Math.ceil(h / this.factor);
@@ -462,11 +476,8 @@ export class DepthOfField {
   }
 
   private freeTargets(): void {
-    this.sceneTarget?.depthTexture?.dispose();
-    this.sceneTarget?.dispose();
     this.prepTarget?.dispose();
     this.blurTarget?.dispose();
-    this.sceneTarget = null;
     this.prepTarget = null;
     this.blurTarget = null;
   }

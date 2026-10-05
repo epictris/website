@@ -57,7 +57,9 @@ import {
   type ViewProjection,
 } from "./space";
 import { ReflectionProbe } from "./reflectionProbe";
-import { DepthOfField, type DepthOfFieldLevel } from "./depthOfField";
+import type { DepthOfFieldLevel } from "../render/settings";
+import { DepthOfField } from "./depthOfField";
+import { FrameTarget } from "./frameTarget";
 import { updateWater, waterTextures } from "./water";
 import { beltRenderTime } from "../render/beltTread";
 
@@ -234,13 +236,17 @@ export class Scene3D {
   private readonly reflectionProbe: ReflectionProbe;
   // The background blur behind the gameplay plane (see depthOfField.ts).
   private readonly depthOfField: DepthOfField;
+  // Where every frame is drawn before the canvas gets it (see frameTarget.ts).
+  private readonly frame: FrameTarget;
   private reflectionOn = true;
 
   constructor(canvas: HTMLCanvasElement, opts: Scene3DOptions = {}) {
     this.diagnostics = opts.diagnostics === true;
     this.renderer = new THREE.WebGLRenderer({
       canvas,
-      antialias: true,
+      // Antialiased in the frame target every frame is drawn into, which the
+      // canvas only receives (see frameTarget.ts).
+      antialias: false,
       // The 2D canvas above is transparent, so this one is what the player sees
       // through it; alpha here would let the page background show through the
       // sky instead of the scene's own.
@@ -268,6 +274,7 @@ export class Scene3D {
     this.gpuTimer = GpuTimer.create(this.renderer.getContext());
     this.reflectionProbe = new ReflectionProbe(this.renderer);
     this.depthOfField = new DepthOfField(this.renderer);
+    this.frame = new FrameTarget(this.renderer);
   }
 
   // How much the scenery behind the gameplay plane is blurred, from the next
@@ -1091,10 +1098,17 @@ export class Scene3D {
     // perf HUD should say what the frame costs, not what the main view does.
     this.gpuTimer?.begin();
     this.captureReflection(level);
-    // Depth of field draws the whole canvas, so never into the editor's
+    // Depth of field reads the whole frame, so never in the editor's
     // letterboxed sub-rect (which never asks for it anyway).
-    const blurred = this.depthOfField.active && !rect && this.depthOfField.render(this.scene, this.camera);
-    if (!blurred) this.renderer.render(this.scene, this.camera);
+    const blurred = this.depthOfField.active && !rect && this.depthOfField.faces(this.camera);
+    const frame = this.frame.begin(rect, blurred);
+    if (blurred) {
+      this.depthOfField.render(this.scene, this.camera, frame);
+    } else {
+      this.renderer.setRenderTarget(frame);
+      this.renderer.render(this.scene, this.camera);
+    }
+    this.frame.present();
     this.gpuTimer?.end();
   }
 
@@ -1167,6 +1181,7 @@ export class Scene3D {
     this.env.dispose();
     this.reflectionProbe.dispose();
     this.depthOfField.dispose();
+    this.frame.dispose();
     this.renderer.dispose();
   }
 }

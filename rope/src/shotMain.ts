@@ -35,7 +35,7 @@ import { levelFromRecording } from "./sim/replay";
 import { recordingDeserializer, type Recording } from "./sim/trace";
 import { BALL_ZOOM, GRAPPLE_ZOOM, type Camera } from "./render/camera";
 import { fitCanvas, LETTERBOX_COLOR, VIEW_HEIGHT, VIEW_WIDTH } from "./render/viewport";
-import { DEPTH_OF_FIELD_LEVELS, type DepthOfFieldLevel } from "./render3d/depthOfField";
+import { DEPTH_OF_FIELD_LEVELS, type DepthOfFieldLevel } from "./render/settings";
 import { Vec2 } from "./engine/vec2";
 
 interface ShotLogEntry {

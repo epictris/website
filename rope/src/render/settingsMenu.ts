@@ -8,9 +8,15 @@
 // and no Cancel: the level is right behind the panel, so the new resolution is
 // its own preview, and a setting that only took effect on a second press would
 // be a preview of nothing.
+//
+// Each setting is a radio group, as the platform's own radios behave: Tab moves
+// between the groups (only the chosen option of each is in the tab order), and
+// the arrows move the choice within the group that has the focus.
 
 import {
+  DEPTH_OF_FIELD_LEVELS,
   availableResolutions,
+  depthOfFieldLabel,
   readSettings,
   resolutionLabel,
   writeSettings,
@@ -19,7 +25,7 @@ import {
 } from "./settings";
 
 export interface SettingsMenuHost {
-  // The setting has changed: redraw the frame at it.
+  // A setting has changed: draw the frame with it.
   apply(settings: Settings): void;
   // The size the frame is actually drawn at now, which is the chosen
   // resolution or less - a window smaller than the setting draws at its own size
@@ -30,17 +36,40 @@ export interface SettingsMenuHost {
   closed(): void;
 }
 
+// One setting's row of options.
+interface Group<T> {
+  list: HTMLElement | null;
+  options(): readonly T[];
+  label(option: T): string;
+  isChosen(option: T, settings: Settings): boolean;
+  with(option: T, settings: Settings): Settings;
+}
+
 export class SettingsMenu {
   private readonly root: HTMLElement | null;
-  private readonly list: HTMLElement | null;
   private readonly note: HTMLElement | null;
+  private readonly groups: Group<unknown>[];
   private settings: Settings = readSettings();
   private open = false;
 
   constructor(private readonly host: SettingsMenuHost) {
     this.root = document.getElementById("settings");
-    this.list = document.getElementById("settings-resolutions");
     this.note = document.getElementById("settings-note");
+    const resolution: Group<Resolution> = {
+      list: document.getElementById("settings-resolutions"),
+      options: availableResolutions,
+      label: resolutionLabel,
+      isChosen: (r, s) => s.resolution.width === r.width && s.resolution.height === r.height,
+      with: (r, s) => ({ ...s, resolution: r }),
+    };
+    const depthOfField: Group<(typeof DEPTH_OF_FIELD_LEVELS)[number]> = {
+      list: document.getElementById("settings-dof"),
+      options: () => DEPTH_OF_FIELD_LEVELS,
+      label: depthOfFieldLabel,
+      isChosen: (level, s) => s.depthOfField === level,
+      with: (level, s) => ({ ...s, depthOfField: level }),
+    };
+    this.groups = [resolution, depthOfField] as Group<unknown>[];
     // Capture, so a focused option does not swallow the keys that close it.
     document.addEventListener("keydown", (e) => this.onKey(e), true);
   }
@@ -52,7 +81,7 @@ export class SettingsMenu {
     if (this.open) this.paintNote();
   }
 
-  // What the page should draw at, from the first frame.
+  // What the page should draw with, from the first frame.
   get current(): Settings {
     return this.settings;
   }
@@ -68,11 +97,11 @@ export class SettingsMenu {
 
   show(): void {
     // A page whose markup has no panel (`shot.html`) has nothing to show.
-    if (this.open || !this.root || !this.list) return;
+    if (this.open || !this.root) return;
     this.open = true;
-    this.paintList();
+    this.paint();
     this.root.removeAttribute("hidden");
-    this.selectedButton()?.focus();
+    this.chosenButton(this.groups[0]!)?.focus();
     this.host.opened();
   }
 
@@ -86,36 +115,35 @@ export class SettingsMenu {
     this.host.closed();
   }
 
-  private choose(r: Resolution): void {
-    this.settings = { ...this.settings, resolution: r };
+  private choose(group: Group<unknown>, option: unknown): void {
+    this.settings = group.with(option, this.settings);
     writeSettings(this.settings);
     this.host.apply(this.settings);
-    this.paintList();
-    this.selectedButton()?.focus();
+    this.paint();
+    this.chosenButton(group)?.focus();
   }
 
-  private isChosen(r: Resolution): boolean {
-    const c = this.settings.resolution;
-    return c.width === r.width && c.height === r.height;
+  private chosenButton(group: Group<unknown>): HTMLButtonElement | null {
+    return group.list?.querySelector<HTMLButtonElement>('button[aria-checked="true"]') ?? null;
   }
 
-  private selectedButton(): HTMLButtonElement | null {
-    return this.list?.querySelector<HTMLButtonElement>('button[aria-checked="true"]') ?? null;
-  }
-
-  private paintList(): void {
-    if (!this.list) return;
-    this.list.innerHTML = "";
-    for (const r of availableResolutions()) {
-      const b = document.createElement("button");
-      b.type = "button";
-      b.className = "settings-option";
-      b.setAttribute("role", "radio");
-      b.setAttribute("aria-checked", this.isChosen(r) ? "true" : "false");
-      b.tabIndex = this.isChosen(r) ? 0 : -1;
-      b.textContent = resolutionLabel(r);
-      b.addEventListener("click", () => this.choose(r));
-      this.list.appendChild(b);
+  private paint(): void {
+    for (const group of this.groups) {
+      const list = group.list;
+      if (!list) continue;
+      list.innerHTML = "";
+      for (const option of group.options()) {
+        const chosen = group.isChosen(option, this.settings);
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "settings-option";
+        b.setAttribute("role", "radio");
+        b.setAttribute("aria-checked", chosen ? "true" : "false");
+        b.tabIndex = chosen ? 0 : -1;
+        b.textContent = group.label(option);
+        b.addEventListener("click", () => this.choose(group, option));
+        list.appendChild(b);
+      }
     }
     this.paintNote();
   }
@@ -147,9 +175,13 @@ export class SettingsMenu {
     if (step === 0) return;
     e.preventDefault();
     e.stopPropagation();
-    const options = availableResolutions();
-    const at = options.findIndex((r) => this.isChosen(r));
+    // The group holding the focus; the first if the focus is on none (the
+    // panel was clicked on its background).
+    const focused = document.activeElement;
+    const group = this.groups.find((g) => g.list?.contains(focused)) ?? this.groups[0]!;
+    const options = group.options();
+    const at = options.findIndex((o) => group.isChosen(o, this.settings));
     const next = options[Math.max(0, Math.min(options.length - 1, (at < 0 ? 0 : at) + step))];
-    if (next && !this.isChosen(next)) this.choose(next);
+    if (next !== undefined && !group.isChosen(next, this.settings)) this.choose(group, next);
   }
 }

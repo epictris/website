@@ -71,6 +71,19 @@ It exists so a host can hold a camera the 2D one cannot describe: the editor's V
   All three are ported from the fork (karin_website `381b923`), including its fix of `pick` measuring depth by `hit.point.sub(...)`, which rewrote the hit point in place.
   A hit on something that is not a mesh (a guide's sprite: a corner handle, a light's icon) is kept like any other; until 2026-09-25 a lens test on `mesh.isMesh` dropped every sprite, so no handle could be picked at all (found driving the Visuals workspace; the `visuals:` cases raycast the guides directly and could not see it).
 
+## The frame target
+
+The WebGL canvas is made **without** antialiasing, and nothing is drawn onto it directly.
+Every frame goes into one 4x multisampled target the size of the canvas (`render3d/frameTarget.ts`), and the canvas receives the finished picture as one single-sample copy at the end.
+That is what lets a pass read the frame back (the depth of field's blur reads its colour and depth) and write into the same samples, only where it changes something.
+Before 2026-10-05 the depth of field rewrote the whole frame onto an antialiased canvas, every pixel's four samples and its depth, which cost 0.45 ms at 4K and took an RTX 4070 SUPER from 144 Hz to ~136.
+Measured in the live page, fullscreen and interleaved, the GPU frame went from 4.70 to 4.03 ms with the blur off and from 5.40 to 4.54 with it on, and both held 144 Hz.
+
+The target is flagged as three's XR target and stored as plain RGBA8, so every program is the one three builds for the canvas (tone mapped and sRGB encoded in the shader) and translucent layers blend in the canvas's own space.
+In an ordinary linear float target the sky moved from (20,40,62) to (2,29,56).
+The flag is three's internal, so a three upgrade has to be checked against the previous picture (`cli shot --3d` before and after).
+Drawing back into the samples after they have been resolved relies on three not discarding them, which it only does on the Oculus browser.
+
 ## The coordinate mapping
 
 Physics is x right, y **down**, rotation clockwise-positive.

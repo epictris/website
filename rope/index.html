@@ -435,11 +435,14 @@
         letter-spacing: 0.22em;
       }
       .settings-label { margin: 0 0 0.5rem; color: #8a8f98; }
-      #settings-resolutions {
+      #settings-resolutions, #settings-dof {
         display: grid;
         grid-template-columns: repeat(auto-fill, minmax(12ch, 1fr));
         gap: 0.5ch;
       }
+      /* Four levels, one row: auto-fill would wrap the fourth under the first. */
+      #settings-dof { grid-template-columns: repeat(4, 1fr); }
+      #settings-dof-label { margin-top: 1.25rem; }
       .settings-option {
         min-height: 44px;
         padding: 0 1ch;
@@ -508,6 +511,8 @@
         <p class="settings-label" id="settings-resolution-label">Resolution</p>
         <div id="settings-resolutions" role="radiogroup" aria-labelledby="settings-resolution-label"></div>
         <p id="settings-note"></p>
+        <p class="settings-label" id="settings-dof-label">Depth of field</p>
+        <div id="settings-dof" role="radiogroup" aria-labelledby="settings-dof-label"></div>
         <p id="settings-hint">S or Esc to close</p>
       </div>
     </div>

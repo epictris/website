@@ -9,7 +9,7 @@ import { BallInputSource } from "./input/ballInput";
 import { BUTTON_BITS, InputTrace } from "./input/inputTrace";
 import { drawProbeOutline, render, renderBall } from "./render/renderer";
 import { Scene3D } from "./render3d/scene";
-import { DEPTH_OF_FIELD_LEVELS, type DepthOfFieldLevel } from "./render3d/depthOfField";
+import { isDepthOfFieldLevel } from "./render/settings";
 import { BALL_ZOOM, GRAPPLE_ZOOM, type Camera } from "./render/camera";
 import { clientToView, fitCanvas, VIEW_HEIGHT, VIEW_WIDTH, viewTransform } from "./render/viewport";
 import { CameraController } from "./render/cameraController";
@@ -156,12 +156,12 @@ const scene3d = ((): Scene3D | null => {
 })();
 if (!scene3d) sceneCanvas.style.display = "none";
 
-// `?dof=low|medium|high` blurs the scenery behind the gameplay plane (see
-// render3d/depthOfField.ts). A URL switch while its cost is being measured.
+// `?dof=off|low|medium|high` starts this visit at that depth of field instead
+// of the player's setting, without storing it (see render3d/depthOfField.ts):
+// a frame-time reading names its setting in its own URL. The panel still
+// changes it from there.
 const dofParam = params.get("dof");
-if (scene3d && DEPTH_OF_FIELD_LEVELS.includes(dofParam as DepthOfFieldLevel)) {
-  scene3d.setDepthOfField(dofParam as DepthOfFieldLevel);
-}
+const dofOverride = isDepthOfFieldLevel(dofParam) ? dofParam : null;
 // `?probe=0` turns the ball's reflection probe off, for measuring its cost in a
 // live frame (see render3d/reflectionProbe.ts).
 if (scene3d && params.get("probe") === "0") scene3d.setReflectionProbe(false);
@@ -187,7 +187,10 @@ const dprOverride = ((): number | null => {
 // way the completion panel's freeze does and for the same reason: the player is
 // pointing at a panel, not playing.
 const settingsMenu = new SettingsMenu({
-  apply: () => resize(),
+  apply: (settings) => {
+    resize();
+    scene3d?.setDepthOfField(settings.depthOfField);
+  },
   drawnSize: () => ({ width: canvas.width, height: canvas.height }),
   opened: () => {
     // The cursor comes back so the panel can be pointed at (see
@@ -213,6 +216,7 @@ function resize(): void {
 }
 
 resize();
+scene3d?.setDepthOfField(dofOverride ?? settingsMenu.current.depthOfField);
 window.addEventListener("resize", resize);
 
 // The grey screen `index.html` painted before this module existed, with its bar
@@ -747,6 +751,10 @@ const perf = new PerfProbe();
 // A GETTER, because the level is replaced on every reset and a captured
 // reference would be of a run that has ended.
 Object.defineProperty(window, "__level", { get: () => level, configurable: true });
+// And one on the 3D scene, so a script measuring frame time on a real GPU can
+// switch a renderer setting (`setDepthOfField`, `setReflectionProbe`) inside one
+// page and interleave the readings, rather than reloading between them.
+(window as unknown as { __scene3d: Scene3D | null }).__scene3d = scene3d;
 // The visual chain drape may not cost gameplay a frame: past this much of a
 // step it stops iterating and the next step picks up the slack (literally).
 // Half a millisecond is 3% of the 60 Hz step and several times what the drape
