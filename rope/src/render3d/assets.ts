@@ -678,7 +678,7 @@ function track<T>(p: Promise<T>, what: string): Promise<T> {
   return p;
 }
 
-// For loads that live outside this module (the water flipbook) but must still
+// For loads that live outside this module (a level's Blender scene) but must still
 // hold up a headless grab: same set, same settle point.
 export function trackPending<T>(p: Promise<T>, what: string): Promise<T> {
   return track(p, what);
@@ -1040,14 +1040,13 @@ export const MESH_ASSETS: Record<string, MeshAsset> = {
 // Raw maps
 // ---------------------------------------------------------------------------
 
-// A stored file that is neither a prop nor a slot of a PBR surface set: the
-// water renderer's animation flipbook and its baked foam mask (see
-// `render3d/water.ts`, which is their only consumer). They get a manifest of
-// their own rather than a slot in `TEXTURE_ASSETS` because that manifest is
-// also the `surfaceFor` namespace - an entry there is a surface a level can
-// name and a wall can wear, and a 10x6 flipbook atlas worn as brick would be
-// a nameable mistake. Same store, same fetch, same budget, same provenance
-// rules; only the namespace differs.
+// A stored file that is neither a prop nor a slot of a PBR surface set (the
+// painted channel's water flipbook and foam mask were, until 2026-10-05).
+// They get a manifest of their own rather than a slot in `TEXTURE_ASSETS`
+// because that manifest is also the `surfaceFor` namespace - an entry there
+// is a surface a level can name and a wall can wear, and a 10x6 flipbook atlas
+// worn as brick would be a nameable mistake. Same store, same fetch, same
+// budget, same provenance rules; only the namespace differs.
 export interface RawAsset {
   // Path under `public/` - `/water/...`, gitignored and populated by
   // `bun run assets:fetch` like every other stored file.
@@ -1071,33 +1070,11 @@ export interface RawAsset {
   license: string;
 }
 
-export const RAW_ASSETS: Record<string, RawAsset> = {
-  // 60 of the source's 120 frames (every second one), downscaled 1024 -> 256
-  // and packed into a 10x6 atlas by `magick montage` (see the note in
-  // water.ts); the original loops at 30 fps, so the shipped layers play at 15
-  // with a crossfade. Lossless, because normals are data (same argument as
-  // optimize-texture's scalar maps).
-  "water-normal-flip": {
-    file: "/water/water-normal-flip.webp",
-    sha256: "ca1c14cfa3cf1d2afb946668315630411a3a5ab2a55e48781f5594619bc5aef9",
-    bytes: 5068428,
-    source:
-      "https://textures.pixel-furnace.com (Animated Water Normal Map; via https://blenderartists.org/t/animated-water-normal-map-tileable-looped/673140)",
-    author: "Cebbi (Pixel-Furnace)",
-    license: "Pixel-Furnace free licence (CC0-like: commercial use allowed, credit appreciated but not required)",
-  },
-  // Generated in-repo by `scripts/bake-foam.ts` (deterministic - the same
-  // script is the same picture). Stored anyway so a fresh clone is dressed by
-  // the fetch alone; re-bake and re-publish together.
-  "water-foam": {
-    file: "/water/water-foam.webp",
-    sha256: "da1b8900131770f284ea3ab55977cd98ab65728709d7ca0133d1da37bb927f9f",
-    bytes: 94482,
-    source: "scripts/bake-foam.ts (generated in this repository)",
-    author: "Tristan Bray",
-    license: "CC0",
-  },
-};
+// Empty since 2026-10-05: its two entries were the painted channel's water
+// flipbook (Cebbi's "Animated Water Normal Map", Pixel-Furnace) and the foam
+// mask `scripts/bake-foam.ts` baked, and the river study's port draws its
+// ripples from a spectrum it generates (render3d/waterLook.ts).
+export const RAW_ASSETS: Record<string, RawAsset> = {};
 
 // A captured sky, as an equirectangular high-dynamic-range image: what a level
 // can be lit BY, in place of the sky `environment.ts` generates from its own

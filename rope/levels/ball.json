@@ -1577,7 +1577,7 @@
       "drag": 50,
       "spill": 150,
       "spillSpeed": 100,
-      "waterDepth": 150,
+      "waterDepth": 300,
       "objects": [
         {
           "type": "collision",

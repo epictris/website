@@ -176,6 +176,9 @@ export class BodyVisual {
   // A still water body's surface, which the scene's splashes watch the ball
   // cross (see stillWater.ts). Null for everything else.
   stillSurface: StillSurface | null = null;
+  // Water's registrations (its top, its fall; see water.ts `buildWater`),
+  // forgotten at dispose.
+  private releaseWater: (() => void) | null = null;
   // Lights this body's light objects hang on it. Children of the root, so they
   // ride the pose with no per-frame cost; handed back to the rig at dispose,
   // which is what frees the budget slot as well as the objects.
@@ -218,6 +221,7 @@ export class BodyVisual {
         this.owned.push(...water.geometries);
         this.ownedMaterials.push(...water.materials);
         this.stillSurface = water.still;
+        this.releaseWater = water.release;
       }
     } else if (data) {
       this.buildAuthored(data, solidZ, greybox && drawsGreybox(data));
@@ -389,6 +393,8 @@ export class BodyVisual {
     this.rings.length = 0;
     for (const m of this.ownedMaterials) m.dispose();
     this.ownedMaterials.length = 0;
+    this.releaseWater?.();
+    this.releaseWater = null;
     this.root.clear();
   }
 }

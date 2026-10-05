@@ -31,8 +31,7 @@ edit by hand - add the asset to its manifest and regenerate, which is what
 
 ## Raw maps
 
-- **water-foam** - "Tristan Bray", scripts/bake-foam.ts (generated in this repository), CC0
-- **water-normal-flip** - "Cebbi (Pixel-Furnace)", [source](https://textures.pixel-furnace.com), Pixel-Furnace free licence (CC0-like: commercial use allowed, credit appreciated but not required)
+_None yet._
 
 ## Everything else
 

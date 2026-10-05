@@ -65,75 +65,85 @@ broken.
 
 ## Drawing a body of water
 
-A `water` body is drawn in 3D by `render3d/water.ts` as a **digital painting** of water, tuned on 2026-09-17 against two reference pictures: a river of smooth saturated teal with soft tonal drift and thin wispy highlight hairlines running with the flow, and a fall of long soft vertical ribbons under a bright brow, sparkling, into a wide soft cloud of white.
-Soft everywhere: no outlines, no hard bands, no lace.
-A cel-shaded cut into flat bands with inked edges was the first reading of "painterly" and was not it; the flat-plane and half-ellipse-column falls before that were 2D images on bent planes, and every fall as a separate body had a seam at the lip (see **A fall**).
+Water is drawn in 3D after two of Tris's WebGL studies of 2026-10-05 that share one world: a **pool** (`flow: 0`, no `spill`) is "A quiet cave pool" (`render3d/stillWater.ts`, see **Still water**), and a **current**, with its fall when it has a `spill`, is "Flowing water v14" (`cave-river-waterfall-v14.html`, ported in `render3d/water.ts`).
+The river study's river and cascade were rewritten in the pool's own formulation, so the three read as the same water, and what they share lives in `render3d/waterLook.ts`: the clock (`waterTime`), the studies' palette, scale and depth stretch, the wave spectrum both read their ripples from (`waterSurfaceMap`, generated at load), and the impact field a fall draws on the water it lands in.
 The 2D overlay's flow-streak glyphs are what the 2D renderer shows, and what the 3D renderer shows for the shapes the water renderer does not draw (anything but a rect or a circle).
 
-The water stays **lit by the scene** - a `MeshStandardMaterial` with a little gloss and a touch of the environment, so the same lamps, fog and tone mapping fall on it as on the rock beside it - and its normal is left the plane's own, so the sheen is a soft wash rather than glints.
-That is what keeps a painted surface in a photo-textured scene from reading as a sticker: the colours are stylised, the light is not.
+**The palette** is the studies' three colours carried onto the authored one (`studyPalette`): the body's `color` stands for the studies' shallow `#178b96`, and the deep (`#13506b`) and the light (`#55bec7`) are moved from it in HSL by whatever separates them from the shallow in the study.
+Water with no authored colour is the study's own.
+`levels/ball.json`'s water is `#1e7382`, darker and less saturated than the study's shallow.
 
-A channel's colour is a smooth **tone field** mapped continuously through deep, body and light (`toneRamp`), a weighted sum of the things that move: the travelling vertex waves, the flipbook's churn (the along-flow component of its normal, which is which side of a ripple the pixel is on), and the strokes.
-The strokes are the baked cellular web (`scripts/bake-foam.ts`) sampled with its tile stretched seven times along the flow, so every cell edge is a long thin line running with the current; thresholded high, only the strongest survive, and a second finer sample breaks each along its length into a wisp with soft ends.
-Those wisps are the reference's hairline highlights, painted in the pale.
-The flipbook does not perturb the lighting normal; it drives the tone field and distorts the strokes, played at half speed so its shapes swell rather than flicker.
-The front sheet darkens smoothly into the deep below the waterline under a soft pale line at the seam, and a run pales softly toward its ends the way the reference river pales at its banks.
-The palette derives from the authored `color` alone, so a level tunes its water through the one colour field it tunes everything else with - and it derives as four LIGHTNESSES of that one colour, taken in HSL, hue kept and saturation carried nearly whole up the ramp.
-The stops are k-means clusters of a third reference picture's own water (2026-09-18, a turquoise gorge, masked to the water by hue): `#1b4657` in the deep, `#1e6c86` and `#3391aa` through the body, `#6ecad9` on the crests, `#a1dce7` going into the foam - one teal at six lightnesses, hue 186-197 throughout.
-Saturation is the thing that reference settles.
-It does not fall as the water lightens the way a blue pool's does (0.53 at the deepest cluster, 0.58 at the brightest), so the light stop keeps the tint's own saturation outright and only the near-white pale eases off; a ramp that desaturates upward turns a teal's crests grey.
-The ramp before it mixed the tint toward black and toward white in linear RGB, and both ends of that greyed.
-A whiten in linear space lifts a teal's weak red channel fastest, so the crests desaturated to paper; the deep went a third of the way to near-black.
-A teal channel drew as wet concrete with white scum on it, and swapping the authored colour did not help, because the ramp greyed whatever it was given.
-`body` is now the tint itself: a level authors the colour its water reads as, not a colour it is derived from.
-`levels/ball.json`'s channels are `#1e7382` since 2026-09-30: a cave-pool teal light enough to read as the luminous water of the reference painting under the level's top-down sun and the shaft that lands on it.
-They were `#0a4247` before, a deep, faintly green teal dark enough that the lamps and the crests were what read on it rather than the sheet itself; under the sun-off lighting of the time that was the right call, and under a sun it drew as navy.
-Water with no authored colour draws as `#2c8896`, much the same hue a good deal lighter.
+**The scale.** Both studies are drawn in study metres at `STUDY_SCALE` (0.5 game metres to the study's one) and stretched `DEPTH_STRETCH` (2.5) along the depth (world z), because the game sees its water far more edge-on than the studies' cameras did; the reasons and the measurements are under **Still water**.
+
+**Unlit, not tone mapped, not fogged**, as the pool is: the colours are the studies' display colours, and BALL's haze greyed the teal into a blue-grey sheet.
+Both write depth, so the depth of field blurs them like the rock around them.
+
+### A current
+
+A channel is the river study's **closed swept volume**: one tube carrying one material coordinate from the source over the lip into the water the fall lands in (`currentGeometry`).
+A station every `RIVER_STEP` (2.5 cm) down the run carries the cross-section, a rounded rectangle walked from the middle of the bed round the back, over the top, down the front and back, so its seam lies under the water; both ends are capped with their own vertices, so a cap shades flat.
+The study's section had whole semicircles for sides, which its banks hid; the game looks at a channel's front and keeps the painted channel's slab, a flat front under a flat top with its corners all but square (`SECTION_CORNER`, 5 mm).
+Corners rounded 6 cm, as first ported, lost an A/B to it (Tris, 2026-10-06).
+The water's front sits `FRONT_INSET` behind the slab's nominal front, because a bank authored to the same depth has its face exactly there and two coplanar faces z-fight; behind by a hair, the bank wins.
+
+Every vertex carries the study's coordinates (`aFlow`): metres travelled (study), the position across the top (study metres, stretched along the depth as the pool's pattern is), the **travel time** from the source, and how far down the fall it is (a fraction of the `spill`).
+The pattern is read at the parcel's **Lagrangian** position - across, and the run's speed times its travel time less the clock - so it rides the current at exactly the speed the ball drifts at.
+The study ran its pattern at 1.92 times its 1.3 m/s river, which is 1.25 m/s at the game's scale: BALL's 1.2 m/s flow, so the game's channels move on screen as the study's river did.
+`aUnroll` continues the across coordinate round the section's perimeter (unstretched past the top), so a pattern painted by it runs down the front face rather than smearing into vertical bars, which one coordinate shared by two faces does.
+
+**The relief** on the river is the painted channel's wave train, not the study's (`PAINTED_HARMONICS`, `riverWaves`): four harmonics of 5 cm riding the current, each churning at its own rate and wandering across the depth, crests sharpened by a 0.75 power, dying out over `PAINTED_END_TAPER` before either end of a run and waving only within `PAINTED_FRONT_FALLOFF` of the top down the front.
+The study's relief was ported first - travelling gravity waves of 8.5 study cm, a finer band-limited relief calmer at the banks and the brink, a pressure hump before the lip - and lost an A/B to the old waves (Tris, 2026-10-06): its crests were tighter and sharper along the waterline, and it swelled the top of the front.
+Its two longest waves still tilt the light bands (`swellSlope`), as shading only.
+The waves are displaced along N (perpendicular to the travel) and the normal is tilted by both slopes, taken by central differences; the finest wave is 0.36 m, so the stations' 2.5 cm resolve it with room to spare (see the Nyquist note below).
+Approaching a lip the current eases to the lip's speed over `DRAWDOWN_REACH` (the study's 1.9 m acceleration zone) and the surface lowers by `DRAWDOWN` of the half depth, the bed staying put: the taper into a fall that a level surface running to a hard edge never has.
+
+**The look** is the study's `paintedRiver`: three layers of the pool's spectrum read in parcel space, stretched along the flow and turned 90 and ~40 degrees against each other so the spectrum's diagonal never lines up, plus a fine chop churning in its own time (a current is not a mirror), and the long swell's slope.
+The same slopes drive soft light bands where the ripples face the light, a little shade where they face away, a crest on the steepest and a broad highlight; the colour drifts down the channel between the deep, the shallow and the light, a little greener here and there.
+A **pale wash** stands in for foam: translucent milky streaks drawn along the current, faint in mid-channel and opaque where the water meets the banks (whose reach wanders, so the inner edge is a torn line) and at the brink, with a thin nearly solid rim at the waterline.
+Down the front the wash gives out within `BANK_DOWN` and the rim within `RIM_DOWN`, since the study's banks hid its sides and a front painted as a bank read as white from the waterline to the bed, and the pigment fades toward the deep with the depth under the waterline.
+The top is opaque and the front murky glass (`ALPHA_FRONT_*`, the pool's numbers), so a submerged ball stays a silhouette; the tube is closed and its back faces culled, so what shows through is the ball and the rock behind, never the water's own far side.
+The study's river mirror (a second reflection pass in the river's plane, at 0.3) is not ported: from the game's camera a channel's top is a few pixels tall, so it would be a scene pass per frame for nothing visible.
 
 ### A fall
 
-A channel with a **`spill`** pours off its downstream end - the end `flow` points at - as a fall dropping `spill` metres to the pool it lands in, leaving the lip at `spillSpeed` (the current's own speed when absent), which sets how far the arc swings out.
+A channel with a **`spill`** pours off its downstream end - the end `flow` points at - leaving the lip at `spillSpeed` (the current's own speed when absent), which sets how far the arc swings out.
 Both live on the water BODY beside `flow` and `drag`, because where the current goes is a fact about the current; both are lengths and both convert.
 It is drawn only: the physics of a fall, if a level wants one, is a second water area turned to point down.
 
-**A channel and its fall are one mesh under one shader**, and that is what makes the join seamless.
-Every earlier fall was a separate body whose tube tried to meet the channel's end and never quite did - a step where the waves lifted the surface above a flat brow, an end cap standing exposed under a thin pour, a second translucent surface showing the first through it - so the fall became the channel's own water leaving its end, built into the same `BufferGeometry` (`appendFall`) with the same attributes.
-The tube's first slice IS the channel's end rectangle: the same positions, and the same lit, alpha and texture-frame attributes by face, so the top face and the front sheet run over the lip into the tube with no step and no cap.
-Three things make the seam exact rather than close.
-The waves die out over `WAVE_END_TAPER` before a run's ends, so the surface meets the tube's flat first slice; a brink goes glassy anyway.
-The texture frame of a tube vertex is taken from the lip point it descends from (`aFrozen`), plus the metres travelled past the lip (`aArc`), so the strokes are continuous at the lip and constant down the fall.
-And every fall-only term in the shader - the ribbon weights, the brow, the white base - is zero at the lip and eases in over `FALL_BLEND_IN`, while the channel's own terms (the front sheet's murk, the pale bank) carry over it.
+**A channel and its fall are one tube under one shader**, and that is what makes the join seamless: the fall's stations carry on from the river's with the same section, the same attributes and the same material coordinate, so nothing ends at the lip.
+Every earlier fall was a separate body whose tube tried to meet the channel's end and never quite did - a step where the waves lifted the surface above a flat brow, an end cap standing exposed under a thin pour, a second translucent surface showing the first through it.
 
-The pour is a **volume** whose cross-sections are **vertical slices**, not planes perpendicular to the travel: every layer of the slab leaving the lip follows the same parabola from its own height, so a slice at time t is the lip's rectangle carried along the arc unturned.
-That is the physics - the perpendicular thickness then thins by exactly `v0 / v` - and it is what keeps a thick slab from bulging under the lip, which a rigid ring turning with the tangent did.
-The rectangle rounds into a superellipse over `FALL_CORNER_BLEND`, the z-width contracts a little by the base, the samples are uniform in time (packed into the brow, spread down the drop), and the tube's inside is culled in the fragment shader.
-The surface **draws down** into the brink over `DRAWDOWN_REACH` before the lip, by `DRAWDOWN` of the depth: water approaching a drop speeds up and its surface dips, and that dip is the taper into the fall that a level surface running to a hard edge never has.
+The fall's sections are **vertical slices**, not planes perpendicular to the travel: every layer of the slab leaving the lip follows the same parabola from its own height, so a slice at time t is the lip's carried along the arc unturned.
+That is the physics - the sheet's perpendicular thickness then thins by exactly `v0 / v` - and it is what keeps a slab thicker than the brow's radius of curvature (v0²/g, 10 cm at BALL's 1 m/s) from folding under the lip, which the study's perpendicular sections would: its 2.2 m/s lip had the room, the game's do not.
+The study's sections, thinned by continuity, were tried on BALL beside these (2026-10-06): they did not fold outright, and left the lip thinner and cleaner, but tore a white ribbon off the upper fall's downstream edge where its brow is tightest; Tris kept the vertical slices.
+The stations are uniform in time (`FALL_STEPS`), packed into the brow and spread down the drop.
+Down the fall the study's folding takes over the relief, the sheet thickens and thins in ridges across it (`thicknessField`), and its edges wander a little (`EDGE_MOTION`).
 
-Its shading is the channel's on the volume: the strokes stretched along the flow are the fall's long soft **ribbons** through the same tone ramp, the strongest edges its hairlines, a bump of light over the brow, and the base dissolving into white above the cloud.
-The texture's along coordinate is **time from the lip at the lip's speed**, so a scrolling texture stretches exactly as the water accelerates.
-The water's front face sits `FRONT_INSET` behind the slab's nominal front, because a bank authored to the same depth has its face exactly there and two coplanar faces z-fight; behind by a hair, the bank wins, which is what a channel sunk into rock means.
+The cascade is the study's `cascadeLook`, blended in over the brow by the drop: the same spectrum drawn out into long ribbons as the water accelerates, labelled by **time from the lip at the lip's speed** (so a scrolling texture stretches exactly as the water does), bands taken against the sheet's own smooth normal, reflections in pale palette tones only (a fold whose normal dipped reflected near-black and read as a dark column), and the river's own wash carried over the brink, filling in, brightening toward white and cut by finer lanes down the sheet, its edges milky like the banks.
+It is opaque: refracting the shelf behind drew horizontal bluish bands in the study.
 
-Spray is one point cloud (`sprayPoints`) whose every particle is a pure function of the clock and its own seed: no CPU update, and a pinned clock draws the same spray twice.
-Three populations share it by `aKind`: **mist**, soft airbrushed puffs of white born low and wide around the impact and drifting up and out - the reference's cloud; **splash**, small droplets thrown up from the impact and falling back under gravity; and **sparkle**, tiny white dots riding the sheet's front face down the arc, placed on the tube by solving its superellipse for z in the vertex shader.
-Point sprites are sized in pixels, so `updateWater` takes the viewport's height beside the clock to keep a droplet authored in metres the same size when the window changes.
-A channel has end caps where nothing pours off it, because an open box was the first thing an orbit view showed.
+**Where it lands.** The fall pours `spill` metres as authored, but the water it lands in is wherever the level put it: `updateWater` finds, every frame, where the sheet's top first meets the top of another water body under it, puts the landing at the middle of the span the sheet crosses that surface over (its bottom a slice depth before its top), and stops drawing the sheet `FALL_SINK` under it; with no water under it the landing is at the authored drop.
+On BALL both falls land shorter than authored - the upper channel's 2 m spill meets the lower channel 1.4 m down, the lower's 1.5 m meets the pool 0.9 m down.
 
-`levels/ball.json`'s upper channel spills 2 m at 1 m/s onto the lower one.
+**The landing** is the study's, at `STUDY_SCALE` and in its timing: a **crown**, one frothing heightfield over a capsule footprint the width of the sheet, kept on the water it lands in; ninety-two short-lived **plumes**, broad lobes in the middle and fading wisps outside; twenty-six airborne **splash ribbons** whose tips follow gravity; and a hundred and sixty streaks of **spray** (the study faded each against the scene's depth, which this pass has no texture of; the depth test does the occluding).
+Every particle is a pure function of the clock and its instance, so a pinned clock draws the same landing twice; all four are always in the scene and placed in their vertex shaders, so the prewarm compiles them.
+The water it lands in draws the **impact field** (`IMPACT_GLSL`, up to `IMPACT_SLOTS` landings in a module-wide table, each read only within `IMPACT_PLANE` of its height and only on a top face): a broad irregular whitewater footprint, boiling, with broken arcs of ripple running out from it, tilting the surface's own slopes - the pool's light bands and its mirror, or a channel's.
+
+`levels/ball.json`'s upper channel spills onto the lower one, and the lower into the pool.
 
 ### Still water
 
 A water body with `flow: 0` and no `spill` is a **pool**, and `render3d/stillWater.ts` draws it after Tris's cave-pool study rather than as a current (2026-10-05).
-It wears the same geometry as a channel (`waterGeometry`) and takes its shallow colour from the same palette (`paletteOf`), under its own material.
+Its geometry is a slab (`poolGeometry`: the top face, the front sheet and two end caps, never displaced, so only as fine as its light gradient needs) and its colours the shared palette (`studyPalette`).
 
 The study is `cave-pool-water-v2.html` ("A quiet cave pool", a self-contained WebGL page) with Tris's exported settings, and the port is shader for shader.
-The surface is **continuous rippling normals**, never a cellular pattern: three layers of a band-limited wave spectrum (a 256 px tiling texture of twelve plane waves, generated at load by `stillSurfaceMap`, R/G the slopes and B the height) drifting against each other, plus three long sine waves as slopes.
+The surface is **continuous rippling normals**, never a cellular pattern: three layers of a band-limited wave spectrum (a 256 px tiling texture of twelve plane waves, generated at load by `waterSurfaceMap` in `waterLook.ts`, R/G the slopes and B the height) drifting against each other, plus three long sine waves as slopes.
 The same slopes drive everything on the water: broad soft turquoise **light bands** where the ripples face the light, a little shade where they face away, a brighter crest on the steepest, a broad highlight from a fixed cave-opening direction, and the **mirror**, pushed about by them so a reflected rock edge bends and breaks as the ripples pass.
 The colour runs from deep blue at the back of the slab to shallow teal at its front.
 The mirror is strong for what stands within `REFLECT_NEAR` metres of the water and faint past `REFLECT_FAR` (the study reflected its rocks and left its far cave wall out), which is what keeps the water teal rather than a dark mirror of the cave; the distance is the mirrored point recovered from the reflection's depth.
 A Fresnel term strengthens it toward grazing.
 
-The palette is the study's three colours, carried onto the authored one: the authored colour stands for the study's shallow `#178b96`, and the deep (`#13506b`) and the light (`#55bec7`) are moved from it in HSL by whatever separates them from the shallow in the study.
-BALL's pool is authored `#1e7382`, darker and less saturated than the study's shallow; authoring `#178b96` gives the study's own colours.
+The palette is the shared one (see **Drawing a body of water**); authoring `#178b96` gives the study's own colours.
 
 What had to change from the study, each measured on BALL:
 - **Scale.** The study's lake is 75 m seen from 35 m, and BALL's pool is 6.4 m across at ~0.18 of the study's framing, but at 0.18 the ripples were hairlines: the game sees its pool far more edge-on (12 m of depth is ~200 px of a 1080 px frame). `STUDY_SCALE` is 0.5, and the pattern is stretched `DEPTH_STRETCH` (2.5) times along the depth so its ripples read as the study's broad bands rather than streaks.
@@ -199,6 +209,13 @@ The pale line rings that drew the wake before, a mesh of their own, are gone.
 All of the splash is three draw calls, always in the scene so the prewarm compiles them: up to `SLOTS` splashes live in uniform tables, every particle is a pure function of the clock and its slot's start time, and an idle slot collapses outside the clip volume in the vertex shader.
 A pinned clock (`cli shot`) draws the same splash twice.
 Unplayed; no cases until it has been.
+
+### The painted channel the river study replaced
+
+From 2026-09-17 to 2026-10-05 a current was a **soft digital painting**, lit by the scene (a `MeshStandardMaterial`), tuned against Tris's reference pictures: a tone field mapped through a four-stop HSL ramp of the authored colour (`paletteOf`), driven by travelling vertex waves, a crossfaded 60-layer flipbook of real water normals (Cebbi's "Animated Water Normal Map") and hairline strokes from a baked cellular foam mask (`scripts/bake-foam.ts`) stretched along the flow; the fall was the same strokes as ribbons under a bright brow, with mist, splash and sparkle points.
+Both maps left the store with it.
+Rejected along the way: hard colour bands with inked edges (the first reading of "painterly"), a flat sheet and a half-ellipse column for the fall, every fall as a separate body (the seam at the lip), and a ramp that mixed toward black and white in linear RGB (a teal drew as wet concrete with white scum: a linear whiten lifts a teal's weak red channel fastest).
+What it established and the port keeps: a channel and its fall as one mesh under one shader, the fall's vertical slices, the drawdown into the brink, `FRONT_INSET`, and the front sheet as murky glass for the ball's sake.
 
 ### The photographic renderer this replaced
 

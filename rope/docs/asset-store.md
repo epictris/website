@@ -1,6 +1,6 @@
 # The asset store
 
-Five kinds of binary: props (`.glb` under `public/meshes/`), authored texture maps (`.webp` under `public/textures/`), the water renderer's raw maps (`public/water/`), captured skies (`.hdr` under `public/hdri/`) and the levels' Blender scenes (`public/scenes/`, see [below](#blender-scenes-in-the-store)).
+Five kinds of binary: props (`.glb` under `public/meshes/`), authored texture maps (`.webp` under `public/textures/`), raw maps (`RAW_ASSETS`, none since the water's flipbook and foam mask were retired on 2026-10-05; `public/water/`), captured skies (`.hdr` under `public/hdri/`) and the levels' Blender scenes (`public/scenes/`, see [below](#blender-scenes-in-the-store)).
 Since 2026-09-29 a level's props and surfaces live in its Blender scene (see [blender-scenes](blender-scenes.md)), so the prop and texture manifests hold only what the GAME draws itself: the ball (`iron-ball`), its iron (`painted steel`), and whatever surface a conveyor band names.
 Every set and prop the levels used to name was pruned then (the release still holds their files, which older commits pin); the pipeline below is still how one is added.
 Every one of those directories is **gitignored**: the bytes live in a permanent GitHub Release (tag `assets`) on this repo and are fetched at build time (`bun run assets:fetch`, run by the Dockerfile before `bun run build`).

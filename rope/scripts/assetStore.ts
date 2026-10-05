@@ -82,8 +82,8 @@ export function storedAssets(): StoredAsset[] {
     seen.key = `${seen.key}, ${key}`;
   }
   out.push(...meshFiles.values());
-  // The water renderer's raw maps (flipbook, foam) - one file per entry, like a
-  // prop; see `RawAsset` for why they are not texture-set slots.
+  // Raw maps - one file per entry, like a prop; see `RawAsset` for why they
+  // are not texture-set slots.
   for (const [key, asset] of Object.entries(RAW_ASSETS)) {
     out.push({ key, file: asset.file, sha256: asset.sha256, bytes: asset.bytes });
   }

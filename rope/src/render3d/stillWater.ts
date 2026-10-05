@@ -8,8 +8,9 @@
 // at the back of the pool to shallow teal at the front. (A caustic net after
 // his Blender reference files came first, then a calm-lake painting of
 // wavelet dashes; both were replaced, and the net's star glints were rejected
-// outright.) The channel's soft digital painting (water.ts) is a current's
-// look; this is a pool's.
+// outright.) A current (water.ts) is the companion river study, written in
+// this same formulation; where a fall lands in a pool, the pool draws its
+// impact field (waterLook.ts).
 //
 // THE WAKE is rings the ball sheds moving through the water, after Tris's
 // stylised ripple reference: each born small at the ball and spreading, its
@@ -29,11 +30,20 @@
 import * as THREE from "three";
 import { WaterArea } from "../engine/body";
 import { Vec2 } from "../engine/vec2";
-import { LIGHT_FALLOFF, paletteOf, waterTime } from "./water";
 import { reflectionUniforms } from "./planarReflection";
 import { POINT_VIEW_HALF_HEIGHT, threeY } from "./space";
-
-const fmt = (n: number): string => n.toFixed(4);
+import {
+  DEPTH_STRETCH,
+  fmt,
+  hash2,
+  IMPACT_GLSL,
+  impactUniforms,
+  LIGHT_FALLOFF,
+  STUDY_SCALE,
+  studyPalette,
+  waterSurfaceMap,
+  waterTime,
+} from "./waterLook";
 
 // ---------------------------------------------------------------------------
 // Shared GLSL: hashing and value noise, for the splash
@@ -98,21 +108,11 @@ const NOISE_GLSL = `
 // a caustic net after Tris's Blender files, whose star glints were rejected
 // ("they look bad").
 
-// Game metres per study metre. The study's world is a 75 m lake seen from
-// 35 m and the BALL pool is 6.4 m across, framed ~0.18 as large - but at 0.18
-// the ripples were hairlines, because the game sees its pool far more edge-on
-// (see DEPTH_STRETCH); 0.5 gives bands the size of the study's on screen. Its
-// speeds are in the pattern's own units, so they scale with it.
-const STUDY_SCALE = 0.5;
 // Tris's settings (cave-pool-v2-settings.json): the pattern's size (study
-// metres), "painterly light", "ripple strength", the clock's rate, the
+// metres, at STUDY_SCALE; stretched DEPTH_STRETCH along the depth, see
+// waterLook.ts), "painterly light", "ripple strength", the clock's rate, the
 // reflection's strength and how far the ripples push it about.
 const PATCH_SIZE = 0.82 * STUDY_SCALE;
-// The game looks at its pools far more edge-on than the study's camera did
-// (the BALL pool's 12 m of depth is ~200 px of a 1080 px frame), so a pattern
-// round in plan is crushed into hairlines on screen. Stretched this much
-// along the depth, its ripples read as the study's broad bands.
-const DEPTH_STRETCH = 2.5;
 const CONTRAST = 0.6;
 const RIPPLE_STRENGTH = 1.01;
 const SPEED = 1;
@@ -123,13 +123,6 @@ const DISTORTION = 0.51;
 // by them, by 4 mm at this scale, which no pixel shows and the slab's 1.2 m
 // rows could not carry anyway.
 const WAVE_HEIGHT = 0.022;
-// The palette: Tris's three colours. The pool's authored colour stands in for
-// the shallow one, and the deep and the light are moved from it in HSL by
-// whatever separates them from the shallow in the study, so an authored pool
-// keeps its own colour and BALL's (#1e7382) lands near the study.
-const STUDY_SHALLOW = "#178b96";
-const STUDY_DEEP = "#13506b";
-const STUDY_LIGHT = "#55bec7";
 // How the mirror's strength follows what it mirrors: full for what stands
 // within NEAR metres of the water, the study's faint reflection of its open
 // background past FAR (study: rocks reflected, the far cave wall left out).
@@ -149,106 +142,106 @@ const RIM_WIDTH = 0.008;
 const RIM_SOFT = 0.016;
 const WATERLINE_W = 0.5;
 
-// `c` moved in HSL (in sRGB, as paletteOf does in water.ts) by what separates
-// `to` from `from`: hue turned by the difference, saturation and lightness
-// scaled by the ratio.
-function relative(c: THREE.Color, from: string, to: string): THREE.Color {
-  const hsl = { h: 0, s: 0, l: 0 };
-  const a = { h: 0, s: 0, l: 0 };
-  const b = { h: 0, s: 0, l: 0 };
-  c.getHSL(hsl, THREE.SRGBColorSpace);
-  new THREE.Color(from).getHSL(a, THREE.SRGBColorSpace);
-  new THREE.Color(to).getHSL(b, THREE.SRGBColorSpace);
-  return new THREE.Color().setHSL(
-    (hsl.h + b.h - a.h + 1) % 1,
-    Math.min(1, (hsl.s * b.s) / a.s),
-    Math.min(1, (hsl.l * b.l) / a.l),
-    THREE.SRGBColorSpace,
-  );
-}
+// The slab's opacity: the top is opaque (see the material), the front sheet
+// murky glass so a submerged ball stays a visible silhouette (an opaque front
+// is better water and worse gameplay).
+const ALPHA_FRONT_TOP = 0.94;
+const ALPHA_FRONT_BED = 0.8;
+// The front sheet, and everything that meets it, sits this far behind the
+// slab's nominal front. A bank authored to the same depth as the water has
+// its face exactly there too, and two coplanar faces z-fight: the water won
+// on some builds and the bank on others. Behind by a hair, the bank wins,
+// which is what a pool sunk into rock means.
+export const FRONT_INSET = 0.002;
+// Rows down the front sheet and its end caps: the light and the opacity are
+// interpolated down them.
+const FRONT_ROWS = 6;
 
-// The wave spectrum the ripples are read from, generated here rather than
-// stored (the study's `createSurfaceTextureData`, number for number): a sum of
-// twelve plane waves on whole-number wave vectors, so it tiles. R and G are the
-// two slopes, B the height, A a soft value noise; data, not colour.
-function hash2(x: number, y: number, seed = 0): number {
-  let h = Math.imul(x ^ seed, 374761393) ^ Math.imul(y + seed, 668265263);
-  h = Math.imul(h ^ (h >>> 13), 1274126177);
-  return ((h ^ (h >>> 16)) >>> 0) / 4294967295;
-}
+// ---------------------------------------------------------------------------
+// The slab
+// ---------------------------------------------------------------------------
 
-function tileNoise(u: number, v: number, n: number, seed: number): number {
-  const mod = (x: number): number => ((x % n) + n) % n;
-  const x = u * n;
-  const y = v * n;
-  const ix = Math.floor(x);
-  const iy = Math.floor(y);
-  let fx = x - ix;
-  let fy = y - iy;
-  fx = fx * fx * (3 - 2 * fx);
-  fy = fy * fy * (3 - 2 * fy);
-  const a = hash2(mod(ix), mod(iy), seed);
-  const b = hash2(mod(ix + 1), mod(iy), seed);
-  const c = hash2(mod(ix), mod(iy + 1), seed);
-  const d = hash2(mod(ix + 1), mod(iy + 1), seed);
-  return (a + (b - a) * fx) * (1 - fy) + (c + (d - c) * fx) * fy;
-}
-
-const SURFACE_MAP_SIZE = 256;
-const SURFACE_MODES: readonly (readonly [number, number, number])[] = [
-  [2, 5, 0.2], [-3, 7, 0.16], [1, 9, 0.13], [4, 3, 0.12], [-2, 13, 0.095],
-  [5, 11, 0.075], [-4, 17, 0.055], [8, 6, 0.05], [1, 21, 0.035],
-  [7, 19, 0.03], [-9, 11, 0.03], [11, 23, 0.018],
-];
-
-let surfaceMap: THREE.DataTexture | null = null;
-
-function stillSurfaceMap(): THREE.DataTexture {
-  if (surfaceMap) return surfaceMap;
-  const size = SURFACE_MAP_SIZE;
-  const data = new Uint8Array(size * size * 4);
-  const terms = SURFACE_MODES.map(([x, y, w], i) => ({
-    x,
-    y,
-    w,
-    phi: hash2(i, 17, 819) * Math.PI * 2,
-    dx: x / Math.hypot(x, y),
-    dy: y / Math.hypot(x, y),
-  }));
-  const total = SURFACE_MODES.reduce((s, m) => s + m[2], 0);
-  const byte = (v: number): number => Math.round(255 * Math.max(0, Math.min(1, v)));
-  for (let y = 0; y < size; y++) {
-    for (let x = 0; x < size; x++) {
-      const u = x / size;
-      const v = y / size;
-      let dx = 0;
-      let dy = 0;
-      let h = 0;
-      for (const m of terms) {
-        const phase = Math.PI * 2 * (m.x * u + m.y * v) + m.phi;
-        const c = Math.cos(phase) * m.w;
-        dx += c * m.dx;
-        dy += c * m.dy;
-        h += Math.sin(phase) * m.w;
+// A pool's geometry, in the body's local frame (three's y-up, +z toward the
+// camera): the top face at the waterline from the back of the slab to its
+// front, the front sheet hanging from its front edge to the bed, and a cap at
+// each end. The surface is never displaced (its ripples are normals), so the
+// faces are flat grids only as fine as their light gradient needs.
+// Attributes beyond position and normal:
+//   aLit   - how far the light gets: 1 at the waterline, 0 LIGHT_FALLOFF
+//            below it; read back as the depth under the waterline
+//   aAlpha - opacity
+//   aUp    - 1 on the top face, 0 on the front sheet and the caps
+export function poolGeometry(halfX: number, halfY: number, frontZ: number, backZ: number): THREE.BufferGeometry {
+  const pos: number[] = [];
+  const nor: number[] = [];
+  const lit: number[] = [];
+  const alpha: number[] = [];
+  const up: number[] = [];
+  const index: number[] = [];
+  frontZ -= FRONT_INSET;
+  const depth = halfY * 2;
+  const frontLit = (t: number): number => Math.max(0, 1 - (t * depth) / LIGHT_FALLOFF);
+  const frontAlpha = (t: number): number => ALPHA_FRONT_TOP + (ALPHA_FRONT_BED - ALPHA_FRONT_TOP) * t;
+  // A grid of (rows + 1) x (cols + 1) vertices from `at(r, c)`, wound so its
+  // face points along `n`.
+  const grid = (
+    rows: number,
+    cols: number,
+    at: (t: number, u: number) => [number, number, number],
+    n: [number, number, number],
+    face: (t: number) => [number, number, number],
+  ): void => {
+    const base = pos.length / 3;
+    for (let r = 0; r <= rows; r++) {
+      for (let c = 0; c <= cols; c++) {
+        pos.push(...at(r / rows, c / cols));
+        nor.push(...n);
+        const [l, a, u] = face(r / rows);
+        lit.push(l);
+        alpha.push(a);
+        up.push(u);
       }
-      const i = (y * size + x) * 4;
-      data[i] = byte(0.5 + (dx / total) * 0.9);
-      data[i + 1] = byte(0.5 + (dy / total) * 0.9);
-      data[i + 2] = byte(0.5 + (h / total) * 0.75);
-      data[i + 3] = byte(tileNoise(u, v, 8, 109) * 0.6 + tileNoise(u, v, 16, 41) * 0.4);
     }
+    const stride = cols + 1;
+    const p = (i: number): THREE.Vector3 => new THREE.Vector3(pos[3 * i], pos[3 * i + 1], pos[3 * i + 2]);
+    const flip = p(base + stride).sub(p(base)).cross(p(base + 1).sub(p(base))).dot(new THREE.Vector3(...n)) < 0;
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const a = base + r * stride + c;
+        const d = a + stride;
+        if (flip) index.push(a, a + 1, d, a + 1, d + 1, d);
+        else index.push(a, d, a + 1, a + 1, d, d + 1);
+      }
+    }
+  };
+  const cols = Math.max(2, Math.ceil(halfX * 2));
+  const x = (u: number): number => -halfX + u * halfX * 2;
+  // The top: the back of the slab (t 0) to its front.
+  grid(1, cols, (t, u) => [x(u), halfY, backZ + (frontZ - backZ) * t], [0, 1, 0], () => [1, 1, 1]);
+  // The front sheet, waterline (t 0) to bed; its top row is the top face's
+  // front row.
+  grid(FRONT_ROWS, cols, (t, u) => [x(u), halfY - depth * t, frontZ], [0, 0, 1], (t) => [frontLit(t), frontAlpha(t), 0]);
+  // The caps, so the slab is not an open box from any view but the game's.
+  for (const sign of [-1, 1]) {
+    grid(FRONT_ROWS, 4, (t, u) => [sign * halfX, halfY - depth * t, backZ + (frontZ - backZ) * u], [sign, 0, 0], (t) => [
+      frontLit(t),
+      frontAlpha(t),
+      0,
+    ]);
   }
-  const map = new THREE.DataTexture(data, size, size, THREE.RGBAFormat);
-  map.wrapS = THREE.RepeatWrapping;
-  map.wrapT = THREE.RepeatWrapping;
-  map.magFilter = THREE.LinearFilter;
-  map.minFilter = THREE.LinearMipmapLinearFilter;
-  map.generateMipmaps = true;
-  map.colorSpace = THREE.NoColorSpace;
-  map.needsUpdate = true;
-  surfaceMap = map;
-  return map;
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+  geometry.setAttribute("normal", new THREE.Float32BufferAttribute(nor, 3));
+  geometry.setAttribute("aLit", new THREE.Float32BufferAttribute(lit, 1));
+  geometry.setAttribute("aAlpha", new THREE.Float32BufferAttribute(alpha, 1));
+  geometry.setAttribute("aUp", new THREE.Float32BufferAttribute(up, 1));
+  geometry.setIndex(index);
+  return geometry;
 }
+
+// ---------------------------------------------------------------------------
+// The material
+// ---------------------------------------------------------------------------
 
 // A pool's material and the switch for its mirror: on only for the pool the
 // scene drew the reflection for this frame (see `Scene3D.mirrorPool`), so a
@@ -368,9 +361,7 @@ export function stillWaterMaterial(
   frontZ: number,
   plane: { reflect: { value: number }; footprint: { value: THREE.Vector4 } } | null = null,
 ): StillWaterMaterial {
-  const shallow = paletteOf(color).body;
-  const deep = relative(shallow, STUDY_SHALLOW, STUDY_DEEP);
-  const light = relative(shallow, STUDY_SHALLOW, STUDY_LIGHT);
+  const { deep, shallow, light } = studyPalette(color);
   const reflect = plane ? plane.reflect : { value: 0 };
   const openBehind = { value: CAPS_CLOSED };
   const footprint = plane ? plane.footprint : { value: new THREE.Vector4() };
@@ -404,7 +395,8 @@ export function stillWaterMaterial(
   mat.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, reflectionUniforms);
     shader.uniforms.uTime = waterTime;
-    shader.uniforms.uSurfaceMap = { value: stillSurfaceMap() };
+    shader.uniforms.uSurfaceMap = { value: waterSurfaceMap() };
+    Object.assign(shader.uniforms, impactUniforms);
     shader.uniforms.uReflect = reflect;
     shader.uniforms.uOpenBehind = openBehind;
     shader.uniforms.uFootprint = footprint;
@@ -473,6 +465,7 @@ export function stillWaterMaterial(
       varying float vCap;
       varying vec3 vWorld;
       varying vec4 vReflection;
+      ${IMPACT_GLSL}
       // The reflection is stored as the canvas is, sRGB encoded.
       vec3 swDecode(vec3 c) {
         return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(0.04045, c));
@@ -518,6 +511,9 @@ export function stillWaterMaterial(
         + vec2(-0.86, 1.58) * 0.55 * cos(dot(swP, vec2(-0.86, 1.58)) + swT * 1.17)
         + vec2(1.65, 0.93) * 0.28 * cos(dot(swP, vec2(1.65, 0.93)) - swT * 1.36));
       swSlope *= ${fmt(RIPPLE_STRENGTH)};
+      // Where a fall lands in the pool, the boil and the rings it sends out
+      // (waterLook.ts); the top face only, never the front sheet beside it.
+      swSlope += impactSlope(vWorld) * vUp;
 
       // THE WAKE: each ring's crests, a narrow wave and a white stroke each
       // (see the header). In metres, stretched along the depth.
@@ -614,6 +610,7 @@ export function stillWaterMaterial(
       float swShade = smoothstep(0.015, 0.14, -swFacing);
       swCol *= 1.0 - swShade * 0.22;
       swCol = mix(swCol, uLight, swBroad * ${fmt(CONTRAST)} * (0.12 + swFore * 0.36));
+      vec3 swBase = swCol;
 
       // The mirror, pushed about by the same slopes, three taps along the
       // ripples. Strong for what stands near the water, faint for the far
@@ -636,6 +633,9 @@ export function stillWaterMaterial(
       swCol += uLight * swCrest * ${fmt(CONTRAST * 0.16)};
       swCol += uLight * swWake;
       swCol = mix(swCol, mix(uLight, vec3(1.0), ${fmt(STROKE_COLOR)}), swStroke * ${fmt(STROKE_OPACITY)});
+      // A fall's whitewater footprint and broken rings, over the mirror.
+      float swSpan = impactSpan(vWorld);
+      if (vUp > 0.5) swCol = impactPaint(vWorld, swCol, swBase, uLight, swSpan);
 
       // THE FRONT SHEET, a cross-section looking into the water: between the
       // shallow and the deep colour under the waterline, darkening toward the

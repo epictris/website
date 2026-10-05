@@ -106,7 +106,7 @@ That happens to be what the negation produces, which is a coincidence worth stat
 Since 2026-09-29 the level format has no geometry objects: a collision object is what a body is made of, and what it looks like is whatever object in the level's scene carries the body's `name`.
 `BodyVisual` (`render3d/bodyVisuals.ts`) is the ONE class for every body, and what it builds is only what a mesh cannot be:
 
-- **Water** (`render3d/water.ts`), whose surface the current runs across; its slab is the body's `waterZ`/`waterDepth` and its tint the body's `color`.
+- **Water** (`render3d/water.ts` for a current and its fall, `stillWater.ts` for a pool, both after Tris's studies and sharing `waterLook.ts`; see [water](water.md)), whose surface the current runs across; its slab is the body's `waterZ`/`waterDepth` and its tint the body's `color`.
 - **A conveyor's band** (see [Conveyor belts](#conveyor-belts)), built from the belt collision object itself.
 - **The body's lights** (see [lighting-and-surfaces](lighting-and-surfaces.md)).
 - In a level that names **no scene**, a **grey box**: every collision piece of a body that is not an area, extruded through its `thickness` (default `DEFAULT_THICKNESS`) and filled with the body's `color` as a flat surface (`texture: "color"`).

@@ -29,7 +29,6 @@ import {
   HDRI_ASSETS,
   IRON_SURFACE,
   MESH_ASSETS,
-  RAW_ASSETS,
   surfaceName,
   TEXTURE_ASSETS,
   textureMaps,
@@ -96,20 +95,14 @@ export function levelStoredFiles(raw: RawLevelData, controller?: string): Stored
   // The Blender scene is what a level looks like, and one file.
   if (data.scene) add(sceneStoredFile(data.scene));
 
-  let water = false;
+  // Water draws from nothing stored (its ripples are generated, see
+  // render3d/waterLook.ts).
   for (const body of data.bodies) {
-    if (body.kind === "water") water = true;
     // A conveyor's band wears its own surface, drawn by the game (see
     // `BodyVisual.mountBelt`).
     for (const object of body.objects) {
       if (object.type === "collision" && object.shape.kind === "belt") addSurface(object.shape.texture);
     }
-  }
-  // The flipbook and the foam mask are loaded when the first water material is
-  // built, which is when a water body is drawn (see render3d/water.ts).
-  if (water) {
-    add(RAW_ASSETS["water-normal-flip"]);
-    add(RAW_ASSETS["water-foam"]);
   }
   return out;
 }
