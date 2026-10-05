@@ -26,14 +26,30 @@ import { tmpdir } from "node:os";
 import { basename, join, relative, resolve } from "node:path";
 import { PX } from "../src/engine/units";
 import { Vec2 } from "../src/engine/vec2";
-import { worldPlacement } from "../src/level/buildBodies";
+import { objectDepth, worldPlacement } from "../src/level/buildBodies";
 import {
   isCollisionObject,
+  isLightObject,
   scaleLevelData,
   type LevelBodyData,
   type RawLevelData,
 } from "../src/level/levelFormat";
 import { outlineOfData } from "../src/render/shapePath";
+import { DOF_MAX_BLUR, FOCUS_BAND } from "../src/render3d/depthOfField";
+import { EQUIRECT_SIZE, equirectPixels, fogOf, lightingOf, TONE_MAPPING_EXPOSURE } from "../src/render3d/environment";
+import { wakeParams } from "../src/render3d/glow";
+import { swarmParams } from "../src/render3d/fireflies";
+import {
+  DEFAULT_LIGHT_COLOR,
+  DEFAULT_LIGHT_INTENSITY,
+  DEFAULT_LIGHT_RANGE,
+  DEFAULT_LIGHT_Z,
+  DEFAULT_SPOT_ANGLE,
+  DEFAULT_SPOT_PENUMBRA,
+  LIGHT_BUDGET,
+  LIGHT_SHADOW_BUDGET,
+} from "../src/render3d/lights";
+import * as THREE from "three";
 import { isSceneName } from "../src/render3d/scenes";
 import { LEVELS } from "../src/level/registry";
 import { trackAlongPaths, trackFromRecording, WALK_SPEED, type CameraTrack } from "../src/sim/cameraTrack";
@@ -140,7 +156,60 @@ const camera = cameraTrack();
 const cameraJob = {
   ...camera,
   frames: camera.frames.map((f) => ({ eye: f.eye.map(round), halfHeight: round(f.halfHeight) })),
+  // What the game draws over the view, for the Formations panel's game look:
+  // the level's fog and the Medium depth of field (src/render3d/depthOfField.ts).
+  look: { fog: fogOf(level.environment), dofMaxBlur: DOF_MAX_BLUR.medium, dofFocusBand: FOCUS_BAND },
 };
+
+// The game's light at rest, for the Formations panel's Lighting: what
+// `Environment` builds from the level's block (sun, hemisphere fill, the
+// generated sky it reflects, background, tone mapping) and the always-on light
+// objects `LightRig` builds, in its order and under its budgets. Waking lights
+// start dark and fireflies move, so neither is here. Three's frame, linear
+// colours, metres.
+function lightingJob() {
+  const l = lightingOf(level.environment);
+  const lin = (c: THREE.Color): number[] => [c.r, c.g, c.b].map((v) => Math.round(v * 1e6) / 1e6);
+  const vec = (v: THREE.Vector3): number[] => [v.x, v.y, v.z].map(round);
+  const lights: object[] = [];
+  let shadows = LIGHT_SHADOW_BUDGET;
+  for (const b of level.bodies) {
+    for (const o of b.objects) {
+      if (!isLightObject(o) || wakeParams(o) || swarmParams(o) || lights.length >= LIGHT_BUDGET) continue;
+      const w = worldPlacement(b, o);
+      // The holder turns by -rot about +z (three's frame), and a spot's
+      // direction is local to it.
+      const rot = -w.rot;
+      const dx = o.dirX ?? 0;
+      const dy = -(o.dirY ?? 1);
+      const castShadow = o.castShadow === true && shadows > 0;
+      if (castShadow) shadows--;
+      lights.push({
+        kind: o.kind === "spot" ? "spot" : "point",
+        position: [round(w.pos.x), round(-w.pos.y), round(objectDepth(o.z, DEFAULT_LIGHT_Z))],
+        direction: [dx * Math.cos(rot) - dy * Math.sin(rot), dx * Math.sin(rot) + dy * Math.cos(rot), o.dirZ ?? 0],
+        color: lin(new THREE.Color(o.color ?? DEFAULT_LIGHT_COLOR)),
+        intensity: o.intensity ?? DEFAULT_LIGHT_INTENSITY,
+        range: round(o.range ?? DEFAULT_LIGHT_RANGE),
+        angle: o.angle ?? DEFAULT_SPOT_ANGLE,
+        penumbra: o.penumbra ?? DEFAULT_SPOT_PENUMBRA,
+        castShadow,
+      });
+    }
+  }
+  return {
+    sun: l.sun && { color: lin(l.sun.color), intensity: l.sun.intensity, dir: vec(l.sun.dir) },
+    fill: { sky: lin(l.fill.sky), ground: lin(l.fill.ground), intensity: l.fill.intensity },
+    // RGBA floats, row 0 straight down, as three reads them (`equirectDirection`).
+    sky: { ...EQUIRECT_SIZE, pixels: Array.from(equirectPixels(l.sky), (v) => Math.round(v * 1e6) / 1e6) },
+    envIntensity: l.envIntensity,
+    // The CSS hex three clears to: shown as these sRGB bytes, never tone mapped.
+    background: l.background,
+    hdri: l.hdri,
+    toneMappingExposure: TONE_MAPPING_EXPOSURE,
+    lights,
+  };
+}
 
 const job = {
   level: levelName,
@@ -149,6 +218,7 @@ const job = {
   spawn: { x: round(level.player.x), y: round(-level.player.y), r: round(level.player.radius) },
   bodies,
   camera: cameraJob,
+  lighting: lightingJob(),
 };
 
 const blender = flag("blender") ?? process.env["BLENDER_PATH"] ?? process.env["BLENDER"] ?? "blender";

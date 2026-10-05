@@ -11,6 +11,12 @@
 // outright.) The channel's soft digital painting (water.ts) is a current's
 // look; this is a pool's.
 //
+// THE WAKE is rings the ball sheds moving through the water, after Tris's
+// stylised ripple reference: each born small at the ball and spreading, its
+// crests drawn by the surface shader itself in the slopes that bend the mirror and
+// light the bands - not a mark painted over the water - each crest a white
+// stroke broken into tapered arcs.
+//
 // THE SPLASH (`WaterSplashes`) is the reference's splash, staged once rather
 // than looped under a waterfall: a cel-shaded crown that rises, flares and
 // tears into holes; a lace ring of foam spreading over the surface and
@@ -265,6 +271,86 @@ const CAPS_CLOSED = -1e9;
 // How far the scene's water reaches in under the pool's top face, metres.
 const FOOTPRINT_OVERLAP = 0.01;
 
+// THE WAKE's rings, after Tris's stylised ripple reference (2026-10-05, a
+// drop on flat blue water): a ring is born a dot and its crests come out of
+// it one after another, so the set starts small and grows; each crest is a
+// white stroke broken into tapered arcs, a little off a true circle, the
+// inner ones thinner and fainter; as the ring spreads its arcs shorten to a
+// few long ones and it goes. Under each stroke the crest is a narrow wave,
+// tilting the slopes that light the bands and bend the mirror. (The study's
+// own click ripple came first: a Gaussian packet of waves, too big at birth
+// and drawing clean even circles, with torn foam over it that read as a
+// stencil and then as jagged.)
+//
+// Shared by every still water material, so a ring carries on from the pool
+// onto the scene's water beyond it. Lengths are metres along x; along the
+// depth they are stretched DEPTH_STRETCH, as the pattern is, so a ring reads
+// round on screen.
+//
+// The ball sheds one every WAKE_SPACING metres it travels, but no sooner than
+// WAKE_INTERVAL after the last, so a slot is never taken back while its ring
+// lives (RIPPLE_LIFE); the last RIPPLE_FADE of its life fades it out.
+const RIPPLES = 24;
+const WAKE_INTERVAL = 0.15;
+const RIPPLE_LIFE = RIPPLES * WAKE_INTERVAL;
+const RIPPLE_FADE = 0.55;
+// A ring starts at the ball's rim, the ball hiding where it is born, and
+// comes in over RING_RISE (s): popping in at full strength read as a flash of
+// light every time the ball moved, and coming in over 0.3 s showed it 0.6 m
+// behind a 2 m/s ball, seeming to run back toward it (Tris, 2026-10-05).
+const RING_RISE = 0.1;
+// The leading crest runs out RING_REACH metres over the ring's life, easing
+// out (RING_EASE: its start speed is that many times the mean). CRESTS follow
+// it CREST_GAP apart, the gap opening as it spreads, each CREST_FALLOFF
+// weaker than the one ahead.
+const RING_REACH = 0.9;
+const RING_EASE = 1.6;
+const CRESTS = 4;
+const CREST_GAP = 0.07;
+const CREST_FALLOFF = 0.2;
+// How far a crest strays from a true circle, as a fraction of its radius.
+const RING_WOBBLE = 0.04;
+// The wave under a stroke: its half-width (m, widening as it spreads), the
+// slope it tilts, the light it adds.
+const BUMP_WIDTH = 0.035;
+const RING_SLOPE = 0.22;
+const RING_LIGHT = 0.07;
+// The strokes: half-width (m) young and old; the arcs are where a smooth
+// noise round the ring clears ARC_CUT (rising over the ring's life, so its
+// arcs shorten and part), ARC_INNER higher for each crest behind the first,
+// and taper to points over ARC_TAPER of it. STROKE_COLOR is how far from the
+// light colour to white, STROKE_OPACITY how much the strokes cover.
+const STROKE_WIDTH = [0.006, 0.012] as const;
+const ARC_CUT = [0.3, 0.62] as const;
+const ARC_INNER = 0.08;
+const ARC_TAPER = 0.15;
+// The strokes ride the surface rather than lying on it like a decal (Tris,
+// 2026-10-05: the swell moved but the white rings did not): pushed in and out
+// by the pattern's height under them, up to STROKE_WARP (m), so they waver as
+// the swell passes; and thicker where the swell faces the light, thinner
+// where it faces away (STROKE_FACING, the width's range).
+const STROKE_WARP = 0.03;
+const STROKE_FACING = [0.55, 1.35] as const;
+const STROKE_COLOR = 0.9;
+const STROKE_OPACITY = 0.9;
+// How far off the ring's plane a pixel can be and still ripple with it (m):
+// the pool's top and the scene water continuing it, never the front sheet.
+const RING_PLANE = 0.05;
+// No two rings alike (Tris, 2026-10-05: seeded only by a phase, every ring
+// was the same ring turned). Each draws its own: how far it reaches (RING_
+// REACH times VARY_REACH), how far apart its crests are (VARY_GAP), how far
+// off round it strays (VARY_WOBBLE), how broken it is (VARY_CUT added to the
+// cut), and which whole frequencies its arcs and wobble are made of.
+const VARY_REACH = [0.65, 1.3] as const;
+const VARY_GAP = [0.75, 1.3] as const;
+const VARY_WOBBLE = [0.4, 1.6] as const;
+const VARY_CUT = 0.14;
+// Where each ring was shed (x, y, z in three's frame, start time); how strong
+// it is (0 = idle), the ball's waterline radius it starts at (m, true, not
+// stretched) and its two seeds (0..1).
+const rippleAt = { value: Array.from({ length: RIPPLES }, () => new THREE.Vector4()) };
+const rippleHow = { value: Array.from({ length: RIPPLES }, () => new THREE.Vector4()) };
+
 // `backZ`/`frontZ` are the slab's z range, which is the world's: a water body's
 // root stands on the gameplay plane. The deep-to-shallow ramp runs over it in
 // world z, so anything else wearing a pool's water continues its colours.
@@ -326,6 +412,8 @@ export function stillWaterMaterial(
     shader.uniforms.uDeep = { value: deep };
     shader.uniforms.uShallow = { value: shallow };
     shader.uniforms.uLight = { value: light };
+    shader.uniforms.uRippleAt = rippleAt;
+    shader.uniforms.uRippleHow = rippleHow;
 
     shader.vertexShader = `
       #ifndef SW_PLANE
@@ -369,12 +457,15 @@ export function stillWaterMaterial(
       uniform sampler2D uReflection;
       uniform sampler2D uReflectionDepth;
       uniform mat4 uReflectionInverse;
+      uniform vec4 uReflectionArea;
       uniform float uReflect;
       uniform float uOpenBehind;
       uniform vec4 uFootprint;
       uniform vec3 uDeep;
       uniform vec3 uShallow;
       uniform vec3 uLight;
+      uniform vec4 uRippleAt[${RIPPLES}];
+      uniform vec4 uRippleHow[${RIPPLES}];
       varying float vLit;
       varying float vAlpha;
       varying float vUp;
@@ -386,8 +477,13 @@ export function stillWaterMaterial(
       vec3 swDecode(vec3 c) {
         return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(0.04045, c));
       }
+      // A point of the picture (0..1 over the water's window) in the texture
+      // it is drawn into the corner of, kept half a texel inside it.
+      vec2 swReflectionAt(vec2 uv) {
+        return clamp(uv, uReflectionArea.zw, 1.0 - uReflectionArea.zw) * uReflectionArea.xy;
+      }
       vec3 swReflection(vec2 uv) {
-        return swDecode(texture2D(uReflection, clamp(uv, 0.003, 0.997)).rgb);
+        return swDecode(texture2D(uReflection, swReflectionAt(uv)).rgb);
       }
     ${shader.fragmentShader}`
       .replace(
@@ -423,6 +519,86 @@ export function stillWaterMaterial(
         + vec2(1.65, 0.93) * 0.28 * cos(dot(swP, vec2(1.65, 0.93)) - swT * 1.36));
       swSlope *= ${fmt(RIPPLE_STRENGTH)};
 
+      // THE WAKE: each ring's crests, a narrow wave and a white stroke each
+      // (see the header). In metres, stretched along the depth.
+      float swWake = 0.0;
+      float swStroke = 0.0;
+      // The swell under the strokes: its height (about -1..1) and how much it
+      // faces the light (as the bands read it), before the rings add theirs.
+      float swSwell = swA.b + swB.b + 0.5 * swC.b - 1.25;
+      float swSwellLit = smoothstep(-0.04, 0.06, swSlope.y + swSlope.x * 0.24);
+      // How far a pixel spans, for the strokes' edges: taken here, in uniform
+      // control flow, since the loop leaves per pixel.
+      vec2 swRingScale = vec2(1.0, ${fmt(DEPTH_STRETCH)});
+      vec2 swDX = dFdx(vWorld.xz);
+      vec2 swDY = dFdy(vWorld.xz);
+      for (int i = 0; i < ${RIPPLES}; i++) {
+        vec4 at = uRippleAt[i];
+        vec4 how = uRippleHow[i];
+        float age = (uTime - at.w) * ${fmt(SPEED)};
+        if (how.x <= 0.0 || age < 0.0 || age > ${fmt(RIPPLE_LIFE * SPEED)} || abs(vWorld.y - at.y) > ${fmt(RING_PLANE)}) continue;
+        float u = age / ${fmt(RIPPLE_LIFE * SPEED)};
+        // How far out from the ball's waterline (how.y, true metres - the
+        // contact circle is round, whatever the stretch) the pixel is, in the
+        // stretched lengths the ring spreads by. Measured from the centre in
+        // the stretched frame, a 12 cm ball's ring was born 30 cm in front
+        // of and behind it, 18 cm clear of its edge (Tris, 2026-10-05).
+        vec2 d = vWorld.xz - at.xz;
+        float rw = length(d);
+        vec2 dir = d / max(rw, 1e-4);
+        float k = length(dir / swRingScale);
+        float r = (rw - how.y) * k;
+        // This ring's own draw (see VARY_*), from its two seeds.
+        vec4 sv = fract(how.zwzw * vec4(1.0, 1.0, 7.31, 5.17) + vec4(0.0, 0.0, how.w, how.z));
+        float reach = ${fmt(RING_REACH)} * mix(${fmt(VARY_REACH[0])}, ${fmt(VARY_REACH[1])}, sv.x);
+        float front = reach * (1.0 - pow(1.0 - u, ${fmt(RING_EASE)}));
+        float gap = ${fmt(CREST_GAP)} * mix(${fmt(VARY_GAP[0])}, ${fmt(VARY_GAP[1])}, sv.y) * (0.5 + u);
+        float wob = ${fmt(RING_WOBBLE)} * mix(${fmt(VARY_WOBBLE[0])}, ${fmt(VARY_WOBBLE[1])}, sv.z);
+        if (r > front + (front + how.y) * wob + 0.1 || r < front - gap * ${fmt(CRESTS)} - 0.1) continue;
+        float fade = how.x * smoothstep(0.0, ${fmt(RING_RISE)}, age) * (1.0 - smoothstep(${fmt(RIPPLE_FADE)}, 1.0, u));
+        float th = atan(d.y, d.x);
+        // Phases, and whole frequencies (so no seam) for the arcs and the
+        // wobble: 2-4, 4-6 and 7-10 round the ring for the arcs.
+        float sd = how.z * 6.2832;
+        float f1 = 2.0 + floor(sv.w * 3.0);
+        float f2 = 4.0 + floor(fract(sv.w * 3.0) * 3.0);
+        float f3 = 7.0 + floor(fract(sv.z * 4.0) * 4.0);
+        float fw = 2.0 + floor(fract(sv.x * 5.0) * 2.0);
+        float cutBias = (fract(sv.y * 3.0) - 0.5) * ${fmt(2 * VARY_CUT)};
+        // The pixel's span across the ring.
+        float aa = max((abs(dot(dir, swDX)) + abs(dot(dir, swDY))) * k, 1e-4);
+        float sigma = ${fmt(BUMP_WIDTH)} * (0.6 + 0.8 * u);
+        float half_ = ${fmt(STROKE_WIDTH[0])} + ${fmt(STROKE_WIDTH[1] - STROKE_WIDTH[0])} * u;
+        for (int k = 0; k < ${CRESTS}; k++) {
+          float fk = float(k);
+          float rk = front - fk * gap;
+          // Born at the waterline, under the ball's rim.
+          float born = smoothstep(-0.02, 0.02, rk);
+          if (born <= 0.0) continue;
+          rk += (rk + how.y) * wob * (0.6 * sin(fw * th + sd + fk * 1.3) + 0.4 * sin((fw + 1.0) * th - sd * 1.7 + fk * 2.9));
+          float dist = r - rk;
+          float sk = (1.0 - fk * ${fmt(CREST_FALLOFF)}) * fade * born;
+          float g = exp(-dist * dist / (sigma * sigma));
+          swSlope += dir * (-2.0 * dist / sigma) * g * ${fmt(RING_SLOPE)} * sk;
+          swWake += g * ${fmt(RING_LIGHT)} * sk;
+          // The arcs: a smooth noise round the ring (whole frequencies, no
+          // seam), the stroke's width tapering to nothing where it falls
+          // under the cut.
+          float n = 0.5 + 0.25 * sin(f1 * th + sd * 2.3 + fk * 2.1)
+                        + 0.15 * sin(f2 * th - sd * 3.1 + fk * 4.7)
+                        + 0.1 * sin(f3 * th + sd * 5.3 - fk * 1.9);
+          float cut = ${fmt(ARC_CUT[0])} + ${fmt(ARC_CUT[1] - ARC_CUT[0])} * u + fk * ${fmt(ARC_INNER)} + cutBias;
+          float hw = half_ * (1.0 - fk * ${fmt(CREST_FALLOFF)}) * smoothstep(cut, cut + ${fmt(ARC_TAPER)}, n)
+            * mix(${fmt(STROKE_FACING[0])}, ${fmt(STROKE_FACING[1])}, swSwellLit);
+          // Riding the swell (see STROKE_WARP).
+          float sdist = dist - swSwell * ${fmt(STROKE_WARP)};
+          // Antialiased, and thinned rather than drawn wider than it is where
+          // it is under a pixel.
+          float cover = clamp((hw + 0.5 * aa - abs(sdist)) / aa, 0.0, 1.0) * min(1.0, 2.0 * hw / aa);
+          swStroke = max(swStroke, cover * fade * born);
+        }
+      }
+
       vec3 swN = normalize(vec3(-swSlope.x, 1.0, -swSlope.y));
       vec3 swEye = normalize(cameraPosition - vWorld);
       float swNV = clamp(dot(swN, swEye), 0.0, 1.0);
@@ -446,9 +622,9 @@ export function stillWaterMaterial(
       vec3 swMirror = swReflection(swUV) * 0.5
                     + swReflection(swUV + vec2(0.0015, 0.0007)) * 0.25
                     + swReflection(swUV - vec2(0.0015, 0.0007)) * 0.25;
-      vec2 swDepthUV = clamp(swUV, 0.003, 0.997);
+      vec2 swDepthUV = clamp(swUV, uReflectionArea.zw, 1.0 - uReflectionArea.zw);
       vec4 swHit = uReflectionInverse
-        * vec4(vec3(swDepthUV, texture2D(uReflectionDepth, swDepthUV).r) * 2.0 - 1.0, 1.0);
+        * vec4(vec3(swDepthUV, texture2D(uReflectionDepth, swReflectionAt(swDepthUV)).r) * 2.0 - 1.0, 1.0);
       float swNear = 1.0 - smoothstep(${fmt(REFLECT_NEAR)}, ${fmt(REFLECT_FAR)}, length(swHit.xyz / swHit.w - vWorld));
       float swMirrorW = ${fmt(REFLECTION)} * mix(0.13 + swFresnel * 0.32, 0.82 + swFresnel * 0.16, swNear) * uReflect;
       swCol = mix(swCol, swMirror, clamp(swMirrorW, 0.0, 0.92));
@@ -458,6 +634,8 @@ export function stillWaterMaterial(
       vec3 swHalf = normalize(swEye + normalize(vec3(-0.36, 0.78, -0.43)));
       swCol += uLight * pow(max(0.0, dot(swN, swHalf)), 100.0) * 0.16 * ${fmt(RIPPLE_STRENGTH)};
       swCol += uLight * swCrest * ${fmt(CONTRAST * 0.16)};
+      swCol += uLight * swWake;
+      swCol = mix(swCol, mix(uLight, vec3(1.0), ${fmt(STROKE_COLOR)}), swStroke * ${fmt(STROKE_OPACITY)});
 
       // THE FRONT SHEET, a cross-section looking into the water: between the
       // shallow and the deep colour under the waterline, darkening toward the
@@ -530,18 +708,13 @@ const TELEPORT = 1.5;
 
 // THE WAKE: while the ball moves through the water with its bottom no deeper
 // than WAKE_DEPTH under the top (and faster than WAKE_MIN_SPEED along it), it
-// sheds a ring every WAKE_SPACING metres. Each ring spreads and fades on its
-// own, so a slow ball draws loose concentric rings and a fast one a V.
-const RIPPLES = 32;
+// sheds a ring (see RIPPLES) every WAKE_SPACING metres. Each ring spreads and
+// fades on its own, so a slow ball draws loose concentric rings and a fast
+// one a V.
 const WAKE_DEPTH = 0.35;
 const WAKE_MIN_SPEED = 0.15;
 const WAKE_FULL_SPEED = 3;
 const WAKE_SPACING = 0.14;
-const RIPPLE_LIFE = 1.5;
-// How fast a ring spreads (m/s, easing out) and how wide its line is (m).
-const RIPPLE_SPEED = 0.55;
-const RIPPLE_LINE = 0.012;
-const RIPPLE_COLOR = "#d4f5fb";
 
 // THE CROWN: an open ring wall that rises out of the surface, flares outward
 // and tears into holes as it falls - the reference's cloud-displaced
@@ -600,9 +773,10 @@ export class WaterSplashes {
   private next = 0;
   private prev: Vec2 | null = null;
   private prevClock = 0;
-  // Where the last wake ring was shed, while the ball is still making one.
+  // Where and when the last wake ring was shed, while the ball is still
+  // making one.
   private wakeFrom: Vec2 | null = null;
-  private readonly ripples: SplashSlot[] = [];
+  private wakeAt = -Infinity;
   private nextRipple = 0;
   private readonly geometries: THREE.BufferGeometry[] = [];
   private readonly materials: THREE.Material[] = [];
@@ -620,10 +794,6 @@ export class WaterSplashes {
     this.add(new THREE.Mesh(...this.crown(uniforms)), 12);
     this.add(new THREE.Mesh(...this.lace(uniforms)), 11);
     this.add(new THREE.Points(...this.drops(uniforms)), 13);
-    for (let i = 0; i < RIPPLES; i++) {
-      this.ripples.push({ at: new THREE.Vector4(), how: new THREE.Vector4(), clip: new THREE.Vector4() });
-    }
-    this.add(new THREE.Mesh(...this.rippleRings()), 10.5);
   }
 
   private add(obj: THREE.Mesh | THREE.Points, order: number): void {
@@ -639,8 +809,9 @@ export class WaterSplashes {
   // Forget every splash and the ball's last position: a new level, a restart.
   reset(): void {
     for (const s of this.slots) s.how.x = 0;
-    for (const r of this.ripples) r.how.x = 0;
+    for (const h of rippleHow.value) h.x = 0;
     this.wakeFrom = null;
+    this.wakeAt = -Infinity;
     this.prev = null;
   }
 
@@ -677,7 +848,7 @@ export class WaterSplashes {
       // The ball sits on the gameplay plane, which the slab may not contain
       // when it is shifted through z.
       const z = Math.min(Math.max(0, s.backZ), s.frontZ);
-      // The pool's footprint for the lace and the ripples (an axis-aligned
+      // The pool's footprint for the lace (an axis-aligned
       // box: still water is never authored turned).
       const ex = Math.abs(Math.cos(rot)) * s.halfX + Math.abs(Math.sin(rot)) * s.halfY;
       const clip: [number, number, number, number] = [c.x - ex, c.x + ex, s.backZ, s.frontZ];
@@ -693,14 +864,23 @@ export class WaterSplashes {
         if (speed > WAKE_MIN_SPEED) {
           waking = true;
           const at = surfacePoint(lp.x);
-          if (!this.wakeFrom || this.wakeFrom.distanceTo(at) >= WAKE_SPACING) {
+          const due = !this.wakeFrom || this.wakeFrom.distanceTo(at) >= WAKE_SPACING;
+          // (A clock run back, a seek, owes nothing to the ring before it.)
+          if (due && (clock - this.wakeAt >= WAKE_INTERVAL || clock < this.wakeAt)) {
             this.wakeFrom = at;
             // Strongest with the ball breaking the surface, gone by WAKE_DEPTH;
             // and with speed.
             const shallow = 1 - Math.max(0, depth - ball.radius * 2) / WAKE_DEPTH;
             const fast = Math.min(1, speed / WAKE_FULL_SPEED);
             const strength = Math.max(0, shallow) * (0.35 + 0.65 * fast);
-            if (strength > 0.05) this.ripple(at.x, threeY(at.y), z, clock, strength, ball.radius, clip);
+            if (strength > 0.05) {
+              this.wakeAt = clock;
+              // Born on the ball's waterline: the circle where the surface
+              // cuts it, the centre `depth - radius` under (+) or over it.
+              const under = depth - ball.radius;
+              const waterline = Math.sqrt(Math.max(0, ball.radius * ball.radius - under * under));
+              this.ripple(at.x, threeY(at.y), z, clock, strength, waterline);
+            }
           }
         }
       }
@@ -726,20 +906,15 @@ export class WaterSplashes {
     if (!waking) this.wakeFrom = null;
   }
 
-  private ripple(
-    x: number,
-    y: number,
-    z: number,
-    clock: number,
-    strength: number,
-    radius: number,
-    clip: [number, number, number, number],
-  ): void {
-    const r = this.ripples[this.nextRipple]!;
-    this.nextRipple = (this.nextRipple + 1) % RIPPLES;
-    r.at.set(x, y, z, clock);
-    r.how.set(strength, (clock * 13.7) % 89, radius, 0);
-    r.clip.set(...clip);
+  private ripple(x: number, y: number, z: number, clock: number, strength: number, waterline: number): void {
+    const i = this.nextRipple;
+    this.nextRipple = (i + 1) % RIPPLES;
+    rippleAt.value[i]!.set(x, y, z, clock);
+    // Its seeds from where and when it was shed, so a pinned clock draws the
+    // same ring twice.
+    const qx = Math.round(x * 1000);
+    const qt = Math.round(clock * 1000);
+    rippleHow.value[i]!.set(strength, waterline, hash2(qx, qt, 17), hash2(qt, qx, 53));
   }
 
   private spawn(
@@ -1079,113 +1254,6 @@ export class WaterSplashes {
     // The slot table by reference, after the merge: merge CLONES, and a
     // cloned table is one `spawn` never writes to.
     Object.assign(m.uniforms, uniforms);
-    return [g, m];
-  }
-
-  // The wake's rings: one quad per ring on the surface, a thin pale line
-  // spreading out from where it was shed, broken round its length the way a
-  // painted ripple is, thinning and fading as it goes.
-  private rippleRings(): [THREE.BufferGeometry, THREE.ShaderMaterial] {
-    const slot: number[] = [];
-    const corner: number[] = [];
-    const index: number[] = [];
-    for (let s = 0; s < RIPPLES; s++) {
-      const b = slot.length;
-      for (const [cx, cz] of [[-1, -1], [1, -1], [1, 1], [-1, 1]] as const) {
-        slot.push(s);
-        corner.push(cx, cz);
-      }
-      index.push(b, b + 2, b + 1, b, b + 3, b + 2);
-    }
-    const g = new THREE.BufferGeometry();
-    g.setAttribute("position", new THREE.Float32BufferAttribute(new Float32Array(slot.length * 3), 3));
-    g.setAttribute("aSlot", new THREE.Float32BufferAttribute(slot, 1));
-    g.setAttribute("aCorner", new THREE.Float32BufferAttribute(corner, 2));
-    g.setIndex(index);
-    const reach = RIPPLE_SPEED * RIPPLE_LIFE + 0.2;
-    const m = new THREE.ShaderMaterial({
-      uniforms: THREE.UniformsUtils.merge([THREE.UniformsLib.fog, { uColor: { value: new THREE.Color(RIPPLE_COLOR) } }]),
-      vertexShader: `
-        #include <common>
-        #include <fog_pars_vertex>
-        uniform float uTime;
-        uniform vec4 uAt[${RIPPLES}];
-        uniform vec4 uHow[${RIPPLES}];
-        uniform vec4 uClip[${RIPPLES}];
-        attribute float aSlot;
-        attribute vec2 aCorner;
-        varying vec2 vQ;
-        varying vec3 vWorld;
-        varying float vU;
-        varying float vStrength;
-        varying float vSeed;
-        varying float vR0;
-        varying vec4 vClip;
-        void main() {
-          int s = int(aSlot + 0.5);
-          vec4 at = uAt[s];
-          vec4 how = uHow[s];
-          float u = (uTime - at.w) / ${fmt(RIPPLE_LIFE)};
-          if (how.x <= 0.0 || u < 0.0 || u > 1.0) { gl_Position = vec4(0.0, 0.0, 2.0, 1.0); return; }
-          vQ = aCorner * ${fmt(reach)};
-          // A hair above the lace, which a ring may cross.
-          vec3 p = vec3(at.x + vQ.x, at.y + 0.005, at.z + vQ.y);
-          vWorld = p;
-          vU = u;
-          vStrength = how.x;
-          vSeed = how.y;
-          vR0 = how.z;
-          vClip = uClip[s];
-          vec4 mvPosition = modelViewMatrix * vec4(p, 1.0);
-          gl_Position = projectionMatrix * mvPosition;
-          #include <fog_vertex>
-        }`,
-      fragmentShader: `
-        #include <common>
-        #include <fog_pars_fragment>
-        uniform vec3 uColor;
-        varying vec2 vQ;
-        varying vec3 vWorld;
-        varying float vU;
-        varying float vStrength;
-        varying float vSeed;
-        varying float vR0;
-        varying vec4 vClip;
-        ${NOISE_GLSL}
-        void main() {
-          if (vWorld.x < vClip.x || vWorld.x > vClip.y || vWorld.z < vClip.z || vWorld.z > vClip.w) discard;
-          float r = length(vQ);
-          float th = atan(vQ.y, vQ.x) / 6.2832 + 0.5;
-          // Out fast, then slowing.
-          float front = vR0 + ${fmt(RIPPLE_SPEED * RIPPLE_LIFE)} * (1.0 - pow(1.0 - vU, 1.8));
-          float w = ${fmt(RIPPLE_LINE)} * mix(1.4, 0.6, vU);
-          float line = 1.0 - smoothstep(w * 0.5, w, abs(r - front));
-          // A fainter second ring just inside the first.
-          float inner = 1.0 - smoothstep(w * 0.4, w * 0.8, abs(r - front * 0.8));
-          // Broken round its length, more as it spreads; wrapped at the seam.
-          float brk = mix(
-            swNoise(vec3(th * 16.0, vSeed, 0.0)),
-            swNoise(vec3((th - 1.0) * 16.0, vSeed, 0.0)),
-            smoothstep(0.9, 1.0, th));
-          float on = smoothstep(0.25 + 0.35 * vU, 0.35 + 0.35 * vU, brk);
-          float fade = (1.0 - smoothstep(0.35, 1.0, vU)) * smoothstep(0.0, 0.06, vU);
-          float a = max(line, inner * 0.5) * on * fade * vStrength;
-          if (a < 0.02) discard;
-          gl_FragColor = vec4(uColor, a * 0.85);
-          #include <tonemapping_fragment>
-          #include <colorspace_fragment>
-          #include <fog_fragment>
-        }`,
-      transparent: true,
-      depthWrite: false,
-      fog: true,
-    });
-    Object.assign(m.uniforms, {
-      uTime: waterTime,
-      uAt: { value: this.ripples.map((s) => s.at) },
-      uHow: { value: this.ripples.map((s) => s.how) },
-      uClip: { value: this.ripples.map((s) => s.clip) },
-    });
     return [g, m];
   }
 

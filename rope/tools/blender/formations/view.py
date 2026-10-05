@@ -43,7 +43,9 @@ def game_camera(scene):
     """The guide's game camera: the scene camera if it is one, else any."""
     if scene.camera is not None and "game_fps" in scene.camera:
         return scene.camera
-    return next((ob for ob in scene.objects if ob.type == "CAMERA" and "game_fps" in ob), None)
+    # Not the depth of field twin, which the panel swaps in itself.
+    return next((ob for ob in scene.objects if ob.type == "CAMERA" and "game_fps" in ob and not ob.get("game_dof")),
+                None)
 
 
 def eye(scene):
@@ -76,10 +78,37 @@ def look_through(context):
             space = area.spaces.active
             space.region_3d.view_perspective = "CAMERA"
             space.lock_camera = False
+            # The whole game frame, not a zoom into it the file was saved with.
+            region = next(r for r in area.regions if r.type == "WINDOW")
+            with context.temp_override(window=window, area=area, region=region):
+                bpy.ops.view3d.view_center_camera()
             # The outline handles and the guide's wires are overlays.
             space.overlay.show_overlays = True
             space.clip_end = max(space.clip_end, cam.data.clip_end)
     return cam
+
+
+def look_from_start(context):
+    """Look through the game camera from the start of its route, held there."""
+    cam = look_through(context)
+    scene = context.scene
+    if context.screen.is_animation_playing:
+        bpy.ops.screen.animation_cancel(restore_frame=False)
+    # Played at the game's pace, frames dropped if the scene cannot keep up.
+    scene.sync_mode = "FRAME_DROP"
+    scene.frame_set(scene.frame_start)
+    # The game look follows the scene's view transform, which may have changed.
+    from . import look
+    look.apply(context)
+    return cam
+
+
+def ride(context, direction):
+    """Move the game camera along its route: 1 forward, -1 back, 0 paused."""
+    if context.screen.is_animation_playing:
+        bpy.ops.screen.animation_cancel(restore_frame=False)
+    if direction:
+        bpy.ops.screen.animation_play(reverse=direction < 0)
 
 
 # --- Projection ----------------------------------------------------------------

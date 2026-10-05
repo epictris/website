@@ -149,6 +149,10 @@ const SCENERY_WATER_REACH = 0.1;
 // device coordinates: the ripples push a lookup up to ~0.02 of the screen
 // (stillWater.ts, slope x 0.11 x DISTORTION) and the taps a little more.
 const MIRROR_WINDOW_PAD = 0.05;
+// Where the mirror's texel grid is held still in the world (see
+// `PlanarReflection.capture`): on the play plane, the depth of the ball and
+// of what it swings on, so their reflections are the ones that never slide.
+const MIRROR_ANCHOR = new THREE.Vector3(0, 0, 0);
 
 // A pool's surface height in three's frame, from the body's pose: the visual's
 // root is first posed by the frame's sync, after the scene may already have
@@ -1281,7 +1285,7 @@ export class Scene3D {
     if (!chosen) return;
     const onScreen = this.screenWindow(this.chosenBox);
     if (onScreen === "offscreen") return;
-    this.poolMirror.capture(this.scene, camera, plane, hidden, onScreen);
+    this.poolMirror.capture(this.scene, camera, plane, hidden, onScreen, MIRROR_ANCHOR);
     chosen.reflect.value = 1;
   }
 

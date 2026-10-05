@@ -12,7 +12,17 @@ The job (metres, the GAME's frame: x right, y up, z toward the camera):
      "bounds": {"min": [x, y], "max": [x, y]},
      "spawn": {"x": .., "y": .., "r": ..},
      "camera": {"fps": 60, "focalLength": 70.0, "aspect": 1.78, "far": 400,
-                "source": "...", "frames": [{"eye": [x, y, z], "halfHeight": ..}, ...]},
+                "source": "...", "frames": [{"eye": [x, y, z], "halfHeight": ..}, ...],
+                "look": {"fog": {"color": "#2a5075", "density": ..} | null,
+                         "dofMaxBlur": .008, "dofFocusBand": 1.5}},
+     "lighting": {"sun": {"color": [r, g, b], "intensity": .., "dir": [x, y, z]} | null,
+                  "fill": {"sky": [r, g, b], "ground": [r, g, b], "intensity": ..},
+                  "sky": {"width": 128, "height": 64, "pixels": [r, g, b, a, ...]},
+                  "envIntensity": .., "background": "#1c3856", "hdri": null,
+                  "toneMappingExposure": 1.0,
+                  "lights": [{"kind": "spot", "position": [x, y, z], "direction": [x, y, z],
+                              "color": [r, g, b], "intensity": .., "range": .., "angle": ..,
+                              "penumbra": .., "castShadow": true}, ...]},
      "bodies": [{"index": 3, "name": "Ledge_03" | null, "kind": "static", "solid": true,
                  "origin": [x, y],
                  "pieces": [{"outline": [[x, y], ...], "hole": [[x, y], ...] | null}, ...]}, ...]}
@@ -37,7 +47,16 @@ What is written, all in one collection called `Guide`:
   src/sim/cameraTrack.ts). It looks along +y (the game's -z) and never turns, as
   the game's never does. Its `game_fps` and frame count are what the scene
   takes when the Formations panel's "Look through game camera" makes it the
-  scene camera.
+  scene camera. Its `game_look` is the level's fog and the Medium depth of
+  field, for the panel's Fog and Depth of Field.
+- `guide.camera.dof`: the same camera (riding on it) through Blender's depth
+  of field set to the game's, which the panel's Depth of Field swaps in.
+
+Outside the `Guide`, so the scene does not use them until the panel's
+Lighting links them in: the game's light at rest, the `guide.lights`
+collection (its sun and always-on light objects) and the `guide.world` (the
+sky it reflects, its hemisphere fill and its background), from the job's
+`lighting` (scripts/scene-guide.ts).
 
 None of it ever exports: the exporter skips linked objects and any collection
 named `guide*`. The guide file is OVERWRITTEN on every run - it is the level's,
@@ -198,6 +217,7 @@ def build_camera(track, coll):
     ob["game_frames"] = len(frames)
     ob["game_aspect"] = track["aspect"]
     ob["game_source"] = track["source"]
+    ob["game_look"] = json.dumps(track.get("look", {}))
     link(coll, ob)
 
     ob.animation_data_create()
@@ -213,6 +233,241 @@ def build_camera(track, coll):
         fc.keyframe_points.foreach_set("interpolation", [1] * len(frames))  # LINEAR
         fc.update()
     log(f"game camera: {len(frames)} frames at {track['fps']} fps, {cam.lens:.1f} mm, {track['source']}")
+    look = track.get("look", {})
+    if look.get("dofMaxBlur"):
+        build_dof_camera(ob, frames, look, coll)
+
+
+def build_dof_camera(plain, frames, look, coll):
+    """`guide.camera.dof`: the game camera through Blender's own depth of
+    field, which the panel's Depth of Field swaps in as the scene camera (the
+    linked camera's settings cannot be changed in the scene file).
+
+    The game blurs with a thin lens focused `dofFocusBand` behind the plane, its
+    circle reaching `dofMaxBlur` of the frame's height as a radius at infinity
+    (src/render3d/depthOfField.ts). Blender's lens has the same law, a circle of
+    diameter f^2 / (N (s - f)) * |1 - s/d| on the sensor, so against the 24 mm
+    sensor height the f-number that gives it is f^2 / (48 maxBlur (s - f))
+    (measured in EEVEE within a pixel of the game's at 15 m to 1 km). It blurs
+    in front of the focus too, where the game keeps everything sharp."""
+    cam = plain.data.copy()
+    cam.name = "guide.camera.dof"
+    cam.dof.use_dof = True
+    ob = bpy.data.objects.new("guide.camera.dof", cam)
+    for key in plain.keys():
+        ob[key] = plain[key]
+    ob["game_dof"] = True
+    # Riding on the plain camera, so the two are one pose by construction.
+    ob.parent = plain
+    link(coll, ob)
+
+    cam.animation_data_create()
+    action = bpy.data.actions.new("guide.camera.dof")
+    cam.animation_data.action = action
+    f = cam.lens
+    focus, fstop = [], []
+    for i, frame in enumerate(frames):
+        # The eye's z is its distance from the plane.
+        s = frame["eye"][2] + look["dofFocusBand"]
+        focus += [i + 1, s]
+        fstop += [i + 1, f * f / (48 * look["dofMaxBlur"] * (s * 1000 - f))]
+    for path, co in (("dof.focus_distance", focus), ("dof.aperture_fstop", fstop)):
+        fc = action.fcurve_ensure_for_datablock(cam, path)
+        fc.keyframe_points.add(len(frames))
+        fc.keyframe_points.foreach_set("co", co)
+        fc.keyframe_points.foreach_set("interpolation", [1] * len(frames))
+        fc.update()
+
+
+# --- The game's light -----------------------------------------------------
+
+LIGHTS_COLLECTION = "guide.lights"
+WORLD = "guide.world"
+# three's ACES Filmic is Blender's ACES 1.3 view with the exposure three
+# applies before its curve (exposure / 0.6): measured over a grey ramp and
+# random colours, a mean error of 0.005 of the display range.
+TONE_VIEW = "ACES 1.3"
+# The sun's shadow: three filters it over 3 texels of a 2048 map 30 m wide, a
+# blur of ~0.09 m whatever the distance; Blender's softens with distance, so
+# this disc matches it for an occluder about a metre off.
+SUN_ANGLE = math.radians(5)
+
+
+def three_aces(c, exposure):
+    """three's ACESFilmicToneMapping and sRGB encoding, linear in, display out."""
+    import numpy as np
+    c = np.asarray(c, float) * exposure / 0.6
+    v = np.array([[0.59719, 0.35458, 0.04823], [0.07600, 0.90834, 0.01566], [0.02840, 0.13383, 0.83777]]) @ c
+    v = (v * (v + 0.0245786) - 0.000090537) / (v * (0.983729 * v + 0.4329510) + 0.238081)
+    v = np.clip(np.array([[1.60475, -0.53108, -0.07367], [-0.10208, 1.10813, -0.00605],
+                          [-0.00327, -0.07276, 1.07602]]) @ v, 0, 1)
+    return np.where(v <= 0.0031308, v * 12.92, 1.055 * v ** (1 / 2.4) - 0.055)
+
+
+def untonemapped(hex_color, exposure):
+    """The linear colour the tone mapping shows as `hex_color`'s bytes: three
+    clears to the background untouched, and Blender draws its world through the
+    view transform."""
+    import numpy as np
+    h = hex_color.lstrip("#")
+    want = np.array([int(h[i:i + 2], 16) / 255 for i in (0, 2, 4)])
+    x = np.full(3, .05)
+    for _ in range(60):
+        r = three_aces(x, exposure) - want
+        j = np.empty((3, 3))
+        for k in range(3):
+            d = np.zeros(3)
+            d[k] = 1e-5
+            j[:, k] = (three_aces(x + d, exposure) - three_aces(x, exposure)) / 1e-5
+        x = np.maximum(x - np.linalg.lstsq(j, r, rcond=None)[0], 0)
+    return [float(v) for v in x]
+
+
+def to_blender_dir(v):
+    return Vector((v[0], -v[2], v[1])).normalized()
+
+
+def build_lighting(job):
+    """The game's light at rest, for the Formations panel's Lighting: the
+    lights in `guide.lights` (never in the Guide, so the scene does not light
+    with them until asked) and the sky as `guide.world`.
+
+    Units, each measured in EEVEE against three's physical lights: a sun's
+    strength is three's intensity (both light a white diffuse surface to I/pi),
+    a point or spot's power is 4 pi times its candela, and a world of radiance L
+    lights a surface as three's environment of L does. three's hemisphere fill
+    is irradiance mix(ground, sky, (1 + n.y) / 2) * I, which is exactly what a
+    world of sky above and ground below at I/pi gives a diffuse surface."""
+    coll = bpy.data.collections.new(LIGHTS_COLLECTION)
+    bpy.context.scene.collection.children.link(coll)
+    sun = job.get("sun")
+    if sun:
+        data = bpy.data.lights.new("guide.sun", "SUN")
+        data.color = sun["color"]
+        data.energy = sun["intensity"]
+        data.angle = SUN_ANGLE
+        ob = bpy.data.objects.new("guide.sun", data)
+        # A sun shines down its -Z; three's `dir` is where its lamp sits.
+        ob.rotation_euler = to_blender_dir(sun["dir"]).to_track_quat("Z", "Y").to_euler()
+        coll.objects.link(ob)
+    for i, light in enumerate(job.get("lights", [])):
+        kind = "SPOT" if light["kind"] == "spot" else "POINT"
+        data = bpy.data.lights.new(f"guide.light.{i}", kind)
+        data.color = light["color"]
+        data.energy = 4 * math.pi * light["intensity"]
+        data.shadow_soft_size = 0
+        data.use_shadow = light["castShadow"]
+        # three's reach fades the light out by (1 - (d/range)^4)^2; Blender's
+        # cuts it off there.
+        data.use_custom_distance = True
+        data.cutoff_distance = light["range"]
+        if kind == "SPOT":
+            data.spot_size = math.radians(light["angle"]) * 2
+            data.spot_blend = light["penumbra"]
+        ob = bpy.data.objects.new(f"guide.light.{i}", data)
+        ob.location = to_blender(*light["position"])
+        if kind == "SPOT":
+            ob.rotation_euler = (-to_blender_dir(light["direction"])).to_track_quat("Z", "Y").to_euler()
+        coll.objects.link(ob)
+    build_world(job)
+    log(f"game lighting: {'a sun, ' if sun else ''}{len(job.get('lights', []))} lights, "
+        f"{'HDRI ' + job['hdri'] + ' (not carried: the generated sky stands in)' if job.get('hdri') else 'generated sky'}")
+
+
+def build_world(job):
+    """The game's sky as a world: the generated environment three reflects (the
+    same pixels, sampled with three's own equirectangular mapping), the
+    hemisphere fill, and to the camera the background colour three clears to."""
+    sky = job["sky"]
+    w, h = sky["width"], sky["height"]
+    image = bpy.data.images.new("guide.sky", w, h, float_buffer=True, alpha=True)
+    image.colorspace_settings.name = "Linear Rec.709"
+    image.pixels.foreach_set(sky["pixels"])
+    # A generated image is regenerated blank on load, so it goes into the file
+    # as a packed float EXR, written by `save_render` (`save` writes a float
+    # image sRGB-encoded).
+    import tempfile
+    settings = bpy.context.scene.render.image_settings
+    settings.file_format = "OPEN_EXR"
+    settings.color_depth = "32"
+    with tempfile.TemporaryDirectory() as scratch:
+        path = os.path.join(scratch, "guide.sky.exr")
+        image.save_render(filepath=path, scene=bpy.context.scene)
+        bpy.data.images.remove(image)
+        image = bpy.data.images.load(path)
+        image.name = "guide.sky"
+        image.pack()
+    image.filepath_raw = "//guide.sky.exr"
+    image.colorspace_settings.name = "Linear Rec.709"
+    world = bpy.data.worlds.new(WORLD)
+    world.use_fake_user = True
+    world.use_nodes = True
+    nt = world.node_tree
+    nt.nodes.clear()
+    nodes, links = nt.nodes, nt.links
+    x = [0]
+
+    def node(kind, **props):
+        n = nodes.new(kind)
+        n.location = (x[0], 0)
+        x[0] += 200
+        for k, v in props.items():
+            setattr(n, k, v)
+        return n
+
+    def math_node(op, a, b=None):
+        n = node("ShaderNodeMath", operation=op)
+        for socket, value in ((n.inputs[0], a), (n.inputs[1], b)):
+            if isinstance(value, bpy.types.NodeSocket):
+                links.new(value, socket)
+            elif value is not None:
+                socket.default_value = value
+        return n.outputs[0]
+
+    coords = node("ShaderNodeTexCoord")
+    unit = node("ShaderNodeVectorMath", operation="NORMALIZE")
+    links.new(coords.outputs["Generated"], unit.inputs[0])
+    xyz = node("ShaderNodeSeparateXYZ")
+    links.new(unit.outputs[0], xyz.inputs[0])
+    bx, by, bz = xyz.outputs
+    # three's direction is Blender's (x, z, -y); its `equirectUv` takes
+    # u = atan2(z, x) / 2pi + 0.5 and v = asin(y) / pi + 0.5, row 0 at v = 0.
+    u = math_node("ADD", math_node("DIVIDE", math_node("ARCTAN2", math_node("MULTIPLY", by, -1.0), bx), 2 * math.pi), .5)
+    v = math_node("ADD", math_node("DIVIDE", math_node("ARCSINE", bz), math.pi), .5)
+    uv = node("ShaderNodeCombineXYZ")
+    links.new(u, uv.inputs[0])
+    links.new(v, uv.inputs[1])
+    tex = node("ShaderNodeTexImage", image=image, interpolation="Linear", extension="EXTEND")
+    links.new(uv.outputs[0], tex.inputs["Vector"])
+    env = node("ShaderNodeMix", data_type="RGBA", blend_type="MULTIPLY")
+    env.inputs["Factor"].default_value = 1
+    links.new(tex.outputs["Color"], env.inputs[6])
+    env.inputs[7].default_value = [job["envIntensity"]] * 3 + [1]
+
+    fill = job["fill"]
+    k = fill["intensity"] / math.pi
+    hemi = node("ShaderNodeMix", data_type="RGBA")
+    links.new(math_node("GREATER_THAN", bz, 0.0), hemi.inputs["Factor"])
+    hemi.inputs[6].default_value = [c * k for c in fill["ground"]] + [1]
+    hemi.inputs[7].default_value = [c * k for c in fill["sky"]] + [1]
+    light = node("ShaderNodeMix", data_type="RGBA", blend_type="ADD")
+    light.inputs["Factor"].default_value = 1
+    links.new(env.outputs[2], light.inputs[6])
+    links.new(hemi.outputs[2], light.inputs[7])
+    lit = node("ShaderNodeBackground")
+    links.new(light.outputs[2], lit.inputs["Color"])
+
+    seen = node("ShaderNodeBackground")
+    seen.inputs["Color"].default_value = untonemapped(job["background"], job["toneMappingExposure"]) + [1]
+    path = node("ShaderNodeLightPath")
+    mix = node("ShaderNodeMixShader")
+    links.new(path.outputs["Is Camera Ray"], mix.inputs["Fac"])
+    links.new(lit.outputs[0], mix.inputs[1])
+    links.new(seen.outputs[0], mix.inputs[2])
+    out = node("ShaderNodeOutputWorld")
+    links.new(mix.outputs[0], out.inputs["Surface"])
+    world["game_tone_view"] = TONE_VIEW
+    world["game_tone_exposure"] = math.log2(job["toneMappingExposure"] / .6)
 
 
 def fresh_file():
@@ -240,6 +495,8 @@ def main():
     build_guide(job, coll)
     if job.get("camera", {}).get("frames"):
         build_camera(job["camera"], coll)
+    if job.get("lighting"):
+        build_lighting(job["lighting"])
     os.makedirs(os.path.dirname(os.path.abspath(guide_path)), exist_ok=True)
     bpy.ops.wm.save_as_mainfile(filepath=os.path.abspath(guide_path))
     log(f"wrote {guide_path}: {len(job['bodies'])} bodies")

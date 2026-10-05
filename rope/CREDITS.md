@@ -24,10 +24,8 @@ edit by hand - add the asset to its manifest and regenerate, which is what
 - **finish_line** (scene rails) - "hyd (@hydroh)", [source](https://sketchfab.com/3d-models/finish-line-7ec1d8194ddf46e6b398d336df0b5d7a), Sketchfab Standard
 - **metal_053b** (scene rails) - "ambientCG (Lennart Demes)", [source](https://ambientcg.com/view?id=Metal053B), CC0
 - **moss_003** (scene rails) - "ambientCG (Lennart Demes)", [source](https://ambientcg.com/view?id=Moss003), CC0
-- **dark_rock_02** (scene river) - "Amal Kumar", [source](https://polyhaven.com/a/dark_rock_02), CC0
 - **finish_line** (scene river) - "hyd (@hydroh)", [source](https://sketchfab.com/3d-models/finish-line-7ec1d8194ddf46e6b398d336df0b5d7a), Sketchfab Standard
 - **moss_003** (scene river) - "ambientCG (Lennart Demes)", [source](https://ambientcg.com/view?id=Moss003), CC0
-- **moss_ground_01** (scene river) - "FreeStylized", [source](https://freestylized.com/material/moss_ground_01/), FreeStylized CC0 (no redistribution of the unmodified pack)
 - **pbr_rock_cliffs_pack** (scene river) - "Maksim Batyrev (@c3posw01)", [source](https://sketchfab.com/3d-models/pbr-rock-cliffs-pack-8fa6cabbbf0c431a9f5ffe91eb0b9090), CC BY 4.0
 - **wooden_stool** (scene river) - "yoyo83710", [source](https://sketchfab.com/3d-models/wooden-stool-528f72346b2f4a1096c1d5104b731d04), CC BY 4.0
 

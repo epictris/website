@@ -11,7 +11,7 @@ scene, which `just scene <level>` exports like any other scenery."""
 import bpy
 from bpy.props import BoolProperty, EnumProperty, FloatProperty, PointerProperty
 
-from . import core, growth, ops, params, render, ui
+from . import core, growth, look, ops, params, render, ui
 
 CLASSES = ops.CLASSES + ui.CLASSES
 
@@ -42,6 +42,17 @@ def register():
         name="Solid rocks as wireframe", default=False,
         update=lambda self, _: core.rocks_wire(self, self.formations_rocks_wire),
         description="Draw the solid formations' rocks as wireframe, so their guides show through")
+    bpy.types.Scene.formations_game_fog = BoolProperty(
+        name="Fog", default=False, update=look.toggled,
+        description="The level's fog, as the game mixes it over the view (viewport compositor and renders)")
+    bpy.types.Scene.formations_game_dof = BoolProperty(
+        name="Depth of Field", default=False, update=look.toggled,
+        description="Look through the game camera with Blender's depth of field, set to the game's Medium blur "
+                    "behind the gameplay plane (it blurs in front of it too, which the game does not)")
+    bpy.types.Scene.formations_game_lighting = BoolProperty(
+        name="Lighting", default=False, update=look.toggled,
+        description="The game's light at rest: its sun, the level's always-on lights, its sky and fill as the "
+                    "world, and its tone mapping (ACES). The scene's own lights are hidden until it is off")
     render.register()
     for c in CLASSES:
         bpy.utils.register_class(c)
@@ -57,6 +68,9 @@ def unregister():
     for c in reversed(CLASSES):
         bpy.utils.unregister_class(c)
     render.unregister()
+    del bpy.types.Scene.formations_game_lighting
+    del bpy.types.Scene.formations_game_dof
+    del bpy.types.Scene.formations_game_fog
     del bpy.types.Scene.formations_rocks_wire
     del bpy.types.Scene.formations_show_guides
     del bpy.types.Scene.formations_depth_keep_size

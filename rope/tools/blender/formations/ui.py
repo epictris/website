@@ -2,7 +2,7 @@
 
 import bpy
 
-from . import core, params, render, view
+from . import core, look, params, render, view
 
 
 class FORMATIONS_PT_main(bpy.types.Panel):
@@ -22,7 +22,20 @@ class FORMATIONS_PT_main(bpy.types.Panel):
             box.label(text="Run: just scene-guide <level>")
         else:
             box.operator("formations.look", icon="VIEW_CAMERA")
+            row = box.row(align=True)
+            row.operator("formations.ride", text="", icon="PLAY_REVERSE").direction = "BACK"
+            row.operator("formations.ride", text="", icon="PAUSE").direction = "PAUSE"
+            row.operator("formations.ride", text="", icon="PLAY").direction = "FORWARD"
+            row.prop(scene, "frame_current", text="Frame")
             box.label(text=str(cam.get("game_source", "")))
+            row = box.row(align=True)
+            row.prop(scene, "formations_game_lighting", toggle=True)
+            row.prop(scene, "formations_game_fog", toggle=True)
+            row.prop(scene, "formations_game_dof", toggle=True)
+            if scene.get(look.ERROR):
+                box.label(text=scene[look.ERROR], icon="ERROR")
+            elif look.enabled(scene):
+                box.label(text="Shows in Rendered shading")
         if scene.get("formations_busy"):
             layout.label(text=scene.get("formations_progress", "Working..."), icon="TIME")
 

@@ -42,18 +42,36 @@ def active_formation(context):
 
 
 class FORMATIONS_OT_look(bpy.types.Operator):
-    """Make the game camera the scene camera and look through it"""
+    """Make the game camera the scene camera and look through it from the start of its route"""
     bl_idname = "formations.look"
     bl_label = "Look Through Game Camera"
 
     def execute(self, context):
         try:
-            cam = view.look_through(context)
+            cam = view.look_from_start(context)
             self.report({"INFO"}, f"Game camera: {cam.get('game_source', '')}")
             return {"FINISHED"}
         except ValueError as e:
             self.report({"ERROR"}, str(e))
             return {"CANCELLED"}
+
+
+class FORMATIONS_OT_ride(bpy.types.Operator):
+    """Move the game camera along its route at the game's pace, or pause it"""
+    bl_idname = "formations.ride"
+    bl_label = "Ride Game Camera"
+
+    direction: EnumProperty(items=[("BACK", "Back", "Back along the route"), ("PAUSE", "Pause", "Hold the camera"),
+                                   ("FORWARD", "Forward", "Forward along the route")])
+
+    @classmethod
+    def description(cls, context, properties):
+        return {"BACK": "Ride the game camera back along its route", "PAUSE": "Pause the game camera",
+                "FORWARD": "Ride the game camera forward along its route"}[properties.direction]
+
+    def execute(self, context):
+        view.ride(context, {"BACK": -1, "PAUSE": 0, "FORWARD": 1}[self.direction])
+        return {"FINISHED"}
 
 
 def guide_of_mesh(ob):
@@ -484,6 +502,6 @@ class FORMATIONS_OT_depth(bpy.types.Operator):
             return {"CANCELLED"}
 
 
-CLASSES = (FORMATIONS_OT_look, FORMATIONS_OT_generate, FORMATIONS_OT_rebuild_changed, FORMATIONS_OT_action,
+CLASSES = (FORMATIONS_OT_look, FORMATIONS_OT_ride, FORMATIONS_OT_generate, FORMATIONS_OT_rebuild_changed, FORMATIONS_OT_action,
            FORMATIONS_OT_plant, FORMATIONS_OT_tone_facets, FORMATIONS_OT_repaint_slate, FORMATIONS_OT_edit,
            FORMATIONS_OT_polygon, FORMATIONS_OT_depth)

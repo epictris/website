@@ -136,6 +136,50 @@ export function fogDensity(amount: number): number {
   return Math.sqrt(-Math.log(1 - f)) / FOG_REFERENCE_DISTANCE;
 }
 
+// The level's fog: its colour (a CSS hex, which three mixes in as the sRGB
+// bytes it names, after tone mapping) and `FogExp2` density. Absent, zero (and
+// a negative, which means nothing) are all "no fog". Exported so the Blender
+// guide's game look (scripts/scene-guide.ts) is this fog, not a copy of it.
+export function fogOf(env: EnvironmentData | undefined): { color: string; density: number } | null {
+  const amount = env?.fogAmount ?? 0;
+  if (!(amount > 0)) return null;
+  return { color: env?.fogColor ?? env?.backgroundColor ?? DEFAULT_SKY, density: fogDensity(amount) };
+}
+
+// The tone mapping's exposure (`configureRenderer`). three's ACES Filmic
+// divides it by 0.6 before the curve.
+export const TONE_MAPPING_EXPOSURE = 1.0;
+
+// The level's light as the game draws it with a renderer, every default
+// applied: what `Environment` builds, and what the Blender guide rebuilds
+// (scripts/scene-guide.ts), so the two cannot disagree. Colours are three's
+// (linear); `hdri` names a captured sky that replaces the generated one.
+export interface Lighting {
+  sun: { color: THREE.Color; intensity: number; dir: THREE.Vector3 } | null;
+  fill: { sky: THREE.Color; ground: THREE.Color; intensity: number };
+  sky: SkyInputs;
+  envIntensity: number;
+  background: string;
+  hdri: string | null;
+}
+
+export function lightingOf(env: EnvironmentData | undefined, withRenderer = true): Lighting {
+  const sky = skyInputs(env);
+  const sunIntensity = env?.sunIntensity ?? DEFAULT_SUN_INTENSITY;
+  return {
+    sun: sunIntensity > 0 ? { color: sky.sunColor, intensity: sunIntensity, dir: sky.sunDir } : null,
+    fill: {
+      sky: sky.sky,
+      ground: sky.ground,
+      intensity: (env?.fillIntensity ?? DEFAULT_FILL_INTENSITY) * (withRenderer ? FILL_WITH_ENV : 1),
+    },
+    sky,
+    envIntensity: env?.envIntensity ?? ENV_INTENSITY,
+    background: env?.backgroundColor ?? DEFAULT_SKY,
+    hdri: env?.hdri ?? null,
+  };
+}
+
 export class Environment {
   // NULL when the level authors `sunIntensity: 0`, which is how a level says it
   // is underground. It is an absent light rather than a light at zero strength
@@ -169,13 +213,13 @@ export class Environment {
   ) {
     // The authored block with every default applied, read once and shared by
     // the lights and the generated sky, so the two cannot disagree.
-    const inputs = skyInputs(env);
+    const lighting = lightingOf(env, renderer !== undefined);
+    const inputs = lighting.sky;
     this.dir.copy(inputs.sunDir);
 
-    const sunIntensity = env?.sunIntensity ?? DEFAULT_SUN_INTENSITY;
     this.sunColor = inputs.sunColor;
-    if (sunIntensity > 0) {
-      this.sun = new THREE.DirectionalLight(this.sunColor, sunIntensity);
+    if (lighting.sun) {
+      this.sun = new THREE.DirectionalLight(this.sunColor, lighting.sun.intensity);
       this.sun.castShadow = true;
       this.sun.shadow.mapSize.set(SHADOW_MAP_SIZE, SHADOW_MAP_SIZE);
       const cam = this.sun.shadow.camera;
@@ -214,17 +258,10 @@ export class Environment {
       this.sun = null;
     }
 
-    const skyFill = inputs.sky;
-    const groundFill = inputs.ground;
-    this.fill = new THREE.HemisphereLight(
-      skyFill,
-      groundFill,
-      (env?.fillIntensity ?? DEFAULT_FILL_INTENSITY) * (renderer ? FILL_WITH_ENV : 1),
-    );
+    this.fill = new THREE.HemisphereLight(lighting.fill.sky, lighting.fill.ground, lighting.fill.intensity);
     scene.add(this.fill);
 
-    const background = env?.backgroundColor ?? DEFAULT_SKY;
-    scene.background = new THREE.Color(background);
+    scene.background = new THREE.Color(lighting.background);
     // Stated rather than left: the scene outlives this object, so a level that
     // authors no sky rotation must not inherit the last one's.
     scene.environmentRotation.set(0, 0, 0);
@@ -232,7 +269,7 @@ export class Environment {
 
     if (renderer) {
       this.renderer = renderer;
-      this.envIntensity = env?.envIntensity ?? ENV_INTENSITY;
+      this.envIntensity = lighting.envIntensity;
       this.rotation = THREE.MathUtils.degToRad(env?.hdriRotation ?? 0);
       this.hdriAsBackground = env?.hdriBackground === true;
       // A CAPTURED sky, if the level named one and this build has it. It is
@@ -262,14 +299,10 @@ export class Environment {
       }
     }
 
-    // Absent, zero (and a negative, which means nothing) are all "no fog", so a
-    // level that authors none has no `scene.fog` at all rather than a fog of zero
-    // density - three.js runs the fog chunks either way.
-    const amount = env?.fogAmount ?? 0;
-    scene.fog =
-      amount > 0
-        ? new THREE.FogExp2(new THREE.Color(env?.fogColor ?? background), fogDensity(amount))
-        : null;
+    // A level that authors none has no `scene.fog` at all rather than a fog of
+    // zero density - three.js runs the fog chunks either way.
+    const fog = fogOf(env);
+    scene.fog = fog ? new THREE.FogExp2(new THREE.Color(fog.color), fog.density) : null;
   }
 
   // Convolve one equirectangular sky into the mip chain a rough surface samples,
@@ -482,7 +515,7 @@ export function configureRenderer(renderer: THREE.WebGLRenderer): void {
   // Unity exposure (2026-09-30, was 1.15): brightness is the key light's job,
   // so a bright top face and a genuinely dark recess both fit in the curve;
   // raising the exposure instead lifts the shadows the look depends on.
-  renderer.toneMappingExposure = 1.0;
+  renderer.toneMappingExposure = TONE_MAPPING_EXPOSURE;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.shadowMap.enabled = true;
   // PCF, which is what three has drawn for `PCFSoftShadowMap` since it

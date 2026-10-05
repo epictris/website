@@ -30,9 +30,39 @@ The poses come out of the game's own code (`src/sim/cameraTrack.ts`): the real `
   There is no canonical run of a level, and the route is what the level's camera is authored around.
 - **A ride** of a recorded run: `just scene-guide ball --ride playtests/regressions/session-1010f.json.gz` replays the sim and feeds the camera exactly what `cli camera --ride` does, for the view one playthrough had.
 
-**Look Through Game Camera** makes it the scene camera and gives the scene its 60 fps, its frame range and a 1920x1080 frame, so scrubbing the timeline is travelling the route and the camera view is the game's view at that frame.
+**Look Through Game Camera** makes it the scene camera, gives the scene its 60 fps, its frame range and a 1920x1080 frame, and puts it on the first frame, the start of the route, so scrubbing the timeline is travelling the route and the camera view is the game's view at that frame.
+The buttons under it ride the camera back along the route, pause it and ride it forward, at the game's pace (the scene drops frames rather than slowing down when it cannot keep up); the frame field beside them scrubs.
 The camera is head-on and never turns, as the game's never does.
-What it cannot show is the game's light and fog: those are the level's (`environment`), and the viewport's are Blender's.
+What it cannot show is the game's light: that is the level's (`environment`), and the viewport's is Blender's.
+
+**Lighting**, **Fog** and **Depth of Field** under it are the game's look over that view, each a toggle (`tools/blender/formations/look.py`), each built from numbers the guide takes straight from the game's code, so nothing is a copy that can drift.
+
+**Lighting** is the game's light at rest instead of the scene's own.
+`just scene-guide` builds it into the guide file from `lightingOf` (`src/render3d/environment.ts`, which the game's `Environment` builds from too) and the always-on light objects `LightRig` builds (waking lights start dark and fireflies move, so neither is there): a `guide.lights` collection (the sun and the spots and points, outside the `Guide`, so nothing lights the scene until asked) and a `guide.world`.
+The toggle links both in, makes `guide.world` the scene's world, hides the scene's own lights, and sets the view transform to the game's tone mapping; off puts the world, the view settings and the lights' visibility back.
+Every conversion is measured in EEVEE against three's physical lights rather than assumed:
+
+| Game (three.js) | Blender |
+|---|---|
+| sun, intensity I | sun, strength I (both light white diffuse to I/pi) |
+| spot or point, I candela | power 4 pi I W |
+| hemisphere fill, sky over ground, intensity I | the world, sky above and ground below at I/pi (the same diffuse irradiance, linear in the normal's height) |
+| the generated sky it reflects, at `envIntensity` | the same pixels in the world, sampled with three's equirectangular mapping |
+| the background colour it clears to (never tone mapped) | the world to camera rays, at the colour the tone mapping shows as those bytes |
+| ACES Filmic at exposure 1 | ACES 1.3 at exposure log2(1 / 0.6) (three divides by 0.6 first; mean error 0.005 over a grey ramp and random colours) |
+
+A white diffuse card facing the camera under the guide's world and sun renders within 3 % of three's formula with the same numbers.
+What is not the same: three's light reach fades out as `(1 - (d/range)^4)^2` and Blender's cuts off at the range; the sun's shadow is softened by a 5 degree disc, which matches the game's fixed-width filter only about a metre from the occluder; the hemisphere fill has no specular in three and the world does in Blender; and the materials are Blender's, not the exported game's.
+A level that names a captured sky (`hdri`) still gets the generated one.
+
+**Depth of Field** makes `guide.camera.dof` the scene camera: the game camera (it rides on it) with Blender's own depth of field, its focus and f-number keyed per frame so that the blur behind the plane is the game's Medium (`DOF_MAX_BLUR`, `FOCUS_BAND` in `src/render3d/depthOfField.ts`).
+The game's thin lens has a circle of `dofMaxBlur` of the frame's height at infinity times `1 - focus / depth`; Blender's has diameter `f^2 / (N (s - f)) * |1 - s/d|` on the sensor, so the f-number is `f^2 / (48 dofMaxBlur (s - f))` against the 24 mm sensor height (measured within a pixel of the game's at 15 m, 30 m, 100 m and 1 km).
+It blurs in front of the focus too, where the game keeps everything sharp.
+
+**Fog** is a compositor tree, `Formations game look`, which the toggle makes the scene's compositor with the Depth pass and the viewport compositor in camera view on (Material Preview and Rendered shading, and renders).
+The game mixes its fog in after tone mapping, over the colours as they are shown, so the tree does too: the image goes to the display through the scene's view transform (its exposure applied around the conversion, which takes none), the fog `1 - exp(-(density * depth)^2)` mixes in the fog colour's sRGB bytes (never over the sky), and the result is inverted back to scene linear for the view transform to apply again (a round trip that changes no pixel by more than 1/255).
+Off hands the compositor and the Depth pass back as they were; a scene with a compositor of its own refuses it.
+A guide written before 2026-10-05 has none of the three: rerun `just scene-guide <level>` and reopen the scene.
 
 ## Editing outlines through the camera
 

@@ -72,6 +72,7 @@ The guide has no depth: it says where the collision is on the plane, and the dre
 A piece is a ready outline for the formations add-on's **New Formation** ([blender-formations](blender-formations.md#formations)).
 Until 2026-10-02 the guide was meshes, each body's outlines extruded through its thickness; Blender filled their faces along a normal that was never computed, so concave outlines came out as fans of triangles outside the collision.
 The guide also carries the **game camera**, `guide.camera`: the level's lens, keyed on every frame at 60 fps through the real camera controller along the level's camera paths (or along a recorded run, `--ride <bundle>`), so looking through it in Blender is looking through the game ([blender-formations](blender-formations.md#the-game-camera)).
+Beside it are what the game draws over that view, for the Formations panel's toggles: `guide.camera.dof` (the same camera with the game's depth of field), the game's light at rest (`guide.lights` and `guide.world`, which the scene does not use until the panel's Lighting links them in), and the level's fog on the camera.
 It **creates `<scene>.blend`** when there is none, with the `Guide` collection linked from the guide file, so reopening the scene after a level edit shows the current colliders and the dressing is always modelled against the outline the ball actually rolls on.
 The guide file is overwritten on every run and never exports.
 
