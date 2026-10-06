@@ -184,13 +184,18 @@ export const IMPACT_SLOTS = 4;
 // surface the fall lands in, never the one it leaves (a fall drops further).
 export const IMPACT_PLANE = 0.15;
 // x, y, z (three's frame, world) and amount (0 = idle); the sheet's half
-// width (study metres) and the direction it travels along world x.
+// width (boil units), the direction it travels along world x, metres per boil
+// unit and the boil's clock rate (water.ts, BOIL_REACH).
 export const impactAt = { value: Array.from({ length: IMPACT_SLOTS }, () => new THREE.Vector4()) };
 export const impactHow = { value: Array.from({ length: IMPACT_SLOTS }, () => new THREE.Vector4()) };
+// How far upstream the sheet's edges strike the water of its middle, boil
+// units (the sheet bows: its edges leave the lip slower, water.ts EDGE_LAG):
+// the boil follows the line the sheet actually strikes along.
+export const impactBend = { value: Array.from({ length: IMPACT_SLOTS }, () => 0) };
 const impactTaken: boolean[] = Array.from({ length: IMPACT_SLOTS }, () => false);
 
 // A slot for one fall's impact, or -1 when every slot is taken (that fall's
-// landing then draws its crown and spray but no footprint).
+// landing then draws its crown, plumes and ribbons but no footprint).
 export function takeImpactSlot(): number {
   const i = impactTaken.indexOf(false);
   if (i >= 0) impactTaken[i] = true;
@@ -224,36 +229,48 @@ export const IMPACT_GLSL = `
   ${ORGANIC_GLSL}
   uniform vec4 uImpactAt[${IMPACT_SLOTS}];
   uniform vec4 uImpactHow[${IMPACT_SLOTS}];
+  uniform float uImpactBend[${IMPACT_SLOTS}];
+  // From the line the sheet strikes along, the whole of its width, so the
+  // boil wraps round the sheet's sides. (Its straight part once stopped at
+  // 0.82 of the half width, the study's sheet's, which on a wide sheet left
+  // its edges falling into clear water.)
   float impactDistance(vec2 d, float hw) {
-    return length(vec2(d.x, max(abs(d.y) - hw * 0.82, 0.0)));
+    return length(vec2(d.x, max(abs(d.y) - hw, 0.0)));
   }
   float impactEnvelope(vec2 d, float hw) {
     float r = impactDistance(d, hw);
     return smoothstep(0.45, 0.95, r) * (1.0 - smoothstep(2.5, 4.0, r)) * exp(-r * 0.28);
   }
-  float impactPhase(vec2 d, float hw) {
+  // t: the impact's own clock (uTime at its rate).
+  float impactPhase(vec2 d, float hw, float t) {
     float r = impactDistance(d, hw), a = atan(d.y, d.x);
-    return 6.2831853 * (r / 1.10 - uTime * 0.84 / 1.10) + 0.24 * sin(a * 6.0 - uTime * 0.65) + 0.16 * sin(a * 11.0 + uTime * 0.73);
+    return 6.2831853 * (r / 1.10 - t * 0.84 / 1.10) + 0.24 * sin(a * 6.0 - t * 0.65) + 0.16 * sin(a * 11.0 + t * 0.73);
   }
-  float impactFootprint(vec2 d, float hw) {
-    float r = impactDistance(vec2(d.x + 0.12 + 0.12 * sin(d.y * 2.8 - uTime * 1.7), d.y), hw);
-    float edge = paintNoise(vec2(d.y * 3.8 - uTime * 0.9, d.x * 4.1 + uTime * 0.65));
-    return 1.0 - smoothstep(0.57, 0.95, r + (edge - 0.5) * 0.48 + 0.08 * sin(d.y * 6.0 + uTime * 1.9));
+  // The whitewater footprint's field: inside under 0.76 (see impactPaint).
+  float impactFootprintField(vec2 d, float hw, float t) {
+    float r = impactDistance(vec2(d.x + 0.12 + 0.12 * sin(d.y * 2.8 - t * 1.7), d.y), hw);
+    float edge = paintNoise(vec2(d.y * 3.8 - t * 0.9, d.x * 4.1 + t * 0.65));
+    return r + (edge - 0.5) * 0.48 + 0.08 * sin(d.y * 6.0 + t * 1.9);
   }
-  float impactHeight(vec2 d, float hw) {
+  float impactHeight(vec2 d, float hw, float t) {
     float r = impactDistance(d, hw);
     if (r > 4.1) return 0.0;
-    float waves = 0.009 * sin(impactPhase(d, hw)) * impactEnvelope(d, hw);
-    float boil = impactFootprint(d, hw) * (0.03 + 0.06 * paintNoise(vec2(d.y * 2.4 + uTime * 0.72, d.x * 2.8 - uTime * 0.9)));
+    float waves = 0.009 * sin(impactPhase(d, hw, t)) * impactEnvelope(d, hw);
+    float footprint = 1.0 - smoothstep(0.57, 0.95, impactFootprintField(d, hw, t));
+    float boil = footprint * (0.03 + 0.06 * paintNoise(vec2(d.y * 2.4 + t * 0.72, d.x * 2.8 - t * 0.9)));
     return waves + boil;
   }
-  // Study metres from impact i, x turned so the sheet travels toward -x; or
+  // Boil units from impact i, x turned so the sheet travels toward -x; or
   // a long way off when the slot is idle or out of this plane.
   vec2 impactOffset(int i, vec3 world) {
     vec4 at = uImpactAt[i];
     if (at.w <= 0.0 || abs(world.y - at.y) > ${fmt(IMPACT_PLANE)}) return vec2(1e3);
-    vec2 d = (world.xz - at.xz) / ${fmt(STUDY_SCALE)};
-    return vec2(-uImpactHow[i].y * d.x, d.y);
+    vec2 d = (world.xz - at.xz) / uImpactHow[i].z;
+    d.x *= -uImpactHow[i].y;
+    // Measured from where the sheet strikes at this point across it.
+    float across = clamp(d.y / max(uImpactHow[i].x, 1e-3), -1.0, 1.0);
+    d.x -= uImpactBend[i] * across * across;
+    return d;
   }
   vec2 impactSlope(vec3 world) {
     vec2 slope = vec2(0.0);
@@ -261,41 +278,47 @@ export const IMPACT_GLSL = `
       vec2 d = impactOffset(i, world);
       float hw = uImpactHow[i].x;
       if (impactDistance(d, hw) > 4.1) continue;
-      float h = impactHeight(d, hw);
-      vec2 g = vec2(impactHeight(d + vec2(0.015, 0.0), hw) - h, impactHeight(d + vec2(0.0, 0.015), hw) - h) / 0.015;
+      float t = uTime * uImpactHow[i].w;
+      float h = impactHeight(d, hw, t);
+      vec2 g = vec2(impactHeight(d + vec2(0.015, 0.0), hw, t) - h, impactHeight(d + vec2(0.0, 0.015), hw, t) - h) / 0.015;
       // Back into the world's x.
       slope += vec2(-uImpactHow[i].y * g.x, g.y);
     }
     return slope;
   }
-  // How far a pixel spans, study metres, for the arcs' edges: the study's
-  // fwidth of the distance to the impact, which changes by no more than the
-  // pixel moves. Taken by the caller in uniform control flow, since the
-  // paint is drawn per pixel only where an impact is near.
-  float impactSpan(vec3 world) { return length(fwidth(world.xz)) / ${fmt(STUDY_SCALE)}; }
+  // How far a pixel spans, metres, for the edges: the fwidth of the distance
+  // to the impact changes by no more than the pixel moves. Taken by the
+  // caller in uniform control flow, since the paint is drawn per pixel only
+  // where an impact is near.
+  float impactSpan(vec3 world) { return length(fwidth(world.xz)); }
   vec3 impactPaint(vec3 world, vec3 col, vec3 base, vec3 light, float span) {
     for (int i = 0; i < ${IMPACT_SLOTS}; i++) {
       vec2 d = impactOffset(i, world);
       float hw = uImpactHow[i].x;
       float dist = impactDistance(d, hw);
       if (dist > 4.1) continue;
-      float n = paintNoise(vec2(d.y * 3.8 - uTime * 0.9, d.x * 4.1 + uTime * 0.65));
-      float foam = impactFootprint(d, hw) * (0.78 + 0.22 * smoothstep(0.2, 0.66, n));
-      float phase = impactPhase(d, hw);
+      float t = uTime * uImpactHow[i].w;
+      float px = span / uImpactHow[i].z;
+      float n = paintNoise(vec2(d.y * 3.8 - t * 0.9, d.x * 4.1 + t * 0.65));
+      // The footprint cut to the pixel, opaque: a clean edge, never a mist.
+      float field = impactFootprintField(d, hw, t);
+      float foam = 1.0 - smoothstep(0.76 - px, 0.76 + px, field);
+      float phase = impactPhase(d, hw, t);
       float pd = abs(atan(sin(phase), cos(phase))) / 6.2831853 * 1.10;
-      float aa = clamp(span, 0.003, 0.042);
-      float group = floor((dist - uTime * 0.84) / 1.10 + 0.5);
+      float aa = clamp(px, 0.003, 0.042);
+      float group = floor((dist - t * 0.84) / 1.10 + 0.5);
       float branch = sin(d.y * 3.5 + d.x * 1.8 + group * 2.7) + 0.62 * sin(d.y * 7.3 - d.x * 3.0 - group * 1.3);
       float ridge = 1.0 - smoothstep(0.018 - aa * 0.35, 0.042 + aa, pd);
       float broken = smoothstep(0.03, 0.57, branch);
       float arc = ridge * broken * impactEnvelope(d, hw) * (1.0 - smoothstep(0.10, 0.9, d.x));
       col = mix(col, base, (1.0 - smoothstep(0.7, 3.6, dist)) * 0.58);
       vec3 white = vec3(0.88, 0.97, 0.99);
-      col = mix(col, white, clamp(foam, 0.0, 0.98));
+      // Its mottling is in the tone, not in how much of the water shows through.
+      col = mix(col, mix(base, white, 0.78 + 0.22 * smoothstep(0.2, 0.66, n)), foam);
       col = mix(col, mix(white, light, smoothstep(0.8, 3.5, dist) * 0.80), clamp(arc * 0.65, 0.0, 0.68));
     }
     return col;
   }
 `;
 
-export const impactUniforms = { uImpactAt: impactAt, uImpactHow: impactHow };
+export const impactUniforms = { uImpactAt: impactAt, uImpactHow: impactHow, uImpactBend: impactBend };

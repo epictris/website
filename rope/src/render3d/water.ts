@@ -31,6 +31,7 @@ import {
   freeImpactSlot,
   IMPACT_GLSL,
   impactAt,
+  impactBend,
   impactHow,
   impactUniforms,
   LIGHT_FALLOFF,
@@ -77,10 +78,17 @@ const EDGE_MOTION = 0.026;
 // fall's whitewater.
 const RIVER_FOAM = 1.0;
 const FALL_FOAM = 1.0;
-// The landing: how tall the crown and the plumes stand, and how much of them.
+// How much finer across the wash's streaks are than the study's: narrow
+// lines rather than broad bands (Tris, 2026-10-06).
+const WASH_ACROSS = 2.5;
+// How much higher the wash is cut than the study's, river and fall alike:
+// half as many streaks (measured on the field, 14.6 to 7.3 across 12 study
+// metres; Tris, 2026-10-06), each a little narrower.
+const WASH_CUT_RAISE = 0.05;
+// The landing's shapes: how tall the crown and the plumes stand (in boil
+// units, see BOIL_REACH), and how much of them.
 const FOAM_HEIGHT = 1.15;
 const IMPACT_FOAM = 1.0;
-const SPRAY = 1.0;
 // The study's river ran across its world at z -5.7, a fixed share of the way
 // from its far wall to its camera, and paled its light bands by that share.
 const FOREGROUND = 0.43;
@@ -199,34 +207,31 @@ const PAINTED_HARMONICS: readonly (readonly [number, number, number, number])[] 
 const PAINTED_WAVE_HEIGHT = 0.05;
 const PAINTED_END_TAPER = 0.5;
 const PAINTED_FRONT_FALLOFF = 0.22;
-// How far down a channel's front the wash and the waterline rim reach,
-// metres: the study's banks hid its sides, and a front painted as a bank
-// read as white from the waterline to the bed.
-const BANK_DOWN = 0.05;
-const RIM_DOWN = 0.03;
 // The front sheet's opacity, waterline to bed: murky glass, so the submerged
 // ball stays a silhouette (the pool's numbers). The top and the fall are
 // opaque, as the study's water is.
 const ALPHA_FRONT_TOP = 0.94;
 const ALPHA_FRONT_BED = 0.8;
-// The landing's spray, in instances (the study's counts).
-// Fewer of each than the study threw (92, 26 and 160): BALL's falls are
-// short, and the study's count of airborne water read as a cataract landing
-// in a cascade a metre high (Tris, 2026-10-06).
-const PLUMES = 72;
-const SPLASHES = 8;
-const SPRAYS = 40;
-// What a landing throws goes as fast as the water arrives: the study's
-// numbers are for its 3.55 study metre fall, and a shorter fall's impact speed
-// is the study's times sqrt(drop / STUDY_DROP) (`uEnergy`, never above 1). On
-// top of that the splash ribbons and the spray are thrown at SPLASH_SPEED and
-// SPRAY_SPEED of the study's, and the crown and the plumes stand CROWN_RISE
-// and PLUME_RISE of its height (the churn kept, only calmer).
-const STUDY_DROP = 3.55;
-const SPLASH_SPEED = 0.6;
-const SPRAY_SPEED = 0.7;
-const CROWN_RISE = 0.85;
-const PLUME_RISE = 0.85;
+// THE LANDING'S SCALE, from the fall's own physics (Tris, 2026-10-06: the
+// churn should fit the height and the water). The sheet strikes at
+// v_i = sqrt(v_lip^2 + 2 g drop), carrying q m^2/s per metre of width.
+// - The BOIL (crown, plumes, the whitewater footprint and rings on the water
+//   below) is the bubbles the sheet drives down coming back up: its size is
+//   the one length the sheet's momentum per width q v_i and gravity make,
+//   l = sqrt(q v_i / g), and the crown reaches l downstream. Its shapes are
+//   drawn in units of l / BOIL_REACH, on a clock run by the square root of
+//   that unit (Froude: the same gravity at any size). BALL: 0.33 m on the
+//   lower fall, 0.66 m on the upper.
+// - Nothing is THROWN: loose drops read as a sprinkler and splash ribbons
+//   arcing out were not liked either (Tris, 2026-10-06), so both are gone.
+// - HOW MUCH: a plunging sheet entrains air in proportion to q (v_i - v_e),
+//   v_e ~1 m/s the speed below which it takes in none (ENTRAIN_ONSET); times
+//   the width, that sets how many plumes are out, at PLUMES_PER per unit (the
+//   lower fall's 2.6 units keep the 72 it had), up to PLUMES_MAX.
+const BOIL_REACH = 1.16;
+const ENTRAIN_ONSET = 1.0;
+const PLUMES_PER = 28;
+const PLUMES_MAX = 256;
 
 // ---------------------------------------------------------------------------
 // Geometry
@@ -680,17 +685,11 @@ const PAINT_GLSL = `
   }
   // The wash field shared by the river and the falling sheet, in parcel units,
   // so a streak born on the river runs on over the brink and down the fall.
+  // Read WASH_ACROSS finer across than the study's.
   float washStreak(vec2 mp) {
     float t = uTime * ${fmt(CHURN)};
-    vec2 sq = vec2(mp.x * 1.7, mp.y * 0.17);
+    vec2 sq = vec2(mp.x * ${fmt(1.7 * WASH_ACROSS)}, mp.y * 0.17);
     return wfb(sq) * 0.58 + 0.27 * wn(sq * 2.1 + vec2(t * 0.28, -t * 0.18)) + 0.15 * wn(sq * 4.7 + vec2(-t * 0.14, t * 0.33));
-  }
-  // How close to the bank (or the sheet's edge) a point is, with a reach that
-  // wanders along the channel so the inner edge is a torn line. Down the
-  // front (see BANK_DOWN) it gives out.
-  float washBank(vec2 mp, float across) {
-    float reach = abs(across) + 0.5 * (wfb(vec2(mp.y * 0.45, mp.x * 0.9) + (across > 0.0 ? 3.0 : 17.0)) - 0.5);
-    return smoothstep(vHalfWidth - 0.50, vHalfWidth - 0.06, reach) * (1.0 - smoothstep(0.0, ${fmt(BANK_DOWN)}, vBelow));
   }
   vec3 paintedRiver(out float foam) {
     // Across (continued down the faces), Lagrangian travel.
@@ -747,17 +746,19 @@ const PAINT_GLSL = `
     col += uLight * specular * 0.06;
     col += uLight * crest * ${fmt(CONTRAST * 0.16 * STROKES)};
     // A pale wash instead of foam: translucent milky streaks drawn along the
-    // current, faint in mid-channel and opaque where the water meets the
-    // banks or the brink, feathered at their edges.
+    // current, faint in mid-channel and opaque toward the brink, cut clean at
+    // their edges. (The study also drew it opaque along the banks, with a
+    // rim at the waterline: extra foam down the water's sides, dropped,
+    // Tris 2026-10-06.)
     float lip = exp(-pow((uLip - vFlow.x - 0.3) / 1.0, 2.0)) * uSpilling;
-    float bank = washBank(matp, vFlow.y);
-    float contact = clamp(bank + 0.22 * lip, 0.0, 1.0) * ${fmt(RIVER_FOAM)};
+    float contact = clamp(0.22 * lip, 0.0, 1.0) * ${fmt(RIVER_FOAM)};
     float light = 0.84 + 0.16 * max(0.0, dot(n, L));
     {
       float streak = washStreak(matp);
-      float threshold = mix(0.645, 0.47, contact);
-      // A crisp edge: the streak is translucent through its opacity, not blurred.
-      float aa = max(0.012, fwidth(streak) * 0.8);
+      float threshold = mix(0.645, 0.47, contact) + ${fmt(WASH_CUT_RAISE)};
+      // A crisp edge, cut to the pixel: the streak is translucent through its
+      // opacity, never feathered.
+      float aa = 0.5 * fwidth(streak);
       float wash = smoothstep(threshold - aa, threshold + aa, streak);
       // Thinner streaks inside: a second cut a little higher draws a brighter core.
       float core = smoothstep(threshold + 0.07 - aa, threshold + 0.07 + aa, streak);
@@ -765,13 +766,7 @@ const PAINT_GLSL = `
       vec3 milk = mix(uLight, vec3(0.88, 0.94, 0.95), mix(0.5, 0.9, contact));
       col = mix(col, milk * light, wash * opacity * ${fmt(STROKES)});
       col = mix(col, mix(milk, vec3(0.92, 0.96, 0.96), 0.5) * light, core * opacity * 0.5 * ${fmt(STROKES)});
-      // The waterline itself: a thin, nearly solid rim where the water meets
-      // rock, and only there (see RIM_DOWN).
-      float rim = smoothstep(vHalfWidth - 0.16, vHalfWidth - 0.03, abs(vFlow.y))
-        * (0.5 + 0.5 * wn(vec2(matp.y * 1.3, matp.x * 3.0)))
-        * (1.0 - smoothstep(0.0, ${fmt(RIM_DOWN)}, vBelow));
-      col = mix(col, vec3(0.90, 0.95, 0.95) * light, rim * 0.75 * ${fmt(RIVER_FOAM)});
-      foam = clamp(max(wash * opacity, rim * 0.8), 0.0, 1.0) * mix(0.09, 1.0, vSurfaceWeight);
+      foam = clamp(wash * opacity, 0.0, 1.0) * mix(0.09, 1.0, vSurfaceWeight);
     }
     // A fall's whitewater footprint and broken rings, on the top only.
     float span = impactSpan(vWorld);
@@ -832,20 +827,18 @@ const PAINT_GLSL = `
     // Whitewater: the river's own wash carried over the brink, in the same
     // travel coordinate, so nothing ends at the lip; down the sheet it fills
     // in, brightens toward white and is cut by finer lanes as the water
-    // accelerates, and the sheet's edges stay milky like the banks.
+    // accelerates.
     vec2 mp = matp;
     float streak = washStreak(mp);
     streak += ((wn(vec2(pm.x * 14.0 + 5.0, pm.y * 0.15)) - 0.5) * 0.30 + (wn(vec2(pm.x * 26.0 + 9.0, pm.y * 0.3)) - 0.5) * 0.14) * fall;
-    float bankF = washBank(mp, vFlow.y) * ${fmt(RIVER_FOAM)};
-    float threshold = mix(0.645, 0.575, pow(fall, 1.2) * ${fmt(FALL_FOAM)}) - 0.08 * bankF;
-    float aa = max(0.012, fwidth(streak) * 0.8);
+    float threshold = mix(0.645, 0.575, pow(fall, 1.2) * ${fmt(FALL_FOAM)}) + ${fmt(WASH_CUT_RAISE)};
+    float aa = 0.5 * fwidth(streak);
     float ribbons = smoothstep(threshold - aa, threshold + aa, streak);
     // A streak that would run wide down the sheet thins to a wash in its middle.
     ribbons *= mix(1.0, 0.5, smoothstep(threshold + 0.08, threshold + 0.2, streak) * fall);
     float core = smoothstep(threshold + 0.07 - aa, threshold + 0.07 + aa, streak);
-    float opacity = mix(0.30, 0.9, smoothstep(0.0, 0.7, fall)) + 0.2 * bankF;
-    opacity = min(opacity, 1.0) * mix(0.08, 1.0, vSurfaceWeight);
-    vec3 milk = mix(uLight, vec3(0.88, 0.94, 0.95), mix(0.5, 0.9, max(fall, bankF)));
+    float opacity = mix(0.30, 0.9, smoothstep(0.0, 0.7, fall)) * mix(0.08, 1.0, vSurfaceWeight);
+    vec3 milk = mix(uLight, vec3(0.88, 0.94, 0.95), mix(0.5, 0.9, fall));
     float foamLight = 0.84 + 0.16 * max(0.0, dot(geo, L));
     col = mix(col, milk * foamLight, ribbons * opacity);
     col = mix(col, mix(milk, vec3(0.92, 0.96, 0.96), 0.5) * foamLight, core * opacity * 0.5);
@@ -1001,52 +994,69 @@ function currentMaterial(look: CurrentLook): THREE.MeshBasicMaterial {
 // The landing
 // ---------------------------------------------------------------------------
 
-// Where a fall meets the water, the study's crown, plumes, splash ribbons and
-// spray, ported shader for shader. Each is drawn in study metres in a frame
-// whose x is turned so the sheet travels toward -x (the study's), about the
-// impact, then scaled into the body's frame: so the whole landing is the
-// study's at STUDY_SCALE and keeps its timing. Every particle is a pure
-// function of the clock and its instance, so a pinned clock draws the same
-// landing twice.
+// Where a fall meets the water: the crown and the plumes,
+// scaled by the fall's own physics (see BOIL_REACH). The boil is drawn in boil
+// units in a frame whose x is turned so the sheet travels toward -x, about the
+// impact, on the landing's own clock; what it throws is drawn in metres in the
+// same turned frame, on the wall clock. Every piece is a pure function of the
+// clock and its instance, so a pinned clock draws the same landing twice.
+//
+// CLEAN EDGES: every piece is opaque and cut to the pixel, and comes and goes
+// by growing and shrinking rather than fading (Tris, 2026-10-06: the soft
+// translucent puffs read as a blurry mist over the stylised scene).
 interface Landing {
   impact: THREE.Vector3;
   side: number;
-  // The sheet's half width, study metres (physical, not stretched).
-  halfWidth: number;
   // The top of the water it lands in, in the body's frame (min x, max x,
   // min z, max z): the crown froths on that water and nowhere past its ends.
   clip: THREE.Vector4;
-  // The impact's speed as a share of the study's (see STUDY_DROP).
-  energy: { value: number };
+  // Set every frame by `land`: metres per boil unit and the boil's clock;
+  // and the sheet's half width (metres).
+  unit: { value: number };
+  clock: { value: number };
+  halfWidth: { value: number };
+  // How far upstream the sheet's edges strike of its middle, boil units (see
+  // impactBend).
+  bend: { value: number };
 }
 
 // Uniforms every landing program shares.
 function landingUniforms(l: Landing): Record<string, THREE.IUniform> {
   return {
     uTime: waterTime,
+    uClock: l.clock,
     uImpact: { value: l.impact },
     uSide: { value: l.side },
-    uHalfWidth: { value: l.halfWidth },
+    uUnit: l.unit,
+    uHalfWidthM: l.halfWidth,
+    uBend: l.bend,
     uClip: { value: l.clip },
-    uEnergy: l.energy,
   };
 }
 
 const LANDING_PRELUDE = `
   uniform float uTime;
+  uniform float uClock;
   uniform vec3 uImpact;
   uniform float uSide;
-  uniform float uHalfWidth;
-  uniform float uEnergy;
-  // A point of the landing in study metres (sheet toward -x) to the body's
-  // frame.
-  vec3 toBody(vec3 p) { return uImpact + vec3(-uSide * p.x, p.y, p.z) * ${fmt(S)}; }
+  uniform float uUnit;
+  uniform float uHalfWidthM;
+  uniform float uBend;
+  // The sheet's half width in boil units.
+  float halfWidth() { return uHalfWidthM / uUnit; }
+  // How far upstream (+x) of the middle's the sheet strikes at z across it
+  // (boil units), held at the edges' past them.
+  float strikeShift(float z) { float a = clamp(z / halfWidth(), -1.0, 1.0); return uBend * a * a; }
+  // A point in boil units (sheet toward -x) to the body's frame.
+  vec3 toBody(vec3 p) { return uImpact + vec3(-uSide * p.x, p.y, p.z) * uUnit; }
   // The camera's right and up in the body's frame.
   vec3 viewRight() { return vec3(modelViewMatrix[0][0], modelViewMatrix[1][0], modelViewMatrix[2][0]); }
   vec3 viewUp() { return vec3(modelViewMatrix[0][1], modelViewMatrix[1][1], modelViewMatrix[2][1]); }
   float rnd(float x) { return fract(sin(x * 127.1 + 311.7) * 43758.5453); }
 `;
 
+// Opaque cut-outs: they write depth like the water around them, so they sort
+// among themselves and the depth of field sees them where they are.
 function landingMaterial(l: Landing, vertex: string, fragment: string): THREE.ShaderMaterial {
   return new THREE.ShaderMaterial({
     uniforms: landingUniforms(l),
@@ -1054,24 +1064,65 @@ function landingMaterial(l: Landing, vertex: string, fragment: string): THREE.Sh
     fragmentShader: `
       #include <common>
       uniform float uTime;
+      uniform float uClock;
+      // Inside where f is under the cut, to the pixel.
+      float cut(float f, float at) { float aa = 0.5 * fwidth(f); return 1.0 - smoothstep(at - aa, at + aa, f); }
       ${fragment}`,
     transparent: true,
-    depthWrite: false,
+    depthWrite: true,
     toneMapped: false,
     side: THREE.DoubleSide,
   });
 }
 
-// The colours are the study's, linear, out through the canvas's encoding.
+// The colours, linear, out through the canvas's encoding. Opaque but for the
+// one-pixel cut; what falls under half of it is not drawn at all.
 const LANDING_OUT = `
-  gl_FragColor = vec4(col, alpha);
+  if (alpha < 0.5) discard;
+  gl_FragColor = vec4(col, 1.0);
   #include <colorspace_fragment>
 `;
 
+// The crown's surface, shared by the crown and the plumes thrown from it, in
+// boil units about the line the sheet strikes (before strikeShift), at the
+// boil's clock t. Its EDGE is a field, under CROWN_EDGE inside: the mound
+// stands while the field is inside and sinks under the water just past it, so
+// the waterline itself is the crown's outline, drawn to the pixel by the depth
+// test. (Its edge was once an alpha cut beside a height that sank on a
+// smoother radius: inside the cut the surface sat within a centimetre of the
+// water, and as it heaved, teal islands opened and closed in it - the
+// flicker, Tris 2026-10-06.)
+const CROWN_EDGE = 0.76;
+const CROWN_GLSL = `
+  // Torn toward the rim only, so the breakup never opens holes in the middle.
+  float crownEdge(vec2 p, float t) {
+    float r = length(vec2(p.x + 0.10 * sin(p.y * 2.8 - t * 1.7), max(abs(p.y) - halfWidth(), 0.0)));
+    float breakup = paintNoise(vec2(p.y * 4.0 - t * 1.05, p.x * 5.4 + t * 1.34));
+    return r + ((breakup - 0.5) * 0.47 + 0.08 * sin(p.y * 6.0 + t * 1.9)) * smoothstep(0.25, 0.6, r);
+  }
+  float crownHeight(vec2 p, float t) {
+    float nx = p.x / ${fmt(BOIL_REACH)}, nz = p.y / (halfWidth() + 0.70);
+    float body = max(0.0, 1.0 - pow(abs(nx), 2.3) - pow(abs(nz), 6.0));
+    float folds = paintNoise(vec2(p.y * 3.25 + t * 0.88, p.x * 4.6 - t * 1.26));
+    float h = (0.10 + 0.41 * folds + 0.07 * sin(p.y * 9.0 + t * 4.0)) * pow(body, 0.65);
+    return 0.045 + h * ${fmt(FOAM_HEIGHT * Math.min(1, IMPACT_FOAM))};
+  }
+  // Above the water (0) while the edge field is inside CROWN_EDGE, sloping
+  // down to it exactly there and under it past: one crossing, so the
+  // waterline is the outline.
+  float crownSurface(vec2 p, float t) {
+    float e = crownEdge(p, t);
+    float inside = 1.0 - smoothstep(${fmt(CROWN_EDGE - 0.24)}, ${fmt(CROWN_EDGE)}, e);
+    return crownHeight(p, t) * inside - 0.06 * smoothstep(${fmt(CROWN_EDGE)}, ${fmt(CROWN_EDGE + 0.1)}, e);
+  }
+`;
+
 // One continuous frothing contact surface, not a row of spheres or a torus:
-// a heightfield over a capsule footprint the width of the sheet.
+// a heightfield over a capsule footprint the width of the sheet, BOIL_REACH
+// boil units downstream and up, along the line the sheet strikes. Fine
+// enough that the edge field's breakup is sampled several times a wave.
 function crownMesh(l: Landing): THREE.Mesh {
-  const geometry = new THREE.PlaneGeometry(2, 2, 36, 96);
+  const geometry = new THREE.PlaneGeometry(2, 2, 72, 288);
   geometry.rotateX(-Math.PI / 2);
   const material = landingMaterial(
     l,
@@ -1080,41 +1131,24 @@ function crownMesh(l: Landing): THREE.Mesh {
     varying vec2 vLocal;
     varying vec2 vBody;
     ${ORGANIC_GLSL}
-    float crownHeight(vec2 p) {
-      float nx = p.x / 1.16, nz = p.y / (uHalfWidth + 0.70);
-      float body = max(0.0, 1.0 - pow(abs(nx), 2.3) - pow(abs(nz), 6.0));
-      float folds = paintNoise(vec2(p.y * 3.25 + uTime * 0.88, p.x * 4.6 - uTime * 1.26));
-      float h = (0.10 + 0.41 * folds + 0.07 * sin(p.y * 9.0 + uTime * 4.0)) * pow(body, 0.65);
-      return 0.045 + h * ${fmt(FOAM_HEIGHT * CROWN_RISE * Math.min(1, IMPACT_FOAM))};
-    }
-    // The fragment's mask radius without its noise (see the fragment stage).
-    float crownReach(vec2 p) {
-      return length(vec2(p.x + 0.10 * sin(p.y * 2.8 - uTime * 1.7), max(abs(p.y) - uHalfWidth * 0.82, 0.0)));
-    }
-    float crownSkirt(vec2 p) {
-      float r = crownReach(p);
-      return crownHeight(p) * (1.0 - smoothstep(0.3, 0.9, r)) - 0.04 * smoothstep(0.55, 0.95, r);
-    }
+    ${CROWN_GLSL}
     void main() {
-      vec2 p = position.xz * vec2(1.16, uHalfWidth + 0.70);
-      float edgeEnv = pow(abs(p.x) / 1.16, 2.0);
-      p.x += (0.055 * sin(p.y * 7.0 - uTime * 4.0) + 0.03 * sin(p.y * 14.0 + uTime * 2.7)) * edgeEnv;
-      // The mound rises OUT OF the water: its height dies with the fragment
-      // mask's own reach (the same r, without the mask's noise) and its rim
-      // dips under the surface, where the water's depth hides it. The study's
-      // stood on a 0.045 plinth with the mask cutting it off well above the
-      // water, a lid with a gap under it through which a low camera saw the
-      // sheet strike the water (Tris, 2026-10-06).
-      float y = crownSkirt(p);
-      vec2 d = vec2(crownSkirt(p + vec2(0.015, 0.0)) - y, crownSkirt(p + vec2(0.0, 0.015)) - y) / 0.015;
+      vec2 p = position.xz * vec2(${fmt(BOIL_REACH)}, halfWidth() + 0.70);
+      float edgeEnv = pow(abs(p.x) / ${fmt(BOIL_REACH)}, 2.0);
+      p.x += (0.055 * sin(p.y * 7.0 - uClock * 4.0) + 0.03 * sin(p.y * 14.0 + uClock * 2.7)) * edgeEnv;
+      float y = crownSurface(p, uClock);
+      // The slope of the mound itself, for its light (not of the step at its
+      // edge, which is under the water).
+      float h = crownHeight(p, uClock);
+      vec2 d = vec2(crownHeight(p + vec2(0.015, 0.0), uClock) - h, crownHeight(p + vec2(0.0, 0.015), uClock) - h) / 0.015;
       vLocal = p;
       vNormal = normalize(vec3(uSide * d.x, 1.0, -d.y));
-      vec3 at = toBody(vec3(p.x - 0.08, y, p.y));
+      // Along the line the sheet strikes (see strikeShift).
+      vec3 at = toBody(vec3(p.x - 0.08 + strikeShift(p.y), y, p.y));
       vBody = at.xz;
       gl_Position = projectionMatrix * modelViewMatrix * vec4(at, 1.0);
     }`,
     `
-    uniform float uHalfWidth;
     uniform vec4 uClip;
     varying vec3 vNormal;
     varying vec2 vLocal;
@@ -1122,26 +1156,21 @@ function crownMesh(l: Landing): THREE.Mesh {
     ${ORGANIC_GLSL}
     void main() {
       if (vBody.x < uClip.x || vBody.x > uClip.y || vBody.y < uClip.z || vBody.y > uClip.w) discard;
-      float r = length(vec2(vLocal.x + 0.10 * sin(vLocal.y * 2.8 - uTime * 1.7), max(abs(vLocal.y) - uHalfWidth * 0.82, 0.0)));
-      float breakup = paintNoise(vec2(vLocal.y * 4.0 - uTime * 1.05, vLocal.x * 5.4 + uTime * 1.34));
-      float mask = 1.0 - smoothstep(0.56, 0.96, r + (breakup - 0.5) * 0.47 + 0.08 * sin(vLocal.y * 6.0 + uTime * 1.9));
-      float fold = paintNoise(vec2(vLocal.y * 5.0 + uTime * 0.80, vLocal.x * 6.0 - uTime * 1.65));
+      float alpha = 1.0;
+      float fold = paintNoise(vec2(vLocal.y * 5.0 + uClock * 0.80, vLocal.x * 6.0 - uClock * 1.65));
       vec3 col = mix(vec3(0.45, 0.69, 0.77), vec3(0.96, 0.99, 1.0), 0.55 + 0.45 * smoothstep(0.19, 0.69, fold));
       float lit = dot(normalize(vNormal), normalize(vec3(-0.45, 0.85, 0.2)));
       col *= 0.86 + 0.14 * smoothstep(-0.6, 0.75, lit);
-      float alpha = mask * ${fmt(Math.min(1, IMPACT_FOAM))};
-      if (alpha < 0.008) discard;
       ${LANDING_OUT}
     }`,
   );
   return new THREE.Mesh(geometry, material);
 }
 
-// A quad instanced `count` times; the programs place each by gl_InstanceID.
-function instancedQuads(count: number, rows = 1): THREE.InstancedBufferGeometry {
-  const plane = new THREE.PlaneGeometry(1, 1, 1, rows);
-  // The splash ribbons run up from their root: y 0..1 rather than centred.
-  if (rows > 1) plane.translate(0, 0.5, 0);
+// A quad instanced up to `count` times; the programs place each by
+// gl_InstanceID, and `land` sets how many are out.
+function instancedQuads(count: number): THREE.InstancedBufferGeometry {
+  const plane = new THREE.PlaneGeometry(1, 1);
   const geometry = new THREE.InstancedBufferGeometry();
   geometry.setAttribute("position", plane.getAttribute("position"));
   geometry.setAttribute("uv", plane.getAttribute("uv"));
@@ -1151,38 +1180,55 @@ function instancedQuads(count: number, rows = 1): THREE.InstancedBufferGeometry 
   return geometry;
 }
 
-// Short-lived irregular water plumes: broad lobes in the middle, fading wisps
-// at the outside.
+// Lumps of the boil thrown up where the bubbles surface along the line the
+// sheet strikes: broad in the middle, small at the outside. Each leaves the
+// crown's surface where it is thrown (CROWN_GLSL; they once started inside it
+// and only flashed out of it for a few frames, Tris 2026-10-06) and flies one
+// ballistic flight (9.81 boil units/s^2, which the boil's clock makes real
+// gravity) until it is back under the water, into the froth or the water
+// hiding it as it goes in; then a pause before the next (they once shrank
+// away mid-air).
 function plumeMesh(l: Landing): THREE.Mesh {
   const material = landingMaterial(
     l,
     `
     varying vec2 vUV;
-    varying float vLife;
     varying float vSeed;
     varying float vPuff;
+    ${ORGANIC_GLSL}
+    ${CROWN_GLSL}
     void main() {
       float id = float(gl_InstanceID), r = rnd(id + 33.0), s = rnd(id + 71.0), b = rnd(id + 19.0);
-      float life = 0.54 + r * 0.48;
-      float phase = fract(uTime / life + rnd(id + 9.0));
-      float age = phase * life;
       float theta = 6.28318 * b;
-      vec3 vel = vec3(cos(theta) * (0.55 + r * 0.70) - 0.35, 1.05 + s * 0.80, sin(theta) * (0.38 + r * 0.48));
-      vec3 center = vec3(-0.06, 0.11, (s * 2.0 - 1.0) * uHalfWidth);
-      center += vec3(vel.x * age, (vel.y * age - 2.3 * age * age) * ${fmt(FOAM_HEIGHT * PLUME_RISE)}, vel.z * age);
-      float size = (0.32 + r * 0.32) * (0.70 + 0.48 * sin(phase * 3.14159));
+      vec3 vel = vec3(cos(theta) * (0.55 + r * 0.70) - 0.35, (1.05 + s * 0.80) * ${fmt(FOAM_HEIGHT)}, sin(theta) * (0.38 + r * 0.48));
+      float size = (0.32 + r * 0.32) * ${fmt(Math.min(1, IMPACT_FOAM))};
+      float z = (s * 2.0 - 1.0) * halfWidth();
+      // Up from the crown's surface where it is thrown, when it is thrown,
+      // and back down until wholly under the water. The cycle is the flight
+      // from the crown's mean height, so the launch time is known before the
+      // launch height.
+      float sink = size * 0.5;
+      float flight0 = (vel.y + sqrt(vel.y * vel.y + 2.0 * 9.81 * (0.3 + sink))) / 9.81;
+      float cycle = flight0 * (1.12 + 0.35 * rnd(id + 5.0));
+      float phase = fract(uClock / cycle + rnd(id + 9.0));
+      float age = phase * cycle;
+      // From wholly inside the froth, so it comes out of the surface by its
+      // own motion rather than appearing on it.
+      vec2 from = vec2(0.02, z);
+      float y0 = crownSurface(from, uClock - age) - sink;
+      float flight = (vel.y + sqrt(vel.y * vel.y + 2.0 * 9.81 * max(y0 + sink, 0.0))) / 9.81;
+      vec3 center = vec3(from.x - 0.08 + strikeShift(z), y0, z) + vec3(vel.x * age, vel.y * age - 4.905 * age * age, vel.z * age);
+      float grow = step(age, flight);
       vec2 rot = vec2(cos(b * 6.3), sin(b * 6.3));
       vec2 p = vec2(position.x * rot.x - position.y * rot.y, position.x * rot.y + position.y * rot.x);
-      vec3 at = toBody(center) + (viewRight() * p.x * size * 1.28 + viewUp() * p.y * size) * ${fmt(S)};
+      vec3 at = toBody(center) + (viewRight() * p.x * 1.28 + viewUp() * p.y) * size * grow * uUnit;
       vUV = uv;
       vSeed = id;
-      vPuff = phase;
-      vLife = smoothstep(0.0, 0.1, phase) * (1.0 - smoothstep(0.45, 0.98, phase)) * smoothstep(-0.18, 0.06, center.y) * ${fmt(Math.min(1, IMPACT_FOAM))};
+      vPuff = age / flight;
       gl_Position = projectionMatrix * modelViewMatrix * vec4(at, 1.0);
     }`,
     `
     varying vec2 vUV;
-    varying float vLife;
     varying float vSeed;
     varying float vPuff;
     ${ORGANIC_GLSL}
@@ -1191,106 +1237,12 @@ function plumeMesh(l: Landing): THREE.Mesh {
       float a = atan(q.y, q.x);
       float n = paintNoise(q * 3.2 + vec2(vSeed * 0.71, -vPuff * 1.8));
       float r = length(q) + 0.10 * sin(a * 5.0 + vSeed) + 0.065 * sin(a * 9.0 - vPuff * 4.0);
-      float mask = 1.0 - smoothstep(0.50, 0.98, r + (n - 0.5) * 0.23);
-      float alpha = mask * vLife * 0.80;
-      if (alpha < 0.008) discard;
+      float alpha = cut(r + (n - 0.5) * 0.23, 0.74);
       vec3 col = mix(vec3(0.67, 0.84, 0.87), vec3(0.97, 1.0, 1.0), 0.40 + 0.60 * n);
       ${LANDING_OUT}
     }`,
   );
-  return new THREE.Mesh(instancedQuads(PLUMES), material);
-}
-
-// Airborne curved splash ribbons rather than tubes, their tips following
-// gravity.
-function splashMesh(l: Landing): THREE.Mesh {
-  const material = landingMaterial(
-    l,
-    `
-    varying vec2 vUV;
-    varying float vLife;
-    varying float vSeed;
-    varying float vHeight;
-    void main() {
-      float id = float(gl_InstanceID), r = rnd(id + 13.0), s = rnd(id + 82.0), b = rnd(id + 54.0);
-      float life = 0.74 + r * 0.37;
-      float phase = fract(uTime / life + rnd(id + 24.0));
-      float turn = (b * 2.0 - 1.0) * 1.18;
-      vec3 dir = vec3(-cos(turn), 0.0, sin(turn));
-      vec3 across = vec3(-dir.z, 0.0, dir.x);
-      float age = (phase * 0.56 + 0.10) * uv.y;
-      vec3 vel = (dir * (1.5 + r * 1.7) + vec3(0.0, (2.5 + r * 1.55) * ${fmt(FOAM_HEIGHT)}, 0.0)) * ${fmt(SPLASH_SPEED)} * uEnergy;
-      vec3 center = vec3(0.0, 0.07, (s * 2.0 - 1.0) * uHalfWidth) + vel * age + vec3(0.0, -4.905 * age * age, 0.0);
-      float width = (0.22 + r * 0.24) * (1.0 - uv.y * 0.93) * (0.75 + 0.25 * sin(uv.y * 13.0 + phase * 7.0 + id));
-      vec3 p = center + across * (uv.x - 0.5) * width;
-      vUV = uv;
-      vSeed = id;
-      vHeight = p.y;
-      vLife = smoothstep(0.02, 0.14, phase) * (1.0 - smoothstep(0.52, 0.97, phase)) * ${fmt(Math.min(1, SPRAY))};
-      gl_Position = projectionMatrix * modelViewMatrix * vec4(toBody(p), 1.0);
-    }`,
-    `
-    varying vec2 vUV;
-    varying float vLife;
-    varying float vSeed;
-    varying float vHeight;
-    void main() {
-      if (vHeight < 0.04) discard;
-      float width = 0.35 + 0.11 * sin(vUV.y * 14.0 + vSeed - uTime * 7.0);
-      float alpha = (1.0 - smoothstep(width - 0.12, width, abs(vUV.x - 0.5))) * vLife * (1.0 - smoothstep(0.85, 1.0, vUV.y));
-      alpha *= 0.78;
-      if (alpha < 0.008) discard;
-      vec3 col = vec3(0.84, 0.96, 0.98);
-      ${LANDING_OUT}
-    }`,
-  );
-  return new THREE.Mesh(instancedQuads(SPLASHES, 16), material);
-}
-
-// Fine spray: short streaks thrown up and out along their velocity. (The
-// study faded each against the scene's depth; the game has no depth texture
-// in this pass, and the depth test does the occluding.)
-function sprayMesh(l: Landing): THREE.Mesh {
-  const material = landingMaterial(
-    l,
-    `
-    varying vec2 vUV;
-    varying float vLife;
-    varying float vSeed;
-    void main() {
-      float id = float(gl_InstanceID), r = rnd(id + 17.0), s = rnd(id + 31.0), b = rnd(id + 52.0);
-      float lifeTime = 0.55 + r * 0.55;
-      float phase = fract(uTime / lifeTime + rnd(id + 9.0));
-      float age = phase * lifeTime;
-      vec3 start = vec3(-0.10, 0.06, (s * 2.0 - 1.0) * uHalfWidth);
-      vec3 vel = vec3(-0.35 - r * 2.0, 2.1 + b * 2.2, (s - 0.5) * 1.90) * ${fmt(SPRAY_SPEED)} * uEnergy;
-      vec3 center = start + vel * age + vec3(0.0, -4.905 * age * age, 0.0);
-      float size = (0.026 + r * 0.047) * ${fmt(SPRAY)};
-      float len = 0.045 + b * 0.065;
-      vec3 right = viewRight(), up = viewUp();
-      vec3 axis = normalize(up * (vel.y - 9.81 * age) + right * (-0.25 - r * 0.25));
-      vec3 across = normalize(cross(axis, normalize(cross(right, up))));
-      vec3 at = toBody(center) + (across * position.x * size + axis * position.y * len) * ${fmt(S)};
-      vUV = uv;
-      vSeed = b;
-      vLife = smoothstep(0.0, 0.10, phase) * (1.0 - smoothstep(0.65, 1.0, phase)) * smoothstep(0.015, 0.09, center.y);
-      gl_Position = projectionMatrix * modelViewMatrix * vec4(at, 1.0);
-    }`,
-    `
-    varying vec2 vUV;
-    varying float vLife;
-    varying float vSeed;
-    void main() {
-      vec2 p = vUV * 2.0 - 1.0;
-      float width = (1.0 - abs(p.y)) * (0.6 + 0.12 * sin(p.y * 7.0 + vSeed * 9.0));
-      float m = 1.0 - smoothstep(width - 0.07, width + 0.09, abs(p.x));
-      float alpha = m * vLife * ${fmt(Math.min(SPRAY, 1))} * 0.88;
-      if (alpha < 0.01) discard;
-      vec3 col = vec3(0.91, 0.98, 0.98);
-      ${LANDING_OUT}
-    }`,
-  );
-  return new THREE.Mesh(instancedQuads(SPRAYS), material);
+  return new THREE.Mesh(instancedQuads(PLUMES_MAX), material);
 }
 
 // ---------------------------------------------------------------------------
@@ -1319,7 +1271,12 @@ interface FallRecord {
   impact: THREE.Vector3;
   floor: { value: number };
   clip: THREE.Vector4;
-  energy: { value: number };
+  // The landing's scale (see BOIL_REACH), set by `land`, and its plumes,
+  // whose count it sets.
+  unit: { value: number };
+  clock: { value: number };
+  bend: { value: number };
+  plumes: THREE.InstancedBufferGeometry | null;
 }
 
 interface SurfaceRecord {
@@ -1382,7 +1339,25 @@ function land(f: FallRecord): void {
   // slice depth above its top - and the landing is the middle of it.
   const tBottom = fallTime(f.dive, arcDrop(f, t) - f.depth);
   f.impact.set(f.xLip + f.side * f.v0 * (t + tBottom) / 2, f.yLip - arcDrop(f, t), f.zMid);
-  f.energy.value = Math.min(1, Math.sqrt((f.yLip - f.impact.y) / S / STUDY_DROP));
+  // The landing's scale (see BOIL_REACH): the impact speed, the boil's
+  // length from the sheet's momentum per width, and how much air it takes in.
+  const drop = f.yLip - f.impact.y;
+  const vi = Math.sqrt(f.v0 * f.v0 + f.dive * f.dive + 2 * FALL_GRAVITY * Math.max(0, drop));
+  const q = f.v0 * f.depth;
+  const boil = Math.sqrt((q * vi) / FALL_GRAVITY);
+  f.unit.value = boil / BOIL_REACH;
+  f.clock.value = waterTime.value / Math.sqrt(f.unit.value);
+  // Where a column leaving at k of the lip's velocity crosses the surface,
+  // metres from the lip: the middle of where its slice's bottom and top go
+  // in. The edges (k = 1 - EDGE_LAG) strike that much nearer the lip.
+  const strike = (k: number): number => {
+    const top = (-f.dive * k + Math.sqrt(f.dive * f.dive * k * k + 2 * FALL_GRAVITY * Math.max(0, drop))) / FALL_GRAVITY;
+    const bottom = (-f.dive * k + Math.sqrt(f.dive * f.dive * k * k + 2 * FALL_GRAVITY * Math.max(0, drop - f.depth))) / FALL_GRAVITY;
+    return (f.v0 * k * (top + bottom)) / 2;
+  };
+  f.bend.value = (strike(1) - strike(1 - EDGE_LAG)) / f.unit.value;
+  const entrained = 2 * f.halfW * q * Math.max(0, vi - ENTRAIN_ONSET);
+  if (f.plumes) f.plumes.instanceCount = Math.min(PLUMES_MAX, Math.round(PLUMES_PER * entrained));
   if (hit) {
     f.floor.value = scratchWorld.set(0, hit.top, 0).applyMatrix4(hit.root.matrixWorld).y - FALL_SINK;
     // The water's top in this body's frame, for the crown.
@@ -1398,7 +1373,8 @@ function land(f: FallRecord): void {
     scratchWorld.copy(f.impact).applyMatrix4(f.root.matrixWorld);
     impactAt.value[f.slot]!.set(scratchWorld.x, scratchWorld.y, scratchWorld.z, 1);
     const dir = scratchA.set(f.side, 0, 0).transformDirection(f.root.matrixWorld);
-    impactHow.value[f.slot]!.set(f.halfW / S, Math.sign(dir.x) || 1, 0, 0);
+    impactHow.value[f.slot]!.set(f.halfW / f.unit.value, Math.sign(dir.x) || 1, f.unit.value, 1 / Math.sqrt(f.unit.value));
+    impactBend.value[f.slot] = f.bend.value;
   }
 }
 
@@ -1542,22 +1518,29 @@ export function buildWater(root: THREE.Group, body: WaterArea, data: LevelBodyDa
       impact: new THREE.Vector3(),
       floor,
       clip: new THREE.Vector4(),
-      energy: { value: 1 },
+      unit: { value: S },
+      clock: { value: 0 },
+      bend: { value: 0 },
+      plumes: null,
     };
     falls.add(fall);
     land(fall);
     const landing: Landing = {
       impact: fall.impact,
       side: spill.side,
-      halfWidth: fall.halfW / S,
       clip: fall.clip,
-      energy: fall.energy,
+      unit: fall.unit,
+      clock: fall.clock,
+      halfWidth: { value: fall.halfW },
+      bend: fall.bend,
     };
-    // Drawn after the water, in the study's order: the splash ribbons, the
-    // crown, the plumes over it, the spray last. Always in the scene and
-    // never culled (each is placed in its vertex shader), so the prewarm
-    // compiles all four.
-    [splashMesh(landing), crownMesh(landing), plumeMesh(landing), sprayMesh(landing)].forEach((m, i) => {
+    // Drawn after the water: the crown, the plumes over it. Always in the
+    // scene and never culled (each is placed in its vertex shader), so the
+    // prewarm compiles both.
+    const pieces = [crownMesh(landing), plumeMesh(landing)];
+    fall.plumes = pieces[1]!.geometry as THREE.InstancedBufferGeometry;
+    land(fall);
+    pieces.forEach((m, i) => {
       m.frustumCulled = false;
       m.renderOrder = 11 + i;
       root.add(m);
