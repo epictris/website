@@ -151,6 +151,8 @@ const ALPHA_FRONT_BED = 0.8;
 // Separate compact splashes from the much softer, longer-lived mist.
 const PLUMES = 40;
 const MISTS = 48;
+// Additional low mist puffs, kept at the contact rather than rising with the veil.
+const BASE_MISTS = 40;
 const FOAM_PATCHES = 88;
 
 // ---------------------------------------------------------------------------
@@ -1073,8 +1075,9 @@ function plumeMesh(l: Landing): THREE.Mesh {
   return new THREE.Mesh(instancedQuads(PLUMES), material);
 }
 
-// A separate low-opacity veil: slow expansion and lift, never ballistic
-// white splashes. Rounded noisy edges and a surface fade keep the water visible.
+// Dilute rising wisps and a denser, low source cloud share one instanced pass.
+// The source puffs overlap just outside the contact, where the opaque sheet
+// cannot hide them; the taller veil remains transparent above the foam.
 function mistMesh(l: Landing): THREE.Mesh {
   const material = landingMaterial(
     l,
@@ -1083,9 +1086,11 @@ function mistMesh(l: Landing): THREE.Mesh {
     varying float vLife;
     varying float vSeed;
     varying float vHeight;
+    varying float vBase;
     void main() {
       float id = float(gl_InstanceID), r = rnd(id + 204.0), s = rnd(id + 302.0);
-      float life = 1.9 + r * 1.7;
+      float base = step(${fmt(MISTS)}, id);
+      float life = mix(1.9 + r * 1.7, 1.4 + r * 1.2, base);
       float clock = uTime / life + rnd(id + 416.0);
       float phase = fract(clock), cycle = floor(clock);
       float drift = rnd(id + cycle * 19.0 + 500.0);
@@ -1101,11 +1106,29 @@ function mistMesh(l: Landing): THREE.Mesh {
       center = mix(center, wrapped, sideMist);
       center.x += 0.10 * sin(phase * 4.0 + id);
       float size = (0.48 + r * 0.46) * (0.65 + phase * 0.85) * mix(1.0, 0.82, sideMist);
-      vec3 at = toBody(center) + (viewRight() * position.x * size * 1.65 + viewUp() * position.y * size) * ${fmt(S)};
+      float liftScale = 1.0;
+      float envelope = smoothstep(0.0, 0.18, phase) * (1.0 - smoothstep(0.54, 1.0, phase)) * mix(1.0, 1.42, sideMist);
+      if (base > 0.5) {
+        // Downstream of the sheet or just round its sides, never inside it.
+        vec3 source = vec3(-uContactHalfSpan - 0.10 - drift * 0.16 - phase * 0.16,
+          0.16 + phase * (0.20 + r * 0.10) * uStrength,
+          (s * 2.0 - 1.0) * uHalfWidth * 0.96);
+        vec3 sourceRim = rimPoint(0.12 + drift * 0.76, edge)
+          + vec3(-phase * 0.12, 0.12 + phase * (0.19 + r * 0.09) * uStrength, edge * 0.06);
+        center = mix(source, sourceRim, step(0.34, rnd(id + 552.0)));
+        center.x += 0.035 * sin(phase * 3.0 + id);
+        center.z += 0.025 * sin(phase * 2.6 + id * 0.7);
+        size = (0.64 + r * 0.42) * (0.85 + phase * 0.30);
+        liftScale = 0.82;
+        envelope = smoothstep(0.0, 0.07, phase) * (1.0 - smoothstep(0.70, 1.0, phase));
+      }
+      vec3 at = toBody(center) + (viewRight() * position.x * size * 1.65 + viewUp() * position.y * size * liftScale) * ${fmt(S)};
       vUV = uv;
       vSeed = id + cycle * 7.0;
-      vHeight = center.y + position.y * size;
-      vLife = smoothstep(0.0, 0.18, phase) * (1.0 - smoothstep(0.54, 1.0, phase)) * mix(1.0, 1.42, sideMist);
+      // Actual billboard height above the receiving plane, including camera tilt.
+      vHeight = (at.y - uImpact.y) / ${fmt(S)};
+      vBase = base;
+      vLife = envelope;
       gl_Position = projectionMatrix * modelViewMatrix * vec4(at, 1.0);
     }`,
     `
@@ -1113,20 +1136,23 @@ function mistMesh(l: Landing): THREE.Mesh {
     varying float vLife;
     varying float vSeed;
     varying float vHeight;
+    varying float vBase;
     ${ORGANIC_GLSL}
     void main() {
       vec2 q = vUV * 2.0 - 1.0;
       float n = paintNoise(q * 2.6 + vec2(vSeed * 1.31, uTime * 0.16));
       float radius = length(q) + (n - 0.5) * 0.25;
       float soft = 1.0 - smoothstep(0.18, 1.0, radius);
-      float alpha = soft * (0.42 + 0.58 * n) * vLife * 0.135
-        * smoothstep(0.01, 0.16, vHeight);
+      float surfaceFade = smoothstep(0.01, mix(0.16, 0.07, vBase), vHeight);
+      float lowCloud = 1.0 - vBase * smoothstep(0.38, 0.86, vHeight);
+      float alpha = soft * (0.42 + 0.58 * n) * vLife * mix(0.135, 0.32, vBase)
+        * surfaceFade * lowCloud;
       if (alpha < 0.002) discard;
-      vec3 col = uMistColor;
+      vec3 col = mix(uMistColor, uFoamLight, vBase * (0.20 + n * 0.18));
       ${LANDING_OUT}
     }`,
   );
-  return new THREE.Mesh(instancedQuads(MISTS), material);
+  return new THREE.Mesh(instancedQuads(MISTS + BASE_MISTS), material);
 }
 
 // Loose froth lies on the receiving water and drifts round the sheet's sides.
