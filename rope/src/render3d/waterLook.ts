@@ -171,15 +171,42 @@ export function waterSurfaceMap(): THREE.DataTexture {
 // The impact field
 // ---------------------------------------------------------------------------
 
-// Where a fall lands, the water it lands in draws the river study's impact
-// field (its `impactFieldGLSL` and the pool shader's use of it): a broad
-// irregular whitewater footprint round the whole landing width, boiling, and
-// broken arcs of ripple running out from it. A capsule along z, the width of
-// the sheet, in study metres; never stretched along the depth, so the
-// footprint meets the crown that stands on it (water.ts) and the sheet's own
-// edges. Module-wide like the wake's rings: every surface material reads the
-// one table and draws the impacts that lie in its own plane.
+// Where a fall lands, the water it lands in draws the impact field: the foam
+// lying flat on it, whole at the plunge and breaking into rings that drift
+// out and thin, the water milky round it with the bubble cloud under it, a
+// heave where the foam is thick and ripples running out. A capsule along z,
+// the width of the sheet, in boil units; never stretched along the depth, so
+// it meets the sheet's own edges. Module-wide like the wake's rings: every
+// surface material reads the one table and draws the impacts that lie in its
+// own plane.
 export const IMPACT_SLOTS = 4;
+// The boil's length l in boil units: how far its foam reaches (water.ts, THE
+// LANDING'S SCALE, sets the unit from the fall's own physics).
+export const BOIL_REACH = 1.16;
+// The foam lies flat on the water, after Tris's reference (2026-10-06, a
+// stylised plunge: one pale tone, whole at the plunge and breaking into
+// broken rings that drift out and thin). It reaches the boil's length, is
+// carried out at FOAM_OUTFLOW boil units per tick of the boil's clock, and is
+// shed in rings FOAM_RING_SPACING apart (the study's ring arcs' numbers).
+const FOAM_REACH = BOIL_REACH;
+const FOAM_OUTFLOW = 0.84;
+const FOAM_RING_SPACING = 1.1;
+// The foam's tone: the water's light tone toward white by this much, so it
+// sits in the water's own palette (the reference's foam is a pale cyan, not
+// white). In GLSL `foamTone(light)` (IMPACT_GLSL), shared with the ball's
+// wake (stillWater.ts).
+const FOAM_WHITEN = 0.45;
+// How far the field reaches (boil units); what it lays on the water fades to
+// nothing from IMPACT_FADE on, so it has no edge of its own. HEAVE_HEIGHT is
+// the boil's heave where the foam is thick. No rings of ripple run out from
+// the landing: tried as the ball's wake draws them (slope bumps, then made
+// irregular) and removed - they did not fit the look (Tris, 2026-10-06).
+const IMPACT_REACH = 4.1;
+const IMPACT_FADE = 2.6;
+const HEAVE_HEIGHT = 0.08;
+export function foamColor(light: THREE.Color): THREE.Color {
+  return light.clone().lerp(new THREE.Color(1, 1, 1), FOAM_WHITEN);
+}
 // How far off an impact's plane a pixel may be and still draw it, metres: the
 // surface the fall lands in, never the one it leaves (a fall drops further).
 export const IMPACT_PLANE = 0.15;
@@ -195,7 +222,7 @@ export const impactBend = { value: Array.from({ length: IMPACT_SLOTS }, () => 0)
 const impactTaken: boolean[] = Array.from({ length: IMPACT_SLOTS }, () => false);
 
 // A slot for one fall's impact, or -1 when every slot is taken (that fall's
-// landing then draws its crown, plumes and ribbons but no footprint).
+// landing then draws its plumes but no foam).
 export function takeImpactSlot(): number {
   const i = impactTaken.indexOf(false);
   if (i >= 0) impactTaken[i] = true;
@@ -208,7 +235,7 @@ export function freeImpactSlot(i: number): void {
   impactAt.value[i]!.set(0, 0, 0, 0);
 }
 
-// The study's soft noise, shared by the impact field and the crown.
+// The study's soft noise, shared by the impact field and the plumes.
 export const ORGANIC_GLSL = `
   float h21(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
   float softNoise(vec2 p) {
@@ -221,10 +248,9 @@ export const ORGANIC_GLSL = `
 
 // The field, for a surface material (needs `uTime`). `impactSlope` is the
 // tilt the rings and the boil give the surface (dimensionless, so the same in
-// either unit); `impactPaint` lays the footprint and the arcs over a colour,
-// pulling the water toward `base` near the landing so the mirror does not
-// pull it into white halos. `d` is study metres from the impact, x along the
-// sheet's travel; the study's sheet travels toward -x.
+// either unit); `impactPaint` lays the foam and the milky water under it over
+// a colour. `d` is boil units from the impact, x along the sheet's travel;
+// the sheet travels toward -x.
 export const IMPACT_GLSL = `
   ${ORGANIC_GLSL}
   uniform vec4 uImpactAt[${IMPACT_SLOTS}];
@@ -237,28 +263,34 @@ export const IMPACT_GLSL = `
   float impactDistance(vec2 d, float hw) {
     return length(vec2(d.x, max(abs(d.y) - hw, 0.0)));
   }
-  float impactEnvelope(vec2 d, float hw) {
-    float r = impactDistance(d, hw);
-    return smoothstep(0.45, 0.95, r) * (1.0 - smoothstep(2.5, 4.0, r)) * exp(-r * 0.28);
+  // How much foam is on the water (0 to 1): the bubbles the sheet drove down
+  // surfacing as the outflow carries them off, whole along the line the sheet
+  // strikes and dying away over the boil's length.
+  float impactFoamAmount(float dist) { return exp(-dist / ${fmt(FOAM_REACH)}); }
+  // The field's own fade (see IMPACT_REACH).
+  float impactFade(float dist) { return 1.0 - smoothstep(${fmt(IMPACT_FADE)}, ${fmt(IMPACT_REACH)}, dist); }
+  // Where round the ring a point is (boil units): the line the sheet strikes,
+  // unrolled round its ends, so the foam's patches lie along the rings. (Its
+  // two ends meet behind the sheet, against the wall it falls from.)
+  float impactAlong(vec2 d, float hw, float dist) {
+    float beyond = max(abs(d.y) - hw, 0.0);
+    return sign(d.y) * (min(abs(d.y), hw) + atan(beyond, -d.x) * dist);
   }
-  // t: the impact's own clock (uTime at its rate).
-  float impactPhase(vec2 d, float hw, float t) {
-    float r = impactDistance(d, hw), a = atan(d.y, d.x);
-    return 6.2831853 * (r / 1.10 - t * 0.84 / 1.10) + 0.24 * sin(a * 6.0 - t * 0.65) + 0.16 * sin(a * 11.0 + t * 0.73);
+  // The foam's patches: carried outward at FOAM_OUTFLOW, drawn out along the
+  // rings, and banded every FOAM_RING_SPACING as the plunge sheds them. Foam
+  // covers the pattern wherever it is under the amount, so it is whole where
+  // the amount is and breaks into thinning arcs as the amount dies away.
+  float impactFoamPattern(vec2 d, float hw, float dist, float t) {
+    float s = dist - t * ${fmt(FOAM_OUTFLOW)};
+    float n = paintNoise(vec2(impactAlong(d, hw, dist) * 1.4 + t * 0.15, s * 5.0));
+    float bands = 0.5 - 0.5 * cos(6.2831853 * s / ${fmt(FOAM_RING_SPACING)});
+    return 0.55 * n + 0.45 * bands;
   }
-  // The whitewater footprint's field: inside under 0.76 (see impactPaint).
-  float impactFootprintField(vec2 d, float hw, float t) {
-    float r = impactDistance(vec2(d.x + 0.12 + 0.12 * sin(d.y * 2.8 - t * 1.7), d.y), hw);
-    float edge = paintNoise(vec2(d.y * 3.8 - t * 0.9, d.x * 4.1 + t * 0.65));
-    return r + (edge - 0.5) * 0.48 + 0.08 * sin(d.y * 6.0 + t * 1.9);
-  }
+  // The surface heaves a few centimetres where the foam is thick.
   float impactHeight(vec2 d, float hw, float t) {
     float r = impactDistance(d, hw);
-    if (r > 4.1) return 0.0;
-    float waves = 0.009 * sin(impactPhase(d, hw, t)) * impactEnvelope(d, hw);
-    float footprint = 1.0 - smoothstep(0.57, 0.95, impactFootprintField(d, hw, t));
-    float boil = footprint * (0.03 + 0.06 * paintNoise(vec2(d.y * 2.4 + t * 0.72, d.x * 2.8 - t * 0.9)));
-    return waves + boil;
+    if (r > ${fmt(IMPACT_REACH)}) return 0.0;
+    return ${fmt(HEAVE_HEIGHT)} * impactFoamAmount(r) * impactFade(r) * paintNoise(vec2(d.y * 2.4 + t * 0.72, d.x * 2.8 - t * 0.9));
   }
   // Boil units from impact i, x turned so the sheet travels toward -x; or
   // a long way off when the slot is idle or out of this plane.
@@ -277,7 +309,7 @@ export const IMPACT_GLSL = `
     for (int i = 0; i < ${IMPACT_SLOTS}; i++) {
       vec2 d = impactOffset(i, world);
       float hw = uImpactHow[i].x;
-      if (impactDistance(d, hw) > 4.1) continue;
+      if (impactDistance(d, hw) > ${fmt(IMPACT_REACH)}) continue;
       float t = uTime * uImpactHow[i].w;
       float h = impactHeight(d, hw, t);
       vec2 g = vec2(impactHeight(d + vec2(0.015, 0.0), hw, t) - h, impactHeight(d + vec2(0.0, 0.015), hw, t) - h) / 0.015;
@@ -286,36 +318,39 @@ export const IMPACT_GLSL = `
     }
     return slope;
   }
-  // How far a pixel spans, metres, for the edges: the fwidth of the distance
-  // to the impact changes by no more than the pixel moves. Taken by the
-  // caller in uniform control flow, since the paint is drawn per pixel only
-  // where an impact is near.
-  float impactSpan(vec3 world) { return length(fwidth(world.xz)); }
-  vec3 impactPaint(vec3 world, vec3 col, vec3 base, vec3 light, float span) {
+  // Under 0 where there is foam.
+  float impactCover(vec2 d, float hw, float t) {
+    float dist = impactDistance(d, hw);
+    return impactFoamPattern(d, hw, dist, t) - impactFoamAmount(dist) * impactFade(dist);
+  }
+  // How far a pixel spans across the water, metres: the world's x and z
+  // across the screen's x (xy) and y (zw). Taken by the caller in uniform
+  // control flow, since the paint is drawn per pixel only where an impact is
+  // near.
+  vec4 impactPixel(vec3 world) { return vec4(dFdx(world.xz), dFdy(world.xz)); }
+  // The foam's flat tone (see FOAM_WHITEN).
+  vec3 foamTone(vec3 light) { return mix(light, vec3(1.0), ${fmt(FOAM_WHITEN)}); }
+  vec3 impactPaint(vec3 world, vec3 col, vec3 base, vec3 light, vec4 pixel) {
     for (int i = 0; i < ${IMPACT_SLOTS}; i++) {
       vec2 d = impactOffset(i, world);
       float hw = uImpactHow[i].x;
       float dist = impactDistance(d, hw);
-      if (dist > 4.1) continue;
+      if (dist > ${fmt(IMPACT_REACH)}) continue;
       float t = uTime * uImpactHow[i].w;
-      float px = span / uImpactHow[i].z;
-      float n = paintNoise(vec2(d.y * 3.8 - t * 0.9, d.x * 4.1 + t * 0.65));
-      // The footprint cut to the pixel, opaque: a clean edge, never a mist.
-      float field = impactFootprintField(d, hw, t);
-      float foam = 1.0 - smoothstep(0.76 - px, 0.76 + px, field);
-      float phase = impactPhase(d, hw, t);
-      float pd = abs(atan(sin(phase), cos(phase))) / 6.2831853 * 1.10;
-      float aa = clamp(px, 0.003, 0.042);
-      float group = floor((dist - t * 0.84) / 1.10 + 0.5);
-      float branch = sin(d.y * 3.5 + d.x * 1.8 + group * 2.7) + 0.62 * sin(d.y * 7.3 - d.x * 3.0 - group * 1.3);
-      float ridge = 1.0 - smoothstep(0.018 - aa * 0.35, 0.042 + aa, pd);
-      float broken = smoothstep(0.03, 0.57, branch);
-      float arc = ridge * broken * impactEnvelope(d, hw) * (1.0 - smoothstep(0.10, 0.9, d.x));
-      col = mix(col, base, (1.0 - smoothstep(0.7, 3.6, dist)) * 0.58);
-      vec3 white = vec3(0.88, 0.97, 0.99);
-      // Its mottling is in the tone, not in how much of the water shows through.
-      col = mix(col, mix(base, white, 0.78 + 0.22 * smoothstep(0.2, 0.66, n)), foam);
-      col = mix(col, mix(white, light, smoothstep(0.8, 3.5, dist) * 0.80), clamp(arc * 0.65, 0.0, 0.68));
+      vec3 foam = foamTone(light);
+      // The water itself milky with the bubble cloud under it, out to twice
+      // the foam's reach; this also keeps the mirror from lighting a white
+      // halo round the landing.
+      col = mix(col, mix(base, foam, 0.35), impactFoamAmount(0.5 * dist) * impactFade(dist) * 0.75);
+      // The foam, one flat tone cut to the pixel: a clean edge, never a mist.
+      // The edge is as wide as the cover changes across the pixel, from its
+      // slope in boil units turned back into the world's x and z (seen
+      // edge-on, the water is far wider per pixel in depth than across).
+      float cover = impactCover(d, hw, t);
+      vec2 g = vec2(impactCover(d + vec2(0.01, 0.0), hw, t) - cover, impactCover(d + vec2(0.0, 0.01), hw, t) - cover) / 0.01;
+      vec2 gw = vec2(-uImpactHow[i].y * g.x, g.y) / uImpactHow[i].z;
+      float aa = max(0.5 * (abs(dot(gw, pixel.xy)) + abs(dot(gw, pixel.zw))), 1e-4);
+      col = mix(col, foam, 1.0 - smoothstep(-aa, aa, cover));
     }
     return col;
   }
