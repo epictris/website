@@ -153,7 +153,8 @@ const ALPHA_FRONT_BED = 0.8;
 const PLUMES = 40;
 const SPLASHES = 10;
 const SPRAYS = 130;
-const MISTS = 24;
+const MISTS = 32;
+const BUBBLES = 64;
 
 // ---------------------------------------------------------------------------
 // Geometry
@@ -884,6 +885,8 @@ interface Landing {
   clip: THREE.Vector4;
   palette: ReturnType<typeof studyPalette>;
   strength: { value: number };
+  // Half the sheet's actual contact span along x, in study metres.
+  contactHalfSpan: { value: number };
 }
 
 // Uniforms every landing program shares.
@@ -895,6 +898,7 @@ function landingUniforms(l: Landing): Record<string, THREE.IUniform> {
     uHalfWidth: { value: l.halfWidth },
     uClip: { value: l.clip },
     uStrength: l.strength,
+    uContactHalfSpan: l.contactHalfSpan,
     uFoamShade: { value: l.palette.shallow.clone().lerp(l.palette.light, 0.25) },
     uFoamLight: { value: l.palette.light.clone().lerp(new THREE.Color(0.90, 0.97, 0.98), 0.65) },
     uMistColor: { value: l.palette.light.clone().lerp(new THREE.Color(0.80, 0.94, 0.95), 0.48) },
@@ -907,6 +911,7 @@ const LANDING_PRELUDE = `
   uniform float uSide;
   uniform float uHalfWidth;
   uniform float uStrength;
+  uniform float uContactHalfSpan;
   // A point of the landing in study metres (sheet toward -x) to the body's
   // frame.
   vec3 toBody(vec3 p) { return uImpact + vec3(-uSide * p.x, p.y, p.z) * ${fmt(S)}; }
@@ -914,6 +919,13 @@ const LANDING_PRELUDE = `
   vec3 viewRight() { return vec3(modelViewMatrix[0][0], modelViewMatrix[1][0], modelViewMatrix[2][0]); }
   vec3 viewUp() { return vec3(modelViewMatrix[0][1], modelViewMatrix[1][1], modelViewMatrix[2][1]); }
   float rnd(float x) { return fract(sin(x * 127.1 + 311.7) * 43758.5453); }
+  // A bowed path from the upstream contact edge, round either side of the
+  // sheet, into downstream foam. Positive z faces the gameplay camera.
+  vec3 rimPoint(float along, float edge) {
+    float angle = along * 3.14159265;
+    return vec3((uContactHalfSpan + 0.24) * cos(angle) - 0.12, 0.04,
+      edge * (uHalfWidth - 0.04 + 0.34 * sin(angle)));
+  }
 `;
 
 function landingMaterial(l: Landing, vertex: string, fragment: string): THREE.ShaderMaterial {
@@ -1047,8 +1059,12 @@ function plumeMesh(l: Landing): THREE.Mesh {
       float theta = 6.28318 * rnd(id + cycle * 17.0 + 40.0);
       vec3 vel = vec3(cos(theta) * (0.42 + r * 0.55) - 0.22, 0.85 + s * 0.65, sin(theta) * (0.30 + r * 0.35)) * uStrength;
       vec3 center = vec3(-0.03, 0.05, (s * 2.0 - 1.0) * uHalfWidth * 0.9);
+      float sideFoam = step(0.62, rnd(id + 122.0));
+      float edge = mod(id, 2.0) * 2.0 - 1.0;
+      center = mix(center, rimPoint(rnd(id + cycle * 17.0 + 170.0), edge), sideFoam);
+      vel = mix(vel, vec3(-0.22 - r * 0.25, 0.60 + s * 0.44, edge * 0.12) * uStrength, sideFoam);
       center += vec3(vel.x * age, vel.y * age - 4.905 * age * age, vel.z * age);
-      float size = (0.20 + r * 0.22) * (0.70 + 0.30 * sin(phase * 3.14159));
+      float size = (0.20 + r * 0.22) * (0.70 + 0.30 * sin(phase * 3.14159)) * mix(1.0, 0.70, sideFoam);
       vec2 rot = vec2(cos(b * 6.3), sin(b * 6.3));
       vec2 p = vec2(position.x * rot.x - position.y * rot.y, position.x * rot.y + position.y * rot.x);
       vec3 at = toBody(center) + (viewRight() * p.x * size * 1.28 + viewUp() * p.y * size) * ${fmt(S)};
@@ -1231,7 +1247,7 @@ function sprayMesh(l: Landing): THREE.Mesh {
     `
     varying vec2 vUV;
     varying float vLife;
-    varying float vSeed;
+    varying float vGlint;
     void main() {
       float id = float(gl_InstanceID), r = rnd(id + 17.0), s = rnd(id + 31.0), b = rnd(id + 52.0);
       float lifeTime = 0.55 + r * 0.55;
@@ -1253,21 +1269,21 @@ function sprayMesh(l: Landing): THREE.Mesh {
       vec3 across = normalize(cross(axis, normalize(cross(right, up))));
       vec3 at = toBody(center) + (across * position.x * size + axis * position.y * len) * ${fmt(S)};
       vUV = uv;
-      vSeed = b;
+      vGlint = step(0.86, rnd(id + 631.0)) * pow(max(0.0, sin(uTime * (3.1 + r * 1.8) + seed)), 16.0);
       vLife = smoothstep(0.0, 0.10, phase) * (1.0 - smoothstep(0.65, 1.0, phase)) * smoothstep(0.015, 0.09, center.y);
       gl_Position = projectionMatrix * modelViewMatrix * vec4(at, 1.0);
     }`,
     `
     varying vec2 vUV;
     varying float vLife;
-    varying float vSeed;
+    varying float vGlint;
     void main() {
       vec2 p = vUV * 2.0 - 1.0;
       // Elliptical droplets, softly rounded rather than diamond-shaped sparks.
       float m = 1.0 - smoothstep(0.62, 1.0, length(p * vec2(1.0, 0.86)));
-      float alpha = m * vLife * ${fmt(Math.min(SPRAY, 1))} * 0.70;
+      float alpha = m * vLife * ${fmt(Math.min(SPRAY, 1))} * mix(0.70, 1.0, vGlint);
       if (alpha < 0.01) discard;
-      vec3 col = mix(uFoamLight, vec3(0.95, 0.99, 1.0), 0.55);
+      vec3 col = mix(uFoamLight, vec3(0.98, 1.0, 1.0), 0.38 + 0.62 * vGlint);
       ${LANDING_OUT}
     }`,
   );
@@ -1290,20 +1306,22 @@ function mistMesh(l: Landing): THREE.Mesh {
       float clock = uTime / life + rnd(id + 416.0);
       float phase = fract(clock), cycle = floor(clock);
       float drift = rnd(id + cycle * 19.0 + 500.0);
-      // A few wisps pass the front edge of the sheet so the veil is visible
-      // in the gameplay camera, while most remain behind the falling water.
-      float z = mix((s * 2.0 - 1.0) * uHalfWidth * 0.90,
-        uHalfWidth + 0.12 + r * 0.30, step(0.72, s));
+      float sideMist = step(0.48, rnd(id + 290.0));
+      float edge = mod(id, 2.0) * 2.0 - 1.0;
+      vec3 rim = rimPoint(0.12 + drift * 0.76, edge);
       vec3 center = vec3(-0.08 - phase * (0.45 + drift * 0.55),
         0.08 + phase * (0.45 + r * 0.42) * uStrength,
-        z + (s * 2.0 - 1.0) * phase * 0.28);
+        (s * 2.0 - 1.0) * uHalfWidth * 0.90 + (s * 2.0 - 1.0) * phase * 0.28);
+      vec3 wrapped = rim + vec3(0.12 - phase * (0.16 + drift * 0.18),
+        0.04 + phase * (0.36 + r * 0.35) * uStrength, edge * (0.05 + phase * 0.14));
+      center = mix(center, wrapped, sideMist);
       center.x += 0.10 * sin(phase * 4.0 + id);
-      float size = (0.44 + r * 0.40) * (0.65 + phase * 0.85);
+      float size = (0.44 + r * 0.40) * (0.65 + phase * 0.85) * mix(1.0, 0.76, sideMist);
       vec3 at = toBody(center) + (viewRight() * position.x * size * 1.65 + viewUp() * position.y * size) * ${fmt(S)};
       vUV = uv;
       vSeed = id + cycle * 7.0;
       vHeight = center.y + position.y * size;
-      vLife = smoothstep(0.0, 0.20, phase) * (1.0 - smoothstep(0.50, 1.0, phase));
+      vLife = smoothstep(0.0, 0.20, phase) * (1.0 - smoothstep(0.50, 1.0, phase)) * mix(1.0, 1.40, sideMist);
       gl_Position = projectionMatrix * modelViewMatrix * vec4(at, 1.0);
     }`,
     `
@@ -1325,6 +1343,64 @@ function mistMesh(l: Landing): THREE.Mesh {
     }`,
   );
   return new THREE.Mesh(instancedQuads(MISTS), material);
+}
+
+// Small pearly foam bubbles drift round the sheet's sides and out onto the
+// receiving water. Crescents catch the light; only a few briefly sparkle.
+function bubbleMesh(l: Landing): THREE.Mesh {
+  const material = landingMaterial(
+    l,
+    `
+    varying vec2 vUV;
+    varying vec2 vBody;
+    varying float vLife;
+    varying float vGlint;
+    varying float vSeed;
+    void main() {
+      float id = float(gl_InstanceID), r = rnd(id + 710.0);
+      float life = 1.20 + r * 1.15;
+      float clock = uTime / life + rnd(id + 721.0);
+      float phase = fract(clock), seed = id + floor(clock) * 37.0;
+      float edge = mod(id, 2.0) * 2.0 - 1.0;
+      float along = rnd(seed + 742.0);
+      vec3 center = rimPoint(along, edge);
+      center.x -= phase * (0.22 + r * 0.46);
+      center.z += edge * (0.03 + phase * 0.15 + 0.035 * sin(phase * 5.0 + seed));
+      center.y += 0.025 * sin(phase * 3.14159) + 0.018 * r;
+      float size = (0.055 + rnd(seed + 780.0) * 0.085) * (0.72 + 0.28 * sin(phase * 3.14159));
+      vec3 at = toBody(center) + (viewRight() * position.x * size * 1.18 + viewUp() * position.y * size) * ${fmt(S)};
+      vUV = uv;
+      vBody = at.xz;
+      vSeed = rnd(seed + 796.0);
+      vGlint = step(0.85, rnd(id + 805.0)) * pow(max(0.0, sin(uTime * (2.8 + r * 1.6) + seed)), 14.0);
+      vLife = smoothstep(0.0, 0.12, phase) * (1.0 - smoothstep(0.65, 1.0, phase));
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(at, 1.0);
+    }`,
+    `
+    uniform vec4 uClip;
+    varying vec2 vUV;
+    varying vec2 vBody;
+    varying float vLife;
+    varying float vGlint;
+    varying float vSeed;
+    void main() {
+      if (vBody.x < uClip.x || vBody.x > uClip.y || vBody.y < uClip.z || vBody.y > uClip.w) discard;
+      vec2 q = vUV * 2.0 - 1.0;
+      float radius = length(q);
+      float aa = max(0.025, fwidth(radius));
+      float mask = 1.0 - smoothstep(0.82 - aa, 0.96 + aa, radius);
+      float rim = smoothstep(0.43, 0.78, radius) * mask;
+      float crescent = rim * smoothstep(-0.1, 0.65, q.y - q.x);
+      vec2 gleam = (q - vec2(-0.28, 0.34)) * 5.0;
+      float pinpoint = exp(-dot(gleam, gleam)) * vGlint;
+      float alpha = (mask * 0.42 + rim * 0.25 + pinpoint * 0.55) * vLife * ${fmt(Math.min(1, IMPACT_FOAM))};
+      if (alpha < 0.008) discard;
+      vec3 col = mix(uFoamShade, uFoamLight, 0.18 + 0.22 * vSeed + crescent * 0.70);
+      col = mix(col, vec3(0.98, 1.0, 1.0), pinpoint);
+      ${LANDING_OUT}
+    }`,
+  );
+  return new THREE.Mesh(instancedQuads(BUBBLES), material);
 }
 
 // ---------------------------------------------------------------------------
@@ -1352,6 +1428,7 @@ interface FallRecord {
   floor: { value: number };
   clip: THREE.Vector4;
   strength: { value: number };
+  contactHalfSpan: { value: number };
 }
 
 interface SurfaceRecord {
@@ -1411,6 +1488,7 @@ function land(f: FallRecord): void {
   // The sheet crosses the surface over a span of x - its bottom first, a
   // slice depth above its top - and the landing is the middle of it.
   const tBottom = Math.sqrt(Math.max(0, t * t - (2 * f.depth) / FALL_GRAVITY));
+  f.contactHalfSpan.value = f.v0 * (t - tBottom) / (2 * S);
   f.impact.set(f.xLip + f.side * f.v0 * (t + tBottom) / 2, f.yLip - 0.5 * FALL_GRAVITY * t * t, f.zMid);
   if (hit) {
     f.floor.value = scratchWorld.set(0, hit.top, 0).applyMatrix4(hit.root.matrixWorld).y - FALL_SINK;
@@ -1571,18 +1649,20 @@ export function buildWater(root: THREE.Group, body: WaterArea, data: LevelBodyDa
       floor,
       clip: new THREE.Vector4(),
       strength: { value: 1 },
+      contactHalfSpan: { value: 0 },
     };
     falls.add(fall);
     land(fall);
     const landing: Landing = {
       impact: fall.impact, side: spill.side, halfWidth: fall.halfW / S,
       clip: fall.clip, palette: studyPalette(color), strength: fall.strength,
+      contactHalfSpan: fall.contactHalfSpan,
     };
     // Drawn after the water: soft mist behind the splash ribbons, the low
     // crown, the compact plumes over it, and droplets last. Always in the scene and
     // never culled (each is placed in its vertex shader), so the prewarm
-    // compiles all seven, including shed tip droplets and their surface returns.
-    [mistMesh(landing), splashMesh(landing), crownMesh(landing), plumeMesh(landing), sprayMesh(landing), jetTipMesh(landing), dropletReturnMesh(landing)].forEach((m, i) => {
+    // compiles all eight, including the side bubbles and shed droplets' returns.
+    [mistMesh(landing), splashMesh(landing), crownMesh(landing), plumeMesh(landing), bubbleMesh(landing), sprayMesh(landing), jetTipMesh(landing), dropletReturnMesh(landing)].forEach((m, i) => {
       m.frustumCulled = false;
       m.renderOrder = 11 + i;
       root.add(m);
