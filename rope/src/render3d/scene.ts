@@ -219,8 +219,9 @@ export class Scene3D {
   // The level's Blender scene, when it names one (see `SceneDressing`).
   private dressing: SceneDressing | null = null;
   private ballVisual: BallVisual | null = null;
-  // The splash the ball throws up falling into still water (stillWater.ts):
-  // render-side, reading where the ball is drawn and never writing back.
+  // The splash and the wake the ball leaves in still water (stillWater.ts),
+  // foam the pools' surfaces draw: render-side, reading where the ball is
+  // drawn and never writing back.
   private readonly splashes = new WaterSplashes();
   private chains: ChainLayer;
   private vines: VineLayer;
@@ -312,7 +313,6 @@ export class Scene3D {
     this.vines = new VineLayer(this.scene);
     this.editorLayer.name = "editor-layer";
     this.scene.add(this.editorLayer);
-    this.scene.add(this.splashes.root);
     this.raycaster.params.Line2 = { threshold: LINE_PICK_PX };
     // Null wherever the driver has no timer extension (see GpuTimer); the perf
     // HUD says so rather than plotting a zero.
@@ -1394,7 +1394,6 @@ export class Scene3D {
     this.poolMirror.dispose();
     this.depthOfField.dispose();
     this.lightShafts.dispose();
-    this.splashes.dispose();
     this.frame.dispose();
     this.renderer.dispose();
   }

@@ -771,7 +771,7 @@ const PAINT_GLSL = `
     }
     // A fall's foam and the milky water under it, on the top only.
     vec4 pixel = impactPixel(vWorld);
-    if (vUp > 0.5) col = impactPaint(vWorld, col, base, uLight, pixel);
+    if (vUp > 0.5) col = impactPaint(vWorld, col, uLight, pixel);
     // Down the submerged face the same pigment fades to deep.
     col = mix(col, uDeep * 0.57, (1.0 - vSurfaceWeight) * 0.58);
     return col;

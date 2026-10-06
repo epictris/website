@@ -173,8 +173,7 @@ export function waterSurfaceMap(): THREE.DataTexture {
 
 // Where a fall lands, the water it lands in draws the impact field: the foam
 // lying flat on it, whole at the plunge and breaking into rings that drift
-// out and thin, the water milky round it with the bubble cloud under it, a
-// heave where the foam is thick and ripples running out. A capsule along z,
+// out and thin, and a heave where the foam is thick. A capsule along z,
 // the width of the sheet, in boil units; never stretched along the depth, so
 // it meets the sheet's own edges. Module-wide like the wake's rings: every
 // surface material reads the one table and draws the impacts that lie in its
@@ -248,8 +247,7 @@ export const ORGANIC_GLSL = `
 
 // The field, for a surface material (needs `uTime`). `impactSlope` is the
 // tilt the rings and the boil give the surface (dimensionless, so the same in
-// either unit); `impactPaint` lays the foam and the milky water under it over
-// a colour. `d` is boil units from the impact, x along the sheet's travel;
+// either unit); `impactPaint` lays the foam over a colour. `d` is boil units from the impact, x along the sheet's travel;
 // the sheet travels toward -x.
 export const IMPACT_GLSL = `
   ${ORGANIC_GLSL}
@@ -330,7 +328,7 @@ export const IMPACT_GLSL = `
   vec4 impactPixel(vec3 world) { return vec4(dFdx(world.xz), dFdy(world.xz)); }
   // The foam's flat tone (see FOAM_WHITEN).
   vec3 foamTone(vec3 light) { return mix(light, vec3(1.0), ${fmt(FOAM_WHITEN)}); }
-  vec3 impactPaint(vec3 world, vec3 col, vec3 base, vec3 light, vec4 pixel) {
+  vec3 impactPaint(vec3 world, vec3 col, vec3 light, vec4 pixel) {
     for (int i = 0; i < ${IMPACT_SLOTS}; i++) {
       vec2 d = impactOffset(i, world);
       float hw = uImpactHow[i].x;
@@ -338,10 +336,8 @@ export const IMPACT_GLSL = `
       if (dist > ${fmt(IMPACT_REACH)}) continue;
       float t = uTime * uImpactHow[i].w;
       vec3 foam = foamTone(light);
-      // The water itself milky with the bubble cloud under it, out to twice
-      // the foam's reach; this also keeps the mirror from lighting a white
-      // halo round the landing.
-      col = mix(col, mix(base, foam, 0.35), impactFoamAmount(0.5 * dist) * impactFade(dist) * 0.75);
+      // No milky water round it: the pale blur it spread under the churn
+      // was removed (Tris, 2026-10-06).
       // The foam, one flat tone cut to the pixel: a clean edge, never a mist.
       // The edge is as wide as the cover changes across the pixel, from its
       // slope in boil units turned back into the world's x and z (seen

@@ -14,23 +14,23 @@
 //
 // THE WAKE is foam the ball leaves churning through the water, drawn by the
 // surface shader as a fall's foam is (waterLook.ts): solid at the ball,
-// breaking into torn patches behind it in one flat tone, the water milky
-// under it.
+// breaking into torn patches behind it in one flat tone. The water under it
+// is NOT milky (Tris, 2026-10-06: the pale blur spreading out under the
+// churn went, the splash's with it).
 //
-// THE SPLASH (`WaterSplashes`) is the reference's splash, staged once rather
-// than looped under a waterfall: a cel-shaded crown that rises, flares and
-// tears into holes; a lace ring of foam spreading over the surface and
-// breaking into flecks at its rim; and droplets thrown up and out, some solid,
-// some hollow rings. It never touches the sim - it reads where the ball is
-// drawn and how fast it is moving, as the lights do, and every particle is a
-// pure function of the clock and the splash's own start, so a pinned clock
-// draws the same splash twice.
+// THE SPLASH is foam too, drawn by the surface shader as a fall's landing is:
+// solid where the ball went in, opening into a torn ring carried out to where
+// the crown's sheet comes back down. `WaterSplashes`
+// is its detector and the wake's: it never touches the sim - it reads where
+// the ball is drawn and how fast it is moving, as the lights do - and the
+// foam is a pure function of the clock and the splash's own start, so a
+// pinned clock draws the same splash twice.
 
 import * as THREE from "three";
 import { WaterArea } from "../engine/body";
 import { Vec2 } from "../engine/vec2";
 import { reflectionUniforms } from "./planarReflection";
-import { POINT_VIEW_HALF_HEIGHT, threeY } from "./space";
+import { threeY } from "./space";
 import {
   DEPTH_STRETCH,
   fmt,
@@ -42,24 +42,6 @@ import {
   waterSurfaceMap,
   waterTime,
 } from "./waterLook";
-
-// ---------------------------------------------------------------------------
-// Shared GLSL: hashing and value noise, for the splash
-// ---------------------------------------------------------------------------
-
-const NOISE_GLSL = `
-  // PCG-style integer hash: well distributed, no sin(), the same on every GPU.
-  uvec3 swPcg3(uvec3 v) {
-    v = v * 1664525u + 1013904223u;
-    v.x += v.y * v.z; v.y += v.z * v.x; v.z += v.x * v.y;
-    v ^= v >> 16u;
-    v.x += v.y * v.z; v.y += v.z * v.x; v.z += v.x * v.y;
-    return v;
-  }
-  vec3 swHash3(vec3 p) {
-    return vec3(swPcg3(uvec3(ivec3(floor(p)) + 32768))) / 4294967295.0;
-  }
-`;
 
 // ---------------------------------------------------------------------------
 // The surface
@@ -245,19 +227,47 @@ const FOOTPRINT_OVERLAP = 0.01;
 
 // THE WAKE is foam, drawn as a fall's foam is (waterLook.ts, impactPaint;
 // Tris, 2026-10-06: the ripple rings went, and the white ring strokes were
-// replaced by this): the ball churning through the surface leaves puffs of
-// foam along its path, each solid where the ball broke the water and gone by
-// WAKE_LIFE (clean water's bubbles burst within a second or two).
-// IT SPREADS WITH THE BALL'S SPEED (Tris, 2026-10-06: it should expand out
-// more when the ball moves): the water the ball shoves aside moves out at
-// the Kelvin wake's half-angle, tan(19.47 deg) of the ball's speed, never
-// slower than WAKE_SPREAD (a ball hardly moving still stirs a little), and
-// slows as that water loses its push, the spread easing to a stop over about
-// WAKE_EASE seconds. The puffs add to one foam amount, and a shared pattern of
-// patches in metres (WAKE_PATCH across a metre, drifting) is covered wherever
-// it is under that amount, so the trail is solid at the ball and breaks into
-// torn patches behind it, one flat tone cut to the pixel; the water under it
-// is milky, out to twice each puff's spread. Lengths are true metres.
+// replaced by this): the ball churning through the surface leaves foam
+// along its path. THE FOAM IS LEFT WHERE THE BALL WAS, AS IT LEAVES (Tris,
+// 2026-10-06: "when the ball leaves an area, a wake persists in the place it
+// left", and never appears where the ball was not): the trail follows the
+// ball's path, as capsules along x, and the newest is drawn out every frame
+// to wherever the ball is now, so water the ball uncovers already carries
+// its foam and nothing pops in behind it. Each point of a
+// capsule is as old as the moment the ball was there (its age runs from the
+// capsule's start to its end). (Tried the same day and dropped: one round
+// puff at the ball's middle, which drew narrower than the ball and grew;
+// puffs born whole at the ball's leading and trailing ends, then off its near
+// and far sides, then over the back half it had swept every 14 cm - each
+// made foam appear at once, some of it where the ball had not been. Then the
+// swept disc itself, spreading: a solid pale slab, "odd".)
+//
+// WHAT IS DRAWN is a real wake's shape (Tris, 2026-10-06, "more realistic"):
+// - HOW MUCH WHITE WATER follows the ball's Froude number U / sqrt(g R): a
+//   body moving slower than the surface waves it makes (Fr ~1, ~1.1 m/s for
+//   this ball) breaks none, so `share` runs 0 to 1 over WAKE_FROUDE. Below
+//   it the ball leaves only a thin strip, short-lived; above it the strip
+//   widens toward the ball's width and the arms break.
+// - THE STRIP down the middle of the path, the churned water behind the
+//   ball: WAKE_STRIP[0] of its waterline radius wide (each side) at share 0,
+//   [1] at share 1.
+// - THE ARMS, the Kelvin wake's diverging crests breaking: lines that leave
+//   the ball's sides and are carried outward at tan(19.47 deg) of its speed,
+//   so the two of them trail back from it in the wake's V; WAKE_ARM_WIDTH of
+//   the waterline radius wide (each side), as strong as `share`.
+// - IT DECAYS AS FOAM DOES, into lace: bubbles burst, so a round hole opens
+//   in every cell of a jittered grid (WAKE_LACE_CELL across, drawn out
+//   WAKE_LACE_STRETCH along the path as the water the ball dragged stretches
+//   it) as the amount falls, up to WAKE_LACE_HOLE cell units across, the
+//   holes growing until only curved strands are left between them and then
+//   those go; solid while the amount is 1 or more; one flat tone cut to the
+//   pixel. (Thresholding the cells' edges, F2 - F1, was tried first: it drew
+//   straight hairline cracks, like shattered ice.)
+// It lasts WAKE_LIFE at full strength, less as the ball goes slower or
+// deeper: less air is churned in, and clean water's bubbles burst within a
+// second or two; WAKE_PEAK lifts the amount so a cell is covered out to the
+// strip's and the arms' widths, not only along their middles. Lengths are
+// true metres.
 // (Until 2026-10-06 the wake was rings after Tris's stylised ripple
 // reference: crests as narrow waves in the slopes and white strokes broken
 // into tapered arcs.)
@@ -265,25 +275,57 @@ const FOOTPRINT_OVERLAP = 0.01;
 // Shared by every still water material, so the trail carries on from the
 // pool onto the scene's water beyond it.
 //
-// The ball sheds a puff every WAKE_SPACING metres it travels, but no sooner
-// than WAKE_INTERVAL after the last, so a slot is never taken back while its
-// puff lives (WAKE_SLOTS of them cover WAKE_SLOTS * WAKE_INTERVAL seconds,
-// longer than WAKE_LIFE).
+// A capsule is closed and the next one starts from its end once it is
+// WAKE_SPACING long and WAKE_INTERVAL old, so a slot is never taken back
+// while its foam lives (WAKE_SLOTS of them cover at least WAKE_SLOTS *
+// WAKE_INTERVAL seconds, longer than WAKE_LIFE).
 const WAKE_SLOTS = 24;
 const WAKE_INTERVAL = 0.15;
-const WAKE_LIFE = 1.6;
-const WAKE_SPREAD = 0.3;
+const WAKE_LIFE = 1.0;
+const WAKE_LINE_LIFE = 0.3;
+const WAKE_PEAK = 1.6;
+const WAKE_FROUDE = [1.0, 2.0] as const;
+const WAKE_STRIP = [0.25, 0.7] as const;
+const WAKE_ARM_WIDTH = 0.3;
 const WAKE_KELVIN = Math.tan((19.47 * Math.PI) / 180);
-const WAKE_EASE = 0.6;
-const WAKE_PATCH = 9;
+const WAKE_LACE_CELL = 0.06;
+const WAKE_LACE_STRETCH = 2.5;
+const WAKE_LACE_HOLE = 0.95;
 // How far off the wake's plane a pixel can be and still carry it (m): the
 // pool's top and the scene water continuing it, never the front sheet.
 const WAKE_PLANE = 0.05;
-// Where each puff was shed (x, y, z in three's frame, start time); how strong
-// it is (0 = idle), the ball's waterline radius it starts at (m) and how fast
-// it spreads (m/s).
+// Each capsule: where the ball's middle was on the surface at its start and
+// at its end (x0, x1 along the world's x - the ball moves in the gameplay
+// plane, and still water is never authored turned - then y and z, three's
+// frame); when (t0, t1), how strong it is (0 = idle; its life is WAKE_LIFE
+// times this) and how fast its arms move out (m/s); and the ball's waterline
+// radius (m) and the white water's share (see WAKE_FROUDE).
 const wakeSpotAt = { value: Array.from({ length: WAKE_SLOTS }, () => new THREE.Vector4()) };
-const wakeSpotHow = { value: Array.from({ length: WAKE_SLOTS }, () => new THREE.Vector3()) };
+const wakeSpotTime = { value: Array.from({ length: WAKE_SLOTS }, () => new THREE.Vector4()) };
+const wakeSpotShape = { value: Array.from({ length: WAKE_SLOTS }, () => new THREE.Vector2()) };
+
+// THE SPLASH'S FOAM (see `WaterSplashes`): the water the ball went in through
+// churned white, and the ring where the crown's sheet comes back down (see
+// CROWN_SPEED), so it is solid at the entry and breaks into a ring of torn
+// arcs drifting out, as a fall's foam does: its amount covers a pattern of
+// patches in metres (SPLASH_PATCH across a metre, drifting), in the wake's
+// flat tone. The core is
+// solid out to the ball's radius and spreads by SPLASH_CORE_SPREAD of it as
+// the crown's foot falls back, and clears by SPLASH_CORE_LIFE of the splash's
+// life (the churned water's bubbles are small and burst first); the ring
+// leaves the ball's radius and eases out to where the sheet lands over its
+// flight, widening from SPLASH_RING_WIDTH[0] to [1] of the ball's radius,
+// and is gone by the splash's life.
+const SPLASH_SLOTS = 6;
+const SPLASH_FOAM_LIFE = [1.2, 2.4] as const;
+const SPLASH_CORE_SPREAD = 0.8;
+const SPLASH_CORE_LIFE = 0.55;
+const SPLASH_RING_WIDTH = [0.35, 1.2] as const;
+const SPLASH_PATCH = 9;
+// Where each splash went in (x, y, z in three's frame, start time); its power
+// (0 = idle), the ball's radius, its reach (m) and the sheet's flight (s).
+const splashFoamAt = { value: Array.from({ length: SPLASH_SLOTS }, () => new THREE.Vector4()) };
+const splashFoamHow = { value: Array.from({ length: SPLASH_SLOTS }, () => new THREE.Vector4()) };
 
 // `backZ`/`frontZ` are the slab's z range, which is the world's: a water body's
 // root stands on the gameplay plane. The deep-to-shallow ramp runs over it in
@@ -346,7 +388,10 @@ export function stillWaterMaterial(
     shader.uniforms.uShallow = { value: shallow };
     shader.uniforms.uLight = { value: light };
     shader.uniforms.uWakeAt = wakeSpotAt;
-    shader.uniforms.uWakeHow = wakeSpotHow;
+    shader.uniforms.uWakeTime = wakeSpotTime;
+    shader.uniforms.uWakeShape = wakeSpotShape;
+    shader.uniforms.uSplashAt = splashFoamAt;
+    shader.uniforms.uSplashHow = splashFoamHow;
 
     shader.vertexShader = `
       #ifndef SW_PLANE
@@ -398,7 +443,10 @@ export function stillWaterMaterial(
       uniform vec3 uShallow;
       uniform vec3 uLight;
       uniform vec4 uWakeAt[${WAKE_SLOTS}];
-      uniform vec3 uWakeHow[${WAKE_SLOTS}];
+      uniform vec4 uWakeTime[${WAKE_SLOTS}];
+      uniform vec2 uWakeShape[${WAKE_SLOTS}];
+      uniform vec4 uSplashAt[${SPLASH_SLOTS}];
+      uniform vec4 uSplashHow[${SPLASH_SLOTS}];
       varying float vLit;
       varying float vAlpha;
       varying float vUp;
@@ -407,6 +455,21 @@ export function stillWaterMaterial(
       varying vec3 vWorld;
       varying vec4 vReflection;
       ${IMPACT_GLSL}
+      // The wake's lace: how far a point is from the nearest hole's middle
+      // (cell units, one hole per cell, jittered), divided by that hole's
+      // own size, so the holes are round and no two the same.
+      float swLace(vec2 p) {
+        vec2 c = floor(p);
+        float best = 8.0;
+        for (int j = -1; j <= 1; j++)
+        for (int i = -1; i <= 1; i++) {
+          vec2 o = vec2(float(i), float(j));
+          vec2 cell = c + o;
+          float d = distance(o + vec2(h21(cell), h21(cell + 17.31)), p - c) / mix(0.75, 1.2, h21(cell + 41.7));
+          best = min(best, d);
+        }
+        return best;
+      }
       // The reflection is stored as the canvas is, sRGB encoded.
       vec3 swDecode(vec3 c) {
         return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(0.04045, c));
@@ -456,32 +519,71 @@ export function stillWaterMaterial(
       // (waterLook.ts); the top face only, never the front sheet beside it.
       swSlope += impactSlope(vWorld) * vUp;
 
-      // THE WAKE: the foam the ball leaves (see the header). Each puff's
-      // amount, solid out to its spread and falling away past it, fading
-      // over its life; the most of them is the trail's amount here, and the
-      // milky water under it reaches twice as far.
+      // THE WAKE: the foam the ball leaves (see the header). Each capsule's
+      // amount - the churned strip down the middle of the path and the two
+      // arms breaking off the ball's sides - fading over its life; the most
+      // of them is the trail's amount here.
       float swWake = 0.0;
-      float swMilk = 0.0;
       for (int i = 0; i < ${WAKE_SLOTS}; i++) {
         vec4 at = uWakeAt[i];
-        vec3 how = uWakeHow[i];
-        float age = uTime - at.w;
-        if (how.x <= 0.0 || age < 0.0 || age > ${fmt(WAKE_LIFE)} || abs(vWorld.y - at.y) > ${fmt(WAKE_PLANE)}) continue;
-        // Out at its own rate, easing to a stop (see WAKE_EASE).
-        float spread = how.y + how.z * ${fmt(WAKE_EASE)} * (1.0 - exp(-age / ${fmt(WAKE_EASE)}));
-        float r = length(vWorld.xz - at.xz) / max(spread, 1e-3);
-        float life = how.x * (1.0 - smoothstep(0.3, 1.0, age / ${fmt(WAKE_LIFE)}));
-        swWake = max(swWake, life * exp(-r * r));
-        swMilk = max(swMilk, life * exp(-0.25 * r * r));
+        vec4 tm = uWakeTime[i];
+        float span = ${fmt(WAKE_LIFE)} * tm.z;
+        if (tm.z <= 0.0 || uTime - tm.y > span || abs(vWorld.y - at.z) > ${fmt(WAKE_PLANE)}) continue;
+        // The nearest point of the ball's path, and when the ball was there.
+        float len = at.y - at.x;
+        float along = abs(len) > 1e-4 ? clamp((vWorld.x - at.x) / len, 0.0, 1.0) : 0.0;
+        float age = uTime - mix(tm.x, tm.y, along);
+        if (age < 0.0 || age > span) continue;
+        float dx = vWorld.x - mix(at.x, at.y, along);
+        float dz = abs(vWorld.z - at.w);
+        float w = uWakeShape[i].x;
+        float share = uWakeShape[i].y;
+        float life = 1.0 - smoothstep(0.0, 1.0, age / span);
+        // The strip: a thin line behind a slow ball, most of its width
+        // behind a fast one.
+        float strip = length(vec2(dx, dz)) / (w * mix(${fmt(WAKE_STRIP[0])}, ${fmt(WAKE_STRIP[1])}, share));
+        // The arms: where the diverging waves break, carried out from the
+        // ball's sides at the Kelvin speed (tm.w) since the ball was there.
+        float arm = length(vec2(dx, dz - w - tm.w * age)) / (w * ${fmt(WAKE_ARM_WIDTH)});
+        swWake = max(swWake, ${fmt(WAKE_PEAK)} * life * max(exp(-strip * strip), share * exp(-arm * arm)));
       }
-      // The patches the amount covers, in metres, drifting slowly: under 0
-      // where there is foam. Cut to the pixel, taken here in uniform control
-      // flow.
-      float swPatch = 0.6 * paintNoise(vWorld.xz * ${fmt(WAKE_PATCH)} + vec2(0.13, -0.09) * uTime)
-        + 0.4 * paintNoise(vWorld.xz * ${fmt(WAKE_PATCH * 2.3)} - vec2(0.11, 0.17) * uTime + 3.7);
-      float swCover = swPatch - swWake;
+      // The wake's lace (see WAKE_LACE_CELL): a round hole opens in every
+      // cell as the amount falls, growing till only strands are left between
+      // them, then those go. Under 0 where there is foam; cut to the pixel,
+      // taken here in uniform control flow.
+      float swHole = ${fmt(WAKE_LACE_HOLE)} * (1.0 - clamp(swWake, 0.0, 1.0));
+      float swLaceCover = swHole - swLace(vWorld.xz / vec2(${fmt(WAKE_LACE_CELL * WAKE_LACE_STRETCH)}, ${fmt(WAKE_LACE_CELL)}));
+      float swLaceAA = max(0.5 * fwidth(swLaceCover), 1e-4);
+      float swWakeFoam = (1.0 - smoothstep(-swLaceAA, swLaceAA, swLaceCover)) * step(0.05, swWake);
+
+      // THE SPLASH'S FOAM (see SPLASH_SLOTS): the churned core and the ring
+      // the crown's sheet lands in.
+      float swSplash = 0.0;
+      for (int i = 0; i < ${SPLASH_SLOTS}; i++) {
+        vec4 at = uSplashAt[i];
+        vec4 how = uSplashHow[i];
+        float age = uTime - at.w;
+        float span = mix(${fmt(SPLASH_FOAM_LIFE[0])}, ${fmt(SPLASH_FOAM_LIFE[1])}, how.x);
+        if (how.x <= 0.0 || age < 0.0 || age > span || abs(vWorld.y - at.y) > ${fmt(WAKE_PLANE)}) continue;
+        float d = length(vWorld.xz - at.xz);
+        float out_ = 1.0 - exp(-age / max(how.w, 1e-3));
+        float strength = mix(0.6, 1.0, how.x);
+        float life = strength * (1.0 - smoothstep(0.25, 1.0, age / span));
+        float coreLife = strength * (1.0 - smoothstep(0.1, 1.0, age / (span * ${fmt(SPLASH_CORE_LIFE)})));
+        float core = d / (how.y * (1.0 + ${fmt(SPLASH_CORE_SPREAD)} * out_));
+        float ringAt = how.y + (how.z - how.y) * out_;
+        float ringW = how.y * mix(${fmt(SPLASH_RING_WIDTH[0])}, ${fmt(SPLASH_RING_WIDTH[1])}, out_);
+        float ring = (d - ringAt) / ringW;
+        swSplash = max(swSplash, max(coreLife * exp(-core * core), life * exp(-ring * ring)));
+      }
+      // The patches the splash's amount covers, in metres, drifting slowly:
+      // under 0 where there is foam. Cut to the pixel, taken here in uniform
+      // control flow.
+      float swPatch = 0.6 * paintNoise(vWorld.xz * ${fmt(SPLASH_PATCH)} + vec2(0.13, -0.09) * uTime)
+        + 0.4 * paintNoise(vWorld.xz * ${fmt(SPLASH_PATCH * 2.3)} - vec2(0.11, 0.17) * uTime + 3.7);
+      float swCover = swPatch - swSplash;
       float swFoamAA = max(0.5 * fwidth(swCover), 1e-4);
-      float swFoam = (1.0 - smoothstep(-swFoamAA, swFoamAA, swCover)) * step(0.001, swWake);
+      float swFoam = max(swWakeFoam, (1.0 - smoothstep(-swFoamAA, swFoamAA, swCover)) * step(0.001, swSplash));
 
       vec3 swN = normalize(vec3(-swSlope.x, 1.0, -swSlope.y));
       vec3 swEye = normalize(cameraPosition - vWorld);
@@ -498,7 +600,6 @@ export function stillWaterMaterial(
       float swShade = smoothstep(0.015, 0.14, -swFacing);
       swCol *= 1.0 - swShade * 0.22;
       swCol = mix(swCol, uLight, swBroad * ${fmt(CONTRAST)} * (0.12 + swFore * 0.36));
-      vec3 swBase = swCol;
 
       // The mirror, pushed about by the same slopes, three taps along the
       // ripples. Strong for what stands near the water, faint for the far
@@ -519,13 +620,11 @@ export function stillWaterMaterial(
       vec3 swHalf = normalize(swEye + normalize(vec3(-0.36, 0.78, -0.43)));
       swCol += uLight * pow(max(0.0, dot(swN, swHalf)), 100.0) * 0.16 * ${fmt(RIPPLE_STRENGTH)};
       swCol += uLight * swCrest * ${fmt(CONTRAST * 0.16)};
-      // The wake's milky water and its foam, the fall's tone.
-      vec3 swFoamTone = foamTone(uLight);
-      swCol = mix(swCol, mix(swBase, swFoamTone, 0.35), swMilk * 0.6 * vUp);
-      swCol = mix(swCol, swFoamTone, swFoam * vUp);
-      // A fall's foam and the milky water under it, over the mirror.
+      // The wake's and the splash's foam, the fall's tone.
+      swCol = mix(swCol, foamTone(uLight), swFoam * vUp);
+      // A fall's foam, over the mirror.
       vec4 swPixel = impactPixel(vWorld);
-      if (vUp > 0.5) swCol = impactPaint(vWorld, swCol, swBase, uLight, swPixel);
+      if (vUp > 0.5) swCol = impactPaint(vWorld, swCol, uLight, swPixel);
 
       // THE FRONT SHEET, a cross-section looking into the water: between the
       // shallow and the deep colour under the waterline, darkening toward the
@@ -582,8 +681,6 @@ export interface SplashBall {
   radius: number;
 }
 
-// How many splashes can be in the air at once; the oldest is reused.
-const SLOTS = 6;
 // Entry speeds (m/s, downward through the surface): under SPLASH_MIN nothing,
 // SPLASH_FULL and over the whole splash. A ball leaving the water upward
 // faster than EXIT_MIN throws a smaller one (EXIT_POWER of its speed's).
@@ -598,110 +695,43 @@ const TELEPORT = 1.5;
 
 // THE WAKE: while the ball moves through the water with its bottom no deeper
 // than WAKE_DEPTH under the top (and faster than WAKE_MIN_SPEED along it), it
-// sheds a puff of foam (see WAKE_SLOTS) every WAKE_SPACING metres, so the
-// trail is as long as the ball is fast.
+// draws its trail out behind it (see WAKE_SLOTS), so the trail is as long as
+// the ball is fast. A ball further than WAKE_JUMP from where its trail ends
+// was placed, or left the water and came back: it starts a new one rather
+// than owe foam to the stretch between.
 const WAKE_DEPTH = 0.35;
 const WAKE_MIN_SPEED = 0.15;
-const WAKE_FULL_SPEED = 3;
 const WAKE_SPACING = 0.14;
+const WAKE_JUMP = 0.5;
 
-// THE CROWN: an open ring wall that rises out of the surface, flares outward
-// and tears into holes as it falls - the reference's cloud-displaced
-// cylinders, cel-shaded pale cyan with white blotches and a white fringe.
-const CROWN_SEG = 48;
-const CROWN_ROWS = 8;
-const CROWN_LIFE = [0.45, 0.8] as const;
-const CROWN_HEIGHT = [0.12, 0.42] as const;
-// Starting radius as a multiple of the ball's, and how far it spreads (m).
-const CROWN_R0 = 1.05;
-const CROWN_SPREAD = [0.06, 0.2] as const;
-const CROWN_FLARE = 0.55;
-const CROWN_FRONT = "#a6e8f6";
-const CROWN_BACK = "#5cc0d8";
-
-// THE LACE: foam spreading over the surface from where the ball went in -
-// radial lace near the middle, breaking into torn flecks at its rim. (Two
-// broken ripple rings ran ahead of it until 2026-10-06, Tris: the ball's
-// ripple rings went with the wake's.)
-const LACE_LIFE = [1.1, 2.0] as const;
-const LACE_RADIUS = [0.35, 1.1] as const;
-const LACE_COLOR = "#c6f1fa";
-const LACE_SPOKES = 22;
-
-// THE DROPLETS: thrown up and out, ballistic; most solid dots, some hollow
-// rings, like the reference's.
-const DROPS = 40;
-const DROP_UP = [1.4, 3.6] as const;
-const DROP_OUT = [0.3, 1.5] as const;
-const DROP_SIZE = [0.012, 0.034] as const;
-const DROP_RING_ODDS = 0.3;
-const DROP_GRAVITY = 9.81;
-const DROP_COLOR = "#effbfd";
-
-// The shared shader prelude: the slot table and the collapse for an idle slot.
-const SLOT_GLSL = `
-  uniform float uTime;
-  uniform vec4 uAt[${SLOTS}];     // x, y, z (three's frame), start time
-  uniform vec4 uHow[${SLOTS}];    // power 0..1 (0 = idle), seed, ball radius, -
-  uniform vec4 uClip[${SLOTS}];   // the pool's xmin, xmax, zmin, zmax
-  attribute float aSlot;
-  // Outside the clip volume: an idle slot's triangles all land here and vanish.
-  const vec4 SW_GONE = vec4(0.0, 0.0, 2.0, 1.0);
-`;
-
-const lerpGlsl = (r: readonly [number, number], t: string): string => `mix(${fmt(r[0])}, ${fmt(r[1])}, ${t})`;
-
-interface SplashSlot {
-  at: THREE.Vector4;
-  how: THREE.Vector4;
-  clip: THREE.Vector4;
-}
+// THE CROWN'S SHEET, which the foam ring rides out on (see SPLASH_SLOTS): the
+// water the ball shoves aside leaves its waterline (CROWN_FROM of its radius
+// out) at CROWN_SPEED of the entry speed U, tilted CROWN_TILT (radians) off
+// vertical, and comes back down a ballistic range out, one flight later. It
+// is not drawn - thrown lumps of foam were tried and removed (Tris,
+// 2026-10-06) - only the foam it lands as.
+const CROWN_FROM = 0.8;
+const CROWN_SPEED = 0.45;
+const CROWN_TILT = 0.4;
+const GRAVITY = 9.81;
+const RANGE_PER_U2 = (CROWN_SPEED * CROWN_SPEED * Math.sin(2 * CROWN_TILT)) / GRAVITY;
+const FLIGHT_PER_U = (2 * CROWN_SPEED * Math.cos(CROWN_TILT)) / GRAVITY;
 
 export class WaterSplashes {
-  readonly root = new THREE.Group();
-  private readonly slots: SplashSlot[] = [];
   private next = 0;
   private prev: Vec2 | null = null;
   private prevClock = 0;
-  // Where and when the last wake ring was shed, while the ball is still
-  // making one.
-  private wakeFrom: Vec2 | null = null;
-  private wakeAt = -Infinity;
+  // The wake capsule the ball is drawing out (-1 while it makes none) and the
+  // surface it lies on.
+  private wakeLive = -1;
+  private wakeSurface: StillSurface | null = null;
   private nextPuff = 0;
-  private readonly geometries: THREE.BufferGeometry[] = [];
-  private readonly materials: THREE.Material[] = [];
-
-  constructor() {
-    for (let i = 0; i < SLOTS; i++) {
-      this.slots.push({ at: new THREE.Vector4(), how: new THREE.Vector4(), clip: new THREE.Vector4() });
-    }
-    const uniforms = {
-      uTime: waterTime,
-      uAt: { value: this.slots.map((s) => s.at) },
-      uHow: { value: this.slots.map((s) => s.how) },
-      uClip: { value: this.slots.map((s) => s.clip) },
-    };
-    this.add(new THREE.Mesh(...this.crown(uniforms)), 12);
-    this.add(new THREE.Mesh(...this.lace(uniforms)), 11);
-    this.add(new THREE.Points(...this.drops(uniforms)), 13);
-  }
-
-  private add(obj: THREE.Mesh | THREE.Points, order: number): void {
-    // Always in the scene and always "visible", so the prewarm compiles all
-    // three programs; an idle slot collapses in the vertex shader instead.
-    obj.frustumCulled = false;
-    obj.renderOrder = order;
-    this.geometries.push(obj.geometry);
-    this.materials.push(obj.material as THREE.Material);
-    this.root.add(obj);
-  }
 
   // Forget every splash and the ball's last position: a new level, a restart.
   reset(): void {
-    for (const s of this.slots) s.how.x = 0;
-    for (const h of wakeSpotHow.value) h.x = 0;
-    this.wakeFrom = null;
-    this.wakeAt = -Infinity;
+    for (const h of splashFoamHow.value) h.x = 0;
+    for (const t of wakeSpotTime.value) t.z = 0;
+    this.wakeLive = -1;
     this.prev = null;
   }
 
@@ -711,7 +741,7 @@ export class WaterSplashes {
   update(clock: number, surfaces: Iterable<StillSurface>, ball: SplashBall | null): void {
     if (!ball) {
       this.prev = null;
-      this.wakeFrom = null;
+      this.wakeLive = -1;
       return;
     }
     const p = ball.position;
@@ -720,7 +750,7 @@ export class WaterSplashes {
     this.prev = p;
     this.prevClock = clock;
     if (!q || p.distanceTo(q) > TELEPORT || dt <= 0) {
-      this.wakeFrom = null;
+      this.wakeLive = -1;
       return;
     }
     // The ball's velocity as DRAWN between the two frames, beside the sim's
@@ -738,10 +768,6 @@ export class WaterSplashes {
       // The ball sits on the gameplay plane, which the slab may not contain
       // when it is shifted through z.
       const z = Math.min(Math.max(0, s.backZ), s.frontZ);
-      // The pool's footprint for the lace (an axis-aligned
-      // box: still water is never authored turned).
-      const ex = Math.abs(Math.cos(rot)) * s.halfX + Math.abs(Math.sin(rot)) * s.halfY;
-      const clip: [number, number, number, number] = [c.x - ex, c.x + ex, s.backZ, s.frontZ];
       const surfacePoint = (x: number): Vec2 => c.add(new Vec2(x, top).rotated(rot));
 
       // The wake: inside the pool's span, in the water but not deeper than
@@ -752,25 +778,22 @@ export class WaterSplashes {
       if (Math.abs(lp.x) <= s.halfX && depth > 0 && depth < WAKE_DEPTH + ball.radius) {
         const speed = Math.max(Math.abs(ball.velocity.rotated(-rot).x), Math.abs(drawn.rotated(-rot).x));
         if (speed > WAKE_MIN_SPEED) {
-          waking = true;
-          const at = surfacePoint(lp.x);
-          const due = !this.wakeFrom || this.wakeFrom.distanceTo(at) >= WAKE_SPACING;
-          // (A clock run back, a seek, owes nothing to the ring before it.)
-          if (due && (clock - this.wakeAt >= WAKE_INTERVAL || clock < this.wakeAt)) {
-            this.wakeFrom = at;
-            // Strongest with the ball breaking the surface, gone by WAKE_DEPTH;
-            // and with speed.
-            const shallow = 1 - Math.max(0, depth - ball.radius * 2) / WAKE_DEPTH;
-            const fast = Math.min(1, speed / WAKE_FULL_SPEED);
-            const strength = Math.max(0, shallow) * (0.35 + 0.65 * fast);
-            if (strength > 0.05) {
-              this.wakeAt = clock;
-              // Born on the ball's waterline: the circle where the surface
-              // cuts it, the centre `depth - radius` under (+) or over it.
-              const under = depth - ball.radius;
-              const waterline = Math.sqrt(Math.max(0, ball.radius * ball.radius - under * under));
-              this.shedFoam(at.x, threeY(at.y), z, clock, strength, waterline, Math.max(WAKE_SPREAD, WAKE_KELVIN * speed));
-            }
+          // The white water's share from the Froude number (see
+          // WAKE_FROUDE), and how long it lasts: WAKE_LINE_LIFE for the thin
+          // strip a slow ball leaves, WAKE_LIFE for a breaking wake;
+          // strongest with the ball breaking the surface, gone by WAKE_DEPTH.
+          const froude = speed / Math.sqrt(GRAVITY * ball.radius);
+          const share = Math.min(1, Math.max(0, (froude - WAKE_FROUDE[0]) / (WAKE_FROUDE[1] - WAKE_FROUDE[0])));
+          const shallow = 1 - Math.max(0, depth - ball.radius * 2) / WAKE_DEPTH;
+          const strength = Math.max(0, shallow) * (WAKE_LINE_LIFE + (WAKE_LIFE - WAKE_LINE_LIFE) * share) / WAKE_LIFE;
+          if (strength > 0.05) {
+            waking = true;
+            const at = surfacePoint(lp.x);
+            // The ball's waterline: the circle where the surface cuts it, the
+            // centre `depth - radius` under (+) or over it.
+            const under = depth - ball.radius;
+            const waterline = Math.sqrt(Math.max(0, ball.radius * ball.radius - under * under));
+            this.drawWake(s, at.x, threeY(at.y), z, clock, strength, WAKE_KELVIN * speed, waterline, share);
           }
         }
       }
@@ -791,361 +814,67 @@ export class WaterSplashes {
       if (speed < (entering ? SPLASH_MIN : EXIT_MIN * EXIT_POWER)) continue;
       const power = Math.min(1, Math.max(SPLASH_FLOOR, (speed - SPLASH_MIN) / (SPLASH_FULL - SPLASH_MIN)));
       const w = surfacePoint(x);
-      this.spawn(w.x, threeY(w.y), z, clock, power, ball.radius, clip);
+      // Started when the ball crossed, a fraction t into the frame, not when
+      // the frame is drawn: at 60 Hz that is up to 17 ms of flight.
+      this.spawn(w.x, threeY(w.y), z, clock - (1 - t) * dt, power, speed, ball.radius);
     }
-    if (!waking) this.wakeFrom = null;
+    if (!waking) this.wakeLive = -1;
   }
 
-  private shedFoam(
+  // Draw the live capsule out to where the ball is now, starting one where
+  // there is none (or the last cannot be carried on: another surface, a
+  // jump, a clock run back), and closing it for the next, which starts from
+  // its end, once it is long and old enough (see WAKE_SLOTS).
+  private drawWake(
+    surface: StillSurface,
     x: number,
     y: number,
     z: number,
     clock: number,
     strength: number,
+    armSpeed: number,
     waterline: number,
-    spread: number,
+    share: number,
   ): void {
+    let i = this.wakeLive;
+    if (i >= 0) {
+      const at = wakeSpotAt.value[i]!;
+      const tm = wakeSpotTime.value[i]!;
+      if (this.wakeSurface !== surface || clock < tm.y || Math.abs(x - at.y) > WAKE_JUMP) {
+        i = -1;
+      } else if (Math.abs(at.y - at.x) >= WAKE_SPACING && clock - tm.x >= WAKE_INTERVAL) {
+        i = this.startWake(at.y, y, z, tm.y);
+      }
+    }
+    if (i < 0) i = this.startWake(x, y, z, clock);
+    this.wakeSurface = surface;
+    wakeSpotAt.value[i]!.y = x;
+    wakeSpotTime.value[i]!.set(wakeSpotTime.value[i]!.x, clock, strength, armSpeed);
+    wakeSpotShape.value[i]!.set(waterline, share);
+  }
+
+  private startWake(x: number, y: number, z: number, clock: number): number {
     const i = this.nextPuff;
     this.nextPuff = (i + 1) % WAKE_SLOTS;
-    wakeSpotAt.value[i]!.set(x, y, z, clock);
-    wakeSpotHow.value[i]!.set(strength, waterline, spread);
+    this.wakeLive = i;
+    wakeSpotAt.value[i]!.set(x, x, y, z);
+    wakeSpotTime.value[i]!.set(clock, clock, 0, 0);
+    return i;
   }
 
   private spawn(
     x: number,
     y: number,
     z: number,
-    clock: number,
+    start: number,
     power: number,
+    speed: number,
     radius: number,
-    clip: [number, number, number, number],
   ): void {
-    const slot = this.slots[this.next]!;
-    this.next = (this.next + 1) % SLOTS;
-    slot.at.set(x, y, z, clock);
-    // The seed varies the crown's jag and the lace's cells from splash to
-    // splash; taken from the clock so a pinned clock draws the same one.
-    slot.how.set(power, (clock * 7.31) % 97, radius, 0);
-    slot.clip.set(...clip);
-  }
-
-  private crown(uniforms: Record<string, THREE.IUniform>): [THREE.BufferGeometry, THREE.ShaderMaterial] {
-    const slot: number[] = [];
-    const ring: number[] = [];
-    const index: number[] = [];
-    for (let s = 0; s < SLOTS; s++) {
-      const base = slot.length;
-      for (let r = 0; r <= CROWN_ROWS; r++) {
-        for (let k = 0; k <= CROWN_SEG; k++) {
-          slot.push(s);
-          ring.push((k / CROWN_SEG) * Math.PI * 2, r / CROWN_ROWS);
-        }
-      }
-      const cols = CROWN_SEG + 1;
-      for (let r = 0; r < CROWN_ROWS; r++) {
-        for (let k = 0; k < CROWN_SEG; k++) {
-          const a = base + r * cols + k;
-          index.push(a, a + 1, a + cols, a + 1, a + cols + 1, a + cols);
-        }
-      }
-    }
-    const g = new THREE.BufferGeometry();
-    g.setAttribute("position", new THREE.Float32BufferAttribute(new Float32Array(slot.length * 3), 3));
-    g.setAttribute("aSlot", new THREE.Float32BufferAttribute(slot, 1));
-    g.setAttribute("aRing", new THREE.Float32BufferAttribute(ring, 2));
-    g.setIndex(index);
-    const m = new THREE.ShaderMaterial({
-      uniforms: THREE.UniformsUtils.merge([THREE.UniformsLib.fog, {
-        uFront: { value: new THREE.Color(CROWN_FRONT) },
-        uBack: { value: new THREE.Color(CROWN_BACK) },
-      }]),
-      vertexShader: `
-        #include <common>
-        #include <fog_pars_vertex>
-        ${SLOT_GLSL}
-        attribute vec2 aRing;
-        varying vec2 vRing;
-        varying float vU;
-        varying float vSeed;
-        void main() {
-          int s = int(aSlot + 0.5);
-          vec4 at = uAt[s];
-          vec4 how = uHow[s];
-          float power = how.x;
-          float life = ${lerpGlsl(CROWN_LIFE, "power")};
-          float u = (uTime - at.w) / life;
-          if (power <= 0.0 || u < 0.0 || u > 1.0) { gl_Position = SW_GONE; return; }
-          float a = aRing.x;
-          float v = aRing.y;
-          float sd = how.y;
-          // The jagged rim: a periodic sum of sines round the ring, sharpened
-          // so the crown has points rather than a wavy hem.
-          float jag = 0.5 + 0.5 * (0.55 * sin(5.0 * a + sd) + 0.3 * sin(9.0 * a + sd * 1.7) + 0.25 * sin(14.0 * a + sd * 2.3));
-          jag = pow(clamp(jag, 0.0, 1.0), 1.5);
-          // Up fast, then down: risen by a third of its life, collapsing after.
-          float rise = smoothstep(0.0, 0.32, u);
-          float fall = 1.0 - smoothstep(0.4, 1.0, u);
-          float h = ${lerpGlsl(CROWN_HEIGHT, "power")} * rise * (0.25 + 0.75 * fall) * (0.4 + 0.8 * jag);
-          float r0 = how.z * ${fmt(CROWN_R0)} + ${lerpGlsl(CROWN_SPREAD, "power")} * sqrt(u);
-          float r = r0 + v * v * h * ${fmt(CROWN_FLARE)} * (0.6 + 1.2 * u);
-          r *= 1.0 + 0.14 * v * sin(3.0 * a + sd * 3.1);
-          vec3 p = vec3(at.x + r * cos(a), at.y - 0.01 + v * h, at.z + r * sin(a));
-          vRing = aRing;
-          vU = u;
-          vSeed = sd;
-          vec4 mvPosition = modelViewMatrix * vec4(p, 1.0);
-          gl_Position = projectionMatrix * mvPosition;
-          #include <fog_vertex>
-        }`,
-      fragmentShader: `
-        #include <common>
-        #include <fog_pars_fragment>
-        uniform vec3 uFront;
-        uniform vec3 uBack;
-        varying vec2 vRing;
-        varying float vU;
-        varying float vSeed;
-        ${NOISE_GLSL}
-        float swCell(vec2 p) {
-          vec2 c = floor(p);
-          float d = 8.0;
-          for (int j = -1; j <= 1; j++)
-          for (int i = -1; i <= 1; i++) {
-            vec2 o = vec2(float(i), float(j));
-            // Wrapped round the ring so the seam at angle 0 does not show.
-            vec2 cell = vec2(mod(c.x + o.x, 12.0), c.y + o.y);
-            d = min(d, distance(o + swHash3(vec3(cell, vSeed)).xy, p - c));
-          }
-          return d;
-        }
-        void main() {
-          vec2 q = vec2(vRing.x / 6.2832 * 12.0, vRing.y * 2.5);
-          // Holes that open as the crown falls: it tears into lace and goes.
-          float hole = swCell(q * 1.6 + vec2(0.0, vU * 0.8));
-          if (hole < smoothstep(0.3, 1.0, vU) * 0.75) discard;
-          vec3 col = gl_FrontFacing ? uFront : uBack;
-          // White blotches, and a white fringe along the points.
-          float blot = step(0.62, swCell(q + 3.7));
-          col = mix(col, vec3(1.0), max(blot * 0.8, step(0.82, vRing.y)));
-          gl_FragColor = vec4(col, 1.0);
-          #include <tonemapping_fragment>
-          #include <colorspace_fragment>
-          #include <fog_fragment>
-        }`,
-      side: THREE.DoubleSide,
-      fog: true,
-    });
-    // The slot table by reference, after the merge: merge CLONES, and a
-    // cloned table is one `spawn` never writes to.
-    Object.assign(m.uniforms, uniforms);
-    return [g, m];
-  }
-
-  private lace(uniforms: Record<string, THREE.IUniform>): [THREE.BufferGeometry, THREE.ShaderMaterial] {
-    const slot: number[] = [];
-    const corner: number[] = [];
-    const index: number[] = [];
-    for (let s = 0; s < SLOTS; s++) {
-      const b = slot.length;
-      for (const [cx, cz] of [[-1, -1], [1, -1], [1, 1], [-1, 1]] as const) {
-        slot.push(s);
-        corner.push(cx, cz);
-      }
-      index.push(b, b + 2, b + 1, b, b + 3, b + 2);
-    }
-    const g = new THREE.BufferGeometry();
-    g.setAttribute("position", new THREE.Float32BufferAttribute(new Float32Array(slot.length * 3), 3));
-    g.setAttribute("aSlot", new THREE.Float32BufferAttribute(slot, 1));
-    g.setAttribute("aCorner", new THREE.Float32BufferAttribute(corner, 2));
-    g.setIndex(index);
-    const m = new THREE.ShaderMaterial({
-      uniforms: THREE.UniformsUtils.merge([THREE.UniformsLib.fog, { uColor: { value: new THREE.Color(LACE_COLOR) } }]),
-      vertexShader: `
-        #include <common>
-        #include <fog_pars_vertex>
-        ${SLOT_GLSL}
-        attribute vec2 aCorner;
-        varying vec2 vQ;
-        varying vec3 vWorld;
-        varying float vU;
-        varying float vPower;
-        varying float vSeed;
-        varying float vR0;
-        varying vec4 vClip;
-        void main() {
-          int s = int(aSlot + 0.5);
-          vec4 at = uAt[s];
-          vec4 how = uHow[s];
-          float power = how.x;
-          float u = (uTime - at.w) / ${lerpGlsl(LACE_LIFE, "power")};
-          if (power <= 0.0 || u < 0.0 || u > 1.0) { gl_Position = SW_GONE; return; }
-          // Big enough for the flecks past its rim.
-          float reach = ${lerpGlsl(LACE_RADIUS, "power")} * 1.5;
-          vQ = aCorner * reach;
-          vec3 p = vec3(at.x + vQ.x, at.y + 0.004, at.z + vQ.y);
-          vWorld = p;
-          vU = u;
-          vPower = power;
-          vSeed = how.y;
-          vR0 = how.z;
-          vClip = uClip[s];
-          vec4 mvPosition = modelViewMatrix * vec4(p, 1.0);
-          gl_Position = projectionMatrix * mvPosition;
-          #include <fog_vertex>
-        }`,
-      fragmentShader: `
-        #include <common>
-        #include <fog_pars_fragment>
-        uniform vec3 uColor;
-        varying vec2 vQ;
-        varying vec3 vWorld;
-        varying float vU;
-        varying float vPower;
-        varying float vSeed;
-        varying float vR0;
-        varying vec4 vClip;
-        ${NOISE_GLSL}
-        // F1 and F2 of a 2D Voronoi whose x wraps every 'wrap' cells - the
-        // angle - so a field laid out in polar coordinates has no seam.
-        vec2 swVoronoi(vec2 p, float wrap, float seed) {
-          vec2 c = floor(p);
-          float f1 = 8.0;
-          float f2 = 8.0;
-          for (int j = -1; j <= 1; j++)
-          for (int i = -1; i <= 1; i++) {
-            vec2 o = vec2(float(i), float(j));
-            vec2 cell = vec2(mod(c.x + o.x, wrap), c.y + o.y);
-            float d = distance(o + swHash3(vec3(cell, seed)).xy, p - c);
-            if (d < f1) { f2 = f1; f1 = d; } else if (d < f2) { f2 = d; }
-          }
-          return vec2(f1, f2);
-        }
-        void main() {
-          if (vWorld.x < vClip.x || vWorld.x > vClip.y || vWorld.z < vClip.z || vWorld.z > vClip.w) discard;
-          float r = length(vQ);
-          float th = atan(vQ.y, vQ.x) / 6.2832 + 0.5;
-          float u = vU;
-          float rMax = ${lerpGlsl(LACE_RADIUS, "vPower")};
-          // The front runs out fast and slows; the middle hollows behind it.
-          float front = vR0 + (rMax - vR0) * (1.0 - pow(1.0 - u, 2.2));
-          float inner = front * mix(0.2, 0.75, u);
-          // The lace: Voronoi edges in log-polar space, so its cells stretch
-          // out along the spokes the way the reference's do; thick when young,
-          // thinning as it spreads.
-          vec2 lp = vec2(th * ${fmt(LACE_SPOKES)}, log(max(r, 0.01)) * 4.0);
-          vec2 f = swVoronoi(lp, ${fmt(LACE_SPOKES)}, vSeed);
-          float web = 1.0 - smoothstep(mix(0.42, 0.12, u) - 0.02, mix(0.42, 0.12, u), f.y - f.x);
-          float band = smoothstep(inner * 0.9, inner, r) * (1.0 - smoothstep(front * 0.8, front, r));
-          float lace = web * band;
-          // Torn flecks at and past the rim: some cells kept whole, stretched
-          // round the ring.
-          vec2 fp = vec2(th * ${fmt(LACE_SPOKES * 2)}, r * 9.0);
-          vec2 fc = floor(fp);
-          float keep = step(swHash3(vec3(mod(fc.x, ${fmt(LACE_SPOKES * 2)}), fc.y, vSeed + 5.0)).x, 0.3);
-          vec2 g = swVoronoi(fp, ${fmt(LACE_SPOKES * 2)}, vSeed + 5.0);
-          float fleck = keep * step(g.x, mix(0.42, 0.18, u))
-            * smoothstep(front * 0.75, front * 0.85, r) * (1.0 - smoothstep(front * 1.15, front * 1.3, r));
-          float fade = 1.0 - smoothstep(0.6, 1.0, u);
-          float a = max(lace, fleck) * fade;
-          if (a < 0.02) discard;
-          gl_FragColor = vec4(uColor, a * 0.95);
-          #include <tonemapping_fragment>
-          #include <colorspace_fragment>
-          #include <fog_fragment>
-        }`,
-      transparent: true,
-      depthWrite: false,
-      fog: true,
-    });
-    // The slot table by reference, after the merge: merge CLONES, and a
-    // cloned table is one `spawn` never writes to.
-    Object.assign(m.uniforms, uniforms);
-    return [g, m];
-  }
-
-  private drops(uniforms: Record<string, THREE.IUniform>): [THREE.BufferGeometry, THREE.ShaderMaterial] {
-    const slot: number[] = [];
-    const seed: number[] = [];
-    let n = 987654321;
-    const rnd = (): number => {
-      n = (n * 1103515245 + 12345) & 0x7fffffff;
-      return n / 0x7fffffff;
-    };
-    for (let s = 0; s < SLOTS; s++) {
-      for (let i = 0; i < DROPS; i++) {
-        slot.push(s);
-        seed.push(rnd(), rnd(), rnd(), rnd());
-      }
-    }
-    const g = new THREE.BufferGeometry();
-    g.setAttribute("position", new THREE.Float32BufferAttribute(new Float32Array(slot.length * 3), 3));
-    g.setAttribute("aSlot", new THREE.Float32BufferAttribute(slot, 1));
-    g.setAttribute("aSeed", new THREE.Float32BufferAttribute(seed, 4));
-    const m = new THREE.ShaderMaterial({
-      uniforms: THREE.UniformsUtils.merge([THREE.UniformsLib.fog, {
-        uViewHalfHeight: POINT_VIEW_HALF_HEIGHT,
-        uColor: { value: new THREE.Color(DROP_COLOR) },
-      }]),
-      vertexShader: `
-        #include <common>
-        #include <fog_pars_vertex>
-        ${SLOT_GLSL}
-        uniform float uViewHalfHeight;
-        attribute vec4 aSeed;
-        varying float vRing;
-        void main() {
-          int s = int(aSlot + 0.5);
-          vec4 at = uAt[s];
-          vec4 how = uHow[s];
-          float power = how.x;
-          // A drop leaves a little after the ball goes in, and only as many
-          // drops as the splash has power for.
-          float t = uTime - at.w - aSeed.w * 0.12;
-          if (power <= 0.0 || t < 0.0 || aSeed.w > 0.25 + 0.75 * power) { gl_Position = SW_GONE; return; }
-          float a = aSeed.x * 6.2832;
-          vec2 dir = vec2(cos(a), sin(a));
-          float up = ${lerpGlsl(DROP_UP, "aSeed.y")} * mix(0.45, 1.0, power);
-          float out_ = ${lerpGlsl(DROP_OUT, "aSeed.z")} * mix(0.4, 1.0, power);
-          vec3 p = vec3(at.x, at.y + 0.02, at.z) + vec3(dir.x, 0.0, dir.y) * how.z;
-          p += vec3(dir.x * out_, up, dir.y * out_) * t;
-          p.y -= 0.5 * ${fmt(DROP_GRAVITY)} * t * t;
-          // Back in the water: gone.
-          if (p.y < at.y) { gl_Position = SW_GONE; return; }
-          vRing = step(fract(aSeed.y * 7.31), ${fmt(DROP_RING_ODDS)});
-          float size = ${lerpGlsl(DROP_SIZE, "fract(aSeed.x * 13.7)")} * mix(0.6, 1.0, power) * (1.0 + 0.6 * vRing);
-          vec4 mvPosition = modelViewMatrix * vec4(p, 1.0);
-          gl_Position = projectionMatrix * mvPosition;
-          gl_PointSize = max(2.0, size * projectionMatrix[1][1] * uViewHalfHeight / -mvPosition.z);
-          #include <fog_vertex>
-        }`,
-      fragmentShader: `
-        #include <common>
-        #include <fog_pars_fragment>
-        uniform vec3 uColor;
-        varying float vRing;
-        void main() {
-          float d = length(gl_PointCoord - 0.5);
-          float dot_ = 1.0 - smoothstep(0.4, 0.5, d);
-          float ring = dot_ * smoothstep(0.24, 0.32, d);
-          float a = mix(dot_, ring, vRing);
-          if (a < 0.05) discard;
-          gl_FragColor = vec4(uColor, a);
-          #include <tonemapping_fragment>
-          #include <colorspace_fragment>
-          #include <fog_fragment>
-        }`,
-      transparent: true,
-      depthWrite: false,
-      fog: true,
-    });
-    // The slot table by reference, after the merge: merge CLONES, and a
-    // cloned table is one `spawn` never writes to.
-    Object.assign(m.uniforms, uniforms);
-    return [g, m];
-  }
-
-  dispose(): void {
-    for (const g of this.geometries) g.dispose();
-    for (const m of this.materials) m.dispose();
+    const i = this.next;
+    this.next = (i + 1) % SPLASH_SLOTS;
+    // The ring carried out to where the crown's sheet lands, over its flight.
+    splashFoamAt.value[i]!.set(x, y, z, start);
+    splashFoamHow.value[i]!.set(power, radius, CROWN_FROM * radius + RANGE_PER_U2 * speed * speed, FLIGHT_PER_U * speed);
   }
 }
