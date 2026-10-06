@@ -98,11 +98,26 @@ The waves are displaced along N (perpendicular to the travel) and the normal is 
 Approaching a lip the current eases to the lip's speed over `DRAWDOWN_REACH` (the study's 1.9 m acceleration zone) and the surface lowers by `DRAWDOWN` of the half depth, the bed staying put: the taper into a fall that a level surface running to a hard edge never has.
 
 **The look** is the study's `paintedRiver`: three layers of the pool's spectrum read in parcel space, stretched along the flow and turned 90 and ~40 degrees against each other so the spectrum's diagonal never lines up, plus a fine chop churning in its own time (a current is not a mirror), and the long swell's slope.
-The same slopes drive soft light bands where the ripples face the light, a little shade where they face away, a crest on the steepest and a broad highlight; the colour drifts down the channel between the deep, the shallow and the light, a little greener here and there.
-A **pale wash** stands in for foam: translucent milky streaks drawn along the current, faint in mid-channel and opaque where the water meets the banks (whose reach wanders, so the inner edge is a torn line) and at the brink, with a thin nearly solid rim at the waterline.
-Down the front the wash gives out within `BANK_DOWN` and the rim within `RIM_DOWN`, since the study's banks hid its sides and a front painted as a bank read as white from the waterline to the bed, and the pigment fades toward the deep with the depth under the waterline.
+The same slopes drive soft light bands where the ripples face the light, a little shade where they face away, a crest on the steepest and a broad highlight; restrained deep-to-shallow teal patches ride the current without an extra green tint.
+Broken **turquoise strokes** travel downstream, faint in mid-channel and becoming pale at the brink. Over the drawdown reach their pattern blends into the cascade's shared parcel wash. Slab edges carry only faint interrupted teal glints: they do not establish contact with rock and no longer draw continuous white foam borders.
+Down the front the glints give out within `RIM_DOWN`, and the pigment fades toward the deep with the depth under the waterline. `BANK_DOWN` still limits the cascade's edge wash.
 The top is opaque and the front murky glass (`ALPHA_FRONT_*`, the pool's numbers), so a submerged ball stays a silhouette; the tube is closed and its back faces culled, so what shows through is the ball and the rock behind, never the water's own far side.
 The study's river mirror (a second reflection pass in the river's plane, at 0.3) is not ported: from the game's camera a channel's top is a few pixels tall, so it would be a scene pass per frame for nothing visible.
+
+### River refinement (2026-10-06)
+
+The running surface keeps the approved wave geometry and shared pond palette,
+but uses restrained deep-to-shallow teal pigment without the extra green tint.
+Its ripple layers churn at a quarter of the cascade's rate, with reduced fine
+chop and longer downstream patterns. Broken turquoise strokes ride parcel
+coordinates; their interior opacity is 0.15, rising toward 0.55 at the lip.
+Only the lip and the existing impact field whiten the running surface. A slab
+edge does not establish contact with rock, so its former white bank outline is
+replaced by faint, interrupted teal glints; actual bank-contact foam would need
+a scenery/contact mask. The cascade retains its original churn and whitewater.
+BALL's two `spillSpeed` values are now 145 px/s against a 120 px/s current,
+giving the rendered approach a modest acceleration instead of slowing to 100.
+These exit speeds affect the visible arc, not the gameplay current or drag.
 
 ### A fall
 
@@ -125,9 +140,10 @@ It is opaque: refracting the shelf behind drew horizontal bluish bands in the st
 **Where it lands.** The fall pours `spill` metres as authored, but the water it lands in is wherever the level put it: `updateWater` finds, every frame, where the sheet's top first meets the top of another water body under it, puts the landing at the middle of the span the sheet crosses that surface over (its bottom a slice depth before its top), and stops drawing the sheet `FALL_SINK` under it; with no water under it the landing is at the authored drop.
 On BALL both falls land shorter than authored - the upper channel's 2 m spill meets the lower channel 1.4 m down, the lower's 1.5 m meets the pool 0.9 m down.
 
-**The landing** is the study's, at `STUDY_SCALE` and in its timing: a **crown**, one frothing heightfield over a capsule footprint the width of the sheet, kept on the water it lands in; ninety-two short-lived **plumes**, broad lobes in the middle and fading wisps outside; twenty-six airborne **splash ribbons** whose tips follow gravity; and a hundred and sixty streaks of **spray** (the study faded each against the scene's depth, which this pass has no texture of; the depth test does the occluding).
-Every particle is a pure function of the clock and its instance, so a pinned clock draws the same landing twice; all four are always in the scene and placed in their vertex shaders, so the prewarm compiles them.
-The water it lands in draws the **impact field** (`IMPACT_GLSL`, up to `IMPACT_SLOTS` landings in a module-wide table, each read only within `IMPACT_PLANE` of its height and only on a top face): a broad irregular whitewater footprint, boiling, with broken arcs of ripple running out from it, tilting the surface's own slopes - the pool's light bands and its mirror, or a channel's.
+**The landing** uses seven distinct layers at `STUDY_SCALE`: a lower, narrower **crown** with a compact white contact core and broken teal edges, kept on the receiving water; forty translucent short-lived **plumes** with lower ballistic lobes; ten shorter, narrower **splash ribbons** fragmenting toward their tips; 130 rounded **droplets** aligned to their projected velocity; 24 low-opacity turquoise **mist wisps**; thirty **jet-tip drops** shed from the ribbon trajectories; and thirty small broken **return rings** where those drops meet the receiving surface. The mist expands and drifts slowly upward, with a few wisps nearer the camera, fades at the surface and draws behind the splashes. These replace the study's overlapping white mound (92 plumes at opacity 0.80) and pointed spray marks, refined on 2026-10-06.
+Foam shadows, highlights and mist are derived from the authored water palette; nearly white colour is concentrated at the contact and on droplets. `land` derives a bounded visual strength from the actual impact speed (0.7..1.4 relative to BALL's lower fall), so a shorter landing is quieter than a taller one. It changes only visual emission height/spread, never the simulation. Plume, mist, ribbon and spray variations change per emission cycle, with fades hiding the reset. Ribbons, tip drops and return rings share the same launch state, so the detached drops continue the jet's ballistic path and rings appear at its landing point, clipped to the receiving water.
+Every particle is a pure function of the clock and its instance, so a pinned clock draws the same landing twice; all seven are always in the scene and placed in their vertex shaders, so the prewarm compiles them. The pass has no scene-depth texture for soft intersection fading: ordinary depth tests occlude particles against rocks and the mist's surface fade prevents a hard waterline.
+The water it lands in draws the **impact field** (`IMPACT_GLSL`, up to `IMPACT_SLOTS` landings in a module-wide table, each read only within `IMPACT_PLANE` of its height and only on a top face): a compact boiling core, a low broken mint foam apron travelling downstream with teal gaps, sparse farther flecks, and the existing broken ripple arcs. The lower boil and arcs tilt the surface's own slopes - the pool's light bands and its mirror, or a channel's.
 
 `levels/ball.json`'s upper channel spills onto the lower one, and the lower into the pool.
 
