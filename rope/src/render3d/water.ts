@@ -151,7 +151,7 @@ const ALPHA_FRONT_BED = 0.8;
 // Separate compact splashes from the much softer, longer-lived mist.
 const PLUMES = 40;
 const MISTS = 48;
-const BUBBLES = 100;
+const FOAM_PATCHES = 88;
 
 // ---------------------------------------------------------------------------
 // Geometry
@@ -866,7 +866,7 @@ function currentMaterial(look: CurrentLook): THREE.MeshBasicMaterial {
 // The landing
 // ---------------------------------------------------------------------------
 
-// Where a fall meets the water, a compact crown, soft plumes, side bubbles
+// Where a fall meets the water, a compact crown, soft plumes, surface foam
 // and a separate mist veil. Each is drawn in study metres in a frame
 // whose x is turned so the sheet travels toward -x (the study's), about the
 // impact, then scaled into the body's frame at STUDY_SCALE. Every particle is a pure
@@ -1129,9 +1129,9 @@ function mistMesh(l: Landing): THREE.Mesh {
   return new THREE.Mesh(instancedQuads(MISTS), material);
 }
 
-// Small pearly foam bubbles drift round the sheet's sides and out onto the
-// receiving water. Crescents catch the light; only a few briefly sparkle.
-function bubbleMesh(l: Landing): THREE.Mesh {
+// Loose froth lies on the receiving water and drifts round the sheet's sides.
+// Each island has a broken painted silhouette, teal gaps and a few glints.
+function surfaceFoamMesh(l: Landing): THREE.Mesh {
   const material = landingMaterial(
     l,
     `
@@ -1142,29 +1142,29 @@ function bubbleMesh(l: Landing): THREE.Mesh {
     varying float vSeed;
     void main() {
       float id = float(gl_InstanceID), r = rnd(id + 710.0);
-      float life = 1.05 + r * 1.40 + rnd(id + 720.0) * 0.70;
+      float life = 2.0 + r * 1.40 + rnd(id + 720.0) * 0.80;
       float clock = uTime / life + rnd(id + 721.0);
       float phase = fract(clock), seed = id + floor(clock) * 37.0;
       float edge = mod(id, 2.0) * 2.0 - 1.0;
       float along = rnd(seed + 742.0);
       vec3 center = rimPoint(along, edge);
-      center.x -= phase * (0.14 + pow(rnd(seed + 752.0), 0.65) * 0.75);
-      center.x += (rnd(seed + 759.0) - 0.5) * 0.18 + 0.04 * sin(phase * 4.0 + seed);
-      center.z += edge * (0.02 + phase * 0.18) + (rnd(seed + 763.0) - 0.5) * 0.24
-        + 0.035 * sin(phase * (3.8 + r * 2.0) + seed);
-      center.y += 0.014 + 0.021 * sin(phase * 3.14159) + 0.014 * rnd(seed + 770.0);
-      float shape = rnd(seed + 796.0);
-      float clustered = step(0.90, shape);
-      float size = (0.072 + pow(rnd(seed + 780.0), 1.2) * 0.12 + clustered * 0.035)
-        * (0.72 + 0.28 * sin(phase * 3.14159));
-      vec2 aspect = vec2(0.98 + rnd(seed + 785.0) * 0.42, 0.84 + rnd(seed + 789.0) * 0.28);
-      vec3 at = toBody(center) + (viewRight() * position.x * size * aspect.x
-        + viewUp() * position.y * size * aspect.y) * ${fmt(S)};
+      center.x -= phase * life * (0.08 + rnd(seed + 752.0) * 0.10);
+      center.x += (rnd(seed + 759.0) - 0.5) * 0.18 + 0.035 * sin(phase * 3.0 + seed);
+      center.z += edge * (0.015 + phase * 0.16) + (rnd(seed + 763.0) - 0.5) * 0.30;
+      center.y = 0.024 + 0.010 * rnd(seed + 770.0) + 0.002 * sin(phase * 3.14159);
+      float size = (0.20 + pow(rnd(seed + 780.0), 0.75) * 0.32)
+        * (0.80 + 0.20 * sin(phase * 3.14159));
+      vec2 aspect = vec2(1.10 + rnd(seed + 785.0) * 0.80, 0.55 + rnd(seed + 789.0) * 0.55);
+      float turn = (rnd(seed + 792.0) - 0.5) * 1.20 + phase * 0.10;
+      vec2 surfaceOffset = position.xy * size * aspect;
+      vec2 offset = vec2(surfaceOffset.x * cos(turn) - surfaceOffset.y * sin(turn), surfaceOffset.x * sin(turn) + surfaceOffset.y * cos(turn));
+      // Surface-aligned xz quads stay flat even when the camera moves.
+      vec3 at = toBody(center + vec3(offset.x, 0.0, offset.y));
       vUV = uv;
       vBody = at.xz;
-      vSeed = shape;
-      vGlint = step(0.85, rnd(id + 805.0)) * pow(max(0.0, sin(uTime * (2.8 + r * 1.6) + seed)), 14.0);
-      vLife = smoothstep(0.0, 0.10 + r * 0.08, phase) * (1.0 - smoothstep(0.56 + r * 0.16, 1.0, phase));
+      vSeed = rnd(seed + 796.0);
+      vGlint = step(0.91, rnd(id + 805.0)) * pow(max(0.0, sin(uTime * (1.8 + r * 0.8) + seed)), 20.0);
+      vLife = smoothstep(0.0, 0.12 + r * 0.06, phase) * (1.0 - smoothstep(0.58 + r * 0.12, 1.0, phase));
       gl_Position = projectionMatrix * modelViewMatrix * vec4(at, 1.0);
     }`,
     `
@@ -1174,27 +1174,31 @@ function bubbleMesh(l: Landing): THREE.Mesh {
     varying float vLife;
     varying float vGlint;
     varying float vSeed;
+    ${ORGANIC_GLSL}
     void main() {
       if (vBody.x < uClip.x || vBody.x > uClip.y || vBody.y < uClip.z || vBody.y > uClip.w) discard;
       vec2 q = vUV * 2.0 - 1.0;
-      float angle = atan(q.y, q.x);
-      float radius = length(q) + 0.025 * sin(angle * 3.0 + vSeed * 6.28318);
-      float paired = min(length(q - vec2(0.24, 0.03)) * 1.28, length(q + vec2(0.26, 0.02)) * 1.34);
-      radius = mix(radius, paired, step(0.90, vSeed));
-      float aa = max(0.025, fwidth(radius));
-      float mask = 1.0 - smoothstep(0.82 - aa, 0.96 + aa, radius);
-      float rim = smoothstep(mix(0.36, 0.49, vSeed), mix(0.72, 0.82, vSeed), radius) * mask;
-      float crescent = rim * smoothstep(-0.1, 0.65, q.y - q.x);
-      vec2 gleam = (q - vec2(-0.28, 0.34)) * 5.0;
-      float pinpoint = exp(-dot(gleam, gleam)) * vGlint;
-      float alpha = (mask * 0.42 + rim * 0.25 + pinpoint * 0.55) * vLife * ${fmt(Math.min(1, IMPACT_FOAM))};
+      vec2 grain = q * 2.15 + vec2(vSeed * 31.7, vSeed * 11.3);
+      float pigment = paintNoise(grain + vec2(uTime * 0.025, -uTime * 0.035));
+      float outline = pow(abs(q.x), 2.6) + pow(abs(q.y), 2.3)
+        + (pigment - 0.5) * 0.62 + 0.07 * sin(q.x * 5.0 + q.y * 3.0 + vSeed * 9.0);
+      float aa = max(0.025, fwidth(outline));
+      float mask = 1.0 - smoothstep(0.57 - aa, 0.90 + aa, outline);
+      float gaps = smoothstep(0.64, 0.80, paintNoise(q * 2.8 + vec2(vSeed * 17.0, 8.3))) * 0.86;
+      float froth = mask * (1.0 - gaps);
+      float brush = smoothstep(0.30, 0.68, softNoise(vec2(q.x * 3.7 + vSeed * 8.0, q.y * 0.9 + 4.2)))
+        * smoothstep(-0.30, 0.35, q.y - q.x * 0.18);
+      vec2 gleam = (q - vec2(-0.18 + vSeed * 0.30, 0.12 - vSeed * 0.25)) * 12.0;
+      float pinpoint = exp(-dot(gleam, gleam)) * vGlint * froth;
+      float alpha = (froth * (0.42 + pigment * 0.16) + pinpoint * 0.16) * vLife * ${fmt(Math.min(1, IMPACT_FOAM))};
       if (alpha < 0.008) discard;
-      vec3 col = mix(uFoamShade, uFoamLight, 0.18 + 0.22 * vSeed + crescent * 0.70);
-      col = mix(col, vec3(0.98, 1.0, 1.0), pinpoint);
+      vec3 col = mix(uFoamShade, uFoamLight, 0.48 + 0.42 * smoothstep(0.28, 0.70, pigment));
+      col = mix(col, vec3(0.92, 0.98, 0.99), brush * 0.26);
+      col = mix(col, vec3(0.98, 1.0, 1.0), pinpoint * 0.65);
       ${LANDING_OUT}
     }`,
   );
-  return new THREE.Mesh(instancedQuads(BUBBLES), material);
+  return new THREE.Mesh(instancedQuads(FOAM_PATCHES), material);
 }
 
 // ---------------------------------------------------------------------------
@@ -1452,10 +1456,10 @@ export function buildWater(root: THREE.Group, body: WaterArea, data: LevelBodyDa
       clip: fall.clip, palette: studyPalette(color), strength: fall.strength,
       contactHalfSpan: fall.contactHalfSpan,
     };
-    // Drawn after the water: mist, the low crown, soft froth and side bubbles.
+    // Drawn after the water: mist, the low crown, soft plumes and surface foam.
     // Always in the scene and never culled (each is placed in its vertex
     // shader), so the prewarm compiles all four.
-    [mistMesh(landing), crownMesh(landing), plumeMesh(landing), bubbleMesh(landing)].forEach((m, i) => {
+    [mistMesh(landing), crownMesh(landing), plumeMesh(landing), surfaceFoamMesh(landing)].forEach((m, i) => {
       m.frustumCulled = false;
       m.renderOrder = 11 + i;
       root.add(m);
