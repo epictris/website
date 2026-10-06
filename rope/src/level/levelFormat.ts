@@ -915,13 +915,14 @@ export interface LevelBodyData {
   // Water areas only: the water SPILLS off the downstream end of the run (the
   // end `flow` points at) as a fall, dropping `spill` pixels (metres once
   // scaled) from the waterline to the pool it lands in. Absent or 0 = the run
-  // ends against its bank and nothing pours. `spillSpeed` is the speed the
-  // water leaves the lip at in pixels/s, which sets how far the arc swings
-  // out; absent = the current's own speed. Both are lengths (per second, for
-  // the speed) and both convert. Drawn only - the physics of a fall, if a
-  // level wants one, is a second water area turned to point down.
+  // ends against its bank and nothing pours. A length, so it converts. How
+  // fast the water leaves the lip, and so how the arc curves, is not authored:
+  // it follows from the current's speed and the run's depth (render3d/water.ts,
+  // `brinkOf`), so faster water arcs out further. The retired `spillSpeed`
+  // that said it instead is dropped on load (`withoutSpillSpeed`). Drawn only -
+  // the physics of a fall, if a level wants one, is a second water area turned
+  // to point down.
   spill?: number;
-  spillSpeed?: number;
   // Water areas only: where the water's slab sits through z and how deep it
   // is, in pixels (metres once scaled) - `waterZ` offsets its middle from the
   // gameplay plane, + toward the camera, and `waterDepth` is its extent
@@ -2606,7 +2607,7 @@ function finish(
     const extra = added.get(i);
     const withAnchors = extra ? { ...b, objects: [...b.objects, ...extra] } : b;
     const body = withoutLook(withAnchors);
-    return body.objects.length > 0 ? [withoutConflictingSpring(withMigratedMask(body))] : [];
+    return body.objects.length > 0 ? [withoutSpillSpeed(withoutConflictingSpring(withMigratedMask(body)))] : [];
   });
   const { backgrounds: _panels, lights: _lights, chains: _chains, ...rest } = raw;
   return { ...rest, bodies: out, ...(chains ? { chains } : {}) };
@@ -2665,6 +2666,18 @@ interface RetiredGeometryData {
 
 function isRetiredGeometry(o: SceneObjectData | RetiredGeometryData): o is RetiredGeometryData {
   return o.type === "geometry";
+}
+
+// The retired `spillSpeed` (2026-10-06): a fall's lip speed was authored, and
+// every level carried the editor's 100 px/s, slower than the 120 px/s currents
+// feeding it, so the water braked into the brink and turned down it on a 10 cm
+// radius whatever the current did. It follows from the current now (see
+// `LevelBodyData.spill`), so the field is dropped here rather than having every
+// level rewritten. Returns the body unchanged when it has none.
+function withoutSpillSpeed(b: LevelBodyData): LevelBodyData {
+  if (!("spillSpeed" in b)) return b;
+  const { spillSpeed: _retired, ...rest } = b as LevelBodyData & { spillSpeed?: number };
+  return rest;
 }
 
 // Take the retired geometry objects out of a body, keeping the two looks that
@@ -3300,9 +3313,8 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
       // A speed scales; a rate does not. See `LevelBodyData.flow`/`drag`.
       ...(b.flow !== undefined ? { flow: b.flow * factor } : {}),
       ...(b.drag !== undefined ? { drag: b.drag } : {}),
-      // A drop and a speed: both lengths, both convert.
+      // A drop: a length, so it converts.
       ...(b.spill !== undefined ? { spill: b.spill * factor } : {}),
-      ...(b.spillSpeed !== undefined ? { spillSpeed: b.spillSpeed * factor } : {}),
       // Where the slab sits through z and how deep it is: both lengths.
       ...(b.waterZ !== undefined ? { waterZ: b.waterZ * factor } : {}),
       ...(b.waterDepth !== undefined ? { waterDepth: b.waterDepth * factor } : {}),

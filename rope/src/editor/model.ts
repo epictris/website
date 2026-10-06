@@ -517,10 +517,8 @@ export interface EdItem {
   flow: number;
   drag: number;
   // Water areas only: the fall off the downstream end - its drop in metres
-  // (0 = none) and the lip speed in m/s (null = the current's own). See
-  // `LevelBodyData.spill` / `spillSpeed`.
+  // (0 = none). See `LevelBodyData.spill`.
   spill: number;
-  spillSpeed: number | null;
   // Water areas only: the slab through z - its middle's offset from the plane
   // in metres, + toward the camera, and its depth (null = the renderer's
   // default). See `LevelBodyData.waterZ` / `waterDepth`.
@@ -1244,7 +1242,6 @@ function fromLevelData(data: LevelData): EdModel {
       flow: b.flow ?? 0,
       drag: b.drag ?? 0,
       spill: b.spill ?? 0,
-      spillSpeed: b.spillSpeed ?? null,
       waterZ: b.waterZ ?? 0,
       waterDepth: b.waterDepth ?? null,
       passable: b.passable === true,
@@ -1348,7 +1345,6 @@ function fromLevelData(data: LevelData): EdModel {
     flow: 0,
     drag: 0,
     spill: 0,
-    spillSpeed: null,
     waterZ: 0,
     waterDepth: null,
     passable: false,
@@ -1447,7 +1443,6 @@ function fromLevelData(data: LevelData): EdModel {
     flow: 0,
     drag: 0,
     spill: 0,
-    spillSpeed: null,
     waterZ: 0,
     waterDepth: null,
     passable: false,
@@ -1556,7 +1551,6 @@ function lightItem(
     flow: 0,
     drag: 0,
     spill: 0,
-    spillSpeed: null,
     waterZ: 0,
     waterDepth: null,
     passable: false,
@@ -1636,7 +1630,6 @@ function lightItem(
     flow: 0,
     drag: 0,
     spill: 0,
-    spillSpeed: null,
     waterZ: 0,
     waterDepth: null,
     passable: false,
@@ -2146,7 +2139,6 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
             ...(lead.kind === "water" && lead.spill > 0
               ? {
                   spill: lead.spill,
-                  ...(lead.spillSpeed !== null ? { spillSpeed: lead.spillSpeed } : {}),
                 }
               : {}),
             // The slab through z, only where it differs from the renderer's
@@ -3675,7 +3667,6 @@ export function syncBodyProps(members: readonly EdItem[]): void {
     m.flow = lead.flow;
     m.drag = lead.drag;
     m.spill = lead.spill;
-    m.spillSpeed = lead.spillSpeed;
     m.waterZ = lead.waterZ;
     m.waterDepth = lead.waterDepth;
     m.passable = lead.passable;
@@ -4094,7 +4085,6 @@ export function emptyModel(): EdModel {
         flow: 0,
         drag: 0,
         spill: 0,
-        spillSpeed: null,
         waterZ: 0,
         waterDepth: null,
         passable: false,

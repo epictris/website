@@ -21,6 +21,7 @@ import { DebrisSystem } from "./render/debris";
 import { ChainRetract } from "./render/chainRetract";
 import { NO_ORBIT } from "./render3d/space";
 import type { ViewCapture } from "./render3d/viewCapture";
+import { waterShimmer } from "./render3d/water";
 import { DEFAULT_LEVEL, LEVELS, listedLevels } from "./level/registry";
 import { spawnAtCheckpoint } from "./level/levelFormat";
 import {
@@ -167,6 +168,9 @@ const dofOverride = isDepthOfFieldLevel(dofParam) ? dofParam : null;
 if (scene3d && params.get("probe") === "0") scene3d.setReflectionProbe(false);
 // `?mirror=0` turns the pools' mirror off, likewise (render3d/planarReflection.ts).
 if (scene3d && params.get("mirror") === "0") scene3d.setPoolMirror(false);
+// TEMPORARY: `?shimmer=0` turns the water's ripple light bands off, for an A/B
+// (render3d/water.ts, `waterShimmer`).
+if (params.get("shimmer") === "0") waterShimmer.value = 0;
 
 // `?dpr=N` draws the frame at a device pixel ratio this display does not have,
 // so the fill cost a 4K or HiDPI player pays can be read on a 1080p desk (see

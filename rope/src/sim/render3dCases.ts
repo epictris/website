@@ -2984,7 +2984,8 @@ function waterFormat(): CaseResult[] {
         flow: -150,
         drag: 5,
         spill: 200,
-        spillSpeed: 100,
+        // Retired (see `withoutSpillSpeed`), as every level on disk still has it.
+        ...({ spillSpeed: 100 } as object),
         waterZ: 25,
         waterDepth: 150,
         objects: [{ type: "collision", shape: { kind: "rect", w: 2430, h: 46 } }],
@@ -2997,13 +2998,12 @@ function waterFormat(): CaseResult[] {
   );
   const inMetres = normalizeLevelData(authored);
   const scaled = scaleLevelData(inMetres, PX);
-  // The spill is a drop and a speed, and the slab a place and an extent
-  // through z - four more lengths that convert.
+  // The spill is a drop, and the slab a place and an extent through z -
+  // three more lengths that convert.
   const units =
     scaled.bodies[0]!.flow === -1.5 &&
     scaled.bodies[0]!.drag === 5 &&
     scaled.bodies[0]!.spill === 2 &&
-    scaled.bodies[0]!.spillSpeed === 1 &&
     scaled.bodies[0]!.waterZ === 0.25 &&
     scaled.bodies[0]!.waterDepth === 1.5;
   const saved = modelToDisk(modelFromDisk(authored));
@@ -3011,9 +3011,12 @@ function waterFormat(): CaseResult[] {
     saved.bodies[0]!.flow === -150 &&
     saved.bodies[0]!.drag === 5 &&
     saved.bodies[0]!.spill === 200 &&
-    saved.bodies[0]!.spillSpeed === 100 &&
     saved.bodies[0]!.waterZ === 25 &&
     saved.bodies[0]!.waterDepth === 150;
+  // The retired lip speed (`withoutSpillSpeed`): gone on load, so neither the
+  // sim, the renderer nor the editor's next save ever sees it.
+  const retired = (b: object): boolean => !("spillSpeed" in b);
+  const dropped = retired(inMetres.bodies[0]!) && retired(scaled.bodies[0]!) && retired(saved.bodies[0]!);
 
   return [
     {
@@ -3032,6 +3035,11 @@ function waterFormat(): CaseResult[] {
       name: "editor: a water area keeps its current, its spill and its slab through a save",
       pass: kept,
       detail: kept ? "flow, drag, spill and slab survive" : JSON.stringify(saved.bodies[0]),
+    },
+    {
+      name: "level format: the retired spillSpeed is dropped on load and on save",
+      pass: dropped,
+      detail: dropped ? "the lip speed follows from the current" : JSON.stringify(saved.bodies[0]),
     },
   ];
 }

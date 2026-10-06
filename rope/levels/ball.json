@@ -1576,7 +1576,6 @@
       "flow": -120,
       "drag": 50,
       "spill": 150,
-      "spillSpeed": 100,
       "waterDepth": 300,
       "objects": [
         {
@@ -1586,7 +1585,7 @@
           "shape": {
             "kind": "rect",
             "w": 1050,
-            "h": 50
+            "h": 20
           }
         }
       ]
@@ -1984,7 +1983,6 @@
       "flow": -120,
       "drag": 50,
       "spill": 200,
-      "spillSpeed": 100,
       "waterZ": 25,
       "waterDepth": 150,
       "objects": [

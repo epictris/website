@@ -4617,21 +4617,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         // reciprocal time, so it is authored and stored as the same number.
         num("drag", (b) => b.drag, (b, v) => (b.drag = Math.max(0, v)), 0.5);
         // The fall off the downstream end: its drop in px (0 = none, the run
-        // ends against its bank), and the lip speed in px/s, which is the
-        // current's own unless said otherwise (see `LevelBodyData.spill`).
+        // ends against its bank). How fast it leaves the lip is not authored:
+        // it follows from the current's speed and depth (see
+        // `LevelBodyData.spill`).
         num("spill", (b) => b.spill * M2PX, (b, v) => (b.spill = Math.max(0, v) * PX), 10);
-        num(
-          "spill v",
-          (b) => (b.spillSpeed ?? 0) * M2PX,
-          (b, v) => (b.spillSpeed = Math.max(0, v) * PX),
-          10,
-          {
-            placeholder: leads.length > 1 ? "mixed" : "flow",
-            onEmpty: () => {
-              for (const b of leads) b.spillSpeed = null;
-            },
-          },
-        );
         // The slab through z, drawn by the game (see `LevelBodyData.waterZ`):
         // its middle's offset from the plane and its depth, both in px. An
         // empty depth is the renderer's own.
@@ -7304,7 +7293,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       drag: DEFAULT_WATER_DRAG,
       // A fresh run ends against its bank; a fall is opted into on the panel.
       spill: 0,
-      spillSpeed: null,
       waterZ: 0,
       waterDepth: null,
       // A fresh body is free; the bearing and the spring are both opted into on

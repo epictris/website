@@ -44,6 +44,11 @@ import {
 
 export { waterTime } from "./waterLook";
 
+// TEMPORARY (Tris, 2026-10-06, an A/B): how much of the ripples' light bands
+// (broad light, shade, crests) the river and the falls draw; `?shimmer=0`
+// turns them off (main.ts). Remove once compared.
+export const waterShimmer = { value: 1 };
+
 // ---------------------------------------------------------------------------
 // The study's settings
 // ---------------------------------------------------------------------------
@@ -108,17 +113,73 @@ const BED_SEGS = 2;
 // and the fall's folding finer still; 0.025 m gives either six samples or
 // more, which is where a sum of sines stops looking sampled.
 const RIVER_STEP = 0.025;
-// The DRAWDOWN. Water approaching a brink speeds up and its surface dips
-// into the drop: over the last DRAWDOWN_REACH metres before the lip (the
-// study's 1.9 m acceleration zone) the current eases to the lip's speed and
-// the surface lowers by DRAWDOWN of the half depth; the bed stays put.
-const DRAWDOWN = 0.3;
-const DRAWDOWN_REACH = 0.95;
+// THE BRINK (a free overfall, the textbook case). A current U deep H carries
+// q = U H per metre of width, and pouring off an edge it runs down through
+// critical depth y_c = (q^2 / g)^(1/3) to the BRINK DEPTH at the edge itself:
+// 0.715 y_c for a current slower than its wave speed (Froude U / sqrt(g H)
+// under 1; Rouse's measurement, BRINK_DEPTH), H Fr^2 / (Fr^2 + 0.4) for a
+// faster one (Rajaratnam's, which meets the first at Fr = 1). Continuity
+// speeds the water up to q / y_b at the lip. BALL's 1.2 m/s, 0.5 m deep lower
+// channel leaves at 2.5 m/s, 24 cm deep.
+//
+// The surface follows GRAVITY the whole way down: from where it starts to
+// drop it is one ballistic arc at the lip's horizontal speed, through the lip
+// and on down the fall, so it never levels out at the edge and then turns
+// (Tris, 2026-10-06: "it goes from flowing straight ahead to quickly flowing
+// down"). The arc drops H - y_b by the lip, which fixes how far upstream it
+// starts, and its curvature is g / v^2: faster water, gentler brow.
+//
+// Before this the lip speed was authored (`spillSpeed`, retired), 1 m/s on
+// every level, slower than the currents feeding it: the water braked into the
+// brink, levelled out on a smoothstep drawdown, and turned down a 10 cm radius
+// whatever the current did.
+const BRINK_DEPTH = 0.715;
+const FALL_GRAVITY = 9.81;
+
+interface Brink {
+  // Depth at the lip (m), the horizontal speed there (m/s), how far upstream
+  // of the lip the surface starts to drop (m), and how fast it is already
+  // falling at the lip (m/s, downward).
+  depth: number;
+  speed: number;
+  reach: number;
+  dive: number;
+}
+
+export function brinkOf(runSpeed: number, depth: number, runLength: number): Brink {
+  const fr2 = (runSpeed * runSpeed) / (FALL_GRAVITY * depth);
+  const share = fr2 < 1 ? BRINK_DEPTH * Math.cbrt(fr2) : fr2 / (fr2 + 0.4);
+  const yb = depth * share;
+  const speed = (runSpeed * depth) / yb;
+  // A run shorter than the arc's reach starts falling at its upstream end.
+  const reach = Math.min(speed * Math.sqrt((2 * (depth - yb)) / FALL_GRAVITY), runLength);
+  return { depth: depth - (FALL_GRAVITY * reach * reach) / (2 * speed * speed), speed, reach, dive: (FALL_GRAVITY * reach) / speed };
+}
+
+// Seconds for the arc leaving the lip at `dive` m/s downward to fall `dy` m.
+function fallTime(dive: number, dy: number): number {
+  return (-dive + Math.sqrt(dive * dive + 2 * FALL_GRAVITY * Math.max(0, dy))) / FALL_GRAVITY;
+}
 // The fall: samples along the arc, uniform in time (packed into the brow,
 // spread down the drop), and how far past the drop the tube carries on.
 const FALL_STEPS = 64;
-const FALL_GRAVITY = 9.81;
 const FALL_OVERSHOOT = 0.2;
+// THE SHEET'S PLAN. The banks drag on the water beside them, so a channel's
+// edges leave the lip slower than its middle and fall closer to it: a slice's
+// launch speed is the lip's times 1 - EDGE_LAG (z/b)^2, b the half width, so
+// the falling sheet bows out in the middle. The study's thickness ridges are
+// kept at RIDGE_SHARE of their contrast.
+//
+// NOTHING ELSE SHAPES THE EDGES (Tris, 2026-10-06: no shaping that is not
+// physically accurate). A channel's surface is level across it, so its depth
+// at the banks is its depth in the middle: an edge thinning (EDGE_THIN, 0.6
+// then 0.15) was tried and removed - the game sees a fall from the side, which
+// is its edge, and with continuity's own thinning on top it drew a 4 cm
+// ribbon. The study's ridges and folding faded toward the edges for a while
+// (FOLD_EDGE), to keep its fixed-across-the-width ridges from puffing BALL's
+// edges out; removed with it.
+const EDGE_LAG = 0.25;
+const RIDGE_SHARE = 0.5;
 // How far under the water it lands in the falling sheet is still drawn,
 // metres (that surface waves by ~4 cm).
 const FALL_SINK = 0.06;
@@ -149,9 +210,23 @@ const RIM_DOWN = 0.03;
 const ALPHA_FRONT_TOP = 0.94;
 const ALPHA_FRONT_BED = 0.8;
 // The landing's spray, in instances (the study's counts).
-const PLUMES = 92;
-const SPLASHES = 26;
-const SPRAYS = 160;
+// Fewer of each than the study threw (92, 26 and 160): BALL's falls are
+// short, and the study's count of airborne water read as a cataract landing
+// in a cascade a metre high (Tris, 2026-10-06).
+const PLUMES = 72;
+const SPLASHES = 8;
+const SPRAYS = 40;
+// What a landing throws goes as fast as the water arrives: the study's
+// numbers are for its 3.55 study metre fall, and a shorter fall's impact speed
+// is the study's times sqrt(drop / STUDY_DROP) (`uEnergy`, never above 1). On
+// top of that the splash ribbons and the spray are thrown at SPLASH_SPEED and
+// SPRAY_SPEED of the study's, and the crown and the plumes stand CROWN_RISE
+// and PLUME_RISE of its height (the churn kept, only calmer).
+const STUDY_DROP = 3.55;
+const SPLASH_SPEED = 0.6;
+const SPRAY_SPEED = 0.7;
+const CROWN_RISE = 0.85;
+const PLUME_RISE = 0.85;
 
 // ---------------------------------------------------------------------------
 // Geometry
@@ -204,9 +279,13 @@ function sectionRing(width: number, depth: number): RingPoint[] {
   arc(b - r, -depth + r, 0, -H);
   line(b - r, -depth, 0, -depth, 0, -1, BED_SEGS);
   // The top centre is the perimeter's zero (TOP_SEGS is even, so a vertex
-  // sits on it).
-  const top = out[BED_SEGS + 2 * CORNER_SEGS + BACK_SEGS + TOP_SEGS / 2]!;
-  for (const p of out) p.ell -= top.ell;
+  // sits on it). Read out as a number first: subtracting a point's own field
+  // zeroes it partway through the loop, and every point after the centre was
+  // then left unshifted - the pattern coordinate jumped by the whole back half
+  // across one cell of the top, and drew a seam down the middle of the
+  // channel and its fall.
+  const zero = out[BED_SEGS + 2 * CORNER_SEGS + BACK_SEGS + TOP_SEGS / 2]!.ell;
+  for (const p of out) p.ell -= zero;
   return out;
 }
 
@@ -226,24 +305,22 @@ interface Station {
   tau: number;
   drop: number;
   speed: number;
+  // Seconds since the lip on the fall; -1 on the river.
+  age: number;
 }
 
 export interface SpillSpec {
   side: number;
-  v0: number;
   drop: number;
 }
 
 interface CurrentGeometry {
   geometry: THREE.BufferGeometry;
-  // The fall's lip and its slice, in the body's frame, or null without one.
-  lip: { x: number; y: number; depth: number; s: number } | null;
+  // The fall's lip and its slice, in the body's frame, with the speed it
+  // leaves at and how fast it is already falling (see `brinkOf`), or null
+  // without one.
+  lip: { x: number; y: number; depth: number; s: number; speed: number; dive: number } | null;
 }
-
-const smooth = (t: number): number => {
-  const k = Math.max(0, Math.min(1, t));
-  return k * k * (3 - 2 * k);
-};
 
 // The run and its fall as one closed tube, in the body's local frame (three's
 // y-up: local +x the flow axis, +z toward the camera). The river's stations
@@ -251,11 +328,11 @@ const smooth = (t: number): number => {
 // lip's section along the arc a thrown thing follows, as VERTICAL SLICES: every
 // layer of the slab leaving the lip follows the same parabola from its own
 // height, so a slice at time t is the lip's carried along the arc unturned.
-// That is the physics - the sheet's perpendicular thickness thins by exactly
-// v0/v - and it is what keeps a slab thicker than the brow's radius of
-// curvature (v0^2/g, 10 cm at 1 m/s) from folding under the lip, which the
-// study's sections perpendicular to the travel would (its 2.2 m/s lip had the
-// room; the game's do not).
+// That is the physics - continuity thins the sheet's perpendicular thickness
+// by exactly v0/v, which a constant vertical depth is - and it is what keeps
+// a slab thicker than the brow's radius of curvature from folding under the
+// lip, which the study's sections perpendicular to the travel did on BALL's
+// tight brows (before the brink, see BRINK_DEPTH).
 // Attributes beyond position and normal:
 //   aFlow    - metres travelled (study), across the top (study, stretched along
 //              the depth as the pool's pattern is), travel time (s), drop
@@ -286,10 +363,13 @@ function currentGeometry(
   const length = halfX * 2;
   const upstream = -side * halfX;
   // The surface and the speed down the run, s metres from the upstream end:
-  // the drawdown and the acceleration into the lip.
-  const brink = (s: number): number => (spill ? smooth(1 - (length - s) / DRAWDOWN_REACH) : 0);
-  const topAt = (s: number): number => halfY - DRAWDOWN * halfY * brink(s);
-  const speedAt = (s: number): number => (spill ? runSpeed + (spill.v0 - runSpeed) * brink(s) : runSpeed);
+  // level until the brink's arc starts, then falling along it into the lip,
+  // the water speeding up by continuity as it thins over the level bed.
+  const brink = spill ? brinkOf(runSpeed, halfY * 2, length) : null;
+  const arcFrom = brink ? length - brink.reach : length;
+  const topAt = (s: number): number =>
+    brink && s > arcFrom ? halfY - (FALL_GRAVITY * (s - arcFrom) ** 2) / (2 * brink.speed * brink.speed) : halfY;
+  const speedAt = (s: number): number => (runSpeed * halfY * 2) / (topAt(s) + halfY);
 
   const stations: Station[] = [];
   const steps = Math.max(2, Math.ceil(length / RIVER_STEP));
@@ -309,10 +389,11 @@ function currentGeometry(
       tau: prev ? prev.tau + (ds * 0.5 * (1 / prev.speed + 1 / speed)) : 0,
       drop: 0,
       speed,
+      age: -1,
     });
   }
-  // The river's tangent follows its surface (the drawdown's dip), and is level
-  // again at the lip, where the fall's begins.
+  // The river's tangent follows its surface (the brink's arc), and meets the
+  // fall's at the lip, where both are the one arc.
   for (let i = 0; i < stations.length; i++) {
     const a = stations[Math.max(0, i - 1)]!;
     const b = stations[Math.min(stations.length - 1, i + 1)]!;
@@ -321,18 +402,17 @@ function currentGeometry(
     stations[i]!.ty = (b.y - a.y) / tl;
   }
   let lip: CurrentGeometry["lip"] = null;
-  if (spill) {
+  if (spill && brink) {
     const l = stations[stations.length - 1]!;
-    lip = { x: l.x, y: l.y, depth: l.depth, s: l.s };
-    const reach = spill.drop + l.depth + FALL_OVERSHOOT;
-    const tEnd = Math.sqrt((2 * reach) / FALL_GRAVITY);
+    lip = { x: l.x, y: l.y, depth: l.depth, s: l.s, speed: brink.speed, dive: brink.dive };
+    const tEnd = fallTime(brink.dive, spill.drop + l.depth + FALL_OVERSHOOT);
     for (let i = 1; i <= FALL_STEPS; i++) {
       const t = (tEnd * i) / FALL_STEPS;
       const prev = stations[stations.length - 1]!;
-      const x = l.x + side * spill.v0 * t;
-      const y = l.y - 0.5 * FALL_GRAVITY * t * t;
-      const vx = side * spill.v0;
-      const vy = -FALL_GRAVITY * t;
+      const x = l.x + side * brink.speed * t;
+      const y = l.y - brink.dive * t - 0.5 * FALL_GRAVITY * t * t;
+      const vx = side * brink.speed;
+      const vy = -brink.dive - FALL_GRAVITY * t;
       const speed = Math.hypot(vx, vy);
       stations.push({
         x,
@@ -344,6 +424,7 @@ function currentGeometry(
         tau: l.tau + t,
         drop: (l.y - y) / spill.drop,
         speed,
+        age: t,
       });
     }
   }
@@ -359,25 +440,47 @@ function currentGeometry(
   const halfWidth = width / 2 / (S * DEPTH_STRETCH);
   const topFlat = (b: number, r: number): number => b - r;
   const vertex = (st: Station, p: RingPoint, r: number): void => {
+    // Down the fall each column of the slice leaves the lip at its own speed
+    // (see EDGE_LAG): its own x along the arc, and its own travel direction.
+    // Its whole velocity scales, so it leaves on the river's own slope and
+    // only curves the tighter for being slower.
+    let x = st.x;
+    let y = st.y;
+    let drop = st.drop;
+    let tx = st.tx;
+    let ty = st.ty;
+    let speed = st.speed;
+    if (spill && lip && st.age >= 0) {
+      const across = p.z / (width / 2);
+      const k = 1 - EDGE_LAG * across * across;
+      const vx = side * lip.speed * k;
+      const vy = -lip.dive * k - FALL_GRAVITY * st.age;
+      speed = Math.hypot(vx, vy);
+      x = lip.x + vx * st.age;
+      y = lip.y - lip.dive * k * st.age - 0.5 * FALL_GRAVITY * st.age * st.age;
+      drop = (lip.y - y) / spill.drop;
+      tx = vx / speed;
+      ty = vy / speed;
+    }
     // N: T turned a right angle toward up and out.
-    const nx = -side * st.ty;
-    const ny = side * st.tx;
+    const nx = -side * ty;
+    const ny = side * tx;
     // A vertical slice (see the header): the section hangs straight down from
     // its station, whatever way the water is travelling.
-    pos.push(st.x, st.y + p.h, zMid + p.z);
+    pos.push(x, y + p.h, zMid + p.z);
     const below = -p.h;
     const flat = topFlat(width / 2, r);
     const e = Math.abs(p.ell);
     const u = e <= flat ? e / (S * DEPTH_STRETCH) : flat / (S * DEPTH_STRETCH) + (e - flat) / S;
-    flowA.push(st.s, p.z / (S * DEPTH_STRETCH), st.tau, st.drop);
+    flowA.push(st.s, p.z / (S * DEPTH_STRETCH), st.tau, drop);
     unroll.push(Math.sign(p.ell) * u);
-    tangent.push(st.tx, st.ty, 0);
+    tangent.push(tx, ty, 0);
     disp.push(nx, ny, 0);
     profile.push(p.nz, p.ny, st.depth / S, halfWidth);
     skin.push(
       Math.max(0, Math.min(1, 1 - below / Math.min(LIGHT_FALLOFF, st.depth))),
       ((p.h + st.depth / 2) * ny) / S,
-      st.speed,
+      speed,
       below,
     );
   };
@@ -502,11 +605,13 @@ const WAVE_GLSL = `
     folded += 0.055 * (pow(0.5 + 0.5 * sin(p.x * 9.4 + p.y * 0.46), 2.0) - 0.375);
     return folded * smoothstep(0.0, 0.46, f.w);
   }
+  // The sheet's thickness about its middle: the study's ridges at RIDGE_SHARE
+  // of their contrast.
   float thicknessField(vec4 f) {
     vec2 p = parcel(f);
     float fall = smoothstep(0.0, 0.32, f.w);
     float ridges = pow(0.5 + 0.5 * cos(p.x * 5.1 + 0.22 * sin(p.x * 1.2 + p.y * 0.75)), 3.0);
-    float thickness = (0.43 + 2.10 * ridges) / 1.08625;
+    float thickness = mix(1.0, (0.43 + 2.10 * ridges) / 1.08625, ${fmt(RIDGE_SHARE)});
     return mix(1.0, thickness, fall) * (1.0 + 0.13 * fall * sin(p.y * 3.1 + p.x * 2.5));
   }
   // The displacement along N, study metres: the river's waves, and down the
@@ -528,6 +633,7 @@ const PAINT_GLSL = `
   uniform float uLipSpeed;
   uniform float uSpilling;
   uniform float uFloor;
+  uniform float uShimmer;
   varying vec3 vWorld;
   varying vec3 vBaseNormal;
   varying vec3 vMacroNormal;
@@ -538,11 +644,22 @@ const PAINT_GLSL = `
   varying float vBelow;
   varying float vUp;
   varying float vDepth;
+  varying float vSpeed;
+  // How far the water here has been DRAWN OUT along its flow since the river:
+  // its speed over the run's. A parcel keeps its label (parcelAt) as it
+  // speeds into the brink and down the fall, so a metre of river surface
+  // becomes v / U metres, and a ripple carried on it keeps its slope across
+  // the flow but loses that share of its slope along it. So the bands the
+  // river's crossing crests draw fade over the brink while the slanting ones
+  // are pulled into streaks down the sheet - the physics, rather than a
+  // pattern of its own for the fall.
+  float drawnOut() { return max(1.0, vSpeed / (uRefSpeed * ${fmt(S)})); }
   // Three drifting layers of the pool's spectrum, read in parcel space
   // (across, along), stretched along the flow so the bands lengthen with the
   // current; the second and third turned (90 and ~40 degrees) so the
-  // spectrum's own diagonal never lines up across all three. The slope in the
-  // surface's own frame: x across (world z), y along the travel.
+  // spectrum's own diagonal never lines up across all three. The slope in
+  // the surface's own frame: x across (world z), y along the travel, per
+  // metre of the river's own surface (see drawnOut).
   vec2 riverSlope(vec2 matp, float stretch, out vec4 a, out vec4 b, out vec4 c) {
     vec2 q = vec2(matp.x, matp.y / stretch) / ${fmt(PATCH_SIZE * Math.max(0.5, BRUSH_SCALE))};
     float t = uTime * ${fmt(CHURN)};
@@ -590,6 +707,8 @@ const PAINT_GLSL = `
       float fine = 1.0 - smoothstep(0.14, 0.8, length(fwidth(q)));
       s += ((d.rg * 2.0 - 1.0) * vec2(0.06, 0.08) + (e.rg * 2.0 - 1.0) * vec2(0.035, 0.045)) * fine * ${fmt(CHURN)};
     }
+    // Drawn out into the brink (see drawnOut).
+    s.y /= drawnOut();
     // Surface frame to world: across is +z, along the travel is uSide x.
     vec2 ripple = vec2(uSide * s.y, s.x);
     // The long swell tilts the same bands, as the pool's long waves do.
@@ -617,6 +736,9 @@ const PAINT_GLSL = `
     float broadLight = smoothstep(0.012, 0.052, facing);
     float crest = smoothstep(0.078, 0.125, facing) * smoothstep(0.28, 0.65, b.b);
     float shade = smoothstep(0.015, 0.14, -facing);
+    broadLight *= uShimmer;
+    crest *= uShimmer;
+    shade *= uShimmer;
     base *= 1.0 - shade * 0.22 * ${fmt(PAINT_STRENGTH)};
     base = mix(base, uLight, broadLight * ${fmt(CONTRAST)} * ${fmt(0.22 + FOREGROUND * 0.3)} * ${fmt(PAINT_STRENGTH)});
     vec3 col = base;
@@ -660,10 +782,15 @@ const PAINT_GLSL = `
   }
   vec3 cascadeLook(out float white) {
     float fall = smoothstep(0.0, 0.80, vFlow.w);
-    // Metres on the sheet at the lip's speed, moving with the water: a
-    // parcel's label is its travel time, so what was a metre at the brink is
-    // drawn out as the water accelerates.
+    // Metres on the sheet at the lip's speed, moving with the water, for the
+    // whitewater's lanes.
     vec2 pm = vec2(vUnroll, (vFlow.z - uTime) * uLipSpeed);
+    // The river's own ripples, carried over the brink at the river's labels
+    // and drawn out as the water accelerates (see drawnOut). The cascade once
+    // read its own pattern, drawn out by a factor of the study's and then
+    // turned to run down the sheet: its crests across the sheet drew long
+    // horizontal shimmers (Tris, 2026-10-06), which the physics fades.
+    vec2 matp = parcelAt(vUnroll, vFlow.z);
     // Slopes in the sheet's own frame: T down the flow, B across it. The
     // per-ring normal is softened toward the smooth sheet normal: at full
     // strength its ring-to-ring wiggle hatched every band edge.
@@ -674,7 +801,8 @@ const PAINT_GLSL = `
     vec3 rawT = cross(B, baseN);
     vec3 T = length(rawT) > 0.01 ? normalize(rawT) : vec3(uSide, 0.0, 0.0);
     vec4 a, b, c;
-    vec2 s = riverSlope(pm, mix(1.6, 3.5, fall), a, b, c);
+    vec2 s = riverSlope(matp, 1.15, a, b, c);
+    s.y /= drawnOut();
     vec3 N = normalize(geo - T * s.y * ${fmt(MACRO_LIGHT)} - B * s.x);
     vec3 V = normalize(cameraPosition - vWorld);
     vec3 L = normalize(vec3(-0.36, 0.78, -0.43));
@@ -688,6 +816,9 @@ const PAINT_GLSL = `
     float shade = smoothstep(0.015, 0.14, -facing);
     float sun = max(0.0, dot(N, L));
     vec3 base = mix(uDeep, uShallow, 0.62);
+    broadLight *= uShimmer;
+    crest *= uShimmer;
+    shade *= uShimmer;
     base *= (0.90 + 0.10 * sun) * (1.0 - shade * 0.10 * ${fmt(PAINT_STRENGTH)});
     base = mix(base, uLight, broadLight * ${fmt(CONTRAST * 0.48 * PAINT_STRENGTH)});
     // Reflected light is a pale palette tone only, never the dark cave below:
@@ -702,7 +833,7 @@ const PAINT_GLSL = `
     // travel coordinate, so nothing ends at the lip; down the sheet it fills
     // in, brightens toward white and is cut by finer lanes as the water
     // accelerates, and the sheet's edges stay milky like the banks.
-    vec2 mp = parcelAt(vUnroll, vFlow.z);
+    vec2 mp = matp;
     float streak = washStreak(mp);
     streak += ((wn(vec2(pm.x * 14.0 + 5.0, pm.y * 0.15)) - 0.5) * 0.30 + (wn(vec2(pm.x * 26.0 + 9.0, pm.y * 0.3)) - 0.5) * 0.14) * fall;
     float bankF = washBank(mp, vFlow.y) * ${fmt(RIVER_FOAM)};
@@ -760,6 +891,7 @@ function currentMaterial(look: CurrentLook): THREE.MeshBasicMaterial {
   mat.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, impactUniforms);
     shader.uniforms.uTime = waterTime;
+    shader.uniforms.uShimmer = waterShimmer;
     shader.uniforms.uSurfaceMap = { value: waterSurfaceMap() };
     shader.uniforms.uDeep = { value: deep };
     shader.uniforms.uShallow = { value: shallow };
@@ -794,6 +926,7 @@ function currentMaterial(look: CurrentLook): THREE.MeshBasicMaterial {
       varying float vBelow;
       varying float vUp;
       varying float vDepth;
+      varying float vSpeed;
     ${shader.vertexShader}`.replace(
       "#include <begin_vertex>",
       `#include <begin_vertex>
@@ -830,6 +963,7 @@ function currentMaterial(look: CurrentLook): THREE.MeshBasicMaterial {
         vBelow = aSkin.w;
         vUp = max(aProfile.y, 0.0);
         vDepth = aProfile.z * ${fmt(S)};
+        vSpeed = aSkin.z;
       }`,
     );
 
@@ -882,6 +1016,8 @@ interface Landing {
   // The top of the water it lands in, in the body's frame (min x, max x,
   // min z, max z): the crown froths on that water and nowhere past its ends.
   clip: THREE.Vector4;
+  // The impact's speed as a share of the study's (see STUDY_DROP).
+  energy: { value: number };
 }
 
 // Uniforms every landing program shares.
@@ -892,6 +1028,7 @@ function landingUniforms(l: Landing): Record<string, THREE.IUniform> {
     uSide: { value: l.side },
     uHalfWidth: { value: l.halfWidth },
     uClip: { value: l.clip },
+    uEnergy: l.energy,
   };
 }
 
@@ -900,6 +1037,7 @@ const LANDING_PRELUDE = `
   uniform vec3 uImpact;
   uniform float uSide;
   uniform float uHalfWidth;
+  uniform float uEnergy;
   // A point of the landing in study metres (sheet toward -x) to the body's
   // frame.
   vec3 toBody(vec3 p) { return uImpact + vec3(-uSide * p.x, p.y, p.z) * ${fmt(S)}; }
@@ -947,14 +1085,28 @@ function crownMesh(l: Landing): THREE.Mesh {
       float body = max(0.0, 1.0 - pow(abs(nx), 2.3) - pow(abs(nz), 6.0));
       float folds = paintNoise(vec2(p.y * 3.25 + uTime * 0.88, p.x * 4.6 - uTime * 1.26));
       float h = (0.10 + 0.41 * folds + 0.07 * sin(p.y * 9.0 + uTime * 4.0)) * pow(body, 0.65);
-      return 0.045 + h * ${fmt(FOAM_HEIGHT * Math.min(1, IMPACT_FOAM))};
+      return 0.045 + h * ${fmt(FOAM_HEIGHT * CROWN_RISE * Math.min(1, IMPACT_FOAM))};
+    }
+    // The fragment's mask radius without its noise (see the fragment stage).
+    float crownReach(vec2 p) {
+      return length(vec2(p.x + 0.10 * sin(p.y * 2.8 - uTime * 1.7), max(abs(p.y) - uHalfWidth * 0.82, 0.0)));
+    }
+    float crownSkirt(vec2 p) {
+      float r = crownReach(p);
+      return crownHeight(p) * (1.0 - smoothstep(0.3, 0.9, r)) - 0.04 * smoothstep(0.55, 0.95, r);
     }
     void main() {
       vec2 p = position.xz * vec2(1.16, uHalfWidth + 0.70);
       float edgeEnv = pow(abs(p.x) / 1.16, 2.0);
       p.x += (0.055 * sin(p.y * 7.0 - uTime * 4.0) + 0.03 * sin(p.y * 14.0 + uTime * 2.7)) * edgeEnv;
-      float y = crownHeight(p);
-      vec2 d = vec2(crownHeight(p + vec2(0.015, 0.0)) - y, crownHeight(p + vec2(0.0, 0.015)) - y) / 0.015;
+      // The mound rises OUT OF the water: its height dies with the fragment
+      // mask's own reach (the same r, without the mask's noise) and its rim
+      // dips under the surface, where the water's depth hides it. The study's
+      // stood on a 0.045 plinth with the mask cutting it off well above the
+      // water, a lid with a gap under it through which a low camera saw the
+      // sheet strike the water (Tris, 2026-10-06).
+      float y = crownSkirt(p);
+      vec2 d = vec2(crownSkirt(p + vec2(0.015, 0.0)) - y, crownSkirt(p + vec2(0.0, 0.015)) - y) / 0.015;
       vLocal = p;
       vNormal = normalize(vec3(uSide * d.x, 1.0, -d.y));
       vec3 at = toBody(vec3(p.x - 0.08, y, p.y));
@@ -1017,7 +1169,7 @@ function plumeMesh(l: Landing): THREE.Mesh {
       float theta = 6.28318 * b;
       vec3 vel = vec3(cos(theta) * (0.55 + r * 0.70) - 0.35, 1.05 + s * 0.80, sin(theta) * (0.38 + r * 0.48));
       vec3 center = vec3(-0.06, 0.11, (s * 2.0 - 1.0) * uHalfWidth);
-      center += vec3(vel.x * age, (vel.y * age - 2.3 * age * age) * ${fmt(FOAM_HEIGHT)}, vel.z * age);
+      center += vec3(vel.x * age, (vel.y * age - 2.3 * age * age) * ${fmt(FOAM_HEIGHT * PLUME_RISE)}, vel.z * age);
       float size = (0.32 + r * 0.32) * (0.70 + 0.48 * sin(phase * 3.14159));
       vec2 rot = vec2(cos(b * 6.3), sin(b * 6.3));
       vec2 p = vec2(position.x * rot.x - position.y * rot.y, position.x * rot.y + position.y * rot.x);
@@ -1067,7 +1219,7 @@ function splashMesh(l: Landing): THREE.Mesh {
       vec3 dir = vec3(-cos(turn), 0.0, sin(turn));
       vec3 across = vec3(-dir.z, 0.0, dir.x);
       float age = (phase * 0.56 + 0.10) * uv.y;
-      vec3 vel = dir * (1.5 + r * 1.7) + vec3(0.0, (2.5 + r * 1.55) * ${fmt(FOAM_HEIGHT)}, 0.0);
+      vec3 vel = (dir * (1.5 + r * 1.7) + vec3(0.0, (2.5 + r * 1.55) * ${fmt(FOAM_HEIGHT)}, 0.0)) * ${fmt(SPLASH_SPEED)} * uEnergy;
       vec3 center = vec3(0.0, 0.07, (s * 2.0 - 1.0) * uHalfWidth) + vel * age + vec3(0.0, -4.905 * age * age, 0.0);
       float width = (0.22 + r * 0.24) * (1.0 - uv.y * 0.93) * (0.75 + 0.25 * sin(uv.y * 13.0 + phase * 7.0 + id));
       vec3 p = center + across * (uv.x - 0.5) * width;
@@ -1111,7 +1263,7 @@ function sprayMesh(l: Landing): THREE.Mesh {
       float phase = fract(uTime / lifeTime + rnd(id + 9.0));
       float age = phase * lifeTime;
       vec3 start = vec3(-0.10, 0.06, (s * 2.0 - 1.0) * uHalfWidth);
-      vec3 vel = vec3(-0.35 - r * 2.0, 2.1 + b * 2.2, (s - 0.5) * 1.90);
+      vec3 vel = vec3(-0.35 - r * 2.0, 2.1 + b * 2.2, (s - 0.5) * 1.90) * ${fmt(SPRAY_SPEED)} * uEnergy;
       vec3 center = start + vel * age + vec3(0.0, -4.905 * age * age, 0.0);
       float size = (0.026 + r * 0.047) * ${fmt(SPRAY)};
       float len = 0.045 + b * 0.065;
@@ -1156,7 +1308,9 @@ interface FallRecord {
   xLip: number;
   yLip: number;
   side: number;
+  // The lip's horizontal speed and how fast it is already falling there (m/s).
   v0: number;
+  dive: number;
   depth: number;
   drop: number;
   zMid: number;
@@ -1165,6 +1319,7 @@ interface FallRecord {
   impact: THREE.Vector3;
   floor: { value: number };
   clip: THREE.Vector4;
+  energy: { value: number };
 }
 
 interface SurfaceRecord {
@@ -1186,12 +1341,17 @@ const scratchB = new THREE.Vector3();
 const scratchWorld = new THREE.Vector3();
 
 function arcPoint(f: FallRecord, t: number, out: THREE.Vector3): THREE.Vector3 {
-  return out.set(f.xLip + f.side * f.v0 * t, f.yLip - 0.5 * FALL_GRAVITY * t * t, f.zMid);
+  return out.set(f.xLip + f.side * f.v0 * t, f.yLip - arcDrop(f, t), f.zMid);
+}
+
+// How far the arc has fallen below the lip at time t.
+function arcDrop(f: FallRecord, t: number): number {
+  return f.dive * t + 0.5 * FALL_GRAVITY * t * t;
 }
 
 function land(f: FallRecord): void {
   f.root.updateWorldMatrix(true, false);
-  const tMax = Math.sqrt((2 * (f.drop + f.depth + FALL_OVERSHOOT)) / FALL_GRAVITY);
+  const tMax = fallTime(f.dive, f.drop + f.depth + FALL_OVERSHOOT);
   let tHit = Infinity;
   let hit: SurfaceRecord | null = null;
   for (const s of surfaces) {
@@ -1217,11 +1377,12 @@ function land(f: FallRecord): void {
       a.copy(b);
     }
   }
-  const t = hit ? tHit : Math.sqrt((2 * f.drop) / FALL_GRAVITY);
+  const t = hit ? tHit : fallTime(f.dive, f.drop);
   // The sheet crosses the surface over a span of x - its bottom first, a
   // slice depth above its top - and the landing is the middle of it.
-  const tBottom = Math.sqrt(Math.max(0, t * t - (2 * f.depth) / FALL_GRAVITY));
-  f.impact.set(f.xLip + f.side * f.v0 * (t + tBottom) / 2, f.yLip - 0.5 * FALL_GRAVITY * t * t, f.zMid);
+  const tBottom = fallTime(f.dive, arcDrop(f, t) - f.depth);
+  f.impact.set(f.xLip + f.side * f.v0 * (t + tBottom) / 2, f.yLip - arcDrop(f, t), f.zMid);
+  f.energy.value = Math.min(1, Math.sqrt((f.yLip - f.impact.y) / S / STUDY_DROP));
   if (hit) {
     f.floor.value = scratchWorld.set(0, hit.top, 0).applyMatrix4(hit.root.matrixWorld).y - FALL_SINK;
     // The water's top in this body's frame, for the crown.
@@ -1276,7 +1437,8 @@ export interface WaterBuild {
 // overlay's streak glyphs remain the fallback for anything else.
 //
 // Everything it reads is on the body: the physics (flow, drag), the SPILL
-// (`spill`, the drop off the downstream end, and `spillSpeed`, the lip speed),
+// (`spill`, the drop off the downstream end; how fast it leaves the lip
+// follows from the current, see `brinkOf`),
 // the slab through z (`waterZ`, `waterDepth`) and the tint (`color`). Water is
 // drawn by the game rather than by the level's Blender scene, because the
 // current moves its surface every frame (plans/blender-owns-appearance.md).
@@ -1293,14 +1455,13 @@ export function buildWater(root: THREE.Group, body: WaterArea, data: LevelBodyDa
   const depth = data.waterDepth ?? DEFAULT_WATER_DEPTH;
   const frontZ = (data.waterZ ?? 0) + depth / 2;
   const backZ = frontZ - depth;
-  // The spill: off the end the flow points at, at the flow's own speed unless
-  // told otherwise. A run with no current spills off its +x end.
+  // The spill: off the end the flow points at. A run with no current spills
+  // off its +x end.
   const drop = data.spill ?? 0;
   const spill: SpillSpec | null =
     drop > 0
       ? {
           side: body.flow < 0 ? -1 : 1,
-          v0: Math.max(data.spillSpeed ?? Math.abs(body.flow), 0.3),
           drop,
         }
       : null;
@@ -1349,7 +1510,7 @@ export function buildWater(root: THREE.Group, body: WaterArea, data: LevelBodyDa
     color,
     side: spill ? spill.side : body.flow < 0 ? -1 : 1,
     runSpeed: Math.max(Math.abs(body.flow), 0.05),
-    lipSpeed: spill ? spill.v0 : Math.abs(body.flow),
+    lipSpeed: built.lip ? built.lip.speed : Math.abs(body.flow),
     lipS: built.lip ? built.lip.s : null,
     runEnd: built.lip ? built.lip.s : (halfX * 2) / S,
     drop: spill ? spill.drop : 0,
@@ -1371,7 +1532,8 @@ export function buildWater(root: THREE.Group, body: WaterArea, data: LevelBodyDa
       xLip: built.lip.x,
       yLip: built.lip.y,
       side: spill.side,
-      v0: spill.v0,
+      v0: built.lip.speed,
+      dive: built.lip.dive,
       depth: built.lip.depth,
       drop: spill.drop,
       zMid: (front + backZ) / 2,
@@ -1380,10 +1542,17 @@ export function buildWater(root: THREE.Group, body: WaterArea, data: LevelBodyDa
       impact: new THREE.Vector3(),
       floor,
       clip: new THREE.Vector4(),
+      energy: { value: 1 },
     };
     falls.add(fall);
     land(fall);
-    const landing: Landing = { impact: fall.impact, side: spill.side, halfWidth: fall.halfW / S, clip: fall.clip };
+    const landing: Landing = {
+      impact: fall.impact,
+      side: spill.side,
+      halfWidth: fall.halfW / S,
+      clip: fall.clip,
+      energy: fall.energy,
+    };
     // Drawn after the water, in the study's order: the splash ribbons, the
     // crown, the plumes over it, the spray last. Always in the scene and
     // never culled (each is placed in its vertex shader), so the prewarm
