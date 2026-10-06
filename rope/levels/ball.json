@@ -1576,7 +1576,7 @@
       "flow": -120,
       "drag": 50,
       "spill": 150,
-      "spillSpeed": 100,
+      "spillSpeed": 145,
       "waterDepth": 300,
       "objects": [
         {
@@ -1984,7 +1984,7 @@
       "flow": -120,
       "drag": 50,
       "spill": 200,
-      "spillSpeed": 100,
+      "spillSpeed": 145,
       "waterZ": 25,
       "waterDepth": 150,
       "objects": [
