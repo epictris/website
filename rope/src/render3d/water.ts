@@ -72,11 +72,10 @@ const EDGE_MOTION = 0.026;
 // fall's whitewater.
 const RIVER_FOAM = 1.0;
 const FALL_FOAM = 1.0;
-// The crown's relief, foam amount and spray amount. Ballistic splash strength
-// is derived separately from the actual landing speed.
+// The crown's relief and foam amount. Froth strength is derived separately
+// from the actual landing speed.
 const FOAM_HEIGHT = 1.15;
 const IMPACT_FOAM = 1.0;
-const SPRAY = 1.0;
 // The study's river ran across its world at z -5.7, a fixed share of the way
 // from its far wall to its camera, and paled its light bands by that share.
 const FOREGROUND = 0.43;
@@ -151,10 +150,8 @@ const ALPHA_FRONT_TOP = 0.94;
 const ALPHA_FRONT_BED = 0.8;
 // Separate compact splashes from the much softer, longer-lived mist.
 const PLUMES = 40;
-const SPLASHES = 10;
-const SPRAYS = 130;
-const MISTS = 32;
-const BUBBLES = 64;
+const MISTS = 48;
+const BUBBLES = 100;
 
 // ---------------------------------------------------------------------------
 // Geometry
@@ -869,8 +866,8 @@ function currentMaterial(look: CurrentLook): THREE.MeshBasicMaterial {
 // The landing
 // ---------------------------------------------------------------------------
 
-// Where a fall meets the water, a compact crown, plumes, short splash ribbons,
-// droplets and a separate mist veil. Each is drawn in study metres in a frame
+// Where a fall meets the water, a compact crown, soft plumes, side bubbles
+// and a separate mist veil. Each is drawn in study metres in a frame
 // whose x is turned so the sheet travels toward -x (the study's), about the
 // impact, then scaled into the body's frame at STUDY_SCALE. Every particle is a pure
 // function of the clock and its instance, so a pinned clock draws the same
@@ -952,23 +949,6 @@ const LANDING_OUT = `
   #include <colorspace_fragment>
 `;
 
-// Ribbons and their detached tip droplets share an emitter, so a drop is
-// born on the jet itself and continues along its ballistic trajectory.
-const JET_GLSL = `
-  void jetState(float id, out float phase, out float life, out float seed, out vec3 origin, out vec3 velocity) {
-    // Even the strongest supported jet has time to return before its seed resets.
-    life = 1.30 + rnd(id + 13.0) * 0.37;
-    float clock = uTime / life + rnd(id + 24.0);
-    phase = fract(clock);
-    seed = id + floor(clock) * 97.0;
-    float r = rnd(seed + 13.0), s = rnd(seed + 82.0), b = rnd(seed + 54.0);
-    float turn = (b * 2.0 - 1.0) * 1.18;
-    origin = vec3(0.0, 0.07, (s * 2.0 - 1.0) * uHalfWidth);
-    velocity = (vec3(-cos(turn), 0.0, sin(turn)) * (0.85 + r * 1.10)
-      + vec3(0.0, 1.6 + r * 0.9, 0.0)) * uStrength;
-  }
-`;
-
 // One continuous frothing contact surface, not a row of spheres or a torus:
 // a heightfield over a capsule footprint the width of the sheet.
 function crownMesh(l: Landing): THREE.Mesh {
@@ -1028,10 +1008,8 @@ function crownMesh(l: Landing): THREE.Mesh {
 }
 
 // A quad instanced `count` times; the programs place each by gl_InstanceID.
-function instancedQuads(count: number, rows = 1): THREE.InstancedBufferGeometry {
-  const plane = new THREE.PlaneGeometry(1, 1, 1, rows);
-  // The splash ribbons run up from their root: y 0..1 rather than centred.
-  if (rows > 1) plane.translate(0, 0.5, 0);
+function instancedQuads(count: number): THREE.InstancedBufferGeometry {
+  const plane = new THREE.PlaneGeometry(1, 1);
   const geometry = new THREE.InstancedBufferGeometry();
   geometry.setAttribute("position", plane.getAttribute("position"));
   geometry.setAttribute("uv", plane.getAttribute("uv"));
@@ -1095,201 +1073,6 @@ function plumeMesh(l: Landing): THREE.Mesh {
   return new THREE.Mesh(instancedQuads(PLUMES), material);
 }
 
-// Airborne curved splash ribbons rather than tubes, their tips following
-// gravity.
-function splashMesh(l: Landing): THREE.Mesh {
-  const material = landingMaterial(
-    l,
-    `
-    varying vec2 vUV;
-    varying float vLife;
-    varying float vSeed;
-    varying float vHeight;
-    ${JET_GLSL}
-    void main() {
-      float id = float(gl_InstanceID), phase, life, seed;
-      vec3 origin, vel;
-      jetState(id, phase, life, seed, origin, vel);
-      float r = rnd(seed + 13.0);
-      vec3 dir = normalize(vec3(vel.x, 0.0, vel.z));
-      vec3 across = vec3(-dir.z, 0.0, dir.x);
-      float age = (phase * 0.38 + 0.08) * uv.y;
-      vec3 center = origin + vel * age + vec3(0.0, -4.905 * age * age, 0.0);
-      float width = (0.09 + r * 0.10) * (1.0 - uv.y * 0.96) * (0.75 + 0.25 * sin(uv.y * 13.0 + phase * 7.0 + id));
-      vec3 p = center + across * (uv.x - 0.5) * width;
-      vUV = uv;
-      vSeed = seed;
-      vHeight = p.y;
-      vLife = smoothstep(0.02, 0.14, phase) * (1.0 - smoothstep(0.52, 0.97, phase)) * ${fmt(Math.min(1, SPRAY))};
-      gl_Position = projectionMatrix * modelViewMatrix * vec4(toBody(p), 1.0);
-    }`,
-    `
-    varying vec2 vUV;
-    varying float vLife;
-    varying float vSeed;
-    varying float vHeight;
-    void main() {
-      if (vHeight < 0.04) discard;
-      float width = 0.35 + 0.11 * sin(vUV.y * 14.0 + vSeed - uTime * 7.0);
-      float alpha = (1.0 - smoothstep(width - 0.12, width, abs(vUV.x - 0.5))) * vLife * (1.0 - smoothstep(0.85, 1.0, vUV.y));
-      float fragments = mix(1.0, smoothstep(-0.1, 0.45, sin(vUV.y * 43.0 + vSeed * 3.0 - uTime * 5.0)), smoothstep(0.38, 0.85, vUV.y));
-      alpha *= 0.62 * fragments;
-      if (alpha < 0.008) discard;
-      vec3 col = mix(uFoamLight, vec3(0.93, 0.98, 0.99), 0.3);
-      ${LANDING_OUT}
-    }`,
-  );
-  return new THREE.Mesh(instancedQuads(SPLASHES, 16), material);
-}
-
-function jetTipMesh(l: Landing): THREE.Mesh {
-  const material = landingMaterial(
-    l,
-    `
-    varying vec2 vUV;
-    varying float vLife;
-    ${JET_GLSL}
-    void main() {
-      float id = float(gl_InstanceID), jet = floor(id / 3.0), part = mod(id, 3.0);
-      float phase, life, seed;
-      vec3 origin, vel;
-      jetState(jet, phase, life, seed, origin, vel);
-      float release = 0.24 + part * 0.12;
-      float elapsed = max(0.0, (phase - release) * life);
-      float age = release * 0.38 + 0.08 + elapsed;
-      vec3 center = origin + vel * age + vec3(0.0, -4.905 * age * age, 0.0);
-      float size = 0.030 + rnd(seed + part * 11.0 + 420.0) * 0.028;
-      vec3 right = viewRight(), up = viewUp();
-      vec3 velocity = vec3(-uSide * vel.x, vel.y - 9.81 * age, vel.z);
-      vec2 projected = vec2(dot(velocity, right), dot(velocity, up));
-      vec3 axis = normalize(right * projected.x + up * projected.y + up * 0.0001);
-      vec3 across = normalize(cross(axis, normalize(cross(right, up))));
-      vec3 at = toBody(center) + (across * position.x * size + axis * position.y * size * 1.7) * ${fmt(S)};
-      vUV = uv;
-      vLife = step(release, phase) * smoothstep(0.0, 0.025, elapsed)
-        * smoothstep(0.015, 0.07, center.y)
-        * (1.0 - smoothstep(0.85, 0.98, phase));
-      gl_Position = projectionMatrix * modelViewMatrix * vec4(at, 1.0);
-    }`,
-    `
-    varying vec2 vUV;
-    varying float vLife;
-    void main() {
-      vec2 p = vUV * 2.0 - 1.0;
-      float alpha = (1.0 - smoothstep(0.62, 1.0, length(p))) * vLife * 0.84;
-      if (alpha < 0.008) discard;
-      vec3 col = mix(uFoamLight, vec3(0.95, 0.99, 1.0), 0.55);
-      ${LANDING_OUT}
-    }`,
-  );
-  return new THREE.Mesh(instancedQuads(SPLASHES * 3), material);
-}
-
-// Small surface reactions at the actual return points of the shed droplets.
-// They share the jet clock and trajectory, rather than appearing at random.
-function dropletReturnMesh(l: Landing): THREE.Mesh {
-  const material = landingMaterial(
-    l,
-    `
-    varying vec2 vUV;
-    varying vec2 vBody;
-    varying float vLife;
-    varying float vSeed;
-    ${JET_GLSL}
-    void main() {
-      float id = float(gl_InstanceID), jet = floor(id / 3.0), part = mod(id, 3.0);
-      float phase, life, seed;
-      vec3 origin, vel;
-      jetState(jet, phase, life, seed, origin, vel);
-      float release = 0.24 + part * 0.12;
-      float age = release * 0.38 + 0.08 + max(0.0, (phase - release) * life);
-      float hitAge = (vel.y + sqrt(vel.y * vel.y + 19.62 * origin.y)) / 9.81;
-      float after = max(0.0, age - hitAge);
-      float radius = 0.055 + after * 0.32;
-      vec3 center = origin + vel * hitAge;
-      center.y = 0.026;
-      vec3 at = toBody(center + vec3(position.x * radius * 2.0, 0.0, position.y * radius * 2.0));
-      vUV = uv;
-      vBody = at.xz;
-      vSeed = seed + part * 23.0;
-      vLife = step(release, phase) * step(hitAge, age) * smoothstep(0.0, 0.025, after)
-        * (1.0 - smoothstep(0.15, 0.40, after)) * (1.0 - smoothstep(0.85, 0.98, phase));
-      gl_Position = projectionMatrix * modelViewMatrix * vec4(at, 1.0);
-    }`,
-    `
-    uniform vec4 uClip;
-    varying vec2 vUV;
-    varying vec2 vBody;
-    varying float vLife;
-    varying float vSeed;
-    void main() {
-      vec2 p = vUV * 2.0 - 1.0;
-      float radius = length(p), angle = atan(p.y, p.x);
-      float aa = max(0.035, fwidth(radius));
-      float ring = smoothstep(0.66 - aa, 0.76 + aa, radius)
-        * (1.0 - smoothstep(0.87 - aa, 0.97 + aa, radius));
-      float broken = smoothstep(-0.65, 0.15, sin(angle * 3.0 + vSeed));
-      float alpha = ring * broken * vLife * 0.42;
-      if (vBody.x < uClip.x || vBody.x > uClip.y || vBody.y < uClip.z || vBody.y > uClip.w || alpha < 0.008) discard;
-      vec3 col = uFoamLight;
-      ${LANDING_OUT}
-    }`,
-  );
-  return new THREE.Mesh(instancedQuads(SPLASHES * 3), material);
-}
-
-// Fine spray: short streaks thrown up and out along their velocity. (The
-// study faded each against the scene's depth; the game has no depth texture
-// in this pass, and the depth test does the occluding.)
-function sprayMesh(l: Landing): THREE.Mesh {
-  const material = landingMaterial(
-    l,
-    `
-    varying vec2 vUV;
-    varying float vLife;
-    varying float vGlint;
-    void main() {
-      float id = float(gl_InstanceID), r = rnd(id + 17.0), s = rnd(id + 31.0), b = rnd(id + 52.0);
-      float lifeTime = 0.55 + r * 0.55;
-      float clock = uTime / lifeTime + rnd(id + 9.0);
-      float phase = fract(clock), seed = id + floor(clock) * 83.0;
-      r = rnd(seed + 17.0);
-      s = rnd(seed + 31.0);
-      b = rnd(seed + 52.0);
-      float age = phase * lifeTime;
-      vec3 start = vec3(-0.10, 0.06, (s * 2.0 - 1.0) * uHalfWidth);
-      vec3 vel = vec3(-0.25 - r * 1.45, 1.5 + b * 1.65, (s - 0.5) * 1.50) * uStrength;
-      vec3 center = start + vel * age + vec3(0.0, -4.905 * age * age, 0.0);
-      float size = (0.014 + r * r * 0.037) * ${fmt(SPRAY)};
-      float len = size * (1.15 + b * 0.75);
-      vec3 right = viewRight(), up = viewUp();
-      vec3 velocity = vec3(-uSide * vel.x, vel.y - 9.81 * age, vel.z);
-      vec2 projected = vec2(dot(velocity, right), dot(velocity, up));
-      vec3 axis = normalize(right * projected.x + up * projected.y + up * 0.0001);
-      vec3 across = normalize(cross(axis, normalize(cross(right, up))));
-      vec3 at = toBody(center) + (across * position.x * size + axis * position.y * len) * ${fmt(S)};
-      vUV = uv;
-      vGlint = step(0.86, rnd(id + 631.0)) * pow(max(0.0, sin(uTime * (3.1 + r * 1.8) + seed)), 16.0);
-      vLife = smoothstep(0.0, 0.10, phase) * (1.0 - smoothstep(0.65, 1.0, phase)) * smoothstep(0.015, 0.09, center.y);
-      gl_Position = projectionMatrix * modelViewMatrix * vec4(at, 1.0);
-    }`,
-    `
-    varying vec2 vUV;
-    varying float vLife;
-    varying float vGlint;
-    void main() {
-      vec2 p = vUV * 2.0 - 1.0;
-      // Elliptical droplets, softly rounded rather than diamond-shaped sparks.
-      float m = 1.0 - smoothstep(0.62, 1.0, length(p * vec2(1.0, 0.86)));
-      float alpha = m * vLife * ${fmt(Math.min(SPRAY, 1))} * mix(0.70, 1.0, vGlint);
-      if (alpha < 0.01) discard;
-      vec3 col = mix(uFoamLight, vec3(0.98, 1.0, 1.0), 0.38 + 0.62 * vGlint);
-      ${LANDING_OUT}
-    }`,
-  );
-  return new THREE.Mesh(instancedQuads(SPRAYS), material);
-}
-
 // A separate low-opacity veil: slow expansion and lift, never ballistic
 // white splashes. Rounded noisy edges and a surface fade keep the water visible.
 function mistMesh(l: Landing): THREE.Mesh {
@@ -1302,26 +1085,27 @@ function mistMesh(l: Landing): THREE.Mesh {
     varying float vHeight;
     void main() {
       float id = float(gl_InstanceID), r = rnd(id + 204.0), s = rnd(id + 302.0);
-      float life = 1.7 + r * 1.5;
+      float life = 1.9 + r * 1.7;
       float clock = uTime / life + rnd(id + 416.0);
       float phase = fract(clock), cycle = floor(clock);
       float drift = rnd(id + cycle * 19.0 + 500.0);
-      float sideMist = step(0.48, rnd(id + 290.0));
+      float sideMist = step(0.35, rnd(id + 290.0));
       float edge = mod(id, 2.0) * 2.0 - 1.0;
-      vec3 rim = rimPoint(0.12 + drift * 0.76, edge);
+      vec3 rim = rimPoint(0.08 + drift * 0.84, edge);
       vec3 center = vec3(-0.08 - phase * (0.45 + drift * 0.55),
         0.08 + phase * (0.45 + r * 0.42) * uStrength,
         (s * 2.0 - 1.0) * uHalfWidth * 0.90 + (s * 2.0 - 1.0) * phase * 0.28);
-      vec3 wrapped = rim + vec3(0.12 - phase * (0.16 + drift * 0.18),
-        0.04 + phase * (0.36 + r * 0.35) * uStrength, edge * (0.05 + phase * 0.14));
+      vec3 wrapped = rim + vec3(0.10 - phase * (0.14 + drift * 0.20),
+        0.06 + phase * (0.48 + r * 0.44) * uStrength,
+        edge * (0.03 + phase * 0.16) + (rnd(id + cycle * 11.0 + 535.0) - 0.5) * 0.13);
       center = mix(center, wrapped, sideMist);
       center.x += 0.10 * sin(phase * 4.0 + id);
-      float size = (0.44 + r * 0.40) * (0.65 + phase * 0.85) * mix(1.0, 0.76, sideMist);
+      float size = (0.48 + r * 0.46) * (0.65 + phase * 0.85) * mix(1.0, 0.82, sideMist);
       vec3 at = toBody(center) + (viewRight() * position.x * size * 1.65 + viewUp() * position.y * size) * ${fmt(S)};
       vUV = uv;
       vSeed = id + cycle * 7.0;
       vHeight = center.y + position.y * size;
-      vLife = smoothstep(0.0, 0.20, phase) * (1.0 - smoothstep(0.50, 1.0, phase)) * mix(1.0, 1.40, sideMist);
+      vLife = smoothstep(0.0, 0.18, phase) * (1.0 - smoothstep(0.54, 1.0, phase)) * mix(1.0, 1.42, sideMist);
       gl_Position = projectionMatrix * modelViewMatrix * vec4(at, 1.0);
     }`,
     `
@@ -1335,7 +1119,7 @@ function mistMesh(l: Landing): THREE.Mesh {
       float n = paintNoise(q * 2.6 + vec2(vSeed * 1.31, uTime * 0.16));
       float radius = length(q) + (n - 0.5) * 0.25;
       float soft = 1.0 - smoothstep(0.18, 1.0, radius);
-      float alpha = soft * (0.42 + 0.58 * n) * vLife * 0.095
+      float alpha = soft * (0.42 + 0.58 * n) * vLife * 0.135
         * smoothstep(0.01, 0.16, vHeight);
       if (alpha < 0.002) discard;
       vec3 col = uMistColor;
@@ -1358,22 +1142,29 @@ function bubbleMesh(l: Landing): THREE.Mesh {
     varying float vSeed;
     void main() {
       float id = float(gl_InstanceID), r = rnd(id + 710.0);
-      float life = 1.20 + r * 1.15;
+      float life = 1.05 + r * 1.40 + rnd(id + 720.0) * 0.70;
       float clock = uTime / life + rnd(id + 721.0);
       float phase = fract(clock), seed = id + floor(clock) * 37.0;
       float edge = mod(id, 2.0) * 2.0 - 1.0;
       float along = rnd(seed + 742.0);
       vec3 center = rimPoint(along, edge);
-      center.x -= phase * (0.22 + r * 0.46);
-      center.z += edge * (0.03 + phase * 0.15 + 0.035 * sin(phase * 5.0 + seed));
-      center.y += 0.025 * sin(phase * 3.14159) + 0.018 * r;
-      float size = (0.055 + rnd(seed + 780.0) * 0.085) * (0.72 + 0.28 * sin(phase * 3.14159));
-      vec3 at = toBody(center) + (viewRight() * position.x * size * 1.18 + viewUp() * position.y * size) * ${fmt(S)};
+      center.x -= phase * (0.14 + pow(rnd(seed + 752.0), 0.65) * 0.75);
+      center.x += (rnd(seed + 759.0) - 0.5) * 0.18 + 0.04 * sin(phase * 4.0 + seed);
+      center.z += edge * (0.02 + phase * 0.18) + (rnd(seed + 763.0) - 0.5) * 0.24
+        + 0.035 * sin(phase * (3.8 + r * 2.0) + seed);
+      center.y += 0.014 + 0.021 * sin(phase * 3.14159) + 0.014 * rnd(seed + 770.0);
+      float shape = rnd(seed + 796.0);
+      float clustered = step(0.90, shape);
+      float size = (0.072 + pow(rnd(seed + 780.0), 1.2) * 0.12 + clustered * 0.035)
+        * (0.72 + 0.28 * sin(phase * 3.14159));
+      vec2 aspect = vec2(0.98 + rnd(seed + 785.0) * 0.42, 0.84 + rnd(seed + 789.0) * 0.28);
+      vec3 at = toBody(center) + (viewRight() * position.x * size * aspect.x
+        + viewUp() * position.y * size * aspect.y) * ${fmt(S)};
       vUV = uv;
       vBody = at.xz;
-      vSeed = rnd(seed + 796.0);
+      vSeed = shape;
       vGlint = step(0.85, rnd(id + 805.0)) * pow(max(0.0, sin(uTime * (2.8 + r * 1.6) + seed)), 14.0);
-      vLife = smoothstep(0.0, 0.12, phase) * (1.0 - smoothstep(0.65, 1.0, phase));
+      vLife = smoothstep(0.0, 0.10 + r * 0.08, phase) * (1.0 - smoothstep(0.56 + r * 0.16, 1.0, phase));
       gl_Position = projectionMatrix * modelViewMatrix * vec4(at, 1.0);
     }`,
     `
@@ -1386,10 +1177,13 @@ function bubbleMesh(l: Landing): THREE.Mesh {
     void main() {
       if (vBody.x < uClip.x || vBody.x > uClip.y || vBody.y < uClip.z || vBody.y > uClip.w) discard;
       vec2 q = vUV * 2.0 - 1.0;
-      float radius = length(q);
+      float angle = atan(q.y, q.x);
+      float radius = length(q) + 0.025 * sin(angle * 3.0 + vSeed * 6.28318);
+      float paired = min(length(q - vec2(0.24, 0.03)) * 1.28, length(q + vec2(0.26, 0.02)) * 1.34);
+      radius = mix(radius, paired, step(0.90, vSeed));
       float aa = max(0.025, fwidth(radius));
       float mask = 1.0 - smoothstep(0.82 - aa, 0.96 + aa, radius);
-      float rim = smoothstep(0.43, 0.78, radius) * mask;
+      float rim = smoothstep(mix(0.36, 0.49, vSeed), mix(0.72, 0.82, vSeed), radius) * mask;
       float crescent = rim * smoothstep(-0.1, 0.65, q.y - q.x);
       vec2 gleam = (q - vec2(-0.28, 0.34)) * 5.0;
       float pinpoint = exp(-dot(gleam, gleam)) * vGlint;
@@ -1658,11 +1452,10 @@ export function buildWater(root: THREE.Group, body: WaterArea, data: LevelBodyDa
       clip: fall.clip, palette: studyPalette(color), strength: fall.strength,
       contactHalfSpan: fall.contactHalfSpan,
     };
-    // Drawn after the water: soft mist behind the splash ribbons, the low
-    // crown, the compact plumes over it, and droplets last. Always in the scene and
-    // never culled (each is placed in its vertex shader), so the prewarm
-    // compiles all eight, including the side bubbles and shed droplets' returns.
-    [mistMesh(landing), splashMesh(landing), crownMesh(landing), plumeMesh(landing), bubbleMesh(landing), sprayMesh(landing), jetTipMesh(landing), dropletReturnMesh(landing)].forEach((m, i) => {
+    // Drawn after the water: mist, the low crown, soft froth and side bubbles.
+    // Always in the scene and never culled (each is placed in its vertex
+    // shader), so the prewarm compiles all four.
+    [mistMesh(landing), crownMesh(landing), plumeMesh(landing), bubbleMesh(landing)].forEach((m, i) => {
       m.frustumCulled = false;
       m.renderOrder = 11 + i;
       root.add(m);
