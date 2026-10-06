@@ -951,57 +951,81 @@ const LANDING_OUT = `
   #include <colorspace_fragment>
 `;
 
-// One continuous frothing contact surface, not a row of spheres or a torus:
-// a heightfield over a capsule footprint the width of the sheet.
+// One continuous frothing contact surface: a rolling heightfield along the
+// actual sheet-to-water perimeter, with raised pockets outside its edges.
 function crownMesh(l: Landing): THREE.Mesh {
-  const geometry = new THREE.PlaneGeometry(2, 2, 36, 96);
+  const geometry = new THREE.PlaneGeometry(2, 2, 48, 128);
   geometry.rotateX(-Math.PI / 2);
+  // Signed distance to the actual contact span, not a narrower capsule that
+  // hides the visible side of the froth beneath the opaque falling sheet.
+  const crownField = `
+    float crownDistance(vec2 p) {
+      vec2 edge = abs(p) - vec2(max(uContactHalfSpan, 0.025), uHalfWidth);
+      return length(max(edge, 0.0)) + min(max(edge.x, edge.y), 0.0);
+    }
+    float crownRoll(vec2 p) {
+      return paintNoise(vec2(p.y * 2.85 + uTime * 0.34, p.x * 4.8 + uTime * 0.76));
+    }
+  `;
   const material = landingMaterial(
     l,
     `
     varying vec3 vNormal;
     varying vec2 vLocal;
     varying vec2 vBody;
+    varying float vHeight;
     ${ORGANIC_GLSL}
+    ${crownField}
     float crownHeight(vec2 p) {
-      float nx = p.x / 0.80, nz = p.y / (uHalfWidth + 0.45);
-      float body = max(0.0, 1.0 - pow(abs(nx), 2.3) - pow(abs(nz), 6.0));
-      float folds = paintNoise(vec2(p.y * 3.25 + uTime * 0.88, p.x * 4.6 - uTime * 1.26));
-      float h = (0.045 + 0.20 * folds + 0.025 * sin(p.y * 9.0 + uTime * 4.0)) * pow(body, 0.8);
+      float distance = crownDistance(p);
+      // Raised rolling pockets peak just outside the sheet. Their troughs
+      // settle nearly to the pond so this remains loose froth, not a wall.
+      float rim = exp(-pow((distance - 0.11) / 0.26, 2.0));
+      float roll = crownRoll(p);
+      float pockets = smoothstep(0.26, 0.64, roll);
+      float core = 1.0 - smoothstep(-0.10, 0.12, distance);
+      float h = rim * (0.09 + 0.11 * smoothstep(0.22, 0.74, roll)) * (0.55 + pockets * 0.45) + core * 0.035;
       return 0.022 + h * uStrength * ${fmt(FOAM_HEIGHT * Math.min(1, IMPACT_FOAM))};
     }
     void main() {
-      vec2 p = position.xz * vec2(0.80, uHalfWidth + 0.45);
-      float edgeEnv = pow(abs(p.x) / 0.80, 2.0);
-      p.x += (0.055 * sin(p.y * 7.0 - uTime * 4.0) + 0.03 * sin(p.y * 14.0 + uTime * 2.7)) * edgeEnv;
+      vec2 p = position.xz * vec2(uContactHalfSpan + 0.64, uHalfWidth + 0.64);
       float y = crownHeight(p);
-      vec2 d = vec2(crownHeight(p + vec2(0.015, 0.0)) - y, crownHeight(p + vec2(0.0, 0.015)) - y) / 0.015;
+      vec2 d = vec2(crownHeight(p + vec2(0.015, 0.0)) - crownHeight(p - vec2(0.015, 0.0)),
+        crownHeight(p + vec2(0.0, 0.015)) - crownHeight(p - vec2(0.0, 0.015))) / 0.030;
       vLocal = p;
       vNormal = normalize(vec3(uSide * d.x, 1.0, -d.y));
-      vec3 at = toBody(vec3(p.x - 0.08, y, p.y));
+      vHeight = y;
+      vec3 at = toBody(vec3(p.x, y, p.y));
       vBody = at.xz;
       gl_Position = projectionMatrix * modelViewMatrix * vec4(at, 1.0);
     }`,
     `
     uniform float uHalfWidth;
+    uniform float uContactHalfSpan;
+    uniform float uStrength;
     uniform vec4 uClip;
     varying vec3 vNormal;
     varying vec2 vLocal;
     varying vec2 vBody;
+    varying float vHeight;
     ${ORGANIC_GLSL}
+    ${crownField}
     void main() {
       if (vBody.x < uClip.x || vBody.x > uClip.y || vBody.y < uClip.z || vBody.y > uClip.w) discard;
-      float r = length(vec2(vLocal.x + 0.10 * sin(vLocal.y * 2.8 - uTime * 1.7), max(abs(vLocal.y) - uHalfWidth * 0.82, 0.0)));
-      float breakup = paintNoise(vec2(vLocal.y * 4.0 - uTime * 1.05, vLocal.x * 5.4 + uTime * 1.34));
-      float mask = 1.0 - smoothstep(0.35, 0.73, r + (breakup - 0.5) * 0.32 + 0.06 * sin(vLocal.y * 6.0 + uTime * 1.9));
-      float fold = paintNoise(vec2(vLocal.y * 5.0 + uTime * 0.80, vLocal.x * 6.0 - uTime * 1.65));
-      float core = 1.0 - smoothstep(0.16, 0.42, r);
-      float holes = smoothstep(0.50, 0.73, breakup) * (1.0 - core);
-      vec3 col = mix(uFoamShade, uFoamLight, 0.36 + 0.45 * smoothstep(0.19, 0.69, fold));
-      col = mix(col, vec3(0.93, 0.98, 0.99), core * 0.65);
-      float lit = dot(normalize(vNormal), normalize(vec3(-0.45, 0.85, 0.2)));
-      col *= 0.86 + 0.14 * smoothstep(-0.6, 0.75, lit);
-      float alpha = mask * mix(0.52, 0.94, core) * (1.0 - holes * 0.75) * ${fmt(Math.min(1, IMPACT_FOAM))};
+      float distance = crownDistance(vLocal);
+      float roll = crownRoll(vLocal);
+      float breakup = paintNoise(vec2(vLocal.y * 4.0 - uTime * 0.35, vLocal.x * 5.4 + uTime * 0.56));
+      float mask = 1.0 - smoothstep(0.32, 0.56, distance + (breakup - 0.5) * 0.12);
+      float core = 1.0 - smoothstep(-0.05, 0.19, distance);
+      float pockets = smoothstep(0.21, 0.53, roll);
+      vec3 normal = normalize(vNormal);
+      float lit = dot(normal, normalize(vec3(-0.45, 0.85, 0.2)));
+      float softLight = smoothstep(-0.35, 0.90, lit);
+      float crest = smoothstep(0.085, 0.22, vHeight / max(uStrength, 0.70)) * smoothstep(0.40, 0.95, lit);
+      vec3 col = mix(uFoamShade, uFoamLight, 0.22 + roll * 0.34 + softLight * 0.24);
+      col = mix(col, vec3(0.93, 0.98, 0.99), crest * 0.68 + core * 0.18);
+      col *= 0.82 + softLight * 0.18;
+      float alpha = mask * mix(0.68, 0.94, core) * mix(pockets, 1.0, core) * ${fmt(Math.min(1, IMPACT_FOAM))};
       if (alpha < 0.008) discard;
       ${LANDING_OUT}
     }`,
