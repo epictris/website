@@ -33,6 +33,7 @@
 // detaches between steps, which is the same rule the 2D renderer already keeps.
 
 import * as THREE from "three";
+import { disposeFoliageWind } from "./foliage/wind";
 
 import type { CollisionObject2D, CollisionShape2D } from "../engine/body";
 import { WaterArea } from "../engine/body";
@@ -313,7 +314,8 @@ export function mountVisual(
   const key = g?.mesh;
   if (!key) return { geometry: owned };
   void loadMesh(key).then((obj) => {
-    if (!obj || !opts.alive()) return;
+    if (!obj) return;
+    if (!opts.alive()) { disposeFoliageWind(obj); return; }
     if (placeholder) holder.remove(placeholder);
     // An authored texture is the level saying what this thing is made of, and it
     // outranks whatever the file was exported with - which is the whole point of
@@ -634,6 +636,7 @@ export class BodyVisual {
   }
 
   dispose(): void {
+    disposeFoliageWind(this.root);
     this.disposed = true;
     for (const l of this.lights) this.rig?.drop(l);
     this.lights.length = 0;

@@ -1,0 +1,292 @@
+{
+  "coordinateSystem": "Three.js UV, u left-to-right; v bottom-to-top",
+  "textureOrientation": "Leaf tip points toward +Y. Source SVGs are preserved; PNGs are rotated 180 degrees.",
+  "baseNote": "The botanical base is at the upper notch or shoulder in the supplied art. Its UV is exact and centered horizontally; rounded lobes extend below the base in the original silhouettes.",
+  "variants": [
+    {
+      "id": "leaf-1-emerald",
+      "shape": "heart",
+      "color": "emerald",
+      "svg": "/hanging-vines/leaves/leaf-1-emerald.svg",
+      "png": "/hanging-vines/leaves/leaf-1-emerald.png",
+      "originalPng": "/hanging-vines/leaves/leaf-1-emerald-original.png",
+      "width": 748,
+      "height": 792,
+      "geometryAspect": 0.944444,
+      "baseUv": [
+        0.5,
+        0.14899
+      ],
+      "tipUv": [
+        0.459893,
+        0.954545
+      ]
+    },
+    {
+      "id": "leaf-1-forest",
+      "shape": "heart",
+      "color": "forest",
+      "svg": "/hanging-vines/leaves/leaf-1-forest.svg",
+      "png": "/hanging-vines/leaves/leaf-1-forest.png",
+      "originalPng": "/hanging-vines/leaves/leaf-1-forest-original.png",
+      "width": 748,
+      "height": 792,
+      "geometryAspect": 0.944444,
+      "baseUv": [
+        0.5,
+        0.14899
+      ],
+      "tipUv": [
+        0.459893,
+        0.954545
+      ]
+    },
+    {
+      "id": "leaf-1-leaf",
+      "shape": "heart",
+      "color": "leaf",
+      "svg": "/hanging-vines/leaves/leaf-1-leaf.svg",
+      "png": "/hanging-vines/leaves/leaf-1-leaf.png",
+      "originalPng": "/hanging-vines/leaves/leaf-1-leaf-original.png",
+      "width": 748,
+      "height": 792,
+      "geometryAspect": 0.944444,
+      "baseUv": [
+        0.5,
+        0.14899
+      ],
+      "tipUv": [
+        0.459893,
+        0.954545
+      ]
+    },
+    {
+      "id": "leaf-1-lime",
+      "shape": "heart",
+      "color": "lime",
+      "svg": "/hanging-vines/leaves/leaf-1-lime.svg",
+      "png": "/hanging-vines/leaves/leaf-1-lime.png",
+      "originalPng": "/hanging-vines/leaves/leaf-1-lime-original.png",
+      "width": 748,
+      "height": 792,
+      "geometryAspect": 0.944444,
+      "baseUv": [
+        0.5,
+        0.14899
+      ],
+      "tipUv": [
+        0.459893,
+        0.954545
+      ]
+    },
+    {
+      "id": "leaf-1-sage",
+      "shape": "heart",
+      "color": "sage",
+      "svg": "/hanging-vines/leaves/leaf-1-sage.svg",
+      "png": "/hanging-vines/leaves/leaf-1-sage.png",
+      "originalPng": "/hanging-vines/leaves/leaf-1-sage-original.png",
+      "width": 748,
+      "height": 792,
+      "geometryAspect": 0.944444,
+      "baseUv": [
+        0.5,
+        0.14899
+      ],
+      "tipUv": [
+        0.459893,
+        0.954545
+      ]
+    },
+    {
+      "id": "leaf-2-emerald",
+      "shape": "lobed",
+      "color": "emerald",
+      "svg": "/hanging-vines/leaves/leaf-2-emerald.svg",
+      "png": "/hanging-vines/leaves/leaf-2-emerald.png",
+      "originalPng": "/hanging-vines/leaves/leaf-2-emerald-original.png",
+      "width": 662,
+      "height": 662,
+      "geometryAspect": 1,
+      "baseUv": [
+        0.5,
+        0.061934
+      ],
+      "tipUv": [
+        0.397281,
+        0.941088
+      ]
+    },
+    {
+      "id": "leaf-2-forest",
+      "shape": "lobed",
+      "color": "forest",
+      "svg": "/hanging-vines/leaves/leaf-2-forest.svg",
+      "png": "/hanging-vines/leaves/leaf-2-forest.png",
+      "originalPng": "/hanging-vines/leaves/leaf-2-forest-original.png",
+      "width": 662,
+      "height": 662,
+      "geometryAspect": 1,
+      "baseUv": [
+        0.5,
+        0.061934
+      ],
+      "tipUv": [
+        0.397281,
+        0.941088
+      ]
+    },
+    {
+      "id": "leaf-2-leaf",
+      "shape": "lobed",
+      "color": "leaf",
+      "svg": "/hanging-vines/leaves/leaf-2-leaf.svg",
+      "png": "/hanging-vines/leaves/leaf-2-leaf.png",
+      "originalPng": "/hanging-vines/leaves/leaf-2-leaf-original.png",
+      "width": 662,
+      "height": 662,
+      "geometryAspect": 1,
+      "baseUv": [
+        0.5,
+        0.061934
+      ],
+      "tipUv": [
+        0.397281,
+        0.941088
+      ]
+    },
+    {
+      "id": "leaf-2-lime",
+      "shape": "lobed",
+      "color": "lime",
+      "svg": "/hanging-vines/leaves/leaf-2-lime.svg",
+      "png": "/hanging-vines/leaves/leaf-2-lime.png",
+      "originalPng": "/hanging-vines/leaves/leaf-2-lime-original.png",
+      "width": 662,
+      "height": 662,
+      "geometryAspect": 1,
+      "baseUv": [
+        0.5,
+        0.061934
+      ],
+      "tipUv": [
+        0.397281,
+        0.941088
+      ]
+    },
+    {
+      "id": "leaf-2-sage",
+      "shape": "lobed",
+      "color": "sage",
+      "svg": "/hanging-vines/leaves/leaf-2-sage.svg",
+      "png": "/hanging-vines/leaves/leaf-2-sage.png",
+      "originalPng": "/hanging-vines/leaves/leaf-2-sage-original.png",
+      "width": 662,
+      "height": 662,
+      "geometryAspect": 1,
+      "baseUv": [
+        0.5,
+        0.061934
+      ],
+      "tipUv": [
+        0.397281,
+        0.941088
+      ]
+    },
+    {
+      "id": "leaf-3-emerald",
+      "shape": "heart-offset",
+      "color": "emerald",
+      "svg": "/hanging-vines/leaves/leaf-3-emerald.svg",
+      "png": "/hanging-vines/leaves/leaf-3-emerald.png",
+      "originalPng": "/hanging-vines/leaves/leaf-3-emerald-original.png",
+      "width": 686,
+      "height": 697,
+      "geometryAspect": 0.984218,
+      "baseUv": [
+        0.5,
+        0.180775
+      ],
+      "tipUv": [
+        0.395044,
+        0.941176
+      ]
+    },
+    {
+      "id": "leaf-3-forest",
+      "shape": "heart-offset",
+      "color": "forest",
+      "svg": "/hanging-vines/leaves/leaf-3-forest.svg",
+      "png": "/hanging-vines/leaves/leaf-3-forest.png",
+      "originalPng": "/hanging-vines/leaves/leaf-3-forest-original.png",
+      "width": 686,
+      "height": 697,
+      "geometryAspect": 0.984218,
+      "baseUv": [
+        0.5,
+        0.180775
+      ],
+      "tipUv": [
+        0.395044,
+        0.941176
+      ]
+    },
+    {
+      "id": "leaf-3-leaf",
+      "shape": "heart-offset",
+      "color": "leaf",
+      "svg": "/hanging-vines/leaves/leaf-3-leaf.svg",
+      "png": "/hanging-vines/leaves/leaf-3-leaf.png",
+      "originalPng": "/hanging-vines/leaves/leaf-3-leaf-original.png",
+      "width": 686,
+      "height": 697,
+      "geometryAspect": 0.984218,
+      "baseUv": [
+        0.5,
+        0.180775
+      ],
+      "tipUv": [
+        0.395044,
+        0.941176
+      ]
+    },
+    {
+      "id": "leaf-3-lime",
+      "shape": "heart-offset",
+      "color": "lime",
+      "svg": "/hanging-vines/leaves/leaf-3-lime.svg",
+      "png": "/hanging-vines/leaves/leaf-3-lime.png",
+      "originalPng": "/hanging-vines/leaves/leaf-3-lime-original.png",
+      "width": 686,
+      "height": 697,
+      "geometryAspect": 0.984218,
+      "baseUv": [
+        0.5,
+        0.180775
+      ],
+      "tipUv": [
+        0.395044,
+        0.941176
+      ]
+    },
+    {
+      "id": "leaf-3-sage",
+      "shape": "heart-offset",
+      "color": "sage",
+      "svg": "/hanging-vines/leaves/leaf-3-sage.svg",
+      "png": "/hanging-vines/leaves/leaf-3-sage.png",
+      "originalPng": "/hanging-vines/leaves/leaf-3-sage-original.png",
+      "width": 686,
+      "height": 697,
+      "geometryAspect": 0.984218,
+      "baseUv": [
+        0.5,
+        0.180775
+      ],
+      "tipUv": [
+        0.395044,
+        0.941176
+      ]
+    }
+  ]
+}

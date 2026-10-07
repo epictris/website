@@ -236,6 +236,8 @@ import {
   TEXTURE_ASSETS,
 } from "../render3d/assets";
 import * as THREE from "three";
+import { createFoliageTool } from "./foliageTool";
+import { isGeneratedFoliage } from "../render3d/foliage/recipe";
 import { ROCK_HASH_KEY, ROCK_INDEX_KEY, ROCK_TEXTURES, rockBodies, rockNodeName, rocksUrl } from "../render3d/rocks";
 import { silhouette, type SilTriangle } from "../lib/silhouette";
 import { Scene3D, type Scene3DLevel } from "../render3d/scene";
@@ -366,7 +368,9 @@ type Tool =
   | "mushrooms"
   | "mushroom"
   | "grass"
-  | "plant";
+  | "plant"
+  | "hangingVine"
+  | "fern";
 
 const isSurfaceTool = (t: Tool): boolean => t === "mushroom" || t === "grass" || t === "plant";
 
@@ -394,6 +398,8 @@ const LAYER_TOOLS: Record<EdLayer, Tool[]> = {
     "mushroom",
     "grass",
     "plant",
+    "hangingVine",
+    "fern",
     "light",
     "glow",
     "fireflies",
@@ -437,6 +443,8 @@ const TOOL_WORKSPACES: Record<Tool, ToolWorkspace> = {
   mushroom: "level",
   grass: "visuals",
   plant: "visuals",
+  hangingVine: "visuals",
+  fern: "visuals",
 };
 
 // Kinds a chain may be tied to. An area is a region, not a body - nothing hangs
@@ -2619,7 +2627,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const geometry = selected.length === 1 ? selected[0] : undefined;
     if (!geometry || geometry.layer !== "scene" || geometry.shape.kind !== "circle" ||
         geometry.visual.depth === null || geometry.visual.depth <= 0 ||
-        (geometry.visual.kind === "mesh" && !geometry.visual.mesh.startsWith("vine-v3:"))) {
+        (geometry.visual.kind === "mesh" && !isGeneratedFoliage(geometry.visual.mesh))) {
       vineStatus.textContent = "Select one +Vine rope, or one cylinder geometry object with depth.";
       return;
     }
@@ -2977,13 +2985,76 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     mushroomStatus);
   bar.appendChild(plantRow);
 
+  // A decorative vine starts with two picks on one model: an attachment point
+  // and the direction it first crawls across the rock. Its baked mesh rides
+  // that model's body, while the sidecar retains the editable recipe.
+  const foliageTool = createFoliageTool({
+    layer: scene3d?.editorLayer ?? new THREE.Group(),
+    selected: () => {
+      const direct = selected();
+      if (direct) return direct;
+      const geometry = operandItems().filter(item => item.object === "geometry");
+      return geometry.length === 1 ? geometry[0] : null;
+    },
+    host: (id) => model.items.find(item => item.id === id),
+    hosts: (item) => model.items.filter(it => it.bodyId === item.bodyId && it.object === "geometry" && !isGeneratedFoliage(it.visual.mesh)),
+    plants: (item) => model.items.filter(it => it.bodyId === item.bodyId && isGeneratedFoliage(it.visual.mesh)),
+    meshes: drawnMeshesOf,
+    frame: patchFrame,
+    revision: () => modelRev,
+    editable: () => !!scene3d && sceneRev === modelRev && mode === "edit" && !lockedLayers.has(activeLayer),
+    activate: setTool,
+    pick: (scr) => {
+      const ndc = surfaceNdc(new Vec2(scr.x, scr.y));
+      if (!ndc || !scene3d || !sceneShown()) return null;
+      const hit = scene3d.pickSurface(ndc[0], ndc[1], tag => {
+        const id = itemOfSceneObject.get(tag as SceneObjectData);
+        const item = model.items.find(it => it.id === id);
+        return !!item && item.layer === "scene" && item.object === "geometry" &&
+          !lockedLayers.has(item.layer) && !isGeneratedFoliage(item.visual.mesh) &&
+          !/^(mushroom|grass|plant)-patch:/.test(item.visual.mesh);
+      });
+      const hostId = hit ? itemOfSceneObject.get(hit.tag as SceneObjectData) : undefined;
+      const host = model.items.find(it => it.id === hostId);
+      return hit && host ? { host, point: hit.point, normal: hit.normal } : null;
+    },
+    commit: (commits) => {
+      beginAction();
+      const added: EdItem[] = [];
+      for (const commit of commits) {
+        const host = commit.host;
+        const item = commit.replace ?? {
+          ...host, id: newBodyId(), object: "geometry" as const, shape: cloneShape(host.shape),
+          cam: { ...host.cam }, light: { ...host.light }, note: { ...host.note },
+          anchorId: 0, pathId: 0, matchId: 0,
+        };
+        const origin = new THREE.Vector3().setFromMatrixPosition(commit.frame);
+        const { min, max } = commit.bounds;
+        const reachX = Math.max(.05, Math.abs(min.x), Math.abs(max.x));
+        const reachY = Math.max(.05, Math.abs(min.y), Math.abs(max.y));
+        const reachZ = Math.max(.05, Math.abs(min.z), Math.abs(max.z));
+        item.pos = new Vec2(origin.x, threeY(origin.y)); item.rot = 0;
+        item.shape = { kind: "rect", w: reachX * 2, h: reachY * 2 };
+        item.visual = { ...defaultVisual(), kind: "mesh", mesh: commit.mesh, offsetZ: origin.z, depth: reachZ * 2 };
+        if (!commit.replace) added.push(item);
+      }
+      if (added.length) addAndSelect(added);
+      else { markDirty(); rebuildInspector(); }
+    },
+  });
+  bar.appendChild(foliageTool.panel);
+
   const surfaceSettingsRow = el("div", "ed-row");
   surfaceSettingsRow.append(labelWrap("max slope°", mushroomSlope), mushroomStatus);
   bar.appendChild(surfaceSettingsRow);
   function refreshFoliageControls(): void {
+    const decorativePlant = tool === "hangingVine" || tool === "fern";
+    bar.classList.toggle("ed-foliage-active", decorativePlant);
+    for (const row of [rootsRow, boulderRow, dirtRow, vineRow]) row.style.display = decorativePlant ? "none" : "";
     mushroomRow.style.display = tool === "mushroom" ? "" : "none";
     grassRow.style.display = tool === "grass" ? "" : "none";
     plantRow.style.display = tool === "plant" ? "" : "none";
+    foliageTool.refresh(tool, mode !== "test");
     surfaceSettingsRow.style.display = isSurfaceTool(tool) ? "" : "none";
   }
 
@@ -3006,6 +3077,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     mushroom: button("+ Mushrooms", () => setTool("mushroom")),
     grass: button("+ Grass", () => setTool("grass")),
     plant: button("+ Plants", () => setTool("plant")),
+    hangingVine: button("+ Hanging vine", () => setTool("hangingVine")),
+    fern: button("+ Fern", () => setTool("fern")),
     glow: button("+ Glow", () => setTool("glow")),
     fireflies: button("+ Fireflies", () => setTool("fireflies")),
     rock: button("+ Rock", () => setTool("rock")),
@@ -3021,6 +3094,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     "Click an outline onto a model in Visuals, then Enter to close it; Generate grass grows low-poly grass tufts on the covered faces. Switching between Grass and Plants keeps the outline, so one outline can carry both.";
   toolBtns.plant.title =
     "Click an outline onto a model in Visuals, then Enter to close it; Generate plants grows the ticked cave plants (alocasia, bird's nest, ferns, creepers, hanging ivy) on the covered faces. With hanging ivy ticked the outline also takes the faces that look down.";
+  toolBtns.hangingVine.title = "Click a root and crawl direction on one model. Preview grows the vine; Apply saves it. Edit selected plant restores its recipe.";
+  toolBtns.fern.title = "Click a fern crown on a model, or select a model and Preview scatter. Preview checks the shape; Apply saves the plants.";
   toolBtns.geometry.title =
     "Click to drop a geometry object; drag to size it. It is DRAWN and never simulated - nothing collides with it, the rope does not wrap it, no force reaches it. Give it a mesh or a texture on the panel; drop it on a selected body to have it ride that body.";
   // The path tool's tooltip is the active layer's (see `refreshToolButtons`):
@@ -3089,6 +3164,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     toolBtns.mushroom,
     toolBtns.grass,
     toolBtns.plant,
+    toolBtns.hangingVine,
+    toolBtns.fern,
     toolBtns.glow,
     toolBtns.fireflies,
     kindWrap,
@@ -3721,7 +3798,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // than a crosshair over a canvas that will not draw.
     // ...except the mushroom and grass outline, which is drawn IN the scene and
     // so draws at any orbit.
-    canvas.style.cursor = isSurfaceTool(tool) ? "crosshair"
+    canvas.style.cursor = isSurfaceTool(tool) || tool === "hangingVine" || tool === "fern" ? "crosshair"
       : orbited() || tool === "select" ? "default" : "crosshair";
   }
   // Does the current workspace offer this tool (`TOOL_WORKSPACES`)?
@@ -3744,6 +3821,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (!isSurfaceTool(t)) cancelSurfaceDraft();
     if (t !== "mushrooms") surfaceLoop.clear();
     tool = t;
+    foliageTool.refresh(tool, mode !== "test");
     // The plant tool cuts the outline differently (see `plantsKeepOverhangs`).
     if (surfaceDraft?.closed) refreshSurfaceSelection();
     describeSurface();
@@ -10865,6 +10943,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       surfaceClick(scr);
       return;
     }
+    if (tool === "hangingVine" || tool === "fern") {
+      foliageTool.click(scr);
+      return;
+    }
     const world = canvasWorld(scr);
     dragMoved = false;
     dragPushed = false;
@@ -12146,6 +12228,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (e.code === "Escape") {
       if (mode === "test") stopTest();
       else if (surfaceDraft) cancelSurfaceDraft();
+      else if (foliageTool.hasDraft() && (tool === "hangingVine" || tool === "fern")) {
+        foliageTool.cancel();
+      }
       else if (polyDraft) cancelPolyDraft();
       else if (!surfaceLoop.empty) {
         surfaceLoop.clear();
@@ -12426,6 +12511,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       what = n
         ? `${n} point${n === 1 ? "" : "s"} on the model${n >= 3 ? " · Enter or the first point closes" : ""} · Backspace drops the last · Esc cancels`
         : "click a loop onto a drawn model's faces · Enter or the first point closes it";
+    } else if (tool === "hangingVine") {
+      what = "click root and direction · Preview vine · Apply saves it · Edit selected plant loads its recipe";
+    } else if (tool === "fern") {
+      what = "click a fern crown on a rock · Preview fern or scatter · Apply saves the plants";
     } else if (isSurfaceTool(tool)) {
       what = "click an outline onto the model · Enter closes · Backspace drops the last · Generate above grows the patch · Esc cancels";
     } else if (tool === "geometry") {
@@ -12452,6 +12541,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // The mushroom outline is editing chrome in the scene; a test borrows the
     // same scene and must not show it.
     if (surfaceView) surfaceView.group.visible = mode !== "test" && !!surfaceDraft?.points.length;
+    foliageTool.refresh(tool, mode !== "test");
     if (mode === "test" && testLevel) {
       if (lastNow < 0) lastNow = now;
       let dt = (now - lastNow) / 1000;

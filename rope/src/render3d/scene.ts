@@ -56,6 +56,7 @@ import {
   type ViewPose,
   type ViewProjection,
 } from "./space";
+import { updateFoliageWind } from "./foliage/wind";
 import { updateWater, waterTextures } from "./water";
 import { beltRenderTime } from "../render/beltTread";
 
@@ -1016,6 +1017,7 @@ export class Scene3D {
     // `updateWater`).
     const viewportHeight = rect ? rect.h : this.size.y;
     updateWater(clock, viewportHeight);
+    updateFoliageWind(clock);
 
     // Bodies come and go at runtime (the hook is destroyed and rebuilt on every
     // throw, the sandbox spawns rocks), so the visual set is reconciled rather

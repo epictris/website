@@ -1,0 +1,15 @@
+.ed-foliage { display: flex; flex-direction: column; gap: 8px; max-width: 100%; padding: 8px 0; }
+.ed-bar:has(.ed-foliage) { max-width: calc(100vw - 238px); max-height: calc(100vh - 16px); overflow-y: auto; box-sizing: border-box; }
+.ed-bar.ed-foliage-active { width: 440px; max-height: calc(100vh - 80px); scrollbar-width: thin; scrollbar-color: #3c445c transparent; }
+.ed-foliage .ed-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.ed-foliage-field { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; }
+.ed-foliage-field input[type=number] { width: 72px; }
+.ed-foliage summary { cursor: pointer; pointer-events: auto; font-size: 12px; padding: 5px 0; }
+.ed-foliage-leaves { display: flex; flex-wrap: wrap; gap: 5px; max-height: 190px; overflow-y: auto; padding: 4px; }
+.ed-foliage-leaves button { display: flex; flex-direction: column; align-items: center; min-width: 64px; font-size: 10px; }
+.ed-foliage-leaves img { width: 40px; height: 40px; object-fit: contain; }
+.ed-foliage [aria-pressed=true] { outline: 2px solid #83b9f1; outline-offset: -2px; }
+.ed-foliage-swatches { display: flex; flex-wrap: wrap; gap: 4px; }
+.ed-foliage-swatches button::before { content: ""; display: inline-block; width: 12px; height: 12px; margin-right: 4px; background: var(--leaf-colour); border-radius: 2px; }
+.ed-foliage button:focus-visible, .ed-foliage input:focus-visible, .ed-foliage select:focus-visible { outline: 2px solid #83b9f1; outline-offset: 2px; }
+@media (max-width: 760px) { .ed-bar.ed-foliage-active { width: 340px; } .ed-foliage .ed-row { gap: 6px; } .ed-foliage .ed-btn { min-height: 32px; } }

@@ -3,6 +3,8 @@ import { rootGenerator } from "./src/server/rootGenerator";
 import { boulderGenerator } from "./src/server/boulderGenerator";
 import { dirtMossGenerator } from "./src/server/dirtMossGenerator";
 import { vineGenerator } from "./src/server/vineGenerator";
+import { foliageGenerator } from "./src/server/foliageGenerator";
+import { hangingVineGenerator } from "./src/server/hangingVineGenerator";
 import { mushroomGenerator } from "./src/server/mushroomGenerator";
 import { grassGenerator } from "./src/server/grassGenerator";
 import { plantGenerator } from "./src/server/plantGenerator";
@@ -535,6 +537,7 @@ export default defineConfig({
       // /api/levels, and the preload list re-reads the file off disk per page
       // load (see `storeScript`). Reload by hand to pick up a level edit.
       ignored: [
+        "**/artifacts/**",
         "**/levels/*.json",
         // Generated meshes land here while the editor is open; they are
         // fetched by key, never imported, so a write must not reach HMR.
@@ -580,6 +583,8 @@ export default defineConfig({
     boulderGenerator(),
     dirtMossGenerator(),
     vineGenerator(),
+    hangingVineGenerator(),
+    foliageGenerator(),
     mushroomGenerator(),
     grassGenerator(),
     plantGenerator(),

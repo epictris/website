@@ -35,6 +35,7 @@
 // mesh that has not arrived yet never blocks the frame or the sim.
 
 import * as THREE from "three";
+import { attachFoliageWind } from "./foliage/wind";
 import { generatedRootAsset } from "./generatedRoots";
 import { generatedBoulderAsset } from "./generatedBoulders";
 import { generatedDirtMossAsset } from "./generatedDirtMoss";
@@ -3531,6 +3532,7 @@ export function loadMesh(key: string): Promise<THREE.Object3D | null> {
     holder.scale.setScalar(asset.scale ?? 1);
     holder.rotation.set(asset.rotX ?? 0, asset.rotY ?? 0, asset.rotZ ?? 0);
     holder.add(obj);
+    if (key.startsWith("foliage-v1:")) attachFoliageWind(holder);
     return holder as THREE.Object3D;
   });
 }
