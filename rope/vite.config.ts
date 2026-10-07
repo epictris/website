@@ -1,4 +1,6 @@
 import { defineConfig, normalizePath, type HtmlTagDescriptor, type Plugin } from "vite";
+import { foliageGenerator } from "./src/server/foliageGenerator";
+import { hangingVineGenerator } from "./src/server/hangingVineGenerator";
 import { buildSync } from "esbuild";
 import {
   existsSync,
@@ -555,6 +557,8 @@ export default defineConfig({
     },
   },
   plugins: [
+    foliageGenerator(),
+    hangingVineGenerator(),
     treeStampPlugin(),
     levelHashesPlugin(),
     storeScript(),

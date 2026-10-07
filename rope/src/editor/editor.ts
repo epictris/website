@@ -3,6 +3,7 @@
 // and saves/loads levels from disk through the dev-server API.
 
 import { Vec2 } from "../engine/vec2";
+import { createSceneFoliageTool } from "./sceneFoliageTool";
 import { PIXELS_PER_METER, PX } from "../engine/units";
 import { BALL_ZOOM, GRAPPLE_ZOOM, screenToWorld, worldToScreen, type Camera } from "../render/camera";
 import { LETTERBOX_COLOR, VIEW_HEIGHT, VIEW_WIDTH, viewTransform } from "../render/viewport";
@@ -302,7 +303,9 @@ type Tool =
   | "vine"
   | "light"
   | "glow"
-  | "fireflies";
+  | "fireflies"
+  | "hangingVine"
+  | "fern";
 
 // Which tools each layer offers. A shape tool has no meaning on the notes layer
 // (a note is a text box or an arrow, never a circle) and vice versa, so the
@@ -326,6 +329,8 @@ const LAYER_TOOLS: Record<EdLayer, Tool[]> = {
     "fireflies",
     "chain",
     "vine",
+    "hangingVine",
+    "fern",
   ],
   camera: ["select", "rect", "circle", "poly", "path"],
   // A firefly path is a route and nothing else: no regions to draw.
@@ -340,7 +345,7 @@ const LAYER_TOOLS: Record<EdLayer, Tool[]> = {
 // ones whose gesture and feedback live on the 2D overlay: a chain and a vine
 // are strung from collision outline to collision outline with a draft the
 // overlay draws, and neither is drawn by the guides.
-type ToolWorkspace = "both" | "level";
+type ToolWorkspace = "both" | "level" | "visuals";
 const TOOL_WORKSPACES: Record<Tool, ToolWorkspace> = {
   select: "both",
   rect: "both",
@@ -356,6 +361,8 @@ const TOOL_WORKSPACES: Record<Tool, ToolWorkspace> = {
   light: "both",
   glow: "both",
   fireflies: "both",
+  hangingVine: "visuals",
+  fern: "visuals",
 };
 
 // Kinds a chain may be tied to. An area is a region, not a body - nothing hangs
@@ -934,6 +941,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // undo is meant to be restoring.
     meta: { ...m.meta },
     scene: m.scene,
+    foliage: structuredClone(m.foliage ?? []),
   });
   const resetHistory = (): void => {
     history.length = 0;
@@ -1979,6 +1987,19 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // Toolbar.
   const bar = el("div", "ed-bar");
   root.appendChild(bar);
+  const foliageTool = scene3d ? createSceneFoliageTool({
+    scene: scene3d.foliage, layer: scene3d.editorLayer, camera: scene3d.camera,
+    ndc: screen => {
+      if (!inVisuals() || !visuals) return null;
+      const point = visuals.ndc(new Vec2(screen.x, screen.y));
+      return [point.x, point.y];
+    },
+    revision: () => modelRev,
+    editable: () => mode === "edit" && sceneRev === modelRev && !lockedLayers.has("scene"),
+    records: () => model.foliage ?? [],
+    commit: records => { beginAction(); model.foliage = records; markDirty(); },
+    activate: kind => setTool(kind),
+  }) : null;
 
   // The workspace switcher, at the top because it changes what everything
   // below it means: which view is driven, which tools are offered, what the
@@ -2057,6 +2078,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     light: button("+ Light", () => setTool("light")),
     glow: button("+ Glow", () => setTool("glow")),
     fireflies: button("+ Fireflies", () => setTool("fireflies")),
+    hangingVine: button("+ Hanging vine", () => setTool("hangingVine")),
+    fern: button("+ Fern", () => setTool("fern")),
   };
   // The path tool's tooltip is the active layer's (see `refreshToolButtons`):
   // the one gesture draws three different things.
@@ -2120,10 +2143,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     toolBtns.light,
     toolBtns.glow,
     toolBtns.fireflies,
+    toolBtns.hangingVine,
+    toolBtns.fern,
     kindWrap,
   );
 
   // Layer list: which layer is being edited (Tab cycles), plus a visibility
+  if (foliageTool) bar.appendChild(foliageTool.panel);
   // toggle each. Visibility is independent of active — a hidden active layer
   // would be an invisible edit target, so hiding one also moves the edit focus.
   // It stacks vertically, with the visibility boxes in a column down the left:
@@ -2694,7 +2720,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // Does the current workspace offer this tool (`TOOL_WORKSPACES`)?
   function toolOffered(t: Tool): boolean {
     const w = TOOL_WORKSPACES[t];
-    return w === "both" || !inVisuals();
+    return w === "both" || (w === "visuals" ? inVisuals() : !inVisuals());
   }
   function setTool(t: Tool): void {
     if (!LAYER_TOOLS[activeLayer].includes(t)) return;
@@ -8556,6 +8582,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     }
     if (e.button !== 0) return;
     const scr = pointerScreen(e);
+    if (tool === "hangingVine" || tool === "fern") {
+      foliageTool?.click(scr); e.preventDefault(); return;
+    }
     const world = canvasWorld(scr);
     dragMoved = false;
     dragPushed = false;
@@ -9803,6 +9832,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   window.addEventListener("keydown", (e) => {
     if (e.code === "Escape") {
       if (mode === "test") stopTest();
+      else if (foliageTool?.hasDraft() && (tool === "hangingVine" || tool === "fern")) foliageTool.cancel();
       else if (polyDraft) cancelPolyDraft();
       // The vertex selection goes first, for the reason a click on empty space
       // drops it first: it is the innermost thing selected, and dropping it is
@@ -10179,6 +10209,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // only on selection. It is a revision check and a class toggle per row
       // unless the model actually moved.
       refreshOutliner();
+      foliageTool?.refresh(tool, inVisuals() && activeLayer === "scene");
+      bar.classList.toggle("ed-foliage-active", inVisuals() && (tool === "hangingVine" || tool === "fern"));
       // The scene first, then the editor's own canvas over it. Both are driven
       // from the SAME free camera through `space.ts`, so an outline drawn on top
       // lands on the geometry it describes underneath at any pan or zoom - which

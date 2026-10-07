@@ -1,0 +1,606 @@
+{
+ "atlasSize": [
+  2048,
+  2387
+ ],
+ "leaves": [
+  {
+   "id": "paint-1",
+   "geometryAspect": 0.9308,
+   "baseUv": [
+    0.4895,
+    0.065
+   ],
+   "atlasRect": [
+    0.01758,
+    0.86804,
+    0.13135,
+    0.12107
+   ],
+   "scale": 0.961,
+   "keepColour": true,
+   "avgColour": "#84ac52"
+  },
+  {
+   "id": "paint-2",
+   "geometryAspect": 0.7484,
+   "baseUv": [
+    0.4866,
+    0.0146
+   ],
+   "atlasRect": [
+    0.19141,
+    0.86217,
+    0.11621,
+    0.13322
+   ],
+   "scale": 0.956,
+   "keepColour": true,
+   "avgColour": "#81aa54"
+  },
+  {
+   "id": "paint-3",
+   "geometryAspect": 0.8006,
+   "baseUv": [
+    0.5056,
+    0.0174
+   ],
+   "atlasRect": [
+    0.35059,
+    0.8584,
+    0.13086,
+    0.14034
+   ],
+   "scale": 1.097,
+   "keepColour": true,
+   "avgColour": "#86ae52"
+  },
+  {
+   "id": "paint-4",
+   "geometryAspect": 0.6833,
+   "baseUv": [
+    0.4978,
+    0.0119
+   ],
+   "atlasRect": [
+    0.52686,
+    0.8584,
+    0.11133,
+    0.14034
+   ],
+   "scale": 0.983,
+   "keepColour": true,
+   "avgColour": "#88af52"
+  },
+  {
+   "id": "paint-5",
+   "geometryAspect": 0.8109,
+   "baseUv": [
+    0.4886,
+    0.017
+   ],
+   "atlasRect": [
+    0.6875,
+    0.86343,
+    0.12354,
+    0.13071
+   ],
+   "scale": 0.971,
+   "keepColour": true,
+   "avgColour": "#84ac52"
+  },
+  {
+   "id": "paint-6",
+   "geometryAspect": 0.8994,
+   "baseUv": [
+    0.5032,
+    0.0244
+   ],
+   "atlasRect": [
+    0.84375,
+    0.86008,
+    0.14404,
+    0.13741
+   ],
+   "scale": 1.065,
+   "keepColour": true,
+   "avgColour": "#84ac52"
+  },
+  {
+   "id": "paint-7",
+   "geometryAspect": 0.7508,
+   "baseUv": [
+    0.5105,
+    0.0132
+   ],
+   "atlasRect": [
+    0.02344,
+    0.71764,
+    0.11914,
+    0.13615
+   ],
+   "scale": 0.972,
+   "keepColour": true,
+   "avgColour": "#7fa852"
+  },
+  {
+   "id": "paint-8",
+   "geometryAspect": 0.7744,
+   "baseUv": [
+    0.4795,
+    0.0136
+   ],
+   "atlasRect": [
+    0.1875,
+    0.71722,
+    0.12402,
+    0.13741
+   ],
+   "scale": 0.998,
+   "keepColour": true,
+   "avgColour": "#7fa852"
+  },
+  {
+   "id": "paint-9",
+   "geometryAspect": 0.7679,
+   "baseUv": [
+    0.4934,
+    0.0179
+   ],
+   "atlasRect": [
+    0.35352,
+    0.71554,
+    0.12549,
+    0.14034
+   ],
+   "scale": 1.006,
+   "keepColour": true,
+   "avgColour": "#7fa952"
+  },
+  {
+   "id": "paint-10",
+   "geometryAspect": 0.7964,
+   "baseUv": [
+    0.4946,
+    0.03
+   ],
+   "atlasRect": [
+    0.52832,
+    0.72727,
+    0.10889,
+    0.1173
+   ],
+   "scale": 0.857,
+   "keepColour": true,
+   "avgColour": "#85ad51"
+  },
+  {
+   "id": "paint-11",
+   "geometryAspect": 0.5456,
+   "baseUv": [
+    0.4919,
+    0.0086
+   ],
+   "atlasRect": [
+    0.70459,
+    0.71554,
+    0.08887,
+    0.14034
+   ],
+   "scale": 1.192,
+   "keepColour": true,
+   "avgColour": "#84ac53"
+  },
+  {
+   "id": "paint-12",
+   "geometryAspect": 0.8221,
+   "baseUv": [
+    0.5024,
+    0.0154
+   ],
+   "atlasRect": [
+    0.8501,
+    0.71764,
+    0.13086,
+    0.13657
+   ],
+   "scale": 1.002,
+   "keepColour": true,
+   "avgColour": "#7fa752"
+  },
+  {
+   "id": "paint-13",
+   "geometryAspect": 0.6915,
+   "baseUv": [
+    0.4853,
+    0.0115
+   ],
+   "atlasRect": [
+    0.02686,
+    0.57269,
+    0.11279,
+    0.14034
+   ],
+   "scale": 1.071,
+   "keepColour": true,
+   "avgColour": "#80a852"
+  },
+  {
+   "id": "paint-14",
+   "geometryAspect": 0.8088,
+   "baseUv": [
+    0.4839,
+    0.0154
+   ],
+   "atlasRect": [
+    0.18359,
+    0.57269,
+    0.13184,
+    0.14034
+   ],
+   "scale": 1.038,
+   "keepColour": true,
+   "avgColour": "#83ab52"
+  },
+  {
+   "id": "leaf-1",
+   "geometryAspect": 1.0755,
+   "baseUv": [
+    0.5041,
+    0.0148
+   ],
+   "atlasRect": [
+    0.33447,
+    0.57771,
+    0.16357,
+    0.13029
+   ],
+   "scale": 1.35
+  },
+  {
+   "id": "leaf-2",
+   "geometryAspect": 0.7386,
+   "baseUv": [
+    0.4926,
+    0.033
+   ],
+   "atlasRect": [
+    0.55078,
+    0.6062,
+    0.06348,
+    0.07373
+   ],
+   "scale": 0.623
+  },
+  {
+   "id": "leaf-3",
+   "geometryAspect": 0.9399,
+   "baseUv": [
+    0.4578,
+    0.0192
+   ],
+   "atlasRect": [
+    0.67285,
+    0.5731,
+    0.15283,
+    0.13951
+   ],
+   "scale": 1.238
+  },
+  {
+   "id": "leaf-4",
+   "geometryAspect": 0.8873,
+   "baseUv": [
+    0.4923,
+    0.0263
+   ],
+   "atlasRect": [
+    0.84326,
+    0.57269,
+    0.14502,
+    0.14034
+   ],
+   "scale": 1.35
+  },
+  {
+   "id": "leaf-5",
+   "geometryAspect": 0.9153,
+   "baseUv": [
+    0.4786,
+    0.0244
+   ],
+   "atlasRect": [
+    0.02783,
+    0.44826,
+    0.11084,
+    0.1039
+   ],
+   "scale": 0.959
+  },
+  {
+   "id": "leaf-6",
+   "geometryAspect": 1.0235,
+   "baseUv": [
+    0.5404,
+    0.136
+   ],
+   "atlasRect": [
+    0.19629,
+    0.45538,
+    0.10645,
+    0.08923
+   ],
+   "scale": 0.905
+  },
+  {
+   "id": "leaf-7",
+   "geometryAspect": 1.0691,
+   "baseUv": [
+    0.4818,
+    0.1548
+   ],
+   "atlasRect": [
+    0.33691,
+    0.43653,
+    0.15869,
+    0.12736
+   ],
+   "scale": 1.286
+  },
+  {
+   "id": "leaf-8",
+   "geometryAspect": 0.989,
+   "baseUv": [
+    0.5056,
+    0.0477
+   ],
+   "atlasRect": [
+    0.53906,
+    0.46209,
+    0.0874,
+    0.07583
+   ],
+   "scale": 0.737
+  },
+  {
+   "id": "leaf-9",
+   "geometryAspect": 0.892,
+   "baseUv": [
+    0.5725,
+    0.0755
+   ],
+   "atlasRect": [
+    0.71094,
+    0.46334,
+    0.07666,
+    0.07373
+   ],
+   "scale": 0.644
+  },
+  {
+   "id": "leaf-10",
+   "geometryAspect": 0.92,
+   "baseUv": [
+    0.4946,
+    0.0239
+   ],
+   "atlasRect": [
+    0.84814,
+    0.43737,
+    0.13477,
+    0.12568
+   ],
+   "scale": 1.148
+  },
+  {
+   "id": "leaf-11",
+   "geometryAspect": 1.1837,
+   "baseUv": [
+    0.5529,
+    0.0294
+   ],
+   "atlasRect": [
+    0.04053,
+    0.32635,
+    0.08496,
+    0.06158
+   ],
+   "scale": 0.617
+  },
+  {
+   "id": "leaf-12",
+   "geometryAspect": 0.9403,
+   "baseUv": [
+    0.3955,
+    0.1157
+   ],
+   "atlasRect": [
+    0.17285,
+    0.28697,
+    0.15381,
+    0.14034
+   ],
+   "scale": 1.35
+  },
+  {
+   "id": "leaf-13",
+   "geometryAspect": 0.9312,
+   "baseUv": [
+    0.4779,
+    0.0186
+   ],
+   "atlasRect": [
+    0.35986,
+    0.3054,
+    0.1123,
+    0.10348
+   ],
+   "scale": 0.949
+  },
+  {
+   "id": "leaf-14",
+   "geometryAspect": 1.0678,
+   "baseUv": [
+    0.5547,
+    0.1183
+   ],
+   "atlasRect": [
+    0.53662,
+    0.32007,
+    0.09229,
+    0.07415
+   ],
+   "scale": 0.731
+  },
+  {
+   "id": "leaf-15",
+   "geometryAspect": 1.0485,
+   "baseUv": [
+    0.5106,
+    0.1931
+   ],
+   "atlasRect": [
+    0.70703,
+    0.32258,
+    0.08447,
+    0.06912
+   ],
+   "scale": 0.705
+  },
+  {
+   "id": "leaf-16",
+   "geometryAspect": 0.9549,
+   "baseUv": [
+    0.4136,
+    0.2024
+   ],
+   "atlasRect": [
+    0.83789,
+    0.28697,
+    0.15576,
+    0.14034
+   ],
+   "scale": 1.35
+  },
+  {
+   "id": "leaf-17",
+   "geometryAspect": 0.9458,
+   "baseUv": [
+    0.4845,
+    0.1409
+   ],
+   "atlasRect": [
+    0.00586,
+    0.14411,
+    0.1543,
+    0.14034
+   ],
+   "scale": 1.35
+  },
+  {
+   "id": "leaf-18",
+   "geometryAspect": 1.1676,
+   "baseUv": [
+    0.57,
+    0.174
+   ],
+   "atlasRect": [
+    0.19678,
+    0.17553,
+    0.10547,
+    0.0775
+   ],
+   "scale": 0.833
+  },
+  {
+   "id": "leaf-19",
+   "geometryAspect": 1.0252,
+   "baseUv": [
+    0.4866,
+    0.104
+   ],
+   "atlasRect": [
+    0.33691,
+    0.14788,
+    0.15869,
+    0.1328
+   ],
+   "scale": 1.325
+  },
+  {
+   "id": "leaf-20",
+   "geometryAspect": 0.7836,
+   "baseUv": [
+    0.5365,
+    0.0297
+   ],
+   "atlasRect": [
+    0.5498,
+    0.17847,
+    0.06543,
+    0.07164
+   ],
+   "scale": 0.599
+  },
+  {
+   "id": "leaf-21",
+   "geometryAspect": 0.976,
+   "baseUv": [
+    0.4995,
+    0.0233
+   ],
+   "atlasRect": [
+    0.68945,
+    0.16213,
+    0.11914,
+    0.10473
+   ],
+   "scale": 1.039
+  },
+  {
+   "id": "leaf-22",
+   "geometryAspect": 0.9265,
+   "baseUv": [
+    0.6453,
+    0.3661
+   ],
+   "atlasRect": [
+    0.86963,
+    0.17176,
+    0.09229,
+    0.08546
+   ],
+   "scale": 0.776
+  },
+  {
+   "id": "leaf-23",
+   "geometryAspect": 1.0423,
+   "baseUv": [
+    0.4907,
+    0.1568
+   ],
+   "atlasRect": [
+    0.01709,
+    0.01718,
+    0.13232,
+    0.10892
+   ],
+   "scale": 1.116
+  },
+  {
+   "id": "leaf-24",
+   "geometryAspect": 0.8357,
+   "baseUv": [
+    0.4722,
+    0.2126
+   ],
+   "atlasRect": [
+    0.19141,
+    0.01173,
+    0.1167,
+    0.11982
+   ],
+   "scale": 1.085
+  }
+ ]
+}

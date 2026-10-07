@@ -2199,6 +2199,8 @@ export interface LevelMetaData {
 }
 
 export interface LevelData {
+  /** Host-local, metre-space decorative models; no collision or simulation state. */
+  foliage?: import("../render3d/foliageScene").ScenePlantData[];
   player: SpawnData;
   bodies: LevelBodyData[];
   // What the level select shows (see `LevelMetaData`). Absent = a listed level
@@ -2364,6 +2366,7 @@ export interface RawLevelData {
   checkpoints?: CheckpointData[];
   chains?: (ChainData | LegacyChainData)[];
   vines?: VineData[];
+  foliage?: import("../render3d/foliageScene").ScenePlantData[];
   environment?: EnvironmentData;
   camera?: LevelCameraData;
   scene?: string;
@@ -3255,6 +3258,7 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
       : {}),
     // A name, not a length (see `LevelData.scene`).
     ...(data.scene !== undefined ? { scene: data.scene } : {}),
+    ...(data.foliage?.length ? { foliage: structuredClone(data.foliage) } : {}),
     ...(notes ? { notes } : {}),
     ...(checkpoints ? { checkpoints } : {}),
     ...(chains ? { chains } : {}),

@@ -752,6 +752,7 @@ export interface EdBodyFrame {
 }
 
 export interface EdModel {
+  foliage?: import("../render3d/foliageScene").ScenePlantData[];
   // The spawn: where it is, how big the avatar is, whether the run starts on
   // the anchor (`SpawnData.hang`), how far off to the side it rolls in from
   // (`SpawnData.roll`, metres here as every length in the model is, 0 for no
@@ -1759,6 +1760,7 @@ function lightItem(
     camera: data.camera ? { ...data.camera } : undefined,
     meta: { ...data.meta },
     scene: data.scene ?? "",
+    foliage: structuredClone(data.foliage ?? []),
   };
 }
 
@@ -2349,6 +2351,7 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
     ...(model.environment ? { environment: { ...model.environment } } : {}),
     ...(model.camera ? { camera: { ...model.camera } } : {}),
     ...(model.scene ? { scene: model.scene } : {}),
+    ...(model.foliage?.length ? { foliage: structuredClone(model.foliage) } : {}),
     ...(notes.length ? { notes } : {}),
     ...(checkpoints.length ? { checkpoints } : {}),
     ...(chains.length ? { chains } : {}),

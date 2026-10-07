@@ -43,6 +43,7 @@ import {
   studyPalette,
   waterSurfaceMap,
   waterTime,
+  WATER_HIGHLIGHT_GLSL,
 } from "./waterLook";
 
 // ---------------------------------------------------------------------------
@@ -361,7 +362,7 @@ export function stillWaterMaterial(
   frontZ: number,
   plane: { reflect: { value: number }; footprint: { value: THREE.Vector4 } } | null = null,
 ): StillWaterMaterial {
-  const { deep, shallow, light } = studyPalette(color);
+  const { deep, shallow, light, highlight, gleam } = studyPalette(color);
   const reflect = plane ? plane.reflect : { value: 0 };
   const openBehind = { value: CAPS_CLOSED };
   const footprint = plane ? plane.footprint : { value: new THREE.Vector4() };
@@ -404,6 +405,8 @@ export function stillWaterMaterial(
     shader.uniforms.uDeep = { value: deep };
     shader.uniforms.uShallow = { value: shallow };
     shader.uniforms.uLight = { value: light };
+    shader.uniforms.uHighlight = { value: highlight };
+    shader.uniforms.uGleam = { value: gleam };
     shader.uniforms.uRippleAt = rippleAt;
     shader.uniforms.uRippleHow = rippleHow;
 
@@ -444,6 +447,7 @@ export function stillWaterMaterial(
     );
 
     shader.fragmentShader = `
+      ${WATER_HIGHLIGHT_GLSL}
       uniform float uTime;
       uniform sampler2D uSurfaceMap;
       uniform sampler2D uReflection;
@@ -624,6 +628,7 @@ export function stillWaterMaterial(
         * vec4(vec3(swDepthUV, texture2D(uReflectionDepth, swReflectionAt(swDepthUV)).r) * 2.0 - 1.0, 1.0);
       float swNear = 1.0 - smoothstep(${fmt(REFLECT_NEAR)}, ${fmt(REFLECT_FAR)}, length(swHit.xyz / swHit.w - vWorld));
       float swMirrorW = ${fmt(REFLECTION)} * mix(0.13 + swFresnel * 0.32, 0.82 + swFresnel * 0.16, swNear) * uReflect;
+      swMirrorW *= 1.0 - impactAeration(vWorld) * vUp * 0.62;
       swCol = mix(swCol, swMirror, clamp(swMirrorW, 0.0, 0.92));
 
       // A broad highlight from the cave's opening rather than a sun's hot
@@ -631,6 +636,13 @@ export function stillWaterMaterial(
       vec3 swHalf = normalize(swEye + normalize(vec3(-0.36, 0.78, -0.43)));
       swCol += uLight * pow(max(0.0, dot(swN, swHalf)), 100.0) * 0.16 * ${fmt(RIPPLE_STRENGTH)};
       swCol += uLight * swCrest * ${fmt(CONTRAST * 0.16)};
+      // The two palest shades catch only the nearest strip of the pool.
+      // Drifting wave grain breaks up the fade so it cannot read as a band.
+      float swHighlightDepth = vDepth + (swA.a - 0.5) * 0.05;
+      float swHighlightNear = smoothstep(0.78, 0.98, swHighlightDepth);
+      float swHighlightPatch = smoothstep(0.26, 0.70, swA.a * 0.6 + swB.a * 0.4);
+      swCol = waterHighlights(swCol, swFacing, swB.b, swA.a,
+        swHighlightNear * swHighlightPatch * 0.95 * vUp);
       swCol += uLight * swWake;
       swCol = mix(swCol, mix(uLight, vec3(1.0), ${fmt(STROKE_COLOR)}), swStroke * ${fmt(STROKE_OPACITY)});
       // A fall's whitewater footprint and broken rings, over the mirror.

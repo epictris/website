@@ -10,9 +10,8 @@
 // spectrum read in the current's frame (soft light bands, a crest, colour
 // drifting down the channel, a pale milky wash streaming along the flow and
 // opaque at the banks and the brink); the falling sheet drawn out into long
-// ribbons under gravity; and at the landing a frothing crown, plumes, splash
-// ribbons, spray and a whitewater footprint with broken rings on the water it
-// lands in. The port is shader for shader, with the study's numbers, in study
+// ribbons under gravity; and at the landing low foam rolls and a whitewater
+// footprint with broken rings on the receiving water. The shaders use study
 // metres (STUDY_SCALE, see waterLook.ts); what had to change is listed in the
 // docs and at each site.
 //
@@ -28,6 +27,7 @@ import { FRONT_INSET, poolGeometry, stillWaterMaterial, type StillSurface } from
 import {
   DEPTH_STRETCH,
   fmt,
+  FOAM_REACH_GLSL,
   freeImpactSlot,
   IMPACT_GLSL,
   impactAt,
@@ -40,6 +40,7 @@ import {
   takeImpactSlot,
   waterSurfaceMap,
   waterTime,
+  WATER_HIGHLIGHT_GLSL,
 } from "./waterLook";
 
 export { waterTime } from "./waterLook";
@@ -67,14 +68,12 @@ const CHURN = 1.0;
 // PAINTED_HARMONICS). And how far the falling sheet's edges wander (study
 // metres).
 const WAVE_AMPLITUDE = 0.085;
-const EDGE_MOTION = 0.026;
+const EDGE_MOTION = 0.008;
 // The wash: the river's (the study's default 1.32 is its unit here) and the
 // fall's whitewater.
 const RIVER_FOAM = 1.0;
 const FALL_FOAM = 1.0;
-// The crown's relief and foam amount. Froth strength is derived separately
-// from the actual landing speed.
-const FOAM_HEIGHT = 1.15;
+// Foam amount. Froth strength is derived from the actual landing speed.
 const IMPACT_FOAM = 1.0;
 // The study's river ran across its world at z -5.7, a fixed share of the way
 // from its far wall to its camera, and paled its light bands by that share.
@@ -122,6 +121,9 @@ const FALL_OVERSHOOT = 0.2;
 // How far under the water it lands in the falling sheet is still drawn,
 // metres (that surface waves by ~4 cm).
 const FALL_SINK = 0.06;
+// Bed friction slows the rock-facing layer at the ledge. Each layer then
+// follows its own ballistic path; do not inflate the outside of the sheet.
+const FALL_BED_SPEED = 0.55;
 // THE RIVER'S GEOMETRY is the painted channel's wave train (its WAVE_*
 // constants before the port), chosen over the study's relief by A/B on
 // 2026-10-06 (Tris): gentle rolling crests rather than the study's tighter,
@@ -148,11 +150,8 @@ const RIM_DOWN = 0.03;
 // opaque, as the study's water is.
 const ALPHA_FRONT_TOP = 0.94;
 const ALPHA_FRONT_BED = 0.8;
-// Separate compact splashes from the much softer, longer-lived mist.
+// Low, overlapping rolls of foam at the contact, with no airborne mist.
 const PLUMES = 40;
-const MISTS = 48;
-// Additional low mist puffs, kept at the contact rather than rising with the veil.
-const BASE_MISTS = 40;
 const FOAM_PATCHES = 88;
 
 // ---------------------------------------------------------------------------
@@ -250,14 +249,10 @@ const smooth = (t: number): number => {
 // The run and its fall as one closed tube, in the body's local frame (three's
 // y-up: local +x the flow axis, +z toward the camera). The river's stations
 // carry the section from the upstream end to the lip; the fall's carry the
-// lip's section along the arc a thrown thing follows, as VERTICAL SLICES: every
-// layer of the slab leaving the lip follows the same parabola from its own
-// height, so a slice at time t is the lip's carried along the arc unturned.
-// That is the physics - the sheet's perpendicular thickness thins by exactly
-// v0/v - and it is what keeps a slab thicker than the brow's radius of
-// curvature (v0^2/g, 10 cm at 1 m/s) from folding under the lip, which the
-// study's sections perpendicular to the travel would (its 2.2 m/s lip had the
-// room; the game's do not).
+// lip's section along ballistic trajectories from each layer's launch height.
+// The rock-facing layer leaves more slowly because of bed friction. Keeping
+// the sections vertical avoids folding the thick channel under its tight brow;
+// gravity steepens the trajectories and thins the sheet along their normals.
 // Attributes beyond position and normal:
 //   aFlow    - metres travelled (study), across the top (study, stretched along
 //              the depth as the pool's pattern is), travel time (s), drop
@@ -366,7 +361,10 @@ function currentGeometry(
     const ny = side * st.tx;
     // A vertical slice (see the header): the section hangs straight down from
     // its station, whatever way the water is travelling.
-    pos.push(st.x, st.y + p.h, zMid + p.z);
+    const outer = Math.max(0, Math.min(1, 1 + p.h / st.depth));
+    const travel = st.drop > 0 && lip ? st.x - lip.x : 0;
+    const layerSpeed = FALL_BED_SPEED + (1 - FALL_BED_SPEED) * smooth(outer);
+    pos.push(st.x - travel * (1 - layerSpeed), st.y + p.h, zMid + p.z);
     const below = -p.h;
     const flat = topFlat(width / 2, r);
     const e = Math.abs(p.ell);
@@ -497,19 +495,21 @@ const WAVE_GLSL = `
     float front = pow(max(0.0, 1.0 - below / ${fmt(PAINTED_FRONT_FALLOFF)}), 2.0);
     return w * ${fmt(PAINTED_WAVE_HEIGHT / S)} * taper * front * (1.0 - smoothstep(0.0, 0.05, f.w));
   }
-  // The cascade's folding (the study's), study metres.
+  // Shallow longitudinal folds carried by the water, in study metres.
+  // Keep the silhouette steady: the old folds and 0.4..2.3 thickness pulse
+  // made the whole fall swell like a moving solid instead of a thin sheet.
   float cascadeFolds(vec4 f) {
     vec2 p = parcel(f);
-    float folded = 0.105 * sin(p.x * 3.35 + p.y * 0.36) + 0.050 * sin(p.x * 6.2 - p.y * 0.67);
-    folded += 0.055 * (pow(0.5 + 0.5 * sin(p.x * 9.4 + p.y * 0.46), 2.0) - 0.375);
+    float folded = 0.022 * sin(p.x * 3.35 + p.y * 0.16) + 0.009 * sin(p.x * 6.2 - p.y * 0.23);
+    folded += 0.004 * sin(p.x * 9.4 + p.y * 0.19);
     return folded * smoothstep(0.0, 0.46, f.w);
   }
   float thicknessField(vec4 f) {
     vec2 p = parcel(f);
     float fall = smoothstep(0.0, 0.32, f.w);
-    float ridges = pow(0.5 + 0.5 * cos(p.x * 5.1 + 0.22 * sin(p.x * 1.2 + p.y * 0.75)), 3.0);
-    float thickness = (0.43 + 2.10 * ridges) / 1.08625;
-    return mix(1.0, thickness, fall) * (1.0 + 0.13 * fall * sin(p.y * 3.1 + p.x * 2.5));
+    float ridges = sin(p.x * 5.1 + 0.12 * sin(p.x * 1.2 + p.y * 0.22));
+    float thickness = 1.0 + 0.075 * ridges + 0.025 * sin(p.x * 8.3 - p.y * 0.18);
+    return mix(1.0, thickness, fall);
   }
   // The displacement along N, study metres: the river's waves, and down the
   // fall the study's folding and the sheet's thickness ridges about its
@@ -523,6 +523,7 @@ const WAVE_GLSL = `
 // in the pool's formulation, the cascade, and the blend between them down the
 // brow. Into a MeshBasicMaterial's color_fragment (see `currentMaterial`).
 const PAINT_GLSL = `
+  ${WATER_HIGHLIGHT_GLSL}
   uniform sampler2D uSurfaceMap;
   uniform vec3 uDeep;
   uniform vec3 uShallow;
@@ -626,6 +627,7 @@ const PAINT_GLSL = `
     float specular = pow(max(0.0, dot(n, normalize(V + L))), 100.0);
     col += uLight * specular * 0.06;
     col += uLight * crest * ${fmt(CONTRAST * 0.16 * STROKES)};
+    col = waterHighlights(col, facing, b.b, a.a, vSurfaceWeight);
     // Turquoise travelling strokes become pale only at the disturbed lip.
     // Slab edges are not evidence of a rock bank: do not outline them in foam.
     float lip = exp(-pow((uLip - vFlow.x - 0.3) / 1.0, 2.0)) * uSpilling;
@@ -666,16 +668,15 @@ const PAINT_GLSL = `
     // drawn out as the water accelerates.
     vec2 pm = vec2(vUnroll, (vFlow.z - uTime) * uLipSpeed);
     // Slopes in the sheet's own frame: T down the flow, B across it. The
-    // per-ring normal is softened toward the smooth sheet normal: at full
-    // strength its ring-to-ring wiggle hatched every band edge.
-    vec3 geoRaw = normalize(vMacroNormal);
+    // Use the smooth sheet normal for light: discrete mesh rings otherwise
+    // draw tiny horizontal white hatches across the flowing streaks.
     vec3 baseN = normalize(vBaseNormal);
-    vec3 geo = normalize(mix(baseN, geoRaw, 0.45));
+    vec3 geo = baseN;
     vec3 B = vec3(0.0, 0.0, 1.0);
     vec3 rawT = cross(B, baseN);
     vec3 T = length(rawT) > 0.01 ? normalize(rawT) : vec3(uSide, 0.0, 0.0);
     vec4 a, b, c;
-    vec2 s = riverSlope(pm, mix(1.6, 3.5, fall), 1.0, a, b, c);
+    vec2 s = riverSlope(pm, mix(1.8, 6.0, fall), 0.18, a, b, c);
     vec3 N = normalize(geo - T * s.y * ${fmt(MACRO_LIGHT)} - B * s.x);
     vec3 V = normalize(cameraPosition - vWorld);
     vec3 L = normalize(vec3(-0.36, 0.78, -0.43));
@@ -699,27 +700,96 @@ const PAINT_GLSL = `
     float spec = pow(max(dot(N, normalize(V + L)), 0.0), 100.0);
     col += uLight * spec * 0.16;
     col += uLight * crest * ${fmt(CONTRAST * 0.16 * STROKES)};
+    col = waterHighlights(col, facing, b.b, a.a, 0.85);
     // Whitewater: the river's own wash carried over the brink, in the same
     // travel coordinate, so nothing ends at the lip; down the sheet it fills
     // in, brightens toward white and is cut by finer lanes as the water
     // accelerates, and the sheet's edges stay milky like the banks.
     vec2 mp = parcelAt(vUnroll, vFlow.z);
-    float streak = washStreak(mp);
+    float curtain = wfb(vec2(pm.x * 4.4 + 0.06 * sin(pm.y * 0.7), pm.y * 0.15));
+    curtain += (wn(vec2(pm.x * 18.0, pm.y * 0.38)) - 0.5) * 0.22;
+    float streak = mix(washStreak(mp), curtain, smoothstep(0.03, 0.30, vFlow.w));
     streak += ((wn(vec2(pm.x * 14.0 + 5.0, pm.y * 0.15)) - 0.5) * 0.30 + (wn(vec2(pm.x * 26.0 + 9.0, pm.y * 0.3)) - 0.5) * 0.14) * fall;
     float bankF = washBank(mp, vFlow.y) * ${fmt(RIVER_FOAM)};
-    float threshold = mix(0.645, 0.575, pow(fall, 1.2) * ${fmt(FALL_FOAM)}) - 0.08 * bankF;
+    // Fewer independent lanes, with long gaps and varied lengths; suppress
+    // the bank mask on the fall so its sides do not become white outlines.
+    bankF *= 1.0 - smoothstep(0.03, 0.24, vFlow.w);
+    float threshold = mix(0.70, 0.64, pow(fall, 0.7) * ${fmt(FALL_FOAM)}) - 0.02 * bankF;
+    float laneWidth = wn(vec2(pm.x * 3.1 + 12.7, pm.y * 0.26));
+    threshold += (laneWidth - 0.5) * 0.12;
+    float segments = smoothstep(0.35, 0.66, wfb(vec2(pm.x * 2.3 + 8.9, pm.y * 0.95)));
     float aa = max(0.012, fwidth(streak) * 0.8);
     float ribbons = smoothstep(threshold - aa, threshold + aa, streak);
     // A streak that would run wide down the sheet thins to a wash in its middle.
     ribbons *= mix(1.0, 0.5, smoothstep(threshold + 0.08, threshold + 0.2, streak) * fall);
+    ribbons *= segments;
     float core = smoothstep(threshold + 0.07 - aa, threshold + 0.07 + aa, streak);
-    float opacity = mix(0.30, 0.9, smoothstep(0.0, 0.7, fall)) + 0.2 * bankF;
+    core *= segments;
+    // On the falling sheet, explicit longitudinal strokes replace the
+    // thresholded noise islands whose short crossbars read as ladder rungs.
+    float laneCoord = pm.x * 6.3;
+    float laneId = floor(laneCoord);
+    float seed = wnHash(vec2(laneId, 5.7));
+    float laneCenter = 0.20 + seed * 0.60 + 0.035 * sin(pm.y * 0.42 + seed * 17.0);
+    float laneHalfWidth = 0.045 + 0.065 * wnHash(vec2(laneId, 13.1));
+    float laneAA = max(fwidth(laneCoord), 0.005);
+    float flowStroke = 1.0 - smoothstep(max(0.0, laneHalfWidth - laneAA * 0.5),
+      laneHalfWidth + laneAA * 0.5, abs(fract(laneCoord) - laneCenter));
+    flowStroke *= min(1.0, 2.0 * laneHalfWidth / laneAA);
+    flowStroke *= smoothstep(0.42, 0.62, seed);
+    flowStroke *= smoothstep(0.30, 0.70, wn(vec2(laneId * 4.3, pm.y * 0.48 + seed * 9.0)));
+    float strokeBlend = smoothstep(0.025, 0.14, vFlow.w);
+    ribbons = mix(ribbons, flowStroke, strokeBlend);
+    core = mix(core, flowStroke * 0.42, strokeBlend);
+    float opacity = mix(0.25, 0.70, smoothstep(0.0, 0.7, fall)) + 0.1 * bankF;
     opacity = min(opacity, 1.0) * mix(0.08, 1.0, vSurfaceWeight);
     vec3 milk = mix(uLight, vec3(0.88, 0.94, 0.95), mix(0.5, 0.9, max(fall, bankF)));
     float foamLight = 0.84 + 0.16 * max(0.0, dot(geo, L));
     col = mix(col, milk * foamLight, ribbons * opacity);
     col = mix(col, mix(milk, vec3(0.92, 0.96, 0.96), 0.5) * foamLight, core * opacity * 0.5);
-    white = ribbons * opacity;
+    // Aeration grows up from the actual receiving surface, in irregular
+    // streaming tongues. It bridges the sheet and crown without moving the
+    // entire sheet or cutting a straight white stripe across its bottom.
+    float abovePool = max(0.0, (vWorld.y - uFloor - ${fmt(FALL_SINK)}) / ${fmt(S)});
+    float landingLane = wfb(vec2(pm.x * 5.8, pm.y * 0.48));
+    float landing = 1.0 - smoothstep(0.015, 0.22 + landingLane * 0.34, abovePool);
+    float lace = wn(vec2(pm.x * 19.0, pm.y * 2.2));
+    float torn = smoothstep(0.38, 0.57, landingLane + (lace - 0.5) * 0.40 + landing * 0.43);
+    // Keep the opaque contact thin, with a longer, feathered veil climbing
+    // different distances up each flowing lane.
+    float contactWhite = 1.0 - smoothstep(0.008, 0.14 + landingLane * 0.09, abovePool);
+    float contactVeil = pow(1.0 - smoothstep(0.0, 0.30 + landingLane * 0.22, abovePool), 2.0);
+    contactWhite = mix(contactWhite, contactVeil, 0.36);
+    float aeration = landing * (0.24 + 0.66 * torn);
+    aeration += (1.0 - aeration) * contactWhite * 0.95;
+    col = mix(col, mix(uLight, vec3(0.90, 0.97, 0.98), 0.76) * foamLight, aeration);
+    // Two intermittent ribbons on the rock-facing side. Independent pulses
+    // travel down the sheet, shortening and dissolving before the next birth.
+    float layer = clamp(vBelow / max(vDepth, 0.001), 0.0, 1.0);
+    float frontSide = smoothstep(vHalfWidth - 0.008, vHalfWidth + 0.018, vUnroll);
+    float longRibbons = 0.0;
+    for (int i = 0; i < 2; i++) {
+      float lane = float(i) + 1.0;
+      float center = 0.32 + lane * 0.205;
+      center += 0.013 * sin(pm.y * (0.72 + lane * 0.19) + lane * 2.7)
+        + 0.006 * sin(pm.y * 1.9 + lane * 4.1);
+      float width = i == 0 ? 0.028 : 0.019;
+      width *= 0.75 + 0.25 * wn(vec2(pm.y * 0.8, lane * 7.3));
+      float aaLane = max(0.003, fwidth(layer) * 0.9);
+      float ribbon = 1.0 - smoothstep(width * 0.35, width + aaLane, abs(layer - center));
+      float pulse = uTime / (2.1 + lane * 0.53) + lane * 0.37;
+      float phase = fract(pulse);
+      float variation = wn(vec2(floor(pulse) * 2.7, lane * 9.1));
+      float alive = smoothstep(0.0, 0.18, phase) * (1.0 - smoothstep(0.65, 1.0, phase));
+      float start = 0.075 + variation * 0.09 + phase * 0.14;
+      float taper = smoothstep(start, start + 0.10, vFlow.w)
+        * smoothstep(0.025, 0.10 + variation * 0.10, abovePool);
+      float grain = smoothstep(0.22, 0.68, wn(vec2(pm.y * 1.3, lane * 7.8)));
+      longRibbons = max(longRibbons, ribbon * taper * alive * (0.45 + 0.55 * grain));
+    }
+    longRibbons *= frontSide;
+    col = mix(col, mix(uGleam, vec3(0.91, 0.97, 0.98), 0.74) * foamLight, longRibbons * 0.84);
+    white = max(max(ribbons * opacity, aeration), longRibbons * 0.84);
     col = mix(col, uDeep * 0.57, (1.0 - vSurfaceWeight) * 0.58 * (1.0 - fall));
     return col;
   }
@@ -749,7 +819,7 @@ interface CurrentLook {
 // channel's front: the tube is closed and its back faces culled, so what shows
 // through is the ball and the rock behind, never the water's own far side.
 function currentMaterial(look: CurrentLook): THREE.MeshBasicMaterial {
-  const { deep, shallow, light } = studyPalette(look.color);
+  const { deep, shallow, light, highlight, gleam } = studyPalette(look.color);
   const mat = new THREE.MeshBasicMaterial({
     color: shallow,
     transparent: true,
@@ -765,6 +835,8 @@ function currentMaterial(look: CurrentLook): THREE.MeshBasicMaterial {
     shader.uniforms.uDeep = { value: deep };
     shader.uniforms.uShallow = { value: shallow };
     shader.uniforms.uLight = { value: light };
+    shader.uniforms.uHighlight = { value: highlight };
+    shader.uniforms.uGleam = { value: gleam };
     shader.uniforms.uSide = { value: look.side };
     // The parcel's travel at the run's speed, and the cascade's at the lip's:
     // study metres per second.
@@ -817,8 +889,8 @@ function currentMaterial(look: CurrentLook): THREE.MeshBasicMaterial {
           - skinHeight(aFlow - vec4(0.0, ds, 0.0, 0.0), aSkin.y, aSkin.w)) / (2.0 * ds * ${fmt(DEPTH_STRETCH)});
         vec2 q = parcel(aFlow);
         transformed += N * h * ${fmt(S)};
-        float left = 0.65 * sin(q.y * 2.4 + 0.6) + 0.35 * sin(q.y * 5.6 + 1.3);
-        float right = 0.62 * sin(q.y * 2.1 + 3.1) + 0.38 * sin(q.y * 4.8 - 0.8);
+        float left = 0.65 * sin(q.y * 0.8 + 0.6) + 0.35 * sin(q.y * 1.6 + 1.3);
+        float right = 0.62 * sin(q.y * 0.7 + 3.1) + 0.38 * sin(q.y * 1.4 - 0.8);
         transformed.z += ${fmt(EDGE_MOTION * S)} * fall * mix(left, right, clamp(aFlow.y / (aProfile.w * 2.0) + 0.5, 0.0, 1.0));
         vec3 tilted = normalize(normal - T * slopeS * aProfile.y - vec3(0.0, 0.0, 1.0) * slopeA * aProfile.y);
         vWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;
@@ -857,10 +929,23 @@ function currentMaterial(look: CurrentLook): THREE.MeshBasicMaterial {
       // Opaque on the top and down the fall; murky glass down the channel's
       // front, so the ball stays a silhouette in it.
       float front = mix(${fmt(ALPHA_FRONT_TOP)}, ${fmt(ALPHA_FRONT_BED)}, clamp(vBelow / max(vDepth, 1e-3), 0.0, 1.0));
-      diffuseColor.a = mix(front, 1.0, max(smoothstep(0.2, 0.8, vUp), cascade));`,
+      diffuseColor.a = mix(front, 1.0, max(smoothstep(0.2, 0.8, vUp), cascade));
+      // A narrow, moving overlap with the receiving water replaces the
+      // straight opaque foot of the sheet. Inactive floors leave it intact.
+      float contactGrain = wfb(vec2(vUnroll * 6.0, (vFlow.z - uTime) * uLipSpeed * 1.8));
+      float contactHeight = vWorld.y - uFloor - ${fmt(FALL_SINK)} + (contactGrain - 0.5) * 0.035;
+      diffuseColor.a *= mix(1.0, smoothstep(-0.025, 0.055, contactHeight), cascade);`,
     );
   };
-  mat.customProgramCacheKey = () => "flowing-water";
+  // GLSL is captured from module strings, which Three cannot see in the
+  // callback's source. Include it so a live editor rebuild cannot reuse an
+  // older water program after the pattern changes.
+  let programHash = 2166136261;
+  const programSource = WAVE_GLSL + PAINT_GLSL + IMPACT_GLSL + mat.onBeforeCompile.toString();
+  for (let i = 0; i < programSource.length; i++) {
+    programHash = Math.imul(programHash ^ programSource.charCodeAt(i), 16777619);
+  }
+  mat.customProgramCacheKey = () => `flowing-water-${programHash >>> 0}`;
   return mat;
 }
 
@@ -868,8 +953,8 @@ function currentMaterial(look: CurrentLook): THREE.MeshBasicMaterial {
 // The landing
 // ---------------------------------------------------------------------------
 
-// Where a fall meets the water, a compact crown, soft plumes, surface foam
-// and a separate mist veil. Each is drawn in study metres in a frame
+// Where a fall meets the water, a low foam bed, rounded rolls and surface
+// foam. Each is drawn in study metres in a frame
 // whose x is turned so the sheet travels toward -x (the study's), about the
 // impact, then scaled into the body's frame at STUDY_SCALE. Every particle is a pure
 // function of the clock and its instance, so a pinned clock draws the same
@@ -900,11 +985,11 @@ function landingUniforms(l: Landing): Record<string, THREE.IUniform> {
     uContactHalfSpan: l.contactHalfSpan,
     uFoamShade: { value: l.palette.shallow.clone().lerp(l.palette.light, 0.25) },
     uFoamLight: { value: l.palette.light.clone().lerp(new THREE.Color(0.90, 0.97, 0.98), 0.65) },
-    uMistColor: { value: l.palette.light.clone().lerp(new THREE.Color(0.80, 0.94, 0.95), 0.48) },
   };
 }
 
 const LANDING_PRELUDE = `
+  ${FOAM_REACH_GLSL}
   uniform float uTime;
   uniform vec3 uImpact;
   uniform float uSide;
@@ -914,9 +999,8 @@ const LANDING_PRELUDE = `
   // A point of the landing in study metres (sheet toward -x) to the body's
   // frame.
   vec3 toBody(vec3 p) { return uImpact + vec3(-uSide * p.x, p.y, p.z) * ${fmt(S)}; }
-  // The camera's right and up in the body's frame.
+  // The camera's right in the body's frame.
   vec3 viewRight() { return vec3(modelViewMatrix[0][0], modelViewMatrix[1][0], modelViewMatrix[2][0]); }
-  vec3 viewUp() { return vec3(modelViewMatrix[0][1], modelViewMatrix[1][1], modelViewMatrix[2][1]); }
   float rnd(float x) { return fract(sin(x * 127.1 + 311.7) * 43758.5453); }
   // A bowed path from the upstream contact edge, round either side of the
   // sheet, into downstream foam. Positive z faces the gameplay camera.
@@ -936,7 +1020,7 @@ function landingMaterial(l: Landing, vertex: string, fragment: string): THREE.Sh
       uniform float uTime;
       uniform vec3 uFoamShade;
       uniform vec3 uFoamLight;
-      uniform vec3 uMistColor;
+      ${FOAM_REACH_GLSL}
       ${fragment}`,
     transparent: true,
     depthWrite: false,
@@ -951,20 +1035,29 @@ const LANDING_OUT = `
   #include <colorspace_fragment>
 `;
 
-// One continuous frothing contact surface: a rolling heightfield along the
-// actual sheet-to-water perimeter, with raised pockets outside its edges.
+// A low broken foam bed, not a raised collar: the splash fans above overlap
+// this plane and the aerated curtain, so there is no moulded rim at the join.
 function crownMesh(l: Landing): THREE.Mesh {
   const geometry = new THREE.PlaneGeometry(2, 2, 48, 128);
   geometry.rotateX(-Math.PI / 2);
   // Signed distance to the actual contact span, not a narrower capsule that
   // hides the visible side of the froth beneath the opaque falling sheet.
   const crownField = `
+    float crownOutward(vec2 p) {
+      // Round the downstream corners of the contact collar rather than
+      // letting two independent straight fade limits meet at a square tip.
+      float radius = 0.24 + 0.025 * sin(p.y * 2.2 + uTime * 0.35);
+      vec2 edge = vec2(-p.x - uContactHalfSpan, abs(p.y) - uHalfWidth) + radius;
+      return length(max(edge, 0.0)) + min(max(edge.x, edge.y), 0.0) - radius;
+    }
     float crownDistance(vec2 p) {
-      vec2 edge = abs(p) - vec2(max(uContactHalfSpan, 0.025), uHalfWidth);
-      return length(max(edge, 0.0)) + min(max(edge.x, edge.y), 0.0);
+      p += vec2(0.07 * sin(p.y * 4.3 + uTime * 0.72),
+        0.055 * sin(p.x * 5.1 - uTime * 0.61));
+      vec2 edge = abs(p) - vec2(max(uContactHalfSpan, 0.025), max(uHalfWidth - 0.12, 0.025));
+      return length(max(edge, 0.0)) + min(max(edge.x, edge.y), 0.0) - 0.12;
     }
     float crownRoll(vec2 p) {
-      return paintNoise(vec2(p.y * 2.85 + uTime * 0.34, p.x * 4.8 + uTime * 0.76));
+      return paintNoise(vec2(p.y * 3.6 + 0.12 * sin(p.x * 2.4), (p.x + uTime * 0.42) * 3.2));
     }
   `;
   const material = landingMaterial(
@@ -978,14 +1071,10 @@ function crownMesh(l: Landing): THREE.Mesh {
     ${crownField}
     float crownHeight(vec2 p) {
       float distance = crownDistance(p);
-      // Raised rolling pockets peak just outside the sheet. Their troughs
-      // settle nearly to the pond so this remains loose froth, not a wall.
-      float rim = exp(-pow((distance - 0.11) / 0.26, 2.0));
       float roll = crownRoll(p);
-      float pockets = smoothstep(0.26, 0.64, roll);
-      float core = 1.0 - smoothstep(-0.10, 0.12, distance);
-      float h = rim * (0.09 + 0.11 * smoothstep(0.22, 0.74, roll)) * (0.55 + pockets * 0.45) + core * 0.035;
-      return 0.022 + h * uStrength * ${fmt(FOAM_HEIGHT * Math.min(1, IMPACT_FOAM))};
+      float outward = crownOutward(p);
+      float bed = (1.0 - smoothstep(0.05, 0.62, distance)) * foamCoverage(outward, roll);
+      return 0.006 + bed * (0.008 + roll * roll * 0.042) * uStrength;
     }
     void main() {
       vec2 p = position.xz * vec2(uContactHalfSpan + 0.64, uHalfWidth + 0.64);
@@ -1015,17 +1104,36 @@ function crownMesh(l: Landing): THREE.Mesh {
       float distance = crownDistance(vLocal);
       float roll = crownRoll(vLocal);
       float breakup = paintNoise(vec2(vLocal.y * 4.0 - uTime * 0.35, vLocal.x * 5.4 + uTime * 0.56));
-      float mask = 1.0 - smoothstep(0.32, 0.56, distance + (breakup - 0.5) * 0.12);
-      float core = 1.0 - smoothstep(-0.05, 0.19, distance);
-      float pockets = smoothstep(0.21, 0.53, roll);
+      float edgeDrift = paintNoise(vec2(vLocal.y * 1.65 + 0.10 * sin(vLocal.x * 2.0),
+        vLocal.x * 1.2 + uTime * 0.19));
+      float edgePigment = edgeDrift * 0.70 + breakup * 0.30;
+      float mask = 1.0 - smoothstep(0.30, 0.65, distance + (breakup - 0.5) * 0.24);
+      float core = 1.0 - smoothstep(-0.08, 0.16, distance + (roll - 0.5) * 0.12);
+      float pockets = smoothstep(0.22, 0.65, roll);
       vec3 normal = normalize(vNormal);
       float lit = dot(normal, normalize(vec3(-0.45, 0.85, 0.2)));
       float softLight = smoothstep(-0.35, 0.90, lit);
-      float crest = smoothstep(0.085, 0.22, vHeight / max(uStrength, 0.70)) * smoothstep(0.40, 0.95, lit);
+      float crest = smoothstep(0.055, 0.15, vHeight / max(uStrength, 0.70)) * smoothstep(0.40, 0.95, lit);
       vec3 col = mix(uFoamShade, uFoamLight, 0.22 + roll * 0.34 + softLight * 0.24);
       col = mix(col, vec3(0.93, 0.98, 0.99), crest * 0.68 + core * 0.18);
       col *= 0.82 + softLight * 0.18;
-      float alpha = mask * mix(0.68, 0.94, core) * mix(pockets, 1.0, core) * ${fmt(Math.min(1, IMPACT_FOAM))};
+      float lace = paintNoise(vLocal * vec2(10.0, 13.0) + vec2(uTime * 2.4, 0.0));
+      float connected = mix(smoothstep(0.32, 0.53, lace), 0.38 + pockets * 0.62, core);
+      col = mix(col, uFoamLight, smoothstep(0.36, 0.72, lace) * 0.24);
+      float outward = crownOutward(vLocal);
+      col = mix(col, uFoamShade, foamSettling(outward) * 0.45);
+      float alpha = mask * mix(0.66, 0.82, core) * connected
+        * foamCoverage(outward, edgePigment) * ${fmt(Math.min(1, IMPACT_FOAM))};
+      // A narrow opaque collar hides the sheet/pool seam, with a drifting
+      // soft edge that dissolves into the existing low froth.
+      float contactDistance = max(outward, 0.0);
+      float contactWhite = 1.0 - smoothstep(0.004, 0.12 + edgeDrift * 0.075, contactDistance);
+      float contactVeil = pow(1.0 - smoothstep(0.0, 0.24 + edgeDrift * 0.14, contactDistance), 2.0);
+      contactWhite = mix(contactWhite, contactVeil, 0.40);
+      contactWhite *= mix(1.0, 0.66 + edgePigment * 0.34, smoothstep(0.025, 0.20, contactDistance));
+      contactWhite *= mask;
+      col = mix(col, vec3(0.90, 0.97, 0.98), contactWhite * 0.86);
+      alpha = mix(alpha, 0.94 * ${fmt(Math.min(1, IMPACT_FOAM))}, contactWhite);
       if (alpha < 0.008) discard;
       ${LANDING_OUT}
     }`,
@@ -1045,7 +1153,8 @@ function instancedQuads(count: number): THREE.InstancedBufferGeometry {
   return geometry;
 }
 
-// Low, short-lived water lobes around the contact. Mist is a separate layer.
+// Rounded, low foam rolls rooted at the waterline. Broad overlapping lobes
+// give a soft stylised churn without pointed spray or a floating cloud.
 function plumeMesh(l: Landing): THREE.Mesh {
   const material = landingMaterial(
     l,
@@ -1054,28 +1163,36 @@ function plumeMesh(l: Landing): THREE.Mesh {
     varying float vLife;
     varying float vSeed;
     varying float vPuff;
+    varying float vHeight;
+    varying float vDownstream;
     void main() {
       float id = float(gl_InstanceID), r = rnd(id + 33.0), s = rnd(id + 71.0), b = rnd(id + 19.0);
-      float life = 0.54 + r * 0.48;
+      float life = 1.20 + r * 0.90;
       float phase = fract(uTime / life + rnd(id + 9.0));
       float cycle = floor(uTime / life + rnd(id + 9.0));
-      float age = phase * life;
-      float theta = 6.28318 * rnd(id + cycle * 17.0 + 40.0);
-      vec3 vel = vec3(cos(theta) * (0.42 + r * 0.55) - 0.22, 0.85 + s * 0.65, sin(theta) * (0.30 + r * 0.35)) * uStrength;
-      vec3 center = vec3(-0.03, 0.05, (s * 2.0 - 1.0) * uHalfWidth * 0.9);
-      float sideFoam = step(0.62, rnd(id + 122.0));
+      float variation = rnd(id + cycle * 17.0 + 40.0);
       float edge = mod(id, 2.0) * 2.0 - 1.0;
-      center = mix(center, rimPoint(rnd(id + cycle * 17.0 + 170.0), edge), sideFoam);
-      vel = mix(vel, vec3(-0.22 - r * 0.25, 0.60 + s * 0.44, edge * 0.12) * uStrength, sideFoam);
-      center += vec3(vel.x * age, vel.y * age - 4.905 * age * age, vel.z * age);
-      float size = (0.20 + r * 0.22) * (0.70 + 0.30 * sin(phase * 3.14159)) * mix(1.0, 0.70, sideFoam);
-      vec2 rot = vec2(cos(b * 6.3), sin(b * 6.3));
-      vec2 p = vec2(position.x * rot.x - position.y * rot.y, position.x * rot.y + position.y * rot.x);
-      vec3 at = toBody(center) + (viewRight() * p.x * size * 1.28 + viewUp() * p.y * size) * ${fmt(S)};
+      vec3 center = vec3(-uContactHalfSpan - 0.07 - variation * 0.12, 0.0,
+        (s * 2.0 - 1.0) * uHalfWidth);
+      float sideFoam = step(0.40, rnd(id + 122.0));
+      center = mix(center, rimPoint(0.10 + variation * 0.82, edge), sideFoam);
+      center.y = 0.004;
+      center.x -= phase * (0.06 + r * 0.10);
+      center.z += edge * phase * 0.06 * sideFoam;
+      float rise = sin(phase * 3.14159);
+      float height = (0.07 + r * 0.11) * (0.72 + rise * 0.28) * sqrt(uStrength);
+      float width = 0.38 + s * 0.42;
+      // UV y=0 remains rooted in the foam bed throughout the splash cycle.
+      vec3 right = normalize(vec3(viewRight().x, 0.0, viewRight().z));
+      vec3 at = toBody(center) + (right * (position.x * width + uv.y * (b - 0.5) * 0.08)
+        + vec3(0.0, uv.y * height, 0.0)) * ${fmt(S)};
       vUV = uv;
       vSeed = id + cycle * 13.0;
       vPuff = phase;
-      vLife = smoothstep(0.0, 0.1, phase) * (1.0 - smoothstep(0.45, 0.98, phase)) * smoothstep(-0.18, 0.06, center.y) * ${fmt(Math.min(1, IMPACT_FOAM))};
+      vHeight = (at.y - uImpact.y) / ${fmt(S)};
+      vDownstream = max(uSide * (at.x - uImpact.x) / ${fmt(S)} - uContactHalfSpan,
+        abs(at.z - uImpact.z) / ${fmt(S)} - uHalfWidth);
+      vLife = smoothstep(0.0, 0.12, phase) * (1.0 - smoothstep(0.72, 1.0, phase));
       gl_Position = projectionMatrix * modelViewMatrix * vec4(at, 1.0);
     }`,
     `
@@ -1083,100 +1200,30 @@ function plumeMesh(l: Landing): THREE.Mesh {
     varying float vLife;
     varying float vSeed;
     varying float vPuff;
+    varying float vHeight;
+    varying float vDownstream;
     ${ORGANIC_GLSL}
     void main() {
-      vec2 q = vUV * 2.0 - 1.0;
-      float a = atan(q.y, q.x);
-      float n = paintNoise(q * 3.2 + vec2(vSeed * 0.71, -vPuff * 1.8));
-      float r = length(q) + 0.10 * sin(a * 5.0 + vSeed) + 0.065 * sin(a * 9.0 - vPuff * 4.0);
-      float mask = 1.0 - smoothstep(0.50, 0.98, r + (n - 0.5) * 0.23);
-      float alpha = mask * vLife * 0.30;
+      vec2 q = vec2(vUV.x * 2.0 - 1.0, vUV.y);
+      float n = paintNoise(vec2(q.x * 3.5 + vSeed, q.y * 4.0 - vPuff * 0.8));
+      float offset = 0.12 * sin(vSeed * 1.7 + vPuff * 1.2);
+      float middle = length(vec2((q.x - offset) / 0.58, (q.y - 0.09) / 0.70));
+      float left = length(vec2((q.x + 0.48) / 0.48, (q.y - 0.025) / 0.43));
+      float right = length(vec2((q.x - 0.48) / 0.46, (q.y - 0.035) / 0.49));
+      float contour = min(middle, min(left, right)) + (n - 0.5) * 0.10;
+      float aa = max(0.045, fwidth(contour) * 1.25);
+      float mask = 1.0 - smoothstep(1.0 - aa, 1.0 + aa, contour);
+      float alpha = mask * vLife * 0.88 * smoothstep(-0.008, 0.010, vHeight) * foamCoverage(vDownstream, n);
       if (alpha < 0.008) discard;
-      vec3 col = mix(uFoamShade, uFoamLight, 0.45 + 0.55 * n);
+      vec3 shade = mix(uFoamShade, uFoamLight, 0.58);
+      float light = smoothstep(0.24, 0.78, n * 0.64 + q.y * 0.42);
+      vec3 col = mix(shade, uFoamLight, 0.32 + light * 0.56);
+      col = mix(col, vec3(0.89, 0.97, 0.98), light * 0.28);
+      col = mix(col, uFoamShade, foamSettling(vDownstream) * 0.45);
       ${LANDING_OUT}
     }`,
   );
   return new THREE.Mesh(instancedQuads(PLUMES), material);
-}
-
-// Dilute rising wisps and a denser, low source cloud share one instanced pass.
-// The source puffs overlap just outside the contact, where the opaque sheet
-// cannot hide them; the taller veil remains transparent above the foam.
-function mistMesh(l: Landing): THREE.Mesh {
-  const material = landingMaterial(
-    l,
-    `
-    varying vec2 vUV;
-    varying float vLife;
-    varying float vSeed;
-    varying float vHeight;
-    varying float vBase;
-    void main() {
-      float id = float(gl_InstanceID), r = rnd(id + 204.0), s = rnd(id + 302.0);
-      float base = step(${fmt(MISTS)}, id);
-      float life = mix(1.9 + r * 1.7, 1.4 + r * 1.2, base);
-      float clock = uTime / life + rnd(id + 416.0);
-      float phase = fract(clock), cycle = floor(clock);
-      float drift = rnd(id + cycle * 19.0 + 500.0);
-      float sideMist = step(0.35, rnd(id + 290.0));
-      float edge = mod(id, 2.0) * 2.0 - 1.0;
-      vec3 rim = rimPoint(0.08 + drift * 0.84, edge);
-      vec3 center = vec3(-0.08 - phase * (0.45 + drift * 0.55),
-        0.08 + phase * (0.45 + r * 0.42) * uStrength,
-        (s * 2.0 - 1.0) * uHalfWidth * 0.90 + (s * 2.0 - 1.0) * phase * 0.28);
-      vec3 wrapped = rim + vec3(0.10 - phase * (0.14 + drift * 0.20),
-        0.06 + phase * (0.48 + r * 0.44) * uStrength,
-        edge * (0.03 + phase * 0.16) + (rnd(id + cycle * 11.0 + 535.0) - 0.5) * 0.13);
-      center = mix(center, wrapped, sideMist);
-      center.x += 0.10 * sin(phase * 4.0 + id);
-      float size = (0.48 + r * 0.46) * (0.65 + phase * 0.85) * mix(1.0, 0.82, sideMist);
-      float liftScale = 1.0;
-      float envelope = smoothstep(0.0, 0.18, phase) * (1.0 - smoothstep(0.54, 1.0, phase)) * mix(1.0, 1.42, sideMist);
-      if (base > 0.5) {
-        // Downstream of the sheet or just round its sides, never inside it.
-        vec3 source = vec3(-uContactHalfSpan - 0.10 - drift * 0.16 - phase * 0.16,
-          0.16 + phase * (0.20 + r * 0.10) * uStrength,
-          (s * 2.0 - 1.0) * uHalfWidth * 0.96);
-        vec3 sourceRim = rimPoint(0.12 + drift * 0.76, edge)
-          + vec3(-phase * 0.12, 0.12 + phase * (0.19 + r * 0.09) * uStrength, edge * 0.06);
-        center = mix(source, sourceRim, step(0.34, rnd(id + 552.0)));
-        center.x += 0.035 * sin(phase * 3.0 + id);
-        center.z += 0.025 * sin(phase * 2.6 + id * 0.7);
-        size = (0.64 + r * 0.42) * (0.85 + phase * 0.30);
-        liftScale = 0.82;
-        envelope = smoothstep(0.0, 0.07, phase) * (1.0 - smoothstep(0.70, 1.0, phase));
-      }
-      vec3 at = toBody(center) + (viewRight() * position.x * size * 1.65 + viewUp() * position.y * size * liftScale) * ${fmt(S)};
-      vUV = uv;
-      vSeed = id + cycle * 7.0;
-      // Actual billboard height above the receiving plane, including camera tilt.
-      vHeight = (at.y - uImpact.y) / ${fmt(S)};
-      vBase = base;
-      vLife = envelope;
-      gl_Position = projectionMatrix * modelViewMatrix * vec4(at, 1.0);
-    }`,
-    `
-    varying vec2 vUV;
-    varying float vLife;
-    varying float vSeed;
-    varying float vHeight;
-    varying float vBase;
-    ${ORGANIC_GLSL}
-    void main() {
-      vec2 q = vUV * 2.0 - 1.0;
-      float n = paintNoise(q * 2.6 + vec2(vSeed * 1.31, uTime * 0.16));
-      float radius = length(q) + (n - 0.5) * 0.25;
-      float soft = 1.0 - smoothstep(0.18, 1.0, radius);
-      float surfaceFade = smoothstep(0.01, mix(0.16, 0.07, vBase), vHeight);
-      float lowCloud = 1.0 - vBase * smoothstep(0.38, 0.86, vHeight);
-      float alpha = soft * (0.42 + 0.58 * n) * vLife * mix(0.135, 0.32, vBase)
-        * surfaceFade * lowCloud;
-      if (alpha < 0.002) discard;
-      vec3 col = mix(uMistColor, uFoamLight, vBase * (0.20 + n * 0.18));
-      ${LANDING_OUT}
-    }`,
-  );
-  return new THREE.Mesh(instancedQuads(MISTS + BASE_MISTS), material);
 }
 
 // Loose froth lies on the receiving water and drifts round the sheet's sides.
@@ -1190,21 +1237,22 @@ function surfaceFoamMesh(l: Landing): THREE.Mesh {
     varying float vLife;
     varying float vGlint;
     varying float vSeed;
+    varying float vDownstream;
     void main() {
       float id = float(gl_InstanceID), r = rnd(id + 710.0);
-      float life = 2.0 + r * 1.40 + rnd(id + 720.0) * 0.80;
+      float life = 1.6 + r * 0.90 + rnd(id + 720.0) * 0.45;
       float clock = uTime / life + rnd(id + 721.0);
       float phase = fract(clock), seed = id + floor(clock) * 37.0;
       float edge = mod(id, 2.0) * 2.0 - 1.0;
       float along = rnd(seed + 742.0);
       vec3 center = rimPoint(along, edge);
-      center.x -= phase * life * (0.08 + rnd(seed + 752.0) * 0.10);
+      center.x -= phase * life * (0.10 + rnd(seed + 752.0) * 0.10);
       center.x += (rnd(seed + 759.0) - 0.5) * 0.18 + 0.035 * sin(phase * 3.0 + seed);
       center.z += edge * (0.015 + phase * 0.16) + (rnd(seed + 763.0) - 0.5) * 0.30;
       center.y = 0.024 + 0.010 * rnd(seed + 770.0) + 0.002 * sin(phase * 3.14159);
       float size = (0.20 + pow(rnd(seed + 780.0), 0.75) * 0.32)
         * (0.80 + 0.20 * sin(phase * 3.14159));
-      vec2 aspect = vec2(1.10 + rnd(seed + 785.0) * 0.80, 0.55 + rnd(seed + 789.0) * 0.55);
+      vec2 aspect = vec2(1.45 + rnd(seed + 785.0) * 0.85, 0.48 + rnd(seed + 789.0) * 0.42);
       float turn = (rnd(seed + 792.0) - 0.5) * 1.20 + phase * 0.10;
       vec2 surfaceOffset = position.xy * size * aspect;
       vec2 offset = vec2(surfaceOffset.x * cos(turn) - surfaceOffset.y * sin(turn), surfaceOffset.x * sin(turn) + surfaceOffset.y * cos(turn));
@@ -1212,6 +1260,8 @@ function surfaceFoamMesh(l: Landing): THREE.Mesh {
       vec3 at = toBody(center + vec3(offset.x, 0.0, offset.y));
       vUV = uv;
       vBody = at.xz;
+      vDownstream = max(uSide * (at.x - uImpact.x) / ${fmt(S)} - uContactHalfSpan,
+        abs(at.z - uImpact.z) / ${fmt(S)} - uHalfWidth);
       vSeed = rnd(seed + 796.0);
       vGlint = step(0.91, rnd(id + 805.0)) * pow(max(0.0, sin(uTime * (1.8 + r * 0.8) + seed)), 20.0);
       vLife = smoothstep(0.0, 0.12 + r * 0.06, phase) * (1.0 - smoothstep(0.58 + r * 0.12, 1.0, phase));
@@ -1224,27 +1274,34 @@ function surfaceFoamMesh(l: Landing): THREE.Mesh {
     varying float vLife;
     varying float vGlint;
     varying float vSeed;
+    varying float vDownstream;
     ${ORGANIC_GLSL}
     void main() {
       if (vBody.x < uClip.x || vBody.x > uClip.y || vBody.y < uClip.z || vBody.y > uClip.w) discard;
       vec2 q = vUV * 2.0 - 1.0;
       vec2 grain = q * 2.15 + vec2(vSeed * 31.7, vSeed * 11.3);
       float pigment = paintNoise(grain + vec2(uTime * 0.025, -uTime * 0.035));
-      float outline = pow(abs(q.x), 2.6) + pow(abs(q.y), 2.3)
-        + (pigment - 0.5) * 0.62 + 0.07 * sin(q.x * 5.0 + q.y * 3.0 + vSeed * 9.0);
-      float aa = max(0.025, fwidth(outline));
-      float mask = 1.0 - smoothstep(0.57 - aa, 0.90 + aa, outline);
-      float gaps = smoothstep(0.64, 0.80, paintNoise(q * 2.8 + vec2(vSeed * 17.0, 8.3))) * 0.86;
-      float froth = mask * (1.0 - gaps);
+      // Branching broken brush lines, not rectangular drifting foam decals.
+      float bend = sin(q.x * 2.8 + vSeed * 8.0) * 0.30 + (pigment - 0.5) * 0.34;
+      float line = abs(q.y - bend);
+      float branch = abs(q.y + bend * 0.6 - 0.38) + smoothstep(-0.2, 0.5, q.x) * 0.30;
+      float width = 0.045 + pigment * 0.12;
+      float aa = max(0.014, fwidth(line));
+      float mask = 1.0 - smoothstep(width - aa, width + aa, min(line, branch));
+      float ends = 1.0 - smoothstep(0.65, 0.96, abs(q.x));
+      float gaps = smoothstep(0.25, 0.46, paintNoise(q * 3.4 + vec2(vSeed * 17.0, 8.3)));
+      float froth = mask * ends * gaps;
       float brush = smoothstep(0.30, 0.68, softNoise(vec2(q.x * 3.7 + vSeed * 8.0, q.y * 0.9 + 4.2)))
         * smoothstep(-0.30, 0.35, q.y - q.x * 0.18);
       vec2 gleam = (q - vec2(-0.18 + vSeed * 0.30, 0.12 - vSeed * 0.25)) * 12.0;
       float pinpoint = exp(-dot(gleam, gleam)) * vGlint * froth;
-      float alpha = (froth * (0.42 + pigment * 0.16) + pinpoint * 0.16) * vLife * ${fmt(Math.min(1, IMPACT_FOAM))};
+      float alpha = (froth * 0.88 + pinpoint * 0.10) * vLife
+        * foamCoverage(vDownstream, pigment) * ${fmt(Math.min(1, IMPACT_FOAM))};
       if (alpha < 0.008) discard;
       vec3 col = mix(uFoamShade, uFoamLight, 0.48 + 0.42 * smoothstep(0.28, 0.70, pigment));
       col = mix(col, vec3(0.92, 0.98, 0.99), brush * 0.26);
       col = mix(col, vec3(0.98, 1.0, 1.0), pinpoint * 0.65);
+      col = mix(col, uFoamShade, foamSettling(vDownstream) * 0.45);
       ${LANDING_OUT}
     }`,
   );
@@ -1298,7 +1355,8 @@ const scratchB = new THREE.Vector3();
 const scratchWorld = new THREE.Vector3();
 
 function arcPoint(f: FallRecord, t: number, out: THREE.Vector3): THREE.Vector3 {
-  return out.set(f.xLip + f.side * f.v0 * t, f.yLip - 0.5 * FALL_GRAVITY * t * t, f.zMid);
+  const drop = 0.5 * FALL_GRAVITY * t * t;
+  return out.set(f.xLip + f.side * f.v0 * t, f.yLip - drop, f.zMid);
 }
 
 function land(f: FallRecord): void {
@@ -1336,8 +1394,10 @@ function land(f: FallRecord): void {
   // The sheet crosses the surface over a span of x - its bottom first, a
   // slice depth above its top - and the landing is the middle of it.
   const tBottom = Math.sqrt(Math.max(0, t * t - (2 * f.depth) / FALL_GRAVITY));
-  f.contactHalfSpan.value = f.v0 * (t - tBottom) / (2 * S);
-  f.impact.set(f.xLip + f.side * f.v0 * (t + tBottom) / 2, f.yLip - 0.5 * FALL_GRAVITY * t * t, f.zMid);
+  const outerX = f.v0 * t;
+  const innerX = f.v0 * FALL_BED_SPEED * tBottom;
+  f.contactHalfSpan.value = (outerX - innerX) / (2 * S);
+  f.impact.set(f.xLip + f.side * (outerX + innerX) / 2, f.yLip - 0.5 * FALL_GRAVITY * t * t, f.zMid);
   if (hit) {
     f.floor.value = scratchWorld.set(0, hit.top, 0).applyMatrix4(hit.root.matrixWorld).y - FALL_SINK;
     // The water's top in this body's frame, for the crown.
@@ -1353,7 +1413,7 @@ function land(f: FallRecord): void {
     scratchWorld.copy(f.impact).applyMatrix4(f.root.matrixWorld);
     impactAt.value[f.slot]!.set(scratchWorld.x, scratchWorld.y, scratchWorld.z, 1);
     const dir = scratchA.set(f.side, 0, 0).transformDirection(f.root.matrixWorld);
-    impactHow.value[f.slot]!.set(f.halfW / S, Math.sign(dir.x) || 1, 0, 0);
+    impactHow.value[f.slot]!.set(f.halfW / S, Math.sign(dir.x) || 1, f.contactHalfSpan.value, 0);
   }
 }
 
@@ -1506,10 +1566,10 @@ export function buildWater(root: THREE.Group, body: WaterArea, data: LevelBodyDa
       clip: fall.clip, palette: studyPalette(color), strength: fall.strength,
       contactHalfSpan: fall.contactHalfSpan,
     };
-    // Drawn after the water: mist, the low crown, soft plumes and surface foam.
+    // Drawn after the water: the foam bed, low rolls and drifting surface foam.
     // Always in the scene and never culled (each is placed in its vertex
-    // shader), so the prewarm compiles all four.
-    [mistMesh(landing), crownMesh(landing), plumeMesh(landing), surfaceFoamMesh(landing)].forEach((m, i) => {
+    // shader), so the prewarm compiles all three.
+    [crownMesh(landing), plumeMesh(landing), surfaceFoamMesh(landing)].forEach((m, i) => {
       m.frustumCulled = false;
       m.renderOrder = 11 + i;
       root.add(m);

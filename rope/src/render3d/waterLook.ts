@@ -46,11 +46,15 @@ export const LIGHT_FALLOFF = 0.5;
 const STUDY_SHALLOW = "#178b96";
 const STUDY_DEEP = "#13506b";
 const STUDY_LIGHT = "#55bec7";
+const STUDY_HIGHLIGHT = "#82cdd2";
+const STUDY_GLEAM = "#b4e1df";
 
 export interface StudyPalette {
   deep: THREE.Color;
   shallow: THREE.Color;
   light: THREE.Color;
+  highlight: THREE.Color;
+  gleam: THREE.Color;
 }
 
 // `c` moved in HSL (in sRGB: HSL is a statement about the colour as authored,
@@ -77,8 +81,23 @@ export function studyPalette(color: string | undefined): StudyPalette {
     deep: relative(shallow, STUDY_SHALLOW, STUDY_DEEP),
     shallow,
     light: relative(shallow, STUDY_SHALLOW, STUDY_LIGHT),
+    highlight: relative(shallow, STUDY_SHALLOW, STUDY_HIGHLIGHT),
+    gleam: relative(shallow, STUDY_SHALLOW, STUDY_GLEAM),
   };
 }
+
+// Two soft highlight shades carried by the existing wave spectrum. Broad
+// cyan facets catch the light first, then occasional pale mint crests.
+export const WATER_HIGHLIGHT_GLSL = `
+  uniform vec3 uHighlight;
+  uniform vec3 uGleam;
+  vec3 waterHighlights(vec3 col, float facing, float height, float grain, float strength) {
+    float broad = smoothstep(0.018, 0.075, facing) * (0.45 + 0.55 * grain);
+    float crest = smoothstep(0.045, 0.115, facing) * smoothstep(0.42, 0.76, height);
+    col = mix(col, uHighlight, broad * 0.38 * strength);
+    return mix(col, uGleam, crest * 0.46 * strength);
+  }
+`;
 
 // ---------------------------------------------------------------------------
 // The wave spectrum
@@ -183,7 +202,7 @@ export const IMPACT_SLOTS = 4;
 // surface the fall lands in, never the one it leaves (a fall drops further).
 export const IMPACT_PLANE = 0.15;
 // x, y, z (three's frame, world) and amount (0 = idle); the sheet's half
-// width (study metres) and the direction it travels along world x.
+// width (study metres), direction along world x, and contact half-span.
 export const impactAt = { value: Array.from({ length: IMPACT_SLOTS }, () => new THREE.Vector4()) };
 export const impactHow = { value: Array.from({ length: IMPACT_SLOTS }, () => new THREE.Vector4()) };
 const impactTaken: boolean[] = Array.from({ length: IMPACT_SLOTS }, () => false);
@@ -213,6 +232,24 @@ export const ORGANIC_GLSL = `
   float paintNoise(vec2 p) { return softNoise(p) * 0.72 + softNoise(p * 2.07 + 9.7) * 0.28; }
 `;
 
+// Dense froth ends just outside the falling sheet, then dissolves smoothly.
+// Distances are study metres downstream from the actual contact edge.
+export const FOAM_REACH_GLSL = `
+  float foamReach(float downstream) {
+    return pow(1.0 - smoothstep(0.04, 0.72, max(downstream, 0.0)), 1.8);
+  }
+  float foamSettling(float outward) { return smoothstep(0.015, 0.58, outward); }
+  float foamCoverage(float outward, float grain) {
+    float settled = foamSettling(outward);
+    // Dense tongues end at different distances, with translucent water
+    // pockets opening immediately beyond contact rather than a solid apron.
+    float reachScale = mix(0.55, 1.15, smoothstep(0.25, 0.75, grain));
+    float distance = max(0.0, outward / reachScale + (0.58 - grain) * 0.24 * settled);
+    float islands = smoothstep(0.20 + settled * 0.30, 0.56 + settled * 0.17, grain);
+    return foamReach(distance) * mix(1.0, islands, settled * 0.96);
+  }
+`;
+
 // The field, for a surface material (needs `uTime`). `impactSlope` is the
 // tilt the rings and the boil give the surface (dimensionless, so the same in
 // either unit); `impactPaint` lays the footprint and the arcs over a colour,
@@ -221,14 +258,15 @@ export const ORGANIC_GLSL = `
 // sheet's travel; the study's sheet travels toward -x.
 export const IMPACT_GLSL = `
   ${ORGANIC_GLSL}
+  ${FOAM_REACH_GLSL}
   uniform vec4 uImpactAt[${IMPACT_SLOTS}];
   uniform vec4 uImpactHow[${IMPACT_SLOTS}];
   float impactDistance(vec2 d, float hw) {
-    return length(vec2(d.x, max(abs(d.y) - hw * 0.82, 0.0)));
+    return length(vec2(d.x, max(abs(d.y) - hw, 0.0)));
   }
   float impactEnvelope(vec2 d, float hw) {
     float r = impactDistance(d, hw);
-    return smoothstep(0.45, 0.95, r) * (1.0 - smoothstep(2.5, 4.0, r)) * exp(-r * 0.28);
+    return smoothstep(0.32, 0.70, r) * (1.0 - smoothstep(1.10, 2.10, r)) * exp(-r * 0.65);
   }
   // A gently bent capsule wave rather than a perfect concentric outline.
   // Broad spatial bends preserve its outward travel without grainy wobble.
@@ -245,7 +283,8 @@ export const IMPACT_GLSL = `
   float impactFootprint(vec2 d, float hw) {
     float r = impactDistance(vec2(d.x + 0.06 + 0.07 * sin(d.y * 2.8 - uTime * 1.7), d.y), hw);
     float edge = paintNoise(vec2(d.y * 3.8 - uTime * 0.9, d.x * 4.1 + uTime * 0.65));
-    return 1.0 - smoothstep(0.22, 0.46, r + (edge - 0.5) * 0.19 + 0.04 * sin(d.y * 6.0 + uTime * 1.9));
+    return (1.0 - smoothstep(0.12, 0.48, r + (edge - 0.5) * 0.30 + 0.05 * sin(d.y * 3.0 + uTime * 0.7)))
+      * foamCoverage(max(-d.x, max(abs(d.y) - hw, 0.0)), edge);
   }
   // The sheet travels toward -x: foam moves away from the contact instead of
   // whitening an equally broad halo on both sides. The patch field travels
@@ -253,20 +292,24 @@ export const IMPACT_GLSL = `
   float impactApron(vec2 d, float hw) {
     float downstream = max(-d.x, 0.0);
     float edge = paintNoise(vec2(d.y * 3.2, d.x * 2.7 + uTime * 0.48));
-    float across = max(abs(d.y + 0.07 * sin(d.x * 2.4 - uTime * 0.55)) - hw * 0.82, 0.0);
-    float spread = 0.20 + 0.18 * smoothstep(0.0, 1.5, downstream);
+    float across = max(abs(d.y + 0.07 * sin(d.x * 2.4 - uTime * 0.55)) - hw, 0.0);
+    float spread = 0.25 + 0.27 * smoothstep(0.0, 1.8, downstream);
     float width = 1.0 - smoothstep(spread * 0.55, spread + 0.22, across + (edge - 0.5) * 0.20);
-    float reach = (1.0 - smoothstep(0.95, 1.85, downstream)) * (1.0 - smoothstep(0.12, 0.38, d.x));
-    vec2 parcel = vec2(d.y * 4.2, (d.x + uTime * 0.48) * 5.1);
-    float pigment = paintNoise(parcel) * 0.72 + softNoise(parcel * 2.4 + 7.3) * 0.28;
-    float threshold = mix(0.32, 0.56, smoothstep(0.1, 1.6, downstream));
-    float islands = smoothstep(threshold, threshold + 0.15, pigment);
-    return width * reach * islands * (1.0 - smoothstep(0.3, 1.85, downstream) * 0.42);
+    float reach = (1.0 - smoothstep(0.50, 1.15, downstream)) * (1.0 - smoothstep(0.12, 0.42, d.x));
+    // Longer patches carry momentum out of the falling sheet; their narrow
+    // transverse gaps open gradually as the aerated water settles.
+    vec2 parcel = vec2(d.y * 4.0, (d.x + uTime * 0.48) * 3.8);
+    parcel += vec2(sin(parcel.y * 0.65), sin(parcel.x * 0.72)) * 0.32;
+    float pigment = paintNoise(parcel);
+    float lineWidth = mix(0.19, 0.045, smoothstep(0.10, 1.7, downstream));
+    float islands = 1.0 - smoothstep(lineWidth, lineWidth + 0.045, abs(pigment - 0.49));
+    islands *= mix(1.0, smoothstep(0.26, 0.50, softNoise(parcel * 2.3 + 7.3)), smoothstep(0.3, 1.9, downstream));
+    return width * reach * islands * foamCoverage(max(downstream, across), pigment);
   }
   float impactFlecks(vec2 d, float hw) {
     float downstream = -d.x;
     float across = max(abs(d.y) - hw * 0.82, 0.0);
-    float envelope = smoothstep(0.45, 0.95, downstream) * (1.0 - smoothstep(1.8, 2.8, downstream))
+    float envelope = smoothstep(0.30, 0.60, downstream) * (1.0 - smoothstep(0.80, 1.35, downstream))
       * (1.0 - smoothstep(0.3, 0.75, across));
     vec2 parcel = vec2(d.y * 9.0, (d.x + uTime * 0.48) * 8.4);
     float cells = softNoise(parcel + vec2(2.7, 13.1));
@@ -278,7 +321,12 @@ export const IMPACT_GLSL = `
     if (r > 4.1) return 0.0;
     float waves = 0.009 * sin(impactPhase(d, hw)) * impactEnvelope(d, hw);
     float boil = impactFootprint(d, hw) * (0.018 + 0.035 * paintNoise(vec2(d.y * 2.4 + uTime * 0.72, d.x * 2.8 - uTime * 0.9)));
-    return waves + boil;
+    // Fine, advected disturbance breaks the reflected sheet into short
+    // fragments near contact, fading smoothly back to the calm pool.
+    float churnEnvelope = (1.0 - smoothstep(0.35, 1.9, r))
+      * (1.0 - smoothstep(0.18, 0.72, d.x));
+    float churn = paintNoise(vec2(d.y * 7.0, (d.x + uTime * 0.48) * 9.0)) - 0.5;
+    return waves + boil + churn * churnEnvelope * 0.028;
   }
   // Study metres from impact i, x turned so the sheet travels toward -x; or
   // a long way off when the slot is idle or out of this plane.
@@ -286,7 +334,11 @@ export const IMPACT_GLSL = `
     vec4 at = uImpactAt[i];
     if (at.w <= 0.0 || abs(world.y - at.y) > ${fmt(IMPACT_PLANE)}) return vec2(1e3);
     vec2 d = (world.xz - at.xz) / ${fmt(STUDY_SCALE)};
-    return vec2(-uImpactHow[i].y * d.x, d.y);
+    float along = -uImpactHow[i].y * d.x;
+    // Distance starts at the actual thick curtain's perimeter. The previous
+    // narrow centre capsule left a visible straight edge under the sheet.
+    along = sign(along) * max(abs(along) - uImpactHow[i].z, 0.0);
+    return vec2(along, d.y);
   }
   vec2 impactSlope(vec3 world) {
     vec2 slope = vec2(0.0);
@@ -306,6 +358,19 @@ export const IMPACT_GLSL = `
   // pixel moves. Taken by the caller in uniform control flow, since the
   // paint is drawn per pixel only where an impact is near.
   float impactSpan(vec3 world) { return length(fwidth(world.xz)) / ${fmt(STUDY_SCALE)}; }
+  // Local aeration reduces mirror coherence only at the landing. The
+  // surface slopes above provide the moving distortion; this soft envelope
+  // keeps bright reflected foam from doubling into a solid white column.
+  float impactAeration(vec3 world) {
+    float amount = 0.0;
+    for (int i = 0; i < ${IMPACT_SLOTS}; i++) {
+      vec2 d = impactOffset(i, world);
+      float r = impactDistance(d, uImpactHow[i].x);
+      amount = max(amount, (1.0 - smoothstep(0.25, 1.65, r))
+        * (1.0 - smoothstep(0.12, 0.65, d.x)));
+    }
+    return amount;
+  }
   vec3 impactPaint(vec3 world, vec3 col, vec3 base, vec3 light, float span) {
     for (int i = 0; i < ${IMPACT_SLOTS}; i++) {
       vec2 d = impactOffset(i, world);
@@ -313,7 +378,13 @@ export const IMPACT_GLSL = `
       float dist = impactDistance(d, hw);
       if (dist > 4.1) continue;
       float n = paintNoise(vec2(d.y * 3.8 - uTime * 0.9, d.x * 4.1 + uTime * 0.65));
-      float core = impactFootprint(d, hw) * (0.78 + 0.16 * smoothstep(0.2, 0.66, n));
+      // Broad moving turquoise pockets prevent a solid white shelf directly
+      // beneath the curtain; brighter lobes stay tied to the impact itself.
+      float core = impactFootprint(d, hw) * (0.40 + 0.42 * smoothstep(0.26, 0.72, n));
+      float contactWhite = 1.0 - smoothstep(0.006, 0.15 + n * 0.075, dist);
+      float contactVeil = pow(1.0 - smoothstep(0.0, 0.28 + n * 0.14, dist), 2.0);
+      contactWhite = mix(contactWhite, contactVeil, 0.40);
+      core += (1.0 - core) * contactWhite * 0.93;
       float apron = impactApron(d, hw);
       float flecks = impactFlecks(d, hw);
       float phase = impactPhase(d, hw);
@@ -324,7 +395,7 @@ export const IMPACT_GLSL = `
       // into rounded tips as the branch fades, leaving broad calm gaps.
       float branch = sin(d.y * 2.3 + d.x * 0.45 + group * 2.7)
         + 0.45 * sin(d.y * 4.5 - d.x * 0.7 - group * 1.3);
-      float broken = smoothstep(-0.25, 0.62, branch);
+      float broken = smoothstep(0.08, 0.80, branch);
       float strokeWidth = (0.026 + 0.038 * smoothstep(-0.15, 0.8, branch))
         * (0.84 + 0.16 * sin(d.y * 2.8 + group));
       float ridge = 1.0 - smoothstep(strokeWidth * 0.40 - aa * 0.30, strokeWidth + aa, abs(wavePos));
@@ -342,8 +413,8 @@ export const IMPACT_GLSL = `
       vec3 underpaint = mix(base, light, 0.72);
       vec3 rippleMint = mix(light, white, 0.32);
       col = mix(col, underpaint, clamp(shoulder * arcEnv * 0.28, 0.0, 0.32));
-      col = mix(col, rippleMint, clamp(ridge * arcEnv * pigment * 0.58, 0.0, 0.62));
-      col = mix(col, mix(light, white, 0.46), clamp(leading * arcEnv * pigment * 0.26, 0.0, 0.30));
+      col = mix(col, rippleMint, clamp(ridge * arcEnv * pigment * 0.34, 0.0, 0.38));
+      col = mix(col, mix(light, white, 0.46), clamp(leading * arcEnv * pigment * 0.14, 0.0, 0.18));
     }
     return col;
   }

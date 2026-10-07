@@ -63,6 +63,8 @@ import { DepthOfField } from "./depthOfField";
 import { FrameTarget } from "./frameTarget";
 import { LightShafts } from "./lightShafts";
 import { updateWater, waterTextures } from "./water";
+import { SceneFoliage } from "./foliageScene";
+import { updateFoliageWind } from "./foliage/wind";
 import { stillWaterMaterial, WaterSplashes, type StillSurface } from "./stillWater";
 import { beltRenderTime } from "../render/beltTread";
 
@@ -162,6 +164,7 @@ function top(surface: StillSurface): number {
 }
 
 export class Scene3D {
+  readonly foliage = new SceneFoliage();
   readonly scene = new THREE.Scene();
   // What the editor draws into the scene for itself - the Visuals workspace's
   // guides (collision outlines, light icons, handles, drafts). It lives here
@@ -400,7 +403,11 @@ export class Scene3D {
     // bound nodes land under the roots above when the file arrives, scenery
     // stands in the world where Blender put it.
     if (sceneName) {
-      this.dressing = new SceneDressing(sceneName, targets, (scenery) => this.adoptSceneryWater(scenery));
+      this.foliage.setPlants(level.visualSource.data.foliage ?? []);
+      this.dressing = new SceneDressing(sceneName, targets, (scenery) => {
+        this.adoptSceneryWater(scenery);
+        this.foliage.bind(this.dressing!.bound, scenery);
+      });
       this.scene.add(this.dressing.root);
     }
     // Then whatever else the world already holds - the avatar's debris, a
@@ -1099,6 +1106,7 @@ export class Scene3D {
     const viewportHeight = rect ? rect.h : this.size.y;
     POINT_VIEW_HALF_HEIGHT.value = viewportHeight / 2;
     updateWater(clock);
+    updateFoliageWind(clock);
 
     // Bodies come and go at runtime (the hook is destroyed and rebuilt on every
     // throw, the sandbox spawns rocks), so the visual set is reconciled rather
@@ -1352,6 +1360,7 @@ export class Scene3D {
   }
 
   private clearLevel(): void {
+    this.foliage.clear();
     this.clearHighlight();
     for (const visual of this.bodies.values()) {
       this.scene.remove(visual.root);
