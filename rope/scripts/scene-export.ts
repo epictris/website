@@ -18,9 +18,12 @@
 // `--raw` skips the optimiser and ships Blender's own file, for telling an
 // optimiser problem from an export one. Never publish one.
 //
-// An object whose baked maps are in the bake cache (`.cache/scene-bake/<scene>/`,
-// tools/blender/bake_cache.py) is not baked again; `--no-cache` bakes every
-// one afresh (the cache's key is in that file).
+// An object whose prepared mesh and baked maps are in the bake cache
+// (`.cache/scene-bake/<scene>/`, tools/blender/bake_cache.py) is neither
+// prepared nor baked again, and a map whose encode is in the encode cache
+// (`.cache/scene-encode/<scene>/`, scripts/encode-textures.mjs) is not
+// encoded again; `--no-cache` does every one afresh and leaves both caches
+// alone (each one's key is in its file).
 
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -168,7 +171,10 @@ try {
     progress.start("optimise");
     const opt = await stream(
       "bun",
-      ["run", join(ROOT, "scripts", "optimize-asset.ts"), raw, shipped, "--keep-nodes", "--keep-hierarchy", "--baked-maps"],
+      [
+        "run", join(ROOT, "scripts", "optimize-asset.ts"), raw, shipped, "--keep-nodes", "--keep-hierarchy", "--baked-maps",
+        ...(args.includes("--no-cache") ? [] : ["--texture-cache", join(ROOT, ".cache", "scene-encode", scene)]),
+      ],
       (line) => {
         // encode-textures.mjs counting its maps as they land.
         const encoding = /^\[assets\] encoding textures: (\d+) of (\d+) done$/.exec(line);
@@ -191,10 +197,10 @@ try {
     // Every map Blender baked must be encoded as one: the optimiser finds them
     // by name, and a baked map it misses goes out as lossy WebP at 1k without
     // a word (the four dotted Terraces did until 2026-10-04).
-    const baked = /baked (\d+) colour, \d+ detail and (\d+) normal maps/.exec(run.stdout);
+    const baked = /ships (\d+) colour and (\d+) normal maps/.exec(run.stdout);
     const encoded = (kind: string) => Number(new RegExp(`^\\[assets\\] (\\d+) texture\\(s\\): baked ${kind}`, "m").exec(opt.stdout)?.[1] ?? 0);
     if (baked && (encoded("colour") !== Number(baked[1]) || encoded("normal") !== Number(baked[2]))) {
-      fail(`Blender baked ${baked[1]} colour and ${baked[2]} normal maps but the optimiser encoded ${encoded("colour")} and ${encoded("normal")} as baked maps; the rest shipped at 1k (an image name the glTF exporter cut short?)`);
+      fail(`Blender shipped ${baked[1]} colour and ${baked[2]} normal maps (baked or from its cache) but the optimiser encoded ${encoded("colour")} and ${encoded("normal")} as baked maps; the rest shipped at 1k (an image name the glTF exporter cut short?)`);
     }
   }
 

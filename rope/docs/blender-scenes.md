@@ -100,13 +100,21 @@ The Level panel shows the export's summary and the body panel offers the exporte
 
 ## The bake cache
 
-Baking is most of an export, and an edit usually touches one or two objects, so every baked object's final maps (its `baked colour` and `baked normal` images, as the glTF gets them) are kept in `rope/.cache/scene-bake/<scene>/` (gitignored) and an object whose key has not changed loads them instead of baking (`tools/blender/bake_cache.py`, since 2026-10-04).
-A cached slate rock skips its detail high poly too.
-The key is everything that decides the pixels: the bake code (`scene_export.py`, `bake_cache.py` and `formations/*.py`) and Blender's version; the scene's Cycles and bake settings; the object's prepared mesh as the bake sees it (modifiers applied, creases rebuilt and still straight, every attribute, the bake unwrap), its world transform, detail seed and map size; every node tree of its materials, groups and images included; and every object within reach of its Ambient Occlusion nodes, since the slate's 0.5 m occlusion darkens where a neighbour comes close.
-When in doubt the key takes more in: a missed input ships a stale map without a word, an extra one costs a bake.
-Any edit to the bake code therefore re-bakes everything.
+Preparing and baking is most of an export, and an edit usually touches one or two objects, so every baked object's prepared mesh (modifiers applied, creases rebuilt and still straight, the bake unwrap) and final maps (its `baked colour` and `baked normal` images, as the glTF gets them) are kept in `rope/.cache/scene-bake/<scene>/` (gitignored), and an object whose key has not changed loads them instead (`tools/blender/bake_cache.py`, since 2026-10-04; the mesh since 2026-10-07).
+A cached object is neither prepared nor baked: no crease rebuild (100 s for Terrace.011 alone, 170 s for the river's Terraces), no unwrap, no detail high poly.
+Its mesh is kept straight with its bows, and bent with the fresh ones after the bakes, so an object still to bake meets its neighbours as a cold export would.
+The key is taken on the scene before anything is prepared, since the preparation is a function of what the key holds: the bake code and Blender's version; the scene's Cycles settings a bake reads and its bake settings; the object's evaluated mesh (every attribute), its world transform, detail seed and render settings (depth, strips, creases, chips, map size); every node tree of its materials as the export repaints them, slot by slot, groups and images (by their pixels) included; and every triangle of the rest of the scene within reach of its Ambient Occlusion nodes, with the seed and render settings of a baked neighbour, since the slate's 0.5 m occlusion darkens where a neighbour comes close.
+Every input is taken by content, never by name or by its place in the file.
+Until 2026-10-07 the key held the names of the export's per-object material copies, which Blender numbers after every material in the file (`Painted slate.058`), so a rebuild anywhere that added a slate material re-baked every rock in the scene; and a neighbour counted whole, so a vertex moved on one backdrop rock re-baked the five others whose boxes it touched.
+Now a neighbour's edit re-bakes an object only when the edited triangles are within its occlusion reach.
+The bake code is the part of `scene_export.py` the bake reaches from `bake_procedural_textures`, plus the formations modules it imports and those import, each as its syntax tree with its reports left out (a `log`, `step` or `print` whose arguments call only side-effect-free builtins; `log(f"... {curve.rebuild_mesh(...)}")` stays in): a comment, a docstring, a reflow, a log line or an edit to the export's other steps re-bakes nothing; any other edit to the bake's code re-bakes everything.
+What decides a pixel is in the key: a missed input ships a stale map without a word, an extra one costs a bake.
+Hair curves, point clouds and volumes have no triangles to read, so one counts whole (its data and transform) for every rock its box comes within reach of.
 Entries the latest export did not use are removed, so the cache holds one export per scene; the log line says how many objects came from it.
-`just scene <level> --no-cache` bakes every object afresh and leaves the cache alone.
+The optimiser's encode has a cache of its own, `rope/.cache/scene-encode/<scene>/` (`scripts/encode-textures.mjs`, `--texture-cache` on `optimize-asset.ts`): each map's AVIF or WebP keyed on the source image's bytes, its colour space, the rule's encoding and the encoder's versions (gltf-transform, sharp and its libraries).
+Encoding was most of a warm export once the bake was cached (93 s of the river's 110, 2026-10-07: 57 maps up to 4k), and an unchanged map's PNG comes out of the bake cache byte for byte, so only the maps of re-baked objects are encoded again.
+A cached encode goes into the file at the point of the pass that would have made it, and the shipped glb is byte for byte the uncached one's.
+`just scene <level> --no-cache` bakes and encodes everything afresh and leaves both caches alone.
 After every export `scene-export.ts` checks that the optimiser encoded every baked map as one (`baked colour` and `baked normal`, both AVIF): it finds them by image name, and a name the glTF exporter cut short at a dot (`Terrace.003 baked colour` went out as `Terrace`) shipped the four dotted Terraces as lossy WebP at 1k until 2026-10-04.
 
 ## Frames and units

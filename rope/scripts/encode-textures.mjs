@@ -1,6 +1,15 @@
 // Encode a glTF's textures in place, each by the first rule that claims it.
 //
-//   node scripts/encode-textures.mjs <file.glb> [--lossless-normals] [--baked-maps]
+//   node scripts/encode-textures.mjs <file.glb> [--lossless-normals] [--baked-maps] [--cache DIR]
+//
+// With `--cache`, a map whose encode is in DIR is taken from there instead of
+// encoded: keyed on the source image's bytes, its mime type and colour space,
+// the rule's encoding and the encoder's versions (gltf-transform, sharp and
+// its libraries), which is everything the encoded bytes are a function of.
+// The scene export passes one per scene (`scene-export.ts`): encoding is most
+// of a warm export (93 s of the river's 110, 2026-10-07: 57 maps, AVIF at up
+// to 4k), and a one-rock edit changes two maps. Entries this run did not use
+// are removed, so DIR holds one file's encodes.
 //
 // The second half of `assets:optimize` when a flag there gives some maps an
 // encoding of their own (scripts/optimize-asset.ts): `optimize` leaves the maps
@@ -18,16 +27,23 @@
 // of the brightness. Under Node (where gltf-transform's CLI already runs) the
 // encode is stable.
 
-import { NodeIO } from "@gltf-transform/core";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { basename, join } from "node:path";
+import { FileUtils, ImageUtils, NodeIO, VERSION } from "@gltf-transform/core";
 import { ALL_EXTENSIONS } from "@gltf-transform/extensions";
-import { textureCompress } from "@gltf-transform/functions";
+import { getTextureColorSpace, listTextureSlots, textureCompress } from "@gltf-transform/functions";
 import { MeshoptDecoder, MeshoptEncoder } from "meshoptimizer";
 import sharp from "sharp";
 
 const argv = process.argv.slice(2);
-const file = argv.find((a) => !a.startsWith("--"));
-if (!file) {
-  console.error("usage: node scripts/encode-textures.mjs <file.glb> [--lossless-normals] [--baked-maps]");
+const cacheAt = argv.indexOf("--cache");
+const cacheDir = cacheAt === -1 ? null : argv[cacheAt + 1];
+// Guarded on the flag being there: an absent one is index -1, and skipping
+// `cacheAt + 1` would skip the file (optimize-asset.ts met that once).
+const file = argv.find((a, i) => !a.startsWith("--") && (cacheAt === -1 || i !== cacheAt + 1));
+if (!file || (cacheAt !== -1 && !cacheDir)) {
+  console.error("usage: node scripts/encode-textures.mjs <file.glb> [--lossless-normals] [--baked-maps] [--cache DIR]");
   process.exit(2);
 }
 
@@ -79,6 +95,35 @@ if (argv.includes("--baked-maps")) {
 if (argv.includes("--lossless-normals")) {
   rules.push({ name: "normal map, lossless", slots: /^normalTexture$/, targetFormat: "webp", lossless: true, resize: [STANDARD, STANDARD] });
 }
+// Everything else, as `optimize` would have encoded it. Unnamed: it reports no
+// count of its own.
+rules.push({ name: null, targetFormat: "webp", resize: [STANDARD, STANDARD] });
+
+// Whether `rule` takes `texture`, as `textureCompress` decides: by name or
+// URI for a pattern, and a texture in no slot passes a slot filter.
+const claims = (rule, texture) => {
+  if (rule.pattern && !rule.pattern.test(texture.getName()) && !rule.pattern.test(texture.getURI())) return false;
+  const slots = listTextureSlots(texture);
+  return !(rule.slots && slots.length && !slots.some((slot) => rule.slots.test(slot)));
+};
+// What an encode's bytes depend on besides its source and rule. Bumped by hand
+// only when this file changes how it encodes.
+const CACHE_VERSION = 1;
+const ENCODER = JSON.stringify([CACHE_VERSION, VERSION, sharp.versions]);
+const keyOf = (texture, rule) => {
+  const { name, pattern, slots, ...encoding } = rule;
+  return createHash("sha256")
+    .update(JSON.stringify([ENCODER, encoding, texture.getMimeType(), getTextureColorSpace(texture)]))
+    .update(texture.getImage())
+    .digest("hex");
+};
+// A cached encode set on `texture` as `compressTexture` sets a fresh one.
+const adopt = (texture, image, dstMime) => {
+  const srcURI = texture.getURI();
+  const srcExtension = srcURI ? FileUtils.extension(srcURI) : ImageUtils.mimeTypeToExtension(texture.getMimeType());
+  const dstURI = srcURI.replace(new RegExp(`\\.${srcExtension}$`), `.${ImageUtils.mimeTypeToExtension(dstMime)}`);
+  texture.setImage(image).setMimeType(dstMime).setURI(dstURI);
+};
 
 await MeshoptDecoder.ready;
 await MeshoptEncoder.ready;
@@ -90,18 +135,35 @@ const doc = await io.read(file);
 // Each pass takes only maps still PNG or JPEG, so a map a rule encoded is never
 // encoded again, and the last pass (everything else) gets exactly the rest.
 const RAW = /^image\/(png|jpeg)$/;
-const raw = () => doc.getRoot().listTextures().filter((t) => RAW.test(t.getMimeType())).length;
+const isRaw = (t) => RAW.test(t.getMimeType());
+// Every map to encode, with the rule that takes it and, with a cache, its
+// cache file (the encode's own, whether there yet or not).
+const plan = doc
+  .getRoot()
+  .listTextures()
+  .filter(isRaw)
+  .map((texture) => {
+    const rule = rules.find((r) => claims(r, texture));
+    const mime = `image/${rule.targetFormat}`;
+    const path = cacheDir && join(cacheDir, `${keyOf(texture, rule)}.${ImageUtils.mimeTypeToExtension(mime)}`);
+    return { texture, rule, mime, path, cached: !!path && existsSync(path) };
+  });
+const fresh = plan.filter((p) => !p.cached);
 // How far the encode is, as a texture's mime type changes the moment its
 // encode lands (`textureCompress` encodes a pass's maps all at once and says
 // nothing until the pass is done; a scene's 4k maps take a minute or more).
 // `scene-export.ts` shows the latest of these lines as its progress.
-const total = raw();
 let shown = -1;
 const progress = () => {
-  const done = total - raw();
-  if (done !== shown) console.log(`[assets] encoding textures: ${(shown = done)} of ${total} done`);
+  const done = fresh.filter((p) => !isRaw(p.texture)).length;
+  if (done !== shown) console.log(`[assets] encoding textures: ${(shown = done)} of ${fresh.length} done`);
 };
-const encode = async (options) => {
+progress();
+for (const rule of rules) {
+  const { name, ...options } = rule;
+  // A pass's cached maps go in just before it, so the file changes in the
+  // order an uncached run changes it, and comes out the same.
+  for (const p of plan) if (p.rule === rule && p.cached) adopt(p.texture, readFileSync(p.path), p.mime);
   const timer = setInterval(progress, 250);
   try {
     await doc.transform(textureCompress({ encoder: sharp, formats: RAW, ...options }));
@@ -109,12 +171,19 @@ const encode = async (options) => {
     clearInterval(timer);
   }
   progress();
-};
-progress();
-for (const { name, ...rule } of rules) {
-  const before = raw();
-  await encode(rule);
-  console.log(`[assets] ${before - raw()} texture(s): ${name}`);
+  if (name) console.log(`[assets] ${plan.filter((p) => p.rule === rule && !isRaw(p.texture)).length} texture(s): ${name}`);
 }
-await encode({ targetFormat: "webp", resize: [STANDARD, STANDARD] });
+if (cacheDir) {
+  mkdirSync(cacheDir, { recursive: true });
+  for (const p of fresh) {
+    // Kept only as the rule meant it: an encode `compressTexture` declined
+    // (a larger file in the same format) is not one.
+    if (p.texture.getMimeType() !== p.mime) continue;
+    writeFileSync(`${p.path}.partial`, p.texture.getImage());
+    renameSync(`${p.path}.partial`, p.path);
+  }
+  const used = new Set(plan.map((p) => basename(p.path)));
+  for (const name of readdirSync(cacheDir)) if (!used.has(name)) unlinkSync(join(cacheDir, name));
+  console.log(`[assets] ${plan.length - fresh.length} of ${plan.length} maps from the encode cache`);
+}
 await io.write(file, doc);

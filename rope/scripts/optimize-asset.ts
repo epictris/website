@@ -80,6 +80,10 @@
 // lossless until 2026-10-04). Lossy WebP turned that dark, low-contrast painted stone into blocks
 // and colour blotches; the measurements are in `encode-textures.mjs`.
 // `scene-export.ts` always passes it.
+//
+// `--texture-cache DIR` keeps each map's encode in DIR and takes it from there
+// next time its source, rule and encoder are unchanged (encode-textures.mjs).
+// It changes no byte of the output; `scene-export.ts` passes one per scene.
 
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
@@ -91,7 +95,11 @@ const argv = process.argv.slice(2);
 // out of the argument list before anything positional is read; everything below
 // then sees exactly the arguments it saw before the flags existed.
 const BARE = new Set(["--center", "--keep-nodes", "--keep-hierarchy", "--lossless-normals", "--baked-maps"]);
-const args = argv.filter((a) => !BARE.has(a));
+// `--texture-cache DIR` (encode-textures.mjs's `--cache`) comes out with its
+// value, the same way; guarded on the flag being there (see `--simplify`).
+const textureCacheAt = argv.indexOf("--texture-cache");
+const textureCache = textureCacheAt === -1 ? null : argv[textureCacheAt + 1];
+const args = argv.filter((a, i) => !BARE.has(a) && (textureCacheAt === -1 || (i !== textureCacheAt && i !== textureCacheAt + 1)));
 const center = argv.includes("--center");
 const keepNodes = argv.includes("--keep-nodes");
 const keepHierarchy = argv.includes("--keep-hierarchy");
@@ -111,7 +119,7 @@ const [input, output] =
     : args.filter((_, i) => i !== simplifyAt && i !== simplifyAt + 1);
 if (!input || !output) {
   console.error(
-    "usage: bun run assets:optimize <input.glb|gltf> <public/meshes/out.glb> [--simplify <ratio>] [--center] [--keep-nodes] [--keep-hierarchy] [--lossless-normals] [--baked-maps]",
+    "usage: bun run assets:optimize <input.glb|gltf> <public/meshes/out.glb> [--simplify <ratio>] [--center] [--keep-nodes] [--keep-hierarchy] [--lossless-normals] [--baked-maps] [--texture-cache DIR]",
   );
   process.exit(2);
 }
@@ -236,6 +244,7 @@ if (ownEncoding) {
       resolve(output),
       ...(losslessNormals ? ["--lossless-normals"] : []),
       ...(bakedMaps ? ["--baked-maps"] : []),
+      ...(textureCache ? ["--cache", resolve(textureCache)] : []),
     ],
     { stdio: "inherit" },
   );

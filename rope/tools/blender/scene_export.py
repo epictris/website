@@ -453,6 +453,37 @@ def seed_for(ob):
         return sum(ord(c) for c in ob.name)
 
 
+def preparation(ob):
+    """Everything besides its mesh and materials that decides how `ob` is
+    prepared and baked: its detail seed and every render setting
+    (formations/render.py: the depth, the strips, creases and chips, the map
+    size), as the bake cache keys it."""
+    from formations import render
+    return seed_for(ob), [(name, render.setting(ob, name)) for name in render.SETTINGS]
+
+
+def export_materials(ob, materials):
+    """The export's own copy of each of `ob`'s `materials` (a slot's, or
+    None), so each object's point at its own images; a painted slate on a
+    rock drawn further back is repainted at its depth (formations/slate.py)."""
+    out = []
+    for mat in materials:
+        copy = mat.copy() if mat is not None else None
+        if copy is not None and is_slate(mat) and detail_scale(ob) != 1.0:
+            from formations import slate
+            copy[slate.SCALE_PROP] = detail_scale(ob)
+            slate.paint(copy)
+        out.append(copy)
+    return out
+
+
+def export_mesh_name(ob):
+    """The name of the mesh the export prepares (or loads from the bake
+    cache) for `ob`: one no mesh in the file has, so Blender never renumbers
+    it, and a cached object's glTF matches a baked one's byte for byte."""
+    return f"{ob.name} export"
+
+
 def image_name(ob, kind):
     """The name of `ob`'s `kind` map ("baked colour", ...). No dot in it: the
     glTF exporter takes everything after the last dot for an extension, so
@@ -541,9 +572,11 @@ def bake_procedural_textures(kept, cache_dir=None, paints=(), warnings=None):
     gets a mesh with its modifiers applied and a fresh unwrap (BAKE_UV), its
     materials are copied so each object's point at its own images, and the file
     is never saved. The resolution is formations/render.py's (`bake_size`:
-    TEXELS_PER_METRE up to BAKE_SIZE_MAX). With `cache_dir`, an object whose maps are in the bake
-    cache (bake_cache.py) loads them instead of baking. Returns how many
-    objects were baked or loaded.
+    TEXELS_PER_METRE up to BAKE_SIZE_MAX). With `cache_dir`, an object whose
+    prepared mesh and maps are in the bake cache (bake_cache.py) loads them
+    instead of being prepared and baked: the key is taken on the scene before
+    anything is prepared, so a cached object costs neither its creases'
+    rebuild nor its unwrap. Returns how many objects were baked or loaded.
 
     `paints` (moss.texture_paints) are texture-only mosses: a rock one grows
     on has its colour baked whatever its material, and the moss painted into
@@ -564,10 +597,57 @@ def bake_procedural_textures(kept, cache_dir=None, paints=(), warnings=None):
     t0 = time.time()
     scene = bpy.context.scene
     depsgraph = bpy.context.evaluated_depsgraph_get()
-    sizes, straight, bows = {}, {}, {}
+    # Set before the cache keys, which take them in.
+    scene.render.engine = "CYCLES"
+    device = bake_device()
+    scene.cycles.device = "CPU" if device == "CPU" else "GPU"
+    scene.cycles.samples = BAKE_SAMPLES
+    # Each object's own copies of its materials, so its point at its own
+    # images; a far-back rock's slate repainted to its depth.
+    materials = {ob: export_materials(ob, [s.material for s in ob.evaluated_get(depsgraph).material_slots])
+                 for ob in targets}
     for ob in targets:
+        if any(m is None for m in materials[ob]) or not materials[ob]:
+            # A bake needs a material to write through on every face.
+            raise SystemExit(f"{ob.name}: a procedural material shares the object with an empty material slot")
+    colored = [ob for ob in targets if ob in by_host or any(procedural_base_colors(m) for m in materials[ob])]
+    bumped = [ob for ob in targets if any(procedural_normals(m) for m in materials[ob])]
+    # The maps each object ships, as (kind, colour space).
+    ships = {ob: [k for k, among in (("baked colour", colored), ("baked normal", bumped)) if ob in among]
+             for ob in targets}
+    space = {"baked colour": "sRGB", "baked normal": "Non-Color"}
+
+    # Objects whose prepared mesh and maps are cached load them and are left
+    # out of the preparation and every bake. Every key is taken before
+    # anything is prepared, on the scene as the file has it. A cached mesh
+    # is the straight one, bent with the others after the bakes, so the
+    # objects still to bake meet it as a cold export would.
+    sizes, straight, bows = {}, {}, {}
+    cache, keys, hits, loaded = None, {}, {}, {}
+    if cache_dir:
+        import bake_cache
+        cache = bake_cache.Cache(cache_dir, depsgraph, {ob: preparation(ob) for ob in targets})
+        for ob in targets:
+            keys[ob] = cache.key(ob, scene, materials[ob], [entry[4] for entry in by_host.get(ob, ())])
+            hit = cache.get(keys[ob], [image_name(ob, k) for k in ships[ob]])
+            if hit is not None:
+                hits[ob] = hit
+        for ob, (files, mesh_file, data) in hits.items():
+            loaded[ob] = {k: bake_cache.load(files[image_name(ob, k)], image_name(ob, k), space[k]) for k in ships[ob]}
+            ob.modifiers.clear()
+            ob.data = bake_cache.load_mesh(mesh_file, materials[ob])
+            ob.data.name = export_mesh_name(ob)
+            if data and data.get("bows"):
+                bows[ob] = [(Vector(a), Vector(b), Vector(bow), reach) for a, b, bow, reach in data["bows"]]
+    step("bake", f"{len(targets) - len(loaded)} of {len(targets)} objects to bake"
+         + (f", {len(loaded)} cached" if cache else ", cache off"))
+
+    for ob in targets:
+        if ob in loaded:
+            continue
         mesh = bpy.data.meshes.new_from_object(ob.evaluated_get(depsgraph), preserve_all_data_layers=True,
                                                depsgraph=depsgraph)
+        mesh.name = export_mesh_name(ob)
         ob.modifiers.clear()
         ob.data = mesh
         slate_rock = any(is_slate(m) for m in mesh.materials)
@@ -583,23 +663,13 @@ def bake_procedural_textures(kept, cache_dir=None, paints=(), warnings=None):
             log(f"curve {ob.name}: {curve.rebuild_mesh(mesh, bows[ob], seed_for(ob), smooth=True)}")
         if slate_rock and render_setting(ob, "export_chips"):
             straight[ob] = mesh.copy()
-        for i, mat in enumerate(mesh.materials):
-            if mat is not None:
-                mesh.materials[i] = mat.copy()
-                if is_slate(mat) and detail_scale(ob) != 1.0:
-                    from formations import slate
-                    mesh.materials[i][slate.SCALE_PROP] = detail_scale(ob)
-                    slate.paint(mesh.materials[i])
-        if any(m is None for m in mesh.materials) or not mesh.materials:
-            # A bake needs a material to write through on every face.
-            raise SystemExit(f"{ob.name}: a procedural material shares the object with an empty material slot")
+        if len(mesh.materials) != len(materials[ob]):
+            raise SystemExit(f"{ob.name}: {len(mesh.materials)} material slots on its mesh, {len(materials[ob])} on the object")
+        for i, mat in enumerate(materials[ob]):
+            mesh.materials[i] = mat
         sizes[ob] = bake_size(mesh, ob)
         bumps = any(procedural_normals(m) for m in mesh.materials)
         unwrap(ob, map_size(sizes[ob], "baked normal") if bumps else sizes[ob])
-    scene.render.engine = "CYCLES"
-    device = bake_device()
-    scene.cycles.device = "CPU" if device == "CPU" else "GPU"
-    scene.cycles.samples = BAKE_SAMPLES
 
     def images(obs, kind, colorspace):
         out = {}
@@ -615,28 +685,6 @@ def bake_procedural_textures(kept, cache_dir=None, paints=(), warnings=None):
             out[ob] = im
         return out
 
-    colored = [ob for ob in targets if ob in by_host or any(procedural_base_colors(m) for m in ob.data.materials)]
-    bumped = [ob for ob in targets if any(procedural_normals(m) for m in ob.data.materials)]
-    # The maps each object ships, as (kind, colour space).
-    ships = {ob: [k for k, among in (("baked colour", colored), ("baked normal", bumped)) if ob in among]
-             for ob in targets}
-    space = {"baked colour": "sRGB", "baked normal": "Non-Color"}
-
-    # Objects whose maps are cached load them and are left out of every bake.
-    cache, keys, loaded = None, {}, {}
-    if cache_dir:
-        import bake_cache
-        cache = bake_cache.Cache(cache_dir)
-        depsgraph = bpy.context.evaluated_depsgraph_get()
-        for ob in targets:
-            keys[ob] = cache.key(ob, sizes[ob], seed_for(ob), scene, depsgraph,
-                                 [bool(render_setting(ob, n)) for n in ("export_strips", "export_creases", "export_chips")]
-                                 + [entry[4] for entry in by_host.get(ob, ())])
-            files = cache.get(keys[ob], [image_name(ob, k) for k in ships[ob]])
-            if files is not None:
-                loaded[ob] = {k: bake_cache.load(files[image_name(ob, k)], image_name(ob, k), space[k]) for k in ships[ob]}
-    step("bake", f"{len(targets) - len(loaded)} of {len(targets)} objects to bake"
-         + (f", {len(loaded)} cached" if cache else ", cache off"))
     fresh = {}  # ob -> the images baked for it here, to cache
 
     def bake_or_load(obs, kind, bake):
@@ -695,16 +743,23 @@ def bake_procedural_textures(kept, cache_dir=None, paints=(), warnings=None):
                 wire_normal(mat, node, bsdf)
     if cache:
         for ob, made in fresh.items():
-            cache.put(keys[ob], made, ob.name)
+            # Still straight: bent below, and on every load.
+            rock_bows = [[list(a), list(b), list(bow), reach] for a, b, bow, reach in bows.get(ob, ())]
+            cache.put(keys[ob], made, ob.data, ob.name, {"bows": rock_bows})
         pruned = cache.prune()
+    if bows:
+        from formations import curve
     for ob, rock_bows in bows.items():
         # Bent only now that every map is baked (formations/curve.py).
         log(f"curve {ob.name}: {curve.bend(ob.data, rock_bows)}")
-    texels = ", ".join(f"{ob.name} {sizes[ob]}" for ob in targets)
+    texels = ", ".join(f"{ob.name} {sizes[ob]}" for ob in targets if ob in sizes)
     cached = (f"{len(loaded)} of {len(targets)} objects from the cache ({pruned} stale entries removed)"
               if cache else "cache off")
-    log(f"baked {len(colored)} colour, {len(detailed)} detail and {len(bumped)} normal maps ({texels}) on {device}; "
-        f"{cached}; {time.time() - t0:.1f}s")
+    # scene-export.ts reads the "ships" counts: the optimiser must encode that
+    # many baked maps.
+    log(f"ships {len(colored)} colour and {len(bumped)} normal maps; baked {sum(ob not in loaded for ob in colored)} "
+        f"colour, {len(to_detail)} detail and {sum(ob not in loaded for ob in bumped)} normal ({texels or 'none'}) "
+        f"on {device}; {cached}; {time.time() - t0:.1f}s")
     return len(targets)
 
 

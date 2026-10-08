@@ -6,20 +6,32 @@ maps (its "baked colour" and "baked normal" images, as the glTF gets them) are
 kept under a key of everything that decides their pixels, and an object whose
 key is unchanged loads them instead of baking:
 
-- the bake code: this file, scene_export.py and formations/*.py (the detail
-  high poly, the slate, the curved creases), and Blender's version;
-- the scene's Cycles and bake settings;
+- the bake code: the part of scene_export.py the bake reaches and the
+  formations modules it imports (the detail high poly, the slate, the curved
+  creases), as code - comments, docstrings and layout left out - and
+  Blender's version;
+- the scene's Cycles settings that a bake reads (not the viewport's, nor
+  denoising, which a bake never runs) and its bake settings;
 - the object's prepared mesh as the bake sees it (modifiers applied, the
   creases rebuilt and still straight, every attribute, the bake unwrap), its
   world transform, its detail seed and its map size;
-- every node tree of its materials, node groups and images included;
-- every object within reach of its Ambient Occlusion nodes: the slate's 0.5 m
-  occlusion darkens where another rock comes close, so moving a neighbour
-  must re-bake it.
+- every node tree of its materials, slot by slot, node groups and images
+  (by their pixels) included;
+- every triangle of the rest of the scene within reach of its Ambient
+  Occlusion nodes: the slate's 0.5 m occlusion darkens where another rock
+  comes close, so a neighbour's edit within that reach must re-bake it.
 
-When in doubt the key takes more in, never less: a missed input ships a stale
-map without a word, an extra one costs a bake. `--no-cache` on the export
-bakes everything afresh.
+Everything is taken by content, never by name or by place in the file: the
+export copies each object's materials, and Blender numbers a copy after
+every material in the file (`Painted slate.058`), so a key that held those
+names re-baked every rock whenever a rebuild anywhere added a material
+(2026-10-07). Likewise a neighbour counts only by its triangles near the
+object, not as a whole, so a far edit to a long Terrace leaves its other
+neighbours' maps alone.
+
+What decides a pixel is in the key, and nothing else: a missed input ships a
+stale map without a word, an extra one costs a bake. `--no-cache` on the
+export bakes everything afresh.
 
 An entry is a directory named by the key with each map as the PNG the export
 packed (named as the image is, since the glTF exporter may name an image by
@@ -27,7 +39,7 @@ its file) and a meta.json; entries the latest export did not use are removed,
 so the cache holds one export's maps per scene.
 """
 
-import glob
+import ast
 import hashlib
 import json
 import os
@@ -35,11 +47,32 @@ import shutil
 
 import bpy
 import numpy as np
-from mathutils import Vector
+from mathutils.bvhtree import BVHTree
 
 # Bumped when an entry's layout changes.
-VERSION = 1
+VERSION = 2
 HERE = os.path.dirname(os.path.abspath(__file__))
+# An entry's prepared mesh, a .blend holding only it.
+MESH_FILE = "mesh.blend"
+# Where the bake's code starts in scene_export.py: the definitions it reaches
+# from here are the bake's.
+BAKE_ROOT = "bake_procedural_textures"
+# Calls that only report (scene_export's log line and progress step), and the
+# functions a report may call and still change nothing: an edit to what an
+# export says re-bakes nothing.
+REPORTS = {"log", "step", "print"}
+PURE = {
+    "len", "sum", "min", "max", "round", "abs", "str", "repr", "int", "float", "bool", "sorted", "list",
+    "tuple", "set", "dict", "any", "all", "enumerate", "range", "zip", "isinstance", "join", "format",
+    "time", "perf_counter", "items", "keys", "values", "dumps",
+}
+# Cycles settings a bake never reads: the viewport's, and denoising, which
+# Cycles does not run on a bake.
+VIEWPORT_CYCLES = ("preview_", "use_preview_", "volume_preview_", "denoising_", "debug_")
+VIEWPORT_CYCLES_NAMES = {"use_denoising", "denoiser", "texture_resolution", "texture_limit", "ao_bounces"}
+# A neighbour's triangle counts at this precision, metres, so a transform
+# recomputed to the same place does not read as an edit.
+NEAR_QUANTUM = 1e-5
 # Node and socket properties that change how a tree looks in the editor, never
 # what it computes.
 SKIP = {
@@ -62,6 +95,9 @@ ATTRIBUTE_FIELD = {
     "FLOAT4X4": ("value", 16),
 }
 GEOMETRY = {"MESH", "CURVE", "SURFACE", "FONT", "META"}
+# What Cycles draws without triangles to read: near an object, each counts
+# whole (its data and transform), by its bounding box.
+WHOLE = {"CURVES", "POINTCLOUD", "VOLUME"}
 
 
 def _put(h, *parts):
@@ -78,15 +114,23 @@ def _array(h, data, field, n, dtype):
 
 def mesh_digest(h, me):
     """Topology and every attribute (positions, UVs, normals, the slate's
-    `facet` and `strip`, materials), selection and hiding left out."""
+    `facet` and `strip`, which slot each face takes), selection and hiding
+    left out. The slots' materials are the key's, by content."""
     _put(h, len(me.vertices), len(me.edges), len(me.loops), len(me.polygons))
     _array(h, me.polygons, "loop_start", 1, np.int32)
     _array(h, me.loops, "vertex_index", 1, np.int32)
     _array(h, me.edges, "vertices", 2, np.int32)
-    for name in sorted(a.name for a in me.attributes):
+    attributes_digest(h, me.attributes)
+    _put(h, len(me.materials))
+
+
+def attributes_digest(h, attributes):
+    """Every attribute of a mesh, curves or point cloud, selection and
+    hiding left out."""
+    for name in sorted(a.name for a in attributes):
         if name.startswith(EDITOR_ATTRIBUTE):
             continue
-        attr = me.attributes[name]
+        attr = attributes[name]
         _put(h, name, attr.domain, attr.data_type)
         field, n = ATTRIBUTE_FIELD.get(attr.data_type, (None, 0))
         try:
@@ -100,20 +144,31 @@ def mesh_digest(h, me):
                 raise TypeError(attr.data_type)
         except (TypeError, RuntimeError):
             _put(h, [repr(getattr(d, "value", d)) for d in attr.data])
-    _put(h, [m.name if m else None for m in me.materials])
+
+
+_file_digests = {}
+
+
+def file_digest(path):
+    """A file's content hash, read once per export."""
+    if path not in _file_digests:
+        try:
+            with open(path, "rb") as f:
+                _file_digests[path] = hashlib.file_digest(f, "sha256").digest()
+        except OSError:
+            _file_digests[path] = b"missing"
+    return _file_digests[path]
 
 
 def image_digest(h, im):
-    _put(h, "image", im.source, im.filepath, tuple(im.size), im.colorspace_settings.name, im.alpha_mode)
+    """An image by its pixels' source: the packed or on-disk file's content
+    (not its name, path or date), or a generated image's settings."""
+    _put(h, "image", im.source, tuple(im.size), im.colorspace_settings.name, im.alpha_mode)
     if im.packed_file is not None:
         h.update(hashlib.sha256(im.packed_file.data).digest())
-    elif im.source == "FILE":
-        path = bpy.path.abspath(im.filepath, library=im.library)
-        try:
-            st = os.stat(path)
-            _put(h, st.st_size, st.st_mtime_ns)
-        except OSError:
-            _put(h, "missing")
+    elif im.source in ("FILE", "SEQUENCE", "TILED"):
+        _put(h, im.filepath if im.source != "FILE" else None)
+        h.update(file_digest(os.path.realpath(bpy.path.abspath(im.filepath, library=im.library))))
     elif im.source == "GENERATED":
         _put(h, im.generated_type, tuple(im.generated_color), im.generated_width, im.generated_height)
 
@@ -157,53 +212,153 @@ def rna_digest(h, s, depth, seen):
 
 def tree_digest(h, nt, seen):
     """A node tree: every node's settings and unlinked inputs, and the links.
-    A group is taken once however often it is used."""
-    if nt.name in seen:
-        _put(h, "tree", nt.name)
-        return
-    seen.add(nt.name)
-    for node in sorted(nt.nodes, key=lambda n: n.name):
-        _put(h, "node", node.bl_idname, node.name, node.mute)
-        rna_digest(h, node, 2, seen)
-        for sock in node.inputs:
-            _put(h, "in", sock.identifier, sock.is_linked, sock.enabled)
-            if not sock.is_linked and hasattr(sock, "default_value"):
-                v = sock.default_value
-                _put(h, tuple(v) if hasattr(v, "__len__") and not isinstance(v, str) else v)
-    _put(h, sorted((l.from_node.name, l.from_socket.identifier, l.to_node.name, l.to_socket.identifier, l.is_muted)
-                   for l in nt.links))
-    for item in getattr(getattr(nt, "interface", None), "items_tree", ()):
-        rna_digest(h, item, 0, seen)
+    A tree is hashed once however often it is used, `seen` holding its
+    digest by identity: by name, every material's own tree is "Shader
+    Nodetree", and a second slot's was taken for the first's, never hashed."""
+    ptr = nt.as_pointer()
+    if ptr not in seen:
+        seen[ptr] = b"cycle"
+        t = hashlib.sha256()
+        for node in sorted(nt.nodes, key=lambda n: n.name):
+            _put(t, "node", node.bl_idname, node.name, node.mute)
+            rna_digest(t, node, 2, seen)
+            for sock in node.inputs:
+                _put(t, "in", sock.identifier, sock.is_linked, sock.enabled)
+                if not sock.is_linked and hasattr(sock, "default_value"):
+                    v = sock.default_value
+                    _put(t, tuple(v) if hasattr(v, "__len__") and not isinstance(v, str) else v)
+        _put(t, sorted((l.from_node.name, l.from_socket.identifier, l.to_node.name, l.to_socket.identifier, l.is_muted)
+                       for l in nt.links))
+        for item in getattr(getattr(nt, "interface", None), "items_tree", ()):
+            rna_digest(t, item, 0, seen)
+        seen[ptr] = t.digest()
+    h.update(seen[ptr])
+
+
+def _says_only(stmt):
+    """Whether `stmt` is a report and nothing else: a call of one of
+    REPORTS whose arguments call only PURE functions, so dropping it changes
+    nothing the export does."""
+    if not (isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call)
+            and isinstance(stmt.value.func, ast.Name) and stmt.value.func.id in REPORTS):
+        return False
+    for node in ast.walk(stmt.value):
+        if node is stmt.value or not isinstance(node, ast.Call):
+            continue
+        f = node.func
+        name = f.id if isinstance(f, ast.Name) else f.attr if isinstance(f, ast.Attribute) else None
+        if name not in PURE:
+            return False
+    return True
+
+
+def _parse(path):
+    """A module as Python runs it: its syntax tree, docstrings and reports
+    (`_says_only`) dropped; comments and layout never reach the tree."""
+    with open(path, encoding="utf-8") as f:
+        tree = ast.parse(f.read())
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            body = node.body
+            if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant) \
+                    and isinstance(body[0].value.value, str):
+                body = body[1:]
+            node.body = body or [ast.Pass()]
+        for field in ("body", "orelse", "finalbody"):
+            stmts = getattr(node, field, None)
+            if isinstance(stmts, list) and stmts and isinstance(stmts[0], ast.stmt):
+                kept = [s for s in stmts if not _says_only(s)]
+                setattr(node, field, kept or [ast.Pass()])
+    return tree
+
+
+def _defines(stmt):
+    """The names a module-level statement binds (inside a block, an `if` or
+    a `try`, too)."""
+    if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        return {stmt.name}
+    if isinstance(stmt, (ast.Import, ast.ImportFrom)):
+        return {(a.asname or a.name).split(".")[0] for a in stmt.names}
+    out = set()
+    for n in ast.walk(stmt):
+        if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store):
+            out.add(n.id)
+        elif isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            out.add(n.name)
+        elif isinstance(n, (ast.Import, ast.ImportFrom)):
+            out |= {(a.asname or a.name).split(".")[0] for a in n.names}
+    return out
+
+
+def _formations_imports(tree, inside):
+    """The formations modules `tree` imports (`inside` the package, its
+    relative imports too)."""
+    out = set()
+    for n in ast.walk(tree):
+        if isinstance(n, ast.ImportFrom):
+            if n.module == "formations" or (inside and n.level == 1 and n.module is None):
+                out |= {a.name for a in n.names}
+            elif n.module and n.module.startswith("formations."):
+                out.add(n.module.split(".")[1])
+            elif inside and n.level == 1:
+                out.add(n.module.split(".")[0])
+        elif isinstance(n, ast.Import):
+            for a in n.names:
+                parts = a.name.split(".")
+                if parts[0] == "formations":
+                    out.add(parts[1] if len(parts) > 1 else "__init__")
+    return {m for m in out if os.path.isfile(os.path.join(HERE, "formations", f"{m}.py"))}
 
 
 def code_digest():
+    """The bake's code: the module-level definitions of scene_export.py that
+    BAKE_ROOT reaches by name, and every formations module they import, and
+    those import, whole. Each as its syntax tree, so a comment, a docstring
+    or a reflow re-bakes nothing; nor does an edit to the export's other
+    steps (the glTF, the growth, the progress lines). This file is not in it:
+    it decides which maps are used, never their pixels."""
     h = hashlib.sha256()
     _put(h, VERSION, bpy.app.version_string)
-    files = [os.path.join(HERE, "scene_export.py"), os.path.join(HERE, "bake_cache.py")]
-    files += sorted(glob.glob(os.path.join(HERE, "formations", "*.py")))
-    for path in files:
-        _put(h, os.path.relpath(path, HERE))
-        with open(path, "rb") as f:
-            h.update(hashlib.sha256(f.read()).digest())
+    tree = _parse(os.path.join(HERE, "scene_export.py"))
+    defs = {}
+    for stmt in tree.body:
+        for name in _defines(stmt):
+            defs.setdefault(name, []).append(stmt)
+    reached, names, todo = set(), set(), [BAKE_ROOT]
+    while todo:
+        name = todo.pop()
+        if name in names:
+            continue
+        names.add(name)
+        for stmt in defs.get(name, ()):
+            if id(stmt) not in reached:
+                reached.add(id(stmt))
+                todo.extend(n.id for n in ast.walk(stmt) if isinstance(n, ast.Name))
+    if BAKE_ROOT not in defs:
+        raise RuntimeError(f"scene_export.py has no {BAKE_ROOT}: bake_cache.BAKE_ROOT names where the bake starts")
+    code = [stmt for stmt in tree.body if id(stmt) in reached]
+    _put(h, "scene_export.py", [ast.dump(stmt) for stmt in code])
+    modules = set().union(*(_formations_imports(stmt, False) for stmt in code))
+    done = set()
+    while modules - done:
+        name = min(modules - done)
+        done.add(name)
+        module = _parse(os.path.join(HERE, "formations", f"{name}.py"))
+        _put(h, f"formations/{name}.py", ast.dump(module))
+        modules |= _formations_imports(module, True)
     return h.hexdigest()
 
 
-def world_box(ob):
-    corners = [ob.matrix_world @ Vector(c) for c in ob.bound_box]
-    return (Vector([min(c[i] for c in corners) for i in range(3)]),
-            Vector([max(c[i] for c in corners) for i in range(3)]))
-
-
-def ao_reach(ob):
-    """How far the object's Ambient Occlusion nodes look, metres: 0 without
-    any, infinite where a distance is driven by a link."""
+def ao_reach(materials):
+    """How far the Ambient Occlusion nodes of `materials` look, metres: 0
+    without any, infinite where a distance is driven by a link."""
     reach, seen = 0.0, set()
 
     def walk(nt):
         nonlocal reach
-        if nt.name in seen:
+        if nt.as_pointer() in seen:
             return
-        seen.add(nt.name)
+        seen.add(nt.as_pointer())
         for node in nt.nodes:
             if node.type == "AMBIENT_OCCLUSION" and not node.only_local:
                 d = node.inputs["Distance"]
@@ -211,81 +366,171 @@ def ao_reach(ob):
             if node.type == "GROUP" and node.node_tree:
                 walk(node.node_tree)
 
-    for mat in ob.data.materials:
+    for mat in materials:
         if mat and mat.node_tree:
             walk(mat.node_tree)
     return reach
 
 
 class Cache:
-    """One scene's bake cache under `root`."""
+    """One scene's bake cache under `root`, keyed on the scene as `depsgraph`
+    evaluates it before the export prepares anything. `prep` holds, for
+    every object the export bakes, what besides its mesh decides how it is
+    prepared (scene_export.preparation: its seed and render settings)."""
 
-    def __init__(self, root):
+    def __init__(self, root, depsgraph, prep):
         self.root = root
         os.makedirs(root, exist_ok=True)
         self.used = set()
         self.code = code_digest()
-        self._near = {}
+        self.depsgraph = depsgraph
+        self.prep = {ob.name: p for ob, p in prep.items()}
+        self._scene = None
 
-    def _object_digest(self, ob, depsgraph):
-        """An object as the bake's rays meet it: evaluated geometry, transform
-        and render visibility."""
-        if ob.name in self._near:
-            return self._near[ob.name]
-        h = hashlib.sha256()
-        _put(h, ob.name, ob.type, ob.hide_render, [tuple(r) for r in ob.matrix_world])
-        ev = ob.evaluated_get(depsgraph)
-        try:
-            me = ev.data if ev.type == "MESH" else ev.to_mesh()
-            if me is not None:
-                mesh_digest(h, me)
-        except RuntimeError:
-            _put(h, "unevaluated")
-        finally:
-            if ev.type != "MESH":
-                ev.to_mesh_clear()
-        self._near[ob.name] = h.digest()
-        return self._near[ob.name]
+    def _triangles(self):
+        """Every triangle in the depsgraph, world space, as [(original
+        object, is an instance, how the bake's rays see it, (n, 3, 3)
+        triangles, their lows, their highs)], read once per export. A WHOLE
+        object comes as its digest in place of triangles, with its world box
+        as one low and one high.
 
-    def key(self, ob, size, seed, scene, depsgraph, passes=()):
-        """The key of `ob`'s maps, baked at `size` with detail seed `seed` and
-        the export's optional `passes` on or off (scene_export.render_setting:
-        the chips change the normal map without changing the mesh)."""
-        h = hashlib.sha256()
-        _put(h, self.code, size, seed, [tuple(r) for r in ob.matrix_world], list(passes))
-        seen = set()
-        rna_digest(h, scene.cycles, 0, seen)
-        rna_digest(h, scene.render.bake, 0, seen)
-        mesh_digest(h, ob.data)
-        for mat in ob.data.materials:
-            _put(h, "material", mat.name if mat else None)
-            if mat and mat.node_tree:
-                tree_digest(h, mat.node_tree, seen)
-        reach = ao_reach(ob)
-        if reach > 0:
-            lo, hi = world_box(ob)
-            near = []
-            for other in scene.objects:
-                if other is ob or other.type not in GEOMETRY:
+        This is the scene before the export prepares it, not as the bake
+        meets it: a baked object's preparation (its creases rebuilt) is a
+        function of its mesh, the code and its `prep`, which its part of the
+        key carries."""
+        if self._scene is not None:
+            return self._scene
+        self._scene = []
+        for inst in self.depsgraph.object_instances:
+            ev = inst.object
+            if ev.type not in GEOMETRY | WHOLE:
+                continue
+            orig = ev.original
+            m = np.array(inst.matrix_world, dtype=np.float64)
+            seen_by = (orig.hide_render, orig.visible_camera, orig.visible_diffuse, orig.visible_glossy,
+                       orig.visible_transmission, orig.visible_volume_scatter, orig.visible_shadow,
+                       self.prep.get(orig.name))
+            if ev.type in WHOLE:
+                d = hashlib.sha256()
+                _put(d, ev.type, m.tolist())
+                if ev.type == "VOLUME":
+                    _put(d, ev.data.filepath)
+                    d.update(file_digest(os.path.realpath(bpy.path.abspath(ev.data.filepath, library=ev.data.library))))
+                else:
+                    attributes_digest(d, ev.data.attributes)
+                corners = np.array([tuple(c) for c in ev.bound_box], dtype=np.float64) @ m[:3, :3].T + m[:3, 3]
+                self._scene.append((orig, inst.is_instance, seen_by, d.digest(),
+                                    corners.min(axis=0)[None], corners.max(axis=0)[None]))
+                continue
+            try:
+                me = ev.to_mesh()
+            except RuntimeError:
+                continue
+            try:
+                if me is None:
                     continue
-                olo, ohi = world_box(other)
-                if all(olo[i] <= hi[i] + reach and ohi[i] >= lo[i] - reach for i in range(3)):
-                    near.append(other)
-            for other in sorted(near, key=lambda o: o.name):
-                h.update(self._object_digest(other, depsgraph))
+                me.calc_loop_triangles()
+                n = len(me.loop_triangles)
+                if not n:
+                    continue
+                verts = np.empty(n * 3, np.int32)
+                me.loop_triangles.foreach_get("vertices", verts)
+                co = np.empty(len(me.vertices) * 3, np.float32)
+                me.vertices.foreach_get("co", co)
+            finally:
+                ev.to_mesh_clear()
+            world = co.reshape(-1, 3).astype(np.float64) @ m[:3, :3].T + m[:3, 3]
+            tris = world[verts].reshape(n, 3, 3)
+            self._scene.append((orig, inst.is_instance, seen_by, tris, tris.min(axis=1), tris.max(axis=1)))
+        return self._scene
+
+    def _surroundings(self, h, ob, reach):
+        """Every triangle of the scene but `ob`'s own within `reach` of its
+        surface, by where it stands and how the bake's rays see it - not by
+        which object it is part of, nor anything else of that object. The
+        test is conservative: a triangle counts when its bounding sphere comes
+        within `reach` of the surface; a WHOLE object, when its box comes
+        within `reach` of `ob`'s."""
+        scene = self._triangles()
+        own = next((e[3] for e in scene if e[0] == ob and not e[1]), None)
+        if own is None:
+            raise RuntimeError(f"{ob.name}: not in the bake's depsgraph")
+        lo, hi = own.min(axis=(0, 1)) - reach, own.max(axis=(0, 1)) + reach
+        bvh = None if reach == float("inf") else \
+            BVHTree.FromPolygons(own.reshape(-1, 3).tolist(), np.arange(len(own) * 3).reshape(-1, 3).tolist())
+        parts = []
+        for orig, instance, seen_by, tris, tlo, thi in scene:
+            if orig == ob and not instance:
+                continue
+            near = np.flatnonzero(np.all(thi >= lo, axis=1) & np.all(tlo <= hi, axis=1))
+            if isinstance(tris, bytes):
+                if len(near):
+                    parts.append(hashlib.sha256(repr(seen_by).encode() + tris).digest())
+                continue
+            if bvh is not None and len(near):
+                centre = tris[near].mean(axis=1)
+                radius = np.linalg.norm(tris[near] - centre[:, None, :], axis=2).max(axis=1)
+                near = [i for i, c, r in zip(near.tolist(), centre.tolist(), radius.tolist())
+                        if bvh.find_nearest(c, reach + r)[0] is not None]
+            if not len(near):
+                continue
+            rows = np.round(tris[near].reshape(-1, 9) / NEAR_QUANTUM).astype(np.int64)
+            rows = rows[np.lexsort(rows.T[::-1])]
+            p = hashlib.sha256()
+            _put(p, seen_by)
+            p.update(rows.tobytes())
+            parts.append(p.digest())
+        # By content, so the order objects stand in the file does not count.
+        for part in sorted(parts):
+            h.update(part)
+
+    def key(self, ob, scene, materials, extra=()):
+        """The key of `ob`'s prepared mesh and maps, from the scene before
+        any preparation, with the export's own copies of its `materials`, slot
+        by slot (as the bake will read them: a backdrop rock's slate is
+        repainted to its depth, its occlusion reach too), and `extra` (the
+        keys of the mosses painted into its colour map)."""
+        h = hashlib.sha256()
+        _put(h, self.code, self.prep[ob.name], [tuple(r) for r in ob.matrix_world], list(extra))
+        seen = {}
+        for p in scene.cycles.bl_rna.properties:
+            if p.identifier.startswith(VIEWPORT_CYCLES) or p.identifier in VIEWPORT_CYCLES_NAMES:
+                continue
+            if p.identifier not in SKIP and p.type in {"BOOLEAN", "INT", "FLOAT", "STRING", "ENUM"}:
+                v = getattr(scene.cycles, p.identifier)
+                _put(h, p.identifier, sorted(v) if isinstance(v, set) else v)
+        rna_digest(h, scene.render.bake, 0, seen)
+        mesh_digest(h, ob.evaluated_get(self.depsgraph).data)
+        for i, mat in enumerate(materials):
+            _put(h, "slot", i, mat is not None)
+            if mat:
+                _put(h, mat.displacement_method)
+                if mat.node_tree:
+                    tree_digest(h, mat.node_tree, seen)
+        reach = ao_reach(materials)
+        if reach > 0:
+            self._surroundings(h, ob, reach)
         return h.hexdigest()
 
     def get(self, key, names):
-        """{image name: PNG path} for an entry holding every one of `names`,
-        else None."""
+        """(the {image name: PNG path} of `names`, the prepared mesh's .blend,
+        the export's `data`) for an entry holding all of them, else None."""
         files = {n: os.path.join(self.root, key, f"{n}.png") for n in names}
-        if not all(os.path.isfile(p) for p in files.values()):
+        mesh = os.path.join(self.root, key, MESH_FILE)
+        meta = os.path.join(self.root, key, "meta.json")
+        if not all(os.path.isfile(p) for p in [*files.values(), mesh, meta]):
             return None
+        with open(meta) as f:
+            data = json.load(f).get("data")
         self.used.add(key)
-        return files
+        return files, mesh, data
 
-    def put(self, key, images, label):
-        """Keep `images` (packed) under `key`, written whole or not at all."""
+    def put(self, key, images, mesh, label, data=None):
+        """Keep `images` (packed), the prepared `mesh` and the export's `data`
+        (JSON) under `key`, written whole or not at all. The mesh goes without
+        its materials (its slots emptied, which keeps every face's slot;
+        clearing them would not): the export copies them afresh from the
+        file's, as for a bake."""
         final = os.path.join(self.root, key)
         tmp = final + ".partial"
         shutil.rmtree(tmp, ignore_errors=True)
@@ -293,8 +538,15 @@ class Cache:
         for im in images:
             with open(os.path.join(tmp, f"{im.name}.png"), "wb") as f:
                 f.write(im.packed_file.data)
+        bare = mesh.copy()
+        try:
+            for i in range(len(bare.materials)):
+                bare.materials[i] = None
+            bpy.data.libraries.write(os.path.join(tmp, MESH_FILE), {bare}, compress=True)
+        finally:
+            bpy.data.meshes.remove(bare)
         with open(os.path.join(tmp, "meta.json"), "w") as f:
-            json.dump({"object": label, "images": [im.name for im in images]}, f)
+            json.dump({"object": label, "images": [im.name for im in images], "data": data}, f)
         shutil.rmtree(final, ignore_errors=True)
         os.replace(tmp, final)
         self.used.add(key)
@@ -318,3 +570,17 @@ def load(path, name, colorspace):
     im["generated_by"] = "tools/blender/scene_export.py"
     im.pack()
     return im
+
+
+def load_mesh(path, materials):
+    """A cached prepared mesh, its emptied slots filled with `materials`."""
+    with bpy.data.libraries.load(path) as (src, dst):
+        dst.meshes = list(src.meshes)
+    if len(dst.meshes) != 1 or dst.meshes[0] is None:
+        raise RuntimeError(f"{path}: not one mesh")
+    mesh = dst.meshes[0]
+    if len(mesh.materials) != len(materials):
+        raise RuntimeError(f"{path}: {len(mesh.materials)} slots for {len(materials)} materials")
+    for i, mat in enumerate(materials):
+        mesh.materials[i] = mat
+    return mesh
