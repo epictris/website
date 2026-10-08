@@ -55,6 +55,7 @@ import {
   BEAM_RAYS_FINE,
   type Shaft,
 } from "./beam";
+import { GAME_FOG_CAMERA, worldZInView } from "./editorFog";
 
 // The light a fully visible beam (`beam = 1`) puts into its air, as a
 // multiple of the spot's colour, relative to the fog colour the rest of the
@@ -166,10 +167,29 @@ const MARCH_FRAGMENT = /* glsl */ `
   uniform float fogNear;
   uniform float fogFar;
 
+  // The game's camera standing in for this one (\`editorFog.ts\`), and world z
+  // in view space (\`worldZInView\`), to measure its depths with.
+  uniform vec2 fogGameCamera;
+  uniform vec4 worldZ;
+
   float fogAt(float depth) {
     if (fogMode == 2) return 1.0 - exp(-fogDensity * fogDensity * depth * depth);
     if (fogMode == 1) return smoothstep(fogNear, fogFar, depth);
     return ${f(SHAFT_AIR)} * depth;
+  }
+
+  // The fog law's weight for the stretch of a view ray from a to b: the air's
+  // between their depths from this camera; or, while the game's camera stands
+  // in, the air the game would put in a stretch that long (in view depth) at
+  // the depth that camera sees it from - its in-scatter and the transmittance
+  // in front of it, as the surfaces around it are fogged.
+  float airBetween(vec3 a, vec3 b) {
+    if (fogGameCamera.x > 0.5) {
+      float g = fogGameCamera.y - (dot(worldZ.xyz, 0.5 * (a + b)) + worldZ.w);
+      float h = 0.5 * abs(a.z - b.z);
+      return fogAt(max(g + h, 0.0)) - fogAt(max(g - h, 0.0));
+    }
+    return fogAt(-b.z) - fogAt(-a.z);
   }
 
   // The interval of t on o + t d inside the cone's forward nappe and within
@@ -328,15 +348,14 @@ const MARCH_FRAGMENT = /* glsl */ `
       // Interleaved gradient noise (Jimenez): which point of its step each
       // step is sampled at, different for neighbouring pixels.
       float jitter = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
-      float before = fogAt(-(o.z + t0 * d.z));
       float collected = 0.0;
       for (int i = 0; i < ${SHAFT_STEPS}; i++) {
         float ta = t0 + float(i) * dt;
-        float after = fogAt(-(o.z + (ta + dt) * d.z));
         vec3 p = o + (ta + jitter * dt) * d;
         float l = lit(p);
-        if (l > 0.0) collected += l * shadowAt(p, jitter + float(i) * 0.618034) * (after - before);
-        before = after;
+        if (l > 0.0) {
+          collected += l * shadowAt(p, jitter + float(i) * 0.618034) * airBetween(o + ta * d, o + (ta + dt) * d);
+        }
       }
       sum = light * collected;
     }
@@ -348,13 +367,10 @@ const MARCH_FRAGMENT = /* glsl */ `
     if (h1 > h0) {
       float dt = (h1 - h0) / float(${HALO_STEPS});
       float jitter = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.00583715, 0.06711056))));
-      float before = fogAt(-(o.z + h0 * d.z));
       float collected = 0.0;
       for (int i = 0; i < ${HALO_STEPS}; i++) {
         float ta = h0 + float(i) * dt;
-        float after = fogAt(-(o.z + (ta + dt) * d.z));
-        collected += halo(o + (ta + jitter * dt) * d) * (after - before);
-        before = after;
+        collected += halo(o + (ta + jitter * dt) * d) * airBetween(o + ta * d, o + (ta + dt) * d);
       }
       sum += light * collected;
     }
@@ -442,6 +458,9 @@ function marchMaterial(shadowed: boolean): THREE.ShaderMaterial {
       fogDensity: { value: 0 },
       fogNear: { value: 0 },
       fogFar: { value: 1 },
+      // The editor's shared one, by reference (see `editorFog.ts`).
+      fogGameCamera: { value: GAME_FOG_CAMERA },
+      worldZ: { value: new THREE.Vector4() },
     },
     toneMapped: false,
     depthTest: false,
@@ -610,6 +629,7 @@ export class LightShafts {
         } else {
           u.fogMode!.value = 0;
         }
+        worldZInView(camera, u.worldZ!.value as THREE.Vector4);
         if (shadowMap) {
           u.tShadow!.value = shadowMap;
           // The map spans the cone's full angle, 2 tan(angle) at unit

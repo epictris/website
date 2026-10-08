@@ -323,6 +323,12 @@ A **▶ Test is always perspective**, whatever the toggle says: the point of a t
 
 The toggle is the editor's view of the whole scene, never saved and never seen by the player.
 
+**The editor's fog is the game's.**
+The level's fog is hidden while authoring unless the Environment panel's **show fog in editor** is ticked, and when it is shown it - and the spots' lit air, which is drawn either way - hazes every surface by the depth the game's camera sees it from rather than the editor camera's, so zooming out or orbiting changes what is seen and never how foggy it is.
+That camera is the one the game settles at for the place the editor is looking at.
+▶ Test draws the fog from its own camera, which is the game's.
+See [lighting-and-surfaces](lighting-and-surfaces.md#light-and-air) for how.
+
 ## The transform gizmo
 
 A single selected object or body carries the standard **red/green/blue handles** in the 3D scene - arrows to move, rings to turn, boxes to size - through three.js's own `TransformControls` (`editor/gizmo.ts`).

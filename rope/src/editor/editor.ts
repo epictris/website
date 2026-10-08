@@ -11,6 +11,8 @@ import {
   REGION_EXIT_MARGIN,
   buildCameraRules,
   pathParamsAt,
+  restingCameraZoom,
+  type CameraRule,
   type PathKeyField,
 } from "../render/cameraController";
 import { render, renderBall } from "../render/renderer";
@@ -219,7 +221,9 @@ import * as THREE from "three";
 import { Scene3D, type Scene3DLevel } from "../render3d/scene";
 import { SCENERY_TAG } from "../render3d/sceneDressing";
 import { nodeNameOf, sceneMetaFile, type SceneMeta } from "../render3d/scenes";
+import { setGameFogCamera } from "../render3d/editorFog";
 import {
+  cameraDistance,
   focalLengthFromFov,
   FOV_Y_DEG,
   isHeadOn,
@@ -1713,6 +1717,29 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       };
     });
     return JSON.stringify({ ...data, bodies, vines, items: [...itemOf.values()] });
+  }
+
+  // THE GAME'S CAMERA, FOR THE FOG. The editor fogs every surface by the depth
+  // the game's camera sees it at rather than its own (`render3d/editorFog.ts`),
+  // so the haze reads as it plays at any zoom and orbit. That camera is the one
+  // the game settles at with the ball at rest where the editor is looking -
+  // the 3D scene is the ball's, hence `BALL_ZOOM` - framed through the level's
+  // own lens in the game's fixed frame. Its rules are rebuilt per model
+  // revision, since a camera path's index is not free.
+  let fogRules: CameraRule[] = [];
+  let fogRulesRev = -1;
+  function gameFogCameraZ(): number {
+    if (fogRulesRev !== modelRev) {
+      fogRulesRev = modelRev;
+      const data = toLevelData(model);
+      fogRules = buildCameraRules(data.cameraRegions ?? [], data.cameraPaths ?? []);
+    }
+    const target = inVisuals() ? visuals?.view?.target : undefined;
+    const centre = target ? new Vec2(target.x, threeY(target.y)) : camera.position;
+    const zoom = restingCameraZoom(fogRules, centre, BALL_ZOOM);
+    const lens = lensOf(model.camera);
+    const game: Camera = { position: centre, zoom, viewportWidth: VIEW_WIDTH, viewportHeight: VIEW_HEIGHT };
+    return lens.zOffset + cameraDistance(game, lens.fovYDeg);
   }
 
   function syncEditorScene(): void {
@@ -6742,7 +6769,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     fb.checked = fogInEditor;
     describe(
       fw,
-      "Draw the fog in the editor's view as well as in ▶ Test. An editor setting, not saved with the level.",
+      "Draw the fog in the editor's view as well as in ▶ Test - as the game's camera sees it, at any zoom or orbit. An editor setting, not saved with the level.",
     );
     fb.addEventListener("change", () => (fogInEditor = fb.checked));
     fw.appendChild(fb);
@@ -10322,8 +10349,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         scene3d!.setProjection("perspective");
         // ...and the mushrooms wake for the ball, as they do in the game.
         scene3d!.setGlowPreview(false);
-        // ...and the level's fog is drawn, which authoring leaves out.
+        // ...and the level's fog is drawn, which authoring leaves out, from
+        // the camera drawing it, which here is the player's.
         scene3d!.setFogShown(true);
+        setGameFogCamera(null);
         const w = Math.round(view.width * view.scale);
         const h = Math.round(view.height * view.scale);
         scene3d!.setViewportRect({
@@ -10384,8 +10413,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         // scene to wake one, and an author has to see what a mushroom lights
         // before anyone does. ▶ Test hands it back to the ball.
         scene3d.setGlowPreview(true);
-        // No fog while authoring unless asked for (see `fogInEditor`).
+        // No fog while authoring unless asked for (see `fogInEditor`); and the
+        // fog when it is shown, and the spots' lit air always, at the depths
+        // the game's camera sees them from (see `gameFogCameraZ`).
         scene3d.setFogShown(fogInEditor);
+        setGameFogCamera(gameFogCameraZ());
         gizmo?.setCamera(scene3d.camera);
         syncEditorScene();
         // What is selected, said on the models themselves - the geometry

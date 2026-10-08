@@ -24,6 +24,8 @@
 // to reset, and a pinned clock (`Scene3D.pinClock`) draws the same beam twice.
 
 import * as THREE from "three";
+// `FOG_ATTENUATE` calls the `fogDepth()` these chunks declare.
+import "./editorFog";
 
 // The dust's cone's radius at the lamp, in metres: a point source is a
 // degenerate cone, and dust seeded in a disc the size of a lamp's lens is also
@@ -282,15 +284,18 @@ function f(v: number): string {
 
 // Additive light seen through the level's haze: dimmed by the fraction of the
 // fog a surface at this depth would take, computed exactly as three's own
-// `fog_fragment` computes it. Mixing toward the fog colour instead would ADD
-// fog colour wherever a mote is. Shared with the fireflies
-// (`fireflyVisual.ts`), which are the same additive light in the same haze.
+// `fog_fragment` computes it (through `fogDepth()`, so the editor's fog from
+// the game's camera holds here too - see `editorFog.ts`). Mixing toward the
+// fog colour instead would ADD fog colour wherever a mote is. Shared with the
+// fireflies (`fireflyVisual.ts`), which are the same additive light in the
+// same haze.
 export const FOG_ATTENUATE = /* glsl */ `
   #ifdef USE_FOG
+    float fogAirDepth = fogDepth();
     #ifdef FOG_EXP2
-      float fogFactor = 1.0 - exp( - fogDensity * fogDensity * vFogDepth * vFogDepth );
+      float fogFactor = 1.0 - exp( - fogDensity * fogDensity * fogAirDepth * fogAirDepth );
     #else
-      float fogFactor = smoothstep( fogNear, fogFar, vFogDepth );
+      float fogFactor = smoothstep( fogNear, fogFar, fogAirDepth );
     #endif
     a *= 1.0 - fogFactor;
   #endif

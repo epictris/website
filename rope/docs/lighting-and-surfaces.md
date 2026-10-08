@@ -100,6 +100,24 @@ It was briefly a **linear fog pinned to the gameplay plane**, on the argument th
 
 Measured on the ball arena at 0.2: 0.73% RMSE over the frame - 10% of haze on the props in front of the plane, 14% on the plane, 18% on the scenery behind it.
 
+**The editor fogs every surface as the game's camera would** (`render3d/editorFog.ts`, since 2026-10-07).
+The law above is right for the camera a level is played from, and wrong for the editor's, which zooms out far past any camera region to see the whole level: every metre pulled back is a metre more air in front of the level, until the frame is fog colour with the level as a silhouette in it (Tris's report).
+The first fix counted only the air behind the gameplay plane, and read clearer than the game, which also hazes the 10 m or so between its camera and the plane (Tris's second report, the same day).
+The game's camera always looks straight down -z, so the view depth it fogs a surface by is exactly `gameCameraZ - surfaceZ`, whatever the surface's x and y; while authoring, that is the depth every surface is fogged by.
+Same law, same density, so each surface takes exactly the haze the game draws on it, at any editor zoom, orbit or lens.
+The spots' lit air uses the same depths (`airBetween` in the shaft march: a stretch of the editor's ray weighs what a stretch that long weighs at the depth the game's camera sees it from), so a shaft and the surfaces around it agree.
+▶ Test and the game fog from the camera drawing the frame.
+The fog is still hidden in the editor unless **show fog in editor** is ticked (in the Environment panel); the shafts' air is drawn either way.
+
+**Which game camera**: the one the game settles at with the ball at rest where the editor is looking (`restingCameraZoom`: the camera rules in force there, blended, no history; a path's keys at the ball's own projection), at `BALL_ZOOM`, in the game's fixed 1080-line frame, through the level's lens and `zOffset`.
+On the river's start that is z = 10.2375 m, the game camera's own z at the spawn to the last digit.
+One camera per frame is the limit of it: a zoomed-out view across regions that zoom differently is fogged as the region at its centre plays, so the haze is exact where the editor looks and an approximation elsewhere.
+
+**How every material hears it**: one uniform object, `GAME_FOG_CAMERA` (a plain `{ x, y }`: on, and that camera's z), added at import to every fogged `ShaderLib` entry and to `UniformsLib.fog`, and three's four fog chunks replaced with ones whose `fogDepth()` reads it.
+Three clones a material's uniforms when it compiles, but copies a value that is not a three.js object or an array by reference, so it is the same object in every material, and writing it changes uniform values without recompiling anything when the editor hands the scene to ▶ Test.
+A shader that includes the chunks without carrying the uniform reads (0, 0), the camera's own fog, so a forgotten one costs a look, never a broken frame.
+The replacement checks three's chunks against the text it read and throws if an upgrade changed them, and `cli render3d` asserts that the object survives the clones by reference, that the installed chunks read it, and the resting zoom inside and outside a region.
+
 **There is an environment, and it is generated.** A `MeshStandardMaterial` gets its specular response from what it can reflect, so with lights alone there is nothing in the world to reflect but one directional sun: a roughness map has almost no visible effect and a metal - which is nearly all reflection - renders as a dark, dead shape. The chains hanging in the ball arena were exactly that.
 
 `equirectEnvironment` paints a small equirectangular sky from the level's OWN colours - the hemisphere's sky and ground either side of a soft horizon, plus a warm lobe where the sun is - and `PMREMGenerator` convolves it into the mip chain a rough surface samples. No asset, nothing to download, and it cannot disagree with the fog and the fill about what colour the air is. It is a **float** texture because the sun lobe is several times brighter than the sky, which is the range an LDR image cannot hold: clipped, the highlight it puts on a metal is the same white as the sky around it. Directional for the same reason - a uniform environment is indistinguishable from ambient light and puts a highlight nowhere.

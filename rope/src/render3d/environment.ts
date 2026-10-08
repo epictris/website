@@ -42,6 +42,9 @@
 // and the level, so a pulled-back camera region is hazier. That is the same
 // statement as the one above and it is the correct direction.
 //
+// The editor's camera is not a player's, so while authoring every surface is
+// fogged by the depth the GAME's camera sees it at instead (`editorFog.ts`).
+//
 // The environment is what makes the PBR maps mean anything. A
 // `MeshStandardMaterial` gets its specular response from reflections, so with
 // lights alone there is nothing for a surface to reflect but one directional
@@ -60,6 +63,8 @@
 import * as THREE from "three";
 import type { EnvironmentData } from "../level/levelFormat";
 import { loadedHdri, loadHdri } from "./assets";
+// Replaces three's fog chunks before any material is made (see `editorFog.ts`).
+import "./editorFog";
 import { threeY } from "./space";
 
 // The page's own background (see index.html and LETTERBOX_COLOR): the frame's

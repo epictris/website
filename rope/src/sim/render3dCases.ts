@@ -20,7 +20,9 @@
 import * as THREE from "three";
 import { Vec2 } from "../engine/vec2";
 import { VIEW_HEIGHT, VIEW_WIDTH } from "../render/viewport";
-import type { Camera } from "../render/camera";
+import { BALL_ZOOM, type Camera } from "../render/camera";
+import { buildCameraRules, restingCameraZoom } from "../render/cameraController";
+import { GAME_FOG_CAMERA, setGameFogCamera } from "../render3d/editorFog";
 import {
   applyPose,
   CAMERA_FAR,
@@ -2460,7 +2462,51 @@ function fogBand(): CaseResult[] {
   };
   const converted = scaleLevelData(authored, PX).environment!;
   const unscaled = converted.fogAmount === 0.25 && converted.fogColor === "#2b2f36";
+  // The editor fogs by the game camera's depths (`editorFog.ts`) through ONE
+  // uniform object every material shares, which holds only while three's
+  // uniform cloning hands that object over by reference - to a built-in
+  // material (cloned from `ShaderLib` at compile) and to a `ShaderMaterial`
+  // merged from `UniformsLib.fog` alike. A clone that copied it would leave
+  // every material on the camera's own fog with nothing in a picture to say
+  // so until the editor zoomed out. And the chunks every material includes
+  // must be the ones that read it.
+  const sharedBuiltIn =
+    THREE.UniformsUtils.clone(THREE.ShaderLib.standard.uniforms).fogGameCamera?.value === GAME_FOG_CAMERA &&
+    THREE.UniformsUtils.clone(THREE.ShaderLib.physical.uniforms).fogGameCamera?.value === GAME_FOG_CAMERA &&
+    THREE.UniformsUtils.clone(THREE.ShaderLib.basic.uniforms).fogGameCamera?.value === GAME_FOG_CAMERA;
+  const sharedCustom =
+    THREE.UniformsUtils.merge([THREE.UniformsLib.fog]).fogGameCamera?.value === GAME_FOG_CAMERA;
+  const chunks =
+    THREE.ShaderChunk.fog_fragment.includes("fogDepth()") &&
+    THREE.ShaderChunk.fog_pars_fragment.includes("fogGameCamera.y - vFogWorldZ") &&
+    THREE.ShaderChunk.fog_vertex.includes("vFogWorldZ");
+  setGameFogCamera(12.5);
+  const standing = GAME_FOG_CAMERA.x === 1 && GAME_FOG_CAMERA.y === 12.5;
+  setGameFogCamera(null);
+  const released = GAME_FOG_CAMERA.x === 0;
+  const fogOk = sharedBuiltIn && sharedCustom && chunks && standing && released;
+  // ...and the game camera it stands in: the zoom the game settles at where
+  // the editor looks - a region's, inside it, and the base zoom outside.
+  const rules = buildCameraRules(
+    [{ x: 0, y: 0, rot: 0, shape: { kind: "rect", w: 10, h: 10 }, viewportScale: 2 }],
+    [],
+  );
+  const inside = restingCameraZoom(rules, new Vec2(0, 0), BALL_ZOOM);
+  const outside = restingCameraZoom(rules, new Vec2(50, 0), BALL_ZOOM);
+  const zoomOk = Math.abs(inside - BALL_ZOOM / 2) < 1e-9 && Math.abs(outside - BALL_ZOOM) < 1e-9;
   return [
+    {
+      name: "render3d: the editor's fog-from-the-game's-camera uniform is one object in every material, and the fog chunks read it",
+      pass: fogOk,
+      detail: fogOk
+        ? "shared by ShaderLib.standard/physical/basic and UniformsLib.fog clones; set and released"
+        : `builtIn ${sharedBuiltIn}, custom ${sharedCustom}, chunks ${chunks}, standing ${standing}, released ${released}`,
+    },
+    {
+      name: "camera: the resting zoom is a region's inside it and the base zoom outside",
+      pass: zoomOk,
+      detail: `inside ${inside}, outside ${outside} (base ${BALL_ZOOM})`,
+    },
     {
       name: "render3d: fog thickens with camera distance, and is the authored fraction at the reference one",
       pass: ramp && honoured,

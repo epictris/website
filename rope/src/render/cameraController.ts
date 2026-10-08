@@ -1145,6 +1145,18 @@ export function activeCameraRule(rules: readonly CameraRule[], p: Vec2): CameraR
   return dominantRule(cameraInfluences(activeCameraRules(rules, p), p));
 }
 
+// The zoom the camera settles at for an avatar at rest at `p`, with the same
+// first-order answer: the rules in force there, blended, no grip, seat, lead
+// or history, a path's keys read at the avatar's own projection. For a caller
+// that wants the game's framing of a place without playing to it (the editor's
+// fog, `render3d/editorFog.ts`).
+export function restingCameraZoom(rules: readonly CameraRule[], p: Vec2, baseZoom: number): number {
+  const members = activeCameraRules(rules, p);
+  const path = members.find((r): r is CameraRule & { kind: "path" } => r.kind === "path");
+  const s = path ? projectOntoPolyline(path.index, p).s : 0;
+  return blendCameraTarget(cameraInfluences(members, p), p, baseZoom, s).zoom;
+}
+
 // Where the camera wants to be under a given rule, for an avatar at `follow`.
 //
 // A region computes per axis: a lock pins it, otherwise it follows plus the
