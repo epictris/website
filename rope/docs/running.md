@@ -17,6 +17,8 @@ dashed grab-radius circle = grabbable now, hollow red = candidate rotated out of
 grey X = seam-occluded, face ticks colored by floor/wall/ceiling classification) and an
 arrow for the surface normal the player is currently touching (grounded/wall surface, or
 both ledge faces while hanging/climbing), colored by the same classification.
+**G** hide or show every shape's debug geometry (render-only, 3D; see
+[render3d](render3d.md#what-the-scene-draws)) - to see the Blender scene alone.
 
 A downloaded bundle carries the identity of the **source that was served**, not
 the last commit before the dev server started: `git` (short commit), `dirty`, and

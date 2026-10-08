@@ -579,6 +579,9 @@ window.addEventListener("keydown", (e) => {
   }
   if (e.code === "KeyP") downloadRecording();
   if (e.code === "KeyL") showDebug = !showDebug;
+  // The pieces' debug geometry, all of it at once - to see what the level's
+  // Blender scene looks like with nothing drawn over it.
+  if (e.code === "KeyG" && scene3d) scene3d.setDebugShown(!scene3d.debugGeometryShown);
   if (e.code === "F3") {
     // The browser's own F3 is find-again; a game with an instrument panel on
     // that key does not want it.

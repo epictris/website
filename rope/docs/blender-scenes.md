@@ -23,12 +23,13 @@ Blender cannot own a surface the sim moves every frame, so the game draws these 
 - **A conveyor's band** (`render3d/beltTread.ts`): the texture, or on a flat colour the cleats, run round the loop at the belt's `speed`.
   Its look is the belt shape's own `BeltLook` (`width`, `texture`, `color`, `tileScale`, see [conveyors](conveyors.md)).
 - **Lights, fireflies, vines, chains, the ball**, and any body the sim spawns (a sandbox rock, the hook).
+- **Debug geometry**: a collision piece whose Debug switch is on (`CollisionObjectData.debug`) is drawn as its outline extruded in a flat colour - by default the body's `color`, through the piece's `thickness`.
+  It is per piece and opt-in, in a level with a scene as in one without, and **G** hides all of it while playing (see [render3d](render3d.md#what-the-scene-draws)).
 
-A level that names **no scene** has no look at all, so it is seen by its collision.
-Every piece of every body that is not an area (`killzone`, `finish`, `force`, `water`) is extruded through its `thickness` (default `DEFAULT_THICKNESS`) and filled with the body's `color`.
-That grey box is derived at build and never authored: it is what the test levels are played in and what a new level is blocked out in.
+A level that names **no scene** has no look at all, so it is seen by the pieces whose debug geometry is on: that is what the test levels are played in and what a new level is blocked out in (a piece drawn in a level with no scene starts switched on).
+A level saved before the switch existed (level format 1) drew every piece of every non-area body as a grey box; it loads with exactly those pieces switched on.
 
-In a level that names a scene, a body the scene does not dress draws **nothing**.
+A piece whose debug geometry is off draws **nothing**, and neither does a body the scene does not dress.
 An invisible wall stays invisible, and `just scene` lists the body names with no object behind them, which is where a misspelt name shows.
 
 ## Binding
@@ -165,7 +166,7 @@ Another file becomes a source by naming it once: `bun run assets:publish-sources
   `river.blend` holds the `Guide`, the level's own dressing in `Dressing` (one mesh object per named body) and the generated cavern in `Cavern`.
 - **`rails`** names **`rails`**: `rails.blend` holds the `Guide` and the level's dressing in `Dressing`.
 - **`grotto.blend`**, the Sunken Grotto (formations built with the formations add-on, converted from karin_website's v5 background pipeline, [blender-formations](blender-formations.md#the-sunken-grotto)), is on disk and named by no level.
-- Every other level names no scene and is drawn as its grey box.
+- Every other level names no scene and is drawn as its pieces' debug geometry.
 
 Both `Dressing` collections were written once, on 2026-09-29, by a one-shot export of what the game then drew from the levels' geometry objects: each named body's visual, built by the game's own renderer, written to glTF by three's `GLTFExporter` and imported into the `.blend`, each body's meshes joined into one object with its origin on the body's rest pose.
 Before-and-after `cli shot --3d` along both routes differed by a few thousand pixels of texture re-encoding.

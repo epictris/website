@@ -83,8 +83,18 @@ They are retired: a level's look is its Blender scene (see [**Blender scenes**](
 Every file in `levels/` was rewritten in the new form the same day, and bundles recorded before it still load: a body of nothing but geometry objects built no engine body, so no build index moved.
 
 A body may carry a **`name`** (`LevelBodyData.name`): a stable name nothing in the sim reads, which is what the level's Blender scene binds an object to - see [**Blender scenes**](blender-scenes.md).
-The level names that scene once, **`scene`** (`LevelData.scene`, `assets-src/scenes/<scene>.blend`); a level that names none is drawn as its collision, a grey box of each piece's `thickness`.
+The level names that scene once, **`scene`** (`LevelData.scene`, `assets-src/scenes/<scene>.blend`).
 Both are names, so `scaleLevelData` passes them through untouched; the editor offers them on the body panel and the Level panel, and `cli levels` holds a level's body names unique as three spells them (`nodeNameOf`).
+
+A collision object may carry **`debug`** (`CollisionObjectData.debug`, `DebugDrawData`): `{ on, color?, opacity?, depth? }`, whether the piece is drawn in 3D as its outline extruded in a flat colour, and how - see [**What the scene draws**](render3d.md#what-the-scene-draws).
+`on` is the switch and the rest are settings it keeps while off; an absent setting falls back to the body's `color`, opacity 1 and the piece's `thickness`.
+`depth` is a length and scales px ↔ m; `color` and `opacity` do not.
+Absent is a piece that draws nothing, and the editor writes the block only for a piece that is on or configured, so a level that uses none stays byte-identical.
+
+A level carries **`format`** (`LevelData.format`, `LEVEL_FORMAT`), the revision it was written in; absent is 1.
+`normalizeLevelData` stamps the current revision on every level that crosses it, and the editor writes it on every save.
+It exists for the one migration the data cannot reveal: a format-1 level that names no scene drew every piece of every non-area body as a grey box, and loads with exactly those pieces' `debug` switched on (`withDebugFromGreybox`).
+A format-2 level with every piece switched off holds the same keys as a format-1 one, so the stamp is the only thing that tells them apart.
 
 A **light object** (`LightObjectData`, `type: "light"`) sits in a body like any other scene object and rides its pose - see [**Light and air**](lighting-and-surfaces.md#light-and-air).
 Its fields, and what `scaleLevelData` does to each:

@@ -109,11 +109,19 @@ Since 2026-09-29 the level format has no geometry objects: a collision object is
 - **Water** (`render3d/water.ts` for a current and its fall, `stillWater.ts` for a pool, both after Tris's studies and sharing `waterLook.ts`; see [water](water.md)), whose surface the current runs across; its slab is the body's `waterZ`/`waterDepth` and its tint the body's `color`.
 - **A conveyor's band** (see [Conveyor belts](#conveyor-belts)), built from the belt collision object itself.
 - **The body's lights** (see [lighting-and-surfaces](lighting-and-surfaces.md)).
-- In a level that names **no scene**, a **grey box**: every collision piece of a body that is not an area, extruded through its `thickness` (default `DEFAULT_THICKNESS`) and filled with the body's `color` as a flat surface (`texture: "color"`).
-  It is derived and never authored, and it is what a level with no look is seen by (the test levels, a level being blocked out).
+- **Debug geometry**: every collision piece whose `debug.on` is set (`CollisionObjectData.debug`, the Debug section of a shape's panel in the editor), extruded through its `debug.depth` and filled flat (`texture: "color"`) with its `debug.color` at its `debug.opacity`.
+  Every setting falls back to what the piece already says - the depth to its `thickness` (default `DEFAULT_THICKNESS`), the colour to the body's `color`, the opacity to 1 - so `{ on: true }` is the piece drawn as itself.
+  It is per piece and opt-in, in every level, scene or not, and for a volume (a killzone, a force area) as for a wall; a belt has none, since it draws its own band.
+  It is an instrument rather than a look: what a level with no scene is blocked out in (the test levels), and what a piece a dressed level has nothing over is seen by.
+  A see-through piece (`opacity` below 1) writes no depth and casts no shadow.
+  **G** hides all of it at once, in the game and in the editor's ▶ Test (`Scene3D.setDebugShown`), to see the Blender scene alone; every test opens with it shown, and authoring always shows it.
 - A body the **sim spawned** (a sandbox rock, the hook) extrudes its own shapes, scene or not.
 
-In a level that names a scene, a body the scene does not dress draws nothing: an invisible wall stays invisible, and `just scene` reports the names with no object behind them.
+A piece with debug geometry switched off draws nothing, scene or not: an invisible wall stays invisible, and `just scene` reports the body names with no object behind them.
+
+Until 2026-10-07 (level format 1) the switch did not exist: a level that named no scene drew every piece of every non-area body as a **grey box**, by a rule no piece could opt out of, and a dressed level drew none.
+`normalizeLevelData` folds a format-1 level into format 2 at load (`withDebugFromGreybox`) by switching on exactly the pieces the grey box drew, with every setting left to its fallback, so an old level - or a recorded bundle carrying one - looks as it always did.
+The fold is keyed on `LevelData.format` rather than read off the data because a format-2 level with every piece switched off holds the same keys as a format-1 one.
 
 A body is a `THREE.Group` carrying the interpolated pose, with one child per drawn piece at that piece's placement - rigid within the body, so written **once** at build.
 The per-frame sync is therefore two writes per body into vectors it already owns; chain links go through one `InstancedMesh` with `count` set per frame rather than per-link `Mesh` churn.
@@ -124,7 +132,7 @@ Two rules are inherited from elsewhere rather than invented here:
 
 - A **code-built circle is a sphere and an authored one is a disc** (a cylinder), which is the same split `lib/shapeGeometry.ts` makes about mass (`computeMass` versus `prismMass`).
   Drawing them by the rule they are weighed by is what stops a 4 cm hook being drawn as a 20 cm slab.
-- The grey box is as thick as the piece **weighs**: `thickness` is what a piece's mass is computed from, and it is the only depth a level states.
+- Debug geometry is, unless told otherwise, as thick as the piece **weighs**: `thickness` is what a piece's mass is computed from, and it is the only depth a level states. `debug.depth` overrides it for the drawing alone.
 
 A belt's authored colour is kept as a **tint with a brightness floor** over a generated surface: colours were authored for a flat renderer where a colour *is* the appearance and most of them are near-black greys, so multiplying a texture by `#000000` leaves a hole.
 The hue is kept exactly and only the lightness is remapped into `TINT_FLOOR..1`.
@@ -135,7 +143,7 @@ Three's bevel runs from the caps *outward*, so a 2 cm bevel put every drawn body
 `bevelOffset: -bevelSize` makes it a chamfer off the outline instead, and `cli render3d` asserts the bounding box against the authored size *with the bevel on*.
 
 Areas stay on the 2D overlay in both modes - a killzone's skulls and a force area's arrows are flat marks on a region of *space* (see [**Area glyphs**](areas-and-friction.md#area-glyphs), and "pass-through geometry must read as pass-through" in `docs/game-design.md`).
-Hook-only bodies do **not**: in a level with no scene their grey box sits a quarter of a metre behind the plane, and in 3D that setback is the whole cue, so the grate lattice is drawn in 2D mode only (a scene puts their dressing wherever Blender does).
+Hook-only bodies do **not**: their debug geometry sits a quarter of a metre behind the plane, and in 3D that setback is the whole cue, so the grate lattice is drawn in 2D mode only (a scene puts their dressing wherever Blender does).
 
 ## Bodies and scene objects
 

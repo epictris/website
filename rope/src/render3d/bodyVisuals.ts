@@ -11,17 +11,19 @@
 // Blender scene (docs/blender-scenes.md): a scene object named like a body is
 // that body's dressing, mounted under this group's root when the file lands
 // (`sceneDressing.ts`), and a level names the scene once. What is drawn HERE is
-// only what the sim moves in a way a mesh cannot follow, and what a level with
-// no scene is seen by:
+// only what the sim moves in a way a mesh cannot follow, and the instrument a
+// piece is made visible by:
 //
 // - WATER, whose surface the current runs across every frame (`water.ts`);
 // - a CONVEYOR's band, whose texture or cleats run round its loop at the belt's
 //   own speed (`beltTread.ts`);
 // - the body's LIGHTS;
-// - and, in a level that names NO scene, every piece the body collides as,
-//   extruded through its `thickness` and filled with the body's own colour -
-//   the grey box a level is blocked out in before it has a look, derived from
-//   the collision and never authored (plans/blender-owns-appearance.md).
+// - and every piece whose DEBUG GEOMETRY is switched on
+//   (`CollisionObjectData.debug`): its outline extruded through the depth it
+//   asks for, in a flat colour at an opacity - what a level is blocked out in
+//   before it has a look, and what a piece the look has not caught up with is
+//   seen by. Per piece and opt-in, in every level, scene or not; the host
+//   hides all of it at once (`setDebugShown`).
 //
 // The one case that is not authored at all is a body the SIM spawned (a rock,
 // the hook), which has no authored objects and simply extrudes its own shapes,
@@ -38,13 +40,12 @@ import type { CollisionObject2D, CollisionShape2D } from "../engine/body";
 import { WaterArea } from "../engine/body";
 import { DEFAULT_THICKNESS } from "../lib/shapeGeometry";
 import { outlineOfData, outlineOfShape, type Outline } from "../render/shapePath";
-import { localPlacement, objectDepth, type BuiltBody } from "../level/buildBodies";
+import { localPlacement, objectDepth, worldPlacement, type BuiltBody } from "../level/buildBodies";
 import {
   DEFAULT_BODY_COLOR,
   isCollisionObject,
   isLightObject,
   type BeltLook,
-  type BodyKind,
   type CollisionObjectData,
   type LevelBodyData,
 } from "../level/levelFormat";
@@ -99,11 +100,17 @@ function tintFor(color: string | undefined): string | undefined {
 // AUTHORED set wears none: its albedo is a photograph of real stuff and a flat
 // renderer's grey is not an opinion about it. A GENERATED surface is tinted,
 // floored, because noise has no colour of its own worth defending.
-export function surfaceOf(req: { texture?: string; tileScale?: number; color?: string }): THREE.MeshStandardMaterial {
+export function surfaceOf(req: {
+  texture?: string;
+  tileScale?: number;
+  color?: string;
+  opacity?: number;
+}): THREE.MeshStandardMaterial {
   const name = surfaceName(req.texture);
   return surfaceFor({
     texture: req.texture,
     tileScale: req.tileScale,
+    opacity: req.opacity,
     color: isSolidSurface(name)
       ? (req.color ?? DEFAULT_SOLID_COLOR)
       : isAuthoredSurface(name)
@@ -131,15 +138,35 @@ function solidOf(outline: Outline, depth: number): THREE.BufferGeometry {
   return extrudeOutline(outline, { depth, bevel: DEFAULT_BEVEL });
 }
 
-// The kinds that are VOLUMES rather than things: the player passes into them
-// and nothing is drawn for them in 3D (the 2D overlay has their glyphs). Water
-// is one, and draws its own surface instead.
-const AREAS: ReadonlySet<BodyKind> = new Set(["killzone", "finish", "force", "water"]);
+// How one piece's debug geometry is drawn, every setting resolved against what
+// the piece and its body already say (see `DebugDrawData`): the body's fill,
+// opaque, the piece's own thickness. Null for a piece that draws none.
+export function debugLookOf(
+  data: LevelBodyData,
+  o: CollisionObjectData,
+): { color: string; opacity: number; depth: number } | null {
+  const d = o.debug;
+  if (!d?.on || o.shape.kind === "belt") return null;
+  return {
+    color: d.color ?? data.color ?? DEFAULT_BODY_COLOR,
+    opacity: d.opacity ?? 1,
+    depth: d.depth ?? o.thickness ?? DEFAULT_THICKNESS,
+  };
+}
 
-// Whether a body is drawn as its collision in a level that names no scene: a
-// thing the player meets, as against a volume it enters.
-export function drawsGreybox(data: LevelBodyData): boolean {
-  return !AREAS.has(data.kind) && data.objects.some(isCollisionObject);
+// Everything a body's debug geometry is built from, as a string two builds can
+// be compared by (`BodyVisual.restyleDebug`): for each piece that draws one,
+// where it is in the world, its outline and its resolved look.
+function debugSignatureOf(data: LevelBodyData): string {
+  const parts: unknown[] = [];
+  data.objects.forEach((o, i) => {
+    if (!isCollisionObject(o)) return;
+    const look = debugLookOf(data, o);
+    if (!look) return;
+    const w = worldPlacement(data, o);
+    parts.push([i, w.pos.x, w.pos.y, w.rot, o.shape, look]);
+  });
+  return JSON.stringify(parts);
 }
 
 // WHAT A PICK LANDS ON. A drawn piece's group carries the authored object it
@@ -197,17 +224,23 @@ export class BodyVisual {
   // geometry is in `owned` like any other.
   private readonly treads: BeltTread[] = [];
   private readonly rings: BeltRing[] = [];
+  // The pieces drawn as debug geometry (`mountDebug`), which the host hides
+  // and shows as one (`setDebugShown`) and the editor rebuilds in place
+  // (`restyleDebug`) - so each keeps its own geometry rather than `owned`'s.
+  private readonly debugPieces: { piece: THREE.Group; geometry: THREE.BufferGeometry; mesh: THREE.Mesh }[] = [];
+  private debugShown = true;
+  private debugZ = 0;
+  // What the pieces were last built from (`debugSignatureOf`).
+  private debugSignature = "";
 
   // `body` is what moves and is null for an authored body that built nothing;
   // `built` is the authored side and is null for a body the sim spawned at
   // runtime (a rock, the hook), which has no authored objects and simply
-  // extrudes its own shapes. `greybox` is whether the level names no scene, so
-  // the body is seen by its collision (see the header).
+  // extrudes its own shapes.
   constructor(
     readonly body: CollisionObject2D | null,
     private readonly built: BuiltBody | null,
     private readonly rig?: LightRig,
-    greybox = false,
   ) {
     const data = built?.data ?? null;
     this.waking = data?.objects.some((o) => isLightObject(o) && isWaking(o)) ?? false;
@@ -228,8 +261,10 @@ export class BodyVisual {
         this.foamSurface = water.foam;
         this.releaseWater = water.release;
       }
+      // A volume's pieces may still be made visible, as any piece may.
+      this.mountDebug(data, solidZ);
     } else if (data) {
-      this.buildAuthored(data, solidZ, greybox && drawsGreybox(data));
+      this.buildAuthored(data, solidZ);
     } else if (body) {
       // A body the level never authored: extrude what it collides as, which is
       // every default.
@@ -248,22 +283,14 @@ export class BodyVisual {
     }
   }
 
-  private buildAuthored(data: LevelBodyData, solidZ: number, greybox: boolean): void {
+  private buildAuthored(data: LevelBodyData, solidZ: number): void {
     const built = this.built!;
     for (const o of data.objects) {
-      if (!isCollisionObject(o)) continue;
+      if (!isCollisionObject(o) || o.shape.kind !== "belt") continue;
       const local = localPlacement(built, o);
-      if (o.shape.kind === "belt") {
-        this.mountBelt(this.piece(local.pos.x, local.pos.y, local.rot, o), o.shape, data.color, solidZ);
-      } else if (greybox) {
-        this.mount(
-          this.piece(local.pos.x, local.pos.y, local.rot, o),
-          solidOf(outlineOfData(o.shape), o.thickness ?? DEFAULT_THICKNESS),
-          surfaceOf({ texture: "color", color: data.color ?? DEFAULT_BODY_COLOR }),
-          solidZ,
-        );
-      }
+      this.mountBelt(this.piece(local.pos.x, local.pos.y, local.rot, o), o.shape, data.color, solidZ);
     }
+    this.mountDebug(data, solidZ);
 
     // Lights last, so the budgets are spent in authored order and a light is
     // never built for a body that failed above.
@@ -364,15 +391,85 @@ export class BodyVisual {
     return piece;
   }
 
+  // Every piece whose debug geometry is on (`debugLookOf`), as its outline
+  // extruded through the depth it asks for. Each is a piece of its own, tagged
+  // with its authored object, so a pick on it answers with that piece.
+  //
+  // Placed against the frame this visual was BUILT in (`built.origin`), which
+  // is where the root stands at rest, from `data`'s own placements - the built
+  // data's at build, an edited copy's in `restyleDebug`. The pick tag is
+  // always the BUILT object at that index: whoever maps tags back to what they
+  // stand for built that map with the scene, and an in-place edit keeps it.
+  private mountDebug(data: LevelBodyData, z: number): void {
+    const built = this.built!;
+    this.debugZ = z;
+    data.objects.forEach((o, i) => {
+      if (!isCollisionObject(o)) return;
+      const look = debugLookOf(data, o);
+      if (!look) return;
+      const world = worldPlacement(data, o);
+      const pos = world.pos.sub(built.origin).rotated(-built.rotation);
+      const piece = this.piece(pos.x, pos.y, world.rot - built.rotation, built.data.objects[i] ?? o);
+      const geometry = solidOf(outlineOfData(o.shape), look.depth);
+      const mesh = new THREE.Mesh(geometry, surfaceOf({ texture: "color", color: look.color, opacity: look.opacity }));
+      // A see-through piece is a ghost, and a ghost's shadow would be a solid
+      // one: it lets the light through as it lets the view through.
+      mesh.castShadow = look.opacity >= 1;
+      mesh.receiveShadow = true;
+      mesh.position.z = z;
+      mesh.visible = this.debugShown;
+      piece.add(mesh);
+      this.debugPieces.push({ piece, geometry, mesh });
+    });
+    this.debugSignature = debugSignatureOf(data);
+  }
+
+  // AN EDIT TO THIS BODY'S DEBUG GEOMETRY, made in place: the editor drags a
+  // corner of a piece that is drawn, retunes its colour, switches it on or off,
+  // and only this body's debug pieces are built again - not the scene, whose
+  // rebuild costs every shader program it frees (see the editor's
+  // `sceneKeyOf`, which decides that nothing else the scene draws has changed).
+  // `data` is the edited body, object for object the one this was built from.
+  // Returns whether anything was rebuilt; a body whose debug geometry did not
+  // change is left alone.
+  restyleDebug(data: LevelBodyData): boolean {
+    if (!this.built || data.objects.length !== this.built.data.objects.length) return false;
+    if (debugSignatureOf(data) === this.debugSignature) return false;
+    this.disposeDebug();
+    this.mountDebug(data, this.debugZ);
+    return true;
+  }
+
+  private disposeDebug(): void {
+    for (const p of this.debugPieces) {
+      p.piece.removeFromParent();
+      p.geometry.dispose();
+    }
+    this.debugPieces.length = 0;
+  }
+
+  // Show or hide this body's debug geometry (`Scene3D.setDebugShown`). Built
+  // shown; the host applies its own flag to every visual it builds.
+  setDebugShown(shown: boolean): void {
+    this.debugShown = shown;
+    for (const p of this.debugPieces) p.mesh.visible = shown;
+  }
+
   // A solid on a piece, at `z` through the plane. Everything drawn here is a
   // thing in the play space, so everything casts.
-  private mount(piece: THREE.Group, geometry: THREE.BufferGeometry, material: THREE.Material, z: number): void {
+  private mount(
+    piece: THREE.Group,
+    geometry: THREE.BufferGeometry,
+    material: THREE.Material,
+    z: number,
+  ): THREE.Mesh {
     this.owned.push(geometry);
     const mesh = new THREE.Mesh(geometry, material);
     mesh.castShadow = true;
     mesh.receiveShadow = true;
     mesh.position.z = z;
     piece.add(mesh);
+    return mesh;
   }
 
   // The whole per-frame cost of a body: two writes into vectors it already owns,
@@ -388,6 +485,7 @@ export class BodyVisual {
   }
 
   dispose(): void {
+    this.disposeDebug();
     for (const l of this.lights) this.rig?.drop(l);
     this.lights.length = 0;
     this.driven.length = 0;

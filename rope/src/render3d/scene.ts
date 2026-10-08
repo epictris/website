@@ -26,7 +26,7 @@ import type { World } from "../engine/world";
 import type { SceneChain } from "../level/chains";
 import type { VineCord } from "../level/vines";
 import type { LevelVisualSource } from "../level/buildBodies";
-import { isCollisionObject, type EnvironmentData, type FireflyPathData } from "../level/levelFormat";
+import { isCollisionObject, type EnvironmentData, type FireflyPathData, type LevelBodyData } from "../level/levelFormat";
 import type { Camera } from "../render/camera";
 import { GpuTimer } from "../render/gpuTimer";
 import { BodyVisual, pickTagOf, surfaceOf } from "./bodyVisuals";
@@ -198,6 +198,9 @@ export class Scene3D {
   // convolution is not, and nothing about dragging a wall changes it.
   private envKey: string | null = null;
   private fogShown = true;
+  // Whether the pieces' debug geometry is drawn (`setDebugShown`). Held here
+  // rather than only on the visuals, because a rebuild makes new ones.
+  private debugShown = true;
   // Every light in the level. It is rebuilt with the BODIES rather than kept
   // across a level change, because a light is an object inside a body now: each
   // one is a child of the group its body is drawn in, so its lifetime is that
@@ -217,6 +220,9 @@ export class Scene3D {
   // fitting. They are not in the world, so they can neither be found by the
   // reconciliation nor go stale: they live exactly as long as the level does.
   private readonly standing: BodyVisual[] = [];
+  // Every AUTHORED body's visual, built or standing, in the level's body order
+  // - the order an edited copy of the level lists them in (`restyleDebug`).
+  private readonly authored: BodyVisual[] = [];
   // The level's Blender scene, when it names one (see `SceneDressing`).
   private dressing: SceneDressing | null = null;
   private ballVisual: BallVisual | null = null;
@@ -375,14 +381,14 @@ export class Scene3D {
     // reconciliation below finds it already made rather than building a second,
     // authorless visual for the same body.
     const targets: DressTarget[] = [];
-    // A level with no scene has no look at all, so it is seen by its collision
-    // (see `BodyVisual`'s header).
     const sceneName = level.visualSource.data.scene;
     level.visualSource.built.bodies.forEach((built) => {
-      const visual = new BodyVisual(built.body, built, this.lights, !sceneName);
+      const visual = new BodyVisual(built.body, built, this.lights);
+      visual.setDebugShown(this.debugShown);
       this.scene.add(visual.root);
       if (built.body) this.bodies.set(built.body, visual);
       else this.standing.push(visual);
+      this.authored.push(visual);
       // What the level's Blender scene may dress: the body by name, its root
       // and the pose that root has at rest. A pick on the dressing answers with
       // the body's first authored object, which is the one the editor can act
@@ -437,6 +443,34 @@ export class Scene3D {
   setFogShown(shown: boolean): void {
     this.fogShown = shown;
     this.env.setFogShown(shown);
+  }
+
+  // Draw the pieces' debug geometry, or hide all of it (`BodyVisual.setDebugShown`):
+  // the game's G, so the look a level's Blender scene gives it can be seen
+  // without the instruments over it.
+  setDebugShown(shown: boolean): void {
+    this.debugShown = shown;
+    for (const v of this.bodies.values()) v.setDebugShown(shown);
+    for (const v of this.standing) v.setDebugShown(shown);
+  }
+
+  get debugGeometryShown(): boolean {
+    return this.debugShown;
+  }
+
+  // An edit to the level's debug geometry, made IN PLACE rather than by a
+  // rebuild (`BodyVisual.restyleDebug`): `bodies` is the edited level's body
+  // list, body for body the one this scene was built from - the caller has
+  // established that nothing else this scene draws has changed (the editor's
+  // `sceneKeyOf`). Each body rebuilds its debug pieces only if they changed.
+  // Returns whether any did; a list of another length rebuilds nothing.
+  restyleDebug(bodies: readonly LevelBodyData[]): boolean {
+    if (bodies.length !== this.authored.length) return false;
+    let changed = false;
+    bodies.forEach((data, i) => {
+      if (this.authored[i]!.restyleDebug(data)) changed = true;
+    });
+    return changed;
   }
 
   // The waking lights' levels, in authored order, for a probe.
@@ -1384,6 +1418,7 @@ export class Scene3D {
       visual.dispose();
     }
     this.standing.length = 0;
+    this.authored.length = 0;
     if (this.dressing) {
       this.scene.remove(this.dressing.root);
       this.dressing.dispose();

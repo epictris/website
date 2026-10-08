@@ -48,6 +48,7 @@ import {
   COLLISION_CATEGORIES,
   COLLISION_CATEGORY_BITS,
   isAreaKind,
+  isMover,
   MOVE_EASES,
   MOVE_MODES,
   moveModeCloses,
@@ -143,6 +144,8 @@ import {
   setPathVerts,
   ZERO_HANDLE,
   NO_KEY,
+  NO_DEBUG,
+  type EdDebug,
   pathDataOf,
   setPolyVerts,
   setBelt,
@@ -243,7 +246,7 @@ import { guidePlaneZ, type GuideDraft } from "./visuals/guides";
 import { surfacePlacement } from "./visuals/surfaceDrop";
 import { describe, fieldRow, heading, PANEL_UI_CSS, pruneEmptySections, revealInSection, section } from "./panelUi";
 import { World } from "../engine/world";
-import { buildLevelBodies, DEFAULT_SPRING_DAMPING, MAX_SPRING_FREQ } from "../level/buildBodies";
+import { buildLevelBodies, DEFAULT_SPRING_DAMPING, MAX_SPRING_FREQ, worldPlacement } from "../level/buildBodies";
 import {
   DEFAULT_VINE_DENSITY,
   vineTargetSpacing,
@@ -266,6 +269,7 @@ import {
 } from "../sim/trace";
 import type {
   EnvironmentData,
+  LevelBodyData,
   LevelCameraData,
   LevelData,
   SceneObjectData,
@@ -374,7 +378,7 @@ const chainable = (b: EdItem): boolean =>
 // for, and how to put something on it.
 const EMPTY_HINTS: Record<EdLayer, string> = {
   scene:
-    "No selection. Click a body, or pick +Rect / +Circle and drag on the canvas; +Poly clicks out an outline, concave corners and all (Enter or click the first vertex to close, Esc to cancel) - the physics gets it cut into convex pieces, so a notch is one object rather than three overlapping ones. Those draw a COLLISION shape - what the body is made of. What a level LOOKS like is its Blender scene (Level panel, `scene`): an object there named like a body (the body's `name`) is that body's look, and a level with no scene is drawn as its collision. +Chain drags a chain from one body to another. Ctrl+G moves the selected objects into ONE body (Ctrl+Shift+G takes bodies apart again; Alt+click picks one object out of a body). The panel bottom-left lists every body and expands it into the objects it is made of, which is the only way to reach an object with no outline, like a light. Rubber-band from empty space: drag left→right to catch what the box encloses, right→left for anything it touches. +Light drops a lamp - drag as you place it to set how far it reaches. A light with no visible source is a body of its own (a shaft down a grate, a fill); a lamp you can see is a light merged into the body its fitting is in, so moving the fitting moves the light. Any visible layer can be selected.",
+    "No selection. Click a body, or pick +Rect / +Circle and drag on the canvas; +Poly clicks out an outline, concave corners and all (Enter or click the first vertex to close, Esc to cancel) - the physics gets it cut into convex pieces, so a notch is one object rather than three overlapping ones. Those draw a COLLISION shape - what the body is made of. What a level LOOKS like is its Blender scene (Level panel, `scene`): an object there named like a body (the body's `name`) is that body's look, and a shape is drawn in 3D only while its Debug section's draw box is ticked (it starts ticked in a level with no scene). +Chain drags a chain from one body to another. Ctrl+G moves the selected objects into ONE body (Ctrl+Shift+G takes bodies apart again; Alt+click picks one object out of a body). The panel bottom-left lists every body and expands it into the objects it is made of, which is the only way to reach an object with no outline, like a light. Rubber-band from empty space: drag left→right to catch what the box encloses, right→left for anything it touches. +Light drops a lamp - drag as you place it to set how far it reaches. A light with no visible source is a body of its own (a shaft down a grate, a fill); a lamp you can see is a light merged into the body its fitting is in, so moving the fitting moves the light. Any visible layer can be selected.",
   camera:
     "Camera layer. Click a region, drag to rubber-band select, or pick +Rect / +Circle and drag one out (+Poly clicks out an outline). Tab switches layer.",
   fireflies:
@@ -708,14 +712,20 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // What the handles are attached to right now, so the target is rebuilt when
   // the selection changes and left alone when it has not.
   let gizmoKey = "";
-  // The scene is rebuilt from the model whenever the model changes. A full
-  // rebuild on every revision is deliberate: the model is small (a level is a
-  // couple of hundred shapes), a rebuild is a few milliseconds, and correctness
-  // beats cleverness where the alternative is a diff of what an edit touched.
-  // It is debounced to a frame rather than run per edit, so a drag rebuilds once
-  // per rendered frame instead of once per pointer move.
+  // The scene is rebuilt from the model whenever something it DRAWS changes
+  // (`sceneKeyOf`), and it is rebuilt whole: correctness beats cleverness where
+  // the alternative is a diff of what an edit touched. What it is not rebuilt
+  // for is an edit to collision the scene does not draw - a corner of a dressed
+  // body's outline - because a rebuild is not cheap: measured 2026-10-07 on
+  // `ball` at ~30 ms of building plus nine shader programs re-linked, every
+  // frame of a vertex drag. It is debounced to a frame rather than run per
+  // edit, so a drag rebuilds at most once per rendered frame.
   let sceneLevel: Scene3DLevel | null = null;
   let sceneRev = -1;
+  // What the scene on screen was built from (`sceneKeyOf`), and how many times
+  // it has been built - the highlight is painted once per build, not per edit.
+  let sceneKey: string | null = null;
+  let sceneBuilds = 0;
   const camera: Camera = {
     position: Vec2.ZERO,
     zoom: 2,
@@ -1655,12 +1665,81 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     return ball;
   }
 
+  // WHAT THE SCENE IS BUILT FROM, as a string two builds can be compared by: the
+  // level as the builder gets it, the vines' rest paths, and which item wrote
+  // which object (the pick and highlight maps are rebuilt with the scene, so a
+  // load or an undo that renumbers items must rebuild it even when nothing
+  // drawn has moved).
+  //
+  // On a body whose pose at rest does not depend on its mass, two things are
+  // left out. A collision piece's GEOMETRY and its debug geometry's settings,
+  // for every piece but a belt: a dressed body's look is its Blender node,
+  // placed in the world where Blender put it (`dressScene`), so moving a
+  // corner of its outline changes no pixel of it, and the one thing here that
+  // does draw the outline - the piece's debug geometry - is rebuilt IN PLACE
+  // when that is all that changed (`Scene3D.restyleDebug`). And the body's
+  // FRAME, with every other object said in the world instead: a frame is where
+  // offsets are measured from, and an edit that moves it while every drawn
+  // thing stays put - the frame of a body of one piece follows that piece -
+  // draws the same scene.
+  //
+  // The bodies whose pose DOES depend on their mass are kept whole: a pivot
+  // hangs its centre of mass under its bearing, a mover turns about it, and a
+  // spring droops from it; water draws its own outline. Leaving one of those
+  // out would draw a stale pose.
+  //
+  // What is NOT re-derived for such an edit is the throwaway world's own
+  // collision, which only the preview's fireflies read (they keep off solid
+  // scenery); it catches up at the next edit that rebuilds.
+  function sceneKeyOf(data: LevelData, itemOf: ReadonlyMap<SceneObjectData, number>, vines: unknown): string {
+    const bodies = data.bodies.map((b) => {
+      const restsAsAuthored =
+        b.kind !== "water" && b.pivot !== true && !(b.springFreqX ?? 0) && !(b.springFreqY ?? 0) && !isMover(b);
+      if (!restsAsAuthored) return b;
+      const { x: _x, y: _y, rot: _rot, ...body } = b;
+      return {
+        ...body,
+        objects: b.objects.map((o) => {
+          if (o.type === "collision" && o.shape.kind !== "belt") {
+            const { shape: _s, x: _ox, y: _oy, rot: _or, thickness: _t, material: _m, debug: _d, ...kept } = o;
+            return kept;
+          }
+          // To the nanometre: an offset re-measured from a moved frame comes
+          // back a rounding error from where it was, which is not a move.
+          const w = worldPlacement(b, o);
+          const nm = (v: number): number => Math.round(v * 1e9) / 1e9;
+          return { ...o, x: nm(w.pos.x), y: nm(w.pos.y), rot: nm(w.rot) };
+        }),
+      };
+    });
+    return JSON.stringify({ ...data, bodies, vines, items: [...itemOf.values()] });
+  }
+
   function syncEditorScene(): void {
     if (!scene3d || sceneRev === modelRev) return;
     sceneRev = modelRev;
-    const world = new World();
     const itemOf = new Map<SceneObjectData, number>();
     const data = toLevelData(model, itemOf);
+    // Vines DO reach the 3D scene, where chains do not, and the difference is
+    // that a vine's rest pose is exact rather than guessed: straight down
+    // from its anchor by its authored length, or the resting catenary of a
+    // span, until something moves it - a fact about the level rather than a
+    // simulation of one (see `vineRestPath`). It has to be drawn there, too -
+    // the overlay is dropped in the 3D-only and orbited views, and a vine is
+    // the level rather than chrome.
+    const vinePaths = model.vines.flatMap((v) => {
+      const points = vineRestPath(model, v);
+      return points ? [{ color: v.color, points }] : [];
+    });
+    const key = sceneKeyOf(data, itemOf, vinePaths);
+    if (key === sceneKey) {
+      // Nothing the scene draws has changed but, at most, some pieces' debug
+      // geometry - a corner of a drawn piece dragged, its colour retuned, its
+      // switch flipped - which is rebuilt in place, body by body.
+      scene3d.restyleDebug(data.bodies);
+      return;
+    }
+    const world = new World();
     let built: ReturnType<typeof buildLevelBodies>;
     try {
       built = buildLevelBodies(world, data, () => {});
@@ -1676,21 +1755,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     for (const [object, id] of itemOfSceneObject) sceneObjectOfItem.set(id, object);
     sceneLevel = {
       world,
-      // Vines DO reach the 3D scene, where chains do not, and the difference is
-      // that a vine's rest pose is exact rather than guessed: straight down
-      // from its anchor by its authored length, or the resting catenary of a
-      // span, until something moves it - a fact about the level rather than a
-      // simulation of one (see `vineRestPath`). It
-      // has to be drawn there, too - the overlay is dropped in the 3D-only and
-      // orbited views, and a vine is the level rather than chrome.
-      vines: model.vines.flatMap((v) => {
-        const points = vineRestPath(model, v);
-        if (!points) return [];
-        return [{ color: v.color, path: (_alpha: number, out: Vec2[]) => {
+      vines: vinePaths.map(({ color, points }) => ({
+        color,
+        path: (_alpha: number, out: Vec2[]) => {
           out.length = 0;
           out.push(...points);
-        } }];
-      }),
+        },
+      })),
       // Chains stay on the 2D canvas while editing: the editor draws a chain
       // STRAIGHT on purpose (a span between wrap nodes is straight, and a
       // guessed sag would be a drawing of something the level does not contain),
@@ -1715,6 +1786,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       ball: spawnBall(),
     };
     scene3d.setLevel(sceneLevel);
+    sceneKey = key;
+    sceneBuilds++;
     highlightKey = null; // a fresh scene holds none of the last one's paint
   }
 
@@ -1723,14 +1796,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   //
   // The colours are the overlay's own, so the two views say the same thing -
   // orange is "an edit applies to this", blue is "this is what the selected body
-  // is made of". What carries a pick tag is a collision object's grey box (a
-  // level with no scene) and a body's Blender dressing, which answers as the
-  // body's first object (`DressTarget.tag`); a light or an anchor is simply
-  // nothing to paint.
+  // is made of". What carries a pick tag is a collision object's debug
+  // geometry and a body's Blender dressing, which answers as the body's first
+  // object (`DressTarget.tag`); a light or an anchor is simply nothing to paint.
   let highlightKey: string | null = null;
   function syncHighlight(): void {
     if (!scene3d) return;
-    const key = `${sceneRev}|${[...selectedIds].join(",")}|${[...selectedBodyIds].join(",")}`;
+    const key = `${sceneBuilds}|${[...selectedIds].join(",")}|${[...selectedBodyIds].join(",")}`;
     if (key === highlightKey) return;
     highlightKey = key;
     const tags = new Map<unknown, string>();
@@ -1838,6 +1910,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       pixelData.player = { ...pixelData.player, x: spawn.x * M2PX, y: spawn.y * M2PX };
     }
     testShowDebug = false;
+    // A test opens as the game does, with the pieces' debug geometry drawn.
+    scene3d?.setDebugShown(true);
     testFinished = false;
     savedCam = { pos: camera.position, zoom: camera.zoom };
     // The test is played in the game's fixed 16:9 frame, so the camera is given
@@ -1948,8 +2022,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     testLevel = null;
     testLevel3d = null;
     // The edit-mode scene was replaced by the test level's, so it is rebuilt on
-    // the next frame rather than left showing the level that just stopped.
+    // the next frame rather than left showing the level that just stopped -
+    // whatever the key says, since the key is of the model and the model has
+    // not changed.
     sceneRev = -1;
+    sceneKey = null;
+    // Authoring always sees the debug geometry it is configuring, whatever the
+    // test's G left it at.
+    scene3d?.setDebugShown(true);
     // Back to editing the whole canvas (see startTest).
     camera.viewportWidth = cssW;
     camera.viewportHeight = cssH;
@@ -4415,6 +4495,83 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       "Thickness is the shape's depth through z, the dimension the 2D view cannot show: mass is area × thickness × density. Both are per shape, so a compound body's pieces each carry their own. Only a rigid body has a mass, but the material also fixes where a body's centre of mass — the point it rotates about — sits.");
   }
 
+  // Debug geometry (see `CollisionObjectData.debug`): whether the shape is drawn
+  // in 3D, in the game as here, and how. One checkbox is the whole switch, and
+  // the settings appear while it is on - ticking it is the common gesture, and
+  // a piece ticked on is drawn as itself (the body's colour, the shape's
+  // thickness, opaque) before anything is tuned. Unticking keeps the settings,
+  // so a piece switched back on comes back as it was.
+  function addDebugFields(g: HTMLElement, items: EdItem[]): void {
+    const write = (patch: Partial<EdDebug>): void => {
+      for (const b of items) b.debug = { ...b.debug, ...patch };
+    };
+    const allOn = items.every((b) => b.debug.on);
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.checked = allOn;
+    box.indeterminate = !allOn && items.some((b) => b.debug.on);
+    box.addEventListener("change", () => {
+      beginAction();
+      write({ on: box.checked });
+      markDirty();
+      rebuildInspector();
+    });
+    const wrap = fieldRow("draw");
+    wrap.appendChild(box);
+    g.appendChild(wrap);
+    describe(wrap,
+      "Draws this shape in 3D, in the game and in ▶ Test as well as here: its outline extruded through the depth, in a flat colour. It is an instrument, not a look - what a level is blocked out in before its Blender scene exists, or what a piece the scene has nothing over is seen by. G hides every shape's debug geometry at once while playing. Unticking keeps the settings below.");
+    if (!allOn) return;
+
+    // The colour, or the body's own fill while none is picked.
+    const cw = fieldRow("colour");
+    const ci = colorInput(items[0]!.debug.color ?? items[0]!.color, beginAction, (hex) => {
+      write({ color: hex });
+      markDirty();
+    });
+    cw.appendChild(ci.el);
+    if (items.some((b) => b.debug.color !== null)) {
+      cw.appendChild(
+        button("body colour", () => {
+          beginAction();
+          write({ color: null });
+          markDirty();
+          rebuildInspector();
+        }),
+      );
+    }
+    g.appendChild(cw);
+    numField(
+      g,
+      "opacity",
+      () => shared(items, (b) => b.debug.opacity),
+      (v) => write({ opacity: Math.min(1, Math.max(0, v)) }),
+      0.1,
+      items.length > 1,
+    );
+    // A length like the thickness it defaults to, so authored in pixels. Blank
+    // is "the shape's own thickness", which follows that field as it changes;
+    // the placeholder is that thickness as a number, which is all the field
+    // has room for, and the row's help says what it is.
+    const depth = numField(
+      g,
+      "depth",
+      // Blank while any is on the default, as well as while they disagree.
+      () => (items.some((b) => b.debug.depth === null) ? null : shared(items, (b) => b.debug.depth! * M2PX)),
+      (v) => write({ depth: Math.max(1, v) * PX }),
+      10,
+      items.length > 1,
+      {
+        placeholder: items.every((b) => b.thickness === items[0]!.thickness)
+          ? fmtOrBlank(items[0]!.thickness * M2PX)
+          : "mixed",
+        onEmpty: () => write({ depth: null }),
+      },
+    );
+    describe(depth.parentElement!,
+      "How deep the debug geometry is drawn through z, in pixels. Blank draws it as deep as the shape's own thickness (the Material section), and follows that as it changes; a number here changes the drawing only, never the mass.");
+  }
+
   // Every layer's panel ends the same way: the two actions that apply to any
   // selection, whatever it is made of. Duplicate and Delete act on the *whole*
   // selection, so a cross-layer one carries a single shared row above the
@@ -4480,6 +4637,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     }
     // Material and thickness are what a shape WEIGHS.
     if (!bodies.some(massless)) addMaterialFields(section(g, "object/Material", "Material"), bodies);
+    // A belt draws its own band (see `mountBelt`), so it has no debug geometry.
+    if (bodies.every((b) => b.shape.kind !== "belt")) addDebugFields(section(g, "object/Debug", "Debug"), bodies);
 
     addGroupSection(g, title);
     addActionsRow(g);
@@ -4682,7 +4841,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     addBodyNameField(section(g, "body/Blender", "Blender"), members);
     // ...and the fill, which only a body written from a collision lead has: a
     // body that is nothing but a light is not painted at all. It is the 2D
-    // view's fill, and the grey box a level with no scene is drawn as.
+    // view's fill, and the colour a piece's debug geometry takes unless the
+    // piece picks its own.
     if (leads.length) {
       const fill = section(g, "body/Fill", "Fill");
       addFillFields(fill, groupNum(fill, leads, sync), leads, sync);
@@ -6330,11 +6490,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const sw = fieldRow("scene");
     sw.appendChild(scene);
     describe(sw,
-      "The Blender scene this level is dressed in: assets-src/scenes/<scene>.blend, exported by `just scene <level>` and drawn over the level. An object in it named like a body rides that body; everything else is scenery where Blender put it. Blank = no look yet: the level is drawn as its collision, grey boxes in each body's fill. `just scene-guide <level>` writes the level's collision into <scene>-guide.blend and creates the scene file if there is none.");
+      "The Blender scene this level is dressed in: assets-src/scenes/<scene>.blend, exported by `just scene <level>` and drawn over the level. An object in it named like a body rides that body; everything else is scenery where Blender put it. Blank = no look yet: the level is seen by the shapes whose debug geometry is on (each shape's Debug section). `just scene-guide <level>` writes the level's collision into <scene>-guide.blend and creates the scene file if there is none.");
     g.appendChild(sw);
     const sceneHint = el("div", "ed-hint");
     const sceneHintText = (): string => {
-      if (!model.scene) return "No scene: the level is drawn as its collision.";
+      if (!model.scene) return "No scene: the level is seen by its shapes' debug geometry.";
       const meta = sceneMetaFor(model.scene, () => (sceneHint.textContent = sceneHintText()));
       if (meta === undefined) return `Looking for /scenes/${model.scene}/meta.json…`;
       if (meta === null) return `Not exported yet: run \`just scene ${currentName ?? "<level>"}\` (after \`just scene-guide\` if assets-src/scenes/${model.scene}.blend does not exist).`;
@@ -7316,6 +7476,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // materials existed is made of.
       material: DEFAULT_MATERIAL,
       thickness: DEFAULT_THICKNESS,
+      // Seen in 3D by its debug geometry while the level has no Blender scene
+      // to be seen by - a block-out is drawn in what it is blocked out of - and
+      // invisible in a dressed level, where collision is drawn over nothing
+      // until the Debug section says so.
+      debug: { ...NO_DEBUG(), on: !model.scene },
       // Only meaningful on a force area, but a new one needs a non-zero pull
       // or it would draw no arrows and do nothing until the field is touched.
       force: DEFAULT_FORCE_MAGNITUDE * PX,
@@ -8194,8 +8359,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // The nearest level surface under the pointer (Visuals), leaving out the
   // body `exclude` - the thing being put down must not be put down on itself.
   // Whatever the level draws counts - the Blender scene's dressing and scenery,
-  // or the grey boxes of a level with none; the guides, the gizmo and the ball
-  // at the spawn do not.
+  // and the pieces' debug geometry; the guides, the gizmo and the ball at the
+  // spawn do not.
   function surfaceUnder(scr: Vec2, exclude: number | null): { point: THREE.Vector3; normal: THREE.Vector3 } | null {
     const hit = visuals?.surfaceAt(scr, (tag) => {
       // Scenery is in no body, so nothing excludes it.
@@ -8961,7 +9126,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   const worldLine = (): number => 1 / (camera.zoom * PIXELS_PER_METER);
 
   // Whether a pick asks the SCENE rather than the gameplay plane: with a 3D view
-  // on screen there are models to ask (a body's Blender dressing, a grey box).
+  // on screen there are models to ask (a body's Blender dressing, a piece's
+  // debug geometry).
   // In the 2D view there is no scene to ask and the outline is both what is
   // drawn and what is picked.
   const picks3d = (): boolean => overlayLayers() === "outline" && sceneLevel !== null;
@@ -9856,6 +10022,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // on-screen cause. A test is where an author tunes `range` and
       // `lookahead`, so it is where the overlay has to be reachable.
       if (e.code === "KeyL") testShowDebug = !testShowDebug;
+      // ...and the game's G: the pieces' debug geometry off, to see the
+      // Blender scene alone.
+      if (e.code === "KeyG" && scene3d) scene3d.setDebugShown(!scene3d.debugGeometryShown);
       return;
     }
     if (mode !== "edit") return;

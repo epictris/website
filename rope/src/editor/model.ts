@@ -90,6 +90,8 @@ import {
   type NoteData,
   type ShapeData,
   type BeltLook,
+  type DebugDrawData,
+  LEVEL_FORMAT,
 } from "../level/levelFormat";
 import {
   DEFAULT_FILL_INTENSITY,
@@ -412,6 +414,40 @@ export interface EdNote {
   size: number; // metres, glyph height (text notes)
 }
 
+// A piece's debug geometry (see `DebugDrawData`), in the model's always-present
+// spelling: `on` is the switch, and a null setting is the fallback the format's
+// absent one is - the body's colour, the piece's own thickness.
+export interface EdDebug {
+  on: boolean;
+  color: string | null;
+  opacity: number; // 0..1
+  depth: number | null; // metres
+}
+
+export const NO_DEBUG = (): EdDebug => ({ on: false, color: null, opacity: 1, depth: null });
+
+export function edDebug(d: DebugDrawData | undefined): EdDebug {
+  if (!d) return NO_DEBUG();
+  return {
+    on: d.on === true,
+    color: d.color ?? null,
+    opacity: typeof d.opacity === "number" ? Math.min(1, Math.max(0, d.opacity)) : 1,
+    depth: typeof d.depth === "number" && d.depth > 0 ? d.depth : null,
+  };
+}
+
+// The on-disk form, or undefined for a piece that is off and configures
+// nothing - so every level authored before debug geometry stays byte-identical.
+export function debugData(d: EdDebug): DebugDrawData | undefined {
+  if (!d.on && d.color === null && d.opacity >= 1 && d.depth === null) return undefined;
+  return {
+    on: d.on,
+    ...(d.color !== null ? { color: d.color } : {}),
+    ...(d.opacity < 1 ? { opacity: d.opacity } : {}),
+    ...(d.depth !== null ? { depth: d.depth } : {}),
+  };
+}
+
 export interface EdItem {
   id: number;
   layer: EdLayer;
@@ -449,8 +485,8 @@ export interface EdItem {
   pos: Vec2; // metres
   rot: number; // radians
   shape: EdShape; // metres
-  // The scene layer authors these (the 2D view's fill, and the grey box a level
-  // with no scene is drawn as); camera regions and notes take the fixed
+  // The scene layer authors these (the 2D view's fill, and the colour a piece's
+  // debug geometry falls back to); camera regions and notes take the fixed
   // editor-furniture colours below.
   color: string; // hex fill colour
   opacity: number; // 0..1 fill opacity (a body's border draws fully opaque)
@@ -514,6 +550,10 @@ export interface EdItem {
   // pieces, and a piece brings its own material to them.
   material: MaterialName;
   thickness: number; // metres
+  // Whether this piece is drawn in 3D, and how (see `CollisionObjectData.debug`).
+  // Per SHAPE like the two above. Replaced whole on an edit rather than
+  // mutated, so an item copied by spreading never shares a live one.
+  debug: EdDebug;
   force: number; // force areas only: m/s² along the item's rotation
   // Water areas only: the current's speed in m/s along the item's rotation, and
   // how hard the water takes hold in 1/s (see `LevelBodyData.flow` / `drag`).
@@ -933,7 +973,7 @@ export const defaultNote = (): EdNote => ({
 // its dressing, and whatever glows in that dressing follows the light
 // (`BodyVisual.adoptDressing`).
 export const GLOW_CUBE = 0.3; // metres, the collision square's side
-export const GLOW_COLOR = "#8a3fd6"; // the body's fill: the 2D view and the grey box
+export const GLOW_COLOR = "#8a3fd6"; // the body's fill: the 2D view and its debug geometry
 export const GLOW_EMISSIVE = "#b070ff"; // the light's colour
 export const GLOW_RANGE = 4; // metres
 export const GLOW_INTENSITY = 6; // candela
@@ -1292,6 +1332,7 @@ function fromLevelData(data: LevelData): EdModel {
           viscosity: typeof o.viscosity === "number" && o.viscosity > 0 ? o.viscosity : 0,
           material: materialName(o.material),
           thickness: o.thickness ?? DEFAULT_THICKNESS,
+          debug: edDebug(o.debug),
         });
         continue;
       }
@@ -1311,6 +1352,7 @@ function fromLevelData(data: LevelData): EdModel {
           viscosity: 0,
           material: DEFAULT_MATERIAL,
           thickness: DEFAULT_THICKNESS,
+          debug: NO_DEBUG(),
           anchorId: o.id,
           pathId: 0,
         });
@@ -1345,6 +1387,7 @@ function fromLevelData(data: LevelData): EdModel {
     viscosity: 0,
     material: DEFAULT_MATERIAL,
     thickness: DEFAULT_THICKNESS,
+    debug: NO_DEBUG(),
     force: 0,
     flow: 0,
     drag: 0,
@@ -1443,6 +1486,7 @@ function fromLevelData(data: LevelData): EdModel {
     viscosity: 0,
     material: DEFAULT_MATERIAL,
     thickness: DEFAULT_THICKNESS,
+    debug: NO_DEBUG(),
     force: 0,
     flow: 0,
     drag: 0,
@@ -1551,6 +1595,7 @@ function lightItem(
     viscosity: 0,
     material: DEFAULT_MATERIAL,
     thickness: DEFAULT_THICKNESS,
+    debug: NO_DEBUG(),
     force: 0,
     flow: 0,
     drag: 0,
@@ -1631,6 +1676,7 @@ function lightItem(
     viscosity: 0,
     material: DEFAULT_MATERIAL,
     thickness: DEFAULT_THICKNESS,
+    debug: NO_DEBUG(),
     force: 0,
     flow: 0,
     drag: 0,
@@ -2106,6 +2152,9 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
         // model drawn over it.
         ...(i.material !== DEFAULT_MATERIAL ? { material: i.material } : {}),
         ...(i.thickness !== DEFAULT_THICKNESS ? { thickness: i.thickness } : {}),
+        // Written only for a piece that is on or configured (`debugData`). A
+        // belt draws its own band and has no debug geometry to configure.
+        ...(i.shape.kind !== "belt" && debugData(i.debug) ? { debug: debugData(i.debug) } : {}),
       });
     }
 
@@ -2353,6 +2402,11 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
     ...(checkpoints.length ? { checkpoints } : {}),
     ...(chains.length ? { chains } : {}),
     ...(vines.length ? { vines } : {}),
+    // Every piece's debug switch is written as the model holds it, so this is
+    // a current-format level: without the stamp the loader would read a level
+    // with no scene as one saved before the switch existed and turn on every
+    // piece the author had turned off (see `LEVEL_FORMAT`).
+    format: LEVEL_FORMAT,
   };
 }
 
@@ -4063,7 +4117,7 @@ export function emptyModel(): EdModel {
     // Unnamed and listed: a new level belongs on the menu, and the Level panel
     // is where it is given a title.
     meta: {},
-    // Drawn as its collision (a grey box) until a scene is named.
+    // No look yet: seen by its pieces' debug geometry until a scene is named.
     scene: "",
     items: [
       {
@@ -4089,6 +4143,9 @@ export function emptyModel(): EdModel {
         viscosity: 0,
         material: DEFAULT_MATERIAL,
         thickness: DEFAULT_THICKNESS,
+        // A fresh level names no scene, so its ground is seen by its debug
+        // geometry, as every piece a new level is blocked out in is.
+        debug: { ...NO_DEBUG(), on: true },
         force: 0,
         flow: 0,
         drag: 0,

@@ -431,7 +431,7 @@ Judge that by playing on a real GPU, not off a headless still.
 
 ## Surfaces
 
-The surfaces here are what the GAME wears: the ball and chain's (`painted steel`), a conveyor band's (`BeltLook.texture`), and the flat fill of a level's grey box.
+The surfaces here are what the GAME wears: the ball and chain's (`painted steel`), a conveyor band's (`BeltLook.texture`), and the flat fill of a shape's debug geometry.
 A level's own surfaces are materials in its Blender scene (see [blender-scenes](blender-scenes.md)), and since 2026-09-29 the authored manifest holds only `painted steel`; the rest of this section is still how either kind resolves, whichever sets are in it.
 
 A surface comes from one of two places and a level cannot tell which, because both are keyed into **one namespace** that `surfaceFor` looks up authored-first:

@@ -119,7 +119,7 @@ The four `cli render3d` cases assert it across the round trip an author performs
 
 There is no decoration in the editor, because there is none in a level: what a level LOOKS like is its Blender scene (see [blender-scenes](blender-scenes.md)), and the level holds what the game simulates and lights.
 An object in the scene named like a body (the body panel's `name`) is that body's dressing and rides it; everything else in the scene is scenery where Blender put it.
-A level with no scene is drawn as its collision, each piece a grey box in its body's fill.
+A collision shape is drawn in 3D only by its own debug geometry, switched on in its Debug section (see [editor](editor.md#debug-geometry)); a level with no scene is seen by that alone.
 
 Decoration used to be a body of geometry objects and no collision object, before that a `collision: false` flag, and before that a `backgrounds` list.
 Every one of those forms is folded away by `normalizeLevelData` at load: the geometry objects are dropped, and a body left with nothing in it is dropped too, since it builds, lights and draws nothing.

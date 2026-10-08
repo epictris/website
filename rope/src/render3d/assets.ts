@@ -599,6 +599,15 @@ export interface SurfaceRequest {
   // shared one instead would freeze the clone in the fallback surface, since the
   // authored maps are swapped into the cached object when they land.
   avatar?: boolean;
+  // 0..1, absent = opaque. Below 1 the surface is see-through and writes no
+  // depth, so what stands behind it still draws - a piece's debug geometry
+  // seen over the Blender dressing it sits inside (`DebugDrawData.opacity`).
+  opacity?: number;
+}
+
+// The opacity a request draws at: 1 unless it names a smaller one.
+function opacityOf(req: SurfaceRequest): number {
+  return req.opacity !== undefined && req.opacity < 1 ? Math.max(0, req.opacity) : 1;
 }
 
 // The shared surface for a request. Callers must not mutate the result - with
@@ -606,7 +615,7 @@ export interface SurfaceRequest {
 // alone and is dressed by `avatarSurface.ts`.
 //
 // Cached on every part of the request that changes what the material IS, so a
-// hundred grey boxes in three colours are three materials and three draw
+// hundred debug pieces in three colours are three materials and three draw
 // states. The tile is part of the key because `repeat` lives on the texture
 // rather than on the material: two tiling scales are two texture objects,
 // sharing one uploaded image through `Texture.clone`.
@@ -620,7 +629,8 @@ export function surfaceKey(req: SurfaceRequest): string {
   const name = surfaceName(req.texture);
   const tile = tileMetres(name, req.tileScale);
   const avatar = req.avatar === true ? "|avatar" : "";
-  return `${name}|${tile}|${req.color ?? ""}${avatar}`;
+  const opacity = opacityOf(req);
+  return `${name}|${tile}|${req.color ?? ""}${avatar}${opacity < 1 ? `|${opacity}` : ""}`;
 }
 
 // Does this surface glow of its own accord - is there an emission map in the
@@ -644,6 +654,12 @@ export function surfaceFor(req: SurfaceRequest): THREE.MeshStandardMaterial {
   // so nothing that has already been handed this material has to be told.
   const mat = buildSurface(authored ? (authored.fallback ?? DEFAULT_TEXTURE) : name, tile);
   if (req.color) mat.color = new THREE.Color(req.color);
+  const opacity = opacityOf(req);
+  if (opacity < 1) {
+    mat.transparent = true;
+    mat.opacity = opacity;
+    mat.depthWrite = false;
+  }
   // A set carrying an emission map glows by being worn, so its emissive colour
   // is white: three.js multiplies the map by it, and the default black is an
   // emission map that renders as nothing at all.

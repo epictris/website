@@ -2508,7 +2508,7 @@ async function cmdPull(o: Record<string, string>): Promise<void> {
 
 // 3D rendering cases (src/sim/render3dCases.ts): the camera correspondence
 // between the WebGL scene and the 2D overlay stacked on it, the extrusion's
-// winding and depth, the grey box and the Blender scene's binding, and the
+// winding and depth, debug geometry and the Blender scene's binding, and the
 // level format's round trips. All pure - no GPU, no canvas, no level - which is
 // what lets the claim the whole 3D renderer stands on be a number in the suite
 // rather than a screenshot someone looked at.

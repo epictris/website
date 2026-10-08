@@ -577,6 +577,34 @@ export interface CollisionObjectData extends ObjectPlacement {
   material?: string;
   // Metres in the sim, scene pixels on disk like every other length.
   thickness?: number;
+  // DEBUG GEOMETRY: whether this piece is drawn in 3D, and how. A level's look
+  // is its Blender scene (docs/blender-scenes.md); what a collision piece is
+  // drawn as is not the look, it is an instrument - the block-out of a level
+  // that has no scene yet, a wall a dressed level has nothing over, an
+  // invisible killzone made visible while it is tuned. Render-only: the sim
+  // never reads it.
+  //
+  // Per OBJECT, because which pieces are worth seeing is a question about the
+  // piece: one ledge in a dressed level is the one Blender has not caught up
+  // with. Absent is a piece that draws nothing.
+  debug?: DebugDrawData;
+}
+
+// How a collision piece's debug geometry is drawn (`CollisionObjectData.debug`):
+// its outline extruded `depth` through z, centred on the piece's plane, in a
+// flat `color` at `opacity`.
+//
+// `on` is the one switch, and the rest are settings it keeps: a piece switched
+// off and on again comes back as it was configured. Every setting falls back
+// to what the piece already says - the body's `color`, fully opaque, the
+// piece's own `thickness` - so `{ on: true }` is the piece drawn as itself.
+export interface DebugDrawData {
+  on: boolean;
+  color?: string;
+  // 0..1.
+  opacity?: number;
+  // Metres in the sim, scene pixels on disk, like `thickness`.
+  depth?: number;
 }
 
 // A LIGHT: a torch on a wall, a shaft coming down through a grate, the glow off
@@ -2251,7 +2279,19 @@ export interface LevelData {
   // it crosses `scaleLevelData` unchanged; `SCENE_NAME` in render3d/scenes.ts
   // is what a name may be spelt as (it is a directory and a release asset).
   scene?: string;
+  // Which revision of this format the level was written in (`LEVEL_FORMAT`).
+  // Absent is 1. It exists for the one migration that cannot be read off the
+  // data itself (see `withDebugFromGreybox`), and `normalizeLevelData` always
+  // stamps the current one, so a level that has crossed the gate says so.
+  format?: number;
 }
+
+// The current revision of the level format (`LevelData.format`).
+//
+// 2: a collision piece is drawn in 3D only by its own `debug` switch. Before
+// it, a level that named no scene drew every piece of every solid body as a
+// grey box, by an implicit rule a piece could not opt out of.
+export const LEVEL_FORMAT = 2;
 
 // ---------------------------------------------------------------------------
 // The retired flat form
@@ -2375,6 +2415,7 @@ export interface RawLevelData {
   environment?: EnvironmentData;
   camera?: LevelCameraData;
   scene?: string;
+  format?: number;
 }
 
 function isLegacyBody(b: LevelBodyData | LegacyBodyData): b is LegacyBodyData {
@@ -2610,14 +2651,42 @@ function finish(
   // objects), and a body with nothing in it builds nothing, lights nothing and
   // draws nothing. It builds no engine body either, so no build index moves
   // and no recorded replay is renumbered.
+  const greybox = (raw.format ?? 1) < 2 && !raw.scene;
   const out = bodies.flatMap((b, i) => {
     const extra = added.get(i);
     const withAnchors = extra ? { ...b, objects: [...b.objects, ...extra] } : b;
     const body = withoutLook(withAnchors);
-    return body.objects.length > 0 ? [withoutSpillSpeed(withoutConflictingSpring(withMigratedMask(body)))] : [];
+    if (body.objects.length === 0) return [];
+    const migrated = withoutSpillSpeed(withoutConflictingSpring(withMigratedMask(body)));
+    return [greybox ? withDebugFromGreybox(migrated) : migrated];
   });
   const { backgrounds: _panels, lights: _lights, chains: _chains, ...rest } = raw;
-  return { ...rest, bodies: out, ...(chains ? { chains } : {}) };
+  return { ...rest, bodies: out, ...(chains ? { chains } : {}), format: LEVEL_FORMAT };
+}
+
+// The retired GREY BOX, folded into the debug geometry it now is (format 1 ->
+// 2, see `LEVEL_FORMAT`). A level that named no scene used to draw every piece
+// of every body the player meets - not a volume, not a belt, which draws its
+// own band - extruded through its thickness in the body's fill. Exactly those
+// pieces are switched on here with every setting left to its fallback, which
+// is that same colour and that same depth, so a level saved before the switch
+// existed looks as it always did.
+//
+// It cannot be read off the data the way the other folds are, because a
+// format-2 level with every piece switched off holds the same keys as a
+// format-1 one; the stamp is the only thing that tells them apart. A recorded
+// bundle carries its level whole, so a run recorded before the switch replays
+// with the block-out it was played in.
+const GREYBOX_AREAS: ReadonlySet<BodyKind> = new Set(["killzone", "finish", "force", "water"]);
+function withDebugFromGreybox(b: LevelBodyData): LevelBodyData {
+  if (GREYBOX_AREAS.has(b.kind)) return b;
+  if (!b.objects.some((o) => o.type === "collision" && o.shape.kind !== "belt" && o.debug === undefined)) return b;
+  return {
+    ...b,
+    objects: b.objects.map((o) =>
+      o.type === "collision" && o.shape.kind !== "belt" && o.debug === undefined ? { ...o, debug: { on: true } } : o,
+    ),
+  };
 }
 
 // The retired `wrappable: false`, folded into the mask it is now one bit of
@@ -2993,6 +3062,18 @@ export function scaleObject(o: SceneObjectData, factor: number): SceneObjectData
       // z and scales exactly as the two lengths in the plane do.
       ...(o.material !== undefined ? { material: o.material } : {}),
       ...(o.thickness !== undefined ? { thickness: o.thickness * factor } : {}),
+      // A colour and an opacity scale by nothing; the depth is a length in z,
+      // as `thickness` is.
+      ...(o.debug !== undefined
+        ? {
+            debug: {
+              on: o.debug.on,
+              ...(o.debug.color !== undefined ? { color: o.debug.color } : {}),
+              ...(o.debug.opacity !== undefined ? { opacity: o.debug.opacity } : {}),
+              ...(o.debug.depth !== undefined ? { depth: o.debug.depth * factor } : {}),
+            },
+          }
+        : {}),
     };
   }
   // An anchor is a placement and an id, and an id is not a length.
@@ -3277,6 +3358,9 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
       : {}),
     // A name, not a length (see `LevelData.scene`).
     ...(data.scene !== undefined ? { scene: data.scene } : {}),
+    // A revision number, and always the current one once a level has crossed
+    // the gate above.
+    ...(data.format !== undefined ? { format: data.format } : {}),
     ...(notes ? { notes } : {}),
     ...(checkpoints ? { checkpoints } : {}),
     ...(chains ? { chains } : {}),

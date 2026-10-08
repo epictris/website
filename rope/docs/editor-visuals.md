@@ -5,7 +5,7 @@ It holds the free view, the guides, and the workspace in the editor: switching, 
 Since 2026-09-29 the level's look is its Blender scene ([blender-scenes](blender-scenes.md)), so the workspace dresses nothing itself; the rock and mushroom tools it used to carry are retired (see [Rocks and mushrooms](#rocks-and-mushrooms)).
 
 The Visuals workspace is a second way of driving the one editor: a free 3D camera navigated Blender's way, with the level's editor furniture drawn into the scene instead of onto the 2D overlay.
-It is for judging a level against its look - the collision, the lights and the cameras seen against the exported Blender scene (or the grey boxes of a level with no scene), lights put where they read, depth judged from the side it will be seen from - where the Level workspace is for authoring the level against the gameplay plane.
+It is for judging a level against its look - the collision, the lights and the cameras seen against the exported Blender scene (and whatever shapes have their debug geometry on), lights put where they read, depth judged from the side it will be seen from - where the Level workspace is for authoring the level against the gameplay plane.
 The model, undo, autosave, the clipboard, the selection, the active layer, the armed tool, the inspector and the outliner are shared with the Level workspace.
 
 ## Switching
@@ -66,7 +66,7 @@ It draws what the 2D overlay draws, in the overlay's colours (imported from `edi
 - the selected polygon's or path's corners and edge midpoints as the overlay's handle glyphs, pixel-sized, in the item's own plane (`guidePlaneZ`);
 - a tool's draft (`setDraft`, `draftView.ts`): the placed points, the run to the cursor or the closing edge, and the warning colour for a crossed loop.
 
-What the scene draws - a body's Blender dressing, or its grey box in a level with no scene - is picked by the model and shows the selection on it (`Scene3D.setHighlight`); the guides draw the collision outline over it either way.
+What the scene draws - a body's Blender dressing, or a shape's debug geometry - is picked by the model and shows the selection on it (`Scene3D.setHighlight`); the guides draw the collision outline over it either way.
 Not drawn by the guides: chains, vines, anchors, a belt's wheels, a mover's route, and a rect's or circle's corner, rotate and radius handles.
 
 A hidden layer draws nothing, and a locked layer draws but carries no pick tags.
@@ -94,7 +94,7 @@ The steps, in order:
 3. **The spawn**, by its ring's guide or by the disc inside it on the plane.
 4. **Items**, by `pickOrder`'s rules exactly as head on: the active layer, then a collision object winning over a light whose reach it sits inside, the drill-in cycle ("click the body, then click into it, then into what is behind it"), Shift to extend, Alt to drill straight to the object.
    What counts as under the pointer is widened by the guides (`itemsUnder`): an outline names its collision object (so a thin wall is hit a few pixels either side of its edge as well as inside it), a light's icon names the light, and a region, a path or a note names itself.
-   What the scene draws answers too, as in any 3D view: a grey box with its collision object, a body's dressing with the body's first object, and the scene's scenery with `SCENERY_TAG`, which names no item.
+   What the scene draws answers too, as in any 3D view: a shape's debug geometry with its collision object, a body's dressing with the body's first object, and the scene's scenery with `SCENERY_TAG`, which names no item.
    A light is hit by its icon ONLY: it hangs at its own `z`, and a disc on the plane under it is somewhere it is not drawn.
    The 2D minimum sizes (a checkpoint's and the spawn's 12 px floor) are in 2D camera pixels, which are not the view on screen here, so they do not apply; a guide's own pick band is the floor.
 5. **Empty space**: a click drops the picked corners first, then the selection, as head on; a drag does nothing and the status line says there is no rubber band.
@@ -110,7 +110,7 @@ Chains and vines are not picked on the canvas here (the guides draw neither); th
   Delete, the arrows and Esc act on the picked corners first, as head on (`vertexEditTarget` answers for Visuals too).
   The overlay and the guides share the press code (`pressVertex`, `pressMidpoint`), so a corner press cannot mean two different things.
 - **No rubber band**: a screen rectangle is a slanted quadrilateral on the plane at any angle, so what is dragged out and what is caught could not be the same shape; Shift+click builds a set of items or corners instead.
-- **Drop on surface**: Shift-drag of the selected light puts it on the nearest drawn surface under the pointer - a body's dressing, a grey box, or the scene's scenery (`SCENERY_TAG`) - leaving out its own body (`surfaceUnder` in `editor.ts`, `surfacePlacement` in `surfaceDrop.ts`).
+- **Drop on surface**: Shift-drag of the selected light puts it on the nearest drawn surface under the pointer - a body's dressing, a shape's debug geometry, or the scene's scenery (`SCENERY_TAG`) - leaving out its own body (`surfaceUnder` in `editor.ts`, `surfacePlacement` in `surfaceDrop.ts`).
   What carries no pick tag at all, the ball at the spawn or a chain, is never a surface.
   It is written through the gizmo's own item handlers (`pos` and the light's `z`), with the grid off since the point is where the face is, and it is one undo step per drag.
   Over no surface the object stays where it last landed.

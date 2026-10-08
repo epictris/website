@@ -101,6 +101,8 @@ import {
   type LevelBodyData,
   type SceneObjectData,
   type RawLevelData,
+  type CollisionObjectData,
+  LEVEL_FORMAT,
 } from "../level/levelFormat";
 import { BodyVisual, pickTagOf } from "../render3d/bodyVisuals";
 import {
@@ -131,7 +133,6 @@ import {
 } from "../render/beltTread";
 import { BeltRing, beltRingStations } from "../render3d/beltTread";
 import { outlineOfData } from "../render/shapePath";
-import { DEFAULT_THICKNESS } from "../lib/shapeGeometry";
 import { loopContainsPoint } from "../lib/polygon";
 import ballLevelJson from "../../levels/ball.json";
 const BALL_LEVEL = ballLevelJson as unknown;
@@ -1785,8 +1786,11 @@ function editorRoundTrip(): CaseResult[] {
   // A shape DRAWN in the editor is a collision object and nothing else, and this
   // is the trip that has to leave it that way: draw, save, reopen. Both halves
   // could undo it independently - the save could invent a look, the load could
-  // migrate one in - so it is checked where they meet.
+  // migrate one in - so it is checked where they meet. A CURRENT-format level:
+  // one saved before debug geometry is switched on by design
+  // (`withDebugFromGreybox`, asserted with the debug geometry).
   const drawn: RawLevelData = {
+    format: LEVEL_FORMAT,
     player: { x: 0, y: 0, radius: 8 },
     bodies: [
       {
@@ -2074,7 +2078,7 @@ function vertexEditMoves(): CaseResult[] {
 // raycasting it rather than by testing an outline on the gameplay plane, and the
 // whole chain from a mesh under the pointer back to a row in the outliner is:
 // the drawn piece carries the authored object it was built from (`BodyVisual`'s
-// pick tag - a collision object, whose grey box it is, or a body's first object
+// pick tag - a collision object, whose debug geometry it is, or a body's first object
 // for its Blender dressing), and `toLevelData` is the only thing that knows
 // which ITEM wrote that object.
 //
@@ -4610,7 +4614,7 @@ function glowCases(): CaseResult[] {
   }
 
   // `+ Glow`: one body - the collision square, filled purple for the 2D view
-  // and the grey box, and a waking point light at its centre with the editor's
+  // and its debug geometry, and a waking point light at its centre with the editor's
   // defaults. What it LOOKS like in a dressed level is the scene's to say.
   {
     const body = glowBody(new Vec2(4, -2));
@@ -5076,16 +5080,17 @@ function blenderScenes(): CaseResult[] {
   return out;
 }
 
-// A LEVEL WITH NO SCENE is seen by its collision: every piece of a body the
-// player meets, extruded through its `thickness` and filled with the body's own
-// colour, is the grey box a level is blocked out in (plans/blender-owns-
-// appearance.md). What is asserted is the rule, through the real build and the
-// real visual: one solid per piece at the piece's thickness, nothing for a
-// volume the player enters, hook-only scenery set back behind the plane - and
-// nothing at all for the same body in a level that names a scene, where the
-// look is Blender's and an invisible wall stays invisible.
-function greybox(): CaseResult[] {
+// DEBUG GEOMETRY (`CollisionObjectData.debug`): a piece is drawn in 3D when,
+// and only when, its own switch is on - in any level, scene or not, and for a
+// volume as for a wall. What is asserted is the rule, through the real build
+// and the real visual: a switched-on piece is its outline at its thickness in
+// the body's colour, picked as that piece; its settings override all three; a
+// see-through one casts no shadow; a switched-off piece draws nothing; hook-only
+// scenery sits behind the plane; the host's switch hides every one of them; and
+// the depth, a length, crosses the pixel conversion as one.
+function debugGeometry(): CaseResult[] {
   const raw: RawLevelData = {
+    format: LEVEL_FORMAT,
     player: { x: 0, y: -300, radius: 8 },
     bodies: [
       {
@@ -5095,12 +5100,20 @@ function greybox(): CaseResult[] {
         rot: 0,
         color: "#406080",
         objects: [
-          { type: "collision", shape: { kind: "rect", w: 200, h: 40 }, thickness: 30 },
-          { type: "collision", x: 150, shape: { kind: "circle", r: 20 } },
+          { type: "collision", shape: { kind: "rect", w: 200, h: 40 }, thickness: 30, debug: { on: true } },
+          {
+            type: "collision",
+            x: 150,
+            shape: { kind: "circle", r: 20 },
+            debug: { on: true, color: "#ff8000", opacity: 0.5, depth: 50 },
+          },
+          // Configured, but switched off: the settings are kept and nothing draws.
+          { type: "collision", x: -150, shape: { kind: "rect", w: 20, h: 20 }, debug: { on: false, color: "#00ff00" } },
+          { type: "collision", x: 300, shape: { kind: "rect", w: 20, h: 20 } },
         ],
       },
-      { kind: "killzone", x: 0, y: 500, rot: 0, objects: [{ type: "collision", shape: { kind: "rect", w: 900, h: 50 } }] },
-      { kind: "static", x: 400, y: 0, rot: 0, passable: true, objects: [{ type: "collision", shape: { kind: "rect", w: 50, h: 50 } }] },
+      { kind: "killzone", x: 0, y: 500, rot: 0, objects: [{ type: "collision", shape: { kind: "rect", w: 900, h: 50 }, debug: { on: true } }] },
+      { kind: "static", x: 400, y: 0, rot: 0, passable: true, objects: [{ type: "collision", shape: { kind: "rect", w: 50, h: 50 }, debug: { on: true } }] },
     ],
   };
   const built = buildLevelBodies(new World(), scaleLevelData(raw, PX), () => {});
@@ -5117,32 +5130,168 @@ function greybox(): CaseResult[] {
     const b = m.geometry.boundingBox!;
     return b.max.z - b.min.z;
   };
-  const wall = new BodyVisual(built.bodies[0]!.body, built.bodies[0]!, undefined, true);
-  const kill = new BodyVisual(built.bodies[1]!.body, built.bodies[1]!, undefined, true);
-  const leaf = new BodyVisual(built.bodies[2]!.body, built.bodies[2]!, undefined, true);
-  const dressed = new BodyVisual(built.bodies[0]!.body, built.bodies[0]!, undefined, false);
+  const wall = new BodyVisual(built.bodies[0]!.body, built.bodies[0]!);
+  const kill = new BodyVisual(built.bodies[1]!.body, built.bodies[1]!);
+  const leaf = new BodyVisual(built.bodies[2]!.body, built.bodies[2]!);
   const pieces = meshesOf(wall);
   const tags = pieces.map((m) => pickTagOf(m));
   const collisions = built.bodies[0]!.data.objects.filter(isCollisionObject);
-  const color = (pieces[0]?.material as THREE.MeshStandardMaterial | undefined)?.color.getHexString();
+  const mat = (m: THREE.Mesh | undefined) => m?.material as THREE.MeshStandardMaterial | undefined;
+  const plain = mat(pieces[0]);
+  const ghost = mat(pieces[1]);
   const leafZ = meshesOf(leaf)[0]?.position.z;
-  const ok =
+  const asBuilt =
     pieces.length === 2 &&
     Math.abs(depthOf(pieces[0]!) - 0.3) < 1e-6 &&
-    Math.abs(depthOf(pieces[1]!) - DEFAULT_THICKNESS) < 1e-6 &&
     tags[0] === collisions[0] &&
+    plain?.color.getHexString() === "406080" &&
+    plain.transparent === false &&
+    pieces[0]!.castShadow === true;
+  const configured =
     tags[1] === collisions[1] &&
-    color === "406080" &&
-    meshesOf(kill).length === 0 &&
-    leafZ !== undefined &&
-    leafZ < 0 &&
-    meshesOf(dressed).length === 0;
-  for (const v of [wall, kill, leaf, dressed]) v.dispose();
+    Math.abs(depthOf(pieces[1]!) - 0.5) < 1e-6 &&
+    ghost?.color.getHexString() === "ff8000" &&
+    ghost.transparent === true &&
+    Math.abs(ghost.opacity - 0.5) < 1e-6 &&
+    ghost.depthWrite === false &&
+    pieces[1]!.castShadow === false;
+  const volume = meshesOf(kill).length === 1;
+  const behind = leafZ !== undefined && leafZ < 0;
+  wall.setDebugShown(false);
+  const hidden = pieces.every((m) => !m.visible);
+  wall.setDebugShown(true);
+  const shown = pieces.every((m) => m.visible);
+  // ...and the depth is a length: pixels on disk, metres in the sim.
+  const scaledDepth = (scaleLevelData(raw, PX).bodies[0]!.objects[1] as CollisionObjectData).debug?.depth;
+  const ok = asBuilt && configured && volume && behind && hidden && shown && scaledDepth !== undefined && Math.abs(scaledDepth - 0.5) < 1e-9;
+  for (const v of [wall, kill, leaf]) v.dispose();
+
+  // THE RETIRED GREY BOX, folded at load (`withDebugFromGreybox`): a level
+  // saved before the switch (no `format`) that names no scene comes back with
+  // exactly the pieces the grey box drew switched on - every piece of a solid
+  // body, no volume, no belt - and the same file naming a scene, or stamped
+  // current, comes back untouched.
+  const legacy: RawLevelData = {
+    player: { x: 0, y: 0, radius: 8 },
+    bodies: [
+      {
+        kind: "static",
+        x: 0,
+        y: 0,
+        rot: 0,
+        objects: [
+          { type: "collision", shape: { kind: "rect", w: 100, h: 20 } },
+          { type: "collision", shape: { kind: "belt", wheels: [{ x: 0, y: 0, r: 20 }, { x: 300, y: 0, r: 20 }], thickness: 6, speed: 100 } },
+        ],
+      },
+      { kind: "killzone", x: 0, y: 500, rot: 0, objects: [{ type: "collision", shape: { kind: "rect", w: 900, h: 50 } }] },
+      { kind: "static", x: 400, y: 0, rot: 0, passable: true, objects: [{ type: "collision", shape: { kind: "rect", w: 50, h: 50 } }] },
+    ],
+  };
+  const switches = (data: LevelData): string =>
+    data.bodies.map((b) => b.objects.map((o) => (o.type === "collision" ? (o.debug?.on ? "on" : "-") : "")).join("")).join("|");
+  const folded = switches(normalizeLevelData(legacy));
+  const dressed = switches(normalizeLevelData({ ...legacy, scene: "river" }));
+  const current = switches(normalizeLevelData({ ...legacy, format: LEVEL_FORMAT }));
+  const twice = switches(normalizeLevelData(normalizeLevelData(legacy)));
+  const fold = folded === "on-|-|on" && dressed === "--|-|-" && current === "--|-|-" && twice === folded;
   return [
     {
-      name: "greybox: a level with no scene draws each piece at its thickness in the body's colour, picked as that piece; an area draws nothing; hook-only scenery sits behind the plane; a dressed level draws none of it",
+      name: "debug geometry: a switched-on piece draws its outline at its thickness in the body's colour, picked as that piece; its own colour, opacity and depth override them, and a see-through one casts nothing; a switched-off or unconfigured piece draws nothing; a volume draws too; hook-only scenery sits behind the plane; the host hides all of it; the depth scales as a length",
       pass: ok,
-      detail: `${pieces.length} pieces, depths ${pieces.map((m) => depthOf(m).toFixed(3)).join(", ")}, tagged ${tags.map((t, i) => t === collisions[i]).join(",")}, colour #${color}; killzone ${meshesOf(kill).length}; passable z ${leafZ}; in a dressed level ${meshesOf(dressed).length}`,
+      detail: `${pieces.length} pieces (want 2), depths ${pieces.map((m) => depthOf(m).toFixed(3)).join(", ")}, tagged ${tags.map((t, i) => t === collisions[i]).join(",")}, colours #${plain?.color.getHexString()} #${ghost?.color.getHexString()}, ghost opacity ${ghost?.opacity} transparent ${ghost?.transparent} casts ${pieces[1]?.castShadow}; killzone ${meshesOf(kill).length}; passable z ${leafZ}; hidden ${hidden} shown again ${shown}; scaled depth ${scaledDepth}`,
+    },
+    {
+      name: "debug geometry: a level saved before the switch with no scene comes back with the grey box's pieces switched on (solid bodies, not volumes, not belts); a dressed or current-format level is untouched; the fold is idempotent",
+      pass: fold,
+      detail: `format 1 ${folded} (want on-|-|on), with a scene ${dressed}, format ${LEVEL_FORMAT} ${current}, folded twice ${twice}`,
+    },
+    ...debugRestyle(),
+  ];
+}
+
+// AN EDIT TO DEBUG GEOMETRY, MADE IN PLACE (`BodyVisual.restyleDebug`): the
+// editor drags a corner of a drawn piece, switches another on and retunes it,
+// and only the body's debug pieces are rebuilt - against the frame the visual
+// was BUILT in, which the edit has since moved (the corner moved the centre of
+// mass). What is asserted is that the restyled body draws exactly what a body
+// built fresh from the edited data draws, in the world; that every piece still
+// answers a pick with the object the scene was built from, which is what the
+// editor's pick map names; that switching a piece off removes it; and that an
+// edit that changes no debug geometry rebuilds nothing.
+function debugRestyle(): CaseResult[] {
+  const level = (corner: number, rectOn: boolean): RawLevelData => ({
+    format: LEVEL_FORMAT,
+    player: { x: 0, y: -300, radius: 8 },
+    bodies: [
+      {
+        kind: "static",
+        x: 50,
+        y: 20,
+        rot: 0.3,
+        color: "#406080",
+        objects: [
+          {
+            type: "collision",
+            shape: { kind: "poly", verts: [{ x: -100, y: -20 }, { x: corner, y: -20 }, { x: 100, y: 20 }, { x: -100, y: 20 }] },
+            debug: { on: true },
+          },
+          {
+            type: "collision",
+            x: 200,
+            rot: 0.5,
+            shape: { kind: "rect", w: 40, h: 40 },
+            debug: { on: rectOn, color: "#ff8000", opacity: 0.5, depth: 60 },
+          },
+        ],
+      },
+    ],
+  });
+  const build = (raw: RawLevelData) => buildLevelBodies(new World(), scaleLevelData(raw, PX), () => {}).bodies[0]!;
+  const posed = (built: ReturnType<typeof build>): BodyVisual => {
+    const v = new BodyVisual(built.body, built);
+    v.sync(1);
+    return v;
+  };
+  const boxes = (v: BodyVisual): string[] => {
+    v.root.updateMatrixWorld(true);
+    const out: string[] = [];
+    v.root.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (!m.isMesh) return;
+      const b = new THREE.Box3().setFromObject(m);
+      const c = (m.material as THREE.MeshStandardMaterial).color.getHexString();
+      out.push(`${[b.min.x, b.min.y, b.min.z, b.max.x, b.max.y, b.max.z].map((n) => n.toFixed(5)).join(",")}|${c}`);
+    });
+    return out.sort();
+  };
+  const tags = (v: BodyVisual): unknown[] => {
+    const out: unknown[] = [];
+    v.root.traverse((o) => {
+      if ((o as THREE.Mesh).isMesh) out.push(pickTagOf(o));
+    });
+    return out;
+  };
+
+  const original = build(level(100, false));
+  const edited = build(level(160, true));
+  const visual = posed(original);
+  const before = boxes(visual);
+  const unchanged = visual.restyleDebug(original.data) === false && boxes(visual).join() === before.join();
+  const rebuilt = visual.restyleDebug(edited.data);
+  const fresh = posed(edited);
+  const want = boxes(fresh);
+  const got = boxes(visual);
+  const sameWorld = got.join() === want.join();
+  const builtObjects = original.data.objects;
+  const tagged = tags(visual).every((t) => builtObjects.includes(t as SceneObjectData)) && tags(visual).length === 2;
+  const off = visual.restyleDebug(original.data) && boxes(visual).join() === before.join();
+  for (const v of [visual, fresh]) v.dispose();
+  return [
+    {
+      name: "debug geometry: an edit made in place draws in the world exactly what a fresh build of the edited body draws, keeps the pick tags the scene was built with, switches a piece back off, and rebuilds nothing for an edit that changes none of it",
+      pass: unchanged && rebuilt && sameWorld && tagged && off,
+      detail: `unchanged edit left alone ${unchanged}; rebuilt ${rebuilt}; in place ${got.length} pieces vs fresh ${want.length}, same world boxes ${sameWorld}${sameWorld ? "" : `\n  in place ${got.join("  ")}\n  fresh    ${want.join("  ")}`}; tags are the built objects ${tagged}; back off ${off}`,
     },
   ];
 }
@@ -5226,7 +5375,7 @@ function retiredGeometry(): CaseResult[] {
 export function runRender3dCases(): CaseResult[] {
   return [
     ...blenderScenes(),
-    ...greybox(),
+    ...debugGeometry(),
     ...retiredGeometry(),
     ...beltRendering(),
     ...chainAnchors(),

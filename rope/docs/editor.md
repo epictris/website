@@ -10,7 +10,7 @@ right button, or a **left** drag on anything not selected), wheel-zoom about the
 click-select, drag a *selected* body to move it, corner/rotate/
 radius handles to resize, and `+Rect`/`+Circle`/`+Poly` tools to draw new bodies.
 This page is the editor's **Level** workspace; the toolbar's switcher (**W**) turns the same editor into the **Visuals** workspace, a free 3D view of the collision, lights and cameras against the level's Blender scene ([Workspaces](#workspaces-level-and-visuals), [editor-visuals](editor-visuals.md)).
-The editor authors what the game simulates and lights; what a level LOOKS like is its Blender scene ([blender-scenes](blender-scenes.md)), and a level with no scene is drawn as its collision, each piece a grey box in its body's fill.
+The editor authors what the game simulates and lights; what a level LOOKS like is its Blender scene ([blender-scenes](blender-scenes.md)), and a collision shape is drawn in 3D only by its own **debug geometry** ([below](#debug-geometry)).
 **Selected first, moved second.**
 A press on something already selected drags it; a press on anything else pans and selects only if the pointer never really moved (`CLICK_SLOP_PX`).
 The level is what you are looking at most of the time, so dragging it about has to be the cheapest gesture there is - and nudging geometry by accident, while reaching for the view, is the one editing mistake that leaves no trace on screen: it still looks like the level, and the level is different.
@@ -52,7 +52,7 @@ The label says `wakes N`.
 **`+ Glow`** (beside `+ Light`) places a glowing mushroom with one click: one static body filled `GLOW_COLOR` `#8a3fd6`, holding a collision square (`GLOW_CUBE`, 0.3 m) and a waking point light at its centre (colour `GLOW_EMISSIVE` `#b070ff`, `range` 4 m, `intensity` 6, `wake` 3 m, `wakeDelay` 0.25, `wakeRise` 0.6, `wakeFall` 1.5).
 It goes through the same loader a level and a paste come in by (`glowModel`), so it is exactly what a file holding that body loads as, and it is one body, so the outliner shows one row and it drags as one.
 Those numbers are editor defaults in `editor/model.ts`, not format defaults, and all of them wait on a play; a mushroom on a far wall can lose its collision object.
-What it looks like is the scene's: a Blender object named like the body is its dressing, and its emissive materials follow the light as it wakes (see [blender-scenes](blender-scenes.md)); a level with no scene shows the square as a grey box in the body's purple.
+What it looks like is the scene's: a Blender object named like the body is its dressing, and its emissive materials follow the light as it wakes (see [blender-scenes](blender-scenes.md)); a level with no scene shows the square as its debug geometry, in the body's purple.
 
 **The 3D preview shows every waking light AWAKE** (`Scene3D.setGlowPreview(true)`, `LightRig.previewAwake`): each source is held at full without stepping its state, and the pool is spent nearest the view's centre instead of the ball.
 There is nobody in the editor's scene to wake anything, and an author has to see what a mushroom lights before anyone does.
@@ -264,7 +264,7 @@ Ctrl is on the orbit rather than on the pan because panning is how you get aroun
 **With a scene drawn underneath, a pick is a raycast through the camera the last frame was drawn with** (`Scene3D.pick`, `raycastItems` in `editor.ts`), so it is about the picture the pointer was actually aimed at, and it holds at any depth.
 What the ray can meet, and what each answers with (`pickTagOf`):
 
-- a **grey box** (a level with no scene) answers with the collision object it is the extrusion of;
+- a piece's **debug geometry** answers with the collision object it is the extrusion of;
 - a body's **Blender dressing** answers with the body's first object, so a click on a dressed ledge selects the ledge's body;
 - the scene's **scenery** answers with `SCENERY_TAG`, which names no item and so selects nothing;
 - in the Visuals workspace, a **guide** answers with its guide tag.
@@ -284,10 +284,21 @@ What it does not offer there is the plane HANDLES: a handle that is not drawn mu
 ## Blender scenes: the `scene` and `name` fields
 
 The Level panel's **`scene`** names the Blender scene the level is dressed in (`LevelData.scene`, held to lower-case letters, digits and dashes as it is typed), with a line under it saying what the current export holds - how many objects, how many on bodies, the triangles, when - or that it is not exported yet.
-With the field blank the line says `No scene: the level is drawn as its collision.`
+With the field blank the line says `No scene: the level is seen by its shapes' debug geometry.`
 The body panel's **`name`** (`LevelBodyData.name`, held on every member of the body) is what an object in that scene is matched to; the field offers the exported objects' names, and the line under it says whether this name is dressed (`Dressed by "Ledge.001" (1,240 triangles)`), missing from the export (the body is then not dressed: nothing in the scene draws it), or shared with another body.
 Both read the export's `meta.json`, fetched once per scene per page; a re-export is seen on the next load.
 The whole loop is in [blender-scenes](blender-scenes.md).
+
+## Debug geometry
+
+A collision shape's panel has a **Debug** section (`addDebugFields`), and its **draw** box is the one switch: ticked, the shape is drawn in 3D - here, in ▶ Test and in the game - as its outline extruded in a flat colour (`CollisionObjectData.debug`, see [render3d](render3d.md#what-the-scene-draws)).
+While it is ticked the section offers **colour** (the body's fill until one is picked; **body colour** goes back to it), **opacity** (0 to 1; below 1 the shape is see-through and casts no shadow) and **depth** (pixels, blank = the shape's own `thickness`).
+Unticking keeps those settings, so a shape switched back on comes back as it was.
+A belt has no Debug section: it draws its own band.
+
+A shape drawn in a level with no scene starts ticked, since that is what a block-out is seen by; one drawn in a dressed level starts unticked, since its look is the Blender scene's.
+A level saved before the switch existed opens with the shapes its grey box used to draw ticked ([level-format](level-format.md)).
+**G** hides every shape's debug geometry in ▶ Test, as in the game; every test opens with it shown, and authoring always shows it.
 
 ## Workspaces: Level and Visuals
 
@@ -340,7 +351,7 @@ The two features are a pair - orbit to see the depth, drag the blue arrow to aut
 
 **The handles sit at the depth the object is drawn at** (`handleZ`): a light's `z`, and the gameplay plane for everything else, which is where collision is.
 
-**The gizmo never touches the model.** It moves a proxy object and the editor reads that proxy and writes the model, which is what lets it survive the scene being rebuilt from scratch on every model revision - that is, on every drag. A handle attached to a visual is attached to an object that is disposed a frame later, and re-attaching per frame is a gesture that cannot survive its own effect.
+**The gizmo never touches the model.** It moves a proxy object and the editor reads that proxy and writes the model, which is what lets it survive the scene being rebuilt from scratch on any revision that changes what it draws - that is, on most drags. A handle attached to a visual is attached to an object that is disposed a frame later, and re-attaching per frame is a gesture that cannot survive its own effect.
 
 **The gizmo is offered for one object, one body, or the whole selection** (`gizmoSpec`), ordered by how much is known about the target rather than by how many things it holds: one object offers what it has of a depth, a turn and a size; one body turns about the centre of mass the engine mounts it at; anything wider is an ARRANGEMENT, and what an arrangement has is a place and an angle.
 
@@ -385,7 +396,12 @@ A collision shape gets none, because it has no z at all - it is the gameplay pla
 A light's handle sits by its source icon rather than out at its reach, for the reason a click on a light lands on the icon: the reach is as wide as the room it lights.
 
 Snapping is the editor's own: the same 10 cm grid and 15° step the 2D drags use, including on the sizes a scale drag writes (`scaleShape`'s `round`), so a gizmo drag and a handle drag cannot land a body in two different places.
-The scene is rebuilt in full from the model whenever `modelRev` moves - the model is a couple of hundred shapes, and correctness beats a diff of what an edit touched - through the same `buildLevelBodies` the game loads with, so what is on screen while editing is what will be played rather than a second interpretation of the same file.
+The scene is rebuilt in full from the model - correctness beats a diff of what an edit touched - through the same `buildLevelBodies` the game loads with, so what is on screen while editing is what will be played rather than a second interpretation of the same file.
+It is rebuilt whenever something it DRAWS changes other than debug geometry, and only then (`sceneKeyOf`): the key is the level as the builder gets it, with every collision piece's geometry and debug settings left out (a belt's kept) and each body's frame replaced by its objects' world placements, on every body whose pose at rest does not depend on its mass (not a pivot, a spring, a mover or water).
+When the key has not moved, what has changed is at most some pieces' debug geometry, and that is rebuilt **in place** (`Scene3D.restyleDebug` → `BodyVisual.restyleDebug`): each body compares a signature of its drawn pieces (world placement, outline, resolved look) and rebuilds only its own debug pieces, placed against the frame the scene was built in and still tagged with the objects the pick map names.
+So a corner dragged on a dressed rock rebuilds nothing, and one dragged on a drawn piece rebuilds that body's debug meshes and nothing else, which matters: a full rebuild on `ball` measured ~30 ms of building and nine shader programs re-linked (2026-10-07), every frame of a drag, and vertex drags on `ball` and on `cave` (all debug geometry) went from ~200 ms frames to the idle baseline with no program re-linked.
+A new opacity below 1 compiles the see-through variant once; switching a piece on or off, recolouring it or moving its corners compiles nothing.
+The world the scene keeps is then a step behind the collision until the next rebuild, which only the preview's fireflies read.
 Chains stay on the 2D canvas there, and deliberately: the editor draws a chain **straight** because a span between wrap nodes is straight, and solving them to draw them would be a second simulation running under the editor.
 
 **The avatar stands at the spawn** (`spawnBall` in `editor.ts`, drawn by `BallVisual` like any other host's), because a level is authored against the thing that plays it.
