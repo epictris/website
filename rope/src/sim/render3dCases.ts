@@ -78,6 +78,7 @@ import {
   DEFAULT_LIGHT_INTENSITY,
   LIGHT_BUDGET,
   LIGHT_SHADOW_NEAR,
+  LIGHT_SHADOW_RADIUS,
   LightRig,
 } from "../render3d/lights";
 import {
@@ -2707,6 +2708,56 @@ function lightShadowNear(): CaseResult[] {
   ];
 }
 
+// The authored shadow softness lands on the shadow, and survives the file. It
+// is in shadow-map texels, so - unlike `shadowNear` beside it - a missed line
+// would be one that SCALED it: a 2.5-texel edge loaded as 0.025, a hard shadow
+// with nothing to say why.
+function lightShadowRadius(): CaseResult[] {
+  const rig = new LightRig();
+  const scene = new THREE.Group();
+  const radius = (data: Partial<Omit<LightObjectData, "type">>): number => {
+    const holder = rig.add(scene, { type: "light", kind: "spot", castShadow: true, ...data }, { x: 0, y: 0, rot: 0, z: 0 });
+    const light = holder!.holder.children.find((c) => (c as THREE.Light).isLight) as THREE.SpotLight;
+    return light.shadow.radius;
+  };
+  const authored = radius({ shadowRadius: 2.5 });
+  const plain = radius({});
+  const negative = radius({ shadowRadius: -2 });
+  rig.dispose();
+  const rigOk = authored === 2.5 && plain === LIGHT_SHADOW_RADIUS && negative === 0;
+
+  const disk = (castShadow: boolean): RawLevelData => ({
+    player: { x: 0, y: 0, radius: 8 },
+    bodies: [
+      {
+        kind: "static",
+        x: 100,
+        y: 0,
+        rot: 0,
+        objects: [{ type: "light", kind: "spot", range: 400, castShadow, shadowRadius: 2.5 }],
+      },
+    ],
+  });
+  const lampOf = (data: RawLevelData) => (data.bodies[0] as LevelBodyData).objects.find(isLightObject)!;
+  const inMetres = lampOf(scaleLevelData(disk(true), PX)).shadowRadius;
+  const saved = lampOf(modelToDisk(modelFromDisk(disk(true)))).shadowRadius;
+  // Read only while the light casts, so written only then, like `shadowNear`.
+  const unlit = lampOf(modelToDisk(modelFromDisk(disk(false)))).shadowRadius;
+  const diskOk = inMetres === 2.5 && saved === 2.5 && unlit === undefined;
+  return [
+    {
+      name: "lights: an authored shadowRadius is the shadow's PCF radius; absent is three's default, negative is 0",
+      pass: rigOk,
+      detail: `authored ${authored}, absent ${plain}, negative ${negative}`,
+    },
+    {
+      name: "level format: shadowRadius is unscaled, saves back, and is written only for a light that casts",
+      pass: diskOk,
+      detail: `in metres ${inMetres}, saved ${saved}, without castShadow ${unlit}`,
+    },
+  ];
+}
+
 // A body has an AUTHORED frame and an ENGINE frame, and they are deliberately
 // not the same point: the engine's origin has to be the pieces' combined centre
 // of mass (every lever arm in the engine is measured from it) and it moves as
@@ -3953,12 +4004,13 @@ function beltRendering(): CaseResult[] {
   return out;
 }
 
-// THE AVATAR'S OWN SURFACE (render3d/avatarSurface.ts). Two facts, neither
-// visible in a picture that looks fine: the avatar's copy of the painted steel
-// is a cache entry of its own, so its fog and its sky never leak onto a wall of
-// the same steel; and the fog patch really rewrites three's chunk - a renamed
-// chunk would be a `replace` matching nothing, and the ball would quietly go
-// back to the world's air.
+// THE AVATAR'S OWN SURFACE (render3d/avatarSurface.ts). Three facts, none of
+// them visible in a picture that looks fine: the avatar's copy of the painted
+// steel is a cache entry of its own, so its fog and its sky never leak onto a
+// wall of the same steel; the fog patch really rewrites three's chunk - a
+// renamed chunk would be a `replace` matching nothing, and the ball would
+// quietly go back to the world's air; and it casts from its front faces, which
+// only shows where the ball rests under a shadow-casting lamp.
 function avatarSurface(): CaseResult[] {
   const req = { texture: IRON_SURFACE, tileScale: 5, color: "#f2eadf" };
   const plain = surfaceKey(req);
@@ -3992,6 +4044,9 @@ function avatarSurface(): CaseResult[] {
   const wrapOk =
     wrapped && diffuseWrapped && specularPlain && lightsReplaced && wrapKeyed &&
     stashes === 3 && bounceUnshadowed && beginReplaced;
+  // The shadow: front faces, not three's flipped default - the back faces of a
+  // ball resting on the floor sit under the floor's normal-biased sample.
+  const frontCast = mat.shadowSide === THREE.FrontSide;
   return [
     {
       name: "avatar: its surface key differs from the plain key for the same request, and is stable",
@@ -4011,6 +4066,11 @@ function avatarSurface(): CaseResult[] {
       detail: wrapOk
         ? `wrap ${AVATAR_WRAP}, key "${key}"`
         : `wrapped ${wrapped}, diffuse ${diffuseWrapped}, specular plain ${specularPlain}, include replaced ${lightsReplaced}, keyed ${wrapKeyed}, stashes ${stashes}, bounce unshadowed ${bounceUnshadowed}, begin replaced ${beginReplaced}`,
+    },
+    {
+      name: "avatar: it casts its shadow from its front faces, so a ball resting on the floor leaves no lit hole under itself",
+      pass: frontCast,
+      detail: `shadowSide ${mat.shadowSide} (FrontSide is ${THREE.FrontSide})`,
     },
   ];
 }
@@ -5190,6 +5250,7 @@ export function runRender3dCases(): CaseResult[] {
     ...lightRidesBody(),
     ...lightAim(),
     ...lightShadowNear(),
+    ...lightShadowRadius(),
     ...avatarSurface(),
     ...generatedSkies(),
     ...beamCases(),

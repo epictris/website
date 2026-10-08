@@ -42,6 +42,20 @@
 // and the wrap part spends the light as it was before the shadow. Shadows from
 // everything else still land on the direct term as before.
 //
+// THE AVATAR CASTS FROM THE FACES THE LIGHT SEES (`shadowSide = FrontSide`).
+// Three's default draws a FrontSide caster's BACK faces into the shadow map,
+// its trick against acne, and that is wrong for a caster resting on its
+// receiver: the ball's back faces are its underside, millimetres off the
+// floor, and every shadow light pushes the floor's sample 3 cm along the
+// normal (`normalBias`) - 37% of the ball's 8 cm radius. Near the contact the
+// pushed sample sits above the underside and reads as lit, so the ball's
+// shadow had a lit hole straight under it (reported 2026-10-07 at the BALL
+// spawn, under the warm lamp above it; gone with front faces, and with the
+// lamp's normalBias at 0, which floods the floor with acne). Every avatar
+// mesh is a closed solid, so its front faces are its whole silhouette, and
+// the acne the default avoids is on the lit side, where the same normalBias
+// already lifts the ball's own samples clear of it.
+//
 // SHARING. The materials handed here are cached (`surfaceFor` with `avatar:
 // true`, or a GLB's materials shared by every `loadMesh` clone), so everything
 // below is idempotent and keyed on the material rather than on the caller.
@@ -153,11 +167,12 @@ interface ShaderSource {
   fragmentShader: string;
 }
 
-// Give a material the avatar's thinner air and its wrapped light. Idempotent, since the materials are
-// shared.
+// Give a material the avatar's thinner air, its wrapped light and its
+// front-face shadow. Idempotent, since the materials are shared.
 export function wearAvatar(mat: THREE.MeshStandardMaterial): THREE.MeshStandardMaterial {
   if (mat.userData.avatar === true) return mat;
   mat.userData.avatar = true;
+  mat.shadowSide = THREE.FrontSide;
   // Chained rather than replaced, so a material that already carries a patch
   // keeps it - none of the avatar's do today, and this is what makes it safe
   // when one does.

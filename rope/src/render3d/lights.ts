@@ -189,6 +189,11 @@ const LIGHT_SHADOW_MAP_SIZE = 1024;
 // silhouette, while still casting shadows from the sun and every other light.
 export const LIGHT_SHADOW_NEAR = 0.1;
 
+// A lamp's shadow edge when it authors none (`shadowRadius`), in shadow-map
+// texels: three's own default, so every lamp authored before the field keeps
+// the edge it had.
+export const LIGHT_SHADOW_RADIUS = 1;
+
 // Flicker shape. Two incommensurate rates summed: one alone is a sine wave and
 // reads as a pulse rather than as a flame, and their ratio being irrational is
 // what stops the pair repeating on any period a player would notice.
@@ -519,7 +524,11 @@ export class LightRig {
       // normal in METRES - the same distance wherever in the frustum it is
       // applied - and it is what handles the acne a constant bias was there for.
       light.shadow.normalBias = 0.03;
-    }
+      // The soft edge, in shadow-map texels: three's PCF kernel radius, the
+      // sun's knob (`environment.ts`) authored per lamp. A uniform, so a lamp
+      // softened in the editor recompiles nothing. See
+      // `LightObjectData.shadowRadius`.
+      light.shadow.radius = Math.max(0, data.shadowRadius ?? LIGHT_SHADOW_RADIUS);    }
 
     parent.add(holder);
     const flicker = clamp01(data.flicker ?? 0);

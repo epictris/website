@@ -678,6 +678,13 @@ export interface LightObjectData extends ObjectPlacement {
   // `castShadow: false` on the mesh could not say. Absent = the default near
   // plane (`LIGHT_SHADOW_NEAR`), sized for a lamp mounted clear of its fitting.
   shadowNear?: number;
+  // Shadow-casting only: how soft the shadow's edge is, as the radius of the
+  // PCF filter in SHADOW-MAP TEXELS - three's `shadow.radius`, the same knob
+  // the sun's soft edge is (`environment.ts`). Not a length, so unscaled. A
+  // spot's texel is a fixed angle seen from the lamp, so the same radius blurs
+  // wider the further the shadow lands from the light, as a real lamp's
+  // penumbra does. Absent = three's default of 1, a near-hard edge.
+  shadowRadius?: number;
   // Flicker depth, 0 (steady) .. 1 (guttering), as a fraction of `intensity`.
   // Absent = 0.
   //
@@ -3012,6 +3019,8 @@ export function scaleObject(o: SceneObjectData, factor: number): SceneObjectData
       ...(o.castShadow !== undefined ? { castShadow: o.castShadow } : {}),
       // A length, like `range`: the shadow camera's near plane.
       ...(o.shadowNear !== undefined ? { shadowNear: o.shadowNear * factor } : {}),
+      // Shadow-map texels, not a length.
+      ...(o.shadowRadius !== undefined ? { shadowRadius: o.shadowRadius } : {}),
       ...(o.flicker !== undefined ? { flicker: o.flicker } : {}),
       // How visible the lit air is and how thick the dust in it: fractions,
       // not lengths.

@@ -366,6 +366,9 @@ export interface EdLight {
   // Authored past a surrounding fitting's radius so a lantern does not shadow
   // its own light - see `LightObjectData.shadowNear`.
   shadowNear: number | null;
+  // Shadow edge softness in shadow-map texels, or null for the renderer's
+  // default - see `LightObjectData.shadowRadius`.
+  shadowRadius: number | null;
   flicker: number; // 0 (steady) .. 1 (guttering)
   // Spot only: how visible the lit air in the cone is, and how thick the dust
   // in it, both 0..1 (see `LightObjectData.beam` / `.dust`).
@@ -904,6 +907,7 @@ export const defaultLight = (): EdLight => ({
   // frame rate that halves without announcing why.
   castShadow: false,
   shadowNear: null,
+  shadowRadius: null,
   flicker: 0,
   beam: 0,
   dust: 0,
@@ -1583,6 +1587,7 @@ function lightItem(
       dirZ: l.dirZ ?? 0,
       castShadow: l.castShadow === true,
       shadowNear: l.shadowNear ?? null,
+      shadowRadius: l.shadowRadius ?? null,
       flicker: l.flicker ?? 0,
       beam: l.beam ?? 0,
       dust: l.dust ?? 0,
@@ -2041,6 +2046,9 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
           // is a field that lies about what it does.
           ...(i.light.castShadow && i.light.shadowNear !== null
             ? { shadowNear: i.light.shadowNear }
+            : {}),
+          ...(i.light.castShadow && i.light.shadowRadius !== null
+            ? { shadowRadius: i.light.shadowRadius }
             : {}),
           ...(i.light.flicker !== 0 ? { flicker: i.light.flicker } : {}),
           // A beam is a spot's cone made visible, so - like the cone itself -

@@ -283,6 +283,7 @@ import {
 import {
   DEFAULT_LIGHT_RANGE,
   LIGHT_SHADOW_BUDGET,
+  LIGHT_SHADOW_RADIUS,
 } from "../render3d/lights";
 import { DEFAULT_WAKE_FALL, DEFAULT_WAKE_RISE } from "../render3d/glow";
 import { DEFAULT_FIREFLY_NOTICE, FIREFLY_MAX } from "../render3d/fireflies";
@@ -6054,6 +6055,21 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           placeholder: "default",
           onEmpty: () => {
             for (const b of lights) b.light.shadowNear = null;
+          },
+        },
+      );
+      // How soft the shadow's edge is, in shadow-map texels: the sun's soft
+      // edge authored per lamp (see `LightObjectData.shadowRadius`); blank is
+      // the renderer's default, a near-hard edge.
+      num(
+        "shadow soft",
+        (b) => b.light.shadowRadius ?? NaN,
+        (b, v) => (b.light.shadowRadius = Math.max(0, v)),
+        0.5,
+        {
+          placeholder: String(LIGHT_SHADOW_RADIUS),
+          onEmpty: () => {
+            for (const b of lights) b.light.shadowRadius = null;
           },
         },
       );

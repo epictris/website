@@ -47,6 +47,14 @@ A directional light's shadow is one render of the scene into an orthographic map
 A corridor of eight shadow-casting torches is forty-eight shadow passes a frame, which announces itself only as the frame rate quietly halving.
 So `castShadow` is opt-in per light and capped at `LIGHT_SHADOW_BUDGET` (4), spent in authored order; past the cap a light still lights and simply does not occlude, which is a much smaller lie than it sounds, since most of what a torch contributes to a wall behind a crate is bounce that none of this models anyway.
 
+**A lamp's shadow edge is authored, like the sun's** (`shadowRadius`, the inspector's `shadow soft`; 2026-10-07).
+It is three's `shadow.radius`, the PCF filter's radius in shadow-map texels, the same knob the sun's soft edge is (fixed at 3 in `environment.ts`); absent is three's default of 1 (`LIGHT_SHADOW_RADIUS`), so every lamp authored before it keeps its edge.
+In texels rather than metres because that is what the filter takes; a spot's texel is a fixed angle seen from the lamp, so the same radius blurs wider the further the shadow lands from the light, which is what a real lamp's penumbra does.
+It is a uniform, so softening a lamp recompiles nothing.
+The cost of a wide one is three's own filter: five taps on a disc turned per pixel by interleaved gradient noise, which a renderer with temporal anti-aliasing smooths and this one does not, so a penumbra shows a fine stipple that grows with the radius (measured at the BALL spawn lamp: clean at 1, a visible stipple at 3, a washed-out speckle at 8; the open floor stays clean, so it is not acne and no bias changes it).
+The sun's radius-3 edge goes through the same filter.
+The shafts in the air keep their own softness (`SHAFT_SHADOW_SOFTNESS`), which is an angle and unrelated.
+
 `flicker` is render-only and driven by the **wall clock**, exactly like the force areas' drifting arrows, so it can never reach the fixed-step sim.
 It is *handed* a clock rather than reading one, because `cli shot --3d` pins it (`Scene3D.pinClock`): a screenshot whose lighting depends on when it was taken is evidence of nothing, which is the same reason that command already waits for every asset before it draws.
 
@@ -158,6 +166,16 @@ And because it is bounce, the ball's own shadow does not block it: three multipl
 So `avatarLightsBeginChunk` stashes each direct light as read, before its shadow, and the wrapped irradiance is the shadowed Lambert part plus `(wrapNL - dotNL)` of the unshadowed light; shadows from everything else still land on the direct term as before.
 `cli render3d` asserts all three stashes and the split.
 Played 2026-09-24 after the river's mushrooms at 30 cd lit one side of the ball to white and left the other black; at the same time the model's metalness came down from 0.85 to 0.5 and its roughness up from 0.5 to 0.65 (`MODEL_*` in `ballVisual.ts`), because a near-metal's lit side is a reflection and in a cave there is nothing to reflect - old iron is rust, grime and dust over the metal, not chrome.
+
+**The avatar casts its shadow from its front faces.**
+`wearAvatar` sets `shadowSide = FrontSide`, against three's default of drawing a FrontSide caster's back faces into the shadow map.
+The default is three's trick against acne, and it is wrong for a caster resting on its receiver: the ball's back faces are its underside, millimetres off the floor, while every shadow light pushes the floor's sample 3 cm along its normal (`normalBias` on the sun and on every lamp) - 37% of the ball's 8 cm radius.
+Near the contact the pushed sample sits above the underside and reads as lit, so the ball's shadow had a lit hole straight under it (reported 2026-10-07 at the BALL spawn, under the warm lamp above it).
+Measured by A/B: front faces close it, the lamp's `normalBias` at 0 closes it too but floods the floor with acne, and the sun's shadow and bias change nothing there.
+Every avatar mesh is a closed solid, so its front faces are its whole silhouette, and the acne the default avoids would be on the lit side, where the same `normalBias` already lifts the ball's own samples clear; the ball's shading is unchanged.
+The shadow prewarm (`Scene3D.shadowVariants`) reads `shadowSide`, so the front-face depth program is compiled with the rest.
+Still open: a chain link is thinner than the 3 cm push, so where it lies on the floor no choice of side gives it a contact shadow; that would take a `normalBias` scaled to each light's texel size.
+`cli render3d` asserts the side.
 
 **The avatar reflects the level's own environment, on purpose.**
 A private sky for it (the level's sky and ground lifted toward white, with a sun lobe always on, handed to the ball and chain as their own `envMap`) was built and played on 2026-09-24 and rejected: a ball reflecting a brighter sky than the room it is in looks pasted on.

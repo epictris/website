@@ -101,6 +101,7 @@ Its fields, and what `scaleLevelData` does to each:
 | `dirX`, `dirY`, `dirZ` | spot only: the aim, in the object's own frame | no |
 | `castShadow` | whether it occludes (capped by `LIGHT_SHADOW_BUDGET`) | no |
 | `shadowNear` | the shadow camera's near plane | yes |
+| `shadowRadius` | the shadow edge's softness, three's PCF radius in shadow-map texels; absent = 1 | no |
 | `flicker` | 0 (steady) .. 1 (guttering); render-only, wall-clock driven | no |
 | `beam` | spot only: how visible the lit air in the cone is, 0..1; render-only, wall-clock driven | no |
 | `dust` | spot only: how thick the dust drifting in the beam is, 0..1; render-only, wall-clock driven | no |
