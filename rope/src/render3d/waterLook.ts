@@ -184,12 +184,46 @@ export const IMPACT_SLOTS = 4;
 export const BOIL_REACH = 1.16;
 // The foam lies flat on the water, after Tris's reference (2026-10-06, a
 // stylised plunge: one pale tone, whole at the plunge and breaking into
-// broken rings that drift out and thin). It reaches the boil's length, is
-// carried out at FOAM_OUTFLOW boil units per tick of the boil's clock, and is
-// shed in rings FOAM_RING_SPACING apart (the study's ring arcs' numbers).
-const FOAM_REACH = BOIL_REACH;
+// broken rings that drift out and thin). It lasts FOAM_LIFE seconds, as
+// clean water's foam does (the ball's wake and splash last 1 to 2.4 s), so
+// it reaches as far as the outflow carries it in that time, round the
+// sheet's ends as far as in front of it (until 2026-10-07 it died over the
+// boil's length, a 0.7 s life on BALL's lower fall; Tris: "a bit more
+// spread ... to the sides of the waterfall as well"). It is shed in rings FOAM_RING_SPACING apart at the plunge (the study's ring
+// arcs' numbers), carried out on the boil's outflow:
+// - THE OUTFLOW SLOWS as it spreads, as a jet along a surface does (a plane
+//   wall jet: speed as one over the square root of the distance from a
+//   virtual origin one boil length upstream), from FOAM_OUTFLOW boil units
+//   per tick of the boil's clock at the plunge; so the rings crowd as they
+//   go out and the foam gathers at the boil's edge. (A constant
+//   FOAM_OUTFLOW, a conveyor, until 2026-10-07.)
+// - THE FOAM RIDES THE BOIL'S EDDIES, as the ball's wake does (stillWater.ts
+//   WAKE_EDDY): eddies FOAM_EDDY of the boil's length across, at
+//   FOAM_TURBULENCE of the plunge's outflow (a plunge pool's turbulence
+//   intensity), carry the foam about their own size over their turnover time
+//   and then let it go. The eddies are the water's own, laid out in where
+//   each bit of water is round the ring and when it left the plunge, so they
+//   ride out with it and never slide across it: the rings come off the
+//   plunge whole and are torn and bent the further out they get.
+// - SMALLER EDDIES STILL MIX IT, a diffusion with K = FOAM_DIFFUSIVITY *
+//   FOAM_OUTFLOW * l: detail of size L fades over about L^2 / K, so the
+//   thinnest slivers the eddies tear off go first and the rings last longest
+//   (Tris, 2026-10-07: "the specks should fade more quickly"). The pattern's
+//   fine scale is across the rings, so that is the way it is blurred; along
+//   them and the rings themselves fade as a sine of their size does. (Lower
+//   than the wake's 0.03, which would smooth the rings away inside the
+//   plunge's solid foam.)
+const FOAM_LIFE = 1.6;
 const FOAM_OUTFLOW = 0.84;
 const FOAM_RING_SPACING = 1.1;
+const FOAM_EDDY = 0.5 * BOIL_REACH;
+const FOAM_TURBULENCE = 0.25;
+const FOAM_DIFFUSIVITY = 0.004;
+const FOAM_K = FOAM_DIFFUSIVITY * FOAM_OUTFLOW * BOIL_REACH;
+// The pattern's frequencies, per boil unit at the plunge: along the rings,
+// across them, and the rings'.
+const PATTERN_ALONG = 1.4;
+const PATTERN_ACROSS = 5.0;
 // The foam's tone: the water's light tone toward white by this much, so it
 // sits in the water's own palette (the reference's foam is a pale cyan, not
 // white). In GLSL `foamTone(light)` (IMPACT_GLSL), shared with the ball's
@@ -261,10 +295,6 @@ export const IMPACT_GLSL = `
   float impactDistance(vec2 d, float hw) {
     return length(vec2(d.x, max(abs(d.y) - hw, 0.0)));
   }
-  // How much foam is on the water (0 to 1): the bubbles the sheet drove down
-  // surfacing as the outflow carries them off, whole along the line the sheet
-  // strikes and dying away over the boil's length.
-  float impactFoamAmount(float dist) { return exp(-dist / ${fmt(FOAM_REACH)}); }
   // The field's own fade (see IMPACT_REACH).
   float impactFade(float dist) { return 1.0 - smoothstep(${fmt(IMPACT_FADE)}, ${fmt(IMPACT_REACH)}, dist); }
   // Where round the ring a point is (boil units): the line the sheet strikes,
@@ -274,21 +304,65 @@ export const IMPACT_GLSL = `
     float beyond = max(abs(d.y) - hw, 0.0);
     return sign(d.y) * (min(abs(d.y), hw) + atan(beyond, -d.x) * dist);
   }
-  // The foam's patches: carried outward at FOAM_OUTFLOW, drawn out along the
-  // rings, and banded every FOAM_RING_SPACING as the plunge sheds them. Foam
-  // covers the pattern wherever it is under the amount, so it is whole where
-  // the amount is and breaks into thinning arcs as the amount dies away.
+  // How long the outflow takes to carry the foam out to dist (ticks of the
+  // boil's clock): speed FOAM_OUTFLOW / sqrt(1 + dist / l), integrated.
+  float impactTravel(float dist) {
+    return ${fmt((2 * BOIL_REACH) / (3 * FOAM_OUTFLOW))} * (pow(1.0 + dist / ${fmt(BOIL_REACH)}, 1.5) - 1.0);
+  }
+  // Which water a point is (boil units at the plunge's speed): when it left
+  // the plunge, counted back from now, so it rides out with the outflow.
+  // How much foam is on the water (0 to 1): the bubbles the sheet drove down
+  // surfacing as the outflow carries them off, whole along the line the sheet
+  // strikes and bursting as they go, over FOAM_LIFE (life, in ticks of the
+  // boil's clock).
+  float impactFoamAmount(float dist, float life) { return exp(-impactTravel(dist) / life); }
+  float impactLabel(float dist, float t) { return (impactTravel(dist) - t) * ${fmt(FOAM_OUTFLOW)}; }
+  // The eddies' stream function, in the water's own coordinates (see
+  // FOAM_EDDY).
+  float impactStream(vec2 d, float hw, float t) {
+    float dist = impactDistance(d, hw);
+    return paintNoise(vec2(impactAlong(d, hw, dist), impactLabel(dist, t)) / ${fmt(FOAM_EDDY)} + 5.3);
+  }
+  // Where the water at d was before the eddies carried it (boil units): back
+  // along the stream function's curl (the noise's slopes are 0.5 rms per its
+  // unit, so this is about one eddy), by as far as the eddies have carried
+  // it since it left the plunge.
+  vec2 impactStirred(vec2 d, float hw, float t) {
+    float age = impactTravel(impactDistance(d, hw));
+    float psi = impactStream(d, hw, t);
+    vec2 curl = vec2(impactStream(d + vec2(0.0, 0.02), hw, t) - psi, psi - impactStream(d + vec2(0.02, 0.0), hw, t)) / 0.02;
+    float turnover = ${fmt(FOAM_EDDY / (FOAM_TURBULENCE * FOAM_OUTFLOW))};
+    return d - curl * (2.0 * ${fmt(FOAM_EDDY)}) * ${fmt(FOAM_EDDY)} * (1.0 - exp(-age / turnover));
+  }
+  // The foam's patches: carried out on the outflow (see impactTravel), drawn
+  // out along the rings, and banded as the plunge sheds them, every
+  // FOAM_RING_SPACING there. Foam covers the pattern wherever it is under the
+  // amount, so it is whole where the amount is and breaks into thinning arcs
+  // as the amount dies away.
   float impactFoamPattern(vec2 d, float hw, float dist, float t) {
-    float s = dist - t * ${fmt(FOAM_OUTFLOW)};
-    float n = paintNoise(vec2(impactAlong(d, hw, dist) * 1.4 + t * 0.15, s * 5.0));
-    float bands = 0.5 - 0.5 * cos(6.2831853 * s / ${fmt(FOAM_RING_SPACING)});
+    float s = impactLabel(dist, t);
+    // Mixed by the smallest eddies since it left the plunge (see
+    // FOAM_DIFFUSIVITY): the spread of a diffusion, sqrt(2 K age), in boil
+    // units. The outflow slowing packs the label c times tighter here.
+    float kt = ${fmt(FOAM_K)} * impactTravel(dist);
+    float c = sqrt(1.0 + dist / ${fmt(BOIL_REACH)});
+    // Across the rings, blurred by that spread: three taps 1.4 spreads apart
+    // weigh in a Gaussian of the spread's variance.
+    float a = impactAlong(d, hw, dist) * ${fmt(PATTERN_ALONG)} + t * 0.15;
+    float across = s * ${fmt(PATTERN_ACROSS)};
+    float tap = 1.4142 * sqrt(2.0 * kt) * ${fmt(PATTERN_ACROSS)} * c;
+    float n = 0.25 * paintNoise(vec2(a, across - tap)) + 0.5 * paintNoise(vec2(a, across)) + 0.25 * paintNoise(vec2(a, across + tap));
+    // Along them, and the rings, a sine of wavenumber k fading by exp(-k^2 K t).
+    n = 0.5 + (n - 0.5) * exp(-${fmt((Math.PI * PATTERN_ALONG) ** 2)} * kt);
+    float kRing = 6.2831853 * c / ${fmt(FOAM_RING_SPACING)};
+    float bands = 0.5 - 0.5 * cos(6.2831853 * s / ${fmt(FOAM_RING_SPACING)}) * exp(-kRing * kRing * kt);
     return 0.55 * n + 0.45 * bands;
   }
   // The surface heaves a few centimetres where the foam is thick.
-  float impactHeight(vec2 d, float hw, float t) {
+  float impactHeight(vec2 d, float hw, float t, float life) {
     float r = impactDistance(d, hw);
     if (r > ${fmt(IMPACT_REACH)}) return 0.0;
-    return ${fmt(HEAVE_HEIGHT)} * impactFoamAmount(r) * impactFade(r) * paintNoise(vec2(d.y * 2.4 + t * 0.72, d.x * 2.8 - t * 0.9));
+    return ${fmt(HEAVE_HEIGHT)} * impactFoamAmount(r, life) * impactFade(r) * paintNoise(vec2(d.y * 2.4 + t * 0.72, d.x * 2.8 - t * 0.9));
   }
   // Boil units from impact i, x turned so the sheet travels toward -x; or
   // a long way off when the slot is idle or out of this plane.
@@ -309,17 +383,20 @@ export const IMPACT_GLSL = `
       float hw = uImpactHow[i].x;
       if (impactDistance(d, hw) > ${fmt(IMPACT_REACH)}) continue;
       float t = uTime * uImpactHow[i].w;
-      float h = impactHeight(d, hw, t);
-      vec2 g = vec2(impactHeight(d + vec2(0.015, 0.0), hw, t) - h, impactHeight(d + vec2(0.0, 0.015), hw, t) - h) / 0.015;
+      float life = ${fmt(FOAM_LIFE)} * uImpactHow[i].w;
+      float h = impactHeight(d, hw, t, life);
+      vec2 g = vec2(impactHeight(d + vec2(0.015, 0.0), hw, t, life) - h, impactHeight(d + vec2(0.0, 0.015), hw, t, life) - h) / 0.015;
       // Back into the world's x.
       slope += vec2(-uImpactHow[i].y * g.x, g.y);
     }
     return slope;
   }
   // Under 0 where there is foam.
-  float impactCover(vec2 d, float hw, float t) {
+  float impactCover(vec2 d, float hw, float t, float life) {
     float dist = impactDistance(d, hw);
-    return impactFoamPattern(d, hw, dist, t) - impactFoamAmount(dist) * impactFade(dist);
+    // The pattern is the water's, so it is read where that water came from.
+    vec2 from = impactStirred(d, hw, t);
+    return impactFoamPattern(from, hw, impactDistance(from, hw), t) - impactFoamAmount(dist, life) * impactFade(dist);
   }
   // How far a pixel spans across the water, metres: the world's x and z
   // across the screen's x (xy) and y (zw). Taken by the caller in uniform
@@ -342,8 +419,9 @@ export const IMPACT_GLSL = `
       // The edge is as wide as the cover changes across the pixel, from its
       // slope in boil units turned back into the world's x and z (seen
       // edge-on, the water is far wider per pixel in depth than across).
-      float cover = impactCover(d, hw, t);
-      vec2 g = vec2(impactCover(d + vec2(0.01, 0.0), hw, t) - cover, impactCover(d + vec2(0.0, 0.01), hw, t) - cover) / 0.01;
+      float life = ${fmt(FOAM_LIFE)} * uImpactHow[i].w;
+      float cover = impactCover(d, hw, t, life);
+      vec2 g = vec2(impactCover(d + vec2(0.01, 0.0), hw, t, life) - cover, impactCover(d + vec2(0.0, 0.01), hw, t, life) - cover) / 0.01;
       vec2 gw = vec2(-uImpactHow[i].y * g.x, g.y) / uImpactHow[i].z;
       float aa = max(0.5 * (abs(dot(gw, pixel.xy)) + abs(dot(gw, pixel.zw))), 1e-4);
       col = mix(col, foam, 1.0 - smoothstep(-aa, aa, cover));
