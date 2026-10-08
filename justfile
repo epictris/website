@@ -80,12 +80,19 @@ moss-install:
 ivy-install:
     cd rope && blender -b --python tools/blender/addon_install.py -- ivy
 
-# Install the formations add-on (rope/tools/blender/formations): rock masses
-# from outlines, edited through the game camera, and what grows on them. Then
-# the Formations tab is in the 3D viewport's sidebar.
+# Install the formations add-on (rope/tools/blender/formations): guides, the
+# rock masses generated from them, and what grows on them. Then the Formations
+# tab is in the 3D viewport's sidebar.
 # See rope/docs/blender-formations.md.
 formations-install:
     cd rope && blender -b --python tools/blender/addon_install.py -- formations
+
+# Install the Game add-on (rope/tools/blender/game; needs formations-install
+# first): the level's game camera and its look, guides edited through it, and
+# guides copied from the collision outlines. Then the Game tab is in the 3D
+# viewport's sidebar. See rope/docs/blender-game.md.
+game-install:
+    cd rope && blender -b --python tools/blender/addon_install.py -- game
 
 # Write the level's collision and its game camera (along the camera paths, or
 # along a recorded run: just scene-guide ball --ride playtests/x.json.gz) into

@@ -9,10 +9,10 @@ It is scenery like everything else in the scene: `just scene ball` exports it, a
 
 **In Blender**, in the Formations tab (N):
 
-- **Show guides** shows every piece's guide in a colour of its own, and **Solid rocks as wireframe** lets them show through the rocks.
-- Select a rock (`backdrop.roof`) for its box: **Select Guide**, the generator's fields, **Regenerate**, and **Render (export)**.
+- **Show guides** (under Scene) shows every piece's guide in a colour of its own, and **Solid rocks as wireframe** lets them show through the rocks.
+- Select a rock (`backdrop.roof`) for its panel: **Regenerate**, **Select Guide**, the generator's fields, and **Render (export)**.
 - Edit a guide like any mesh; the rock turns pending, and Regenerate (or **Rebuild Changed**) builds it again in a separate Blender, the scene editable meanwhile.
-- **New Formation** with a closed mesh selected makes a new piece from it.
+- **Build Formation from Mesh**, offered when a closed mesh is selected, makes a new piece from it.
 
 **Headless**, for a script or an LLM (`tools/blender/backdrop.py`; every run also records the level's start camera and water on the scene, `backdrop_camera`, which every build reads):
 

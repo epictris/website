@@ -86,10 +86,22 @@ class FormationParams(bpy.types.PropertyGroup):
                              default=DEFAULT_PARAMS["voxelCap"], min=.002, max=.1, precision=3, subtype="DISTANCE")
 
 
-def draw(layout, settings):
+def draw(layout, settings, solid):
+    """The fields for a rock built from a guide mesh (`solid`) or from an
+    outline: neither can take the other's generator, so only the outline's
+    two are offered, and a solid rock's one is not."""
     layout.use_property_split = True
     layout.use_property_decorate = False
-    layout.prop(settings, "generator")
+    if not solid:
+        # Laid out as a split property's row: a label, then the two choices.
+        split = layout.split(factor=.4, align=True)
+        label = split.row()
+        label.alignment = "RIGHT"
+        label.label(text="Generator")
+        row = split.row(align=True)
+        row.use_property_split = False
+        row.prop_enum(settings, "generator", "fitted", text="Fitted slate")
+        row.prop_enum(settings, "generator", "boulders", text="Boulders")
     for field in FIELDS[settings.generator].values():
         layout.prop(settings, field)
 

@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-import math
-
 import bpy
-from mathutils import Matrix, Vector
-from bpy.props import BoolProperty, EnumProperty, FloatProperty, PointerProperty, StringProperty
+from mathutils import Matrix
+from bpy.props import EnumProperty, PointerProperty, StringProperty
 
-from . import core, growth, params, slate, view
+from . import core, growth, params, slate
 
 
 def redraw(context):
@@ -41,47 +39,14 @@ def active_formation(context):
     return ob
 
 
-class FORMATIONS_OT_look(bpy.types.Operator):
-    """Make the game camera the scene camera and look through it from the start of its route"""
-    bl_idname = "formations.look"
-    bl_label = "Look Through Game Camera"
-
-    def execute(self, context):
-        try:
-            cam = view.look_from_start(context)
-            self.report({"INFO"}, f"Game camera: {cam.get('game_source', '')}")
-            return {"FINISHED"}
-        except ValueError as e:
-            self.report({"ERROR"}, str(e))
-            return {"CANCELLED"}
-
-
-class FORMATIONS_OT_ride(bpy.types.Operator):
-    """Move the game camera along its route at the game's pace, or pause it"""
-    bl_idname = "formations.ride"
-    bl_label = "Ride Game Camera"
-
-    direction: EnumProperty(items=[("BACK", "Back", "Back along the route"), ("PAUSE", "Pause", "Hold the camera"),
-                                   ("FORWARD", "Forward", "Forward along the route")])
-
-    @classmethod
-    def description(cls, context, properties):
-        return {"BACK": "Ride the game camera back along its route", "PAUSE": "Pause the game camera",
-                "FORWARD": "Ride the game camera forward along its route"}[properties.direction]
-
-    def execute(self, context):
-        view.ride(context, {"BACK": -1, "PAUSE": 0, "FORWARD": 1}[self.direction])
-        return {"FINISHED"}
-
-
 def guide_of_mesh(ob):
     """The guide a new solid formation takes from a selected closed mesh, in
     world space (the rock stands at the world origin: its stones are sized by
     their depth from the game's eye)."""
     if not ob or ob.type != "MESH" or core.is_formation(ob):
         raise ValueError("Select a closed mesh that is not a formation")
-    if ob.library is not None or any(c.name == core.COLLISION for c in ob.users_collection):
-        raise ValueError("The level's guide is a reference only; model a mesh of your own")
+    if core.is_reference(ob):
+        raise ValueError(ob.name + " is linked from another file, a reference only; model a mesh of your own")
     world = core.authored_world(ob)
     return {"verts": [[round(c, 6) for c in world @ v.co] for v in ob.data.vertices],
             "faces": [list(p.vertices) for p in ob.data.polygons]}
@@ -90,12 +55,12 @@ def guide_of_mesh(ob):
 def outline_of_curve(ob):
     """The outline a new formation takes from a selected guide curve, in the
     guide's own X/Z plane (a flat curve is brought to that first, in place),
-    and the frame its rock is placed in: where the guide stands. A collision
-    outline is refused: it is a reference, and a rock is built from a guide."""
-    if core.is_collision_outline(ob):
-        raise ValueError("Collision outlines are a reference only: Create Guide from Outline, then build from the guide")
+    and the frame its rock is placed in: where the guide stands. A reference
+    (a collision outline among them) is refused: a rock is built from a guide."""
     if not ob or ob.type != "CURVE":
         raise ValueError("Select a guide curve")
+    if core.is_reference(ob):
+        raise ValueError(ob.name + " is linked from another file, a reference only; copy it into a guide of your own")
     if ob.get("formation_outline_owner"):
         # Another rock's guide: read, never adopted (that rock keeps it).
         sp = ob.data.splines[0] if len(ob.data.splines) == 1 else None
@@ -103,181 +68,6 @@ def outline_of_curve(ob):
             raise ValueError("Use a closed POLY curve")
         return [[p.co.x, p.co.z] for p in sp.points], core.authored_world(ob).copy()
     return core.flatten_guide(ob), core.authored_world(ob).copy()
-
-
-def screen_outline(region, rv3d, ob):
-    """Collision outline `ob`'s outer polygon in `region`'s pixels, or None
-    where part of it is behind the view."""
-    from bpy_extras.view3d_utils import location_3d_to_region_2d
-    if not ob.data.splines:
-        return None
-    world = core.authored_world(ob)
-    points = []
-    for p in ob.data.splines[0].points:
-        q = location_3d_to_region_2d(region, rv3d, world @ Vector(p.co[:3]))
-        if q is None:
-            return None
-        points.append(q)
-    return points if len(points) >= 3 else None
-
-
-def polygon_hit(points, x, y, reach=6.0):
-    """Whether pixel (x, y) is inside `points` or within `reach` of an edge,
-    and the polygon's area (the innermost of nested outlines wins a click)."""
-    inside, near, area = False, False, 0.0
-    for a, b in zip(points, points[1:] + points[:1]):
-        area += a.x * b.y - b.x * a.y
-        if (a.y > y) != (b.y > y) and x < a.x + (y - a.y) * (b.x - a.x) / (b.y - a.y):
-            inside = not inside
-        ab = b - a
-        t = 0.0 if ab.length_squared == 0 else max(0.0, min(1.0, (Vector((x, y)) - a).dot(ab) / ab.length_squared))
-        near = near or (a + ab * t - Vector((x, y))).length <= reach
-    return inside or near, abs(area) / 2
-
-
-def view_region_at(context, x, y):
-    """The 3D viewport's main region under window pixel (x, y), if any."""
-    for area in context.window.screen.areas:
-        if area.type != "VIEW_3D":
-            continue
-        for region in area.regions:
-            if region.type == "WINDOW" and region.x <= x < region.x + region.width and region.y <= y < region.y + region.height:
-                return region
-    return None
-
-
-def outline_at(context, x, y):
-    """The collision outline under window pixel (x, y): the smallest one
-    whose inside or edge the pixel is on."""
-    region = view_region_at(context, x, y)
-    if region is None:
-        return None
-    best = None
-    for ob in core.collision_outlines(context.scene):
-        if not ob.visible_get(view_layer=context.view_layer):
-            continue
-        points = screen_outline(region, region.data, ob)
-        if points is None:
-            continue
-        hit, area = polygon_hit(points, x - region.x, y - region.y)
-        if hit and (best is None or area < best[1]):
-            best = (ob, area)
-    return best[0] if best else None
-
-
-def draw_hover(op):
-    """Highlight the outline under the cursor in the region being drawn."""
-    import gpu
-    from gpu_extras.batch import batch_for_shader
-    from mathutils.geometry import tessellate_polygon
-    ob = next((o for o in core.collision_outlines(bpy.context.scene) if o.name == op._hover), None)
-    region = bpy.context.region
-    if ob is None or region is None or region.data is None:
-        return
-    points = screen_outline(region, region.data, ob)
-    if points is None:
-        return
-    gpu.state.blend_set("ALPHA")
-    flat = [(p.x, p.y) for p in points]
-    fill = gpu.shader.from_builtin("UNIFORM_COLOR")
-    tris = batch_for_shader(fill, "TRIS", {"pos": flat}, indices=tessellate_polygon([[(*p, 0) for p in flat]]))
-    fill.bind()
-    fill.uniform_float("color", (*core.GUIDE_COLOURS[0], .18))
-    tris.draw(fill)
-    line = gpu.shader.from_builtin("POLYLINE_UNIFORM_COLOR")
-    line.uniform_float("viewportSize", (region.width, region.height))
-    line.uniform_float("lineWidth", 2.0)
-    line.uniform_float("color", (*core.GUIDE_COLOURS[0], 1.0))
-    batch_for_shader(line, "LINE_STRIP", {"pos": flat + flat[:1]}).draw(line)
-    gpu.state.blend_set("NONE")
-
-
-class FORMATIONS_OT_guide_from_outline(bpy.types.Operator):
-    """Copy one of the level's collision outlines into a new guide, to edit and build a formation from.
-    Click an outline in the viewport; Shift+click for more, Esc or right-click ends"""
-    bl_idname = "formations.guide_from_outline"
-    bl_label = "Create Guide from Outline"
-    bl_options = {"REGISTER", "UNDO"}
-
-    outline: StringProperty(name="Collision outline",
-                            description="The outline to copy, by name; empty picks one in the viewport")
-
-    def made(self, context, outline):
-        guide = core.guide_from_outline(outline)
-        if not self._made:
-            if context.mode != "OBJECT":
-                bpy.ops.object.mode_set(mode="OBJECT")
-            bpy.ops.object.select_all(action="DESELECT")
-        guide.select_set(True)
-        context.view_layer.objects.active = guide
-        self._made.append(guide.name)
-
-    def execute(self, context):
-        self._made = []
-        try:
-            ob = next((o for o in core.collision_outlines(context.scene) if o.name == self.outline), None)
-            if ob is None:
-                raise ValueError("No collision outline called " + repr(self.outline))
-            self.made(context, ob)
-            self.report({"INFO"}, "Guide created; edit it, then New Formation builds from it")
-            return {"FINISHED"}
-        except ValueError as e:
-            self.report({"ERROR"}, str(e))
-            return {"CANCELLED"}
-
-    def invoke(self, context, event):
-        if self.outline:
-            return self.execute(context)
-        if view.STATE in context.scene:
-            self.report({"ERROR"}, "Finish editing guides first")
-            return {"CANCELLED"}
-        if not core.collision_outlines(context.scene):
-            self.report({"ERROR"}, "No collision outlines: run `just scene-guide <level>` and reopen the file")
-            return {"CANCELLED"}
-        self._made, self._hover = [], ""
-        self._draw = bpy.types.SpaceView3D.draw_handler_add(draw_hover, (self,), "WINDOW", "POST_PIXEL")
-        context.window_manager.modal_handler_add(self)
-        context.workspace.status_text_set("Click a collision outline to copy it into a guide   "
-                                          "Shift+click: and keep picking   Esc / right-click: done")
-        return {"RUNNING_MODAL"}
-
-    def end(self, context):
-        bpy.types.SpaceView3D.draw_handler_remove(self._draw, "WINDOW")
-        context.workspace.status_text_set(None)
-        redraw(context)
-        if not self._made:
-            return {"CANCELLED"}
-        self.report({"INFO"}, f"Created {len(self._made)} guides; edit them, then New Formation builds from one")
-        return {"FINISHED"}
-
-    def modal(self, context, event):
-        if event.type in {"MOUSEMOVE", "INBETWEEN_MOUSEMOVE"}:
-            hover = outline_at(context, event.mouse_x, event.mouse_y)
-            name = hover.name if hover else ""
-            if name != self._hover:
-                self._hover = name
-                redraw(context)
-            return {"PASS_THROUGH"}
-        if event.value != "PRESS":
-            return {"PASS_THROUGH"}
-        if event.type in {"ESC", "RIGHTMOUSE"}:
-            return self.end(context)
-        if event.type != "LEFTMOUSE":
-            return {"PASS_THROUGH"}
-        if view_region_at(context, event.mouse_x, event.mouse_y) is None:
-            # A click on the panel or elsewhere ends the pick and goes on.
-            self.end(context)
-            return {"FINISHED", "PASS_THROUGH"} if self._made else {"CANCELLED", "PASS_THROUGH"}
-        outline = outline_at(context, event.mouse_x, event.mouse_y)
-        if outline is None:
-            self.report({"WARNING"}, "No collision outline there")
-            return {"RUNNING_MODAL"}
-        try:
-            self.made(context, outline)
-        except ValueError as e:
-            self.report({"ERROR"}, str(e))
-            return {"RUNNING_MODAL"}
-        return {"RUNNING_MODAL"} if event.shift else self.end(context)
 
 
 class FORMATIONS_OT_generate(bpy.types.Operator):
@@ -291,32 +81,56 @@ class FORMATIONS_OT_generate(bpy.types.Operator):
     preset: EnumProperty(name="Starting outline",
                          items=[(x.upper(), x.title(), "") for x in ("terrace", "pillar", "wall", "arch", "distant")])
     settings: PointerProperty(type=params.FormationParams)
-    use_outline: BoolProperty(name="From the selected guide (a closed poly curve)", default=False)
-    use_guide: BoolProperty(name="From the selected mesh, as its guide (Solid guide)", default=False)
+    # What a new rock is built from; the panel's buttons say, and AUTO (a
+    # search or a script) takes the selected curve or mesh, else a preset.
+    source: EnumProperty(items=[("AUTO", "Auto", "The selected curve or mesh, else a starting outline"),
+                                ("PRESET", "Starting outline", "A preset outline at the 3D cursor"),
+                                ("GUIDE", "Guide", "The selected guide (a closed poly curve)"),
+                                ("MESH", "Mesh", "The selected closed mesh, as its guide (Solid guide)")],
+                         options={"SKIP_SAVE"})
+
+    @property
+    def use_outline(self):
+        return self.source == "GUIDE"
+
+    @property
+    def use_guide(self):
+        return self.source == "MESH"
+
+    def resolve_source(self, context):
+        if self.source == "AUTO":
+            ob = context.active_object
+            selected = ob is not None and ob.select_get()
+            self.source = ("GUIDE" if selected and ob.type == "CURVE" else
+                           "MESH" if selected and ob.type == "MESH" and not core.is_formation(ob) else "PRESET")
 
     def invoke(self, context, event):
         if self.mode != "CREATE":
             return self.execute(context)
-        ob = context.active_object
-        self.use_outline = bool(ob and ob.type == "CURVE" and ob.select_get())
-        self.use_guide = bool(ob and ob.type == "MESH" and ob.select_get() and not core.is_formation(ob))
+        self.resolve_source(context)
+        # The dialog keeps its last fields: a mesh takes the solid
+        # generator, and an outline cannot.
         if self.use_guide:
             self.settings.generator = "solid"
-        return context.window_manager.invoke_props_dialog(self, width=340)
+        elif self.settings.generator == "solid":
+            self.settings.generator = "fitted"
+        return context.window_manager.invoke_props_dialog(self, width=340, title={
+            "PRESET": "New Formation", "GUIDE": "Build Formation from Guide",
+            "MESH": "Build Formation from Mesh"}[self.source])
 
     def draw(self, context):
         col = self.layout.column()
         col.use_property_split = True
         col.use_property_decorate = False
-        if not self.use_outline and not self.use_guide:
+        if self.source == "PRESET":
             col.prop(self, "preset")
-        params.draw(col, self.settings)
-        self.layout.prop(self, "use_outline")
-        self.layout.prop(self, "use_guide")
+        params.draw(col, self.settings, solid=self.use_guide)
         self.layout.label(text="Builds in a separate process; Esc discards the result.")
 
     def execute(self, context):
         try:
+            if self.mode == "CREATE":
+                self.resolve_source(context)
             from_selected = self.use_outline or self.use_guide
             self._target = None if self.mode == "CREATE" and not from_selected else (
                 context.active_object if self.mode == "CREATE" else active_formation(context))
@@ -418,9 +232,9 @@ class FORMATIONS_OT_rebuild_changed(bpy.types.Operator):
 
     def execute(self, context):
         try:
-            if context.scene.get("formations_busy"):
+            if context.scene.get(core.BUSY):
                 raise ValueError("A rebuild is already running")
-            view.finish(context.scene, apply=True)
+            core.before_build(context.scene)
             self._targets = [ob for ob in core.formations() if core.pending(ob)]
             for ob in self._targets:
                 if not core.is_solid(ob):
@@ -431,7 +245,7 @@ class FORMATIONS_OT_rebuild_changed(bpy.types.Operator):
                 return {"FINISHED"}
             self._done, self._index, self._cancelled = [], 0, False
             self._launch(context)
-            context.scene["formations_busy"] = True
+            context.scene[core.BUSY] = True
             self._timer = context.window_manager.event_timer_add(.5, window=context.window)
             context.window_manager.modal_handler_add(self)
             self.report({"INFO"}, f"Rebuilding {len(self._targets)} formations; Esc discards the results")
@@ -444,13 +258,13 @@ class FORMATIONS_OT_rebuild_changed(bpy.types.Operator):
         ob = self._targets[self._index]
         self._request = core.recipe_for(ob)
         self._proc, self._out, self._log = core.launch_worker(self._request)
-        context.scene["formations_progress"] = f"{self._index + 1}/{len(self._targets)}: {ob.name}"
+        context.scene[core.PROGRESS] = f"{self._index + 1}/{len(self._targets)}: {ob.name}"
         redraw(context)
 
     def _cleanup(self, context):
         context.window_manager.event_timer_remove(self._timer)
-        context.scene["formations_busy"] = False
-        context.scene["formations_progress"] = ""
+        context.scene[core.BUSY] = False
+        context.scene[core.PROGRESS] = ""
         redraw(context)
 
     def modal(self, context, event):
@@ -519,15 +333,26 @@ class FORMATIONS_OT_action(bpy.types.Operator):
                 ob["formation_mode"] = "MANUAL"
             elif self.action == "ASSEMBLE":
                 core.assemble_sources(ob)
-            elif self.action == "OUTLINE":
+            elif self.action in ("OUTLINE", "ROCK"):
+                # One or the other: the guide shown and selected with its rock
+                # hidden, or the rock with its guide hidden. Viewport hiding
+                # only: the export goes by render visibility and lifts it.
                 guide = bpy.data.objects[ob["formation_outline"]]
-                core.collection(core.RECIPES).hide_viewport = False
+                target, other = (guide, ob) if self.action == "OUTLINE" else (ob, guide)
+                if context.mode != "OBJECT":
+                    bpy.ops.object.mode_set(mode="OBJECT")
+                if target is guide:
+                    core.collection(core.RECIPES).hide_viewport = False
+                target.hide_set(False)
                 bpy.ops.object.select_all(action="DESELECT")
-                guide.select_set(True)
-                context.view_layer.objects.active = guide
+                target.select_set(True)
+                context.view_layer.objects.active = target
+                other.hide_set(True)
             elif self.action == "SOURCES":
                 core.collection(core.RECIPES).hide_viewport = False
                 bpy.data.collections[ob["formation_sources"]].hide_viewport = False
+            elif self.action == "HIDE_SOURCES":
+                bpy.data.collections[ob["formation_sources"]].hide_viewport = True
             return {"FINISHED"}
         except (KeyError, ValueError) as e:
             self.report({"ERROR"}, str(e))
@@ -544,7 +369,7 @@ class FORMATIONS_OT_plant(bpy.types.Operator):
 
     def execute(self, context):
         try:
-            view.finish(context.scene, apply=True)
+            core.before_build(context.scene)
             rocks = {"SELECTED": selected_formations(context),
                      "STALE": [r for r in core.formations() if growth.stale(r)],
                      "ALL": core.formations()}[self.scope]
@@ -600,93 +425,5 @@ class FORMATIONS_OT_repaint_slate(bpy.types.Operator):
         return {"FINISHED"}
 
 
-class FORMATIONS_OT_edit(bpy.types.Operator):
-    """Edit formation guides as the game camera sees them (never the collision outlines)"""
-    bl_idname = "formations.edit"
-    bl_label = "Edit Guides"
-    bl_options = {"REGISTER", "UNDO"}
-
-    action: StringProperty(default="START")
-
-    def execute(self, context):
-        try:
-            if context.scene.get("formations_busy"):
-                raise ValueError("Wait for the rebuild to finish")
-            if self.action == "START":
-                # A solid formation has a guide mesh, edited as any mesh is.
-                targets = [r for r in selected_formations(context) or core.formations() if not core.is_solid(r)]
-                view.start(context, targets)
-            elif self.action == "APPLY":
-                editing = context.mode == "EDIT_CURVE"
-                count = view.apply_outlines(context.scene)
-                self.report({"INFO"}, f"Applied {count} guides; rebuild changed formations")
-                if editing:
-                    view.resume_points(context)
-            elif self.action == "FINISH":
-                view.finish(context.scene, apply=True)
-            elif self.action == "DISCARD":
-                view.finish(context.scene, apply=False)
-            redraw(context)
-            return {"FINISHED"}
-        except ValueError as e:
-            self.report({"ERROR"}, str(e))
-            return {"CANCELLED"}
-
-
-class FORMATIONS_OT_polygon(bpy.types.Operator):
-    """Change the guides being edited"""
-    bl_idname = "formations.polygon"
-    bl_label = "Guide Polygon"
-    bl_options = {"REGISTER", "UNDO"}
-
-    action: StringProperty(default="COPY")
-
-    @classmethod
-    def poll(cls, context):
-        return view.STATE in context.scene and not context.scene.get("formations_busy")
-
-    def execute(self, context):
-        try:
-            self.report({"INFO"}, view.polygon_action(context, self.action))
-            redraw(context)
-            return {"FINISHED"}
-        except ValueError as e:
-            if view.STATE in context.scene:
-                view.resume_points(context)
-            self.report({"ERROR"}, str(e))
-            return {"CANCELLED"}
-
-
-class FORMATIONS_OT_depth(bpy.types.Operator):
-    """Move the selected formations away from or toward the game camera"""
-    bl_idname = "formations.depth"
-    bl_label = "Move Depth"
-    bl_options = {"REGISTER", "UNDO"}
-
-    direction: FloatProperty(default=1)
-
-    def execute(self, context):
-        editing = context.mode == "EDIT_CURVE"
-        try:
-            if view.STATE in context.scene:
-                rocks = [view.owner_for(h) for h in view.selected_handles(context)]
-                rocks = [r for r in rocks if r is not None]
-            else:
-                rocks = selected_formations(context)
-            delta = self.direction * context.scene.formations_depth_step
-            count = view.move_depth(context, rocks, delta, context.scene.formations_depth_keep_size)
-            if editing:
-                view.resume_points(context)
-            redraw(context)
-            self.report({"INFO"}, f"Moved {count} formations {'back' if delta > 0 else 'forward'}; replant their growth")
-            return {"FINISHED"}
-        except ValueError as e:
-            if editing:
-                view.resume_points(context)
-            self.report({"ERROR"}, str(e))
-            return {"CANCELLED"}
-
-
-CLASSES = (FORMATIONS_OT_look, FORMATIONS_OT_ride, FORMATIONS_OT_guide_from_outline, FORMATIONS_OT_generate, FORMATIONS_OT_rebuild_changed, FORMATIONS_OT_action,
-           FORMATIONS_OT_plant, FORMATIONS_OT_tone_facets, FORMATIONS_OT_repaint_slate, FORMATIONS_OT_edit,
-           FORMATIONS_OT_polygon, FORMATIONS_OT_depth)
+CLASSES = (FORMATIONS_OT_generate, FORMATIONS_OT_rebuild_changed, FORMATIONS_OT_action, FORMATIONS_OT_plant,
+           FORMATIONS_OT_tone_facets, FORMATIONS_OT_repaint_slate)

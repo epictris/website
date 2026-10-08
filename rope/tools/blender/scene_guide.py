@@ -38,7 +38,7 @@ What is written, all in one collection called `Guide`:
   wire; an area (water, a force, a killzone, the finish) is the outline alone.
   These COLLISION OUTLINES are a visual reference only: nothing in the scene
   refers to one, so the next run can add, move or drop any of them. The
-  formations add-on's "Create Guide from Outline" copies one into a guide of
+  Game add-on's "Create Guide from Outline" copies one into a guide of
   the scene's own, which keeps nothing of where it came from.
 - an empty on every body's origin, `guide.<name>.origin`, plain axes.
 - `guide.plane`: the gameplay plane's extent as a wire rectangle.
@@ -48,7 +48,7 @@ What is written, all in one collection called `Guide`:
   the level's camera paths, or along a recorded run; see
   src/sim/cameraTrack.ts). It looks along +y (the game's -z) and never turns, as
   the game's never does. Its `game_fps` and frame count are what the scene
-  takes when the Formations panel's "Look through game camera" makes it the
+  takes when the Game panel's "Look through game camera" makes it the
   scene camera. Its `game_look` is the level's fog and the Medium depth of
   field, for the panel's Fog and Depth of Field.
 - `guide.camera.dof`: the same camera (riding on it) through Blender's depth
@@ -336,7 +336,7 @@ def to_blender_dir(v):
 
 
 def build_lighting(job):
-    """The game's light at rest, for the Formations panel's Lighting: the
+    """The game's light at rest, for the Game panel's Lighting: the
     lights in `guide.lights` (never in the Guide, so the scene does not light
     with them until asked) and the sky as `guide.world`.
 

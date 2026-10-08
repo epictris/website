@@ -1,6 +1,6 @@
 """The game look: what the game draws over its camera's view, in Blender.
 
-Three toggles in the panel, each the game's own law with the game's numbers,
+Three toggles in the Game panel, each the game's own law with the game's numbers,
 which `just scene-guide <level>` bakes into the guide (tools/blender/scene_guide.py):
 
 - LIGHTING: the game's light at rest instead of the scene's own. The guide's
@@ -28,15 +28,15 @@ import json
 
 import bpy
 
-from . import view
+from . import camera
 
-TREE = "Formations game look"
+TREE = "Game look"
 LIGHTS = "guide.lights"
 WORLD = "guide.world"
 # What the scene had before a toggle took it over, restored when it is off.
-SAVED_FOG = "formations_game_fog_saved"
-SAVED_LIGHTING = "formations_game_lighting_saved"
-ERROR = "formations_game_look_error"
+SAVED_FOG = "game_fog_saved"
+SAVED_LIGHTING = "game_lighting_saved"
+ERROR = "game_look_error"
 # Depth at or past this is the sky (the world), which the game never fogs.
 SKY_DEPTH = 1e6
 
@@ -53,16 +53,16 @@ def toggled(scene, context):
 
 
 def enabled(scene):
-    return scene.formations_game_fog or scene.formations_game_dof or scene.formations_game_lighting
+    return scene.game_fog or scene.game_dof or scene.game_lighting
 
 
 def apply(context):
     """Make the scene match the toggles. Lighting first: it sets the view
     transform the fog's tree converts through."""
     scene = context.scene
-    if view.game_camera(scene) is None:
+    if camera.game_camera(scene) is None:
         if enabled(scene):
-            raise ValueError("No game camera: run `just scene-guide <level>` and reopen the file")
+            raise ValueError(camera.NO_CAMERA)
         return
     apply_lighting(scene, context.view_layer)
     apply_dof(scene)
@@ -72,20 +72,20 @@ def apply(context):
 # --- Depth of field ------------------------------------------------------------
 
 def apply_dof(scene):
-    plain = view.game_camera(scene)
+    plain = camera.game_camera(scene)
     if plain.get("game_dof"):
         plain = plain.parent
     twin = next((ob for ob in plain.children if ob.get("game_dof")), None)
-    if scene.formations_game_dof and twin is None:
+    if scene.game_dof and twin is None:
         raise ValueError("The guide has no depth of field camera: run `just scene-guide <level>` and reopen the file")
     if scene.camera in (plain, twin):
-        scene.camera = twin if scene.formations_game_dof else plain
+        scene.camera = twin if scene.game_dof else plain
 
 
 # --- Lighting ------------------------------------------------------------------
 
 def guide_library(scene):
-    cam = view.game_camera(scene)
+    cam = camera.game_camera(scene)
     return cam.library if cam is not None else None
 
 
@@ -103,7 +103,7 @@ def linked(kind, name, library):
 
 def apply_lighting(scene, view_layer):
     library = guide_library(scene)
-    on = scene.formations_game_lighting
+    on = scene.game_lighting
     if on and SAVED_LIGHTING not in scene:
         if library is None:
             raise ValueError("The game camera is not linked from a guide file")
@@ -148,7 +148,7 @@ def apply_lighting(scene, view_layer):
 def fog_of(scene):
     """The guide camera's level fog, or None (a level without fog, or a guide
     written before the look)."""
-    cam = view.game_camera(scene)
+    cam = camera.game_camera(scene)
     look = json.loads(cam.get("game_look", "{}")) if cam is not None else {}
     return look.get("fog")
 
@@ -156,7 +156,7 @@ def fog_of(scene):
 def apply_fog(context):
     scene = context.scene
     ours = bpy.data.node_groups.get(TREE)
-    if not scene.formations_game_fog:
+    if not scene.game_fog:
         if ours is not None and scene.compositing_node_group == ours:
             scene.compositing_node_group = None
             saved = json.loads(scene.get(SAVED_FOG, "{}"))

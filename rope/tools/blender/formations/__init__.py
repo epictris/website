@@ -1,17 +1,19 @@
-"""Formations: rock masses generated from outlines, edited as the game camera
-sees them, and the moss and sprigs that grow on them. See
+"""Formations: guides (closed outlines and meshes), the rock masses generated
+from them, and the moss and sprigs that grow on them. See
 rope/docs/blender-formations.md.
 
 A Blender add-on (an extension in Blender's 4.2+ packaging,
-blender_manifest.toml beside this file), installed by `just blender-addons`.
-The rocks are built by the boulder generator (tools/blender/boulders) in a
-separate process; everything else is ordinary, undoable edits of the open
-scene, which `just scene <level>` exports like any other scenery."""
+blender_manifest.toml beside this file), installed by `just formations-install`.
+The rocks are built by the generators (fitted.py, solidfit.py and the boulder
+generator in tools/blender/boulders) in a separate process; everything else
+is ordinary, undoable edits of the open scene, which `just scene <level>`
+exports like any other scenery. Nothing here knows the game or the level
+editor: that is the Game add-on (tools/blender/game)."""
 
 import bpy
 from bpy.props import BoolProperty, EnumProperty, FloatProperty, PointerProperty
 
-from . import core, growth, look, ops, params, render, ui
+from . import core, growth, ops, params, render, ui
 
 CLASSES = ops.CLASSES + ui.CLASSES
 
@@ -28,12 +30,6 @@ def register():
     bpy.types.Object.formation_moisture = FloatProperty(
         name="Moisture", default=.55, min=0, max=1,
         description="How much grows on the formation")
-    bpy.types.Scene.formations_depth_step = FloatProperty(
-        name="Depth step", default=5, min=.01, soft_max=50, unit="LENGTH",
-        description="Metres per Forward/Back click")
-    bpy.types.Scene.formations_depth_keep_size = BoolProperty(
-        name="Keep screen size", default=True,
-        description="Scale about the game camera's eye, so a move in depth keeps a formation's size on screen")
     bpy.types.Scene.formations_show_guides = BoolProperty(
         name="Show guides", default=False, update=lambda self, _: core.show_guides(self, self.formations_show_guides),
         description="Show every formation's guide mesh (and outline) in the viewport, each in a colour of its own. "
@@ -42,17 +38,6 @@ def register():
         name="Solid rocks as wireframe", default=False,
         update=lambda self, _: core.rocks_wire(self, self.formations_rocks_wire),
         description="Draw the solid formations' rocks as wireframe, so their guides show through")
-    bpy.types.Scene.formations_game_fog = BoolProperty(
-        name="Fog", default=False, update=look.toggled,
-        description="The level's fog, as the game mixes it over the view (viewport compositor and renders)")
-    bpy.types.Scene.formations_game_dof = BoolProperty(
-        name="Depth of Field", default=False, update=look.toggled,
-        description="Look through the game camera with Blender's depth of field, set to the game's Medium blur "
-                    "behind the gameplay plane (it blurs in front of it too, which the game does not)")
-    bpy.types.Scene.formations_game_lighting = BoolProperty(
-        name="Lighting", default=False, update=look.toggled,
-        description="The game's light at rest: its sun, the level's always-on lights, its sky and fill as the "
-                    "world, and its tone mapping (ACES). The scene's own lights are hidden until it is off")
     render.register()
     for c in CLASSES:
         bpy.utils.register_class(c)
@@ -68,13 +53,8 @@ def unregister():
     for c in reversed(CLASSES):
         bpy.utils.unregister_class(c)
     render.unregister()
-    del bpy.types.Scene.formations_game_lighting
-    del bpy.types.Scene.formations_game_dof
-    del bpy.types.Scene.formations_game_fog
     del bpy.types.Scene.formations_rocks_wire
     del bpy.types.Scene.formations_show_guides
-    del bpy.types.Scene.formations_depth_keep_size
-    del bpy.types.Scene.formations_depth_step
     del bpy.types.Object.formation_moisture
     del bpy.types.Object.formation_attachment
     del bpy.types.Object.formation_params

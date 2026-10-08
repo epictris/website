@@ -6,4 +6,4 @@ The generator, `cli rocks-check`, `tools/blender/check.py` and the editor's "Fit
 
 Do not resurrect the pipeline or its constants.
 The page as it stood - the reference and actual outlines, the rock material, the chunking and every lesson it cost - is in git history (`docs/rocks.md` at `bfa6597`).
-A rock is now modelled in Blender, and the formations add-on ([blender-formations](blender-formations.md)) builds one from an outline drawn through the game camera.
+A rock is now modelled in Blender, and the formations add-on ([blender-formations](blender-formations.md)) builds one from a guide, which the Game add-on ([blender-game](blender-game.md)) edits through the game camera.

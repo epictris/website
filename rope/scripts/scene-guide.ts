@@ -156,12 +156,12 @@ const camera = cameraTrack();
 const cameraJob = {
   ...camera,
   frames: camera.frames.map((f) => ({ eye: f.eye.map(round), halfHeight: round(f.halfHeight) })),
-  // What the game draws over the view, for the Formations panel's game look:
+  // What the game draws over the view, for the Game panel's game look:
   // the level's fog and the Medium depth of field (src/render3d/depthOfField.ts).
   look: { fog: fogOf(level.environment), dofMaxBlur: DOF_MAX_BLUR.medium, dofFocusBand: FOCUS_BAND },
 };
 
-// The game's light at rest, for the Formations panel's Lighting: what
+// The game's light at rest, for the Game panel's Lighting: what
 // `Environment` builds from the level's block (sun, hemisphere fill, the
 // generated sky it reflects, background, tone mapping) and the always-on light
 // objects `LightRig` builds, in its order and under its budgets. Waking lights

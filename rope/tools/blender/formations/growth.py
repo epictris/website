@@ -37,7 +37,6 @@ import json
 import math
 import random
 import re
-from pathlib import Path
 
 import bpy
 import numpy as np

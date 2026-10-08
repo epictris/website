@@ -1,9 +1,9 @@
 schema_version = "1.0.0"
 
-id = "formations"
+id = "game"
 version = "0.1.0"
-name = "Formations"
-tagline = "Rock formations generated from guides, and what grows on them"
+name = "Game"
+tagline = "The level's game camera, its look, and guides seen through it"
 maintainer = "Tristan Bray"
 type = "add-on"
 

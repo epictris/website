@@ -18,13 +18,16 @@ same way; its recipe holds the guide's geometry, the game's start camera
 rock's world frame, because a stone's size goes with its depth from that eye.
 
 An outline formation's outline is its GUIDE too, and the guide is its only
-source. The level's COLLISION OUTLINES (the `guide.*` curves the scene links
-from `<scene>-guide.blend`) are a visual reference and nothing else: no rock
-is ever built from one, and nothing here writes to one. Create Guide from
-Outline (`guide_from_outline`) copies one into a free guide, a local curve in
-GUIDES that keeps nothing of where it came from, so the editor can add, move
-or remove collision without any guide or rock noticing. New Formation from a
-free guide makes it the rock's own (`adopt_guide`).
+source. A FREE GUIDE is a local closed curve no rock owns yet (in GUIDES when
+the Game add-on copied it from a collision outline); New Formation from one
+makes it the rock's own (`adopt_guide`). Nothing linked from another file is
+ever a guide (`is_reference`): the level's collision outlines, linked from
+`<scene>-guide.blend`, are a visual reference only, and nothing here reads or
+writes one.
+
+This add-on knows nothing of the game or the level editor: the Game add-on
+(tools/blender/game) edits guides through the game camera and copies guides
+from the collision outlines, through the functions here.
 
 Construction helpers never ship and never render: every formation's guide
 curve and the generator's source slabs live under RECIPES, and the mesh a
@@ -64,9 +67,16 @@ RECIPES = "Formation recipes"
 BACKUPS = "Formation backups"
 # Free guides: copies of collision outlines no rock has been built from yet.
 GUIDES = "Formation guides"
-# The collection `just scene-guide` links the level's collision in as
-# (tools/blender/scene_guide.py GUIDE_COLLECTION).
-COLLISION = "Guide"
+# An object that is never a guide, though it may look like one: something
+# drawn to show where a guide is (the Game add-on's projection handles).
+REFERENCE = "formation_reference"
+# The scene properties a running Rebuild Changed sets: that it runs, and on what.
+BUSY = "formations_busy"
+PROGRESS = "formations_progress"
+# Callables taking the scene, run before a rebuild or replant reads any guide:
+# whatever holds guide edits outside the guides writes them in (the Game
+# add-on's Edit Guides applies its handles and ends).
+BEFORE_BUILD = []
 # The scene property holding the game's start camera and water for solid
 # formations: {"eye", "distance", "tanHalf", "waterZ"}.
 CAMERA = "backdrop_camera"
@@ -107,11 +117,14 @@ def is_formation(ob):
 
 
 def formation_of(ob):
-    """The formation `ob` belongs to: itself, the rock under its placement, or
-    the rock its outline or growth belongs to."""
+    """The formation `ob` belongs to: itself, the rock under its placement,
+    the rock its outline or growth belongs to, or the rock one of its source
+    slabs is (so the slabs' tools stay at hand while they are edited)."""
     if ob is None or is_formation(ob):
         return ob
-    rid = ob.get("formation_root") or ob.get("formation_outline_owner") or ob.get("formation_growth_owner")
+    if is_formation(ob.parent) and any(c.name == ob.parent.get("formation_sources") for c in ob.users_collection):
+        return ob.parent
+    rid =ob.get("formation_root") or ob.get("formation_outline_owner") or ob.get("formation_growth_owner")
     if not rid:
         return None
     # A duplicate shares its original's id until Make Unique: try the
@@ -253,63 +266,25 @@ def outline_object(outline, name, owner):
     return ob
 
 
-def is_collision_outline(ob):
-    """Whether `ob` is one of the level's collision outlines (a `guide.*`
-    curve from the linked guide, or a copy of one made local), which is a
-    reference only."""
-    return (ob is not None and ob.type == "CURVE" and ob.name.startswith("guide.")
-            and (ob.library is not None or ob.override_library is not None
-                 or any(c.name == COLLISION or c.library is not None for c in ob.users_collection)))
-
-
-def collision_outlines(scene=None):
-    scene = scene or bpy.context.scene
-    return [ob for ob in scene.objects if is_collision_outline(ob)]
+def is_reference(ob):
+    """Whether `ob` only shows something and is never a guide: linked from
+    another file (the level's collision outlines are, and a file's own guide
+    is its own), or marked REFERENCE."""
+    return (ob.library is not None or ob.override_library is not None or bool(ob.get(REFERENCE))
+            or any(c.library is not None for c in ob.users_collection))
 
 
 def is_free_guide(ob):
-    """A guide curve no formation owns yet: one Create Guide from Outline
-    made, or any local closed curve the artist drew."""
-    return (ob is not None and ob.type == "CURVE" and ob.library is None and not is_collision_outline(ob)
-            and not ob.get("formation_outline_owner") and "formation_handle_owner" not in ob)
+    """A guide curve no formation owns yet: a copy of a collision outline, or
+    any local closed curve the artist drew."""
+    return (ob is not None and ob.type == "CURVE" and not is_reference(ob)
+            and not ob.get("formation_outline_owner"))
 
 
-def guide_from_outline(outline):
-    """A free guide that is an exact copy of collision outline `outline`: the
-    same points at the same place, as a 3D curve in its own X/Z plane (a
-    formation's convention). It copies geometry and pose only, so it holds
-    nothing that refers back to the outline, and the outline is not touched."""
-    if not is_collision_outline(outline):
-        raise ValueError("Pick one of the level's collision outlines")
-    if len(outline.data.splines) != 1:
-        raise ValueError("This outline has a hole (a belt's band); a guide is one closed polygon")
-    sp = outline.data.splines[0]
-    if sp.type != "POLY" or not sp.use_cyclic_u:
-        raise ValueError("This outline is not a closed polygon")
-    if outline.data.dimensions == "2D":
-        points = [(p.co.x, p.co.y) for p in sp.points]
-        # The flat curve's X/Y turned onto the guide's X/Z: the same world points.
-        frame = authored_world(outline) @ Matrix.Rotation(-math.pi / 2, 4, "X")
-    else:
-        if any(abs(p.co.y) > .001 for p in sp.points):
-            raise ValueError("This outline is not flat")
-        points = [(p.co.x, p.co.z) for p in sp.points]
-        frame = authored_world(outline).copy()
-    validate_polygon([list(p) for p in points])
-    curve = bpy.data.curves.new("Guide", "CURVE")
-    curve.dimensions = "3D"
-    line = curve.splines.new("POLY")
-    line.points.add(len(points) - 1)
-    for pt, (x, z) in zip(line.points, points):
-        pt.co = (x, 0, z, 1)
-    line.use_cyclic_u = True
-    ob = bpy.data.objects.new("Guide", curve)
-    col = collection(GUIDES)
-    col.hide_render = True
-    col.objects.link(ob)
-    ob.matrix_world = frame
-    style_guide_curve(ob)
-    return ob
+def before_build(scene):
+    """Bring every guide edit held elsewhere into the guides (BEFORE_BUILD)."""
+    for hook in BEFORE_BUILD:
+        hook(scene)
 
 
 def style_guide_curve(ob):

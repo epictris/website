@@ -965,7 +965,7 @@ def formation_warnings(scene, warnings):
         except ValueError as e:
             warnings.append(f"{ob.name}: {e}")
         if growth.stale(ob):
-            warnings.append(f"{ob.name}: rock changed since its growth was planted (Formations > Growth > Stale)")
+            warnings.append(f"{ob.name}: rock changed since its growth was planted (Formations > Scene > Replant growth: Stale)")
 
 
 def repaint_slate():
