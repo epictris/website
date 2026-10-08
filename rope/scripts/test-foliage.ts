@@ -72,6 +72,16 @@ windGroup.traverse(object => {
 });
 disposeFoliageWind(windGroup);
 
+// Live vine previews share the stem material between several meshes.
+attachFoliageWind(b.group, false);
+b.group.traverse(object => {
+  if (!(object instanceof THREE.Mesh) || !object.geometry.getAttribute("sway")) return;
+  const shader = { uniforms: {}, vertexShader: "#include <common>\n#include <begin_vertex>", fragmentShader: "" };
+  (object.material as THREE.Material).onBeforeCompile(shader as never, {} as never);
+  assert.equal(shader.vertexShader.split("attribute float sway;").length - 1, 1, "shared preview materials get one wind patch");
+});
+disposeFoliageWind(b.group);
+
 // Exercise the real save middleware without running a second web server.
 const scratch = await mkdtemp(join(tmpdir(), "rope-foliage-test-"));
 try {

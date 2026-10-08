@@ -27,6 +27,8 @@ function patch(material: THREE.Material, phase: number): void {
 
 /** Patch local material copies, including shadow passes; cached GLBs and textures stay shared. */
 export function attachFoliageWind(root: THREE.Object3D, copyMaterials = true): void {
+  // Generated stems and leaf stalks share a material in live previews.
+  const patched = new Set<THREE.Material>();
   root.traverse(object => {
     if (!(object instanceof THREE.Mesh) || object.userData.foliageWind) return;
     const weight = object.geometry.getAttribute("sway") ?? object.geometry.getAttribute("_sway");
@@ -50,7 +52,8 @@ export function attachFoliageWind(root: THREE.Object3D, copyMaterials = true): v
         };
         material.customProgramCacheKey = () => "fern-two-sided-glow";
       }
-      patch(material, phase); return material;
+      if (!patched.has(material)) { patch(material, phase); patched.add(material); }
+      return material;
     };
     object.material = Array.isArray(object.material) ? object.material.map(clone) : clone(object.material);
     const source = (Array.isArray(object.material) ? object.material[0] : object.material) as THREE.MeshStandardMaterial;
