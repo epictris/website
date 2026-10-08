@@ -30,20 +30,14 @@
     ]
   },
   "river": {
-    "sha256": "414577d100ce0537dc4c1a56c98779ee25e5f8c4048447ce27f442d02b92c21a",
-    "bytes": 10122676,
+    "sha256": "8700d0656d8eb83b5e17c489639e330dc3780f95c44a03a6b608d08e9e501204",
+    "bytes": 16264344,
     "credits": [
       {
         "name": "finish_line",
         "author": "hyd (@hydroh)",
         "source": "https://sketchfab.com/3d-models/finish-line-7ec1d8194ddf46e6b398d336df0b5d7a",
         "license": "Sketchfab Standard"
-      },
-      {
-        "name": "moss_003",
-        "author": "ambientCG (Lennart Demes)",
-        "source": "https://ambientcg.com/view?id=Moss003",
-        "license": "CC0"
       },
       {
         "name": "pbr_rock_cliffs_pack",

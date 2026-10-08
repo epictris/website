@@ -1,7 +1,7 @@
 """Export a level's Blender scene as the game's dressing.
 
     blender -b assets-src/scenes/<scene>.blend --factory-startup --python-exit-code 1 \
-        --python tools/blender/scene_export.py -- out.glb meta.json [--cache DIR]
+        --python tools/blender/scene_export.py -- out.glb meta.json [--cache DIR [--stale-occlusion]]
 
 Run by `scripts/scene-export.ts` (`just scene <level>`), which optimises the
 result and finishes the meta; see docs/blender-scenes.md.
@@ -560,7 +560,7 @@ def paint_moss(ob, im, paints):
     im.pixels.foreach_set(px.ravel())
 
 
-def bake_procedural_textures(kept, cache_dir=None, paints=(), warnings=None):
+def bake_procedural_textures(kept, cache_dir=None, paints=(), warnings=None, stale_occlusion=False):
     """Bake every procedural Base Color (and Normal) the kept meshes use into
     an image of the object's own, and wire it in, so glTF carries the stone as
     a baseColorTexture (and normalTexture) instead of dropping it to a flat
@@ -576,7 +576,10 @@ def bake_procedural_textures(kept, cache_dir=None, paints=(), warnings=None):
     prepared mesh and maps are in the bake cache (bake_cache.py) loads them
     instead of being prepared and baked: the key is taken on the scene before
     anything is prepared, so a cached object costs neither its creases'
-    rebuild nor its unwrap. Returns how many objects were baked or loaded.
+    rebuild nor its unwrap. With `stale_occlusion`, an object whose
+    neighbours alone changed loads its last bake too (bake_cache.Cache), and
+    each one is named in `warnings`. Returns how many objects were baked or
+    loaded.
 
     `paints` (moss.texture_paints) are texture-only mosses: a rock one grows
     on has its colour baked whatever its material, and the moss painted into
@@ -623,16 +626,21 @@ def bake_procedural_textures(kept, cache_dir=None, paints=(), warnings=None):
     # is the straight one, bent with the others after the bakes, so the
     # objects still to bake meet it as a cold export would.
     sizes, straight, bows = {}, {}, {}
-    cache, keys, hits, loaded = None, {}, {}, {}
+    cache, keys, hits, loaded, stale = None, {}, {}, {}, []
     if cache_dir:
         import bake_cache
-        cache = bake_cache.Cache(cache_dir, depsgraph, {ob: preparation(ob) for ob in targets})
+        cache = bake_cache.Cache(cache_dir, depsgraph, {ob: preparation(ob) for ob in targets}, stale_occlusion)
         for ob in targets:
             keys[ob] = cache.key(ob, scene, materials[ob], [entry[4] for entry in by_host.get(ob, ())])
             hit = cache.get(keys[ob], [image_name(ob, k) for k in ships[ob]])
             if hit is not None:
                 hits[ob] = hit
-        for ob, (files, mesh_file, data) in hits.items():
+                if hit[3] != keys[ob]:
+                    stale.append(ob)
+        if stale and warnings is not None:
+            warnings.append(f"--stale-occlusion: {len(stale)} objects keep the occlusion of their last bake, their "
+                            f"neighbours since changed: {', '.join(sorted(ob.name for ob in stale))}")
+        for ob, (files, mesh_file, data, _) in hits.items():
             loaded[ob] = {k: bake_cache.load(files[image_name(ob, k)], image_name(ob, k), space[k]) for k in ships[ob]}
             ob.modifiers.clear()
             ob.data = bake_cache.load_mesh(mesh_file, materials[ob])
@@ -640,7 +648,8 @@ def bake_procedural_textures(kept, cache_dir=None, paints=(), warnings=None):
             if data and data.get("bows"):
                 bows[ob] = [(Vector(a), Vector(b), Vector(bow), reach) for a, b, bow, reach in data["bows"]]
     step("bake", f"{len(targets) - len(loaded)} of {len(targets)} objects to bake"
-         + (f", {len(loaded)} cached" if cache else ", cache off"))
+         + (f", {len(loaded)} cached" if cache else ", cache off")
+         + (f" ({len(stale)} with stale occlusion)" if stale else ""))
 
     for ob in targets:
         if ob in loaded:
@@ -753,7 +762,8 @@ def bake_procedural_textures(kept, cache_dir=None, paints=(), warnings=None):
         # Bent only now that every map is baked (formations/curve.py).
         log(f"curve {ob.name}: {curve.bend(ob.data, rock_bows)}")
     texels = ", ".join(f"{ob.name} {sizes[ob]}" for ob in targets if ob in sizes)
-    cached = (f"{len(loaded)} of {len(targets)} objects from the cache ({pruned} stale entries removed)"
+    cached = (f"{len(loaded)} of {len(targets)} objects from the cache"
+              + (f", {len(stale)} with stale occlusion" if stale else "") + f" ({pruned} unused entries removed)"
               if cache else "cache off")
     # scene-export.ts reads the "ships" counts: the optimiser must encode that
     # many baked maps.
@@ -982,8 +992,12 @@ def repaint_slate():
 
 def main():
     argv = sys.argv[sys.argv.index("--") + 1 :]
-    if len(argv) not in (2, 4) or (len(argv) == 4 and argv[2] != "--cache"):
-        raise SystemExit("usage: scene_export.py -- out.glb meta.json [--cache DIR]")
+    usage = "usage: scene_export.py -- out.glb meta.json [--cache DIR [--stale-occlusion]]"
+    stale_occlusion = "--stale-occlusion" in argv
+    if stale_occlusion:
+        argv.remove("--stale-occlusion")
+    if len(argv) not in (2, 4) or (len(argv) == 4 and argv[2] != "--cache") or (stale_occlusion and len(argv) != 4):
+        raise SystemExit(usage)
     out_glb, out_meta = argv[0], argv[1]
     cache_dir = argv[3] if len(argv) == 4 else None
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -1029,7 +1043,7 @@ def main():
     view_layer.update()
 
     # Baking selects its own targets; the export selection is restored after.
-    if bake_procedural_textures(kept, cache_dir, paints, warnings):
+    if bake_procedural_textures(kept, cache_dir, paints, warnings, stale_occlusion):
         for ob in scene.objects:
             try:
                 ob.select_set(ob in kept)

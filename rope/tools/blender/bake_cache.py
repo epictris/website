@@ -20,6 +20,8 @@ key is unchanged loads them instead of baking:
 - every triangle of the rest of the scene within reach of its Ambient
   Occlusion nodes: the slate's 0.5 m occlusion darkens where another rock
   comes close, so a neighbour's edit within that reach must re-bake it.
+  Only what the render shows counts: an object hidden in render (the guides)
+  never meets the bake's rays.
 
 Everything is taken by content, never by name or by place in the file: the
 export copies each object's materials, and Blender numbers a copy after
@@ -32,6 +34,13 @@ neighbours' maps alone.
 What decides a pixel is in the key, and nothing else: a missed input ships a
 stale map without a word, an extra one costs a bake. `--no-cache` on the
 export bakes everything afresh.
+
+`--stale-occlusion` on the export trades the last of those for time: the key
+is in two parts, the object's own and its neighbours', and an object whose
+own part is unchanged loads its last bake whatever its neighbours did, its
+colour map darkened by where they stood then. It ships stale maps on
+purpose, so the export names every object it loaded that way, and the entry
+keeps its old key: the next export without the flag re-bakes it.
 
 An entry is a directory named by the key with each map as the PNG the export
 packed (named as the image is, since the glTF exporter may name an image by
@@ -349,6 +358,44 @@ def code_digest():
     return h.hexdigest()
 
 
+def rendered_collections(view_layer):
+    """The collections whose objects a render shows: reached from the scene's
+    through collections neither hidden in render nor excluded from
+    `view_layer`. A collection reached on several paths shows if any does."""
+    out = set()
+
+    def walk(layer_coll):
+        coll = layer_coll.collection
+        if layer_coll.exclude or coll.hide_render or coll in out:
+            return
+        out.add(coll)
+        for child in layer_coll.children:
+            walk(child)
+
+    walk(view_layer.layer_collection)
+    return out
+
+
+def rendered(inst, shown):
+    """Whether the bake's rays can meet `inst` at all. Cycles leaves out what
+    is hidden in render, so a hidden object (a level's guides: its plane, its
+    collision outlines) never darkens a map, and counting its triangles near
+    a rock only re-bakes the rock whenever the guide is edited (2026-10-08).
+    An instance shows when what it instances is not hidden and its instancer
+    is shown; anything else, when it is not hidden, sits in a shown
+    collection and, if it instances, draws itself in render."""
+    ob = inst.object.original
+    if ob.hide_render:
+        return False
+    if inst.is_instance:
+        return rendered_object(inst.parent.original, shown)
+    return rendered_object(ob, shown) and (not ob.is_instancer or ob.show_instancer_for_render)
+
+
+def rendered_object(ob, shown):
+    return not ob.hide_render and any(c in shown for c in ob.users_collection)
+
+
 def ao_reach(materials):
     """How far the Ambient Occlusion nodes of `materials` look, metres: 0
     without any, infinite where a distance is driven by a link."""
@@ -376,16 +423,24 @@ class Cache:
     """One scene's bake cache under `root`, keyed on the scene as `depsgraph`
     evaluates it before the export prepares anything. `prep` holds, for
     every object the export bakes, what besides its mesh decides how it is
-    prepared (scene_export.preparation: its seed and render settings)."""
+    prepared (scene_export.preparation: its seed and render settings).
 
-    def __init__(self, root, depsgraph, prep):
+    With `stale_occlusion`, an object whose neighbours alone changed loads
+    the entry of its last bake, the occlusion of its old neighbours in its
+    colour map, instead of being baked (`get`)."""
+
+    def __init__(self, root, depsgraph, prep, stale_occlusion=False):
         self.root = root
         os.makedirs(root, exist_ok=True)
         self.used = set()
         self.code = code_digest()
         self.depsgraph = depsgraph
         self.prep = {ob.name: p for ob, p in prep.items()}
+        self.stale_occlusion = stale_occlusion
+        # Each key's own part: the key of everything but the neighbours.
+        self.own = {}
         self._scene = None
+        self._entries_by_own = None
 
     def _triangles(self):
         """Every triangle in the depsgraph, world space, as [(original
@@ -401,13 +456,16 @@ class Cache:
         if self._scene is not None:
             return self._scene
         self._scene = []
+        shown = rendered_collections(self.depsgraph.view_layer)
         for inst in self.depsgraph.object_instances:
             ev = inst.object
             if ev.type not in GEOMETRY | WHOLE:
                 continue
             orig = ev.original
+            if not rendered(inst, shown):
+                continue
             m = np.array(inst.matrix_world, dtype=np.float64)
-            seen_by = (orig.hide_render, orig.visible_camera, orig.visible_diffuse, orig.visible_glossy,
+            seen_by = (orig.visible_camera, orig.visible_diffuse, orig.visible_glossy,
                        orig.visible_transmission, orig.visible_volume_scatter, orig.visible_shadow,
                        self.prep.get(orig.name))
             if ev.type in WHOLE:
@@ -489,7 +547,11 @@ class Cache:
         any preparation, with the export's own copies of its `materials`, slot
         by slot (as the bake will read them: a backdrop rock's slate is
         repainted to its depth, its occlusion reach too), and `extra` (the
-        keys of the mosses painted into its colour map)."""
+        keys of the mosses painted into its colour map).
+
+        The key is in two parts: its own (everything above but the
+        neighbours, kept in `own` and in the entry's meta.json), and the
+        neighbours within its occlusion reach, hashed on top of it."""
         h = hashlib.sha256()
         _put(h, self.code, self.prep[ob.name], [tuple(r) for r in ob.matrix_world], list(extra))
         seen = {}
@@ -507,23 +569,64 @@ class Cache:
                 _put(h, mat.displacement_method)
                 if mat.node_tree:
                     tree_digest(h, mat.node_tree, seen)
+        own = h.hexdigest()
+        full = hashlib.sha256(own.encode())
         reach = ao_reach(materials)
         if reach > 0:
-            self._surroundings(h, ob, reach)
-        return h.hexdigest()
+            self._surroundings(full, ob, reach)
+        key = full.hexdigest()
+        self.own[key] = own
+        return key
+
+    def _by_own(self):
+        """{own part: [entry, newest first]} of every entry on disk, read
+        once. An entry written before the key had parts has no own part and
+        is never found by it."""
+        if self._entries_by_own is None:
+            self._entries_by_own = {}
+            for name in os.listdir(self.root):
+                meta = os.path.join(self.root, name, "meta.json")
+                try:
+                    with open(meta) as f:
+                        own = json.load(f).get("own")
+                    when = os.path.getmtime(meta)
+                except (OSError, ValueError):
+                    continue
+                if own:
+                    self._entries_by_own.setdefault(own, []).append((when, name))
+            for own, entries in self._entries_by_own.items():
+                self._entries_by_own[own] = [name for _, name in sorted(entries, reverse=True)]
+        return self._entries_by_own
+
+    def _complete(self, entry, names):
+        """The files of `entry` holding all of `names` and its mesh, else None."""
+        files = {n: os.path.join(self.root, entry, f"{n}.png") for n in names}
+        mesh = os.path.join(self.root, entry, MESH_FILE)
+        meta = os.path.join(self.root, entry, "meta.json")
+        if not all(os.path.isfile(p) for p in [*files.values(), mesh, meta]):
+            return None
+        return files, mesh, meta
 
     def get(self, key, names):
         """(the {image name: PNG path} of `names`, the prepared mesh's .blend,
-        the export's `data`) for an entry holding all of them, else None."""
-        files = {n: os.path.join(self.root, key, f"{n}.png") for n in names}
-        mesh = os.path.join(self.root, key, MESH_FILE)
-        meta = os.path.join(self.root, key, "meta.json")
-        if not all(os.path.isfile(p) for p in [*files.values(), mesh, meta]):
+        the export's `data`, the entry's key) for an entry holding all of
+        them, else None. The entry is `key`'s; failing that, with
+        `stale_occlusion`, the newest whose own part is `key`'s, its key then
+        not `key`. Such an entry stays under its own key, never `key`'s, so
+        an export without the flag bakes it afresh."""
+        entry, found = key, self._complete(key, names)
+        if found is None and self.stale_occlusion:
+            for entry in self._by_own().get(self.own[key], ()):
+                found = self._complete(entry, names)
+                if found:
+                    break
+        if found is None:
             return None
+        files, mesh, meta = found
         with open(meta) as f:
             data = json.load(f).get("data")
-        self.used.add(key)
-        return files, mesh, data
+        self.used.add(entry)
+        return files, mesh, data, entry
 
     def put(self, key, images, mesh, label, data=None):
         """Keep `images` (packed), the prepared `mesh` and the export's `data`
@@ -546,7 +649,7 @@ class Cache:
         finally:
             bpy.data.meshes.remove(bare)
         with open(os.path.join(tmp, "meta.json"), "w") as f:
-            json.dump({"object": label, "images": [im.name for im in images], "data": data}, f)
+            json.dump({"object": label, "own": self.own[key], "images": [im.name for im in images], "data": data}, f)
         shutil.rmtree(final, ignore_errors=True)
         os.replace(tmp, final)
         self.used.add(key)

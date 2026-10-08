@@ -1,6 +1,6 @@
 // Export a level's Blender scene into the game (`just scene <level>`).
 //
-//   bun run scene:export <level> [--blender PATH] [--raw] [--no-cache]
+//   bun run scene:export <level> [--blender PATH] [--raw] [--no-cache] [--stale-occlusion]
 //
 // The level's `scene` names `assets-src/scenes/<scene>.blend`. Headless
 // Blender runs `tools/blender/scene_export.py` over it (every object with
@@ -24,6 +24,11 @@
 // (`.cache/scene-encode/<scene>/`, scripts/encode-textures.mjs) is not
 // encoded again; `--no-cache` does every one afresh and leaves both caches
 // alone (each one's key is in its file).
+//
+// `--stale-occlusion` keeps an object's cached maps when only its neighbours
+// changed (a rock added or moved within its occlusion reach): it ships the
+// occlusion of its last bake, so the export names each one in its warnings,
+// and the next export without the flag re-bakes them.
 
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -76,7 +81,9 @@ function stream(cmd: string, argv: string[], onLine: (line: string) => void): Pr
 }
 
 const args = process.argv.slice(2);
-const bare = new Set(["--raw", "--no-cache"]);
+const bare = new Set(["--raw", "--no-cache", "--stale-occlusion"]);
+const valued = new Set(["--blender"]);
+const usage = "usage: bun run scene:export <level> [--blender PATH] [--raw] [--no-cache] [--stale-occlusion]";
 const positional = args.filter(
   (a, i) => !a.startsWith("--") && !(i > 0 && args[i - 1]!.startsWith("--") && !bare.has(args[i - 1]!)),
 );
@@ -85,7 +92,23 @@ const flag = (name: string): string | undefined => {
   return i >= 0 ? args[i + 1] : undefined;
 };
 
-const levelArg = positional[0] ?? fail("usage: bun run scene:export <level> [--blender PATH] [--raw] [--no-cache]");
+// Levenshtein distance, for naming the flag a typo meant.
+const distance = (a: string, b: string): number => {
+  let row = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const next = [i];
+    for (let j = 1; j <= b.length; j++) next[j] = Math.min(row[j]! + 1, next[j - 1]! + 1, row[j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1));
+    row = next;
+  }
+  return row[b.length]!;
+};
+for (const a of args) {
+  if (!a.startsWith("--") || bare.has(a) || valued.has(a)) continue;
+  const near = [...bare, ...valued].filter((f) => distance(a, f) <= 2);
+  fail(`unknown flag ${a}${near.length ? ` (did you mean ${near.join(" or ")}?)` : ""}\n${usage}`);
+}
+if (args.includes("--no-cache") && args.includes("--stale-occlusion")) fail("--stale-occlusion reads the bake cache, which --no-cache leaves alone");
+const levelArg = positional[0] ?? fail(usage);
 const levelPath = levelArg.endsWith(".json") ? resolve(levelArg) : join(ROOT, "levels", `${levelArg}.json`);
 if (!existsSync(levelPath)) fail(`no level at ${levelPath}`);
 const levelName = basename(levelPath, ".json");
@@ -137,7 +160,7 @@ try {
   progress.start("open");
   const run = await stream(
     blender,
-    ["-b", blend, "--factory-startup", "--python-exit-code", "1", "--python", join(ROOT, "tools", "blender", "scene_export.py"), "--", raw, rawMeta, ...(args.includes("--no-cache") ? [] : ["--cache", join(ROOT, ".cache", "scene-bake", scene)])],
+    ["-b", blend, "--factory-startup", "--python-exit-code", "1", "--python", join(ROOT, "tools", "blender", "scene_export.py"), "--", raw, rawMeta, ...(args.includes("--no-cache") ? [] : ["--cache", join(ROOT, ".cache", "scene-bake", scene)]), ...(args.includes("--stale-occlusion") ? ["--stale-occlusion"] : [])],
     (line) => {
       const marker = /^\[scene_step\] (.*)$/.exec(line);
       if (marker) {
