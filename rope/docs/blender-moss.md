@@ -28,9 +28,24 @@ Until 2026-10-05 the moss grew at the end of every stroke, which held Blender fo
 The panel shows the triangle count, the dabs, the print's size, the build time, the dabs per layer and the mound's mean height over the rock per tone step (the check that the light stands tallest).
 **Rebuild** acts on every selected moss and the moss of every selected rock (the button says how many); **Rebuild All** on every moss in the scene.
 
+### Detail: moss for the background
+
+`Detail` (1, down to 0.1) coarsens the moss's grain and nothing that places its colour: at Detail d, `Resolution`, the dab sizes, `Texel Size` and `Dab Edge` are 1/d as big, and `Triangles / m²` and `Min Clump` d² as many (the clump never under 1).
+`Reference Depth`, the buffers, `Erosion Noise` and `Mottle Scale` stay as authored: they are measured against the painted area, which Detail does not change.
+The panel keeps the values as authored and shows the dab sizes the build gets; `settings.params()` applies Detail, and at 1 passes every value through bit for bit.
+
+It was first `Scale` (2026-10-07), which resized all of those as one pattern; on the same paint that darkened the moss, the light lost (Tris: "reducing the amount of bright colors"): a 3x `Reference Depth` scored every patch a third as deep, and the lighter layers, each kept 1.5 of its dab radii inside the one below, ran out of room.
+Measured as the share of the printed area at each tone step, against the spread that changing the seed gives: at 1/3, mean tone over seeds went 0.46-0.51 to 0.43-0.48 on mid-ledge and 0.20-0.27 to 0.13-0.27 on the backdrop pool (Scale had taken them to 0.21 and 0.08), with the light steps' shares inside the seed spread; coarse dabs vary more from seed to seed.
+Also keeping the lighter layers' room on the authored dab size (`build`'s inset over the coarsening) held mid-ledge but took the pool to 0.28-0.47, its seeds of light that the authored dabs would have dropped under `Min Clump` standing as single big dabs; tried and removed.
+A file saved with `Scale` is carried to Detail 1/scale when it is opened (or built), and wants a Rebuild.
+
+Build time goes with the dab count, so with 1/d²: river's mid-ledge (texture only) grew in 21.7 s at 1 and about 4 s at 1/3 (2026-10-07).
+It is for moss whose dabs are a few texels of what draws them, and so each moss's own: the river backdrop's rock maps run from 7.7 mm a texel (mid-ledge: the default dabs, 3.2 to 5 cm, 8 to 13 texels across) to 5.9 cm (left-shelf and left-wall: 1 to 2 texels), and the backdrop's mosses at 1 grew for about 50 minutes of a cold export, left-shelf alone 379k dabs and 37 minutes.
+A texture-only moss's box says its rock map's texel.
+
 ### Quality: poly count and texture
 
-The **Quality** sub-panel holds what the export pays for, and nothing that changes the look's design:
+The **Quality** sub-panel (a mound's only: a texture-only moss is printed at its rock map's texel, see below) holds what the export pays for, and nothing that changes the look's design:
 
 - `Triangles / m²` (1500): the poly count; the mound is decimated to this density, at most what `Resolution` refines to.
 - `Texel Size` (1.5 mm): the texture quality; the print's texel in the world.
@@ -82,10 +97,10 @@ The mound is an ordinary opaque mesh: it casts and receives like the rock.
 **Kind** at the top of a moss's box is **Mound** (everything above) or **Texture Only** (since 2026-10-05, the owner: "a moss painting option that exclusively paints texture onto the rock ... no actual moss geometry - it's just a texture that gets baked onto the rock on export").
 A texture-only moss grows the same dabs, layers and tones from the same paint and settings (steps 1-6); there is no mound, so the Height panel is hidden.
 
-- **In Blender** the dabs show on a decal: the refined rock under them, and one ring of triangles more (a dab's outline can cross a triangle with no vertex inside), lifted `DECAL_LIFT` (3 mm) along the smoothed normal, not decimated (a collapse would cut across the rock's creases), printed like a mound with the dabs' coverage as alpha and drawn BLENDED, casting no shadow. The Quality settings only set this decal's print.
+- **In Blender** the dabs show on a decal: the refined rock under them, and one ring of triangles more (a dab's outline can cross a triangle with no vertex inside), lifted `DECAL_LIFT` (3 mm) along the smoothed normal, not decimated (a collapse would cut across the rock's creases), printed like a mound with the dabs' coverage as alpha and drawn BLENDED, casting no shadow. The decal is printed at the texel of the rock's baked colour map, uncapped, so it shows the moss as the export paints it (`ops._Inputs`, from `formations/render.py`'s `colour_texel`, the map size the export bakes); the Quality panel, which set this print until 2026-10-07 and so previewed far sharper than what shipped (1.5 mm against the backdrop's 7.7 mm to 5.9 cm), is hidden.
 - **On export** the decal is hidden from render (`grow_painted`): never shipped, and out of the bake's rays, where 3 mm off the rock it would darken the slate's occlusion and bevel. The rock is a bake target whatever its material. Right after Cycles bakes its colour map, while the map's alpha still marks the baked texels, `scene_export.paint_moss` rasterises the export's own unwrap (`SceneBake`) and `build.paint_map` paints every dab over every baked texel within reach, a texel counting for a triangle within 0.75 texel of it so the bake's edge texels are painted too, with `build.paint_texels`, the mound print's own per-texel code; the colour is mixed over the rock's in linear by coverage. The background fill then pads the moss into the seams like any baked texel, and every Base Color of the rock's export materials reads the map.
 - It works on the export's copy after its mesh work (the crease rebuild, the unwrap), so the `.blend`'s rock is never touched. The moss's key (`moss.texture_paints`: its growth's inputs, the dab edge and `build.py`) is part of the rock's bake-cache key, so a cached map holds its moss.
-- The map's density is the rock's (`TEXELS_PER_METRE`, 512 a metre, about 2 mm, up to the rock's map cap), not the moss's `Texel Size`; on a big backdrop rock capped at a smaller map the dabs' 2 mm edge is under a texel and softens.
+- The map's density is the rock's (`TEXELS_PER_METRE` in `formations/render.py`, 512 a metre, about 2 mm, up to the rock's map cap), not the moss's; on a big backdrop rock capped at a smaller map the dabs' 2 mm edge is under a texel and softens.
 
 ## What was tried in the study and dropped
 

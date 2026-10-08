@@ -25,6 +25,8 @@ Plain Python on the object's ID properties: the export runs without the
 add-on registered.
 """
 
+import math
+
 from .slate import OBJECT_SCALE_PROP as DETAIL_SCALE
 
 # What a solid formation's build measured (never set by hand).
@@ -56,6 +58,64 @@ def setting(ob, name):
 def explicit(ob):
     """The render settings `ob` sets itself."""
     return [n for n in SETTINGS if n in ob]
+
+
+# The maps the export bakes for an object, sized here so the export
+# (scene_export.py) and the moss add-on's preview of a texture-only moss (which
+# the export paints into the colour map) read one rule.
+#
+# Texture resolution follows the surface: this many texels per metre of the
+# unwrapped surface, rounded up to a power of two, between these bounds. The
+# game frame shows 200 pixels a metre at the gameplay plane (BALL_ZOOM at
+# 1080p), and the painted slate's edge line is a texel or two wide, so a map
+# under that density draws it magnified and blurred (the Terrace at 1024 got
+# 136 texels a metre). Doubled on 2026-10-03 (Tris: "about double the
+# resolution"), so the edge line and the chips stay crisp up close. The top is
+# the optimiser's cap for baked maps (`--baked-maps`,
+# scripts/encode-textures.mjs).
+TEXELS_PER_METRE = 512
+BAKE_SIZE_MIN, BAKE_SIZE_MAX = 64, 4096
+# The baked normal map's side, as a share of the colour map's (Tris,
+# 2026-10-04). Lossless, the normals were 16 of the river's 20.7 MB, the
+# five Terraces' 3.4 to 4.3 MB each at 4096, against the store's 8 MB a file.
+# The detail high poly is still baked at the colour's size: the normal pass
+# averages it down rather than resampling a coarse one.
+NORMAL_SCALE = 0.5
+# The share of the image an unwrap's islands cover after packing.
+UV_COVERAGE = 0.6
+
+
+def bake_size(area, scale=1.0, map_max=0, texels=0):
+    """The colour map's side for `area` square metres of surface:
+    TEXELS_PER_METRE over it, divided by the object's `detail_scale`, up to
+    BAKE_SIZE_MAX, which a rock standing further back is divided by too
+    (rounded down to a power of two). The backdrop's rocks are big (their
+    hidden backs and sides included), so a density over the depth alone still
+    took every one to 4096 and the river scene to 19.4 MB against the store's
+    8 MB bar (2026-10-04). `map_max` and `texels`, over 0, set the cap and the
+    density instead (`setting`)."""
+    side = math.sqrt(area / UV_COVERAGE) * (texels or TEXELS_PER_METRE / scale)
+    cap = 2 ** math.floor(math.log2(map_max or BAKE_SIZE_MAX / max(scale, 1.0)))
+    return int(min(cap, max(BAKE_SIZE_MIN, 2 ** math.ceil(math.log2(max(side, 1))))))
+
+
+def colour_map(ob, area):
+    """The side of `ob`'s baked colour map, for `area` square metres of its
+    mesh (object space, modifiers applied, as the export bakes it)."""
+    return bake_size(area, detail_scale(ob), int(setting(ob, "export_map_max")), float(setting(ob, "export_texels")))
+
+
+def colour_texel(ob, area, world_area):
+    """How big a texel of `ob`'s baked colour map is on its surface, metres:
+    the map's side (`colour_map`, over `area`) spread over `world_area`, the
+    same surface in the world, at the unwrap's UV_COVERAGE."""
+    return math.sqrt(world_area / UV_COVERAGE) / colour_map(ob, area)
+
+
+def map_size(size, kind):
+    """The side of an object's `kind` map ("baked colour", ...) when its colour
+    map is `size`."""
+    return max(BAKE_SIZE_MIN, int(size * NORMAL_SCALE)) if kind == "baked normal" else size
 
 
 # The Formations panel's fields (Render), read and written through the rule

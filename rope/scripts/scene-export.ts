@@ -22,12 +22,13 @@
 // tools/blender/bake_cache.py) is not baked again; `--no-cache` bakes every
 // one afresh (the cache's key is in that file).
 
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join, relative, resolve } from "node:path";
 import { nodeNameOf, isSceneName, SCENE_ASSETS, sceneFile, sceneMetaFile, type SceneMeta, type SceneNodeMeta } from "../src/render3d/scenes";
+import { StepProgress } from "./stepProgress";
 
 const ROOT = resolve(import.meta.dirname, "..");
 const SCENES_SRC = join(ROOT, "assets-src", "scenes");
@@ -35,6 +36,40 @@ const SCENES_SRC = join(ROOT, "assets-src", "scenes");
 function fail(msg: string): never {
   console.error(`[scene] ${msg}`);
   process.exit(1);
+}
+
+interface Run {
+  status: number | null;
+  // The signal that stopped it, when one did (Ctrl-C, a kill).
+  signal?: NodeJS.Signals;
+  error?: Error;
+  stdout: string;
+  stderr: string;
+}
+
+/** Run `cmd`, handing each line of its stdout to `onLine` as it comes (a
+ * spawnSync says nothing until the export is over, minutes later). */
+function stream(cmd: string, argv: string[], onLine: (line: string) => void): Promise<Run> {
+  return new Promise((done) => {
+    const child = spawn(cmd, argv, { stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    let partial = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      stdout += chunk;
+      const lines = (partial + chunk).split("\n");
+      partial = lines.pop()!;
+      for (const line of lines) onLine(line);
+    });
+    child.stderr.on("data", (chunk: string) => (stderr += chunk));
+    child.on("error", (error) => done({ status: null, error, stdout, stderr }));
+    child.on("close", (status, signal) => {
+      if (partial) onLine(partial);
+      done({ status, signal: signal ?? undefined, stdout, stderr });
+    });
+  });
 }
 
 const args = process.argv.slice(2);
@@ -73,38 +108,86 @@ const shipped = join(ROOT, "public", sceneFile(scene).slice(1));
 const metaPath = join(ROOT, "public", sceneMetaFile(scene).slice(1));
 
 const scratch = mkdtempSync(join(tmpdir(), "scene-export-"));
+// fail() exits without unwinding the `finally` below, and Ctrl-C without
+// even the exit hook unless it is caught (below, once the steps are drawn;
+// Blender, in the same process group, gets the Ctrl-C itself).
+process.on("exit", () => rmSync(scratch, { recursive: true, force: true }));
 try {
   const raw = join(scratch, "raw.glb");
   const rawMeta = join(scratch, "meta.json");
-  const t0 = Date.now();
-  const run = spawnSync(
+  console.log(`[scene] exporting ${relative(ROOT, blend)} for ${levelName}`);
+  // The export's steps in order; scene_export.py starts grow, bake and gltf
+  // by these ids (its `step()`).
+  const STEPS = [
+    { id: "open", label: `start Blender, open ${scene}.blend` },
+    { id: "grow", label: "grow ivy and moss" },
+    { id: "bake", label: "bake textures" },
+    { id: "gltf", label: "write glTF" },
+    { id: "optimise", label: "optimise" },
+    { id: "encode", label: "encode textures" },
+  ];
+  const progress = new StepProgress("[scene]", STEPS);
+  process.on("SIGINT", () => {
+    progress.fail();
+    process.exit(130);
+  });
+  progress.start("open");
+  const run = await stream(
     blender,
     ["-b", blend, "--factory-startup", "--python-exit-code", "1", "--python", join(ROOT, "tools", "blender", "scene_export.py"), "--", raw, rawMeta, ...(args.includes("--no-cache") ? [] : ["--cache", join(ROOT, ".cache", "scene-bake", scene)])],
-    { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
+    (line) => {
+      const marker = /^\[scene_step\] (.*)$/.exec(line);
+      if (marker) {
+        const { step, note } = JSON.parse(marker[1]!) as { step: string; note: string | null };
+        progress.start(step, note ?? undefined);
+      } else if (line.startsWith("[scene_export]")) progress.log(line);
+    },
   );
-  if (run.error) fail(`could not run ${blender}: ${run.error.message} (install Blender 5.2, or name it with --blender or BLENDER_PATH)`);
-  for (const line of run.stdout.split("\n")) if (line.startsWith("[scene_export]")) console.log(line);
+  if (run.error) {
+    progress.fail();
+    fail(`could not run ${blender}: ${run.error.message} (install Blender 5.2, or name it with --blender or BLENDER_PATH)`);
+  }
+  if (run.signal) {
+    progress.fail();
+    fail(`Blender was stopped (${run.signal}); nothing shipped`);
+  }
   if (run.status !== 0 || !existsSync(raw) || !existsSync(rawMeta)) {
+    progress.fail();
     console.error(run.stderr);
     const err = run.stdout.split("\n").filter((l) => /Error|Traceback|nothing to export/.test(l)).slice(-5);
     fail(`Blender wrote nothing (exit ${run.status}): ${err.join(" | ") || "see above"}`);
   }
-  const blenderSecs = ((Date.now() - t0) / 1000).toFixed(1);
 
   if (args.includes("--raw")) {
+    progress.skip("optimise", "--raw");
+    progress.skip("encode", "--raw");
+    progress.finish();
     writeFileSync(shipped, readFileSync(raw));
     console.log(`[scene] --raw: shipped Blender's own file, unoptimised`);
   } else {
-    const opt = spawnSync("bun", ["run", join(ROOT, "scripts", "optimize-asset.ts"), raw, shipped, "--keep-nodes", "--keep-hierarchy", "--baked-maps"], {
-      encoding: "utf8",
-    });
-    // The optimiser's own summary line, and none of its MESH_ASSETS advice,
-    // which is for a prop.
-    for (const line of opt.stdout.split("\n")) if (/^\[assets\] \d/.test(line)) console.log(line.replace("[assets]", "[scene]"));
+    progress.start("optimise");
+    const opt = await stream(
+      "bun",
+      ["run", join(ROOT, "scripts", "optimize-asset.ts"), raw, shipped, "--keep-nodes", "--keep-hierarchy", "--baked-maps"],
+      (line) => {
+        // encode-textures.mjs counting its maps as they land.
+        const encoding = /^\[assets\] encoding textures: (\d+) of (\d+) done$/.exec(line);
+        if (encoding) progress.start("encode", `${encoding[1]} of ${encoding[2]} maps`);
+        // The optimiser's own summary lines, and none of its MESH_ASSETS
+        // advice, which is for a prop.
+        else if (/^\[assets\] \d/.test(line)) progress.log(line.replace("[assets]", "[scene]"));
+      },
+    );
+    if (opt.signal) {
+      progress.fail();
+      fail(`the optimiser was stopped (${opt.signal}); ${relative(ROOT, shipped)} may be half written, export again`);
+    }
     if (opt.status !== 0) {
+      progress.fail();
       console.error(opt.stderr);
       fail("the optimiser failed; `--raw` ships Blender's file as is, to tell whose problem it is");
     }
+    progress.finish();
     // Every map Blender baked must be encoded as one: the optimiser finds them
     // by name, and a baked map it misses goes out as lossy WebP at 1k without
     // a word (the four dotted Terraces did until 2026-10-04).
@@ -146,17 +229,36 @@ try {
   writeFileSync(metaPath, JSON.stringify(meta, null, 2) + "\n");
 
   const kb = (statSync(shipped).size / 1024).toFixed(0);
-  console.log(`[scene] ${relative(ROOT, shipped)}: ${kb} KB, ${meta.nodes.length} objects, ${meta.triangles.toLocaleString()} triangles (Blender ${blenderSecs}s)`);
+  console.log(`[scene] ${relative(ROOT, shipped)}: ${kb} KB, ${meta.nodes.length} objects, ${meta.triangles.toLocaleString()} triangles`);
   console.log(`[scene] on bodies (${bound.length}): ${bound.join(", ") || "-"}`);
   console.log(`[scene] scenery (${scenery.length}): ${scenery.join(", ") || "-"}`);
   if (unbound.length) {
     console.log(`[scene] named in the level, not in the scene (${unbound.length}): ${unbound.map((n) => bodyNodes.get(n)).join(", ")}`);
   }
-  // The guide is dozens of linked objects and one fact; everything else
-  // skipped is named, since a hidden object is the one an author looks for.
+  // The guide is dozens of linked objects and one fact, and so is a tree of
+  // excluded collections (the formations' Sources held 947 objects in the
+  // river, 2026-10-07: a thousand lines that buried the rest): counted per top
+  // collection, its name up to the first " / ". Every other reason two objects
+  // share is counted too. A hidden object, the one an author looks for, is
+  // always named.
   const linked = meta.skipped.filter((s) => s.reason.startsWith("linked from") || s.reason.startsWith("data linked from"));
   if (linked.length) console.log(`[scene] skipped ${linked.length} linked objects (${[...new Set(linked.map((s) => s.reason))].join("; ")})`);
-  for (const s of meta.skipped) if (!linked.includes(s)) console.log(`[scene] skipped ${s.name}: ${s.reason}`);
+  const groups = new Map<string, typeof meta.skipped>();
+  for (const s of meta.skipped) {
+    if (linked.includes(s)) continue;
+    const key = s.reason.startsWith("in collection ") ? s.reason.split(" / ")[0]! : s.reason;
+    groups.set(key, [...(groups.get(key) ?? []), s]);
+  }
+  for (const [reason, skipped] of groups) {
+    if (skipped.length === 1 || reason === "hidden in render") {
+      for (const s of skipped) console.log(`[scene] skipped ${s.name}: ${s.reason}`);
+    } else if (reason.startsWith("in collection ")) {
+      const collections = new Set(skipped.map((s) => s.reason)).size;
+      console.log(`[scene] skipped ${skipped.length} objects ${reason}${collections > 1 ? ` (${collections} collections)` : ""}`);
+    } else {
+      console.log(`[scene] skipped ${skipped.length} objects: ${reason}`);
+    }
+  }
   for (const c of meta.credits) console.log(`[scene] credits ${c.name}: "${c.author}", ${c.source}, ${c.license}`);
   for (const w of meta.warnings) console.log(`[scene] WARNING ${w}`);
   const pinned = SCENE_ASSETS[scene];

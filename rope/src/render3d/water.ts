@@ -24,7 +24,15 @@
 import * as THREE from "three";
 import { WaterArea } from "../engine/body";
 import type { LevelBodyData } from "../level/levelFormat";
-import { FRONT_INSET, poolGeometry, stillWaterMaterial, type StillSurface } from "./stillWater";
+import {
+  BALL_FOAM_GLSL,
+  ballFoamUniforms,
+  FRONT_INSET,
+  poolGeometry,
+  stillWaterMaterial,
+  type FoamSurface,
+  type StillSurface,
+} from "./stillWater";
 import {
   BOIL_REACH,
   DEPTH_STRETCH,
@@ -76,17 +84,23 @@ const CHURN = 1.0;
 // metres).
 const WAVE_AMPLITUDE = 0.085;
 const EDGE_MOTION = 0.026;
-// The wash: the river's (the study's default 1.32 is its unit here) and the
-// fall's whitewater.
+// The river's wash (the study's default 1.32 is its unit here). The curtain
+// draws none (Tris, 2026-10-07).
 const RIVER_FOAM = 1.0;
-const FALL_FOAM = 1.0;
-// How much finer across the wash's streaks are than the study's: narrow
-// lines rather than broad bands (Tris, 2026-10-06).
-const WASH_ACROSS = 2.5;
-// How much higher the wash is cut than the study's, river and fall alike:
-// half as many streaks (measured on the field, 14.6 to 7.3 across 12 study
-// metres; Tris, 2026-10-06), each a little narrower.
-const WASH_CUT_RAISE = 0.05;
+// The running surface's look (after karin-lu's PR #2, Tris 2026-10-07): its
+// ripples churn at RUNNING_CHURN of the cascade's rate with RUNNING_CHOP of
+// its fine chop, stretched RUNNING_STRETCH along the current, and its wash is
+// broken turquoise strokes rather than the study's milky streaks. Over the
+// last BRINK_HANDOVER metres before a lip it hands over to the look the
+// cascade continues (the study's 1.9 m acceleration zone), reached by the
+// lip, and the strokes give out, so nothing ends at the brow.
+const RUNNING_CHURN = 0.25;
+const RUNNING_CHOP = 0.3;
+const RUNNING_STRETCH = 1.8;
+const BRINK_HANDOVER = 0.95;
+// How far down a channel's front the running surface's edge glint reaches,
+// metres.
+const RIM_DOWN = 0.03;
 // The landing's shapes: how high the plumes are thrown (in boil units, see
 // BOIL_REACH), and how much of them.
 const FOAM_HEIGHT = 1.15;
@@ -636,7 +650,6 @@ const PAINT_GLSL = `
   uniform vec3 uDeep;
   uniform vec3 uShallow;
   uniform vec3 uLight;
-  uniform float uLipSpeed;
   uniform float uSpilling;
   uniform float uFloor;
   uniform float uShimmer;
@@ -666,9 +679,9 @@ const PAINT_GLSL = `
   // spectrum's own diagonal never lines up across all three. The slope in
   // the surface's own frame: x across (world z), y along the travel, per
   // metre of the river's own surface (see drawnOut).
-  vec2 riverSlope(vec2 matp, float stretch, out vec4 a, out vec4 b, out vec4 c) {
+  vec2 riverSlope(vec2 matp, float stretch, float churn, out vec4 a, out vec4 b, out vec4 c) {
     vec2 q = vec2(matp.x, matp.y / stretch) / ${fmt(PATCH_SIZE * Math.max(0.5, BRUSH_SCALE))};
-    float t = uTime * ${fmt(CHURN)};
+    float t = uTime * ${fmt(CHURN)} * churn;
     vec2 q2 = vec2(q.y, -q.x);
     mat2 r3 = mat2(0.77, 0.64, -0.64, 0.77);
     vec2 q3 = r3 * q;
@@ -684,28 +697,41 @@ const PAINT_GLSL = `
     s.y /= stretch;
     return s;
   }
-  // The wash field shared by the river and the falling sheet, in parcel units,
-  // so a streak born on the river runs on over the brink and down the fall.
-  // Read WASH_ACROSS finer across than the study's.
-  float washStreak(vec2 mp) {
-    float t = uTime * ${fmt(CHURN)};
-    vec2 sq = vec2(mp.x * ${fmt(1.7 * WASH_ACROSS)}, mp.y * 0.17);
-    return wfb(sq) * 0.58 + 0.27 * wn(sq * 2.1 + vec2(t * 0.28, -t * 0.18)) + 0.15 * wn(sq * 4.7 + vec2(-t * 0.14, t * 0.33));
+  // The running surface's wash field: long, broken strokes carried by the
+  // parcel coordinates, a little lateral wander that stays attached to the
+  // current instead of boiling in place.
+  float currentStreak(vec2 mp) {
+    vec2 sq = vec2(mp.x * 2.0 + 0.12 * sin(mp.y * 0.55), mp.y * 0.28);
+    return wfb(sq) * 0.78 + 0.22 * wn(sq * vec2(1.8, 1.4) + 7.3);
+  }
+  // The river's ripples (riverSlope) and, on top, a fine chop that churns in
+  // its own time: a current is not a mirror. \`churn\` is the share of CHURN
+  // both move at, \`chop\` the share of the chop.
+  vec2 riverRipples(vec2 matp, float stretch, float churn, float chop, out vec4 b) {
+    vec4 a, c;
+    vec2 s = riverSlope(matp, stretch, churn, a, b, c);
+    float t = uTime * ${fmt(CHURN)} * churn;
+    vec2 q = matp / ${fmt(PATCH_SIZE * Math.max(0.5, BRUSH_SCALE))};
+    vec4 d = texture2D(uSurfaceMap, q * vec2(0.21, 0.27) + vec2(0.05, -0.07) * t + 0.17);
+    vec4 e = texture2D(uSurfaceMap, q * vec2(0.33, 0.41) + vec2(-0.08, 0.05) * t + 0.61);
+    float fine = 1.0 - smoothstep(0.14, 0.8, length(fwidth(q)));
+    return s + ((d.rg * 2.0 - 1.0) * vec2(0.06, 0.08) + (e.rg * 2.0 - 1.0) * vec2(0.035, 0.045)) * fine * ${fmt(CHURN)} * chop;
   }
   vec3 paintedRiver(out float foam) {
     // Across (continued down the faces), Lagrangian travel.
     vec2 matp = parcelAt(vUnroll, vFlow.z);
-    vec4 a, b, c;
-    vec2 s = riverSlope(matp, 1.15, a, b, c);
-    // A current is not a mirror: a fine chop that churns in its own time, on
-    // top of the carried pattern, breaks the glassy finish.
-    {
-      float t = uTime * ${fmt(CHURN)};
-      vec2 q = matp / ${fmt(PATCH_SIZE * Math.max(0.5, BRUSH_SCALE))};
-      vec4 d = texture2D(uSurfaceMap, q * vec2(0.21, 0.27) + vec2(0.05, -0.07) * t + 0.17);
-      vec4 e = texture2D(uSurfaceMap, q * vec2(0.33, 0.41) + vec2(-0.08, 0.05) * t + 0.61);
-      float fine = 1.0 - smoothstep(0.14, 0.8, length(fwidth(q)));
-      s += ((d.rg * 2.0 - 1.0) * vec2(0.06, 0.08) + (e.rg * 2.0 - 1.0) * vec2(0.035, 0.045)) * fine * ${fmt(CHURN)};
+    // 0 on the running surface, 1 by the lip: the look the cascade carries on
+    // (see BRINK_HANDOVER). Every term below is the running surface's mixed
+    // toward the brink's by it.
+    float brink = uSpilling * smoothstep(uLip - ${fmt(BRINK_HANDOVER / S)}, uLip, vFlow.x);
+    vec4 b;
+    vec2 s = riverRipples(matp, ${fmt(RUNNING_STRETCH)}, ${fmt(RUNNING_CHURN)}, ${fmt(RUNNING_CHOP)}, b);
+    // Uniform control flow, so the derivatives in riverRipples stay defined.
+    if (uSpilling > 0.5) {
+      vec4 bb;
+      vec2 sb = riverRipples(matp, 1.15, 1.0, 1.0, bb);
+      s = mix(s, sb, brink);
+      b = mix(b, bb, brink);
     }
     // Drawn out into the brink (see drawnOut).
     s.y /= drawnOut();
@@ -718,18 +744,23 @@ const PAINT_GLSL = `
     slope += impactSlope(vWorld) * step(0.5, vUp);
     vec3 n = normalize(vec3(-slope.x, 1.0, -slope.y));
     vec3 V = normalize(cameraPosition - vWorld);
-    // Shallow running water, its colour drifting down the channel: patches
+    // The running surface is the pool's teal, restrained deep-to-shallow
+    // patches riding the current. Into the brink its colour drifts: patches
     // lean deep, shallow or toward the light tone, and a little greener here
     // and there.
     vec3 base;
     {
-      float t = uTime * ${fmt(CHURN)};
       vec2 mq = vec2(matp.x * 0.38, matp.y * 0.13);
-      float tone = wfb(mq + vec2(t * 0.03, -t * 0.02));
-      float tone2 = wfb(mq * 1.9 + vec2(5.0, 2.0) + vec2(-t * 0.04, t * 0.015));
-      base = mix(uDeep, uShallow, 0.45 + 0.5 * smoothstep(0.3, 0.72, tone));
-      base = mix(base, uLight * 0.92, 0.3 * smoothstep(0.55, 0.85, tone2));
-      base *= mix(vec3(1.0), vec3(0.94, 1.04, 0.97), smoothstep(0.4, 0.7, wfb(mq * 0.8 + vec2(11.0, 7.0))));
+      base = mix(uDeep, uShallow, 0.72 + 0.16 * smoothstep(0.3, 0.72, wfb(mq)));
+      if (brink > 0.0) {
+        float t = uTime * ${fmt(CHURN)};
+        float tone = wfb(mq + vec2(t * 0.03, -t * 0.02));
+        float tone2 = wfb(mq * 1.9 + vec2(5.0, 2.0) + vec2(-t * 0.04, t * 0.015));
+        vec3 drift = mix(uDeep, uShallow, 0.45 + 0.5 * smoothstep(0.3, 0.72, tone));
+        drift = mix(drift, uLight * 0.92, 0.3 * smoothstep(0.55, 0.85, tone2));
+        drift *= mix(vec3(1.0), vec3(0.94, 1.04, 0.97), smoothstep(0.4, 0.7, wfb(mq * 0.8 + vec2(11.0, 7.0))));
+        base = mix(base, drift, brink);
+      }
     }
     // Wide, soft light bands follow the changing wave slopes.
     float facing = slope.y + slope.x * 0.24;
@@ -746,27 +777,33 @@ const PAINT_GLSL = `
     float specular = pow(max(0.0, dot(n, normalize(V + L))), 100.0);
     col += uLight * specular * 0.06;
     col += uLight * crest * ${fmt(CONTRAST * 0.16 * STROKES)};
-    // A pale wash instead of foam: translucent milky streaks drawn along the
-    // current, faint in mid-channel and opaque toward the brink, cut clean at
-    // their edges. (The study also drew it opaque along the banks, with a
-    // rim at the waterline: extra foam down the water's sides, dropped,
-    // Tris 2026-10-06.)
+    // The wash: broken turquoise strokes, faint in mid-channel and paling
+    // toward the lip, then giving out over the brink (the curtain draws
+    // none). Cut clean at their edges. (The study also drew it opaque along
+    // the banks, with a rim at the waterline: extra foam down the water's
+    // sides, dropped, Tris 2026-10-06.)
     float lip = exp(-pow((uLip - vFlow.x - 0.3) / 1.0, 2.0)) * uSpilling;
-    float contact = clamp(0.22 * lip, 0.0, 1.0) * ${fmt(RIVER_FOAM)};
+    float contact = clamp(0.65 * lip, 0.0, 1.0) * ${fmt(RIVER_FOAM)};
     float light = 0.84 + 0.16 * max(0.0, dot(n, L));
     {
-      float streak = washStreak(matp);
-      float threshold = mix(0.645, 0.47, contact) + ${fmt(WASH_CUT_RAISE)};
+      float streak = currentStreak(matp);
+      float threshold = mix(0.68, 0.52, contact);
       // A crisp edge, cut to the pixel: the streak is translucent through its
       // opacity, never feathered.
       float aa = 0.5 * fwidth(streak);
       float wash = smoothstep(threshold - aa, threshold + aa, streak);
       // Thinner streaks inside: a second cut a little higher draws a brighter core.
       float core = smoothstep(threshold + 0.07 - aa, threshold + 0.07 + aa, streak);
-      float opacity = mix(0.30, 0.78, contact);
-      vec3 milk = mix(uLight, vec3(0.88, 0.94, 0.95), mix(0.5, 0.9, contact));
+      float opacity = mix(0.15, 0.55, contact) * (1.0 - brink);
+      vec3 milk = mix(uLight, vec3(0.88, 0.94, 0.95), contact * 0.8);
       col = mix(col, milk * light, wash * opacity * ${fmt(STROKES)});
-      col = mix(col, mix(milk, vec3(0.92, 0.96, 0.96), 0.5) * light, core * opacity * 0.5 * ${fmt(STROKES)});
+      col = mix(col, mix(milk, vec3(0.92, 0.96, 0.96), contact * 0.5) * light, core * opacity * 0.35 * ${fmt(STROKES)});
+      // A broken teal glint at the waterline, not a white border: a slab's
+      // edge is no evidence of rock there.
+      float rim = smoothstep(vHalfWidth - 0.16, vHalfWidth - 0.03, abs(vFlow.y))
+        * smoothstep(0.58, 0.78, wn(vec2(matp.y * 1.3, matp.x * 3.0)))
+        * (1.0 - smoothstep(0.0, ${fmt(RIM_DOWN)}, vBelow));
+      col = mix(col, uLight * light, rim * 0.18 * (1.0 - brink));
       foam = clamp(wash * opacity, 0.0, 1.0) * mix(0.09, 1.0, vSurfaceWeight);
     }
     // A fall's foam and the milky water under it, on the top only.
@@ -776,11 +813,8 @@ const PAINT_GLSL = `
     col = mix(col, uDeep * 0.57, (1.0 - vSurfaceWeight) * 0.58);
     return col;
   }
-  vec3 cascadeLook(out float white) {
+  vec3 cascadeLook() {
     float fall = smoothstep(0.0, 0.80, vFlow.w);
-    // Metres on the sheet at the lip's speed, moving with the water, for the
-    // whitewater's lanes.
-    vec2 pm = vec2(vUnroll, (vFlow.z - uTime) * uLipSpeed);
     // The river's own ripples, carried over the brink at the river's labels
     // and drawn out as the water accelerates (see drawnOut). The cascade once
     // read its own pattern, drawn out by a factor of the study's and then
@@ -797,7 +831,7 @@ const PAINT_GLSL = `
     vec3 rawT = cross(B, baseN);
     vec3 T = length(rawT) > 0.01 ? normalize(rawT) : vec3(uSide, 0.0, 0.0);
     vec4 a, b, c;
-    vec2 s = riverSlope(matp, 1.15, a, b, c);
+    vec2 s = riverSlope(matp, 1.15, 1.0, a, b, c);
     s.y /= drawnOut();
     vec3 N = normalize(geo - T * s.y * ${fmt(MACRO_LIGHT)} - B * s.x);
     vec3 V = normalize(cameraPosition - vWorld);
@@ -825,25 +859,10 @@ const PAINT_GLSL = `
     float spec = pow(max(dot(N, normalize(V + L)), 0.0), 100.0);
     col += uLight * spec * 0.16;
     col += uLight * crest * ${fmt(CONTRAST * 0.16 * STROKES)};
-    // Whitewater: the river's own wash carried over the brink, in the same
-    // travel coordinate, so nothing ends at the lip; down the sheet it fills
-    // in, brightens toward white and is cut by finer lanes as the water
-    // accelerates.
-    vec2 mp = matp;
-    float streak = washStreak(mp);
-    streak += ((wn(vec2(pm.x * 14.0 + 5.0, pm.y * 0.15)) - 0.5) * 0.30 + (wn(vec2(pm.x * 26.0 + 9.0, pm.y * 0.3)) - 0.5) * 0.14) * fall;
-    float threshold = mix(0.645, 0.575, pow(fall, 1.2) * ${fmt(FALL_FOAM)}) + ${fmt(WASH_CUT_RAISE)};
-    float aa = 0.5 * fwidth(streak);
-    float ribbons = smoothstep(threshold - aa, threshold + aa, streak);
-    // A streak that would run wide down the sheet thins to a wash in its middle.
-    ribbons *= mix(1.0, 0.5, smoothstep(threshold + 0.08, threshold + 0.2, streak) * fall);
-    float core = smoothstep(threshold + 0.07 - aa, threshold + 0.07 + aa, streak);
-    float opacity = mix(0.30, 0.9, smoothstep(0.0, 0.7, fall)) * mix(0.08, 1.0, vSurfaceWeight);
-    vec3 milk = mix(uLight, vec3(0.88, 0.94, 0.95), mix(0.5, 0.9, fall));
-    float foamLight = 0.84 + 0.16 * max(0.0, dot(geo, L));
-    col = mix(col, milk * foamLight, ribbons * opacity);
-    col = mix(col, mix(milk, vec3(0.92, 0.96, 0.96), 0.5) * foamLight, core * opacity * 0.5);
-    white = ribbons * opacity;
+    // No whitewater down the curtain: the milky streaks the study drew here
+    // (the river's wash carried over the brink, filling in toward white down
+    // the sheet) were removed, Tris 2026-10-07. The river's own strokes give
+    // out before the lip (see BRINK_HANDOVER), so none ends at the brow.
     col = mix(col, uDeep * 0.57, (1.0 - vSurfaceWeight) * 0.58 * (1.0 - fall));
     return col;
   }
@@ -856,11 +875,14 @@ interface CurrentLook {
   color: string | undefined;
   side: number;
   runSpeed: number;
-  lipSpeed: number;
   lipS: number | null;
   drop: number;
   // Where the run ends (its lip, or its downstream cap), study metres.
   runEnd: number;
+  // The run's upstream end and its top, in the body's frame (metres), for
+  // the frame the ball's foam is kept in (see `vFoam`).
+  upstream: number;
+  top: number;
   // World y under which the falling sheet is not drawn: the water it lands
   // in (set every frame by `updateWater`).
   floor: { value: number };
@@ -891,19 +913,24 @@ function currentMaterial(look: CurrentLook): THREE.MeshBasicMaterial {
     shader.uniforms.uShallow = { value: shallow };
     shader.uniforms.uLight = { value: light };
     shader.uniforms.uSide = { value: look.side };
-    // The parcel's travel at the run's speed, and the cascade's at the lip's:
-    // study metres per second.
+    // The parcel's travel at the run's speed, study metres per second.
     shader.uniforms.uRefSpeed = { value: look.runSpeed / S };
-    shader.uniforms.uLipSpeed = { value: look.lipSpeed / S };
     shader.uniforms.uLip = { value: look.lipS ?? 1e6 };
     shader.uniforms.uSpilling = { value: look.lipS === null ? 0 : 1 };
     shader.uniforms.uSpill = { value: Math.max(look.drop, 1e-3) };
     shader.uniforms.uRunEnd = { value: look.runEnd };
     shader.uniforms.uFloor = look.floor;
+    Object.assign(shader.uniforms, ballFoamUniforms);
+    shader.uniforms.uUpstream = { value: look.upstream };
+    shader.uniforms.uTop = { value: look.top };
+    shader.uniforms.uDrift = { value: look.side * look.runSpeed };
 
     shader.vertexShader = `
       ${WAVE_GLSL}
       uniform float uSpill;
+      uniform float uUpstream;
+      uniform float uTop;
+      varying vec3 vFoam;
       attribute vec4 aFlow;
       attribute float aUnroll;
       attribute vec3 aTangent;
@@ -958,28 +985,41 @@ function currentMaterial(look: CurrentLook): THREE.MeshBasicMaterial {
         vUp = max(aProfile.y, 0.0);
         vDepth = aProfile.z * ${fmt(S)};
         vSpeed = aSkin.z;
+        // The ball's foam is kept in the water's own frame (stillWater.ts,
+        // wakeSpotDrift): where the water here was at the clock's zero, had
+        // the run carried it level at its own speed - its parcel's label, so
+        // the foam rides the current at exactly its speed, and over the brink
+        // and down the fall is drawn out as the water is. On the run's top,
+        // across at the vertex's own z.
+        vFoam = (modelMatrix * vec4(uUpstream + uSide * uRefSpeed * ${fmt(S)} * (aFlow.z - uTime), uTop, position.z, 1.0)).xyz;
       }`,
     );
 
     shader.fragmentShader = `
       ${WAVE_GLSL}
       ${IMPACT_GLSL}
+      ${BALL_FOAM_GLSL}
       ${PAINT_GLSL}
+      uniform float uDrift;
+      varying vec3 vFoam;
     ${shader.fragmentShader}`.replace(
       "#include <color_fragment>",
       `#include <color_fragment>
       // The falling sheet goes under the water it lands in.
       if (vFlow.w > 0.0 && vWorld.y < uFloor) discard;
+      // The ball's wake and splash (stillWater.ts), here in uniform control
+      // flow, which its derivatives need.
+      float ballFoamHere = ballFoam(vFoam, uDrift);
       // The river, the cascade, and between them down the brow.
       float cascade = smoothstep(0.0, 0.23, vFlow.w);
       float foam = 0.0;
       vec3 col = vec3(0.0);
       if (cascade < 1.0) col = paintedRiver(foam);
       if (cascade > 0.0) {
-        float cf;
-        vec3 cc = cascadeLook(cf);
-        col = mix(col, cc, cascade);
+        col = mix(col, cascadeLook(), cascade);
       }
+      // The ball's foam, the fall's tone, on the top face as a pool's is.
+      col = mix(col, foamTone(uLight), ballFoamHere * vUp);
       diffuseColor.rgb = max(col, vec3(0.0));
       // Opaque on the top and down the fall; murky glass down the channel's
       // front, so the ball stays a silhouette in it.
@@ -1327,8 +1367,12 @@ export function updateWater(seconds: number): void {
 export interface WaterBuild {
   geometries: THREE.BufferGeometry[];
   materials: THREE.Material[];
-  // A pool's surface, for the splash (stillWater.ts); null for a current.
+  // A pool's surface, for its mirror; null for a current.
   still: StillSurface | null;
+  // The surface the ball's splash and wake are drawn on (stillWater.ts),
+  // pool or current; null for a shape the look is not built for, and for a
+  // turned current (its foam is kept drifting along the world's x).
+  foam: FoamSurface | null;
   // Forget this water's registrations (its top, its fall): call at dispose.
   release: () => void;
 }
@@ -1347,7 +1391,7 @@ export function buildWater(root: THREE.Group, body: WaterArea, data: LevelBodyDa
   const shape = body.primaryShape();
   const s = shape.shape;
   if (s.kind !== "circle" && s.kind !== "rect") {
-    return { geometries: [], materials: [], still: null, release: () => {} };
+    return { geometries: [], materials: [], still: null, foam: null, release: () => {} };
   }
   const halfX = s.kind === "rect" ? s.size.x / 2 : s.radius;
   const halfY = s.kind === "rect" ? s.size.y / 2 : s.radius;
@@ -1384,22 +1428,25 @@ export function buildWater(root: THREE.Group, body: WaterArea, data: LevelBodyDa
     // it after other transparent scenery it might share pixels with.
     mesh.renderOrder = 10;
     root.add(mesh);
+    const still: StillSurface = {
+      body,
+      halfX,
+      halfY,
+      backZ,
+      frontZ,
+      drift: 0,
+      mesh,
+      reflect: pool.reflect,
+      openBehind: pool.openBehind,
+      footprint: pool.footprint,
+      color,
+      scenery: [],
+    };
     return {
       geometries: [geometry],
       materials: [pool.material],
-      still: {
-        body,
-        halfX,
-        halfY,
-        backZ,
-        frontZ,
-        mesh,
-        reflect: pool.reflect,
-        openBehind: pool.openBehind,
-        footprint: pool.footprint,
-        color,
-        scenery: [],
-      },
+      still,
+      foam: still,
       release: () => surfaces.delete(surface),
     };
   }
@@ -1407,15 +1454,18 @@ export function buildWater(root: THREE.Group, body: WaterArea, data: LevelBodyDa
   const front = frontZ - FRONT_INSET;
   const built = currentGeometry(halfX, halfY, front, backZ, body.flow, spill);
   const floor = { value: -1e9 };
+  // As `currentGeometry` reads them.
+  const side = spill ? spill.side : body.flow < 0 ? -1 : 1;
   const look: CurrentLook = {
     color,
-    side: spill ? spill.side : body.flow < 0 ? -1 : 1,
+    side,
     runSpeed: Math.max(Math.abs(body.flow), 0.05),
-    lipSpeed: built.lip ? built.lip.speed : Math.abs(body.flow),
     lipS: built.lip ? built.lip.s : null,
     runEnd: built.lip ? built.lip.s : (halfX * 2) / S,
     drop: spill ? spill.drop : 0,
     floor,
+    upstream: -side * halfX,
+    top: halfY,
   };
   const mat = currentMaterial(look);
   const mesh = new THREE.Mesh(built.geometry, mat);
@@ -1475,6 +1525,13 @@ export function buildWater(root: THREE.Group, body: WaterArea, data: LevelBodyDa
     geometries,
     materials,
     still: null,
+    // Drifting at the shader's own speed (see `vFoam`). A turned current
+    // would carry its foam off the world's x, which the foam's frame cannot
+    // hold; no level has one.
+    foam:
+      body.globalRotation === 0
+        ? { body, halfX, halfY, backZ, frontZ, drift: look.side * look.runSpeed }
+        : null,
     release: () => {
       surfaces.delete(surface);
       if (fall) {

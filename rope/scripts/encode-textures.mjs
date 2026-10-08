@@ -49,12 +49,12 @@ const rules = [];
 // A baked normal map goes the same way since 2026-10-04 (it was lossless, for
 // the reason `--lossless-normals` exists). Lossless, the river's five Terraces'
 // normals were 16 of its 20.7 MB; at half the colour's size (NORMAL_SCALE in
-// scene_export.py) and this AVIF, Terrace.003's is 503 KB against 4,242 KB, and
+// tools/blender/formations/render.py) and this AVIF, Terrace.003's is 503 KB against 4,242 KB, and
 // its in-game render moves by at most 3 levels of 255 for the encoding (44 for
 // the halving, along chip edges): the slate is matte, and the blocks the iron
 // ball showed were in a glossy highlight. Tris compared all four, "barely any
 // difference".
-// The baked maps' cap: scene_export.py's BAKE_SIZE_MAX (512 texels a metre
+// The baked maps' cap: formations/render.py's BAKE_SIZE_MAX (512 texels a metre
 // since 2026-10-03, twice the 256 above).
 const BAKED_MAX = 4096;
 if (argv.includes("--baked-maps")) {
@@ -91,10 +91,30 @@ const doc = await io.read(file);
 // encoded again, and the last pass (everything else) gets exactly the rest.
 const RAW = /^image\/(png|jpeg)$/;
 const raw = () => doc.getRoot().listTextures().filter((t) => RAW.test(t.getMimeType())).length;
+// How far the encode is, as a texture's mime type changes the moment its
+// encode lands (`textureCompress` encodes a pass's maps all at once and says
+// nothing until the pass is done; a scene's 4k maps take a minute or more).
+// `scene-export.ts` shows the latest of these lines as its progress.
+const total = raw();
+let shown = -1;
+const progress = () => {
+  const done = total - raw();
+  if (done !== shown) console.log(`[assets] encoding textures: ${(shown = done)} of ${total} done`);
+};
+const encode = async (options) => {
+  const timer = setInterval(progress, 250);
+  try {
+    await doc.transform(textureCompress({ encoder: sharp, formats: RAW, ...options }));
+  } finally {
+    clearInterval(timer);
+  }
+  progress();
+};
+progress();
 for (const { name, ...rule } of rules) {
   const before = raw();
-  await doc.transform(textureCompress({ encoder: sharp, formats: RAW, ...rule }));
+  await encode(rule);
   console.log(`[assets] ${before - raw()} texture(s): ${name}`);
 }
-await doc.transform(textureCompress({ encoder: sharp, formats: RAW, targetFormat: "webp", resize: [STANDARD, STANDARD] }));
+await encode({ targetFormat: "webp", resize: [STANDARD, STANDARD] });
 await io.write(file, doc);

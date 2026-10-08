@@ -51,7 +51,7 @@ import {
 import { DEFAULT_BEVEL, cylinderSolid, extrudeOutline } from "./extrude";
 import { isAuthoredSurface, isSolidSurface, surfaceFor, surfaceName, tileMetres } from "./assets";
 import { buildWater } from "./water";
-import type { StillSurface } from "./stillWater";
+import type { FoamSurface, StillSurface } from "./stillWater";
 import { DEFAULT_LIGHT_Z, LightRig, type DrivenEmission, type MountedLight } from "./lights";
 import { isWaking } from "./glow";
 import { BeltRing, BeltTread } from "./beltTread";
@@ -173,9 +173,13 @@ export class BodyVisual {
   // own flow and colour in its uniforms), and so is a dressing's copy of a
   // material a waking light drives, so this visual frees them.
   private readonly ownedMaterials: THREE.Material[] = [];
-  // A still water body's surface, which the scene's splashes watch the ball
-  // cross (see stillWater.ts). Null for everything else.
+  // A still water body's surface, for the scene's mirror. Null for everything
+  // else.
   stillSurface: StillSurface | null = null;
+  // Any water body's surface, pool or current, which the scene's splashes
+  // watch the ball cross and move through (see stillWater.ts). Null for
+  // everything else.
+  foamSurface: FoamSurface | null = null;
   // Water's registrations (its top, its fall; see water.ts `buildWater`),
   // forgotten at dispose.
   private releaseWater: (() => void) | null = null;
@@ -221,6 +225,7 @@ export class BodyVisual {
         this.owned.push(...water.geometries);
         this.ownedMaterials.push(...water.materials);
         this.stillSurface = water.still;
+        this.foamSurface = water.foam;
         this.releaseWater = water.release;
       }
     } else if (data) {

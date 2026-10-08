@@ -89,6 +89,10 @@ public/scenes/<scene>/meta.json    what was exported, and how it binds
 ```
 
 and the recipe prints the binding: which objects landed on bodies, which are scenery, which body names have no object behind them, what Blender skipped and why, and every exporter warning.
+While it runs, the recipe keeps a live list of its steps at the bottom of the terminal (`scripts/stepProgress.ts`): start Blender, grow ivy and moss, bake textures (with how many objects the cache spared), write glTF, optimise, encode textures (maps done of all), each ticked with its time, the running one counting, the rest still to come.
+`scene_export.py` names the step it starts with a `[scene_step]` line; `scene-export.ts` owns the list and its labels.
+Off a terminal each step's start is one line and the finished list is printed at the end.
+Skipped objects that share a reason are counted on one line (an excluded collection tree such as the formations' Sources by its top collection); an object hidden in render is always named.
 The dev server serves `/scenes/` itself, uncached (`src/server/scenes.ts`), because vite's public handler knows only the files its watcher saw at startup and the directory is off the watcher; a refresh shows the new export.
 The Level panel shows the export's summary and the body panel offers the exported object names in the `name` field and says whether the name is dressed.
 

@@ -63,7 +63,7 @@ import { DepthOfField } from "./depthOfField";
 import { FrameTarget } from "./frameTarget";
 import { LightShafts } from "./lightShafts";
 import { updateWater, waterTextures } from "./water";
-import { stillWaterMaterial, WaterSplashes, type StillSurface } from "./stillWater";
+import { stillWaterMaterial, WaterSplashes, type FoamSurface, type StillSurface } from "./stillWater";
 import { beltRenderTime } from "../render/beltTread";
 
 // What the 3D renderer needs of a level. Deliberately structural rather than
@@ -219,9 +219,9 @@ export class Scene3D {
   // The level's Blender scene, when it names one (see `SceneDressing`).
   private dressing: SceneDressing | null = null;
   private ballVisual: BallVisual | null = null;
-  // The splash and the wake the ball leaves in still water (stillWater.ts),
-  // foam the pools' surfaces draw: render-side, reading where the ball is
-  // drawn and never writing back.
+  // The splash and the wake the ball leaves in water (stillWater.ts), foam
+  // the pools' and the currents' surfaces draw: render-side, reading where
+  // the ball is drawn and never writing back.
   private readonly splashes = new WaterSplashes();
   private chains: ChainLayer;
   private vines: VineLayer;
@@ -1144,7 +1144,7 @@ export class Scene3D {
     this.ballVisual?.sync(alpha);
     this.splashes.update(
       clock,
-      this.stillSurfaces(),
+      this.foamSurfaces(),
       level.ball
         ? {
             position: level.ball.renderPosition(alpha),
@@ -1198,9 +1198,14 @@ export class Scene3D {
     this.gpuTimer?.end();
   }
 
-  // The pools the splashes watch: every still water body's surface.
+  // Every still water body's surface (the pools the mirror is for).
   private *stillSurfaces(): Iterable<StillSurface> {
     for (const visual of this.bodies.values()) if (visual.stillSurface) yield visual.stillSurface;
+  }
+
+  // The water the splashes and the wake watch: pools and currents alike.
+  private *foamSurfaces(): Iterable<FoamSurface> {
+    for (const visual of this.bodies.values()) if (visual.foamSurface) yield visual.foamSurface;
   }
 
   // The scene's own flat water (the backdrop's pool plane, `sceneryWater`)

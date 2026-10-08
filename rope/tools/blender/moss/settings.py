@@ -36,6 +36,26 @@ def _srgb(c):
 
 _D = Params()
 
+# What Detail coarsens: the moss's grain and nothing that places its colour.
+# At Detail d the dabs, the refinement and the print's texel and dab edge are
+# 1/d as big, the mound's triangles per m² and the smallest clump's dab count
+# d² as many. Reference Depth, the buffers, the erosion noise and the mottle
+# stay as authored: they are measured against the painted area, which Detail
+# does not change. Scaling them too (2026-10-07, "Scale") took mid-ledge's
+# mean tone from 0.46 to 0.21 at 1/3 - the light was lost (Tris: "reducing
+# the amount of bright colors"). Coarsened as here, the share of the area at
+# each tone stays within what changing the seed moves it by: mean tone over
+# seeds 0.46-0.51 at 1 and 0.43-0.48 at 1/3 on mid-ledge, 0.20-0.27 and
+# 0.13-0.27 on the backdrop pool; coarse dabs vary more from seed to seed.
+# Keeping the lighter layers' room on the authored dab size as well
+# (`build`'s inset) held mid-ledge but took the pool to 0.28-0.47.
+# Build time goes with the dab count, so with 1/d²: mid-ledge grew in 21.7 s
+# at 1 and about 4 s at 1/3. For moss whose dabs are a few texels of what
+# draws them: at 1 the river backdrop's came to 1-2 texels across on
+# left-shelf and left-wall (5.9 cm texels) but 8-13 on mid-ledge (7.7 mm), so
+# Detail is each moss's own.
+COARSENED_LENGTHS = ("resolution", "dab_min", "dab_max", "texel", "print_edge")
+
 
 class MossSettings(bpy.types.PropertyGroup):
     host: StringProperty(name="Host", description="The object this moss grows on, matched by name so a re-imported host is found again")
@@ -50,6 +70,10 @@ class MossSettings(bpy.types.PropertyGroup):
                                            "exported (Blender shows them on a decal that is not exported)", 1)],
         description="Grow a mound of moss, or only paint its colour onto the rock")
     seed: IntProperty(name="Seed", default=0, min=0, update=_changed)
+    detail: FloatProperty(name="Detail", default=1.0, min=0.1, max=1.0, update=_changed,
+                          description="How fine the moss is grown: at 0.5 the dabs and texels are twice as big and a "
+                                      "build takes about a quarter of the time. Where the colours fall is kept. "
+                                      "Lower it for moss far in the background")
     resolution: _length("Resolution", _D.resolution, 0.004, 0.05, "Edge length the rock is refined to under the paint")
     threshold: _factor("Threshold", _D.threshold, "Paint coverage at which moss starts")
 
@@ -112,7 +136,9 @@ class MossSettings(bpy.types.PropertyGroup):
     built_key: StringProperty(options={"HIDDEN"})
 
     def params(self):
-        """The build's parameters. Colours go from the panel's sRGB to linear."""
+        """The build's parameters. Colours go from the panel's sRGB to linear,
+        and the grain is coarsened by Detail (COARSENED_LENGTHS); at 1 every
+        value is the panel's own, bit for bit."""
 
         def lin(c):
             return tuple(x / 12.92 if x <= 0.04045 else ((x + 0.055) / 1.055) ** 2.4 for x in c)
@@ -121,12 +147,28 @@ class MossSettings(bpy.types.PropertyGroup):
         kw["dark"] = lin(self.dark)
         kw["light"] = lin(self.light)
         kw["max_texture"] = int(self.max_texture)
+        if self.detail != 1.0:
+            d = self.detail
+            for n in COARSENED_LENGTHS:
+                kw[n] /= d
+            kw["mound_density"] *= d * d
+            kw["min_clump"] = max(1, round(self.min_clump * d * d))
         return Params(**kw)
+
+    def migrate_scale(self):
+        """Carry a moss saved with Scale (its first form, 2026-10-07, which also
+        moved its colours) to Detail, 1/scale. Returns whether it held one."""
+        if "scale" not in self:
+            return False
+        scale = float(self["scale"])
+        del self["scale"]
+        self.detail = min(1.0, max(0.1, 1.0 / scale)) if scale > 0 else 1.0
+        return True
 
     def copy_from(self, other):
         """Take the other moss's settings: the values it has set, and the defaults
         where it has none (copying every value would store the day's defaults)."""
-        for k in Params.__dataclass_fields__:
+        for k in [*Params.__dataclass_fields__, "detail"]:
             if k == "seed" or not hasattr(other, k):
                 continue
             if k in other:

@@ -20,7 +20,9 @@
 //
 // THE SPLASH is foam too, drawn by the surface shader as a fall's landing is:
 // churned white where the ball went in, stirred out of round and spreading
-// as the churn dies. `WaterSplashes` is its detector and the wake's: it never touches the sim - it reads where
+// as the churn dies. Both are drawn on a current too (water.ts), carried
+// downstream with it (see wakeSpotDrift), from the one `BALL_FOAM_GLSL`.
+// `WaterSplashes` is its detector and the wake's: it never touches the sim - it reads where
 // the ball is drawn and how fast it is moving, as the lights do - and the
 // foam is a pure function of the clock and the splash's own start, so a
 // pinned clock draws the same splash twice.
@@ -389,6 +391,174 @@ const SPLASH_PATCH = 9;
 const splashFoamAt = { value: Array.from({ length: SPLASH_SLOTS }, () => new THREE.Vector4()) };
 const splashFoamHow = { value: Array.from({ length: SPLASH_SLOTS }, () => new THREE.Vector4()) };
 
+// THE FOAM RIDES THE WATER IT WAS LAID ON (2026-10-07, Tris: the wake and the
+// splash on the moving water too). On a current the foam is carried
+// downstream with the surface, so every trail and splash is kept in ITS
+// WATER'S FRAME: x is where the water now there was at the clock's zero (the
+// world x less the surface's drift times the clock), and the slot carries
+// that drift (m/s along the world's x; 0 on a pool, where the two frames are
+// one). A water draws only the foam laid on water drifting as it does; a
+// current reads its points' x from its parcels' labels (water.ts), so the
+// foam is carried at exactly the current's speed, and over the brink and
+// down the fall drawn out as the water is.
+const wakeSpotDrift = { value: Array.from({ length: WAKE_SLOTS }, () => 0) };
+const splashFoamDrift = { value: Array.from({ length: SPLASH_SLOTS }, () => 0) };
+
+// The wake's and the splash's foam, for any water's shader: after IMPACT_GLSL
+// (its paintNoise and h21), with `ballFoamUniforms` and the clock `uTime`.
+// `ballFoam(p, drift)` is how much of the point is covered, 0 or 1 cut to the
+// pixel: p is the point in its water's frame (see wakeSpotDrift) and drift that
+// water's. It takes derivatives, so call it in uniform control flow.
+export const ballFoamUniforms = {
+  uWakeAt: wakeSpotAt,
+  uWakeTime: wakeSpotTime,
+  uWakeShape: wakeSpotShape,
+  uWakeDrift: wakeSpotDrift,
+  uWakeEddy: wakeEddy,
+  uSplashAt: splashFoamAt,
+  uSplashHow: splashFoamHow,
+  uSplashDrift: splashFoamDrift,
+};
+
+export const BALL_FOAM_GLSL = `
+  uniform vec4 uWakeAt[${WAKE_SLOTS}];
+  uniform vec4 uWakeTime[${WAKE_SLOTS}];
+  uniform vec4 uWakeShape[${WAKE_SLOTS}];
+  uniform float uWakeDrift[${WAKE_SLOTS}];
+  uniform float uWakeEddy;
+  uniform vec4 uSplashAt[${SPLASH_SLOTS}];
+  uniform vec4 uSplashHow[${SPLASH_SLOTS}];
+  uniform float uSplashDrift[${SPLASH_SLOTS}];
+  // The wake's lace: how far a point is from the nearest hole's middle
+  // (cell units, one hole per cell, jittered), divided by that hole's
+  // own size, so the holes are round and no two the same.
+  float swLace(vec2 p) {
+    vec2 c = floor(p);
+    float best = 8.0;
+    for (int j = -1; j <= 1; j++)
+    for (int i = -1; i <= 1; i++) {
+      vec2 o = vec2(float(i), float(j));
+      vec2 cell = c + o;
+      float d = distance(o + vec2(h21(cell), h21(cell + 17.31)), p - c) / mix(0.75, 1.2, h21(cell + 41.7));
+      best = min(best, d);
+    }
+    return best;
+  }
+  float ballFoam(vec3 p, float drift) {
+    // THE WAKE: the foam the ball leaves (see WAKE_SLOTS). Each capsule's
+    // amount - the churned strip down the middle of the path and the two
+    // arms breaking off the ball's sides - fading over its life; the most
+    // of them is the trail's amount here.
+    // The small eddies' stir (see WAKE_EDDY): the curl of a stream
+    // function, so the water it moves neither piles up nor opens; the
+    // noise's slopes are 0.5 rms, so this is 1 rms.
+    vec2 eddyP = p.xz / uWakeEddy;
+    float psi = paintNoise(eddyP);
+    vec2 stir = vec2(paintNoise(eddyP + vec2(0.0, 0.05)) - psi, psi - paintNoise(eddyP + vec2(0.05, 0.0))) * 40.0;
+    float wake = 0.0;
+    // How far the eddies have carried the foam here since it was laid (the
+    // most of the trail's), so its lace rides the water too.
+    vec2 wakeCarried = vec2(0.0);
+    for (int i = 0; i < ${WAKE_SLOTS}; i++) {
+      vec4 at = uWakeAt[i];
+      vec4 tm = uWakeTime[i];
+      float span = ${fmt(WAKE_LIFE)} * tm.z;
+      if (tm.z <= 0.0 || uTime - tm.y > span || abs(p.y - at.z) > ${fmt(WAKE_PLANE)} || abs(uWakeDrift[i] - drift) > 1e-3) continue;
+      // When the ball was nearest here (from where the point is now: the
+      // eddies move the water far less than the ball moves meanwhile).
+      float len = at.y - at.x;
+      float along = abs(len) > 1e-4 ? clamp((p.x - at.x) / len, 0.0, 1.0) : 0.0;
+      float age = uTime - mix(tm.x, tm.y, along);
+      if (age < 0.0 || age > span) continue;
+      vec4 sh = uWakeShape[i];
+      float w = sh.x;
+      float share = sh.y;
+      float u = tm.w;
+      float d = 2.0 * sh.z;
+      // Where the water here was when the foam was laid on it: back along
+      // the small eddies' stir, about an eddy's size over its turnover.
+      float turnover = uWakeEddy / max(${fmt(WAKE_TURBULENCE)} * u, 1e-3);
+      vec2 carried = stir * (uWakeEddy * (1.0 - exp(-age / turnover)));
+      vec2 laid = p.xz - carried;
+      along = abs(len) > 1e-4 ? clamp((laid.x - at.x) / len, 0.0, 1.0) : 0.0;
+      float dx = laid.x - mix(at.x, at.y, along);
+      float dz = laid.y - at.w;
+      // The strip's water rolled toward the street's eddy on its side as
+      // the eddy forms behind the ball (see WAKE_FORMATION).
+      float street = d / ${fmt(WAKE_STROUHAL)};
+      float roll = ${fmt(WAKE_STREET / 2)} * street * sin(6.2831853 * laid.x / street + sh.w) * (1.0 - exp(-age * u / (${fmt(WAKE_FORMATION)} * d)));
+      // Both spread by the smallest eddies (see WAKE_DIFFUSIVITY), as a
+      // diffusion does: a Gaussian's width squared grows by 4 K t, and its
+      // peak falls as it widens.
+      float spread = ${fmt(4 * WAKE_DIFFUSIVITY)} * u * d * age;
+      float life = 1.0 - smoothstep(0.0, 1.0, age / span);
+      // The strip: a thin line behind a slow ball, most of its width
+      // behind a fast one.
+      float strip0 = w * mix(${fmt(WAKE_STRIP[0])}, ${fmt(WAKE_STRIP[1])}, share);
+      float stripW = sqrt(strip0 * strip0 + spread);
+      float strip = length(vec2(dx, dz - roll)) / stripW;
+      // The arms: thrown out from the ball's sides at the Kelvin speed,
+      // slowing as their crest stops breaking (see WAKE_ARM_DRAG).
+      float arm0 = w * ${fmt(WAKE_ARM_WIDTH)};
+      float armW = sqrt(arm0 * arm0 + spread);
+      float reach = w + ${fmt(WAKE_KELVIN * WAKE_ARM_DRAG)} * u * (1.0 - exp(-age / ${fmt(WAKE_ARM_DRAG)}));
+      float arm = length(vec2(dx, abs(dz) - reach)) / armW;
+      float amount = ${fmt(WAKE_PEAK)} * life * max(strip0 / stripW * exp(-strip * strip), share * arm0 / armW * exp(-arm * arm));
+      if (amount > wake) {
+        wake = amount;
+        wakeCarried = carried;
+      }
+    }
+    // The wake's lace (see WAKE_LACE_CELL): a round hole opens in every
+    // cell as the amount falls, growing till only strands are left between
+    // them, then those go. Under 0 where there is foam; cut to the pixel.
+    float hole = ${fmt(WAKE_LACE_HOLE)} * (1.0 - clamp(wake, 0.0, 1.0));
+    float laceCover = hole - swLace((p.xz - wakeCarried) / vec2(${fmt(WAKE_LACE_CELL * WAKE_LACE_STRETCH)}, ${fmt(WAKE_LACE_CELL)}));
+    float laceAA = max(0.5 * fwidth(laceCover), 1e-4);
+    float wakeFoam = (1.0 - smoothstep(-laceAA, laceAA, laceCover)) * step(0.05, wake);
+
+    // THE SPLASH'S FOAM (see SPLASH_SLOTS): the churned water where the
+    // ball went in.
+    float splash = 0.0;
+    // How far the churn has carried the foam here (the most of the
+    // splashes'), so its patches ride the water too.
+    vec2 splashCarried = vec2(0.0);
+    for (int i = 0; i < ${SPLASH_SLOTS}; i++) {
+      vec4 at = uSplashAt[i];
+      vec4 how = uSplashHow[i];
+      float age = uTime - at.w;
+      float span = mix(${fmt(SPLASH_FOAM_LIFE[0])}, ${fmt(SPLASH_FOAM_LIFE[1])}, how.x);
+      if (how.x <= 0.0 || age < 0.0 || age > span || abs(p.y - at.y) > ${fmt(WAKE_PLANE)} || abs(uSplashDrift[i] - drift) > 1e-3) continue;
+      // The churn (see SPLASH_SLOTS): how long it has had at the water,
+      // which comes to its turnover time and no more.
+      float u = how.z;
+      float turnover = uWakeEddy / max(${fmt(WAKE_TURBULENCE)} * u, 1e-3);
+      float churned = turnover * (1.0 - exp(-age / turnover));
+      vec2 carried = stir * (uWakeEddy * (1.0 - exp(-age / turnover)));
+      float d = length(p.xz - carried - at.xz);
+      float spread = ${fmt(4 * WAKE_DIFFUSIVITY)} * u * 2.0 * how.y * churned;
+      float out_ = 1.0 - exp(-age / max(how.w, 1e-3));
+      float strength = mix(0.6, 1.0, how.x);
+      float life = strength * (1.0 - smoothstep(0.25, 1.0, age / span));
+      float core0 = how.y * (1.0 + ${fmt(SPLASH_CORE_SPREAD)} * out_);
+      float coreW2 = core0 * core0 + spread;
+      float amount = life * core0 * core0 / coreW2 * exp(-d * d / coreW2);
+      if (amount > splash) {
+        splash = amount;
+        splashCarried = carried;
+      }
+    }
+    // The patches the splash's amount covers, in metres, drifting slowly:
+    // under 0 where there is foam. Cut to the pixel.
+    vec2 patchP = p.xz - splashCarried;
+    float patchN = 0.6 * paintNoise(patchP * ${fmt(SPLASH_PATCH)} + vec2(0.13, -0.09) * uTime)
+      + 0.4 * paintNoise(patchP * ${fmt(SPLASH_PATCH * 2.3)} - vec2(0.11, 0.17) * uTime + 3.7);
+    float cover = patchN - splash;
+    float foamAA = max(0.5 * fwidth(cover), 1e-4);
+    return max(wakeFoam, (1.0 - smoothstep(-foamAA, foamAA, cover)) * step(0.001, splash));
+  }
+`;
+
 // `backZ`/`frontZ` are the slab's z range, which is the world's: a water body's
 // root stands on the gameplay plane. The deep-to-shallow ramp runs over it in
 // world z, so anything else wearing a pool's water continues its colours.
@@ -449,12 +619,7 @@ export function stillWaterMaterial(
     shader.uniforms.uDeep = { value: deep };
     shader.uniforms.uShallow = { value: shallow };
     shader.uniforms.uLight = { value: light };
-    shader.uniforms.uWakeAt = wakeSpotAt;
-    shader.uniforms.uWakeTime = wakeSpotTime;
-    shader.uniforms.uWakeShape = wakeSpotShape;
-    shader.uniforms.uWakeEddy = wakeEddy;
-    shader.uniforms.uSplashAt = splashFoamAt;
-    shader.uniforms.uSplashHow = splashFoamHow;
+    Object.assign(shader.uniforms, ballFoamUniforms);
 
     shader.vertexShader = `
       #ifndef SW_PLANE
@@ -505,12 +670,6 @@ export function stillWaterMaterial(
       uniform vec3 uDeep;
       uniform vec3 uShallow;
       uniform vec3 uLight;
-      uniform vec4 uWakeAt[${WAKE_SLOTS}];
-      uniform vec4 uWakeTime[${WAKE_SLOTS}];
-      uniform vec4 uWakeShape[${WAKE_SLOTS}];
-      uniform float uWakeEddy;
-      uniform vec4 uSplashAt[${SPLASH_SLOTS}];
-      uniform vec4 uSplashHow[${SPLASH_SLOTS}];
       varying float vLit;
       varying float vAlpha;
       varying float vUp;
@@ -519,21 +678,7 @@ export function stillWaterMaterial(
       varying vec3 vWorld;
       varying vec4 vReflection;
       ${IMPACT_GLSL}
-      // The wake's lace: how far a point is from the nearest hole's middle
-      // (cell units, one hole per cell, jittered), divided by that hole's
-      // own size, so the holes are round and no two the same.
-      float swLace(vec2 p) {
-        vec2 c = floor(p);
-        float best = 8.0;
-        for (int j = -1; j <= 1; j++)
-        for (int i = -1; i <= 1; i++) {
-          vec2 o = vec2(float(i), float(j));
-          vec2 cell = c + o;
-          float d = distance(o + vec2(h21(cell), h21(cell + 17.31)), p - c) / mix(0.75, 1.2, h21(cell + 41.7));
-          best = min(best, d);
-        }
-        return best;
-      }
+      ${BALL_FOAM_GLSL}
       // THE RIPPLES at a point (xz, metres): three layers of the wave spectrum
       // on independent, opposing drifts, so their sum changes shape rather
       // than sliding, and three long waves, as slopes; and the middle layer's
@@ -606,119 +751,9 @@ export function stillWaterMaterial(
       // (waterLook.ts); the top face only, never the front sheet beside it.
       swSlope += impactSlope(vWorld) * vUp;
 
-      // THE WAKE: the foam the ball leaves (see the header). Each capsule's
-      // amount - the churned strip down the middle of the path and the two
-      // arms breaking off the ball's sides - fading over its life; the most
-      // of them is the trail's amount here.
-      // The small eddies' stir (see WAKE_EDDY): the curl of a stream
-      // function, so the water it moves neither piles up nor opens; the
-      // noise's slopes are 0.5 rms, so this is 1 rms.
-      vec2 swEddyP = vWorld.xz / uWakeEddy;
-      float swPsi = paintNoise(swEddyP);
-      vec2 swStir = vec2(paintNoise(swEddyP + vec2(0.0, 0.05)) - swPsi, swPsi - paintNoise(swEddyP + vec2(0.05, 0.0))) * 40.0;
-      float swWake = 0.0;
-      // How far the eddies have carried the foam here since it was laid (the
-      // most of the trail's), so its lace rides the water too.
-      vec2 swCarried = vec2(0.0);
-      for (int i = 0; i < ${WAKE_SLOTS}; i++) {
-        vec4 at = uWakeAt[i];
-        vec4 tm = uWakeTime[i];
-        float span = ${fmt(WAKE_LIFE)} * tm.z;
-        if (tm.z <= 0.0 || uTime - tm.y > span || abs(vWorld.y - at.z) > ${fmt(WAKE_PLANE)}) continue;
-        // When the ball was nearest here (from where the point is now: the
-        // eddies move the water far less than the ball moves meanwhile).
-        float len = at.y - at.x;
-        float along = abs(len) > 1e-4 ? clamp((vWorld.x - at.x) / len, 0.0, 1.0) : 0.0;
-        float age = uTime - mix(tm.x, tm.y, along);
-        if (age < 0.0 || age > span) continue;
-        vec4 sh = uWakeShape[i];
-        float w = sh.x;
-        float share = sh.y;
-        float u = tm.w;
-        float d = 2.0 * sh.z;
-        // Where the water here was when the foam was laid on it: back along
-        // the small eddies' stir, about an eddy's size over its turnover.
-        float turnover = uWakeEddy / max(${fmt(WAKE_TURBULENCE)} * u, 1e-3);
-        vec2 carried = swStir * (uWakeEddy * (1.0 - exp(-age / turnover)));
-        vec2 laid = vWorld.xz - carried;
-        along = abs(len) > 1e-4 ? clamp((laid.x - at.x) / len, 0.0, 1.0) : 0.0;
-        float dx = laid.x - mix(at.x, at.y, along);
-        float dz = laid.y - at.w;
-        // The strip's water rolled toward the street's eddy on its side as
-        // the eddy forms behind the ball (see WAKE_FORMATION).
-        float street = d / ${fmt(WAKE_STROUHAL)};
-        float roll = ${fmt(WAKE_STREET / 2)} * street * sin(6.2831853 * laid.x / street + sh.w) * (1.0 - exp(-age * u / (${fmt(WAKE_FORMATION)} * d)));
-        // Both spread by the smallest eddies (see WAKE_DIFFUSIVITY), as a
-        // diffusion does: a Gaussian's width squared grows by 4 K t, and its
-        // peak falls as it widens.
-        float spread = ${fmt(4 * WAKE_DIFFUSIVITY)} * u * d * age;
-        float life = 1.0 - smoothstep(0.0, 1.0, age / span);
-        // The strip: a thin line behind a slow ball, most of its width
-        // behind a fast one.
-        float strip0 = w * mix(${fmt(WAKE_STRIP[0])}, ${fmt(WAKE_STRIP[1])}, share);
-        float stripW = sqrt(strip0 * strip0 + spread);
-        float strip = length(vec2(dx, dz - roll)) / stripW;
-        // The arms: thrown out from the ball's sides at the Kelvin speed,
-        // slowing as their crest stops breaking (see WAKE_ARM_DRAG).
-        float arm0 = w * ${fmt(WAKE_ARM_WIDTH)};
-        float armW = sqrt(arm0 * arm0 + spread);
-        float reach = w + ${fmt(WAKE_KELVIN * WAKE_ARM_DRAG)} * u * (1.0 - exp(-age / ${fmt(WAKE_ARM_DRAG)}));
-        float arm = length(vec2(dx, abs(dz) - reach)) / armW;
-        float amount = ${fmt(WAKE_PEAK)} * life * max(strip0 / stripW * exp(-strip * strip), share * arm0 / armW * exp(-arm * arm));
-        if (amount > swWake) {
-          swWake = amount;
-          swCarried = carried;
-        }
-      }
-      // The wake's lace (see WAKE_LACE_CELL): a round hole opens in every
-      // cell as the amount falls, growing till only strands are left between
-      // them, then those go. Under 0 where there is foam; cut to the pixel,
-      // taken here in uniform control flow.
-      float swHole = ${fmt(WAKE_LACE_HOLE)} * (1.0 - clamp(swWake, 0.0, 1.0));
-      float swLaceCover = swHole - swLace((vWorld.xz - swCarried) / vec2(${fmt(WAKE_LACE_CELL * WAKE_LACE_STRETCH)}, ${fmt(WAKE_LACE_CELL)}));
-      float swLaceAA = max(0.5 * fwidth(swLaceCover), 1e-4);
-      float swWakeFoam = (1.0 - smoothstep(-swLaceAA, swLaceAA, swLaceCover)) * step(0.05, swWake);
-
-      // THE SPLASH'S FOAM (see SPLASH_SLOTS): the churned water where the
-      // ball went in.
-      float swSplash = 0.0;
-      // How far the churn has carried the foam here (the most of the
-      // splashes'), so its patches ride the water too.
-      vec2 swSplashCarried = vec2(0.0);
-      for (int i = 0; i < ${SPLASH_SLOTS}; i++) {
-        vec4 at = uSplashAt[i];
-        vec4 how = uSplashHow[i];
-        float age = uTime - at.w;
-        float span = mix(${fmt(SPLASH_FOAM_LIFE[0])}, ${fmt(SPLASH_FOAM_LIFE[1])}, how.x);
-        if (how.x <= 0.0 || age < 0.0 || age > span || abs(vWorld.y - at.y) > ${fmt(WAKE_PLANE)}) continue;
-        // The churn (see the header): how long it has had at the water,
-        // which comes to its turnover time and no more.
-        float u = how.z;
-        float turnover = uWakeEddy / max(${fmt(WAKE_TURBULENCE)} * u, 1e-3);
-        float churned = turnover * (1.0 - exp(-age / turnover));
-        vec2 carried = swStir * (uWakeEddy * (1.0 - exp(-age / turnover)));
-        float d = length(vWorld.xz - carried - at.xz);
-        float spread = ${fmt(4 * WAKE_DIFFUSIVITY)} * u * 2.0 * how.y * churned;
-        float out_ = 1.0 - exp(-age / max(how.w, 1e-3));
-        float strength = mix(0.6, 1.0, how.x);
-        float life = strength * (1.0 - smoothstep(0.25, 1.0, age / span));
-        float core0 = how.y * (1.0 + ${fmt(SPLASH_CORE_SPREAD)} * out_);
-        float coreW2 = core0 * core0 + spread;
-        float amount = life * core0 * core0 / coreW2 * exp(-d * d / coreW2);
-        if (amount > swSplash) {
-          swSplash = amount;
-          swSplashCarried = carried;
-        }
-      }
-      // The patches the splash's amount covers, in metres, drifting slowly:
-      // under 0 where there is foam. Cut to the pixel, taken here in uniform
-      // control flow.
-      vec2 swPatchP = vWorld.xz - swSplashCarried;
-      float swPatch = 0.6 * paintNoise(swPatchP * ${fmt(SPLASH_PATCH)} + vec2(0.13, -0.09) * uTime)
-        + 0.4 * paintNoise(swPatchP * ${fmt(SPLASH_PATCH * 2.3)} - vec2(0.11, 0.17) * uTime + 3.7);
-      float swCover = swPatch - swSplash;
-      float swFoamAA = max(0.5 * fwidth(swCover), 1e-4);
-      float swFoam = max(swWakeFoam, (1.0 - smoothstep(-swFoamAA, swFoamAA, swCover)) * step(0.001, swSplash));
+      // THE WAKE'S AND THE SPLASH'S FOAM (see BALL_FOAM_GLSL): still water's
+      // frame is the world's.
+      float swFoam = ballFoam(vWorld, 0.0);
 
       vec3 swN = normalize(vec3(-swSlope.x, 1.0, -swSlope.y));
       vec3 swEye = normalize(cameraPosition - vWorld);
@@ -787,17 +822,23 @@ export function stillWaterMaterial(
 // The splash
 // ---------------------------------------------------------------------------
 
-// A pool the splash can happen on, in the frames the detector needs: the body
-// (its pose, in the sim's metres, y down), the rect's half extents, and the
-// slab's z range in the body's frame (three's, +z toward the camera). And for
-// the mirror (planarReflection.ts): the drawn slab, which the reflection
-// leaves out, and its material's switch.
-export interface StillSurface {
+// Water the splash and the wake can happen on, in the frames the detector
+// needs: the body (its pose, in the sim's metres, y down), the rect's half
+// extents, the slab's z range in the body's frame (three's, +z toward the
+// camera), and how fast its surface drifts along the world's x (m/s; 0 for a
+// pool, the current's for a current: see wakeSpotDrift).
+export interface FoamSurface {
   body: WaterArea;
   halfX: number;
   halfY: number;
   backZ: number;
   frontZ: number;
+  drift: number;
+}
+
+// A pool, and for the mirror (planarReflection.ts): the drawn slab, which the
+// reflection leaves out, and its material's switch.
+export interface StillSurface extends FoamSurface {
   mesh: THREE.Mesh;
   reflect: { value: number };
   openBehind: { value: number };
@@ -862,7 +903,7 @@ export class WaterSplashes {
   // The wake capsule the ball is drawing out (-1 while it makes none) and the
   // surface it lies on.
   private wakeLive = -1;
-  private wakeSurface: StillSurface | null = null;
+  private wakeSurface: FoamSurface | null = null;
   private nextPuff = 0;
   // The live trail's eddy phase (see WAKE_STROUHAL).
   private wakePhase = 0;
@@ -875,10 +916,10 @@ export class WaterSplashes {
     this.prev = null;
   }
 
-  // Once per drawn frame, after the clock is set: did the ball cross a pool's
+  // Once per drawn frame, after the clock is set: did the ball cross a water's
   // surface since the last frame, and which way? And is it moving through the
   // water near enough the top to leave a wake?
-  update(clock: number, surfaces: Iterable<StillSurface>, ball: SplashBall | null): void {
+  update(clock: number, surfaces: Iterable<FoamSurface>, ball: SplashBall | null): void {
     if (!ball) {
       this.prev = null;
       this.wakeLive = -1;
@@ -919,13 +960,18 @@ export class WaterSplashes {
       const z = Math.min(Math.max(0, s.backZ), s.frontZ);
       const surfacePoint = (x: number): Vec2 => c.add(new Vec2(x, top).rotated(rot));
 
-      // The wake: inside the pool's span, in the water but not deeper than
-      // WAKE_DEPTH below the top, moving along it. A puff of foam is shed
-      // every WAKE_SPACING metres travelled, so the trail is even whatever
-      // the frame rate.
+      // The wake: inside the water's span, in it but not deeper than
+      // WAKE_DEPTH below the top, moving along it - through the WATER: on a
+      // current the speed is the ball's less the surface's drift, so a ball
+      // carried along with it makes none, and one held against it does. A
+      // puff of foam is shed every WAKE_SPACING metres travelled, so the
+      // trail is even whatever the frame rate.
       const depth = lp.y - top + ball.radius;
       if (Math.abs(lp.x) <= s.halfX && depth > 0 && depth < WAKE_DEPTH + ball.radius) {
-        const speed = Math.max(Math.abs(ball.velocity.rotated(-rot).x), Math.abs(drawn.rotated(-rot).x));
+        const speed = Math.max(
+          Math.abs(ball.velocity.rotated(-rot).x - s.drift),
+          Math.abs(drawn.rotated(-rot).x - s.drift),
+        );
         if (speed > WAKE_MIN_SPEED) {
           // The white water's share from the Froude number (see
           // WAKE_FROUDE), and how long it lasts: WAKE_LINE_LIFE for the thin
@@ -942,7 +988,8 @@ export class WaterSplashes {
             // centre `depth - radius` under (+) or over it.
             const under = depth - ball.radius;
             const waterline = Math.sqrt(Math.max(0, ball.radius * ball.radius - under * under));
-            this.drawWake(s, at.x, threeY(at.y), z, clock, strength, speed, waterline, share, ball.radius);
+            // Laid in the water's frame (see wakeSpotDrift).
+            this.drawWake(s, at.x - s.drift * clock, threeY(at.y), z, clock, strength, speed, waterline, share, ball.radius);
           }
         }
       }
@@ -964,8 +1011,10 @@ export class WaterSplashes {
       const power = Math.min(1, Math.max(SPLASH_FLOOR, (speed - SPLASH_MIN) / (SPLASH_FULL - SPLASH_MIN)));
       const w = surfacePoint(x);
       // Started when the ball crossed, a fraction t into the frame, not when
-      // the frame is drawn: at 60 Hz that is up to 17 ms of flight.
-      this.spawn(w.x, threeY(w.y), z, clock - (1 - t) * dt, power, speed, ball.radius);
+      // the frame is drawn: at 60 Hz that is up to 17 ms of flight. Laid in
+      // the water's frame (see wakeSpotDrift).
+      const start = clock - (1 - t) * dt;
+      this.spawn(w.x - s.drift * start, threeY(w.y), z, start, power, speed, ball.radius, s.drift);
     }
     if (!waking) this.wakeLive = -1;
   }
@@ -975,7 +1024,7 @@ export class WaterSplashes {
   // jump, a clock run back), and closing it for the next, which starts from
   // its end, once it is long and old enough (see WAKE_SLOTS).
   private drawWake(
-    surface: StillSurface,
+    surface: FoamSurface,
     x: number,
     y: number,
     z: number,
@@ -1004,6 +1053,7 @@ export class WaterSplashes {
     }
     this.wakeSurface = surface;
     wakeEddy.value = WAKE_EDDY * 2 * radius;
+    wakeSpotDrift.value[i] = surface.drift;
     wakeSpotAt.value[i]!.y = x;
     wakeSpotTime.value[i]!.set(wakeSpotTime.value[i]!.x, clock, strength, speed);
     wakeSpotShape.value[i]!.set(waterline, share, radius, this.wakePhase);
@@ -1026,10 +1076,12 @@ export class WaterSplashes {
     power: number,
     speed: number,
     radius: number,
+    drift: number,
   ): void {
     const i = this.next;
     this.next = (i + 1) % SPLASH_SLOTS;
     splashFoamAt.value[i]!.set(x, y, z, start);
+    splashFoamDrift.value[i] = drift;
     wakeEddy.value = WAKE_EDDY * 2 * radius;
     splashFoamHow.value[i]!.set(power, radius, speed, FLIGHT_PER_U * speed);
   }

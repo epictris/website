@@ -99,11 +99,22 @@ Approaching a lip the surface falls into it along the brink's gravity arc, the b
 
 
 **The look** is the study's `paintedRiver`: three layers of the pool's spectrum read in parcel space, stretched along the flow and turned 90 and ~40 degrees against each other so the spectrum's diagonal never lines up, plus a fine chop churning in its own time (a current is not a mirror), and the long swell's slope.
-The same slopes drive soft light bands where the ripples face the light, a little shade where they face away, a crest on the steepest and a broad highlight; the colour drifts down the channel between the deep, the shallow and the light, a little greener here and there.
-A **pale wash** stands in for foam: translucent milky streaks drawn along the current, faint in mid-channel and opaque toward the brink.
-It is read `WASH_ACROSS` (2.5) times finer across than the study's and cut `WASH_CUT_RAISE` (0.05) higher, so it is narrow lines, half as many as the study's (measured on the field: 14.6 to 7.3 across 12 study metres), and every cut is to the pixel (half a `fwidth` each side), never feathered (Tris, 2026-10-06).
-The study also drew it opaque along the banks (a torn band) with a thin rim at the waterline; on the game's channels that read as extra foam down the water's sides, and both were dropped, on the river and on the falling sheet's edges (Tris, 2026-10-06).
+The same slopes drive soft light bands where the ripples face the light, a little shade where they face away, a crest on the steepest and a broad highlight.
+
+**The running surface** is drawn calmer than the study's, after karin-lu's PR #2 (Tris preferred its flowing water, 2026-10-07; only the surface was taken, none of the PR's landing).
+Its ripples churn at `RUNNING_CHURN` (0.25) of the rate with `RUNNING_CHOP` (0.3) of the fine chop and are stretched `RUNNING_STRETCH` (1.8) along the current, so the pattern reads as carried downstream rather than boiling in place.
+Its colour is the pool's teal, restrained deep-to-shallow patches riding the current.
+Its wash is **broken turquoise strokes** (`currentStreak`, cut at 0.68, opacity 0.15, paling toward the lip), and the waterline carries a faint interrupted teal glint (`RIM_DOWN` down the front), not a white border.
+Every cut is to the pixel (half a `fwidth` each side), never feathered (Tris, 2026-10-06).
 The pigment fades toward the deep with the depth under the waterline.
+
+Over the last `BRINK_HANDOVER` (0.95 m, the study's 1.9 m acceleration zone) before a lip, the ripples and the colour are mixed toward the study's (full churn and chop, stretch 1.15, the colour drifting between the deep, the shallow and the light, a little greener here and there), reached by the lip, because that is what the cascade carries on down the curtain; the strokes and the glint give out over the same reach.
+So nothing ends at the brow: a pixel diff of the brow and the curtain against the tree before the running surface changed was black.
+The second set of ripples is read only on a channel that spills, and under uniform control flow so its `fwidth` stays defined.
+
+The wash it replaced was the study's **pale wash**: translucent milky streaks along the current, faint in mid-channel and opaque toward the brink, read `WASH_ACROSS` (2.5) times finer across than the study's and cut `WASH_CUT_RAISE` (0.05) higher (Tris, 2026-10-06), and carried over the brink into the curtain's whitewater.
+Both went on 2026-10-07: the river's for the PR's strokes, the curtain's at Tris's word ("remove the pale/white streaks from the waterfall curtain").
+The study also drew the wash opaque along the banks (a torn band) with a thin rim at the waterline; on the game's channels that read as extra foam down the water's sides, and both were dropped, on the river and on the falling sheet's edges (Tris, 2026-10-06).
 The top is opaque and the front murky glass (`ALPHA_FRONT_*`, the pool's numbers), so a submerged ball stays a silhouette; the tube is closed and its back faces culled, so what shows through is the ball and the rock behind, never the water's own far side.
 The study's river mirror (a second reflection pass in the river's plane, at 0.3) is not ported: from the game's camera a channel's top is a few pixels tall, so it would be a scene pass per frame for nothing visible.
 
@@ -137,7 +148,8 @@ An edge thinning (`EDGE_THIN`) was tried and removed the same day: the game sees
 What is left of the narrowing is the real thing (a tap's stream narrows the same way); what is not modelled is the air a real fall takes in, which bulks it back up and roughens it lower down.
 The study's ridges sit at fixed places across the width, made for its 4.6 study metre sheet; on BALL's 3 m lower channel they peaked at both edges, and since the vertical slices carry the channel's whole depth over the brow, they puffed both edges ~30 cm out past the middle (Tris, 2026-10-06: "the edges of the waterfall extend further than the middle").
 
-The cascade is the study's `cascadeLook`, blended in over the brow by the drop: the same spectrum drawn out into long ribbons as the water accelerates, labelled by **time from the lip at the lip's speed** (so a scrolling texture stretches exactly as the water does), bands taken against the sheet's own smooth normal, reflections in pale palette tones only (a fold whose normal dipped reflected near-black and read as a dark column), and the river's own wash carried over the brink, filling in, brightening toward white and cut by finer lanes down the sheet.
+The cascade is the study's `cascadeLook`, blended in over the brow by the drop: the river's spectrum carried over the brink and drawn out as the water accelerates (below), bands taken against the sheet's own smooth normal, and reflections in pale palette tones only (a fold whose normal dipped reflected near-black and read as a dark column).
+It draws **no whitewater**: the study's, the river's wash carried over the brink and filling in toward white down the sheet, was removed (Tris, 2026-10-07), and with it the sheet's own lanes, the only thing labelled at the lip's speed.
 It is opaque: refracting the shelf behind drew horizontal bluish bands in the study.
 **The ripples are the river's own, carried over the brink** and drawn out by the physics (`drawnOut`): a parcel keeps its label (`parcelAt`) as it speeds into the brink and down the fall, so a metre of river surface becomes v/U metres (v here, U the run's speed), and a ripple carried on it keeps its slope across the flow but loses that share of its slope along it.
 So the light bands the river's crossing crests draw stay on the river (v = U there) and fade over the brink, while the slanting crests are pulled into streaks down the sheet, as a real falling sheet is striated along its flow.
@@ -242,7 +254,7 @@ The **core** is solid out to the ball's radius, spreads by `SPLASH_CORE_SPREAD` 
 The **ring** rides the crown's sheet: the water the ball shoves aside leaves its waterline at `CROWN_SPEED` of the entry speed U, `CROWN_TILT` off vertical, and comes down a ballistic range out, so the ring eases out to `CROWN_FROM` R + 0.45² sin(0.8) U² / g over the sheet's flight, 2 · 0.45 cos(0.4) U / g (0.63 m in 0.5 s at 6 m/s), widening as it goes.
 The sheet itself is not drawn.
 The splash starts when the ball crossed, a fraction into the frame, not when the frame is drawn.
-Up to `SPLASH_SLOTS` splashes live in a module-wide table (`splashFoamAt`, `splashFoamHow`) beside the wake's, read by every still water material within `WAKE_PLANE` of the splash's height.
+Up to `SPLASH_SLOTS` splashes live in a module-wide table (`splashFoamAt`, `splashFoamHow`, `splashFoamDrift`) beside the wake's, read by every water material within `WAKE_PLANE` of the splash's height and drifting as the splash's water does (see **On a current too** below).
 Before 2026-10-06 a splash was the stylised reference's: a cel-shaded **crown** (an open ring wall with a jagged rim, flaring and tearing into holes), a Voronoi **lace** of foam over the surface and hollow-ring **droplets**; it read as a white ice crystal and was replaced.
 The same day, lumps of foam thrown up ballistically from the waterline in the fall plumes' outline and tone were tried and removed (Tris: "get rid of those clumps!"): a few broad slow ones read as nothing, and enough to read as a crown read as confetti.
 
@@ -263,13 +275,21 @@ What is drawn is **a real wake's shape** (Tris, 2026-10-06, after the swept disc
 From the game's near edge-on camera the wake is subtle: a few streaks along the waterline, which is what a V wake looks like from near water level.
 
 Tried the same day and dropped: one round puff at the ball's middle scaled by its strength (it drew narrower than the ball and then grew); puffs born whole at the ball's leading and trailing ends; a pair off its near and far sides, growing out of the waterline (a gap down the middle); the back half it had swept, shed every 14 cm (at a slow roll a chunk appeared behind the ball each time); the swept waterline disc itself, solid and spreading at the Kelvin speed (a pale slab, "odd", even after it was made to spread more and go sooner).
-The capsule tables are module-wide (`wakeSpotAt`, `wakeSpotTime`, `wakeSpotShape`) and shared by every still water material, so the trail carries on from the pool onto the scene's water beyond it; a pixel more than `WAKE_PLANE` off a capsule's height ignores it.
+The capsule tables are module-wide (`wakeSpotAt`, `wakeSpotTime`, `wakeSpotShape`, `wakeSpotDrift`) and shared by every water material, so the trail carries on from the pool onto the scene's water beyond it; a pixel more than `WAKE_PLANE` off a capsule's height ignores it.
 
 Until 2026-10-06 the wake was rings after Tris's stylised ripple reference (2026-10-05, a drop on flat blue water): crests coming out of the ball's waterline one after another, each a narrow wave in the slopes under a white stroke broken into tapered arcs, riding the swell, every ring its own.
 Before those, the same day: the study's own click ripple (a Gaussian packet of waves) - too big at birth and drawing clean even circles; torn white foam over it, which read first as a stencil (torn in the world's frame, so the rings slid under it), then, torn in each ring's frame and blurred, as jagged; a 0.3 s ease-in that showed each ring 0.6 m behind a 2 m/s ball, running back toward it; and with no ease-in at all, a flash of light every time the ball moved.
 The pale line rings that drew the wake first, a mesh of their own, are gone too.
 
-The splash and the wake cost no draw calls of their own: the pool's surface draws both.
+**On a current too** (2026-10-07, Tris: "add the ball splash & movement foam effect to the moving water as well").
+The detector watches every water body with a look (`FoamSurface`: a pool, or a current, which carries its `drift`), and both shaders draw the one foam from `BALL_FOAM_GLSL` (`ballFoam(p, drift)`, the pool's code moved out of its shader unchanged; a filmstrip of the pool splash was pixel-identical before and after, bar the ball's own reflection of the river).
+**The foam rides the water it was laid on.** Every capsule and splash is kept in its water's frame: x is where the water now under it was at the clock's zero (the world x less the drift times the clock), and the slot carries the drift (`wakeSpotDrift`, `splashFoamDrift`; 0 on a pool, where the frames are one), and a water draws only the foam laid on water drifting as it does.
+A current reads its points' x from their parcels' labels (`vFoam`: the upstream end plus the run's speed times the travel time since the clock's zero), so the foam is carried at exactly the current's speed, and over the brink and down the fall is drawn out as the water is, as the ripples are.
+The wake is laid by the ball's speed **through the water** (its own less the drift): a ball carried along with the current leaves none, and a ball held against it, or driven upstream, leaves one that streams off downstream.
+A turned current has no foam surface (its drift would leave the world's x, which the frame cannot hold); no level has one.
+Checked on BALL's upper channel (a ball dropped in at x 40: the splash forms and drifts downstream with the water, keeping its shape) and on a rig of a shallow current against the roll-drive script (`playtests/ball-roll-drive.json` plus a 18 cm current at -1.2 m/s: the ball at ~0.6 m/s upstream leaves a breaking wake trailing downstream into lace).
+
+The splash and the wake cost no draw calls of their own: the water's surface draws both.
 Their foam is a pure function of the clock and each slot's start time, so a pinned clock (`cli shot`) draws the same splash twice, and a filmstrip (`cli shot --frames`, which advances the clock with the sim) shows it moving - start the strip before the ball crosses, or the detector never sees the crossing.
 Unplayed; no cases until it has been.
 

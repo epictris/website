@@ -41,10 +41,18 @@ class MOSS_PT_main(bpy.types.Panel):
             box.row(align=True).prop(s, "kind", expand=True)
             if s.kind == "TEXTURE":
                 box.label(text="Painted into the rock on export", icon="TEXTURE")
+            col = box.column(align=True)
+            col.prop(s, "detail", slider=True)
+            if s.detail != 1.0:
+                col.label(text=f"Dabs {s.dab_min / s.detail * 100:.1f}-{s.dab_max / s.detail * 100:.1f} cm at this detail")
             if not s.status:
                 took = f"{s.build_ms / 1000:.1f} s" + (", growth reused" if s.reused else "")
                 col = box.column(align=True)
-                col.label(text=f"{s.dabs:,} dabs, {s.texture} px" if s.kind == "TEXTURE" else f"{s.triangles:,} tris, {s.dabs:,} dabs, {s.texture} px")
+                if s.kind == "TEXTURE":
+                    col.label(text=f"{s.dabs:,} dabs")
+                    col.label(text=f"Rock map texels: {s.texel_used * 1000:.1f} mm")
+                else:
+                    col.label(text=f"{s.triangles:,} tris, {s.dabs:,} dabs, {s.texture} px")
                 col.label(text=took)
                 if s.layer_dabs:
                     col.label(text="Dabs per layer:")
@@ -80,19 +88,21 @@ class _Sub:
 class MOSS_PT_quality(_Sub, bpy.types.Panel):
     bl_label = "Quality"
 
+    # A texture-only moss has no mesh, and its print is the rock's baked
+    # colour map, whose texel the decal previews (ops._Inputs): nothing here
+    # applies to it.
+    @classmethod
+    def poll(cls, context):
+        ob = ops.active_moss(context)
+        return ob is not None and ob.moss.kind == "MOUND"
+
     def draw(self, context):
         layout = self.layout
         s = ops.active_moss(context).moss
-        if s.kind == "TEXTURE":
-            # No geometry ships, and the export paints at the rock map's own
-            # resolution: these only set the decal Blender shows.
-            layout.label(text="Viewport decal only; the export", icon="INFO")
-            layout.label(text="paints at the rock map's texels")
-        else:
-            col = layout.column(align=True)
-            col.prop(s, "mound_density")
-            if s.triangles and s.area > 0:
-                col.label(text=f"{s.triangles:,} tris, {s.triangles / s.area:,.0f} / m²")
+        col = layout.column(align=True)
+        col.prop(s, "mound_density")
+        if s.triangles and s.area > 0:
+            col.label(text=f"{s.triangles:,} tris, {s.triangles / s.area:,.0f} / m²")
         col = layout.column(align=True)
         col.prop(s, "texel")
         col.label(text="Max Texture")

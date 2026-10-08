@@ -1,7 +1,9 @@
 """Finding, creating and rebuilding moss objects, and the panel's operators."""
 
+import dataclasses
 import hashlib
 import os
+import sys
 import time
 
 import bpy
@@ -13,6 +15,18 @@ from .stampbrush.brush import GROWN_PROP
 from .stampbrush.geometry import host_world
 
 COLLECTION = "Moss"
+
+
+def _formations_render():
+    """formations/render.py, which sizes the maps the scene export bakes, from
+    the repo this add-on lives in (tools/blender, as scene_export.py imports
+    it): in Blender the formations add-on is a separate extension, which the
+    moss does not need enabled."""
+    here = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    from formations import render
+    return render
 
 
 def is_moss(ob):
@@ -152,10 +166,24 @@ class _Inputs:
         host_mesh = ev.to_mesh()
         try:
             self.co, self.tri = host_world(host_mesh, host.matrix_world)  # copied out before the build re-evaluates
+            area = sum(f.area for f in host_mesh.polygons)
         finally:
             ev.to_mesh_clear()
         self.matrix = host.matrix_world.copy()
+        # The export registers this add-on after the file is loaded, so the
+        # load handler's migration has not run there.
+        ob.moss.migrate_scale()
         self.p = ob.moss.params()
+        if self.p.kind == "TEXTURE" and len(self.tri):
+            # The export paints a texture-only moss into the rock's baked
+            # colour map, so its decal previews that: printed at the map's
+            # texel, uncapped. Print settings only: the growth and the
+            # export's paint keys never read them.
+            a, b, c = (self.co[self.tri[:, i]] for i in range(3))
+            world_area = 0.5 * float(np.linalg.norm(np.cross(b - a, c - a), axis=1).sum())
+            render = _formations_render()
+            self.p = dataclasses.replace(self.p, texel=render.colour_texel(host, area, world_area),
+                                         max_texture=render.BAKE_SIZE_MAX)
         self.stamps = stamp_io.read(ob.moss.stamps)
         self.key = _growth_key(self.co, self.tri, self.matrix, self.stamps, self.p)
 
@@ -313,6 +341,10 @@ def _on_load(*_args):
     the ivy add-on carries it across when it loads. Without it, say so. A
     loaded file's objects are new, so the cached growths go."""
     _grown.clear()
+    scaled = [ob.name for ob in moss_objects() if ob.moss.migrate_scale()]
+    if scaled:
+        print(f"[moss] {len(scaled)} moss(es) saved with Scale now have Detail 1/scale ({', '.join(scaled[:4])}...); "
+              "rebuild them: Scale also moved their colours, Detail does not")
     legacy = _legacy_ivy()
     if legacy and "bl_ext.user_default.ivy" not in bpy.context.preferences.addons:
         print(f"[moss] {len(legacy)} object(s) hold ivy from when the ivy add-on was called moss ({', '.join(legacy[:4])}...); "

@@ -63,6 +63,14 @@ def log(msg):
     print(f"[scene_export] {msg}", flush=True)
 
 
+def step(name, note=None):
+    """Tell scene-export.ts's progress display that step `name` starts now
+    (and so the one before it is done). The list of steps, their order and
+    their labels are that script's (STEPS); `note` is what the display shows
+    beside the step."""
+    print(f"[scene_step] {json.dumps({'step': name, 'note': note})}", flush=True)
+
+
 def node_name(name):
     """How three.js spells this object's node name (see `nodeNameOf` in
     render3d/scenes.ts): whitespace to `_`, then `[`, `]`, `.`, `:`, `/`
@@ -222,30 +230,15 @@ def bake_device():
             return f"{kind} {', '.join(d.name for d in devices)}"
     prefs.compute_device_type = "NONE"
     return "CPU"
-# Texture resolution follows the surface: this many texels per metre of the
-# unwrapped surface, rounded up to a power of two, between these bounds. The
-# game frame shows 200 pixels a metre at the gameplay plane (BALL_ZOOM at
-# 1080p), and the painted slate's edge line is a texel or two wide, so a map
-# under that density draws it magnified and blurred (the Terrace at 1024 got
-# 136 texels a metre). Doubled on 2026-10-03 (Tris: "about double the
-# resolution"), so the edge line and the chips stay crisp up close. The top is
-# the optimiser's cap for baked maps (`--baked-maps`,
-# scripts/encode-textures.mjs).
-TEXELS_PER_METRE = 512
-BAKE_SIZE_MIN, BAKE_SIZE_MAX = 64, 4096
-# The baked normal map's side, as a share of the colour map's (Tris,
-# 2026-10-04). Lossless, the normals were 16 of the river's 20.7 MB, the
-# five Terraces' 3.4 to 4.3 MB each at 4096, against the store's 8 MB a file.
-# The detail high poly is still baked at the colour's size: the normal pass
-# averages it down rather than resampling a coarse one.
-NORMAL_SCALE = 0.5
-# The share of the image an unwrap's islands cover after packing.
-UV_COVERAGE = 0.6
+# The maps' sizes (texels per metre, the bounds, the normal map's share, the
+# unwrap's coverage) are formations/render.py's: the moss add-on's preview of
+# a texture-only moss reads them too.
+#
 # Pixels between islands in the pack. Every texel outside the islands is
 # filled afterwards (`fill_background`), so this gap is only what keeps two
 # islands from sharing a texel at full resolution. It is kept at the object's
-# smallest map (the normal map, NORMAL_SCALE), where islands 1 px apart would
-# filter into each other.
+# smallest map (the normal map, render.NORMAL_SCALE), where islands 1 px apart
+# would filter into each other.
 PACK_GAP_PX = 2
 # How far apart two vertices may be and still be one for the unwrap.
 WELD_DISTANCE = 1e-5
@@ -269,25 +262,17 @@ def render_setting(ob, name):
     return render.setting(ob, name)
 
 
-def bake_size(mesh, scale=1.0, map_max=0, texels=0):
-    """The colour map's side: TEXELS_PER_METRE over the surface, divided by
-    the object's `detail_scale`, up to BAKE_SIZE_MAX, which a rock standing
-    further back is divided by too (rounded down to a power of two). The
-    backdrop's rocks are big (their hidden backs and sides included), so a
-    density over the depth alone still took every one to 4096 and the river
-    scene to 19.4 MB against the store's 8 MB bar (2026-10-04). `map_max`
-    and `texels`, over 0, set the cap and the density instead
-    (`render_setting`)."""
-    area = sum(p.area for p in mesh.polygons)
-    side = math.sqrt(area / UV_COVERAGE) * (texels or TEXELS_PER_METRE / scale)
-    cap = 2 ** math.floor(math.log2(map_max or BAKE_SIZE_MAX / max(scale, 1.0)))
-    return int(min(cap, max(BAKE_SIZE_MIN, 2 ** math.ceil(math.log2(max(side, 1))))))
+def bake_size(mesh, ob):
+    """The side of `ob`'s colour map, baked on `mesh` (formations/render.py)."""
+    from formations import render
+    return render.colour_map(ob, sum(p.area for p in mesh.polygons))
 
 
 def map_size(size, kind):
     """The side of an object's `kind` map ("baked colour", ...) when its colour
-    map is `size`."""
-    return max(BAKE_SIZE_MIN, int(size * NORMAL_SCALE)) if kind == "baked normal" else size
+    map is `size` (formations/render.py)."""
+    from formations import render
+    return render.map_size(size, kind)
 
 
 def select_only(obs, active):
@@ -555,8 +540,8 @@ def bake_procedural_textures(kept, cache_dir=None, paints=(), warnings=None):
     tangent-space normal map. It works on the export's own copies: each target
     gets a mesh with its modifiers applied and a fresh unwrap (BAKE_UV), its
     materials are copied so each object's point at its own images, and the file
-    is never saved. The resolution is TEXELS_PER_METRE up to
-    BAKE_SIZE_MAX. With `cache_dir`, an object whose maps are in the bake
+    is never saved. The resolution is formations/render.py's (`bake_size`:
+    TEXELS_PER_METRE up to BAKE_SIZE_MAX). With `cache_dir`, an object whose maps are in the bake
     cache (bake_cache.py) loads them instead of baking. Returns how many
     objects were baked or loaded.
 
@@ -574,6 +559,7 @@ def bake_procedural_textures(kept, cache_dir=None, paints=(), warnings=None):
     targets = [ob for ob in kept if ob.type == "MESH"
                and (ob in by_host or any(procedural_base_colors(m) or procedural_normals(m) for m in ob.data.materials))]
     if not targets:
+        step("bake", "nothing procedural")
         return 0
     t0 = time.time()
     scene = bpy.context.scene
@@ -607,8 +593,7 @@ def bake_procedural_textures(kept, cache_dir=None, paints=(), warnings=None):
         if any(m is None for m in mesh.materials) or not mesh.materials:
             # A bake needs a material to write through on every face.
             raise SystemExit(f"{ob.name}: a procedural material shares the object with an empty material slot")
-        sizes[ob] = bake_size(mesh, detail_scale(ob), int(render_setting(ob, "export_map_max")),
-                              float(render_setting(ob, "export_texels")))
+        sizes[ob] = bake_size(mesh, ob)
         bumps = any(procedural_normals(m) for m in mesh.materials)
         unwrap(ob, map_size(sizes[ob], "baked normal") if bumps else sizes[ob])
     scene.render.engine = "CYCLES"
@@ -650,6 +635,8 @@ def bake_procedural_textures(kept, cache_dir=None, paints=(), warnings=None):
             files = cache.get(keys[ob], [image_name(ob, k) for k in ships[ob]])
             if files is not None:
                 loaded[ob] = {k: bake_cache.load(files[image_name(ob, k)], image_name(ob, k), space[k]) for k in ships[ob]}
+    step("bake", f"{len(targets) - len(loaded)} of {len(targets)} objects to bake"
+         + (f", {len(loaded)} cached" if cache else ", cache off"))
     fresh = {}  # ob -> the images baked for it here, to cache
 
     def bake_or_load(obs, kind, bake):
@@ -952,7 +939,9 @@ def main():
     excluded = excluded_collections(view_layer)
 
     kept, skipped, warnings = [], [], []
+    step("grow")
     grow_painted(scene, warnings)
+    step("bake")
     import moss
     paints = moss.texture_paints(scene)
     formation_warnings(scene, warnings)
@@ -992,6 +981,7 @@ def main():
             except RuntimeError:
                 pass
         view_layer.update()
+    step("gltf")
     for ob in kept:
         warnings.extend(material_warnings(ob))
 
