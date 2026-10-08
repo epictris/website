@@ -143,21 +143,35 @@ const RIVER_STEP = 0.025;
 // 0.715 y_c for a current slower than its wave speed (Froude U / sqrt(g H)
 // under 1; Rouse's measurement, BRINK_DEPTH), H Fr^2 / (Fr^2 + 0.4) for a
 // faster one (Rajaratnam's, which meets the first at Fr = 1). Continuity
-// speeds the water up to q / y_b at the lip. BALL's 1.2 m/s, 0.5 m deep lower
-// channel leaves at 2.5 m/s, 24 cm deep.
+// speeds the water up to q / y_b at the lip. BALL's 1.2 m/s, 0.4 m deep lower
+// channel leaves at 2.3 m/s, 21 cm deep.
 //
-// The surface follows GRAVITY the whole way down: from where it starts to
-// drop it is one ballistic arc at the lip's horizontal speed, through the lip
-// and on down the fall, so it never levels out at the edge and then turns
-// (Tris, 2026-10-06: "it goes from flowing straight ahead to quickly flowing
-// down"). The arc drops H - y_b by the lip, which fixes how far upstream it
-// starts, and its curvature is g / v^2: faster water, gentler brow.
+// THE DRAWDOWN. Over the bed the water is held up: only its surface comes
+// down, gently, and the slab is not falling yet. A subcritical current passes
+// critical depth CRITICAL_REACH y_c before the lip (Rouse measured 3 to 4 y_c)
+// and keeps drawing down, steepening, to y_b at the edge. The surface is one
+// parabola through those two depths with its vertex upstream, where the drop
+// begins; a current at or over its wave speed has no critical section to pass
+// and starts CRITICAL_REACH y_c out, which is where the first case lands as Fr
+// reaches 1. At the lip its slope is a few degrees (5 on BALL's falls), and
+// the sheet leaves along it: the lower face leaves the level bed level, and
+// only past the edge does GRAVITY take the water, so the fall's curve is g/v^2
+// from the lip down - faster water, a gentler brow (Tris, 2026-10-06: "faster
+// flowing water should result in a more gradual curve").
 //
-// Before this the lip speed was authored (`spillSpeed`, retired), 1 m/s on
-// every level, slower than the currents feeding it: the water braked into the
-// brink, levelled out on a smoothstep drawdown, and turned down a 10 cm radius
-// whatever the current did.
+// Before this (2026-10-06 to 2026-10-07) the surface was one ballistic arc
+// from where it started to drop, as if the whole slab were in free fall over
+// the bed: it reached the lip already falling at 44 degrees (2.55 m/s on
+// BALL's upper fall) and threw the sheet 1.9 m out of a 4 m drop - "I would
+// expect less of an arc" (Tris, 2026-10-07). Rand's measured throw for a
+// straight drop, L = 4.30 D^0.27 h with D = q^2 / (g h^3), puts that one at
+// 2.5 m; leaving at 5 degrees it throws 2.4 m. Before THAT the lip speed was
+// authored (`spillSpeed`, retired), 1 m/s on every level, slower than the
+// currents feeding it: the water braked into the brink, levelled out on a
+// smoothstep drawdown, and turned down a 10 cm radius whatever the current
+// did.
 const BRINK_DEPTH = 0.715;
+const CRITICAL_REACH = 3.5;
 const FALL_GRAVITY = 9.81;
 
 interface Brink {
@@ -175,9 +189,13 @@ export function brinkOf(runSpeed: number, depth: number, runLength: number): Bri
   const share = fr2 < 1 ? BRINK_DEPTH * Math.cbrt(fr2) : fr2 / (fr2 + 0.4);
   const yb = depth * share;
   const speed = (runSpeed * depth) / yb;
-  // A run shorter than the arc's reach starts falling at its upstream end.
-  const reach = Math.min(speed * Math.sqrt((2 * (depth - yb)) / FALL_GRAVITY), runLength);
-  return { depth: depth - (FALL_GRAVITY * reach * reach) / (2 * speed * speed), speed, reach, dive: (FALL_GRAVITY * reach) / speed };
+  const yc = Math.cbrt((runSpeed * runSpeed * depth * depth) / FALL_GRAVITY);
+  // The parabola's vertex: at the lip it is y_b down, CRITICAL_REACH y_c
+  // before it y_c down, so (1 - CRITICAL_REACH y_c / L)^2 = (H - y_c) / (H - y_b).
+  const passing = fr2 < 1 ? Math.sqrt((depth - yc) / (depth - yb)) : 0;
+  // A run shorter than that starts drawing down at its upstream end.
+  const reach = Math.min((CRITICAL_REACH * yc) / (1 - passing), runLength);
+  return { depth: yb, speed, reach, dive: (speed * 2 * (depth - yb)) / reach };
 }
 
 // Seconds for the arc leaving the lip at `dive` m/s downward to fall `dy` m.
@@ -383,12 +401,12 @@ function currentGeometry(
   const length = halfX * 2;
   const upstream = -side * halfX;
   // The surface and the speed down the run, s metres from the upstream end:
-  // level until the brink's arc starts, then falling along it into the lip,
-  // the water speeding up by continuity as it thins over the level bed.
+  // level until the drawdown starts, then down its parabola into the lip, the
+  // water speeding up by continuity as it thins over the level bed.
   const brink = spill ? brinkOf(runSpeed, halfY * 2, length) : null;
   const arcFrom = brink ? length - brink.reach : length;
   const topAt = (s: number): number =>
-    brink && s > arcFrom ? halfY - (FALL_GRAVITY * (s - arcFrom) ** 2) / (2 * brink.speed * brink.speed) : halfY;
+    brink && s > arcFrom ? halfY - (halfY * 2 - brink.depth) * ((s - arcFrom) / brink.reach) ** 2 : halfY;
   const speedAt = (s: number): number => (runSpeed * halfY * 2) / (topAt(s) + halfY);
 
   const stations: Station[] = [];
@@ -412,8 +430,8 @@ function currentGeometry(
       age: -1,
     });
   }
-  // The river's tangent follows its surface (the brink's arc), and meets the
-  // fall's at the lip, where both are the one arc.
+  // The river's tangent follows its surface (the drawdown), and meets the
+  // fall's at the lip, which leaves along it.
   for (let i = 0; i < stations.length; i++) {
     const a = stations[Math.max(0, i - 1)]!;
     const b = stations[Math.min(stations.length - 1, i + 1)]!;
