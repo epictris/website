@@ -173,7 +173,7 @@ export function waterSurfaceMap(): THREE.DataTexture {
 
 // Where a fall lands, the water it lands in draws the impact field: the foam
 // lying flat on it, whole at the plunge and breaking into rings that drift
-// out and thin, and a heave where the foam is thick. A capsule along z,
+// out and thin, and a heave where the water is churned. A capsule along z,
 // the width of the sheet, in boil units; never stretched along the depth, so
 // it meets the sheet's own edges. Module-wide like the wake's rings: every
 // surface material reads the one table and draws the impacts that lie in its
@@ -230,10 +230,23 @@ const PATTERN_ACROSS = 5.0;
 // wake (stillWater.ts).
 const FOAM_WHITEN = 0.45;
 // How far the field reaches (boil units); what it lays on the water fades to
-// nothing from IMPACT_FADE on, so it has no edge of its own. HEAVE_HEIGHT is
-// the boil's heave where the foam is thick. No rings of ripple run out from
-// the landing: tried as the ball's wake draws them (slope bumps, then made
-// irregular) and removed - they did not fit the look (Tris, 2026-10-06).
+// nothing from IMPACT_FADE on, so it has no edge of its own. No rings of
+// ripple run out from the landing: tried as the ball's wake draws them
+// (slope bumps, then made irregular) and removed - they did not fit the look
+// (Tris, 2026-10-06).
+// THE SURFACE HEAVES WITH THE CHURN'S TURBULENCE, not with its foam (Tris,
+// 2026-10-07: the churn should disturb the water's blue shades; until then
+// the heave went as the foam amount, so it lay under the foam where it could
+// not be seen). The churned water wells up in boils, domes about an eddy
+// (FOAM_EDDY) across that rise as high as the upwelling's speed would throw
+// water, w^2 / 2g: HEAVE_HEIGHT boil units at the plunge, an upwelling at
+// about 0.15 of the sheet's impact speed (g is 9.81 in boil units and ticks
+// for any fall, the clock being Froude's). The turbulence slows with the
+// outflow (see impactTravel), so the heave falls as its speed squared,
+// 1 / (1 + dist / l), and reaches on past the foam, which dies by bursting.
+// The boils are the water's own (laid out as the eddies are, see
+// impactStream), so they ride out with it, and each lives an eddy's
+// turnover before the next wells up in its place.
 const IMPACT_REACH = 4.1;
 const IMPACT_FADE = 2.6;
 const HEAVE_HEIGHT = 0.08;
@@ -358,11 +371,37 @@ export const IMPACT_GLSL = `
     float bands = 0.5 - 0.5 * cos(6.2831853 * s / ${fmt(FOAM_RING_SPACING)}) * exp(-kRing * kRing * kt);
     return 0.55 * n + 0.45 * bands;
   }
-  // The surface heaves a few centimetres where the foam is thick.
-  float impactHeight(vec2 d, float hw, float t, float life) {
+  // The boils (see HEAVE_HEIGHT): about -0.5 to 0.5. Each generation wells
+  // up round, an eddy across, and rides the outflow at its speed where it is
+  // (FOAM_OUTFLOW / sqrt(1 + dist / l)) for an eddy's turnover, fading in and
+  // out as the next comes up between them; two generations half a turnover
+  // apart, weighed so the swell is as strong mid-fade as at either end. (Laid
+  // out in the water's label, as the foam is, they were drawn out along the
+  // rings as the slowing outflow packs it, into rings of ripple.)
+  float impactBoilGen(vec2 d, float hw, float t, float offset) {
+    float dist = impactDistance(d, hw);
+    float turnover = ${fmt(FOAM_EDDY / (FOAM_TURBULENCE * FOAM_OUTFLOW))};
+    float phase = t / turnover + offset;
+    float age = fract(phase) * turnover;
+    float speed = ${fmt(FOAM_OUTFLOW)} / sqrt(1.0 + dist / ${fmt(BOIL_REACH)});
+    // On the water as it lies, drifted straight out from the nearest point
+    // of the line the sheet strikes (unrolled round the sheet's ends as the
+    // foam's rings are, the boils came out as a pinwheel there).
+    vec2 out_ = (d - vec2(0.0, clamp(d.y, -hw, hw))) / max(dist, 1e-3);
+    vec2 p = (d - out_ * speed * age) / ${fmt(FOAM_EDDY)};
+    return paintNoise(p + 17.3 * floor(phase) + 41.9 * offset) - 0.5;
+  }
+  float impactBoils(vec2 d, float hw, float t) {
+    float phase = t / ${fmt(FOAM_EDDY / (FOAM_TURBULENCE * FOAM_OUTFLOW))};
+    float wa = 1.0 - abs(2.0 * fract(phase) - 1.0);
+    float wb = 1.0 - wa;
+    return (impactBoilGen(d, hw, t, 0.0) * wa + impactBoilGen(d, hw, t, 0.5) * wb) / sqrt(wa * wa + wb * wb);
+  }
+  // The surface's heave (boil units).
+  float impactHeight(vec2 d, float hw, float t) {
     float r = impactDistance(d, hw);
     if (r > ${fmt(IMPACT_REACH)}) return 0.0;
-    return ${fmt(HEAVE_HEIGHT)} * impactFoamAmount(r, life) * impactFade(r) * paintNoise(vec2(d.y * 2.4 + t * 0.72, d.x * 2.8 - t * 0.9));
+    return ${fmt(HEAVE_HEIGHT)} / (1.0 + r / ${fmt(BOIL_REACH)}) * impactFade(r) * impactBoils(d, hw, t);
   }
   // Boil units from impact i, x turned so the sheet travels toward -x; or
   // a long way off when the slot is idle or out of this plane.
@@ -383,13 +422,41 @@ export const IMPACT_GLSL = `
       float hw = uImpactHow[i].x;
       if (impactDistance(d, hw) > ${fmt(IMPACT_REACH)}) continue;
       float t = uTime * uImpactHow[i].w;
-      float life = ${fmt(FOAM_LIFE)} * uImpactHow[i].w;
-      float h = impactHeight(d, hw, t, life);
-      vec2 g = vec2(impactHeight(d + vec2(0.015, 0.0), hw, t, life) - h, impactHeight(d + vec2(0.0, 0.015), hw, t, life) - h) / 0.015;
+      float h = impactHeight(d, hw, t);
+      vec2 g = vec2(impactHeight(d + vec2(0.015, 0.0), hw, t) - h, impactHeight(d + vec2(0.0, 0.015), hw, t) - h) / 0.015;
       // Back into the world's x.
       slope += vec2(-uImpactHow[i].y * g.x, g.y);
     }
     return slope;
+  }
+  // How fast the water's surface moves (world x and z, m/s) under the
+  // landings' churn: the outflow straight out from the nearest point of the
+  // line the sheet strikes, slowing as it spreads (see impactTravel), and the
+  // eddies' stir on it (see FOAM_EDDY), FOAM_TURBULENCE of its speed; gone by
+  // the field's fade. The pool carries its own ripples on it (stillWater.ts,
+  // FLOW_PERIOD) for up to period seconds, so no faster than would carry
+  // them half way from the line in that time: water nearer welled up from
+  // under it since, and brought no ripples of the water on its far side
+  // (carried from the line itself, they were drawn out without end along
+  // the flow into a fan of streaks round the sheet's ends; half way, never
+  // more than twice).
+  vec2 impactFlow(vec3 world, float period) {
+    vec2 flow = vec2(0.0);
+    for (int i = 0; i < ${IMPACT_SLOTS}; i++) {
+      vec2 d = impactOffset(i, world);
+      float hw = uImpactHow[i].x;
+      float dist = impactDistance(d, hw);
+      if (dist > ${fmt(IMPACT_REACH)}) continue;
+      float t = uTime * uImpactHow[i].w;
+      float speed = min(${fmt(FOAM_OUTFLOW)} / sqrt(1.0 + dist / ${fmt(BOIL_REACH)}), 0.5 * dist / (period * uImpactHow[i].w));
+      vec2 out_ = (d - vec2(0.0, clamp(d.y, -hw, hw))) / max(dist, 1e-3);
+      float psi = impactStream(d, hw, t);
+      vec2 curl = vec2(impactStream(d + vec2(0.0, 0.02), hw, t) - psi, psi - impactStream(d + vec2(0.02, 0.0), hw, t)) / 0.02;
+      vec2 v = (out_ + curl * ${fmt(2 * FOAM_TURBULENCE * FOAM_EDDY)}) * speed * impactFade(dist);
+      // Boil units per tick to the world's metres per second, x turned back.
+      flow += vec2(-uImpactHow[i].y * v.x, v.y) * uImpactHow[i].z * uImpactHow[i].w;
+    }
+    return flow;
   }
   // Under 0 where there is foam.
   float impactCover(vec2 d, float hw, float t, float life) {

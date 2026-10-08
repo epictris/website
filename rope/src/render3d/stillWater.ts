@@ -83,6 +83,20 @@ const DISTORTION = 0.51;
 // by them, by 4 mm at this scale, which no pixel shows and the slab's 1.2 m
 // rows could not carry anyway.
 const WAVE_HEIGHT = 0.022;
+// THE RIPPLES RIDE THE CHURN where a fall lands (Tris, 2026-10-07): the
+// pool's own ripples are carried on the landing's outflow and stirred by its
+// eddies (waterLook.ts impactFlow), so the churn reshapes the water's look
+// rather than laying a second pattern over it. A pattern carried on a flow
+// for good is drawn out without end, so it is drawn twice, each copy carried
+// back along the flow for the time it has been riding (up to FLOW_PERIOD
+// seconds; at 1.5 s, the boil's eddy turnover on BALL's lower fall, the
+// copies were carried 0.67 m, back through the line the sheet strikes and
+// round its ends into a starburst), half a
+// period apart, each fading out as it is about to start over (a flow map).
+// Copies carried FLOW_APART metres apart (about the ripples' size) are two
+// different patterns, so their blend is lifted back to full strength.
+const FLOW_PERIOD = 0.75;
+const FLOW_APART = 0.25;
 // How the mirror's strength follows what it mirrors: full for what stands
 // within NEAR metres of the water, the study's faint reflection of its open
 // background past FAR (study: rocks reflected, the far cave wall left out).
@@ -520,6 +534,25 @@ export function stillWaterMaterial(
         }
         return best;
       }
+      // THE RIPPLES at a point (xz, metres): three layers of the wave spectrum
+      // on independent, opposing drifts, so their sum changes shape rather
+      // than sliding, and three long waves, as slopes; and the middle layer's
+      // tone, where its crests catch the light.
+      vec2 swRipples(vec2 xz, float t, float fine, out float crest) {
+        vec2 p = xz / vec2(${fmt(PATCH_SIZE)}, ${fmt(PATCH_SIZE * DEPTH_STRETCH)});
+        vec4 a = texture2D(uSurfaceMap, p * vec2(0.048, 0.064) + vec2(0.011, -0.014) * t);
+        vec4 b = texture2D(uSurfaceMap, p * vec2(0.067, 0.086) + vec2(-0.009, 0.010) * t + vec2(0.31, 0.57));
+        vec4 c = texture2D(uSurfaceMap, p * vec2(0.11, 0.14) + vec2(0.016, 0.005) * t + 0.73);
+        crest = b.b;
+        vec2 s = (a.rg * 2.0 - 1.0) * vec2(0.11, 0.17)
+               + (b.rg * 2.0 - 1.0) * vec2(0.085, 0.14)
+               + (c.rg * 2.0 - 1.0) * vec2(0.035, 0.045) * fine;
+        s += ${fmt(WAVE_HEIGHT)} * (
+            vec2(0.23, 1.12) * cos(dot(p, vec2(0.23, 1.12)) - t * 0.94)
+          + vec2(-0.86, 1.58) * 0.55 * cos(dot(p, vec2(-0.86, 1.58)) + t * 1.17)
+          + vec2(1.65, 0.93) * 0.28 * cos(dot(p, vec2(1.65, 0.93)) - t * 1.36));
+        return s * ${fmt(RIPPLE_STRENGTH)};
+      }
       // The reflection is stored as the canvas is, sRGB encoded.
       vec3 swDecode(vec3 c) {
         return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(0.04045, c));
@@ -549,22 +582,26 @@ export function stillWaterMaterial(
       // pattern's units.
       vec2 swP = vWorld.xz / vec2(${fmt(PATCH_SIZE)}, ${fmt(PATCH_SIZE * DEPTH_STRETCH)});
       float swT = uTime * ${fmt(SPEED)};
-      // Three layers of the wave spectrum on independent, opposing drifts, so
-      // their sum changes shape rather than sliding.
-      vec4 swA = texture2D(uSurfaceMap, swP * vec2(0.048, 0.064) + vec2(0.011, -0.014) * swT);
-      vec4 swB = texture2D(uSurfaceMap, swP * vec2(0.067, 0.086) + vec2(-0.009, 0.010) * swT + vec2(0.31, 0.57));
-      vec4 swC = texture2D(uSurfaceMap, swP * vec2(0.11, 0.14) + vec2(0.016, 0.005) * swT + 0.73);
       // The finest layer fades out where a pixel spans too much of it.
       float swFine = 1.0 - smoothstep(0.14, 0.8, length(fwidth(swP)));
-      vec2 swSlope = (swA.rg * 2.0 - 1.0) * vec2(0.11, 0.17)
-                   + (swB.rg * 2.0 - 1.0) * vec2(0.085, 0.14)
-                   + (swC.rg * 2.0 - 1.0) * vec2(0.035, 0.045) * swFine;
-      // And three long waves, as slopes only.
-      swSlope += ${fmt(WAVE_HEIGHT)} * (
-          vec2(0.23, 1.12) * cos(dot(swP, vec2(0.23, 1.12)) - swT * 0.94)
-        + vec2(-0.86, 1.58) * 0.55 * cos(dot(swP, vec2(-0.86, 1.58)) + swT * 1.17)
-        + vec2(1.65, 0.93) * 0.28 * cos(dot(swP, vec2(1.65, 0.93)) - swT * 1.36));
-      swSlope *= ${fmt(RIPPLE_STRENGTH)};
+      // The ripples ride the landings' churn (see FLOW_PERIOD): two copies,
+      // each carried back along the flow for the time it has been riding,
+      // half a period apart, each fading out as it is about to start over.
+      vec2 swFlow = impactFlow(vWorld, ${fmt(FLOW_PERIOD)}) * vUp;
+      float swPhase = uTime / ${fmt(FLOW_PERIOD)};
+      float swFa = fract(swPhase);
+      float swFb = fract(swPhase + 0.5);
+      float swWa = 1.0 - abs(2.0 * swFa - 1.0);
+      float swWb = 1.0 - swWa;
+      float swCrestA;
+      float swCrestB;
+      vec2 swSa = swRipples(vWorld.xz - swFlow * (swFa * ${fmt(FLOW_PERIOD)}), swT, swFine, swCrestA);
+      vec2 swSb = swRipples(vWorld.xz - swFlow * (swFb * ${fmt(FLOW_PERIOD)}), swT, swFine, swCrestB);
+      // Two copies carried apart are two different patterns, whose blend is
+      // weaker mid-fade; on still water they are the same one.
+      float swApart = clamp(length(swFlow) * ${fmt(FLOW_PERIOD / FLOW_APART)}, 0.0, 1.0);
+      vec2 swSlope = (swSa * swWa + swSb * swWb) * mix(1.0, inversesqrt(swWa * swWa + swWb * swWb), swApart);
+      float swCrestTone = swCrestA * swWa + swCrestB * swWb;
       // Where a fall lands in the pool, the boil and the rings it sends out
       // (waterLook.ts); the top face only, never the front sheet beside it.
       swSlope += impactSlope(vWorld) * vUp;
@@ -694,7 +731,7 @@ export function stillWaterMaterial(
       // ones facing away, a crest on the steepest.
       float swFacing = swSlope.y + swSlope.x * 0.24;
       float swBroad = smoothstep(0.012, 0.052, swFacing);
-      float swCrest = smoothstep(0.078, 0.125, swFacing) * smoothstep(0.28, 0.65, swB.b);
+      float swCrest = smoothstep(0.078, 0.125, swFacing) * smoothstep(0.28, 0.65, swCrestTone);
       float swShade = smoothstep(0.015, 0.14, -swFacing);
       swCol *= 1.0 - swShade * 0.22;
       swCol = mix(swCol, uLight, swBroad * ${fmt(CONTRAST)} * (0.12 + swFore * 0.36));
