@@ -250,11 +250,30 @@ const FOOTPRINT_OVERLAP = 0.01;
 //   widens toward the ball's width and the arms break.
 // - THE STRIP down the middle of the path, the churned water behind the
 //   ball: WAKE_STRIP[0] of its waterline radius wide (each side) at share 0,
-//   [1] at share 1.
-// - THE ARMS, the Kelvin wake's diverging crests breaking: lines that leave
-//   the ball's sides and are carried outward at tan(19.47 deg) of its speed,
-//   so the two of them trail back from it in the wake's V; WAKE_ARM_WIDTH of
-//   the waterline radius wide (each side), as strong as `share`.
+//   [1] at share 1, when it is laid.
+// - THE ARMS, the Kelvin wake's diverging crests breaking at the ball's
+//   shoulders: the crest throws its foam out sideways at tan(19.47 deg) of
+//   the ball's speed, and the foam, which rides the water and not the wave,
+//   is carried only while the crest breaks under it, slowing over
+//   WAKE_ARM_DRAG; so the arms flare out of the ball's V and settle parallel
+//   behind it, v0 * WAKE_ARM_DRAG further out than the waterline.
+//   WAKE_ARM_WIDTH of the waterline radius wide (each side), as strong as
+//   `share`.
+// - THE FOAM RIDES THE WAKE'S WATER, which is turbulent: each point is drawn
+//   with the foam laid where the water now under it was (traced back once):
+//   - the ball sheds eddies alternately off its sides (a Karman street, at a
+//     Strouhal number of WAKE_STROUHAL: one pair per D / WAKE_STROUHAL of
+//     path, whatever the speed, D the ball's diameter), the two rows
+//     WAKE_STREET of that apart (von Karman's stable spacing); the strip's
+//     water is rolled out toward the eddy on its side, half that spacing,
+//     over about one shedding period, so the trail snakes. Its phase is
+//     fixed where it was laid (world x), so the snake never slides;
+//   - smaller eddies, WAKE_EDDY of D across, stir the strip and the arms at
+//     WAKE_TURBULENCE of the ball's speed (a wake's turbulence intensity),
+//     one fixed field over the water, so the edges come out ragged;
+//   - eddies smaller still mix it outward: the foam spreads as a diffusion,
+//     width sqrt(w0^2 + 2 K age), K = WAKE_DIFFUSIVITY * U * D (a wake's
+//     eddy viscosity), thinning as it spreads so the foam is conserved.
 // - IT DECAYS AS FOAM DOES, into lace: bubbles burst, so a round hole opens
 //   in every cell of a jittered grid (WAKE_LACE_CELL across, drawn out
 //   WAKE_LACE_STRETCH along the path as the water the ball dragged stretches
@@ -288,6 +307,12 @@ const WAKE_FROUDE = [1.0, 2.0] as const;
 const WAKE_STRIP = [0.25, 0.7] as const;
 const WAKE_ARM_WIDTH = 0.3;
 const WAKE_KELVIN = Math.tan((19.47 * Math.PI) / 180);
+const WAKE_ARM_DRAG = 0.25;
+const WAKE_STROUHAL = 0.2;
+const WAKE_STREET = 0.281;
+const WAKE_EDDY = 0.5;
+const WAKE_TURBULENCE = 0.1;
+const WAKE_DIFFUSIVITY = 0.03;
 const WAKE_LACE_CELL = 0.06;
 const WAKE_LACE_STRETCH = 2.5;
 const WAKE_LACE_HOLE = 0.95;
@@ -298,11 +323,15 @@ const WAKE_PLANE = 0.05;
 // at its end (x0, x1 along the world's x - the ball moves in the gameplay
 // plane, and still water is never authored turned - then y and z, three's
 // frame); when (t0, t1), how strong it is (0 = idle; its life is WAKE_LIFE
-// times this) and how fast its arms move out (m/s); and the ball's waterline
-// radius (m) and the white water's share (see WAKE_FROUDE).
+// times this) and the ball's speed (m/s); and the ball's waterline radius
+// (m), the white water's share (see WAKE_FROUDE), the ball's radius (m) and
+// its trail's eddy phase (radians, see WAKE_STROUHAL).
 const wakeSpotAt = { value: Array.from({ length: WAKE_SLOTS }, () => new THREE.Vector4()) };
 const wakeSpotTime = { value: Array.from({ length: WAKE_SLOTS }, () => new THREE.Vector4()) };
-const wakeSpotShape = { value: Array.from({ length: WAKE_SLOTS }, () => new THREE.Vector2()) };
+const wakeSpotShape = { value: Array.from({ length: WAKE_SLOTS }, () => new THREE.Vector4()) };
+// The small eddies' size (m, see WAKE_EDDY), from the last ball to leave a
+// wake: one field over all the water.
+const wakeEddy = { value: 1 };
 
 // THE SPLASH'S FOAM (see `WaterSplashes`): the water the ball went in through
 // churned white, and the ring where the crown's sheet comes back down (see
@@ -390,6 +419,7 @@ export function stillWaterMaterial(
     shader.uniforms.uWakeAt = wakeSpotAt;
     shader.uniforms.uWakeTime = wakeSpotTime;
     shader.uniforms.uWakeShape = wakeSpotShape;
+    shader.uniforms.uWakeEddy = wakeEddy;
     shader.uniforms.uSplashAt = splashFoamAt;
     shader.uniforms.uSplashHow = splashFoamHow;
 
@@ -444,7 +474,8 @@ export function stillWaterMaterial(
       uniform vec3 uLight;
       uniform vec4 uWakeAt[${WAKE_SLOTS}];
       uniform vec4 uWakeTime[${WAKE_SLOTS}];
-      uniform vec2 uWakeShape[${WAKE_SLOTS}];
+      uniform vec4 uWakeShape[${WAKE_SLOTS}];
+      uniform float uWakeEddy;
       uniform vec4 uSplashAt[${SPLASH_SLOTS}];
       uniform vec4 uSplashHow[${SPLASH_SLOTS}];
       varying float vLit;
@@ -523,36 +554,71 @@ export function stillWaterMaterial(
       // amount - the churned strip down the middle of the path and the two
       // arms breaking off the ball's sides - fading over its life; the most
       // of them is the trail's amount here.
+      // The small eddies' stir (see WAKE_EDDY): the curl of a stream
+      // function, so the water it moves neither piles up nor opens; the
+      // noise's slopes are 0.5 rms, so this is 1 rms.
+      vec2 swEddyP = vWorld.xz / uWakeEddy;
+      float swPsi = paintNoise(swEddyP);
+      vec2 swStir = vec2(paintNoise(swEddyP + vec2(0.0, 0.05)) - swPsi, swPsi - paintNoise(swEddyP + vec2(0.05, 0.0))) * 40.0;
       float swWake = 0.0;
+      // How far the eddies have carried the foam here since it was laid (the
+      // most of the trail's), so its lace rides the water too.
+      vec2 swCarried = vec2(0.0);
       for (int i = 0; i < ${WAKE_SLOTS}; i++) {
         vec4 at = uWakeAt[i];
         vec4 tm = uWakeTime[i];
         float span = ${fmt(WAKE_LIFE)} * tm.z;
         if (tm.z <= 0.0 || uTime - tm.y > span || abs(vWorld.y - at.z) > ${fmt(WAKE_PLANE)}) continue;
-        // The nearest point of the ball's path, and when the ball was there.
+        // When the ball was nearest here (from where the point is now: the
+        // eddies move the water far less than the ball moves meanwhile).
         float len = at.y - at.x;
         float along = abs(len) > 1e-4 ? clamp((vWorld.x - at.x) / len, 0.0, 1.0) : 0.0;
         float age = uTime - mix(tm.x, tm.y, along);
         if (age < 0.0 || age > span) continue;
-        float dx = vWorld.x - mix(at.x, at.y, along);
-        float dz = abs(vWorld.z - at.w);
-        float w = uWakeShape[i].x;
-        float share = uWakeShape[i].y;
+        vec4 sh = uWakeShape[i];
+        float w = sh.x;
+        float share = sh.y;
+        float u = tm.w;
+        float d = 2.0 * sh.z;
+        // Where the water here was when the foam was laid on it: back along
+        // the small eddies' stir, at the wake's turbulent speed, since then.
+        vec2 carried = swStir * (${fmt(WAKE_TURBULENCE)} * u * age);
+        vec2 laid = vWorld.xz - carried;
+        along = abs(len) > 1e-4 ? clamp((laid.x - at.x) / len, 0.0, 1.0) : 0.0;
+        float dx = laid.x - mix(at.x, at.y, along);
+        float dz = laid.y - at.w;
+        // The strip's water rolled toward the street's eddy on its side, over
+        // a shedding period (one street length of the ball's travel).
+        float street = d / ${fmt(WAKE_STROUHAL)};
+        float roll = ${fmt(WAKE_STREET / 2)} * street * sin(6.2831853 * laid.x / street + sh.w) * (1.0 - exp(-age * u / street));
+        // Both spread by the smallest eddies (see WAKE_DIFFUSIVITY), as a
+        // diffusion does: a Gaussian's width squared grows by 4 K t, and its
+        // peak falls as it widens.
+        float spread = ${fmt(4 * WAKE_DIFFUSIVITY)} * u * d * age;
         float life = 1.0 - smoothstep(0.0, 1.0, age / span);
         // The strip: a thin line behind a slow ball, most of its width
         // behind a fast one.
-        float strip = length(vec2(dx, dz)) / (w * mix(${fmt(WAKE_STRIP[0])}, ${fmt(WAKE_STRIP[1])}, share));
-        // The arms: where the diverging waves break, carried out from the
-        // ball's sides at the Kelvin speed (tm.w) since the ball was there.
-        float arm = length(vec2(dx, dz - w - tm.w * age)) / (w * ${fmt(WAKE_ARM_WIDTH)});
-        swWake = max(swWake, ${fmt(WAKE_PEAK)} * life * max(exp(-strip * strip), share * exp(-arm * arm)));
+        float strip0 = w * mix(${fmt(WAKE_STRIP[0])}, ${fmt(WAKE_STRIP[1])}, share);
+        float stripW = sqrt(strip0 * strip0 + spread);
+        float strip = length(vec2(dx, dz - roll)) / stripW;
+        // The arms: thrown out from the ball's sides at the Kelvin speed,
+        // slowing as their crest stops breaking (see WAKE_ARM_DRAG).
+        float arm0 = w * ${fmt(WAKE_ARM_WIDTH)};
+        float armW = sqrt(arm0 * arm0 + spread);
+        float reach = w + ${fmt(WAKE_KELVIN * WAKE_ARM_DRAG)} * u * (1.0 - exp(-age / ${fmt(WAKE_ARM_DRAG)}));
+        float arm = length(vec2(dx, abs(dz) - reach)) / armW;
+        float amount = ${fmt(WAKE_PEAK)} * life * max(strip0 / stripW * exp(-strip * strip), share * arm0 / armW * exp(-arm * arm));
+        if (amount > swWake) {
+          swWake = amount;
+          swCarried = carried;
+        }
       }
       // The wake's lace (see WAKE_LACE_CELL): a round hole opens in every
       // cell as the amount falls, growing till only strands are left between
       // them, then those go. Under 0 where there is foam; cut to the pixel,
       // taken here in uniform control flow.
       float swHole = ${fmt(WAKE_LACE_HOLE)} * (1.0 - clamp(swWake, 0.0, 1.0));
-      float swLaceCover = swHole - swLace(vWorld.xz / vec2(${fmt(WAKE_LACE_CELL * WAKE_LACE_STRETCH)}, ${fmt(WAKE_LACE_CELL)}));
+      float swLaceCover = swHole - swLace((vWorld.xz - swCarried) / vec2(${fmt(WAKE_LACE_CELL * WAKE_LACE_STRETCH)}, ${fmt(WAKE_LACE_CELL)}));
       float swLaceAA = max(0.5 * fwidth(swLaceCover), 1e-4);
       float swWakeFoam = (1.0 - smoothstep(-swLaceAA, swLaceAA, swLaceCover)) * step(0.05, swWake);
 
@@ -703,6 +769,7 @@ const WAKE_DEPTH = 0.35;
 const WAKE_MIN_SPEED = 0.15;
 const WAKE_SPACING = 0.14;
 const WAKE_JUMP = 0.5;
+const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
 
 // THE CROWN'S SHEET, which the foam ring rides out on (see SPLASH_SLOTS): the
 // water the ball shoves aside leaves its waterline (CROWN_FROM of its radius
@@ -726,6 +793,8 @@ export class WaterSplashes {
   private wakeLive = -1;
   private wakeSurface: StillSurface | null = null;
   private nextPuff = 0;
+  // The live trail's eddy phase (see WAKE_STROUHAL).
+  private wakePhase = 0;
 
   // Forget every splash and the ball's last position: a new level, a restart.
   reset(): void {
@@ -793,7 +862,7 @@ export class WaterSplashes {
             // centre `depth - radius` under (+) or over it.
             const under = depth - ball.radius;
             const waterline = Math.sqrt(Math.max(0, ball.radius * ball.radius - under * under));
-            this.drawWake(s, at.x, threeY(at.y), z, clock, strength, WAKE_KELVIN * speed, waterline, share);
+            this.drawWake(s, at.x, threeY(at.y), z, clock, strength, speed, waterline, share, ball.radius);
           }
         }
       }
@@ -832,9 +901,10 @@ export class WaterSplashes {
     z: number,
     clock: number,
     strength: number,
-    armSpeed: number,
+    speed: number,
     waterline: number,
     share: number,
+    radius: number,
   ): void {
     let i = this.wakeLive;
     if (i >= 0) {
@@ -846,11 +916,17 @@ export class WaterSplashes {
         i = this.startWake(at.y, y, z, tm.y);
       }
     }
-    if (i < 0) i = this.startWake(x, y, z, clock);
+    if (i < 0) {
+      // A new trail sheds its eddies in a phase of its own, so two passes
+      // over the same water do not snake alike.
+      this.wakePhase = (this.wakePhase + GOLDEN_ANGLE) % (2 * Math.PI);
+      i = this.startWake(x, y, z, clock);
+    }
     this.wakeSurface = surface;
+    wakeEddy.value = WAKE_EDDY * 2 * radius;
     wakeSpotAt.value[i]!.y = x;
-    wakeSpotTime.value[i]!.set(wakeSpotTime.value[i]!.x, clock, strength, armSpeed);
-    wakeSpotShape.value[i]!.set(waterline, share);
+    wakeSpotTime.value[i]!.set(wakeSpotTime.value[i]!.x, clock, strength, speed);
+    wakeSpotShape.value[i]!.set(waterline, share, radius, this.wakePhase);
   }
 
   private startWake(x: number, y: number, z: number, clock: number): number {
