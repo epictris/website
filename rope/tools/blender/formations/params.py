@@ -179,6 +179,8 @@ def load_all():
 @persistent
 def on_load(_):
     load_all()
+    from . import core
+    core.stow_helpers()
 
 
 CLASSES = (FormationParams,)

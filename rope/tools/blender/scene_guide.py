@@ -36,8 +36,10 @@ What is written, all in one collection called `Guide`:
   `guide.body-<index>` for an unnamed body, with `.1`, `.2`, ... after it when
   the body has several pieces. A solid is filled translucent grey with its
   wire; an area (water, a force, a killzone, the finish) is the outline alone.
-  The formations add-on builds a rock from one ("New Formation", from the
-  selected outline).
+  These COLLISION OUTLINES are a visual reference only: nothing in the scene
+  refers to one, so the next run can add, move or drop any of them. The
+  formations add-on's "Create Guide from Outline" copies one into a guide of
+  the scene's own, which keeps nothing of where it came from.
 - an empty on every body's origin, `guide.<name>.origin`, plain axes.
 - `guide.plane`: the gameplay plane's extent as a wire rectangle.
 - `guide.spawn`: a sphere of the avatar's radius at the spawn.
@@ -57,6 +59,10 @@ Lighting links them in: the game's light at rest, the `guide.lights`
 collection (its sun and always-on light objects) and the `guide.world` (the
 sky it reflects, its hemisphere fill and its background), from the job's
 `lighting` (scripts/scene-guide.ts).
+
+Every collision outline, origin, the plane and the spawn are unselectable
+(`hide_select`), so the reference cannot be picked up and edited, made local
+or overridden by accident; the cameras stay selectable.
 
 None of it ever exports: the exporter skips linked objects and any collection
 named `guide*`. The guide file is OVERWRITTEN on every run - it is the level's,
@@ -94,9 +100,11 @@ def to_blender(x, y, z=0.0):
     return Vector((x, -z, y))
 
 
-def link(coll, ob):
+def link(coll, ob, selectable=False):
     coll.objects.link(ob)
     ob.hide_render = True
+    # A reference to look at, never to pick up.
+    ob.hide_select = not selectable
 
 
 def guide_material():
@@ -218,7 +226,7 @@ def build_camera(track, coll):
     ob["game_aspect"] = track["aspect"]
     ob["game_source"] = track["source"]
     ob["game_look"] = json.dumps(track.get("look", {}))
-    link(coll, ob)
+    link(coll, ob, selectable=True)
 
     ob.animation_data_create()
     action = bpy.data.actions.new("guide.camera")
@@ -259,7 +267,7 @@ def build_dof_camera(plain, frames, look, coll):
     ob["game_dof"] = True
     # Riding on the plain camera, so the two are one pose by construction.
     ob.parent = plain
-    link(coll, ob)
+    link(coll, ob, selectable=True)
 
     cam.animation_data_create()
     action = bpy.data.actions.new("guide.camera.dof")

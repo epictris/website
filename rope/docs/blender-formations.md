@@ -64,24 +64,26 @@ The game mixes its fog in after tone mapping, over the colours as they are shown
 Off hands the compositor and the Depth pass back as they were; a scene with a compositor of its own refuses it.
 A guide written before 2026-10-05 has none of the three: rerun `just scene-guide <level>` and reopen the scene.
 
-## Editing outlines through the camera
+## Editing guides through the camera
 
-A formation's outline is a polygon in its own X/Z plane, which may stand tens of metres behind the gameplay plane, tilted, mirrored and scaled by its placement.
-What matters is where its silhouette lands on screen, so **Edit Outlines** edits the outlines as they are seen.
+A formation's **guide** (its outline, recipe key `outline`) is a polygon in its own X/Z plane, which may stand tens of metres behind the gameplay plane, tilted, mirrored and scaled by its placement.
+It is the rock's only source; the level's collision outlines never are (see [Formations](#formations)), and nothing here reads or writes one.
+What matters is where its silhouette lands on screen, so **Edit Guides** (Edit Outlines until 2026-10-07) edits the guides as they are seen.
 Each is projected from the game camera's eye, at the current frame, onto the gameplay plane (`y = 0`) as a flat 2D handle curve, and the view looks through the game camera, so a handle sits exactly on the rock it shapes.
-An edited point goes back along its camera ray to the formation's own outline plane, which keeps depth, tilt, mirroring and scale.
+A rock built on the plane from a copy of a collision outline therefore shows its handle right over that outline; the handle is the guide's, and moving it leaves the collision where it was.
+An edited point goes back along its camera ray to the formation's own guide plane, which keeps depth, tilt, mirroring and scale.
 It edits the selected formations, or every formation when none is selected; nothing else takes clicks while it runs.
 
-- **G** moves points, **Tab** toggles between points and whole outlines.
-- **Copy** / **Paste** duplicate outlines, placed like the formation they came from; **New** starts a square at the 3D cursor.
+- **G** moves points, **Tab** toggles between points and whole guides.
+- **Copy** / **Paste** duplicate guides, placed like the formation they came from; **New** starts a square at the 3D cursor.
 - **Delete** retires a formation to the hidden `Formation backups` collection on Apply (one never built is simply removed); **Discard** restores everything since the last Apply.
 - **Add Point** puts a midpoint between selected neighbours, or after a single selected point; **Remove Points** keeps at least three.
-- **Apply** writes the edits into the outlines, **Done** applies and leaves, **Discard** leaves without.
+- **Apply** writes the edits into the guides, **Done** applies and leaves, **Discard** leaves without.
 
-Every change is validated (a simple polygon, finite, not edge-on to the camera, the formation not moved meanwhile, its mesh not hand-edited) before any outline is written.
+Every change is validated (a simple polygon, finite, not edge-on to the camera, the formation not moved meanwhile, its mesh not hand-edited) before any guide is written.
 The projection is from ONE frame, shown in the panel: scrubbing while editing moves the camera and not the handles.
 
-**Rebuild Changed** rebuilds every formation whose outline or parameters differ from the ones its mesh was built from, one rock at a time in separate processes; the meshes are swapped only once every rock has built and validated, and Esc discards the lot.
+**Rebuild Changed** rebuilds every formation whose guide or parameters differ from the ones its mesh was built from, one rock at a time in separate processes; the meshes are swapped only once every rock has built and validated, and Esc discards the lot.
 A rebuild keeps the formation's materials, placement, name and id, and keeps the replaced mesh in `Formation backups`.
 
 **Depth**: Forward and Back move the selected formations toward or away from the camera by the step.
@@ -90,8 +92,8 @@ Growth rides along (it hangs from the placement), and is then stale: it is sized
 
 ## Formations
 
-A formation is a mesh carrying `formation_recipe` (the outline and the generator's parameters), under a **placement** empty that positions it.
-**New Formation** builds one from a preset outline, or from a selected closed poly curve.
+A formation is a mesh carrying `formation_recipe` (the guide's outline and the generator's parameters), under a **placement** empty that positions it.
+**New Formation** builds one from a preset outline, or from a selected guide (a closed poly curve).
 
 The parameters are also fields on the rock (`Object.formation_params`, `formations/params.py`), shown in the panel whenever the rock, its placement or its outline is the active object.
 The recipe records what built the mesh; the fields are what the next build uses.
@@ -100,9 +102,16 @@ They are loaded from the recipe when a rock is built, when a file opens and when
 Rebuild Changed takes parameter edits along with outline edits.
 A rock appended from another file has no fields loaded yet: **Edit Parameters** loads them, and until then it builds from its recipe, as it does in the scene exporter, which never loads them.
 The grotto's rocks were built by Karin's pipeline, which recorded `generator` as the boulder generator's directory (`C:\...\boulders`); `params.generator_of` reads that as `boulders`, so they regenerate too (before 2026-10-04 they could not be rebuilt at all).
-A selected curve ticks "From the selected outline" on its own.
-A 3D curve gives its outline in its local X/Z plane, as a formation's own outline does; a flat (2D) curve gives it in its local X/Y, and the rock is turned a quarter about X to stand on it.
-So a **guide piece** is a ready outline: select `guide.boulder-3` (linked, it need not be made local) and New Formation builds a rock on exactly the collision the ball rolls on, placed on the body's origin.
+A selected curve ticks "From the selected guide" on its own.
+A 3D curve gives its outline in its local X/Z plane, as a formation's own guide does; a flat (2D) curve is first turned into that in place (its X/Y becomes X/Z and the object a quarter about X, so no point moves).
+A **free guide** (one no rock owns) becomes the new rock's own guide: it moves into `Formation recipes` under the rock, renamed `<rock> / guide`, and the placement goes where it stands, so an edit made to it while the rock built shows as pending.
+Another rock's guide is only read, and that rock keeps it.
+
+**Collision outlines are a reference, never a source** (2026-10-07, Tris: "The 2D collision outlines should serve exclusively as a visual reference").
+The `guide.*` curves the scene links from the level's guide file are unselectable, and New Formation refuses one.
+**Create Guide from Outline** (the eyedropper, under New formations) copies one: click a collision outline in the viewport (the one under the cursor is highlighted; the innermost wins where they nest; Shift+click keeps picking, Esc or right-click ends) and a free guide named `Guide` is made in `Formation guides`, the same points at the same place, selected for New Formation.
+The copy is geometry and pose only: the guide records nothing about the outline, and nothing is written to the outline, so the editor can add, move or remove collision without any guide or rock in the scene changing.
+Edit the guide like any curve (Edit Mode, or Edit Guides once it is a rock's), and the collision stays as the level has it.
 A piece with a hole (a belt's band) is two splines and is refused.
 The rock is built out of process, by `formations/worker.py` in ordinary Python (rope/.venv) and `formations/assemble.py` in a headless Blender, so the scene stays editable while it builds.
 The dialog's **Generator** picks how (the recipe's `generator`; a recipe without one is the boulder generator's), and the **starting outline** (terrace, pillar, wall, arch, distant) is only an outline and a thickness to start from when no curve is selected:
@@ -160,6 +169,7 @@ A generated mesh is sealed (`formation_mesh_hash`); one edited by hand is protec
 **Show Source Slabs** and **Assemble Edited Slabs** expose the generator's pieces and join edited ones into a manual mesh.
 **Make Unique** gives a duplicate its own mesh, id, outline and slabs.
 The outline curves and slabs live in `Formation recipes`, hidden in render, which the exporter honours.
+Only the outlines and slabs of the rocks in the scene stay there, so **Show guides** draws nothing stale: a backup's (a rebuild's or a Delete's) go with it to `Formation backups`, as do those of a rock deleted by hand, and every file load tidies one saved before this rule (`core.stow_helpers`, 2026-10-07).
 **Guides** (since 2026-10-05): **Show guides** shows that collection in the viewport, every guide mesh in a saturated colour of its own (a viewport-only material: Solid shading in Material colour shows it), and **Solid rocks as wireframe** draws the solid formations' rocks as wire so their guides show through.
 **Select Guide** (Select Outline on an outline's formation) selects it for editing; it is an ordinary mesh, edited in Edit Mode or by script, and it never renders or exports.
 

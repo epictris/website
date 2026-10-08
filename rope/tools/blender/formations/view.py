@@ -1,4 +1,4 @@
-"""Looking through the game, and editing outlines as the game sees them.
+"""Looking through the game, and editing formation guides as the game sees them.
 
 THE GAME CAMERA is `guide.camera`, which `just scene-guide <level>` bakes into
 the level's guide (linked into the scene): the level's lens, animated through
@@ -7,14 +7,16 @@ run (src/sim/cameraTrack.ts). `look_through` makes it the scene camera and
 gives the scene its frame rate, range and 16:9 frame, so the viewport's camera
 view and a render are the game's view at that frame of the route.
 
-EDITING BY PROJECTION. A formation's outline is a polygon in its own X/Z plane,
+EDITING BY PROJECTION. A formation's guide is a polygon in its own X/Z plane,
 which may stand tens of metres behind the gameplay plane, tilted and scaled by
 its placement. What matters is where its silhouette lands on screen, so the
-outlines are edited as they are SEEN: each is projected from the game camera's
+guides are edited as they are SEEN: each is projected from the game camera's
 eye (at the current frame) onto the gameplay plane, Blender y = 0, as a flat
 2D handle curve, and an edited handle point goes back along its camera ray to
-the formation's own outline plane. Depth, tilt, mirroring and scale all
+the formation's own guide plane. Depth, tilt, mirroring and scale all
 survive, and in the camera view a handle sits exactly on the rock it shapes.
+The level's collision outlines are never edited here, nor read: a handle over
+one belongs to the guide copied from it, and moving it leaves the collision be.
 
 Handles are construction only: they live in HANDLES (never rendered), and
 every change is validated before any outline is written.
@@ -116,7 +118,7 @@ def ride(context, direction):
 def project(point, center):
     """`point` as seen from `center`, on the gameplay plane (y = 0)."""
     if point.y - center.y <= 1e-6:
-        raise ValueError("Outline lies behind the game camera")
+        raise ValueError("Guide lies behind the game camera")
     return center + (point - center) * (-center.y / (point.y - center.y))
 
 
@@ -127,10 +129,10 @@ def unproject(point, center, rock):
     origin = inverse @ center
     direction = inverse.to_3x3() @ (point - center)
     if abs(direction.y) < 1e-9:
-        raise ValueError(rock.name + ": outline plane is edge-on to the game camera")
+        raise ValueError(rock.name + ": guide plane is edge-on to the game camera")
     t = -origin.y / direction.y
     if t <= 0:
-        raise ValueError(rock.name + ": outline plane is behind the game camera")
+        raise ValueError(rock.name + ": guide plane is behind the game camera")
     result = origin + direction * t
     return [result.x, result.z]
 
@@ -152,7 +154,7 @@ def handle_points(ob):
         raise ValueError(ob.name + ": keep one polygon per formation")
     spline = ob.data.splines[0]
     if spline.type != "POLY" or not spline.use_cyclic_u:
-        raise ValueError(ob.name + ": the outline must be a closed polygon")
+        raise ValueError(ob.name + ": the guide must be a closed polygon")
     points = [core.authored_world(ob) @ Vector(p.co[:3]) for p in spline.points]
     for p in points:
         # A handle is a 2D canvas; depth is never an authored value.
@@ -220,7 +222,7 @@ def changed_outlines(scene):
             raise ValueError("An edited formation was deleted; discard and edit again")
         placed = json.loads(handle["formation_handle_matrix"])
         if any(abs(a - b) > 1e-6 for r1, r2 in zip(core.authored_world(rock), placed) for a, b in zip(r1, r2)):
-            raise ValueError(rock.name + ": moved while its outline was being edited; discard and edit again")
+            raise ValueError(rock.name + ": moved while its guide was being edited; discard and edit again")
         outline = [unproject(p, center, rock) for p in points]
         core.validate_polygon(outline)
         core.assert_rebuildable(rock)
@@ -261,6 +263,8 @@ def retire(rock):
         if any(c.name in (core.RECIPES,) or c.name.startswith("Sources /") for c in ob.users_collection):
             continue
         core.move(ob, backups)
+    # Its outline and slabs, which the loop leaves in the recipes.
+    core.stow_helpers()
 
 
 def remove_handle(handle):
@@ -271,7 +275,7 @@ def remove_handle(handle):
 
 
 def finish(scene, apply=True):
-    """Leave outline editing, applying or discarding what was edited."""
+    """Leave guide editing, applying or discarding what was edited."""
     flush_edit_mode()
     s = state(scene)
     if s is None:
@@ -313,7 +317,7 @@ def start(context, targets):
     for ob in scene.objects:
         ob.hide_select = True
     for rock, points in projected:
-        make_handle("Outline / " + rock.name, points, rock["formation_id"], core.authored_world(rock))
+        make_handle("Guide / " + rock.name, points, rock["formation_id"], core.authored_world(rock))
     resume_points(context)
 
 
@@ -372,7 +376,7 @@ def create_polygon(context, entry, offset=(0., 0.)):
     recipe = json.loads(json.dumps(entry["recipe"]))
     recipe["outline"] = [unproject(p, center, rock) for p in points]
     rock["formation_recipe"] = json.dumps(recipe)
-    rock["formation_outline"] = core.outline_object(recipe["outline"], rock.name + " / outline", rock).name
+    rock["formation_outline"] = core.outline_object(recipe["outline"], rock.name + " / guide", rock).name
     params.load(rock)
     core.seal(rock)
     for ob in (rock, root):
@@ -380,7 +384,7 @@ def create_polygon(context, entry, offset=(0., 0.)):
         ob.hide_select = True
     s["new_owners"].append(rid)
     scene[STATE] = json.dumps(s)
-    handle = make_handle("Outline / " + rock.name, points, rid, core.authored_world(rock))
+    handle = make_handle("Guide / " + rock.name, points, rid, core.authored_world(rock))
     for pt in handle.data.splines[0].points:
         pt.select = True
     return handle
@@ -392,7 +396,7 @@ def polygon_action(context, action):
     selected = selected_handles(context)
     active = None
     if action in ("COPY", "DELETE", "ADD_POINT", "REMOVE_POINT") and not selected:
-        raise ValueError("Select outline points first (Tab toggles points and outlines)")
+        raise ValueError("Select guide points first (Tab toggles points and guides)")
     if action == "COPY":
         entries = []
         for handle in selected:
@@ -405,12 +409,12 @@ def polygon_action(context, action):
                             "attachment": rock.formation_attachment,
                             "moisture": rock.formation_moisture})
         scene[CLIPBOARD] = json.dumps(entries)
-        return f"Copied {len(entries)} outlines"
+        return f"Copied {len(entries)} guides"
     if action in ("PASTE", "NEW"):
         if action == "PASTE":
             entries = json.loads(scene.get(CLIPBOARD, "[]"))
             if not entries:
-                raise ValueError("Copy an outline first")
+                raise ValueError("Copy a guide first")
         else:
             x, z = scene.cursor.location.x, scene.cursor.location.z
             entries = [{"name": "New formation", "recipe": {"version": 1, "preset": "wall", "params": {}},
@@ -434,7 +438,7 @@ def polygon_action(context, action):
         old = list(handle.data.splines[0].points)
         chosen = [i for i, p in enumerate(old) if p.select]
         if not chosen:
-            raise ValueError("Select points on the outline first")
+            raise ValueError("Select points on the guide first")
         if action == "REMOVE_POINT":
             values = [(p.co.copy(), False) for i, p in enumerate(old) if i not in chosen]
         else:

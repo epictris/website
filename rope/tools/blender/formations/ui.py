@@ -40,14 +40,14 @@ class FORMATIONS_PT_main(bpy.types.Panel):
             layout.label(text=scene.get("formations_progress", "Working..."), icon="TIME")
 
         box = layout.box()
-        box.label(text="Outlines, as the game camera sees them")
+        box.label(text="Guides, as the game camera sees them")
         s = view.state(scene)
         if s is None:
-            box.operator("formations.edit", text="Edit Outlines", icon="EDITMODE_HLT").action = "START"
+            box.operator("formations.edit", text="Edit Guides", icon="EDITMODE_HLT").action = "START"
             box.label(text="The selected formations, or all")
         else:
             box.label(text=f"Projected from frame {s['frame']}")
-            box.label(text="G moves, Tab: points or outlines")
+            box.label(text="G moves, Tab: points or guides")
             row = box.row(align=True)
             row.operator("formations.polygon", text="Copy").action = "COPY"
             paste = row.row(align=True)
@@ -96,8 +96,15 @@ class FORMATIONS_PT_main(bpy.types.Panel):
         box.prop(scene, "formations_show_guides")
         box.prop(scene, "formations_rocks_wire")
 
-        layout.operator("formations.generate", text="New Formation", icon="ADD").mode = "CREATE"
-        layout.label(text="With a closed mesh selected: a Solid guide formation")
+        box = layout.box()
+        box.label(text="New formations")
+        box.operator("formations.guide_from_outline", icon="EYEDROPPER")
+        box.operator("formations.generate", text="New Formation", icon="ADD").mode = "CREATE"
+        active = context.active_object
+        if core.is_free_guide(active) and active.select_get():
+            box.label(text=f"Builds from the guide {active.name}", icon="CURVE_DATA")
+        else:
+            box.label(text="From the selected guide, or a closed mesh")
 
         ob = core.formation_of(context.active_object)
         if ob is not None:
@@ -130,7 +137,7 @@ class FORMATIONS_PT_main(bpy.types.Panel):
                 col.prop(ob, field)
             if render.explicit(ob):
                 sub.operator("formations.action", text="Passes and Maps From Depth").action = "RESET_RENDER"
-            for key, title in (("OUTLINE", "Select Guide" if solid else "Select Outline"), ("UNIQUE", "Make Unique"),
+            for key, title in (("OUTLINE", "Select Guide"), ("UNIQUE", "Make Unique"),
                                ("MANUAL", "Keep As Manual Mesh"), ("SOURCES", "Show Source Slabs"),
                                ("ASSEMBLE", "Assemble Edited Slabs")):
                 box.operator("formations.action", text=title).action = key

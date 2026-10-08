@@ -17,10 +17,22 @@ same way; its recipe holds the guide's geometry, the game's start camera
 (`scene[CAMERA]`, written by tools/blender/backdrop.py from the level) and the
 rock's world frame, because a stone's size goes with its depth from that eye.
 
-Construction helpers never ship and never render: every formation's outline
+An outline formation's outline is its GUIDE too, and the guide is its only
+source. The level's COLLISION OUTLINES (the `guide.*` curves the scene links
+from `<scene>-guide.blend`) are a visual reference and nothing else: no rock
+is ever built from one, and nothing here writes to one. Create Guide from
+Outline (`guide_from_outline`) copies one into a free guide, a local curve in
+GUIDES that keeps nothing of where it came from, so the editor can add, move
+or remove collision without any guide or rock noticing. New Formation from a
+free guide makes it the rock's own (`adopt_guide`).
+
+Construction helpers never ship and never render: every formation's guide
 curve and the generator's source slabs live under RECIPES, and the mesh a
 rebuild replaced is kept under BACKUPS. Both collections are hidden in render,
-which the scene exporter honours.
+which the scene exporter honours. A backup's own outline and slabs go with it
+to BACKUPS (`stow_helpers`): RECIPES is what Show guides draws, and an outline
+there that no rock in the scene is built from reads as a guide that should
+have gone.
 
 Nothing here saves the file: every operation is an ordinary undoable edit of
 the open scene.
@@ -50,6 +62,11 @@ ROPE = HERE.parents[2]
 FORMATIONS = "Formations"
 RECIPES = "Formation recipes"
 BACKUPS = "Formation backups"
+# Free guides: copies of collision outlines no rock has been built from yet.
+GUIDES = "Formation guides"
+# The collection `just scene-guide` links the level's collision in as
+# (tools/blender/scene_guide.py GUIDE_COLLECTION).
+COLLISION = "Guide"
 # The scene property holding the game's start camera and water for solid
 # formations: {"eye", "distance", "tanHalf", "waterZ"}.
 CAMERA = "backdrop_camera"
@@ -153,9 +170,9 @@ def validate_polygon(points):
         raise ValueError("A polygon needs at least three finite points")
     edges = list(zip(points, points[1:] + points[:1]))
     if any(math.dist(a, b) < 1e-6 for a, b in edges):
-        raise ValueError("Remove duplicate neighbouring outline points")
+        raise ValueError("Remove duplicate neighbouring points")
     if abs(sum(a[0] * b[1] - b[0] * a[1] for a, b in edges)) < 1e-8:
-        raise ValueError("Outline has zero area")
+        raise ValueError("Polygon has zero area")
 
     def cross(a, b, c):
         return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
@@ -172,7 +189,7 @@ def validate_polygon(points):
             if ((cross(a, b, c) * cross(a, b, d) < 0 and cross(c, d, a) * cross(c, d, b) < 0)
                     or on_segment(a, b, c) or on_segment(a, b, d)
                     or on_segment(c, d, a) or on_segment(c, d, b)):
-                raise ValueError("Outline crosses or touches itself")
+                raise ValueError("Polygon crosses or touches itself")
 
 
 def validate_worker(ob, slabs):
@@ -218,8 +235,8 @@ def validate_worker(ob, slabs):
 
 
 def outline_object(outline, name, owner):
-    """The editable outline: a closed poly curve in the rock's local X/Z plane,
-    parented to the rock so it moves with it."""
+    """An outline formation's guide: a closed poly curve in the rock's local
+    X/Z plane, parented to the rock so it moves with it."""
     curve = bpy.data.curves.new(name, "CURVE")
     curve.dimensions = "3D"
     line = curve.splines.new("POLY")
@@ -232,10 +249,124 @@ def outline_object(outline, name, owner):
     ob.parent = owner
     ob.matrix_parent_inverse = Matrix.Identity(4)
     ob["formation_outline_owner"] = owner["formation_id"]
+    style_guide_curve(ob)
+    return ob
+
+
+def is_collision_outline(ob):
+    """Whether `ob` is one of the level's collision outlines (a `guide.*`
+    curve from the linked guide, or a copy of one made local), which is a
+    reference only."""
+    return (ob is not None and ob.type == "CURVE" and ob.name.startswith("guide.")
+            and (ob.library is not None or ob.override_library is not None
+                 or any(c.name == COLLISION or c.library is not None for c in ob.users_collection)))
+
+
+def collision_outlines(scene=None):
+    scene = scene or bpy.context.scene
+    return [ob for ob in scene.objects if is_collision_outline(ob)]
+
+
+def is_free_guide(ob):
+    """A guide curve no formation owns yet: one Create Guide from Outline
+    made, or any local closed curve the artist drew."""
+    return (ob is not None and ob.type == "CURVE" and ob.library is None and not is_collision_outline(ob)
+            and not ob.get("formation_outline_owner") and "formation_handle_owner" not in ob)
+
+
+def guide_from_outline(outline):
+    """A free guide that is an exact copy of collision outline `outline`: the
+    same points at the same place, as a 3D curve in its own X/Z plane (a
+    formation's convention). It copies geometry and pose only, so it holds
+    nothing that refers back to the outline, and the outline is not touched."""
+    if not is_collision_outline(outline):
+        raise ValueError("Pick one of the level's collision outlines")
+    if len(outline.data.splines) != 1:
+        raise ValueError("This outline has a hole (a belt's band); a guide is one closed polygon")
+    sp = outline.data.splines[0]
+    if sp.type != "POLY" or not sp.use_cyclic_u:
+        raise ValueError("This outline is not a closed polygon")
+    if outline.data.dimensions == "2D":
+        points = [(p.co.x, p.co.y) for p in sp.points]
+        # The flat curve's X/Y turned onto the guide's X/Z: the same world points.
+        frame = authored_world(outline) @ Matrix.Rotation(-math.pi / 2, 4, "X")
+    else:
+        if any(abs(p.co.y) > .001 for p in sp.points):
+            raise ValueError("This outline is not flat")
+        points = [(p.co.x, p.co.z) for p in sp.points]
+        frame = authored_world(outline).copy()
+    validate_polygon([list(p) for p in points])
+    curve = bpy.data.curves.new("Guide", "CURVE")
+    curve.dimensions = "3D"
+    line = curve.splines.new("POLY")
+    line.points.add(len(points) - 1)
+    for pt, (x, z) in zip(line.points, points):
+        pt.co = (x, 0, z, 1)
+    line.use_cyclic_u = True
+    ob = bpy.data.objects.new("Guide", curve)
+    col = collection(GUIDES)
+    col.hide_render = True
+    col.objects.link(ob)
+    ob.matrix_world = frame
+    style_guide_curve(ob)
+    return ob
+
+
+def style_guide_curve(ob):
+    """How a guide curve is drawn: a wire in front of everything, in a guide
+    colour, never rendered."""
     ob.hide_render = True
     ob.display_type = "WIRE"
     ob.show_in_front = True
-    return ob
+    ob.color = (*GUIDE_COLOURS[0], 1.0)
+
+
+def flatten_guide(ob):
+    """Bring a free guide curve to a formation's convention in place: a 3D
+    curve whose polygon lies in its local X/Z plane. A flat (2D) curve's X/Y
+    becomes X/Z and the object turns a quarter about X, so no point moves in
+    the world. Returns its points in that plane."""
+    if ob.type != "CURVE" or len(ob.data.splines) != 1:
+        raise ValueError("Select a guide: a curve with a single closed polygon")
+    sp = ob.data.splines[0]
+    if sp.type != "POLY" or not sp.use_cyclic_u:
+        raise ValueError("A guide must be a closed POLY curve")
+    if ob.data.dimensions == "2D":
+        world = authored_world(ob) @ Matrix.Rotation(-math.pi / 2, 4, "X")
+        flat = [(p.co.x, p.co.y) for p in sp.points]
+        ob.data.dimensions = "3D"
+        for pt, (x, z) in zip(sp.points, flat):
+            pt.co = (x, 0, z, 1)
+        set_authored_world(ob, world)
+    if any(abs(p.co.y) > .001 for p in sp.points):
+        raise ValueError("Use a flat curve, or a 3D curve in its local X/Z plane")
+    return [[p.co.x, p.co.z] for p in sp.points]
+
+
+def adopt_guide(rock, guide):
+    """Make free guide `guide` formation `rock`'s own, in place of the one its
+    build made: the rock's placement goes where the guide stands, so nothing
+    moves, and an edit made to the guide while the rock built shows as pending."""
+    flatten_guide(guide)
+    built = bpy.data.objects.get(rock.get("formation_outline", ""))
+    root = placement(rock)
+    set_authored_world(root, authored_world(guide) @ (authored_world(rock).inverted() @ authored_world(root)))
+    move(guide, helper_collection(RECIPES))
+    guide.parent = rock
+    guide.matrix_parent_inverse = Matrix.Identity(4)
+    guide.matrix_basis = Matrix.Identity(4)
+    guide["formation_outline_owner"] = rock["formation_id"]
+    if built is not None and built != guide:
+        data = built.data
+        bpy.data.objects.remove(built, do_unlink=True)
+        if data.users == 0:
+            bpy.data.curves.remove(data)
+    guide.name = rock.name + " / guide"
+    rock["formation_outline"] = guide.name
+    style_guide_curve(guide)
+    free = bpy.data.collections.get(GUIDES)
+    if free is not None and not free.objects and not free.children:
+        bpy.data.collections.remove(free)
 
 
 def is_solid(ob):
@@ -347,7 +478,7 @@ def append_rock(file, name):
         if recipe.get("generator") == "solid":
             ob["formation_outline"] = guide_object(recipe["guide"], name + " / guide", ob).name
         else:
-            ob["formation_outline"] = outline_object(recipe["outline"], name + " / outline", ob).name
+            ob["formation_outline"] = outline_object(recipe["outline"], name + " / guide", ob).name
         params.load(ob)
         seal(ob)
         return ob
@@ -419,15 +550,15 @@ def outline_points(ob):
     if guide is None:
         return json.loads(ob["formation_recipe"])["outline"]
     if guide.type != "CURVE" or len(guide.data.splines) != 1:
-        raise ValueError(ob.name + ": use one closed polygon outline")
+        raise ValueError(ob.name + ": its guide must be one closed polygon")
     spline = guide.data.splines[0]
     if spline.type != "POLY" or not spline.use_cyclic_u:
-        raise ValueError(ob.name + ": the outline must be a closed poly curve")
+        raise ValueError(ob.name + ": its guide must be a closed poly curve")
     mat = (guide.matrix_parent_inverse @ guide.matrix_basis if guide.parent == ob
            else authored_world(ob).inverted() @ authored_world(guide))
     coords = [mat @ Vector(p.co[:3]) for p in spline.points]
     if max(abs(p.y) for p in coords) > .001:
-        raise ValueError(ob.name + ": keep the outline in the rock's X/Z plane")
+        raise ValueError(ob.name + ": keep its guide in the rock's X/Z plane")
     return [[p.x, p.z] for p in coords]
 
 
@@ -451,7 +582,7 @@ def write_outline(ob, outline):
     validate_polygon(outline)
     guide = bpy.data.objects.get(ob.get("formation_outline", ""))
     if guide is None:
-        ob["formation_outline"] = outline_object(outline, ob.name + " / outline", ob).name
+        ob["formation_outline"] = outline_object(outline, ob.name + " / guide", ob).name
         return
     guide.parent = ob
     guide.matrix_parent_inverse.identity()
@@ -500,7 +631,35 @@ def backup(ob):
     old["formation_id"] = str(uuid.uuid4())
     old["formation_backup"] = True
     copy_recipe_helpers(ob, old)
+    stow_helpers()
     return old
+
+
+def stow_helpers():
+    """Move every helper in RECIPES that no formation in the scene uses - a
+    backup's outline and slabs, or those of a rock deleted by hand - into
+    BACKUPS, hidden. Kept rather than removed, as the backup itself is.
+    Idempotent, and run on every file load to tidy files saved before it."""
+    recipes = bpy.data.collections.get(RECIPES)
+    if recipes is None or recipes.library is not None:
+        return 0
+    live = [ob for ob in bpy.data.objects if is_formation(ob)]
+    outlines = {ob.get("formation_outline") for ob in live}
+    sources = {ob.get("formation_sources") for ob in live}
+    stale = [ob for ob in recipes.objects if ob.name not in outlines]
+    slabs = [c for c in recipes.children if c.name.startswith("Sources /") and c.name not in sources]
+    if not stale and not slabs:
+        return 0
+    backups = helper_collection(BACKUPS)
+    for ob in stale:
+        recipes.objects.unlink(ob)
+        if ob.name not in backups.objects:
+            backups.objects.link(ob)
+    for c in slabs:
+        recipes.children.unlink(c)
+        if c.name not in backups.children:
+            backups.children.link(c)
+    return len(stale) + len(slabs)
 
 
 def remove_unused_helpers(sources_name, guide_name):
@@ -585,7 +744,7 @@ def replace_from_worker(ob, file, variant=False):
     bpy.data.objects.remove(root, do_unlink=True)
     remove_unused_helpers(previous_sources, previous_guide)
     # The fresh one was named for "<name> / new"; the old one has gone.
-    guide.name = ob.name + (" / guide" if is_solid(ob) else " / outline")
+    guide.name = ob.name + " / guide"
     ob["formation_outline"] = guide.name
     seal(ob)
     return ob

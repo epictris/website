@@ -59,7 +59,7 @@ def register():
     if params.on_load not in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.append(params.on_load)
     # The file open when the add-on is enabled had no load to hear.
-    bpy.app.timers.register(params.load_all, first_interval=0)
+    bpy.app.timers.register(lambda: params.on_load(None), first_interval=0)
 
 
 def unregister():
