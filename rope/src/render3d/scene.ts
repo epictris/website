@@ -1146,7 +1146,12 @@ export class Scene3D {
       clock,
       this.stillSurfaces(),
       level.ball
-        ? { position: level.ball.renderPosition(alpha), velocity: level.ball.linearVelocity, radius: level.ball.radius }
+        ? {
+            position: level.ball.renderPosition(alpha),
+            time: beltRenderTime(level.frame ?? 0, alpha),
+            velocity: level.ball.linearVelocity,
+            radius: level.ball.radius,
+          }
         : null,
     );
     // The lights after the bodies, because a waking light is judged by where
