@@ -197,6 +197,7 @@ export class Scene3D {
   // into a mip chain on the GPU. The lights and the fog are cheap; the
   // convolution is not, and nothing about dragging a wall changes it.
   private envKey: string | null = null;
+  private fogShown = true;
   // Every light in the level. It is rebuilt with the BODIES rather than kept
   // across a level change, because a light is an object inside a body now: each
   // one is a child of the group its body is drawn in, so its lifetime is that
@@ -429,6 +430,15 @@ export class Scene3D {
     this.lights.previewAwake = awake;
   }
 
+  // Draw the level's fog, or hide it (`Environment.setFogShown`). The editor
+  // authors without it unless asked for, so a distant rock is seen as it is
+  // rather than through the haze; its ▶ Test always draws it. Held here rather than only on the
+  // environment, because an environment edit builds a new one.
+  setFogShown(shown: boolean): void {
+    this.fogShown = shown;
+    this.env.setFogShown(shown);
+  }
+
   // The waking lights' levels, in authored order, for a probe.
   glowLevels(): number[] {
     return this.lights.glowLevels();
@@ -447,6 +457,7 @@ export class Scene3D {
     this.envKey = key;
     this.env.dispose();
     this.env = new Environment(this.scene, env, this.renderer);
+    this.env.setFogShown(this.fogShown);
   }
 
   // Freeze the flicker clock at `seconds`, or hand it back to the wall clock
@@ -1174,7 +1185,7 @@ export class Scene3D {
     // The spots' lit air reads the scene's depth, so the frame keeps it only
     // when a shaft is in view. Chosen before the reflection, because this is
     // also where the shafts' glow lights are set for the frame.
-    const fog = this.scene.fog as THREE.Fog | THREE.FogExp2 | null;
+    const fog = this.env.shownFog();
     const shafts = this.lightShafts.select(this.lights.shafts(), this.camera, fog);
     // Before the ball's probe, so the pool the ball sees carries its mirror.
     this.mirrorPool();

@@ -202,6 +202,10 @@ export class Environment {
   private envIntensity = ENV_INTENSITY;
   private rotation = 0;
   private hdriAsBackground = false;
+  // The level's air, and the density it authored (see `setFogShown`).
+  private readonly fog: THREE.FogExp2 | null;
+  private readonly fogDensity: number;
+  private fogShown = true;
 
   constructor(
     private readonly scene: THREE.Scene,
@@ -302,7 +306,25 @@ export class Environment {
     // A level that authors none has no `scene.fog` at all rather than a fog of
     // zero density - three.js runs the fog chunks either way.
     const fog = fogOf(env);
-    scene.fog = fog ? new THREE.FogExp2(new THREE.Color(fog.color), fog.density) : null;
+    this.fog = fog ? new THREE.FogExp2(new THREE.Color(fog.color), fog.density) : null;
+    this.fogDensity = fog?.density ?? 0;
+    scene.fog = this.fog;
+  }
+
+  // Draw the authored fog, or hold it at zero density: the editor hides the
+  // air while authoring and ▶ Test brings it back. Zero rather than taking
+  // `scene.fog` away, because the fog is part of every program's key - removed
+  // and restored, the first test would recompile every material in the level.
+  // At zero density three's own chunk mixes in exactly none of it.
+  setFogShown(shown: boolean): void {
+    this.fogShown = shown;
+    if (this.fog) this.fog.density = shown ? this.fogDensity : 0;
+  }
+
+  // The fog as the frame should treat it: null while hidden, so what reads it
+  // directly (the lit air of a spot's shaft) agrees with the surfaces.
+  shownFog(): THREE.FogExp2 | null {
+    return this.fogShown ? this.fog : null;
   }
 
   // Convolve one equirectangular sky into the mip chain a rough surface samples,

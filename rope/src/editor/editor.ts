@@ -834,6 +834,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // keeps it on screen and out of harm's way.
   const lockedLayers = new Set<EdLayer>();
   let snapOn = true;
+  // Whether the editor's own view draws the level's fog. Off by default: the
+  // haze is the player's view of the level, and through it a distant piece is
+  // hard to judge. ▶ Test always draws it. A view setting like `snapOn`, so it
+  // is not written into the level.
+  let fogInEditor = false;
   const gridStep = 0.05; // snap spacing: fixed 5 cm (half the backdrop's 10 cm minor grid)
   let currentName: string | null = null;
   let dirty = false;
@@ -6555,6 +6560,17 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // twentieths, since the useful range is the bottom of it.
     numEnv("fog", "fogAmount", 0.05, (v) => Math.min(1, Math.max(0, v)));
     colorEnv("fog col", "fogColor");
+    const fw = fieldRow("show fog in editor");
+    const fb = document.createElement("input");
+    fb.type = "checkbox";
+    fb.checked = fogInEditor;
+    describe(
+      fw,
+      "Draw the fog in the editor's view as well as in ▶ Test. An editor setting, not saved with the level.",
+    );
+    fb.addEventListener("change", () => (fogInEditor = fb.checked));
+    fw.appendChild(fb);
+    g.appendChild(fw);
 
     if (authored) {
       const row = el("div", "ed-row");
@@ -10121,6 +10137,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         scene3d!.setProjection("perspective");
         // ...and the mushrooms wake for the ball, as they do in the game.
         scene3d!.setGlowPreview(false);
+        // ...and the level's fog is drawn, which authoring leaves out.
+        scene3d!.setFogShown(true);
         const w = Math.round(view.width * view.scale);
         const h = Math.round(view.height * view.scale);
         scene3d!.setViewportRect({
@@ -10181,6 +10199,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         // scene to wake one, and an author has to see what a mushroom lights
         // before anyone does. ▶ Test hands it back to the ball.
         scene3d.setGlowPreview(true);
+        // No fog while authoring unless asked for (see `fogInEditor`).
+        scene3d.setFogShown(fogInEditor);
         gizmo?.setCamera(scene3d.camera);
         syncEditorScene();
         // What is selected, said on the models themselves - the geometry
