@@ -133,7 +133,7 @@ The rock's growth hangs from the placement and stays shown.
 A guide is an ordinary curve or mesh, edited in Edit Mode or by script, and it never renders or exports.
 
 **Render (export)**, a sub-panel of the formation's (`formations/render.py`): how the scene export draws the rock, each an ID property on it that overrides what its depth would decide, so a change needs an export and no rebuild.
-**Detail scale** (its texel density and largest map divided by it, the slate's lengths multiplied by it; unset, the depth scale a solid formation's build measured, `formation_depth_scale`, else 1), **Chamfer strips**, **Curved creases** and **Chips and sub-facets** (the export's three finer passes; unset, on unless the detail scale is over 1), **Largest map** and **Texels per metre** (0: 4096 and 512 over the detail scale).
+**Detail scale** (its texel density and largest map divided by it, the slate's lengths multiplied by it; unset, the depth scale a solid formation's build measured, `formation_depth_scale`, else 1), **Chamfer strips**, **Curved creases** and **Chips and sub-facets** (the export's three finer passes; unset, on unless the detail scale is over 1, and the curved creases and chips off on a solid formation whatever its depth, `render.SOLID_SKIPS`), **Largest map** and **Texels per metre** (0: 4096 and 512 over the detail scale).
 A field shows what the export will do; setting one makes it the rock's own, and **Passes and Maps From Depth** forgets them all.
 The bake cache keys on the three passes too, since the chips change the normal map without changing the mesh.
 

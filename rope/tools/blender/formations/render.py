@@ -19,12 +19,17 @@ export decides as it always has:
 
 The three passes run unless the object is `far_back` (a detail scale over 1:
 30 to 45 m back they are a pixel or two, and on the river's 155k backdrop
-faces they held the export for over half an hour).
+faces they held the export for over half an hour). A solid formation (a
+backdrop piece, generator `solid`) skips the curved creases and the chips
+whatever its depth (Tris, 2026-10-08): the river's Cube stands at a detail
+scale of 0.9, and its 2714 creases and 1630 chips were 747 s of a 1330 s
+export for a rock only an eighth of which the camera can ever see.
 
 Plain Python on the object's ID properties: the export runs without the
 add-on registered.
 """
 
+import json
 import math
 
 from .slate import OBJECT_SCALE_PROP as DETAIL_SCALE
@@ -44,14 +49,28 @@ def far_back(ob):
     return detail_scale(ob) > 1.0
 
 
+# The passes a solid formation skips unless it sets them itself.
+SOLID_SKIPS = ("export_creases", "export_chips")
+
+
+def solid(ob):
+    """Whether `ob` is a solid formation (formations/core.py `is_solid`, read
+    here without the add-on)."""
+    try:
+        return json.loads(ob["formation_recipe"]).get("generator") == "solid"
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return False
+
+
 def setting(ob, name):
-    """`ob`'s render setting `name`: its own, else what its depth decides."""
+    """`ob`'s render setting `name`: its own, else what its depth (and, for a
+    solid formation's creases and chips, its kind) decides."""
     if name in ob:
         return ob[name]
     if name == DETAIL_SCALE:
         return detail_scale(ob)
     if name in PASSES:
-        return not far_back(ob)
+        return not far_back(ob) and not (name in SOLID_SKIPS and solid(ob))
     return 0
 
 
