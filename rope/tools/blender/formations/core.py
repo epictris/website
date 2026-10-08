@@ -55,6 +55,7 @@ from pathlib import Path
 
 import bmesh
 import bpy
+from bpy.app.handlers import persistent
 from mathutils import Matrix, Vector
 
 from . import params, render
@@ -83,6 +84,8 @@ CAMERA = "backdrop_camera"
 # Guide colours: saturated, far from the slate's blue-grey, one per guide.
 GUIDE_COLOURS = [(1.0, .25, .1), (.1, .9, .2), (1.0, .85, .05), (.95, .15, .85), (.1, .85, 1.0),
                  (1.0, .55, 0.0), (.6, .2, 1.0), (.55, 1.0, .1)]
+# The diameter a guide curve draws at, in metres.
+GUIDE_CURVE_WIDTH = .03
 
 
 def collection(name, parent=None):
@@ -102,6 +105,14 @@ def helper_collection(name):
     c.hide_render = True
     if new:
         c.hide_viewport = True
+    return c
+
+
+def guides_collection():
+    """GUIDES: free guides, shown in the viewport whatever Show guides says
+    (it shows and hides RECIPES), and never rendered."""
+    c = collection(GUIDES)
+    c.hide_render = True
     return c
 
 
@@ -288,12 +299,77 @@ def before_build(scene):
 
 
 def style_guide_curve(ob):
-    """How a guide curve is drawn: a wire in front of everything, in a guide
-    colour, never rendered."""
+    """How a guide curve is drawn: a thin tube in its guide colour, in front
+    of everything, never rendered. A bare curve is a hairline in the theme's
+    wire colour, which a dark scene swallows. The tube is only how it shows:
+    the guide is its points."""
     ob.hide_render = True
-    ob.display_type = "WIRE"
+    ob.display_type = "TEXTURED"
     ob.show_in_front = True
-    ob.color = (*GUIDE_COLOURS[0], 1.0)
+    ob.data.bevel_depth = GUIDE_CURVE_WIDTH / 2
+    ob.data.bevel_resolution = 0
+    colour_guide(ob)
+
+
+def guide_styled(ob):
+    return (ob.data.bevel_depth == GUIDE_CURVE_WIDTH / 2 and ob.display_type == "TEXTURED"
+            and len(ob.data.materials) == 1)
+
+
+def style_guides():
+    """Style every curve guide in the file that is not yet: one saved before
+    guide curves drew as tubes (2026-10-08) still draws as a hairline."""
+    for name in (RECIPES, GUIDES):
+        c = bpy.data.collections.get(name)
+        if c is None or c.library is not None:
+            continue
+        for ob in c.objects:
+            if ob.type == "CURVE" and not guide_styled(ob):
+                style_guide_curve(ob)
+
+
+def free_guide(ob, world=None):
+    """Make a guide no formation is built from any more (its rock deleted by
+    hand) a free guide: out of RECIPES, which Show guides hides, into GUIDES,
+    where it always shows, standing at `world` (where it last stood: Blender
+    drops a deleted parent's transform from its children)."""
+    world = (world or ob.matrix_world).copy()
+    ob.pop("formation_outline_owner", None)
+    move(ob, guides_collection())
+    ob.parent = None
+    ob.matrix_world = world
+    ob.hide_set(False)
+    if ob.type == "CURVE":
+        style_guide_curve(ob)
+    else:
+        colour_guide(ob)
+
+
+# Every guide's world matrix as last seen while it had its rock, for
+# `free_guide` once the rock is deleted.
+guide_worlds = {}
+
+
+@persistent
+def free_orphaned_guides(_scene, _depsgraph):
+    """Free the guide of a rock deleted by hand as soon as it goes. Runs on
+    every depsgraph update, so it touches only RECIPES' own few guides, and
+    reads the rest of the file only when one has lost its parent."""
+    recipes = bpy.data.collections.get(RECIPES)
+    if recipes is None or recipes.library is not None:
+        return
+    orphans = []
+    for ob in recipes.objects:
+        if ob.parent is not None:
+            guide_worlds[ob.name] = ob.matrix_world.copy()
+        else:
+            orphans.append(ob)
+    if not orphans:
+        return
+    ids = {ob.get("formation_id") for ob in bpy.data.objects if ob.get("formation_id")}
+    for ob in orphans:
+        if ob.get("formation_outline_owner") not in ids:
+            free_guide(ob, guide_worlds.pop(ob.name, None))
 
 
 def flatten_guide(ob):
@@ -386,9 +462,13 @@ def show_guides(scene, on):
     if on:
         for ob in formations(scene):
             guide = bpy.data.objects.get(ob.get("formation_outline", ""))
-            if guide is not None and guide.type == "MESH":
+            if guide is None:
+                continue
+            if guide.type == "CURVE":
+                style_guide_curve(guide)
+            else:
                 colour_guide(guide)
-                guide.hide_set(False)
+            guide.hide_set(False)
 
 
 def rocks_wire(scene, on):
@@ -612,19 +692,27 @@ def backup(ob):
 
 def stow_helpers():
     """Move every helper in RECIPES that no formation in the scene uses - a
-    backup's outline and slabs, or those of a rock deleted by hand - into
-    BACKUPS, hidden. Kept rather than removed, as the backup itself is.
-    Idempotent, and run on every file load to tidy files saved before it."""
+    backup's outline and slabs, or the slabs of a rock deleted by hand - into
+    BACKUPS, hidden. Kept rather than removed, as the backup itself is. The
+    guide of a rock deleted by hand belongs to nothing, so it is freed
+    instead (`free_guide`), as `free_orphaned_guides` does the moment the
+    rock goes. Idempotent, and run on every file load to tidy files saved
+    before it."""
     recipes = bpy.data.collections.get(RECIPES)
     if recipes is None or recipes.library is not None:
         return 0
     live = [ob for ob in bpy.data.objects if is_formation(ob)]
     outlines = {ob.get("formation_outline") for ob in live}
     sources = {ob.get("formation_sources") for ob in live}
+    ids = {ob.get("formation_id") for ob in bpy.data.objects if ob.get("formation_id")}
     stale = [ob for ob in recipes.objects if ob.name not in outlines]
+    orphans = [ob for ob in stale if ob.get("formation_outline_owner") not in ids]
+    for ob in orphans:
+        free_guide(ob)
+    stale = [ob for ob in stale if ob not in orphans]
     slabs = [c for c in recipes.children if c.name.startswith("Sources /") and c.name not in sources]
     if not stale and not slabs:
-        return 0
+        return len(orphans)
     backups = helper_collection(BACKUPS)
     for ob in stale:
         recipes.objects.unlink(ob)
@@ -634,7 +722,7 @@ def stow_helpers():
         recipes.children.unlink(c)
         if c.name not in backups.children:
             backups.children.link(c)
-    return len(stale) + len(slabs)
+    return len(orphans) + len(stale) + len(slabs)
 
 
 def remove_unused_helpers(sources_name, guide_name):

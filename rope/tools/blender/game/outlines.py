@@ -12,6 +12,7 @@ rock noticing. New Formation (Formations panel) builds from it.
 from __future__ import annotations
 
 import math
+import re
 
 import bpy
 from mathutils import Matrix, Vector
@@ -21,20 +22,52 @@ from .formations_addon import core
 # The collection `just scene-guide` links the level's collision in as
 # (tools/blender/scene_guide.py GUIDE_COLLECTION).
 COLLISION = "Guide"
+ORIGIN = re.compile(r"\.origin(\.\d+)?$")
+
+
+def from_guide(ob):
+    """Whether `ob` is a `guide.*` object of the linked guide, or a copy of one
+    made local."""
+    return (ob is not None and ob.name.startswith("guide.")
+            and (ob.library is not None or ob.override_library is not None
+                 or any(c.name == COLLISION or c.library is not None for c in ob.users_collection)))
 
 
 def is_collision_outline(ob):
     """Whether `ob` is one of the level's collision outlines (a `guide.*`
     curve from the linked guide, or a copy of one made local), which is a
     reference only."""
-    return (ob is not None and ob.type == "CURVE" and ob.name.startswith("guide.")
-            and (ob.library is not None or ob.override_library is not None
-                 or any(c.name == COLLISION or c.library is not None for c in ob.users_collection)))
+    return from_guide(ob) and ob.type == "CURVE"
 
 
 def collision_outlines(scene=None):
     scene = scene or bpy.context.scene
     return [ob for ob in scene.objects if is_collision_outline(ob)]
+
+
+# --- Showing them ---------------------------------------------------------------
+
+def shown_with_outlines(scene):
+    """What Show Collision Outlines shows and hides: every outline, and the
+    `guide.<name>.origin` empty on each body's origin beside them (`.001`
+    and on where bodies share a name)."""
+    return [ob for ob in scene.objects if is_collision_outline(ob)
+            or (from_guide(ob) and ob.type == "EMPTY" and ORIGIN.search(ob.name))]
+
+
+def outlines_shown(scene):
+    """Whether any outline is shown in the view layer (the eye in the
+    outliner), so the toggle reads what the viewport shows."""
+    layer = bpy.context.view_layer
+    return any(not ob.hide_get(view_layer=layer) for ob in collision_outlines(scene))
+
+
+def show_outlines(scene, show):
+    # The eye in the outliner: a linked object's own `hide_viewport` is the
+    # guide file's to set, but its base in this view layer is the scene's.
+    layer = bpy.context.view_layer
+    for ob in shown_with_outlines(scene):
+        ob.hide_set(not show, view_layer=layer)
 
 
 def guide_from_outline(outline):
@@ -67,9 +100,7 @@ def guide_from_outline(outline):
         pt.co = (x, 0, z, 1)
     line.use_cyclic_u = True
     ob = bpy.data.objects.new("Guide", curve)
-    col = core.collection(core.GUIDES)
-    col.hide_render = True
-    col.objects.link(ob)
+    core.guides_collection().objects.link(ob)
     ob.matrix_world = frame
     core.style_guide_curve(ob)
     return ob

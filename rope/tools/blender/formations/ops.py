@@ -334,20 +334,27 @@ class FORMATIONS_OT_action(bpy.types.Operator):
             elif self.action == "ASSEMBLE":
                 core.assemble_sources(ob)
             elif self.action in ("OUTLINE", "ROCK"):
-                # One or the other: the guide shown and selected with its rock
-                # hidden, or the rock with its guide hidden. Viewport hiding
-                # only: the export goes by render visibility and lifts it.
+                # One or the other: the guide shown and selected with its rocks
+                # hidden, or the rock with its guide hidden. Its rocks: a
+                # duplicate shares the guide until Make Unique, and may stand
+                # right on top of the one clicked. Viewport hiding only: the
+                # export goes by render visibility and lifts it.
                 guide = bpy.data.objects[ob["formation_outline"]]
-                target, other = (guide, ob) if self.action == "OUTLINE" else (ob, guide)
+                rocks = [r for r in core.formations() if r.get("formation_outline") == guide.name]
                 if context.mode != "OBJECT":
                     bpy.ops.object.mode_set(mode="OBJECT")
-                if target is guide:
+                if self.action == "OUTLINE":
                     core.collection(core.RECIPES).hide_viewport = False
+                    target = guide
+                else:
+                    target = ob
+                for r in rocks:
+                    r.hide_set(target is guide)
                 target.hide_set(False)
                 bpy.ops.object.select_all(action="DESELECT")
                 target.select_set(True)
                 context.view_layer.objects.active = target
-                other.hide_set(True)
+                guide.hide_set(target is not guide)
             elif self.action == "SOURCES":
                 core.collection(core.RECIPES).hide_viewport = False
                 bpy.data.collections[ob["formation_sources"]].hide_viewport = False

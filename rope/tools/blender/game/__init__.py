@@ -16,7 +16,7 @@ import bpy
 from bpy.app.handlers import persistent
 from bpy.props import BoolProperty, FloatProperty
 
-from . import edit, look, ops, ui
+from . import edit, look, ops, outlines, ui
 from .formations_addon import core
 
 CLASSES = ops.CLASSES + ui.CLASSES
@@ -74,6 +74,12 @@ def register():
         name="Lighting", default=False, update=look.toggled,
         description="The game's light at rest: its sun, the level's always-on lights, its sky and fill as the "
                     "world, and its tone mapping (ACES). The scene's own lights are hidden until it is off")
+    # Nothing stored: it reads and sets the outlines' own visibility, so it
+    # never disagrees with the outliner's eyes.
+    bpy.types.Scene.game_show_outlines = BoolProperty(
+        name="Show Collision Outlines",
+        get=outlines.outlines_shown, set=outlines.show_outlines,
+        description="Show the level's collision outlines and their origins in the viewport (this view layer)")
     for c in CLASSES:
         bpy.utils.register_class(c)
     # A rebuild or replant in the Formations panel applies the guides being
@@ -93,6 +99,7 @@ def unregister():
         core.BEFORE_BUILD.remove(edit.finish)
     for c in reversed(CLASSES):
         bpy.utils.unregister_class(c)
+    del bpy.types.Scene.game_show_outlines
     del bpy.types.Scene.game_lighting
     del bpy.types.Scene.game_dof
     del bpy.types.Scene.game_fog

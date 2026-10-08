@@ -43,11 +43,15 @@ def register():
         bpy.utils.register_class(c)
     if params.on_load not in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.append(params.on_load)
+    if core.free_orphaned_guides not in bpy.app.handlers.depsgraph_update_post:
+        bpy.app.handlers.depsgraph_update_post.append(core.free_orphaned_guides)
     # The file open when the add-on is enabled had no load to hear.
     bpy.app.timers.register(lambda: params.on_load(None), first_interval=0)
 
 
 def unregister():
+    if core.free_orphaned_guides in bpy.app.handlers.depsgraph_update_post:
+        bpy.app.handlers.depsgraph_update_post.remove(core.free_orphaned_guides)
     if params.on_load in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.remove(params.on_load)
     for c in reversed(CLASSES):

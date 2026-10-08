@@ -104,9 +104,9 @@ class FORMATIONS_PT_main(bpy.types.Panel):
             regenerate.operator("formations.generate", text="Regenerate", icon="FILE_REFRESH").mode = "REBUILD"
         row.operator("formations.generate", text="New Variant").mode = "VARIANT"
         if active is ob:
-            layout.operator("formations.action", text="Select Guide", icon="RESTRICT_SELECT_OFF").action = "OUTLINE"
+            layout.operator("formations.action", text="View Guide", icon="HIDE_OFF").action = "OUTLINE"
         else:
-            layout.operator("formations.action", text="Select Formation", icon="RESTRICT_SELECT_OFF").action = "ROCK"
+            layout.operator("formations.action", text="View Formation", icon="HIDE_OFF").action = "ROCK"
 
 
 class FormationSubpanel:

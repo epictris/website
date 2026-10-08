@@ -2,7 +2,7 @@
 
 import bpy
 
-from . import camera, edit, look
+from . import camera, edit, look, outlines
 from .formations_addon import core
 
 
@@ -82,7 +82,15 @@ class GAME_PT_main(bpy.types.Panel):
         box = layout.box()
         box.enabled = not busy
         box.label(text="Collision outlines (reference only)")
-        box.operator("game.guide_from_outline", icon="EYEDROPPER")
+        have = bool(outlines.collision_outlines(scene))
+        row = box.row()
+        row.enabled = have
+        row.prop(scene, "game_show_outlines", toggle=True,
+                 icon="HIDE_OFF" if scene.game_show_outlines else "HIDE_ON")
+        # Only a shown outline can be picked.
+        row = box.row()
+        row.enabled = have and scene.game_show_outlines
+        row.operator("game.guide_from_outline", icon="EYEDROPPER")
 
 
 CLASSES = (GAME_PT_main,)

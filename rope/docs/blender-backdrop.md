@@ -10,7 +10,7 @@ It is scenery like everything else in the scene: `just scene ball` exports it, a
 **In Blender**, in the Formations tab (N):
 
 - **Show guides** (under Scene) shows every piece's guide in a colour of its own, and **Solid rocks as wireframe** lets them show through the rocks.
-- Select a rock (`backdrop.roof`) for its panel: **Regenerate**, **Select Guide**, the generator's fields, and **Render (export)**.
+- Select a rock (`backdrop.roof`) for its panel: **Regenerate**, **View Guide**, the generator's fields, and **Render (export)**.
 - Edit a guide like any mesh; the rock turns pending, and Regenerate (or **Rebuild Changed**) builds it again in a separate Blender, the scene editable meanwhile.
 - **Build Formation from Mesh**, offered when a closed mesh is selected, makes a new piece from it.
 

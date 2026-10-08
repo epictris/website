@@ -89,6 +89,9 @@ Growth rides along (it hangs from the placement), and is then stale: it is sized
 
 **Collision outlines are a reference, never a source** (2026-10-07, Tris: "The 2D collision outlines should serve exclusively as a visual reference").
 The `guide.*` curves the scene links from the level's guide file are unselectable, and Formations refuses anything linked from another file as a guide.
+**Show Collision Outlines** (under Collision outlines) shows and hides them with their `guide.<name>.origin` empties, leaving the plane, the spawn and the cameras.
+It stores nothing of its own: it is the outliner's eye on each of them in the current view layer (a linked object's own visibility is the guide file's), so it always reads what the viewport shows, and it reads on while any outline is shown.
+Hidden outlines cannot be picked, so Create Guide from Outline waits for them to be shown.
 **Create Guide from Outline** (the eyedropper, under Collision outlines) copies one: click a collision outline in the viewport (the one under the cursor is highlighted; the innermost wins where they nest; Shift+click keeps picking, Esc or right-click ends) and a free guide named `Guide` is made in `Formation guides`, the same points at the same place, selected for New Formation (Formations panel).
 The copy is geometry and pose only: the guide records nothing about the outline, and nothing is written to the outline, so the editor can add, move or remove collision without any guide or rock in the scene changing.
 Edit the guide like any curve (Edit Mode, or Edit Guides once it is a rock's), and the collision stays as the level has it.

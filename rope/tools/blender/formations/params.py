@@ -192,7 +192,9 @@ def load_all():
 def on_load(_):
     load_all()
     from . import core
+    core.guide_worlds.clear()
     core.stow_helpers()
+    core.style_guides()
 
 
 CLASSES = (FormationParams,)
