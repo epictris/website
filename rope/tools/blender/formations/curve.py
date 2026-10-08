@@ -189,18 +189,36 @@ def field(points, bows):
     off = np.zeros_like(points)
     if not len(points) or not len(bows):
         return off
-    step = max(1, FIELD_BLOCK // len(bows))
+    # Blocks are sized by the bows that can reach the points at all, not by
+    # every bow: by every one, Cube's 2714 bows cut each call into blocks of 96
+    # points, 700 k of them, and the blocks' own overhead was most of its 208 s
+    # rebuild (2026-10-08).
+    reachable = np.flatnonzero(((bows.lo <= points.max(axis=0)) & (bows.hi >= points.min(axis=0))).all(axis=1))
+    if not len(reachable):
+        return off
+    step = max(1, FIELD_BLOCK // len(reachable))
     for at in range(0, len(points), step):
         p = points[at:at + step]
-        near = np.flatnonzero(((bows.lo <= p.max(axis=0)) & (bows.hi >= p.min(axis=0))).all(axis=1))
+        near = reachable[((bows.lo[reachable] <= p.max(axis=0)) & (bows.hi[reachable] >= p.min(axis=0))).all(axis=1)]
         if not len(near):
             continue
-        a, ab, reach = bows.a[near], bows.ab[near], bows.reach[near]
-        rel = p[:, None, :] - a[None]
-        t = np.clip(np.einsum("nbk,bk->nb", rel, ab) / bows.ab2[near], 0.0, 1.0)
-        d = np.linalg.norm(rel - t[..., None] * ab, axis=2)
-        x = np.clip(1 - d / reach, 0.0, 1.0)
-        off[at:at + step] = (np.sin(np.pi * t) * x * x * (3 - 2 * x)) @ bows.bow[near]
+        # Only the pairs whose point is in the bow's box are measured: out of
+        # it the point is further than the reach, so its weight is exactly 0
+        # (Cube.004: most pairs, and the field two thirds of the rebuild,
+        # 2026-10-08). The weights go into the same product as before.
+        lo, hi = bows.lo[near], bows.hi[near]
+        inbox = (p[:, 0:1] >= lo[:, 0]) & (p[:, 0:1] <= hi[:, 0])
+        for k in (1, 2):
+            inbox &= (p[:, k:k + 1] >= lo[:, k]) & (p[:, k:k + 1] <= hi[:, k])
+        i, j = np.nonzero(inbox)
+        b = near[j]
+        rel = p[i] - bows.a[b]
+        t = np.clip(np.einsum("mk,mk->m", rel, bows.ab[b]) / bows.ab2[b], 0.0, 1.0)
+        d = np.linalg.norm(rel - t[:, None] * bows.ab[b], axis=1)
+        x = np.clip(1 - d / bows.reach[b], 0.0, 1.0)
+        weight = np.zeros(inbox.shape)
+        weight[i, j] = np.sin(np.pi * t) * x * x * (3 - 2 * x)
+        off[at:at + step] = weight @ bows.bow[near]
     return off
 
 
@@ -428,10 +446,11 @@ def rebuild(bm, bows, seed):
         # are cut to the same size.
         if inside:
             local = size_at([origin + u * p[0] + w * p[1] for p in inside])
+            clear = detail.ring_distances(inside, polys)
             kept_pts, tree2d = [], KDTree(len(inside))
             for i in np.argsort(local, kind="stable"):
                 p, s = inside[i], float(local[i])
-                if s > h and min(detail.edge_distance(p, pl) for pl in polys) < detail.MARGIN * s:
+                if s > h and clear[i] < detail.MARGIN * s:
                     continue
                 near = tree2d.find((p[0], p[1], 0.0)) if kept_pts else None
                 if near is not None and near[2] < 0.85 * s:
@@ -449,7 +468,9 @@ def rebuild(bm, bows, seed):
         if len(polys) > 1:
             def centroid(face):
                 return (sum(verts2d[i].x for i in face) / len(face), sum(verts2d[i].y for i in face) / len(face))
-            faces2d = [f for f in faces2d if not any(detail.point_in_polygon(centroid(f), pl) for pl in polys[1:])]
+            centres = [centroid(f) for f in faces2d]
+            holed = np.logical_or.reduce([detail.points_in_polygon(centres, pl) for pl in polys[1:]])
+            faces2d = [f for f, out in zip(faces2d, holed) if not out]
         # The inside points go onto the patch's own faces, not the fitted
         # plane, so the surface stays where it was.
         starts = np.cumsum([0] + [len(f.verts) for f in plane[:-1]])

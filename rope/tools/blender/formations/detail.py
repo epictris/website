@@ -25,6 +25,7 @@ import time
 
 import bmesh
 import bpy
+import numpy as np
 from mathutils import Vector
 from mathutils.bvhtree import BVHTree
 from mathutils.geometry import delaunay_2d_cdt
@@ -191,10 +192,92 @@ def edge_distance(p, poly):
     return best
 
 
+# The two tests above on many points at once, to the bit: per point they were
+# most of the export's crease rebuild (Cube.004, 2026-10-08: 650 k
+# edge_distance and 3.6 M point_in_polygon calls, three quarters of 113 s).
+# Points x edges are taken in blocks of about this many pairs.
+PAIR_BLOCK = 1 << 20
+
+
+def _edges(poly):
+    """`poly`'s edges as two arrays, every edge's start (poly[i - 1]) and end
+    (poly[i]), in the scalar loops' order."""
+    end = np.asarray(poly, dtype=float).reshape(-1, 2)
+    return np.roll(end, 1, axis=0), end
+
+
+def _blocks(n, edges):
+    step = max(1, PAIR_BLOCK // max(edges, 1))
+    return [slice(at, at + step) for at in range(0, n, step)]
+
+
+def points_in_polygon(points, poly):
+    """`point_in_polygon` of every row of `points` (N x 2), the same
+    arithmetic on every edge. A point outside the polygon's box by more than
+    rounding is outside without testing: no edge crosses its row above or
+    below the box, and right of it no crossing is right of the point; left of
+    it the point's row crosses the closed boundary an even number of times."""
+    p = np.asarray(points, dtype=float).reshape(-1, 2)
+    out = np.zeros(len(p), dtype=bool)
+    if not len(p):
+        return out
+    a, b = _edges(poly)
+    lo, hi = np.minimum(a, b).min(axis=0), np.maximum(a, b).max(axis=0)
+    pad = 1e-9 * (1.0 + np.abs(lo) + np.abs(hi))
+    near = np.flatnonzero(((p >= lo - pad) & (p <= hi + pad)).all(axis=1))
+    x0, y0, x1, y1 = a[:, 0], a[:, 1], b[:, 0], b[:, 1]
+    for block in _blocks(len(near), len(a)):
+        rows = near[block]
+        x, y = p[rows, :1], p[rows, 1:]
+        crosses = (y0 > y) != (y1 > y)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            t = (y - y0) / (y1 - y0)
+            left = x < x0 + t * (x1 - x0)
+        out[rows] = np.count_nonzero(crosses & left, axis=1) % 2 == 1
+    return out
+
+
+def edge_distances(points, poly):
+    """`edge_distance` of every row of `points` (N x 2), to the bit: each
+    point's nearest edges are found on squared distances, and only those
+    within rounding of the nearest are measured with math.hypot (numpy's
+    hypot differs from it in the last bit about once in 500), as the scalar
+    loop measures every edge."""
+    p = np.asarray(points, dtype=float).reshape(-1, 2)
+    out = np.full(len(p), math.inf)
+    if not len(p):
+        return out
+    a, b = _edges(poly)
+    x0, y0 = a[:, 0], a[:, 1]
+    dx, dy = b[:, 0] - x0, b[:, 1] - y0
+    ln2 = dx * dx + dy * dy
+    for block in _blocks(len(p), len(a)):
+        px, py = p[block, :1], p[block, 1:]
+        with np.errstate(divide="ignore", invalid="ignore"):
+            t = np.where(ln2 == 0, 0.0, np.clip(((px - x0) * dx + (py - y0) * dy) / ln2, 0.0, 1.0))
+        ex, ey = px - (x0 + t * dx), py - (y0 + t * dy)
+        sq = ex * ex + ey * ey
+        rows, cols = np.nonzero(sq <= sq.min(axis=1, keepdims=True) * (1 + 1e-9))
+        measured = np.fromiter(map(math.hypot, ex[rows, cols].tolist(), ey[rows, cols].tolist()),
+                               dtype=float, count=len(rows))
+        best = np.full(len(px), math.inf)
+        np.minimum.at(best, rows, measured)
+        out[block] = best
+    return out
+
+
+def ring_distances(points, rings):
+    """`min(edge_distance(p, r) for r in rings)` of every row of `points`."""
+    return np.minimum.reduce([edge_distances(points, r) for r in rings])
+
+
 def grid_points(poly, holes, spacing, rng):
     """Points inside `poly` and outside its `holes` on a hexagonal grid at
     `spacing`, randomly turned and jittered, MARGIN of a spacing clear of the
-    boundary; a plane the grid misses gets its deepest point."""
+    boundary; a plane the grid misses gets its deepest point.
+
+    The grid is drawn from `rng` in rows of columns, two jitters a node, and
+    tested as one array (`points_in_polygon`, `ring_distances`)."""
     xs, ys = [p[0] for p in poly], [p[1] for p in poly]
     lo, hi = (min(xs), min(ys)), (max(xs), max(ys))
     theta = rng.uniform(0, math.pi)
@@ -204,28 +287,27 @@ def grid_points(poly, holes, spacing, rng):
     rows = int(reach / (spacing * math.sqrt(3) / 2)) + 1
     cols = int(reach / spacing) + 1
     rings = [poly] + holes
-    points = []
-    for j in range(-rows, rows + 1):
-        for i in range(-cols, cols + 1):
-            gx = (i + (0.5 if j % 2 else 0.0)) * spacing + rng.uniform(-JITTER, JITTER) * spacing
-            gy = j * spacing * math.sqrt(3) / 2 + rng.uniform(-JITTER, JITTER) * spacing
-            c = (cx + gx * ca - gy * sa, cy + gx * sa + gy * ca)
-            if not point_in_polygon(c, poly) or any(point_in_polygon(c, h) for h in holes):
-                continue
-            if min(edge_distance(c, r) for r in rings) < MARGIN * spacing:
-                continue
-            points.append(c)
+    j = np.repeat(np.arange(-rows, rows + 1), 2 * cols + 1)
+    i = np.tile(np.arange(-cols, cols + 1), 2 * rows + 1)
+    jitter = np.array([rng.uniform(-JITTER, JITTER) for _ in range(2 * len(j))]).reshape(-1, 2)
+    gx = (i + np.where(j % 2 == 1, 0.5, 0.0)) * spacing + jitter[:, 0] * spacing
+    gy = j * spacing * math.sqrt(3) / 2 + jitter[:, 1] * spacing
+    c = np.stack([cx + gx * ca - gy * sa, cy + gx * sa + gy * ca], axis=1)
+    keep = points_in_polygon(c, poly)
+    for h in holes:
+        keep[keep] = ~points_in_polygon(c[keep], h)
+    keep[keep] = ~(ring_distances(c[keep], rings) < MARGIN * spacing)
+    points = [tuple(q) for q in c[keep].tolist()]
     if not points:
-        best, depth = None, DEEPEST
-        for _ in range(300):
-            c = (rng.uniform(lo[0], hi[0]), rng.uniform(lo[1], hi[1]))
-            if not point_in_polygon(c, poly) or any(point_in_polygon(c, h) for h in holes):
-                continue
-            d = min(edge_distance(c, r) for r in rings)
-            if d > depth:
-                best, depth = c, d
-        if best is not None:
-            points.append(best)
+        c = np.array([(rng.uniform(lo[0], hi[0]), rng.uniform(lo[1], hi[1])) for _ in range(300)])
+        keep = points_in_polygon(c, poly)
+        for h in holes:
+            keep[keep] = ~points_in_polygon(c[keep], h)
+        depth = np.full(len(c), -math.inf)
+        depth[keep] = ring_distances(c[keep], rings)
+        # The first of the deepest, as a scan keeping only a deeper one did.
+        if depth.max() > DEEPEST:
+            points.append(tuple(c[int(np.argmax(depth))].tolist()))
     return points
 
 
@@ -265,6 +347,9 @@ def crumple(src, rng):
         normal = sum((f.normal * f.calc_area() for f in region), Vector()).normalized()
         jobs.append((region, loops, area, normal))
 
+    # The planes made again (old faces, new faces' corners), the old faces
+    # they drop and the triangles of existing corners they make.
+    remade, gone, claimed = [], set(), set()
     for region, loops, area, normal in jobs:
         origin = sum((v.co for lp in loops for v in lp), Vector()) / sum(len(lp) for lp in loops)
         u = normal.orthogonal().normalized()
@@ -301,7 +386,9 @@ def crumple(src, rng):
         if holes:
             def centroid(face):
                 return (sum(verts2d[i].x for i in face) / len(face), sum(verts2d[i].y for i in face) / len(face))
-            faces2d = [f for f in faces2d if not any(point_in_polygon(centroid(f), h) for h in holes)]
+            centres = [centroid(f) for f in faces2d]
+            holed = np.logical_or.reduce([points_in_polygon(centres, h) for h in holes])
+            faces2d = [f for f, out in zip(faces2d, holed) if not out]
         if not faces2d:
             stats["skipped"] += 1
             stats["skipped_area"] += area
@@ -323,7 +410,7 @@ def crumple(src, rng):
                 break
             s = srcs[0]
             verts.append(loop[s] if s < len(boundary) else new_pts[s])
-        new_faces = []
+        new_faces, keys = [], set()
         if ok:
             for face in faces2d:
                 vs = [verts[i] for i in face]
@@ -331,25 +418,34 @@ def crumple(src, rng):
                     continue
                 existing = [v for v in vs if isinstance(v, bmesh.types.BMVert)]
                 if len(existing) == 3:
-                    old = bm.faces.get(existing)
-                    if old is not None and old not in in_region:
+                    # As if every plane before were already made again: its
+                    # old faces are gone and the triangles it made are there.
+                    old, key = bm.faces.get(existing), frozenset(existing)
+                    if (old is not None and old not in in_region and old not in gone) or key in claimed:
                         ok = False
                         break
+                    keys.add(key)
                 new_faces.append(vs)
         if not ok or not new_faces:
             stats["skipped"] += 1
             stats["skipped_area"] += area
             continue
-        # FACES_ONLY: a boundary corner on an open edge belongs to this
-        # plane's faces alone and the plane is made again on it (FACES freed
-        # it, and the export died on a pinched Terrace, 2026-10-04); what is
-        # still loose after is dropped below.
-        bmesh.ops.delete(bm, geom=region, context="FACES_ONLY")
+        gone |= in_region
+        claimed |= keys
+        remade.append((region, new_faces))
+        stats["rebuilt"] += 1
+        stats["points"] += len(points)
+    # Every plane goes in one delete: each delete walks the whole mesh, and
+    # one a plane held Cube's crumple for 455 s (3813 planes of 523 k faces,
+    # 2026-10-08). FACES_ONLY: a boundary corner on an open edge belongs to
+    # its plane's faces alone and the plane is made again on it (FACES freed
+    # it, and the export died on a pinched Terrace, 2026-10-04); what is
+    # still loose after is dropped below.
+    bmesh.ops.delete(bm, geom=[f for region, _ in remade for f in region], context="FACES_ONLY")
+    for _, new_faces in remade:
         created = {}
         for vs in new_faces:
             bm.faces.new([v if isinstance(v, bmesh.types.BMVert) else created.setdefault(id(v), bm.verts.new(v)) for v in vs])
-        stats["rebuilt"] += 1
-        stats["points"] += len(points)
     bmesh.ops.delete(bm, geom=[e for e in bm.edges if not e.link_faces], context="EDGES")
     bmesh.ops.delete(bm, geom=[v for v in bm.verts if not v.link_faces], context="VERTS")
     bm.normal_update()

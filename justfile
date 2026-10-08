@@ -80,6 +80,13 @@ moss-install:
 ivy-install:
     cd rope && blender -b --python tools/blender/addon_install.py -- ivy
 
+# Install the foliage add-on (rope/tools/blender/foliage): place ferns, leaf
+# sprig bushes and hanging vines on a scene's meshes and grow them from their
+# settings. Then the Foliage tab is in the 3D viewport's sidebar.
+# See rope/docs/blender-foliage.md.
+foliage-install:
+    cd rope && blender -b --python tools/blender/addon_install.py -- foliage
+
 # Install the formations add-on (rope/tools/blender/formations): guides, the
 # rock masses generated from them, and what grows on them. Then the Formations
 # tab is in the 3D viewport's sidebar.

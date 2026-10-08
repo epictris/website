@@ -191,6 +191,7 @@ export function loadSceneFile(scene: string): Promise<THREE.Object3D | null> {
     withDownload(file, bytes, (href) => loading.then((loader) => loader.loadAsync(href)))
       .then((gltf) => {
         let ivyMeshes = 0;
+        let foliageMeshes = 0;
         gltf.scene.traverse((o) => {
           const mesh = o as THREE.Mesh;
           if (!mesh.isMesh) return;
@@ -221,16 +222,23 @@ export function loadSceneFile(scene: string): Promise<THREE.Object3D | null> {
           const decal = names.some((n) => /\.(ivy|moss)\.shadow$/.test(n));
           const legacyIvy = names.some((n) => /\.moss$/.test(n)) && mats.some((m) => m.alphaTest > 0);
           const ivy = !decal && (legacyIvy || names.some((n) => /\.ivy$/.test(n)));
+          // Plants (the Blender foliage add-on's ferns, sprig bushes and
+          // hanging vines) are leaves too, and wear one material, `Foliage`,
+          // found by its name, which glTF and the optimiser keep: whatever
+          // the plant's object is called, its cards are alpha-cut leaves.
+          const foliage = mats.some((m) => /^Foliage(\.\d+)?$/.test(m.name));
           mesh.castShadow = !decal;
           mesh.receiveShadow = true;
           // ...and the leaves receive with finer biases than the sun's, so a
           // leaf shadows the leaf below it; two-sided and translucent (ivyLeaves.ts).
-          if (ivy) {
+          if (ivy || foliage) {
             for (const m of mats) wearIvyLeaves(m);
-            ivyMeshes++;
+            if (ivy) ivyMeshes++;
+            else foliageMeshes++;
           }
         });
         if (ivyMeshes > 0) console.log(`[render3d] scene "${scene}": ${ivyMeshes} ivy meshes cast and receive leaf shadows`);
+        if (foliageMeshes > 0) console.log(`[render3d] scene "${scene}": ${foliageMeshes} plant meshes cast and receive leaf shadows`);
         return gltf.scene as THREE.Object3D;
       })
       .catch((err: unknown) => {

@@ -146,7 +146,7 @@ try {
   // by these ids (its `step()`).
   const STEPS = [
     { id: "open", label: `start Blender, open ${scene}.blend` },
-    { id: "grow", label: "grow ivy and moss" },
+    { id: "grow", label: "grow ivy, moss and foliage" },
     { id: "bake", label: "bake textures" },
     { id: "gltf", label: "write glTF" },
     { id: "optimise", label: "optimise" },

@@ -907,12 +907,14 @@ def stats(ob, depsgraph):
 
 
 def grow_painted(scene, warnings):
-    """Grow every ivy and moss object from its paint and settings (the ivy and
-    moss add-ons, tools/blender/ivy and tools/blender/moss, imported from the
-    repo since the export runs with --factory-startup). The paint is the source;
-    the mesh saved in the .blend is only the last preview, and would be stale
-    against a host edited or re-imported since. One whose host is gone is hidden
-    from the export. The ivy goes first: its rebuild carries a file from before
+    """Grow every ivy and moss object from its paint and settings, and every
+    plant from its settings and placement (the ivy, moss and foliage add-ons,
+    tools/blender/ivy, moss and foliage, imported from the repo since the
+    export runs with --factory-startup). The paint and the settings are the
+    source; the mesh saved in the .blend is only the last preview, and would be
+    stale against a host edited or re-imported since. One whose host is gone
+    (or a plant that cannot grow where it stands) is hidden from the export.
+    The ivy goes first: its rebuild carries a file from before
     2026-10-02 (when the ivy add-on was called moss) to the ivy names, which the
     moss add-on must not mistake for its own."""
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -951,6 +953,20 @@ def grow_painted(scene, warnings):
         else:
             took = f"rebuilt in {s.build_ms:.0f} ms" if what == "rebuilt" else "kept: built from this paint, rock and code"
             log(f"moss {ob.name} on {s.host}: {s.triangles} triangles, {s.dabs} dabs, print {s.texture} px, {took}")
+    # Plants (the foliage add-on, tools/blender/foliage) grow after the ivy and
+    # moss, in their own order, each clear of the plants before it.
+    if any(ob.type == "MESH" and ob.get("grown_by") == "foliage" for ob in scene.objects):
+        import foliage
+
+        foliage.register()
+        for ob, result in foliage.rebuild_all(scene):
+            s = ob.foliage
+            if result is None:
+                warnings.append(f"{ob.name}: {s.status}; not exported")
+                drop(ob)
+                continue
+            what = f"{s.parts} fronds, {s.leaves} leaves" if s.kind == "FERN" else f"{s.leaves} leaves"
+            log(f"foliage {ob.name} on {s.host}: {s.triangles} triangles ({what}), {s.build_ms:.0f} ms")
 
 
 def formation_warnings(scene, warnings):
@@ -1042,8 +1058,20 @@ def main():
         ob.select_set(True)
     view_layer.update()
 
+    # Plants (the foliage add-on) stay out of the bake: hidden in render, a
+    # neighbour is neither in Cycles' rays nor in a rock's cache key, so a fern
+    # edited on a rock re-bakes nothing, and no leaf card is baked into the
+    # stone's occlusion. The game's own shadows shade the rock under a plant.
+    plants = [ob for ob in kept if ob.get("grown_by") == "foliage"]
+    for ob in plants:
+        ob.hide_render = True
+    try:
+        baked = bake_procedural_textures(kept, cache_dir, paints, warnings, stale_occlusion)
+    finally:
+        for ob in plants:
+            ob.hide_render = False
     # Baking selects its own targets; the export selection is restored after.
-    if bake_procedural_textures(kept, cache_dir, paints, warnings, stale_occlusion):
+    if baked:
         for ob in scene.objects:
             try:
                 ob.select_set(ob in kept)

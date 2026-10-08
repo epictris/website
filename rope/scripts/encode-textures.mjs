@@ -91,6 +91,11 @@ if (argv.includes("--baked-maps")) {
     resize: [BAKED_MAX, BAKED_MAX],
   });
 }
+// The foliage add-on's atlas (tools/blender/foliage/library.py): every
+// painted leaf, frond and sprig the plants are cut from, packed at 2048 wide.
+// At the 1k of every other map a frond (0.45 m, 90 px on a 1080-line screen)
+// would draw from about 80 texels of its painted card; at 2k from 160.
+rules.push({ name: "foliage atlas, 2k", pattern: /foliage-atlas/, targetFormat: "webp", resize: [2048, 2048] });
 // A normal map whose detail is subtle codes as a grid of blocks (optimize-asset.ts).
 if (argv.includes("--lossless-normals")) {
   rules.push({ name: "normal map, lossless", slots: /^normalTexture$/, targetFormat: "webp", lossless: true, resize: [STANDARD, STANDARD] });
