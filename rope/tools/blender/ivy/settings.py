@@ -1,11 +1,12 @@
 """The properties an ivy object carries (`Object.ivy`) and the brush's
-(`Scene.ivy_brush`). An ivy object is a mesh parented to its host with an
-identity transform; its mesh is output only - the stamps and these settings
+(`Scene.ivy_brush`). An ivy object is a mesh parented to its host (the first
+it was painted on) with an identity transform, and grows on that host and
+every one it has joined since; its mesh is output only - the stamps and these settings
 are the source, and any rebuild (the panel's, or the scene exporter's)
 produces it again."""
 
 import bpy
-from bpy.props import BoolProperty, EnumProperty, FloatProperty, FloatVectorProperty, IntProperty, PointerProperty, StringProperty
+from bpy.props import BoolProperty, CollectionProperty, EnumProperty, FloatProperty, FloatVectorProperty, IntProperty, PointerProperty, StringProperty
 
 from .build import Params
 
@@ -33,9 +34,17 @@ def _color(name, default, desc):
 _D = Params()
 
 
+class IvyHost(bpy.types.PropertyGroup):
+    """A host joined to an ivy, by its `name` (every PropertyGroup has one)."""
+
+
 class IvySettings(bpy.types.PropertyGroup):
     is_ivy: BoolProperty(default=False, options={"HIDDEN"})
-    host: StringProperty(name="Host", description="The object this ivy grows on, matched by name so a re-imported host is found again")
+    host: StringProperty(name="Host", description="The object this ivy is parented to and its paint is stored against; "
+                                                  "matched by name so a re-imported host is found again")
+    # The other objects it grows on (stampbrush/hosts.py), joined by the brush
+    # as the paint reaches them; matched by name like `host`.
+    joined: CollectionProperty(type=IvyHost, options={"HIDDEN"})
     stamps: PointerProperty(type=bpy.types.Mesh, options={"HIDDEN"})
     live: BoolProperty(name="Live", default=True, description="Rebuild whenever a setting changes")
 
@@ -81,7 +90,7 @@ class IvySettings(bpy.types.PropertyGroup):
     clump_fill: _factor("Fill", _D.clump_fill, "Clump area laid over the paint, as a multiple of the paint's area", 4.0)
 
     # A vine is placed by hand (Place Vines); each is an arrow empty parented
-    # to the host, and the arrow's length is the vine's.
+    # to the ivy, and the arrow's length is the vine's.
     vine_length: _length("New Length", _D.vine_length, 0.05, 3.0, "Length a newly placed vine is given; scale its arrow (S) to change one")
     leaf_size: _length("Leaf Size", _D.leaf_size, 0.01, 0.5, "Leaf length at the top of a vine")
     leaf_tip: _length("Leaf Tip", _D.leaf_tip, 0.005, 0.3, "Leaf length at the tip of a vine")
@@ -175,7 +184,7 @@ class IvyBrush(bpy.types.PropertyGroup):
     show_stamps: BoolProperty(name="Show Stamps", default=False, description="Draw the stamps of the ivy being painted")
 
 
-CLASSES = (IvySettings, IvyBrush)
+CLASSES = (IvyHost, IvySettings, IvyBrush)
 
 
 def register():

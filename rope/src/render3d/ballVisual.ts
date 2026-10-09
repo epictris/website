@@ -216,10 +216,10 @@ export class BallVisual {
     });
   }
 
-  // Wear `texture` as the model's reflection in place of the scene's sky. The
-  // probe hands back the same texture every frame, so this recompiles nothing
-  // past the first call.
-  setReflection(texture: THREE.CubeTexture): void {
+  // Wear `texture` as the model's reflection in place of the scene's sky, or
+  // the sky again with null. The probe hands back the same texture every
+  // frame, so this recompiles nothing past the first call.
+  setReflection(texture: THREE.CubeTexture | null): void {
     this.reflection = texture;
     for (const mat of this.modelMaterials) setProbe(mat, texture);
   }

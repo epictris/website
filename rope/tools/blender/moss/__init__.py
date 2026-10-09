@@ -27,6 +27,11 @@ def prepare_export(scene):
     return ops.prepare_export(scene)
 
 
+def host_names(settings):
+    """Every object a moss grows on (`ob.moss`), its frame host first."""
+    return ops.host_names(settings)
+
+
 def texture_paints(scene):
     return ops.texture_paints(scene)
 

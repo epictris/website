@@ -10,11 +10,16 @@ import numpy as np
 from mathutils import Euler, Matrix, Vector
 
 from . import build, mesh_io, migrate
+from .stampbrush import stamps as stamp_io
 from .stampbrush.brush import GROWN_PROP
+from .stampbrush.hosts import surface
 
 COLLECTION = "Ivy"
-VINE_PROP = "ivy_vine"  # on an Empty: the name of the host its vine hangs from
-ORIGIN_PROP = "ivy_origin"  # on an Empty: the name of the host whose carpet grows out from it
+# On an Empty parented to its ivy: the ivy's name when it was placed (until
+# 2026-10-09: the name of the host it hung from; migrate.adopt_anchors carries
+# those to their ivy). The parent is what counts.
+VINE_PROP = "ivy_vine"  # a vine anchor
+ORIGIN_PROP = "ivy_origin"  # the origin the carpet grows out from
 SHADOW_PROP = "ivy_shadow"  # on a mesh: the shadow decal of the ivy it is parented to
 
 
@@ -68,22 +73,47 @@ def ivy_objects(scene=None):
     return [ob for ob in obs if is_ivy(ob)]
 
 
-def ivy_for_host(host):
-    for ob in bpy.data.objects:
-        if is_ivy(ob) and ob.ivy.host == host.name:
-            return ob
-    return None
+def host_names(s):
+    """Every host an ivy grows on, by name: its frame host first."""
+    return [s.host, *(h.name for h in s.joined if h.name != s.host)]
+
+
+def hosts_of(ob):
+    """The hosts of the ivy that exist, its frame host first."""
+    out = []
+    for name in host_names(ob.ivy):
+        h = bpy.data.objects.get(name)
+        if h is not None and h.type == "MESH" and h not in out:
+            out.append(h)
+    return out
+
+
+def join(ob, host):
+    """Grow the ivy on `host` too (the brush joins what its paint reaches)."""
+    if host.name not in host_names(ob.ivy):
+        ob.ivy.joined.add().name = host.name
+
+
+def ivies_on(host):
+    """Every ivy growing on `host`, by name."""
+    return sorted((ob for ob in bpy.data.objects if is_ivy(ob) and host.name in host_names(ob.ivy)), key=lambda o: o.name)
+
+
+def ivies_of(ob):
+    """[ob] if it is ivy, else every ivy growing on it."""
+    if ob is None:
+        return []
+    return [ob] if is_ivy(ob) else ivies_on(ob)
 
 
 def active_ivy(context):
-    """The ivy the panel shows: the active object if it is ivy, else the
-    active object's ivy."""
+    """The ivy the panel shows and the brush paints: the active object, if it
+    is ivy (or the shadow decal or an anchor of one). A rock may carry
+    several, so a rock is never one."""
     ob = context.active_object
-    if ob is None:
-        return None
-    if is_ivy(ob):
-        return ob
-    return ivy_for_host(ob)
+    if ob is not None and (is_shadow(ob) or is_vine(ob) or is_origin(ob)):
+        ob = ob.parent
+    return ob if is_ivy(ob) else None
 
 
 def _collection(scene):
@@ -126,29 +156,37 @@ def attach(ob, host):
     ob.matrix_basis.identity()
 
 
-def resolve_host(ob):
+def resolve_hosts(ob):
+    """The ivy's hosts, parented to the first; None when that frame host is
+    missing. A joined host that is missing is left out (`missing_hosts` names
+    it) and kept on the list: a rock re-imported under its name is found again."""
     host = bpy.data.objects.get(ob.ivy.host)
     if host is None or host.type != "MESH":
         return None
     attach(ob, host)
-    return host
+    return hosts_of(ob)
+
+
+def missing_hosts(ob):
+    have = {h.name for h in hosts_of(ob)}
+    return [n for n in host_names(ob.ivy) if n not in have]
 
 
 # --------------------------------------------------------------------------
 # Vines. Nothing places a vine but the artist: each is an arrow Empty in the
-# Ivy collection, parented to its host, pointing down, and the arrow's length
-# in the world is the vine's - move it with G, lengthen it with S, delete it
-# with X, as any object. A vine object is found by its `ivy_vine` property
-# (the host's name), so it survives the host being re-imported, like the paint.
+# Ivy collection, parented to its ivy (so it rides the ivy's frame host),
+# pointing down, and the arrow's length in the world is the vine's - move it
+# with G, lengthen it with S, delete it with X, as any object. Until
+# 2026-10-09 it was parented to its host and found by the host's name.
 
 
 def is_vine(ob):
     return ob is not None and ob.type == "EMPTY" and VINE_PROP in ob
 
 
-def vine_objects(host):
-    """This host's vine anchors, in a fixed order so a build is reproducible."""
-    return sorted((ob for ob in bpy.data.objects if is_vine(ob) and ob[VINE_PROP] == host.name), key=lambda o: o.name)
+def vine_objects(ivy):
+    """This ivy's vine anchors, in a fixed order so a build is reproducible."""
+    return sorted((ob for ob in ivy.children if is_vine(ob)), key=lambda o: o.name)
 
 
 def vine_length(ob):
@@ -156,27 +194,34 @@ def vine_length(ob):
     return (ob.matrix_world.to_3x3() @ Vector((0.0, 0.0, ob.empty_display_size))).length
 
 
-def create_vine(host, scene, at, length):
-    """An anchor at the world point `at`, hanging a vine `length` long."""
-    ob = bpy.data.objects.new(f"{host.name}.vine", None)
+def _anchor(ivy, ob):
+    """Parent an anchor Empty to its ivy, keeping where it is in the world."""
+    at = ob.matrix_world.copy()
+    ob.parent = ivy
+    ob.matrix_parent_inverse.identity()
+    ob.matrix_world = at
+
+
+def create_vine(ivy, scene, at, length):
+    """An anchor of the ivy at the world point `at`, hanging a vine `length` long."""
+    ob = bpy.data.objects.new(f"{ivy.name}.vine", None)
     ob.empty_display_type = "SINGLE_ARROW"
     ob.empty_display_size = max(length, 0.05)
-    ob[VINE_PROP] = host.name
+    ob[VINE_PROP] = ivy.name
     _collection(scene).objects.link(ob)
-    ob.parent = host
-    ob.matrix_parent_inverse.identity()
     # The arrow is +z; turned over it hangs the way the vine will.
     ob.matrix_world = Matrix.LocRotScale(Vector(at), Euler((math.pi, 0.0, 0.0)), Vector((1.0, 1.0, 1.0)))
+    _anchor(ivy, ob)
     return ob
 
 
-def read_vines(host):
-    """The host's anchors as the builder takes them: host-local positions and
-    world lengths."""
-    obs = vine_objects(host)
+def read_vines(ivy, frame):
+    """The ivy's anchors as the builder takes them: positions local to its
+    frame host and world lengths."""
+    obs = vine_objects(ivy)
     if not obs:
         return build.Vines.empty()
-    inv = host.matrix_world.inverted()
+    inv = frame.matrix_world.inverted()
     pos = np.array([(inv @ ob.matrix_world.translation)[:] for ob in obs], dtype=np.float64)
     return build.Vines(pos, np.array([vine_length(ob) for ob in obs], dtype=np.float64))
 
@@ -195,53 +240,55 @@ def nearest_vine(at, within):
 # --------------------------------------------------------------------------
 # The origin. A carpet grows out from one point: every leaf points away from
 # it and lies over the leaf beyond it. It is a small sphere Empty in the Ivy
-# collection, `<rock>.origin`, parented to the rock and carrying the rock's
-# name in `ivy_origin`, placed by Set Origin and moved with G like any
-# object; without one the carpet grows from the top of its paint. It only
-# orients and layers the leaves - the paint alone decides where ivy grows.
+# collection, `<ivy>.origin`, parented to the ivy (until 2026-10-09 to the
+# rock, found by the rock's name), placed by Set Origin and moved with G
+# like any object; without one the carpet grows from the top of its paint.
+# It only orients and layers the leaves - the paint alone decides where ivy
+# grows.
 
 
 def is_origin(ob):
     return ob is not None and ob.type == "EMPTY" and ORIGIN_PROP in ob
 
 
-def origin_object(host):
-    """This host's origin, if one is placed."""
-    obs = sorted((ob for ob in bpy.data.objects if is_origin(ob) and ob[ORIGIN_PROP] == host.name), key=lambda o: o.name)
+def origin_object(ivy):
+    """This ivy's origin, if one is placed."""
+    obs = sorted((ob for ob in ivy.children if is_origin(ob)), key=lambda o: o.name)
     return obs[0] if obs else None
 
 
-def set_origin(host, scene, at):
-    """Put the host's origin at the world point `at`, placing one if it has none."""
-    ob = origin_object(host)
+def set_origin(ivy, scene, at):
+    """Put the ivy's origin at the world point `at`, placing one if it has none."""
+    ob = origin_object(ivy)
     if ob is None:
-        ob = bpy.data.objects.new(f"{host.name}.origin", None)
+        ob = bpy.data.objects.new(f"{ivy.name}.origin", None)
         ob.empty_display_type = "SPHERE"
         ob.empty_display_size = 0.05
-        ob[ORIGIN_PROP] = host.name
+        ob[ORIGIN_PROP] = ivy.name
         _collection(scene).objects.link(ob)
-        ob.parent = host
-        ob.matrix_parent_inverse.identity()
     ob.matrix_world = Matrix.Translation(Vector(at))
+    _anchor(ivy, ob)
     return ob
 
 
-def read_origin(host):
-    """The host's origin as the builder takes it: a host-local point, or None."""
-    ob = origin_object(host)
+def read_origin(ivy, frame):
+    """The ivy's origin as the builder takes it: a point local to its frame
+    host, or None."""
+    ob = origin_object(ivy)
     if ob is None:
         return None
-    return np.array((host.matrix_world.inverted() @ ob.matrix_world.translation)[:], dtype=np.float64)
+    return np.array((frame.matrix_world.inverted() @ ob.matrix_world.translation)[:], dtype=np.float64)
 
 
 def rebuild(ob, depsgraph=None):
     """Grow the ivy object's mesh again from its stamps and settings. Returns
-    the build result, or None when the host is missing."""
+    the build result, or None when its frame host is missing."""
     s = ob.ivy
-    host = resolve_host(ob)
-    if host is None:
+    hosts = resolve_hosts(ob)
+    if hosts is None:
         s.status = f'host "{s.host}" not found'
         return None
+    host = hosts[0]
     # An ivy saved before today's defaults may carry yesterday's as stored
     # values (the template copy stored every one); let it follow the defaults.
     live, s.live = s.live, False
@@ -251,13 +298,9 @@ def rebuild(ob, depsgraph=None):
         s.live = live
     t0 = time.perf_counter()
     depsgraph = depsgraph or bpy.context.evaluated_depsgraph_get()
-    ev = host.evaluated_get(depsgraph)
-    host_mesh = ev.to_mesh()
-    try:
-        stamps = mesh_io.read_stamps(s.stamps)
-        result = build.build(host_mesh, host.matrix_world, stamps, read_vines(host), read_origin(host), s.params())
-    finally:
-        ev.to_mesh_clear()
+    co, tri = surface(hosts, depsgraph)
+    stamps = mesh_io.read_stamps(s.stamps)
+    result = build.build(co, tri, host.matrix_world, stamps, read_vines(ob, host), read_origin(ob, host), s.params())
     mesh_io.write_result(ob.data, result)
     ob.visible_shadow = True  # an ivy made before 2026-09-30 was created not casting
     write_shadow(ob, bpy.context.scene, result.shadow)
@@ -265,7 +308,8 @@ def rebuild(ob, depsgraph=None):
     s.leaves = result.leaves
     s.vine_count = result.vines
     s.build_ms = (time.perf_counter() - t0) * 1000.0
-    s.status = ""
+    missing = missing_hosts(ob)
+    s.status = f"grown without {', '.join(missing)}: not found" if missing else ""
     return result
 
 
@@ -303,11 +347,11 @@ def _flush():
 
 # --------------------------------------------------------------------------
 # A vine anchor or an origin moved, scaled, added or deleted regrows its
-# host's ivy. They are plain objects, so nothing tells the add-on about
-# them; after every depsgraph update their names and matrices are compared
-# with the last look, and a host whose set changed is scheduled. The
-# comparison walks the objects once and is far cheaper than a build; the
-# build itself runs from a timer, never inside the handler.
+# ivy. They are plain objects, so nothing tells the add-on about them; after
+# every depsgraph update their names and matrices are compared with the last
+# look, and an ivy whose set changed is scheduled. The comparison walks the
+# objects once and is far cheaper than a build; the build itself runs from a
+# timer, never inside the handler.
 
 _anchor_sig = {}
 
@@ -315,11 +359,10 @@ _anchor_sig = {}
 def _anchors_signature():
     sig = {}
     for ob in bpy.data.objects:
-        prop = VINE_PROP if is_vine(ob) else ORIGIN_PROP if is_origin(ob) else None
-        if prop is not None:
+        if (is_vine(ob) or is_origin(ob)) and ob.parent is not None:
             m = ob.matrix_world
-            sig.setdefault(ob[prop], []).append((ob.name, tuple(round(x, 5) for row in m for x in row), round(ob.empty_display_size, 5)))
-    return {host: tuple(sorted(v)) for host, v in sig.items()}
+            sig.setdefault(ob.parent.name, []).append((ob.name, tuple(round(x, 5) for row in m for x in row), round(ob.empty_display_size, 5)))
+    return {ivy: tuple(sorted(v)) for ivy, v in sig.items()}
 
 
 def _on_depsgraph(scene, depsgraph):
@@ -332,19 +375,19 @@ def _on_depsgraph(scene, depsgraph):
     changed = {h for h in set(sig) | set(_anchor_sig) if sig.get(h) != _anchor_sig.get(h)}
     _anchor_sig = sig
     for name in changed:
-        host = bpy.data.objects.get(name)
-        ivy = ivy_for_host(host) if host is not None else None
-        if ivy is not None and ivy.ivy.live:
+        ivy = bpy.data.objects.get(name)
+        if is_ivy(ivy) and ivy.ivy.live:
             schedule_rebuild(ivy)
 
 
 def _on_load(*_args):
-    """A file just opened: carry a moss-era file to its ivy names (migrate.py),
-    then take its anchors as the baseline, so opening a file regrows nothing."""
+    """A file just opened: carry a moss-era file to its ivy names and an older
+    file's anchors to their ivy (migrate.py), then take its anchors as the
+    baseline, so opening a file regrows nothing."""
     global _anchor_sig
     n = migrate.migrate()
     if n:
-        print(f"[ivy] carried {n} moss-era names over to ivy in {bpy.data.filepath or 'this file'}; save to keep them")
+        print(f"[ivy] carried {n} names and anchors forward in {bpy.data.filepath or 'this file'}; save to keep them")
     _anchor_sig = _anchors_signature()
 
 
@@ -403,14 +446,26 @@ class IVY_OT_clear(bpy.types.Operator):
         if ob is None:
             return {"CANCELLED"}
         mesh_io.write_stamps(ob.ivy.stamps, build.Stamps.empty())
+        if not vine_objects(ob):
+            ob.ivy.joined.clear()  # the paint was what joined them
         rebuild(ob)
         return {"FINISHED"}
+
+
+def selected_ivy(context):
+    """Every ivy selected, or growing on a selected object, the active one first."""
+    out = []
+    for ob in [context.active_object, *context.selected_objects]:
+        for i in ivies_of(ob):
+            if i not in out:
+                out.append(i)
+    return out
 
 
 class IVY_OT_copy_settings(bpy.types.Operator):
     bl_idname = "ivy.copy_settings"
     bl_label = "Copy Settings to Selected"
-    bl_description = "Give the ivy of every selected object (or every selected ivy) this ivy's settings; seeds are kept"
+    bl_description = "Give every selected ivy (and every ivy on a selected object) this ivy's settings; seeds are kept"
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
@@ -418,9 +473,8 @@ class IVY_OT_copy_settings(bpy.types.Operator):
         if src is None:
             return {"CANCELLED"}
         n = 0
-        for ob in context.selected_objects:
-            dst = ob if is_ivy(ob) else ivy_for_host(ob)
-            if dst is None or dst == src:
+        for dst in selected_ivy(context):
+            if dst == src:
                 continue
             dst.ivy.live = False
             dst.ivy.copy_from(src.ivy)
@@ -428,6 +482,76 @@ class IVY_OT_copy_settings(bpy.types.Operator):
             rebuild(dst)
             n += 1
         self.report({"INFO"}, f"copied to {n}")
+        return {"FINISHED"}
+
+
+class IVY_OT_merge(bpy.types.Operator):
+    bl_idname = "ivy.merge"
+    bl_label = "Merge Selected"
+    bl_description = ("Merge every other selected ivy into this one: their paint, vines and rocks become this ivy's, "
+                      "grown with this ivy's settings (and origin, if it has one) as one, and they are deleted")
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        dst = active_ivy(context)
+        others = [ob for ob in context.selected_objects if is_ivy(ob) and ob != dst]
+        if dst is None or not others:
+            self.report({"WARNING"}, "select the ivies to merge, the one to keep active")
+            return {"CANCELLED"}
+        frame = bpy.data.objects.get(dst.ivy.host)
+        if frame is None:
+            self.report({"WARNING"}, f'host "{dst.ivy.host}" not found')
+            return {"CANCELLED"}
+        stamps = mesh_io.read_stamps(dst.ivy.stamps)
+        merged = []
+        for ob in others:
+            src = bpy.data.objects.get(ob.ivy.host)
+            if src is None:
+                self.report({"WARNING"}, f'{ob.name}: host "{ob.ivy.host}" not found; left out')
+                continue
+            stamps = stamp_io.concatenated(stamps, stamp_io.carried(mesh_io.read_stamps(ob.ivy.stamps), src.matrix_world, frame.matrix_world))
+            for name in host_names(ob.ivy):
+                if name not in host_names(dst.ivy):
+                    dst.ivy.joined.add().name = name
+            for v in vine_objects(ob):
+                _anchor(dst, v)
+            origin = origin_object(ob)
+            if origin is not None:
+                if origin_object(dst) is None:
+                    _anchor(dst, origin)
+                else:
+                    bpy.data.objects.remove(origin)
+            merged.append(ob.name)
+            datas = [ob.data, ob.ivy.stamps]
+            for ch in list(ob.children):  # its shadow decal
+                datas.append(ch.data)
+                bpy.data.objects.remove(ch)
+            bpy.data.objects.remove(ob)
+            for data in datas:
+                if data is not None and data.users == 0:
+                    bpy.data.meshes.remove(data)
+        mesh_io.write_stamps(dst.ivy.stamps, stamps)
+        rebuild(dst)
+        self.report({"INFO"}, f"merged {', '.join(merged)} into {dst.name}")
+        return {"FINISHED"}
+
+
+class IVY_OT_select(bpy.types.Operator):
+    bl_idname = "ivy.select"
+    bl_label = "Select Ivy"
+    bl_description = "Select this ivy, to paint it or change its settings"
+    bl_options = {"REGISTER", "UNDO"}
+
+    name: bpy.props.StringProperty()
+
+    def execute(self, context):
+        ob = bpy.data.objects.get(self.name)
+        if not is_ivy(ob):
+            return {"CANCELLED"}
+        for o in context.selected_objects:
+            o.select_set(False)
+        ob.select_set(True)
+        context.view_layer.objects.active = ob
         return {"FINISHED"}
 
 
@@ -452,4 +576,4 @@ class IVY_OT_bake(bpy.types.Operator):
         return {"FINISHED"}
 
 
-CLASSES = (IVY_OT_rebuild, IVY_OT_clear, IVY_OT_copy_settings, IVY_OT_bake)
+CLASSES = (IVY_OT_rebuild, IVY_OT_clear, IVY_OT_copy_settings, IVY_OT_merge, IVY_OT_select, IVY_OT_bake)

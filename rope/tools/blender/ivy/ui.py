@@ -20,25 +20,50 @@ class IVY_PT_main(bpy.types.Panel):
     def draw(self, context):
         layout = self.layout
         brush = context.scene.ivy_brush
+        ob = ops.active_ivy(context)
         col = layout.column(align=True)
-        row = col.row(align=True)
-        row.operator("ivy.paint", text="Paint Ivy", icon="BRUSH_DATA").erase = False
-        row.operator("ivy.paint", text="Erase Ivy", icon="X").erase = True
+        if ob is None:
+            op = col.operator("ivy.paint", text="Paint New Ivy", icon="BRUSH_DATA")
+            op.erase, op.new = False, True
+        else:
+            # Paint and Erase work on the selected ivy; New Ivy starts
+            # another with its settings.
+            row = col.row(align=True)
+            op = row.operator("ivy.paint", text="Paint Ivy", icon="BRUSH_DATA")
+            op.erase, op.new = False, False
+            op = row.operator("ivy.paint", text="Erase Ivy", icon="X")
+            op.erase, op.new = True, False
+            op = col.operator("ivy.paint", text="New Ivy", icon="ADD")
+            op.erase, op.new = False, True
         col.prop(brush, "radius")
         col.prop(brush, "strength")
         col.prop(brush, "spacing")
         col.prop(brush, "show_stamps")
-        # Here as well as in the Vines panel, which only shows for an ivy: a
-        # bare rock gets its first vine from here.
+        # Here as well as in the Vines panel, which only shows for an ivy: with
+        # none selected, the first vine starts a new one.
         layout.operator("ivy.place_vines", icon="CURVE_PATH")
 
-        ob = ops.active_ivy(context)
         box = layout.box()
         if ob is None:
-            box.label(text="Paint a mesh, or select an ivy or its host", icon="INFO")
+            on = ops.ivies_of(context.active_object)
+            if on:
+                box.label(text=f"Ivy on {context.active_object.name}:")
+                for i in on:
+                    box.operator("ivy.select", text=i.name, icon="RESTRICT_SELECT_OFF").name = i.name
+            else:
+                box.label(text="No ivy selected", icon="INFO")
         else:
             s = ob.ivy
-            box.label(text=s.host, icon="OUTLINER_OB_MESH")
+            box.label(text=ob.name, icon="OUTLINER_OB_MESH")
+            names = ops.host_names(s)
+            col = box.column(align=True)
+            col.label(text=f"On {names[0]}" if len(names) == 1 else f"On {len(names)} objects, as one:")
+            if len(names) > 1:
+                for n in names:
+                    col.label(text=n, icon="DOT")
+            n_sel = sum(1 for o in context.selected_objects if ops.is_ivy(o))
+            if n_sel > 1:
+                box.operator("ivy.merge", text=f"Merge {n_sel} Selected into This", icon="AUTOMERGE_ON")
             if s.status:
                 box.label(text=s.status, icon="ERROR")
             else:
@@ -76,8 +101,7 @@ class IVY_PT_surface(_Sub, bpy.types.Panel):
         self.layout.label(text="Outline")
         _grid(self.layout, s, ("threshold", "edge_noise", "edge_scale", "min_patch", "rounding"))
         self.layout.label(text="Growth")
-        host = bpy.data.objects.get(s.host)
-        origin = ops.origin_object(host) if host is not None else None
+        origin = ops.origin_object(ob)
         self.layout.operator("ivy.set_origin", icon="EMPTY_AXIS")
         if origin is None:
             self.layout.label(text="No origin: the carpet grows from the top of its paint", icon="INFO")
@@ -98,8 +122,7 @@ class IVY_PT_vines(_Sub, bpy.types.Panel):
     def draw(self, context):
         ob = ops.active_ivy(context)
         s = ob.ivy
-        host = bpy.data.objects.get(s.host)
-        n = len(ops.vine_objects(host)) if host is not None else 0
+        n = len(ops.vine_objects(ob))
         self.layout.operator("ivy.place_vines", icon="CURVE_PATH")
         self.layout.label(text=f"{n} placed; move (G), lengthen (S) or delete (X) an anchor", icon="EMPTY_SINGLE_ARROW")
         if s.detail == "CLUMPS":

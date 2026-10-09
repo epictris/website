@@ -13,6 +13,7 @@ from . import build, mesh_io
 from .stampbrush import stamps as stamp_io
 from .stampbrush.brush import GROWN_PROP
 from .stampbrush.geometry import host_world
+from .stampbrush.hosts import surface
 
 COLLECTION = "Moss"
 
@@ -38,33 +39,53 @@ def moss_objects(scene=None):
     return [ob for ob in obs if is_moss(ob)]
 
 
-def moss_for_host(host):
-    for ob in bpy.data.objects:
-        if is_moss(ob) and ob.moss.host == host.name:
-            return ob
-    return None
+def host_names(s):
+    """Every host a moss grows on, by name: its frame host first."""
+    return [s.host, *(h.name for h in s.joined if h.name != s.host)]
 
 
-def moss_of(ob):
-    """The object if it is moss, else the moss growing on it."""
+def hosts_of(ob):
+    """The hosts of the moss that exist, its frame host first."""
+    out = []
+    for name in host_names(ob.moss):
+        h = bpy.data.objects.get(name)
+        if h is not None and h.type == "MESH" and h not in out:
+            out.append(h)
+    return out
+
+
+def join(ob, host):
+    """Grow the moss on `host` too (the brush joins what its paint reaches)."""
+    if host.name not in host_names(ob.moss):
+        ob.moss.joined.add().name = host.name
+
+
+def mosses_on(host):
+    """Every moss growing on `host`, by name."""
+    return sorted((ob for ob in bpy.data.objects if is_moss(ob) and host.name in host_names(ob.moss)), key=lambda o: o.name)
+
+
+def mosses_of(ob):
+    """[ob] if it is moss, else every moss growing on it."""
     if ob is None:
-        return None
-    return ob if is_moss(ob) else moss_for_host(ob)
+        return []
+    return [ob] if is_moss(ob) else mosses_on(ob)
 
 
 def active_moss(context):
-    """The moss the panel shows: the active object if it is moss, else the
-    active object's moss."""
-    return moss_of(context.active_object)
+    """The moss the panel shows and the brush paints: the active object, if
+    it is moss. A rock may carry several, so a rock is never one."""
+    ob = context.active_object
+    return ob if is_moss(ob) else None
 
 
 def selected_moss(context):
     """Every moss selected, or growing on a selected object, the active one first."""
     out = []
     for ob in [context.active_object, *context.selected_objects]:
-        m = moss_of(ob)
-        if m is not None and m not in out:
-            out.append(m)
+        for m in mosses_of(ob):
+            if m not in out:
+                out.append(m)
     return out
 
 
@@ -107,12 +128,20 @@ def attach(ob, host):
     ob.matrix_basis.identity()
 
 
-def resolve_host(ob):
+def resolve_hosts(ob):
+    """The moss's hosts, parented to the first; None when that frame host is
+    missing. A joined host that is missing is left out (`missing_hosts` names
+    it) and kept on the list: a rock re-imported under its name is found again."""
     host = bpy.data.objects.get(ob.moss.host)
     if host is None or host.type != "MESH":
         return None
     attach(ob, host)
-    return host
+    return hosts_of(ob)
+
+
+def missing_hosts(ob):
+    have = {h.name for h in hosts_of(ob)}
+    return [n for n in host_names(ob.moss) if n not in have]
 
 
 # The last growth of each moss object (by session_uid), with the key of what it
@@ -158,32 +187,37 @@ def _build_key(growth_key, p):
 
 
 class _Inputs:
-    """A moss's build inputs as they stand: its host's world triangles, its
+    """A moss's build inputs as they stand: the world triangles of what it grows
+    on (one host's own, or the union of its hosts: stampbrush/hosts.py), its
     stamps and settings, and the growth key over them."""
 
-    def __init__(self, ob, host, depsgraph):
-        ev = host.evaluated_get(depsgraph)
-        host_mesh = ev.to_mesh()
-        try:
-            self.co, self.tri = host_world(host_mesh, host.matrix_world)  # copied out before the build re-evaluates
-            area = sum(f.area for f in host_mesh.polygons)
-        finally:
-            ev.to_mesh_clear()
-        self.matrix = host.matrix_world.copy()
+    def __init__(self, ob, hosts, depsgraph):
+        self.hosts = hosts
+        self.co, self.tri = surface(hosts, depsgraph)  # copied out before the build re-evaluates
+        self.matrix = hosts[0].matrix_world.copy()
         # The export registers this add-on after the file is loaded, so the
         # load handler's migration has not run there.
         ob.moss.migrate_scale()
         self.p = ob.moss.params()
         if self.p.kind == "TEXTURE" and len(self.tri):
-            # The export paints a texture-only moss into the rock's baked
+            # The export paints a texture-only moss into each rock's baked
             # colour map, so its decal previews that: printed at the map's
-            # texel, uncapped. Print settings only: the growth and the
-            # export's paint keys never read them.
-            a, b, c = (self.co[self.tri[:, i]] for i in range(3))
-            world_area = 0.5 * float(np.linalg.norm(np.cross(b - a, c - a), axis=1).sum())
+            # texel (the finest of its rocks'), uncapped. Print settings only:
+            # the growth and the export's paint keys never read them.
             render = _formations_render()
-            self.p = dataclasses.replace(self.p, texel=render.colour_texel(host, area, world_area),
-                                         max_texture=render.BAKE_SIZE_MAX)
+            texels = []
+            for h in hosts:
+                ev = h.evaluated_get(depsgraph)
+                me = ev.to_mesh()
+                try:
+                    area = sum(f.area for f in me.polygons)
+                    co, tri = host_world(me, h.matrix_world)
+                finally:
+                    ev.to_mesh_clear()
+                a, b, c = (co[tri[:, i]] for i in range(3))
+                world_area = 0.5 * float(np.linalg.norm(np.cross(b - a, c - a), axis=1).sum())
+                texels.append(render.colour_texel(h, area, world_area))
+            self.p = dataclasses.replace(self.p, texel=min(texels), max_texture=render.BAKE_SIZE_MAX)
         self.stamps = stamp_io.read(ob.moss.stamps)
         self.key = _growth_key(self.co, self.tri, self.matrix, self.stamps, self.p)
 
@@ -201,15 +235,16 @@ def _grow(ob, inputs, regrow=False):
 
 def rebuild(ob, depsgraph=None, regrow=False):
     """Grow the moss object's mound and print again from its stamps and
-    settings. Returns the build result, or None when the host is missing.
-    The growth is reused when only FINISH_PARAMS changed, unless `regrow`."""
+    settings. Returns the build result, or None when its frame host is
+    missing. The growth is reused when only FINISH_PARAMS changed, unless
+    `regrow`."""
     s = ob.moss
-    host = resolve_host(ob)
-    if host is None:
+    hosts = resolve_hosts(ob)
+    if hosts is None:
         s.status = f'host "{s.host}" not found'
         return None
     t0 = time.perf_counter()
-    inputs = _Inputs(ob, host, depsgraph or bpy.context.evaluated_depsgraph_get())
+    inputs = _Inputs(ob, hosts, depsgraph or bpy.context.evaluated_depsgraph_get())
     p = inputs.p
     grown, reused = _grow(ob, inputs, regrow)
     result = build.finish(grown, p, mesh_io.decimate) if grown is not None else build.empty_result()
@@ -224,8 +259,13 @@ def rebuild(ob, depsgraph=None, regrow=False):
     s.reused = reused
     s.built_key = _build_key(inputs.key, p)
     s.build_ms = (time.perf_counter() - t0) * 1000.0
-    s.status = ""
+    s.status = _missing_status(ob)
     return result
+
+
+def _missing_status(ob):
+    missing = missing_hosts(ob)
+    return f"grown without {', '.join(missing)}: not found" if missing else ""
 
 
 def rebuild_all(scene):
@@ -250,7 +290,10 @@ def prepare_export(scene):
     - "texture": a texture-only moss. Nothing is grown here: its decal is not
       exported, and its dabs are only needed if its rock's colour map misses
       the bake cache, whose key holds the moss's (`texture_paints`).
-    - None: its host is missing (`s.status` says so).
+    - None: its frame host is missing (`s.status` says so).
+
+    A moss grown without a joined host that is missing is exported, with
+    `s.status` saying which.
 
     Before 2026-10-05 the export rebuilt every moss: 162 s of the river's
     380 s export, nearly all of it rebuilding mosses nobody had changed."""
@@ -259,16 +302,18 @@ def prepare_export(scene):
     _export.clear()
     for ob in moss_objects(scene):
         s = ob.moss
-        host = resolve_host(ob)
-        if host is None:
+        hosts = resolve_hosts(ob)
+        if hosts is None:
             s.status = f'host "{s.host}" not found'
             out.append((ob, None))
             continue
-        inputs = _Inputs(ob, host, depsgraph)
+        inputs = _Inputs(ob, hosts, depsgraph)
         if s.kind == "TEXTURE":
-            _export[ob.session_uid] = (host, inputs)
+            _export[ob.session_uid] = inputs
+            s.status = _missing_status(ob)
             out.append((ob, "texture"))
         elif s.built_key == _build_key(inputs.key, inputs.p) and len(ob.data.polygons) > 0:
+            s.status = _missing_status(ob)
             out.append((ob, "kept"))
         else:
             out.append((ob, "rebuilt" if rebuild(ob, depsgraph) is not None else None))
@@ -276,18 +321,18 @@ def prepare_export(scene):
 
 
 def texture_paints(scene):
-    """[(moss, host, layers, params, key)] for every texture-only moss
-    `prepare_export` saw: what scene_export.py paints into the host's colour
-    map (build.paint_map). `layers()` grows the moss on its first call (only a
-    rock that misses the bake cache calls it); `key` changes with anything
-    that changes the painting - the growth's inputs, the dab edge, the code -
-    and is part of the rock's bake-cache key."""
+    """[(moss, host, layers, params, key)] for every rock of every texture-only
+    moss `prepare_export` saw: what scene_export.py paints into that rock's
+    colour map (build.paint_map), a moss on several rocks once for each.
+    `layers()` grows the moss on its first call (only a rock that misses the
+    bake cache calls it; the moss's other rocks reuse that growth); `key`
+    changes with anything that changes the painting - the growth's inputs,
+    the dab edge, the code - and is part of the rock's bake-cache key."""
     out = []
     for ob in moss_objects(scene):
-        entry = _export.get(ob.session_uid)
-        if entry is None:
+        inputs = _export.get(ob.session_uid)
+        if inputs is None:
             continue
-        host, inputs = entry
 
         def layers(ob=ob, inputs=inputs):
             t0 = time.perf_counter()
@@ -296,7 +341,8 @@ def texture_paints(scene):
             return grown.layers if grown is not None else []
 
         key = hashlib.sha1(f"{inputs.key} {inputs.p.print_edge!r} {_code_digest()}".encode()).hexdigest()
-        out.append((ob, host, layers, inputs.p, key))
+        for host in inputs.hosts:
+            out.append((ob, host, layers, inputs.p, key))
     return out
 
 
@@ -408,6 +454,7 @@ class MOSS_OT_clear(bpy.types.Operator):
         if ob is None:
             return {"CANCELLED"}
         stamp_io.write(ob.moss.stamps, stamp_io.Stamps.empty())
+        ob.moss.joined.clear()  # the paint was what joined them
         rebuild(ob)
         return {"FINISHED"}
 
@@ -415,7 +462,7 @@ class MOSS_OT_clear(bpy.types.Operator):
 class MOSS_OT_copy_settings(bpy.types.Operator):
     bl_idname = "moss.copy_settings"
     bl_label = "Copy Settings to Selected"
-    bl_description = "Give the moss of every selected object (or every selected moss) this moss's settings; seeds are kept"
+    bl_description = "Give every selected moss (and every moss on a selected object) this moss's settings; seeds are kept"
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
@@ -423,9 +470,8 @@ class MOSS_OT_copy_settings(bpy.types.Operator):
         if src is None:
             return {"CANCELLED"}
         n = 0
-        for ob in context.selected_objects:
-            dst = ob if is_moss(ob) else moss_for_host(ob)
-            if dst is None or dst == src:
+        for dst in selected_moss(context):
+            if dst == src:
                 continue
             live, dst.moss.live = dst.moss.live, False
             dst.moss.copy_from(src.moss)
@@ -436,4 +482,63 @@ class MOSS_OT_copy_settings(bpy.types.Operator):
         return {"FINISHED"}
 
 
-CLASSES = (MOSS_OT_rebuild, MOSS_OT_clear, MOSS_OT_copy_settings)
+class MOSS_OT_merge(bpy.types.Operator):
+    bl_idname = "moss.merge"
+    bl_label = "Merge Selected"
+    bl_description = ("Merge every other selected moss into this one: their paint and their rocks become this moss's, "
+                      "grown with this moss's settings as one, and they are deleted")
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        dst = active_moss(context)
+        others = [ob for ob in context.selected_objects if is_moss(ob) and ob != dst]
+        if dst is None or not others:
+            self.report({"WARNING"}, "select the mosses to merge, the one to keep active")
+            return {"CANCELLED"}
+        frame = bpy.data.objects.get(dst.moss.host)
+        if frame is None:
+            self.report({"WARNING"}, dst.moss.status or f'host "{dst.moss.host}" not found')
+            return {"CANCELLED"}
+        stamps = stamp_io.read(dst.moss.stamps)
+        merged = []
+        for ob in others:
+            src = bpy.data.objects.get(ob.moss.host)
+            if src is None:
+                self.report({"WARNING"}, f'{ob.name}: host "{ob.moss.host}" not found; left out')
+                continue
+            stamps = stamp_io.concatenated(stamps, stamp_io.carried(stamp_io.read(ob.moss.stamps), src.matrix_world, frame.matrix_world))
+            for name in host_names(ob.moss):
+                if name not in host_names(dst.moss):
+                    dst.moss.joined.add().name = name
+            merged.append(ob.name)
+            st, me = ob.moss.stamps, ob.data
+            bpy.data.objects.remove(ob)
+            for data in (me, st):
+                if data is not None and data.users == 0:
+                    bpy.data.meshes.remove(data)
+        stamp_io.write(dst.moss.stamps, stamps)
+        rebuild(dst)
+        self.report({"INFO"}, f"merged {', '.join(merged)} into {dst.name}")
+        return {"FINISHED"}
+
+
+class MOSS_OT_select(bpy.types.Operator):
+    bl_idname = "moss.select"
+    bl_label = "Select Moss"
+    bl_description = "Select this moss, to paint it or change its settings"
+    bl_options = {"REGISTER", "UNDO"}
+
+    name: bpy.props.StringProperty()
+
+    def execute(self, context):
+        ob = bpy.data.objects.get(self.name)
+        if not is_moss(ob):
+            return {"CANCELLED"}
+        for o in context.selected_objects:
+            o.select_set(False)
+        ob.select_set(True)
+        context.view_layer.objects.active = ob
+        return {"FINISHED"}
+
+
+CLASSES = (MOSS_OT_rebuild, MOSS_OT_clear, MOSS_OT_copy_settings, MOSS_OT_merge, MOSS_OT_select)

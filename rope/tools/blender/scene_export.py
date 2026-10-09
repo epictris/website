@@ -936,23 +936,30 @@ def grow_painted(scene, warnings):
             warnings.append(f"{ob.name}: {ob.ivy.status}; not exported (nor its shadow)")
             drop(ob)
             continue
+        if ob.ivy.status:
+            warnings.append(f"{ob.name}: {ob.ivy.status}")
         cards = f"{result.leaves} clumps" if result.detail == "CLUMPS" else f"{result.leaves} leaves"
-        log(f"ivy {ob.name} on {ob.ivy.host}: {len(result.triangles)} triangles ({cards}, {result.vines} vines), {ob.ivy.build_ms:.0f} ms")
+        on = " + ".join(ivy.host_names(ob.ivy))
+        log(f"ivy {ob.name} on {on}: {len(result.triangles)} triangles ({cards}, {result.vines} vines), {ob.ivy.build_ms:.0f} ms")
     moss.register()
     for ob, what in moss.prepare_export(scene):
         s = ob.moss
+        on = " + ".join(moss.host_names(s))
         if what is None:
             warnings.append(f"{ob.name}: {s.status}; not exported")
             drop(ob)
-        elif what == "texture":
+            continue
+        if s.status:
+            warnings.append(f"{ob.name}: {s.status}")
+        if what == "texture":
             # Its decal is Blender's preview: never shipped, and out of the
             # bake's rays (3 mm off the rock, it would shade the rock's own
             # occlusion and bevel). The dabs go into the rock's colour map.
             drop(ob)
-            log(f"moss {ob.name} on {s.host}: texture only, painted into the rock's colour map")
+            log(f"moss {ob.name} on {on}: texture only, painted into the rock's colour map")
         else:
             took = f"rebuilt in {s.build_ms:.0f} ms" if what == "rebuilt" else "kept: built from this paint, rock and code"
-            log(f"moss {ob.name} on {s.host}: {s.triangles} triangles, {s.dabs} dabs, print {s.texture} px, {took}")
+            log(f"moss {ob.name} on {on}: {s.triangles} triangles, {s.dabs} dabs, print {s.texture} px, {took}")
     # Plants (the foliage add-on, tools/blender/foliage) grow after the ivy and
     # moss, in their own order, each clear of the plants before it.
     if any(ob.type == "MESH" and ob.get("grown_by") == "foliage" for ob in scene.objects):

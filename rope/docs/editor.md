@@ -304,6 +304,12 @@ The toolbar's **all debug** box (offered only with a 3D view) draws every shape'
 It is an editor setting like **snap**, never written to the level, and it is the renderer's (`Scene3D.setAllDebugShown` → `BodyVisual.setDebugForced`), not the data's: no shape's `debug` changes, a test's recording carries the level as authored, and the game draws each shape as authored.
 **G** still hides all of it in ▶ Test.
 
+The toolbar's **reflections** box (ticked by default, offered only with a 3D view) turns off the ball's reflection probe and the pools' mirror, in the editor's view and in ▶ Test; unticked, the ball reflects the sky again.
+Both passes draw the scene into targets of their own, and the probe's is linear and not tone mapped, so every material it sees needs a second shader program.
+That program is compiled the first time new scenery comes into the pass, mid-run, because the editor runs no `Scene3D.prewarm`.
+In a 2026-10-09 trace of a `ball` test, the probe and the mirror each cost a frame of 13-17 ms plus a 130-140 ms GPU-process stall, which made them the worst hitches after the test's first frame.
+Like **all debug**, it is an editor setting, the renderer's (`setReflectionProbe`, `setPoolMirror`), and never written to the level.
+
 ## Workspaces: Level and Visuals
 
 The toolbar opens with a switcher, **Level** and **Visuals** (**W** toggles).

@@ -861,6 +861,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // (`Scene3D.setAllDebugShown`), so no shape's `debug` changes and a test's
   // recording carries the level as authored.
   let allDebugShown = false;
+  // Whether the ball's reflection probe and the pools' mirror are drawn, here
+  // and in ▶ Test. Each compiles a second program for every material it sees
+  // (the probe draws untone-mapped into a linear target), first-use, mid-run:
+  // without the game's prewarm, a test paid 100-140 ms GPU-process stalls
+  // each time new scenery came into one of them (trace 2026-10-09). A view
+  // setting held by the renderer, never written into the level.
+  let reflectionsOn = true;
   const gridStep = 0.05; // snap spacing: fixed 5 cm (half the backdrop's 10 cm minor grid)
   let currentName: string | null = null;
   let dirty = false;
@@ -2399,6 +2406,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     allDebugChk.title =
       "Draw every collision shape's debug geometry in 3D, here and in ▶ Test, whether or not its own draw box is ticked. An editor setting: no shape's Debug settings change, and the game draws each shape as authored.";
     testRow.append(allDebugChk);
+    const reflectionsChk = checkbox("reflections", reflectionsOn, (v) => {
+      reflectionsOn = v;
+      scene3d.setReflectionProbe(v);
+      scene3d.setPoolMirror(v);
+    });
+    reflectionsChk.title =
+      "Draw the ball's reflection of the level and the pools' mirror, here and in ▶ Test. Untick to skip the shader compiles they cost the first time new scenery comes into them (the editor runs no prewarm). Off, the ball reflects the sky. An editor setting: the game always draws both.";
+    testRow.append(reflectionsChk);
   }
 
   // View toggle. Only offered when there is a WebGL context to toggle: a machine

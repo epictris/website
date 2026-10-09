@@ -21,6 +21,11 @@ def rebuild_all(scene):
     return ops.rebuild_all(scene)
 
 
+def host_names(settings):
+    """Every object an ivy grows on (`ob.ivy`), its frame host first."""
+    return ops.host_names(settings)
+
+
 def migrate():
     """Carry a file from when this add-on was "moss" to the ivy names."""
     return _migrate.migrate()

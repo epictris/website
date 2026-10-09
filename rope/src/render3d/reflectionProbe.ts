@@ -144,6 +144,12 @@ export class ReflectionProbe {
     return this.cube.texture;
   }
 
+  // Forget the cube, so the next capture draws all six faces: what it holds
+  // was drawn wherever the ball stood when capturing stopped.
+  reset(): void {
+    this.captured = false;
+  }
+
   dispose(): void {
     this.cube.dispose();
   }
@@ -245,11 +251,12 @@ export function wearProbe(mat: THREE.MeshStandardMaterial): void {
   mat.needsUpdate = true;
 }
 
-// What a material worn with `wearProbe` reflects from now on.
-export function setProbe(mat: THREE.MeshStandardMaterial, cube: THREE.CubeTexture): void {
+// What a material worn with `wearProbe` reflects from now on; null hands it
+// back to the scene's environment.
+export function setProbe(mat: THREE.MeshStandardMaterial, cube: THREE.CubeTexture | null): void {
   const uniforms = mat.userData.probe as ProbeUniforms | undefined;
   if (!uniforms) return;
   uniforms.probeCube.value = cube;
-  uniforms.probeOn.value = true;
+  uniforms.probeOn.value = cube !== null;
   uniforms.probeIntensity.value = mat.envMapIntensity;
 }

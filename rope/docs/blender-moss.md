@@ -20,13 +20,29 @@ The **Moss** tab in the 3D viewport's sidebar (N) has **Paint Moss** and **Erase
 The radius is in metres in the world.
 Anything grown, moss or ivy, is transparent to the brush (it carries `grown_by`), so moss can be painted under ivy.
 
-The first stroke on a rock creates its moss object, `<rock>.moss`, in a `Moss` collection, parented to the rock with an identity transform and found again by the rock's **name** (`moss.host`), as the ivy is.
-It takes the settings of the moss the panel showed when painting began; **Copy to Selected** hands one moss's settings to others.
+The brush paints **the selected moss**; with none selected (a rock, or nothing, is active) **Paint New Moss** creates one with its first stroke, and **New Moss** starts another with the selected one's settings.
+A new moss, `<rock>.moss` after the rock it was first painted on, lives in a `Moss` collection, parented to that rock (its **frame**) with an identity transform and found again by the rock's **name** (`moss.host`), as the ivy is; it is selected, so the next painting carries on with it.
+**Copy to Selected** hands one moss's settings to others.
+
+### One moss, many rocks
+
+Since 2026-10-09 a moss is not one rock's (the owner: "when I paint moss over the intersection of two pieces of geometry, I want the moss to naturally generate on both surfaces, as one single moss instance", and "remove the one-moss-per rock constraint").
+A rock may carry any number of mosses, and a moss grows on every rock its paint reaches: each stamp that paints joins the rock under the cursor and every other visible mesh whose surface is within the brush's radius (`stampbrush/hosts.py`, `Reach`) to the moss's hosts (`moss.joined`, by name like `host`).
+The stamps stay in the frame rock's local frame.
+A moss on several rocks grows on their **exact boolean union** (Blender's exact solver, self-intersection on, hole tolerant when a rock is open, cached by the rocks' triangles): one surface cut along the line where the rocks meet, sharing its vertices there, so the paint's falloff, the erosion field, the clumps and the Drape all cross the seam as they would cross a crease of one rock, and nothing grows on the faces of one rock buried in another.
+On a box sunk 10 cm into a slab with a stroke along the seam (scratch harness, 2026-10-09) the mound is one piece over the floor and up the wall with its light clumps on the seam, and none of it inside the box; one rock, as before, stops dead at the wall.
+The union of river's Terrace.003, Terrace.006 and Cube.004 (30k faces) takes 0.9 s.
+A moss on one rock skips the union and builds bit for bit as before (river's nine mosses: the same meshes and `built_key`s).
+The panel lists a moss's rocks, and for a selected rock its mosses (click one to select it).
+**Merge Selected** (with two or more mosses selected) folds the others into the active one: their stamps carried into its frame and appended, their rocks joined, their objects deleted; the active one's settings win.
+A joined rock that is missing is left out of the growth with a status line (and an export warning), and found again if it comes back under its name; a missing frame rock stops the moss, as before.
+The moss moves with its frame rock only: a moss over a rock that is a moving body's dressing and one that is not would tear in the game.
+In Texture Only, the export paints the moss into each of its rocks' colour maps, and the decal previews at the finest of their texels.
 A build takes seconds, not milliseconds (river's rocks: 1-25 s each since 2026-10-05), so **Live** (rebuild on every settings change) is off by default, and **the moss never grows while you paint**: a painted moss is hidden and its paint drawn as green points where the coverage passes `Threshold` (the build's own composite of the stamps, at points 1.2 cm apart over the rock, a stroke adding only its own stamps), and every moss the strokes touched grows when painting ends (Esc, right-click or Enter; the header says "growing N objects" and the cursor waits).
 Until 2026-10-05 the moss grew at the end of every stroke, which held Blender for the whole build each time; a guess from the last build's time is no help, because a build grows with its paint (a new moss built in 0.8 s took 8.8 s three strokes on). The ivy, whose builds are quick, still grows while painted (`GROW_WHILE_PAINTING` in stampbrush/brush.py).
 **Rebuild** and **Rebuild All** are in the panel.
 The panel shows the triangle count, the dabs, the print's size, the build time, the dabs per layer and the mound's mean height over the rock per tone step (the check that the light stands tallest).
-**Rebuild** acts on every selected moss and the moss of every selected rock (the button says how many); **Rebuild All** on every moss in the scene.
+**Rebuild** acts on every selected moss and every moss on a selected rock (the button says how many); **Rebuild All** on every moss in the scene.
 
 ### Detail: moss for the background
 
@@ -72,7 +88,7 @@ A file load clears the cache, and the scene exporter, a fresh process, always gr
 
 ## What is grown
 
-All of it is `build.py`, a pure function of the rock's world triangles, its matrix, the stamps and the settings; the one Blender call, the decimate, is passed in by the caller.
+All of it is `build.py`, a pure function of the rock's world triangles (or the union of its rocks', see "One moss, many rocks"), the frame rock's matrix, the stamps and the settings; the one Blender call, the decimate, is passed in by the caller.
 
 1. **Refinement and paint.** The rock's triangles under the stamps, plus a dab's reach beyond them, refined to `Resolution` (1.2 cm) with the ivy's longest-edge bisection, sorted by position so every random draw is reproducible; the stamps composited into a coverage, cut at `Threshold`. The paint decides where moss grows; the dabs draw its outline. Nothing is voxel-remeshed: the study remeshed its whole metre-sized rock at 6 mm, which a 5 m cavern rock cannot afford.
 2. **Dabs.** A dab is a rounded irregular blob, the polar curve `r(t) = r (1 + a1 cos(t - p1) + a2 cos(2t - p2) + a3 cos(3t - p3))` (owner: "shouldn't be circles at all - rounded blobby irregular"), and it is always **concave**: the owner asked to "remove all the convex shapes" because the blobs "look too round". A draw whose solidity (area over convex hull area) is above 0.97 is drawn again; measured over 2000 draws, the median solidity is 0.985 and 18 % are at or under 0.97, so a dab costs about five draws (a first cut at 0.93 accepted nothing and hung the build).

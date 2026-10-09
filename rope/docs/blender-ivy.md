@@ -35,34 +35,42 @@ Each stroke is one undo step.
 Ivy already grown is transparent to the brush, so painting over it paints the rock beneath.
 The brush's radius is in metres in the world, not pixels, so a stroke means the same thing up close and far away.
 
-The first stroke on a rock creates its ivy object, `<rock>.ivy`, in a `Ivy` collection, parented to the rock with an identity transform.
-It takes the settings of the ivy the panel was showing when painting began, so a look carries from rock to rock; **Copy to Selected** hands one ivy's settings to the ivy of every selected object.
+The brush paints **the selected ivy**; with none selected (a rock, or nothing, is active) **Paint New Ivy** creates one with its first stroke, and **New Ivy** starts another with the selected one's settings, so a look carries.
+A new ivy, `<rock>.ivy` after the rock it was first painted on, lives in an `Ivy` collection, parented to that rock (its **frame**) with an identity transform, and is selected, so the next painting carries on with it.
+**Copy to Selected** hands one ivy's settings to every selected ivy and every ivy on a selected rock.
+
+**One ivy, many rocks** (since 2026-10-09, with the moss; the owner: "remove the one-moss-per rock constraint - same for ivy"): a rock may carry any number of ivies, and an ivy grows on every rock its paint reaches.
+Each stamp that paints joins the rock under the cursor and every other visible mesh within the brush's radius to the ivy (`ivy.joined`, by name), and an ivy on several rocks grows on their exact boolean union, so the carpet crosses the seam where two rocks meet as it would cross a crease of one rock, and grows nothing on faces buried inside another rock.
+The mechanism, its numbers and its limits are the moss's: [blender-moss](blender-moss.md#one-moss-many-rocks).
+An ivy on one rock builds bit for bit as before (river's five ivies, checked 2026-10-09).
+The panel lists an ivy's rocks, and for a selected rock its ivies; **Merge Selected** folds the other selected ivies into the active one: stamps, rocks, vines, and their origin if the active one has none.
 A copy carries only the values the source has *set*; where the source follows a default, so does the copy (`IvySettings.copy_from`).
 Until 2026-09-30 it copied every value, which stored that day's defaults on the copy for good: when the ivy's defaults moved, the river's two copied carpets kept the blob carpet's bright greens and 7 cm thickness while their neighbours changed ("why is the ivy on boulder-2 so much brighter than on boulder-5?").
 Every rebuild now runs `IvySettings.migrate`, which unsets a stored value that is exactly one of those old defaults (`OLD_DEFAULTS`) and drops the blob carpet's own properties, so an old file follows the defaults again; a value the artist chose is untouched.
-Selecting an ivy object or its rock shows its settings in the panel; with **Live** on, any change regrows it after a short quiet spell.
+Selecting an ivy object (or its shadow or an anchor) shows its settings in the panel; with **Live** on, any change regrows it after a short quiet spell.
 A patch builds in about 0.1-0.4 s; the panel shows its triangle count and build time.
 
 **Why a brush and not weight painting.** A weight lives on a vertex and is blended linearly across a triangle, and the river's cavern rocks have 2-5 m facets, so the finest mask weights could hold there is a smear the width of a facet; making them paintable would mean subdividing the rocks, which ship.
-The brush's stamps (centre, surface normal, radius, signed strength, in painting order) are independent of the rock's topology, stored on the ivy object as the vertices of a face-less mesh (`ivy.stamps`) in the rock's local frame.
-The ivy object finds its rock by **name** (`ivy.host`) and sits in its own collection, so a rock deleted and re-imported under the same name (the river's `Cavern` collection is, whenever `import_into_river.py` runs) is found again and its ivy grows back on the new mesh.
+The brush's stamps (centre, surface normal, radius, signed strength, in painting order) are independent of the rock's topology, stored on the ivy object as the vertices of a face-less mesh (`ivy.stamps`) in its frame rock's local frame.
+The ivy object finds its rocks by **name** (`ivy.host`, `ivy.joined`) and sits in its own collection, so a rock deleted and re-imported under the same name (the river's `Cavern` collection is, whenever `import_into_river.py` runs) is found again and its ivy grows back on the new mesh.
 
 ## Placing vines
 
 Since 2026-09-30 nothing places a vine but the artist; the grower used to scatter them along the paint's front edge, and the owner wanted them "explicitly placed in the scene".
-The Vines panel's **Place Vines** runs like the brush: a click on a mesh hangs a vine from that point, Ctrl+click on an anchor removes it, Escape ends it.
-A click on a rock with no paint creates its ivy object too, so a bare rock can wear a vine.
+The Vines panel's **Place Vines** runs like the brush: a click on a mesh hangs a vine of the selected ivy from that point (and joins the mesh to it), Ctrl+click on an anchor removes it, Escape ends it.
+With no ivy selected the first click creates one, so a bare rock can wear a vine.
 
-An anchor is an ordinary object: an arrow Empty named `<rock>.vine`, in the `Ivy` collection, parented to the rock, pointing down, carrying the rock's name in a `ivy_vine` property (found by name like the paint, so it survives a re-import).
+An anchor is an ordinary object: an arrow Empty named `<ivy>.vine`, in the `Ivy` collection, **parented to its ivy** (so it rides the ivy's frame rock), pointing down, carrying a `ivy_vine` property.
+Until 2026-10-09 it was parented to the rock and named the rock in `ivy_vine`, when a rock had one ivy; `migrate.adopt_anchors` gives such an anchor (and an origin) to the ivy whose frame is that rock, where it stands, when a file is opened and before the exporter regrows the ivy (river's two origins moved, its ivies regrew byte for byte).
 **The arrow's length in the world is the vine's**: a new one gets the panel's `New Length`, and afterwards it is moved with G, lengthened with S and deleted with X like anything else.
-The add-on watches the anchors after every depsgraph update (`ops._on_depsgraph`: names, matrices and sizes compared with the last look, one walk of the objects) and regrows the rock's ivy when its set changed, from a timer, never inside the handler; opening a file takes its anchors as the baseline and regrows nothing.
+The add-on watches the anchors after every depsgraph update (`ops._on_depsgraph`: names, matrices and sizes compared with the last look, one walk of the objects) and regrows the anchor's ivy when its set changed, from a timer, never inside the handler; opening a file takes its anchors as the baseline and regrows nothing.
 Anchors are empties, so the exporter skips them as it skips every non-mesh.
 
 ## The origin
 
 Since 2026-09-30 the carpet is ivy that has **grown out from one point**: every leaf points away from the origin and lies over the leaf beyond it, the way runners lay their leaves.
-The Carpet panel's **Set Origin** runs like the vine placer: a click on a painted mesh puts that mesh's origin there (a small sphere Empty, `<rock>.origin`, in the `Ivy` collection, parented to the rock, carrying the rock's name in `ivy_origin`), Ctrl+click removes it, Escape ends it; afterwards the origin is moved with G and deleted with X like any object, and the same watcher that regrows a rock for its vines regrows it for its origin.
-A rock with no origin grows from the **top of its paint**, as ivy that came over the crown of the rock does.
+The Carpet panel's **Set Origin** runs like the vine placer: a click puts the selected ivy's origin there (a small sphere Empty, `<ivy>.origin`, in the `Ivy` collection, parented to the ivy, carrying `ivy_origin`), Ctrl+click removes it, Escape ends it; afterwards the origin is moved with G and deleted with X like any object, and the same watcher that regrows an ivy for its vines regrows it for its origin.
+An ivy with no origin grows from the **top of its paint**, as ivy that came over the crown of the rock does.
 
 The origin only orients and layers the leaves.
 **The paint alone decides where ivy grows**: the origin may sit anywhere, even off the paint, and nothing grows toward it or around it.

@@ -1,6 +1,7 @@
 """The properties a moss object carries (`Object.moss`) and the brush's
-(`Scene.moss_brush`). A moss object is a mesh parented to its host with an
-identity transform; its mesh and its print are output only - the stamps and
+(`Scene.moss_brush`). A moss object is a mesh parented to its host (the
+first it was painted on) with an identity transform, and grows on that host and
+every one it has joined since; its mesh and its print are output only - the stamps and
 these settings are the source, and any rebuild (the panel's, or the scene
 exporter's) produces them again.
 
@@ -9,7 +10,7 @@ the ivy's settings there (with `is_moss` set) until the ivy add-on migrates it.
 A moss object is told apart by `grown_by == "moss"`, never by this group."""
 
 import bpy
-from bpy.props import BoolProperty, EnumProperty, FloatProperty, FloatVectorProperty, IntProperty, PointerProperty, StringProperty
+from bpy.props import BoolProperty, CollectionProperty, EnumProperty, FloatProperty, FloatVectorProperty, IntProperty, PointerProperty, StringProperty
 
 from .build import Params
 
@@ -57,8 +58,16 @@ _D = Params()
 COARSENED_LENGTHS = ("resolution", "dab_min", "dab_max", "texel", "print_edge")
 
 
+class MossHost(bpy.types.PropertyGroup):
+    """A host joined to a moss, by its `name` (every PropertyGroup has one)."""
+
+
 class MossSettings(bpy.types.PropertyGroup):
-    host: StringProperty(name="Host", description="The object this moss grows on, matched by name so a re-imported host is found again")
+    host: StringProperty(name="Host", description="The object this moss is parented to and its paint is stored against; "
+                                                  "matched by name so a re-imported host is found again")
+    # The other objects it grows on (stampbrush/hosts.py), joined by the brush
+    # as the paint reaches them; matched by name like `host`.
+    joined: CollectionProperty(type=MossHost, options={"HIDDEN"})
     stamps: PointerProperty(type=bpy.types.Mesh, options={"HIDDEN"})
     # Off by default: a build takes seconds, too long to follow a slider.
     live: BoolProperty(name="Live", default=False, description="Rebuild whenever a setting changes (a build takes seconds)")
@@ -187,7 +196,7 @@ class MossBrush(bpy.types.PropertyGroup):
     show_stamps: BoolProperty(name="Show Stamps", default=False, description="Draw the stamps of the moss being painted")
 
 
-CLASSES = (MossSettings, MossBrush)
+CLASSES = (MossHost, MossSettings, MossBrush)
 
 
 def register():

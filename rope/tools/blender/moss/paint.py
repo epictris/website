@@ -1,8 +1,10 @@
 """The moss brush: the shared stamp brush (stampbrush/brush.py, also the ivy's)
-laying stamps on a rock's moss object. Left-drag paints, Ctrl+left-drag erases,
-[ and ] resize, Escape (or right-click, or Enter) ends; Erase Moss is the same
-brush the other way round. The first stroke on a rock creates its moss object
-with the settings of the moss the panel showed when painting began."""
+laying stamps on one moss object, the selected one. Left-drag paints, Ctrl+left-
+drag erases, [ and ] resize, Escape (or right-click, or Enter) ends; Erase Moss
+is the same brush the other way round. With no moss selected, or from New Moss,
+the first stroke creates a moss with the settings of the moss the panel showed
+when painting began. The paint joins every rock it reaches to the moss, which
+grows over them as one."""
 
 import bpy
 
@@ -26,8 +28,11 @@ class MOSS_OT_paint(StampBrush, bpy.types.Operator):
     def active(self, context):
         return ops.active_moss(context)
 
-    def grown_for(self, host):
-        return ops.moss_for_host(host)
+    def hosts_of(self, ob):
+        return ops.hosts_of(ob)
+
+    def join(self, ob, host):
+        ops.join(ob, host)
 
     def create(self, host, scene, template):
         return ops.create_moss(host, scene, template)

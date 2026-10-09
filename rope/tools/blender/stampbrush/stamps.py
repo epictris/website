@@ -45,6 +45,25 @@ class Stamps:
         )
 
 
+def carried(stamps, src, dst):
+    """Stamps in the frame `src` (a host's 4x4 world matrix) carried into the
+    frame `dst`: for a growth merged into another, whose paint is in its own
+    frame host's local frame."""
+    a, b = np.array(src, dtype=np.float64), np.array(dst, dtype=np.float64)
+    m = np.linalg.inv(b) @ a
+    pos = stamps.position @ m[:3, :3].T + m[:3, 3]
+    nrm = stamps.normal @ np.linalg.inv(a[:3, :3]) @ b[:3, :3]  # to world by the inverse transpose, then back
+    nrm /= np.maximum(np.linalg.norm(nrm, axis=1, keepdims=True), 1e-12)
+    return Stamps(pos, nrm, stamps.radius.copy(), stamps.strength.copy())
+
+
+def concatenated(first, then):
+    """`first` followed by `then`, painting order kept."""
+    return Stamps(*(np.concatenate([x, y]) for x, y in zip(
+        (first.position, first.normal, first.radius, first.strength),
+        (then.position, then.normal, then.radius, then.strength))))
+
+
 def _attr(me, name):
     a = me.attributes.get(name)
     return a if a is not None else me.attributes.get(LEGACY[name])

@@ -1,4 +1,6 @@
-"""Carry a .blend from before 2026-10-02, when this add-on was "moss", forward.
+"""Carry an older .blend forward: one from before 2026-10-02, when this add-on
+was "moss", and one from before 2026-10-09, when an ivy's vine anchors and
+origin were its rock's (`adopt_anchors`).
 
 The ivy was the moss add-on until the painterly moss (tools/blender/moss) took the
 name. A file saved before then keeps the ivy under the old names: the settings in
@@ -41,7 +43,8 @@ def _legacy_group(ob):
 
 
 def migrate():
-    """Rename a moss-era ivy to its ivy names. Returns how many things moved."""
+    """Rename a moss-era ivy to its ivy names, and give rock-parented anchors
+    to their ivy (`adopt_anchors`). Returns how many things moved."""
     n = 0
     for ob in list(bpy.data.objects):
         sysp, g = _legacy_group(ob)
@@ -98,6 +101,41 @@ def migrate():
             img["ivy_atlas"] = img["moss_atlas"]
             del img["moss_atlas"]
             n += 1
+    return n + adopt_anchors()
+
+
+def adopt_anchors():
+    """Carry vine anchors and origins from before 2026-10-09 to their ivy.
+    They were parented to the rock and named it in `ivy_vine` / `ivy_origin`,
+    when a rock had one ivy; now an ivy owns its anchors as its children.
+    Each goes to the ivy whose frame host is that rock, keeping where it is in
+    the world. Returns how many moved."""
+    ivies = {}
+    for ob in bpy.data.objects:
+        s = getattr(ob, "ivy", None)
+        if ob.type == "MESH" and s is not None and s.is_ivy:
+            ivies.setdefault(s.host, []).append(ob)
+    n = 0
+    for ob in list(bpy.data.objects):
+        if ob.type != "EMPTY" or ob.parent is None:
+            continue
+        prop = "ivy_vine" if "ivy_vine" in ob.keys() else "ivy_origin" if "ivy_origin" in ob.keys() else None
+        if prop is None:
+            continue
+        parent = ob.parent
+        ps = getattr(parent, "ivy", None)
+        if parent.type == "MESH" and ps is not None and ps.is_ivy:
+            continue  # already its ivy's
+        owners = sorted(ivies.get(ob[prop], []), key=lambda o: o.name)
+        if not owners:
+            continue  # a rock with anchors and no ivy: nothing grows from them either way
+        ivy = owners[0]
+        at = ob.matrix_world.copy()
+        ob.parent = ivy
+        ob.matrix_parent_inverse.identity()
+        ob.matrix_world = at
+        ob[prop] = ivy.name
+        n += 1
     return n
 
 

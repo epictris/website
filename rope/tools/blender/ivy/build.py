@@ -7,15 +7,17 @@ shaded by a smooth "hull" normal borrowed from the rock, so the carpet reads
 as one soft mass of distinct colour blocks. See rope/docs/blender-ivy.md for
 the history of the choices.
 
-Everything here is a pure function of (host mesh, host matrix, stamps, vines,
-origin, params) - no bpy state is read or written - so the add-on's live
-rebuild and the scene exporter's rebuild produce the same mesh bit for bit.
+Everything here is a pure function of (surface triangles, frame host matrix,
+stamps, vines, origin, params) - no bpy state is read or written - so the
+add-on's live rebuild and the scene exporter's rebuild produce the same mesh
+bit for bit.
 
-THE PIPELINE (in world space, metres; the result is returned in the host's
-local frame, because the ivy object is parented to the host with an identity
+THE PIPELINE (in world space, metres; the result is returned in the frame
+host's local frame, because the ivy object is parented to it with an identity
 transform):
 
-1. The host's evaluated triangles, welded.
+1. The surface: the host's evaluated triangles, welded, or the union of the
+   ivy's hosts when its paint has joined several (stampbrush/hosts.py).
 2. The triangles near a stamp, refined by edge bisection to `resolution`.
 3. The mask: the stamps composited in painting order, and a lobed threshold.
    The paint is the only thing that decides WHERE ivy grows.
@@ -85,7 +87,7 @@ from .stampbrush.geometry import compact as _compact
 from .stampbrush.geometry import drop_islands as _drop_islands
 from .stampbrush.geometry import edges as _edges
 from .stampbrush.geometry import geodesic as _geodesic
-from .stampbrush.geometry import host_world, kdtree, stamps_world
+from .stampbrush.geometry import kdtree, stamps_world
 from .stampbrush.geometry import mask as _mask
 from .stampbrush.geometry import normalize as _normalize
 from .stampbrush.geometry import refine as _refine
@@ -441,14 +443,16 @@ def _crowd(P, r):
 # 8. The build
 
 
-def build(host_mesh, host_matrix, stamps, vines, origin, p):
-    """The ivy for one host: the carpet its paint covers, grown out from
+def build(co, tri, host_matrix, stamps, vines, origin, p):
+    """The ivy over a surface: the carpet its paint covers, grown out from
     `origin` (a host-local point, or None for the top of the paint), and a
-    vine at every anchor. `host_mesh` is the host's evaluated mesh."""
+    vine at every anchor. `co`, `tri` are what it grows on, welded world
+    triangles: one host's (stampbrush.geometry.host_world) or the union of
+    several (stampbrush/hosts.py); `host_matrix` is the frame host's, which
+    the stamps, the vines and the origin are in and the result is returned in."""
     painted = len(stamps) > 0 and bool((stamps.strength > 0).any())
     if not painted and len(vines) == 0:
         return _empty_result()
-    co, tri = host_world(host_mesh, host_matrix)
     if len(tri) == 0:
         return _empty_result()
     rnd = random.Random(p.seed)

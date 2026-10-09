@@ -4,13 +4,20 @@ operator in the 3D viewport that lays stamps on whatever mesh is under the curso
 Left-drag paints, Ctrl+left-drag erases, [ and ] resize, Escape (or right-click, or
 Enter) ends; the erase variant is the same brush the other way round. Navigation
 passes through. Every stroke lays stamps (centre, surface normal, radius, signed
-strength) on the grown object of the host it hit, creating one the first time a
-host is painted - with the settings of the one the panel showed when painting
-began, so a style carries from rock to rock. Anything either add-on grows carries
-`GROWN_PROP` and is transparent to the brush: the ray passes through it to the
-rock, so ivy can be painted over moss and moss under ivy.
+strength) on ONE grown object, the target: the selected one when painting began,
+or, with none selected (or when started as "new"), one created by the first
+stamp - with the settings of the one the panel showed, so a style carries - and
+selected, so the next painting carries on with it. A stamp that paints joins
+every mesh it reaches (the one under the cursor, and any other whose surface is
+within the brush's radius) to the target's hosts (stampbrush/hosts.py), so paint
+over the seam of two rocks grows one growth over both. A rock may carry any
+number of growths. Anything either add-on grows carries `GROWN_PROP` and is
+transparent to the brush: the ray passes through it to the rock, so ivy can be
+painted over moss and moss under ivy.
 
-Moved out of the ivy's paint.py on 2026-10-02, when the moss add-on was written."""
+Moved out of the ivy's paint.py on 2026-10-02, when the moss add-on was written.
+Until 2026-10-09 each rock had at most one growth of each kind and a stroke went
+to the growth of whatever rock it hit."""
 
 import math
 
@@ -22,7 +29,8 @@ from gpu_extras.batch import batch_for_shader
 from mathutils import Vector
 
 from . import stamps as stamp_io
-from .geometry import composite, host_world, normalize, stamps_world
+from .geometry import composite, normalize, stamps_world
+from .hosts import Reach, world_triangles
 
 GROWN_PROP = "grown_by"  # on every object an add-on grows: "ivy" or "moss"
 LIVE_BUDGET_MS = 150.0  # rebuild during a stroke only while a build is this quick
@@ -87,20 +95,21 @@ def inside_region(context, event):
 
 
 class Coverage:
-    """A grown object's paint as it would be cut: points sampled over its host
+    """A grown object's paint as it would be cut: points sampled over its hosts
     (world space, area-uniform, PREVIEW_SPACING apart), the stamps composited
     at them as the build composites them at its vertices, and those at or over
     the threshold drawn. New stamps are composited onto the last coverage, so a
-    stroke costs its own stamps, never the whole paint again."""
+    stroke costs its own stamps, never the whole paint again. The hosts are
+    sampled each whole, not as their union: a point buried in another rock is
+    hidden by the depth test."""
 
-    def __init__(self, host, depsgraph):
-        ev = host.evaluated_get(depsgraph)
-        me = ev.to_mesh()
-        try:
-            co, tri = host_world(me, host.matrix_world)
-        finally:
-            ev.to_mesh_clear()
-        self.matrix = host.matrix_world.copy()
+    def __init__(self, hosts, frame, depsgraph):
+        self.names = tuple(h.name for h in hosts)
+        parts = [world_triangles(h, depsgraph) for h in hosts]
+        base = np.cumsum([0] + [len(co) for co, _t in parts[:-1]])
+        co = np.concatenate([co for co, _t in parts])
+        tri = np.concatenate([tri + b for (_co, tri), b in zip(parts, base)]).astype(np.int64)
+        self.matrix = frame.matrix_world.copy()
         a, b, c = co[tri[:, 0]], co[tri[:, 1]], co[tri[:, 2]]
         cross = np.cross(b - a, c - a)
         area = 0.5 * np.linalg.norm(cross, axis=1)
@@ -158,11 +167,12 @@ class StampBrush:
 
         LABEL                 the header's name, e.g. "Ivy"
         brush(context)        the brush settings: radius, strength, spacing, show_stamps
-        active(context)       the grown object the panel shows, or None
-        grown_for(host)       the host's grown object, or None
-        create(host, scene, template)   a new grown object for the host
+        active(context)       the grown object the panel shows (the selected one), or None
+        create(host, scene, template)   a new grown object, its frame on the host
         stamps_mesh(ob)       the mesh holding the object's stamps
-        host_of(ob)           the object's host, or None
+        host_of(ob)           the object's frame host (its stamps' frame), or None
+        hosts_of(ob)          every host it grows on that exists, the frame first
+        join(ob, host)        add a host to those it grows on
         rebuild(ob)           grow it again
         build_ms(ob)          how long its last build took
 
@@ -182,6 +192,8 @@ class StampBrush:
 
     LABEL = "Paint"
     erase: bpy.props.BoolProperty(name="Erase", default=False, options={"SKIP_SAVE"}, description="Start as the eraser: drag erases, Ctrl+drag paints")
+    new: bpy.props.BoolProperty(name="New", default=False, options={"SKIP_SAVE"},
+                                description="Paint a new one (with the selected one's settings) instead of painting the selected one")
 
     @classmethod
     def poll(cls, context):
@@ -189,6 +201,9 @@ class StampBrush:
 
     def invoke(self, context, event):
         self.template = self.active(context)
+        # By name: an undo during painting replaces every object.
+        self.target = None if self.new or self.template is None else self.template.name
+        self.reach = None  # Reach over the visible meshes, made at the first stamp that paints
         self.hover = None
         self.stroke = None  # {"erase": bool, "last": Vector | None, "coord": (x, y)}
         self.pending = {}  # grown object's name -> list of stamps not yet written
@@ -207,7 +222,8 @@ class StampBrush:
     def _header(self, context):
         b = self.brush(context)
         keys = "LMB erase   Ctrl+LMB paint" if self.erase else "LMB paint   Ctrl+LMB erase"
-        context.area.header_text_set(f"{self.LABEL}   {keys}   [ ] radius {b.radius:.3f} m   strength {b.strength:.2f}   Esc/RMB done")
+        into = self.target or f"a new {self.LABEL.lower()}"
+        context.area.header_text_set(f"{self.LABEL} into {into}   {keys}   [ ] radius {b.radius:.3f} m   strength {b.strength:.2f}   Esc/RMB done")
 
     def _finish(self, context):
         if self.stale:
@@ -281,17 +297,36 @@ class StampBrush:
         if last is not None and (loc - last).length < brush.radius * brush.spacing:
             return
         self.stroke["last"] = loc.copy()
-        ob = self.grown_for(host)
+        erase = self.stroke["erase"]
+        ob = bpy.data.objects.get(self.target) if self.target else None
         if ob is None:
-            if self.stroke["erase"]:
-                return
+            if erase:
+                return  # nothing selected to erase from
             ob = self.create(host, context.scene, self.template)
+            self.target = ob.name
             if self.template is None:
                 self.template = ob
-        mw = host.matrix_world
+            # Selected, so the panel shows it and the next painting carries on with it.
+            for o in context.selected_objects:
+                o.select_set(False)
+            ob.select_set(True)
+            context.view_layer.objects.active = ob
+            self._header(context)
+        if not erase:
+            if self.reach is None:
+                self.reach = Reach([o for o in context.visible_objects if paintable(o)], context.evaluated_depsgraph_get())
+            have = {h.name for h in self.hosts_of(ob)}
+            for h in [host, *self.reach.near(loc, brush.radius)]:
+                if h.name not in have:
+                    self.join(ob, h)
+                    have.add(h.name)
+        frame = self.host_of(ob)
+        if frame is None:
+            return
+        mw = frame.matrix_world
         p = mw.inverted() @ loc
         n = (mw.to_3x3().transposed() @ nrm).normalized()
-        strength = -brush.strength if self.stroke["erase"] else brush.strength
+        strength = -brush.strength if erase else brush.strength
         self.pending.setdefault(ob.name, []).append((p[:], n[:], brush.radius, strength))
         self.fresh += 1
 
@@ -327,13 +362,15 @@ class StampBrush:
 
     def _preview(self, context, ob):
         threshold = self.coverage_threshold(ob)
-        host = self.host_of(ob)
-        if threshold is None or host is None:
+        frame = self.host_of(ob)
+        if threshold is None or frame is None:
             return
+        hosts = self.hosts_of(ob)
         stamps = stamp_io.read(self.stamps_mesh(ob))
         cov = self.previews.get(ob.name)
-        if cov is None or not cov.update(stamps, threshold):
-            cov = self.previews[ob.name] = Coverage(host, context.evaluated_depsgraph_get())
+        # Started over when a host joined: its points were never sampled.
+        if cov is None or cov.names != tuple(h.name for h in hosts) or not cov.update(stamps, threshold):
+            cov = self.previews[ob.name] = Coverage(hosts, frame, context.evaluated_depsgraph_get())
             cov.update(stamps, threshold)
         if ob.name not in self.hidden and ob.visible_get():
             ob.hide_set(True)
@@ -344,6 +381,8 @@ class StampBrush:
         if ob.name in self.hidden:
             ob.hide_set(False)
             self.hidden.discard(ob.name)
+            if ob.name == self.target:
+                ob.select_set(True)  # hiding it deselected it; the next painting carries on with it
 
     # ----------------------------------------------------------------------
 
@@ -367,7 +406,7 @@ class StampBrush:
             shader.uniform_float("color", self.ERASE_COLOR if erase else self.COLOR)
             batch_for_shader(shader, "LINE_STRIP", {"pos": circle(loc, nrm, brush.radius)}).draw(shader)
         if brush.show_stamps:
-            ob = self.active(context) or self.template
+            ob = bpy.data.objects.get(self.target) if self.target else None
             if ob is not None:
                 host = self.host_of(ob)
                 st = stamp_io.read(self.stamps_mesh(ob))

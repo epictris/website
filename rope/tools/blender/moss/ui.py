@@ -20,22 +20,47 @@ class MOSS_PT_main(bpy.types.Panel):
     def draw(self, context):
         layout = self.layout
         brush = context.scene.moss_brush
+        ob = ops.active_moss(context)
         col = layout.column(align=True)
-        row = col.row(align=True)
-        row.operator("moss.paint", text="Paint Moss", icon="BRUSH_DATA").erase = False
-        row.operator("moss.paint", text="Erase Moss", icon="X").erase = True
+        if ob is None:
+            op = col.operator("moss.paint", text="Paint New Moss", icon="BRUSH_DATA")
+            op.erase, op.new = False, True
+        else:
+            # Paint and Erase work on the selected moss; New Moss starts
+            # another with its settings.
+            row = col.row(align=True)
+            op = row.operator("moss.paint", text="Paint Moss", icon="BRUSH_DATA")
+            op.erase, op.new = False, False
+            op = row.operator("moss.paint", text="Erase Moss", icon="X")
+            op.erase, op.new = True, False
+            op = col.operator("moss.paint", text="New Moss", icon="ADD")
+            op.erase, op.new = False, True
         col.prop(brush, "radius")
         col.prop(brush, "strength")
         col.prop(brush, "spacing")
         col.prop(brush, "show_stamps")
 
-        ob = ops.active_moss(context)
         box = layout.box()
         if ob is None:
-            box.label(text="Paint a mesh, or select a moss or its host", icon="INFO")
+            on = ops.mosses_of(context.active_object)
+            if on:
+                box.label(text=f"Moss on {context.active_object.name}:")
+                for m in on:
+                    box.operator("moss.select", text=m.name, icon="RESTRICT_SELECT_OFF").name = m.name
+            else:
+                box.label(text="No moss selected", icon="INFO")
         else:
             s = ob.moss
-            box.label(text=s.host, icon="OUTLINER_OB_MESH")
+            box.label(text=ob.name, icon="OUTLINER_OB_MESH")
+            names = ops.host_names(s)
+            col = box.column(align=True)
+            col.label(text=f"On {names[0]}" if len(names) == 1 else f"On {len(names)} objects, as one:")
+            if len(names) > 1:
+                for n in names:
+                    col.label(text=n, icon="DOT")
+            n_sel = sum(1 for o in context.selected_objects if ops.is_moss(o))
+            if n_sel > 1:
+                box.operator("moss.merge", text=f"Merge {n_sel} Selected into This", icon="AUTOMERGE_ON")
             if s.status:
                 box.label(text=s.status, icon="ERROR")
             box.row(align=True).prop(s, "kind", expand=True)

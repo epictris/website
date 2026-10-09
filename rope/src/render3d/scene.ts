@@ -341,9 +341,13 @@ export class Scene3D {
   }
 
   // Off, the ball reflects the scene's environment as it did before the probe:
-  // a switch for measuring what the probe costs in a live frame (`?probe=0`).
+  // a switch for measuring what the probe costs in a live frame (`?probe=0`),
+  // and the editor's "reflections" toggle, which flips it mid-run.
   setReflectionProbe(on: boolean): void {
+    if (on === this.reflectionOn) return;
     this.reflectionOn = on;
+    if (on) this.reflectionProbe.reset();
+    else this.ballVisual?.setReflection(null);
   }
 
   // Off, no pool draws its mirror: a switch for measuring what the pass costs
