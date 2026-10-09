@@ -600,7 +600,7 @@ class Cache:
 
     def _complete(self, entry, names):
         """The files of `entry` holding all of `names` and its mesh, else None."""
-        files = {n: os.path.join(self.root, entry, f"{n}.png") for n in names}
+        files = {n: os.path.join(self.root, entry, map_file(n)) for n in names}
         mesh = os.path.join(self.root, entry, MESH_FILE)
         meta = os.path.join(self.root, entry, "meta.json")
         if not all(os.path.isfile(p) for p in [*files.values(), mesh, meta]):
@@ -639,7 +639,7 @@ class Cache:
         shutil.rmtree(tmp, ignore_errors=True)
         os.makedirs(tmp)
         for im in images:
-            with open(os.path.join(tmp, f"{im.name}.png"), "wb") as f:
+            with open(os.path.join(tmp, map_file(im.name)), "wb") as f:
                 f.write(im.packed_file.data)
         bare = mesh.copy()
         try:
@@ -662,6 +662,15 @@ class Cache:
                 shutil.rmtree(os.path.join(self.root, name), ignore_errors=True)
                 gone += 1
         return gone
+
+
+def map_file(name):
+    """The file in an entry holding the map named `name`. A map is named after
+    its object, and an object's name may hold a slash ("Cube / guide-004",
+    2026-10-09, whose put failed on a directory that was not there), so the
+    slash is escaped, and the escape's own "%" with it; any other name is its
+    file as it always was, so no entry already on disk goes missing."""
+    return name.replace("%", "%25").replace("/", "%2F") + ".png"
 
 
 def load(path, name, colorspace):

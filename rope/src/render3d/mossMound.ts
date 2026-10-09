@@ -52,7 +52,14 @@ function lip(): string {
 		vec3 mossR2 = cross( normal, mossSx );
 		float mossDet = dot( mossSx, mossR1 );
 		vec3 mossGrad = sign( mossDet ) * ( dFdx( mossH ) * mossR1 + dFdy( mossH ) * mossR2 );
-		normal = normalize( abs( mossDet ) * normal - mossGrad );
+		// Zero where the surface is edge-on to the pixel (mossDet 0) on a flat
+		// stretch of the roll (mossGrad 0), and normalize( 0 ) is NaN: a NaN
+		// texel in the reflection probe's cube spreads through its mips and
+		// drew the ball's lower half black over the mound (2026-10-09). The
+		// surface normal stands there.
+		vec3 mossN = abs( mossDet ) * normal - mossGrad;
+		float mossL = dot( mossN, mossN );
+		if ( mossL > 0.0 ) normal = mossN * inversesqrt( mossL );
 	}
 	#endif`;
 }
