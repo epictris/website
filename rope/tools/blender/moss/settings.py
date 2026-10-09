@@ -114,6 +114,16 @@ class MossSettings(bpy.types.PropertyGroup):
     drape: _length("Drape", _D.drape, 0.0, 3.0, "The tightest curve the moss bends in: across a step or hollow tighter than this it "
                                                 "slopes from the edge down to the moss below instead of following the rock's corner. "
                                                 "0 follows the rock")
+    edge_kind: EnumProperty(
+        name="Edge", default=_D.edge_kind, update=_changed,
+        items=[("PRINT", "Printed", "The outline is in the print: its alpha is the distance to the dabs' outline, the "
+                                    "material cuts the moss there and shades a rolled lip inside it. The mesh runs a "
+                                    "little past the outline and costs only what the mound's area costs", 0),
+               ("MESH", "Mesh", "The mesh is cut along the dabs' outline, rounded over and skirted under its lip: "
+                                "hundreds of triangles a metre of outline", 1)],
+        description="How the mound's edge is drawn")
+    edge_apron: _length("Apron", _D.edge_apron, 0.0, 0.2, "How far past the outline the mesh runs before the print cuts it "
+                                                         "(never less than a refined edge and a half)")
     edge_round: _length("Edge Round", _D.edge_round, 0.0, 0.05, "How far in from its outline the moss's top rounds down to its lip")
     overhang: _length("Overhang", _D.overhang, 0.0, 0.02, "How high the lip stands over the rock and how far its foot is tucked in under it "
                                                         "(at most half of Floor)")
@@ -152,6 +162,7 @@ class MossSettings(bpy.types.PropertyGroup):
     texture: IntProperty(options={"HIDDEN"})
     texel_used: FloatProperty(options={"HIDDEN"})
     area: FloatProperty(options={"HIDDEN"})
+    apron: FloatProperty(options={"HIDDEN"}, default=-1.0)  # a printed edge: how far past the outline the mesh's open edge is at its closest (m), or -1
     reused: BoolProperty(options={"HIDDEN"})  # the last rebuild finished a cached growth
     build_ms: FloatProperty(options={"HIDDEN"})
     status: StringProperty(options={"HIDDEN"})

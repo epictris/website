@@ -18,6 +18,7 @@ import type { Vec2 } from "../engine/vec2";
 import { gltfLoader, trackPending } from "./assets";
 import { withDownload } from "./download";
 import { wearIvyLeaves } from "./ivyLeaves";
+import { isPrintedMoss, wearMossMound } from "./mossMound";
 import { threeRotation, threeY } from "./space";
 import { nodeNameOf, SCENE_ASSETS, sceneFile } from "./scenes";
 
@@ -192,6 +193,7 @@ export function loadSceneFile(scene: string): Promise<THREE.Object3D | null> {
       .then((gltf) => {
         let ivyMeshes = 0;
         let foliageMeshes = 0;
+        let mossMeshes = 0;
         gltf.scene.traverse((o) => {
           const mesh = o as THREE.Mesh;
           if (!mesh.isMesh) return;
@@ -212,16 +214,22 @@ export function loadSceneFile(scene: string): Promise<THREE.Object3D | null> {
           // no Blender name at all - only its parent does. (A test on
           // `mesh.name` never matched, so until 2026-09-30 the ivy cast all along.)
           // Until 2026-10-02 the ivy add-on was "moss", and a scene exported
-          // before then names its ivy `.moss` and `.moss.shadow`. That name
-          // now belongs to the painterly moss mound, an opaque mesh that must
-          // NOT wear the leaf biases, so an old `.moss` mesh counts as ivy only
-          // when it is alpha-cut, as the leaf cards are and the mound never
-          // is. This can go once every published scene is re-exported.
+          // before then named its ivy `.moss` and `.moss.shadow`; that name
+          // now belongs to the painterly moss mound, and every published scene
+          // has been exported since (checked 2026-10-10: river's `.moss`
+          // nodes wear their own `<rock>.moss` print materials, grotto and
+          // rails have none), so a `.moss` mesh is a mound. A mound with a
+          // printed edge is alpha-cut and wears mossMound.ts (the
+          // anti-aliased cut and the lip's shading); one with a mesh edge is
+          // opaque and needs nothing.
           const names = blenderNames(mesh);
           const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
           const decal = names.some((n) => /\.(ivy|moss)\.shadow$/.test(n));
-          const legacyIvy = names.some((n) => /\.moss$/.test(n)) && mats.some((m) => m.alphaTest > 0);
-          const ivy = !decal && (legacyIvy || names.some((n) => /\.ivy$/.test(n)));
+          const ivy = !decal && names.some((n) => /\.ivy$/.test(n));
+          if (isPrintedMoss(names, mats)) {
+            for (const m of mats) if (m.alphaTest > 0) wearMossMound(m);
+            mossMeshes++;
+          }
           // Plants (the Blender foliage add-on's ferns, sprig bushes and
           // hanging vines) are leaves too, and wear one material, `Foliage`,
           // found by its name, which glTF and the optimiser keep: whatever
@@ -239,6 +247,7 @@ export function loadSceneFile(scene: string): Promise<THREE.Object3D | null> {
         });
         if (ivyMeshes > 0) console.log(`[render3d] scene "${scene}": ${ivyMeshes} ivy meshes cast and receive leaf shadows`);
         if (foliageMeshes > 0) console.log(`[render3d] scene "${scene}": ${foliageMeshes} plant meshes cast and receive leaf shadows`);
+        if (mossMeshes > 0) console.log(`[render3d] scene "${scene}": ${mossMeshes} moss mounds cut and lipped by their print`);
         return gltf.scene as THREE.Object3D;
       })
       .catch((err: unknown) => {

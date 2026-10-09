@@ -5,22 +5,40 @@ import bpy
 import numpy as np
 
 UV = "UVMap"
-MATERIAL_VERSION = 1
+MATERIAL_VERSION = 2  # 2: the printed edge (2026-10-10)
 GENERATED_BY = "tools/blender/moss/build.py"  # scene_export.py: a generated image owes no credit
 
 
-def decimate(v, t, ratio):
+def decimate(v, t, ratio, attrs=None, keep=None):
     """Blender's collapse decimate on (vertices, triangles); the build's one use
-    of bpy, passed in so build.py stays a pure function."""
+    of bpy, passed in so build.py stays a pure function. `attrs` are per-vertex
+    float arrays carried through (interpolated where vertices merge), returned
+    as the third value; `keep` marks vertices the collapse must leave where
+    they are (a vertex group at weight 0, which only prices them out: they
+    still move millimetres). A planar dissolve was tried instead for the
+    printed edge (2026-10-10) and dropped: at 5 degrees it kept the pile's
+    curvature, 16.6k triangles on Terrace.003 against the collapse's 3.6k,
+    and at 20 degrees it chorded 30 mm under the rock's facet edges."""
     me = bpy.data.meshes.new("moss.decimate")
     _write_geometry(me, v, t)
+    attrs = list(attrs or [])
+    for k, a in enumerate(attrs):
+        layer = me.attributes.new(f"carry{k}", "FLOAT", "POINT")
+        layer.data.foreach_set("value", np.asarray(a, np.float32).ravel())
     ob = bpy.data.objects.new("moss.decimate", me)
     bpy.context.scene.collection.objects.link(ob)
     try:
+        if keep is not None and keep.any():
+            vg = ob.vertex_groups.new(name="collapse")
+            vg.add(np.nonzero(~keep)[0].tolist(), 1.0, "REPLACE")
+            vg.add(np.nonzero(keep)[0].tolist(), 0.0, "REPLACE")
         mod = ob.modifiers.new("decimate", "DECIMATE")
         mod.decimate_type = "COLLAPSE"
         mod.ratio = ratio
         mod.use_collapse_triangulate = True
+        if keep is not None and keep.any():
+            mod.vertex_group = "collapse"
+            mod.vertex_group_factor = 1000.0
         dg = bpy.context.evaluated_depsgraph_get()
         out = bpy.data.meshes.new_from_object(ob.evaluated_get(dg), depsgraph=dg)
     finally:
@@ -32,9 +50,14 @@ def decimate(v, t, ratio):
         out.vertices.foreach_get("co", co)
         tri = np.empty(len(out.loop_triangles) * 3, np.int32)
         out.loop_triangles.foreach_get("vertices", tri)
+        carried = []
+        for k in range(len(attrs)):
+            a = np.empty(len(out.vertices), np.float32)
+            out.attributes[f"carry{k}"].data.foreach_get("value", a)
+            carried.append(a.astype(np.float64))
     finally:
         bpy.data.meshes.remove(out)
-    return co.reshape(-1, 3).astype(np.float64), tri.reshape(-1, 3).astype(np.int64)
+    return co.reshape(-1, 3).astype(np.float64), tri.reshape(-1, 3).astype(np.int64), carried
 
 
 def _write_geometry(me, v, t):
@@ -62,11 +85,12 @@ def write_result(ob, result):
     uv.data.foreach_set("uv", result.uvs.astype(np.float32).ravel())
     me.shade_smooth()
     decal = ob.moss.kind == "TEXTURE"
+    kind = "decal" if decal else ("printed" if ob.moss.edge_kind == "PRINT" else "opaque")
     # A texture-only moss's decal is a preview of paint on the rock: it casts
     # no shadow (the export hides it from the bake, and never ships it).
     ob.visible_shadow = not decal
-    img = _image(ob, result.image, alpha=decal)
-    mat = material(ob, img, decal)
+    img = _image(ob, result.image, alpha=kind != "opaque")
+    mat = material(ob, img, kind)
     if list(me.materials) != [mat]:
         me.materials.clear()
         me.materials.append(mat)
@@ -75,7 +99,8 @@ def write_result(ob, result):
 def _image(ob, pixels, alpha=False):
     """The print as a packed 8-bit sRGB image named after the moss. The pixels
     of a byte image are its stored (sRGB) values, so the linear print is encoded.
-    With `alpha`, the print's coverage is the image's alpha."""
+    With `alpha`, the print's alpha (a decal's coverage, a printed edge's
+    distance) is the image's alpha."""
     name = f"{ob.name}.print"
     size = pixels.shape[0]
     img = bpy.data.images.get(name)
@@ -97,19 +122,25 @@ def _image(ob, pixels, alpha=False):
     return img
 
 
-def material(ob, img, decal=False):
+def material(ob, img, kind="opaque"):
     """The moss's matte material: the print as the base colour, nothing else. Every
     node is one the glTF exporter carries (baseColorTexture, roughness 1, no specular).
-    A decal's (a texture-only moss's) is blended by the print's alpha."""
+    `kind`: "opaque" (a mound with a mesh edge); "decal" (a texture-only
+    moss's, blended by the print's coverage); "printed" (a mound with a
+    printed edge: cut at the print's alpha 0.5, which the exporter carries as
+    alphaMode MASK, and the lip's roll as a Bump node off the same alpha,
+    which it does not - the game's shader does the same, mossMound.ts)."""
     name = f"{ob.name}"
     mat = bpy.data.materials.get(name)
-    if mat is None or mat.get("moss_print_material") != MATERIAL_VERSION or mat.get("moss_decal", False) != decal:
+    if mat is None or mat.get("moss_print_material") != MATERIAL_VERSION or mat.get("moss_kind") != kind:
         if mat is None:
             mat = bpy.data.materials.new(name)
         if mat.node_tree is None:
             mat.use_nodes = True
         mat["moss_print_material"] = MATERIAL_VERSION
-        mat["moss_decal"] = decal
+        mat["moss_kind"] = kind
+        if "moss_decal" in mat:
+            del mat["moss_decal"]
         nt = mat.node_tree
         for n in list(nt.nodes):
             if n.type not in {"BSDF_PRINCIPLED", "OUTPUT_MATERIAL"}:
@@ -118,18 +149,85 @@ def material(ob, img, decal=False):
         bsdf.inputs["Roughness"].default_value = 1.0
         if "Specular IOR Level" in bsdf.inputs:
             bsdf.inputs["Specular IOR Level"].default_value = 0.0
+        x, y = bsdf.location.x, bsdf.location.y
         tex = nt.nodes.new("ShaderNodeTexImage")
         tex.name = "print"
-        tex.location = (bsdf.location.x - 400, bsdf.location.y)
+        tex.location = (x - 900, y)
         tex.interpolation = "Linear"
         nt.links.new(tex.outputs["Color"], bsdf.inputs["Base Color"])
         bsdf.inputs["Alpha"].default_value = 1.0
-        if decal:
+        if kind == "decal":
             nt.links.new(tex.outputs["Alpha"], bsdf.inputs["Alpha"])
+        elif kind == "printed":
+            _printed_edge_nodes(nt, tex, bsdf, x, y)
         if hasattr(mat, "surface_render_method"):
-            mat.surface_render_method = "BLENDED" if decal else "DITHERED"
+            mat.surface_render_method = "BLENDED" if kind == "decal" else "DITHERED"
+        if kind == "printed":
+            try:  # the legacy setting the glTF exporter still reads on some versions
+                mat.blend_method = "CLIP"
+                mat.alpha_threshold = 0.5
+            except Exception:
+                pass
         mat.diffuse_color = (0.15, 0.25, 0.1, 1.0)
     tex = mat.node_tree.nodes.get("print")
     if tex is not None and tex.image != img:
         tex.image = img
     return mat
+
+
+def prepare_gltf():
+    """Before a glTF export: unlink the lip's Bump node from every printed-edge
+    material. The exporter (Blender 5.2) carries a Bump fed from an image as
+    a normalTexture OF THAT IMAGE - the print's colour read as normals, which
+    drew the moss black in three (2026-10-10). The game shades the lip itself
+    (mossMound.ts). The export never saves the file, and a Rebuild links it
+    again."""
+    n = 0
+    for mat in bpy.data.materials:
+        if mat.get("moss_kind") != "printed" or mat.node_tree is None:
+            continue
+        bsdf = next((x for x in mat.node_tree.nodes if x.type == "BSDF_PRINCIPLED"), None)
+        if bsdf is None:
+            continue
+        for link in list(bsdf.inputs["Normal"].links):
+            mat.node_tree.links.remove(link)
+            n += 1
+    return n
+
+
+def _printed_edge_nodes(nt, tex, bsdf, x, y):
+    """The printed edge's nodes: the cut (alpha > 0.5, as the foliage's
+    material cuts its atlas, which the glTF exporter carries as MASK), and the
+    lip: the alpha read back as the distance inside the outline, the roll's
+    height h(d) = R sqrt(1 - (1 - d / R)^2) up to R (build.LIP_ROUND), a Bump
+    node's height, Distance 1 so a metre of height is a metre."""
+
+    def math(op, a, b, px, py, clamp=False):
+        n = nt.nodes.new("ShaderNodeMath")
+        n.operation = op
+        n.use_clamp = clamp
+        n.location = (px, py)
+        for k, v in ((0, a), (1, b)):
+            if isinstance(v, bpy.types.NodeSocket):
+                nt.links.new(v, n.inputs[k])
+            else:
+                n.inputs[k].default_value = v
+        return n.outputs[0]
+
+    from .build import LIP_ROUND, SDF_RANGE
+
+    cut = math("GREATER_THAN", tex.outputs["Alpha"], 0.5, x - 300, y - 300)
+    nt.links.new(cut, bsdf.inputs["Alpha"])
+    # d = (alpha - 0.5) * 2 SDF_RANGE; x = clamp(d / R); h = R sqrt(1 - (1 - x)^2)
+    d = math("MULTIPLY", math("SUBTRACT", tex.outputs["Alpha"], 0.5, x - 650, y - 500), 2.0 * SDF_RANGE, x - 650, y - 650)
+    xx = math("DIVIDE", d, LIP_ROUND, x - 650, y - 800, clamp=True)
+    one_minus = math("SUBTRACT", 1.0, xx, x - 650, y - 950)
+    sq = math("SUBTRACT", 1.0, math("MULTIPLY", one_minus, one_minus, x - 500, y - 950), x - 500, y - 1100)
+    h = math("MULTIPLY", math("SQRT", sq, 0.0, x - 350, y - 1100), LIP_ROUND, x - 350, y - 1250)
+    bump = nt.nodes.new("ShaderNodeBump")
+    bump.name = "lip"
+    bump.location = (x - 300, y - 600)
+    bump.inputs["Strength"].default_value = 1.0
+    bump.inputs["Distance"].default_value = 1.0
+    nt.links.new(h, bump.inputs["Height"])
+    nt.links.new(bump.outputs["Normal"], bsdf.inputs["Normal"])

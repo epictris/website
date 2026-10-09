@@ -256,6 +256,7 @@ def rebuild(ob, depsgraph=None, regrow=False):
     s.texture = result.image.shape[0] if result.image.size else 0
     s.texel_used = result.texel
     s.area = result.area
+    s.apron = result.apron if p.edge_kind == "PRINT" and np.isfinite(result.apron) else -1.0
     s.reused = reused
     s.built_key = _build_key(inputs.key, p)
     s.build_ms = (time.perf_counter() - t0) * 1000.0

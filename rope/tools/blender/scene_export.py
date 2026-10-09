@@ -1086,6 +1086,10 @@ def main():
                 pass
         view_layer.update()
     step("gltf")
+    # A printed-edge moss's lip is a Bump node the exporter would carry as a
+    # normal map of the print itself (black moss in the game); the game
+    # shades the lip (src/render3d/mossMound.ts).
+    moss.prepare_gltf()
     for ob in kept:
         warnings.extend(material_warnings(ob))
 

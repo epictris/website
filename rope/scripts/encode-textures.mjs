@@ -96,6 +96,13 @@ if (argv.includes("--baked-maps")) {
 // At the 1k of every other map a frond (0.45 m, 90 px on a 1080-line screen)
 // would draw from about 80 texels of its painted card; at 2k from 160.
 rules.push({ name: "foliage atlas, 2k", pattern: /foliage-atlas/, targetFormat: "webp", resize: [2048, 2048] });
+// A moss mound's print (the Blender moss add-on, `<rock>.moss.print`; the
+// exporter names the image after the material, `<rock>.moss`): since
+// 2026-10-10 its alpha is the outline's distance field, cut at 0.5, so the
+// lobes are as fine as the texels. At the 1k of everything else a print made
+// at 2k (Terrace.003 at 5 mm) would ship at 10 mm. Lossy WebP keeps its alpha
+// exact (sharp's `alphaQuality` is 100 by default).
+rules.push({ name: "moss print, 2k", pattern: /\.moss(\.\d+)?$/, targetFormat: "webp", resize: [2048, 2048] });
 // A normal map whose detail is subtle codes as a grid of blocks (optimize-asset.ts).
 if (argv.includes("--lossless-normals")) {
   rules.push({ name: "normal map, lossless", slots: /^normalTexture$/, targetFormat: "webp", lossless: true, resize: [STANDARD, STANDARD] });
