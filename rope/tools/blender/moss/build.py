@@ -34,24 +34,36 @@ because the moss object is parented to the host with an identity transform):
 6. Tone: per dab, from the field at the dab and its layer, plus a slow positional
    mottle, quantised to `levels` steps from `dark` to `light` (spaced in sRGB), so
    neighbours share a step and merge into one blotch. No per-dab randomness.
-7. Height: `floor` for the darkest moss plus the tone painted onto the vertices
-   times `lift` (the lightest moss stands `floor + lift` proud), the tone's share
-   times how much the surface faces up (`up_floor` of it on a wall: a full pile on
-   a wall faces the ground on its way down), blurred over `height_blur`. At the
-   rim the mound starts `sink` under the rock and rises to that height over `rim`,
-   so it crosses the rock along one line: a mound left flush with the rock across
-   an area decimates into slivers with noise normals that shade a dark strip along
-   the moss edge. (While the dabs were also printed on the rock, moss thinner
-   than `sink` was print only; without that print it would be a hole.)
-8. The mound: the refined mesh where the dabs reach (`inner_u` of a dab's outline),
-   offset along the smoothed normal from the rock surface, decimated to
-   `mound_density` triangles a square metre, its open edge seated `sink` under the
-   rock again.
+   Before it, `strays` detached clumps of one to three small dark dabs join the
+   dark base on the rock outside it, within `stray_reach` (their own random
+   stream: the growth inside is the same without them).
+7. Height: a sheet `floor` thick, and on it the pile: the tone painted onto the
+   vertices times `lift` (the lightest moss stands `floor + lift` proud) times
+   how much the surface faces up (`up_floor` of it on a wall: a full pile on a
+   wall faces the ground on its way down), blurred over `height_blur` and faded
+   in from the edge over `rim`.
+8. The mound: the refined rock cut along the outline of the dark base (the
+   union of its dabs' outlines, the strays' too), refined to `edge_detail`
+   along it so the cut follows each dab's curve, offset along the smoothed
+   normal by the sheet and the pile. The sheet is `floor` thick right to the
+   outline: its top rounds over `edge_round` down to a lip `overhang` over the
+   rock, and from the lip a skirt rolls back under it in a quarter circle to
+   the rock, `overhang` inside the outline. The edge is a cushion whose foot is
+   hidden under its own lip and stands on the rock, never in it (until
+   2026-10-09 the mound rose out of the rock `sink` under it, and its outline
+   was wherever the low-poly mesh met the faceted rock: long straight runs and
+   facets poking through). It is decimated to `mound_density` triangles a
+   square metre, plus a budget for the edge (`_edge_budget`: its rings in
+   segments of two `edge_detail` along the outline). The sheet stands off the
+   rock, the pile off the sheet, along normals smoothed in space
+   (`_spatial_normals`), not over the mesh's edges, which on a coarse
+   `resolution` was the raw normal and turned the thin triangles over.
+   Grass sprigs (`grass`) stand in tufts on the up-facing top.
 9. The print: the mound's own texture. Every mound triangle gets its own chart in
    a shelf-packed atlas at `texel` metres a texel; each texel's world position and
    normal are interpolated, and every dab is evaluated per texel - its outline in
    its tangent plane, a `print_edge` anti-aliased edge, its flat tone over what is
-   below. The outline of the moss is where the mound leaves the rock.
+   below.
 
 `build` is `finish(grow(...))`: `grow` is steps 1-8 up to the decimate, `finish`
 the decimate and the print. FINISH_PARAMS are the parameters only `finish`
@@ -72,7 +84,7 @@ from mathutils.bvhtree import BVHTree
 from mathutils.kdtree import KDTree
 
 from .stampbrush.geometry import edges as mesh_edges
-from .stampbrush.geometry import kdtree, mask, normalize, refine, smooth_field, smoothstep, stamps_world, vertex_normals
+from .stampbrush.geometry import clip, compact, kdtree, mask, normalize, refine, smooth_field, smoothstep, stamps_world, vertex_normals
 
 # A dab must be at least this concave (area over its convex hull's). Measured over
 # 2000 draws of HARMONICS: median 0.985, 5th percentile 0.956, and 18 % at or under
@@ -126,11 +138,20 @@ class Params:
     lift: float = 0.09  # the lightest moss stands this much prouder than the darkest
     up_floor: float = 0.3  # share of the height a wall keeps
     height_blur: float = 0.027
-    sink: float = 0.006
     rim: float = 0.10
     drape: float = 1.0  # the tightest the moss's sheet bends: steps and hollows tighter are bridged (0: it follows the rock)
-    inner_u: float = 0.88  # the mound stops this far out in a dab's outline
-    min_patch: float = 0.002  # m^2: mound islands smaller than this go
+    # The edge: the mound ends at the dark base's outline, `floor` thick
+    edge_round: float = 0.012  # its top rounds down to the lip over this
+    overhang: float = 0.004  # the lip stands this high and its foot this far in, under it
+    edge_detail: float = 0.006  # edge length of the mesh along the outline
+    strays: float = 4.0  # detached clumps per metre of outline
+    stray_reach: float = 0.08  # ... at most this far out
+    min_patch: float = 0.002  # m^2: mound islands smaller than this go (strays stay)
+    # Grass: sprigs of thin blades standing out of the moss's top
+    grass: float = 6.0  # tufts per m^2 of up-facing moss
+    grass_height: float = 0.045
+    grass_blades: int = 10  # in a tuft, about
+    grass_tip: tuple = (0.3185, 0.4179, 0.0467)  # linear (sRGB 0.6, 0.68, 0.24): the lightest tip
     mound_density: float = 1500.0  # triangles per m^2 of mound
     # Print
     texel: float = 0.0015
@@ -402,10 +423,11 @@ class Grown:
     kd: KDTree  # the refined host's vertices
     tval: np.ndarray  # tone at each refined vertex (nan: no dab)
     host_matrix: np.ndarray  # (4, 4)
+    lip: np.ndarray = None  # the mound's vertices of its rounded edge and skirt, budgeted apart in the decimate
 
 
 # The parameters only `finish` reads: the mound's triangle budget and the print.
-FINISH_PARAMS = ("mound_density", "texel", "max_texture", "print_edge")
+FINISH_PARAMS = ("mound_density", "texel", "max_texture", "print_edge", "grass", "grass_height", "grass_blades", "grass_tip")
 
 
 def build(co, tri, host_matrix, stamps, p, decimate):
@@ -452,11 +474,11 @@ def grow(co, tri, host_matrix, stamps, p):
     off = Vector((rng.uniform(0, 50), rng.uniform(0, 50), rng.uniform(0, 50)))
 
     layers = _grow(p, rng, g, P, N, kd, painted, off, res)
+    strays = _strays(p, g, v, hull, kd, layers[0])
     _tone(p, layers, P, kd, g, painted, off, res)
 
-    # ---- height, and the mound
+    # ---- tone on the rock, and the mound
     tval = np.full(len(v), np.nan)
-    inner = np.zeros(len(v))
     for layer in layers:
         for d in layer:
             idx = np.array([i for (_c, i, _d) in kd.find_range(d.c, d.rmax)], dtype=np.int64)
@@ -468,59 +490,315 @@ def grow(co, tri, host_matrix, stamps, p):
             w = smoothstep(1.0, 1.0 - 0.01 / np.maximum(rr, 1e-6), u)
             cur = tval[idx]
             tval[idx] = np.where(np.isnan(cur), d.t, cur + (d.t - np.nan_to_num(cur)) * w)
-            inner[idx[u <= p.inner_u]] = 1.0
     if p.kind == "TEXTURE":
         return _grown_decal(co, tri, host_matrix, v, t, hull, g, kd, tval, layers)
-    lift = _lift(p, tval, hull[:, 2], g, res)
-    inner = smooth_field(inner, g.edges, len(v), max(1, _passes(0.006, res)))
+    bvh = BVHTree.FromPolygons([tuple(x) for x in co], [tuple(x) for x in tri.tolist()])
+    mound = _mound(p, v, t, hull, tval, layers, strays, res, g, painted)
+    if mound is None:
+        return None
+    mv, mt, lip = mound
+    return Grown(mv, mt, layers, bvh, kd, tval, np.array(host_matrix, dtype=np.float64), lip)
 
-    keep = inner[t].mean(1) > 0.5
-    mt = t[keep]
-    if len(mt) == 0:
+
+def _mound(p, v, t, hull, tval, layers, strays, res, g, painted):
+    """Step 8: the mound over the refined rock (`v`, `t`, its graph `g`,
+    smoothed normals `hull`, tone `tval`, the paint `painted`), cut along the
+    outline of the dark base, rounded over at its lip and tucked under it to
+    the rock. Returns (vertices, triangles, lip) in the world, `lip` marking
+    the vertices of the rounded edge (the rounding and the skirt), or None."""
+    base = layers[0]
+    # The outline is the dabs' own: refined to `edge_detail` where it runs and
+    # across the rounding inside it, and cut along it exactly, so its lobes
+    # are the dabs' curves and not the rock's triangles.
+    s = np.maximum(_union_field(base, v, hull, 2.0 * res), -2.0 * res)
+    # A gap between the dabs with no unpainted rock in it is a pinhole of the
+    # packing, not a hole in the moss: filled. (Cut, Terrace.003's 23 m of
+    # outline came with 150 m more round hundreds of pinholes, each with its
+    # own lip and skirt folded into the moss around it.)
+    for comp in g.components(s < 0.0):
+        if painted[comp].all():
+            s[comp] = 1e-4
+    # The tone's height is blurred here, over the rock refined evenly to
+    # `resolution`, and carried onto the finer edge by interpolation: blurred
+    # over the edge's own fine triangles, its tone steps stood as centimetre
+    # cliffs a few millimetres wide, offset along normals that turn at the
+    # rock's creases - folded sheets (Terrace.003: 11x the turned-over area).
+    # The direction the mound stands off the rock: its faces' normals averaged
+    # over LAY_RADIUS in space (`hull`, smoothed over the mesh's edges, is the
+    # raw normal at a coarse `resolution`, and swung across the thin triangles
+    # of a decimated rock: a flat 8 mm offset along it turned 806 cm2 of
+    # Terrace.003's moss over). `hull` still orients the dabs.
+    lay = _spatial_normals(v, t, LAY_RADIUS)
+    has = ~np.isnan(tval)
+    passes = _passes(p.height_blur, res)
+    tone = smooth_field(np.where(has, tval, 0.0), g.edges, len(v), passes)
+    cover = smooth_field(has.astype(np.float64), g.edges, len(v), passes)
+    # Graded: each pass halves the edges within a couple of them of the
+    # outline (and of the rounding inside it), so only a thin band ends at
+    # `edge_detail` (a 23 m outline refined to 6 mm across a resolution's width
+    # was 330k triangles).
+    h, ed = res, min(p.edge_detail, res)
+    while h > ed:
+        h = max(0.5 * h, ed)
+        # near the outline itself: inside the union, `s` dips low between
+        # overlapping dabs far from any outline (refined there, the top was
+        # 436k vertices, and the rounding pressed dimples all over it)
+        x = _outline_distance(v, t, s)
+        near = np.where(s >= 0.0, x < p.edge_round + 2.0 * h, x < 2.0 * h)
+        if not near.any():
+            break
+        v, t, used, par = refine(v, t, v[near], np.full(int(near.sum()), 2.0 * h), h, keep_all=True, parents=True)
+        hull = normalize(_carry(hull[used], par))
+        lay = normalize(_carry(lay[used], par))
+        tone, cover = _carry(tone[used], par), _carry(cover[used], par)
+        # only the new vertices need the field: the others are where they were
+        n0 = len(used)
+        s = np.concatenate([s[used], np.maximum(_union_field(base, v[n0:], hull[n0:], 2.0 * res), -2.0 * res)])
+    # No vertex within a quarter of its shortest edge of the outline, so the
+    # cut crosses every edge at least that far from its ends: a crossing at a
+    # vertex left slivers, a hundredth of a millimetre across, that the sheet's
+    # offset turned over (Terrace.003: 16 % of the faces, 22k of them folded).
+    e = np.unique(np.sort(np.concatenate([t[:, [0, 1]], t[:, [1, 2]], t[:, [2, 0]]]), axis=1), axis=0)
+    shortest = np.full(len(v), np.inf)
+    ln = np.linalg.norm(v[e[:, 1]] - v[e[:, 0]], axis=1)
+    np.minimum.at(shortest, e[:, 0], ln)
+    np.minimum.at(shortest, e[:, 1], ln)
+    keep_off = CUT_CLEARANCE * shortest
+    s = np.where(np.abs(s) < keep_off, np.where(s >= 0.0, keep_off, -keep_off), s)
+    cv, ct, (lay, tone, cover, s) = clip(v, t, s, [lay, tone, cover, s])
+    lay = normalize(lay)
+    ct = _drop_small(cv, ct, p.min_patch, keep_at=strays)
+    if len(ct) == 0:
         return None
-    mt = _drop_small(v, mt, p.min_patch)
-    if len(mt) == 0:
-        return None
-    used = np.unique(mt)
-    m_remap = np.full(len(v), -1, np.int64)
-    m_remap[used] = np.arange(len(used))
-    mv, mt = v[used], m_remap[mt]
-    mg = _Graph(mv, mt)
-    boundary = _boundary(mt, len(mv))
+    cv, ct, (lay, tone, cover, s) = compact(cv, ct, [lay, tone, cover, s])
+    mg = _Graph(cv, ct)
+    boundary = _boundary(ct, len(cv))
     rimf = smoothstep(0.0, p.rim, mg.dijkstra(boundary) * STUDY_METRIC)
+    # The sheet is `floor` thick right to the outline, its top rounded over
+    # `edge_round` down to the lip; the pile stands on it, faded in over `rim`.
+    x = _boundary_distance(cv, ct, boundary)
+    sheet = _bead(x, p)
     if p.drape <= 0.0:
-        # under the rock at the rim, and from there up to the moss's height: it
-        # crosses the rock along one line and is never flush with it across an area
-        offset = -p.sink + (p.sink + lift[used]) * rimf
-        offset = smooth_field(offset, mg.edges, len(mv), 1)
-        mv = mv + hull[used] * offset[:, None]
-        _set_heights(layers, kd, lift)
+        pile = _pile(p, tone, cover, lay[:, 2], rimf)
+        mv = cv + lay * (sheet + pile)[:, None]
+        _set_heights(layers, kdtree(cv), sheet + pile)
     else:
-        # The same height in two parts: the sheet (the rim and `floor`), draped
-        # over the rock's steps and hollows, and the pile standing on it.
-        sheet_h = np.minimum(lift[used], p.floor)
-        base = smooth_field(-p.sink + (p.sink + sheet_h) * rimf, mg.edges, len(mv), 1)
-        sheet = _drape(mv + hull[used] * base[:, None], hull[used], mt, mg, boundary, p.drape, res)
-        sn = normalize(smooth_field(vertex_normals(sheet, mt), mg.edges, len(mv), _passes(0.02, res)))
+        # The sheet draped over the rock's steps and hollows, and the pile on it.
+        laid = cv + lay * sheet[:, None]
+        draped = _drape(laid, lay, ct, mg, boundary, p.drape, res)
+        sn = _spatial_normals(draped, ct, PILE_RADIUS)
         # the pile faces the way the sheet does: a step bridged by a slope
         # piles like a slope, not like the wall under it
-        nz = hull[:, 2].copy()
-        nz[used] = sn[:, 2]
-        lift = _lift(p, tval, nz, g, res)
-        pile = smooth_field((lift[used] - sheet_h) * rimf, mg.edges, len(mv), 1)
-        _set_heights(layers, kd, lift)
+        pile = _pile(p, tone, cover, sn[:, 2], rimf)
+        kdm = kdtree(cv)
+        _set_heights(layers, kdm, sheet + pile)
         # a dab rides the sheet off the rock, so the print finds it over the
         # moss it colours
-        moved = sheet - (mv + hull[used] * base[:, None])
+        moved = draped - laid
         for layer in layers:
             for d in layer:
-                i = m_remap[kd.find(d.c)[1]]
-                if i >= 0:
-                    d.lay(Vector(mv[i] + moved[i]), Vector(sn[i]))
-        mv = sheet + sn * pile[:, None]
+                i = kdm.find(d.c)[1]
+                d.lay(Vector(cv[i] + moved[i]), Vector(sn[i]))
+        mv = draped + sn * pile[:, None]
+    lip = (x < p.edge_round) | boundary
+    return _skirt(mv, ct, cv, lay, sheet, boundary, lip)
 
-    bvh = BVHTree.FromPolygons([tuple(x) for x in co], [tuple(x) for x in tri.tolist()])
-    return Grown(mv, mt, layers, bvh, kd, tval, np.array(host_matrix, dtype=np.float64))
+
+def _outline_distance(v, t, s):
+    """Each vertex's distance to the outline, the zero of `s` (to the nearest
+    point where an edge crosses it: within half an edge of the true one)."""
+    e = np.sort(np.concatenate([t[:, [0, 1]], t[:, [1, 2]], t[:, [2, 0]]]), axis=1)
+    e = np.unique(e, axis=0)
+    a, b = e[:, 0], e[:, 1]
+    cross = (s[a] >= 0.0) != (s[b] >= 0.0)
+    a, b = a[cross], b[cross]
+    if len(a) == 0:
+        return np.full(len(v), np.inf)
+    k = (s[a] / (s[a] - s[b]))[:, None]
+    kd = kdtree(v[a] + (v[b] - v[a]) * k)
+    return np.array([kd.find(Vector(x))[2] for x in v])
+
+
+def _boundary_distance(v, t, boundary):
+    """Each vertex's distance to the mesh's open edge (its vertices and the
+    middles of its edges: within a sixteenth of an edge of the true one)."""
+    e = np.sort(np.concatenate([t[:, [0, 1]], t[:, [1, 2]], t[:, [2, 0]]]), axis=1)
+    uk, cnt = np.unique(e, axis=0, return_counts=True)
+    ob = uk[cnt == 1]
+    if len(ob) == 0:
+        return np.full(len(v), np.inf)
+    kd = kdtree(np.concatenate([v[boundary], 0.5 * (v[ob[:, 0]] + v[ob[:, 1]])]))
+    return np.array([kd.find(Vector(x))[2] for x in v])
+
+
+LAY_RADIUS = 0.03  # m: the mound's sheet stands off the rock along its normal smoothed over this
+PILE_RADIUS = 0.08  # m: ... and the pile, up to `floor + lift` tall, off the sheet along the sheet's
+# smoothed over this: smoothed over less than its height, the pile folded in a crevice
+
+
+def _grid_field(src, val, cell, at):
+    """`val` (N, k) at the points `src` splatted into a sparse grid of `cell`,
+    blurred [1 2 1] / 4 once along each axis, and read back at `at`, all
+    trilinear: a field continuous in space, so points close together read
+    close values whatever mesh they are on. Returns the sums read at `at`."""
+    lo = np.minimum(src.min(0), at.min(0)) - 2.0 * cell
+    hi = np.maximum(src.max(0), at.max(0))
+    dims = np.floor((hi - lo) / cell).astype(np.int64) + 4
+
+    def corners(pts):
+        g = (pts - lo) / cell
+        i0 = np.floor(g).astype(np.int64)
+        f = g - i0
+        for dx in (0, 1):
+            for dy in (0, 1):
+                for dz in (0, 1):
+                    w = (f[:, 0] if dx else 1 - f[:, 0]) * (f[:, 1] if dy else 1 - f[:, 1]) * (f[:, 2] if dz else 1 - f[:, 2])
+                    yield ((i0[:, 0] + dx) * dims[1] + i0[:, 1] + dy) * dims[2] + i0[:, 2] + dz, w
+
+    keys, ws = zip(*corners(src))
+    uk, inv = np.unique(np.concatenate(keys), return_inverse=True)
+    grid = np.zeros((len(uk), val.shape[1]))
+    np.add.at(grid, inv.reshape(-1), np.concatenate([val * w[:, None] for w in ws]))
+    for step in (dims[1] * dims[2], dims[2], 1):
+        out = 2.0 * grid
+        for sgn in (-1, 1):
+            j = np.minimum(np.searchsorted(uk, uk + sgn * step), len(uk) - 1)
+            hit = uk[j] == uk + sgn * step
+            out[hit] += grid[j[hit]]
+        grid = 0.25 * out
+    acc = np.zeros((len(at), val.shape[1]))
+    for k, w in corners(at):
+        j = np.minimum(np.searchsorted(uk, k), len(uk) - 1)
+        hit = uk[j] == k
+        acc[hit] += grid[j[hit]] * w[hit, None]
+    return acc
+
+
+def _spatial_normals(v, t, radius):
+    """Each vertex's normal smoothed over about `radius` in space: the faces'
+    area-weighted normals through `_grid_field` at `radius` / 2 cells, so
+    vertices close together have close normals however thin the triangles
+    between them. Where the field turns against a vertex's own normal (the
+    two faces of a fin thinner than the radius cancel) it keeps its own."""
+    own = vertex_normals(v, t)
+    fn = np.cross(v[t[:, 1]] - v[t[:, 0]], v[t[:, 2]] - v[t[:, 0]])
+    out = normalize(_grid_field(v[t].mean(1), fn, 0.5 * radius, v))
+    bad = (out * own).sum(1) < 0.2
+    out[bad] = own[bad]
+    return out
+
+
+def _pile(p, tone, cover, nz, rimf):
+    """The pile over the sheet: the blurred tone (`tone`, over the blurred
+    share of moss around, `cover`) times `lift`, times how much the moss
+    faces up there (`nz`, the up component of its normal; `up_floor` of it on
+    a wall), faded in from the edge by `rimf`."""
+    up = p.up_floor + (1 - p.up_floor) * smoothstep(0.0, 0.7, nz)
+    return np.maximum(p.floor * (cover - 1.0) + p.lift * tone * up, 0.0) * rimf
+
+
+def _carry(f, par):
+    """A per-vertex field carried onto refine's new vertices, each the mean of
+    its two parents (`par`, in order). Nan (no tone) carries as nan."""
+    out = np.concatenate([f, np.zeros((len(par),) + f.shape[1:])])
+    n0 = len(f)
+    # A parent always comes before its child, so a generation at a time.
+    todo = np.arange(len(par))
+    known = np.zeros(len(out), bool)
+    known[:n0] = True
+    while len(todo):
+        ok = known[par[todo, 0]] & known[par[todo, 1]]
+        k = todo[ok]
+        out[n0 + k] = 0.5 * (out[par[k, 0]] + out[par[k, 1]])
+        known[n0 + k] = True
+        todo = todo[~ok]
+    return out
+
+
+def _union_field(dabs, pts, nrm, reach):
+    """How far inside the union of `dabs` each point is (m, negative outside),
+    measured in each dab's plane along its radius: the largest over the dabs
+    that face the point's way. -inf further than `reach` outside every dab."""
+    s = np.full(len(pts), -np.inf)
+    if not dabs:
+        return s
+    kd = kdtree(pts)
+    for d in dabs:
+        idx = np.array([i for (_c, i, _d) in kd.find_range(d.c, d.rmax + reach)], dtype=np.int64)
+        if len(idx) == 0:
+            continue
+        idx = idx[nrm[idx] @ np.asarray(d.n) > 0.2]
+        if len(idx) == 0:
+            continue
+        u, rr = d.u(pts[idx])
+        s[idx] = np.maximum(s[idx], rr * (1.0 - u))
+    return s
+
+
+def _bead(s, p):
+    """The sheet's height over the rock `s` in from the outline: `floor`,
+    its top rounded down over `edge_round` to the lip, `overhang` up, where
+    it meets the outline standing straight up (a quarter ellipse)."""
+    f = p.floor
+    o = min(p.overhang, 0.5 * f)
+    if p.edge_round <= 0.0:
+        return np.where(s > 0.0, f, o)
+    x = np.clip(s / p.edge_round, 0.0, 1.0)
+    return o + (f - o) * np.sqrt(np.maximum(0.0, 1.0 - (1.0 - x) ** 2))
+
+
+SKIRT_RINGS = 3  # rings of the skirt under the lip, the last on the rock
+CUT_CLEARANCE = 0.25  # the outline crosses an edge at least this far from its ends
+
+
+def _skirt(mv, mt, rock, nrm, sheet, boundary, lip):
+    """The skirt: from the lip (each open-edge vertex, `sheet` over the rock
+    point `rock` along `nrm`) a quarter circle of that radius back under it,
+    down to the rock that far inside the outline, so the edge is a rolled
+    cushion whose foot is hidden under its own overhang and stands on the
+    rock, never in it. Returns (vertices, triangles, lip mask)."""
+    e = np.concatenate([mt[:, [0, 1]], mt[:, [1, 2]], mt[:, [2, 0]]])
+    owner = np.tile(np.arange(len(mt)), 3)
+    key = np.sort(e, axis=1)
+    _u, inv, cnt = np.unique(key, axis=0, return_inverse=True, return_counts=True)
+    open_ = cnt[inv.reshape(-1)] == 1
+    be, bo = e[open_], owner[open_]  # open edges as their triangle winds them
+    if len(be) == 0:
+        return mv, mt, lip
+    # inward: in the tangent plane, square to the edge, toward its triangle
+    n_e = normalize(nrm[be[:, 0]] + nrm[be[:, 1]])
+    along = mv[be[:, 1]] - mv[be[:, 0]]
+    t_in = normalize(np.cross(n_e, along))
+    mid = 0.5 * (mv[be[:, 0]] + mv[be[:, 1]])
+    flip = ((mv[mt[bo]].mean(1) - mid) * t_in).sum(1) < 0
+    t_in[flip] *= -1
+    inward = np.zeros_like(mv)
+    for k in range(2):
+        np.add.at(inward, be[:, k], t_in)
+    bi = np.nonzero(boundary)[0]
+    tn = inward[bi] - nrm[bi] * (inward[bi] * nrm[bi]).sum(1)[:, None]
+    tn = normalize(tn)
+    ring_of = np.full(len(mv), -1, np.int64)
+    ring_of[bi] = np.arange(len(bi))
+    verts, tris = [mv], [mt]
+    prev = None
+    n0 = len(mv)
+    for k in range(1, SKIRT_RINGS + 1):
+        phi = -0.5 * math.pi * k / SKIRT_RINGS
+        o = sheet[bi]
+        pos = rock[bi] + nrm[bi] * (o * (1.0 + math.sin(phi)))[:, None] + tn * (o * (1.0 - math.cos(phi)))[:, None]
+        base_k = n0 + (k - 1) * len(bi)
+        verts.append(pos)
+        up_a = be[:, 0] if prev is None else prev + ring_of[be[:, 0]]
+        up_b = be[:, 1] if prev is None else prev + ring_of[be[:, 1]]
+        lo_a, lo_b = base_k + ring_of[be[:, 0]], base_k + ring_of[be[:, 1]]
+        # the open edge runs a -> b in its triangle: the skirt runs b -> a
+        tris.append(np.stack([up_b, up_a, lo_a], 1))
+        tris.append(np.stack([up_b, lo_a, lo_b], 1))
+        prev = base_k
+    out_v = np.concatenate(verts)
+    lip_all = np.concatenate([lip, np.ones(len(out_v) - len(mv), bool)])
+    return out_v, np.concatenate(tris).astype(np.int64), lip_all
 
 
 def _grown_decal(co, tri, host_matrix, v, t, hull, g, kd, tval, layers):
@@ -556,34 +834,152 @@ def finish(grown, p, decimate):
     mv, mt, layers, bvh = grown.vertices.copy(), grown.triangles, grown.layers, grown.bvh
     if p.kind == "TEXTURE":
         area = 0.5 * np.linalg.norm(np.cross(mv[mt[:, 1]] - mv[mt[:, 0]], mv[mt[:, 2]] - mv[mt[:, 0]]), axis=1).sum()
-        uvs, image, texel = _print(mv, mt, layers, p)
+        uvs, image, texel, _swatch = _print(mv, mt, layers, p)
         inv = np.linalg.inv(grown.host_matrix)
         local = mv @ inv[:3, :3].T + inv[:3, 3]
         return Result(local, mt, uvs, image, dabs=sum(len(x) for x in layers), layers=[len(x) for x in layers], heights={}, texel=texel, area=area)
     # ---- low poly, its edge back under the rock
     area = 0.5 * np.linalg.norm(np.cross(mv[mt[:, 1]] - mv[mt[:, 0]], mv[mt[:, 2]] - mv[mt[:, 0]]), axis=1).sum()
-    ratio = min(1.0, max(0.005, p.mound_density * area / max(len(mt), 1)))
+    # the rest comes down to `mound_density`, and the rounded edge (`lip`)
+    # keeps triangles enough for its lobes (`_edge_budget`)
+    lip = grown.lip if grown.lip is not None else np.zeros(len(mv), bool)
+    edge_t = lip[mt].all(1)
+    tri_area = 0.5 * np.linalg.norm(np.cross(mv[mt[:, 1]] - mv[mt[:, 0]], mv[mt[:, 2]] - mv[mt[:, 0]]), axis=1)
+    target = p.mound_density * tri_area[~edge_t].sum() + _edge_budget(mv, mt, p)
+    ratio = min(1.0, max(0.005, target / max(len(mt), 1)))
     if ratio < 1.0:
         mv, mt = decimate(mv, mt, ratio)
+    # the skirt's foot on the rock: on it, never in it
     for i in np.nonzero(_boundary(mt, len(mv)))[0]:
-        on, nr, _i, _d = bvh.find_nearest(Vector(mv[i]))
+        on, _nr, _i, _d = bvh.find_nearest(Vector(mv[i]))
         if on is not None:
-            mv[i] = np.array(on - nr * p.sink)
+            mv[i] = np.array(on)
 
     heights = _heights(mv, bvh, grown.kd, grown.tval, p.levels)
-    uvs, image, texel = _print(mv, mt, layers, p)
+    gv, gt, guv = _grass(mv, mt, bvh, grown.kd, grown.tval, p)
+    uvs, image, texel, swatch = _print(mv, mt, layers, p, swatch=len(gt) > 0)
+    if len(gt):
+        # the blades read their colour from the swatch: a column per tip, root to tip up it
+        size = image.shape[0]
+        (x0, y0), (cols, rows) = swatch
+        px = np.stack([x0 + 0.5 + guv[..., 0] * (cols - 1), y0 + 0.5 + guv[..., 1] * (rows - 1)], -1)
+        uvs = np.concatenate([uvs, px / size])
+        mt = np.concatenate([mt, gt + len(mv)])
+        mv = np.concatenate([mv, gv])
     inv = np.linalg.inv(grown.host_matrix)
     local = mv @ inv[:3, :3].T + inv[:3, 3]
     return Result(local, mt, uvs, image, dabs=sum(len(x) for x in layers), layers=[len(x) for x in layers], heights=heights, texel=texel, area=area)
 
 
-def _lift(p, tval, nz, g, res):
-    """How far the moss stands proud of the rock at each refined vertex: `floor`,
-    and the tone times `lift` times how much the moss faces up there (`nz`, the
-    up component of its normal), blurred over `height_blur`."""
-    up = p.up_floor + (1 - p.up_floor) * smoothstep(0.0, 0.7, nz)
-    lift = np.where(np.isnan(tval), 0.0, p.floor + p.lift * np.nan_to_num(tval) * up)
-    return smooth_field(lift, g.edges, len(tval), _passes(p.height_blur, res))
+EDGE_SEGMENT = 2.0  # the edge's triangles run this many `edge_detail` along the outline
+
+
+def _edge_budget(mv, mt, p):
+    """The triangles the rounded edge is given on top of `mound_density`:
+    its rings (the rounding, the lip, the skirt) in segments EDGE_SEGMENT
+    `edge_detail` long along the outline (the skirt's foot, the open edge).
+    The decimate places them, so the lobes' tight curves keep more."""
+    e = np.sort(np.concatenate([mt[:, [0, 1]], mt[:, [1, 2]], mt[:, [2, 0]]]), axis=1)
+    uk, cnt = np.unique(e, axis=0, return_counts=True)
+    ob = uk[cnt == 1]
+    length = np.linalg.norm(mv[ob[:, 1]] - mv[ob[:, 0]], axis=1).sum()
+    return 2.0 * (SKIRT_RINGS + 2) * length / (EDGE_SEGMENT * p.edge_detail)
+
+
+GRASS_SEGMENTS = 3  # a blade's segments, root to tip
+GRASS_SWATCH = (8, 32)  # texels of the print the blades read: a column per tip colour, root to tip up the rows
+GRASS_ROOT = 0.35  # the root's colour: this far from `dark` to `light`
+GRASS_WIDTH = 0.1  # a blade's width at its root, of its height
+
+
+def _grass(mv, mt, bvh, kd, tval, p):
+    """Grass sprigs: `grass` tufts a square metre of the moss's up-facing top,
+    more where the moss is lighter, each about `grass_blades` blades up to
+    `grass_height` tall, leaning out and curling over a little. A blade is a
+    tapered strip of GRASS_SEGMENTS quads and a tip (its material is
+    two-sided), rooted 3 mm into the moss. Returns the vertices, triangles and
+    per-corner (column, height) in the swatch, both 0..1. Drawn from their own
+    random stream, after the decimate, so they do not move the moss."""
+    empty = (np.zeros((0, 3)), np.zeros((0, 3), np.int64), np.zeros((0, 3, 2)))
+    if p.grass <= 0.0 or p.grass_height <= 0.0 or p.grass_blades < 1 or len(mt) == 0:
+        return empty
+    rng = random.Random(p.seed * 7919 + 2)
+    a, b, c = (mv[mt[:, k]] for k in range(3))
+    fn = np.cross(b - a, c - a)
+    area = 0.5 * np.linalg.norm(fn, axis=1)
+    fn = normalize(fn)
+    centre = (a + b + c) / 3.0
+    on_top = np.zeros(len(mt))
+    tone = np.zeros(len(mt))
+    for f in range(len(mt)):
+        on, nr, _i, _d = bvh.find_nearest(Vector(centre[f]))
+        if on is not None and (Vector(centre[f]) - on).dot(nr) >= 0.8 * p.floor:
+            on_top[f] = 1.0
+        tv = tval[kd.find(Vector(centre[f]))[1]]
+        tone[f] = 0.0 if np.isnan(tv) else tv
+    up_area = area * on_top * smoothstep(0.2, 0.7, fn[:, 2])
+    if up_area.sum() <= 0.0:
+        return empty
+    want = int(p.grass * up_area.sum() + rng.random())
+    w = up_area * (0.25 + tone)
+    cum = np.cumsum(w) / w.sum()
+    zup = np.array((0.0, 0.0, 1.0))
+    verts, tris, uvw = [], [], []
+    for _ in range(want):
+        f = min(int(np.searchsorted(cum, rng.random())), len(mt) - 1)
+        r1, r2 = rng.random(), rng.random()
+        if r1 + r2 > 1.0:
+            r1, r2 = 1.0 - r1, 1.0 - r2
+        root0 = a[f] + (b[f] - a[f]) * r1 + (c[f] - a[f]) * r2
+        n = fn[f]
+        tx = normalize(np.cross(n, (0.3, 0.7, 0.2)))
+        ty = np.cross(n, tx)
+        for _k in range(max(1, int(round(p.grass_blades * rng.uniform(0.5, 1.5))))):
+            ang = rng.uniform(0.0, 2.0 * math.pi)
+            out = tx * math.cos(ang) + ty * math.sin(ang)
+            root = root0 + out * rng.uniform(0.0, 0.012) - n * 0.003
+            up = normalize(n * 0.35 + zup * 0.65 + out * rng.uniform(0.1, 0.45))
+            h = p.grass_height * rng.uniform(0.45, 1.0)
+            curl = out * (h * rng.uniform(0.15, 0.4))
+            side = normalize(np.cross(up, out))
+            width = h * GRASS_WIDTH
+            col = rng.random()
+            base = sum(len(x) for x in verts)
+            ring = []
+            for j in range(GRASS_SEGMENTS):
+                t = j / GRASS_SEGMENTS
+                ctr = root + up * (h * t) + curl * (t * t)
+                half = 0.5 * width * (1.0 - t) ** 0.9
+                ring.append(np.stack([ctr - side * half, ctr + side * half]))
+                uvw.append(((col, t), (col, t)))
+            ring.append((root + up * h + curl)[None, :])
+            uvw.append(((col, 1.0),))
+            verts.append(np.concatenate(ring))
+            for j in range(GRASS_SEGMENTS - 1):
+                l0, r0, l1, r1_ = base + 2 * j, base + 2 * j + 1, base + 2 * j + 2, base + 2 * j + 3
+                tris.extend(((l0, r0, r1_), (l0, r1_, l1)))
+            tip = base + 2 * GRASS_SEGMENTS
+            tris.append((base + 2 * (GRASS_SEGMENTS - 1), base + 2 * (GRASS_SEGMENTS - 1) + 1, tip))
+    if not verts:
+        return empty
+    gv = np.concatenate(verts)
+    gt = np.array(tris, dtype=np.int64)
+    flat = np.array([x for ring in uvw for x in ring], dtype=np.float64)
+    return gv, gt, flat[gt]
+
+
+def _swatch_colours(p):
+    """The grass swatch (rows, cols, 3), linear: each column runs from the root
+    colour up to its tip, the columns from `light` to `grass_tip`."""
+    cols, rows = GRASS_SWATCH
+    dark_s = np.array([_srgb(x) for x in p.dark])
+    light_s = np.array([_srgb(x) for x in p.light])
+    tip_s = np.array([_srgb(x) for x in p.grass_tip])
+    root = dark_s + (light_s - dark_s) * GRASS_ROOT
+    tips = light_s + (tip_s - light_s) * np.linspace(0.0, 1.0, cols)[:, None]
+    t = ((np.arange(rows) + 0.5) / rows) ** 0.5
+    srgb = root[None, None, :] + (tips[None, :, :] - root[None, None, :]) * t[:, None, None]
+    return np.vectorize(_lin)(srgb)
 
 
 def _set_heights(layers, kd, lift):
@@ -647,7 +1043,14 @@ def _drape(base, nrm, tri, g, boundary, radius, res):
     ct = cl[tri]
     ct = ct[(ct[:, 0] != ct[:, 1]) & (ct[:, 1] != ct[:, 2]) & (ct[:, 2] != ct[:, 0])]
     q = _relax(cs.copy(), cs, cn, pin, ce, DRAPE_PASSES, 1e-4 * cell, radius=radius, tri=ct)
-    sheet = base + (q - cs)[cl]
+    # Carried back as a field continuous in space, each cluster's move
+    # weighted by its vertices: carried back rigidly, a cluster's step against
+    # its neighbour's folded the sheet where the edge refines it finer than a
+    # cluster (Terrace.003: 65 cm2 turned over 1-10 cm in from the edge).
+    acc = _grid_field(cs, np.concatenate([(q - cs) * count[:, None], count[:, None]], 1), cell, base)
+    move = acc[:, :3] / np.maximum(acc[:, 3:], 1e-12)
+    move[boundary] = 0.0
+    sheet = base + move
     return _relax(sheet, base, nrm, boundary, e, _passes(2 * cell, res), 1e-4 * res, radius=radius, tri=tri)
 
 
@@ -703,8 +1106,10 @@ def _relax(q, rest, nrm, pin, e, passes, eps, radius=None, tri=None):
     return q
 
 
-def _drop_small(v, t, min_area):
-    """Triangles of the mesh islands (connected by shared vertices) of at least `min_area`."""
+def _drop_small(v, t, min_area, keep_at=()):
+    """Triangles of the mesh islands (connected by shared vertices) of at least
+    `min_area`, and of every island nearest a point of `keep_at` (a stray
+    clump is a small island on purpose)."""
     parent = np.arange(len(v))
 
     def find(x):
@@ -720,8 +1125,15 @@ def _drop_small(v, t, min_area):
     roots = np.array([find(a) for a in t[:, 0].tolist()])
     area = 0.5 * np.linalg.norm(np.cross(v[t[:, 1]] - v[t[:, 0]], v[t[:, 2]] - v[t[:, 0]]), axis=1)
     _u, inv = np.unique(roots, return_inverse=True)
-    total = np.bincount(inv.reshape(-1), weights=area)
-    return t[total[inv.reshape(-1)] >= min_area]
+    inv = inv.reshape(-1)
+    total = np.bincount(inv, weights=area)
+    keep = total >= min_area
+    if len(keep_at):
+        verts = np.unique(t)
+        kd = kdtree(v[verts])
+        for c in keep_at:
+            keep[np.searchsorted(_u, find(int(verts[kd.find(c)[1]])))] = True
+    return t[keep[inv]]
 
 
 def _boundary(t, n):
@@ -906,6 +1318,61 @@ def _grow(p, rng, g, P, N, kd, painted, off, res):
     return layers
 
 
+STRAY_SIZE = (0.35, 0.7)  # a stray dab's radius, of `dab_min`
+STRAY_CLUMP = (1, 1, 1, 2, 2, 3)  # dabs in a stray clump, drawn from these
+
+
+def _strays(p, g, v, hull, kd, base):
+    """Detached clumps: `strays` a metre of outline, each one to three small
+    dark dabs on the rock outside the dark base (`base`, which they join),
+    most of them close to it and none further than `stray_reach` or nearer
+    than a quarter of `dab_min`, so each is a cushion of its own. Drawn from
+    their own random stream, so the growth inside is the same with or without
+    them. Returns their centres."""
+    if p.strays <= 0.0 or p.stray_reach <= 0.0 or not base:
+        return []
+    rng = random.Random(p.seed * 7919 + 1)
+    out = -_union_field(base, v, hull, p.stray_reach)
+    idx = np.nonzero((out > 0.0) & (out <= p.stray_reach))[0]
+    if len(idx) == 0:
+        return []
+    length = g.area[idx].sum() / p.stray_reach  # of outline, about
+    want = int(p.strays * length + rng.random())
+    w = np.exp(-out[idx] / (0.4 * p.stray_reach)) * g.area[idx]
+    cum = np.cumsum(w) / w.sum()
+    gap = 0.25 * p.dab_min
+    made, centres = [], []
+
+    def fits(d):
+        o = out[kd.find(d.c)[1]]
+        return o > d.rmax + gap and all((d.c - e.c).length > d.rmax + e.rmax + gap for e in made)
+
+    for _ in range(want * 6):
+        if len(centres) >= want:
+            break
+        i = int(idx[min(int(np.searchsorted(cum, rng.random())), len(idx) - 1)])
+        c, n = Vector(v[i]), Vector(hull[i])
+        d = Dab(c, n, p.dab_min * rng.uniform(*STRAY_SIZE), 0, rng)
+        if not fits(d):
+            continue
+        clump = [d]
+        tx = n.cross(Vector((0.3, 0.7, 0.2))).normalized()
+        ty = n.cross(tx)
+        for _k in range(rng.choice(STRAY_CLUMP) - 1):
+            a = rng.uniform(0, 2 * math.pi)
+            r = p.dab_min * rng.uniform(*STRAY_SIZE)
+            _co, j, _dd = kd.find(c + (tx * math.cos(a) + ty * math.sin(a)) * (d.r + r) * 0.55)
+            e = Dab(Vector(v[j]), Vector(hull[j]), r, 0, rng)
+            if Vector(hull[j]).dot(n) > 0.7 and fits(e):
+                clump.append(e)
+        made.extend(clump)
+        centres.append(np.array(c[:]))
+    base.extend(made)
+    if DEBUG:
+        print("[moss.debug] strays: %d clumps (%d dabs) of %d wanted over %.2f m of outline" % (len(centres), len(made), want, length))
+    return centres
+
+
 def _tone(p, layers, P, kd, g, painted, off, res):
     """Each dab's tone step: the erosion field at the dab and its layer, a slow
     mottle, quantised. Scaled against the fixed reference, never the patch."""
@@ -997,9 +1464,10 @@ def _charts(mv, mt):
     return uv, chart, len(seeds)
 
 
-def _print(mv, mt, layers, p):
+def _print(mv, mt, layers, p, swatch=False):
     """UVs and the texture: the mound in flat charts packed into one square, every
-    dab evaluated per texel."""
+    dab evaluated per texel. With `swatch`, the grass swatch is packed beside
+    them and returned as ((x, y), (cols, rows)) in texels, else None."""
     q, chart, n_charts = _charts(mv, mt)
     lo_c = np.full((n_charts, 2), np.inf)
     hi_c = np.full((n_charts, 2), -np.inf)
@@ -1009,6 +1477,8 @@ def _print(mv, mt, layers, p):
     texel = p.texel
     while True:
         wh = np.ceil((hi_c - lo_c) / texel).astype(np.int64) + 2 * pad
+        if swatch:
+            wh = np.concatenate([wh, [[GRASS_SWATCH[0] + 2 * pad, GRASS_SWATCH[1] + 2 * pad]]])
         size, place = _shelf_pack(wh, p.max_texture)
         if place is not None:
             break
@@ -1072,7 +1542,16 @@ def _print(mv, mt, layers, p):
     # A mound's print is opaque; a texture-only moss's decal shows the rock
     # wherever no dab reaches.
     img[yy, xx, 3] = cov if p.kind == "TEXTURE" else 1.0
-    return uvs, img, texel
+    if not swatch:
+        return uvs, img, texel, None
+    # the swatch, its gutter the edge texels repeated
+    (sx, sy), (cols, rows) = place[-1] + pad, GRASS_SWATCH
+    sw = _swatch_colours(p)
+    ry = np.clip(np.arange(-pad, rows + pad), 0, rows - 1)
+    rx = np.clip(np.arange(-pad, cols + pad), 0, cols - 1)
+    img[sy - pad : sy + rows + pad, sx - pad : sx + cols + pad, :3] = sw[ry][:, rx]
+    img[sy - pad : sy + rows + pad, sx - pad : sx + cols + pad, 3] = 1.0
+    return uvs, img, texel, ((int(sx), int(sy)), (cols, rows))
 
 
 def paint_map(px, uv_px, tri_pos, layers, p):

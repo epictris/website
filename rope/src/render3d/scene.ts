@@ -201,6 +201,9 @@ export class Scene3D {
   // Whether the pieces' debug geometry is drawn (`setDebugShown`). Held here
   // rather than only on the visuals, because a rebuild makes new ones.
   private debugShown = true;
+  // Whether the water is drawn (`setWaterShown`), applied to every visual as
+  // it is built.
+  private waterShown = true;
   // Whether EVERY piece's debug geometry is drawn, switched on or not
   // (`setAllDebugShown`). Held here for the same reason.
   private allDebugShown = false;
@@ -294,6 +297,7 @@ export class Scene3D {
   // Where every frame is drawn before the canvas gets it (see frameTarget.ts).
   private readonly frame: FrameTarget;
   private reflectionOn = true;
+  private shadowsOn = true;
 
   constructor(canvas: HTMLCanvasElement, opts: Scene3DOptions = {}) {
     this.diagnostics = opts.diagnostics === true;
@@ -350,10 +354,34 @@ export class Scene3D {
     else this.ballVisual?.setReflection(null);
   }
 
+  // Off, no light casts a shadow, so the shadow pass draws nothing and compiles
+  // no depth programs: the editor's "shadows" toggle. Lights keep what they
+  // were authored with, so switching back on restores the same shadows.
+  // Either way every lit program is recompiled once, on the next frame (three
+  // keys them by the shadow count).
+  setShadows(on: boolean): void {
+    if (on === this.shadowsOn) return;
+    this.shadowsOn = on;
+    this.env.setShadows(on);
+    this.lights.setShadows(on);
+  }
+
   // Off, no pool draws its mirror: a switch for measuring what the pass costs
   // in a live frame (`?mirror=0`, and the shot bench's `benchmirror`).
   setPoolMirror(on: boolean): void {
     this.poolMirrorOn = on;
+  }
+
+  // Off, no water is drawn - pools, currents, falls and the scene's water
+  // continuing a pool - and no pool draws its mirror: the editor's "water"
+  // toggle. The water's shaders are compiled the first time a body of it comes
+  // into view, mid-run, and the editor runs no prewarm. The sim's water is
+  // untouched: the ball still floats and drags in it.
+  setWaterShown(on: boolean): void {
+    this.waterShown = on;
+    for (const v of this.bodies.values()) v.setWaterShown(on);
+    for (const v of this.standing) v.setWaterShown(on);
+    for (const surface of this.stillSurfaces()) for (const mesh of surface.scenery) mesh.visible = on;
   }
 
   // Hides every pool's water and the scene's water continuing it, for
@@ -392,6 +420,7 @@ export class Scene3D {
     level.visualSource.built.bodies.forEach((built) => {
       const visual = new BodyVisual(built.body, built, this.lights, this.allDebugShown);
       visual.setDebugShown(this.debugShown);
+      visual.setWaterShown(this.waterShown);
       this.scene.add(visual.root);
       if (built.body) this.bodies.set(built.body, visual);
       else this.standing.push(visual);
@@ -509,6 +538,7 @@ export class Scene3D {
     this.env.dispose();
     this.env = new Environment(this.scene, env, this.renderer);
     this.env.setFogShown(this.fogShown);
+    this.env.setShadows(this.shadowsOn);
   }
 
   // Freeze the flicker clock at `seconds`, or hand it back to the wall clock
@@ -1311,6 +1341,7 @@ export class Scene3D {
       mesh.receiveShadow = false;
       this.sceneryWaterMaterials.push(water.material);
       pool.scenery.push(mesh);
+      mesh.visible = this.waterShown;
       // Behind the scenery water's front edge the pool's ends stand in open
       // water, so their caps go (see `StillWaterMaterial.openBehind`).
       pool.openBehind.value = Math.max(pool.openBehind.value, box.max.z);
@@ -1346,7 +1377,8 @@ export class Scene3D {
       const y = box.max.y;
       surface.footprint.value.set(box.min.x, box.max.x, box.min.z, box.max.z);
       for (const mesh of surface.scenery) box.union(this.sceneryBox.setFromObject(mesh));
-      if (!this.poolMirrorOn || eye.y <= y || !this.frustum.intersectsBox(box)) continue;
+      // A hidden pool (`setWaterShown`, `setPoolsShown`) mirrors nothing.
+      if (!this.poolMirrorOn || !surface.mesh.visible || eye.y <= y || !this.frustum.intersectsBox(box)) continue;
       const distance = box.distanceToPoint(eye);
       if (distance >= nearest) continue;
       nearest = distance;

@@ -146,6 +146,15 @@ const camera: Camera = {
 const scene3d = use3d ? new Scene3D(sceneCanvas, { diagnostics: true }) : null;
 if (scene3d) {
   scene3d.resize();
+  // The editor's view toggles, so a `--probe` run can be the editor's test as
+  // its author had it set: `reflections=0`, `shadows=0`, `water=0` (through
+  // `cli shot --query`).
+  if (q.get("reflections") === "0") {
+    scene3d.setReflectionProbe(false);
+    scene3d.setPoolMirror(false);
+  }
+  if (q.get("shadows") === "0") scene3d.setShadows(false);
+  if (q.get("water") === "0") scene3d.setWaterShown(false);
   scene3d.setLevel(level);
   // Props and authored texture maps arrive asynchronously, and in the GAME that
   // is the point - the placeholder box and the generated surface cover the gap.

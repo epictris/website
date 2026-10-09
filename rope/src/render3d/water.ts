@@ -1385,6 +1385,9 @@ export function updateWater(seconds: number): void {
 export interface WaterBuild {
   geometries: THREE.BufferGeometry[];
   materials: THREE.Material[];
+  // Everything drawn: the surface, and a fall's plumes. For hiding the water
+  // whole (the editor's "water" toggle, `BodyVisual.setWaterShown`).
+  objects: THREE.Object3D[];
   // A pool's surface, for its mirror; null for a current.
   still: StillSurface | null;
   // The surface the ball's splash and wake are drawn on (stillWater.ts),
@@ -1409,7 +1412,7 @@ export function buildWater(root: THREE.Group, body: WaterArea, data: LevelBodyDa
   const shape = body.primaryShape();
   const s = shape.shape;
   if (s.kind !== "circle" && s.kind !== "rect") {
-    return { geometries: [], materials: [], still: null, foam: null, release: () => {} };
+    return { geometries: [], materials: [], objects: [], still: null, foam: null, release: () => {} };
   }
   const halfX = s.kind === "rect" ? s.size.x / 2 : s.radius;
   const halfY = s.kind === "rect" ? s.size.y / 2 : s.radius;
@@ -1463,6 +1466,7 @@ export function buildWater(root: THREE.Group, body: WaterArea, data: LevelBodyDa
     return {
       geometries: [geometry],
       materials: [pool.material],
+      objects: [mesh],
       still,
       foam: still,
       release: () => surfaces.delete(surface),
@@ -1493,6 +1497,7 @@ export function buildWater(root: THREE.Group, body: WaterArea, data: LevelBodyDa
   root.add(mesh);
   geometries.push(built.geometry);
   materials.push(mat);
+  const objects: THREE.Object3D[] = [mesh];
 
   let fall: FallRecord | null = null;
   if (spill && built.lip) {
@@ -1538,10 +1543,12 @@ export function buildWater(root: THREE.Group, body: WaterArea, data: LevelBodyDa
     root.add(plumes);
     geometries.push(plumes.geometry);
     materials.push(plumes.material as THREE.Material);
+    objects.push(plumes);
   }
   return {
     geometries,
     materials,
+    objects,
     still: null,
     // Drifting at the shader's own speed (see `vFoam`). A turned current
     // would carry its foam off the world's x, which the foam's frame cannot

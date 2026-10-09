@@ -1,6 +1,8 @@
 node_modules
 dist
 playtests/bundles/
+# `cli shot`'s copy of the bundle it is drawing, served to the page while it runs.
+playtests/_shot.json
 # Production runs pulled by `cli pull`; the store on the server is the source.
 playtests/prod/
 # Where a local `bun run serve.ts` keeps its store.

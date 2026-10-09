@@ -310,6 +310,18 @@ That program is compiled the first time new scenery comes into the pass, mid-run
 In a 2026-10-09 trace of a `ball` test, the probe and the mirror each cost a frame of 13-17 ms plus a 130-140 ms GPU-process stall, which made them the worst hitches after the test's first frame.
 Like **all debug**, it is an editor setting, the renderer's (`setReflectionProbe`, `setPoolMirror`), and never written to the level.
 
+The **shadows** box beside it (ticked by default) stops the sun and every lamp from casting, for the same reason.
+The shadow pass compiles one depth program per kind of caster, the first time such a caster is inside a shadow camera, and in the same trace one of those cost a 44 ms frame.
+It is the renderer's (`Scene3D.setShadows`, which reaches `Environment.setShadows` and `LightRig.setShadows`), so no light's **cast shadow** changes, and ticking it again gives the same lamps their shadows back within the shadow budget.
+Switching it either way changes the shadow count three keys every lit program by, so the next frame recompiles them all: expect one long frame at the click.
+
+The **water** box (ticked by default) hides the water: pools, currents, falls and the scene's water continuing a pool, and a hidden pool draws no mirror.
+The water's shaders are compiled the first time a body of it comes into view; in a 2026-10-09 trace that was a 16 ms frame plus a 149 ms GPU-process stall.
+Only the picture goes: the ball still floats and drags in the water.
+It is the renderer's (`Scene3D.setWaterShown` → `BodyVisual.setWaterShown`), never written to the level.
+
+`cli shot --probe --query "reflections=0&shadows=0&water=0"` replays a bundle with the same three switches off, so its log lists what an editor test set up that way still compiles mid-run.
+
 ## Workspaces: Level and Visuals
 
 The toolbar opens with a switcher, **Level** and **Visuals** (**W** toggles).

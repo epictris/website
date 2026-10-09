@@ -220,6 +220,9 @@ interface BuiltLight {
   // A spot's visible beam and dust (see `beam.ts`), or null for every light
   // that asked for neither.
   beam: Beam | null;
+  // Whether it holds a slot of the shadow budget, which is what `castShadow`
+  // says unless shadows are switched off (see `LightRig.setShadows`).
+  shadowed: boolean;
 }
 
 // A material whose emission follows a waking light: a glowing part of the same
@@ -303,6 +306,8 @@ export interface LightPlacement {
 export class LightRig {
   private readonly built: BuiltLight[] = [];
   private shadowsLeft = LIGHT_SHADOW_BUDGET;
+  // Off, no light casts, whatever it was authored with (see `setShadows`).
+  private shadowsOn = true;
   // Whether any light actually flickers, so a level of steady lamps pays nothing
   // per frame rather than paying a loop over every light to multiply by one.
   private flickers = false;
@@ -490,7 +495,7 @@ export class LightRig {
 
     const wantsShadow = data.castShadow === true && this.shadowsLeft > 0;
     if (wantsShadow) this.shadowsLeft--;
-    light.castShadow = wantsShadow;
+    light.castShadow = wantsShadow && this.shadowsOn;
     if (wantsShadow) {
       light.shadow.mapSize.set(LIGHT_SHADOW_MAP_SIZE, LIGHT_SHADOW_MAP_SIZE);
       // The authored near plane, for the lantern case (see LIGHT_SHADOW_NEAR).
@@ -540,6 +545,7 @@ export class LightRig {
       flicker,
       phase,
       beam,
+      shadowed: wantsShadow,
     });
     return { holder };
   }
@@ -574,13 +580,22 @@ export class LightRig {
     const i = this.built.findIndex((b) => b.holder === mounted.holder);
     if (i < 0) return;
     const b = this.built[i]!;
-    if (b.light.castShadow) this.shadowsLeft++;
+    if (b.shadowed) this.shadowsLeft++;
     b.light.dispose();
     b.beam?.dispose();
     b.holder.removeFromParent();
     b.holder.clear();
     this.built.splice(i, 1);
     this.flickers = this.built.some((x) => x.flicker > 0);
+  }
+
+  // Off, no lamp casts a shadow; on, each casts as it was built to. The budget
+  // is untouched either way, so switching back on gives the same lamps their
+  // shadows. Changing it changes every lit program (three keys them by the
+  // shadow count), so the next frame recompiles them.
+  setShadows(on: boolean): void {
+    this.shadowsOn = on;
+    for (const b of this.built) b.light.castShadow = b.shadowed && on;
   }
 
   // Advance the flicker and the beams. `seconds` is a wall clock and never the

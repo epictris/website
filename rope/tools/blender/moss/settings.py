@@ -55,7 +55,7 @@ _D = Params()
 # draws them: at 1 the river backdrop's came to 1-2 texels across on
 # left-shelf and left-wall (5.9 cm texels) but 8-13 on mid-ledge (7.7 mm), so
 # Detail is each moss's own.
-COARSENED_LENGTHS = ("resolution", "dab_min", "dab_max", "texel", "print_edge")
+COARSENED_LENGTHS = ("resolution", "dab_min", "dab_max", "texel", "print_edge", "edge_detail")
 
 
 class MossHost(bpy.types.PropertyGroup):
@@ -110,14 +110,26 @@ class MossSettings(bpy.types.PropertyGroup):
     lift: _length("Lift", _D.lift, 0.0, 0.3, "How much prouder the lightest moss stands than the darkest: the lighter, the taller")
     up_floor: _factor("Wall Share", _D.up_floor, "The share of its height moss keeps on a wall (a full pile on a wall faces the ground)")
     height_blur: _length("Height Blur", _D.height_blur, 0.0, 0.2, "How far the height is smoothed, so blotches are pillows, not terraces")
-    sink: _length("Sink", _D.sink, 0.0, 0.05, "How far under the rock the mound's edge starts, so it rises out of the rock and is never flush with it")
     rim: _length("Rim", _D.rim, 0.0, 0.5, "Distance over which the height fades in from the mound's edge")
     drape: _length("Drape", _D.drape, 0.0, 3.0, "The tightest curve the moss bends in: across a step or hollow tighter than this it "
                                                 "slopes from the edge down to the moss below instead of following the rock's corner. "
                                                 "0 follows the rock")
-    inner_u: _factor("Mound Reach", _D.inner_u, "How far out in a dab's outline the mound reaches", 1.0)
+    edge_round: _length("Edge Round", _D.edge_round, 0.0, 0.05, "How far in from its outline the moss's top rounds down to its lip")
+    overhang: _length("Overhang", _D.overhang, 0.0, 0.02, "How high the lip stands over the rock and how far its foot is tucked in under it "
+                                                        "(at most half of Floor)")
+    edge_detail: _length("Edge Detail", _D.edge_detail, 0.001, 0.03, "Edge length of the mesh along the outline: the smaller, the rounder its lobes")
+    strays: FloatProperty(name="Strays", default=_D.strays, min=0.0, soft_max=30.0, update=_changed,
+                          description="Detached clumps of moss on the rock beyond the outline, per metre of outline")
+    stray_reach: _length("Stray Reach", _D.stray_reach, 0.0, 0.3, "How far beyond the outline a stray clump may be")
 
-    min_patch: FloatProperty(name="Min Patch", default=_D.min_patch, min=0.0, soft_max=0.1, unit="AREA", description="Mound islands smaller than this are dropped", update=_changed)
+    grass: FloatProperty(name="Grass", default=_D.grass, min=0.0, soft_max=60.0, update=_changed,
+                         description="Tufts of grass blades per square metre of the moss's up-facing top, more where it is lighter")
+    grass_height: _length("Grass Height", _D.grass_height, 0.0, 0.3, "How tall the tallest blades stand")
+    grass_blades: IntProperty(name="Blades", default=_D.grass_blades, min=1, soft_max=20, description="Blades in a tuft, about", update=_changed)
+    grass_tip: FloatVectorProperty(name="Grass Tip", default=_srgb(_D.grass_tip), size=3, min=0.0, max=1.0, subtype="COLOR",
+                                   description="The lightest blade tip; the tips run from Light to this", update=_changed)
+
+    min_patch: FloatProperty(name="Min Patch", default=_D.min_patch, min=0.0, soft_max=0.1, unit="AREA", description="Mound islands smaller than this are dropped (stray clumps are kept)", update=_changed)
 
     # Quality: what build.finish reads (build.FINISH_PARAMS), so a change here
     # remakes the mesh and the print from the last growth, without growing again.
@@ -158,6 +170,7 @@ class MossSettings(bpy.types.PropertyGroup):
         kw = {k: getattr(self, k) for k in Params.__dataclass_fields__ if hasattr(self, k)}
         kw["dark"] = lin(self.dark)
         kw["light"] = lin(self.light)
+        kw["grass_tip"] = lin(self.grass_tip)
         kw["max_texture"] = int(self.max_texture)
         if self.detail != 1.0:
             d = self.detail

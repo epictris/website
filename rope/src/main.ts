@@ -51,6 +51,7 @@ import {
   type EndReason,
 } from "./playtest/protocol";
 import { selfReplayLine, verifySelfReplay } from "./sim/selfReplay";
+import { verifySelfReplayOffThread } from "./sim/selfReplayOffThread";
 import { showToast } from "./render/toast";
 import { showCompletionForm } from "./render/completionForm";
 import { readProgress, writeProgress } from "./render/progress";
@@ -547,20 +548,27 @@ function downloadRecording(): void {
   // Before the file leaves: does this bundle reproduce HERE? The browser and bun
   // once disagreed on a 1e-17 m overlap and nothing in this path could know it,
   // so the disagreement surfaced hours later on someone else's machine and read
-  // as a physics bug (see sim/selfReplay.ts). Run synchronously - a 1000-frame
-  // ball session re-simulates in well under a second - and reported either way.
-  rec.selfReplay = verifySelfReplay(rec);
-  showToast(
-    `session-${recFrames.length}f.json\n${selfReplayLine(rec.selfReplay)}`,
-    rec.selfReplay.identical ? "ok" : "warn",
-  );
-  const blob = new Blob([JSON.stringify(rec)], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `session-${recFrames.length}f.json`;
-  a.click();
-  URL.revokeObjectURL(url);
+  // as a physics bug (see sim/selfReplay.ts). Run in a worker: on the page's
+  // own thread it froze the game ~0.35 ms per recorded frame, at the press.
+  // Reported either way.
+  const name = `session-${rec.frames.length}f.json`;
+  showToast(`${name}\nself-replay: checking…`);
+  void verifySelfReplayOffThread(rec)
+    .catch((err: unknown) => {
+      console.warn(`[self-replay] ${String(err)}; checking on the page instead`);
+      return verifySelfReplay(rec);
+    })
+    .then((verdict) => {
+      rec.selfReplay = verdict;
+      showToast(`${name}\n${selfReplayLine(verdict)}`, verdict.identical ? "ok" : "warn");
+      const blob = new Blob([JSON.stringify(rec)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = name;
+      a.click();
+      URL.revokeObjectURL(url);
+    });
 }
 // Debug overlay toggle. Render-side only — deliberately outside the
 // deterministic FrameInput stream so toggling never affects recordings.

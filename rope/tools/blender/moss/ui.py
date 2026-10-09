@@ -166,7 +166,30 @@ class MOSS_PT_height(_Sub, bpy.types.Panel):
 
     def draw(self, context):
         s = ops.active_moss(context).moss
-        _grid(self.layout, s, ("floor", "lift", "up_floor", "height_blur", "sink", "rim", "drape", "inner_u"))
+        _grid(self.layout, s, ("floor", "lift", "up_floor", "height_blur", "rim", "drape"))
+
+
+class MOSS_PT_edge(_Sub, bpy.types.Panel):
+    bl_label = "Edge"
+
+    def draw(self, context):
+        s = ops.active_moss(context).moss
+        if s.kind == "MOUND":
+            _grid(self.layout, s, ("edge_round", "overhang", "edge_detail"))
+        _grid(self.layout, s, ("strays", "stray_reach"))
+
+
+class MOSS_PT_grass(_Sub, bpy.types.Panel):
+    bl_label = "Grass"
+
+    @classmethod
+    def poll(cls, context):
+        ob = ops.active_moss(context)
+        return ob is not None and ob.moss.kind == "MOUND"
+
+    def draw(self, context):
+        s = ops.active_moss(context).moss
+        _grid(self.layout, s, ("grass", "grass_height", "grass_blades", "grass_tip"))
 
 
 class MOSS_PT_mesh(_Sub, bpy.types.Panel):
@@ -178,4 +201,4 @@ class MOSS_PT_mesh(_Sub, bpy.types.Panel):
         _grid(self.layout, s, ("min_patch", "print_edge"))
 
 
-CLASSES = (MOSS_PT_main, MOSS_PT_quality, MOSS_PT_dabs, MOSS_PT_tone, MOSS_PT_height, MOSS_PT_mesh)
+CLASSES = (MOSS_PT_main, MOSS_PT_quality, MOSS_PT_dabs, MOSS_PT_tone, MOSS_PT_height, MOSS_PT_edge, MOSS_PT_grass, MOSS_PT_mesh)

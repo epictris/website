@@ -68,21 +68,30 @@ def stamps_world(stamps, matrix):
     return pos, nrm
 
 
-def refine(co, tri, centres, radii, res, keep_all=False):
+def refine(co, tri, centres, radii, res, keep_all=False, parents=False):
     """Triangles within reach of a stamp, bisected until every edge in reach is
     at most `res` long. Returns (vertices, triangles) as arrays. With
     `keep_all` every input triangle is kept (only those in reach are still
-    refined): the second pass over a mesh the first pass already trimmed."""
-    # Which host triangles can a stamp touch: bounding sphere against stamp sphere.
-    c = co[tri].mean(axis=1)
-    rb = np.linalg.norm(co[tri] - c[:, None, :], axis=2).max(axis=1)
-    near = np.zeros(len(tri), bool)
-    for s in range(0, len(centres), 64):
-        d = np.linalg.norm(c[:, None, :] - centres[None, s : s + 64, :], axis=2)
-        near |= (d - rb[:, None] - radii[None, s : s + 64] < 0).any(axis=1)
-    sel = tri if keep_all else tri[near]
+    refined): the second pass over a mesh the first pass already trimmed.
+    With `parents` it also returns where each vertex came from: `used`, the
+    input vertex each of the first len(used) output vertices is, and `par`
+    (N, 2), the two output vertices whose midpoint each later one is, in
+    order (a parent always comes before its child), so a per-vertex field
+    carries onto the refined mesh exactly as it lies along the input's edges."""
+    if keep_all:
+        sel = tri
+    else:
+        # Which host triangles can a stamp touch: bounding sphere against stamp sphere.
+        c = co[tri].mean(axis=1)
+        rb = np.linalg.norm(co[tri] - c[:, None, :], axis=2).max(axis=1)
+        near = np.zeros(len(tri), bool)
+        for s in range(0, len(centres), 64):
+            d = np.linalg.norm(c[:, None, :] - centres[None, s : s + 64, :], axis=2)
+            near |= (d - rb[:, None] - radii[None, s : s + 64] < 0).any(axis=1)
+        sel = tri[near]
     if len(sel) == 0:
-        return np.zeros((0, 3)), np.zeros((0, 3), np.int64)
+        empty = (np.zeros((0, 3)), np.zeros((0, 3), np.int64))
+        return empty + (np.zeros(0, np.int64), np.zeros((0, 2), np.int64)) if parents else empty
 
     kd = KDTree(len(centres))
     for i, p in enumerate(centres):
@@ -145,10 +154,13 @@ def refine(co, tri, centres, radii, res, keep_all=False):
                 return True
         return False
 
+    par = []
+
     def split(e):
         a, b = e
         m = len(verts)
         verts.append((verts[a] + verts[b]) * 0.5)
+        par.append(e)
         made = []
         for i in list(by_edge.get(e, ())):
             t = tris[i]
@@ -184,6 +196,8 @@ def refine(co, tri, centres, radii, res, keep_all=False):
 
     v = np.array([p[:] for p in verts], dtype=np.float64)
     t = np.array([t for t, ok in zip(tris, alive) if ok], dtype=np.int64).reshape(-1, 3)
+    if parents:
+        return v, t, used, np.array(par, dtype=np.int64).reshape(-1, 2)
     return v, t
 
 

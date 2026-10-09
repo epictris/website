@@ -214,6 +214,8 @@ export class BodyVisual {
   // Water's registrations (its top, its fall; see water.ts `buildWater`),
   // forgotten at dispose.
   private releaseWater: (() => void) | null = null;
+  // What draws the water, for `setWaterShown`. Empty for everything else.
+  private waterObjects: THREE.Object3D[] = [];
   // Lights this body's light objects hang on it. Children of the root, so they
   // ride the pose with no per-frame cost; handed back to the rig at dispose,
   // which is what frees the budget slot as well as the objects.
@@ -268,6 +270,7 @@ export class BodyVisual {
         this.stillSurface = water.still;
         this.foamSurface = water.foam;
         this.releaseWater = water.release;
+        this.waterObjects = water.objects;
       }
       // A volume's pieces may still be made visible, as any piece may.
       this.mountDebug(data, solidZ);
@@ -474,6 +477,12 @@ export class BodyVisual {
   setDebugShown(shown: boolean): void {
     this.debugShown = shown;
     for (const p of this.debugPieces) p.mesh.visible = shown;
+  }
+
+  // Show or hide a water body's water (`Scene3D.setWaterShown`). Built shown;
+  // the host applies its own flag to every visual it builds.
+  setWaterShown(shown: boolean): void {
+    for (const o of this.waterObjects) o.visible = shown;
   }
 
   // A solid on a piece, at `z` through the plane. Everything drawn here is a

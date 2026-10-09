@@ -282,6 +282,7 @@ import type {
 // (see src/sim/treeStamp.ts). Aliased because `commit` and `dirty` are ordinary
 // words in an editor that autosaves.
 import { selfReplayLine, verifySelfReplay } from "../sim/selfReplay";
+import { verifySelfReplayOffThread } from "../sim/selfReplayOffThread";
 import { showToast } from "../render/toast";
 import {
   commit as treeCommit,
@@ -868,6 +869,15 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // each time new scenery came into one of them (trace 2026-10-09). A view
   // setting held by the renderer, never written into the level.
   let reflectionsOn = true;
+  // Whether the sun and the lamps cast shadows, here and in ▶ Test. The shadow
+  // pass compiles a depth program per kind of caster the first time one is
+  // inside a shadow camera, mid-run (a 44 ms frame in the same trace). A view
+  // setting like `reflectionsOn`; no light's `castShadow` changes.
+  let shadowsOn = true;
+  // Whether the water is drawn, here and in ▶ Test, for the same reason: its
+  // shaders compile the first time a body of it comes into view. The sim's
+  // water is untouched. A view setting like `reflectionsOn`.
+  let waterShown = true;
   const gridStep = 0.05; // snap spacing: fixed 5 cm (half the backdrop's 10 cm minor grid)
   let currentName: string | null = null;
   let dirty = false;
@@ -2043,19 +2053,26 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     };
     // The same check the game's P-download runs: a bundle that does not
     // reproduce on the machine that made it is a determinism finding, and this
-    // is the last place anyone can be told so (see sim/selfReplay.ts).
-    rec.selfReplay = verifySelfReplay(rec);
-    showToast(
-      `session-${recFrames.length}f.json\n${selfReplayLine(rec.selfReplay)}`,
-      rec.selfReplay.identical ? "ok" : "warn",
-    );
-    const blob = new Blob([JSON.stringify(rec)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `session-${recFrames.length}f.json`;
-    a.click();
-    URL.revokeObjectURL(url);
+    // is the last place anyone can be told so (see sim/selfReplay.ts). Off the
+    // page's thread, so the test does not freeze while it runs.
+    const name = `session-${rec.frames.length}f.json`;
+    showToast(`${name}\nself-replay: checking…`);
+    void verifySelfReplayOffThread(rec)
+      .catch((err: unknown) => {
+        console.warn(`[self-replay] ${String(err)}; checking on the page instead`);
+        return verifySelfReplay(rec);
+      })
+      .then((verdict) => {
+        rec.selfReplay = verdict;
+        showToast(`${name}\n${selfReplayLine(verdict)}`, verdict.identical ? "ok" : "warn");
+        const blob = new Blob([JSON.stringify(rec)], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = name;
+        a.click();
+        URL.revokeObjectURL(url);
+      });
   }
 
   function stopTest(): void {
@@ -2414,6 +2431,20 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     reflectionsChk.title =
       "Draw the ball's reflection of the level and the pools' mirror, here and in ▶ Test. Untick to skip the shader compiles they cost the first time new scenery comes into them (the editor runs no prewarm). Off, the ball reflects the sky. An editor setting: the game always draws both.";
     testRow.append(reflectionsChk);
+    const shadowsChk = checkbox("shadows", shadowsOn, (v) => {
+      shadowsOn = v;
+      scene3d.setShadows(v);
+    });
+    shadowsChk.title =
+      "Draw the sun's and the lamps' shadows, here and in ▶ Test. Untick to skip the shader compiles the shadow pass costs the first time a new kind of object comes into a shadow (the editor runs no prewarm). Switching either way recompiles the lit shaders once. An editor setting: no light's Cast shadow changes, and the game always draws them.";
+    testRow.append(shadowsChk);
+    const waterChk = checkbox("water", waterShown, (v) => {
+      waterShown = v;
+      scene3d.setWaterShown(v);
+    });
+    waterChk.title =
+      "Draw the water - pools, currents, falls and the scene's water continuing a pool - here and in ▶ Test. Untick to skip the shader compiles it costs the first time a body of it comes into view (the editor runs no prewarm). Only the picture: the ball still floats and drags in the water. An editor setting: the game always draws it.";
+    testRow.append(waterChk);
   }
 
   // View toggle. Only offered when there is a WebGL context to toggle: a machine

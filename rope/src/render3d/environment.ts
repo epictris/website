@@ -326,6 +326,11 @@ export class Environment {
     if (this.fog) this.fog.density = shown ? this.fogDensity : 0;
   }
 
+  // Whether the sun casts its shadow (see `Scene3D.setShadows`).
+  setShadows(on: boolean): void {
+    if (this.sun) this.sun.castShadow = on;
+  }
+
   // The fog as the frame should treat it: null while hidden, so what reads it
   // directly (the lit air of a spot's shaft) agrees with the surfaces.
   shownFog(): THREE.FogExp2 | null {
