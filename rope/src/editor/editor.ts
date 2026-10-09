@@ -854,6 +854,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // hard to judge. ▶ Test always draws it. A view setting like `snapOn`, so it
   // is not written into the level.
   let fogInEditor = false;
+  // Whether the 3D scene draws EVERY collision shape's debug geometry, ticked or
+  // not, here and in ▶ Test - to see the collision under a dressed level
+  // without flipping, and then having to remember to unflip, each shape's own
+  // `draw`. A view setting like `fogInEditor`, held by the renderer
+  // (`Scene3D.setAllDebugShown`), so no shape's `debug` changes and a test's
+  // recording carries the level as authored.
+  let allDebugShown = false;
   const gridStep = 0.05; // snap spacing: fixed 5 cm (half the backdrop's 10 cm minor grid)
   let currentName: string | null = null;
   let dirty = false;
@@ -2384,6 +2391,15 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   edgeChk.title =
     "Keep the avatar out of the outer 8% of the frame during ▶ Test. On in the game always; untick to see the raw framing a camera rule is asking for (the overlay draws the clamp in amber on the frames it is holding).";
   testRow.append(edgeChk);
+  if (scene3d) {
+    const allDebugChk = checkbox("all debug", allDebugShown, (v) => {
+      allDebugShown = v;
+      scene3d.setAllDebugShown(v);
+    });
+    allDebugChk.title =
+      "Draw every collision shape's debug geometry in 3D, here and in ▶ Test, whether or not its own draw box is ticked. An editor setting: no shape's Debug settings change, and the game draws each shape as authored.";
+    testRow.append(allDebugChk);
+  }
 
   // View toggle. Only offered when there is a WebGL context to toggle: a machine
   // that cannot draw the scene should not be shown two dead buttons.
@@ -4523,11 +4539,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   }
 
   // Debug geometry (see `CollisionObjectData.debug`): whether the shape is drawn
-  // in 3D, in the game as here, and how. One checkbox is the whole switch, and
-  // the settings appear while it is on - ticking it is the common gesture, and
-  // a piece ticked on is drawn as itself (the body's colour, the shape's
-  // thickness, opaque) before anything is tuned. Unticking keeps the settings,
-  // so a piece switched back on comes back as it was.
+  // in 3D, in the game as here, and how. One checkbox is the whole switch -
+  // ticking it is the common gesture, and a piece ticked on is drawn as itself
+  // (the body's colour, the shape's thickness, opaque) before anything is
+  // tuned. The settings are offered whether it is on or not: unticking keeps
+  // them, so a piece switched back on comes back as it was, and an unticked
+  // piece can be tuned ahead of switching it on, or while the toolbar's "all
+  // debug" draws it (`allDebugShown`).
   function addDebugFields(g: HTMLElement, items: EdItem[]): void {
     const write = (patch: Partial<EdDebug>): void => {
       for (const b of items) b.debug = { ...b.debug, ...patch };
@@ -4541,14 +4559,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       beginAction();
       write({ on: box.checked });
       markDirty();
-      rebuildInspector();
     });
     const wrap = fieldRow("draw");
     wrap.appendChild(box);
     g.appendChild(wrap);
     describe(wrap,
-      "Draws this shape in 3D, in the game and in ▶ Test as well as here: its outline extruded through the depth, in a flat colour. It is an instrument, not a look - what a level is blocked out in before its Blender scene exists, or what a piece the scene has nothing over is seen by. G hides every shape's debug geometry at once while playing. Unticking keeps the settings below.");
-    if (!allOn) return;
+      "Draws this shape in 3D, in the game and in ▶ Test as well as here: its outline extruded through the depth, in a flat colour. It is an instrument, not a look - what a level is blocked out in before its Blender scene exists, or what a piece the scene has nothing over is seen by. G hides every shape's debug geometry at once while playing. The settings below apply whenever it is drawn, and unticking keeps them.");
 
     // The colour, or the body's own fill while none is picked.
     const cw = fieldRow("colour");

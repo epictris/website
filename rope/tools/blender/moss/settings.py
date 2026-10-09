@@ -103,6 +103,9 @@ class MossSettings(bpy.types.PropertyGroup):
     height_blur: _length("Height Blur", _D.height_blur, 0.0, 0.2, "How far the height is smoothed, so blotches are pillows, not terraces")
     sink: _length("Sink", _D.sink, 0.0, 0.05, "How far under the rock the mound's edge starts, so it rises out of the rock and is never flush with it")
     rim: _length("Rim", _D.rim, 0.0, 0.5, "Distance over which the height fades in from the mound's edge")
+    drape: _length("Drape", _D.drape, 0.0, 3.0, "The tightest curve the moss bends in: across a step or hollow tighter than this it "
+                                                "slopes from the edge down to the moss below instead of following the rock's corner. "
+                                                "0 follows the rock")
     inner_u: _factor("Mound Reach", _D.inner_u, "How far out in a dab's outline the mound reaches", 1.0)
 
     min_patch: FloatProperty(name="Min Patch", default=_D.min_patch, min=0.0, soft_max=0.1, unit="AREA", description="Mound islands smaller than this are dropped", update=_changed)

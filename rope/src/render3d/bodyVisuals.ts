@@ -141,27 +141,31 @@ function solidOf(outline: Outline, depth: number): THREE.BufferGeometry {
 // How one piece's debug geometry is drawn, every setting resolved against what
 // the piece and its body already say (see `DebugDrawData`): the body's fill,
 // opaque, the piece's own thickness. Null for a piece that draws none.
+// `forced` draws every piece as though it were switched on, with its own
+// settings (the editor's "all debug", `Scene3D.setAllDebugShown`); a belt still
+// draws none, since it draws its own band.
 export function debugLookOf(
   data: LevelBodyData,
   o: CollisionObjectData,
+  forced = false,
 ): { color: string; opacity: number; depth: number } | null {
   const d = o.debug;
-  if (!d?.on || o.shape.kind === "belt") return null;
+  if (!(forced || d?.on) || o.shape.kind === "belt") return null;
   return {
-    color: d.color ?? data.color ?? DEFAULT_BODY_COLOR,
-    opacity: d.opacity ?? 1,
-    depth: d.depth ?? o.thickness ?? DEFAULT_THICKNESS,
+    color: d?.color ?? data.color ?? DEFAULT_BODY_COLOR,
+    opacity: d?.opacity ?? 1,
+    depth: d?.depth ?? o.thickness ?? DEFAULT_THICKNESS,
   };
 }
 
 // Everything a body's debug geometry is built from, as a string two builds can
 // be compared by (`BodyVisual.restyleDebug`): for each piece that draws one,
 // where it is in the world, its outline and its resolved look.
-function debugSignatureOf(data: LevelBodyData): string {
+function debugSignatureOf(data: LevelBodyData, forced: boolean): string {
   const parts: unknown[] = [];
   data.objects.forEach((o, i) => {
     if (!isCollisionObject(o)) return;
-    const look = debugLookOf(data, o);
+    const look = debugLookOf(data, o, forced);
     if (!look) return;
     const w = worldPlacement(data, o);
     parts.push([i, w.pos.x, w.pos.y, w.rot, o.shape, look]);
@@ -230,17 +234,21 @@ export class BodyVisual {
   private readonly debugPieces: { piece: THREE.Group; geometry: THREE.BufferGeometry; mesh: THREE.Mesh }[] = [];
   private debugShown = true;
   private debugZ = 0;
-  // What the pieces were last built from (`debugSignatureOf`).
+  // What the pieces were last built from (`debugSignatureOf`), and the body
+  // data itself, which a change of `debugForced` builds them again from.
   private debugSignature = "";
+  private debugData: LevelBodyData | null = null;
 
   // `body` is what moves and is null for an authored body that built nothing;
   // `built` is the authored side and is null for a body the sim spawned at
   // runtime (a rock, the hook), which has no authored objects and simply
-  // extrudes its own shapes.
+  // extrudes its own shapes. `debugForced` draws every piece's debug geometry,
+  // switched on or not (`setDebugForced`).
   constructor(
     readonly body: CollisionObject2D | null,
     private readonly built: BuiltBody | null,
     private readonly rig?: LightRig,
+    private debugForced = false,
   ) {
     const data = built?.data ?? null;
     this.waking = data?.objects.some((o) => isLightObject(o) && isWaking(o)) ?? false;
@@ -391,9 +399,10 @@ export class BodyVisual {
     return piece;
   }
 
-  // Every piece whose debug geometry is on (`debugLookOf`), as its outline
-  // extruded through the depth it asks for. Each is a piece of its own, tagged
-  // with its authored object, so a pick on it answers with that piece.
+  // Every piece whose debug geometry is on (`debugLookOf`) - every piece while
+  // `debugForced` - as its outline extruded through the depth it asks for. Each
+  // is a piece of its own, tagged with its authored object, so a pick on it
+  // answers with that piece.
   //
   // Placed against the frame this visual was BUILT in (`built.origin`), which
   // is where the root stands at rest, from `data`'s own placements - the built
@@ -405,7 +414,7 @@ export class BodyVisual {
     this.debugZ = z;
     data.objects.forEach((o, i) => {
       if (!isCollisionObject(o)) return;
-      const look = debugLookOf(data, o);
+      const look = debugLookOf(data, o, this.debugForced);
       if (!look) return;
       const world = worldPlacement(data, o);
       const pos = world.pos.sub(built.origin).rotated(-built.rotation);
@@ -421,7 +430,8 @@ export class BodyVisual {
       piece.add(mesh);
       this.debugPieces.push({ piece, geometry, mesh });
     });
-    this.debugSignature = debugSignatureOf(data);
+    this.debugSignature = debugSignatureOf(data, this.debugForced);
+    this.debugData = data;
   }
 
   // AN EDIT TO THIS BODY'S DEBUG GEOMETRY, made in place: the editor drags a
@@ -434,7 +444,7 @@ export class BodyVisual {
   // change is left alone.
   restyleDebug(data: LevelBodyData): boolean {
     if (!this.built || data.objects.length !== this.built.data.objects.length) return false;
-    if (debugSignatureOf(data) === this.debugSignature) return false;
+    if (debugSignatureOf(data, this.debugForced) === this.debugSignature) return false;
     this.disposeDebug();
     this.mountDebug(data, this.debugZ);
     return true;
@@ -446,6 +456,17 @@ export class BodyVisual {
       p.geometry.dispose();
     }
     this.debugPieces.length = 0;
+  }
+
+  // Draw every piece's debug geometry whether it is switched on or not, or only
+  // the ones that are (`Scene3D.setAllDebugShown`): built again, in place, from
+  // what the pieces were last built from.
+  setDebugForced(forced: boolean): void {
+    if (forced === this.debugForced) return;
+    this.debugForced = forced;
+    if (!this.debugData) return;
+    this.disposeDebug();
+    this.mountDebug(this.debugData, this.debugZ);
   }
 
   // Show or hide this body's debug geometry (`Scene3D.setDebugShown`). Built

@@ -292,13 +292,17 @@ The whole loop is in [blender-scenes](blender-scenes.md).
 ## Debug geometry
 
 A collision shape's panel has a **Debug** section (`addDebugFields`), and its **draw** box is the one switch: ticked, the shape is drawn in 3D - here, in ▶ Test and in the game - as its outline extruded in a flat colour (`CollisionObjectData.debug`, see [render3d](render3d.md#what-the-scene-draws)).
-While it is ticked the section offers **colour** (the body's fill until one is picked; **body colour** goes back to it), **opacity** (0 to 1; below 1 the shape is see-through and casts no shadow) and **depth** (pixels, blank = the shape's own `thickness`).
-Unticking keeps those settings, so a shape switched back on comes back as it was.
+Under it the section offers **colour** (the body's fill until one is picked; **body colour** goes back to it), **opacity** (0 to 1; below 1 the shape is see-through and casts no shadow) and **depth** (pixels, blank = the shape's own `thickness`).
+They are offered ticked or not: unticking keeps them, so a shape switched back on comes back as it was, and an unticked shape can be tuned before it is switched on, or while **all debug** draws it.
 A belt has no Debug section: it draws its own band.
 
 A shape drawn in a level with no scene starts ticked, since that is what a block-out is seen by; one drawn in a dressed level starts unticked, since its look is the Blender scene's.
 A level saved before the switch existed opens with the shapes its grey box used to draw ticked ([level-format](level-format.md)).
 **G** hides every shape's debug geometry in ▶ Test, as in the game; every test opens with it shown, and authoring always shows it.
+
+The toolbar's **all debug** box (offered only with a 3D view) draws every shape's debug geometry in 3D, ticked or not, each with its own settings - in the editor's view and in ▶ Test - so the collision under a dressed level can be seen without flipping each shape's **draw**.
+It is an editor setting like **snap**, never written to the level, and it is the renderer's (`Scene3D.setAllDebugShown` → `BodyVisual.setDebugForced`), not the data's: no shape's `debug` changes, a test's recording carries the level as authored, and the game draws each shape as authored.
+**G** still hides all of it in ▶ Test.
 
 ## Workspaces: Level and Visuals
 

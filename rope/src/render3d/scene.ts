@@ -201,6 +201,9 @@ export class Scene3D {
   // Whether the pieces' debug geometry is drawn (`setDebugShown`). Held here
   // rather than only on the visuals, because a rebuild makes new ones.
   private debugShown = true;
+  // Whether EVERY piece's debug geometry is drawn, switched on or not
+  // (`setAllDebugShown`). Held here for the same reason.
+  private allDebugShown = false;
   // Every light in the level. It is rebuilt with the BODIES rather than kept
   // across a level change, because a light is an object inside a body now: each
   // one is a child of the group its body is drawn in, so its lifetime is that
@@ -383,7 +386,7 @@ export class Scene3D {
     const targets: DressTarget[] = [];
     const sceneName = level.visualSource.data.scene;
     level.visualSource.built.bodies.forEach((built) => {
-      const visual = new BodyVisual(built.body, built, this.lights);
+      const visual = new BodyVisual(built.body, built, this.lights, this.allDebugShown);
       visual.setDebugShown(this.debugShown);
       this.scene.add(visual.root);
       if (built.body) this.bodies.set(built.body, visual);
@@ -456,6 +459,16 @@ export class Scene3D {
 
   get debugGeometryShown(): boolean {
     return this.debugShown;
+  }
+
+  // Draw every piece's debug geometry, whether the piece switches it on or not
+  // (`BodyVisual.setDebugForced`), each with its own settings: the editor's
+  // "all debug", which sees the collision under a dressed level without editing
+  // a piece's `debug`. Render-side, so the level - and a test's recording of
+  // it - is untouched. G still hides it all (`setDebugShown`).
+  setAllDebugShown(shown: boolean): void {
+    this.allDebugShown = shown;
+    for (const v of this.authored) v.setDebugForced(shown);
   }
 
   // An edit to the level's debug geometry, made IN PLACE rather than by a

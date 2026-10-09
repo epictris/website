@@ -128,6 +128,7 @@ class Params:
     height_blur: float = 0.027
     sink: float = 0.006
     rim: float = 0.10
+    drape: float = 1.0  # the tightest the moss's sheet bends: steps and hollows tighter are bridged (0: it follows the rock)
     inner_u: float = 0.88  # the mound stops this far out in a dab's outline
     min_patch: float = 0.002  # m^2: mound islands smaller than this go
     mound_density: float = 1500.0  # triangles per m^2 of mound
@@ -217,6 +218,16 @@ def dab_shape(rng):
 
 class Dab:
     __slots__ = ("c", "n", "r", "k", "ax", "ay", "harm", "rmax", "t", "tone", "h")
+
+    def lay(self, c, n):
+        """Move the dab to `c`, facing `n`, its outline turned as little as the
+        new plane allows (where the draped sheet carries it off the rock)."""
+        ax = self.ax - n * self.ax.dot(n)
+        if ax.length < 1e-6:
+            ax = self.ay - n * self.ay.dot(n)
+        self.c, self.n = c, n
+        self.ax = ax.normalized()
+        self.ay = n.cross(self.ax)
 
     def __init__(self, c, n, r, k, rng):
         self.c, self.n, self.r, self.k = c, n, r, k
@@ -460,12 +471,7 @@ def grow(co, tri, host_matrix, stamps, p):
             inner[idx[u <= p.inner_u]] = 1.0
     if p.kind == "TEXTURE":
         return _grown_decal(co, tri, host_matrix, v, t, hull, g, kd, tval, layers)
-    up = p.up_floor + (1 - p.up_floor) * smoothstep(0.0, 0.7, hull[:, 2])
-    lift = np.where(np.isnan(tval), 0.0, p.floor + p.lift * np.nan_to_num(tval) * up)
-    lift = smooth_field(lift, g.edges, len(v), _passes(p.height_blur, res))
-    for layer in layers:
-        for d in layer:
-            d.h = max(0.0, float(lift[kd.find(d.c)[1]]))
+    lift = _lift(p, tval, hull[:, 2], g, res)
     inner = smooth_field(inner, g.edges, len(v), max(1, _passes(0.006, res)))
 
     keep = inner[t].mean(1) > 0.5
@@ -482,11 +488,36 @@ def grow(co, tri, host_matrix, stamps, p):
     mg = _Graph(mv, mt)
     boundary = _boundary(mt, len(mv))
     rimf = smoothstep(0.0, p.rim, mg.dijkstra(boundary) * STUDY_METRIC)
-    # under the rock at the rim, and from there up to the moss's height: it crosses
-    # the rock along one line and is never flush with it across an area
-    offset = -p.sink + (p.sink + lift[used]) * rimf
-    offset = smooth_field(offset, mg.edges, len(mv), 1)
-    mv = mv + hull[used] * offset[:, None]
+    if p.drape <= 0.0:
+        # under the rock at the rim, and from there up to the moss's height: it
+        # crosses the rock along one line and is never flush with it across an area
+        offset = -p.sink + (p.sink + lift[used]) * rimf
+        offset = smooth_field(offset, mg.edges, len(mv), 1)
+        mv = mv + hull[used] * offset[:, None]
+        _set_heights(layers, kd, lift)
+    else:
+        # The same height in two parts: the sheet (the rim and `floor`), draped
+        # over the rock's steps and hollows, and the pile standing on it.
+        sheet_h = np.minimum(lift[used], p.floor)
+        base = smooth_field(-p.sink + (p.sink + sheet_h) * rimf, mg.edges, len(mv), 1)
+        sheet = _drape(mv + hull[used] * base[:, None], hull[used], mt, mg, boundary, p.drape, res)
+        sn = normalize(smooth_field(vertex_normals(sheet, mt), mg.edges, len(mv), _passes(0.02, res)))
+        # the pile faces the way the sheet does: a step bridged by a slope
+        # piles like a slope, not like the wall under it
+        nz = hull[:, 2].copy()
+        nz[used] = sn[:, 2]
+        lift = _lift(p, tval, nz, g, res)
+        pile = smooth_field((lift[used] - sheet_h) * rimf, mg.edges, len(mv), 1)
+        _set_heights(layers, kd, lift)
+        # a dab rides the sheet off the rock, so the print finds it over the
+        # moss it colours
+        moved = sheet - (mv + hull[used] * base[:, None])
+        for layer in layers:
+            for d in layer:
+                i = m_remap[kd.find(d.c)[1]]
+                if i >= 0:
+                    d.lay(Vector(mv[i] + moved[i]), Vector(sn[i]))
+        mv = sheet + sn * pile[:, None]
 
     bvh = BVHTree.FromPolygons([tuple(x) for x in co], [tuple(x) for x in tri.tolist()])
     return Grown(mv, mt, layers, bvh, kd, tval, np.array(host_matrix, dtype=np.float64))
@@ -544,6 +575,132 @@ def finish(grown, p, decimate):
     inv = np.linalg.inv(grown.host_matrix)
     local = mv @ inv[:3, :3].T + inv[:3, 3]
     return Result(local, mt, uvs, image, dabs=sum(len(x) for x in layers), layers=[len(x) for x in layers], heights=heights, texel=texel, area=area)
+
+
+def _lift(p, tval, nz, g, res):
+    """How far the moss stands proud of the rock at each refined vertex: `floor`,
+    and the tone times `lift` times how much the moss faces up there (`nz`, the
+    up component of its normal), blurred over `height_blur`."""
+    up = p.up_floor + (1 - p.up_floor) * smoothstep(0.0, 0.7, nz)
+    lift = np.where(np.isnan(tval), 0.0, p.floor + p.lift * np.nan_to_num(tval) * up)
+    return smooth_field(lift, g.edges, len(tval), _passes(p.height_blur, res))
+
+
+def _set_heights(layers, kd, lift):
+    for layer in layers:
+        for d in layer:
+            d.h = max(0.0, float(lift[kd.find(d.c)[1]]))
+
+
+DRAPE_CELL = 0.025  # m: the coarse mesh the sheet is draped on
+DRAPE_WINDOW = 100  # passes
+DRAPE_TOL = 2e-4  # m: the sheet is settled when under 1 % of its clusters move this far in DRAPE_WINDOW passes
+DRAPE_PASSES = 20000  # ... or after this many passes
+
+
+def _drape(base, nrm, tri, g, boundary, radius, res):
+    """The moss's sheet, draped over the rock instead of following it into every
+    corner: a sheet under tension, pressed onto `base` (the mound's vertices at
+    the sheet's height over the rock, whose normals are `nrm`) so firmly that it
+    bends no tighter than `radius`. Where the rock is flat, convex or curves
+    more gently than that, the sheet lies on `base`; across a step or a hollow
+    tighter than that it is free, and spans it in a curve of that radius - from
+    a ledge's edge it slopes down to the moss below instead of dropping with the
+    rock and turning a right angle at its foot. The open edge stays on `base`.
+
+    It is the settled sheet (`_relax`), not some number of smoothing passes,
+    so neither `Resolution` nor the size of the patch changes its shape. The
+    vertices are free to slide along the sheet (they spread evenly down a
+    slope), so it is solved as positions, not heights: a height along each
+    vertex's own normal folds the sheet in a concave corner, where the wall's
+    and the floor's normals cross.
+    It is solved on clusters of the mesh about DRAPE_CELL across (the vertices
+    in one cell connected inside it, so a thin fin's two faces stay apart),
+    carried back to the vertices, and pressed there for the passes that reach
+    over two cells: each cluster carries the rock's corner inside it along
+    rigidly, and the pile stood on that kink folded (the 25 cm test step:
+    566 flipped triangles, 16 after, all where the rim tucks under the rock)."""
+    n = len(base)
+    e = g.edges
+    cell = max(res, DRAPE_CELL)
+    key = np.floor(base / cell).astype(np.int64)
+    inner = e[(key[e[:, 0]] == key[e[:, 1]]).all(1)]
+    lab = np.arange(n)
+    while True:
+        m = np.minimum(lab[inner[:, 0]], lab[inner[:, 1]])
+        new = lab.copy()
+        np.minimum.at(new, inner[:, 0], m)
+        np.minimum.at(new, inner[:, 1], m)
+        new = new[new]
+        if (new == lab).all():
+            break
+        lab = new
+    _u, cl = np.unique(lab, return_inverse=True)
+    cl = cl.reshape(-1)
+    k = len(_u)
+    count = np.bincount(cl, minlength=k).astype(np.float64)
+    cs = np.stack([np.bincount(cl, base[:, j], k) for j in range(3)], 1) / count[:, None]
+    cn = normalize(np.stack([np.bincount(cl, nrm[:, j], k) for j in range(3)], 1))
+    pin = np.bincount(cl, boundary.astype(np.float64), k) > 0
+    ce = np.unique(np.sort(cl[e], axis=1), axis=0)
+    ce = ce[ce[:, 0] != ce[:, 1]]
+    ct = cl[tri]
+    ct = ct[(ct[:, 0] != ct[:, 1]) & (ct[:, 1] != ct[:, 2]) & (ct[:, 2] != ct[:, 0])]
+    q = _relax(cs.copy(), cs, cn, pin, ce, DRAPE_PASSES, 1e-4 * cell, radius=radius, tri=ct)
+    sheet = base + (q - cs)[cl]
+    return _relax(sheet, base, nrm, boundary, e, _passes(2 * cell, res), 1e-4 * res, radius=radius, tri=tri)
+
+
+def _relax(q, rest, nrm, pin, e, passes, eps, radius=None, tri=None):
+    """Umbrella passes over positions `q`, each followed by the obstacle: a
+    vertex less than `eps` over its `rest` along its normal is set back on it,
+    as is every `pin`ned one.
+
+    With `radius` the sheet is pressed onto the rock: along the normal of the
+    sheet as it stands (from `tri`; the rest normal where it has none or it has
+    turned over) a vertex goes where its edges' curvatures - each edge's rise
+    off the vertex's tangent plane over half its length squared - average 1 /
+    (2 `radius`), the mean curvature of a cylinder of that radius; along the
+    sheet it moves to the average of its neighbours. The passes stop once no
+    vertex moves DRAPE_TOL. (A pressure from the umbrella step alone, a quarter
+    of the mean squared edge length over the radius, holds only on an evenly
+    spaced mesh: the sheet bunches its vertices up across a corner, and the
+    curve came out a third as wide as asked; on a strip free at its sides,
+    twice.)"""
+    n = len(q)
+    deg = np.maximum(np.bincount(e.ravel(), minlength=n), 1).astype(np.float64)[:, None]
+    a, b = e[:, 0], e[:, 1]
+    press = radius is not None
+    for _ in range(passes):
+        acc = np.stack([np.bincount(a, q[b, j], n) + np.bincount(b, q[a, j], n) for j in range(3)], 1)
+        new = acc / deg
+        if press:
+            fn = np.cross(q[tri[:, 1]] - q[tri[:, 0]], q[tri[:, 2]] - q[tri[:, 0]])
+            sn = np.stack([sum(np.bincount(tri[:, c], fn[:, j], n) for c in range(3)) for j in range(3)], 1)
+            ln = np.linalg.norm(sn, axis=1)
+            sn = np.where(((sn * nrm).sum(1) > 0.1 * ln)[:, None], sn / np.maximum(ln, 1e-12)[:, None], nrm)
+            d = q[b] - q[a]
+            w = 1.0 / np.maximum(np.sum(d * d, axis=1), 1e-12)
+            rise = np.bincount(a, w * (d * sn[a]).sum(1), n) - np.bincount(b, w * (d * sn[b]).sum(1), n)
+            sw = np.bincount(a, w, n) + np.bincount(b, w, n)
+            step = new - q
+            along = step - sn * (step * sn).sum(1)[:, None]
+            new = q + along + sn * ((rise - deg[:, 0] / (4.0 * radius)) / np.maximum(sw, 1e-12))[:, None]
+        new = 0.5 * q + 0.5 * new
+        held = (((new - rest) * nrm).sum(1) < eps) | pin
+        new[held] = rest[held]
+        q = new
+        # Settled: measured over a window of passes, and on all but a few: a
+        # cluster where the sheet meets the rock at the mound's rim can flick
+        # on and off it for good (the step: 9 of 2339, a few mm each, which
+        # the vertices' own relaxing smooths away).
+        if press and _ % DRAPE_WINDOW == 0:
+            if _ and (np.abs(q - last).max(1) > DRAPE_TOL).sum() <= 0.01 * n:
+                break
+            last = q.copy()
+    if DEBUG and press:
+        print("[moss.debug] drape: %d clusters settled in %d passes" % (n, _ + 1))
+    return q
 
 
 def _drop_small(v, t, min_area):

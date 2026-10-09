@@ -141,7 +141,7 @@ class MOSS_PT_height(_Sub, bpy.types.Panel):
 
     def draw(self, context):
         s = ops.active_moss(context).moss
-        _grid(self.layout, s, ("floor", "lift", "up_floor", "height_blur", "sink", "rim", "inner_u"))
+        _grid(self.layout, s, ("floor", "lift", "up_floor", "height_blur", "sink", "rim", "drape", "inner_u"))
 
 
 class MOSS_PT_mesh(_Sub, bpy.types.Panel):

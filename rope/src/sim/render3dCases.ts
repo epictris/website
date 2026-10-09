@@ -5333,11 +5333,41 @@ function debugRestyle(): CaseResult[] {
   const tagged = tags(visual).every((t) => builtObjects.includes(t as SceneObjectData)) && tags(visual).length === 2;
   const off = visual.restyleDebug(original.data) && boxes(visual).join() === before.join();
   for (const v of [visual, fresh]) v.dispose();
+
+  // ALL DEBUG (`BodyVisual.setDebugForced`, the editor's "all debug"): every
+  // piece is drawn whether its switch is on or not, each with its own settings
+  // - so a switched-off piece draws exactly what it would switched on - and
+  // the data is never touched. Forcing at construction and forcing after are
+  // the same drawing; an in-place edit while forced stays forced; unforcing
+  // draws only the switched-on pieces again.
+  const forcedAfter = posed(original);
+  forcedAfter.setDebugForced(true);
+  const forcedAt = new BodyVisual(original.body, original, undefined, true);
+  forcedAt.sync(1);
+  const switchedOn = posed(build(level(100, true)));
+  const forcedWant = boxes(switchedOn);
+  const afterOk = boxes(forcedAfter).join() === forcedWant.join() && forcedWant.length === 2;
+  const atOk = boxes(forcedAt).join() === forcedWant.join();
+  const untouched = (original.data.objects[1] as CollisionObjectData).debug?.on === false;
+  const editedOff = build(level(160, false));
+  forcedAfter.restyleDebug(editedOff.data);
+  const editedOn = posed(build(level(160, true)));
+  const editStaysForced = boxes(forcedAfter).join() === boxes(editedOn).join();
+  const forcedTagged = tags(forcedAfter).length === 2 && tags(forcedAfter).every((t) => builtObjects.includes(t as SceneObjectData));
+  forcedAfter.setDebugForced(false);
+  const editedPlain = posed(editedOff);
+  const unforced = boxes(forcedAfter).join() === boxes(editedPlain).join() && boxes(editedPlain).length === 1;
+  for (const v of [forcedAfter, forcedAt, switchedOn, editedOn, editedPlain]) v.dispose();
   return [
     {
       name: "debug geometry: an edit made in place draws in the world exactly what a fresh build of the edited body draws, keeps the pick tags the scene was built with, switches a piece back off, and rebuilds nothing for an edit that changes none of it",
       pass: unchanged && rebuilt && sameWorld && tagged && off,
       detail: `unchanged edit left alone ${unchanged}; rebuilt ${rebuilt}; in place ${got.length} pieces vs fresh ${want.length}, same world boxes ${sameWorld}${sameWorld ? "" : `\n  in place ${got.join("  ")}\n  fresh    ${want.join("  ")}`}; tags are the built objects ${tagged}; back off ${off}`,
+    },
+    {
+      name: "debug geometry: forced (\"all debug\") draws a switched-off piece exactly as it would draw switched on, the same forced at build or after, leaves the data alone, stays forced through an in-place edit with the built pick tags, and unforcing draws only the switched-on pieces",
+      pass: afterOk && atOk && untouched && editStaysForced && forcedTagged && unforced,
+      detail: `forced after build ${afterOk}; forced at build ${atOk}; data untouched ${untouched}; edit while forced ${editStaysForced}; tags ${forcedTagged}; unforced ${unforced}`,
     },
   ];
 }

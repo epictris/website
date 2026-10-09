@@ -115,6 +115,7 @@ Since 2026-09-29 the level format has no geometry objects: a collision object is
   It is an instrument rather than a look: what a level with no scene is blocked out in (the test levels), and what a piece a dressed level has nothing over is seen by.
   A see-through piece (`opacity` below 1) writes no depth and casts no shadow.
   **G** hides all of it at once, in the game and in the editor's ▶ Test (`Scene3D.setDebugShown`), to see the Blender scene alone; every test opens with it shown, and authoring always shows it.
+  The editor's **all debug** forces it the other way (`Scene3D.setAllDebugShown` → `BodyVisual.setDebugForced`): every piece is drawn, switched on or not, with its own settings, render-side so the level data is untouched; the game never sets it.
 - A body the **sim spawned** (a sandbox rock, the hook) extrudes its own shapes, scene or not.
 
 A piece with debug geometry switched off draws nothing, scene or not: an invisible wall stays invisible, and `just scene` reports the body names with no object behind them.
