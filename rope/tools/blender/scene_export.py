@@ -761,6 +761,10 @@ def bake_procedural_textures(kept, cache_dir=None, paints=(), warnings=None, sta
     for ob, rock_bows in bows.items():
         # Bent only now that every map is baked (formations/curve.py).
         log(f"curve {ob.name}: {curve.bend(ob.data, rock_bows)}")
+        # ... and what grows on it is bent the same way after (`bend_growths`)
+        # One flat row of 10 floats per bow (a, b, bow, reach): an ID
+        # property array can't nest vectors beside a float.
+        ob["scene_bows"] = [[*a, *b, *bow, reach] for a, b, bow, reach in rock_bows]
     texels = ", ".join(f"{ob.name} {sizes[ob]}" for ob in targets if ob in sizes)
     cached = (f"{len(loaded)} of {len(targets)} objects from the cache"
               + (f", {len(stale)} with stale occlusion" if stale else "") + f" ({pruned} unused entries removed)"
@@ -771,6 +775,96 @@ def bake_procedural_textures(kept, cache_dir=None, paints=(), warnings=None, sta
         f"colour, {len(to_detail)} detail and {sum(ob not in loaded for ob in bumped)} normal ({texels or 'none'}) "
         f"on {device}; {cached}; {time.time() - t0:.1f}s")
     return len(targets)
+
+
+def bend_growths(kept, warnings):
+    """Bend every ivy, moss and formation growth piece in `kept` with the
+    rocks it grows on. The bake
+    bends a painted slate rock's long straight creases into bows after its
+    maps (formations/curve.py, `ob["scene_bows"]`), but a growth was grown,
+    and cleared of the rock, on the straight rock: on the bent one a bow
+    bulged over the moss, which hid behind the rock face while the contact
+    shadow baked beside it showed on the rock (the owner's jagged patch on
+    Terrace.003, 2026-10-10: 8,059 cm2 of its mound in the bent rock). Each
+    vertex moves by its hosts' bow field, as the rock's surface under it did,
+    so it keeps its clearance (Terrace.003: the median vertex's changed by
+    0.02 mm); but a bow curves across the faces between the vertices, and
+    5,262 cm2 still chorded through. So a moss mound is then cleared again on
+    the bent rock (moss/mesh_io.py `clear_of`: the build's `_clear_of_rock`
+    on the finished mesh, its UVs carried; Terrace.003 0.5 s, 3,679 to 4,491
+    triangles, none left in the rock), and what it could not clear is a
+    warning."""
+    from formations import curve
+    from moss import mesh_io as moss_mesh_io
+    from moss import ops as moss_ops
+    from ivy import ops as ivy_ops
+
+    for ob in kept:
+        if ob.type != "MESH":
+            continue
+        if moss_ops.is_moss(ob):
+            names = moss_ops.host_names(ob.moss)
+        elif ivy_ops.is_ivy(ob):
+            names = ivy_ops.host_names(ob.ivy)
+        elif ob.get("formation_growth_owner") is not None:
+            # formations/growth.py: planted on the straight rock too
+            owner = ob["formation_growth_owner"]
+            names = [r.name for r in kept if r.get("formation_id") == owner]
+        else:
+            continue
+        hosts = [h for h in (bpy.data.objects.get(n) for n in names) if h is not None and h.get("scene_bows")]
+        if not hosts:
+            continue
+        for part in [ob, *(c for c in ob.children_recursive if c.type == "MESH")]:
+            me = part.data
+            co = np.empty(3 * len(me.vertices))
+            me.vertices.foreach_get("co", co)
+            m = np.array(part.matrix_world, dtype=np.float64)
+            world = co.reshape(-1, 3) @ m[:3, :3].T + m[:3, 3]
+            moved = np.zeros_like(world)
+            for h in hosts:
+                hm = np.array(h.matrix_world, dtype=np.float64)
+                inv = np.linalg.inv(hm)
+                local = world @ inv[:3, :3].T + inv[:3, 3]
+                bows = [(Vector(r[0:3]), Vector(r[3:6]), Vector(r[6:9]), r[9])
+                        for r in (list(row) for row in h["scene_bows"])]
+                moved += curve.field(local, bows) @ hm[:3, :3].T
+            world = world + moved
+            inv = np.linalg.inv(m)
+            me.vertices.foreach_set("co", (world @ inv[:3, :3].T + inv[:3, 3]).ravel())
+            me.update()
+            log(f"bend {part.name}: {int((np.einsum('ij,ij->i', moved, moved) > 1e-12).sum())} vertices moved with {', '.join(h.name for h in hosts)}")
+        if moss_ops.is_moss(ob) and len(ob.data.polygons):
+            # The bows bulge between the mound's vertices (up to 12 cm over a
+            # crease, curving across its faces): moved with the field, 5,262
+            # cm2 of Terrace.003's mound still chorded through the bent rock.
+            # Cleared again on it, as the build cleared it on the straight one.
+            co, tri = [], []
+            for h in hosts_of_names(names):
+                hc, ht = world_mesh(h)
+                tri.append(ht + sum(len(c) for c in co))
+                co.append(hc)
+            moved, split, before, after, left = moss_mesh_io.clear_of(
+                ob, np.concatenate(co), np.concatenate(tri), 0.5 * ob.moss.params().floor)
+            log(f"bend {ob.name}: cleared of the bent rock, {moved} vertices moved, {split} edges split, {before} -> {after} triangles")
+            if left > 0.0:
+                warnings.append(f"{ob.name}: {left * 1e4:.1f} cm2 of moss in its rock after the export bent the rock")
+
+
+def hosts_of_names(names):
+    return [h for h in (bpy.data.objects.get(n) for n in names) if h is not None and h.type == "MESH"]
+
+
+def world_mesh(ob):
+    """(co, tri): `ob`'s own mesh, triangulated, in world space."""
+    me = ob.data
+    me.calc_loop_triangles()
+    co = np.empty(3 * len(me.vertices))
+    me.vertices.foreach_get("co", co)
+    tri = np.empty(3 * len(me.loop_triangles), np.int32)
+    me.loop_triangles.foreach_get("vertices", tri)
+    m = np.array(ob.matrix_world, dtype=np.float64)
+    return co.reshape(-1, 3) @ m[:3, :3].T + m[:3, 3], tri.reshape(-1, 3).astype(np.int64)
 
 
 def carries_channel(src):
@@ -959,7 +1053,12 @@ def grow_painted(scene, warnings):
             log(f"moss {ob.name} on {on}: texture only, painted into the rock's colour map")
         else:
             took = f"rebuilt in {s.build_ms:.0f} ms" if what == "rebuilt" else "kept: built from this paint, rock and code"
-            log(f"moss {ob.name} on {on}: {s.triangles} triangles, {s.dabs} dabs, print {s.texture} px, {took}")
+            if s.in_rock > 0.0:
+                # the moss clips through the rock there, and the bake shades
+                # the rock over it (moss/build.py `_clear_of_rock`)
+                warnings.append(f"{ob.name}: {s.in_rock * 1e4:.1f} cm2 of moss could not be cleared of its rock")
+            left = f", {s.in_rock * 1e4:.2f} cm2 in the rock" if s.in_rock > 0.0 else ""
+            log(f"moss {ob.name} on {on}: {s.triangles} triangles, {s.dabs} dabs, print {s.texture} px{left}, {took}")
     # Plants (the foliage add-on, tools/blender/foliage) grow after the ivy and
     # moss, in their own order, each clear of the plants before it.
     if any(ob.type == "MESH" and ob.get("grown_by") == "foliage" for ob in scene.objects):
@@ -1079,11 +1178,21 @@ def main():
     # mound a normal map the unlink then cut off again (2026-10-09: "ships 30
     # normal maps", 28 encoded).
     moss.prepare_gltf()
+    # A printed-edge moss's mesh runs past its outline, cut away by the print's
+    # alpha, but the slate's occlusion treats alpha 0 as solid and baked the
+    # rock black under that apron. The bake sees each mound cut at its outline
+    # (moss/build.py `cut_at_print`); the export gets its own mesh back.
+    cut = moss.cut_for_bake(kept)
+    view_layer.update()
     try:
         baked = bake_procedural_textures(kept, cache_dir, paints, warnings, stale_occlusion)
     finally:
+        moss.uncut(cut)
+        view_layer.update()
         for ob in plants:
             ob.hide_render = False
+    bend_growths(kept, warnings)
+    view_layer.update()
     # Baking selects its own targets; the export selection is restored after.
     if baked:
         for ob in scene.objects:

@@ -114,6 +114,7 @@ The rock is rebuilt before the unwrap, every map is baked on it STRAIGHT, and on
 The detail high poly is built from the straight rebuilt rock (`detail.py` finds planes by flatness) and never bent; built from the rock before the rebuild, the folded slivers' creases sat up to 1.5 mm off it and the bake drew them as dark dashes and pale specks, so it matches the rock exactly at the bake.
 Bending both and baking between them was tried first: each was fitted to the curve only to its own tolerance, and that misfit showed twice. Fitted to 4 mm, a long sub-facet triangle of the high poly folded and the bake drew a dark diagonal band; fitted to 0.5 mm against the rock's 2 mm, the bake's rays near a crease hit the high poly's other face, so the edge highlight landed beside the edge with the chips' floors as dark dashes (slate-tone page #15 and #16).
 It never touches the scene file's mesh: the rock in Blender keeps its straight edges, and its growth is planted on those, so leaves near a long crease can sit up to the bow off the surface.
+The ivy and moss add-ons' growths are bent with their rocks at export (`scene_export.bend_growths`, since 2026-10-10: a bow's bulge hid the moss and showed its baked shadow).
 `cave-sheet-study/slate_check.py --curve 0|1` renders a rock with and without.
 
 A generated mesh is sealed (`formation_mesh_hash`); one edited by hand is protected from being rebuilt over, and **Keep As Manual Mesh** says so on purpose.

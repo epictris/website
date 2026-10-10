@@ -181,6 +181,8 @@ class MOSS_PT_edge(_Sub, bpy.types.Panel):
                 col.prop(s, "edge_apron")
                 if s.apron >= 0.0:
                     col.label(text=f"Mesh ends {s.apron * 1000:.0f} mm past the outline" if s.apron > 0.002 else "Mesh ends inside the outline: raise Apron", icon="NONE" if s.apron > 0.002 else "ERROR")
+                if s.in_rock > 0.0:
+                    col.label(text=f"{s.in_rock * 1e4:.1f} cm\u00b2 of moss in the rock", icon="ERROR")
             else:
                 _grid(self.layout, s, ("edge_round", "overhang", "edge_detail"))
         _grid(self.layout, s, ("strays", "stray_reach"))

@@ -202,6 +202,9 @@ class Result:
     # comes (m, positive = outside it). Under SDF_RANGE, the print's cut can
     # run into the mesh's.
     apron: float = float("inf")
+    # A printed edge: m2 of the mound still in the rock after
+    # `_clear_of_rock` (0: none of it is).
+    in_rock: float = 0.0
 
 
 def empty_result():
@@ -465,7 +468,7 @@ class Grown:
     # crease, and the pile stands up to `lift` over the dabs' planes)
     sheet_n: np.ndarray = None
     pile: np.ndarray = None
-    rock: tuple = None  # a printed edge: the host's (vertices, normals, triangles), for `_lift_chords`
+    rock: tuple = None  # a printed edge: the host's (vertices, normals, triangles), for `_clear_of_rock`
 
 
 # The parameters only `finish` reads: the mound's triangle budget and the print.
@@ -966,14 +969,16 @@ def finish(grown, p, decimate):
             ring = _open_edges(mv, mt)
             mv, mt, attrs = decimate(mv, mt, ratio, attrs, _boundary(mt, len(mv)))
             _snap_to_ring(mv, _boundary(mt, len(mv)), ring)
-        # On the rock, never in it, triangle interiors included (`_lift_chords`:
-        # the collapse chords long triangles under convex facet edges, and
-        # the rock poked through a 2 mm sheet; Tris, 2026-10-10).
+        # On the rock, never in it, triangle interiors included (`_clear_of_rock`:
+        # the sheet sags through a convex crease, the collapse chords long
+        # triangles under facet edges, and the rock poked through; Tris,
+        # 2026-10-10).
         clear = 0.5 * p.floor
-        mv, mt, attrs, lifted, split = _lift_chords(mv, mt, attrs, bvh, grown.rock, clear)
+        rv, _rn, rt = grown.rock
+        mv, mt, attrs, lifted, split, in_rock, _weld = _clear_of_rock(mv, mt, attrs, _RockDistance(rv, rt), clear)
         if DEBUG:
-            print("[moss.debug] clear of the rock: %d vertices lifted, %d triangles split; pinhole mark %d vertices before, %.2f max / %d over %.2f after" % (
-                lifted, split, int((pin > 0.5).sum()), float(attrs[0].max()), int((attrs[0] > PIN_FILL).sum()), PIN_FILL))
+            print("[moss.debug] clear of the rock: %d vertices lifted, %d edges split, %.1f cm2 still in it; pinhole mark %d vertices before, %.2f max / %d over %.2f after" % (
+                lifted, split, in_rock * 1e4, int((pin > 0.5).sum()), float(attrs[0].max()), int((attrs[0] > PIN_FILL).sum()), PIN_FILL))
         pin = attrs[0]
         sheet_n = normalize(np.stack(attrs[1:4], 1))
         pile = attrs[4]
@@ -983,6 +988,8 @@ def finish(grown, p, decimate):
         if ratio < 1.0:
             mv, mt, _carried = decimate(mv, mt, ratio)
     apron = float("inf")
+    if not printed:
+        in_rock = 0.0
     if printed:
         # How far outside the outline the open edge still is, at its closest:
         # the print cuts at the outline, so the mesh must reach past it.
@@ -1013,7 +1020,7 @@ def finish(grown, p, decimate):
         mv = np.concatenate([mv, gv])
     inv = np.linalg.inv(grown.host_matrix)
     local = mv @ inv[:3, :3].T + inv[:3, 3]
-    return Result(local, mt, uvs, image, dabs=sum(len(x) for x in layers), layers=[len(x) for x in layers], heights=heights, texel=texel, area=area, apron=apron)
+    return Result(local, mt, uvs, image, dabs=sum(len(x) for x in layers), layers=[len(x) for x in layers], heights=heights, texel=texel, area=area, apron=apron, in_rock=in_rock)
 
 
 EDGE_SEGMENT = 2.0  # the edge's triangles run this many `edge_detail` along the outline
@@ -1204,7 +1211,7 @@ def _drape(base, nrm, tri, g, boundary, radius, res, obstacle=None):
     move[boundary] = 0.0
     sheet = base + move
     # the vertices' own pass has no obstacle: a query a vertex a pass is
-    # minutes at a fine resolution, and `_lift_chords` clears them after
+    # minutes at a fine resolution, and `_clear_of_rock` clears them after
     return _relax(sheet, base, nrm, boundary, e, _passes(2 * cell, res), 1e-4 * res, radius=radius, tri=tri)
 
 
@@ -1324,99 +1331,325 @@ def _open_edges(v, t):
     return v[ob]
 
 
-CHORD_ROUNDS = 2  # rounds of splitting the triangles the rock's vertices poke through
-# ... and only where a rock vertex stands this far over the mound: a split
-# mends one point, and at a cube's 90-degree edge every child chords again,
-# so four rounds at no tolerance split 6,108 triangles on Cube.004 (40x).
-CHORD_TOL = 0.003
-CHORD_REACH = 0.1  # m: how far under a rock vertex the mound is looked for
-CHORD_SAMPLES = np.array([(1 / 3, 1 / 3, 1 / 3), (0.5, 0.25, 0.25), (0.25, 0.5, 0.25), (0.25, 0.25, 0.5),
-                          (0.1, 0.45, 0.45), (0.45, 0.1, 0.45), (0.45, 0.45, 0.1)])  # where a triangle is tested against the rock besides
+class _Shell:
+    """One closed shell of the rock: its own BVH, face normals and the
+    pseudonormals of its edges and vertices, and its box."""
+
+    def __init__(self, co, tri):
+        self.co, self.tri = co, tri
+        self.bvh = BVHTree.FromPolygons([tuple(x) for x in co], [tuple(x) for x in tri.tolist()])
+        self.lo, self.hi = co.min(0), co.max(0)
+        a, b, c = co[tri[:, 0]], co[tri[:, 1]], co[tri[:, 2]]
+        self.fn = normalize(np.cross(b - a, c - a))
+        vn = np.zeros_like(co)
+        for k in range(3):
+            p, q, r = co[tri[:, k]], co[tri[:, (k + 1) % 3]], co[tri[:, (k + 2) % 3]]
+            u, w = normalize(q - p), normalize(r - p)
+            ang = np.arccos(np.clip(np.einsum("ij,ij->i", u, w), -1.0, 1.0))
+            np.add.at(vn, tri[:, k], self.fn * ang[:, None])
+        self.vn = vn
+        self.en = {}
+        for f, (i, j, k) in enumerate(tri.tolist()):
+            for e in ((i, j), (j, k), (k, i)):
+                key = (min(e), max(e))
+                self.en[key] = self.en.get(key, 0.0) + self.fn[f]
+
+    def query(self, q):
+        on, _nr, f, d = self.bvh.find_nearest(Vector(q))
+        if on is None:
+            return float("inf"), None, None
+        on = np.array(on)
+        i, j, k = self.tri[f]
+        a, b, c = self.co[i], self.co[j], self.co[k]
+        # barycentrics of the nearest point: which feature it is on
+        v0, v1, v2 = b - a, c - a, on - a
+        d00, d01, d11 = v0 @ v0, v0 @ v1, v1 @ v1
+        d20, d21 = v2 @ v0, v2 @ v1
+        den = d00 * d11 - d01 * d01
+        pn = self.fn[f]
+        if den > 0.0:
+            wb = (d11 * d20 - d01 * d21) / den
+            wc = (d00 * d21 - d01 * d20) / den
+            w = (1.0 - wb - wc, wb, wc)
+            zero = [x < 1e-7 for x in w]
+            if sum(zero) >= 2:
+                pn = self.vn[(i, j, k)[w.index(max(w))]]
+            elif sum(zero) == 1:
+                o = (i, j, k)
+                m = zero.index(True)
+                e = (o[(m + 1) % 3], o[(m + 2) % 3])
+                pn = self.en[(min(e), max(e))]
+        off = q - on
+        s = 1.0 if off @ pn >= 0.0 else -1.0
+        if s < 0.0 and d > PARITY_BELOW and not self.inside(q):
+            # the pseudonormal says in, the rays say out: the rays (a few
+            # points by a non-manifold edge or a sliver read in by mm,
+            # Terrace.002 and .003, 2026-10-10)
+            s = 1.0
+        out = off * (s / d) if d > 1e-9 else pn / max(np.linalg.norm(pn), 1e-12)
+        return s * d, on, out
+
+    def inside(self, q):
+        """Ray parity, the majority of PARITY_RAYS: is `q` inside the shell?"""
+        votes = 0
+        for ray in PARITY_DIRS:
+            o, n = Vector(q), 0
+            for _ in range(1000):
+                loc, _nr, _f, _d = self.bvh.ray_cast(o, ray)
+                if loc is None:
+                    break
+                n += 1
+                o = loc + ray * 1e-6
+            votes += n % 2
+        return votes * 2 > len(PARITY_DIRS)
 
 
-def _lift_chords(v, t, attrs, bvh, rock, clear):
-    """The mound clear of the rock: every vertex at least `clear` over its
-    nearest rock point along that point's normal (a vertex the sheet's offset
-    or the drape left in the rock is set there), and then every triangle a
-    rock vertex pokes through split where it does, the new vertex `clear`
-    over that rock vertex, for CHORD_ROUNDS rounds. `rock` is (vertices,
-    normals) of the host: a facet's peak is a vertex, and a ray down the
-    vertex's normal that meets the mound within CHORD_REACH says the mound
-    runs under it (seven samples a triangle against the rock alone missed the
-    peaks between them: 256 rock vertices stood over Terrace.003's mound,
-    one by 6 cm, with the samples saying 4 mm); and the triangle's own
-    CHORD_SAMPLES against the rock besides, for the ridge between two far
-    rock vertices, which the rays miss (481 cm2 of Terrace.003's mound in
-    the rock by the samples with the rays alone). `attrs` are per-vertex
-    arrays, interpolated for the new vertices. Returns (v, t, attrs,
-    vertices lifted, triangles split)."""
-    v = v.copy()
-    attrs = [np.asarray(a, np.float64).copy() for a in attrs]
-    lifted = 0
-    for i in range(len(v)):
-        on, nr, _i, _d = bvh.find_nearest(Vector(v[i]))
-        if on is not None and (Vector(v[i]) - on).dot(nr) < clear:
-            v[i] = np.array(on + nr * clear)
-            lifted += 1
-    rv, rn, rt = rock
-    _u, first = np.unique(np.round(rv, 5), axis=0, return_index=True)
-    # the rock's vertices, and points along its edges: a ridge between two
-    # vertices pokes through between them (a wedge through a stray, rays of
-    # rock through a fan of mound triangles round a vertex, 2026-10-10)
-    e = np.unique(np.sort(np.concatenate([rt[:, [0, 1]], rt[:, [1, 2]], rt[:, [2, 0]]]), axis=1), axis=0)
-    pts = [rv[first]]
-    nrms = [rn[first]]
-    for s in (0.25, 0.5, 0.75):
-        pts.append(rv[e[:, 0]] + (rv[e[:, 1]] - rv[e[:, 0]]) * s)
-        nrms.append(normalize(rn[e[:, 0]] + (rn[e[:, 1]] - rn[e[:, 0]]) * s))
-    rv, rn = np.concatenate(pts), np.concatenate(nrms)
-    split = 0
-    for _ in range(CHORD_ROUNDS):
-        mound = BVHTree.FromPolygons([tuple(x) for x in v], [tuple(x) for x in t.tolist()])
-        worst = {}  # triangle -> (depth, point on the mound, the rock vertex, its normal)
-        for x, n in zip(rv, rn):
-            loc, _nr, f, d = mound.ray_cast(Vector(x) + Vector(n) * 0.0005, -Vector(n), CHORD_REACH)
-            if loc is None or d < CHORD_TOL:
+PARITY_BELOW = 1e-4  # m: a point read in the rock by more than this is checked by ray parity
+# odd directions, so a ray seldom runs along an edge or a face
+PARITY_DIRS = [Vector(d).normalized() for d in ((0.5257, 0.1847, 0.8304), (-0.7071, 0.6124, 0.3536), (0.2113, -0.9361, 0.2810))]
+
+
+ROCK_REACH = 0.25  # m: a shell further than this (by its box) is not asked about a point
+SHELL_VOLUME_MIN = 1e-6  # m3: a shell of the rock enclosing less (or facing inward) is left out of its distance
+
+
+class _RockDistance:
+    """The rock's signed distance (positive outside) at any point, as the
+    game sees the rock: the union of its closed shells, the least of their
+    distances. Each shell's is its nearest point signed by the angle-weighted
+    pseudonormal of the feature it lies on (Baerentzen and Aanaes, "Signed
+    distance computation using the angle weighted pseudonormal", 2005) - the
+    face's normal inside a face, the sum of its two faces' normals on an
+    edge, the angle-weighted normal at a vertex.
+
+    Both halves were measured wrong first (2026-10-10): the face's normal
+    alone misreads a point outside a sharp convex edge as inside; and
+    Cube.004's own triangles are 31 closed shells, rock chunks overlapping,
+    where the nearest surface can be a buried shell's and a point deep inside
+    the rock reads as outside it (ray parity split 2-3 of 5 on 61 % of the
+    points the old clamp had cleared). The growth's surface is now the union
+    of such shells (stampbrush/hosts.py), so the shells here seldom overlap;
+    the least distance still holds where they do. Only outward shells count
+    (SHELL_VOLUME_MIN). `co`, `tri`: the host's welded, consistently wound
+    world triangles."""
+
+    def __init__(self, co, tri):
+        parent = np.arange(len(co))
+
+        def find(x):
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+
+        for a, b, c in tri.tolist():
+            for u, w in ((a, b), (b, c)):
+                ru, rw = find(u), find(w)
+                if ru != rw:
+                    parent[ru] = rw
+        roots = np.array([find(i) for i in tri[:, 0]])
+        self.shells = []
+        for r in np.unique(roots):
+            st = tri[roots == r]
+            used, local = np.unique(st, return_inverse=True)
+            sc = co[used]
+            a, b, c = sc[local.reshape(-1, 3)[:, 0]], sc[local.reshape(-1, 3)[:, 1]], sc[local.reshape(-1, 3)[:, 2]]
+            # outward shells only: one with no volume (a stray flat piece)
+            # encloses nothing, and one facing inward is a void the union
+            # left - inside the rock, where no moss is, but in the open air
+            # round it every point reads inside it (Terrace.002 + Cube.001's
+            # union leaves three such slivers, 10-16 triangles, and 27 mound
+            # triangles beside them read 6 mm deep where ray parity found
+            # them clear, 2026-10-10)
+            if np.einsum("ij,ij->i", a, np.cross(b, c)).sum() / 6.0 < SHELL_VOLUME_MIN:
                 continue
-            if f not in worst or d > worst[f][0]:
-                worst[f] = (d, np.array(loc), x, n)
-        for f in range(len(t)):
-            corners = v[t[f]]
-            for bar in CHORD_SAMPLES:
-                q = bar @ corners
-                on, nr, _i, _d = bvh.find_nearest(Vector(q))
-                if on is None:
-                    continue
-                d = clear - float((Vector(q) - on).dot(nr))  # how far under the clearance
-                if d > CHORD_TOL and (f not in worst or d > worst[f][0]):
-                    worst[f] = (d, q, np.array(on), np.array(nr))
-        if not worst:
+            self.shells.append(_Shell(sc, local.reshape(-1, 3)))
+
+    def query(self, q):
+        """(signed distance, nearest point, the outward direction there) at `q` (3,), of the nearest shell (the one it is deepest in)."""
+        best = (float("inf"), None, None)
+        for sh in self.shells:
+            if (q < sh.lo - ROCK_REACH).any() or (q > sh.hi + ROCK_REACH).any():
+                continue
+            r = sh.query(q)
+            if r[0] < best[0]:
+                best = r
+        return best
+
+
+CLEAR_ROUNDS = 64  # rounds of raising and splitting what still meets the rock, at most
+CLEAR_RAISE = 0.004  # m: how much higher than `clear` a vertex may be raised to take a chord off a crease, before its triangle is split instead
+CLEAR_SPLIT_MIN = 0.002  # m: an edge shorter than this is not split again (the rock's own detail; what is left is reported)
+CLEAR_SAMPLE = 0.005  # m: what is left in the rock is measured on points this far apart
+LIFT_TRIES = 6  # a vertex lifted clear of one shell and standing in another is lifted again, this many times at most
+
+
+def _clear_of_rock(v, t, attrs, rock, clear, weld=None):
+    """The mound out of the rock, triangle interiors included. Every vertex
+    is set at least `clear` off the rock (one nearer, or in it, goes to that
+    far off its nearest point, along the outward direction there); a vertex
+    standing clear of the rock, a triangle is out of it exactly when it meets
+    none of the rock's triangles, which the BVHs answer exactly (no samples
+    to fall between). A triangle that still meets the rock has its vertices
+    raised (each round higher, CLEAR_RAISE over `clear` at most: a chord
+    across a shallow crease comes off it for a millimetre or two, at no
+    cost), and once they are as high as they may go, its longest edge split
+    at the midpoint, the new vertex set clear in turn; until none meets it
+    (CLEAR_ROUNDS at most). An edge is split, not a triangle: every triangle
+    on it is cut at the same point, so no crack opens (a point inside one
+    triangle, as a fan split puts it, is a T-junction on its neighbour's
+    edge). The splits gather where the rock bends too sharply for a raise,
+    along its creases, where the mesh must bend with it.
+
+    Until 2026-10-10 `_lift_chords` split the worst triangles round a new
+    vertex over the offending rock point, two rounds and only past 3 mm,
+    against the rock's own triangles (whose buried shells it took for
+    surface): it left 5,967 cm2 of Cube.004's 4.2 m2 mound in the rock, 56 mm
+    deep at worst, the moss clipped through the rock and the bake shaded the
+    rock above it (the owner's jagged patch). Samples 1 cm apart, tried next,
+    reported nothing left on Terrace.003 where a 7.5 mm census found 30 cm2.
+
+    `rock` is the host's _RockDistance; `attrs` per-vertex arrays,
+    interpolated at new vertices. `weld`, when given, names each vertex's
+    point (a mesh split at its UV seams has two vertices at one point): the
+    vertices of a point are raised together, and an edge between two points
+    is split in every triangle on it, so no seam opens. Returns (v, t,
+    attrs, vertices moved, edges split, m2 of mound still in the rock)."""
+    sdf = rock
+    v = np.asarray(v, np.float64).copy()
+    t = np.asarray(t, np.int64).copy()
+    attrs = [np.asarray(a, np.float64).copy() for a in attrs]
+    height = np.full(len(v), clear)  # what each vertex stands off the rock
+    top = clear + CLEAR_RAISE
+    moved = np.zeros(len(v), bool)
+    stuck = np.zeros(len(v), bool)  # still in the rock after LIFT_TRIES
+    weld = np.arange(len(v)) if weld is None else np.asarray(weld, np.int64).copy()
+
+    def lift(idx):
+        for i in idx:
+            for _ in range(LIFT_TRIES):
+                d, on, out = sdf.query(v[i])
+                if d >= height[i] - 1e-6 or on is None:
+                    break
+                v[i] = on + out * height[i]
+                moved[i] = True
+            stuck[i] = sdf.query(v[i])[0] < 0.0
+
+    lift(range(len(v)))
+    split = 0
+    for _round in range(CLEAR_ROUNDS + 1):
+        bad = _meets_rock(v, t, sdf) | stuck[t].any(1)
+        if DEBUG:
+            print(f"[moss.debug] clear round {_round}: {len(t)} triangles, {int(bad.sum())} meet the rock", flush=True)
+        if not bad.any() or _round == CLEAR_ROUNDS:
             break
-        new_v, new_t, new_a, drop = [], [], [[] for _ in attrs], []
-        for f, (_d, loc, x, n) in worst.items():
-            a, b, c = v[t[f]]
-            # barycentric weights of the hit, for the attributes
-            m = np.stack([b - a, c - a], 1)
-            w = np.linalg.lstsq(m, loc - a, rcond=None)[0]
-            # strictly inside the triangle: a new vertex on an edge is a
-            # T-junction, a hairline crack to the neighbour (a fan of them
-            # radiated from one rock vertex in the alpha view, 2026-10-10)
-            bar = np.array([1.0 - w[0] - w[1], w[0], w[1]]).clip(0.1, 1.0)
-            bar /= max(bar.sum(), 1e-9)
-            k = len(v) + len(new_v)
-            new_v.append(x + n * clear)
-            for arr, out in zip(attrs, new_a):
-                out.append(bar @ arr[t[f]])
-            i0, i1, i2 = t[f]
-            new_t.extend(((i0, i1, k), (i1, i2, k), (i2, i0, k)))
-            drop.append(f)
-        split += len(drop)
-        keep = np.ones(len(t), bool)
-        keep[drop] = False
-        v = np.concatenate([v, np.array(new_v)])
-        t = np.concatenate([t[keep], np.array(new_t, dtype=np.int64)])
-        attrs = [np.concatenate([arr, np.array(out)]) for arr, out in zip(attrs, new_a)]
-    return v, t, attrs, lifted, split
+        corners = np.unique(t[bad])
+        low = corners[height[corners] < top - 1e-9]
+        low = np.nonzero(np.isin(weld, weld[low]))[0]  # every vertex of those points
+        if len(low):
+            height[low] = np.minimum(top, 2.0 * height[low] + 0.0005)
+            lift(low)
+        # split the triangles whose corners are all as high as they may go
+        full = bad & (height[t] >= top - 1e-9).all(1)
+        if not full.any():
+            continue
+        tri_e = np.stack([t[:, [0, 1]], t[:, [1, 2]], t[:, [2, 0]]], 1)  # (T, 3, 2)
+        length = np.linalg.norm(v[tri_e[..., 0]] - v[tri_e[..., 1]], axis=2)
+        pick = np.argmax(length, axis=1)
+        cand = full & (length[np.arange(len(t)), pick] > CLEAR_SPLIT_MIN)
+        if not cand.any():
+            if not len(low):
+                break
+            continue
+        chosen = tri_e[np.nonzero(cand)[0], pick[cand]]
+        # by point: the same edge's other copy across a seam is split too
+        point_e = np.sort(weld[tri_e], axis=2).reshape(-1, 2)
+        want = np.sort(weld[chosen], axis=1)
+        span = int(weld.max()) + 1
+        hit = np.isin(point_e[:, 0] * span + point_e[:, 1], want[:, 0] * span + want[:, 1])
+        edges = np.unique(np.sort(tri_e.reshape(-1, 2)[hit], axis=1), axis=0)
+        pe = np.sort(weld[edges], axis=1)
+        _u, which = np.unique(pe, axis=0, return_inverse=True)
+        v, t, attrs, new, _kept = _split_edges(v, t, attrs, edges)
+        weld = np.concatenate([weld, weld.max() + 1 + which.reshape(-1)])
+        height = np.concatenate([height, np.full(len(new), clear)])
+        moved = np.concatenate([moved, np.zeros(len(new), bool)])
+        stuck = np.concatenate([stuck, np.zeros(len(new), bool)])
+        split += len(edges)
+        lift(new)
+    bad = _meets_rock(v, t, sdf) | stuck[t].any(1)
+    return v, t, attrs, int(moved.sum()), split, _area_in_rock(v, t[bad], sdf), weld
+
+
+def _meets_rock(v, t, sdf):
+    """Which triangles of the mesh meet a triangle of the rock (BVHTree.overlap: exact triangle pairs)."""
+    mound = BVHTree.FromPolygons([tuple(x) for x in v], [tuple(x) for x in t.tolist()])
+    bad = np.zeros(len(t), bool)
+    for sh in sdf.shells:
+        for i, _j in mound.overlap(sh.bvh):
+            bad[i] = True
+    return bad
+
+
+def _area_in_rock(v, t, sdf):
+    """m2 of the triangles `t` in the rock, on points CLEAR_SAMPLE apart."""
+    if len(t) == 0:
+        return 0.0
+    a, b, c = v[t[:, 0]], v[t[:, 1]], v[t[:, 2]]
+    area = 0.5 * np.linalg.norm(np.cross(b - a, c - a), axis=1)
+    longest = np.max(np.stack([np.linalg.norm(b - a, axis=1), np.linalg.norm(c - b, axis=1), np.linalg.norm(a - c, axis=1)]), axis=0)
+    n = np.clip(np.ceil(longest / CLEAR_SAMPLE), 1, 32).astype(np.int64)
+    total = 0.0
+    for k in np.unique(n):
+        w, _tris = _bary_grid(int(k))
+        idx = np.nonzero(n == k)[0]
+        at = np.einsum("pk,tkc->tpc", w, v[t[idx]])
+        for row, f in enumerate(idx):
+            total += area[f] * np.mean([sdf.query(q)[0] < 0.0 for q in at[row]])
+    return float(total)
+
+
+def _split_edges(v, t, attrs, edges):
+    """Split every one of `edges` (E, 2), sorted vertex pairs, at its
+    midpoint; every triangle on a split edge is cut there (one split edge:
+    two triangles; two: three, the quad by its shorter diagonal; three:
+    four). Returns (v, t, attrs, the new vertices' indices, the indices of
+    the triangles left whole, which come first in `t`, in order)."""
+    base = len(v)
+    mid = {(int(i), int(j)): base + k for k, (i, j) in enumerate(edges)}
+    v = np.concatenate([v, 0.5 * (v[edges[:, 0]] + v[edges[:, 1]])])
+    attrs = [np.concatenate([a, 0.5 * (a[edges[:, 0]] + a[edges[:, 1]])]) for a in attrs]
+    whole, out = [], []
+    for f, (i, j, k) in enumerate(t.tolist()):
+        m = [mid.get((min(p, q), max(p, q))) for p, q in ((i, j), (j, k), (k, i))]
+        cnt = sum(x is not None for x in m)
+        if cnt == 0:
+            whole.append(f)
+            continue
+        # rotate so the corners are (a, b, c) with the split edges first
+        o, ms = (i, j, k), m
+        if cnt == 1:
+            r = ms.index(next(x for x in ms if x is not None))
+        elif cnt == 2:
+            r = ms.index(None)
+            r = (r + 1) % 3
+        else:
+            r = 0
+        a, b, c = o[r], o[(r + 1) % 3], o[(r + 2) % 3]
+        mab, mbc, mca = ms[r], ms[(r + 1) % 3], ms[(r + 2) % 3]
+        if cnt == 1:  # ab split
+            out += [(a, mab, c), (mab, b, c)]
+        elif cnt == 2:  # ab and bc split, ca whole
+            out.append((mab, b, mbc))
+            if np.linalg.norm(v[a] - v[mbc]) <= np.linalg.norm(v[mab] - v[c]):
+                out += [(a, mab, mbc), (a, mbc, c)]
+            else:
+                out += [(a, mab, c), (mab, mbc, c)]
+        else:
+            out += [(a, mab, mca), (mab, b, mbc), (mca, mbc, c), (mab, mbc, mca)]
+    kept = np.array(whole, dtype=np.int64)
+    t = np.concatenate([t[kept], np.array(out, dtype=np.int64).reshape(-1, 3)])
+    return v, t, attrs, np.arange(base, len(v)), kept
 
 
 def _snap_to_ring(v, boundary, ring):
@@ -1935,6 +2168,81 @@ def _dilate(img, valid, passes):
         img[ty, tx] = img[sy, sx]
         valid |= grow
     return img
+
+
+CUT_STEP = 2.0  # texels: the side of the pieces a triangle across a printed outline is cut into for the bake
+CUT_MAX = 64  # at most this many pieces along a triangle's side
+
+
+def _bary_grid(n):
+    """A triangle cut into n^2 pieces: the corners' barycentric weights
+    (P, 3) and the pieces as corner indices (n^2, 3)."""
+    ij = [(i, j) for i in range(n + 1) for j in range(n + 1 - i)]
+    index = {c: k for k, c in enumerate(ij)}
+    w = np.array([((n - i - j) / n, i / n, j / n) for i, j in ij])
+    tris = []
+    for i in range(n):
+        for j in range(n - i):
+            tris.append((index[i, j], index[i + 1, j], index[i, j + 1]))
+            if i + j < n - 1:
+                tris.append((index[i + 1, j], index[i + 1, j + 1], index[i, j + 1]))
+    return w, np.array(tris)
+
+
+def _bilinear(img, x, y):
+    """`img` (H, W) at texel coordinates (texel centres at integer + 0.5), clamped at the border."""
+    h, w = img.shape
+    x = np.clip(x - 0.5, 0.0, w - 1.0)
+    y = np.clip(y - 0.5, 0.0, h - 1.0)
+    x0 = np.minimum(np.floor(x).astype(np.int64), w - 2) if w > 1 else np.zeros_like(x, np.int64)
+    y0 = np.minimum(np.floor(y).astype(np.int64), h - 2) if h > 1 else np.zeros_like(y, np.int64)
+    fx, fy = x - x0, y - y0
+    x1, y1 = np.minimum(x0 + 1, w - 1), np.minimum(y0 + 1, h - 1)
+    top = img[y0, x0] * (1 - fx) + img[y0, x1] * fx
+    bottom = img[y1, x0] * (1 - fx) + img[y1, x1] * fx
+    return top * (1 - fy) + bottom * fy
+
+
+def cut_at_print(corners, uvs, alpha, in_rock=None):
+    """The printed mound as the game draws it, for the bake: `corners`
+    (T, 3, 3) its triangles, `uvs` (T, 3, 2) their corners' UVs, `alpha`
+    (H, W) the print's alpha, row 0 at the bottom. A triangle wholly inside
+    the outline (alpha >= 0.5 at every piece) is kept, one wholly outside is
+    dropped, and one across it is cut into pieces CUT_STEP texels across, of
+    which those whose centre is inside are kept. `in_rock`, when given, takes
+    (N, 3) points and says which are in the rock: those triangles are dropped
+    too (the game never shows moss in the rock, and its shadow on the rock
+    over it was the owner's jagged patch). Returns the kept triangles
+    (K, 3, 3), unwelded.
+
+    The bake's occlusion (the painted slate's Ambient Occlusion node) treats
+    every surface as opaque, alpha 0 included: measured 2026-10-10, a plane
+    of alpha 0 over a baked one darkened it to 0.049 of its open value,
+    exactly as an opaque one did. The apron, which the game cuts away, baked
+    the rock black under it in a band as jagged as its triangles (the owner's
+    "jagged black lines around the moss")."""
+    h, w = alpha.shape
+    px = uvs * np.array([w, h], np.float64)
+    longest = np.max(np.linalg.norm(px - np.roll(px, 1, axis=1), axis=2), axis=1)
+    pieces = np.clip(np.ceil(longest / CUT_STEP), 1, CUT_MAX).astype(np.int64)
+    out = []
+    for n in np.unique(pieces):
+        group = np.nonzero(pieces == n)[0]
+        wts, tris = _bary_grid(int(n))
+        centre = wts[tris].mean(axis=1)  # (S, 3)
+        at = np.einsum("sk,tkc->tsc", centre, px[group])  # (G, S, 2)
+        inside = _bilinear(alpha, at[..., 0], at[..., 1]) >= 0.5  # (G, S)
+        whole = inside.all(axis=1)
+        out.append(corners[group[whole]])
+        part = ~whole & inside.any(axis=1)
+        if part.any():
+            pos = np.einsum("pk,tkc->tpc", wts, corners[group[part]])  # (G', P, 3)
+            g, s = np.nonzero(inside[part])
+            out.append(pos[g[:, None], tris[s]])
+    kept = np.concatenate(out) if out else np.zeros((0, 3, 3))
+    if in_rock is not None and len(kept):
+        kept = kept[~in_rock(kept.mean(axis=1))]
+    return kept
 
 
 def paint_map(px, uv_px, tri_pos, layers, p):

@@ -26,6 +26,14 @@ import * as THREE from "three";
 // position derivatives unnormalized so a metre of height is a metre). Blender
 // shows the same through a Bump node (mesh_io.py). The two constants are
 // build.py's SDF_RANGE and LIP_ROUND: change both.
+//
+// THE BACK, shaded as the front. The mound is one sheet over the rock, drawn
+// from both sides (the glTF is doubleSided), and where it stands proud of a
+// crest the camera looks along under it and sees its back: three's default
+// turns the normal to the viewer there, a face lit as if it hung under the
+// rock, and drew those slivers black against the water (2026-10-10). A solid
+// mound would show its own top over the crest, so the back keeps the front's
+// normal, as the ivy's carpet does (ivyLeaves.ts).
 const SDF_RANGE = 0.02;
 const LIP_ROUND = 0.012;
 const PROGRAM_KEY = "moss-mound";
@@ -37,6 +45,7 @@ interface ShaderSource {
 
 const NORMAL_NEEDLE = "#include <normal_fragment_maps>";
 const MAP_NEEDLE = "vec4 sampledDiffuseColor = texture2D( map, vMapUv );";
+const FACE_NEEDLE = "float faceDirection = gl_FrontFacing ? 1.0 : - 1.0;";
 
 function lip(): string {
   const f = (x: number) => x.toFixed(4);
@@ -67,7 +76,8 @@ function lip(): string {
 function patchable(): boolean {
   // A text patch on three's chunks: say so the moment a three upgrade moves
   // the text, and draw the moss as three ships it rather than half-patched.
-  const ok = THREE.ShaderChunk.map_fragment.includes(MAP_NEEDLE);
+  const ok =
+    THREE.ShaderChunk.map_fragment.includes(MAP_NEEDLE) && THREE.ShaderChunk.normal_fragment_begin.includes(FACE_NEEDLE);
   if (!ok) console.warn("[render3d] mossMound: three's shader chunks changed; the moss is drawn as a plain material");
   return ok;
 }
@@ -80,7 +90,7 @@ export function isPrintedMoss(blenderNames: readonly string[], materials: readon
   );
 }
 
-/** Dress a printed-edge moss material: the anti-aliased cut and the lip's shading. Idempotent: the material is shared. */
+/** Dress a printed-edge moss material: the anti-aliased cut, the lip's shading and its back shaded as its front. Idempotent: the material is shared. */
 export function wearMossMound(mat: THREE.Material): THREE.Material {
   if (mat.userData.mossMound === true) return mat;
   mat.userData.mossMound = true;
@@ -90,7 +100,12 @@ export function wearMossMound(mat: THREE.Material): THREE.Material {
   mat.onBeforeCompile = function (this: THREE.Material, shader: ShaderSource, renderer: THREE.WebGLRenderer) {
     prior.call(this, shader as Parameters<typeof prior>[0], renderer);
     if (!patchable()) return;
-    shader.fragmentShader = shader.fragmentShader.replace(NORMAL_NEEDLE, lip());
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        "#include <normal_fragment_begin>",
+        THREE.ShaderChunk.normal_fragment_begin.replace(FACE_NEEDLE, "float faceDirection = 1.0;"),
+      )
+      .replace(NORMAL_NEEDLE, lip());
   } as typeof mat.onBeforeCompile;
   mat.customProgramCacheKey = function (this: THREE.Material) {
     return `${priorKey.call(this)}|${PROGRAM_KEY}`;

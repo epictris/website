@@ -51,6 +51,20 @@ def prepare_gltf():
     return mesh_io.prepare_gltf()
 
 
+def cut_for_bake(obs):
+    """Right before the scene's bake: printed-edge mounds cut at their outline
+    (the bake's occlusion would see their apron). Returns what `uncut` puts back."""
+    from . import mesh_io
+
+    return mesh_io.cut_for_bake(obs)
+
+
+def uncut(swapped):
+    from . import mesh_io
+
+    mesh_io.uncut(swapped)
+
+
 def register():
     settings.register()
     for c in CLASSES:

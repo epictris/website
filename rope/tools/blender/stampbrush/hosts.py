@@ -14,8 +14,13 @@ vertices there, so everything that walks the surface - the paint's falloff, the
 moss's erosion field and drape, the ivy's leaves - crosses the seam as it would
 cross a crease of one rock; and nothing grows on the faces of one rock buried in
 another. An open host (a plane) counts as the half-space behind its faces, as
-Blender's exact solver takes it. One host is grown on as it always was: its own
-welded triangles, no union, so a one-rock growth builds bit for bit as before."""
+Blender's exact solver takes it. One host of one shell is grown on as it always
+was: its own welded triangles, no union, so such a growth builds bit for bit as
+before. One host of several shells - a formation's chunks overlapping, river's
+Cube.004 is 31 - is the union of its shells (since 2026-10-10): grown on its
+own triangles, the moss grew over the faces of chunks buried in others, hidden
+up to 28 cm inside the rock, and every test of the mound against the rock read
+the buried faces as surface."""
 
 import hashlib
 
@@ -48,7 +53,9 @@ def surface(hosts, depsgraph):
     if not parts:
         return np.zeros((0, 3)), np.zeros((0, 3), np.int64)
     if len(parts) == 1:
-        return parts[0]
+        parts = shells(*parts[0])
+        if len(parts) == 1:
+            return parts[0]
     h = hashlib.sha1(bpy.app.version_string.encode())
     for co, tri in parts:
         for a in (co, tri):
@@ -63,6 +70,32 @@ def surface(hosts, depsgraph):
     while len(_unions) > _UNION_CACHE:
         _unions.pop(next(iter(_unions)))
     return hit
+
+
+def shells(co, tri):
+    """[(co, tri)]: the connected pieces of a welded triangle set, each with
+    its own vertices, in the order of their first triangle."""
+    parent = np.arange(len(co))
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for a, b, c in tri.tolist():
+        for u, w in ((a, b), (b, c)):
+            ru, rw = find(u), find(w)
+            if ru != rw:
+                parent[ru] = rw
+    roots = np.array([find(i) for i in tri[:, 0]], dtype=np.int64)
+    _u, first = np.unique(roots, return_index=True)
+    out = []
+    for r in roots[np.sort(first)]:
+        st = tri[roots == r]
+        used, local = np.unique(st, return_inverse=True)
+        out.append((co[used], local.reshape(-1, 3).astype(np.int64)))
+    return out
 
 
 def _closed(tri):

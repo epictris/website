@@ -7,9 +7,13 @@
     "sha256": "dca028a1ff23495d3d0c4d0e9ecd94808674e06e98c47351f10c60d43f3c11cd",
     "bytes": 10716270
   },
+  "scenes/rive.blend": {
+    "sha256": "666c7135552d66ced15e7b19f55b68e26baeb3dd84a0bb8f3bcff9ab3064208f",
+    "bytes": 88527
+  },
   "scenes/river.blend": {
-    "sha256": "90b3d4e80e36e3487478221f20cfa718e5dbccb29ce25a3de9d0d3326483ce7e",
-    "bytes": 100982202
+    "sha256": "25db9cfcfe19cd8374bce3ff4acade4aef8bbbf8e6db701612b554c2721dfed4",
+    "bytes": 103342855
   },
   "scenes/textures/foliage-components-v3.png": {
     "sha256": "bbd46bc1aa504c2857fc2d38853584daad04b2007bc69c36e55d9f3309a10296",

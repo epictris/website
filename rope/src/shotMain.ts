@@ -144,6 +144,9 @@ const camera: Camera = {
 // readable drawing buffer so the tiles below and the blank-frame check can read
 // what was actually drawn.
 const scene3d = use3d ? new Scene3D(sceneCanvas, { diagnostics: true }) : null;
+// The game's handle on its scene (main.ts), so a grab can be inspected live:
+// what a pixel shows, a material's maps.
+(window as unknown as { __scene3d: Scene3D | null }).__scene3d = scene3d;
 if (scene3d) {
   scene3d.resize();
   // The editor's view toggles, so a `--probe` run can be the editor's test as

@@ -163,6 +163,7 @@ class MossSettings(bpy.types.PropertyGroup):
     texel_used: FloatProperty(options={"HIDDEN"})
     area: FloatProperty(options={"HIDDEN"})
     apron: FloatProperty(options={"HIDDEN"}, default=-1.0)  # a printed edge: how far past the outline the mesh's open edge is at its closest (m), or -1
+    in_rock: FloatProperty(options={"HIDDEN"}, default=0.0)  # a printed edge: m2 of mound the build could not clear of the rock (build._clear_of_rock)
     reused: BoolProperty(options={"HIDDEN"})  # the last rebuild finished a cached growth
     build_ms: FloatProperty(options={"HIDDEN"})
     status: StringProperty(options={"HIDDEN"})
