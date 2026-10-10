@@ -24,6 +24,7 @@ import { Hook } from "../classes/hook";
 import { Player } from "../classes/player";
 import type { World } from "../engine/world";
 import type { SceneChain } from "../level/chains";
+import type { TieChain } from "../engine/ties";
 import type { VineCord } from "../level/vines";
 import type { LevelVisualSource } from "../level/buildBodies";
 import { isCollisionObject, type EnvironmentData, type FireflyPathData, type LevelBodyData } from "../level/levelFormat";
@@ -73,6 +74,9 @@ import { beltRenderTime } from "../render/beltTread";
 export interface Scene3DLevel {
   readonly world: World;
   readonly sceneChains: readonly SceneChain[];
+  // The tied chains (`engine/ties.ts`). Absent = a host with none, which is
+  // the editor's preview and every host that predates them.
+  readonly tieChains?: readonly TieChain[];
   // The vines to draw, as cords rather than as `Vine`s: the editor draws them
   // too and has no links to read, so what it hands over is the rest pose (see
   // `VineCord`). Absent = a level with no vines, which is every level and every

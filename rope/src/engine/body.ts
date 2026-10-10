@@ -962,6 +962,16 @@ export class RigidBody2D extends PhysicsBody2D {
   // of every frame.
   held = false;
 
+  // Knotted into a tied chain (`engine/ties.ts`): integrated by the island
+  // solver rather than by `World.integrate`'s gravity loop, its contacts with
+  // the scenery solved there, and put to sleep only with the whole island.
+  // Set once by `TieSolver.add`; false for every body of every recorded level.
+  tied = false;
+  // The rest rule held for this body this frame (`World.settleSleep`), and it
+  // is tied, so whether it sleeps is the island's decision
+  // (`TieSolver.settleSleep`). Cleared there every frame.
+  restReady = false;
+
   sleep(): void {
     this.asleep = true;
     this.linearVelocity = Vec2.ZERO;

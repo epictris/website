@@ -1376,6 +1376,35 @@ export interface ChainData {
   // that is not there, or one on a body that builds nothing, is skipped and the
   // chain keeps its ends. Absent = no wrap points.
   via?: number[];
+  // TIE POINTS, in order from `a` to `b`: anchor ids the chain is KNOTTED to on
+  // its way. A rope bridge is one chain: `a` on the left post, through slat 1's
+  // left and right anchors, slat 2's, ..., `b` on the right post. Two
+  // consecutive ties on one body are the body itself and no rope; a tie and
+  // the next tie on a different body are one SEGMENT, a straight piece of rope
+  // of its own length that nothing slides across. A chain with tie points is
+  // a `TieChain` (`engine/ties.ts`) rather than a `Rope`: its segments are
+  // rows of a substepped island solver beside the contacts of the bodies they
+  // tie, it has no wrap list (a segment between two knots is straight by
+  // construction - to bend a bridge around something, tie it), and `length`
+  // and `via` mean nothing on it. Nothing assumes the slats are evenly spaced
+  // or the same size: the chain is this list, and each segment's length is its
+  // own. A tie naming an anchor that is not there, or one on a body that builds
+  // nothing, is skipped and the segments either side are joined.
+  through?: number[];
+  // One length per segment of a `through` chain, in order. A segment without
+  // one (absent, or a shorter list) is `slack` applied to its authored gap, or
+  // taut as authored where there is no slack either.
+  lengths?: number[];
+  // The author's shorthand for a `through` chain: every unauthored segment is
+  // built at its authored gap times `1 + slack`, so a hand-placed row of slats
+  // sags without a number per gap. A straight bridge authored with no slack
+  // at all is a cable under transverse load with unbounded tension: it hangs
+  // on the softness of its rows, visibly stretched, and the loader says so.
+  slack?: number;
+  // Substeps the island solver gives a `through` chain's island per frame
+  // (`DEFAULT_TIE_SUBSTEPS` when absent): more for a long span under a heavy
+  // load, since the author can see the rig and the solver cannot.
+  substeps?: number;
 }
 
 // The retired form, as every level on disk still carries it: a body INDEX and a
@@ -3276,6 +3305,12 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
     ...(c.length !== undefined ? { length: c.length * factor } : {}),
     ...(c.color !== undefined ? { color: c.color } : {}),
     ...(c.via !== undefined ? { via: [...c.via] } : {}),
+    // A tied chain's segment lengths are lengths; its tie ids, its slack (a
+    // ratio) and its substep count are not.
+    ...(c.through !== undefined ? { through: [...c.through] } : {}),
+    ...(c.lengths !== undefined ? { lengths: c.lengths.map((l) => l * factor) } : {}),
+    ...(c.slack !== undefined ? { slack: c.slack } : {}),
+    ...(c.substeps !== undefined ? { substeps: c.substeps } : {}),
   }));
   // A vine's LENGTH and its link SPACING are both lengths; its anchor id and its
   // colour are not. The anchor point itself is an object on its body and scales

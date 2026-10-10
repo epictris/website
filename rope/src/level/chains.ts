@@ -56,6 +56,21 @@ import { RopeGeneration } from "../lib/ropeGeneration";
 import { Calc } from "../lib/calc";
 import { GenerationDirection, IntersectionStatus, WrapDirection } from "../lib/types";
 import { PhaseTrace } from "../engine/phaseTrace";
+import { SolverStats } from "../engine/solverStats";
+import {
+  DEFAULT_TIE_SUBSTEPS,
+  MAX_TIE_SUBSTEPS,
+  TieChain,
+  TiePoint,
+  invInertiaOf,
+  invMassOf,
+  islandOwns,
+  ropeImpulse,
+  type IslandRow,
+  type IslandUnit,
+  type Softness,
+} from "../engine/ties";
+import type { RopeRowTerm } from "../classes/rope";
 import { localPlacement, worldPlacement, type BuiltBodies } from "./buildBodies";
 import {
   isAnchorObject,
@@ -174,7 +189,23 @@ export class SceneChain implements SceneConstraint {
   // lifted back, so its chain was solved every frame, and again in the coupled
   // sweep whenever the ball was on anything - 12 of the 15 path regenerations
   // a frame on `session-392f`, for six chains nobody was touching.
-  asleep = false;
+  //
+  // An AUTHORED chain in a level is solved as a row of the world's island
+  // solver instead (`row`, see `RopeRow` and `buildSceneChains`), and its
+  // sleep is then the island's: the flag below is read and written through
+  // the row. A vine's pair chain, and a chain a case builds by hand without a
+  // world, stay on the sweep and keep their own flag.
+  row: RopeRow | null = null;
+  private asleepFlag = false;
+
+  get asleep(): boolean {
+    return this.row ? this.row.asleep : this.asleepFlag;
+  }
+
+  set asleep(value: boolean) {
+    if (this.row) this.row.asleep = value;
+    else this.asleepFlag = value;
+  }
   private readonly sleptAtVersion: number[];
   // `watchBodies`' transform versions as of the last real solve.
   private readonly solvedAtVersion: number[];
@@ -388,6 +419,7 @@ export class SceneChain implements SceneConstraint {
       if (unchanged) return;
     }
     for (let i = 0; i < watch.length; i++) versions[i] = watch[i]!.transformVersion;
+    if (SolverStats.enabled) SolverStats.solves++;
     this.rope.solvePass(this.wrapBodies, delta);
     let identity = true;
     for (let i = 0; i < watch.length; i++) {
@@ -671,6 +703,16 @@ export function settleChainsAtBuild(world: World, chains: readonly SceneChain[])
         }
       });
     }
+    // The top of a played frame, exactly: an awake chain wakes any body on it
+    // still flagged asleep (`wakeIfDisturbed`), because the solve below is about
+    // to move it and the credit it is paid has to integrate. Left out, a body
+    // that satisfied the rest rule on its own - a plank wedged in a corner,
+    // hauled back to the same spot every frame - slept while the chain holding
+    // its weight stayed awake, and the chain went on crediting a body nothing
+    // would ever step: `session-527f`'s plank left this loop asleep at 85 m/s
+    // and 139 rad/s, and the bridge rig's end slat at 125 m/s with its chain
+    // 2 m over (`bridge-build`, before the bridge became a tied chain).
+    wakeChains(awake);
     // The same step `World.integrate` gives a free body, minus everything a
     // clear body has no use for.
     for (const body of bodies) {
@@ -738,11 +780,13 @@ export function stepSceneChains(
   extra: CoupledRope | null = null,
 ): void {
   if (chains.length === 0) return;
+  const t0 = SolverStats.now();
   dampChainBodies(chains);
   const before = snapshotChainBodies(chains, null);
   for (const chain of chains) chain.beginFrame(delta);
   sweepChains(chains, extra, delta);
   settleChainBodies(chains, before, world, delta);
+  if (SolverStats.enabled) SolverStats.chainMs += performance.now() - t0;
 }
 
 // Per-frame velocity retention for a body a scene chain holds. A body on a
@@ -1242,10 +1286,14 @@ export function sweepChains(
   // apart: the sweep leaves its ropes inside `CHAIN_TOLERANCE` rather than at
   // zero, so an iteration ending short means something different here.
   PhaseTrace.pass = "sweep";
+  // Timed here as well as in `stepSceneChains`, because the coupled sweep is
+  // called from the ball's chain phase on its own, outside that function.
+  const t0 = extra ? SolverStats.now() : 0;
   try {
     sweepChainsInner(chains, extra, delta);
   } finally {
     PhaseTrace.pass = "length";
+    if (extra && SolverStats.enabled) SolverStats.chainMs += performance.now() - t0;
   }
 }
 
@@ -1294,7 +1342,10 @@ function sweepOneSet(
   let prevDisturbed = Infinity;
   let prevWorstSet = Infinity;
   let stalled = 0;
+  // Did the loop leave on the tolerance (or a stall), or run out of cap?
+  let converged = false;
   for (let sweep = 0; sweep < cap; sweep++) {
+    if (SolverStats.enabled) SolverStats.sweeps++;
     if (sweep % 2 === 0) {
       for (let i = 0; i < chains.length; i++) chains[i]!.solve(delta);
     } else {
@@ -1349,9 +1400,13 @@ function sweepOneSet(
       // has to be told about it, is a coupled rope up to `CHAIN_TOLERANCE` long
       // on the frames it skips (see `BallLevel`, session-337f).
       if (!extra.settleSet || disturbed > CHAIN_TOLERANCE) {
+        if (SolverStats.enabled) SolverStats.solves++;
         extra.rope.solvePass(extra.bodies, delta);
       }
-      if (disturbed <= CHAIN_TOLERANCE && worstSet <= 0) break;
+      if (disturbed <= CHAIN_TOLERANCE && worstSet <= 0) {
+        converged = true;
+        break;
+      }
       // ...and it leaves on a stall as well, because the gate above asks for
       // something a sweep cannot always deliver. A chain coiled onto its own
       // ball carries most of its over-length as coil, and no translation
@@ -1378,7 +1433,10 @@ function sweepOneSet(
       prevDisturbed = disturbed;
       prevWorstSet = worstSet;
       if (improved) stalled = 0;
-      else if (++stalled >= STALLED_SWEEPS) break;
+      else if (++stalled >= STALLED_SWEEPS) {
+        converged = true;
+        break;
+      }
       continue;
     }
     // Measured after the sweep, so a set that is already satisfied still pays
@@ -1387,8 +1445,12 @@ function sweepOneSet(
     // `SceneConstraint.tolerance`).
     let worst = 0;
     for (const chain of chains) worst = Math.max(worst, chain.residual - chain.tolerance);
-    if (worst <= 0) break;
+    if (worst <= 0) {
+      converged = true;
+      break;
+    }
   }
+  if (SolverStats.enabled && !converged) SolverStats.capped++;
 }
 
 // The authored anchor point pushed onto the body's own surface - the nearest
@@ -1548,14 +1610,172 @@ export function snapToCorner(
 // shared by every chain rather than copied per chain, and it is the level's
 // geometry and not the play space: the avatar, its hook and anything spawned
 // in play are never in it.
-export function buildSceneChains(data: LevelData, built: BuiltBodies): SceneChain[] {
+//
+// Given a `world`, each chain is also registered with that world's island
+// solver as a `RopeRow` and is solved there, at velocity level inside
+// `World.integrate`, rather than by the chain phase's sweep - the plan's
+// second stage, which NO LEVEL RUNS ON YET (see `RopeRow` for what it found):
+// the drivers build their chains without a world, and `cli bridges`
+// `chain-row` is what keeps the row path built and measured.
+export function buildSceneChains(
+  data: LevelData,
+  built: BuiltBodies,
+  world: World | null = null,
+): SceneChain[] {
   const anchors = collectAnchorSites(built);
   const chains: SceneChain[] = [];
   for (const c of data.chains ?? []) {
+    // A chain with tie points is a `TieChain`, built by `buildTieChains`.
+    if (isTieChain(c)) continue;
     const chain = buildOne(c, anchors, built.wrapBodies);
-    if (chain) chains.push(chain);
+    if (!chain) continue;
+    chains.push(chain);
+    if (world) {
+      chain.row = new RopeRow(chain.rope, chain.wrapBodies);
+      world.ties.addUnit(chain.row);
+    }
   }
   return chains;
+}
+
+// An authored chain's `Rope` as a row of the island solver (`engine/ties.ts`):
+// the plan's second stage, IMPLEMENTED AND PARKED (2026-10-10). Switched on
+// for every level it did what it says below - the lanterns hung and slept,
+// `cli contacts`, `cli spring` and `cli sleep` held - and two corpus bundles
+// of the ball wound tight onto a chain-hung body went unhealthy
+// (`session-324f`: the anchor spun to 77 rad/s under the ball's rim, its chain
+// wound onto it in 51 mm topology jumps, and the ball's positional phase
+// kicked 32 m/s off the result). That regime is the one the ball's chain
+// phase governs with its spin rollback, its unwind and its lease, and a
+// scene chain cannot leave the sweep before the ball's chain joins the island
+// (the plan's third stage). So the levels stay on the sweep and this row
+// waits for that, kept built and measured by `chain-row` in `cli bridges`.
+//
+// The constraint is `pathLength <= constraintLength`
+// over the rope's whole wrap path, and its Jacobian is what the path objects
+// already give the positional solve - direction, mechanical advantage and
+// torque arm per path body (`Rope.rowTerms`) - so this is the existing
+// projection moved from position level to velocity level, which is what warm
+// starting and substeps need to work on. The wrap path is regenerated once a
+// substep (`Rope.rowPrepare`: coil, uncross, scan, resolvers), eight times a
+// frame against the sweep's up to sixty-four.
+//
+// What this replaces for an authored chain: the Gauss-Seidel sweep over
+// independent ropes (`sweepChains`, with its cap, its stall gate and the
+// coupled sweep with the ball's rope), the velocity credit over the phase
+// (`settleChainBodies`, with the funded refusal and the credit scale), the
+// static push-out and the blocked-length lease - because the bodies' contacts
+// with the scenery are rows of the same solve, and a chain hauling a plank
+// into a post is a tie and a contact iterated together rather than a
+// correction and a refusal in two phases. The ball on a chain-hung plank is
+// the same statement again (`TieSolver.ownsContact`), and the ball's chain on
+// one is a guest row (`BallLevel.syncTieGuest`).
+//
+// The unit's BODIES - what the island integrates and sleeps - are the free
+// rigid bodies on the path as built: the two ends and the authored wrap
+// points' bodies. A pivot or a spring body on the path keeps `World.integrate`'s
+// own step and takes the row's impulse as velocity (`islandOwns`), and a free
+// body the chain wraps mid-play that was not on the built path is solved the
+// same way until the next build - a crate a chain swings over is the ball's
+// case, a free body coupled at velocity level.
+export class RopeRow implements IslandRow, IslandUnit {
+  impulse = 0;
+  over = 0;
+  asleep = false;
+  readonly substeps = DEFAULT_TIE_SUBSTEPS;
+  readonly bodies: readonly RigidBody2D[];
+  private readonly statics: readonly PhysicsBody2D[];
+  private readonly sleptAtVersion: number[];
+
+  constructor(
+    readonly rope: Rope,
+    readonly scene: PhysicsBody2D[],
+  ) {
+    const bodies: RigidBody2D[] = [];
+    const statics: PhysicsBody2D[] = [];
+    for (const node of rope.path()) {
+      const obj = node.contact.obj;
+      if (!(obj instanceof PhysicsBody2D)) continue;
+      if (islandOwns(obj)) {
+        if (!bodies.includes(obj)) bodies.push(obj);
+      } else if (obj instanceof StaticBody2D && !statics.includes(obj)) {
+        statics.push(obj);
+      }
+    }
+    this.bodies = bodies;
+    this.statics = statics;
+    this.sleptAtVersion = statics.map(() => -1);
+    this.measure();
+  }
+
+  get rows(): readonly IslandRow[] {
+    return [this];
+  }
+
+  beginFrame(dt: number): void {
+    this.rope.beginFrame(dt);
+  }
+
+  prepare(): void {
+    this.rope.rowPrepare(this.scene);
+  }
+
+  warmStart(): void {
+    if (this.impulse === 0) return;
+    for (const t of this.rope.rowTerms().terms) applyTerm(t, this.impulse);
+  }
+
+  // The row: slack `L - pathLength`, its rate the path's rate of shortening,
+  // `sum(ma * (dir . v + arm * w))`, and the effective inverse mass
+  // `sum(ma^2 * (1/m + arm^2 / I))` - every term the positional solve's
+  // `correctShapePositionAndRotation` splits a correction by, read at
+  // velocity level (see `Rope.rowTerms`).
+  solve(h: number, soft: Softness, useBias: boolean): void {
+    const { length, constraint, terms } = this.rope.rowTerms();
+    let w = 0;
+    let slackRate = 0;
+    for (const t of terms) {
+      const invM = invMassOf(t.body);
+      const invI = invInertiaOf(t.body);
+      if (t.body instanceof RigidBody2D) {
+        w += t.ma * t.ma * (invM + t.arm * t.arm * invI);
+        slackRate += t.ma * (t.dir.dot(t.body.linearVelocity) + t.arm * t.body.angularVelocity);
+      } else {
+        // A static that moves (a mover's anchor) carries the rope with it.
+        slackRate += t.ma * t.dir.dot(t.body.velocityAtPoint(t.body.globalPosition));
+      }
+    }
+    if (w <= 0) return;
+    const applied = ropeImpulse(this, constraint - length, slackRate, w, h, soft, useBias);
+    if (applied === 0) return;
+    for (const t of terms) applyTerm(t, applied);
+  }
+
+  measure(): void {
+    this.over = this.rope.overLength;
+  }
+
+  fallAsleep(): void {
+    this.asleep = true;
+    for (let i = 0; i < this.statics.length; i++) {
+      this.sleptAtVersion[i] = this.statics[i]!.transformVersion;
+    }
+  }
+
+  anchorsMoved(): boolean {
+    for (let i = 0; i < this.statics.length; i++) {
+      if (this.statics[i]!.transformVersion !== this.sleptAtVersion[i]) return true;
+    }
+    return false;
+  }
+}
+
+// Impulse `j` along the rope, delivered to one path body through its term.
+function applyTerm(t: RopeRowTerm, j: number): void {
+  const body = t.body;
+  if (!(body instanceof RigidBody2D)) return;
+  body.linearVelocity = body.linearVelocity.add(t.dir.mul(j * t.ma * body.inverseMass));
+  body.angularVelocity += j * t.ma * t.arm * invInertiaOf(body);
 }
 
 // Every anchor in the level, by id. A chain names its two ends and nothing else
@@ -1686,4 +1906,174 @@ function buildOne(
   const length =
     c.length ?? (wraps.length > 0 ? null : tieA.point.distanceTo(tieB.point));
   return new SceneChain(start, end, length, c.color ?? null, scene, wraps);
+}
+
+// ---------------------------------------------------------------------------
+// Tied chains (`ChainData.through`): one rope knotted through many bodies,
+// solved by the island solver in `engine/ties.ts` rather than by `Rope`. The
+// reasoning and the measurements are in `plans/rope-bridge.md`; what this half
+// does is turn the authored list of anchors into knots on bodies and
+// segment lengths, refuse what cannot be simulated, and settle the result at
+// build so a level arrives with its bridge hanging and asleep.
+// ---------------------------------------------------------------------------
+
+export function isTieChain(c: ChainData): boolean {
+  return (c.through?.length ?? 0) > 0;
+}
+
+// Build every tied chain in `data` against the bodies `buildLevelBodies` made
+// and register each with the world's island solver. The same tolerances as
+// `buildOne`: an END naming an anchor that is not there, or on a body that
+// builds nothing, drops the chain; a TIE that does is skipped and the segments
+// either side are joined, as a dead wrap point is skipped.
+export function buildTieChains(data: LevelData, built: BuiltBodies, world: World): TieChain[] {
+  const anchors = collectAnchorSites(built);
+  const chains: TieChain[] = [];
+  for (const c of data.chains ?? []) {
+    if (!isTieChain(c)) continue;
+    const chain = buildTie(c, anchors);
+    if (!chain) continue;
+    chains.push(chain);
+    world.ties.add(chain);
+  }
+  return chains;
+}
+
+function buildTie(c: ChainData, anchors: Map<number, AnchorSite>): TieChain | null {
+  const ids = [c.a, ...(c.through ?? []), c.b];
+  const points: TiePoint[] = [];
+  for (let i = 0; i < ids.length; i++) {
+    const site = anchors.get(ids[i]!);
+    const obj = site?.built.body;
+    if (!site || !(obj instanceof PhysicsBody2D)) {
+      if (i === 0 || i === ids.length - 1) return null;
+      continue;
+    }
+    // The knot is on the body's surface, as a chain end is (`tieToSurface`),
+    // and is carried in the body's own frame from then on.
+    const tie = tieToSurface(obj, anchorWorldPoint(site));
+    const local = tie.point.sub(obj.globalPosition).rotated(-obj.globalRotation);
+    points.push(new TiePoint(obj, local));
+  }
+  // A pivot turns on a bearing and a spring body hangs on its stem; both are
+  // stepped by `World.integrate` in ways the island does not reproduce, so a
+  // chain knotted to one is refused until pivots and springs are rows of the
+  // same solve (the plan's second stage).
+  for (const p of points) {
+    const body = p.body;
+    if (body instanceof RigidBody2D && (body.pivot || body.spring !== null)) {
+      console.warn(`chain ${c.a}-${c.b}: tied to a pivot or spring body; not built`);
+      return null;
+    }
+  }
+  const gaps: number[] = [];
+  for (let i = 0; i + 1 < points.length; i++) {
+    const a = points[i]!;
+    const b = points[i + 1]!;
+    if (a.body === b.body) continue;
+    gaps.push(a.world().distanceTo(b.world()));
+  }
+  // Every knot on one body is nothing to constrain.
+  if (gaps.length === 0) return null;
+  const slack = c.slack ?? 0;
+  const lengths = gaps.map((gap, k) => {
+    const authored = c.lengths?.[k];
+    return authored !== undefined && authored > 0 ? authored : gap * (1 + slack);
+  });
+  // A straight bridge with no slack is a cable under transverse load, whose
+  // tension is unbounded as the sag goes to zero; it builds all the same,
+  // because the rows are soft and bound it (`bridge-taut` measures how far
+  // it stretches), where the chain phase spent its sweep cap on it for ever.
+  // It is said once, since a level that looks taut and hangs stretched is
+  // an authoring mistake with nothing on screen to say why.
+  if (lengths.every((l, k) => l <= gaps[k]! + 1e-9) && gaps.length > 1) {
+    console.warn(
+      `chain ${c.a}-${c.b}: a tied chain with no slack hangs on the softness of its rows; ` +
+        `give it \`slack\` or a length per segment to hang as authored`,
+    );
+  }
+  const substeps = Math.max(
+    1,
+    Math.min(MAX_TIE_SUBSTEPS, Math.round(c.substeps ?? DEFAULT_TIE_SUBSTEPS)),
+  );
+  return new TieChain(points, lengths, substeps, c.color ?? null);
+}
+
+// Settle the island solver's units at build - the authored chains' rows and
+// the tied chains - as `settleChainsAtBuild` settled the authored chains on the
+// sweep: up to `SETTLE_AT_BUILD_CAP` frames of the island solver with sleep
+// on, so a level arrives with its lanterns hanging and its bridge sagging,
+// asleep, rather than spending the first seconds of play finding its rest.
+//
+// The same clearance rule: only a unit whose every body hangs clear of
+// anything that can move and of every area is settled here, because the loop
+// runs the islands and nothing else - a slat under a crate would be solved
+// against a crate nothing is stepping. Static scenery near a body is allowed,
+// since the island solves its own contacts with the scenery; that is how a
+// bridge whose end slats rest on their posts settles here. Units sharing a
+// body with one that cannot be settled are left with it.
+export function settleTiesAtBuild(world: World, units: readonly IslandUnit[]): void {
+  const clear = new Set<IslandUnit>();
+  for (const unit of units) if (tieClearAtBuild(world, unit)) clear.add(unit);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const unit of clear) {
+      for (const other of units) {
+        if (other === unit || clear.has(other)) continue;
+        if (unit.bodies.some((b) => other.bodies.includes(b))) {
+          clear.delete(unit);
+          changed = true;
+          break;
+        }
+      }
+      if (changed) break;
+    }
+  }
+  if (clear.size === 0) return;
+  const dt = 1 / 60;
+  const bodies: RigidBody2D[] = [];
+  for (const unit of clear) {
+    for (const body of unit.bodies) if (!bodies.includes(body)) bodies.push(body);
+  }
+  for (let frame = 0; frame < SETTLE_AT_BUILD_CAP; frame++) {
+    let awake = false;
+    for (const unit of clear) if (!unit.asleep) awake = true;
+    if (!awake) break;
+    world.stepTiesStandalone(dt, clear);
+    world.settleSleep(bodies);
+  }
+}
+
+function tieClearAtBuild(world: World, chain: IslandUnit): boolean {
+  for (const body of chain.bodies) {
+    if (!body.canSleep) return false;
+    for (const s of body.getShapes()) {
+      const c = s.globalPosition;
+      const e = s.extents();
+      const minX = c.x - e.x - CLEAR_MARGIN;
+      const minY = c.y - e.y - CLEAR_MARGIN;
+      const maxX = c.x + e.x + CLEAR_MARGIN;
+      const maxY = c.y + e.y + CLEAR_MARGIN;
+      for (const o of world.queryShapes(minX, minY, maxX, maxY)) {
+        const owner = o.owner;
+        if (owner === body || !(owner instanceof PhysicsBody2D)) continue;
+        // Another tied body is in the same solve and is fine; anything else
+        // that can move is not.
+        if (owner instanceof RigidBody2D && owner.tied) continue;
+        if (owner.isMobile || !(owner instanceof StaticBody2D)) return false;
+      }
+      for (const area of world.areas) {
+        if (area.removed) continue;
+        for (const a of area.getShapes()) {
+          const ac = a.globalPosition;
+          const ae = a.extents();
+          if (ac.x + ae.x >= minX && ac.x - ae.x <= maxX && ac.y + ae.y >= minY && ac.y - ae.y <= maxY) {
+            return false;
+          }
+        }
+      }
+    }
+  }
+  return true;
 }

@@ -40,19 +40,22 @@ import {
   vineChainSet,
   type Vine,
 } from "./vines";
+import { TiePoint, TieSegment, type TieChain } from "../engine/ties";
 import {
   awakeChains,
   buildSceneChains,
+  buildTieChains,
   settleChainsAtBuild,
+  settleTiesAtBuild,
+  sleepChains,
+  wakeChains,
   CHAIN_TOLERANCE,
   refuseRopeBodiesIntoStatics,
   settleChainBodies,
-  sleepChains,
   snapshotChainBodies,
   snapshotRopeBodies,
   stepSceneChains,
   sweepChains,
-  wakeChains,
   type SceneChain,
   type SceneConstraint,
 } from "./chains";
@@ -98,6 +101,8 @@ export class BallLevel {
   readonly fireflyPaths: FireflyPathData[];
   // Chains strung between authored bodies (see Level.sceneChains).
   readonly sceneChains: SceneChain[];
+  // Chains knotted through many bodies (see `Level.tieChains`).
+  readonly tieChains: TieChain[];
   // Vines hanging from authored anchors (see `level/vines.ts`). The ball level
   // builds them for the same reason the grapple level does, and it is not a
   // nicety: `BALL` is the DEFAULT level, so a bare `/` and the editor's
@@ -471,12 +476,16 @@ export class BallLevel {
     // Before the vines, so a vine hung from a lantern is built from where the
     // lantern comes to rest.
     settleChainsAtBuild(this.world, this.sceneChains);
+    // The tied chains after the authored ropes, for the same reason: a bridge
+    // hung from a chain-held body settles against where that body came to rest.
+    this.tieChains = buildTieChains(data, built, this.world);
+    settleTiesAtBuild(this.world, this.tieChains);
     this.vines = buildVines(this.world, data, built);
     // Both are built, so both can be asked what they hang from: a breakable
     // body under a chain or a vine anchor is one the file got wrong, and it
     // loses its threshold here rather than taking a constraint down with it
     // mid-play (see `guardBreakables`).
-    guardBreakables(this.sceneChains, this.vines);
+    guardBreakables(this.sceneChains, this.vines, this.tieChains);
     for (const vine of this.vines) this.bodies.push(...vine.links);
     // A hook that strikes a link threads onto the whole vine (see
     // `lib/vineClamp.ts`), and the level is what knows which vine a link is.
@@ -523,6 +532,80 @@ export class BallLevel {
   // actually being governed by rather than the ones the ball is passing through.
   private cameraAnchor(): Vec2 {
     return this.entry?.at ?? this.ball.globalPosition;
+  }
+
+  // The ball's chain as a row of the island that holds its anchor, while the
+  // chain runs straight from the ball to a TIED body (see `TieSolver.guests`).
+  //
+  // A body knotted into a tied chain is immovable to a rope's positional
+  // solve (see `Rope.getDynamicBodyState`), so on its own the chain phase would
+  // haul the ball and the bridge would never feel it. Handing the bridge the
+  // reaction afterwards as an impulse was tried and is wrong by construction:
+  // the positional solve arrests the ball in one frame against an anchor it
+  // believes immovable, and the impulse that arrest implies - a 52 kg ball
+  // stopped dead, delivered to a 2.6 kg slat - is tens of metres a second,
+  // which no island can absorb within a frame (the slat left at 16 m/s). What
+  // the physics wants is the ball decelerated over the bridge's give, which is
+  // the ball and the ties in ONE velocity solve. So the chain is a row there,
+  // the ball's real mass on one side and the slat on the other, warm-started
+  // across frames like every tie, with its length the chain's own constraint
+  // length as the winch leaves it. The chain phase then only cleans up the
+  // position the gravity step drifted, and pays the ball no credit for it (see
+  // `chainCreditVelocity`): the row did the velocity work, and crediting the
+  // correction on top would hand the ball its weight back every other frame.
+  //
+  // Only a chain whose free span runs straight from the ball to the knot is a
+  // row: every node before the last on the ball itself (the coil the winch
+  // winds), and nothing wrapped on the way. Wrapped over something, the
+  // tension reaches the knot through the wrap and the row would pull along
+  // the wrong line; that chain stays positional with its knot immovable, and
+  // the bridge does not feel it - the plan's third stage, the ball's chain as
+  // a row in full, is where that goes.
+  private tieGuest: TieSegment | null = null;
+
+  private syncTieGuest(): void {
+    const chain = this.ball.chain;
+    const path = chain?.path();
+    const end = chain?.end.contact.obj;
+    let straight = !!chain && !!path && path.length >= 2 && end instanceof RigidBody2D && end.tied;
+    if (straight && path) {
+      for (let i = 0; i + 1 < path.length; i++) {
+        if (path[i]!.contact.obj !== this.ball) straight = false;
+      }
+    }
+    if (!chain || !path || !straight || !(end instanceof RigidBody2D)) {
+      this.tieGuest = null;
+      this.world.ties.guests = [];
+      return;
+    }
+    // The free span: from the coil's last node on the ball to the knot.
+    const from = path[path.length - 2]!.contact;
+    const knot = chain.end.contact;
+    let guest = this.tieGuest;
+    if (!guest || guest.b.body !== end) {
+      guest = new TieSegment(new TiePoint(this.ball, from.position), new TiePoint(end, knot.position), 0);
+      this.tieGuest = guest;
+    } else {
+      if (!guest.a.local.equals(from.position)) guest.a = new TiePoint(this.ball, from.position);
+      if (!guest.b.local.equals(knot.position)) guest.b = new TiePoint(end, knot.position);
+    }
+    // The span's share of the constraint: what it may measure for the whole
+    // path to be exactly at length, so coil on the ball and the lease are the
+    // chain's and the row holds only the free span.
+    //
+    // ...and never less than the span measures NOW. The row HOLDS the ball at
+    // the chain's length - a fall is arrested in the island, the bridge carries
+    // the weight - and the winch's shortening is the positional phase's, under
+    // its budget, its spin rollback and its unwind. Set to the allowance alone,
+    // the row did the winch's work too: every coil node the aim wound on
+    // shortened its length within the frame and it yanked the ball and the
+    // weight it hung from together, the unwind gave the length back next frame,
+    // and the pair pumped from a hand's whirl to 11 m/s (`hung-anchor`), which
+    // is `session-215f`'s slingshot through a new door.
+    const span = from.globalPosition.distanceTo(knot.globalPosition);
+    const allowance = span + chain.constraintLength - chain.getCurrentLength();
+    guest.length = Math.max(0, allowance, span);
+    this.world.ties.guests = [guest];
   }
 
   // The chain set as it stands this frame: the authored chains, every vine's
@@ -939,6 +1022,9 @@ export class BallLevel {
     // the arrival, and by the time `collectContactSparks` runs the solve has
     // already cancelled it (see there).
     const ballSpinBeforeContacts = this.ball.angularVelocity;
+    // The ball's chain as a row of the island it is hooked to, if it is (see
+    // `syncTieGuest`) - set before the world steps, read inside it.
+    this.syncTieGuest();
     this.world.integrate(delta);
 
     // Driving the mounting loop into a surface may never launch the ball. It is
@@ -1961,7 +2047,10 @@ export class BallLevel {
         this.ball.globalPosition
           .sub(positionBeforeChain)
           .div(delta)
-          .mul(this.ball.chain.topologyCreditScale),
+          // ...and no credit at all while the chain is a row of a tied island
+          // (see `syncTieGuest`): the row paid the velocity inside `integrate`,
+          // and the position this phase corrected is the gravity step's drift.
+          .mul(this.tieGuest ? 0 : this.ball.chain.topologyCreditScale),
         chainBound,
       );
       this.ball.linearVelocity = velocityBeforeChain.add(this.chainCreditVelocity);

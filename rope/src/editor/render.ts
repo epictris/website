@@ -17,6 +17,7 @@ import {
   chainEnds,
   chainPath,
   chainViaItems,
+  isTiedChain,
   vineRestPath,
   ED_LAYERS,
   bodyBounds,
@@ -1948,10 +1949,11 @@ export function drawEditor(
   polyDraft: { kind: "poly" | "path"; verts: readonly Vec2[]; cursor: Vec2 } | null = null,
   // Chains carry their own selection (see `selectedChainIds` in editor.ts).
   selectedChainIds: ReadonlySet<number> = new Set<number>(),
-  // A chain being strung out: where it started and where the pointer is, plus
-  // whether it is currently over a body it could land on - so the gesture says
-  // in advance whether releasing will make a chain or drop it.
-  chainDraft: { from: Vec2; to: Vec2; valid: boolean } | null = null,
+  // A chain being strung out: where it started and the knots it has been tied
+  // to so far (`path`), where the pointer is, plus whether it is currently over
+  // a body it could land on - so the gesture says in advance whether releasing
+  // will make a chain or drop it.
+  chainDraft: { path: Vec2[]; to: Vec2; valid: boolean } | null = null,
   // Vines carry their own selection too, and their own draft. "hang" is a vine
   // being pulled out DOWNWARD from the body it is anchored to - an anchor and a
   // length rather than two points; "attach" is a tip being Shift-dragged toward
@@ -2307,7 +2309,9 @@ export function drawEditor(
       // A ring at each anchor: the chain is pinned to a point on a body, and the
       // point is what an author places, so it has to be findable under the fill.
       // A wrap point is a HOLLOW ring - the chain bends around it rather than
-      // being tied to it, and the two must read differently at a glance.
+      // being tied to it, and the two must read differently at a glance. A
+      // tied chain's knots are tied to their bodies, so they are filled like
+      // the ends, smaller.
       ctx.fillStyle = color;
       for (const p of [path[0]!, path[path.length - 1]!]) {
         ctx.beginPath();
@@ -2315,11 +2319,13 @@ export function drawEditor(
         ctx.fill();
       }
       ctx.lineWidth = worldLine * 1.5;
+      const tied = isTiedChain(c);
       for (let i = 1; i < path.length - 1; i++) {
         const p = path[i]!;
         ctx.beginPath();
-        ctx.arc(p.x, p.y, CHAIN_ANCHOR_R_PX * worldLine, 0, Math.PI * 2);
-        ctx.stroke();
+        ctx.arc(p.x, p.y, CHAIN_ANCHOR_R_PX * worldLine * (tied ? 0.6 : 1), 0, Math.PI * 2);
+        if (tied) ctx.fill();
+        else ctx.stroke();
       }
     }
     // A wrap point being pulled out: the route as it would be, dashed as a
@@ -2404,11 +2410,28 @@ export function drawEditor(
   // The chain being strung out, if any: dashed while it has nowhere to land,
   // solid the moment it is over a body it can attach to.
   if (chainDraft) {
-    ctx.strokeStyle = chainDraft.valid ? CHAIN_DEFAULT_COLOR : SELECT;
+    const path = chainDraft.path;
+    // The knotted part is settled and drawn solid; the live span to the pointer
+    // says whether it could land.
+    ctx.strokeStyle = CHAIN_DEFAULT_COLOR;
     ctx.lineWidth = worldLine * 2;
+    if (path.length > 1) {
+      ctx.beginPath();
+      ctx.moveTo(path[0]!.x, path[0]!.y);
+      for (let i = 1; i < path.length; i++) ctx.lineTo(path[i]!.x, path[i]!.y);
+      ctx.stroke();
+      ctx.fillStyle = CHAIN_DEFAULT_COLOR;
+      for (let i = 1; i < path.length; i++) {
+        ctx.beginPath();
+        ctx.arc(path[i]!.x, path[i]!.y, CHAIN_ANCHOR_R_PX * worldLine * 0.6, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    const last = path[path.length - 1]!;
+    ctx.strokeStyle = chainDraft.valid ? CHAIN_DEFAULT_COLOR : SELECT;
     if (!chainDraft.valid) ctx.setLineDash([6 * PX, 4 * PX]);
     ctx.beginPath();
-    ctx.moveTo(chainDraft.from.x, chainDraft.from.y);
+    ctx.moveTo(last.x, last.y);
     ctx.lineTo(chainDraft.to.x, chainDraft.to.y);
     ctx.stroke();
     ctx.setLineDash([]);

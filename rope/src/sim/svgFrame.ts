@@ -348,6 +348,17 @@ export function renderFrameSVG(level: Level | BallLevel): string {
       ropeEls.push(`<circle cx="${(nodes[i]!.x * M).toFixed(1)}" cy="${(nodes[i]!.y * M).toFixed(1)}" r="3" fill="#8fa3b8"/>`);
     }
   }
+  // Tied chains the same way, their knots marked: a knot is where the rope is
+  // fixed to a body, which is exactly what a snapshot of a bridge is read for.
+  for (const chain of level.tieChains) {
+    const nodes = chain.path();
+    for (const n of nodes) grow(box, n.x * M, n.y * M, 4);
+    const pts = nodes.map((n) => `${(n.x * M).toFixed(1)},${(n.y * M).toFixed(1)}`).join(" ");
+    ropeEls.push(`<polyline points="${pts}" fill="none" stroke="#8fa3b8" stroke-width="2" stroke-dasharray="7 5"/>`);
+    for (const n of nodes) {
+      ropeEls.push(`<circle cx="${(n.x * M).toFixed(1)}" cy="${(n.y * M).toFixed(1)}" r="2.5" fill="#8fa3b8"/>`);
+    }
+  }
 
   if (!Number.isFinite(box.minX)) {
     box.minX = -100;

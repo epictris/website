@@ -36,6 +36,8 @@
 //   bun run src/tools/cli.ts decompose
 //   bun run src/tools/cli.ts dmath     [--write]   (the deterministic libm: bit-exact vectors + source scan)
 //   bun run src/tools/cli.ts contacts
+//   bun run src/tools/cli.ts bridges
+//   bun run src/tools/cli.ts perf      bundle.json [--from A] [--to B] [--every N]
 //   bun run src/tools/cli.ts spring
 //   bun run src/tools/cli.ts movers
 //   bun run src/tools/cli.ts vines
@@ -2260,6 +2262,13 @@ switch (cmd) {
   case "contacts":
     void cmdContacts();
     break;
+  case "bridges":
+    void cmdBridges();
+    break;
+  case "perf":
+    if (!arg) fail("usage: cli perf bundle.json [--from A] [--to B] [--every N]");
+    void cmdPerf(arg, opts(rest));
+    break;
   case "spring":
     void cmdSpring();
     break;
@@ -2627,6 +2636,106 @@ async function cmdContacts(): Promise<void> {
   const x = xfail > 0 ? ` (${xfail} expected-fail)` : "";
   console.log(`[contacts] ${results.length - failed}/${results.length} cases green${x}`);
   process.exit(failed > 0 ? 1 : 0);
+}
+
+// Rope-bridge cases (src/sim/bridgeCases.ts): slats on chains between two
+// posts, the ball across and under them, and what a frame of it costs. Written
+// before the solver the bridge plan proposes, so most are expected-fail with
+// the number this tree measures (see `cli contacts` for the marker's rule).
+async function cmdBridges(): Promise<void> {
+  const { runBridgeCases } = await import("../sim/bridgeCases");
+  const results = runBridgeCases();
+  let failed = 0;
+  let xfail = 0;
+  for (const r of results) {
+    const stale = r.passed && r.expectedFail;
+    const bad = stale || (!r.passed && !r.expectedFail);
+    const tag = stale ? "STALE" : r.expectedFail ? "XFAIL" : r.passed ? "PASS " : "FAIL ";
+    console.log(`  ${tag} ${r.name}`);
+    for (const d of r.details) console.log(`        ${d}`);
+    if (stale) {
+      console.log(`        this case is marked expectedFail but PASSED — delete the marker`);
+    }
+    if (bad) failed++;
+    if (r.expectedFail && !r.passed) xfail++;
+  }
+  const x = xfail > 0 ? ` (${xfail} expected-fail)` : "";
+  console.log(`[bridges] ${results.length - failed}/${results.length} cases green${x}`);
+  process.exit(failed > 0 ? 1 : 0);
+}
+
+// What a bundle's frames COST: wall clock per frame, the chain phase's share,
+// and the work behind it - sweeps, constraint solves, wrap-path regenerations,
+// and how many frames left a sweep on the cap rather than on the tolerance
+// (`engine/solverStats.ts`). The work counts are deterministic and the clock
+// is not, so a regression reads as "sweeps went from 6 to 64" before it reads
+// as milliseconds.
+//
+// `session-235f` is the example: 1280 solves and 64 sweeps on 200 of 235
+// frames, 12.7 ms a frame in bun, which `cli replay` reported as HEALTHY.
+async function cmdPerf(file: string, o: Record<string, string>): Promise<void> {
+  const { SolverStats } = await import("../engine/solverStats");
+  const rec = loadRecording(file);
+  const level = levelFromRecording(rec);
+  const deserialize = recordingDeserializer(rec);
+  const from = Math.max(1, Number(o.from ?? 0));
+  const to = Number(o.to ?? 0);
+  const every = Math.max(1, Number(o.every ?? 1));
+  interface Row {
+    ms: number;
+    chainMs: number;
+    sweeps: number;
+    solves: number;
+    regens: number;
+    capped: number;
+  }
+  const rows: Row[] = [];
+  SolverStats.enabled = true;
+  try {
+    for (let i = 0; i < rec.frames.length; i++) {
+      const input = deserialize(rec.frames[i]!);
+      SolverStats.reset();
+      const t0 = performance.now();
+      level.physicsProcess(input, 1 / 60);
+      const ms = performance.now() - t0;
+      const s = SolverStats.snapshot();
+      rows.push({ ms, chainMs: s.chainMs, sweeps: s.sweeps, solves: s.solves, regens: s.pathRegens, capped: s.capped });
+    }
+  } finally {
+    SolverStats.enabled = false;
+  }
+  console.log(`[perf] ${file} — level=${rec.level} frames=${rows.length}${rec.git ? ` recorded@${rec.git}` : ""}`);
+  printTreeStamp(rec);
+  const pct = (xs: number[], p: number): number => {
+    const sorted = [...xs].sort((a, b) => a - b);
+    return sorted[Math.min(sorted.length - 1, Math.floor((p / 100) * sorted.length))] ?? 0;
+  };
+  const line = (name: string, xs: number[], fmt: (x: number) => string): void => {
+    const mean = xs.reduce((a, b) => a + b, 0) / Math.max(1, xs.length);
+    console.log(
+      `  ${name.padEnd(12)} mean ${fmt(mean).padStart(8)}  p50 ${fmt(pct(xs, 50)).padStart(8)}  p95 ${fmt(pct(xs, 95)).padStart(8)}  max ${fmt(Math.max(...xs)).padStart(8)}`,
+    );
+  };
+  const ms1 = (x: number): string => x.toFixed(2);
+  const int = (x: number): string => x.toFixed(x === Math.floor(x) ? 0 : 1);
+  line("frame ms", rows.map((r) => r.ms), ms1);
+  line("chain ms", rows.map((r) => r.chainMs), ms1);
+  line("sweeps", rows.map((r) => r.sweeps), int);
+  line("solves", rows.map((r) => r.solves), int);
+  line("path regens", rows.map((r) => r.regens), int);
+  const cappedFrames = rows.filter((r) => r.capped > 0).length;
+  const total = rows.reduce((a, r) => a + r.ms, 0);
+  console.log(`  frames with a sweep on the cap: ${cappedFrames}/${rows.length}; total ${total.toFixed(0)} ms`);
+  if (from > 0 || to > 0) {
+    const last = to > 0 ? Math.min(to, rows.length) : rows.length;
+    console.log("  frame      ms  chainMs  sweeps  solves  regens  capped");
+    for (let i = from - 1; i < last; i += every) {
+      const r = rows[i]!;
+      console.log(
+        `  ${String(i + 1).padStart(5)} ${r.ms.toFixed(2).padStart(7)} ${r.chainMs.toFixed(2).padStart(8)} ${String(r.sweeps).padStart(7)} ${String(r.solves).padStart(7)} ${String(r.regens).padStart(7)} ${String(r.capped).padStart(7)}`,
+      );
+    }
+  }
 }
 
 // Spring-body cases (src/sim/springCases.ts). Pure physics like `contacts`, and

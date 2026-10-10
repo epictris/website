@@ -27,6 +27,7 @@ import { FinishLine } from "../classes/finishLine";
 import type { Level } from "../level/level";
 import type { BallLevel } from "../level/ballLevel";
 import type { SceneChain } from "../level/chains";
+import type { TieChain } from "../engine/ties";
 import type { Camera } from "./camera";
 import type { ViewTransform } from "./viewport";
 import type { HeldCamera } from "./cameraController";
@@ -754,7 +755,7 @@ export function render(
   if (!overlayOnly) {
     // Chains hang behind every solid thing - which is the same statement as
     // their passing through it (see `SceneChain`).
-    drawSceneChains(ctx, level.sceneChains, alpha);
+    drawSceneChains(ctx, level.sceneChains, level.tieChains, alpha);
   }
 
   // Hook-only scenery is background the player passes through, so it goes down
@@ -960,23 +961,38 @@ export function drawProbeOutline(
 function drawSceneChains(
   ctx: CanvasRenderingContext2D,
   chains: readonly SceneChain[],
+  ties: readonly TieChain[],
   alpha: number,
 ): void {
-  for (const chain of chains) {
-    const spans = chain.rope.getSpans();
-    if (!spans.length) continue;
-    const path = [
-      spans[0]!.from.contact.renderGlobalPosition(alpha),
-      ...spans.map((s) => s.to.contact.renderGlobalPosition(alpha)),
-    ];
+  const draw = (path: Vec2[], color: string | null): void => {
     ctx.save();
     ctx.globalAlpha *= CHAIN_ALPHA;
     drawChainPolyline(
       ctx,
       path,
-      chain.color ? { broad: chain.color, narrow: shade(chain.color, 0.65) } : undefined,
+      color ? { broad: color, narrow: shade(color, 0.65) } : undefined,
     );
     ctx.restore();
+  };
+  for (const chain of chains) {
+    const spans = chain.rope.getSpans();
+    if (!spans.length) continue;
+    draw(
+      [
+        spans[0]!.from.contact.renderGlobalPosition(alpha),
+        ...spans.map((s) => s.to.contact.renderGlobalPosition(alpha)),
+      ],
+      chain.color,
+    );
+  }
+  // A tied chain is its knots, in order: each segment straight between two
+  // knots (which is what the solver holds it as), and a run of knots on one
+  // body - a slat's two ends - laid along the body.
+  for (const chain of ties) {
+    draw(
+      chain.points.map((p) => p.renderWorld(alpha)),
+      chain.color,
+    );
   }
 }
 
@@ -1124,7 +1140,7 @@ export function renderBall(
 
   if (!overlayOnly) {
     // Chains behind the solid geometry they pass through (see `render`).
-    drawSceneChains(ctx, level.sceneChains, alpha);
+    drawSceneChains(ctx, level.sceneChains, level.tieChains, alpha);
   }
 
   // Hook-only scenery behind the solid geometry it sits among (see `render`).

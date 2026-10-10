@@ -738,6 +738,19 @@ export interface EdChain {
   // two ends are - an object in its body, riding it - so the chain's whole
   // route is objects and this list is only the order they come in.
   via: number[];
+  // TIE POINTS: the item ids of the anchors the chain is KNOTTED to, in order
+  // from `a` to `b` (see `ChainData.through`). A chain with any is a tied
+  // chain - a rope bridge - and has no wrap points; `length` means nothing on
+  // it, and `lengths`, `slack` and `substeps` below are its.
+  through: number[];
+  // One length per segment of a tied chain, metres; null in a slot = that
+  // segment takes `slack`. Empty for a chain with no tie points.
+  lengths: (number | null)[];
+  // The fraction every unauthored segment of a tied chain is built longer than
+  // its gap; null = taut as authored (see `ChainData.slack`).
+  slack: number | null;
+  // The island solver's substeps for a tied chain; null = the default.
+  substeps: number | null;
   // Metres. Null = exactly taut between the two anchors, re-derived at load, so
   // a chain dragged out between two bodies stays taut as they are moved.
   length: number | null;
@@ -1748,11 +1761,22 @@ function lightItem(
       const item = itemOfAnchor.get(id);
       if (item) via.push(item.id);
     }
+    // A tie point naming an anchor the file does not contain is skipped the
+    // same way, and the segments either side join (as the loader joins them).
+    const through: number[] = [];
+    for (const id of c.through ?? []) {
+      const item = itemOfAnchor.get(id);
+      if (item) through.push(item.id);
+    }
     chains.push({
       id: newBodyId(),
       a: a.id,
       b: b.id,
       via,
+      through,
+      lengths: (c.lengths ?? []).map((l) => (l > 0 ? l : null)),
+      slack: c.slack ?? null,
+      substeps: c.substeps ?? null,
       length: c.length ?? null,
       color: c.color ?? null,
     });
@@ -2326,13 +2350,28 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
       const v = model.items.find((i) => i.id === id);
       if (v?.object === "anchor") via.push(v.anchorId);
     }
+    const through: number[] = [];
+    for (const id of c.through) {
+      const t = model.items.find((i) => i.id === id);
+      if (t?.object === "anchor") through.push(t.anchorId);
+    }
+    // A tied chain writes its tie points and their lengths (0 in a slot = that
+    // segment takes the slack, which is how `ChainData.lengths` reads an
+    // absent one); its `length` is not written, since it means nothing there.
+    const tied = through.length > 0;
+    const lengths = c.lengths.map((l) => l ?? 0);
+    while (lengths.length > 0 && lengths[lengths.length - 1] === 0) lengths.pop();
     chains.push({
       a: a.anchorId,
       b: b.anchorId,
       // Omitted = taut between the anchors, which the loader re-derives.
-      ...(c.length !== null ? { length: c.length } : {}),
+      ...(c.length !== null && !tied ? { length: c.length } : {}),
       ...(c.color !== null ? { color: c.color } : {}),
-      ...(via.length > 0 ? { via } : {}),
+      ...(via.length > 0 && !tied ? { via } : {}),
+      ...(tied ? { through } : {}),
+      ...(tied && lengths.length > 0 ? { lengths } : {}),
+      ...(tied && c.slack !== null ? { slack: c.slack } : {}),
+      ...(tied && c.substeps !== null ? { substeps: c.substeps } : {}),
     });
   }
 
@@ -3932,7 +3971,7 @@ function shapeCorners(item: EdItem): Vec2[] {
 // --- chains -----------------------------------------------------------------
 
 export function cloneChain(c: EdChain): EdChain {
-  return { ...c, via: [...c.via] };
+  return { ...c, via: [...c.via], through: [...c.through], lengths: [...c.lengths] };
 }
 
 // A world point pushed onto the item's own surface, returned in the item's local
@@ -4005,14 +4044,51 @@ export function chainViaItems(model: EdModel, c: EdChain): EdItem[] {
   return out;
 }
 
-// The whole route in the world - end, wrap points, end - or null if either end
-// is gone. What the canvas draws and what a click on the chain is tested
-// against: a chain with wrap points IS its polyline, since a span between two
-// wrap nodes is straight and the solver renders exactly this.
+// The chain's tie points as items, in route order, under the same tolerance.
+export function chainThroughItems(model: EdModel, c: EdChain): EdItem[] {
+  const out: EdItem[] = [];
+  for (const id of c.through) {
+    const item = anchorItem(model, id);
+    if (item) out.push(item);
+  }
+  return out;
+}
+
+export function isTiedChain(c: EdChain): boolean {
+  return c.through.length > 0;
+}
+
+// The whole route in the world - end, wrap points (or tie points), end - or
+// null if either end is gone. What the canvas draws and what a click on the
+// chain is tested against: a chain with wrap points IS its polyline, since a
+// span between two wrap nodes is straight and the solver renders exactly this,
+// and a tied chain is its knots in order for the same reason.
 export function chainPath(model: EdModel, c: EdChain): Vec2[] | null {
   const ends = chainEnds(model, c);
   if (!ends) return null;
-  return [ends.a, ...chainViaItems(model, c).map((i) => i.pos), ends.b];
+  const middle = isTiedChain(c) ? chainThroughItems(model, c) : chainViaItems(model, c);
+  return [ends.a, ...middle.map((i) => i.pos), ends.b];
+}
+
+// A tied chain's SEGMENTS as the loader builds them: consecutive knots on
+// different bodies, with the authored gap between them. Two knots on one body
+// are the body and no rope.
+export function chainSegments(
+  model: EdModel,
+  c: EdChain,
+): { from: EdItem; to: EdItem; gap: number }[] {
+  const a = anchorItem(model, c.a);
+  const b = anchorItem(model, c.b);
+  if (!a || !b) return [];
+  const knots = [a, ...chainThroughItems(model, c), b];
+  const out: { from: EdItem; to: EdItem; gap: number }[] = [];
+  for (let i = 0; i + 1 < knots.length; i++) {
+    const from = knots[i]!;
+    const to = knots[i + 1]!;
+    if (from.bodyId === to.bodyId) continue;
+    out.push({ from, to, gap: from.pos.distanceTo(to.pos) });
+  }
+  return out;
 }
 
 // Distance from a world point to the chain's straight span, for picking. The

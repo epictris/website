@@ -272,6 +272,7 @@ export function removeBrokenBody(
 export function guardBreakables(
   chains: readonly { readonly rope: Rope }[],
   vines: readonly { readonly anchorContact: RopeContact; readonly anchor2Contact: RopeContact | null }[],
+  ties: readonly { readonly points: readonly { readonly body: CollisionObject2D }[] }[] = [],
 ): void {
   const unbreak = (anchor: CollisionObject2D): void => {
     if (anchor.breakForce <= 0) return;
@@ -288,4 +289,6 @@ export function guardBreakables(
     unbreak(vine.anchorContact.obj);
     if (vine.anchor2Contact) unbreak(vine.anchor2Contact.obj);
   }
+  // A tied chain is knotted to every body on it, so every one of them holds it.
+  for (const tie of ties) for (const p of tie.points) unbreak(p.body);
 }

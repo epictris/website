@@ -62,6 +62,10 @@ import finishTestJson from "../../levels/finish-test.json";
 // inside for a wheel prop (see `lib/belt.ts`, docs/conveyors.md).
 // Hand-authored, like the rail and mud sandboxes.
 import beltTestJson from "../../levels/belt-test.json";
+// The rope bridge of `plans/rope-bridge.md`: nineteen slats knotted onto one
+// chain between two posts (`ChainData.through`), the rig `session-235f`
+// recorded, with the slack it lacked. Roll across it, hook a slat from below.
+import ropeBridgeJson from "../../levels/rope-bridge.json";
 
 export const LEVELS: Record<string, LevelSpec> = {
   LEVEL_2: {
@@ -112,6 +116,9 @@ export const LEVELS: Record<string, LevelSpec> = {
   // Conveyor belts to ride, drop crates on and hook, driven with the ball (see
   // `lib/belt.ts`). Unlisted, like every sandbox.
   TEST_BELT: { data: beltTestJson as RawLevelData, controller: "ball", file: "belt-test" },
+  // A rope bridge to roll across and hang from (see `docs/scene-chains.md`,
+  // "Tied chains"). Unlisted, like every sandbox.
+  ROPE_BRIDGE: { data: ropeBridgeJson as RawLevelData, controller: "ball", file: "rope-bridge" },
   // Geometry that gives way: swing off the ceiling and drop through it (see
   // `docs/breakable.md`). The three ledges are 2.5 kN, 5 kN, and 4 kN three
   // times over; the L at the end is one body of two pieces, so it goes as one.

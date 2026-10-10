@@ -35,6 +35,7 @@ import { shapeContacts } from "./manifold";
 import { AABBTree } from "./aabbTree";
 import { PhaseTrace } from "./phaseTrace";
 import { PhysTrace } from "./physTrace";
+import { TieSolver, type IslandUnit } from "./ties";
 
 // Broadphase candidate order: the owner's position in `World.bodies`, then the
 // shape's mount order within the owner. This is exactly the order the full
@@ -549,6 +550,11 @@ export class World {
   readonly bodies: PhysicsBody2D[] = [];
   readonly areas: Area2D[] = [];
 
+  // The tied chains (`engine/ties.ts`) and their island solver. Empty on every
+  // level without a `through` chain, and every branch below that reads it is
+  // then the branch every recorded replay took.
+  readonly ties = new TieSolver();
+
   // Broadphase: one fat-box leaf per collision shape of every body in
   // `bodies` (areas are not proxied - nothing queries them spatially). The
   // tree answers CANDIDATES only; every query below keeps its original exact
@@ -988,6 +994,9 @@ export class World {
         // undo. It is settled where it was left and the only thing that can
         // change that is being woken (see `RigidBody2D.asleep`).
         if (World.isAsleep(body)) continue;
+        // A tied body is integrated by its island (`TieSolver.step`, below),
+        // substep by substep with the rows that hold it, never here.
+        if (body.tied) continue;
         if (body.pivot) {
           // A pivot body turns on a fixed bearing: no gravity step, no
           // translation. The velocity is ZEROED rather than trusted to stay
@@ -1077,6 +1086,27 @@ export class World {
     PhaseTrace.mark("shape-settle", this);
     this.resolveDynamicCollisions(dt);
     this.notifyAreas();
+  }
+
+  // The tied chains' frame: every island of them, substepped against its own
+  // contacts (see `TieSolver`). Called inside the contact phase with the
+  // contacts the gather found for tied bodies, so the slats' positions and
+  // velocities are final by the time anything after `integrate` reads them.
+  private stepTies(islandContacts: ContactConstraint[], dt: number): void {
+    this.ties.step(islandContacts, GRAVITY, dt);
+    PhaseTrace.mark("ties", this);
+  }
+
+  // The frame a tied chain's build settle steps: no areas, no free bodies,
+  // the island's own contacts gathered for its bodies alone (see
+  // `settleTiesAtBuild` in `level/chains.ts`).
+  stepTiesStandalone(dt: number, only: ReadonlySet<IslandUnit>): void {
+    const tied = new Set<RigidBody2D>();
+    for (const chain of only) for (const body of chain.bodies) tied.add(body);
+    const contacts = this.collectContacts(tied).filter(TieSolver.ownsContact);
+    this.frameContacts = [];
+    this.ties.step(contacts, GRAVITY, dt, only);
+    this.frameContacts = contacts;
   }
 
   // The continuous position step (see RigidBody2D.continuous): advance the
@@ -1654,7 +1684,10 @@ export class World {
   // are pieces of one body (`session-373f`).
   private pairLoad = new Map<string, SustainedPress[]>();
 
-  collectContacts(): ContactConstraint[] {
+  // `only` narrows the gather to pairs one of these bodies leads: the tied
+  // chains' build settle asks for the contacts of its own bodies and nothing
+  // else (`stepTiesStandalone`).
+  collectContacts(only: ReadonlySet<RigidBody2D> | null = null): ContactConstraint[] {
     const out: ContactConstraint[] = [];
     // Broadphase pair discovery. Every pair that can produce a constraint has
     // a rigid side that survives every rigid-side filter below (role `a` is
@@ -1668,6 +1701,7 @@ export class World {
     const pairKeys = new Set<number>();
     for (const a of this.bodies) {
       if (!(a instanceof RigidBody2D)) continue;
+      if (only && !only.has(a)) continue;
       if (a.removed || !a.hasShape() || !isSolidTarget(a)) continue;
       if (a.passable) continue;
       if (World.isAsleep(a)) continue;
@@ -2036,7 +2070,6 @@ export class World {
         s.c.normal.mul(cached.n).add(s.tangent.mul(cached.t)),
       );
     }
-
     for (let it = 0; it < VELOCITY_ITERATIONS; it++) {
       for (const s of solved) {
         // Tangent first, then normal - Box2D's ordering, so the non-penetration
@@ -2339,8 +2372,12 @@ export class World {
       }
       i = j;
       const bRigid = deepest.b instanceof RigidBody2D ? deepest.b : null;
-      const invMassA = deepest.a.inverseMass;
-      const invMassB = bRigid ? bRigid.inverseMass : 0;
+      // A tied body is held where it is by its island's rows, so against a free
+      // body it gives way like a static: the free body takes the whole push.
+      // Split by inverse mass, the ball resting on a 2.6 kg slat pushed the
+      // slat 2.6 mm into its bridge every frame for the island to haul back.
+      const invMassA = deepest.a.tied && bRigid && !bRigid.tied ? 0 : deepest.a.inverseMass;
+      const invMassB = bRigid ? (bRigid.tied && !deepest.a.tied ? 0 : bRigid.inverseMass) : 0;
       const total = invMassA + invMassB;
       // A speculative contact is not overlapping, so there is nothing to push
       // out of - pushing along a negative depth would drag the pair together.
@@ -2361,7 +2398,19 @@ export class World {
     // the same solver is a worthwhile follow-up once `cli contacts` has been
     // green across a few changes, and a valuable one: warm-started static
     // manifolds are where Box2D's resting-stack quality actually comes from.
-    const constraints = this.collectContacts();
+    let constraints = this.collectContacts();
+    // Every contact touching a tied body is a row of its island's solve
+    // (`TieSolver`), not of this one - the scenery under a slat, another slat,
+    // and the ball on it, solved there with its real mass so the two agree at
+    // the end of the frame. The list is split only when the level has a tied
+    // chain at all, so every other level's contact set is exactly what it was.
+    let islandContacts: ContactConstraint[] | null = null;
+    if (this.ties.active) {
+      islandContacts = [];
+      const own: ContactConstraint[] = [];
+      for (const c of constraints) (TieSolver.ownsContact(c) ? islandContacts : own).push(c);
+      constraints = own;
+    }
     // A contact is a push, and a body about to be pushed is awake from here:
     // the solver credits it velocity this frame, and next frame's integrate
     // has to carry that rather than skip it. The lead side is awake by
@@ -2371,6 +2420,14 @@ export class World {
     }
     this.solveContacts(constraints, dt);
     PhaseTrace.mark("contacts", this);
+    // The tied chains, with their contacts: after the world's solve has settled
+    // every free body's velocity, and before the grips and the drag below read
+    // the frame's contacts, since the ball's contacts with a slat are among
+    // them and carry the impulses the island applied.
+    if (islandContacts) {
+      this.stepTies(islandContacts, dt);
+      constraints = constraints.concat(islandContacts);
+    }
 
     // Which surfaces each body met this frame, and the grippiest of them.
     // `contactDamp` is once per body per frame now (see below), so it is the
@@ -2410,12 +2467,18 @@ export class World {
     // ball's mounting loop met a surface, and which way that surface faces.
     this.frameContacts = constraints;
 
-    const gripped = this.applyStaticGrip(constraints, dt);
+    // A tied body's contacts with the scenery are its island's, and the pin
+    // and the stick are not for it; its contacts with a free body - the ball
+    // on a slat - are the ball's to grip through, so those stay in.
+    const gripContacts = islandContacts
+      ? constraints.filter((c) => !c.a.tied || (c.b instanceof RigidBody2D && !c.b.tied))
+      : constraints;
+    const gripped = this.applyStaticGrip(gripContacts, dt);
     // The steered ball's grip, which is the only thing a circle contact still
     // needs beyond the constraint solve above: aim steering drives the ball's
     // rotation kinematically, and a control input with no force behind it cannot
     // be expressed as an impulse the solver would cap.
-    for (const id of this.applySteeringGrip(constraints, dt)) gripped.add(id);
+    for (const id of this.applySteeringGrip(gripContacts, dt)) gripped.add(id);
     PhaseTrace.mark("grip", this);
 
     for (const body of this.bodies) {
@@ -2525,6 +2588,9 @@ export class World {
     for (let pass = 0; pass < DEPENETRATION_PASSES; pass++) {
       for (const body of this.bodies) {
         if (!(body instanceof RigidBody2D) || body.removed) continue;
+        // A tied body's overlaps with the scenery are its island's contact
+        // rows, solved below with the ties that put it there.
+        if (body.tied) continue;
         const before = body.globalPosition;
         this.depenetrateRigid(body, 1);
         const anchor = body.stickAnchorWorld();
@@ -3027,8 +3093,16 @@ export class World {
         body.restartRestWindow();
         continue;
       }
+      // A tied body satisfies the rule for itself and sleeps with its island
+      // (`TieSolver.settleSleep`): a slat put to sleep on its own is a slat its
+      // awake neighbour hauls away with nothing measuring the rope between.
+      if (body.tied) {
+        body.restReady = true;
+        continue;
+      }
       body.sleep();
     }
+    if (this.ties.active) this.ties.settleSleep();
   }
 
   // Wake every sleeping body within a contact's reach of `mover`: a platform

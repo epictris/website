@@ -330,6 +330,8 @@ The **Visuals** workspace ([editor-visuals](editor-visuals.md)) is the same edit
 It is what the turned view's missing overlay became: where a turned Level view only selects and moves, Visuals edits corners, draws with the plane tools and drops lights on surfaces, from any angle.
 Each workspace keeps its own view, and `▶ Test` returns to the one it left.
 **+ Chain** and **+ Vine** are Level-only.
+A chain knotted through bodies (a rope bridge, `ChainData.through`; see [scene-chains](scene-chains.md#tied-chains)) is strung out with the same tool: **Shift-release** on a body ties the chain there and keeps the draft going past the release, each further **Shift-click** on a body ties another knot, a plain click on a body ends the chain there and **Esc** drops it - so a bridge is one gesture, post, each slat's two ends, ..., post, and it starts with 3% slack.
+It is drawn with small filled rings at its knots, and its panel lists the knots with a `×` each and carries `slack`, `substeps` and a length per segment in place of the one length.
 
 The one predicate the press handler asks is `inScene()` - the Visuals workspace, or the Level workspace turned - which says a press is resolved through the scene's camera rather than the 2D camera's scale and offset; where the two differ, each branch says which it is (see [Picking](editor-visuals.md#picking) there).
 **Home** resets the Level workspace's orbit as `⟲ Reset view` does.

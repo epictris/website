@@ -51,6 +51,7 @@ import { RopeRide } from "../lib/belt";
 import { Player } from "./player";
 import { Hook } from "./hook";
 import { PhaseTrace, type SolveBodyTerm } from "../engine/phaseTrace";
+import { SolverStats } from "../engine/solverStats";
 
 // Pass-through geometry (a `passable` body, a vine link): the rope may be *pinned* to
 // it — that is what the hook is for — but it may never bend around it. Every
@@ -163,6 +164,17 @@ export function isSeamVertex(shape: CollisionShape2D, vertexIndex: number): bool
 // that pushed it. One per body the geometry pushed this frame - a scene chain
 // holds two, and either may be the one standing in a surface. See
 // `unreachableShortening`.
+// One path body's term of the length constraint's Jacobian (see
+// `Rope.rowTerms`): the direction a correction moves it, the mechanical
+// advantage the rope has over it, the torque arm the pull turns it by, and the
+// node the rope meets it at.
+export interface RopeRowTerm {
+  readonly body: PhysicsBody2D;
+  readonly dir: Vec2;
+  readonly ma: number;
+  readonly arm: number;
+}
+
 export interface LengthRefusal {
   body: PhysicsBody2D;
   normals: readonly Vec2[];
@@ -692,6 +704,44 @@ export class Rope {
 
   getCurrentLength(): number {
     return this.calculateRopePathLength();
+  }
+
+  // --- as a row of the island solver (`engine/ties.ts`, `RopeRow`) ---------
+  // The island solves an authored chain's length at velocity level, once a
+  // substep, and these are the two things it needs of the rope: the path
+  // brought up to date against the scene as the bodies now stand, and the
+  // length constraint's Jacobian over the path's bodies.
+
+  // Sync the coil, uncross the nodes, regenerate the wrap path (the scan, the
+  // self-intersection resolver, the detachment pass): what a solve pass does
+  // before it measures, and nothing of the solve.
+  rowPrepare(bodies: PhysicsBody2D[]): void {
+    this.regenerateAndMeasure(bodies);
+  }
+
+  // The constraint `C = pathLength - constraintLength` and its Jacobian, one
+  // term per PATH BODY: the direction a correction moves that body in
+  // (`PathObject.resolveCorrectionDir`), the mechanical advantage the rope has
+  // over it (1 at an end, the bisector's length at a wrap) and the torque arm
+  // the pull turns it by (`calculateTorqueArm`). Moving a body by `d` along
+  // its direction shortens the path by `ma * d`, so the path's rate of
+  // shortening is `sum(ma * (dir . v + arm * w))` and the effective inverse
+  // mass is `sum(ma^2 * (1/m + arm^2 / I))` - the quantity
+  // `effectiveInverseInertia` sums, with the masses left to the caller, which
+  // reads them off the bodies as the island does (a pivot is infinite in mass,
+  // a spring body in inertia). The terms are the path objects' and are
+  // regenerated with the path; a body carrying no direction (a degenerate
+  // span) is left out.
+  rowTerms(): { length: number; constraint: number; terms: RopeRowTerm[] } {
+    const terms: RopeRowTerm[] = [];
+    for (const pathObject of this.generatePathObjects()) {
+      const dir = pathObject.resolveCorrectionDir();
+      if (dir.lengthSquared() < 0.0001) continue;
+      const ma = pathObject.calculateMechanicalAdvantage();
+      if (ma < 1e-6) continue;
+      terms.push({ body: pathObject.body, dir, ma, arm: this.calculateTorqueArm(pathObject) });
+    }
+    return { length: this.calculateRopePathLength(), constraint: this.constraintLength, terms };
   }
 
   // The rope from where it leaves the start body to the far end: the path less
@@ -1821,6 +1871,7 @@ export class Rope {
   }
 
   private regeneratePath(bodies: PhysicsBody2D[]): void {
+    if (SolverStats.enabled) SolverStats.pathRegens++;
     this.dropWrapsOnGoneBodies();
     this.resolveNodeSelfIntersections();
     const newNodes: RopeWrap[] = [];
@@ -3291,6 +3342,15 @@ export class Rope {
     // a `StaticBody2D` is, and `null` is how the solve is told so. See
     // `solveLengthHolding`.
     if (this.held !== null && this.held.has(body)) return null;
+    // A body knotted into a tied chain is held by its island's rows and is
+    // integrated there (`engine/ties.ts`); to a rope it is immovable, like a
+    // static, so the whole correction lands on the rope's free bodies. Split by
+    // inverse mass instead, the ball's chain hauled a 2.6 kg slat by its 95%
+    // share every frame and the island hauled it back, and the two minted
+    // energy until the slat left at 38 m/s. The tension the rope puts on a
+    // tied body reaches the island as an impulse (`BallLevel`'s chain phase);
+    // a scene chain's does not yet, which is the plan's second stage.
+    if (body instanceof RigidBody2D && body.tied) return null;
     if (body instanceof RigidBody2D) {
       // A PIVOT body cannot translate, and the solve is told so in its own
       // vocabulary: infinite mass. `1 / mass` reads 0, so the linear share of

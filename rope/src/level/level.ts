@@ -37,13 +37,16 @@ import type { ConveyorBody } from "../lib/belt";
 import {
   awakeChains,
   buildSceneChains,
+  buildTieChains,
   settleChainsAtBuild,
+  settleTiesAtBuild,
   sleepChains,
   stepSceneChains,
   wakeChains,
   type SceneChain,
   type SceneConstraint,
 } from "./chains";
+import type { TieChain } from "../engine/ties";
 import {
   buildVines,
   stepVines,
@@ -103,6 +106,10 @@ export class Level {
   // `SceneChain`s too and are swept with these, but they are the vine's and are
   // drawn as one, so they are not in this list (see `chainSet`).
   readonly sceneChains: SceneChain[];
+  // Chains knotted through many bodies - a rope bridge - solved by the world's
+  // island solver inside `World.integrate` rather than by the chain phase
+  // (see `engine/ties.ts`). Held here for the renderers and the detectors.
+  readonly tieChains: TieChain[];
   // Vines hanging from authored anchors (see `level/vines.ts`). Their links are
   // in the world and in `bodies`; their pair chains are in `chainSet`.
   readonly vines: Vine[];
@@ -162,10 +169,14 @@ export class Level {
     this.belts.push(...built.belts);
     this.sceneChains = buildSceneChains(data, built);
     settleChainsAtBuild(this.world, this.sceneChains);
+    // The tied chains after the authored ropes, so a bridge hung from a
+    // chain-held body settles against where that body came to rest.
+    this.tieChains = buildTieChains(data, built, this.world);
+    settleTiesAtBuild(this.world, this.tieChains);
     this.vines = buildVines(this.world, data, built);
     // A breakable body with a chain or a vine hanging off it loses its
     // threshold, loudly (see `guardBreakables`).
-    guardBreakables(this.sceneChains, this.vines);
+    guardBreakables(this.sceneChains, this.vines, this.tieChains);
     // The links go in the rope's candidate list like every other body. They are
     // never wrapped - `isPassThrough` drops a non-solid body from the wrap scan -
     // so what this buys is that the list is what the world holds, rather than a

@@ -76,7 +76,10 @@ import {
   anchorItem,
   chainEnds,
   chainPath,
+  chainSegments,
+  chainThroughItems,
   chainViaItems,
+  isTiedChain,
   nearestChainSpan,
   nearestCornerLocal,
   vineAnchorWorld,
@@ -531,7 +534,11 @@ type Drag =
   | { mode: "rotateGroup"; items: EdItem[]; centre: Vec2; grabAngle: number; applied: number }
   // Stringing a new chain out from a body: the anchor is fixed in `from`'s local
   // frame, and the free end follows the pointer until it is dropped on a body.
-  | { mode: "chainDraw"; from: EdItem; local: Vec2; cursor: Vec2 }
+  // Stringing a chain out from a body. `knots` are the bodies it has been TIED
+  // to on the way (Shift-release over a body, see `finishOrTieChainDraw`): a
+  // chain with any is a tied chain (`EdChain.through`), and the draft lives on
+  // past the release until a plain press ends it on a body or Escape drops it.
+  | { mode: "chainDraw"; from: EdItem; local: Vec2; cursor: Vec2; knots: { item: EdItem; local: Vec2 }[] }
   // Re-anchoring one end of an existing chain. It follows the pointer and lands
   // on whatever body it is dropped on, so moving a chain end and moving it to a
   // different body are one gesture.
@@ -2214,7 +2221,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     notes: "",
   };
   toolBtns.path.title = PATH_TOOL_TITLE[activeLayer];
-  toolBtns.chain.title = "Drag from one body to another to string a chain between them";
+  toolBtns.chain.title =
+    "Drag from one body to another to string a chain between them. Shift-release on a body ties the chain there and keeps going (a rope bridge: post, each slat's two ends, ..., post); a plain click on a body ends it, Esc drops it";
   toolBtns.belt.title =
     "Press where the first wheel goes and drag to the second to lay a conveyor belt; a click drops one 1.5 m long. Click a run's midpoint to add a wheel, Alt+click a wheel's square to remove it. The band wraps the outside of every wheel and its surface runs round the loop at the panel's speed (positive = clockwise on screen), carrying whatever rests on it. It builds only on a static body that does not move.";
   toolBtns.vine.title =
@@ -5132,12 +5140,55 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     );
     g.appendChild(title);
 
-    if (chains.length === 1) addWrapPointRows(section(g, "chain/Wrap points", "Wrap points"), chains[0]!);
+    // A TIED chain (`EdChain.through`) has knots where an ordinary chain has
+    // wrap points, and its own length fields: one slack for the lot and a
+    // length per segment, in place of the one length below.
+    if (chains.length === 1 && isTiedChain(chains[0]!)) {
+      addTiePointRows(section(g, "chain/Tie points", "Tie points"), chains[0]!);
+      addTiedLengthRows(section(g, "chain/Segments", "Segments"), chains[0]!);
+    } else if (chains.length === 1) {
+      addWrapPointRows(section(g, "chain/Wrap points", "Wrap points"), chains[0]!);
+    }
 
     // Slack is what a chain is for, so the length is authored in scene pixels
     // like every other length. Blank = exactly taut between the two anchors,
     // re-derived on load, which is what dragging one out gives.
     const length = section(g, "chain/Length", "Length");
+    if (chains.some(isTiedChain)) {
+      const hint = el("div", "ed-hint");
+      hint.textContent = "A tied chain's lengths are its segments' (above).";
+      length.appendChild(hint);
+    } else {
+      addLengthField(length, chains);
+    }
+
+    const color = section(g, "chain/Color", "Color");
+    const cw = fieldRow("color");
+    const ci = colorInput(chains[0]!.color ?? CHAIN_DEFAULT_COLOR, beginAction, (hex) => {
+      for (const c of chains) c.color = hex;
+      markDirty();
+    });
+    cw.appendChild(ci.el);
+    color.appendChild(cw);
+    const reset = el("div", "ed-row");
+    reset.appendChild(
+      button("Reset color", () => {
+        beginAction();
+        for (const c of chains) c.color = null;
+        markDirty();
+        rebuildInspector();
+      }),
+    );
+    color.appendChild(reset);
+
+    const row = el("div", "ed-row");
+    row.appendChild(button("Delete", () => deleteSelected()));
+    g.appendChild(row);
+    inspector.appendChild(g);
+  }
+
+  // An ordinary chain's one length, in scene pixels, with a slack readout.
+  function addLengthField(length: HTMLElement, chains: EdChain[]): void {
     numField(
       length,
       "length",
@@ -5174,30 +5225,98 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     srow.appendChild(sval);
     length.appendChild(srow);
     readouts.push({ el: sval, get: slack });
+  }
 
-    const color = section(g, "chain/Color", "Color");
-    const cw = fieldRow("color");
-    const ci = colorInput(chains[0]!.color ?? CHAIN_DEFAULT_COLOR, beginAction, (hex) => {
-      for (const c of chains) c.color = hex;
-      markDirty();
+  // A tied chain's knots, one row each in route order - which body each is on,
+  // by its outliner number, and a way to untie it: the knots either side join
+  // up, as the loader joins them around a dead anchor.
+  function addTiePointRows(g: HTMLElement, c: EdChain): void {
+    const runs = bodyRuns(model.items.filter((i) => i.layer === "scene"));
+    const indexOfBody = new Map<number, number>();
+    runs.forEach((members, i) => indexOfBody.set(members[0]!.bodyId, i));
+    const hint = el("div", "ed-hint");
+    hint.textContent =
+      "Knotted to each body it passes: a rope bridge is one chain, post, slat, slat, ..., post. Each segment between knots on different bodies is straight and has its own length.";
+    g.appendChild(hint);
+    chainThroughItems(model, c).forEach((t, i) => {
+      const row = el("div", "ed-row");
+      const label = el("span", "ed-hint");
+      const at = indexOfBody.get(t.bodyId);
+      label.textContent = `tie ${i + 1} · body ${at === undefined ? "?" : at}`;
+      row.append(
+        label,
+        button("×", () => {
+          beginAction();
+          c.through = c.through.filter((id) => id !== t.id);
+          c.lengths = [];
+          pruneAnchors();
+          markDirty();
+          rebuildInspector();
+        }),
+      );
+      g.appendChild(row);
     });
-    cw.appendChild(ci.el);
-    color.appendChild(cw);
-    const reset = el("div", "ed-row");
-    reset.appendChild(
-      button("Reset color", () => {
-        beginAction();
-        for (const c of chains) c.color = null;
-        markDirty();
-        rebuildInspector();
-      }),
-    );
-    color.appendChild(reset);
+  }
 
-    const row = el("div", "ed-row");
-    row.appendChild(button("Delete", () => deleteSelected()));
-    g.appendChild(row);
-    inspector.appendChild(g);
+  // A tied chain's slack, its substeps, and a length per segment. A segment's
+  // field blank = that segment takes the slack; the readout beside each is
+  // the authored gap it would be built at.
+  function addTiedLengthRows(g: HTMLElement, c: EdChain): void {
+    numField(
+      g,
+      "slack",
+      () => c.slack,
+      (v) => {
+        c.slack = Math.max(0, v);
+      },
+      0.01,
+      false,
+      {
+        placeholder: "taut",
+        onEmpty: () => {
+          c.slack = null;
+        },
+      },
+    );
+    numField(
+      g,
+      "substeps",
+      () => c.substeps,
+      (v) => {
+        c.substeps = Math.max(1, Math.min(32, Math.round(v)));
+      },
+      1,
+      false,
+      {
+        placeholder: "8",
+        onEmpty: () => {
+          c.substeps = null;
+        },
+      },
+    );
+    const segments = chainSegments(model, c);
+    while (c.lengths.length < segments.length) c.lengths.push(null);
+    segments.forEach((s, i) => {
+      numField(
+        g,
+        `segment ${i + 1} (gap ${Math.round(s.gap * M2PX)} px)`,
+        () => {
+          const l = c.lengths[i];
+          return l === null || l === undefined ? null : l * M2PX;
+        },
+        (v) => {
+          c.lengths[i] = Math.max(0, v * PX);
+        },
+        1,
+        false,
+        {
+          placeholder: c.slack !== null ? `${Math.round(s.gap * (1 + c.slack) * M2PX)}` : "taut",
+          onEmpty: () => {
+            c.lengths[i] = null;
+          },
+        },
+      );
+    });
   }
 
   // The chain's wrap points, one row each in route order - which body each is
@@ -7125,7 +7244,16 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         const v = idOf.get(id);
         if (v !== undefined) via.push(v);
       }
-      out.push({ ...cloneChain(c), id: newBodyId(), a, b, via });
+      // A tie point whose anchor was not copied is dropped the same way, and
+      // the copy's segment lengths go with it - they index segments that no
+      // longer exist.
+      const through: number[] = [];
+      for (const id of c.through) {
+        const t = idOf.get(id);
+        if (t !== undefined) through.push(t);
+      }
+      const lengths = through.length === c.through.length ? [...c.lengths] : [];
+      out.push({ ...cloneChain(c), id: newBodyId(), a, b, via, through, lengths });
     }
     return out;
   }
@@ -7345,7 +7473,32 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // String a chain between two bodies, anchored where each end was placed. A
   // chain to the body you started on (or to another piece of the same compound
   // body) is a chain tied to itself and is refused.
-  function addChain(from: EdItem, fromWorld: Vec2, to: EdItem, world: Vec2): void {
+  // The chain draw's release, or a press while a tied chain is being strung
+  // out: over a body with Shift, TIE the chain there (a knot on the body's
+  // surface where the pointer is) and keep going; over a body without, end the
+  // chain there; over nothing, abandon it - a chain lands only on a body, and
+  // leaving an end in mid-air is not a thing that could be meant. A rope
+  // bridge is therefore one gesture: press on the left post, Shift-release on
+  // the left end of slat 1, Shift-click its right end, slat 2's left end, ...,
+  // and a plain click on the right post.
+  function finishOrTieChainDraw(tie: boolean): void {
+    if (!drag || drag.mode !== "chainDraw") return;
+    const to = topmostAt(drag.cursor, (b) => chainable(b));
+    if (tie && to) {
+      drag.knots.push({ item: to, local: nearestSurfaceLocal(to, drag.cursor) });
+      return;
+    }
+    if (to) addChain(drag.from, toWorld(drag.from, drag.local), drag.knots, to, drag.cursor);
+    drag = null;
+  }
+
+  function addChain(
+    from: EdItem,
+    fromWorld: Vec2,
+    knots: readonly { item: EdItem; local: Vec2 }[],
+    to: EdItem,
+    world: Vec2,
+  ): void {
     if (!chainable(to)) return;
     if (to.id === from.id) return;
     if (to.bodyId === from.bodyId) return;
@@ -7359,6 +7512,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // in the editor and carries no error anywhere.
     const a = newAnchorOn(from, fromWorld);
     model.items.push(a);
+    const through: number[] = [];
+    for (const k of knots) {
+      const anchor = newAnchorOn(k.item, toWorld(k.item, k.local));
+      model.items.push(anchor);
+      through.push(anchor.id);
+    }
     const b = newAnchorOn(to, world);
     model.items.push(b);
     const chain: EdChain = {
@@ -7366,6 +7525,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       a: a.id,
       b: b.id,
       via: [],
+      through,
+      lengths: [],
+      // A tied chain starts with the sag a bridge needs rather than taut, since
+      // taut it hangs stretched on its rows' softness (see `buildTie`); the
+      // panel's `slack` field is where it is tuned.
+      slack: through.length > 0 ? 0.03 : null,
+      substeps: null,
       length: null, // taut as drawn
       color: null,
     };
@@ -7442,6 +7608,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // the route loses the point and the chain keeps its ends.
     for (const c of model.chains) {
       if (c.via.some((id) => !live.has(id))) c.via = c.via.filter((id) => live.has(id));
+      // ...and a TIE POINT the same way: the knots either side join up, and the
+      // segment lengths are re-read against the knots that are left.
+      if (c.through.some((id) => !live.has(id))) {
+        c.through = c.through.filter((id) => live.has(id));
+        c.lengths = [];
+      }
     }
     model.vines = model.vines.filter((v) => live.has(v.anchor));
     for (const v of model.vines) {
@@ -7473,6 +7645,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       used.add(c.a);
       used.add(c.b);
       for (const id of c.via) used.add(id);
+      for (const id of c.through) used.add(id);
     }
     for (const v of model.vines) {
       used.add(v.anchor);
@@ -8831,6 +9004,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (e.button !== 0) return;
     const scr = pointerScreen(e);
     const world = canvasWorld(scr);
+    // A tied chain being strung out knot by knot (see `finishOrTieChainDraw`):
+    // this press is the next knot or the chain's end, and nothing else.
+    if (drag?.mode === "chainDraw" && drag.knots.length > 0) {
+      drag.cursor = world;
+      finishOrTieChainDraw(e.shiftKey);
+      e.preventDefault();
+      return;
+    }
     dragMoved = false;
     dragPushed = false;
 
@@ -8911,7 +9092,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       if (from) {
         // The anchor lands on the body's surface, not where the pointer happens
         // to be inside it (see `nearestSurfaceLocal`).
-        drag = { mode: "chainDraw", from, local: nearestSurfaceLocal(from, world), cursor: world };
+        drag = { mode: "chainDraw", from, local: nearestSurfaceLocal(from, world), cursor: world, knots: [] };
       }
       return;
     }
@@ -9952,7 +10133,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     };
   }
 
-  window.addEventListener("mouseup", () => {
+  window.addEventListener("mouseup", (e) => {
     if (mode !== "edit" || !drag) return;
     // A press that panned nowhere was a click, and it means what a click on that
     // item has always meant.
@@ -10034,10 +10215,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       detachVineEnd(drag.vine);
     }
     if (drag.mode === "chainDraw") {
-      // A chain lands only on a body: released over empty space the gesture is
-      // simply abandoned, rather than leaving one end in mid-air.
-      const to = topmostAt(drag.cursor, (b) => chainable(b));
-      if (to) addChain(drag.from, toWorld(drag.from, drag.local), to, drag.cursor);
+      finishOrTieChainDraw(e.shiftKey);
+      // Tied, and still going: the draft lives on past the release.
+      if (drag) return;
+      applyToolCursor();
+      return;
     }
     if (drag.mode === "chainWrapOut") {
       // A wrap point lands only on a body: released over empty space the
@@ -10079,6 +10261,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (e.code === "Escape") {
       if (mode === "test") stopTest();
       else if (polyDraft) cancelPolyDraft();
+      // A tied chain being strung out is dropped whole: its knots are not in
+      // the model until the chain ends on a body.
+      else if (drag?.mode === "chainDraw") {
+        drag = null;
+        applyToolCursor();
+      }
       // The vertex selection goes first, for the reason a click on empty space
       // drops it first: it is the innermost thing selected, and dropping it is
       // how the shape stops being open for vertex editing.
@@ -10247,15 +10435,15 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
 
   // The chain being strung out, as the renderer wants it: the fixed anchor, the
   // pointer, and whether releasing here would actually make a chain.
-  function chainDraftView(): { from: Vec2; to: Vec2; valid: boolean } | null {
+  function chainDraftView(): { path: Vec2[]; to: Vec2; valid: boolean } | null {
     if (!drag || drag.mode !== "chainDraw") return null;
-    const from = toWorld(drag.from, drag.local);
+    const path = [toWorld(drag.from, drag.local), ...drag.knots.map((k) => toWorld(k.item, k.local))];
     const to = topmostAt(drag.cursor, (b) => chainable(b));
     const valid =
       to !== null &&
       to.id !== drag.from.id &&
       !(drag.from.bodyId !== null && to.bodyId === drag.from.bodyId);
-    return { from, to: drag.cursor, valid };
+    return { path, to: drag.cursor, valid };
   }
 
   // A wrap point being pulled out of a chain, as the renderer wants it: the

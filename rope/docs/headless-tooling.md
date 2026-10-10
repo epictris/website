@@ -10,6 +10,8 @@ bun run src/tools/cli.ts decompose            # convex decomposition of authored
 bun run src/tools/cli.ts dmath                # the deterministic libm: bit-exact vectors on this engine + no platform Math in the sim
 bun run dmath:crosscheck                      # how far THIS engine's own Math is from it (an instrument, not a test)
 bun run src/tools/cli.ts contacts             # rigid-body contact cases (settle/stack/ramps/impact/momentum/loop-cap/loop-ride)
+bun run src/tools/cli.ts bridges              # rope-bridge cases on the tied-chain island solver (the build settle, hangs, taut, uneven, the ball across and under, the mass ratio, the cost of sixty slats; see docs/scene-chains.md "Tied chains" and plans/rope-bridge.md)
+bun run src/tools/cli.ts perf session.json    # what a bundle's frames COST: ms, the chain phase's share, sweeps, solves, path regenerations, frames on the cap
 bun run src/tools/cli.ts spring               # spring-body cases (droop, load and release, per-axis periods, the locks)
 bun run src/tools/cli.ts movers               # scripted-mover cases (the arc, the route, the ease, the rider, the speed bar)
 bun run src/tools/cli.ts vines                # vine cases (the pass-through guards, drape, grab, winch, the load rope)
@@ -84,6 +86,25 @@ A script about an area of an AUTHORED level should name a `checkpoint` instead (
 **What a mechanic test is for** below.
 Invariants checked every frame: NaN, runaway speed, rope-over-length (once
 anchored), player-embedded-in-geometry.
+Both drivers also watch the **scene chains** and the **sleepers** (since
+2026-10-10, from `session-235f`'s bridge, which replayed HEALTHY with nine slats
+spinning at whole turns a frame): `chain-over-length` (a scene chain ending a
+frame more than 50 mm over its length - ten times the sweep's tolerance, where a
+rig the cap binds on ends at 15 mm), `chain-body-spin` (a body on an awake
+chain turning faster than a quarter turn a frame, past which the solve cannot
+see it turning), `chain-asleep-stretched` (a body one chain holds asleep and another
+holds awake, with the sleeping chain past the sweep's tolerance: it is out of
+the sweep while the awake one goes on moving their shared body - the stretch is
+what tells it from the one frame a mid-frame wake leaves a chain asleep) and `asleep-moving` (a sleeping body carrying more
+than 1 m/s or 10 rad/s - frozen in mid-air with a jump banked for when it
+wakes). The **tied chains** (`engine/ties.ts`) get the first three per
+segment (`checkTieChains`): a segment over the bar is `chain-over-length`, or
+`chain-asleep-stretched` on a sleeping island, since an island sleeps whole
+and a stretched sleeping segment is the solver having let go.
+The first two are what the build settle's wreckage of that bridge trips on
+frame 1, and `chain-body-spin` found a second instance the day it landed:
+`session-527f`'s plank leaves `settleChainsAtBuild` asleep at 85 m/s and
+139 rad/s, so that corpus bundle is red until the settle is fixed.
 Ball runs add: `rope-anchor-kick` (the solve added speed on the frame the chain
 anchored — an anchor born over its length), `rope-solve-kick` (the solve added
 more than 4 m/s in **any** single frame), `rope-credit-unearned` (the chain phase
@@ -233,7 +254,12 @@ regression once shipped under a "bit-identical" claim (`session-298f`).
 `WorldDigest` (`sim/trace.ts`) carries every body that can move - position,
 rotation, linear velocity and **angular velocity**, which no avatar digest ever
 had - plus the chain's node count, path length, `maxRopeLength` and
-`blockedSlack`.
+`blockedSlack`, and, on a level that has them, every **scene chain's** path
+length, over-length and sleep state (`chains`, since 2026-10-10), so `cli
+diverge` can say `chain#17.over` rather than only that a slat moved, and every
+**tied chain's** summed length, worst segment over-length and sleep state
+(`ties`, named `tie#2.over`). A bundle from before either field is compared
+without it.
 Bodies are named by **build order** (`CollisionObject2D.buildIndex`, stamped by
 `World.add`) rather than by the process-global `id`, so two builds of the same
 level agree; `cli replay` reports world divergence separately from avatar

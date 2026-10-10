@@ -120,6 +120,14 @@ export class ChainLayer {
       this.tint.set(chain.color ?? DEFAULT_CHAIN_COLOR);
       this.lay(this.path);
     }
+    // A tied chain: its knots in order, each segment straight between two
+    // (see the 2D renderer).
+    for (const chain of level.tieChains ?? []) {
+      this.path.length = 0;
+      for (const p of chain.points) this.path.push(p.renderWorld(alpha));
+      this.tint.set(chain.color ?? DEFAULT_CHAIN_COLOR);
+      this.lay(this.path);
+    }
     this.sceneLinks = this.count;
 
     const ball = level.ball;

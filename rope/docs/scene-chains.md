@@ -3,8 +3,9 @@
 ## Chains
 
 **+Chain** (**K**) drags a chain from one body to another: press on the first body, release on the second.
-A chain is a real constraint, not decoration - it is a `Rope` with both ends pinned at load (`src/level/chains.ts`), stepped once a frame after `World.integrate` by both level drivers, so a rigid body on either end hangs, swings and is hauled by it while a static is infinite mass and simply holds.
-There is deliberately **no new physics**: `Rope` already models a rope between two `RopeContact`s on arbitrary bodies, and a scene chain is that class with neither end being a hook in flight.
+A chain is a real constraint, not decoration - it is a `Rope` with both ends pinned at load (`src/level/chains.ts`), so a rigid body on either end hangs, swings and is hauled by it while a static is infinite mass and simply holds.
+There is deliberately **no new physics** in the rope itself: `Rope` already models a rope between two `RopeContact`s on arbitrary bodies, and a scene chain is that class with neither end being a hook in flight.
+An authored chain as a row of the world's island solver - solved inside `World.integrate` beside the contacts of the bodies it holds - is implemented and **parked** ([Authored chains as rows](#authored-chains-as-rows) below): every level still runs its chains on the Gauss-Seidel sweep this section describes, until the ball's chain joins the island.
 
 What a chain is **not** is collision geometry: nothing stands on it and another rope does not wrap it.
 Both would need the chain to be a body per link, which is a different mechanism.
@@ -180,3 +181,71 @@ Deleting a wrap point's body drops it from the route and keeps the chain (`prune
 
 `cli contacts` `chain-wrap-point` is the crane: a two-piece pivot wheel (chain-through rim, winding hub), a beam with one authored corner, a stone box - the route builds as hub, both top corners, box; the box hangs plumb under the far corner; 4 rad of hub hauls it up by hub radius × angle; unwinding lowers it; the rim is never on the path; and a dead wrap point is skipped.
 `cli render3d` checks `via` and the rim's collision mask through the scale every load applies and through the editor round trip - the rim authored in the retired `wrappable: false` spelling, so the fold into `passes: ["chain"]` ([collision-layers](collision-layers.md)) is asserted on the one gate it runs in.
+
+## Tied chains
+
+A chain may be **knotted through** bodies: `ChainData.through` is an ordered list of anchor ids the chain is tied to on its way from `a` to `b`, beside `via`, which is the ids it is routed over.
+A rope bridge is one such chain - `a` on the left post, through slat 1's left and right anchors, slat 2's, ..., `b` on the right post - one row in the outliner, one selection, one colour, one sleep decision.
+Two consecutive knots on one body are the body itself and no rope; a knot and the next knot on a different body are one **segment**, a straight piece of rope with a length of its own that nothing slides across.
+Nothing assumes the slats are evenly spaced or the same size: the chain is the list, each segment's length is its own (`lengths`, one per segment), and `slack` is the author's shorthand for every segment without one (its authored gap times `1 + slack`).
+A bridge authored with no slack at all is a cable under transverse load, whose tension is unbounded as the sag goes to zero; it builds, hangs stretched by what its load needs on the softness below, and the loader says so once.
+A `through` chain has no wrap list - a segment between two knots is straight by construction, and a bridge that must bend around something is tied to it - and `length` and `via` mean nothing on it.
+Its tie point on a pivot or a spring body is refused (those are stepped by `World.integrate` in ways the island does not reproduce), and a knot naming an anchor that is not there is skipped with the segments either side joined, as a dead wrap point is.
+
+A tied chain is **not a `Rope`**.
+It is a `TieChain` (`src/engine/ties.ts`), and its segments are rows of a **substepped island solver** that runs inside `World.integrate`, beside every contact that touches one of its bodies.
+The reasoning and the measurements are in [plans/rope-bridge.md](../plans/rope-bridge.md); the short form is that a 15 cm tie that will never wrap anything was paying `Rope`'s wrap scan, its self-intersection resolver, a path-object allocation and a snapshot per segment per sweep - sixty times the arithmetic - and a Gauss-Seidel sweep over twenty of them in series spent the 64-sweep cap every frame carrying the ball's weight one link per pass (`session-235f`, 9 to 21 ms a frame, nine slats turning whole revolutions a frame).
+The solver is Box2D v3's soft step: per substep, integrate velocities, warm start, solve every row with a soft bias, integrate positions, solve every row again with no bias.
+A tie row is the point-to-point inequality `|p_b - p_a| <= L` with a torque arm on each body, accumulated and clamped at zero (a rope pulls, never pushes), speculative while slack and soft while over - 60 Hz at a damping ratio of 2, Box2D's joint defaults, which is what makes the taut bridge well-posed where the exact inequalities are not.
+The island's contact rows are the world's own manifolds with their anchors carried in the bodies' frames and the normal held for the frame, friction then non-penetration, restitution after the substeps.
+Eight substeps a frame by default (`ChainData.substeps` for more), which is sixteen solves per segment per frame against the sweep's sixty-four.
+
+The island **owns its bodies**: a tied body is skipped by `integrate`'s gravity loop and by the depenetration passes, its contacts with the scenery, with other tied bodies **and with the ball** are the island's rows (the ball keeps its own integration and its grip; the island solves it with its real mass so the two agree at the end of the frame), and its positional pair push gives way to a free body like a static does.
+Every connected set of tied bodies is one **island**: it sleeps only when every body in it has satisfied the rest rule (`World.settleSleep` marks a tied body `restReady` instead of sleeping it; `TieSolver.settleSleep` decides), it wakes whole when any of them is touched or a static knot moves, and the build settle (`settleTiesAtBuild`) runs the same solve with sleep on so a level arrives with its bridge hanging and asleep.
+That closes by construction the defect the bridge rig found in the chain phase: a slat asleep on one chain while the next hauled it away with nothing measuring the rope between.
+
+To a `Rope`, a tied body is **immovable**, like a static (`Rope.getDynamicBodyState`).
+Split by inverse mass instead, the ball's chain hauled a 2.6 kg slat by its 95% share every frame and the island hauled it back, and the two minted energy until the slat left at 38 m/s.
+The ball's chain therefore reaches a tied body as a **row of the island** while it runs straight from the coil on the ball to the knot (`BallLevel.syncTieGuest`, `TieSolver.guests`): the ball's real mass on one side and the slat on the other, warm-started across frames, its length the chain's constraint length as the winch leaves it, so the ball is decelerated over the bridge's give and the bridge carries the ball's weight every frame.
+The chain phase then only cleans up the position the gravity step drifted, and pays the ball no credit for it.
+Handing the bridge the reaction afterwards as an impulse was tried and is wrong by construction: the positional solve arrests a 52 kg ball in one frame against an anchor it believes immovable, and the impulse that implies, delivered to a 2.6 kg slat, is tens of metres a second.
+What does not yet reach the island is a chain wrapped on the way to its knot, and a `Rope`-based scene chain hung from a tied body (the lantern hangs; the bridge does not feel it) - both are the plan's later stages, the scene chains and the ball's chain as rows in full.
+
+What it does, measured (`cli bridges`, 2026-10-10, the 19-slat rig at 3% slack): hangs 3.5 mm over at rest, 0.00 rad/s, mirror-symmetric to the micrometre, asleep whole at f600; irregular gaps of 8 to 40 px and slats of 10 to 25 the same; the ball rolls the length of it in 170 frames; hooked under the middle slat it sags the deck 240 mm and hangs still at 2.3 rad/s; slats of 26 kg and 2.6 kg under the dropped ball settle at 4.0 and 7.7 mm; sixty slats cost 18.4 solves per segment per frame.
+Its measured **edge** is the mass ratio: the ball dropped on slats 200 times lighter stretches the segments under it to 85 mm for 22 frames before the load has crossed the bridge (`bridge-mass-ratio-200`, red on purpose), where stiffer rows halve the stretch and whip the slats instead and more substeps buy nothing; Box2D's own guidance for the soft step is to keep the ratio across a joint near 10:1.
+
+The detectors are the scene chains' (`chain-over-length`, `chain-body-spin`, `chain-asleep-stretched`, per segment), the world digest carries every tied chain's length, worst over-length and sleep state (`ties`), and `cli perf` reads the island's work through the same counters (`sweeps` is substeps times two, `solves` is rows).
+
+In the editor a tied chain is strung out with the chain tool: **Shift-release** over a body ties the chain there and the draft lives on past the release, each **Shift-click** on a body ties another knot, a plain click on a body ends the chain and **Esc** drops it, so a bridge is one gesture - post, each slat's two ends in turn, post - and it starts with 3% slack (`finishOrTieChainDraw`).
+Its knots are drawn as small **filled** rings on its route where a wrap point is a hollow one, the chain panel lists them in route order with a `×` each and carries `slack`, `substeps` and a length per segment with its authored gap beside it, and the chain is saved with `through`, `lengths`, `slack` and `substeps` and without `length` or `via`.
+Deleting a knot's body drops the knot and keeps the chain (`pruneChains`), and a copy that did not take the body along drops it the same way.
+`levels/rope-bridge.json` (`ROPE_BRIDGE`, unlisted) is the example.
+
+## Authored chains as rows
+
+The plan's second stage ([plans/rope-bridge.md](../plans/rope-bridge.md)) is implemented and parked, 2026-10-10: `RopeRow` (`src/level/chains.ts`) solves an authored chain's `Rope` as a row of the island solver, and `buildSceneChains` registers one per chain when it is given a world.
+No level gives it one.
+The drivers build their chains on the sweep, and `cli bridges` `chain-row` is what keeps the row path built and measured: a lantern on a chain, settled asleep at build 0.1 mm over, pushed, hanging 0.1 mm over at 2.5 rad/s and asleep again by frame 390.
+
+The row is the rope's own length constraint moved from position level to velocity level.
+`C = pathLength - constraintLength <= 0` over the whole wrap path, and its Jacobian is one term per path body - the direction a correction moves that body, the mechanical advantage the rope has over it (1 at an end, the bisector's length at a wrap) and the torque arm the pull turns it by - which is exactly what `correctShapePositionAndRotation` splits a positional correction by, read off the path objects (`Rope.rowTerms`).
+The path's rate of shortening is the sum of `ma * (dir . v + arm * w)`, the effective inverse mass the sum of `ma^2 * (1/m + arm^2 / I)`, and the accumulated impulse is clamped at zero like a tie's, speculative while slack and soft while over (`TieTuning`).
+The wrap path is regenerated once a substep against the level's wrappable bodies (`Rope.rowPrepare`: coil, uncross, scan, resolvers, detachment).
+A pivot or a spring body on the path keeps `World.integrate`'s own step and takes the row's impulse as velocity (`islandOwns`); the island integrates only the free rigid bodies on the path.
+The build settle (`settleTiesAtBuild`) takes rows and tied chains alike.
+
+Switched on for every level, it did what it says: the lanterns hung and slept, `cli contacts`, `cli spring` and `cli sleep` held where they held before, and the three rules the ball's chain needs at velocity level were found on `hung-anchor` and kept (below).
+What parked it is two corpus bundles of the ball **wound tight onto a chain-hung body** and whirled.
+On `session-324f` the hung anchor was spun to 77 rad/s under the ball's rim through their contact rows, its own chain wound onto it in 51 mm topology jumps, the row stretched 54 to 69 mm, and the ball's positional phase - its knot immovable, its guest row gone once the chain wrapped - kicked 32 m/s off the result; on `session-193f-lamp` the lantern was dragged into the hook-only bracket it hangs from, which turned out to be a detector flaw (the embedded invariants now skip statics the world collides nothing with) rather than a solver one.
+That regime is the one the ball's chain phase governs with its spin rollback, its unwind and its lease, split between the sweep and the ball's phase by the coupled sweep, and a scene chain cannot leave the sweep before the ball's chain joins the island: the plan's third stage comes before its second.
+
+What the attempt left in the tree, because the tied chains need it too:
+
+- A rope row reads a kinematically spun body's knot at the centre's velocity (`knotVelocity`).
+  Read at the rim, the guest row from a ball wound tight onto a hanging weight saw the rim coming and going at the aim's 33 rad/s and spent impulses cancelling it, and the only things those impulses could move were the ball and the weight: 17 m/s out of a hand's whirl (`hung-anchor`).
+- The guest row's length is never less than the span measures at the top of the frame (`BallLevel.syncTieGuest`): the row holds the chain's length, and the winch's shortening stays the positional phase's, under its budget and its unwind.
+  A row doing it yanked the pair at every coil node the aim wound on (11 m/s).
+- A contact row reads the rim's slip less the share the unwind refused (`spinDriveShare`), the world's own rule: what rolls the ball along a slat, and nothing when it is wound tight against the body it hangs from.
+  Read in full it was a motor (10 m/s); read at the centre the ball could not roll a deck at all.
+
+With the three, `hung-anchor` peaks at 2.4 m/s against its bar of 5 on a tied anchor as on a chain-hung one.

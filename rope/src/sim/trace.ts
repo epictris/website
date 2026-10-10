@@ -30,6 +30,8 @@ import { WrapDirection } from "../lib/types";
 import { CONTACT_SLOP, type ContactConstraint, type World } from "../engine/world";
 import type { Level } from "../level/level";
 import type { BallLevel } from "../level/ballLevel";
+import type { SceneChain } from "../level/chains";
+import type { TieChain } from "../engine/ties";
 import type { RawLevelData } from "../level/levelFormat";
 import type { SelfReplayVerdict } from "./selfReplay";
 import type { RunMeta } from "../playtest/protocol";
@@ -238,6 +240,32 @@ export interface WorldDigest {
   // report a divergence the recording never made. Absent on BOTH sides compares
   // equal; absent on one is a different scene.
   finished?: boolean;
+  // The SCENE CHAINS, in build order: what each one measured at the end of the
+  // frame. Absent on a level with none, and - unlike `finished` - absent on one
+  // side is "not recorded" rather than a different scene, since every bundle
+  // from before the field has chains it never digested. Present on both sides
+  // it is compared field by field (`chain#3.over`), which is what lets `cli
+  // diverge` name a chain: on `session-235f` the first thing to differ between
+  // two trees was a bridge segment's over-length, and the body digests could
+  // only say that a slat had moved.
+  chains?: SceneChainDigest[];
+  // The TIED CHAINS (`engine/ties.ts`), in build order, under the same rule as
+  // `chains`: absent on a level with none, compared where both sides carry it,
+  // and named `tie#2.over` by `cli diverge`.
+  ties?: SceneChainDigest[];
+}
+
+// One scene chain at the end of a frame (see `WorldDigest.chains`), or one
+// tied chain (`WorldDigest.ties`).
+export interface SceneChainDigest {
+  // Path length in metres, and metres over the constraint (zero while slack) -
+  // the sweep's own residual, `Rope.overLength`; for a tied chain the segments
+  // summed, and the worst segment's over-length.
+  len: number;
+  over: number;
+  // 1 while the chain is out of the frame's set (`SceneChain.asleep`,
+  // `TieChain.asleep`).
+  asleep: number;
 }
 
 // What the level driver decided about its chain this frame. Passed in rather
@@ -279,7 +307,9 @@ function worldDigestOf(
   world: World,
   rope: Rope | null,
   phase: ChainPhaseState | null,
-  finished?: boolean,
+  finished: boolean | undefined,
+  chains: readonly SceneChain[],
+  ties: readonly TieChain[],
 ): WorldDigest {
   const bodies: BodyDigest[] = [];
   const contacts = world.frameContacts;
@@ -354,6 +384,24 @@ function worldDigestOf(
         }
       : null,
     ...(finished !== undefined ? { finished } : {}),
+    ...(chains.length > 0
+      ? {
+          chains: chains.map((c) => ({
+            len: c.rope.getCurrentLength(),
+            over: c.rope.overLength,
+            asleep: c.asleep ? 1 : 0,
+          })),
+        }
+      : {}),
+    ...(ties.length > 0
+      ? {
+          ties: ties.map((c) => ({
+            len: c.currentLength,
+            over: c.over,
+            asleep: c.asleep ? 1 : 0,
+          })),
+        }
+      : {}),
   };
 }
 
@@ -367,7 +415,15 @@ function anchorBodyOf(rope: Rope): number | null {
 }
 
 export function worldDigest(level: Level): WorldDigest {
-  return worldDigestOf(level.frame, level.world, level.player.rope, null);
+  return worldDigestOf(
+    level.frame,
+    level.world,
+    level.player.rope,
+    null,
+    undefined,
+    level.sceneChains,
+    level.tieChains,
+  );
 }
 
 export function worldDigestBall(level: BallLevel): WorldDigest {
@@ -386,6 +442,8 @@ export function worldDigestBall(level: BallLevel): WorldDigest {
     // one digests exactly what it always did and every bundle of one compares
     // as it always did (see `WorldDigest.finished`).
     level.hasFinish ? level.completedFrame !== null : undefined,
+    level.sceneChains,
+    level.tieChains,
   );
 }
 
@@ -431,6 +489,27 @@ export function worldDigestDrift(a: WorldDigest, b: WorldDigest): WorldDrift {
     consider(Infinity, "finish (present in one run only)");
   } else if (a.finished !== b.finished) {
     consider(Infinity, "finish (crossed in one run only)");
+  }
+  // Scene chains drift by their LENGTH, the one quantity a chain has that is a
+  // distance; compared only where both runs digested them (see
+  // `WorldDigest.chains`).
+  if (a.chains && b.chains) {
+    if (a.chains.length !== b.chains.length) {
+      consider(Infinity, "chains (different count)");
+    } else {
+      for (let i = 0; i < a.chains.length; i++) {
+        consider(Math.abs(a.chains[i]!.len - b.chains[i]!.len), `chain#${i}`);
+      }
+    }
+  }
+  if (a.ties && b.ties) {
+    if (a.ties.length !== b.ties.length) {
+      consider(Infinity, "ties (different count)");
+    } else {
+      for (let i = 0; i < a.ties.length; i++) {
+        consider(Math.abs(a.ties[i]!.len - b.ties[i]!.len), `tie#${i}`);
+      }
+    }
   }
   return worst;
 }
@@ -547,6 +626,34 @@ export function worldDigestDeltas(
     compareIdentity(out, "finished", Number(recorded.finished), Number(replayed.finished));
   } else if ((recorded.finished === undefined) !== (replayed.finished === undefined)) {
     out.push({ name: "finished", recorded: null, replayed: null, delta: Infinity });
+  }
+  // Scene chains, where both runs digested them. The count is a property of
+  // the level and differs only between different levels.
+  if (recorded.chains && replayed.chains) {
+    if (recorded.chains.length !== replayed.chains.length) {
+      out.push({ name: "chains", recorded: recorded.chains.length, replayed: replayed.chains.length, delta: Infinity });
+    } else {
+      for (let i = 0; i < recorded.chains.length; i++) {
+        const o = recorded.chains[i]!;
+        const r = replayed.chains[i]!;
+        compareNumber(out, `chain#${i}.len`, o.len, r.len, tolerance);
+        compareNumber(out, `chain#${i}.over`, o.over, r.over, tolerance);
+        compareIdentity(out, `chain#${i}.asleep`, o.asleep, r.asleep);
+      }
+    }
+  }
+  if (recorded.ties && replayed.ties) {
+    if (recorded.ties.length !== replayed.ties.length) {
+      out.push({ name: "ties", recorded: recorded.ties.length, replayed: replayed.ties.length, delta: Infinity });
+    } else {
+      for (let i = 0; i < recorded.ties.length; i++) {
+        const o = recorded.ties[i]!;
+        const r = replayed.ties[i]!;
+        compareNumber(out, `tie#${i}.len`, o.len, r.len, tolerance);
+        compareNumber(out, `tie#${i}.over`, o.over, r.over, tolerance);
+        compareIdentity(out, `tie#${i}.asleep`, o.asleep, r.asleep);
+      }
+    }
   }
   return out;
 }
@@ -1882,8 +1989,11 @@ export function checkBallInvariants(level: BallLevel): Violation[] {
     // legitimately touches corners it wraps (endpoints on the surface), so
     // sample interior points and flag only genuine penetration past tolerance.
     const nodes = b.chain.path().map((n) => n.contact.globalPosition);
+    // The solid statics: a hook-only, passable piece is one the world
+    // collides nothing with, so a chain or a body inside it is not clipping
+    // anything (`session-193f-lamp`'s lantern hangs inside its own bracket).
     const statics = level.world.bodies.filter(
-      (body): body is StaticBody2D => body instanceof StaticBody2D && body.hasShape(),
+      (body): body is StaticBody2D => body instanceof StaticBody2D && body.hasShape() && body.isSolid,
     );
     let clip: { depth: number; name: string } | null = null;
     for (let s = 0; s < nodes.length - 1 && !clip; s++) {
@@ -1945,7 +2055,9 @@ export function checkBallInvariants(level: BallLevel): Violation[] {
     }
   }
   for (const body of level.world.bodies) {
-    if (!(body instanceof StaticBody2D) || !body.hasShape()) continue;
+    // A static the world collides nothing with - a hook-only, passable piece
+    // - is not one a body can be embedded in.
+    if (!(body instanceof StaticBody2D) || !body.hasShape() || !body.isSolid) continue;
     const ov = bodyOverlapCircle(body, b.globalPosition, b.radius);
     if (ov && ov.depth > EMBED_TOLERANCE) {
       out.push({
@@ -1986,6 +2098,167 @@ export function checkBallInvariants(level: BallLevel): Violation[] {
       });
     }
   }
+  out.push(...checkSceneChains(frame, level.sceneChains));
+  out.push(...checkTieChains(frame, level.tieChains));
+  out.push(...checkSleepers(frame, level.world));
+  return out;
+}
+
+// ---- scene chains -----------------------------------------------------------
+// What `session-235f` replayed HEALTHY with: nine slats of a rope bridge
+// spinning at exactly one, two, four and six turns a frame, a chain 2.9 m over
+// its length from frame 1, and the rightmost slat asleep at 125 m/s from the
+// build settle on. Every invariant there was looked at the ball; these look at
+// the scenery a chain holds.
+
+// Metres a scene chain may end a frame over its length. Ten times the sweep's
+// tolerance: a rig the cap binds on ends at 15 mm (`chain-order`), and the one
+// that is actually broken ends at metres.
+const SCENE_CHAIN_OVER_LIMIT = 0.05;
+// Rad/s a body on a chain may turn at: a quarter turn a frame. The rope's
+// correction is written against the body's pose at the start of the pass, so
+// a body turning further than that between two looks is one the solve is
+// wrong about by construction - and at a whole turn a frame it is one the
+// solve cannot see turning at all, which is how the bridge's slats stayed at
+// 373 rad/s for two hundred frames. Nothing a chain legitimately holds spins
+// at 15 rev/s; the wound-up ball is not a chain body and is not read here.
+const CHAIN_SPIN_LIMIT = Math.PI / 2 / (1 / 60);
+// A SLEEPING body is one the integrator skips; one skipped while carrying
+// speed is frozen in mid-air with a jump banked for whenever it wakes. A body
+// hanging on a chain idles at gravity's per-frame bite (0.16 m/s), so the bar
+// sits well clear of that.
+const ASLEEP_SPEED_LIMIT = 1;
+const ASLEEP_SPIN_LIMIT = 10;
+// Metres a SLEEPING chain may be over its length before it counts as stretched
+// by something awake. The invariant's own over-length bar rather than the
+// sweep's tolerance: the one frame a mid-frame wake leaves a chain asleep can
+// stretch it by what its body moved that frame - 7 mm on `session-291f`'s
+// link block under the ball's haul, twice in 290 frames, and gone the next
+// frame - while a chain that has really been let go of is over by decimetres
+// and stays so.
+const SCENE_CHAIN_SLEEP_STRETCH = SCENE_CHAIN_OVER_LIMIT;
+
+export function checkSceneChains(frame: number, chains: readonly SceneChain[]): Violation[] {
+  const out: Violation[] = [];
+  if (chains.length === 0) return out;
+  const spinning = new Set<RigidBody2D>();
+  // Which chains hold each rigid body, for the half-asleep rule below.
+  const holders = new Map<RigidBody2D, SceneChain[]>();
+  for (let i = 0; i < chains.length; i++) {
+    const chain = chains[i]!;
+    const over = chain.rope.overLength;
+    if (over > SCENE_CHAIN_OVER_LIMIT) {
+      out.push({
+        frame,
+        kind: "chain-over-length",
+        detail:
+          `chain#${i} (${chainBodies(chain)}) ${(over * 1000).toFixed(0)}mm over its length` +
+          (chain.asleep ? " while asleep" : ""),
+      });
+    }
+    chain.eachBody((body) => {
+      const list = holders.get(body);
+      if (list) list.push(chain);
+      else holders.set(body, [chain]);
+      if (chain.asleep || spinning.has(body)) return;
+      if (Math.abs(body.angularVelocity) > CHAIN_SPIN_LIMIT) {
+        spinning.add(body);
+        out.push({
+          frame,
+          kind: "chain-body-spin",
+          detail:
+            `body#${body.buildIndex} on chain#${i} turning at ${body.angularVelocity.toFixed(0)} rad/s ` +
+            `(${(Math.abs(body.angularVelocity) / 60 / (2 * Math.PI)).toFixed(2)} turns a frame)`,
+        });
+      }
+    });
+  }
+  // A body one chain holds asleep and another holds awake is a set that has
+  // let go of one end: the sleeping chain is out of the sweep, so nothing
+  // measures or corrects its length while the awake one goes on moving the
+  // body it shares. The sleeping chain being STRETCHED is what makes it a
+  // defect rather than a frame's lag: a body a contact wakes mid-frame leaves
+  // its chains asleep until the next frame's `wakeChains`, which is one frame
+  // of the two states disagreeing and nothing moved (`session-291f` f22, the
+  // arena's link block, once in 170 frames), where a chain that is asleep and
+  // over its tolerance has had its body taken from it.
+  for (const [body, list] of holders) {
+    if (list.length < 2) continue;
+    const asleep = list.filter((c) => c.asleep && c.rope.overLength > SCENE_CHAIN_SLEEP_STRETCH);
+    if (asleep.length === 0 || asleep.length === list.length) continue;
+    const worst = Math.max(...asleep.map((c) => c.rope.overLength));
+    out.push({
+      frame,
+      kind: "chain-asleep-stretched",
+      detail:
+        `body#${body.buildIndex} held by ${list.length} chains, ${asleep.length} asleep and stretched ` +
+        `(${(worst * 1000).toFixed(1)}mm over; body ${body.asleep ? "asleep" : "awake"})`,
+    });
+  }
+  return out;
+}
+
+function chainBodies(chain: SceneChain): string {
+  const ids: number[] = [];
+  for (const node of chain.rope.path()) ids.push(node.contact.obj.buildIndex);
+  return ids.join("-");
+}
+
+// The same three questions of the tied chains (`engine/ties.ts`), per
+// segment: a segment over `SCENE_CHAIN_OVER_LIMIT` at the end of a frame, a
+// body on an awake chain turning faster than a solve can see, and a chain
+// asleep with a segment stretched past the bar - which for an island, where
+// nothing can sleep one body at a time, would be the solver having let go.
+export function checkTieChains(frame: number, ties: readonly TieChain[]): Violation[] {
+  const out: Violation[] = [];
+  if (ties.length === 0) return out;
+  const spinning = new Set<RigidBody2D>();
+  for (let i = 0; i < ties.length; i++) {
+    const chain = ties[i]!;
+    for (let j = 0; j < chain.segments.length; j++) {
+      const s = chain.segments[j]!;
+      if (s.over <= SCENE_CHAIN_OVER_LIMIT) continue;
+      out.push({
+        frame,
+        kind: chain.asleep ? "chain-asleep-stretched" : "chain-over-length",
+        detail:
+          `tie#${i} segment ${j} (body#${s.a.body.buildIndex}-body#${s.b.body.buildIndex}) ` +
+          `${(s.over * 1000).toFixed(0)}mm over its length` +
+          (chain.asleep ? " while asleep" : ""),
+      });
+    }
+    if (chain.asleep) continue;
+    for (const body of chain.bodies) {
+      if (spinning.has(body)) continue;
+      if (Math.abs(body.angularVelocity) > CHAIN_SPIN_LIMIT) {
+        spinning.add(body);
+        out.push({
+          frame,
+          kind: "chain-body-spin",
+          detail:
+            `body#${body.buildIndex} on tie#${i} turning at ${body.angularVelocity.toFixed(0)} rad/s ` +
+            `(${(Math.abs(body.angularVelocity) / 60 / (2 * Math.PI)).toFixed(2)} turns a frame)`,
+        });
+      }
+    }
+  }
+  return out;
+}
+
+export function checkSleepers(frame: number, world: World): Violation[] {
+  const out: Violation[] = [];
+  for (const body of world.bodies) {
+    if (!(body instanceof RigidBody2D) || body.removed || !body.asleep) continue;
+    const speed = body.linearVelocity.length();
+    const spin = Math.abs(body.angularVelocity);
+    if (speed > ASLEEP_SPEED_LIMIT || spin > ASLEEP_SPIN_LIMIT) {
+      out.push({
+        frame,
+        kind: "asleep-moving",
+        detail: `body#${body.buildIndex} asleep at ${speed.toFixed(1)} m/s, ${spin.toFixed(1)} rad/s`,
+      });
+    }
+  }
   return out;
 }
 
@@ -2021,7 +2294,7 @@ export function checkInvariants(level: Level): Violation[] {
   const shape = p.primaryShape().shape;
   if (shape.kind === "circle") {
     for (const body of level.world.bodies) {
-      if (!(body instanceof StaticBody2D) || !body.hasShape()) continue;
+      if (!(body instanceof StaticBody2D) || !body.hasShape() || !body.isSolid) continue;
       const ov = bodyOverlapCircle(body, p.globalPosition, shape.radius);
       if (ov && ov.depth > EMBED_TOLERANCE) {
         out.push({
@@ -2033,5 +2306,8 @@ export function checkInvariants(level: Level): Violation[] {
       }
     }
   }
+  out.push(...checkSceneChains(frame, level.sceneChains));
+  out.push(...checkTieChains(frame, level.tieChains));
+  out.push(...checkSleepers(frame, level.world));
   return out;
 }
