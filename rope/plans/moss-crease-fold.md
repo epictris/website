@@ -3,6 +3,20 @@
 Written 2026-10-10, at the end of the session that made the printed moss never clip through its rock ([docs/blender-moss.md](../docs/blender-moss.md), step 8, "On the rock").
 It is written so the fix can be picked up after the session is compacted, without re-deriving anything below.
 
+## Outcome (2026-10-10, uncommitted, awaiting Tris's review)
+
+Step 1 found the root in the rock, not the sheet: Terrace.003's generated mesh has twin vertices 0.05-0.4 mm apart along nearly every edge, joined by slivers.
+At the crease under the cursor `_spatial_normals` gave the two of a pair normals 138 degrees apart, and the 1 mm lay opened each sliver into a 2.7 cm strip facing into the rock (3.5 cm² at the spot; the drape tripled it).
+What shipped in the fix (`tools/blender/moss/build.py`):
+
+- `_weld`: the moss grows on the rock welded at a quarter of `floor`; the clearance is still measured against the rock as it is.
+- `_untangle`: the lay and the pile (offsets along a direction) are held back per vertex where a triangle would pass through zero area along the move. Not the drape: its vertices move along curves, and a straight-path check held it back where it folded nothing, pulling bridges into hollows as cliffs.
+- `_flip_folds`: after the decimate, an edge whose triangles meet past 90 degrees is flipped when that agrees better with the full-resolution mound under them.
+- `PARITY_STEP`: `_Shell.inside` stepped 1 um past each face, an ulp of the float32 BVH 10 m out, so rays re-hit one face up to a thousand times; an even count read a point 20 mm inside the bent Terrace.003 as out, and the clear pass ran away (411 triangles left in the rock). A bug in the shipping code, latent there by luck.
+
+Step 3 was tried twice and reverted (rope/CLAUDE.md, two failed attempts): a guard refusing any lift that turns a face past 90 degrees changed nothing measurable (36 faces 87 cm² against 24 / 88), and lifting along the mound's normal with it left 337 triangles in the rock after 64 rounds.
+The numbers are in [docs/blender-moss.md](../docs/blender-moss.md), "The fold at a crease".
+
 ## The defect
 
 Tris, in the review file, on Terrace.003's moss by a crease of the wall: a dark wedge with a hard straight edge, the moss's faces there shading near black.

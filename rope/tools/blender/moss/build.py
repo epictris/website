@@ -49,7 +49,11 @@ because the moss object is parented to the host with an identity transform):
    The sheet stands off the rock, the pile off the sheet, along normals
    smoothed in space (`_spatial_normals`), not over the mesh's edges, which on
    a coarse `resolution` was the raw normal and turned the thin triangles
-   over. Grass sprigs (`grass`) stand in tufts on the up-facing top.
+   over. It is grown on the rock welded at a quarter of `floor` (`_weld`: a
+   generated rock's twin vertices along its creases turned the sheet inside
+   out), each move off it (the lay, the pile) is held back where it would
+   fold the sheet (`_untangle`), and the decimate's folds are flipped out
+   (`_flip_folds`). Grass sprigs (`grass`) stand in tufts on the up-facing top.
    The edge is drawn one of two ways (`edge_kind`):
    - "PRINT" (since 2026-10-10, the default): the mesh is cut `edge_apron`
      OUTSIDE the outline, at the rock's own resolution, and the outline is
@@ -503,7 +507,14 @@ def grow(co, tri, host_matrix, stamps, p):
         # the mesh ended at the refined rock's edge, inside a stray's outline
         # (Terrace.003: 25 open-edge vertices up to 6 cm inside, 2026-10-10)
         reach += max(p.edge_apron, 2.0 * res + 0.01) + p.stray_reach
-    v, t = refine(co, tri, centres, radii + reach, res)
+    # The moss grows on the rock welded at a quarter of its sheet: a generated
+    # rock comes with twins, nearly every vertex of Terrace.003 one within
+    # 0.4 mm of another (4,377 of them, 2,175 welded), joined by slivers whose
+    # normals are noise. The two of a pair along a crease stood off it along
+    # normals 138 degrees apart, and the sheet turned each sliver inside out:
+    # the dark wedge of 2026-10-10 (Tris). What the moss must clear (`bvh`,
+    # `rock`) is the host's own.
+    v, t = refine(*_weld(co, tri, ROCK_WELD * p.floor), centres, radii + reach, res)
     if len(t) == 0:
         return None
     # Canonical order: vertices and triangles by position, so the draws below
@@ -668,13 +679,19 @@ def _mound(p, v, t, hull, tval, layers, strays, res, g, painted, bvh):
         x = _boundary_distance(cv, ct, boundary)
         sheet = _bead(x, p)
     sn = lay
+    # Each move off the rock (the lay, the drape, the pile) is held back where
+    # it would fold the sheet (`_untangle`). Unheld, Terrace.003's full mound
+    # turned 442 faces against its rock (110 on the welded rock: the drape
+    # bridging a crease, the pile in one).
+    laid, held_up = _untangle(cv, cv + lay * sheet[:, None], ct)
+    stood = sheet * held_up  # the sheet's height where it stands
     if p.drape <= 0.0:
         pile = _pile(p, tone, cover, lay[:, 2], rimf)
-        mv = cv + lay * (sheet + pile)[:, None]
-        _set_heights(layers, kdtree(cv), sheet + pile)
+        mv, held_up = _untangle(laid, laid + lay * pile[:, None], ct)
+        pile = pile * held_up
+        _set_heights(layers, kdtree(cv), stood + pile)
     else:
         # The sheet draped over the rock's steps and hollows, and the pile on it.
-        laid = cv + lay * sheet[:, None]
         # A printed edge's apron is held down with the open edge: held at the
         # open edge alone, 11 cm or more out, the sheet still bridged a hollow
         # where the print cut it, and the moss hung 10 cm over the rock there
@@ -685,8 +702,10 @@ def _mound(p, v, t, hull, tval, layers, strays, res, g, painted, bvh):
         # the pile faces the way the sheet does: a step bridged by a slope
         # piles like a slope, not like the wall under it
         pile = _pile(p, tone, cover, sn[:, 2], rimf)
+        mv, held_up = _untangle(draped, draped + sn * pile[:, None], ct)
+        pile = pile * held_up
         kdm = kdtree(cv)
-        _set_heights(layers, kdm, sheet + pile)
+        _set_heights(layers, kdm, stood + pile)
         # a dab rides the sheet off the rock, so the print finds it over the
         # moss it colours
         moved = draped - laid
@@ -694,7 +713,6 @@ def _mound(p, v, t, hull, tval, layers, strays, res, g, painted, bvh):
             for d in layer:
                 i = kdm.find(d.c)[1]
                 d.lay(Vector(cv[i] + moved[i]), Vector(sn[i]))
-        mv = draped + sn * pile[:, None]
     if printed:
         return mv, ct, None, pin, sn, pile
     lip = (x < p.edge_round) | boundary
@@ -783,6 +801,46 @@ def _spatial_normals(v, t, radius):
     bad = (out * own).sum(1) < 0.2
     out[bad] = own[bad]
     return out
+
+
+UNTANGLE_ROUNDS = 30  # halvings of a folding move before what still folds is put back on its base
+UNTANGLE_STEPS = 8  # a move is checked at this many points along it
+
+
+def _untangle(base, target, t):
+    """`base` moved toward `target`, each vertex as far as it can go without a
+    triangle passing through zero area on the way: checked at UNTANGLE_STEPS
+    points along the move, a triangle turned over from one to the next is
+    folding. An offset surface folds where neighbours move by different
+    amounts along directions that turn (the pile in a crease, past the
+    crease's radius; two twins of a crease along normals 138 degrees apart):
+    the corners of a folding triangle give up half their move, round after
+    round, so the fold opens back out where it would form and the move stands
+    everywhere else, as an inversion-free line search does. A triangle that
+    only turns (a sheet bridging a hollow, over a wall that faced the other
+    way) is no fold. Measured against the rock, the bridge over Terrace.003's
+    hollows counted as folds, and was pulled back into them as cliffs.
+    Returns the positions and each vertex's share of its move kept."""
+    held = np.ones(len(base))
+    d = target - base
+
+    def normals(k):
+        x = base + d * (held * k / UNTANGLE_STEPS)[:, None]
+        return x, np.cross(x[t[:, 1]] - x[t[:, 0]], x[t[:, 2]] - x[t[:, 0]])
+
+    for r in range(UNTANGLE_ROUNDS + len(base)):
+        bad = np.zeros(len(t), bool)
+        x, before = normals(0)
+        for k in range(1, UNTANGLE_STEPS + 1):
+            x, n = normals(k)
+            bad |= (n * before).sum(1) < 0.0
+            before = n
+        if not bad.any():
+            break
+        held[np.unique(t[bad])] *= 0.5 if r < UNTANGLE_ROUNDS else 0.0
+    if DEBUG:
+        print("[moss.debug] untangle: %d of %d vertices held back, %d of them on their base" % (int((held < 1.0).sum()), len(held), int((held == 0.0).sum())))
+    return x, held
 
 
 def _pile(p, tone, cover, nz, rimf):
@@ -969,6 +1027,9 @@ def finish(grown, p, decimate):
             ring = _open_edges(mv, mt)
             mv, mt, attrs = decimate(mv, mt, ratio, attrs, _boundary(mt, len(mv)))
             _snap_to_ring(mv, _boundary(mt, len(mv)), ring)
+            mt, flipped = _flip_folds(mv, mt, (grown.vertices, grown.triangles))
+            if DEBUG:
+                print("[moss.debug] decimate: %d folded edges flipped" % flipped)
         # On the rock, never in it, triangle interiors included (`_clear_of_rock`:
         # the sheet sags through a convex crease, the collapse chords long
         # triangles under facet edges, and the rock poked through; Tris,
@@ -1293,6 +1354,114 @@ def _relax(q, rest, nrm, pin, e, passes, eps, radius=None, tri=None, obstacle=No
     return q
 
 
+FOLD_ROUNDS = 8  # rounds of flipping folded edges, at most
+FOLD_REACH = 0.01  # m: the mound under a triangle is the full-resolution one's faces this near its middle
+
+
+def _flip_folds(v, t, mound):
+    """The decimated mound with its folds flipped out: an edge whose two
+    triangles meet at more than 90 degrees is flipped (the quad's other
+    diagonal) when that brings the two closer to agreeing and both face the
+    way the full-resolution mound (`mound`, (vertices, triangles)) does
+    under them. The collapse refuses a collapse that turns a triangle over,
+    but not a run of them that turns one a little each: Terrace.003 came out
+    with 10 triangles turned against their neighbours, up to 34 cm2, 9 of
+    them a flip from right (2026-10-10). No vertex moves, so what the
+    vertices carry stays theirs. Returns (triangles, edges flipped)."""
+    fv, ft = mound
+    bvh = BVHTree.FromPolygons([tuple(x) for x in fv], [tuple(x) for x in ft.tolist()])
+    fn = normalize(np.cross(fv[ft[:, 1]] - fv[ft[:, 0]], fv[ft[:, 2]] - fv[ft[:, 0]]))
+
+    def under(x):
+        idx = [h[2] for h in bvh.find_nearest_range(Vector(x), FOLD_REACH)] or [bvh.find_nearest(Vector(x))[2]]
+        return normalize(fn[idx].sum(0))
+
+    def facing(tri):
+        a, b, c = v[tri[:, 0]], v[tri[:, 1]], v[tri[:, 2]]
+        return np.cross(b - a, c - a)
+
+    t = t.copy()
+    flipped = 0
+    for _ in range(FOLD_ROUNDS):
+        n = normalize(facing(t))
+        e = np.sort(np.concatenate([t[:, [0, 1]], t[:, [1, 2]], t[:, [2, 0]]]), axis=1)
+        f = np.tile(np.arange(len(t)), 3)
+        order = np.lexsort((e[:, 1], e[:, 0]))
+        e, f = e[order], f[order]
+        pair = np.nonzero((e[1:] == e[:-1]).all(1))[0]
+        once = (np.r_[True, (e[1:] != e[:-1]).any(1)][pair]) & np.r_[(e[2:] != e[1:-1]).any(1), True][pair]  # interior: on exactly two
+        pair = pair[once]
+        fa, fb = f[pair], f[pair + 1]
+        folded = (n[fa] * n[fb]).sum(1) < 0.0
+        if not folded.any():
+            break
+        edges = {tuple(x) for x in e.tolist()}
+        busy = np.zeros(len(t), bool)
+        changed = 0
+        for k in np.nonzero(folded)[0][np.argsort((n[fa] * n[fb]).sum(1)[folded])]:
+            g, h = int(fa[k]), int(fb[k])
+            if busy[g] or busy[h]:
+                continue
+            a, b = (int(x) for x in e[pair[k]])
+            tg = t[g].tolist()
+            if tg[(tg.index(a) + 1) % 3] != b:
+                a, b = b, a
+            c = next(x for x in tg if x not in (a, b))
+            d = next(int(x) for x in t[h] if x not in (a, b))
+            if (min(c, d), max(c, d)) in edges:
+                continue
+            new = np.array([[c, a, d], [c, d, b]])
+            m = facing(new)
+            area = np.linalg.norm(m, axis=1)
+            if area.min() < 1e-3 * np.linalg.norm(facing(t[[g, h]]), axis=1).max():
+                continue
+            m = m / area[:, None]
+            if m[0] @ m[1] <= n[g] @ n[h] or any(m[j] @ under(v[new[j]].mean(0)) <= 0.0 for j in range(2)):
+                continue
+            t[g], t[h] = new
+            busy[[g, h]] = True
+            edges.add((min(c, d), max(c, d)))
+            changed += 1
+        flipped += changed
+        if not changed:
+            break
+    return t, flipped
+
+
+ROCK_WELD = 0.25  # of `floor`: rock vertices this close are one under the moss
+
+
+def _weld(co, tri, tol):
+    """The mesh with its vertices within `tol` of one another merged, each onto
+    the first of its cluster in order (so none moves further than `tol`, where
+    merging pairs would chain), the triangles that collapse dropped, and of
+    two that come to share their corners, one kept, or neither when they face
+    opposite ways (a pinched strip)."""
+    if tol <= 0.0 or len(co) == 0:
+        return co, tri
+    kd = kdtree(co)
+    rep = np.full(len(co), -1, np.int64)
+    for i in range(len(co)):
+        if rep[i] < 0:
+            idx = np.array([j for (_c, j, _d) in kd.find_range(co[i], tol)], np.int64)
+            rep[idx[rep[idx] < 0]] = i
+    used, inv = np.unique(rep, return_inverse=True)
+    t = inv.reshape(-1)[tri]
+    t = t[(t[:, 0] != t[:, 1]) & (t[:, 1] != t[:, 2]) & (t[:, 2] != t[:, 0])]
+    # a triangle's corners turned to start at the least, and which way they then run
+    lo = np.argmin(t, axis=1)
+    rot = np.stack([t[np.arange(len(t)), (lo + k) % 3] for k in range(3)], 1)
+    ccw = rot[:, 1] < rot[:, 2]
+    key = np.sort(t, axis=1)
+    _u, first, inv, cnt = np.unique(key, axis=0, return_index=True, return_inverse=True, return_counts=True)
+    inv = inv.reshape(-1)
+    ways = np.bincount(inv, weights=ccw.astype(np.float64))
+    keep = np.zeros(len(t), bool)
+    keep[first] = True
+    keep &= (cnt[inv] == 1) | (ways[inv] == cnt[inv]) | (ways[inv] == 0)
+    return co[used], t[np.sort(np.nonzero(keep)[0])]
+
+
 def _drop_small(v, t, min_area, keep_at=()):
     """Triangles of the mesh islands (connected by shared vertices) of at least
     `min_area`, and of every island nearest a point of `keep_at` (a stray
@@ -1399,12 +1568,18 @@ class _Shell:
                 if loc is None:
                     break
                 n += 1
-                o = loc + ray * 1e-6
+                o = loc + ray * PARITY_STEP
             votes += n % 2
         return votes * 2 > len(PARITY_DIRS)
 
 
 PARITY_BELOW = 1e-4  # m: a point read in the rock by more than this is checked by ray parity
+# m: a ray goes on this far past a face it crossed. The BVH is float32, a
+# micrometre an ulp 10 m out: stepping that, a ray hit the face it had just
+# crossed again, a thousand times over, and an even count read a point 20 mm
+# inside Terrace.003's bent rock as out (the moss's clear pass then lifted
+# its neighbours into the rock after it, 411 triangles, 2026-10-10).
+PARITY_STEP = 1e-5
 # odd directions, so a ray seldom runs along an edge or a face
 PARITY_DIRS = [Vector(d).normalized() for d in ((0.5257, 0.1847, 0.8304), (-0.7071, 0.6124, 0.3536), (0.2113, -0.9361, 0.2810))]
 
