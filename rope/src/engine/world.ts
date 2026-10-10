@@ -2469,9 +2469,17 @@ export class World {
 
     // A tied body's contacts with the scenery are its island's, and the pin
     // and the stick are not for it; its contacts with a free body - the ball
-    // on a slat - are the ball's to grip through, so those stay in.
+    // on a slat - are the ball's to grip through, so those stay in. So do the
+    // ball's own while IT is tied (its chain a row of the island, see
+    // `RigidBody2D.gripsWhenTied`): the island solved them and wrote the
+    // impulses back, and the steering grip reads them as any other.
     const gripContacts = islandContacts
-      ? constraints.filter((c) => !c.a.tied || (c.b instanceof RigidBody2D && !c.b.tied))
+      ? constraints.filter(
+          (c) =>
+            !c.a.tied ||
+            c.a.gripsWhenTied ||
+            (c.b instanceof RigidBody2D && !c.b.tied),
+        )
       : constraints;
     const gripped = this.applyStaticGrip(gripContacts, dt);
     // The steered ball's grip, which is the only thing a circle contact still

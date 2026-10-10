@@ -40,8 +40,14 @@ import {
   vineChainSet,
   type Vine,
 } from "./vines";
-import { TiePoint, TieSegment, type TieChain } from "../engine/ties";
+import type { TieChain } from "../engine/ties";
+import type { Rope } from "../classes/rope";
+import { RopeClamp } from "../lib/rail";
+import { RopeEmbed } from "../lib/viscous";
+import { RopeRide } from "../lib/belt";
+import { RopeVineClamp } from "../lib/vineClamp";
 import {
+  BallChainRow,
   awakeChains,
   buildSceneChains,
   buildTieChains,
@@ -534,78 +540,205 @@ export class BallLevel {
     return this.entry?.at ?? this.ball.globalPosition;
   }
 
-  // The ball's chain as a row of the island that holds its anchor, while the
-  // chain runs straight from the ball to a TIED body (see `TieSolver.guests`).
+  // The ball's chain as a row of the island solver (`BallChainRow` in
+  // `level/chains.ts`; `plans/rope-bridge.md`, stage 3).
   //
   // A body knotted into a tied chain is immovable to a rope's positional
-  // solve (see `Rope.getDynamicBodyState`), so on its own the chain phase would
-  // haul the ball and the bridge would never feel it. Handing the bridge the
-  // reaction afterwards as an impulse was tried and is wrong by construction:
-  // the positional solve arrests the ball in one frame against an anchor it
-  // believes immovable, and the impulse that arrest implies - a 52 kg ball
-  // stopped dead, delivered to a 2.6 kg slat - is tens of metres a second,
-  // which no island can absorb within a frame (the slat left at 16 m/s). What
-  // the physics wants is the ball decelerated over the bridge's give, which is
-  // the ball and the ties in ONE velocity solve. So the chain is a row there,
-  // the ball's real mass on one side and the slat on the other, warm-started
-  // across frames like every tie, with its length the chain's own constraint
-  // length as the winch leaves it. The chain phase then only cleans up the
-  // position the gravity step drifted, and pays the ball no credit for it (see
-  // `chainCreditVelocity`): the row did the velocity work, and crediting the
-  // correction on top would hand the ball its weight back every other frame.
+  // solve (see `Rope.getDynamicBodyState`), so a positional chain phase hauls
+  // the ball against a slat the island then puts back, and the two mint
+  // energy between them: stage 1's guest row (the free span as a tie segment,
+  // the rest of the phase positional) left the gravity step's drift to the
+  // positional solve, which hauled the ball 6 mm a frame into the slat it rode
+  // and had the pair separation kick the slat 3 rad/s for its share
+  // (`session-1118f`, 52 J unforced), and wound tight with the chain over a
+  // slat's edge the guest was gone and the same loop flung slats at 13 m/s
+  // (`session-394f`). What the physics wants is the ball, its chain and the
+  // bridge in ONE velocity solve: the chain a row of the island, the ball a
+  // body the island integrates, every contact on either an island row, the
+  // winch the row's kinematic rate. The chain phase is then what an island
+  // cannot do - refuse a rotation it does not own (the unwind and the latch)
+  // and lease what geometry refuses - and nothing it moves is credited.
   //
-  // Only a chain whose free span runs straight from the ball to the knot is a
-  // row: every node before the last on the ball itself (the coil the winch
-  // winds), and nothing wrapped on the way. Wrapped over something, the
-  // tension reaches the knot through the wrap and the row would pull along
-  // the wrong line; that chain stays positional with its knot immovable, and
-  // the bridge does not feel it - the plan's third stage, the ball's chain as
-  // a row in full, is where that goes.
-  private tieGuest: TieSegment | null = null;
+  // `ballRow` is the unit, kept across frames for its warm start;
+  // `ballRowActive` is non-null on a frame it is in the solve; `rowTied` are
+  // the bodies tied for that frame, untied again once the world has stepped
+  // (`untieBallRow`), so the rest of the frame reads them as the free bodies
+  // they are.
+  private ballRow: BallChainRow | null = null;
+  private ballRowActive: BallChainRow | null = null;
+  private rowTied: RigidBody2D[] = [];
 
-  private syncTieGuest(): void {
+  // Which anchored chains run as a row. "tied": only a chain whose path
+  // touches a body of a tied chain, so every level without a bridge is
+  // bit-identical to its recordings; "always": every anchored chain, the plan's
+  // stage 3 in full, to be measured against the corpus before it is ever the
+  // default; "never": stage 1 as it shipped, minus the guest row.
+  static readonly BALL_ROW_MODE: "tied" | "always" | "never" = "tied";
+
+  private syncBallRow(delta: number): void {
+    this.untieBallRow();
+    this.ballRowActive = null;
+    this.world.ties.ballRow = null;
     const chain = this.ball.chain;
-    const path = chain?.path();
-    const end = chain?.end.contact.obj;
-    let straight = !!chain && !!path && path.length >= 2 && end instanceof RigidBody2D && end.tied;
-    if (straight && path) {
-      for (let i = 0; i + 1 < path.length; i++) {
-        if (path[i]!.contact.obj !== this.ball) straight = false;
-      }
-    }
-    if (!chain || !path || !straight || !(end instanceof RigidBody2D)) {
-      this.tieGuest = null;
-      this.world.ties.guests = [];
+    if (
+      !chain ||
+      BallLevel.BALL_ROW_MODE === "never" ||
+      !this.ball.chainAnchored ||
+      !this.ball.chainAttached
+    ) {
       return;
     }
-    // The free span: from the coil's last node on the ball to the knot.
-    const from = path[path.length - 2]!.contact;
-    const knot = chain.end.contact;
-    let guest = this.tieGuest;
-    if (!guest || guest.b.body !== end) {
-      guest = new TieSegment(new TiePoint(this.ball, from.position), new TiePoint(end, knot.position), 0);
-      this.tieGuest = guest;
-    } else {
-      if (!guest.a.local.equals(from.position)) guest.a = new TiePoint(this.ball, from.position);
-      if (!guest.b.local.equals(knot.position)) guest.b = new TiePoint(end, knot.position);
+    // Ends that slide, creep or ride (`correctShapePositionAndRotation` moves
+    // them before the bodies) and vines (their own system) stay positional.
+    const end = chain.end;
+    if (
+      end instanceof RopeClamp ||
+      end instanceof RopeEmbed ||
+      end instanceof RopeRide ||
+      end instanceof RopeVineClamp
+    ) {
+      return;
     }
-    // The span's share of the constraint: what it may measure for the whole
-    // path to be exactly at length, so coil on the ball and the lease are the
-    // chain's and the row holds only the free span.
-    //
-    // ...and never less than the span measures NOW. The row HOLDS the ball at
-    // the chain's length - a fall is arrested in the island, the bridge carries
-    // the weight - and the winch's shortening is the positional phase's, under
-    // its budget, its spin rollback and its unwind. Set to the allowance alone,
-    // the row did the winch's work too: every coil node the aim wound on
-    // shortened its length within the frame and it yanked the ball and the
-    // weight it hung from together, the unwind gave the length back next frame,
-    // and the pair pumped from a hand's whirl to 11 m/s (`hung-anchor`), which
-    // is `session-215f`'s slingshot through a new door.
-    const span = from.globalPosition.distanceTo(knot.globalPosition);
-    const allowance = span + chain.constraintLength - chain.getCurrentLength();
-    guest.length = Math.max(0, allowance, span);
-    this.world.ties.guests = [guest];
+    let touchesTied = false;
+    for (const node of chain.path()) {
+      const obj = node.contact.obj;
+      if (obj instanceof VineLink) return;
+      if (obj instanceof RigidBody2D && obj.tied) touchesTied = true;
+    }
+    if (BallLevel.BALL_ROW_MODE === "tied" && !touchesTied) return;
+    let row = this.ballRow;
+    if (row === null || row.rope !== chain) {
+      row = new BallChainRow(this.ball, chain, () => this.bodies);
+      this.ballRow = row;
+    }
+    row.sync();
+    for (const body of row.bodies) {
+      if (body.tied) continue;
+      body.tied = true;
+      this.rowTied.push(body);
+    }
+    // The rope's frame opens here, before the island's first substep: the
+    // lease release, the per-frame books.
+    chain.beginFrame(delta);
+    this.world.ties.ballRow = row;
+    this.ballRowActive = row;
+  }
+
+  private untieBallRow(): void {
+    for (const body of this.rowTied) body.tied = false;
+    this.rowTied = [];
+  }
+
+  // The chain phase of a frame the island solved the chain on: the path brought
+  // up to date, the winding the frame could not haul given back to the spin,
+  // the latch, the books. Nothing here moves the ball but the unwind's
+  // rotation, and nothing is credited.
+  private closeBallRowFrame(
+    row: BallChainRow,
+    chain: Rope,
+    delta: number,
+    ballRotationAtFrameStart: number,
+    anchoredThisFrame: boolean,
+  ): void {
+    // The last substep moved the bodies after the last regeneration; growth a
+    // wrap appearing here puts on the path is leased at the next prepare.
+    chain.syncWraps(this.bodies);
+    const spinLength =
+      Math.abs(this.ball.globalRotation - ballRotationAtFrameStart) *
+      Math.abs(chain.lengthPerRadian(this.ball));
+    // The birth length re-taken where the frame leaves the ball, as the
+    // positional phase does (see there).
+    if (anchoredThisFrame) {
+      const born = chain.getCurrentLength() - spinLength;
+      if (born > chain.maxRopeLength) chain.maxRopeLength = born;
+      this.chainAnchorLength = chain.maxRopeLength;
+    }
+    this.chainWinchSpeedBudget = spinLength / delta;
+    const braced = this.ballBraced(chain);
+    this.chainBraced = braced;
+    // The winding the row's drum did not realise is over-length the coil wound
+    // on with nowhere to go, and the spin gives it back, bounded to the
+    // frame's turn. The rest of the chain's over-length is the soft row's
+    // stretch under load and is forgiven (see `BallChainRow.finishFrame`).
+    const unrealised = row.finishFrame();
+    const forgive = Math.max(0, chain.overLength - unrealised);
+    const rotationBeforeUnwind = this.ball.globalRotation;
+    chain.unwindOverLength(this.ball, ballRotationAtFrameStart, delta, forgive);
+    this.settleUnwindLatch(rotationBeforeUnwind, delta, braced);
+    PhaseTrace.mark("unwind", this.world);
+    // A row never reports a block: the island's contact rows answered the
+    // geometry, and the lease only ever hands back what topology jumps
+    // borrowed (`Rope.leaseLength`).
+    chain.noteBlockedByGeometry(false);
+    this.chainStallFrames = 0;
+    this.chainLeaseHeldFrames =
+      chain.blockedSlack > BallLevel.LEASE_EPSILON ? this.chainLeaseHeldFrames + 1 : 0;
+    this.chainCreditVelocity = Vec2.ZERO;
+    this.chainSolveSpeedGain = 0;
+    this.anchorKickSpeedGain = anchoredThisFrame ? 0 : null;
+    this.chainCreditOverBound = null;
+    this.chainPushOutCredit = 0;
+    this.chainPushCreditFrames = 0;
+    PhaseTrace.mark("chain-velocity", this.world);
+  }
+
+  // Is the ball carrying a load-bearing contact against something NOT on its
+  // chain's path this frame (see `chainBraced`).
+  private ballBraced(chain: Rope): boolean {
+    const pathBodies = new Set<CollisionObject2D>();
+    for (const node of chain.path()) pathBodies.add(node.contact.obj);
+    for (const c of this.world.frameContacts) {
+      if (c.normalImpulse <= 0) continue;
+      const other = c.a === this.ball ? c.b : c.b === this.ball ? c.a : null;
+      if (other !== null && !pathBodies.has(other)) return true;
+    }
+    return false;
+  }
+
+  // After the unwind: what it refunded, and what that says about the steering
+  // (`BallPlayer.windStall`, `RigidBody2D.spinDriveShare`).
+  private settleUnwindLatch(rotationBeforeUnwind: number, delta: number, braced: boolean): void {
+    const chain = this.ball.chain;
+    if (!chain) return;
+    const asked = Math.abs(this.aimSpin) * delta;
+    const refunded = Math.abs(this.ball.globalRotation - rotationBeforeUnwind);
+    this.chainUnwindRefund = refunded;
+    const path = chain.path();
+    this.ball.windStallHeld = this.world.frameContacts.some((c) => {
+      if (c.a !== this.ball && c.b !== this.ball) return false;
+      const other = c.a === this.ball ? c.b : c.a;
+      return other instanceof RigidBody2D && path.some((n) => n.contact.obj === other);
+    });
+    const spool = Math.abs(chain.lengthPerRadian(this.ball));
+    // The share of this ask that STAYED wound is what next frame's contact
+    // solve may sell as roll (`RigidBody2D.spinDriveShare`). The unwind
+    // runs after the contacts, so the frame that refuses a turn has
+    // already sold it; the next frame does not. Floored the way the latch
+    // is: an ask under `STALL_EPSILON` of chain is a converged aim's
+    // residual, not a refusal (`session-379f`) - and it is no information
+    // either way, so the share HOLDS across it rather than resetting. The
+    // share is a fact about the jam, not about the ask: reset to 1 on
+    // every quiet frame, a proportional aim that toggles between nothing
+    // and a 24 rad/s snap had every snap's first frame funded whole, and
+    // each bought the ball rim speed on the floor before the refund came
+    // - 2.8 m/s in one frame from a standing start, with the stool going
+    // over the top lifting the floor load off it so nothing braked the
+    // coast (`session-141f` f77, f82). Held, a snap into a standing jam
+    // buys what the jam last allowed, and the first frame the chain does
+    // let a turn stand re-earns the drive whole.
+    if (asked * spool >= BallLevel.STALL_EPSILON) {
+      this.ball.spinDriveShare = Math.max(0, 1 - refunded / asked);
+    }
+    if (braced) this.ball.windStall = 0;
+    if (
+      asked * spool >= BallLevel.STALL_EPSILON &&
+      this.ball.windStallHeld &&
+      !braced &&
+      refunded >= BallLevel.STALL_REFUND_SHARE * asked &&
+      spool >= BallPlayer.STALL_LATCH_SPOOL_SHARE * this.ball.radius
+    ) {
+      this.ball.windStall = Math.sign(this.aimSpin);
+    }
   }
 
   // The chain set as it stands this frame: the authored chains, every vine's
@@ -1023,9 +1156,13 @@ export class BallLevel {
     // already cancelled it (see there).
     const ballSpinBeforeContacts = this.ball.angularVelocity;
     // The ball's chain as a row of the island it is hooked to, if it is (see
-    // `syncTieGuest`) - set before the world steps, read inside it.
-    this.syncTieGuest();
+    // `syncBallRow`) - set before the world steps, read inside it.
+    this.syncBallRow(delta);
     this.world.integrate(delta);
+    // The flags were for the world's step; the rest of the frame reads the
+    // row's bodies as the free bodies they are (the unwind's spin credit, the
+    // rest rule, the digest).
+    this.untieBallRow();
 
     // Driving the mounting loop into a surface may never launch the ball. It is
     // written here, after the contacts and the depenetration sweep, because it
@@ -1105,8 +1242,11 @@ export class BallLevel {
     // (see `Rope.noteGeometryPush`). This leading push-out is part of that sum:
     // it is the frame's first statement that a surface would not let the ball be
     // where the last chain solve put it.
+    // Not on a frame the ball is a body of an island (see `syncBallRow`): its
+    // overlaps are that island's contact rows, solved with the chain that put
+    // it there, as a slat's are.
     const pushOutBefore = this.ball.globalPosition;
-    this.world.depenetrateRigid(this.ball);
+    if (this.ballRowActive === null) this.world.depenetrateRigid(this.ball);
     const leadingPush = this.ball.globalPosition.distanceTo(pushOutBefore);
     // Position-only, so this phase never shows a velocity of its own; it is
     // marked so that what follows is measured from a ball already clear of the
@@ -1130,7 +1270,15 @@ export class BallLevel {
     // the invariant only scrutinises the frame the anchor goes rigid.
     const endFixed = this.ball.chainAttached;
     const anchoredThisFrame = endFixed && !this.endWasFixed;
-    if (this.ball.chainAnchored && this.ball.chain) {
+    if (this.ballRowActive !== null && this.ball.chain) {
+      this.closeBallRowFrame(
+        this.ballRowActive,
+        this.ball.chain,
+        delta,
+        ballRotationAtFrameStart,
+        anchoredThisFrame,
+      );
+    } else if (this.ball.chainAnchored && this.ball.chain) {
       const speedBefore = this.ball.linearVelocity.length();
       const positionBeforeChain = this.ball.globalPosition;
       const velocityBeforeChain = this.ball.linearVelocity;
@@ -1952,45 +2100,7 @@ export class BallLevel {
         // on the ground with its leverage and its spin dead (the `session-427f`
         // continuation, f497). The latch is a statement about a ball with no
         // leverage, so the frame the ball has some is the frame it ends.
-        const asked = Math.abs(this.aimSpin) * delta;
-        const refunded = Math.abs(this.ball.globalRotation - rotationBeforeUnwind);
-        this.chainUnwindRefund = refunded;
-        const path = this.ball.chain.path();
-        this.ball.windStallHeld = this.world.frameContacts.some((c) => {
-          if (c.a !== this.ball && c.b !== this.ball) return false;
-          const other = c.a === this.ball ? c.b : c.a;
-          return other instanceof RigidBody2D && path.some((n) => n.contact.obj === other);
-        });
-        const spool = Math.abs(this.ball.chain.lengthPerRadian(this.ball));
-        // The share of this ask that STAYED wound is what next frame's contact
-        // solve may sell as roll (`RigidBody2D.spinDriveShare`). The unwind
-        // runs after the contacts, so the frame that refuses a turn has
-        // already sold it; the next frame does not. Floored the way the latch
-        // is: an ask under `STALL_EPSILON` of chain is a converged aim's
-        // residual, not a refusal (`session-379f`) - and it is no information
-        // either way, so the share HOLDS across it rather than resetting. The
-        // share is a fact about the jam, not about the ask: reset to 1 on
-        // every quiet frame, a proportional aim that toggles between nothing
-        // and a 24 rad/s snap had every snap's first frame funded whole, and
-        // each bought the ball rim speed on the floor before the refund came
-        // - 2.8 m/s in one frame from a standing start, with the stool going
-        // over the top lifting the floor load off it so nothing braked the
-        // coast (`session-141f` f77, f82). Held, a snap into a standing jam
-        // buys what the jam last allowed, and the first frame the chain does
-        // let a turn stand re-earns the drive whole.
-        if (asked * spool >= BallLevel.STALL_EPSILON) {
-          this.ball.spinDriveShare = Math.max(0, 1 - refunded / asked);
-        }
-        if (braced) this.ball.windStall = 0;
-        if (
-          asked * spool >= BallLevel.STALL_EPSILON &&
-          this.ball.windStallHeld &&
-          !braced &&
-          refunded >= BallLevel.STALL_REFUND_SHARE * asked &&
-          spool >= BallPlayer.STALL_LATCH_SPOOL_SHARE * this.ball.radius
-        ) {
-          this.ball.windStall = Math.sign(this.aimSpin);
-        }
+        this.settleUnwindLatch(rotationBeforeUnwind, delta, braced);
       } else {
         // Nothing anchored refuses a turn, so nothing withholds its drive.
         this.ball.spinDriveShare = 1;
@@ -2047,10 +2157,7 @@ export class BallLevel {
         this.ball.globalPosition
           .sub(positionBeforeChain)
           .div(delta)
-          // ...and no credit at all while the chain is a row of a tied island
-          // (see `syncTieGuest`): the row paid the velocity inside `integrate`,
-          // and the position this phase corrected is the gravity step's drift.
-          .mul(this.tieGuest ? 0 : this.ball.chain.topologyCreditScale),
+          .mul(this.ball.chain.topologyCreditScale),
         chainBound,
       );
       this.ball.linearVelocity = velocityBeforeChain.add(this.chainCreditVelocity);

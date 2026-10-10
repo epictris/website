@@ -243,6 +243,10 @@ export class BallPlayer extends RigidBody2D {
     // KillZone reset and the hook's don't-attach-to-the-avatar check both
     // match by name.
     this.name = "Player";
+    // While its chain is a row of an island the ball is a body of that island,
+    // and still the steered ball: its grips read the contacts the island solved
+    // (see `RigidBody2D.gripsWhenTied`, `BallLevel.syncBallRow`).
+    this.gripsWhenTied = true;
     // The avatar is its own collision category, ball and mounting loop alike:
     // scenery a level wants the player to pass through says so by leaving
     // `LAYER_PLAYER` out of its mask (`CollisionShape2D.mask`). Not also

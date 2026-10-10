@@ -576,6 +576,52 @@ function caseBallHangs(): BridgeResult {
   return ok(name, down && bounded && still && clean, details);
 }
 
+// ---------------------------------------------------------------------------
+// bridge-wound-tight: the ball winds itself all the way up to the slat it is
+// hooked to and the aim keeps turning against it - `session-394f`'s regime,
+// where stage 1's split (the chain positional with the slat immovable to it,
+// the island putting the slat back) stretched a segment 76 mm and flung two
+// slats at 13 m/s, and `session-1118f`'s, where the same loop minted 52 J in
+// thirty frames with the aim idle. On the ball's chain as a row of the island
+// (`BallChainRow`) the winch stops at the slat, the unwind refunds the turn,
+// and the rig measures: ball 1.3 m/s, slats 3.0 m/s, segments 15 mm over.
+// ---------------------------------------------------------------------------
+const WOUND_TIGHT_BALL_SPEED = 4;
+const WOUND_TIGHT_SLAT_SPEED = 5;
+
+function caseWoundTight(): BridgeResult {
+  const name = "bridge-wound-tight - the ball wound up to its slat with the aim still turning";
+  const rig = new Rig(standard(0.03));
+  const mid = rig.slat(Math.floor(rig.slats.length / 2));
+  const hooked = rig.until(180, () => hookedToSlat(rig), fireAt(mid.globalPosition));
+  if (hooked < 0) return ok(name, false, [bar("hook attached to the middle slat within 180 frames", false)]);
+  // Ten seconds of whirl winds the 1.4 m chain onto the rim in six and goes on
+  // turning against the slat for four more; then two seconds held still.
+  let ballSpeed = 0;
+  let slatSpeed = 0;
+  let touched = false;
+  const input = whirl(0.03, true, true);
+  for (let i = 0; i < 720; i++) {
+    rig.step(1, i < 600 ? input : hold(), true);
+    ballSpeed = Math.max(ballSpeed, rig.level.ball.linearVelocity.length());
+    for (const s of rig.slats) slatSpeed = Math.max(slatSpeed, s.linearVelocity.length());
+    if (rig.level.ball.windStallHeld) touched = true;
+  }
+  const stillHooked = hookedToSlat(rig);
+  const bounded = rig.worstOver <= WORST_OVER;
+  const calmBall = ballSpeed <= WOUND_TIGHT_BALL_SPEED;
+  const calmSlats = slatSpeed <= WOUND_TIGHT_SLAT_SPEED;
+  const clean = rig.violations.length === 0;
+  const details = [
+    bar(`hooked at f${hooked}, wound up against the slat (${touched ? "yes" : "never"}), still hooked at the end (${stillHooked ? "yes" : "no"})`, touched && stillHooked),
+    bar(`worst segment over-length over the 720 frames ${mm(rig.worstOver)} (want <${mm(WORST_OVER)})`, bounded),
+    bar(`fastest the ball went ${ballSpeed.toFixed(2)} m/s (want <${WOUND_TIGHT_BALL_SPEED})`, calmBall),
+    bar(`fastest any slat went ${slatSpeed.toFixed(2)} m/s (want <${WOUND_TIGHT_SLAT_SPEED})`, calmSlats),
+    bar(rig.violationLine(), clean),
+  ];
+  return ok(name, touched && stillHooked && bounded && calmBall && calmSlats && clean, details);
+}
+
 // The deploy button held with the aim straight below the ball: the chain
 // stays attached and nothing winds.
 function hold(): (level: BallLevel) => FrameInput {
@@ -708,6 +754,7 @@ export function runBridgeCases(): BridgeResult[] {
     caseUneven(),
     caseBallRolls(),
     caseBallHangs(),
+    caseWoundTight(),
     caseMassRatio(),
     caseMassRatio200(),
     caseLong(),

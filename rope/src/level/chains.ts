@@ -46,7 +46,13 @@ import {
   type CollisionShape2D,
 } from "../engine/body";
 import { nearestShapeIndex, nearestSurfacePoint } from "../engine/shapes";
-import { GRAVITY, isRealPush, type PushOut, type World } from "../engine/world";
+import {
+  GRAVITY,
+  isRealPush,
+  type ContactConstraint,
+  type PushOut,
+  type World,
+} from "../engine/world";
 import { Rope, type LengthRefusal } from "../classes/rope";
 import { RopeContact, RopeWrap } from "../lib/ropeContact";
 import { Segment } from "../lib/segment";
@@ -1766,6 +1772,225 @@ export class RopeRow implements IslandRow, IslandUnit {
     for (let i = 0; i < this.statics.length; i++) {
       if (this.statics[i]!.transformVersion !== this.sleptAtVersion[i]) return true;
     }
+    return false;
+  }
+}
+
+// The ball's chain as a row of the island (`plans/rope-bridge.md`, stage 3):
+// the same length constraint `RopeRow` solves for an authored chain, plus the
+// one thing an authored chain never has - the WINCH.
+//
+// The ball's aim writes its spin kinematically, so the coil on its rim takes
+// chain at `lengthPerRadian` metres a radian with no body moving and no impulse
+// able to change it. Fed to the length row as it stands, that is a demand with
+// infinite force behind it: wound tight against a slat, the row drove the ball
+// 48 mm into the slat against the softer contact row (the row at 60 Hz, the
+// contact at 30), the length read as satisfied, the unwind found nothing to
+// refund and the coil wound on - two slats pushed apart by the ball between
+// them, 98 rad/s on one of them (`session-1118f` f850 on the first cut of this
+// row). So the winding is modelled as what a winch is: a drum that takes in
+// chain at the aim's rate while the tension is under what its motor can hold,
+// and SLIPS once it is not.
+//
+// The row holds `free + coil0 <= constraintLength - realised`: the free span
+// plus the coil as the frame began, less what the winch has REALISED this
+// frame. `coilGrowth` is what the kinematic turn has wound onto the rim so far
+// (`lengthPerRadian` times the rotation the substeps integrated), and each
+// substep `realised` follows it while the row's tension is under
+// `WINCH_MAX_ACCEL` times the ball's mass and the ball is clear of its path
+// (`touching`); over the limit, or jammed, it holds where it is. The row is
+// then one accumulated impulse, unbounded and soft at `TieTuning`: a fall is
+// arrested here, the weight hangs here, and in free air the shortening target
+// hauls the ball at the winch's rate as the positional phase did. Against a
+// contact the tension climbs to the limit, the drum stops, and the ball
+// presses the slat with a bounded force rather than sinking into it.
+//
+// Two shapes were tried before this one and both are recorded here so they
+// are not re-tried. The coil's rate fed to one row as a rest-length rate is
+// the embedding above. A separate bounded MOTOR row beside a limit row leased
+// by `coilGrowth` (Box2D's limit-plus-motor) chattered on the taut gate every
+// half substep, and in the off substeps the ball fell into the leased slack:
+// winding a hanging ball LOWERED it 6 mm a frame (`bridge-ball-hangs`).
+//
+// The winding the drum did not realise - `coilGrowth - realised` - is
+// over-length at the end of the frame, and the chain phase's unwind gives
+// exactly that back to the spin, which is the positional phase's statement
+// ("winding that stayed wound") made at velocity level. Only while the
+// rotation IS kinematic: a ball that is not aiming turns under the chain's
+// torque like any other body, `calculateTorqueArm` gives it the arm, the
+// Jacobian's own `arm * w` is then the spool rate, and the row is the plain
+// length constraint.
+//
+// The unit's bodies are the ball and every free body its path runs over, so
+// it joins the island of whatever it is hooked to or wrapped round by sharing
+// the body (`TieSolver.islands`), and the island integrates the ball while the
+// row holds it (`BallLevel.syncBallRow` ties it for the frame).
+//
+// Topology: a wrap appearing between two regenerations lengthens the measured
+// path with nothing having moved, and at velocity level that is a yank the
+// soft bias would deliver (see `Rope.topologyGrowth`). The growth is leased
+// to the constraint in `prepare`, before the substep's solve, and the lease
+// reels it back at the lease's own rate.
+export class BallChainRow implements IslandRow, IslandUnit {
+  // The tension the drum holds against before it slips, as an acceleration of
+  // the ball. The jam is not this bound's to hold (`touching`), so it only
+  // decides how hard a swing can be hauled against, and on the bridge rig
+  // (the ball hooked to the middle slat, the aim whirled at 24 rad/s for two
+  // seconds, 2026-10-11) it barely decides the haul at all: 3 g to 20 g all
+  // reel the ball up 1.2 to 1.5 m and refund 9 to 13 percent of the turn.
+  // What it decides is what the bridge takes - the worst segment stretch in
+  // a 4 m/s swing is 21 mm at 3 g, 39 at 5, 52 at 8 and 58 at 10, against the
+  // invariant's 50 - and how long a hard swing stalls the drum (3 g slipped on
+  // half the turns of `session-247f`'s 4 m/s swings on a short chain). Five
+  // is the middle of that; it is the one feel knob the row has, and it is
+  // unplayed.
+  static readonly WINCH_MAX_ACCEL = 5 * GRAVITY.y;
+
+  impulse = 0;
+  over = 0;
+  // Never: the ball cannot sleep, so neither can an island holding it.
+  asleep = false;
+  readonly substeps = DEFAULT_TIE_SUBSTEPS;
+  // Re-read by `sync` each frame the row is active: the path changes.
+  bodies: RigidBody2D[] = [];
+  private endBody: CollisionObject2D | null = null;
+  // This frame's kinematic winding so far, in metres of path (see above), the
+  // share of it the drum has realised, and the rotation the growth was last
+  // measured at.
+  private coilGrowth = 0;
+  private realised = 0;
+  private lastRotation = 0;
+  // The substep the island last ran this row at, for `finishFrame`.
+  private h = 0;
+
+  constructor(
+    readonly ball: RigidBody2D,
+    readonly rope: Rope,
+    // The level's bodies as they stand, for the wrap scan.
+    readonly scene: () => PhysicsBody2D[],
+  ) {}
+
+  get rows(): readonly IslandRow[] {
+    return [this];
+  }
+
+  // The level owns the rope's frame (`Rope.beginFrame`, the lease release).
+  // What is read here is whether the ball is touching a body on its path this
+  // frame (a gathered contact, speculative ones included), which is the
+  // winch's jam: see `touching`.
+  beginFrame(_dt: number, contacts: readonly ContactConstraint[]): void {
+    const onPath = new Set<CollisionObject2D>();
+    for (const node of this.rope.path()) onPath.add(node.contact.obj);
+    this.touching = contacts.some(
+      (c) => (c.a === this.ball && onPath.has(c.b)) || (c.b === this.ball && onPath.has(c.a)),
+    );
+  }
+
+  // The ball is against a body its chain runs over. Wound up to the body it
+  // hangs from, the winch has nothing left to haul: every impulse the motor
+  // could deliver reaches the body through the knot at one point and the ball
+  // through the contact at another, a couple that rocks a slat rather than
+  // shortening anything (the middle slat rocked at 10-14 rad/s under a ball
+  // wound tight to its end, whatever the motor's bound, `bridge-ball-hangs`),
+  // and a haul the frame then refunds nine tenths of keeps the steering
+  // asking (`BallPlayer.windStall` wants the refund whole). So the motor does
+  // not pull while the ball touches its path, the unwind hands the whole turn
+  // back, and the latch closes - the positional phase's rule for a ridden
+  // holder, made here.
+  private touching = false;
+
+  // The bodies the path runs over now. A new far end carries no tension
+  // history, so the warm start is dropped with it, as `Rope.end`'s setter
+  // drops the frame correction.
+  sync(): void {
+    const bodies: RigidBody2D[] = [this.ball];
+    for (const node of this.rope.path()) {
+      const obj = node.contact.obj;
+      if (obj === this.ball || !(obj instanceof PhysicsBody2D) || !islandOwns(obj)) continue;
+      if (!bodies.includes(obj)) bodies.push(obj);
+    }
+    this.bodies = bodies;
+    const end = this.rope.end.contact.obj;
+    if (end !== this.endBody) {
+      this.impulse = 0;
+      this.endBody = end;
+    }
+    this.coilGrowth = 0;
+    this.realised = 0;
+    this.lastRotation = this.ball.globalRotation;
+  }
+
+  prepare(h: number): void {
+    this.h = h;
+    this.takeInTurn();
+    this.rope.rowPrepare(this.scene());
+    this.rope.leaseLength(this.rope.takeTopologyGrowth());
+  }
+
+  // What the substeps have turned the ball by since the last look, as path:
+  // the spool rate at the pose the coil was last brought to, times the turn.
+  // The drum takes it in while the tension the last substep left is under the
+  // limit and the ball is clear of its path (see the class comment).
+  private takeInTurn(): void {
+    if (this.ball.kinematicRotation) {
+      const wound =
+        this.rope.lengthPerRadian(this.ball) * (this.ball.globalRotation - this.lastRotation);
+      this.coilGrowth += wound;
+      const limit = this.ball.mass * BallChainRow.WINCH_MAX_ACCEL * this.h;
+      if (wound > 0 && !this.touching && this.impulse < limit) this.realised += wound;
+      if (this.realised > this.coilGrowth) this.realised = Math.max(this.coilGrowth, 0);
+    }
+    this.lastRotation = this.ball.globalRotation;
+  }
+
+  // After the island's last substep: the turn that substep integrated, taken
+  // in on the same terms, and the winding the drum did NOT realise this frame
+  // - the one share of the chain's over-length that is the spin's to give
+  // back (`Rope.unwindOverLength`). The rest of the over-length is the soft
+  // row's stretch under load, and charging THAT to the spin is a ball that
+  // cannot wind: a loaded chain sits a few millimetres over all frame, and
+  // with no coil yet on the rim the spool rate is a few millimetres a radian,
+  // so the stretch was worth more than the frame's whole turn and every turn
+  // was refunded (`session-247f`, winding ignored for 230 frames).
+  finishFrame(): number {
+    this.takeInTurn();
+    return Math.max(0, this.coilGrowth - this.realised);
+  }
+
+  warmStart(): void {
+    if (this.impulse === 0) return;
+    for (const t of this.rope.rowTerms().terms) applyTerm(t, this.impulse);
+  }
+
+  solve(h: number, soft: Softness, useBias: boolean): void {
+    const { length, constraint, terms } = this.rope.rowTerms();
+    let w = 0;
+    let slackRate = 0;
+    for (const t of terms) {
+      const invM = invMassOf(t.body);
+      const invI = invInertiaOf(t.body);
+      if (t.body instanceof RigidBody2D) {
+        w += t.ma * t.ma * (invM + t.arm * t.arm * invI);
+        slackRate += t.ma * (t.dir.dot(t.body.linearVelocity) + t.arm * t.body.angularVelocity);
+      } else {
+        slackRate += t.ma * t.dir.dot(t.body.velocityAtPoint(t.body.globalPosition));
+      }
+    }
+    if (w <= 0) return;
+    // The length, less the frame's winding the drum has not realised (see the
+    // class comment): `constraint + coilGrowth - realised - path`.
+    const slack = constraint + Math.max(this.coilGrowth, 0) - this.realised - length;
+    const applied = ropeImpulse(this, slack, slackRate, w, h, soft, useBias);
+    if (applied !== 0) for (const t of terms) applyTerm(t, applied);
+  }
+
+  measure(): void {
+    this.over = this.rope.overLength;
+  }
+
+  fallAsleep(): void {}
+
+  anchorsMoved(): boolean {
     return false;
   }
 }

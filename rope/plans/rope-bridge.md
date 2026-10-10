@@ -301,3 +301,42 @@ What it established:
 - Pivots and springs as rows were not started; a pivot or spring body on a row keeps `World.integrate`'s own step (`islandOwns`), and `cli spring` is 22 of 22 on that.
 - Topology jumps are the open question for a rope row: a coil node appearing is a discontinuity in `C` that a soft bias turns into velocity, where the positional phase corrected it in position and paid nothing (`topologyCreditScale`).
   A jump allowance reeled back at a bounded rate, the lease's shape at velocity level, is the candidate.
+
+## Stage 3 (2026-10-11): the ball's chain as a row, landed behind the tied gate
+
+Two played bundles of the bridge (`playtests/bundles/session-1118f-bridge.json`, `session-394f-bridge.json`, both replay bit-exact) are the red detectors, and both are one class: the ball wound tight onto a slat with the stage 1 split still in place.
+On 1118f (f1012-1024, `energy-gained` 52 J at f1024) each frame the gravity step drops the ball 2.7 mm, the guest row restores its velocity but not its position, the positional solve hauls the ball 6 mm into the slat it believes immovable, `separateBallFromPathBodies` kicks the slat 3 rad/s and 0.2 m/s for its share, and the island takes it back next frame.
+On 394f (`chain-over-length` x56, slats at 13 m/s, `scan`: chain solve added 4.2 m/s at f241) the same loop with the aim winding and the chain wrapped over a slat edge, so the guest row is gone and the ball is credited the full positional haul (1.9 m/s at f224); at f237-241 the pair push-out spins slat 9 by 32 rad/s a frame.
+The guest row is therefore a half-measure the bridge cannot live with, which the plan predicted.
+
+What landed (the user-facing account is in [docs/scene-chains.md](../docs/scene-chains.md#the-balls-chain-as-a-row)):
+
+- `BallChainRow implements IslandRow, IslandUnit` beside `RopeRow` in `level/chains.ts`: `prepare` is `Rope.rowPrepare(level.bodies)`, `solve` is `Rope.rowTerms()` as `RopeRow`'s is, and the winch is a **drum** - the kinematic turn's winding (`lengthPerRadian` times the rotation the substeps integrated) is realised while the row's impulse is under `WINCH_MAX_ACCEL` times the ball's mass and the ball is not touching a body on its path, and the row holds `free + coil0 <= L - realised`.
+  `bodies` is recomputed each frame: the ball plus every `islandOwns` body on the path; it never sleeps.
+- `Rope.topologyGrowth` (lengthening only), taken in `prepare` and leased into `blockedSlack` before the solve, released by `beginFrame` at `SLACK_RELEASE_RATE`: the jump allowance at velocity level.
+  `noteBlockedByGeometry(false)` every row frame, so the lease only ever releases.
+- `TieSolver.ballRow` replaces `guests`; `step` solves `[...units, ballRow]`; `active` counts it; `IslandRow.beginFrame` gets the island's contacts and `prepare` the substep.
+- The ball is island-integrated while the row holds it: `ball.tied = true` for the frame (gravity skip, depenetration skip, pair separation as a static, every contact an island row), the free path bodies likewise, all untied again right after `World.integrate` so the rest of the frame reads them as free bodies.
+  `RigidBody2D.gripsWhenTied` (true on `BallPlayer`) keeps the ball's contacts in `World`'s grip filter.
+- Gate (`BallLevel.BALL_ROW_MODE = "tied"`): the chain anchored and attached, the end a plain `RopeAttachment` (no clamp, embed, ride or vine ring), no vine link on the path, and a path node on a tie-chain body; every level without a bridge is bit-identical (`cli selftest` deterministic, the corpus unchanged).
+- `BallLevel.closeBallRowFrame` is the chain phase on a row frame: `syncWraps` once after the island, the born-length re-take, `unwindOverLength` forgiven everything but the winding the drum did not realise (`BallChainRow.finishFrame`), the latch and `spinDriveShare` (extracted into `settleUnwindLatch`, shared with the positional phase, bit-identical), the digest fields at zero credit.
+  Skipped: the leading push-out, the positional solve, the sweep, the pair separation, the rollback, the winch pass, the hang load, the into-surface refusal, the lease grant.
+- `cli bridges` `bridge-wound-tight` is the new case (the ball wound up to its slat with the aim turning four seconds more: 32 mm of stretch, ball 1.3 m/s, slats 4.3), 11 of 11 green with the one standing `expectedFail`.
+  The three played bundles are in `playtests/regressions/` (`session-1118f-bridge`, `-394f-`, `-247f-`): all healthy on the row, all diverged from their recordings.
+
+Where it departs from the design above, each measured:
+
+- **The winch is a drum with a tension limit, not a rate term.** The coil's rate fed to the row as a rest-length rate (the design) drove the ball 48 mm into its slat against the softer contact row - the row at 60 Hz, the contact at 30 - so the length read as satisfied, the unwind found nothing to refund, and two slats were pushed apart by the ball between them at 98 rad/s (`session-1118f` f850).
+  Box2D's limit-plus-motor shape (a bounded motor row beside a limit leased by the winding) was tried next and chattered on its taut gate every half substep, and in the off substeps the ball fell into the leased slack: winding a hanging ball lowered it 6 mm a frame.
+  A motor whose accumulated impulse was warm-started but not re-solved while inactive applied its stale 6.4 N·s eight times a frame along a millimetre of free span's direction: 191 rad/s on a slat (`session-394f` f188).
+- **The unwind refunds only the unrealised winding.** Charging the whole over-length to the spin, as the positional phase could with an exact solve, is a ball that cannot wind on a soft row: a loaded chain sits millimetres over all frame, with no coil yet on the rim the spool rate is millimetres a radian, and every turn was refunded whole (`session-247f`, the aim ignored for 230 frames, reported by Tris as the ball not responding to winding).
+- **The drum's bound** (`WINCH_MAX_ACCEL`, 5 g) barely decides the haul (3 to 20 g all reel the rig's ball up 1.2 to 1.5 m in two seconds of a 24 rad/s whirl, refunding a tenth of the turn) and does decide the bridge's stretch in a 4 m/s swing (21 mm at 3 g, 39 at 5, 52 at 8, 58 at 10 against the invariant's 50) and how long a hard swing stalls the drum; it is the one feel knob and is unplayed.
+- **Blind spot, named:** the island integrates the tied ball without `integrateContinuous`, so a fast ball on a bridge could cross a slat between gathers.
+- **`"always"`** (every anchored chain a row, the plan's stage 3 in full) is measured in a worktree, below, not shipped.
+
+### `"always"`, measured (2026-10-11, a worktree at the same tree with the gate flipped)
+
+`cli bridges` 11 of 11 and `cli vines` and `cli sleep` as on the shipped tree; `cli contacts` 50 of 58 against 56 (new reds: `point-blank-turn`, `converged-aim-hang`, `hung-anchor`, `plank-anchor`, `plank-haul`, `spawn-hang`); `cli spring` red on `whirl-anchor` and `hang-settle`; the corpus 10 of 69 bundles unhealthy (none on the shipped tree): 28 `player-embedded` (3 to 4 cm into a static, `1010f`, `1052f`, `1195f`, `322f`, `431f`, `537f`), 8 `rope-over-length` (`236f`, `307f`), 2 `chain-clip`, 1 `roll-unfunded`.
+What that says, before anyone tries to fix it case by case: a chain to a **static** anchor has no give, so the row's unbounded tension meets a soft 30 Hz contact row and the island's push-out cap with the world's positional depenetration switched off for the tied ball, and the ball ends inside the wall it is hauled against - the chain phase's leading push-out, which the row frame skips, was doing real work there; a **pivot** holder takes the row's impulse as velocity with no governor (`whirl-anchor`, `hang-settle` are the positional phase's governors, and the row has none); and a free holder a **scene chain** holds meets the positional sweep (`plank-anchor`, `plank-haul`, `hung-anchor`), which is stage 2.
+So the gate stays `"tied"`.
+The order for the rest of stage 3 is: statics first (the ball's contacts with statics as hard rows, or the leading push-out kept on row frames), then pivots and springs as rows (their own governors at velocity level), then stage 2 for the chains sharing a body with the ball's path.

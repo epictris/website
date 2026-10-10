@@ -116,7 +116,7 @@ Rope geometry and surfaces
 - [viscous-surfaces](docs/viscous-surfaces.md) - mud: the cuff sinks, creeps and drops out.
 - [conveyors](docs/conveyors.md) - belts: a static with a surface velocity, the hull of N wheels and its sense, the hollow build, the carry, the ride round the wheels, the tear-out, the band's ring and its scrolling texture.
 - [breakable](docs/breakable.md) - geometry that gives way: the force a hit carries, the hit count, and the debris it leaves.
-- [scene-chains](docs/scene-chains.md) - authored chains, the coupled sweep, the settle, anchors and wrap points; tied chains (a rope bridge) and their substepped island solver, and the parked row an authored chain can be solved as.
+- [scene-chains](docs/scene-chains.md) - authored chains, the coupled sweep, the settle, anchors and wrap points; tied chains (a rope bridge) and their substepped island solver, the ball's chain as a row of that island with its winch as a drum, and the parked row an authored chain can be solved as.
 - [vines](docs/vines.md) - pass-through link chains, the load rope, stiffness, spans, sleep, drawing, authoring.
 - [vine-ring](docs/vine-ring.md) - the manacle threaded onto a vine as a creeping ring.
 

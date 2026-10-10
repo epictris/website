@@ -967,6 +967,12 @@ export class RigidBody2D extends PhysicsBody2D {
   // the scenery solved there, and put to sleep only with the whole island.
   // Set once by `TieSolver.add`; false for every body of every recorded level.
   tied = false;
+  // A tied body whose contacts the world's grips still read: the steered ball
+  // while its chain is a row of an island (`BallLevel.syncBallRow`). A slat's
+  // contacts are its island's alone; the ball's are the island's too, but the
+  // steering grip is what rolls it along a slat, and the grips read the
+  // impulses the island wrote back. False for every body but the ball.
+  gripsWhenTied = false;
   // The rest rule held for this body this frame (`World.settleSleep`), and it
   // is tied, so whether it sleeps is the island's decision
   // (`TieSolver.settleSleep`). Cleared there every frame.

@@ -241,6 +241,17 @@ export class Rope {
   // Metres of path length that the last `regeneratePath` added or removed *with
   // the bodies held still* — a wrap node appearing or being culled.
   topologyJump = 0;
+  // The LENGTHENING half of the same, signed and not reset per frame: what the
+  // regenerations since the last `takeTopologyGrowth` added to the path with
+  // the bodies held still. A rope solved as a row of the island
+  // (`BallChainRow`, `RopeRow`) leases this into `blockedSlack` before its
+  // next solve: at velocity level a wrap appearing is a discontinuity in the
+  // constraint that a soft bias would turn into a yank (9.5 cm of path at
+  // `session-265f`'s 31 rad/s is a 7 m/s target rate), where the positional
+  // phase corrected it in position and paid nothing (`topologyCreditScale`).
+  // Leased, the row reels it back at `SLACK_RELEASE_RATE`, which is the lease's
+  // own statement about length the frame cannot honestly charge for.
+  private topologyGrowth = 0;
   // What fraction of the last solve's velocity credit was earned, 0..1.
   //
   // The path is a polyline through the wrap nodes, and the moment a node is
@@ -600,7 +611,25 @@ export class Rope {
     const before = this.calculateRopePathLength();
     this.uncrossAdjacentNodes();
     this.regeneratePath(bodies);
-    this.topologyJump += Math.abs(this.calculateRopePathLength() - before);
+    const jump = this.calculateRopePathLength() - before;
+    this.topologyJump += Math.abs(jump);
+    if (jump > 0) this.topologyGrowth += jump;
+  }
+
+  // Hand over the path growth the regenerations since the last call put there
+  // (see `topologyGrowth`), and zero it.
+  takeTopologyGrowth(): number {
+    const growth = this.topologyGrowth;
+    this.topologyGrowth = 0;
+    return growth;
+  }
+
+  // Lease `amount` of length to the constraint (see `blockedSlack`): the row's
+  // way of absorbing a topology jump without charging velocity for it. Given
+  // back by `beginFrame` at `SLACK_RELEASE_RATE` like any other lease, since a
+  // row never reports a block.
+  leaseLength(amount: number): void {
+    if (amount > 0) this.blockedSlack += amount;
   }
 
   // Zero the per-frame accounting and hand back this frame's instalment of the

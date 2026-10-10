@@ -151,6 +151,7 @@
             "w": 15.000000000000002,
             "h": 5
           },
+          "material": "brick",
           "thickness": 50,
           "debug": {
             "on": true
@@ -186,6 +187,7 @@
             "w": 15.000000000000002,
             "h": 5
           },
+          "material": "brick",
           "thickness": 50,
           "debug": {
             "on": true
@@ -221,6 +223,7 @@
             "w": 15.000000000000002,
             "h": 5
           },
+          "material": "brick",
           "thickness": 50,
           "debug": {
             "on": true
@@ -256,6 +259,7 @@
             "w": 15.000000000000002,
             "h": 5
           },
+          "material": "brick",
           "thickness": 50,
           "debug": {
             "on": true
@@ -291,6 +295,7 @@
             "w": 15.000000000000002,
             "h": 5
           },
+          "material": "brick",
           "thickness": 50,
           "debug": {
             "on": true
@@ -326,6 +331,7 @@
             "w": 15.000000000000002,
             "h": 5
           },
+          "material": "brick",
           "thickness": 50,
           "debug": {
             "on": true
@@ -361,6 +367,7 @@
             "w": 15.000000000000002,
             "h": 5
           },
+          "material": "brick",
           "thickness": 50,
           "debug": {
             "on": true
@@ -396,6 +403,7 @@
             "w": 15.000000000000002,
             "h": 5
           },
+          "material": "brick",
           "thickness": 50,
           "debug": {
             "on": true
@@ -431,6 +439,7 @@
             "w": 15.000000000000002,
             "h": 5
           },
+          "material": "brick",
           "thickness": 50,
           "debug": {
             "on": true
@@ -466,6 +475,7 @@
             "w": 15.000000000000002,
             "h": 5
           },
+          "material": "brick",
           "thickness": 50,
           "debug": {
             "on": true
@@ -501,6 +511,7 @@
             "w": 15.000000000000002,
             "h": 5
           },
+          "material": "brick",
           "thickness": 50,
           "debug": {
             "on": true
@@ -536,6 +547,7 @@
             "w": 15.000000000000002,
             "h": 5
           },
+          "material": "brick",
           "thickness": 50,
           "debug": {
             "on": true
@@ -571,6 +583,7 @@
             "w": 15.000000000000002,
             "h": 5
           },
+          "material": "brick",
           "thickness": 50,
           "debug": {
             "on": true
@@ -606,6 +619,7 @@
             "w": 15.000000000000002,
             "h": 5
           },
+          "material": "brick",
           "thickness": 50,
           "debug": {
             "on": true
@@ -641,6 +655,7 @@
             "w": 15.000000000000002,
             "h": 5
           },
+          "material": "brick",
           "thickness": 50,
           "debug": {
             "on": true
@@ -676,6 +691,7 @@
             "w": 15.000000000000002,
             "h": 5
           },
+          "material": "brick",
           "thickness": 50,
           "debug": {
             "on": true
@@ -711,6 +727,7 @@
             "w": 15.000000000000002,
             "h": 5
           },
+          "material": "brick",
           "thickness": 50,
           "debug": {
             "on": true
@@ -746,6 +763,7 @@
             "w": 15.000000000000002,
             "h": 5
           },
+          "material": "brick",
           "thickness": 50,
           "debug": {
             "on": true
@@ -781,6 +799,7 @@
             "w": 15.000000000000002,
             "h": 5
           },
+          "material": "brick",
           "thickness": 50,
           "debug": {
             "on": true

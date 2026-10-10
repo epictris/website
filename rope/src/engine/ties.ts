@@ -110,11 +110,13 @@ export const MAX_TIE_SUBSTEPS = 32;
 // A constraint the island solves: a slack that must stay non-negative, its
 // rate, and the impulse that drives it, applied to its bodies.
 export interface IslandRow {
-  // Once a frame, before any substep.
-  beginFrame(dt: number): void;
+  // Once a frame, before any substep, with the contacts the island solves this
+  // frame beside the rows (the ball's row asks whether the ball is touching a
+  // body on its path).
+  beginFrame(dt: number, contacts: readonly ContactConstraint[]): void;
   // Once a substep, before the warm start: a rope regenerates its wrap path
   // here against the bodies as they stand.
-  prepare(): void;
+  prepare(h: number): void;
   warmStart(): void;
   solve(h: number, soft: Softness, useBias: boolean): void;
   // End of the frame: what the row ended at (`over`).
@@ -165,10 +167,9 @@ export class TieSegment implements IslandRow {
   current = 0;
   over = 0;
 
-  // Mutable for a GUEST row (`TieSolver.guests`), whose length is the ball's
-  // chain's and changes as the winch winds it, and whose knot on the ball is
-  // wherever the coil's last node sits; the accumulated impulse is kept across
-  // both, which is what warm-starting the row from frame to frame means.
+  // Mutable so a caller re-knotting a segment (the editor, a build) can keep
+  // the accumulated impulse, which is what warm-starting the row across the
+  // change means.
   constructor(
     public a: TiePoint,
     public b: TiePoint,
@@ -449,22 +450,31 @@ export class TieSolver {
   readonly chains: TieChain[] = [];
   // ...and every unit, chains included: what the islands are built over.
   readonly units: IslandUnit[] = [];
-  // GUEST rows: a rope between a held body and a body that is NOT the island's
-  // to integrate, solved with that body's real mass. The ball's chain hooked to
-  // a slat is the one there is (`BallLevel.syncTieGuest`): its positional
-  // chain phase treats the slat as immovable, so this row is where the ball
-  // and the bridge actually exchange momentum - the ball's arrest spread over
-  // the bridge's give rather than taken by one slat in one frame, and the
-  // slat loaded with the ball's weight every frame. Set by the level before
-  // each `World.integrate`; empty on every level without one.
-  guests: TieSegment[] = [];
+  // The ball's chain as a unit of its own (`BallChainRow` in
+  // `level/chains.ts`, the plan's third stage): set by the level before each
+  // `World.integrate` on the frames the chain is a row, null otherwise. Its
+  // bodies are the ball and whatever free bodies its path runs over, so it
+  // joins the island of the slat it is hooked to by sharing that body, and
+  // the ball's arrest, its weight and its winch reach the bridge through one
+  // solve rather than a positional haul the island then has to undo.
+  //
+  // It replaced the GUEST row stage 1 shipped - the free span from the coil
+  // to the knot as a tie segment, the chain phase still positional with the
+  // slat immovable to it. That split leaked by construction: the gravity step
+  // dropped the ball 2.7 mm a frame that the row restored in velocity and not
+  // in position, the positional solve hauled it back into the slat, and the
+  // pair separation kicked the slat 3 rad/s a frame for its share
+  // (`session-1118f` f1012-1024, 52 J unforced); wound tight with the chain
+  // over a slat edge the guest was gone and the same loop spun a slat 32 rad/s
+  // a frame and flung two others at 13 m/s (`session-394f` f237-241).
+  ballRow: IslandUnit | null = null;
   // Last frame's accumulated contact impulses by contact key, looked up only.
   private contactCache = new Map<string, CachedImpulse>();
   // The islands this frame was solved in, kept for the sleep pass.
   private frameIslands: IslandUnit[][] = [];
 
   get active(): boolean {
-    return this.units.length > 0;
+    return this.units.length > 0 || this.ballRow !== null;
   }
 
   add(chain: TieChain): void {
@@ -500,7 +510,8 @@ export class TieSolver {
     only: ReadonlySet<IslandUnit> | null = null,
   ): void {
     const t0 = SolverStats.now();
-    const units = only ? this.units.filter((u) => only.has(u)) : this.units;
+    const all = this.ballRow ? [...this.units, this.ballRow] : this.units;
+    const units = only ? all.filter((u) => only.has(u)) : all;
     // Top of the frame: a sleeping unit gets up if anything woke one of its
     // bodies (the ball's contact, an impulse, the avatar's chain reaching it)
     // or moved one of its static knots. An awake unit keeps its bodies awake.
@@ -604,13 +615,6 @@ export class TieSolver {
       for (const row of unit.rows) rows.push(row);
     }
     const inIsland = new Set<RigidBody2D>(bodies);
-    for (const g of this.guests) {
-      const a = g.a.body;
-      const b = g.b.body;
-      if ((a instanceof RigidBody2D && inIsland.has(a)) || (b instanceof RigidBody2D && inIsland.has(b))) {
-        rows.push(g);
-      }
-    }
     const contactRows: ContactRow[] = [];
     for (const c of contacts) {
       if (!inIsland.has(c.a) && !(c.b instanceof RigidBody2D && inIsland.has(c.b))) continue;
@@ -627,7 +631,7 @@ export class TieSolver {
     const tieSoft = softness(Math.min(TieTuning.hertz, 0.25 / h), TieTuning.damping, h);
     const contactSoft = softness(Math.min(CONTACT_HERTZ, 0.25 / h), CONTACT_DAMPING, h);
 
-    for (const row of rows) row.beginFrame(dt);
+    for (const row of rows) row.beginFrame(dt, contacts);
     // Once a frame, before anything is measured, as the chain phase damps its
     // bodies (see `TIE_BODY_DAMPING`).
     for (const body of bodies) {
@@ -641,7 +645,7 @@ export class TieSolver {
         body.linearVelocity = body.linearVelocity.add(gravity.mul(body.gravityScale * h));
       }
       // A rope regenerates its wrap path against the bodies as they now stand.
-      for (const row of rows) row.prepare();
+      for (const row of rows) row.prepare(h);
       // Warm start: last substep's answer, applied before the first iteration.
       for (const row of rows) row.warmStart();
       for (const row of contactRows) warmStartContact(row);
