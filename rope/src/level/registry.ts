@@ -23,6 +23,7 @@ import type { RawLevelData } from "./levelFormat";
 // built app, which has no server. JSON widens string literals (`kind: string`),
 // hence the cast — the file is written by the editor against this schema.
 import ballLevelJson from "../../levels/ball.json";
+import starberryTestJson from "../../levels/starberry-test.json";
 // The rails level: the third of the authored arenas, a descent along ziplines
 // and bars the cuff clamps onto and slides down (see `lib/rail.ts`). Registered
 // here because a file in `levels/` is not a level until it is - the menu's list
@@ -64,6 +65,7 @@ import finishTestJson from "../../levels/finish-test.json";
 import beltTestJson from "../../levels/belt-test.json";
 
 export const LEVELS: Record<string, LevelSpec> = {
+  STARBERRY_TEST: { data: starberryTestJson as RawLevelData, controller: "ball", file: "starberry-test" },
   LEVEL_2: {
     data: LEVEL_2,
     init: (level) => {

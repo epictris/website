@@ -480,10 +480,10 @@ export class BallLevel {
     // loses its threshold here rather than taking a constraint down with it
     // mid-play (see `guardBreakables`).
     guardBreakables(this.sceneChains, this.vines);
-    for (const vine of this.vines) this.bodies.push(...vine.links);
+    for (const vine of this.vines) this.bodies.push(...vine.allLinks);
     // A hook that strikes a link threads onto the whole vine (see
     // `lib/vineClamp.ts`), and the level is what knows which vine a link is.
-    this.ball.vineFor = (link) => this.vines.find((v) => v.links.includes(link)) ?? null;
+    this.ball.vineFor = (link) => this.vines.find((v) => !v.starberry && v.links.includes(link)) ?? null;
     this.decor = collectDecor(built);
     this.visualSource = { data, built };
 

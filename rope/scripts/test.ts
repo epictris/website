@@ -32,6 +32,7 @@ const playtests = readdirSync(join(ROOT, "playtests"))
 
 const steps: Step[] = [
   { name: "typecheck", cmd: ["bunx", "tsc", "--noEmit"] },
+  { name: "starberry vines", cmd: ["bun", "run", "scripts/test-starberry.ts"] },
   { name: "dmath", cmd: ["bun", "run", CLI, "dmath"] },
   { name: "selftest", cmd: ["bun", "run", CLI, "selftest"] },
   { name: "contacts", cmd: ["bun", "run", CLI, "contacts"] },

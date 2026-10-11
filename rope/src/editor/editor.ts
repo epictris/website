@@ -1,3 +1,4 @@
+import { starberrySettings } from "../level/starberry";
 // Level editor. Owns its own canvas loop and DOM overlay (toolbar + inspector),
 // manipulates an EdModel with the mouse, tests the scene with either controller,
 // and saves/loads levels from disk through the dev-server API.
@@ -2015,7 +2016,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       vines: model.vines.flatMap((v) => {
         const points = vineRestPath(model, v);
         if (!points) return [];
-        return [{ color: v.color, braidSeed: v.braidSeed, path: (_alpha: number, out: Vec2[]) => {
+        return [{ color: v.color, braidSeed: v.braidSeed, starberry: v.starberry, path: (_alpha: number, out: Vec2[]) => {
           out.length = 0;
           out.push(...points);
         } }];
@@ -6953,7 +6954,45 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const hint = el("div", "ed-hint");
     hint.textContent =
       "Hangs from one anchor, free at the bottom - or spans between two. The player passes straight through it and the hook grabs it anywhere along its length; it drapes over whatever it lands on. Drag the top handle to move it - along the body it hangs from, or onto another one - and the end handle to set how long it is. SHIFT-drag the end handle onto a body to attach it there and make the vine a span (length stays its own, so a span longer than the gap sags); Shift-drop a span's end over empty space to detach it again. Density is kilograms per metre of cord: it sets how the vine answers a hooked player and what it leans on what it hangs from, not how it falls. Stiffness is how hard it is to bend - 0 is a rope, 1 a pole that holds itself straight and springs back to hanging. On a span the ends are pinned and stiffness presses the drape toward straight: 0 rests in the catenary, 1 reads as a taut wire. The ball's manacle threads onto a vine like a ring and creeps down it under the ball's weight, locked to the cord until it slides off the free end - viscosity sets how slowly, as it does for mud: blank is mud's own, 0 never slides.";
+    if (vines.every(v => v.starberry)) hint.textContent =
+      "Starberry vine: only the golden fruit catches the hook. The leafy stem stays firm while the berries sway. Drag the end to change length; berry positions follow the vine.";
     g.appendChild(hint);
+    const species = button(vines.every(v => v.starberry) ? "Use ordinary vine" : "Make Starberry vine", () => {
+      beginAction();
+      const remove = vines.every(v => v.starberry);
+      for (const v of vines) {
+        if (remove) { delete v.starberry; v.stiffness = null; }
+        else { v.starberry = starberrySettings(); v.stiffness = 0.78; }
+      }
+      markDirty(); rebuildInspector();
+    });
+    g.appendChild(species);
+    if (vines.length === 1 && vines[0]!.starberry) {
+      const berry = vines[0]!.starberry!;
+      for (const [key, label, step, min, max, scale] of [
+        ["radius", "berry radius", 1, 0.06, 0.65, M2PX],
+        ["stemLength", "berry stem length", 1, 0.2, 1.5, M2PX],
+        ["leafDensity", "leaf density", 0.1, 0.25, 2.5, 1],
+        ["sway", "berry sway", 0.05, 0, 1, 1],
+        ["glow", "golden glow", 0.1, 0, 3, 1],
+        ["seed", "foliage seed", 1, 0, 2147483647, 1],
+      ] as const) numField(g, label, () => berry[key] * scale,
+        n => { berry[key] = Math.min(max, Math.max(min, n / scale)); }, step, false);
+      const positions = document.createElement("input");
+      positions.className = "ed-num";
+      positions.value = berry.positions.map(p => Math.round(p * 100)).join(", ");
+      positions.setAttribute("aria-label", "Berry positions, percent down vine");
+      positions.title = "1–8 positions, from 8 to 100 percent down the vine, separated by commas.";
+      positions.addEventListener("change", () => {
+        const values = positions.value.split(",").map(p => p.trim() ? Number(p.trim()) : NaN);
+        const valid = values.length <= 8 && values.every(p => Number.isFinite(p) && p >= 8 && p <= 100);
+        positions.setCustomValidity(valid ? "" : "Enter 1–8 numbers between 8 and 100, separated by commas.");
+        if (!positions.reportValidity()) return;
+        beginAction(); berry.positions = [...new Set(values)].sort((a, b) => a - b).map(p => p / 100);
+        markDirty();
+      });
+      g.appendChild(labelWrap("berry positions %", positions));
+    }
 
     numField(
       g,
@@ -7146,7 +7185,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // The bands are the measured ones (see `BEND_EI_POLE`).
     readout("bends like", () => {
       if (vines.length > 1) return "-";
-      const s = vines[0]!.stiffness ?? DEFAULT_VINE_STIFFNESS;
+      const s = vines[0]!.stiffness ?? (vines[0]!.starberry ? 0.78 : DEFAULT_VINE_STIFFNESS);
       if (s < 0.2) return "a rope";
       if (s < 0.4) return "a heavy cord";
       if (s < 0.65) return "a springy branch";

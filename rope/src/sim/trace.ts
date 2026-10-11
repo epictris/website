@@ -1700,6 +1700,21 @@ export function checkBallInvariants(level: BallLevel): Violation[] {
   const out: Violation[] = [];
   const b = level.ball;
   const frame = level.frame;
+  for (const vine of level.vines) {
+    if (!vine.starberry) continue;
+    for (const link of vine.allLinks) {
+      if (!link.globalPosition.isFinite() || !link.linearVelocity.isFinite())
+        out.push({ frame, kind: "starberry-nan", detail: `Non-finite ${link.name}` });
+    }
+    for (const berry of vine.berries) {
+      const length = berry.fruit.globalPosition.distanceTo(vine.links[berry.parentIndex]!.globalPosition);
+      if (length > vine.starberry.stemLength + 0.05)
+        out.push({ frame, kind: "starberry-stretch", detail: `Branch stretched to ${length.toFixed(3)} m` });
+    }
+    const held = b.chain?.end.contact.obj;
+    if (vine.links.some(link => link === held) || vine.berries.some(berry => berry.joint === held))
+      out.push({ frame, kind: "starberry-stem-grab", detail: "The hook attached to a non-berry stem" });
+  }
   out.push(...checkBreakables(frame, level.world, b.anchoredTo));
 
   // THE CROSSING IS FINAL. `completedFrame` is written once, on the frame the

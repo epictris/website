@@ -175,7 +175,7 @@ export class Level {
     // never wrapped - `isPassThrough` drops a non-solid body from the wrap scan -
     // so what this buys is that the list is what the world holds, rather than a
     // second, quieter definition of the scene.
-    for (const vine of this.vines) this.bodies.push(...vine.links);
+    for (const vine of this.vines) this.bodies.push(...vine.allLinks);
     this.decor = collectDecor(built);
     this.visualSource = { data, built };
 

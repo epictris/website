@@ -16,6 +16,7 @@ import { shade } from "./color";
 import { VINE_VISUAL_RADIUS, type Vine } from "../level/vines";
 import { forEachBraidSegment } from "./vineBraid";
 import { forEachVineLeaf } from "./vineLeaves";
+import { drawStarberry } from "./starberry";
 
 // A vine with no authored colour. Deliberately desaturated: it hangs among the
 // level's own greys and has to read as growth without pulling the eye off the
@@ -32,6 +33,7 @@ export function drawVines(
   alpha: number,
 ): void {
   for (const vine of vines) {
+    if (vine.starberry) { drawStarberry(ctx, vine, alpha); continue; }
     if (vine.links.length === 0) continue;
     const points = [
       vine.anchorContact.renderGlobalPosition(alpha),

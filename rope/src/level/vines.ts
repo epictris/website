@@ -51,7 +51,8 @@
 // against an already-taut line.
 
 import { Vec2 } from "../engine/vec2";
-import { VineLink } from "../engine/body";
+import { starberrySettings, branchDirection, type StarberrySettings, type StarberryPose } from "./starberry";
+import { LAYER_HOOK, VineLink } from "../engine/body";
 import { circleShape } from "../engine/shapes";
 import { bodyOverlapCircle } from "../engine/collision";
 import { GRAVITY, type World } from "../engine/world";
@@ -219,6 +220,8 @@ export const DEFAULT_VINE_STIFFNESS = 0;
 // renderers take the cord through this, so neither can have its own idea of
 // where a vine is.
 export interface VineCord {
+  readonly starberry?: StarberrySettings;
+  berryPoses?(alpha: number): StarberryPose[];
   readonly color: string | null;
   readonly braidSeed: number | null;
   // The cord's points, in metres, appended to `out` (which is cleared first).
@@ -314,8 +317,8 @@ export function stepVines(vines: readonly Vine[]): void {
     if (vine.asleep) continue;
 
     let worst = 0;
-    for (let i = 0; i < vine.links.length; i++) {
-      const link = vine.links[i]!;
+    for (let i = 0; i < vine.allLinks.length; i++) {
+      const link = vine.allLinks[i]!;
       link.linearVelocity = link.linearVelocity.mul(LINK_DAMPING);
       link.angularVelocity *= LINK_DAMPING;
       worst = Math.max(worst, link.globalPosition.distanceTo(vine.sleepMark[i]!));
@@ -337,7 +340,7 @@ export function stepVines(vines: readonly Vine[]): void {
     vine.asleep = true;
     vine.anchorAt = anchor;
     if (vine.anchor2Contact) vine.anchor2At = vine.anchor2Contact.globalPosition;
-    for (const link of vine.links) {
+    for (const link of vine.allLinks) {
       link.linearVelocity = Vec2.ZERO;
       link.angularVelocity = 0;
       link.asleep = true;
@@ -379,7 +382,7 @@ export function vineChainSet(
 
 function restartWindow(vine: Vine): void {
   vine.stillFrames = 0;
-  for (let i = 0; i < vine.links.length; i++) vine.sleepMark[i] = vine.links[i]!.globalPosition;
+  for (let i = 0; i < vine.allLinks.length; i++) vine.sleepMark[i] = vine.allLinks[i]!.globalPosition;
 }
 
 function wakeVine(vine: Vine): void {
@@ -388,10 +391,13 @@ function wakeVine(vine: Vine): void {
   if (vine.anchor2Contact) vine.anchor2At = vine.anchor2Contact.globalPosition;
   if (!vine.asleep) return;
   vine.asleep = false;
-  for (const link of vine.links) link.asleep = false;
+  for (const link of vine.allLinks) link.asleep = false;
 }
 
 export interface Vine extends VineCord {
+  readonly allLinks: VineLink[];
+  readonly berries: { parentIndex: number; joint: VineLink; fruit: VineLink }[];
+  heldBerry: VineLink | null;
   // Where the vine is bolted, on the anchor body's own surface. Both the first
   // pair chain and the load rope start here.
   readonly anchorContact: RopeContact;
@@ -503,7 +509,7 @@ function settleVinesAtBuild(world: World, vines: Vine[]): void {
     const awake = candidates.filter((v) => !v.asleep);
     if (awake.length === 0) break;
     for (const vine of awake) {
-      for (const link of vine.links) {
+      for (const link of vine.allLinks) {
         link.linearVelocity = link.linearVelocity.add(GRAVITY.mul(link.gravityScale * dt));
         link.globalPosition = link.globalPosition.add(link.linearVelocity.mul(dt));
         link.globalRotation += link.angularVelocity * dt;
@@ -581,7 +587,8 @@ function buildOne(
   // Clamped rather than trusted: a hand-edited file may say anything, and a
   // negative compliance is a solver that pushes the vine further from straight
   // the harder it is bent.
-  const stiffness = Math.min(1, Math.max(0, v.stiffness ?? DEFAULT_VINE_STIFFNESS));
+  const starberry = v.starberry ? starberrySettings(v.starberry) : undefined;
+  const stiffness = Math.min(1, Math.max(0, v.stiffness ?? (starberry ? 0.78 : DEFAULT_VINE_STIFFNESS)));
   // A negative viscosity is a law with no meaning; the floor is a ring that
   // never slides.
   const viscosity = Math.max(0, v.viscosity ?? DEFAULT_VINE_VISCOSITY);
@@ -612,6 +619,7 @@ function buildOne(
   for (let i = 0; i < count; i++) {
     const link = new VineLink();
     link.setShape(circleShape(radius));
+    if (starberry) link.primaryShape().mask &= ~LAYER_HOOK;
     link.mass = density * spacing;
     link.inertia = ShapeGeometry.computeMomentOfInertia(link.primaryShape(), link.mass);
     // No friction coefficients: a link contacts nothing (`passable`), so there
@@ -708,6 +716,38 @@ function buildOne(
   // unused there (see `buildVineBends`).
   const restDir = new Vec2(0, 1);
 
+  const bends = buildVineBends(anchorContact, restDir, links, stiffness, spacing, anchor2Contact);
+  const allLinks = [...links];
+  const berries: Vine["berries"] = [];
+  if (starberry) for (const [i, fraction] of starberry.positions.entries()) {
+    const parentIndex = Math.min(links.length - 1, Math.max(0, Math.round(fraction * segments) - 1));
+    const parent = links[parentIndex]!;
+    const direction = branchDirection(i), step = starberry.stemLength / 2;
+    const branch: VineLink[] = [];
+    for (let j = 0; j < 2; j++) {
+      const body = new VineLink();
+      body.name = j === 1 ? "Starberry" : "StarberryStem";
+      body.setShape(circleShape(j === 1 ? starberry.radius * 0.83 : 0.025));
+      if (j === 0) body.primaryShape().mask &= ~LAYER_HOOK;
+      body.mass = j === 1 ? 9 : 4;
+      body.inertia = ShapeGeometry.computeMomentOfInertia(body.primaryShape(), body.mass);
+      // Fruit rocks with its supporting stem visually; the grab surface does not spin.
+      body.kinematicRotation = true;
+      body.globalPosition = parent.globalPosition.add(direction.mul(step * (j + 1)));
+      world.add(body);
+      branch.push(body);
+      allLinks.push(body);
+      chains.push(new VinePair(new RopeContact(j === 0 ? parent : branch[0]!, Vec2.ZERO),
+        new RopeContact(body, Vec2.ZERO), step, CHAIN_TOLERANCE));
+    }
+    // A short branch has its own bend compliance, independently of the trunk.
+    const source = new RopeContact(parent, Vec2.ZERO);
+    bends.push(...buildVineBends(source, direction, branch, 0.5 - starberry.sway * 0.2, step));
+    chains.push(new VineAnchor(source, new RopeContact(branch[1]!, Vec2.ZERO),
+      starberry.stemLength + CHAIN_TOLERANCE, CHAIN_TOLERANCE));
+    berries.push({ parentIndex, joint: branch[0]!, fruit: branch[1]! });
+  }
+
   // Whether this vine's settle may run AT BUILD instead of over the level's
   // first visible frames (see `settleVinesAtBuild`): its spawn pose is its own
   // rest pose, and every link is clear of every area - a link a current or
@@ -717,7 +757,7 @@ function buildOne(
   // settle either at build or live.
   const settleAtBuild =
     spawnIsRest &&
-    links.every((link) =>
+    allLinks.every((link) =>
       world.areas.every((area) => bodyOverlapCircle(area, link.globalPosition, radius) === null),
     );
 
@@ -726,7 +766,15 @@ function buildOne(
     anchor2Contact,
     links,
     chains,
-    bends: buildVineBends(anchorContact, restDir, links, stiffness, spacing, anchor2Contact),
+    bends,
+    allLinks,
+    berries,
+    heldBerry: null,
+    starberry,
+    berryPoses(alpha: number): StarberryPose[] {
+      return berries.map(b => ({ root: links[b.parentIndex]!.renderPosition(alpha),
+        joint: b.joint.renderPosition(alpha), fruit: b.fruit.renderPosition(alpha), held: this.heldBerry === b.fruit }));
+    },
     stiffness,
     viscosity,
     spacing,
@@ -738,7 +786,7 @@ function buildOne(
     settleAtBuild,
     asleep: false,
     stillFrames: 0,
-    sleepMark: links.map((l) => l.globalPosition),
+    sleepMark: allLinks.map((l) => l.globalPosition),
     anchorAt: anchorPoint,
     anchor2At: anchor2Point ?? anchorPoint,
     // The anchor, every link centre, and the second anchor if there is one,
@@ -822,7 +870,9 @@ export function updateVineLoads(vines: readonly Vine[], rope: Rope | null): Vine
   const held = rope ? rope.end.contact.obj : null;
   let active: Vine | null = null;
   for (const vine of vines) {
-    const index = held instanceof VineLink ? vine.links.indexOf(held) : -1;
+    const berry = vine.berries.find(b => b.fruit === held);
+    vine.heldBerry = berry?.fruit ?? null;
+    const index = berry ? berry.parentIndex : held instanceof VineLink ? vine.links.indexOf(held) : -1;
     if (index < 0) {
       vine.lra = null;
       vine.lra2 = null;

@@ -1,5 +1,48 @@
 # Vines
 
+## Starberry vines
+
+Use **+ Vine** in the editor, draw from an anchor body, then choose **Make Starberry vine**
+in the selected vine's inspector. The same button converts an existing vine. The inspector
+exposes berry radius, branch length, leaf density, berry sway, glow, foliage seed, and explicit
+berry positions as percentages down the stem. Positions survive foliage reseeding, cloning,
+undo, save/load, and pixel/metre conversion. Start with the preset stiffness of 0.78.
+
+Play `/?level=STARBERRY_TEST` for the Starberry garden, with two new plants and an ordinary
+vine for comparison. `&toggle_click=true` lets a click keep the chain attached; right-click releases.
+The existing river level is not changed by this feature.
+
+`VineData.starberry` is an optional settings block. Stem and branch-joint shapes omit
+`LAYER_HOOK`; only the fruit has a hook target. The ball attaches to the fruit's body using its
+normal moving-body attachment, without the ordinary vine's sliding ring. Each berry has two
+branch bodies, short pair constraints and its own bend compliance. Its branch transfers load
+to a main-stem link; the main vine's temporary load constraint ends on that parent link.
+`allLinks` includes branches for level ownership, damping, sleep, and wake; `links` remains the
+ordered main stem for curve rendering and arc measurements. All berry bodies are already
+included in the world's recording digest. Starberry-specific invariants detect non-finite
+motion, excess branch extension, and accidental attachment to a stem.
+
+The 3D renderer instances curved heart leaves and stems, and shares rounded, bevelled
+five-point fruit geometry. Fruit meshes follow interpolated physics positions; leaf flutter,
+grab glow, a brief foliage shiver, and a quiet gesture-unlocked chime are presentation only.
+An additive golden halo keeps glow available without a bloom pass. One local light per plant
+follows the berry nearest the player and fades in nearby. Small heart leaves use muted olive
+colours, rough surfaces and broken pigment texture. Conservative blade footprints reserve
+gaps between leaves (including neighbouring plants) and around the plant's berries; blades
+sit behind the player's full depth so the ball passes cleanly in front. The trunk has a tapered,
+irregular curve, and thicker curved berry stalks meet the fruit inside its silhouette. These
+curves are visual only. New plants default to 0.38 m branches, 0.95 leaf density and 1.5 glow.
+Canvas play and the editor overlay also show berry targets. The first version supports up to
+eight explicit berries and considers at most 100 leaf placements per plant. Author branches clear of
+scenery: like ordinary vines, this plant is pass-through and does not collide with the level.
+
+Validation: `bun run scripts/test-starberry.ts` checks format/clone isolation, real swept-hook
+filtering, sleeping berry grabs, swing/release, branch bounds, leaf/berry clearance during a
+swing, foliage depth behind the ball, and complete-world replay
+identity. `bun run scripts/probe-starberry.ts` prints motion measurements without freezing
+subjective sway tuning into a regression. Tune the feel in the garden before fixing aesthetic
+or swing-amplitude targets in tests.
+
 A **vine** hangs from one anchor, free at the bottom - or **spans between two**
 (see **Spanning vines** below): the player passes straight through it, and the
 hook grabs it **anywhere along its length**.

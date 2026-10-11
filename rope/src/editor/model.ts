@@ -792,6 +792,7 @@ export interface EdChain {
 // press on a body that starts a chain, and a drag that pulls the length out
 // instead of reaching for a second body.
 export interface EdVine {
+  starberry?: import("../level/starberry").StarberrySettings;
   id: number;
   braidSeed: number | null;
   // The item id of the anchor it hangs from.
@@ -2175,6 +2176,7 @@ function lightItem(
     vines.push({
       id: newBodyId(),
       braidSeed: v.braidSeed ?? null,
+      ...(v.starberry ? { starberry: structuredClone(v.starberry) } : {}),
       anchor: a.id,
       anchor2: a2 && a2 !== a ? a2.id : null,
       length: v.length,
@@ -2787,6 +2789,7 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
     const a2 = v.anchor2 !== null ? model.items.find((i) => i.id === v.anchor2) : undefined;
     vines.push({
       anchor: a.anchorId,
+      ...(v.starberry ? { starberry: structuredClone(v.starberry) } : {}),
       ...(v.braidSeed !== null ? { braidSeed: v.braidSeed } : {}),
       ...(a2?.object === "anchor" ? { anchor2: a2.anchorId } : {}),
       length: v.length,
@@ -4623,7 +4626,7 @@ export function nearestChainSpan(
 // --- vines ------------------------------------------------------------------
 
 export function cloneVine(v: EdVine): EdVine {
-  return { ...v };
+  return { ...v, ...(v.starberry ? { starberry: structuredClone(v.starberry) } : {}) };
 }
 
 // Where a vine hangs from, or null if its anchor has gone.

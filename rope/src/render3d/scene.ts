@@ -1059,7 +1059,8 @@ export class Scene3D {
     for (const visual of this.standing) visual.sync(alpha, treadTime);
 
     this.chains.sync(level, alpha, retract);
-    this.vines.sync(level.vines ?? NO_VINES, alpha);
+    this.vines.sync(level.vines ?? NO_VINES, alpha, level.ball
+      ? { position: level.ball.renderPosition(alpha), radius: level.ball.radius } : undefined);
     this.ballVisual?.sync(alpha);
     // The lights after the bodies, because a waking light is judged by where
     // its body is drawn this frame against where the ball is drawn this frame

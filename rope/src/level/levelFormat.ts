@@ -1658,7 +1658,10 @@ export function isLegacyChain(c: ChainData | LegacyChainData): c is LegacyChainD
 // point anywhere: a hanging vine's free end is wherever the simulation leaves
 // it, and a spanning vine's rest pose is the catenary its length and its two
 // anchors imply (`level/catenary.ts`).
+import type { StarberrySettings } from "./starberry";
+
 export interface VineData {
+  starberry?: StarberrySettings;
   // Anchor id. A vine naming an anchor that is not in the level, or one on a
   // body that builds nothing, is dropped at load - the same tolerance a chain
   // end gets.
@@ -3597,6 +3600,8 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
   // through `scaleObject` with every other placement, exactly as a chain end does.
   const vines = data.vines?.map((v) => ({
     anchor: v.anchor,
+    ...(v.starberry ? { starberry: { ...v.starberry, positions: [...v.starberry.positions],
+      radius: v.starberry.radius * factor, stemLength: v.starberry.stemLength * factor } } : {}),
     ...(v.braidSeed !== undefined ? { braidSeed: v.braidSeed } : {}),
     ...(v.anchor2 !== undefined ? { anchor2: v.anchor2 } : {}),
     length: v.length * factor,

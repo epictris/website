@@ -1,3 +1,4 @@
+import { StarberryLayer } from "./starberryVisual";
 // Every vine in the scene, as one `InstancedMesh` of short capsules.
 //
 // The same argument `ChainLayer` is written under, one mechanic along: a vine is
@@ -49,6 +50,7 @@ const INITIAL_SEGMENTS = 256;
 const FORWARD = new THREE.Vector3(0, 0, 1);
 
 export class VineLayer {
+  private readonly starberries: StarberryLayer;
   private mesh: THREE.InstancedMesh;
   private braidMesh: THREE.InstancedMesh;
   private leafMesh: THREE.InstancedMesh;
@@ -78,6 +80,7 @@ export class VineLayer {
   private readonly up = new THREE.Vector3(0, 1, 0);
 
   constructor(private readonly scene: THREE.Scene) {
+    this.starberries = new StarberryLayer(scene);
     // A unit-length capsule: the per-instance y scale is then the segment's own
     // length, and nothing has to rebuild geometry as a vine bends.
     this.geometry = new THREE.CapsuleGeometry(VINE_VISUAL_RADIUS, 1, 3, 8);
@@ -131,11 +134,13 @@ export class VineLayer {
   }
 
   // Every vine on the level, laid this frame.
-  sync(vines: readonly VineCord[], alpha: number): void {
+  sync(vines: readonly VineCord[], alpha: number, ball?: { position: Vec2; radius: number }): void {
+    this.starberries.sync(vines, alpha, ball);
     this.count = 0;
     this.braidCount = 0;
     this.leafCount = 0;
     for (const vine of vines) {
+      if (vine.starberry) continue;
       vine.path(alpha, this.path);
       if (this.path.length < 2) continue;
       this.tint.set(vine.color ?? DEFAULT_TINT);
@@ -250,6 +255,7 @@ export class VineLayer {
   }
 
   clear(): void {
+    this.starberries.hide();
     this.count = 0;
     this.mesh.count = 0;
     this.braidMesh.count = 0;
@@ -258,6 +264,7 @@ export class VineLayer {
   }
 
   dispose(): void {
+    this.starberries.dispose();
     this.scene.remove(this.mesh);
     this.mesh.dispose();
     this.scene.remove(this.braidMesh);

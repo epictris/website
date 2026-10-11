@@ -3,6 +3,7 @@
 // truth for handle positions, shared by drawing and hit-testing.
 
 import { Vec2 } from "../engine/vec2";
+import { drawStarberry } from "../render/starberry";
 import { PIXELS_PER_METER, PX } from "../engine/units";
 import { worldToScreen, type Camera } from "../render/camera";
 import { drawTrainingGrid } from "../render/trainingGrid";
@@ -2508,7 +2509,10 @@ export function drawEditor(
       }
       const color = v.color ?? VINE_DEFAULT_COLOR;
       if (layers === "fill") {
-        if (v.braidSeed !== null) {
+        if (v.starberry) {
+          drawStarberry(ctx, { color: v.color, braidSeed: v.braidSeed, starberry: v.starberry,
+            path: (_alpha, out) => { out.length = 0; out.push(...path); } }, 1);
+        } else if (v.braidSeed !== null) {
           ctx.strokeStyle = color;
           ctx.lineWidth = worldLine * 2;
           tracePath(path);
