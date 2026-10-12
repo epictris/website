@@ -1,0 +1,167 @@
+{
+  "meta": {
+    "title": "Round lantern berry garden",
+    "unlisted": true
+  },
+  "cameraRegions": [
+    {
+      "x": 220.00000000000003,
+      "y": 0,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 2000,
+        "h": 1600
+      },
+      "viewportScale": 1.45,
+      "lockX": 210,
+      "lockY": -115.00000000000001,
+      "keepInFrame": false
+    }
+  ],
+  "environment": {
+    "envIntensity": 0.65
+  },
+  "vines": [
+    {
+      "anchor": 901,
+      "starberry": {
+        "appearance": "round",
+        "positions": [
+          0.35,
+          0.59,
+          0.87
+        ],
+        "radius": 14.000000000000002,
+        "stemLength": 42,
+        "leafDensity": 0.85,
+        "sway": 0.65,
+        "glow": 1.5,
+        "seed": 1701,
+        "sides": [
+          1,
+          1,
+          -1
+        ]
+      },
+      "length": 340,
+      "stiffness": 0.78
+    },
+    {
+      "anchor": 902,
+      "starberry": {
+        "appearance": "round",
+        "positions": [
+          0.33,
+          0.7
+        ],
+        "radius": 16,
+        "stemLength": 46,
+        "leafDensity": 0.85,
+        "sway": 0.7,
+        "glow": 1.5,
+        "seed": 2914
+      },
+      "length": 285,
+      "stiffness": 0.78
+    },
+    {
+      "anchor": 903,
+      "starberry": {
+        "positions": [
+          0.3,
+          0.65
+        ],
+        "radius": 25,
+        "stemLength": 38,
+        "leafDensity": 0.95,
+        "sway": 0.65,
+        "glow": 1.5,
+        "seed": 1701
+      },
+      "length": 320,
+      "stiffness": 0.78
+    }
+  ],
+  "player": {
+    "x": -100,
+    "y": 45,
+    "radius": 12
+  },
+  "bodies": [
+    {
+      "kind": "static",
+      "x": 250,
+      "y": 130,
+      "rot": 0,
+      "color": "#33483d",
+      "opacity": 0.5,
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 2000,
+            "h": 70
+          }
+        },
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 2000,
+            "h": 70
+          },
+          "matchCollision": true
+        }
+      ]
+    },
+    {
+      "kind": "static",
+      "x": 220.00000000000003,
+      "y": -375,
+      "rot": 0,
+      "color": "#33483d",
+      "opacity": 0.5,
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 1450,
+            "h": 40
+          }
+        },
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 1450,
+            "h": 40
+          },
+          "matchCollision": true
+        },
+        {
+          "type": "anchor",
+          "id": 901,
+          "x": -220.00000000000003,
+          "y": 20.000000000000018
+        },
+        {
+          "type": "anchor",
+          "id": 902,
+          "x": 60.00000000000001,
+          "y": 20.000000000000018
+        },
+        {
+          "type": "anchor",
+          "id": 903,
+          "x": 350,
+          "y": 20.000000000000018
+        }
+      ]
+    }
+  ]
+}

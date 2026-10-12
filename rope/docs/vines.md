@@ -8,6 +8,30 @@ exposes berry radius, branch length, leaf density, berry sway, glow, foliage see
 berry positions as percentages down the stem. Positions survive foliage reseeding, cloning,
 undo, save/load, and pixel/metre conversion. Start with the preset stiffness of 0.78.
 
+Select a berry vine in **Level** view with **2D** or **3D + overlay** enabled to see numbered
+berry handles. Drag a berry along the vine to place its branch, including on spanning vines.
+The inspector has **+ Berry**, individual position percentages, left/right switches, and
+**Remove berry N**; Alt-clicking a berry handle also removes it. Up to eight berries can be
+placed, moved past one another, and removed without moving or flipping the others. Positions
+keep their authored order; optional `sides` record each berry's side. These changes support
+undo/redo and autosave. The global **berry stem length** still controls branch reach.
+
+**Berry appearance → Round lantern berries** selects the smaller, softly oval variation. It keeps the
+same attachment and sway, with subtle asymmetry, a rounded bottom, five curved sepals around
+the stalk junction, and a smooth honey-gold glow with faint pigment variation. Two unequal, slowly twisting
+stems follow the crooked Starberry path and braid into the short berry stalks. The berry and
+calyx share the stalk's arrival direction, and the two strands converge smoothly into the
+calyx with no sideways kink. The braid is distinct
+from the ordinary vine's tighter three-strand braid. The original stars remain available as
+**Golden stars**; older levels with no `appearance` field retain that look. The appearance
+field is presentation only. The editor halves the authored radius when switching to round berries
+and doubles it when switching back (within the radius limits), so the hook target follows their
+size. New round plants default to a 0.125 m radius. `/?level=ROUNDBERRY_TEST` shows
+two round-berry plants beside a star-berry plant. No external texture download is needed:
+the soft pigment is generated once, mapped continuously around the berry and reused.
+The leafy cap has a short stem collar and five individually curved sepals with raised veins,
+slightly different lengths, and lifted tapered tips. It follows the berry's growth axis.
+
 Play `/?level=STARBERRY_TEST` for the Starberry garden, with two new plants and an ordinary
 vine for comparison. `&toggle_click=true` lets a click keep the chain attached; right-click releases.
 The existing river level is not changed by this feature.

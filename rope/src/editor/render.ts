@@ -4,6 +4,7 @@
 
 import { Vec2 } from "../engine/vec2";
 import { drawStarberry } from "../render/starberry";
+import { restStarberries } from "../level/starberry";
 import { PIXELS_PER_METER, PX } from "../engine/units";
 import { worldToScreen, type Camera } from "../render/camera";
 import { drawTrainingGrid } from "../render/trainingGrid";
@@ -540,6 +541,16 @@ export function computeVineHandles(
     top: worldToScreen(cam, path[0]!),
     tip: worldToScreen(cam, path[path.length - 1]!),
   };
+}
+
+export function computeBerryHandles(cam: Camera, model: EdModel, vine: EdVine) {
+  const path = vineRestPath(model, vine);
+  if (!path || !vine.starberry) return [];
+  return restStarberries(path, vine.starberry).map((berry, index) => ({
+    index, root: berry.root, fruit: berry.fruit,
+    screen: worldToScreen(cam, berry.fruit), rootScreen: worldToScreen(cam, berry.root),
+    radius: Math.max(9, vine.starberry!.radius * cam.zoom * PIXELS_PER_METER + 4),
+  }));
 }
 
 // The rotate knob for a whole compound body: above the group's bounding box, on
@@ -2868,6 +2879,15 @@ export function drawEditor(
     if (!hs) continue;
     circleHandle(ctx, hs.top);
     circleHandle(ctx, hs.tip);
+    for (const handle of computeBerryHandles(cam, model, v)) {
+      ctx.save(); ctx.strokeStyle = "#eac36b"; ctx.fillStyle = "#ffe2a0"; ctx.lineWidth = 1.5;
+      ctx.setLineDash([3, 3]); ctx.beginPath();
+      ctx.moveTo(handle.rootScreen.x, handle.rootScreen.y); ctx.lineTo(handle.screen.x, handle.screen.y); ctx.stroke();
+      ctx.setLineDash([]); ctx.beginPath(); ctx.arc(handle.screen.x, handle.screen.y, handle.radius, 0, Math.PI * 2); ctx.stroke();
+      ctx.font = "12px monospace"; ctx.textAlign = "center"; ctx.textBaseline = "bottom";
+      ctx.fillText(String(handle.index + 1), handle.screen.x, handle.screen.y - handle.radius - 3);
+      ctx.restore();
+    }
   }
   // A whole compound body turns as one, so it gets a rotate knob where a lone
   // shape does - placed by the group's extent, with the centre of mass it turns

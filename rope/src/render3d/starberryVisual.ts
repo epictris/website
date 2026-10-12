@@ -4,7 +4,8 @@ import type { VineCord } from "../level/vines";
 import { restStarberries } from "../level/starberry";
 import { threeY } from "./space";
 import { StarberryChime } from "./starberryChime";
-import { leafDepth, naturalStemPoint, starberryLeaves, stemFraction, type LeafFootprint } from "../render/starberryArt";
+import { roundBerryCalyx, roundBerryGeometry, roundBerryTexture } from "./roundBerry";
+import { leafDepth, naturalStemPoint, roundBerryAttachment, starberryLeaves, stemFraction, type LeafFootprint } from "../render/starberryArt";
 
 // Broad, broken pigment marks, rather than a glossy uniform plastic surface.
 function pigmentTexture(woody = false): THREE.DataTexture {
@@ -83,6 +84,7 @@ interface Plant {
   stems: THREE.InstancedMesh;
   fruit: THREE.Mesh[];
   halos: THREE.Mesh[];
+  caps: THREE.Mesh[];
   materials: THREE.MeshStandardMaterial[];
   light: THREE.PointLight;
   pulse: number[];
@@ -95,6 +97,9 @@ export class StarberryLayer {
   private readonly plants: Plant[] = [];
   private readonly leafGeometry = heartGeometry();
   private readonly fruitGeometry = fruitGeometry();
+  private readonly roundGeometry = roundBerryGeometry();
+  private readonly capGeometry = roundBerryCalyx();
+  private roundPigment: THREE.DataTexture | null = null;
   private readonly stemGeometry = new THREE.CylinderGeometry(1, 1, 1, 6);
   private readonly haloGeometry = new THREE.PlaneGeometry(1, 1);
   private readonly leafPigment = pigmentTexture();
@@ -104,6 +109,8 @@ export class StarberryLayer {
   private readonly stemMaterial = new THREE.MeshStandardMaterial({ color: 0x6b6842,
     map: this.stemPigment, roughness: 0.98 });
   private readonly veinMaterial = new THREE.MeshStandardMaterial({ color: 0x738150, roughness: 0.96 });
+  private readonly capMaterial = new THREE.MeshStandardMaterial({ color: 0x82984b,
+    map: this.leafPigment, vertexColors: true, roughness: 0.95, side: THREE.DoubleSide });
   private readonly haloMaterial = new THREE.ShaderMaterial({
     uniforms: { strength: { value: 1 } }, transparent: true, depthWrite: false,
     blending: THREE.AdditiveBlending,
@@ -139,7 +146,7 @@ export class StarberryLayer {
     // One local light per plant, following the fruit closest to the player.
     const light = new THREE.PointLight(0xffb52e, 0, 1.25, 2);
     group.add(leaves, veins, stems, light); this.scene.add(group);
-    return { group, leaves, veins, stems, light, fruit: [], halos: [], materials: [], pulse: [], held: [] };
+    return { group, leaves, veins, stems, light, fruit: [], halos: [], caps: [], materials: [], pulse: [], held: [] };
   }
 
   private segment(mesh: THREE.InstancedMesh, index: number, a: THREE.Vector3, b: THREE.Vector3, radius: number): void {
@@ -149,6 +156,7 @@ export class StarberryLayer {
     this.dummy.quaternion.setFromUnitVectors(this.up, this.direction.normalize());
     this.dummy.scale.set(radius, length * 1.08, radius); this.dummy.updateMatrix();
     mesh.setMatrixAt(index, this.dummy.matrix);
+    if (mesh.instanceColor) mesh.setColorAt(index, this.color.setHex(0xffffff));
   }
 
   sync(vines: readonly VineCord[], alpha: number, ball?: { position: Vec2; radius: number }): void {
@@ -163,6 +171,8 @@ export class StarberryLayer {
       vine.path(alpha, this.path);
       if (this.path.length < 2) { plant.group.visible = false; continue; }
       const settings = vine.starberry;
+      const round = settings.appearance === "round";
+      if (round) this.roundPigment ??= roundBerryTexture();
       const berries = vine.berryPoses?.(alpha) ?? restStarberries(this.path, settings);
       let stems = 0, leaves = 0, length = 0;
       for (let i = 1; i < this.path.length; i++) length += this.path[i]!.distanceTo(this.path[i - 1]!);
@@ -173,9 +183,22 @@ export class StarberryLayer {
       };
       for (let i = 0; i < segments; i++) {
         const f = (i + 0.5) / segments;
-        stem3(i / segments, this.a); stem3((i + 1) / segments, this.b);
         const radius = (0.041 - f * 0.024) * (1 + Math.sin(f * 47 + settings.seed) * 0.12);
-        this.segment(plant.stems, stems++, this.a, this.b, radius);
+        for (let strand = 0; strand < (round ? 2 : 1); strand++) {
+          const sample = (fraction: number, out: THREE.Vector3) => {
+            stem3(fraction, out);
+            if (!round) return;
+            // A slow, uneven two-stem growth, following the Starberry's crooked silhouette.
+            const phase = fraction * length * 10 + Math.sin(fraction * 11) * 0.7 + settings.seed * 0.1 + strand * Math.PI;
+            const spread = (0.034 - fraction * 0.023) * Math.min(1, (1 - fraction) * 18);
+            out.x += Math.cos(phase) * spread; out.z += Math.sin(phase) * spread;
+          };
+          sample(i / segments, this.a); sample((i + 1) / segments, this.b);
+          this.segment(plant.stems, stems, this.a, this.b, radius * (round ? (strand ? 0.57 : 0.78) : 1));
+          this.color.setRGB(round ? (strand ? 0.85 : 1.35) : 1, round ? (strand ? 1.05 : 1.65) : 1,
+            round ? (strand ? 0.55 : 0.9) : 1);
+          plant.stems.setColorAt(stems++, this.color);
+        }
       }
       const lastGrab = plant.pulse.reduce((latest, pulse) => Math.max(latest, pulse ?? -100), -100);
       const shiver = Math.max(0, 1 - (time - lastGrab) / 0.65);
@@ -203,42 +226,72 @@ export class StarberryLayer {
             emissiveIntensity: 1.6, roughness: 0.64, metalness: 0.04 });
           const mesh = new THREE.Mesh(this.fruitGeometry, material); mesh.castShadow = true;
           const halo = new THREE.Mesh(this.haloGeometry, this.haloMaterial.clone());
-          plant.group.add(mesh, halo); plant.fruit.push(mesh); plant.halos.push(halo); plant.materials.push(material);
+          const cap = new THREE.Mesh(this.capGeometry, this.capMaterial); cap.castShadow = true;
+          plant.group.add(mesh, halo, cap); plant.fruit.push(mesh); plant.halos.push(halo);
+          plant.caps.push(cap); plant.materials.push(material);
         }
         if (berry.held && !plant.held[i]) { plant.pulse[i] = time; this.chime.play(); }
         plant.held[i] = berry.held;
         const pulse = Math.max(0, 1 - (time - (plant.pulse[i] ?? -100)) / 0.55);
         const mesh = plant.fruit[i]!, halo = plant.halos[i]!;
+        const cap = plant.caps[i]!, material = plant.materials[i]!;
+        mesh.geometry = round ? this.roundGeometry : this.fruitGeometry;
+        const pigment = round ? this.roundPigment : null;
+        if (material.map !== pigment) {
+          material.map = material.emissiveMap = pigment; material.needsUpdate = true;
+        }
+        material.color.setHex(round ? 0xffc567 : 0xeaaa32);
+        material.emissive.setHex(round ? 0xffdc8a : 0xffb52c);
         mesh.visible = halo.visible = true;
         mesh.position.set(berry.fruit.x, threeY(berry.fruit.y), 0);
         mesh.scale.setScalar(settings.radius);
         mesh.rotation.z = -Math.atan2(berry.fruit.x - berry.joint.x, berry.fruit.y - berry.joint.y) * 0.25;
-        plant.materials[i]!.emissiveIntensity = settings.glow * (1.6 + pulse * 0.8 + (berry.held ? 0.2 : 0));
+        material.emissiveIntensity = settings.glow * ((round ? 0.85 : 1.6)
+          + pulse * (round ? 0.45 : 0.8) + (berry.held ? (round ? 0.15 : 0.2) : 0));
         halo.position.copy(mesh.position); halo.position.z = -0.04;
-        halo.scale.setScalar(settings.radius * (5.8 + pulse * 0.5));
-        (halo.material as THREE.ShaderMaterial).uniforms.strength!.value = settings.glow * (1 + pulse);
+        halo.scale.setScalar(settings.radius * ((round ? 4.5 : 5.8) + pulse * 0.5));
+        (halo.material as THREE.ShaderMaterial).uniforms.strength!.value = settings.glow * (round ? 0.55 : 1) * (1 + pulse);
         const root = stem3(stemFraction(this.path, berry.root), new THREE.Vector3());
-        const end = mesh.position.clone().lerp(root, Math.min(0.7, settings.radius * 0.45 / Math.max(0.001, root.distanceTo(mesh.position))));
-        const side = i % 2 ? 1 : -1;
+        const attachment = roundBerryAttachment(new Vec2(root.x, -root.y), berry.fruit, settings.radius);
+        const axis = new THREE.Vector3(attachment.axis.x, threeY(attachment.axis.y), 0);
+        const end = round ? new THREE.Vector3(attachment.end.x, threeY(attachment.end.y), 0)
+          : mesh.position.clone().lerp(root, Math.min(0.7, settings.radius * 0.45 / Math.max(0.001, root.distanceTo(mesh.position))));
+        cap.visible = round; cap.position.copy(mesh.position); cap.scale.setScalar(settings.radius);
+        cap.quaternion.setFromUnitVectors(this.up, axis);
+        if (round) mesh.quaternion.copy(cap.quaternion);
+        const side = settings.sides?.[i] ?? (i % 2 ? 1 : -1);
         const control1 = root.clone().lerp(end, 0.25).add(new THREE.Vector3(side * 0.025, 0.055, -0.025));
-        const control2 = end.clone().lerp(root, 0.2).add(new THREE.Vector3(-side * 0.015, 0.045, -0.015));
+        const control2 = round ? new THREE.Vector3(attachment.control.x, threeY(attachment.control.y), 0)
+          : end.clone().lerp(root, 0.2).add(new THREE.Vector3(-side * 0.015, 0.045, -0.015));
         const curve = new THREE.CubicBezierCurve3(root, control1, control2, end);
-        for (let j = 0; j < 9; j++) {
-          curve.getPoint(j / 9, this.a); curve.getPoint((j + 1) / 9, this.b);
-          this.segment(plant.stems, stems++, this.a, this.b, 0.032 - j * 0.0014);
+        for (let j = 0; j < 9; j++) for (let strand = 0; strand < (round ? 2 : 1); strand++) {
+          const sample = (t: number, out: THREE.Vector3) => {
+            curve.getPoint(t, out);
+            if (!round) return;
+            const phase = t * 8 + strand * Math.PI + i;
+            const spread = 0.013 * Math.sin(Math.PI * t) ** 2;
+            out.x += Math.cos(phase) * spread; out.z += Math.sin(phase) * spread;
+          };
+          sample(j / 9, this.a); sample((j + 1) / 9, this.b);
+          this.segment(plant.stems, stems, this.a, this.b, (0.032 - j * 0.0014) * (round ? 0.7 : 1));
+          this.color.setRGB(round ? (strand ? 0.85 : 1.35) : 1, round ? (strand ? 1.05 : 1.65) : 1,
+            round ? (strand ? 0.55 : 0.9) : 1);
+          plant.stems.setColorAt(stems++, this.color);
         }
       }
       const nearest = berries.reduce<typeof berries[number] | undefined>((best, b) =>
         !best || (ball && b.fruit.distanceTo(ball.position) < best.fruit.distanceTo(ball.position)) ? b : best, undefined);
       if (nearest) plant.light.position.set(nearest.fruit.x, threeY(nearest.fruit.y), 0.18);
-      plant.light.intensity = nearest && ball ? settings.glow * 0.55
+      plant.light.intensity = nearest && ball ? settings.glow * (round ? 0.28 : 0.55)
         * THREE.MathUtils.clamp((1.6 - nearest.fruit.distanceTo(ball.position)) / 0.6, 0, 1) : 0;
       for (let i = berries.length; i < plant.fruit.length; i++) {
         plant.fruit[i]!.visible = plant.halos[i]!.visible = false;
+        plant.caps[i]!.visible = false;
       }
       plant.stems.count = stems; plant.leaves.count = plant.veins.count = leaves;
       for (const mesh of [plant.stems, plant.leaves, plant.veins]) mesh.instanceMatrix.needsUpdate = true;
       if (plant.leaves.instanceColor) plant.leaves.instanceColor.needsUpdate = true;
+      if (plant.stems.instanceColor) plant.stems.instanceColor.needsUpdate = true;
     }
     for (let i = index; i < this.plants.length; i++) this.plants[i]!.group.visible = false;
   }
@@ -252,8 +305,9 @@ export class StarberryLayer {
       for (const m of p.materials) m.dispose();
       for (const h of p.halos) (h.material as THREE.Material).dispose();
     }
-    for (const g of [this.leafGeometry, this.fruitGeometry, this.stemGeometry, this.haloGeometry]) g.dispose();
+    for (const g of [this.leafGeometry, this.fruitGeometry, this.roundGeometry, this.capGeometry, this.stemGeometry, this.haloGeometry]) g.dispose();
     this.leafMaterial.dispose(); this.stemMaterial.dispose(); this.veinMaterial.dispose(); this.haloMaterial.dispose();
     this.leafPigment.dispose(); this.stemPigment.dispose();
+    this.capMaterial.dispose(); this.roundPigment?.dispose();
   }
 }

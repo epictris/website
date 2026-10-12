@@ -1,4 +1,5 @@
-import { starberrySettings } from "../level/starberry";
+import { restStarberries, starberrySettings } from "../level/starberry";
+import { addBerry, berryPositionAt, berrySides, moveBerry, removeBerry } from "./berryEditing";
 // Level editor. Owns its own canvas loop and DOM overlay (toolbar + inspector),
 // manipulates an EdModel with the mouse, tests the scene with either controller,
 // and saves/loads levels from disk through the dev-server API.
@@ -197,6 +198,7 @@ import { readClipboard, writeClipboard } from "./clipboard";
 import {
   computeChainHandles,
   computeVineHandles,
+  computeBerryHandles,
   computeGroupHandles,
   computeHandles,
   drawEditor,
@@ -658,6 +660,7 @@ type Drag =
   // is re-anchored by, and for the same reason - the anchor IS the vine's
   // placement, so this moves an object rather than re-pointing the vine at one.
   | { mode: "vineAnchor"; vine: EdVine }
+  | { mode: "berryPosition"; vine: EdVine; index: number; offset: Vec2 }
   | { mode: "draw"; body: EdItem; start: Vec2 };
 
 // Arrow-key nudge directions (world axes, +y down).
@@ -6969,6 +6972,23 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     g.appendChild(species);
     if (vines.length === 1 && vines[0]!.starberry) {
       const berry = vines[0]!.starberry!;
+      const appearance = document.createElement("select");
+      appearance.className = "ed-select";
+      appearance.setAttribute("aria-label", "Berry appearance");
+      for (const [value, label] of [["star", "Golden stars"], ["round", "Round lantern berries"]]) {
+        const option = document.createElement("option");
+        option.value = value!; option.textContent = label!; appearance.appendChild(option);
+      }
+      appearance.value = berry.appearance ?? "star";
+      appearance.addEventListener("change", () => {
+        beginAction();
+        const wasRound = berry.appearance === "round", isRound = appearance.value === "round";
+        if (wasRound !== isRound) berry.radius = Math.min(0.65, Math.max(0.06, berry.radius * (isRound ? 0.5 : 2)));
+        if (appearance.value === "round") berry.appearance = "round";
+        else delete berry.appearance;
+        markDirty(); rebuildInspector();
+      });
+      g.appendChild(labelWrap("berry appearance", appearance));
       for (const [key, label, step, min, max, scale] of [
         ["radius", "berry radius", 1, 0.06, 0.65, M2PX],
         ["stemLength", "berry stem length", 1, 0.2, 1.5, M2PX],
@@ -6988,10 +7008,33 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         const valid = values.length <= 8 && values.every(p => Number.isFinite(p) && p >= 8 && p <= 100);
         positions.setCustomValidity(valid ? "" : "Enter 1–8 numbers between 8 and 100, separated by commas.");
         if (!positions.reportValidity()) return;
-        beginAction(); berry.positions = [...new Set(values)].sort((a, b) => a - b).map(p => p / 100);
-        markDirty();
+        beginAction();
+        const previousSides = berrySides(berry).slice();
+        berry.positions = [...new Set(values)].map(p => p / 100);
+        berry.sides = berry.positions.map((_, i) => previousSides[i] ?? (i % 2 ? 1 : -1));
+        markDirty(); rebuildInspector();
       });
       g.appendChild(labelWrap("berry positions %", positions));
+      const placementHint = el("div", "ed-hint");
+      placementHint.textContent = "In Level view with 2D or 3D + overlay, drag a numbered berry along the vine. Choose its side below. Alt-click a berry to remove it.";
+      g.appendChild(placementHint);
+      const add = button("+ Berry", () => { beginAction(); addBerry(berry); markDirty(); rebuildInspector(); });
+      add.disabled = berry.positions.length >= 8; g.appendChild(add);
+      berry.positions.forEach((_, index) => {
+        numField(g, `berry ${index + 1} at %`, () => Math.round(berry.positions[index]! * 1000) / 10,
+          value => {
+            moveBerry(berry, index, value / 100);
+            positions.value = berry.positions.map(p => Math.round(p * 1000) / 10).join(", ");
+          }, 1);
+        const side = button(`Berry ${index + 1}: ${(berry.sides?.[index] ?? (index % 2 ? 1 : -1)) < 0 ? "left" : "right"}`, () => {
+          beginAction(); berrySides(berry)[index]! *= -1; markDirty(); rebuildInspector();
+        });
+        side.title = "Switch this berry to the other side of the vine";
+        const remove = button(`Remove berry ${index + 1}`, () => {
+          beginAction(); removeBerry(berry, index); markDirty(); rebuildInspector();
+        });
+        g.append(side, remove);
+      });
     }
 
     numField(
@@ -10747,13 +10790,18 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       const hit = pickRouteHandle(routeBody, scr, alt, shift);
       if (hit) return hit;
     }
-    // A selected vine is edited by its two handles and nothing else: the anchor
-    // it hangs from, which is where it is, and its free end, which is how long
-    // it is. The tip is tested first, so the two cannot fight over a press on a
-    // vine drawn short enough for them to overlap.
+    // Berry handles take priority, followed by the vine's free end and anchor.
+    // The tip precedes the anchor so a short vine can still be lengthened.
     const vines = selectedVines();
     if (vines.length === 1) {
       const vine = vines[0]!;
+      for (const handle of computeBerryHandles(camera, model, vine)) {
+        if (scr.distanceTo(handle.screen) > handle.radius) continue;
+        if (alt) {
+          beginAction(); removeBerry(vine.starberry!, handle.index); markDirty(); rebuildInspector(); return "consumed";
+        }
+        return { mode: "berryPosition", vine, index: handle.index, offset: canvasWorld(scr).sub(handle.root) };
+      }
       const hs = computeVineHandles(camera, model, vine);
       if (hs) {
         if (scr.distanceTo(hs.tip) <= HANDLE_HIT_PX) {
@@ -11646,7 +11694,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     let best: EdVine | null = null;
     let bestD = band;
     for (const v of model.vines) {
-      const d = distanceToVine(model, v, world);
+      let d = distanceToVine(model, v, world);
+      const path = v.starberry ? vineRestPath(model, v) : null;
+      if (path && v.starberry) for (const berry of restStarberries(path, v.starberry)) {
+        d = Math.min(d, Math.max(0, world.distanceTo(berry.fruit) - v.starberry.radius));
+      }
       if (d <= bestD) {
         bestD = d;
         best = v;
@@ -12033,6 +12085,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         refreshFields();
         break;
       }
+      case "berryPosition": {
+        const path = vineRestPath(model, drag.vine);
+        if (!path || !drag.vine.starberry) break;
+        moveBerry(drag.vine.starberry, drag.index, berryPositionAt(path, world.sub(drag.offset)));
+        markDirty(); refreshFields();
+        break;
+      }
       case "vineEnd": {
         drag.cursor = world;
         // Shift over empty space arms the DETACH, resolved at release; over a
@@ -12233,6 +12292,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       const to = topmostAt(drag.cursor, (b) => chainable(b));
       if (to) addWrapPoint(drag.chain, drag.index, to, drag.cursor);
     }
+    if (drag.mode === "berryPosition") rebuildInspector();
     drag = null;
     applyToolCursor();
   });

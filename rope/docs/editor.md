@@ -1,5 +1,13 @@
 # Level editor
 
+## Place berries on a vine
+
+Select a Starberry vine in Level view, using **2D** or **3D + overlay**. Drag the numbered
+berries along the vine to place their branches. **+ Berry** adds one in a free interval;
+each berry also has an exact position percentage, a left/right switch, and a remove button.
+Alt-click a berry handle to remove it. Moving or removing a berry preserves the other berries'
+positions and sides. All placement edits support undo/redo and autosave (maximum eight berries).
+
 ## Braid a vine
 
 Select a rope made with **+ Vine** and click **Braid selected vine** to give it

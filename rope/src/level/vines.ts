@@ -722,7 +722,7 @@ function buildOne(
   if (starberry) for (const [i, fraction] of starberry.positions.entries()) {
     const parentIndex = Math.min(links.length - 1, Math.max(0, Math.round(fraction * segments) - 1));
     const parent = links[parentIndex]!;
-    const direction = branchDirection(i), step = starberry.stemLength / 2;
+    const direction = branchDirection(i, starberry), step = starberry.stemLength / 2;
     const branch: VineLink[] = [];
     for (let j = 0; j < 2; j++) {
       const body = new VineLink();

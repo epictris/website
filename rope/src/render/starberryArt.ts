@@ -6,6 +6,15 @@ export interface StarberryLeaf extends LeafFootprint {
   base: Vec2; root: Vec2; size: number; angle: number; variation: number;
 }
 
+/** Fruit, calyx and the stalk's arrival tangent share one growth direction. */
+export function roundBerryAttachment(root: Vec2, fruit: Vec2, radius: number) {
+  const shoulder = root.add(fruit.sub(root).mul(0.6)).add(new Vec2(0, -0.06));
+  const axis = shoulder.sub(fruit).normalized();
+  const end = fruit.add(axis.mul(radius * 0.99));
+  const control = end.add(axis.mul(Math.max(0.035, root.distanceTo(fruit) * 0.22)));
+  return { axis, end, control };
+}
+
 /** Render-only crooked growth. Physics and berry grab positions stay authoritative. */
 export function naturalStemPoint(path: readonly Vec2[], fraction: number, seed: number): Vec2 {
   const p = pointAlong(path, fraction);

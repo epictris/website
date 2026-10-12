@@ -3601,6 +3601,7 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
   const vines = data.vines?.map((v) => ({
     anchor: v.anchor,
     ...(v.starberry ? { starberry: { ...v.starberry, positions: [...v.starberry.positions],
+      ...(v.starberry.sides ? { sides: [...v.starberry.sides] } : {}),
       radius: v.starberry.radius * factor, stemLength: v.starberry.stemLength * factor } } : {}),
     ...(v.braidSeed !== undefined ? { braidSeed: v.braidSeed } : {}),
     ...(v.anchor2 !== undefined ? { anchor2: v.anchor2 } : {}),
