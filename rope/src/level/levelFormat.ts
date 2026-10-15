@@ -1439,6 +1439,8 @@ export function isLegacyChain(c: ChainData | LegacyChainData): c is LegacyChainD
 // it, and a spanning vine's rest pose is the catenary its length and its two
 // anchors imply (`level/catenary.ts`).
 export interface VineData {
+  // Render-only seed for the old three-strand braid; absent = plain cord.
+  braidSeed?: number;
   // Anchor id. A vine naming an anchor that is not in the level, or one on a
   // body that builds nothing, is dropped at load - the same tolerance a chain
   // end gets.
@@ -3329,6 +3331,7 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
     // Dimensionless too.
     ...(v.viscosity !== undefined ? { viscosity: v.viscosity } : {}),
     ...(v.color !== undefined ? { color: v.color } : {}),
+    ...(v.braidSeed !== undefined ? { braidSeed: v.braidSeed } : {}),
   }));
   // A firefly path is the camera path's curve alone: its placement, its nodes
   // and their handles are lengths, `rot` and `id` are not. Degenerate ones are

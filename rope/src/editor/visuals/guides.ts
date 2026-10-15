@@ -619,7 +619,9 @@ export class Guides {
   // major cells so the lines fall where the training grid's do. Built only when
   // that snapped extent differs from the one the grid on hand was built for.
   private buildGrid(model: EdModel): void {
-    const b = bodyBounds(model.items);
+    // Only scene objects set the modelling extent. Large authored bounds use
+    // the adaptive stride below rather than allocating millions of lines.
+    const b = bodyBounds(model.items.filter(item => item.layer === "scene"));
     const p = model.player.pos;
     const x0 = Math.floor((Math.min(b.min.x, p.x) - GRID_MARGIN) / MAJOR_M) * MAJOR_M;
     const x1 = Math.ceil((Math.max(b.max.x, p.x) + GRID_MARGIN) / MAJOR_M) * MAJOR_M;
@@ -637,8 +639,9 @@ export class Guides {
     const lines = ((x1 - x0) + (y1 - y0)) / MINOR_M;
     const withMinor = lines <= GRID_MAX_LINES;
     // Integer steps, so a line's position is computed rather than accumulated.
+    const stride = withMinor ? 1 : perMajor * Math.max(1, Math.ceil(lines / perMajor / GRID_MAX_LINES));
     const nx = Math.round((x1 - x0) / MINOR_M);
-    for (let i = 0; i <= nx; i++) {
+    for (let i = 0; i <= nx; i += stride) {
       const x = x0 + i * MINOR_M;
       const isMajor = i % perMajor === 0;
       if (!isMajor && !withMinor) continue;
@@ -646,7 +649,7 @@ export class Guides {
       into.push(x, -y0, 0, x, -y1, 0);
     }
     const ny = Math.round((y1 - y0) / MINOR_M);
-    for (let j = 0; j <= ny; j++) {
+    for (let j = 0; j <= ny; j += stride) {
       const y = y0 + j * MINOR_M;
       const isMajor = j % perMajor === 0;
       if (!isMajor && !withMinor) continue;

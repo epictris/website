@@ -795,7 +795,7 @@ export function render(
   // where it has depth and takes the level's light; a flat cord over the top of
   // that would be the same vine drawn twice, and the flat one would be the one
   // in front.
-  if (!overlayOnly) drawVines(ctx, level.vines, alpha);
+  if (!overlayOnly) drawVines(ctx, level.vines, alpha, treadTime);
 
   // Rope spans, drawn exactly as simulated and BEHIND the player so the body
   // covers the origin at its centre. The first span used to be redrawn from
@@ -1164,7 +1164,7 @@ export function renderBall(
     }
     // ...and the vine as that cord, over the geometry and under the ball. 2D
     // only, for the reason `render` gives: in 3D the scene draws it.
-    drawVines(ctx, level.vines, alpha);
+    drawVines(ctx, level.vines, alpha, treadTime);
   }
   // Areas stay 2D in both modes: a killzone's skulls and a force area's flow
   // arrows are flat marks on a region of space, and a region of space has no

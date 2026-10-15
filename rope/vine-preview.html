@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Moving vine material study</title>
+<style>body{margin:0;background:#1c3856;color:#cbccc6;font:12px monospace}canvas{display:block}nav{position:fixed;bottom:12px;left:12px;right:12px;display:flex;gap:8px;align-items:center}button{background:#243345;color:inherit;border:1px solid #65bddb;padding:6px 9px;font:inherit}span{opacity:.8}</style></head>
+<body><nav><button id="mode">Two-ended span</button><button id="pull" hidden>Pull</button><button id="reset" hidden>Reset span</button><button id="motion">Pause</button><button id="step">Step</button><button id="view">Close up</button><button id="light">Backlight</button><button id="ring">Ring</button><span id="status">Vine study · live physics</span></nav>
+<script type="module">
+import * as THREE from 'three';
+import { VineLayer } from './src/render3d/vineVisual.ts';
+import { Level } from './src/level/level.ts';
+import { emptyFrameInput } from './src/input/frameInput.ts';
+import { MANACLE_BAND, MANACLE_RADIUS } from './src/lib/manacle.ts';
+const scene = new THREE.Scene(); scene.background = new THREE.Color('#1c3856');
+const renderer = new THREE.WebGLRenderer({antialias:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2)); renderer.shadowMap.enabled=true;
+renderer.shadowMap.type=THREE.PCFShadowMap; renderer.toneMapping=THREE.ACESFilmicToneMapping;
+document.body.prepend(renderer.domElement);
+scene.add(new THREE.HemisphereLight('#7ab8e0','#2a3f56',3));
+const sun = new THREE.DirectionalLight('#ffe3bd',3.4); sun.position.set(-2,5,5); sun.castShadow=true;
+sun.shadow.mapSize.set(2048,2048); sun.shadow.bias=-.0008;sun.shadow.normalBias=.03;
+sun.shadow.camera.left=-3;sun.shadow.camera.right=3;sun.shadow.camera.top=4;sun.shadow.camera.bottom=-4;
+scene.add(sun);scene.add(sun.target);
+const back = new THREE.DirectionalLight('#ffe1ad',3);back.position.set(1,2,-5);back.visible=false;scene.add(back);
+const lamp = new THREE.PointLight('#ffe4bd',.5,5);lamp.position.set(1,1,2);lamp.castShadow=true;lamp.shadow.normalBias=.03;scene.add(lamp);
+const camera = new THREE.PerspectiveCamera(24,1,.01,100);
+const hanging = {player:{x:-500,y:450,radius:12},bodies:[
+ {kind:'static',x:0,y:550,rot:0,objects:[{type:'collision',shape:{kind:'rect',w:2000,h:30}}]},
+ {kind:'static',x:0,y:-150,rot:0,swingAmp:.16,swingPeriod:5,objects:[{type:'collision',shape:{kind:'rect',w:180,h:20}},
+ {type:'anchor',id:1,x:20,y:100},{type:'anchor',id:2,x:62,y:100}]}
+],vines:[{anchor:1,length:350,stiffness:.3,viscosity:.25,braidSeed:1701},{anchor:2,length:290,stiffness:.3,viscosity:.25,braidSeed:1798}]};
+const spanData={player:{x:200,y:-250,radius:12},bodies:[
+ {kind:'static',x:0,y:600,rot:0,objects:[{type:'collision',shape:{kind:'rect',w:3000,h:40}}]},
+ {kind:'static',x:0,y:-500,rot:0,objects:[{type:'collision',shape:{kind:'rect',w:600,h:40}},{type:'anchor',id:1,x:0,y:20}]},
+ {kind:'static',x:400,y:-500,rot:0,objects:[{type:'collision',shape:{kind:'rect',w:200,h:40}},{type:'anchor',id:2,x:0,y:20}]}
+],vines:[{anchor:1,anchor2:2,length:500,braidSeed:1798}]};
+let level = new Level(hanging), span=false,pulling=false,wasPulling=false,aim=null;
+// Ring: the ball's manacle threaded on the first vine, slid down it and back up
+// at 1 m/s, folding the leaves it passes (render3d/vineLeafFold.ts).
+// ?ring=1 starts it, ?seek=S plays S seconds and holds there, ?view=close
+// looks at the ring from close by.
+const params=new URLSearchParams(location.search);
+let ringOn=params.get('ring')==='1',ringFrame=0;
+const cuff=new THREE.Mesh(new THREE.TorusGeometry(MANACLE_RADIUS,MANACLE_BAND/2,12,32),new THREE.MeshStandardMaterial({color:'#2a2c30',metalness:.8,roughness:.45}));
+cuff.castShadow=true;scene.add(cuff);
+const ringPath=[];
+function ringAt(alpha){
+ if(!ringOn)return null;
+ const v=level.vines[0];v.path(alpha,ringPath);
+ const last=ringPath.length-1,spacing=v.restLength/last,lo=.3,hi=last-.3;
+ const travel=(ringFrame+alpha)/60/spacing,span2=2*(hi-lo),k=travel%span2;
+ return {vine:v,u:lo+(k<hi-lo?k:span2-k)};
+}
+function placeCuff(ring){
+ cuff.visible=ring!==null;if(!ring)return;
+ const i=Math.min(ringPath.length-2,Math.floor(ring.u)),f=ring.u-i,a=ringPath[i],b=ringPath[i+1];
+ cuff.position.set(a.x+(b.x-a.x)*f,-(a.y+(b.y-a.y)*f),0);
+ cuff.quaternion.setFromUnitVectors(new THREE.Vector3(0,0,1),new THREE.Vector3(b.x-a.x,-(b.y-a.y),0).normalize());
+}
+const vines = new VineLayer(scene); let paused=false,close=false,frame=0,accumulator=0,last=performance.now();
+const player=new THREE.Mesh(new THREE.SphereGeometry(.12,24,16),new THREE.MeshStandardMaterial({color:'#cbb38b',metalness:.65,roughness:.3}));scene.add(player);
+const anchorMaterial=new THREE.MeshStandardMaterial({color:'#8ca1b1',roughness:.7});
+const anchors=[0,1].map(()=>{const m=new THREE.Mesh(new THREE.SphereGeometry(.055,16,12),anchorMaterial);scene.add(m);return m;});
+const pullGeometry=new THREE.BufferGeometry().setAttribute('position',new THREE.Float32BufferAttribute(new Float32Array(6),3));
+const pullLine=new THREE.Line(pullGeometry,new THREE.LineBasicMaterial({color:'#b3a383'}));pullLine.frustumCulled=false;scene.add(pullLine);
+function reset(){level=new Level(span?spanData:hanging);frame=0;accumulator=0;pulling=wasPulling=false;vines.clear();
+ if(span){for(let i=0;i<30;i++){level.physicsProcess(emptyFrameInput(),1/60);frame++;}aim=level.vines[0].links[Math.floor(level.vines[0].links.length/2)].globalPosition;paused=true;}
+ document.querySelector('#pull').textContent='Pull';document.querySelector('#motion').textContent=paused?'Play':'Pause';pose();}
+function step(withRender=false){if(ringOn)ringFrame++;const input=emptyFrameInput();if(span){input.mouseWorldPosition=aim;input.fire={held:pulling,pressed:pulling&&!wasPulling,released:!pulling&&wasPulling};input.retract.held=pulling;wasPulling=pulling;}
+ level.physicsProcess(input,1/60);frame++;if(withRender)vines.sync(level.vines,1,frame/60,ringAt(1));}
+function resize(){renderer.setSize(innerWidth,innerHeight);camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();}
+function pose(){const x=span?2:.4,y=span?(close?3.8:2.5):close?-1.2:-1.25;camera.position.set(x,y,span?(close?7:13.5):(close?3.4:9));camera.lookAt(x,y,0);}
+document.querySelector('#mode').onclick=e=>{span=!span;e.target.textContent=span?'Hanging vines':'Two-ended span';document.querySelector('#pull').hidden=!span;document.querySelector('#reset').hidden=!span;reset();};
+document.querySelector('#reset').onclick=reset;
+document.querySelector('#pull').onclick=e=>{pulling=!pulling;e.target.textContent=pulling?'Release':'Pull';};
+document.querySelector('#motion').onclick=e=>{paused=!paused;e.target.textContent=paused?'Play':'Pause';};
+document.querySelector('#step').onclick=()=>{
+ paused=true;document.querySelector('#motion').textContent='Play';accumulator=0;
+ for(let i=0;i<30;i++)step(true);
+};
+document.querySelector('#view').onclick=e=>{close=!close;e.target.textContent=close?'Whole vines':'Close up';pose();};
+document.querySelector('#ring').onclick=e=>{ringOn=!ringOn;ringFrame=0;e.target.textContent=ringOn?'No ring':'Ring';};
+document.querySelector('#light').onclick=e=>{back.visible=!back.visible;e.target.textContent=back.visible?'Front light':'Backlight';sun.intensity=back.visible ? .75 : 3.4;};
+addEventListener('resize',resize); resize(); pose();
+if(ringOn)document.querySelector('#ring').textContent='No ring';
+if(params.get('view')==='close'){close=true;document.querySelector('#view').textContent='Whole vines';pose();}
+if(params.has('seek')){paused=true;document.querySelector('#motion').textContent='Play';for(let i=0;i<Math.round(+params.get('seek')*60);i++)step(true);}
+function draw(now){
+ const dt=Math.min(.05,(now-last)/1000);last=now;
+ if(!paused){accumulator+=dt;while(accumulator>=1/60){step();accumulator-=1/60;}}
+ const alpha=paused?1:accumulator*60;
+ const ring=ringAt(alpha);
+ vines.sync(level.vines,alpha,Math.max(0,frame-1+alpha)/60,ring);placeCuff(ring);
+ if(ring&&close){camera.position.set(cuff.position.x+.25,cuff.position.y+.05,.9);camera.lookAt(cuff.position);}
+ player.visible=span;pullLine.visible=span&&level.vines[0].lraLink!==null;
+ const p=level.player.renderPosition(alpha);player.position.set(p.x,-p.y,0);
+ if(pullLine.visible){const q=level.vines[0].lraLink.renderPosition(alpha),a=pullGeometry.getAttribute('position');a.setXYZ(0,p.x,-p.y,0);a.setXYZ(1,q.x,-q.y,0);a.needsUpdate=true;}
+ anchors.forEach((m,i)=>{m.visible=span;if(span){const v=level.vines[0],p=(i?v.anchor2Contact:v.anchorContact).renderGlobalPosition(alpha);m.position.set(p.x,-p.y,0);}});
+ document.querySelector('#status').textContent=span?`Frame ${frame} · ${level.vines[0].lra&&level.vines[0].lra2?'Player pulling · both ends loaded':pulling?'Reaching for vine':'Released'}`:'Vine study · live physics';
+ renderer.render(scene,camera);requestAnimationFrame(draw);
+}
+requestAnimationFrame(draw);
+</script></body></html>

@@ -26,6 +26,7 @@ import type { World } from "../engine/world";
 import type { SceneChain } from "../level/chains";
 import type { TieChain } from "../engine/ties";
 import type { VineCord } from "../level/vines";
+import { RopeVineClamp } from "../lib/vineClamp";
 import type { LevelVisualSource } from "../level/buildBodies";
 import { isCollisionObject, type EnvironmentData, type FireflyPathData, type LevelBodyData } from "../level/levelFormat";
 import type { Camera } from "../render/camera";
@@ -1236,7 +1237,11 @@ export class Scene3D {
     for (const visual of this.standing) visual.sync(alpha, treadTime);
 
     this.chains.sync(level, alpha, retract);
-    this.vines.sync(level.vines ?? NO_VINES, alpha);
+    // The ball's ring, when it is threaded on a vine, folds the leaves it
+    // slides over (render3d/vineLeafFold.ts).
+    const end = level.ball?.chain?.end;
+    this.vines.sync(level.vines ?? NO_VINES, alpha, treadTime,
+      end instanceof RopeVineClamp ? { vine: end.vine, u: end.segment - 1 + end.fraction } : null);
     this.ballVisual?.sync(alpha);
     this.splashes.update(
       clock,

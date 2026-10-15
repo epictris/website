@@ -14,6 +14,12 @@ import { Vec2 } from "../engine/vec2";
 import { PX } from "../engine/units";
 import { shade } from "./color";
 import { VINE_VISUAL_RADIUS, type Vine } from "../level/vines";
+import { braidLeafAttachment, forEachBraidSegment } from "./vineBraid";
+import { forEachVineLeaf } from "./vineLeaves";
+import { sampleVineCurve, vineMaterial } from "./vineCurve";
+import { VineTwist } from "./vineTwist";
+
+const twists = new WeakMap<Vine, VineTwist>();
 
 // A vine with no authored colour. Deliberately desaturated: it hangs among the
 // level's own greys and has to read as growth without pulling the eye off the
@@ -28,17 +34,59 @@ export function drawVines(
   ctx: CanvasRenderingContext2D,
   vines: readonly Vine[],
   alpha: number,
+  time = 0,
 ): void {
   for (const vine of vines) {
     if (vine.links.length === 0) continue;
-    const points = [
-      vine.anchorContact.renderGlobalPosition(alpha),
-      ...vine.links.map((l) => l.renderPosition(alpha)),
-    ];
+    const points: Vec2[] = [];
+    vine.path(alpha, points);
     const color = vine.color ?? VINE_COLOR;
     ctx.save();
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
+    if (vine.braidSeed !== null) {
+      const curve = sampleVineCurve(points, [], [], vine.restLength);
+      let twist = twists.get(vine);
+      if (!twist) { twist = new VineTwist(); twists.set(vine, twist); }
+      twist.update(curve, time, vine.attachedAtBothEnds ?? false);
+      const growthLength = vine.restLength ?? vineMaterial(curve.at(-1)!);
+      const colors = [shade(color, 1.04), shade(color, .98), shade(color, .91)];
+      forEachBraidSegment(points, vine.braidSeed, (ax, ay, _az, bx, by, _bz, strand, girth) => {
+        ctx.strokeStyle = colors[strand]!;
+        ctx.lineWidth = VINE_VISUAL_RADIUS * 0.95 * girth;
+        ctx.beginPath();
+        ctx.moveTo(ax, ay);
+        ctx.lineTo(bx, by);
+        ctx.stroke();
+      }, curve, growthLength, vine.attachedAtBothEnds);
+      const attachment = { across: 0, depth: 0 };
+      forEachVineLeaf(points, vine.braidSeed, (x, y, side, length, tone, tx, ty, turn, fraction) => {
+        const nx = -ty, ny = tx;
+        const target = fraction * vineMaterial(curve.at(-1)!);
+        let ring = 0;
+        while (ring + 1 < curve.length - 1 && vineMaterial(curve[ring + 1]!) < target) ring++;
+        const a = curve[ring]!, b = curve[ring + 1]!;
+        const t = (target - vineMaterial(a)) / Math.max(1e-8, vineMaterial(b) - vineMaterial(a));
+        braidLeafAttachment(vine.braidSeed!, fraction, growthLength, side, attachment, vine.attachedAtBothEnds,
+          (a.twist ?? 0) * (1 - t) + (b.twist ?? 0) * t, (a.stretch ?? 1) * (1 - t) + (b.stretch ?? 1) * t);
+        const baseX = x + nx * attachment.across, baseY = y + ny * attachment.across;
+        const dx = tx * .72 + nx * side * (.5 + turn * .25);
+        const dy = ty * .72 + ny * side * (.5 + turn * .25) + .28;
+        ctx.save();
+        ctx.translate(baseX, baseY);
+        ctx.rotate(Math.atan2(dy, dx) - Math.PI / 2);
+        const width = length * .3 * (1 + turn * .18);
+        ctx.fillStyle = ["#397b35", "#5a9d38", "#7dad48"][tone]!;
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.bezierCurveTo(-width * .1, length * .12, -width * 1.2, length * .45, 0, length * .86);
+        ctx.bezierCurveTo(width * 1.2, length * .5, width * .1, length * .12, 0, 0);
+        ctx.fill();
+        ctx.restore();
+      }, curve, growthLength);
+      ctx.restore();
+      continue;
+    }
     traceVine(ctx, points);
     ctx.strokeStyle = shade(color, RIM_SHADE);
     ctx.lineWidth = VINE_VISUAL_RADIUS * 2;

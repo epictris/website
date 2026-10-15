@@ -1787,7 +1787,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // the level rather than chrome.
     const vinePaths = model.vines.flatMap((v) => {
       const points = vineRestPath(model, v);
-      return points ? [{ color: v.color, points }] : [];
+      return points ? [{ color: v.color, braidSeed: v.braidSeed, points,
+        restLength: Math.max(v.length, points[0]!.distanceTo(points.at(-1)!)),
+        attachedAtBothEnds: v.anchor2 !== null }] : [];
     });
     const key = sceneKeyOf(data, itemOf, vinePaths);
     if (key === sceneKey) {
@@ -1813,8 +1815,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     for (const [object, id] of itemOfSceneObject) sceneObjectOfItem.set(id, object);
     sceneLevel = {
       world,
-      vines: vinePaths.map(({ color, points }) => ({
+      vines: vinePaths.map(({ color, braidSeed, points, restLength, attachedAtBothEnds }) => ({
         color,
+        braidSeed,
+        restLength,
+        attachedAtBothEnds,
         path: (_alpha: number, out: Vec2[]) => {
           out.length = 0;
           out.push(...points);
@@ -5648,6 +5653,29 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       "The ball's manacle threads onto a vine like a ring and creeps down it under the ball's weight, locked to the cord until it slides off the free end - viscosity sets how slowly, as it does for mud: blank is mud's own, 0 never slides.",
     );
 
+    g = section(group, "vine/Braid", "Braid");
+    const braidSeed = document.createElement("input");
+    braidSeed.type = "number";
+    braidSeed.className = "ed-num";
+    braidSeed.min = "0"; braidSeed.max = "2147483647"; braidSeed.step = "1";
+    braidSeed.value = String(vines[0]!.braidSeed ?? 1701);
+    braidSeed.setAttribute("aria-label", "Vine seed");
+    const braidRow = el("div", "ed-row");
+    braidRow.append(braidSeed, button("Braid selected vine", () => {
+      if (!braidSeed.reportValidity()) return;
+      beginAction();
+      for (const vine of vines) vine.braidSeed = Number(braidSeed.value);
+      markDirty(); rebuildInspector();
+    }));
+    g.appendChild(braidRow);
+    const plainRow = el("div", "ed-row");
+    plainRow.appendChild(button("Plain vine", () => {
+      beginAction();
+      for (const vine of vines) vine.braidSeed = null;
+      markDirty(); rebuildInspector();
+    }));
+    g.appendChild(plainRow);
+
     g = section(group, "vine/Color", "Color");
     const cw = fieldRow("color");
     const ci = colorInput(vines[0]!.color ?? VINE_DEFAULT_COLOR, beginAction, (hex) => {
@@ -7551,6 +7579,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     model.items.push(a);
     const vine: EdVine = {
       id: newBodyId(),
+      braidSeed: null,
       anchor: a.id,
       anchor2: null,
       length,

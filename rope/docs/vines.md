@@ -455,6 +455,109 @@ way. Capsules rather than cylinders because the cord bends at every link and the
 hemispherical caps fill the notch two cylinders would leave on the outside of a
 bend, at any angle and with no mitre to compute.
 
+With a `braidSeed`, both renderers use the old three-strand braid from
+`add-boulder-and-root-generation`, refined for smooth moving geometry.
+`render/vineCurve.ts` interpolates the links with arc-weighted Hermite tangents;
+`render/vineBraid.ts` packs three unequal stems in a tangent triangle, varying
+their gauges and smoothly tightening/loosening the pitch over seeded growth
+stretches without reversing the twist, and tapering along the whole length, then the
+last 18 cm (or 30% of a short cord) to a pointed end. Small swollen nodes share
+their seeded growth coordinates with the leaf attachments. The 3D renderer uses
+three continuous, capped tubes in one mesh per vine (`render3d/vineTube.ts`),
+with 12 radial sides, shared ring vertices and smooth transported normals.
+Each live
+cord exposes its built `restLength` and whether both ends attach; render samples
+carry `(link index + spline parameter) * rest spacing` independently of their
+current arc length. Braid phase, nodes, leaves and broad bark/olive/moss paint
+patches use these material stations, so stretching one link cannot slide the
+decoration on another. The editor's equal-arc rest samples use the same mapping.
+Shallow longitudinal ridges and restrained contact
+darkening describe the stems' fibres and crossings, with matte roughness.
+`render/vineLeaves.ts` places sparse leaves on the same interpolated curve.
+Unequal seeded growth intervals place nodes in clusters with longer bare
+stretches. Leaves grow singly or in staggered pairs, with a broad size range
+from small young blades to mature leaves and smaller growth near the tip.
+Blade bases attach directly to the outer braid surface; neither renderer draws
+little leaf stalks. In 3D, `VineTube.leafSurface` selects an exposed rendered edge
+across all three strands at the attachment's material station, so the roots
+meet the actual ridges without being buried. The blade's supporting plane keeps
+the whole braid behind its base, rather than clearing only one strand.
+Blade width stays tangent to that plane, and the blade grows
+outward before it droops and gradually turns toward the gameplay plane. The
+turn and its normal deformation are shared by lit, depth and point shadows.
+The braid test checks blade vertices against the rendered solid, including a
+player grabbing a two-ended span, while comparing the physics against plain cords.
+The instanced blades have asymmetric outlines, a raised midrib, shallow cups
+and drooping tips; most are flatter, with occasional curls. Their shader paints
+broad colour patches, a midrib and branching veins, with a softer waxy highlight
+and a paler underside. Thin-leaf backlighting uses the scene's direct lights and
+their shadow attenuation, strongest at edges and weaker through veins; it is a
+local material patch, not a scene-wide painted-light filter.
+`render3d/vineLeafLag.ts` gives tips a bounded damped lag behind their attachments on
+the simulation clock, with matching vertex deformation in the lit, depth and
+point-shadow materials. Pausing freezes it, seeking/teleporting resets it, and
+blade roots never detach. The editor uses the same geometry in its rest pose.
+
+**The braid is built once, in its rest pose, and bent on the GPU** (`VineTube`), the way a skinned mesh is posed by its bones.
+Everything about it - strands, gauges, taper, ridges, paint, ring topology - is fixed at a material station, so only the centreline changes from frame to frame, and only the centreline is uploaded: a two-row float texture, one texel pair per link point (the point and the curve's tangent there; the twist rod's roll and the stretch either side).
+Each vertex carries its station in link units and its offset in the centreline's own frame, and the vertex shader evaluates the same arc-weighted Hermite `sampleVineCurve` does, then lays the offset out on the tangent there, rolled and narrowed; the depth and point-shadow passes run the same deformation.
+`VineTube.frameAt` is that evaluation on the CPU, on the same float32 pose, for the leaf roots and for the braid test (`deformedGeometry`), so what the test measures is what the shader draws.
+Rebuilding the tube on the CPU every frame instead - a ring every 1.2 cm, three strands, a painted colour per vertex - cost 6.5 ms of a frame for BALL's six vines (`Trace-20261011T201625`, `session-1055f`, 2026-10-11); posing it costs 0.17 ms for all six.
+
+**A leaf folds under the ball's ring as the ring slides over it** (`render3d/vineLeafFold.ts`), render-only like the lag and on the same spring.
+The blade is a chord hinged at the stem's surface at an angle `θ` from the downstream tangent.
+In the plane of the fold, measured from the hinge, the ring's band is a solid rectangle: its width along the cord about the ring's centre, by the span from its bore to its rim; the blade may not cross it, so `θ` may not lie in the angular span of the part of that rectangle within the blade's reach (`forbiddenSpan`, exact from its corners and its edges' crossings of the reach circle).
+The band's WIDTH is what gets a ring past a leaf at all, and the first version, which modelled the ring as a thin disc, let it through the leaf's stem going up the vine (Tris, 2026-10-11): a blade's base is inside the bore, so a ring can only cross it by folding the blade down the vine ahead of it or up the vine behind it, and the width forbids every angle in between.
+So a ring creeping down threads over the base with the blade in the bore and presses it flatter as it goes until it clears the tip and the blade springs back; a ring coming up passes under the blade, lifts it, turns it over the hinge and lays it flat up the vine inside the bore until it has passed.
+Which of those happens is never decided by rule: the blade stays on whichever side of the forbidden span it was on, and a fast ring is followed in 4 mm steps so it cannot jump a blade.
+With no history - the first frame after a seek, or a ring just threaded on over a blade - a ring past the base presses the blade into the bore, as a ring that slid down to there would have; `cli shot --frame N` draws one frame with no history, so look at a fold through `--frames` from before the ring arrives.
+The state is the fold's departure from the blade's own swaying angle, so an untouched leaf costs one comparison; a folded blade is its rest frame carried about the hinge, its curl, droop, lag and face turn let go by the square of how far it has folded.
+
+**A blade through the ring wraps the stem** rather than bending flat over it, which was the second thing the first version got wrong: a flat 30 cm blade is 10 cm wide each side and stood out through the iron (Tris, 2026-10-11).
+The leaf shader wraps the blade's width onto a cylinder about the stem's axis - fully across the ring's band wherever the ring is threaded over the blade, easing out over a few band widths, and elsewhere by how nearly the blade lies along the stem (`leafWrap`, `leafRing`).
+The cylinder has to be ON the axis: the fold plane is measured through the line from the axis to the blade's base (not the leaf's outward direction, since the base sits on whichever strand stands furthest out), a blade not yet flat wraps at its own rising distance from the axis, and the blade follows the stem's curvature under it both toward its face and across it, since a span sags in the gameplay plane.
+The braid stands up to about 3.6 cm from its axis against the bore's 3.65 cm, so through the ring there is no room off the braid: the blade wraps at `wrapRadius`, the nearer of just off the braid and just inside the bore, sinking a millimetre into the braid's lobes under the iron rather than through the iron, and the fold's bound reserves that radius so the wrapped edge is inside the bore by construction.
+A ring arriving within 3 cm of any part of a blade squares it up to the fold plane first, since its own twist tips one edge down into the ring's path.
+Measured with a probe that mirrors the shader on the CPU, sweeping a ring down and back up straight and sagging braided vines at 1 m/s: the deepest any blade vertex reaches into the drawn torus is 0.6 mm, against 15 mm before, bar one frame of 1.4 mm where the cup of a blade standing upright over the hinge grazes the band.
+`vine-preview.html`'s **Ring** (`?ring=1&seek=S&view=close`) slides a manacle down the first vine and back up at 1 m/s, for looking at it without the ball.
+
+`Scene3D` hands the layer the ring as the vine it is on and its link-units station (`RopeVineClamp`'s segment and fraction).
+Measured on `session-1055f`: the ring at 1.2 m/s presses a 9 cm leaf from 39° to under a degree in four frames, and it springs back in about 0.35 s with a degree of overshoot.
+Unplayed; the 2D renderer does not fold.
+
+For **two-ended spans**, both attachments retain their material roll and the
+second end keeps its full gauge, rather than tapering to a free tip. The planar
+section normal follows the smooth tangent without adding roll; the strand tube
+frames use minimal-rotation quaternion transport through bends. Local tensile
+strain slightly narrows the bundle by `1 / sqrt(stretch)` (bounded at 30% strain).
+`render/vineTwist.ts` adds a render-owned torsional rod on fixed rest stations:
+elastic torque is the gradient of `(angle gradient - preferred twist density)`,
+where tension relaxes the helical bundle's preferred twist by up to 0.9 rad/m.
+Uniform tension cannot unwind rotationally fixed ends; differential strain
+creates a small twist between them. Waves travel at 2.8 m/s with 5/s velocity
+damping, CFL-safe substeps, and a 0.45 rad visual bound. Pausing freezes angles;
+seeking, time gaps over 0.1 s, or clearing the layer resets history.
+Nearly coincident attachments (under 2 cm) skip the unresolved twist solve, and
+changing material length starts clean angular history. Leaf outward
+directions follow the same material roll while their roots stay on the braid's
+exposed support edge. Tests exercise differential strain, fixed boundaries,
+release/settling and blade clearance under actual player pull and release.
+This is a compliant **visual approximation**, not a coupled 3D elastic rod:
+the existing deterministic 2D solver still owns tension, bending and player
+loads, and decorative torsional torque never changes gameplay. Two-ended vines
+are treated as tied at both ends; separately authored axial swivels and 3D
+twist-induced buckling are not modelled.
+
+`/vine-preview.html` is a dev-only live-physics material study with close-up,
+pause, half-second frame stepping and backlight controls. **Two-ended span**
+switches to a real player load fixture; **Pull** deploys/retracts the player's
+hook, **Release** removes it and **Reset span** restores the initial pose. Its
+frame/load readout supports multi-frame checks. It is excluded from
+the production entry points.
+Select a gameplay vine and use **Braid selected vine** in its inspector to
+author the seed, or **Plain vine** to remove it. The seed is render-only and
+survives save/load and copy/undo without changing the physics.
+
 Drawn in the scene rather than painted flat over it, and that is the whole point
 of the 3D half existing: **the 2D overlay is dropped in every 3D-only view the
 editor has and in every orbited one**, being a projection of the gameplay plane,
@@ -487,6 +590,7 @@ a rope, with what it reads as beside it) and the colour, and the vine is listed
 under `Vines (N)` beside the chains.
 A **span** is authored from a hanging vine: **Shift-drag its end handle onto a body** to attach a second anchor there (the panel gains a live `slack` readout), drag that end handle to re-anchor it as a chain end is re-anchored, and **Shift-drop it over empty space** to detach back to a hanging vine of the same length.
 The editor draws a span at its resting catenary, on the canvas and in the 3D scene both, through the same `catenaryPolyline` the builder spawns from.
+The panel's **Braid** section sets `braidSeed`: **Braid selected vine** braids it with the seed in the box (change the seed and press again to regrow it), **Plain vine** clears it, and both undo; the canvas marks a braided vine with a dashed stroke ([Drawing](#drawing)).
 `TEST_VINES` is the worked level - two vines
 over a chasm to swing across, one long enough to pool on the far ledge, and a
 span with a metre of slack between the second and third branches.
@@ -497,6 +601,7 @@ span with a metre of slack between the second and third branches.
 vine reaches no avatar digest and no invariant: it violates nothing when it comes
 apart, and a build that quietly stopped making links renders as a level with no
 vine in it and passes everything else.
+The braid has its own test, `scripts/test-vine-braid.ts` (a step of `bun run test`): it renders braided vines through `VineLayer` and checks the leaves against the tube, and it simulates braided and plain vines side by side, frame by frame, to prove the seed never reaches the sim.
 
 The cases that matter most are the ones nothing else could make: the engine
 guards on bare bodies (`link-contacts`, a link touching nothing in either
