@@ -10,6 +10,7 @@ import {
   PhysicsBody2D,
   RigidBody2D,
   StaticBody2D,
+  VineLink,
   type CollisionObject2D,
   type CollisionShape2D,
 } from "../engine/body";
@@ -1808,6 +1809,43 @@ export function checkBallInvariants(level: BallLevel): Violation[] {
   const b = level.ball;
   const frame = level.frame;
   out.push(...checkBreakables(frame, level.world, b.anchoredTo));
+
+  // BERRY VINES (`level/starberry.ts`): every stalk body finite, no stalk
+  // stretched past its berry's reach, the chain never on anything of the
+  // vine but a berry - the cord and the stalk joints are no targets - and
+  // nothing in contact with a vine body but the ball or its hook with a berry
+  // (the one solid vine body, `VineLink.solid`). Asked of the vine's own list
+  // of its berries rather than of the flag, which is the thing being checked.
+  for (const c of level.world.frameContacts) {
+    for (const [side, other] of [
+      [c.a, c.b],
+      [c.b, c.a],
+    ] as const) {
+      if (!(side instanceof VineLink)) continue;
+      const isBerry = level.vines.some((vine) => vine.berries.some((berry) => berry.fruit === side));
+      if (!isBerry || (other !== b && !(other instanceof BallHook))) {
+        out.push({ frame, kind: "starberry-contact", detail: `${side.name} in contact with ${other.name}` });
+      }
+    }
+  }
+  for (const vine of level.vines) {
+    if (!vine.starberry) continue;
+    for (const link of vine.allLinks) {
+      if (!link.globalPosition.isFinite() || !link.linearVelocity.isFinite()) {
+        out.push({ frame, kind: "starberry-nan", detail: `non-finite ${link.name}` });
+      }
+    }
+    for (const berry of vine.berries) {
+      const length = berry.fruit.globalPosition.distanceTo(vine.links[berry.parentIndex]!.globalPosition);
+      if (length > berry.cap + 0.05) {
+        out.push({ frame, kind: "starberry-stretch", detail: `stalk stretched to ${length.toFixed(3)} m` });
+      }
+    }
+    const held = b.chain?.end.contact.obj;
+    if (vine.links.some((link) => link === held) || vine.berries.some((berry) => berry.joint === held)) {
+      out.push({ frame, kind: "starberry-stem-grab", detail: "the chain is on a berry vine's cord or stalk" });
+    }
+  }
 
   // THE CROSSING IS FINAL. `completedFrame` is written once, on the frame the
   // player entered the finish line, and a level that has been finished stays

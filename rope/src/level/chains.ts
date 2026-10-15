@@ -38,6 +38,8 @@
 
 import { Vec2 } from "../engine/vec2";
 import { PX } from "../engine/units";
+import { RopeVineClamp } from "../lib/vineClamp";
+import { creepSpeed } from "../lib/viscous";
 import {
   PhysicsBody2D,
   RigidBody2D,
@@ -1853,7 +1855,7 @@ export class BallChainRow implements IslandRow, IslandUnit {
   readonly substeps = DEFAULT_TIE_SUBSTEPS;
   // Re-read by `sync` each frame the row is active: the path changes.
   bodies: RigidBody2D[] = [];
-  private endBody: CollisionObject2D | null = null;
+  private endKey: unknown = null;
   // This frame's kinematic winding so far, in metres of path (see above), the
   // share of it the drum has realised, and the rotation the growth was last
   // measured at.
@@ -1862,6 +1864,36 @@ export class BallChainRow implements IslandRow, IslandUnit {
   private lastRotation = 0;
   // The substep the island last ran this row at, for `finishFrame`.
   private h = 0;
+
+  // A RING ON A CORD (`RopeVineClamp`, the chain's end threaded onto a stiff
+  // span): the row is a viscous slip, not a rigid length. The ring creeps
+  // along the cord at the viscous law's speed for the tension's share along
+  // it (`creepSpeed(|along|·T)`), and every metre it walks takes `|along|` of
+  // a metre out of the path, so the length the bodies may open is not zero
+  // but the creep's relief: `slackRate + |along|·creepSpeed(|along|·λ/h) = 0`,
+  // the tension `λ/h` the one that makes the ball's outward speed and the
+  // ring's give agree. `solve` finds that λ (`viscousRopeImpulse`), and the
+  // ring walks by the λ the substep's integration was made with (the biased
+  // pass's, `walkImpulse`), at the next substep's `prepare` or the frame's
+  // `finishFrame` (`Rope.rowCreep`).
+  //
+  // This is the textbook way a velocity solver carries a velocity-dependent
+  // force - Box2D's friction and motor rows are the same shape, an impulse
+  // solved against a rate rather than a position - and it replaces five
+  // drafts (2026-10-13) that walked the ring OUTSIDE the solve and told the
+  // row afterwards, each from a reading of the tension that some case made
+  // wrong: walked once a frame after the solve, a centimetre of slack a
+  // frame the ball fell into and was caught from (`session-346f`, a jerky
+  // slide); walked from last frame's tension, a bang-bang loop at the bottom
+  // of a swing (`session-113f`); walked at a substep's scale of the
+  // positional law, no slide at all under a wind-up along the cord
+  // (`session-129f`); bounded by a reconstruction of the ball's free motion,
+  // no slide for a ball with momentum along the cord and no winch
+  // (`session-121f`). Inside the solve none of those readings exists: the
+  // tension IS the one that lets the ball lengthen the path at the creep's
+  // relief, whatever is driving it - weight, a swing's centripetal load, the
+  // winch, or momentum.
+  private walkImpulse = 0;
 
   constructor(
     readonly ball: RigidBody2D,
@@ -1910,10 +1942,18 @@ export class BallChainRow implements IslandRow, IslandUnit {
       if (!bodies.includes(obj)) bodies.push(obj);
     }
     this.bodies = bodies;
-    const end = this.rope.end.contact.obj;
-    if (end !== this.endBody) {
+    // A ring on a cord keeps its warm start across the links it crosses: the
+    // constraint is the same cord, and the tension it carried a link ago is
+    // the tension it carries now. Dropped at every crossing, the first
+    // substep on each link started from nothing, the ball ran on into a taut
+    // chain and was caught at twice the weight: a hitch every twenty
+    // centimetres of slide (`session-346f`).
+    const end = this.rope.end;
+    const endKey: unknown = end instanceof RopeVineClamp ? end.vine : end.contact.obj;
+    if (endKey !== this.endKey) {
       this.impulse = 0;
-      this.endBody = end;
+      this.walkImpulse = 0;
+      this.endKey = endKey;
     }
     this.coilGrowth = 0;
     this.realised = 0;
@@ -1924,7 +1964,18 @@ export class BallChainRow implements IslandRow, IslandUnit {
     this.h = h;
     this.takeInTurn();
     this.rope.rowPrepare(this.scene());
+    // The last substep's walk, over the integration it was solved with (see
+    // the class comment), on the cord as that integration left it.
+    this.walk();
     this.rope.leaseLength(this.rope.takeTopologyGrowth());
+    this.reel = this.reelRate();
+  }
+
+  // Walk a ring on the cord by the tension the last biased pass solved for,
+  // over one substep (`Rope.rowCreep`).
+  private walk(): void {
+    if (this.walkImpulse > 0 && this.h > 0) this.rope.rowCreep(this.h, this.walkImpulse / this.h);
+    this.walkImpulse = 0;
   }
 
   // What the substeps have turned the ball by since the last look, as path:
@@ -1943,6 +1994,19 @@ export class BallChainRow implements IslandRow, IslandUnit {
     this.lastRotation = this.ball.globalRotation;
   }
 
+  // The drum's take-up over the substep about to be solved, metres a second
+  // (see `solve`'s viscous branch): the spool rate at the ball's present turn,
+  // on the terms `takeInTurn` will realise it on once the substep has turned
+  // the ball. A motor's target speed, read before the step it drives.
+  private reelRate(): number {
+    if (!this.ball.kinematicRotation) return 0;
+    const rate = this.rope.lengthPerRadian(this.ball) * this.ball.angularVelocity;
+    const limit = this.ball.mass * BallChainRow.WINCH_MAX_ACCEL * this.h;
+    return rate > 0 && !this.touching && this.impulse < limit ? rate : 0;
+  }
+
+  private reel = 0;
+
   // After the island's last substep: the turn that substep integrated, taken
   // in on the same terms, and the winding the drum did NOT realise this frame
   // - the one share of the chain's over-length that is the spin's to give
@@ -1954,6 +2018,7 @@ export class BallChainRow implements IslandRow, IslandUnit {
   // was refunded (`session-247f`, winding ignored for 230 frames).
   finishFrame(): number {
     this.takeInTurn();
+    this.walk();
     return Math.max(0, this.coilGrowth - this.realised);
   }
 
@@ -1980,8 +2045,45 @@ export class BallChainRow implements IslandRow, IslandUnit {
     // The length, less the frame's winding the drum has not realised (see the
     // class comment): `constraint + coilGrowth - realised - path`.
     const slack = constraint + Math.max(this.coilGrowth, 0) - this.realised - length;
-    const applied = ropeImpulse(this, slack, slackRate, w, h, soft, useBias);
+    // A ring on a cord gives way at the creep's relief (see the class comment).
+    //
+    // And there the drum's take-up this substep is a RATE the row reels at,
+    // not a length the row is short by: the motor's velocity target, as a
+    // velocity solver carries any motor. Handed over as position error (the
+    // rigid row's way, below), the take-up is corrected by the soft bias,
+    // which the biased pass pays as tension and the relax pass takes back:
+    // under a wind-up on `session-171f` the biased pass pulled 2-5 kN on a
+    // 30-44 mm error and the relax pass left the ball 0.4-1.5 kN, while the
+    // ring crept by the biased figure - several times the tension the ball
+    // felt, squared by the law. The ring gave way where the chain should
+    // have held the ball, and winding felt far less resisted than a fall did.
+    // As a rate, both passes carry the one tension that reels the ball and
+    // drives the creep, and the error left is the drift the bias is for. The
+    // rate is the take-up the substep is about to make (`reelRate`, read at
+    // `prepare` from the ball's present turn), so the take-up `takeInTurn`
+    // then books into `realised` is already paid by the motion it drove and
+    // leaves no error behind; booked after the fact instead, every frame's
+    // last substep of winding carried into the next frame as error, ten
+    // millimetres of it under a steady wind-up.
+    const law = this.rope.rowCreepLaw();
+    let applied: number;
+    if (law !== null && law.along !== 0) {
+      applied = viscousRopeImpulse(
+        this,
+        slack,
+        slackRate - this.reel,
+        w,
+        h,
+        soft,
+        useBias,
+        Math.abs(law.along),
+        law.viscosity,
+      );
+    } else {
+      applied = ropeImpulse(this, slack, slackRate, w, h, soft, useBias);
+    }
     if (applied !== 0) for (const t of terms) applyTerm(t, applied);
+    if (useBias) this.walkImpulse = this.impulse;
   }
 
   measure(): void {
@@ -1993,6 +2095,64 @@ export class BallChainRow implements IslandRow, IslandUnit {
   anchorsMoved(): boolean {
     return false;
   }
+}
+
+// `ropeImpulse` for a rope whose end creeps along a viscous cord: the same
+// soft row, with the path's own shortening by the creep added to the rate it
+// drives to zero. The creep's relief at an accumulated impulse λ is
+// `along·creepSpeed(along·λ/h)`, so the impulse solves
+//
+//   λ = max(0, λ₀ − m·(slackRate + relief(λ) + bias)/w − i·λ₀)
+//
+// where `m`, `i` and `bias` are `ropeImpulse`'s own (`massScale`,
+// `impulseScale`, the slack's or the softness's bias). The right side falls as
+// λ rises (the relief grows with the tension), so there is one root and it lies
+// between 0 and the rigid row's answer; forty halvings of that bracket put it
+// within a millionth of a newton-second, past anything the sim can measure.
+// Bisection rather than Newton because the square law's slope is zero at no
+// tension, where Newton's first step is undefined.
+const VISCOUS_ROW_BISECTIONS = 40;
+
+export function viscousRopeImpulse(
+  row: { impulse: number },
+  slack: number,
+  slackRate: number,
+  w: number,
+  h: number,
+  soft: Softness,
+  useBias: boolean,
+  along: number,
+  viscosity: number,
+): number {
+  let bias = 0;
+  let massScale = 1;
+  let impulseScale = 0;
+  if (slack > 0) {
+    bias = slack / h;
+  } else if (useBias) {
+    bias = soft.biasRate * slack;
+    massScale = soft.massScale;
+    impulseScale = soft.impulseScale;
+  }
+  const start = row.impulse;
+  const target = (lambda: number): number => {
+    const relief = along * creepSpeed((along * lambda) / h, viscosity);
+    return Math.max(start - (massScale * (slackRate + relief + bias)) / w - impulseScale * start, 0);
+  };
+  let hi = target(0);
+  let next = 0;
+  if (hi > 0) {
+    let lo = 0;
+    for (let k = 0; k < VISCOUS_ROW_BISECTIONS; k++) {
+      const mid = 0.5 * (lo + hi);
+      if (target(mid) > mid) lo = mid;
+      else hi = mid;
+    }
+    next = 0.5 * (lo + hi);
+  }
+  const applied = next - start;
+  row.impulse = next;
+  return applied;
 }
 
 // Impulse `j` along the rope, delivered to one path body through its term.

@@ -185,9 +185,37 @@ import {
   routeWorldPoints,
 } from "./model";
 import { readClipboard, writeClipboard } from "./clipboard";
+import { berryAlongAt, growBerry, moveBerry, placeBerry, removeBerry, sizeBerry } from "./berryEditing";
+import {
+  DEFAULT_BERRY_DENSITY,
+  DEFAULT_BERRY_RADIUS,
+  DEFAULT_STALK_DENSITY,
+  MAX_BERRIES,
+  MAX_BERRY_DENSITY,
+  MAX_BERRY_RADIUS,
+  MAX_STALK_DENSITY,
+  MIN_BERRY_DENSITY,
+  MIN_BERRY_RADIUS,
+  MIN_STALK,
+  MIN_STALK_DENSITY,
+  DEFAULT_STALK_STRETCH,
+  MAX_STALK_STRETCH,
+  MIN_STALK_STRETCH,
+  berryMass,
+  stalkMass,
+  stalkReach,
+  STARBERRY_STIFFNESS,
+  berryOffset,
+  berryRadius,
+  minBerryVineLength,
+  pointAlong,
+  restStarberries,
+  starberrySettings,
+} from "../level/starberry";
 import {
   computeChainHandles,
   computeVineHandles,
+  computeBerryHandles,
   computeGroupHandles,
   computeHandles,
   drawEditor,
@@ -574,6 +602,16 @@ type Drag =
   // is re-anchored by, and for the same reason - the anchor IS the vine's
   // placement, so this moves an object rather than re-pointing the vine at one.
   | { mode: "vineAnchor"; vine: EdVine }
+  // Sliding berry `index`'s root along its vine, by the handle the selected
+  // berry shows there. The berry keeps its offset from the root.
+  | { mode: "berryPosition"; vine: EdVine; index: number }
+  // Moving berry `index` itself, its root unmoved. `grab` is from the press to
+  // the berry, so the berry does not jump to the pointer.
+  | { mode: "berryMove"; vine: EdVine; index: number; grab: Vec2 }
+  // A berry being dragged off a vine: the press was on the cord `along`
+  // metres down it (`root`), and releasing past the click's slop grows a
+  // berry where the pointer is. Nothing is written until then.
+  | { mode: "berryDraw"; vine: EdVine; along: number; root: Vec2; cursor: Vec2; press: Vec2 }
   | { mode: "draw"; body: EdItem; start: Vec2 };
 
 // Arrow-key nudge directions (world axes, +y down).
@@ -816,6 +854,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // vine has one anchor, a length and a colour, which is nothing an item panel
   // or a chain panel could speak for.
   const selectedVineIds = new Set<number>();
+  // One BERRY of a berry vine, picked out of it: what the gizmo moves and
+  // Delete removes. Only meaningful while its vine is the one thing selected
+  // (`currentBerry`), so every path that changes the selection drops it
+  // without having to say so.
+  let selectedBerry: { vineId: number; index: number } | null = null;
   // Which of the selected shape's VERTICES an edit acts on, as indices into its
   // vert loop. A second level of selection inside the item one, because a
   // polygon is the item whose parts are separately editable: once the shape is
@@ -1077,6 +1120,27 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   const selected = () => (selectedIds.size === 1 ? selectedBodies()[0] ?? null : null);
   const selectedChains = () => model.chains.filter((c) => selectedChainIds.has(c.id));
   const selectedVines = () => model.vines.filter((v) => selectedVineIds.has(v.id));
+  // The picked berry, if it still is one: its vine alone selected and still
+  // carrying a berry at that index (an undo can take either away).
+  function currentBerry(): { vine: EdVine; index: number } | null {
+    if (!selectedBerry || selectedVineIds.size !== 1 || !selectedVineIds.has(selectedBerry.vineId)) return null;
+    const vine = model.vines.find((v) => v.id === selectedBerry!.vineId);
+    if (!vine?.starberry || selectedBerry.index >= vine.starberry.along.length) return null;
+    return { vine, index: selectedBerry.index };
+  }
+  function selectBerry(vine: EdVine, index: number): void {
+    setVineSelection([vine.id]);
+    selectedBerry = { vineId: vine.id, index };
+    rebuildInspector();
+  }
+  // Take berry `index` off `vine`. The last berry takes the berry vine with
+  // it: a vine with no berries is a plain vine again, its cord a target.
+  function deleteBerry(vine: EdVine, index: number): void {
+    if (!vine.starberry) return;
+    removeBerry(vine.starberry, index);
+    if (vine.starberry.along.length === 0) delete vine.starberry;
+    selectedBerry = null;
+  }
   // The shape whose VERTICES are editable right now: the lone selected item, if
   // it is one of the two vertex-authored kinds and its handles are on screen at
   // all. Everything about the vertex selection - what a band catches, what
@@ -1260,6 +1324,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     selectedVineIds.clear();
     selectedBodyIds.clear();
     for (const id of ids) selectedVineIds.add(id);
+    selectedBerry = null;
     nudging = false;
     rebuildInspector();
   }
@@ -1605,10 +1670,60 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // an arrangement, and what an arrangement has is a place and an angle.
   type GizmoTarget =
     | { kind: "item" | "body"; id: number }
-    | { kind: "selection"; ids: number[] };
+    | { kind: "selection"; ids: number[] }
+    | { kind: "berry"; vineId: number; index: number };
+
+  // A BERRY picked out of its vine (`selectedBerry`): moved in the plane, its
+  // root on the vine unmoved, exactly as dragging it on the overlay moves it.
+  // It hangs in the gameplay plane, so the handles stand there.
+  function berryHandlers(vineId: number, index: number): GizmoHandlers {
+    const find = (): { vine: EdVine; root: Vec2; fruit: Vec2 } | null => {
+      const vine = model.vines.find((v) => v.id === vineId);
+      const path = vine?.starberry ? vineRestPath(model, vine) : null;
+      if (!vine?.starberry || !path || index >= vine.starberry.along.length) return null;
+      const root = pointAlong(path, vine.starberry.along[index]!);
+      return { vine, root, fruit: root.add(berryOffset(index, vine.starberry)) };
+    };
+    // The radius a scale drag is measured against.
+    let baseRadius: number | null = null;
+    return {
+      pose() {
+        const b = find();
+        return { pos: b ? new THREE.Vector3(b.fruit.x, threeY(b.fruit.y), 0) : new THREE.Vector3(), quat: new THREE.Quaternion() };
+      },
+      axes(mode): GizmoAxes {
+        if (!find() || mode === "rotate") return null;
+        // Moved in the plane; scaled as a whole, which is its radius.
+        return { x: true, y: true, z: false };
+      },
+      begin() {
+        gizmoBegin();
+        const b = find();
+        baseRadius = b ? berryRadius(index, b.vine.starberry!) : null;
+      },
+      apply(mode, pos, _quat, scale) {
+        const b = find();
+        if (!b) return;
+        if (mode === "translate") {
+          placeBerry(b.vine.starberry!, index, snapVec(new Vec2(pos.x, threeY(pos.y))).sub(b.root));
+        } else if (mode === "scale" && baseRadius !== null) {
+          // Either handle scales the whole berry: it is round.
+          const factor = Math.abs(scale.x - 1) > Math.abs(scale.y - 1) ? scale.x : scale.y;
+          sizeBerry(b.vine.starberry!, index, baseRadius * factor);
+        }
+        gizmoTouched();
+      },
+      end() {
+        baseRadius = null;
+        rebuildInspector();
+      },
+    };
+  }
 
   function gizmoSpec(): GizmoTarget | null {
     if (mode === "test" || !sceneShown()) return null;
+    const berry = currentBerry();
+    if (berry) return { kind: "berry", vineId: berry.vine.id, index: berry.index };
     if (selectedChainIds.size || selectedVineIds.size) return null;
     if (selectedBodyIds.size === 1) return { kind: "body", id: [...selectedBodyIds][0]! };
     if (selectedIds.size === 1) return { kind: "item", id: [...selectedIds][0]! };
@@ -1624,7 +1739,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // with different members to move, and a key that said only "selection" would
   // leave the handles writing the set that was selected before.
   const gizmoKeyOf = (t: GizmoTarget | null): string =>
-    t === null ? "" : t.kind === "selection" ? `selection:${t.ids.join(",")}` : `${t.kind}:${t.id}`;
+    t === null
+      ? ""
+      : t.kind === "selection"
+        ? `selection:${t.ids.join(",")}`
+        : t.kind === "berry"
+          ? `berry:${t.vineId}:${t.index}`
+          : `${t.kind}:${t.id}`;
 
   function syncGizmo(): void {
     if (!gizmo) return;
@@ -1637,7 +1758,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           ? null
           : spec.kind === "selection"
             ? selectionHandlers(spec.ids)
-            : spec.kind === "body"
+            : spec.kind === "berry"
+              ? berryHandlers(spec.vineId, spec.index)
+              : spec.kind === "body"
               ? bodyHandlers(spec.id)
               : itemHandlers(spec.id),
       );
@@ -1789,7 +1912,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       const points = vineRestPath(model, v);
       return points ? [{ color: v.color, braidSeed: v.braidSeed, points,
         restLength: Math.max(v.length, points[0]!.distanceTo(points.at(-1)!)),
-        attachedAtBothEnds: v.anchor2 !== null }] : [];
+        attachedAtBothEnds: v.anchor2 !== null,
+        ...(v.starberry ? { starberry: starberrySettings(v.starberry, v.length) } : {}) }] : [];
     });
     const key = sceneKeyOf(data, itemOf, vinePaths);
     if (key === sceneKey) {
@@ -1815,11 +1939,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     for (const [object, id] of itemOfSceneObject) sceneObjectOfItem.set(id, object);
     sceneLevel = {
       world,
-      vines: vinePaths.map(({ color, braidSeed, points, restLength, attachedAtBothEnds }) => ({
+      vines: vinePaths.map(({ color, braidSeed, points, restLength, attachedAtBothEnds, starberry }) => ({
         color,
         braidSeed,
         restLength,
         attachedAtBothEnds,
+        ...(starberry ? { starberry } : {}),
         path: (_alpha: number, out: Vec2[]) => {
           out.length = 0;
           out.push(...points);
@@ -5425,7 +5550,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         return vines.every((v) => v.length === first) ? first * M2PX : null;
       },
       (v) => {
-        for (const vine of vines) vine.length = Math.max(MIN_VINE_LENGTH, v * PX);
+        // Never shorter than a berry vine's lowest berry (`minBerryVineLength`).
+        for (const vine of vines) vine.length = Math.max(minBerryVineLength(vine.starberry, MIN_VINE_LENGTH), v * PX);
       },
       10,
       vines.length > 1,
@@ -5600,7 +5726,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       0.05,
       vines.length > 1,
       {
-        placeholder: `${DEFAULT_VINE_STIFFNESS}`,
+        placeholder: `${vines.every((v) => v.starberry) ? STARBERRY_STIFFNESS : DEFAULT_VINE_STIFFNESS}`,
         onEmpty: () => {
           for (const vine of vines) vine.stiffness = null;
         },
@@ -5616,7 +5742,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // The bands are the measured ones (see `BEND_EI_POLE`).
     readout("bends like", () => {
       if (vines.length > 1) return "-";
-      const s = vines[0]!.stiffness ?? DEFAULT_VINE_STIFFNESS;
+      const s = vines[0]!.stiffness ?? (vines[0]!.starberry ? STARBERRY_STIFFNESS : DEFAULT_VINE_STIFFNESS);
       if (s < 0.2) return "a rope";
       if (s < 0.4) return "a heavy cord";
       if (s < 0.65) return "a springy branch";
@@ -5653,47 +5779,173 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       "The ball's manacle threads onto a vine like a ring and creeps down it under the ball's weight, locked to the cord until it slides off the free end - viscosity sets how slowly, as it does for mud: blank is mud's own, 0 never slides.",
     );
 
-    g = section(group, "vine/Braid", "Braid");
-    const braidSeed = document.createElement("input");
-    braidSeed.type = "number";
-    braidSeed.className = "ed-num";
-    braidSeed.min = "0"; braidSeed.max = "2147483647"; braidSeed.step = "1";
-    braidSeed.value = String(vines[0]!.braidSeed ?? 1701);
-    braidSeed.setAttribute("aria-label", "Vine seed");
-    const braidRow = el("div", "ed-row");
-    braidRow.append(braidSeed, button("Braid selected vine", () => {
-      if (!braidSeed.reportValidity()) return;
-      beginAction();
-      for (const vine of vines) vine.braidSeed = Number(braidSeed.value);
-      markDirty(); rebuildInspector();
-    }));
-    g.appendChild(braidRow);
-    const plainRow = el("div", "ed-row");
-    plainRow.appendChild(button("Plain vine", () => {
-      beginAction();
-      for (const vine of vines) vine.braidSeed = null;
-      markDirty(); rebuildInspector();
-    }));
-    g.appendChild(plainRow);
-
-    g = section(group, "vine/Color", "Color");
-    const cw = fieldRow("color");
-    const ci = colorInput(vines[0]!.color ?? VINE_DEFAULT_COLOR, beginAction, (hex) => {
-      for (const v of vines) v.color = hex;
-      markDirty();
-    });
-    cw.appendChild(ci.el);
-    g.appendChild(cw);
-    const reset = el("div", "ed-row");
-    reset.appendChild(
-      button("Reset color", () => {
-        beginAction();
-        for (const v of vines) v.color = null;
-        markDirty();
-        rebuildInspector();
-      }),
+    // A BERRY VINE (`level/starberry.ts`): berries on stalks off the cord, and
+    // only the berries catch the hook - the cord is drawn set back behind the
+    // gameplay plane to say so. Its stiffness left blank is a sapling's
+    // (`STARBERRY_STIFFNESS`) rather than a rope's.
+    const berried = vines.every((v) => v.starberry);
+    g = section(group, "vine/Berries", "Berries");
+    describe(
+      g,
+      "Drag out from a vine to grow a berry: its stalk leaves the vine where you pressed and the berry hangs where you let go. Click a berry to pick it and move it with its gizmo (or drag it), or size it with the gizmo's scale or its radius field; drag the square at its root to slide it along the vine; Alt-click or Delete removes it. Only the berries catch the hook - a vine with berries is drawn set back behind the play plane, and nothing on it collides with the ball or the chain. The last berry removed makes it a plain vine again.",
     );
-    g.appendChild(reset);
+    const vine = vines.length === 1 ? vines[0]! : null;
+    const settings = vine?.starberry;
+    if (vine && settings) {
+      for (const [key, label, step, min, max, scale] of [
+        ["radius", "new berry radius", 1, MIN_BERRY_RADIUS, MAX_BERRY_RADIUS, M2PX],
+        ["sway", "berry sway", 0.05, 0, 1, 1],
+        ["glow", "glow", 0.1, 0, 3, 1],
+        ["seed", "vine seed", 1, 0, 2147483647, 1],
+      ] as const) {
+        numField(g, label, () => settings[key] * scale, (n) => {
+          settings[key] = Math.min(max, Math.max(min, n / scale));
+        }, step);
+      }
+      // What a berry is made of (kilograms per cubic metre, so each berry
+      // weighs its own drawn sphere) and what a stalk is made of (kilograms
+      // per metre, as the cord's `density` is, so each stem weighs its own
+      // stalk's reach). Blank is the builder's default, as the cord's is;
+      // neither is a length, so neither is scaled by `M2PX`. The numbers set
+      // how the plant answers the ball (a PBD correction is split by inverse
+      // mass, so a light berry takes the whole of what the chain hands it),
+      // not how it falls.
+      // And how far a stalk stretches on its spring before its ropes catch it,
+      // as a fraction of its reach: the bounce. A fraction, so not scaled
+      // either.
+      for (const [key, label, fallback, min, max, step] of [
+        ["berryDensity", "berry density kg/m³", DEFAULT_BERRY_DENSITY, MIN_BERRY_DENSITY, MAX_BERRY_DENSITY, 10],
+        ["stalkDensity", "stem density kg/m", DEFAULT_STALK_DENSITY, MIN_STALK_DENSITY, MAX_STALK_DENSITY, 0.5],
+        ["stretch", "stem stretch", DEFAULT_STALK_STRETCH, MIN_STALK_STRETCH, MAX_STALK_STRETCH, 0.05],
+      ] as const) {
+        const field = numField(
+          g,
+          label,
+          () => settings[key] ?? NaN,
+          (n) => {
+            settings[key] = Math.min(max, Math.max(min, n));
+          },
+          step,
+          false,
+          {
+            placeholder: `${fallback}`,
+            onEmpty: () => {
+              delete settings[key];
+            },
+          },
+        );
+        describe(
+          field,
+          key === "berryDensity"
+            ? "What the berries are made of, so a bigger berry weighs more: it sets how the plant answers the ball on the chain, not how it falls - a light berry is whipped about and takes the whole of every pull, a heavy one barely gives. Blank is a fruit's (640); the ball is iron at 7200. For a berry that bounces the ball, keep it light: a heavy berry takes a share of the ball's speed the moment the chain goes taut, the way a chain catch does."
+            : key === "stalkDensity"
+              ? "What the stalks are made of, per metre like the cord, so a longer stalk weighs more: the weight of the stem between the cord and the berry. Blank is the default (8.3, a third of the cord's)."
+              : "How far a stalk stretches on its spring before its ropes catch it, as a fraction of its length: the bounce. At 0 a pull along the stalk is caught dead, as a chain catches; at 0.5 a 0.6 m stalk stretches to 0.9 m and throws the ball back. Sway sets the spring's rate; above 0.5 sway the stalk sags too far under a hanging ball to bounce it. Blank is 0.5.",
+        );
+      }
+      // Each berry, to pick; the picked one's place in the level, exactly.
+      const picked = currentBerry();
+      const list = el("div", "ed-row");
+      settings.along.forEach((_, index) => {
+        const b = button(`${picked?.index === index ? "▸ " : ""}Berry ${index + 1}`, () => selectBerry(vine, index));
+        list.appendChild(b);
+      });
+      g.appendChild(list);
+      if (picked?.vine === vine) {
+        const index = picked.index;
+        const root = (): Vec2 | null => {
+          const path = vineRestPath(model, vine);
+          return path && vine.starberry ? pointAlong(path, vine.starberry.along[index]!) : null;
+        };
+        const at = (): Vec2 | null => {
+          const r = root();
+          return r && vine.starberry ? r.add(berryOffset(index, vine.starberry)) : null;
+        };
+        // Where the berry hangs in the level (its centre, in the file's
+        // pixels), and where its stalk leaves the vine.
+        numField(g, `berry ${index + 1} x`, () => (at()?.x ?? NaN) * M2PX, (n) => {
+          const r = root();
+          const a = at();
+          if (r && a && vine.starberry) placeBerry(vine.starberry, index, new Vec2(n * PX, a.y).sub(r));
+        });
+        numField(g, `berry ${index + 1} y`, () => (at()?.y ?? NaN) * M2PX, (n) => {
+          const r = root();
+          const a = at();
+          if (r && a && vine.starberry) placeBerry(vine.starberry, index, new Vec2(a.x, n * PX).sub(r));
+        });
+        numField(g, `berry ${index + 1} radius`, () => berryRadius(index, settings) * M2PX, (n) => {
+          sizeBerry(settings, index, n * PX);
+        });
+        // What that berry weighs at the plant's density - the number the chain
+        // actually pulls against - and what its stem weighs at the stalk's.
+        readout(`berry ${index + 1} weight`, () => `${berryMass(berryRadius(index, settings), settings).toFixed(1)} kg`);
+        readout(
+          `stem ${index + 1} weight`,
+          () => `${stalkMass(stalkReach(berryOffset(index, settings).length()), settings).toFixed(1)} kg`,
+        );
+        // How far down the vine the stalk leaves it, in the file's pixels:
+        // fixed whatever the vine's length does.
+        numField(g, "stalk leaves at", () => settings.along[index]! * M2PX, (n) => {
+          moveBerry(settings, index, n * PX, vine.length);
+        });
+        const row = el("div", "ed-row");
+        row.appendChild(
+          button(`Remove berry ${index + 1}`, () => {
+            beginAction();
+            deleteBerry(vine, index);
+            markDirty();
+            rebuildInspector();
+          }),
+        );
+        g.appendChild(row);
+      }
+    }
+
+    // A berry vine draws its own single woody cord, so neither the braid nor
+    // the colour has anything to say about one.
+    if (!berried) {
+      g = section(group, "vine/Braid", "Braid");
+      const braidSeed = document.createElement("input");
+      braidSeed.type = "number";
+      braidSeed.className = "ed-num";
+      braidSeed.min = "0"; braidSeed.max = "2147483647"; braidSeed.step = "1";
+      braidSeed.value = String(vines[0]!.braidSeed ?? 1701);
+      braidSeed.setAttribute("aria-label", "Vine seed");
+      const braidRow = el("div", "ed-row");
+      braidRow.append(braidSeed, button("Braid selected vine", () => {
+        if (!braidSeed.reportValidity()) return;
+        beginAction();
+        for (const vine of vines) vine.braidSeed = Number(braidSeed.value);
+        markDirty(); rebuildInspector();
+      }));
+      g.appendChild(braidRow);
+      const plainRow = el("div", "ed-row");
+      plainRow.appendChild(button("Plain vine", () => {
+        beginAction();
+        for (const vine of vines) vine.braidSeed = null;
+        markDirty(); rebuildInspector();
+      }));
+      g.appendChild(plainRow);
+
+      g = section(group, "vine/Color", "Color");
+      const cw = fieldRow("color");
+      const ci = colorInput(vines[0]!.color ?? VINE_DEFAULT_COLOR, beginAction, (hex) => {
+        for (const v of vines) v.color = hex;
+        markDirty();
+      });
+      cw.appendChild(ci.el);
+      g.appendChild(cw);
+      const reset = el("div", "ed-row");
+      reset.appendChild(
+        button("Reset color", () => {
+          beginAction();
+          for (const v of vines) v.color = null;
+          markDirty();
+          rebuildInspector();
+        }),
+      );
+      g.appendChild(reset);
+    }
 
     const row = el("div", "ed-row");
     row.appendChild(button("Delete", () => deleteSelected()));
@@ -8130,6 +8382,15 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   }
 
   function deleteSelected(): void {
+    // A berry picked out of its vine is what is selected, not the vine.
+    const berry = currentBerry();
+    if (berry) {
+      beginAction();
+      deleteBerry(berry.vine, berry.index);
+      markDirty();
+      rebuildInspector();
+      return;
+    }
     // A selected BODY means all of it: deleting a body deletes the objects in
     // it. Reading `selectedIds` alone left the body panel's own Delete button
     // doing nothing at all.
@@ -8813,6 +9074,15 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const vines = selectedVines();
     if (vines.length === 1) {
       const vine = vines[0]!;
+      // The picked berry's root, which slides along the vine, before the
+      // vine's ends: a root can sit over either.
+      const picked = currentBerry();
+      if (picked?.vine === vine) {
+        const handle = computeBerryHandles(camera, model, vine)[picked.index];
+        if (handle && scr.distanceTo(handle.rootScreen) <= HANDLE_HIT_PX) {
+          return { mode: "berryPosition", vine, index: picked.index };
+        }
+      }
       const hs = computeVineHandles(camera, model, vine);
       if (hs) {
         if (scr.distanceTo(hs.tip) <= HANDLE_HIT_PX) {
@@ -9194,6 +9464,41 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       drag = { mode: "movePlayer", grab: model.player.pos.sub(world) };
       return;
     }
+    // 3b. A berry, before the bodies: it hangs in front of whatever is behind
+    // it. A press picks it out (its gizmo moves it in the 3D view) and a drag
+    // moves it; Alt-click removes it. Not in the Visuals workspace, where the
+    // guides do not draw berries.
+    const berry = scene ? null : berryAt(world);
+    if (berry) {
+      if (e.altKey) {
+        beginAction();
+        deleteBerry(berry.vine, berry.index);
+        markDirty();
+        setVineSelection([berry.vine.id]);
+        return;
+      }
+      selectBerry(berry.vine, berry.index);
+      drag = turned ? null : { mode: "berryMove", vine: berry.vine, index: berry.index, grab: berry.fruit.sub(world) };
+      return;
+    }
+    // 3c. A vine, before the items too: it is a line a few pixels wide drawn
+    // over everything, so a press within its band means it - not the camera
+    // region or the wall behind it, which are reached anywhere else. Not in
+    // the Visuals workspace, whose guides do not draw vines.
+    const vine = scene ? null : topmostVineAt(world);
+    if (vine) {
+      setVineSelection([vine.id]);
+      // ...and a press that DRAGS off the vine grows a berry on it, its stalk
+      // leaving the cord where the press was and the berry where the drag is
+      // released (see `berryDraw`). Head on only: the draft is drawn on the
+      // overlay.
+      const path = turned ? null : vineRestPath(model, vine);
+      if (path) {
+        const along = Math.min(vine.length, berryAlongAt(path, world));
+        drag = { mode: "berryDraw", vine, along, root: pointAlong(path, along), cursor: world, press: scr };
+      } else drag = null;
+      return;
+    }
     // 4. Topmost item under the pointer, over every visible layer — the active
     // layer wins a tie (see `pickOrder`), so the layer switch still says which
     // of two stacked items a click means. A grouped item selects its whole
@@ -9357,14 +9662,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         return;
       }
       setChainSelection([chain.id]);
-      drag = null;
-      return;
-    }
-    // ...and a vine, for the same reason and after the same bodies: a vine hangs
-    // over the geometry it is bolted to.
-    const vine = scene ? null : topmostVineAt(world);
-    if (vine) {
-      setVineSelection([vine.id]);
       drag = null;
       return;
     }
@@ -9668,6 +9965,52 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     return best;
   }
 
+  // Whether a berry drag-off released here would grow a berry: it left the
+  // click's slop (a click on a vine only selects it), the stalk is long enough
+  // to be one, and the vine has room for another.
+  function berryDraftValid(d: Extract<Drag, { mode: "berryDraw" }>): boolean {
+    return (
+      canvasScreen(d.cursor).distanceTo(d.press) >= CLICK_SLOP_PX &&
+      d.cursor.distanceTo(d.root) >= MIN_STALK &&
+      (d.vine.starberry?.along.length ?? 0) < MAX_BERRIES
+    );
+  }
+
+  // A berry drag-off, released: the berry grows where the pointer is, on a
+  // stalk from where the press was on the cord, and is picked out so its gizmo
+  // is on it. A plain vine becomes a berry vine by it.
+  function growDraggedBerry(d: Extract<Drag, { mode: "berryDraw" }>): void {
+    if (!berryDraftValid(d)) return;
+    beginAction();
+    const grown = growBerry(d.vine.starberry, d.along, d.cursor.sub(d.root), d.vine.length);
+    if (!grown) return;
+    d.vine.starberry = grown.settings;
+    markDirty();
+    selectBerry(d.vine, grown.index);
+  }
+
+  // The berry under a world point (on the gameplay plane, where berries hang),
+  // nearest first: within its radius, or a few pixels of its centre when it
+  // is drawn small.
+  function berryAt(world: Vec2): { vine: EdVine; index: number; fruit: Vec2 } | null {
+    if (!visibleLayers.has("scene") || lockedLayers.has("scene")) return null;
+    const floor = SMALL_MARK_PICK_PX * worldLine();
+    let best: { vine: EdVine; index: number; fruit: Vec2 } | null = null;
+    let bestD = Infinity;
+    for (const v of model.vines) {
+      const path = v.starberry ? vineRestPath(model, v) : null;
+      if (!path || !v.starberry) continue;
+      for (const [index, berry] of restStarberries(path, v.starberry).entries()) {
+        const d = world.distanceTo(berry.fruit);
+        if (d <= Math.max(berry.radius, floor) && d < bestD) {
+          bestD = d;
+          best = { vine: v, index, fruit: berry.fruit };
+        }
+      }
+    }
+    return best;
+  }
+
   // The vine nearest a world point, within the same band a chain is picked by,
   // measured against its drawn rest pose.
   function topmostVineAt(world: Vec2): EdVine | null {
@@ -9676,7 +10019,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     let best: EdVine | null = null;
     let bestD = band;
     for (const v of model.vines) {
-      const d = distanceToVine(model, v, world);
+      let d = distanceToVine(model, v, world);
+      // A berry vine is picked by its berries too, which hang off the line.
+      const path = v.starberry ? vineRestPath(model, v) : null;
+      if (path && v.starberry) {
+        for (const berry of restStarberries(path, v.starberry)) {
+          d = Math.min(d, Math.max(0, world.distanceTo(berry.fruit) - berry.radius));
+        }
+      }
       if (d <= bestD) {
         bestD = d;
         best = v;
@@ -9743,7 +10093,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       drag.mode !== "surfaceDrop" &&
       drag.mode !== "marquee" &&
       drag.mode !== "chainDraw" &&
-      drag.mode !== "vineDraw"
+      drag.mode !== "vineDraw" &&
+      // Writes nothing until it is released (see `growDraggedBerry`).
+      drag.mode !== "berryDraw"
     ) {
       beginAction();
       dragPushed = true;
@@ -10041,6 +10393,26 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         // length, which the draft draws as refused.
         drag.length = Math.max(0, world.y - toWorld(drag.from, drag.local).y);
         break;
+      case "berryPosition": {
+        const path = vineRestPath(model, drag.vine);
+        if (!path || !drag.vine.starberry) break;
+        moveBerry(drag.vine.starberry, drag.index, berryAlongAt(path, world), drag.vine.length);
+        markDirty();
+        refreshFields();
+        break;
+      }
+      case "berryMove": {
+        const path = vineRestPath(model, drag.vine);
+        if (!path || !drag.vine.starberry) break;
+        const root = pointAlong(path, drag.vine.starberry.along[drag.index]!);
+        placeBerry(drag.vine.starberry, drag.index, snapVec(world.add(drag.grab)).sub(root));
+        markDirty();
+        refreshFields();
+        break;
+      }
+      case "berryDraw":
+        drag.cursor = snapVec(world);
+        break;
       case "vineLength": {
         const top = vineAnchorWorld(model, drag.vine);
         if (!top) break;
@@ -10052,7 +10424,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         drag.attach = e.shiftKey ? (topmostAt(world, (b) => chainable(b)) ?? null) : null;
         drag.vine.length = drag.attach
           ? drag.startLength
-          : Math.max(MIN_VINE_LENGTH, snap(world.y - top.y));
+          : Math.max(minBerryVineLength(drag.vine.starberry, MIN_VINE_LENGTH), snap(world.y - top.y));
         markDirty();
         refreshFields();
         break;
@@ -10243,6 +10615,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (drag.mode === "vineEnd" && drag.detach) {
       detachVineEnd(drag.vine);
     }
+    // The berry's own fields, rebuilt to where it was dropped.
+    if (drag.mode === "berryPosition" || drag.mode === "berryMove") rebuildInspector();
+    if (drag.mode === "berryDraw") growDraggedBerry(drag);
     if (drag.mode === "chainDraw") {
       finishOrTieChainDraw(e.shiftKey);
       // Tied, and still going: the draft lives on past the release.
@@ -10777,6 +11152,21 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           : drag?.mode === "move" && drag.moved
             ? drag.lead.pos.add(drag.snapAt)
             : gizmoSnapPoint,
+        {
+          selected: (() => {
+            const b = currentBerry();
+            return b ? { vineId: b.vine.id, index: b.index } : null;
+          })(),
+          draft:
+            drag?.mode === "berryDraw" && canvasScreen(drag.cursor).distanceTo(drag.press) >= CLICK_SLOP_PX
+              ? {
+                  root: drag.root,
+                  to: drag.cursor,
+                  radius: drag.vine.starberry?.radius ?? DEFAULT_BERRY_RADIUS,
+                  valid: berryDraftValid(drag),
+                }
+              : null,
+        },
       );
     }
     requestAnimationFrame(frame);

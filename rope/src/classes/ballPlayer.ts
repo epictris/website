@@ -1363,6 +1363,10 @@ export class BallPlayer extends RigidBody2D {
       point.sub(body.globalPosition).rotated(-body.globalRotation),
       normal.angle() - body.globalRotation,
     );
+    // On a vine's berry, the one vine body the hook bites (`VineLink.solid`),
+    // the cuff is in the way of what the berry is and nothing more: a cuff
+    // meeting the scenery would hold the berry off a rock it hangs in.
+    if (body instanceof VineLink) cuff.mask = body.primaryShape().mask;
     cuff.wrappable = false;
     cuff.hidden = true;
     this.anchorCuff = { body, shape: cuff };

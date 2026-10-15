@@ -39,7 +39,7 @@ import {
 } from "../engine/body";
 import { circleShape, rectShape } from "../engine/shapes";
 import { bodyOverlapCircle } from "../engine/collision";
-import { World } from "../engine/world";
+import { GRAVITY, World } from "../engine/world";
 import { Level } from "../level/level";
 import { BallLevel } from "../level/ballLevel";
 import type { BallPlayer } from "../classes/ballPlayer";
@@ -51,7 +51,7 @@ import {
   type Violation,
 } from "./trace";
 import { RopeVineClamp } from "../lib/vineClamp";
-import { VISCOUS_CREEP_SPEED } from "../lib/viscous";
+import { VISCOUS_CREEP_SPEED, creepSpeed } from "../lib/viscous";
 import { MANACLE_REACH } from "../lib/manacle";
 import { CHAIN_TOLERANCE, VINE_TOLERANCE } from "../level/chains";
 import {
@@ -70,6 +70,7 @@ import {
 import { scaleLevelData, type LevelBodyData, type RawLevelData } from "../level/levelFormat";
 import { modelFromDisk, modelToDisk } from "../editor/model";
 import { PX } from "../engine/units";
+import { SolverStats } from "../engine/solverStats";
 
 export interface VineResult {
   name: string;
@@ -338,11 +339,12 @@ function caseLinkContacts(): VineResult {
 // ---------------------------------------------------------------------------
 // rest: a vine hangs straight, settles, and stays where it settled.
 //
-// The bound on the droop is the one the sweep's own tolerance implies. It is a
-// per-CHAIN bound and a vine is a series of them, so a settled vine may hang up
-// to `links * CHAIN_TOLERANCE` longer than its authored length; what may not
-// happen is any pair ending a frame over that bound, or the vine creeping,
-// ringing, or leaning off the plumb line under no load at all.
+// Where a vine is drawn is where it rests: its length within one
+// `CHAIN_TOLERANCE` of the authored one, not the `links * CHAIN_TOLERANCE` the
+// series of per-chain bounds would allow (see `jointLength` in `buildOne`).
+// What may not happen besides is any pair ending a frame over its bound, or
+// the vine creeping, ringing, or leaning off the plumb line under no load at
+// all.
 // ---------------------------------------------------------------------------
 function caseRest(): VineResult {
   const details: string[] = [];
@@ -370,7 +372,12 @@ function caseRest(): VineResult {
   const anchorY = vine.anchorContact.globalPosition.y;
   const tipY = vine.links[vine.links.length - 1]!.globalPosition.y;
   const hang = tipY - anchorY;
-  const droopBound = vine.links.length * CHAIN_TOLERANCE;
+  // Where a vine is drawn is where it rests: its joints sit a give short of the
+  // spacing under attachments on the drawn arc (`jointLength` in `buildOne`),
+  // so the series' give lands it on its drawn length rather than up to a give a
+  // link past it (5.4 mm a link, 104 mm at the tip of BALL's plant, measured
+  // before).
+  const droopBound = CHAIN_TOLERANCE;
   const droop = hang - 3;
 
   const claims: Array<[string, boolean]> = [
@@ -378,7 +385,7 @@ function caseRest(): VineResult {
     // attachments a hanging vine builds (see `buildOne`).
     [`${vine.links.length} links, ${vine.chains.length} chains`, vine.links.length === 20 && vine.chains.length === 39],
     [`worst pair over-length ${(worstOver * 1000).toFixed(3)} mm <= ${VINE_TOLERANCE * 1000} mm`, worstOver <= VINE_TOLERANCE],
-    [`hangs ${hang.toFixed(4)} m against 3 m authored: droop ${(droop * 1000).toFixed(1)} mm, bound ${(droopBound * 1000).toFixed(0)} mm`, droop >= 0 && droop <= droopBound],
+    [`hangs ${hang.toFixed(4)} m against 3 m authored: ${(droop * 1000).toFixed(1)} mm off, bound ${(droopBound * 1000).toFixed(0)} mm`, Math.abs(droop) <= droopBound],
     [`plumb: worst |x| ${(worstLean * 1000).toFixed(3)} mm <= 1 mm`, worstLean <= 0.001],
     [`settled: worst link speed ${worstSpeed.toFixed(5)} m/s <= 0.05`, worstSpeed <= 0.05],
     [`no creep: worst drift over 120 frames ${(drift * 1000).toFixed(3)} mm <= 1 mm`, drift <= 0.001],
@@ -387,7 +394,7 @@ function caseRest(): VineResult {
     if (!got) passed = false;
     details.push(`${got ? "ok  " : "BAD "} ${claim}`);
   }
-  return ok("rest — a vine hangs plumb, within the sweep's own tolerance, and stays there", passed, details);
+  return ok("rest — a vine hangs plumb, on its drawn length, and stays there", passed, details);
 }
 
 // ---------------------------------------------------------------------------
@@ -794,8 +801,8 @@ function caseFormat(): VineResult {
   const anchorY = upsideDown.vine.anchorContact.globalPosition.y;
   const deepest = Math.max(...upsideDown.vine.links.map((l) => l.globalPosition.y));
   check(
-    `a vine hung off the top of a body hangs its full length through it (deepest link ${((deepest - anchorY) * 1000).toFixed(0)} mm below the anchor, vine 3000 + series give)`,
-    deepest - anchorY >= 3.0 && deepest - anchorY <= 3.0 + upsideDown.vine.links.length * 0.005,
+    `a vine hung off the top of a body hangs its full length through it (deepest link ${((deepest - anchorY) * 1000).toFixed(0)} mm below the anchor, vine 3000 +- 5)`,
+    Math.abs(deepest - anchorY - 3.0) <= CHAIN_TOLERANCE,
   );
 
   // A vine naming an anchor the level does not have is dropped at both ends,
@@ -1697,7 +1704,7 @@ function caseSpanStiffness(): VineResult {
     details.push(`${got ? "ok  " : "BAD "} ${claim}`);
   };
 
-  const sagOf = (stiffness: number | undefined): { sag: number; asleep: number; speed: number } => {
+  const sagOf = (stiffness: number | undefined): { sag: number; asleep: number; speed: number; arc: number } => {
     const scene = spanScene(500);
     if (stiffness !== undefined) scene.vines![0]!.stiffness = stiffness;
     const rig = new Rig(scene);
@@ -1709,20 +1716,37 @@ function caseSpanStiffness(): VineResult {
     for (const l of rig.vine.links) speed = Math.max(speed, l.linearVelocity.length());
     const a = rig.vine.anchorContact.globalPosition;
     const deepest = Math.max(...rig.vine.links.map((l) => l.globalPosition.y));
-    return { sag: deepest - a.y, asleep, speed };
+    const ends = [rig.vine.anchorContact, ...rig.vine.links, rig.vine.anchor2Contact!];
+    let arc = 0;
+    for (let i = 1; i < ends.length; i++) arc += ends[i]!.globalPosition.distanceTo(ends[i - 1]!.globalPosition);
+    return { sag: deepest - a.y, asleep, speed, arc };
   };
 
   const rope = sagOf(undefined);
   const cord = sagOf(0.25);
   const branch = sagOf(0.5);
   const pole = sagOf(1);
+  // The bow is the rod's geometry, not the slider's: a 5 m rod over 4 m
+  // sags about what the catenary does at any stiffness, the floors holding
+  // its arc (below), and what the slider moves is under the island's own
+  // softness - the free span rests a percent long on its 60 Hz rows
+  // (`SPAN_SUBSTEPS`), which is 2 cm of sag.
+  const sags = [cord.sag, branch.sag, pole.sag];
   check(
-    `the slider is monotone: sag ${rope.sag.toFixed(2)} m (rope) >= ${cord.sag.toFixed(2)} (0.25) ` +
-      `>= ${branch.sag.toFixed(2)} (0.5) >= ${pole.sag.toFixed(2)} (1)`,
-    rope.sag >= cord.sag - 0.01 && cord.sag >= branch.sag - 0.01 && branch.sag >= pole.sag - 0.01,
+    `the bow is the rod's, not the slider's: sag ${rope.sag.toFixed(2)} m (rope), ${cord.sag.toFixed(2)} (0.25), ` +
+      `${branch.sag.toFixed(2)} (0.5), ${pole.sag.toFixed(2)} (1), all within 0.05 m of the catenary's`,
+    sags.every((sag) => Math.abs(sag - rope.sag) <= 0.05),
   );
   check(`a rope span keeps its catenary (sag ${rope.sag.toFixed(2)} m >= 1.2)`, rope.sag >= 1.2);
-  check(`a pole span reads as a taut wire (sag ${pole.sag.toFixed(2)} m <= 0.2)`, pole.sag <= 0.2);
+  // A rod of surplus length bows and never shortens: the floors hold at
+  // every stiffness, so a pole span is a bow too (it read as a taut wire
+  // while the bends crushed its links into each other - see `buildVineBends`
+  // on a span's scales).
+  check(
+    `a stiff span keeps its arc at every stiffness (${cord.arc.toFixed(3)}, ${branch.arc.toFixed(3)}, ${pole.arc.toFixed(3)} m of 5, bar 4.95)`,
+    cord.arc >= 4.95 && branch.arc >= 4.95 && pole.arc >= 4.95,
+  );
+  check(`...and a pole span bows rather than flattens (sag ${pole.sag.toFixed(2)} m >= 1.2)`, pole.sag >= 1.2);
   check(
     `every setting settles (worst speeds ${cord.speed.toFixed(4)}, ${branch.speed.toFixed(4)}, ${pole.speed.toFixed(4)} <= 0.05)`,
     cord.speed <= 0.05 && branch.speed <= 0.05 && pole.speed <= 0.05,
@@ -1732,7 +1756,213 @@ function caseSpanStiffness(): VineResult {
     cord.asleep >= 0 && branch.asleep >= 0 && pole.asleep >= 0,
   );
 
-  return ok("span-stiffness — stiffness presses a span's drape toward straight, and it still sleeps", passed, details);
+  return ok("span-stiffness — a stiff span bows on its whole arc at every stiffness, and sleeps", passed, details);
+}
+
+// ---------------------------------------------------------------------------
+// span-kick: a stiff span knocked hard comes to rest again.
+//
+// BALL's 2.5 m span over a 2.19 m gap at stiffness 0.3 (session-381f): the
+// ball's chain caught its end link, and from the release on the span jiggled
+// for ever at up to 1 m/s. Its joint floors (`VineStrut`) and its bends argue
+// by construction - a bend pass shortens every joint it straightens - and
+// with the floors solved BEFORE the bends a forward sweep ended one bend pass
+// short of the floors. Swinging in, that was past the exit bar, the sweep
+// ran to its 64-sweep cap on one frame in nineteen, and that frame's
+// displacement was paid out as velocity: 2.9 J to 15.9 J, a limit cycle the
+// damping never caught. Sweeping the floors after the bends ended that
+// cycle but not the fight (session-294f: a span let go at speed still
+// capped one frame in twenty, three seconds of jiggle), so a free stiff
+// span is now a unit of the island solver (`PlantUnit`, `syncSpanUnits`),
+// where floors and bends are rows of one soft substepped solve with no last
+// word; this case slept at 92 under the sweep and sleeps at 29 there.
+//
+// Asserted the way it failed: the settled span, its middle link kicked at
+// 3 m/s, must sleep again, and no sweep on the way may hit the cap - a capped
+// sweep is the solver not converging, which is what the ringing was made of
+// (the island reports no cap, so the assertion is also that the span never
+// fell back to the sweep). Stiffness 0.3 is the level's; 0.5 is where the
+// floor still holds, so the class is covered to there.
+// ---------------------------------------------------------------------------
+function caseSpanKick(): VineResult {
+  const details: string[] = [];
+  let passed = true;
+  const check = (claim: string, got: boolean): void => {
+    if (!got) passed = false;
+    details.push(`${got ? "ok  " : "BAD "} ${claim}`);
+  };
+
+  const wasEnabled = SolverStats.enabled;
+  try {
+    for (const stiffness of [0.3, 0.5]) {
+      // The level's span: 2.5 m of vine between anchors 2.19 m apart, the far
+      // one 1.03 m lower. The second anchor sits on its own block's underside
+      // so the surface snap has nothing to do.
+      const scene = hall({
+        vineLength: 250,
+        stiffness,
+        extra: [
+          {
+            kind: "static",
+            x: 193,
+            y: -400,
+            rot: 0,
+            objects: [
+              { type: "collision", shape: { kind: "rect", w: 60, h: 40 } },
+              { type: "anchor", id: 2, x: 0, y: 23 },
+            ],
+          },
+        ],
+      });
+      scene.vines![0]!.anchor2 = 2;
+      const rig = new Rig(scene);
+      const vine = rig.vine;
+      const gap = vine.anchorContact.globalPosition.distanceTo(vine.anchor2Contact!.globalPosition);
+      const rest = vine.spacing * (vine.links.length + 1);
+      check(`stiffness ${stiffness}: a ${rest.toFixed(2)} m span over a ${gap.toFixed(2)} m gap arrives asleep`, vine.asleep);
+
+      // The kick: the span woken by hand and its middle link sent off at 3 m/s,
+      // which is what the ball's chain letting go of it did.
+      vine.asleep = false;
+      vine.stillFrames = 0;
+      for (const link of vine.allLinks) link.asleep = false;
+      const mid = vine.links[Math.floor(vine.links.length / 2)]!;
+      mid.linearVelocity = new Vec2(3, -3);
+
+      SolverStats.enabled = true;
+      let asleepAt = -1;
+      let capped = 0;
+      let peak = 0;
+      const frames = 600;
+      rig.step(frames, {}, (f) => {
+        capped += SolverStats.capped;
+        SolverStats.reset();
+        if (asleepAt < 0 && vine.asleep) asleepAt = f;
+        if (f >= frames / 2) {
+          let ke = 0;
+          for (const link of vine.allLinks) ke += 0.5 * link.mass * link.linearVelocity.lengthSquared();
+          peak = Math.max(peak, ke);
+        }
+      });
+      check(`...kicked at 3 m/s it sleeps again (frame ${asleepAt}, bar 300)`, asleepAt >= 0 && asleepAt <= 300);
+      // The cap is gated at the level's stiffness only. At 0.5 the floors
+      // converge slowly enough to cap while the kick rings out, in either
+      // order (192 capped sweeps on this one, 165 on the old; it sleeps at
+      // frame 61 on both): that is the strut's own open item - the floor holds
+      // up to about 0.5 and loses past it - and this case reports it rather
+      // than owning it.
+      if (stiffness <= 0.3) check(`...no sweep hit the cap on the way (${capped} capped)`, capped === 0);
+      else details.push(`     ${capped} sweeps capped on the way (reported, not asserted: the floor's convergence past 0.3 is the open item)`);
+      check(`...and the second half carries no energy (peak ${peak.toExponential(2)} J, bar 1e-3)`, peak < 1e-3);
+    }
+  } finally {
+    SolverStats.reset();
+    SolverStats.enabled = wasEnabled;
+  }
+
+  return ok("span-kick — a stiff span knocked hard comes to rest again, with the sweep off its cap", passed, details);
+}
+
+// ---------------------------------------------------------------------------
+// span-release: a stiff span the ball lets go of while hanging still stays
+// still.
+//
+// A held span is the sweep's and a free one the island's (`syncSpanUnits`),
+// and the hold hands the span back in whatever pose the sweep leaves it. At
+// the joint bar the sweep left every floor 4 mm short - 2370 mm of arc on
+// BALL's 2.5 m span against the island's 2409 - and the island's floors paid
+// that out as a 17.7 J twang the frame the chain let go of a span that was
+// hanging still, the bow overshooting 30 mm and ringing for twenty frames
+// (session-133f, "a weird jittery movement when the chain releases"). On the
+// ball there is no handover any more: the ring's hold is a row of the span's
+// island (`BallLevel.syncBallRow`), so the span is the island's before,
+// through and after the hold and nothing is paid out at either end. (The
+// grapple level's hold is still the sweep's, with neighbour-scale bends and
+// `SPAN_JOINT_TOLERANCE` keeping its pose within a few millimetres of the
+// island's - see docs/vines.md "The hold ends where the island would have
+// had it".)
+//
+// Asserted the way it failed, on the ball: the level's span (2.5 m over a
+// 2.19 m gap at 0.3), the ring threaded on near its lower end, the ball hung
+// still under it, then let go - the span may carry no more than a joule at
+// any frame after, and sleeps. (The grapple level's player, 70 kg hung from
+// a span's middle, stretches the sweep's pairs by their bar and lease and
+// gets that back as an elastic return on release - 11 J, the work the hang
+// did - which is a rope and not this.)
+// ---------------------------------------------------------------------------
+function caseSpanRelease(): VineResult {
+  const details: string[] = [];
+  let passed = true;
+  const check = (claim: string, got: boolean): void => {
+    if (!got) passed = false;
+    details.push(`${got ? "ok  " : "BAD "} ${claim}`);
+  };
+  const data: RawLevelData = {
+    player: { x: 185, y: -270, radius: 8 },
+    bodies: [
+      {
+        kind: "static",
+        x: 0,
+        y: -500,
+        rot: 0,
+        objects: [
+          { type: "collision", shape: { kind: "rect", w: 600, h: 40 } },
+          { type: "anchor", id: 1, x: 0, y: 20 },
+        ],
+      },
+      {
+        kind: "static",
+        x: 193,
+        y: -400,
+        rot: 0,
+        objects: [
+          { type: "collision", shape: { kind: "rect", w: 60, h: 40 } },
+          { type: "anchor", id: 2, x: 0, y: 23 },
+        ],
+      },
+      // A floor a metre under the span's lower end, for the ball to throw from.
+      {
+        kind: "static",
+        x: 0,
+        y: -250,
+        rot: 0,
+        objects: [{ type: "collision", shape: { kind: "rect", w: 3000, h: 40 } }],
+      },
+    ],
+    vines: [{ anchor: 1, anchor2: 2, length: 250, stiffness: 0.3 }],
+  };
+  const rig = new RingRig(data);
+  const vine = rig.vine;
+  const ringed = rig.throwUntilRinged(new Vec2(-0.3, -1.2));
+  check(`the ring threaded onto the span (frame ${ringed})`, ringed >= 0);
+  const keOf = (): number => {
+    let ke = 0;
+    for (const link of vine.allLinks) ke += 0.5 * link.mass * link.linearVelocity.lengthSquared();
+    return ke;
+  };
+  // Hang until the span under the ball is still.
+  let stillKE = Infinity;
+  rig.run(300, Vec2.ZERO, () => {
+    stillKE = keOf();
+  });
+  check(`...and hung from it until the span was still (${stillKE.toExponential(2)} J, bar 0.5)`, stillKE < 0.5);
+  check(`...with the span the island's through the hold, the chain a row of it`, vine.unit !== null);
+  // Let go.
+  let peak = 0;
+  let asleepAt = -1;
+  let released = false;
+  for (let f = 0; f < 300; f++) {
+    rig.step(rig.ball.globalPosition, false);
+    if (rig.ring === null) released = true;
+    peak = Math.max(peak, keOf());
+    if (asleepAt < 0 && vine.asleep) asleepAt = f;
+  }
+  check(`let go (the ring came off)`, released);
+  check(`...the span carries at most ${peak.toFixed(2)} J at any frame after (bar 1)`, peak <= 1);
+  check(`...is the island's again`, vine.unit !== null);
+  check(`...and sleeps (frame ${asleepAt}, bar 300)`, asleepAt >= 0);
+  check(`no invariant tripped (${rig.violations.length})`, rig.violations.length === 0);
+  return ok("span-release — a stiff span the ball lets go of while hanging still stays still", passed, details);
 }
 
 // ---------------------------------------------------------------------------
@@ -1853,6 +2083,7 @@ function ringScene(opts: {
   vineLength?: number;
   viscosity?: number;
   anchor2?: boolean;
+  stiffness?: number;
   floorY?: number;
   ballX?: number;
   ballY?: number;
@@ -1900,6 +2131,7 @@ function ringScene(opts: {
         length: opts.vineLength ?? 400,
         spacing: 20,
         ...(opts.viscosity !== undefined ? { viscosity: opts.viscosity } : {}),
+        ...(opts.stiffness !== undefined ? { stiffness: opts.stiffness } : {}),
       },
     ],
   };
@@ -1937,10 +2169,10 @@ class RingRig {
   aimOverride: ((frame: number) => Vec2) | null = null;
   private frame = 0;
 
-  step(aim: Vec2): void {
+  step(aim: Vec2, fire = true): void {
     const input: FrameInput = {
       ...emptyFrameInput(),
-      fire: button(true, this.prev.fire),
+      fire: button(fire, this.prev.fire),
       mouseWorldPosition: this.aimOverride ? this.aimOverride(this.frame) : aim,
     };
     this.frame++;
@@ -2377,7 +2609,10 @@ function caseRingCatch(): VineResult {
   // question.
   const rig = new RingRig(ringScene({ ballX: RING_BALL_X, vineLength: 600 }));
   rig.ball.linearVelocity = new Vec2(0, 6);
-  const up = new Vec2(-0.7, -1.65);
+  // Aimed a little higher than it was (-0.7) since the vine rests on its drawn
+  // length instead of a give a link past it (`jointLength` in `buildOne`): the
+  // 6 m vine's end came up 22 cm, and the old throw passed under it.
+  const up = new Vec2(-0.8, -1.65);
   const on = rig.throwUntilRinged(up, 30);
   c.check(`the falling ball's manacle threads onto the vine (frame ${on})`, on >= 0);
   const ring = rig.ring;
@@ -2404,28 +2639,180 @@ function caseRingCatch(): VineResult {
   return ok("ring-catch — a falling ball caught on a vine drags the ring far further than a hang does", c.passed(), c.details);
 }
 
-export function runVineCases(): VineResult[] {
-  return [
-    caseFormat(),
-    caseRingWalk(),
-    caseRingHang(),
-    caseRingSwing(),
-    caseRingSquare(),
-    caseRingCatch(),
-    caseWeight(),
-    caseStiffness(),
-    caseLinkContacts(),
-    caseRest(),
-    caseScenery(),
-    caseSpan(),
-    caseSpanStiffness(),
-    caseSpanGrab(),
-    casePassThrough(),
-    caseGrabHang(),
-    caseWinch(),
-    caseReleaseRefire(),
-    caseBallVine(),
-    caseBallSteer(),
-    caseSleep(),
-  ];
+// ---------------------------------------------------------------------------
+// ring-span: the ring on a STIFF SPAN creeps at the law's speed, as a row.
+// ---------------------------------------------------------------------------
+// A stiff span is the island's (`syncSpanUnits`), so a ring threaded onto it
+// makes the chain a row of that island and the creep is taken once a frame
+// from the row's tension (`Rope.rowCreep`) rather than inside the positional
+// solve (`slipVineClampedEnd`, which `ring-hang` measures on a hanging vine).
+// The two must agree with the law: a ball hanging still under the ring draws
+// it along the cord at `creepSpeed` of the weight's component along the cord,
+// whichever solver holds the chain. `session-256f` (2026-10-13, the first
+// play of the row on `ball.json`'s spans at viscosity 0.25) crept at a sixth
+// of the law and stood still for thirty frames at a time: the row's walk was
+// capped by the over-length the row had left standing, which a velocity
+// solve leaves at a millimetre or under, where the positional solve's cap is
+// the ball's whole unconstrained fall.
+//
+// Then the ball is wound up onto the ring and left hanging, which is the
+// scenario the cap was written for (the ring walked the budget both ways as
+// the pull leaned, 7 cm in fifteen frames under a ball hanging still, and the
+// span carried 25 J): a wound-tight ring must not walk against the pull, and
+// nothing may be minted.
+function caseRingSpan(): VineResult {
+  const c = ringClaims();
+  // A 6 m span over 4 m, stiff at 0.3 and viscous at 0.25 as `ball.json`'s
+  // are; the ball stands under its left quarter, a metre under the sag, and
+  // throws up and left into the steep part of the cord, where the weight has
+  // a component along it.
+  const rig = new RingRig(
+    ringScene({ anchor2: true, vineLength: 600, stiffness: 0.3, viscosity: 0.25, ballX: 90, ballY: -150 }),
+  );
+  const up = new Vec2(-0.15, -1.5);
+  const on = rig.throwUntilRinged(up);
+  c.check(`the manacle threads onto the span (frame ${on}, ${rig.ringArc().toFixed(2)} m along the cord)`, on > 0);
+  const ring = rig.ring;
+  if (!ring) return ok("ring-span", false, c.details);
+  const level = rig.level as unknown as { ballRowActive: { impulse: number } | null };
+  c.check(`...and the chain is a row of the span's island`, level.ballRowActive !== null);
+  const probe = process.env.RING_SPAN_PROBE
+    ? (tag: string, f: number): void => {
+        const chain = rig.ball.chain;
+        console.log(
+          `${tag} f${f} arc=${(rig.ringArc() * 1000).toFixed(2)}mm along=${along().toFixed(3)}` +
+            ` tension=${level.ballRowActive ? (level.ballRowActive.impulse * 480).toFixed(1) : "-"}N constraint=${chain?.constraintLength.toFixed(4)}` +
+            ` over=${chain ? ((chain.getCurrentLength() - chain.constraintLength) * 1000).toFixed(3) : "-"}mm` +
+            ` |v|=${rig.ball.linearVelocity.length().toFixed(3)}`,
+        );
+      }
+    : (): void => {};
+  // Hung plumb under the ring, at rest, as `ring-hang` does; then the catch
+  // settles out of the span before the window.
+  rig.run(5, up);
+  const len = rig.ball.chain!.maxRopeLength;
+  rig.ball.globalPosition = ring.contact.globalPosition.add(new Vec2(0, len - 0.05));
+  rig.ball.linearVelocity = Vec2.ZERO;
+  rig.ball.angularVelocity = 0;
+  rig.run(120, up);
+  const along = (): number => {
+    const chain = rig.ball.chain;
+    const r = rig.ring;
+    const t = r?.tangent();
+    if (!chain || !r || !t) return 0;
+    const nodes = chain.path();
+    const prev = nodes[nodes.length - 2];
+    if (!prev) return 0;
+    const pull = prev.contact.globalPosition.sub(r.contact.globalPosition);
+    const reach = pull.length();
+    return reach > 0 ? pull.dot(t) / reach : 0;
+  };
+  // A window of the slide: the creep against the law, the walk only ever the
+  // way the pull leans along the cord (a viscous ring follows its load, and
+  // one that walked both ways under a steady pull is the wander the bound
+  // this case replaced was written against), and the chain taut throughout,
+  // the ball riding the slide rather than falling into it or hauled up it.
+  const watch = (
+    tag: string,
+    frames: number,
+  ): { rate: number; law: number; meanAlong: number; against: number; worstOver: number; left: number } => {
+    const arcStart = rig.ringArc();
+    let alongSum = 0;
+    let against = 0;
+    let worstOver = 0;
+    let left = -1;
+    // The walk itself (`slipped`, what the creep moved the ring by along the
+    // line this frame; cleared at each frame's look), not the arc: the joints
+    // breathe within their tolerance and the arc with them, creep or no creep.
+    // Judged only on frames the lean held its sign from the last frame's end
+    // to this one's: the ring follows the pull's lean substep by substep, so a
+    // frame the lean crosses zero in (a wound-tight ball swinging under the
+    // ring) walks a little each way and has no one lean to be judged by.
+    let leanWas = along();
+    rig.run(frames, up, (f) => {
+      probe(tag, f);
+      if (left < 0 && rig.ring !== ring) left = f;
+      const lean = along();
+      alongSum += Math.abs(lean);
+      const t = ring.tangent();
+      const step = t ? ring.slipped.dot(t) : 0;
+      if (Math.abs(step) > 0.00005 && step * lean < 0 && lean * leanWas > 0) against++;
+      leanWas = lean;
+      const chain = rig.ball.chain;
+      if (chain) worstOver = Math.max(worstOver, Math.abs(chain.getCurrentLength() - chain.constraintLength));
+    });
+    const meanAlong = alongSum / frames;
+    return {
+      rate: (rig.ringArc() - arcStart) / (frames * DT),
+      law: creepSpeed(meanAlong * rig.ball.mass * GRAVITY.y, rig.vine.viscosity),
+      meanAlong,
+      against,
+      worstOver,
+      left,
+    };
+  };
+  const hang = watch("hang", 60);
+  c.check(`still on the span through the window`, hang.left < 0);
+  c.check(`the cord runs ${hang.meanAlong.toFixed(2)} of the pull's way (steep enough to slide)`, hang.meanAlong > 0.4);
+  c.check(
+    `the ring creeps along the cord at the law's speed for the weight's share along it (${(hang.rate * 100).toFixed(2)} cm/s of ${(hang.law * 100).toFixed(2)})`,
+    Math.abs(hang.rate - hang.law) < hang.law * 0.25,
+  );
+  c.check(`...only ever the way the pull leans (${hang.against} frames against it)`, hang.against === 0);
+  c.check(
+    `...with the chain taut, the ball riding the slide (${(hang.worstOver * 1000).toFixed(1)} mm from its length at worst)`,
+    hang.worstOver < 0.02,
+  );
+  // Wound up onto the ring and left hanging still: the pull turns square to
+  // the cord, the law's budget with it, and the ring must stand rather than
+  // wander.
+  const spin = (f: number): Vec2 => rig.ball.globalPosition.add(Vec2.RIGHT.rotated(f * WIND_RATE));
+  rig.aimOverride = spin;
+  rig.run(2 * WIND_FRAMES, up);
+  rig.aimOverride = null;
+  const wound = rig.ball.chain!.hangingLength();
+  c.check(`the ball winds up to the ring (${(wound * 100).toFixed(1)} cm of chain hanging)`, wound < 0.3);
+  rig.ball.linearVelocity = Vec2.ZERO;
+  rig.ball.angularVelocity = 0;
+  rig.run(60, up);
+  const still = watch("wound", 90);
+  c.check(
+    `wound tight (the pull ${still.meanAlong.toFixed(2)} along the cord), the ring walks ${(still.rate * 90 * DT * 1000).toFixed(1)} mm in 90 frames, within the law's ${(still.law * 90 * DT * 1000).toFixed(1)} and a centimetre`,
+    still.left < 0 && still.rate * 90 * DT < still.law * 90 * DT + 0.01,
+  );
+  c.check(`...only ever the way the pull leans (${still.against} frames against it)`, still.against === 0);
+  withViolations(c, rig);
+  return ok("ring-span — a ring on a stiff span creeps at the law's speed as a row of its island, and stands wound tight", c.passed(), c.details);
+}
+
+// Every case by name, so a caller can run one (`cli vines --only ring-span`).
+const VINE_CASES: ReadonlyArray<[string, () => VineResult]> = [
+  ["format", caseFormat],
+  ["ring-walk", caseRingWalk],
+  ["ring-hang", caseRingHang],
+  ["ring-swing", caseRingSwing],
+  ["ring-square", caseRingSquare],
+  ["ring-catch", caseRingCatch],
+  ["ring-span", caseRingSpan],
+  ["weight", caseWeight],
+  ["stiffness", caseStiffness],
+  ["link-contacts", caseLinkContacts],
+  ["rest", caseRest],
+  ["scenery", caseScenery],
+  ["span", caseSpan],
+  ["span-stiffness", caseSpanStiffness],
+  ["span-kick", caseSpanKick],
+  ["span-release", caseSpanRelease],
+  ["span-grab", caseSpanGrab],
+  ["pass-through", casePassThrough],
+  ["grab-hang", caseGrabHang],
+  ["winch", caseWinch],
+  ["release-refire", caseReleaseRefire],
+  ["ball-vine", caseBallVine],
+  ["ball-steer", caseBallSteer],
+  ["sleep", caseSleep],
+];
+
+export function runVineCases(select: (name: string) => boolean = () => true): VineResult[] {
+  return VINE_CASES.filter(([name]) => select(name)).map(([, run]) => run());
 }

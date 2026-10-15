@@ -50,6 +50,7 @@ import type { TieChain } from "../engine/ties";
 import {
   buildVines,
   stepVines,
+  syncSpanUnits,
   updateVineLoads,
   vineChainSet,
   type Vine,
@@ -181,7 +182,7 @@ export class Level {
     // never wrapped - `isPassThrough` drops a non-solid body from the wrap scan -
     // so what this buys is that the list is what the world holds, rather than a
     // second, quieter definition of the scene.
-    for (const vine of this.vines) this.bodies.push(...vine.links);
+    for (const vine of this.vines) this.bodies.push(...vine.allLinks);
     this.visualSource = { data, built };
 
     init?.(this);
@@ -320,6 +321,9 @@ export class Level {
     // driven by grab and release events, so it is settled here, immediately
     // before the sweep that has to solve it.
     const held = updateVineLoads(this.vines, this.player.rope);
+    // A stiff span is the island's until the rope takes it, and the island's
+    // again when the rope lets go (see `syncSpanUnits`).
+    syncSpanUnits(this.world, this.vines, this.player.rope);
     stepVines(this.vines);
     wakeChains(this.sceneChains);
     const chains = vineChainSet(

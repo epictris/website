@@ -18,6 +18,7 @@ import { braidLeafAttachment, forEachBraidSegment } from "./vineBraid";
 import { forEachVineLeaf } from "./vineLeaves";
 import { sampleVineCurve, vineMaterial } from "./vineCurve";
 import { VineTwist } from "./vineTwist";
+import { drawStarberry } from "./starberry";
 
 const twists = new WeakMap<Vine, VineTwist>();
 
@@ -37,6 +38,10 @@ export function drawVines(
   time = 0,
 ): void {
   for (const vine of vines) {
+    if (vine.starberry) {
+      drawStarberry(ctx, vine, alpha);
+      continue;
+    }
     if (vine.links.length === 0) continue;
     const points: Vec2[] = [];
     vine.path(alpha, points);

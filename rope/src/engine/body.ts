@@ -1390,8 +1390,37 @@ export class VineLink extends RigidBody2D {
 
   override wake(): void {}
 
+  // A link does not spin. Every constraint on one acts at its centre, so its
+  // rotation means nothing to the vine (`level/vines.ts`), and the rope solve
+  // already moves one by translation alone (`Rope.getDynamicBodyState`); this
+  // is the same statement made where every other impulse path reads it - the
+  // contact solve, the ball's pair separation and its surface refusal, a
+  // chain's settle - as a spring body's rotation is locked.
+  //
+  // The body it matters for is a BERRY, the one link anything touches: it is
+  // round, but the chain's cuff is bolted to its rim and the ball rolls on it,
+  // and a berry spun by those (the ball's pair separation handed one
+  // -10.5 rad/s over two frames) carried the chain's anchor round with it at
+  // 2 m/s, winding coil onto a ball whose aim had stalled - 10 cm of fresh
+  // path a frame that no translation could take out, leased out as a block
+  // until a 30 cm chain was flying a 2.7 m path (plans/berry-whip.md). A
+  // fruit on a stalk is held against turning by the stalk, so the lock is the
+  // physical statement as well as the solver's.
+  override get inverseInertia(): number {
+    return 0;
+  }
+
+  // The one vine body that is in the way of anything: a berry vine's BERRY
+  // (`growBerries` in `level/vines.ts`), which the ball rolls against and the
+  // chain wraps, while the cord and the stalk it hangs from stay pass-through.
+  // Its mask says WHAT it is in the way of - the ball, the hook and the chain,
+  // never the scenery or another berry - and the vine, not the engine, wakes
+  // it when one of them touches it (`stepVines`). False on every other link.
+  solid = false;
+
+
   override get isSolid(): boolean {
-    return false;
+    return this.solid;
   }
 }
 

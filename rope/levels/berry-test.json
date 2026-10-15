@@ -1,0 +1,131 @@
+{
+  "meta": {
+    "title": "Berry garden",
+    "unlisted": true
+  },
+  "player": {
+    "x": -100,
+    "y": 45,
+    "radius": 12
+  },
+  "environment": {
+    "envIntensity": 0.65
+  },
+  "cameraRegions": [
+    {
+      "x": 220,
+      "y": 0,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 2000,
+        "h": 1600
+      },
+      "lockX": 210,
+      "lockY": -115,
+      "viewportScale": 1.45,
+      "keepInFrame": false
+    }
+  ],
+  "bodies": [
+    {
+      "kind": "static",
+      "x": 250,
+      "y": 130,
+      "rot": 0,
+      "color": "#33483d",
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 2000,
+            "h": 70
+          },
+          "debug": {
+            "on": true
+          }
+        }
+      ]
+    },
+    {
+      "kind": "static",
+      "x": 220,
+      "y": -375,
+      "rot": 0,
+      "color": "#33483d",
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 1450,
+            "h": 40
+          },
+          "debug": {
+            "on": true,
+            "depth": 90
+          }
+        },
+        {
+          "type": "anchor",
+          "id": 901,
+          "x": -220,
+          "y": 20
+        },
+        {
+          "type": "anchor",
+          "id": 902,
+          "x": 60,
+          "y": 20
+        },
+        {
+          "type": "anchor",
+          "id": 903,
+          "x": 350,
+          "y": 20
+        }
+      ]
+    }
+  ],
+  "vines": [
+    {
+      "anchor": 901,
+      "length": 340,
+      "stiffness": 0.78,
+      "starberry": {
+        "positions": [
+          0.3,
+          0.59,
+          0.87
+        ],
+        "radius": 15,
+        "stemLength": 38,
+        "sway": 0.65,
+        "glow": 1.5,
+        "seed": 1701
+      }
+    },
+    {
+      "anchor": 902,
+      "length": 285,
+      "stiffness": 0.78,
+      "starberry": {
+        "positions": [
+          0.33,
+          0.7
+        ],
+        "radius": 15,
+        "stemLength": 42,
+        "sway": 0.7,
+        "glow": 1.5,
+        "seed": 2914
+      }
+    },
+    {
+      "anchor": 903,
+      "length": 320,
+      "braidSeed": 1701
+    }
+  ]
+}

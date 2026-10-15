@@ -108,6 +108,11 @@ export class VinePair implements SceneConstraint {
     return this.restLength + this.blockedSlack;
   }
 
+  // The two ends, for the island's row of this joint (`level/plantRows.ts`).
+  get ends(): readonly [RopeContact, RopeContact] {
+    return [this.a, this.b];
+  }
+
   // How far over its length it ended the pass. Zero while slack: like a rope's,
   // the constraint is an inequality and a slack joint is satisfied.
   get residual(): number {
@@ -230,6 +235,94 @@ export class VinePair implements SceneConstraint {
     this.blockedSlack = Mathf.max(this.blockedSlack, blocked);
   }
 }
+
+// The other half of a STIFF vine's joint: the floor under its length, where a
+// `VinePair` is the ceiling over it.
+//
+// A pair is a rope's joint - it refuses to stretch and is satisfied slack - and
+// on a limp vine that is the truth: a rope pushed end to end folds. A stiff
+// vine's bends (`VineBend`) then had nothing to argue with but the stretch, and
+// straightened a span by letting its links pile into each other instead: a
+// 3 m span between anchors 1.49 m apart (testing.json) settled as a nearly
+// straight line 1.8 m long, 753 mm off the catenary it is drawn as, its slack
+// gone into overlapping links. A rod does not shorten under bending, so a
+// stiff vine's joints hold a floor as well: no shorter than the spacing less
+// `STRUT_GIVE`, the band between floor and ceiling being what keeps the two
+// from grinding at one length.
+//
+// The PBD distance projection again, mirrored: closed form, centre to centre,
+// each body moved by its share of the inverse mass, and paid velocity for it
+// bounded by what the joint was closing at.
+export class VineStrut implements SceneConstraint {
+  constructor(
+    private readonly a: RopeContact,
+    private readonly b: RopeContact,
+    // The shortest this joint may be, metres.
+    readonly minLength: number,
+    readonly tolerance: number = VINE_TOLERANCE,
+  ) {}
+
+  get residual(): number {
+    return Mathf.max(this.minLength - this.currentLength(), 0);
+  }
+
+  get creditScale(): number {
+    return 1;
+  }
+
+  get ends(): readonly [RopeContact, RopeContact] {
+    return [this.a, this.b];
+  }
+
+  private currentLength(): number {
+    return this.a.globalPosition.distanceTo(this.b.globalPosition);
+  }
+
+  beginFrame(): void {}
+
+  solve(delta: number): void {
+    const bodyA = this.a.obj;
+    const bodyB = this.b.obj;
+    const wa = inverseMass(bodyA);
+    const wb = inverseMass(bodyB);
+    const total = wa + wb;
+    if (total < 1e-6) return;
+    const span = this.b.globalPosition.sub(this.a.globalPosition);
+    const length = span.length();
+    // Coincident: no direction to push along. The bends and the pairs pull a
+    // link back off its neighbour long before it reaches one.
+    if (length >= this.minLength || length < 1e-9) return;
+    // The way that LENGTHENS the joint: A is pushed back along it, B on.
+    const n = span.div(length);
+    const bound = Mathf.max(velocityOf(bodyA).sub(velocityOf(bodyB)).dot(n), 0);
+    const error = this.minLength - length;
+    const da = (error * wa) / total;
+    const db = (error * wb) / total;
+    bodyA.globalPosition = bodyA.globalPosition.sub(n.mul(da));
+    bodyB.globalPosition = bodyB.globalPosition.add(n.mul(db));
+    credit(bodyA, n.mul(-Math.min(da / delta, bound)));
+    credit(bodyB, n.mul(Math.min(db / delta, bound)));
+  }
+
+  eachBody(fn: (body: RigidBody2D) => void): void {
+    if (this.a.obj instanceof RigidBody2D) fn(this.a.obj);
+    if (this.b.obj instanceof RigidBody2D) fn(this.b.obj);
+  }
+
+  holds(body: RigidBody2D): boolean {
+    return this.a.obj === body || this.b.obj === body;
+  }
+
+  resolveHolding(): void {}
+
+  settle(): void {}
+}
+
+// The give between a stiff vine's floor and its ceiling, metres: the joint may
+// be anywhere from its length less this to its length. The sweep's own
+// tolerance, the same give the hanging vine's long-range attachments leave
+// (`VINE_LRA_GIVE`), so a strut and a pair are never asked for one length.
+export const STRUT_GIVE = 0.005;
 
 // The velocity of the point this constraint acts through. Both contacts sit at
 // their body's centre, so a rotation contributes nothing - which is why the

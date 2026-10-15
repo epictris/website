@@ -1,4 +1,5 @@
-// Plain cords use instanced capsules; braids use continuous dynamic tubes.
+// Plain cords use instanced capsules; braids use continuous dynamic tubes;
+// berry vines are drawn by their own layer (`StarberryLayer`).
 // Each braid has one reusable mesh containing its three strands. Unlike a
 // scene chain's wrap nodes, a vine's path comes from its real physics links.
 //
@@ -29,6 +30,7 @@ import { vineRandom } from "../render/vineGrowth";
 import { forEachVineLeaf } from "../render/vineLeaves";
 import { braidLeafAttachment } from "../render/vineBraid";
 import { threeY } from "./space";
+import { StarberryLayer } from "./starberryVisual";
 
 // White: the instance colour MULTIPLIES the shared material, so the default has
 // to be the material's own colour rather than a tint over it. The material is
@@ -62,6 +64,7 @@ export interface VineRing {
 }
 
 export class VineLayer {
+  private readonly starberries: StarberryLayer;
   private mesh: THREE.InstancedMesh;
   private readonly braids = new Map<VineCord, VineTube>();
   private leafMesh: THREE.InstancedMesh;
@@ -108,6 +111,7 @@ export class VineLayer {
   private readonly curving = new THREE.Vector3();
 
   constructor(private readonly scene: THREE.Scene) {
+    this.starberries = new StarberryLayer(scene);
     // A unit-length capsule: the per-instance y scale is then the segment's own
     // length, and nothing has to rebuild geometry as a vine bends.
     this.geometry = new THREE.CapsuleGeometry(VINE_VISUAL_RADIUS, 1, 3, 8);
@@ -163,13 +167,16 @@ export class VineLayer {
   // Every vine on the level, laid this frame. `ring` is the ball's ring when it
   // is threaded on one of them, which folds the leaves it passes over.
   sync(vines: readonly VineCord[], alpha: number, time = 0, ring: VineRing | null = null): void {
+    this.starberries.sync(vines, alpha, time);
     this.count = 0;
     this.leafCount = 0;
     for (const [vine, tube] of this.braids) {
-      if (!vines.includes(vine) || vine.braidSeed === null) { tube.dispose(); this.braids.delete(vine); }
+      if (!vines.includes(vine) || vine.braidSeed === null || vine.starberry) { tube.dispose(); this.braids.delete(vine); }
       else tube.mesh.visible = false;
     }
     for (const vine of vines) {
+      // A berry vine is the berry layer's alone (`StarberryLayer`).
+      if (vine.starberry) continue;
       vine.path(alpha, this.path);
       if (this.path.length < 2) continue;
       this.tint.set(vine.color ?? DEFAULT_TINT);
@@ -379,6 +386,7 @@ export class VineLayer {
   }
 
   clear(): void {
+    this.starberries.hide();
     this.count = 0;
     this.mesh.count = 0;
     for (const tube of this.braids.values()) { tube.mesh.visible = false; tube.leafMotions.length = 0; tube.leafFolds.length = 0; tube.twist.reset(); }
@@ -386,6 +394,7 @@ export class VineLayer {
   }
 
   dispose(): void {
+    this.starberries.dispose();
     this.scene.remove(this.mesh);
     this.mesh.dispose();
     for (const tube of this.braids.values()) tube.dispose();

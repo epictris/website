@@ -62,6 +62,10 @@ import finishTestJson from "../../levels/finish-test.json";
 // inside for a wheel prop (see `lib/belt.ts`, docs/conveyors.md).
 // Hand-authored, like the rail and mud sandboxes.
 import beltTestJson from "../../levels/belt-test.json";
+// Berry vines (`level/starberry.ts`, docs/vines.md "Berry vines"), from
+// karin-lu's branch: two berry plants beside an ordinary vine. Only the
+// berries catch the hook.
+import berryTestJson from "../../levels/berry-test.json";
 // The rope bridge of `plans/rope-bridge.md`: nineteen slats knotted onto one
 // chain between two posts (`ChainData.through`), the rig `session-235f`
 // recorded, with the slack it lacked. Roll across it, hook a slat from below.
@@ -129,6 +133,7 @@ export const LEVELS: Record<string, LevelSpec> = {
   // The finish gantry on its own, to swing through and to roll into (see
   // `docs/levels.md`). Unlisted like every other sandbox.
   FINISH_TEST: { data: finishTestJson as RawLevelData, controller: "ball", file: "finish-test" },
+  BERRY_TEST: { data: berryTestJson as RawLevelData, controller: "ball", file: "berry-test" },
   // The ball & chain controller in the grapple arena, kept for A/B comparison.
   BALL_LEVEL_2: { data: LEVEL_2, controller: "ball" },
 };

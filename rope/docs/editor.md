@@ -80,6 +80,24 @@ Duplicating a swarm keeps its `path`; duplicating a swarm together with its path
 
 On the canvas a firefly path is a dashed line in the firefly's colour with the camera path's direction arrows, a ring at its START (where a swarm that has left the player waits) and a bar across its END (where it leaves them), labelled at the start with its number and how many swarms follow it; a swarm's label gains `path N`.
 
+## Berry vines
+
+A berry vine is any vine with berries on it ([vines](vines.md#berry-vines)).
+Place the vine with `+ Vine`, then, with the select tool, **press on the vine and drag out**: the stalk leaves the vine where you pressed and the berry grows where you let go.
+A plain vine becomes a berry vine by its first berry, and goes back to plain (its cord a target again) when its last berry is removed.
+A click on a vine that does not leave the click's slop only selects it.
+
+**Click a berry** to pick it out: it wears the selection, the 3D view's gizmo stands on it, and Delete removes it rather than the vine.
+Move it with the gizmo or by dragging the berry itself; its root on the vine stays put and the stalk follows.
+The gizmo's scale sizes it (it is round, so either handle scales the whole berry).
+The picked berry shows a square at its root, which slides the root along the vine; the berry keeps its offset from it.
+**Alt-click** a berry removes it.
+
+The panel's **Berries** section has the vine's `new berry radius` (what a new berry starts at, 15 by default), berry sway, glow and vine seed (the cord's crooked line), `berry density kg/m³` (what the berries are made of, so each weighs its own size; blank is a fruit's 640) and `stem density kg/m` (what the stalks are made of, per metre like the cord, so a longer stalk's stem weighs more; blank is 8.3), neither a pixel length, like the cord's `density` in the Physics section, `stem stretch` (how far a stalk stretches on its spring before its ropes catch it, as a fraction of its length: the bounce; blank is 0.5, and 0 is a stalk that catches the ball dead), a button per berry to pick it, and for the picked berry its `x` and `y` in the level, its `radius` and the `weight` that gives it, its stem's `weight`, where its stalk leaves the vine (`stalk leaves at`, in pixels down the vine from its anchor) and Remove.
+A berry's root is a length down the vine, so changing the vine's length leaves every berry where it is, and neither the length field nor the length handle will make a berry vine shorter than its lowest berry's root.
+A berry vine's cord is its own woody brown, so the Braid and Color sections are not shown for one.
+At most eight berries a vine.
+
 ## Conveyor belts
 
 `+ Belt` (beside `+ Circle`) lays a **conveyor**: press where the first wheel goes and drag to the second, or click to drop a two-wheel belt 1.5 m long running right at 1 m/s on 10 cm wheels under a 5 cm band (see [**Conveyor belts**](conveyors.md)).

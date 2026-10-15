@@ -136,6 +136,10 @@ export interface IslandUnit {
   fallAsleep(): void;
   // Has a static the unit hangs from moved since it slept (a post on a mover)?
   anchorsMoved(): boolean;
+  // The unit's bodies are left undamped (`TIE_BODY_DAMPING`): a berry plant
+  // the ball hangs from, which the chain phase never damps either, and whose
+  // bounce is the energy the damping would take (`level/plantRows.ts`).
+  readonly undamped?: boolean;
 }
 
 // A knot: the rope is fixed to the body at this point, in the body's own frame.
@@ -487,6 +491,15 @@ export class TieSolver {
     for (const body of unit.bodies) body.tied = true;
   }
 
+  // A unit that exists only while something holds it (a berry plant on the
+  // ball's chain) leaves the solve with its bodies free again.
+  removeUnit(unit: IslandUnit): void {
+    const i = this.units.indexOf(unit);
+    if (i < 0) return;
+    this.units.splice(i, 1);
+    for (const body of unit.bodies) body.tied = false;
+  }
+
   // Is this contact the island's to solve: anything touching a held body. The
   // scenery and other held bodies, and also a FREE body - the ball on a slat -
   // which is solved here with its real mass and never integrated here (the
@@ -607,10 +620,12 @@ export class TieSolver {
     let k = 1;
     const bodies: RigidBody2D[] = [];
     const rows: IslandRow[] = [];
+    const undamped = new Set<RigidBody2D>();
     for (const unit of island) {
       if (unit.substeps > k) k = unit.substeps;
       for (const body of unit.bodies) {
         if (!body.removed && !bodies.includes(body)) bodies.push(body);
+        if (unit.undamped) undamped.add(body);
       }
       for (const row of unit.rows) rows.push(row);
     }
@@ -635,7 +650,7 @@ export class TieSolver {
     // Once a frame, before anything is measured, as the chain phase damps its
     // bodies (see `TIE_BODY_DAMPING`).
     for (const body of bodies) {
-      if (body.held || !body.canSleep) continue;
+      if (body.held || !body.canSleep || undamped.has(body)) continue;
       body.linearVelocity = body.linearVelocity.mul(TIE_BODY_DAMPING);
       body.angularVelocity *= TIE_BODY_DAMPING;
     }

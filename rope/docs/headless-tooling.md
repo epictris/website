@@ -14,7 +14,7 @@ bun run src/tools/cli.ts bridges              # rope-bridge cases on the tied-ch
 bun run src/tools/cli.ts perf session.json    # what a bundle's frames COST: ms, the chain phase's share, sweeps, solves, path regenerations, frames on the cap
 bun run src/tools/cli.ts spring               # spring-body cases (droop, load and release, per-axis periods, the locks)
 bun run src/tools/cli.ts movers               # scripted-mover cases (the arc, the route, the ease, the rider, the speed bar)
-bun run src/tools/cli.ts vines                # vine cases (the pass-through guards, drape, grab, winch, the load rope)
+bun run src/tools/cli.ts vines                # vine cases (the pass-through guards, drape, grab, winch, the load rope, the ring); --only NAME runs one
 bun run src/tools/cli.ts sleep                # sleep cases (a hung body and its chain sleep, the hook / a landing / a platform / an impulse wake, the lead swap, the stack, the arena)
 bun run src/tools/cli.ts rails                # rail cases (the stroke, the cone, the clamp, the coast, the jam, the catch)
 bun run src/tools/cli.ts belts                # conveyor cases (the hull of N wheels and its closed forms, the hollow build, speed 0 = static, the carry, the wake, the energy source, the ride, the tear)

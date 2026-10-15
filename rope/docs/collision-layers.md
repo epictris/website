@@ -20,7 +20,7 @@ It is the rule the rest of the project already states, applied to one more quest
 
 | Bit | Name | What is on it |
 |---|---|---|
-| 1 | `LAYER_SCENERY` | ordinary level geometry and props - every static, every rigid body, every level ever authored |
+| 1 | `LAYER_SCENERY` | ordinary level geometry and props - every static, every rigid body, every level ever authored; and a berry vine's berry, whose own mask is `LAYER_PLAYER \| LAYER_HOOK \| LAYER_ROPE` so it meets the ball, the hook and the chain and no scenery (see [vines](vines.md#berry-vines)) |
 | 2 | `LAYER_ANCHOR` | geometry only the hook may find: a `passable` body, a vine link (see [hook-surfaces](hook-surfaces.md#hook-only-bodies)) |
 | 4 | `LAYER_PLAYER` | the avatar - `Player` on the grapple levels, `BallPlayer` on the ball ones |
 | 8 | `LAYER_HOOK` | the chain end - the grapple `Hook`, the ball's `BallHook` and its cuff |

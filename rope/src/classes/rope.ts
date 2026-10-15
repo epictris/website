@@ -12,6 +12,7 @@ import {
   currentTransformEpoch,
   PhysicsBody2D,
   RigidBody2D,
+  VineLink,
 } from "../engine/body";
 import { isExposedCorner } from "../engine/shapes";
 import { GRAVITY, type World } from "../engine/world";
@@ -45,7 +46,7 @@ import {
   type ClampState,
 } from "../lib/rail";
 import { MANACLE_BORE } from "../lib/manacle";
-import { RopeEmbed, slipDistance, type EmbedState } from "../lib/viscous";
+import { RopeEmbed, creepSpeed, slipDistance, type EmbedState } from "../lib/viscous";
 import { RopeVineClamp, type VineClampState } from "../lib/vineClamp";
 import { RopeRide } from "../lib/belt";
 import { Player } from "./player";
@@ -746,6 +747,17 @@ export class Rope {
   // before it measures, and nothing of the solve.
   rowPrepare(bodies: PhysicsBody2D[]): void {
     this.regenerateAndMeasure(bodies);
+    // A ring on a cord rides the cord: its contact is re-derived from its
+    // segment and fraction on the polyline as the island has just moved it,
+    // every substep, as `settleVineClamp` re-derives it once a frame for the
+    // positional solve (which a row frame never runs). Left where the link's
+    // frame carried it, the contact drifted off the line by whatever the
+    // joints had moved and jumped back onto it with the next creep's sync,
+    // millimetres at a time, which read as relief the creep had not earned
+    // (or its opposite, a walk refused for lengthening a path it had not
+    // touched) and as a shudder under a hanging ball (`session-346f`).
+    const end = this.end_;
+    if (end instanceof RopeVineClamp && end.sync()) this.markPathChanged();
   }
 
   // The constraint `C = pathLength - constraintLength` and its Jacobian, one
@@ -3157,6 +3169,69 @@ export class Rope {
     return relieved;
   }
 
+  // The ring's walk on a frame the chain is a ROW of the island
+  // (`BallChainRow`, a ring on a stiff span): the positional solve that walks
+  // the ring along the cord (`slipVineClampedEnd`) never runs. The row solves
+  // the creep inside its own velocity solve instead (`viscousRopeImpulse`:
+  // the tension that lets the bodies lengthen the path at exactly the relief
+  // the creep at that tension makes), and this walks the ring by that
+  // tension over one substep - `h·creepSpeed(|along|·force)` along the cord,
+  // toward the pull. So the walk and the ball's motion are one solution, and
+  // nothing here bounds or second-guesses the step. The monotone guard
+  // stands: the line bends, and a walk is kept only if it shortened the path,
+  // measured. The rim is seated as the positional solve seats it, once a
+  // frame at the first walk.
+  rowCreep(h: number, force: number): number {
+    const clamp = this.end;
+    if (!(clamp instanceof RopeVineClamp)) return 0;
+    const law = this.rowCreepLaw();
+    if (law === null) return 0;
+    const { along, tangent, toward } = law;
+    if (!this.slideLooked) {
+      this.slideLooked = true;
+      clamp.slipped = Vec2.ZERO;
+      clamp.seat(toward, true);
+    }
+    if (force <= 0 || along === 0 || h <= 0) return 0;
+    const step = h * creepSpeed(Math.abs(along) * force, clamp.vine.viscosity);
+    if (step <= 0) return 0;
+    const before = this.calculateRopePathLength();
+    const state = clamp.snapshot();
+    const moved = clamp.creep((along >= 0 ? 1 : -1) * step);
+    if (moved === 0) return 0;
+    this.markPathChanged();
+    const relieved = before - this.calculateRopePathLength();
+    if (relieved <= 0) {
+      clamp.restoreState(state);
+      this.markPathChanged();
+      return 0;
+    }
+    clamp.slipped = clamp.slipped.add(tangent.mul(moved));
+    this.frameCreepRelief += relieved;
+    return moved;
+  }
+
+  // The geometry the ring's creep law reads on a row frame: the cosine of the
+  // pull along the cord (`along`, signed toward the cord's bottom), the cord's
+  // direction at the ring, the vine's viscosity, and the point the chain
+  // reaches the ring from. Null for an end that is not a ring on a cord, or a
+  // degenerate span. The row folds the law into its own velocity solve with
+  // this (`BallChainRow.solve`), and `rowCreep` walks the ring by it.
+  rowCreepLaw(): { along: number; tangent: Vec2; viscosity: number; toward: Vec2 } | null {
+    const clamp = this.end;
+    if (!(clamp instanceof RopeVineClamp)) return null;
+    const nodes = this.path();
+    const prev = nodes[nodes.length - 2];
+    if (!prev) return null;
+    const tangent = clamp.tangent();
+    if (tangent === null) return null;
+    const toward = prev.contact.globalPosition;
+    const pull = toward.sub(clamp.contact.globalPosition);
+    const reach = pull.length();
+    if (reach < Rope.EMBED_NODE_EPSILON) return null;
+    return { along: pull.dot(tangent) / reach, tangent, viscosity: clamp.vine.viscosity, toward };
+  }
+
   // The path's summed inverse inertia along the constraint: what one metre of
   // length correction is divided by to become the correction impulse, and
   // whose reciprocal is the effective mass the chain's tension acts on. Each
@@ -3421,13 +3496,14 @@ export class Rope {
           addRotation: () => {},
         };
       }
-      // The LINK a ring on a vine stands on is told the same: the ring's
-      // centre is offset from the link's along the cord, which is a lever,
-      // and a link's spin means nothing (every constraint on it acts at its
-      // centre), so the pull moves it by translation alone rather than
-      // spinning a light body whose spin would carry the ring's contact round
-      // with it (see `lib/vineClamp.ts`).
-      if (this.end_ instanceof RopeVineClamp && body === this.end_.contact.obj) {
+      // A vine LINK is told the same: a link's spin means nothing (every
+      // constraint on it acts at its centre, and `VineLink.inverseInertia` is
+      // zero for the same reason), so the pull moves it by translation alone
+      // rather than spinning a light body whose spin would carry the rope's
+      // contact round with it - the ring's contact, offset from the link's
+      // centre along the cord (see `lib/vineClamp.ts`), or the cuff bolted to
+      // a berry's rim.
+      if (body instanceof VineLink) {
         return {
           body,
           inertia: Infinity,

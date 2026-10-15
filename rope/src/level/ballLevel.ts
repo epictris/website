@@ -36,6 +36,8 @@ import type { ConveyorBody } from "../lib/belt";
 import {
   buildVines,
   stepVines,
+  syncSpanUnits,
+  touchedBerries,
   updateVineLoads,
   vineChainSet,
   type Vine,
@@ -65,6 +67,7 @@ import {
   type SceneChain,
   type SceneConstraint,
 } from "./chains";
+import { PlantUnit } from "./plantRows";
 import { buildCameraRules, type CameraHang, type CameraRule } from "../render/cameraController";
 import type { SparkEvent } from "./sparkEvents";
 import {
@@ -492,10 +495,12 @@ export class BallLevel {
     // loses its threshold here rather than taking a constraint down with it
     // mid-play (see `guardBreakables`).
     guardBreakables(this.sceneChains, this.vines, this.tieChains);
-    for (const vine of this.vines) this.bodies.push(...vine.links);
+    for (const vine of this.vines) this.bodies.push(...vine.allLinks);
     // A hook that strikes a link threads onto the whole vine (see
     // `lib/vineClamp.ts`), and the level is what knows which vine a link is.
-    this.ball.vineFor = (link) => this.vines.find((v) => v.links.includes(link)) ?? null;
+    // Never a berry vine's: its cord is no target, and a berry is bitten like
+    // any other moving body.
+    this.ball.vineFor = (link) => this.vines.find((v) => !v.starberry && v.links.includes(link)) ?? null;
     this.visualSource = { data, built };
 
     // A spawn that says so opens the level already on its anchor (see
@@ -586,26 +591,48 @@ export class BallLevel {
       !this.ball.chainAnchored ||
       !this.ball.chainAttached
     ) {
+      this.releasePlant();
       return;
     }
     // Ends that slide, creep or ride (`correctShapePositionAndRotation` moves
-    // them before the bodies) and vines (their own system) stay positional.
+    // them before the bodies) and plain vines (their own system) stay
+    // positional.
     const end = chain.end;
+    // ...except a ring on a STIFF SPAN, whose links are the island's already
+    // (`syncSpanUnits`): the chain is a row of that island, the load ropes
+    // its rows, and the ring's creep is solved inside the row's velocity solve
+    // (`viscousRopeImpulse` in `BallChainRow.solve`). Positional, the hold
+    // was the one place a stiff span was still the sweep's, and the ball
+    // winding against it ran the coupled sweep to its cap frame after frame
+    // (`session-211f`, `session-262f`: 48 rope solves and a wrap path
+    // regenerated on each, 11-14 ms in bun), the correction landing 93% on
+    // the 3.7 kg link that the load ropes put straight back.
     if (
       end instanceof RopeClamp ||
       end instanceof RopeEmbed ||
       end instanceof RopeRide ||
-      end instanceof RopeVineClamp
+      (end instanceof RopeVineClamp && !end.link.tied)
     ) {
+      this.releasePlant();
       return;
     }
+    // A berry's plant is a unit of the island for as long as the chain holds
+    // the berry (see `syncPlantUnit`), so its links are tied bodies below and
+    // the chain is a row of the plant's island.
+    this.syncPlantUnit(end.contact.obj);
     let touchesTied = false;
     for (const node of chain.path()) {
       const obj = node.contact.obj;
-      if (obj instanceof VineLink) return;
+      if (obj instanceof VineLink && !obj.tied) {
+        this.releasePlant();
+        return;
+      }
       if (obj instanceof RigidBody2D && obj.tied) touchesTied = true;
     }
-    if (BallLevel.BALL_ROW_MODE === "tied" && !touchesTied) return;
+    if (BallLevel.BALL_ROW_MODE === "tied" && !touchesTied) {
+      this.releasePlant();
+      return;
+    }
     let row = this.ballRow;
     if (row === null || row.rope !== chain) {
       row = new BallChainRow(this.ball, chain, () => this.bodies);
@@ -627,6 +654,55 @@ export class BallLevel {
   private untieBallRow(): void {
     for (const body of this.rowTied) body.tied = false;
     this.rowTied = [];
+  }
+
+  // The berry plant the ball hangs from, as a unit of the island solver
+  // (`PlantUnit` in `level/plantRows.ts`): the stalk's spring is what bounces
+  // the ball, and solved positionally at the frame's step it damped a third
+  // of the bounce a stroke (see the file comment there). Built the frame the
+  // chain takes a berry, kept across frames for its rows' warm start, and
+  // dropped the frame the chain lets go or moves to another berry - the plant
+  // then goes back to the chain sweep with the velocities the island left it.
+  private plantUnit: PlantUnit | null = null;
+
+  // Whether a held berry's plant is solved as an island unit at all. Off,
+  // the plant stays in the chain sweep (the positional solve, which is where
+  // the bounce dies); measured both ways in `scripts/test-berry-vines.ts`.
+  static readonly PLANT_ROWS: boolean = true;
+
+  // Whether the chain ends in a ring on a cord, which `syncBallRow` makes a
+  // row of a stiff span's island (see there): the span keeps its unit through
+  // the hold, with the load ropes among its rows.
+  private ringOnSpan(): boolean {
+    return this.ball.chain?.end instanceof RopeVineClamp;
+  }
+
+  private syncPlantUnit(end: CollisionObject2D): void {
+    if (BallLevel.PLANT_ROWS && end instanceof VineLink) {
+      const vine = this.vines.find((v) => v.starberry && v.berries.some((b) => b.fruit === end));
+      if (vine) {
+        if (this.plantUnit !== null && this.plantUnit.vine === vine && this.plantUnit.berry === end) return;
+        this.releasePlant();
+        // The load rope is one of the unit's rows, so it exists before the
+        // unit does (the same call the frame makes after the step finds it
+        // built and leaves it).
+        updateVineLoads(this.vines, this.ball.chain);
+        const unit = new PlantUnit(vine, end);
+        vine.unit = unit;
+        this.world.ties.addUnit(unit);
+        this.plantUnit = unit;
+        return;
+      }
+    }
+    this.releasePlant();
+  }
+
+  private releasePlant(): void {
+    const unit = this.plantUnit;
+    if (unit === null) return;
+    this.world.ties.removeUnit(unit);
+    unit.vine.unit = null;
+    this.plantUnit = null;
   }
 
   // The chain phase of a frame the island solved the chain on: the path brought
@@ -1155,6 +1231,11 @@ export class BallLevel {
     // the arrival, and by the time `collectContactSparks` runs the solve has
     // already cancelled it (see there).
     const ballSpinBeforeContacts = this.ball.angularVelocity;
+    // A stiff span the hook has just threaded onto (the swept attach above)
+    // leaves the island before the world steps: the hold is positional, and
+    // the ring and the island may not both move its links (see
+    // `syncSpanUnits`).
+    syncSpanUnits(this.world, this.vines, this.ball.chain, this.ringOnSpan());
     // The ball's chain as a row of the island it is hooked to, if it is (see
     // `syncBallRow`) - set before the world steps, read inside it.
     this.syncBallRow(delta);
@@ -1176,7 +1257,16 @@ export class BallLevel {
     // A vine is damped and its load rope settled before anything solves against
     // either, so both halves of the chain phase below see the same set.
     this.heldVine = updateVineLoads(this.vines, this.ball.chain);
-    stepVines(this.vines);
+    // A stiff span the ring has just let go rejoins the island for the next
+    // frame's step; one just taken is the sweep's for this one (see
+    // `syncSpanUnits`).
+    syncSpanUnits(this.world, this.vines, this.ball.chain, this.ringOnSpan());
+    // A berry the ball has just struck, or the chain lies over, wakes its vine
+    // (see `stepVines`).
+    stepVines(
+      this.vines,
+      touchedBerries(this.vines, this.world.frameContacts, () => this.ball.chain?.path() ?? []),
+    );
     // After integration, so a lantern the ball bumped is awake by contact
     // before its chain asks, and its chain comes into this frame's set.
     wakeChains(this.sceneChains);
@@ -1543,10 +1633,22 @@ export class BallLevel {
       // holders the rollback still reaches is what answers the haul: a PIVOT
       // stores it in a frictionless bearing and a SPRING mount in its spring,
       // both of which the whirl governor and `applyHangLoad` are written for;
-      // a VINE LINK is the limit case of a light holder (~0.05 kg against the
-      // ball) whose whole vine the coupled sweep has to be left to apportion
-      // (`session-1260f`, `cli vines` `ball-steer`), and it stays the winch
-      // pass's. A free body answers the haul the way the plank does - by
+      // a PASSABLE vine link - the cord the ring stands on - is the limit case
+      // of a light holder (~0.05 kg against the ball) whose whole vine the
+      // coupled sweep has to be left to apportion (`session-1260f`, `cli
+      // vines` `ball-steer`), and it stays the winch pass's. A BERRY is not
+      // that: it is the one solid link, 9 kg on a stalk with the cuff bolted
+      // to its rim, and rolled back and winched against it was the plank's
+      // failure exactly - a ball hanging from it and winding left the berry
+      // standing at its UNLOADED rest, springing up above it while the 52 kg
+      // ball still hung there (`session-501f`, "the berry moves around
+      // unnaturally while I'm hanging off it"), and a ball whipped round a
+      // swinging berry was hauled after a point that never answered, 3.1 to
+      // 9.5 m/s over 23 frames for +2.4 kJ (`session-221f`). Kept, the same
+      // input peaks at 4.6 m/s for +124 J, and the slow-wind rig in
+      // `scripts/test-berry-vines.ts` holds the berry's sag through a wind
+      // where the rollback let it spring 30-160 mm back up (plans/berry-whip.md).
+      // A free body answers the haul the way the plank does - by
       // moving - and the pair push-out (`separateBallFromPathBodies`) is what
       // keeps the wound-tight regime honest for it: both bodies hauled into
       // each other are pushed back by the shares they were hauled by, so the
@@ -1633,7 +1735,7 @@ export class BallLevel {
       }
       this.chainBraced = braced;
       const freeHolder = (body: RigidBody2D): boolean =>
-        !body.pivot && body.spring === null && !(body instanceof VineLink);
+        !body.pivot && body.spring === null && !(body instanceof VineLink && body.passable);
       const chainHeld = (body: RigidBody2D): boolean => solveChains.some((c) => c.holds(body));
       const keepsHaul = (body: RigidBody2D): boolean =>
         freeHolder(body) && (braced || !ridingPath);
@@ -1642,7 +1744,7 @@ export class BallLevel {
       // coupled solve's share of the haul, which is the reaction to the
       // tension that hauled the ball (see `keepsHaul`). Rolled back: the
       // holder a ball in free air is riding, and every pivot, spring mount and
-      // vine link.
+      // pass-through vine link.
       const rolledBack = new Set<RigidBody2D>();
       for (const [body, before] of haulAtSolve) {
         if (keepsHaul(body)) continue;

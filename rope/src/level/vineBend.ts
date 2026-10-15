@@ -160,11 +160,19 @@ export function bendCompliance(stiffness: number, spacing: number): number {
 // load what it is hung from, and where it is hung is an authoring question (see
 // `DEFAULT_VINE_DENSITY`). So the anchor holds the vine and the vine does not
 // pull back, exactly as a static one would.
-class BendEnd {
+export class BendEnd {
   constructor(
     readonly link: VineLink | null,
     readonly fixed: RopeContact | null,
   ) {}
+
+  // The velocity of the point, for a row's rate (`level/plantRows.ts`): a
+  // link's own, or the fixed point's as its body carries it.
+  get velocity(): Vec2 {
+    if (this.link) return this.link.linearVelocity;
+    const body = this.fixed!.obj;
+    return body instanceof RigidBody2D ? body.velocityAtPoint(this.fixed!.globalPosition) : Vec2.ZERO;
+  }
 
   get position(): Vec2 {
     return this.link ? this.link.globalPosition : this.fixed!.globalPosition;
@@ -217,6 +225,16 @@ export class VineBend implements SceneConstraint {
   beginFrame(delta: number): void {
     this.lambda = 0;
     this.alphaTilde = this.compliance / (delta * delta);
+  }
+
+  // The triple and the spring, for the island's row of this bend
+  // (`level/plantRows.ts`).
+  get ends(): readonly [BendEnd, BendEnd, BendEnd] {
+    return [this.a, this.b, this.c];
+  }
+
+  get springCompliance(): number {
+    return this.compliance;
   }
 
   // How far this joint is from the shape its compliance says it should be in,
@@ -349,7 +367,29 @@ export function buildVineBends(
 
   const n = links.length;
   const bends: VineBend[] = [];
-  for (let k = 1; k <= n; k *= 2) {
+  // A SPAN builds the neighbour scale only. The coarser scales are a
+  // convergence device for a hanging pole (see the top of this file): each
+  // says "straight over 2k links", a hanging vine's rest pose IS straight, so
+  // they all agree with the fine scale and only carry the news faster. A span
+  // of surplus length can never be straight at any scale, and the coarse
+  // triples then argue with the joint floors (`VineStrut`) at full rigidity:
+  // in the sweep that was a fight with no fixed point (the released span rang
+  // for ever, `session-381f`, then for three seconds, `session-294f`), and
+  // once a free span was the island's it was the HOLD's fight - the sweep
+  // left every floor short by its bar and the island paid the difference out
+  // on release (17.7 J, `session-133f`), and a bar tight enough to stop that
+  // (1 mm) had the sweep argue every frame instead, 44 sweeps and a cap every
+  // fifth frame, 1.8 mm of link jitter a frame: the "shudder" of
+  // `session-267` while the ball wound up and down a held span. Neighbour-
+  // only the floors and the bends agree: 12 sweeps a frame on that hold,
+  // 0.5 mm of jitter, no cap, and the span keeps 2503 of its 2500 mm of arc
+  // free (2409 with the coarse set, 2359 in the sweep). What it costs is the
+  // slider: a span's bow is the elastica a rod of that surplus bows into, and
+  // a 5 m rod over 4 m sags 1.34 m at every stiffness against the catenary's
+  // 1.38 - the "taut wire" a pole span used to read as was its links crushed
+  // into each other, and a rod cannot shorten.
+  const scales = anchor2 ? 1 : n;
+  for (let k = 1; k <= scales; k *= 2) {
     const compliance = bendCompliance(stiffness, spacing * k);
     // The clamp at this scale: ghost - anchor - the link k spacings down.
     // Hanging vines only; a span's ends are pinned (see above).
@@ -379,4 +419,164 @@ export function buildVineBends(
     }
   }
   return bends;
+}
+
+// Where a berry stalk's body stands relative to the cord it grows from, held
+// there through a compliance: the stalk's CLAMP, in the plant's own frame.
+//
+// Why not a `VineBend` clamp, which is what stalks were first built with. A
+// clamp's ghost and anchor are immovable ends: right for a vine bolted to
+// scenery (see `BendEnd`), wrong for a stalk on a cord link, which is free.
+// Every correction such a clamp made pushed the berry back toward its rest
+// offset with nothing pushing the cord the other way - and since a cord link
+// never turns, the ghost held the stalk to a WORLD direction, not to the cord.
+// Under a chain that was a force from nowhere: session-97f, the ball hooked a
+// berry standing out right of the cord from below-left, and the plant and the
+// ball gained 220 kg·m/s rightward in ten frames, so the whole vine swung away
+// from the pull.
+//
+// This constraint is written on the plant alone. The cord's local direction
+// is the edge `u = b - a` (the link above the stalk's root, the root), and the
+// body `c` belongs at `b + k⊗u`, where `k` is the grown offset divided by the
+// grown `u` as complex numbers - a turn and a scale, so the target turns and
+// stretches with the cord. `C = |c - b - k⊗u|` is blind to where the plant is
+// and which way it faces, so its corrections, weighted by each body's inverse
+// mass along its gradient, move the plant's momentum and angular momentum by
+// nothing: it bends the plant, it cannot push it. And it is LINEAR in the three
+// positions - the gradient is `n` at `c`, `conj(k)⊗n` at `a` and minus their
+// sum at `b` - so, like `VineBend`, it needs no trigonometry and no
+// small-angle case.
+//
+// It holds the body's distance from the root as well as its angle, which is
+// what a stalk needs and an angle alone cannot give: the stalk's pairs are
+// ropes, slack when shortened, so a berry standing up on its stalk held only
+// at an angle sank onto its root (397 mm, the garden's raised berry).
+//
+// Compliance as a `VineBend` clamp of the same reach (`bendCompliance`), times
+// four: that clamp's `C` was the root's distance off the midpoint of ghost and
+// body, half the body's distance off its place, which is this `C`.
+export class StalkClamp implements SceneConstraint {
+  // The XPBD multiplier, newtons, accumulated over one frame's passes (see
+  // `VineBend.lambda`).
+  private lambda = 0;
+  private alphaTilde = 0;
+
+  constructor(
+    private readonly a: BendEnd,
+    private readonly b: BendEnd,
+    private readonly c: BendEnd,
+    // `(c - b) / (b - a)` at rest, as a complex number: as grown, then as
+    // aimed (`aim`).
+    private k: Vec2,
+    // Metres per newton.
+    private readonly compliance: number,
+    readonly tolerance: number = VINE_TOLERANCE,
+  ) {}
+
+  beginFrame(delta: number): void {
+    this.lambda = 0;
+    this.alphaTilde = this.compliance / (delta * delta);
+  }
+
+  get residual(): number {
+    return Math.abs(this.offset().length() + this.alphaTilde * this.lambda);
+  }
+
+  get creditScale(): number {
+    return 1;
+  }
+
+  eachBody(fn: (body: RigidBody2D) => void): void {
+    if (this.a.link) fn(this.a.link);
+    if (this.b.link) fn(this.b.link);
+    if (this.c.link) fn(this.c.link);
+  }
+
+  holds(body: RigidBody2D): boolean {
+    return this.a.link === body || this.b.link === body || this.c.link === body;
+  }
+
+  settle(): void {}
+
+  resolveHolding(): void {}
+
+  // The triple, the grown ratio and the spring, for the island's row of this
+  // clamp (`level/plantRows.ts`).
+  get ends(): readonly [BendEnd, BendEnd, BendEnd] {
+    return [this.a, this.b, this.c];
+  }
+
+  get ratio(): Vec2 {
+    return this.k;
+  }
+
+  get springCompliance(): number {
+    return this.compliance;
+  }
+
+  // Move where `c` belongs by `shift`, metres, in the world as the cord edge
+  // stands now: `k += shift / u`. How the build grows a stalk into the shape
+  // that, LOADED, puts its berry where it was drawn (see `aimBerries`).
+  aim(shift: Vec2): void {
+    const u = this.b.position.sub(this.a.position);
+    const uu = u.lengthSquared();
+    this.k = this.k.add(new Vec2((shift.x * u.x + shift.y * u.y) / uu, (shift.y * u.x - shift.x * u.y) / uu));
+  }
+
+  // Where `c` is, less where it belongs: `c - b - k⊗(b - a)`.
+  private offset(): Vec2 {
+    const u = this.b.position.sub(this.a.position);
+    const k = this.k;
+    return this.c.position.sub(this.b.position).sub(new Vec2(k.x * u.x - k.y * u.y, k.x * u.y + k.y * u.x));
+  }
+
+  solve(): void {
+    const offset = this.offset();
+    const c = offset.length();
+    // In place: no gradient, and the multiplier kept (see `VineBend.solve`).
+    if (c < 1e-12) return;
+    const n = offset.div(c);
+    const k = this.k;
+    // ∇c = n, ∇a = conj(k)⊗n, ∇b = -(n + conj(k)⊗n): the three sum to nothing.
+    const ga = new Vec2(k.x * n.x + k.y * n.y, k.x * n.y - k.y * n.x);
+    const gb = n.add(ga).mul(-1);
+    const wSum =
+      this.a.inverseMass * ga.lengthSquared() + this.b.inverseMass * gb.lengthSquared() + this.c.inverseMass;
+    if (wSum <= 0) return;
+    const dLambda = (-c - this.alphaTilde * this.lambda) / (wSum + this.alphaTilde);
+    this.lambda += dLambda;
+    this.a.move(ga.mul(this.a.inverseMass * dLambda));
+    this.b.move(gb.mul(this.b.inverseMass * dLambda));
+    this.c.move(n.mul(this.c.inverseMass * dLambda));
+  }
+}
+
+// A berry stalk's stiffness, the set a `VineBend` clamp gave it rebuilt on the
+// plant (see `StalkClamp`): the stalk's middle joint and its berry each held
+// where they grew in the frame of the cord edge above the stalk's root (from
+// the link above it, or from the vine's anchor for a stalk off the first link),
+// at a stalk step and two, and the middle joint held straight between root and
+// berry. The root is a LINK in all three, so the cord takes its share of every
+// correction. Null for a stalk of no stiffness.
+export function buildStalkBends(
+  above: VineLink | RopeContact,
+  root: VineLink,
+  stalk: readonly [VineLink, VineLink],
+  stiffness: number,
+  step: number,
+): { readonly clamps: readonly [StalkClamp, StalkClamp]; readonly bends: readonly SceneConstraint[] } | null {
+  if (!(stiffness > 0)) return null;
+  const upper = above instanceof VineLink ? new BendEnd(above, null) : new BendEnd(null, above);
+  const base = new BendEnd(root, null);
+  const u = root.globalPosition.sub(upper.position);
+  const uu = u.lengthSquared();
+  const clamp = (body: VineLink, scale: number): StalkClamp => {
+    const v = body.globalPosition.sub(root.globalPosition);
+    // v / u as complex numbers: v⊗conj(u) / |u|².
+    const k = new Vec2((v.x * u.x + v.y * u.y) / uu, (v.y * u.x - v.x * u.y) / uu);
+    return new StalkClamp(upper, base, new BendEnd(body, null), k, 4 * bendCompliance(stiffness, step * scale));
+  };
+  const clamps = [clamp(stalk[0], 1), clamp(stalk[1], 2)] as const;
+  const straight = new VineBend(base, new BendEnd(stalk[0], null), new BendEnd(stalk[1], null), bendCompliance(stiffness, step));
+  return { clamps, bends: [...clamps, straight] };
 }

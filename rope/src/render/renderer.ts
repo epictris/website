@@ -765,7 +765,9 @@ export function render(
   // `renderBall`).
   if (!overlayOnly) {
     for (const body of level.world.bodies) {
-      if (body.passable) drawBody(ctx, body, alpha, treadTime);
+      // A vine link is passable too, but a vine is one cord, not its links'
+      // grab discs (`drawVines`).
+      if (body.passable && !(body instanceof VineLink)) drawBody(ctx, body, alpha, treadTime);
     }
   }
   if (!overlayOnly) {
@@ -1151,7 +1153,8 @@ export function renderBall(
   // "Pass-through geometry must read as pass-through" in docs/game-design.md).
   if (!overlayOnly) {
     for (const body of level.world.bodies) {
-      if (body.passable) drawBody(ctx, body, alpha, treadTime);
+      // Not a vine link: see `render`.
+      if (body.passable && !(body instanceof VineLink)) drawBody(ctx, body, alpha, treadTime);
     }
   }
   if (!overlayOnly) {

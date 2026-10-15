@@ -5,6 +5,8 @@
 import { Vec2 } from "../engine/vec2";
 import { PIXELS_PER_METER, PX } from "../engine/units";
 import { worldToScreen, type Camera } from "../render/camera";
+import { drawStarberry } from "../render/starberry";
+import { restStarberries } from "../level/starberry";
 import { drawTrainingGrid } from "../render/trainingGrid";
 import { fillAnchor, fillFinish, fillForceArea, fillKillZone, fillWaterArea } from "../render/areaFill";
 import { hexToRgba } from "../render/color";
@@ -494,6 +496,27 @@ export function computeVineHandles(
     top: worldToScreen(cam, path[0]!),
     tip: worldToScreen(cam, path[path.length - 1]!),
   };
+}
+
+// A berry vine's berries as handles, at rest on the vine's rest path: where
+// each is on screen, where its stalk leaves the vine, and how near a press has
+// to be to take it.
+export function computeBerryHandles(
+  cam: Camera,
+  model: EdModel,
+  vine: EdVine,
+): { index: number; root: Vec2; fruit: Vec2; screen: Vec2; rootScreen: Vec2; radius: number }[] {
+  const settings = vine.starberry;
+  const path = settings ? vineRestPath(model, vine) : null;
+  if (!settings || !path) return [];
+  return restStarberries(path, settings).map((berry, index) => ({
+    index,
+    root: berry.root,
+    fruit: berry.fruit,
+    screen: worldToScreen(cam, berry.fruit),
+    rootScreen: worldToScreen(cam, berry.root),
+    radius: Math.max(9, berry.radius * cam.zoom * PIXELS_PER_METER + 4),
+  }));
 }
 
 // The rotate knob for a whole compound body: above the group's bounding box, on
@@ -2005,6 +2028,14 @@ export function drawEditor(
   // model.ts), marked while the drag is live so it is plain which corner of
   // which piece is being lined up.
   snapPoint: Vec2 | null = null,
+  // Berry vines (see `berryDraw` / `selectedBerry` in editor.ts): the berry
+  // picked out of a vine, which wears the selection and shows the handle its
+  // root slides along the vine by, and a berry being dragged off a vine - its
+  // root on the cord, the pointer, and whether releasing makes a berry.
+  berries: {
+    selected: { vineId: number; index: number } | null;
+    draft: { root: Vec2; to: Vec2; radius: number; valid: boolean } | null;
+  } = { selected: null, draft: null },
 ): void {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   // The backdrop is the editor's own paper. With a 3D scene underneath, this
@@ -2369,7 +2400,20 @@ export function drawEditor(
         tracePath(path);
       }
       const color = v.color ?? VINE_DEFAULT_COLOR;
-      if (layers === "fill") {
+      if (layers === "fill" && v.starberry) {
+        // A berry vine is drawn as the canvas renderer draws it, berries and
+        // all, at rest.
+        const settings = v.starberry;
+        drawStarberry(ctx, {
+          color: v.color,
+          braidSeed: v.braidSeed,
+          starberry: settings,
+          path: (_alpha, out) => {
+            out.length = 0;
+            out.push(...path);
+          },
+        }, 1);
+      } else if (layers === "fill") {
         ctx.strokeStyle = color;
         ctx.lineWidth = worldLine * (v.braidSeed !== null ? 2 : 3);
         tracePath(path);
@@ -2739,6 +2783,50 @@ export function drawEditor(
     if (!hs) continue;
     circleHandle(ctx, hs.top);
     circleHandle(ctx, hs.tip);
+    // A berry vine's berries, numbered, each dashed back to where its stalk
+    // leaves the vine. The selected one wears the selection, and its root is a
+    // handle that slides along the vine.
+    for (const handle of computeBerryHandles(cam, model, v)) {
+      const picked = berries.selected?.vineId === v.id && berries.selected.index === handle.index;
+      ctx.save();
+      ctx.strokeStyle = picked ? SELECT : "#eac36b";
+      ctx.fillStyle = picked ? SELECT : "#ffe2a0";
+      ctx.lineWidth = picked ? 2.5 : 1.5;
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath();
+      ctx.moveTo(handle.rootScreen.x, handle.rootScreen.y);
+      ctx.lineTo(handle.screen.x, handle.screen.y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.beginPath();
+      ctx.arc(handle.screen.x, handle.screen.y, handle.radius, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.font = "12px monospace";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "bottom";
+      ctx.fillText(String(handle.index + 1), handle.screen.x, handle.screen.y - handle.radius - 3);
+      ctx.restore();
+      if (picked) circleHandle(ctx, handle.rootScreen);
+    }
+  }
+  // A berry being dragged off a vine: the stalk from where it leaves the cord
+  // to the pointer, and the berry it will make - dashed while releasing would
+  // make nothing.
+  if (berries.draft) {
+    const root = worldToScreen(cam, berries.draft.root);
+    const to = worldToScreen(cam, berries.draft.to);
+    ctx.save();
+    ctx.strokeStyle = berries.draft.valid ? "#eac36b" : SELECT;
+    ctx.lineWidth = 2;
+    if (!berries.draft.valid) ctx.setLineDash([6, 4]);
+    ctx.beginPath();
+    ctx.moveTo(root.x, root.y);
+    ctx.lineTo(to.x, to.y);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(to.x, to.y, berries.draft.radius * cam.zoom * PIXELS_PER_METER, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
   }
   // A whole compound body turns as one, so it gets a rotate knob where a lone
   // shape does - placed by the group's extent, with the centre of mass it turns

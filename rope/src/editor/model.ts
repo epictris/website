@@ -11,6 +11,7 @@
 // its layer does not use, so nothing meaningless reaches disk.
 
 import { Vec2 } from "../engine/vec2";
+import type { StarberrySettings } from "../level/starberry";
 import { MANACLE_BORE } from "../lib/manacle";
 import { strokeCurve } from "../lib/stroke";
 import {
@@ -39,6 +40,7 @@ import {
 } from "../lib/path";
 import { PATH_KEY_FIELDS, type PathKeyField } from "../render/cameraController";
 import { catenaryPolyline } from "../level/catenary";
+import { restingSpanPath } from "../level/vines";
 import { buildMoveRoute, moveAngleAt, type MoveRoute } from "../level/movers";
 import { DEFAULT_SPRING_DAMPING, buildLevelBodies, worldPlacement } from "../level/buildBodies";
 import { World } from "../engine/world";
@@ -769,6 +771,9 @@ export interface EdChain {
 export interface EdVine {
   id: number;
   braidSeed: number | null;
+  // Present = a berry vine (`VineData.starberry`), in metres like the rest of
+  // the model.
+  starberry?: StarberrySettings;
   // The item id of the anchor it hangs from.
   anchor: number;
   // The item id of an optional SECOND anchor, making the vine a span attached
@@ -1803,6 +1808,7 @@ function lightItem(
       viscosity: v.viscosity ?? null,
       color: v.color ?? null,
       braidSeed: v.braidSeed ?? null,
+      ...(v.starberry ? { starberry: structuredClone(v.starberry) } : {}),
     });
   }
 
@@ -2397,6 +2403,7 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
       ...(v.viscosity !== null ? { viscosity: v.viscosity } : {}),
       ...(v.color !== null ? { color: v.color } : {}),
       ...(v.braidSeed !== null ? { braidSeed: v.braidSeed } : {}),
+      ...(v.starberry ? { starberry: structuredClone(v.starberry) } : {}),
     });
   }
 
@@ -4128,7 +4135,7 @@ export function nearestChainSpan(
 // --- vines ------------------------------------------------------------------
 
 export function cloneVine(v: EdVine): EdVine {
-  return { ...v };
+  return { ...v, ...(v.starberry ? { starberry: structuredClone(v.starberry) } : {}) };
 }
 
 // Where a vine hangs from, or null if its anchor has gone.
@@ -4147,21 +4154,48 @@ export function vineAnchor2World(model: EdModel, v: EdVine): Vec2 | null {
 const VINE_REST_SEGMENTS = 24;
 
 // The vine's rest pose as the EDITOR draws it: straight down from the anchor by
-// its authored length, or - with a second anchor - the catenary that length
-// rests in between the two.
+// its authored length, or - with a second anchor - where that length rests
+// between the two: the catenary for a limp span, and for a stiff one the
+// flatter bow its bends hold it in, settled by the builder itself
+// (`restingSpanPath`).
 //
 // That is the rest pose and nothing more. Where a vine actually hangs is a
 // runtime answer - it drapes over whatever is under it, and the player drags it
 // about - and drawing a guess at that would be a drawing of something the level
 // does not contain, which is the same rule the editor draws a chain straight by.
-// The catenary is not a guess: it is where a span authored over empty ground
-// rests, and it is the pose `buildVines` spawns the links in.
+// The rest pose is not a guess: it is where the vine rests over empty ground,
+// and where the level's own vine stands when it opens (a hanging vine on its
+// drawn length, a span settled at build - see `buildVines`).
 export function vineRestPath(model: EdModel, v: EdVine): Vec2[] | null {
   const top = vineAnchorWorld(model, v);
   if (!top) return null;
   const end = vineAnchor2World(model, v);
   if (!end) return [top, top.add(new Vec2(0, v.length))];
+  if (v.stiffness !== null && v.stiffness > 0) return restingSpan(top, end, v);
   return catenaryPolyline(top, end, v.length, VINE_REST_SEGMENTS);
+}
+
+// A stiff span's settled pose, cached by everything that decides it - its
+// anchors, length, spacing, weight and stiffness - since settling one is a
+// build and 8-28 ms (measured on BALL's and testing's spans), and the editor
+// asks for the rest pose every frame it draws or picks.
+const restingSpans = new Map<string, Vec2[]>();
+const RESTING_SPAN_CACHE = 64;
+function restingSpan(top: Vec2, end: Vec2, v: EdVine): Vec2[] {
+  const key = [top.x, top.y, end.x, end.y, v.length, v.spacing, v.density, v.stiffness].join(",");
+  let path = restingSpans.get(key);
+  if (!path) {
+    path =
+      restingSpanPath(top, end, {
+        length: v.length,
+        ...(v.spacing !== null ? { spacing: v.spacing } : {}),
+        ...(v.density !== null ? { density: v.density } : {}),
+        ...(v.stiffness !== null ? { stiffness: v.stiffness } : {}),
+      }) ?? catenaryPolyline(top, end, v.length, VINE_REST_SEGMENTS);
+    if (restingSpans.size >= RESTING_SPAN_CACHE) restingSpans.clear();
+    restingSpans.set(key, path);
+  }
+  return path;
 }
 
 // Distance from a world point to that rest pose, for picking.

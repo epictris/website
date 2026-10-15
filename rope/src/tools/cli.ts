@@ -2802,7 +2802,13 @@ async function cmdVines(): Promise<void> {
   // engine internals an old revision does not have, and `cli compare` runs this
   // very file inside a worktree of one.
   const { runVineCases } = await import("../sim/vineCases");
-  const results = runVineCases();
+  // `--only NAME` runs the cases whose name starts with NAME, for iterating on
+  // one without the minute the suite takes.
+  const only = opts([arg ?? "", ...rest]).only;
+  const prefixes = only === undefined ? null : only.split(",");
+  const results = runVineCases(
+    prefixes === null ? undefined : (name) => prefixes.some((p) => name.startsWith(p)),
+  );
   let failed = 0;
   for (const r of results) {
     console.log(`  ${r.passed ? "PASS " : "FAIL "} ${r.name}`);

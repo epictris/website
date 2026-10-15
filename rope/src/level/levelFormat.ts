@@ -85,6 +85,7 @@
 // kind on the way through would be a field that forgets.
 import { dmath } from "../engine/dmath";
 import { LAYER_HOOK, LAYER_PLAYER, LAYER_ROPE, MASK_ALL } from "../engine/body";
+import { DEFAULT_BERRY_FRACTIONS, type StarberrySettings } from "./starberry";
 
 export type BodyKind = "static" | "killzone" | "rigid" | "force" | "water" | "finish";
 
@@ -1505,6 +1506,15 @@ export interface VineData {
   viscosity?: number;
   // Optional appearance. Absent = the renderer's own vine colours.
   color?: string;
+  // Present = a BERRY VINE (`level/starberry.ts`): berries on short stalks off
+  // the cord, each placed explicitly, and only the berries catch the hook. Its
+  // `radius`, `radii`, `stemLength` and `offsets` are lengths, so `scaleLevelData`
+  // converts them; the rest are fractions, sides, a seed, the berries' density
+  // in kg/m³ (`berryDensity`, a berry weighing its drawn sphere) and the
+  // stalks' in kg/m (`stalkDensity`, a stem weighing its stalk's reach) and
+  // how far a stalk stretches on its spring as a fraction of its reach
+  // (`stretch`), which are left alone as the cord's `density` is.
+  starberry?: StarberrySettings;
 }
 
 // Default framing of a camera region: no offset, unchanged viewport, no lock.
@@ -2787,6 +2797,13 @@ function withoutSpillSpeed(b: LevelBodyData): LevelBodyData {
   return rest;
 }
 
+// A berry vine's settings without the retired arc fractions, which
+// `scaleLevelData` has just folded into `along` (see `StarberrySettings`).
+function withoutPositions(s: StarberrySettings): StarberrySettings {
+  const { positions: _retired, ...rest } = s;
+  return rest;
+}
+
 // Take the retired geometry objects out of a body, keeping the two looks that
 // were never a mesh and so have not moved to Blender: a WATER body's slab
 // (`waterZ`, `waterDepth`) and a BELT's band (`BeltLook`), both drawn by the
@@ -3332,6 +3349,28 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
     ...(v.viscosity !== undefined ? { viscosity: v.viscosity } : {}),
     ...(v.color !== undefined ? { color: v.color } : {}),
     ...(v.braidSeed !== undefined ? { braidSeed: v.braidSeed } : {}),
+    // Copied rather than shared, so a converted level never aliases the
+    // file's arrays. A berry's root is a length along the vine; the retired
+    // arc fractions (`positions`, and karin's default when a file names
+    // neither) are folded into it here, against the length the file states.
+    ...(v.starberry
+      ? {
+          starberry: {
+            ...withoutPositions(v.starberry),
+            along: (
+              v.starberry.along ??
+              (v.starberry.positions ?? DEFAULT_BERRY_FRACTIONS).map((f) => f * v.length)
+            ).map((a) => a * factor),
+            ...(v.starberry.sides ? { sides: [...v.starberry.sides] } : {}),
+            ...(v.starberry.offsets
+              ? { offsets: v.starberry.offsets.map((o) => ({ x: o.x * factor, y: o.y * factor })) }
+              : {}),
+            ...(v.starberry.radii ? { radii: v.starberry.radii.map((r) => r * factor) } : {}),
+            radius: v.starberry.radius * factor,
+            stemLength: v.starberry.stemLength * factor,
+          },
+        }
+      : {}),
   }));
   // A firefly path is the camera path's curve alone: its placement, its nodes
   // and their handles are lengths, `rot` and `id` are not. Degenerate ones are

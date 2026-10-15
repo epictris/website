@@ -81,6 +81,12 @@ export class VineAnchor implements SceneConstraint {
     return this.restLength + this.blockedSlack;
   }
 
+  // The two ends, for the island's row of this constraint
+  // (`level/plantRows.ts`).
+  get ends(): readonly [RopeContact, RopeContact] {
+    return [this.a, this.b];
+  }
+
   // How far over its length it ended the pass. Zero while slack: the
   // constraint is an inequality, and a slack line is satisfied.
   get residual(): number {
