@@ -10,7 +10,7 @@
 import { dmath } from "../engine/dmath";
 import { Vec2 } from "../engine/vec2";
 import { PX } from "../engine/units";
-import { wrapAngle } from "../engine/mathf";
+import { Mathf, wrapAngle } from "../engine/mathf";
 import { LAYER_PLAYER, PhysicsBody2D, RigidBody2D, VineLink, type CollisionObject2D, type CollisionShape2D } from "../engine/body";
 import { circleShape, nearestShapeIndex, type ShapeTransform } from "../engine/shapes";
 import { outwardDirection } from "../engine/collision";
@@ -76,6 +76,19 @@ export class BallPlayer extends RigidBody2D {
   // Proportional gain steering the loop toward the aim direction (1/s).
   // Stable at 1/60 while gain*dt < 1.
   static readonly AIM_TURN_GAIN = 10;
+  // The most the loop may trail the aim by, one whole turn (rad). The error the
+  // steering turns toward is carried from frame to frame rather than wrapped,
+  // so an aim circling the ball faster than the spin cap can follow keeps
+  // winding the way it is circling (see `resolveInput`); this bounds the
+  // backlog a ball left behind still turns through once the aim stops.
+  static readonly AIM_MAX_LAG = Mathf.Tau;
+  // The error the steering turned toward on the last frame it ran, unwrapped,
+  // with the aim angle and the rotation it was measured against: what makes the
+  // next frame's error continuous with this one. Null while not aiming, and
+  // whenever the error is to be read the short way again.
+  aimError: number | null = null;
+  private aimErrorAim = 0;
+  private aimErrorRotation = 0;
   // The direction (+1/-1, 0 for none) of a turn the chain refused in full on
   // the last frame that asked for one, latched by `BallLevel` after the
   // unwind and read by the aim steering (see `resolveInput`). Cleared by a
@@ -93,6 +106,10 @@ export class BallPlayer extends RigidBody2D {
   // Spool rate (m per radian) below which turning does not wind chain and the
   // stall has nothing to limit.
   static readonly STALL_MIN_SPOOL = 0.001;
+  // Share of the aim's turn the unwind must give back for the turn to count
+  // as refused outright: what latches `windStall`, and what stops the aim
+  // steering carrying a lap (see `resolveInput`).
+  static readonly STALL_REFUND_SHARE = 0.9;
   // Share of the ball's radius the spool must reach for a refused turn to
   // LATCH the stall at all. A chain wound onto the rim leaves it tangentially,
   // at the radius itself; one anchored point-blank and leaving radially winds
@@ -904,10 +921,47 @@ export class BallPlayer extends RigidBody2D {
     // throw along the rate-limited turn's leftovers.
     if (aiming && input.fire.pressed) {
       this.globalRotation += wrapAngle(toAim.angle() - this.loopDirection.angle());
+      // The snap closed whatever the loop was trailing by.
+      this.aimError = null;
     }
     if (aiming) {
-      const angleError = wrapAngle(toAim.angle() - this.loopDirection.angle());
-      const demand = angleError * BallPlayer.AIM_TURN_GAIN;
+      // The error is read the short way round, and then carried on from last
+      // frame's: an aim circling the ball faster than the spin cap
+      // (`AIM_TURN_GAIN * pi`) falls further behind every frame, and read the
+      // short way the lag flips sign the moment it passes half a turn - the
+      // steering turned round and unwound the chain the player was winding
+      // (`session-150f` of 2026-10-15: a 30 rad/s whirl, the loop 179 degrees
+      // behind on f122, and 23 cm of chain given back over the next four
+      // frames at -31 rad/s). So the error is the representative of the short
+      // one nearest where last frame's has moved to - by the aim's own turn
+      // about the ball, less the loop's - and for every error inside half a
+      // turn that is the short one itself, bit for bit. Only a lag the ball
+      // was turning to close is carried: if the chain refused last frame's
+      // turn outright (`spinDriveShare`, `STALL_REFUND_SHARE`) or the stall
+      // has latched, the loop trails because it is held, not because it is
+      // slow, and the short way is what pays chain out of a jam the moment the
+      // aim goes past the back of the ball. Outright and not at all, because
+      // a turn that winds a wrap on gives back float noise (3e-14 rad on the
+      // `whirl-lap` rig), and a turn the chain only slows is still winding.
+      const aimAngle = toAim.angle();
+      let angleError = wrapAngle(aimAngle - this.loopDirection.angle());
+      const held =
+        this.windStall !== 0 || this.spinDriveShare <= 1 - BallPlayer.STALL_REFUND_SHARE;
+      if (this.aimError !== null && !held) {
+        const carried =
+          this.aimError +
+          wrapAngle(aimAngle - this.aimErrorAim) -
+          (this.globalRotation - this.aimErrorRotation);
+        angleError += Mathf.Tau * Math.round((carried - angleError) / Mathf.Tau);
+        angleError = Mathf.clamp(angleError, -BallPlayer.AIM_MAX_LAG, BallPlayer.AIM_MAX_LAG);
+      }
+      this.aimError = angleError;
+      this.aimErrorAim = aimAngle;
+      this.aimErrorRotation = this.globalRotation;
+      // A lag past half a turn turns the ball no faster than half a turn does:
+      // the cap is what it always was.
+      const maxSpin = Mathf.Pi * BallPlayer.AIM_TURN_GAIN;
+      const demand = Mathf.clamp(angleError * BallPlayer.AIM_TURN_GAIN, -maxSpin, maxSpin);
       // Stalled: the chain refunded the whole of a turn in this direction and
       // nothing has changed since (see `windStall`), so the loop may turn only
       // as far as the chain's OWN length allows - the slack between the path
@@ -943,6 +997,8 @@ export class BallPlayer extends RigidBody2D {
         this.windStall = 0;
       }
       this.angularVelocity = allowed;
+    } else {
+      this.aimError = null;
     }
 
     // Hold-to-keep: press shoots, release lets go (matches the grapple
@@ -986,28 +1042,35 @@ export class BallPlayer extends RigidBody2D {
     if (!this.hookInFlight || !this.chain) return;
     const len = this.chain.getCurrentLength();
     if (len > BallPlayer.CHAIN_MAX_LENGTH) {
+      // The chain ended the flight, and nothing past its reach is bitten: an
+      // anchor taken here off the solver's contacts is the forgiveness
+      // `hook-mouth-band` keeps out, so the blocking-contact test is not asked.
       this.deployTip(BallPlayer.CHAIN_MAX_LENGTH);
-    } else if (this.chain.detectSceneCatch(bodies, this)) {
-      // Snagged mid-flight: the wrap node is now in the chain, so freeze at the
-      // wrapped path length (longer than the straight span was).
-      this.deployTip(this.chain.getCurrentLength());
-    } else if (this.deploySpent(this.hookInFlight)) {
-      // What stops a throw dead is nearly always the solver blocking it against
-      // a surface the sweep's reach did not quite cover, and that surface is
-      // what the throw was aimed at. Ask the hook's own blocking-contact test
-      // before ending the flight: it reads `World.frameContacts`, which here is
-      // THIS frame's set, and it declines for anything not flying, so the
-      // conversion below would silently take away the one frame it was written
-      // to run on (`session-401f`: a 12 m/s shot stopped 8.84 mm off an
-      // attachable wall, dangling ever after, HEALTHY). It is refused an anchor
-      // out of the chain's reach by the snap backstop in `onHookAttached`, the
-      // same gate that answers `probeContact`.
-      if (!this.hookInFlight.attachToBlockingContact()) {
-        // Nothing to anchor to: the throw is over on its own account, and
-        // freezes at the length it reached.
-        this.deployTip(this.chain.getCurrentLength());
-      }
+      return;
     }
+    // Snagged mid-flight (the wrap node is now in the chain, so the length
+    // below is the wrapped path, longer than the straight span was), or the
+    // throw has stopped going anywhere.
+    if (!this.chain.detectSceneCatch(bodies, this) && !this.deploySpent(this.hookInFlight)) return;
+    // Either ends the throw, and either can land on the frame the solver
+    // blocked the hook against the surface it was thrown at - a stop dead is
+    // nearly always that, and a snag can be the ball's own motion swinging the
+    // chain over the same rock the hook just struck. Ask the hook's own
+    // blocking-contact test before ending the flight: it reads
+    // `World.frameContacts`, which here is THIS frame's set, and it declines
+    // for anything not flying, so converting first silently takes away the one
+    // frame it was written to run on. `session-401f` lost that frame to the
+    // stop (a 12 m/s shot stopped 8.84 mm off an attachable wall, dangling ever
+    // after, HEALTHY); `session-613f` lost it to the snag (a hook pushed off a
+    // rock's corner with 1.09 N·s while the chain cut the rock's lower corners,
+    // and the ball fell two metres under a tip that slid down the face). It is
+    // refused an anchor out of the chain's reach by the snap backstop in
+    // `onHookAttached`, the same gate that answers `probeContact`, and
+    // `onHookAttached` re-wraps the path, so a snag's wrap nodes are kept.
+    if (this.hookInFlight.attachToBlockingContact()) return;
+    // Nothing to anchor to: the throw is over on its own account, and freezes
+    // at the length it reached.
+    this.deployTip(this.chain.getCurrentLength());
   }
 
   // Is the throw still a throw? A deploy is the hook TRAVELLING OUT, and it is

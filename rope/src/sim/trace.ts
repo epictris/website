@@ -276,6 +276,14 @@ export interface WorldDigest {
   // `chains`: absent on a level with none, compared where both sides carry it,
   // and named `tie#2.over` by `cli diverge`.
   ties?: SceneChainDigest[];
+  // The BALL'S AIM ERROR the steering turned toward this frame
+  // (`BallPlayer.aimError`), unwrapped, or null while it was not aiming. It is
+  // the one piece of steering state that carries from frame to frame - the
+  // lap a whirl has the loop trailing by - and nothing else in the digest can
+  // tell a loop a whole turn behind from one level with its aim. Written by
+  // the ball driver alone, and compared where both sides carry it, under the
+  // rule `chains` follows.
+  aimError?: number | null;
 }
 
 // One scene chain at the end of a frame (see `WorldDigest.chains`), or one
@@ -450,7 +458,7 @@ export function worldDigest(level: Level): WorldDigest {
 }
 
 export function worldDigestBall(level: BallLevel): WorldDigest {
-  return worldDigestOf(
+  const digest = worldDigestOf(
     level.frame,
     level.world,
     level.ball.chain,
@@ -468,6 +476,8 @@ export function worldDigestBall(level: BallLevel): WorldDigest {
     level.sceneChains,
     level.tieChains,
   );
+  digest.aimError = level.ball.aimError;
+  return digest;
 }
 
 // Worst behavioural difference between two full-world digests, and the name of
@@ -663,6 +673,13 @@ export function worldDigestDeltas(
         compareNumber(out, `chain#${i}.over`, o.over, r.over, tolerance);
         compareIdentity(out, `chain#${i}.asleep`, o.asleep, r.asleep);
       }
+    }
+  }
+  if (recorded.aimError !== undefined && replayed.aimError !== undefined) {
+    if (recorded.aimError === null || replayed.aimError === null) {
+      compareIdentity(out, "aimError", recorded.aimError, replayed.aimError);
+    } else {
+      compareNumber(out, "aimError", recorded.aimError, replayed.aimError, tolerance);
     }
   }
   if (recorded.ties && replayed.ties) {

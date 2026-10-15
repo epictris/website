@@ -393,9 +393,6 @@ export class BallLevel {
   // push. The floor itself is the engine's (`PUSH_OUT_MIN_DEPTH` in
   // `engine/world.ts`), shared with the scene-chain settle.
   static readonly PUSH_OUT_MIN_DEPTH = PUSH_OUT_MIN_DEPTH;
-  // Share of the aim's turn the unwind must give back for the turn to count
-  // as refused outright (see `BallPlayer.windStall`).
-  static readonly STALL_REFUND_SHARE = 0.9;
   // Length below which a stall is float noise rather than a blocked correction.
   // Also the least chain a turn must ask to wind before the unwind refunding it
   // whole can latch the wind-stall (see the latch in `physicsProcess`).
@@ -810,7 +807,7 @@ export class BallLevel {
       asked * spool >= BallLevel.STALL_EPSILON &&
       this.ball.windStallHeld &&
       !braced &&
-      refunded >= BallLevel.STALL_REFUND_SHARE * asked &&
+      refunded >= BallPlayer.STALL_REFUND_SHARE * asked &&
       spool >= BallPlayer.STALL_LATCH_SPOOL_SHARE * this.ball.radius
     ) {
       this.ball.windStall = Math.sign(this.aimSpin);

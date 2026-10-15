@@ -138,8 +138,14 @@ Being late means the frame after has to exist, and it does not when the same con
 A block hard enough to stop the hook dead is a spent deploy, read off the hook's motion after integrate on that very frame, and the conversion to a dangling tip un-flies the hook before its next `physicsStep` - so this declines, on the one frame it was written for.
 `session-401f` is that miss: a 12 m/s shot at an attachable wall, blocked 8.84 mm off the face by a 2.68 N·s impulse (the sweep wanted 210.262 mm of its 210.000 mm reach - the `1/cos` shortfall above, at cos 0.8616), the tangent eaten by the friction cone, 12 m/s down to 0.246 against a `DEPLOY_MIN_SPEED` of 0.5.
 The throw ended on f307 and nothing ever anchored: the chain dangled at the 1.027 m it had reached, the winch reeled the hook back in over the next eighty frames, and the run replayed HEALTHY.
-So `BallPlayer.checkChainReach` asks this **before** it converts a spent throw, where `World.frameContacts` is the current frame's set and the hook is still the deploying one.
-Only on that branch: the chain running out and a scene catch are the chain ending the flight rather than a surface, and an anchor past the chain's own reach is the dishonest forgiveness `hook-mouth-band` exists to keep out (the snap backstop in `onHookAttached` refuses it in any case, exactly as it does for `probeContact`).
+So `BallPlayer.checkChainReach` asks this **before** it converts a throw, where `World.frameContacts` is the current frame's set and the hook is still the deploying one.
+
+A **scene catch** ends the throw on its frame just as a stop does, and it was once left out of that on the grounds that a snag is the chain ending the flight rather than a surface.
+That holds only for a snag on its own, and nothing keeps a snag from landing on the blocking frame.
+`session-613f` is the two together: the ball travelling right at 4.87 m/s under a rock and throwing up past its left face, the solver pushing the hook off the face's top corner on f355 with 1.09 N·s while it was still flying at 8.9 m/s, and the ball by then far enough right that the straight chain cut the same rock's two lower corners.
+`detectSceneCatch` answered first, froze the chain at the wrapped 1.44 m and un-flew the hook, the blocking-contact test never ran, and the hook slid down the rock as a dangling tip while the ball fell two metres under it - a throw that should have stuck, replaying HEALTHY, shown in the HUD as `BallAnchored` throughout because a dangling tip is an anchored chain.
+So both conversions ask first, and the snag's wrap nodes survive the bite because `onHookAttached` re-wraps the path before it measures it.
+The chain **running out** is still not asked: there the chain did end the flight, and an anchor past its reach is the dishonest forgiveness `hook-mouth-band` exists to keep out (the snap backstop in `onHookAttached` refuses it in any case, exactly as it does for `probeContact`).
 
 It rescues a **throw** only. A dangling tip hangs at exactly `CHAIN_MAX_LENGTH`, so anchoring it on a contact reported while the hook is still millimetres clear buys the chain that much extra path, and a chain going taut-to-slack in one frame drops the ball it had been braking - 0.7 m/s of `rope-anchor-kick` on `session-576f` f60.
 A tip drifts into its surface slowly and the probe catches it on real contact, which is what keeps the anchored length honest.
@@ -149,6 +155,8 @@ The throws are made by a `BallPlayer`, through the frame order the game runs, be
 It runs **two tilts** for the same reason, and counts them separately.
 Off a steep face a block is glancing, the throw keeps its speed as tangent and stays a throw, and the backstop anchors it on the frame after; off a shallow one the normal impulse is large enough for the friction cone to take the tangent too, the hook stops dead, and the throw is spent on the blocking frame itself.
 The case fails unless it finds at least three of each, so a fan that drifts off the second shape says so instead of quietly testing half the property.
+A third fan is `session-613f`'s rock, its pieces as the level builds them, thrown at by a ball moving at the bundle's 4.87 m/s on the bundle's heading, walked along where the ball fires from.
+It counts the blocks that land on the frame the chain snagged, read off the wrap nodes the reach check leaves (a catch keeps them, and a bite re-wraps the same corners), and it fails unless it finds at least three: before the fix those were exactly the 7 of 41 blocked throws that failed to anchor.
 
 Whichever surface the hook reaches first decides, and where two are reached at once **an attach beats a bounce**.
 Attachable and hook-proof geometry are therefore swept as two separate questions (`bodySweepConvex`'s `only` filter) rather than as one earliest hit.
@@ -206,7 +214,9 @@ the hook is in flight the chain is slack (no length solver), so
 straight span has caught on a body other than the ball itself (ball
 self-winding from aiming is not a catch), it keeps the generated wrap node and
 freezes the deploy at the wrapped path length, so the chain wraps the corner
-and stops paying out.
+and stops paying out - unless the solver blocked the hook against something it
+bites on that same frame, which anchors it instead (`session-613f`, under the
+blocking contact above).
 
 ## A throw that is going nowhere is over
 

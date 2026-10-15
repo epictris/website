@@ -1503,21 +1503,62 @@ function caseGripRollPhase(sims: Sim[]): ContactResult {
 // stops dead, and `deploySpent` ends the throw on the blocking frame itself.
 // Only the second shape is `session-401f`, and a one-tilt fan can hold every
 // other part of this property while missing it entirely.
+//
+// The third fan is the third ending: the CHAIN snagging the scene on the very
+// frame the solver blocks the hook. `session-613f` is that throw. The ball was
+// travelling right at 4.87 m/s under a rock and threw up past its left face;
+// on f355 the solver pushed the hook off the face's top corner with 1.09 N·s,
+// still flying at 8.9 m/s, while the ball had moved far enough right that the
+// straight chain cut the same rock's two lower corners. `detectSceneCatch`
+// answered first and ended the throw at the wrapped 1.44 m, the blocking-
+// contact test never ran, and the hook slid down the rock as a dangling tip
+// while the ball fell two metres under it - read from the game as a throw
+// that should have stuck and did not. Its rock, pieces as the level builds
+// them, its thrower's speed and its throw's heading; the fan walks where the
+// ball fires from, so it crosses throws whose chain snags before, on and after
+// the blocking frame, and only the ones that snag ON it are counted as such.
 // ---------------------------------------------------------------------------
 function caseHookBlockedAttaches(): ContactResult {
+  const slab = (rot: number, y: number) => (world: World) => {
+    const body = new StaticBody2D();
+    body.globalPosition = new Vec2(0, y);
+    body.globalRotation = rot;
+    body.setShape(rectShape(2.4, 0.8));
+    world.add(body);
+  };
+  const SESSION_613F_ROCK = [
+    [[31.4, 5.75], [31.3, 5.65], [31.15, 5.45], [31.15, 5.2], [31.2, 4.9], [31.35, 4.95], [31.85, 5.4], [31.8, 5.55], [31.6, 5.75]],
+    [[31.4, 4.2], [31.55, 3.55], [31.65, 3.35], [31.5, 4.05], [31.35, 4.6]],
+    [[31.35, 4.6], [31.5, 4.05], [31.5, 4.45]],
+    [[31.35, 4.6], [31.5, 4.45], [31.35, 4.95], [31.2, 4.9]],
+  ];
+  const rock = (world: World) => {
+    const body = new StaticBody2D();
+    for (const piece of SESSION_613F_ROCK) {
+      const made = polyShapeCentred(piece.map(([x, y]) => new Vec2(x!, y!)));
+      body.addShape(made.shape, made.offset);
+    }
+    world.add(body);
+  };
+  // `session-613f`'s heading: 17.5° right of straight up, the way the hook
+  // actually flew (the facing had not finished turning onto the cursor).
+  const UP_RIGHT = new Vec2(0.3007, -0.9537);
   const FANS = [
     // The hanging plank of `session-1154f`, pinned: a 2.4 x 0.8 slab at 60°,
     // thrown at from above so the fan crosses its end face, its corner, and
     // clean misses past it. A hit here is glancing: the throw survives it.
-    { rot: 1.05, y: -2, offsets: 240, from: -0.35, to: 0.15 },
+    { build: slab(1.05, -2), y: 0, aim: new Vec2(0, -1), vx: 0, offsets: 240, from: -0.35, to: 0.15 },
     // `session-401f`'s wall: a face ~30° off the throw, where the block kills
     // the shot outright. The fan is 1200 wide because what it is hunting is the
     // ~1.6 mm of path the sweep's reach under-covers, once per 200 mm step.
-    { rot: 0.52, y: -1.6, offsets: 1200, from: -0.7, to: 0.6 },
+    { build: slab(0.52, -1.6), y: 0, aim: new Vec2(0, -1), vx: 0, offsets: 1200, from: -0.7, to: 0.6 },
+    // `session-613f`'s rock: the ball fired from 30.72, 6.52 at 4.87 m/s.
+    { build: rock, y: 6.52, aim: UP_RIGHT, vx: 4.87, offsets: 400, from: 30.4, to: 30.9 },
   ];
 
   let blocked = 0;
   let spentOnBlock = 0;
+  let caughtOnBlock = 0;
   let unattached = 0;
   let firstBad = "";
   let throws = 0;
@@ -1526,17 +1567,15 @@ function caseHookBlockedAttaches(): ContactResult {
       throws++;
       const x = fan.from + ((fan.to - fan.from) * i) / (fan.offsets - 1);
       const world = new World();
-      const slab = new StaticBody2D();
-      slab.globalPosition = new Vec2(0, fan.y);
-      slab.globalRotation = fan.rot;
-      slab.setShape(rectShape(2.4, 0.8));
-      world.add(slab);
+      fan.build(world);
 
-      // The thrower sits where the bare hook used to start, and throws straight
-      // down: the same fan, now with a deploy behind it. Held still, so what
-      // varies across the fan is the geometry and nothing else.
+      // The thrower sits where the bare hook used to start, and throws: the
+      // same fan, now with a deploy behind it. Weightless, and at a steady
+      // speed (still, for the slabs), so what varies across the fan is the
+      // geometry and nothing else.
       const ball = new BallPlayer(0.12);
-      ball.globalPosition = new Vec2(x, 0);
+      ball.globalPosition = new Vec2(x, fan.y);
+      ball.linearVelocity = new Vec2(fan.vx, 0);
       ball.gravityScale = 0;
       ball.spawnBody = (b) => world.add(b);
       world.add(ball);
@@ -1546,9 +1585,10 @@ function caseHookBlockedAttaches(): ContactResult {
       let pushedAt = -1;
       let atMaxWhenPushed = false;
       let stoppedDead = false;
+      let caught = false;
       for (let f = 0; f < 20 && !attached; f++) {
         const input = emptyFrameInput();
-        input.mouseWorldPosition = ball.globalPosition.add(new Vec2(0, -1));
+        input.mouseWorldPosition = ball.globalPosition.add(fan.aim);
         input.fire = { held: true, pressed: f === 0, released: false };
         ball.resolveInput(input);
         ball.sceneBodies = world.bodies;
@@ -1582,6 +1622,11 @@ function caseHookBlockedAttaches(): ContactResult {
           }
         }
         ball.checkChainReach(world.bodies);
+        // Whether the chain snagged on the blocking frame, read off the path
+        // the reach check left: `detectSceneCatch` keeps its wrap nodes exactly
+        // when it caught, and an attach re-wraps the same corners, so this says
+        // the same thing whichever of the two answered.
+        if (pushedAt === f) caught = ball.chain?.wraps.some((w) => w.contact.obj !== ball) ?? false;
         if (ball.chainAnchored && ball.chain) ball.chain.physicsStep(world.bodies, DT);
         // The sweep anchors on the frame of contact, a spent throw on that same
         // frame's reach check, and the backstop on the frame after: one more
@@ -1592,26 +1637,34 @@ function caseHookBlockedAttaches(): ContactResult {
       if (pushedAt < 0 || atMaxWhenPushed) continue;
       blocked++;
       if (stoppedDead) spentOnBlock++;
+      if (caught) caughtOnBlock++;
       if (!attached) {
         unattached++;
-        if (!firstBad) firstBad = `rot=${fan.rot} x=${x.toFixed(4)} f${pushedAt + 1}`;
+        if (!firstBad) firstBad = `fan ${FANS.indexOf(fan) + 1} x=${x.toFixed(4)} f${pushedAt + 1}${caught ? " caught" : ""}`;
       }
     }
   }
 
   // A fan that never gets blocked would pass the check above by testing nothing,
   // and one that is never blocked to a STANDSTILL passes it while testing only
-  // half of it - which is how this case watched `session-401f` go by.
+  // half of it - which is how this case watched `session-401f` go by. The same
+  // holds for a block on the frame the chain snags, `session-613f`.
   const enough = blocked >= 10;
   const bothKinds = spentOnBlock >= 3 && blocked - spentOnBlock >= 3;
+  const snagged = caughtOnBlock >= 3;
   const good = unattached === 0;
-  return ok("hook-blocked-attaches — a hook the solver pushes on is a hook that anchors", good && enough && bothKinds, [
-    `${good ? "ok  " : "BAD "} ${unattached} of ${blocked} blocked throws failed to anchor` +
-      `${firstBad ? ` (first at ${firstBad})` : ""} (want 0)`,
-    `${enough ? "ok  " : "BAD "} ${blocked} of ${throws} throws were blocked at all (want >=10)`,
-    `${bothKinds ? "ok  " : "BAD "} ${spentOnBlock} of those stopped the throw dead and` +
-      ` ${blocked - spentOnBlock} left it flying (want >=3 of each)`,
-  ]);
+  return ok(
+    "hook-blocked-attaches — a hook the solver pushes on is a hook that anchors",
+    good && enough && bothKinds && snagged,
+    [
+      `${good ? "ok  " : "BAD "} ${unattached} of ${blocked} blocked throws failed to anchor` +
+        `${firstBad ? ` (first at ${firstBad})` : ""} (want 0)`,
+      `${enough ? "ok  " : "BAD "} ${blocked} of ${throws} throws were blocked at all (want >=10)`,
+      `${bothKinds ? "ok  " : "BAD "} ${spentOnBlock} of those stopped the throw dead and` +
+        ` ${blocked - spentOnBlock} left it flying (want >=3 of each)`,
+      `${snagged ? "ok  " : "BAD "} ${caughtOnBlock} were blocked on the frame the chain snagged the scene (want >=3)`,
+    ],
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -4336,6 +4389,102 @@ function caseConvergedAimHang(): ContactResult {
   );
 
   return ok("converged-aim-hang - a ball hanging against its anchor turns on from a reached aim", passed, details);
+}
+
+// whirl-lap - an aim circling the ball faster than it can turn winds the chain
+// on, all the way.
+//
+// The steering's spin is proportional to the aim error and so tops out at
+// `AIM_TURN_GAIN * pi`, and an aim circling faster than that leaves the loop
+// further behind every frame. Read the short way round, the error flipped sign
+// the frame the lag passed half a turn, and the ball turned round and unwound
+// what the player was winding: `session-150f` of 2026-10-15 whirled at about
+// 30 rad/s, the loop fell 179 degrees behind on f122, and the next four frames
+// spun at -31 rad/s and gave back 23 cm of chain. The error is now carried on
+// from frame to frame (`BallPlayer.aimError`).
+//
+// The rig is the recording's situation without its level: the ball hanging
+// on its chain from a ceiling, the aim whirled around it for fourteen frames
+// at two rates above the cap (45 and 60 rad/s, the second reaching the
+// one-turn ceiling on the lag), each way round, then held still. The claims
+// are signs and bounds only, since how much a whirl should wind is a feel the
+// player decides: the aim really does get more than half a turn ahead, the
+// ball never turns against the whirl while it lasts, and once the aim stops
+// the ball closes the gap the same way round and settles on it.
+function caseWhirlLap(): ContactResult {
+  const details: string[] = [];
+  let passed = true;
+  const check = (claim: string, got: boolean): void => {
+    if (!got) passed = false;
+    details.push(`${got ? "ok  " : "BAD "} ${claim}`);
+  };
+  const WHIRL_FRAMES = 14;
+  for (const rate of [45, 60]) {
+    for (const dir of [1, -1]) {
+      const tag = `${rate * dir} rad/s`;
+      // A ceiling 1.7 m above the ball, inside the chain's reach.
+      const level = new BallLevel({
+        player: { x: 1300, y: -1950, radius: 8 },
+        bodies: [
+          {
+            kind: "static",
+            x: 1300,
+            y: -2130,
+            rot: 0,
+            friction: 1,
+            objects: [{ type: "collision", shape: { kind: "rect", w: 400, h: 20 } }],
+          },
+        ],
+      } as RawLevelData);
+      const ball = level.ball;
+      let prev = emptyFrameInput();
+      const feed = (aim: Vec2): void => {
+        const input: FrameInput = {
+          ...emptyFrameInput(),
+          fire: button(true, prev.fire),
+          mouseWorldPosition: aim,
+        };
+        prev = input;
+        level.physicsProcess(input, DT);
+      };
+      // Thrown straight up, and left to hang still.
+      for (let f = 0; f < 90; f++) feed(ball.globalPosition.add(new Vec2(0, -2)));
+      check(`${tag}: the chain is anchored to the ceiling`, ball.chainAnchored);
+
+      // The aim's angle about the ball, unwrapped, against the loop's: the
+      // lead is how far ahead of the loop the player's aim has really gone.
+      const startAim = ball.loopDirection.angle();
+      const startRotation = ball.globalRotation;
+      let aim = startAim;
+      let maxLead = 0;
+      let against = 0;
+      for (let f = 0; f < WHIRL_FRAMES; f++) {
+        aim += dir * rate * DT;
+        feed(ball.globalPosition.add(new Vec2(Math.cos(aim), Math.sin(aim)).mul(2)));
+        maxLead = Math.max(maxLead, dir * (aim - startAim - (ball.globalRotation - startRotation)));
+        if (dir * level.aimSpin < 0) against++;
+      }
+      check(
+        `${tag}: the aim got more than half a turn ahead of the loop (${(maxLead / DEG).toFixed(0)} deg)`,
+        maxLead > Math.PI,
+      );
+      check(`${tag}: and the ball never turned against the whirl (${against} frames did)`, against === 0);
+
+      // The aim held where the whirl left it.
+      const rest = ball.globalPosition.add(new Vec2(Math.cos(aim), Math.sin(aim)).mul(2));
+      let back = 0;
+      for (let f = 0; f < 60; f++) {
+        feed(rest);
+        if (dir * level.aimSpin < 0) back++;
+      }
+      const off = Math.abs(
+        wrapAngle(rest.sub(ball.globalPosition).angle() - ball.loopDirection.angle()),
+      );
+      check(`${tag}: the ball closed the gap the same way round (${back} frames turned back)`, back === 0);
+      check(`${tag}: and settled on the aim (${(off / DEG).toFixed(2)} deg off, under 3)`, off < 3 * DEG);
+    }
+  }
+  return ok("whirl-lap - an aim circling faster than the spin cap winds the chain on", passed, details);
 }
 
 // ---------------------------------------------------------------------------
@@ -7130,6 +7279,7 @@ export function runContactCases(): ContactResult[] {
   results.push(casePointBlankTurn());
   results.push(caseWoundTight());
   results.push(caseConvergedAimHang());
+  results.push(caseWhirlLap());
   results.push(caseHookSeam());
   results.push(caseCollisionMask());
   results.push(casePassableBody());
