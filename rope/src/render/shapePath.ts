@@ -48,7 +48,7 @@ export function outlineOfData(s: ShapeData): Outline {
   // offset of the same simplified centreline the build tiles the bar with, so
   // the bar that is drawn and the bar that is collided are the one shape.
   if (s.kind === "curve") {
-    return { kind: "poly", verts: strokeCurve(pathNodesOf(s.verts), s.width).outline };
+    return { kind: "poly", verts: strokeCurve(pathNodesOf(s.verts), s.width, s.tip).outline };
   }
   // A BELT's outline is its BAND (`lib/belt.ts`), in the object's frame with
   // wheel 0 at the origin: the loop's outer surface, flattened, with the inner

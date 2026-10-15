@@ -305,6 +305,10 @@ export const LEGACY_IMPERMEABLE = "impermeable";
 // polygon is cut into the pieces that tile it, so nothing downstream of the
 // build knows it was ever a curve; and a rail's centreline IS its curve rather
 // than something derived from a shape's proportions (see `lib/rail.ts`).
+// `tip` TAPERS it: the bar is `width` wide at its first node and `tip` wide at
+// its last, linearly in arc length between - a root (`CollisionObjectData.root`)
+// narrowing to its tip. Absent is the constant bar every curve authored before
+// it is. A rail rides a constant half-width, so a tapered curve is never one.
 //
 // Simple and not convex, which is the one place the two halves of the project
 // disagree about what a polygon is, and deliberately: the ENGINE's polygon is
@@ -345,7 +349,7 @@ export type ShapeData =
   | { kind: "rect"; w: number; h: number }
   | { kind: "circle"; r: number }
   | { kind: "poly"; verts: { x: number; y: number }[] }
-  | { kind: "curve"; verts: CurveVertData[]; width: number }
+  | { kind: "curve"; verts: CurveVertData[]; width: number; tip?: number }
   | ({ kind: "belt"; wheels: BeltWheelData[]; thickness: number; speed: number } & BeltLook);
 
 // How a belt's band looks. `width` is how wide the band is across the pulleys,
@@ -394,6 +398,10 @@ export interface CurveVertData {
 // fully opaque in the same colour). Applied when a body omits color/opacity.
 export const DEFAULT_BODY_COLOR = "#555555";
 export const DEFAULT_BODY_OPACITY = 0.5;
+// What a root's bark is tinted (`render3d/rootMesh.ts`) when its body names no
+// colour, and the colour the editor gives a body it grows a root in: a warm
+// mid brown, which the bark texture darkens into its fissures.
+export const DEFAULT_ROOT_COLOR = "#7a5a40";
 
 // Surface friction of authored geometry: 0 = ice, 1 = rubber. 1 is the default
 // and MUST stay so — it scales the contact-friction terms by exactly 1, which
@@ -589,6 +597,30 @@ export interface CollisionObjectData extends ObjectPlacement {
   // piece: one ledge in a dressed level is the one Blender has not caught up
   // with. Absent is a piece that draws nothing.
   debug?: DebugDrawData;
+  // A ROOT branch (docs/roots.md): this piece is one branch of a root, a
+  // tapered curve the game draws as a generated root of its own (`rootMesh.ts`)
+  // rather than leaving to the level's Blender scene. Only a CURVE may be one;
+  // set on any other shape kind it is ignored. Render and authoring only: what
+  // the sim collides is the curve itself, tapered by `tip`, in whatever body it
+  // is in - a root is hook-only because its body is `passable`, and springs
+  // because its body is a sprung `pivot`, exactly as any body would.
+  root?: RootBranchData;
+}
+
+// Where a root branch grows from (`CollisionObjectData.root`). A TRUNK is
+// `{}`: it grows from its own first node. A BRANCH names the piece it grows out
+// of - `parent`, an index into the same body's `objects`, which must be another
+// root piece - and how far along that piece's centreline it sprouts, `at`, a
+// fraction of the parent's arc length (0 its first node, 1 its last). Its own
+// first node IS the junction: the editor keeps it on the parent's centreline
+// at `at` (`rootEditing.ts`), so the file states the junction twice and the
+// node is what everything downstream reads.
+//
+// A fraction rather than a length, so it scales by nothing and a parent
+// reshaped by hand keeps its branches at the same place along it.
+export interface RootBranchData {
+  parent?: number;
+  at?: number;
 }
 
 // How a collision piece's debug geometry is drawn (`CollisionObjectData.debug`):
@@ -2719,14 +2751,18 @@ function finish(
 // bundle carries its level whole, so a run recorded before the switch replays
 // with the block-out it was played in.
 const GREYBOX_AREAS: ReadonlySet<BodyKind> = new Set(["killzone", "finish", "force", "water"]);
+//
+// A ROOT piece is passed over like a belt, and for the same reason: it draws
+// its own generated root (docs/roots.md), and roots postdate the grey box, so
+// a root in a format-1 file is a hand-written one that never had a block-out.
 function withDebugFromGreybox(b: LevelBodyData): LevelBodyData {
   if (GREYBOX_AREAS.has(b.kind)) return b;
-  if (!b.objects.some((o) => o.type === "collision" && o.shape.kind !== "belt" && o.debug === undefined)) return b;
+  const greyboxed = (o: SceneObjectData): boolean =>
+    o.type === "collision" && o.shape.kind !== "belt" && o.root === undefined && o.debug === undefined;
+  if (!b.objects.some(greyboxed)) return b;
   return {
     ...b,
-    objects: b.objects.map((o) =>
-      o.type === "collision" && o.shape.kind !== "belt" && o.debug === undefined ? { ...o, debug: { on: true } } : o,
-    ),
+    objects: b.objects.map((o) => (greyboxed(o) ? { ...o, debug: { on: true } } : o)),
   };
 }
 
@@ -3045,6 +3081,7 @@ function scaleShape(s: ShapeData, factor: number): ShapeData {
     return {
       kind: "curve",
       width: s.width * factor,
+      ...(s.tip !== undefined ? { tip: s.tip * factor } : {}),
       verts: s.verts.map((v) => ({
         x: v.x * factor,
         y: v.y * factor,
@@ -3119,6 +3156,15 @@ export function scaleObject(o: SceneObjectData, factor: number): SceneObjectData
               ...(o.debug.color !== undefined ? { color: o.debug.color } : {}),
               ...(o.debug.opacity !== undefined ? { opacity: o.debug.opacity } : {}),
               ...(o.debug.depth !== undefined ? { depth: o.debug.depth * factor } : {}),
+            },
+          }
+        : {}),
+      // An index and a fraction, neither of which is a length.
+      ...(o.root !== undefined
+        ? {
+            root: {
+              ...(o.root.parent !== undefined ? { parent: o.root.parent } : {}),
+              ...(o.root.at !== undefined ? { at: o.root.at } : {}),
             },
           }
         : {}),

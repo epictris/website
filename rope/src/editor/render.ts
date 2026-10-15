@@ -59,6 +59,7 @@ import {
   DEFAULT_PATH_LOOKAHEAD_Y,
   DEFAULT_PATH_RANGE_X,
   DEFAULT_PATH_RANGE_Y,
+  DEFAULT_ROOT_COLOR,
   DEFAULT_VIEWPORT_SCALE,
   moveModeCloses,
 } from "../level/levelFormat";
@@ -562,8 +563,8 @@ export function outlineOf(body: EdItem): Outline {
 }
 
 // The stroke of an authored curve, in the item's own frame.
-function strokeOf(shape: { verts: Vec2[]; handles: { in: Vec2; out: Vec2 }[]; width: number }): Vec2[] {
-  return strokeCurve(curveNodes(shape), shape.width).outline;
+function strokeOf(shape: { verts: Vec2[]; handles: { in: Vec2; out: Vec2 }[]; width: number; tip?: number }): Vec2[] {
+  return strokeCurve(curveNodes(shape), shape.width, shape.tip).outline;
 }
 
 // How many convex pieces an authored curve builds as - the same question the
@@ -573,8 +574,9 @@ export function curvePieceCount(shape: {
   verts: Vec2[];
   handles: { in: Vec2; out: Vec2 }[];
   width: number;
+  tip?: number;
 }): number {
-  return strokeCurve(curveNodes(shape), shape.width).pieces.length;
+  return strokeCurve(curveNodes(shape), shape.width, shape.tip).pieces.length;
 }
 
 // An editor path's nodes as `lib/path` deals in them: the points and their two
@@ -2036,6 +2038,17 @@ export function drawEditor(
     selected: { vineId: number; index: number } | null;
     draft: { root: Vec2; to: Vec2; radius: number; valid: boolean } | null;
   } = { selected: null, draft: null },
+  // A root branch being drawn (`rootDraft` in editor.ts): its nodes and their
+  // handles so far, where the pointer is, the widths it will taper between,
+  // and the junction on its parent if it grows out of one.
+  rootDraft: {
+    verts: readonly Vec2[];
+    handles: readonly { in: Vec2; out: Vec2 }[];
+    cursor: Vec2;
+    width: number;
+    tip: number;
+    from: Vec2 | null;
+  } | null = null,
 ): void {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   // The backdrop is the editor's own paper. With a 3D scene underneath, this
@@ -2635,6 +2648,60 @@ export function drawEditor(
       ctx.lineWidth = worldLine * 1.5;
       ctx.beginPath();
       ctx.arc(v[0]!.x, v[0]!.y, worldLine * 6, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  }
+
+  // A ROOT being drawn (`rootDraft` in editor.ts): the branch it would grow
+  // into, tapered, with the pointer as its next node - so the width it will
+  // have is judged while the curve is still being placed - and every node's
+  // Bézier handles, the pen-tool way, so the drag that pulls them out shows
+  // what it is pulling. The junction a branch grows from wears a ring.
+  if (rootDraft && rootDraft.verts.length) {
+    const v = rootDraft.verts;
+    const nodes = [
+      ...v.map((p, i) => ({ p, in: rootDraft.handles[i]?.in ?? Vec2.ZERO, out: rootDraft.handles[i]?.out ?? Vec2.ZERO })),
+      ...(rootDraft.cursor.distanceTo(v[v.length - 1]!) > 1e-6
+        ? [{ p: rootDraft.cursor, in: Vec2.ZERO, out: Vec2.ZERO }]
+        : []),
+    ];
+    if (nodes.length >= 2) {
+      const outline = strokeCurve(nodes, rootDraft.width, rootDraft.tip).outline;
+      if (outline.length >= 3) {
+        ctx.fillStyle = hexToRgba(DEFAULT_ROOT_COLOR, 0.45);
+        ctx.strokeStyle = SELECT;
+        ctx.lineWidth = worldLine * 1.5;
+        ctx.beginPath();
+        outline.forEach((q, i) => (i === 0 ? ctx.moveTo(q.x, q.y) : ctx.lineTo(q.x, q.y)));
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+      }
+    }
+    ctx.strokeStyle = SELECT;
+    ctx.fillStyle = SELECT;
+    ctx.lineWidth = worldLine;
+    v.forEach((q, i) => {
+      const h = rootDraft.handles[i];
+      for (const off of h ? [h.in, h.out] : []) {
+        if (off.lengthSquared() === 0) continue;
+        const end = q.add(off);
+        ctx.beginPath();
+        ctx.moveTo(q.x, q.y);
+        ctx.lineTo(end.x, end.y);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(end.x, end.y, worldLine * 2.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.beginPath();
+      ctx.arc(q.x, q.y, worldLine * 3, 0, Math.PI * 2);
+      ctx.fill();
+    });
+    if (rootDraft.from) {
+      ctx.lineWidth = worldLine * 1.5;
+      ctx.beginPath();
+      ctx.arc(rootDraft.from.x, rootDraft.from.y, worldLine * 6, 0, Math.PI * 2);
       ctx.stroke();
     }
   }

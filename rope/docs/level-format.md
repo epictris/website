@@ -56,6 +56,10 @@ The **`meta`** block is what the level select reads: a `title` to show, `intro` 
 Nothing in it is a length, so it crosses `scaleLevelData` whole; everything in it is optional, so a level that authors no block is a listed level named after its registry id.
 The editor carries it through `EdModel.meta` and offers it as the **Level** panel, for the reason `hang` and the environment block are carried: a block the model does not know about is a block the first autosave deletes.
 
+A collision `curve` may **taper**: `tip` is its width at its last node, `width` at its first (a length, absent = a bar of one width, built bit-identically).
+A curve may be a **root** branch: `root: {}` for a trunk, `root: { parent, at }` for a branch growing out of the root piece at index `parent` in the same body's `objects`, `at` (a fraction of that piece's arc length) along it, its own first node being that junction - see [**Roots**](roots.md#the-format).
+`parent` is an index and `at` a fraction, so `scaleLevelData` carries both untouched; the editor renumbers `parent` on every save to the order it writes the body's objects in, and `cli levels` reports a branch whose first node is off its junction.
+
 A body may be the level's **finish line**: `kind: "finish"`, the region the player crosses to complete the level - see [**The finish line**](levels.md#the-finish-line).
 A KIND rather than a flag, because it is what the body is: a `finish` body builds an `Area2D` and nothing else, exactly as a `killzone` does, and there is no body a finish line and a wall could both be pieces of (`isAreaKind`).
 The gantry that marks it is the body's dressing in the level's Blender scene (an object named like the body), so what is drawn and what is crossed still move together.

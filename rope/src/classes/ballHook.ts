@@ -23,7 +23,8 @@ import { PX } from "../engine/units";
 import { circleShape, nearestSurfacePoint, shapeWorldVertices, type ShapeTransform } from "../engine/shapes";
 import { bodySweepConvex } from "../engine/collision";
 import { shapeContacts } from "../engine/manifold";
-import { CONTACT_SLOP } from "../engine/world";
+import { CONTACT_SLOP, GRAVITY } from "../engine/world";
+import { Mathf } from "../engine/mathf";
 import { Density, ShapeGeometry } from "../lib/shapeGeometry";
 import { Vec2 } from "../engine/vec2";
 import { MANACLE_HINGE_LOCAL, MANACLE_REACH, manacleShape } from "../lib/manacle";
@@ -79,6 +80,10 @@ export class BallHook extends RigidBody2D {
   // too short to have a direction). Set by the owner; read every step by
   // `alignToChain`, which is the only thing that turns this body.
   facing: (() => Vec2 | null) | null = null;
+  // Whether the chain is pulling on the cuff, set by the owner. A dangling tip
+  // resting on a surface lies flat on it, and only a taut chain may turn it
+  // round to face the other way (see `lieFlat`).
+  chainTaut: (() => boolean) | null = null;
   private armed = true;
   // Pieces this hook does not bite, however armed it is: the viscous faces it
   // has already crept out of (`shed`). A cuff that drops out of mud is left
@@ -188,11 +193,82 @@ export class BallHook extends RigidBody2D {
   // the hinge the chain is budgeted to and the bar the sweep flies both follow
   // from the rotation, so it has to be settled first. The angular velocity is
   // held at zero so integration adds nothing to what was set here.
-  private alignToChain(): void {
-    const dir = this.facing?.() ?? null;
-    if (dir !== null && (dir.x !== 0 || dir.y !== 0)) this.globalRotation = dir.angle();
+  private alignToChain(dt: number): void {
+    const chain = this.facing?.() ?? null;
+    if (chain !== null && (chain.x !== 0 || chain.y !== 0)) {
+      const flat = this.flying ? null : this.lieFlat(chain);
+      if (flat === null) this.globalRotation = chain.angle();
+      else {
+        // Laid down at a bounded rate rather than in one step: a tip that lands
+        // hanging hinge-up tips over onto the floor instead of popping flat.
+        const turn = Vec2.RIGHT.rotated(this.globalRotation).angleTo(flat);
+        const most = BallHook.LIE_DOWN_RATE * dt;
+        this.globalRotation += Mathf.clamp(turn, -most, most);
+      }
+    }
     this.angularVelocity = 0;
   }
+
+  // How fast a resting tip is laid flat, in rad/s: a quarter turn in about six
+  // frames, the pace of a ring falling over.
+  private static readonly LIE_DOWN_RATE = 15;
+
+  // Which way a DANGLING tip resting on a surface lies: flat along it, hinge
+  // toward the chain - or null when it is resting on nothing, and trails the
+  // chain like any free cuff.
+  //
+  // The chain's facing alone is wrong on a floor. With chain to spare the sim's
+  // span is a straight line from the tip to the ball's mounting loop, which
+  // orbits the rim as the ball rolls, so a tip lying still on the ground was
+  // turned after the loop every frame and rocked on its mouth corner with every
+  // roll of the ball (`session-391f`: 15 degrees each way, the tip never moving
+  // a millimetre). A slack chain is not pulling on anything; the cuff lies the
+  // way it fell. So which END faces which way is kept from the cuff's present
+  // facing while the chain is slack, and only a TAUT chain - one dragging the
+  // hinge - turns it round, once it is clearly pulling from the other side.
+  private lieFlat(chain: Vec2): Vec2 | null {
+    const normal = this.restingNormal();
+    if (normal === null) return null;
+    const along = normal.orthogonal();
+    const pull = along.dot(chain);
+    const taut = this.chainTaut?.() ?? false;
+    const now = along.dot(Vec2.RIGHT.rotated(this.globalRotation));
+    const side = taut && Mathf.abs(pull) > BallHook.TURN_ROUND_PULL ? pull : now !== 0 ? now : pull;
+    return side < 0 ? along.neg() : along;
+  }
+
+  // How squarely along the surface a taut chain must pull, as the cosine of
+  // its angle off it, before it turns a lying cuff round: a chain going
+  // straight up off the tip is lifting it, not dragging it one way or the other.
+  private static readonly TURN_ROUND_PULL = 0.5;
+
+  // The surface a dangling tip is lying on: the outward normal of the deepest
+  // contact the bar has, within the probe's margin, with anything it is in
+  // the way of - provided that surface holds it up against gravity (no steeper
+  // than `REST_SLOPE`). A wall the tip is leaning on is not a floor it lies on.
+  private restingNormal(): Vec2 | null {
+    if (!this.world) return null;
+    const bar = this.primaryShape();
+    const up = GRAVITY.normalized().neg();
+    let best: { normal: Vec2; depth: number } | null = null;
+    for (const body of this.world.intersectCircle(this.globalPosition, MANACLE_REACH + BallHook.PROBE_MARGIN)) {
+      if (body === this || body.name === "Player") continue;
+      if (!(body instanceof StaticBody2D || body instanceof RigidBody2D)) continue;
+      for (const s of body.getShapes()) {
+        if (!this.reaches(s)) continue;
+        for (const c of shapeContacts(bar, s, BallHook.PROBE_MARGIN)) {
+          if (c.normal.dot(up) < BallHook.REST_SLOPE) continue;
+          if (best === null || c.depth > best.depth) best = { normal: c.normal, depth: c.depth };
+        }
+      }
+    }
+    return best?.normal ?? null;
+  }
+
+  // The steepest surface a tip lies flat on, as the cosine of its slope: 60
+  // degrees, past the 31 the tip's static friction holds on, so a tip sliding
+  // down a slope lies along it too.
+  private static readonly REST_SLOPE = 0.5;
 
   // A weight on the end of the chain and nothing more: it no longer anchors to
   // what it touches. What a ring that has run off the open end of a rail comes
@@ -328,7 +404,7 @@ export class BallHook extends RigidBody2D {
   // its tip held by geometry, fed the winch stall a blocked correction every one
   // of those frames and grew from 64 cm to 3.58 m.
   physicsStep(dt: number): void {
-    this.alignToChain();
+    this.alignToChain(dt);
     if (!this.armed || !this.world) return;
     if (this.attachToBlockingContact()) return;
     const from = this.globalPosition;

@@ -193,7 +193,9 @@ function inRange(frame: number, from: number, to: number): boolean {
   return frame >= from && frame <= to;
 }
 
-class ScriptedInput {
+// Exported for the suites that drive a level by a script without the runner's
+// monitors (`rootCases.ts` lays the 3D chain off the level it leaves).
+export class ScriptedInput {
   private prev: FrameInput = emptyFrameInput();
   constructor(private script: PlaytestScript) {}
 

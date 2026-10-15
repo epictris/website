@@ -119,6 +119,7 @@ Rope geometry and surfaces
 - [scene-chains](docs/scene-chains.md) - authored chains, the coupled sweep, the settle, anchors and wrap points; tied chains (a rope bridge) and their substepped island solver, the ball's chain as a row of that island with its winch as a drum, and the parked row an authored chain can be solved as.
 - [vines](docs/vines.md) - pass-through link chains, the load rope, stiffness, spans, sleep, drawing, authoring.
 - [vine-ring](docs/vine-ring.md) - the manacle threaded onto a vine as a creeping ring.
+- [roots](docs/roots.md) - `+ Root`: trees of tapered curves in one hook-only body, branches kept on their parents, the generated root mesh, springing about the base.
 
 Bodies and the solver
 

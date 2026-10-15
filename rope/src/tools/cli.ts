@@ -2348,6 +2348,9 @@ switch (cmd) {
   case "rails":
     void cmdRails();
     break;
+  case "roots":
+    void cmdRoots();
+    break;
   case "belts":
     void cmdBelts();
     break;
@@ -2926,6 +2929,28 @@ async function cmdRails(): Promise<void> {
   }
   const x = xfail > 0 ? ` (${xfail} expected-fail)` : "";
   console.log(`[rails] ${results.length - failed}/${results.length} cases passed${x}`);
+  process.exit(failed > 0 ? 1 : 0);
+}
+
+// Root cases (src/sim/rootCases.ts, docs/roots.md). A root is tapered curves
+// in a hook-only body, wired to mechanisms that have suites of their own, so
+// this asserts the wiring: the taper tiles, the tree survives the format and
+// the editor, only the hook finds one, a sprung one hinges at its base, the
+// lint sees a broken tree, and the drawn mesh is the bar it stands for.
+async function cmdRoots(): Promise<void> {
+  const { runRootCases } = await import("../sim/rootCases");
+  const results = runRootCases();
+  let failed = 0;
+  for (const r of results) {
+    const stale = r.passed && r.expectedFail;
+    const bad = stale || (!r.passed && !r.expectedFail);
+    const tag = stale ? "STALE" : r.expectedFail ? "XFAIL" : r.passed ? "PASS " : "FAIL ";
+    console.log(`  ${tag} ${r.name}`);
+    for (const d of r.details) console.log(`        ${d}`);
+    if (stale) console.log(`        this case is marked expectedFail but PASSED - delete the marker`);
+    if (bad) failed++;
+  }
+  console.log(`[roots] ${results.length - failed}/${results.length} cases passed`);
   process.exit(failed > 0 ? 1 : 0);
 }
 

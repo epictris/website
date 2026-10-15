@@ -18,11 +18,17 @@ import { PX } from "../engine/units";
 import { rectShape, type Shape } from "../engine/shapes";
 import { Vec2 } from "../engine/vec2";
 
-// The cuff's centreline radius, and the bar stock it is forged from. The jaws
-// are drawn shut always - a manacle on a chain is a ring, and the swing was one
-// more thing to keep the collision shape in step with for no gain.
+// The cuff's centreline radius, and the band's thickness from bore to rim. The
+// jaws are drawn shut always - a manacle on a chain is a ring, and the swing was
+// one more thing to keep the collision shape in step with for no gain.
 export const MANACLE_RADIUS = 4.5 * PX;
 export const MANACLE_BAND = 1.7 * PX;
+
+// The band's width along the ring's own axis: a broad strap of iron, not a ring
+// of round bar - about two fifths of the cuff's diameter, like a real leg iron.
+// Seen edge-on this is how thick the bar the camera sees is, and threaded on a
+// vine or a rail it is how much of it the cuff covers.
+export const MANACLE_WIDTH = 4.4 * PX;
 
 // The ring's bounding radius: half its length, mouth to hinge, the band's own
 // outer edge. How far ANY point of the manacle can stand from its centre, and
@@ -33,10 +39,10 @@ export const MANACLE_BAND = 1.7 * PX;
 export const MANACLE_REACH = MANACLE_RADIUS + MANACLE_BAND / 2;
 
 // The bar the sim collides as: the ring's whole length along its long axis,
-// and across it the lock housing, which is the widest thing on the cuff. The
-// band and the hinge knuckle both stay inside that depth.
+// and across it the band's width, which is the widest thing on the cuff. The
+// lock, the hinge knuckles and the rivets all stay inside that depth.
 export const MANACLE_LENGTH = 2 * MANACLE_REACH;
-export const MANACLE_THICKNESS = MANACLE_BAND * 1.3;
+export const MANACLE_THICKNESS = MANACLE_WIDTH;
 
 // Where the chain is shackled: the hinge pin, on the ring's centreline at the
 // far end from the mouth, as an offset from the cuff's centre along its own +x.

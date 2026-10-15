@@ -1,0 +1,76 @@
+{
+  "level": "ball-root-swing",
+  "controller": "ball",
+  "frames": 700,
+  "spawn": {
+    "x": 1.2,
+    "y": -1.0
+  },
+  "holds": [
+    {
+      "action": "deploy",
+      "from": 5,
+      "to": 700
+    }
+  ],
+  "aim": [
+    {
+      "from": 1,
+      "to": 10,
+      "x": -1.2,
+      "y": -1.0,
+      "relative": true
+    }
+  ],
+  "data": {
+    "player": { "x": 0, "y": 0, "radius": 8 },
+    "bodies": [
+      {
+        "kind": "static",
+        "passable": true,
+        "x": 0,
+        "y": -200,
+        "rot": 0,
+        "color": "#7a5a40",
+        "objects": [
+          {
+            "type": "collision",
+            "shape": {
+              "kind": "curve",
+              "width": 16,
+              "tip": 3,
+              "verts": [
+                { "x": -150, "y": -10, "outX": 60, "outY": 10 },
+                { "x": 150, "y": 10, "inX": -60, "inY": 0 }
+              ]
+            },
+            "root": {}
+          },
+          {
+            "type": "collision",
+            "shape": {
+              "kind": "curve",
+              "width": 9,
+              "tip": 2,
+              "verts": [
+                { "x": -21.268971019849737, "y": 2.2905631359455336 },
+                { "x": 30, "y": 70, "inX": -10, "inY": -20 }
+              ]
+            },
+            "root": { "parent": 0, "at": 0.43 }
+          }
+        ]
+      }
+    ]
+  },
+  "asserts": [
+    {
+      "window": {
+        "from": 60,
+        "to": 700
+      },
+      "minSwings": 2,
+      "maxTravelX": 3.0
+    }
+  ]
+}

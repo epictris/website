@@ -43,6 +43,7 @@ import { outlineOfData, outlineOfShape, type Outline } from "../render/shapePath
 import { localPlacement, objectDepth, worldPlacement, type BuiltBody } from "../level/buildBodies";
 import {
   DEFAULT_BODY_COLOR,
+  DEFAULT_ROOT_COLOR,
   isCollisionObject,
   isLightObject,
   type BeltLook,
@@ -56,6 +57,7 @@ import type { FoamSurface, StillSurface } from "./stillWater";
 import { DEFAULT_LIGHT_Z, LightRig, type DrivenEmission, type MountedLight } from "./lights";
 import { isWaking } from "./glow";
 import { BeltRing, BeltTread } from "./beltTread";
+import { rootBarkMaterial, rootGeometry } from "./rootMesh";
 import { beltLoopOf } from "../render/beltTread";
 import { orientTo, placeAt, threeY } from "./space";
 
@@ -158,6 +160,19 @@ export function debugLookOf(
   };
 }
 
+// Everything a body's ROOTS are grown from (`mountRoots`): each root piece's
+// curve, placement and place in the tree, and the body's colour its bark is
+// tinted by. Empty for a body with none, so a body never rebuilds roots it does
+// not have.
+function rootSignatureOf(data: LevelBodyData): string {
+  const roots = data.objects.flatMap((o, i) =>
+    isCollisionObject(o) && o.root && o.shape.kind === "curve"
+      ? [{ i, shape: o.shape, root: o.root, place: worldPlacement(data, o) }]
+      : [],
+  );
+  return roots.length ? JSON.stringify({ color: data.color, roots }) : "";
+}
+
 // Everything a body's debug geometry is built from, as a string two builds can
 // be compared by (`BodyVisual.restyleDebug`): for each piece that draws one,
 // where it is in the world, its outline and its resolved look.
@@ -193,6 +208,12 @@ export function pickTagOf(obj: THREE.Object3D): unknown {
 
 export class BodyVisual {
   readonly root = new THREE.Group();
+  // How far off the gameplay plane this body is drawn, metres (+z toward the
+  // camera): `ANCHOR_Z` for hook-only scenery, which sits behind the level it
+  // decorates, and the plane for everything else. The ball's cuff is drawn at
+  // it when it bites the body (`ChainLayer.sync`), so a cuff bitten into a
+  // root sits in the root rather than in front of it.
+  readonly depth: number;
   // Which frame the world was last seen holding this body. `Scene3D` stamps it
   // and sweeps what it did not stamp, which is how a destroyed hook's visual
   // leaves the scene without every frame paying for a membership search.
@@ -240,6 +261,11 @@ export class BodyVisual {
   // data itself, which a change of `debugForced` builds them again from.
   private debugSignature = "";
   private debugData: LevelBodyData | null = null;
+  // The ROOT branches this body grows (`mountRoots`), kept apart from `owned`
+  // for the reason the debug pieces are: the editor rebuilds them in place as
+  // a branch is drawn and reshaped (`restyleDebug`).
+  private readonly rootPieces: { piece: THREE.Group; geometry: THREE.BufferGeometry }[] = [];
+  private rootSignature = "";
 
   // `body` is what moves and is null for an authored body that built nothing;
   // `built` is the authored side and is null for a body the sim spawned at
@@ -259,6 +285,7 @@ export class BodyVisual {
     // says so, the flat grate lattice being 2D-mode only (see docs/game-design.md
     // and `render/renderer.ts`). Anything else sits on the gameplay plane.
     const solidZ = body?.passable === true ? ANCHOR_Z : 0;
+    this.depth = solidZ;
 
     if (data?.kind === "water") {
       // Water has its own renderer (see `water.ts`): its look is not a surface
@@ -301,6 +328,7 @@ export class BodyVisual {
       const local = localPlacement(built, o);
       this.mountBelt(this.piece(local.pos.x, local.pos.y, local.rot, o), o.shape, data.color, solidZ);
     }
+    this.mountRoots(data, solidZ);
     this.mountDebug(data, solidZ);
 
     // Lights last, so the budgets are spent in authored order and a light is
@@ -445,12 +473,60 @@ export class BodyVisual {
   // `data` is the edited body, object for object the one this was built from.
   // Returns whether anything was rebuilt; a body whose debug geometry did not
   // change is left alone.
+  //
+  // A body's ROOTS are rebuilt here too, by the same argument: the editor's
+  // scene key leaves a root's curve out (`sceneKeyOf`), so drawing out a
+  // branch, dragging its nodes or retuning its taper reaches the scene as this
+  // in-place rebuild of the one body's branches rather than a whole new scene.
   restyleDebug(data: LevelBodyData): boolean {
     if (!this.built || data.objects.length !== this.built.data.objects.length) return false;
-    if (debugSignatureOf(data, this.debugForced) === this.debugSignature) return false;
-    this.disposeDebug();
-    this.mountDebug(data, this.debugZ);
-    return true;
+    let rebuilt = false;
+    if (rootSignatureOf(data) !== this.rootSignature) {
+      this.disposeRoots();
+      this.mountRoots(data, this.debugZ);
+      rebuilt = true;
+    }
+    if (debugSignatureOf(data, this.debugForced) !== this.debugSignature) {
+      this.disposeDebug();
+      this.mountDebug(data, this.debugZ);
+      rebuilt = true;
+    }
+    return rebuilt;
+  }
+
+  // Every ROOT branch of this body (`CollisionObjectData.root`) as its
+  // generated mesh (`rootMesh.ts`), placed against the built frame exactly as
+  // a debug piece is and tagged with its authored object, so a click on a
+  // branch in the 3D view picks that branch. Drawn in every level, scene or
+  // not: what the scene cannot draw is a root grown from the curves the level
+  // states.
+  private mountRoots(data: LevelBodyData, z: number): void {
+    const built = this.built!;
+    this.debugZ = z;
+    const material = rootBarkMaterial(data.color ?? DEFAULT_ROOT_COLOR);
+    data.objects.forEach((o, i) => {
+      if (!isCollisionObject(o) || !o.root || o.shape.kind !== "curve") return;
+      const geometry = rootGeometry(o.shape, { trunk: o.root.parent === undefined, seed: i });
+      if (!geometry) return;
+      const world = worldPlacement(data, o);
+      const pos = world.pos.sub(built.origin).rotated(-built.rotation);
+      const piece = this.piece(pos.x, pos.y, world.rot - built.rotation, built.data.objects[i] ?? o);
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      mesh.position.z = z;
+      piece.add(mesh);
+      this.rootPieces.push({ piece, geometry });
+    });
+    this.rootSignature = rootSignatureOf(data);
+  }
+
+  private disposeRoots(): void {
+    for (const p of this.rootPieces) {
+      p.piece.removeFromParent();
+      p.geometry.dispose();
+    }
+    this.rootPieces.length = 0;
   }
 
   private disposeDebug(): void {
@@ -516,6 +592,7 @@ export class BodyVisual {
 
   dispose(): void {
     this.disposeDebug();
+    this.disposeRoots();
     for (const l of this.lights) this.rig?.drop(l);
     this.lights.length = 0;
     this.driven.length = 0;

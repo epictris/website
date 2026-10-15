@@ -1,11 +1,11 @@
-import { MANACLE_BAND, MANACLE_RADIUS } from "../lib/manacle";
+import { MANACLE_BAND, MANACLE_RADIUS, MANACLE_WIDTH } from "../lib/manacle";
 import { leafSpring } from "./vineLeafLag";
 
 // The ball's ring is a solid annulus around the cord: its bore and its rim,
-// measured from the cord's axis, and the band's axial thickness.
+// measured from the cord's axis, and the band's width along it.
 const RING_BORE = MANACLE_RADIUS - MANACLE_BAND / 2;
 const RING_RIM = MANACLE_RADIUS + MANACLE_BAND / 2;
-export const RING_HALF_WIDTH = MANACLE_BAND / 2;
+export const RING_HALF_WIDTH = MANACLE_WIDTH / 2;
 
 // A pressed blade wraps the stem this far off its surface (`VineLayer`'s wrap)
 // - or this far inside the ring's bore, if that is nearer the axis. The braid

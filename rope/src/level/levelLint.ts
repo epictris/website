@@ -31,7 +31,9 @@
 // its line as thin as the gate it stands in, and the lint has nothing to say
 // about the size of one.
 
-import { collides, normalizeLevelData, type LevelData } from "./levelFormat";
+import { collides, normalizeLevelData, scaleLevelData, type LevelData } from "./levelFormat";
+import { rootProblems } from "./roots";
+import { PX } from "../engine/units";
 import { LEVELS, listedLevels } from "./registry";
 import { nodeNameOf } from "../render3d/scenes";
 
@@ -150,6 +152,23 @@ export function runLevelChecks(): LevelCheck[] {
       else sameName.push(`${id}: bodies ${first} and ${i} are both "${node}"`);
     });
   }
+  // ROOTS hold together (docs/roots.md): every branch grows out of another
+  // root in its own body, from the point it names along it. A branch whose base
+  // has drifted off its parent still builds and still bites - it is only seen
+  // in 3D, floating - so it is caught here. In metres, the units the junction
+  // is measured on (`rootProblems`).
+  const roots: string[] = [];
+  for (const [id, spec] of Object.entries(LEVELS)) {
+    scaleLevelData(spec.data, PX).bodies.forEach((b, i) => {
+      for (const p of rootProblems(b)) roots.push(`${id}: body ${i}: ${p}`);
+    });
+  }
+  checks.push({
+    name: "levels: every root branch grows out of its root",
+    pass: roots.length === 0,
+    detail: roots.length === 0 ? "every branch starts on its junction" : roots.join("; "),
+  });
+
   checks.push({
     name: "levels: no two bodies in a level share a name",
     pass: sameName.length === 0,

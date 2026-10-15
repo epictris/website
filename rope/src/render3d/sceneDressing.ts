@@ -269,6 +269,8 @@ export class SceneDressing {
   // What was bound, for a probe or a panel; empty until the file lands.
   bound: Map<string, THREE.Object3D> = new Map();
   unbound: string[] = [];
+  // Whether it is drawn (`setShown`), held for a file that has not landed yet.
+  private shown = true;
 
   // `landed` is handed the scenery once it is mounted, for what the scene
   // itself still draws over it (the pool's water, `Scene3D.adoptSceneryWater`).
@@ -280,6 +282,7 @@ export class SceneDressing {
       this.bound = dressed.bound;
       this.unbound = dressed.unbound;
       this.root.add(dressed.scenery);
+      this.setShown(this.shown);
       landed?.(dressed.scenery);
       // Where each bound node landed, in the world, so a headless grab's log
       // says whether the dressing is on its body (see docs/blender-scenes.md).
@@ -295,6 +298,14 @@ export class SceneDressing {
         console.warn(`[render3d] scene "${scene}": no object named ${dressed.unbound.join(", ")}`);
       }
     });
+  }
+
+  // Draw the scene or hide all of it: the scenery under `root`, and the bound
+  // nodes, which live under the bodies' roots rather than here.
+  setShown(on: boolean): void {
+    this.shown = on;
+    this.root.visible = on;
+    for (const node of this.bound.values()) node.visible = on;
   }
 
   dispose(): void {

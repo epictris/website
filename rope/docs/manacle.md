@@ -1,6 +1,7 @@
 # The manacle
 
-The chain's far end is a manacle, and since 2026-09-08 it is a RING SEEN EDGE-ON: its axis lies in the gameplay plane, square to the chain, so what the camera sees and what the sim collides is the ring's silhouette - a bar as long as the ring is wide and as thick as the lock housing that stands proudest of its band (`lib/manacle.ts`: `manacleShape`, `MANACLE_LENGTH` by `MANACLE_THICKNESS`).
+The chain's far end is a manacle, and since 2026-09-08 it is a RING SEEN EDGE-ON: its axis lies in the gameplay plane, square to the chain, so what the camera sees and what the sim collides is the ring's silhouette - a bar as long as the ring is wide and as thick as its band is broad (`lib/manacle.ts`: `manacleShape`, `MANACLE_LENGTH` by `MANACLE_THICKNESS`, which is `MANACLE_WIDTH`).
+Since 2026-10-13 the band is a leg iron's strap, 4.4 cm across - two fifths of the ring's diameter - where it was a ring of 1.7 cm round bar; the hinge knuckles, the lock plate and the rivets all stand inside the bar.
 The chain is shackled to the HINGE PIN at one end of that bar (`MANACLE_HINGE` along the cuff's own +x) and the jaws meet under the lock at the other, which is the end that leads a throw and bites.
 It was a disc lying in the plane, drawn flat-on with the chain ending at its centre, and the disc's face is the one thing a ring never shows a camera looking down its chain.
 
@@ -15,7 +16,13 @@ Their polygon rule walked to the vertex adjacent to the contact, which for a bit
 
 **The hook's rotation is driven, not integrated.** Every step turns the bar to face back along the chain (`BallHook.alignToChain`, off `chainEndFacing` over the sim's own path), the way a shackle on the end of a chain trails the chain, so the drawn cuff, the bar the sim collides and the hinge the chain is measured to cannot come apart.
 It is told to the contact solver and the rope solver in the vocabulary they already have for the steered ball (`kinematicRotation`: infinite rotational inertia, no torque arm), so neither spends an impulse on a spin the next step overwrites.
-A resting tip therefore lies at the chain's angle rather than flat, propped on its mouth corner with the hinge toward the ball; a manacle with the chain pulling at its pin is a light body in series between the ball and the ground and would want a rotational degree of freedom of its own, and `session-225f` is the record of trying that for the rail ring.
+A manacle with the chain pulling at its pin is a light body in series between the ball and the ground and would want a rotational degree of freedom of its own, and `session-225f` is the record of trying that for the rail ring.
+
+**A dangling tip resting on a surface lies flat on it** (`BallHook.lieFlat`, 2026-10-13).
+Facing the chain alone, it did not: with chain to spare the sim's span is a straight line from the tip to the ball's mounting loop, which orbits the rim as the ball rolls, so a tip lying still on the floor was turned after the loop every frame and rocked 15 degrees each way on its mouth corner while it never moved a millimetre (`session-391f`).
+The surface is the deepest contact the bar has within the probe's margin that holds it up against gravity (no steeper than 60 degrees; a wall it leans on is not a floor), and the bar is laid along it at no more than 15 rad/s, so a tip landing hinge-up tips over rather than popping flat.
+Which end points which way is kept from the cuff's own facing while the chain is slack - a slack chain pulls on nothing - and only a TAUT chain pulling clearly along the surface from the other side turns it round.
+A thrown hook and a tip resting on nothing trail the chain as before.
 
 **The bar is swept as the loop it is** (`sweepConvex` in `engine/collision.ts`): the separating-axis sweep of a translating convex loop against a convex piece - in the plane the only axes that can separate two convex polygons are their face normals, and under a pure translation each axis's two intervals close at one exact time, so the first contact is the latest of those and the axis that closes last is the face they meet on.
 Against a circle it is `sweepCirclePoly` run the other way round.

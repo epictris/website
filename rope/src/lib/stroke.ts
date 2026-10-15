@@ -61,11 +61,25 @@ export interface Stroke {
   pieceAt: number[];
   // The union's boundary, in order, for drawing.
   outline: Vec2[];
+  // The half-width at each point of `line`, for a TAPERED stroke
+  // (`strokeTaperedCurve`); null for a bar of one width, which is `halfWidth`
+  // everywhere.
+  halfWidths: number[] | null;
 }
 
 // The stroke of an authored node list. `width` is the full width of the bar;
 // everything below works in half-widths.
-export function strokeCurve(nodes: readonly PathNode[], width: number): Stroke {
+//
+// `tip`, when given, TAPERS the bar (`ShapeData`'s `curve`): `width` at the
+// first node, `tip` at the last, linear in arc length along the line between
+// (`taperedHalfWidths`). The tolerance is taken against the narrower end, so
+// the thin end of a root is not straightened by its thick end's allowance.
+export function strokeCurve(nodes: readonly PathNode[], width: number, tip?: number): Stroke {
+  if (tip !== undefined) {
+    const line = curveLine(nodes, width, tip);
+    const widths = taperedHalfWidths(line, width, tip);
+    return strokeLine(line, widths[0] ?? 0, widths);
+  }
   const halfWidth = Math.max(width, 0) * 0.5;
   const tolerance = Math.min(STROKE_TOLERANCE, halfWidth * 0.2);
   return strokeLine(simplifyPolyline(dedupe(flattenPath(nodes)), tolerance), halfWidth);
@@ -74,9 +88,41 @@ export function strokeCurve(nodes: readonly PathNode[], width: number): Stroke {
 // The centreline of an authored node list, which is the stroke's `line` and
 // nothing else: the same flattening and the same simplification, for the
 // callers that want where the bar runs without what it is made of.
-export function curveLine(nodes: readonly PathNode[], width: number): Vec2[] {
-  const halfWidth = Math.max(width, 0) * 0.5;
-  return simplifyPolyline(dedupe(flattenPath(nodes)), Math.min(STROKE_TOLERANCE, halfWidth * 0.2));
+export function curveLine(nodes: readonly PathNode[], width: number, tip?: number): Vec2[] {
+  const halfWidth = Math.max(tip === undefined ? width : Math.min(width, taperTip(tip)), 0) * 0.5;
+  const flat = tip === undefined ? flattenPath(nodes) : flattenPath(nodes, TAPER_FLATTEN_STEP);
+  return simplifyPolyline(dedupe(flat), Math.min(STROKE_TOLERANCE, halfWidth * 0.2));
+}
+
+// How finely a TAPERED curve is sampled before it is simplified, metres of
+// control polygon. A root bends tighter than a rail and is drawn as a smooth
+// generated mesh (`render3d/rootMesh.ts`), which has to agree with what it
+// collides as: the default 25 cm leaves a chord up to 3 cm off a 30 cm bend,
+// where 5 cm leaves it inside the centimetre `STROKE_TOLERANCE` already allows.
+// The simplification drops whatever the finer sampling bought nothing with, so
+// the piece count is still the bend's and not the step's. The constant bar
+// keeps the default it was always built at.
+export const TAPER_FLATTEN_STEP = 0.05;
+
+// The narrowest a tapered bar may end, metres: a tip of nothing is a
+// degenerate last piece (two of its corners on one point), so a tip authored
+// at or below this ends at it instead. Half a centimetre is under anything the
+// game can tell apart from a point at play distance.
+export const MIN_TAPER_TIP = 0.005;
+
+function taperTip(tip: number): number {
+  return Math.max(tip, MIN_TAPER_TIP);
+}
+
+// The half-width at each point of a tapered bar's centreline: `width` at the
+// first point, `tip` at the last, linear in the arc length along `line`.
+export function taperedHalfWidths(line: readonly Vec2[], width: number, tip: number): number[] {
+  const base = Math.max(width, 0) * 0.5;
+  const end = taperTip(tip) * 0.5;
+  const along: number[] = [0];
+  for (let i = 1; i < line.length; i++) along.push(along[i - 1]! + line[i]!.distanceTo(line[i - 1]!));
+  const total = along[along.length - 1] ?? 0;
+  return along.map((s) => (total > 0 ? base + (end - base) * (s / total) : base));
 }
 
 // The stroke of a polyline that has already been flattened and simplified.
@@ -87,10 +133,21 @@ export function curveLine(nodes: readonly PathNode[], width: number): Vec2[] {
 // inside. Where the mitre would spike (`STROKE_MITER_LIMIT`) the outer side is
 // bevelled instead and the wedge between the two pieces becomes a triangle of
 // its own, which keeps the tiling exact.
-export function strokeLine(line: readonly Vec2[], halfWidth: number): Stroke {
+//
+// `halfWidths`, when given, is a half-width per point of `line` - a TAPERED
+// bar, whose pieces are the same quads with their two ends at different
+// widths. Every offset below reads its own point's half-width, so a joint is
+// mitred at the width the bar has there; absent, every point reads `halfWidth`
+// by the very arithmetic it always did.
+export function strokeLine(
+  line: readonly Vec2[],
+  halfWidth: number,
+  halfWidths: readonly number[] | null = null,
+): Stroke {
   const verts = line.map((v) => v.clone());
-  if (verts.length < 2 || halfWidth <= 0) {
-    return { line: verts, halfWidth, pieces: [], pieceAt: [], outline: [] };
+  const widths = halfWidths ? [...halfWidths] : null;
+  if (verts.length < 2 || halfWidth <= 0 || (widths && widths.length !== verts.length)) {
+    return { line: verts, halfWidth, pieces: [], pieceAt: [], outline: [], halfWidths: widths };
   }
   const n = verts.length;
   // Per segment: its unit direction and the normal to one side of it (Godot's
@@ -114,12 +171,13 @@ export function strokeLine(line: readonly Vec2[], halfWidth: number): Stroke {
   const bevelled: (1 | -1 | 0)[] = [];
   for (let i = 0; i < n; i++) {
     const v = verts[i]!;
+    const h = widths ? widths[i]! : halfWidth;
     const a = i > 0 ? norm[i - 1]! : null;
     const b = i + 1 < n ? norm[i]! : null;
     if (a === null || b === null) {
       const s = (a ?? b)!;
-      left.push([v.add(s.mul(halfWidth))]);
-      right.push([v.sub(s.mul(halfWidth))]);
+      left.push([v.add(s.mul(h))]);
+      right.push([v.sub(s.mul(h))]);
       bevelled.push(0);
       continue;
     }
@@ -130,8 +188,8 @@ export function strokeLine(line: readonly Vec2[], halfWidth: number): Stroke {
     // that sharp is a level-design pathology rather than a shape to be exact
     // about.
     if (cosHalf <= 1e-6) {
-      left.push([v.add(a.mul(halfWidth)), v.add(b.mul(halfWidth))]);
-      right.push([v.sub(a.mul(halfWidth)), v.sub(b.mul(halfWidth))]);
+      left.push([v.add(a.mul(h)), v.add(b.mul(h))]);
+      right.push([v.sub(a.mul(h)), v.sub(b.mul(h))]);
       bevelled.push(0);
       continue;
     }
@@ -145,7 +203,7 @@ export function strokeLine(line: readonly Vec2[], halfWidth: number): Stroke {
     const sinHalf = Math.sqrt(Math.max(0, 1 - cosHalf * cosHalf));
     const room = 0.45 * Math.min(len[i - 1]!, len[i]!);
     const reach = Math.min(
-      halfWidth / cosHalf,
+      h / cosHalf,
       sinHalf < 1e-9 ? Infinity : room / sinHalf,
     );
     // Which way the bar turns: the outer side is the one the turn leaves.
@@ -153,12 +211,12 @@ export function strokeLine(line: readonly Vec2[], halfWidth: number): Stroke {
     const bevel = 1 / cosHalf > STROKE_MITER_LIMIT;
     const outerLeft = turn > 0;
     if (bevel && outerLeft) {
-      left.push([v.add(a.mul(halfWidth)), v.add(b.mul(halfWidth))]);
+      left.push([v.add(a.mul(h)), v.add(b.mul(h))]);
       right.push([v.sub(unit.mul(reach))]);
       bevelled.push(1);
     } else if (bevel) {
       left.push([v.add(unit.mul(reach))]);
-      right.push([v.sub(a.mul(halfWidth)), v.sub(b.mul(halfWidth))]);
+      right.push([v.sub(a.mul(h)), v.sub(b.mul(h))]);
       bevelled.push(-1);
     } else {
       left.push([v.add(unit.mul(reach))]);
@@ -190,7 +248,7 @@ export function strokeLine(line: readonly Vec2[], halfWidth: number): Stroke {
   const outline: Vec2[] = [];
   for (let i = 0; i < n; i++) for (const p of left[i]!) outline.push(p);
   for (let i = n - 1; i >= 0; i--) for (let k = right[i]!.length - 1; k >= 0; k--) outline.push(right[i]![k]!);
-  return { line: verts, halfWidth, pieces, pieceAt, outline };
+  return { line: verts, halfWidth, pieces, pieceAt, outline, halfWidths: widths };
 }
 
 // Consecutive duplicates removed, so every segment has a direction.

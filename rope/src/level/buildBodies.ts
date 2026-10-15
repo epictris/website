@@ -349,8 +349,10 @@ function makePieces(body: LevelBodyData, o: CollisionObjectData): Piece[] {
     // centreline is placed in the world here, with the pieces, because the
     // body's own origin is not known until they are all mounted.
     const { pieces, line, halfWidth, pieceAt } = strokePieces(o.shape);
+    // A TAPERED curve is never a rail: the cuff rides a constant half-width
+    // (`RailCurve`), and a root is bitten, not clamped round.
     const rail: RailBuild | null =
-      o.rail === true && o.impermeable !== true
+      o.rail === true && o.impermeable !== true && o.shape.tip === undefined
         ? {
             line: line.map((v) => world.pos.add(v.rotated(world.rot))),
             halfWidth,
@@ -421,13 +423,13 @@ function beltPieces(shape: Extract<ShapeData, { kind: "belt" }>): { shape: Shape
 // built from and which piece covers each of its segments - all in the shape's
 // own local frame (`lib/stroke.ts` does the geometry; this is only the shape of
 // the answer the build wants).
-function strokePieces(shape: { verts: CurveVertData[]; width: number }): {
+function strokePieces(shape: { verts: CurveVertData[]; width: number; tip?: number }): {
   pieces: { shape: Shape; offset: Vec2 }[];
   line: Vec2[];
   halfWidth: number;
   pieceAt: number[];
 } {
-  const stroke = strokeCurve(pathNodesOf(shape.verts), shape.width);
+  const stroke = strokeCurve(pathNodesOf(shape.verts), shape.width, shape.tip);
   return {
     // Each quad is re-centred on its own centroid exactly as a decomposed
     // polygon's piece is, so the offset the loader removes goes back onto the

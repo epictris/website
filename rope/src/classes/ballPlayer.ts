@@ -1424,6 +1424,7 @@ export class BallPlayer extends RigidBody2D {
     hook.registerChainOutCallback(() => this.deployTip(BallPlayer.CHAIN_MAX_LENGTH));
     // Free - flying or dangling - the cuff trails the chain, hinge first.
     hook.facing = () => this.hookFacing(hook);
+    hook.chainTaut = () => this.chain?.isTaut ?? false;
   }
 
   // A clamped ring has run off the OPEN end of its rail (see `RopeClamp.coast`):

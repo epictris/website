@@ -98,6 +98,16 @@ A berry's root is a length down the vine, so changing the vine's length leaves e
 A berry vine's cord is its own woody brown, so the Braid and Color sections are not shown for one.
 At most eight berries a vine.
 
+## Roots
+
+`+ Root` (beside `+ Vine`) draws a root: press for each node and drag before releasing to pull out its Bézier handles, then Enter or a double-click (see [**Roots**](roots.md)).
+A stroke started ON a root grows a branch out of it, at any depth; anywhere else it starts a new root, a static hook-only body of its own.
+While the tool is armed the toolbar's `start width` and `tip` (px) set the widths new roots are drawn at, remembered by the browser; mid-draw they set the root or branch being drawn.
+While the tool is armed the selection's handles and gizmo stand down, so a press on a root always starts a branch.
+With the select tool a branch is edited like any curve, except that its first node is its junction: dragging it slides the branch along its parent, and it cannot be removed.
+Delete takes a branch and everything growing out of it; Ctrl+G of a branch into a body of its own makes it a trunk where it stands.
+The item panel has `start width`, `tip width` and `grows from`; the body panel's **Root** section has `springs`, which hinges the root at its trunk's base on a torsion spring.
+
 ## Conveyor belts
 
 `+ Belt` (beside `+ Circle`) lays a **conveyor**: press where the first wheel goes and drag to the second, or click to drop a two-wheel belt 1.5 m long running right at 1 m/s on 10 cm wheels under a 5 cm band (see [**Conveyor belts**](conveyors.md)).
@@ -337,6 +347,14 @@ The **water** box (ticked by default) hides the water: pools, currents, falls an
 The water's shaders are compiled the first time a body of it comes into view; in a 2026-10-09 trace that was a 16 ms frame plus a 149 ms GPU-process stall.
 Only the picture goes: the ball still floats and drags in the water.
 It is the renderer's (`Scene3D.setWaterShown` → `BodyVisual.setWaterShown`), never written to the level.
+
+The **scene** box (ticked by default) hides the level's Blender scene: the scenery and the nodes dressing the bodies alike, so the collision and what the game draws itself (water, belts, chains, lights, the ball) stand alone, in the editor's view and in ▶ Test.
+It is the renderer's (`Scene3D.setSceneShown` → `SceneDressing.setShown`), held for a file that has not landed yet, and never written to the level.
+Hidden scenery is not picked and not dropped onto: `Scene3D.hitsAt` skips any hit whose object or an ancestor is invisible, because three's raycaster tests hidden objects too.
+
+The toolbar's view boxes - **snap**, **edge clamp**, **all debug**, **reflections**, **shadows**, **water** and **scene** - are remembered by the browser (`localStorage` key `rope.editor.view`, `editor/prefs.ts`), so the editor opens as it was last left; each box writes itself back when it changes.
+So is the level last open (`rope.editor.level`), which a fresh editor reopens: it is written by Load and Save As, and cleared by New and Delete File, so an editor last left on an unnamed model opens empty.
+The reopen waits for the level list and is skipped for a name no longer on disk (forgotten, without a dialog) and for a model already edited while the list was on its way.
 
 `cli shot --probe --query "reflections=0&shadows=0&water=0"` replays a bundle with the same three switches off, so its log lists what an editor test set up that way still compiles mid-run.
 

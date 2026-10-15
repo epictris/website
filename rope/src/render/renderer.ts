@@ -33,7 +33,7 @@ import type { ViewTransform } from "./viewport";
 import type { HeldCamera } from "./cameraController";
 import { CHAIN_LINK_LEN, CHAIN_LINK_W, walkChain } from "./chainMetrics";
 import type { ChainRetract } from "./chainRetract";
-import { MANACLE_BAND, MANACLE_RADIUS, MANACLE_REACH, MANACLE_THICKNESS } from "../lib/manacle";
+import { MANACLE_HINGE, MANACLE_REACH, MANACLE_WIDTH } from "../lib/manacle";
 import { railPolyline } from "../lib/rail";
 import { beltBand, beltRenderTime, beltTreadPhase, beltTreadTicks } from "./beltTread";
 import { drawTrainingGrid } from "./trainingGrid";
@@ -1028,15 +1028,15 @@ function drawManacle(
   dir: Vec2,
   buriedUnder: Vec2 | null,
 ): void {
-  const R = MANACLE_RADIUS;
-  const BAND = MANACLE_BAND; // bar stock the cuff is forged from
-  const T = MANACLE_THICKNESS; // the lock housing's depth: the bar's thickness
+  const W = MANACLE_WIDTH; // the band's width: the bar's thickness
+  const PROUD = 0.3 * PX; // how far the hinge and the lock stand off the band
+  const KNUCKLE = MANACLE_REACH - MANACLE_HINGE; // the hinge barrel's radius
   ctx.save();
   ctx.translate(center.x, center.y);
   if (buriedUnder) {
     // The half-plane on the outward side of the face, generous enough to hold
     // the whole cuff at any angle.
-    const reach = MANACLE_REACH + T;
+    const reach = MANACLE_REACH + W;
     ctx.save();
     ctx.rotate(Math.atan2(buriedUnder.y, buriedUnder.x));
     ctx.beginPath();
@@ -1046,30 +1046,33 @@ function drawManacle(
   }
   ctx.rotate(Math.atan2(dir.y, dir.x)); // +x now points along `dir`
 
-  // The ring, edge-on: the band, hinge to mouth, with the band's own round
-  // section for its ends.
-  ctx.lineCap = "round";
-  ctx.lineWidth = BAND;
-  ctx.strokeStyle = MANACLE;
-  ctx.beginPath();
-  ctx.moveTo(-R, 0);
-  ctx.lineTo(R, 0);
-  ctx.stroke();
+  // The ring, edge-on: the band's outer face, hinge to mouth and the band's
+  // width across, standing inside the reach by the fittings' margin.
+  const face = MANACLE_REACH - PROUD;
+  ctx.fillStyle = MANACLE;
+  ctx.fillRect(-face, -W / 2, 2 * face, W);
 
-  // Lock: the housing over the mouth, holding the two jaw tips shut, with its
-  // keyhole. Set inward off the band's outer edge so it stays inside the bar.
+  // Lock: the plate over the mouth, holding the two jaw tips shut, with its
+  // keyhole; it stands off the band to the end of the bar.
   ctx.fillStyle = MANACLE_DARK;
-  ctx.fillRect(-MANACLE_REACH + 0.3 * PX, -T / 2, 2.6 * PX, T);
+  ctx.fillRect(-MANACLE_REACH, -W / 2 + 0.25 * PX, 1.6 * PX, W - 0.5 * PX);
   ctx.fillStyle = MANACLE;
   ctx.beginPath();
-  ctx.arc(-R + 0.7 * PX, 0, 0.45 * PX, 0, Math.PI * 2);
+  ctx.arc(-MANACLE_REACH + 0.8 * PX, 0, 0.45 * PX, 0, Math.PI * 2);
   ctx.fill();
 
-  // Hinge knuckle: the pin's barrel, its axis across the bar, so it is seen
-  // side-on as a short block at the hinge end - as wide as the bar, and set in
-  // from the ring's end by its own diameter so it stays inside the bar.
+  // Hinge: the pin's barrel, its axis across the bar, so it is seen side-on as
+  // a block the band's width at the hinge end, split into its three knuckles.
   ctx.fillStyle = MANACLE_DARK;
-  ctx.fillRect(MANACLE_REACH - T, -0.9 * PX, T, 1.8 * PX);
+  ctx.fillRect(MANACLE_HINGE - KNUCKLE, -W / 2, 2 * KNUCKLE, W);
+  ctx.strokeStyle = MANACLE;
+  ctx.lineWidth = 0.15 * PX;
+  ctx.beginPath();
+  for (const z of [-W / 6, W / 6]) {
+    ctx.moveTo(MANACLE_HINGE - KNUCKLE, z);
+    ctx.lineTo(MANACLE_REACH, z);
+  }
+  ctx.stroke();
 
   ctx.restore();
 }

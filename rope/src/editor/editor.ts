@@ -45,6 +45,7 @@ import {
   DEFAULT_WATER_FLOW,
   DEFAULT_BOUNCE,
   DEFAULT_LAUNCH,
+  DEFAULT_ROOT_COLOR,
   DEFAULT_SURFACE_FRICTION,
   type BodyKind,
   COLLISION_CATEGORIES,
@@ -185,6 +186,18 @@ import {
   routeWorldPoints,
 } from "./model";
 import { readClipboard, writeClipboard } from "./clipboard";
+import {
+  ROOT_TIP_WIDTH,
+  ROOT_TRUNK_WIDTH,
+  branchWidths,
+  isRootItem,
+  rootAt,
+  rootDescendants,
+  setRootSprings,
+  slideRootJunction,
+  syncRoots,
+  type RootItem,
+} from "./rootEditing";
 import { berryAlongAt, growBerry, moveBerry, placeBerry, removeBerry, sizeBerry } from "./berryEditing";
 import {
   DEFAULT_BERRY_DENSITY,
@@ -326,6 +339,14 @@ import {
 import { DEFAULT_WAKE_FALL, DEFAULT_WAKE_RISE } from "../render3d/glow";
 import { DEFAULT_FIREFLY_NOTICE, FIREFLY_MAX } from "../render3d/fireflies";
 import { colorInput } from "./colorPicker";
+import {
+  readLastLevel,
+  readRootWidths,
+  readViewSettings,
+  writeLastLevel,
+  writeRootWidths,
+  writeViewSetting,
+} from "./prefs";
 
 type Tool =
   | "select"
@@ -339,6 +360,7 @@ type Tool =
   | "checkpoint"
   | "chain"
   | "vine"
+  | "root"
   | "light"
   | "glow"
   | "fireflies";
@@ -365,6 +387,7 @@ const LAYER_TOOLS: Record<EdLayer, Tool[]> = {
     "fireflies",
     "chain",
     "vine",
+    "root",
   ],
   camera: ["select", "rect", "circle", "poly", "path"],
   // A firefly path is a route and nothing else: no regions to draw.
@@ -392,6 +415,9 @@ const TOOL_WORKSPACES: Record<Tool, ToolWorkspace> = {
   checkpoint: "both",
   chain: "level",
   vine: "level",
+  // Drawn on the plane with handles pulled out under the pointer, which is
+  // the 2D overlay's gesture.
+  root: "level",
   light: "both",
   glow: "both",
   fireflies: "both",
@@ -582,6 +608,9 @@ type Drag =
   // frame and the drag sets the LENGTH rather than reaching for a second body,
   // which is the whole of the difference between a vine and a chain.
   | { mode: "vineDraw"; from: EdItem; local: Vec2; length: number }
+  // Pulling out the Bézier handles of the root node just placed (`rootDraft`):
+  // `index` is which node.
+  | { mode: "rootHandle"; index: number }
   // Dragging a placed vine's free end, which is the same edit by hand - or,
   // with SHIFT held over a body, carrying that end toward a second anchor:
   // releasing there attaches the vine at both ends and makes it a span.
@@ -882,6 +911,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // the one reader, and it asks whose nodes these are).
   let routeSel: { bodyId: number; nodes: Set<number> } | null = null;
   const NO_NODES: ReadonlySet<number> = new Set<number>();
+  // An empty selection, for drawing the overlay as if nothing were selected.
+  const NO_IDS: ReadonlySet<number> = new Set<number>();
   let tool: Tool = "select";
   let newKind: BodyKind = "static";
   // Layers. Every *visible* layer is hit-testable, so a selection may span them
@@ -897,7 +928,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // and visibility are independent: one keeps a layer out of the way, the other
   // keeps it on screen and out of harm's way.
   const lockedLayers = new Set<EdLayer>();
-  let snapOn = true;
+  // The toolbar's view toggles open as this browser last left them
+  // (prefs.ts); each one's change writes itself back.
+  const viewSettings = readViewSettings();
+  let snapOn = viewSettings.snap;
   // Whether the editor's own view draws the level's fog. Off by default: the
   // haze is the player's view of the level, and through it a distant piece is
   // hard to judge. ▶ Test always draws it. A view setting like `snapOn`, so it
@@ -909,23 +943,37 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // `draw`. A view setting like `fogInEditor`, held by the renderer
   // (`Scene3D.setAllDebugShown`), so no shape's `debug` changes and a test's
   // recording carries the level as authored.
-  let allDebugShown = false;
+  let allDebugShown = viewSettings.allDebug;
   // Whether the ball's reflection probe and the pools' mirror are drawn, here
   // and in ▶ Test. Each compiles a second program for every material it sees
   // (the probe draws untone-mapped into a linear target), first-use, mid-run:
   // without the game's prewarm, a test paid 100-140 ms GPU-process stalls
   // each time new scenery came into one of them (trace 2026-10-09). A view
   // setting held by the renderer, never written into the level.
-  let reflectionsOn = true;
+  let reflectionsOn = viewSettings.reflections;
   // Whether the sun and the lamps cast shadows, here and in ▶ Test. The shadow
   // pass compiles a depth program per kind of caster the first time one is
   // inside a shadow camera, mid-run (a 44 ms frame in the same trace). A view
   // setting like `reflectionsOn`; no light's `castShadow` changes.
-  let shadowsOn = true;
+  let shadowsOn = viewSettings.shadows;
   // Whether the water is drawn, here and in ▶ Test, for the same reason: its
   // shaders compile the first time a body of it comes into view. The sim's
   // water is untouched. A view setting like `reflectionsOn`.
-  let waterShown = true;
+  let waterShown = viewSettings.water;
+  // Whether the level's Blender scene is drawn, here and in ▶ Test: off, the
+  // collision and what the game draws itself stand alone. A view setting like
+  // `reflectionsOn`.
+  let blenderSceneShown = viewSettings.scene;
+  // A remembered toggle may open off, which the renderer has to be told once;
+  // it keeps each across every rebuild after.
+  if (scene3d) {
+    scene3d.setAllDebugShown(allDebugShown);
+    scene3d.setReflectionProbe(reflectionsOn);
+    scene3d.setPoolMirror(reflectionsOn);
+    scene3d.setShadows(shadowsOn);
+    scene3d.setWaterShown(waterShown);
+    scene3d.setSceneShown(blenderSceneShown);
+  }
   const gridStep = 0.05; // snap spacing: fixed 5 cm (half the backdrop's 10 cm minor grid)
   let currentName: string | null = null;
   let dirty = false;
@@ -982,6 +1030,18 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // outline, `+Path` ends open as a camera path. One draft rather than two so
   // Esc, Enter, the title readout and the preview cannot drift apart per tool.
   let polyDraft: { kind: "poly" | "path"; verts: Vec2[] } | null = null;
+  // A ROOT being drawn (`+ Root`, docs/roots.md): its nodes so far in world
+  // metres and each node's Bézier handles (pulled out by dragging as it is
+  // placed), the widths it will taper between, and - for a branch - the root
+  // it grows out of and where along it. Kept apart from `polyDraft` because it
+  // is a curve with handles and a parent rather than a run of corners.
+  let rootDraft: {
+    verts: Vec2[];
+    handles: { in: Vec2; out: Vec2 }[];
+    width: number;
+    tip: number;
+    from: { item: RootItem; at: number } | null;
+  } | null = null;
   let dragMoved = false;
   let dragPushed = false; // history snapshot taken for the in-progress drag?
   let nudging = false; // arrow-key run in progress? (coalesces into one undo step)
@@ -1720,6 +1780,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
 
   function gizmoSpec(): GizmoTarget | null {
     if (mode === "test" || !sceneShown()) return null;
+    // Drawing roots: a press on one starts a branch, so nothing may sit on it
+    // waiting to be dragged instead.
+    if (tool === "root") return null;
     const berry = currentBerry();
     if (berry) return { kind: "berry", vineId: berry.vine.id, index: berry.index };
     if (selectedChainIds.size || selectedVineIds.size) return null;
@@ -1772,6 +1835,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   }
 
   function markDirty(): void {
+    // Every edit leaves a root a tree (rootEditing.ts): a branch whose parent
+    // went away is a trunk, and every branch starts on its parent again.
+    syncRoots(model);
     dirty = true;
     modelRev++;
     scheduleAutosave();
@@ -2027,8 +2093,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // editor's own camera handling, which is a direct pan/zoom.
   const testCameraCtl = new CameraController();
   // See the `edge clamp` toggle: an authoring instrument for ▶ Test, not a
-  // level property, so it is remembered here and saved nowhere.
-  let edgeClampOn = true;
+  // level property, so it is remembered by the browser (prefs.ts) and
+  // never written to a file.
+  let edgeClampOn = viewSettings.edgeClamp;
 
   // Full-session recording of the current test run — press P to download a
   // self-contained replay bundle (embeds the tested geometry, since an
@@ -2283,6 +2350,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     selectedVerts.clear();
     selectedBodyIds.clear();
     currentName = null;
+    writeLastLevel(null);
     dirty = false;
     camera.position = Vec2.ZERO;
     rebuildInspector();
@@ -2309,6 +2377,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     cancelAutosave(); // a queued write would recreate the file
     await deleteLevel(currentName);
     currentName = null;
+    writeLastLevel(null);
     dirty = true;
     await refreshLevelList();
     updateTitle();
@@ -2329,6 +2398,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     checkpoint: button("+ Checkpoint", () => setTool("checkpoint")),
     chain: button("+ Chain", () => setTool("chain")),
     vine: button("+ Vine", () => setTool("vine")),
+    root: button("+ Root", () => setTool("root")),
     light: button("+ Light", () => setTool("light")),
     glow: button("+ Glow", () => setTool("glow")),
     fireflies: button("+ Fireflies", () => setTool("fireflies")),
@@ -2351,6 +2421,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     "Press where the first wheel goes and drag to the second to lay a conveyor belt; a click drops one 1.5 m long. Click a run's midpoint to add a wheel, Alt+click a wheel's square to remove it. The band wraps the outside of every wheel and its surface runs round the loop at the panel's speed (positive = clockwise on screen), carrying whatever rests on it. It builds only on a static body that does not move.";
   toolBtns.vine.title =
     "Press on a body and drag DOWN to hang a vine from it. Shift-drag its end handle onto another body to span between the two. The player passes through a vine and the hook grabs it anywhere along its length.";
+  toolBtns.root.title =
+    "Draw a root: click out its curve from base to tip - press and drag to pull out a node's Bézier handles - and Enter or a double-click grows it. Start a stroke ON a root to grow a branch out of it, at any depth. Roots are hook-only and static; tick pivot on the body to make one spring about its base.";
   toolBtns.light.title = "Click to drop a light; drag to set how far it reaches";
   toolBtns.glow.title =
     "Click to drop a glowing mushroom: one static body holding a collision box and a WAKING light that stays dark until the ball comes within its wake (the dashed ring) and fades out after it leaves. Name the body and model it in the level's Blender scene; what glows in its model follows the light. The 3D preview shows it awake.";
@@ -2379,6 +2451,72 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     }
   });
   const kindWrap = labelWrap("kind", kindSel);
+
+  // `+ Root`'s own options, in the toolbar while it is armed: the width a root
+  // STARTS at (its base) and the width it tapers to, in px like every length
+  // in the panels. They are the widths a new root is drawn at, remembered by
+  // this browser (`readRootWidths`); while a root or branch is being drawn they
+  // show - and set - that one's, so a branch, which starts from its parent's
+  // girth, can be made thicker or thinner before it is grown. Every grown root
+  // keeps its own two in its panel (`start width` / `tip width`).
+  const storedRootWidths = readRootWidths();
+  let rootStartWidth = storedRootWidths.start ?? ROOT_TRUNK_WIDTH;
+  let rootTipWidth = storedRootWidths.tip ?? ROOT_TIP_WIDTH;
+  const rootWidthInput = (title: string, min: number, apply: (metres: number) => void): HTMLInputElement => {
+    const input = document.createElement("input");
+    input.type = "number";
+    input.className = "ed-num";
+    input.step = "1";
+    input.min = String(min);
+    input.title = title;
+    input.addEventListener("input", () => {
+      const px = Number(input.value);
+      if (!Number.isFinite(px) || px < min) return;
+      apply(px * PX);
+    });
+    return input;
+  };
+  const rootStartInput = rootWidthInput(
+    "How wide the root starts, at its base (px). Set while drawing, it is the width of the root or branch being drawn; otherwise the width new roots start at.",
+    1,
+    (w) => {
+      if (rootDraft) rootDraft.width = w;
+      if (!rootDraft || !rootDraft.from) {
+        rootStartWidth = w;
+        writeRootWidths({ start: rootStartWidth, tip: rootTipWidth });
+      }
+    },
+  );
+  const rootTipInput = rootWidthInput(
+    "How wide the root ends, at its tip (px). Set while drawing, it is the tip of the root or branch being drawn; otherwise the tip new roots end at.",
+    0.5,
+    (w) => {
+      if (rootDraft) rootDraft.tip = w;
+      if (!rootDraft || !rootDraft.from) {
+        rootTipWidth = w;
+        writeRootWidths({ start: rootStartWidth, tip: rootTipWidth });
+      }
+    },
+  );
+  const rootWidthsWrap = el("span", "ed-inline");
+  rootWidthsWrap.append(labelWrap("start width", rootStartInput), labelWrap("tip", rootTipInput));
+  // The fields say what the next press will draw: the draft's widths while
+  // there is one, the remembered ones otherwise. Called when a draft starts or
+  // ends and when the tool changes - never from the fields' own input, so it
+  // cannot fight the caret.
+  function refreshRootWidthFields(): void {
+    const round = (m: number): string => String(Math.round(m * M2PX * 10) / 10);
+    rootStartInput.value = round(rootDraft ? rootDraft.width : rootStartWidth);
+    rootTipInput.value = round(rootDraft ? rootDraft.tip : rootTipWidth);
+  }
+  // The toolbar's per-tool options: `kind` for the shape tools on the scene
+  // layer, the widths for `+ Root` (whose root is always static and hook-only,
+  // so `kind` says nothing about it).
+  function refreshToolOptions(): void {
+    kindWrap.style.display = activeLayer === "scene" && tool !== "root" ? "" : "none";
+    rootWidthsWrap.style.display = tool === "root" ? "" : "none";
+    refreshRootWidthFields();
+  }
   toolBtns.poly.title =
     "Click out an outline, concave corners included; Enter or the first vertex closes it, Esc cancels";
   toolRow.append(
@@ -2393,10 +2531,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     toolBtns.checkpoint,
     toolBtns.chain,
     toolBtns.vine,
+    toolBtns.root,
     toolBtns.light,
     toolBtns.glow,
     toolBtns.fireflies,
     kindWrap,
+    rootWidthsWrap,
   );
 
   // Layer list: which layer is being edited (Tab cycles), plus a visibility
@@ -2507,7 +2647,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // outgoing layer are still selectable and still shown by the inspector.
     for (const [k, b] of Object.entries(layerBtns)) b.classList.toggle("active", k === l);
     // `kind` is a geometry property; a camera region and a note have none.
-    kindWrap.style.display = l === "scene" ? "" : "none";
+    refreshToolOptions();
     refreshToolButtons();
     rebuildInspector();
   }
@@ -2533,7 +2673,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     button("▶ Test Grapple", () => startTest("grapple", testSpawn())),
     btnTestBall,
   );
-  const snapChk = checkbox("snap 5cm", snapOn, (v) => (snapOn = v));
+  const snapChk = checkbox("snap 5cm", snapOn, (v) => {
+    snapOn = v;
+    writeViewSetting("snap", v);
+  });
   testRow.append(snapChk);
   // The screen-edge guarantee, off-switchable for a test and NOWHERE else. The
   // game never turns it off - it is the one camera rule a level may not opt out
@@ -2543,6 +2686,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   const edgeChk = checkbox("edge clamp", edgeClampOn, (v) => {
     edgeClampOn = v;
     testCameraCtl.edgeClamp = v;
+    writeViewSetting("edgeClamp", v);
   });
   edgeChk.title =
     "Keep the avatar out of the outer 8% of the frame during ▶ Test. On in the game always; untick to see the raw framing a camera rule is asking for (the overlay draws the clamp in amber on the frames it is holding).";
@@ -2551,6 +2695,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const allDebugChk = checkbox("all debug", allDebugShown, (v) => {
       allDebugShown = v;
       scene3d.setAllDebugShown(v);
+      writeViewSetting("allDebug", v);
     });
     allDebugChk.title =
       "Draw every collision shape's debug geometry in 3D, here and in ▶ Test, whether or not its own draw box is ticked. An editor setting: no shape's Debug settings change, and the game draws each shape as authored.";
@@ -2559,6 +2704,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       reflectionsOn = v;
       scene3d.setReflectionProbe(v);
       scene3d.setPoolMirror(v);
+      writeViewSetting("reflections", v);
     });
     reflectionsChk.title =
       "Draw the ball's reflection of the level and the pools' mirror, here and in ▶ Test. Untick to skip the shader compiles they cost the first time new scenery comes into them (the editor runs no prewarm). Off, the ball reflects the sky. An editor setting: the game always draws both.";
@@ -2566,6 +2712,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const shadowsChk = checkbox("shadows", shadowsOn, (v) => {
       shadowsOn = v;
       scene3d.setShadows(v);
+      writeViewSetting("shadows", v);
     });
     shadowsChk.title =
       "Draw the sun's and the lamps' shadows, here and in ▶ Test. Untick to skip the shader compiles the shadow pass costs the first time a new kind of object comes into a shadow (the editor runs no prewarm). Switching either way recompiles the lit shaders once. An editor setting: no light's Cast shadow changes, and the game always draws them.";
@@ -2573,10 +2720,19 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const waterChk = checkbox("water", waterShown, (v) => {
       waterShown = v;
       scene3d.setWaterShown(v);
+      writeViewSetting("water", v);
     });
     waterChk.title =
       "Draw the water - pools, currents, falls and the scene's water continuing a pool - here and in ▶ Test. Untick to skip the shader compiles it costs the first time a body of it comes into view (the editor runs no prewarm). Only the picture: the ball still floats and drags in the water. An editor setting: the game always draws it.";
     testRow.append(waterChk);
+    const sceneChk = checkbox("scene", blenderSceneShown, (v) => {
+      blenderSceneShown = v;
+      scene3d.setSceneShown(v);
+      writeViewSetting("scene", v);
+    });
+    sceneChk.title =
+      "Draw the level's Blender scene - the scenery and what dresses the bodies - here and in ▶ Test. Untick to see the collision and what the game draws itself (water, belts, chains, lights, the ball) on their own; hidden scenery is not picked or dropped onto. An editor setting: the game always draws it.";
+    testRow.append(sceneChk);
   }
 
   // View toggle. Only offered when there is a WebGL context to toggle: a machine
@@ -2977,7 +3133,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
             ? " · Enter to finish"
             : " · Enter to close"
           : "")
-      : "";
+      : rootDraft
+        ? ` · ${rootDraft.from ? "branch" : "root"}: ${rootDraft.verts.length} ` +
+          `${rootDraft.verts.length === 1 ? "node" : "nodes"} · drag to pull handles` +
+          (rootDraft.verts.length >= 2 ? " · Enter to grow it" : "")
+        : "";
     title.textContent = `${currentName ?? "(unsaved)"}${state} · ${count("scene")} objects${extra}${draft}${notice ? ` · ${notice}` : ""}`;
   }
   function flashNotice(text: string): void {
@@ -3015,8 +3175,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // armed by the keyboard shortcuts any more than by the (hidden) buttons.
     if (t !== "select" && lockedLayers.has(activeLayer)) return;
     if (t !== "poly" && t !== "path") cancelPolyDraft();
+    if (t !== "root") cancelRootDraft();
     tool = t;
     for (const [k, b] of Object.entries(toolBtns)) b.classList.toggle("active", k === t);
+    refreshToolOptions();
     applyToolCursor();
   }
   setTool("select");
@@ -3446,9 +3608,31 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     } else if (items.every((b) => b.shape.kind === "path" && b.layer === "scene")) {
       // A CURVE has one size and it is the width of the bar: the line itself is
       // edited on the canvas, node by node, exactly as a polygon's outline is.
-      num("width", (b) => (b.shape.kind === "path" ? b.shape.width * M2PX : 0), (b, v) => {
+      // A ROOT branch tapers (docs/roots.md), so its `width` is where it STARTS,
+      // at its base, and the panel says so.
+      const roots = items.every(isRootItem);
+      num(roots ? "start width" : "width", (b) => (b.shape.kind === "path" ? b.shape.width * M2PX : 0), (b, v) => {
         if (b.shape.kind === "path") b.shape.width = Math.max(1, v) * PX;
       });
+      // ...and this is what it narrows to at its tip.
+      if (roots) {
+        num("tip width", (b) => (b.shape.kind === "path" ? (b.shape.tip ?? b.shape.width) * M2PX : 0), (b, v) => {
+          if (b.shape.kind === "path") b.shape.tip = Math.max(0.5, v) * PX;
+        });
+        const grows = (): string => {
+          const says = items.map((b) => {
+            const parent = b.root?.parent ?? null;
+            return parent === null ? "the ground (a trunk)" : `${Math.round((b.root?.at ?? 0) * 100)}% along its root`;
+          });
+          return says.every((s) => s === says[0]) ? says[0]! : "mixed";
+        };
+        const grow = fieldRow("grows from");
+        const gval = document.createElement("span");
+        gval.textContent = grows();
+        grow.appendChild(gval);
+        g.appendChild(grow);
+        readouts.push({ el: gval, get: grows });
+      }
       // What the curve BUILDS as, for the reason a polygon reports its piece
       // count: the bar is stroked into the convex pieces that tile it at load
       // (`lib/stroke.ts`), and a straight bar is one of them however many nodes
@@ -3467,7 +3651,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       g.appendChild(prow);
       readouts.push({ el: pval, get: pieces });
       describe(g,
-        "Drag a node to move it, its round grip to bow the curve either side of it (Alt at the press breaks the pair into a corner), an edge midpoint to add a node, Alt+click a node to remove it. The bar is what the curve strokes out at this width, and a rail's cuff rides the line down its middle.");
+        items.every(isRootItem)
+          ? "A root branch, tapering from its width to its tip; the game grows the root you see in 3D from it. Drag a node to move it, its round grip to bow the curve, an edge midpoint to add a node, Alt+click to remove one. A branch's first node is where it grows out of its root: drag it to slide the branch along the root. With +Root, start a stroke on any branch to grow another out of it. Delete takes a branch and everything growing from it."
+          : "Drag a node to move it, its round grip to bow the curve either side of it (Alt at the press breaks the pair into a corner), an edge midpoint to add a node, Alt+click a node to remove it. The bar is what the curve strokes out at this width, and a rail's cuff rides the line down its middle.");
     } else if (items.every((b) => b.shape.kind === "poly")) {
       // A polygon has no width or height to type: it is edited on the canvas,
       // vertex by vertex. The panel says so and reports the count, rather than
@@ -3860,6 +4046,32 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     g.appendChild(wrap);
     describe(wrap,
       "Only the hook can find this body: the player walks and swings straight through it, loose bodies fall through it and the rope never wraps it — drawn with a grate lattice and a dotted edge, behind the solid geometry. A rigid one still falls, still hangs on its spring and is still hauled by a chain; what it stops having is contacts.");
+  }
+
+  // A ROOT that SPRINGS (docs/roots.md): one checkbox for what is otherwise
+  // three edits - the body made rigid, mounted on a pivot, the bearing put at
+  // the trunk's base, and a torsion return spring about it - because that is
+  // the one thing a springy root is: a body hinged where it grows out of the
+  // wall, bending under the player and coming back. Unticked, it is a static
+  // root again. The Pivot section below it tunes the spring like any other.
+  function addRootSpringField(g: HTMLElement, leads: EdItem[]): void {
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    const springs = (b: EdItem): boolean => b.kind === "rigid" && b.pivot;
+    box.checked = leads.every(springs);
+    box.indeterminate = !box.checked && leads.some(springs);
+    box.addEventListener("change", () => {
+      beginAction();
+      setRootSprings(model, leads, box.checked);
+      syncEditedBodies(leads);
+      markDirty();
+      rebuildInspector();
+    });
+    const wrap = fieldRow("springs");
+    wrap.appendChild(box);
+    g.appendChild(wrap);
+    describe(wrap,
+      "Hinge this root where its trunk grows from, on a torsion spring: it bends under the ball and comes back. The Pivot section tunes how stiff (return Hz) and how quickly it settles (damping). Unticked, the root is static. To spring one branch on its own, Ctrl+G it into a body of its own - it becomes a trunk where it stood - and tick this there.");
   }
 
   // Pivot mounting, rigid bodies only (see `LevelBodyData.pivot`): bolted to a
@@ -4853,7 +5065,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // drew, and there is none to ride on a box or a vertex loop (see
       // `CollisionObjectData.rail`). Offered elsewhere it is a checkbox that
       // writes a field the loader ignores.
-      if (bodies.every((b) => b.shape.kind === "path")) addRailField(surface, bodies);
+      // A ROOT is bitten, never clamped round: it tapers, and a rail rides a
+      // bar of one width (docs/roots.md).
+      if (bodies.every((b) => b.shape.kind === "path" && !isRootItem(b))) addRailField(surface, bodies);
       addMaskFields(surface, bodies);
     }
     // Material and thickness are what a shape WEIGHS.
@@ -5046,6 +5260,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       if (leads.every((b) => b.kind === "static" || b.kind === "rigid")) {
         const breaks = section(g, "body/Breakable", "Breakable");
         addBreakFields(breaks, groupNum(breaks, leads, sync), leads);
+      }
+      // A ROOT's one body question: does it spring about where it grows from.
+      if (
+        leads.every((b) => (b.kind === "static" || b.kind === "rigid") && bodyMembers(model.items, b.bodyId).some(isRootItem))
+      ) {
+        addRootSpringField(section(g, "body/Root", "Root"), leads);
       }
       if (leads.every((b) => b.kind === "rigid")) {
         addPivotField(section(g, "body/Pivot", "Pivot"), leads);
@@ -7477,6 +7697,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     for (const it of items) {
       if (it.object === "anchor") it.anchorId = nextAnchorId++;
     }
+    // ...and a copied ROOT branch grows out of the copy of its parent when the
+    // two were copied together. Copied alone it names the original, which is
+    // in another body now - and `syncRoots` makes it a trunk where it stands.
+    for (const it of items) {
+      if (it.root && it.root.parent !== null) {
+        it.root = { parent: idOf.get(it.root.parent) ?? it.root.parent, at: it.root.at };
+      }
+    }
     // ...and a copied firefly path is a new path, for the same reason: two
     // paths under one id leave a swarm naming it following whichever loads
     // first (the loader drops the second). A copied SWARM keeps naming the
@@ -8018,6 +8246,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // invisible in a dressed level, where collision is drawn over nothing
       // until the Debug section says so.
       debug: { ...NO_DEBUG(), on: !model.scene },
+      // A root branch is drawn with the root tool alone (`commitRootDraft`).
+      root: null,
       // Only meaningful on a force area, but a new one needs a non-zero pull
       // or it would draw no arrows and do nothing until the field is touched.
       force: DEFAULT_FORCE_MAGNITUDE * PX,
@@ -8248,6 +8478,71 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     addAndSelect([item]);
   }
 
+  // How close (in screen px) outside a root's bar a stroke may start and still
+  // grow a branch out of it, so a tip a few pixels wide can be started from.
+  const ROOT_PICK_PX = 6;
+
+  function cancelRootDraft(): void {
+    if (!rootDraft) return;
+    rootDraft = null;
+    if (drag?.mode === "rootHandle") drag = null;
+    refreshRootWidthFields();
+    updateTitle();
+  }
+
+  // Grow the drafted ROOT (docs/roots.md). A branch joins the body of the root
+  // it grows out of, with its first node on that root's centreline where the
+  // stroke began; anything else is a new root - a body of its own whatever is
+  // selected, since a root is not a part of the rock it grows out of. A new
+  // root is static and hook-only, in the bark colour; `pivot` on its body is
+  // what makes it spring.
+  function commitRootDraft(): void {
+    const draft = rootDraft;
+    rootDraft = null;
+    if (drag?.mode === "rootHandle") drag = null;
+    // Back to the widths the next root starts at.
+    refreshRootWidthFields();
+    if (!draft || draft.verts.length < 2) {
+      updateTitle();
+      return;
+    }
+    const parent = draft.from ? model.items.find((i) => i.id === draft.from!.item.id) : undefined;
+    const item = newDrawnItem("path", draft.verts[0]!);
+    item.pos = Vec2.ZERO;
+    item.shape = {
+      kind: "path",
+      verts: draft.verts.map((p) => p.clone()),
+      handles: draft.handles.map((h) => ({ in: h.in, out: h.out })),
+      keys: draft.verts.map(() => NO_KEY()),
+      width: draft.width,
+      tip: draft.tip,
+    };
+    if (!setPathVerts(item, item.shape.verts, item.shape.handles)) {
+      updateTitle();
+      return;
+    }
+    centreShapeOrigin(item);
+    // Bitten, never clamped round (a tapered curve is never a rail), and drawn
+    // by its own generated mesh rather than by debug geometry.
+    item.rail = false;
+    item.debug = NO_DEBUG();
+    if (parent && isRootItem(parent) && draft.from) {
+      item.bodyId = parent.bodyId;
+      item.root = { parent: parent.id, at: draft.from.at };
+    } else {
+      item.bodyId = newBodyId();
+      item.kind = "static";
+      item.passable = true;
+      item.color = DEFAULT_ROOT_COLOR;
+      item.root = { parent: null, at: 0 };
+    }
+    beginAction();
+    addAndSelect([item]);
+    // A branch wears its root's body properties - the kind, the pivot, the
+    // colour - rather than the tool's.
+    if (parent) syncBodyProps(bodyMembers(model.items, item.bodyId));
+  }
+
   // Remove the picked vertices from the shape they belong to. Answers whether
   // it handled the keystroke, so the caller can fall through to deleting the
   // OBJECT when no vertex is picked.
@@ -8263,6 +8558,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (item.shape.kind !== "poly" && item.shape.kind !== "path") return false;
     const doomed = new Set(selectedVertIndices(item));
     if (!doomed.size) return false;
+    // A branch's first node is where it grows out of its parent, not a node it
+    // could do without; it is slid along the parent instead.
+    if (doomed.has(0) && isRootItem(item) && item.root.parent !== null) {
+      flashNotice("a branch's first node is where it grows out of its root - drag it along the root instead");
+      return true;
+    }
     const floor = item.shape.kind === "path" ? 2 : 3;
     if (item.shape.verts.length - doomed.size < floor) return true;
     beginAction();
@@ -8389,6 +8690,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // it. Reading `selectedIds` alone left the body panel's own Delete button
     // doing nothing at all.
     const doomed = new Set(operandItems().map((b) => b.id));
+    // A root branch goes with everything growing out of it: cutting a root
+    // cuts what it carries, rather than leaving its branches standing in the
+    // air as trunks of their own.
+    for (const b of model.items) {
+      if (doomed.has(b.id) && isRootItem(b)) for (const d of rootDescendants(model, b)) doomed.add(d.id);
+    }
     if (!doomed.size && !selectedChainIds.size && !selectedVineIds.size) return;
     beginAction();
     model.items = model.items.filter((b) => !doomed.has(b.id));
@@ -8604,7 +8911,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   });
 
   // --- disk -----------------------------------------------------------------
-  async function refreshLevelList(): Promise<void> {
+  // Whether the list arrived; a failed one leaves the dropdown as it was.
+  async function refreshLevelList(): Promise<boolean> {
     try {
       const names = await listLevels();
       loadSel.innerHTML = "";
@@ -8618,8 +8926,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         o.textContent = n;
         loadSel.appendChild(o);
       }
+      return true;
     } catch (e) {
       console.error(e);
+      return false;
     }
   }
   async function doLoad(name: string): Promise<void> {
@@ -8634,6 +8944,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // body in the incoming level that has nothing to do with the one picked.
       selectedBodyIds.clear();
       currentName = name;
+      writeLastLevel(name);
       dirty = false;
       camera.position = model.player.pos;
       rebuildInspector();
@@ -8688,6 +8999,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     try {
       await saveLevel(name, data);
       currentName = name;
+      writeLastLevel(name);
       if (modelRev === rev) dirty = false;
       saveError = null;
       if (isNewFile) await refreshLevelList();
@@ -8814,6 +9126,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (shape.kind !== "poly" && shape.kind !== "path") return null;
     if (!alt) return grabVertex(s, i, shift, planeZ);
     if (shape.verts.length <= (shape.kind === "path" ? 2 : 3)) return null;
+    // A branch's junction is not a node it could lose (`deleteSelectedVerts`).
+    if (i === 0 && isRootItem(s) && s.root.parent !== null) return "consumed";
     beginAction();
     const ok =
       shape.kind === "path"
@@ -9333,7 +9647,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const turned = inScene();
     // Everything under the pointer, once per press, for the steps below.
     const tags = scene ? visuals!.tagsAt(scr) : [];
-    if (!turned) {
+    // With +Root armed the selection's handles are not drawn (see the frame
+    // loop) and so are not grabbed: a press on a root starts a branch there.
+    if (!turned && tool !== "root") {
       // 1. Handles of the current selection.
       const h = pickHandle(scr, e.altKey, e.shiftKey);
       if (h === "consumed") return; // handled outright; no drag, selection intact
@@ -9373,6 +9689,37 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         return;
       }
       polyDraft = { kind: drawTool, verts: [...(polyDraft?.verts ?? []), p] };
+      updateTitle();
+      return;
+    }
+    // 1b'. Root drafting: the same run of clicks a curve is, each press placing
+    // a node and its drag pulling out that node's handles (`rootHandle`). The
+    // FIRST press decides what is being drawn: on a root it grows a branch out
+    // of that root, from the point on its centreline under the pointer; over
+    // anything else it starts a new root.
+    if (drawTool === "root") {
+      if (rootDraft && e.detail >= 2 && rootDraft.verts.length >= 2) {
+        commitRootDraft();
+        return;
+      }
+      if (!rootDraft) {
+        const slop = canvasWorld(scr.add(new Vec2(ROOT_PICK_PX, 0))).distanceTo(world);
+        const from = rootAt(model, world, slop, (i) => visibleLayers.has(i.layer) && !lockedLayers.has(i.layer));
+        rootDraft = from
+          ? {
+              verts: [from.point],
+              handles: [ZERO_HANDLE()],
+              ...branchWidths(from.item, from.at),
+              from: { item: from.item, at: from.at },
+            }
+          : { verts: [snapVec(world)], handles: [ZERO_HANDLE()], width: rootStartWidth, tip: rootTipWidth, from: null };
+        // The toolbar's widths now show (and set) this draft's.
+        refreshRootWidthFields();
+      } else {
+        rootDraft.verts.push(snapVec(world));
+        rootDraft.handles.push(ZERO_HANDLE());
+      }
+      drag = { mode: "rootHandle", index: rootDraft.verts.length - 1 };
       updateTitle();
       return;
     }
@@ -10089,7 +10436,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       drag.mode !== "chainDraw" &&
       drag.mode !== "vineDraw" &&
       // Writes nothing until it is released (see `growDraggedBerry`).
-      drag.mode !== "berryDraw"
+      drag.mode !== "berryDraw" &&
+      // Shapes a root that is not in the model until it is finished.
+      drag.mode !== "rootHandle"
     ) {
       beginAction();
       dragPushed = true;
@@ -10330,6 +10679,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         // only for the degenerate case of every vert landing on one point.
         const ok = b.shape.kind === "path" ? setPathVerts(b, next) : setPolyVerts(b, next);
         if (ok) drag.accepted = local;
+        // A BRANCH's first node is its junction: dragged, it slides along the
+        // root it grows out of rather than leaving it (`slideRootJunction`).
+        const junction = moved.get(0);
+        if (ok && junction) slideRootJunction(model, b, b.pos.add(junction.rotated(b.rot)));
         markDirty();
         refreshFields();
         break;
@@ -10381,6 +10734,20 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       case "chainDraw":
         drag.cursor = world;
         break;
+      case "rootHandle": {
+        // The pen tool's gesture: the node stays where it was pressed and the
+        // drag pulls its handles out, the one under the pointer leading on
+        // toward the next node and its mirror trailing back, so the curve runs
+        // smoothly through the node. A drag inside the click's slop leaves it a
+        // corner, which is what a plain click means.
+        const d = rootDraft;
+        const node = d?.verts[drag.index];
+        if (!d || !node) break;
+        const pull = world.sub(node);
+        const smooth = canvasScreen(world).distanceTo(canvasScreen(node)) >= CLICK_SLOP_PX;
+        d.handles[drag.index] = smooth ? { in: pull.mul(-1), out: pull } : ZERO_HANDLE();
+        break;
+      }
       case "vineDraw":
         // Downward only: a vine hangs, so what the drag measures is how far
         // BELOW the anchor the pointer has got. Dragging up is a vine of no
@@ -10659,6 +11026,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (e.code === "Escape") {
       if (mode === "test") stopTest();
       else if (polyDraft) cancelPolyDraft();
+      else if (rootDraft) cancelRootDraft();
       // A tied chain being strung out is dropped whole: its knots are not in
       // the model until the chain ends on a body.
       else if (drag?.mode === "chainDraw") {
@@ -10770,6 +11138,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     }
     if ((e.code === "Enter" || e.code === "NumpadEnter") && polyDraft) {
       commitPolyDraft();
+      e.preventDefault();
+      return;
+    }
+    if ((e.code === "Enter" || e.code === "NumpadEnter") && rootDraft) {
+      commitRootDraft();
       e.preventDefault();
       return;
     }
@@ -11123,7 +11496,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         cssH,
         camera,
         model,
-        selectedIds,
+        // While +Root is armed the selection keeps its inspector but loses its
+        // handles: a press anywhere on a root starts a branch there, so no
+        // corner, midpoint or knob may be drawn as if it would be grabbed.
+        tool === "root" ? NO_IDS : selectedIds,
         marqueeBand(),
         visibleLayers,
         polyDraft ? { ...polyDraft, cursor: pointerWorld() } : null,
@@ -11134,8 +11510,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         // In 3D the scene below is what shows what a body IS; the overlay drops
         // its fills to outlines so the geometry stays visible through them.
         overlayLayers(),
-        selectedBodyIds,
-        selectedVerts,
+        tool === "root" ? NO_IDS : selectedBodyIds,
+        tool === "root" ? NO_IDS : selectedVerts,
         currentSettleGhosts(),
         wrapDraftView(),
         routeSel?.bodyId === soleBodyId() ? routeSel.nodes : NO_NODES,
@@ -11159,6 +11535,21 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
                 }
               : null,
         },
+        rootDraft
+          ? {
+              verts: rootDraft.verts,
+              handles: rootDraft.handles,
+              // While a node's handles are being pulled out the pointer is ON
+              // the handle, not the next node, so the preview ends at the node.
+              cursor:
+                drag?.mode === "rootHandle"
+                  ? rootDraft.verts[rootDraft.verts.length - 1]!
+                  : snapVec(pointerWorld()),
+              width: rootDraft.width,
+              tip: rootDraft.tip,
+              from: rootDraft.from ? rootDraft.verts[0]! : null,
+            }
+          : null,
       );
     }
     requestAnimationFrame(frame);
@@ -11169,7 +11560,17 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   setLayer("scene");
   rebuildInspector();
   updateTitle();
-  refreshLevelList();
+  // Reopen the level this browser last had open (prefs.ts), once the list
+  // says it is still on disk; a name that is gone is forgotten rather than
+  // reported. Skipped if the empty model was edited, or a level loaded, while
+  // the list was on its way: the author has already started on something.
+  const bootRev = modelRev;
+  void refreshLevelList().then((listed) => {
+    const last = readLastLevel();
+    if (!listed || last === null || modelRev !== bootRev || currentName !== null) return;
+    if ([...loadSel.options].some((o) => o.value === last)) void doLoad(last);
+    else writeLastLevel(null);
+  });
   requestAnimationFrame(frame);
 }
 

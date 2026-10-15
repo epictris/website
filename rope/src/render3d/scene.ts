@@ -166,6 +166,12 @@ function top(surface: StillSurface): number {
   return threeY(surface.body.globalPosition.y) + surface.halfY;
 }
 
+// Whether `obj` is drawn: it and every ancestor visible.
+function drawn(obj: THREE.Object3D): boolean {
+  for (let o: THREE.Object3D | null = obj; o; o = o.parent) if (!o.visible) return false;
+  return true;
+}
+
 export class Scene3D {
   readonly scene = new THREE.Scene();
   // What the editor draws into the scene for itself - the Visuals workspace's
@@ -209,6 +215,9 @@ export class Scene3D {
   // Whether the water is drawn (`setWaterShown`), applied to every visual as
   // it is built.
   private waterShown = true;
+  // Whether the level's Blender scene is drawn (`setSceneShown`), applied to
+  // the dressing as it is mounted.
+  private sceneShown = true;
   // Whether EVERY piece's debug geometry is drawn, switched on or not
   // (`setAllDebugShown`). Held here for the same reason.
   private allDebugShown = false;
@@ -389,6 +398,16 @@ export class Scene3D {
     for (const surface of this.stillSurfaces()) for (const mesh of surface.scenery) mesh.visible = on;
   }
 
+  // Off, nothing from the level's Blender scene is drawn - the scenery and the
+  // nodes dressing the bodies alike - so the collision and what the game draws
+  // itself (water, belts, chains, the ball, lights) stand alone: the editor's
+  // "scene" toggle. Hidden is unpickable too (`hitsAt`), so a click goes
+  // through to what is drawn behind.
+  setSceneShown(on: boolean): void {
+    this.sceneShown = on;
+    this.dressing?.setShown(on);
+  }
+
   // Hides every pool's water and the scene's water continuing it, for
   // measuring what drawing it costs (the shot bench's `benchpools`).
   setPoolsShown(on: boolean): void {
@@ -449,6 +468,7 @@ export class Scene3D {
     // stands in the world where Blender put it.
     if (sceneName) {
       this.dressing = new SceneDressing(sceneName, targets, (scenery) => this.adoptSceneryWater(scenery));
+      this.dressing.setShown(this.sceneShown);
       this.scene.add(this.dressing.root);
     }
     // Then whatever else the world already holds - the avatar's debris, a
@@ -898,6 +918,11 @@ export class Scene3D {
   // A body the world holds that the level did not author: a spawned rock, the
   // hook. It extrudes what it collides as and has no objects of its own, which
   // is why it is built with no `BuiltBody` behind it.
+  // How far off the gameplay plane `body` is drawn (`BodyVisual.depth`): the
+  // plane for anything this scene does not draw as a body (a vine link, the
+  // avatar), which is drawn on it.
+  private readonly depthOf = (body: CollisionObject2D): number => this.bodies.get(body)?.depth ?? 0;
+
   private ensureBody(body: CollisionObject2D): BodyVisual | null {
     const existing = this.bodies.get(body);
     if (existing) return existing;
@@ -1032,6 +1057,9 @@ export class Scene3D {
     this.raycaster.setFromCamera(this.pointer, cam);
     const hits: SceneHit[] = [];
     for (const hit of this.raycaster.intersectObjects(this.scene.children, true)) {
+      // three's raycaster tests hidden objects too; the pick is about the
+      // picture, so what is not drawn is not hit.
+      if (!drawn(hit.object)) continue;
       const depth =
         this.forward.x * (hit.point.x - cam.position.x) +
         this.forward.y * (hit.point.y - cam.position.y) +
@@ -1236,7 +1264,8 @@ export class Scene3D {
     // drawn-only conveyor still runs its tread.
     for (const visual of this.standing) visual.sync(alpha, treadTime);
 
-    this.chains.sync(level, alpha, retract);
+    // The cuff is drawn at the depth of whatever it bit (`BodyVisual.depth`).
+    this.chains.sync(level, alpha, retract, this.depthOf);
     // The ball's ring, when it is threaded on a vine, folds the leaves it
     // slides over (render3d/vineLeafFold.ts).
     const end = level.ball?.chain?.end;

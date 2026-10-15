@@ -83,6 +83,7 @@ import {
   type RawLevelData,
   type LevelBodyData,
   type LightObjectData,
+  type RootBranchData,
   type SceneObjectData,
   hasBearing,
   isCollisionObject,
@@ -209,6 +210,10 @@ export type EdShape =
       // well-formed one and nothing has to ask which layer it is on to know
       // whether it may be read.
       width: number;
+      // The width at its LAST node, for a tapered curve (`ShapeData`'s
+      // `curve.tip`) - a root branch narrowing from `width` at its base.
+      // Absent is a bar of one width.
+      tip?: number;
     }
   // A CONVEYOR (`ShapeData`'s `belt`, docs/conveyors.md): a band `thickness`
   // deep round the outside of two or more wheels. Each wheel is a centre `c` in
@@ -226,6 +231,16 @@ export type EdShape =
 export interface EdWheel {
   readonly c: Vec2;
   readonly r: number;
+}
+
+// Where a root branch grows from, in the editor (`RootBranchData` on disk): the
+// ITEM it grows out of - an item id, where the file holds an index into the
+// body's objects - or null for a trunk, and how far along that item's
+// centreline it sprouts, a fraction of its arc length. The branch's own first
+// node is kept on that point by `syncRoots` (rootEditing.ts) after every edit.
+export interface EdRoot {
+  readonly parent: number | null;
+  readonly at: number;
 }
 
 // What a curve drawn in the editor starts out as: a bar the manacle's own ring
@@ -450,6 +465,14 @@ export function debugData(d: EdDebug): DebugDrawData | undefined {
   };
 }
 
+// A root branch's on-disk form (`RootBranchData`), its parent's item id turned
+// into the index that item is written at among `run`, the body's members in
+// the order `toLevelData` writes them.
+function rootData(r: EdRoot, run: readonly EdItem[]): RootBranchData {
+  const parent = r.parent === null ? -1 : run.findIndex((m) => m.id === r.parent);
+  return parent < 0 ? {} : { parent, at: r.at };
+}
+
 export interface EdItem {
   id: number;
   layer: EdLayer;
@@ -556,6 +579,10 @@ export interface EdItem {
   // Per SHAPE like the two above. Replaced whole on an edit rather than
   // mutated, so an item copied by spreading never shares a live one.
   debug: EdDebug;
+  // A ROOT branch (see `CollisionObjectData.root`, docs/roots.md), or null for
+  // every other piece. Only ever set on a scene-layer curve. Replaced whole on
+  // an edit, like `debug`.
+  root: EdRoot | null;
   force: number; // force areas only: m/s² along the item's rotation
   // Water areas only: the current's speed in m/s along the item's rotation, and
   // how hard the water takes hold in 1/s (see `LevelBodyData.flow` / `drag`).
@@ -666,6 +693,7 @@ export function cloneShape(s: EdShape): EdShape {
       handles: s.handles.map((h) => ({ ...h })),
       keys: s.keys.map((k) => ({ ...k })),
       width: s.width,
+      ...(s.tip !== undefined ? { tip: s.tip } : {}),
     };
   }
   // A belt's wheel list is cloned for the same reason: `setBelt` writes a new
@@ -1168,6 +1196,7 @@ function edShape(s: ShapeData): EdShape {
       })),
       keys: s.verts.map(() => NO_KEY()),
       width: s.width,
+      ...(s.tip !== undefined ? { tip: s.tip } : {}),
     };
   }
   // A BELT keeps every field it has on disk (docs/conveyors.md): each wheel's
@@ -1352,6 +1381,9 @@ function fromLevelData(data: LevelData): EdModel {
           material: materialName(o.material),
           thickness: o.thickness ?? DEFAULT_THICKNESS,
           debug: edDebug(o.debug),
+          // Filled in below, once every object of the body has its item: a
+          // branch names its parent by index.
+          root: null,
         });
         continue;
       }
@@ -1372,6 +1404,7 @@ function fromLevelData(data: LevelData): EdModel {
           material: DEFAULT_MATERIAL,
           thickness: DEFAULT_THICKNESS,
           debug: NO_DEBUG(),
+          root: null,
           anchorId: o.id,
           pathId: 0,
         });
@@ -1381,6 +1414,19 @@ function fromLevelData(data: LevelData): EdModel {
     }
     const made = bodies.slice(firstOfBody);
     itemOfBody.push(made.find((i) => i.object === "collision") ?? null);
+    // A root branch names the piece it grows out of by its index in the
+    // body's objects, and every object made exactly one item, in order - so
+    // the index is the item at that place in `made`. One that names nothing
+    // in the body loads as a trunk (`syncRoots` would make it one anyway).
+    b.objects.forEach((o, k) => {
+      const item = made[k];
+      if (!item || !isCollisionObject(o) || !o.root || item.shape.kind !== "path") return;
+      const parent = o.root.parent !== undefined ? made[o.root.parent] : undefined;
+      item.root = {
+        parent: parent && parent !== item ? parent.id : null,
+        at: o.root.at ?? 0,
+      };
+    });
   }
 
   const regions: EdItem[] = (data.cameraRegions ?? []).map((r) => ({
@@ -1407,6 +1453,7 @@ function fromLevelData(data: LevelData): EdModel {
     material: DEFAULT_MATERIAL,
     thickness: DEFAULT_THICKNESS,
     debug: NO_DEBUG(),
+    root: null,
     force: 0,
     flow: 0,
     drag: 0,
@@ -1506,6 +1553,7 @@ function fromLevelData(data: LevelData): EdModel {
     material: DEFAULT_MATERIAL,
     thickness: DEFAULT_THICKNESS,
     debug: NO_DEBUG(),
+    root: null,
     force: 0,
     flow: 0,
     drag: 0,
@@ -1615,6 +1663,7 @@ function lightItem(
     material: DEFAULT_MATERIAL,
     thickness: DEFAULT_THICKNESS,
     debug: NO_DEBUG(),
+    root: null,
     force: 0,
     flow: 0,
     drag: 0,
@@ -1696,6 +1745,7 @@ function lightItem(
     material: DEFAULT_MATERIAL,
     thickness: DEFAULT_THICKNESS,
     debug: NO_DEBUG(),
+    root: null,
     force: 0,
     flow: 0,
     drag: 0,
@@ -1912,6 +1962,7 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
       return {
         kind: "curve",
         width: i.shape.width,
+        ...(i.shape.tip !== undefined ? { tip: i.shape.tip } : {}),
         verts: i.shape.verts.map((v, k) => {
           const h = handles[k];
           return {
@@ -2187,6 +2238,11 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
         // Written only for a piece that is on or configured (`debugData`). A
         // belt draws its own band and has no debug geometry to configure.
         ...(i.shape.kind !== "belt" && debugData(i.debug) ? { debug: debugData(i.debug) } : {}),
+        // A root branch, its parent named by the index it is written at in
+        // this body: every member writes one object, in run order. A parent
+        // outside the body (`syncRoots` clears one, so only a model mid-edit
+        // could hold it) is written as a trunk.
+        ...(i.root && i.shape.kind === "path" ? { root: rootData(i.root, run) } : {}),
       });
     }
 
@@ -3255,7 +3311,10 @@ export function pointInBody(item: EdItem, world: Vec2): boolean {
   // A polyline has no inside, so it is picked by a band around it - the same
   // band an arrow note is picked by, since both are segments rather than areas.
   if (item.shape.kind === "path") {
-    return distanceToPolyline(flattenPath(pathNodes(item)), l) <= PATH_PICK_HALF_WIDTH;
+    // A ROOT is picked anywhere on its bar, which at its base is far wider
+    // than the band: a trunk is clicked where it is drawn.
+    const reach = item.root ? Math.max(PATH_PICK_HALF_WIDTH, item.shape.width / 2) : PATH_PICK_HALF_WIDTH;
+    return distanceToPolyline(flattenPath(pathNodes(item)), l) <= reach;
   }
   if (item.shape.kind === "rect") {
     return Math.abs(l.x) <= item.shape.w / 2 && Math.abs(l.y) <= item.shape.h / 2;
@@ -3364,6 +3423,9 @@ export function objectLabel(item: EdItem, metresToPx: number): string {
         : item.shape.kind === "belt"
           ? `${item.shape.wheels.length} wheels t${n(item.shape.thickness)}`
           : `${item.shape.verts.length}v`;
+  // A root piece is a trunk or a branch, which is what tells one from another
+  // in a tree of them; a scene path that is not one is the bar it always was.
+  if (item.root) return `${item.root.parent === null ? "root" : "branch"} ${form}`;
   return `${item.shape.kind} ${form}`;
 }
 
@@ -3377,7 +3439,7 @@ export function shapeArea(item: EdItem): number {
   // and nothing weighs it, which its own zero area says.
   if (item.shape.kind === "path") {
     if (item.layer !== "scene") return 0;
-    return strokeCurve(pathNodes(item), item.shape.width).pieces.reduce(
+    return strokeCurve(pathNodes(item), item.shape.width, item.shape.tip).pieces.reduce(
       (a, piece) => a + Math.abs(polySignedArea2(piece)) / 2,
       0,
     );
@@ -3437,7 +3499,7 @@ export function shapeCentre(item: EdItem): Vec2 {
   if (s.kind === "path") {
     let total = 0;
     let acc = Vec2.ZERO;
-    for (const piece of strokeCurve(pathNodes(item), s.width).pieces) {
+    for (const piece of strokeCurve(pathNodes(item), s.width, s.tip).pieces) {
       const a = Math.abs(polySignedArea2(piece)) / 2;
       total += a;
       acc = acc.add(polyCentroid(piece).mul(a));
@@ -4259,6 +4321,7 @@ export function emptyModel(): EdModel {
         // A fresh level names no scene, so its ground is seen by its debug
         // geometry, as every piece a new level is blocked out in is.
         debug: { ...NO_DEBUG(), on: true },
+        root: null,
         force: 0,
         flow: 0,
         drag: 0,
