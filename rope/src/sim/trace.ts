@@ -60,7 +60,14 @@ export interface SerializedFrame {
 
 export interface Recording {
   level: string;
+  // Every frame of the run, from its first: what a replay re-creates the run
+  // from, so never trimmed.
   frames: SerializedFrame[];
+  // What the replay is checked against, each stamped with its own `frame`, and
+  // NOT necessarily one per frame: a browser bundle carries every frame of its
+  // last thirty seconds and one a second before that (`sim/runRecording.ts`),
+  // a production run one a second. Read them by frame (`digestsByFrame`),
+  // never by index.
   digests?: Digest[];
   // The whole scene, not just the avatar (see WorldDigest). Optional and at the
   // same cadence as `digests`: bundles recorded before it existed replay exactly
@@ -111,6 +118,21 @@ export interface Recording {
   // Production playtest runs carry who played them and when (see
   // `playtest/protocol.ts`). Never read by the sim.
   meta?: RunMeta;
+}
+
+// Recorded digests looked up by the frame they describe rather than by their
+// position (see `Recording.digests`): a bundle that carries one a second, or
+// every frame only of its last thirty seconds, indexed by position would
+// compare frame 2 against the digest of frame 120.
+export function digestsByFrame<T extends { frame: number }>(
+  list: T[] | undefined,
+): (frame: number) => T | undefined {
+  if (!list || list.length === 0) return () => undefined;
+  const dense = list.every((d, i) => d.frame === i + 1);
+  if (dense) return (frame) => list[frame - 1];
+  const map = new Map<number, T>();
+  for (const d of list) map.set(d.frame, d);
+  return (frame) => map.get(frame);
 }
 
 export interface Digest {

@@ -4,8 +4,9 @@ The debugging loop for gameplay/physics bugs (player stuck, frozen input, bad
 launches, mover misbehavior):
 
 1. **Capture.** Reproduce in the browser, press **P** — downloads a bundle
-   (level id + full input trace + per-frame avatar and world digests). Recording
-   restarts on level reset, so a bundle always replays from frame 0.
+   (level id + full input trace + avatar and world digests: every frame of the
+   last 30 s, one a second before that). Recording restarts on level reset, so
+   a bundle always replays from frame 0.
    A scenario that can be described as a script needs no browser at all:
    `cli record script.json --out session.json` writes the same format headlessly,
    which is how a fiddly repro (wound up against a ceiling, wedged under a crate)

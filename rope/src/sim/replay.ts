@@ -19,6 +19,7 @@ import {
   digestsEqual,
   digestDrift,
   DRIFT_EPSILON,
+  digestsByFrame,
   recordingDeserializer,
   StuckDetector,
   worldDigest,
@@ -126,26 +127,13 @@ export function levelFromRecording(rec: Recording): Level | BallLevel {
   return spec.controller === "ball" ? new BallLevel(data) : new Level(data, spec.init);
 }
 
-// Recorded digests looked up by the frame they describe rather than by their
-// position. A P download carries one per frame and the two agree; a production
-// run carries one a second (see playtest/protocol.ts), and indexing that by
-// position would compare frame 2 against the digest of frame 120.
-function byFrame<T extends { frame: number }>(list: T[] | undefined): (frame: number) => T | undefined {
-  if (!list || list.length === 0) return () => undefined;
-  const dense = list.every((d, i) => d.frame === i + 1);
-  if (dense) return (frame) => list[frame - 1];
-  const map = new Map<number, T>();
-  for (const d of list) map.set(d.frame, d);
-  return (frame) => map.get(frame);
-}
-
 export function replayRecording(rec: Recording, options: ReplayOptions = {}): ReplayResult {
   const tolerance = options.divergenceTolerance ?? DIVERGENCE_TOLERANCE;
   const fieldFilter = options.divergenceField;
   const level = levelFromRecording(rec);
   const deserialize = recordingDeserializer(rec);
-  const expectedDigestAt = byFrame(rec.digests);
-  const expectedWorldAt = byFrame(rec.worldDigests);
+  const expectedDigestAt = digestsByFrame(rec.digests);
+  const expectedWorldAt = digestsByFrame(rec.worldDigests);
   let worldComparedFrames = 0;
   const digests: Digest[] = [];
   const worldDigests: WorldDigest[] = [];

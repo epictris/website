@@ -267,6 +267,16 @@ divergence and names what carried it (`world: body#3 drifted @f412`).
 A P bundle gains an optional `worldDigests` array at the same cadence as
 `digests`, so old bundles replay exactly as before and new ones are compared on
 the whole scene.
+
+**A bundle's digests are not one per frame.**
+The page keeps every input from frame 0, and the digests in full only for the last 30 s; older than that, one frame in 60 survives as a checkpoint (`sim/runRecording.ts`, the game and the editor's test both).
+Every digest was retained before (2026-10-13): a BALL world digest is 273 bodies, about 37 KB, and at 2.2 MB a second an editor tab left in a test ran out of memory, players' tabs included.
+The inputs are what a replay re-creates every frame from, and the checkpoints are what says the replay is the run that was played, to the second.
+A body digest unchanged since the frame before is stored as that frame's object (two bodies in three on BALL), invisible in the JSON.
+Recorded digests are read by their `frame` (`digestsByFrame`), never by index, which a production run's one-a-second stream needed already.
+In a run longer than 30 s, `cli diverge` places a divergence older than the window to the checkpoint after it; `cli trace` over that second finds the frame.
+`cli selftest` checks the window on a run 300 frames longer than it: the cadence, the content against the run's own digests, a bit-exact replay, and a perturbed old checkpoint named by the self-replay verdict.
+
 `cli selftest` demands bit-exactness on all of it, for a grapple script *and* for
 a ball script recorded headlessly through `cli record`.
 

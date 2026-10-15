@@ -75,6 +75,7 @@ import { PhysTrace } from "../engine/physTrace";
 import type { PhaseRecord } from "../engine/phaseTrace";
 import { runScript, type PlaytestScript } from "../sim/playtest";
 import { recordScript, type RecordStamp } from "../sim/record";
+import { CHECKPOINT_EVERY, DENSE_WINDOW_FRAMES, RunRecording } from "../sim/runRecording";
 import {
   DIVERGENCE_TOLERANCE,
   divergenceSummary,
@@ -108,6 +109,7 @@ import {
   checkInvariants,
   digest,
   digestBall,
+  digestsByFrame,
   EnergyMonitor,
   RollMonitor,
   TunnelMonitor,
@@ -247,18 +249,24 @@ function worldDivergenceLine(r: {
   worldMaxDrift: number;
   worldMaxDriftName: string | null;
   worldComparedFrames: number;
+  framesRun: number;
 }): string | null {
   if (r.worldComparedFrames === 0) return null;
   const drift = `maxDrift=${(r.worldMaxDrift * 100).toFixed(2)}px${
     r.worldMaxDriftName ? ` on ${r.worldMaxDriftName}` : ""
   }`;
+  // What the verdict covers, when it is not every frame: a bundle keeps every
+  // frame's world digest only for its last thirty seconds and one a second
+  // before that (`sim/runRecording.ts`), and production runs one a second.
+  const covered =
+    r.worldComparedFrames < r.framesRun ? ` (${r.worldComparedFrames} of ${r.framesRun} frames recorded)` : "";
   if (r.worldDivergedAtFrame !== null) {
-    return `world: ${r.worldDivergedName} drifted @f${r.worldDivergedAtFrame} (${drift})`;
+    return `world: ${r.worldDivergedName} drifted @f${r.worldDivergedAtFrame} (${drift})${covered}`;
   }
   if (r.worldBitDivergedAtFrame !== null) {
-    return `world: bit-identical behaviour (${drift} float noise @f${r.worldBitDivergedAtFrame}+)`;
+    return `world: bit-identical behaviour (${drift} float noise @f${r.worldBitDivergedAtFrame}+)${covered}`;
   }
-  return `world: bit-exact match with recording`;
+  return `world: bit-exact match with recording${covered}`;
 }
 
 
@@ -468,8 +476,9 @@ function firstAvatarDifference(
   tolerance: number,
 ): { frame: number; fields: DigestFieldDelta[] } | null {
   const fields = ["px", "py", "rot", "vx", "vy", "ropeLen", "maxRope"] as const;
+  const recordedAt = digestsByFrame(rec.digests);
   for (let i = 0; i < replayed.length; i++) {
-    const a = rec.digests?.[i];
+    const a = recordedAt(i + 1);
     const b = replayed[i];
     if (!a || !b) continue;
     const out: DigestFieldDelta[] = [];
@@ -2100,9 +2109,64 @@ function cmdSelftest(): void {
       `@f${tamperedVerdict.firstDivergence?.frame ?? "-"} ${tamperedVerdict.firstDivergence?.field ?? "-"}`,
   );
 
-  const allOk = ok && ballOk && selfReplayOk;
+  const windowOk = selftestRunRecording();
+
+  const allOk = ok && ballOk && selfReplayOk && windowOk;
   console.log(allOk ? "RESULT: DETERMINISTIC" : "RESULT: NON-DETERMINISTIC / UNHEALTHY");
   process.exit(allOk ? 0 : 1);
+}
+
+// The bundle the page keeps (sim/runRecording.ts), on a run three hundred frames
+// longer than its window: every input, the digests of the window in full and one
+// a second before it, each the digest the run actually produced (the shared body
+// objects are invisible in the JSON). The bundle has to replay bit-exactly
+// against what it kept, and a checkpoint from BEFORE the window has to be one
+// the replay is checked against - perturbed, the self-replay verdict must name
+// its frame, or the past half of a long bundle is a list nothing reads.
+function selftestRunRecording(): boolean {
+  const extra = 300;
+  const full = recordScript({ ...BALL_SELFTEST_SCRIPT, frames: DENSE_WINDOW_FRAMES + extra }).recording;
+  const kept = new RunRecording();
+  for (let i = 0; i < full.frames.length; i++) {
+    // A copy: `push` swaps unchanged bodies for the previous frame's objects in
+    // place, and the run it is compared against below must stay as recorded.
+    kept.push(full.frames[i]!, full.digests![i]!, structuredClone(full.worldDigests![i]!));
+  }
+  const parts = kept.bundle();
+  const wantFrames: number[] = [];
+  for (let f = CHECKPOINT_EVERY; f <= extra; f += CHECKPOINT_EVERY) wantFrames.push(f);
+  for (let f = extra + 1; f <= full.frames.length; f++) wantFrames.push(f);
+  const framesOf = (list: { frame: number }[]): string => list.map((d) => d.frame).join(",");
+  const want = wantFrames.join(",");
+  const cadenceOk = framesOf(parts.digests) === want && framesOf(parts.worldDigests) === want;
+  const contentOk =
+    parts.frames.length === full.frames.length &&
+    JSON.stringify(parts.worldDigests) === JSON.stringify(wantFrames.map((f) => full.worldDigests![f - 1])) &&
+    JSON.stringify(parts.digests) === JSON.stringify(wantFrames.map((f) => full.digests![f - 1]));
+  const rec: Recording = { ...full, ...parts };
+  const replayed = replayRecording(rec);
+  const replayOk =
+    replayed.bitDivergedAtFrame === null &&
+    replayed.worldBitDivergedAtFrame === null &&
+    replayed.worldComparedFrames === wantFrames.length;
+  const checkpoint = 2 * CHECKPOINT_EVERY;
+  const tampered: Recording = {
+    ...rec,
+    worldDigests: rec.worldDigests!.map((wd) =>
+      wd.frame === checkpoint
+        ? { ...wd, bodies: wd.bodies.map((b) => (b.id === 0 ? { ...b, px: b.px + 1e-3 } : b)) }
+        : wd,
+    ),
+  };
+  const tamperedVerdict = verifySelfReplay(tampered);
+  const tamperOk = !tamperedVerdict.identical && tamperedVerdict.firstDivergence?.frame === checkpoint;
+  console.log(
+    `[selftest] run recording: ${full.frames.length} frames kept ${parts.frames.length}, ` +
+      `digests ${parts.digests.length} (cadence ${cadenceOk ? "ok" : "WRONG"}, content ${contentOk ? "ok" : "WRONG"}), ` +
+      `replay compared ${replayed.worldComparedFrames} world frames, diverged ${replayed.worldBitDivergedAtFrame ?? replayed.bitDivergedAtFrame ?? "no"}, ` +
+      `checkpoint f${checkpoint} perturbed -> @f${tamperedVerdict.firstDivergence?.frame ?? "-"}`,
+  );
+  return cadenceOk && contentOk && replayOk && tamperOk;
 }
 
 // A ball & chain session with everything the controller does in it: a deploy, an

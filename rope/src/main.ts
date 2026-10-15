@@ -31,11 +31,10 @@ import {
   serializeInput,
   worldDigest,
   worldDigestBall,
-  type Digest,
   type Recording,
-  type SerializedFrame,
   type WorldDigest,
 } from "./sim/trace";
+import { RunRecording } from "./sim/runRecording";
 import type { FrameInput } from "./input/frameInput";
 import type { IInputSource } from "./input/frameInput";
 import { levelFromRecording } from "./sim/replay";
@@ -332,9 +331,7 @@ function buildRun(): void {
   debris.reset();
   chainRetract?.reset();
   level.onReset = reset;
-  recFrames.length = 0;
-  recDigests.length = 0;
-  recWorldDigests.length = 0;
+  recording.clear();
   // A reset builds a new level, so it builds a new scene: every extrusion in it
   // belongs to bodies that no longer exist. Held off while a seek is passing
   // through a build on its way somewhere - the scene it would build is of a
@@ -418,14 +415,12 @@ const inputTrace = new InputTrace(
 inputTrace.install();
 
 // Full-session recording — press P to download a replayable bundle. A bundle
-// must start at level start to replay deterministically, so the trace isn't
-// trimmed; it resets whenever the level resets.
-const recFrames: SerializedFrame[] = [];
-const recDigests: Digest[] = [];
-// The rest of the scene, at the same cadence — every rigid body and the chain,
-// so a replay of this bundle is compared on the whole world rather than on the
-// avatar alone (see WorldDigest).
-const recWorldDigests: WorldDigest[] = [];
+// must start at level start to replay deterministically, so the inputs aren't
+// trimmed; it resets whenever the level resets. The digests it is checked
+// against - the avatar's and the whole world's (see WorldDigest) - are kept
+// in full for the last thirty seconds and one a second before that, or a tab
+// left in a level runs out of memory (see sim/runRecording.ts).
+const recording = new RunRecording();
 // The held mask of the most recent sampled frame, which is the hand the NEXT
 // level's first frame is stepped from: the input source's previous-frame state
 // survives a reset, so a jump still held on the frame after the one that reset
@@ -540,9 +535,7 @@ function downloadRecording(): void {
     dirty,
     srcHash,
     heldAtStart: recHeldAtStart,
-    frames: recFrames.slice(),
-    digests: recDigests.slice(),
-    worldDigests: recWorldDigests.slice(),
+    ...recording.bundle(),
     inputTrace: inputTrace.bundle(),
   };
   // Before the file leaves: does this bundle reproduce HERE? The browser and bun
@@ -855,10 +848,8 @@ function stepLevel(frameInput: FrameInput, seeking: boolean): void {
     recHeldAtStart = serialized.h;
     recorder?.startRun(levelId, serialized.h);
   } else {
-    recFrames.push(serialized);
-    recDigests.push(level instanceof BallLevel ? digestBall(level) : digest(level));
     const wd = worldDigestOf(level);
-    recWorldDigests.push(wd);
+    recording.push(serialized, level instanceof BallLevel ? digestBall(level) : digest(level), wd);
     recorder?.frame(serialized);
     if (level.frame % DIGEST_EVERY === 0) recorder?.digest(wd);
   }

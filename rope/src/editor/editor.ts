@@ -297,11 +297,9 @@ import {
   serializeInput,
   worldDigest,
   worldDigestBall,
-  type Digest,
   type Recording,
-  type SerializedFrame,
-  type WorldDigest,
 } from "../sim/trace";
+import { RunRecording } from "../sim/runRecording";
 import type {
   EnvironmentData,
   LevelBodyData,
@@ -2044,13 +2042,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // would be raised sixty times a second for the rest of the run.
   let testFinished = false;
   let testData: LevelData | null = null;
-  const recFrames: SerializedFrame[] = [];
-  const recDigests: Digest[] = [];
-  // Every body that can move, at the same cadence as `recDigests` (see
-  // `WorldDigest`), as `main.ts` records. A test-mode bundle without it can say
-  // where the AVATAR first left the recording and nothing about what the body
-  // it was anchored to was doing, which is the wrong half of a chain bug.
-  const recWorldDigests: WorldDigest[] = [];
+  // The test's bundle, as `main.ts` records the game's: every input, and the
+  // avatar's and every moving body's digest for the last thirty seconds and one
+  // a second before that (see sim/runRecording.ts). A test-mode bundle without
+  // the world digests can say where the AVATAR first left the recording and
+  // nothing about what the body it was anchored to was doing, which is the
+  // wrong half of a chain bug.
+  const recording = new RunRecording();
   // The raw DOM button story beside the frames, as `main.ts` carries it (see
   // input/inputTrace.ts): session-2191f was a test-mode bundle with a dropped
   // click near its end and no trace to place it with, because only the game's
@@ -2111,9 +2109,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     testController = controller;
     testData = pixelData;
     testRuns++;
-    recFrames.length = 0;
-    recDigests.length = 0;
-    recWorldDigests.length = 0;
+    recording.clear();
     // The camera controller owns the zoom from here (base framing × the active
     // region's viewportScale), and re-derives it every frame, so a resize
     // mid-test needs no separate handling.
@@ -2175,7 +2171,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   }
 
   function downloadTestRecording(): void {
-    if (!testData || recFrames.length === 0) return;
+    if (!testData || recording.length === 0) return;
     const rec: Recording = {
       level: currentName ?? "editor",
       git: treeCommit,
@@ -2183,9 +2179,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       srcHash: treeSrcHash,
       controller: testController,
       data: testData,
-      frames: recFrames.slice(),
-      digests: recDigests.slice(),
-      worldDigests: recWorldDigests.slice(),
+      ...recording.bundle(),
       inputTrace: inputTrace.bundle(),
     };
     // The same check the game's P-download runs: a bundle that does not
@@ -10939,11 +10933,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         // runs several steps must not drop the caught-up steps' events.
         testSparks.ingest(testLevel.sparkEvents);
         testDebris.ingest(testLevel.breakEvents);
-        recFrames.push(serializeInput(fi));
-        recDigests.push(
+        recording.push(
+          serializeInput(fi),
           testLevel instanceof BallLevel ? digestBall(testLevel) : digest(testLevel),
-        );
-        recWorldDigests.push(
           testLevel instanceof BallLevel ? worldDigestBall(testLevel) : worldDigest(testLevel),
         );
         // The LINE WAS CROSSED. A test is an authoring instrument, so it says

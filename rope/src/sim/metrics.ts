@@ -95,6 +95,10 @@ export function bundleMetrics(rec: Recording, name: string): BundleMetrics {
   const gripAnchor = new GripAnchorMonitor();
   const tunnel = new TunnelMonitor();
   const stuck = new StuckDetector();
+  // The recorded world digests by the frame they describe: a bundle need not
+  // carry one per frame (see `Recording.digests`). Built here rather than
+  // imported, as `num` is written, because older trees have no helper for it.
+  const expectedWorld = new Map((rec.worldDigests ?? []).map((wd) => [wd.frame, wd]));
   let violations = 0;
   let peakV: number | null = null;
   let peakAnchorV: number | null = null;
@@ -145,7 +149,7 @@ export function bundleMetrics(rec: Recording, name: string): BundleMetrics {
       peakV = keepMax(peakV, num(level.player.velocity.length()));
     }
 
-    const expected = rec.worldDigests?.[i];
+    const expected = expectedWorld.get(i + 1);
     if (expected && divergedAt === 0) {
       const wd = level instanceof BallLevel ? worldDigestBall(level) : worldDigest(level);
       if (worldDigestDeltas(wd, expected, DIVERGENCE_TOLERANCE).length > 0) divergedAt = i + 1;
