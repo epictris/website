@@ -64,13 +64,25 @@ export interface Softness {
 
 export const RIGID: Softness = { biasRate: 0, massScale: 1, impulseScale: 0 };
 
+export type MutableSoftness = { -readonly [K in keyof Softness]: Softness[K] };
+
 export function softness(hertz: number, zeta: number, h: number): Softness {
+  return softnessInto({ biasRate: 0, massScale: 1, impulseScale: 0 }, hertz, zeta, h);
+}
+
+// `softness` written into `out` rather than a fresh object, for a row that
+// derives its own frequency on every solve (a plant's spring rows, thousands a
+// frame). `RIGID` for zero hertz, as `softness` answers.
+export function softnessInto(out: MutableSoftness, hertz: number, zeta: number, h: number): Softness {
   if (hertz === 0) return RIGID;
   const omega = 2 * Math.PI * hertz;
   const a1 = 2 * zeta + h * omega;
   const a2 = h * omega * a1;
   const a3 = 1 / (1 + a2);
-  return { biasRate: omega / a1, massScale: a2 * a3, impulseScale: a3 };
+  out.biasRate = omega / a1;
+  out.massScale = a2 * a3;
+  out.impulseScale = a3;
+  return out;
 }
 
 // A rope row's stiffness, as a soft constraint's frequency and damping ratio.
@@ -619,17 +631,20 @@ export class TieSolver {
   ): void {
     let k = 1;
     const bodies: RigidBody2D[] = [];
+    const inIsland = new Set<RigidBody2D>();
     const rows: IslandRow[] = [];
     const undamped = new Set<RigidBody2D>();
     for (const unit of island) {
       if (unit.substeps > k) k = unit.substeps;
       for (const body of unit.bodies) {
-        if (!body.removed && !bodies.includes(body)) bodies.push(body);
+        if (!body.removed && !inIsland.has(body)) {
+          bodies.push(body);
+          inIsland.add(body);
+        }
         if (unit.undamped) undamped.add(body);
       }
       for (const row of unit.rows) rows.push(row);
     }
-    const inIsland = new Set<RigidBody2D>(bodies);
     const contactRows: ContactRow[] = [];
     for (const c of contacts) {
       if (!inIsland.has(c.a) && !(c.b instanceof RigidBody2D && inIsland.has(c.b))) continue;
@@ -655,27 +670,38 @@ export class TieSolver {
       body.angularVelocity *= TIE_BODY_DAMPING;
     }
 
+    // The substeps are the island's hot loop (a held berry plant: eight of
+    // them over some 230 rows), so their loops are indexed - a `for...of`
+    // over an array allocated an iterator result per element there - and the
+    // integration is written in scalars, `v += gravity·(gravityScale·h)` and
+    // `p += v·h` with the same operations and no vector to throw away.
     for (let s = 0; s < k; s++) {
-      for (const body of bodies) {
-        body.linearVelocity = body.linearVelocity.add(gravity.mul(body.gravityScale * h));
+      for (let i = 0; i < bodies.length; i++) {
+        const body = bodies[i]!;
+        const v = body.linearVelocity;
+        const gs = body.gravityScale * h;
+        body.linearVelocity = new Vec2(v.x + gravity.x * gs, v.y + gravity.y * gs);
       }
       // A rope regenerates its wrap path against the bodies as they now stand.
-      for (const row of rows) row.prepare(h);
+      for (let i = 0; i < rows.length; i++) rows[i]!.prepare(h);
       // Warm start: last substep's answer, applied before the first iteration.
-      for (const row of rows) row.warmStart();
-      for (const row of contactRows) warmStartContact(row);
+      for (let i = 0; i < rows.length; i++) rows[i]!.warmStart();
+      for (let i = 0; i < contactRows.length; i++) warmStartContact(contactRows[i]!);
       // Solve with bias. The rows alternate direction substep by substep, so
       // the order bias of one pass is the mirror of the next's.
       solveRows(rows, h, tieSoft, true, s % 2 === 1);
-      for (const row of contactRows) solveContact(row, h, contactSoft, true);
-      for (const body of bodies) {
-        body.globalPosition = body.globalPosition.add(body.linearVelocity.mul(h));
+      for (let i = 0; i < contactRows.length; i++) solveContact(contactRows[i]!, h, contactSoft, true);
+      for (let i = 0; i < bodies.length; i++) {
+        const body = bodies[i]!;
+        const p = body.globalPosition;
+        const v = body.linearVelocity;
+        body.globalPosition = new Vec2(p.x + v.x * h, p.y + v.y * h);
         body.globalRotation += body.angularVelocity * h;
       }
       // Relax: the same rows against the new positions, with no bias, which
       // takes back the velocity the bias put in.
       solveRows(rows, h, tieSoft, false, s % 2 === 1);
-      for (const row of contactRows) solveContact(row, h, RIGID, false);
+      for (let i = 0; i < contactRows.length; i++) solveContact(contactRows[i]!, h, RIGID, false);
       if (SolverStats.enabled) {
         SolverStats.sweeps += 2;
         SolverStats.solves += 2 * (rows.length + contactRows.length);

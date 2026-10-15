@@ -33,16 +33,17 @@
 
 import { Vec2 } from "../engine/vec2";
 import { Mathf } from "../engine/mathf";
-import { PhysicsBody2D, RigidBody2D, type CollisionObject2D } from "../engine/body";
+import { PhysicsBody2D, RigidBody2D } from "../engine/body";
 import {
   RIGID,
   invInertiaOf,
   islandOwns,
-  knotVelocity,
   ropeImpulse,
   softness,
+  softnessInto,
   type IslandRow,
   type IslandUnit,
+  type MutableSoftness,
   type Softness,
 } from "../engine/ties";
 import type { RopeContact } from "../lib/ropeContact";
@@ -52,27 +53,67 @@ import { StalkClamp, VineBend, type BendEnd } from "./vineBend";
 import { VINE_LRA_GIVE, wakeVine, type Vine } from "./vines";
 import type { VineLink } from "../engine/body";
 
-// The velocity of the point a contact sits at, for a row's rate: a rigid
-// body's as `knotVelocity` reads it (the steered ball's rim excepted), a
-// moving static's at the point, and nothing for anything else.
-function contactVelocity(contact: RopeContact): Vec2 {
+// The rows below are the plant's hot loop - a held berry runs some 230 of them
+// both passes of eight substeps, 3,700 solves a frame - so they are written in
+// scalars rather than `Vec2`s: each expression is the one the vector form
+// evaluated, operand for operand and in the same order, so the bits are the
+// same, and what goes is the dozen short-lived vectors a solve allocated (6 MB
+// a held frame, `session-470f`). The `Vec2` each line replaces is named beside
+// it where the correspondence is not obvious.
+
+// The velocity of the point a contact sits at, for a row's rate, into
+// `VEL`: a rigid body's as `knotVelocity` reads it (the steered ball's rim
+// excepted), a moving static's at the point, and nothing for anything else.
+const VEL = { x: 0, y: 0 };
+function contactVelocityInto(contact: RopeContact): void {
   const body = contact.obj;
-  if (body instanceof RigidBody2D) return knotVelocity(body, contact.globalPosition);
-  return body instanceof PhysicsBody2D ? body.velocityAtPoint(contact.globalPosition) : Vec2.ZERO;
+  if (body instanceof RigidBody2D) {
+    const v = body.linearVelocity;
+    if (body.kinematicRotation) {
+      VEL.x = v.x;
+      VEL.y = v.y;
+      return;
+    }
+    // `RigidBody2D.velocityAtPoint`: v + (-r.y, r.x)·w, r = at - centre.
+    const at = contact.globalPosition;
+    const c = body.globalPosition;
+    const rx = at.x - c.x;
+    const ry = at.y - c.y;
+    const w = body.angularVelocity;
+    VEL.x = v.x + -ry * w;
+    VEL.y = v.y + rx * w;
+    return;
+  }
+  const v = body instanceof PhysicsBody2D ? body.velocityAtPoint(contact.globalPosition) : Vec2.ZERO;
+  VEL.x = v.x;
+  VEL.y = v.y;
 }
 
-// A body's generalized inverse mass at arm `r` along `n`, as the island reads
-// it (`invInertiaOf`: a kinematically turned body is locked to a row).
-function effectiveInverse(body: CollisionObject2D, r: Vec2, n: Vec2): number {
-  if (!(body instanceof RigidBody2D)) return 0;
-  const rxn = r.cross(n);
-  return body.inverseMass + invInertiaOf(body) * rxn * rxn;
+// `body.linearVelocity += (ix, iy)·inverseMass` and the spin the impulse puts
+// in at arm `(rx, ry)` (`r.cross(impulse)`), as the island applies an impulse
+// (`invInertiaOf`: a kinematically turned body is locked to a row).
+function applyImpulse(body: RigidBody2D, ix: number, iy: number, rx: number, ry: number): void {
+  const v = body.linearVelocity;
+  const m = body.inverseMass;
+  body.linearVelocity = new Vec2(v.x + ix * m, v.y + iy * m);
+  body.angularVelocity += (rx * iy - ry * ix) * invInertiaOf(body);
 }
 
-function apply(body: CollisionObject2D, impulse: Vec2, r: Vec2): void {
-  if (!(body instanceof RigidBody2D)) return;
-  body.linearVelocity = body.linearVelocity.add(impulse.mul(body.inverseMass));
-  body.angularVelocity += r.cross(impulse) * invInertiaOf(body);
+// `plantSoftness(h)`, kept for the last step and tuning it was asked of: every
+// row of every substep asks it of the same `h`, and it is a pure function of
+// that and of `PlantTuning`, which a rig may change between runs.
+let plantSoftLast: Softness = RIGID;
+let plantSoftH = Number.NaN;
+let plantSoftHertz = Number.NaN;
+let plantSoftDamping = Number.NaN;
+function plantSoftnessAt(h: number): Softness {
+  if (h !== plantSoftH || PlantTuning.hertz !== plantSoftHertz || PlantTuning.damping !== plantSoftDamping) {
+    plantSoftLast = plantSoftness(h);
+    plantSoftH = h;
+    plantSoftHertz = PlantTuning.hertz;
+    plantSoftDamping = PlantTuning.damping;
+  }
+  return plantSoftLast;
 }
 
 // How soft a plant's length rows are, and how many substeps a plant gets.
@@ -163,41 +204,68 @@ export class LengthRow implements IslandRow {
     if (this.impulse === 0) return;
     const pa = this.a.globalPosition;
     const pb = this.b.globalPosition;
-    const d = pb.sub(pa);
-    const len = d.length();
+    const dx = pb.x - pa.x;
+    const dy = pb.y - pa.y;
+    const len = Math.sqrt(dx * dx + dy * dy);
     if (len < 1e-9) return;
-    this.deliver(d.div(len), pa, pb, this.impulse);
+    this.deliver(dx / len, dy / len, pa, pb, this.impulse);
   }
 
   solve(h: number, soft: Softness, useBias: boolean): void {
     const pa = this.a.globalPosition;
     const pb = this.b.globalPosition;
-    const d = pb.sub(pa);
-    const len = d.length();
+    const dx = pb.x - pa.x;
+    const dy = pb.y - pa.y;
+    const len = Math.sqrt(dx * dx + dy * dy);
     if (len < 1e-9) return;
-    const n = d.div(len);
+    const nx = dx / len;
+    const ny = dy / len;
     const A = this.a.obj;
     const B = this.b.obj;
-    const ra = A instanceof RigidBody2D ? pa.sub(A.globalPosition) : Vec2.ZERO;
-    const rb = B instanceof RigidBody2D ? pb.sub(B.globalPosition) : Vec2.ZERO;
-    const w = effectiveInverse(A, ra, n) + effectiveInverse(B, rb, n);
+    // Each end's generalized inverse mass at its arm along `n`
+    // (`inverseMass + invInertia·(r×n)²`), and nothing for a static end.
+    let wa = 0;
+    if (A instanceof RigidBody2D) {
+      const c = A.globalPosition;
+      const rxn = (pa.x - c.x) * ny - (pa.y - c.y) * nx;
+      wa = A.inverseMass + invInertiaOf(A) * rxn * rxn;
+    }
+    let wb = 0;
+    if (B instanceof RigidBody2D) {
+      const c = B.globalPosition;
+      const rxn = (pb.x - c.x) * ny - (pb.y - c.y) * nx;
+      wb = B.inverseMass + invInertiaOf(B) * rxn * rxn;
+    }
+    const w = wa + wb;
     if (w <= 0) return;
-    // The rate the distance opens at.
-    const opening = n.dot(contactVelocity(this.b).sub(contactVelocity(this.a)));
+    // The rate the distance opens at: `n·(v_b - v_a)`.
+    contactVelocityInto(this.b);
+    const vbx = VEL.x;
+    const vby = VEL.y;
+    contactVelocityInto(this.a);
+    const opening = nx * (vbx - VEL.x) + ny * (vby - VEL.y);
     const slack = this.floor ? len - this.length : this.length - len;
     const slackRate = this.floor ? opening : -opening;
-    const applied = ropeImpulse(this, slack, slackRate, w, h, useBias ? plantSoftness(h) : soft, useBias);
-    if (applied !== 0) this.deliver(n, pa, pb, applied);
+    const applied = ropeImpulse(this, slack, slackRate, w, h, useBias ? plantSoftnessAt(h) : soft, useBias);
+    if (applied !== 0) this.deliver(nx, ny, pa, pb, applied);
   }
 
   // A rope pulls the two points together (`+n` on A, `-n` on B); a strut
   // pushes them apart.
-  private deliver(n: Vec2, pa: Vec2, pb: Vec2, j: number): void {
+  private deliver(nx: number, ny: number, pa: Vec2, pb: Vec2, j: number): void {
     const A = this.a.obj;
     const B = this.b.obj;
-    const impulse = n.mul(this.floor ? -j : j);
-    apply(A, impulse, A instanceof RigidBody2D ? pa.sub(A.globalPosition) : Vec2.ZERO);
-    apply(B, impulse.neg(), B instanceof RigidBody2D ? pb.sub(B.globalPosition) : Vec2.ZERO);
+    const s = this.floor ? -j : j;
+    const ix = nx * s;
+    const iy = ny * s;
+    if (A instanceof RigidBody2D) {
+      const c = A.globalPosition;
+      applyImpulse(A, ix, iy, pa.x - c.x, pa.y - c.y);
+    }
+    if (B instanceof RigidBody2D) {
+      const c = B.globalPosition;
+      applyImpulse(B, -ix, -iy, pb.x - c.x, pb.y - c.y);
+    }
   }
 }
 
@@ -216,48 +284,101 @@ export class LengthRow implements IslandRow {
 export class SpringRow implements IslandRow {
   impulse = 0;
   over = 0;
+  // "bend" or "clamp", for the digests and the rigs.
+  readonly kind: "bend" | "clamp";
+  private readonly ends: readonly [BendEnd, BendEnd, BendEnd];
+  private readonly clamp: StalkClamp | null;
+  private readonly compliance: number;
 
-  constructor(
-    private readonly ends: readonly [BendEnd, BendEnd, BendEnd],
-    // The offset the constraint holds to zero, and each end's gradient
-    // coefficient for a unit offset direction `n`: `gᵢ = coef(n)[i]`.
-    private readonly offset: () => Vec2,
-    private readonly gradients: (n: Vec2) => readonly [Vec2, Vec2, Vec2],
-    private readonly compliance: number,
-    // "bend" or "clamp", for the digests and the rigs.
-    readonly kind: string,
-  ) {}
+  // A bend (`VineBend`): the middle point off the chord's midpoint, `∇b = n`,
+  // `∇a = ∇c = -n/2`. A stalk clamp (`StalkClamp`): the body off where the
+  // cord edge says it belongs, `∇c = n`, `∇a = conj(k)⊗n`, `∇b = -(n + ∇a)`.
+  constructor(constraint: VineBend | StalkClamp) {
+    const [a, b, c] = constraint.ends;
+    this.ends = [a, b, c];
+    this.clamp = constraint instanceof StalkClamp ? constraint : null;
+    this.kind = this.clamp ? "clamp" : "bend";
+    this.compliance = constraint.springCompliance;
+  }
+
+  // The offset the constraint holds to zero, into `OFFSET`.
+  private offsetInto(): void {
+    // Indexed rather than destructured: a destructuring pattern runs the
+    // array's iterator, which allocated on every solve here.
+    const pa = this.ends[0].position;
+    const pb = this.ends[1].position;
+    const pc = this.ends[2].position;
+    if (!this.clamp) {
+      // `b - (a + c)·0.5`
+      OFFSET.x = pb.x - (pa.x + pc.x) * 0.5;
+      OFFSET.y = pb.y - (pa.y + pc.y) * 0.5;
+      return;
+    }
+    // `(c - b) - k⊗u`, `u = b - a`
+    const k = this.clamp.ratio;
+    const ux = pb.x - pa.x;
+    const uy = pb.y - pa.y;
+    OFFSET.x = pc.x - pb.x - (k.x * ux - k.y * uy);
+    OFFSET.y = pc.y - pb.y - (k.x * uy + k.y * ux);
+  }
+
+  // Each end's gradient for a unit offset direction `n`, into `GRAD` as
+  // `[g0x, g0y, g1x, g1y, g2x, g2y]`.
+  private gradientsInto(nx: number, ny: number): void {
+    if (!this.clamp) {
+      GRAD[0] = nx * -0.5;
+      GRAD[1] = ny * -0.5;
+      GRAD[2] = nx;
+      GRAD[3] = ny;
+      GRAD[4] = nx * -0.5;
+      GRAD[5] = ny * -0.5;
+      return;
+    }
+    const k = this.clamp.ratio;
+    const gax = k.x * nx + k.y * ny;
+    const gay = k.x * ny - k.y * nx;
+    GRAD[0] = gax;
+    GRAD[1] = gay;
+    GRAD[2] = (nx + gax) * -1;
+    GRAD[3] = (ny + gay) * -1;
+    GRAD[4] = nx;
+    GRAD[5] = ny;
+  }
 
   beginFrame(): void {}
 
   prepare(): void {}
 
   measure(): void {
-    this.over = this.offset().length();
+    this.offsetInto();
+    this.over = Math.sqrt(OFFSET.x * OFFSET.x + OFFSET.y * OFFSET.y);
   }
 
   warmStart(): void {
     if (this.impulse === 0) return;
-    const offset = this.offset();
-    const c = offset.length();
+    this.offsetInto();
+    const c = Math.sqrt(OFFSET.x * OFFSET.x + OFFSET.y * OFFSET.y);
     if (c < 1e-12) return;
-    this.deliver(this.gradients(offset.div(c)), this.impulse);
+    this.gradientsInto(OFFSET.x / c, OFFSET.y / c);
+    this.deliver(this.impulse);
   }
 
   solve(h: number, soft: Softness, useBias: boolean): void {
-    const offset = this.offset();
-    const c = offset.length();
+    this.offsetInto();
+    const c = Math.sqrt(OFFSET.x * OFFSET.x + OFFSET.y * OFFSET.y);
     // Dead on: no direction, and the impulse kept as `VineBend.solve` keeps
     // its multiplier through a joint that passes through straight.
     if (c < 1e-12) return;
-    const n = offset.div(c);
-    const g = this.gradients(n);
+    this.gradientsInto(OFFSET.x / c, OFFSET.y / c);
     let w = 0;
     let cdot = 0;
     for (let i = 0; i < 3; i++) {
       const end = this.ends[i]!;
-      w += end.inverseMass * g[i]!.lengthSquared();
-      cdot += g[i]!.dot(end.velocity);
+      const gx = GRAD[2 * i]!;
+      const gy = GRAD[2 * i + 1]!;
+      const v = end.velocity;
+      w += end.inverseMass * (gx * gx + gy * gy);
+      cdot += gx * v.x + gy * v.y;
     }
     if (w <= 0) return;
     let spring: Softness;
@@ -279,7 +400,8 @@ export class SpringRow implements IslandRow {
       // a rod's axial stiffness is orders above its bending stiffness, so a
       // span of surplus length bows and never shortens, at any stiffness.
       // Past the cap a stiffer bend is the same row.
-      spring = softness(
+      spring = softnessInto(
+        SPRING_SOFT,
         Math.min(omega / (2 * Mathf.Pi), 0.5 * Math.min(PlantTuning.hertz, 0.25 / h)),
         PlantTuning.springDamping,
         h,
@@ -295,51 +417,28 @@ export class SpringRow implements IslandRow {
     const inc = (-spring.massScale * (cdot + bias)) / w - spring.impulseScale * this.impulse;
     if (inc === 0) return;
     this.impulse += inc;
-    this.deliver(g, inc);
+    this.deliver(inc);
   }
 
-  private deliver(g: readonly [Vec2, Vec2, Vec2], j: number): void {
+  // `link.linearVelocity += gᵢ·(j·wᵢ)` on each end that can move, with the
+  // gradients `gradientsInto` left in `GRAD`.
+  private deliver(j: number): void {
     for (let i = 0; i < 3; i++) {
       const end = this.ends[i]!;
       const w = end.inverseMass;
       if (!end.link || w === 0) continue;
-      end.link.linearVelocity = end.link.linearVelocity.add(g[i]!.mul(j * w));
+      const v = end.link.linearVelocity;
+      end.link.linearVelocity = new Vec2(v.x + GRAD[2 * i]! * (j * w), v.y + GRAD[2 * i + 1]! * (j * w));
     }
   }
 }
 
-// The rows of one bend: `∇b = n`, `∇a = ∇c = -n/2` (see `VineBend.solve`).
-function bendRow(bend: VineBend): SpringRow {
-  const [a, b, c] = bend.ends;
-  return new SpringRow(
-    bend.ends,
-    () => b.position.sub(a.position.add(c.position).mul(0.5)),
-    (n) => [n.mul(-0.5), n, n.mul(-0.5)],
-    bend.springCompliance,
-    "bend",
-  );
-}
-
-// The rows of one stalk clamp: `∇c = n`, `∇a = conj(k)⊗n`, `∇b = -(n + ∇a)`
-// (see `StalkClamp.solve`).
-function clampRow(clamp: StalkClamp): SpringRow {
-  const [a, b, c] = clamp.ends;
-  return new SpringRow(
-    clamp.ends,
-    () => {
-      const u = b.position.sub(a.position);
-      const k = clamp.ratio;
-      return c.position.sub(b.position).sub(new Vec2(k.x * u.x - k.y * u.y, k.x * u.y + k.y * u.x));
-    },
-    (n) => {
-      const k = clamp.ratio;
-      const ga = new Vec2(k.x * n.x + k.y * n.y, k.x * n.y - k.y * n.x);
-      return [ga, n.add(ga).mul(-1), n];
-    },
-    clamp.springCompliance,
-    "clamp",
-  );
-}
+// The scratch a spring row's solve works in: its offset, its three
+// gradients, and its softness when it has a compliance of its own. Rows are
+// solved one at a time, so one of each serves them all.
+const OFFSET = { x: 0, y: 0 };
+const GRAD = new Float64Array(6);
+const SPRING_SOFT: MutableSoftness = { biasRate: 0, massScale: 1, impulseScale: 0 };
 
 // One vine as a unit of the island: its bodies the cord and every stalk, its
 // rows every joint, strut, stalk rope, bend and clamp in the sweep's own
@@ -464,9 +563,14 @@ export class PlantUnit implements IslandUnit {
       const [a, b] = strut.ends;
       rows.push(new LengthRow(a, b, strut.minLength, true, "strut"));
     }
+    // Every scale, the coarse ones included. A held plant with the neighbour
+    // scale alone (`session-470f`, 2026-10-13) cost 17-19% less a frame and
+    // bobbed 15-40 mm under a still ball against 2-6 mm (the "berries jiggle"
+    // of `session-846f`), stiffened to store a smooth bend's energy or not:
+    // the coarse scales are what hold the cord's slow modes, and a neighbour
+    // row stiff enough to stand in for them is past the island's spring cap.
     for (const bend of vine.bends) {
-      if (bend instanceof VineBend) rows.push(bendRow(bend));
-      else if (bend instanceof StalkClamp) rows.push(clampRow(bend));
+      if (bend instanceof VineBend || bend instanceof StalkClamp) rows.push(new SpringRow(bend));
       else throw new Error(`a plant's bend set holds a ${bend.constructor.name}, which has no row`);
     }
     for (const lra of [vine.lra, vine.lra2]) {

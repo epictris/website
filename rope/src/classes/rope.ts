@@ -118,6 +118,22 @@ function mobileSurfaces(surfaces: readonly WrapCandidate[]): readonly WrapCandid
   return out;
 }
 
+// Each surface's position in a surfaces list, by its shape, for mapping the
+// broadphase's candidates back into the list's order (`regeneratePath`). Kept
+// per list identity as `mobileCache` is: a held berry regenerates the ball's
+// path every island substep over the same list, and rebuilding this map of
+// every wrappable surface in the level each time was a third of what a
+// regeneration cost (`session-470f`).
+let surfaceIndexCache: { of: readonly WrapCandidate[]; out: Map<CollisionShape2D, number> } | null = null;
+
+function surfaceIndexOf(surfaces: readonly WrapCandidate[]): Map<CollisionShape2D, number> {
+  if (surfaceIndexCache !== null && surfaceIndexCache.of === surfaces) return surfaceIndexCache.out;
+  const out = new Map<CollisionShape2D, number>();
+  for (let i = 0; i < surfaces.length; i++) out.set(surfaces[i]!.shape, i);
+  surfaceIndexCache = { of: surfaces, out };
+  return out;
+}
+
 function surfacesStillValid(bodies: readonly PhysicsBody2D[]): boolean {
   const cache = surfacesCache;
   if (cache === null || cache.bodies !== bodies) return false;
@@ -745,6 +761,12 @@ export class Rope {
   // Sync the coil, uncross the nodes, regenerate the wrap path (the scan, the
   // self-intersection resolver, the detachment pass): what a solve pass does
   // before it measures, and nothing of the solve.
+  //
+  // Every substep, and not every few: regenerating once a frame or every
+  // second or fourth substep saved 9-13% of a held berry's frame
+  // (`session-470f`), and the rope-bridge bundle `session-394f` went red at
+  // two of the three (a 56 mm segment over-length at every 2nd, 122 J of
+  // unforced energy at every 8th), clean at every substep.
   rowPrepare(bodies: PhysicsBody2D[]): void {
     this.regenerateAndMeasure(bodies);
     // A ring on a cord rides the cord: its contact is re-derived from its
@@ -1942,8 +1964,7 @@ export class Rope {
       surfaces.length > 8
         ? (this.start.contact.obj.world ?? this.end.contact.obj.world)
         : null;
-    const surfaceIndex = new Map<CollisionShape2D, number>();
-    if (world) for (let i = 0; i < surfaces.length; i++) surfaceIndex.set(surfaces[i]!.shape, i);
+    const surfaceIndex = world ? surfaceIndexOf(surfaces) : new Map<CollisionShape2D, number>();
 
     for (const span of this.regenerateSpans()) {
       if (span.from instanceof RopeWrap) newNodes.push(span.from);
@@ -2275,9 +2296,14 @@ export class Rope {
       exit = wrap;
     }
     this.lastExit = exit.contact.globalPosition;
+    // Only a body the next sweep can ask about: a surface it may wrap, or one a
+    // wrap node sits on, and both are solid. A pass-through body (a plain vine
+    // link, most of what moves on a level with vines) is neither, and it never
+    // becomes one - solidity is decided at build - so its pose was recorded and
+    // never read, two hundred and more of them a regeneration (`session-470f`).
     this.lastPoses = new Map();
     for (const body of bodies) {
-      if (body.isMobile) {
+      if (body.isMobile && !isPassThrough(body)) {
         this.lastPoses.set(body, { position: body.globalPosition, rotation: body.globalRotation });
       }
     }
