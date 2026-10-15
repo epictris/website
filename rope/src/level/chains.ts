@@ -40,6 +40,7 @@ import { Vec2 } from "../engine/vec2";
 import { PX } from "../engine/units";
 import { RopeVineClamp } from "../lib/vineClamp";
 import { creepSpeed } from "../lib/viscous";
+import { MANACLE_REACH } from "../lib/manacle";
 import {
   PhysicsBody2D,
   RigidBody2D,
@@ -1790,22 +1791,33 @@ export class RopeRow implements IslandRow, IslandUnit {
 // contact at 30), the length read as satisfied, the unwind found nothing to
 // refund and the coil wound on - two slats pushed apart by the ball between
 // them, 98 rad/s on one of them (`session-1118f` f850 on the first cut of this
-// row). So the winding is modelled as what a winch is: a drum that takes in
-// chain at the aim's rate while the tension is under what its motor can hold,
-// and SLIPS once it is not.
+// row). So the winding is modelled as a drum that takes in chain at the aim's
+// rate for as long as there is chain to take in, and stops only where winding
+// on is physically impossible: the ball against a body on its path, or wound
+// up to within the cuff's reach of the next node.
 //
 // The row holds `free + coil0 <= constraintLength - realised`: the free span
 // plus the coil as the frame began, less what the winch has REALISED this
 // frame. `coilGrowth` is what the kinematic turn has wound onto the rim so far
 // (`lengthPerRadian` times the rotation the substeps integrated), and each
-// substep `realised` follows it while the row's tension is under
-// `WINCH_MAX_ACCEL` times the ball's mass and the ball is clear of its path
-// (`touching`); over the limit, or jammed, it holds where it is. The row is
-// then one accumulated impulse, unbounded and soft at `TieTuning`: a fall is
-// arrested here, the weight hangs here, and in free air the shortening target
-// hauls the ball at the winch's rate as the positional phase did. Against a
-// contact the tension climbs to the limit, the drum stops, and the ball
-// presses the slat with a bounded force rather than sinking into it.
+// substep `realised` follows it while the ball is clear of its path
+// (`touching`) and the free span leaving the ball has room (`WOUND_TIGHT`);
+// jammed, or wound tight, it holds where it is. The row is then one
+// accumulated impulse, unbounded and soft at `TieTuning`: a fall is arrested
+// here, the weight hangs here, and in free air the shortening target hauls the
+// ball at the winch's rate as the positional phase did. Against a contact the
+// drum stops, and the ball rests on the slat rather than sinking into it.
+//
+// The drum is not bounded by the tension. It was, at five times the ball's
+// weight, and a drum that stops on last substep's tension and pulls without
+// bound when running cannot hold at its limit: it reeled at 8 g, read the
+// 8 g, stopped for a substep at 0.5 g, read that, and reeled again - every
+// other substep, so a ball swinging under a span took in exactly half of
+// every turn and the unwind gave the other half back to the spin
+// (`session-223f` f150-161, about 0.2 rad a frame). The ball fell behind the
+// aim until the steering's error wrapped past half a turn and it spun the
+// other way, unwinding everything (f162). The aim's turn is the player's,
+// and only geometry may refuse it.
 //
 // Two shapes were tried before this one and both are recorded here so they
 // are not re-tried. The coil's rate fed to one row as a rest-length rate is
@@ -1834,19 +1846,11 @@ export class RopeRow implements IslandRow, IslandUnit {
 // to the constraint in `prepare`, before the substep's solve, and the lease
 // reels it back at the lease's own rate.
 export class BallChainRow implements IslandRow, IslandUnit {
-  // The tension the drum holds against before it slips, as an acceleration of
-  // the ball. The jam is not this bound's to hold (`touching`), so it only
-  // decides how hard a swing can be hauled against, and on the bridge rig
-  // (the ball hooked to the middle slat, the aim whirled at 24 rad/s for two
-  // seconds, 2026-10-11) it barely decides the haul at all: 3 g to 20 g all
-  // reel the ball up 1.2 to 1.5 m and refund 9 to 13 percent of the turn.
-  // What it decides is what the bridge takes - the worst segment stretch in
-  // a 4 m/s swing is 21 mm at 3 g, 39 at 5, 52 at 8 and 58 at 10, against the
-  // invariant's 50 - and how long a hard swing stalls the drum (3 g slipped on
-  // half the turns of `session-247f`'s 4 m/s swings on a short chain). Five
-  // is the middle of that; it is the one feel knob the row has, and it is
-  // unplayed.
-  static readonly WINCH_MAX_ACCEL = 5 * GRAVITY.y;
+  // The free span leaving the ball at which it is wound tight: the cuff's
+  // reach, where its rim meets the ball's. A body on the path is met first
+  // as a contact (`touching`); this is the end for a node the ball passes
+  // through, a ring on a vine's cord, whose links touch nothing.
+  static readonly WOUND_TIGHT = MANACLE_REACH;
 
   impulse = 0;
   over = 0;
@@ -1980,18 +1984,24 @@ export class BallChainRow implements IslandRow, IslandUnit {
 
   // What the substeps have turned the ball by since the last look, as path:
   // the spool rate at the pose the coil was last brought to, times the turn.
-  // The drum takes it in while the tension the last substep left is under the
-  // limit and the ball is clear of its path (see the class comment).
+  // The drum takes it in while the ball is clear of its path, up to the free
+  // span it has left (see the class comment).
   private takeInTurn(): void {
     if (this.ball.kinematicRotation) {
       const wound =
         this.rope.lengthPerRadian(this.ball) * (this.ball.globalRotation - this.lastRotation);
       this.coilGrowth += wound;
-      const limit = this.ball.mass * BallChainRow.WINCH_MAX_ACCEL * this.h;
-      if (wound > 0 && !this.touching && this.impulse < limit) this.realised += wound;
+      if (wound > 0 && !this.touching) this.realised += Math.min(wound, this.room());
       if (this.realised > this.coilGrowth) this.realised = Math.max(this.coilGrowth, 0);
     }
     this.lastRotation = this.ball.globalRotation;
+  }
+
+  // How much more chain the drum may take in before the ball is wound tight:
+  // the free span leaving it, less the cuff's reach.
+  private room(): number {
+    const free = this.rope.leavingSpanLength(this.ball);
+    return free === null ? 0 : Math.max(0, free - BallChainRow.WOUND_TIGHT);
   }
 
   // The drum's take-up over the substep about to be solved, metres a second
@@ -1999,10 +2009,9 @@ export class BallChainRow implements IslandRow, IslandUnit {
   // on the terms `takeInTurn` will realise it on once the substep has turned
   // the ball. A motor's target speed, read before the step it drives.
   private reelRate(): number {
-    if (!this.ball.kinematicRotation) return 0;
+    if (!this.ball.kinematicRotation || this.touching || this.h <= 0) return 0;
     const rate = this.rope.lengthPerRadian(this.ball) * this.ball.angularVelocity;
-    const limit = this.ball.mass * BallChainRow.WINCH_MAX_ACCEL * this.h;
-    return rate > 0 && !this.touching && this.impulse < limit ? rate : 0;
+    return rate > 0 ? Math.min(rate, this.room() / this.h) : 0;
   }
 
   private reel = 0;

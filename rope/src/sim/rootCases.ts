@@ -24,12 +24,12 @@
 
 import { Vec2 } from "../engine/vec2";
 import { LAYER_HOOK, MASK_ALL, MASK_SOLID, RigidBody2D, type PhysicsBody2D } from "../engine/body";
-import { circleShape, isConvexLoop, polyArea } from "../engine/shapes";
+import { circleShape, isConvexLoop, polyArea, polyShapeCentred } from "../engine/shapes";
 import { World } from "../engine/world";
 import { buildLevelBodies } from "../level/buildBodies";
 import { isCollisionObject, scaleLevelData, type LevelBodyData, type RawLevelData } from "../level/levelFormat";
 import { rootProblems } from "../level/roots";
-import { strokeCurve } from "../lib/stroke";
+import { curveLine, strokeCurve } from "../lib/stroke";
 import { cubicAt, pathNodesOf } from "../lib/path";
 import { PX } from "../engine/units";
 import { BallHook } from "../classes/ballHook";
@@ -209,6 +209,93 @@ function caseStroke(): RootResult {
   }
   c.check(`...and its centreline keeps within a centimetre of the cubic (${fmt(worst * 1000, 2)} mm)`, worst <= 0.01);
   return { name: "root-stroke - a tapered bar tiles exactly, base to tip, in convex pieces", passed: c.passed(), details: c.details };
+}
+
+// ---------------------------------------------------------------------------
+// fold - a bend tighter than the bar's half-width still strokes into pieces the
+// build accepts.
+// ---------------------------------------------------------------------------
+// The root that stopped ball.json building (2026-10-15), as it was on disk in
+// pixels: deleting points left the middle node with 2.8 px handles between
+// neighbours 60-75 px away, so the cubic turns 33° within a few centimetres of
+// a bar 8 cm wide there. The 5 cm sampling kept a 1.1 cm segment through the
+// bend, the mitre lines at its two ends crossed 3.7 cm out on the inner side,
+// inside the 4.06 cm half-width, and that quad folded into a concave one
+// `polyShape` throws on.
+const FOLDED_ROOT = {
+  kind: "curve" as const,
+  width: 16,
+  tip: 2.5,
+  verts: [
+    { x: 36.666666666666714, y: -193.33333333333337 },
+    {
+      x: -10.583731669630136,
+      y: -119.23126515127524,
+      inX: -0.5584160749834588,
+      inY: -2.737769379649424,
+      outX: 0.5584160749834588,
+      outY: 2.737769379649424,
+    },
+    {
+      x: -8.33333333333357,
+      y: -58.33333333333333,
+      inX: 0.3328022182710555,
+      inY: -1.197242423922562,
+      outX: -0.665604436542111,
+      outY: 2.394484847845113,
+    },
+  ],
+};
+
+function caseFold(): RootResult {
+  const c = claims();
+  const raw = {
+    player: { x: 0, y: -300, radius: 8 },
+    bodies: [{ kind: "static", passable: true, x: 0, y: 0, rot: 0, objects: [{ type: "collision", shape: FOLDED_ROOT, root: {} }] }],
+  } as RawLevelData;
+  let built: string | null = null;
+  try {
+    buildLevelBodies(new World(), scaleLevelData(raw, PX), () => {});
+  } catch (err) {
+    built = err instanceof Error ? err.message : String(err);
+  }
+  c.check(`the folded root builds (${built ?? "built"})`, built === null);
+
+  const verts = FOLDED_ROOT.verts.map((v) => Object.fromEntries(Object.entries(v).map(([k, x]) => [k, x * PX])));
+  const nodes = pathNodesOf(verts as typeof FOLDED_ROOT.verts);
+  const stroke = strokeCurve(nodes, FOLDED_ROOT.width * PX, FOLDED_ROOT.tip * PX);
+  const rejected = stroke.pieces.filter((p) => {
+    try {
+      polyShapeCentred(p);
+      return false;
+    } catch {
+      return true;
+    }
+  });
+  c.check(`...every piece is one the build accepts (${rejected.length} of ${stroke.pieces.length} refused)`, rejected.length === 0);
+  const hw = stroke.halfWidths!;
+  const tiled = stroke.pieces.reduce((a, p) => a + polyArea(p), 0);
+  let integral = 0;
+  for (let i = 0; i + 1 < stroke.line.length; i++) integral += (hw[i]! + hw[i + 1]!) * stroke.line[i]!.distanceTo(stroke.line[i + 1]!);
+  c.check(`...and they tile the bar: ${fmt(tiled, 5)} m² against ${fmt(integral, 5)} m²`, near(tiled, integral, integral * 0.01));
+  const line = curveLine(nodes, FOLDED_ROOT.width * PX, FOLDED_ROOT.tip * PX);
+  c.check(
+    `...the centreline the mesh reads is the one the pieces were built from (${line.length} / ${stroke.line.length} points)`,
+    line.length === stroke.line.length && line.every((p, i) => p.x === stroke.line[i]!.x && p.y === stroke.line[i]!.y),
+  );
+  let worst = 0;
+  for (let e = 0; e + 1 < nodes.length; e++) {
+    const a = nodes[e]!;
+    const b = nodes[e + 1]!;
+    for (let k = 0; k <= 200; k++) {
+      const p = cubicAt(a.p, a.p.add(a.out), b.p.add(b.in), b.p, k / 200);
+      let d = Infinity;
+      for (let i = 0; i + 1 < stroke.line.length; i++) d = Math.min(d, segDist(p, stroke.line[i]!, stroke.line[i + 1]!));
+      worst = Math.max(worst, d);
+    }
+  }
+  c.check(`...and its centreline keeps within a centimetre of the cubic (${fmt(worst * 1000, 2)} mm)`, worst <= 0.01);
+  return { name: "root-fold - a bend tighter than the half-width strokes into pieces the build accepts", passed: c.passed(), details: c.details };
 }
 
 function segDist(p: Vec2, a: Vec2, b: Vec2): number {
@@ -552,6 +639,6 @@ function withCanvasStub<T>(make: () => T): T {
 }
 
 export function runRootCases(): RootResult[] {
-  return [caseStroke(), caseFormat(), caseHookOnly(), caseSpring(), caseTree(), caseLint(), caseMesh(), caseCuffDepth()];
+  return [caseStroke(), caseFold(), caseFormat(), caseHookOnly(), caseSpring(), caseTree(), caseLint(), caseMesh(), caseCuffDepth()];
 }
 

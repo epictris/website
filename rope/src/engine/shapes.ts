@@ -206,6 +206,15 @@ export function polyShapeCentred(verts: readonly Vec2[]): { shape: Shape; offset
   return { shape: polyShape(verts.map((v) => v.sub(c))), offset: c };
 }
 
+// Whether `polyShapeCentred` accepts a loop: the same centring and the same
+// test, for a caller that chooses the loops it builds rather than catching.
+export function polyCentredIsConvex(verts: readonly Vec2[]): boolean {
+  if (verts.length < 3) return false;
+  const c = polyCentroid(verts);
+  const local = verts.map((v) => v.sub(c));
+  return isConvexLoop(polySignedArea2(local) >= 0 ? local : local.reverse());
+}
+
 // The shape's vertex loop in its local frame — rect corners, polygon vertices,
 // or nothing at all for a circle. The single accessor every vertex-walking
 // query goes through (ledge candidacy, rope wrap generation, SAT).

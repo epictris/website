@@ -17,6 +17,14 @@ Past the build nothing knows it was ever a curve.
 `flattenPath` samples by control-polygon length (25 cm, the camera path's own step) and a Douglas-Peucker pass then drops the samples that buy nothing, at `STROKE_TOLERANCE` - a centimetre, a tenth of the manacle's disc, capped at a fifth of the half-width so a thin bar is not straightened by a tolerance the size of its own thickness.
 A straight bar is therefore ONE piece however many nodes it was clicked out with, and a gentle four-metre bow is a handful rather than the twenty the flattener produces.
 
+**A bend tighter than the half-width folds the stroke, and the fold is merged away.**
+Each joint is mitred on its own, so a short segment through a tight bend can have the mitre lines at its two ends cross inside the bar, and its quad comes out concave - which `polyShape` refuses, so the level does not build.
+The reach cap in `strokeLine` (not quite half of the shorter segment) only keeps a segment's two ends apart ALONG it, and cannot see this.
+`strokeCurve` therefore checks every piece with `polyCentredIsConvex` (the build's own centring and test) and collapses a segment whose pieces fail to a point - its midpoint, or the line's end for the first or last segment - and strokes again, until every piece builds.
+It happens at the polyline, so the line the cuff rides and the root mesh is drawn round is still the line the pieces were built from, and `curveLine` reads the line off the stroke for that reason.
+A line that does not fold is stroked exactly as before, so no existing level or recording moved.
+It was found on 2026-10-15 in a root (`cli roots`, `root-fold`): deleting nodes left the middle one with 2.8 cm handles between neighbours 60-75 cm away, a 33° turn inside a few centimetres of a bar 8 cm wide; the 25 cm rail sampling simplifies such a bend away, the 5 cm root sampling kept a 1.1 cm segment through it.
+
 **The clamp is a `RopeAttachment` whose contact can move** (`RopeClamp`), on the rail's own body, so the anchored regime is untouched: a rail on a static is a fixed anchor, a rail on the hanging lantern is a lever on the lantern, and the winch, the credits, the refusals and the lease all read it as the anchor it is.
 The hook body is removed on clamping exactly as on a bite.
 Where the cuff stands is `s` metres of ARC LENGTH along the curve, and every question about it - the point at `s`, the tangent at `s`, where the bite projects onto the line - is `lib/path.ts`'s, the module the camera paths and the movers' routes already ride.

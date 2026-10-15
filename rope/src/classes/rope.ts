@@ -1640,6 +1640,13 @@ export class Rope {
     return span.length - reachable;
   }
 
+  // The length of the free span leaving `body` (see `freeSpan`), or null for a
+  // body the path is not attached to: how much chain winding on could still
+  // take in before the body reaches the next node.
+  leavingSpanLength(body: PhysicsBody2D): number | null {
+    return this.freeSpan(body)?.length ?? null;
+  }
+
   // The span the length solve hauls `body` along, for a body the path is
   // attached to: its direction (the pull, away from the body) and its length.
   // Leaves a coil on the body where the chain leaves it, since the coil rides

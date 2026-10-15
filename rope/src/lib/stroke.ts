@@ -18,6 +18,7 @@
 // felt like.
 
 import { Vec2 } from "../engine/vec2";
+import { polyCentredIsConvex } from "../engine/shapes";
 import { flattenPath, type PathNode } from "./path";
 
 // How far the collision polyline may stray from the flattened cubic, metres.
@@ -74,24 +75,65 @@ export interface Stroke {
 // first node, `tip` at the last, linear in arc length along the line between
 // (`taperedHalfWidths`). The tolerance is taken against the narrower end, so
 // the thin end of a root is not straightened by its thick end's allowance.
+//
+// A bend tighter than the bar's half-width FOLDS the stroke: the mitre lines at
+// the two ends of a short segment through it cross inside the bar, and that
+// segment's quad comes out concave, which the build refuses. The segment is
+// merged away (`withoutSegment`) and the line stroked again until every piece
+// is one the build accepts - at the polyline, so the line the rail rides and
+// the root mesh is drawn round is the line the pieces were built from. A line
+// that does not fold is stroked exactly as it always was.
 export function strokeCurve(nodes: readonly PathNode[], width: number, tip?: number): Stroke {
-  if (tip !== undefined) {
-    const line = curveLine(nodes, width, tip);
-    const widths = taperedHalfWidths(line, width, tip);
-    return strokeLine(line, widths[0] ?? 0, widths);
+  let line = flattenedLine(nodes, width, tip);
+  for (;;) {
+    const stroke = tip === undefined ? strokeLine(line, Math.max(width, 0) * 0.5) : taperedStroke(line, width, tip);
+    const folded = foldedSegment(stroke);
+    // Two points are one quad with straight sides, which cannot fold.
+    if (folded < 0 || line.length <= 2) return stroke;
+    line = withoutSegment(line, folded);
   }
-  const halfWidth = Math.max(width, 0) * 0.5;
-  const tolerance = Math.min(STROKE_TOLERANCE, halfWidth * 0.2);
-  return strokeLine(simplifyPolyline(dedupe(flattenPath(nodes)), tolerance), halfWidth);
+}
+
+function taperedStroke(line: readonly Vec2[], width: number, tip: number): Stroke {
+  const widths = taperedHalfWidths(line, width, tip);
+  return strokeLine(line, widths[0] ?? 0, widths);
 }
 
 // The centreline of an authored node list, which is the stroke's `line` and
-// nothing else: the same flattening and the same simplification, for the
-// callers that want where the bar runs without what it is made of.
+// nothing else, for the callers that want where the bar runs without what it
+// is made of. It is read off the stroke itself, because a fold is found only
+// by building the pieces.
 export function curveLine(nodes: readonly PathNode[], width: number, tip?: number): Vec2[] {
+  return strokeCurve(nodes, width, tip).line;
+}
+
+// The flattened and simplified node list, before any fold is merged away.
+function flattenedLine(nodes: readonly PathNode[], width: number, tip?: number): Vec2[] {
   const halfWidth = Math.max(tip === undefined ? width : Math.min(width, taperTip(tip)), 0) * 0.5;
   const flat = tip === undefined ? flattenPath(nodes) : flattenPath(nodes, TAPER_FLATTEN_STEP);
   return simplifyPolyline(dedupe(flat), Math.min(STROKE_TOLERANCE, halfWidth * 0.2));
+}
+
+// The first centreline segment whose pieces (its quad and the bevel wedge
+// after it) the build would refuse, or -1.
+function foldedSegment(stroke: Stroke): number {
+  for (let i = 0; i < stroke.pieceAt.length; i++) {
+    const end = stroke.pieceAt[i + 1] ?? stroke.pieces.length;
+    for (let k = stroke.pieceAt[i]!; k < end; k++) if (!polyCentredIsConvex(stroke.pieces[k]!)) return i;
+  }
+  return -1;
+}
+
+// The line with segment `i` collapsed to a point: its midpoint, or the end of
+// the line where it is the first or last segment, so the line still starts and
+// ends exactly where the curve does. The segment is the short one through the
+// bend - it is short enough to fold - so the line moves by a fraction of it.
+function withoutSegment(line: readonly Vec2[], i: number): Vec2[] {
+  const out = line.map((p) => p.clone());
+  if (i === 0) out.splice(1, 1);
+  else if (i === line.length - 2) out.splice(i, 1);
+  else out.splice(i, 2, line[i]!.add(line[i + 1]!).mul(0.5));
+  return out;
 }
 
 // How finely a TAPERED curve is sampled before it is simplified, metres of
@@ -199,7 +241,9 @@ export function strokeLine(
     // that runs back further than its segment is long would cross the joint at
     // the far end and turn the piece into a bow tie, so the reach is capped at
     // not quite half of the shorter segment - the one case where the tiling
-    // narrows the bar at a kink rather than emitting an invalid polygon.
+    // narrows the bar at a kink rather than emitting an invalid polygon. It
+    // keeps the two ends of a segment apart ALONG it; mitre lines that cross
+    // inside the bar across it are a fold, which `strokeCurve` merges away.
     const sinHalf = Math.sqrt(Math.max(0, 1 - cosHalf * cosHalf));
     const room = 0.45 * Math.min(len[i - 1]!, len[i]!);
     const reach = Math.min(

@@ -47,6 +47,7 @@ The hook **bites** a root like any other face.
 The tiling stays exact (neighbours share the edge between them); with no per-point widths every point reads the one `halfWidth` by the arithmetic it always did.
 A tapered curve is sampled every 5 cm (`TAPER_FLATTEN_STEP`) rather than the default 25 cm before the Douglas-Peucker pass, so a root that bends tighter than a rail keeps its centreline within a centimetre of the cubic (`cli roots` measures 2.3 mm on its bent case) and the drawn mesh, which follows the cubic itself, agrees with what is collided.
 The simplification tolerance is taken against the narrow end, and a tip under `MIN_TAPER_TIP` (5 mm) ends at it, because a tip of nothing is a degenerate last piece.
+The finer sampling is also what reaches a bend tighter than the bar's half-width, which folds the stroke; `strokeCurve` merges the folded segment away ([rails](rails.md)).
 
 ## The look
 
@@ -114,6 +115,7 @@ The 2 Hz default is a guess until it is played, and nothing pins it.
 `cli roots` (`sim/rootCases.ts`, in `bun run test`):
 
 - `root-stroke`: a straight root is one trapezoid of the right area and the authored widths at both ends; a bent one is all convex pieces that tile the bar, narrowing monotonically, its centreline within a centimetre of the cubic.
+- `root-fold`: the root that stopped `ball.json` building (a 33° turn inside a few centimetres of an 8 cm bar) builds, every piece one `polyShapeCentred` accepts, tiling the bar, `curveLine` the stroke's own line, within a centimetre of the cubic.
 - `root-format`: `tip` scales and `root` survives the scale; the editor writes a three-level tree into one body with every parent renumbered (the fixture lists a light first, which the editor writes last), and a second round trip writes the same level.
 - `root-hook-only`: the body is passable and not in the wrap list, no piece is a rail, a solid ray passes through while the hook's finds it, the ball's hook thrown at it bites, and a rock dropped on it falls through.
 - `root-spring`: springs gives a rigid pivot with a return spring, hinged exactly at the trunk's base, at rest on spawn (no turn and no axle drift over 2 s).
