@@ -3,6 +3,8 @@
 // and saves/loads levels from disk through the dev-server API.
 
 import { Vec2 } from "../engine/vec2";
+import { ROOT_BARK_VARIANTS, ROOT_BARK_LABELS, rootBarkVariant } from "../level/rootAppearance";
+import { setRootBark } from "./rootEditing";
 import { PIXELS_PER_METER, PX } from "../engine/units";
 import { BALL_ZOOM, GRAPPLE_ZOOM, screenToWorld, worldToScreen, type Camera } from "../render/camera";
 import { LETTERBOX_COLOR, VIEW_HEIGHT, VIEW_WIDTH, viewTransform } from "../render/viewport";
@@ -1924,6 +1926,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         objects: b.objects.map((o) => {
           if (o.type === "collision" && o.shape.kind !== "belt") {
             const { shape: _s, x: _ox, y: _oy, rot: _or, thickness: _t, material: _m, debug: _d, ...kept } = o;
+            // Bark switches only rebuild this body's root visuals, not the
+            // entire river scene and its lighting/shader warmup.
+            if (o.root) {
+              const { bark: _bark, ...root } = o.root;
+              return { ...kept, root };
+            }
             return kept;
           }
           // To the nanometre: an offset re-measured from a moved frame comes
@@ -3616,6 +3624,27 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       });
       // ...and this is what it narrows to at its tip.
       if (roots) {
+        const barkRow = fieldRow("bark texture");
+        const barkSelect = document.createElement("select");
+        barkSelect.className = "ed-select";
+        barkSelect.setAttribute("aria-label", "Root bark texture");
+        barkSelect.title = "Changes this root and all branches in its body.";
+        for (const variant of ROOT_BARK_VARIANTS) {
+          const option = document.createElement("option");
+          option.value = variant; option.textContent = ROOT_BARK_LABELS[variant];
+          barkSelect.appendChild(option);
+        }
+        const selectedBark = rootBarkVariant(items[0]!.root?.bark);
+        if (items.some(b => rootBarkVariant(b.root?.bark) !== selectedBark)) {
+          const mixed = document.createElement("option");
+          mixed.value = ""; mixed.textContent = "Mixed"; mixed.disabled = true;
+          barkSelect.prepend(mixed); barkSelect.value = "";
+        } else barkSelect.value = selectedBark;
+        barkSelect.addEventListener("change", () => {
+          beginAction(); setRootBark(model, items, rootBarkVariant(barkSelect.value));
+          markDirty(); rebuildInspector();
+        });
+        barkRow.appendChild(barkSelect); g.appendChild(barkRow);
         num("tip width", (b) => (b.shape.kind === "path" ? (b.shape.tip ?? b.shape.width) * M2PX : 0), (b, v) => {
           if (b.shape.kind === "path") b.shape.tip = Math.max(0.5, v) * PX;
         });
@@ -7702,7 +7731,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // in another body now - and `syncRoots` makes it a trunk where it stands.
     for (const it of items) {
       if (it.root && it.root.parent !== null) {
-        it.root = { parent: idOf.get(it.root.parent) ?? it.root.parent, at: it.root.at };
+        it.root = { ...it.root, parent: idOf.get(it.root.parent) ?? it.root.parent, at: it.root.at };
       }
     }
     // ...and a copied firefly path is a new path, for the same reason: two
@@ -8528,7 +8557,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     item.debug = NO_DEBUG();
     if (parent && isRootItem(parent) && draft.from) {
       item.bodyId = parent.bodyId;
-      item.root = { parent: parent.id, at: draft.from.at };
+      item.root = { parent: parent.id, at: draft.from.at, bark: parent.root?.bark };
     } else {
       item.bodyId = newBodyId();
       item.kind = "static";

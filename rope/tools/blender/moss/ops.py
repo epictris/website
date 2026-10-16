@@ -246,8 +246,14 @@ def rebuild(ob, depsgraph=None, regrow=False):
     t0 = time.perf_counter()
     inputs = _Inputs(ob, hosts, depsgraph or bpy.context.evaluated_depsgraph_get())
     p = inputs.p
-    grown, reused = _grow(ob, inputs, regrow)
-    result = build.finish(grown, p, mesh_io.decimate) if grown is not None else build.empty_result()
+    try:
+        with build.time_limit():
+            grown, reused = _grow(ob, inputs, regrow)
+            result = build.finish(grown, p, mesh_io.decimate) if grown is not None else build.empty_result()
+    except build.BuildError as e:
+        # the last mesh stays; the panel says why this paint did not grow
+        s.status = f"not grown: {e}"
+        return None
     mesh_io.write_result(ob, result)
     s.triangles = len(result.triangles)
     s.dabs = result.dabs

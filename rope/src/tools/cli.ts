@@ -2956,10 +2956,11 @@ async function cmdRails(): Promise<void> {
 // in a hook-only body, wired to mechanisms that have suites of their own, so
 // this asserts the wiring: the taper tiles, the tree survives the format and
 // the editor, only the hook finds one, a sprung one hinges at its base, the
-// lint sees a broken tree, and the drawn mesh is the bar it stands for.
+// lint sees a broken tree, the drawn mesh is the bar it stands for, and its
+// simplified and baked forms are that mesh.
 async function cmdRoots(): Promise<void> {
   const { runRootCases } = await import("../sim/rootCases");
-  const results = runRootCases();
+  const results = await runRootCases();
   let failed = 0;
   for (const r of results) {
     const stale = r.passed && r.expectedFail;

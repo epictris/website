@@ -1,0 +1,17 @@
+{
+  "ball": {
+    "file": "/roots/ball.glb",
+    "sha256": "ccd01ff2412beee4c47f0ed6beeb6036de60fa3befa5fb1cba6be630ad478cc7",
+    "bytes": 388468,
+    "keys": [
+      "14fa8ddfac4a5785",
+      "3142b52a4415bb50",
+      "7ba2081374a01ce1",
+      "944e754d3485f32d",
+      "a3ed0d4b9c699c08",
+      "b5c2b1ed0ed48384",
+      "e4d9d8864777f2b5",
+      "ef96508101e21e14"
+    ]
+  }
+}

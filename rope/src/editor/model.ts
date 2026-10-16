@@ -241,6 +241,7 @@ export interface EdWheel {
 export interface EdRoot {
   readonly parent: number | null;
   readonly at: number;
+  bark?: RootBranchData["bark"];
 }
 
 // What a curve drawn in the editor starts out as: a bar the manacle's own ring
@@ -470,7 +471,7 @@ export function debugData(d: EdDebug): DebugDrawData | undefined {
 // the order `toLevelData` writes them.
 function rootData(r: EdRoot, run: readonly EdItem[]): RootBranchData {
   const parent = r.parent === null ? -1 : run.findIndex((m) => m.id === r.parent);
-  return parent < 0 ? {} : { parent, at: r.at };
+  return { ...(parent < 0 ? {} : { parent, at: r.at }), ...(r.bark ? { bark: r.bark } : {}) };
 }
 
 export interface EdItem {
@@ -1425,6 +1426,7 @@ function fromLevelData(data: LevelData): EdModel {
       item.root = {
         parent: parent && parent !== item ? parent.id : null,
         at: o.root.at ?? 0,
+        ...(o.root.bark ? { bark: o.root.bark } : {}),
       };
     });
   }

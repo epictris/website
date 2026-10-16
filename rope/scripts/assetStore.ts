@@ -29,6 +29,7 @@ import {
 } from "../src/render3d/assets";
 import { levelSceneName } from "../src/render3d/levelAssets";
 import { SCENE_ASSETS, sceneFile, sceneReleaseName } from "../src/render3d/scenes";
+import ROOT_BAKES from "../src/render3d/rootBakes.json";
 import { LEVELS } from "../src/level/registry";
 
 // Overridable so a fork, or a private mirror, does not have to patch source.
@@ -40,6 +41,7 @@ export const ASSET_TAG = process.env.ASSET_TAG ?? "assets";
 // check - wants the files rather than the manifests. One list means a texture map
 // cannot be left out of a check by being in the other manifest.
 export interface StoredAsset {
+  storeRepo?: string;
   // Manifest key, qualified by the map slot for a texture, so a failure names
   // the thing to go and fix. A file several keys name (a PACK - see
   // `MeshAsset.node`) is listed once, under all of them.
@@ -94,7 +96,7 @@ export function storedAssets(): StoredAsset[] {
   for (const [key, asset] of Object.entries(TEXTURE_ASSETS)) {
     const maps = asset.maps;
     for (const [slot, map] of Object.entries(maps)) {
-      if (map) out.push({ key: `${key}.${slot}`, file: map.file, sha256: map.sha256, bytes: map.bytes });
+      if (map) out.push({ key: `${key}.${slot}`, file: map.file, sha256: map.sha256, bytes: map.bytes, storeRepo: map.storeRepo });
     }
     // Belt and braces: `textureMaps` is what the runtime iterates, so a slot
     // added there and not here would be a file nothing checks.
@@ -113,6 +115,12 @@ export function storedAssets(): StoredAsset[] {
       bytes: asset.bytes,
       name: sceneReleaseName(scene),
     });
+  }
+  // Each level's baked roots, written by `roots:bake` (see `rootBake.ts`).
+  // Every bake is `<level>.glb` on disk, so its release name carries what it
+  // is, as a scene's does.
+  for (const [level, bake] of Object.entries(ROOT_BAKES)) {
+    out.push({ key: `roots:${level}`, file: bake.file, sha256: bake.sha256, bytes: bake.bytes, name: `roots-${level}.glb` });
   }
   return out;
 }
@@ -134,8 +142,12 @@ export function assetName(asset: { file: string; name?: string }): string {
   return asset.name ?? basename(asset.file);
 }
 
-export function assetUrl(asset: { file: string; name?: string }): string {
-  return `https://github.com/${ASSET_REPO}/releases/download/${ASSET_TAG}/${assetName(asset)}`;
+export function assetStoreRepo(asset: { storeRepo?: string }): string {
+  return process.env.ASSET_REPO ?? asset.storeRepo ?? ASSET_REPO;
+}
+
+export function assetUrl(asset: { file: string; name?: string; storeRepo?: string }): string {
+  return `https://github.com/${assetStoreRepo(asset)}/releases/download/${ASSET_TAG}/${assetName(asset)}`;
 }
 
 export function sha256(bytes: Uint8Array): string {

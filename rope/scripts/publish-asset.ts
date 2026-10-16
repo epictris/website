@@ -15,7 +15,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { basename, resolve } from "node:path";
-import { ASSET_REPO, ASSET_TAG, sha256 } from "./assetStore";
+import { ASSET_TAG, assetStoreRepo, sha256, storedAssets } from "./assetStore";
 
 const [input] = process.argv.slice(2);
 if (!input) {
@@ -32,13 +32,14 @@ if (spawnSync("which", ["gh"]).status !== 0) {
 }
 
 const name = basename(input);
+const repo = assetStoreRepo(storedAssets().find(asset => basename(asset.file) === name) ?? {});
 const bytes = readFileSync(resolve(input));
 const hash = sha256(bytes);
 
 // The store tag holds no version meaning, so it is created once and reused
 // forever. `view` first rather than `create --if-not-exists`, which gh has no
 // flag for.
-const exists = spawnSync("gh", ["release", "view", ASSET_TAG, "--repo", ASSET_REPO], {
+const exists = spawnSync("gh", ["release", "view", ASSET_TAG, "--repo", repo], {
   stdio: "ignore",
 }).status === 0;
 if (!exists) {
@@ -50,7 +51,7 @@ if (!exists) {
       "create",
       ASSET_TAG,
       "--repo",
-      ASSET_REPO,
+      repo,
       "--title",
       "Binary assets",
       "--notes",
@@ -65,7 +66,7 @@ if (!exists) {
 // publishing it. The sha256 below is what makes that safe to do.
 const up = spawnSync(
   "gh",
-  ["release", "upload", ASSET_TAG, resolve(input), "--repo", ASSET_REPO, "--clobber"],
+  ["release", "upload", ASSET_TAG, resolve(input), "--repo", repo, "--clobber"],
   { stdio: "inherit" },
 );
 if (up.status !== 0) process.exit(up.status ?? 1);

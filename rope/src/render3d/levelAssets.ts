@@ -21,13 +21,17 @@
 // the set do the deduplicating.
 
 import type { RawLevelData } from "../level/levelFormat";
-import { normalizeLevelData } from "../level/levelFormat";
+import { normalizeLevelData, scaleLevelData } from "../level/levelFormat";
+import { PX } from "../engine/units";
+import { rootMeshKey } from "./rootKey";
+import rootBakes from "./rootBakes.json";
 import { SCENE_ASSETS, sceneFile } from "./scenes";
 import { sceneMeta } from "./sceneMeta";
 import {
   BALL_MESH,
   HDRI_ASSETS,
   IRON_SURFACE,
+  rootSurfaceFor,
   MESH_ASSETS,
   surfaceName,
   TEXTURE_ASSETS,
@@ -56,6 +60,15 @@ function sceneStoredFile(scene: string): StoredFile {
     console.warn(`[levelAssets] scene "${scene}" is not in the store and has no meta.json; preloading ${sceneFile(scene)} unweighted`);
   }
   return { file: sceneFile(scene), bytes: bytes ?? 0 };
+}
+
+// The pinned root bake (`rootBakes.json`) holding any of this level's root
+// bodies, by their keys, which are of the level in metres.
+export function rootBakeOfLevel(raw: RawLevelData): StoredFile | undefined {
+  const keys = new Set(scaleLevelData(raw, PX).bodies.map(rootMeshKey).filter(Boolean));
+  if (!keys.size) return undefined;
+  const bakes: Record<string, { file: string; bytes: number; keys: string[] }> = rootBakes;
+  return Object.values(bakes).find((bake) => bake.keys.some((k) => keys.has(k)));
 }
 
 // Every stored file the 3D scene will request for this level, in roughly the
@@ -95,12 +108,17 @@ export function levelStoredFiles(raw: RawLevelData, controller?: string): Stored
   // The Blender scene is what a level looks like, and one file.
   if (data.scene) add(sceneStoredFile(data.scene));
 
+  // The level's roots, grown ahead of time (`rootBake.ts`): the bake that
+  // holds any of its bodies. A body it does not hold is grown at load.
+  add(rootBakeOfLevel(raw));
+
   // Water draws from nothing stored (its ripples are generated, see
   // render3d/waterLook.ts).
   for (const body of data.bodies) {
     // A conveyor's band wears its own surface, drawn by the game (see
     // `BodyVisual.mountBelt`).
     for (const object of body.objects) {
+      if (object.type === "collision" && object.root) addSurface(rootSurfaceFor(object.root.bark));
       if (object.type === "collision" && object.shape.kind === "belt") addSurface(object.shape.texture);
     }
   }

@@ -49,10 +49,14 @@ def is_navigation(event):
 
 
 def paintable(ob):
+    # Only what renders is scenery to grow on: a formation's solid guide (in
+    # "Formation recipes", hidden from render) was joined to a moss as a rock
+    # the paint came near (river's 782 m3 back-wall guide, 2026-10-16).
     return (
         ob is not None
         and ob.type == "MESH"
         and GROWN_PROP not in ob
+        and not ob.hide_render
         and ob.library is None
         and ob.override_library is None
         and not any(c.name.lower().startswith("guide") or c.library is not None for c in ob.users_collection)

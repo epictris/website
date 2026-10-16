@@ -26,7 +26,7 @@ import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { ASSET_REPO, ASSET_TAG, assetName, sha256, storedAssets } from "./assetStore";
+import { ASSET_TAG, assetName, assetStoreRepo, sha256, storedAssets } from "./assetStore";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const PUBLIC_DIR = join(ROOT, "public");
@@ -39,14 +39,14 @@ if (spawnSync("which", ["gh"]).status !== 0) {
 // name -> sha256 hex, or null for an asset GitHub has no digest for (one
 // uploaded before it recorded them). Unknown is treated as stale: re-uploading
 // the pinned bytes is harmless, and it records the digest for next time.
-function releaseDigests(): Map<string, string | null> {
+function releaseDigests(repo: string): Map<string, string | null> {
   const r = spawnSync(
     "gh",
-    ["release", "view", ASSET_TAG, "--repo", ASSET_REPO, "--json", "assets", "--jq", ".assets[] | [.name, .digest] | @tsv"],
+    ["release", "view", ASSET_TAG, "--repo", repo, "--json", "assets", "--jq", ".assets[] | [.name, .digest] | @tsv"],
     { encoding: "utf8" },
   );
   if (r.status !== 0) {
-    console.error(`[assets] cannot list the "${ASSET_TAG}" release on ${ASSET_REPO}:\n${r.stderr}`);
+    console.error(`[assets] cannot list the "${ASSET_TAG}" release on ${repo}:\n${r.stderr}`);
     process.exit(1);
   }
   const out = new Map<string, string | null>();
@@ -57,13 +57,16 @@ function releaseDigests(): Map<string, string | null> {
   return out;
 }
 
-const inRelease = releaseDigests();
+const releases = new Map<string, Map<string, string | null>>();
 const failures: string[] = [];
 const drifted: string[] = [];
 let uploaded = 0;
 let current = 0;
 
 for (const asset of storedAssets()) {
+  const repo = assetStoreRepo(asset);
+  if (!releases.has(repo)) releases.set(repo, releaseDigests(repo));
+  const inRelease = releases.get(repo)!;
   const name = assetName(asset);
   const path = join(PUBLIC_DIR, asset.file.replace(/^\//, ""));
   const local = existsSync(path) ? sha256(readFileSync(path)) : null;
@@ -92,7 +95,7 @@ for (const asset of storedAssets()) {
   const staging = mkdtempSync(join(tmpdir(), "asset-"));
   const staged = join(staging, name);
   copyFileSync(path, staged);
-  const up = spawnSync("gh", ["release", "upload", ASSET_TAG, staged, "--repo", ASSET_REPO, "--clobber"], {
+  const up = spawnSync("gh", ["release", "upload", ASSET_TAG, staged, "--repo", repo, "--clobber"], {
     stdio: "inherit",
   });
   rmSync(staging, { recursive: true, force: true });

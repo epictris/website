@@ -27,7 +27,7 @@ import { LAYER_HOOK, MASK_ALL, MASK_SOLID, RigidBody2D, type PhysicsBody2D } fro
 import { circleShape, isConvexLoop, polyArea, polyShapeCentred } from "../engine/shapes";
 import { World } from "../engine/world";
 import { buildLevelBodies } from "../level/buildBodies";
-import { isCollisionObject, scaleLevelData, type LevelBodyData, type RawLevelData } from "../level/levelFormat";
+import { DEFAULT_ROOT_COLOR, isCollisionObject, scaleLevelData, type LevelBodyData, type RawLevelData } from "../level/levelFormat";
 import { rootProblems } from "../level/roots";
 import { curveLine, strokeCurve } from "../lib/stroke";
 import { cubicAt, pathNodesOf } from "../lib/path";
@@ -43,9 +43,16 @@ import {
   setRootSprings,
   slideRootJunction,
   syncRoots,
+  setRootBark,
   type RootItem,
 } from "../editor/rootEditing";
-import { rootGeometry } from "../render3d/rootMesh";
+import { rootBarkMaterial, rootGeometry, rootCenterline } from "../render3d/rootMesh";
+import { fuseRootForks } from "../render3d/rootFork";
+import { buildRootMeshes, rootBuildReady, ROOT_SIMPLIFY_ERROR } from "../render3d/rootBuild";
+import { rootMeshKey } from "../render3d/rootKey";
+import { readRootBake } from "../render3d/rootBake";
+import { encodeRootBake } from "../../scripts/rootBakeEncode";
+import { levelStoredFiles } from "../render3d/levelAssets";
 import { readFileSync } from "node:fs";
 import * as THREE from "three";
 import type { CollisionObject2D } from "../engine/body";
@@ -53,6 +60,7 @@ import { BallLevel } from "../level/ballLevel";
 import { ScriptedInput, scriptSpec, type PlaytestScript } from "./playtest";
 import { BodyVisual } from "../render3d/bodyVisuals";
 import { AVATAR_CHAIN_MESH, ChainLayer } from "../render3d/chainVisual";
+import { Scene3D } from "../render3d/scene";
 
 const DT = 1 / 60;
 
@@ -317,7 +325,10 @@ function caseFormat(): RootResult {
     trunk.shape.kind === "curve" && near(trunk.shape.tip ?? 0, 0.025, 1e-12) && trunk.root !== undefined,
   );
   const { model } = grownModel();
+  setRootBark(model, [model.items.find(isRootItem)!], "broad");
   const disk = modelToDisk(model);
+  const rootFiles = levelStoredFiles(disk).filter(f => f.file.includes("painted-root"));
+  c.check("preloading fetches only the chosen bark variant", rootFiles.length === 1 && rootFiles[0]!.file.endsWith("painted-root-broad-base.webp"));
   const objs = disk.bodies.flatMap((b) => b.objects);
   const roots = disk.bodies[0]!.objects;
   const tags = roots.map((o) => (isCollisionObject(o) ? o.root : undefined));
@@ -337,6 +348,8 @@ function caseFormat(): RootResult {
   const again = modelToDisk(modelFromDisk(disk));
   c.check("...and a second round trip writes the same level", JSON.stringify(again.bodies) === JSON.stringify(disk.bodies));
   const metres = scaleLevelData(disk, PX);
+  c.check("bark choice survives save, load and unit scaling on every branch", metres.bodies[0]!.objects
+    .filter(isCollisionObject).filter(o => o.root).every(o => o.root!.bark === "broad"));
   const problems = rootProblems(metres.bodies[0]!);
   c.check(`the lint finds every branch on its junction (${problems.join("; ") || "none"})`, problems.length === 0);
   return { name: "root-format - the taper and the tree survive the scale and the editor", passed: c.passed(), details: c.details };
@@ -431,6 +444,7 @@ function caseSpring(): RootResult {
 function caseTree(): RootResult {
   const c = claims();
   const { model, trunk, branch, twig } = grownModel();
+  setRootBark(model, [branch], "original");
   const onParent = (child: RootItem, parent: RootItem): number =>
     toWorld(child, child.shape.verts[0]!).distanceTo(rootPointAt(parent, child.root.at));
   c.check(
@@ -451,6 +465,7 @@ function caseTree(): RootResult {
   // Slide the branch's junction toward the trunk's base.
   const target = rootPointAt(trunk, 0.2).add(new Vec2(0.05, 0.05));
   slideRootJunction(model, branch, target);
+  c.check("sliding a join retains the chosen bark on the whole root", [trunk, branch, twig].every(i => i.root.bark === "original"));
   c.check(
     `dragging a branch's first node slides it along its parent (at ${fmt(branch.root.at, 3)}, ${fmt(onParent(branch, trunk) * 1000, 6)} mm off)`,
     near(branch.root.at, projectOntoRoot(trunk, target).at, 1e-12) && branch.root.at < 0.3 && onParent(branch, trunk) < 1e-9,
@@ -464,6 +479,8 @@ function caseTree(): RootResult {
   const at = toWorld(branch, branch.shape.verts[0]!);
   branch.bodyId = 99_999;
   syncRoots(model);
+  setRootBark(model, [branch], "broad");
+  c.check("changing a separated root does not recolour another body", branch.root.bark === "broad" && trunk.root.bark === "original" && twig.root.bark === "original");
   c.check(
     `moved to another body, a branch becomes a trunk where it stood (parent ${branch.root.parent}, ${fmt(toWorld(branch, branch.shape.verts[0]!).distanceTo(at) * 1000, 6)} mm moved)`,
     branch.root.parent === null && toWorld(branch, branch.shape.verts[0]!).distanceTo(at) < 1e-12,
@@ -565,7 +582,60 @@ function caseMesh(): RootResult {
   );
   const none = rootGeometry({ width: 0.1, verts: [{ x: 0, y: 0 }, { x: 0, y: 0 }] }, { trunk: true, seed: 0 });
   c.check("a curve of no length grows nothing", none === null);
+  // Find each duplicated UV seam without pinning the tessellation count.
+  const uv = g.getAttribute("uv"), age = g.getAttribute("rootAge");
+  let seam = true, unit = true, first = 0;
+  for (let i = 0; i < pos.count; i++) {
+    unit &&= Math.abs(Math.hypot(nrm.getX(i), nrm.getY(i), nrm.getZ(i)) - 1) < 1e-5;
+    if (i + 1 === pos.count || uv.getY(i + 1) !== uv.getY(i)) {
+      seam &&= Math.abs(pos.getX(i) - pos.getX(first)) < 1e-6
+        && Math.abs(pos.getY(i) - pos.getY(first)) < 1e-6
+        && Math.abs(pos.getZ(i) - pos.getZ(first)) < 1e-6
+        && Math.abs(nrm.getX(i) - nrm.getX(first)) < 1e-6
+        && Math.abs(nrm.getY(i) - nrm.getY(first)) < 1e-6
+        && Math.abs(nrm.getZ(i) - nrm.getZ(first)) < 1e-6
+        && Math.abs(uv.getX(i) - uv.getX(first) - 1) < 1e-6;
+      first = i + 1;
+    }
+  }
+  c.check("the bark wrap closes in both position and normal, exactly one UV turn apart", seam);
+  c.check("fluted surface normals stay unit length, including the caps", unit);
+  c.check("the thin tip wears younger skin than the woody base", age.getX(0) > 0.9 && age.getX(pos.count - 1) < 0.1);
+  g.dispose();
   return { name: "root-mesh - the drawn root is a closed tube as wide as its bar", passed: c.passed(), details: c.details };
+}
+
+function caseBark(): RootResult {
+  const c = claims();
+  const bark = rootBarkMaterial(DEFAULT_ROOT_COLOR);
+  const custom = rootBarkMaterial("#8b785f");
+  c.check("variant materials are isolated and reused by variant and tint", rootBarkMaterial(DEFAULT_ROOT_COLOR, "original") !== bark
+    && rootBarkMaterial(DEFAULT_ROOT_COLOR, "broad") !== bark
+    && rootBarkMaterial(DEFAULT_ROOT_COLOR, "broad") === rootBarkMaterial(DEFAULT_ROOT_COLOR, "broad"));
+  c.check("roots share texture storage across body colours", bark.map === custom.map
+    && bark.normalMap === custom.normalMap && bark.roughnessMap === custom.roughnessMap);
+  c.check("custom tint never mutates the default material", bark !== custom
+    && bark === rootBarkMaterial(DEFAULT_ROOT_COLOR) && bark.color.equals(new THREE.Color(1, 1, 1)));
+  c.check("albedo is colour data; relief and roughness are linear data", bark.map!.colorSpace === THREE.SRGBColorSpace
+    && bark.normalMap!.colorSpace === THREE.NoColorSpace && bark.roughnessMap!.colorSpace === THREE.NoColorSpace);
+  const map = bark.map as THREE.DataTexture;
+  const { width, height } = map.image;
+  const data = map.image.data!;
+  // A tile edge should be no more conspicuous than nearby texel transitions.
+  // Check both axes; exact duplicate edge texels are not required for a repeat.
+  let edge = 0, interior = 0;
+  for (let y = 0; y < height; y++) for (let channel = 0; channel < 3; channel++) {
+    edge += Math.abs(data[(y * width) * 4 + channel]! - data[(y * width + width - 1) * 4 + channel]!);
+    interior += Math.abs(data[(y * width + 1) * 4 + channel]! - data[y * width * 4 + channel]!);
+  }
+  for (let x = 0; x < width; x++) for (let channel = 0; channel < 3; channel++) {
+    edge += Math.abs(data[x * 4 + channel]! - data[((height - 1) * width + x) * 4 + channel]!);
+    interior += Math.abs(data[(width + x) * 4 + channel]! - data[x * 4 + channel]!);
+  }
+  c.check(`texture boundaries are continuous at texel scale (${fmt(edge / Math.max(1, interior), 2)}× adjacent variation)`, edge < interior * 2 + 1);
+  c.check("grain repeats with mipmapping for distant roots", map.wrapS === THREE.RepeatWrapping
+    && map.wrapT === THREE.RepeatWrapping && map.generateMipmaps && map.minFilter === THREE.LinearMipmapLinearFilter);
+  return { name: "root-bark - shared painted maps wrap cleanly and preserve authored tint", passed: c.passed(), details: c.details };
 }
 
 // ---------------------------------------------------------------------------
@@ -640,7 +710,311 @@ function withCanvasStub<T>(make: () => T): T {
   }
 }
 
-export function runRootCases(): RootResult[] {
-  return [caseStroke(), caseFold(), caseFormat(), caseHookOnly(), caseSpring(), caseTree(), caseLint(), caseMesh(), caseCuffDepth()];
+export async function runRootCases(): Promise<RootResult[]> {
+  await rootBuildReady;
+  return [caseStroke(), caseFold(), caseFormat(), caseHookOnly(), caseSpring(), caseTree(), caseLint(), caseMesh(), caseBark(), caseOrganicFork(), caseCuffDepth(), caseBarkHighlight(),
+    caseSimplify(), caseKey(), await caseBake(), caseRestyle()];
+}
+
+// ---------------------------------------------------------------------------
+// restyle - the editor's in-place rebuild of a root draws from the cache: a
+// recolour keeps the geometry and swaps the material, a reshape grows anew.
+// ---------------------------------------------------------------------------
+function caseRestyle(): RootResult {
+  const c = claims();
+  const data = scaleLevelData(rootLevel(), PX);
+  const built = buildLevelBodies(new World(), data, () => {}).bodies[0]!;
+  const visual = new BodyVisual(built.body, built);
+  const drawn = (): THREE.Mesh[] => {
+    const out: THREE.Mesh[] = [];
+    visual.root.traverse((o) => {
+      if ((o as THREE.Mesh).isMesh && (o as THREE.Mesh).geometry.getAttribute("rootAge")) out.push(o as THREE.Mesh);
+    });
+    return out;
+  };
+  const first = drawn();
+  c.check(`the root is drawn on build (${first.length} mesh)`, first.length === 1);
+  // Placed in the world: the drawn mesh's bounds, in world space, centre on
+  // the authored curve's middle (the body is at the origin, unrotated). The
+  // visual stands at its body's pose once synced, as every frame does.
+  visual.sync(1);
+  visual.root.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(first[0]!);
+  const middle = box.getCenter(new THREE.Vector3());
+  c.check(`placed where the curve is (centre ${fmt(middle.x, 3)}, ${fmt(middle.y, 3)})`, middle.x > 0.4 && middle.x < 1.2 && middle.y < 0 && middle.y > -0.8);
+  const recoloured = structuredClone(built.data);
+  recoloured.color = "#40607a";
+  c.check("a recolour rebuilds in place", visual.restyleDebug(recoloured));
+  const after = drawn();
+  c.check("...with the same geometry and a new material",
+    after.length === 1 && after[0]!.geometry === first[0]!.geometry && after[0]!.material !== first[0]!.material);
+  const reshaped = structuredClone(recoloured);
+  const curve = reshaped.objects.find((o) => isCollisionObject(o) && o.root) as { shape: { verts: { x: number }[] } };
+  curve.shape.verts[1]!.x += 0.2;
+  c.check("a reshape rebuilds in place", visual.restyleDebug(reshaped));
+  const regrown = drawn();
+  c.check("...with new geometry", regrown.length === 1 && regrown[0]!.geometry !== first[0]!.geometry);
+  c.check("back to the first shape, the first geometry comes back from the cache", visual.restyleDebug(recoloured) && drawn()[0]?.geometry === first[0]!.geometry);
+  visual.dispose();
+  c.check("disposed, nothing is drawn", drawn().length === 0);
+  return { name: "root-restyle - the editor's in-place rebuild draws from the shared cache", passed: c.passed(), details: c.details };
+}
+
+// A two-branch body in metres: a trunk with a branch grown out of it half way.
+function forkBody(): LevelBodyData {
+  return {
+    x: 1, y: 2, rot: 0.3, kind: "static", passable: true,
+    objects: [
+      { type: "collision", x: 0, y: 0, shape: { kind: "curve", width: 0.12, tip: 0.04, verts: [{ x: 0, y: 0, outX: 0.2 }, { x: 0.7, y: 0.15 }] }, root: {} },
+      { type: "collision", x: 0, y: 0, shape: { kind: "curve", width: 0.06, tip: 0.02, verts: [{ x: 0.35, y: 0.08 }, { x: 0.5, y: -0.25 }] }, root: { parent: 0, at: 0.5 } },
+    ],
+  } as unknown as LevelBodyData;
+}
+
+// Every corner of a mesh's triangles, by index or in order.
+function trianglesOf(g: THREE.BufferGeometry): number[][] {
+  const index = g.getIndex();
+  const count = index ? index.count : g.getAttribute("position").count;
+  const out: number[][] = [];
+  for (let t = 0; t < count; t += 3) out.push([0, 1, 2].map((k) => (index ? index.getX(t + k) : t + k)));
+  return out;
+}
+
+// The distance from `p` to the nearest of a mesh's triangles.
+function distanceToMesh(p: THREE.Vector3, g: THREE.BufferGeometry, matrix?: THREE.Matrix4): number {
+  const pos = g.getAttribute("position");
+  const tri = new THREE.Triangle(), a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), q = new THREE.Vector3();
+  let best = Infinity;
+  for (const [i, j, k] of trianglesOf(g)) {
+    a.fromBufferAttribute(pos, i!); b.fromBufferAttribute(pos, j!); c.fromBufferAttribute(pos, k!);
+    if (matrix) { a.applyMatrix4(matrix); b.applyMatrix4(matrix); c.applyMatrix4(matrix); }
+    tri.set(a, b, c).closestPointToPoint(p, q);
+    best = Math.min(best, q.distanceTo(p));
+  }
+  return best;
+}
+
+// ---------------------------------------------------------------------------
+// simplify - the drawn root is the grown one, simplified within its error,
+// and still one closed surface across the fork.
+// ---------------------------------------------------------------------------
+function caseSimplify(): RootResult {
+  const c = claims();
+  const body = forkBody();
+  const simplified = buildRootMeshes(body);
+  // The same growth, unsimplified, in the same frame.
+  const grown = new Map<number, THREE.BufferGeometry>();
+  body.objects.forEach((o, i) => {
+    if (!isCollisionObject(o) || o.shape.kind !== "curve" || !o.root) return;
+    const g = rootGeometry(o.shape, { trunk: o.root.parent === undefined, seed: i })!;
+    g.rotateZ(-body.rot);
+    const p = new Vec2(body.x, body.y);
+    g.translate(p.x, -p.y, 0);
+    grown.set(i, g);
+  });
+  const fused = fuseRootForks(grown, new Map([[1, 0]]));
+  const count = (set: Map<number, THREE.BufferGeometry>): number => [...set.values()].reduce((n, g) => n + trianglesOf(g).length, 0);
+  const before = count(fused), after = count(simplified);
+  // A short fixture keeps a larger share than a level's long roots do
+  // (ball.json keeps 22%).
+  c.check(`simplified to under half the grown triangles (${before} -> ${after})`, after > 0 && after * 2 < before);
+  // Every grown vertex lies within the error of the simplified surface (with
+  // slack for the error being measured by the simplifier's own metric).
+  let worst = 0;
+  const p = new THREE.Vector3();
+  for (const [i, g] of fused) {
+    const pos = g.getAttribute("position");
+    for (let v = 0; v < pos.count; v += 7) worst = Math.max(worst, distanceToMesh(p.fromBufferAttribute(pos, v), simplified.get(i)!));
+  }
+  c.check(`the simplified surface stays within ${ROOT_SIMPLIFY_ERROR * 1000} mm of the grown one (worst ${fmt(worst * 1000, 3)} mm)`, worst <= ROOT_SIMPLIFY_ERROR * 1.5);
+  // Closed: every edge, by position, has exactly two triangles across both
+  // branches' meshes - the cut between them held where it was.
+  const edges = new Map<string, number>();
+  let degenerate = 0;
+  for (const g of simplified.values()) {
+    const pos = g.getAttribute("position");
+    const point = (i: number): string => [pos.getX(i), pos.getY(i), pos.getZ(i)].map((v) => Math.round(v * 1e7)).join(",");
+    for (const tri of trianglesOf(g)) {
+      const keys = tri.map(point);
+      if (new Set(keys).size < 3) { degenerate++; continue; }
+      for (let k = 0; k < 3; k++) {
+        const a = keys[k]!, b = keys[(k + 1) % 3]!;
+        const key = a < b ? `${a}/${b}` : `${b}/${a}`;
+        edges.set(key, (edges.get(key) ?? 0) + 1);
+      }
+    }
+  }
+  const open = [...edges.values()].filter((n) => n !== 2).length;
+  c.check(`the simplified fork is still one closed surface (${open} unmatched edges, ${degenerate} degenerate)`, open === 0);
+  const attributes = ["position", "normal", "uv", "color", "rootAge", "rootJoin"];
+  c.check("every attribute the bark reads survives", [...simplified.values()].every((g) => attributes.every((a) => g.getAttribute(a))));
+  return { name: "root-simplify - the drawn root is the grown one within its error, still closed", passed: c.passed(), details: c.details };
+}
+
+// ---------------------------------------------------------------------------
+// key - what a body's root meshes are known by (in the cache and the bake).
+// ---------------------------------------------------------------------------
+function caseKey(): RootResult {
+  const c = claims();
+  const body = forkBody();
+  const key = rootMeshKey(body);
+  const edit = (change: (b: LevelBodyData) => void): string => {
+    const b = structuredClone(body);
+    change(b);
+    return rootMeshKey(b);
+  };
+  c.check(`a body with roots has a 16-digit key (${key})`, /^[0-9a-f]{16}$/.test(key));
+  c.check("the same body has the same key", rootMeshKey(structuredClone(body)) === key);
+  c.check("colour and bark are the material's, not the mesh's", edit((b) => {
+    b.color = "#ff0000";
+    (b.objects[0] as { root: { bark?: string } }).root.bark = "broad";
+  }) === key);
+  c.check("a node moved is a different mesh", edit((b) => {
+    ((b.objects[0] as { shape: { verts: { x: number }[] } }).shape.verts[1]!).x += 0.01;
+  }) !== key);
+  c.check("the body moved is a different mesh (it is grown in the world)", edit((b) => { b.x += 0.5; }) !== key);
+  c.check("a branch made a trunk is a different mesh", edit((b) => { (b.objects[1] as { root: object }).root = {}; }) !== key);
+  c.check("a body with no roots has none", edit((b) => { b.objects = []; }) === "");
+  return { name: "root-key - a body's root meshes are known by what they are grown from", passed: c.passed(), details: c.details };
+}
+
+// ---------------------------------------------------------------------------
+// bake - a bake read back through the game's loader is the build it was made
+// from, within its quantisation.
+// ---------------------------------------------------------------------------
+async function caseBake(): Promise<RootResult> {
+  const c = claims();
+  const body = forkBody();
+  const key = rootMeshKey(body);
+  const built = buildRootMeshes(body);
+  const bytes = await encodeRootBake("case", [{ key, meshes: built }]);
+  const [{ GLTFLoader }, { MeshoptDecoder }] = await Promise.all([
+    import("three/examples/jsm/loaders/GLTFLoader.js"),
+    import("three/examples/jsm/libs/meshopt_decoder.module.js"),
+  ]);
+  const gltf = await new GLTFLoader().setMeshoptDecoder(MeshoptDecoder)
+    .parseAsync(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer, "");
+  const found = readRootBake(gltf.scene);
+  const set = found.get(key);
+  c.check(`the bake (${(bytes.byteLength / 1024).toFixed(0)} KB) holds the body under its key`, set !== undefined);
+  if (!set) return { name: "root-bake - a bake read back is the build it was made from", passed: false, details: c.details };
+  c.check("...with every branch", [...built.keys()].every((i) => set.has(i)) && set.size === built.size);
+  let worstPosition = 0, worstNormal = 0, worstUv = 0, sameTriangles = true;
+  const v = new THREE.Vector3(), n = new THREE.Vector3(), w = new THREE.Vector3();
+  for (const [i, original] of built) {
+    const baked = set.get(i)!;
+    const matrix = baked.matrix ?? new THREE.Matrix4();
+    const normalMatrix = new THREE.Matrix3().getNormalMatrix(matrix);
+    sameTriangles &&= trianglesOf(baked.geometry).length === trianglesOf(original).length;
+    // The bake reorders vertices for the GPU, so each is compared with the
+    // original vertex at its position.
+    const pos = original.getAttribute("position"), nor = original.getAttribute("normal"), uv = original.getAttribute("uv");
+    const bpos = baked.geometry.getAttribute("position"), bnor = baked.geometry.getAttribute("normal"), buv = baked.geometry.getAttribute("uv");
+    const byPosition = new Map<string, number>();
+    const cell = (p: THREE.Vector3): string => [p.x, p.y, p.z].map((x) => Math.round(x * 2e4)).join(",");
+    for (let k = 0; k < pos.count; k++) byPosition.set(cell(v.fromBufferAttribute(pos, k)), k);
+    for (let k = 0; k < bpos.count; k++) {
+      v.fromBufferAttribute(bpos, k).applyMatrix4(matrix);
+      let match = byPosition.get(cell(v));
+      if (match === undefined) {
+        // Nearest by search when quantisation crossed a cell boundary.
+        let best = Infinity;
+        for (let o = 0; o < pos.count; o++) {
+          const d = w.fromBufferAttribute(pos, o).distanceToSquared(v);
+          if (d < best) { best = d; match = o; }
+        }
+      }
+      worstPosition = Math.max(worstPosition, w.fromBufferAttribute(pos, match!).distanceTo(v));
+      n.fromBufferAttribute(bnor, k).applyMatrix3(normalMatrix).normalize();
+      worstNormal = Math.max(worstNormal, n.angleTo(w.fromBufferAttribute(nor, match!)));
+      // U is compared a turn apart: at the bark's wrap one position is two
+      // vertices, U a whole turn apart, and either may be the one found.
+      const du = buv.getX(k) - uv.getX(match!);
+      worstUv = Math.max(worstUv, Math.abs(du - Math.round(du)), Math.abs(buv.getY(k) - uv.getY(match!)));
+    }
+  }
+  c.check("the same triangles", sameTriangles);
+  c.check(`positions within a twentieth of a millimetre (worst ${fmt(worstPosition * 1000, 4)} mm)`, worstPosition < 5e-5);
+  c.check(`normals within a degree (worst ${fmt(THREE.MathUtils.radToDeg(worstNormal), 3)} deg)`, worstNormal < THREE.MathUtils.degToRad(1));
+  c.check(`bark coordinates exact (worst ${worstUv})`, worstUv < 1e-6);
+  const ages = [...set.values()].every((p) => p.geometry.getAttribute("rootAge") && p.geometry.getAttribute("rootJoin"));
+  c.check("the bark's own attributes arrive under the names its shader reads", ages);
+  return { name: "root-bake - a bake read back is the build it was made from", passed: c.passed(), details: c.details };
+}
+
+function caseBarkHighlight(): RootResult {
+  const c = claims(), scene = new THREE.Scene(), tag = {};
+  const source = new THREE.MeshStandardMaterial(), mesh = new THREE.Mesh(new THREE.BoxGeometry(), source);
+  mesh.userData.pickTag = tag; scene.add(mesh);
+  // Exercise the selection logic without a WebGL context. The texture arrives
+  // after selection, as it does the first time an editor variant is chosen.
+  const preview = Object.create(Scene3D.prototype) as Scene3D;
+  const clones = new Map<string, THREE.Material>();
+  Object.assign(preview, { scene, editorLayer: new THREE.Group(), highlighted: new Map(), highlightMaterials: clones });
+  const sync = () => (preview as unknown as { syncHighlight(): void }).syncHighlight();
+  preview.setHighlight(new Map([[tag, "#ffaa00"]])); sync();
+  const before = mesh.material;
+  source.map = new THREE.Texture(); source.needsUpdate = true; sync();
+  c.check("a selected root refreshes its highlight when the authored texture arrives", mesh.material !== before && mesh.material.map === source.map);
+  const loaded = mesh.material; sync();
+  c.check("a loaded highlighted material is reused on subsequent frames", mesh.material === loaded);
+  preview.setHighlight(new Map()); sync();
+  c.check("deselecting restores the loaded source material", mesh.material === source);
+  for (const m of clones.values()) m.dispose();
+  source.map.dispose(); source.dispose(); mesh.geometry.dispose();
+  return { name: "root-bark-highlight - asynchronous variant loading stays visible while selected", passed: c.passed(), details: c.details };
+}
+
+function caseOrganicFork(): RootResult {
+  const c = claims();
+  const corner = { width: 0.12, tip: 0.05, verts: [{ x: 0, y: 0 }, { x: 0.5, y: 0 }, { x: 0.5, y: 0.5 }] };
+  const before = JSON.stringify(corner);
+  const line = rootCenterline(corner, 0);
+  let abrupt = 0;
+  for (let i = 1; i + 1 < line.length; i++) {
+    const a = line[i]!.sub(line[i - 1]!).normalized(), b = line[i + 1]!.sub(line[i]!).normalized();
+    if (a.dot(b) < 0.95) abrupt++;
+  }
+  c.check("a right-angle authoring corner becomes a continuously turning visual spine", abrupt === 0);
+  c.check("rounding preserves endpoints and never rewrites the collision curve", JSON.stringify(corner) === before && line[0]!.distanceTo(new Vec2(0, 0)) < 1e-9 && line.at(-1)!.distanceTo(new Vec2(0.5, 0.5)) < 1e-9);
+  const parent = rootGeometry({ width: 0.12, tip: 0.06, verts: [{ x: 0, y: 0 }, { x: 0.6, y: 0 }] }, { trunk: true, seed: 0 })!;
+  const child = rootGeometry({ width: 0.065, tip: 0.025, verts: [{ x: 0.3, y: 0 }, { x: 0.48, y: -0.28 }] }, { trunk: false, seed: 1 })!;
+  const meshes = fuseRootForks(new Map([[0, parent], [1, child]]), new Map([[1, 0]]));
+  c.check("the fused surface retains both authored branch identities for picking", meshes.has(0) && meshes.has(1));
+  const edges = new Map<string, number>();
+  let invalid = 0;
+  let grainJumps = 0, joinedVertices = 0;
+  for (const g of meshes.values()) {
+    const p = g.getAttribute("position"), n = g.getAttribute("normal");
+    const uv = g.getAttribute("uv"), join = g.getAttribute("rootJoin");
+    const point = (i: number): string => [p.getX(i), p.getY(i), p.getZ(i)].map(v => Math.round(v * 1e7)).join(",");
+    for (let i = 0; i < p.count; i++) {
+      const norm = Math.hypot(n.getX(i), n.getY(i), n.getZ(i));
+      if (!Number.isFinite(p.getX(i) + p.getY(i) + p.getZ(i) + norm) || norm < 0.99 || norm > 1.01) invalid++;
+      if (join.getX(i) > 0.5) joinedVertices++;
+    }
+    const index = g.getIndex();
+    const corner = (t: number): number => (index ? index.getX(t) : t);
+    const corners = index ? index.count : p.count;
+    for (let t = 0; t < corners; t += 3) {
+      const tri = [corner(t), corner(t + 1), corner(t + 2)];
+      const vertices = tri.map(point);
+      for (let k = 0; k < 3; k++) {
+        const ia = tri[k]!, ib = tri[(k + 1) % 3]!;
+        const length = Math.hypot(p.getX(ia) - p.getX(ib), p.getY(ia) - p.getY(ib), p.getZ(ia) - p.getZ(ib));
+        if (length < 0.015 && Math.abs(uv.getY(ia) - uv.getY(ib)) > 0.06) grainJumps++;
+        const a = vertices[k]!, b = vertices[(k + 1) % 3]!;
+        const key = a < b ? `${a}/${b}` : `${b}/${a}`;
+        edges.set(key, (edges.get(key) ?? 0) + 1);
+      }
+    }
+    g.dispose();
+  }
+  const open = [...edges.values()].filter(count => count !== 2).length;
+  c.check(`the fork is one closed surface, with no open join or buried caps (${open} unmatched edges)`, open === 0);
+  c.check("the blended fork has finite vertices and unit shading normals", invalid === 0);
+  c.check(`the grain has no phase jump across the fork (${grainJumps} short edges with discontinuous grain)`, grainJumps === 0);
+  c.check("the saddle carries a local shading transition", joinedVertices > 0);
+  return { name: "root-organic-fork - rounded growth and a continuous pickable junction", passed: c.passed(), details: c.details };
 }
 

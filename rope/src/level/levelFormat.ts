@@ -621,6 +621,7 @@ export interface CollisionObjectData extends ObjectPlacement {
 export interface RootBranchData {
   parent?: number;
   at?: number;
+  bark?: import("./rootAppearance").RootBarkVariant;
 }
 
 // How a collision piece's debug geometry is drawn (`CollisionObjectData.debug`):
@@ -3165,6 +3166,7 @@ export function scaleObject(o: SceneObjectData, factor: number): SceneObjectData
             root: {
               ...(o.root.parent !== undefined ? { parent: o.root.parent } : {}),
               ...(o.root.at !== undefined ? { at: o.root.at } : {}),
+              ...(o.root.bark !== undefined ? { bark: o.root.bark } : {}),
             },
           }
         : {}),

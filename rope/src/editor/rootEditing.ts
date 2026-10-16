@@ -14,6 +14,7 @@
 // Everything here is in world metres on the model, as every editor module is.
 
 import { Vec2 } from "../engine/vec2";
+import type { RootBarkVariant } from "../level/rootAppearance";
 import { buildPolylineIndex, pointAtArcLength, projectOntoPolyline, type PolylineIndex } from "../lib/path";
 import { curveLine } from "../lib/stroke";
 import {
@@ -47,6 +48,12 @@ export type RootItem = EdItem & { shape: Extract<EdItem["shape"], { kind: "path"
 
 export function isRootItem(i: EdItem): i is RootItem {
   return i.root !== null && i.shape.kind === "path" && i.layer === "scene";
+}
+
+// All branches in one body share their bark, including across fused joins.
+export function setRootBark(model: EdModel, selected: readonly EdItem[], bark: RootBarkVariant): void {
+  const bodies = new Set(selected.filter(isRootItem).map(i => i.bodyId));
+  for (const item of model.items) if (isRootItem(item) && bodies.has(item.bodyId)) item.root = { ...item.root, bark };
 }
 
 // A branch's centreline in world metres, indexed for arc length: the very
@@ -139,7 +146,7 @@ export function syncRoots(model: EdModel): boolean {
     const p = byId.get(i.root.parent);
     const ok = p !== undefined && p !== i && isRootItem(p) && p.bodyId === i.bodyId && !closesLoop(byId, i);
     if (!ok) {
-      i.root = { parent: null, at: 0 };
+      i.root = { ...i.root, parent: null, at: 0 };
       changed = true;
     }
   }
@@ -179,7 +186,7 @@ export function slideRootJunction(model: EdModel, item: EdItem, world: Vec2): bo
   if (!isRootItem(item) || item.root.parent === null) return false;
   const parent = model.items.find((i) => i.id === item.root.parent);
   if (!parent || !isRootItem(parent)) return false;
-  item.root = { parent: parent.id, at: projectOntoRoot(parent, world).at };
+  item.root = { ...item.root, parent: parent.id, at: projectOntoRoot(parent, world).at };
   syncRoots(model);
   return true;
 }

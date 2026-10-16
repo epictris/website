@@ -45,14 +45,18 @@ import {
   BALL_MESH,
   HDRI_ASSETS,
   IRON_SURFACE,
+  ROOT_SURFACES,
   MESH_ASSETS,
   RAW_ASSETS,
   surfaceName,
   TEXTURE_ASSETS,
 } from "../render3d/assets";
 import { SCENE_ASSETS, isSceneName } from "../render3d/scenes";
-import { normalizeLevelData } from "../level/levelFormat";
+import { normalizeLevelData, scaleLevelData, type RawLevelData } from "../level/levelFormat";
 import { LEVELS } from "../level/registry";
+import { PX } from "../engine/units";
+import { rootMeshKey } from "../render3d/rootKey";
+import ROOT_BAKES from "../render3d/rootBakes.json";
 import { assetName, levelsSceneNames, storedAssets } from "../../scripts/assetStore";
 import { CREDITS_PATH, renderCredits } from "../../scripts/credits";
 
@@ -66,6 +70,8 @@ const ASSET_DIRS = [
   join(PUBLIC_DIR, "textures"),
   join(PUBLIC_DIR, "water"),
   join(PUBLIC_DIR, "hdri"),
+  // The levels' baked roots (`roots:bake`).
+  join(PUBLIC_DIR, "roots"),
 ];
 
 // The store itself imposes nothing worth budgeting against - a GitHub Release
@@ -236,10 +242,35 @@ export function runAssetChecks(): AssetCheck[] {
         : `${scenes.size} scene(s) published`,
   });
 
+  // Every level's roots are baked as they now are: a level whose roots were
+  // edited since its bake still plays, but grows the edited bodies at load,
+  // which is the stall the bake exists to remove. And a bake holds no body
+  // that is not its level's any more. Read from disk, like the bake script,
+  // because the editor writes the file.
+  const roots: string[] = [];
+  for (const spec of Object.values(LEVELS)) {
+    if (!spec.file) continue;
+    const path = join(ROOT, "levels", `${spec.file}.json`);
+    const raw = existsSync(path) ? (JSON.parse(readFileSync(path, "utf8")) as RawLevelData) : spec.data;
+    const keys = [...new Set(scaleLevelData(raw, PX).bodies.map(rootMeshKey).filter(Boolean))].sort();
+    const baked = (ROOT_BAKES as Record<string, { keys: string[] }>)[spec.file]?.keys ?? [];
+    if (keys.join() !== baked.join()) {
+      const unbaked = keys.filter((k) => !baked.includes(k)).length;
+      const gone = baked.filter((k) => !keys.includes(k)).length;
+      roots.push(`${spec.file}: ${unbaked} root bod(ies) not in its bake, ${gone} baked that it no longer has`);
+    }
+  }
+  checks.push({
+    name: "assets: every level's roots are baked as they are",
+    pass: roots.length === 0,
+    detail: roots.length ? `run \`bun run roots:bake\` (or \`just publish\`): ${roots.join("; ")}` : "current",
+  });
+
   // Every prop and texture entry is drawn by something (UNDRAWN above). The
   // game's own things are named in code; a conveyor's band wears the surface
   // its level names (`BeltLook.texture`), resolved as the renderer resolves it.
-  const worn = new Set<string>([IRON_SURFACE]);
+  // Root bark variants are built-in renderer choices exposed in the editor.
+  const worn = new Set<string>([IRON_SURFACE, ...Object.values(ROOT_SURFACES)]);
   for (const spec of Object.values(LEVELS)) {
     for (const body of normalizeLevelData(spec.data).bodies) {
       for (const o of body.objects) {

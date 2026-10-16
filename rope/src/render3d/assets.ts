@@ -35,6 +35,7 @@
 // mesh that has not arrived yet never blocks the frame or the sim.
 
 import * as THREE from "three";
+import { rootBarkVariant, type RootBarkVariant } from "../level/rootAppearance";
 // Type-only, so the loader's module still lands in its own chunk (`gltfLoader`).
 import type { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { withDownload } from "./download";
@@ -90,6 +91,11 @@ export const DEFAULT_TEXTURE: MaterialName = "wood";
 // the manifest above and because both readers have to agree about it: a scene
 // with any chain in it loads this set, ball level or not.
 export const IRON_SURFACE = "painted steel";
+export const ROOT_SURFACE = "painted root";
+export const ROOT_SURFACES: Record<RootBarkVariant, string> = {
+  original: "painted root original", broad: "painted root broad", soft: ROOT_SURFACE,
+};
+export function rootSurfaceFor(bark: unknown): string { return ROOT_SURFACES[rootBarkVariant(bark)]; }
 
 // The avatar's own model (`MESH_ASSETS`, and see `BallVisual`). Named here for
 // the same reason the surface above is: the preload list a page starts fetching
@@ -141,6 +147,8 @@ const SOLID_ROUGHNESS = 0.8;
 export interface TextureMap {
   file: string;
   sha256: string;
+  // A contributor may publish a new map in their fork's asset release.
+  storeRepo?: string;
   // The file's size in bytes, which is what the loading screen's bar is a
   // fraction OF (see render3d/download.ts). It is stated here rather than read
   // off the responses because a denominator that arrives with the download is
@@ -267,6 +275,37 @@ export interface TextureAsset {
 // `cli assets` holds the whole directory to a byte budget; see
 // docs/asset-store.md.
 export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
+  "painted root original": {
+    maps: { base: {
+      file: "/textures/painted-root-base.webp",
+      raw: "painted-root/painted-root-base.png",
+      sha256: "a77de8328c8289642a1af46a51b6db224c6267ebfafc0494276282cde9206413", bytes: 196336,
+    } },
+    tile: 1, roughness: 0.94, metalness: 0, fallback: "wood",
+    source: "docs/root-bark-generation.md", author: "OpenAI image generation, directed by Karin", license: "Generated for this project",
+  },
+  "painted root broad": {
+    maps: { base: {
+      file: "/textures/painted-root-broad-base.webp",
+      raw: "painted-root/painted-root-broad-base.png",
+      sha256: "807527406d73942da9f81c8ae81480bab0bb4d6a329b372fbb81dbcce939f4d1", bytes: 70208,
+    } },
+    tile: 1, roughness: 0.91, metalness: 0, fallback: "wood",
+    source: "docs/root-bark-generation.md", author: "OpenAI image generation, directed by Karin", license: "Generated for this project",
+  },
+  "painted root": {
+    maps: { base: {
+      file: "/textures/painted-root-soft-v4-base.webp",
+      raw: "painted-root/painted-root-soft-v4-base.png",
+      sha256: "0bc79f36c644418ee043830481a4fbc1fb7515c192935fa0e0891f49c21d795f",
+      bytes: 46976,
+    } },
+    tile: 1, roughness: 0.91, metalness: 0,
+    fallback: "wood",
+    source: "docs/root-bark-generation.md",
+    author: "OpenAI image generation, directed by Karin",
+    license: "Generated for this project",
+  },
   // The ball and chain's own surface: oil strokes, not a photograph. Baked by
   // `scripts/bake-strokes.ts` into `assets-src/painted-steel/` and then
   // through the ordinary pipeline like any set, so it is reproducible and
@@ -723,7 +762,7 @@ export type LoadedMaps = Partial<Record<Slot, THREE.Texture>>;
 
 let textureLoader: THREE.TextureLoader | null = null;
 
-function loadMaps(name: string, asset: TextureAsset): Promise<LoadedMaps> {
+export function loadMaps(name: string, asset: TextureAsset): Promise<LoadedMaps> {
   const cached = imageCache.get(name);
   if (cached) return cached;
   textureLoader ??= new THREE.TextureLoader();

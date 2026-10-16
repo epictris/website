@@ -92,7 +92,9 @@ import heapq
 import math
 import os
 import random
+import time
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -189,6 +191,36 @@ class Params:
     texel: float = 0.0015
     max_texture: int = 2048
     print_edge: float = 0.002
+
+
+class BuildError(Exception):
+    """A moss that cannot be built as painted; the message is for the panel."""
+
+
+# s: a build (growth and finish) that runs longer stops with a BuildError. Every
+# loop in it ends, but some can take a long time on a mesh nothing expected (the
+# clear pass ran Blender out of patience at 3.7 million triangles, 2026-10-16),
+# and a build that fails is better than one that never returns. River's take
+# 3 to 62 s.
+BUILD_SECONDS = 300.0
+_deadline = None
+
+
+@contextmanager
+def time_limit(seconds=None):
+    """Builds inside it stop with a BuildError after `seconds` (BUILD_SECONDS)."""
+    global _deadline
+    outer = _deadline
+    _deadline = time.monotonic() + (BUILD_SECONDS if seconds is None else seconds)
+    try:
+        yield
+    finally:
+        _deadline = outer
+
+
+def _tick():
+    if _deadline is not None and time.monotonic() > _deadline:
+        raise BuildError(f"took over {BUILD_SECONDS:.0f} s and was stopped")
 
 
 @dataclass
@@ -1128,6 +1160,8 @@ def _grass(mv, mt, bvh, kd, tval, p, base=None):
     on_top = np.zeros(len(mt))
     tone = np.zeros(len(mt))
     for f in range(len(mt)):
+        if not f % 4096:
+            _tick()
         on, nr, _i, _d = bvh.find_nearest(Vector(centre[f]))
         if on is not None and (Vector(centre[f]) - on).dot(nr) >= 0.8 * p.floor:
             on_top[f] = 1.0
@@ -1303,6 +1337,7 @@ def _relax(q, rest, nrm, pin, e, passes, eps, radius=None, tri=None, obstacle=No
     press = radius is not None
     on_rock = np.zeros(n, bool)
     for _ in range(passes):
+        _tick()
         acc = np.stack([np.bincount(a, q[b, j], n) + np.bincount(b, q[a, j], n) for j in range(3)], 1)
         new = acc / deg
         if press:
@@ -1383,6 +1418,7 @@ def _flip_folds(v, t, mound):
     t = t.copy()
     flipped = 0
     for _ in range(FOLD_ROUNDS):
+        _tick()
         n = normalize(facing(t))
         e = np.sort(np.concatenate([t[:, [0, 1]], t[:, [1, 2]], t[:, [2, 0]]]), axis=1)
         f = np.tile(np.arange(len(t)), 3)
@@ -1656,7 +1692,15 @@ CLEAR_ROUNDS = 64  # rounds of raising and splitting what still meets the rock, 
 CLEAR_RAISE = 0.004  # m: how much higher than `clear` a vertex may be raised to take a chord off a crease, before its triangle is split instead
 CLEAR_SPLIT_MIN = 0.002  # m: an edge shorter than this is not split again (the rock's own detail; what is left is reported)
 CLEAR_SAMPLE = 0.005  # m: what is left in the rock is measured on points this far apart
+# Edges split per triangle the pass was given, at most. Splitting is for the
+# rock's creases, lines across the mound; a mound that meets the rock over an
+# area splits it all down to CLEAR_SPLIT_MIN (Terrace.002's 2,900 triangles
+# became 3.7 million and froze Blender, 2026-10-16), so past this the build
+# fails (BuildError). River's mounds split 0.1 to 1.3 per triangle, and 3.9
+# where Terrace.002 meets Cube.002 (cleared in full).
+CLEAR_SPLIT_BUDGET = 16
 LIFT_TRIES = 6  # a vertex lifted clear of one shell and standing in another is lifted again, this many times at most
+CLEAR_REACH = 0.03  # m: how far out of a crevice a vertex no lift clears is looked for a place
 
 
 def _clear_of_rock(v, t, attrs, rock, clear, weld=None):
@@ -1698,38 +1742,94 @@ def _clear_of_rock(v, t, attrs, rock, clear, weld=None):
     top = clear + CLEAR_RAISE
     moved = np.zeros(len(v), bool)
     stuck = np.zeros(len(v), bool)  # still in the rock after LIFT_TRIES
+    cramped = np.zeros(len(v), bool)  # in a crevice too narrow for its height: set at its widest
     weld = np.arange(len(v)) if weld is None else np.asarray(weld, np.int64).copy()
+
+    def opening(on, out):
+        """How far the open air reaches from rock point `on` along `out`."""
+        o, r, reach = Vector(on + out * 1e-5), Vector(out), CLEAR_REACH
+        for sh in sdf.shells:
+            hit = sh.bvh.ray_cast(o, r, reach)
+            if hit[0] is not None:
+                reach = min(reach, hit[3])
+        return reach
 
     def lift(idx):
         for i in idx:
+            if not i % 256:
+                _tick()
             for _ in range(LIFT_TRIES):
                 d, on, out = sdf.query(v[i])
                 if d >= height[i] - 1e-6 or on is None:
                     break
                 v[i] = on + out * height[i]
                 moved[i] = True
+            cramped[i] = False
+            d, on, out = sdf.query(v[i])
+            if on is not None and d < height[i] - 1e-6:
+                # Lifting off one wall lands by another. In a crease the place
+                # `height` off both is out along their bisector; in a crevice
+                # narrower than twice `height` there is none (Cube.002's chunks
+                # meet in gaps of 2 mm), and the vertex goes where it is
+                # furthest off both: cramped, never split towards (below).
+                h = height[i]
+                _d1, on1, out1 = sdf.query(on + out * h)
+                ways = [(on, out)]
+                if on1 is not None:
+                    ways.append((on1, out1))
+                    mid = out + out1
+                    if np.linalg.norm(mid) > 0.2:
+                        ways.append((on, mid / np.linalg.norm(mid)))
+                step = max(0.25 * h, 2.5e-4)
+                best, best_d = None, -np.inf
+                for o, w in ways:
+                    for k in range(1, int(opening(o, w) / step) + 1):
+                        p = o + w * (k * step)
+                        dk = sdf.query(p)[0]
+                        if dk > best_d:
+                            best, best_d = p, dk
+                        if dk >= h - 1e-6:
+                            break
+                    if best_d >= h - 1e-6:
+                        break
+                if best is not None and best_d > d:
+                    v[i] = best
+                    moved[i] = True
+                    cramped[i] = best_d < h - 1e-6
             stuck[i] = sdf.query(v[i])[0] < 0.0
 
     lift(range(len(v)))
     split = 0
+    budget = CLEAR_SPLIT_BUDGET * len(t)
     for _round in range(CLEAR_ROUNDS + 1):
+        _tick()
         bad = _meets_rock(v, t, sdf) | stuck[t].any(1)
         if DEBUG:
-            print(f"[moss.debug] clear round {_round}: {len(t)} triangles, {int(bad.sum())} meet the rock", flush=True)
+            # the area, not the count: the count grows as triangles shrink
+            area = 0.5 * np.linalg.norm(np.cross(v[t[:, 1]] - v[t[:, 0]], v[t[:, 2]] - v[t[:, 0]]), axis=1)
+            print(f"[moss.debug] clear round {_round}: {len(t)} triangles, {int(bad.sum())} meet the rock ({area[bad].sum() * 1e4:.1f} cm2); "
+                  f"{int(stuck.sum())} vertices in it, {int(cramped.sum())} in crevices", flush=True)
         if not bad.any() or _round == CLEAR_ROUNDS:
             break
         corners = np.unique(t[bad])
-        low = corners[height[corners] < top - 1e-9]
+        low = corners[(height[corners] < top - 1e-9) & ~cramped[corners]]
         low = np.nonzero(np.isin(weld, weld[low]))[0]  # every vertex of those points
         if len(low):
             height[low] = np.minimum(top, 2.0 * height[low] + 0.0005)
             lift(low)
-        # split the triangles whose corners are all as high as they may go
-        full = bad & (height[t] >= top - 1e-9).all(1)
+        # Split the triangles whose corners are all as high as they may go (a
+        # cramped one is), but never along an edge to a vertex in a crevice or
+        # still in the rock: the midpoint is in the crevice, or halfway into
+        # the rock, in turn (case A of plans/moss-clear-blowup.md: stuck
+        # vertices 735 -> 2,887 in four rounds, the area in the rock rising).
+        full = bad & ((height[t] >= top - 1e-9) | cramped[t]).all(1)
         if not full.any():
+            if not len(low):
+                break
             continue
         tri_e = np.stack([t[:, [0, 1]], t[:, [1, 2]], t[:, [2, 0]]], 1)  # (T, 3, 2)
         length = np.linalg.norm(v[tri_e[..., 0]] - v[tri_e[..., 1]], axis=2)
+        length = np.where((stuck | cramped)[tri_e].any(2), -1.0, length)
         pick = np.argmax(length, axis=1)
         cand = full & (length[np.arange(len(t)), pick] > CLEAR_SPLIT_MIN)
         if not cand.any():
@@ -1743,6 +1843,8 @@ def _clear_of_rock(v, t, attrs, rock, clear, weld=None):
         span = int(weld.max()) + 1
         hit = np.isin(point_e[:, 0] * span + point_e[:, 1], want[:, 0] * span + want[:, 1])
         edges = np.unique(np.sort(tri_e.reshape(-1, 2)[hit], axis=1), axis=0)
+        if split + len(edges) > budget:
+            raise BuildError(f"could not be cleared of the rock ({split:,} edges split, {CLEAR_SPLIT_BUDGET} a triangle at most)")
         pe = np.sort(weld[edges], axis=1)
         _u, which = np.unique(pe, axis=0, return_inverse=True)
         v, t, attrs, new, _kept = _split_edges(v, t, attrs, edges)
@@ -1750,6 +1852,7 @@ def _clear_of_rock(v, t, attrs, rock, clear, weld=None):
         height = np.concatenate([height, np.full(len(new), clear)])
         moved = np.concatenate([moved, np.zeros(len(new), bool)])
         stuck = np.concatenate([stuck, np.zeros(len(new), bool)])
+        cramped = np.concatenate([cramped, np.zeros(len(new), bool)])
         split += len(edges)
         lift(new)
     bad = _meets_rock(v, t, sdf) | stuck[t].any(1)
@@ -1780,6 +1883,8 @@ def _area_in_rock(v, t, sdf):
         idx = np.nonzero(n == k)[0]
         at = np.einsum("pk,tkc->tpc", w, v[t[idx]])
         for row, f in enumerate(idx):
+            if not row % 256:
+                _tick()
             total += area[f] * np.mean([sdf.query(q)[0] < 0.0 for q in at[row]])
     return float(total)
 
@@ -1996,6 +2101,7 @@ def _grow(p, rng, g, P, N, kd, painted, off, res):
         for d in layer:
             block(d)
         while len(layer) < target and stalls < (80 if fill else 400):
+            _tick()
             grew = False
             for qi, q in enumerate(queues):
                 if len(q) >= caps[qi]:
@@ -2152,6 +2258,8 @@ def _charts(mv, mt):
     cos_lim = math.cos(math.radians(CHART_ANGLE))
     seeds = []
     for f0 in range(len(mt)):
+        if not f0 % 4096:
+            _tick()
         if chart[f0] >= 0:
             continue
         c = len(seeds)
@@ -2165,12 +2273,19 @@ def _charts(mv, mt):
                     chart[g] = c
                     stack.append(g)
     uv = np.zeros((len(mt), 3, 2))
+    # each chart's triangles, ascending, found once: a scan of every triangle per
+    # chart was charts x triangles, and froze the brush for minutes on a large
+    # mound of small charts (2026-10-16)
+    by_chart = np.argsort(chart, kind="stable")
+    starts = np.searchsorted(chart[by_chart], np.arange(len(seeds) + 1))
     for c, f0 in enumerate(seeds):
+        if not c % 4096:
+            _tick()
         n = fn[f0]
         a = np.array((1.0, 0.0, 0.0)) if abs(n[0]) < 0.9 else np.array((0.0, 1.0, 0.0))
         e1 = normalize(np.cross(n, a))
         e2 = np.cross(n, e1)
-        fs = np.nonzero(chart == c)[0]
+        fs = by_chart[starts[c]:starts[c + 1]]
         pts = mv[mt[fs]]
         flat = np.stack([pts @ e1, pts @ e2], -1)
         # turned to its principal axes, so its bounding box (what is packed) is tight
@@ -2195,10 +2310,20 @@ def _print(mv, mt, layers, p, swatch=False, pin=None, sheet_n=None, pile=None):
     np.maximum.at(hi_c, chart, q.max(1))
     pad = CHART_PAD_PRINTED if (p.kind != "TEXTURE" and p.edge_kind == "PRINT") else CHART_PAD
     texel = p.texel
-    while True:
-        wh = np.ceil((hi_c - lo_c) / texel).astype(np.int64) + 2 * pad
+
+    def boxes(cells):
+        wh = cells + 2 * pad
         if swatch:
             wh = np.concatenate([wh, [[GRASS_SWATCH[0] + 2 * pad, GRASS_SWATCH[1] + 2 * pad]]])
+        return wh
+
+    # Coarser texels shrink a chart's box to one texel and its gutter, and no
+    # further: when even those do not fit, no texel does (640,000 charts
+    # coarsened here for good, Blender frozen, 2026-10-16).
+    if _shelf_pack(boxes((hi_c > lo_c).astype(np.int64)), p.max_texture)[1] is None:
+        raise BuildError(f"{n_charts} print charts cannot fit a {p.max_texture} px texture at any texel")
+    while True:
+        wh = boxes(np.ceil((hi_c - lo_c) / texel).astype(np.int64))
         size, place = _shelf_pack(wh, p.max_texture)
         if place is not None:
             break
@@ -2219,6 +2344,8 @@ def _print(mv, mt, layers, p, swatch=False, pin=None, sheet_n=None, pile=None):
     piled = np.zeros((size, size))
     valid = np.zeros((size, size), bool)
     for f in range(len(mt)):
+        if not f % 4096:
+            _tick()
         (ax_, ay_), (bx, by_), (cx, cy) = px_uv[f]
         den = (by_ - cy) * (ax_ - cx) + (cx - bx) * (ay_ - cy)
         if abs(den) < 1e-12:
@@ -2327,6 +2454,7 @@ def _dilate(img, valid, passes):
     valid = valid.copy()
     size = valid.shape[0]
     for _ in range(passes):
+        _tick()
         grow = np.zeros_like(valid)
         ty, tx, sy, sx = [], [], [], []
         for dy, dx in ((0, 1), (0, -1), (1, 0), (-1, 0)):

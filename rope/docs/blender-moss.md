@@ -81,6 +81,13 @@ What is left is Python spread thin, roughly equal parts: the growth loop (KD-tre
 
 The print (`paint_texels`) paints **front to back**: dabs are packed so tightly that a texel met 12 dabs on average and 91 % of the dab-texel pairs lay under a later dab that covers the texel whole (mid-ledge: 13.3M pairs over 1.09M texels). Top down, each texel keeps how much of what is below still shows; a texel a dab covers whole is final and the dabs below skip it, as does a texel bucket with none open. The algebra is the bottom-up mix's (the comment in `paint_texels` has it); the order of the float sums is not, so the floats differ by under 1e-16 and the 8-bit print is identical (checked on three rocks). With buckets of one `dab_max` instead of 0.3 (fewer lookups a dab, the same texels), mid-ledge's print went from 4.3 s to 1.7 s.
 
+### A build cannot hang (2026-10-16)
+
+A moss stroke on river's `Terrace.002` once froze Blender for good: the clear pass (step 8, "On the rock") split a 2,900-triangle mound into 3.7 million triangles without clearing it, and the print's packing then looped forever.
+The cause was crevices narrower than twice the clearance, where `Cube.002`'s chunks meet: no point in one is that far off both walls, the vertices there stayed in the rock, and every split towards them made another.
+Such a vertex now goes where it is furthest off both walls (cramped) and is never split towards, and a build that still runs away fails instead: more than `CLEAR_SPLIT_BUDGET` splits per triangle, or longer than `BUILD_SECONDS` (300 s), stops it with "not grown: ..." in the panel, the last mesh kept.
+The whole account, a headless repro and the numbers: [plans/moss-clear-blowup.md](../plans/moss-clear-blowup.md).
+
 ### The export keeps what is current
 
 Every build stores `built_key` on its moss: a hash of the growth's inputs (the rock's evaluated world triangles, the stamps, every setting), the Quality settings, `build.py`, `mesh_io.py`, `stampbrush/geometry.py` and the Blender version. `scene_export.py` calls `prepare_export`, which keeps a mound whose key matches what its inputs make now and rebuilds only the rest; until 2026-10-05 it rebuilt every moss, 162 s of the river's 380 s export.

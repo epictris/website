@@ -37,6 +37,7 @@
 import * as THREE from "three";
 
 import type { CollisionObject2D, CollisionShape2D } from "../engine/body";
+import { Vec2 } from "../engine/vec2";
 import { WaterArea } from "../engine/body";
 import { DEFAULT_THICKNESS } from "../lib/shapeGeometry";
 import { outlineOfData, outlineOfShape, type Outline } from "../render/shapePath";
@@ -57,7 +58,9 @@ import type { FoamSurface, StillSurface } from "./stillWater";
 import { DEFAULT_LIGHT_Z, LightRig, type DrivenEmission, type MountedLight } from "./lights";
 import { isWaking } from "./glow";
 import { BeltRing, BeltTread } from "./beltTread";
-import { rootBarkMaterial, rootGeometry } from "./rootMesh";
+import { rootBarkMaterial } from "./rootMesh";
+import { acquireRootMeshes, releaseRootMeshes, type RootMeshSet } from "./rootBake";
+import { rootMeshKey } from "./rootKey";
 import { beltLoopOf } from "../render/beltTread";
 import { orientTo, placeAt, threeY } from "./space";
 
@@ -263,9 +266,13 @@ export class BodyVisual {
   private debugData: LevelBodyData | null = null;
   // The ROOT branches this body grows (`mountRoots`), kept apart from `owned`
   // for the reason the debug pieces are: the editor rebuilds them in place as
-  // a branch is drawn and reshaped (`restyleDebug`).
-  private readonly rootPieces: { piece: THREE.Group; geometry: THREE.BufferGeometry }[] = [];
+  // a branch is drawn and reshaped (`restyleDebug`). Their geometry is the
+  // shared cache's (`rootBake.ts`), held under `rootKey` and given back when
+  // they go; `rootMount` tells a mount that landed late from a stale one.
+  private readonly rootPieces: THREE.Group[] = [];
   private rootSignature = "";
+  private rootKey = "";
+  private rootMount = 0;
 
   // `body` is what moves and is null for an authored body that built nothing;
   // `built` is the authored side and is null for a body the sim spawned at
@@ -500,33 +507,52 @@ export class BodyVisual {
   // branch in the 3D view picks that branch. Drawn in every level, scene or
   // not: what the scene cannot draw is a root grown from the curves the level
   // states.
+  //
+  // The meshes are in world metres (`rootBuild.ts`), from the level's bake or
+  // grown, and arrive late when neither is to hand yet (the bake still
+  // loading, the simplifier still starting): the body draws no roots until
+  // then, as a scene-dressed body draws no dressing until its file lands.
   private mountRoots(data: LevelBodyData, z: number): void {
-    const built = this.built!;
     this.debugZ = z;
-    const material = rootBarkMaterial(data.color ?? DEFAULT_ROOT_COLOR);
-    data.objects.forEach((o, i) => {
-      if (!isCollisionObject(o) || !o.root || o.shape.kind !== "curve") return;
-      const geometry = rootGeometry(o.shape, { trunk: o.root.parent === undefined, seed: i });
-      if (!geometry) return;
-      const world = worldPlacement(data, o);
-      const pos = world.pos.sub(built.origin).rotated(-built.rotation);
-      const piece = this.piece(pos.x, pos.y, world.rot - built.rotation, built.data.objects[i] ?? o);
+    this.rootSignature = rootSignatureOf(data);
+    this.rootKey = rootMeshKey(data);
+    const mount = ++this.rootMount;
+    if (!this.rootKey) return;
+    const meshes = acquireRootMeshes(this.rootKey, data);
+    if (!(meshes instanceof Promise)) {
+      this.placeRoots(data, meshes, z);
+      return;
+    }
+    void meshes.then((set) => {
+      if (mount === this.rootMount) this.placeRoots(data, set, z);
+    });
+  }
+
+  private placeRoots(data: LevelBodyData, meshes: RootMeshSet, z: number): void {
+    const built = this.built!;
+    // The world's origin in the built frame: a piece there, unrotated against
+    // the world, holds a mesh in world coordinates.
+    const origin = Vec2.ZERO.sub(built.origin).rotated(-built.rotation);
+    for (const [i, { geometry, matrix }] of meshes) {
+      const object = data.objects[i]!;
+      const material = rootBarkMaterial(data.color ?? DEFAULT_ROOT_COLOR, isCollisionObject(object) ? object.root?.bark : undefined);
+      const piece = this.piece(origin.x, origin.y, -built.rotation, built.data.objects[i] ?? object);
       const mesh = new THREE.Mesh(geometry, material);
+      if (matrix) mesh.applyMatrix4(matrix);
       mesh.castShadow = true;
       mesh.receiveShadow = true;
-      mesh.position.z = z;
+      mesh.position.z += z;
       piece.add(mesh);
-      this.rootPieces.push({ piece, geometry });
-    });
-    this.rootSignature = rootSignatureOf(data);
+      this.rootPieces.push(piece);
+    }
   }
 
   private disposeRoots(): void {
-    for (const p of this.rootPieces) {
-      p.piece.removeFromParent();
-      p.geometry.dispose();
-    }
+    for (const piece of this.rootPieces) piece.removeFromParent();
     this.rootPieces.length = 0;
+    if (this.rootKey) releaseRootMeshes(this.rootKey);
+    this.rootKey = "";
+    this.rootMount++;
   }
 
   private disposeDebug(): void {

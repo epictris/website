@@ -1173,7 +1173,13 @@ export class Scene3D {
       }
     }
     for (const [mesh, painted] of this.highlighted) {
-      if (want.get(mesh) === painted.color) continue;
+      // A selected material can finish loading a texture in place. Rebuild
+      // its highlighted clone when the source version changes as well.
+      const sourceVersion = Array.isArray(painted.material)
+        ? painted.material.map(m => m.version).join(",") : String(painted.material.version);
+      const shownVersion = Array.isArray(mesh.material)
+        ? mesh.material.map(m => m.userData.highlightSourceVersion).join(",") : String(mesh.material.userData.highlightSourceVersion);
+      if (want.get(mesh) === painted.color && sourceVersion === shownVersion) continue;
       mesh.material = painted.material;
       this.highlighted.delete(mesh);
     }
@@ -1195,13 +1201,14 @@ export class Scene3D {
   // The emissive MAP is dropped with it: a lamp's own glow pattern is exactly
   // what the selection colour has to be told apart from.
   private highlightMaterial(src: THREE.Material, color: string): THREE.Material {
-    const key = `${color}|${src.uuid}`;
+    const key = `${color}|${src.uuid}|${src.version}`;
     const existing = this.highlightMaterials.get(key);
     if (existing) return existing;
     // Keeping the source's shader patches: a plain clone drops a patched
     // surface's shader (water), so selecting a thing would change what it
     // looks like.
     const clone = cloneWithPatches(src);
+    clone.userData.highlightSourceVersion = src.version;
     const std = clone as THREE.MeshStandardMaterial;
     if (std.isMeshStandardMaterial) {
       std.emissive = new THREE.Color(color);

@@ -9,25 +9,21 @@
 //
 // What it is made of, per branch:
 //
-// - the CENTRELINE, the authored cubic sampled every `RING_STEP` of arc length
-//   - finer than the collision line (`lib/stroke.ts`, which keeps within a
-//   centimetre of the same cubic), so the two agree to the width of a pencil
-//   line while the drawn one is smooth;
+// - the CENTRELINE, sampled every `RING_STEP`, rounded across sharp authoring
+//   corners and gently meandering within its girth (render-side only);
 // - a RING of `SIDES` points about it, in the plane across the curve that holds
 //   the depth axis - a root drawn in the gameplay plane is round through z, so
 //   the frame never twists and needs no transport;
 // - the RADIUS, the collision's own linear taper (`taperedHalfWidths`) with
-//   three things over it that collision does not care about: the flare where a
-//   trunk leaves the ground, a slow swelling along
-//   it, and a lobed cross-section, all seeded so a branch keeps its look across
-//   edits;
+//   a trunk flare or a buried branch shoulder, slow swelling, and unequal
+//   longitudinal flutes, all seeded so a branch keeps its look across edits;
 // - rounded CAPS at both ends, so a tip ends in a point rather than a cut and a
 //   branch's base, buried in its parent, never shows an open tube;
-// - BARK, a generated texture whose fissures run along the root
-//   (`rootBarkMaterial`), tinted by the body's colour.
+// - BARK, layered colour, relief and roughness (`rootBark.ts`), following the
+//   grain with broad painted washes and smoother skin on thin growing ends.
 //
-// Built once per branch at build time, in the branch's own frame; the body
-// group carries it from there, so a sprung root swings it for nothing.
+// Built in each branch's own frame. BodyVisual transforms the sweeps into the
+// body frame and fuses branched roots with rootFork; the body carries the result.
 
 import * as THREE from "three";
 
@@ -36,15 +32,13 @@ import { flattenPath, pathNodesOf } from "../lib/path";
 import { MIN_TAPER_TIP } from "../lib/stroke";
 import type { CurveVertData } from "../level/levelFormat";
 import { threeY } from "./space";
+export { rootBarkMaterial } from "./rootBark";
 
-// Metres of centreline between rings. Two centimetres is under a pixel of
-// curvature error at play distance on the tightest bend an author draws.
-const RING_STEP = 0.02;
+// Metres of centreline between rings, fine enough for the bark's silhouette.
+const RING_STEP = 0.012;
 
-// Points round each ring. Fourteen keeps a 30 cm trunk round in silhouette;
-// the lobes below are three per turn, so the count is not a multiple of them
-// that would line every lobe up with a vertex.
-const SIDES = 14;
+// Enough samples for the broad woody flutes, including in a close editor view.
+const SIDES = 40;
 
 // Rings in each rounded cap.
 const CAP_RINGS = 5;
@@ -56,21 +50,18 @@ const BRANCH_CAP_DEPTH = 0.25;
 // Metres of root per repeat of the bark along it. Around it the bark wraps
 // once whatever the girth, so a thin branch shows finer fissures than a trunk,
 // which is what bark does.
-const BARK_TILE = 0.6;
+const BARK_TILE = 0.65;
 
-// How much a TRUNK swells where it leaves the ground (a fraction of its base
-// radius), and over how many base widths that swelling dies away. A BRANCH has
-// none: its base is on its parent's centreline, where a collar is hidden, and
-// one that made the base wider than the parent there broke out through the
-// parent's far side as a ridge.
+// Trunk flare as a fraction of base radius, fading over one base width.
+// Branches instead have a shoulder AHEAD of their base, never a wider base cap
+// that would poke back through the far side of the parent.
 const TRUNK_FLARE = 0.45;
 const TRUNK_FLARE_REACH = 1.0;
 
-// The slow swelling along a branch (fraction of the radius) and its wavelength
-// in metres; and the depth of the cross-section's three lobes.
-const SWELL = 0.08;
-const SWELL_WAVELENGTH = 0.22;
-const LOBE = 0.07;
+// Slow swelling (fraction of radius), wavelength in metres, maximum flute depth.
+const SWELL = 0.24;
+const SWELL_WAVELENGTH = 0.48;
+const LOBE = 0.24;
 
 export interface RootShape {
   verts: readonly CurveVertData[];
@@ -86,7 +77,7 @@ export function rootGeometry(
   shape: RootShape,
   opts: { trunk: boolean; seed: number },
 ): THREE.BufferGeometry | null {
-  const line = resample(flattenPath(pathNodesOf(shape.verts), RING_STEP / 2), RING_STEP);
+  const line = rootCenterline(shape, opts.seed);
   if (line.length < 2) return null;
   const along: number[] = [0];
   for (let i = 1; i < line.length; i++) along.push(along[i - 1]! + line[i]!.distanceTo(line[i - 1]!));
@@ -102,7 +93,10 @@ export function rootGeometry(
   const radiusAt = (s: number): number => {
     const t = Math.min(1, Math.max(0, s / total));
     const taper = base + (end - base) * t;
-    return taper * (1 + flare * Math.exp(-Math.max(0, s) / flareReach)) * (1 + SWELL * (swell(s / SWELL_WAVELENGTH) * 2 - 1));
+    const station = Math.max(0, s) / Math.max(base, 1e-3);
+    const shoulder = opts.trunk ? 0 : 0.32 * (1 - Math.exp(-station / 0.45)) * Math.exp(-station / 2);
+    return taper * (1 + flare * Math.exp(-Math.max(0, s) / flareReach) + shoulder)
+      * (1 + SWELL * (swell(s / SWELL_WAVELENGTH) * 2 - 1));
   };
   const tangentAt = (i: number): Vec2 => {
     const a = line[Math.max(0, i - 1)]!;
@@ -125,7 +119,9 @@ export function rootGeometry(
   const rings: Ring[] = [];
   const t0 = tangentAt(0);
   const r0 = radiusAt(0);
-  const phaseAt = (s: number): number => twist(s / (SWELL_WAVELENGTH * 3)) * Math.PI * 2;
+  // Wood follows the root's length. A small meander, never the rotating lobes
+  // of a twisted cord. Keep the dominant flute on the same side at a bend.
+  const phaseAt = (s: number): number => opts.seed * 2.39996 + (twist(s / 1.8) - 0.5) * 0.45;
   // The base cap, closing the tube behind the first node: a hemisphere on a
   // trunk, and a shallow dome on a branch. A branch's first node is on its
   // parent's centreline, so a full hemisphere reaches back out through the far
@@ -174,7 +170,10 @@ export function rootGeometry(
   const positions = new Float32Array(rings.length * stride * 3);
   const normals = new Float32Array(rings.length * stride * 3);
   const uvs = new Float32Array(rings.length * stride * 2);
+  const colors = new Float32Array(rings.length * stride * 3);
+  const ages = new Float32Array(rings.length * stride);
   const radial = new THREE.Vector3();
+  const around = new THREE.Vector3();
   const tangent = new THREE.Vector3();
   const normal = new THREE.Vector3();
   rings.forEach((ring, j) => {
@@ -187,7 +186,15 @@ export function rootGeometry(
       const theta = (k / SIDES) * Math.PI * 2;
       const cos = Math.cos(theta);
       const sin = Math.sin(theta);
-      const lobe = 1 + LOBE * Math.cos(3 * theta + ring.phase);
+      // Unequal flutes, broad rather than rope-like. The thin growing end is
+      // rounder; the older wood has an oval section and secondary ridges.
+      const age = THREE.MathUtils.smoothstep(radiusAt(Math.max(0, Math.min(total, ring.s))), 0.005, 0.04);
+      const lobe = 1 + LOBE * age * (0.55 * Math.cos(2 * theta + ring.phase)
+        + 0.32 * Math.cos(3 * theta - ring.phase * 0.7)
+        + 0.13 * Math.cos(5 * theta + ring.phase * 1.3));
+      const lobeSlope = -LOBE * age * (1.10 * Math.sin(2 * theta + ring.phase)
+        + 0.96 * Math.sin(3 * theta - ring.phase * 0.7)
+        + 0.65 * Math.sin(5 * theta + ring.phase * 1.3));
       const r = ring.r * lobe;
       radial.set(ax * cos, ay * cos, sin);
       const o = (j * stride + k) * 3;
@@ -196,13 +203,23 @@ export function rootGeometry(
       positions[o + 2] = radial.z * r;
       // A surface of revolution's normal: the radial direction leaned back
       // against the way the radius grows along the tangent.
-      normal.copy(radial).addScaledVector(tangent, -ring.dr * lobe).normalize();
+      around.set(-ax * sin, -ay * sin, cos);
+      normal.copy(radial).addScaledVector(tangent, -ring.dr * lobe)
+        .addScaledVector(around, -lobeSlope / lobe).normalize();
       normals[o] = normal.x;
       normals[o + 1] = normal.y;
       normals[o + 2] = normal.z;
       const u = (j * stride + k) * 2;
-      uvs[u] = k / SIDES;
-      uvs[u + 1] = ring.s / BARK_TILE;
+      uvs[u] = k / SIDES + hash(opts.seed * 17.3);
+      uvs[u + 1] = ring.s / BARK_TILE + hash(opts.seed * 31.7);
+      // Broad washes, fixed to the wood, complement the texture's small
+      // brush marks. Linear-space multipliers preserve authored body tint.
+      const wash = Math.sin(theta * 2 + ring.phase + ring.s * 1.3) * 0.055;
+      const aged = 0.94 + 0.06 * swell(ring.s / 0.7);
+      colors[o] = aged + wash + (1 - age) * 0.14;
+      colors[o + 1] = aged + wash * 0.65 + (1 - age) * 0.07;
+      colors[o + 2] = aged - wash * 0.2;
+      ages[j * stride + k] = age;
     }
   });
   const index: number[] = [];
@@ -219,9 +236,43 @@ export function rootGeometry(
   geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
   geometry.setAttribute("normal", new THREE.BufferAttribute(normals, 3));
   geometry.setAttribute("uv", new THREE.BufferAttribute(uvs, 2));
+  geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+  geometry.setAttribute("rootAge", new THREE.BufferAttribute(ages, 1));
+  geometry.setAttribute("rootJoin", new THREE.BufferAttribute(new Float32Array(ages.length), 1));
   geometry.setIndex(index);
   geometry.computeBoundingSphere();
   return geometry;
+}
+
+// Round the authoring polyline in arc-length space. A compact kernel cannot
+// overshoot as an interpolating spline can. Endpoints stay fixed, and the
+// support is proportional to girth: thick wood bends broadly, fine tips curl.
+// This is dressing only; neither collision nor the editor's handles are edited.
+export function rootCenterline(shape: RootShape, seed: number): Vec2[] {
+  const raw = resample(flattenPath(pathNodesOf(shape.verts), RING_STEP / 2), RING_STEP);
+  const count = raw.length;
+  if (count < 3) return raw;
+  const wander = valueNoise1(seed * 9.3 + 4.7);
+  return raw.map((p, i) => {
+    const f = i / (count - 1);
+    const radius = (shape.width + ((shape.tip ?? shape.width) - shape.width) * f) / 2;
+    const support = Math.max(2, radius * 6 / RING_STEP);
+    const reach = Math.ceil(support);
+    let x = 0, y = 0, weight = 0;
+    for (let j = -reach; j <= reach; j++) {
+      const w = Math.pow(Math.max(0, 1 - Math.abs(j) / (support + 1)), 2);
+      // Linear extension keeps the first and last tangent from pulling inward.
+      const k = i + j;
+      const q = k < 0 ? raw[0]!.add(raw[1]!.sub(raw[0]!).mul(k))
+        : k >= count ? raw[count - 1]!.add(raw[count - 1]!.sub(raw[count - 2]!).mul(k - count + 1)) : raw[k]!;
+      x += q.x * w; y += q.y * w; weight += w;
+    }
+    const fade = Math.min(1, i / reach, (count - 1 - i) / reach);
+    const tangent = raw[Math.min(count - 1, i + reach)]!.sub(raw[Math.max(0, i - reach)]!).normalized();
+    const wiggle = radius * 0.48 * (wander(i * RING_STEP / 0.24) * 2 - 1) * fade;
+    return new Vec2(p.x + (x / weight - p.x) * fade - tangent.y * wiggle,
+      p.y + (y / weight - p.y) * fade + tangent.x * wiggle);
+  });
 }
 
 // A polyline resampled every `step` of arc length, both ends kept.
@@ -263,108 +314,4 @@ function valueNoise1(seed: number): (x: number) => number {
 function hash(n: number): number {
   const s = Math.sin(n * 127.1 + 311.7) * 43758.5453;
   return s - Math.floor(s);
-}
-
-// ---------------------------------------------------------------------------
-// Bark
-// ---------------------------------------------------------------------------
-
-// The bark texture's size: round the root, and along it. Fissures run along,
-// so the long axis has the detail.
-const BARK_U = 128;
-const BARK_V = 256;
-
-let barkMaps: { map: THREE.DataTexture; normalMap: THREE.DataTexture } | null = null;
-const barkMaterials = new Map<string, THREE.MeshStandardMaterial>();
-
-// The bark a root of body colour `color` wears: one material per colour,
-// shared by every branch that asks, over one generated pair of maps.
-// Materials are shared and cached like every surface (see assets.ts), so a
-// visual never disposes one.
-export function rootBarkMaterial(color: string): THREE.MeshStandardMaterial {
-  let m = barkMaterials.get(color);
-  if (m) return m;
-  barkMaps ??= buildBarkMaps();
-  m = new THREE.MeshStandardMaterial({
-    color: new THREE.Color(color),
-    map: barkMaps.map,
-    normalMap: barkMaps.normalMap,
-    normalScale: new THREE.Vector2(1.4, 1.4),
-    roughness: 0.92,
-    metalness: 0,
-  });
-  barkMaterials.set(color, m);
-  return m;
-}
-
-// Bark as a height field: ridged noise stretched along the root, so the
-// fissures run lengthwise and break every so often, over a finer grain. The
-// albedo darkens into the fissures; the normal map is the field's gradient.
-// Periodic in both directions, so the root wraps it without a seam.
-function buildBarkMaps(): { map: THREE.DataTexture; normalMap: THREE.DataTexture } {
-  const h = new Float32Array(BARK_U * BARK_V);
-  for (let y = 0; y < BARK_V; y++) {
-    for (let x = 0; x < BARK_U; x++) {
-      const u = x / BARK_U;
-      const v = y / BARK_V;
-      const ridge = 1 - Math.abs(2 * periodicNoise(u * 9, v * 3, 9, 3, 1) - 1);
-      const plates = periodicNoise(u * 5, v * 2, 5, 2, 2);
-      const grain = periodicNoise(u * 24, v * 10, 24, 10, 3);
-      h[y * BARK_U + x] = 0.55 * ridge * ridge + 0.3 * plates + 0.15 * grain;
-    }
-  }
-  const at = (x: number, y: number): number =>
-    h[((y + BARK_V) % BARK_V) * BARK_U + ((x + BARK_U) % BARK_U)]!;
-  const albedo = new Uint8Array(BARK_U * BARK_V * 4);
-  const normal = new Uint8Array(BARK_U * BARK_V * 4);
-  for (let y = 0; y < BARK_V; y++) {
-    for (let x = 0; x < BARK_U; x++) {
-      const i = (y * BARK_U + x) * 4;
-      const v = at(x, y);
-      const tone = Math.round(255 * Math.min(1, 0.32 + 0.78 * v));
-      albedo[i] = tone;
-      albedo[i + 1] = tone;
-      albedo[i + 2] = tone;
-      albedo[i + 3] = 255;
-      const dx = (at(x + 1, y) - at(x - 1, y)) * 3;
-      const dy = (at(x, y + 1) - at(x, y - 1)) * 3;
-      const len = Math.hypot(dx, dy, 1);
-      normal[i] = Math.round(255 * (0.5 - (0.5 * dx) / len));
-      normal[i + 1] = Math.round(255 * (0.5 - (0.5 * dy) / len));
-      normal[i + 2] = Math.round(255 * (0.5 + 0.5 / len));
-      normal[i + 3] = 255;
-    }
-  }
-  const texture = (data: Uint8Array, srgb: boolean): THREE.DataTexture => {
-    const t = new THREE.DataTexture(data, BARK_U, BARK_V, THREE.RGBAFormat);
-    t.wrapS = THREE.RepeatWrapping;
-    t.wrapT = THREE.RepeatWrapping;
-    t.magFilter = THREE.LinearFilter;
-    t.minFilter = THREE.LinearMipmapLinearFilter;
-    t.generateMipmaps = true;
-    if (srgb) t.colorSpace = THREE.SRGBColorSpace;
-    t.needsUpdate = true;
-    return t;
-  };
-  return { map: texture(albedo, true), normalMap: texture(normal, false) };
-}
-
-// 2D value noise in [0, 1] that repeats every `px` by `py` lattice cells.
-function periodicNoise(x: number, y: number, px: number, py: number, seed: number): number {
-  const ix = Math.floor(x);
-  const iy = Math.floor(y);
-  const fx = x - ix;
-  const fy = y - iy;
-  const cell = (cx: number, cy: number): number => {
-    const wx = ((cx % px) + px) % px;
-    const wy = ((cy % py) + py) % py;
-    return hash(wx * 57.31 + wy * 113.7 + seed * 19.19);
-  };
-  const sx = fx * fx * (3 - 2 * fx);
-  const sy = fy * fy * (3 - 2 * fy);
-  const a = cell(ix, iy);
-  const b = cell(ix + 1, iy);
-  const c = cell(ix, iy + 1);
-  const d = cell(ix + 1, iy + 1);
-  return a + (b - a) * sx + (c - a) * sy + (a - b - c + d) * sx * sy;
 }

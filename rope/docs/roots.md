@@ -56,13 +56,20 @@ This was asked for explicitly (2026-10-13), over the "Blender owns every rendere
 
 Per branch, in the branch's own frame:
 
-- the authored cubic sampled every 2 cm of arc length, a ring of 14 points about it in the plane across the curve that holds the depth axis (a curve in the gameplay plane never twists, so there is no frame to transport);
-- the collision's own linear taper for the radius, with three things over it collision does not care about: a FLARE where a trunk leaves the ground (45% over a base width) or a branch leaves its parent (25%), a slow swelling along it (8%), and a three-lobed cross-section (7%), all seeded by the piece's index so a branch keeps its look across edits;
+- the authored curve sampled every 1.2 cm, with a compact, girth-dependent smoothing kernel rounding straight-segment corners. The visual spine wanders by at most 48% of the local radius; endpoints remain fixed. These are render-only offsets, so the collision and spring simulation stay unchanged;
+- rings of 40 points, linear taper, a trunk flare (45% over a base width), irregular swelling (24%), and unequal longitudinal flutes (up to 24%). The flute phase meanders slightly along the wood instead of rotating like a braided vine. Thin ends become rounder. Surface normals include the angular derivative of those flutes;
+- a branch shoulder ahead of its buried base. For a branched body, `rootFork.ts` samples the sweeps as distance fields and smooth-unions them into a continuous surface with a concave fork crotch. A sparse marching-cubes grid (6–11 mm cells) follows the wood rather than filling the empty body bounds. Triangles retain their nearest authored branch identity for editor picking; individual branch meshes share matching boundary positions and normals. Every mesh is then simplified, and in the game read from a bake ([below](#simplified-and-baked-roots));
+- lateral roots initially follow the parent's tangent, then ease into their own direction over several base radii. The shoulder is broader underneath and tighter in the inner crotch, with a subtle uneven ridge through the saddle. This uses the authored parent links, processed parent-first, including branches growing back along a parent. Endpoints and all collision data stay unchanged;
+- bark phase is inherited at each junction, with direction reversed for a backward-growing lateral. Circular wrap coordinates and longitudinal coordinates blend continuously through the join, bending the painted grain instead of switching between independently wrapped tubes. The same coordinates drive colour and relief. The `rootJoin` attribute reduces normal-map strength locally through the saddle so a deep shading line does not suggest an open gap;
 - rounded caps at both ends, so the tip ends in a point and a branch's base, buried in its parent's centreline, never shows an open tube;
-- a generated bark (`rootBarkMaterial`): ridged value noise stretched along the root, so the fissures run lengthwise, as an albedo and a normal map, tinted by the body's colour (`DEFAULT_ROOT_COLOR` for a new one).
+- painterly bark (`rootBark.ts`): a shared 1024-square generated painting, pinned in the ordinary texture asset manifest, with uneven broad tan plates, light clay grooves, interrupted grain and occasional knots. Fine hatching is omitted to fit the vines' quieter paint. Relief is derived once from that same image at normal strength 0.45, with uniform matte roughness 0.91, so the old procedural roughness cannot add unrelated detail. Grain follows arc length, repeating every 65 cm. The procedural 512 × 1024 maps remain a headless-safe loading fallback. The image loads through the existing asset tracker and level preloader, so frame grabs wait for the finished surface. See [generation record and prompt](root-bark-generation.md);
+- the body's colour remains a tint, expressed relative to `DEFAULT_ROOT_COLOR`. The reference paint is multiplied by 0.58 in linear space to fit the game's earthy palette. Thin roots blend toward smoother young skin. Maps and materials are cached, and springing carries the surface with its body. There is no per-frame mesh or texture generation.
+
+The visual direction is exposed woody roots: thick established axes giving way to finer lateral roots, with uneven branching chosen by the author. It draws on [US Forest Service root architecture observations](https://research.fs.usda.gov/treesearch/59121); it does not invent extra branches outside the authored hook geometry.
+`/scripts/root-study.html` is a development-only, orbitable close-up using the live root renderer, with warm/cool lighting to inspect the grain and branch shoulders.
 
 It stands at `ANCHOR_Z` (25 cm behind the plane) like every hook-only body, the setback being what says the ball passes through it.
-A branch has no base flare and only a shallow dome for a base cap (a quarter of its radius deep): its base is on its parent's centreline, and a full hemisphere or a collar wider than the parent broke out through the parent's far side as a knob.
+A branch's input sweep has a shallow base dome rather than a full hemisphere. In a fork the union removes the buried interface entirely; the shoulder swells ahead of the junction instead of poking through the parent's far side.
 
 **The cuff bitten into a root is drawn in the root** (`ChainLayer.sync`): at the depth the body it bit is drawn at (`BodyVisual.depth`, which Scene3D hands the chain layer as `depthOf`), so it sits half-buried in the root's centre rather than floating 25 cm in front of it.
 The chain then runs STRAIGHT from that depth to the plane over the anchor's span - to the first corner it wraps, which is on the plane, or to the ball - each link on that run leaning out of the plane by the run's angle.
@@ -72,7 +79,43 @@ That is also why the editor's overlay outline of a root sits a little off its me
 In the editor a root's mesh is rebuilt **in place** as it is drawn and reshaped (`BodyVisual.restyleDebug`, keyed by `rootSignatureOf`), not by rebuilding the scene, for the reason debug pieces are.
 The 2D renderer draws a root's pieces as the grate lattice every hook-only body wears there.
 
+## Simplified and baked roots
+
+What is drawn is not the grown mesh itself but that mesh **simplified** (`render3d/rootBuild.ts`), and in the game it is not grown at all but read from the level's **bake**.
+
+**Why** (measured 2026-10-16 on `ball.json`, 12 root pieces in 8 bodies): growing them cost 5.2 s of main thread at every load, almost all of it the fork fuse (1.0-1.8 s per branched body: ~370k distance-field samples per body, each testing ~28 segments with an `atan2`), and the editor paid the same per edit of a branched root.
+They drew 142k triangles, the fused ones unindexed (77k vertices for a 26k-triangle body), with shadows on.
+
+- **The fuse is ~5x faster with the same output** (`rootFork.ts`, bit-identical on every `ball.json` body when it was changed): each segment is bounded by its least and greatest radius before its angle is paid for, the grid's signs are decided a cube at a time where the bound settles them (only the corners of edges the surface crosses are evaluated), and the grid is typed arrays rather than hashes. The fused meshes are indexed.
+- **Simplified** with meshoptimizer (`simplifyWithAttributes`, `ROOT_SIMPLIFY_ERROR` = 0.5 mm absolute), normals and bark coordinates weighted so shading and grain hold. Only a choice of which vertices to keep, so every kept vertex is exactly as grown. Fused branches keep their cut edges locked, so neighbours still meet: `root-simplify` checks the fork stays one closed surface. On `ball.json` 142k triangles become 30k. 2 mm visibly blunted the thin tips and polygonised bends at zoom 5; 1 mm was indistinguishable at 4x magnification; 0.5 mm leaves headroom for the editor's close views.
+- **Grown in the world frame** from the level data alone, so the same body grows the same meshes in the game, the editor and the bake. The body's built frame is applied as the mesh's placement (`BodyVisual.placeRoots`), never baked into vertices.
+- **Known by a key** (`rootKey.ts`, `rootMeshKey`): a hash of each piece's curve, world placement, parent and index (its seed), with `ROOT_MESH_VERSION`. Not colour or bark, which are the material's. **Bump `ROOT_MESH_VERSION` in any change that alters what is built from the same data** (the generator, the fuse, the simplifier's settings): nothing else notices, and a stale bake goes on drawing the old look.
+- **Cached and shared** by key (`render3d/rootBake.ts`, `acquireRootMeshes`): a whole-scene rebuild in the editor gets every unedited body's meshes back rather than growing them again, and recolouring or re-barking a root only swaps its material.
+- **Baked**: `bun run roots:bake` (`just roots`, and the first step of `just publish`) grows every registered level's roots into `public/roots/<level>.glb` (one node per body named by its key, one mesh per piece named by its object index; positions 16-bit and normals 12-bit under `KHR_mesh_quantization`, meshopt-compressed) and pins it in `render3d/rootBakes.json` with its keys. `ball.json`'s is 380 KB and decodes in 3 ms. It is a stored asset like a scene (`roots:<level>`, released as `roots-<level>.glb`), fetched by `assets:fetch` and uploaded by `assets:publish-stored`, and the level preloads it (`rootBakeOfLevel`). The same level baked twice on one machine is the same bytes, and a level whose keys match its pin is left alone.
+- **A body the bake does not hold is grown** where it is drawn, and the page logs `[roots] grew a body ... (not baked)`. That is the editor's normal case for the root being edited, and in the game it is the stall the bake exists to remove: `cli assets` fails "every level's roots are baked as they are" until the level is re-baked.
+- Meshes arrive **late** when they are not to hand (the bake still decoding, the simplifier's WebAssembly still starting): the body draws no roots until then, as a dressed body draws no dressing until its scene lands, and both are tracked so a frame grab waits for them.
+
+What this leaves: editing a branched root in the editor still regrows that one body per edit (~250 ms on `ball.json`'s), which would want a worker to make interactive.
+
 ## The editor: `+ Root`
+
+Select a root curve and use **bark texture** in its shape inspector:
+**Original detailed** is the texture committed on the roots branch,
+**Broad grain** is the supplied lower-detail painting with broad grooves,
+and **Soft selective** is the latest reference-based painting with selectively
+darkened grooves and approximately 20% less brush detail. The latter remains
+the default for roots without an explicit choice.
+
+Changing bark applies to all root branches in the selected body's tree so fused
+joins keep one surface. It supports undo/redo, save/load and copying; a new
+branch inherits its parent's choice. The saved `root.bark` is `original`,
+`broad` or `soft`. Root shape, collision and colour tint are unchanged.
+Maps and materials are cached by variant and tint, and the preloader includes
+only variants used by the level. Original detailed retains its stronger normal
+relief and procedural roughness; both simpler choices use strength 0.45 and
+matte roughness 0.91. All share the same grain coordinates through joins.
+The editor's selection highlight refreshes when an asynchronously loaded source
+material changes, so a newly selected variant is visible without deselecting.
 
 `+ Root` (Level workspace, scene layer) draws a root as a run of presses, the pen tool's way: each **press places a node**, and **dragging before releasing pulls out that node's Bézier handles** (mirrored, so the curve runs smoothly through it; a drag inside the click slop leaves a corner).
 **Enter** or a double-click grows it, **Esc** drops it.
@@ -121,7 +164,13 @@ The 2 Hz default is a guess until it is played, and nothing pins it.
 - `root-spring`: springs gives a rigid pivot with a return spring, hinged exactly at the trunk's base, at rest on spawn (no turn and no axle drift over 2 s).
 - `root-tree`: reshaping a trunk carries both junctions of a two-level tree, sliding moves `at` to the projection, and moving a branch to another body makes it (and the branch growing out of it) a trunk where it stood.
 - `root-lint`: `rootProblems` reports a junction drifted 5 cm, a parent that is not a root, and a loop.
-- `root-mesh`: finite, outward-facing, as deep through z as the bar is wide, flare included, centred on its plane within its lobes; a curve of no length grows nothing.
+- `root-mesh`: finite, outward-facing unit normals, as deep through z as the bar is wide, flare included, centred on its plane within its lobes; a curve of no length grows nothing. The UV seam closes in position and normal, and thin tips carry younger skin.
+- `root-bark`: maps are shared across body tints without mutating the default material, colour and data maps use the correct colour spaces, both tile boundaries are continuous at texel scale, and minification uses mipmaps.
+- `root-simplify`: a fork simplified to under half its grown triangles, every grown vertex within the error of the simplified surface, still one closed surface across both branches' meshes, every bark attribute kept.
+- `root-key`: the key ignores colour and bark, and changes with a moved node, a moved body, and a branch made a trunk.
+- `root-bake`: a bake encoded and read back through three's loader holds the body under its key with every branch, the same triangles, positions within a twentieth of a millimetre, normals within a degree, exact bark coordinates, and the bark's own attributes under the names its shader reads.
+- `root-restyle`: a root's mesh is placed where its curve is; the editor's in-place rebuild keeps the geometry on a recolour (only the material changes), grows new geometry on a reshape, and gets the first back from the cache when the shape returns.
+- `cli assets` holds every registered level's bake to its current roots.
 - `root-cuff`: the ball, driven by `ball-root-swing.json`'s own inputs to frame 200, has bitten the root; the chain layer draws the cuff at the root's drawn depth and the chain rising from beside it to the ball's plane; the control (every body on the plane) leaves both on the plane.
 
 `playtests/ball-root-swing.json` is the mechanic end to end through the real ball controller: thrown at a root above it, the hook bites and the ball swings (red with the same root made hook-proof).

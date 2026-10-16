@@ -51,12 +51,22 @@ sources:
 
 # Publish the Blender scenes the levels name to the asset release and pin them in
 # rope/src/render3d/sceneAssets.json, and those scenes' sources (their .blend
-# files, pinned in rope/scripts/sceneSources.json), then upload every other pinned
-# asset (props, texture maps, skies) the release does not hold yet. Run it after
-# `just scene`, then commit the pins with the level; run it before pushing any
+# files, pinned in rope/scripts/sceneSources.json), bake every level's roots
+# (`just roots`), then upload every other pinned asset (props, texture maps,
+# skies, root bakes) the release does not hold yet. Run it after `just scene` or
+# a root edit, then commit the pins with the level; run it before pushing any
 # commit that re-pins an asset.
 publish:
-    cd rope && bun run assets:publish-scenes && bun run assets:publish-sources && bun run assets:publish-stored
+    cd rope && bun run assets:publish-scenes && bun run assets:publish-sources && bun run roots:bake && bun run assets:publish-stored
+
+# Grow every level's roots ahead of time into rope/public/roots/<level>.glb and
+# pin them in rope/src/render3d/rootBakes.json, so the game draws them rather
+# than growing them at load. A level whose roots are unchanged is left alone.
+# See rope/docs/roots.md.
+#   just roots          every level
+#   just roots ball     one level
+roots *LEVELS:
+    cd rope && bun run roots:bake {{LEVELS}}
 
 # Export a level's Blender scene (rope/assets-src/scenes/<scene>.blend, the
 # level's `scene`) into rope/public/scenes/<scene>/ and report what it dressed.

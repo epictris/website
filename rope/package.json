@@ -21,6 +21,7 @@
     "assets:publish-stored": "bun run scripts/publish-stored.ts",
     "assets:fetch-sources": "bun run scripts/fetch-scene-sources.ts",
     "scene:export": "bun run scripts/scene-export.ts",
+    "roots:bake": "bun run scripts/bake-roots.ts",
     "scene:guide": "bun run scripts/scene-guide.ts",
     "assets:paint": "bun run scripts/paint-textures.ts",
     "assets:fetch": "bun run scripts/fetch-assets.ts",
@@ -37,6 +38,7 @@
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "0.20.0",
+    "meshoptimizer": "1.0.1",
     "three": "^0.185.1"
   }
 }

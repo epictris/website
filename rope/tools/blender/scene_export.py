@@ -1130,6 +1130,7 @@ def bend_growths(kept, warnings):
     triangles, none left in the rock), and what it could not clear is a
     warning."""
     from formations import curve
+    from moss import build as moss_build
     from moss import mesh_io as moss_mesh_io
     from moss import ops as moss_ops
     from ivy import ops as ivy_ops
@@ -1179,8 +1180,13 @@ def bend_growths(kept, warnings):
                 hc, ht = world_mesh(h)
                 tri.append(ht + sum(len(c) for c in co))
                 co.append(hc)
-            moved, split, before, after, left = moss_mesh_io.clear_of(
-                ob, np.concatenate(co), np.concatenate(tri), 0.5 * ob.moss.params().floor)
+            try:
+                with moss_build.time_limit():
+                    moved, split, before, after, left = moss_mesh_io.clear_of(
+                        ob, np.concatenate(co), np.concatenate(tri), 0.5 * ob.moss.params().floor)
+            except moss_build.BuildError as e:
+                warnings.append(f"{ob.name}: not cleared of its rock after the export bent the rock: {e}")
+                continue
             log(f"bend {ob.name}: cleared of the bent rock, {moved} vertices moved, {split} edges split, {before} -> {after} triangles")
             if left > 0.0:
                 warnings.append(f"{ob.name}: {left * 1e4:.1f} cm2 of moss in its rock after the export bent the rock")
