@@ -30,21 +30,8 @@
     ]
   },
   "river": {
-    "sha256": "a8c0c9a68ca02b3f3fa5d594208a9a99cad57a73757de226f011981e33a73572",
-    "bytes": 17623216,
-    "credits": [
-      {
-        "name": "finish_line",
-        "author": "hyd (@hydroh)",
-        "source": "https://sketchfab.com/3d-models/finish-line-7ec1d8194ddf46e6b398d336df0b5d7a",
-        "license": "Sketchfab Standard"
-      },
-      {
-        "name": "wooden_stool",
-        "author": "yoyo83710",
-        "source": "https://sketchfab.com/3d-models/wooden-stool-528f72346b2f4a1096c1d5104b731d04",
-        "license": "CC BY 4.0"
-      }
-    ]
+    "sha256": "4c4ee77f807b807a3b0f4c572b2ff8148fb337e6e275a9c6c833a12155979190",
+    "bytes": 27011884,
+    "credits": []
   }
 }
