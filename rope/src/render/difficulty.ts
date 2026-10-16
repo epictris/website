@@ -16,14 +16,12 @@ export type Ball = "iron" | "glass";
 // `playtest/feedback.ts`) - a different question with the same word in it.
 export interface DifficultyOption {
   label: string;
-  // What the row says under its label: what the choice actually changes.
-  hint: string;
   ball: Ball;
 }
 
 export const DIFFICULTIES: readonly DifficultyOption[] = [
-  { label: "Normal", hint: "an iron ball", ball: "iron" },
-  { label: "Hard", hint: "a glass ball - it breaks on anything solid", ball: "glass" },
+  { label: "Normal", ball: "iron" },
+  { label: "Hard", ball: "glass" },
 ];
 
 // The page that plays `level` with `ball`. Iron is the plain level URL, which is

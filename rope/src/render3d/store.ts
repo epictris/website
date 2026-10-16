@@ -289,10 +289,6 @@ function paintMenu(manifest: PreloadManifest, note: string): void {
     const title = document.createElement("span");
     title.className = "menu-title";
     title.textContent = option.label;
-    const hint = document.createElement("span");
-    hint.className = "menu-hint";
-    hint.textContent = option.hint;
-    title.appendChild(hint);
     a.appendChild(title);
     const done = progress[key];
     if (done) {
