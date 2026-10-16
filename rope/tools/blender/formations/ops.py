@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import textwrap
+
 import bpy
 from mathutils import Matrix
 from bpy.props import EnumProperty, PointerProperty, StringProperty
@@ -14,6 +16,51 @@ def redraw(context):
         for area in window.screen.areas:
             if area.type == "VIEW_3D":
                 area.tag_redraw()
+
+
+def build_failed(op, error, out):
+    """Report a build that failed once it had started, and open a dialog
+    whose Copy puts the reason on the clipboard: the build ran in the
+    background, and a report's own popup cannot be copied."""
+    if bpy.app.background:
+        op.report({"ERROR"}, str(error))
+        return
+    # An error report opens a popup of its own, over the dialog: the
+    # dialog is the error here, the report only its line in the status bar.
+    op.report({"WARNING"}, str(error))
+    if not isinstance(error, core.WorkerFailed):
+        # Raised here, taking the worker's result in.
+        error = core.WorkerFailed(str(error), "", "\n".join(
+            ["Formation generation failed: " + str(error), "", "Worker output: " + str(out)]))
+    bpy.ops.formations.build_failure("INVOKE_DEFAULT", reason=error.reason, where=error.where,
+                                     details=error.details)
+
+
+class FORMATIONS_OT_build_failure(bpy.types.Operator):
+    """Why a formation failed to build; Copy puts the reason, its traceback and the log's path on the clipboard"""
+    bl_idname = "formations.build_failure"
+    bl_label = "Formation Generation Failed"
+    bl_options = {"INTERNAL"}
+
+    reason: StringProperty(options={"SKIP_SAVE"})
+    where: StringProperty(options={"SKIP_SAVE"})
+    details: StringProperty(options={"SKIP_SAVE"})
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_props_dialog(self, width=520, title=self.bl_label,
+                                                          confirm_text="Copy to Clipboard")
+
+    def draw(self, context):
+        col = self.layout.column(align=True)
+        for i, line in enumerate(textwrap.wrap(self.reason, 76) or [""]):
+            col.label(text=line, icon="ERROR" if i == 0 else "BLANK1")
+        if self.where:
+            col.label(text="in " + self.where, icon="BLANK1")
+
+    def execute(self, context):
+        context.window_manager.clipboard = self.details or self.reason
+        self.report({"INFO"}, "Copied the failure to the clipboard")
+        return {"FINISHED"}
 
 
 def selected_formations(context):
@@ -177,7 +224,7 @@ class FORMATIONS_OT_generate(bpy.types.Operator):
         context.window_manager.event_timer_remove(self._timer)
         try:
             if self._proc.returncode:
-                raise ValueError(core.worker_failure(self._out))
+                raise core.worker_failure(self._out)
             if self.mode == "CREATE":
                 name = {"fitted": "Fitted slate", "solid": getattr(self, "_target_name", "Solid")}.get(
                     self.settings.generator, self.preset.title())
@@ -215,7 +262,7 @@ class FORMATIONS_OT_generate(bpy.types.Operator):
             self.report({"INFO"}, "Formation ready; replant its growth")
             return {"FINISHED"}
         except ValueError as e:
-            self.report({"ERROR"}, str(e))
+            build_failed(self, e, self._out)
             return {"CANCELLED"}
 
 
@@ -274,7 +321,7 @@ class FORMATIONS_OT_rebuild_changed(bpy.types.Operator):
                 self.report({"INFO"}, "Rebuild cancelled; meshes kept")
                 return {"CANCELLED"}
             if self._proc.returncode:
-                raise ValueError(core.worker_failure(self._out))
+                raise core.worker_failure(self._out, self._targets[self._index].name)
             self._done.append((self._targets[self._index], self._out / "rock.blend", self._request))
             self._index += 1
             if self._index < len(self._targets):
@@ -302,7 +349,7 @@ class FORMATIONS_OT_rebuild_changed(bpy.types.Operator):
             return {"FINISHED"}
         except ValueError as e:
             self._cleanup(context)
-            self.report({"ERROR"}, str(e))
+            build_failed(self, e, self._out)
             return {"CANCELLED"}
 
 
@@ -480,5 +527,5 @@ class FORMATIONS_OT_repaint_slate(bpy.types.Operator):
         return {"FINISHED"}
 
 
-CLASSES = (FORMATIONS_OT_generate, FORMATIONS_OT_rebuild_changed, FORMATIONS_OT_action, FORMATIONS_OT_plant,
-           FORMATIONS_OT_tone_facets, FORMATIONS_OT_planar_transform, FORMATIONS_OT_repaint_slate)
+CLASSES = (FORMATIONS_OT_build_failure, FORMATIONS_OT_generate, FORMATIONS_OT_rebuild_changed, FORMATIONS_OT_action,
+           FORMATIONS_OT_plant, FORMATIONS_OT_tone_facets, FORMATIONS_OT_planar_transform, FORMATIONS_OT_repaint_slate)

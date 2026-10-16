@@ -118,8 +118,12 @@ def main():
     output = Path(a.output).resolve()
     output.mkdir(parents=True, exist_ok=True)
     prepare(json.loads(Path(a.recipe).read_text(encoding="utf-8")), output)
-    subprocess.run([a.blender, "--background", "--factory-startup", "--python-exit-code", "1",
-                    "--python", str(HERE / "assemble.py"), "--", str(output)], check=True)
+    build = subprocess.run([a.blender, "--background", "--factory-startup", "--python-exit-code", "1",
+                            "--python", str(HERE / "assemble.py"), "--", str(output)])
+    if build.returncode:
+        # Blender printed its own error above; a traceback of this call
+        # would only bury it.
+        sys.exit(f"assemble.py failed in Blender (exit status {build.returncode})")
     if not (output / "rock.blend").is_file():
         raise RuntimeError("Worker produced no rock.blend")
 

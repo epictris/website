@@ -909,9 +909,47 @@ def launch_worker(recipe):
     return proc, out, log
 
 
-def worker_failure(output):
+class WorkerFailed(ValueError):
+    """A rock build that failed in its worker: `reason` is the first error
+    its log raised, `where` the line that raised it, and `details` the report
+    to copy (the reason, its traceback and the log's path)."""
+
+    def __init__(self, reason, where, details):
+        super().__init__("Generation failed: " + reason)
+        self.reason, self.where, self.details = reason, where, details
+
+
+def first_traceback(lines):
+    """The first traceback in a log, through its exception line: the build's
+    own error, not the worker's report of Blender exiting."""
+    start = next((i for i, line in enumerate(lines) if line.startswith("Traceback (most recent call last):")), None)
+    if start is None:
+        return []
+    end = next((j for j in range(start + 1, len(lines)) if lines[j] and not lines[j][0].isspace()), len(lines) - 1)
+    return lines[start:end + 1]
+
+
+def worker_failure(output, name=None):
+    """Why a worker failed, read from its log; `name` is the formation it was
+    building, when there are several."""
     path = Path(output) / "worker.log"
-    details = path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
-    if "MemoryError" in details or "out of memory" in details.lower():
-        return "Rock generation ran out of memory; existing meshes kept."
-    return "Generation failed; meshes kept. See " + str(path)
+    log = path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
+    lines = log.splitlines()
+    trace = first_traceback(lines)
+    if not trace:
+        # No Python error (Blender crashed, say): the end of the log.
+        trace = [line for line in lines if line.strip()][-12:]
+    reason = trace[-1].strip() if trace else "the worker exited without a log"
+    if "MemoryError" in log or "out of memory" in log.lower():
+        reason = "ran out of memory"
+    if name:
+        reason = name + ": " + reason
+    frames = [line.strip() for line in trace if line.lstrip().startswith('File "')]
+    where = ""
+    if frames:
+        # 'File "/x/solidfit.py", line 878, in build_from_recipe'
+        file, line, func = (frames[-1].split(", ") + ["", ""])[:3]
+        where = f"{Path(file[6:-1]).name}:{line.removeprefix('line ')} {func}".strip()
+    details = "\n\n".join(["Formation generation failed: " + reason, *(["\n".join(trace)] if trace else []),
+                           "Log: " + str(path)])
+    return WorkerFailed(reason, where, details)
