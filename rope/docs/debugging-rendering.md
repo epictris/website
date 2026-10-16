@@ -117,6 +117,38 @@ Each row carries its five-second average and worst alongside a graph of the same
 The graphs scale to the window's 90th percentile rather than its worst column, so one 250 ms stall does not flatten five seconds of 7 ms frames into a line along the floor - the spike runs off the top, and the exact figure is the `max` on the row above.
 Memory is the exception on both counts: it is not zero-based and it is not clipped, because a heap's shape is its reading.
 
+## Costing a pass
+
+The `gpu` row is the whole frame; what a pass costs is a second question, and the obvious way to ask it gives the wrong answer.
+Learned on 2026-10-16 (the fill-cost work in [render3d](render3d.md#fill-cost)), on the RTX 4070 SUPER:
+
+- **Lap timers misattribute.**
+  Ending one `TIME_ELAPSED` query and opening the next at every pass boundary (the mirror, the probe, the scene, the depth of field...) sums to the right frame total, but the GPU overlaps work across the boundaries, so a pass absorbs its neighbour's tail.
+  The pool mirror read 0.67 ms that way while removing it outright saved 0.09 ms.
+  A lap breakdown is a map of where to look, never a cost.
+- **A pass costs what removing it saves.**
+  Switch the pass off in the page (`__scene3d.poolMirrorOn`, `setReflectionProbe(false)`, a light's or a mesh's `visible`, a material swap) and read the frame total with it and without it, in interleaved blocks: 1.5 s each, three rounds, a few hundred ms to settle after each switch.
+  A switch that changes a program's key compiles on its first frame, so warm every variant once before timing.
+  Three rounds of the same state agree to about 0.05 ms.
+- **Prove the switch switched.**
+  A material patch done in `onBeforeCompile` sees the shader BEFORE three expands its `#include`s, so a patch that matches a chunk's text matches nothing and the A/B times the same program twice.
+  On 2026-10-16 that read as "the light reach saves nothing" until the switch was replaced by one that swaps the `#include` itself.
+  A variant that should cost something and does not is a switch to check before it is a result.
+- **An identical picture is checked, not argued.**
+  Pin the clock (`__scene3d.pinClock(t)`), wrap `__scene3d.frame.present` once to `drawImage` the canvas into an `OffscreenCanvas` in the same task (the drawing buffer is not preserved past it), and diff whole frames.
+  Grab the same state twice for the noise floor (0 at rest) and change something small on purpose (hide one rock) to show the grab can see a difference at all.
+- **The clock is not the variable.**
+  `nvidia-smi --query-gpu=clocks.gr,pstate,utilization.gpu --format=csv -lms 200` beside the blocks shows whether the GPU changed clocks between variants.
+  Here it held 2,700 MHz in P0 throughout, and utilisation (100% before the fill-cost patches, 81% after) is the honest second reading.
+- **The window has to be in front for the whole run.**
+  On sway, switching to another workspace leaves `visibilityState` `visible` but throttles the page to 60 Hz (and an occluded one to 1 Hz), and the GPU timings of such a block are not comparable with the others.
+  Check the frame count of every block, not just the first.
+
+A DevTools performance trace is the other half, and has its own traps.
+The first `requestAnimationFrame` of a recording carries the profiler starting up (`CpuProfiler::StartProfiling`, 117 ms on 2026-10-16), which reads as a spawn hitch and is not.
+And a trace taken with DevTools docked is a trace of a smaller window: the frame drew under the resolution cap there and at the full 3840x2160 setting once the game took fullscreen, so the drops appeared exactly when it did.
+Read the trace's `Screenshot` events for the window's shape before reading its frame times.
+
 ## What a grab is doing under the hood
 
 `cli shot` drives chromium over CDP (`src/tools/shotRunner.ts`, Bun's own `fetch` and `WebSocket`, no dependency) rather than through `--screenshot`.

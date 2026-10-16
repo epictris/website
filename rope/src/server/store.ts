@@ -194,6 +194,8 @@ function validateMeta(m: unknown): SessionMeta {
     // Absent on every page that did not ask for a named spawn, which is most of
     // them and every one from before checkpoints existed.
     !(m.checkpoint === undefined || m.checkpoint === null || isStr(m.checkpoint, 64)) ||
+    // Absent on every Normal page and every page from before the difficulties.
+    !(m.ball === undefined || m.ball === "glass") ||
     // Absent on every page from before the field, and on every level that is
     // not a file - the same rule the checkpoint above follows.
     !(m.levelHash === undefined || m.levelHash === null || isStr(m.levelHash, 64)) ||
@@ -214,6 +216,7 @@ function validateMeta(m: unknown): SessionMeta {
     srcHash: m.srcHash,
     level: m.level,
     ...(typeof m.checkpoint === "string" ? { checkpoint: m.checkpoint } : {}),
+    ...(m.ball === "glass" ? { ball: "glass" as const } : {}),
     ...(typeof m.levelHash === "string" ? { levelHash: m.levelHash } : {}),
     nick: m.nick,
     device: m.device,
@@ -263,6 +266,8 @@ function validateFeedback(b: unknown): FeedbackSubmission {
   if (!(b.completedFrame === undefined || isInt(b.completedFrame))) {
     throw new Refusal(400, "feedback: bad completedFrame");
   }
+  // Absent = Normal, as on every page from before the difficulties.
+  if (!(b.ball === undefined || b.ball === "glass")) throw new Refusal(400, "feedback: ball is \"glass\" or absent");
   return {
     level: b.level,
     levelHash: b.levelHash,
@@ -272,6 +277,7 @@ function validateFeedback(b: unknown): FeedbackSubmission {
     stars: (b.stars as Stars | null) ?? null,
     difficulty: (b.difficulty as Difficulty | null) ?? null,
     comment: comment || null,
+    ...(b.ball === "glass" ? { ball: "glass" as const } : {}),
     ...(typeof b.session === "string" ? { session: b.session } : {}),
     ...(typeof b.run === "number" ? { run: b.run } : {}),
     ...(typeof b.completedFrame === "number" ? { completedFrame: b.completedFrame } : {}),
@@ -377,6 +383,7 @@ export class PlaytestStore {
       player: m.player,
       nick: m.nick,
       level: rec.level,
+      ...(rec.ball === "glass" ? { ball: "glass" as const } : {}),
       commit: rec.git ?? "unknown",
       srcHash: rec.srcHash ?? "",
       startedAt: m.startedAt,
@@ -671,6 +678,9 @@ export class PlaytestStore {
       // is named rather than embedded, so this is the only thing that tells a
       // replay where the run began (see `Recording.checkpoint`).
       ...(sess.meta.checkpoint ? { checkpoint: sess.meta.checkpoint } : {}),
+      // ...and the ball, for the same reason: the level cannot say it was
+      // played as glass (see `Recording.ball`).
+      ...(sess.meta.ball === "glass" ? { ball: "glass" as const } : {}),
       git: sess.meta.commit,
       dirty: sess.meta.dirty,
       srcHash: sess.meta.srcHash,

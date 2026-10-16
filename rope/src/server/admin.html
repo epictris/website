@@ -229,7 +229,7 @@
         <td><input type="checkbox" class="sel" ${selected.has(r.id) ? "checked" : ""} /></td>
         <td title="${esc(r.id)} ${fmtWhen(r.startedAt)}">${fmtShort(r.startedAt)}</td>
         <td><a href="#" class="pick-player" data-player="${esc(r.player)}">${esc(r.playerName)}</a></td>
-        <td>${esc(r.level)}</td>
+        <td>${esc(r.level)}${r.ball === "glass" ? ' <span class="dim">hard</span>' : ""}</td>
         <td>${esc(r.commit)}${r.srcHash === data.here.srcHash ? ' <span class="tag live">live</span>' : ""}</td>
         <td class="num">${r.frames}</td>
         <td class="num">${fmtDur(r.seconds)}</td>
@@ -376,7 +376,7 @@
       return `<tr>
         <td title="${esc(fmtWhen(r.at))}">${fmtShort(r.at)}</td>
         <td>${esc(name(r.player))}</td>
-        <td>${esc(r.level)}</td>
+        <td>${esc(r.level)}${r.ball === "glass" ? ' <span class="dim">hard</span>' : ""}</td>
         <td class="dim">v${seq.get(r.id)} of ${totals.get(k)}</td>
         <td>${stars}</td>
         <td>${diffWord}</td>

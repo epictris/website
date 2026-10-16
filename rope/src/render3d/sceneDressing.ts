@@ -18,6 +18,7 @@ import type { Vec2 } from "../engine/vec2";
 import { gltfLoader, trackPending } from "./assets";
 import { withDownload } from "./download";
 import { wearIvyLeaves } from "./ivyLeaves";
+import { isDepthStandIn, joinDepthPrepass } from "./depthPrepass";
 import { isPrintedMoss, wearMossMound } from "./mossMound";
 import { threeRotation, threeY } from "./space";
 import { nodeNameOf, SCENE_ASSETS, sceneFile } from "./scenes";
@@ -152,7 +153,10 @@ const SCENERY_WATER = "backdrop pool";
 export function sceneryWater(root: THREE.Object3D): THREE.Mesh[] {
   const out: THREE.Mesh[] = [];
   root.traverse((o) => {
-    if ((o as THREE.Mesh).isMesh && blenderNames(o).includes(SCENERY_WATER)) out.push(o as THREE.Mesh);
+    // A stand-in answers to its mesh's names too (they are its ancestors).
+    if ((o as THREE.Mesh).isMesh && !isDepthStandIn(o) && blenderNames(o).includes(SCENERY_WATER)) {
+      out.push(o as THREE.Mesh);
+    }
   });
   return out;
 }
@@ -194,6 +198,9 @@ export function loadSceneFile(scene: string): Promise<THREE.Object3D | null> {
         let ivyMeshes = 0;
         let foliageMeshes = 0;
         let mossMeshes = 0;
+        // Taken after the walk, so the walk never meets a stand-in it has
+        // just added (and casts it a shadow).
+        const prepass: THREE.Mesh[] = [];
         gltf.scene.traverse((o) => {
           const mesh = o as THREE.Mesh;
           if (!mesh.isMesh) return;
@@ -244,7 +251,11 @@ export function loadSceneFile(scene: string): Promise<THREE.Object3D | null> {
             if (ivy) ivyMeshes++;
             else foliageMeshes++;
           }
+          // What of it is opaque lays its depth first (depthPrepass.ts).
+          prepass.push(mesh);
         });
+        const depthFirst = prepass.filter(joinDepthPrepass).length;
+        if (depthFirst > 0) console.log(`[render3d] scene "${scene}": ${depthFirst} meshes lay their depth first`);
         if (ivyMeshes > 0) console.log(`[render3d] scene "${scene}": ${ivyMeshes} ivy meshes cast and receive leaf shadows`);
         if (foliageMeshes > 0) console.log(`[render3d] scene "${scene}": ${foliageMeshes} plant meshes cast and receive leaf shadows`);
         if (mossMeshes > 0) console.log(`[render3d] scene "${scene}": ${mossMeshes} moss mounds cut and lipped by their print`);

@@ -20,8 +20,8 @@ Every run writes the level's start camera and water onto the scene
                             fixedScale, facetFalloff)
     --render NAME key=value,..  its render settings (formations/render.py:
                             detail_scale, export_strips, export_creases,
-                            export_chips, export_map_max, export_texels;
-                            `auto` forgets one)
+                            export_chips, export_map_max, export_texels,
+                            export_maps; `auto` forgets one)
     --rebuild changed|all|NAME,NAME   regenerate solid formations
     --list                  print every solid formation: guide, parameters,
                             render settings, whether it is pending

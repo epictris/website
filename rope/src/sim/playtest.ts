@@ -187,6 +187,9 @@ export interface PlaytestScript {
   // every run. `spawn` still wins where a script gives both, being the more
   // specific of the two.
   checkpoint?: string;
+  // The ball, when it is not the iron one: "glass" plays the script with the
+  // Hard difficulty's glass ball (see `Recording.ball`).
+  ball?: "glass";
 }
 
 function inRange(frame: number, from: number, to: number): boolean {
@@ -520,7 +523,7 @@ function evaluateAsserts(
 // and the ball has no state machine, no stuck detector (it has no locomotion
 // input to freeze) and its own invariants.
 function runBallScript(script: PlaytestScript, spec: LevelSpec): PlaytestResult {
-  const level = new BallLevel(spec.data);
+  const level = new BallLevel(spec.data, { ball: script.ball === "glass" ? "glass" : "iron" });
   let resetFired = false;
   level.onReset = () => {
     resetFired = true;

@@ -84,6 +84,32 @@ In an ordinary linear float target the sky moved from (20,40,62) to (2,29,56).
 The flag is three's internal, so a three upgrade has to be checked against the previous picture (`cli shot --3d` before and after).
 Drawing back into the samples after they have been resolved relies on three not discarding them, which it only does on the Oculus browser.
 
+## Fill cost
+
+A frame of a dressed level is bound by how much its scenery costs to shade, not by its draw calls: on BALL at the spawn, the Blender scenery was 3.4 ms of a 4.3 ms main pass at 3701x2082, and the frame at half that resolution cost a quarter as much.
+Two patches, both 2026-10-16, take most of that away without changing a pixel.
+
+- **The scenery lays its depth first** (`render3d/depthPrepass.ts`).
+  three sorts opaque draws by material before depth, so rocks that each wear their own baked material are drawn in material order, and every rock drawn before the one in front of it is shaded and then painted over.
+  Each eligible scene mesh carries a depth-only stand-in, ordered ahead of every opaque draw, so the real materials shade only the nearest surface; `gl_Position` is declared `invariant` in every built-in vertex shader so the two depths agree to the bit.
+  What is eligible, what is not and why, and the one material swap that has to leave (the scene's own water) are in the module's header.
+- **A light is shaded only where it reaches** (`render3d/lightReach.ts`).
+  three runs the whole surface model for every point and spot light on every fragment, including the ones a light's `range` puts at exactly zero; the light loop now skips them on the flag three already sets for its shadow lookup.
+  A light's `range` is therefore a cost as well as a look: a lamp that reaches everything is shaded everywhere.
+
+Measured live on the RTX 4070 SUPER, the spawn view held still and the variants interleaved in one page, GPU time per frame (the sum of every pass):
+
+| | 3701x2082 | 1920x1080 |
+|---|---|---|
+| before | 5.37 ms, 4% of frames dropped at 144 Hz | 2.84 ms |
+| light reach only | 4.83 ms | |
+| depth prepass only | 3.69 ms | |
+| both | 3.38 ms, none dropped | 2.21 ms |
+
+The picture is the same: with the clock pinned, every combination of the two differs from the shipped frame in 0 of 7.7 M pixels, and the same comparison sees 43 k pixels when one small rock is hidden.
+At 1080p the saving is a smaller share because the fixed-size passes (the ball's probe, the shadow maps, the shafts) are a larger part of the frame there; they are the next thing a weaker GPU pays for.
+`cli render3d` holds the patches' shape (the `fill:` cases); the exactness and the timings are live-only, by the method in [debugging-rendering](debugging-rendering.md#costing-a-pass).
+
 ## The coordinate mapping
 
 Physics is x right, y **down**, rotation clockwise-positive.

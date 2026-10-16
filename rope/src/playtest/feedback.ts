@@ -77,6 +77,10 @@ export interface FeedbackSubmission {
   // blank in a listing, which is the truth about both.
   difficulty: Difficulty | null;
   comment: string | null;
+  // The difficulty it is about, when it was not Normal: "glass" is Hard, the
+  // same level played with the glass ball (see render/difficulty.ts). Absent =
+  // Normal, which is every record written before the difficulties existed.
+  ball?: "glass";
   // The run that finished the level, when the form came from a crossing rather
   // than from the level select's `rate`. Absent from a re-rating, which is
   // about the level rather than about a run.

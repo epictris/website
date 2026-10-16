@@ -26,21 +26,22 @@ interface Window {
   // idiom as `__perf` and `__replay`: a driving script reads it, and nothing in
   // the app does.
   readonly __level?: unknown;
-  // FALSE on a page that is the level select rather than a level (see
-  // `paintMenu` in src/render3d/store.ts). `index.html`'s module tag reads it
-  // and imports `main.ts` only when there is something to play, so a bare `/`
-  // never downloads three.js or the level graph to draw a list of six words.
+  // TRUE on the menu page - a bare `/`, or a `?level=` nobody has - which
+  // loads the introduction behind the loading bar and offers the difficulties
+  // once it is ready (see `chooseDifficulty` in main.ts). Set by the inlined
+  // store, which decides before the app exists.
   //
-  // A global rather than an export for the reason the store itself is one: the
+  // Globals rather than exports for the reason the store itself is one: the
   // script that decides is deliberately outside the module graph, because it
   // has to have run before the graph exists.
-  __ropePlay?: boolean;
-  // Load the app INTO THIS PAGE, set by `index.html`'s module tag on the one
-  // page that did not load it: the level select. Picking a level there calls it
-  // rather than following the row's link, because fullscreen and the pointer
-  // lock are granted to that press and neither survives a navigation (see
-  // `startOnClick` in src/render3d/store.ts).
-  __ropeBoot?: () => void;
+  __ropeChoose?: boolean;
+  // Paint the difficulty select (the store's, see `paintMenu`), called by the
+  // app once the level is loaded and warm.
+  __ropeMenu?: () => void;
+  // The pick: a row's press hands the app the ball it chose ("iron" or
+  // "glass"), having already taken the screen and the pointer (see
+  // `startOnClick` in src/render3d/store.ts). Set by the app while it waits.
+  __ropePick?: (ball: string) => void;
   // Where the desktop pointer last was, in CLIENT pixels, noted by the inlined
   // store script from the moment the page parses (`watchPointer` in
   // src/render3d/store.ts). Read by `AimPointer` for where an UNLOCKED cursor is

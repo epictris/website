@@ -599,18 +599,24 @@ class Cache:
         return self._entries_by_own
 
     def _complete(self, entry, names):
-        """The files of `entry` holding all of `names` and its mesh, else None."""
-        files = {n: os.path.join(self.root, entry, map_file(n)) for n in names}
+        """(the {image name: path} of `names(data)`, its mesh, its `data`)
+        for `entry` when it holds all of them, else None. `data` is what the
+        export kept with it (meta.json), which says how many maps it has."""
         mesh = os.path.join(self.root, entry, MESH_FILE)
         meta = os.path.join(self.root, entry, "meta.json")
-        if not all(os.path.isfile(p) for p in [*files.values(), mesh, meta]):
+        if not (os.path.isfile(mesh) and os.path.isfile(meta)):
             return None
-        return files, mesh, meta
+        with open(meta) as f:
+            data = json.load(f).get("data") or {}
+        files = {n: os.path.join(self.root, entry, map_file(n)) for n in names(data)}
+        if not all(os.path.isfile(p) for p in files.values()):
+            return None
+        return files, mesh, data
 
     def get(self, key, names):
-        """(the {image name: PNG path} of `names`, the prepared mesh's .blend,
-        the export's `data`, the entry's key) for an entry holding all of
-        them, else None. The entry is `key`'s; failing that, with
+        """(the {image name: PNG path} of `names(data)`, the prepared mesh's
+        .blend, the export's `data`, the entry's key) for an entry holding all
+        of them, else None. The entry is `key`'s; failing that, with
         `stale_occlusion`, the newest whose own part is `key`'s, its key then
         not `key`. Such an entry stays under its own key, never `key`'s, so
         an export without the flag bakes it afresh."""
@@ -622,9 +628,7 @@ class Cache:
                     break
         if found is None:
             return None
-        files, mesh, meta = found
-        with open(meta) as f:
-            data = json.load(f).get("data")
+        files, mesh, data = found
         self.used.add(entry)
         return files, mesh, data, entry
 

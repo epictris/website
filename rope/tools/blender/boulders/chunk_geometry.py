@@ -5,7 +5,7 @@ from shapely import Polygon,Point
 from shapely.geometry.polygon import orient
 
 def build_chunks(spec):
-    from rockgen import Mesh,prism,triangulate_cap
+    from rockgen import ENVELOPE,Mesh,prism,triangulate_cap
     from volume_geometry import camera_basis
     from params import param
     p=orient(Polygon(spec['outer'],spec['holes']),1)
@@ -74,7 +74,7 @@ def build_chunks(spec):
         part=mesh.dump(); part['clip_to_outline']=True
         part['chunk_bevel']=float(rng.uniform(bevel_min,bevel_max))
         parts.append(part)
-    clip=prism(p,-depth*1.3,depth*1.3,'polygon_envelope',0)
+    clip=prism(p,-depth*ENVELOPE,depth*ENVELOPE,'polygon_envelope',0)
     guide=Mesh('gameplay_section',0); triangulate_cap(guide,p,lambda x,y:0)
     return dict(spec=dict(spec,construction='volume',camera_basis=camera_basis(spec).tolist()),
                 parts=parts,clip=clip,cell_count=count,gameplay_section=guide.dump(),

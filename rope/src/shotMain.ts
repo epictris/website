@@ -25,6 +25,8 @@
 import { render, renderBall } from "./render/renderer";
 import { SparkSystem } from "./render/sparks";
 import { DebrisSystem } from "./render/debris";
+import { GlassShards } from "./render/glassShards";
+import { glassOptionsFrom } from "./render3d/glassMaterial";
 import { ChainRetract } from "./render/chainRetract";
 import { NO_ORBIT, type CameraOrbit } from "./render3d/space";
 import { Scene3D } from "./render3d/scene";
@@ -62,6 +64,8 @@ const sceneCanvas = document.getElementById("scene") as HTMLCanvasElement;
 const ctx = canvas.getContext("2d")!;
 const q = new URLSearchParams(location.search);
 const use3d = q.get("render") === "3d";
+// The glass ball's A/B switches, as the game reads them (`--query glasstint=...`).
+glassOptionsFrom(q);
 
 // The same fixed 16:9 frame the game draws into, so a grab is what the player is
 // shown — a window-shaped canvas would frame the scene differently from the game
@@ -314,6 +318,8 @@ const sparks = new SparkSystem();
 // ...and the debris of anything that broke, on the same clock and with its own
 // seed, for the same reason (see render/debris.ts).
 const debris = new DebrisSystem();
+// ...and the glass ball's shards, likewise (see render/glassShards.ts).
+const shards = new GlassShards();
 // The released chain reeling back in (see render/chainRetract.ts), driven at
 // the fixed step for the same reason.
 // Behind `?retract=1` as it is in the game (`cli shot ... --retract`).
@@ -326,6 +332,8 @@ const advanceTo = (target: number): void => {
     sparks.advance(1 / 60);
     debris.ingest(level.breakEvents);
     debris.advance(1 / 60);
+    if (level instanceof BallLevel) shards.ingest(level.shatterEvents);
+    shards.advance(1 / 60);
     chainRetract?.observe(level instanceof BallLevel ? level : null, 1 / 60);
   }
 };
@@ -402,7 +410,7 @@ function drawFrame(frame: number): void {
     // Measured from the first frame rather than from frame 0, so a single grab
     // pins it at exactly 0 as it always has and its PNG is unchanged.
     scene3d.pinClock((frame - frames[0]!) / 60);
-    scene3d.render(level, camera, 1, orbit, chainRetract);
+    scene3d.render(level, camera, 1, orbit, chainRetract, shards);
     if (q.get("probe") !== null) {
       // The waking lights' levels too, where the level has any: a filmstrip of
       // a mushroom rising is otherwise a claim read off the pictures alone.
@@ -455,6 +463,7 @@ function drawFrame(frame: number): void {
       sparks,
       chainRetract,
       debris,
+      shards,
     );
   } else {
     render(

@@ -51,6 +51,7 @@ import bmesh
 import bpy
 import numpy as np
 from mathutils import Vector, kdtree
+from mathutils.bvhtree import BVHTree
 
 # Object types with geometry the glTF exporter carries.
 EXPORTABLE = {"MESH", "CURVE", "SURFACE", "FONT", "META"}
@@ -262,10 +263,13 @@ def render_setting(ob, name):
     return render.setting(ob, name)
 
 
-def bake_size(mesh, ob):
-    """The side of `ob`'s colour map, baked on `mesh` (formations/render.py)."""
+def bake_maps(mesh, ob, seen):
+    """The sides of `ob`'s colour maps, baked on `mesh`, whose faces the
+    camera can see where `seen` holds (formations/render.py)."""
     from formations import render
-    return render.colour_map(ob, sum(p.area for p in mesh.polygons))
+    area = np.empty(len(mesh.polygons))
+    mesh.polygons.foreach_get("area", area)
+    return render.colour_maps(ob, float(area[seen].sum() + render.HIDDEN_DENSITY ** 2 * area[~seen].sum()))
 
 
 def map_size(size, kind):
@@ -285,9 +289,99 @@ def select_only(obs, active):
     view_layer.objects.active = active
 
 
-def unwrap(ob, size):
-    """A fresh UV map BAKE_UV on `ob`, islands packed PACK_GAP_PX apart at
-    `size`.
+# The game camera, as `seen_faces` tests a face against it: always head-on
+# (looking along Blender +y), a 70 mm lens on a 24 mm tall frame of 16:9
+# (src/render3d/space.ts: every level's `camera.focalLength`, Tris
+# 2026-10-16), over a grid of VIEW_GRID x VIEW_GRID directions spanning the
+# frame and VIEW_MARGIN past its edges. A face is seen if a ray from it to the
+# camera along one of them leaves the object without hitting it again. Its own
+# surface is all that occludes: another object's moving would otherwise
+# change which faces are seen without changing this one's bake key, and a
+# face counted seen is only finer.
+FOCAL_LENGTH_MM, FRAME_HALF_HEIGHT_MM, FRAME_ASPECT = 70.0, 12.0, 16 / 9
+VIEW_GRID, VIEW_MARGIN = 5, 1.1
+# How far a face's samples (its centre, and its corners pulled this share of
+# the way out from it) and their rays start off it, metres.
+SAMPLE_REACH, RAY_LIFT = 0.8, 1e-4
+# Vertices this close are one, for growing the seen faces by a ring.
+SEEN_WELD = 1e-5
+# The longest an island may run, as a share of its map's side (`cut_islands`).
+# At a quarter, the cuts cost Terrace.003 more coverage (0.62 -> 0.56) than
+# they won; at a half, 0.63.
+ISLAND_SHARE = 0.5
+
+
+def view_directions():
+    """The directions `seen_faces` looks from the surface toward the camera
+    (world space, unit)."""
+    tan_y = FRAME_HALF_HEIGHT_MM / FOCAL_LENGTH_MM * VIEW_MARGIN
+    tan_x = tan_y * FRAME_ASPECT
+    steps = np.linspace(-1.0, 1.0, VIEW_GRID)
+    d = np.array([(-x * tan_x, -1.0, -z * tan_y) for x in steps for z in steps])
+    return d / np.linalg.norm(d, axis=1)[:, None]
+
+
+def seen_faces(mesh, matrix):
+    """Which faces of `mesh` (at `matrix` in the world) the game camera can
+    see, as a bool per polygon: facing one of `view_directions` with one of
+    its samples' rays out of the object, and then every face touching one of
+    those by a vertex, so a partly seen face's neighbour that a sample missed,
+    and the seam between the seen and the unseen, are seen too.
+
+    Measured 2026-10-16 on the river (Terrace.001, 250 k triangles, 3 s):
+    of its 470 m2 of pile, 231 face the camera with nothing of the rock in
+    the way."""
+    n = len(mesh.polygons)
+    m = np.array(matrix, dtype=np.float64)
+    co = np.empty(len(mesh.vertices) * 3)
+    mesh.vertices.foreach_get("co", co)
+    co = co.reshape(-1, 3) @ m[:3, :3].T + m[:3, 3]
+    start = np.empty(n, np.int32)
+    total = np.empty(n, np.int32)
+    mesh.polygons.foreach_get("loop_start", start)
+    mesh.polygons.foreach_get("loop_total", total)
+    corner = np.empty(len(mesh.loops), np.int32)
+    mesh.loops.foreach_get("vertex_index", corner)
+    tris = [corner[a:a + b].tolist() for a, b in zip(start.tolist(), total.tolist())]
+    bvh = BVHTree.FromPolygons(co.tolist(), tris)
+    centre = np.add.reduceat(co[corner], start) / total[:, None]
+    normal = np.empty(n * 3)
+    mesh.polygons.foreach_get("normal", normal)
+    # A normal goes to the world by the inverse transpose.
+    normal = normal.reshape(-1, 3) @ np.linalg.inv(m[:3, :3])
+    normal /= np.maximum(np.linalg.norm(normal, axis=1), 1e-30)[:, None]
+    toward = view_directions()
+    facing = normal @ toward.T > 1e-3
+    seen = np.zeros(n, bool)
+    ray = bvh.ray_cast
+    dirs = [tuple(d) for d in toward.tolist()]
+    for f in np.flatnonzero(facing.any(axis=1)).tolist():
+        lift = normal[f] * RAY_LIFT
+        c = centre[f]
+        ways = [dirs[j] for j in np.flatnonzero(facing[f]).tolist()]
+        samples = [c] + [c + SAMPLE_REACH * (co[v] - c) for v in tris[f]]
+        if any(ray(tuple(p + lift), d)[0] is None for p in samples for d in ways):
+            seen[f] = True
+    # One ring more, by welded position: a mesh split at its seams (flat
+    # shaded, or come in through glTF) has no shared vertices to walk.
+    weld = np.unique(np.round(co / SEEN_WELD).astype(np.int64), axis=0, return_inverse=True)[1].ravel()
+    hot = np.zeros(weld.max() + 1 if len(weld) else 0, bool)
+    hot[weld[corner[np.repeat(seen, total)]]] = True
+    return np.logical_or.reduceat(hot[weld[corner]], start) if n else seen
+
+
+def unwrap(ob, seen, sides, gap_sides):
+    """A fresh UV map BAKE_UV on `ob`, its surface over one image a side in
+    `sides`, islands packed PACK_GAP_PX apart at that image's `gap_sides`.
+    Returns the image each face is in, an array over the polygons.
+
+    The faces `seen` (`seen_faces`) and the rest are unwrapped apart, so no
+    island holds both, and every island is scaled to its surface, the
+    unseen ones by HIDDEN_DENSITY: one image's texels go to what the camera
+    sees. With more than one image the islands are dealt out in order along
+    the object's longest side, each image taking its share of the surface
+    by its side squared, so each image's faces lie together (three.js culls
+    each by its own box) and no island is cut.
 
     The unwrap runs on a WELDED copy: a flat-shaded mesh that came in through
     glTF (the river's boulders) has every face's vertices split from its
@@ -299,6 +393,7 @@ def unwrap(ob, size):
     corners take the UV of the nearest welded corner. It runs on one object at
     a time, because Smart UV Project in a multi-object edit packs every object
     into one shared square."""
+    from formations import render
     bm = bmesh.new()
     bm.from_mesh(ob.data)
     tag = bm.loops.layers.int.new(UNWRAP_TAG)
@@ -313,29 +408,126 @@ def unwrap(ob, size):
     bm.free()
     tmp = bpy.data.objects.new(f"{ob.name} unwrap", welded)
     bpy.context.scene.collection.objects.link(tmp)
-    select_only([tmp], tmp)
-    bpy.ops.object.mode_set(mode="EDIT")
-    bpy.ops.mesh.select_all(action="SELECT")
-    # Smart UV Project packs as it goes. Repacking with rotation won 7 points
-    # of coverage (0.62 -> 0.69 on the Terrace) for 9 s an object; not worth it.
-    bpy.ops.uv.smart_project(angle_limit=math.radians(66), island_margin=PACK_GAP_PX / size, scale_to_bounds=False)
-    bpy.ops.object.mode_set(mode="OBJECT")
     n = len(welded.loops)
-    uv_welded = np.empty(2 * n, dtype=np.float32)
-    welded.uv_layers.active.data.foreach_get("uv", uv_welded)
     origin = np.empty(n, dtype=np.int32)
     welded.attributes[UNWRAP_TAG].data.foreach_get("value", origin)
+    w_start = np.empty(len(welded.polygons), dtype=np.int32)
+    w_total = np.empty(len(welded.polygons), dtype=np.int32)
+    welded.polygons.foreach_get("loop_start", w_start)
+    welded.polygons.foreach_get("loop_total", w_total)
+    o_start = np.empty(len(ob.data.polygons), dtype=np.int32)
+    ob.data.polygons.foreach_get("loop_start", o_start)
+    # Each welded face is the face its first corner came from.
+    w_seen = seen[np.searchsorted(o_start, origin[w_start], side="right") - 1]
+    w_area = np.empty(len(welded.polygons))
+    welded.polygons.foreach_get("area", w_area)
+
+    tool = bpy.context.scene.tool_settings
+    sync, select_mode = tool.use_uv_select_sync, tuple(tool.mesh_select_mode)
+    tool.use_uv_select_sync = True
+    tool.mesh_select_mode = (False, False, True)
+    corner_face = np.repeat(np.arange(len(welded.polygons)), w_total)
+    select_only([tmp], tmp)
+
+    w_vert = np.empty(n, dtype=np.int32)
+    welded.loops.foreach_get("vertex_index", w_vert)
+    w_edge = np.empty(n, dtype=np.int32)
+    welded.loops.foreach_get("edge_index", w_edge)
+
+    def select(faces):
+        # Faces, their edges and their vertices, in face select mode, so
+        # entering edit mode flushes nothing away.
+        bpy.ops.object.mode_set(mode="OBJECT")
+        mine = faces[corner_face]
+        verts = np.zeros(len(welded.vertices), bool)
+        verts[w_vert[mine]] = True
+        edges = np.zeros(len(welded.edges), bool)
+        edges[w_edge[mine]] = True
+        welded.vertices.foreach_set("select", verts)
+        welded.edges.foreach_set("select", edges)
+        welded.polygons.foreach_set("select", faces)
+        bpy.ops.object.mode_set(mode="EDIT")
+
+    def uvs():
+        bpy.ops.object.mode_set(mode="OBJECT")
+        out = np.empty(2 * n, dtype=np.float64)
+        welded.uv_layers.active.data.foreach_get("uv", out)
+        return out.reshape(-1, 2)
+
+    def put(uv):
+        bpy.ops.object.mode_set(mode="OBJECT")
+        welded.uv_layers.active.data.foreach_set("uv", uv.astype(np.float32).ravel())
+
+    if not welded.uv_layers:
+        welded.uv_layers.new(name=BAKE_UV)
+    uv = np.zeros((n, 2))
+    for faces, density in ((w_seen, 1.0), (~w_seen, render.HIDDEN_DENSITY)):
+        if not faces.any():
+            continue
+        select(faces)
+        # The packing below sets the margins.
+        bpy.ops.uv.smart_project(angle_limit=math.radians(66), island_margin=0, scale_to_bounds=False)
+        part = uvs()
+        mine = faces[corner_face]
+        # Metres of the surface, times its density.
+        scale = density * math.sqrt(w_area[faces].sum() / max(face_uv_area(part, w_start, w_total)[faces].sum(), 1e-30))
+        uv[mine] = part[mine] * scale
+    # No island longer than ISLAND_SHARE of the largest map's side, which
+    # holds its share of the surface (side squared over all the sides'), at
+    # UV_COVERAGE.
+    largest = max(sides) ** 2 / sum(side * side for side in sides)
+    longest = math.sqrt(face_uv_area(uv, w_start, w_total).sum() * largest / render.UV_COVERAGE) * ISLAND_SHARE
+    uv, cut = cut_islands(uv, uv_islands(w_vert, uv, w_start, w_total, corner_face), w_start, w_total,
+                          corner_face, longest)
+    put(uv)
+    if cut:
+        log(f"unwrap {ob.name}: {cut} islands over {longest:.2f} m cut")
+    if len(sides) == 1:
+        image = np.zeros(len(welded.polygons), dtype=np.int32)
+    else:
+        image = deal_islands(welded, uv, uv_islands(w_vert, uv, w_start, w_total, corner_face),
+                             w_start, w_total, corner_face, sides)
+    for k, (side, gap) in enumerate(zip(sides, gap_sides)):
+        faces = image == k
+        if not faces.any():
+            continue
+        # Into the unit square first: the packer packs into the UDIM tile
+        # nearest the islands.
+        uv = uvs()
+        mine = faces[corner_face]
+        lo = uv[mine].min(axis=0)
+        uv[mine] = (uv[mine] - lo) / max(float((uv[mine] - lo).max()), 1e-30) * 0.999
+        put(uv)
+        select(faces)
+        # Turning islands by right angles took the coverage from 0.47 to
+        # 0.59 on Terrace.001's five maps (385 -> 430 texels a metre seen;
+        # without, it would take a sixth map) for 85 s of packing against
+        # 39 s; on Terrace.003, 0.63 -> 0.69 for 10 s against 7. Any angle
+        # packed no better than right angles, slower.
+        bpy.ops.uv.pack_islands(udim_source="CLOSEST_UDIM", rotate=True, rotate_method="CARDINAL", scale=True,
+                                margin_method="FRACTION", margin=PACK_GAP_PX / gap, shape_method="CONCAVE")
+        uv = uvs()
+        lo = np.floor(uv[mine].min(axis=0) + 1e-6)
+        if lo.any():
+            uv[mine] -= lo
+            put(uv)
+    bpy.ops.object.mode_set(mode="OBJECT")
+    tool.use_uv_select_sync, tool.mesh_select_mode = sync, select_mode
+    uv_welded = uvs().astype(np.float32).ravel()
     corner_vert = np.empty(n, dtype=np.int32)
     welded.loops.foreach_get("vertex_index", corner_vert)
     co = np.empty(3 * len(welded.vertices), dtype=np.float32)
     welded.vertices.foreach_get("co", co)
     corner_co = co.reshape(-1, 3)[corner_vert]
+    corner_image = image[corner_face]
     bpy.data.objects.remove(tmp)
     bpy.data.meshes.remove(welded)
 
-    uvs = np.full((len(ob.data.loops), 2), np.nan, dtype=np.float32)
-    uvs[origin] = uv_welded.reshape(-1, 2)
-    lost = np.flatnonzero(np.isnan(uvs[:, 0]))
+    uvs_out = np.full((len(ob.data.loops), 2), np.nan, dtype=np.float32)
+    uvs_out[origin] = uv_welded.reshape(-1, 2)
+    loop_image = np.full(len(ob.data.loops), -1, dtype=np.int32)
+    loop_image[origin] = corner_image
+    lost = np.flatnonzero(np.isnan(uvs_out[:, 0]))
     if len(lost):
         tree = kdtree.KDTree(n)
         for j, c in enumerate(corner_co):
@@ -344,25 +536,121 @@ def unwrap(ob, size):
         verts = np.empty(len(ob.data.loops), dtype=np.int32)
         ob.data.loops.foreach_get("vertex_index", verts)
         for j in lost:
-            uvs[j] = uv_welded[2 * tree.find(ob.data.vertices[verts[j]].co)[1]:][:2]
+            near = tree.find(ob.data.vertices[verts[j]].co)[1]
+            uvs_out[j] = uv_welded[2 * near:][:2]
+            loop_image[j] = corner_image[near]
     # A face with no area (the dissolve's collinear slivers) can have its
     # corners land on different islands, a streak across the atlas. Flat it
     # draws nothing; bent open after the bake (formations/curve.py) it drew
     # that streak as a pale stair-stepped band. Collapse it onto one corner
     # that came through the weld, so it takes the colour of where it sits.
+    # So too a face whose corners came back in different images (the weld
+    # collapsed it, and its corners took their nearest neighbours').
     start = np.empty(len(ob.data.polygons), dtype=np.int32)
     total = np.empty(len(ob.data.polygons), dtype=np.int32)
     ob.data.polygons.foreach_get("loop_start", start)
     ob.data.polygons.foreach_get("loop_total", total)
     area = np.empty(len(ob.data.polygons))
     ob.data.polygons.foreach_get("area", area)
-    found = set(range(len(uvs))) - set(lost.tolist())
-    for f in np.flatnonzero(area < DEGENERATE_AREA):
+    found = np.ones(len(uvs_out), bool)
+    found[lost] = False
+    split = np.maximum.reduceat(loop_image, start) != np.minimum.reduceat(loop_image, start)
+    for f in np.flatnonzero((area < DEGENERATE_AREA) | split):
         corners = range(start[f], start[f] + total[f])
-        keep = next((c for c in corners if c in found), start[f])
-        uvs[list(corners)] = uvs[keep]
-    uv = ob.data.uv_layers.new(name=BAKE_UV)
-    uv.data.foreach_set("uv", uvs.ravel())
+        keep = next((c for c in corners if found[c]), start[f])
+        uvs_out[list(corners)] = uvs_out[keep]
+        loop_image[list(corners)] = loop_image[keep]
+    uv_map = ob.data.uv_layers.new(name=BAKE_UV)
+    uv_map.data.foreach_set("uv", uvs_out.ravel())
+    return loop_image[start]
+
+
+def uv_islands(corner_vert, uv, start, total, corner_face):
+    """Each face's island: the faces joined by edges whose two corners
+    share UVs on both sides (`uv`, a corner's). Numbered from 0."""
+    nf = len(start)
+    nxt = np.arange(len(corner_face)) + 1
+    nxt[start + total - 1] = start
+    a, b = corner_vert, corner_vert[nxt]
+    q = np.round(uv / 1e-6).astype(np.int64)
+    flip = a > b
+    lo_v, hi_v = np.where(flip, b, a), np.where(flip, a, b)
+    lo_uv, hi_uv = np.where(flip[:, None], q[nxt], q), np.where(flip[:, None], q, q[nxt])
+    _, edge = np.unique(np.column_stack([lo_v, hi_v, lo_uv, hi_uv]), axis=0, return_inverse=True)
+    edge = edge.ravel()
+    order = np.argsort(edge, kind="stable")
+    parent = list(range(nf))
+
+    def root(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for i in np.flatnonzero(edge[order][1:] == edge[order][:-1]).tolist():
+        f, g = root(int(corner_face[order[i]])), root(int(corner_face[order[i + 1]]))
+        if f != g:
+            parent[f] = g
+    return np.unique([root(f) for f in range(nf)], return_inverse=True)[1].ravel()
+
+
+def face_uv_area(uv, start, total):
+    """Each face's area in UV, by the shoelace over its corners."""
+    nxt = np.arange(len(uv)) + 1
+    nxt[start + total - 1] = start
+    return np.abs(np.add.reduceat(uv[:, 0] * uv[nxt, 1] - uv[nxt, 0] * uv[:, 1], start) / 2)
+
+
+def cut_islands(uv, island, start, total, corner_face, longest):
+    """`uv` with every island longer than `longest` either way cut into
+    squares that long, each moved a hair off its neighbours so it packs as
+    an island of its own. Smart UV Project keeps a run of near-coplanar
+    faces whole however far it runs: on Terrace.001 one ran the width of a
+    map, and the packer, shrinking every island until it fit, filled 9 %
+    of it."""
+    uv = uv.copy()
+    centre = np.add.reduceat(uv, start) / total[:, None]
+    lo = np.full((island.max() + 1, 2), np.inf)
+    hi = np.full((island.max() + 1, 2), -np.inf)
+    np.minimum.at(lo, island[corner_face], uv)
+    np.maximum.at(hi, island[corner_face], uv)
+    long = ((hi - lo) > longest).any(axis=1)
+    faces = long[island]
+    if not faces.any():
+        return uv, 0
+    cell = np.floor((centre - lo[island]) / longest)
+    shift = np.where(faces[:, None], cell * 1e-3, 0.0)
+    uv += shift[corner_face]
+    return uv, int(long.sum())
+
+
+def deal_islands(mesh, uv, island, start, total, corner_face, sides):
+    """The image each face of `mesh` goes in, for `uv` (a corner's UV, in
+    metres times its density): its `island`'s, the islands dealt out along
+    the mesh's longest side so each image's share of their area is its side
+    squared over all the sides'."""
+    corner_vert = np.empty(len(corner_face), dtype=np.int32)
+    mesh.loops.foreach_get("vertex_index", corner_vert)
+    co = np.empty(3 * len(mesh.vertices))
+    mesh.vertices.foreach_get("co", co)
+    co = co.reshape(-1, 3)
+    axis = int(np.argmax(co.max(axis=0) - co.min(axis=0)))
+    face_pos = np.add.reduceat(co[corner_vert, axis], start) / total
+    face_area = face_uv_area(uv, start, total)
+    count = island.max() + 1
+    weight = np.bincount(island, face_area, count)
+    pos = np.bincount(island, face_area * face_pos, count) / np.maximum(weight, 1e-30)
+    share = np.cumsum(np.array(sides, dtype=np.float64) ** 2)
+    share = share / share[-1] * weight.sum()
+    out = np.zeros(count, dtype=np.int32)
+    held, k = 0.0, 0
+    for i in np.argsort(pos, kind="stable").tolist():
+        # An island goes where its middle falls.
+        while k < len(sides) - 1 and held + weight[i] / 2 > share[k]:
+            k += 1
+        out[i] = k
+        held += weight[i]
+    return out[island]
 
 
 def fill_background(im):
@@ -415,21 +703,13 @@ def bake_detail_normals(targets, images, straight):
     image nodes keyed by material. The high poly is built from the rock's
     `straight` mesh (the rock is split for its bows but not yet bent, so the
     two line up exactly). It stands at the rock's world transform; the bake casts from detail.CAGE outside the rock inward to
-    detail.RAY_DISTANCE."""
+    detail.RAY_DISTANCE. `images` holds each rock's images, one a map."""
     from formations import detail
     scene = bpy.context.scene
-    nodes = {}
+    nodes = image_nodes(targets, images)
     for ob in targets:
         high, report = detail.build(straight.get(ob, ob.data), seed_for(ob), scene.collection, f"{ob.name} detail")
         high.matrix_world = ob.matrix_world.copy()
-        for mat in ob.data.materials:
-            node = mat.node_tree.nodes.new("ShaderNodeTexImage")
-            node.image = images[ob]
-            uv = mat.node_tree.nodes.new("ShaderNodeUVMap")
-            uv.uv_map = BAKE_UV
-            mat.node_tree.links.new(uv.outputs["UV"], node.inputs["Vector"])
-            mat.node_tree.nodes.active = node
-            nodes[mat] = node
         select_only([high, ob], ob)
         t0 = time.time()
         bpy.ops.object.bake(type="NORMAL", normal_space="TANGENT", use_selected_to_active=True,
@@ -439,8 +719,9 @@ def bake_detail_normals(targets, images, straight):
         me = high.data
         bpy.data.objects.remove(high)
         bpy.data.meshes.remove(me)
-        fill_background(images[ob])
-        images[ob].pack()
+        for im in images[ob]:
+            fill_background(im)
+            im.pack()
     return nodes
 
 
@@ -484,25 +765,44 @@ def export_mesh_name(ob):
     return f"{ob.name} export"
 
 
-def image_name(ob, kind):
-    """The name of `ob`'s `kind` map ("baked colour", ...). No dot in it: the
-    glTF exporter takes everything after the last dot for an extension, so
-    "Terrace.003 baked colour" shipped as "Terrace", missed the optimiser's
-    " baked colour" rule and went out as lossy WebP at 1k, a quarter of its
-    texels (2026-10-04; scene-export.ts now checks every baked map is
-    matched)."""
-    return f"{ob.name.replace('.', '-')} {kind}"
+def image_name(ob, kind, i=0, count=1):
+    """The name of `ob`'s `kind` map ("baked colour", ...), the `i`th of its
+    `count`. No dot in it: the glTF exporter takes everything after the last
+    dot for an extension, so "Terrace.003 baked colour" shipped as "Terrace",
+    missed the optimiser's " baked colour" rule and went out as lossy WebP at
+    1k, a quarter of its texels (2026-10-04; scene-export.ts now checks every
+    baked map is matched)."""
+    base = ob.name.replace('.', '-')
+    return f"{base} {kind}" if count == 1 else f"{base} map {i + 1} {kind}"
+
+
+def image_names(ob, kinds, count):
+    return [image_name(ob, k, i, count) for k in kinds for i in range(count)]
+
+
+def map_of(ob, slot, count):
+    """Which of `ob`'s `count` maps its material `slot` draws from: the
+    export gives each map its own copy of every material (`split_materials`),
+    map by map."""
+    return slot // (len(ob.data.materials) // count)
+
+
+def split_materials(materials, count):
+    """`materials` (one an object's slot) for an object over `count` maps:
+    the first map's are these, every other map's copies of them, slot for
+    slot, so each map's faces point at their own images."""
+    return [m if i == 0 else m.copy() for i in range(count) for m in materials]
 
 
 def image_nodes(targets, images):
-    """An Image Texture of its object's image in each of the targets'
-    materials, read through BAKE_UV and ACTIVE (where a bake writes). Returns
-    the nodes, keyed by material."""
+    """An Image Texture of its map's image (`images`: each object's, one a
+    map) in each of the targets' materials, read through BAKE_UV and ACTIVE
+    (where a bake writes). Returns the nodes, keyed by material."""
     nodes = {}
     for ob in targets:
-        for mat in ob.data.materials:
+        for slot, mat in enumerate(ob.data.materials):
             node = mat.node_tree.nodes.new("ShaderNodeTexImage")
-            node.image = images[ob]
+            node.image = images[ob][map_of(ob, slot, len(images[ob]))]
             uv = mat.node_tree.nodes.new("ShaderNodeUVMap")
             uv.uv_map = BAKE_UV
             mat.node_tree.links.new(uv.outputs["UV"], node.inputs["Vector"])
@@ -512,26 +812,30 @@ def image_nodes(targets, images):
 
 
 def bake_pass(targets, images, bake_type, before_fill=None, **bake_args):
-    """One Cycles bake of every target into its own image: each material
-    gets an Image Texture of its object's image as the ACTIVE node, which is
-    where a bake writes. `before_fill(ob, image)` runs on each image while its
-    alpha still marks the baked texels. Returns the nodes, keyed by material."""
+    """One Cycles bake of every target into its own images: each material
+    gets an Image Texture of its map's image as the ACTIVE node, which is
+    where a bake writes. `before_fill(ob, i, image)` runs on each object's
+    `i`th image while its alpha still marks the baked texels. Returns the
+    nodes, keyed by material."""
     nodes = image_nodes(targets, images)
     select_only(targets, targets[0])
     bpy.ops.object.bake(type=bake_type, target="IMAGE_TEXTURES", uv_layer=BAKE_UV, margin=0, **bake_args)
     if before_fill is not None:
         for ob in targets:
-            before_fill(ob, images[ob])
-    for im in set(images.values()):
-        fill_background(im)
-        im.pack()
+            for i, im in enumerate(images[ob]):
+                before_fill(ob, i, im)
+    for ob in targets:
+        for im in images[ob]:
+            fill_background(im)
+            im.pack()
     return nodes
 
 
-def paint_moss(ob, im, paints):
+def paint_moss(ob, im, paints, i=0, count=1):
     """Paint the texture-only mosses of `ob` (moss.texture_paints entries)
-    into its freshly baked colour map `im`, before the background fill, so
-    the fill carries the moss into the seams like any baked texel."""
+    into its freshly baked colour map `im`, the `i`th of its `count`, before
+    the background fill, so the fill carries the moss into the seams like
+    any baked texel. Only that map's triangles are painted."""
     import moss
 
     w, h = im.size
@@ -545,6 +849,12 @@ def paint_moss(ob, im, paints):
     me.loop_triangles.foreach_get("loops", loops)
     verts = np.empty(n * 3, np.int32)
     me.loop_triangles.foreach_get("vertices", verts)
+    if count > 1:
+        slot = np.empty(n, np.int32)
+        me.loop_triangles.foreach_get("material_index", slot)
+        mine = np.repeat(slot // (len(me.materials) // count) == i, 3)
+        loops, verts = loops[mine], verts[mine]
+        n = len(loops) // 3
     uv = np.empty(len(me.loops) * 2, np.float32)
     me.uv_layers[BAKE_UV].data.foreach_get("uv", uv)
     co = np.empty(len(me.vertices) * 3, np.float32)
@@ -571,8 +881,11 @@ def bake_procedural_textures(kept, cache_dir=None, paints=(), warnings=None, sta
     tangent-space normal map. It works on the export's own copies: each target
     gets a mesh with its modifiers applied and a fresh unwrap (BAKE_UV), its
     materials are copied so each object's point at its own images, and the file
-    is never saved. The resolution is formations/render.py's (`bake_size`:
-    TEXELS_PER_METRE up to BAKE_SIZE_MAX). With `cache_dir`, an object whose
+    is never saved. The resolution is formations/render.py's (`map_sides`:
+    TEXELS_PER_METRE up to BAKE_SIZE_MAX, a painted slate rock that outgrows
+    that split over several maps, each with its own copies of the materials;
+    the faces the camera never sees, `seen_faces`, at HIDDEN_DENSITY). With
+    `cache_dir`, an object whose
     prepared mesh and maps are in the bake cache (bake_cache.py) loads them
     instead of being prepared and baked: the key is taken on the scene before
     anything is prepared, so a cached object costs neither its creases'
@@ -632,7 +945,7 @@ def bake_procedural_textures(kept, cache_dir=None, paints=(), warnings=None, sta
         cache = bake_cache.Cache(cache_dir, depsgraph, {ob: preparation(ob) for ob in targets}, stale_occlusion)
         for ob in targets:
             keys[ob] = cache.key(ob, scene, materials[ob], [entry[4] for entry in by_host.get(ob, ())])
-            hit = cache.get(keys[ob], [image_name(ob, k) for k in ships[ob]])
+            hit = cache.get(keys[ob], lambda data, ob=ob: image_names(ob, ships[ob], len(data.get("maps", [0]))))
             if hit is not None:
                 hits[ob] = hit
                 if hit[3] != keys[ob]:
@@ -641,7 +954,11 @@ def bake_procedural_textures(kept, cache_dir=None, paints=(), warnings=None, sta
             warnings.append(f"--stale-occlusion: {len(stale)} objects keep the occlusion of their last bake, their "
                             f"neighbours since changed: {', '.join(sorted(ob.name for ob in stale))}")
         for ob, (files, mesh_file, data, _) in hits.items():
-            loaded[ob] = {k: bake_cache.load(files[image_name(ob, k)], image_name(ob, k), space[k]) for k in ships[ob]}
+            sizes[ob] = data["maps"]
+            count = len(sizes[ob])
+            loaded[ob] = {k: [bake_cache.load(files[image_name(ob, k, i, count)], image_name(ob, k, i, count), space[k])
+                              for i in range(count)] for k in ships[ob]}
+            materials[ob] = split_materials(materials[ob], count)
             ob.modifiers.clear()
             ob.data = bake_cache.load_mesh(mesh_file, materials[ob])
             ob.data.name = export_mesh_name(ob)
@@ -676,22 +993,39 @@ def bake_procedural_textures(kept, cache_dir=None, paints=(), warnings=None, sta
             raise SystemExit(f"{ob.name}: {len(mesh.materials)} material slots on its mesh, {len(materials[ob])} on the object")
         for i, mat in enumerate(materials[ob]):
             mesh.materials[i] = mat
-        sizes[ob] = bake_size(mesh, ob)
+        seen = seen_faces(mesh, ob.matrix_world)
+        sizes[ob] = bake_maps(mesh, ob, seen)
         bumps = any(procedural_normals(m) for m in mesh.materials)
-        unwrap(ob, map_size(sizes[ob], "baked normal") if bumps else sizes[ob])
+        in_map = unwrap(ob, seen, sizes[ob], [map_size(side, "baked normal") if bumps else side for side in sizes[ob]])
+        if len(sizes[ob]) > 1:
+            # Each map's faces on their own copies of the materials.
+            slots = len(materials[ob])
+            materials[ob] = split_materials(materials[ob], len(sizes[ob]))
+            for mat in materials[ob][slots:]:
+                mesh.materials.append(mat)
+            slot = np.empty(len(mesh.polygons), np.int32)
+            mesh.polygons.foreach_get("material_index", slot)
+            mesh.polygons.foreach_set("material_index", (slot + in_map * slots).astype(np.int32))
+        area = np.empty(len(mesh.polygons))
+        mesh.polygons.foreach_get("area", area)
+        log(f"unwrap {ob.name}: {area[seen].sum():.1f} of {area.sum():.1f} m2 seen, "
+            f"maps {' + '.join(str(side) for side in sizes[ob])}")
 
     def images(obs, kind, colorspace):
+        """Each of `obs`' `kind` images, one a map."""
         out = {}
         for ob in obs:
-            # With alpha, cleared to 0: the bake writes 1 where it baked, which
-            # is the mask `fill_background` fills the rest by.
-            side = map_size(sizes[ob], kind)
-            im = bpy.data.images.new(image_name(ob, kind), side, side, alpha=True)
-            im.generated_color = (0, 0, 0, 0)
-            im.colorspace_settings.name = colorspace
-            # Drawn by this export for this object: an original, no credit owed.
-            im["generated_by"] = "tools/blender/scene_export.py"
-            out[ob] = im
+            out[ob] = []
+            for i, size in enumerate(sizes[ob]):
+                # With alpha, cleared to 0: the bake writes 1 where it baked,
+                # which is the mask `fill_background` fills the rest by.
+                side = map_size(size, kind)
+                im = bpy.data.images.new(image_name(ob, kind, i, len(sizes[ob])), side, side, alpha=True)
+                im.generated_color = (0, 0, 0, 0)
+                im.colorspace_settings.name = colorspace
+                # Drawn by this export for this object: an original, no credit owed.
+                im["generated_by"] = "tools/blender/scene_export.py"
+                out[ob].append(im)
         return out
 
     fresh = {}  # ob -> the images baked for it here, to cache
@@ -705,15 +1039,15 @@ def bake_procedural_textures(kept, cache_dir=None, paints=(), warnings=None, sta
             made = images(todo, kind, space[kind])
             nodes.update(bake(todo, made))
             for ob in todo:
-                fresh.setdefault(ob, []).append(made[ob])
+                fresh.setdefault(ob, []).extend(made[ob])
         done = [ob for ob in obs if ob in loaded]
         nodes.update(image_nodes(done, {ob: loaded[ob][kind] for ob in done}))
         return nodes
 
     if colored:
-        def moss_into(ob, im):
+        def moss_into(ob, i, im):
             if ob in by_host:
-                paint_moss(ob, im, by_host[ob])
+                paint_moss(ob, im, by_host[ob], i, len(sizes[ob]))
 
         nodes = bake_or_load(colored, "baked colour",
                              lambda obs, ims: bake_pass(obs, ims, "DIFFUSE", before_fill=moss_into, pass_filter={"COLOR"}))
@@ -754,7 +1088,7 @@ def bake_procedural_textures(kept, cache_dir=None, paints=(), warnings=None, sta
         for ob, made in fresh.items():
             # Still straight: bent below, and on every load.
             rock_bows = [[list(a), list(b), list(bow), reach] for a, b, bow, reach in bows.get(ob, ())]
-            cache.put(keys[ob], made, ob.data, ob.name, {"bows": rock_bows})
+            cache.put(keys[ob], made, ob.data, ob.name, {"bows": rock_bows, "maps": sizes[ob]})
         pruned = cache.prune()
     if bows:
         from formations import curve
@@ -765,14 +1099,15 @@ def bake_procedural_textures(kept, cache_dir=None, paints=(), warnings=None, sta
         # One flat row of 10 floats per bow (a, b, bow, reach): an ID
         # property array can't nest vectors beside a float.
         ob["scene_bows"] = [[*a, *b, *bow, reach] for a, b, bow, reach in rock_bows]
-    texels = ", ".join(f"{ob.name} {sizes[ob]}" for ob in targets if ob in sizes)
+    texels = ", ".join(f"{ob.name} {' + '.join(map(str, sizes[ob]))}" for ob in targets if ob in sizes)
     cached = (f"{len(loaded)} of {len(targets)} objects from the cache"
               + (f", {len(stale)} with stale occlusion" if stale else "") + f" ({pruned} unused entries removed)"
               if cache else "cache off")
     # scene-export.ts reads the "ships" counts: the optimiser must encode that
     # many baked maps.
-    log(f"ships {len(colored)} colour and {len(bumped)} normal maps; baked {sum(ob not in loaded for ob in colored)} "
-        f"colour, {len(to_detail)} detail and {sum(ob not in loaded for ob in bumped)} normal ({texels or 'none'}) "
+    log(f"ships {sum(len(sizes[ob]) for ob in colored)} colour and {sum(len(sizes[ob]) for ob in bumped)} normal "
+        f"maps; baked {sum(ob not in loaded for ob in colored)} colour, {len(to_detail)} detail and "
+        f"{sum(ob not in loaded for ob in bumped)} normal ({texels or 'none'}) "
         f"on {device}; {cached}; {time.time() - t0:.1f}s")
     return len(targets)
 

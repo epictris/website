@@ -65,6 +65,11 @@ import type { EnvironmentData } from "../level/levelFormat";
 import { loadedHdri, loadHdri } from "./assets";
 // Replaces three's fog chunks before any material is made (see `editorFog.ts`).
 import "./editorFog";
+// ...and its light loop, so a lamp is shaded only where it reaches
+// (`lightReach.ts`), and every built-in vertex shader's position is invariant,
+// which the scenery's depth prepass rests on (`depthPrepass.ts`).
+import "./lightReach";
+import "./depthPrepass";
 import { threeY } from "./space";
 
 // The page's own background (see index.html and LETTERBOX_COLOR): the frame's

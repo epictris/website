@@ -20,13 +20,33 @@ def camera_basis(spec):
     return np.array([right, up, toward]).T
 
 
+# Until 2026-10-16 a slab's width and length were these shares of the
+# outline's width and height, and the core's ramp (`core_depth`) 30 % of its
+# least extent: sizes that grew with the outline. A rock built then, and
+# regenerated unchanged, is still built so (`legacy_sizing`, set by the
+# formations worker), since the least change to the slabs rearranges every
+# facet.
+LEGACY_WIDTH_SHARE, LEGACY_LENGTH_SHARE = (.29, .48), (.19, .43)
+
+
+def core_ramp(p, spec):
+    """How far in from the outline the core reaches its full depth (m): 30 %
+    of the extent a slab's middle width and length were shares of (38.5 % of
+    the width, 31 % of the height), so it follows the slabs, not the outline."""
+    from params import param
+    if spec.get("legacy_sizing"):
+        return min(p.bounds[2]-p.bounds[0], p.bounds[3]-p.bounds[1])*0.30
+    width = (param(spec, "slabWidthMin") + param(spec, "slabWidthMax")) / 2 / .385
+    height = (param(spec, "slabLengthMin") + param(spec, "slabLengthMax")) / 2 / .31
+    return .30 * min(width, height)
+
+
 def core_depth(p, xy, depth, spec=None):
     from params import param
-    width = min(p.bounds[2]-p.bounds[0], p.bounds[3]-p.bounds[1])
     distance = p.boundary.distance(Point(xy))
     if distance < 1e-8:
         return 0.0
-    return depth * param(spec, "coreDepth") * min(1, distance / max(width*0.30, 1e-9))**0.36
+    return depth * param(spec, "coreDepth") * min(1, distance / max(core_ramp(p, spec), 1e-9))**0.36
 
 
 def natural_outline(p, spec):
@@ -141,7 +161,6 @@ def build_volume(spec):
     p = orient(Polygon(spec["outer"], spec["holes"]), 1)
     rng = np.random.default_rng(int(spec["seed"]))
     basis = camera_basis(spec)
-    width, height = p.bounds[2]-p.bounds[0], p.bounds[3]-p.bounds[1]
     core_polygon = natural_outline(p,spec)
     core = rounded_core(core_polygon, spec, Mesh)
     parts = [core]
@@ -158,26 +177,36 @@ def build_volume(spec):
     if not candidates:
         raise ValueError("Unable to place 3D slabs inside the silhouette")
     chosen = [candidates.pop(int(rng.integers(len(candidates))))]
+    # Farthest-point sampling gives even coverage; low jitter keeps it from
+    # becoming a regular grid. All placements remain seed-reproducible. Each
+    # candidate keeps its distance to the nearest chosen slab, so a slab costs
+    # one pass over the candidates, not one over every pair.
+    pool = np.array(candidates)
+    nearest = np.full(len(pool), np.inf)
     while len(chosen) < count:
-        # Farthest-point sampling gives even coverage; low jitter keeps it from
-        # becoming a regular grid. All placements remain seed-reproducible.
-        distances = [min(np.linalg.norm((q-v)*[1,.65]) for v in chosen) for q in candidates]
-        best = int(np.argmax(np.array(distances)*rng.uniform(.85,1.15,len(distances))))
-        chosen.append(candidates.pop(best))
+        nearest = np.minimum(nearest, np.linalg.norm((pool-chosen[-1])*[1,.65], axis=1))
+        best = int(np.argmax(nearest*rng.uniform(.85,1.15,len(nearest))))
+        chosen.append(pool[best])
+        pool = np.delete(pool, best, axis=0)
+        nearest = np.delete(nearest, best)
     from params import param
     back_every = int(param(spec, "backSlabEvery"))
-    width_share = param(spec, "slabWidthMin"), param(spec, "slabWidthMax")
+    # Slabs are sized in metres, so a rock looks the same at any size: a larger
+    # outline takes more slabs, not larger ones.
+    legacy = spec.get("legacy_sizing")
+    outline_width, outline_height = p.bounds[2]-p.bounds[0], p.bounds[3]-p.bounds[1]
+    widths = LEGACY_WIDTH_SHARE if legacy else (param(spec, "slabWidthMin"), param(spec, "slabWidthMax"))
     thickness_share = param(spec, "slabThicknessMin"), param(spec, "slabThicknessMax")
-    length_share = param(spec, "slabLengthMin"), param(spec, "slabLengthMax")
+    lengths = LEGACY_LENGTH_SHARE if legacy else (param(spec, "slabLengthMin"), param(spec, "slabLengthMax"))
     max_yaw = param(spec, "slabYaw")
     for index, xy in enumerate(chosen):
         half = core_depth(core_polygon, xy, spec["depth"], spec)
         # Some slabs live on the back, others on either side/front. Their
         # centres are inside the rounded core, ensuring overlap/connectivity.
         side = 1 if index % back_every else -1
-        plate_width = width * rng.uniform(*width_share)
+        plate_width = outline_width * rng.uniform(*widths) if legacy else rng.uniform(*widths)
         plate_thickness = spec["depth"] * rng.uniform(*thickness_share)
-        plate_length = height * rng.uniform(*length_share)
+        plate_length = outline_height * rng.uniform(*lengths) if legacy else rng.uniform(*lengths)
         # Let the slab stand proud of the core. Its inward half still overlaps
         # the mass; burying its centre deep inside would hide the side faces.
         projected_half = plate_thickness / (2 * max(abs(basis[1,2]), .4))

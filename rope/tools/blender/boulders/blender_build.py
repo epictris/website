@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import json
 import math
 from pathlib import Path
@@ -69,31 +70,48 @@ def mesh_health(obj):
     return result
 
 
+@contextmanager
+def alone(obj, collection):
+    """`obj` linked into `collection` and active, for the operators on it, and
+    out of the scene again after. Every operator call evaluates the whole
+    scene, so with every piece in it a rock of n pieces cost n^2: a 120 m^2
+    outline's 2190 pieces took most of an hour (2026-10-16)."""
+    collection.objects.link(obj)
+    bpy.context.view_layer.objects.active = obj
+    try:
+        yield obj
+    finally:
+        collection.objects.unlink(obj)
+
+
 def assemble_rock(rock, destination, source_collection, materials):
     spec = rock["spec"]
     pieces = [object_from_part(part, source_collection, materials) for part in rock["parts"]]
+    # Out of the scene until the union; `alone` links one in at a time.
+    for piece in pieces:
+        source_collection.objects.unlink(piece)
     if "clip" in rock:
         envelope = object_from_part(rock["clip"], source_collection, materials)
         for piece, part in zip(pieces, rock["parts"]):
             if not part.get("clip_to_outline"):
                 continue
-            bpy.context.view_layer.objects.active = piece
-            cut = piece.modifiers.new("Camera silhouette constraint", "BOOLEAN")
-            cut.operation = "INTERSECT"
-            cut.solver = "MANIFOLD"
-            cut.object = envelope
-            bpy.ops.object.modifier_apply(modifier=cut.name)
-            if part.get('chunk_bevel') and len(piece.data.polygons):
-                bevel=piece.modifiers.new('Broad broken chunk corners','BEVEL')
-                # Not reduced for game_low_poly: this runs before the union,
-                # remesh and decimation, so it costs no final triangles, and a
-                # single-segment chamfer this wide cuts outline corners by
-                # more than the tolerance.
-                bevel.width=part['chunk_bevel']; bevel.segments=int(param(spec,'chunkBevelSegments')) if spec.get('soften_thin_edges') else 1
-                bevel.limit_method='ANGLE'; bevel.angle_limit=math.radians(param(spec,'chunkBevelAngle'))
-                bpy.ops.object.modifier_apply(modifier=bevel.name)
-                for face in piece.data.polygons:
-                    face.material_index=part['material']
+            with alone(piece, source_collection):
+                cut = piece.modifiers.new("Camera silhouette constraint", "BOOLEAN")
+                cut.operation = "INTERSECT"
+                cut.solver = "MANIFOLD"
+                cut.object = envelope
+                bpy.ops.object.modifier_apply(modifier=cut.name)
+                if part.get('chunk_bevel') and len(piece.data.polygons):
+                    bevel=piece.modifiers.new('Broad broken chunk corners','BEVEL')
+                    # Not reduced for game_low_poly: this runs before the union,
+                    # remesh and decimation, so it costs no final triangles, and a
+                    # single-segment chamfer this wide cuts outline corners by
+                    # more than the tolerance.
+                    bevel.width=part['chunk_bevel']; bevel.segments=int(param(spec,'chunkBevelSegments')) if spec.get('soften_thin_edges') else 1
+                    bevel.limit_method='ANGLE'; bevel.angle_limit=math.radians(param(spec,'chunkBevelAngle'))
+                    bpy.ops.object.modifier_apply(modifier=bevel.name)
+                    for face in piece.data.polygons:
+                        face.material_index=part['material']
         bpy.data.objects.remove(envelope, do_unlink=True)
     if spec.get('hybrid_faces'):
         from hybrid_geometry import taper_chunk
@@ -105,10 +123,10 @@ def assemble_rock(rock, destination, source_collection, materials):
         # Constrain any oblique displaced corners before unioning the chunks.
         guard=object_from_part(rock['clip'],source_collection,materials)
         for piece in pieces:
-            bpy.context.view_layer.objects.active=piece
-            cut=piece.modifiers.new('Keep tilted chunk inside playable envelope','BOOLEAN')
-            cut.operation='INTERSECT'; cut.solver='MANIFOLD'; cut.object=guard
-            bpy.ops.object.modifier_apply(modifier=cut.name)
+            with alone(piece, source_collection):
+                cut=piece.modifiers.new('Keep tilted chunk inside playable envelope','BOOLEAN')
+                cut.operation='INTERSECT'; cut.solver='MANIFOLD'; cut.object=guard
+                bpy.ops.object.modifier_apply(modifier=cut.name)
             if spec.get('game_low_poly') and piece.name.startswith('fracture_chunk_'):
                 clip_pointed_game_chunk_tips(piece,spec)
         bpy.data.objects.remove(guard,do_unlink=True)
@@ -126,6 +144,8 @@ def assemble_rock(rock, destination, source_collection, materials):
                 bmesh.ops.recalc_face_normals(bm,faces=list(bm.faces))
                 bm.to_mesh(piece.data); bm.free()
 
+    for piece in pieces:
+        source_collection.objects.link(piece)
     core = pieces[0]
     result = core.copy()
     result.data = core.data.copy()
@@ -210,13 +230,17 @@ def assemble_rock(rock, destination, source_collection, materials):
     if spec.get('game_low_poly'):
         # Keep broad face placement and the validated gameplay outline, but
         # budget far fewer triangles before the final edge treatment. The
-        # budget (faceBudget, 3,000 faces) was tuned on outlines of about
-        # 8.5 m perimeter; the outline tolerance is absolute, so a longer
-        # outline needs proportionally more faces or its facets cut inside
-        # the silhouette.
-        rings=[spec['outer'],*spec.get('holes',[])]
-        perimeter=sum(math.dist(ring[i],ring[(i+1)%len(ring)]) for ring in rings for i in range(len(ring)))
-        budget=param(spec,'faceBudget')*max(1.0,perimeter/8.5)
+        # budget is faces per FACE_BUDGET_AREA of rock surface, so a facet is
+        # the same size on any rock. It was per 8.5 m of outline perimeter,
+        # which spread the faces thin over a broad outline's faces.
+        bm=bmesh.new(); bm.from_mesh(result.data)
+        surface=sum(f.calc_area() for f in bm.faces); bm.free()
+        budget=param(spec,'faceBudget')*surface/FACE_BUDGET_AREA
+        if spec.get('legacy_sizing'):
+            # Per 8.5 m of outline perimeter, as the rock was first built.
+            rings=[spec['outer'],*spec.get('holes',[])]
+            perimeter=sum(math.dist(ring[i],ring[(i+1)%len(ring)]) for ring in rings for i in range(len(ring)))
+            budget=param(spec,'faceBudget')*max(1.0,perimeter/8.5)
         dec.ratio=min(1.0, budget/max(1,len(result.data.polygons)))
     elif spec.get('balanced_hybrid'):
         # Preserve the broad faces and two-segment rock bevel, while budgeting
@@ -257,14 +281,13 @@ def assemble_rock(rock, destination, source_collection, materials):
                    .020 if spec.get('soften_thin_edges') else .012)
     bevel.segments = (int(param(spec,'edgeBevelSegments')) if spec.get('game_low_poly') else
                       2 if spec.get('soften_thin_edges') else 1)
-    bevel.limit_method = "ANGLE"
-    bevel.angle_limit = math.radians(param(spec,'edgeBevelAngle') if spec.get('game_low_poly') else 27)
     # Paint only the actual bevel bands. Mesh Pointiness is unstable after
     # remeshing and decimation and draws highlights across triangle junctions.
     bevel.material = len(result.data.materials) - 1
-    if spec.get('join_undercuts'):
+    if spec.get('join_undercuts') or bevel.width <= 0:
         result.modifiers.remove(bevel)
     else:
+        limit_edge_bevel(result, bevel, math.radians(param(spec,'edgeBevelAngle') if spec.get('game_low_poly') else 27))
         bpy.ops.object.modifier_apply(modifier=bevel.name)
     tri = result.modifiers.new("Export triangles", "TRIANGULATE")
     bpy.ops.object.modifier_apply(modifier=tri.name)
@@ -304,6 +327,116 @@ def assemble_rock(rock, destination, source_collection, materials):
     result["generator"] = "Polygon Rock / rockgen.py"
     result.select_set(False)
     return result
+
+
+# Rock surface (m^2) that faceBudget's faces cover: Terrace.003 (35.5 m^2 when
+# it is decimated) kept 3559 faces under the old perimeter rule, about this.
+FACE_BUDGET_AREA = 30.0
+
+# An edge left less room than a tenth of the width, or than this, gets no strip:
+# assemble.py collapses anything under 0.01 mm, and collapsing a rock's worth of
+# such slivers folded its mesh. (A strip far under a pixel still shows: it draws
+# a fine highlight along its crease.)
+EDGE_BEVEL_FLOOR = .00005
+
+
+def limit_edge_bevel(obj, bevel, angle):
+    """Give each edge sharper than `angle` a bevel width of its own, as its
+    bevel weight (the modifier's width times it), and keep the bevel from
+    adding stone.
+
+    Blender's Clamp Overlap is global: the tightest spot on the mesh sets every
+    edge's width, which on a decimated rock is microns (Terrace.003, 2026-10-16:
+    0.08 mm for 18 mm asked), and dissolving those slivers folded a large rock's
+    mesh. Instead each edge is held to half the height of each face beside it,
+    and to under half of each edge of those faces that its bevel slides along.
+
+    Blender still slides a strip's end along a shallow neighbour elsewhere in
+    the corner, sometimes by decimetres, so the bevel is evaluated and the edges
+    whose strips carry a vertex out past the surface are halved until none does.
+    """
+    from mathutils.bvhtree import BVHTree
+    from mathutils.geometry import intersect_point_line
+    from mathutils.kdtree import KDTree
+
+    me = obj.data
+    bm = bmesh.new()
+    bm.from_mesh(me)
+    bm.normal_update()
+    layer = bm.edges.layers.float.get('bevel_weight_edge') or bm.edges.layers.float.new('bevel_weight_edge')
+    floor = max(.1, EDGE_BEVEL_FLOOR / bevel.width)
+
+    def slide(e, v, o):
+        a = (e.other_vert(v).co - v.co).normalized()
+        b = (o.other_vert(v).co - v.co).normalized()
+        return .45 * o.calc_length() * max(a.cross(b).length, 1e-6)
+
+    for e in bm.edges:
+        e[layer] = 0.0
+        if not e.is_manifold or e.calc_face_angle(0) <= angle:
+            continue
+        a, b = (v.co for v in e.verts)
+        axis = (b - a).normalized()
+        room = min(.5 * min(((v.co - a) - axis * (v.co - a).dot(axis)).length for v in f.verts if v not in e.verts)
+                   for f in e.link_faces)
+        room = min([room] + [slide(e, v, o) for f in e.link_faces for v in e.verts for o in v.link_edges
+                             if o is not e and o in f.edges])
+        w = min(1.0, room / bevel.width)
+        e[layer] = w if w >= floor else 0.0
+    bm.to_mesh(me)
+    bm.free()
+    bevel.limit_method = 'WEIGHT'
+    bevel.use_clamp_overlap = False
+
+    surface = BVHTree.FromPolygons([v.co.copy() for v in me.vertices], [p.vertices[:] for p in me.polygons])
+    weights = me.attributes['bevel_weight_edge'].data
+    ends = {e.index: (me.vertices[e.vertices[0]].co.copy(), me.vertices[e.vertices[1]].co.copy()) for e in me.edges
+            if weights[e.index].value > 0}
+    if not ends:
+        return
+    reach = max((a - b).length for a, b in ends.values()) / 2 + .03
+    middles = KDTree(len(ends))
+    for i, (a, b) in ends.items():
+        middles.insert((a + b) / 2, i)
+    middles.balance()
+    for attempt in range(12):
+        evaluated = obj.evaluated_get(bpy.context.evaluated_depsgraph_get())
+        out = bmesh.new()
+        out.from_mesh(evaluated.to_mesh())
+        evaluated.to_mesh_clear()
+        thrown = []
+        for v in out.verts:
+            loc, normal, _, distance = surface.find_nearest(v.co)
+            if loc is not None and distance > bevel.width / 4 and (v.co - loc).dot(normal) > 0:
+                thrown.append(v)
+        culprits = set()
+        for v in thrown:
+            # The strip faces carrying it lie along the edges that made them.
+            strip, stack = set(), [f for f in v.link_faces if f.material_index == bevel.material]
+            while stack and len(strip) < 64:
+                f = stack.pop()
+                if f not in strip:
+                    strip.add(f)
+                    stack += [g for edge in f.edges for g in edge.link_faces if g.material_index == bevel.material]
+            for f in strip:
+                centre = f.calc_center_median()
+                for _, i, _ in middles.find_range(centre, reach):
+                    if i in culprits or weights[i].value <= 0:
+                        continue
+                    point, t = intersect_point_line(centre, *ends[i])
+                    if 0 <= t <= 1 and (point - centre).length < .03:
+                        culprits.add(i)
+        out.free()
+        if not thrown:
+            break
+        print(f"Edge bevel: {len(thrown)} vertices thrown out past the surface; narrowing {len(culprits)} edges",
+              flush=True)
+        if not culprits:
+            break
+        for i in culprits:
+            w = weights[i].value * .5
+            weights[i].value = w if w >= floor else 0.0
+        me.update()
 
 
 def keep_main_body(obj):

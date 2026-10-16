@@ -28,7 +28,7 @@ def build_hybrid(spec):
     # clipping wall while keeping original corners and the gameplay fit budget.
     from shapely import Polygon
     from shapely.geometry.polygon import orient
-    from rockgen import prism
+    from rockgen import ENVELOPE,prism
     import numpy as np
     p=orient(Polygon(spec['outer'],spec['holes']),1)
     rng=np.random.default_rng(spec['seed']+520)
@@ -44,7 +44,7 @@ def build_hybrid(spec):
         rings.append(points)
     varied=Polygon(rings[0],rings[1:])
     if varied.is_valid and varied.boundary.hausdorff_distance(p.boundary)<spec['tolerance']*.65:
-        body['clip']=prism(varied,-depth*1.3,depth*1.3,'varied_polygon_envelope',0)
+        body['clip']=prism(varied,-depth*ENVELOPE,depth*ENVELOPE,'varied_polygon_envelope',0)
     return body
 
 

@@ -1,5 +1,7 @@
 // The ball & chain avatar in 3D: a cast-iron sphere and the steel loop the chain
-// deploys through.
+// deploys through - or, on Hard, a solid glass ball and a glass loop (see
+// `buildGlass` and docs/glass-ball.md), which is all the rest of this header is
+// not about.
 //
 // Since the model landed (`BALL_MESH`) both of those are one MODELLED
 // assembly - a hammered iron ball with a thin forged loop at its pole - and
@@ -30,6 +32,7 @@ import { BallPlayer } from "../classes/ballPlayer";
 import { BALL_MESH, BALL_MESH_RADIUS, IRON_SURFACE, loadMesh, surfaceFor } from "./assets";
 import { standardMaterialsOf, wearAvatar } from "./avatarSurface";
 import { setProbe, wearProbe } from "./reflectionProbe";
+import { glassBallStyle, glassMaterial, solidGlassMaterial } from "./glassMaterial";
 import { orientTo, placeAt, threeY } from "./space";
 
 // How much thicker than the collision radius the mounting loop's ring is drawn.
@@ -164,6 +167,13 @@ function shine(obj: THREE.Object3D): void {
 export class BallVisual {
   readonly root = new THREE.Group();
   private readonly owned: THREE.BufferGeometry[] = [];
+  // Whether this was built as the glass ball. The ball's kind may be set after
+  // the level is built (`BallLevel.setBallKind`, the menu's pick), and the
+  // scene rebuilds the visual when the two disagree.
+  readonly glass: boolean;
+  // Materials this visual made for itself and must free: the glass ball's
+  // (the iron ones are cached and shared, see `forgedMetal`).
+  private readonly ownedMaterials: THREE.Material[] = [];
   // The primitives standing in until the model lands, as one group so the swap
   // is a remove rather than a search. Null once it has happened.
   private stand: THREE.Group | null = new THREE.Group();
@@ -174,7 +184,18 @@ export class BallVisual {
   private modelMaterials: THREE.MeshStandardMaterial[] = [];
   private reflection: THREE.CubeTexture | null = null;
 
-  constructor(private readonly ball: BallPlayer) {
+  constructor(
+    // The ball this draws, which the scene compares against the level's to
+    // follow a respawn (see `Scene3D.render`).
+    readonly ball: BallPlayer,
+    // The glass ball's baked surface wear (see glassWear.ts), when it is glass.
+    private readonly wear: THREE.CubeTexture | null = null,
+  ) {
+    this.glass = ball.glass;
+    if (ball.glass) {
+      this.buildGlass();
+      return;
+    }
     const stand = this.stand as THREE.Group;
     const sphere = new THREE.SphereGeometry(ball.radius, 32, 24);
     this.owned.push(sphere);
@@ -216,6 +237,48 @@ export class BallVisual {
     });
   }
 
+  // THE GLASS BALL (Hard, `BallPlayer.glass`): a solid sphere of clear glass -
+  // a crystal ball, which shows the room behind it upside down - and a glass
+  // loop, in place of the iron model, which is never loaded (see
+  // glassMaterial.ts for what the glass is and how it is drawn). Built rather
+  // than modelled: a smooth sphere is the one shape a primitive draws
+  // perfectly, and there is nothing hammered about glass.
+  //
+  // The sphere is the collider's silhouette, as the iron ball's is, and finely
+  // tessellated: the lens is traced off its normals, and a faceted sphere
+  // refracts as a cut gem. It casts no shadow (see glassMaterial.ts).
+  //
+  // Solid since Tris's word on 2026-10-16 (the hollow shell "looks like a blue
+  // bubble" and was lost against the cave); `?glass=hollow` draws the shell
+  // again while the two are compared.
+  private buildGlass(): void {
+    const solid = glassBallStyle.value === "solid";
+    const glass = solid ? solidGlassMaterial(this.ball.radius, this.wear) : glassMaterial(true);
+    const sphere = new THREE.SphereGeometry(this.ball.radius, 96, 64);
+    this.owned.push(sphere);
+    const body = new THREE.Mesh(sphere, glass);
+    body.name = "glass-ball";
+    // Casts nothing (see glassMaterial.ts), but RECEIVES: a light's shadow is
+    // what tells the lens whether it can see that light (`lensLightsChunk`).
+    body.receiveShadow = true;
+    // After the scene's opaque work and its water, as glass in front of it.
+    body.renderOrder = 1;
+    this.root.add(body);
+    // The loop in glass too, where the iron one is (see the constructor): a
+    // bar of its tube's radius, seeing the room through the same probe.
+    const torus = new THREE.TorusGeometry(BallPlayer.LOOP_RADIUS, LOOP_TUBE, 16, 32);
+    this.owned.push(torus);
+    const ring = solid ? solidGlassMaterial(LOOP_TUBE) : glassMaterial();
+    const loop = new THREE.Mesh(torus, ring);
+    loop.position.set(0, threeY(-(this.ball.radius + BallPlayer.LOOP_GAP)), 0);
+    loop.renderOrder = 1;
+    loop.receiveShadow = true;
+    this.root.add(loop);
+    this.modelMaterials = solid ? [glass, ring] : [glass];
+    this.ownedMaterials.push(glass, ring);
+    this.stand = null;
+  }
+
   // Wear `texture` as the model's reflection in place of the scene's sky, or
   // the sky again with null. The probe hands back the same texture every
   // frame, so this recompiles nothing past the first call.
@@ -225,6 +288,9 @@ export class BallVisual {
   }
 
   sync(alpha: number): void {
+    // A broken glass ball is its shards now (see glassShards.ts), and nothing
+    // of the ball is left standing where it broke.
+    this.root.visible = !this.ball.shattered;
     placeAt(this.root, this.ball.renderPosition(alpha));
     orientTo(this.root, this.ball.renderRotation(alpha));
   }
@@ -235,6 +301,8 @@ export class BallVisual {
     this.reflection = null;
     for (const g of this.owned) g.dispose();
     this.owned.length = 0;
+    for (const m of this.ownedMaterials) m.dispose();
+    this.ownedMaterials.length = 0;
     this.stand = null;
     this.root.clear();
   }

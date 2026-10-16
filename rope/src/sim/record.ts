@@ -43,6 +43,7 @@ export function recordScript(script: PlaytestScript, stamp?: RecordStamp): Recor
       // against nothing.
       data: spec.data,
       controller: spec.controller === "ball" ? "ball" : "grapple",
+      ...(script.ball === "glass" ? { ball: "glass" as const } : {}),
       frames: result.serializedFrames,
       digests: result.digests,
       worldDigests: result.worldDigests,

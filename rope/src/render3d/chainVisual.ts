@@ -27,6 +27,8 @@ import { CHAIN_LINK_LEN, CHAIN_LINK_W, walkChain } from "../render/chainMetrics"
 import type { ChainRetract } from "../render/chainRetract";
 import { MANACLE_BAND, MANACLE_HINGE, MANACLE_RADIUS, MANACLE_REACH, MANACLE_WIDTH } from "../lib/manacle";
 import { FORGED_SMALL, forgedMetal } from "./ballVisual";
+import { glassBallStyle, glassMaterial, solidGlassMaterial } from "./glassMaterial";
+import { setProbe } from "./reflectionProbe";
 import { threeY } from "./space";
 import type { Scene3DLevel } from "./scene";
 
@@ -51,16 +53,111 @@ const DEFAULT_CHAIN_COLOR = new THREE.Color(1, 1, 1);
 // buffer grows if a level ever needs more.
 const INITIAL_LINKS = 1024;
 
-export class ChainLayer {
-  private mesh: THREE.InstancedMesh;
+// The two link meshes' names: the level's own chains, and the ball's.
+export const SCENE_CHAIN_MESH = "scene-chain-links";
+export const AVATAR_CHAIN_MESH = "avatar-chain-links";
+
+// One instanced mesh of links and the count laid into it this frame, grown
+// when a frame lays more than it holds.
+class LinkBuffer {
+  mesh: THREE.InstancedMesh;
   private capacity = INITIAL_LINKS;
-  private count = 0;
-  // How many of this frame's links are the level's own chains: they are laid
-  // first, so everything past this index is the avatar's (see `withoutAvatar`).
-  private sceneLinks = 0;
+  count = 0;
+
+  constructor(
+    private readonly scene: THREE.Scene,
+    // What the mesh is called, which is how a case finds it (`rootCases`).
+    private readonly name: string,
+    private readonly geometry: THREE.BufferGeometry,
+    private material: THREE.Material,
+    // Whether the links cast shadows: iron does, glass does not (see
+    // glassMaterial.ts).
+    private shadows: boolean,
+  ) {
+    this.mesh = this.makeMesh(this.capacity);
+    scene.add(this.mesh);
+  }
+
+  private makeMesh(capacity: number): THREE.InstancedMesh {
+    const mesh = new THREE.InstancedMesh(this.geometry, this.material, capacity);
+    mesh.name = this.name;
+    mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    mesh.castShadow = this.shadows;
+    mesh.receiveShadow = true;
+    // The count is set per frame; three culls by the mesh's own bounds, which
+    // for a chain that moves across the whole level is never a useful test.
+    mesh.frustumCulled = false;
+    mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(capacity * 3), 3);
+    return mesh;
+  }
+
+  // Wear `material` from now on (the avatar's chain, iron or glass). Glass
+  // casts no shadow but receives them: that is how its lens knows which
+  // lights it can see (see glassMaterial.ts).
+  setMaterial(material: THREE.Material, casts: boolean): void {
+    this.material = material;
+    this.shadows = casts;
+    this.mesh.material = material;
+    this.mesh.castShadow = casts;
+    this.mesh.receiveShadow = true;
+  }
+
+  // Write link `i`, if it fits: a frame that lays more than the buffer holds
+  // truncates for that frame and grows for the next (see `finish`), rather
+  // than throwing away every matrix already written into it this frame.
+  set(i: number, m: THREE.Matrix4, tint: THREE.Color): void {
+    if (i >= this.capacity) return;
+    this.mesh.setMatrixAt(i, m);
+    this.mesh.instanceColor?.setXYZ(i, tint.r, tint.g, tint.b);
+  }
+
+  finish(): void {
+    if (this.count > this.capacity) {
+      let capacity = this.capacity;
+      while (capacity < this.count) capacity *= 2;
+      this.scene.remove(this.mesh);
+      this.mesh.dispose();
+      this.capacity = capacity;
+      this.mesh = this.makeMesh(capacity);
+      this.scene.add(this.mesh);
+    }
+    this.mesh.count = Math.min(this.count, this.capacity);
+    this.mesh.instanceMatrix.needsUpdate = true;
+    if (this.mesh.instanceColor) this.mesh.instanceColor.needsUpdate = true;
+    // Measured afresh: depth of field asks whether a see-through mesh reaches
+    // the plane by its bounds (depthOfField.ts `reachesFocus`), and an
+    // instanced mesh's are of wherever its links were the first time it asked.
+    this.mesh.boundingSphere = null;
+  }
+
+  clear(): void {
+    this.count = 0;
+    this.mesh.count = 0;
+  }
+
+  dispose(): void {
+    this.scene.remove(this.mesh);
+    this.mesh.dispose();
+  }
+}
+
+export class ChainLayer {
+  // The level's own chains, and the avatar's: two meshes, because the avatar's
+  // may be glass (`BallPlayer.glass`) while the level's are always iron.
+  private readonly sceneLinks: LinkBuffer;
+  private readonly avatarLinks: LinkBuffer;
+  // Which buffer `lay` writes into.
+  private target: LinkBuffer;
   private readonly geometry: THREE.BufferGeometry;
   private readonly manacle: THREE.Group;
+  private readonly manacleMesh: THREE.Mesh;
   private readonly manacleGeometry: THREE.BufferGeometry[] = [];
+  private readonly ironManacle: THREE.Material;
+  // The avatar's chain in glass, made the first time a glass ball is drawn and
+  // kept for the page (one link material, one cuff material).
+  private glassLinks: THREE.MeshPhysicalMaterial | null = null;
+  private glassManacle: THREE.MeshPhysicalMaterial | null = null;
+  private glass = false;
   // Scratch, reused every frame: a chain sync must not allocate.
   private readonly m = new THREE.Matrix4();
   private readonly q = new THREE.Quaternion();
@@ -84,34 +181,38 @@ export class ChainLayer {
     const torus = new THREE.TorusGeometry(LINK_HALF_LEN, LINK_TUBE, 10, 20);
     torus.scale(1, CHAIN_LINK_W / LINK_HALF_LEN, 1);
     this.geometry = torus;
-    this.mesh = this.makeMesh(this.capacity);
-    scene.add(this.mesh);
+    this.sceneLinks = new LinkBuffer(scene, SCENE_CHAIN_MESH, torus, forgedMetal(FORGED_SMALL), true);
+    this.avatarLinks = new LinkBuffer(scene, AVATAR_CHAIN_MESH, torus, forgedMetal(FORGED_SMALL), true);
+    this.target = this.sceneLinks;
 
     this.manacle = buildManacle(this.manacleGeometry);
+    this.manacleMesh = this.manacle.children[0] as THREE.Mesh;
+    this.ironManacle = this.manacleMesh.material as THREE.Material;
     this.manacle.visible = false;
     scene.add(this.manacle);
   }
 
-  private makeMesh(capacity: number): THREE.InstancedMesh {
-    const mesh = new THREE.InstancedMesh(this.geometry, forgedMetal(FORGED_SMALL), capacity);
-    mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-    mesh.castShadow = true;
-    mesh.receiveShadow = true;
-    // The count is set per frame; three culls by the mesh's own bounds, which
-    // for a chain that moves across the whole level is never a useful test.
-    mesh.frustumCulled = false;
-    mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(capacity * 3), 3);
-    return mesh;
-  }
-
-  private grow(needed: number): void {
-    let capacity = this.capacity;
-    while (capacity < needed) capacity *= 2;
-    this.scene.remove(this.mesh);
-    this.mesh.dispose();
-    this.capacity = capacity;
-    this.mesh = this.makeMesh(capacity);
-    this.scene.add(this.mesh);
+  // Draw the avatar's chain and cuff in glass (the glass ball's, see
+  // `BallPlayer.glass`) or in iron. The level's own chains are iron either way.
+  private setGlass(glass: boolean): void {
+    if (glass === this.glass) return;
+    this.glass = glass;
+    if (glass) {
+      // Solid glass like the ball (see `solidGlassMaterial`): each link a bar
+      // of its tube's radius, the cuff a strap of half its band. The hollow
+      // shell's walls are the comparison `?glass=hollow` still draws.
+      const solid = glassBallStyle.value === "solid";
+      this.glassLinks ??= solid ? solidGlassMaterial(LINK_TUBE) : glassMaterial();
+      this.glassManacle ??= solid ? solidGlassMaterial(MANACLE_BAND / 2) : glassMaterial();
+    }
+    this.avatarLinks.setMaterial(glass ? this.glassLinks! : forgedMetal(FORGED_SMALL), !glass);
+    this.manacleMesh.material = glass ? this.glassManacle! : this.ironManacle;
+    this.manacleMesh.castShadow = !glass;
+    // The glass cuff's lens reads its lights' shadows (see `setMaterial`).
+    this.manacleMesh.receiveShadow = glass;
+    // Glass is drawn over what is behind it, after the opaque scene.
+    this.avatarLinks.mesh.renderOrder = glass ? 1 : 0;
+    this.manacleMesh.renderOrder = glass ? 1 : 0;
   }
 
   // Every chain on the level, laid this frame. `retract` is the released chain
@@ -125,9 +226,12 @@ export class ChainLayer {
     retract: ChainRetract | null = null,
     depthOf: (body: CollisionObject2D) => number = () => 0,
   ): void {
-    this.count = 0;
+    this.sceneLinks.count = 0;
+    this.avatarLinks.count = 0;
     this.manacle.visible = false;
+    this.setGlass(level.ball?.glass === true);
 
+    this.target = this.sceneLinks;
     for (const chain of level.sceneChains) {
       const spans = chain.rope.getSpans();
       if (!spans.length) continue;
@@ -145,8 +249,8 @@ export class ChainLayer {
       this.tint.set(chain.color ?? DEFAULT_CHAIN_COLOR);
       this.lay(this.path);
     }
-    this.sceneLinks = this.count;
 
+    this.target = this.avatarLinks;
     const ball = level.ball;
     const chain = ball?.chain;
     if (ball && chain) {
@@ -205,12 +309,9 @@ export class ChainLayer {
     }
 
     // A chain longer than the buffer truncates for one frame and the buffer is
-    // resized for the next, rather than being resized mid-walk - which would
-    // throw away every matrix already written into it this frame.
-    if (this.count > this.capacity) this.grow(this.count);
-    this.mesh.count = Math.min(this.count, this.capacity);
-    this.mesh.instanceMatrix.needsUpdate = true;
-    if (this.mesh.instanceColor) this.mesh.instanceColor.needsUpdate = true;
+    // resized for the next (see `LinkBuffer.finish`).
+    this.sceneLinks.finish();
+    this.avatarLinks.finish();
   }
 
   // `toAnchor`: the ball's chain bitten into set-back scenery, laid from its
@@ -222,8 +323,7 @@ export class ChainLayer {
     const slope = toAnchor ? -this.anchorDepth / this.anchorReach : 0;
     const lean = Math.atan(slope);
     walkChain(points, ({ mid, dir, broad, index }) => {
-      const i = this.count++;
-      if (i >= this.capacity) return; // grown on the next frame; see below
+      const i = this.target.count++;
       // Turn the link's +x onto the tangent (in three's frame), then twist every
       // other link about that tangent.
       const angle = Math.atan2(threeY(dir.y), dir.x);
@@ -247,8 +347,7 @@ export class ChainLayer {
       this.q.multiply(this.spin);
       this.pos.set(mid.x, threeY(mid.y), z);
       this.m.compose(this.pos, this.q, this.scl);
-      this.mesh.setMatrixAt(i, this.m);
-      this.mesh.instanceColor?.setXYZ(i, this.tint.r, this.tint.g, this.tint.b);
+      this.target.set(i, this.m, this.tint);
     });
   }
 
@@ -268,33 +367,43 @@ export class ChainLayer {
     this.manacle.visible = true;
   }
 
+  // What the glass chain sees through itself and reflects: the ball's probe
+  // (see glassMaterial.ts `solidGlassMaterial`), or the room's sky with null.
+  // The iron chain does not wear the probe and ignores this.
+  setReflection(texture: THREE.CubeTexture | null): void {
+    if (this.glassLinks) setProbe(this.glassLinks, texture);
+    if (this.glassManacle) setProbe(this.glassManacle, texture);
+  }
+
   // Run `draw` with only the level's own chains showing - the ball's chain, a
   // reeling one and the manacle hidden - and put them back. The ball's
   // reflection probe draws through this (see reflectionProbe.ts).
   withoutAvatar(draw: () => void): void {
-    const count = this.mesh.count;
+    const links = this.avatarLinks.mesh.visible;
     const manacle = this.manacle.visible;
-    this.mesh.count = Math.min(this.sceneLinks, count);
+    this.avatarLinks.mesh.visible = false;
     this.manacle.visible = false;
     try {
       draw();
     } finally {
-      this.mesh.count = count;
+      this.avatarLinks.mesh.visible = links;
       this.manacle.visible = manacle;
     }
   }
 
   clear(): void {
-    this.count = 0;
-    this.sceneLinks = 0;
-    this.mesh.count = 0;
+    this.sceneLinks.clear();
+    this.avatarLinks.clear();
     this.manacle.visible = false;
   }
 
   dispose(): void {
-    this.scene.remove(this.mesh, this.manacle);
-    this.mesh.dispose();
+    this.scene.remove(this.manacle);
+    this.sceneLinks.dispose();
+    this.avatarLinks.dispose();
     this.geometry.dispose();
+    this.glassLinks?.dispose();
+    this.glassManacle?.dispose();
     for (const g of this.manacleGeometry) g.dispose();
     this.manacleGeometry.length = 0;
   }

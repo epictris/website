@@ -1,7 +1,7 @@
 # Levels, the finish line, and finishing one
 
 The game is a set of levels rather than one arena.
-`/` is the **level select**; `?level=ID` plays one.
+`/` is the **difficulty select** - Normal or Hard, on the introduction, offered once it has loaded; `?level=ID` plays one level (`&ball=glass` for Hard).
 Every listed level ends at a **finish line**, and touching it completes the level.
 
 ## What a level says about itself
@@ -110,27 +110,34 @@ A reason has to land on `EndReason` (`playtest/protocol.ts`) and on `END_REASONS
 In the editor's ▶ Test a crossing raises a toast and the test carries on.
 A test is an authoring instrument - what is being judged there is where the line is and whether the run arrives at it - and one that froze and asked for a rating would be answering a question nobody in the editor is asking.
 
-## The level select
+## The difficulty select
 
 `/` with no `?level=` and no `?replay=` is the menu, and a `?level=` nobody has is the menu with a line saying so - rather than silently playing something else, which is a mistyped or stale link nobody can debug.
 
-**The menu page never loads the app.** It is markup in `index.html` painted by `render3d/store.ts`, which is compiled on its own and inlined ahead of the module graph (see [loading-screen](loading-screen.md)), and `index.html`'s module tag imports `main.ts` only when the store says there is something to play (`window.__ropePlay`).
-A bare `/` must not download a megabyte of three.js and the whole level graph to show a list of six words.
-That is also why the titles and the listing ride in the preload manifest (`t` and `k` per level) rather than being read out of `registry.ts`: the manifest is markup that already ships on every page.
+**The menu offers difficulties, not levels** (Tris, 2026-10-16): **Normal** and **Hard**, both of which open the introduction - with the iron ball and with the glass one, which breaks on anything solid (see [glass-ball](glass-ball.md)).
+A difficulty is a ball, not a level, so it is a second half of the URL rather than a different `?level=`: `/?level=BALL` is Normal and `/?level=BALL&ball=glass` is Hard (`render/difficulty.ts`).
+The other listed levels are reached from there, by the completion panel's Next Level, at the difficulty chosen; every level is still reachable by its URL.
 
-Every row is an `<a href="/?level=ID">`, so middle-click, a bookmark and a screen reader all work, and a row opened any of those ways is an ordinary navigation to the level's own page.
+**The menu comes AFTER the loading, not before it** (Tris: "the pre-loading should happen before the difficulty selection ... load both ball models then just use whichever the user selects").
+A bare `/` boots the app behind the loading bar like any level page: the store fetches the introduction's assets (`window.__ropeChoose`, `introOf` in `render3d/store.ts`), and `main.ts` builds, warms and prewarms the level with the ball it booted with and then with the other one too (`chooseDifficulty`), so whichever is picked meets nothing it has not already compiled or uploaded.
+Only then does the loading screen come off and the menu go up, painted by the store through `window.__ropeMenu`.
+Picking starts the run at once, and **builds nothing**: the level already built, warmed and on the GPU is the one played, its ball made iron or glass in place (`BallLevel.setBallKind`, exact before the first frame - `glass-kind-swap` steps it against a level built glass).
+Rebuilding on the pick threw the prewarmed scene away and re-uploaded all of it: a 684-808 ms first frame, measured in Chrome; in place it is 4-5 ms.
+Until 2026-10-16 it was a level select painted BEFORE the app was loaded, so that a list of six words did not cost a megabyte of three.js; with the level loading behind it there is nothing left to save.
+
+Every row is an `<a href="/?level=ID&ball=...">`, so middle-click, a bookmark and a screen reader all work, and a row opened any of those ways is an ordinary page at that level and ball.
 Arrows move and Enter opens, which the anchors give for free once one of them has the focus; the first row takes it.
 
-**A plain press on a row does not navigate.** It takes fullscreen and the pointer lock - the two things a browser grants to a gesture and to nothing else - pushes the level's URL, and boots the app into *this* document (`startOnClick` in `render3d/store.ts`, `window.__ropeBoot` from `index.html`'s module tag).
+**A plain press on a row does not navigate.** It takes fullscreen and the pointer lock - the two things a browser grants to a gesture and to nothing else - pushes the row's URL, and hands the ball it picked to the app waiting in this document (`startOnClick` in `render3d/store.ts`, `window.__ropePick`), which builds the level with that ball and opens the recorder's session.
 The reason is measured rather than assumed: **neither grant survives a navigation.** A fullscreen taken on this page is gone by the time the next document loads (chromium 142: `document.fullscreenElement` null and `(display-mode: fullscreen)` false on the page the press opened), and a pointer lock never survives one at all.
 A press that took both and then threw them away is worse than one that never asked - the window flickers into fullscreen and straight back out - and the alternative is the game interrupting itself to ask again on the first click of a run.
 So the press that commits to playing is the press that is spent on them, and the run opens fullscreen with the virtual cursor live (see [**Starting a run**](running.md#starting-a-run)).
 
-**One page load is still one session and one level**, which is what the navigation was protecting: the URL is pushed before the app is imported, so `main.ts` reads which level to play out of `location` exactly as it does on a page loaded at it, the recorder's `SessionMeta` is fixed for the one level that is played in the page, and the checkpoint and the level hash are still resolved once.
-Back returns to the menu by reloading it, since the app owns the document by then.
+**One page load is still one session, one level and one ball**: the session opens at the pick, with the ball it picked in its `SessionMeta`, and the checkpoint and the level hash are resolved once.
+Back returns to the menu by reloading it.
 A row opened in a new tab, or a level reached by its URL, loads the app the way it always did and takes the screen on the first click in the level instead.
 
-Per-level marks - completed, and the last rating as five glyphs - come from `rope.progress` in `localStorage` (`render/progress.ts`), never from the server.
+Per-difficulty marks - completed, and the last rating as five glyphs - come from `rope.progress` in `localStorage` (`render/progress.ts`), never from the server; Hard keeps its own entry (`BALL:hard`, see `progressKey`), and Normal the bare level id every entry from before had.
 It is a convenience rather than a record: the server already has the runs and the feedback, and a menu that cannot say what you have played until a fetch answers is a menu that flickers.
 Every access is guarded, because storage throws outright in some privacy modes, comes back empty after a clear and is absent in a preview - and the menu has to paint correctly with no storage at all, the marks being the one thing on it that is not the offer.
 Cross-device progress is a separate feature and is not this.
@@ -143,7 +150,7 @@ It is one panel with two halves, and the halves are answerable at different rate
 **The time and the exits are what every crossing gets.**
 A level that finishes says what it took - `M:SS.CC` off `completedFrame` and the fixed 1/60 step, so it is the run's own clock and a frame dropped to a slow machine does not make the level take longer - and it offers **Retry**, **Next Level** and **Menu**.
 Next Level is the next row in the menu's own order (`listedLevels`), so the button and the list agree about what "next" means; the last level in the list offers no Next Level at all rather than a button that quietly goes back to the start.
-Retry rebuilds the level **in this page** rather than reloading: fullscreen and the pointer lock do not survive a navigation (see [**The level select**](#the-level-select)), so a reload would drop the player out of the screen they are playing in and make them click their way back.
+Retry rebuilds the level **in this page** rather than reloading: fullscreen and the pointer lock do not survive a navigation (see [**The difficulty select**](#the-difficulty-select)), so a reload would drop the player out of the screen they are playing in and make them click their way back.
 It is the same act a jump press already is, so it is the same `reset`, plus a zeroed `accumulator` - time spent reading a panel is not time the sim is behind by, and leaving the debt would fast-forward the first seconds of the new run.
 
 **The feedback half is asked for until it is answered.**

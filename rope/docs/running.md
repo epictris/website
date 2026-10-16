@@ -60,14 +60,14 @@ and `TEST_SPRING` is the spring-body one (a leaf over a chasm to hang off - see
 
 ## Starting a run
 
-`/` with nothing asked for is the **level select** (see [**Levels**](levels.md)): a list of the listed levels, the introduction first, with what this browser has finished and last rated beside each.
-Picking one puts the game fullscreen, takes the pointer, pushes `/?level=ID` and starts the level in that same page - one page load is still one session and one level.
-That page never loads the game until a level is picked, so a bare `/` costs a list of words rather than a megabyte of three.js; a `?level=` nobody has shows the same list with a line saying so.
+`/` with nothing asked for loads the introduction behind the loading screen and then offers the **difficulty select** (see [**Levels**](levels.md#the-difficulty-select)): **Normal**, the iron ball, and **Hard**, the glass ball that breaks on anything solid (see [glass-ball](glass-ball.md)), with what this browser has finished and last rated beside each.
+Picking one puts the game fullscreen, takes the pointer, pushes `/?level=ID` (`&ball=glass` for Hard) and starts at once - the level was loaded, warmed and prewarmed with both balls before the menu went up - and one page load is still one session, one level and one ball.
+A `?level=` nobody has is the same menu with a line saying so.
 
 A level page opens on the loading screen and **starts when the level is ready** - the bar fills, the scene is warmed and prewarmed behind it, and the frame loop begins (see [**The loading screen**](loading-screen.md)).
 There is no second press between choosing a level and playing it.
 
-**The press that picks the level takes fullscreen and the pointer lock**, in that order - the lock first, while the gesture is unspent, then fullscreen - so a run started from the menu opens filling the screen with the virtual cursor already live (see [**The level select**](levels.md#the-level-select) for why that press cannot also be a navigation).
+**The press that picks the difficulty takes fullscreen and the pointer lock**, in that order - the lock first, while the gesture is unspent, then fullscreen - so a run started from the menu opens filling the screen with the virtual cursor already live (see [**The difficulty select**](levels.md#the-difficulty-select) for why that press cannot also be a navigation).
 A level reached any other way - its own URL, a new tab, a reload - opens **windowed**, aiming with the real pointer, and the **first click in the level** takes both instead: it is the click that throws the first hook, so nothing is asked of the player they were not about to do.
 A refused fullscreen gives the lock straight back and plays windowed, which is what the whole gate exists to guarantee: the lock is never held outside fullscreen.
 
@@ -78,7 +78,7 @@ A test run from the editor has no loading screen and no gate - it is the editor'
 A listed level ends at a **finish line** (see [**The finish line**](levels.md#the-finish-line)): a chequered gantry across the way out, which finishes the level the moment you touch it, swinging through or rolling into it.
 The sim then runs half a second more so the ball carries out the far side and **freezes** - nothing reaches into the level, so a **P** download taken afterwards still replays and finishes on the same frame - the pointer comes back, and a panel appears over the frozen scene with what the run took and three ways on: **Retry**, **Next Level** and **Menu** (see [**The completion panel**](levels.md#the-completion-panel)).
 Retry rebuilds the level in the page, so the screen and the run are not spent on a reload.
-The level is marked as finished on this browser whichever way it is left, and a finished row can be re-rated from its `rate` link on the level select.
+The level is marked as finished on this browser whichever way it is left, and a finished row can be re-rated from its `rate` link on the difficulty select.
 The panel also asks for **feedback** - five stars for fun, a five-point bipolar difficulty scale and a comment, all optional - on the first crossing and on any later one where nothing has been sent yet; sending does not close the panel.
 The run is sealed with the end reason `complete`, which is its own reason because it is neither a failure nor an interruption.
 

@@ -2,7 +2,7 @@
 
 import { Vec2 } from "./engine/vec2";
 import { Level } from "./level/level";
-import { BallLevel, FINISH_LINGER_FRAMES } from "./level/ballLevel";
+import { BallLevel, FINISH_LINGER_FRAMES, type BallKind } from "./level/ballLevel";
 import { SlackChain } from "./classes/slackChain";
 import { LiveInputSource } from "./input/liveInput";
 import { BallInputSource } from "./input/ballInput";
@@ -22,6 +22,7 @@ import { ChainRetract } from "./render/chainRetract";
 import { NO_ORBIT } from "./render3d/space";
 import type { ViewCapture } from "./render3d/viewCapture";
 import { waterShimmer } from "./render3d/water";
+import { glassOptionsFrom } from "./render3d/glassMaterial";
 import { DEFAULT_LEVEL, LEVELS, listedLevels } from "./level/registry";
 import { spawnAtCheckpoint } from "./level/levelFormat";
 import {
@@ -54,6 +55,8 @@ import { verifySelfReplayOffThread } from "./sim/selfReplayOffThread";
 import { showToast } from "./render/toast";
 import { showCompletionForm } from "./render/completionForm";
 import { readProgress, writeProgress } from "./render/progress";
+import { levelHref, progressKey } from "./render/difficulty";
+import { GlassShards } from "./render/glassShards";
 import { submitFeedback } from "./playtest/feedback";
 import { LoadingScreen } from "./render/loadingScreen";
 import { SettingsMenu } from "./render/settingsMenu";
@@ -116,6 +119,11 @@ const params = new URLSearchParams(location.search);
 // with a line saying so, rather than silently playing something else - so by
 // the time this runs the name is one the registry has.
 const levelId = ((): string => {
+  // The menu page plays the introduction, whatever its URL says (see
+  // `choosing` below, and `introOf` in render3d/store.ts, which loaded it).
+  if (window.__ropeChoose === true && params.get("replay") === null) {
+    return listedLevels().find((l) => l.intro)?.id ?? DEFAULT_LEVEL;
+  }
   const requested = params.get("level") ?? DEFAULT_LEVEL;
   return LEVELS[requested] ? requested : DEFAULT_LEVEL;
 })();
@@ -129,6 +137,21 @@ const levelHash = levelHashes[levelId] ?? "";
 const levelTitle = levelSpec.data.meta?.title ?? levelId;
 const isBall = levelSpec.controller === "ball";
 const baseZoom = isBall ? BALL_ZOOM : GRAPPLE_ZOOM;
+// THE MENU PAGE. A bare `/` (or a `?level=` nobody has) is the difficulty
+// select, and it is shown AFTER the level has loaded rather than before: this
+// page boots the intro level behind the loading bar - downloaded, warmed and
+// prewarmed with both balls - and only then offers Normal and Hard, so the
+// pick starts the run at once (see `chooseDifficulty`). The store decided this
+// before the app existed (`window.__ropeChoose`, see render3d/store.ts).
+const choosing = window.__ropeChoose === true && params.get("replay") === null;
+// The difficulty, which is the ball: `?ball=glass` is Hard, the glass ball
+// that breaks on the first solid thing it touches, and anything else is the
+// iron ball (see `BallLevelOptions`). Fixed for the page once the run starts,
+// like the level - on the menu page, by the pick.
+let ballKind: BallKind = isBall && params.get("ball") === "glass" ? "glass" : "iron";
+// Where this page's progress is kept, which is per difficulty: finishing Hard
+// is not finishing Normal (see `progressKey`).
+const progressId = (): string => progressKey(levelId, ballKind);
 
 // Render mode. The ball & chain plays in 3D; the grapple levels stay on the 2D
 // path, because the Player state-machine slice is 2D-only (its rig, its rope and
@@ -171,6 +194,10 @@ if (scene3d && params.get("mirror") === "0") scene3d.setPoolMirror(false);
 // TEMPORARY: `?shimmer=0` turns the water's ripple light bands off, for an A/B
 // (render3d/water.ts, `waterShimmer`).
 if (params.get("shimmer") === "0") waterShimmer.value = 0;
+// TEMPORARY: `?glass=hollow` draws the Hard ball as the hollow shell it was
+// before the solid crystal ball, and `?glasstint=R,G,B` tints the solid glass,
+// for an A/B (render3d/glassMaterial.ts `glassOptionsFrom`).
+glassOptionsFrom(params);
 
 // `?dpr=N` draws the frame at a device pixel ratio this display does not have,
 // so the fill cost a 4K or HiDPI player pays can be read on a 1080p desk (see
@@ -294,7 +321,7 @@ function makeLevel(): Level | BallLevel {
   // a run played from a checkpoint is a different level entirely, and the frames
   // after the reset were then evidence about nothing.
   if (replayRec) return levelFromRecording(replayRec);
-  return isBall ? new BallLevel(levelData) : new Level(levelData, levelSpec.init);
+  return isBall ? new BallLevel(levelData, { ball: ballKind }) : new Level(levelData, levelSpec.init);
 }
 
 let level = makeLevel();
@@ -307,6 +334,10 @@ const sparks = new SparkSystem();
 // same shape as the sparks, and for the same reason - the sim hands it one fact
 // per break and it owns everything else.
 const debris = new DebrisSystem();
+// The glass ball's shards (see render/glassShards.ts): the debris' shape again,
+// fed the sim's one fact per break, drawn by the 3D scene (or the 2D canvas on
+// the 2D path), and cleared with the level.
+const shards = new GlassShards();
 // The released chain reeling back in (see render/chainRetract.ts): the same
 // shape as the sparks - it watches the sim each step, runs on the render
 // clock, and is cleared with the level.
@@ -329,6 +360,7 @@ function buildRun(): void {
   // that is standing again.
   sparks.reset();
   debris.reset();
+  shards.reset();
   chainRetract?.reset();
   level.onReset = reset;
   recording.clear();
@@ -462,27 +494,36 @@ function playerNick(): string | null {
   }
 }
 
-const recorder = recordWanted
-  ? new PlaytestRecorder(INGEST_PATH, {
-      commit,
-      dirty,
-      srcHash,
-      level: levelId,
-      // The named spawn this page was opened at, so a run streamed from an
-      // invite link with `?checkpoint=` replays from where it was played.
-      ...(checkpoint ? { checkpoint } : {}),
-      // The authored level's own bytes, so a run can be joined to the feedback
-      // about the same level file (see `SessionMeta.levelHash`).
-      ...(levelHash ? { levelHash } : {}),
-      nick: playerNick(),
-      device: detectDevice(),
-      ua: navigator.userAgent,
-      viewport: { w: window.innerWidth, h: window.innerHeight },
-      dpr: window.devicePixelRatio,
-      render: scene3d ? "3d" : "2d",
-    })
-  : null;
-recorder?.startRun(levelId, 0);
+// The session opens with the run: at once on a page loaded at a level, and on
+// the menu page at the pick, which is when the ball it was played with is known
+// (see `chooseDifficulty`). A menu nobody picks from records nothing.
+let recorder: PlaytestRecorder | null = null;
+function openSession(): void {
+  recorder = recordWanted
+    ? new PlaytestRecorder(INGEST_PATH, {
+        commit,
+        dirty,
+        srcHash,
+        level: levelId,
+        // The named spawn this page was opened at, so a run streamed from an
+        // invite link with `?checkpoint=` replays from where it was played.
+        ...(checkpoint ? { checkpoint } : {}),
+        // ...and the ball, so a Hard run replays as glass (see `Recording.ball`).
+        ...(ballKind === "glass" ? { ball: "glass" as const } : {}),
+        // The authored level's own bytes, so a run can be joined to the feedback
+        // about the same level file (see `SessionMeta.levelHash`).
+        ...(levelHash ? { levelHash } : {}),
+        nick: playerNick(),
+        device: detectDevice(),
+        ua: navigator.userAgent,
+        viewport: { w: window.innerWidth, h: window.innerHeight },
+        dpr: window.devicePixelRatio,
+        render: scene3d ? "3d" : "2d",
+      })
+    : null;
+  recorder?.startRun(levelId, 0);
+}
+if (!choosing) openSession();
 
 // Restart the level from outside a physics step: the page was hidden for long
 // enough that continuing would be a run with a gap in it the fixed step never
@@ -531,6 +572,11 @@ function downloadRecording(): void {
     // spawn has to say so or its replay starts at the level's own spawn and
     // diverges on frame 1 (see `Recording.checkpoint`).
     ...(replayRec ? (replayRec.checkpoint ? { checkpoint: replayRec.checkpoint } : {}) : checkpoint ? { checkpoint } : {}),
+    // The ball, which the level's data cannot say (see `Recording.ball`): the
+    // recording's on a replay page, this page's otherwise.
+    ...((replayRec ? replayRec.ball : ballKind === "glass" ? "glass" : undefined) === "glass"
+      ? { ball: "glass" as const }
+      : {}),
     git: commit,
     dirty,
     srcHash,
@@ -635,6 +681,7 @@ const replayHost: ReplayHost = {
     // level in a handful of rendered frames.
     sparks.reset();
     debris.reset();
+    shards.reset();
     chainRetract?.reset();
     if (sceneStale) {
       buildScene();
@@ -817,7 +864,12 @@ function stepLevel(frameInput: FrameInput, seeking: boolean): void {
   if (replay) replayAim = recordedAim(level, frameInput);
   const simT0 = performance.now();
   const stepped = level;
+  const attempt = level instanceof BallLevel ? level.attempt : 0;
   level.physicsProcess(frameInput, STEP);
+  // A glass ball respawned at the start (see `BallLevel.respawn`): the camera
+  // goes with it, as it does on a reset, rather than easing the length of the
+  // level to catch up.
+  if (level === stepped && level instanceof BallLevel && level.attempt !== attempt) cameraCtl.snap();
   frameSimMs += performance.now() - simT0;
   frameSteps++;
   if (!seeking) {
@@ -827,6 +879,8 @@ function stepLevel(frameInput: FrameInput, seeking: boolean): void {
     // Per step for the same reason: a break that happens on a caught-up step is
     // the only frame its event exists on (see `BallLevel.breakEvents`).
     debris.ingest(level.breakEvents);
+    // ...and the glass ball breaking, which happens on one step only.
+    if (level instanceof BallLevel) shards.ingest(level.shatterEvents);
     // Likewise per step, so a chain let go and re-thrown across two steps of
     // one render frame is seen as both rather than as nothing having changed.
     chainRetract?.observe(level instanceof BallLevel ? level : null, STEP);
@@ -933,12 +987,14 @@ function completeLevel(): void {
   document.exitPointerLock?.();
   document.documentElement.style.cursor = "";
   const completedFrame = (level as BallLevel).completedFrame ?? 0;
-  const was = readProgress()[levelId];
+  const was = readProgress()[progressId()];
   // The crossing, in seconds. `completedFrame` is the fixed-step frame the line
   // was crossed on and the step is exactly 1/60, so this is the run's own clock
   // rather than a wall clock - a frame dropped to a slow machine does not make
-  // the level take longer to finish (see `frame`).
-  const seconds = completedFrame * STEP;
+  // the level take longer to finish (see `frame`). Counted from the start of
+  // the ATTEMPT that finished it: a glass ball that broke and respawned started
+  // over (see `BallLevel.respawn`), and so did its clock.
+  const seconds = (completedFrame - (level as BallLevel).attemptStartFrame) * STEP;
 
   // THE COMPLETION IS RECORDED NOW, before anything is asked and whatever the
   // player does next. Finishing the level is what happened; a rating is a
@@ -946,7 +1002,7 @@ function completeLevel(): void {
   // down the Submit path would be a level the menu forgets you played because
   // you had nothing to say about it.
   const completedAt = was?.completedAt ?? Date.now();
-  writeProgress(levelId, {
+  writeProgress(progressId(), {
     completedAt,
     stars: was?.stars ?? null,
     difficulty: was?.difficulty ?? null,
@@ -979,7 +1035,7 @@ function completeLevel(): void {
 
   void showCompletionForm({
     eyebrow: "Finished",
-    title: levelTitle,
+    title: ballKind === "glass" ? `${levelTitle} (Hard)` : levelTitle,
     seconds,
     ask: sendable
       ? {
@@ -993,7 +1049,7 @@ function completeLevel(): void {
             // beside it and a flaky network are the same case, and in both the
             // player still said this: writing progress only on a successful
             // send would lose the rating along with the round trip.
-            writeProgress(levelId, {
+            writeProgress(progressId(), {
               completedAt,
               stars,
               difficulty,
@@ -1009,6 +1065,8 @@ function completeLevel(): void {
               stars,
               difficulty,
               comment,
+              // Which difficulty it was about (see `FeedbackSubmission.ball`).
+              ...(ballKind === "glass" ? { ball: "glass" as const } : {}),
               // The run that finished it, so a rating can be read beside the
               // play it came out of. A re-rating from the level select carries
               // neither.
@@ -1026,8 +1084,10 @@ function completeLevel(): void {
       // instead: this page has spent its session on the level it just finished
       // (`SessionMeta` is fixed for one level), so the next one is the next page
       // load - see docs/levels.md.
+      // At the same difficulty: Hard is a ball, and the next level is played
+      // with the one this one was.
       ...(next
-        ? [{ label: "Next Level", run: () => { location.href = `/?level=${encodeURIComponent(next.id)}`; } }]
+        ? [{ label: "Next Level", run: () => { location.href = levelHref(next.id, ballKind); } }]
         : []),
       // LAST, because it is what Esc runs (see `showCompletionForm`).
       { label: "Menu", run: () => { location.href = "/"; } },
@@ -1096,6 +1156,7 @@ function frame(now: number): void {
   // fixed step entirely, like the camera ease.
   sparks.advance(dt);
   debris.advance(dt);
+  shards.advance(dt);
 
   // Camera: eased follow of the avatar, reshaped by the level's camera regions.
   // Driven by the render dt, so it is frame-rate independent and outside the
@@ -1120,7 +1181,7 @@ function frame(now: number): void {
   // interpolated state at the same `alpha` and the same camera, so they are one
   // picture rather than two that agree most of the time.
   const draw3dT0 = performance.now();
-  scene3d?.render(level, camera, alpha, NO_ORBIT, chainRetract);
+  scene3d?.render(level, camera, alpha, NO_ORBIT, chainRetract, shards);
   const draw3dMs = performance.now() - draw3dT0;
 
   const draw2dT0 = performance.now();
@@ -1137,6 +1198,7 @@ function frame(now: number): void {
       sparks,
       chainRetract,
       debris,
+      shards,
     );
   } else {
     render(
@@ -1344,6 +1406,42 @@ function armFirstClick(): void {
   );
 }
 
+// THE DIFFICULTY SELECT, on the menu page, once the level is loaded.
+//
+// The level was booted with one ball; the other is put in it and prewarmed
+// here too, so that whichever is picked meets nothing it has not already
+// compiled or uploaded (the glass ball's lens and wear, its chain, its shards,
+// or the iron model and its maps). Then the loading screen comes off, the menu
+// goes up (`window.__ropeMenu`, painted by render3d/store.ts, which also owns
+// the rows' press), and the pick is the run starting: the press has already
+// taken the screen and the pointer and moved the URL to the level's own
+// (`startOnClick`), and what is left here is to make the ball the one it chose
+// and open the session the run is recorded in.
+//
+// THE PICK BUILDS NOTHING. The level already built, warmed and on the GPU is
+// the one played, with its ball made iron or glass in place
+// (`BallLevel.setBallKind`, exact before frame 1). Rebuilding it was a
+// 0.7-0.8 s first frame after either pick (Tris, 2026-10-16: "the transition
+// should be seamless") - the whole scene thrown away and uploaded again.
+async function chooseDifficulty(): Promise<void> {
+  const ballLevel = level instanceof BallLevel ? level : null;
+  if (scene3d && ballLevel) {
+    ballLevel.setBallKind(ballKind === "glass" ? "iron" : "glass");
+    warmFrame();
+    await scene3d.prewarm(level, camera);
+  }
+  loading.finish();
+  revealed = true;
+  const picked = await new Promise<string>((resolve) => {
+    window.__ropePick = resolve;
+    window.__ropeMenu?.();
+  });
+  window.__ropePick = undefined;
+  ballKind = isBall && picked === "glass" ? "glass" : "iron";
+  ballLevel?.setBallKind(ballKind);
+  openSession();
+}
+
 // Play once the level's assets are in - or once the loading screen has run out
 // of patience with them (see `LoadingScreen.wait`).
 //
@@ -1381,6 +1479,9 @@ async function boot(): Promise<void> {
       `[prewarm] ${warmed.programs} programs, ${warmed.textures} textures in ${warmed.ms.toFixed(0)} ms`,
     );
   }
+  // The menu page offers the difficulties now, with everything either one
+  // needs already loaded and warm (see `choosing`).
+  if (choosing) await chooseDifficulty();
   // Everything is loaded, warm and drawn, so the level STARTS. There is nothing
   // else to wait for: choosing it on the level select was the press (Tris,
   // 2026-09-20), and a second one in front of a room that is already lit is a

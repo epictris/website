@@ -46,9 +46,14 @@ EDITOR_RECIPE = {"camera_yaw": 0, "camera_pitch": 0, "strata": 0.08,
                  "balanced_hybrid": True, "broad_side_chunks": True, "soften_thin_edges": True,
                  "solid_chunk_edges": True, "join_undercuts": False, "game_low_poly": True}
 
-# Slab count bounds: tiny outlines stay rocky, large ones stay practical for the
-# Boolean/remesh pass in Blender (slabs, dimensionless).
-MIN_SLABS, MAX_SLABS = 2, 100
+# Tiny outlines stay rocky (slabs, dimensionless). There is no most: slabs are
+# sized in metres, so a larger outline takes more of them, not larger ones.
+MIN_SLABS = 2
+
+# The rock is cut from the outline extruded ENVELOPE depths either side of the
+# gameplay plane (hybrid_geometry, chunk_geometry), so the `depth` the
+# construction works in is the rock's thickness over 2 * ENVELOPE.
+ENVELOPE = 1.3
 
 
 def outline_area(outline):
@@ -68,7 +73,7 @@ def js_round(x):
 
 
 def slab_count(area, per_area):
-    return max(MIN_SLABS, min(MAX_SLABS, js_round(area * per_area)))
+    return max(MIN_SLABS, js_round(area * per_area))
 
 
 def request_document(request):
@@ -94,7 +99,8 @@ def request_document(request):
         # Blank: 4 % of the outline's linear size, capped at 4 cm (m).
         tolerance = min(0.04, math.sqrt(area) * 0.04)
     fork = {
-        "depth": values["depth"], "seed": values["seed"],
+        # `depth` asks for the rock's thickness, front to back.
+        "depth": values["depth"] / (2 * ENVELOPE), "seed": values["seed"],
         "slabs": slab_count(area, values["slabsPerArea"]), "tolerance": tolerance,
         "fracture_angle": values["fractureAngle"],
         "camera_yaw": EDITOR_RECIPE["camera_yaw"], "camera_pitch": EDITOR_RECIPE["camera_pitch"],
@@ -137,8 +143,8 @@ def read_specs(path):
             spec.setdefault(key, value)
         if spec["depth"] <= 0 or spec["tolerance"] <= 0:
             raise ValueError(f"{name}: depth and tolerance must be positive for the volumetric generator.")
-        if not 1 <= int(spec["slabs"]) <= 250:
-            raise ValueError(f"{name}: slabs must be between 1 and 250.")
+        if int(spec["slabs"]) < 1:
+            raise ValueError(f"{name}: slabs must be at least 1.")
         if not 0.25 <= float(spec["detail"]) <= 4:
             raise ValueError(f"{name}: detail must be between 0.25 and 4.")
         for key in ["weathering", "strata", "secondary_slabs", "edge_variation"]:

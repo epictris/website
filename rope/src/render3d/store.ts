@@ -45,6 +45,7 @@ export {};
 // IN by esbuild, since this file is compiled on its own and inlined ahead of
 // the app rather than imported by it.
 import { readProgress, writeProgress } from "../render/progress";
+import { DIFFICULTIES, levelHref, progressKey, type Ball } from "../render/difficulty";
 // The panel the level select's `rate` link opens - the same one a finished
 // level ends at, with its time and its exits left out. Bundled in for the same
 // reason: this page never loads the app.
@@ -167,20 +168,26 @@ interface PreloadManifest {
 // The level select
 // ---------------------------------------------------------------------------
 
-// The menu is painted HERE, for the same reason the bar is: whoever draws it
-// has to be running before the thing it is instead of. A bare `/` must not
-// download a megabyte of three.js to show a list of six words, so the app is
-// never loaded on this page at all (see the module tag in index.html) and this
-// script is the whole of it.
+// THE DIFFICULTY SELECT, painted from here and shown by the app.
 //
-// Every row is an `<a href="/?level=ID">`, so middle-click, a screen reader and
-// a bookmark all work, and picking a level is a NAVIGATION rather than an
-// in-page switch. That is not a nicety either: one page load is one session and
-// one level - the preload above is keyed on `?level=`, the recorder's session
-// meta is fixed per page, and a checkpoint is resolved once - and an in-page
-// switch would quietly break every one of them.
-// PICKING A LEVEL TAKES THE SCREEN AND THE POINTER, and starts the level in
-// THIS page rather than navigating to it.
+// The menu page (a bare `/`) is the introduction, loaded behind the loading
+// bar like any level page, and the menu goes up only once that level is
+// downloaded, warmed and prewarmed with both balls (`chooseDifficulty` in
+// main.ts, Tris 2026-10-16: "load both ball models then just use whichever the
+// user selects") - so picking a difficulty starts the run at once instead of
+// starting a wait. Until 2026-10-16 it was a level select painted BEFORE the
+// app was loaded, so that a list of six words did not cost a megabyte of
+// three.js; with the level behind it there is nothing left to save.
+//
+// The markup and the painting stay here because the rows are links the store
+// already knows how to make (the manifest's titles, `rope.progress`'s marks),
+// and the app calls in through `window.__ropeMenu`.
+//
+// Every row is an `<a href="/?level=ID&ball=...">`, so middle-click, a screen
+// reader and a bookmark all work, and a row opened any of those ways is an
+// ordinary page at that level and ball.
+// PICKING A DIFFICULTY TAKES THE SCREEN AND THE POINTER, and starts the level
+// in THIS page rather than navigating to it.
 //
 // Fullscreen and the pointer lock are granted to a user gesture and to nothing
 // else, and picking a level is the gesture: it is the moment the player commits
@@ -196,35 +203,32 @@ interface PreloadManifest {
 // fullscreen)` false on the page the click opened), and a pointer lock never
 // survives a navigation at all. A press that took both and then threw them away
 // is worse than one that never asked - the window flickers into fullscreen and
-// straight back out. So the anchor's default is prevented and the app is
-// imported into this document instead (`__ropeBoot`, see index.html).
+// straight back out. So the anchor's default is prevented and the app already
+// running in this document is handed the ball (`__ropePick`).
 //
 // What the navigation was for is kept: the URL becomes the level's, pushed
-// rather than replaced so Back returns to the menu (and reloads it, since the
-// app is running in this document by then), and `main.ts` reads which level to
-// play out of `location` exactly as it does on a page that was loaded at it.
-// One page load is still one session and one level.
+// rather than replaced so Back returns to the menu (and reloads it), and the
+// session the run is recorded in opens at the pick, with the ball it picked.
+// One page load is still one session, one level and one ball.
 //
 // Every OTHER way of opening a row is left alone: only a plain primary press is
 // intercepted, so middle-click, ctrl/cmd-click and "open in new tab" still
 // navigate - a background tab is not this tab going fullscreen.
-function startOnClick(a: HTMLAnchorElement, manifest: PreloadManifest, id: string): void {
+function startOnClick(a: HTMLAnchorElement, manifest: PreloadManifest, id: string, ball: Ball): void {
   a.addEventListener("click", (e) => {
     if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-    // Nothing to boot into: the module tag never ran (an old browser, a failed
-    // parse), so the link is still the way in.
-    if (!window.__ropeBoot) return;
+    // Nobody waiting for a pick - a menu re-painted after one was made - so
+    // the link is the way in.
+    const pick = window.__ropePick;
+    if (!pick) return;
     e.preventDefault();
     takeScreen(manifest.l[id]?.b === 1);
     history.pushState(null, "", a.href);
-    // Back goes to the menu, which is this document with the app running in it,
-    // so it is re-loaded rather than re-painted. The app owns the page by then.
+    // Back goes to the menu, which is this document with a run going in it,
+    // so it is re-loaded rather than re-painted.
     window.addEventListener("popstate", () => location.reload());
     document.getElementById("menu")?.removeAttribute("data-show");
-    document.getElementById("loading")?.removeAttribute("hidden");
-    fetchLevel(manifest, id, new URLSearchParams(location.search).get("render"));
-    if (!polling) polling = requestAnimationFrame(tick);
-    window.__ropeBoot();
+    pick(ball);
   });
 }
 
@@ -250,11 +254,8 @@ function takeScreen(ball: boolean): void {
 }
 
 function paintMenu(manifest: PreloadManifest, note: string): void {
-  // THIS SCRIPT RUNS IN THE HEAD, during parsing, so the markup it draws into
-  // does not exist yet - the same reason the bar looks its element up per
-  // animation frame instead of once. The DECISION is made now (`__ropePlay` is
-  // read by the module tag at the end of the body), and the painting waits for
-  // the document.
+  // The app calls this once the level is ready, by which time the document has
+  // long been parsed; the wait is for a re-paint asked for any earlier.
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", () => paintMenu(manifest, note), { once: true });
     return;
@@ -267,27 +268,33 @@ function paintMenu(manifest: PreloadManifest, note: string): void {
   if (noteEl) noteEl.textContent = note;
 
   const progress = readProgress();
-  const rows = Object.entries(manifest.l)
-    .filter(([, l]) => l.k !== 0)
-    .sort(([, a], [, b]) =>
-      a.k !== b.k ? b.k - a.k : a.t.localeCompare(b.t, undefined, { sensitivity: "base" }),
-    );
+  // THE MENU OFFERS DIFFICULTIES, not levels: Normal and Hard, both of which
+  // open the introduction - with the iron ball and with the glass one (see
+  // render/difficulty.ts). The other listed levels are reached from there, by
+  // the completion panel's Next Level, at the difficulty chosen here; and every
+  // level is still reachable by its URL.
+  const introId = introOf(manifest);
+  const level = manifest.l[introId];
+  if (!level) return;
 
   list.innerHTML = "";
-  for (const [id, level] of rows) {
+  for (const option of DIFFICULTIES) {
+    const id = introId;
+    const key = progressKey(id, option.ball);
+    const levelTitle = option.ball === "glass" ? `${level.t} (Hard)` : level.t;
     const li = document.createElement("li");
-    // The rule under the introduction is what separates it from the rest, so
-    // it is drawn only when there IS a rest: a lone row with a line under it is
-    // a list that looks like it lost something.
-    if (level.k === 2 && rows.length > 1) li.dataset.intro = "1";
     const a = document.createElement("a");
-    a.href = `/?level=${encodeURIComponent(id)}`;
-    startOnClick(a, manifest, id);
+    a.href = levelHref(id, option.ball);
+    startOnClick(a, manifest, id, option.ball);
     const title = document.createElement("span");
     title.className = "menu-title";
-    title.textContent = level.t;
+    title.textContent = option.label;
+    const hint = document.createElement("span");
+    hint.className = "menu-hint";
+    hint.textContent = option.hint;
+    title.appendChild(hint);
     a.appendChild(title);
-    const done = progress[id];
+    const done = progress[key];
     if (done) {
       const mark = document.createElement("span");
       mark.className = "menu-mark";
@@ -320,7 +327,7 @@ function paintMenu(manifest: PreloadManifest, note: string): void {
           // earlier and is saying something about now - so there is no time to
           // report and nothing to retry or move on from.
           eyebrow: "Rate",
-          title: level.t,
+          title: levelTitle,
           seconds: null,
           ask: {
             stars: done.stars as Stars | null,
@@ -332,7 +339,7 @@ function paintMenu(manifest: PreloadManifest, note: string): void {
             submit: ({ stars, difficulty, comment }) => {
               // Locally FIRST, so a failed POST still keeps what was said - the
               // rule the completion flow follows (see `submitFeedback`).
-              writeProgress(id, { ...done, stars, difficulty, comment, submittedAt: Date.now() });
+              writeProgress(key, { ...done, stars, difficulty, comment, submittedAt: Date.now() });
               void submitFeedback({
                 level: id,
                 levelHash: manifest.h?.[id] ?? "",
@@ -342,6 +349,7 @@ function paintMenu(manifest: PreloadManifest, note: string): void {
                 stars,
                 difficulty,
                 comment,
+                ...(option.ball === "glass" ? { ball: "glass" as const } : {}),
               });
               // The row's marks are behind the panel, which stays open: a
               // rating that did not show up on the list it came from would read
@@ -418,20 +426,28 @@ function preload(): void {
   const requested = params.get("level");
   const replay = params.get("replay");
 
-  // NO LEVEL AND NO REPLAY IS THE MENU. It used to be the default level, which
-  // was right while there was one arena and is wrong now that there is a list
-  // (see docs/levels.md).
+  // NO LEVEL AND NO REPLAY IS THE MENU PAGE: the introduction, loaded like any
+  // level, with the difficulty select offered once it is ready (see
+  // `chooseDifficulty` in main.ts). The app paints it through `__ropeMenu`.
   //
-  // A `?level=` NOBODY HAS is the menu too, with a line saying so, rather than
-  // silently playing something else: a mistyped or stale link that quietly
+  // A `?level=` NOBODY HAS is the menu page too, with a line saying so, rather
+  // than silently playing something else: a mistyped or stale link that quietly
   // opens a different level is a link nobody can debug.
   if (replay === null && (requested === null || !manifest.l[requested])) {
-    window.__ropePlay = false;
-    paintMenu(manifest, requested === null ? "" : `There is no level called "${requested}".`);
+    const note = requested === null ? "" : `There is no level called "${requested}".`;
+    window.__ropeChoose = true;
+    window.__ropeMenu = () => paintMenu(manifest, note);
+    fetchLevel(manifest, introOf(manifest), params.get("render"));
     return;
   }
 
   fetchLevel(manifest, requested ?? manifest.d, params.get("render"));
+}
+
+// The introduction, which is the level the menu page loads and offers: the one
+// level the manifest marks as such, or the default.
+function introOf(manifest: PreloadManifest): string {
+  return Object.entries(manifest.l).find(([, l]) => l.k === 2)?.[0] ?? manifest.d;
 }
 
 // Start every file a level's scene is going to ask for. `render` is the
@@ -626,6 +642,6 @@ function watchPointer(): void {
 preload();
 watchPointer();
 // Only a page with a preload list has a loading screen on it; the editor has
-// neither, and the MENU has taken it off the page. An animation frame a second
-// forever is not something to leave running on either.
-if (preloaded && window.__ropePlay !== false) polling = requestAnimationFrame(tick);
+// none, and an animation frame a second forever is not something to leave
+// running there.
+if (preloaded) polling = requestAnimationFrame(tick);

@@ -181,6 +181,17 @@ export class BallPlayer extends RigidBody2D {
   // turns the unwinding way and the tip is paid back out (`stowIfWoundIn`,
   // `unstowIfUnwinding`).
   chainStowed = false;
+  // THE GLASS BALL (the Hard difficulty, `?ball=glass`): the same ball in
+  // every number the sim reads - mass, radius, loop, chain - except that it
+  // breaks on the first solid thing it touches (see `BallLevel.shatterIfStruck`).
+  // Set at build, or before the level's first frame by the menu's pick
+  // (`BallLevel.setBallKind`), and never changed once it steps; the renderers
+  // read it to draw glass instead of iron.
+  glass = false;
+  // The glass ball has broken: it collides with nothing and holds still where
+  // it broke until the level restarts (see `BallLevel.holdShattered`). Never
+  // set on an iron ball, and never cleared - a reset builds a fresh ball.
+  shattered = false;
   // Which way the manacle faces, in the ANCHOR BODY's frame. A clamped manacle
   // is bolted to what it bit: it does not turn at all for as long as it holds,
   // however the chain swings around it afterwards - and it turns with the thing

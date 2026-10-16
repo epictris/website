@@ -46,6 +46,7 @@ const steps: Step[] = [
   { name: "viscous", cmd: ["bun", "run", CLI, "viscous"] },
   { name: "breaks", cmd: ["bun", "run", CLI, "breaks"] },
   { name: "finish", cmd: ["bun", "run", CLI, "finish"] },
+  { name: "glass", cmd: ["bun", "run", CLI, "glass"] },
   { name: "entry", cmd: ["bun", "run", CLI, "entry"] },
   { name: "corners", cmd: ["bun", "run", CLI, "corners"] },
   { name: "tangents", cmd: ["bun", "run", CLI, "tangents"] },

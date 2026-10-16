@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import subprocess
 import sys
 from pathlib import Path
@@ -48,7 +49,23 @@ PRESETS = {
 # (slate.py), not the generator's tinted stones.
 DEFAULT_PARAMS = {
     "seed": 31, "slabsPerArea": 10, "faceBudget": 3000, "detail": 1, "voxelCap": .012, "weathering": .38,
+    "edgeBevelWidth": .0002, "slabWidth": 1.5015, "slabLength": .434,
 }
+
+# A slab's width and length, metres, about their middles (`slabWidth`,
+# `slabLength`): the generator's own ranges, as shares of their middles. They
+# were 29-48 % of the outline's width and 19-43 % of its height until
+# 2026-10-16; the defaults are what that came to on Terrace.003 (3.9 x 1.4 m),
+# and an older rock's are read off its own outline (`legacy_slab_size`).
+SLAB_WIDTH_SPREAD = (.29 / .385, .48 / .385)
+SLAB_LENGTH_SPREAD = (.19 / .31, .43 / .31)
+
+
+def legacy_slab_size(outline):
+    """The slab width and length a recipe from before version 2 was built
+    with: the middles of the shares of its outline's extent."""
+    xs, ys = [p[0] for p in outline], [p[1] for p in outline]
+    return .385 * (max(xs) - min(xs)), .31 * (max(ys) - min(ys))
 
 # What builds the rock, by the recipe's `generator` (a recipe without one is
 # the boulder generator's): its parameters and their defaults. `fitted` is
@@ -65,6 +82,14 @@ GENERATORS = {
 }
 
 
+# A recipe's version. Version 2 (2026-10-16): a boulder recipe's `depth` is the
+# rock's thickness. Before it, it was the boulder construction's depth, a
+# LEGACY_THICKNESS-th of the thickness (twice boulders/rockgen.ENVELOPE), and
+# params.built reads an older recipe's depth as that many times thicker.
+RECIPE_VERSION = 2
+LEGACY_THICKNESS = 2.6
+
+
 def fingerprint():
     """What built the rock: this adapter and the generators, byte for byte."""
     h = hashlib.sha256()
@@ -79,8 +104,8 @@ def prepare(recipe, output):
     if recipe.get("generator") == "solid":
         # All Blender, from the recipe's own guide, camera and frame.
         given = {k: v for k, v in recipe.get("params", {}).items() if k in GENERATORS["solid"]}
-        resolved = {"version": 1, "generator": "solid", "guide": recipe["guide"], "camera": recipe["camera"],
-                    "frame": recipe["frame"], "params": {**GENERATORS["solid"], **given},
+        resolved = {"version": RECIPE_VERSION, "generator": "solid", "guide": recipe["guide"],
+                    "camera": recipe["camera"], "frame": recipe["frame"], "params": {**GENERATORS["solid"], **given},
                     "generatorHash": fingerprint()}
         (output / "recipe.json").write_text(json.dumps(resolved, separators=(",", ":")))
         return
@@ -93,19 +118,37 @@ def prepare(recipe, output):
     given = {k: v for k, v in recipe.get("params", {}).items() if k in defaults or k == "depth"}
     params = {**defaults, "depth": base["depth"], **given}
     outline = recipe.get("outline", base["outline"])
+    # A boulder recipe from before version 2, regenerated with none of its
+    # fields changed (core.recipe_for), is built as it was first built: its
+    # depth the construction's, its slabs and core shares of its outline, its
+    # faces per perimeter. The least change to the slabs rearranges every
+    # facet, so this is the only way it comes back as it was.
+    legacy = generator == "boulders" and recipe.get("version") == 1
+    if legacy:
+        params = {k: v for k, v in params.items() if k not in ("slabWidth", "slabLength")}
     if generator == "boulders":
         sys.path.insert(0, str(GENERATOR))
         import rockgen
 
+        if not math.isclose(2 * rockgen.ENVELOPE, LEGACY_THICKNESS):
+            raise RuntimeError("worker.LEGACY_THICKNESS is no longer twice rockgen.ENVELOPE")
+        # The generator takes the ranges; the recipe keeps the middles.
+        asked = {k: v for k, v in params.items() if k not in ("slabWidth", "slabLength")}
+        if not legacy:
+            asked["slabWidthMin"], asked["slabWidthMax"] = (params["slabWidth"] * k for k in SLAB_WIDTH_SPREAD)
+            asked["slabLengthMin"], asked["slabLengthMax"] = (params["slabLength"] * k for k in SLAB_LENGTH_SPREAD)
         source = output / "request.json"
-        source.write_text(json.dumps({"outline": outline, "params": params}))
+        source.write_text(json.dumps({"outline": outline, "params": asked}))
         spec = rockgen.read_specs(source)[0]
         spec["name"] = "SceneryRock"
+        if legacy:
+            spec["depth"] = params["depth"]
+            spec["legacy_sizing"] = True
         rock = rockgen.make_rock(spec)
         (output / "geometry.json").write_text(json.dumps({"rocks": [rock]}, separators=(",", ":")))
     # The fitted slate is all Blender: assemble.py builds it from the recipe.
-    resolved = {"version": 1, "preset": kind, "generator": generator, "outline": outline, "params": params,
-                "generatorHash": fingerprint()}
+    resolved = {"version": 1 if legacy else RECIPE_VERSION, "preset": kind, "generator": generator, "outline": outline,
+                "params": params, "generatorHash": fingerprint()}
     (output / "recipe.json").write_text(json.dumps(resolved, indent=2))
 
 

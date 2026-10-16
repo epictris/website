@@ -27,6 +27,7 @@ bun run src/tools/cli.ts render3d             # 3D camera correspondence, extrus
 bun run src/tools/cli.ts assets               # prop + texture budget, stale bytes, orphans, licences (see The asset store)
 bun run src/tools/cli.ts levels               # the level-file lint: the menu's list, one intro, and each listed level's finish line (see Levels)
 bun run src/tools/cli.ts finish               # the finish-line mechanic: crossed once, missed, and the region moving nothing (see Levels)
+bun run src/tools/cli.ts glass                # the glass ball (Hard): breaks on landing not in water, hangs whole, iron until it breaks, respawns, replays (see glass-ball)
 bun run src/tools/cli.ts entry                # the rolling entry a level may open on: the roll in, the hands-off gate and the hand-over (see Ball rolling)
 bun run src/tools/cli.ts latch                # the button latch that carries a sub-step click into the next sample, and the click audit
 bun run src/tools/cli.ts clicks session.json  # the DOM button story a P bundle carries, laid against its frames (see The input latch)
@@ -65,7 +66,7 @@ bun run src/tools/cli.ts ab      session.json --metrics peakV,pushRun  # the sam
 ```
 
 `bun run test` is what "all green" means: typecheck, `dmath`, `selftest`, `contacts`,
-`spring`, `movers`, `vines`, `rails`, `roots`, `belts`, `viscous`, `breaks`, `finish`, `corners`, `tangents`, `decompose`, `camera`, `render3d`, `assets`, `levels`, `ledges`, every `playtests/*.json`,
+`spring`, `movers`, `vines`, `rails`, `roots`, `belts`, `viscous`, `breaks`, `finish`, `glass`, `corners`, `tangents`, `decompose`, `camera`, `render3d`, `assets`, `levels`, `ledges`, every `playtests/*.json`,
 then the bundle corpus, in that order and under one exit code.
 A case that is red on purpose carries `expectedFail` (see `sim/contactCases.ts`),
 which the runner counts as a pass and, crucially, **fails on if it ever passes**:

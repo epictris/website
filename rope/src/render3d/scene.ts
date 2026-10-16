@@ -37,6 +37,9 @@ import { BallVisual } from "./ballVisual";
 import { ChainLayer } from "./chainVisual";
 import { VineLayer } from "./vineVisual";
 import type { ChainRetract } from "../render/chainRetract";
+import type { GlassShards } from "../render/glassShards";
+import { ShardLayer } from "./shardVisual";
+import { bakeGlassWear } from "./glassWear";
 import type { CameraRule } from "../render/cameraController";
 import { configureRenderer, Environment } from "./environment";
 import { LightRig } from "./lights";
@@ -62,6 +65,7 @@ import { ReflectionProbe } from "./reflectionProbe";
 import { PlanarReflection } from "./planarReflection";
 import type { DepthOfFieldLevel } from "../render/settings";
 import { DepthOfField } from "./depthOfField";
+import { isDepthStandIn, leaveDepthPrepass } from "./depthPrepass";
 import { FrameTarget } from "./frameTarget";
 import { LightShafts } from "./lightShafts";
 import { updateWater, waterTextures } from "./water";
@@ -246,11 +250,16 @@ export class Scene3D {
   // The level's Blender scene, when it names one (see `SceneDressing`).
   private dressing: SceneDressing | null = null;
   private ballVisual: BallVisual | null = null;
+  // The glass ball's baked surface wear (see glassWear.ts), once one has been
+  // drawn.
+  private glassWear: THREE.CubeTexture | null = null;
   // The splash and the wake the ball leaves in water (stillWater.ts), foam
   // the pools' and the currents' surfaces draw: render-side, reading where
   // the ball is drawn and never writing back.
   private readonly splashes = new WaterSplashes();
   private chains: ChainLayer;
+  // The glass ball's shards, when it has broken (see render/glassShards.ts).
+  private readonly shardLayer: ShardLayer;
   private vines: VineLayer;
   private probe: THREE.Mesh | null = null;
   // Picking and highlighting (editor only; the game never clicks the scene).
@@ -338,6 +347,7 @@ export class Scene3D {
     this.env = new Environment(this.scene, undefined, this.renderer);
     this.envKey = JSON.stringify(null);
     this.chains = new ChainLayer(this.scene);
+    this.shardLayer = new ShardLayer(this.scene);
     this.vines = new VineLayer(this.scene);
     this.editorLayer.name = "editor-layer";
     this.scene.add(this.editorLayer);
@@ -365,7 +375,11 @@ export class Scene3D {
     if (on === this.reflectionOn) return;
     this.reflectionOn = on;
     if (on) this.reflectionProbe.reset();
-    else this.ballVisual?.setReflection(null);
+    else {
+      this.ballVisual?.setReflection(null);
+      this.chains.setReflection(null);
+      this.shardLayer.setReflection(null);
+    }
   }
 
   // Off, no light casts a shadow, so the shadow pass draws nothing and compiles
@@ -475,7 +489,10 @@ export class Scene3D {
     // sandbox rock spawned before the scene was built.
     for (const body of level.world.bodies) this.ensureBody(body);
     if (level.ball) {
-      this.ballVisual = new BallVisual(level.ball);
+      // The glass ball's surface wear, baked the first time a glass ball is
+      // drawn and kept for the page (see glassWear.ts).
+      if (level.ball.glass && !this.glassWear) this.glassWear = bakeGlassWear(this.renderer, level.ball.radius);
+      this.ballVisual = new BallVisual(level.ball, this.glassWear);
       this.scene.add(this.ballVisual.root);
     }
     // The waking lights' pool, sized now that every authored light has been
@@ -643,6 +660,9 @@ export class Scene3D {
     camera: Camera,
   ): Promise<{ ms: number; programs: number; textures: number }> {
     const t0 = performance.now();
+    // The glass ball's shards are drawn only once it breaks, and compiled here
+    // with everything else (see `ShardLayer.prewarming`).
+    this.shardLayer.prewarming = level.ball?.glass === true;
     // As a frame would: reconcile the visuals, settle the camera and the
     // environment, size the shadow maps.
     this.render(level, camera, 1);
@@ -665,6 +685,7 @@ export class Scene3D {
     for (const texture of this.sampledTextures()) this.renderer.initTexture(texture);
 
     this.drawEverythingOnce();
+    this.shardLayer.prewarming = false;
 
     for (const material of materials) {
       // `WebGLProperties.get` is typed as an opaque bag; what is in it for a
@@ -1113,7 +1134,8 @@ export class Scene3D {
         if (child === this.editorLayer) continue;
         child.traverse((o) => {
           const mesh = o as THREE.Mesh;
-          if (!mesh.isMesh) return;
+          // A depth stand-in draws no colour to light up (depthPrepass.ts).
+          if (!mesh.isMesh || isDepthStandIn(mesh)) return;
           const color = this.highlight.get(pickTagOf(mesh));
           if (color !== undefined) want.set(mesh, color);
         });
@@ -1183,6 +1205,9 @@ export class Scene3D {
     // The released chain reeling back into the ball, if one is (see
     // render/chainRetract.ts); session state the host keeps, like the sparks.
     retract: ChainRetract | null = null,
+    // The glass ball's shards, the host's like the sparks (see
+    // render/glassShards.ts).
+    shards: GlassShards | null = null,
   ): void {
     const rect = this.viewportRect;
     if (rect) {
@@ -1271,7 +1296,24 @@ export class Scene3D {
     const end = level.ball?.chain?.end;
     this.vines.sync(level.vines ?? NO_VINES, alpha, treadTime,
       end instanceof RopeVineClamp ? { vine: end.vine, u: end.segment - 1 + end.fraction } : null);
+    // A glass ball's respawn puts a fresh ball in the level (see
+    // `BallLevel.respawn`), and the menu's pick may make the ball glass or iron
+    // (`BallLevel.setBallKind`): either way the avatar is redrawn, and only the
+    // avatar - the materials are ones already compiled, so this builds a ball's
+    // geometry and nothing else.
+    if (
+      level.ball &&
+      this.ballVisual &&
+      (this.ballVisual.ball !== level.ball || this.ballVisual.glass !== level.ball.glass)
+    ) {
+      this.scene.remove(this.ballVisual.root);
+      this.ballVisual.dispose();
+      if (level.ball.glass && !this.glassWear) this.glassWear = bakeGlassWear(this.renderer, level.ball.radius);
+      this.ballVisual = new BallVisual(level.ball, this.glassWear);
+      this.scene.add(this.ballVisual.root);
+    }
     this.ballVisual?.sync(alpha);
+    this.shardLayer.sync(shards);
     this.splashes.update(
       clock,
       this.foamSurfaces(),
@@ -1365,6 +1407,9 @@ export class Scene3D {
         footprint: pool.footprint,
       });
       mesh.material = water.material;
+      // See-through now, so its depth no longer goes first (depthPrepass.ts):
+      // its stand-in would hide the pool's bed under it.
+      leaveDepthPrepass(mesh);
       // Up to the pool's own surface (it was laid a little under it), so the
       // two are one surface at one height; moved in its parent's frame.
       const parent = mesh.parent;
@@ -1473,11 +1518,18 @@ export class Scene3D {
     visual.root.visible = false;
     this.editorLayer.visible = false;
     try {
-      this.chains.withoutAvatar(() => {
-        // Half the radius: nothing but the ball is inside it, and the floor
-        // it rests on - a radius below the centre - must not be clipped.
-        visual.setReflection(this.reflectionProbe.capture(this.scene, visual.root.position, ball.radius / 2));
-      });
+      this.chains.withoutAvatar(() =>
+        this.shardLayer.withoutShards(() => {
+          // Half the radius: nothing but the ball is inside it, and the floor
+          // it rests on - a radius below the centre - must not be clipped.
+          const cube = this.reflectionProbe.capture(this.scene, visual.root.position, ball.radius / 2);
+          visual.setReflection(cube);
+          // The glass ball's chain sees the room through it, and its shards fly
+          // from where it stands (see glassMaterial.ts, shardVisual.ts).
+          this.chains.setReflection(cube);
+          this.shardLayer.setReflection(cube);
+        }),
+      );
     } finally {
       visual.root.visible = ballShown;
       this.editorLayer.visible = editorShown;
@@ -1520,6 +1572,7 @@ export class Scene3D {
     }
     this.splashes.reset();
     this.chains.clear();
+    this.shardLayer.clear();
     this.vines.clear();
     // Every visual has handed its lights back on the way through, so this is the
     // backstop rather than the mechanism: a rig holding a light whose parent has
@@ -1530,6 +1583,8 @@ export class Scene3D {
   dispose(): void {
     this.clearLevel();
     this.chains.dispose();
+    this.shardLayer.dispose();
+    this.glassWear?.dispose();
     this.vines.dispose();
     this.lights.dispose();
     this.env.dispose();

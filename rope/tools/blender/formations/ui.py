@@ -1,7 +1,7 @@
 """The Formations tab in the 3D viewport's sidebar (N).
 
 It shows what the clicked object offers and little else: a formation (its
-rock, placement, guide, growth or a source slab) gets its own panel and
+rock, placement, guide or growth) gets its own panel and
 sub-panels, a free guide or a mesh gets the button that builds a rock from
 it, and with nothing selected there is only New Formation. What concerns the
 whole scene is in the Scene sub-panel, closed until opened."""
@@ -46,12 +46,6 @@ def is_pending(ob):
 def is_duplicate(ob):
     """Whether `ob` shares its mesh, or its id, with another formation."""
     return ob.data.users > 1 or sum(r["formation_id"] == ob["formation_id"] for r in core.formations()) > 1
-
-
-def sources_shown(ob):
-    slabs = bpy.data.collections.get(ob.get("formation_sources", ""))
-    recipes = bpy.data.collections.get(core.RECIPES)
-    return slabs is not None and not slabs.hide_viewport and recipes is not None and not recipes.hide_viewport
 
 
 class FORMATIONS_PT_main(bpy.types.Panel):
@@ -187,12 +181,6 @@ class FORMATIONS_PT_mesh(FormationSubpanel, bpy.types.Panel):
             col.operator("formations.action", text="Make Unique").action = "UNIQUE"
         if ob.get("formation_mode") != "MANUAL":
             col.operator("formations.action", text="Keep As Manual Mesh").action = "MANUAL"
-        if ob.get("formation_sources") in bpy.data.collections:
-            if sources_shown(ob):
-                col.operator("formations.action", text="Hide Source Slabs").action = "HIDE_SOURCES"
-                col.operator("formations.action", text="Assemble Edited Slabs").action = "ASSEMBLE"
-            else:
-                col.operator("formations.action", text="Show Source Slabs").action = "SOURCES"
         col.operator("formations.tone_facets", text="Tone Facets").scope = "SELECTED"
 
 

@@ -112,9 +112,12 @@ export interface ReplayResult {
 // (level-editor exports) carry their own geometry; use it rather than the
 // registry, which won't know the ad-hoc level.
 export function levelFromRecording(rec: Recording): Level | BallLevel {
+  // The ball it was played with (see `Recording.ball`): the same level file is
+  // both difficulties.
+  const options = { ball: rec.ball === "glass" ? ("glass" as const) : ("iron" as const) };
   if (rec.data) {
     const data = spawnAtCheckpoint(rec.data, rec.checkpoint);
-    return rec.controller === "ball" ? new BallLevel(data) : new Level(data);
+    return rec.controller === "ball" ? new BallLevel(data, options) : new Level(data);
   }
   const spec = LEVELS[rec.level];
   if (!spec) throw new Error(`Unknown level: ${rec.level}`);
@@ -124,7 +127,7 @@ export function levelFromRecording(rec: Recording): Level | BallLevel {
   // twice is moving to it once, so a self-contained bundle that already carries
   // the moved spawn is unaffected by the same call above.
   const data = spawnAtCheckpoint(spec.data, rec.checkpoint);
-  return spec.controller === "ball" ? new BallLevel(data) : new Level(data, spec.init);
+  return spec.controller === "ball" ? new BallLevel(data, options) : new Level(data, spec.init);
 }
 
 export function replayRecording(rec: Recording, options: ReplayOptions = {}): ReplayResult {

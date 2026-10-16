@@ -33,10 +33,9 @@ This add-on knows nothing of the game or the level editor: the Game add-on
 formations in depth from the game camera, through the functions here.
 
 Construction helpers never ship and never render: every formation's guide
-curve and the generator's source slabs live under RECIPES, and the mesh a
-rebuild replaced is kept under BACKUPS. Both collections are hidden in render,
-which the scene exporter honours. A backup's own outline and slabs go with it
-to BACKUPS (`stow_helpers`): RECIPES is what Show guides draws, and an outline
+curve lives under RECIPES, and the mesh a rebuild replaced is kept under
+BACKUPS. Both collections are hidden in render, which the scene exporter
+honours. A backup's own outline goes with it to BACKUPS (`stow_helpers`): RECIPES is what Show guides draws, and an outline
 there that no rock in the scene is built from reads as a guide that should
 have gone.
 
@@ -62,6 +61,7 @@ from bpy.app.handlers import persistent
 from mathutils import Matrix, Vector
 
 from . import params, render
+from .worker import RECIPE_VERSION
 
 HERE = Path(__file__).resolve().parent
 ROPE = HERE.parents[2]
@@ -128,12 +128,9 @@ def is_formation(ob):
 
 def formation_of(ob):
     """The formation `ob` belongs to: itself, the rock under its placement,
-    the rock its outline or growth belongs to, or the rock one of its source
-    slabs is (so the slabs' tools stay at hand while they are edited)."""
+    or the rock its outline or growth belongs to."""
     if ob is None or is_formation(ob):
         return ob
-    if is_formation(ob.parent) and any(c.name == ob.parent.get("formation_sources") for c in ob.users_collection):
-        return ob.parent
     rid =ob.get("formation_root") or ob.get("formation_outline_owner") or ob.get("formation_growth_owner")
     if not rid:
         return None
@@ -215,11 +212,10 @@ def validate_polygon(points):
                 raise ValueError("Polygon crosses or touches itself")
 
 
-def validate_worker(ob, slabs):
+def validate_worker(ob):
     """What a generator run has to have produced before it may replace
-    anything: a finite, watertight, non-degenerate mesh, its recipe, and the
-    source slabs it was assembled from."""
-    if not ob or ob.type != "MESH" or not slabs:
+    anything: a finite, watertight, non-degenerate mesh and its recipe."""
+    if not ob or ob.type != "MESH":
         raise ValueError("Worker file has no complete rock")
     mesh = ob.data
     if not mesh.vertices or not mesh.polygons or any(not math.isfinite(n) for v in mesh.vertices for n in v.co):
@@ -240,8 +236,6 @@ def validate_worker(ob, slabs):
             guide = recipe["guide"]
             if not guide["verts"] or not guide["faces"] or not isinstance(recipe["params"], dict):
                 raise ValueError()
-            if not any(s.type == "MESH" and len(s.data.polygons) for s in slabs.objects):
-                raise ValueError()
             return recipe
         outline, params = recipe["outline"], recipe["params"]
         if not isinstance(outline, list) or not isinstance(params, dict) or not isinstance(recipe["preset"], str):
@@ -252,8 +246,6 @@ def validate_worker(ob, slabs):
             raise ValueError()
     except (KeyError, TypeError, ValueError):
         raise ValueError("Worker file has no valid rock recipe") from None
-    if not any(s.type == "MESH" and len(s.data.polygons) for s in slabs.objects):
-        raise ValueError("Worker file has no source slabs")
     return recipe
 
 
@@ -533,9 +525,8 @@ def append_rock(file, name):
     try:
         with bpy.data.libraries.load(str(file), link=False) as (_, dst):
             dst.objects = ["SceneryRock"]
-            dst.collections = ["SOURCE_SLABS"]
-        ob, slabs = dst.objects[0], dst.collections[0]
-        recipe = validate_worker(ob, slabs)
+        ob = dst.objects[0]
+        recipe = validate_worker(ob)
         col = collection(FORMATIONS)
         col.objects.link(ob)
         root = bpy.data.objects.new(name + " / placement", None)
@@ -549,14 +540,6 @@ def append_rock(file, name):
         ob["formation_id"] = rid
         ob["formation_mode"] = "PROCEDURAL"
         root["formation_root"] = rid
-        slabs.name = "Sources / " + name + " / " + rid[:8]
-        helper_collection(RECIPES).children.link(slabs)
-        slabs.hide_render = True
-        slabs.hide_viewport = True
-        for s in slabs.objects:
-            s.parent = ob
-            s.matrix_parent_inverse = Matrix.Identity(4)
-        ob["formation_sources"] = slabs.name
         if recipe.get("generator") == "solid":
             ob["formation_outline"] = guide_object(recipe["guide"], name + " / guide", ob).name
         else:
@@ -572,8 +555,8 @@ def append_rock(file, name):
 
 
 def copy_recipe_helpers(source, target):
-    """Copy the outline and source slabs into `target`'s frame, including any
-    edits made to them."""
+    """Copy the outline into `target`'s frame, including any edits made to
+    it."""
     relative = authored_world(source).inverted()
 
     def local_for(helper):
@@ -582,21 +565,6 @@ def copy_recipe_helpers(source, target):
             return helper.matrix_parent_inverse @ helper.matrix_basis
         return relative @ authored_world(helper)
 
-    src = bpy.data.collections.get(source.get("formation_sources", ""))
-    if src:
-        copies = bpy.data.collections.new("Sources / " + target.name + " / " + target["formation_id"][:8])
-        helper_collection(RECIPES).children.link(copies)
-        copies.hide_viewport = True
-        copies.hide_render = True
-        for s in src.objects:
-            local = local_for(s)
-            n = s.copy()
-            n.data = s.data.copy()
-            copies.objects.link(n)
-            n.parent = target
-            n.matrix_parent_inverse = Matrix.Identity(4)
-            n.matrix_basis = local
-        target["formation_sources"] = copies.name
     guide = bpy.data.objects.get(source.get("formation_outline", ""))
     if guide:
         local = local_for(guide)
@@ -611,7 +579,7 @@ def copy_recipe_helpers(source, target):
 
 
 def make_unique(ob):
-    """Give a duplicated formation its own mesh, id, outline and slabs."""
+    """Give a duplicated formation its own mesh, id and outline."""
     if not is_formation(ob):
         raise ValueError("Select a formation")
     edited = mesh_hash(ob.data) != ob.get("formation_mesh_hash")
@@ -648,6 +616,14 @@ def recipe_for(ob):
     """The recipe a rebuild would run: the built one with the current outline
     and parameters."""
     recipe = json.loads(ob["formation_recipe"])
+    if (params.generator_of(recipe) == "boulders" and recipe.get("version", 1) < RECIPE_VERSION
+            and not pending(ob)):
+        # Built before version 2 and unchanged since: the recipe as it is, its
+        # outline the recorded one, for the worker to build as it was first
+        # built (worker.prepare). Read back off the guide, the outline is a
+        # rounding off, and that rearranges every facet.
+        recipe["generator"], recipe["version"] = "boulders", 1
+        return recipe
     if recipe.get("generator") == "solid":
         recipe["guide"] = guide_geometry(ob)
         recipe["camera"] = scene_camera()
@@ -656,6 +632,7 @@ def recipe_for(ob):
     else:
         recipe["outline"] = outline_points(ob)
     recipe["generator"], recipe["params"] = params.current(ob)
+    recipe["version"] = RECIPE_VERSION
     return recipe
 
 
@@ -715,8 +692,7 @@ def backup(ob):
 
 def stow_helpers():
     """Move every helper in RECIPES that no formation in the scene uses - a
-    backup's outline and slabs, or the slabs of a rock deleted by hand - into
-    BACKUPS, hidden. Kept rather than removed, as the backup itself is. The
+    backup's outline - into BACKUPS, hidden. Kept rather than removed, as the backup itself is. The
     guide of a rock deleted by hand belongs to nothing, so it is freed
     instead (`free_guide`), as `free_orphaned_guides` does the moment the
     rock goes. Idempotent, and run on every file load to tidy files saved
@@ -726,38 +702,44 @@ def stow_helpers():
         return 0
     live = [ob for ob in bpy.data.objects if is_formation(ob)]
     outlines = {ob.get("formation_outline") for ob in live}
-    sources = {ob.get("formation_sources") for ob in live}
     ids = {ob.get("formation_id") for ob in bpy.data.objects if ob.get("formation_id")}
     stale = [ob for ob in recipes.objects if ob.name not in outlines]
     orphans = [ob for ob in stale if ob.get("formation_outline_owner") not in ids]
     for ob in orphans:
         free_guide(ob)
     stale = [ob for ob in stale if ob not in orphans]
-    slabs = [c for c in recipes.children if c.name.startswith("Sources /") and c.name not in sources]
-    if not stale and not slabs:
+    if not stale:
         return len(orphans)
     backups = helper_collection(BACKUPS)
     for ob in stale:
         recipes.objects.unlink(ob)
         if ob.name not in backups.objects:
             backups.objects.link(ob)
-    for c in slabs:
-        recipes.children.unlink(c)
-        if c.name not in backups.children:
-            backups.children.link(c)
-    return len(orphans) + len(stale) + len(slabs)
+    return len(orphans) + len(stale)
 
 
-def remove_unused_helpers(sources_name, guide_name):
-    if not any(o.get("formation_sources") == sources_name for o in bpy.data.objects):
-        sources = bpy.data.collections.get(sources_name)
-        if sources:
-            for item in list(sources.objects):
-                data = item.data
-                bpy.data.objects.remove(item, do_unlink=True)
-                if data and data.users == 0:
-                    bpy.data.batch_remove(ids=[data])
-            bpy.data.collections.remove(sources)
+def remove_source_slabs():
+    """Delete the generator's source slabs a file saved before 2026-10-16
+    keeps beside its formations and their backups (their "Sources / ..."
+    collections), which nothing uses any more: they were for editing the
+    pieces by hand and assembling them, and a large rock brought in
+    thousands. Returns how many objects went."""
+    collections = [c for c in bpy.data.collections if c.name.startswith("Sources /") and c.library is None]
+    objects = {ob for c in collections for ob in c.all_objects}
+    # Their meshes go too, unless something else uses them.
+    kept = {ob.data for ob in bpy.data.objects if ob not in objects and ob.data is not None}
+    meshes = {ob.data for ob in objects if ob.data is not None} - kept
+    # One removal: deleting one object at a time updates the whole file each
+    # time, and a large rock's thousands took minutes.
+    if collections or objects:
+        bpy.data.batch_remove(ids=list(objects) + list(meshes) + collections)
+    for ob in bpy.data.objects:
+        if ob.library is None and "formation_sources" in ob:
+            del ob["formation_sources"]
+    return len(objects)
+
+
+def remove_unused_helpers(guide_name):
     if not any(o.get("formation_outline") == guide_name for o in bpy.data.objects):
         guide = bpy.data.objects.get(guide_name)
         if guide:
@@ -775,13 +757,13 @@ def remove_formation(ob):
     for other in list(bpy.data.objects):
         if rid and other.get("formation_growth_owner") == rid:
             bpy.data.objects.remove(other, do_unlink=True)
-    guide, sources, data = ob.get("formation_outline", ""), ob.get("formation_sources", ""), ob.data
+    guide, data = ob.get("formation_outline", ""), ob.data
     bpy.data.objects.remove(ob, do_unlink=True)
     if root is not None and not root.children:
         bpy.data.objects.remove(root, do_unlink=True)
     if data.users == 0:
         bpy.data.meshes.remove(data)
-    remove_unused_helpers(sources, guide)
+    remove_unused_helpers(guide)
 
 
 def replace_from_worker(ob, file, variant=False):
@@ -798,7 +780,7 @@ def replace_from_worker(ob, file, variant=False):
                 fresh.data.materials[i] = mat
         return fresh
     backup(ob)
-    previous_sources, previous_guide = ob.get("formation_sources", ""), ob.get("formation_outline", "")
+    previous_guide = ob.get("formation_outline", "")
     old_mesh = ob.data
     ob.data = fresh.data
     ob["formation_recipe"] = fresh["formation_recipe"]
@@ -815,11 +797,6 @@ def replace_from_worker(ob, file, variant=False):
         for i, mat in enumerate(old_mesh.materials):
             if i < len(ob.data.materials):
                 ob.data.materials[i] = mat
-    sources = bpy.data.collections[fresh["formation_sources"]]
-    for s in sources.objects:
-        s.parent = ob
-        s.matrix_parent_inverse = Matrix.Identity(4)
-    ob["formation_sources"] = sources.name
     guide = bpy.data.objects[fresh["formation_outline"]]
     guide.parent = ob
     guide.matrix_parent_inverse = Matrix.Identity(4)
@@ -828,56 +805,12 @@ def replace_from_worker(ob, file, variant=False):
     root = fresh.parent
     bpy.data.objects.remove(fresh, do_unlink=True)
     bpy.data.objects.remove(root, do_unlink=True)
-    remove_unused_helpers(previous_sources, previous_guide)
+    remove_unused_helpers(previous_guide)
     # The fresh one was named for "<name> / new"; the old one has gone.
     guide.name = ob.name + " / guide"
     ob["formation_outline"] = guide.name
     seal(ob)
     return ob
-
-
-def assemble_sources(ob):
-    """Join the (hand-edited) source slabs into the formation's mesh, without
-    rerunning the generator. The result is a manual mesh."""
-    src = bpy.data.collections.get(ob.get("formation_sources", ""))
-    if not src:
-        raise ValueError("No source slabs found")
-    scratch = collection("Formation scratch")
-    copies = []
-    active = bpy.context.view_layer.objects.active
-    try:
-        for s in src.objects:
-            if s.type != "MESH":
-                continue
-            n = s.copy()
-            n.data = s.data.copy()
-            scratch.objects.link(n)
-            n.parent = None
-            n.matrix_world = authored_world(ob).inverted() @ authored_world(s)
-            copies.append(n)
-        if not copies:
-            raise ValueError("Source collection is empty")
-        base = copies[0]
-        bpy.context.view_layer.update()
-        bpy.context.view_layer.objects.active = base
-        for n in copies[1:]:
-            mod = base.modifiers.new("Assemble edited slab", "BOOLEAN")
-            mod.operation = "UNION"
-            mod.solver = "EXACT"
-            mod.object = n
-            bpy.ops.object.modifier_apply(modifier=mod.name)
-        if not len(base.data.polygons):
-            raise ValueError("Assembly produced no faces")
-        backup(ob)
-        ob.data = base.data.copy()
-        ob.data.transform(authored_world(base))
-        ob["formation_mode"] = "MANUAL"
-        seal(ob)
-    finally:
-        for n in copies:
-            bpy.data.objects.remove(n, do_unlink=True)
-        bpy.data.collections.remove(scratch)
-        bpy.context.view_layer.objects.active = active
 
 
 # --- The generator, in its own processes -------------------------------------

@@ -31,6 +31,7 @@ import { WrapDirection } from "../lib/types";
 import { CONTACT_SLOP, type ContactConstraint, type World } from "../engine/world";
 import type { Level } from "../level/level";
 import type { BallLevel } from "../level/ballLevel";
+import type { BallPlayer } from "../classes/ballPlayer";
 import type { SceneChain } from "../level/chains";
 import type { TieChain } from "../engine/ties";
 import type { RawLevelData } from "../level/levelFormat";
@@ -102,6 +103,13 @@ export interface Recording {
   // on its first frame - the bundle would be evidence about a different run.
   // Absent = the level's own spawn, which is every bundle before this field.
   checkpoint?: string;
+  // The ball the run was played with, when it was not the iron one: "glass" is
+  // the Hard difficulty (`?ball=glass`, see `BallLevelOptions`), which breaks on
+  // the first solid thing it touches. A ball level's own data cannot say this -
+  // the same file is both difficulties - so a glass run replayed without it
+  // would be an iron run and diverge on the frame the glass broke. Absent =
+  // iron, which is every bundle before the field.
+  ball?: "glass";
   // The held-action mask the level's FIRST frame was stepped from. A serialized
   // frame carries held bits only and the deserializer derives pressed/released
   // by diffing against the previous frame, so a run that begins with a button
@@ -263,6 +271,12 @@ export interface WorldDigest {
   // report a divergence the recording never made. Absent on BOTH sides compares
   // equal; absent on one is a different scene.
   finished?: boolean;
+  // THE GLASS BALL (`BallPlayer.glass`): whether it has broken. Written only
+  // for a glass ball, under `finished`'s rule exactly - absent on both sides is
+  // two iron runs and compares equal (every bundle before the glass ball, and
+  // every Normal run after it), present on one alone is a different ball, and
+  // broken in one run only is a different run.
+  shattered?: boolean;
   // The SCENE CHAINS, in build order: what each one measured at the end of the
   // frame. Absent on a level with none, and - unlike `finished` - absent on one
   // side is "not recorded" rather than a different scene, since every bundle
@@ -477,6 +491,9 @@ export function worldDigestBall(level: BallLevel): WorldDigest {
     level.tieChains,
   );
   digest.aimError = level.ball.aimError;
+  // Only for a glass ball, so an iron run digests exactly what it always did
+  // (see `WorldDigest.shattered`).
+  if (level.ball.glass) digest.shattered = level.shatteredFrame !== null;
   return digest;
 }
 
@@ -522,6 +539,12 @@ export function worldDigestDrift(a: WorldDigest, b: WorldDigest): WorldDrift {
     consider(Infinity, "finish (present in one run only)");
   } else if (a.finished !== b.finished) {
     consider(Infinity, "finish (crossed in one run only)");
+  }
+  // The glass ball, by the same rule (see `WorldDigest.shattered`).
+  if ((a.shattered === undefined) !== (b.shattered === undefined)) {
+    consider(Infinity, "glass ball (in one run only)");
+  } else if (a.shattered !== b.shattered) {
+    consider(Infinity, "glass ball (broken in one run only)");
   }
   // Scene chains drift by their LENGTH, the one quantity a chain has that is a
   // distance; compared only where both runs digested them (see
@@ -659,6 +682,12 @@ export function worldDigestDeltas(
     compareIdentity(out, "finished", Number(recorded.finished), Number(replayed.finished));
   } else if ((recorded.finished === undefined) !== (replayed.finished === undefined)) {
     out.push({ name: "finished", recorded: null, replayed: null, delta: Infinity });
+  }
+  // The glass ball, under the same rule as `finished`.
+  if (recorded.shattered !== undefined && replayed.shattered !== undefined) {
+    compareIdentity(out, "shattered", Number(recorded.shattered), Number(replayed.shattered));
+  } else if ((recorded.shattered === undefined) !== (replayed.shattered === undefined)) {
+    out.push({ name: "shattered", recorded: null, replayed: null, delta: Infinity });
   }
   // Scene chains, where both runs digested them. The count is a property of
   // the level and differs only between different levels.
@@ -1843,6 +1872,80 @@ function checkBreakables(
 // dropped by a replay's rebuild is not held alive by its own watchdog.
 const finishedAt = new WeakMap<BallLevel, number>();
 
+// The frame each glass BALL was first seen broken on and where it was held, for
+// the same reason as `finishedAt`: "broken once and for good" is a claim about
+// frames, not about one. Keyed by the ball rather than the level, because a
+// respawn replaces the ball (see `BallLevel.respawn`): the broken one is gone
+// for good, and the new one is whole.
+const shatteredAt = new WeakMap<BallPlayer, { frame: number; x: number; y: number }>();
+
+// THE GLASS BALL (`BallLevel.shatterIfStruck`). Four ways it can be wrong, all
+// silent in a picture of one frame:
+//
+//   glass-iron       - an iron ball says it broke. Normal must never.
+//   glass-intact     - a whole glass ball ended the frame with a contact that
+//                      pushed on it, which is a touch the break never heard
+//                      about (a phase added after the check, a contact list it
+//                      did not read).
+//   glass-once       - the break moved, cleared, or the ball mended itself.
+//   glass-held       - a broken ball moved from where it broke, or something
+//                      still collides with it.
+function checkGlassBall(level: BallLevel): Violation[] {
+  const out: Violation[] = [];
+  const b = level.ball;
+  const frame = level.frame;
+  if (!b.glass) {
+    if (b.shattered || level.shatteredFrame !== null) {
+      out.push({ frame, kind: "glass-iron", detail: "an iron ball broke" });
+    }
+    return out;
+  }
+  if (level.shatteredFrame === null) {
+    if (b.shattered) out.push({ frame, kind: "glass-once", detail: "the ball is broken with no frame it broke on" });
+    if (shatteredAt.has(b)) {
+      out.push({ frame, kind: "glass-once", detail: `the ball broke on f${shatteredAt.get(b)!.frame} and is whole again` });
+    }
+    if (level.completedFrame === null) {
+      for (const c of level.world.frameContacts) {
+        if (c.normalImpulse > 0 && (c.a === b || c.b === b)) {
+          const other = c.a === b ? c.b : c.a;
+          out.push({
+            frame,
+            kind: "glass-intact",
+            detail: `whole after a contact with ${other.name || `body#${other.buildIndex}`} (pn=${c.normalImpulse.toFixed(3)})`,
+          });
+          break;
+        }
+      }
+    }
+    return out;
+  }
+  const seen = shatteredAt.get(b);
+  const at = b.globalPosition;
+  if (seen === undefined) {
+    shatteredAt.set(b, { frame: level.shatteredFrame, x: at.x, y: at.y });
+  } else {
+    if (seen.frame !== level.shatteredFrame) {
+      out.push({ frame, kind: "glass-once", detail: `broke on f${seen.frame} and now says f${level.shatteredFrame}` });
+    }
+    if (at.x !== seen.x || at.y !== seen.y) {
+      out.push({ frame, kind: "glass-held", detail: `the broken ball moved from (${seen.x}, ${seen.y}) to ${at}` });
+    }
+  }
+  if (!b.shattered || !b.passable || b.chain !== null) {
+    out.push({ frame, kind: "glass-held", detail: "broken, but still solid or still carrying its chain" });
+  }
+  // From the frame after: the frame it broke on is the one whose contacts broke
+  // it.
+  for (const c of frame > level.shatteredFrame ? level.world.frameContacts : []) {
+    if (c.a === b || c.b === b) {
+      out.push({ frame, kind: "glass-held", detail: "something is in contact with the broken ball" });
+      break;
+    }
+  }
+  return out;
+}
+
 export function checkBallInvariants(level: BallLevel): Violation[] {
   const out: Violation[] = [];
   const b = level.ball;
@@ -1912,6 +2015,8 @@ export function checkBallInvariants(level: BallLevel): Violation[] {
       detail: `the level was finished on f${finishedAt.get(level)} and is no longer finished`,
     });
   }
+
+  out.push(...checkGlassBall(level));
 
   if (!b.globalPosition.isFinite() || !b.linearVelocity.isFinite()) {
     out.push({ frame, kind: "nan", detail: `pos=${b.globalPosition} vel=${b.linearVelocity}` });

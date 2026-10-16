@@ -75,7 +75,9 @@ export class ChainRetract {
       // Let go: the drape as it stands starts reeling in from where it was.
       // A new throw instead: the chain that is out is the chain (see the
       // header), and one still reeling is dropped.
-      this.reeling = chain === null && this.slack?.beginReel() ? this.slack : null;
+      // Not a glass chain that broke with its ball: there is nothing left to
+      // reel it into, and it is shards (see render/glassShards.ts).
+      this.reeling = chain === null && !ball.shattered && this.slack?.beginReel() ? this.slack : null;
       this.chain = chain;
     }
     this.slack = ball.chainSlack;

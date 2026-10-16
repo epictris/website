@@ -23,7 +23,7 @@ bun run test       # THE suite: typecheck + every case suite + every playtest + 
 bun run generators:setup   # once per machine: the venv the formations add-on's boulder generator needs (Blender 5.2 on PATH too)
 ```
 
-`/` is the **level select** and `?level=NAME` plays one (`src/level/registry.ts`); `BALL` (the ball & chain controller, 3D) is the introduction and the grapple levels stay 2D.
+`/` loads the introduction and then offers the **difficulty select** - Normal (iron ball) or Hard (`?ball=glass`, a glass ball that breaks on anything solid, [docs/glass-ball.md](docs/glass-ball.md)) - and `?level=NAME` plays one level (`src/level/registry.ts`); `BALL` (the ball & chain controller, 3D) is the introduction and the grapple levels stay 2D.
 `?render=2d|3d`, `?hud=1` (F3 in play), `?aim=cursor|position|motion`, `?toggle_click=true` (click to deploy/redeploy, right-click to detach), `?probe3d=1`, `?retract=1` (the released chain reels in, still being judged), F4 captures the camera for `cli shot --view`.
 `?checkpoint=NAME` starts (and restarts) at an authored named spawn instead of the level's own - placed on the editor's notes layer, recorded into every bundle so a replay starts where the run did.
 `/editor` is the level editor; **W** switches it between the Level workspace and the Visuals workspace (a free 3D view of the collision, lights, cameras and fireflies against the level's exported Blender scene; [docs/editor-visuals.md](docs/editor-visuals.md)).
@@ -103,6 +103,7 @@ The ball and chain
 - [ball-rolling](docs/ball-rolling.md) - the steered ball's grip, spin traction on a fresh contact, the loop cap and the loop ride, the two openings a level may have: the rolling entry and the recorded arrival.
 - [ball-coil-and-hook](docs/ball-coil-and-hook.md) - the coil as an angle, how the hook attaches (sweep, blocking contact, seam, reach), the dangling tip and scene catch.
 - [manacle](docs/manacle.md) - the edge-on ring, its hinge pin, driven rotation, the bite and the mounted cuff.
+- [glass-ball](docs/glass-ball.md) - Hard: the glass ball that breaks on anything solid but water, the respawn in place, its detectors, the solid glass traced through the reflection probe, the baked wear, the shards.
 - [slack-chain-drape](docs/slack-chain-drape.md) - the visual-only drape of a chain with length to spare.
 - [chain-retract](docs/chain-retract.md) - the released chain reeling back in: the drape carrying on, render-side, deleted by the next throw.
 - [wrap-detection](docs/wrap-detection.md) - the continuous span sweep and its three exclusions, and how a corner two bodies share lets go.
@@ -134,13 +135,13 @@ Tooling
 
 - [headless-tooling](docs/headless-tooling.md) - every `cli` command, `bun run test`, the invariants, full-world digests, mechanic tests and rigs.
 - [debugging-physics](docs/debugging-physics.md) - the loop in full, past root causes, the discipline, what the suite cannot see.
-- [debugging-rendering](docs/debugging-rendering.md) - renderer discipline, the live-verification workflow, the perf rows, how a grab works.
+- [debugging-rendering](docs/debugging-rendering.md) - renderer discipline, the live-verification workflow, the perf rows, costing a pass (and why lap timers lie), how a grab works.
 - [production-recording](docs/production-recording.md) - runs streamed from swing.tris.sh, `/admin`, `replay pull`.
 - [input-latch](docs/input-latch.md) - sub-step clicks, the input trace, and the Chromium Wayland pointer-lock drop.
 
 Editor and levels
 
-- [levels](docs/levels.md) - the level select, `meta` and the listing rules, the finish line and the crossing, the completion panel (time, Retry/Next Level/Menu, the feedback half) and where what players say is kept, the level hash.
+- [levels](docs/levels.md) - the difficulty select (after the load), `meta` and the listing rules, the finish line and the crossing, the completion panel (time, Retry/Next Level/Menu, the feedback half) and where what players say is kept, the level hash.
 - [editor](docs/editor.md) - gestures, selection, vertex editing, the 3D view, orbit, the lens, the gizmo, the depth handle, ▶ Test.
 - [editor-visuals](docs/editor-visuals.md) - the Visuals workspace (W): switching, the free view and its gestures, the guides and their pick tags, picking and editing in the scene, drop on surface, the tools offered and not.
 - [generators](docs/generators.md) - retired 2026-09-29: the editor's boulder and mushroom generator service, and what survives of it in Blender.
@@ -155,7 +156,7 @@ Camera
 Rendering
 
 - [art-style](docs/art-style.md) - the painterly look (no longer the direction since 2026-09-24; the painted light is removed): painted maps, the reproducible bake, how to add a texture, what was rejected.
-- [render3d](docs/render3d.md) - two canvases one camera, the coordinate mapping, what the game draws beside the Blender scene (water, belts, debug geometry and the grey box it replaced), bodies and scene objects, what was retired, traps.
+- [render3d](docs/render3d.md) - two canvases one camera, the frame target, fill cost (the scenery's depth prepass, lights shaded only where they reach), the coordinate mapping, what the game draws beside the Blender scene (water, belts, debug geometry and the grey box it replaced), bodies and scene objects, what was retired, traps.
 - [lighting-and-surfaces](docs/lighting-and-surfaces.md) - environment, light objects in bodies, fog, HDRI skies, beams, waking lights, fireflies that follow the ball (along the camera paths or a firefly path of their own), generated and authored PBR surfaces, tiling.
 - [blender-scenes](docs/blender-scenes.md) - a level's whole look in one `.blend`: what the game still draws, body `name` binds an object to a body, `scene` names the file, shadows and waking glow, `just scene-guide` / `just scene`, the bake cache, the frame, publishing, what glTF cannot carry, credits.
 - [blender-moss](docs/blender-moss.md) - the moss add-on (since 2026-10-02): paint painterly moss onto a scene's rocks, grown as a low mound whose dabs are printed on its own texture, dark at the rim and lighter in clumps, the lighter the taller, its edge a rolled cushion along the dabs' outline (printed into the texture's alpha as a distance field and cut by the material, since 2026-10-10, or cut into the mesh) with stray clumps beyond it and grass sprigs on top; or texture only, painted into the rock's baked colour map; the export rebuilds only what its paint, rock or code changed.

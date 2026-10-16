@@ -90,9 +90,60 @@ import { resolveArrival } from "./arrivals";
 // catch up before the form is laid over it.
 export const FINISH_LINGER_FRAMES = 30;
 
+// What the ball is made of: the iron ball (Normal) or the glass one (Hard),
+// which is the same ball in every number but breaks on the first solid thing
+// it touches (see `BallLevel.shatterIfStruck`).
+export type BallKind = "iron" | "glass";
+
+export interface BallLevelOptions {
+  // Absent = iron, which is every level built before the glass ball existed.
+  ball?: BallKind;
+}
+
+// How long after a glass ball breaks a fresh one is put at the spawn, in frames:
+// two seconds (Tris, 2026-10-16: "respawn the player at the beginning after a
+// couple of seconds") - long enough to watch the shards land and settle, short
+// enough that the next attempt is the next thing that happens. The respawn is
+// the sim's own, on a frame of the run, so a replay respawns on the same frame
+// the page did (see `BallLevel.respawn`).
+export const SHATTER_RESPAWN_FRAMES = 120;
+
+// The glass ball breaking, as the facts the sim had in hand - the render side
+// throws the shards from them (see `render/glassShards.ts`) and keeps nothing
+// of the level afterwards. Every position is in world metres.
+export interface ShatterEvent {
+  // The ball's centre and size as it broke.
+  readonly at: Vec2;
+  readonly radius: number;
+  // Where it was struck, and the struck surface's outward normal there (out of
+  // the thing it hit, toward the ball).
+  readonly point: Vec2;
+  readonly normal: Vec2;
+  // The ball's velocity coming INTO the frame it broke on - the arrival, before
+  // the contact solve stopped it - and its spin.
+  readonly velocity: Vec2;
+  readonly spin: number;
+  // The glass chain it was carrying, loop to far end (empty for no chain out),
+  // and the manacle on the end of it, which break with it: a chain with no ball
+  // on it has nothing left to be a chain of.
+  readonly chain: readonly Vec2[];
+  readonly manacle: { centre: Vec2; dir: Vec2 } | null;
+}
+
 export class BallLevel {
   readonly world = new World();
-  readonly ball: BallPlayer;
+  // The ball. Replaced only by a glass ball's RESPAWN (see `respawn`): a fresh
+  // ball at the spawn, so no state of the one that broke can carry over.
+  ball: BallPlayer;
+  // Where the ball is put at the start of the level, and whether it starts on
+  // its chain - what a respawn repeats (the openings, a roll or an arrival, are
+  // the level's and are played once).
+  private readonly spawn: { at: Vec2; hang: boolean };
+  // Which attempt this is (0 for the first), and the frame it began on: a
+  // respawn starts the next one, and a finish is timed from the start of the
+  // attempt that made it (see `completeLevel` in main.ts).
+  attempt = 0;
+  attemptStartFrame = 0;
   // All PhysicsBody2D the chain may wrap (ball + statics + hook).
   bodies: PhysicsBody2D[] = [];
   frame = 0;
@@ -176,6 +227,28 @@ export class BallLevel {
   // render-only: what each breakable body has taken so far, and the per-pair
   // accounting that decides when a load is a fresh hit.
   private readonly breaker = new BreakTracker();
+
+  // THE GLASS BALL (`BallPlayer.glass`, the Hard difficulty): the frame it
+  // broke on, or null - on an iron ball always, and on a glass one until it
+  // touches something solid (see `shatterIfStruck`).
+  //
+  // Sim state, for the reason `completedFrame` is: it ends the run, so it is
+  // digested into every bundle of a glass run (`WorldDigest.shattered`) and a
+  // replay has to break on the same frame. Never cleared; a RESET builds a
+  // fresh level with a whole ball, which is what starts the run over.
+  shatteredFrame: number | null = null;
+  // Render-only, the sparks' and the debris' rule: the break this frame, for
+  // the render side to throw the shards from (see `render/glassShards.ts`).
+  // Cleared at the top of every `physicsProcess`; nothing in the sim reads it.
+  shatterEvents: ShatterEvent[] = [];
+  // Where the broken ball is held, and facing, until the reset (see
+  // `holdShattered`).
+  private shatteredPose: { at: Vec2; rotation: number } | null = null;
+  // The push-outs that moved the ball this frame - surfaces the chain phase
+  // hauled it into, which the contact solve never saw. Collected for a glass
+  // ball only (a push-out is a touch as much as a contact is), and cleared at
+  // the top of every frame.
+  private readonly ballPushes: PushOut[] = [];
 
   // THE FRAME THE PLAYER CROSSED THE FINISH LINE, once, or null on a level with
   // no finish line and on one that has not been finished (see the `finish` body
@@ -264,6 +337,13 @@ export class BallLevel {
   // so every bundle of one compares as it always did (see `WorldDigest`).
   get hasFinish(): boolean {
     return this.finishAreas.length > 0;
+  }
+
+  // What the ball is made of, as the build was asked for it (see
+  // `BallLevelOptions`): what a recording of this run has to carry for its
+  // replay to build the same ball.
+  get ballKind(): BallKind {
+    return this.ball.glass ? "glass" : "iron";
   }
 
   // Diagnostic for the anchor-kick invariant. On the frame the chain first
@@ -448,14 +528,16 @@ export class BallLevel {
   static readonly ENTRY_STUCK_FRAMES = 30;
   static readonly ENTRY_PROGRESS = 0.01;
 
-  constructor(rawData: RawLevelData) {
+  constructor(rawData: RawLevelData, options: BallLevelOptions = {}) {
     const data = scaleLevelData(rawData, PX);
     this.cameraRegions = data.cameraRegions ?? [];
     this.cameraPaths = data.cameraPaths ?? [];
     this.cameraRules = buildCameraRules(this.cameraRegions, this.cameraPaths);
     this.fireflyPaths = data.fireflyPaths ?? [];
     this.ball =new BallPlayer(data.player.radius * BallLevel.BALL_RADIUS_SCALE);
+    this.ball.glass = options.ball === "glass";
     this.ball.globalPosition = new Vec2(data.player.x, data.player.y);
+    this.spawn = { at: this.ball.globalPosition, hang: data.player.hang === true };
     // The two openings a spawn may author, and only one of them can happen: the
     // arrival is the recorded one and it decides where the ball starts, so it is
     // asked first and the roll gives way to it (see `startArrival`).
@@ -506,29 +588,7 @@ export class BallLevel {
     // (`settleChainsAtBuild`) and the vines exist and know which vine each link
     // belongs to, so the spawn anchor is taken on the same geometry, in the
     // same poses, that the first frame of play will see.
-    if (data.player.hang) {
-      // The attach callback regenerates the chain's wrap path against the
-      // scene, exactly as it does mid-play (see `physicsProcess`), so the build
-      // has to hand it the bodies first.
-      this.ball.sceneBodies = this.bodies;
-      if (this.ball.anchorOverhead()) {
-        // The anchor is OLDER THAN THE FIRST FRAME, so frame 1 is an ordinary
-        // frame of a chain that already holds the ball, not the frame it
-        // anchored on. The difference is the birth-length re-take below (see
-        // `anchoredThisFrame`): it exists because an anchor taken at the top of
-        // a frame must not charge the ball for the distance it travels during
-        // the rest of that frame, and applied to a spawn anchor it would hand
-        // the chain the first frame's fall - the ball hanging 2.7 mm below the
-        // point the level authored, off a chain 2.7 mm longer than the one it
-        // was built with. Armed here, the solve holds the authored pose
-        // instead: nothing moves, and nothing has to settle.
-        this.endWasFixed = true;
-      } else {
-        console.warn(
-          "[spawn] this level's spawn asks to start hanging, but nothing within the chain's reach is overhead: starting on the ground.",
-        );
-      }
-    }
+    if (this.spawn.hang) this.hangAtSpawn();
 
     this.cameraPosition = this.cameraAnchor();
   }
@@ -875,6 +935,10 @@ export class BallLevel {
   // nothing later in the frame can be a better account of a touch that has
   // already happened, and `bounce()` ends the flight, so there can only be one.
   private reportSpark(body: PhysicsBody2D, event: SparkEvent, arrival = false): void {
+    // Glass strikes no sparks - the ball breaks instead (`shatterIfStruck`),
+    // and its glass cuff scraping a wall is glass scraping a wall. Render-only,
+    // like every spark event, so this changes nothing the sim does.
+    if (this.ball.glass) return;
     const held = this.sparkEventIndex.get(body);
     if (held === undefined) {
       this.sparkEventIndex.set(body, { at: this.sparkEvents.length, arrival });
@@ -941,6 +1005,9 @@ export class BallLevel {
   // (see main.ts). The sim carries on stepping exactly as it would have, so a
   // bundle of a run that finished replays and finishes on the same frame.
   private finish(): void {
+    // A broken glass ball has nothing left to cross the line with: what is
+    // still in the world is its inert body, held where it broke.
+    if (this.ball.shattered) return;
     if (this.completedFrame === null) this.completedFrame = this.frame;
   }
 
@@ -1058,6 +1125,11 @@ export class BallLevel {
   // it was played - on this level, with this sim, rather than as a picture of
   // one that was.
   private playerInput(input: FrameInput): FrameInput {
+    // A broken ball is no one's to steer: no throw, and an aim at its own
+    // centre, which is "not aiming" (see `BallPlayer.resolveInput`).
+    if (this.ball.shattered) {
+      return { ...input, fire: { ...NO_BUTTON }, mouseWorldPosition: this.ball.globalPosition };
+    }
     const arrival = this.arrival;
     if (arrival !== null) return arrival.frames[arrival.next++]!;
     if (this.entry === null) return input;
@@ -1097,15 +1169,29 @@ export class BallLevel {
 
   physicsProcess(input: FrameInput, delta: number): void {
     this.frame++;
+    // A broken glass ball is replaced at the spawn once the shards have had
+    // their moment (see `respawn`). Until then the world carries on around the
+    // inert ball (see `holdShattered`), and a jump press below is still the
+    // way to restart the whole level. First thing in the frame, so everything
+    // below - the swept finish, the render snapshot - starts from the new
+    // ball rather than seeing it jump from where the old one broke.
+    if (this.shatteredFrame !== null && this.frame - this.shatteredFrame >= SHATTER_RESPAWN_FRAMES) {
+      this.respawn();
+    }
     // Where the ball stands as the frame BEGINS, for the swept finish test at
     // the bottom of this method. A local rather than a field because that is
     // the whole of its life, and deliberately not the render interpolation's
     // snapshot beside it (`captureRenderTransforms`), which is render-side
     // state the sim may not read.
     const ballWasAt = this.ball.globalPosition;
+    // ...and how fast it was going, which is what a glass ball breaking this
+    // frame breaks AT: by the end of the frame the contact solve has stopped it.
+    const ballArrival = this.ball.linearVelocity;
     this.sparkEvents.length = 0;
     this.sparkEventIndex.clear();
     this.breakEvents.length = 0;
+    this.shatterEvents.length = 0;
+    this.ballPushes.length = 0;
     this.ballSparkSpin = null;
     Debug.clear();
     PhysTrace.frame = this.frame;
@@ -1119,6 +1205,7 @@ export class BallLevel {
       this.onReset?.();
       return;
     }
+
 
     // The two openings, before anything reads the input: while either stands
     // the player's own hands are off the ball (see `playerInput`), and both end
@@ -1335,7 +1422,13 @@ export class BallLevel {
     // overlaps are that island's contact rows, solved with the chain that put
     // it there, as a slat's are.
     const pushOutBefore = this.ball.globalPosition;
-    if (this.ballRowActive === null) this.world.depenetrateRigid(this.ball);
+    if (this.ballRowActive === null) {
+      const leading = this.world.depenetrateRigid(this.ball);
+      // A surface the ball was left buried in is one it touched (see
+      // `shatterIfStruck`). Collected only for the glass ball, which is the
+      // only one that cares.
+      if (this.ball.glass) this.ballPushes.push(...leading.filter(BallLevel.realPush));
+    }
     const leadingPush = this.ball.globalPosition.distanceTo(pushOutBefore);
     // Position-only, so this phase never shows a velocity of its own; it is
     // marked so that what follows is measured from a ball already clear of the
@@ -2442,6 +2535,9 @@ export class BallLevel {
         pull === null
           ? null
           : this.ball.linearVelocity.sub(velocityBeforeChain).dot(pull) - chainBound;
+      // Every surface the phase pushed the ball out of is one the chain hauled
+      // it into, which the glass ball breaks on (see `shatterIfStruck`).
+      if (this.ball.glass) this.ballPushes.push(...pushedOutOf.filter(BallLevel.realPush));
       // And what it handed the ball out of the surfaces it pushed it out of
       // (see the field): how much faster the ball is LEAVING each of them, along
       // its push-out normal and relative to the surface's own motion, than it
@@ -2516,6 +2612,13 @@ export class BallLevel {
     // nothing and costs the reader one frame of scenery that was already broken.
     this.breakBodies(delta);
 
+    // The glass ball, on the frame's final contacts: broken by anything solid
+    // it touched this frame, and held where it broke on every frame after.
+    // After every phase that moves it, for the reason the breakables wait: the
+    // chain it lets go of is one the chain phase was holding a reference to.
+    if (this.ball.shattered) this.holdShattered();
+    else if (this.ball.glass) this.shatterIfStruck(ballArrival);
+
     // THE CROSSING, SWEPT (see `classes/finishLine.ts`). Last, on the frame's
     // final poses, so what is asked about is the step the player just took.
     //
@@ -2569,6 +2672,169 @@ export class BallLevel {
       removeBrokenBody(this.world, this.bodies, event.body);
       this.breakEvents.push(event);
     }
+  }
+
+  // Break the glass ball if it touched anything solid this frame.
+  //
+  // WHAT A TOUCH IS. Either the contact solve pushed back on it - a contact on
+  // the ball that ended the solve carrying normal impulse, which is a landing,
+  // a graze or a crate knocked into it, and includes the speculative contact
+  // that stops a ball arriving within the slop before it ever overlaps - or a
+  // push-out moved it out of a surface the chain had hauled it into, which the
+  // contact solve never saw. A speculative contact that pushed nothing is a
+  // ball passing close, and is not one.
+  //
+  // WHAT IS NOT SOLID is everything the solver never pairs the ball with, which
+  // is exactly the list the request makes: water and every other area (a region,
+  // not a body), a vine (a non-solid link), and the ball's own hook, which it
+  // has a collision exception with. The hook and the chain touch whatever they
+  // like - neither is the ball.
+  //
+  // A level already FINISHED is not broken by what the ball meets on its way
+  // out of the gate: the run is over and the linger is the page's presentation
+  // of that (see `FINISH_LINGER_FRAMES`).
+  private shatterIfStruck(arrival: Vec2): void {
+    if (this.completedFrame !== null) return;
+    const ball = this.ball;
+    let struck: { point: Vec2; normal: Vec2; load: number } | null = null;
+    for (const c of this.world.frameContacts) {
+      if (c.normalImpulse <= 0) continue;
+      // `normal` is out of `b`, toward `a` (see `ContactConstraint`), so it is
+      // out of the struck surface when the ball is `a`.
+      let normal: Vec2;
+      if (c.a === ball) normal = c.normal;
+      else if (c.b === ball) normal = c.normal.neg();
+      else continue;
+      if (struck === null || c.normalImpulse > struck.load) {
+        struck = { point: c.point, normal, load: c.normalImpulse };
+      }
+    }
+    if (struck === null) {
+      for (const p of this.ballPushes) {
+        if (!p.other.isSolid || p.other instanceof BallHook) continue;
+        if (struck === null || p.depth > struck.load) struck = { point: p.point, normal: p.normal, load: p.depth };
+      }
+    }
+    if (struck === null) return;
+
+    this.shatteredFrame = this.frame;
+    // The chain and its manacle are glass too, and with no ball on them they
+    // are nothing: they break with it. Read before the chain is let go of.
+    const chain = ball.chain;
+    const path = chain
+      ? (ball.chainSlack?.pathLoopToAnchor(1) ?? chain.path().map((n) => n.contact.globalPosition))
+      : [];
+    const manacle = ball.manaclePose(1);
+    this.shatterEvents.push({
+      at: ball.globalPosition,
+      radius: ball.radius,
+      point: struck.point,
+      normal: struck.normal,
+      velocity: arrival,
+      spin: ball.angularVelocity,
+      chain: path,
+      manacle: manacle ? { centre: manacle.centre, dir: manacle.dir } : null,
+    });
+    ball.releaseChain();
+    ball.shattered = true;
+    // In nothing's way from here on, and nothing in its: a broken ball is not
+    // there to be landed on, pushed or hooked.
+    ball.passable = true;
+    this.shatteredPose = { at: ball.globalPosition, rotation: ball.globalRotation };
+    this.holdShattered();
+  }
+
+  // Make the ball iron or glass BEFORE THE LEVEL HAS STEPPED - the menu page's
+  // pick (see `chooseDifficulty` in main.ts), which must not rebuild a level
+  // that is already built, warmed and on the GPU: a rebuild there was a
+  // 0.7-0.8 s first frame (measured 2026-10-16), the whole scene re-uploaded.
+  //
+  // Exact rather than approximate: nothing in the build reads `glass` (the
+  // ball's kind is read only by `physicsProcess` and the renderers), so a level
+  // built iron and made glass before frame 1 steps bit for bit as one built
+  // glass - which is what a replay of the run does (`levelFromRecording`).
+  // After frame 0 that is no longer true, and it is refused.
+  setBallKind(kind: BallKind): void {
+    if (this.frame !== 0) throw new Error("BallLevel.setBallKind: the level has already stepped");
+    this.ball.glass = kind === "glass";
+  }
+
+  // Start the ball on its anchor, as a spawn that says so asks (see
+  // `SpawnData.hang`): at build, and again at a respawn.
+  private hangAtSpawn(): void {
+    // The attach callback regenerates the chain's wrap path against the
+    // scene, exactly as it does mid-play (see `physicsProcess`), so it has to
+    // be handed the bodies first.
+    this.ball.sceneBodies = this.bodies;
+    if (this.ball.anchorOverhead()) {
+      // The anchor is OLDER THAN THE FIRST FRAME, so frame 1 is an ordinary
+      // frame of a chain that already holds the ball, not the frame it
+      // anchored on. The difference is the birth-length re-take below (see
+      // `anchoredThisFrame`): it exists because an anchor taken at the top of
+      // a frame must not charge the ball for the distance it travels during
+      // the rest of that frame, and applied to a spawn anchor it would hand
+      // the chain the first frame's fall - the ball hanging 2.7 mm below the
+      // point the level authored, off a chain 2.7 mm longer than the one it
+      // was built with. Armed here, the solve holds the authored pose
+      // instead: nothing moves, and nothing has to settle.
+      this.endWasFixed = true;
+    } else {
+      console.warn(
+        "[spawn] this level's spawn asks to start hanging, but nothing within the chain's reach is overhead: starting on the ground.",
+      );
+    }
+  }
+
+  // THE RESPAWN after a glass ball breaks: a fresh ball at the spawn, in the
+  // same level, with everything else in it exactly as the last attempt left it.
+  //
+  // Not a rebuild, which is what a kill zone's reset is (Tris, 2026-10-16:
+  // "don't reload the whole page when the glass ball shatters, just respawn the
+  // player at the beginning"): a rebuild is a new world and a new 3D scene, and
+  // after a break - a thing Hard asks the player to do over and over - it read
+  // as the page reloading. A fresh BallPlayer rather than the broken one put
+  // back, so that nothing of it carries over (its loop ride, its aim, its wind
+  // stall, the layer `passable` moved it to): the old one leaves the world, the
+  // new one takes its place in the level's body list, and the renderers follow
+  // `ball` to it.
+  //
+  // Sim state, on a frame of the run: a replay respawns on the same frame, and
+  // the recorder's run simply carries on through it.
+  private respawn(): void {
+    const old = this.ball;
+    old.releaseChain();
+    this.world.remove(old);
+    const ball = new BallPlayer(old.radius);
+    ball.glass = old.glass;
+    ball.globalPosition = this.spawn.at;
+    ball.spawnBody = (b) => this.spawnBody(b);
+    ball.vineFor = old.vineFor;
+    this.world.add(ball);
+    const at = this.bodies.indexOf(old);
+    if (at >= 0) this.bodies[at] = ball;
+    else this.bodies.unshift(ball);
+    this.ball = ball;
+    this.shatteredFrame = null;
+    this.shatteredPose = null;
+    this.endWasFixed = false;
+    this.attempt++;
+    this.attemptStartFrame = this.frame;
+    if (this.spawn.hang) this.hangAtSpawn();
+    this.cameraPosition = this.cameraAnchor();
+  }
+
+  // Keep the broken ball where it broke, still. It stays in the world - every
+  // phase of the frame takes the ball as given, and the camera reads it - but
+  // as a body that collides with nothing and is put back each frame wherever
+  // gravity or water took it, so the world goes on around it unchanged and the
+  // camera holds on the place it broke until the reset.
+  private holdShattered(): void {
+    const pose = this.shatteredPose;
+    if (pose === null) return;
+    this.ball.globalPosition = pose.at;
+    this.ball.globalRotation = pose.rotation;
+    this.ball.linearVelocity = Vec2.ZERO;
+    this.ball.angularVelocity = 0;
   }
 
   // Rewrite the ball's spark event with the spin the frame actually REALISED,

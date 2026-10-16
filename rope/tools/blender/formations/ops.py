@@ -336,8 +336,7 @@ class FORMATIONS_OT_rebuild_changed(bpy.types.Operator):
                 try:
                     with bpy.data.libraries.load(str(file), link=False) as (_, dst):
                         dst.objects = ["SceneryRock"]
-                        dst.collections = ["SOURCE_SLABS"]
-                    core.validate_worker(dst.objects[0], dst.collections[0])
+                    core.validate_worker(dst.objects[0])
                 finally:
                     imported = core.datablocks() - before
                     if imported:
@@ -373,8 +372,6 @@ class FORMATIONS_OT_action(bpy.types.Operator):
                 render.reset(ob)
             elif self.action == "MANUAL":
                 ob["formation_mode"] = "MANUAL"
-            elif self.action == "ASSEMBLE":
-                core.assemble_sources(ob)
             elif self.action in ("OUTLINE", "ROCK"):
                 # One or the other: the guide shown and selected with its rocks
                 # hidden, or the rock with its guide hidden. Its rocks: a
@@ -397,11 +394,6 @@ class FORMATIONS_OT_action(bpy.types.Operator):
                 target.select_set(True)
                 context.view_layer.objects.active = target
                 guide.hide_set(target is not guide)
-            elif self.action == "SOURCES":
-                core.collection(core.RECIPES).hide_viewport = False
-                bpy.data.collections[ob["formation_sources"]].hide_viewport = False
-            elif self.action == "HIDE_SOURCES":
-                bpy.data.collections[ob["formation_sources"]].hide_viewport = True
             return {"FINISHED"}
         except (KeyError, ValueError) as e:
             self.report({"ERROR"}, str(e))

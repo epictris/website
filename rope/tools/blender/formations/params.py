@@ -20,15 +20,17 @@ import bpy
 from bpy.app.handlers import persistent
 from bpy.props import BoolProperty, EnumProperty, FloatProperty, IntProperty
 
-from .worker import DEFAULT_PARAMS, GENERATORS
+from .worker import DEFAULT_PARAMS, GENERATORS, LEGACY_THICKNESS, legacy_slab_size
 
 # Lengths show three significant digits: Blender's unit display counts
 # precision in them, and at its default 1.05 m reads as "1 m".
 # Recipe key -> field, per generator, in the order the panel shows them.
 FIELDS = {
     "fitted": {"seed": "seed", "depth": "depth", "smallestRock": "smallest_rock", "largestRock": "largest_rock"},
-    "boulders": {"seed": "seed", "depth": "depth", "slabsPerArea": "slabs_per_area", "weathering": "weathering",
-                 "faceBudget": "face_budget", "detail": "detail", "voxelCap": "voxel_cap"},
+    "boulders": {"seed": "seed", "depth": "depth", "slabsPerArea": "slabs_per_area", "slabWidth": "slab_width",
+                 "slabLength": "slab_length", "weathering": "weathering",
+                 "faceBudget": "face_budget", "detail": "detail", "voxelCap": "voxel_cap",
+                 "edgeBevelWidth": "edge_bevel"},
     "solid": {"seed": "seed", "stoneSize": "stone_size", "facets": "facets", "chisel": "chisel", "knub": "knub",
               "curveTurn": "curve_turn", "floor": "floor", "fixedScale": "fixed_scale",
               "facetFalloff": "facet_falloff"},
@@ -39,6 +41,12 @@ SOLID = GENERATORS["solid"]
 
 class FormationParams(bpy.types.PropertyGroup):
     loaded: BoolProperty(description="The fields hold this rock's parameters")
+    # Fields saved before 2026-10-16 hold a boulder rock's construction depth
+    # in `depth`, not its thickness; `load_all` converts them once.
+    real_thickness: BoolProperty(description="Thickness is the rock's own, front to back")
+    # Fields saved before 2026-10-16 have no slab width or length; `load_all`
+    # gives them the ones the rock was built with, once.
+    slab_sizes: BoolProperty(description="Slab width and length are the rock's own")
     generator: EnumProperty(name="Generator", items=[
         ("fitted", "Fitted slate", "Recipe F rocks sized and turned to fit the outline, fused into one mass: "
                                    "the cave look (docs/cave-look.md)"),
@@ -47,16 +55,24 @@ class FormationParams(bpy.types.PropertyGroup):
                                  "game's start camera: the backdrop (docs/blender-backdrop.md)"),
     ])
     seed: IntProperty(name="Seed", default=FITTED["seed"], min=0)
-    depth: FloatProperty(name="Thickness", default=1.05, min=.02, max=50, precision=3, subtype="DISTANCE")
+    depth: FloatProperty(name="Thickness", description="The rock's thickness through the gameplay plane, front to "
+                         "back", default=1.05, min=.02, max=50, precision=3, subtype="DISTANCE")
     smallest_rock: FloatProperty(name="Smallest rock", description="A rock's smallest long half-length",
                                  default=FITTED["smallestRock"], min=.05, max=10, precision=3, subtype="DISTANCE")
     largest_rock: FloatProperty(name="Largest rock", description="A rock's largest long half-length",
                                 default=FITTED["largestRock"], min=.1, max=50, precision=3, subtype="DISTANCE")
-    slabs_per_area: FloatProperty(name="Fractures", description="Slabs per square metre of outline (2 to 100 in all)",
+    slabs_per_area: FloatProperty(name="Fractures", description="Slabs per square metre of outline (at least "
+                                  "2): how densely they overlap",
                                   default=DEFAULT_PARAMS["slabsPerArea"], min=.5, max=100)
+    slab_width: FloatProperty(name="Slab width", description="A slab's width across the outline, about its middle "
+                              "(75 to 125 %): the same at any outline size", default=DEFAULT_PARAMS["slabWidth"],
+                              min=.05, max=20, precision=3, subtype="DISTANCE")
+    slab_length: FloatProperty(name="Slab length", description="A slab's length up the outline, about its middle "
+                               "(61 to 139 %): the same at any outline size", default=DEFAULT_PARAMS["slabLength"],
+                               min=.05, max=20, precision=3, subtype="DISTANCE")
     weathering: FloatProperty(name="Weathering", description="How irregular each slab's corners and long edges are",
                               default=DEFAULT_PARAMS["weathering"], min=0, max=1)
-    face_budget: IntProperty(name="Face budget", description="Faces kept per 8.5 m of outline perimeter",
+    face_budget: IntProperty(name="Face budget", description="Faces kept per 30 m² of rock surface",
                              default=DEFAULT_PARAMS["faceBudget"], min=200, max=100000, soft_max=10000)
     detail: FloatProperty(name="Remesh detail", description="Remesh resolution: finer as it rises",
                           default=DEFAULT_PARAMS["detail"], min=.25, max=4)
@@ -84,6 +100,10 @@ class FormationParams(bpy.types.PropertyGroup):
                                  default=SOLID["facetFalloff"], min=0, max=3)
     voxel_cap: FloatProperty(name="Voxel cap", description="Largest remesh voxel, whatever the outline",
                              default=DEFAULT_PARAMS["voxelCap"], min=.002, max=.1, precision=3, subtype="DISTANCE")
+    edge_bevel: FloatProperty(name="Edge bevel", description="Width of the bevel on every sharp edge: well under a "
+                              "millimetre it draws a fine highlight along each crease; 0 leaves the edges sharp",
+                              default=DEFAULT_PARAMS["edgeBevelWidth"], min=0, max=.05, precision=5, step=.001,
+                              subtype="DISTANCE")
 
 
 def draw(layout, settings, solid):
@@ -132,6 +152,12 @@ def built(ob):
     generator = generator_of(recipe)
     given = recipe["params"]
     params = {k: given.get(k, GENERATORS[generator].get(k)) for k in FIELDS[generator]}
+    if generator == "boulders" and recipe.get("version", 1) < 2:
+        # Built when its depth was the construction's and its slabs were
+        # shares of its outline (worker.RECIPE_VERSION).
+        if params["depth"] is not None:
+            params["depth"] *= LEGACY_THICKNESS
+        params["slabWidth"], params["slabLength"] = legacy_slab_size(recipe["outline"])
     return generator, params
 
 
@@ -176,16 +202,34 @@ def load(ob):
         if params[key] is not None:
             setattr(settings, field, params[key])
     settings.loaded = True
+    settings.real_thickness = True
+    settings.slab_sizes = True
 
 
 def load_all():
     from . import core
     for ob in bpy.data.objects:
-        if core.is_formation(ob) and ob.is_editable and not ob.formation_params.loaded:
+        if not core.is_formation(ob) or not ob.is_editable:
+            continue
+        settings = ob.formation_params
+        if not settings.loaded:
             try:
                 load(ob)
             except (KeyError, TypeError, ValueError):
                 pass  # A broken recipe is reported where it is built from.
+            continue
+        if not settings.real_thickness:
+            if settings.generator == "boulders":
+                settings.depth *= LEGACY_THICKNESS
+            settings.real_thickness = True
+        if not settings.slab_sizes:
+            try:
+                generator, params = built(ob)
+            except (KeyError, TypeError, ValueError):
+                continue
+            if generator == "boulders":
+                settings.slab_width, settings.slab_length = params["slabWidth"], params["slabLength"]
+            settings.slab_sizes = True
 
 
 @persistent
@@ -193,6 +237,7 @@ def on_load(_):
     load_all()
     from . import core
     core.guide_worlds.clear()
+    core.remove_source_slabs()
     core.stow_helpers()
     core.style_guides()
 

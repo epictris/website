@@ -2375,6 +2375,9 @@ switch (cmd) {
   case "finish":
     void cmdFinish();
     break;
+  case "glass":
+    void cmdGlass();
+    break;
   case "entry":
     void cmdEntry();
     break;
@@ -2653,6 +2656,23 @@ async function cmdFinish(): Promise<void> {
     if (!r.passed) failed++;
   }
   console.log(`[finish] ${results.length - failed}/${results.length} cases passed`);
+  process.exit(failed > 0 ? 1 : 0);
+}
+
+// Glass ball cases (src/sim/glassCases.ts): the Hard difficulty's ball breaks
+// on the frame it lands and not in water, hangs whole off its hook, is the iron
+// ball bit for bit until it breaks, restarts the level with the world running,
+// survives a finished level, and replays as glass.
+async function cmdGlass(): Promise<void> {
+  const { runGlassCases } = await import("../sim/glassCases");
+  const results = runGlassCases();
+  let failed = 0;
+  for (const r of results) {
+    console.log(`  ${r.passed ? "PASS " : "FAIL "} ${r.name}`);
+    for (const d of r.details) console.log(`        ${d}`);
+    if (!r.passed) failed++;
+  }
+  console.log(`[glass] ${results.length - failed}/${results.length} cases passed`);
   process.exit(failed > 0 ? 1 : 0);
 }
 

@@ -52,7 +52,7 @@ import type { CollisionObject2D } from "../engine/body";
 import { BallLevel } from "../level/ballLevel";
 import { ScriptedInput, scriptSpec, type PlaytestScript } from "./playtest";
 import { BodyVisual } from "../render3d/bodyVisuals";
-import { ChainLayer } from "../render3d/chainVisual";
+import { AVATAR_CHAIN_MESH, ChainLayer } from "../render3d/chainVisual";
 
 const DT = 1 / 60;
 
@@ -593,7 +593,9 @@ function caseCuffDepth(): RootResult {
     const chains = withCanvasStub(() => new ChainLayer(scene));
     chains.sync(level, 1, null, depthOf);
     const cuff = scene.children.find((o) => o instanceof THREE.Group && o.visible)!;
-    const mesh = scene.children.find((o): o is THREE.InstancedMesh => o instanceof THREE.InstancedMesh)!;
+    const mesh = scene.children.find(
+      (o): o is THREE.InstancedMesh => o instanceof THREE.InstancedMesh && o.name === AVATAR_CHAIN_MESH,
+    )!;
     const m = new THREE.Matrix4();
     const p = new THREE.Vector3();
     const links: number[] = [];

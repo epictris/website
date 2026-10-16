@@ -30,9 +30,9 @@ The panel shows what the clicked object offers and little else (2026-10-08, Tris
 - **Nothing**, or something that is no part of a formation: a hint and **New Formation** (a preset outline at the 3D cursor).
 - **A free guide** (a local closed curve no rock owns): **Build Formation from Guide**.
 - **A mesh** of the scene's own, unparented and no part of a formation: **Build Formation from Mesh** (a Solid guide).
-- **A formation**: its rock, placement, guide, growth, or one of its source slabs while they are shown (so Assemble stays at hand).
+- **A formation**: its rock, placement, guide or growth.
   Its name and generator, **Regenerate** (not on a manual mesh, red while the guide or parameters changed) and **New Variant**, **View Guide** on the rock or **View Formation** from anything else of it (each shows and selects one of the pair and hides the other), then sub-panels: **Generator** (open), and **Growth**, **Render (export)** and **Mesh** (closed).
-  Mesh offers **Make Unique** only on a duplicate, **Keep As Manual Mesh** only on a generated one, **Show Source Slabs** or, once they are shown, **Hide Source Slabs** and **Assemble Edited Slabs**, and **Tone Facets**.
+  Mesh offers **Make Unique** only on a duplicate, **Keep As Manual Mesh** only on a generated one, and **Tone Facets**.
 - **Rebuild Changed (n)** shows under all of it while any formation in the scene is pending.
 - **Scene**, closed until opened, holds what concerns every formation: Show guides, Solid rocks as wireframe, replanting Stale or All growth, Tone All Facets and Repaint (slate).
 
@@ -73,10 +73,27 @@ The dialog's **Generator** picks how (the recipe's `generator`; a recipe without
   Nothing is clipped to the outline: clipping looks artificial.
   On `dark-rock-4` (18 m²) it is 14 rocks, about 3900 faces, in about 5 s.
   Tried and dropped on the way, the same day: rocks in fixed tiers (read as a pile of stones, and large areas cut into small rocks), backing layers of bigger stones (their seams met the front's and left holes), a core held inside the outline (the silhouette fell short), and rocks built at 1 m and scaled up (detail grows with the rock).
-- **Boulder generator** (`boulders`): `tools/blender/boulders`, unmodified, slabs cut to the outline and unioned.
-  Its defaults are the generator's own (`params.json`: 10 slabs per m², a 3000-face budget, detail 1, a 1.2 cm voxel cap, weathering 0.38, the tolerance derived from the outline), the many crisp slabs the editor's boulder service built.
+- **Boulder generator** (`boulders`): `tools/blender/boulders`, slabs cut to the outline and unioned.
+  Its defaults are the generator's own (`params.json`: 10 slabs per m², 3000 faces per 30 m² of rock surface, detail 1, a 1.2 cm voxel cap, weathering 0.38, the tolerance derived from the outline), the many crisp slabs the editor's boulder service built.
+  It builds the same rock at any outline size (since 2026-10-16): a larger outline takes more slabs, not larger ones.
+  A slab's size is the rock's own **Slab width** and **Slab length**, in metres about their middles (75-125 % and 61-139 %); Fractures is how densely they overlap, with no most; the core reaches its full depth 0.233 depths in from the outline; and the face budget follows the rock's surface.
+  Before, a slab was 29-48 % of the outline's width and 19-43 % of its height, the count stopped at 100 and the budget followed the perimeter, all tuned on boulders a few metres across: a 37 x 18 m outline (Terrace.001) got 100 slabs 11-18 m wide, sawn flat by the outline and the depth box.
+  A new rock's slabs are what those shares came to on Terrace.003 (1.5 x 0.43 m), and its core ramp is 30 % of the extent its slabs stand for.
+  A rock built before (recipe `version` under 2) shows its own sizes in the fields, read off its outline (`worker.legacy_slab_size`), and **regenerated with nothing changed** (no field, no outline: not pending) it is built by the rules it was first built with (`core.recipe_for` hands the worker the recorded recipe, outline and all; `legacy_sizing` in the generator): its construction depth, slabs and core ramp as shares of its outline, faces per perimeter, with today's bevel and cleanup.
+  That is the only way it comes back as it was: the booleans, remesh and decimation turn a micrometre in their input (the depth read back as 1.7999999999999998, the outline off the guide curve in single precision) into a rearranged set of facets, and Terrace rebuilt from its migrated fields under the new rules visibly faceted its middle slab differently (2867 pixels off in a same-run render, against none on this path).
+  Change any field or the outline and it is built by the new rules from the fields.
+  One size for every rock was tried first and dropped the same day: Terrace's slabs grew 10-15 % and, with the same seed, every overlap fell elsewhere and the rock read blockier (Tris: "the edges are sharper").
+  **Thickness** is the rock's own, front to back: the rock is cut from the outline extruded half of it either side of the gameplay plane (`rockgen.ENVELOPE`).
+  Until 2026-10-16 it was the construction's depth, a 2.6th of the thickness (Thickness 1 m built 2.6 m of stone); a recipe from before (`version` under 2) and fields saved before are read as 2.6 times thicker, so a rock keeps its size.
+  Slab placement keeps each candidate's distance to the nearest slab (it was cubic in the slab count: 1197 slabs would have taken hours), and each piece is in the scene only while its own operators run (every operator evaluates the whole scene, so a rock's pieces cost the square of their count).
   From 2026-09-29 to 2026-10-04 they were Karin's scenery adapter's (1.3 slabs per m², 1000 faces, detail 0.25, 4.5 cm voxels), which cut a formation into a few big, softly remeshed chunks; Tris preferred the slabs.
   A rock built in that window keeps every one of them in its recipe and its fields, and a regenerate keeps them until they are changed; tolerance is never a field and is always derived from the outline.
+  Its last step is the **edge bevel** (the panel's Edge bevel, `edgeBevelWidth`, 0.2 mm by default): every edge sharper than 36°, convex or concave, gets a strip up to that wide (`limit_edge_bevel` in `blender_build.py`).
+  A strip far under a pixel still shows: antialiasing blends its in-between normal into the pixels along the crease, a fine highlight on every edge, which is the weathered rim Tris likes; with no bevel the rock reads flatter.
+  Until 2026-10-16 it asked 18 mm through Blender's bevel with Clamp Overlap, which is global: the tightest spot on a decimated rock set every edge's width, so it came out between 0.02 and 0.3 mm (0.21 mm on Terrace, 0.08 mm on Terrace.003, whose strips were half its faces), and on a large outline the cleanup's collapse of the narrowest ones folded the mesh ("Worker rock mesh must be watertight", on any seed).
+  Now each edge is held to its own room (which needs Clamp Overlap off), an edge with less room than a tenth of the width or 0.05 mm gets no strip, and since Blender then slides a strip's end along a shallow neighbouring edge, sometimes by decimetres, the edges whose strips carry a vertex out past the surface are halved until none does.
+  The worker's last cleanup (`assemble.remove_degenerate`) collapses only edges under 0.01 mm whose ends share no neighbour but their own triangles' corners (the link condition) and flips needle triangles; bmesh's `dissolve_degenerate`, which it replaced, pinched a large rock's mesh where it collapsed a few dozen such edges.
+  Tris also saw it at 18 mm and 3 mm on Terrace.003: at 3 mm the strip doubles the edge line, at 18 mm it is a flat band, and either costs about twice the triangles of no bevel.
 - **Solid guide** (`solid`, since 2026-10-05, `formations/solidfit.py`): recipe F stones cut from a closed **guide mesh** instead of an outline, sized and worked by their depth from the game's start camera; the backdrop is made of these ([blender-backdrop](blender-backdrop.md)).
   **Build Formation from Mesh**, with a closed mesh selected, makes one: the mesh becomes the rock's guide, in world space, and the rock stands at the world origin, since its stones are sized by their depth from the eye.
   Its recipe holds the guide's geometry, the start camera and water (`backdrop_camera` on the scene, which `tools/blender/backdrop.py` writes from the level: a scene without it cannot build one) and the rock's world frame; moving the guide, editing its mesh, moving the rock or changing the start camera makes it pending.
@@ -117,10 +134,11 @@ The ivy and moss add-ons' growths are bent with their rocks at export (`scene_ex
 `cave-sheet-study/slate_check.py --curve 0|1` renders a rock with and without.
 
 A generated mesh is sealed (`formation_mesh_hash`); one edited by hand is protected from being rebuilt over, and **Keep As Manual Mesh** says so on purpose.
-**Show Source Slabs** and **Assemble Edited Slabs** expose the generator's pieces and join edited ones into a manual mesh.
-**Make Unique** gives a duplicate its own mesh, id, outline and slabs.
-The outline curves and slabs live in `Formation recipes`, hidden in render, which the exporter honours.
-Only the outlines and slabs of the rocks in the scene stay there, so **Show guides** draws nothing stale: a backup's (a rebuild's or a Delete's) go with it to `Formation backups`, as do the slabs of a rock deleted by hand, and every file load tidies one saved before this rule (`core.stow_helpers`, 2026-10-07).
+The generator's pieces (the source slabs) are not kept, since 2026-10-16: **Show Source Slabs** and **Assemble Edited Slabs**, which let them be edited by hand and joined into a manual mesh, are gone, as Tris no longer used them, and a large rock brought in thousands (Terrace.001, about 2000, froze Blender for 20 s as they came in).
+A file saved before has them deleted when it opens (`core.remove_source_slabs`).
+**Make Unique** gives a duplicate its own mesh, id and outline.
+The outline curves live in `Formation recipes`, hidden in render, which the exporter honours.
+Only the outlines of the rocks in the scene stay there, so **Show guides** draws nothing stale: a backup's (a rebuild's or a Delete's) goes with it to `Formation backups`, and every file load tidies one saved before this rule (`core.stow_helpers`, 2026-10-07).
 **A guide no rock is built from is always shown** (2026-10-08, Tris): the guide of a rock deleted by hand (X, not the panel's Delete, which backs the rock up with its guide) becomes a free guide the moment the rock goes, moved to `Formation guides`, which Show guides never hides, and left where it stood (`core.free_orphaned_guides`, a depsgraph handler that remembers each guide's world matrix, because Blender drops a deleted parent's transform and the guide would otherwise jump to the origin).
 Undo brings the rock and its guide back as they were.
 **Guides** (since 2026-10-05): **Show guides** shows that collection in the viewport, every guide in a saturated colour of its own (a viewport-only material: Solid shading in Material colour shows it), and **Solid rocks as wireframe** draws the solid formations' rocks as wire so their guides show through.

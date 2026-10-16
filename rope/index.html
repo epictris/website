@@ -91,15 +91,13 @@
       @media (prefers-reduced-motion: reduce) {
         #loading-fill { transition: none; }
       }
-      /* THE LEVEL SELECT. Markup rather than something the game builds, for the
-         reason the loading screen is: a bare `/` must not download three.js to
-         show a list of six words, so the menu page never loads the app at all
-         (see the module tag at the bottom of this file). What paints it is the
-         inlined store, which is already running during HTML parsing.
-         The same terminal idiom as the screen it replaces: the #1f2430 page,
-         #cbccc6 text, monospace, hairline rules, square corners, and the
-         #65bddb accent kept for the two things that are special - the
-         introduction and whichever row has the keyboard. */
+      /* THE DIFFICULTY SELECT, shown on a bare `/` once the introduction behind
+         it has loaded (see `chooseDifficulty` in main.ts) and painted by the
+         inlined store (`paintMenu` in render3d/store.ts).
+         The same terminal idiom as the loading screen it follows: the #1f2430
+         page, #cbccc6 text, monospace, hairline rules, square corners, and the
+         #65bddb accent kept for the heading and whichever row has the
+         keyboard. */
       #menu {
         position: fixed;
         inset: 0;
@@ -131,10 +129,9 @@
         color: #65bddb;
       }
       #menu-list { list-style: none; margin: 0; padding: 0; }
-      /* A row is an ANCHOR, so middle-click opens a level in a tab and a screen
-         reader reads a list of links - which is what this is. Picking a level is
-         a navigation (see docs/levels.md): one page load is one session and one
-         level, and an in-page switch would break every part of that. */
+      /* A row is an ANCHOR, so middle-click opens a difficulty in a tab and a
+         screen reader reads a list of links - which is what this is. A plain
+         press starts the run in this page instead (see docs/levels.md). */
       #menu-list a {
         display: flex;
         align-items: baseline;
@@ -153,16 +150,11 @@
         border-color: #65bddb;
         outline: none;
       }
-      /* The introduction sits above a rule rather than being sorted into place:
-         a level called "Zither" that is the introduction is still the first
-         thing a new player is offered. */
-      #menu-list li[data-intro="1"] {
-        border-bottom: 1px solid #313244;
-        margin-bottom: 0.5rem;
-        padding-bottom: 0.5rem;
-      }
-      #menu-list li[data-intro="1"] a { color: #65bddb; }
       .menu-title { flex: 1; }
+      /* What a difficulty changes, under its name: dim, because it is the
+         explanation rather than the choice, and on its own line so the two
+         names stay one column the eye runs down. */
+      .menu-hint { display: block; color: #8a8f98; }
       /* Completion and the last rating, from `rope.progress` in localStorage.
          Dim, because they are a record of what the player has done rather than
          part of the offer. */
@@ -479,7 +471,7 @@
     </div>
     <div id="menu">
       <div id="menu-inner">
-        <h1>Choose a level</h1>
+        <h1>Choose a difficulty</h1>
         <p id="menu-note"></p>
         <ul id="menu-list"></ul>
       </div>
@@ -516,21 +508,9 @@
         <p id="settings-hint">S or Esc to close</p>
       </div>
     </div>
-    <!-- THE APP IS LOADED ONLY WHERE THERE IS SOMETHING TO PLAY. A bare `/` is
-         the level select, which the inlined store paints on its own, so this
-         import must not be a static `src=`: vite would make it the page's entry
-         and the menu would pull down three.js and the whole level graph to draw
-         a list. The store decides (see `render3d/store.ts`) and sets the flag
-         this reads. -->
-    <script type="module">
-      if (window.__ropePlay !== false) await import("/src/main.ts");
-      // The level select is on screen instead. Picking a level there boots the
-      // app into THIS document rather than navigating to the level's own page:
-      // fullscreen and the pointer lock are granted to that press and neither
-      // survives a navigation, so a link would hand both straight back (see
-      // `startOnClick` in render3d/store.ts). The import stays inside this tag
-      // so vite still resolves it to the built chunk.
-      else window.__ropeBoot = () => void import("/src/main.ts");
-    </script>
+    <!-- The app, on every page: a bare `/` too, which loads the introduction
+         behind the loading bar and offers the difficulties once it is ready
+         (see `chooseDifficulty` in main.ts). -->
+    <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

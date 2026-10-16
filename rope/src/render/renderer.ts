@@ -18,6 +18,7 @@ import { Debug } from "../engine/debug";
 import { PIXELS_PER_METER, PX } from "../engine/units";
 import type { SparkSystem } from "./sparks";
 import type { DebrisSystem } from "./debris";
+import type { GlassShards } from "./glassShards";
 import { Player } from "../classes/player";
 import { BallPlayer } from "../classes/ballPlayer";
 import { BallHook } from "../classes/ballHook";
@@ -68,6 +69,8 @@ const CHAIN = "#767e88"; // steel — broad (lit) link
 const CHAIN_DARK = "#4e555e"; // shadowed / narrow link
 const MANACLE = "#7c848e"; // steel cuff band
 const MANACLE_DARK = "#454c55"; // lock housing / hinge shadow
+const GLASS_EDGE = "rgba(235, 246, 255, 0.85)"; // the glass ball's rim and loop
+const GLASS_LINKS = { broad: "rgba(225, 240, 252, 0.8)", narrow: "rgba(190, 215, 235, 0.55)" };
 const KILLZONE = "rgba(220,60,80,0.35)";
 const IMPERMEABLE_EDGE = "#9db8c6"; // hook-proof surfaces: dashed steel border
 const VISCOUS_EDGE = "#c9a066"; // viscous (mud) surfaces: dash-dot ochre border
@@ -127,6 +130,27 @@ function drawBody(
   if (body instanceof Hook || body instanceof BallHook) {
     pathShape(ctx, t);
     ctx.fillStyle = HOOK;
+    ctx.fill();
+    return;
+  }
+  if (body instanceof BallPlayer && body.glass) {
+    // The glass ball (Hard): clear, so the level shows through it, with the
+    // rim bright where a glass wall seen edge-on reflects nearly everything
+    // (see render3d/glassMaterial.ts) and a glint where the light catches it.
+    const c = t.globalPosition;
+    const r = body.radius;
+    pathShape(ctx, t);
+    const rim = ctx.createRadialGradient(c.x, c.y, r * 0.55, c.x, c.y, r);
+    rim.addColorStop(0, "rgba(205, 228, 245, 0.06)");
+    rim.addColorStop(1, "rgba(225, 240, 252, 0.5)");
+    ctx.fillStyle = rim;
+    ctx.fill();
+    ctx.strokeStyle = GLASS_EDGE;
+    ctx.lineWidth = PX * 0.8;
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(c.x - r * 0.38, c.y - r * 0.38, r * 0.16, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(255, 255, 255, 0.8)";
     ctx.fill();
     return;
   }
@@ -1127,6 +1151,9 @@ export function renderBall(
   retract: ChainRetract | null = null,
   // See `render`: the chunks of a body that broke, drawn in both render modes.
   debris: DebrisSystem | null = null,
+  // The glass ball's shards (see render/glassShards.ts): drawn here on the 2D
+  // path only, since in 3D they are glass in the scene.
+  shards: GlassShards | null = null,
 ): void {
   const { width: viewWidth, height: viewHeight } = view;
   // See `render`: the sim instant that carries every conveyor's tread.
@@ -1207,7 +1234,7 @@ export function renderBall(
     // pinned to the ring's rim (`SlackChain`) - so the links run to exactly the
     // point the drawn cuff is shackled at, with nothing trimmed or lifted.
     const path = [...loopToAnchor.reverse(), ball.renderPosition(alpha)];
-    drawChainPolyline(ctx, path);
+    drawChainPolyline(ctx, path, ball.glass ? GLASS_LINKS : undefined);
     // The manacle at the chain's far end (flying hook, dangling tip, or anchor),
     // wherever the sim says it is (`BallPlayer.manaclePose`): a free cuff is
     // the hook body itself, at its own pose; a bitten one stands on the face's
@@ -1226,18 +1253,20 @@ export function renderBall(
     drawChainPolyline(ctx, reeling.path);
     drawManacle(ctx, reeling.centre, reeling.dir, null);
   }
-  if (!overlayOnly) {
+  // A broken glass ball is nothing but its shards.
+  if (!overlayOnly && !ball.shattered) {
     drawBody(ctx, ball, alpha);
 
     // Steel mounting loop: material point on the rim, rotating with the ball
     // (its aim direction when no chain is out). Drawn on top of the body.
     const loop = ball.renderLoopCenter(alpha);
-    ctx.strokeStyle = CHAIN;
+    ctx.strokeStyle = ball.glass ? GLASS_EDGE : CHAIN;
     ctx.lineWidth = PX;
     ctx.beginPath();
     ctx.arc(loop.x, loop.y, BallPlayer.LOOP_RADIUS, 0, Math.PI * 2);
     ctx.stroke();
   }
+  if (!overlayOnly) shards?.draw(ctx);
 
   debris?.draw(ctx);
   sparks?.draw(ctx);

@@ -184,14 +184,31 @@ import {
   fogDensity,
   skyInputs,
 } from "../render3d/environment";
-import { AVATAR_FOG, AVATAR_PROGRAM_KEY, AVATAR_WRAP, wearAvatar } from "../render3d/avatarSurface";
+import {
+  AVATAR_FOG,
+  AVATAR_PROGRAM_KEY,
+  AVATAR_WRAP,
+  avatarLightsBeginChunk,
+  wearAvatar,
+} from "../render3d/avatarSurface";
+import { glassFogChunk, glassMaterial, glassOpaqueChunk, solidGlassMaterial } from "../render3d/glassMaterial";
 import { beamFarRadius, beamRadiusAt, BEAM_SOURCE_RADIUS, seedDust } from "../render3d/beam";
 import { IRON_SURFACE } from "../render3d/assets";
 import { HDRI_ASSETS, hdriNames } from "../render3d/assets";
 import { PIXELS_PER_METER, PX } from "../engine/units";
 import { levelStoredFiles } from "../render3d/levelAssets";
 import { nodeNameOf, SCENE_ASSETS, sceneFile, type SceneAsset } from "../render3d/scenes";
-import { castsShadow, dressScene, SCENERY_TAG, type DressTarget } from "../render3d/sceneDressing";
+import { castsShadow, dressScene, SCENERY_TAG, sceneryWater, type DressTarget } from "../render3d/sceneDressing";
+import { RE_DIRECT, skipUnreachedLights } from "../render3d/lightReach";
+import {
+  INVARIANT_POSITION,
+  invariantPositionChunk,
+  isDepthStandIn,
+  joinDepthPrepass,
+  leaveDepthPrepass,
+  PREPASS_ORDER,
+  prepassRefusal,
+} from "../render3d/depthPrepass";
 import { orientTo, placeAt } from "../render3d/space";
 
 export interface CaseResult {
@@ -5448,8 +5465,205 @@ function retiredGeometry(): CaseResult[] {
   ];
 }
 
+// THE GLASS BALL'S SURFACE (render3d/glassMaterial.ts). Every one of its
+// rewrites of three's shaders is a `replace` that would match nothing after a
+// three upgrade reworded a line, and the glass would quietly draw as black
+// opaque plastic: so each is run here, on three's own physical shader, and the
+// result is asked for what it must contain.
+function glassSurface(): CaseResult[] {
+  const shader = {
+    uniforms: {} as Record<string, THREE.IUniform>,
+    vertexShader: THREE.ShaderLib.physical.vertexShader,
+    fragmentShader: THREE.ShaderLib.physical.fragmentShader,
+  };
+  const wear = new THREE.CubeTexture();
+  const solid = solidGlassMaterial(0.12, wear);
+  const run = solid.onBeforeCompile as unknown as (s: typeof shader, r: unknown) => void;
+  run.call(solid, shader, null);
+  const frag = shader.fragmentShader;
+  const vert = shader.vertexShader;
+  const traced =
+    !frag.includes("#include <opaque_fragment>") &&
+    // In, out along the straight path, out along the reflected one.
+    frag.split("refract(").length - 1 >= 3 &&
+    // The scene's lights, read down both paths in each of three's three
+    // direct-light loops (point, spot, directional).
+    frag.split("lensLights[ c ] +=").length - 1 === 3 &&
+    frag.includes("vec3 lensIor = vec3(") &&
+    frag.includes("textureLod( probeCube, transformDirectionByInverseViewMatrix( lensOut") &&
+    frag.includes("uniform float lensRadius;") &&
+    frag.includes("uniform samplerCube probeCube;");
+  const worn =
+    vert.includes("vGlassLocal = position;") &&
+    frag.includes("uniform samplerCube glassWear;") &&
+    frag.includes("texture( glassWear, vGlassLocal )") &&
+    frag.includes("roughnessFactor = max( roughnessFactor, glassSmudge") &&
+    shader.uniforms.glassWear?.value === wear &&
+    solid.defines?.GLASS_WEAR !== undefined;
+  const thin = glassOpaqueChunk().includes("gl_FragColor = vec4( glassLight, 1.0 - glassT );");
+  const fog = glassFogChunk().includes("fogColor * gl_FragColor.a");
+  const keyed = solid.customProgramCacheKey() !== glassMaterial().customProgramCacheKey();
+  wear.dispose();
+  solid.dispose();
+  return [
+    {
+      name: "glass: the solid glass traces both paths per channel through three's physical shader, and reads the probe and every light",
+      pass: traced,
+      detail: `opaque replaced ${!frag.includes("#include <opaque_fragment>")}, refracts ${frag.split("refract(").length - 1}, light loops read ${frag.split("lensLights[ c ] +=").length - 1}, probe read ${frag.includes("textureLod( probeCube")}`,
+    },
+    {
+      name: "glass: the ball wears its baked wear - the varying, the cube, the roughness",
+      pass: worn,
+      detail: `varying ${vert.includes("vGlassLocal = position;")}, sampler ${frag.includes("uniform samplerCube glassWear;")}, read ${frag.includes("texture( glassWear")}, define ${solid.defines?.GLASS_WEAR !== undefined}`,
+    },
+    {
+      name: "glass: the thin glass blends premultiplied and fogs premultiplied, under a program key of its own",
+      pass: thin && fog && keyed,
+      detail: `blend ${thin}, fog ${fog}, keyed apart ${keyed}`,
+    },
+  ];
+}
+
+// The fill-cost patches (lightReach.ts, depthPrepass.ts). What they promise is
+// an identical picture for less work, and the picture half is a live check
+// (docs/render3d.md, "Fill cost"); what is held here is that each patch says
+// what it claims to, survives the other patches that read the same chunks,
+// and that the stand-ins are where the prepass needs them and nowhere else.
+function fillCost(): CaseResult[] {
+  const GUARDED = `if ( directLight.visible ) ${RE_DIRECT}`;
+  const count = (s: string, of: string): number => s.split(of).length - 1;
+
+  // The light loop: all three calls guarded, none left bare, and a second pass
+  // changes nothing.
+  const begin = THREE.ShaderChunk.lights_fragment_begin;
+  const guarded = count(begin, GUARDED);
+  const bare = count(begin, RE_DIRECT) - guarded;
+  const idempotent = skipUnreachedLights(begin) === begin;
+  // ...and the patches that read the same chunk still land on it: the glass
+  // lens reads every light after its guarded call, the avatar stashes every
+  // light before it.
+  const shader = {
+    uniforms: {} as Record<string, THREE.IUniform>,
+    vertexShader: THREE.ShaderLib.physical.vertexShader,
+    fragmentShader: THREE.ShaderLib.physical.fragmentShader,
+  };
+  const wear = new THREE.CubeTexture();
+  const solid = solidGlassMaterial(0.12, wear);
+  (solid.onBeforeCompile as unknown as (s: typeof shader, r: unknown) => void).call(solid, shader, null);
+  const glassGuarded = count(shader.fragmentShader, GUARDED);
+  const glassLens = count(shader.fragmentShader, "lensLights[ c ] +=");
+  wear.dispose();
+  solid.dispose();
+  const avatar = avatarLightsBeginChunk();
+  const avatarGuarded = count(avatar, GUARDED);
+  const avatarStashes = count(avatar, "avatarUnshadowed = directLight.color;");
+
+  // The invariant position: declared once in the host chunk, and the host is
+  // included by every built-in shader the prepass pairs (the stand-in's basic
+  // material against the scenery's standard and physical ones) and by the
+  // shadow pass's depth material.
+  const host = THREE.ShaderChunk.logdepthbuf_pars_vertex;
+  const declared = host.startsWith(INVARIANT_POSITION) && count(host, INVARIANT_POSITION) === 1;
+  const hostIdempotent = invariantPositionChunk(host) === host;
+  const paired = ["basic", "standard", "physical", "lambert", "phong", "toon", "depth"] as const;
+  const missing = paired.filter((k) => !THREE.ShaderLib[k].vertexShader.includes("#include <logdepthbuf_pars_vertex>"));
+
+  // The stand-in: a child sharing the geometry, depth only, front faces,
+  // ahead of every opaque draw, casting nothing and never picked; one per
+  // mesh however often it is asked; carried by a clone; gone on leaving.
+  const geometry = new THREE.BoxGeometry(1, 1, 1);
+  const rock = new THREE.Mesh(geometry, new THREE.MeshPhysicalMaterial({ side: THREE.DoubleSide }));
+  rock.castShadow = true;
+  const joined = joinDepthPrepass(rock) && joinDepthPrepass(rock);
+  const standIns = rock.children.filter(isDepthStandIn) as THREE.Mesh[];
+  const standIn = standIns[0];
+  const depthOnly = standIn?.material as THREE.Material | undefined;
+  const shaped =
+    standIns.length === 1 &&
+    standIn!.geometry === geometry &&
+    depthOnly!.colorWrite === false &&
+    depthOnly!.depthWrite &&
+    depthOnly!.side === THREE.FrontSide &&
+    standIn!.renderOrder === PREPASS_ORDER &&
+    !standIn!.castShadow &&
+    !standIn!.receiveShadow;
+  rock.position.set(0, 0, -5);
+  rock.updateMatrixWorld(true);
+  // Off the face diagonals, which two triangles share and would both report.
+  const ray = new THREE.Raycaster(new THREE.Vector3(0.2, 0.1, 0), new THREE.Vector3(0, 0, -1));
+  const hits = ray.intersectObject(rock, true);
+  const pickedOnce = hits.length === 2 && hits.every((h) => h.object === rock); // in and out of the box
+  const carried = rock.clone(true).children.filter(isDepthStandIn).length === 1;
+  leaveDepthPrepass(rock);
+  const left = rock.children.filter(isDepthStandIn).length === 0;
+
+  // Refused: everything a front-face depth write could disagree with.
+  const refusals: Array<[string, THREE.Mesh]> = [
+    ["transparent", new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ transparent: true }))],
+    ["alpha test", new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ alphaTest: 0.5 }))],
+    ["alpha map", new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ alphaMap: new THREE.Texture() }))],
+    ["back side only", new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ side: THREE.BackSide }))],
+    ["displacement map", new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ displacementMap: new THREE.Texture() }))],
+    ["material groups", new THREE.Mesh(geometry, [new THREE.MeshStandardMaterial()])],
+    ["writes no colour", new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ colorWrite: false }))],
+  ];
+  const patched = new THREE.MeshStandardMaterial();
+  patched.onBeforeCompile = () => {};
+  refusals.push(["shader patch", new THREE.Mesh(geometry, patched)]);
+  const wrongRefusals = refusals
+    .map(([want, mesh]) => [want, prepassRefusal(mesh), joinDepthPrepass(mesh) || mesh.children.length > 0] as const)
+    .filter(([want, got, joinedAnyway]) => got !== want || joinedAnyway)
+    .map(([want, got]) => `${want}: ${got ?? "accepted"}`);
+
+  // The scene's own water is found by its name, which its stand-in answers to
+  // as well (the name is an ancestor's): only the mesh is the water.
+  const scenery = new THREE.Group();
+  const pool = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial());
+  pool.name = "backdrop pool";
+  scenery.add(pool);
+  joinDepthPrepass(pool);
+  const water = sceneryWater(scenery);
+  const waterOnly = water.length === 1 && water[0] === pool;
+  geometry.dispose();
+
+  return [
+    {
+      name: "fill: every direct light's surface model is skipped where the light does not reach, and the patch is idempotent",
+      pass: guarded === 3 && bare === 0 && idempotent,
+      detail: `guarded ${guarded}, bare ${bare}, idempotent ${idempotent}`,
+    },
+    {
+      name: "fill: the glass lens and the avatar wrap still patch the guarded light loop, every light",
+      pass: glassGuarded === 3 && glassLens === 3 && avatarGuarded === 3 && avatarStashes === 3,
+      detail: `glass guarded ${glassGuarded}, lens reads ${glassLens}; avatar guarded ${avatarGuarded}, stashes ${avatarStashes}`,
+    },
+    {
+      name: "fill: gl_Position is invariant in every built-in vertex shader the depth prepass pairs",
+      pass: declared && hostIdempotent && missing.length === 0,
+      detail: `declared once ${declared}, idempotent ${hostIdempotent}, host missing from ${missing.join(", ") || "none"}`,
+    },
+    {
+      name: "fill: an opaque mesh takes one depth stand-in - shared geometry, depth only, front faces, first, no shadow, never picked, cloned with it, gone on leaving",
+      pass: joined && shaped && pickedOnce && carried && left,
+      detail: `joined ${joined}, stand-ins ${standIns.length}, shaped ${shaped}, hits ${hits.length} (${hits.map((h) => h.object === rock ? "mesh" : "other").join(",")}), cloned ${carried}, left ${left}`,
+    },
+    {
+      name: "fill: a mesh whose depth a front-face write could disagree with takes no stand-in, for the reason it names",
+      pass: wrongRefusals.length === 0,
+      detail: wrongRefusals.length === 0 ? `${refusals.length} refused as named` : wrongRefusals.join("; "),
+    },
+    {
+      name: "fill: the scene's water is the water mesh alone, not its depth stand-in",
+      pass: waterOnly,
+      detail: `found ${water.length}: ${water.map((m) => (isDepthStandIn(m) ? "stand-in" : m.name)).join(", ")}`,
+    },
+  ];
+}
+
 export function runRender3dCases(): CaseResult[] {
   return [
+    ...fillCost(),
+    ...glassSurface(),
     ...blenderScenes(),
     ...debugGeometry(),
     ...retiredGeometry(),

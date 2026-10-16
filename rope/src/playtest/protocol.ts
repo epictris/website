@@ -51,6 +51,11 @@ export interface SessionMeta {
   // the level's own spawn when the page started elsewhere diverges on its first
   // frame (see `Recording.checkpoint`).
   checkpoint?: string | null;
+  // The ball every run of this session was played with, when it was not the
+  // iron one: "glass" is the Hard difficulty (`?ball=glass`). The session's for
+  // the reason the checkpoint is - only a reload can change it - and carried so
+  // a sealed run replays as glass (see `Recording.ball`). Absent = iron.
+  ball?: "glass";
   // The hash of the LEVEL FILE this session was played on (see `levelFileHash`
   // in sim/treeStamp.ts), when the level is one that has a file.
   //
@@ -137,6 +142,8 @@ export interface RunRow {
   player: string;
   nick: string | null;
   level: string;
+  // Played as glass - the Hard difficulty (see `Recording.ball`). Absent = iron.
+  ball?: "glass";
   commit: string;
   srcHash: string;
   startedAt: number;
