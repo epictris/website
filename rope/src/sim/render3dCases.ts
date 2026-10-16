@@ -191,7 +191,10 @@ import {
   avatarLightsBeginChunk,
   wearAvatar,
 } from "../render3d/avatarSurface";
-import { glassFogChunk, glassMaterial, glassOpaqueChunk, solidGlassMaterial } from "../render3d/glassMaterial";
+import { glassCoatShown, hollowGlassMaterial, pieceGlassMaterial, solidGlassMaterial } from "../render3d/glassMaterial";
+import { FrameCopy } from "../render3d/frameCopy";
+import { bodyTriangles, sceneryTriangles, solidMesh } from "../render3d/shardCollision";
+import { buildFractureSet } from "../render/glassFracture";
 import { beamFarRadius, beamRadiusAt, BEAM_SOURCE_RADIUS, seedDust } from "../render3d/beam";
 import { IRON_SURFACE } from "../render3d/assets";
 import { HDRI_ASSETS, hdriNames } from "../render3d/assets";
@@ -210,6 +213,9 @@ import {
   prepassRefusal,
 } from "../render3d/depthPrepass";
 import { orientTo, placeAt } from "../render3d/space";
+import { stopAtLoop } from "../render3d/chainVisual";
+import { CHAIN_LINK_LEN, walkChain } from "../render/chainMetrics";
+import { BallPlayer } from "../classes/ballPlayer";
 
 export interface CaseResult {
   name: string;
@@ -3321,6 +3327,58 @@ function chainAnchors(): CaseResult[] {
   ];
 }
 
+// The glass ball's chain is laid on past its loop only as far as the loop's
+// inner edge (`stopAtLoop`), so no link shows in the middle of the ball - and
+// the links WOUND round the ball, which lie on its surface nearer the centre
+// than the loop is, are all still laid (session-277f: a cut by distance from
+// the centre took the whole coil). Anchor straight above, one and a half turns
+// round the surface, the loop, the centre: the run `ChainLayer.sync` builds.
+function glassBallChainEnd(): CaseResult[] {
+  const radius = 0.12;
+  const centre = new Vec2(0, 0);
+  const loopArm = radius + BallPlayer.LOOP_GAP;
+  const edge = radius + BallPlayer.LOOP_GAP - BallPlayer.LOOP_RADIUS;
+  const coil: Vec2[] = [new Vec2(0, -1)];
+  for (let i = 0; i <= 48; i++) {
+    const a = -Math.PI / 2 + (i / 32) * 2 * Math.PI;
+    coil.push(centre.add(new Vec2(Math.cos(a), Math.sin(a)).mul(radius)));
+  }
+  coil.push(centre.add(new Vec2(0, loopArm)));
+  const links = (points: Vec2[]): Vec2[] => {
+    const mids: Vec2[] = [];
+    walkChain(points, ({ mid }) => mids.push(mid));
+    return mids;
+  };
+  // Every link up to the loop is laid, at the same place: the cut is past it.
+  const wound = links(coil);
+  const woundRun = [...coil, centre];
+  stopAtLoop(woundRun, radius);
+  const laid = links(woundRun);
+  const onSurface = wound.filter((m) => m.distanceTo(centre) < loopArm).length;
+  const allLaid = wound.length <= laid.length && wound.every((m, i) => m.distanceTo(laid[i]!) < 1e-12);
+  // Nothing laid past the loop reaches deeper than its inner edge.
+  const deepest = (mids: Vec2[], from: number) =>
+    Math.min(...mids.slice(from).map((m) => m.distanceTo(centre) - CHAIN_LINK_LEN / 2));
+  const woundDeepest = laid.length > wound.length ? deepest(laid, wound.length) : Infinity;
+  // A plain hang, anchor → loop → centre, as the report that made the cut.
+  const hang = [new Vec2(0, -1), centre.add(new Vec2(0, -loopArm)), centre];
+  stopAtLoop(hang, radius);
+  const hung = links(hang);
+  const hangDeepest = deepest(hung, 0);
+  return [
+    {
+      name: "glass chain: every link wound round the ball is laid",
+      pass: onSurface >= 25 && allLaid,
+      detail: `${onSurface} on the surface; ${laid.length} laid of ${wound.length} up to the loop`,
+    },
+    {
+      name: "glass chain: ...and none past the loop reaches deeper than its inner edge",
+      pass: woundDeepest >= edge - 1e-12 && hangDeepest >= edge - 1e-12 && hung.length > 0,
+      detail: `inner ends at ${(Math.min(woundDeepest, hangDeepest) * 1000).toFixed(2)} mm from the centre, edge ${(edge * 1000).toFixed(2)} mm`,
+    },
+  ];
+}
+
 // A chain's WRAP POINTS (`ChainData.via`) and a piece's collision MASK are both
 // content the format has to carry unchanged: through the pixel-to-metre scale
 // every load applies, and through the editor, where a wrap point is an anchor
@@ -5489,6 +5547,9 @@ function glassSurface(): CaseResult[] {
     // The scene's lights, read down both paths in each of three's three
     // direct-light loops (point, spot, directional).
     frag.split("lensLights[ c ] +=").length - 1 === 3 &&
+    // ...except a point light inside the glass: the ball's own glow light,
+    // which the lens would draw as a lamp seen through the ball.
+    frag.includes("if ( distance( pointLight.position, lensC ) > lensRadius )") &&
     frag.includes("vec3 lensIor = vec3(") &&
     frag.includes("textureLod( probeCube, transformDirectionByInverseViewMatrix( lensOut") &&
     frag.includes("uniform float lensRadius;") &&
@@ -5500,9 +5561,152 @@ function glassSurface(): CaseResult[] {
     frag.includes("roughnessFactor = max( roughnessFactor, glassSmudge") &&
     shader.uniforms.glassWear?.value === wear &&
     solid.defines?.GLASS_WEAR !== undefined;
-  const thin = glassOpaqueChunk().includes("gl_FragColor = vec4( glassLight, 1.0 - glassT );");
-  const fog = glassFogChunk().includes("fogColor * gl_FragColor.a");
-  const keyed = solid.customProgramCacheKey() !== glassMaterial().customProgramCacheKey();
+  // The aurora film: off for now (`glassCoatShown`), so three's iridescence
+  // is off and the film reads bare quartz; with `?glasscoat=1` three's
+  // iridescence is on (so `evalIridescence` is compiled in), its thickness
+  // taken per fragment from the film, the axis carried in, and every surface
+  // the trace crosses reading the film rather than Schlick.
+  glassCoatShown.value = true;
+  const coatedSolid = solidGlassMaterial(0.12, wear);
+  glassCoatShown.value = false;
+  const coated =
+    solid.iridescence === 0 &&
+    coatedSolid.iridescence > 0 &&
+    frag.includes("#ifdef USE_IRIDESCENCE\n\t\treturn evalIridescence(") &&
+    frag.includes("#else\n\t\treturn vec3( F_Schlick(") &&
+    vert.includes("vCoatAxis = normalize( normalMatrix * coatAxis );") &&
+    frag.includes("#ifdef USE_IRIDESCENCE\n\t\tmaterial.iridescenceThickness = coatAt(") &&
+    frag.split("coatFresnel( dot(").length - 1 === 3;
+  coatedSolid.dispose();
+  // The hollow ball (the ball since 2026-10-16): one opaque draw on three's
+  // physical shader, tracing the four surfaces of its wall, reading the frame
+  // behind it from the copied patch (decoded, then encoded with the rest), and
+  // the probe and every light down the paths the frame does not hold.
+  const hollowShader = {
+    uniforms: {} as Record<string, THREE.IUniform>,
+    vertexShader: THREE.ShaderLib.physical.vertexShader,
+    fragmentShader: THREE.ShaderLib.physical.fragmentShader,
+  };
+  const copy = new FrameCopy();
+  const hollow = hollowGlassMaterial(0.12, 0.006, copy.uniforms, wear, true);
+  (hollow.onBeforeCompile as unknown as (s: typeof hollowShader, r: unknown) => void).call(hollow, hollowShader, null);
+  const hollowFrag = hollowShader.fragmentShader;
+  const hollowTraced =
+    hollowFrag.includes("hollowToOuter( a, lensC, n );") &&
+    hollowFrag.includes("hollowToOuter( bl, lensC, n );") &&
+    hollowFrag.includes("hollowToOuter( cl, lensC, n );") &&
+    hollowFrag.includes("hollowToOuter( dl, lensC, n );") &&
+    hollowFrag.includes("frameDecode( frameColour( pc ) )") &&
+    hollowFrag.includes("gl_FragColor = vec4( frameEncode( hollowThrough + hollowAdded ), 1.0 );") &&
+    hollowFrag.split("lensLights[ c ] +=").length - 1 === 3 &&
+    hollowFrag.includes("if ( distance( pointLight.position, lensC ) > lensRadius )") &&
+    hollowFrag.includes("glassSeen + mix( gl_FragColor.rgb - glassSeen, fogColor * glassCover") &&
+    !hollowFrag.includes("#include <tonemapping_fragment>") &&
+    !hollowFrag.includes("#include <colorspace_fragment>") &&
+    Math.abs((hollowShader.uniforms.lensInner?.value as number) - 0.114) < 1e-9 &&
+    !hollow.transparent &&
+    hollow.userData.seesFrame === true;
+  hollow.dispose();
+  copy.dispose();
+  // frameDecode inverts three's ACES and sRGB: the same rational and matrices,
+  // run forward here on the CPU and back by the shader's own algebra.
+  const acesFit = (v: number): number => (v * (v + 0.0245786) - 0.000090537) / (v * (0.983729 * v + 0.432951) + 0.238081);
+  const acesBack = (y: number): number => {
+    const qa = 0.983729 * y - 1;
+    const qb = 0.432951 * y - 0.0245786;
+    const qc = 0.238081 * y + 0.000090537;
+    return (-qb - Math.sqrt(Math.max(qb * qb - 4 * qa * qc, 0))) / (2 * qa);
+  };
+  const decodes = [0.001, 0.05, 0.3, 0.8, 3].every((v) => Math.abs(acesBack(acesFit(v)) - v) < 1e-6 * Math.max(1, v));
+  // The broken pieces (render3d/shardVisual.ts): both draws on three's physical
+  // shader, double-sided, each face Fresnel from its film or from inside past
+  // the critical angle, encoded for the frame, fading with the batch's colour.
+  const pieceFrags = (["transmit", "light"] as const).map((pass) => {
+    const sh = {
+      uniforms: {} as Record<string, THREE.IUniform>,
+      vertexShader: THREE.ShaderLib.physical.vertexShader,
+      fragmentShader: THREE.ShaderLib.physical.fragmentShader,
+    };
+    const m = pieceGlassMaterial(pass);
+    (m.onBeforeCompile as unknown as (s: typeof sh, r: unknown) => void).call(m, sh, null);
+    const ok = m.side === THREE.DoubleSide && m.transparent && !m.depthWrite && m.defines?.COAT_FROM_ATTRIBUTE !== undefined;
+    m.dispose();
+    return { frag: sh.fragmentShader, vert: sh.vertexShader, ok };
+  });
+  const [pieceTransmit, pieceLight] = pieceFrags as [(typeof pieceFrags)[number], (typeof pieceFrags)[number]];
+  const pieces =
+    pieceFrags.every((p) => p.ok && p.frag.includes("pieceSin >= 1.0 ? vec3( 1.0 )") && p.frag.includes("float pieceFade = vColor.r;") && p.vert.includes("vCoatNm = coatNm;")) &&
+    pieceTransmit.frag.includes("mix( vec3( 1.0 ), frameEncode( pieceBehind * pieceT ) / frameEncode( pieceBehind ), pieceFade )") &&
+    pieceLight.frag.includes("* pieceFade, 1.0 );") &&
+    !pieceLight.frag.includes("#include <tonemapping_fragment>");
+  // The pieces themselves (render/glassFracture.ts): every ball pattern tiles
+  // the ball - its cells' volumes add up to the tessellated sphere's, shrunk by
+  // the gap between them - and every piece has a volume, a hull to collide as,
+  // and a ring's pieces their bar.
+  const radius = 0.12;
+  const set = buildFractureSet(radius, { a: 0.02, b: 0.02, radius: 0.008 });
+  const sphere = (4 / 3) * Math.PI * radius ** 3;
+  const tiled = set.ball.map((p) => p.reduce((a, c) => a + c.volume, 0) / sphere);
+  // A hollow ball's shards tile its wall, every one curved: colliding as
+  // several convex parts, its inside (bare, facing the centre) drawn too.
+  const wall = 0.006;
+  const hollowSet = buildFractureSet(radius, { a: 0.02, b: 0.02, radius: 0.008 }, undefined, wall);
+  const shellVolume = (4 / 3) * Math.PI * (radius ** 3 - (radius - wall) ** 3);
+  const shellTiled = hollowSet.ball.map((p) => p.reduce((a, c) => a + c.volume, 0) / shellVolume);
+  const shards = hollowSet.ball.flat();
+  const sharded =
+    shellTiled.every((v) => v > 0.97 && v < 1) &&
+    shards.every((p) => p.volume > 0 && (p.parts?.length ?? 0) >= 1 && p.parts!.every((h) => h.length >= 12 && h.length <= 96)) &&
+    shards.some((p) => p.parts!.length > 1) &&
+    shards.every((p) => {
+      // Some vertex's normal points back toward the ball's centre: its inside.
+      for (let i = 0; i < p.normals.length; i += 3) {
+        const at = [p.positions[i]! + p.centre[0], p.positions[i + 1]! + p.centre[1], p.positions[i + 2]! + p.centre[2]];
+        if (at[0] * p.normals[i]! + at[1] * p.normals[i + 1]! + at[2] * p.normals[i + 2]! < -0.9 * Math.hypot(at[0], at[1], at[2])) return true;
+      }
+      return false;
+    });
+  // What the pieces land on in 3D (render3d/shardCollision.ts): rock and a
+  // moss cushion, not a fern's cards, an ivy shadow, the pool or the depth
+  // prepass's copy of the rock; scenery in the world, a body's in its frame.
+  const rockGeometry = new THREE.BoxGeometry(1, 1, 1);
+  const rockMesh = new THREE.Mesh(rockGeometry, new THREE.MeshStandardMaterial({ name: "Painted slate.001" }));
+  rockMesh.position.set(2, 1, 0);
+  joinDepthPrepass(rockMesh);
+  const moss = new THREE.MeshStandardMaterial({ name: "Terrace.moss", alphaTest: 0.5 });
+  moss.userData.mossMound = true;
+  const fern = new THREE.MeshStandardMaterial({ name: "Foliage", alphaTest: 0.5 });
+  const shadow = new THREE.Mesh(rockGeometry, new THREE.MeshStandardMaterial());
+  shadow.userData.name = "backdrop.left-shelf.ivy.shadow";
+  const pool = new THREE.Mesh(rockGeometry, new THREE.MeshStandardMaterial());
+  pool.userData.name = "backdrop pool";
+  const sceneryRoot = new THREE.Group();
+  sceneryRoot.add(rockMesh, new THREE.Mesh(rockGeometry, moss), new THREE.Mesh(rockGeometry, fern), shadow, pool);
+  const sceneryTris = sceneryTriangles(sceneryRoot);
+  const bodyRoot = new THREE.Group();
+  bodyRoot.position.set(5, 3, 0);
+  bodyRoot.rotation.z = 0.5;
+  const bodyMesh = new THREE.Mesh(rockGeometry, new THREE.MeshStandardMaterial());
+  bodyMesh.position.set(1, 0, 0);
+  bodyRoot.add(bodyMesh);
+  const bodyTris = bodyTriangles(bodyRoot);
+  const firstX = (m: { positions: Float32Array }): number => {
+    let sum = 0;
+    for (let i = 0; i < m.positions.length; i += 3) sum += m.positions[i]!;
+    return sum / (m.positions.length / 3);
+  };
+  const landsOn =
+    sceneryTris.length === 2 &&
+    !solidMesh(rockMesh.children[0]!) &&
+    Math.abs(firstX(sceneryTris[0]!) - 2) < 1e-6 &&
+    bodyTris.length === 1 &&
+    Math.abs(firstX(bodyTris[0]!) - 1) < 1e-6 &&
+    bodyTris[0]!.indices.length === rockGeometry.getIndex()!.count;
+  rockGeometry.dispose();
+  const fractured =
+    tiled.every((v) => v > 0.97 && v < 0.99) &&
+    [...set.ball.flat(), ...set.loop.flat()].every((p) => p.volume > 0 && p.hull.length >= 12 && p.hull.length <= 96) &&
+    set.loop.flat().every((p) => p.bar !== undefined);
   wear.dispose();
   solid.dispose();
   return [
@@ -5517,9 +5721,34 @@ function glassSurface(): CaseResult[] {
       detail: `varying ${vert.includes("vGlassLocal = position;")}, sampler ${frag.includes("uniform samplerCube glassWear;")}, read ${frag.includes("texture( glassWear")}, define ${solid.defines?.GLASS_WEAR !== undefined}`,
     },
     {
-      name: "glass: the thin glass blends premultiplied and fogs premultiplied, under a program key of its own",
-      pass: thin && fog && keyed,
-      detail: `blend ${thin}, fog ${fog}, keyed apart ${keyed}`,
+      name: "glass: the solid glass wears the aurora film under ?glasscoat=1 (bare quartz without) - three's iridescence, its thickness per fragment, on every surface the trace crosses",
+      pass: coated,
+      detail: `iridescence ${solid.iridescence} (coated ${coatedSolid.iridescence}), axis ${vert.includes("vCoatAxis = normalize(")}, thickness ${frag.includes("material.iridescenceThickness = coatAt(")}, surfaces ${frag.split("coatFresnel( dot(").length - 1}`,
+    },
+    {
+      name: "glass: the hollow ball traces its wall's four surfaces, sees the frame behind it decoded and the probe and every light elsewhere, in one opaque draw",
+      pass: hollowTraced && decodes,
+      detail: `traced ${hollowTraced} (light loops ${hollowFrag.split("lensLights[ c ] +=").length - 1}), ACES inverts ${decodes}`,
+    },
+    {
+      name: "glass: the broken pieces are two see-through draws - each face's film or total internal reflection, encoded for the frame, fading per piece",
+      pass: pieces,
+      detail: `transmit ${pieceFrags[0]!.ok}, light ${pieceFrags[1]!.ok}`,
+    },
+    {
+      name: "glass: the pieces land on the scene's rock and moss in the world and a body's own solids in its frame - never leaves, shadows, water or the depth prepass's copies",
+      pass: landsOn,
+      detail: `scenery meshes ${sceneryTris.length} (want 2), body meshes ${bodyTris.length}, stand-in solid ${solidMesh(rockMesh.children[0]!)}`,
+    },
+    {
+      name: "glass: every hollow ball pattern tiles its wall in curved shards, each with its inside and several convex parts to collide as",
+      pass: sharded,
+      detail: `wall shares ${shellTiled.map((v) => v.toFixed(4)).join(", ")}, shards ${shards.length}, parts ${shards.reduce((a, p) => a + (p.parts?.length ?? 0), 0)}`,
+    },
+    {
+      name: "glass: every ball fracture pattern tiles the ball, and every piece has a volume and a hull (a loop's piece its bar)",
+      pass: fractured,
+      detail: `volume shares ${tiled.map((v) => v.toFixed(4)).join(", ")}`,
     },
   ];
 }
@@ -5670,6 +5899,7 @@ export function runRender3dCases(): CaseResult[] {
     ...beltRendering(),
     ...chainAnchors(),
     ...chainWrapPoints(),
+    ...glassBallChainEnd(),
     ...cameraCorrespondence(),
     ...levelLens(),
     ...blendStability(),

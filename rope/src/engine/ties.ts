@@ -433,9 +433,17 @@ class ContactRow {
   // Relative normal velocity at collection, for restitution after the substeps.
   readonly vn0: number;
   readonly key: string;
+  // The accumulated impulses: each substep's, warm started from the one
+  // before, so after the last substep they are what that substep spent.
   n = 0;
   t = 0;
   maxN = 0;
+  // What the contact spent over the whole frame: every substep's `n` and `t`
+  // as it ended (each substep re-applies its accumulated impulse from the warm
+  // start up), and restitution's after them - Box2D v3's
+  // `totalNormalImpulse`, and the number the world's one-pass solve reports.
+  totalN = 0;
+  totalT = 0;
 
   constructor(c: ContactConstraint, friction: number) {
     this.c = c;
@@ -701,7 +709,12 @@ export class TieSolver {
       // Relax: the same rows against the new positions, with no bias, which
       // takes back the velocity the bias put in.
       solveRows(rows, h, tieSoft, false, s % 2 === 1);
-      for (let i = 0; i < contactRows.length; i++) solveContact(contactRows[i]!, h, RIGID, false);
+      for (let i = 0; i < contactRows.length; i++) {
+        const row = contactRows[i]!;
+        solveContact(row, h, RIGID, false);
+        row.totalN += row.n;
+        row.totalT += row.t;
+      }
       if (SolverStats.enabled) {
         SolverStats.sweeps += 2;
         SolverStats.solves += 2 * (rows.length + contactRows.length);
@@ -709,12 +722,19 @@ export class TieSolver {
     }
     for (const row of contactRows) applyRestitution(row);
     for (const row of contactRows) {
+      // The last substep's impulses warm start the next frame's first...
       this.contactCache.set(row.key, { n: row.n, t: row.t });
-      // What the contact spent, written back where the world's own solve
-      // writes it, so the grips, the digest and `cli trace` read a contact
-      // the island solved as they read any other.
-      row.c.normalImpulse = row.n;
-      row.c.tangentImpulse = row.t;
+      // ...and what the contact spent over the frame is written back where the
+      // world's own solve writes it, so the grips, the braces, the hook's
+      // attach, the breakables, the digest and `cli trace` read a contact the
+      // island solved as they read any other. Written as the last substep's
+      // alone, it read an eighth of a steady load (8.0x under, the median over
+      // the bridge regressions' 1041 contact rows) and zero for one in twelve
+      // that had pushed and was leaving by the end of the frame - the glass
+      // ball bounced whole off the bed (`session-198f` f129, 89.7 N·s pushed).
+      row.c.normalImpulse = row.totalN;
+      row.c.tangentImpulse = row.totalT;
+      row.c.maxNormalImpulse = Math.max(row.maxN, row.n);
     }
     for (const row of rows) row.measure();
   }
@@ -872,6 +892,7 @@ function applyRestitution(r: ContactRow): void {
   const total = Math.max(r.n + inc, 0);
   const applied = total - r.n;
   r.n = total;
+  r.totalN += applied;
   if (applied === 0) return;
   const impulse = n.mul(applied);
   applyAt(A, impulse, ra);

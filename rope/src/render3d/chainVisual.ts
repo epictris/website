@@ -27,7 +27,7 @@ import { CHAIN_LINK_LEN, CHAIN_LINK_W, walkChain } from "../render/chainMetrics"
 import type { ChainRetract } from "../render/chainRetract";
 import { MANACLE_BAND, MANACLE_HINGE, MANACLE_RADIUS, MANACLE_REACH, MANACLE_WIDTH } from "../lib/manacle";
 import { FORGED_SMALL, forgedMetal } from "./ballVisual";
-import { glassBallStyle, glassMaterial, solidGlassMaterial } from "./glassMaterial";
+import { solidGlassMaterial } from "./glassMaterial";
 import { setProbe } from "./reflectionProbe";
 import { threeY } from "./space";
 import type { Scene3DLevel } from "./scene";
@@ -198,12 +198,10 @@ export class ChainLayer {
     if (glass === this.glass) return;
     this.glass = glass;
     if (glass) {
-      // Solid glass like the ball (see `solidGlassMaterial`): each link a bar
-      // of its tube's radius, the cuff a strap of half its band. The hollow
-      // shell's walls are the comparison `?glass=hollow` still draws.
-      const solid = glassBallStyle.value === "solid";
-      this.glassLinks ??= solid ? solidGlassMaterial(LINK_TUBE) : glassMaterial();
-      this.glassManacle ??= solid ? solidGlassMaterial(MANACLE_BAND / 2) : glassMaterial();
+      // Solid glass (see `solidGlassMaterial`), whatever the ball is: each
+      // link a bar of its tube's radius, the cuff a strap of half its band.
+      this.glassLinks ??= solidGlassMaterial(LINK_TUBE);
+      this.glassManacle ??= solidGlassMaterial(MANACLE_BAND / 2);
     }
     this.avatarLinks.setMaterial(glass ? this.glassLinks! : forgedMetal(FORGED_SMALL), !glass);
     this.manacleMesh.material = glass ? this.glassManacle! : this.ironManacle;
@@ -272,6 +270,7 @@ export class ChainLayer {
           this.path.push(loopToAnchor[i]!);
         }
         this.path.push(ball.renderPosition(alpha));
+        if (ball.glass) stopAtLoop(this.path, ball.radius);
         this.tint.set(DEFAULT_CHAIN_COLOR);
 
         // BITTEN INTO SET-BACK SCENERY - a root, a grate, anything hook-only,
@@ -304,7 +303,11 @@ export class ChainLayer {
     const reeling = retract?.resolve(alpha);
     if (reeling) {
       this.tint.set(DEFAULT_CHAIN_COLOR);
-      this.lay(reeling.path);
+      // Reeled home into the ball, as the chain that is out is (above).
+      this.path.length = 0;
+      for (const p of reeling.path) this.path.push(p);
+      if (level.ball?.glass) stopAtLoop(this.path, level.ball.radius);
+      this.lay(this.path);
       this.placeManacle(reeling.centre, reeling.dir);
     }
 
@@ -407,6 +410,26 @@ export class ChainLayer {
     for (const g of this.manacleGeometry) g.dispose();
     this.manacleGeometry.length = 0;
   }
+}
+
+// The ball's chain runs on past the loop to the ball's centre, so the links
+// being reeled in are consumed INTO the ball rather than the chain compressing
+// toward its anchor (see chainMetrics.ts). Hidden in iron; but through glass
+// the last links of a hanging chain sat in the middle of the ball (Tris,
+// 2026-10-16: "I can see a link of chain in the middle of the ball"). So a
+// glass ball's run, `points` ending loop → centre, stops at the loop's inner
+// edge on that last stretch: links are laid whole, so the last one drawn
+// reaches no deeper than the loop it hangs from. Only that stretch is cut -
+// links wound round the ball lie on its surface, nearer the centre than the
+// loop is, and are the wrap the player is meant to see (a cut by distance from
+// the centre took the whole coil, session-277f).
+export function stopAtLoop(points: Vec2[], radius: number): void {
+  if (points.length < 2) return;
+  const centre = points[points.length - 1]!;
+  const loop = points[points.length - 2]!;
+  const edge = radius + BallPlayer.LOOP_GAP - BallPlayer.LOOP_RADIUS;
+  if (loop.distanceTo(centre) > edge) points[points.length - 1] = centre.add(centre.directionTo(loop).mul(edge));
+  else points.pop();
 }
 
 const FORWARD = new THREE.Vector3(0, 0, 1);

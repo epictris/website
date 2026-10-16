@@ -40,6 +40,7 @@ import type { ChainRetract } from "../render/chainRetract";
 import type { GlassShards } from "../render/glassShards";
 import { ShardLayer } from "./shardVisual";
 import { bakeGlassWear } from "./glassWear";
+import { BALL_GLOW, BALL_GLOW_INTENSITY, BALL_GLOW_RANGE, glassWearShown } from "./glassMaterial";
 import type { CameraRule } from "../render/cameraController";
 import { configureRenderer, Environment } from "./environment";
 import { LightRig } from "./lights";
@@ -61,12 +62,14 @@ import {
   type ViewPose,
   type ViewProjection,
 } from "./space";
-import { ReflectionProbe } from "./reflectionProbe";
+import { glassProbeFar, PROBE_FAR, ReflectionProbe } from "./reflectionProbe";
 import { PlanarReflection } from "./planarReflection";
 import type { DepthOfFieldLevel } from "../render/settings";
 import { DepthOfField } from "./depthOfField";
 import { isDepthStandIn, leaveDepthPrepass } from "./depthPrepass";
 import { FrameTarget } from "./frameTarget";
+import { frameSource } from "./frameCopy";
+import { bodyTriangles, sceneryTriangles, type CollisionMesh, type ShardCollision } from "./shardCollision";
 import { LightShafts } from "./lightShafts";
 import { updateWater, waterTextures } from "./water";
 import { stillWaterMaterial, WaterSplashes, type FoamSurface, type StillSurface } from "./stillWater";
@@ -249,7 +252,22 @@ export class Scene3D {
   private readonly authored: BodyVisual[] = [];
   // The level's Blender scene, when it names one (see `SceneDressing`).
   private dressing: SceneDressing | null = null;
+  // What the glass ball's pieces land on (`shardCollision`): its version, and
+  // whether the level's scene file has landed (or it has none).
+  private shardCollisionVersion = 0;
+  private sceneryLanded = false;
+  // The scenery's triangles, kept for the scene they are of: a restart mounts
+  // the same file again, and reading 700 thousand triangles out of it is tens
+  // of milliseconds.
+  private sceneryTriangleCache: { key: string; meshes: CollisionMesh[] } | null = null;
   private ballVisual: BallVisual | null = null;
+  // The glass ball's glow on the world (see glassMaterial.ts `BALL_GLOW_INTENSITY`):
+  // built with any level that has a ball, iron too, and only ever turned up or
+  // down - three compiles every lit program against the number of lights, so
+  // one that came with the glass ball would recompile the scene at the pick.
+  // Dark (and so skipped wherever it is shaded, lightReach.ts) for an iron or a
+  // broken ball.
+  private ballGlow: THREE.PointLight | null = null;
   // The glass ball's baked surface wear (see glassWear.ts), once one has been
   // drawn.
   private glassWear: THREE.CubeTexture | null = null;
@@ -480,8 +498,14 @@ export class Scene3D {
     // The level's Blender scene, over everything (see docs/blender-scenes.md):
     // bound nodes land under the roots above when the file arrives, scenery
     // stands in the world where Blender put it.
+    this.shardCollisionVersion++;
+    this.sceneryLanded = !sceneName;
     if (sceneName) {
-      this.dressing = new SceneDressing(sceneName, targets, (scenery) => this.adoptSceneryWater(scenery));
+      this.dressing = new SceneDressing(sceneName, targets, (scenery) => {
+        this.adoptSceneryWater(scenery);
+        this.sceneryLanded = true;
+        this.shardCollisionVersion++;
+      });
       this.dressing.setShown(this.sceneShown);
       this.scene.add(this.dressing.root);
     }
@@ -491,9 +515,13 @@ export class Scene3D {
     if (level.ball) {
       // The glass ball's surface wear, baked the first time a glass ball is
       // drawn and kept for the page (see glassWear.ts).
-      if (level.ball.glass && !this.glassWear) this.glassWear = bakeGlassWear(this.renderer, level.ball.radius);
+      if (level.ball.glass && glassWearShown.value && !this.glassWear) this.glassWear = bakeGlassWear(this.renderer, level.ball.radius);
       this.ballVisual = new BallVisual(level.ball, this.glassWear);
       this.scene.add(this.ballVisual.root);
+      this.ballGlow = new THREE.PointLight(BALL_GLOW, 0, BALL_GLOW_RANGE, 2);
+      this.ballGlow.name = "ball-glow";
+      this.ballGlow.castShadow = false;
+      this.scene.add(this.ballGlow);
     }
     // The waking lights' pool, sized now that every authored light has been
     // recorded and before `prewarm` compiles against the scene's lights (see
@@ -658,6 +686,9 @@ export class Scene3D {
   async prewarm(
     level: Scene3DLevel,
     camera: Camera,
+    // The glass ball's shards, whose pieces are compiled with the rest (see
+    // `ShardLayer.prewarming`) - prepared for the level before this is called.
+    shards: GlassShards | null = null,
   ): Promise<{ ms: number; programs: number; textures: number }> {
     const t0 = performance.now();
     // The glass ball's shards are drawn only once it breaks, and compiled here
@@ -665,7 +696,7 @@ export class Scene3D {
     this.shardLayer.prewarming = level.ball?.glass === true;
     // As a frame would: reconcile the visuals, settle the camera and the
     // environment, size the shadow maps.
-    this.render(level, camera, 1);
+    this.render(level, camera, 1, NO_ORBIT, null, shards);
 
     const materials = this.renderer.compile(this.scene, this.camera);
     await this.renderer.compileAsync(this.scene, this.camera);
@@ -1296,23 +1327,29 @@ export class Scene3D {
     const end = level.ball?.chain?.end;
     this.vines.sync(level.vines ?? NO_VINES, alpha, treadTime,
       end instanceof RopeVineClamp ? { vine: end.vine, u: end.segment - 1 + end.fraction } : null);
-    // A glass ball's respawn puts a fresh ball in the level (see
-    // `BallLevel.respawn`), and the menu's pick may make the ball glass or iron
-    // (`BallLevel.setBallKind`): either way the avatar is redrawn, and only the
-    // avatar - the materials are ones already compiled, so this builds a ball's
-    // geometry and nothing else.
+    // A glass ball's respawn puts a fresh ball of the same kind in the level
+    // (see `BallLevel.respawn`), which the visual already drawn simply follows
+    // (`BallVisual.follow`): rebuilding it disposed its materials, and with
+    // them their compiled programs. The menu's pick may make the ball glass or
+    // iron (`BallLevel.setBallKind`), and then the avatar is rebuilt - both
+    // kinds were prewarmed, so from materials whose programs are compiled.
     if (
       level.ball &&
       this.ballVisual &&
-      (this.ballVisual.ball !== level.ball || this.ballVisual.glass !== level.ball.glass)
+      (this.ballVisual.ball !== level.ball || this.ballVisual.glass !== level.ball.glass) &&
+      !this.ballVisual.follow(level.ball)
     ) {
       this.scene.remove(this.ballVisual.root);
       this.ballVisual.dispose();
-      if (level.ball.glass && !this.glassWear) this.glassWear = bakeGlassWear(this.renderer, level.ball.radius);
+      if (level.ball.glass && glassWearShown.value && !this.glassWear) this.glassWear = bakeGlassWear(this.renderer, level.ball.radius);
       this.ballVisual = new BallVisual(level.ball, this.glassWear);
       this.scene.add(this.ballVisual.root);
     }
     this.ballVisual?.sync(alpha);
+    if (this.ballGlow && this.ballVisual && level.ball) {
+      this.ballGlow.intensity = level.ball.glass && !level.ball.shattered ? BALL_GLOW_INTENSITY : 0;
+      this.ballGlow.position.copy(this.ballVisual.root.position);
+    }
     this.shardLayer.sync(shards);
     this.splashes.update(
       clock,
@@ -1355,12 +1392,16 @@ export class Scene3D {
     // letterboxed sub-rect (which never asks for it anyway).
     const blurred = this.depthOfField.active && !rect && this.depthOfField.faces(this.camera);
     const frame = this.frame.begin(rect, blurred || shafts);
+    // What the hollow glass ball copies what is behind it out of.
+    frameSource.target = frame;
     const addShafts = (): void => {
       const v = frame.viewport;
       this.lightShafts.render(frame, this.camera, fog, clock, { x: v.x, y: v.y, w: v.z, h: v.w });
     };
     if (blurred) {
       this.depthOfField.render(this.scene, this.camera, frame, shafts ? addShafts : undefined);
+    } else if (this.ballVisual?.seesFrame) {
+      this.depthOfField.renderInTwo(this.scene, this.camera, frame, shafts ? addShafts : undefined);
     } else {
       this.renderer.setRenderTarget(frame);
       this.renderer.render(this.scene, this.camera);
@@ -1385,6 +1426,33 @@ export class Scene3D {
   // (the backdrop tool lays it 2 cm down), in the pool's colour, slab ramp and
   // mirror switch. The ripples are in world x and z and so is the ramp, so
   // where the two meet nothing changes but which mesh is drawing.
+  // What the glass ball's pieces land on (render3d/shardCollision.ts): the
+  // scene's solid scenery and what each body draws, or null until the level's
+  // scene file has landed.
+  collisionVersion(): number {
+    return this.shardCollisionVersion;
+  }
+
+  shardCollision(): ShardCollision<CollisionObject2D> | null {
+    if (!this.sceneryLanded) return null;
+    let scenery: ShardCollision<CollisionObject2D>["scenery"] = null;
+    const dressing = this.dressing;
+    if (dressing) {
+      const key = dressing.root.name;
+      if (this.sceneryTriangleCache?.key !== key) {
+        this.sceneryTriangleCache = { key, meshes: sceneryTriangles(dressing.root) };
+      }
+      scenery = this.sceneryTriangleCache;
+    }
+    return {
+      scenery,
+      bodyMeshes: (body) => {
+        const visual = this.bodies.get(body);
+        return visual ? bodyTriangles(visual.root) : [];
+      },
+    };
+  }
+
   private adoptSceneryWater(scenery: THREE.Group): void {
     const box = this.poolBox;
     for (const mesh of sceneryWater(scenery)) {
@@ -1522,7 +1590,10 @@ export class Scene3D {
         this.shardLayer.withoutShards(() => {
           // Half the radius: nothing but the ball is inside it, and the floor
           // it rests on - a radius below the centre - must not be clipped.
-          const cube = this.reflectionProbe.capture(this.scene, visual.root.position, ball.radius / 2);
+          // As far as the cave behind it for a glass ball, which is seen
+          // through (see reflectionProbe.ts `glassProbeFar`).
+          const far = ball.glass ? glassProbeFar.value : PROBE_FAR;
+          const cube = this.reflectionProbe.capture(this.scene, visual.root.position, ball.radius / 2, far);
           visual.setReflection(cube);
           // The glass ball's chain sees the room through it, and its shards fly
           // from where it stands (see glassMaterial.ts, shardVisual.ts).
@@ -1569,6 +1640,11 @@ export class Scene3D {
       this.scene.remove(this.ballVisual.root);
       this.ballVisual.dispose();
       this.ballVisual = null;
+    }
+    if (this.ballGlow) {
+      this.scene.remove(this.ballGlow);
+      this.ballGlow.dispose();
+      this.ballGlow = null;
     }
     this.splashes.reset();
     this.chains.clear();

@@ -101,7 +101,7 @@ function run(data: RawLevelData, ball: "iron" | "glass", frames: number, watch?:
     if (resetAt !== null) break;
     if (
       firstTouch === null &&
-      level.world.frameContacts.some((c) => c.normalImpulse > 0 && (c.a === level.ball || c.b === level.ball))
+      level.world.frameContacts.some((c) => c.maxNormalImpulse > 0 && (c.a === level.ball || c.b === level.ball))
     ) {
       firstTouch = level.frame;
     }

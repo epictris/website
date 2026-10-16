@@ -27,6 +27,7 @@ import { SparkSystem } from "./render/sparks";
 import { DebrisSystem } from "./render/debris";
 import { GlassShards } from "./render/glassShards";
 import { glassOptionsFrom } from "./render3d/glassMaterial";
+import { glassProbeFar, PROBE_FAR } from "./render3d/reflectionProbe";
 import { ChainRetract } from "./render/chainRetract";
 import { NO_ORBIT, type CameraOrbit } from "./render3d/space";
 import { Scene3D } from "./render3d/scene";
@@ -81,6 +82,9 @@ const view = use3d
 const rec = (await (await fetch(q.get("bundle")!)).json()) as Recording;
 const level = levelFromRecording(rec);
 const de = recordingDeserializer(rec);
+// The glass ball's shards (see render/glassShards.ts), advanced at the fixed
+// step with the sparks below.
+const shards = new GlassShards();
 
 // Which frames to draw. `frame=N` is one grab; `frames=A..B` with `every=K` is a
 // filmstrip - one page load, one chromium session, N tiles - because a single
@@ -148,6 +152,10 @@ const camera: Camera = {
 // readable drawing buffer so the tiles below and the blank-frame check can read
 // what was actually drawn.
 const scene3d = use3d ? new Scene3D(sceneCanvas, { diagnostics: true }) : null;
+shards.useCollision(scene3d);
+// The glass ball's pieces and their engine, on either path, and before the
+// prewarm compiles them.
+if (level instanceof BallLevel) await shards.prepare(level);
 // The game's handle on its scene (main.ts), so a grab can be inspected live:
 // what a pixel shows, a material's maps.
 (window as unknown as { __scene3d: Scene3D | null }).__scene3d = scene3d;
@@ -188,7 +196,7 @@ if (scene3d) {
     scene3d.render(level, camera, 1);
     console.log(`probe ${JSON.stringify({ frame: 0, ...scene3d.programProbe() })}`);
   } else {
-    const warmed = await scene3d.prewarm(level, camera);
+    const warmed = await scene3d.prewarm(level, camera, shards);
     console.log(
       `prewarm ${warmed.programs} programs, ${warmed.textures} textures in ${warmed.ms.toFixed(0)} ms`,
     );
@@ -258,7 +266,11 @@ async function benchDepthOfField(scene: Scene3D, frames: number): Promise<void> 
   // drawn: the water's own cost, and what it costs the depth of field),
   // instead of the depth-of-field settings, which `benchdof=low|medium|high`
   // holds for both (off by default).
-  const pair = q.get("benchmirror") === "1" ? "mirror" : q.get("benchpools") === "1" ? "pools" : null;
+  // `benchprobe=1` pairs the glass ball's probe at the iron ball's range and
+  // at its own (reflectionProbe.ts `glassProbeFar`).
+  const pair =
+    q.get("benchmirror") === "1" ? "mirror" : q.get("benchpools") === "1" ? "pools" : q.get("benchprobe") === "1" ? "probe" : null;
+  const glassFar = glassProbeFar.value;
   if (pair) {
     const held = q.get("benchdof");
     const dof = DEPTH_OF_FIELD_LEVELS.includes(held as DepthOfFieldLevel) ? (held as DepthOfFieldLevel) : "off";
@@ -267,6 +279,7 @@ async function benchDepthOfField(scene: Scene3D, frames: number): Promise<void> 
     const deltas: number[] = [];
     const side = async (on: boolean, count: number): Promise<number> => {
       scene.setPoolsShown(pair === "pools" ? on : true);
+      glassProbeFar.value = pair === "probe" && !on ? PROBE_FAR : glassFar;
       return block(dof, count, pair === "mirror" ? on : true);
     };
     await side(false, 10);
@@ -279,6 +292,7 @@ async function benchDepthOfField(scene: Scene3D, frames: number): Promise<void> 
     }
     scene.setPoolMirror(true);
     scene.setPoolsShown(true);
+    glassProbeFar.value = glassFar;
     console.log(`bench ${JSON.stringify({ pair, dof, offMs: ms(offs), onMs: ms(ons), addedMs: ms(deltas), rounds })}`);
     return;
   }
@@ -318,8 +332,8 @@ const sparks = new SparkSystem();
 // ...and the debris of anything that broke, on the same clock and with its own
 // seed, for the same reason (see render/debris.ts).
 const debris = new DebrisSystem();
-// ...and the glass ball's shards, likewise (see render/glassShards.ts).
-const shards = new GlassShards();
+// ...and the glass ball's shards, likewise (see render/glassShards.ts), made
+// before the prewarm (see `shards`).
 // The released chain reeling back in (see render/chainRetract.ts), driven at
 // the fixed step for the same reason.
 // Behind `?retract=1` as it is in the game (`cli shot ... --retract`).
@@ -333,7 +347,7 @@ const advanceTo = (target: number): void => {
     debris.ingest(level.breakEvents);
     debris.advance(1 / 60);
     if (level instanceof BallLevel) shards.ingest(level.shatterEvents);
-    shards.advance(1 / 60);
+    shards.advance(1 / 60, level instanceof BallLevel ? level : null);
     chainRetract?.observe(level instanceof BallLevel ? level : null, 1 / 60);
   }
 };
@@ -354,9 +368,12 @@ if (dump) {
   }
 } else if (frames.length === 1) {
   advanceTo(frames[0]!);
+  // The shards are stepped in a worker: their poses for this frame are drawn,
+  // not a frame or two before it (see render/glassShards.ts `flush`).
+  await shards.flush();
   drawFrame(frames[0]!);
 } else {
-  drawFilmstrip();
+  await drawFilmstrip();
 }
 
 reportErrors();
@@ -487,7 +504,7 @@ function drawFrame(frame: number): void {
 // changed-pixel count between adjacent tiles printed by the CLI. A flashing
 // artifact is a spike pattern in that series and a steady flow is a flat one -
 // neither of which a single grab can show at all.
-function drawFilmstrip(): void {
+async function drawFilmstrip(): Promise<void> {
   // At most this many columns, and enough of them that the grid fits the frame:
   // with `c` columns the tiles are (1920/c) x (1080/c), so `ceil(n/c) <= c` is
   // what keeps the whole strip inside one 1920x1080 grab.
@@ -505,8 +522,9 @@ function drawFilmstrip(): void {
 
   let previous: ImageData | null = null;
   const changed: number[] = [];
-  frames.forEach((frame, i) => {
+  for (const [i, frame] of frames.entries()) {
     advanceTo(frame);
+    await shards.flush();
     drawFrame(frame);
     const x = (i % cols) * tileW;
     const y = Math.floor(i / cols) * tileH;
@@ -534,7 +552,7 @@ function drawFilmstrip(): void {
     stripCtx.fillRect(x + 4, y + 4, 52, 22);
     stripCtx.fillStyle = "#ffffff";
     stripCtx.fillText(`f${frame}`, x + 8, y + 7);
-  });
+  }
 
   // The strip replaces what is on screen. The overlay canvas is the top one and
   // is painted opaque here, so nothing of the last frame shows through.

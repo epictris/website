@@ -307,9 +307,18 @@ export interface ContactConstraint {
   // Stable frame to frame while the same features are meeting: the warm-start
   // matching key (see `Contact.featureId`).
   readonly featureId: number;
-  // Solver state, accumulated during the solve.
+  // Solver state: what the contact spent over the frame. The world's solve is
+  // one pass, so it is that pass's accumulated impulse; the island's
+  // (`TieSolver`) is substepped, and it is every substep's summed, with
+  // restitution's (Box2D v3's `totalNormalImpulse`).
   normalImpulse: number;
   tangentImpulse: number;
+  // The most this contact pushed in any one solve of the frame - Box2D v3's
+  // `maxNormalImpulse`, and the strictest answer to "did it touch": an island
+  // contact the biased pass pushed and the relax took back moved the bodies,
+  // and sums to nothing. The world's solve is one pass, so it is that solve's
+  // `normalImpulse`. The glass ball's break reads it (`shatterIfStruck`).
+  maxNormalImpulse: number;
   // Did the tangential solve ask for more than the Coulomb cone could give? Then
   // this contact is SLIDING, which is what decides whether a body resting on
   // static geometry earns the position pin (see `applyStaticGrip`).
@@ -1866,6 +1875,7 @@ export class World {
         featureId,
         normalImpulse: 0,
         tangentImpulse: 0,
+        maxNormalImpulse: 0,
         slipping: false,
         limited: false,
       });
@@ -2131,6 +2141,7 @@ export class World {
 
     for (const s of solved) {
       this.contactCache.set(s.key, { n: s.c.normalImpulse, t: s.c.tangentImpulse });
+      s.c.maxNormalImpulse = s.c.normalImpulse;
       // The rule the drive cap in `solveTangent` enforces, measured on what was
       // actually APPLIED: tangential impulse in a kinematic spin's drive
       // direction beyond what the sustained load and the linear slip fund is a

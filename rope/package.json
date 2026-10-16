@@ -2,7 +2,7 @@
   "name": "rope",
   "version": "0.0.0",
   "type": "module",
-  "description": "2D grappling-hook character controller \u2014 TS port of the C#/Godot prototype",
+  "description": "2D grappling-hook character controller — TS port of the C#/Godot prototype",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -36,6 +36,7 @@
     "ws": "^8.21.3"
   },
   "dependencies": {
+    "@dimforge/rapier3d-compat": "0.20.0",
     "three": "^0.185.1"
   }
 }

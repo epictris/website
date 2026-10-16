@@ -1,15 +1,16 @@
-// What the glass ball, its chain, its manacle and its shards are made of (the
-// Hard difficulty, see `BallPlayer.glass`). Two kinds of glass, because glass
-// looks like what it is SHAPED like:
+// What the glass ball, its chain, its manacle and its broken pieces are made of
+// (the Hard difficulty, see `BallPlayer.glass`). Glass looks like what it is
+// SHAPED like, so there are kinds of it:
 //
-//   SOLID - the ball, its loop, its links and its cuff: round glass, which
-//           is a lens. `solidGlassMaterial`.
-//   THIN  - the shards, plates of a wall a few millimetres thick, which bend
-//           nothing. `glassMaterial`. (Until 2026-10-16 the ball was a hollow
-//           shell of it too - "a blue bubble", lost against the cave -
-//           and `?glass=hollow` still draws that while the two are compared.)
+//   SOLID  - its loop, its links and its cuff, and the ball when its wall is
+//            as thick as it is (glassWall.ts): round quartz, which is a lens.
+//            `solidGlassMaterial`.
+//   HOLLOW - the ball: a quartz shell with a wall of a set thickness, coated
+//            outside, seeing the frame behind it. `hollowGlassMaterial`.
+//   PIECES - the broken ball's chunks: small, seen through.
+//            `pieceGlassMaterial`, two blended draws.
 //
-// Both reflect what Fresnel's equations give for glass (n = 1.5): 4% face-on,
+// All reflect what Fresnel's equations give for quartz (n = 1.544): 4.6% face-on,
 // rising to all of it at grazing incidence, through three's own physical
 // specular. They differ in what comes THROUGH.
 //
@@ -20,9 +21,11 @@
 // it was "massive performance drops while the glass ball is active" (Tris,
 // 2026-10-16). What comes through solid glass is read from the ball's
 // reflection probe instead, which is already drawn (see `solidGlassMaterial`),
-// and what comes through thin glass is the frame behind it, by blending.
+// what comes through the hollow ball from a patch of the frame copied out
+// before it is drawn (frameCopy.ts), and what comes through a piece is the
+// frame behind it, by blending.
 //
-// WHAT IS LEFT OUT of both: absorption (clear glass absorbs well under 1% over
+// WHAT IS LEFT OUT of all of them: absorption (clear glass absorbs well under 1% over
 // these lengths), caustics, and shadows: a glass ball's shadow is a faint ring
 // around a bright focus, which a shadow map cannot draw, and a solid black disc
 // under a clear ball would be the one thing about it that is wrong.
@@ -30,15 +33,21 @@
 import * as THREE from "three";
 import { AVATAR_FOG, avatarFogChunk } from "./avatarSurface";
 import { wearProbe } from "./reflectionProbe";
+import { COAT_IOR, COAT_THICKNESS_NM } from "./glassCoat";
+import { FRAME_COPY_PARS } from "./frameCopy";
+import { glassWallFrom } from "./glassWall";
 
-// Glass's refractive index, the one number the optics are drawn from:
-// F0 = ((n - 1) / (n + 1))^2 = 0.04 for crown glass.
-export const GLASS_IOR = 1.5;
+export { COAT_IOR, COAT_THICKNESS_NM };
+
+// The ball's refractive index, the one number the optics are drawn from. It
+// is a CRYSTAL ball (Tris, 2026-10-16: "it should have the refractive index of
+// quartz, not glass"): crystalline quartz's ordinary ray at the sodium d line,
+// so F0 = ((n - 1) / (n + 1))^2 = 0.046. The shards are pieces of it. Quartz is
+// birefringent (the extraordinary ray is 0.009 higher), which doubles what is
+// seen through a real ball very slightly; one index is traced.
+export const GLASS_IOR = 1.5443;
 const F0 = ((GLASS_IOR - 1) / (GLASS_IOR + 1)) ** 2;
 
-// How rough the thin glass is: polished, so a lamp is a pinpoint on it. Not
-// zero, which aliases a sub-pixel highlight into a shimmer as a shard tumbles.
-const GLASS_ROUGHNESS = 0.04;
 
 // The lines of three's shaders this rewrites, named so a three upgrade that
 // rewords either fails loudly rather than drawing the glass opaque (see the
@@ -51,10 +60,6 @@ function glslFloat(v: number): string {
   return /[.eE]/.test(s) ? s : `${s}.0`;
 }
 
-// Schlick's approximation to the Fresnel reflectance at a cosine.
-const SCHLICK = (cosine: string): string =>
-  `( ${glslFloat(F0)} + ${glslFloat(1 - F0)} * pow( 1.0 - saturate( ${cosine} ), 5.0 ) )`;
-
 // ---------------------------------------------------------------------------
 // SOLID glass: a lens, traced, seeing the room through the reflection probe
 // ---------------------------------------------------------------------------
@@ -66,7 +71,7 @@ const SCHLICK = (cosine: string): string =>
 //
 // THE PATH IS TRACED per fragment (`solidGlassChunk`), in view space:
 //
-//   1. refracted into the glass at the surface it hits (Snell, n = 1.5),
+//   1. refracted into the glass at the surface it hits (Snell, n = 1.544),
 //   2. carried across to where it meets the far surface - a chord of the
 //      sphere of radius `lensRadius` whose surface this is, centred one radius
 //      in along the normal,
@@ -100,12 +105,13 @@ const LENS_LINE = OPAQUE_LINE;
 // Three's `opaque_fragment` with the traced lens. Needs `wearProbe`'s uniforms
 // (`probeCube`, `probeOn`, `probeIntensity`) and the material's `lensRadius`.
 // Exported so `cli render3d` can read it without a GPU.
-// DISPERSION: glass bends blue more than red, so every traced path is traced
-// three times, once per channel, with that channel's index - Schott N-BK7 at
-// the C (656 nm), d (588 nm) and F (486 nm) lines, Abbe number 64. Through a
+// DISPERSION: quartz bends blue more than red, so every traced path is traced
+// three times, once per channel, with that channel's index - crystalline
+// quartz's ordinary ray at the C (656 nm), d (588 nm) and F (486 nm) lines,
+// Abbe number 70. Through a
 // ball lens that splits each bright edge seen through it into colour toward
 // the rim, and splits a lamp's internal-reflection flash into a small rainbow.
-export const GLASS_IOR_RGB: readonly [number, number, number] = [1.5143, 1.5168, 1.5224];
+export const GLASS_IOR_RGB: readonly [number, number, number] = [1.5419, 1.5443, 1.5497];
 
 // THE TWO PATHS traced per channel, from where the view ray meets the glass:
 //
@@ -114,7 +120,7 @@ export const GLASS_IOR_RGB: readonly [number, number, number] = [1.5143, 1.5168,
 //   B - ONCE REFLECTED INSIDE: refracted in, reflected off the inside of the
 //       far surface (the share Fresnel reflects there), across again, out. It
 //       is the raindrop's path, and with dispersion it is the rainbow: for
-//       n = 1.5 its exit directions bunch at about 23 degrees from the point
+//       n = 1.544 its exit directions bunch at about 19 degrees from the point
 //       opposite a light, so a lamp behind the viewer flashes in colour near
 //       the rim. Faint against the room (a few percent of it), bright against
 //       a lamp.
@@ -137,8 +143,80 @@ export const GLASS_IOR_RGB: readonly [number, number, number] = [1.5143, 1.5168,
 // big enough on screen to resolve it.
 const LIGHT_ANGLE = 0.012;
 
-// Declarations ahead of `main`: the lobe a light is spread over.
+// THE AURORA COATING (Tris, 2026-10-16: an "aurora" crystal ball, "the most
+// important part is the rainbow gradient inside it"). An aurora ball is clear
+// crystal with a film a few hundred nanometres thick evaporated onto it (its
+// material and thickness are in glassCoat.ts): light reflected off the film's
+// top and off the glass under it interferes, so each surface reflects some
+// wavelengths strongly (17.5% where the film is a quarter wave, against bare
+// quartz's 4.6%) and passes the rest. The colour is the film's THICKNESS,
+// and the film is not even: the vapour reached the side of the ball facing the
+// source most, so it thins from one pole of the ball to the other and its
+// colours run in bands across it - through one interference order, orange,
+// magenta, purple, blue, green, yellow.
+//
+// The gradient seen INSIDE the ball is that film on the far side of it: every
+// path through the lens leaves through the coated back surface, and the
+// internally reflected one is reflected off it, at a place on the film the
+// lens chose. So the film is not a tint laid on the front: every surface the
+// trace crosses takes its Fresnel from the film where the ray crosses it
+// (three's `evalIridescence`, Belcour & Barla's thin-film model, which is also
+// what lights the front surface's own reflection). A lossless film reflects the
+// same share from either side, so the inside reflections use the same function
+// at the outside angle.
+//
+// The film's index and the thickness it runs between are in glassCoat.ts.
+//
+// OFF FOR NOW (Tris, 2026-10-16: "remove the coating temporarily"): the
+// glass is bare quartz - three compiles no iridescence (`coatOptions`), and
+// every surface the trace crosses takes Schlick's quartz (`filmFresnel`).
+// `?glasscoat=1` puts the film back.
+export const glassCoatShown: { value: boolean } = { value: false };
+
+// The film as three's material options: three lights the front surface's
+// reflection through it, and compiles `evalIridescence` for the trace.
+function coatOptions(): THREE.MeshPhysicalMaterialParameters {
+  return {
+    iridescence: glassCoatShown.value ? 1 : 0,
+    iridescenceIOR: COAT_IOR,
+    iridescenceThicknessRange: [COAT_THICKNESS_NM[0], COAT_THICKNESS_NM[1]],
+  };
+}
+
+// Three's surface set up, then the film's thickness at this fragment, `nm`.
+function coatThicknessChunk(nm: string): string {
+  return `#include <lights_physical_fragment>\n\t#ifdef USE_IRIDESCENCE\n\t\tmaterial.iridescenceThickness = ${nm};\n\t#endif`;
+}
+
+// Declarations ahead of `main`: the lobe a light is spread over, and the film.
 const LENS_PARS = /* glsl */ `
+varying vec3 vCoatAxis;
+#ifdef COAT_FROM_ATTRIBUTE
+	// A broken piece of the ball (glassShards.ts) carries the film it had where
+	// it was on the ball, and none on a broken face (glassFracture.ts).
+	varying float vCoatNm;
+#endif
+float coatAt( const in vec3 outward ) {
+	#ifdef COAT_FROM_ATTRIBUTE
+		return vCoatNm;
+	#else
+		// Thickest at the pole that faced the source, thinning toward the other.
+		return mix( ${glslFloat(COAT_THICKNESS_NM[1])}, ${glslFloat(COAT_THICKNESS_NM[0])}, 0.5 - 0.5 * dot( outward, vCoatAxis ) );
+	#endif
+}
+// The film's reflectance by the cosine on its air side, \`nm\` thick there; bare
+// quartz's while the film is off (\`glassCoatShown\`), when three compiles no
+// iridescence.
+vec3 filmFresnel( const in float cosOutside, const in float nm ) {
+	#ifdef USE_IRIDESCENCE
+		return evalIridescence( 1.0, ${glslFloat(COAT_IOR)}, saturate( cosOutside ), nm, vec3( ${glslFloat(F0)} ) );
+	#else
+		return vec3( F_Schlick( ${glslFloat(F0)}, 1.0, saturate( cosOutside ) ) );
+	#endif
+}
+vec3 coatFresnel( const in float cosOutside, const in vec3 outward ) {
+	return filmFresnel( cosOutside, coatAt( outward ) );
+}
 float lensLobe( const in vec3 dir, const in vec3 toLight, const in float width ) {
 	float a = acos( clamp( dot( dir, toLight ), - 1.0, 1.0 ) );
 	// A disc of radius \`width\`, its edge softened, normalised to the solid angle
@@ -155,12 +233,14 @@ function lensTraceChunk(): string {
 	vec3 lensN = normalize( normal );
 	vec3 lensD = isOrthographic ? vec3( 0.0, 0.0, - 1.0 ) : normalize( lensP );
 	vec3 lensC = lensP - lensN * lensRadius;
-	float lensFin = ${SCHLICK("dot( lensN, - lensD )")};
+	vec3 lensFin = coatFresnel( dot( lensN, - lensD ), lensN );
 	vec3 lensIor = vec3( ${r}, ${g}, ${b} );
 	vec3 lensOutA[ 3 ];
 	vec3 lensOutB[ 3 ];
 	vec3 lensPassA;
 	vec3 lensPassB;
+	// The ball's own glow (\`lensGlow\`), seen along this fragment's view ray.
+	vec3 lensGlowSeen;
 	for ( int c = 0; c < 3; c ++ ) {
 		float n = lensIor[ c ];
 		// In.
@@ -172,19 +252,23 @@ function lensTraceChunk(): string {
 		vec3 in1 = normalize( lensC - at1 );
 		// A: out through the far surface, losing what it reflects back.
 		vec3 o1 = refract( d1, in1, n );
-		float f1 = ${SCHLICK("dot( o1, - in1 )")};
+		float f1 = coatFresnel( dot( o1, - in1 ), - in1 )[ c ];
 		lensOutA[ c ] = o1;
 		// Absorbed along the way (Beer-Lambert) over the chord crossed.
-		lensPassA[ c ] = ( 1.0 - lensFin ) * ( 1.0 - f1 ) * exp( - lensAbsorb[ c ] * chord1 );
+		lensPassA[ c ] = ( 1.0 - lensFin[ c ] ) * ( 1.0 - f1 ) * exp( - lensAbsorb[ c ] * chord1 );
 		// B: what the far surface reflected, across again, and out.
 		vec3 d2 = reflect( d1, in1 );
 		float chord2 = 2.0 * lensRadius * dot( in1, d2 );
 		vec3 at2 = at1 + d2 * chord2;
 		vec3 in2 = normalize( lensC - at2 );
 		vec3 o2 = refract( d2, in2, n );
-		float f2 = ${SCHLICK("dot( o2, - in2 )")};
+		float f2 = coatFresnel( dot( o2, - in2 ), - in2 )[ c ];
 		lensOutB[ c ] = o2;
-		lensPassB[ c ] = ( 1.0 - lensFin ) * f1 * ( 1.0 - f2 ) * exp( - lensAbsorb[ c ] * ( chord1 + chord2 ) );
+		lensPassB[ c ] = ( 1.0 - lensFin[ c ] ) * f1 * ( 1.0 - f2 ) * exp( - lensAbsorb[ c ] * ( chord1 + chord2 ) );
+		// The glow is emitted evenly through the ball, so what reaches the eye
+		// is what glows along the chord the view ray crosses and along the one
+		// the far surface's film reflects into it, out through the front.
+		lensGlowSeen[ c ] = lensGlow[ c ] * ( 1.0 - lensFin[ c ] ) * ( chord1 + f1 * chord2 ) / ( 2.0 * lensRadius );
 	}
 	// How far the exit directions turn across one pixel: what a light smaller
 	// than that is spread over (see \`lensLobe\`). Taken here, outside any branch.
@@ -201,12 +285,24 @@ function lensTraceChunk(): string {
 const RE_DIRECT =
   "RE_Direct( directLight, geometryPosition, geometryNormal, geometryViewDir, geometryClearcoatNormal, material, reflectedLight );";
 
-function lensLightsChunk(): string {
+// `see` read after each of three's three direct-light calls, in its loops'
+// order: point, spot, directional. A point light INSIDE the glass - the ball's
+// own glow light (`BALL_GLOW_INTENSITY`, at its centre) - is not a lamp the
+// glass sees through itself, and is skipped: the glass draws its glow as the
+// traced `lensGlow`. Unguarded, the lens drew it as a lamp seen through the
+// ball, a white point at the centre and a white ring at the rim.
+function seeEachLight(what: string, see: string, centre: string): string {
   const chunk = THREE.ShaderChunk.lights_fragment_begin;
-  if (chunk.split(RE_DIRECT).length - 1 !== 3) {
-    throw new Error("glassMaterial: three's lights_fragment_begin no longer calls RE_Direct once per light kind; the lens lights patch matches nothing");
+  const parts = chunk.split(RE_DIRECT);
+  if (parts.length - 1 !== 3 || !parts[0]!.includes("pointLight = pointLights[ i ];")) {
+    throw new Error(`glassMaterial: three's lights_fragment_begin no longer calls RE_Direct once per light kind, point lights first; the ${what} lights patch matches nothing`);
   }
-  const see = `${RE_DIRECT}
+  const outside = `if ( distance( pointLight.position, ${centre} ) > lensRadius ) ${see}`;
+  return parts[0] + `${RE_DIRECT}\n\t\t${outside}` + parts[1] + `${RE_DIRECT}\n\t\t${see}` + parts[2] + `${RE_DIRECT}\n\t\t${see}` + parts[3];
+}
+
+function lensLightsChunk(): string {
+  const see = `
 		{
 			vec3 lensL = normalize( directLight.direction );
 			for ( int c = 0; c < 3; c ++ ) {
@@ -215,7 +311,7 @@ function lensLightsChunk(): string {
 					lensPassB[ c ] * lensLobe( lensOutB[ c ], lensL, lensWidthB ) );
 			}
 		}`;
-  return chunk.split(RE_DIRECT).join(see);
+  return seeEachLight("lens", see, "lensC");
 }
 
 // Three's `opaque_fragment`: what the two paths see of the room, added to the
@@ -249,7 +345,7 @@ export function solidGlassChunk(): string {
 		lensRoom[ c ] = seenA[ c ] * lensPassA[ c ] + seenB[ c ] * lensPassB[ c ];
 	}
 	// A speck of dust is opaque: what it covers comes through it not at all.
-	gl_FragColor = vec4( outgoingLight + ( lensRoom + lensLights ) * ( 1.0 - glassDust ), 1.0 );`;
+	gl_FragColor = vec4( outgoingLight + ( lensRoom + lensLights + lensGlowSeen ) * ( 1.0 - glassDust ), 1.0 );`;
   return chunk.replace(LENS_LINE, composite);
 }
 
@@ -319,17 +415,61 @@ const WEAR_ROUGHNESS = /* glsl */ `
 // one write retints the ball, its loop, its chain and its cuff together.
 export const GLASS_ABSORPTION: THREE.IUniform<THREE.Vector3> = { value: new THREE.Vector3(0, 0, 0) };
 
-export const SOLID_GLASS_PROGRAM_KEY = `ball-lens:${GLASS_IOR_RGB.join(",")}:paths-ab:${LIGHT_ANGLE}|wear:${GREASE_ROUGHNESS}:${GREASE_HAZE_MIPS}:${GREASE_SCATTER}:${SCUFF_SCATTER}|avatar-fog:${AVATAR_FOG}`;
+// THE GLOW (Tris, 2026-10-16: "a slight glow. That doesn't need to be
+// realistic because it's a magic crystal ball"): the ball - not its loop or
+// chain - gives off a faint light of its own, evenly through its volume, so it
+// is brightest where the view crosses the most crystal and fades to the rim.
+// What is invented is only that it glows; the light then leaves through the
+// aurora film like any other, so the film colours it (`lensGlowSeen`). The
+// colour, and the radiance seen straight through the centre (linear, the
+// scene's own units: a sunlit rock top reads about 0.25).
+// A warm yellow (Tris, 2026-10-16: "glow a warm yellow, not purple"; it was
+// 0xdcd8ff, a lavender white).
+export const BALL_GLOW = 0xffc857;
+export const BALL_GLOW_RADIANCE = 0.025;
+// ...and the light it gives the world (Tris: "make it emit actual light (using
+// a scene light)"): a point light at the ball's centre (`Scene3D`), in three's
+// candela with the inverse square, reaching `BALL_GLOW_RANGE` metres - short,
+// so the fragments it cannot reach skip it (lightReach.ts). The cave's lamps
+// are ~2. No shadow: a point light's shadow is six more renders a frame.
+export const BALL_GLOW_INTENSITY = 0.35;
+export const BALL_GLOW_RANGE = 2.5;
+
+// The film carried by a broken piece's vertices (`pieceGlassMaterial`), handed
+// to the fragment shader.
+const COAT_ATTRIBUTE_PARS = /* glsl */ `
+#ifdef COAT_FROM_ATTRIBUTE
+	attribute float coatNm;
+	varying float vCoatNm;
+#endif
+`;
+
+// The axis the film thins along (`coatAt`), the piece's own +y carried into view
+// space: through each instance's matrix for a link, so every link wears its own
+// bands, and through the ball's rotation for the ball, so its bands roll with it.
+const COAT_AXIS_VERTEX = /* glsl */ `
+	vec3 coatAxis = vec3( 0.0, 1.0, 0.0 );
+	#ifdef USE_INSTANCING
+		coatAxis = mat3( instanceMatrix ) * coatAxis;
+	#endif
+	vCoatAxis = normalize( normalMatrix * coatAxis );
+	#ifdef COAT_FROM_ATTRIBUTE
+		vCoatNm = coatNm;
+	#endif
+`;
+
+export const SOLID_GLASS_PROGRAM_KEY = `ball-lens:${GLASS_IOR_RGB.join(",")}:paths-ab:${LIGHT_ANGLE}|aurora:${COAT_IOR}:${COAT_THICKNESS_NM.join("-")}|wear:${GREASE_ROUGHNESS}:${GREASE_HAZE_MIPS}:${GREASE_SCATTER}:${SCUFF_SCATTER}|avatar-fog:${AVATAR_FOG}`;
 
 // Solid round glass whose surface curves at `lensRadius` (metres): the ball's
 // radius for the ball, a bar's for a link, the loop or the cuff. Lit and seen
 // through from the ball's reflection probe (`setProbe` it every frame).
 //
 // `wear`: the baked surface wear the ball carries (glassWear.ts), or null for
-// clean glass.
+// clean glass. `glow`: the ball's own magic glow (`BALL_GLOW`).
 export function solidGlassMaterial(
   lensRadius: number,
   wear: THREE.CubeTexture | null = null,
+  glow = false,
 ): THREE.MeshPhysicalMaterial {
   const mat = new THREE.MeshPhysicalMaterial({
     // No diffuse: glass scatters nothing. What it shows is reflected (three's
@@ -339,6 +479,10 @@ export function solidGlassMaterial(
     roughness: 0,
     ior: GLASS_IOR,
     specularIntensity: 1,
+    // The aurora film, so three lights the front surface's reflection through
+    // it too; its thickness is set per fragment below (`coatAt`), not by
+    // three's range.
+    ...coatOptions(),
   });
   mat.name = "solid-glass";
   if (wear) mat.defines = { ...mat.defines, GLASS_WEAR: "" };
@@ -346,20 +490,27 @@ export function solidGlassMaterial(
   mat.onBeforeCompile = (shader) => {
     shader.uniforms.lensRadius = radius;
     shader.uniforms.lensAbsorb = GLASS_ABSORPTION;
+    shader.uniforms.lensGlow = { value: new THREE.Color(glow ? BALL_GLOW : 0x000000).multiplyScalar(glow ? BALL_GLOW_RADIANCE : 0) };
     if (wear) shader.uniforms.glassWear = { value: wear };
     for (const line of ["#include <begin_vertex>"]) {
       if (!shader.vertexShader.includes(line)) throw new Error(`glassMaterial: three's vertex shader has no ${line}`);
     }
-    for (const line of ["#include <color_fragment>", "#include <roughnessmap_fragment>", "#include <lights_fragment_begin>"]) {
+    for (const line of [
+      "#include <color_fragment>",
+      "#include <roughnessmap_fragment>",
+      "#include <lights_physical_fragment>",
+      "#include <lights_fragment_begin>",
+    ]) {
       if (!shader.fragmentShader.includes(line)) throw new Error(`glassMaterial: three's fragment shader has no ${line}`);
     }
     shader.vertexShader = shader.vertexShader
-      .replace("void main() {", "varying vec3 vGlassLocal;\nvoid main() {")
-      .replace("#include <begin_vertex>", "#include <begin_vertex>\n\tvGlassLocal = position;");
+      .replace("void main() {", `varying vec3 vGlassLocal;\nvarying vec3 vCoatAxis;\n${COAT_ATTRIBUTE_PARS}\nvoid main() {`)
+      .replace("#include <begin_vertex>", `#include <begin_vertex>\n${COAT_AXIS_VERTEX}\n\tvGlassLocal = position;`);
     shader.fragmentShader = shader.fragmentShader
-      .replace("void main() {", `uniform float lensRadius;\nuniform vec3 lensAbsorb;\n${WEAR_PARS}\n${LENS_PARS}\nvoid main() {`)
+      .replace("void main() {", `uniform float lensRadius;\nuniform vec3 lensAbsorb;\nuniform vec3 lensGlow;\n${WEAR_PARS}\n${LENS_PARS}\nvoid main() {`)
       .replace("#include <color_fragment>", `#include <color_fragment>\n${WEAR_FRAGMENT}`)
       .replace("#include <roughnessmap_fragment>", `#include <roughnessmap_fragment>\n${WEAR_ROUGHNESS}`)
+      .replace("#include <lights_physical_fragment>", coatThicknessChunk("coatAt( normalize( normal ) )"))
       .replace("#include <lights_fragment_begin>", `${lensTraceChunk()}\n${lensLightsChunk()}`)
       .replace("#include <opaque_fragment>", solidGlassChunk())
       // Opaque, so the avatar's thinner air is the plain chunk's patch.
@@ -373,117 +524,686 @@ export function solidGlassMaterial(
 }
 
 // ---------------------------------------------------------------------------
-// THIN glass: a wall, blended
+// HOLLOW glass: the ball as a quartz shell with a wall of some thickness
 // ---------------------------------------------------------------------------
 //
-// A wall a few millimetres thick shifts what is behind it sideways by a
-// fraction of its own thickness, so the background through it is the
-// background, and the glass is a blend: each surface passes (1 - F) of what
-// reaches it and adds its own reflection, so a wall - two surfaces - is drawn
-// premultiplied, as
+// Tris, 2026-10-16: "I want the crystal ball to have thin walls instead of
+// being solid. I want to be able to configure the thickness of the wall" (the
+// wall is glassWall.ts). Two concentric spheres, the outer one coated with the
+// aurora film, the inner one bare quartz, and air between them and the centre.
+// What that does to the light depends on where the view ray meets the ball,
+// which is the whole of how a thick glass bulb looks:
 //
-//   colour = reflection + background * (1 - F)^2
+//   - Inside the hollow's own silhouette (the ray's distance from the centre,
+//     its IMPACT PARAMETER, under the inner radius) the ray crosses the wall,
+//     the hollow and the far wall: four surfaces. Each wall is a meniscus whose
+//     surfaces share a centre, and that is a weak diverging lens, so what is
+//     behind the ball is seen through it a little smaller, and bent hard and
+//     split into colour toward the hollow's edge, where the ray meets the
+//     inner surface at a graze.
+//   - Outside it, the ray never reaches the air inside. Quartz keeps
+//     n * (impact parameter) the same at every surface of concentric spheres,
+//     so a ray whose impact parameter outside is over the inner radius meets
+//     the inner surface past the critical angle, or misses it: it stays in the
+//     wall and comes out bent as through solid glass. The rim of the ball is a
+//     band of solid quartz exactly the wall's thickness wide in the projected
+//     radius - the dark, bright-edged ring a glass bulb has.
 //
-// with three's own physical lighting supplying the reflection (the inner
-// surface reflects the same again, less what the outer one kept). Drawn
-// double-sided, three draws the far face and then the near one, which is the
-// light path's own order.
+// THE PATHS traced, per fragment, in view space (`hollowToOuter` is one leg):
 //
-// THE AVATAR'S THINNER AIR is kept (`AVATAR_FOG`), rewritten for a premultiplied
-// colour: the fog is laid over the light the glass ITSELF adds, in proportion to
-// how much of the background it hides, because the background behind it has
-// had its own fog already.
+//   A - straight through: in, on through the hollow if it gets there, out.
+//       Per channel, with dispersion, as the solid ball.
+//   B - reflected once off the far side's film, from inside the glass, and
+//       out again: the aurora's colour seen inside the ball (the solid ball's
+//       path B). Per channel.
+//   C - reflected off the far wall's bare inner surface, from the hollow.
+//   D - reflected off the near wall's bare inner surface, from the glass: the
+//       second, fainter reflection a thick glass wall shows behind the first.
+//       C and D only where the ray crosses the hollow, and traced once, in
+//       green: each is a twentieth of the light, uncoloured by the film.
+//
+// WHAT A PATH SEES. Path A through the hollow leaves the ball close to where
+// it was going, and what it sees is the scene right behind the ball, which
+// the reflection probe holds a few texels of across the whole ball: it is
+// read from the FRAME instead, a patch of it copied out just before the ball
+// is drawn (frameCopy.ts), where the leaving ray meets the depth the frame
+// holds (two steps of a secant search). Everything else - the rim's rays, the
+// reflections, and any of A that lands off the patch or on something in front
+// of the ball - is read from the probe, as for the solid ball, with the
+// scene's lamps added along it (which the probe has no more of than the frame
+// does: a lamp is not drawn, only what it lights). The frame is tone mapped
+// and encoded (frameTarget.ts), so it is decoded first (`frameDecode`, the
+// exact inverse of three's ACES and sRGB), and the sum encoded again: one
+// opaque draw, no blending.
+//
+// With depth of field on, the ball is drawn after the blur (depthOfField.ts
+// takes it as an overlay), so what it sees behind it is out of focus too.
 
-// Three's `opaque_fragment` chunk, with the wall's coverage as the alpha.
-// Exported so `cli render3d` can read it without a GPU.
-export function glassOpaqueChunk(): string {
-  const chunk = THREE.ShaderChunk.opaque_fragment;
-  if (!chunk.includes(OPAQUE_LINE)) {
-    throw new Error("glassMaterial: three's opaque_fragment chunk changed; the glass patch matches nothing");
-  }
-  return chunk.replace(
-    OPAQUE_LINE,
-    [
-      // The reflectance at this fragment's view angle. `normal` faces the
-      // viewer on both faces (three flips it on a back face), so it is the
-      // angle at whichever surface this is.
-      `float glassF = ${SCHLICK("dot( normal, geometryViewDir )")};`,
-      // A wall's two surfaces, each passing (1 - F).
-      "float glassT = ( 1.0 - glassF ) * ( 1.0 - glassF );",
-      // The inner surface reflects as the outer does, of what the outer let in,
-      // and passes it back out through the outer again.
-      "vec3 glassLight = outgoingLight * ( 1.0 + glassT );",
-      "gl_FragColor = vec4( glassLight, 1.0 - glassT );",
-    ].join("\n"),
+// Three's tone mapping, inverted (`frameDecode`), from its own constants: a
+// three upgrade that changes them fails here rather than drawing the scene
+// behind the ball the wrong brightness.
+const ACES_INPUT = [0.59719, 0.076, 0.0284, 0.35458, 0.90834, 0.13383, 0.04823, 0.01566, 0.83777];
+const ACES_OUTPUT = [1.60475, -0.10208, -0.00327, -0.53108, 1.10813, -0.07276, -0.07367, -0.00605, 1.07602];
+function acesMatchesThree(): boolean {
+  const chunk = THREE.ShaderChunk.tonemapping_pars_fragment;
+  return (
+    chunk.includes("vec3( 0.59719, 0.07600, 0.02840 )") &&
+    chunk.includes("vec3( 0.35458, 0.90834, 0.13383 )") &&
+    chunk.includes("vec3( 0.04823, 0.01566, 0.83777 )") &&
+    chunk.includes("vec3(  1.60475, -0.10208, -0.00327 )") &&
+    chunk.includes("vec3( -0.53108,  1.10813, -0.07276 )") &&
+    chunk.includes("vec3( -0.07367, -0.00605,  1.07602 )") &&
+    chunk.includes("vec3 a = v * ( v + 0.0245786 ) - 0.000090537;") &&
+    chunk.includes("vec3 b = v * ( 0.983729 * v + 0.4329510 ) + 0.238081;") &&
+    chunk.includes("color *= toneMappingExposure / 0.6;")
   );
 }
+function glslMat3(columns: number[]): string {
+  return `mat3( ${columns.map(glslFloat).join(", ")} )`;
+}
+const inverseOf = (columns: number[]): number[] => new THREE.Matrix3().fromArray(columns).invert().toArray();
 
-// Three's `fog_fragment` chunk for a premultiplied colour, at the avatar's
-// thinner air. Exported for `cli render3d`.
-export function glassFogChunk(scale: number = AVATAR_FOG): string {
+// Declarations shared by everything drawn over the frame or read out of it
+// (the hollow ball, the broken pieces), ahead of `main`.
+const FRAME_PARS = /* glsl */ `
+// The frame's own encoding of a linear colour: tone mapped and sRGB, as the
+// canvas is (frameTarget.ts).
+vec3 frameEncode( vec3 linear ) {
+	#ifdef TONE_MAPPING
+		linear = toneMapping( linear );
+	#endif
+	return linearToOutputTexel( vec4( linear, 1.0 ) ).rgb;
+}
+// ...and back: the linear colour a pixel of the frame was. Exact but where the
+// tone mapping clipped a channel.
+vec3 frameDecode( vec3 encoded ) {
+	vec3 c = sRGBTransferEOTF( vec4( encoded, 1.0 ) ).rgb;
+	#ifdef TONE_MAPPING
+		c = clamp( ${glslMat3(inverseOf(ACES_OUTPUT))} * c, 0.0, 1.0 );
+		// RRTAndODTFit's rational, solved for its input: a quadratic.
+		vec3 qa = 0.983729 * c - 1.0;
+		vec3 qb = 0.4329510 * c - 0.0245786;
+		vec3 qc = 0.238081 * c + 0.000090537;
+		c = ( - qb - sqrt( max( qb * qb - 4.0 * qa * qc, 0.0 ) ) ) / ( 2.0 * qa );
+		c = ${glslMat3(inverseOf(ACES_INPUT))} * c * ( 0.6 / toneMappingExposure );
+	#endif
+	return max( c, vec3( 0.0 ) );
+}
+`;
+
+// An estimate of what the frame holds behind a piece of glass drawn by
+// blending over it (the broken pieces, which cannot read the frame): the
+// probe's room along the view ray, blurred `FRAME_BEHIND_MIPS`, since the
+// probe sees it from a little way off and only so far. Only where the
+// encoding's curve bends around it depends on it (see "PIECES").
+const FRAME_BEHIND_MIPS = 3;
+// The darkest the estimate is taken to be: below it the encoding is linear.
+const FRAME_BEHIND_FLOOR = "vec3( 1e-3 )";
+const FRAME_BEHIND = (dir: string): string => `max( probeOn ? probeIntensity * textureLod( probeCube, transformDirectionByInverseViewMatrix( ${dir}, viewMatrix ), ${glslFloat(FRAME_BEHIND_MIPS)} ).rgb : vec3( 0.0 ), ${FRAME_BEHIND_FLOOR} )`;
+
+// Three's `fog_fragment` for glass that shows the frame behind it: the fog is
+// laid over the light the glass ITSELF sends (`glassSeen` is what of the
+// frame behind came through, fogged already), in proportion to how much of
+// the frame it hides (`glassCover`).
+export function seeThroughFogChunk(scale: number = AVATAR_FOG): string {
   const chunk = THREE.ShaderChunk.fog_fragment;
   if (!chunk.includes(FOG_MIX)) {
-    throw new Error("glassMaterial: three's fog_fragment chunk changed; the glass fog patch matches nothing");
+    throw new Error("glassMaterial: three's fog_fragment chunk changed; the see-through fog patch matches nothing");
   }
   return chunk.replace(
     FOG_MIX,
-    `gl_FragColor.rgb = mix( gl_FragColor.rgb, fogColor * gl_FragColor.a, fogFactor * ${glslFloat(scale)} );`,
+    `gl_FragColor.rgb = glassSeen + mix( gl_FragColor.rgb - glassSeen, fogColor * glassCover, fogFactor * ${glslFloat(scale)} );`,
   );
 }
 
-// TEMPORARY, while the two are compared: which glass ball is drawn - the solid
-// crystal ball (the default) or the hollow shell it replaced (`?glass=hollow`,
-// set by main.ts like `waterShimmer`).
-export const glassBallStyle: { value: "solid" | "hollow" } = { value: "solid" };
+// One leg of a path through the hollow ball, and the surfaces it crosses.
+const HOLLOW_PARS = /* glsl */ `
+struct HollowLeg {
+	vec3 p;        // where it is
+	vec3 d;        // which way it is going
+	float pass;    // what the bare inner surfaces crossed have let through
+	float glass;   // how far it has gone in quartz (what absorbs)
+	float span;    // ...and in all, inside the ball (what glows)
+	bool crossed;  // whether it crossed the hollow
+	// Where it met the inner surface going in (near) and coming out (far), the
+	// way it was going, and its pass and its quartz there, before that surface.
+	vec3 nearP; vec3 nearD; float nearPass; float nearGlass;
+	vec3 farP; vec3 farD; float farPass; float farGlass;
+};
+HollowLeg hollowLeg( const in vec3 p, const in vec3 d ) {
+	HollowLeg l;
+	l.p = p; l.d = d;
+	l.pass = 1.0; l.glass = 0.0; l.span = 0.0;
+	l.crossed = false;
+	l.nearP = p; l.nearD = d; l.nearPass = 0.0; l.nearGlass = 0.0;
+	l.farP = p; l.farD = d; l.farPass = 0.0; l.farGlass = 0.0;
+	return l;
+}
+// Bare quartz's reflectance at the inner surface, by the cosine on its air
+// side: Fresnel's is the same whichever way the light crosses.
+float bareFresnel( const in float cosAir ) {
+	return F_Schlick( ${glslFloat(F0)}, 1.0, saturate( cosAir ) );
+}
+// From inside the quartz on to the outer surface, crossing the hollow on the
+// way if the ray reaches it, or turned back by it past the critical angle:
+// the leg ends ON the outer surface, still inside, going the way it hits it.
+void hollowToOuter( inout HollowLeg l, const in vec3 c, const in float n ) {
+	vec3 oc = l.p - c;
+	float b = dot( oc, l.d );
+	if ( lensInner > 0.0 && b < 0.0 ) {
+		float disc = b * b - ( dot( oc, oc ) - lensInner * lensInner );
+		if ( disc > 0.0 ) {
+			float t = - b - sqrt( disc );
+			vec3 h = l.p + l.d * t;
+			l.glass += t;
+			l.span += t;
+			vec3 m = ( h - c ) / lensInner;
+			vec3 o = refract( l.d, m, n );
+			l.nearP = h; l.nearD = l.d; l.nearPass = l.pass; l.nearGlass = l.glass;
+			if ( dot( o, o ) == 0.0 ) {
+				// Past the critical angle: the inner surface is a perfect mirror.
+				l.d = reflect( l.d, m );
+			} else {
+				l.pass *= 1.0 - bareFresnel( - dot( o, m ) );
+				// Across the hollow: from a point on a sphere, the chord along a
+				// unit direction is -2 (p - c) . d long.
+				float t2 = - 2.0 * dot( h - c, o );
+				h += o * t2;
+				l.span += t2;
+				vec3 m2 = ( h - c ) / lensInner;
+				l.crossed = true;
+				l.farP = h; l.farD = o; l.farPass = l.pass; l.farGlass = l.glass;
+				l.pass *= 1.0 - bareFresnel( dot( o, m2 ) );
+				l.d = refract( o, - m2, 1.0 / n );
+			}
+			l.p = h;
+			oc = l.p - c;
+			b = dot( oc, l.d );
+		}
+	}
+	float t = - b + sqrt( max( b * b - ( dot( oc, oc ) - lensRadius * lensRadius ), 0.0 ) );
+	l.p += l.d * t;
+	l.glass += t;
+	l.span += t;
+}
+`;
 
-// TEMPORARY, for the same comparisons, read by main.ts and shotMain.ts off
-// their URL: `?glass=hollow` (above) and `?glasstint=R,G,B`, the solid glass's
+// What the probe (or, until it has drawn, the level's sky) sees along a view-
+// space direction, as an expression. Inline rather than a function: the
+// probe's uniforms are declared after everything else ahead of `main` (see
+// reflectionProbe.ts `wearProbe`).
+const PROBE_SEES = (dir: string, lod: string, roughness: string): string => `( probeOn
+		? probeIntensity * textureLod( probeCube, transformDirectionByInverseViewMatrix( ${dir}, viewMatrix ), ${lod} ).rgb
+		: hollowSky( ${dir}, ${roughness} ) )`;
+
+// The level's sky along a direction, before the probe has drawn.
+const HOLLOW_SKY = /* glsl */ `
+vec3 hollowSky( const in vec3 dir, const in float roughness ) {
+	#if defined( USE_ENVMAP ) && defined( ENVMAP_TYPE_CUBE_UV )
+		// Reflecting a direction off itself is the direction.
+		return getIBLRadiance( dir, dir, roughness );
+	#else
+		return vec3( 0.0 );
+	#endif
+}
+`;
+
+// Before three's lights loop: every path, and what of path A the frame holds.
+function hollowTraceChunk(): string {
+  const [r, g, b] = GLASS_IOR_RGB.map(glslFloat);
+  return `
+	vec3 lensP = - vViewPosition;
+	vec3 lensN = normalize( normal );
+	vec3 lensD = isOrthographic ? vec3( 0.0, 0.0, - 1.0 ) : normalize( lensP );
+	vec3 lensC = lensP - lensN * lensRadius;
+	vec3 lensFin = coatFresnel( dot( lensN, - lensD ), lensN );
+	vec3 lensIor = vec3( ${r}, ${g}, ${b} );
+	vec3 lensOutA[ 3 ];
+	vec3 lensOutB[ 3 ];
+	// Where path A leaves the ball, per channel.
+	vec3 lensAt[ 3 ];
+	vec3 lensPassA;
+	vec3 lensPassB;
+	vec3 lensGlowSeen;
+	// Paths C and D (green), zero where the ray does not cross the hollow.
+	bool hollowCrossed = false;
+	vec3 hollowOutC = vec3( 0.0, 0.0, 1.0 );
+	vec3 hollowOutD = vec3( 0.0, 0.0, 1.0 );
+	vec3 hollowPassC = vec3( 0.0 );
+	vec3 hollowPassD = vec3( 0.0 );
+	for ( int c = 0; c < 3; c ++ ) {
+		float n = lensIor[ c ];
+		// A: in, on to the far side, out - losing what the film reflects back.
+		HollowLeg a = hollowLeg( lensP, refract( lensD, lensN, 1.0 / n ) );
+		hollowToOuter( a, lensC, n );
+		vec3 na = ( a.p - lensC ) / lensRadius;
+		vec3 oa = refract( a.d, - na, n );
+		// (Never past the critical angle on a sphere, but for rounding.)
+		float fa = dot( oa, oa ) > 0.0 ? coatFresnel( dot( oa, na ), na )[ c ] : 1.0;
+		lensOutA[ c ] = oa;
+		lensAt[ c ] = a.p;
+		lensPassA[ c ] = ( 1.0 - lensFin[ c ] ) * a.pass * ( 1.0 - fa ) * exp( - lensAbsorb[ c ] * a.glass );
+		// B: what the film reflected, on round again, and out.
+		HollowLeg bl = a;
+		bl.d = reflect( a.d, na );
+		hollowToOuter( bl, lensC, n );
+		vec3 nb = ( bl.p - lensC ) / lensRadius;
+		vec3 ob = refract( bl.d, - nb, n );
+		float fb = dot( ob, ob ) > 0.0 ? coatFresnel( dot( ob, nb ), nb )[ c ] : 1.0;
+		lensOutB[ c ] = ob;
+		lensPassB[ c ] = ( 1.0 - lensFin[ c ] ) * bl.pass * fa * ( 1.0 - fb ) * exp( - lensAbsorb[ c ] * bl.glass );
+		// The glow fills the ball, hollow and all (see \`BALL_GLOW\`): what
+		// glows along the paths the view takes through it, out the front.
+		lensGlowSeen[ c ] = lensGlow[ c ] * ( 1.0 - lensFin[ c ] ) * ( a.span + fa * ( bl.span - a.span ) ) / ( 2.0 * lensRadius );
+		if ( c == 1 && a.crossed ) {
+			hollowCrossed = true;
+			// C: off the far wall's inner surface, back across the hollow, and
+			// out through the near wall.
+			vec3 m2 = ( a.farP - lensC ) / lensInner;
+			vec3 dc = reflect( a.farD, m2 );
+			vec3 h3 = a.farP + dc * ( - 2.0 * dot( a.farP - lensC, dc ) );
+			vec3 m3 = ( h3 - lensC ) / lensInner;
+			HollowLeg cl = hollowLeg( h3, refract( dc, - m3, 1.0 / n ) );
+			cl.pass = a.farPass * bareFresnel( dot( a.farD, m2 ) ) * ( 1.0 - bareFresnel( dot( dc, m3 ) ) );
+			cl.glass = a.farGlass;
+			hollowToOuter( cl, lensC, n );
+			vec3 nc = ( cl.p - lensC ) / lensRadius;
+			hollowOutC = refract( cl.d, - nc, n );
+			hollowPassC = ( 1.0 - lensFin ) * cl.pass * ( 1.0 - coatFresnel( dot( hollowOutC, nc ), nc ) ) * exp( - lensAbsorb * cl.glass );
+			// D: off the near wall's inner surface, from inside the quartz,
+			// back out of the front.
+			vec3 m1 = ( a.nearP - lensC ) / lensInner;
+			HollowLeg dl = hollowLeg( a.nearP, reflect( a.nearD, m1 ) );
+			dl.pass = a.nearPass * bareFresnel( - dot( refract( a.nearD, m1, n ), m1 ) );
+			dl.glass = a.nearGlass;
+			hollowToOuter( dl, lensC, n );
+			vec3 nd = ( dl.p - lensC ) / lensRadius;
+			hollowOutD = refract( dl.d, - nd, n );
+			hollowPassD = ( 1.0 - lensFin ) * dl.pass * ( 1.0 - coatFresnel( dot( hollowOutD, nd ), nd ) ) * exp( - lensAbsorb * dl.glass );
+		}
+	}
+	// What path A sees of the frame behind the ball, and how much of A that
+	// is (\`hollowW\`): where the green ray, leaving, meets the depth the frame
+	// holds, found by stepping from the pixel straight behind, on the patch,
+	// and behind where it leaves the ball. Fading out toward the patch's edge,
+	// where the probe takes over.
+	float hollowW = 0.0;
+	vec3 hollowBehind = vec3( 0.0 );
+	if ( frameCopyOn && hollowCrossed && lensOutA[ 1 ].z < - 1e-4 ) {
+		vec3 q = lensAt[ 1 ];
+		vec3 e = lensOutA[ 1 ];
+		vec2 px = gl_FragCoord.xy;
+		float t = 0.0;
+		bool held = true;
+		for ( int i = 0; i < 3; i ++ ) {
+			t = max( ( frameViewZ( px ) - q.z ) / e.z, 0.0 );
+			px = framePixel( q + e * t );
+			if ( frameInside( px ) < 1.0 ) {
+				held = false;
+				break;
+			}
+		}
+		// What it found must be behind where the ray left the ball: anything
+		// nearer (the ball's own loop beside it) the ray has already passed.
+		if ( held && frameViewZ( px ) < q.z ) {
+			hollowW = smoothstep( 0.0, 0.1 * min( frameCopyRect.z, frameCopyRect.w ), frameInside( px ) );
+			for ( int c = 0; c < 3; c ++ ) {
+				vec2 pc = clamp( framePixel( lensAt[ c ] + lensOutA[ c ] * t ), frameCopyRect.xy + 0.5, frameCopyRect.xy + frameCopyRect.zw - 0.5 );
+				hollowBehind[ c ] = frameDecode( frameColour( pc ) )[ c ];
+			}
+		}
+	}
+	// How far each path's exit direction turns across one pixel (see
+	// \`lensLobe\`), outside any branch.
+	float lensWidthA = max( length( fwidth( lensOutA[ 1 ] ) ), ${glslFloat(LIGHT_ANGLE)} );
+	float lensWidthB = max( length( fwidth( lensOutB[ 1 ] ) ), ${glslFloat(LIGHT_ANGLE)} );
+	float hollowWidthC = max( length( fwidth( hollowOutC ) ), ${glslFloat(LIGHT_ANGLE)} );
+	float hollowWidthD = max( length( fwidth( hollowOutD ) ), ${glslFloat(LIGHT_ANGLE)} );
+	vec3 lensLights = vec3( 0.0 );
+`;
+}
+
+// In each of three's light loops: the lamp along every path the probe is read
+// down - path A only for the share of it the frame does not hold.
+function hollowLightsChunk(): string {
+  const see = `
+		{
+			vec3 lensL = normalize( directLight.direction );
+			for ( int c = 0; c < 3; c ++ ) {
+				lensLights[ c ] += directLight.color[ c ] * (
+					lensPassA[ c ] * ( 1.0 - hollowW ) * lensLobe( lensOutA[ c ], lensL, lensWidthA ) +
+					lensPassB[ c ] * lensLobe( lensOutB[ c ], lensL, lensWidthB ) );
+			}
+			lensLights += directLight.color * (
+				hollowPassC * lensLobe( hollowOutC, lensL, hollowWidthC ) +
+				hollowPassD * lensLobe( hollowOutD, lensL, hollowWidthD ) );
+		}`;
+  return seeEachLight("hollow", see, "lensC");
+}
+
+// Three's `opaque_fragment`: everything the paths see, the frame's share
+// decoded and the sum encoded here. Exported so `cli render3d` can read it
+// without a GPU.
+export function hollowGlassChunk(): string {
+  const chunk = THREE.ShaderChunk.opaque_fragment;
+  if (!chunk.includes(OPAQUE_LINE)) {
+    throw new Error("glassMaterial: three's opaque_fragment chunk changed; the hollow patch matches nothing");
+  }
+  const lod = `glassSmudge * ${glslFloat(GREASE_HAZE_MIPS)}`;
+  const rough = `glassSmudge * ${glslFloat(GREASE_ROUGHNESS)}`;
+  return chunk.replace(
+    OPAQUE_LINE,
+    `
+	vec3 lensRoom = vec3( 0.0 );
+	for ( int c = 0; c < 3; c ++ ) {
+		vec3 seenA = ${PROBE_SEES("lensOutA[ c ]", lod, rough)};
+		vec3 seenB = ${PROBE_SEES("lensOutB[ c ]", lod, rough)};
+		lensRoom[ c ] = seenA[ c ] * lensPassA[ c ] * ( 1.0 - hollowW ) + seenB[ c ] * lensPassB[ c ];
+	}
+	if ( hollowCrossed ) {
+		lensRoom += ${PROBE_SEES("hollowOutC", lod, rough)} * hollowPassC;
+		lensRoom += ${PROBE_SEES("hollowOutD", lod, rough)} * hollowPassD;
+	}
+	// A speck of dust is opaque: what it covers comes through it not at all.
+	vec3 hollowThrough = hollowW * hollowBehind * lensPassA * ( 1.0 - glassDust );
+	vec3 hollowAdded = outgoingLight + ( lensRoom + lensLights + lensGlowSeen ) * ( 1.0 - glassDust );
+	gl_FragColor = vec4( frameEncode( hollowThrough + hollowAdded ), 1.0 );
+	// For the fog (\`seeThroughFogChunk\`): the frame's share came fogged.
+	vec3 glassSeen = frameEncode( hollowThrough );
+	float glassCover = 1.0 - hollowW * dot( lensPassA, vec3( 1.0 / 3.0 ) ) * ( 1.0 - glassDust );`,
+  );
+}
+
+export const HOLLOW_GLASS_PROGRAM_KEY = `ball-hollow:${GLASS_IOR_RGB.join(",")}:paths-abcd:${LIGHT_ANGLE}|aurora:${COAT_IOR}:${COAT_THICKNESS_NM.join("-")}|wear:${GREASE_ROUGHNESS}:${GREASE_HAZE_MIPS}:${GREASE_SCATTER}:${SCUFF_SCATTER}|frame-copy|see-through-fog:${AVATAR_FOG}`;
+
+// The hollow ball's draw: after every other opaque thing in the scene (so the
+// frame it copies holds them) and the solid glass loop (1).
+export const HOLLOW_GLASS_ORDER = 2;
+
+// A quartz shell of outer radius `radius` and wall `wall` (metres), coated
+// outside, seeing the frame behind it through `copy`'s patch (`FrameCopy`,
+// grabbed as the mesh's `onBeforeRender`) and the room through the ball's
+// reflection probe (`setProbe` it every frame). `wear` and `glow` as for
+// `solidGlassMaterial`. The wall is a uniform: `setHollowWall` changes it.
+export function hollowGlassMaterial(
+  radius: number,
+  wall: number,
+  copy: Record<string, THREE.IUniform>,
+  wear: THREE.CubeTexture | null = null,
+  glow = false,
+): THREE.MeshPhysicalMaterial {
+  if (!acesMatchesThree()) {
+    throw new Error("glassMaterial: three's ACES tone mapping changed; `frameDecode` no longer inverts it");
+  }
+  const mat = new THREE.MeshPhysicalMaterial({
+    color: 0x000000,
+    metalness: 0,
+    roughness: 0,
+    ior: GLASS_IOR,
+    specularIntensity: 1,
+    ...coatOptions(),
+  });
+  mat.name = "hollow-glass";
+  // Shows the frame behind it: drawn after depth of field's blur, as the see-
+  // through things are (depthOfField.ts).
+  mat.userData.seesFrame = true;
+  if (wear) mat.defines = { ...mat.defines, GLASS_WEAR: "" };
+  const uniforms = {
+    lensRadius: { value: radius },
+    lensInner: { value: Math.max(0, radius - wall) },
+    lensAbsorb: GLASS_ABSORPTION,
+    lensGlow: { value: new THREE.Color(glow ? BALL_GLOW : 0x000000).multiplyScalar(glow ? BALL_GLOW_RADIANCE : 0) },
+    ...copy,
+  };
+  mat.userData.hollow = uniforms;
+  mat.onBeforeCompile = (shader, renderer) => {
+    if (renderer && renderer.toneMapping !== THREE.ACESFilmicToneMapping && renderer.toneMapping !== THREE.NoToneMapping) {
+      throw new Error("glassMaterial: the hollow ball decodes the frame from ACES tone mapping, and the renderer's is another");
+    }
+    Object.assign(shader.uniforms, uniforms);
+    if (wear) shader.uniforms.glassWear = { value: wear };
+    if (!shader.vertexShader.includes("#include <begin_vertex>")) throw new Error("glassMaterial: three's vertex shader has no #include <begin_vertex>");
+    for (const line of [
+      "#include <color_fragment>",
+      "#include <roughnessmap_fragment>",
+      "#include <lights_physical_fragment>",
+      "#include <lights_fragment_begin>",
+      "#include <opaque_fragment>",
+      "#include <tonemapping_fragment>",
+      "#include <colorspace_fragment>",
+      "#include <fog_fragment>",
+    ]) {
+      if (!shader.fragmentShader.includes(line)) throw new Error(`glassMaterial: three's fragment shader has no ${line}`);
+    }
+    shader.vertexShader = shader.vertexShader
+      .replace("void main() {", `varying vec3 vGlassLocal;\nvarying vec3 vCoatAxis;\n${COAT_ATTRIBUTE_PARS}\nvoid main() {`)
+      .replace("#include <begin_vertex>", `#include <begin_vertex>\n${COAT_AXIS_VERTEX}\n\tvGlassLocal = position;`);
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        "void main() {",
+        `uniform float lensRadius;\nuniform float lensInner;\nuniform vec3 lensAbsorb;\nuniform vec3 lensGlow;\n${WEAR_PARS}\n${LENS_PARS}\n${FRAME_PARS}\n${FRAME_COPY_PARS}\n${HOLLOW_PARS}\n${HOLLOW_SKY}\nvoid main() {`,
+      )
+      .replace("#include <color_fragment>", `#include <color_fragment>\n${WEAR_FRAGMENT}`)
+      .replace("#include <roughnessmap_fragment>", `#include <roughnessmap_fragment>\n${WEAR_ROUGHNESS}`)
+      .replace("#include <lights_physical_fragment>", coatThicknessChunk("coatAt( normalize( normal ) )"))
+      .replace("#include <lights_fragment_begin>", `${hollowTraceChunk()}\n${hollowLightsChunk()}`)
+      .replace("#include <opaque_fragment>", hollowGlassChunk())
+      // Encoded by `hollowGlassChunk` already.
+      .replace("#include <tonemapping_fragment>", "")
+      .replace("#include <colorspace_fragment>", "")
+      .replace("#include <fog_fragment>", seeThroughFogChunk());
+  };
+  mat.customProgramCacheKey = () => HOLLOW_GLASS_PROGRAM_KEY;
+  wearProbe(mat);
+  return mat;
+}
+
+// A new wall for a hollow ball's material, in metres; recompiles nothing.
+export function setHollowWall(mat: THREE.Material, wall: number): void {
+  const u = mat.userData.hollow as { lensRadius: THREE.IUniform<number>; lensInner: THREE.IUniform<number> } | undefined;
+  if (u) u.lensInner.value = Math.max(0, u.lensRadius.value - wall);
+}
+
+// ---------------------------------------------------------------------------
+// PIECES: the broken ball's chunks, seen through
+// ---------------------------------------------------------------------------
+//
+// A chunk of the ball (render/glassFracture.ts) is a few centimetres of solid
+// quartz with flat broken faces, and what it looks like is what is BEHIND it,
+// shifted a little, with bright edges and facets that flash: traced as the
+// ball is, through the probe, every pixel of a flat face looked along nearly
+// the same direction and read one texel of the room - a face drawn as one
+// flat colour, like painted plastic (2026-10-16). So a piece is seen through
+// by blending, two draws over the frame: TRANSMIT multiplying it by what each
+// face passes and LIGHT adding what each face sends the eye.
+//
+// THE FRAME IS ENCODED (frameTarget.ts: tone mapped and sRGB, as the canvas
+// is), and light does not add in encoded values: blended as they are, a dim
+// reflection laid over a dark cave came out several times too bright - glass
+// drawn this way went milky (the hollow ball's first version, 2026-10-16). A
+// blend cannot decode what it lands on, so both draws are written for the
+// encoded frame from an estimate of what is behind (`FRAME_BEHIND`) as
+//
+//   transmit: frame * enc(behind * T) / enc(behind)
+//   light:    + enc(behind * T + added) - enc(behind * T)
+//
+// which is the encoded sum exactly where the estimate is right.
+//
+// Both faces of a piece are drawn. A FRONT face is the light entering: the
+// film's or bare quartz's reflectance at the view angle (`coatNm`, none on a
+// broken face), lit by three as the ball's surface is. A BACK face is the
+// light leaving: Fresnel from inside, and past quartz's critical angle (40
+// degrees) nothing leaves at all - the face reflects everything back into the
+// piece, which is the dark facet and the bright flash a glass chunk has. What
+// a back face reflects is read from the probe along the reflection, through
+// the face it came in by. The bend of the light through the piece is left
+// out: across a chunk a few centimetres thick it moves the background less
+// than the piece's own edge does.
+//
+// That is for a CHUNK, whose faces meet at every angle. A SHARD of the hollow
+// ball's wall (`setPieceSlabs`) is a curved plate a few millimetres thick: the
+// light leaving one face entered by the face opposite, nearly parallel, so it
+// leaves at the angle it entered at and is never trapped. Drawn as chunks,
+// the shards' back faces went past the critical angle wherever they were seen
+// obliquely and showed only the dark cave they reflected (Tris, 2026-10-16:
+// "the ugly black areas that appear on the glass after it breaks").
+
+// Shared by both draws, after three's lights: the face's reflectance and
+// transmittance, and the estimate of what is behind it.
+const PIECE_FACE = /* glsl */ `
+	vec3 pieceN = normalize( normal );
+	float pieceCos = saturate( dot( pieceN, geometryViewDir ) );
+	vec3 pieceR;
+	if ( gl_FrontFacing ) {
+		pieceR = filmFresnel( pieceCos, vCoatNm );
+	} else {
+	#ifdef PIECE_SLAB
+		// A shard of a thin wall: what leaves a face came in by the face
+		// opposite, all but parallel to it, so it leaves at the angle it came in
+		// at - never past the critical angle.
+		pieceR = filmFresnel( pieceCos, vCoatNm );
+	#else
+		// Leaving the quartz: Snell's sine outside, or none past the critical angle.
+		float pieceSin = ${glslFloat(GLASS_IOR)} * sqrt( 1.0 - pieceCos * pieceCos );
+		pieceR = pieceSin >= 1.0 ? vec3( 1.0 ) : filmFresnel( sqrt( 1.0 - pieceSin * pieceSin ), vCoatNm );
+	#endif
+	}
+	vec3 pieceT = 1.0 - pieceR;
+	vec3 pieceBehind = ${FRAME_BEHIND("- geometryViewDir")};
+	// How much of the piece is left as it fades away: the batch's per-piece
+	// colour (render3d/shardVisual.ts), 1 whole to 0 gone.
+	#ifdef USE_COLOR_ALPHA
+		float pieceFade = vColor.r;
+	#else
+		float pieceFade = 1.0;
+	#endif
+`;
+
+function pieceTransmitChunk(): string {
+  const chunk = THREE.ShaderChunk.opaque_fragment;
+  if (!chunk.includes(OPAQUE_LINE)) throw new Error("glassMaterial: three's opaque_fragment chunk changed; the piece patch matches nothing");
+  return chunk.replace(
+    OPAQUE_LINE,
+    `${PIECE_FACE}
+	gl_FragColor = vec4( mix( vec3( 1.0 ), frameEncode( pieceBehind * pieceT ) / frameEncode( pieceBehind ), pieceFade ), 1.0 );`,
+  );
+}
+
+function pieceLightChunk(): string {
+  const chunk = THREE.ShaderChunk.opaque_fragment;
+  if (!chunk.includes(OPAQUE_LINE)) throw new Error("glassMaterial: three's opaque_fragment chunk changed; the piece patch matches nothing");
+  return chunk.replace(
+    OPAQUE_LINE,
+    `${PIECE_FACE}
+	vec3 pieceAdded = outgoingLight;
+	if ( ! gl_FrontFacing ) {
+		// Reflected inside off this face (whose outward normal faces away from
+		// the eye), from light that came in by a front face.
+		vec3 pieceIn = reflect( - geometryViewDir, - pieceN );
+		vec3 pieceRoom = probeOn ? probeIntensity * textureLod( probeCube, transformDirectionByInverseViewMatrix( pieceIn, viewMatrix ), 0.0 ).rgb : vec3( 0.0 );
+		pieceAdded = pieceRoom * pieceR * ${glslFloat(1 - F0)};
+	}
+	vec3 pieceThrough = pieceBehind * pieceT;
+	gl_FragColor = vec4( ( frameEncode( pieceThrough + pieceAdded ) - frameEncode( pieceThrough ) ) * pieceFade, 1.0 );
+	vec3 glassSeen = vec3( 0.0 );
+	float glassCover = ( 1.0 - dot( pieceT, vec3( 1.0 / 3.0 ) ) ) * pieceFade;`,
+  );
+}
+
+// Whether the pieces' material draws shards of a thin wall (see "PIECES"):
+// set when the pieces are cut, before anything is drawn with it.
+export function setPieceSlabs(mat: THREE.Material, slabs: boolean): void {
+  const defines = (mat.defines ??= {}) as Record<string, string>;
+  if ((defines.PIECE_SLAB !== undefined) === slabs) return;
+  if (slabs) defines.PIECE_SLAB = "";
+  else delete defines.PIECE_SLAB;
+  mat.needsUpdate = true;
+}
+
+// The pieces' two draws, after the opaque scene (the hollow ball among it)
+// and the water, the transmit first.
+export const PIECE_TRANSMIT_ORDER = 2;
+export const PIECE_LIGHT_ORDER = 3;
+
+const PIECE_KEY = `piece-fade:${F0}:${GLASS_IOR}|aurora:${COAT_IOR}|behind-${FRAME_BEHIND_MIPS}|see-through-fog:${AVATAR_FOG}`;
+
+// The two draws of the broken pieces (see "PIECES"), TRANSMIT first. Both lit
+// from the ball's probe (`setProbe` them both). For a `BatchedMesh` whose
+// geometry carries `coatNm`.
+export function pieceGlassMaterial(pass: "transmit" | "light"): THREE.MeshPhysicalMaterial {
+  const mat = new THREE.MeshPhysicalMaterial({
+    color: 0x000000,
+    metalness: 0,
+    roughness: 0,
+    ior: GLASS_IOR,
+    specularIntensity: 1,
+    ...coatOptions(),
+    side: THREE.DoubleSide,
+    transparent: true,
+    depthWrite: false,
+    ...(pass === "transmit"
+      ? {
+          blending: THREE.CustomBlending,
+          blendEquation: THREE.AddEquation,
+          blendSrc: THREE.ZeroFactor,
+          blendDst: THREE.SrcColorFactor,
+          blendEquationAlpha: THREE.AddEquation,
+          blendSrcAlpha: THREE.ZeroFactor,
+          blendDstAlpha: THREE.OneFactor,
+        }
+      : { blending: THREE.AdditiveBlending }),
+  });
+  mat.name = `glass-piece-${pass}`;
+  // Both faces of the double-sided piece in one pass each, back then front;
+  // the order does not matter to a multiply or a sum.
+  mat.forceSinglePass = true;
+  mat.defines = { ...mat.defines, COAT_FROM_ATTRIBUTE: "" };
+  mat.onBeforeCompile = (shader) => {
+    for (const line of ["#include <begin_vertex>"]) {
+      if (!shader.vertexShader.includes(line)) throw new Error(`glassMaterial: three's vertex shader has no ${line}`);
+    }
+    for (const line of [
+      "#include <lights_physical_fragment>",
+      "#include <opaque_fragment>",
+      "#include <tonemapping_fragment>",
+      "#include <colorspace_fragment>",
+      "#include <fog_fragment>",
+    ]) {
+      if (!shader.fragmentShader.includes(line)) throw new Error(`glassMaterial: three's fragment shader has no ${line}`);
+    }
+    shader.uniforms.lensRadius = { value: 0 };
+    shader.vertexShader = shader.vertexShader
+      .replace("void main() {", `varying vec3 vCoatAxis;\n${COAT_ATTRIBUTE_PARS}\nvoid main() {`)
+      .replace("#include <begin_vertex>", `#include <begin_vertex>\n${COAT_AXIS_VERTEX}`);
+    shader.fragmentShader = shader.fragmentShader
+      .replace("void main() {", `uniform float lensRadius;\n${LENS_PARS}\n${FRAME_PARS}\nvoid main() {`)
+      .replace("#include <lights_physical_fragment>", coatThicknessChunk("vCoatNm"))
+      .replace("#include <opaque_fragment>", pass === "transmit" ? pieceTransmitChunk() : pieceLightChunk())
+      // Encoded by the chunk above already.
+      .replace("#include <tonemapping_fragment>", "")
+      .replace("#include <colorspace_fragment>", "")
+      .replace("#include <fog_fragment>", pass === "transmit" ? "" : seeThroughFogChunk());
+  };
+  mat.customProgramCacheKey = () => `${PIECE_KEY}|${pass}|${mat.defines?.PIECE_SLAB !== undefined ? "slab" : "chunk"}`;
+  wearProbe(mat);
+  return mat;
+}
+
+// Whether the ball wears its baked wear (glassWear.ts) - off for now (Tris,
+// 2026-10-16: "remove all the dust/smears/fogginess for now (not forever)"):
+// unbaked, and the ball compiled clean. `?glasswear=1` puts it back.
+export const glassWearShown: { value: boolean } = { value: false };
+
+// Read by main.ts and shotMain.ts off their URL: `?glasswall=<mm>` (the
+// ball's wall, glassWall.ts), `?glasswear=1` (above), `?glasscoat=1` (the
+// aurora film, `glassCoatShown`) and `?glasstint=R,G,B`, the glass's
 // absorption per metre (`GLASS_ABSORPTION`) - `glasstint=0.4,3,11` is amber.
 export function glassOptionsFrom(params: URLSearchParams): void {
-  if (params.get("glass") === "hollow") glassBallStyle.value = "hollow";
+  glassWallFrom(params);
+  if (params.get("glasswear") === "1") glassWearShown.value = true;
+  if (params.get("glasscoat") === "1") glassCoatShown.value = true;
   const tint = params.get("glasstint")?.split(",").map(Number);
   if (tint?.length === 3 && tint.every((v) => Number.isFinite(v) && v >= 0)) {
     GLASS_ABSORPTION.value.set(tint[0]!, tint[1]!, tint[2]!);
   }
-}
-
-export const GLASS_PROGRAM_KEY = `glass-wall:${F0}|glass-fog:${AVATAR_FOG}`;
-
-// A new thin-glass material. `probe`: lit from the ball's reflection probe as
-// well as the room (see reflectionProbe.ts) - the shards, which fly from where
-// the probe stands.
-export function glassMaterial(probe = false): THREE.MeshPhysicalMaterial {
-  const mat = new THREE.MeshPhysicalMaterial({
-    // No diffuse at all: glass scatters nothing, it reflects and transmits.
-    color: 0x000000,
-    metalness: 0,
-    roughness: GLASS_ROUGHNESS,
-    ior: GLASS_IOR,
-    specularIntensity: 1,
-    side: THREE.DoubleSide,
-    transparent: true,
-    // The background has been drawn; the glass is laid over it and hides
-    // nothing behind it from what is drawn later. It is also what depth of
-    // field reads as "a see-through thing near the plane" and draws sharp over
-    // the blur (see depthOfField.ts `seeThrough`).
-    depthWrite: false,
-    blending: THREE.CustomBlending,
-    blendEquation: THREE.AddEquation,
-    blendSrc: THREE.OneFactor,
-    blendDst: THREE.OneMinusSrcAlphaFactor,
-    blendEquationAlpha: THREE.AddEquation,
-    blendSrcAlpha: THREE.OneFactor,
-    blendDstAlpha: THREE.OneMinusSrcAlphaFactor,
-  });
-  mat.name = "glass";
-  mat.onBeforeCompile = (shader) => {
-    shader.fragmentShader = shader.fragmentShader
-      .replace("#include <opaque_fragment>", glassOpaqueChunk())
-      .replace("#include <fog_fragment>", glassFogChunk());
-  };
-  mat.customProgramCacheKey = () => GLASS_PROGRAM_KEY;
-  // After the glass patch, so the probe's chains onto it (`wearProbe` keeps
-  // whatever `onBeforeCompile` it finds).
-  if (probe) wearProbe(mat);
-  return mat;
 }

@@ -134,6 +134,9 @@ function drawBody(
     return;
   }
   if (body instanceof BallPlayer && body.glass) {
+    // A broken one is nothing but its pieces (`GlassShards.draw`), though it
+    // stays in the world, passable, until the respawn.
+    if (body.shattered) return;
     // The glass ball (Hard): clear, so the level shows through it, with the
     // rim bright where a glass wall seen edge-on reflects nearly everything
     // (see render3d/glassMaterial.ts) and a glint where the light catches it.

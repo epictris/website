@@ -220,9 +220,13 @@ function cocUniforms(): Record<string, THREE.IUniform> {
   };
 }
 
+// See-through: drawn over what is behind it without hiding it from the blur -
+// blended without writing depth, or opaque but showing the frame behind it,
+// which it copies out as it is drawn (the hollow glass ball, glassMaterial.ts
+// `seesFrame`), and which must be the blurred frame.
 function seeThrough(material: THREE.Material | THREE.Material[]): boolean {
   const all = Array.isArray(material) ? material : [material];
-  return all.length > 0 && all.every((m) => m.transparent && !m.depthWrite);
+  return all.length > 0 && all.every((m) => (m.transparent && !m.depthWrite) || m.userData.seesFrame === true);
 }
 
 export class DepthOfField {
@@ -272,7 +276,8 @@ export class DepthOfField {
   // Step 4's blur, as a member of the scene for that one draw, so it and the
   // overlays are one render and the frame is resolved once for both. One
   // triangle over the whole of clip space, drawn before anything else in the
-  // pass: it is opaque, and nothing opaque is ever an overlay.
+  // pass: it is opaque and its order is the lowest there is, so even an opaque
+  // overlay (`seeThrough`) is drawn after it.
   private readonly compositeGeometry = new THREE.BufferGeometry().setAttribute(
     "position",
     new THREE.Float32BufferAttribute([-1, -1, 0, 3, -1, 0, -1, 3, 0], 3),
@@ -399,6 +404,55 @@ export class DepthOfField {
       r.render(scene, camera);
     } finally {
       scene.remove(this.compositeMesh);
+      frame.resolveDepthBuffer = resolveDepth;
+      r.autoClear = autoClear;
+      r.info.autoReset = autoReset;
+      r.shadowMap.autoUpdate = shadowsUpdate;
+      camera.layers.mask = cameraMask;
+      scene.background = background;
+      this.restoreOverlays();
+    }
+  }
+
+  // Draw `scene` into `frame` unblurred, but in the lens's two passes: the
+  // scene without its see-through things near the plane, `afterScene` (the
+  // light shafts), and then those things. For a frame holding something that
+  // copies what is behind it as it is drawn (the hollow glass ball,
+  // frameCopy.ts): it is a see-through thing here (`seeThrough`), so the copy
+  // holds the lit air the shafts add, which in one pass it did not - the
+  // ball's middle was a dark square of the cave without its haze.
+  renderInTwo(
+    scene: THREE.Scene,
+    camera: THREE.PerspectiveCamera | THREE.OrthographicCamera,
+    frame: THREE.WebGLRenderTarget,
+    afterScene?: () => void,
+  ): void {
+    camera.getWorldDirection(this.forward);
+    // Past edge-on there is no plane, and everything see-through goes last.
+    const sharpTo = this.forward.z < -1e-6 ? -camera.position.z / this.forward.z + FOCUS_BAND : Infinity;
+    const r = this.renderer;
+    this.takeOverlays(scene, camera, sharpTo);
+    const autoClear = r.autoClear;
+    const resolveDepth = frame.resolveDepthBuffer;
+    const autoReset = r.info.autoReset;
+    const shadowsUpdate = r.shadowMap.autoUpdate;
+    const cameraMask = camera.layers.mask;
+    const background = scene.background;
+    r.info.reset();
+    r.info.autoReset = false;
+    try {
+      r.setRenderTarget(frame);
+      r.render(scene, camera);
+      afterScene?.();
+      // Its depth, if anything wanted it, was resolved by the first pass.
+      r.setRenderTarget(frame);
+      frame.resolveDepthBuffer = false;
+      r.autoClear = false;
+      camera.layers.set(OVERLAY_LAYER);
+      scene.background = null;
+      r.shadowMap.autoUpdate = false;
+      r.render(scene, camera);
+    } finally {
       frame.resolveDepthBuffer = resolveDepth;
       r.autoClear = autoClear;
       r.info.autoReset = autoReset;

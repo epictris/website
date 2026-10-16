@@ -746,6 +746,53 @@ function caseLong(): BridgeResult {
   return ok("bridge-long - sixty slats under the ball cost what a substepped solve costs", cheap && within && clean, details);
 }
 
+// ---------------------------------------------------------------------------
+// bridge-ball-weight: what the island says its contacts spent.
+//
+// The ball dropped onto the middle slat and come to rest, as `bridge-mass-
+// ratio`'s 2:1 rig. Its contacts with the slats are rows of the island's
+// substepped solve, and every reader of a contact - the grips and the static
+// pin's budget, the braces, the hook's attach, the breakables' load, the
+// glass ball's break - takes `normalImpulse` as what it spent over the frame,
+// which for a ball at rest is its weight: m g dt, upward. The island wrote
+// back the LAST substep's accumulated impulse until 2026-10-16, an eighth of
+// that at eight substeps (0.11x here, 1.00x since), and zero for a contact that had pushed
+// and was leaving by the end of the frame (`session-198f` f129, the glass
+// ball bouncing whole off the bed). `maxNormalImpulse` is the most any one
+// solve pushed, so it can never be below the frame's last word.
+// ---------------------------------------------------------------------------
+function caseBallWeight(): BridgeResult {
+  const rig = new Rig(standard(0.03, { x: 0, y: DECK_Y - 30 }));
+  rig.step(480);
+  const ball = rig.level.ball;
+  const weight = ball.mass * 9.8 * DT;
+  let carried = 0;
+  for (let f = 0; f < 60; f++) {
+    rig.step(1);
+    for (const c of rig.level.world.frameContacts) {
+      const other = c.a === ball ? c.b : c.b === ball ? c.a : null;
+      if (other === null || !rig.slats.includes(other as RigidBody2D)) continue;
+      // The whole impulse on the ball, friction too: it sits in the V of two
+      // tilted slats, and there friction carries half its weight. `normal` is
+      // out of `b` toward `a`, the tangent is (-n.y, n.x) in both solvers,
+      // and up is -y.
+      const vertical = c.normal.y * c.normalImpulse + c.normal.x * c.tangentImpulse;
+      carried += c.a === ball ? -vertical : vertical;
+    }
+  }
+  const ratio = carried / 60 / weight;
+  const honest = ratio >= 0.9 && ratio <= 1.1;
+  const details = [
+    bar(`the slats' contacts carry ${ratio.toFixed(2)}x the ball's weight a frame at rest, f481-540 (want 0.9-1.1)`, honest),
+    bar(rig.violationLine(), rig.violations.length === 0),
+  ];
+  return ok(
+    "bridge-ball-weight - a contact the island solved reports what it spent over the frame",
+    honest && rig.violations.length === 0,
+    details,
+  );
+}
+
 export function runBridgeCases(): BridgeResult[] {
   return [
     caseBuild(),
@@ -758,6 +805,7 @@ export function runBridgeCases(): BridgeResult[] {
     caseMassRatio(),
     caseMassRatio200(),
     caseLong(),
+    caseBallWeight(),
     caseChainRow(),
   ];
 }

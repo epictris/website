@@ -194,9 +194,9 @@ if (scene3d && params.get("mirror") === "0") scene3d.setPoolMirror(false);
 // TEMPORARY: `?shimmer=0` turns the water's ripple light bands off, for an A/B
 // (render3d/water.ts, `waterShimmer`).
 if (params.get("shimmer") === "0") waterShimmer.value = 0;
-// TEMPORARY: `?glass=hollow` draws the Hard ball as the hollow shell it was
-// before the solid crystal ball, and `?glasstint=R,G,B` tints the solid glass,
-// for an A/B (render3d/glassMaterial.ts `glassOptionsFrom`).
+// `?glasswall=<mm>` sets the Hard ball's wall (`solid` for a solid ball), and
+// TEMPORARY `?glasstint=R,G,B` tints the glass, for an A/B
+// (render3d/glassMaterial.ts `glassOptionsFrom`).
 glassOptionsFrom(params);
 
 // `?dpr=N` draws the frame at a device pixel ratio this display does not have,
@@ -338,6 +338,8 @@ const debris = new DebrisSystem();
 // fed the sim's one fact per break, drawn by the 3D scene (or the 2D canvas on
 // the 2D path), and cleared with the level.
 const shards = new GlassShards();
+// In 3D the pieces land on what the scene draws (render3d/shardCollision.ts).
+shards.useCollision(scene3d);
 // The released chain reeling back in (see render/chainRetract.ts): the same
 // shape as the sparks - it watches the sim each step, runs on the render
 // clock, and is cleared with the level.
@@ -1156,7 +1158,7 @@ function frame(now: number): void {
   // fixed step entirely, like the camera ease.
   sparks.advance(dt);
   debris.advance(dt);
-  shards.advance(dt);
+  shards.advance(dt, level instanceof BallLevel ? level : null);
 
   // Camera: eased follow of the avatar, reshaped by the level's camera regions.
   // Driven by the render dt, so it is frame-rate independent and outside the
@@ -1428,7 +1430,7 @@ async function chooseDifficulty(): Promise<void> {
   if (scene3d && ballLevel) {
     ballLevel.setBallKind(ballKind === "glass" ? "iron" : "glass");
     warmFrame();
-    await scene3d.prewarm(level, camera);
+    await scene3d.prewarm(level, camera, shards);
   }
   loading.finish();
   revealed = true;
@@ -1471,10 +1473,13 @@ async function boot(): Promise<void> {
   warming = false;
   // The last arrivals, which no warm frame covered.
   warmFrame();
+  // The glass ball's pieces and the engine that throws them, on either path,
+  // and before the prewarm compiles them (see render/glassShards.ts `prepare`).
+  if (level instanceof BallLevel) await shards.prepare(level);
   // Then everything the warm frame's camera cannot see (see `Scene3D.prewarm`).
   // Awaited under the screen: the frame loop, and the run, start after it.
   if (scene3d) {
-    const warmed = await scene3d.prewarm(level, camera);
+    const warmed = await scene3d.prewarm(level, camera, shards);
     console.log(
       `[prewarm] ${warmed.programs} programs, ${warmed.textures} textures in ${warmed.ms.toFixed(0)} ms`,
     );

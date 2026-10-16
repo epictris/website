@@ -1907,12 +1907,14 @@ function checkGlassBall(level: BallLevel): Violation[] {
     }
     if (level.completedFrame === null) {
       for (const c of level.world.frameContacts) {
-        if (c.normalImpulse > 0 && (c.a === b || c.b === b)) {
+        // The most it pushed, as the break reads it: a contact the island
+        // solved can push and end the frame on zero (`maxNormalImpulse`).
+        if (c.maxNormalImpulse > 0 && (c.a === b || c.b === b)) {
           const other = c.a === b ? c.b : c.a;
           out.push({
             frame,
             kind: "glass-intact",
-            detail: `whole after a contact with ${other.name || `body#${other.buildIndex}`} (pn=${c.normalImpulse.toFixed(3)})`,
+            detail: `whole after a contact with ${other.name || `body#${other.buildIndex}`} (max pn=${c.maxNormalImpulse.toFixed(3)})`,
           });
           break;
         }

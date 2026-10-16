@@ -11,7 +11,7 @@ The reasoning, the numbers and the postmortems behind every mechanic live in `do
 ## Stack
 
 There is **no game engine dependency**: Godot's physics (`MoveAndSlide`, `RigidBody2D`, raycasts and shape queries) was reimplemented from scratch in `src/engine/` so the simulation is self-contained and deterministic.
-Bun runs everything; three.js draws the optional 3D scene; the level editor is a dev-only page.
+Bun runs everything; three.js draws the optional 3D scene; Rapier (WASM, in a worker) throws the glass ball's broken pieces, render-side only, so it never touches the sim; the level editor is a dev-only page.
 
 ## Running
 
@@ -103,7 +103,7 @@ The ball and chain
 - [ball-rolling](docs/ball-rolling.md) - the steered ball's grip, spin traction on a fresh contact, the loop cap and the loop ride, the two openings a level may have: the rolling entry and the recorded arrival.
 - [ball-coil-and-hook](docs/ball-coil-and-hook.md) - the coil as an angle, how the hook attaches (sweep, blocking contact, seam, reach), the dangling tip and scene catch.
 - [manacle](docs/manacle.md) - the edge-on ring, its hinge pin, driven rotation, the bite and the mounted cuff.
-- [glass-ball](docs/glass-ball.md) - Hard: the glass ball that breaks on anything solid but water, the respawn in place, its detectors, the solid glass traced through the reflection probe, the baked wear, the shards.
+- [glass-ball](docs/glass-ball.md) - Hard: the glass ball that breaks on anything solid but water, the respawn in place, its detectors, the hollow quartz ball (`?glasswall=`) traced through its four surfaces seeing the frame behind it, the solid quartz chain traced through the reflection probe, the aurora film and the glow, the baked wear, the shards (fractured pieces in a Rapier worker).
 - [slack-chain-drape](docs/slack-chain-drape.md) - the visual-only drape of a chain with length to spare.
 - [chain-retract](docs/chain-retract.md) - the released chain reeling back in: the drape carrying on, render-side, deleted by the next throw.
 - [wrap-detection](docs/wrap-detection.md) - the continuous span sweep and its three exclusions, and how a corner two bodies share lets go.

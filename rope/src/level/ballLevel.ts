@@ -112,8 +112,9 @@ export const SHATTER_RESPAWN_FRAMES = 120;
 // throws the shards from them (see `render/glassShards.ts`) and keeps nothing
 // of the level afterwards. Every position is in world metres.
 export interface ShatterEvent {
-  // The ball's centre and size as it broke.
+  // The ball's centre, turn and size as it broke.
   readonly at: Vec2;
+  readonly rotation: number;
   readonly radius: number;
   // Where it was struck, and the struck surface's outward normal there (out of
   // the thing it hit, toward the ball).
@@ -123,11 +124,6 @@ export interface ShatterEvent {
   // the contact solve stopped it - and its spin.
   readonly velocity: Vec2;
   readonly spin: number;
-  // The glass chain it was carrying, loop to far end (empty for no chain out),
-  // and the manacle on the end of it, which break with it: a chain with no ball
-  // on it has nothing left to be a chain of.
-  readonly chain: readonly Vec2[];
-  readonly manacle: { centre: Vec2; dir: Vec2 } | null;
 }
 
 export class BallLevel {
@@ -2698,15 +2694,19 @@ export class BallLevel {
     const ball = this.ball;
     let struck: { point: Vec2; normal: Vec2; load: number } | null = null;
     for (const c of this.world.frameContacts) {
-      if (c.normalImpulse <= 0) continue;
+      // The most it pushed this frame, not what it ended on: a ball tied to a
+      // vine is solved in the island's substeps, and a contact there that
+      // struck early and let go by the last substep ends on zero
+      // (`ContactConstraint.maxNormalImpulse`).
+      if (c.maxNormalImpulse <= 0) continue;
       // `normal` is out of `b`, toward `a` (see `ContactConstraint`), so it is
       // out of the struck surface when the ball is `a`.
       let normal: Vec2;
       if (c.a === ball) normal = c.normal;
       else if (c.b === ball) normal = c.normal.neg();
       else continue;
-      if (struck === null || c.normalImpulse > struck.load) {
-        struck = { point: c.point, normal, load: c.normalImpulse };
+      if (struck === null || c.maxNormalImpulse > struck.load) {
+        struck = { point: c.point, normal, load: c.maxNormalImpulse };
       }
     }
     if (struck === null) {
@@ -2718,22 +2718,17 @@ export class BallLevel {
     if (struck === null) return;
 
     this.shatteredFrame = this.frame;
-    // The chain and its manacle are glass too, and with no ball on them they
-    // are nothing: they break with it. Read before the chain is let go of.
-    const chain = ball.chain;
-    const path = chain
-      ? (ball.chainSlack?.pathLoopToAnchor(1) ?? chain.path().map((n) => n.contact.globalPosition))
-      : [];
-    const manacle = ball.manaclePose(1);
+    // Only the ball breaks into pieces; its chain and hook, let go of below,
+    // simply go (Tris, 2026-10-16: "the chain and hook shouldn't shatter - just
+    // the ball. The chain and hook should just disappear").
     this.shatterEvents.push({
       at: ball.globalPosition,
+      rotation: ball.globalRotation,
       radius: ball.radius,
       point: struck.point,
       normal: struck.normal,
       velocity: arrival,
       spin: ball.angularVelocity,
-      chain: path,
-      manacle: manacle ? { centre: manacle.centre, dir: manacle.dir } : null,
     });
     ball.releaseChain();
     ball.shattered = true;

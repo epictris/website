@@ -56,7 +56,18 @@ export const PROBE_SIZE = 128;
 // start view, any resolution: it is draw calls, not pixels) - nearly half of
 // a 4K frame, and what stood between it and a steady 144 Hz. What a ball
 // ~200 px across mirrors sharply is the rock it is touching.
-const PROBE_FAR = 5;
+export const PROBE_FAR = 5;
+
+// ...except for the GLASS ball, which is SEEN THROUGH, not only reflected in:
+// what fills a crystal ball is the room behind it, flipped and shrunk, and
+// with the probe ending at 5 m that was mostly the sky colour - a flat pale
+// disc that read as frosted glass (Tris, 2026-10-16: "make the glass more
+// transparent", "fix the transparency issue"). Far enough for the cave walls
+// behind the play plane. One face a frame either way (see `capture`), so it
+// is one face's draws of a farther scene; `cli shot --gl angle --query
+// bench=1&benchprobe=1` measures it against `PROBE_FAR`. Mutable only for
+// that bench.
+export const glassProbeFar: { value: number } = { value: 40 };
 
 // A capture redraws ONE face (see `capture`), so the whole picture is renewed
 // every six frames. A jump further than this between captures - a respawn, a
@@ -95,11 +106,12 @@ export class ReflectionProbe {
   // iron ball's blurred reflection does not show. All six on the first call
   // and after a jump (`RECAPTURE_JUMP`). The mips are rebuilt every call, so
   // the face that changed is seen at once rather than every sixth frame.
-  capture(scene: THREE.Scene, at: THREE.Vector3, near: number): THREE.CubeTexture {
+  capture(scene: THREE.Scene, at: THREE.Vector3, near: number, far = PROBE_FAR): THREE.CubeTexture {
     const renderer = this.renderer;
     for (const face of this.camera.children as THREE.PerspectiveCamera[]) {
-      if (face.near === near) break;
+      if (face.near === near && face.far === far) break;
       face.near = near;
+      face.far = far;
       face.updateProjectionMatrix();
     }
     this.camera.position.copy(at);
