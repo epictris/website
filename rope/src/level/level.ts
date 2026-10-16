@@ -240,7 +240,8 @@ export class Level {
   get cameraHang(): CameraHang | null {
     const rope = this.player.rope;
     if (rope === null) return null;
-    return { pull: rope.startPull() ?? Vec2.ZERO, length: rope.hangingLength() };
+    const length = rope.hangingLength();
+    return { pull: rope.startPull() ?? Vec2.ZERO, length, reach: length + rope.slack };
   }
 
   physicsProcess(input: FrameInput, delta: number): void {

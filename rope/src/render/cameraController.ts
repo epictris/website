@@ -481,6 +481,43 @@ export const CAMERA_STICK_RELEASE = 0.4;
 export const WIND_REARM_DELAY = 0.25;
 export const WIND_REST_RATE = 0.05;
 
+// THE WIND-IN: while the avatar hangs, every metre of line taken in gives a
+// metre of the stick back, on both axes, locked or not (see `windIn`). It has
+// no constant because it is not a tuning.
+//
+// The stick holds a swing's EXTREME so the camera is not rocked by the return
+// half of it, and the extremes are where the line lets the avatar get: a
+// circle about what they hang from. Winding in shrinks that circle, and every
+// extreme on it - below, above, either side - comes in by exactly the line
+// taken in, so an extreme the stick is holding comes in by the same: the
+// camera follows a wind-up the whole way, in any direction, and is back on the
+// rule's target once the hold is used up. The guarantee is untouched by it,
+// since the hold it gives back is only ever what the window asked for before.
+//
+// It is counted off the LINE rather than off where the circle is, and that was
+// measured. Read as a bound - the window's demand at the circle's far side -
+// it took the hold off a plain swing on `session-501f`, whose anchor sways
+// 0.45 m an arc with the ball under it: the circle went up with the anchor
+// and the hold went down with the circle, for the guarantee to charge again at
+// the next extreme, a 0.25 m bob on a hang whose line never changed length. A
+// swinging anchor is a swing too, and only the line says what is winding. The
+// line is the reach - the length past the coil with its slack, so taking up
+// slack, which moves nothing, gives nothing back.
+//
+// And only at a winding RATE (WIND_REST_RATE, the wind release's): the line
+// out breathes by a centimetre an arc as the coil rolls and unrolls, and
+// counted as winding that would walk the hold in by a centimetre an arc for as
+// long as they swing.
+//
+// It is the wind release's complement rather than its replacement.
+// `session-461f`: the ball fell, bit above itself and wound 1.8 m straight up
+// under a level route, so along the route it wound 0.33 m and never reached
+// the 0.5 m buffer. The guarantee had pushed the camera 1.3 m down for the
+// fall and the lock held it there for the whole climb, leaving the ball a metre
+// above a camera looking at an empty patch of floor - and each release and
+// re-grab gave back a few centimetres of it on the release law. Wound in, the
+// hold is gone by the time the ball reaches the anchor.
+
 // How long the progress rate the SPEED LEAD is bought with is smoothed over, in
 // seconds (see `CameraController.progressRate`).
 //
@@ -1521,10 +1558,13 @@ export interface HeldCamera {
 // its anchor - and how much line is out. Having one at all is `anchored`, which
 // is what the lead ratchet and the vertical lock are gated on; the length is
 // what the wind release watches, and the pull is what says which way winding
-// it in carries them.
+// it in carries them. The reach is that length with the line's slack in it -
+// how far the line lets them get - and taking it in is what gives the stick
+// back (see THE WIND-IN).
 export interface CameraHang {
   pull: Vec2;
   length: number;
+  reach: number;
 }
 
 // One axis of the critically damped spring, over `dt`, in CLOSED FORM.
@@ -1570,6 +1610,12 @@ function springStep(x: number, v: number, dt: number): { x: number; vel: number 
 function stick(want: number, decayed: number): number {
   if (want === 0) return decayed;
   return want > 0 ? Math.max(want, Math.max(0, decayed)) : Math.min(want, Math.min(0, decayed));
+}
+
+// One axis of the wind-in (see THE WIND-IN): `held` given back by `wound`
+// metres of line taken in, toward zero and never past it.
+function windIn(held: number, wound: number): number {
+  return held > 0 ? Math.max(0, held - wound) : Math.min(0, held + wound);
 }
 
 export class CameraController {
@@ -1677,6 +1723,9 @@ export class CameraController {
   private hangLength: number | null = null;
   private windArmed = true;
   private sinceWind = Infinity;
+  // Last frame's `CameraHang.reach`, null while not hanging: what THE WIND-IN
+  // measures this frame's take-up against.
+  private hangReach: number | null = null;
 
   // What the camera aimed at on the last frame - the rule's target with the
   // window and the stick already on it. Recorded for the overlay, which cannot
@@ -1805,6 +1854,7 @@ export class CameraController {
       this.stickY = 0;
       this.windProgress = 0;
       this.hangLength = null;
+      this.hangReach = null;
       this.windArmed = true;
       this.sinceWind = Infinity;
     }
@@ -1979,6 +2029,15 @@ export class CameraController {
     // The vertical lock: held while the avatar hangs and the wind release has
     // not opened it (see CAMERA_STICK_TAU).
     const lockY = anchored && this.windArmed;
+    // The line taken in this frame, which gives the stick back (see THE
+    // WIND-IN): nothing on the frame a hang begins, since there is no line
+    // before it to have taken in, and nothing below the winding rate.
+    let wound = 0;
+    if (hang && this.hangReach !== null && dt > 0 && Number.isFinite(dt)) {
+      const taken = this.hangReach - hang.reach;
+      if (taken / dt > WIND_REST_RATE) wound = taken;
+    }
+    this.hangReach = hang?.reach ?? null;
 
     if (!this.started) {
       this.started = true;
@@ -1993,7 +2052,7 @@ export class CameraController {
       this.vel = Vec2.ZERO;
       this.zoomVel = 0;
       this.logZoom = Math.log(Math.max(1e-9, target.zoom));
-      this.aim = this.softEdge(camera, target.pos, follow, Infinity, lockY);
+      this.aim = this.softEdge(camera, target.pos, follow, Infinity, lockY, wound);
       this.pos = this.holdEdge(camera, this.aim, follow, Infinity);
       camera.position = this.pos;
       camera.zoom = this.zoom;
@@ -2041,7 +2100,7 @@ export class CameraController {
     // turns over rather than reversing; the HARD half is applied last and to
     // where the camera actually IS, because a target the avatar can outrun is
     // not a guarantee and outrunning the spring is exactly what a launch does.
-    const aimPos = this.softEdge(camera, target.pos, follow, step, lockY);
+    const aimPos = this.softEdge(camera, target.pos, follow, step, lockY, wound);
     this.aim = aimPos;
     // The spring, then the caps, then integrate what is left, with the position
     // integrated from the capped velocity rather than from the spring's own
@@ -2133,7 +2192,17 @@ export class CameraController {
   // `lockY` is the vertical lock: while it is on, the vertical stick is not
   // released at all, so it holds the furthest the guarantee has pushed the aim
   // on that side until the guarantee pushes it further or asks the other way.
-  private softEdge(camera: Camera, aim: Vec2, follow: Vec2, dt: number, lockY: boolean): Vec2 {
+  //
+  // `wound` is the line taken in this frame, which both axes give back, locked
+  // or not (see THE WIND-IN).
+  private softEdge(
+    camera: Camera,
+    aim: Vec2,
+    follow: Vec2,
+    dt: number,
+    lockY: boolean,
+    wound: number,
+  ): Vec2 {
     if (!this.keep) {
       this.aimPullX = 0;
       this.aimPullY = 0;
@@ -2155,8 +2224,10 @@ export class CameraController {
       const left = Math.abs(held) * decay - give;
       return left <= 0 ? 0 : held < 0 ? -left : left;
     };
-    this.stickX = stick(x.pos - aim.x, released(this.stickX));
-    this.stickY = stick(y.pos - aim.y, lockY ? this.stickY : released(this.stickY));
+    const keptX = windIn(released(this.stickX), wound);
+    const keptY = windIn(lockY ? this.stickY : released(this.stickY), wound);
+    this.stickX = stick(x.pos - aim.x, keptX);
+    this.stickY = stick(y.pos - aim.y, keptY);
     return new Vec2(aim.x + this.stickX, aim.y + this.stickY);
   }
 

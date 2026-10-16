@@ -333,6 +333,29 @@ It fires on six of the river bundles (`session-238f`, `268f`, `336f`, `391f` twi
 
 Unplayed as of 2026-09-22, and the cases wait on the play (see [**Validate the behaviour before writing the cases**](../CLAUDE.md)).
 
+#### The wind-in
+
+**While the avatar hangs, every metre of line taken in gives a metre of the stick back**, on both axes, locked or not (`windIn`).
+It has no constant, because it is not a tuning.
+
+The stick holds a swing's extreme so the camera is not rocked by the return half of it, and the extremes are where the line lets the avatar get: a circle about what they hang from.
+Winding in shrinks that circle, and every extreme on it - below, above, either side - comes in by exactly the line taken in, so an extreme the stick is holding comes in by the same.
+The camera follows a wind-up the whole way, in any direction, and is back on the rule's target once the hold is used up.
+The guarantee is untouched by it, since what it gives back is only ever what the window asked for before.
+
+It is counted off the **line**, not off where the circle is, and that was measured.
+The first form was a bound - the window's demand with the avatar at the circle's far side, about the pivot they swing on - and it took the hold off a plain swing on `session-501f`, whose anchor sways 0.45 m an arc with the ball under it.
+The circle went up with the anchor and the hold went down with the circle, for the guarantee to charge again at the next extreme: a 0.25 m bob on a hang whose line never changed length, which is the rocking the vertical lock exists to stop.
+A swinging anchor is a swing too, and only the line says what is winding.
+What is counted is `CameraHang.reach`, the length past the coil with the slack still in it (`Rope.slack`), so taking up slack, which moves nothing, gives nothing back.
+And only at a winding rate (`WIND_REST_RATE`, the wind release's), because the line out breathes by a centimetre an arc as the coil rolls and unrolls, and counted as winding that would walk the hold in by a centimetre an arc for as long as they swing.
+
+It is the wind release's complement, not its replacement: the release is about a route the camera should glide forward along, the wind-in about a hold the line has stopped allowing.
+`session-461f` is why it exists. The ball fell, bit above itself and wound 1.8 m straight up under a level route, which along the route is 0.33 m and never reaches the 0.5 m buffer.
+The guarantee had pushed the camera 1.3 m down for the fall and the lock held it there for the whole climb, leaving the ball a metre above a camera looking at an empty patch of floor; each release and re-grab gave a few centimetres back on the release law.
+Wound in, the hold is gone by the time the ball is 0.4 m from the anchor and the camera is on the path's target 0.6 s later, and the avatar's vertical spread in the frame over the run falls from 0.72 m to 0.30 m.
+Unplayed as of 2026-10-16.
+
 **It holds the largest recent demand on that side**, and that is the part measurement moved.
 The obvious form - the stick IS the demand while there is one, and decays once there is not - buys nothing at all, because the demand is itself continuous: it falls smoothly to zero as the avatar comes back inside the inner margin, so by the frame it stops being asked there is nothing left to decay, and the camera returns at exactly the pace the avatar does.
 Holding the extreme of the arc instead is what decays under the avatar as they swing back.

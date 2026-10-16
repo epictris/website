@@ -210,7 +210,7 @@ const BASE_ZOOM = 2;
 const DT = 1 / 60;
 // The hang a case's `anchored` walk stands in for: a line with no direction
 // and no length, so it opens the ratchet and the vertical lock and never winds.
-const SLACK_HANG: CameraHang = { pull: Vec2.ZERO, length: 0 };
+const SLACK_HANG: CameraHang = { pull: Vec2.ZERO, length: 0, reach: 0 };
 
 // How far a critically damped spring trails a target moving at a steady speed,
 // in metres: `2 * v / omega`, which is the closed-form steady state of

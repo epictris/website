@@ -449,6 +449,13 @@ export class Rope {
     return Mathf.max(this.calculateRopePathLength() - this.constraintLength, 0);
   }
 
+  // The other side of the same inequality: how much shorter than its length
+  // the rope is lying, which is how much further its ends could still move
+  // apart before it went taut. Zero for a taut rope.
+  get slack(): number {
+    return Mathf.max(this.constraintLength - this.calculateRopePathLength(), 0);
+  }
+
   retract(amount = PX): void {
     // The rope may never be retracted to a negative length.
     const before = this.maxRopeLength;

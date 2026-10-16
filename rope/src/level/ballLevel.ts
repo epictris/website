@@ -918,11 +918,13 @@ export class BallLevel {
   // TOTAL never changes (session-269f: 1.127 m for a whole hang the ball
   // climbed 40 cm of). It is the free span the winch shortens by hauling the
   // ball up it (see `Rope.solveLengthHolding`), and that is what the wind
-  // release watches.
+  // release watches. The reach is that free span with the slack still in it,
+  // which is how far the chain lets the ball get (see `CameraHang`).
   get cameraHang(): CameraHang | null {
     const chain = this.ball.chain;
     if (chain === null || !this.ball.chainAnchored) return null;
-    return { pull: chain.startPull() ?? Vec2.ZERO, length: chain.hangingLength() };
+    const length = chain.hangingLength();
+    return { pull: chain.startPull() ?? Vec2.ZERO, length, reach: length + chain.slack };
   }
 
   // The player has entered a finish line (see `classes/finishLine.ts`), fired
