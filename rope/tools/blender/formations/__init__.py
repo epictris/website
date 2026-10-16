@@ -41,6 +41,7 @@ def register():
     render.register()
     for c in CLASSES:
         bpy.utils.register_class(c)
+    ops.register_keys()
     if params.on_load not in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.append(params.on_load)
     if core.free_orphaned_guides not in bpy.app.handlers.depsgraph_update_post:
@@ -54,6 +55,7 @@ def unregister():
         bpy.app.handlers.depsgraph_update_post.remove(core.free_orphaned_guides)
     if params.on_load in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.remove(params.on_load)
+    ops.unregister_keys()
     for c in reversed(CLASSES):
         bpy.utils.unregister_class(c)
     render.unregister()

@@ -5,10 +5,10 @@ They are a Blender add-on, `tools/blender/formations/`, and they are scenery lik
 The Sunken Grotto, `assets-src/scenes/grotto.blend` (no level names it now), is built from them.
 
 Since 2026-10-08 the add-on is only guides and what is generated from them, and knows nothing of the game or the level editor.
-Everything that does (the game camera and its look, guides edited as that camera sees them, depth moves about its eye, guides copied from the level's collision outlines) is the **Game** add-on, [blender-game](blender-game.md), which builds on this one.
+Everything that does (the game camera and its look, depth moves about its eye, guides copied from the level's collision outlines) is the **Game** add-on, [blender-game](blender-game.md), which builds on this one.
 
 The tools came from karin_website's "Connected v5" background pipeline, which rendered the grotto into near and far layer packages with baked lighting and a camera of their own.
-What was kept is the authoring: the outline-to-rock generator, the camera-projected outline editor and depth moves (now Game's), and the growth.
+What was kept is the authoring: the outline-to-rock generator, the depth moves (now Game's), and the growth; the camera-projected outline editor came too, and was dropped on 2026-10-16 for plain Edit Mode ([editing a guide](#editing-a-guide)).
 What was dropped is everything about layers and packages: formations are ordinary scene geometry, lit and fogged by the level like the rest of the scene, and the package camera became the game's own camera ([blender-game](blender-game.md#the-game-camera)).
 
 ## Install
@@ -51,17 +51,16 @@ They are loaded from the recipe when a rock is built, when a file opens and when
 Rebuild Changed takes parameter edits along with outline edits.
 A rock appended from another file has no fields loaded yet: **Edit Parameters** loads them, and until then it builds from its recipe, as it does in the scene exporter, which never loads them.
 The grotto's rocks were built by Karin's pipeline, which recorded `generator` as the boulder generator's directory (`C:\...\boulders`); `params.generator_of` reads that as `boulders`, so they regenerate too (before 2026-10-04 they could not be rebuilt at all).
-A 3D curve gives its outline in its local X/Z plane, as a formation's own guide does; a flat (2D) curve is first turned into that in place (its X/Y becomes X/Z and the object a quarter about X, so no point moves).
+A guide curve is a 2D curve, its outline in its own local X/Y plane, and a rock's own guide stands a quarter turn about X from the rock (`core.GUIDE_PLANE`), so that plane is the rock's X/Z, where the recipe's outline lies.
+A selected curve is brought to that in place first (`core.make_planar`): a 3D curve flat in its local X/Z plane has its X/Z become X/Y and its object a quarter turn about X, and one flat in X/Y just becomes 2D, so no point moves.
 A **free guide** (one no rock owns) becomes the new rock's own guide: it moves into `Formation recipes` under the rock, renamed `<rock> / guide`, and the placement goes where it stands, so an edit made to it while the rock built shows as pending.
 Another rock's guide is only read, and that rock keeps it.
 
 **Nothing linked from another file is ever a guide** (`core.is_reference`): New Formation refuses a linked curve or mesh, and it is never a free guide.
 That is what keeps the level's collision outlines a reference (2026-10-07, Tris: "The 2D collision outlines should serve exclusively as a visual reference"): they are linked from the level's guide file, and Game's **Create Guide from Outline** copies one into a free guide of the scene's own ([blender-game](blender-game.md#guides-from-collision-outlines)).
-An object marked `formation_reference` is never a guide either (Game's projection handles are local closed curves).
 
 **Rebuild Changed** (under Guides) rebuilds every formation whose guide or parameters differ from the ones its mesh was built from, one rock at a time in separate processes; the meshes are swapped only once every rock has built and validated, and Esc discards the lot.
 A rebuild keeps the formation's materials, placement, name and id, and keeps the replaced mesh in `Formation backups`.
-Before it (or **Replant Growth**) reads a guide it runs `core.BEFORE_BUILD`, the hooks another add-on holding guide edits of its own puts there (Game's Edit Guides applies its handles and ends).
 
 The rock is built out of process, by `formations/worker.py` in ordinary Python (rope/.venv) and `formations/assemble.py` in a headless Blender, so the scene stays editable while it builds.
 The dialog's **Generator** picks how (the recipe's `generator`; a recipe without one is the boulder generator's), and the **starting outline** (terrace, pillar, wall, arch, distant) is only an outline and a thickness to start from when no curve is selected:
@@ -126,12 +125,24 @@ Only the outlines and slabs of the rocks in the scene stay there, so **Show guid
 Undo brings the rock and its guide back as they were.
 **Guides** (since 2026-10-05): **Show guides** shows that collection in the viewport, every guide in a saturated colour of its own (a viewport-only material: Solid shading in Material colour shows it), and **Solid rocks as wireframe** draws the solid formations' rocks as wire so their guides show through.
 A guide curve (an outline formation's, or a free guide) draws as a 3 cm tube in its colour, in front of everything (`core.style_guide_curve`, 2026-10-08): a bare curve is a hairline in the theme's black wire colour, which the cave swallowed, so Show guides looked as if it showed none of the foreground guides.
-The tube is display only (the guide is its points, and it never renders); every file load restyles a curve guide saved before it (`core.style_guides`).
+The tube is display only (the guide is its points, and it never renders, and a 2D curve's fill is off so it never covers the inside); every file load restyles a curve guide saved before it (`core.style_guides`).
 **View Guide** shows and selects it for editing and hides the rock, and **View Formation** shows and selects the rock and hides the guide (2026-10-08, Tris; named Select Guide and Select Formation until later that day), so the one being worked on is never behind the other.
 View Guide hides every rock on that guide, not just the one clicked: a duplicate shares its original's guide until **Make Unique**, and a pasted one stands right on top of it (River's `Cube.003` over `Cube.001`, 2026-10-08); View Formation shows them all again.
 Both hide in the viewport only (the eye in the outliner): the export goes by render visibility and lifts viewport hiding, so a rock left hidden still ships.
 The rock's growth hangs from the placement and stays shown.
 A guide is an ordinary curve or mesh, edited in Edit Mode or by script, and it never renders or exports.
+
+### Editing a guide
+
+Click a guide curve (a free guide, or a rock's after **View Guide**), press **Tab**, and edit its points with Blender's own tools (2026-10-16, Tris: "I want to be able to simply select a 2d guide in object mode, switch to edit mode, and move around the points using standard blender controls, but the point movements should be constrained to the gameplay plane").
+Its points stay on its plane, because it is a native 2D curve: Blender zeroes a 2D curve's points' local Z after every Edit Mode transform, however it was started (a script writing `co` directly is not flattened, and `outline_points` refuses a guide off its rock's plane).
+That plane is the gameplay plane for a guide copied from a collision outline, and the rock's own X/Z plane for a rock's guide, wherever its placement stands.
+Before 2026-10-16 guides were 3D curves on their X/Z plane, and a G-drag in a perspective view carried the point along the view plane, off its own (1.56 m off in an oblique test view); every file load converts such a guide in place (`core.style_guides` runs `core.make_planar`), no point moving more than float rounding (8e-7 m over River's 53 guides, none of them turned pending).
+Flattening alone keeps the point on the plane but not under the cursor: an unconstrained move follows the cursor across the view plane and is then dropped onto the guide's, which in an oblique view lands it well off the cursor (65 px in the same test).
+So **G**, **R** and **S** in curve Edit Mode on any 2D curve run `formations.planar_transform` (an add-on key in the `Curve` keymap), which starts Blender's own move, rotate or scale constrained to the curve's local plane (rotation about its normal): the point goes where the cursor's ray meets the plane (0 px off in GUI tests through the game camera and an oblique view), the header reads `local`, and Blender draws the plane's two axes while it runs.
+X, Y or Z pressed during the move constrain as usual; any curve that is not 2D (a 3D curve's poll refuses) gets Blender's own G, R and S.
+A move started another way (the Tweak tool's drag, the Move tool's gizmo) is unconstrained, so it stays on the plane but can drift from the cursor in an oblique view.
+Points are added and removed with Blender's own tools too (Subdivide between two selected neighbours, **X** > Vertices; replacing Edit Guides' Add Point and Remove Points); the guide must stay one closed polygon of at least three points, and a rock with an edited guide shows as pending.
 
 **Render (export)**, a sub-panel of the formation's (`formations/render.py`): how the scene export draws the rock, each an ID property on it that overrides what its depth would decide, so a change needs an export and no rebuild.
 **Detail scale** (its texel density and largest map divided by it, the slate's lengths multiplied by it; unset, the depth scale a solid formation's build measured, `formation_depth_scale`, else 1), **Chamfer strips**, **Curved creases** and **Chips and sub-facets** (the export's three finer passes; unset, on unless the detail scale is over 1, and the curved creases and chips off on a solid formation whatever its depth, `render.SOLID_SKIPS`), **Largest map** and **Texels per metre** (0: 4096 and 512 over the detail scale).

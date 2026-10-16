@@ -18,16 +18,19 @@ same way; its recipe holds the guide's geometry, the game's start camera
 rock's world frame, because a stone's size goes with its depth from that eye.
 
 An outline formation's outline is its GUIDE too, and the guide is its only
-source. A FREE GUIDE is a local closed curve no rock owns yet (in GUIDES when
-the Game add-on copied it from a collision outline); New Formation from one
-makes it the rock's own (`adopt_guide`). Nothing linked from another file is
+source. A guide curve is a native 2D curve: its points lie in its own local
+X/Y plane, which Blender keeps them in through every Edit Mode transform,
+and the object stands a quarter turn about X from its rock (GUIDE_PLANE), so
+that plane is the rock's X/Z. A FREE GUIDE is a local closed curve no rock
+owns yet (in GUIDES when the Game add-on copied it from a collision outline);
+New Formation from one makes it the rock's own (`adopt_guide`). Nothing linked from another file is
 ever a guide (`is_reference`): the level's collision outlines, linked from
 `<scene>-guide.blend`, are a visual reference only, and nothing here reads or
 writes one.
 
 This add-on knows nothing of the game or the level editor: the Game add-on
-(tools/blender/game) edits guides through the game camera and copies guides
-from the collision outlines, through the functions here.
+(tools/blender/game) copies guides from the collision outlines and moves
+formations in depth from the game camera, through the functions here.
 
 Construction helpers never ship and never render: every formation's guide
 curve and the generator's source slabs live under RECIPES, and the mesh a
@@ -68,16 +71,9 @@ RECIPES = "Formation recipes"
 BACKUPS = "Formation backups"
 # Free guides: copies of collision outlines no rock has been built from yet.
 GUIDES = "Formation guides"
-# An object that is never a guide, though it may look like one: something
-# drawn to show where a guide is (the Game add-on's projection handles).
-REFERENCE = "formation_reference"
 # The scene properties a running Rebuild Changed sets: that it runs, and on what.
 BUSY = "formations_busy"
 PROGRESS = "formations_progress"
-# Callables taking the scene, run before a rebuild or replant reads any guide:
-# whatever holds guide edits outside the guides writes them in (the Game
-# add-on's Edit Guides applies its handles and ends).
-BEFORE_BUILD = []
 # The scene property holding the game's start camera and water for solid
 # formations: {"eye", "distance", "tanHalf", "waterZ"}.
 CAMERA = "backdrop_camera"
@@ -86,6 +82,9 @@ GUIDE_COLOURS = [(1.0, .25, .1), (.1, .9, .2), (1.0, .85, .05), (.95, .15, .85),
                  (1.0, .55, 0.0), (.6, .2, 1.0), (.55, 1.0, .1)]
 # The diameter a guide curve draws at, in metres.
 GUIDE_CURVE_WIDTH = .03
+# A guide curve's frame in its rock's: a quarter turn about X, which lays the
+# 2D curve's X/Y plane on the rock's X/Z, so local (x, y) is outline (x, z).
+GUIDE_PLANE = Matrix.Rotation(math.pi / 2, 4, "X")
 
 
 def collection(name, parent=None):
@@ -258,20 +257,36 @@ def validate_worker(ob, slabs):
     return recipe
 
 
-def outline_object(outline, name, owner):
-    """An outline formation's guide: a closed poly curve in the rock's local
-    X/Z plane, parented to the rock so it moves with it."""
+def guide_curve(name, points):
+    """A guide's curve data: one closed 2D polygon through `points`, (x, y)
+    in its own plane."""
     curve = bpy.data.curves.new(name, "CURVE")
-    curve.dimensions = "3D"
+    set_guide_points(curve, points)
+    return curve
+
+
+def set_guide_points(curve, points):
+    """Make `curve` one closed 2D polygon through `points`, (x, y) in its own
+    plane."""
+    curve.splines.clear()
+    curve.dimensions = "2D"
+    # A guide is its outline: a 2D curve's fill would cover its inside.
+    curve.fill_mode = "NONE"
     line = curve.splines.new("POLY")
-    line.points.add(len(outline) - 1)
-    for pt, (x, z) in zip(line.points, outline):
-        pt.co = (x, 0, z, 1)
+    line.points.add(len(points) - 1)
+    for pt, (x, y) in zip(line.points, points):
+        pt.co = (x, y, 0, 1)
     line.use_cyclic_u = True
-    ob = bpy.data.objects.new(name, curve)
+
+
+def outline_object(outline, name, owner):
+    """An outline formation's guide: a closed 2D poly curve on the rock's
+    local X/Z plane, parented to the rock so it moves with it."""
+    ob = bpy.data.objects.new(name, guide_curve(name, outline))
     helper_collection(RECIPES).objects.link(ob)
     ob.parent = owner
     ob.matrix_parent_inverse = Matrix.Identity(4)
+    ob.matrix_basis = GUIDE_PLANE
     ob["formation_outline_owner"] = owner["formation_id"]
     style_guide_curve(ob)
     return ob
@@ -280,8 +295,8 @@ def outline_object(outline, name, owner):
 def is_reference(ob):
     """Whether `ob` only shows something and is never a guide: linked from
     another file (the level's collision outlines are, and a file's own guide
-    is its own), or marked REFERENCE."""
-    return (ob.library is not None or ob.override_library is not None or bool(ob.get(REFERENCE))
+    is its own)."""
+    return (ob.library is not None or ob.override_library is not None
             or any(c.library is not None for c in ob.users_collection))
 
 
@@ -290,12 +305,6 @@ def is_free_guide(ob):
     any local closed curve the artist drew."""
     return (ob is not None and ob.type == "CURVE" and not is_reference(ob)
             and not ob.get("formation_outline_owner"))
-
-
-def before_build(scene):
-    """Bring every guide edit held elsewhere into the guides (BEFORE_BUILD)."""
-    for hook in BEFORE_BUILD:
-        hook(scene)
 
 
 def style_guide_curve(ob):
@@ -308,24 +317,39 @@ def style_guide_curve(ob):
     ob.show_in_front = True
     ob.data.bevel_depth = GUIDE_CURVE_WIDTH / 2
     ob.data.bevel_resolution = 0
+    if ob.data.dimensions == "2D":
+        ob.data.fill_mode = "NONE"
     colour_guide(ob)
 
 
 def guide_styled(ob):
-    return (ob.data.bevel_depth == GUIDE_CURVE_WIDTH / 2 and ob.display_type == "TEXTURED"
-            and len(ob.data.materials) == 1)
+    # Blender stores the depth as a 32-bit float.
+    return (math.isclose(ob.data.bevel_depth, GUIDE_CURVE_WIDTH / 2, abs_tol=1e-6) and ob.display_type == "TEXTURED"
+            and len(ob.data.materials) == 1 and (ob.data.dimensions == "3D" or ob.data.fill_mode == "NONE"))
+
+
+def guide_curves():
+    """Every guide curve of the file's own: the formations' (backups'
+    included) and the free guides."""
+    free = bpy.data.collections.get(GUIDES)
+    return [ob for ob in bpy.data.objects if ob.type == "CURVE" and not is_reference(ob)
+            and (ob.get("formation_outline_owner") or (free is not None and ob.name in free.objects))]
 
 
 def style_guides():
-    """Style every curve guide in the file that is not yet: one saved before
-    guide curves drew as tubes (2026-10-08) still draws as a hairline."""
-    for name in (RECIPES, GUIDES):
-        c = bpy.data.collections.get(name)
-        if c is None or c.library is not None:
-            continue
-        for ob in c.objects:
-            if ob.type == "CURVE" and not guide_styled(ob):
-                style_guide_curve(ob)
+    """Bring every guide curve in the file to the way guides are now: a file
+    saved before guide curves drew as tubes (2026-10-08) still draws them as
+    hairlines, and one saved before they were 2D (2026-10-16) holds them as
+    3D curves on their local X/Z plane (`make_planar`)."""
+    for ob in guide_curves():
+        if ob.data.dimensions == "3D":
+            try:
+                make_planar(ob)
+            except ValueError as e:
+                # Left as it is: its rock reports it on the next rebuild.
+                print("Formations:", e)
+        if not guide_styled(ob):
+            style_guide_curve(ob)
 
 
 def free_guide(ob, world=None):
@@ -372,40 +396,43 @@ def free_orphaned_guides(_scene, _depsgraph):
             free_guide(ob, guide_worlds.pop(ob.name, None))
 
 
-def flatten_guide(ob):
-    """Bring a free guide curve to a formation's convention in place: a 3D
-    curve whose polygon lies in its local X/Z plane. A flat (2D) curve's X/Y
-    becomes X/Z and the object turns a quarter about X, so no point moves in
-    the world. Returns its points in that plane."""
+def make_planar(ob):
+    """Bring guide curve `ob` to the guides' convention in place: a 2D curve,
+    its polygon in its local X/Y plane. A 3D curve flat in its local X/Z
+    plane (the convention until 2026-10-16) has its X/Z become X/Y and its
+    object turned a quarter about X, and one flat in X/Y just becomes 2D, so
+    no point moves in the world. Returns its points in that plane."""
     if ob.type != "CURVE" or len(ob.data.splines) != 1:
-        raise ValueError("Select a guide: a curve with a single closed polygon")
+        raise ValueError(ob.name + ": a guide is a curve with a single closed polygon")
     sp = ob.data.splines[0]
     if sp.type != "POLY" or not sp.use_cyclic_u:
-        raise ValueError("A guide must be a closed POLY curve")
-    if ob.data.dimensions == "2D":
-        world = authored_world(ob) @ Matrix.Rotation(-math.pi / 2, 4, "X")
-        flat = [(p.co.x, p.co.y) for p in sp.points]
-        ob.data.dimensions = "3D"
-        for pt, (x, z) in zip(sp.points, flat):
-            pt.co = (x, 0, z, 1)
-        set_authored_world(ob, world)
-    if any(abs(p.co.y) > .001 for p in sp.points):
-        raise ValueError("Use a flat curve, or a 3D curve in its local X/Z plane")
-    return [[p.co.x, p.co.z] for p in sp.points]
+        raise ValueError(ob.name + ": a guide must be a closed POLY curve")
+    if ob.data.dimensions == "3D":
+        if all(abs(p.co.y) <= .001 for p in sp.points):
+            points = [(p.co.x, p.co.z) for p in sp.points]
+            # Its children (none, for a guide) would turn with it.
+            ob.matrix_basis = ob.matrix_basis @ GUIDE_PLANE
+        elif all(abs(p.co.z) <= .001 for p in sp.points):
+            points = [(p.co.x, p.co.y) for p in sp.points]
+        else:
+            raise ValueError(ob.name + ": use a flat curve, or a 3D curve in its local X/Y or X/Z plane")
+        set_guide_points(ob.data, points)
+    return [[p.co.x, p.co.y] for p in ob.data.splines[0].points]
 
 
 def adopt_guide(rock, guide):
     """Make free guide `guide` formation `rock`'s own, in place of the one its
     build made: the rock's placement goes where the guide stands, so nothing
     moves, and an edit made to the guide while the rock built shows as pending."""
-    flatten_guide(guide)
+    make_planar(guide)
     built = bpy.data.objects.get(rock.get("formation_outline", ""))
     root = placement(rock)
-    set_authored_world(root, authored_world(guide) @ (authored_world(rock).inverted() @ authored_world(root)))
+    set_authored_world(root, authored_world(guide) @ GUIDE_PLANE.inverted()
+                       @ (authored_world(rock).inverted() @ authored_world(root)))
     move(guide, helper_collection(RECIPES))
     guide.parent = rock
     guide.matrix_parent_inverse = Matrix.Identity(4)
-    guide.matrix_basis = Matrix.Identity(4)
+    guide.matrix_basis = GUIDE_PLANE
     guide["formation_outline_owner"] = rock["formation_id"]
     if built is not None and built != guide:
         data = built.data
@@ -613,7 +640,7 @@ def outline_points(ob):
            else authored_world(ob).inverted() @ authored_world(guide))
     coords = [mat @ Vector(p.co[:3]) for p in spline.points]
     if max(abs(p.y) for p in coords) > .001:
-        raise ValueError(ob.name + ": keep its guide in the rock's X/Z plane")
+        raise ValueError(ob.name + ": its guide was turned off the rock's X/Z plane; turn it back")
     return [[p.x, p.z] for p in coords]
 
 
@@ -641,13 +668,9 @@ def write_outline(ob, outline):
         return
     guide.parent = ob
     guide.matrix_parent_inverse.identity()
-    guide.matrix_basis.identity()
-    guide.data.splines.clear()
-    spline = guide.data.splines.new("POLY")
-    spline.points.add(len(outline) - 1)
-    for pt, (x, z) in zip(spline.points, outline):
-        pt.co = (x, 0, z, 1)
-    spline.use_cyclic_u = True
+    guide.matrix_basis = GUIDE_PLANE
+    set_guide_points(guide.data, outline)
+    style_guide_curve(guide)
 
 
 def pending(ob):

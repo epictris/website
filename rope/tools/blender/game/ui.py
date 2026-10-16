@@ -2,7 +2,7 @@
 
 import bpy
 
-from . import camera, edit, look, outlines
+from . import camera, look, outlines
 from .formations_addon import core
 
 
@@ -40,35 +40,6 @@ class GAME_PT_main(bpy.types.Panel):
                 box.label(text="Shows in Rendered shading")
         if busy:
             layout.label(text=scene.get("formations_progress", "Working..."), icon="TIME")
-
-        box = layout.box()
-        box.enabled = not busy
-        box.label(text="Guides, as the game camera sees them")
-        s = edit.state(scene)
-        if s is None:
-            box.operator("game.edit", text="Edit Guides", icon="EDITMODE_HLT").action = "START"
-            box.label(text="The selected formations, or all")
-        else:
-            box.label(text=f"Projected from frame {s['frame']}")
-            box.label(text="G moves, Tab: points or guides")
-            row = box.row(align=True)
-            row.operator("game.polygon", text="Copy").action = "COPY"
-            paste = row.row(align=True)
-            paste.enabled = bool(scene.get(edit.CLIPBOARD))
-            paste.operator("game.polygon", text="Paste").action = "PASTE"
-            row = box.row(align=True)
-            row.operator("game.polygon", text="New").action = "NEW"
-            row.operator("game.polygon", text="Delete").action = "DELETE"
-            row = box.row(align=True)
-            row.operator("game.polygon", text="Add Point").action = "ADD_POINT"
-            row.operator("game.polygon", text="Remove Points").action = "REMOVE_POINT"
-            row = box.row(align=True)
-            row.operator("game.edit", text="Apply").action = "APPLY"
-            row.operator("game.edit", text="Done").action = "FINISH"
-            row.operator("game.edit", text="Discard").action = "DISCARD"
-        # Formations' own: it applies the edits above first.
-        pending = [ob for ob in core.formations() if core.pending(ob)]
-        box.operator("formations.rebuild_changed", text=f"Rebuild Changed ({len(pending)})", icon="FILE_REFRESH")
 
         box = layout.box()
         box.enabled = not busy

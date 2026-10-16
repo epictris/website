@@ -58,7 +58,7 @@ def look_through(context):
             region = next(r for r in area.regions if r.type == "WINDOW")
             with context.temp_override(window=window, area=area, region=region):
                 bpy.ops.view3d.view_center_camera()
-            # The guide handles and the guide's wires are overlays.
+            # The guides' wires and their points in Edit Mode are overlays.
             space.overlay.show_overlays = True
             space.clip_end = max(space.clip_end, cam.data.clip_end)
     return cam

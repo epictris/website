@@ -3,7 +3,7 @@ schema_version = "1.0.0"
 id = "game"
 version = "0.1.0"
 name = "Game"
-tagline = "The level's game camera, its look, and guides seen through it"
+tagline = "The level's game camera, its look, and guides from its collision"
 maintainer = "Tristan Bray"
 type = "add-on"
 

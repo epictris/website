@@ -5,10 +5,8 @@ from __future__ import annotations
 import bpy
 from bpy.props import EnumProperty, FloatProperty, StringProperty
 
-from . import camera, edit, outlines
-from .formations_addon import core, ops as formation_ops
-
-BUSY = "formations_busy"
+from . import camera, depth, outlines
+from .formations_addon import ops as formation_ops
 
 
 def redraw(context):
@@ -87,9 +85,6 @@ class GAME_OT_guide_from_outline(bpy.types.Operator):
     def invoke(self, context, event):
         if self.outline:
             return self.execute(context)
-        if edit.STATE in context.scene:
-            self.report({"ERROR"}, "Finish editing guides first")
-            return {"CANCELLED"}
         if not outlines.collision_outlines(context.scene):
             self.report({"ERROR"}, "No collision outlines: run `just scene-guide <level>` and reopen the file")
             return {"CANCELLED"}
@@ -142,64 +137,6 @@ class GAME_OT_guide_from_outline(bpy.types.Operator):
         return {"RUNNING_MODAL"} if event.shift else self.end(context)
 
 
-class GAME_OT_edit(bpy.types.Operator):
-    """Edit formation guides as the game camera sees them (never the collision outlines)"""
-    bl_idname = "game.edit"
-    bl_label = "Edit Guides"
-    bl_options = {"REGISTER", "UNDO"}
-
-    action: StringProperty(default="START")
-
-    def execute(self, context):
-        try:
-            if context.scene.get(BUSY):
-                raise ValueError("Wait for the rebuild to finish")
-            if self.action == "START":
-                # A solid formation has a guide mesh, edited as any mesh is.
-                targets = [r for r in formation_ops.selected_formations(context) or core.formations()
-                           if not core.is_solid(r)]
-                edit.start(context, targets)
-            elif self.action == "APPLY":
-                editing = context.mode == "EDIT_CURVE"
-                count = edit.apply_outlines(context.scene)
-                self.report({"INFO"}, f"Applied {count} guides; rebuild changed formations")
-                if editing:
-                    edit.resume_points(context)
-            elif self.action == "FINISH":
-                edit.finish(context.scene, apply=True)
-            elif self.action == "DISCARD":
-                edit.finish(context.scene, apply=False)
-            redraw(context)
-            return {"FINISHED"}
-        except ValueError as e:
-            self.report({"ERROR"}, str(e))
-            return {"CANCELLED"}
-
-
-class GAME_OT_polygon(bpy.types.Operator):
-    """Change the guides being edited"""
-    bl_idname = "game.polygon"
-    bl_label = "Guide Polygon"
-    bl_options = {"REGISTER", "UNDO"}
-
-    action: StringProperty(default="COPY")
-
-    @classmethod
-    def poll(cls, context):
-        return edit.STATE in context.scene and not context.scene.get(BUSY)
-
-    def execute(self, context):
-        try:
-            self.report({"INFO"}, edit.polygon_action(context, self.action))
-            redraw(context)
-            return {"FINISHED"}
-        except ValueError as e:
-            if edit.STATE in context.scene:
-                edit.resume_points(context)
-            self.report({"ERROR"}, str(e))
-            return {"CANCELLED"}
-
-
 class GAME_OT_depth(bpy.types.Operator):
     """Move the selected formations away from or toward the game camera"""
     bl_idname = "game.depth"
@@ -209,25 +146,16 @@ class GAME_OT_depth(bpy.types.Operator):
     direction: FloatProperty(default=1)
 
     def execute(self, context):
-        editing = context.mode == "EDIT_CURVE"
         try:
-            if edit.STATE in context.scene:
-                rocks = [edit.owner_for(h) for h in edit.selected_handles(context)]
-                rocks = [r for r in rocks if r is not None]
-            else:
-                rocks = formation_ops.selected_formations(context)
+            rocks = formation_ops.selected_formations(context)
             delta = self.direction * context.scene.game_depth_step
-            count = edit.move_depth(context, rocks, delta, context.scene.game_depth_keep_size)
-            if editing:
-                edit.resume_points(context)
+            count = depth.move_depth(context, rocks, delta, context.scene.game_depth_keep_size)
             redraw(context)
             self.report({"INFO"}, f"Moved {count} formations {'back' if delta > 0 else 'forward'}; replant their growth")
             return {"FINISHED"}
         except ValueError as e:
-            if editing:
-                edit.resume_points(context)
             self.report({"ERROR"}, str(e))
             return {"CANCELLED"}
 
 
-CLASSES = (GAME_OT_look, GAME_OT_ride, GAME_OT_guide_from_outline, GAME_OT_edit, GAME_OT_polygon, GAME_OT_depth)
+CLASSES = (GAME_OT_look, GAME_OT_ride, GAME_OT_guide_from_outline, GAME_OT_depth)

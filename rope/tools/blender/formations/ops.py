@@ -54,20 +54,16 @@ def guide_of_mesh(ob):
 
 def outline_of_curve(ob):
     """The outline a new formation takes from a selected guide curve, in the
-    guide's own X/Z plane (a flat curve is brought to that first, in place),
-    and the frame its rock is placed in: where the guide stands. A reference
-    (a collision outline among them) is refused: a rock is built from a guide."""
+    guide's own plane (a curve is brought to the guides' convention first, in
+    place: no point moves), and the frame its rock is placed in: where the
+    guide stands, its plane the rock's X/Z. A reference (a collision outline
+    among them) is refused: a rock is built from a guide. Another rock's guide
+    is only read, never adopted: that rock keeps it."""
     if not ob or ob.type != "CURVE":
         raise ValueError("Select a guide curve")
     if core.is_reference(ob):
         raise ValueError(ob.name + " is linked from another file, a reference only; copy it into a guide of your own")
-    if ob.get("formation_outline_owner"):
-        # Another rock's guide: read, never adopted (that rock keeps it).
-        sp = ob.data.splines[0] if len(ob.data.splines) == 1 else None
-        if sp is None or sp.type != "POLY" or not sp.use_cyclic_u or ob.data.dimensions != "3D":
-            raise ValueError("Use a closed POLY curve")
-        return [[p.co.x, p.co.z] for p in sp.points], core.authored_world(ob).copy()
-    return core.flatten_guide(ob), core.authored_world(ob).copy()
+    return core.make_planar(ob), core.authored_world(ob) @ core.GUIDE_PLANE.inverted()
 
 
 class FORMATIONS_OT_generate(bpy.types.Operator):
@@ -234,7 +230,6 @@ class FORMATIONS_OT_rebuild_changed(bpy.types.Operator):
         try:
             if context.scene.get(core.BUSY):
                 raise ValueError("A rebuild is already running")
-            core.before_build(context.scene)
             self._targets = [ob for ob in core.formations() if core.pending(ob)]
             for ob in self._targets:
                 if not core.is_solid(ob):
@@ -376,7 +371,6 @@ class FORMATIONS_OT_plant(bpy.types.Operator):
 
     def execute(self, context):
         try:
-            core.before_build(context.scene)
             rocks = {"SELECTED": selected_formations(context),
                      "STALE": [r for r in core.formations() if growth.stale(r)],
                      "ALL": core.formations()}[self.scope]
@@ -415,6 +409,60 @@ class FORMATIONS_OT_tone_facets(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class FORMATIONS_OT_planar_transform(bpy.types.Operator):
+    """Move, rotate or scale the selected points of a flat (2D) curve in its own plane, the cursor
+    staying on the point: G, R and S in Edit Mode on a guide"""
+    bl_idname = "formations.planar_transform"
+    bl_label = "Transform in Plane"
+
+    mode: EnumProperty(items=[("TRANSLATE", "Move", ""), ("ROTATE", "Rotate", ""), ("RESIZE", "Scale", "")])
+
+    @classmethod
+    def poll(cls, context):
+        # Any other curve falls through to Blender's own G, R and S.
+        ob = context.edit_object
+        return context.mode == "EDIT_CURVE" and ob is not None and ob.data.dimensions == "2D"
+
+    def invoke(self, context, event):
+        # Blender keeps a 2D curve's points on its plane whatever moves them,
+        # but an unconstrained move follows the cursor across the VIEW plane
+        # and is then flattened, so in any view not square to the guide the
+        # point drifts from under the cursor. Constrained to the curve's own
+        # (local) plane, the move puts it where the cursor's ray meets that
+        # plane; X, Y or Z during the move still constrain as usual.
+        if self.mode == "TRANSLATE":
+            bpy.ops.transform.translate("INVOKE_DEFAULT", orient_type="LOCAL", constraint_axis=(True, True, False))
+        elif self.mode == "ROTATE":
+            bpy.ops.transform.rotate("INVOKE_DEFAULT", orient_type="LOCAL", constraint_axis=(False, False, True))
+        else:
+            bpy.ops.transform.resize("INVOKE_DEFAULT", orient_type="LOCAL", constraint_axis=(True, True, False))
+        return {"FINISHED"}
+
+
+# G, R and S in curve Edit Mode, in front of Blender's own (which take every
+# curve the operator's poll refuses).
+KEYS = (("G", "TRANSLATE"), ("R", "ROTATE"), ("S", "RESIZE"))
+keymap_items = []
+
+
+def register_keys():
+    keyconfig = bpy.context.window_manager.keyconfigs.addon
+    if keyconfig is None:
+        # Blender in the background has no key configurations.
+        return
+    keymap = keyconfig.keymaps.new(name="Curve", space_type="EMPTY")
+    for key, mode in KEYS:
+        item = keymap.keymap_items.new(FORMATIONS_OT_planar_transform.bl_idname, key, "PRESS")
+        item.properties.mode = mode
+        keymap_items.append((keymap, item))
+
+
+def unregister_keys():
+    for keymap, item in keymap_items:
+        keymap.keymap_items.remove(item)
+    keymap_items.clear()
+
+
 class FORMATIONS_OT_repaint_slate(bpy.types.Operator):
     """Rebuild every painted slate material in this file to the add-on's current shader, in place; no rock is rebuilt"""
     bl_idname = "formations.repaint_slate"
@@ -433,4 +481,4 @@ class FORMATIONS_OT_repaint_slate(bpy.types.Operator):
 
 
 CLASSES = (FORMATIONS_OT_generate, FORMATIONS_OT_rebuild_changed, FORMATIONS_OT_action, FORMATIONS_OT_plant,
-           FORMATIONS_OT_tone_facets, FORMATIONS_OT_repaint_slate)
+           FORMATIONS_OT_tone_facets, FORMATIONS_OT_planar_transform, FORMATIONS_OT_repaint_slate)

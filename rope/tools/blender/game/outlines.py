@@ -11,11 +11,10 @@ rock noticing. New Formation (Formations panel) builds from it.
 
 from __future__ import annotations
 
-import math
 import re
 
 import bpy
-from mathutils import Matrix, Vector
+from mathutils import Vector
 
 from .formations_addon import core
 
@@ -72,9 +71,9 @@ def show_outlines(scene, show):
 
 def guide_from_outline(outline):
     """A free guide that is an exact copy of collision outline `outline`: the
-    same points at the same place, as a 3D curve in its own X/Z plane (a
-    formation's convention). It copies geometry and pose only, so it holds
-    nothing that refers back to the outline, and the outline is not touched."""
+    same points at the same place, as a 2D curve (a guide's convention, which
+    the outlines share). It copies geometry and pose only, so it holds nothing
+    that refers back to the outline, and the outline is not touched."""
     if not is_collision_outline(outline):
         raise ValueError("Pick one of the level's collision outlines")
     if len(outline.data.splines) != 1:
@@ -84,22 +83,16 @@ def guide_from_outline(outline):
         raise ValueError("This outline is not a closed polygon")
     if outline.data.dimensions == "2D":
         points = [(p.co.x, p.co.y) for p in sp.points]
-        # The flat curve's X/Y turned onto the guide's X/Z: the same world points.
-        frame = core.authored_world(outline) @ Matrix.Rotation(-math.pi / 2, 4, "X")
+        frame = core.authored_world(outline).copy()
     else:
         if any(abs(p.co.y) > .001 for p in sp.points):
             raise ValueError("This outline is not flat")
+        # A 3D curve on its X/Z plane: that plane laid on the guide's X/Y,
+        # the same world points.
         points = [(p.co.x, p.co.z) for p in sp.points]
-        frame = core.authored_world(outline).copy()
+        frame = core.authored_world(outline) @ core.GUIDE_PLANE
     core.validate_polygon([list(p) for p in points])
-    curve = bpy.data.curves.new("Guide", "CURVE")
-    curve.dimensions = "3D"
-    line = curve.splines.new("POLY")
-    line.points.add(len(points) - 1)
-    for pt, (x, z) in zip(line.points, points):
-        pt.co = (x, 0, z, 1)
-    line.use_cyclic_u = True
-    ob = bpy.data.objects.new("Guide", curve)
+    ob = bpy.data.objects.new("Guide", core.guide_curve("Guide", points))
     core.guides_collection().objects.link(ob)
     ob.matrix_world = frame
     core.style_guide_curve(ob)

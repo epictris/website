@@ -1,6 +1,6 @@
 # The Game add-on
 
-Since 2026-10-08 everything in Blender that comes from the level editor is one add-on, **Game**, `tools/blender/game/`: the game camera and the game's look over it, formation guides edited as that camera sees them, depth moves about its eye, and guides copied from the level's collision outlines.
+Since 2026-10-08 everything in Blender that comes from the level editor is one add-on, **Game**, `tools/blender/game/`: the game camera and the game's look over it, depth moves about its eye, and guides copied from the level's collision outlines.
 Until then it was all part of the formations add-on, which now only makes guides and builds rocks from them ([blender-formations](blender-formations.md)); the split keeps Formations free of anything the level decides.
 Game needs Formations enabled: the guides it edits and the rocks it moves are Formations', and it works through Formations' own modules (`game/formations_addon.py` finds the enabled extension, so both share one copy and one set of hooks).
 Everything it reads from the level, `just scene-guide <level>` bakes into the level's guide, `<scene>-guide.blend`, linked into the scene ([blender-scenes](blender-scenes.md)).
@@ -13,7 +13,7 @@ just game-install         # once per machine; links the add-on into Blender and 
 ```
 
 The add-on is the **Game** tab in the 3D viewport's sidebar (N).
-A file saved before the split keeps its toggles, its depth step, the look's saved scene state and any guide editing in progress: the add-on renames them on load (`game/__init__.py`, `on_load`).
+A file saved before the split keeps its toggles, its depth step and the look's saved scene state: the add-on renames them on load (`game/__init__.py`, `on_load`).
 
 ## The game camera
 
@@ -59,29 +59,16 @@ The game mixes its fog in after tone mapping, over the colours as they are shown
 Off hands the compositor and the Depth pass back as they were; a scene with a compositor of its own refuses it.
 A guide written before 2026-10-05 has none of the three: rerun `just scene-guide <level>` and reopen the scene.
 
-## Editing guides through the camera
+## Guides are edited in Edit Mode
 
-A formation's **guide** (its outline, recipe key `outline`) is a polygon in its own X/Z plane, which may stand tens of metres behind the gameplay plane, tilted, mirrored and scaled by its placement.
-It is the rock's only source; the level's collision outlines never are (see [below](#guides-from-collision-outlines)), and nothing here reads or writes one.
-What matters is where its silhouette lands on screen, so **Edit Guides** (Edit Outlines until 2026-10-07) edits the guides as they are seen.
-Each is projected from the game camera's eye, at the current frame, onto the gameplay plane (`y = 0`) as a flat 2D handle curve, and the view looks through the game camera, so a handle sits exactly on the rock it shapes.
-A rock built on the plane from a copy of a collision outline therefore shows its handle right over that outline; the handle is the guide's, and moving it leaves the collision where it was.
-An edited point goes back along its camera ray to the formation's own guide plane, which keeps depth, tilt, mirroring and scale.
-It edits the selected formations, or every formation when none is selected; nothing else takes clicks while it runs.
+A formation's guide is edited where it stands, as an ordinary 2D curve in Blender's Edit Mode, its points held on its plane ([blender-formations](blender-formations.md#editing-a-guide)).
+Until 2026-10-16 this panel had **Edit Guides** instead (Edit Outlines until 2026-10-07): it projected each guide from the game camera's eye onto the gameplay plane as a handle curve, sent edited points back along their camera rays, and made everything else in the scene unselectable while it ran, with its own Copy, Paste, New, Delete, Add Point, Remove Points, Apply, Done and Discard.
+It was removed on 2026-10-16 (Tris: "I don't like the "Edit Guides" mode. Remove it."), after a session left running in River had kept the guides copied from collision outlines from being clicked, with nothing in the viewport to say why.
+A file saved while one ran has it ended on load as Done ended it (`game/legacy.py`): an edited handle is written into its guide, everything selectable before is again, and the handles go; a formation it marked Delete is kept, and the console says so.
 
-- **G** moves points, **Tab** toggles between points and whole guides.
-- **Copy** / **Paste** duplicate guides, placed like the formation they came from; **New** starts a square at the 3D cursor.
-- **Delete** retires a formation to the hidden `Formation backups` collection on Apply (one never built is simply removed); **Discard** restores everything since the last Apply.
-- **Add Point** puts a midpoint between selected neighbours, or after a single selected point; **Remove Points** keeps at least three.
-- **Apply** writes the edits into the guides, **Done** applies and leaves, **Discard** leaves without.
+## Depth
 
-Every change is validated (a simple polygon, finite, not edge-on to the camera, the formation not moved meanwhile, its mesh not hand-edited) before any guide is written.
-The projection is from ONE frame, shown in the panel: scrubbing while editing moves the camera and not the handles.
-
-**Rebuild Changed**, under the editing buttons, is Formations' own ([blender-formations](blender-formations.md#formations)), there so an edit can be built without changing tabs.
-It and Formations' **Replant Growth** apply the guides being edited first and end the editing, wherever they are pressed: Formations runs `core.BEFORE_BUILD` before it reads any guide, and Game puts its `edit.finish` there when it registers.
-
-**Depth**: Forward and Back move the selected formations toward or away from the camera by the step.
+Forward and Back move the selected formations toward or away from the camera by the step.
 With **Keep screen size** they scale about the game camera's eye, so they keep their size and place on screen from there; without, it is a plain move and they shrink with distance.
 Growth rides along (it hangs from the placement), and is then stale: it is sized for its depth.
 
@@ -94,5 +81,5 @@ It stores nothing of its own: it is the outliner's eye on each of them in the cu
 Hidden outlines cannot be picked, so Create Guide from Outline waits for them to be shown.
 **Create Guide from Outline** (the eyedropper, under Collision outlines) copies one: click a collision outline in the viewport (the one under the cursor is highlighted; the innermost wins where they nest; Shift+click keeps picking, Esc or right-click ends) and a free guide named `Guide` is made in `Formation guides`, the same points at the same place, selected for New Formation (Formations panel).
 The copy is geometry and pose only: the guide records nothing about the outline, and nothing is written to the outline, so the editor can add, move or remove collision without any guide or rock in the scene changing.
-Edit the guide like any curve (Edit Mode, or Edit Guides once it is a rock's), and the collision stays as the level has it.
+The guide is a 2D curve like the outline it came from, so Tab and G move its points on the gameplay plane ([blender-formations](blender-formations.md#editing-a-guide)), and the collision stays as the level has it.
 A piece with a hole (a belt's band) is two splines and is refused.

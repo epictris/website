@@ -2,11 +2,10 @@
 rope/docs/blender-game.md.
 
 The game camera and the game's look over it (lighting, fog, depth of field),
-which `just scene-guide <level>` bakes into the level's guide; formation
-guides edited as that camera sees them, and formations moved in depth from
-its eye; and guides copied from the level's collision outlines. The guides
-and the rocks built from them are the Formations add-on's
-(tools/blender/formations), which this one needs enabled.
+which `just scene-guide <level>` bakes into the level's guide; formations
+moved in depth from its eye; and guides copied from the level's collision
+outlines. The guides and the rocks built from them are the Formations
+add-on's (tools/blender/formations), which this one needs enabled.
 
 A Blender add-on (an extension in Blender's 4.2+ packaging,
 blender_manifest.toml beside this file), installed by `just game-install`.
@@ -16,8 +15,7 @@ import bpy
 from bpy.app.handlers import persistent
 from bpy.props import BoolProperty, FloatProperty
 
-from . import edit, look, ops, outlines, ui
-from .formations_addon import core
+from . import legacy, look, ops, outlines, ui
 
 CLASSES = ops.CLASSES + ui.CLASSES
 
@@ -28,16 +26,15 @@ RENAMED_PROPERTIES = {"formations_game_fog": "game_fog", "formations_game_dof": 
                       "formations_game_lighting": "game_lighting", "formations_depth_step": "game_depth_step",
                       "formations_depth_keep_size": "game_depth_keep_size"}
 RENAMED_KEYS = {"formations_game_fog_saved": look.SAVED_FOG, "formations_game_lighting_saved": look.SAVED_LIGHTING,
-                "formations_game_look_error": look.ERROR, "formations_edit_state": edit.STATE,
-                "formations_polygon_clipboard": edit.CLIPBOARD}
-RENAMED_DATA = (("node_groups", "Formations game look", look.TREE),
-                ("collections", "Formation outline handles", edit.HANDLES))
+                "formations_game_look_error": look.ERROR}
+RENAMED_DATA = (("node_groups", "Formations game look", look.TREE),)
 
 
 @persistent
 def on_load(_):
     """Bring a file saved by the Formations add-on's game camera to these
-    names, as it was: nothing is re-applied."""
+    names, as it was: nothing is re-applied. A file saved while Edit Guides
+    ran (gone since 2026-10-16) has that session ended, as Done ended it."""
     for scene in bpy.data.scenes:
         if scene.library is not None:
             continue
@@ -54,6 +51,7 @@ def on_load(_):
         found = getattr(bpy.data, kind).get(old)
         if found is not None and found.library is None:
             found.name = new
+    legacy.end_edit_sessions()
 
 
 def register():
@@ -82,10 +80,6 @@ def register():
         description="Show the level's collision outlines and their origins in the viewport (this view layer)")
     for c in CLASSES:
         bpy.utils.register_class(c)
-    # A rebuild or replant in the Formations panel applies the guides being
-    # edited here first, and ends the editing.
-    if edit.finish not in core.BEFORE_BUILD:
-        core.BEFORE_BUILD.append(edit.finish)
     if on_load not in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.append(on_load)
     # The file open when the add-on is enabled had no load to hear.
@@ -95,8 +89,6 @@ def register():
 def unregister():
     if on_load in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.remove(on_load)
-    if edit.finish in core.BEFORE_BUILD:
-        core.BEFORE_BUILD.remove(edit.finish)
     for c in reversed(CLASSES):
         bpy.utils.unregister_class(c)
     del bpy.types.Scene.game_show_outlines
