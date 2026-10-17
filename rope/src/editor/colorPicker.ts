@@ -8,9 +8,11 @@
 // Nothing the page can say moves a native popup, so the picker is the page's own
 // and is kept inside the viewport by the same arithmetic that places it.
 //
-// It is deliberately small: saturation/value square, hue strip, hex field. The
-// value in and out is `#rrggbb`, exactly what the native input spoke, so every
-// call site kept its model code.
+// It is deliberately small: saturation/value square, hue strip, hex field and
+// an eyedropper. The value in and out is `#rrggbb`, exactly what the native
+// input spoke, so every call site kept its model code.
+
+import { startEyedropper, type Eyedropper } from "./eyedropper";
 
 export interface ColorInput {
   // The swatch to put in the panel. Clicking it opens the picker.
@@ -85,6 +87,12 @@ export function colorInput(
   };
 }
 
+// A pipette, in the button's text colour.
+const PIPETTE_SVG =
+  '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" ' +
+  'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+  '<path d="M10.5 2.5l3 3-1.5 1.5-3-3z"/><path d="M9.5 5.5l-6.5 6.5-.5 2.5 2.5-.5 6.5-6.5"/></svg>';
+
 // Pixels. The square is wide enough to place a colour to about a percent.
 const SQUARE_W = 180;
 const SQUARE_H = 120;
@@ -106,7 +114,10 @@ class Picker {
   private s = 0;
   private v = 0;
   private frame = 0;
+  // The eyedropper while it is picking: it covers the page, so a press is its.
+  private dropper: Eyedropper | null = null;
   private readonly onDown = (e: PointerEvent): void => {
+    if (this.dropper) return;
     // The swatch's own row counts as inside: its label forwards a click to the
     // swatch, which toggles the picker, and closing here first would reopen it.
     const t = e.target as Node;
@@ -114,7 +125,8 @@ class Picker {
     if (!this.root.contains(t) && !own.contains(t)) this.close();
   };
   private readonly onKey = (e: KeyboardEvent): void => {
-    if (e.key !== "Escape") return;
+    // Escape while picking cancels the eyedropper alone (its own listener).
+    if (e.key !== "Escape" || this.dropper) return;
     // Ours, not the editor's: Escape also clears the selection, and closing a
     // picker should not do that as well.
     e.stopPropagation();
@@ -141,7 +153,29 @@ class Picker {
     this.hue.appendChild(this.hueDot);
     this.hex.className = "ed-num ed-picker-hex";
     this.hex.spellcheck = false;
-    this.root.append(this.square, this.hue, this.hex);
+    const row = document.createElement("div");
+    row.className = "ed-picker-row";
+    const pick = document.createElement("button");
+    pick.type = "button";
+    pick.className = "ed-btn ed-picker-pick";
+    pick.title = "Pick a colour off the view or the panels (Esc or right-click cancels)";
+    pick.innerHTML = PIPETTE_SVG;
+    pick.addEventListener("click", () => {
+      pick.classList.add("active");
+      this.dropper = startEyedropper({
+        ignore: [this.root],
+        onPick: (hex) => {
+          [this.h, this.s, this.v] = rgbToHsv(parseHex(hex)!, this.h);
+          this.changed();
+        },
+        onEnd: () => {
+          this.dropper = null;
+          pick.classList.remove("active");
+        },
+      });
+    });
+    row.append(this.hex, pick);
+    this.root.append(this.square, this.hue, row);
 
     this.drag(this.square, (x, y) => {
       this.s = x;
@@ -189,6 +223,7 @@ class Picker {
   }
 
   destroy(): void {
+    this.dropper?.cancel();
     cancelAnimationFrame(this.frame);
     window.removeEventListener("pointerdown", this.onDown, true);
     window.removeEventListener("keydown", this.onKey, true);

@@ -25,7 +25,8 @@ The job (metres, the GAME's frame: x right, y up, z toward the camera):
                               "penumbra": .., "castShadow": true}, ...]},
      "bodies": [{"index": 3, "name": "Ledge_03" | null, "kind": "static", "solid": true,
                  "origin": [x, y],
-                 "pieces": [{"outline": [[x, y], ...], "hole": [[x, y], ...] | null}, ...]}, ...]}
+                 "pieces": [{"outline": [[x, y], ...], "hole": [[x, y], ...] | null,
+                             "color": [r, g, b]}, ...]}, ...]}
 
 What is written, all in one collection called `Guide`:
 
@@ -34,8 +35,10 @@ What is written, all in one collection called `Guide`:
   the object's origin at the BODY's origin - so the artist snaps to it, and an
   object placed on the body's origin needs no offset. Named `guide.<name>`, or
   `guide.body-<index>` for an unnamed body, with `.1`, `.2`, ... after it when
-  the body has several pieces. A solid is filled translucent grey with its
-  wire; an area (water, a force, a killzone, the finish) is the outline alone.
+  the body has several pieces. Each is in the colour the piece is shown in
+  (its debug colour, else its body's, as the editor sets them): a solid is
+  filled with it, translucent and flat, with its wire; an area (water, a force,
+  a killzone, the finish) is the outline alone.
   These COLLISION OUTLINES are a visual reference only: nothing in the scene
   refers to one, so the next run can add, move or drop any of them. The
   Game add-on's "Create Guide from Outline" copies one into a guide of
@@ -83,8 +86,13 @@ import bmesh
 from mathutils import Vector
 
 GUIDE_COLLECTION = "Guide"
-SOLID_COLOR = (0.55, 0.58, 0.68, 0.35)
-AREA_COLOR = (0.35, 0.65, 0.75, 1.0)
+# How opaque a solid's fill is: enough to see, thin enough to model through.
+# The Game add-on's opacity slider overrides it in the scene.
+SOLID_ALPHA = 0.35
+# The fill's Mix Shader, whose factor is that opacity.
+OPACITY_NODE = "Opacity"
+# The spawn sphere's colour, linear RGB: no piece's, so the guides' own blue-grey.
+SPAWN_COLOUR = (0.55, 0.58, 0.68)
 PLANE_MARGIN = 2.0  # metres past the level's extent
 ORIGIN_SIZE = 0.25
 # A flat curve lies in its object's X/Y plane; turned a quarter about X, its
@@ -107,21 +115,33 @@ def link(coll, ob, selectable=False):
     ob.hide_select = not selectable
 
 
-def guide_material():
-    mat = bpy.data.materials.new("guide")
-    mat.use_nodes = True
-    bsdf = next((n for n in mat.node_tree.nodes if n.type == "BSDF_PRINCIPLED"), None)
-    if bsdf is not None:
-        bsdf.inputs["Base Color"].default_value = SOLID_COLOR
-        bsdf.inputs["Alpha"].default_value = SOLID_COLOR[3]
-        bsdf.inputs["Roughness"].default_value = 1.0
-    mat.diffuse_color = SOLID_COLOR
-    # Blender 4.2+ names the EEVEE blend mode this way; older builds have
-    # `blend_method`. Either makes the alpha show in the viewport.
-    if hasattr(mat, "surface_render_method"):
-        mat.surface_render_method = "BLENDED"
-    elif hasattr(mat, "blend_method"):
-        mat.blend_method = "BLEND"
+def guide_material(colour, cache):
+    """A solid's fill in `colour` (linear RGB), at SOLID_ALPHA, one material
+    per colour. Flat (an Emission shader through a Transparent BSDF), so
+    Material Preview shows the colour itself: a lit surface this pale read as
+    white under the viewport's light."""
+    key = tuple(colour)
+    if key in cache:
+        return cache[key]
+    mat = bpy.data.materials.new("guide %.3f %.3f %.3f" % key)
+    nodes, links = mat.node_tree.nodes, mat.node_tree.links
+    nodes.clear()
+    emit = nodes.new("ShaderNodeEmission")
+    emit.inputs["Color"].default_value = (*colour, 1.0)
+    clear = nodes.new("ShaderNodeBsdfTransparent")
+    mix = nodes.new("ShaderNodeMixShader")
+    # The Game add-on's Collision outlines opacity sets this factor in the
+    # scene that links the guide (tools/blender/game/outlines.py).
+    mix.name = OPACITY_NODE
+    mix.inputs["Fac"].default_value = SOLID_ALPHA
+    links.new(clear.outputs[0], mix.inputs[1])
+    links.new(emit.outputs[0], mix.inputs[2])
+    out = nodes.new("ShaderNodeOutputMaterial")
+    links.new(mix.outputs[0], out.inputs["Surface"])
+    # What Solid shading in Material colour shows.
+    mat.diffuse_color = (*colour, SOLID_ALPHA)
+    mat.surface_render_method = "BLENDED"
+    cache[key] = mat
     return mat
 
 
@@ -149,7 +169,7 @@ def body_label(body):
 
 
 def build_guide(job, coll):
-    mat = guide_material()
+    materials = {}
     for body in job["bodies"]:
         label = body_label(body)
         location = to_blender(*body["origin"])
@@ -160,13 +180,14 @@ def build_guide(job, coll):
             ob = bpy.data.objects.new(name, curve)
             ob.location = location
             ob.rotation_euler = CURVE_UPRIGHT
+            colour = piece["color"]
             if body["solid"]:
                 curve.fill_mode = "BOTH"
-                curve.materials.append(mat)
-                ob.color = SOLID_COLOR
+                curve.materials.append(guide_material(colour, materials))
+                ob.color = (*colour, SOLID_ALPHA)
             else:
                 curve.fill_mode = "NONE"
-                ob.color = AREA_COLOR
+                ob.color = (*colour, 1.0)
             link(coll, ob)
 
         origin = bpy.data.objects.new(f"guide.{label}.origin", None)
@@ -183,7 +204,11 @@ def build_guide(job, coll):
         to_blender(hi[0] + PLANE_MARGIN, hi[1] + PLANE_MARGIN),
         to_blender(lo[0] - PLANE_MARGIN, hi[1] + PLANE_MARGIN),
     ]
-    bm.faces.new([bm.verts.new(c) for c in corners])
+    # Edges only: Blender 5.2's Material Preview and Rendered shading draw a
+    # face even on a WIRE-displayed object, as a white sheet over the level.
+    verts = [bm.verts.new(c) for c in corners]
+    for a, b in zip(verts, verts[1:] + verts[:1]):
+        bm.edges.new((a, b))
     me = bpy.data.meshes.new("guide.plane")
     bm.to_mesh(me)
     bm.free()
@@ -201,7 +226,7 @@ def build_guide(job, coll):
         ball = bpy.data.objects.new("guide.spawn", me)
         ball.location = to_blender(spawn["x"], spawn["y"])
         ball.show_wire = True
-        me.materials.append(mat)
+        me.materials.append(guide_material(SPAWN_COLOUR, materials))
         link(coll, ball)
 
 

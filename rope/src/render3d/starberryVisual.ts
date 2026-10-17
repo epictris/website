@@ -119,7 +119,7 @@ export class StarberryLayer {
   private readonly direction = new THREE.Vector3();
   private readonly up = new THREE.Vector3(0, 1, 0);
 
-  constructor(private readonly scene: THREE.Scene) {}
+  constructor(private readonly scene: THREE.Object3D) {}
 
   private instances(geometry: THREE.BufferGeometry, material: THREE.Material, count: number): THREE.InstancedMesh {
     const mesh = new THREE.InstancedMesh(geometry, material, count);

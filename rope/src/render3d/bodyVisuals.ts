@@ -43,8 +43,8 @@ import { DEFAULT_THICKNESS } from "../lib/shapeGeometry";
 import { outlineOfData, outlineOfShape, type Outline } from "../render/shapePath";
 import { localPlacement, objectDepth, worldPlacement, type BuiltBody } from "../level/buildBodies";
 import {
-  DEFAULT_BODY_COLOR,
   DEFAULT_ROOT_COLOR,
+  debugColorOf,
   isCollisionObject,
   isLightObject,
   type BeltLook,
@@ -157,10 +157,30 @@ export function debugLookOf(
   const d = o.debug;
   if (!(forced || d?.on) || o.shape.kind === "belt") return null;
   return {
-    color: d?.color ?? data.color ?? DEFAULT_BODY_COLOR,
+    color: debugColorOf(data, o),
     opacity: d?.opacity ?? 1,
     depth: d?.depth ?? o.thickness ?? DEFAULT_THICKNESS,
   };
+}
+
+// Debug geometry is an instrument, so it shows its colour exactly as picked:
+// unlit (no light, environment or shadow reaches it), not fogged and not tone
+// mapped, so `#rrggbb` on the piece is `#rrggbb` on screen (2026-10-17, Tris).
+// One per colour and opacity, shared and never disposed, as `surfaceFor`'s are.
+const debugMaterials = new Map<string, THREE.MeshBasicMaterial>();
+function debugMaterialOf(color: string, opacity: number): THREE.MeshBasicMaterial {
+  const key = `${color}|${opacity}`;
+  let mat = debugMaterials.get(key);
+  if (!mat) {
+    mat = new THREE.MeshBasicMaterial({ color, fog: false, toneMapped: false });
+    if (opacity < 1) {
+      mat.transparent = true;
+      mat.opacity = opacity;
+      mat.depthWrite = false;
+    }
+    debugMaterials.set(key, mat);
+  }
+  return mat;
 }
 
 // Everything a body's ROOTS are grown from (`mountRoots`): each root piece's
@@ -458,11 +478,11 @@ export class BodyVisual {
       const pos = world.pos.sub(built.origin).rotated(-built.rotation);
       const piece = this.piece(pos.x, pos.y, world.rot - built.rotation, built.data.objects[i] ?? o);
       const geometry = solidOf(outlineOfData(o.shape), look.depth);
-      const mesh = new THREE.Mesh(geometry, surfaceOf({ texture: "color", color: look.color, opacity: look.opacity }));
+      const mesh = new THREE.Mesh(geometry, debugMaterialOf(look.color, look.opacity));
       // A see-through piece is a ghost, and a ghost's shadow would be a solid
       // one: it lets the light through as it lets the view through.
       mesh.castShadow = look.opacity >= 1;
-      mesh.receiveShadow = true;
+      mesh.receiveShadow = false;
       mesh.position.z = z;
       mesh.visible = this.debugShown;
       piece.add(mesh);

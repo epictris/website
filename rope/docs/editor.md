@@ -257,7 +257,10 @@ corner, and **corner-resize** anchors the opposite corner (grows toward the drag
 **Undo/redo** (Ctrl+Z / Ctrl+Shift+Z or Ctrl+Y) keeps 50 model snapshots - one step per
 discrete action (each drag, add/delete/duplicate, kind/colour/opacity/numeric edit); New and
 Load clear the stack.
-Every colour field in the editor is a swatch that opens the editor's own picker (`src/editor/colorPicker.ts`: saturation/value square, hue strip, hex field; Escape or a click elsewhere closes it), not `<input type="color">`.
+Every colour field in the editor is a swatch that opens the editor's own picker (`src/editor/colorPicker.ts`: saturation/value square, hue strip, hex field, eyedropper; Escape or a click elsewhere closes it), not `<input type="color">`.
+The **eyedropper** (the pipette beside the hex field, 2026-10-17) picks a colour off anything the editor shows: the pointer becomes a crosshair with the colour under it beside it, a click takes it, and Escape or a right-click cancels without closing the picker.
+It is the editor's own (`src/editor/eyedropper.ts`), since the browser's `EyeDropper` exists only on Windows, macOS and ChromeOS: it reads the elements under the point front to back, each canvas by its pixel and anything else by its background colour, so it sees the 3D view, the overlay and the panels' swatches, but not text.
+The 3D canvas keeps no drawing buffer, so the pixel is read in an animation frame that runs after the editor's own has drawn it; a pick matched the screenshot's pixel exactly.
 The native picker is a browser popup placed by Chromium from where it thinks its window is, and under Wayland it is never told, so opened from the inspector at the right edge of a maximised window it ran off the screen.
 The page's picker is clamped into the viewport, flips above the swatch when there is no room below, follows the inspector as it scrolls, and takes its undo step on the first change rather than on opening.
 Each body has an editable **colour + opacity** (inspector); defaults to
@@ -466,6 +469,7 @@ The scene is rebuilt in full from the model - correctness beats a diff of what a
 It is rebuilt whenever something it DRAWS changes other than debug geometry, and only then (`sceneKeyOf`): the key is the level as the builder gets it, with every collision piece's geometry and debug settings left out (a belt's kept) and each body's frame replaced by its objects' world placements, on every body whose pose at rest does not depend on its mass (not a pivot, a spring, a mover or water).
 When the key has not moved, what has changed is at most some pieces' debug geometry, and that is rebuilt **in place** (`Scene3D.restyleDebug` → `BodyVisual.restyleDebug`): each body compares a signature of its drawn pieces (world placement, outline, resolved look) and rebuilds only its own debug pieces, placed against the frame the scene was built in and still tagged with the objects the pick map names.
 So a corner dragged on a dressed rock rebuilds nothing, and one dragged on a drawn piece rebuilds that body's debug meshes and nothing else, which matters: a full rebuild on `ball` measured ~30 ms of building and nine shader programs re-linked (2026-10-07), every frame of a drag, and vertex drags on `ball` and on `cave` (all debug geometry) went from ~200 ms frames to the idle baseline with no program re-linked.
+Since 2026-10-17 a full rebuild re-links nothing either: the scene it replaces is disposed only after the new one has drawn a frame and taken its programs over ([**A level's scene**](render3d.md#a-levels-scene-built-shown-retired)), and nudging a body on `ball` went from ~830 ms over four frames to one ~50 ms frame.
 A new opacity below 1 compiles the see-through variant once; switching a piece on or off, recolouring it or moving its corners compiles nothing.
 The world the scene keeps is then a step behind the collision until the next rebuild, which only the preview's fireflies read.
 Chains stay on the 2D canvas there, and deliberately: the editor draws a chain **straight** because a span between wrap nodes is straight, and solving them to draw them would be a second simulation running under the editor.
@@ -476,6 +480,8 @@ It is built here from the model rather than borrowed from a `BallLevel`, at the 
 The spawn marker on the overlay gained the same size as a second, fainter ring outside its own: the inner one is the marker - the thing dragged to move the spawn - and the outer one is the ball's footprint, which lands on the drawn sphere's silhouette in a 3D view and is the only thing that says the ball's size in the 2D one.
 
 **Retired 2026-09-29**: the panel fields and tools for how a level looks - geometry objects (primitive, mesh and image), `+ Geometry`, `+ Image`, the per-object lens, match collision, the rock taper, **Fit collision to rock** and the rock seed - went when the level's look moved to its Blender scene ([blender-scenes](blender-scenes.md)); the full text is at commit `bfa6597`.
+
+## Testing a level
 
 `▶ Test Grapple` / `▶ Test Ball` build a real `Level`/`BallLevel` from
 the current model and run it inline (with the real camera, so a camera region is felt exactly as it will play); **Esc** returns to editing.
@@ -490,3 +496,13 @@ A test is a spot-check of the thing being edited - press it, see whether the led
 It is dropped from the data the test is built from rather than skipped by the driver, so the bundle a test exports describes the run that was actually played.
 To see the opening itself, play the level (`?level=NAME`), which is where an opening is worth judging anyway - the editor's canvas is not the screen it will be read on.
 Starting a test also **detaches the 3D gizmo**: it lives in the scene rather than on the overlay, so a selection left the editing arrows hanging in the middle of the level being played - `gizmoSpec` had always answered "none in test mode" and nothing asked it, the sync running on the edit loop and a test having its own.
+
+**Going in and coming back out are seamless** (2026-10-17).
+Until then each cost about a second on `ball`: a ~1030 ms frame on the press and ~950 ms over three frames on Esc, measured headless on the RTX 4070.
+About 800 ms of each was three.js linking the same nine shader programs again, because the editor threw its scene away for the test's and then the test's away for a fresh one of its own, and a disposed material frees its program ([**A level's scene**](render3d.md#a-levels-scene-built-shown-retired)); the rest was building the level and its scene.
+Now the editor's scene is **parked** for the length of the test (`Scene3D.show` hands it back still built, and `stopTest` puts it back up), so Esc rebuilds nothing, and the test's scene is drawn with the programs the parked one keeps alive.
+The test's level and its scene are **built ahead** (`prebuildTest`), because building them is real work - the level's chains and vines are settled to rest at build, ~80 ms on `ball`, and its scene is ~30 ms more.
+They are built when the pointer comes onto a ▶ Test button, the click being on its way, and when the editor has been idle for 1.5 s (no edit, press, key or wheel), the level and the scene on two frames.
+What was built ahead is used only if it is of exactly the data the press would build (compared as JSON, controller and start included), so a stale level is never played; `B`, from the cursor, cannot be built ahead and builds at the press.
+Measured over hover, a click 250 ms later and Esc: no frame over the 16.7 ms vsync on the way in or out, and no program linked.
+What is left is the idle build's own frame (~70-100 ms, 1.5 s after the last thing done), and the first test of a session still compiles what the editor's view never drew - on `ball`, one pool-mirror program (~40 ms) - which the **reflections** toggle is for.

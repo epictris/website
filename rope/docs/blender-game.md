@@ -76,9 +76,12 @@ Growth rides along (it hangs from the placement), and is then stale: it is sized
 
 **Collision outlines are a reference, never a source** (2026-10-07, Tris: "The 2D collision outlines should serve exclusively as a visual reference").
 The `guide.*` curves the scene links from the level's guide file are unselectable, and Formations refuses anything linked from another file as a guide.
-**Show Collision Outlines** (under Collision outlines) shows and hides them with their `guide.<name>.origin` empties, leaving the plane, the spawn and the cameras.
-It stores nothing of its own: it is the outliner's eye on each of them in the current view layer (a linked object's own visibility is the guide file's), so it always reads what the viewport shows, and it reads on while any outline is shown.
-Hidden outlines cannot be picked, so Create Guide from Outline waits for them to be shown.
+**Opacity** (under Collision outlines, 2026-10-17, Tris: "instead of "Show Collision Outlines" I want an opacity slider") is how opaque the solid outlines are filled, 0.35 by default, the scene's own setting (`game_outline_opacity`).
+The fills are the guide file's materials, linked, and a driver on them reading the scene never evaluated (it was flagged invalid), so the add-on sets each fill's factor (the Mix Shader `scene_guide.py` names `Opacity`) and its Solid-shading alpha directly: Blender allows that on linked data but never saves it, and a reload of the guide brings back the file's own 0.35, so a depsgraph handler (`outlines.keep_fills`) writes the scene's value back wherever it differs, and the file's load applies it.
+At 0 the outlines and their `guide.<name>.origin` empties are hidden, since an area's outline is a wire and a wire cannot fade; the plane, the spawn and the cameras stay.
+Hiding is the outliner's eye on each in the current view layer (a linked object's own visibility is the guide file's).
+It replaced the **Show Collision Outlines** toggle; a file saved with the outlines hidden by it opens at 0.
+Hidden outlines cannot be picked, so Create Guide from Outline waits for the opacity to be raised.
 **Create Guide from Outline** (the eyedropper, under Collision outlines) copies one: click a collision outline in the viewport (the one under the cursor is highlighted; the innermost wins where they nest; Shift+click keeps picking, Esc or right-click ends) and a free guide named `Guide` is made in `Formation guides`, the same points at the same place, selected for New Formation (Formations panel).
 The copy is geometry and pose only: the guide records nothing about the outline, and nothing is written to the outline, so the editor can add, move or remove collision without any guide or rock in the scene changing.
 The guide is a 2D curve like the outline it came from, so Tab and G move its points on the gameplay plane ([blender-formations](blender-formations.md#editing-a-guide)), and the collision stays as the level has it.

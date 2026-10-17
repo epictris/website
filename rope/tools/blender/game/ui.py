@@ -56,11 +56,10 @@ class GAME_PT_main(bpy.types.Panel):
         have = bool(outlines.collision_outlines(scene))
         row = box.row()
         row.enabled = have
-        row.prop(scene, "game_show_outlines", toggle=True,
-                 icon="HIDE_OFF" if scene.game_show_outlines else "HIDE_ON")
+        row.prop(scene, "game_outline_opacity", slider=True)
         # Only a shown outline can be picked.
         row = box.row()
-        row.enabled = have and scene.game_show_outlines
+        row.enabled = have and scene.game_outline_opacity > 0
         row.operator("game.guide_from_outline", icon="EYEDROPPER")
 
 

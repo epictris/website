@@ -14,6 +14,7 @@ from __future__ import annotations
 import re
 
 import bpy
+from bpy.app.handlers import persistent
 from mathutils import Vector
 
 from .formations_addon import core
@@ -47,7 +48,7 @@ def collision_outlines(scene=None):
 # --- Showing them ---------------------------------------------------------------
 
 def shown_with_outlines(scene):
-    """What Show Collision Outlines shows and hides: every outline, and the
+    """What an opacity of 0 hides: every outline, and the
     `guide.<name>.origin` empty on each body's origin beside them (`.001`
     and on where bodies share a name)."""
     return [ob for ob in scene.objects if is_collision_outline(ob)
@@ -56,17 +57,52 @@ def shown_with_outlines(scene):
 
 def outlines_shown(scene):
     """Whether any outline is shown in the view layer (the eye in the
-    outliner), so the toggle reads what the viewport shows."""
+    outliner), which is what the viewport shows."""
     layer = bpy.context.view_layer
     return any(not ob.hide_get(view_layer=layer) for ob in collision_outlines(scene))
 
 
-def show_outlines(scene, show):
-    # The eye in the outliner: a linked object's own `hide_viewport` is the
-    # guide file's to set, but its base in this view layer is the scene's.
+# The fill's Mix Shader whose factor is its opacity, and the opacity the guide
+# is written with (tools/blender/scene_guide.py OPACITY_NODE, SOLID_ALPHA).
+OPACITY_NODE = "Opacity"
+DEFAULT_OPACITY = .35
+
+
+def sync_fills(scene):
+    """Give every solid outline's fill the scene's opacity. The fills are the
+    guide file's, linked: Blender lets them be set but never saves it, and a
+    reload of the guide brings back the file's own, so this runs on every
+    depsgraph update and writes only what differs (a write is an update)."""
+    opacity = scene.game_outline_opacity
+    for mat in bpy.data.materials:
+        if mat.library is None or mat.node_tree is None:
+            continue
+        mix = mat.node_tree.nodes.get(OPACITY_NODE)
+        if mix is None:
+            continue
+        if mix.inputs["Fac"].default_value != opacity:
+            mix.inputs["Fac"].default_value = opacity
+        if mat.diffuse_color[3] != opacity:
+            mat.diffuse_color[3] = opacity
+
+
+def apply_opacity(scene):
+    """The Collision outlines opacity: the solid outlines' fills at it, and at
+    0 every outline and its origin hidden, since a wire cannot fade. Hiding is
+    the outliner's eye: a linked object's own `hide_viewport` is the guide
+    file's to set, but its base in this view layer is the scene's."""
     layer = bpy.context.view_layer
+    hide = scene.game_outline_opacity <= 0
     for ob in shown_with_outlines(scene):
-        ob.hide_set(not show, view_layer=layer)
+        if ob.hide_get(view_layer=layer) != hide:
+            ob.hide_set(hide, view_layer=layer)
+    sync_fills(scene)
+
+
+@persistent
+def keep_fills(scene, _depsgraph):
+    if scene.library is None:
+        sync_fills(scene)
 
 
 def guide_from_outline(outline):

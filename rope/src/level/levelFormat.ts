@@ -1268,6 +1268,13 @@ export function isCollisionObject(o: SceneObjectData): o is CollisionObjectData 
   return o.type === "collision";
 }
 
+// The colour a collision piece is shown in: its debug colour, else its body's
+// fill. Its debug geometry draws in it (`render3d/bodyVisuals.ts`), and so does
+// its outline in the level's Blender guide (`scripts/scene-guide.ts`).
+export function debugColorOf(body: LevelBodyData, o: CollisionObjectData): string {
+  return o.debug?.color ?? body.color ?? DEFAULT_BODY_COLOR;
+}
+
 export function isLightObject(o: SceneObjectData): o is LightObjectData {
   return o.type === "light";
 }

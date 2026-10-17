@@ -28,6 +28,7 @@ import { PX } from "../src/engine/units";
 import { Vec2 } from "../src/engine/vec2";
 import { objectDepth, worldPlacement } from "../src/level/buildBodies";
 import {
+  debugColorOf,
   isCollisionObject,
   isLightObject,
   scaleLevelData,
@@ -88,10 +89,16 @@ const level = scaleLevelData(raw, PX);
 // The game's frame from the sim's: y up.
 const game = (p: Vec2): [number, number] => [round(p.x), round(-p.y)];
 const round = (v: number): number => Math.round(v * 10000) / 10000;
+// A CSS hex colour (sRGB) as the linear RGB Blender's colours hold.
+const linear = (hex: string): number[] => {
+  const c = new THREE.Color(hex);
+  return [c.r, c.g, c.b].map((v) => Math.round(v * 1e6) / 1e6);
+};
 
 // A body's collision pieces as world-space outlines, each with its hole if it
-// has one (a belt's band).
-type Piece = { outline: [number, number][]; hole: [number, number][] | null };
+// has one (a belt's band), and the colour the piece is shown in (`debugColorOf`)
+// as Blender's linear RGB.
+type Piece = { outline: [number, number][]; hole: [number, number][] | null; color: number[] };
 function pieces(b: LevelBodyData): Piece[] {
   const out: Piece[] = [];
   for (const o of b.objects) {
@@ -114,7 +121,7 @@ function pieces(b: LevelBodyData): Piece[] {
       local = [...shape.verts];
       hole = shape.hole;
     }
-    out.push({ outline: toGame(local), hole: hole ? toGame(hole) : null });
+    out.push({ outline: toGame(local), hole: hole ? toGame(hole) : null, color: linear(debugColorOf(b, o)) });
   }
   return out;
 }

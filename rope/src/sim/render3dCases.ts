@@ -5162,6 +5162,39 @@ function blenderScenes(): CaseResult[] {
     detail: `scenery ${sceneryNames.join(",")}; backdrop casts ${sBackdrop?.castShadow}, rock casts ${sRock?.castShadow}; loaded children ${loaded.children.length}`,
   });
 
+  // THE VERDICT IS KEPT PER FILE NODE (`sceneryCasts`): a second mount answers
+  // from it, and must answer what the first did - but not for scenery a bound
+  // node was taken out of, whose shape on that mount is not the file's. A
+  // shelf behind the plane with a hook in front of it casts whole (its box
+  // reaches the plane) and does not once the hook is bound to a body.
+  const shelfFile = new THREE.Group();
+  const shelf = new THREE.Group();
+  shelf.name = "Shelf";
+  const board = new THREE.Mesh(new THREE.BoxGeometry(1, 0.1, 0.5));
+  board.name = "Board";
+  board.position.z = -3;
+  board.castShadow = true;
+  const hook = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.1, 0.1));
+  hook.name = "Hook";
+  hook.position.z = 1;
+  hook.castShadow = true;
+  shelf.add(board, hook);
+  shelfFile.add(shelf);
+  const boardCasts = (d: ReturnType<typeof dressScene>): boolean | undefined =>
+    (d.scenery.getObjectByName("Board") as THREE.Mesh | undefined)?.castShadow;
+  const hookTarget: DressTarget[] = [
+    { name: "Hook", root: new THREE.Group(), origin: Vec2.ZERO, rotation: 0, solid: true },
+  ];
+  const whole = boardCasts(dressScene(shelfFile, []));
+  const wholeAgain = boardCasts(dressScene(shelfFile, []));
+  const cutShelf = boardCasts(dressScene(shelfFile, hookTarget));
+  const wholeAfter = boardCasts(dressScene(shelfFile, []));
+  out.push({
+    name: "scene: a scenery node's shadow verdict is kept for its file and answered again, but scenery a bound node was taken out of is asked afresh",
+    pass: whole === true && wholeAgain === true && cutShelf === false && wholeAfter === true,
+    detail: `board casts: whole ${whole}, again ${wholeAgain}, with the hook bound ${cutShelf}, whole after ${wholeAfter}`,
+  });
+
   // A pick on scenery answers `SCENERY_TAG` - in no body, but a surface a
   // light can be dropped on - and a bound node its body's tag.
   const hitTag = (o: THREE.Object3D | undefined): unknown => (o ? pickTagOf(o) : undefined);
@@ -5257,9 +5290,14 @@ function debugGeometry(): CaseResult[] {
   const pieces = meshesOf(wall);
   const tags = pieces.map((m) => pickTagOf(m));
   const collisions = built.bodies[0]!.data.objects.filter(isCollisionObject);
-  const mat = (m: THREE.Mesh | undefined) => m?.material as THREE.MeshStandardMaterial | undefined;
+  const mat = (m: THREE.Mesh | undefined) => m?.material as THREE.MeshBasicMaterial | undefined;
   const plain = mat(pieces[0]);
   const ghost = mat(pieces[1]);
+  // Its exact colour on screen: unlit, unshadowed, unfogged, not tone mapped.
+  const unlit = pieces.every((m) => {
+    const x = mat(m);
+    return x?.isMeshBasicMaterial === true && !x.fog && !x.toneMapped && !m.receiveShadow;
+  });
   const leafZ = meshesOf(leaf)[0]?.position.z;
   const asBuilt =
     pieces.length === 2 &&
@@ -5284,7 +5322,9 @@ function debugGeometry(): CaseResult[] {
   const shown = pieces.every((m) => m.visible);
   // ...and the depth is a length: pixels on disk, metres in the sim.
   const scaledDepth = (scaleLevelData(raw, PX).bodies[0]!.objects[1] as CollisionObjectData).debug?.depth;
-  const ok = asBuilt && configured && volume && behind && hidden && shown && scaledDepth !== undefined && Math.abs(scaledDepth - 0.5) < 1e-9;
+  const ok =
+    asBuilt && configured && unlit && volume && behind && hidden && shown &&
+    scaledDepth !== undefined && Math.abs(scaledDepth - 0.5) < 1e-9;
   for (const v of [wall, kill, leaf]) v.dispose();
 
   // THE RETIRED GREY BOX, folded at load (`withDebugFromGreybox`): a level
@@ -5318,9 +5358,9 @@ function debugGeometry(): CaseResult[] {
   const fold = folded === "on-|-|on" && dressed === "--|-|-" && current === "--|-|-" && twice === folded;
   return [
     {
-      name: "debug geometry: a switched-on piece draws its outline at its thickness in the body's colour, picked as that piece; its own colour, opacity and depth override them, and a see-through one casts nothing; a switched-off or unconfigured piece draws nothing; a volume draws too; hook-only scenery sits behind the plane; the host hides all of it; the depth scales as a length",
+      name: "debug geometry: a switched-on piece draws its outline at its thickness in the body's colour, exactly (unlit, unshadowed, unfogged, not tone mapped), picked as that piece; its own colour, opacity and depth override them, and a see-through one casts nothing; a switched-off or unconfigured piece draws nothing; a volume draws too; hook-only scenery sits behind the plane; the host hides all of it; the depth scales as a length",
       pass: ok,
-      detail: `${pieces.length} pieces (want 2), depths ${pieces.map((m) => depthOf(m).toFixed(3)).join(", ")}, tagged ${tags.map((t, i) => t === collisions[i]).join(",")}, colours #${plain?.color.getHexString()} #${ghost?.color.getHexString()}, ghost opacity ${ghost?.opacity} transparent ${ghost?.transparent} casts ${pieces[1]?.castShadow}; killzone ${meshesOf(kill).length}; passable z ${leafZ}; hidden ${hidden} shown again ${shown}; scaled depth ${scaledDepth}`,
+      detail: `${pieces.length} pieces (want 2), depths ${pieces.map((m) => depthOf(m).toFixed(3)).join(", ")}, tagged ${tags.map((t, i) => t === collisions[i]).join(",")}, colours #${plain?.color.getHexString()} #${ghost?.color.getHexString()}, ghost opacity ${ghost?.opacity} transparent ${ghost?.transparent} casts ${pieces[1]?.castShadow}, unlit ${unlit}; killzone ${meshesOf(kill).length}; passable z ${leafZ}; hidden ${hidden} shown again ${shown}; scaled depth ${scaledDepth}`,
     },
     {
       name: "debug geometry: a level saved before the switch with no scene comes back with the grey box's pieces switched on (solid bodies, not volumes, not belts); a dressed or current-format level is untouched; the fold is idempotent",

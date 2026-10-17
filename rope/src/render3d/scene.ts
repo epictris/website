@@ -35,7 +35,7 @@ import { BodyVisual, pickTagOf, surfaceOf } from "./bodyVisuals";
 import { SceneDressing, sceneryWater, type DressTarget } from "./sceneDressing";
 import { BallVisual } from "./ballVisual";
 import { ChainLayer } from "./chainVisual";
-import { VineLayer } from "./vineVisual";
+import { LevelScene } from "./levelScene";
 import type { ChainRetract } from "../render/chainRetract";
 import type { GlassShards } from "../render/glassShards";
 import { ShardLayer } from "./shardVisual";
@@ -43,11 +43,10 @@ import { bakeGlassWear } from "./glassWear";
 import { BALL_GLOW, BALL_GLOW_INTENSITY, BALL_GLOW_RANGE, glassWearShown } from "./glassMaterial";
 import type { CameraRule } from "../render/cameraController";
 import { configureRenderer, Environment } from "./environment";
-import { LightRig } from "./lights";
+import type { LightRig } from "./lights";
 import {
   applyPose,
   CAMERA_FAR,
-  DEFAULT_LENS,
   FOV_Y_DEG,
   lensOf,
   NO_ORBIT,
@@ -57,7 +56,6 @@ import {
   threeY,
   VIEW_ASPECT,
   type CameraOrbit,
-  type SceneLens,
   type ViewCamera,
   type ViewPose,
   type ViewProjection,
@@ -179,6 +177,11 @@ function drawn(obj: THREE.Object3D): boolean {
   return true;
 }
 
+// Every still water body's surface in one level (the pools the mirror is for).
+function* stillSurfacesOf(slot: LevelScene): Iterable<StillSurface> {
+  for (const visual of slot.bodies.values()) if (visual.stillSurface) yield visual.stillSurface;
+}
+
 export class Scene3D {
   readonly scene = new THREE.Scene();
   // What the editor draws into the scene for itself - the Visuals workspace's
@@ -195,8 +198,14 @@ export class Scene3D {
   // pair costs nothing and leaves the gizmo something stable to be attached to.
   private readonly perspective = new THREE.PerspectiveCamera(FOV_Y_DEG, VIEW_ASPECT, 0.1, CAMERA_FAR);
   private readonly orthographic = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, CAMERA_FAR);
-  // The lens and z offset the current level asked for (`LevelCameraData`).
-  private lens: SceneLens = DEFAULT_LENS;
+  // The level being drawn (see levelScene.ts): its visuals, its Blender scene,
+  // its lights and vines, under a group of its own. Null until the first
+  // level is shown.
+  private current: LevelScene | null = null;
+  // Levels taken down for good, still built: each is disposed at the end of
+  // the next frame drawn, once the level that replaced it has taken its
+  // programs over (see `retire`).
+  private readonly retiring: LevelScene[] = [];
   // The game never touches this: it is played through the perspective camera the
   // levels are framed against, and only the editor offers the other.
   private projection: ViewProjection = "perspective";
@@ -228,46 +237,21 @@ export class Scene3D {
   // Whether EVERY piece's debug geometry is drawn, switched on or not
   // (`setAllDebugShown`). Held here for the same reason.
   private allDebugShown = false;
-  // Every light in the level. It is rebuilt with the BODIES rather than kept
-  // across a level change, because a light is an object inside a body now: each
-  // one is a child of the group its body is drawn in, so its lifetime is that
-  // body's and there is nothing to key it separately on.
-  private readonly lights = new LightRig();
+  // Whether every waking light is held awake (`setGlowPreview`), applied to
+  // each level's lights as it is shown.
+  private glowPreview = false;
   // Wall-clock seconds, or a PINNED value. The flicker and the water read it,
   // and only
   // a headless grab pins it: a screenshot whose lighting depends on when it was
   // taken is evidence of nothing, which is the same reason the SVG snapshot
   // pins the force areas' arrow phase at 0.
   private pinnedClock: number | null = null;
-  // Bodies that are IN THE WORLD, keyed by their engine object. Reconciled every
-  // frame, because bodies come and go at runtime (the hook is destroyed and
-  // rebuilt on every throw, the sandbox spawns rocks).
-  private readonly bodies = new Map<CollisionObject2D, BodyVisual>();
-  // Authored bodies that built no engine object - decoration, a light with no
-  // fitting. They are not in the world, so they can neither be found by the
-  // reconciliation nor go stale: they live exactly as long as the level does.
-  private readonly standing: BodyVisual[] = [];
-  // Every AUTHORED body's visual, built or standing, in the level's body order
-  // - the order an edited copy of the level lists them in (`restyleDebug`).
-  private readonly authored: BodyVisual[] = [];
-  // The level's Blender scene, when it names one (see `SceneDressing`).
-  private dressing: SceneDressing | null = null;
-  // What the glass ball's pieces land on (`shardCollision`): its version, and
-  // whether the level's scene file has landed (or it has none).
+  // What the glass ball's pieces land on (`shardCollision`): its version.
   private shardCollisionVersion = 0;
-  private sceneryLanded = false;
   // The scenery's triangles, kept for the scene they are of: a restart mounts
   // the same file again, and reading 700 thousand triangles out of it is tens
   // of milliseconds.
   private sceneryTriangleCache: { key: string; meshes: CollisionMesh[] } | null = null;
-  private ballVisual: BallVisual | null = null;
-  // The glass ball's glow on the world (see glassMaterial.ts `BALL_GLOW_INTENSITY`):
-  // built with any level that has a ball, iron too, and only ever turned up or
-  // down - three compiles every lit program against the number of lights, so
-  // one that came with the glass ball would recompile the scene at the pick.
-  // Dark (and so skipped wherever it is shaded, lightReach.ts) for an iron or a
-  // broken ball.
-  private ballGlow: THREE.PointLight | null = null;
   // The glass ball's baked surface wear (see glassWear.ts), once one has been
   // drawn.
   private glassWear: THREE.CubeTexture | null = null;
@@ -278,7 +262,6 @@ export class Scene3D {
   private chains: ChainLayer;
   // The glass ball's shards, when it has broken (see render/glassShards.ts).
   private readonly shardLayer: ShardLayer;
-  private vines: VineLayer;
   private probe: THREE.Mesh | null = null;
   // Picking and highlighting (editor only; the game never clicks the scene).
   private readonly raycaster = new THREE.Raycaster();
@@ -328,9 +311,6 @@ export class Scene3D {
   private readonly mirrorWindow = new THREE.Vector4();
   private readonly poolHidden: THREE.Object3D[] = [];
   private poolMirrorOn = true;
-  // The pool's water worn by the scene's own flat water (`adoptSceneryWater`),
-  // freed with the level.
-  private readonly sceneryWaterMaterials: THREE.Material[] = [];
   // The background blur behind the gameplay plane (see depthOfField.ts).
   private readonly depthOfField: DepthOfField;
   // The spots' lit air (see lightShafts.ts).
@@ -366,7 +346,6 @@ export class Scene3D {
     this.envKey = JSON.stringify(null);
     this.chains = new ChainLayer(this.scene);
     this.shardLayer = new ShardLayer(this.scene);
-    this.vines = new VineLayer(this.scene);
     this.editorLayer.name = "editor-layer";
     this.scene.add(this.editorLayer);
     this.raycaster.params.Line2 = { threshold: LINE_PICK_PX };
@@ -394,7 +373,7 @@ export class Scene3D {
     this.reflectionOn = on;
     if (on) this.reflectionProbe.reset();
     else {
-      this.ballVisual?.setReflection(null);
+      this.current?.ballVisual?.setReflection(null);
       this.chains.setReflection(null);
       this.shardLayer.setReflection(null);
     }
@@ -409,7 +388,7 @@ export class Scene3D {
     if (on === this.shadowsOn) return;
     this.shadowsOn = on;
     this.env.setShadows(on);
-    this.lights.setShadows(on);
+    this.current?.lights.setShadows(on);
   }
 
   // Off, no pool draws its mirror: a switch for measuring what the pass costs
@@ -425,9 +404,7 @@ export class Scene3D {
   // untouched: the ball still floats and drags in it.
   setWaterShown(on: boolean): void {
     this.waterShown = on;
-    for (const v of this.bodies.values()) v.setWaterShown(on);
-    for (const v of this.standing) v.setWaterShown(on);
-    for (const surface of this.stillSurfaces()) for (const mesh of surface.scenery) mesh.visible = on;
+    if (this.current) this.applyShown(this.current);
   }
 
   // Off, nothing from the level's Blender scene is drawn - the scenery and the
@@ -437,7 +414,7 @@ export class Scene3D {
   // through to what is drawn behind.
   setSceneShown(on: boolean): void {
     this.sceneShown = on;
-    this.dressing?.setShown(on);
+    this.current?.dressing?.setShown(on);
   }
 
   // Hides every pool's water and the scene's water continuing it, for
@@ -456,13 +433,23 @@ export class Scene3D {
     return this.gpuTimer?.lastMs ?? null;
   }
 
-  // Build the scene for a level. Called once per level instance (a reset builds
-  // a new level, so it builds a new scene): every static extrusion is created
-  // here and nothing but transforms is touched per frame.
+  // Build the scene for a level and draw it from the next frame on. Called once
+  // per level instance (a reset builds a new level, so it builds a new scene):
+  // every static extrusion is created here and nothing but transforms is
+  // touched per frame. The level it replaces is disposed once this one has
+  // been drawn (`retire`).
   setLevel(level: Scene3DLevel): void {
-    this.clearLevel();
-    this.setEnvironment(level.visualSource.data.environment);
-    this.lens = lensOf(level.visualSource.data.camera);
+    this.retire(this.show(this.prepare(level)));
+  }
+
+  // Build the scene for a level WITHOUT drawing it: what `show` puts up. The
+  // editor builds its ▶ Test's scene this way so that its own can be kept.
+  prepare(level: Scene3DLevel): LevelScene {
+    const slot = new LevelScene(level, lensOf(level.visualSource.data.camera));
+    // Before the bodies, which register their lights with the rig as they are
+    // built.
+    slot.lights.setShadows(this.shadowsOn);
+    slot.lights.previewAwake = this.glowPreview;
     // Authored bodies FIRST, and in authored order, because the light budgets
     // are spent in that order: a level whose lamps are drawn in a different
     // order from the one it was authored in is a level whose lamps go out
@@ -474,13 +461,11 @@ export class Scene3D {
     const targets: DressTarget[] = [];
     const sceneName = level.visualSource.data.scene;
     level.visualSource.built.bodies.forEach((built) => {
-      const visual = new BodyVisual(built.body, built, this.lights, this.allDebugShown);
-      visual.setDebugShown(this.debugShown);
-      visual.setWaterShown(this.waterShown);
-      this.scene.add(visual.root);
-      if (built.body) this.bodies.set(built.body, visual);
-      else this.standing.push(visual);
-      this.authored.push(visual);
+      const visual = new BodyVisual(built.body, built, slot.lights, this.allDebugShown);
+      slot.root.add(visual.root);
+      if (built.body) slot.bodies.set(built.body, visual);
+      else slot.standing.push(visual);
+      slot.authored.push(visual);
       // What the level's Blender scene may dress: the body by name, its root
       // and the pose that root has at rest. A pick on the dressing answers with
       // the body's first authored object, which is the one the editor can act
@@ -498,48 +483,118 @@ export class Scene3D {
     // The level's Blender scene, over everything (see docs/blender-scenes.md):
     // bound nodes land under the roots above when the file arrives, scenery
     // stands in the world where Blender put it.
-    this.shardCollisionVersion++;
-    this.sceneryLanded = !sceneName;
+    slot.sceneryLanded = !sceneName;
     if (sceneName) {
-      this.dressing = new SceneDressing(sceneName, targets, (scenery) => {
-        this.adoptSceneryWater(scenery);
-        this.sceneryLanded = true;
-        this.shardCollisionVersion++;
+      slot.dressing = new SceneDressing(sceneName, targets, (scenery) => {
+        this.adoptSceneryWater(slot, scenery);
+        slot.sceneryLanded = true;
+        if (slot === this.current) this.shardCollisionVersion++;
       });
-      this.dressing.setShown(this.sceneShown);
-      this.scene.add(this.dressing.root);
+      slot.root.add(slot.dressing.root);
     }
     // Then whatever else the world already holds - the avatar's debris, a
     // sandbox rock spawned before the scene was built.
-    for (const body of level.world.bodies) this.ensureBody(body);
+    for (const body of level.world.bodies) this.ensureBody(slot, body);
     if (level.ball) {
       // The glass ball's surface wear, baked the first time a glass ball is
       // drawn and kept for the page (see glassWear.ts).
       if (level.ball.glass && glassWearShown.value && !this.glassWear) this.glassWear = bakeGlassWear(this.renderer, level.ball.radius);
-      this.ballVisual = new BallVisual(level.ball, this.glassWear);
-      this.scene.add(this.ballVisual.root);
-      this.ballGlow = new THREE.PointLight(BALL_GLOW, 0, BALL_GLOW_RANGE, 2);
-      this.ballGlow.name = "ball-glow";
-      this.ballGlow.castShadow = false;
-      this.scene.add(this.ballGlow);
+      slot.ballVisual = new BallVisual(level.ball, this.glassWear);
+      slot.root.add(slot.ballVisual.root);
     }
+    // The glass ball's glow on the world (see glassMaterial.ts
+    // `BALL_GLOW_INTENSITY`): built with EVERY level, a ball in it or not, and
+    // only ever turned up or down. three compiles every lit program against
+    // the number of lights, so one that came with the glass ball would
+    // recompile the scene at the pick, and one that came with any ball would
+    // recompile it between the editor's preview (which has one) and a grapple
+    // test of the same level (which does not). Dark (and so skipped wherever it
+    // is shaded, lightReach.ts) for an iron, broken or absent ball.
+    slot.ballGlow = new THREE.PointLight(BALL_GLOW, 0, BALL_GLOW_RANGE, 2);
+    slot.ballGlow.name = "ball-glow";
+    slot.ballGlow.castShadow = false;
+    slot.root.add(slot.ballGlow);
     // The waking lights' pool, sized now that every authored light has been
     // recorded and before `prewarm` compiles against the scene's lights (see
     // `LightRig.buildPool`). A level with no waking light builds none.
-    this.lights.buildPool(this.scene);
+    slot.lights.buildPool(slot.root);
     // The authored routes the fireflies read (see `Scene3DLevel.cameraRules`
     // and `Scene3DLevel.fireflyPaths`).
-    this.lights.setRoutes(
+    slot.lights.setRoutes(
       (level.cameraRules ?? []).flatMap((r) => (r.kind === "path" ? [r.index] : [])),
       level.fireflyPaths ?? [],
     );
+    // The vines' tubes, which their first sync builds: here, so that a level
+    // prepared ahead of being shown (the editor's ▶ Test) has paid for them.
+    slot.vines.sync(level.vines ?? NO_VINES, 1, beltRenderTime(level.frame ?? 0, 1));
+    this.applyShown(slot);
+    return slot;
+  }
+
+  // Draw `slot` from the next frame on, and take down the level drawn until
+  // now - built still, and handed back: to be shown again (the editor's own
+  // scene, parked for the length of a ▶ Test) or handed to `retire`. Null when
+  // nothing else was drawn.
+  //
+  // What the scene keeps across levels is turned over to the new one: the
+  // environment it authored, and the chains, the shards, the splashes and the
+  // highlight, which are of the level that was drawn.
+  show(slot: LevelScene): LevelScene | null {
+    const previous = this.current;
+    if (previous === slot) return null;
+    const waiting = this.retiring.indexOf(slot);
+    if (waiting >= 0) this.retiring.splice(waiting, 1);
+    this.clearHighlight();
+    previous?.root.removeFromParent();
+    this.current = slot;
+    this.scene.add(slot.root);
+    this.setEnvironment(slot.level.visualSource.data.environment);
+    // The switches may have moved while it was down.
+    this.applyShown(slot);
+    if (!this.reflectionOn) slot.ballVisual?.setReflection(null);
+    this.splashes.reset();
+    this.chains.clear();
+    this.shardLayer.clear();
+    this.shardCollisionVersion++;
+    return previous;
+  }
+
+  // Dispose a level that has been taken down - but not yet. Its materials are
+  // what keep its compiled programs alive (three frees a program with the last
+  // material using it), and the level drawn now is very often the same level
+  // built again: the editor's preview and its ▶ Test, a reset, an edit. So it
+  // is held to the end of the next frame drawn, and disposed only after that
+  // frame and a compile of the whole scene have given every one of its
+  // programs that is still wanted another user (see `render`).
+  retire(slot: LevelScene | null): void {
+    if (!slot || slot === this.current || this.retiring.includes(slot)) return;
+    slot.root.removeFromParent();
+    this.retiring.push(slot);
+  }
+
+  // The switches every level's visuals obey, applied to one level's: at its
+  // build, when it is shown again, and when one of them is flipped.
+  private applyShown(slot: LevelScene): void {
+    for (const v of slot.authored) v.setDebugForced(this.allDebugShown);
+    for (const visuals of [slot.bodies.values(), slot.standing]) {
+      for (const v of visuals) {
+        v.setDebugShown(this.debugShown);
+        v.setWaterShown(this.waterShown);
+        const scenery = v.stillSurface?.scenery ?? [];
+        for (const mesh of scenery) mesh.visible = this.waterShown;
+      }
+    }
+    slot.dressing?.setShown(this.sceneShown);
+    slot.lights.setShadows(this.shadowsOn);
+    slot.lights.previewAwake = this.glowPreview;
   }
 
   // Hold every waking light at full, served nearest the view's centre, rather
   // than waking it for a ball (`LightRig.previewAwake`). The editor's preview,
   // which has nobody in it to wake anything; its ▶ Test turns it off.
   setGlowPreview(awake: boolean): void {
-    this.lights.previewAwake = awake;
+    this.glowPreview = awake;
+    if (this.current) this.current.lights.previewAwake = awake;
   }
 
   // Draw the level's fog, or hide it (`Environment.setFogShown`). The editor
@@ -556,8 +611,7 @@ export class Scene3D {
   // without the instruments over it.
   setDebugShown(shown: boolean): void {
     this.debugShown = shown;
-    for (const v of this.bodies.values()) v.setDebugShown(shown);
-    for (const v of this.standing) v.setDebugShown(shown);
+    if (this.current) this.applyShown(this.current);
   }
 
   get debugGeometryShown(): boolean {
@@ -571,7 +625,7 @@ export class Scene3D {
   // it - is untouched. G still hides it all (`setDebugShown`).
   setAllDebugShown(shown: boolean): void {
     this.allDebugShown = shown;
-    for (const v of this.authored) v.setDebugForced(shown);
+    if (this.current) this.applyShown(this.current);
   }
 
   // An edit to the level's debug geometry, made IN PLACE rather than by a
@@ -581,22 +635,23 @@ export class Scene3D {
   // `sceneKeyOf`). Each body rebuilds its debug pieces only if they changed.
   // Returns whether any did; a list of another length rebuilds nothing.
   restyleDebug(bodies: readonly LevelBodyData[]): boolean {
-    if (bodies.length !== this.authored.length) return false;
+    const authored = this.current?.authored ?? [];
+    if (bodies.length !== authored.length) return false;
     let changed = false;
     bodies.forEach((data, i) => {
-      if (this.authored[i]!.restyleDebug(data)) changed = true;
+      if (authored[i]!.restyleDebug(data)) changed = true;
     });
     return changed;
   }
 
   // The waking lights' levels, in authored order, for a probe.
   glowLevels(): number[] {
-    return this.lights.glowLevels();
+    return this.current?.lights.glowLevels() ?? [];
   }
 
   // The firefly swarms' states, in authored order, for a probe.
   swarmStates(): ReturnType<LightRig["swarmStates"]> {
-    return this.lights.swarmStates();
+    return this.current?.lights.swarmStates() ?? [];
   }
 
   // The environment a level authored, so a host that rebuilds the scene without
@@ -973,15 +1028,15 @@ export class Scene3D {
   // How far off the gameplay plane `body` is drawn (`BodyVisual.depth`): the
   // plane for anything this scene does not draw as a body (a vine link, the
   // avatar), which is drawn on it.
-  private readonly depthOf = (body: CollisionObject2D): number => this.bodies.get(body)?.depth ?? 0;
+  private readonly depthOf = (body: CollisionObject2D): number => this.current?.bodies.get(body)?.depth ?? 0;
 
-  private ensureBody(body: CollisionObject2D): BodyVisual | null {
-    const existing = this.bodies.get(body);
+  private ensureBody(slot: LevelScene, body: CollisionObject2D): BodyVisual | null {
+    const existing = slot.bodies.get(body);
     if (existing) return existing;
     if (drawnElsewhere(body) || !body.hasShape()) return null;
-    const visual = new BodyVisual(body, null, this.lights);
-    this.bodies.set(body, visual);
-    this.scene.add(visual.root);
+    const visual = new BodyVisual(body, null, slot.lights);
+    slot.bodies.set(body, visual);
+    slot.root.add(visual.root);
     return visual;
   }
 
@@ -1224,8 +1279,10 @@ export class Scene3D {
   }
 
   private clearHighlight(): void {
-    // The meshes are about to be disposed with their visuals, so only the
-    // clones this scene made are its to free.
+    // The meshes go back to what they wore: the level they are in is being
+    // taken down, and may be put back up (`show`). The clones are this scene's
+    // to free.
+    for (const [mesh, painted] of this.highlighted) mesh.material = painted.material;
     this.highlighted.clear();
     for (const m of this.highlightMaterials.values()) m.dispose();
     this.highlightMaterials.clear();
@@ -1248,6 +1305,10 @@ export class Scene3D {
     shards: GlassShards | null = null,
   ): void {
     const rect = this.viewportRect;
+    // The level's own visuals, built the first time it is drawn if nothing
+    // asked for it before (`setLevel`).
+    if (!this.current) this.setLevel(level);
+    const slot = this.current!;
     if (rect) {
       this.renderer.setViewport(rect.x, rect.y, rect.w, rect.h);
       this.renderer.setScissor(rect.x, rect.y, rect.w, rect.h);
@@ -1276,8 +1337,8 @@ export class Scene3D {
       this.poseCentre.y = threeY(pose.target.y);
       centre = this.poseCentre;
     } else {
-      syncCamera(this.camera, camera, this.lens, orbit);
-      syncCamera(other, camera, this.lens, orbit);
+      syncCamera(this.camera, camera, slot.lens, orbit);
+      syncCamera(other, camera, slot.lens, orbit);
     }
     this.env.follow(centre);
     const clock = this.pinnedClock ?? performance.now() / 1000;
@@ -1301,7 +1362,7 @@ export class Scene3D {
     this.stamp++;
     let seen = 0;
     const stamp = (body: CollisionObject2D): void => {
-      const visual = this.ensureBody(body);
+      const visual = this.ensureBody(slot, body);
       if (!visual) return;
       visual.stamp = this.stamp;
       seen++;
@@ -1316,23 +1377,23 @@ export class Scene3D {
     // load-bearing - but a visual that cannot survive frame one is a bug waiting
     // for the first area that does need to be drawn.
     for (const area of level.world.areas) stamp(area);
-    if (seen !== this.bodies.size) this.dropStaleBodies();
+    if (seen !== slot.bodies.size) this.dropStaleBodies(slot);
 
     // The SIM clock, not the wall clock above: a conveyor's tread shows how far
     // the belt has run, so a replay shows the same belt at the same frame and a
     // paused game shows it standing.
     const treadTime = beltRenderTime(level.frame ?? 0, alpha);
-    for (const visual of this.bodies.values()) visual.sync(alpha, treadTime);
+    for (const visual of slot.bodies.values()) visual.sync(alpha, treadTime);
     // Standing bodies built no engine body and have no pose to follow, but a
     // drawn-only conveyor still runs its tread.
-    for (const visual of this.standing) visual.sync(alpha, treadTime);
+    for (const visual of slot.standing) visual.sync(alpha, treadTime);
 
     // The cuff is drawn at the depth of whatever it bit (`BodyVisual.depth`).
     this.chains.sync(level, alpha, retract, this.depthOf);
     // The ball's ring, when it is threaded on a vine, folds the leaves it
     // slides over (render3d/vineLeafFold.ts).
     const end = level.ball?.chain?.end;
-    this.vines.sync(level.vines ?? NO_VINES, alpha, treadTime,
+    slot.vines.sync(level.vines ?? NO_VINES, alpha, treadTime,
       end instanceof RopeVineClamp ? { vine: end.vine, u: end.segment - 1 + end.fraction } : null);
     // A glass ball's respawn puts a fresh ball of the same kind in the level
     // (see `BallLevel.respawn`), which the visual already drawn simply follows
@@ -1342,20 +1403,20 @@ export class Scene3D {
     // kinds were prewarmed, so from materials whose programs are compiled.
     if (
       level.ball &&
-      this.ballVisual &&
-      (this.ballVisual.ball !== level.ball || this.ballVisual.glass !== level.ball.glass) &&
-      !this.ballVisual.follow(level.ball)
+      slot.ballVisual &&
+      (slot.ballVisual.ball !== level.ball || slot.ballVisual.glass !== level.ball.glass) &&
+      !slot.ballVisual.follow(level.ball)
     ) {
-      this.scene.remove(this.ballVisual.root);
-      this.ballVisual.dispose();
+      slot.ballVisual.root.removeFromParent();
+      slot.ballVisual.dispose();
       if (level.ball.glass && glassWearShown.value && !this.glassWear) this.glassWear = bakeGlassWear(this.renderer, level.ball.radius);
-      this.ballVisual = new BallVisual(level.ball, this.glassWear);
-      this.scene.add(this.ballVisual.root);
+      slot.ballVisual = new BallVisual(level.ball, this.glassWear);
+      slot.root.add(slot.ballVisual.root);
     }
-    this.ballVisual?.sync(alpha);
-    if (this.ballGlow && this.ballVisual && level.ball) {
-      this.ballGlow.intensity = level.ball.glass && !level.ball.shattered ? BALL_GLOW_INTENSITY : 0;
-      this.ballGlow.position.copy(this.ballVisual.root.position);
+    slot.ballVisual?.sync(alpha);
+    if (slot.ballGlow && slot.ballVisual && level.ball) {
+      slot.ballGlow.intensity = level.ball.glass && !level.ball.shattered ? BALL_GLOW_INTENSITY : 0;
+      slot.ballGlow.position.copy(slot.ballVisual.root.position);
     }
     this.shardLayer.sync(shards);
     this.splashes.update(
@@ -1374,7 +1435,7 @@ export class Scene3D {
     // its body is drawn this frame against where the ball is drawn this frame
     // (`renderPosition`, the pose `BallVisual` just used) - both read, neither
     // written: nothing here reaches the sim.
-    this.lights.update(clock, {
+    slot.lights.update(clock, {
       ball: level.ball ? level.ball.renderPosition(alpha) : null,
       view: centre,
       world: level.world,
@@ -1391,7 +1452,7 @@ export class Scene3D {
     // when a shaft is in view. Chosen before the reflection, because this is
     // also where the shafts' glow lights are set for the frame.
     const fog = this.env.shownFog();
-    const shafts = this.lightShafts.select(this.lights.shafts(), this.camera, fog);
+    const shafts = this.lightShafts.select(slot.lights.shafts(), this.camera, fog);
     // Before the ball's probe, so the pool the ball sees carries its mirror.
     this.mirrorPool();
     this.captureReflection(level);
@@ -1407,7 +1468,7 @@ export class Scene3D {
     };
     if (blurred) {
       this.depthOfField.render(this.scene, this.camera, frame, shafts ? addShafts : undefined);
-    } else if (this.ballVisual?.seesFrame) {
+    } else if (slot.ballVisual?.seesFrame) {
       this.depthOfField.renderInTwo(this.scene, this.camera, frame, shafts ? addShafts : undefined);
     } else {
       this.renderer.setRenderTarget(frame);
@@ -1416,16 +1477,42 @@ export class Scene3D {
     }
     this.frame.present();
     this.gpuTimer?.end();
+    if (this.retiring.length) this.disposeRetired(frame);
+  }
+
+  // The levels `retire` held, disposed now that a whole frame of the level
+  // that replaced them has been drawn - every pass of it: the view, the shadows,
+  // the ball's probe, the pool's mirror - so each program that frame used has
+  // a user in the new level already. What it did not draw (off screen, a
+  // piece hidden behind G) is given one by compiling the whole scene first,
+  // against the frame target the view is drawn into, which is what the
+  // programs are keyed by. When the new level is the old one built again,
+  // every program is found compiled and this links nothing; a genuinely new
+  // one is linked here, a frame early, rather than at its first sight.
+  //
+  // The level's Blender scene is in by now whenever its file has been mounted
+  // before (`SceneDressing` mounts a decoded file on the spot), and a file
+  // still on its way is one no earlier level wore, so it has no programs here
+  // to keep.
+  private disposeRetired(frame: THREE.WebGLRenderTarget): void {
+    this.renderer.setRenderTarget(frame);
+    try {
+      this.renderer.compile(this.scene, this.camera);
+    } finally {
+      this.renderer.setRenderTarget(null);
+    }
+    for (const slot of this.retiring) slot.dispose();
+    this.retiring.length = 0;
   }
 
   // Every still water body's surface (the pools the mirror is for).
-  private *stillSurfaces(): Iterable<StillSurface> {
-    for (const visual of this.bodies.values()) if (visual.stillSurface) yield visual.stillSurface;
+  private stillSurfaces(): Iterable<StillSurface> {
+    return this.current ? stillSurfacesOf(this.current) : [];
   }
 
   // The water the splashes and the wake watch: pools and currents alike.
   private *foamSurfaces(): Iterable<FoamSurface> {
-    for (const visual of this.bodies.values()) if (visual.foamSurface) yield visual.foamSurface;
+    for (const visual of this.current?.bodies.values() ?? []) if (visual.foamSurface) yield visual.foamSurface;
   }
 
   // The scene's own flat water (the backdrop's pool plane, `sceneryWater`)
@@ -1441,9 +1528,10 @@ export class Scene3D {
   }
 
   shardCollision(): ShardCollision<CollisionObject2D> | null {
-    if (!this.sceneryLanded) return null;
+    const slot = this.current;
+    if (!slot?.sceneryLanded) return null;
     let scenery: ShardCollision<CollisionObject2D>["scenery"] = null;
-    const dressing = this.dressing;
+    const dressing = slot.dressing;
     if (dressing) {
       const key = dressing.root.name;
       if (this.sceneryTriangleCache?.key !== key) {
@@ -1454,19 +1542,19 @@ export class Scene3D {
     return {
       scenery,
       bodyMeshes: (body) => {
-        const visual = this.bodies.get(body);
+        const visual = slot.bodies.get(body);
         return visual ? bodyTriangles(visual.root) : [];
       },
     };
   }
 
-  private adoptSceneryWater(scenery: THREE.Group): void {
+  private adoptSceneryWater(slot: LevelScene, scenery: THREE.Group): void {
     const box = this.poolBox;
     for (const mesh of sceneryWater(scenery)) {
       box.setFromObject(mesh);
       let pool: StillSurface | null = null;
       let gap = SCENERY_WATER_REACH;
-      for (const surface of this.stillSurfaces()) {
+      for (const surface of stillSurfacesOf(slot)) {
         const d = Math.abs(top(surface) - box.max.y);
         if (d < gap) {
           gap = d;
@@ -1497,7 +1585,7 @@ export class Scene3D {
         mesh.updateMatrixWorld(true);      }
       mesh.castShadow = false;
       mesh.receiveShadow = false;
-      this.sceneryWaterMaterials.push(water.material);
+      slot.sceneryWaterMaterials.push(water.material);
       pool.scenery.push(mesh);
       mesh.visible = this.waterShown;
       // Behind the scenery water's front edge the pool's ends stand in open
@@ -1585,7 +1673,7 @@ export class Scene3D {
   // The ball's view of the level, with the avatar and the editor's guides out
   // of it (see reflectionProbe.ts), worn as the ball's reflection.
   private captureReflection(level: Scene3DLevel): void {
-    const visual = this.ballVisual;
+    const visual = this.current?.ballVisual;
     const ball = level.ball;
     if (!visual || !ball || !this.reflectionOn) return;
     const ballShown = visual.root.visible;
@@ -1614,62 +1702,24 @@ export class Scene3D {
     }
   }
 
-  private dropStaleBodies(): void {
-    for (const [body, visual] of this.bodies) {
+  private dropStaleBodies(slot: LevelScene): void {
+    for (const [body, visual] of slot.bodies) {
       if (visual.stamp === this.stamp) continue;
-      this.scene.remove(visual.root);
+      visual.root.removeFromParent();
       visual.dispose();
-      this.bodies.delete(body);
+      slot.bodies.delete(body);
     }
-  }
-
-  private clearLevel(): void {
-    this.clearHighlight();
-    for (const visual of this.bodies.values()) {
-      this.scene.remove(visual.root);
-      visual.dispose();
-    }
-    this.bodies.clear();
-    for (const visual of this.standing) {
-      this.scene.remove(visual.root);
-      visual.dispose();
-    }
-    this.standing.length = 0;
-    this.authored.length = 0;
-    if (this.dressing) {
-      this.scene.remove(this.dressing.root);
-      this.dressing.dispose();
-      this.dressing = null;
-    }
-    for (const m of this.sceneryWaterMaterials) m.dispose();
-    this.sceneryWaterMaterials.length = 0;
-    if (this.ballVisual) {
-      this.scene.remove(this.ballVisual.root);
-      this.ballVisual.dispose();
-      this.ballVisual = null;
-    }
-    if (this.ballGlow) {
-      this.scene.remove(this.ballGlow);
-      this.ballGlow.dispose();
-      this.ballGlow = null;
-    }
-    this.splashes.reset();
-    this.chains.clear();
-    this.shardLayer.clear();
-    this.vines.clear();
-    // Every visual has handed its lights back on the way through, so this is the
-    // backstop rather than the mechanism: a rig holding a light whose parent has
-    // gone is a slot of the budget spent on nothing.
-    this.lights.dispose();
   }
 
   dispose(): void {
-    this.clearLevel();
+    this.clearHighlight();
+    this.current?.dispose();
+    this.current = null;
+    for (const slot of this.retiring) slot.dispose();
+    this.retiring.length = 0;
     this.chains.dispose();
     this.shardLayer.dispose();
     this.glassWear?.dispose();
-    this.vines.dispose();
-    this.lights.dispose();
     this.env.dispose();
     this.reflectionProbe.dispose();
     this.poolMirror.dispose();

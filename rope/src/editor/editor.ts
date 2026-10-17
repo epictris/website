@@ -265,6 +265,7 @@ import {
 } from "../render3d/assets";
 import * as THREE from "three";
 import { Scene3D, type Scene3DLevel } from "../render3d/scene";
+import type { LevelScene } from "../render3d/levelScene";
 import { SCENERY_TAG } from "../render3d/sceneDressing";
 import { nodeNameOf, sceneMetaFile, type SceneMeta } from "../render3d/scenes";
 import { setGameFogCamera } from "../render3d/editorFog";
@@ -2086,6 +2087,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // so the render path does not have to re-narrow a union it has already
   // narrowed for the 2D one.
   let testLevel3d: Scene3DLevel | null = null;
+  // The editor's own 3D scene while a test is drawn in its place (see
+  // `startTest`), or null.
+  let editScene: LevelScene | null = null;
   // The hook's sparks while a test runs (see render/sparks.ts). One system for
   // the editor's life, cleared at every ▶ Test, so a test never opens carrying
   // the embers of the last one.
@@ -2148,27 +2152,26 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // reset (and the exported bundle) respawns at the same place.
   function startTest(controller: "grapple" | "ball", spawn?: Vec2): void {
     if (mode === "test") stopTest();
-    // A ROLLING ENTRY IS NOT PLAYED HERE (`spawnWithoutEntry`, the same drop a
-    // checkpoint start makes - see `SpawnData.roll`).
-    //
-    // A test is a spot-check of the thing being edited - press it, see whether
-    // the ledge is reachable, press Esc, move the ledge - and an entry is the
-    // opening of a RUN: two metres of rolling in and a second of hands off,
-    // between every edit and the thing it is being checked against. The game
-    // plays the opening; the editor plays the level.
-    const pixelData = spawnWithoutEntry(modelToDisk(model));
-    // A level the build refuses cannot be played, and the refusal is a throw
-    // from inside the level's constructor below - after the camera and the
-    // recording have been handed over to a test that never starts. So it is
-    // asked first, through the same builder, and said where the title says it.
+    const asked = testDataFor(spawn);
+    // The level built ahead (`prebuildTest`) when it is of exactly this data,
+    // or one built now. A level the build refuses cannot be played, and the
+    // refusal is a throw from inside the level's constructor - so the level is
+    // built FIRST, before the camera and the recording are handed over to a
+    // test that would never start, and the refusal said where the title says
+    // it.
+    const ready = prebuilt?.key === testKeyOf(controller, asked) ? prebuilt : null;
+    if (!ready) discardPrebuilt();
+    prebuilt = null;
+    // Asked for again once the editor is idle: this one is about to be played.
+    prebuildAsked = null;
+    prebuildController = controller;
+    const pixelData = ready?.data ?? asked;
+    let level: Level | BallLevel;
     try {
-      buildLevelBodies(new World(), toLevelData(model), () => {});
+      level = ready?.level ?? buildTestLevel(controller, pixelData);
     } catch (err) {
       noteBuildError(err);
       return;
-    }
-    if (spawn) {
-      pixelData.player = { ...pixelData.player, x: spawn.x * M2PX, y: spawn.y * M2PX };
     }
     testShowDebug = false;
     // A test opens as the game does, with the pieces' debug geometry drawn.
@@ -2190,8 +2193,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // mid-test needs no separate handling.
     testCameraCtl.edgeClamp = edgeClampOn;
     testCameraCtl.snap();
+    testLevel = level;
     if (controller === "ball") {
-      testLevel = new BallLevel(pixelData);
       ballInput ??= new BallInputSource(
         canvas,
         camera,
@@ -2203,7 +2206,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         () => mode === "test",
       );
     } else {
-      testLevel = new Level(pixelData);
       liveInput ??= new LiveInputSource(
         canvas,
         camera,
@@ -2217,7 +2219,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // renderer reads. A grapple test keeps its avatar and rope on the 2D canvas
     // (the Player slice is 2D-only), which is what `overlayOnly` leaves there.
     testLevel3d = testLevel;
-    if (sceneShown()) scene3d!.setLevel(testLevel);
+    // The editor's own scene is PARKED for the length of the test rather than
+    // thrown away (see render3d/levelScene.ts): built still, its materials
+    // keep the programs the test's scene - the same level, built again - is
+    // drawn with, and `stopTest` puts it straight back up. Thrown away, each
+    // way cost a rebuild and a relink of the same programs: on `ball`, a
+    // ~1 s frame at the start of a test and ~0.9 s over three on the way back.
+    if (sceneShown()) editScene = scene3d!.show(ready?.scene ?? scene3d!.prepare(level));
+    else if (ready?.scene) scene3d?.retire(ready.scene);
     // A test is the player's camera and the player's picture, from whichever
     // workspace it started in: the Visuals pose and guides are set aside here
     // and taken up again when the test stops, so Esc returns to the view it
@@ -2285,12 +2294,20 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     mode = "edit";
     testLevel = null;
     testLevel3d = null;
-    // The edit-mode scene was replaced by the test level's, so it is rebuilt on
-    // the next frame rather than left showing the level that just stopped -
-    // whatever the key says, since the key is of the model and the model has
-    // not changed.
-    sceneRev = -1;
-    sceneKey = null;
+    // The edit-mode scene, parked by `startTest`, goes back up and the test's
+    // goes. The model cannot change during a test, so the parked scene is of
+    // the model as it stands. With none parked (a test started without the
+    // 3D view, or before the editor's scene ever built) the edit-mode scene is
+    // rebuilt on the next frame rather than left showing the level that just
+    // stopped - whatever the key says, since the key is of the model and the
+    // model has not changed.
+    if (scene3d && editScene) {
+      scene3d.retire(scene3d.show(editScene));
+      editScene = null;
+    } else {
+      sceneRev = -1;
+      sceneKey = null;
+    }
     // Authoring always sees the debug geometry it is configuring, whatever the
     // test's G left it at.
     scene3d?.setDebugShown(true);
@@ -2312,6 +2329,115 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // and the Visuals workspace's view, if the test was started from there.
     visuals?.resume();
     syncGizmo();
+  }
+
+  // The data a test from `spawn` (world metres; the level's own spawn when
+  // absent) is built from.
+  //
+  // A ROLLING ENTRY IS NOT PLAYED HERE (`spawnWithoutEntry`, the same drop a
+  // checkpoint start makes - see `SpawnData.roll`). A test is a spot-check of
+  // the thing being edited - press it, see whether the ledge is reachable,
+  // press Esc, move the ledge - and an entry is the opening of a RUN: two
+  // metres of rolling in and a second of hands off, between every edit and the
+  // thing it is being checked against. The game plays the opening; the editor
+  // plays the level.
+  //
+  // The spawn override is baked in here rather than into the model, so a
+  // spot-check never edits the level, and a reset (and the exported bundle)
+  // respawns at the same place.
+  function testDataFor(spawn: Vec2 | undefined): LevelData {
+    const pixelData = spawnWithoutEntry(modelToDisk(model));
+    if (spawn) {
+      pixelData.player = { ...pixelData.player, x: spawn.x * M2PX, y: spawn.y * M2PX };
+    }
+    return pixelData;
+  }
+
+  function testKeyOf(controller: "grapple" | "ball", data: LevelData): string {
+    return `${controller}|${JSON.stringify(data)}`;
+  }
+
+  function buildTestLevel(controller: "grapple" | "ball", data: LevelData): Level | BallLevel {
+    return controller === "ball" ? new BallLevel(data) : new Level(data);
+  }
+
+  // ▶ TEST, BUILT AHEAD. A test's level is a real build of the level - its
+  // chains and vines settled to rest, ~80 ms on `ball` (`settleVinesAtBuild`)
+  // - and its 3D scene ~30 ms more, which paid at the press was one frame of
+  // that length between the click and the test. So both are built before the
+  // press, at the two moments a long frame is least seen:
+  //
+  // - when the pointer comes onto a ▶ Test button, the click being on its
+  //   way. The system cursor moves on regardless, and the button's own hover
+  //   is all the page has to show for it.
+  // - when the editor has been idle for `PREBUILD_QUIET_MS` - no edit, no
+  //   press, no key, no wheel, and so no drag or orbit - the level and, on a
+  //   later frame, its scene (two shorter frames rather than one of both).
+  //   Long enough that an author mid-edit is not met by it after every
+  //   change: at 0.6 s it landed after every pause in a run of nudges.
+  //
+  // The press then only puts it up. What is built ahead is exactly what the
+  // press would build: it is kept under the data itself, compared at the
+  // press, so an edit that moved no revision is a build at the press rather
+  // than a test of a stale level. `B` (from the cursor) has nowhere to be built
+  // ahead for, and builds at the press as before.
+  const PREBUILD_QUIET_MS = 1500;
+  let prebuilt: { key: string; data: LevelData; level: Level | BallLevel; scene: LevelScene | null } | null = null;
+  // What the last prebuild was of - the revision, the controller, the start,
+  // whether a scene was wanted - so each is built once rather than every idle
+  // frame. Cleared by a test, whose level is played and so has to be built
+  // again.
+  let prebuildAsked: string | null = null;
+  // The controller the next test is guessed to be: the last one tested, and
+  // the ball controller before any.
+  let prebuildController: "grapple" | "ball" = "ball";
+  // When the editor last stopped being still: an edit, a press, a wheel.
+  let stillSince = 0;
+  let stillRev = -1;
+  let buttonsHeld = false;
+  window.addEventListener("pointerdown", () => {
+    buttonsHeld = true;
+    stillSince = performance.now();
+  }, true);
+  for (const type of ["pointerup", "pointercancel"] as const) {
+    window.addEventListener(type, (e) => {
+      buttonsHeld = e.buttons !== 0;
+      stillSince = performance.now();
+    }, true);
+  }
+  for (const type of ["wheel", "keydown"] as const) {
+    window.addEventListener(type, () => (stillSince = performance.now()), { capture: true, passive: true });
+  }
+
+  function discardPrebuilt(): void {
+    if (prebuilt?.scene) scene3d?.retire(prebuilt.scene);
+    prebuilt = null;
+  }
+
+  // Once an edit frame, while editing; and `eager` when the pointer comes onto
+  // a ▶ Test button, which builds whatever is not built yet there and then.
+  function prebuildTest(now: number, eager = false): void {
+    if (mode !== "edit") return;
+    if (modelRev !== stillRev) {
+      stillRev = modelRev;
+      stillSince = now;
+    }
+    if (!eager && (drag || buttonsHeld || now - stillSince < PREBUILD_QUIET_MS)) return;
+    const spawn = testSpawn();
+    const wantScene = sceneShown() && scene3d !== null;
+    const asked = `${modelRev}|${prebuildController}|${spawn ? `${spawn.x},${spawn.y}` : "spawn"}|${wantScene}`;
+    if (asked !== prebuildAsked) {
+      prebuildAsked = asked;
+      discardPrebuilt();
+      const data = testDataFor(spawn);
+      try {
+        prebuilt = { key: testKeyOf(prebuildController, data), data, level: buildTestLevel(prebuildController, data), scene: null };
+      } catch {
+        // Refused: the press will say so, where the title does.
+      }
+      if (!eager) return;
+    }
+    if (prebuilt && wantScene && !prebuilt.scene) prebuilt.scene = scene3d!.prepare(prebuilt.level);
   }
 
   // --- DOM ------------------------------------------------------------------
@@ -2677,10 +2803,15 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   const btnTestBall = button("▶ Test Ball", () => startTest("ball", testSpawn()));
   btnTestBall.title =
     "Test from the level's spawn, or from the selected checkpoint (B tests from the cursor)";
-  testRow.append(
-    button("▶ Test Grapple", () => startTest("grapple", testSpawn())),
-    btnTestBall,
-  );
+  const btnTestGrapple = button("▶ Test Grapple", () => startTest("grapple", testSpawn()));
+  // The click is on its way: build its level now (see `prebuildTest`).
+  for (const [btn, controller] of [[btnTestGrapple, "grapple"], [btnTestBall, "ball"]] as const) {
+    btn.addEventListener("pointerenter", () => {
+      prebuildController = controller;
+      prebuildTest(performance.now(), true);
+    });
+  }
+  testRow.append(btnTestGrapple, btnTestBall);
   const snapChk = checkbox("snap 5cm", snapOn, (v) => {
     snapOn = v;
     writeViewSetting("snap", v);
@@ -11442,6 +11573,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         );
       }
     } else {
+      // The next ▶ Test's level, while nothing is moving.
+      prebuildTest(now);
       // The tree tracks the model, and a drag changes the model every frame
       // without touching the inspector - so it is refreshed here rather than
       // only on selection. It is a revision check and a class toggle per row
@@ -11721,7 +11854,21 @@ function injectStyles(): void {
     pointer-events: none; }
   .ed-picker-bar { position: absolute; top: -2px; bottom: -2px; width: 4px; margin-left: -3px;
     border: 1px solid #fff; box-shadow: 0 0 0 1px #000; pointer-events: none; }
-  .ed-picker-hex { width: auto; }
+  /* The hex field takes what the square leaves beside the eyedropper: no width
+     of its own, or its default size would widen the picker past the square. */
+  .ed-picker-row { display: flex; gap: 6px; }
+  .ed-picker-hex { width: 0; flex: 1; min-width: 0; }
+  .ed-picker-pick { display: inline-flex; align-items: center; justify-content: center;
+    padding: 0 6px; cursor: pointer; }
+  /* The eyedropper (eyedropper.ts): a cover over the whole page while picking,
+     above the picker, and the swatch it shows beside the pointer. */
+  .ed-dropper { position: fixed; inset: 0; z-index: 1001; cursor: crosshair; }
+  .ed-dropper-chip { position: fixed; display: flex; gap: 6px; align-items: center;
+    padding: 3px 6px; background: #1f2430; border: 1px solid #3c445c; border-radius: 2px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.5); font-family: monospace; font-size: 13px;
+    color: #cbccc6; pointer-events: none; white-space: nowrap; }
+  .ed-dropper-chip[hidden] { display: none; }
+  .ed-dropper-swatch { width: 14px; height: 14px; border: 1px solid #3c445c; }
   .ed-inline, .ed-check { display: inline-flex; gap: 4px; align-items: center; color: #9aa0ac; }
   .ed-layers { display: flex; flex-direction: column; gap: 4px; align-self: flex-start; }
   .ed-layer-label { color: #9aa0ac; }

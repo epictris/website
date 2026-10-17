@@ -70,6 +70,10 @@ export function dressScene(loaded: THREE.Object3D, targets: readonly DressTarget
   scenery.userData["pickTag"] = SCENERY_TAG;
   const clone = loaded.clone(true);
   clone.updateMatrixWorld(true);
+  // Each of the clone's top-level nodes and the file's node it is a copy of,
+  // which is what a scenery node's shadow verdict is kept under (below).
+  const originalOf = new Map<THREE.Object3D, THREE.Object3D>();
+  clone.children.forEach((child, i) => originalOf.set(child, loaded.children[i]!));
 
   const byNode = new Map<string, DressTarget>();
   for (const t of targets) {
@@ -84,11 +88,17 @@ export function dressScene(loaded: THREE.Object3D, targets: readonly DressTarget
   // after its ancestor, and one whose ancestor was taken is skipped.
   const bound = new Map<string, THREE.Object3D>();
   const taken: THREE.Object3D[] = [];
+  // The top-level nodes a bound node is taken out of, whose shape on this
+  // mount is not the file's.
+  const cut = new Set<THREE.Object3D>();
   clone.traverse((o) => {
     if (o === clone || !byNode.has(o.name) || bound.has(o.name)) return;
     for (let p = o.parent; p; p = p.parent) if (taken.includes(p)) return;
     taken.push(o);
     bound.set(o.name, o);
+    let top = o;
+    while (top.parent && top.parent !== clone) top = top.parent;
+    if (top !== o) cut.add(top);
   });
 
   const rest = new THREE.Matrix4();
@@ -120,7 +130,17 @@ export function dressScene(loaded: THREE.Object3D, targets: readonly DressTarget
     child.removeFromParent();
     child.updateMatrixWorld(true);
     scenery.add(child);
-    noShadowBehindPlane(child);
+    const original = originalOf.get(child);
+    if (!original || cut.has(child)) {
+      noShadowBehindPlane(child);
+      continue;
+    }
+    let casts = sceneryCasts.get(original);
+    if (casts === undefined) {
+      casts = castsShadow(child);
+      sceneryCasts.set(original, casts);
+    }
+    if (!casts) castNoShadow(child);
   }
   clone.updateMatrixWorld(true);
 
@@ -172,11 +192,22 @@ export function castsShadow(node: THREE.Object3D): boolean {
 // front of it reads as geometry the player ought to be able to touch - and on
 // or in front of it, it is in the scene and casts like anything else.
 function noShadowBehindPlane(node: THREE.Object3D): void {
-  if (castsShadow(node)) return;
+  if (!castsShadow(node)) castNoShadow(node);
+}
+
+function castNoShadow(node: THREE.Object3D): void {
   node.traverse((o) => {
     if ((o as THREE.Mesh).isMesh) (o as THREE.Mesh).castShadow = false;
   });
 }
+
+// A scenery node's verdict, kept under the file's own node it was cloned from.
+// The test reads every vertex of the node (an exact box), ~35 ms over `river`'s
+// scenery, and a mount - every editor rebuild, every ▶ Test, every reset -
+// clones the same nodes to the same places: scenery stands at the identity, so
+// its box is the file's and so is the answer. Not for a bound node, which is
+// placed on its body, nor for scenery a bound node was taken out of.
+const sceneryCasts = new WeakMap<THREE.Object3D, boolean>();
 
 // One decoded file per scene, shared by every mount of it on the page. A
 // failure stays cached too: a scene that is not there is asked for once, not
@@ -264,12 +295,21 @@ export function loadSceneFile(scene: string): Promise<THREE.Object3D | null> {
       .catch((err: unknown) => {
         console.warn(`[render3d] scene "${scene}" failed to load from ${file}:`, err);
         return null;
+      })
+      .then((loaded) => {
+        decoded.set(file, loaded);
+        return loaded;
       }),
     `scene "${scene}"`,
   );
   files.set(file, p);
   return p;
 }
+
+// What each file's promise above settled to, once it has: a mount of a file
+// already decoded is made on the spot rather than a task later (see
+// `SceneDressing`).
+const decoded = new Map<string, THREE.Object3D | null>();
 
 // A mounted scene: asks for the file, places it when it lands, and takes it
 // all down again on `dispose`. The bound nodes live under the bodies' roots,
@@ -285,30 +325,46 @@ export class SceneDressing {
 
   // `landed` is handed the scenery once it is mounted, for what the scene
   // itself still draws over it (the pool's water, `Scene3D.adoptSceneryWater`).
+  //
+  // A file already decoded is mounted HERE, inside the constructor, rather
+  // than when its promise next calls back. The editor rebuilds its scene
+  // inside a frame, and a mount a task later left that frame drawing the
+  // level with none of its scenery - a one-frame flash of the bare collision
+  // on every edit - and the level it replaced already disposed by the time the
+  // scenery's water arrived to take its programs over (`Scene3D.retire`).
   constructor(scene: string, targets: readonly DressTarget[], landed?: (scenery: THREE.Group) => void) {
     this.root.name = `scene:${scene}`;
-    void loadSceneFile(scene).then((loaded) => {
-      if (!loaded || this.disposed) return;
-      const dressed = dressScene(loaded, targets);
-      this.bound = dressed.bound;
-      this.unbound = dressed.unbound;
-      this.root.add(dressed.scenery);
-      this.setShown(this.shown);
-      landed?.(dressed.scenery);
-      // Where each bound node landed, in the world, so a headless grab's log
-      // says whether the dressing is on its body (see docs/blender-scenes.md).
-      const placed = [...dressed.bound].map(([name, node]) => {
-        node.updateWorldMatrix(true, false);
-        const p = new THREE.Vector3().setFromMatrixPosition(node.matrixWorld);
-        return `${name} @ ${p.x.toFixed(2)},${p.y.toFixed(2)},${p.z.toFixed(2)}`;
-      });
-      console.log(
-        `[render3d] scene "${scene}": ${dressed.bound.size} on bodies (${placed.join("; ") || "-"}), ${dressed.scenery.children.length} scenery`,
-      );
-      if (dressed.unbound.length) {
-        console.warn(`[render3d] scene "${scene}": no object named ${dressed.unbound.join(", ")}`);
-      }
+    const file = sceneFile(scene);
+    if (decoded.has(file)) this.mount(scene, decoded.get(file)!, targets, landed);
+    else void loadSceneFile(scene).then((loaded) => this.mount(scene, loaded, targets, landed));
+  }
+
+  private mount(
+    scene: string,
+    loaded: THREE.Object3D | null,
+    targets: readonly DressTarget[],
+    landed: ((scenery: THREE.Group) => void) | undefined,
+  ): void {
+    if (!loaded || this.disposed) return;
+    const dressed = dressScene(loaded, targets);
+    this.bound = dressed.bound;
+    this.unbound = dressed.unbound;
+    this.root.add(dressed.scenery);
+    this.setShown(this.shown);
+    landed?.(dressed.scenery);
+    // Where each bound node landed, in the world, so a headless grab's log
+    // says whether the dressing is on its body (see docs/blender-scenes.md).
+    const placed = [...dressed.bound].map(([name, node]) => {
+      node.updateWorldMatrix(true, false);
+      const p = new THREE.Vector3().setFromMatrixPosition(node.matrixWorld);
+      return `${name} @ ${p.x.toFixed(2)},${p.y.toFixed(2)},${p.z.toFixed(2)}`;
     });
+    console.log(
+      `[render3d] scene "${scene}": ${dressed.bound.size} on bodies (${placed.join("; ") || "-"}), ${dressed.scenery.children.length} scenery`,
+    );
+    if (dressed.unbound.length) {
+      console.warn(`[render3d] scene "${scene}": no object named ${dressed.unbound.join(", ")}`);
+    }
   }
 
   // Draw the scene or hide all of it: the scenery under `root`, and the bound

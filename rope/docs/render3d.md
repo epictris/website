@@ -135,7 +135,9 @@ Since 2026-09-29 the level format has no geometry objects: a collision object is
 - **Water** (`render3d/water.ts` for a current and its fall, `stillWater.ts` for a pool, both after Tris's studies and sharing `waterLook.ts`; see [water](water.md)), whose surface the current runs across; its slab is the body's `waterZ`/`waterDepth` and its tint the body's `color`.
 - **A conveyor's band** (see [Conveyor belts](#conveyor-belts)), built from the belt collision object itself.
 - **The body's lights** (see [lighting-and-surfaces](lighting-and-surfaces.md)).
-- **Debug geometry**: every collision piece whose `debug.on` is set (`CollisionObjectData.debug`, the Debug section of a shape's panel in the editor), extruded through its `debug.depth` and filled flat (`texture: "color"`) with its `debug.color` at its `debug.opacity`.
+- **Debug geometry**: every collision piece whose `debug.on` is set (`CollisionObjectData.debug`, the Debug section of a shape's panel in the editor), extruded through its `debug.depth` and filled with its `debug.color` at its `debug.opacity`.
+  The colour is exact on screen (`debugMaterialOf`, 2026-10-17, Tris: "regardless of lighting"): an unlit `MeshBasicMaterial`, not fogged, not tone mapped and receiving no shadow, so `#555555` on the piece is `#555555` in the frame, and its faces are one flat colour with no shading between them; an opaque piece still casts its shadow.
+  Until then it was the lit `color` surface, which the sun, the environment, the fog and ACES all moved off the picked colour.
   Every setting falls back to what the piece already says - the depth to its `thickness` (default `DEFAULT_THICKNESS`), the colour to the body's `color`, the opacity to 1 - so `{ on: true }` is the piece drawn as itself.
   It is per piece and opt-in, in every level, scene or not, and for a volume (a killzone, a force area) as for a wall; a belt has none, since it draws its own band.
   It is an instrument rather than a look: what a level with no scene is blocked out in (the test levels), and what a piece a dressed level has nothing over is seen by.
@@ -214,10 +216,23 @@ Both run at the belt's `speed`; `Scene3DLevel.frame` is how the clock reaches th
 Cleat placement allocates nothing (`beltFrameAt` is `beltPointAt`/`beltTangentAt` written into a scratch record, and `cli render3d` holds the two to agree).
 `cli render3d`'s `belt:` cases hold the ring's walls, caps and normals against the loop, `u` against arc length with a whole number of repeats, and the scroll's rate and sign; `cli shot --3d --frames` on `TEST_BELT` is the evidence for how it looks.
 
+## A level's scene: built, shown, retired
+
+Everything one level draws - its bodies' visuals, its Blender scene, its lights, its vines, its ball - is a `LevelScene` (`render3d/levelScene.ts`), one group under the scene; what the page keeps across levels (the environment, the chains, the shards, the passes, the editor's guides) stays on `Scene3D`.
+`setLevel(level)` is `prepare` (build it, not drawn), `show` (put it up, and hand back the one that was up, still built) and `retire` (dispose that one later).
+The editor uses the three apart: a ▶ Test **parks** the editor's own scene for the length of the test and puts it back on Esc, and the test's own scene is prepared ahead of the press (see [**Testing a level**](editor.md#testing-a-level)).
+
+A retired level is not disposed on the spot, because **three frees a compiled program with the last material using it**, and the level replacing it is very often the same level built again - a reset, an editor rebuild, the editor's preview and its test.
+Disposed first, every program it shared with its successor was linked a second time on the next frame: on `ball` in the editor that was nine programs (the braided vines' stem, depth and distance materials, the pool's water and the scenery's water), ~800 ms of `getProgramInfoLog` at the start of a test and again on the way back, and ~150 ms on every edit (2026-10-17, measured on the RTX 4070).
+So a retired level waits for the end of the next frame drawn, when every pass of that frame has given each program it used a user in the new level; `disposeRetired` then compiles the whole scene against the frame target (cheap when every program is found, and it gives a user to what the frame did not draw) and only then disposes.
+The ball's glow light is built with every level, a ball in it or not, so the number of lights - which every lit program is keyed by - is the same in the editor's preview and in a grapple test of the same level.
+
 ## Blender scenes
 
 A level naming a `scene` is dressed by one GLB exported from `assets-src/scenes/<scene>.blend` (see [blender-scenes](blender-scenes.md)).
-`Scene3D.setLevel` hands `SceneDressing` (`render3d/sceneDressing.ts`) every authored body's name, visual root, rest pose and whether it collides; when the file lands, `dressScene` hangs each node named like a body under that body's root at Blender's pose minus the rest pose, so it is drawn where Blender put it and carried by the body, and adds the rest to the scene as scenery at the identity.
+`Scene3D.prepare` hands `SceneDressing` (`render3d/sceneDressing.ts`) every authored body's name, visual root, rest pose and whether it collides; when the file lands, `dressScene` hangs each node named like a body under that body's root at Blender's pose minus the rest pose, so it is drawn where Blender put it and carried by the body, and adds the rest to the scene as scenery at the identity.
+A file already decoded is mounted inside the `SceneDressing` constructor rather than when its promise next calls back: the editor rebuilds inside a frame, and a mount a task later drew that frame with no scenery at all, a one-frame flash of the bare collision on every edit.
+Whether a scenery node casts (below) reads every vertex of it, ~35 ms over `river`, so the answer is kept per file node (`sceneryCasts`); a bound node, or scenery a bound node was taken out of, is asked every mount.
 Bound nodes carry the body's first object as their pick tag; scenery carries none.
 A bound node is handed to its body (`BodyVisual.adoptDressing`), which gives a body carrying a waking light its own copies of the node's emissive materials for the light to drive.
 A node on a body that collides always casts a shadow; any other node casts only if it is not wholly behind the plane.

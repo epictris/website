@@ -89,7 +89,7 @@ class GAME_OT_guide_from_outline(bpy.types.Operator):
             self.report({"ERROR"}, "No collision outlines: run `just scene-guide <level>` and reopen the file")
             return {"CANCELLED"}
         if not outlines.outlines_shown(context.scene):
-            self.report({"ERROR"}, "The collision outlines are hidden: Show Collision Outlines first")
+            self.report({"ERROR"}, "The collision outlines are hidden: raise their Opacity first")
             return {"CANCELLED"}
         self._made, self._hover = [], ""
         self._draw = bpy.types.SpaceView3D.draw_handler_add(outlines.draw_hover, (self,), "WINDOW", "POST_PIXEL")

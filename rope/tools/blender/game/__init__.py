@@ -34,7 +34,9 @@ RENAMED_DATA = (("node_groups", "Formations game look", look.TREE),)
 def on_load(_):
     """Bring a file saved by the Formations add-on's game camera to these
     names, as it was: nothing is re-applied. A file saved while Edit Guides
-    ran (gone since 2026-10-16) has that session ended, as Done ended it."""
+    ran (gone since 2026-10-16) has that session ended, as Done ended it.
+    The collision outlines take the scene's opacity; a file saved before it
+    (2026-10-17) with them hidden by Show Collision Outlines starts at 0."""
     for scene in bpy.data.scenes:
         if scene.library is not None:
             continue
@@ -52,6 +54,12 @@ def on_load(_):
         if found is not None and found.library is None:
             found.name = new
     legacy.end_edit_sessions()
+    scene = bpy.context.scene
+    if scene is not None and scene.library is None and outlines.collision_outlines(scene):
+        if "game_outline_opacity" not in scene.bl_system_properties_get(do_create=True) \
+                and not outlines.outlines_shown(scene):
+            scene.game_outline_opacity = 0
+        outlines.apply_opacity(scene)
 
 
 def register():
@@ -72,26 +80,29 @@ def register():
         name="Lighting", default=False, update=look.toggled,
         description="The game's light at rest: its sun, the level's always-on lights, its sky and fill as the "
                     "world, and its tone mapping (ACES). The scene's own lights are hidden until it is off")
-    # Nothing stored: it reads and sets the outlines' own visibility, so it
-    # never disagrees with the outliner's eyes.
-    bpy.types.Scene.game_show_outlines = BoolProperty(
-        name="Show Collision Outlines",
-        get=outlines.outlines_shown, set=outlines.show_outlines,
-        description="Show the level's collision outlines and their origins in the viewport (this view layer)")
+    bpy.types.Scene.game_outline_opacity = FloatProperty(
+        name="Opacity", default=outlines.DEFAULT_OPACITY, min=0, max=1, subtype="FACTOR",
+        update=lambda self, _: outlines.apply_opacity(self),
+        description="How opaque the level's solid collision outlines are filled in the viewport; "
+                    "at 0 every outline and its origin is hidden")
     for c in CLASSES:
         bpy.utils.register_class(c)
     if on_load not in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.append(on_load)
+    if outlines.keep_fills not in bpy.app.handlers.depsgraph_update_post:
+        bpy.app.handlers.depsgraph_update_post.append(outlines.keep_fills)
     # The file open when the add-on is enabled had no load to hear.
     bpy.app.timers.register(lambda: on_load(None), first_interval=0)
 
 
 def unregister():
+    if outlines.keep_fills in bpy.app.handlers.depsgraph_update_post:
+        bpy.app.handlers.depsgraph_update_post.remove(outlines.keep_fills)
     if on_load in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.remove(on_load)
     for c in reversed(CLASSES):
         bpy.utils.unregister_class(c)
-    del bpy.types.Scene.game_show_outlines
+    del bpy.types.Scene.game_outline_opacity
     del bpy.types.Scene.game_lighting
     del bpy.types.Scene.game_dof
     del bpy.types.Scene.game_fog

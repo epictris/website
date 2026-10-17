@@ -110,7 +110,9 @@ export class VineLayer {
   private readonly foldBasis = new THREE.Matrix4();
   private readonly curving = new THREE.Vector3();
 
-  constructor(private readonly scene: THREE.Scene) {
+  // `scene` is what the vines are drawn under: the level's own group
+  // (`LevelScene.root`), so they are put up and taken down with it.
+  constructor(private readonly scene: THREE.Object3D) {
     this.starberries = new StarberryLayer(scene);
     // A unit-length capsule: the per-instance y scale is then the segment's own
     // length, and nothing has to rebuild geometry as a vine bends.
