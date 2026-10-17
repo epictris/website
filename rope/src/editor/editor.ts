@@ -963,6 +963,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // shaders compile the first time a body of it comes into view. The sim's
   // water is untouched. A view setting like `reflectionsOn`.
   let waterShown = viewSettings.water;
+  // Whether the roots are grown and drawn, here and in ▶ Test: an edit to a
+  // branched root regrows its mesh, which off skips while one is drawn and
+  // reshaped. The sim's roots are untouched. A view setting like `waterShown`.
+  let rootsShown = viewSettings.roots;
   // Whether the level's Blender scene is drawn, here and in ▶ Test: off, the
   // collision and what the game draws itself stand alone. A view setting like
   // `reflectionsOn`.
@@ -975,6 +979,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     scene3d.setPoolMirror(reflectionsOn);
     scene3d.setShadows(shadowsOn);
     scene3d.setWaterShown(waterShown);
+    scene3d.setRootsShown(rootsShown);
     scene3d.setSceneShown(blenderSceneShown);
   }
   const gridStep = 0.05; // snap spacing: fixed 5 cm (half the backdrop's 10 cm minor grid)
@@ -2864,6 +2869,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     waterChk.title =
       "Draw the water - pools, currents, falls and the scene's water continuing a pool - here and in ▶ Test. Untick to skip the shader compiles it costs the first time a body of it comes into view (the editor runs no prewarm). Only the picture: the ball still floats and drags in the water. An editor setting: the game always draws it.";
     testRow.append(waterChk);
+    const rootsChk = checkbox("roots", rootsShown, (v) => {
+      rootsShown = v;
+      scene3d.setRootsShown(v);
+      writeViewSetting("roots", v);
+    });
+    rootsChk.title =
+      "Draw the roots, here and in ▶ Test. Untick to draw and reshape a root without regrowing its mesh on every edit (a branched root takes a few hundred ms each time); its outline still shows where it is. Only the picture: the hook still bites the roots. An editor setting: the game always draws them.";
+    testRow.append(rootsChk);
     const sceneChk = checkbox("scene", blenderSceneShown, (v) => {
       blenderSceneShown = v;
       scene3d.setSceneShown(v);

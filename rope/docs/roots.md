@@ -96,6 +96,7 @@ They drew 142k triangles, the fused ones unindexed (77k vertices for a 26k-trian
 - Meshes arrive **late** when they are not to hand (the bake still decoding, the simplifier's WebAssembly still starting): the body draws no roots until then, as a dressed body draws no dressing until its scene lands, and both are tracked so a frame grab waits for them.
 
 What this leaves: editing a branched root in the editor still regrows that one body per edit (~250 ms on `ball.json`'s), which would want a worker to make interactive.
+Until then the editor's **roots** box ([editor](editor.md)) turns root meshes off altogether: hidden, `BodyVisual.mountRoots` acquires nothing, so an edit grows nothing, and ticking it again grows each body as it now is (`root-hidden`).
 
 ## The editor: `+ Root`
 
@@ -170,6 +171,7 @@ The 2 Hz default is a guess until it is played, and nothing pins it.
 - `root-key`: the key ignores colour and bark, and changes with a moved node, a moved body, and a branch made a trunk.
 - `root-bake`: a bake encoded and read back through three's loader holds the body under its key with every branch, the same triangles, positions within a twentieth of a millimetre, normals within a degree, exact bark coordinates, and the bark's own attributes under the names its shader reads.
 - `root-restyle`: a root's mesh is placed where its curve is; the editor's in-place rebuild keeps the geometry on a recolour (only the material changes), grows new geometry on a reshape, and gets the first back from the cache when the shape returns.
+- `root-hidden`: the editor's **roots** box off draws no root, through a reshape too, and ticked again draws the shape as last reshaped.
 - `cli assets` holds every registered level's bake to its current roots.
 - `root-cuff`: the ball, driven by `ball-root-swing.json`'s own inputs to frame 200, has bitten the root; the chain layer draws the cuff at the root's drawn depth and the chain rising from beside it to the ball's plane; the control (every body on the plane) leaves both on the plane.
 

@@ -231,6 +231,9 @@ export class Scene3D {
   // Whether the water is drawn (`setWaterShown`), applied to every visual as
   // it is built.
   private waterShown = true;
+  // Whether the roots are grown and drawn (`setRootsShown`), handed to every
+  // visual as it is built.
+  private rootsShown = true;
   // Whether the level's Blender scene is drawn (`setSceneShown`), applied to
   // the dressing as it is mounted.
   private sceneShown = true;
@@ -407,6 +410,15 @@ export class Scene3D {
     if (this.current) this.applyShown(this.current);
   }
 
+  // Off, no root is grown or drawn: the editor's "roots" toggle. A branched
+  // root is regrown on every edit of it (~250 ms on ball.json's, see
+  // docs/roots.md), which this skips while one is being drawn and reshaped.
+  // The sim's roots are untouched: the hook still bites them.
+  setRootsShown(on: boolean): void {
+    this.rootsShown = on;
+    if (this.current) this.applyShown(this.current);
+  }
+
   // Off, nothing from the level's Blender scene is drawn - the scenery and the
   // nodes dressing the bodies alike - so the collision and what the game draws
   // itself (water, belts, chains, the ball, lights) stand alone: the editor's
@@ -461,7 +473,7 @@ export class Scene3D {
     const targets: DressTarget[] = [];
     const sceneName = level.visualSource.data.scene;
     level.visualSource.built.bodies.forEach((built) => {
-      const visual = new BodyVisual(built.body, built, slot.lights, this.allDebugShown);
+      const visual = new BodyVisual(built.body, built, slot.lights, this.allDebugShown, this.rootsShown);
       slot.root.add(visual.root);
       if (built.body) slot.bodies.set(built.body, visual);
       else slot.standing.push(visual);
@@ -580,6 +592,7 @@ export class Scene3D {
       for (const v of visuals) {
         v.setDebugShown(this.debugShown);
         v.setWaterShown(this.waterShown);
+        v.setRootsShown(this.rootsShown);
         const scenery = v.stillSurface?.scenery ?? [];
         for (const mesh of scenery) mesh.visible = this.waterShown;
       }

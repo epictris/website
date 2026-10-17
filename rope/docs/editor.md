@@ -351,15 +351,21 @@ The water's shaders are compiled the first time a body of it comes into view; in
 Only the picture goes: the ball still floats and drags in the water.
 It is the renderer's (`Scene3D.setWaterShown` → `BodyVisual.setWaterShown`), never written to the level.
 
+The **roots** box (ticked by default) hides the roots, and more than hides them: no root mesh is grown at all while it is off.
+An edit to a branched root regrows that body's mesh (~250 ms on `ball.json`'s, see [**roots**](roots.md#simplified-and-baked-roots)), so untick it to draw and reshape a root without that stall on every edit; the overlay outline still shows where each root is.
+Ticking it again grows each root as it now is, and a root nothing changed comes back from the cache.
+Only the picture goes: the hook still bites the roots.
+It is the renderer's (`Scene3D.setRootsShown` → `BodyVisual.setRootsShown`), never written to the level.
+
 The **scene** box (ticked by default) hides the level's Blender scene: the scenery and the nodes dressing the bodies alike, so the collision and what the game draws itself (water, belts, chains, lights, the ball) stand alone, in the editor's view and in ▶ Test.
 It is the renderer's (`Scene3D.setSceneShown` → `SceneDressing.setShown`), held for a file that has not landed yet, and never written to the level.
 Hidden scenery is not picked and not dropped onto: `Scene3D.hitsAt` skips any hit whose object or an ancestor is invisible, because three's raycaster tests hidden objects too.
 
-The toolbar's view boxes - **snap**, **edge clamp**, **all debug**, **reflections**, **shadows**, **water** and **scene** - are remembered by the browser (`localStorage` key `rope.editor.view`, `editor/prefs.ts`), so the editor opens as it was last left; each box writes itself back when it changes.
+The toolbar's view boxes - **snap**, **edge clamp**, **all debug**, **reflections**, **shadows**, **water**, **roots** and **scene** - are remembered by the browser (`localStorage` key `rope.editor.view`, `editor/prefs.ts`), so the editor opens as it was last left; each box writes itself back when it changes.
 So is the level last open (`rope.editor.level`), which a fresh editor reopens: it is written by Load and Save As, and cleared by New and Delete File, so an editor last left on an unnamed model opens empty.
 The reopen waits for the level list and is skipped for a name no longer on disk (forgotten, without a dialog) and for a model already edited while the list was on its way.
 
-`cli shot --probe --query "reflections=0&shadows=0&water=0"` replays a bundle with the same three switches off, so its log lists what an editor test set up that way still compiles mid-run.
+`cli shot --probe --query "reflections=0&shadows=0&water=0&roots=0"` replays a bundle with the same four switches off, so its log lists what an editor test set up that way still compiles mid-run.
 
 ## Workspaces: Level and Visuals
 

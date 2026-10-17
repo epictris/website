@@ -1,5 +1,5 @@
 // WHAT THIS BROWSER REMEMBERS OF THE EDITOR: the toolbar's view toggles (snap,
-// edge clamp, all debug, reflections, shadows, water and scene) and the level
+// edge clamp, all debug, reflections, shadows, water, roots and scene) and the level
 // last open. They are how the author likes to work rather than anything about
 // a level, so they are kept in `localStorage` and never written into a file.
 //
@@ -15,6 +15,7 @@ export interface EditorViewSettings {
   reflections: boolean;
   shadows: boolean;
   water: boolean;
+  roots: boolean;
   scene: boolean;
 }
 
@@ -27,6 +28,7 @@ const DEFAULTS: EditorViewSettings = {
   reflections: true,
   shadows: true,
   water: true,
+  roots: true,
   scene: true,
 };
 

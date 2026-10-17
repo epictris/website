@@ -713,7 +713,7 @@ function withCanvasStub<T>(make: () => T): T {
 export async function runRootCases(): Promise<RootResult[]> {
   await rootBuildReady;
   return [caseStroke(), caseFold(), caseFormat(), caseHookOnly(), caseSpring(), caseTree(), caseLint(), caseMesh(), caseBark(), caseOrganicFork(), caseCuffDepth(), caseBarkHighlight(),
-    caseSimplify(), caseKey(), await caseBake(), caseRestyle()];
+    caseSimplify(), caseKey(), await caseBake(), caseRestyle(), caseHidden()];
 }
 
 // ---------------------------------------------------------------------------
@@ -758,6 +758,52 @@ function caseRestyle(): RootResult {
   visual.dispose();
   c.check("disposed, nothing is drawn", drawn().length === 0);
   return { name: "root-restyle - the editor's in-place rebuild draws from the shared cache", passed: c.passed(), details: c.details };
+}
+
+// ---------------------------------------------------------------------------
+// hidden - the editor's "roots" toggle: a body built with its roots hidden
+// draws none, an edit while hidden draws none, and showing them grows the
+// shape as last edited, not as built.
+// ---------------------------------------------------------------------------
+function caseHidden(): RootResult {
+  const c = claims();
+  const data = scaleLevelData(rootLevel(), PX);
+  const built = buildLevelBodies(new World(), data, () => {}).bodies[0]!;
+  const visual = new BodyVisual(built.body, built, undefined, false, false);
+  const drawn = (): THREE.Mesh[] => {
+    const out: THREE.Mesh[] = [];
+    visual.root.traverse((o) => {
+      if ((o as THREE.Mesh).isMesh && (o as THREE.Mesh).geometry.getAttribute("rootAge")) out.push(o as THREE.Mesh);
+    });
+    return out;
+  };
+  c.check("built hidden, no root is drawn", drawn().length === 0);
+  const reshaped = structuredClone(built.data);
+  const curve = reshaped.objects.find((o) => isCollisionObject(o) && o.root) as { shape: { verts: { x: number }[] } };
+  curve.shape.verts[1]!.x += 0.2;
+  visual.restyleDebug(reshaped);
+  c.check("reshaped while hidden, still none", drawn().length === 0);
+  visual.setRootsShown(true);
+  const shown = drawn();
+  c.check(`shown, the root is drawn (${shown.length} mesh)`, shown.length === 1);
+  visual.sync(1);
+  visual.root.updateMatrixWorld(true);
+  const reference = new BodyVisual(built.body, { ...built, data: reshaped });
+  reference.sync(1);
+  reference.root.updateMatrixWorld(true);
+  const ref = (() => {
+    let mesh: THREE.Mesh | null = null;
+    reference.root.traverse((o) => {
+      if ((o as THREE.Mesh).isMesh && (o as THREE.Mesh).geometry.getAttribute("rootAge")) mesh = o as THREE.Mesh;
+    });
+    return mesh as THREE.Mesh | null;
+  })();
+  c.check("...as last reshaped (the reshape's geometry)", !!ref && shown[0]?.geometry === ref.geometry);
+  visual.setRootsShown(false);
+  c.check("hidden again, none", drawn().length === 0);
+  reference.dispose();
+  visual.dispose();
+  return { name: "root-hidden - the editor's roots toggle grows nothing while off", passed: c.passed(), details: c.details };
 }
 
 // A two-branch body in metres: a trunk with a branch grown out of it half way.

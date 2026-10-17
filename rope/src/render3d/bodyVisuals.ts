@@ -289,21 +289,26 @@ export class BodyVisual {
   // a branch is drawn and reshaped (`restyleDebug`). Their geometry is the
   // shared cache's (`rootBake.ts`), held under `rootKey` and given back when
   // they go; `rootMount` tells a mount that landed late from a stale one.
+  // `rootData` is what they were last mounted from, which showing them again
+  // (`setRootsShown`) grows them from.
   private readonly rootPieces: THREE.Group[] = [];
   private rootSignature = "";
   private rootKey = "";
   private rootMount = 0;
+  private rootData: LevelBodyData | null = null;
 
   // `body` is what moves and is null for an authored body that built nothing;
   // `built` is the authored side and is null for a body the sim spawned at
   // runtime (a rock, the hook), which has no authored objects and simply
   // extrudes its own shapes. `debugForced` draws every piece's debug geometry,
-  // switched on or not (`setDebugForced`).
+  // switched on or not (`setDebugForced`); `rootsShown` off grows and draws no
+  // roots (`setRootsShown`).
   constructor(
     readonly body: CollisionObject2D | null,
     private readonly built: BuiltBody | null,
     private readonly rig?: LightRig,
     private debugForced = false,
+    private rootsShown = true,
   ) {
     const data = built?.data ?? null;
     this.waking = data?.objects.some((o) => isLightObject(o) && isWaking(o)) ?? false;
@@ -532,9 +537,15 @@ export class BodyVisual {
   // grown, and arrive late when neither is to hand yet (the bake still
   // loading, the simplifier still starting): the body draws no roots until
   // then, as a scene-dressed body draws no dressing until its file lands.
+  //
+  // Hidden (`setRootsShown`), nothing is acquired at all, so an edit to a root
+  // grows nothing: the editor's "roots" toggle is for drawing and reshaping a
+  // branched root without paying its regrow on every edit.
   private mountRoots(data: LevelBodyData, z: number): void {
     this.debugZ = z;
     this.rootSignature = rootSignatureOf(data);
+    this.rootData = data;
+    if (!this.rootsShown) return;
     this.rootKey = rootMeshKey(data);
     const mount = ++this.rootMount;
     if (!this.rootKey) return;
@@ -592,6 +603,18 @@ export class BodyVisual {
     if (!this.debugData) return;
     this.disposeDebug();
     this.mountDebug(this.debugData, this.debugZ);
+  }
+
+  // Grow and draw this body's roots, or drop them (`Scene3D.setRootsShown`):
+  // mounted again, in place, from what they were last mounted from. Hidden
+  // releases the meshes to the cache, so showing them again before anything
+  // changed gets them back rather than growing them.
+  setRootsShown(shown: boolean): void {
+    if (shown === this.rootsShown) return;
+    this.rootsShown = shown;
+    if (!this.rootData) return;
+    this.disposeRoots();
+    this.mountRoots(this.rootData, this.debugZ);
   }
 
   // Show or hide this body's debug geometry (`Scene3D.setDebugShown`). Built
