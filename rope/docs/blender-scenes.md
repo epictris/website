@@ -182,12 +182,21 @@ Another file becomes a source by naming it once: `bun run assets:publish-sources
   A solid formation skips the curved creases and the detail high poly at any depth (`render.SOLID_SKIPS`, since 2026-10-08).
   Until 2026-10-02 the colour was baked into a vertex colour instead, which averaged every grain, stain and edge line finer than the faceted mesh's vertices into a smooth tone; a faceted rock has big flat faces, so nothing of the painted stone survived.
   Roughness, metallic and emission wired to anything else still export as flat values, and the exporter warns about each (`meta.json`'s `warnings`, printed by the recipe); a Bump of strength 0 is no loss and is neither baked nor reported.
+- **Pictures.** An image shown as it is on a plane (what Image as Plane builds) goes out whole since 2026-10-17 (`prepare_pictures`).
+  A material is a picture when one Image Texture feeds both a Principled BSDF's Base Color and its Alpha (lit), or when it is the "shadeless" shape: a Mix Shader of a Transparent BSDF and an Emission of the image's colour at strength 1, mixed by the image's alpha (unlit).
+  An image a tool drew (the moss prints, `generated_by`) is not one.
+  The glTF exporter reads the shadeless shape as a black surface glowing with the image, opaque: the alpha was lost and the river's root-room backdrop drew every cutout as a black box, outlined in the blocks lossy WebP leaves in the colour under a transparent texel.
+  It carries a Transparent BSDF mixed with a colour as `KHR_materials_unlit`, blended by the Mix's factor, so the export takes the Emission out (at strength 1 it changes nothing) and the picture ships unlit with `alphaMode: BLEND`.
+  Each picture's image ships as a copy named `<image> picture` (once per file, however many Blender images load it), with the colour under every fully transparent texel filled from the visible ones (`fill_background`'s pull-push): straight alpha is filtered colour and alpha apart, so a painted cutout, black under its alpha, drew a dark rim wherever a texel at the outline or a mip level averaged that black in.
+  No visible texel and no alpha changes.
+  The encoder keeps it exactly: **lossless AVIF at its own size**, since lossless WebP rewrites the colour under a transparent texel (to black or a prediction) and AVIF codes colour and alpha apart (bg_10, 1143 x 1065: PNG 2.30 MB, lossless WebP 1.20, lossless AVIF 1.27).
+  `scene-export.ts` fails an export where a picture missed that rule, as it does for a baked map.
 - **Lights.** The level's own lights carry glow and beam semantics and a budget (see [lighting-and-surfaces](lighting-and-surfaces.md)); a Blender light is dropped.
   Emissive materials do export, and a waking light in the body they dress drives them (above).
 - **Volumetrics, fog, compositing.** The level's environment block is where the air is authored.
 - **A moving surface.** Water and conveyor bands are the game's to draw (above).
 - **Size.** A scene answers to the store's 100 MB total, not to its 8 MB per-file bar, which is a single prop's (2026-10-04); the export prints its size.
-  The baked maps have their own encoding (`--baked-maps`, which `just scene` always passes; every other map stays lossy WebP at 1k): a baked colour map ships as **AVIF with full-resolution colour (4:4:4) at quality 90**, up to 4k, and since 2026-10-04 a baked normal map the same way (it was lossless WebP; see below).
+  The baked maps have their own encoding (`--baked-maps`, which `just scene` always passes; a picture is lossless at its own size, above, and every other map stays lossy WebP at 1k): a baked colour map ships as **AVIF with full-resolution colour (4:4:4) at quality 90**, up to 4k, and since 2026-10-04 a baked normal map the same way (it was lossless WebP; see below).
   Lossy WebP turned the Terrace's dark, low-contrast 1k bake into 15 KB of blocks and purple-green blotches (it codes colour at half resolution, so even quality 100 kept the blotches); lossless WebP is exact but 1.17 MB at 2k, which would have put the river near 13 MB; AVIF 4:4:4 q90 is 114 KB, 0.77 levels rms off, and keeps the edge lines.
   three's GLTFLoader reads `EXT_texture_avif` itself.
 

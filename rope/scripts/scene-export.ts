@@ -225,6 +225,13 @@ try {
     if (baked && (encoded("colour") !== Number(baked[1]) || encoded("normal") !== Number(baked[2]))) {
       fail(`Blender shipped ${baked[1]} colour and ${baked[2]} normal maps (baked or from its cache) but the optimiser encoded ${encoded("colour")} and ${encoded("normal")} as baked maps; the rest shipped at 1k (an image name the glTF exporter cut short?)`);
     }
+    // And every picture (scene_export.py `prepare_pictures`) as one, by the
+    // same name rule, or it ships lossy at 1k: the blocks it was made to end.
+    const pictures = Number(/ (\d+) pictures, /.exec(run.stdout)?.[1] ?? 0);
+    const lossless = Number(/^\[assets\] (\d+) texture\(s\): picture/m.exec(opt.stdout)?.[1] ?? 0);
+    if (lossless !== pictures) {
+      fail(`Blender shipped ${pictures} pictures but the optimiser encoded ${lossless} as pictures; the rest shipped lossy at 1k (an image name the glTF exporter cut short?)`);
+    }
   }
 
   // The meta: Blender's account, the shipped file's facts, and the binding

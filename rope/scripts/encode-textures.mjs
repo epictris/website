@@ -103,6 +103,16 @@ rules.push({ name: "foliage atlas, 2k", pattern: /foliage-atlas/, targetFormat: 
 // at 2k (Terrace.003 at 5 mm) would ship at 10 mm. Lossy WebP keeps its alpha
 // exact (sharp's `alphaQuality` is 100 by default).
 rules.push({ name: "moss print, 2k", pattern: /\.moss(\.\d+)?$/, targetFormat: "webp", resize: [2048, 2048] });
+// A picture (an image shown as it is on a plane; tools/blender/scene_export.py
+// `prepare_pictures` names it `<image> picture`) ships exactly as painted, at
+// its own size: lossless AVIF. Lossy WebP at 1k drew the river's painted
+// backdrop soft and its outlines in blocks. Lossless WebP keeps every visible
+// texel too, but rewrites the colour under a transparent one (to black or a
+// prediction), which is the colour the export filled from the outline so a
+// mip level never averages black into it; AVIF codes colour and alpha apart
+// and keeps every byte. bg_10 (1143 x 1065): PNG 2.30 MB, lossless WebP 1.20,
+// lossless AVIF 1.27 (2026-10-17).
+rules.push({ name: "picture, lossless AVIF", pattern: / picture$/, targetFormat: "avif", lossless: true, chromaSubsampling: "4:4:4" });
 // A normal map whose detail is subtle codes as a grid of blocks (optimize-asset.ts).
 if (argv.includes("--lossless-normals")) {
   rules.push({ name: "normal map, lossless", slots: /^normalTexture$/, targetFormat: "webp", lossless: true, resize: [STANDARD, STANDARD] });

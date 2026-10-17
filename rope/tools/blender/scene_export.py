@@ -1225,6 +1225,129 @@ def carries_channel(src):
     return image.type == "TEX_IMAGE" and image.image is not None
 
 
+# The name a picture's image ships under (`prepare_pictures`), which is how
+# scripts/encode-textures.mjs knows to keep it exactly as painted.
+PICTURE_SUFFIX = " picture"
+
+
+def linked_from(sock):
+    """The node feeding `sock` and the output it comes out of, or (None, None)."""
+    if not sock.is_linked:
+        return None, None
+    link = sock.links[0]
+    return link.from_node, link.from_socket
+
+
+def picture_node(mat):
+    """The Image Texture node of a PICTURE material, or None: an image shown as
+    it is, its colour and its alpha wired straight onto the surface - what
+    Blender's Image as Plane builds. Two shapes: a Principled BSDF whose Base
+    Color and Alpha come from one Image Texture (lit), and the "shadeless" one,
+    a Mix Shader of a Transparent BSDF and an Emission of the image's colour at
+    strength 1, mixed by its alpha, into the output (unlit; also with the
+    image's Color straight into the Mix, which `prepare_pictures` leaves). An
+    image a tool drew (the moss prints) is not a picture: it has its own
+    encoding."""
+    if mat is None or mat.node_tree is None:
+        return None
+    nodes = mat.node_tree.nodes
+
+    def image_of(node, sock, output):
+        ok = (node is not None and node.type == "TEX_IMAGE" and node.image is not None
+              and sock.name == output and not node.image.get("generated_by"))
+        return node if ok else None
+
+    for node in nodes:
+        if node.type != "BSDF_PRINCIPLED":
+            continue
+        color = image_of(*linked_from(node.inputs["Base Color"]), "Color")
+        # `==`, not `is`: every access makes a new Python object of a node.
+        if color is not None and color == image_of(*linked_from(node.inputs["Alpha"]), "Alpha"):
+            return color
+    out = next((n for n in nodes if n.type == "OUTPUT_MATERIAL" and n.is_active_output), None)
+    mix = out and linked_from(out.inputs["Surface"])[0]
+    if mix is None or mix.type != "MIX_SHADER":
+        return None
+    transparent, (shown, sock) = linked_from(mix.inputs[1])[0], linked_from(mix.inputs[2])
+    if transparent is None or transparent.type != "BSDF_TRANSPARENT" or shown is None:
+        return None
+    if shown.type == "EMISSION":
+        strength = shown.inputs["Strength"]
+        if strength.is_linked or strength.default_value != 1.0:
+            return None
+        shown, sock = linked_from(shown.inputs["Color"])
+    color = image_of(shown, sock, "Color") if shown is not None else None
+    if color is not None and color == image_of(*linked_from(mix.inputs[0]), "Alpha"):
+        return color
+    return None
+
+
+def picture_texels(src):
+    """`src`'s pixels with every fully transparent texel's colour filled from
+    the visible ones around it (`fill_background`'s pull-push). Straight alpha
+    is filtered colour and alpha apart, so a texel just inside the outline that
+    is sampled with its invisible neighbour, and every mip level, averages in
+    whatever colour that neighbour has; a painted cutout is mostly black under
+    its alpha, which drew a dark rim. A visible texel keeps its colour, and
+    every texel its alpha."""
+    w, h = src.size
+    px = np.empty(w * h * 4, dtype=np.float32)
+    src.pixels.foreach_get(px)
+    px = px.reshape(h, w, 4)
+    fill = bpy.data.images.new("picture fill", w, h, alpha=True)
+    try:
+        fill.pixels.foreach_set(px.ravel())
+        fill_background(fill)
+        filled = np.empty(w * h * 4, dtype=np.float32)
+        fill.pixels.foreach_get(filled)
+    finally:
+        bpy.data.images.remove(fill)
+    hidden = px[..., 3] == 0
+    px[hidden, :3] = filled.reshape(h, w, 4)[hidden, :3]
+    return px
+
+
+def prepare_pictures(kept):
+    """Make every picture material the exported objects wear (`picture_node`)
+    go out whole. Blender's glTF exporter reads the shadeless shape as a black
+    surface glowing with the image, opaque - its alpha lost, the colour under
+    it drawn as a black box with the encoder's blocks along the outline - while
+    it carries a Mix of a Transparent BSDF and a COLOUR as KHR_materials_unlit
+    blended by the Mix's factor, so the Emission between is taken out (at
+    strength 1 it changes nothing). And each picture's image is swapped for a
+    copy named `<image> picture` with its hidden texels filled
+    (`picture_texels`), which the encoder keeps at its own size, losslessly
+    (scripts/encode-textures.mjs). The file is never saved, so its own
+    materials and images are left as they were. Returns how many pictures."""
+    copies = {}
+    for mat in {m for ob in kept for m in (getattr(ob.data, "materials", None) or []) if m is not None}:
+        node = picture_node(mat)
+        if node is None:
+            continue
+        links = mat.node_tree.links
+        for out in (n for n in mat.node_tree.nodes if n.type == "OUTPUT_MATERIAL" and n.is_active_output):
+            mix = linked_from(out.inputs["Surface"])[0]
+            emission = mix is not None and mix.type == "MIX_SHADER" and linked_from(mix.inputs[2])[0]
+            if emission and emission.type == "EMISSION":
+                links.new(node.outputs["Color"], mix.inputs[2])
+        src = node.image
+        # One copy per file: an image loaded twice (`x.png` and `x.png.001`)
+        # ships once.
+        key = os.path.realpath(bpy.path.abspath(src.filepath, library=src.library)) if src.filepath else src.name
+        if key not in copies:
+            # No dot, as in `image_name`: the glTF exporter would cut the name
+            # at the last one and the encoder's rule would miss it.
+            stem = os.path.splitext(re.sub(r"\.\d{3}$", "", src.name))[0].replace(".", "-")
+            w, h = src.size
+            copy = bpy.data.images.new(stem + PICTURE_SUFFIX, w, h, alpha=True)
+            copy.colorspace_settings.name = src.colorspace_settings.name
+            copy.alpha_mode = "STRAIGHT"
+            copy.pixels.foreach_set(picture_texels(src).ravel())
+            copies[key] = copy
+        node.image = copies[key]
+    return len(copies)
+
+
 def material_warnings(ob):
     """What glTF cannot carry of this object's materials, one line each."""
     out = []
@@ -1238,6 +1361,9 @@ def material_warnings(ob):
         if mat.node_tree is None:
             continue
         principled = [n for n in mat.node_tree.nodes if n.type == "BSDF_PRINCIPLED"]
+        # An unlit picture goes as KHR_materials_unlit (`prepare_pictures`).
+        if not principled and picture_node(mat) is not None:
+            continue
         if not principled:
             kinds = sorted({n.type for n in mat.node_tree.nodes if n.type.startswith("BSDF") or n.type == "EMISSION"})
             out.append(f'{ob.name}: material "{mat.name}" has no Principled BSDF ({", ".join(kinds) or "no shader"}); glTF exports a default surface')
@@ -1543,6 +1669,10 @@ def main():
                 pass
         view_layer.update()
     step("gltf")
+    # Credited before the pictures are swapped for copies, which have neither
+    # the name nor the file the credits table knows an image by.
+    credits = image_credits(kept, warnings)
+    pictures = prepare_pictures(kept)
     for ob in kept:
         warnings.extend(material_warnings(ob))
 
@@ -1589,7 +1719,7 @@ def main():
     meta = {
         "blender": bpy.app.version_string,
         "nodes": nodes,
-        "credits": image_credits(kept, warnings),
+        "credits": credits,
         "skipped": skipped,
         "warnings": warnings,
     }
@@ -1598,7 +1728,7 @@ def main():
 
     tris = sum(n["triangles"] for n in nodes)
     log(f"wrote {out_glb} ({os.path.getsize(out_glb) / 1024:.0f} KB raw): {len(nodes)} objects, {tris} triangles, "
-        f"{len(skipped)} skipped, {len(warnings)} warnings, {time.time() - t0:.1f}s")
+        f"{pictures} pictures, {len(skipped)} skipped, {len(warnings)} warnings, {time.time() - t0:.1f}s")
 
 
 main()

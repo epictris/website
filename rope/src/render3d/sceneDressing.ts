@@ -18,7 +18,7 @@ import type { Vec2 } from "../engine/vec2";
 import { gltfLoader, trackPending } from "./assets";
 import { withDownload } from "./download";
 import { wearIvyLeaves } from "./ivyLeaves";
-import { isDepthStandIn, joinDepthPrepass } from "./depthPrepass";
+import { isDepthStandIn, isPicture, joinDepthPrepass, joinPictureDepth } from "./depthPrepass";
 import { isPrintedMoss, wearMossMound } from "./mossMound";
 import { threeRotation, threeY } from "./space";
 import { nodeNameOf, SCENE_ASSETS, sceneFile } from "./scenes";
@@ -282,11 +282,14 @@ export function loadSceneFile(scene: string): Promise<THREE.Object3D | null> {
             if (ivy) ivyMeshes++;
             else foliageMeshes++;
           }
-          // What of it is opaque lays its depth first (depthPrepass.ts).
+          // What of it is opaque lays its depth first, and a picture lays
+          // its own after it is drawn (depthPrepass.ts).
           prepass.push(mesh);
         });
-        const depthFirst = prepass.filter(joinDepthPrepass).length;
+        const pictures = prepass.filter(joinPictureDepth).length;
+        const depthFirst = prepass.filter((m) => !isPicture(m) && joinDepthPrepass(m)).length;
         if (depthFirst > 0) console.log(`[render3d] scene "${scene}": ${depthFirst} meshes lay their depth first`);
+        if (pictures > 0) console.log(`[render3d] scene "${scene}": ${pictures} pictures lay their depth after them`);
         if (ivyMeshes > 0) console.log(`[render3d] scene "${scene}": ${ivyMeshes} ivy meshes cast and receive leaf shadows`);
         if (foliageMeshes > 0) console.log(`[render3d] scene "${scene}": ${foliageMeshes} plant meshes cast and receive leaf shadows`);
         if (mossMeshes > 0) console.log(`[render3d] scene "${scene}": ${mossMeshes} moss mounds cut and lipped by their print`);

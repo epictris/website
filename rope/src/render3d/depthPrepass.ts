@@ -102,9 +102,65 @@ export function prepassRefusal(mesh: THREE.Mesh): string | null {
 export function joinDepthPrepass(mesh: THREE.Mesh): boolean {
   if (standInOf(mesh)) return true;
   if (prepassRefusal(mesh) !== null) return false;
-  const standIn = new THREE.Mesh(mesh.geometry, DEPTH_ONLY);
+  addStandIn(mesh, DEPTH_ONLY, PREPASS_ORDER);
+  return true;
+}
+
+// A PICTURE - an image shown as it is on a plane, whose map the scene export
+// names `<image> picture` (tools/blender/scene_export.py `prepare_pictures`) -
+// is blended, and a blended surface writes no depth, so anything drawn after
+// it paints over it even where the picture stands in front. The water is
+// drawn after all transparent scenery (renderOrder 10, water.ts), and drew
+// over the river's root-room backdrop wherever a card stands in the pool
+// (2026-10-17); the depth of field also blurred a card by whatever was behind
+// it.
+//
+// So a picture lays its depth too, but AFTER it is drawn, not before: a depth
+// laid first would reject the scenery behind the picture's soft outline, which
+// then blended over nothing and drew a dark rim. Every picture is blended (in
+// three's back-to-front order) and then every picture's depth is laid
+// (`PICTURE_DEPTH_ORDER`), so all that is drawn later - the water - is tested
+// against the cards. The depth is cut out by the picture's own map at half
+// alpha (`PICTURE_DEPTH_CUT`), the textbook cut: a picture is not reliably
+// opaque inside its outline - the root-room cards are 252 of 255 throughout,
+// and a cut at 0.99 let the pool through them in blotches - so only the
+// outline's soft ramp is in question, where a later surface behind the card
+// draws over its outer half and is rejected under its inner half.
+export const PICTURE_DEPTH_ORDER = 1;
+export const PICTURE_DEPTH_CUT = 0.5;
+
+export function isPicture(mesh: THREE.Mesh): boolean {
+  const material = mesh.material;
+  if (Array.isArray(material) || !material.transparent) return false;
+  const map = (material as THREE.MeshBasicMaterial).map;
+  return !!map && / picture$/.test(map.name);
+}
+
+// Give a picture its depth, once. Returns whether `mesh` is a picture.
+export function joinPictureDepth(mesh: THREE.Mesh): boolean {
+  if (!isPicture(mesh)) return false;
+  if (standInOf(mesh)) return true;
+  const material = mesh.material as THREE.MeshBasicMaterial;
+  const depth = new THREE.MeshBasicMaterial({
+    map: material.map,
+    alphaTest: PICTURE_DEPTH_CUT,
+    colorWrite: false,
+    // Transparent only to be drawn in the transparent pass, after the picture.
+    transparent: true,
+    depthWrite: true,
+    side: material.side,
+    fog: false,
+    toneMapped: false,
+  });
+  depth.name = STAND_IN;
+  addStandIn(mesh, depth, PICTURE_DEPTH_ORDER);
+  return true;
+}
+
+function addStandIn(mesh: THREE.Mesh, material: THREE.Material, renderOrder: number): void {
+  const standIn = new THREE.Mesh(mesh.geometry, material);
   standIn.name = STAND_IN;
-  standIn.renderOrder = PREPASS_ORDER;
+  standIn.renderOrder = renderOrder;
   // It IS its mesh, drawn a second way: the identity in its mesh's frame, a
   // shadow nobody needs twice, and nothing for a pick to land on.
   standIn.matrixAutoUpdate = false;
@@ -113,7 +169,6 @@ export function joinDepthPrepass(mesh: THREE.Mesh): boolean {
   standIn.raycast = () => {};
   standIn.userData[STAND_IN] = true;
   mesh.add(standIn);
-  return true;
 }
 
 export function leaveDepthPrepass(mesh: THREE.Mesh): void {

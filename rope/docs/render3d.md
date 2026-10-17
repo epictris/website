@@ -93,6 +93,8 @@ Two patches, both 2026-10-16, take most of that away without changing a pixel.
   three sorts opaque draws by material before depth, so rocks that each wear their own baked material are drawn in material order, and every rock drawn before the one in front of it is shaded and then painted over.
   Each eligible scene mesh carries a depth-only stand-in, ordered ahead of every opaque draw, so the real materials shade only the nearest surface; `gl_Position` is declared `invariant` in every built-in vertex shader so the two depths agree to the bit.
   What is eligible, what is not and why, and the one material swap that has to leave (the scene's own water) are in the module's header.
+  A **picture** (a blended image card from the scene, [blender-scenes](blender-scenes.md#what-blender-cannot-carry)) gets a stand-in too, for correctness rather than cost (since 2026-10-17): blended, it writes no depth, and the water, drawn after all transparent scenery, painted over the river's root-room cards wherever they stand in the pool.
+  Its stand-in is cut by the picture's own map at half alpha and drawn after every picture and before the water (`PICTURE_DEPTH_ORDER`), never first, since a depth laid first rejects the scenery behind the picture's soft outline and leaves a dark rim.
 - **A light is shaded only where it reaches** (`render3d/lightReach.ts`).
   three runs the whole surface model for every point and spot light on every fragment, including the ones a light's `range` puts at exactly zero; the light loop now skips them on the flag three already sets for its shadow lookup.
   A light's `range` is therefore a cost as well as a look: a lamp that reaches everything is shaded everywhere.
