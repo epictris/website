@@ -563,7 +563,10 @@ export class World {
   // The tied chains (`engine/ties.ts`) and their island solver. Empty on every
   // level without a `through` chain, and every branch below that reads it is
   // then the branch every recorded replay took.
-  readonly ties = new TieSolver();
+  readonly ties = new TieSolver(
+    (c, dt, out) => this.recollide(c, dt, out),
+    (body, h) => this.integrateContinuous(body, h),
+  );
 
   // Broadphase: one fat-box leaf per collision shape of every body in
   // `bodies` (areas are not proxied - nothing queries them spatially). The
@@ -1071,7 +1074,7 @@ export class World {
   // contacts (see `TieSolver`). Called inside the contact phase with the
   // contacts the gather found for tied bodies, so the slats' positions and
   // velocities are final by the time anything after `integrate` reads them.
-  private stepTies(islandContacts: ContactConstraint[], dt: number): void {
+  private stepTies(islandContacts: ContactConstraint[], dt: number): ContactConstraint[] {
     // The movers that moved this frame, for the island to carry through its
     // substeps (see `TieSolver.driven`). A jump is not motion (`teleported`).
     const driven: AnimatableBody2D[] = [];
@@ -1082,8 +1085,9 @@ export class World {
       }
     }
     this.ties.driven = driven;
-    this.ties.step(islandContacts, GRAVITY, dt);
+    const solved = this.ties.step(islandContacts, GRAVITY, dt);
     PhaseTrace.mark("ties", this);
+    return solved;
   }
 
   // The frame a tied chain's build settle steps: no areas, no free bodies,
@@ -1094,8 +1098,29 @@ export class World {
     for (const chain of only) for (const body of chain.bodies) tied.add(body);
     const contacts = this.collectContacts(tied, dt).filter(TieSolver.ownsContact);
     this.frameContacts = [];
-    this.ties.step(contacts, GRAVITY, dt, only);
-    this.frameContacts = contacts;
+    this.frameContacts = this.ties.step(contacts, GRAVITY, dt, only);
+  }
+
+  // One island contact's shape pair gathered again as the bodies now stand:
+  // the island's narrowphase, run every substep (see `TieSolver.solveIsland`).
+  // The pair's filters were settled by the frame's gather, which found it.
+  //
+  // Out to the reach the frame's gather used (`gatherReach`), except where
+  // the island sweeps: a `continuous` body's primary shape against the
+  // scenery is stopped on the face by its swept position step
+  // (`integrateContinuous`, as the world steps it when free), so its contacts
+  // there are the world's own - the slop and no further. A speculative row
+  // reads its separation along the normal it was gathered with, and further
+  // out than a substep's travel that is a prediction about a corner the body
+  // is passing: a ball swung past one with 17 mm to spare read its 4 cm of
+  // travel in the substep as closing on it and was stopped (`island-corner-graze`).
+  private recollide(c: ContactConstraint, dt: number, out: ContactConstraint[]): void {
+    const sa = c.a.getShapes()[c.shapeA];
+    const sb = c.b.getShapes()[c.shapeB];
+    if (sa === undefined || sb === undefined) return;
+    const swept = c.a.continuous && c.shapeA === 0 && c.b instanceof StaticBody2D;
+    const slop = swept ? CONTACT_SLOP : Math.max(this.gatherReach(c.a, dt), this.gatherReach(c.b, dt));
+    this.gatherShapePair(out, c.a, c.shapeA, sa, c.b, c.shapeB, sb, slop);
   }
 
   // The continuous position step (see RigidBody2D.continuous): advance the
@@ -2453,7 +2478,7 @@ export class World {
     // the frame's contacts, since the ball's contacts with a slat are among
     // them and carry the impulses the island applied.
     if (islandContacts) {
-      this.stepTies(islandContacts, dt);
+      islandContacts = this.stepTies(islandContacts, dt);
       // An island body's contacts past the slop are the island's own lookahead
       // (`gatherReach`), not touches: only one the bodies closed - that pushed,
       // or stands closed - is the frame's, so every reader of the contact set

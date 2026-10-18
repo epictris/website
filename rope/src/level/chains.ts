@@ -659,7 +659,32 @@ export class BallChainRow implements IslandRow, IslandUnit {
     // Whether a contact's face is engaged as the island stands
     // (`TieSolver.engaged`), for `room`.
     private readonly engaged: (c: ContactConstraint) => boolean,
+    // The ball's own dangling hook when it is the chain's end
+    // (`BallPlayer.chainTip`), or null (see `dangling`).
+    private readonly tip: () => RigidBody2D | null = () => null,
   ) {}
+
+  // The chain's end is the ball's own dangling hook: a tip on a string, not a
+  // tether. Nothing the tip meets may reach the ball - not the face it is
+  // pinned on, not its weight, not its mass - so the row is one-way: the
+  // ball's motion is read along the chain and the impulse goes to the tip
+  // alone (`solve`), the drum takes in every turn the aim makes and gives
+  // none of it back to the spin (`realiseTakeUp`, `finishFrame`), and the
+  // chain's pull on the tip buys it no grip on what it rests on
+  // (`tipPressInto`), so a pinned tip slides off rather than holding. Read
+  // as a two-way row, a 0.26 kg tip pinned on a ledge was the anchor a 52 kg
+  // ball wound itself 31 cm up a wall by (`session-373f` f211-331), and one
+  // snagged under a box was a load the solve could not carry to the ball,
+  // the chain standing 16 cm over while the ball fell on (`session-126f` f97).
+  get dangling(): boolean {
+    return this.tip() !== null;
+  }
+
+  // The free span left to take in before the tip reaches the rim, where the
+  // ball stows it (`BallPlayer.stowIfWoundIn`).
+  private freeRoom(): number {
+    return Math.max(0, this.rope.leavingSpanLength(this.ball) ?? 0);
+  }
 
   get rows(): readonly IslandRow[] {
     return [this];
@@ -974,10 +999,12 @@ export class BallChainRow implements IslandRow, IslandUnit {
     return null;
   }
 
-  // An impulse `j` along the chain, to every body on it.
+  // An impulse `j` along the chain, to every body on it - but the ball, while
+  // the chain's end is its dangling tip (see `dangling`).
   private applyAll(terms: readonly RopeRowTerm[], j: number): void {
     if (j === 0) return;
-    for (const t of terms) applyTerm(t, j);
+    const skip = this.dangling ? this.ball : null;
+    for (const t of terms) if (t.body !== skip) applyTerm(t, j);
   }
 
   // The chain's take-in speed this substep (see `closingRate`).
@@ -1081,7 +1108,13 @@ export class BallChainRow implements IslandRow, IslandUnit {
     const pending = this.pending;
     this.pending = 0;
     const slack = this.lengthSlack();
-    if (pending > 0 && !this.touching) {
+    if (pending > 0 && this.dangling) {
+      // A dangling tip is reeled in by every turn, up to the rim (see
+      // `dangling`): what it is against is its own problem, never the ball's.
+      const realise = Math.min(pending, this.freeRoom());
+      this.realised += realise;
+      this.slackRef = slack - realise;
+    } else if (pending > 0 && !this.touching) {
       // The closure the motor achieved since the last look: the slack the
       // turn wound off (`pending`) and what the bodies gave back since. Not
       // the slack itself: a chain standing over its length - squeezed
@@ -1172,9 +1205,11 @@ export class BallChainRow implements IslandRow, IslandUnit {
   // on the terms `takeInTurn` will realise it on once the substep has turned
   // the ball. A motor's target speed, read before the step it drives.
   private reelRate(): number {
-    if (!this.ball.kinematicRotation || this.touching || this.h <= 0) return 0;
+    if (!this.ball.kinematicRotation || this.h <= 0) return 0;
+    const dangling = this.dangling;
+    if (this.touching && !dangling) return 0;
     const rate = this.rope.lengthPerRadian(this.ball) * this.ball.angularVelocity;
-    return rate > 0 ? Math.min(rate, this.room() / this.h) : 0;
+    return rate > 0 ? Math.min(rate, (dangling ? this.freeRoom() : this.room()) / this.h) : 0;
   }
 
   private reel = 0;
@@ -1187,10 +1222,24 @@ export class BallChainRow implements IslandRow, IslandUnit {
   // along each of the ball's terms, where that term pulls into the face (see
   // `TieSolver.chainPress`).
   pressInto(normal: Vec2): number {
+    return this.pressOf(this.ballTerms, normal);
+  }
+
+  // The same for the dangling tip (see `dangling`): its contacts take no grip
+  // from the chain's pull, so a tip the chain drags across a face slides on
+  // it whatever its friction, and only its own weight grips.
+  tipPressInto(normal: Vec2): number {
+    return this.pressOf(this.tipTerms, normal);
+  }
+
+  private pressOf(terms: readonly RopeRowTerm[], normal: Vec2): number {
     let press = 0;
-    for (const t of this.ballTerms) press += t.ma * Math.max(0, -t.dir.dot(normal));
+    for (const t of terms) press += t.ma * Math.max(0, -t.dir.dot(normal));
     return (this.impulse + this.motorImpulse) * press;
   }
+
+  // The dangling tip's terms of the row as last solved, for `tipPressInto`.
+  private tipTerms: RopeRowTerm[] = [];
 
 
   // After the island's last substep: the turn that substep integrated, taken
@@ -1209,6 +1258,8 @@ export class BallChainRow implements IslandRow, IslandUnit {
     this.walk();
     this.walkRelief += ringRelief;
     this.realiseTakeUp();
+    // A dangling tip refuses the spin nothing (see `dangling`).
+    if (this.dangling) return 0;
     return Math.max(0, this.coilGrowth - this.realised);
   }
 
@@ -1237,12 +1288,20 @@ export class BallChainRow implements IslandRow, IslandUnit {
     let w = 0;
     let slackRate = 0;
     this.ballTerms = [];
+    this.tipTerms = [];
+    // Dangling, the ball is an infinite mass to this row (see `dangling`):
+    // its motion along the chain is the rate the tip must follow, and none of
+    // the row's impulse is its.
+    const dangling = this.dangling;
+    const tip = dangling ? this.tip() : null;
     for (const t of terms) {
-      const invM = invMassOf(t.body);
-      const invI = invInertiaOf(t.body);
-      if (t.body === this.ball) this.ballTerms.push(t);
-      if (t.body instanceof RigidBody2D) w += t.ma * t.ma * (invM + t.arm * t.arm * invI);
       slackRate += this.termRate(t);
+      if (t.body === tip) this.tipTerms.push(t);
+      if (t.body === this.ball) {
+        if (dangling) continue;
+        this.ballTerms.push(t);
+      }
+      if (t.body instanceof RigidBody2D) w += t.ma * t.ma * (invMassOf(t.body) + t.arm * t.arm * invInertiaOf(t.body));
     }
     slackRate += this.beadRate;
     this.w = w;

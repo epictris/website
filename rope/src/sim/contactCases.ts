@@ -34,7 +34,7 @@ import {
 } from "../engine/body";
 import { circleOverlap } from "../engine/collision";
 import { Mathf } from "../engine/mathf";
-import { PX } from "../engine/units";
+import { PIXELS_PER_METER, PX } from "../engine/units";
 import { shapeContacts } from "../engine/manifold";
 import { circleShape, polyShapeCentred, rectShape, type Shape } from "../engine/shapes";
 import { CONTACT_SLOP, ContactAudit, GRAVITY, World } from "../engine/world";
@@ -4531,6 +4531,173 @@ function caseWhirlLap(): ContactResult {
 }
 
 // ---------------------------------------------------------------------------
+// A rect `obstacle` for `swingPast`, metres, its centre relative to where the
+// ball hangs. A rigid one is a 50 cm steel block standing on a floor of its
+// own, built with the level so it has settled by the time the ball hangs.
+interface SwingObstacle {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  rigid?: boolean;
+}
+
+// The ball hung 1.7 m under a ceiling and given `speed` along +x at the bottom
+// of its swing past `obstacle`, the static one placed once the ball hangs
+// still, so the hang is the same with it and without. The ball's path
+// relative to the hang, frame by frame, and how far the obstacle moved.
+function swingPast(
+  speed: number,
+  obstacle: SwingObstacle | null,
+  frames: number,
+  hangAt: Vec2 | null = null,
+): { path: Vec2[]; hang: Vec2; moved: number } {
+  const bodies: LevelBodyData[] = [
+    {
+      kind: "static",
+      x: 1300,
+      y: -2130,
+      rot: 0,
+      friction: 1,
+      objects: [{ type: "collision", shape: { kind: "rect", w: 400, h: 20 } }],
+    },
+  ];
+  if (obstacle?.rigid && hangAt) {
+    const at = hangAt.add(new Vec2(obstacle.x, obstacle.y)).mul(PIXELS_PER_METER);
+    const w = obstacle.w * PIXELS_PER_METER;
+    const h = obstacle.h * PIXELS_PER_METER;
+    bodies.push(
+      {
+        kind: "static",
+        x: at.x,
+        y: at.y + h / 2 + 10,
+        rot: 0,
+        friction: 1,
+        objects: [{ type: "collision", shape: { kind: "rect", w: 4 * w, h: 20 } }],
+      },
+      {
+        kind: "rigid",
+        x: at.x,
+        y: at.y,
+        rot: 0,
+        friction: 1,
+        objects: [{ type: "collision", material: "steel", shape: { kind: "rect", w, h } }],
+      },
+    );
+  }
+  const level = new BallLevel({ player: { x: 1300, y: -1950, radius: 8 }, bodies } as RawLevelData);
+  const ball = level.ball;
+  let prev = emptyFrameInput();
+  const feed = (): void => {
+    const input: FrameInput = {
+      ...emptyFrameInput(),
+      fire: button(true, prev.fire),
+      mouseWorldPosition: ball.globalPosition.add(new Vec2(0, -2)),
+    };
+    prev = input;
+    level.physicsProcess(input, DT);
+  };
+  for (let f = 0; f < 90; f++) feed();
+  const hang = ball.globalPosition;
+  let body: PhysicsBody2D | null = null;
+  if (obstacle?.rigid) {
+    body = level.bodies.find((b) => b instanceof RigidBody2D && b !== ball) ?? null;
+  } else if (obstacle) {
+    body = new StaticBody2D();
+    body.globalPosition = hang.add(new Vec2(obstacle.x, obstacle.y));
+    body.setShape(rectShape(obstacle.w, obstacle.h));
+    level.world.add(body);
+  }
+  const start = body?.globalPosition ?? Vec2.ZERO;
+  ball.linearVelocity = new Vec2(speed, 0);
+  const path: Vec2[] = [];
+  for (let f = 0; f < frames; f++) {
+    feed();
+    path.push(ball.globalPosition.sub(hang));
+  }
+  return { path, hang, moved: body ? body.globalPosition.distanceTo(start) : 0 };
+}
+
+// A chained ball swung past the top corner of a box it clears is not touched
+// by it. The island gathers its contacts out to a frame's travel, and with
+// the normal and separation read once a frame, a ball swung at 20 m/s past a
+// static corner it cleared by 46 mm read its travel along the frame-start
+// normal as closing on the corner and left the frame at (3.4, -10.6) m/s
+// where the same swing without the box leaves at (6.6, -18.2); past a steel
+// block standing on a floor it shoved the block 0.23 m without touching it.
+// Gathered each substep, and again before the relax (see
+// `TieSolver.solveIsland`), with the swept step under the ball against the
+// scenery (`World.recollide`), the box changes nothing; raised into the path,
+// the same box is hit, so the case can see it. Up to 30 m/s, three times the
+// drum's fling at its rating: at 45 the block still takes a 1 mm nudge, the
+// row being a prediction one substep (9 cm) ahead against a body the island
+// does not sweep, as Box2D's are for any pair that is not a bullet.
+function caseIslandCornerGraze(): ContactResult {
+  const details: string[] = [];
+  let passed = true;
+  const check = (claim: string, got: boolean): void => {
+    if (!got) passed = false;
+    details.push(`${got ? "ok  " : "BAD "} ${claim}`);
+  };
+  const R = 0.12;
+  const FRAMES = 20;
+  // The box's left face 15 cm ahead of the ball's rim, its top `gap` under
+  // the ball's lowest point; the swing rises away from it.
+  const box = (gap: number, rigid: boolean): SwingObstacle => ({
+    x: R + 0.15 + 0.25,
+    y: R + gap + 0.25,
+    w: 0.5,
+    h: 0.5,
+    rigid,
+  });
+  const worst = (a: Vec2[], b: Vec2[]): number => Math.max(...a.map((p, i) => p.distanceTo(b[i]!)));
+  const hang = swingPast(0, null, 1).hang;
+  for (const rigid of [false, true]) {
+    const kind = rigid ? "steel block" : "static box";
+    for (const speed of [10, 20, 30]) {
+      const free = swingPast(speed, null, FRAMES);
+      for (const gap of [0.005, 0.03]) {
+        const past = swingPast(speed, box(gap, rigid), FRAMES, hang);
+        const off = worst(past.path, free.path);
+        check(
+          `${kind}, ${speed} m/s past its corner ${gap * 1000} mm under the rim: the box-free path (worst ${(off * 1000).toFixed(3)} mm off over ${FRAMES} frames, the box moved ${(past.moved * 1000).toFixed(3)} mm, hung ${(past.hang.distanceTo(free.hang) * 1000).toFixed(3)} mm apart)`,
+          off < 1e-6 && past.moved < 1e-6 && past.hang.distanceTo(free.hang) < 1e-9,
+        );
+      }
+      const hit = worst(swingPast(speed, box(-0.03, rigid), FRAMES, hang).path, free.path);
+      check(`${kind}, ${speed} m/s with it 30 mm into the path: it is hit (path ${(hit * 1000).toFixed(0)} mm off)`, hit > 0.05);
+    }
+  }
+  return ok("island-corner-graze - a chained ball swung past a corner it clears is not touched by it", passed, details);
+}
+
+// A chained ball swung into a 1 cm static plank at up to 45 m/s, 9 cm of
+// travel a substep, stops on its near side: the island's swept position step
+// (`TieSolver.sweep`) is what a contact gathered at the slop cannot be.
+function caseIslandThinPlank(): ContactResult {
+  const details: string[] = [];
+  let passed = true;
+  const check = (claim: string, got: boolean): void => {
+    if (!got) passed = false;
+    details.push(`${got ? "ok  " : "BAD "} ${claim}`);
+  };
+  const R = 0.12;
+  const PLANK = { x: 0.4, y: 0, w: 0.01, h: 0.6 };
+  for (const speed of [10, 20, 30, 45]) {
+    const path = swingPast(speed, PLANK, 30).path;
+    // The plank's near face is 0.395 m out, so the ball's centre never passes
+    // 0.395 - R while it is level with the plank.
+    const level = path.filter((p) => Math.abs(p.y - PLANK.y) < PLANK.h / 2 + R);
+    const furthest = Math.max(...level.map((p) => p.x));
+    check(
+      `${speed} m/s: the ball's centre comes no nearer the plank than its radius (furthest ${(furthest * 1000).toFixed(1)} mm, face at ${((PLANK.x - PLANK.w / 2 - R) * 1000).toFixed(1)})`,
+      furthest <= PLANK.x - PLANK.w / 2 - R + MAX_PENETRATION,
+    );
+  }
+  return ok("island-thin-plank - a chained ball swung into a thin plank stops on its near side", passed, details);
+}
+
+// ---------------------------------------------------------------------------
 function caseChainHungJam(sims: Sim[]): ContactResult {
   const sim = new Sim("chain-hung-jam", 30);
   sims.push(sim);
@@ -7281,6 +7448,8 @@ export function runContactCases(): ContactResult[] {
   results.push(caseWoundTight());
   results.push(caseConvergedAimHang());
   results.push(caseWhirlLap());
+  results.push(caseIslandCornerGraze());
+  results.push(caseIslandThinPlank());
   results.push(caseHookSeam());
   results.push(caseCollisionMask());
   results.push(casePassableBody());

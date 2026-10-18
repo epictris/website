@@ -148,7 +148,12 @@ So both conversions ask first, and the snag's wrap nodes survive the bite becaus
 The chain **running out** is still not asked: there the chain did end the flight, and an anchor past its reach is the dishonest forgiveness `hook-mouth-band` exists to keep out (the snap backstop in `onHookAttached` refuses it in any case, exactly as it does for `probeContact`).
 
 It rescues a **throw** only. A dangling tip hangs at exactly `CHAIN_MAX_LENGTH`, so anchoring it on a contact reported while the hook is still millimetres clear buys the chain that much extra path, and a chain going taut-to-slack in one frame drops the ball it had been braking - 0.7 m/s of `rope-anchor-kick` on `session-576f` f60.
-A tip drifts into its surface slowly and the probe catches it on real contact, which is what keeps the anchored length honest.
+A tip bites on real contact instead, two ways: `BallHook.biteWhereStruck` and the probe.
+
+`biteWhereStruck` asks first, before `alignToChain` turns the bar to the chain: a piece the solver reports the tip pushed on last frame (`maxNormalImpulse`, any substep) is bitten if the bar is on it NOW, inside the probe's touch tolerance, at the point it touches now.
+The probe alone asks after the turn: a tip swung round a box's corner on its chain (since 2026-10-19 the island gathers its contacts every substep, so it really goes round) struck the underside inside the substeps, where nothing asks about a bite, ended the frame pressed flat on it, and was turned 1.1 rad off the face, 10 mm clear of the probe; the falling ball stretched the unbitten chain from 1.80 to 2.10 m and the next frame's bite found it past the snap and dropped it with the button held (`session-126f` f97-99).
+And the contact's own point is not used: the solver's report is the frame's, and a tip that brushed the box's side and crossed its top at 13 m/s in one frame was handed a point 8 cm under it, on the side, with the anchored chain cut 3 cm into the box to reach it (`chain-clip`).
+
 The `hook-blocked-attaches` contact case is the general statement, asserted over fans of throws past a tilted slab rather than at one placed near-miss: **every throw the solver pushes on must anchor**.
 A single fixed offset would stop straddling the sub-millimetre margin the moment the manifold changed, and then pass by missing the geometry instead of by handling it.
 The throws are made by a `BallPlayer`, through the frame order the game runs, because a backstop that is a frame late is a claim about the whole frame and not about the hook: driven bare, the case held every other part of this property while `session-401f` went by underneath it.
@@ -207,7 +212,16 @@ Before this the coil simply kept growing: the coil is an angle, nothing refuses 
 Refusing the turn instead is the ice `session-315f` reported; a hook left as a body riding the rim of a rolling ball is a 2 cm bar striking the floor once a revolution; and retrieving the chain outright was tried first and read from the game as the chain vanishing mid wind-up (`session-105f-stow`).
 Both halves of the stow test matter: the hinge at the rim alone is a tip that fell back against the ball with the whole chain draped slack, and the over-length alone is a swing going taut, which is next frame's ordinary correction.
 Only a rope that is coil and nothing else is closed: a wrap beyond the coil is real chain lying over the scene, and coiling the whole length onto the ball would pull it through whatever it lay over.
-A dangling tip is also **not a tether**: the free-ball guards (the spin-traction cap and the loop ride) stay on while the chain's end is the ball's own hook, and `session-251f` is the regression for the tree that switched them off for it. A deploying chain
+A dangling tip is also **not a tether**: the free-ball guards (the spin-traction cap and the loop ride) stay on while the chain's end is the ball's own hook, and `session-251f` is the regression for the tree that switched them off for it.
+
+Nor does anything the tip meets reach the ball (`BallChainRow.dangling`, since 2026-10-19).
+The ball's chain row is one-way while the end is the tip: the ball's motion along the chain is the rate the tip must follow, and the row's impulse goes to the tip alone, so neither the tip's mass nor a face it is pinned on moves the ball.
+The drum takes in every turn the aim makes, up to the rim where the tip is stowed, with no jam on a touch and no refund to the spin, and the chain's pull on the tip buys it no grip on what it rests on (`tipPressInto`, as `chainPress` is for the ball): a pinned tip slides off toward the ball, and only its own weight grips, so a slack tip still rests on a slope.
+Two-way, a 0.26 kg tip pinned on a hook-proof ledge was the anchor a ball wound itself 31 cm up the wall below it by (`session-373f` f211-331); one-way, the tip slides off the ledge, drops toward the ball and is stowed, and the ball never leaves the floor.
+And a tip snagged under a box was a load the solve could not carry to the 52 kg ball through a 0.26 kg body, the chain standing 16 cm over while the ball fell on (`session-126f` f97, the 200:1 mass ratio against one sequential pass a substep).
+What is not yet handled: a tip WEDGED, its bar held by faces on both sides of the chain's pull (across a slot narrower than itself), cannot slide out, so the chain stands over its length while the ball moves on unaffected.
+
+A deploying chain
 that snags scene geometry mid-flight also converts to the dangling tip: while
 the hook is in flight the chain is slack (no length solver), so
 `BallPlayer.checkChainReach` runs `Rope.detectSceneCatch` each frame — if the

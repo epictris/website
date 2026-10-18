@@ -609,6 +609,8 @@ export class BallLevel {
     this.world.ties.hardBody = null;
     this.world.ties.hardHolders = [];
     this.world.ties.chainPress = null;
+    this.world.ties.tipBody = null;
+    this.world.ties.tipPress = null;
     const chain = this.ball.chain;
     // Every chain that is out and thrown is a row: anchored, ringed onto a
     // cord, clamped to a rail, embedded in mud, or a dangling tip the ball
@@ -626,7 +628,16 @@ export class BallLevel {
     this.syncPlantUnit(chain.end.contact.obj);
     let row = this.ballRow;
     if (row === null || row.rope !== chain) {
-      row = new BallChainRow(this.ball, chain, () => this.bodies, (c) => this.world.ties.engaged(c));
+      row = new BallChainRow(
+        this.ball,
+        chain,
+        () => this.bodies,
+        (c) => this.world.ties.engaged(c),
+        () => {
+          const tip = this.ball.chainTip;
+          return tip !== null && this.ball.chain?.end.contact.obj === tip ? tip : null;
+        },
+      );
       this.ballRow = row;
     }
     row.sync(this.world.ties.chains);
@@ -642,6 +653,10 @@ export class BallLevel {
     this.world.ties.hardBody = this.ball;
     this.world.ties.hardHolders = row.bodies.filter((body) => body !== this.ball);
     this.world.ties.chainPress = (normal) => row.pressInto(normal);
+    if (row.dangling) {
+      this.world.ties.tipBody = this.ball.chainTip;
+      this.world.ties.tipPress = (normal) => row.tipPressInto(normal);
+    }
     this.ballRowActive = row;
   }
 

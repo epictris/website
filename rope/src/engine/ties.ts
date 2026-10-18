@@ -422,24 +422,30 @@ export function islandOwns(body: PhysicsBody2D): body is RigidBody2D {
 // A contact between a held body and the scenery, another held body or a free
 // body, as a row. The world's narrowphase gives one point, a normal out of `b`
 // toward `a` and a depth; the point is carried in each body's frame so the
-// separation can be re-read as the bodies move through the substeps (Box2D's
-// anchors), and the normal is held for the frame.
+// separation can be re-read as the bodies move through the substep (Box2D's
+// anchors), and the whole of it is gathered again at the top of every
+// substep (`place`, see `TieSolver.solveIsland`).
 class ContactRow {
-  readonly c: ContactConstraint;
+  // The contact as last gathered, where the frame's impulses are written back.
+  c: ContactConstraint;
   readonly a: RigidBody2D;
   readonly b: PhysicsBody2D;
-  readonly la: Vec2;
+  la: Vec2;
   // `a`'s shape is a circle on its body's origin (see the constructor).
   readonly aRound: boolean;
-  readonly lb: Vec2;
-  readonly normal: Vec2;
-  readonly tangent: Vec2;
-  // Separation at collection: negative is penetration.
-  readonly s0: number;
+  lb: Vec2;
+  normal: Vec2;
+  tangent: Vec2;
+  // Separation at the substep's gather: negative is penetration.
+  s0: number;
   readonly friction: number;
   readonly restitution: number;
-  // Relative normal velocity at collection, for restitution after the substeps.
+  // Relative normal velocity when the row was first gathered, for restitution
+  // after the substeps.
   readonly vn0: number;
+  // Gathered at the top of this substep: a row whose feature the narrowphase
+  // no longer reports applies nothing until it does again.
+  live = true;
   readonly key: string;
   // Solved without softness in the biased pass (see `TieSolver.hardBody`).
   readonly hard: boolean;
@@ -475,7 +481,10 @@ class ContactRow {
   // island keeps no books for; nor does it take off the normal a spun
   // off-centre shape fabricates (`spinFabricatedNormal`).
   readonly freeSpin: boolean;
-  readonly weightPress: number;
+  weightPress = 0;
+  private readonly freeA: boolean;
+  private readonly freeB: boolean;
+  private readonly gravity: Vec2;
   // The accumulated impulses: each substep's, warm started from the one
   // before, so after the last substep they are what that substep spent.
   n = 0;
@@ -523,25 +532,50 @@ class ContactRow {
       shapeA.shape.kind === "circle" &&
       shapeA.localOffset.x === 0 &&
       shapeA.localOffset.y === 0;
+    this.friction = friction;
+    this.restitution = Math.max(c.a.restitution, c.b.restitution);
+    this.vn0 = c.a.velocityAtPoint(c.point).sub(c.b.velocityAtPoint(c.point)).dot(c.normal);
+    const bRigid = c.b instanceof RigidBody2D ? c.b : null;
+    this.freeA = c.a.kinematicRotation && !c.a.constraintTethered;
+    this.freeB = bRigid !== null && bRigid.kinematicRotation && !bRigid.constraintTethered;
+    this.freeSpin = this.freeA || this.freeB;
+    this.gravity = gravity;
+    this.key = contactKey(c);
+    this.c = c;
+    this.la = this.lb = this.normal = this.tangent = Vec2.ZERO;
+    this.s0 = 0;
+    this.place(c);
+  }
+
+  // The row's geometry from a gather of its feature at the bodies' present
+  // poses.
+  place(c: ContactConstraint): void {
+    this.c = c;
     const offsetA = c.point.sub(c.a.globalPosition);
     this.la = this.aRound ? offsetA : offsetA.rotated(-c.a.globalRotation);
     this.lb = c.point.sub(c.b.globalPosition).rotated(-c.b.globalRotation);
     this.normal = c.normal;
     this.tangent = new Vec2(-c.normal.y, c.normal.x);
     this.s0 = -c.depth;
-    this.friction = friction;
-    this.restitution = Math.max(c.a.restitution, c.b.restitution);
-    this.vn0 = c.a.velocityAtPoint(c.point).sub(c.b.velocityAtPoint(c.point)).dot(c.normal);
-    const bRigid = c.b instanceof RigidBody2D ? c.b : null;
-    const freeA = c.a.kinematicRotation && !c.a.constraintTethered;
-    const freeB = bRigid !== null && bRigid.kinematicRotation && !bRigid.constraintTethered;
-    this.freeSpin = freeA || freeB;
+    const g = this.gravity;
+    const b = this.b;
     this.weightPress =
-      (freeA ? c.a.mass * c.a.gravityScale * Math.max(0, -gravity.dot(c.normal)) : 0) +
-      (freeB ? bRigid.mass * bRigid.gravityScale * Math.max(0, gravity.dot(c.normal)) : 0);
-    this.key = `${c.a.id}:${c.b.id}:${c.shapeA}:${c.shapeB}:${c.featureId}`;
+      (this.freeA ? this.a.mass * this.a.gravityScale * Math.max(0, -g.dot(c.normal)) : 0) +
+      (this.freeB && b instanceof RigidBody2D ? b.mass * b.gravityScale * Math.max(0, g.dot(c.normal)) : 0);
   }
 }
+
+function contactKey(c: ContactConstraint): string {
+  return `${c.a.id}:${c.b.id}:${c.shapeA}:${c.shapeB}:${c.featureId}`;
+}
+
+// The world's narrowphase for one contact's shape pair at the bodies' present
+// poses, out to the reach the frame's gather used, appending to `out`.
+export type IslandCollide = (c: ContactConstraint, dt: number, out: ContactConstraint[]) => void;
+
+// The world's swept position step for one body over `h`: along its velocity,
+// stopping at the static geometry it would cross.
+export type IslandSweep = (body: RigidBody2D, h: number) => void;
 
 interface CachedImpulse {
   n: number;
@@ -608,6 +642,12 @@ export class TieSolver {
   // pulled through slack; the drum is a speculative motor now (see
   // `BallChainRow.RATED_PULL`).
   chainPress: ((normal: Vec2) => number) | null = null;
+  // The ball's dangling hook while it is the chain's end, and the chain's
+  // pull on it into a face (`BallChainRow.tipPressInto`): what the chain
+  // presses the tip into funds none of its grip, as for the ball, so a
+  // pinned tip slides off instead of holding the chain.
+  tipBody: RigidBody2D | null = null;
+  tipPress: ((normal: Vec2) => number) | null = null;
   // The movers that moved this frame (set by `World.stepTies`). A mover's
   // script puts it at the END of the frame before anything is solved, with
   // its velocity the frame's displacement over the frame, and an island that
@@ -622,8 +662,18 @@ export class TieSolver {
   driven: readonly AnimatableBody2D[] = [];
   // Last frame's accumulated contact impulses by contact key, looked up only.
   private contactCache = new Map<string, CachedImpulse>();
-  // This frame's contact rows by the contact they solve, for `engaged`.
+  // This frame's contact rows by every gather of the contact they solve, for
+  // `engaged`.
   private rowOf = new Map<ContactConstraint, ContactRow>();
+
+  // The narrowphase every substep gathers the island's contacts with (see
+  // `solveIsland`), the world's own (`World.recollide`), and the swept
+  // position step a `continuous` body takes through each substep, the
+  // world's own (`World.integrateContinuous`).
+  constructor(
+    private readonly collide: IslandCollide,
+    private readonly sweep: IslandSweep,
+  ) {}
 
   // Is this contact's face engaged as the island stands: closed (the row's
   // separation re-read at the bodies' present poses) or carrying load (its
@@ -634,9 +684,12 @@ export class TieSolver {
   // carries nothing on the substeps it is recovering, and a drum that reeled
   // through those wound the ball and the weight it hangs from into a 5 m/s
   // slingshot (`hung-anchor`).
+  // A row the substep's gather no longer reports is engaged with nothing:
+  // its anchors are where it last stood, and read at the bodies' present
+  // poses they answered "closed" for a face 19 cm away (`session-126f` f97).
   engaged(c: ContactConstraint): boolean {
     const row = this.rowOf.get(c);
-    return row !== undefined && (row.n > 0 || separationOf(row) <= 0);
+    return row !== undefined && row.live && (row.n > 0 || separationOf(row) <= 0);
   }
   // The islands this frame was solved in, kept for the sleep pass.
   private frameIslands: IslandUnit[][] = [];
@@ -699,7 +752,7 @@ export class TieSolver {
     gravity: Vec2,
     dt: number,
     only: ReadonlySet<IslandUnit> | null = null,
-  ): void {
+  ): ContactConstraint[] {
     const t0 = SolverStats.now();
     const all = this.ballRow ? [...this.units, this.ballRow] : this.units;
     const units = only ? all.filter((u) => only.has(u)) : all;
@@ -723,6 +776,11 @@ export class TieSolver {
     const islands = this.islands(units, contacts);
     this.frameIslands = islands;
     this.rowOf.clear();
+    // The frame's contacts as the substeps last gathered them, in the order
+    // the world gave them, and after them any feature a substep met that the
+    // frame's gather had not (see `solveIsland`).
+    const last = new Map<ContactConstraint, ContactRow>();
+    const born: ContactRow[] = [];
     for (const island of islands) {
       // Whole or not at all: one awake unit in an island wakes the rest.
       let awake = false;
@@ -734,9 +792,12 @@ export class TieSolver {
           for (const body of unit.bodies) body.wake();
         }
       }
-      this.solveIsland(island, contacts, gravity, dt);
+      this.solveIsland(island, contacts, gravity, dt, last, born);
     }
+    const out = contacts.map((c) => last.get(c)?.c ?? c);
+    for (const row of born) out.push(row.c);
     if (SolverStats.enabled) SolverStats.chainMs += performance.now() - t0;
+    return out;
   }
 
   // The connected components of "shares a held body" over the units, with two
@@ -795,6 +856,8 @@ export class TieSolver {
     contacts: readonly ContactConstraint[],
     gravity: Vec2,
     dt: number,
+    last: Map<ContactConstraint, ContactRow>,
+    born: ContactRow[],
   ): void {
     let k = 1;
     const bodies: RigidBody2D[] = [];
@@ -813,8 +876,8 @@ export class TieSolver {
       for (const row of unit.rows) rows.push(row);
     }
     const contactRows: ContactRow[] = [];
-    for (const c of contacts) {
-      if (!inIsland.has(c.a) && !(c.b instanceof RigidBody2D && inIsland.has(c.b))) continue;
+    const rowByKey = new Map<string, ContactRow>();
+    const makeRow = (c: ContactConstraint): ContactRow => {
       // `b` is the scenery whenever it is not a rigid body (`a` always is).
       const hard =
         !(c.b instanceof RigidBody2D) &&
@@ -827,14 +890,17 @@ export class TieSolver {
       // at all (`session-1195f` f278-307). The normal points out of `b`, so
       // the face's outward normal at the ball is `-normal` when the ball is
       // `b`.
+      const tipPress = this.tipPress;
       const press =
-        this.hardBody === null || this.chainPress === null
-          ? null
-          : c.a === this.hardBody
-            ? this.chainPress
-            : c.b === this.hardBody
-              ? (normal: Vec2) => this.chainPress!(normal.neg())
-              : null;
+        this.hardBody !== null && this.chainPress !== null && c.a === this.hardBody
+          ? this.chainPress
+          : this.hardBody !== null && this.chainPress !== null && c.b === this.hardBody
+            ? (normal: Vec2) => this.chainPress!(normal.neg())
+            : tipPress !== null && c.a === this.tipBody
+              ? tipPress
+              : tipPress !== null && c.b === this.tipBody
+                ? (normal: Vec2) => tipPress(normal.neg())
+                : null;
       const row = new ContactRow(c, pairFriction(c), hard, press, c.a === this.hardBody, gravity);
       const cached = this.contactCache.get(row.key);
       if (cached) {
@@ -842,8 +908,70 @@ export class TieSolver {
         row.t = cached.t;
       }
       contactRows.push(row);
+      rowByKey.set(row.key, row);
       this.rowOf.set(c, row);
+      return row;
+    };
+    // The shape pairs the frame's gather found within reach, each gathered
+    // again at the top of every substep. Gathered once, at the poses the
+    // frame found the bodies in, a contact's normal was the frame's for all
+    // eight substeps while the gather reached out a whole frame's travel
+    // (`World.gatherReach`): a ball swung past a corner it clears by 36 mm
+    // read its travel along that frame-start normal as closing on the corner,
+    // and at 20 m/s it was stopped and thrown straight up at 14 m/s in the
+    // first frame (`island-corner-graze`). Gathered per substep, a row can
+    // only be wrong about the substep's own travel - the bodies are gathered
+    // once a frame for candidates and every substep for contacts, as XPBD's
+    // substepped rigid bodies are (Müller et al. 2020, section 3.5).
+    const pairs: ContactConstraint[] = [];
+    const pairSeen = new Set<string>();
+    for (const c of contacts) {
+      if (!inIsland.has(c.a) && !(c.b instanceof RigidBody2D && inIsland.has(c.b))) continue;
+      last.set(c, makeRow(c));
+      const pair = `${c.a.id}:${c.b.id}:${c.shapeA}:${c.shapeB}`;
+      if (pairSeen.has(pair)) continue;
+      pairSeen.add(pair);
+      pairs.push(c);
     }
+    const gathered: ContactConstraint[] = [];
+    // `open`: the top of a substep, where a feature the narrowphase no longer
+    // reports leaves the solve. Before the relax a row stays in for the pass
+    // whatever the gather says, at the geometry it had: the relax is what
+    // takes back what the biased pass left in it, and a row dropped between
+    // the two kept its warm start in the bodies' velocity. A ball the chain
+    // had crushed into the corner of a belt and a wall started its frame
+    // with 2.6 kN·s warm in each of the two rows, moved 8 cm off both in the
+    // first substep - out of the slop - and was launched at 40 m/s
+    // (`ride-tear` f104).
+    const regather = (open: boolean): void => {
+      gathered.length = 0;
+      for (let i = 0; i < pairs.length; i++) this.collide(pairs[i]!, dt, gathered);
+      if (open) for (let i = 0; i < contactRows.length; i++) contactRows[i]!.live = false;
+      for (let i = 0; i < gathered.length; i++) {
+        const c = gathered[i]!;
+        const row = rowByKey.get(contactKey(c));
+        if (row === undefined) {
+          const fresh = makeRow(c);
+          // Met after the warm start, a row has applied nothing yet, and last
+          // frame's impulse counted as applied would be taken back from the
+          // bodies by the relax.
+          if (!open) fresh.n = fresh.t = 0;
+          born.push(fresh);
+          continue;
+        }
+        row.place(c);
+        row.live = true;
+        this.rowOf.set(c, row);
+      }
+      // A feature the narrowphase stopped reporting holds nothing over: its
+      // impulse would warm start the next substep into a face it is not on.
+      for (let i = 0; i < contactRows.length; i++) {
+        const row = contactRows[i]!;
+        if (row.live) continue;
+        row.n = 0;
+        row.t = 0;
+      }
+    };
 
     const h = dt / k;
     const tieSoft = softness(Math.min(TieTuning.hertz, 0.25 / h), TieTuning.damping, h);
@@ -905,12 +1033,15 @@ export class TieSolver {
         }
         body.linearVelocity = new Vec2(v.x + dvx, v.y + dvy);
       }
-      // A rope regenerates its wrap path against the bodies as they now stand.
+      // The contacts, and a rope's wrap path, against the bodies as they now
+      // stand.
+      regather(true);
       for (let i = 0; i < rows.length; i++) rows[i]!.prepare(h);
       // Warm start: last substep's answer, applied before the first iteration.
       for (let i = 0; i < rows.length; i++) rows[i]!.warmStart();
       for (let i = 0; i < contactRows.length; i++) {
         const row = contactRows[i]!;
+        if (!row.live) continue;
         row.pressNow = row.press !== null ? row.press(row.normal) : 0;
         warmStartContact(row);
       }
@@ -919,13 +1050,18 @@ export class TieSolver {
       solveRows(rows, h, tieSoft, true, s % 2 === 1);
       for (let i = 0; i < contactRows.length; i++) {
         const row = contactRows[i]!;
-        solveContact(row, h, row.hard ? RIGID : contactSoft, !row.hard);
-      }
-      for (let i = 0; i < bodies.length; i++) {
+        if (row.live) solveContact(row, h, row.hard ? RIGID : contactSoft, !row.hard);
+      }      for (let i = 0; i < bodies.length; i++) {
         const body = bodies[i]!;
-        const p = body.globalPosition;
-        const v = body.linearVelocity;
-        body.globalPosition = new Vec2(p.x + v.x * h, p.y + v.y * h);
+        // A `continuous` body (the ball, its hook) is swept against the
+        // scenery as the world sweeps it when free, so no substep carries it
+        // across a face its contacts had not reached (see `World.recollide`).
+        if (body.continuous) this.sweep(body, h);
+        else {
+          const p = body.globalPosition;
+          const v = body.linearVelocity;
+          body.globalPosition = new Vec2(p.x + v.x * h, p.y + v.y * h);
+        }
         body.globalRotation += body.angularVelocity * h;
         if (body.spring) body.pinSpringAxes();
       }
@@ -938,14 +1074,15 @@ export class TieSolver {
       }
       // Relax: the same rows against the new positions, with no bias, which
       // takes back the velocity the bias put in.
+      regather(false);
       solveRows(rows, h, tieSoft, false, s % 2 === 1);
       for (let i = 0; i < contactRows.length; i++) {
         const row = contactRows[i]!;
+        if (!row.live) continue;
         solveContact(row, h, RIGID, false);
         row.totalN += row.n;
         row.totalT += row.t;
-      }
-      if (SolverStats.enabled) {
+      }      if (SolverStats.enabled) {
         SolverStats.sweeps += 2;
         SolverStats.solves += 2 * (rows.length + contactRows.length);
       }
@@ -955,7 +1092,7 @@ export class TieSolver {
       driven[i]!.globalPosition = drivenEnd[i]!.position;
       driven[i]!.globalRotation = drivenEnd[i]!.rotation;
     }
-    for (const row of contactRows) applyRestitution(row);
+    for (const row of contactRows) if (row.live) applyRestitution(row);
     for (const row of contactRows) {
       // The last substep's impulses warm start the next frame's first...
       this.contactCache.set(row.key, { n: row.n, t: row.t });
