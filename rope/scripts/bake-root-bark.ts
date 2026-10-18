@@ -11,13 +11,20 @@
 // wood itself is one colour. So the maps here are the relief's, from the one
 // field the root mesh displaces its rings by (`render3d/rootBarkField.ts`):
 //
-//   base    one bark colour, a few percent off it here and there, laid in
-//           broad strokes along the root that stay on one vein (so it is
-//           paint, not a gradient); the valleys are the same colour as the veins.
+//   base    one bark colour, drifting a few percent lighter or darker and
+//           warmer or cooler in patches of twenty to thirty centimetres (as
+//           bark's colour does, well under anything that reads as shading),
+//           laid in broad strokes along the root that stay on one vein (so
+//           it is paint, not a gradient); the valleys are the same colour
+//           as the veins.
 //   normal  the field's slope, at the physical aspect of the tile on a root
 //           (a texel is longer along the root than around it).
 //   ao      horizon occlusion of the same height field: the valleys in
 //           shadow, the crests open to the sky.
+//
+// A roughness map (crests smoother than valleys) was baked and dropped on
+// 2026-10-18: it changed a tenth of a percent of the frame, and the sheen
+// that would show it made the veins glossy.
 //
 // Deterministic (the field's own stream and this script's), so the same
 // script is the same picture and the pipeline's sha256 holds.
@@ -33,7 +40,7 @@ const outDir = process.argv[2] ?? "assets-src/painted-root";
 type Rgb = [number, number, number];
 // The bark, sRGB: the reference's warm brown between its lit and shaded
 // plates, since the light will take it either way.
-const BARK: Rgb = [0x7a, 0x4e, 0x22];
+const BARK: Rgb = [0x77, 0x50, 0x2a];
 // Pigment left in a valley: all of it. The veins are the wood's own colour,
 // and only the light tells them apart (Tris, 2026-10-18).
 const GAP_SHADE = 1;
@@ -66,17 +73,49 @@ const rand = rng(0x2008);
 const span = (r: [number, number]): number => r[0] + rand() * (r[1] - r[0]);
 const at = (x: number, y: number): number => (((y % SIZE) + SIZE) % SIZE) * SIZE + (((x % SIZE) + SIZE) % SIZE);
 
+// Wrapped value noise on an nx by ny lattice over the tile, 0..1.
+function noise(nx: number, ny: number, seed: number): (u: number, v: number) => number {
+  const r = rng(seed);
+  const lat = new Float32Array(nx * ny);
+  for (let i = 0; i < lat.length; i++) lat[i] = r();
+  const smooth = (t: number) => t * t * (3 - 2 * t);
+  return (u, v) => {
+    const fx = (((u % 1) + 1) % 1) * nx;
+    const fy = (((v % 1) + 1) % 1) * ny;
+    const x0 = Math.floor(fx) % nx;
+    const y0 = Math.floor(fy) % ny;
+    const x1 = (x0 + 1) % nx;
+    const y1 = (y0 + 1) % ny;
+    const tx = smooth(fx - Math.floor(fx));
+    const ty = smooth(fy - Math.floor(fy));
+    const a = lat[y0 * nx + x0]! * (1 - tx) + lat[y0 * nx + x1]! * tx;
+    const b = lat[y1 * nx + x0]! * (1 - tx) + lat[y1 * nx + x1]! * tx;
+    return a * (1 - ty) + b * ty;
+  };
+}
+// The pigment's slow drift: patches of a fifth to a third of the tile along
+// the root (13-22 cm) and a few around it, the value this far either way and
+// the warmth (red up, blue down, in sRGB units) this far.
+const DRIFT_VALUE = 0.06;
+const DRIFT_WARMTH = 5;
+const driftValue = noise(4, 3, 3001);
+const driftWarmth = noise(3, 4, 3002);
+
 // The field, sampled once per texel.
 const height = new Float32Array(SIZE * SIZE);
 const patch = new Int32Array(SIZE * SIZE);
 const rgb = new Float32Array(SIZE * SIZE * 3);
 for (let y = 0; y < SIZE; y++) for (let x = 0; x < SIZE; x++) {
-  const s = barkAt((x + 0.5) / SIZE, (y + 0.5) / SIZE);
+  const u = (x + 0.5) / SIZE, v = (y + 0.5) / SIZE;
+  const s = barkAt(u, v);
   const i = y * SIZE + x;
   height[i] = s.height;
   patch[i] = s.patch;
-  const shade = (0.9 + 0.2 * s.tone) * (1 - (1 - GAP_SHADE) * s.gap);
-  for (let c = 0; c < 3; c++) rgb[i * 3 + c] = BARK[c]! * shade;
+  const shade = (0.9 + 0.2 * s.tone) * (1 - (1 - GAP_SHADE) * s.gap) * (1 + (driftValue(u, v) - 0.5) * 2 * DRIFT_VALUE);
+  const warm = (driftWarmth(u, v) - 0.5) * 2 * DRIFT_WARMTH;
+  rgb[i * 3] = BARK[0] * shade + warm;
+  rgb[i * 3 + 1] = BARK[1] * shade;
+  rgb[i * 3 + 2] = BARK[2] * shade - warm;
 }
 
 // The strokes: the plate's tone under the centre, nudged a little lighter or

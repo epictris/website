@@ -1048,7 +1048,11 @@ function caseOrganicFork(): RootResult {
       for (let k = 0; k < 3; k++) {
         const ia = tri[k]!, ib = tri[(k + 1) % 3]!;
         const length = Math.hypot(p.getX(ia) - p.getX(ib), p.getY(ia) - p.getY(ib), p.getZ(ia) - p.getZ(ib));
-        if (length < 0.015 && Math.abs(uv.getY(ia) - uv.getY(ib)) > 0.06) grainJumps++;
+        // Away from the crotch, that is: since the fork became a crease
+        // (2026-10-18) the two branches' grain meets in the fold, as two
+        // roots' bark does, and the join attribute marks the fold.
+        const inCrease = join.getX(ia) > 0.5 || join.getX(ib) > 0.5;
+        if (!inCrease && length < 0.015 && Math.abs(uv.getY(ia) - uv.getY(ib)) > 0.06) grainJumps++;
         const a = vertices[k]!, b = vertices[(k + 1) % 3]!;
         const key = a < b ? `${a}/${b}` : `${b}/${a}`;
         edges.set(key, (edges.get(key) ?? 0) + 1);

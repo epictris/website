@@ -80,3 +80,40 @@ Prompt:
 The renderer derives a tangent normal map once from the painted luminance, so
 raised edges and relief follow the same strokes. The procedural maps remain a
 headless-safe fallback while loading or if the stored image is unavailable.
+
+## Woody (the default since 2026-10-18)
+
+Not a painting: `scripts/bake-root-bark.ts` (`bun run roots:bark`) bakes
+`painted-root-woody-{base,normal,ao}` under `assets-src/painted-root/` from the
+relief field in `render3d/rootBarkField.ts`, the same field the root mesh
+displaces its rings by, so the bumps the silhouette shows are the bumps the
+maps shade.
+The reference is the painted cave backdrop's own roots (`RR_bg_*`, the scene
+pictures), and what reads as blocks of colour there is relief under light:
+veins standing proud of the wood, lit along the crest, shaded down one flank,
+the valleys between them in shadow.
+The wood itself is one colour.
+
+The maps are deterministic (the field's own mulberry32 stream and the script's),
+so the same script is the same bytes and the pins hold.
+Only the albedo is lossy; the normal and occlusion maps are data and ship lossless.
+
+- `base`: one bark colour (`BARK`, #77502a sRGB, settled by eye against the backdrop: darker, then less saturated, then halfway back), drifting up to 6% in value and a few units of warmth in patches of 13-22 cm, laid in broad strokes along the root that stop at a vein's border, with a bristle streak; the valleys are the same colour as the veins.
+- `normal`: the field's slope at the tile's physical aspect on an 8 cm root (`ALONG` 2.6: a texel is that much longer along the root than around it; `AMP` 16: the relief's full height in across-texels, about 4 mm), +Y up.
+- `ao`: horizon occlusion of the same height field, eight directions, 28 texels' reach.
+
+The field itself is the vein description in [roots](roots.md#the-look); its
+constants (twelve veins, half-widths 0.05-0.12 of the wrap, runs of a tenth of
+the tile, the bell section's exponent 1.4) were each settled in review on
+2026-10-18, one at a time, against close shots in BALL: straight stripes,
+plates with drawn outlines, painted shadow blotches, scalloped silhouettes,
+pockets where a vein sank, sharp-pointed thin veins, blunt vein ends and a
+glossy sheen were each tried and rejected on the way.
+Changing the field changes what the mesh grows from the same level data, so
+bump `ROOT_MESH_VERSION` with it and re-bake both the bark and the roots.
+
+What the shader adds on top (`rootBark.ts`, this variant only): a painter's key
+light from the viewer's upper left, since the backdrop's roots are unlit
+pictures and the cave's fill alone renders a warm bark at a third of its albedo
+in rock shadow; it is shaded by the relief, the occlusion map and the fork's
+crotch.

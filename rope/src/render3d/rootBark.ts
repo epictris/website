@@ -38,7 +38,7 @@ interface BarkMaps {
 }
 let maps: BarkMaps | undefined;
 const materials = new Map<string, THREE.MeshStandardMaterial>();
-const paintedMaps = new Map<RootBarkVariant, Promise<{ map: THREE.Texture; normalMap: THREE.Texture; aoMap?: THREE.Texture } | undefined>>();
+const paintedMaps = new Map<RootBarkVariant, Promise<PaintedMaps | undefined>>();
 
 export function rootBarkMaterial(color: string, bark?: RootBarkVariant): THREE.MeshStandardMaterial {
   const variant = rootBarkVariant(bark), key = `${variant}:${color}`;
@@ -56,7 +56,7 @@ export function rootBarkMaterial(color: string, bark?: RootBarkVariant): THREE.M
   });
   // Thin growing ends have finer, smoother skin than established woody roots.
   // This is surface shading only: all shadow passes use the same actual mesh.
-  material.customProgramCacheKey = () => `painted-root-bark-v5-${variant === "woody" ? "lit" : "scene"}`;
+  material.customProgramCacheKey = () => `painted-root-bark-v6-${variant === "woody" ? "lit" : "scene"}`;
   material.onBeforeCompile = shader => {
     // The woody bark carries a painter's light of its own, as the backdrop's
     // painted roots do: a warm key from the viewer's upper left and a cool
@@ -82,6 +82,8 @@ export function rootBarkMaterial(color: string, bark?: RootBarkVariant): THREE.M
         #ifdef USE_AOMAP
         barkOpen *= texture2D(aoMap, vAoMapUv).r;
         #endif
+        // Diffuse only: a sheen lobe on the vein crests was tried (2026-10-18)
+        // and read as gloss; bark is matte.
         totalEmissiveRadiance += diffuseColor.rgb * barkLight * barkOpen * (0.1 + 0.9 * smoothstep(-0.25, 0.95, barkKey));
       `)
       .replace("#include <map_fragment>", `
@@ -117,6 +119,10 @@ export function rootBarkMaterial(color: string, bark?: RootBarkVariant): THREE.M
       }
       // Quiet matte paint: the detailed fallback's roughness grain would add
       // unrelated fine marks back over the broad, irregular painted plates.
+      // (A roughness map baked from the woody relief, crests smoother than
+      // valleys, was tried 2026-10-18: it changed a tenth of a percent of
+      // the frame under the cave's light, and with a sheen to show it, the
+      // veins read as glossy.)
       if (variant !== "original") {
         material.roughnessMap = null;
         material.roughness = variant === "woody" ? 0.88 : 0.91;
@@ -130,7 +136,8 @@ export function rootBarkMaterial(color: string, bark?: RootBarkVariant): THREE.M
   return material;
 }
 
-async function loadPaintedMaps(variant: RootBarkVariant): Promise<{ map: THREE.Texture; normalMap: THREE.Texture; aoMap?: THREE.Texture } | undefined> {
+interface PaintedMaps { map: THREE.Texture; normalMap: THREE.Texture; aoMap?: THREE.Texture }
+async function loadPaintedMaps(variant: RootBarkVariant): Promise<PaintedMaps | undefined> {
   const surface = rootSurfaceFor(variant);
   const loaded = await loadMaps(surface, TEXTURE_ASSETS[surface]!);
   if (!loaded.base) return undefined;

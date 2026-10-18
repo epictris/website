@@ -284,7 +284,7 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       base: {
         file: "/textures/painted-root-woody-base.webp",
         raw: "painted-root/painted-root-woody-base.png",
-        sha256: "689eb36745d0050294944aa2d00dace94fcd2806d2598545190d5699f34ca6ca", bytes: 24552,
+        sha256: "8a011e2b73fc4e2b5b2b273c48ad37668b3b858df602631cfbe79059f33f85b8", bytes: 24256,
       },
       normal: {
         file: "/textures/painted-root-woody-normal.webp",
