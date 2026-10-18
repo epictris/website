@@ -16,12 +16,7 @@ import {
 } from "../engine/body";
 import { bodyOverlapCircle, circleOverlap, shapeRadius } from "../engine/collision";
 import { shapeContacts } from "../engine/manifold";
-import { Hook } from "../classes/hook";
 import { BallHook } from "../classes/ballHook";
-import { LedgeClimbState } from "../classes/states/ledgeClimbState";
-import { LedgeHangState } from "../classes/states/ledgeHangState";
-import { OnWallState } from "../classes/states/onWallState";
-import { WallJumpingState } from "../classes/states/wallJumpingState";
 import { button, emptyFrameInput, type FrameInput } from "../input/frameInput";
 import { isSeamVertex, type Rope } from "../classes/rope";
 import type { RopeNode } from "../lib/ropeContact";
@@ -29,7 +24,6 @@ import { RopeRide } from "../lib/belt";
 import { shapeCrossesSpan, spanMotionBox, type Pose, type SpanMotion } from "../lib/spanSweep";
 import { WrapDirection } from "../lib/types";
 import { CONTACT_SLOP, type ContactConstraint, type World } from "../engine/world";
-import type { Level } from "../level/level";
 import type { BallLevel } from "../level/ballLevel";
 import type { BallPlayer } from "../classes/ballPlayer";
 import type { SceneChain } from "../level/chains";
@@ -237,8 +231,9 @@ export interface ChainDigest {
   // m/s the frame's own winding entitles the solve to
   // (`BallLevel.chainWinchSpeedBudget`).
   winchBudget?: number;
-  // m/s the chain phase handed the ball out of a surface it pushed it out of
-  // (`BallLevel.chainPushOutCredit`). Re-earned every frame is the pump.
+  // m/s the positional chain phase handed the ball out of a surface it pushed
+  // it out of. Not written since the phase was retired (2026-10-19): a bundle
+  // from before carries it, and nothing compares it.
   pushCredit?: number;
   // Build index of the body the chain's far end sits on, or null while the end
   // is still the hook in flight. A two-body interaction diagnosed from one
@@ -315,7 +310,7 @@ export interface SceneChainDigest {
 
 // What the level driver decided about its chain this frame. Passed in rather
 // than read off the rope, because it is the DRIVER's: the aim's spin, the
-// unwind's refund, the winch's budget and the push-out credit are all
+// unwind's refund and the winch's budget are both
 // `BallLevel` state, and the rope itself has never heard of any of them. Null
 // for a driver with no chain phase — the grapple avatar's rope, which is
 // steered by nothing and whose caller measures no push-out.
@@ -323,7 +318,6 @@ interface ChainPhaseState {
   aimSpin: number;
   unwindRefund: number;
   winchBudget: number;
-  pushCredit: number;
   braced: boolean;
 }
 
@@ -423,7 +417,6 @@ function worldDigestOf(
           stalled: rope.stalledLength,
           geometryPush: rope.geometryPush ?? 0,
           winchBudget: phase?.winchBudget ?? 0,
-          pushCredit: phase?.pushCredit ?? 0,
           anchorBody: anchorBodyOf(rope),
           braced: phase?.braced ? 1 : 0,
         }
@@ -455,20 +448,8 @@ function worldDigestOf(
 // describes, and reading its index would name a body nobody anchored to.
 function anchorBodyOf(rope: Rope): number | null {
   const obj = rope.end.contact.obj;
-  if (obj instanceof Hook || obj instanceof BallHook) return null;
+  if (obj instanceof BallHook) return null;
   return obj.buildIndex;
-}
-
-export function worldDigest(level: Level): WorldDigest {
-  return worldDigestOf(
-    level.frame,
-    level.world,
-    level.player.rope,
-    null,
-    undefined,
-    level.sceneChains,
-    level.tieChains,
-  );
 }
 
 export function worldDigestBall(level: BallLevel): WorldDigest {
@@ -480,7 +461,6 @@ export function worldDigestBall(level: BallLevel): WorldDigest {
       aimSpin: level.aimSpin,
       unwindRefund: level.chainUnwindRefund,
       winchBudget: level.chainWinchSpeedBudget,
-      pushCredit: level.chainPushOutCredit,
       braced: level.chainBraced,
     },
     // Written only on a level that HAS a finish line, so every level without
@@ -608,7 +588,6 @@ const CHAIN_FIELDS = [
   "stalled",
   "geometryPush",
   "winchBudget",
-  "pushCredit",
   "braced",
 ] as const;
 
@@ -764,22 +743,7 @@ export function recordingDeserializer(rec: Recording): (f: SerializedFrame) => F
   return inputDeserializer(rec.heldAtStart ?? 0);
 }
 
-export function digest(level: Level): Digest {
-  const p = level.player;
-  return {
-    frame: level.frame,
-    px: p.globalPosition.x,
-    py: p.globalPosition.y,
-    rot: p.globalRotation,
-    vx: p.velocity.x,
-    vy: p.velocity.y,
-    ropeLen: p.rope ? p.rope.getCurrentLength() : null,
-    maxRope: p.rope ? p.rope.maxRopeLength : null,
-    state: p.state.constructor.name,
-  };
-}
-
-// Ball & chain variant of digest() — same shape so recordings stay uniform.
+// A frame's digest: the ball's pose and its chain's length.
 export function digestBall(level: BallLevel): Digest {
   const b = level.ball;
   return {
@@ -842,85 +806,12 @@ const EMBED_TOLERANCE = 0.03;
 // solver-band noise, well under a centimetre.
 const HOOK_EMBED_TOLERANCE = 0.01;
 
-// Slack above numerical/geometry noise for the anchor-kick check. Legit anchors
-// brake (negative gain); a point-blank shot into a wall the ball is already
-// hitting nudges it a few tenths of m/s as it depenetrates. The tip-anchor bug
-// injects ~1.9 m/s — well clear of both.
-const ANCHOR_KICK_TOLERANCE = 0.6;
-// Ceiling on the speed the chain's length solve may add to the ball in a single
-// frame. The solve removes over-length by moving bodies and then converts that
-// displacement to velocity (Δposition/Δt), so a discontinuous jump in the path
-// length becomes a discontinuous jump in speed — a launch. Across the whole ball
-// corpus real play peaks at 2.1 m/s of gain in a frame, while the session-1474f
-// launch was +7.7 m/s (and +93.7 m/s in the recording), so 4 leaves ~2x headroom
-// over anything legitimate and still catches the bug by a wide margin.
-// `runaway-speed` never saw it: 96 m/s is far under that 1000 m/s ceiling.
-const CHAIN_SOLVE_KICK_TOLERANCE = 4;
 // Ceiling on applied tangential impulse beyond the kinematic spin's traction
 // budget (`World.spinDriveOverspend`, N·s). The budget arithmetic is exact -
 // the solver clamps to the same expression - so this is noise slack only: on
 // the ball's 52 kg, 1 N·s is 0.02 m/s. The wall launch it exists for overspent
 // by 193 N·s (`session-773f` f600).
 const SPIN_OVERDRIVE_TOLERANCE = 1;
-// Ceiling on how much inward speed the chain phase may hand the ball beyond what
-// its own constraint was opening at (`BallLevel.chainCreditOverBound`).
-//
-// This is the sharp form of the same idea `rope-solve-kick` states bluntly. That
-// one is a bar on the SIZE of a one-frame gain, so it has to sit clear of every
-// legitimate one - a chain going taut on a fast swing brakes several m/s in a
-// frame - and `session-360f` slipped under it at 2.1 against a bar of 4. A
-// constraint may only remove the motion opening it, so measured against that
-// entitlement the same frame reads 2.17 m/s of speed the chain was never owed,
-// and a legitimate brake reads zero however large it is.
-//
-// The tolerance is for the phase's other writes, which are real and are not the
-// length solve: the spin rollback, the unwind, and the into-surface refusal that
-// hands gravity's own step back. Measured over the whole ball corpus, exactly one
-// frame reaches over the bound at all - session-1426f f714, at 0.21 m/s - so 0.6
-// clears the top of that by nearly threefold while still catching session-360f's
-// 2.17 by more than three.
-const CHAIN_CREDIT_BOUND_TOLERANCE = 0.6;
-// How many consecutive frames the chain phase may hand the ball speed OUT of a
-// surface it pushed the ball out of (`BallLevel.chainPushCreditFrames`, counted
-// above `BallLevel.PUSH_CREDIT_SPEED`) before it is a pump.
-//
-// A push-out is the answer to a haul the geometry refused, and against static
-// geometry it can never leave the ball further out than it began. Against a
-// rigid body it could: hauled by the ball's own chain, the body moved INTO the
-// ball, and a push-out that then moved the ball alone credited the ball for the
-// body's share of the motion while the body kept its own credit for it - the
-// pair leaving together, 0.3 to 2.3 m/s a frame, until a ball and its 12.6 kg
-// anchor were doing 19 m/s (`session-324f` f252-270). The chain phase now
-// clears that overlap as a pair (`BallLevel.separateBallFromPathBodies`), and
-// this is the statement that it stays cleared.
-//
-// A bar on the SIZE would not do: the unwind turning the ball's mounting loop
-// into the scenery is cleared and credited in one frame at up to 2.2 m/s across
-// the corpus (`session-234f` f79), and the pump's per-frame credit sat under
-// that. What distinguishes a pump is that it is re-earned for as long as its
-// cause lasts - 18 consecutive frames on `session-324f`, 11 on `session-307f`
-// - where the corpus never strung more than 2 together. Six was the bar.
-//
-// IT NO LONGER SEPARATES THE TWO CLASSES, and the number below is housekeeping
-// over what healthy reads rather than a detection threshold. Measured
-// 2026-09-09 by replaying the three artifacts with `separateBallFromPathBodies`
-// disabled, which is the pump this counts: `session-324f` strings **5** frames
-// while the ball and its anchor leave together at 24 m/s, and `session-307f`
-// strings 2 at 9 m/s. Healthy, the same corpus reads 0 on 46 bundles, 1 on 9,
-// and 7 on `session-324f` - so the counter is now HIGHER on the press than on
-// the pump, and no bar drawn on it can tell them apart. What catches the
-// restored pump today is `rope-solve-kick` (7.0 m/s at `session-324f` f181);
-// nothing catches `session-307f`'s at all.
-//
-// Nine clears the measured healthy ceiling of 7 by two and stays two under the
-// shortest run the pump ever gave when the counter did work, so it keeps the
-// corpus honest without pretending to a detection it has lost. The class wants
-// a detector written on what a pump actually is - the ball and the body it is
-// anchored to GAINING SPEED TOGETHER and keeping it, where a press exchanges
-// momentum (`session-324f` f123-129 healthy: the anchor decelerates 2.85 to
-// 0.95 m/s as the ball accelerates 0.65 to 1.71, with the chain's length pinned
-// to a tenth of a pixel) - rather than on how long the credit runs.
-const CHAIN_PUSH_CREDIT_FRAMES = 9;
 // How far over its constraint length the anchored chain may measure before the
 // rope is not being enforced at all - the launch class, a wrap path appearing
 // at full size in one frame (`session-1474f`: half a metre of length error,
@@ -960,29 +851,6 @@ export const CHAIN_OVER_LENGTH_TOLERANCE = 0.25;
 // not the lease running away: `maxRopeLength` does not move a millimetre through
 // any of it, and the lease is re-derived from the present geometry every frame.
 const CHAIN_GROWTH_TOLERANCE = 1.0;
-// Consecutive frames the winch stall may keep letting length out. This is the
-// sharp measure, because a *run* of stalls is the shape of every chain runaway
-// there has been, and one blocked frame is not. The runaways ran 79, 51, 36, 32
-// and 28.
-//
-// The legitimate ceiling was 11 frames when this was written and is 46 now
-// (session-431f), and that is not drift - it is scenery having been given
-// friction against the ground it stands on. A stall is the chain being held over
-// its length by geometry, so how long one lasts is how long that geometry takes
-// to stop holding, and a frictionless rigid body relieved every block for free
-// by sliding out from under it. The blocks were short because the level was made
-// of ice. A chain anchored to a crate that stays put is now legitimately blocked
-// until the *ball* settles, which is tens of frames: 431f's runs 46, over which
-// `maxRopeLength` does not move at all and the lease is paid back to exactly
-// zero by f420.
-//
-// The count is correspondingly blunter, and `rope-grew` is what still holds the
-// gap: the one genuine chain runaway this change surfaced (session-1195f, a
-// point-blank anchor on a body the ball had wedged itself against, whose lease
-// climbed to 1.47 m on a 2.9 cm chain) tripped `rope-grew` twenty frames before
-// its stall run would have said anything, because a runaway is measured in
-// metres of chain and only incidentally in frames.
-const CHAIN_STALL_FRAMES_TOLERANCE = 60;
 // Consecutive frames the chain may hold a blocked-length lease while nothing is
 // blocking it. The lease is the constraint sitting where geometry is actually
 // holding the far end, and it is a *loan*: released at 0.5 m/s the moment the
@@ -1008,134 +876,6 @@ const CHAIN_LEASE_HELD_FRAMES_TOLERANCE = 120;
 // through the scene. Same 3 cm slack as the embed check.
 const CHAIN_CLIP_TOLERANCE = 0.03;
 const CHAIN_CLIP_SAMPLES = 24;
-
-// ---- input-frozen detector -------------------------------------------------
-// Flags the "player holds a direction but barely moves" class of bug: with a
-// mobile body nearby, holding a direction for a sustained window must produce
-// real displacement along it. Pressing into a static wall is exempt (no
-// mobile body involved). Frames in deliberate-stationary states (ledge hang /
-// climb, wall-jump startup, wall slide — attach requires toward-input, so
-// pressing into the wall there is deliberate) or with an active rope are
-// exempt — but a state merely *thrashing* through Airborne must not reset the
-// window, so the streak counts every non-exempt input-held frame regardless
-// of state.
-
-const STUCK_WINDOW = 45; // frames of continuous same-direction input
-const STUCK_MIN_DISPLACEMENT = 0.25; // m along the input direction over the window
-const STUCK_MOBILE_DIST = 0.48; // m — a mobile body this close implicates movers
-// Yield exemption (wedge rules: movers push, never freeze): a player being
-// displaced backward by a mover is moving, not frozen — the treadmill bug
-// class this detector exists for pins the player near zero displacement.
-// Two signatures qualify: shoved backward over the whole window, or a
-// sustained backward drift in the window's tail (the push phase of a window
-// that straddles earlier real progress).
-const STUCK_PUSHED_BACK_EXEMPT = 0.1; // m against the input over the window
-const STUCK_YIELD_TAIL = 15; // frames — tail length checked for backward drift
-const STUCK_YIELD_DISPLACEMENT = 0.03; // m backward over the tail counts as yielding
-
-function mobileBodyNear(level: Level): boolean {
-  const p = level.player;
-  for (const body of level.world.bodies) {
-    // `isMobile` and NOT `surfaceMoves`, deliberately: this detector only ARMS
-    // near a mobile body (a static wall pressed into is exempt), and a running
-    // belt is a static whose sweep the avatar resolves against like any other.
-    // Walking against a belt at its own speed is zero displacement by design -
-    // armed there it fired `input-frozen` every 45 frames (docs/conveyors.md).
-    if (body === p || body.removed || !body.isMobile || !body.hasShape()) continue;
-    if (body instanceof Hook) continue;
-    const s = body.primaryShape().shape;
-    // The rect form is spelled out rather than routed through `shapeRadius` so
-    // the expression stays literally what every recorded run was checked with.
-    const bound =
-      s.kind === "circle"
-        ? s.radius
-        : s.kind === "rect"
-          ? Math.hypot(s.size.x, s.size.y) * 0.5
-          : shapeRadius(s);
-    if (body.globalPosition.distanceTo(p.globalPosition) <= bound + STUCK_MOBILE_DIST) return true;
-  }
-  return false;
-}
-
-// A ledge climb is a short scripted traversal (~a second at most); staying in
-// LedgeClimbState longer means the climb target is unreachable (e.g. wedged in
-// a notch between rects) and the player is locked out of all input.
-const CLIMB_STALL_FRAMES = 90;
-
-export class StuckDetector {
-  private streak = 0;
-  private dir = 0;
-  private xs: number[] = [];
-  private mobileSeen: boolean[] = [];
-  private climbFrames = 0;
-
-  // Call once per frame after level.physicsProcess. Returns a violation when
-  // the window criteria trip, then restarts the streak (no per-frame spam).
-  push(level: Level, input: FrameInput): Violation | null {
-    const p = level.player;
-
-    // Climb-stall check (independent of input — climb ignores input).
-    this.climbFrames = p.state instanceof LedgeClimbState ? this.climbFrames + 1 : 0;
-    if (this.climbFrames === CLIMB_STALL_FRAMES) {
-      return {
-        frame: level.frame,
-        kind: "climb-stalled",
-        detail: `LedgeClimbState for ${CLIMB_STALL_FRAMES}f at (${p.globalPosition.x.toFixed(1)},${p.globalPosition.y.toFixed(1)})`,
-      };
-    }
-
-    const dir = (input.moveRight.held ? 1 : 0) - (input.moveLeft.held ? 1 : 0);
-    const exempt =
-      p.rope !== null ||
-      p.state instanceof LedgeHangState ||
-      p.state instanceof LedgeClimbState ||
-      p.state instanceof WallJumpingState ||
-      p.state instanceof OnWallState;
-
-    if (dir === 0 || exempt || dir !== this.dir) {
-      this.dir = dir;
-      this.streak = 0;
-      this.xs.length = 0;
-      this.mobileSeen.length = 0;
-      if (dir === 0 || exempt) return null;
-    }
-
-    this.streak++;
-    this.xs.push(p.globalPosition.x);
-    this.mobileSeen.push(mobileBodyNear(level));
-    if (this.streak < STUCK_WINDOW) return null;
-
-    const dx = (this.xs[this.xs.length - 1]! - this.xs[0]!) * dir;
-    // Peak forward progress within the window, not just endpoint-to-endpoint:
-    // a window straddling real progress followed by a mover push-back is
-    // movement, not a freeze — the treadmill bug class never advances at all.
-    const dxMax = Math.max(...this.xs.map((x) => (x - this.xs[0]!) * dir));
-    // Backward drift over the window tail — yielding to an active push.
-    const tail = this.xs[this.xs.length - 1 - STUCK_YIELD_TAIL];
-    const yielding =
-      tail !== undefined &&
-      (this.xs[this.xs.length - 1]! - tail) * dir < -STUCK_YIELD_DISPLACEMENT;
-    const mobileInvolved = this.mobileSeen.some(Boolean);
-    this.xs.shift();
-    this.mobileSeen.shift();
-    if (
-      dxMax < STUCK_MIN_DISPLACEMENT &&
-      dx > -STUCK_PUSHED_BACK_EXEMPT &&
-      !yielding &&
-      mobileInvolved
-    ) {
-      this.streak = 0;
-      this.xs.length = 0;
-      this.mobileSeen.length = 0;
-      return {
-        frame: level.frame,
-        kind: "input-frozen",
-        detail: `held ${dir > 0 ? "right" : "left"} ${STUCK_WINDOW}f, moved ${dx.toFixed(1)}px (state=${p.state.constructor.name})`,
-      };
-    }
-    return null;
-  }
-}
 
 // ---- energy invariant ------------------------------------------------------
 // The solver may not invent energy.
@@ -1198,9 +938,8 @@ const ROLL_UNFUNDED_FRAMES = 30;
 // A contact that is not at its Coulomb limit has been solved to NO SLIP: the
 // contact point is stationary against the surface, so the ball's centre moves
 // along that surface at exactly `radius x omega` and nothing else. The chain is
-// the one other thing entitled to move it, and `BallLevel.chainCreditVelocity`
-// is what that phase paid. Whatever is left is a body being driven along a
-// surface by nothing at all - which is the shape of every friction motor this
+// solved in the same island as the contact, so whatever is left is a body
+// being driven along a surface by nothing at all - which is the shape of every friction motor this
 // project has had, and of `session-315f`, where the chain's unwind took the
 // frame's rotation back off the ball while the contact solve had already sold it
 // as roll: the ball crossed 40 cm of the platform it rested on, at 0.46 m/s,
@@ -1242,7 +981,6 @@ export class RollMonitor {
     const unfunded =
       ball.linearVelocity
         .sub(other.velocityAtPoint(best.point))
-        .sub(level.chainCreditVelocity)
         .dot(tangent) + spinAtPoint.dot(tangent);
     if (Math.abs(unfunded) <= ROLL_UNFUNDED_SPEED) {
       this.run = 0;
@@ -2031,41 +1769,6 @@ export function checkBallInvariants(level: BallLevel): Violation[] {
       detail: `|vel|=${b.linearVelocity.length().toFixed(1)}`,
     });
   }
-  // A chain going taut against a fixed anchor can only brake the ball, never
-  // accelerate it. A positive solver speed-gain on the anchoring frame means
-  // the anchor was born over its max length and the solve dumped the excess
-  // into the ball as a one-frame velocity kick (the tip-anchor lurch).
-  //
-  // Except by the winch, and for exactly the reason `rope-solve-kick` below
-  // subtracts the same budget: a ball spinning as its hook lands is winding
-  // chain onto its own rim, the free span shortens by |omega| x the spool rate,
-  // and hauling the ball towards its anchor is what pays for that. It is the
-  // mechanic, not a lurch, and it is not rare on an anchoring frame - the shot
-  // leaves through the loop, so the ball is usually still turning when the hook
-  // lands. Charged to the bare bar it read as the bug at 1.1 m/s out of a 2.7
-  // m/s entitlement, on frames whose over-length was 100% the winding's
-  // (`session-234f` f84, `session-576f` f61).
-  const anchorKick = (level.anchorKickSpeedGain ?? 0) - level.chainWinchSpeedBudget;
-  if (level.anchorKickSpeedGain !== null && anchorKick > ANCHOR_KICK_TOLERANCE) {
-    out.push({
-      frame,
-      kind: "rope-anchor-kick",
-      detail:
-        `solve added ${level.anchorKickSpeedGain.toFixed(1)} m/s as the chain anchored, ` +
-        `${anchorKick.toFixed(1)} of it beyond what winding paid for`,
-    });
-  }
-  // Measured against what the frame's own winding entitles the solve to. Winding
-  // chain onto the ball shortens the free span by |omega| x the spool rate, and
-  // the winch pays for that by hauling the ball in - so at 41 rad/s on the ball's
-  // own rim the chain legitimately reels in 9 cm in a frame, which is 5.5 m/s and
-  // nothing to do with a launch. Charging that to the same 4 m/s bar as a
-  // phantom one reports the mechanic working (`session-265f` f139, where the
-  // whole 4.5 m/s gain is covered by the winding that frame).
-  //
-  // A launch has no winding behind it - `session-1474f`'s 96 m/s came from a wrap
-  // path jumping half a metre with the ball barely turning - so subtracting the
-  // budget leaves that case exactly as visible as it was.
   // Friction fighting the steered spin's slip may spend only what the sustained
   // load (the ball's own weight into the surface) and the linear slip fund -
   // never an impact's normal impulse. The spin is kinematic, so the contact
@@ -2083,37 +1786,6 @@ export function checkBallInvariants(level: BallLevel): Violation[] {
         `contact friction overspent the kinematic spin's traction budget by ` +
         `${level.world.spinDriveOverspend.toFixed(1)} N·s` +
         (level.world.spinDriveDetail ? ` (${level.world.spinDriveDetail})` : ""),
-    });
-  }
-  const kick = (level.chainSolveSpeedGain ?? 0) - level.chainWinchSpeedBudget;
-  if (level.chainSolveSpeedGain !== null && kick > CHAIN_SOLVE_KICK_TOLERANCE) {
-    out.push({
-      frame,
-      kind: "rope-solve-kick",
-      detail:
-        `chain solve added ${level.chainSolveSpeedGain.toFixed(1)} m/s in one frame, ` +
-        `${kick.toFixed(1)} of it beyond what winding paid for`,
-    });
-  }
-  if (
-    level.chainCreditOverBound !== null &&
-    level.chainCreditOverBound > CHAIN_CREDIT_BOUND_TOLERANCE
-  ) {
-    out.push({
-      frame,
-      kind: "rope-credit-unearned",
-      detail:
-        `chain phase took ${level.chainCreditOverBound.toFixed(2)} m/s more along its own pull ` +
-        `than the constraint was opening at`,
-    });
-  }
-  if (level.chainPushCreditFrames > CHAIN_PUSH_CREDIT_FRAMES) {
-    out.push({
-      frame,
-      kind: "rope-push-credit",
-      detail:
-        `chain phase has handed the ball speed out of a surface it pushed the ball out of ` +
-        `for ${level.chainPushCreditFrames} frames running (${level.chainPushOutCredit.toFixed(2)} m/s this frame)`,
     });
   }
   if (b.chain) {
@@ -2160,13 +1832,6 @@ export function checkBallInvariants(level: BallLevel): Violation[] {
         frame,
         kind: "rope-lease-held",
         detail: `${(b.chain.blockedSlack * 100).toFixed(1)}cm of blocked-length lease unrepaid for ${level.chainLeaseHeldFrames} frames with nothing blocking it`,
-      });
-    }
-    if (level.chainStallFrames > CHAIN_STALL_FRAMES_TOLERANCE) {
-      out.push({
-        frame,
-        kind: "rope-stalling",
-        detail: `winch stall has let chain out for ${level.chainStallFrames} frames running`,
       });
     }
     // Chain-clip: no span's interior may run deep inside static geometry. A span
@@ -2443,55 +2108,5 @@ export function checkSleepers(frame: number, world: World): Violation[] {
       });
     }
   }
-  return out;
-}
-
-// Per-frame sanity checks (ported in spirit from snapshot/InvariantChecker.cs).
-export function checkInvariants(level: Level): Violation[] {
-  const out: Violation[] = [];
-  const p = level.player;
-  const frame = level.frame;
-  out.push(...checkBreakables(frame, level.world, p.rope?.end.contact.obj ?? null));
-
-  if (!p.globalPosition.isFinite() || !p.velocity.isFinite()) {
-    out.push({ frame, kind: "nan", detail: `pos=${p.globalPosition} vel=${p.velocity}` });
-    return out; // further checks meaningless
-  }
-  if (p.velocity.length() > RUNAWAY_SPEED) {
-    out.push({ frame, kind: "runaway-speed", detail: `|vel|=${p.velocity.length().toFixed(1)}` });
-  }
-  if (p.rope) {
-    const len = p.rope.getCurrentLength();
-    // While the hook is still an unanchored projectile, maxRopeLength is reset to
-    // the path length every frame and the hook moves after the rope step, so the
-    // length legitimately exceeds it — only meaningful once the rope is anchored.
-    const anchored = !(p.rope.end.contact.obj instanceof Hook);
-    if (anchored && len > p.rope.constraintLength + 0.05) {
-      out.push({
-        frame,
-        kind: "rope-over-length",
-        detail: `len=${len.toFixed(1)} > max=${p.rope.constraintLength.toFixed(1)}`,
-      });
-    }
-    if (Number.isNaN(len)) out.push({ frame, kind: "rope-nan", detail: "rope length NaN" });
-  }
-  const shape = p.primaryShape().shape;
-  if (shape.kind === "circle") {
-    for (const body of level.world.bodies) {
-      if (!(body instanceof StaticBody2D) || !body.hasShape() || !body.isSolid) continue;
-      const ov = bodyOverlapCircle(body, p.globalPosition, shape.radius);
-      if (ov && ov.depth > EMBED_TOLERANCE) {
-        out.push({
-          frame,
-          kind: "player-embedded",
-          detail: `depth=${ov.depth.toFixed(2)} in ${body.name || "static"}`,
-        });
-        break;
-      }
-    }
-  }
-  out.push(...checkSceneChains(frame, level.sceneChains));
-  out.push(...checkTieChains(frame, level.tieChains));
-  out.push(...checkSleepers(frame, level.world));
   return out;
 }

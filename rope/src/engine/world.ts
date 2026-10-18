@@ -9,6 +9,7 @@ import { Vec2 } from "./vec2";
 import { circleShape, shapeExtents, shapeWorldVertices } from "./shapes";
 import type { ShapeTransform } from "./shapes";
 import {
+  AnimatableBody2D,
   Area2D,
   CharacterBody2D,
   CollisionObject2D,
@@ -1071,6 +1072,16 @@ export class World {
   // contacts the gather found for tied bodies, so the slats' positions and
   // velocities are final by the time anything after `integrate` reads them.
   private stepTies(islandContacts: ContactConstraint[], dt: number): void {
+    // The movers that moved this frame, for the island to carry through its
+    // substeps (see `TieSolver.driven`). A jump is not motion (`teleported`).
+    const driven: AnimatableBody2D[] = [];
+    for (const body of this.bodies) {
+      if (!(body instanceof AnimatableBody2D) || body.removed || body.jumped) continue;
+      if (body.linearVelocity.x !== 0 || body.linearVelocity.y !== 0 || body.angularVelocity !== 0) {
+        driven.push(body);
+      }
+    }
+    this.ties.driven = driven;
     this.ties.step(islandContacts, GRAVITY, dt);
     PhaseTrace.mark("ties", this);
   }
@@ -1081,7 +1092,7 @@ export class World {
   stepTiesStandalone(dt: number, only: ReadonlySet<IslandUnit>): void {
     const tied = new Set<RigidBody2D>();
     for (const chain of only) for (const body of chain.bodies) tied.add(body);
-    const contacts = this.collectContacts(tied).filter(TieSolver.ownsContact);
+    const contacts = this.collectContacts(tied, dt).filter(TieSolver.ownsContact);
     this.frameContacts = [];
     this.ties.step(contacts, GRAVITY, dt, only);
     this.frameContacts = contacts;
@@ -1665,8 +1676,46 @@ export class World {
   // `only` narrows the gather to pairs one of these bodies leads: the tied
   // chains' build settle asks for the contacts of its own bodies and nothing
   // else (`stepTiesStandalone`).
-  collectContacts(only: ReadonlySet<RigidBody2D> | null = null): ContactConstraint[] {
+  // How far out a body's contacts are gathered: `CONTACT_SLOP`, and for a body
+  // an island integrates (`tied`) as far again as it can travel in the frame
+  // (`dt`) - SPECULATIVE CONTACTS, Box2D's continuous answer for a substepped
+  // solver. The world integrates a free body before it gathers, so the gather
+  // sees where the frame has taken it; an island body is gathered where the
+  // frame FOUND it and moved through the substeps afterwards, so a face more
+  // than the slop away had no row to stop it: a ball hauled up into a belt's
+  // run at 2.3 m/s went through the band, and the chain then wrapped the
+  // belt's far wheel, a 9.7 m path (`ride-wrap-sweep`). Gathered out to its
+  // reach, a contact that is still apart is a row that lets the pair close no
+  // faster than the gap (`solveContact`'s `s / h`), re-read every substep, so
+  // the body stops on the face at whatever substep it gets there. The reach is
+  // the centre's travel under its velocity and gravity, and the rim's under
+  // its spin for a body whose pieces are not all round on its centre.
+  private gatherReach(body: PhysicsBody2D, dt: number): number {
+    if (dt <= 0 || !(body instanceof RigidBody2D) || !body.tied) return CONTACT_SLOP;
+    let reach = body.linearVelocity.length() * dt + 0.5 * GRAVITY.length() * Math.abs(body.gravityScale) * dt * dt;
+    if (body.angularVelocity !== 0) {
+      let arm = 0;
+      for (const piece of body.getShapes()) {
+        const off = piece.globalPosition.distanceTo(body.globalPosition);
+        if (piece.shape.kind === "circle" && off < 1e-9) continue;
+        const e = piece.extents();
+        arm = Math.max(arm, off + Math.max(e.x, e.y));
+      }
+      reach += Math.abs(body.angularVelocity) * arm * dt;
+    }
+    return CONTACT_SLOP + reach;
+  }
+
+  collectContacts(only: ReadonlySet<RigidBody2D> | null = null, dt = 0): ContactConstraint[] {
     const out: ContactConstraint[] = [];
+    // The island bodies' reaches (see `gatherReach`); every other body gathers
+    // at `CONTACT_SLOP`, exactly as it always did.
+    const reach = new Map<PhysicsBody2D, number>();
+    if (dt > 0) {
+      for (const body of this.bodies) {
+        if (body instanceof RigidBody2D && body.tied) reach.set(body, this.gatherReach(body, dt));
+      }
+    }
     // Broadphase pair discovery. Every pair that can produce a constraint has
     // a rigid side that survives every rigid-side filter below (role `a` is
     // by definition rigid, awake, not passable and a solid target), so
@@ -1696,15 +1745,11 @@ export class World {
         maxY = Math.max(maxY, c.y + e.y);
       }
       // The narrowphase gathers speculative contacts down to -CONTACT_SLOP
-      // depth, so the query box carries the same slop the box test below does.
+      // depth, so the query box carries the same slop the box test below does,
+      // or the island body's reach (`gatherReach`).
       const cands: CollisionShape2D[] = [];
-      this.broadphase.query(
-        minX - CONTACT_SLOP,
-        minY - CONTACT_SLOP,
-        maxX + CONTACT_SLOP,
-        maxY + CONTACT_SLOP,
-        cands,
-      );
+      const slop = reach.get(a) ?? CONTACT_SLOP;
+      this.broadphase.query(minX - slop, minY - slop, maxX + slop, maxY + slop, cands);
       for (const s of cands) {
         const t = s.owner;
         if (t === a || !(t instanceof PhysicsBody2D) || t.removed) continue;
@@ -1717,7 +1762,8 @@ export class World {
     for (const key of orderedKeys) {
       const bi = this.bodies[Math.floor(key / 0x100000)]!;
       const bj = this.bodies[key % 0x100000]!;
-      this.collectPairContacts(bi, bj, out);
+      const slop = Math.max(reach.get(bi) ?? CONTACT_SLOP, reach.get(bj) ?? CONTACT_SLOP);
+      this.collectPairContacts(bi, bj, out, slop);
     }
     return out;
   }
@@ -1728,6 +1774,7 @@ export class World {
     bi: PhysicsBody2D,
     bj: PhysicsBody2D,
     out: ContactConstraint[],
+    slop = CONTACT_SLOP,
   ): void {
     {
       {
@@ -1798,10 +1845,10 @@ export class World {
             if (!shapesCollide(sa, sb)) continue;
             const eb = sb.extents();
             const dx = sa.globalPosition.x - sb.globalPosition.x;
-            if (Math.abs(dx) > ea.x + eb.x + CONTACT_SLOP) continue;
+            if (Math.abs(dx) > ea.x + eb.x + slop) continue;
             const dy = sa.globalPosition.y - sb.globalPosition.y;
-            if (Math.abs(dy) > ea.y + eb.y + CONTACT_SLOP) continue;
-            this.gatherShapePair(out, a, si, sa, b, sj, sb);
+            if (Math.abs(dy) > ea.y + eb.y + slop) continue;
+            this.gatherShapePair(out, a, si, sa, b, sj, sb, slop);
           }
         }
       }
@@ -1818,6 +1865,7 @@ export class World {
     b: PhysicsBody2D,
     shapeB: number,
     sb: ShapeTransform,
+    slop = CONTACT_SLOP,
   ): void {
     // EVERY contact comes here, circles against static geometry included. That
     // one was the last exclusion, and what it excluded was a load path: a rigid
@@ -1852,14 +1900,14 @@ export class World {
     if (sa.shape.kind !== "circle") {
       // `shapeContacts(x, y)` reports normals out of `y` toward `x`, which is
       // already the convention.
-      for (const c of shapeContacts(sa, sb, CONTACT_SLOP)) {
+      for (const c of shapeContacts(sa, sb, slop)) {
         push(c.normal, c.depth, c.point, c.featureId);
       }
       return;
     }
     if (sb.shape.kind !== "circle") {
       // The vertex shape has to lead, so the normals come out the other way.
-      for (const c of shapeContacts(sb, sa, CONTACT_SLOP)) {
+      for (const c of shapeContacts(sb, sa, slop)) {
         push(c.normal.neg(), c.depth, c.point, c.featureId);
       }
       return;
@@ -1871,7 +1919,7 @@ export class World {
     const delta = sa.globalPosition.sub(sb.globalPosition);
     const dist = delta.length();
     const depth = ra + sb.shape.radius - dist;
-    if (depth <= -CONTACT_SLOP) return;
+    if (depth <= -slop) return;
     const normal = dist > 1e-9 ? delta.div(dist) : Vec2.UP;
     // A circle's contact point is on its own rim, back along the normal.
     push(normal, depth, sa.globalPosition.sub(normal.mul(ra)), CIRCLE_PAIR_FEATURE);
@@ -2378,7 +2426,7 @@ export class World {
     // the same solver is a worthwhile follow-up once `cli contacts` has been
     // green across a few changes, and a valuable one: warm-started static
     // manifolds are where Box2D's resting-stack quality actually comes from.
-    let constraints = this.collectContacts();
+    let constraints = this.collectContacts(null, dt);
     // Every contact touching a tied body is a row of its island's solve
     // (`TieSolver`), not of this one - the scenery under a slat, another slat,
     // and the ball on it, solved there with its real mass so the two agree at
@@ -2406,7 +2454,13 @@ export class World {
     // them and carry the impulses the island applied.
     if (islandContacts) {
       this.stepTies(islandContacts, dt);
-      constraints = constraints.concat(islandContacts);
+      // An island body's contacts past the slop are the island's own lookahead
+      // (`gatherReach`), not touches: only one the bodies closed - that pushed,
+      // or stands closed - is the frame's, so every reader of the contact set
+      // (the grips, the latch, the sparks, the digest) sees what it always saw.
+      for (const c of islandContacts) {
+        if (c.depth > -CONTACT_SLOP || c.normalImpulse > 0 || this.ties.engaged(c)) constraints.push(c);
+      }
     }
 
     // Which surfaces each body met this frame, and the grippiest of them.

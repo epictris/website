@@ -2,14 +2,11 @@
 // if the bundle carries digests, flagging the first frame that diverges.
 // Ported in spirit from tools/Replay.cs.
 
-import { Level } from "../level/level";
 import { BallLevel } from "../level/ballLevel";
 import { LEVELS } from "../level/registry";
 import { spawnAtCheckpoint } from "../level/levelFormat";
 import {
   checkBallInvariants,
-  checkInvariants,
-  digest,
   digestBall,
   EnergyMonitor,
   GripPinMonitor,
@@ -21,8 +18,6 @@ import {
   DRIFT_EPSILON,
   digestsByFrame,
   recordingDeserializer,
-  StuckDetector,
-  worldDigest,
   worldDigestBall,
   worldDigestDeltas,
   worldDigestDrift,
@@ -111,13 +106,24 @@ export interface ReplayResult {
 // Reconstruct the level a recording plays on. Self-contained bundles
 // (level-editor exports) carry their own geometry; use it rather than the
 // registry, which won't know the ad-hoc level.
-export function levelFromRecording(rec: Recording): Level | BallLevel {
+// Whether a recording was played on the grapple controller, which was retired
+// on 2026-10-19: one that embeds its level and does not name the ball, or one
+// that names a level the grapple alone was registered for. It cannot be
+// replayed.
+export function recordedOnGrapple(rec: Recording): boolean {
+  return rec.data ? rec.controller !== "ball" : rec.controller === "grapple";
+}
+
+export function levelFromRecording(rec: Recording): BallLevel {
+  if (recordedOnGrapple(rec)) {
+    throw new Error(`${rec.level}: recorded on the grapple controller, which was retired; it cannot be replayed`);
+  }
   // The ball it was played with (see `Recording.ball`): the same level file is
   // both difficulties.
   const options = { ball: rec.ball === "glass" ? ("glass" as const) : ("iron" as const) };
   if (rec.data) {
     const data = spawnAtCheckpoint(rec.data, rec.checkpoint);
-    return rec.controller === "ball" ? new BallLevel(data, options) : new Level(data);
+    return new BallLevel(data, options);
   }
   const spec = LEVELS[rec.level];
   if (!spec) throw new Error(`Unknown level: ${rec.level}`);
@@ -127,7 +133,7 @@ export function levelFromRecording(rec: Recording): Level | BallLevel {
   // twice is moving to it once, so a self-contained bundle that already carries
   // the moved spawn is unaffected by the same call above.
   const data = spawnAtCheckpoint(spec.data, rec.checkpoint);
-  return spec.controller === "ball" ? new BallLevel(data, options) : new Level(data, spec.init);
+  return new BallLevel(data, options);
 }
 
 export function replayRecording(rec: Recording, options: ReplayOptions = {}): ReplayResult {
@@ -141,7 +147,6 @@ export function replayRecording(rec: Recording, options: ReplayOptions = {}): Re
   const digests: Digest[] = [];
   const worldDigests: WorldDigest[] = [];
   const violations: Violation[] = [];
-  const stuck = new StuckDetector();
   // Ball levels only: the grapple avatar's locomotion is a forced body by
   // construction, and the mover levels contain scripted geometry that does real
   // work on whatever it touches, so an energy budget there is not an invariant
@@ -165,27 +170,21 @@ export function replayRecording(rec: Recording, options: ReplayOptions = {}): Re
   for (let i = 0; i < rec.frames.length; i++) {
     const input = deserialize(rec.frames[i]!);
     level.physicsProcess(input, 1 / 60);
-    const d = level instanceof BallLevel ? digestBall(level) : digest(level);
+    const d = digestBall(level);
     digests.push(d);
-    const wd = level instanceof BallLevel ? worldDigestBall(level) : worldDigest(level);
+    const wd = worldDigestBall(level);
     worldDigests.push(wd);
-    if (level instanceof BallLevel) {
-      violations.push(...checkBallInvariants(level));
-      const ev = energy.push(level, input);
-      if (ev) violations.push(ev);
-      const rv = roll.push(level);
-      if (rv) violations.push(rv);
-      const gv = gripPin.push(level);
-      if (gv) violations.push(gv);
-      const av = gripAnchor.push(level);
-      if (av) violations.push(av);
-      const tv = tunnel.push(level);
-      if (tv) violations.push(tv);
-    } else {
-      violations.push(...checkInvariants(level));
-      const sv = stuck.push(level, input);
-      if (sv) violations.push(sv);
-    }
+    violations.push(...checkBallInvariants(level));
+    const ev = energy.push(level, input);
+    if (ev) violations.push(ev);
+    const rv = roll.push(level);
+    if (rv) violations.push(rv);
+    const gv = gripPin.push(level);
+    if (gv) violations.push(gv);
+    const av = gripAnchor.push(level);
+    if (av) violations.push(av);
+    const tv = tunnel.push(level);
+    if (tv) violations.push(tv);
     const expected = expectedDigestAt(i + 1);
     if (expected) {
       if (bitDivergedAtFrame === null && !digestsEqual(d, expected)) bitDivergedAtFrame = i + 1;

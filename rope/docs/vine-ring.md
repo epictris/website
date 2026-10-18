@@ -3,7 +3,7 @@
 The ball's manacle no longer bites a vine link as it bites a rock (a design decision, 2026-09-10): it THREADS onto the vine as a ring, the cord through its bore, and is a cross between a rail and a viscous face (`lib/vineClamp.ts`, `RopeVineClamp`).
 Like a rail in what holds it: the ring is constrained to the cord until the player lets go of the chain or it slides off the vine's free bottom end - it cannot be pulled off sideways however the ball swings, and a span, having no free end, never lets it off at all.
 Like mud in how it moves: it creeps along the cord under the chain's pull by the viscous law (`creepSpeed`, a power of the load) rather than a rail's Coulomb cone, so a hanging ball draws it slowly down the vine, a falling ball caught on one drags it a long way before it is slowed to a hang, and a ball swinging out sideways barely moves it.
-Only the ball's chain does this; the player's grapple still grabs a link as it always did.
+Only the ball's chain does this; the grapple, until it was retired on 2026-10-19, grabbed a link as it always had.
 
 **Where the ring stands is a SEGMENT of the vine's polyline and a FRACTION along it**, the polyline being the anchor, the link centres in order, and a span's second anchor.
 Not an arc length, because a hanging vine's joints run to `VINE_TOLERANCE` and its arc breathes with them, while a fraction of a segment stays put.
@@ -82,7 +82,7 @@ Letting the link keep its share, as a plank or berry does, left the coupled swee
 Reading the creep against the ring held at the frame's start moved the residual 0.4 mm: it was the ball's, not the cord's.
 As rows, the ball, the link and the cord are one velocity solve, nothing is rolled back, and the creep is the row's (`ring-hang` 3.04 cm/s against the law's 3.00).
 On the session's own inputs the grab swings 0.84 m and the tip 1.45 m (0.49 and 0.75 positional), with the ball peaking at 3.5 m/s against 6.1; let go of mid-swing, ball and rope only lose energy, the free tip whipping to 7.5-9.9 m/s on the ball's.
-A row's walk that runs off the cord's free end is answered at the top of the next frame (`Rope.settleRowRunOff`), as a positional ring's is at its first look; a span has no free end, so the island path never needed it before.
+A row's walk that runs off the cord's free end is answered at the top of the next frame (`Rope.settleRowEnd`), as a positional ring's is at its first look; a span has no free end, so the island path never needed it before.
 `ring-rope-haul` pins the rule (a light rope whirled under the ball: none of its share rolled back; 1940 mm without the island hold), and `ring-square`'s throw bar is the kick's own speed, since a cord that gives no longer cuts the kick's radial part on the first frame.
 
 What is still unplayed: the push-fit ring, the thread-on inset, and the drop coming back armed.

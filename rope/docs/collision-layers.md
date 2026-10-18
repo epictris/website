@@ -22,8 +22,8 @@ It is the rule the rest of the project already states, applied to one more quest
 |---|---|---|
 | 1 | `LAYER_SCENERY` | ordinary level geometry and props - every static, every rigid body, every level ever authored; and a berry vine's berry, whose own mask is `LAYER_PLAYER \| LAYER_HOOK \| LAYER_ROPE` so it meets the ball, the hook and the chain and no scenery (see [vines](vines.md#berry-vines)) |
 | 2 | `LAYER_ANCHOR` | geometry only the hook may find: a `passable` body, a vine link (see [hook-surfaces](hook-surfaces.md#hook-only-bodies)) |
-| 4 | `LAYER_PLAYER` | the avatar - `Player` on the grapple levels, `BallPlayer` on the ball ones |
-| 8 | `LAYER_HOOK` | the chain end - the grapple `Hook`, the ball's `BallHook` and its cuff |
+| 4 | `LAYER_PLAYER` | the avatar - `BallPlayer` (and the grapple `Player`, retired 2026-10-19) |
+| 8 | `LAYER_HOOK` | the chain end - the ball's `BallHook` and its cuff (and the grapple `Hook`, retired 2026-10-19) |
 | 16 | `LAYER_ROPE` | the rope/chain PATH |
 
 They are **disjoint**, and deliberately.
@@ -68,18 +68,20 @@ The symptom is exactly the shape of a half-applied filter: *the ball passes thro
 
 Queries that are not a shape carry the same pair as two numbers.
 `RayOptions.collisionMask` is which categories the ray may hit (tested against each piece's `layer`) and `RayOptions.collisionLayer` is the category the ray is cast **on behalf of** (tested against each piece's `mask`) - the half that lets a piece decline a query.
-A stool leg is scenery to every ray and still not something the avatar's own wall probes may find.
+A stool leg is scenery to every ray and still not something a ray cast on the avatar's behalf may find.
 Both are optional, and a diagnostic query that states neither sees the world whatever it is authored as.
 
 The rest, each honouring it in one place:
 
-- The grapple `Hook` raycasts as `LAYER_HOOK` for `MASK_ALL`; the avatar's wall and ground probes (`onWallState`, `airborneState`) raycast as `LAYER_PLAYER` for `MASK_SOLID`.
 - `BallHook.reaches` gates all three of its attach paths - the swept bar, the blocking contact and the resting probe - and it is separate from `bites` because the two say different things: a hook-proof piece still *deflects* the hook, while a piece the cuff is not in the way of is nothing to it at all.
-- `SlackSimulation.resolveRopeCollisions` - the grapple rope's drawn slack - drops a piece the rope is not in the way of, so the slack drapes over the same geometry the taut path wraps.
-- `LedgeDetection.findGrab` drops a piece the avatar is not stopped by, and so does the corner-burial scan beside it (and `drawLedgeOverlay`, which has to show exactly the set `findGrab` walks): a corner you cannot be stopped by is not a corner you can hang off.
+- `SlackSimulation.resolveRopeCollisions` - the ported rope slack, currently unwired - drops a piece the rope is not in the way of, so the slack drapes over the same geometry the taut path wraps.
+
+The grapple controller's queries honoured it too, until that controller was retired on 2026-10-19.
+Its `Hook` raycast as `LAYER_HOOK` for `MASK_ALL`, and the avatar's wall and ground probes (`onWallState`, `airborneState`) as `LAYER_PLAYER` for `MASK_SOLID`.
+`LedgeDetection.findGrab` dropped a piece the avatar was not stopped by, and so did the corner-burial scan beside it (and `drawLedgeOverlay`, which had to show exactly the set `findGrab` walked): a corner you cannot be stopped by is not a corner you can hang off.
 
 One simplification is left, deliberately: `CollisionShape2D.isVertexExposed` - a piece asking whether its **own siblings** have buried a corner - does not read masks.
-It is computed once at build and cached because the arrangement of a body's pieces is rigid, and a per-mask answer would be a cache per asker on a path the ledge query walks every frame.
+It is computed once at build and cached because the arrangement of a body's pieces is rigid, and a per-mask answer would be a cache per asker on a path the ledge query walked every frame.
 What it costs is a corner of the seat that a leg happens to bury reading as occluded although the avatar passes through that leg, which needs the pieces to actually overlap at the corner in question - legs are inset from a seat's edge, and it is the seat's outer corners a player grabs.
 
 ## Authoring
@@ -107,7 +109,7 @@ A piece that anything passes through is drawn with the dotted edge a hook-only b
 ## The detector
 
 `cli contacts` `collision-mask` builds the stool - one rigid body, a seat and a leg standing on a floor - and asks every path that can stop something, with the **seat as the control in each**: a case that reported "passed through" for both pieces would be asserting that the stool had been deleted.
-The character sweep, the character's own depenetration, the contact gather, the rigid depenetration sweep, the continuous sweep, the raycast, ledge detection and the ball's hook.
+The character sweep, the character's own depenetration, the contact gather, the rigid depenetration sweep, the continuous sweep, the raycast and the ball's hook.
 Then the fold (`wrappable` is the leg's rope bit and nothing else), and then the point of all of it: the stool **stands**, because the leg it is not in the avatar's way with is what holds it up.
 
 ## What this is not

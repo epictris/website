@@ -48,7 +48,7 @@
 // `Vec2.rotated`, which goes through `dmath`.
 
 import { Vec2 } from "./vec2";
-import { PhysicsBody2D, RigidBody2D } from "./body";
+import { AnimatableBody2D, PhysicsBody2D, RigidBody2D } from "./body";
 import type { ContactConstraint } from "./world";
 import { SolverStats } from "./solverStats";
 
@@ -459,6 +459,23 @@ class ContactRow {
   // it each time it touched (`session-165f` f74, 0.58 m/s along it in, 2.59
   // out).
   pressNow = 0;
+  // A kinematic spin no chain holds is a FREE spinning body's (the ball with
+  // its chain stowed, in flight or dangling - `RigidBody2D.constraintTethered`
+  // false), and its drive may spend only what the body's own weight presses
+  // into this surface: the world's spin-traction cap (`World.solveTangent`,
+  // `spinCone`), per substep. The spin is an infinite reservoir, and an
+  // impact's normal impulse spent against it is energy from nothing - a ball
+  // rolled into a wall with its chain dangling climbed it (`session-251f`,
+  // `ball-roll-wall-dangling`). `weightPress` is that weight into the
+  // surface, N: the spinning body's own mass, not the pair's effective mass -
+  // a ball resting on a light slat presses it with all of its weight, and
+  // read through the pair it funded a fraction of that and the ball could not
+  // roll the deck (`bridge-ball-rolls`). The world reaches the same number on
+  // a light body through its sustained-load ramp (`World.pairLoad`), which the
+  // island keeps no books for; nor does it take off the normal a spun
+  // off-centre shape fabricates (`spinFabricatedNormal`).
+  readonly freeSpin: boolean;
+  readonly weightPress: number;
   // The accumulated impulses: each substep's, warm started from the one
   // before, so after the last substep they are what that substep spent.
   n = 0;
@@ -482,6 +499,7 @@ class ContactRow {
     press: ((normal: Vec2) => number) | null,
     // `a` is the ball itself, not a holder on its path (see `aRound`, `brake`).
     ball: boolean,
+    gravity: Vec2,
   ) {
     this.c = c;
     this.hard = hard;
@@ -514,6 +532,13 @@ class ContactRow {
     this.friction = friction;
     this.restitution = Math.max(c.a.restitution, c.b.restitution);
     this.vn0 = c.a.velocityAtPoint(c.point).sub(c.b.velocityAtPoint(c.point)).dot(c.normal);
+    const bRigid = c.b instanceof RigidBody2D ? c.b : null;
+    const freeA = c.a.kinematicRotation && !c.a.constraintTethered;
+    const freeB = bRigid !== null && bRigid.kinematicRotation && !bRigid.constraintTethered;
+    this.freeSpin = freeA || freeB;
+    this.weightPress =
+      (freeA ? c.a.mass * c.a.gravityScale * Math.max(0, -gravity.dot(c.normal)) : 0) +
+      (freeB ? bRigid.mass * bRigid.gravityScale * Math.max(0, gravity.dot(c.normal)) : 0);
     this.key = `${c.a.id}:${c.b.id}:${c.shapeA}:${c.shapeB}:${c.featureId}`;
   }
 }
@@ -583,8 +608,36 @@ export class TieSolver {
   // pulled through slack; the drum is a speculative motor now (see
   // `BallChainRow.RATED_PULL`).
   chainPress: ((normal: Vec2) => number) | null = null;
+  // The movers that moved this frame (set by `World.stepTies`). A mover's
+  // script puts it at the END of the frame before anything is solved, with
+  // its velocity the frame's displacement over the frame, and an island that
+  // left it there saw a node standing still through the substeps while its
+  // speed was live in every row and contact that touched it: a ball anchored
+  // to a mover moving away was a frame's travel behind it at the end of every
+  // frame, which the unwind charged to the spin, and one moving towards it a
+  // frame's travel slack - the same lag a pivot stepped once a frame had
+  // (`islandOwns`). So the island takes each one back to where the frame
+  // found it and carries it by its velocity substep by substep, which sums to
+  // where the script put it, and puts it exactly there afterwards.
+  driven: readonly AnimatableBody2D[] = [];
   // Last frame's accumulated contact impulses by contact key, looked up only.
   private contactCache = new Map<string, CachedImpulse>();
+  // This frame's contact rows by the contact they solve, for `engaged`.
+  private rowOf = new Map<ContactConstraint, ContactRow>();
+
+  // Is this contact's face engaged as the island stands: closed (the row's
+  // separation re-read at the bodies' present poses) or carrying load (its
+  // accumulated normal impulse, the last substep's, or last frame's
+  // warm-started before the first). A gathered contact may be a speculative
+  // one up to `CONTACT_SLOP` clear of its face, which refuses nothing; and
+  // load alone is not enough either, because a soft row touching a free body
+  // carries nothing on the substeps it is recovering, and a drum that reeled
+  // through those wound the ball and the weight it hangs from into a 5 m/s
+  // slingshot (`hung-anchor`).
+  engaged(c: ContactConstraint): boolean {
+    const row = this.rowOf.get(c);
+    return row !== undefined && (row.n > 0 || separationOf(row) <= 0);
+  }
   // The islands this frame was solved in, kept for the sleep pass.
   private frameIslands: IslandUnit[][] = [];
 
@@ -600,6 +653,20 @@ export class TieSolver {
   addUnit(unit: IslandUnit): void {
     this.units.push(unit);
     for (const body of unit.bodies) body.tied = true;
+  }
+
+  // A unit whose bodies changed - an authored chain's path wrapping onto a
+  // free body, or off one (`RopeRow.sync`) - is re-tied: what it took is the
+  // island's, and what it let go is free again unless another unit still
+  // holds it. Before the world steps, since `tied` is what keeps a body out of
+  // `World.integrate`'s own step.
+  retie(unit: IslandUnit, before: readonly RigidBody2D[]): void {
+    for (const body of unit.bodies) body.tied = true;
+    for (const body of before) {
+      if (unit.bodies.includes(body)) continue;
+      if (this.units.some((u) => u !== unit && u.bodies.includes(body))) continue;
+      body.tied = false;
+    }
   }
 
   // A unit that exists only while something holds it (a berry plant on the
@@ -655,6 +722,7 @@ export class TieSolver {
     }
     const islands = this.islands(units, contacts);
     this.frameIslands = islands;
+    this.rowOf.clear();
     for (const island of islands) {
       // Whole or not at all: one awake unit in an island wakes the rest.
       let awake = false;
@@ -767,13 +835,14 @@ export class TieSolver {
             : c.b === this.hardBody
               ? (normal: Vec2) => this.chainPress!(normal.neg())
               : null;
-      const row = new ContactRow(c, pairFriction(c), hard, press, c.a === this.hardBody);
+      const row = new ContactRow(c, pairFriction(c), hard, press, c.a === this.hardBody, gravity);
       const cached = this.contactCache.get(row.key);
       if (cached) {
         row.n = cached.n;
         row.t = cached.t;
       }
       contactRows.push(row);
+      this.rowOf.set(c, row);
     }
 
     const h = dt / k;
@@ -782,9 +851,12 @@ export class TieSolver {
 
     for (const row of rows) row.beginFrame(dt, contacts);
     // Once a frame, before anything is measured, as the chain phase damps its
-    // bodies (see `TIE_BODY_DAMPING`).
+    // bodies (see `TIE_BODY_DAMPING`). Not a pivot or a spring body: their
+    // mountings carry their own damping and the world takes nothing else off
+    // them, so a root swings the same with a chain hung from it as without.
     for (const body of bodies) {
       if (body.held || !body.canSleep || undamped.has(body)) continue;
+      if (body.pivot || body.spring !== null) continue;
       body.linearVelocity = body.linearVelocity.mul(TIE_BODY_DAMPING);
       body.angularVelocity *= TIE_BODY_DAMPING;
     }
@@ -797,6 +869,14 @@ export class TieSolver {
     // A pivot's mounting acceleration is summed over the substeps for the
     // rope's credit bound, as `World.integrate` records its frame's.
     for (const body of bodies) if (body.pivot) body.pivotFrameAccelDw = 0;
+    // The movers back to where the frame found them (see `driven`).
+    const driven = this.driven;
+    const drivenEnd: { position: Vec2; rotation: number }[] = [];
+    for (const body of driven) {
+      drivenEnd.push({ position: body.globalPosition, rotation: body.globalRotation });
+      body.globalPosition = body.framePosition;
+      body.globalRotation = body.frameRotation;
+    }
     for (let s = 0; s < k; s++) {
       for (let i = 0; i < bodies.length; i++) {
         const body = bodies[i]!;
@@ -849,6 +929,13 @@ export class TieSolver {
         body.globalRotation += body.angularVelocity * h;
         if (body.spring) body.pinSpringAxes();
       }
+      for (let i = 0; i < driven.length; i++) {
+        const body = driven[i]!;
+        const p = body.globalPosition;
+        const v = body.linearVelocity;
+        body.globalPosition = new Vec2(p.x + v.x * h, p.y + v.y * h);
+        body.globalRotation += body.angularVelocity * h;
+      }
       // Relax: the same rows against the new positions, with no bias, which
       // takes back the velocity the bias put in.
       solveRows(rows, h, tieSoft, false, s % 2 === 1);
@@ -862,6 +949,11 @@ export class TieSolver {
         SolverStats.sweeps += 2;
         SolverStats.solves += 2 * (rows.length + contactRows.length);
       }
+    }
+    // Where the scripts put them, to the bit.
+    for (let i = 0; i < driven.length; i++) {
+      driven[i]!.globalPosition = drivenEnd[i]!.position;
+      driven[i]!.globalRotation = drivenEnd[i]!.rotation;
     }
     for (const row of contactRows) applyRestitution(row);
     for (const row of contactRows) {
@@ -1003,8 +1095,13 @@ function solveContact(r: ContactRow, h: number, soft: Softness, useBias: boolean
       // positional phase's length projection always let it.
       const drive = -Math.sign(spinSlipOf(A, ra, tg) * A.spinDriveShare);
       const load = Math.max(0, r.n - r.pressNow);
-      const conePos = (drive > 0 ? r.friction : r.brake) * load;
-      const coneNeg = (drive < 0 ? r.friction : r.brake) * load;
+      let conePos = (drive > 0 ? r.friction : r.brake) * load;
+      let coneNeg = (drive < 0 ? r.friction : r.brake) * load;
+      if (r.freeSpin && drive !== 0) {
+        const funded = r.friction * r.weightPress * h;
+        if (drive > 0) conePos = Math.min(conePos, funded);
+        else coneNeg = Math.min(coneNeg, funded);
+      }
       const total = Math.min(conePos, Math.max(-coneNeg, r.t - vt / invEffT));
       // At the cone, as the world's solve reports it (`ContactConstraint.limited`).
       r.limited = total >= conePos - 1e-12 || total <= -coneNeg + 1e-12;
@@ -1044,6 +1141,14 @@ function solveContact(r: ContactRow, h: number, soft: Softness, useBias: boolean
   const impulse = n.mul(applied);
   applyAt(A, impulse, ra);
   applyAt(B, impulse.neg(), rb);
+}
+
+// A contact row's separation at the bodies' present poses, from its anchors:
+// negative is penetration (see `solveContact`).
+function separationOf(r: ContactRow): number {
+  const pa = r.a.globalPosition.add(armA(r));
+  const pb = r.b.globalPosition.add(r.lb.rotated(r.b.globalRotation));
+  return pa.sub(pb).dot(r.normal) + r.s0;
 }
 
 // After the substeps, as Box2D applies it: a contact that closed faster than

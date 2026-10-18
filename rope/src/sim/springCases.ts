@@ -22,10 +22,8 @@ import { RigidBody2D, StaticBody2D } from "../engine/body";
 import { rectShape, type Shape } from "../engine/shapes";
 import { ContactAudit, GRAVITY, World } from "../engine/world";
 import { ShapeGeometry } from "../lib/shapeGeometry";
-import { SceneChain, stepSceneChains } from "../level/chains";
+import { SceneChain, syncSceneChains } from "../level/chains";
 import { RopeContact } from "../lib/ropeContact";
-import { applyHangLoad } from "../classes/states/ledgeLoad";
-import { Player } from "../classes/player";
 import { mechanicalEnergy } from "./trace";
 import {
   buildLevelBodies,
@@ -149,79 +147,6 @@ function caseDroop(): SpringResult {
     );
   }
   return ok("droop — a spring body settles at g/w² under its own weight", passed, details);
-}
-
-// ---------------------------------------------------------------------------
-// load-release: the hang deepens the droop by F/(m·w²), and letting go overshoots.
-//
-// The mechanic itself, and it is driven through `applyHangLoad` - the function
-// the ledge states actually call - rather than through a hand-rolled force, so
-// what is asserted is the path the player's weight really takes. The load is
-// applied at an OFF-CENTRE corner for the same reason: that is where a grab
-// lands, and a body that answered it with a torque instead of a sag would show
-// up here as well as in `rotation-lock`.
-//
-// The overshoot is the half that cannot be got from the equilibrium alone, and
-// it is the half the mechanic is FOR: released from `A` below its rest height an
-// underdamped spring returns to `A·e^(-zeta·pi/sqrt(1-zeta²))` ABOVE it, which at
-// the default zeta of 0.15 is 62% of the way back up. A critically damped spring
-// would sink and return with none of it.
-// ---------------------------------------------------------------------------
-function caseLoadRelease(): SpringResult {
-  const FREQ = 1;
-  const s = new Spring({ freqX: 1.5, freqY: FREQ });
-  const rest = droopOf(FREQ);
-  const w2 = (2 * Math.PI * FREQ) ** 2;
-  // Where the corner of the leaf is, in the body's own terms: half its length
-  // out, which is where a grab lands.
-  const corner = (): Vec2 => s.body.globalPosition.add(new Vec2(0.6, -0.06));
-
-  s.step(1200);
-  const settled = Math.abs(s.offset.y - rest) < 1e-6;
-
-  // Hung on for 20 s: the equilibrium deepens by the player's weight over the
-  // body's own stiffness, `m_player·g / (m_body·w²)`.
-  s.step(1200, () => applyHangLoad(s.body, corner(), DT));
-  const extra = s.offset.y - rest;
-  const wantExtra = (Player.MASS * G) / (s.body.mass * w2);
-  // The DISCRETE equilibrium sits a definite hair above the continuous one, and
-  // the hair is worth writing out rather than hiding in a loose tolerance. A
-  // per-frame impulse leaves `F·dt/m` of velocity standing in the body at the
-  // fixed point, and the damping term charges it `2·zeta·w·dt` of that back, so
-  // the discrete answer is `wantExtra·(1 - 2·zeta·w·dt)` - 2.4% shy here, and
-  // O(dt) rather than a bias that survives a finer step. The measurement is
-  // asserted into that window, which is sharper than a percentage bound and
-  // says WHY the two numbers differ.
-  const wantDiscrete = wantExtra * (1 - 2 * 0.15 * 2 * Math.PI * FREQ * DT);
-  const loaded = Math.abs(extra - wantDiscrete) < 1e-4;
-
-  // Let go: the return must overshoot ABOVE the unloaded rest height, then come
-  // back to it.
-  const startedFrom = extra;
-  let peak = s.offset.y;
-  s.step(300, () => {
-    peak = Math.min(peak, s.body.globalPosition.y - s.anchor.y);
-  });
-  const overshoot = rest - peak;
-  const wantOvershoot = startedFrom * Math.exp((-0.15 * Math.PI) / Math.sqrt(1 - 0.15 ** 2));
-  // A bound, not the value: the damped period and the discrete step both shift
-  // it a little, and what is being asserted is that a real overshoot is there.
-  const sprang = overshoot > 0.8 * wantOvershoot && overshoot < 1.2 * wantOvershoot;
-
-  s.step(1500);
-  const settledBack = s.offset.y;
-  const returned = Math.abs(settledBack - rest) < 1e-4;
-
-  const passed = settled && loaded && sprang && returned;
-  return ok("load-release — a hung player deepens the droop, and letting go springs back", passed, [
-    `${settled ? "ok  " : "BAD "} unloaded rest at ${(rest * 100).toFixed(2)} cm`,
-    `${loaded ? "ok  " : "BAD "} ${Player.MASS} kg hung on a ${s.body.mass.toFixed(2)} kg leaf: ` +
-      `sags a further ${(extra * 100).toFixed(2)} cm (want ${(wantDiscrete * 100).toFixed(2)}, ` +
-      `the discrete form of F/(m·w²) = ${(wantExtra * 100).toFixed(2)})`,
-    `${sprang ? "ok  " : "BAD "} released: overshoots ${(overshoot * 100).toFixed(2)} cm above rest ` +
-      `(want ~${(wantOvershoot * 100).toFixed(2)} from ${(startedFrom * 100).toFixed(2)} cm down)`,
-    `${returned ? "ok  " : "BAD "} and settles back to ${(settledBack * 100).toFixed(4)} cm`,
-  ]);
 }
 
 // Frames between the first two upward zero crossings of a history about `about`,
@@ -448,6 +373,7 @@ function caseChainLoad(): SpringResult {
   const top = s.body.globalPosition.add(new Vec2(0.8, 0.1));
   const bottom = weight.globalPosition.add(new Vec2(0, -0.2));
   const chain = new SceneChain(
+    s.world,
     RopeContact.at(s.body, top),
     RopeContact.at(weight, bottom),
     top.distanceTo(bottom),
@@ -457,7 +383,7 @@ function caseChainLoad(): SpringResult {
   let peak = 0;
   let maxSpin = 0;
   s.step(1800, () => {
-    stepSceneChains([chain], s.world, DT);
+    syncSceneChains([chain], s.world);
     peak = Math.max(peak, weight.linearVelocity.length());
     maxSpin = Math.max(maxSpin, Math.abs(s.body.angularVelocity));
   });
@@ -546,6 +472,7 @@ function caseChainDrain(): SpringResult {
     const top = anchor.globalPosition.add(new Vec2(0.8, 0.1));
     const bottom = weight.globalPosition.add(new Vec2(0, -0.2));
     const chain = new SceneChain(
+      world,
       RopeContact.at(anchor, top),
       RopeContact.at(weight, bottom),
       top.distanceTo(bottom),
@@ -554,7 +481,7 @@ function caseChainDrain(): SpringResult {
     const step = (n: number, onFrame?: () => void): void => {
       for (let i = 0; i < n; i++) {
         world.integrate(DT);
-        stepSceneChains([chain], world, DT);
+        syncSceneChains([chain], world);
         onFrame?.();
       }
     };
@@ -1183,7 +1110,7 @@ function caseSpawnAtRest(): SpringResult {
         ],
       },
       // The leaf: sprung at 1 Hz vertically, with the chain's other anchor on
-      // its top edge.
+      // its bottom edge, the face that looks at the ground.
       {
         kind: "rigid" as const,
         x: 0,
@@ -1194,7 +1121,7 @@ function caseSpawnAtRest(): SpringResult {
         springDamping: 0.4,
         objects: [
           { type: "collision" as const, x: 0, y: 0, rot: 0, shape: { kind: "rect" as const, w: 120, h: 12 } },
-          { type: "anchor" as const, id: 2, x: 0, y: -6 },
+          { type: "anchor" as const, id: 2, x: 0, y: 6 },
         ],
       },
       // The branch: hinged at its left end with a torsion spring.
@@ -1277,10 +1204,10 @@ function caseSpawnAtRest(): SpringResult {
     free.globalPosition.y === -3;
 
   // The chain went taut between the anchors as they LAND: static top face to
-  // the leaf's settled top edge.
-  const chains = buildSceneChains(data, built);
-  const settledDist = Math.abs(-0.5 - (-3.06 + droop));
-  const authoredDist = Math.abs(-0.5 - -3.06);
+  // the leaf's settled bottom edge.
+  const chains = buildSceneChains(data, built, world);
+  const settledDist = Math.abs(-0.5 - (-2.94 + droop));
+  const authoredDist = Math.abs(-0.5 - -2.94);
   const chainLen = chains[0]?.rope.maxRopeLength ?? NaN;
   const chainOk =
     Math.abs(chainLen - settledDist) < 1e-9 && Math.abs(chainLen - authoredDist) > 0.2;
@@ -2305,7 +2232,6 @@ function caseYankCatch(): SpringResult {
 export function runSpringCases(): SpringResult[] {
   return [
     caseDroop(),
-    caseLoadRelease(),
     caseAxes(),
     caseLockedAxis(),
     caseRotationLock(),

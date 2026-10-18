@@ -16,14 +16,3 @@ export enum IntersectionStatus {
   Touching = 0,
   Separate = 1,
 }
-
-export enum SurfaceType {
-  WALL,
-  FLOOR,
-  CEILING,
-}
-
-export enum SlideType {
-  KEEP_VELOCITY,
-  PROJECT_VELOCITY,
-}

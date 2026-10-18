@@ -20,8 +20,6 @@ import type { CollisionObject2D } from "../engine/body";
 import { VineLink } from "../engine/body";
 import { BallHook } from "../classes/ballHook";
 import { BallPlayer } from "../classes/ballPlayer";
-import { Hook } from "../classes/hook";
-import { Player } from "../classes/player";
 import type { World } from "../engine/world";
 import type { SceneChain } from "../level/chains";
 import type { TieChain } from "../engine/ties";
@@ -108,9 +106,8 @@ export interface Scene3DLevel {
 }
 
 // Bodies the 3D scene deliberately does not extrude, because something else
-// draws them: the grapple avatar and its hook (still 2D), the ball and its hook
-// (drawn by `ballVisual`/`chainVisual` as a cast-iron sphere and a manacle, not
-// as an extruded disc), and a vine's links.
+// draws them: the ball and its hook (drawn by `ballVisual`/`chainVisual` as a
+// cast-iron sphere and a manacle, not as an extruded disc), and a vine's links.
 //
 // A vine link is the one of these that is not an avatar, and it is here for the
 // plainest reason of all: a link's circle is its GRAB radius, several times the
@@ -123,8 +120,6 @@ const NO_VINES: readonly VineCord[] = [];
 
 function drawnElsewhere(body: CollisionObject2D): boolean {
   return (
-    body instanceof Player ||
-    body instanceof Hook ||
     body instanceof BallPlayer ||
     body instanceof BallHook ||
     body instanceof VineLink

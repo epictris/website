@@ -21,7 +21,6 @@ import { Vec2 } from "../engine/vec2";
 import { CharacterBody2D, RigidBody2D, type PhysicsBody2D } from "../engine/body";
 import type { World } from "../engine/world";
 import { BallLevel } from "../level/ballLevel";
-import type { Level } from "../level/level";
 import { bodyId, deepestEmbedding } from "./query";
 import { recordingDeserializer, type Recording } from "./trace";
 import { levelFromRecording } from "./replay";
@@ -270,7 +269,7 @@ export const NOTABLE_SOLVE_GAIN = 2.5;
 // velocity spikes are the mechanic working and would flag on every single
 // bundle. It stays in the per-body table, where it can be read on purpose.
 function spikesAreDeliberate(b: BodyScan): boolean {
-  return b.type === "BallHook" || b.type === "Hook";
+  return b.type === "BallHook";
 }
 
 export function notable(scan: ScanResult): string[] {

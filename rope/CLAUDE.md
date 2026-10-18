@@ -23,7 +23,7 @@ bun run test       # THE suite: typecheck + every case suite + every playtest + 
 bun run generators:setup   # once per machine: the venv the formations add-on's boulder generator needs (Blender 5.2 on PATH too)
 ```
 
-`/` loads the introduction and then offers the **difficulty select** - Normal (iron ball) or Hard (`?ball=glass`, a glass ball that breaks on anything solid, [docs/glass-ball.md](docs/glass-ball.md)) - and `?level=NAME` plays one level (`src/level/registry.ts`); `BALL` (the ball & chain controller, 3D) is the introduction and the grapple levels stay 2D.
+`/` loads the introduction and then offers the **difficulty select** - Normal (iron ball) or Hard (`?ball=glass`, a glass ball that breaks on anything solid, [docs/glass-ball.md](docs/glass-ball.md)) - and `?level=NAME` plays one level (`src/level/registry.ts`); `BALL` is the introduction, and every level is played with the ball & chain controller in 3D (the grapple controller was retired on 2026-10-19).
 `?render=2d|3d`, `?hud=1` (F3 in play), `?aim=cursor|position|motion`, `?toggle_click=true` (click to deploy/redeploy, right-click to detach), `?probe3d=1`, `?retract=1` (the released chain reels in, still being judged), F4 captures the camera for `cli shot --view`.
 `?checkpoint=NAME` starts (and restarts) at an authored named spawn instead of the level's own - placed on the editor's notes layer, recorded into every bundle so a replay starts where the run did.
 `/editor` is the level editor; **W** switches it between the Level workspace and the Visuals workspace (a free 3D view of the collision, lights, cameras and fireflies against the level's exported Blender scene; [docs/editor-visuals.md](docs/editor-visuals.md)).

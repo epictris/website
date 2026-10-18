@@ -12,7 +12,6 @@
 
 import { CharacterBody2D, RigidBody2D } from "../engine/body";
 import { BallLevel } from "../level/ballLevel";
-import type { Level } from "../level/level";
 
 export interface CompareBody {
   id: number;
@@ -31,7 +30,7 @@ export interface CompareFrame {
   chain: { nodes: number; len: number; max: number; slack: number } | null;
 }
 
-export function compareFrame(level: Level | BallLevel): CompareFrame {
+export function compareFrame(level: BallLevel): CompareFrame {
   const bodies: CompareBody[] = [];
   for (const body of level.world.bodies) {
     if (body.removed) continue;
@@ -50,7 +49,7 @@ export function compareFrame(level: Level | BallLevel): CompareFrame {
       w: rigid ? rigid.angularVelocity : 0,
     });
   }
-  const rope = level instanceof BallLevel ? level.ball.chain : level.player.rope;
+  const rope = level.ball.chain;
   return {
     frame: level.frame,
     bodies,

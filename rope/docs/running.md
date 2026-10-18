@@ -36,18 +36,17 @@ here …)` or `tree: unknown` (a bundle from before the stamp) on its header.
 The committed corpus is *expected* to read MISMATCH: those bundles are
 deliberately historical, and `cli bundles` therefore does not repeat it per row.
 
-`?render=2d` / `?render=3d` picks the renderer (see [**3D rendering**](render3d.md)): the ball
-level plays in 3D by default and the grapple levels stay 2D, and `?render=2d` is
+`?render=2d` / `?render=3d` picks the renderer (see [**3D rendering**](render3d.md)): every
+level plays in 3D by default, and `?render=2d` is
 the escape hatch anywhere. `?probe3d=1` draws the alignment probe.
 `?retract=1` turns on the released chain reeling back in ([chain-retract](chain-retract.md)); off, a let-go chain vanishes as it always did. `cli shot --retract` is the same switch for a filmstrip.
 **F4** captures the camera as JSON for `cli shot --view`, so a report about a spot in the level is a replayable grab.
 The frame is drawn at 1920x1080 device pixels at most by default, whatever the display: past that a player is paying for fragments rather than seeing more, and the browser scales the result up to the window.
-**S** on a ball level opens the settings panel (S or Esc closes it), which pauses the run and moves that cap: 16:9 resolutions from 960x540 up to the display's own size, applied as they are picked and kept in `localStorage` as `rope.settings` (`render/settings.ts`, `render/settingsMenu.ts`). The grapple controller keeps S as extend, so it has no panel. The setting changes sharpness and fill cost only; the frame is still 1920x1080 view pixels, so the world on screen is the same.
+**S** opens the settings panel (S or Esc closes it), which pauses the run and moves that cap: 16:9 resolutions from 960x540 up to the display's own size, applied as they are picked and kept in `localStorage` as `rope.settings` (`render/settings.ts`, `render/settingsMenu.ts`). The setting changes sharpness and fill cost only; the frame is still 1920x1080 view pixels, so the world on screen is the same.
 The panel's second row is **Depth of field** (Off, Low, Medium, High, default High since 2026-10-18): how far out of focus the scenery behind the gameplay plane is drawn, the plane itself always sharp (`render3d/depthOfField.ts`, [**The frame target**](render3d.md#the-frame-target)); it costs ~0.5 ms of GPU a frame at 4K whatever the level, and the two rows are stored and reset independently. `?dof=off|low|medium|high` starts one visit at that level without storing it. `?dpr=N` overrides that (clamped to 4) and is how the renderer's FILL cost is measured from a 1080p desk - the picture is identical and only the fragment count behind it changes, so `?dpr=2` on 1080p pays what an uncapped 4K player used to. Debug only - see [**Testing a weaker GPU**](debugging-rendering.md#testing-a-weaker-gpu).
 
-Pick a level with `?level=NAME` (see `src/level/registry.ts`); `TEST_MOVERS` /
-`TEST_WINDMILL` are hand-written mover test levels (sliding platform, windmill),
-`TEST_SWING`, `TEST_SPIN` and `TEST_LIFT` are the AUTHORED ones (two pendulums to
+Pick a level with `?level=NAME` (see `src/level/registry.ts`);
+`TEST_SWING`, `TEST_SPIN` and `TEST_LIFT` are the mover test levels (two pendulums to
 time a crossing against; two counter-turning crosses and a sail on an authored
 bearing; and a lift, a looping trolley and an eased shuttle - see
 [**Scripted movers**](movers.md)),
@@ -56,7 +55,7 @@ and `TEST_SPRING` is the spring-body one (a leaf over a chasm to hang off - see
 (see [**Vines**](vines.md)).
 `CAMERA_TEST` is the camera sandbox: two rooms overlapping by exactly the width of their `falloff` band, so the hand-over is an exact cross-fade, and a priority island past them that takes the camera outright (see [**Camera**](camera.md#blending)).
 `BREAK_TEST` is the breakable sandbox: a stair up to a ceiling to swing from, and under it a row of ledges at a few thresholds and durabilities over a drop to the stone floor (see [**Breakable geometry**](breakable.md)).
-`LEVEL_2` is the grapple arena (the Godot-extracted scene).
+`BALL_LEVEL_2` is the arena the grapple controller was built around (the Godot-extracted scene), played with the ball since that controller was retired on 2026-10-19.
 
 ## Starting a run
 
@@ -195,7 +194,7 @@ feel without a rebuild):
   Bounding the drawn cursor to the frame is what *guarantees* the gap: the real one keeps going where the drawn one may not.
 
   **The desktop cursor stays hidden either way**, windowed included: the reticle is the ball controller's only pointer, and windowed it is now drawn *on* the real one, so there is a single mark on screen and the clicks land under it.
-  It is hidden rather than shown as a crosshair beneath the ring because two marks for one pointer is what the reticle exists to avoid - and the crosshair the canvas carries in CSS is the grapple controller's, which has no reticle of its own.
+  It is hidden rather than shown as a crosshair beneath the ring because two marks for one pointer is what the reticle exists to avoid - and the crosshair the canvas carries in CSS was the grapple controller's (retired 2026-10-19), which had no reticle of its own.
 
   **The run opens with a reticle, never without one - and with the ball already facing it.**
   A cursor has no position until an event carries one, and a ball with no aim is a ball whose rotation belongs to the physics, so a run used to open unaimed and stay that way until the player's first mouse move.
@@ -319,10 +318,8 @@ the feel motion aim gave up.
 The lock is requested **without** `unadjustedMovement`: the virtual cursor is
 meant to feel like the desktop cursor it replaces, and that one has the OS
 pointer acceleration curve on it.
-On the grapple controller the OS cursor *is* the aim indicator, so under lock
-`LiveInputSource.crosshairAim()` hands the renderer a crosshair to draw in its
-place (the same one the right stick gets); the ball controller already hides the
-cursor and draws its reticle either way.
+On the grapple controller (retired 2026-10-19) the OS cursor was the aim indicator, so under lock `LiveInputSource.crosshairAim()` handed the renderer a crosshair to draw in its place.
+The ball controller hides the cursor and draws its reticle either way.
 `BALL_ZOOM` is a plain constant: the view is a fixed 16:9 frame scaled to fit the
 window (see [**The view**](camera.md#the-view)), so a landscape phone gets the same framing as a
 desktop at a smaller size rather than a smaller slice of the level.

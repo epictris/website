@@ -14,11 +14,9 @@ import {
   RigidBody2D,
   VineLink,
 } from "../engine/body";
-import { isExposedCorner } from "../engine/shapes";
 import { GRAVITY, type World } from "../engine/world";
-import { Colors } from "../engine/debug";
 import { Segment } from "../lib/segment";
-import { Intersections, type Intersection } from "../lib/intersections";
+import { Intersections } from "../lib/intersections";
 import { ShapeGeometry } from "../lib/shapeGeometry";
 import { RopeGeneration } from "../lib/ropeGeneration";
 import { cullDetachedNodes, MIN_WRAP_DEFLECTION } from "../lib/nodeDetachment";
@@ -39,19 +37,14 @@ import {
 import { GenerationDirection, IntersectionStatus, WrapDirection } from "../lib/types";
 import { PathEnd, PathObject, PathStart, PathWrap } from "../lib/pathObject";
 import {
-  RAIL_KINETIC_FRICTION,
   RAIL_MAX_SLIDE_SPEED,
-  RAIL_STATIC_FRICTION,
   RopeClamp,
-  type ClampState,
 } from "../lib/rail";
 import { MANACLE_BORE } from "../lib/manacle";
-import { RopeEmbed, creepSpeed, slipDistance, type EmbedState } from "../lib/viscous";
-import { RopeVineClamp, type VineClampState } from "../lib/vineClamp";
+import { RopeEmbed, creepSpeed } from "../lib/viscous";
+import { RopeVineClamp } from "../lib/vineClamp";
 import { RopeRide } from "../lib/belt";
-import { Player } from "./player";
-import { Hook } from "./hook";
-import { PhaseTrace, type SolveBodyTerm } from "../engine/phaseTrace";
+import { PhaseTrace } from "../engine/phaseTrace";
 import { SolverStats } from "../engine/solverStats";
 
 // Pass-through geometry (a `passable` body, a vine link): the rope may be *pinned* to
@@ -156,8 +149,7 @@ function surfacesStillValid(bodies: readonly PhysicsBody2D[]): boolean {
 // because the body is expressed as several convex pieces, and which has no
 // outside for the rope to bend around?
 //
-// The mirror of LedgeDetection.isSeamOccluded, and it exists for the same
-// reason: a concave form is authored as overlapping convex pieces (see
+// A concave form is authored as overlapping convex pieces (see
 // "Convex-only polygons; compound bodies" in docs/game-design.md), and without
 // this the rope snags on the join where the real surface is smooth. Only the
 // body's *own* other shapes are consulted; a corner buried in a neighbouring
@@ -190,6 +182,11 @@ export interface RopeRowTerm {
   readonly dir: Vec2;
   readonly ma: number;
   readonly arm: number;
+  // For a body the island does not move - the scenery, a mover, a belt - the
+  // velocity of the NODE the rope meets it at (`Rope.nodeVelocity`): a
+  // mover's frame at the corner or the bite, rotation included, and a ride's
+  // carry along its belt. Zero for a rigid body, whose rate is read live.
+  readonly vel: Vec2;
 }
 
 export interface LengthRefusal {
@@ -203,16 +200,6 @@ export class RopePath {
     public to: RopeNode,
     public span: Segment,
   ) {}
-}
-
-// What one iteration of the length solve may move, for its monotone guard to
-// restore (see `snapshotPathBodies`).
-interface PathSnapshot {
-  bodies: { body: PhysicsBody2D; position: Vec2; rotation: number }[];
-  clamp: ClampState | null;
-  embed: EmbedState | null;
-  ring: VineClampState | null;
-  slideBudget: number;
 }
 
 interface DynamicBody {
@@ -254,7 +241,6 @@ export class Rope {
   private static readonly REFUSAL_EPSILON = 1e-9;
 
   maxRopeLength = 10;
-  maxIterations = 10;
   // Metres of path length that the last `regeneratePath` added or removed *with
   // the bodies held still* — a wrap node appearing or being culled.
   topologyJump = 0;
@@ -264,38 +250,10 @@ export class Rope {
   // (`BallChainRow`, `RopeRow`) leases this into `blockedSlack` before its
   // next solve: at velocity level a wrap appearing is a discontinuity in the
   // constraint that a soft bias would turn into a yank (9.5 cm of path at
-  // `session-265f`'s 31 rad/s is a 7 m/s target rate), where the positional
-  // phase corrected it in position and paid nothing (`topologyCreditScale`).
+  // `session-265f`'s 31 rad/s is a 7 m/s target rate).
   // Leased, the row reels it back at `SLACK_RELEASE_RATE`, which is the lease's
   // own statement about length the frame cannot honestly charge for.
   private topologyGrowth = 0;
-  // What fraction of the last solve's velocity credit was earned, 0..1.
-  //
-  // The path is a polyline through the wrap nodes, and the moment a node is
-  // added the polyline is longer: the span A→B becomes A→W→B, and |AW| + |WB| >
-  // |AB| by however far the span had already cut into the body before the
-  // regeneration noticed. That is a discretisation artefact — with a smaller
-  // step the wrap would have appeared with no deflection at all — and its size
-  // grows with how fast things are moving. A ball spinning at 31 rad/s sweeps a
-  // new wrap into being every frame, 9.5 cm of "length error" at a time
-  // (session-265f), and the ball & chain's whole path can jump half a metre in
-  // one frame (session-1474f).
-  //
-  // The constraint still has to be satisfied, so the *position* correction is
-  // made in full. What must not happen is the rope paying itself velocity for
-  // it: Δposition over Δt turns half a metre into a 96 m/s launch, and the rope
-  // did not accelerate anything — the description of it changed. So the credit
-  // is scaled by the share of the length error that bodies actually moving put
-  // there, which on an ordinary frame is all of it and this is 1.
-  topologyCreditScale = 1;
-  // Metres of rope the frame's own retract commands have taken out of the
-  // constraint since the last credit was paid. A shortening constraint is the
-  // rope genuinely pulling, so it is inward speed the credit may honestly
-  // contain (see `creditBound`); it is spent by the credit that follows it
-  // rather than cleared per frame, because `retract` is called from input
-  // handling, which for both controllers runs before the rope's frame opens.
-  private retractedSinceCredit = 0;
-  private frameBegun = false;
   // What `absorbBlockedLength` has had to let out, accumulated — how badly the
   // frame's length correction was blocked. It accumulates rather than
   // overwrites because the stall runs more than once in a ball frame (once at
@@ -321,10 +279,6 @@ export class Rope {
   // it, which is every caller but `BallLevel` and means "unbounded", exactly as
   // this behaved before. See `noteGeometryPush` and `absorbBlockedLength`.
   private geometryPushAccum: number | null = null;
-  // Trace-only scratch: the per-body terms the last correction step computed,
-  // so `resolveLengthConstraint` can emit them beside the error it measured.
-  // Filled only while `PhaseTrace.enabled`, read by nothing in the sim.
-  private solveTerms: SolveBodyTerm[] = [];
   // Did geometry refuse the chain's correction on the frame just gone? Set by
   // the caller that can see it (`BallLevel`, from the push-out that follows its
   // solve); false for callers with nothing to report, which is every rope whose
@@ -335,7 +289,6 @@ export class Rope {
   // frame that has not run yet. A block does not appear and vanish between two
   // frames, so last frame's is the right one to act on.
   private blockedLastFrame = false;
-  frictionCoefficient = 0.4;
   // Continuous wrap detection: every regeneration also asks what passed
   // THROUGH each span since the last one, not only what the span overlaps
   // where it now is (see `sweepSpan`). Off by default and on for the ball's
@@ -363,10 +316,6 @@ export class Rope {
   private lastExit: Vec2 | null = null;
   private lastEnd: Vec2 | null = null;
   private lastPoses = new Map<PhysicsBody2D, Pose>();
-  // Set by a correction step that drew the far end all the way up to the node
-  // it was being pulled towards (see `correctShapePositionAndRotation`); read
-  // and cleared by the iteration loop, which rounds the corner for it.
-  private endReachedNode = false;
 
   // `start`/`end`/`wraps` invalidate the memoized path geometry on ASSIGNMENT
   // (see `markPathChanged` below), so no caller - this file or another - can
@@ -394,10 +343,6 @@ export class Rope {
     this.markPathChanged();
     // A new end carries no tension history: what the chain carried to the
     // hook in flight says nothing about the ring it has just become.
-    this.frameCorrection = 0;
-    this.lastFrameCorrection = 0;
-    this.frameCreepRelief = 0;
-    this.lastFrameCreepRelief = 0;
   }
 
   get wraps(): RopeWrap[] {
@@ -409,7 +354,6 @@ export class Rope {
     this.markPathChanged();
   }
 
-  private frameStartDistanceLookup = new Map<RopeNode, number>();
   // Angle of rope wound onto the body the rope starts on, radians, *unwrapped*
   // so it counts whole turns rather than resetting at each one. Null when no
   // coil is on. See `syncCoil`.
@@ -424,7 +368,6 @@ export class Rope {
   ) {
     this.start = new RopeAttachment(start);
     this.end = new RopeAttachment(end);
-    this.registerHookCallbacks();
     this.wraps = wraps ?? [];
     this.maxRopeLength = initialLength ?? this.calculateRopePathLength();
   }
@@ -458,17 +401,11 @@ export class Rope {
 
   retract(amount = PX): void {
     // The rope may never be retracted to a negative length.
-    const before = this.maxRopeLength;
     this.maxRopeLength = Mathf.max(this.maxRopeLength - amount, 0);
-    this.retractedSinceCredit += before - this.maxRopeLength;
   }
 
   extend(): void {
     this.maxRopeLength += PX;
-  }
-
-  updateFrameStartDistanceLookup(): void {
-    this.frameStartDistanceLookup = this.genDistanceToStartLookup();
   }
 
   path(): RopeNode[] {
@@ -507,13 +444,12 @@ export class Rope {
     this.coilRunCache = null;
   }
 
-  // Metres a clamped end (`RopeClamp`) may still run along its rail this frame
-  // - opened on the solve's first look at the clamp (see `slideClampedEnd`)
-  // and spent by the slides the length solve's iterations take. Zero for a
-  // rope whose frame has not begun, so a clamp never slides outside a frame.
-  private slideBudget = 0;
-  // The frame's step, for the budget above.
+  // The frame's step, for an embed's drop speed (`settleEmbed`) and the
+  // creep's books.
   private frameDelta = 0;
+  // Whether this frame's creep has looked at a ring on a cord yet: the first
+  // look reseats it and clears its slip (see `rowCreep`).
+  private slideLooked = false;
   // Told when a clamped end has run off the OPEN end of its rail: the owner
   // turns the ring back into the dangling tip it was before it clamped (see
   // `settleClamp`). The end has NOT been replaced when this fires; that is the
@@ -529,81 +465,48 @@ export class Rope {
   // `settleVineClamp`). As above, the end has NOT been replaced when this
   // fires.
   onVineRunOff: ((clamp: RopeVineClamp, velocity: Vec2) => void) | null = null;
-  // Which way along the vine this frame's creep runs, for a ring on one:
-  // decided with the budget at the solve's first look (`slipVineClampedEnd`).
-  private slideSign: 1 | -1 = 1;
-  // The length solve's summed correction this frame and last, as the
-  // position-impulse the split is made of (`scaledCorrectionImpulse`, kg·m:
-  // every body on the path moved by its inverse inertia times this), and the
-  // over-length a ring on a vine crept away this frame and last. Together the
-  // last frame's pair are the tension the chain actually carried, which is
-  // what a ring on a vine reads its creep from (see `slipVineClampedEnd`).
-  private frameCorrection = 0;
-  private lastFrameCorrection = 0;
-  private frameCreepRelief = 0;
-  private lastFrameCreepRelief = 0;
-  // Whether this frame has looked at the clamp yet: the first look is the one
-  // that decides whether a running ring has come to rest (see `slideClampedEnd`).
-  private slideLooked = false;
-  // Whether this frame has hung the clamp yet (see `settleClampSeat`). Its own
-  // flag rather than `slideLooked`'s: a ring hangs whether or not the chain is
-  // taut enough for the length solve to look at it, and the two answers are
-  // settled at different points in the frame.
-  private seatLooked = false;
 
-  // The owner's frame number and step, for a hook that bites a running belt:
-  // the ride it starts is a pure function of the frame from there (see
-  // `RopeRide`). The grapple's `Player` hands its own, which `Level` stamps
-  // every frame; a rope with none (a scene chain, which has no hook) anchors
-  // to a belt as to any static.
-  clock: { readonly frame: number; readonly dt: number } | null = null;
 
-  // Wires hook attachment callbacks; called on construction and after snapshot restore.
-  registerHookCallbacks(): void {
-    const endObj = this.end.contact.obj;
-    if (endObj instanceof Hook) {
-      endObj.registerAttachmentCallback((body, point) => {
-        // `RopeContact.at`: the hook anchors on whichever piece of the body it
-        // hit, and the wrap resolvers walk the piece the contact names.
-        this.end = this.attachmentAt(body, point);
-        this.maxRopeLength = Mathf.max(this.maxRopeLength, this.calculateRopePathLength());
-      });
-    }
-    const startObj = this.start.contact.obj;
-    if (startObj instanceof Hook) {
-      startObj.registerAttachmentCallback((body, point) => {
-        this.start = this.attachmentAt(body, point);
-        this.maxRopeLength = Mathf.max(this.maxRopeLength, this.calculateRopePathLength());
-      });
-    }
-  }
-
-  // What the grapple's hook anchors as where it strikes `body` at `point`: a
-  // ride on a running belt, carried round the loop with the surface (no cuff
-  // and no standoff - the hook is a point), else a plain attachment.
-  private attachmentAt(body: PhysicsBody2D, point: Vec2): RopeAttachment {
-    const contact = RopeContact.at(body, point);
-    const piece = contact.shape;
-    const clock = this.clock;
-    if (clock !== null && piece.belt !== null && piece.beltSpeed !== 0) {
-      return RopeRide.at(body, piece, point, null, clock.frame, clock.dt, 0);
-    }
-    return new RopeAttachment(contact);
-  }
-
-  // Carry an end riding a belt to where `frame` has it (`RopeRide.carry`).
+  // Carry an end riding a belt to the start of `frame` (`RopeRide.carry`).
   // Called by the level after the movers and belts and before anything
   // regenerates this rope's path, so a continuous rope's sweep sees the
   // carry as the end's motion since the last regeneration and catches a body
   // it carries the chain across.
+  //
+  // To the frame's START: the carry through the frame is the solver's that
+  // steps the chain - the island's, substep by substep (`carryRidesWithin`),
+  // or the positional phase's, the whole frame at once before it solves.
+  // Carried to the frame's end here and back to its start by the island's
+  // first substep, a regeneration in between swept a frame of carry
+  // backwards across the belt's own pieces and wrapped the chain round the
+  // belt, a 9.7 m path (`ride-wrap-sweep`'s 1 cm post).
   carryRides(frame: number): void {
+    this.rideFrame = frame;
+    this.carryRidesTo(frame - 1);
+  }
+
+  // Carry a riding end to `fraction` of the way through the frame
+  // `carryRides` last carried it to: 0 the frame's start, 1 its end. An island
+  // row places the ride at each substep's time (`BallChainRow.prepare`), as the
+  // island carries a mover (`TieSolver.driven`): left at the frame's end, the
+  // pin stood still through the substeps while its carry was live in the
+  // row's rate. Never before the frame it bit on.
+  carryRidesWithin(fraction: number): void {
+    if (this.rideFrame === null) return;
+    this.carryRidesTo(this.rideFrame - 1 + fraction);
+  }
+
+  // The frame `carryRides` last carried to, for `carryRidesWithin`.
+  private rideFrame: number | null = null;
+
+  private carryRidesTo(frame: number): void {
     let moved = false;
     if (this.start instanceof RopeRide) {
-      this.start.carry(frame);
+      this.start.carry(Math.max(frame, this.start.frame0));
       moved = true;
     }
     if (this.end instanceof RopeRide) {
-      this.end.carry(frame);
+      this.end.carry(Math.max(frame, this.end.frame0));
       moved = true;
     }
     if (moved) this.markPathChanged();
@@ -622,9 +525,8 @@ export class Rope {
 
   // Regenerate the wrap path and record what the regeneration alone did to the
   // measured length, with the bodies held still. Accumulates across every
-  // regeneration in a frame, because the ball controller syncs the path once
-  // before the solve and `physicsStep` regenerates again — see
-  // `topologyCreditScale`.
+  // regeneration in a frame, because a frame regenerates the path more than
+  // once (a row's every substep, and the ball's close).
   private regenerateAndMeasure(bodies: PhysicsBody2D[]): void {
     // Baseline taken *after* a coil sync, not before. The coil's nodes ride the
     // body, so between frames they carry its rotation with them and the stored
@@ -682,20 +584,13 @@ export class Rope {
   beginFrame(delta: number): void {
     this.stalledLength = 0;
     this.topologyJump = 0;
-    this.slideBudget = 0;
     this.frameDelta = delta;
     this.slideLooked = false;
-    this.seatLooked = false;
-    this.lastFrameCorrection = this.frameCorrection;
-    this.lastFrameCreepRelief = this.frameCreepRelief;
-    this.frameCorrection = 0;
-    this.frameCreepRelief = 0;
     this.geometryPushAccum = null;
     this.leaseAtFrameStart = this.blockedSlack;
     if (!this.blockedLastFrame) {
       this.blockedSlack = Mathf.max(this.blockedSlack - Rope.SLACK_RELEASE_RATE * delta, 0);
     }
-    this.frameBegun = true;
   }
 
   // Whether geometry refused this frame's correction, reported by the caller
@@ -809,7 +704,11 @@ export class Rope {
       if (dir.lengthSquared() < 0.0001) continue;
       const ma = pathObject.calculateMechanicalAdvantage();
       if (ma < 1e-6) continue;
-      terms.push({ body: pathObject.body, dir, ma, arm: this.calculateTorqueArm(pathObject) });
+      const vel =
+        pathObject.body instanceof RigidBody2D
+          ? Vec2.ZERO
+          : this.nodeVelocity(pathObject, Rope.contactPointOf(pathObject));
+      terms.push({ body: pathObject.body, dir, ma, arm: this.calculateTorqueArm(pathObject), vel });
     }
     return { length: this.calculateRopePathLength(), constraint: this.constraintLength, terms };
   }
@@ -1023,368 +922,6 @@ export class Rope {
     this.getDynamicBodyState(body)?.addRotation((bestRotation - startRotation) / delta);
   }
 
-  getDistanceToStartLookup(): Map<RopeNode, number> {
-    return this.genDistanceToStartLookup();
-  }
-
-  render(color: string): void {
-    for (const span of this.getSpans()) {
-      // Debug.drawLine(span.span.start, span.span.end, color, 1); // drawn by renderer via getSpans
-    }
-  }
-
-  // One frame of the rope: open the frame if the caller has not, then solve it
-  // once. This is what every single-pass caller wants and what they all did
-  // before the split below.
-  physicsStep(bodies: PhysicsBody2D[], delta: number): void {
-    if (!this.frameBegun) this.beginFrame(delta);
-    this.frameBegun = false;
-    this.solvePass(bodies, delta);
-  }
-
-  // One solve pass: regenerate the path, enforce the length, credit the bodies
-  // for what it moved. Split out of `physicsStep` so a caller solving a SET of
-  // ropes can iterate the set without re-opening each rope's frame - the
-  // per-frame bookkeeping in `beginFrame` (the lease release above all) is a
-  // statement about the frame, and running it once per pass would release the
-  // lease K times over. See `stepSceneChains`.
-  solvePass(bodies: PhysicsBody2D[], delta: number): void {
-    this.settleClamp(delta);
-    this.regenerateAndMeasure(bodies);
-    const lengthError = this.calculateRopePathLength() - this.constraintLength;
-    this.topologyCreditScale =
-      lengthError > 0 ? 1 - Mathf.clamp(this.topologyJump / lengthError, 0, 1) : 1;
-
-    // Every body this solve may move, for the velocity books below: the bodies
-    // on the rope's OWN path, whatever scene it was handed. The path is the
-    // exact list on both sides.
-    //
-    // It is not too narrow, and that direction is the load-bearing one: the
-    // solve corrects the position of whatever hangs on the chain, and a body
-    // whose position is corrected but never credited keeps every frame's
-    // gravity. A wrecking ball hanging from a background chain - on the chain's
-    // path but absent from its restricted scene, so a scene-only list missed it
-    // - sat perfectly still while its velocity climbed 0.16 m/s a frame, to
-    // 119 m/s by the twelfth second, waiting to be released by the first frame
-    // that gave it any slack.
-    //
-    // It is not too wide either: `resolveLengthConstraint` moves path bodies
-    // and nothing else, so a scene body off the path measures a zero credit
-    // every time. Measuring those zeros was not free - a rope handed the whole
-    // level as its scene took pre-positions of all 174 bodies and asked
-    // `pullDirection` about each of them, on every pass of the coupled sweep
-    // (session-230f, 20 ms physics frames while hanging from a vine).
-    const moved: PhysicsBody2D[] = [];
-    for (const node of this.path()) {
-      const obj = node.contact.obj;
-      if (obj instanceof PhysicsBody2D && !moved.includes(obj)) moved.push(obj);
-    }
-
-    const prePositions = new Map<PhysicsBody2D, Vec2>();
-    const preRotations = new Map<PhysicsBody2D, number>();
-    for (const b of moved) {
-      prePositions.set(b, b.globalPosition);
-      preRotations.set(b, b.globalRotation);
-    }
-
-    if (
-      this.start.contact.obj instanceof Player &&
-      this.end.contact.obj instanceof Hook &&
-      this.wraps.length === 0
-    ) {
-      // The slack rope sim looks weird while the hook is unfurling.
-      this.maxRopeLength = this.calculateRopePathLength();
-    } else {
-      const endObj = this.end.contact.obj;
-      if (endObj instanceof Hook) {
-        const lastWrap = this.wraps[this.wraps.length - 1]!;
-        endObj.velocity = endObj.globalPosition
-          .directionTo(lastWrap.contact.obj.globalPosition)
-          .mul(10 * PX);
-        this.wraps.pop();
-        this.end = new RopeAttachment(lastWrap.contact);
-        this.markPathChanged();
-        this.maxRopeLength = this.calculateRopePathLength();
-        endObj.world?.remove(endObj);
-      }
-    }
-
-    // Taken here and not later: the velocities on the bodies right now are the
-    // ones the pass was handed, and what the solve is allowed to be worth is a
-    // statement about those. A line below this and the correction has already
-    // begun rewriting them.
-    const creditBound = this.creditBound(delta);
-
-
-    const correctionImpulse = this.resolveLengthConstraint();
-    if (correctionImpulse !== null) {
-      // Friction impulse may push the rope past its max length; re-solve.
-      this.resolveLengthConstraint();
-
-      // One path regeneration for the whole credit loop. The credits below are
-      // velocity-level only, so nothing in the loop can move the path, and the
-      // per-body `pullDirection` calls this replaces each regenerated the
-      // identical path objects from scratch - the other half of session-230f's
-      // 20 ms frames.
-      const { dirs: pullDirs, pivotArms, pivotContacts } = this.pullDirections();
-
-      // Two passes, compute-then-apply, so a PIVOT body's rotation credit can
-      // be bounded by the reaction to the momentum this pass actually REMOVED
-      // from the other bodies (see `boundRotationCredit`). Nothing a credit
-      // writes feeds another body's credit — every credit is Δposition over Δt
-      // against pre-positions, clamped by precomputed bounds — so splitting
-      // the loop is bit-identical for every body the pair bound never touches.
-      const pending: { dyn: DynamicBody; vel: Vec2; rot: number; body: PhysicsBody2D }[] = [];
-      let paidImpulse = 0;
-      let maxReceding = 0;
-      for (const body of moved) {
-        const dynamicBody = this.getDynamicBodyState(body);
-        if (dynamicBody) {
-          // Scaled by `topologyCreditScale`: the share of this frame's length
-          // error that a wrap appearing or vanishing put there is corrected in
-          // position but earns no velocity. Bounded by `creditBound`: the share
-          // the bodies are no longer moving to earn does not either.
-          const vel = Rope.clampCreditAlong(
-            pullDirs.get(body) ?? null,
-            body.globalPosition
-              .sub(prePositions.get(body)!)
-              .div(delta)
-              .mul(this.topologyCreditScale),
-            creditBound,
-          );
-          const rot =
-            ((body.globalRotation - preRotations.get(body)!) / delta) * this.topologyCreditScale;
-          pending.push({ dyn: dynamicBody, vel, rot, body });
-          // What this pass PAID: the share of a body's credit that removed its
-          // own recession along the pull — a braking impulse, real momentum the
-          // constraint took off the body. Credit past cancelling the recession
-          // is the solve GRANTING inward speed (the winch's haul), which is
-          // exactly the credit the whirl ratchet was fed by, so it pays the
-          // pivot nothing. A pivot's own mass reads Infinity and is excluded by
-          // the same guard that keeps 0·Infinity out of the sum.
-          const dir = pullDirs.get(body);
-          if (dir && Number.isFinite(dynamicBody.mass)) {
-            // Less gravity's own per-frame bite along the recession: a body
-            // merely HANGING recedes by exactly that every frame and the solve
-            // removes it every frame, and crediting the pivot for it is the
-            // static weight arriving as a velocity trickle - ~0.13 rad/s a
-            // frame into a frictionless bearing, which is session-136f's whip
-            // by another door. The static load reaches a sprung anchor as the
-            // position solve's displacement and `applyHangLoad`'s force, both
-            // of which a spring answers with a settled droop.
-            const bite = Math.max(0, -GRAVITY.dot(dir)) * delta;
-            const receding = Math.max(0, -dynamicBody.velocity.dot(dir) - bite);
-            if (receding >= Rope.PAIR_SNAP_MIN_RECESSION) {
-              paidImpulse += Mathf.clamp(vel.dot(dir), 0, receding) * dynamicBody.mass;
-              maxReceding = Math.max(maxReceding, receding);
-            }
-          }
-        }
-      }
-      for (const p of pending) {
-        p.dyn.addVelocity(p.vel);
-        const arm = pivotArms.get(p.body);
-        let reactionDw = 0;
-        if (
-          arm !== undefined &&
-          arm > 1e-9 &&
-          Number.isFinite(p.dyn.inertia) &&
-          p.dyn.inertia > 0 &&
-          paidImpulse > 0
-        ) {
-          // The pairing is INELASTIC at velocity level too: the pivot's contact
-          // may be spun up along its pull direction until it matches the rate
-          // the payer was receding at, never past it — that is where a real
-          // arrest converges, and the cap is what keeps the whirl's per-cycle
-          // recessions from ACCUMULATING in the bearing across cycles (the tip
-          // there already co-rotates near the ball's speed, so the match
-          // allowance reads near zero every pass).
-          const pairDw = (paidImpulse * arm) / p.dyn.inertia;
-          const dir = pullDirs.get(p.body);
-          const contact = pivotContacts.get(p.body);
-          const tipAlong =
-            dir && contact ? Rope.velocityAt(p.body, contact).dot(dir) : 0;
-          const matchDw = Math.max(0, maxReceding - tipAlong) / arm;
-          reactionDw = Math.min(pairDw, matchDw);
-        }
-        p.dyn.addRotation(Rope.boundRotationCredit(p.body, p.rot, reactionDw));
-        // (Godot pushed the mutated transform back into the physics server here;
-        // in this engine the body transform is already authoritative.)
-      }
-    }
-
-    // The frame's retract is the frame's to spend. Cleared whether or not a
-    // correction ran, so a rope retracted while slack cannot bank the allowance
-    // and hand it to some later frame's solve.
-    this.retractedSinceCredit = 0;
-
-    this.absorbBlockedLength();
-  }
-
-  // How fast the length solve may honestly haul, this frame, in metres per
-  // second — the ceiling on the inward speed any credit it pays may contain.
-  //
-  // The credit is Δposition over Δt, a standard PBD velocity update, and it is
-  // honest only while the position error it corrects is error the bodies are
-  // still MOVING to create. Nothing in the frame guarantees that. A ball falling
-  // onto the floor with its chain already taut arrives over its length by the
-  // distance gravity integrated, the contact solve then reverses the velocity
-  // that put it there and pushes the ball back out, and the solve corrects what
-  // is left — a real position error, correctly corrected — and charges the ball
-  // Δposition over Δt for motion the contact had already answered for. The chain
-  // sold the same centimetres twice and the ball left the floor at 3 m/s having
-  // landed at 0.9 (`session-360f` f305).
-  //
-  // So the credit is bounded by the constraint's own velocity-level form. The
-  // rope's job is `length <= constraintLength`, and while it is taut the same
-  // statement in velocity is `d(length)/dt <= d(constraintLength)/dt`: the solve
-  // may remove exactly the rate at which the path is opening, and no more. Both
-  // sides are measurable here — the left from the velocities the bodies carry
-  // in, through the same path Jacobian the position correction uses, the right
-  // from what the frame's own retract took out — so the bound is the constraint,
-  // not a heuristic clamp on top of it.
-  //
-  // `extraInward` is for a caller holding a term the Jacobian cannot see. The
-  // ball & chain's winch is the one: chain wound onto the ball's own rim
-  // shortens the free path without any body moving, and the ball's rotation is
-  // kinematic, so it contributes nothing here by design (see
-  // `calculateTorqueArm`). `BallLevel` measures that as a length and passes it
-  // in as a speed; without it the wind-up would be bounded to nothing and the
-  // mechanic would stall, which is the failure `session-322f` is about.
-  //
-  // `entering` supplies the velocity a body carried into the phase, for callers
-  // whose books are taken over a whole phase rather than a single pass and whose
-  // bodies have therefore already been paid something. Bodies it does not name
-  // are read live.
-  creditBound(
-    delta: number,
-    entering?: ReadonlyMap<PhysicsBody2D, Vec2>,
-    extraInward = 0,
-  ): number {
-    let openingRate = 0;
-    for (const pathObject of this.generatePathObjects()) {
-      const point = Rope.contactPointOf(pathObject);
-      const velocity = entering?.get(pathObject.body) ?? this.nodeVelocity(pathObject, point);
-      // `resolveCorrectionDir` points the way the correction hauls this body,
-      // which is the way that SHORTENS the path — so a body moving along it is
-      // closing the constraint and one moving against it is opening it.
-      openingRate -=
-        pathObject.calculateMechanicalAdvantage() *
-        velocity.dot(pathObject.resolveCorrectionDir());
-    }
-    return Math.max(openingRate + this.retractedSinceCredit / delta + extraInward, 0);
-  }
-
-  // The impulse-pair allowance is for a SNAP, and a snap is FAST: only a body
-  // receding above this rate pays the pivot its reaction. The two regimes it
-  // separates were both measured. A hard radial catch arrives at 6-10 m/s of
-  // recession (session-209f, the yank-catch rig); the whirl's churn - the
-  // orbit's little per-cycle yanks, re-fed by the winch's own credit - runs at
-  // 0.8-1.6 m/s, and a body merely hanging recedes by gravity's bite, 0.16.
-  // Below the bar a recession pays nothing, so the whirl's bearing never
-  // receives the seed spin the runaway bootstraps from and the orbit stays at
-  // its governed baseline; discriminators derived from the aim instead were
-  // tried and both read wrong (realized winding is ZERO in a whirl - the bar
-  // co-rotates, so the chain never coils - and the steering snaps the ball's
-  // spin to 47 rad/s in an ordinary catch as the ball passes its aim point).
-  private static readonly PAIR_SNAP_MIN_RECESSION = 2.5;
-
-  // The rotation credit for a PIVOT body may only top its spin up to the rate
-  // the solve's own position correction sustained this pass, never past it.
-  //
-  // The credit is Δrotation over Δt, ADDED to the angular velocity - and for a
-  // free body that add-form is kept honest by everything else acting on it: its
-  // contacts damp it, its mass bounds the linear half, and a correction that
-  // repeats stops repeating once the credited velocity carries the body with
-  // the constraint. A pivot body has none of that. Its bearing is frictionless
-  // and its axle immovable, so when the correction PERSISTS - a ball whirled in
-  // circles on a chain anchored to a hinged bar, whose rotation co-rotates with
-  // the whirl so the constraint direction turns and the correction never stops
-  // - each frame's Δθ/dt lands on top of the ω the last frame's credit already
-  // left, and the bearing integrates: the solve was correcting ~0.055 rad a
-  // frame (a 3.3 rad/s drive) and the bar wound up to 24 rad/s, slinging the
-  // ball at 39 m/s off a rig whose static-anchor control peaks at 2.5 (the
-  // `whirl-anchor` case in `cli spring` is that rig; killing this credit alone
-  // took the whip to 2.4 rad/s).
-  //
-  // So the credit saturates instead of accumulating - the standard PBD velocity
-  // update is a SET, `v = Δx/Δt`, and topping up to the drive rate is that
-  // statement made compatible with the add-form the loop uses. A body at rest
-  // yanked hard still receives the full Δθ/dt (that is momentum transfer); one
-  // already turning with the correction at the drive rate receives nothing,
-  // which is exactly the frame on which the add-form was minting energy. The
-  // bound is the solve's own position correction, so unlike a velocity-derived
-  // bound (`creditBound`'s angular image, tried and reverted) it cannot chase
-  // the runaway it exists to stop. Non-pivot bodies keep the add-form to the
-  // bit.
-  //
-  // Saturation alone starves a HARD RADIAL YANK, and `reactionDw` is the other
-  // half of the statement. A ball falling onto a chain anchored to a sprung
-  // pivot spins the bar to the drive rate in the first frames of the arrest,
-  // and from then on every frame's Δθ/dt sits under the spin already earned:
-  // the credit clamps to zero while the ball goes on paying real momentum
-  // through the same constraint - 0.4-1.1 m/s a frame with the bar credited
-  // nothing, Newton's third law severed, 83% of a 2.76 kJ arrival destroyed
-  // against an inelastic-jerk ceiling of 28% (session-209f f66-70, felt as the
-  // branch giving no backlash at the bottom of the arc). So the pivot may
-  // ALWAYS receive up to the reaction of the impulse the pass actually paid
-  // the other bodies (`reactionDw` = ΣJ·arm/I, computed in the credit loop) -
-  // that is momentum pairing, and it cannot mint: the payer measurably lost
-  // what the pivot gains, and paid impulse counts only the BRAKING share of a
-  // body's credit, so the whirl - whose orbit was hauled inward, never braked
-  // - still pays nothing and the ratchet stays dead. Both allowances cap at
-  // the position-backed credit itself: the solve's own correction remains the
-  // most rotation a pass may be worth. Where two pivots share one path each is
-  // offered the whole paid pool - a loose cap, but a CAP: the position solve's
-  // effective-mass split is what actually apportions the correction between
-  // them, and `cli spring` yank-catch is the detector on the arithmetic.
-  //
-  // And the top-up may never REFUND what the body's own dynamics just removed
-  // (`RigidBody2D.pivotFrameAccelDw`). A ball hanging still from a sprung
-  // branch generates a small position correction every frame - gravity's own
-  // bite, split by effective mass - and the top-up read the spring's per-frame
-  // deceleration of the branch as headroom: the spring bit 0.077 rad/s off,
-  // the credit handed 0.078 back, and the branch position-marched DOWN at the
-  // constant rate of the split, linear, with no bounce, straight past a torque
-  // balance its spring already out-pulled two to one (session-333f, 0.14
-  // rad/s of creep). Subtracting the restoring share leaves the spring's
-  // bite in force: the march stalls a hair past the true balance (~2ζ·c/ω of
-  // offset), and the approach is the spring's own damped oscillation - the
-  // linear spring's interaction, locked to a rotation path. Strictly tighter
-  // than the bare saturation, so nothing the whirl governor holds is loosened.
-  private static boundRotationCredit(
-    body: PhysicsBody2D,
-    credit: number,
-    reactionDw = 0,
-  ): number {
-    if (!(body instanceof RigidBody2D) || !body.pivot || credit === 0) return credit;
-    const dir = Math.sign(credit);
-    const alongCredit = body.angularVelocity * dir;
-    const restoring = Math.max(0, -body.pivotFrameAccelDw * dir);
-    const saturation = Mathf.clamp(
-      Math.abs(credit) - Math.max(alongCredit, 0) - restoring,
-      0,
-      Math.abs(credit),
-    );
-    const paired = Math.min(Math.abs(credit), reactionDw);
-    return dir * Math.max(saturation, paired);
-  }
-
-  // Spend the bound: strip whatever inward speed a credit carries past what the
-  // solve was allowed to be worth. Only the inward component is touched — the
-  // rest is the swing, and the push-outs the phase folded in, and neither is the
-  // constraint's to refuse.
-  clampCredit(body: PhysicsBody2D, credit: Vec2, bound: number): Vec2 {
-    return Rope.clampCreditAlong(this.pullDirection(body), credit, bound);
-  }
-
-  private static clampCreditAlong(dir: Vec2 | null, credit: Vec2, bound: number): Vec2 {
-    if (!dir) return credit;
-    const inward = credit.dot(dir);
-    if (inward <= bound) return credit;
-    return credit.sub(dir.mul(inward - bound));
-  }
-
   // Where the rope's load lands on the body it ENDS on: the point at which the
   // last free span meets that body. For a chain tied to a surface that is the
   // anchor itself; for a chain that has come round the holder it is the tangent
@@ -1400,64 +937,6 @@ export class Rope {
       }
     }
     return null;
-  }
-
-  // The direction the length solve hauls `body`, or null for a body the path
-  // does not hold. An attachment in preference to a wrap: a body the rope both
-  // ends on and bends around is hauled from its attachment, and the wrap's
-  // bisector is a weaker statement about the same pull.
-  pullDirection(body: PhysicsBody2D): Vec2 | null {
-    let fallback: Vec2 | null = null;
-    for (const pathObject of this.generatePathObjects()) {
-      if (pathObject.body !== body) continue;
-      const dir = pathObject.resolveCorrectionDir();
-      if (dir.lengthSquared() < 0.0001) continue;
-      if (pathObject instanceof PathWrap) fallback ??= dir.normalized();
-      else return dir.normalized();
-    }
-    return fallback;
-  }
-
-  // `pullDirection` for every path body at once, from ONE regeneration. Body by
-  // body it answers exactly what `pullDirection` answers - attachment beats
-  // wrap, first valid of each kind wins - it just walks the path once instead
-  // of once per body, which is what a solve pass crediting the whole path
-  // needs (see the credit loop in `solvePass`).
-  private pullDirections(): {
-    dirs: Map<PhysicsBody2D, Vec2>;
-    // A PIVOT body's torque arm about its bearing and the contact the rope
-    // acts through, for the impulse-pair bound in `boundRotationCredit` —
-    // collected in the same walk so the credit loop costs one path
-    // regeneration, not two (session-230f).
-    pivotArms: Map<PhysicsBody2D, number>;
-    pivotContacts: Map<PhysicsBody2D, Vec2>;
-  } {
-    const dirs = new Map<PhysicsBody2D, Vec2>();
-    const fallbacks = new Map<PhysicsBody2D, Vec2>();
-    const pivotArms = new Map<PhysicsBody2D, number>();
-    const pivotContacts = new Map<PhysicsBody2D, Vec2>();
-    for (const pathObject of this.generatePathObjects()) {
-      const body = pathObject.body;
-      if (body instanceof RigidBody2D && body.pivot) {
-        const arm = Math.abs(this.calculateTorqueArm(pathObject));
-        if (arm > (pivotArms.get(body) ?? 0)) {
-          pivotArms.set(body, arm);
-          pivotContacts.set(body, Rope.contactPointOf(pathObject));
-        }
-      }
-      if (dirs.has(body)) continue;
-      const dir = pathObject.resolveCorrectionDir();
-      if (dir.lengthSquared() < 0.0001) continue;
-      if (pathObject instanceof PathWrap) {
-        if (!fallbacks.has(body)) fallbacks.set(body, dir.normalized());
-      } else {
-        dirs.set(body, dir.normalized());
-      }
-    }
-    for (const [body, dir] of fallbacks) {
-      if (!dirs.has(body)) dirs.set(body, dir);
-    }
-    return { dirs, pivotArms, pivotContacts };
   }
 
   private static contactPointOf(pathObject: PathObject): Vec2 {
@@ -1491,7 +970,6 @@ export class Rope {
   // `calculateTorqueArm` makes and for the same reason: a spin the controller
   // overwrites every frame is not motion the rope may be paid against.
   private static velocityAt(body: PhysicsBody2D, point: Vec2): Vec2 {
-    if (body instanceof Player) return body.velocity;
     if (body instanceof RigidBody2D && body.kinematicRotation) return body.linearVelocity;
     return body.velocityAtPoint(point);
   }
@@ -1700,8 +1178,6 @@ export class Rope {
     toNode: RopeNode,
   ): RopeNode | null {
     const obj = fromNode.contact.obj;
-    if (obj instanceof Player && fromNode === this.start) return null;
-    if (obj instanceof Hook && fromNode === this.start) return null;
     if (isPassThrough(obj)) return null;
     // A span that ends on a ring clamped around a rail ends at the ring's
     // centre, and the chain leaves the ring at its rim: a corner of the same
@@ -1838,7 +1314,6 @@ export class Rope {
 
   private resolveSelfIntersectionAtEnd(toNode: RopeNode, span: Segment): RopeNode | null {
     const obj = toNode.contact.obj;
-    if (obj instanceof Hook && toNode === this.end) return null;
     // A clamp's contact is the cuff's centre, which is in the bar's BORE -
     // inside the bar for a push fit, a centimetre under it for a thin one -
     // so the span ending on it sits on or against the piece it is clamped
@@ -2733,102 +2208,12 @@ export class Rope {
       previous = wraps[i]!;
     }
     cumulativeLength += this.spanLength(previous, this.end_);
-    if (this.start.contact.obj instanceof Player) {
-      cumulativeLength -= this.start.contact.obj.radialCoMOffset;
-    }
-    if (this.end.contact.obj instanceof Player) {
-      cumulativeLength -= this.end.contact.obj.radialCoMOffset;
-    }
     return cumulativeLength;
   }
 
   // Bodies the current pass must treat as immovable. Null outside a winch pass,
   // which is every pass every other caller makes.
   private held: ReadonlySet<CollisionObject2D> | null = null;
-
-  // Enforce the length with `held` immovable, so the whole correction lands on
-  // whatever is left free.
-  //
-  // This is the winch, stated as a solve. Winding chain onto the ball's own rim
-  // shortens the free path, and the way that is paid for is by hauling the BALL
-  // towards its anchor - never by hauling the anchor, which is a kinematic spin
-  // driving a body that has to keep what it is given (`session-265f`). The
-  // ordinary solve cannot say that: it splits every correction by effective
-  // inverse mass, so an anchor lighter than the ball takes most of it, and
-  // `BallLevel`'s rollback then takes that share back off the anchor and leaves
-  // the length unpaid. Held, the same solve puts all of it where the winch was
-  // always supposed to put it.
-  //
-  // Position only, like every other length correction: the caller pays the
-  // velocity for it, over the displacement the phase actually ends on.
-  solveLengthHolding(held: ReadonlySet<CollisionObject2D>): void {
-    this.held = held;
-    try {
-      PhaseTrace.inPass("winch", () => this.resolveLengthConstraint());
-    } finally {
-      this.held = null;
-    }
-  }
-
-  private resolveLengthConstraint(): number | null {
-    let cumulativeCorrectionImpulse = 0;
-    let error = this.calculateRopePathLength() - this.constraintLength;
-    // The step is sized by the WHOLE error, and on a chain coiled tight onto
-    // its ball most of that error is coil, which no translation can remove:
-    // the free span from the coil to the anchor is millimetres long, the step
-    // is decimetres, and the ball is carried straight past its anchor into a
-    // longer path than it left (124 mm of error to 262 in one iteration,
-    // `session-154f` f86-88). Undone outright the constraint is simply
-    // abandoned for the frame and the pair drifts apart; halved until it
-    // shortens, the translation takes the span's worth and leaves the coil's
-    // worth to the unwind, which is whose it is.
-    let relaxation = 1;
-    // A continuous rope's guard carries a nanometre of tolerance, because the
-    // end drawn exactly onto a node measures the same path to the last bit
-    // only in exact arithmetic (see `roundEndNode`).
-    const guardEpsilon = this.continuous ? Rope.MONOTONE_EPSILON : 0;
-    for (let iteration = 0; iteration < this.maxIterations; iteration++) {
-      // An iteration may only shorten the path. The correction is a step along
-      // the FIRST span's direction sized by the whole error, and on a chain
-      // coiled tight onto its ball that direction is not the path's gradient:
-      // the step overshoots, the next span flips the direction, and each
-      // iteration lands longer than the last while turning the anchor the same
-      // way every time. Ten of those spun a 12.6 kg weight fourteen turns in
-      // one frame, wrapped the chain around it into a 3.8 m path, and the
-      // winch hauled the ball 1.2 m after it: a 93 m/s launch out of a 27 cm
-      // error (`session-239f` f192, replayed). Undone and stopped, the error
-      // stands as over-length for the unwind and the stall lease, which is
-      // what a correction geometry will not let through has always been.
-      const before = this.snapshotPathBodies();
-      const wrapsBefore = this.wraps;
-      this.endReachedNode = false;
-      const correctionImpulse = this.correctShapePositionAndRotation(relaxation);
-      if (correctionImpulse === null) {
-        if (iteration === 0) return null;
-        break;
-      }
-      const after = this.calculateRopePathLength() - this.constraintLength;
-      const undone = after > error + guardEpsilon;
-      // One record per iteration, before the guard acts on it: what the
-      // iteration was handed, what it left, whether it stood, and the per-body
-      // terms that decided where the correction went. A diverging solve is ten
-      // of these with the error climbing and `dirX` alternating (`session-239f`
-      // f192), and it was visible only through a temporary print until now.
-      PhaseTrace.solve(iteration, error, after, undone, this.solveTerms);
-      if (undone) {
-        this.restorePathBodies(before);
-        if (this.wraps !== wrapsBefore) this.wraps = wrapsBefore;
-        relaxation *= 0.5;
-        if (relaxation < Rope.MIN_RELAXATION) break;
-        continue;
-      }
-      error = after;
-      cumulativeCorrectionImpulse += correctionImpulse;
-      if (this.endReachedNode) this.roundEndNode();
-    }
-    this.frameCorrection += cumulativeCorrectionImpulse;
-    return cumulativeCorrectionImpulse;
-  }
 
   // The far end has been drawn up to the last wrap node, so the rope no longer
   // bends there: drop the node, and the next iteration pulls the end on towards
@@ -2861,103 +2246,6 @@ export class Rope {
     this.wraps = this.wraps.slice(0, -1);
   }
 
-  // Smallest share of a correction step worth trying before the solve gives
-  // the frame up: six halvings, a sixty-fourth of the error.
-  private static readonly MIN_RELAXATION = 1 / 64;
-  // Metres of lengthening the monotone guard forgives a continuous rope's
-  // iteration, so an end snapped onto a node is not undone for float noise.
-  private static readonly MONOTONE_EPSILON = 1e-9;
-
-  // Everything an iteration of the length solve may move, so the monotone
-  // guard can put it all back: the path bodies' poses, and - for a clamped
-  // end - where along its rail the cuff stands and what is left of the
-  // frame's slide budget. A slide undone with its budget kept would be a
-  // clamp that runs out of road for a move it never made.
-  private snapshotPathBodies(): PathSnapshot {
-    const bodies: PathSnapshot["bodies"] = [];
-    for (const node of this.path()) {
-      const body = node.contact.obj;
-      if (!(body instanceof PhysicsBody2D) || bodies.some((o) => o.body === body)) continue;
-      bodies.push({ body, position: body.globalPosition, rotation: body.globalRotation });
-    }
-    const clamp = this.end instanceof RopeClamp ? this.end.snapshot() : null;
-    const embed = this.end instanceof RopeEmbed ? this.end.snapshot() : null;
-    const ring = this.end instanceof RopeVineClamp ? this.end.snapshot() : null;
-    return { bodies, clamp, embed, ring, slideBudget: this.slideBudget };
-  }
-
-  private restorePathBodies(snapshot: PathSnapshot): void {
-    for (const s of snapshot.bodies) {
-      s.body.globalPosition = s.position;
-      s.body.globalRotation = s.rotation;
-    }
-    if (snapshot.clamp && this.end instanceof RopeClamp) {
-      this.end.restoreState(snapshot.clamp);
-      this.markPathChanged();
-    }
-    if (snapshot.embed && this.end instanceof RopeEmbed) {
-      this.end.restoreState(snapshot.embed);
-      this.markPathChanged();
-    }
-    if (snapshot.ring && this.end instanceof RopeVineClamp) {
-      this.end.restoreState(snapshot.ring);
-      this.markPathChanged();
-    }
-    this.slideBudget = snapshot.slideBudget;
-  }
-
-  // The ring's own frame: let a clamped end run along its rail under its own
-  // weight, or run off the bar's open end, and swing on the point it rests on
-  // toward whatever is pulling it (`RopeClamp.coast`, `RopeClamp.seat`).
-  //
-  // Once a frame, and OUTSIDE the length solve, because a ring hangs and falls
-  // whether or not the chain is taut: a ball resting on the floor under a slack
-  // chain still swings the cuff as it rolls, a ring threaded onto a vertical
-  // bar falls whatever the chain is doing, and the length solve returns before
-  // it ever looks at a clamp when there is no error to correct. It runs before
-  // the path is regenerated, so a ring that has run off the bar is replaced
-  // before the pass reads the path - the node it swings toward is last
-  // frame's, which the cuff cannot tell from this frame's.
-  //
-  // What it swings toward is the node the chain reaches it from while the
-  // chain was pulling on it last frame, and straight down otherwise: a slack
-  // chain's last span has a direction, but not one the ring hangs by.
-  private settleClamp(delta: number): void {
-    if (this.seatLooked) return;
-    const clamp = this.end;
-    if (clamp instanceof RopeEmbed) {
-      this.seatLooked = true;
-      this.settleEmbed(clamp);
-      return;
-    }
-    if (clamp instanceof RopeVineClamp) {
-      this.seatLooked = true;
-      this.settleVineClamp(clamp);
-      return;
-    }
-    if (!(clamp instanceof RopeClamp)) return;
-    this.seatLooked = true;
-    const grip = clamp.body.surfaceFriction;
-    // The hang is decided BEFORE the ring is let go of, because whether the
-    // chain is pulling on it decides both where it hangs and whether it is
-    // free to run down the bar at all.
-    const hang = this.clampHang(clamp);
-    const coasted = clamp.coast(
-      delta,
-      RAIL_STATIC_FRICTION * grip,
-      RAIL_KINETIC_FRICTION * grip,
-      GRAVITY,
-      hang.blocked,
-    );
-    if (coasted.ranOff !== 0) {
-      this.markPathChanged();
-      this.onClampRunOff?.(clamp, coasted.ranOff);
-      return;
-    }
-    const seated = clamp.seat(hang.toward, delta, hang.pulling);
-    if (coasted.moved || seated) this.markPathChanged();
-  }
-
   // The frame's first look at an embedded end (`RopeEmbed`): is the cuff still
   // held? Its mouth is what grips the face, and a mouth that has crept clear
   // of every piece of the body it bit is gripping nothing - the cuff drops
@@ -2974,242 +2262,9 @@ export class Rope {
     this.onEmbedDrop?.(embed, velocity);
   }
 
-  // Let an embedded end creep through the viscous face it bit, along the pull
-  // of the span that reaches it, and say how much of the path's length that
-  // took out (see `lib/viscous.ts`).
-  //
-  // The whole frame's creep is decided at the solve's first look, from the
-  // tension the solve is about to apply: the path's over-length and the
-  // effective mass along it are what the correction would be made of, so
-  // `slipDistance` reads them as the force on the anchor and answers how far
-  // the mud lets it move for that force. The share of the error a wrap
-  // appearing or vanishing put there is no tension (`topologyCreditScale`),
-  // so it is taken out of the reading. Later iterations of the same frame find
-  // the budget spent; an undone iteration has it refunded with the pin's
-  // position (`snapshotPathBodies`).
-  //
-  // The creep runs along the LAST span - from the pin toward the node the
-  // chain reaches it from, the ball or a corner on the way - and no further
-  // than that node, nor than the over-length itself: past either the chain
-  // would be slack, and a slack chain is pulling on nothing. The pin is the
-  // node the span ends on, so a creep of `s` along it shortens the path by
-  // exactly `s`.
-  //
-  // A mouth that has crept out of the mud into a SOLID piece of the same body
-  // is stuck fast there and creeps no further; one that has crept clear of
-  // everything is dropped at the next frame's first look (`settleEmbed`).
-  //
-  // A pin that REACHES the node it is pulled toward has crept up to a corner
-  // the chain bends round, and the chain no longer bends there: the node is
-  // rounded - dropped, for the next iteration to pull the pin on toward the
-  // one before it - exactly as a continuous rope's far end rounds a corner
-  // inside a solve (`boundToNode`, `roundEndNode`). Left standing, a pin ON
-  // its wrap node has a pull with no direction, and the cuff sat at the
-  // corner of a mud blob for ever with the ball swinging under it
-  // (`session-332f`, f208 on).
-  private slipEmbeddedEnd(): number {
-    const embed = this.end;
-    if (!(embed instanceof RopeEmbed)) return 0;
-    const nodes = this.path();
-    const prev = nodes[nodes.length - 2];
-    if (!prev) return 0;
-    if (!this.slideLooked) {
-      this.slideLooked = true;
-      this.slideBudget = 0;
-      const held = embed.holding();
-      if (held.kind === "viscous") {
-        const error = this.calculateRopePathLength() - this.constraintLength;
-        const inverseInertia = this.effectiveInverseInertia(this.generatePathObjects());
-        if (error > 0 && inverseInertia >= 1e-6) {
-          this.slideBudget = slipDistance(
-            error * this.topologyCreditScale,
-            1 / inverseInertia,
-            this.frameDelta,
-            held.viscosity,
-          );
-        }
-      }
-    }
-    if (this.slideBudget <= 0) return 0;
-    const pin = embed.contact.globalPosition;
-    const pull = prev.contact.globalPosition.sub(pin);
-    const reach = pull.length();
-    if (reach < Rope.EMBED_NODE_EPSILON) {
-      this.endReachedNode = true;
-      return 0;
-    }
-    const before = this.calculateRopePathLength();
-    const step = Mathf.min(this.slideBudget, Mathf.min(before - this.constraintLength, reach));
-    if (step <= 0) return 0;
-    if (step >= reach) this.endReachedNode = true;
-    embed.slip(pull.mul(step / reach));
-    this.slideBudget = Mathf.max(this.slideBudget - step, 0);
-    this.markPathChanged();
-    return before - this.calculateRopePathLength();
-  }
-
   // How close to the node it is pulled toward an embedded pin counts as ON it:
   // a micron, well under any creep a frame makes and well over float noise.
   private static readonly EMBED_NODE_EPSILON = 1e-6;
-
-  // The frame's first look at a ring on a vine (`RopeVineClamp`): put it back
-  // on the vine's line where its segment and fraction say it stands - the
-  // links have moved since the last look, and the ring rides the cord rather
-  // than its link's frame - then act on a ring the last creep drove off the
-  // free end, which comes back as the dangling tip at the speed it was being
-  // driven at (`onVineRunOff`), and hang the rim toward what is pulling. Once
-  // a frame and before the path is regenerated, where a rail's `settleClamp`
-  // and a mud embed's `settleEmbed` are, and for the same reason: a ring that
-  // has left the vine is replaced before the pass reads the path.
-  private settleVineClamp(clamp: RopeVineClamp): void {
-    const dt = this.frameDelta;
-    let velocity = dt > 0 ? clamp.slipped.div(dt) : Vec2.ZERO;
-    clamp.slipped = Vec2.ZERO;
-    if (clamp.sync()) this.markPathChanged();
-    const ran = clamp.takeRunOff();
-    if (ran.ranOff) {
-      const t = clamp.tangent();
-      if (t !== null && dt > 0) velocity = velocity.add(t.mul(ran.overrun / dt));
-      this.markPathChanged();
-      this.onVineRunOff?.(clamp, velocity);
-      return;
-    }
-    // Pulling, or slack? The bound is the rail's (`clampHang`): a chain within
-    // a bore's radius of taut can be taut at some hang of the ring; slacker
-    // than that has really gone slack, and a slack chain hangs the rim
-    // nowhere.
-    const nodes = this.path();
-    const prev = nodes[nodes.length - 2];
-    const slack = this.constraintLength - this.calculateRopePathLength();
-    const pulling = prev !== undefined && slack < MANACLE_BORE / 2;
-    clamp.seat(pulling ? prev.contact.globalPosition : clamp.contact.globalPosition.add(GRAVITY), pulling);
-  }
-
-  // Let a ring on a vine creep along the vine under the pull of the span that
-  // reaches it, and say how much of the path's length that took out - the mud
-  // embed's seat (`slipEmbeddedEnd`), for a cuff LOCKED to a line (see
-  // `lib/vineClamp.ts`).
-  //
-  // Two things differ from the mud, and both are the line's. Only the pull's
-  // component ALONG the vine drives the creep, and a creep along it relieves
-  // only that component's share of the error (`slipDistance`'s `along`), so a
-  // ball hanging plumb under the vine draws the ring straight down it at the
-  // law's speed and a ball swung out sideways barely moves it. And the tension
-  // is read from the bodies the vine does NOT hold: the link the ring stands
-  // on is on the path and the length solve may move it, but the load rope and
-  // the pair chains hold it on the vine, which this solve cannot see - so it
-  // is left out of the effective mass, and a ball under a held vine reads as
-  // a ball under a fixed anchor. Its share of the correction still lands on
-  // it below, and the coupled sweep then argues that out with the vine.
-  //
-  // The error the first look reads is not the whole of the tension, and that
-  // is the other thing the link costs. Between one frame's last pass and the
-  // next frame's first look the link falls under its own gravity and its
-  // vine's own sweep leaves it sagging within the joints' tolerance, and the
-  // ring, re-seated on the line (`settleVineClamp`), comes down with it - so
-  // the first look sees the ball's fall LESS the link's sag, about a third
-  // short on a dead hang (2.0 mm against 3.2, measured), and the squared law
-  // made half the creep of it. The coupled sweep then lifts the link back and
-  // corrects the ball for the rest, but the budget was decided. So the look
-  // is floored by what the chain carried LAST frame: the length solve's
-  // summed correction over every pass, which is the impulse the tension
-  // actually delivered (both ends of a rope feel the same impulse however
-  // the split falls, and the sweep's passes sum to the ball's whole
-  // correction), plus the over-length the creep relieved before it. On a
-  // steady hang that is the ball's fall exactly; on a catch the first look
-  // is the larger by far and stands, so the ball is slowed over the frames
-  // the slip takes to decay rather than in one, as the mud slows it.
-  //
-  // The budget is decided at the frame's first look and spent along the line
-  // - crossing from link to link as it goes, stopping at a closed end, running
-  // off the open one - no further than the over-length lets: past that the
-  // chain would be slack and pulling on nothing. An undone iteration refunds
-  // it with the ring's place on the line (`snapshotPathBodies`).
-  private slipVineClampedEnd(): number {
-    const clamp = this.end;
-    if (!(clamp instanceof RopeVineClamp)) return 0;
-    const nodes = this.path();
-    const prev = nodes[nodes.length - 2];
-    if (!prev) return 0;
-    const t = clamp.tangent();
-    if (t === null) return 0;
-    const pull = prev.contact.globalPosition.sub(clamp.contact.globalPosition);
-    const reach = pull.length();
-    if (reach < Rope.EMBED_NODE_EPSILON) return 0;
-    const along = pull.dot(t) / reach;
-    if (!this.slideLooked) {
-      this.slideLooked = true;
-      this.slideBudget = 0;
-      this.slideSign = along >= 0 ? 1 : -1;
-      const inverseInertia = this.effectiveInverseInertia(this.generatePathObjects(), clamp.link);
-      const seen = (this.calculateRopePathLength() - this.constraintLength) * this.topologyCreditScale;
-      const carried = this.lastFrameCorrection * inverseInertia + this.lastFrameCreepRelief;
-      const error = Mathf.max(seen, carried);
-      if (error > 0 && inverseInertia >= 1e-6 && along !== 0) {
-        this.slideBudget = slipDistance(
-          error,
-          1 / inverseInertia,
-          this.frameDelta,
-          clamp.vine.viscosity,
-          Math.abs(along),
-        );
-      }
-    }
-    if (this.slideBudget <= 0 || along * this.slideSign <= 0) return 0;
-    const before = this.calculateRopePathLength();
-    const over = before - this.constraintLength;
-    if (over <= 0) return 0;
-    // How far the creep may run: the over-length itself, as the mud's seat
-    // bounds its own slip (`slipEmbeddedEnd`), and NOT divided by `along`.
-    // A creep of `s` along the line takes at most `s` out of the path
-    // (`|along| <= 1`), so `over` is already the distance past which the chain
-    // would be slack and pulling on nothing. The first-order `over / |along|`
-    // that stood here reads "a creep that relieves less may run further",
-    // which is exactly backwards as a bound - the shallower the pull lies to
-    // the cord, the less the geometry holds still over the distance - and it
-    // is unbounded as the pull turns square to the vine, which the design
-    // calls the ordinary case (a ball swung out sideways). The sideways ball
-    // is already answered where it belongs, in the budget: `slipDistance`
-    // takes `along` and the viscous law makes the creep small.
-    //
-    // On `session-322f` f250 a 45 mm over-length at `along = -0.086` asked for
-    // 522 mm, carried the ring three segments up the vine, and LENGTHENED the
-    // path by 498 mm; the solve then re-asked on the bigger error until the
-    // ring stood at the vine's top 1.6 m from the node pulling it, the path
-    // read 3.48 m against a 0.29 m constraint, and the length solve hauled the
-    // ball 1.54 m to fit it - paid back the next frame as 33 m/s.
-    //
-    // The mud's OTHER bound, `reach`, is deliberately not borrowed: the mud's
-    // pin creeps along the pull, so running past the node it is pulled toward
-    // is meaningless, while a ring creeps along the LINE, square to that pull
-    // as often as not. Capping by it starves precisely the case this is about
-    // - a ball wound tight against the ring closes the span to nothing, the
-    // creep that would relieve the error is throttled with it, and the solve
-    // takes the error out by hauling bodies instead (measured: the ring walked
-    // 347 mm up the line and the ball left at 18 m/s on `ring-square`).
-    const step = Mathf.min(this.slideBudget, over);
-    const state = clamp.snapshot();
-    const moved = clamp.creep(this.slideSign * step);
-    if (moved === 0) return 0;
-    this.markPathChanged();
-    const relieved = before - this.calculateRopePathLength();
-    // The line BENDS, so no bound computed at the ring's own segment can
-    // promise the creep shortened the path: crossing a link turns the tangent
-    // under it. The guard is therefore the measurement and not the estimate -
-    // a creep that did not relieve is put back, along with the run-off it
-    // claimed, and the budget it would have spent is left for the pass after
-    // it, which looks from wherever the rest of the solve has since moved the
-    // vine to.
-    if (relieved <= 0) {
-      clamp.restoreState(state);
-      this.markPathChanged();
-      return 0;
-    }
-    clamp.slipped = clamp.slipped.add(t.mul(moved));
-    this.slideBudget = Mathf.max(this.slideBudget - Math.abs(moved), 0);
-    this.frameCreepRelief += relieved;
-    return relieved;
-  }
 
   // A ring the last ROW frame's walk (`rowCreep`) drove off the cord's free
   // end comes back as the dangling tip, at the speed it was being driven at,
@@ -3218,7 +2273,33 @@ export class Rope {
   // its island does (`syncSpanUnits`), and left unanswered the ring sat at
   // the last link for ever. Called by the owner at the top of its frame,
   // before anything reads the chain's end.
-  settleRowRunOff(): void {
+  //
+  // And a cuff the last row frame's creep (`rowCreep`) took clear of every
+  // piece of the body it bit is dropped, as the positional frame's first look
+  // drops it (`settleEmbed`).
+  //
+  // A ring on a RAIL moves under its own row in the island (`BallChainRow`'s
+  // ring row: its slide, its friction, its weight along the bar), so all its
+  // frame asks of here is the run-off the last frame drove it to
+  // (`RopeClamp.takeRowRunOff`) and the hang toward the pull (`seat`), which
+  // the positional solve made at its first look (`settleClamp`).
+  settleRowEnd(): void {
+    if (this.end instanceof RopeEmbed) {
+      this.settleEmbed(this.end);
+      return;
+    }
+    if (this.end instanceof RopeClamp) {
+      const clamp = this.end;
+      const ran = clamp.takeRowRunOff();
+      if (ran !== 0) {
+        this.markPathChanged();
+        this.onClampRunOff?.(clamp, ran);
+        return;
+      }
+      const hang = this.clampHang(clamp);
+      if (clamp.seat(hang.toward, this.frameDelta, hang.pulling)) this.markPathChanged();
+      return;
+    }
     const clamp = this.end;
     if (!(clamp instanceof RopeVineClamp)) return;
     const ran = clamp.takeRunOff();
@@ -3244,7 +2325,16 @@ export class Rope {
   // stands: the line bends, and a walk is kept only if it shortened the path,
   // measured. The rim is seated as the positional solve seats it, once a
   // frame at the first walk.
+  //
+  // A cuff EMBEDDED in mud walks the same way, free in the face rather than
+  // locked to a line: along the last span toward the node the chain reaches it
+  // from, `h·creepSpeed(force)`, which shortens the path by exactly the step -
+  // the positional solve's creep (`slipEmbeddedEnd`) moved into the row. A pin
+  // that reaches that node has crept up to a corner the chain bends round, and
+  // the corner is rounded off (`roundEndNode`) so the next substep pulls it on
+  // toward the node before (`session-332f`).
   rowCreep(h: number, force: number): number {
+    if (this.end instanceof RopeEmbed) return this.rowCreepEmbed(h, force);
     const clamp = this.end;
     if (!(clamp instanceof RopeVineClamp)) return 0;
     const law = this.rowCreepLaw();
@@ -3270,8 +2360,21 @@ export class Rope {
       return 0;
     }
     clamp.slipped = clamp.slipped.add(tangent.mul(moved));
-    this.frameCreepRelief += relieved;
     return moved;
+  }
+
+  private rowCreepEmbed(h: number, force: number): number {
+    const embed = this.end;
+    if (!(embed instanceof RopeEmbed)) return 0;
+    const law = this.rowCreepLaw();
+    if (law === null || force <= 0 || h <= 0) return 0;
+    const reach = law.toward.distanceTo(embed.contact.globalPosition);
+    const step = Mathf.min(h * creepSpeed(force, law.viscosity), reach);
+    if (step <= 0) return 0;
+    embed.slip(law.tangent.mul(step));
+    if (step >= reach) this.roundEndNode();
+    this.markPathChanged();
+    return step;
   }
 
   // The geometry the ring's creep law reads on a row frame: the cosine of the
@@ -3280,8 +2383,26 @@ export class Rope {
   // reaches the ring from. Null for an end that is not a ring on a cord, or a
   // degenerate span. The row folds the law into its own velocity solve with
   // this (`BallChainRow.solve`), and `rowCreep` walks the ring by it.
+  //
+  // For a cuff embedded in mud the creep runs with the pull itself (`along`
+  // 1, `tangent` the last span's direction toward the node it is pulled to),
+  // at the piece's viscosity; a cuff held fast by a solid piece, or by
+  // nothing, has no law, and the row holds it rigidly or the frame's first
+  // look drops it (`settleRowEnd`).
   rowCreepLaw(): { along: number; tangent: Vec2; viscosity: number; toward: Vec2 } | null {
-    const clamp = this.end;
+    const end = this.end;
+    if (end instanceof RopeEmbed) {
+      const held = end.holding();
+      if (held.kind !== "viscous") return null;
+      const prev = this.path()[this.path().length - 2];
+      if (!prev) return null;
+      const toward = prev.contact.globalPosition;
+      const pull = toward.sub(end.contact.globalPosition);
+      const reach = pull.length();
+      if (reach < Rope.EMBED_NODE_EPSILON) return null;
+      return { along: 1, tangent: pull.div(reach), viscosity: held.viscosity, toward };
+    }
+    const clamp = end;
     if (!(clamp instanceof RopeVineClamp)) return null;
     const nodes = this.path();
     const prev = nodes[nodes.length - 2];
@@ -3293,31 +2414,6 @@ export class Rope {
     const reach = pull.length();
     if (reach < Rope.EMBED_NODE_EPSILON) return null;
     return { along: pull.dot(tangent) / reach, tangent, viscosity: clamp.vine.viscosity, toward };
-  }
-
-  // The path's summed inverse inertia along the constraint: what one metre of
-  // length correction is divided by to become the correction impulse, and
-  // whose reciprocal is the effective mass the chain's tension acts on. Each
-  // dynamic body on the path contributes its mechanical advantage squared
-  // over its effective inverse mass along the pull, torque arm included.
-  //
-  // `except` is a body left OUT of the sum: the link a ring on a vine stands
-  // on, which the vine holds and the tension is not spent on (see
-  // `slipVineClampedEnd`).
-  private effectiveInverseInertia(pathObjects: PathObject[], except: PhysicsBody2D | null = null): number {
-    let total = 0;
-    for (const segment of pathObjects) {
-      if (segment.body === except) continue;
-      const dynamicBody = this.getDynamicBodyState(segment.body);
-      if (dynamicBody) {
-        const mechanicalAdvantage = segment.calculateMechanicalAdvantage();
-        const torqueArm = this.calculateTorqueArm(segment);
-        const inverseEffectiveMass =
-          1 / dynamicBody.mass + (torqueArm * torqueArm) / dynamicBody.inertia;
-        total += mechanicalAdvantage * mechanicalAdvantage * inverseEffectiveMass;
-      }
-    }
-    return total;
   }
 
   // Where a clamped end hangs, and whether the chain is what is hanging it:
@@ -3350,7 +2446,7 @@ export class Rope {
   // flicks eleven degrees and back for as long as it takes the chain to come
   // taut (`session-164f`). Measured to the rest point the slack is the better
   // witness of the two, so it is the only one.
-  clampHang(clamp: RopeClamp): { toward: Vec2; pulling: boolean; blocked: -1 | 0 | 1 } {
+  clampHang(clamp: RopeClamp): { toward: Vec2; pulling: boolean } {
     const nodes = this.path();
     const prev = nodes[nodes.length - 2];
     const centre = clamp.contact.globalPosition;
@@ -3362,80 +2458,39 @@ export class Rope {
       prevPos === undefined ? 0 : prevPos.distanceTo(centre) - prevPos.distanceTo(clamp.restPoint());
     const slack = this.constraintLength - this.calculateRopePathLength() + toRest;
     const pulling = slack < MANACLE_BORE / 2 && prev !== undefined;
-    if (!pulling) return { toward: centre.add(GRAVITY), pulling, blocked: 0 };
-    // Which way along the bar the taut chain will not let the ring go, for the
-    // ring's own weight to respect (see `RopeClamp.coast`). Moving the ring by
-    // `ds` along the bar's tangent changes the last span by `-(p̂·t)·ds`, so
-    // the path LENGTHENS toward increasing arc length exactly when the pull
-    // runs back against it.
-    const toward = prev.contact.globalPosition;
-    const t = clamp.tangent();
-    const pull = toward.sub(centre);
-    const len = pull.length();
-    const blocked: -1 | 0 | 1 =
-      t === null || len === 0 ? 0 : pull.dot(t) < 0 ? 1 : -1;
-    return { toward, pulling, blocked };
+    if (!pulling) return { toward: centre.add(GRAVITY), pulling };
+    return { toward: prev.contact.globalPosition, pulling };
   }
 
-  // Let a clamped end swing on its rail and run along it under the pull of the
-  // span that reaches it, and say how much of the path's length that took out.
-  // The cuff is massless, so it goes first - to wherever force balance puts it,
-  // hanging from the point of the bar it rests on (`RopeClamp.seat`) and then
-  // running along the bar (`RopeClamp.slide`) - and the bodies split what is
-  // left of the error.
-  //
-  // The pull is the last span's own direction, from the cuff to whatever node
-  // the chain reaches it from: the ball, or a corner the chain bends round on
-  // the way. The rail's grip is the body's authored `friction` on the rail
-  // coefficients, exactly as a rigid body's contact friction is built.
-  //
-  // Where the ring HANGS is settled before the solve rather than in it (see
-  // `settleClamp`); what this step moves is where along the bar it stands.
-  //
-  // How far it may move in the frame is bounded by what is driving it: the
-  // speed it already had along the bar, the speed of the node pulling it
-  // measured along the bar, and one frame of gravity on top - so a ring under a
-  // ball falling down a vertical bar falls with the ball at `g`, a ring under a
-  // coasting zipline ball keeps pace with it exactly, and a ring a ball has
-  // swung past the static cone slips away at the ball's own speed rather than
-  // leaping to the cone's edge in a frame and dropping the ball off its arc.
-  // `RAIL_MAX_SLIDE_SPEED` caps the lot.
-  private slideClampedEnd(): number {
+  // A rail ring's own motion over the substep just solved, at the speed its
+  // row left it (`BallChainRow`'s ring row, `RopeClamp.rowAdvance`). Returns
+  // the path it took out - chain the row takes in without a body moving, as a
+  // creep's walk is.
+  rowAdvanceRing(h: number): number {
     const clamp = this.end;
-    if (!(clamp instanceof RopeClamp)) return 0;
+    if (!(clamp instanceof RopeClamp) || clamp.speed === 0 || h <= 0) return 0;
+    const before = this.calculateRopePathLength();
+    clamp.rowAdvance(Mathf.clamp(clamp.speed, -RAIL_MAX_SLIDE_SPEED, RAIL_MAX_SLIDE_SPEED) * h);
+    this.markPathChanged();
+    return Math.max(0, before - this.calculateRopePathLength());
+  }
+
+  // A pulled rail ring to where its friction cone puts it under the node the
+  // chain reaches it from, at a substep's opening (`BallChainRow`'s ring):
+  // stuck inside the static cone, run to the kinetic edge past it, and held at
+  // that edge while sliding (`RopeClamp.slide`), with a substep's share of the
+  // speed cap. Returns the path it took out.
+  rowSnapRing(h: number, mus: number, muk: number): number {
+    const clamp = this.end;
+    if (!(clamp instanceof RopeClamp) || h <= 0) return 0;
     const nodes = this.path();
     const prev = nodes[nodes.length - 2];
     if (!prev) return 0;
-    // The frame's first look settles the friction state and opens the budget;
-    // every later iteration finds the ring where that look left it (see
-    // `RopeClamp.slide`).
-    const settle = !this.slideLooked;
-    if (settle) {
-      const t = clamp.tangent();
-      const puller = prev.contact.obj;
-      const driving =
-        t && puller instanceof PhysicsBody2D
-          ? Math.abs(puller.velocityAtPoint(prev.contact.globalPosition).dot(t))
-          : 0;
-      const pace = Math.abs(clamp.speed) + driving + GRAVITY.length() * this.frameDelta;
-      this.slideBudget = Mathf.min(pace, RAIL_MAX_SLIDE_SPEED) * this.frameDelta;
-    }
-    this.slideLooked = true;
-    clamp.noteLoaded();
-    if (this.slideBudget <= 0) return 0;
     const before = this.calculateRopePathLength();
-    const grip = clamp.body.surfaceFriction;
-    const moved = clamp.slide(
-      prev.contact.globalPosition,
-      this.slideBudget,
-      RAIL_STATIC_FRICTION * grip,
-      RAIL_KINETIC_FRICTION * grip,
-      settle,
-    );
+    const moved = clamp.slide(prev.contact.globalPosition, RAIL_MAX_SLIDE_SPEED * h, mus, muk, false);
     if (moved === 0) return 0;
-    this.slideBudget = Mathf.max(this.slideBudget - Math.abs(moved), 0);
     this.markPathChanged();
-    return before - this.calculateRopePathLength();
+    return Math.max(0, before - this.calculateRopePathLength());
   }
 
   // Perpendicular lever from the body's centre of rotation to the correction
@@ -3478,7 +2533,6 @@ export class Rope {
     if (segment.body instanceof RigidBody2D && segment.body.kinematicRotation) return 0;
 
     if (segment instanceof PathStart) {
-      if (segment.body instanceof Player) return 0;
       const leverArm = segment.selfWrap
         ? segment.selfWrap.next.start.sub(centre)
         : segment.next.start.sub(centre);
@@ -3591,160 +2645,7 @@ export class Rope {
         },
       };
     }
-    if (body instanceof Player) {
-      return {
-        body,
-        inertia: body.inertia,
-        mass: body.mass,
-        velocity: body.velocity,
-        addVelocity: (v) => {
-          body.velocity = body.velocity.add(v);
-        },
-        addRotation: (r) => {
-          body.globalRotation += r;
-        },
-      };
-    }
     return null;
   }
 
-  private correctShapePositionAndRotation(relaxationFactor = 1): number | null {
-    let currentLength = this.calculateRopePathLength();
-    if (currentLength <= this.constraintLength) return null;
-
-    // A clamped end slides before the bodies are moved, and may leave the
-    // chain SLACK: a ring released from the static cone runs to the kinetic
-    // cone's edge, which can be nearer the ball than a span's length, and the
-    // ball then flies until the chain comes taut again. That is a correction
-    // in the sense the iteration loop's guard reads it - the path got shorter
-    // - so it is reported as one, with nothing else to split.
-    // An embedded end creeps through its viscous face before the bodies are
-    // moved, on the same terms (`slipEmbeddedEnd`): the creep is the mud
-    // yielding, which is a correction, and it may take the whole error.
-    // A ring on a vine creeps along the vine on the same terms again
-    // (`slipVineClampedEnd`).
-    if (this.slideClampedEnd() !== 0 || this.slipEmbeddedEnd() !== 0 || this.slipVineClampedEnd() !== 0) {
-      currentLength = this.calculateRopePathLength();
-      if (currentLength <= this.constraintLength) return 0;
-    }
-
-    const pathObjects = this.generatePathObjects();
-    const lengthError = currentLength - this.constraintLength;
-    const totalEffectiveInverseInertia = this.effectiveInverseInertia(pathObjects);
-    const dynamicPathObjects = pathObjects.filter(
-      (segment) => this.getDynamicBodyState(segment.body) !== null,
-    );
-
-    if (totalEffectiveInverseInertia < 1e-6) return 0;
-    const scaledCorrectionImpulse = (lengthError * relaxationFactor) / totalEffectiveInverseInertia;
-    if (PhaseTrace.enabled) this.solveTerms = [];
-
-    for (const pathObject of dynamicPathObjects) {
-      const dynamicBody = this.getDynamicBodyState(pathObject.body);
-      if (!dynamicBody) continue;
-      const correctionDir = pathObject.resolveCorrectionDir();
-      if (correctionDir.lengthSquared() < 0.0001) continue;
-      const mechanicalAdvantage = pathObject.calculateMechanicalAdvantage();
-      if (mechanicalAdvantage < 1e-6) continue;
-      const torqueArm = this.calculateTorqueArm(pathObject);
-      const inverseEffectiveMass =
-        1 / dynamicBody.mass + (torqueArm * torqueArm) / dynamicBody.inertia;
-      const totalCorrectionMagnitude =
-        scaledCorrectionImpulse * mechanicalAdvantage * inverseEffectiveMass;
-      if (PhaseTrace.enabled) {
-        this.solveTerms.push({
-          id: pathObject.body.buildIndex,
-          ma: mechanicalAdvantage,
-          arm: torqueArm,
-          invMass: 1 / dynamicBody.mass,
-          invInertiaArm: (torqueArm * torqueArm) / dynamicBody.inertia,
-          dirX: correctionDir.x,
-          dirY: correctionDir.y,
-        });
-      }
-
-      const torqueSquared = torqueArm * torqueArm;
-      if (torqueSquared > 0) {
-        const denominator = dynamicBody.inertia + dynamicBody.mass * torqueSquared;
-        // Both indeterminate limits are written out rather than evaluated: each
-        // is Inf/Inf = NaN taken literally.
-        //
-        // Infinite MASS is the pivot: the whole correction lands in rotation,
-        // where mass·arm / (I + mass·arm²) tends to 1/arm, so arm·Δθ is exactly
-        // the length the solve asked this body to remove.
-        //
-        // Infinite INERTIA is the spring body, whose rotation is locked: the
-        // whole correction lands in translation instead, `linearFactor` tending
-        // to 1 and the angular share to 0.
-        const linearFactor = Number.isFinite(dynamicBody.inertia)
-          ? dynamicBody.inertia / denominator
-          : 1;
-        const angularFactor = !Number.isFinite(dynamicBody.inertia)
-          ? 0
-          : Number.isFinite(dynamicBody.mass)
-            ? (dynamicBody.mass * torqueArm) / denominator
-            : 1 / torqueArm;
-        this.applyCorrectionMotion(
-          dynamicBody.body,
-          this.boundToNode(pathObject, correctionDir.mul(totalCorrectionMagnitude * linearFactor)),
-        );
-        dynamicBody.body.globalRotation += totalCorrectionMagnitude * angularFactor;
-      } else {
-        this.applyCorrectionMotion(
-          dynamicBody.body,
-          this.boundToNode(pathObject, correctionDir.mul(totalCorrectionMagnitude)),
-        );
-      }
-    }
-    return scaledCorrectionImpulse;
-  }
-
-  // A continuous rope's far end may be drawn up to the node it is being pulled
-  // towards and no further: past it the pull is through the corner the rope
-  // is bent around, and the step only lands the end on the far side of a node
-  // it should have rounded (see `roundEndNode`). A step that reaches the node
-  // is noted for the iteration loop to round it.
-  private boundToNode(pathObject: PathObject, motion: Vec2): Vec2 {
-    if (!this.continuous || !(pathObject instanceof PathEnd) || pathObject.selfWrap) return motion;
-    const reach = pathObject.previous.length();
-    if (motion.length() < reach) return motion;
-    this.endReachedNode = true;
-    return pathObject.directionToPrevious.mul(reach);
-  }
-
-  // Positional corrections on the player go through the collision system so
-  // the rope cannot drag the body through scene geometry: moveAndCollide
-  // stops at contact and the remainder slides along the surface. (The C#
-  // original wrote the transform directly and relied on Godot's MoveAndSlide
-  // recovery next frame, which this engine does not replicate.) Other bodies
-  // keep the direct write — rigid circles are depenetrated by the world.
-  private applyCorrectionMotion(body: PhysicsBody2D, motion: Vec2): void {
-    if (!(body instanceof Player)) {
-      body.globalPosition = body.globalPosition.add(motion);
-      return;
-    }
-    let remaining = motion;
-    for (let i = 0; i < 3; i++) {
-      const collision = body.moveAndCollide(remaining);
-      if (!collision) return;
-      remaining = collision.getRemainder().slide(collision.getNormal());
-    }
-  }
-
-  private genDistanceToStartLookup(): Map<RopeNode, number> {
-    const lookup = new Map<RopeNode, number>();
-    lookup.set(this.start, 0);
-    let prev: RopeNode = this.start;
-    let cumulativeLength = 0;
-    for (const node of this.path()) {
-      if (node instanceof RopeWrap) {
-        // Arc, not chord, for a coil step — the same measure the length solve
-        // uses, so friction distances stay consistent with it.
-        cumulativeLength += this.spanLength(prev, node);
-        lookup.set(node, cumulativeLength);
-        prev = node;
-      }
-    }
-    return lookup;
-  }
 }

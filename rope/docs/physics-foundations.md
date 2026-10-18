@@ -223,7 +223,7 @@ static geometry included. What is left outside it is the ball avatar's aim **ste
   (Contacts *are* speculative in the cheap sense — see `CONTACT_SLOP`.)
 - Circles remain single-point; polygon contacts get a real two-point manifold (above).
 - `SlackSimulation` is fully ported but currently unwired — the C# `Rope` also left its
-  `slackSimulation` field unused; the grapple rope renders straight spans.
+  `slackSimulation` field unused; the grapple rope (retired 2026-10-19) rendered straight spans.
   The BALL chain no longer does: `SlackChain` ([slack-chain-drape.md](slack-chain-drape.md)) is a fresh visual drape sim, unrelated
   to that port.
 - `ApplyFrictionImpulse` is ported behaviour-for-behaviour but, as in the C# source, is

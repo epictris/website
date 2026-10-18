@@ -2,8 +2,7 @@
 
 ```sh
 bun run test                                  # THE suite: typecheck + every check below, one exit code
-bun run replay selftest                       # determinism + replay round-trip check (grapple and ball)
-bun run src/tools/cli.ts ledges               # generated ledge-grab matrix (speed × angle × negatives)
+bun run replay selftest                       # determinism + replay round-trip check (ball)
 bun run src/tools/cli.ts corners              # corner geometry cases (compound-body seams, the release of a corner two bodies share)
 bun run src/tools/cli.ts tangents             # tangent-vertex cases (which corner a wrap node is born on)
 bun run src/tools/cli.ts decompose            # convex decomposition of authored concave outlines (partition, seams, determinism)
@@ -32,7 +31,7 @@ bun run src/tools/cli.ts entry                # the rolling entry a level may op
 bun run src/tools/cli.ts latch                # the button latch that carries a sub-step click into the next sample, and the click audit
 bun run src/tools/cli.ts clicks session.json  # the DOM button story a P bundle carries, laid against its frames (see The input latch)
 bun run src/tools/cli.ts transport            # the replay transport: play, pause, speed, and which frame a seek lands on (see Watching a replay)
-bun run src/tools/cli.ts play  playtests/grapple-swing.json
+bun run src/tools/cli.ts play  playtests/ball-swing.json
 bun run src/tools/cli.ts record playtests/ball-wind-up.json --out session.json  # script → real bundle
 bun run src/tools/cli.ts replay session.json  # replay a P-exported bundle, run invariants
 bun run src/tools/cli.ts diverge session.json # WHERE a replay first leaves its recording: frame, field, phase
@@ -66,7 +65,7 @@ bun run src/tools/cli.ts ab      session.json --metrics peakV,pushRun  # the sam
 ```
 
 `bun run test` is what "all green" means: typecheck, `dmath`, `selftest`, `contacts`,
-`spring`, `movers`, `vines`, `rails`, `roots`, `belts`, `viscous`, `breaks`, `finish`, `glass`, `corners`, `tangents`, `decompose`, `camera`, `render3d`, `assets`, `levels`, `ledges`, every `playtests/*.json`,
+`spring`, `movers`, `vines`, `rails`, `roots`, `belts`, `viscous`, `breaks`, `finish`, `glass`, `corners`, `tangents`, `decompose`, `camera`, `render3d`, `assets`, `levels`, every `playtests/*.json`,
 then the bundle corpus, in that order and under one exit code.
 A case that is red on purpose carries `expectedFail` (see `sim/contactCases.ts`),
 which the runner counts as a pass and, crucially, **fails on if it ever passes**:
@@ -279,8 +278,7 @@ Recorded digests are read by their `frame` (`digestsByFrame`), never by index, w
 In a run longer than 30 s, `cli diverge` places a divergence older than the window to the checkpoint after it; `cli trace` over that second finds the frame.
 `cli selftest` checks the window on a run 300 frames longer than it: the cadence, the content against the run's own digests, a bit-exact replay, and a perturbed old checkpoint named by the self-replay verdict.
 
-`cli selftest` demands bit-exactness on all of it, for a grapple script *and* for
-a ball script recorded headlessly through `cli record`.
+`cli selftest` demands bit-exactness on all of it, for a ball script recorded headlessly through `cli record` (it also ran a grapple script until that controller was retired on 2026-10-19).
 
 The digest also carries what the chain phase **decided**, not only what the chain
 measured, because a chain-phase bug was not readable from a bundle at all

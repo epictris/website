@@ -42,7 +42,7 @@ export function recordScript(script: PlaytestScript, stamp?: RecordStamp): Recor
       // and is not in the registry, so a bundle naming it by id would replay
       // against nothing.
       data: spec.data,
-      controller: spec.controller === "ball" ? "ball" : "grapple",
+      controller: "ball",
       ...(script.ball === "glass" ? { ball: "glass" as const } : {}),
       frames: result.serializedFrames,
       digests: result.digests,

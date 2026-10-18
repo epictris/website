@@ -5,7 +5,8 @@ The ball & chain is drawn in 3D (`src/render3d/`, three.js), in the style of *Ge
 It is still 2D, still metres, still a fixed 1/60 step, still deterministic, and every replay in `playtests/` still replays bit-for-bit - the 3D renderer is a parallel consumer of exactly the interpolated state the 2D one reads (`renderPosition/renderRotation/renderShapes(alpha)`, `RopeContact.renderGlobalPosition(alpha)`), and it never writes anything the sim can see.
 
 `?render=2d` selects the old path anywhere; `?render=3d` selects the new one.
-The default is 3D for the ball level and 2D for the grapple levels, because the Player state-machine slice (its rig, its rope, its ledge overlay) is deliberately still 2D - a grapple level in 3D is a 3D world with a 2D avatar in it, which works but is not what anyone asked for yet.
+The default is 3D for every level.
+It was 2D for the grapple levels until that controller was retired on 2026-10-19, because its Player state-machine slice (its rig, its rope, its ledge overlay) was only ever drawn in 2D.
 A machine with no WebGL falls back to the 2D renderer rather than to a blank page.
 
 ## Two canvases, one camera
@@ -227,7 +228,7 @@ The editor uses the three apart: a ▶ Test **parks** the editor's own scene for
 A retired level is not disposed on the spot, because **three frees a compiled program with the last material using it**, and the level replacing it is very often the same level built again - a reset, an editor rebuild, the editor's preview and its test.
 Disposed first, every program it shared with its successor was linked a second time on the next frame: on `ball` in the editor that was nine programs (the braided vines' stem, depth and distance materials, the pool's water and the scenery's water), ~800 ms of `getProgramInfoLog` at the start of a test and again on the way back, and ~150 ms on every edit (2026-10-17, measured on the RTX 4070).
 So a retired level waits for the end of the next frame drawn, when every pass of that frame has given each program it used a user in the new level; `disposeRetired` then compiles the whole scene against the frame target (cheap when every program is found, and it gives a user to what the frame did not draw) and only then disposes.
-The ball's glow light is built with every level, a ball in it or not, so the number of lights - which every lit program is keyed by - is the same in the editor's preview and in a grapple test of the same level.
+The ball's glow light is built with every level, a ball in it or not, so the number of lights - which every lit program is keyed by - is the same in the editor's preview and in a test of the same level.
 
 ## Blender scenes
 

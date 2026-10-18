@@ -20,9 +20,10 @@ The editor carries it through `EdModel.meta` and offers it as the **Level** pane
 That is not a convenience: the editor rewrites the whole file every 750 ms, so a block the model does not carry is a block **deleted** from disk the first time the level is opened, and nothing about that loss is visible in the editor.
 It is the lesson `SpawnData.hang` and the `environment` block each paid for separately.
 
-`listedLevels()` in `level/registry.ts` derives the menu's list: file-backed ball levels whose `meta` does not say `unlisted`, the intro first and then by title, case-insensitively.
-File-backed and ball-driven are both deliberate - the hand-written `TEST_*` specs are rigs with no file to hash and no finish line to cross, and the grapple levels are a controller the completion flow has never been through.
-Both stay reachable by `?level=`.
+`listedLevels()` in `level/registry.ts` derives the menu's list: file-backed levels whose `meta` does not say `unlisted`, the intro first and then by title, case-insensitively.
+File-backed is deliberate - the hand-written `TEST_*` specs and `BALL_LEVEL_2` are rigs with no file to hash and no finish line to cross.
+They stay reachable by `?level=`.
+The list was once ball-driven too, leaving out the grapple levels as a controller the completion flow had never been through; every level is played with the ball since that controller was retired on 2026-10-19.
 
 `cli levels` is the lint over all of it, and every failure it names is one that is silent in play: a listed level with no finish line, a finish body with no collision object and so building no region at all, no introduction or two, and two levels the player cannot tell apart in the list.
 It is pure and fast - no world is built and no frame is stepped - in the spirit of `cli assets`.

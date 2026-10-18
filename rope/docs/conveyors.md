@@ -10,7 +10,7 @@ Every mover (see [movers](movers.md)) moves its body's TRANSFORM and derives con
 A belt's geometry never moves; only its material does, and the straight runs between the wheels cannot be expressed as any body's transform at all.
 So a belt is what Box2D makes a conveyor: a static body whose surface has a tangent speed (`b2SurfaceMaterial.tangentSpeed` in v3, `b2Contact::SetTangentSpeed` in v2).
 
-The engine's one hook for that is `PhysicsBody2D.velocityAtPoint`, which every carry path already reads: the contact solver's normal and tangent solves, the steered ball's ride, the rope's anchor motion, and the grapple avatar's grounded, wall and wall-jump states.
+The engine's one hook for that is `PhysicsBody2D.velocityAtPoint`, which every carry path already reads: the contact solver's normal and tangent solves, the steered ball's ride, and the rope's anchor motion (and, until the grapple controller was retired on 2026-10-19, its avatar's grounded, wall and wall-jump states).
 `ConveyorBody` (`lib/belt.ts`, a `StaticBody2D`) answers it with the belt's speed along the loop's tangent at the point of the loop nearest the contact, turned into the world.
 Two things follow.
 
@@ -138,7 +138,7 @@ It is the third moving attachment beside a rail's clamp and a mud embed, and the
 The ball's manacle bites a belt exactly as it bites a face - the pin one ring radius proud along the arrival facing, the cuff mounted on the belt's body centred on the bite (`BallPlayer.onHookAttached`, after the rail and viscous branches and before the plain bite; a hook-proof belt still repels) - and then the pin, the cuff piece and the angle the cuff makes with the SURFACE are carried together.
 The cuff keeps its arrival angle to the outward normal (`phi`), not its world angle, so a cuff carried round a wheel turns with the wheel: over the far wheel of a stadium it turns by exactly pi (`ride-round-roller`), and over the drive's large wheel by exactly that arc's sweep (`ride-3`).
 The contact's piece index follows the arc length (`beltPieceAt`): the wheel's disc while the anchor is on an arc, that run's own quad while it is on a run, so the wrap resolvers walk the piece the anchor is on.
-The grapple's hook rides the same way with no cuff and no standoff, the hook being a point (`Rope.attachmentAt`); the grapple's `Player` hands its rope the level's clock for it.
+The grapple's hook (retired 2026-10-19) rode the same way with no cuff and no standoff, the hook being a point (`Rope.attachmentAt`), its `Player` handing its rope the level's clock for it.
 Letting go unmounts the cuff exactly as the plain bite's release does (`ride-detach`).
 
 **The arc length is a pure function of the frame.**

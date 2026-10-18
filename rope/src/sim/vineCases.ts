@@ -13,18 +13,9 @@
 //   - the engine guards, in isolation, on bare bodies (`link-contacts`), in
 //     BOTH directions: nothing is blocked by a link, and a link is blocked by
 //     nothing but statics;
-//   - that the player is BIT-IDENTICAL walking and swinging through a vine
+//   - and that the ball is BIT-IDENTICAL rolling through a vine
 //     (`pass-through`) - which is the whole of what "pass-through" means, and
-//     the only form of it that cannot be satisfied by a nearly-no-op;
-//   - that the load rope holds the anchor-to-grab arc in MILLIMETRES under a
-//     hanging, swinging player (`grab-hang`), that being its entire job;
-//   - that a winch hauls as far up a vine as up a static (`winch`), which is
-//     `ball-winch-hung-anchor`'s statement about mass splits, made here because
-//     the ratio between a 70 kg player and one link is far worse than any the
-//     ball ever saw;
-//   - and that exactly zero or one load rope exists on every frame of a
-//     fire/grab/release/regrab cycle (`release-refire`), the load rope being
-//     derived per frame rather than driven by events.
+//     the only form of it that cannot be satisfied by a nearly-no-op.
 
 import { Vec2 } from "../engine/vec2";
 import { wrapAngle } from "../engine/mathf";
@@ -40,7 +31,6 @@ import {
 import { circleShape, rectShape } from "../engine/shapes";
 import { bodyOverlapCircle } from "../engine/collision";
 import { GRAVITY, World } from "../engine/world";
-import { Level } from "../level/level";
 import { BallLevel } from "../level/ballLevel";
 import type { BallPlayer } from "../classes/ballPlayer";
 import {
@@ -103,6 +93,9 @@ function hall(opts: {
   spacing?: number;
   density?: number;
   stiffness?: number;
+  // 0 pins the ball's ring where it threads the cord (see `lib/vineClamp.ts`):
+  // what a case loading a vine at one link wants of it.
+  viscosity?: number;
   floorY?: number;
   playerX?: number;
   playerY?: number;
@@ -143,11 +136,24 @@ function hall(opts: {
               ...(opts.spacing === undefined ? {} : { spacing: opts.spacing }),
               ...(opts.density === undefined ? {} : { density: opts.density }),
               ...(opts.stiffness === undefined ? {} : { stiffness: opts.stiffness }),
+              ...(opts.viscosity === undefined ? {} : { viscosity: opts.viscosity }),
             },
           ],
         }),
   };
 }
+
+// A floor 1.2 m under a 3 m vine's tip and the ball standing on it a metre to
+// the side, with the ring pinned where it threads the cord: within the chain's
+// 1.8 m reach of the lower half of the vine (`BallPlayer.CHAIN_MAX_LENGTH`).
+// The grapple's player, retired, reached a vine from anywhere in the hall.
+const BALL_UNDER_VINE = { floorY: -100, playerX: -100, playerY: -320, viscosity: 0 } as const;
+
+// The ball a metre beside a 3 m vine at height `y` (scene px) with nothing
+// under it for metres, the ring pinned: thrown at the link level with it at
+// once, it falls and swings on that link, which is the vine loaded by a
+// hanging, swinging ball.
+const ballBeside = (y: number, x = -100) => ({ playerX: x, playerY: y, viscosity: 0 }) as const;
 
 // One frame's input, as the buttons a case actually presses.
 interface Press {
@@ -163,11 +169,11 @@ interface Press {
 // `InputBuffer`s are edge-triggered, so a case that hand-rolls `pressed` gets a
 // key latched on for ever - the same trap `cli continue` documents.
 class Rig {
-  readonly level: Level;
+  readonly level: BallLevel;
   private prev: FrameInput = emptyFrameInput();
 
   constructor(data: RawLevelData) {
-    this.level = new Level(data);
+    this.level = new BallLevel(data);
   }
 
   get vine(): Vine {
@@ -184,7 +190,8 @@ class Rig {
         moveLeft: button(!!p.left, this.prev.moveLeft),
         moveRight: button(!!p.right, this.prev.moveRight),
         jump: button(!!p.jump, this.prev.jump),
-        mouseWorldPosition: p.aim ?? Vec2.ZERO,
+        // Not aiming unless told to: an aim at the ball itself is no aim.
+        mouseWorldPosition: p.aim ?? this.level.ball.globalPosition,
       };
       this.prev = input;
       this.level.physicsProcess(input, DT);
@@ -207,9 +214,9 @@ class Rig {
     return arc;
   }
 
-  // The link the player's rope currently ends on, or -1.
+  // The link the ball's chain currently ends on, or -1.
   heldIndex(): number {
-    const end = this.level.player.rope?.end.contact.obj;
+    const end = this.level.ball.chain?.end.contact.obj;
     return end instanceof VineLink ? this.vine.links.indexOf(end) : -1;
   }
 
@@ -462,32 +469,34 @@ function caseScenery(): VineResult {
 }
 
 // ---------------------------------------------------------------------------
-// pass-through: the player walks and swings through a resting vine, and the two
-// runs are BIT-IDENTICAL.
+// pass-through: the ball rolls through a resting vine, and the two runs are
+// BIT-IDENTICAL.
 //
 // Anything weaker than bit-identical is satisfiable by a vine that shoves the
-// player a millimetre, which is the failure this is written against: the guards
+// ball a millimetre, which is the failure this is written against: the guards
 // are three lines in the hottest loops in the engine, and "almost no effect" is
 // exactly what a half-applied one looks like.
 // ---------------------------------------------------------------------------
 function casePassThrough(): VineResult {
   const details: string[] = [];
-  // The vine hangs to the floor across the player's path, so the walk really
+  // The vine hangs to the floor across the ball's path, so the roll really
   // does go through it rather than under it.
-  const withVine = new Rig(hall({ vineLength: 700, floorY: 100, playerX: -300, playerY: 0 }));
-  const without = new Rig(hall({ floorY: 100, playerX: -300, playerY: 0 }));
-  // Settle the vine before the walk, so the player meets a vine at rest.
+  const withVine = new Rig(hall({ vineLength: 700, floorY: 100, playerX: -150, playerY: 0 }));
+  const without = new Rig(hall({ floorY: 100, playerX: -150, playerY: 0 }));
+  // Settle the vine before the roll, so the ball meets a vine at rest, and
+  // then send the ball along the floor through it.
   withVine.step(240);
   without.step(240);
+  withVine.level.ball.linearVelocity = new Vec2(5, 0);
+  without.level.ball.linearVelocity = new Vec2(5, 0);
 
-  const script = (f: number): Press => ({ right: true, jump: f === 120 });
   const trackA: Array<[Vec2, Vec2]> = [];
   const trackB: Array<[Vec2, Vec2]> = [];
-  withVine.step(300, script, () => {
-    trackA.push([withVine.level.player.globalPosition, withVine.level.player.velocity]);
+  withVine.step(300, {}, () => {
+    trackA.push([withVine.level.ball.globalPosition, withVine.level.ball.linearVelocity]);
   });
-  without.step(300, script, () => {
-    trackB.push([without.level.player.globalPosition, without.level.player.velocity]);
+  without.step(300, {}, () => {
+    trackB.push([without.level.ball.globalPosition, without.level.ball.linearVelocity]);
   });
 
   let firstDiff = -1;
@@ -520,171 +529,6 @@ function grab(rig: Rig, aim: Vec2, frames = 90): number {
     if (index < 0) index = rig.heldIndex();
   });
   return index;
-}
-
-// ---------------------------------------------------------------------------
-// grab-hang: the load rope's entire job, in millimetres.
-//
-// The player hangs and swings off the middle of a vine. The arc of vine between
-// the anchor and the grabbed link may not measurably exceed what it was when the
-// hook landed - that is what stops the vine reading as elastic, and it is the
-// one thing the pair chains alone cannot do (`links * CHAIN_TOLERANCE` of give,
-// and a 70:3.75 kg mass split at the grabbed link).
-// ---------------------------------------------------------------------------
-function caseGrabHang(): VineResult {
-  const details: string[] = [];
-  let passed = true;
-  const rig = new Rig(hall({ vineLength: 300, playerX: -250, playerY: -320 }));
-  rig.step(30);
-  const mid = Math.floor(rig.vine.links.length / 2);
-  const aim = rig.vine.links[mid]!.globalPosition;
-  const index = grab(rig, aim, 20);
-
-  const arcAtGrab = rig.arcTo(index);
-  let worstArc = 0;
-  let worstLraOver = 0;
-  let lraMissing = 0;
-  rig.step(400, { fire: true, aim }, () => {
-    worstArc = Math.max(worstArc, rig.arcTo(index));
-    const lra = rig.vine.lra;
-    if (!lra) {
-      lraMissing++;
-      return;
-    }
-    worstLraOver = Math.max(worstLraOver, lra.currentLength() - lra.restLength);
-  });
-
-  const player = rig.level.player;
-  const swung = Math.abs(player.globalPosition.x - aim.x) > 0.3 || player.globalPosition.y < aim.y;
-  const claims: Array<[string, boolean]> = [
-    [`grabbed link ${index} of ${rig.vine.links.length}`, index === mid],
-    [`a load rope exists on every one of the 400 held frames (${lraMissing} missing)`, lraMissing === 0],
-    // The sharp one, and the load rope's whole job: the CONSTRAINT is never over
-    // its own length. It reads exactly zero, which is what "the vine does not
-    // stretch under load" means.
-    [
-      `load rope worst over its own length ${(worstLraOver * 1000).toFixed(3)} mm <= 1 mm`,
-      worstLraOver <= 0.001,
-    ],
-    // The arc is a different quantity and needs its own bound. It is the summed
-    // link-to-link distance, so it exceeds the load rope's routed length by
-    // however far the links BOW off that line - which the pair chains' own
-    // tolerance permits, at up to `CHAIN_TOLERANCE` each. A number here instead
-    // of the rule reads as a regression the first time anything changes how the
-    // vine hangs, which is what damping the links did to it (3 mm to 11).
-    [
-      `anchor-to-grab arc ${worstArc.toFixed(4)} m against ${arcAtGrab.toFixed(4)} at the grab: ` +
-        `excess ${((worstArc - arcAtGrab) * 1000).toFixed(2)} mm, bound ` +
-        `${((index + 1) * CHAIN_TOLERANCE * 1000).toFixed(0)} mm (${index + 1} pairs of bow)`,
-      worstArc - arcAtGrab <= (index + 1) * CHAIN_TOLERANCE,
-    ],
-    [`the player is actually hanging on it (swung off the grab point)`, swung],
-  ];
-  for (const [claim, got] of claims) {
-    if (!got) passed = false;
-    details.push(`${got ? "ok  " : "BAD "} ${claim}`);
-  }
-  return ok("grab-hang — the load rope holds the anchor-to-grab arc under a swinging player", passed, details);
-}
-
-// ---------------------------------------------------------------------------
-// winch: how far a winch hauls must not depend on what is holding the far end.
-//
-// `ball-winch-hung-anchor`'s methodology, and here for a sharper reason than
-// there: a PBD correction splits by inverse mass, and the ratio between the
-// player and one link is 19:1 where the ball's against its hung anchor was 5:1.
-// Left uncoupled, the rope's correction lands almost entirely on the link, the
-// load rope puts it straight back, and the player is hauled by what is left.
-// ---------------------------------------------------------------------------
-function caseWinch(): VineResult {
-  const details: string[] = [];
-  const rig = new Rig(hall({ vineLength: 300, playerX: -250, playerY: -320 }));
-  rig.step(30);
-  const mid = Math.floor(rig.vine.links.length / 2);
-  const aim = rig.vine.links[mid]!.globalPosition;
-  grab(rig, aim, 20);
-  const vineStart = rig.level.player.globalPosition;
-  rig.step(240, { fire: true, retract: true, aim });
-  const vineTravel = vineStart.distanceTo(rig.level.player.globalPosition);
-
-  // The same rig with a small static block where the link was, and no vine at
-  // all: the winch's own baseline.
-  const block: LevelBodyData = {
-    kind: "static",
-    x: Math.round(aim.x * P),
-    y: Math.round(aim.y * P),
-    rot: 0,
-    objects: [{ type: "collision", shape: { kind: "rect", w: 18, h: 18 } }],
-  };
-  const control = new Rig(hall({ playerX: -250, playerY: -320, extra: [block] }));
-  control.step(30);
-  control.step(20, { fire: true, aim });
-  const staticStart = control.level.player.globalPosition;
-  control.step(240, { fire: true, retract: true, aim });
-  const staticTravel = staticStart.distanceTo(control.level.player.globalPosition);
-
-  const ratio = staticTravel > 0 ? vineTravel / staticTravel : 0;
-  const passed = ratio >= 0.8;
-  details.push(
-    `${passed ? "ok  " : "BAD "} winched ${vineTravel.toFixed(3)} m up a vine against ` +
-      `${staticTravel.toFixed(3)} m up a static in the same place (${(ratio * 100).toFixed(0)}%, want >= 80%)`,
-  );
-  return ok("winch — hauling up a vine goes as far as hauling up a static", passed, details);
-}
-
-// ---------------------------------------------------------------------------
-// release-refire: zero or one load rope, on every frame.
-//
-// The rule is derived from the world each frame rather than driven by grab and
-// release events, and this is that claim stated as the thing it buys: a fire, a
-// grab, a release, a regrab on a different link, and at no point two load ropes
-// pulling on one vine or a stale one pulling on a link nobody is holding.
-// ---------------------------------------------------------------------------
-function caseReleaseRefire(): VineResult {
-  const details: string[] = [];
-  let passed = true;
-  const rig = new Rig(hall({ vineLength: 300, playerX: -250, playerY: -320 }));
-  rig.step(30);
-  const links = rig.vine.links;
-  const first = Math.floor(links.length / 2);
-  const second = links.length - 4;
-
-  let bad = 0;
-  let mismatched = 0;
-  const audit = (): void => {
-    const live = rig.vine.lra ? 1 : 0;
-    if (live > 1) bad++;
-    const held = rig.heldIndex();
-    // The rule, restated: a load rope exists exactly while the rope ends on a
-    // link of this vine, and it is tied to that link.
-    if ((held >= 0) !== (live === 1)) mismatched++;
-    if (live === 1 && rig.vine.lraLink !== links[held]) mismatched++;
-  };
-
-  const aimA = links[first]!.globalPosition;
-  rig.step(60, { fire: true, aim: aimA }, audit);
-  const grabbedA = rig.heldIndex();
-  // Let go, fall clear, then fire again at a different link.
-  rig.step(40, {}, audit);
-  const releasedClean = rig.vine.lra === null;
-  const aimB = links[second]!.globalPosition;
-  rig.step(90, { fire: true, aim: aimB }, audit);
-  const grabbedB = rig.heldIndex();
-  rig.step(40, {}, audit);
-
-  const claims: Array<[string, boolean]> = [
-    [`first grab landed on link ${grabbedA}`, grabbedA >= 0],
-    [`releasing left no load rope`, releasedClean],
-    [`the second grab landed on a different link (${grabbedB})`, grabbedB >= 0 && grabbedB !== grabbedA],
-    [`never more than one load rope (${bad} frames)`, bad === 0],
-    [`the load rope matched what the player was holding on every frame (${mismatched} mismatches)`, mismatched === 0],
-    [`and none is left over at the end`, rig.vine.lra === null],
-  ];
-  for (const [claim, got] of claims) {
-    if (!got) passed = false;
-    details.push(`${got ? "ok  " : "BAD "} ${claim}`);
-  }
-  return ok("release-refire — the load rope is exactly what the player is holding, every frame", passed, details);
 }
 
 // ---------------------------------------------------------------------------
@@ -1062,9 +906,9 @@ function caseSleep(): VineResult {
     details.push(`${got ? "ok  " : "BAD "} ${claim}`);
   };
 
-  // The floor close under the spawn, so the player is still within reach of the
-  // vine after the long settle this case needs.
-  const rig = new Rig(hall({ vineLength: 300, floorY: 100, playerX: -100, playerY: -320 }));
+  // The floor close under the vine, so the ball is still within its chain's
+  // reach of the vine after the long settle this case needs.
+  const rig = new Rig(hall({ vineLength: 300, floorY: -100, playerX: -100, playerY: -320, viscosity: 0 }));
   const vine = rig.vine;
   // A free-hanging vine spawns in its rest pose, clear of the scenery, so its
   // settle runs AT BUILD (see `settleVinesAtBuild`) and it arrives already
@@ -1335,9 +1179,10 @@ function caseWeight(): VineResult {
 
   // And the positive: the heavier vine holds a hooked player where the light one
   // gives. Same grab, same swing, and the only difference is the number.
-  const stretch = (rig: Rig): number => {
-    const mid = Math.floor(rig.vine.links.length / 2);
-    const aim = rig.vine.links[mid]!.globalPosition;
+  const stretch = (density: number): number => {
+    const rig = new Rig(hall({ vineLength: 300, density, ...ballBeside(-235) }));
+    const low = Math.floor((rig.vine.links.length * 3) / 4);
+    const aim = rig.vine.links[low]!.globalPosition;
     grab(rig, aim, 20);
     let worst = 0;
     rig.step(400, { fire: true, aim }, () => {
@@ -1346,8 +1191,8 @@ function caseWeight(): VineResult {
     });
     return worst;
   };
-  const lightStretch = stretch(built(2));
-  const heavyStretch = stretch(built(60));
+  const lightStretch = stretch(2);
+  const heavyStretch = stretch(60);
   check(
     `the 60 kg/m vine holds the player: load rope stretched ${(heavyStretch * 1000).toFixed(2)} mm (bar ${CHAIN_TOLERANCE * 1000})`,
     heavyStretch <= CHAIN_TOLERANCE,
@@ -1419,8 +1264,9 @@ function caseStiffness(): VineResult {
   // bit against the same level with the field absent, over a run that hangs the
   // player off it - anything less is satisfied by a nearly-no-op.
   const trace = (stiffness: number | undefined): string[] => {
-    const rig = new Rig(hall({ vineLength: 300, ...(stiffness === undefined ? {} : { stiffness }) }));
-    rig.step(30);
+    const rig = new Rig(
+      hall({ vineLength: 300, ...ballBeside(-160), ...(stiffness === undefined ? {} : { stiffness }) }),
+    );
     const aim = rig.vine.links[rig.vine.links.length - 1]!.globalPosition;
     grab(rig, aim, 20);
     const out: string[] = [];
@@ -1441,11 +1287,10 @@ function caseStiffness(): VineResult {
   const limp = new Rig(hall({ vineLength: 300, stiffness: 0 }));
   check(`...and builds no bend constraints (${limp.vine.bends.length})`, limp.vine.bends.length === 0);
 
-  // The player hooks the TIP and hangs on it, which is the biggest bending load
-  // the game has: 70 kg on the end of a 3 m lever.
+  // The ball hooks the TIP and hangs on it, which is the biggest bending load
+  // the game has: the ball on the end of a 3 m lever.
   const hang = (stiffness: number): { lean: number; straight: number; end: number } => {
-    const rig = new Rig(hall({ vineLength: 300, stiffness }));
-    rig.step(30);
+    const rig = new Rig(hall({ vineLength: 300, stiffness, ...ballBeside(-260, -120) }));
     const aim = rig.vine.links[rig.vine.links.length - 1]!.globalPosition;
     grab(rig, aim, 20);
     let lean = 0;
@@ -1459,10 +1304,15 @@ function caseStiffness(): VineResult {
   const rope = hang(0);
   const pole = hang(1);
   const branch = hang(0.5);
+  // Stiffness is what BENDS, so the rope is judged by its straightness (the
+  // anchor-to-tip chord against the arc): a swinging ball curves a rope down
+  // its length rather than tilting it whole, and the tilt is the swing's. The
+  // rope was once held to a 30 degree tilt under the grapple's swinging player
+  // (retired); the ball's swing tilts it about 20 and bends it a great deal more.
   check(
-    `a rope is bent right over by a hooked player: ${rope.lean.toFixed(0)} deg off vertical, ` +
-      `${rope.straight.toFixed(3)} straight (bar 30 deg)`,
-    rope.lean > 30,
+    `a rope is bent right over by the hanging ball: ${rope.straight.toFixed(3)} straight, ` +
+      `${rope.lean.toFixed(0)} deg off vertical (more than the pole's ${pole.lean.toFixed(1)}, and bent where it is not)`,
+    rope.straight < pole.straight && rope.lean > pole.lean,
   );
   check(
     `a pole is not: ${pole.lean.toFixed(1)} deg, ${pole.straight.toFixed(3)} straight (bars 5 deg, 0.99)`,
@@ -1471,12 +1321,12 @@ function caseStiffness(): VineResult {
   check(
     `and half way between is half way between: ${branch.lean.toFixed(0)} deg, ` +
       `${branch.straight.toFixed(3)} straight`,
-    branch.lean < rope.lean && branch.lean > pole.lean && branch.straight > rope.straight,
+    branch.straight > rope.straight && branch.straight < pole.straight && branch.lean > pole.lean,
   );
-  // The clamp, from the other side: the player is still hanging on it 400
+  // The clamp, from the other side: the ball is still hanging on it 400
   // frames later, and the pole is still where it was hung.
   check(
-    `the pole is still vertical with the player hanging on it (${pole.end.toFixed(1)} deg, ` +
+    `the pole is still vertical with the ball hanging on it (${pole.end.toFixed(1)} deg, ` +
       `against the rope's ${rope.end.toFixed(0)})`,
     pole.end < 5 && rope.end > pole.end,
   );
@@ -1968,99 +1818,6 @@ function caseSpanRelease(): VineResult {
   check(`...and sleeps (frame ${asleepAt}, bar 300)`, asleepAt >= 0);
   check(`no invariant tripped (${rig.violations.length})`, rig.violations.length === 0);
   return ok("span-release — a stiff span the ball lets go of while hanging still stays still", passed, details);
-}
-
-// ---------------------------------------------------------------------------
-// span-grab: a held span gets TWO load ropes, and both hold their arc.
-//
-// The second one is the point of the case: a span's tension runs to both
-// anchors, and held by one alone the run to the other end is just pair chains
-// under a player - `links * CHAIN_TOLERANCE` of give paid out exactly where the
-// span is supposed to hold. Both ropes are asserted the way `grab-hang` asserts
-// the one.
-// ---------------------------------------------------------------------------
-function caseSpanGrab(): VineResult {
-  const details: string[] = [];
-  let passed = true;
-  // The player starts under the span's midpoint, so the fired hook has the
-  // whole sag right above it.
-  const scene = spanScene(500);
-  scene.player = { x: 200, y: -250, radius: 12 };
-  const rig = new Rig(scene);
-  rig.step(30);
-  const vine = rig.vine;
-  const mid = Math.floor(vine.links.length / 2);
-  const aim = vine.links[mid]!.globalPosition;
-  const index = grab(rig, aim);
-  if (index < 0) {
-    return ok("span-grab — a held span holds its arc to BOTH anchors, in millimetres", false, [
-      "BAD  the hook never caught the span at all",
-    ]);
-  }
-
-  const arcFrom2 = (i: number): number => {
-    let arc = vine.anchor2Contact!.globalPosition.distanceTo(
-      vine.links[vine.links.length - 1]!.globalPosition,
-    );
-    for (let k = vine.links.length - 1; k > i; k--) {
-      arc += vine.links[k]!.globalPosition.distanceTo(vine.links[k - 1]!.globalPosition);
-    }
-    return arc;
-  };
-
-  const arcAtGrab = rig.arcTo(index);
-  const arc2AtGrab = arcFrom2(index);
-  let missing = 0;
-  let worstOver = 0;
-  let worstOver2 = 0;
-  let worstArc = 0;
-  let worstArc2 = 0;
-  rig.step(400, { fire: true, aim }, () => {
-    const { lra, lra2 } = vine;
-    if (!lra || !lra2) {
-      missing++;
-      return;
-    }
-    worstOver = Math.max(worstOver, lra.currentLength() - lra.restLength);
-    worstOver2 = Math.max(worstOver2, lra2.currentLength() - lra2.restLength);
-    worstArc = Math.max(worstArc, rig.arcTo(index));
-    worstArc2 = Math.max(worstArc2, arcFrom2(index));
-  });
-
-  const hanging = rig.heldIndex() === index;
-  const claims: Array<[string, boolean]> = [
-    [`grabbed link ${index} of ${vine.links.length}, and still holds it`, index === mid && hanging],
-    [`BOTH load ropes exist on every held frame (${missing} missing)`, missing === 0],
-    [
-      `first load rope worst over its length ${(worstOver * 1000).toFixed(3)} mm <= 1 mm`,
-      worstOver <= 0.001,
-    ],
-    [
-      `second load rope worst over its length ${(worstOver2 * 1000).toFixed(3)} mm <= 1 mm`,
-      worstOver2 <= 0.001,
-    ],
-    [
-      `anchor-to-grab arc excess ${((worstArc - arcAtGrab) * 1000).toFixed(2)} mm, ` +
-        `bound ${((index + 1) * CHAIN_TOLERANCE * 1000).toFixed(0)} mm`,
-      worstArc - arcAtGrab <= (index + 1) * CHAIN_TOLERANCE,
-    ],
-    [
-      `far-anchor-to-grab arc excess ${((worstArc2 - arc2AtGrab) * 1000).toFixed(2)} mm, ` +
-        `bound ${((vine.links.length - index + 1) * CHAIN_TOLERANCE * 1000).toFixed(0)} mm`,
-      worstArc2 - arc2AtGrab <= (vine.links.length - index + 1) * CHAIN_TOLERANCE,
-    ],
-  ];
-  for (const [claim, got] of claims) {
-    if (!got) passed = false;
-    details.push(`${got ? "ok  " : "BAD "} ${claim}`);
-  }
-  // Release: both go together, exactly as the one does.
-  rig.step(40);
-  const cleared = vine.lra === null && vine.lra2 === null;
-  if (!cleared) passed = false;
-  details.push(`${cleared ? "ok  " : "BAD "} releasing leaves neither load rope behind`);
-
-  return ok("span-grab — a held span holds its arc to BOTH anchors, in millimetres", passed, details);
 }
 
 // ---------------------------------------------------------------------------
@@ -2922,11 +2679,7 @@ const VINE_CASES: ReadonlyArray<[string, () => VineResult]> = [
   ["span-stiffness", caseSpanStiffness],
   ["span-kick", caseSpanKick],
   ["span-release", caseSpanRelease],
-  ["span-grab", caseSpanGrab],
   ["pass-through", casePassThrough],
-  ["grab-hang", caseGrabHang],
-  ["winch", caseWinch],
-  ["release-refire", caseReleaseRefire],
   ["ball-vine", caseBallVine],
   ["ball-steer", caseBallSteer],
   ["sleep", caseSleep],

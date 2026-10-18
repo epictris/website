@@ -787,6 +787,16 @@ export class AnimatableBody2D extends StaticBody2D {
   private prevPosition: Vec2 = Vec2.ZERO;
   private prevRotation = 0;
 
+  // The pose the frame's move started from (`beginMove`, or the landing
+  // point of a jump): what the island carries the mover from through its
+  // substeps (`TieSolver.driven`).
+  get framePosition(): Vec2 {
+    return this.prevPosition;
+  }
+  get frameRotation(): number {
+    return this.prevRotation;
+  }
+
   override get isMobile(): boolean {
     return true;
   }

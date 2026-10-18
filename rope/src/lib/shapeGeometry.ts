@@ -13,14 +13,6 @@ import {
 } from "../engine/shapes";
 import type { Shape, ShapeTransform } from "../engine/shapes";
 
-// Ledge candidacy (game-design.md, vertex angles): a vertex is a candidate when
-// its interior angle is at/below this threshold. Rect 90° corners qualify;
-// near-straight vertices don't.
-export const LEDGE_MAX_INTERIOR_ANGLE = Mathf.degToRad(100);
-
-// Interior angles are rotation-invariant — computed once per Shape and cached.
-const interiorAngleCache = new WeakMap<Shape, number[]>();
-
 // How thick a piece of scenery is through the z axis - the dimension the 2D
 // view cannot show - in metres. A level shape authors its own `thickness`; this
 // is what one that does not is, and it is what every body authored before the
@@ -177,66 +169,6 @@ export const ShapeGeometry = {
   // Ordered local vertex loop for a shape; [] for circles (no vertices).
   getLocalVertices(shape: Shape): readonly Vec2[] {
     return shapeVertices(shape);
-  },
-
-  // Interior angle (radians) at each vertex, computed once per Shape.
-  getVertexInteriorAngles(shape: Shape): number[] {
-    const cached = interiorAngleCache.get(shape);
-    if (cached) return cached;
-    const verts = ShapeGeometry.getLocalVertices(shape);
-    const n = verts.length;
-    const angles = verts.map((v, i) => {
-      const incoming = v.sub(verts[(i + n - 1) % n]!);
-      const outgoing = verts[(i + 1) % n]!.sub(v);
-      return Mathf.Pi - Mathf.abs(incoming.angleTo(outgoing));
-    });
-    interiorAngleCache.set(shape, angles);
-    return angles;
-  },
-
-  isLedgeCandidate(shape: Shape, vertexIndex: number): boolean {
-    const angles = ShapeGeometry.getVertexInteriorAngles(shape);
-    const angle = angles[vertexIndex];
-    return angle !== undefined && angle <= LEDGE_MAX_INTERIOR_ANGLE;
-  },
-
-  getVertexWorldPosition(t: ShapeTransform, vertexIndex: number): Vec2 {
-    const v = ShapeGeometry.getLocalVertices(t.shape)[vertexIndex];
-    if (!v) throw new Error(`No vertex ${vertexIndex}`);
-    return t.globalPosition.add(v.rotated(t.globalRotation));
-  },
-
-  // Nearest vertex of the placed shape to worldPoint within maxDistance, else
-  // null. Circles have no vertices — always null (never ledge-grabbable).
-  findNearestVertexIndex(t: ShapeTransform, worldPoint: Vec2, maxDistance: number): number | null {
-    const verts = ShapeGeometry.getLocalVertices(t.shape);
-    let best: number | null = null;
-    let bestDist = maxDistance;
-    verts.forEach((v, i) => {
-      const world = t.globalPosition.add(v.rotated(t.globalRotation));
-      const d = world.distanceTo(worldPoint);
-      if (d <= bestDist) {
-        bestDist = d;
-        best = i;
-      }
-    });
-    return best;
-  },
-
-  // Outward world-space normals of the two faces incident to the vertex.
-  // The vertex loop is clockwise in y-down space, so the outward normal of
-  // edge a→b is its Godot orthogonal (y, -x), normalized.
-  getIncidentFaceNormals(t: ShapeTransform, vertexIndex: number): [Vec2, Vec2] {
-    const verts = ShapeGeometry.getLocalVertices(t.shape);
-    const n = verts.length;
-    if (n === 0) throw new Error("getIncidentFaceNormals on vertex-less shape");
-    const rot = t.globalRotation;
-    const prev = verts[(vertexIndex + n - 1) % n]!;
-    const v = verts[vertexIndex]!;
-    const next = verts[(vertexIndex + 1) % n]!;
-    const inNormal = v.sub(prev).rotated(rot).orthogonal().normalized();
-    const outNormal = next.sub(v).rotated(rot).orthogonal().normalized();
-    return [inNormal, outNormal];
   },
 
   // A shape's area in m², whichever kind it is. One statement of it, so the two
