@@ -9,7 +9,8 @@
 //   world is on screen.
 // - The DEPTH OF FIELD - how far out of focus the scenery behind the gameplay
 //   plane is drawn (see `render3d/depthOfField.ts`). The plane itself is sharp
-//   at every level. Off by default: it costs ~0.5 ms of GPU a frame at 4K.
+//   at every level. High by default (Tris, 2026-10-18): it costs ~0.5 ms of
+//   GPU a frame at 4K, and Off is one press away in the panel.
 //
 // Each is read on its own, so a stored value one version no longer offers
 // resets that setting alone, not the other.
@@ -81,7 +82,7 @@ function isOffered(r: Resolution): boolean {
   return RESOLUTIONS.some((o) => o.width === r.width && o.height === r.height);
 }
 
-export const DEFAULT_SETTINGS: Settings = { resolution: DEFAULT_RESOLUTION, depthOfField: "off" };
+export const DEFAULT_SETTINGS: Settings = { resolution: DEFAULT_RESOLUTION, depthOfField: "high" };
 
 export function readSettings(): Settings {
   let parsed: Partial<Settings> | null = null;

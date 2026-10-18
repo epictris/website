@@ -214,7 +214,7 @@ export function fuseRootForks(inputs: Map<number, THREE.BufferGeometry>, parents
   // The most the fork blend below can take off the nearest branch's distance
   // for each other branch it meets: a quarter of the widest blend and the
   // saddle ridge at full strength (h = 1, tanh = 1, sin = 1).
-  const blendDepth = Math.max(0.024 * 0.25, ...[...junctions.values()].map(j => j.radius * (2.75 * 0.25 + 0.07)))
+  const blendDepth = Math.max(0.024 * 0.25, ...[...junctions.values()].map(j => j.radius * (1.0 * 0.25 + 0.07)))
     * (1 + 1e-6) + 1e-12;
   // Whether the field is negative at a grid point. Marching cubes needs only
   // the sign at a corner, and the value only at the two ends of an edge the
@@ -249,10 +249,11 @@ export function fuseRootForks(inputs: Map<number, THREE.BufferGeometry>, parents
       const other = ordered[o]!;
       const a = junctions.get(nearest.branch), b = junctions.get(other.branch);
       const fork = a?.parent === other.branch ? a : b?.parent === nearest.branch ? b : undefined;
-      // More wood under the lateral, less in the inner crotch: never a circular
-      // collar. Girth sets the length scale, including on very fine branches.
+      // A CREASE, not a collar: the two surfaces meet in a fold a fraction
+      // of the girth wide, a little more wood under the lateral than in the
+      // inner crotch. Girth sets the length scale, including on fine branches.
       const side = fork ? toFork.copy(p).sub(fork.base).dot(fork.side) / fork.radius : 0;
-      const blend = fork ? fork.radius * (2.1 - 0.65 * Math.tanh(side)) : 0.024;
+      const blend = fork ? fork.radius * (0.7 - 0.3 * Math.tanh(side)) : 0.024;
       const h = Math.max(blend - Math.abs(d - other.d), 0) / blend;
       // Interpolate coordinates, not painted colours: this bends the ridges
       // through the fork without dissolving them into a blurry crossfade.
@@ -261,7 +262,11 @@ export function fuseRootForks(inputs: Map<number, THREE.BufferGeometry>, parents
       u += du * weight;
       v = THREE.MathUtils.lerp(v, other.v, weight);
       age = THREE.MathUtils.lerp(age, other.age, weight);
-      join = Math.max(join, h);
+      // How much the other branch closes over this point of the surface:
+      // the shade in the crotch of a fork, which the bark shader draws as
+      // occlusion. Full where the other surface is at hand, gone a girth
+      // and a half away.
+      join = Math.max(join, fork ? Math.max(0, 1 - (other.d - d) / (1.5 * fork.radius)) : h);
       d = Math.min(d, other.d) - h * h * blend * 0.25;
       // A slight uneven bark ridge follows the saddle, not the circumference.
       if (fork) d -= h * h * fork.radius * 0.07 * Math.max(0, Math.tanh(side)) * (0.8 + 0.2 * Math.sin(v * 23));

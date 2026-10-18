@@ -43,7 +43,7 @@ the escape hatch anywhere. `?probe3d=1` draws the alignment probe.
 **F4** captures the camera as JSON for `cli shot --view`, so a report about a spot in the level is a replayable grab.
 The frame is drawn at 1920x1080 device pixels at most by default, whatever the display: past that a player is paying for fragments rather than seeing more, and the browser scales the result up to the window.
 **S** on a ball level opens the settings panel (S or Esc closes it), which pauses the run and moves that cap: 16:9 resolutions from 960x540 up to the display's own size, applied as they are picked and kept in `localStorage` as `rope.settings` (`render/settings.ts`, `render/settingsMenu.ts`). The grapple controller keeps S as extend, so it has no panel. The setting changes sharpness and fill cost only; the frame is still 1920x1080 view pixels, so the world on screen is the same.
-The panel's second row is **Depth of field** (Off, Low, Medium, High, default Off): how far out of focus the scenery behind the gameplay plane is drawn, the plane itself always sharp (`render3d/depthOfField.ts`, [**The frame target**](render3d.md#the-frame-target)); it costs ~0.5 ms of GPU a frame at 4K whatever the level, and the two rows are stored and reset independently. `?dof=off|low|medium|high` starts one visit at that level without storing it. `?dpr=N` overrides that (clamped to 4) and is how the renderer's FILL cost is measured from a 1080p desk - the picture is identical and only the fragment count behind it changes, so `?dpr=2` on 1080p pays what an uncapped 4K player used to. Debug only - see [**Testing a weaker GPU**](debugging-rendering.md#testing-a-weaker-gpu).
+The panel's second row is **Depth of field** (Off, Low, Medium, High, default High since 2026-10-18): how far out of focus the scenery behind the gameplay plane is drawn, the plane itself always sharp (`render3d/depthOfField.ts`, [**The frame target**](render3d.md#the-frame-target)); it costs ~0.5 ms of GPU a frame at 4K whatever the level, and the two rows are stored and reset independently. `?dof=off|low|medium|high` starts one visit at that level without storing it. `?dpr=N` overrides that (clamped to 4) and is how the renderer's FILL cost is measured from a 1080p desk - the picture is identical and only the fragment count behind it changes, so `?dpr=2` on 1080p pays what an uncapped 4K player used to. Debug only - see [**Testing a weaker GPU**](debugging-rendering.md#testing-a-weaker-gpu).
 
 Pick a level with `?level=NAME` (see `src/level/registry.ts`); `TEST_MOVERS` /
 `TEST_WINDMILL` are hand-written mover test levels (sliding platform, windmill),
@@ -61,13 +61,15 @@ and `TEST_SPRING` is the spring-body one (a leaf over a chasm to hang off - see
 ## Starting a run
 
 `/` with nothing asked for loads the introduction behind the loading screen and then offers the **difficulty select** (see [**Levels**](levels.md#the-difficulty-select)): **Normal**, the iron ball, and **Hard**, the glass ball that breaks on anything solid (see [glass-ball](glass-ball.md)), with what this browser has finished and last rated beside each.
-Picking one puts the game fullscreen, takes the pointer, pushes `/?level=ID` (`&ball=glass` for Hard) and starts at once - the level was loaded, warmed and prewarmed with both balls before the menu went up - and one page load is still one session, one level and one ball.
+Under them is a **Go Fullscreen (recommended)** button; picking a difficulty does not take the screen by itself.
+Picking one pushes `/?level=ID` (`&ball=glass` for Hard) and starts at once - the level was loaded, warmed and prewarmed with both balls before the menu went up - and one page load is still one session, one level and one ball.
 A `?level=` nobody has is the same menu with a line saying so.
 
 A level page opens on the loading screen and **starts when the level is ready** - the bar fills, the scene is warmed and prewarmed behind it, and the frame loop begins (see [**The loading screen**](loading-screen.md)).
 There is no second press between choosing a level and playing it.
 
-**The press that picks the difficulty takes fullscreen and the pointer lock**, in that order - the lock first, while the gesture is unspent, then fullscreen - so a run started from the menu opens filling the screen with the virtual cursor already live (see [**The difficulty select**](levels.md#the-difficulty-select) for why that press cannot also be a navigation).
+**Fullscreen on the menu is the player's choice**: the Go Fullscreen button takes the screen alone, and the press that then picks the difficulty takes the pointer lock into it, so the run opens filling the screen with the virtual cursor already live (see [**The difficulty select**](levels.md#the-difficulty-select) for why that press cannot also be a navigation).
+A difficulty picked windowed opens windowed and stays so: the first click in the level takes nothing, and the canvas takes the lock only if the player goes fullscreen later (F11 included).
 A level reached any other way - its own URL, a new tab, a reload - opens **windowed**, aiming with the real pointer, and the **first click in the level** takes both instead: it is the click that throws the first hook, so nothing is asked of the player they were not about to do.
 A refused fullscreen gives the lock straight back and plays windowed, which is what the whole gate exists to guarantee: the lock is never held outside fullscreen.
 
@@ -178,7 +180,7 @@ feel without a rebuild):
   un-projected through the *current* camera every time it is read
   (`currentAimLocal`) - the **virtual** cursor in fullscreen, where the lock is
   held, and the real pointer in a window, where it is not.
-  The **press that picks the level takes the pointer lock** along with fullscreen, and the first click in the level does it for a run that started any other way (see [**Starting a run**](#starting-a-run)); clicking the canvas takes it in **fullscreen only** thereafter - Esc releases it and the next click takes it back, and leaving fullscreen by either route gives the pointer back.
+  The **press that picks the level takes the pointer lock** if the menu's Go Fullscreen button was pressed first, and the first click in the level takes it with fullscreen for a run that started off the menu (see [**Starting a run**](#starting-a-run)); clicking the canvas takes it in **fullscreen only** thereafter - Esc releases it and the next click takes it back, and leaving fullscreen by either route gives the pointer back.
   That click asks for the lock *itself*, first, before requesting fullscreen: asked from the `fullscreenchange` that follows instead - which reads as though it should work, entering fullscreen being a user gesture of its own - Chrome refuses it every time (`The root document of this element is not valid for pointer lock`, measured in a real browser on first loads and refreshes alike), and the game opened fullscreen with the desktop pointer loose in it until the player happened to click the canvas.
   A refused fullscreen gives the lock straight back, since a lock in a *window* is the one thing it is never allowed to be.
   While locked the

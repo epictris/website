@@ -32,6 +32,7 @@ import { flattenPath, pathNodesOf } from "../lib/path";
 import { MIN_TAPER_TIP } from "../lib/stroke";
 import type { CurveVertData } from "../level/levelFormat";
 import { threeY } from "./space";
+import { barkAt } from "./rootBarkField";
 export { rootBarkMaterial } from "./rootBark";
 
 // Metres of centreline between rings, fine enough for the bark's silhouette.
@@ -44,8 +45,10 @@ const SIDES = 40;
 const CAP_RINGS = 5;
 
 // How deep a branch's base cap is, as a fraction of its radius (a trunk's is a
-// full hemisphere). See where the caps are built.
+// full hemisphere), and how far the tip's dome is drawn out to its point, in
+// radii. See where the caps are built.
 const BRANCH_CAP_DEPTH = 0.25;
+const TIP_DEPTH = 2.2;
 
 // Metres of root per repeat of the bark along it. Around it the bark wraps
 // once whatever the girth, so a thin branch shows finer fissures than a trunk,
@@ -55,13 +58,23 @@ const BARK_TILE = 0.65;
 // Trunk flare as a fraction of base radius, fading over one base width.
 // Branches instead have a shoulder AHEAD of their base, never a wider base cap
 // that would poke back through the far side of the parent.
-const TRUNK_FLARE = 0.45;
+// (Was 0.45: a sprung trunk pivots at its base, which then hangs exposed
+// beside whatever it is drawn as growing from, and a flared hemisphere there
+// is a bulb.)
+const TRUNK_FLARE = 0.15;
 const TRUNK_FLARE_REACH = 1.0;
 
 // Slow swelling (fraction of radius), wavelength in metres, maximum flute depth.
 const SWELL = 0.24;
 const SWELL_WAVELENGTH = 0.48;
-const LOBE = 0.24;
+const LOBE = 0.18;
+// The broad section turns slowly about the root, radians per metre: a turn
+// every three metres, never a rope's spiral.
+const TWIST = (Math.PI * 2) / 3;
+// The bark's relief (rootBarkField.ts), as a fraction of radius peak to
+// peak: the veins standing proud of the valleys between them, so the
+// silhouette is ridged and the shading's ridges are the silhouette's.
+const RELIEF = 0.2;
 
 export interface RootShape {
   verts: readonly CurveVertData[];
@@ -94,8 +107,19 @@ export function rootGeometry(
     const t = Math.min(1, Math.max(0, s / total));
     const taper = base + (end - base) * t;
     const station = Math.max(0, s) / Math.max(base, 1e-3);
-    const shoulder = opts.trunk ? 0 : 0.32 * (1 - Math.exp(-station / 0.45)) * Math.exp(-station / 2);
-    return taper * (1 + flare * Math.exp(-Math.max(0, s) / flareReach) + shoulder)
+    // A slight collar past a branch's base. It was a third of the radius
+    // when the fork's fillet hid it; the fork is a crease now (rootFork.ts),
+    // and anything more shows as a knob at the crotch.
+    const shoulder = opts.trunk ? 0 : 0.1 * (1 - Math.exp(-station / 0.45)) * Math.exp(-station / 2);
+    // A branch grows out of its parent from a point: narrow at its base on
+    // the parent's centreline, full within a girth and a half, so a lateral
+    // as thick as its parent (or thicker, past a taper) never pokes out of
+    // the far side of it beside the crease it leaves by.
+    const emerging = opts.trunk ? 1 : 0.35 + 0.65 * THREE.MathUtils.smoothstep(s, 0, 1.5 * base);
+    // And ends in a point: the authored tip width is the collision's, and
+    // the wood draws down to nothing over the last few of them.
+    const pointed = 0.15 + 0.85 * Math.min(1, Math.max(0, total - s) / (4 * end));
+    return taper * emerging * pointed * (1 + flare * Math.exp(-Math.max(0, s) / flareReach) + shoulder)
       * (1 + SWELL * (swell(s / SWELL_WAVELENGTH) * 2 - 1));
   };
   const tangentAt = (i: number): Vec2 => {
@@ -119,21 +143,25 @@ export function rootGeometry(
   const rings: Ring[] = [];
   const t0 = tangentAt(0);
   const r0 = radiusAt(0);
-  // Wood follows the root's length. A small meander, never the rotating lobes
-  // of a twisted cord. Keep the dominant flute on the same side at a bend.
-  const phaseAt = (s: number): number => opts.seed * 2.39996 + (twist(s / 1.8) - 0.5) * 0.45;
+  // Wood follows the root's length: the flutes meander a little and turn
+  // slowly (TWIST), the cords of a bundle rather than a rope's spiral.
+  const phaseAt = (s: number): number => opts.seed * 2.39996 + (twist(s / 1.8) - 0.5) * 0.45 + s * TWIST;
   // The base cap, closing the tube behind the first node: a hemisphere on a
   // trunk, and a shallow dome on a branch. A branch's first node is on its
   // parent's centreline, so a full hemisphere reaches back out through the far
   // side of the parent and shows there as a knob; a dome a quarter as deep
   // stays inside it while still closing the tube.
   const baseDepth = opts.trunk ? 1 : BRANCH_CAP_DEPTH;
+  // A branch's dome is also narrower than its tube: its rim at the parent's
+  // centreline would otherwise touch the parent's surface from inside and,
+  // where the parent's flutes dip, show through it.
+  const baseWidth = opts.trunk ? 1 : 0.75;
   for (let k = CAP_RINGS; k >= 1; k--) {
     const a = (k / CAP_RINGS) * (Math.PI / 2);
     rings.push({
       c: line[0]!.sub(t0.mul(r0 * baseDepth * Math.sin(a))),
       t: t0,
-      r: r0 * Math.cos(a),
+      r: r0 * Math.cos(a) * baseWidth,
       dr: Math.tan(a) / baseDepth,
       s: -r0 * baseDepth * Math.sin(a),
       phase: phaseAt(0),
@@ -153,15 +181,17 @@ export function rootGeometry(
   }
   const tn = tangentAt(line.length - 1);
   const rn = radiusAt(total);
-  // The tip cap: the same hemisphere ahead of the last node.
+  // The tip cap: a dome drawn out to a point ahead of the last node, since
+  // a root ends in a point and a hemisphere on an authored tip of a few
+  // centimetres is a ball on a stick.
   for (let k = 1; k <= CAP_RINGS; k++) {
     const a = (k / CAP_RINGS) * (Math.PI / 2);
     rings.push({
-      c: line[line.length - 1]!.add(tn.mul(rn * Math.sin(a))),
+      c: line[line.length - 1]!.add(tn.mul(rn * TIP_DEPTH * Math.sin(a))),
       t: tn,
       r: rn * Math.cos(a),
-      dr: -Math.tan(a),
-      s: total + rn * Math.sin(a),
+      dr: -Math.tan(a) / TIP_DEPTH,
+      s: total + rn * TIP_DEPTH * Math.sin(a),
       phase: phaseAt(total),
     });
   }
@@ -189,32 +219,40 @@ export function rootGeometry(
       // Unequal flutes, broad rather than rope-like. The thin growing end is
       // rounder; the older wood has an oval section and secondary ridges.
       const age = THREE.MathUtils.smoothstep(radiusAt(Math.max(0, Math.min(total, ring.s))), 0.005, 0.04);
-      const lobe = 1 + LOBE * age * (0.55 * Math.cos(2 * theta + ring.phase)
+      // A branch's first girth of length is inside its parent: round and
+      // smooth there, so nothing of it pokes out through the parent's flutes
+      // beside the crease it leaves by.
+      const exposed = opts.trunk ? 1 : THREE.MathUtils.smoothstep(ring.s, 0, 2 * base);
+      const lobe = 1 + LOBE * age * exposed * (0.55 * Math.cos(2 * theta + ring.phase)
         + 0.32 * Math.cos(3 * theta - ring.phase * 0.7)
         + 0.13 * Math.cos(5 * theta + ring.phase * 1.3));
-      const lobeSlope = -LOBE * age * (1.10 * Math.sin(2 * theta + ring.phase)
+      const lobeSlope = -LOBE * age * exposed * (1.10 * Math.sin(2 * theta + ring.phase)
         + 0.96 * Math.sin(3 * theta - ring.phase * 0.7)
         + 0.65 * Math.sin(5 * theta + ring.phase * 1.3));
-      const r = ring.r * lobe;
+      const u = (j * stride + k) * 2;
+      uvs[u] = k / SIDES + hash(opts.seed * 17.3);
+      uvs[u + 1] = ring.s / BARK_TILE + hash(opts.seed * 31.7);
+      // The bark's veins and valleys, displaced in the ring itself so the
+      // silhouette shows them; the thin growing end stays smooth.
+      const relief = 1 + RELIEF * age * exposed * (barkAt(uvs[u]!, uvs[u + 1]!, true).height - 0.5);
+      const r = ring.r * lobe * relief;
       radial.set(ax * cos, ay * cos, sin);
       const o = (j * stride + k) * 3;
       positions[o] = ring.c.x + radial.x * r;
       positions[o + 1] = threeY(ring.c.y) + radial.y * r;
       positions[o + 2] = radial.z * r;
       // A surface of revolution's normal: the radial direction leaned back
-      // against the way the radius grows along the tangent.
+      // against the way the radius grows along the tangent. The relief's own
+      // slopes are the bark's normal map, which carries them at texel scale.
       around.set(-ax * sin, -ay * sin, cos);
       normal.copy(radial).addScaledVector(tangent, -ring.dr * lobe)
         .addScaledVector(around, -lobeSlope / lobe).normalize();
       normals[o] = normal.x;
       normals[o + 1] = normal.y;
       normals[o + 2] = normal.z;
-      const u = (j * stride + k) * 2;
-      uvs[u] = k / SIDES + hash(opts.seed * 17.3);
-      uvs[u + 1] = ring.s / BARK_TILE + hash(opts.seed * 31.7);
-      // Broad washes, fixed to the wood, complement the texture's small
-      // brush marks. Linear-space multipliers preserve authored body tint.
-      const wash = Math.sin(theta * 2 + ring.phase + ring.s * 1.3) * 0.055;
+      // A faint wash fixed to the wood; the tone is the light's, not the
+      // pigment's. Linear-space multipliers preserve authored body tint.
+      const wash = Math.sin(theta * 2 + ring.phase + ring.s * 1.3) * 0.02;
       const aged = 0.94 + 0.06 * swell(ring.s / 0.7);
       colors[o] = aged + wash + (1 - age) * 0.14;
       colors[o + 1] = aged + wash * 0.65 + (1 - age) * 0.07;

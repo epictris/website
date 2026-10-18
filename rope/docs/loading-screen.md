@@ -46,10 +46,11 @@ So the level opened filling the screen with the cursor already in hand.
 
 It is gone because it was a second press (Tris, 2026-09-20: *"the level should then load and start. There shouldn't be any intermediary Play screen"*).
 Choosing the difficulty on the menu is the press, and a door held shut in front of a room that is already lit is not worth what it was buying.
-**What it was buying moves to the press on the menu** (`startOnClick` in `render3d/store.ts`), which is where the argument always pointed: picking a difficulty is the press that commits to playing, and it asks for the lock and fullscreen in the same order the PLAY button did.
+**What it was buying moved to the press on the menu** (`startOnClick` in `render3d/store.ts`), and since 2026-10-18 it is split there: fullscreen is the menu's own Go Fullscreen button, and the press that picks a difficulty takes the lock into it if the player took it.
 Neither grant survives a navigation, so that press does not make one - it hands the pick to the app already running in the menu's own document (see [**The difficulty select**](levels.md#the-difficulty-select)).
 On the menu page (a bare `/`) the screen covers the same wait as any level page, and is followed by the menu rather than the run: the introduction is loaded, warmed and prewarmed with both balls, then the screen comes off and the difficulties are offered (`chooseDifficulty` in main.ts).
 A level reached any other way - its own URL, a new tab, a reload - has no such press to spend, and there the **first click IN the level** takes both (`armFirstClick` in main.ts): the click that throws the first hook is one the player was about to make anyway.
+A run picked windowed off the menu gets no first-click grab: the player was offered the screen and left it.
 Until it lands that run is windowed and aims with the real pointer, which is a mode the game already has - the lock is never taken outside fullscreen whatever asks for it (see [**Ball controls and aim**](running.md#ball-controls-and-aim)).
 
 **The desktop cursor goes when the level starts**, rather than at a press: `hidePointer` takes it off the whole page (the ball controller only - the grapple controller aims with the OS pointer itself), on top of the `cursor: none` the canvas has carried since the level was chosen.

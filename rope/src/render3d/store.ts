@@ -186,24 +186,26 @@ interface PreloadManifest {
 // Every row is an `<a href="/?level=ID&ball=...">`, so middle-click, a screen
 // reader and a bookmark all work, and a row opened any of those ways is an
 // ordinary page at that level and ball.
-// PICKING A DIFFICULTY TAKES THE SCREEN AND THE POINTER, and starts the level
-// in THIS page rather than navigating to it.
+// PICKING A DIFFICULTY STARTS THE LEVEL in THIS page rather than navigating to
+// it, and takes the pointer if the page is ALREADY fullscreen.
 //
-// Fullscreen and the pointer lock are granted to a user gesture and to nothing
-// else, and picking a level is the gesture: it is the moment the player commits
-// to playing, and it is the last press this page gets. Taken here, the run
-// opens already fullscreen with the virtual cursor live (it exists only under
-// the lock, which is only taken in fullscreen - see input/aimPointer.ts),
-// instead of the game having to interrupt itself to ask for both on the first
-// click inside the level.
+// It does not take the screen. Fullscreen is offered beside the difficulties
+// instead, as a button of its own (`offerScreen`), and is the player's to take
+// or leave (Tris, 2026-10-18: "Selecting the difficulty should no longer
+// automatically enter the user into fullscreen mode"). The pointer lock is
+// still the pick's to take, because it is granted to a user gesture and to
+// nothing else and this is the last press the page gets - but only into a
+// fullscreen the player has chosen, since a lock held in a window is the one
+// thing this game never allows (see input/aimPointer.ts). Taken here, a run
+// started fullscreen opens with the virtual cursor live instead of waiting for
+// the first click inside the level.
 //
 // IT CANNOT BE A NAVIGATION, and that is measured rather than assumed: a
 // fullscreen taken on this page is gone by the time the next document loads
 // (chromium 142, `document.fullscreenElement` null and `(display-mode:
 // fullscreen)` false on the page the click opened), and a pointer lock never
-// survives a navigation at all. A press that took both and then threw them away
-// is worse than one that never asked - the window flickers into fullscreen and
-// straight back out. So the anchor's default is prevented and the app already
+// survives a navigation at all. A pick that threw both away would undo the
+// button above it. So the anchor's default is prevented and the app already
 // running in this document is handed the ball (`__ropePick`).
 //
 // What the navigation was for is kept: the URL becomes the level's, pushed
@@ -222,7 +224,7 @@ function startOnClick(a: HTMLAnchorElement, manifest: PreloadManifest, id: strin
     const pick = window.__ropePick;
     if (!pick) return;
     e.preventDefault();
-    takeScreen(manifest.l[id]?.b === 1);
+    if (manifest.l[id]?.b === 1) takePointer();
     history.pushState(null, "", a.href);
     // Back goes to the menu, which is this document with a run going in it,
     // so it is re-loaded rather than re-painted.
@@ -232,26 +234,61 @@ function startOnClick(a: HTMLAnchorElement, manifest: PreloadManifest, id: strin
   });
 }
 
-// The screen and the pointer, in the order `main.ts` learned to ask for them:
-// THE LOCK FIRST, while the gesture is unspent, because a lock asked for after
-// the fullscreen transition has started is one chrome refuses outright; then
-// fullscreen, which hands the lock back if it is itself refused, since a lock
+// The pointer, for a run that starts fullscreen - and only then, since a lock
 // held in a WINDOW is the one thing this game never allows (see `AimPointer`:
-// windowed, chromium's Wayland pointer drifts out of the page and eats presses).
+// windowed, chromium's Wayland pointer drifts out of the page and eats
+// presses). A run picked windowed aims with the real pointer, and the canvas
+// takes the lock on its own press if the player goes fullscreen later.
 //
-// The lock is for the ball controller alone - the grapple controller aims with
-// the desktop pointer and draws no reticle of its own, so capturing it would
-// leave nothing to aim with. Both are best-effort: a browser that refuses either
-// gives the windowed game this page has always opened.
-function takeScreen(ball: boolean): void {
+// The ball controller alone - the grapple controller aims with the desktop
+// pointer and draws no reticle of its own, so capturing it would leave nothing
+// to aim with. Best-effort: a refusal is the windowed aim, which works.
+function takePointer(): void {
   const canvas = document.getElementById("game");
-  if (ball && canvas) void Promise.resolve(canvas.requestPointerLock()).catch(() => {});
-  const el = document.documentElement;
-  if (document.fullscreenElement || typeof el.requestFullscreen !== "function") return;
-  void Promise.resolve(el.requestFullscreen()).catch(() => {
-    document.exitPointerLock?.();
-  });
+  if (!canvas || !document.fullscreenElement) return;
+  void Promise.resolve(canvas.requestPointerLock()).catch(() => {});
 }
+
+// GO FULLSCREEN, under the difficulties: the screen on its own press.
+//
+// The whole document rather than the frame, as everywhere else in the game
+// (see `enterFullscreen` in main.ts). The screen ONLY, and no pointer lock with
+// it: the menu is still up and is clicked with the desktop pointer, which a
+// lock would take away. The pick takes the lock once the player has chosen
+// (`takePointer`).
+//
+// Shown only while there is a fullscreen to go to: not once the page is in one
+// (so it comes back if Esc leaves it), and never on a browser with no Fullscreen
+// API at all (an iPhone), where the offer would be a button that does nothing.
+function offerScreen(signal: AbortSignal, refocus: () => void): void {
+  const box = document.getElementById("menu-screen");
+  const button = document.getElementById("menu-fullscreen");
+  if (!box || !button) return;
+  const el = document.documentElement;
+  if (typeof el.requestFullscreen !== "function") return;
+  const show = (): void => {
+    const was = !box.hidden;
+    box.hidden = document.fullscreenElement !== null;
+    // The button had the keyboard and has just gone: give it to a row rather
+    // than to the page, or the arrows and Enter stop doing anything.
+    if (was && box.hidden) refocus();
+  };
+  show();
+  document.addEventListener("fullscreenchange", show, { signal });
+  button.addEventListener(
+    "click",
+    () => {
+      if (document.fullscreenElement) return;
+      void Promise.resolve(el.requestFullscreen()).catch(() => {});
+    },
+    { signal },
+  );
+}
+
+// The listeners the last paint left on what outlives it - the menu root, the
+// fullscreen button and the document - so a re-paint (a rating sent from the
+// menu) replaces them rather than stacking a second set beside them.
+let menuPaint: AbortController | null = null;
 
 function paintMenu(manifest: PreloadManifest, note: string): void {
   // The app calls this once the level is ready, by which time the document has
@@ -379,26 +416,56 @@ function paintMenu(manifest: PreloadManifest, note: string): void {
   }
 
   root.dataset.show = "1";
+  menuPaint?.abort();
+  menuPaint = new AbortController();
+  const { signal } = menuPaint;
   // Arrows move, Enter opens - which the anchors give for free once one of them
-  // has the focus. The first row takes it, so the keyboard works without a
-  // click and a player who never touches the mouse still starts somewhere.
-  const links = [...list.querySelectorAll("a")];
+  // has the focus, and the fullscreen button under them is one more stop. The
+  // first row takes it, so the keyboard works without a click and a player who
+  // never touches the mouse still starts somewhere.
+  //
+  // Read afresh on every move, because the button comes and goes with the
+  // fullscreen it offers (`offerScreen`).
+  const button = document.getElementById("menu-fullscreen");
+  const stops = (): HTMLElement[] => {
+    const rows: HTMLElement[] = [...list.querySelectorAll("a")];
+    if (button && !button.parentElement?.hidden) rows.push(button);
+    return rows;
+  };
   let at = 0;
   const focus = (i: number): void => {
-    at = (i + links.length) % links.length;
-    for (const [k, el] of links.entries()) el.dataset.at = k === at ? "1" : "0";
-    links[at]?.focus();
+    const all = stops();
+    if (!all.length) return;
+    at = (i + all.length) % all.length;
+    for (const [k, el] of all.entries()) el.dataset.at = k === at ? "1" : "0";
+    if (button && !all.includes(button)) button.dataset.at = "0";
+    all[at]?.focus();
   };
-  if (links.length) focus(0);
-  root.addEventListener("keydown", (e) => {
-    if (e.key === "ArrowDown") focus(at + 1);
-    else if (e.key === "ArrowUp") focus(at - 1);
-    else return;
-    e.preventDefault();
-  });
+  offerScreen(signal, () => focus(0));
+  focus(0);
+  root.addEventListener(
+    "keydown",
+    (e) => {
+      if (e.key === "ArrowDown") focus(at + 1);
+      else if (e.key === "ArrowUp") focus(at - 1);
+      else return;
+      e.preventDefault();
+    },
+    { signal },
+  );
   // A click anywhere on a row follows its link, which is what makes a tap on a
   // phone hit the whole row rather than the word in it.
-  for (const [i, el] of links.entries()) el.addEventListener("focus", () => focus(i));
+  // Placed by where it is NOW, for the same reason the moves are.
+  for (const el of [...list.querySelectorAll("a"), ...(button ? [button] : [])]) {
+    el.addEventListener(
+      "focus",
+      () => {
+        const i = stops().indexOf(el);
+        if (i >= 0) focus(i);
+      },
+      { signal },
+    );
+  }
 }
 
 // Start the level's download now - or, on a bare URL, paint the menu instead.

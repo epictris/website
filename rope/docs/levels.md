@@ -128,14 +128,20 @@ Until 2026-10-16 it was a level select painted BEFORE the app was loaded, so tha
 Every row is an `<a href="/?level=ID&ball=...">`, so middle-click, a bookmark and a screen reader all work, and a row opened any of those ways is an ordinary page at that level and ball.
 Arrows move and Enter opens, which the anchors give for free once one of them has the focus; the first row takes it.
 
-**A plain press on a row does not navigate.** It takes fullscreen and the pointer lock - the two things a browser grants to a gesture and to nothing else - pushes the row's URL, and hands the ball it picked to the app waiting in this document (`startOnClick` in `render3d/store.ts`, `window.__ropePick`), which builds the level with that ball and opens the recorder's session.
-The reason is measured rather than assumed: **neither grant survives a navigation.** A fullscreen taken on this page is gone by the time the next document loads (chromium 142: `document.fullscreenElement` null and `(display-mode: fullscreen)` false on the page the press opened), and a pointer lock never survives one at all.
-A press that took both and then threw them away is worse than one that never asked - the window flickers into fullscreen and straight back out - and the alternative is the game interrupting itself to ask again on the first click of a run.
-So the press that commits to playing is the press that is spent on them, and the run opens fullscreen with the virtual cursor live (see [**Starting a run**](running.md#starting-a-run)).
+**Fullscreen is a button of its own**, "Go Fullscreen (recommended)", under the difficulties and set off from them by a hairline (`offerScreen` in `render3d/store.ts`).
+Until 2026-10-18 the pick took fullscreen itself; Tris: *"Selecting the difficulty should no longer automatically enter the user into fullscreen mode"*.
+The button takes the screen only, never the pointer lock with it, because the menu is still up and is clicked with the desktop pointer.
+It is one more stop for the arrows, and it is shown only while there is a fullscreen to go to: it hides once the page is fullscreen (the keyboard goes back to the first row), comes back if Esc leaves it, and never appears on a browser with no Fullscreen API (an iPhone).
+
+**A plain press on a row does not navigate.** It pushes the row's URL and hands the ball it picked to the app waiting in this document (`startOnClick` in `render3d/store.ts`, `window.__ropePick`), which builds the level with that ball and opens the recorder's session.
+If the player went fullscreen first, the same press takes the pointer lock, so the run opens with the virtual cursor live; picked windowed, it takes nothing, and the run aims with the real pointer (a lock in a window is the one thing the game never allows - see [**Ball controls and aim**](running.md#ball-controls-and-aim)).
+The reason it cannot navigate is measured rather than assumed: **neither grant survives a navigation.** A fullscreen taken on this page is gone by the time the next document loads (chromium 142: `document.fullscreenElement` null and `(display-mode: fullscreen)` false on the page the press opened), and a pointer lock never survives one at all.
+A pick that threw the button's fullscreen away would undo the button (see [**Starting a run**](running.md#starting-a-run)).
 
 **One page load is still one session, one level and one ball**: the session opens at the pick, with the ball it picked in its `SessionMeta`, and the checkpoint and the level hash are resolved once.
 Back returns to the menu by reloading it.
 A row opened in a new tab, or a level reached by its URL, loads the app the way it always did and takes the screen on the first click in the level instead.
+A run picked windowed off the menu does not: its player was offered the screen and left it.
 
 Per-difficulty marks - completed, and the last rating as five glyphs - come from `rope.progress` in `localStorage` (`render/progress.ts`), never from the server; Hard keeps its own entry (`BALL:hard`, see `progressKey`), and Normal the bare level id every entry from before had.
 It is a convenience rather than a record: the server already has the runs and the feedback, and a menu that cannot say what you have played until a fetch answers is a menu that flickers.

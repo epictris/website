@@ -12,7 +12,7 @@ import { isCollisionObject, type LevelBodyData } from "../level/levelFormat";
 // no longer match, and its bodies are grown again until it is re-baked.
 // Nothing can notice a forgotten bump (the bake would go on drawing the old
 // look), so it belongs in the same change as the edit.
-export const ROOT_MESH_VERSION = 1;
+export const ROOT_MESH_VERSION = 20;
 
 // Each root piece's curve, its placement in the world, whether it is a trunk
 // or which piece it grows from, and its index (the seed of its look), with

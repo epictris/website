@@ -7,6 +7,12 @@ import { loadMaps, rootSurfaceFor, TEXTURE_ASSETS, trackPending } from "./assets
 import { rootBarkVariant, type RootBarkVariant } from "../level/rootAppearance";
 
 const WIDTH = 512, HEIGHT = 1024;
+
+// The woody bark's own painted light (linear radiance per unit albedo) on the
+// lit side; the shade side keeps 12% of it. Chosen against the painted
+// backdrop's roots in BALL's rock shadow, where the cave's fill alone gives a
+// warm bark about a third of its albedo. See the shader below.
+const PAINTED_LIGHT = 0.75;
 const TAU = Math.PI * 2;
 const clamp = (x: number): number => Math.max(0, Math.min(1, x));
 function band(a: number, b: number, x: number): number {
@@ -32,7 +38,7 @@ interface BarkMaps {
 }
 let maps: BarkMaps | undefined;
 const materials = new Map<string, THREE.MeshStandardMaterial>();
-const paintedMaps = new Map<RootBarkVariant, Promise<{ map: THREE.Texture; normalMap: THREE.DataTexture } | undefined>>();
+const paintedMaps = new Map<RootBarkVariant, Promise<{ map: THREE.Texture; normalMap: THREE.Texture; aoMap?: THREE.Texture } | undefined>>();
 
 export function rootBarkMaterial(color: string, bark?: RootBarkVariant): THREE.MeshStandardMaterial {
   const variant = rootBarkVariant(bark), key = `${variant}:${color}`;
@@ -50,18 +56,41 @@ export function rootBarkMaterial(color: string, bark?: RootBarkVariant): THREE.M
   });
   // Thin growing ends have finer, smoother skin than established woody roots.
   // This is surface shading only: all shadow passes use the same actual mesh.
-  material.customProgramCacheKey = () => "painted-root-bark-v3";
+  material.customProgramCacheKey = () => `painted-root-bark-v5-${variant === "woody" ? "lit" : "scene"}`;
   material.onBeforeCompile = shader => {
+    // The woody bark carries a painter's light of its own, as the backdrop's
+    // painted roots do: a warm key from the viewer's upper left and a cool
+    // shade below it, added to whatever the cave's own light gives, so a root
+    // in a rock's shadow still shows its plates and fissures in the painted
+    // range instead of going to mud under the blue fill. Scene light,
+    // shadows and fog still lie over it.
+    shader.uniforms.barkLight = { value: variant === "woody" ? PAINTED_LIGHT : 0 };
     shader.vertexShader = shader.vertexShader
       .replace("#include <common>", "#include <common>\nattribute float rootAge;\nattribute float rootJoin;\nvarying float vRootAge;\nvarying float vRootJoin;")
       .replace("#include <begin_vertex>", "#include <begin_vertex>\nvRootAge = rootAge;\nvRootJoin = rootJoin;");
     shader.fragmentShader = shader.fragmentShader
-      .replace("#include <common>", "#include <common>\nvarying float vRootAge;\nvarying float vRootJoin;")
+      .replace("#include <common>", "#include <common>\nvarying float vRootAge;\nvarying float vRootJoin;\nuniform float barkLight;")
+      .replace("#include <emissivemap_fragment>", `
+        #include <emissivemap_fragment>
+        // The painter's key, in view space: lit from the upper left, with a
+        // soft wrap so the shade side keeps a little of the plate colour.
+        // Shaded by the relief (the perturbed normal), closed off by the
+        // baked occlusion of the gaps and by the other branch in a fork's
+        // crotch (rootJoin, rootFork.ts).
+        float barkKey = dot(normal, normalize(vec3(-0.5, 0.7, 0.55)));
+        float barkOpen = 1.0 - 0.6 * vRootJoin;
+        #ifdef USE_AOMAP
+        barkOpen *= texture2D(aoMap, vAoMapUv).r;
+        #endif
+        totalEmissiveRadiance += diffuseColor.rgb * barkLight * barkOpen * (0.1 + 0.9 * smoothstep(-0.25, 0.95, barkKey));
+      `)
       .replace("#include <map_fragment>", `
         #include <map_fragment>
         // Low-contrast young skin; mature bark keeps the painted fissures.
         vec3 youngBark = vec3(0.28, 0.164, 0.084) * diffuse;
         diffuseColor.rgb = mix(youngBark, diffuseColor.rgb, mix(0.38, 1.0, vRootAge));
+        // The crotch of a fork is in the other branch's shade for every light.
+        diffuseColor.rgb *= 1.0 - 0.4 * vRootJoin;
       `)
       .replace("#include <normal_fragment_maps>", THREE.ShaderChunk.normal_fragment_maps
         .replace("mapN.xy *= normalScale;", "mapN.xy *= normalScale * mix(0.22, 1.0, vRootAge) * mix(1.0, 0.45, vRootJoin);"))
@@ -78,26 +107,37 @@ export function rootBarkMaterial(color: string, bark?: RootBarkVariant): THREE.M
       if (!painted) return;
       material.map = painted.map;
       material.normalMap = painted.normalMap;
-      material.normalScale.setScalar(variant === "original" ? 0.85 : 0.45);
+      // The woody relief is physical (baked at the tile's aspect on a root),
+      // so it is used at its own strength; the paintings' derived relief
+      // is a reading of their brushwork and is held back.
+      material.normalScale.setScalar(variant === "original" ? 0.85 : variant === "woody" ? 1 : 0.45);
+      if (painted.aoMap) {
+        material.aoMap = painted.aoMap;
+        material.aoMapIntensity = 1;
+      }
       // Quiet matte paint: the detailed fallback's roughness grain would add
       // unrelated fine marks back over the broad, irregular painted plates.
       if (variant !== "original") {
         material.roughnessMap = null;
-        material.roughness = 0.91;
+        material.roughness = variant === "woody" ? 0.88 : 0.91;
       }
-      // The reference's light paint is brought into the game's earthy range;
-      // actual lighting and the author's relative tint still shape the result.
-      material.color.multiplyScalar(0.58);
+      // The three light gouache paintings are brought into the game's earthy
+      // range; the woody bark is painted at the value it is meant to show.
+      if (variant !== "woody") material.color.multiplyScalar(0.58);
       material.needsUpdate = true;
     }), "painted root bark");
   }
   return material;
 }
 
-async function loadPaintedMaps(variant: RootBarkVariant): Promise<{ map: THREE.Texture; normalMap: THREE.DataTexture } | undefined> {
+async function loadPaintedMaps(variant: RootBarkVariant): Promise<{ map: THREE.Texture; normalMap: THREE.Texture; aoMap?: THREE.Texture } | undefined> {
   const surface = rootSurfaceFor(variant);
   const loaded = await loadMaps(surface, TEXTURE_ASSETS[surface]!);
   if (!loaded.base) return undefined;
+  // A set that ships its relief (the woody bark: its normal and occlusion
+  // maps are baked from the same field the mesh is displaced by) is used as
+  // it is; a painting alone has its relief read off its luminance below.
+  if (loaded.normal) return { map: loaded.base, normalMap: loaded.normal, aoMap: loaded.ao ?? undefined };
   const size = 1024;
   const canvas = document.createElement("canvas");
   canvas.width = canvas.height = size;

@@ -403,6 +403,8 @@ function buildScene(): void {
 }
 buildScene();
 
+// The difficulty select is up (see `chooseDifficulty`).
+let menuUp = false;
 const ballInput = isBall
   ? new BallInputSource(
       canvas,
@@ -414,7 +416,13 @@ const ballInput = isBall
       // pointer lock off the first click on the transport bar (see
       // `AimPointer.requestLock`). The game otherwise has no second mode to be
       // idle in, which is the editor's case and not this one.
-      () => replayName === null,
+      //
+      // Nor while the difficulty select is up, for the same reason: its Go
+      // Fullscreen button raises a `fullscreenchange`, and a lock taken off
+      // that would leave the menu with no pointer to be clicked with. Chrome
+      // refuses a lock asked for from there anyway (see `AimPointer`), which
+      // is the browser's rule and not this page's.
+      () => replayName === null && !menuUp,
       // The canvas hides the OS pointer here (below) and the reticle stands in
       // for it, so the aim may be given a position of its own before the first
       // move (see `AimPointer`). A test run from the editor passes nothing here:
@@ -1415,10 +1423,11 @@ function armFirstClick(): void {
 // compiled or uploaded (the glass ball's lens and wear, its chain, its shards,
 // or the iron model and its maps). Then the loading screen comes off, the menu
 // goes up (`window.__ropeMenu`, painted by render3d/store.ts, which also owns
-// the rows' press), and the pick is the run starting: the press has already
-// taken the screen and the pointer and moved the URL to the level's own
-// (`startOnClick`), and what is left here is to make the ball the one it chose
-// and open the session the run is recorded in.
+// the rows' press and the Go Fullscreen button under them), and the pick is the
+// run starting: the press has already taken the pointer if the player went
+// fullscreen and moved the URL to the level's own (`startOnClick`), and what is
+// left here is to make the ball the one it chose and open the session the run
+// is recorded in.
 //
 // THE PICK BUILDS NOTHING. The level already built, warmed and on the GPU is
 // the one played, with its ball made iron or glass in place
@@ -1434,10 +1443,12 @@ async function chooseDifficulty(): Promise<void> {
   }
   loading.finish();
   revealed = true;
+  menuUp = true;
   const picked = await new Promise<string>((resolve) => {
     window.__ropePick = resolve;
     window.__ropeMenu?.();
   });
+  menuUp = false;
   window.__ropePick = undefined;
   ballKind = isBall && picked === "glass" ? "glass" : "iron";
   ballLevel?.setBallKind(ballKind);
@@ -1501,13 +1512,20 @@ async function boot(): Promise<void> {
   // fullscreen, because Chromium's Wayland pointer drifts out of a windowed
   // capture and eats presses).
   //
+  // NOT for a run picked off the menu: the menu offered the screen as a button
+  // of its own (`offerScreen` in render3d/store.ts), so a run picked windowed
+  // is one whose player has said no to it, and the first throw is not the
+  // moment to take it from them anyway (Tris, 2026-10-18). Such a run keeps
+  // the canvas's own path to the lock, which takes it in a fullscreen the
+  // player enters later (F11 included).
+  //
   // The desktop cursor still goes here rather than there, and earlier than it
   // used to: the canvas has hidden it since the level was chosen, and this
   // takes it off the letterbox bars either side, which are page rather than
   // canvas. The game's own reticle replaces it from the first mouse move (see
   // `AimPointer.reveal`).
   hidePointer();
-  armFirstClick();
+  if (!choosing) armFirstClick();
   // The aim starts HERE, with the run, rather than when the input source was
   // built: the ball opens facing the cursor, wherever the hand left it (see
   // `BallInputSource.openRun`).

@@ -22,6 +22,7 @@
     "assets:fetch-sources": "bun run scripts/fetch-scene-sources.ts",
     "scene:export": "bun run scripts/scene-export.ts",
     "roots:bake": "bun run scripts/bake-roots.ts",
+    "roots:bark": "bun run scripts/bake-root-bark.ts",
     "scene:guide": "bun run scripts/scene-guide.ts",
     "assets:paint": "bun run scripts/paint-textures.ts",
     "assets:fetch": "bun run scripts/fetch-assets.ts",
