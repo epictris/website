@@ -32,9 +32,9 @@
 
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join, relative, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { nodeNameOf, isSceneName, SCENE_ASSETS, sceneFile, sceneMetaFile, type SceneMeta, type SceneNodeMeta } from "../src/render3d/scenes";
 import { StepProgress } from "./stepProgress";
 
@@ -80,8 +80,15 @@ function stream(cmd: string, argv: string[], onLine: (line: string) => void): Pr
   });
 }
 
+/** The name and type of every image in the GLB at `path`. */
+function glbImages(path: string): { name?: string; mimeType?: string }[] {
+  const glb = readFileSync(path);
+  const json = JSON.parse(glb.subarray(20, 20 + glb.readUInt32LE(12)).toString("utf8")) as { images?: { name?: string; mimeType?: string }[] };
+  return json.images ?? [];
+}
+
 const args = process.argv.slice(2);
-const bare = new Set(["--raw", "--no-cache", "--stale-occlusion"]);
+const bare =new Set(["--raw", "--no-cache", "--stale-occlusion"]);
 const valued = new Set(["--blender"]);
 const usage = "usage: bun run scene:export <level> [--blender PATH] [--raw] [--no-cache] [--stale-occlusion]";
 const positional = args.filter(
@@ -141,6 +148,9 @@ process.on("exit", () => rmSync(scratch, { recursive: true, force: true }));
 try {
   const raw = join(scratch, "raw.glb");
   const rawMeta = join(scratch, "meta.json");
+  // The optimiser's file, shipped only once every check below has passed.
+  const optimised = join(scratch, "scene.glb");
+  const blenderLog = join(ROOT, ".cache", "scene-export", `${scene}.blender.log`);
   console.log(`[scene] exporting ${relative(ROOT, blend)} for ${levelName}`);
   // The export's steps in order; scene_export.py starts grow, bake and gltf
   // by these ids (its `step()`).
@@ -169,6 +179,11 @@ try {
       } else if (line.startsWith("[scene_export]")) progress.log(line);
     },
   );
+  // Everything Blender said, kept: the steps show only the export's own
+  // lines, and a bake that went wrong on the device (a black map, 2026-10-18)
+  // says why in Cycles' lines, which went nowhere before.
+  mkdirSync(dirname(blenderLog), { recursive: true });
+  writeFileSync(blenderLog, `${run.stdout}\n--- stderr ---\n${run.stderr}`);
   if (run.error) {
     progress.fail();
     fail(`could not run ${blender}: ${run.error.message} (install Blender 5.2, or name it with --blender or BLENDER_PATH)`);
@@ -181,7 +196,7 @@ try {
     progress.fail();
     console.error(run.stderr);
     const err = run.stdout.split("\n").filter((l) => /Error|Traceback|nothing to export/.test(l)).slice(-5);
-    fail(`Blender wrote nothing (exit ${run.status}): ${err.join(" | ") || "see above"}`);
+    fail(`Blender wrote nothing (exit ${run.status}): ${err.join(" | ") || "see above"}; its whole output is in ${relative(ROOT, blenderLog)}`);
   }
 
   if (args.includes("--raw")) {
@@ -195,7 +210,7 @@ try {
     const opt = await stream(
       "bun",
       [
-        "run", join(ROOT, "scripts", "optimize-asset.ts"), raw, shipped, "--keep-nodes", "--keep-hierarchy", "--baked-maps",
+        "run", join(ROOT, "scripts", "optimize-asset.ts"), raw, optimised, "--keep-nodes", "--keep-hierarchy", "--baked-maps",
         ...(args.includes("--no-cache") ? [] : ["--texture-cache", join(ROOT, ".cache", "scene-encode", scene)]),
       ],
       (line) => {
@@ -209,7 +224,7 @@ try {
     );
     if (opt.signal) {
       progress.fail();
-      fail(`the optimiser was stopped (${opt.signal}); ${relative(ROOT, shipped)} may be half written, export again`);
+      fail(`the optimiser was stopped (${opt.signal}); nothing shipped`);
     }
     if (opt.status !== 0) {
       progress.fail();
@@ -223,15 +238,23 @@ try {
     const baked = /ships (\d+) colour and (\d+) normal maps/.exec(run.stdout);
     const encoded = (kind: string) => Number(new RegExp(`^\\[assets\\] (\\d+) texture\\(s\\): baked ${kind}`, "m").exec(opt.stdout)?.[1] ?? 0);
     if (baked && (encoded("colour") !== Number(baked[1]) || encoded("normal") !== Number(baked[2]))) {
-      fail(`Blender shipped ${baked[1]} colour and ${baked[2]} normal maps (baked or from its cache) but the optimiser encoded ${encoded("colour")} and ${encoded("normal")} as baked maps; the rest shipped at 1k (an image name the glTF exporter cut short?)`);
+      // By name: the glTF exporter shortens a dotted image name (the rule's
+      // miss, shipped at 1k), and drops a one-colour image for a factor (the
+      // empty bake of 2026-10-18, shipped black).
+      const expected = (JSON.parse(readFileSync(rawMeta, "utf8")) as { baked_maps?: string[] }).baked_maps ?? [];
+      const encodedNames = new Set(glbImages(optimised).filter((im) => im.mimeType === "image/avif").map((im) => im.name));
+      const missing = expected.filter((name) => !encodedNames.has(name));
+      fail(`Blender shipped ${baked[1]} colour and ${baked[2]} normal maps (baked or from its cache) but the optimiser encoded ${encoded("colour")} and ${encoded("normal")} as baked maps; not encoded as one: ${missing.join(", ") || "(none by name)"}. Nothing shipped; Blender's output is in ${relative(ROOT, blenderLog)}`);
     }
     // And every picture (scene_export.py `prepare_pictures`) as one, by the
     // same name rule, or it ships lossy at 1k: the blocks it was made to end.
     const pictures = Number(/ (\d+) pictures, /.exec(run.stdout)?.[1] ?? 0);
     const lossless = Number(/^\[assets\] (\d+) texture\(s\): picture/m.exec(opt.stdout)?.[1] ?? 0);
     if (lossless !== pictures) {
-      fail(`Blender shipped ${pictures} pictures but the optimiser encoded ${lossless} as pictures; the rest shipped lossy at 1k (an image name the glTF exporter cut short?)`);
+      fail(`Blender shipped ${pictures} pictures but the optimiser encoded ${lossless} as pictures; the rest would ship lossy at 1k (an image name the glTF exporter cut short?). Nothing shipped`);
     }
+    // Only now, checked: a file that failed a check never reaches the game.
+    copyFileSync(optimised, shipped);
   }
 
   // The meta: Blender's account, the shipped file's facts, and the binding

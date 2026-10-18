@@ -660,12 +660,14 @@ def fill_background(im):
     dozens of the source's, and any background among them shows as a dark
     line along every seam. Pull-push: average the baked texels down a pyramid
     to one, then walk back up filling each unbaked texel from the level above.
-    The bake leaves an unbaked texel's alpha at 0, which is the mask."""
+    The bake leaves an unbaked texel's alpha at 0, which is the mask.
+    Returns how many texels that mask held."""
     w, h = im.size
     px = np.empty(w * h * 4, dtype=np.float32)
     im.pixels.foreach_get(px)
     px = px.reshape(h, w, 4)
     known = px[..., 3] > 0.5
+    count = int(known.sum())
     levels = [(px[..., :3] * known[..., None], known.astype(np.float32))]
     def down(a):
         # Each 2 x 2 block summed as four slices: a strided reshape-and-sum
@@ -687,6 +689,19 @@ def fill_background(im):
     px[..., :3] = color
     px[..., 3] = 1.0
     im.pixels.foreach_set(px.ravel())
+    return count
+
+
+def fill_baked(ob, im, what):
+    """`fill_background` a map the `what` bake just wrote for `ob`, failing
+    the export when it wrote nothing. An empty mask fills to solid black, the
+    glTF exporter ships an all-black map as a black base colour and no image,
+    and the bake cache keeps it for every export after: Cube.003 went out a
+    black rock so on 2026-10-18 (its colour map empty, its normal map whole,
+    from the same bake; one bake of the same rocks later wrote it whole)."""
+    if not fill_background(im):
+        raise SystemExit(f"{ob.name}: the {what} bake wrote no texel into {im.name}; nothing is cached or shipped. "
+                         f"Export again; Cycles' own messages are in the export's Blender log")
 
 
 def is_slate(mat):
@@ -720,7 +735,7 @@ def bake_detail_normals(targets, images, straight):
         bpy.data.objects.remove(high)
         bpy.data.meshes.remove(me)
         for im in images[ob]:
-            fill_background(im)
+            fill_baked(ob, im, "detail normal")
             im.pack()
     return nodes
 
@@ -826,7 +841,7 @@ def bake_pass(targets, images, bake_type, before_fill=None, **bake_args):
                 before_fill(ob, i, im)
     for ob in targets:
         for im in images[ob]:
-            fill_background(im)
+            fill_baked(ob, im, bake_type)
             im.pack()
     return nodes
 
@@ -1722,6 +1737,11 @@ def main():
         "credits": credits,
         "skipped": skipped,
         "warnings": warnings,
+        # Every baked map the glTF should carry, by name: scene-export.ts
+        # names the ones the shipped file lacks. Not part of the scene's meta.
+        "baked_maps": sorted(im.name for im in bpy.data.images
+                             if im.get("generated_by") == "tools/blender/scene_export.py"
+                             and im.name.endswith((" baked colour", " baked normal"))),
     }
     with open(out_meta, "w", encoding="utf-8") as f:
         json.dump(meta, f, indent=2)

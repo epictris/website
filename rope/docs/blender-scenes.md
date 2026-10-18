@@ -126,6 +126,13 @@ Encoding was most of a warm export once the bake was cached (93 s of the river's
 A cached encode goes into the file at the point of the pass that would have made it, and the shipped glb is byte for byte the uncached one's.
 `just scene <level> --no-cache` bakes and encodes everything afresh and leaves both caches alone.
 After every export `scene-export.ts` checks that the optimiser encoded every baked map as one (`baked colour` and `baked normal`, both AVIF): it finds them by image name, and a name the glTF exporter cut short at a dot (`Terrace.003 baked colour` went out as `Terrace`) shipped the four dotted Terraces as lossy WebP at 1k until 2026-10-04.
+On a miss it names the maps the optimised file lacks (Blender's meta lists them, `baked_maps`).
+The optimiser writes into the export's scratch directory and the file is copied into `public/scenes/<scene>/` only once every check has passed, so a failed export leaves the last good scene in place; until 2026-10-18 the checks ran on the shipped file, and a failed export left its broken file in the game.
+
+A bake that writes no texel into a map fails the export, naming the object, the pass and the map (`fill_baked` in `scene_export.py`), before anything is cached.
+An empty map fills to solid black, the glTF exporter ships a one-colour image as a factor with no image, and the bake cache would keep it for every export after.
+That is how Cube.003 went out a black rock on 2026-10-18: its colour map was empty while its normal map, from the same run, was whole, and baking it again from the same file (alone, and in one bake with the three rocks baked beside it, on the same OptiX device) wrote it whole, so the cause is not in the file; with Chrome holding 6 GB of the 12 GB card, device memory is the suspect, unconfirmed.
+Blender's whole output from the latest export, Cycles' lines included, is kept in `rope/.cache/scene-export/<scene>.blender.log`; the steps show only the export's own lines, and before 2026-10-18 the rest went nowhere.
 
 ## Frames and units
 
