@@ -70,6 +70,7 @@ import {
   DEFAULT_TIE_SUBSTEPS,
   MAX_TIE_SUBSTEPS,
   TieChain,
+  TieTuning,
   TiePoint,
   invInertiaOf,
   invMassOf,
@@ -1680,13 +1681,13 @@ export function buildSceneChains(
 // the same statement again (`TieSolver.ownsContact`), and the ball's chain on
 // one is a guest row (`BallLevel.syncTieGuest`).
 //
-// The unit's BODIES - what the island integrates and sleeps - are the free
-// rigid bodies on the path as built: the two ends and the authored wrap
-// points' bodies. A pivot or a spring body on the path keeps `World.integrate`'s
-// own step and takes the row's impulse as velocity (`islandOwns`), and a free
-// body the chain wraps mid-play that was not on the built path is solved the
-// same way until the next build - a crate a chain swings over is the ball's
-// case, a free body coupled at velocity level.
+// The unit's BODIES - what the island integrates and sleeps - are the rigid
+// bodies on the path as built, pivots and spring bodies among them
+// (`islandOwns`): the two ends and the authored wrap points' bodies. A free
+// body the chain wraps mid-play that was not on the built path keeps the
+// world's step and takes the row's impulse as velocity until the next build -
+// a crate a chain swings over is the ball's case, a free body coupled at
+// velocity level.
 export class RopeRow implements IslandRow, IslandUnit {
   impulse = 0;
   over = 0;
@@ -1915,12 +1916,55 @@ export class BallChainRow implements IslandRow, IslandUnit {
   // frame (a gathered contact, speculative ones included), which is the
   // winch's jam: see `touching`.
   beginFrame(_dt: number, contacts: readonly ContactConstraint[]): void {
+    const path = this.rope.path();
     const onPath = new Set<CollisionObject2D>();
-    for (const node of this.rope.path()) onPath.add(node.contact.obj);
+    for (const node of path) onPath.add(node.contact.obj);
+    // A body on the path that MOVES (a slat, a plank) jams the drum on any
+    // touch (see `touching`). The scenery does not: a ball rolling along the
+    // floor its chain is bolted to winds itself along that floor towards the
+    // anchor, as the positional phase always let it, and stopping the drum
+    // on the touch refunded the whole turn from the frame the ball landed
+    // (`session-187f` f33 on). What the scenery refuses is length the ball
+    // cannot reach (see `sceneryNormals`).
+    // A body on the path the ball is against is answered as the scenery is,
+    // by what it leaves reachable, not jammed on the touch: winding against a
+    // pivot turns it, winding against a hung weight slides the ball along it,
+    // and jammed on the touch neither could follow the aim at all - every
+    // turn refunded, 0 rad of a half-turn sweep on a disc it rests on
+    // (`point-blank-turn`) and 0.24 hanging against a chained weight
+    // (`converged-aim-hang`), where the positional phase let both turn.
+    //
+    // A body of a TIED chain - a bridge's slat - keeps the jam on the touch
+    // (see `touching`): wound against a slat the drum only rocks it, and
+    // answered by the room the bridge's segments stretched 51-58 mm against
+    // the invariant's 50 (`session-1118f-bridge` f967).
+    const slat = (body: CollisionObject2D): boolean => body instanceof RigidBody2D && this.slats.has(body);
     this.touching = contacts.some(
-      (c) => (c.a === this.ball && onPath.has(c.b)) || (c.b === this.ball && onPath.has(c.a)),
+      (c) => (c.a === this.ball && slat(c.b)) || (c.b === this.ball && slat(c.a)),
     );
+    this.sceneryNormals = [];
+    // `b` is a static whenever it is not a rigid body, and the normal points
+    // out of `b`, so a face the ball is `b` against is turned round.
+    for (const c of contacts) {
+      if (c.a === this.ball && (!(c.b instanceof RigidBody2D) || (onPath.has(c.b) && !slat(c.b)))) this.sceneryNormals.push(c.normal);
+      else if (c.b === this.ball && onPath.has(c.a) && !slat(c.a)) this.sceneryNormals.push(c.normal.neg());
+    }
   }
+
+  // The normals of the scenery the ball is against this frame, which bound
+  // what the drum may take in (`room`): no more than the free span could
+  // lose with the ball sliding along every face it allows, the positional
+  // phase's own measure of a refusal (`Rope.unreachableShortening`, which
+  // returns the shortening the surfaces leave REACHABLE, and the lease
+  // `absorbBlockedLength` grants). A pull straight into a face leaves none:
+  // `session-1052f`, the cuff struck point-blank through a wall's corner
+  // (`p·n` = -1.00), where a drum that reeled on regardless carried 0.6 to
+  // 4.9 kN·s a substep and the friction it bought let the kinematic spin roll
+  // the ball up the wall away from its anchor. A pull along a face leaves
+  // all of it, and so does anything in between short of square; friction is
+  // not consulted, because the ball's grip (3.8) made the cone 75 degrees
+  // wide and the drum stopped under any overhang (`session-187f`).
+  private sceneryNormals: Vec2[] = [];
 
   // The ball is against a body its chain runs over. Wound up to the body it
   // hangs from, the winch has nothing left to haul: every impulse the motor
@@ -1934,16 +1978,22 @@ export class BallChainRow implements IslandRow, IslandUnit {
   // back, and the latch closes - the positional phase's rule for a ridden
   // holder, made here.
   private touching = false;
+  // The path's bodies that belong to a tied chain, read in `sync` before the
+  // row ties its own (see `beginFrame`).
+  private slats: Set<RigidBody2D> = new Set();
 
   // The bodies the path runs over now. A new far end carries no tension
   // history, so the warm start is dropped with it, as `Rope.end`'s setter
   // drops the frame correction.
   sync(): void {
     const bodies: RigidBody2D[] = [this.ball];
+    this.slats = new Set();
     for (const node of this.rope.path()) {
       const obj = node.contact.obj;
       if (obj === this.ball || !(obj instanceof PhysicsBody2D) || !islandOwns(obj)) continue;
       if (!bodies.includes(obj)) bodies.push(obj);
+      // Tied before this row ties its own bodies: a body of a tied chain.
+      if (obj.tied) this.slats.add(obj);
     }
     this.bodies = bodies;
     // A ring on a cord keeps its warm start across the links it crosses: the
@@ -1956,11 +2006,14 @@ export class BallChainRow implements IslandRow, IslandUnit {
     const endKey: unknown = end instanceof RopeVineClamp ? end.vine : end.contact.obj;
     if (endKey !== this.endKey) {
       this.impulse = 0;
+      this.motorImpulse = 0;
       this.walkImpulse = 0;
       this.endKey = endKey;
     }
     this.coilGrowth = 0;
     this.realised = 0;
+    this.pending = 0;
+    this.slackRef = this.lengthSlack();
     this.lastRotation = this.ball.globalRotation;
   }
 
@@ -1972,15 +2025,140 @@ export class BallChainRow implements IslandRow, IslandUnit {
     // the class comment), on the cord as that integration left it.
     this.walk();
     this.rope.leaseLength(this.rope.takeTopologyGrowth());
+    this.realiseTakeUp();
     this.reel = this.reelRate();
+    this.taking = this.reel > 0 ? this.closingRate() : 0;
   }
+
+  // How fast the chain is actually being taken in as the substep opens, m/s:
+  // the rate the bodies close the path along it (`slackRate`), read before
+  // the solve so the motor's power bound does not chase its own answer.
+  private closingRate(): number {
+    let rate = 0;
+    for (const t of this.rope.rowTerms().terms) {
+      rate +=
+        t.body instanceof RigidBody2D
+          ? t.ma * (t.dir.dot(t.body.linearVelocity) + t.arm * t.body.angularVelocity)
+          : t.ma * t.dir.dot(t.body.velocityAtPoint(t.body.globalPosition));
+    }
+    return rate;
+  }
+
+  // The chain's take-in speed this substep (see `closingRate`).
+  private taking = 0;
+
+  // THE DRUM IS A MOTOR WITH A RATED PULL (`RATED_PULL`), solved as Box2D
+  // solves a prismatic joint's motor beside its limit: the motor drives the
+  // chain's shortening towards the drum's reel rate with its accumulated
+  // impulse clamped to the rated pull every substep, and the length row -
+  // the limit - holds whatever has been taken in without bound and has the
+  // last word. So the drum stalls at its rating and never pays out under
+  // load, and what it takes in is what the bodies actually let it take in:
+  // the slack the motor opened (`realiseTakeUp`), the rest of the turn left
+  // unrealised for the unwind to hand back, as a jammed drum's always was.
+  // Unbounded, a drum reeling against a face it could not reach had no
+  // ceiling on its tension at all, and every way the island found to spend
+  // it was a launch or a buzz: 1000 J in one frame off a ceiling
+  // (`session-85f` f51), a rigid anchor 45 mm into a wall (`session-427f`),
+  // the ball whipped round an anchor across the face it rested on at 13 m/s
+  // (`session-187f`). A ring on a cord is the same motor, its creep reading
+  // the motor's pull with its own row's.
+  //
+  // The 5 g slip removed on 2026-10-15 was a GATE - it stopped the drum on
+  // the last substep's tension and pulled without bound while running, so it
+  // stopped and started every other substep (`session-223f`); a clamped
+  // accumulated impulse saturates instead, and nothing switches.
+  // Newtons: the most the drum can pull, which is also the fling's ceiling
+  // by RADIUS - reeling a whirling ball in means out-pulling its centripetal
+  // tension `m·v²/r`, so a drum rated `T` winds it no faster than
+  // `sqrt(T·r/m)`: a short swing caps low and a long one high, as a hand
+  // whirling a weight finds. 4 kN (Tris, 2026-10-18): unbounded (20 kN) the
+  // power alone set the fling, and a short swing that keeps the drum at full
+  // power out-flung the long ones (`session-144f`'s 0.54 m chain released at
+  // 8.9 m/s against `session-197f`'s 7.8); at 4 kN it releases at 6.0, and
+  // the long swings are untouched. A catch it cannot take spills into the
+  // length row, which has no bound. Mutable so a study can sweep it.
+  static RATED_PULL = 4000;
+  // Watts: the drum's rated POWER, a winch's motor curve - it pulls no harder
+  // than `RATED_POWER` over the speed the chain is actually coming in at, so
+  // a jammed drum heaves up to its rated pull and one keeping up delivers its
+  // rated power however fast it is asked to turn. The feel knob, Tris's: 2 kW
+  // (11, then 8, felt too strong on the curve against the ASKED-for speed,
+  // which starved a fast wind, and 5 and 4 on this one). At 5 kW it released
+  // `session-197f`, the 226f post and `session-185f` at 9.0 / 6.7 / 8.3 m/s, where the positional phase's
+  // integration loss left them at 8.4 / 6.4 / 9.0; unbounded the drum peaked
+  // at 60-65 kW and flung 12.8 / 11.0 / 12.1. Mutable so a study can sweep it.
+  static RATED_POWER = 3500;
+
+  // The motor's accumulated impulse, this substep.
+  private motorImpulse = 0;
+
+  // The whole pull on the chain this substep, the drum's motor and the
+  // length row together, as an impulse: what a ring on a cord creeps by.
+  get pull(): number {
+    return this.impulse + this.motorImpulse;
+  }
+  // Turn wound onto the rim since the motor last looked, not yet realised.
+  private pending = 0;
+
+  // Book as realised the winding the motor actually took in: the slack its
+  // pull opened in the length row since the last look, no more than the turn
+  // wound and no more than the room left (see `takeInTurn`).
+  private realiseTakeUp(): void {
+    const pending = this.pending;
+    this.pending = 0;
+    const slack = this.lengthSlack();
+    if (pending > 0 && !this.touching) {
+      // The closure the motor achieved since the last look: the slack the
+      // turn wound off (`pending`) and what the bodies gave back since. Not
+      // the slack itself: a chain standing over its length - squeezed
+      // between the hold and a face the ball rests on - has negative slack
+      // whatever the motor does, and booked against it nothing was ever
+      // realised and every turn refunded (`converged-aim-hang`, 6 mm over).
+      const closed = slack - this.slackRef + pending;
+      // And no more than the bodies actually came together along the chain
+      // over the substep, read from their velocities: the turn is booked at
+      // the spool rate, and where the path did not grow by it - a chain
+      // straight from the cuff to a root, no coil on the ball, the rim
+      // carrying the cuff round - the slack it seemed to open was booked as
+      // the motor's closure, the length row's target shrank 5.5 mm a substep
+      // with the bodies opening, and the row, which has no rating, hauled the
+      // ball round the root to 50 m/s (`session-166f` f60-85).
+      const came = Math.max(0, this.closingRate()) * this.h + this.walkRelief;
+      const realise = Math.max(0, Math.min(closed, pending, this.room(), came));
+      this.realised += realise;
+      this.slackRef = slack - realise;
+    } else {
+      this.slackRef = slack;
+    }
+  }
+
+  // The length row's slack as the bodies stand: the length, less the winding
+  // not realised, less the path.
+  private lengthSlack(): number {
+    const { length, constraint } = this.rope.rowTerms();
+    return constraint + Math.max(this.coilGrowth, 0) - this.realised - length;
+  }
+
+  // The slack as `realiseTakeUp` last left it.
+  private slackRef = 0;
 
   // Walk a ring on the cord by the tension the last biased pass solved for,
   // over one substep (`Rope.rowCreep`).
   private walk(): void {
-    if (this.walkImpulse > 0 && this.h > 0) this.rope.rowCreep(this.h, this.walkImpulse / this.h);
+    this.walkRelief = 0;
+    if (this.walkImpulse > 0 && this.h > 0) {
+      const before = this.rope.rowTerms().length;
+      if (this.rope.rowCreep(this.h, this.walkImpulse / this.h) !== 0) {
+        this.walkRelief = Math.max(0, before - this.rope.rowTerms().length);
+      }
+    }
     this.walkImpulse = 0;
   }
+
+  // The path the ring's last walk took out of the chain, metres: chain the
+  // drum takes in without a body moving (see `realiseTakeUp`).
+  private walkRelief = 0;
 
   // What the substeps have turned the ball by since the last look, as path:
   // the spool rate at the pose the coil was last brought to, times the turn.
@@ -1991,17 +2169,31 @@ export class BallChainRow implements IslandRow, IslandUnit {
       const wound =
         this.rope.lengthPerRadian(this.ball) * (this.ball.globalRotation - this.lastRotation);
       this.coilGrowth += wound;
-      if (wound > 0 && !this.touching) this.realised += Math.min(wound, this.room());
+      if (wound > 0) this.pending += wound;
       if (this.realised > this.coilGrowth) this.realised = Math.max(this.coilGrowth, 0);
     }
     this.lastRotation = this.ball.globalRotation;
   }
 
+
   // How much more chain the drum may take in before the ball is wound tight:
-  // the free span leaving it, less the cuff's reach.
+  // the free span leaving it, less the cuff's reach, and no more than the
+  // scenery it is against lets that span lose (see `sceneryNormals`).
   private room(): number {
     const free = this.rope.leavingSpanLength(this.ball);
-    return free === null ? 0 : Math.max(0, free - BallChainRow.WOUND_TIGHT);
+    if (free === null) return 0;
+    // The cuff's reach is the end only where nothing on the path can be
+    // touched, a ring on a vine's cord (see `WOUND_TIGHT`); against a body,
+    // its contact says when the ball is wound tight. Applied everywhere, a
+    // point-blank anchor - born closer than the cuff's reach - could never
+    // wind at all (`converged-aim-hang`: 26 mm free, every turn refunded).
+    const reach = this.rope.end instanceof RopeVineClamp ? BallChainRow.WOUND_TIGHT : 0;
+    const room = Math.max(0, free - reach);
+    if (this.sceneryNormals.length === 0) return room;
+    return Math.min(
+      room,
+      this.rope.unreachableShortening({ body: this.ball, normals: this.sceneryNormals }),
+    );
   }
 
   // The drum's take-up over the substep about to be solved, metres a second
@@ -2016,6 +2208,20 @@ export class BallChainRow implements IslandRow, IslandUnit {
 
   private reel = 0;
 
+  // The ball's own terms of the row as last solved, for `pressInto`.
+  private ballTerms: RopeRowTerm[] = [];
+
+  // How hard the chain is pressing the ball into a face with outward normal
+  // `normal`, as an impulse this substep: the hold's and the motor's tension
+  // along each of the ball's terms, where that term pulls into the face (see
+  // `TieSolver.chainPress`).
+  pressInto(normal: Vec2): number {
+    let press = 0;
+    for (const t of this.ballTerms) press += t.ma * Math.max(0, -t.dir.dot(normal));
+    return (this.impulse + this.motorImpulse) * press;
+  }
+
+
   // After the island's last substep: the turn that substep integrated, taken
   // in on the same terms, and the winding the drum did NOT realise this frame
   // - the one share of the chain's over-length that is the spin's to give
@@ -2028,21 +2234,39 @@ export class BallChainRow implements IslandRow, IslandUnit {
   finishFrame(): number {
     this.takeInTurn();
     this.walk();
+    this.realiseTakeUp();
     return Math.max(0, this.coilGrowth - this.realised);
   }
 
+  // The row's own stretch under the tension its last substep carried, the
+  // one over-length that is not the spin's: a soft constraint at `ω`
+  // carrying `λ` a substep stands `λ·w / (h·ω²)` over (the steady state of
+  // `ropeImpulse`'s soft step), 1.2 mm under `session-197f`'s 9 kN against
+  // the 1-2 mm it is measured at.
+  stretch(): number {
+    if (this.h <= 0 || this.w <= 0) return 0;
+    const omega = 2 * Math.PI * Math.min(TieTuning.hertz, 0.25 / this.h);
+    return (this.impulse * this.w) / (this.h * omega * omega);
+  }
+
+  // The row's effective inverse mass as last solved, for `stretch`.
+  private w = 0;
+
   warmStart(): void {
-    if (this.impulse === 0) return;
-    for (const t of this.rope.rowTerms().terms) applyTerm(t, this.impulse);
+    const impulse = this.impulse + this.motorImpulse;
+    if (impulse === 0) return;
+    for (const t of this.rope.rowTerms().terms) applyTerm(t, impulse);
   }
 
   solve(h: number, soft: Softness, useBias: boolean): void {
     const { length, constraint, terms } = this.rope.rowTerms();
     let w = 0;
     let slackRate = 0;
+    this.ballTerms = [];
     for (const t of terms) {
       const invM = invMassOf(t.body);
       const invI = invInertiaOf(t.body);
+      if (t.body === this.ball) this.ballTerms.push(t);
       if (t.body instanceof RigidBody2D) {
         w += t.ma * t.ma * (invM + t.arm * t.arm * invI);
         slackRate += t.ma * (t.dir.dot(t.body.linearVelocity) + t.arm * t.body.angularVelocity);
@@ -2050,6 +2274,7 @@ export class BallChainRow implements IslandRow, IslandUnit {
         slackRate += t.ma * t.dir.dot(t.body.velocityAtPoint(t.body.globalPosition));
       }
     }
+    this.w = w;
     if (w <= 0) return;
     // The length, less the frame's winding the drum has not realised (see the
     // class comment): `constraint + coilGrowth - realised - path`.
@@ -2074,25 +2299,58 @@ export class BallChainRow implements IslandRow, IslandUnit {
     // leaves no error behind; booked after the fact instead, every frame's
     // last substep of winding carried into the next frame as error, ten
     // millimetres of it under a steady wind-up.
+    // The motor first, the limit after it with the last word (see
+    // `RATED_PULL`), for a plain chain and a ring on a cord alike. As a rate
+    // the take-up stands 1-2 mm over under `session-197f`'s 9 kN wind-up, the
+    // soft row's own stretch; handed over as position error it trailed the
+    // winding by a frame of it, 34-62 mm, one frame of `R·ω·dt`.
+    let rate = slackRate;
+    if (this.reel > 0) {
+      // Speculative, as a contact is: slack the chain still has absorbs the
+      // reel before the motor pulls on anything, so a drum reeling a slack
+      // chain takes up slack and hauls nothing.
+      //
+      // The power bound is the chain's ACTUAL take-in speed's, a motor's
+      // curve: a drum keeping up delivers its rated power however fast the
+      // aim asks it to turn, and one bogged down heaves harder, up to its
+      // rated pull. Bounded by the speed the aim ASKED for instead, a fast
+      // wind capped itself at 1.3 kN, could not haul the ball at that speed,
+      // and delivered 0.1-2.7 kW of the 5 - a fast whirl put half the energy
+      // of a slow one into the ball (`session-86f` 535 J against
+      // `session-130f`'s 1128).
+      const power = BallChainRow.RATED_POWER / Math.max(this.taking, 1e-6);
+      const max = Math.min(BallChainRow.RATED_PULL, power) * h;
+      const ask = slackRate + Math.max(slack, 0) / h - this.reel;
+      const next = Math.min(max, Math.max(0, this.motorImpulse - ask / w));
+      const driven = next - this.motorImpulse;
+      this.motorImpulse = next;
+      if (driven !== 0) for (const t of terms) applyTerm(t, driven);
+      rate += driven * w;
+    } else {
+      this.motorImpulse = 0;
+    }
+    // A ring on a cord gives way at the creep's relief (see the class
+    // comment), by the whole pull on it, the motor's as well as the hold's.
     const law = this.rope.rowCreepLaw();
     let applied: number;
     if (law !== null && law.along !== 0) {
       applied = viscousRopeImpulse(
         this,
         slack,
-        slackRate - this.reel,
+        rate,
         w,
         h,
         soft,
         useBias,
         Math.abs(law.along),
         law.viscosity,
+        this.motorImpulse,
       );
     } else {
-      applied = ropeImpulse(this, slack, slackRate, w, h, soft, useBias);
+      applied = ropeImpulse(this, slack, rate, w, h, soft, useBias);
     }
     if (applied !== 0) for (const t of terms) applyTerm(t, applied);
-    if (useBias) this.walkImpulse = this.impulse;
+    if (useBias) this.walkImpulse = this.impulse + this.motorImpulse;
   }
 
   measure(): void {
@@ -2132,6 +2390,9 @@ export function viscousRopeImpulse(
   useBias: boolean,
   along: number,
   viscosity: number,
+  // Impulse another row is pulling the ring with this substep (the drum's
+  // motor), which the creep feels as much as this row's own.
+  pull = 0,
 ): number {
   let bias = 0;
   let massScale = 1;
@@ -2145,7 +2406,7 @@ export function viscousRopeImpulse(
   }
   const start = row.impulse;
   const target = (lambda: number): number => {
-    const relief = along * creepSpeed((along * lambda) / h, viscosity);
+    const relief = along * creepSpeed((along * (lambda + pull)) / h, viscosity);
     return Math.max(start - (massScale * (slackRate + relief + bias)) / w - impulseScale * start, 0);
   };
   let hi = target(0);
@@ -2349,10 +2610,10 @@ function buildTie(c: ChainData, anchors: Map<number, AnchorSite>): TieChain | nu
     const local = tie.point.sub(obj.globalPosition).rotated(-obj.globalRotation);
     points.push(new TiePoint(obj, local));
   }
-  // A pivot turns on a bearing and a spring body hangs on its stem; both are
-  // stepped by `World.integrate` in ways the island does not reproduce, so a
-  // chain knotted to one is refused until pivots and springs are rows of the
-  // same solve (the plan's second stage).
+  // A pivot turns on a bearing and a spring body hangs on its stem. The
+  // island steps both as the world does (`islandOwns`), but no tied chain
+  // knotted to one has ever been built or measured - a bridge slung from a
+  // sprung branch - so one is refused until it has a rig.
   for (const p of points) {
     const body = p.body;
     if (body instanceof RigidBody2D && (body.pivot || body.spring !== null)) {

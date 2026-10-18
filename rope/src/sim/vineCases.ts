@@ -2698,7 +2698,7 @@ function caseRingSpan(): VineResult {
   c.check(`the manacle threads onto the span (frame ${on}, ${rig.ringArc().toFixed(2)} m along the cord)`, on > 0);
   const ring = rig.ring;
   if (!ring) return ok("ring-span", false, c.details);
-  const level = rig.level as unknown as { ballRowActive: { impulse: number } | null };
+  const level = rig.level as unknown as { ballRowActive: { impulse: number; pull: number } | null };
   c.check(`...and the chain is a row of the span's island`, level.ballRowActive !== null);
   const probe = process.env.RING_SPAN_PROBE
     ? (tag: string, f: number): void => {
@@ -2763,7 +2763,7 @@ function caseRingSpan(): VineResult {
       // substep's impulse over the substep), not the weight's: a ball still
       // swinging under the ring pulls harder at the bottom of each swing.
       const row = level.ballRowActive;
-      if (row) carried += creepSpeed(Math.abs(lean) * row.impulse * DEFAULT_TIE_SUBSTEPS / DT, rig.vine.viscosity) * DT;
+      if (row) carried += creepSpeed(Math.abs(lean) * row.pull * DEFAULT_TIE_SUBSTEPS / DT, rig.vine.viscosity) * DT;
       const t = ring.tangent();
       const step = t ? ring.slipped.dot(t) : 0;
       if (Math.abs(step) > 0.00005 && step * lean < 0 && lean * leanWas > 0) against++;

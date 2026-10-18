@@ -1631,7 +1631,9 @@ export class Rope {
   // span geometry is not the statement this makes, and zero here says the whole
   // over-length is refused, which is what the caller got before it named any
   // surfaces.
-  private unreachableShortening(refusal: LengthRefusal): number {
+  // Public for the ball's row, whose drum may take in no more than this
+  // (`BallChainRow.room`).
+  unreachableShortening(refusal: LengthRefusal): number {
     const span = this.freeSpan(refusal.body);
     if (span === null) return 0;
     const allowed = (d: Vec2): boolean =>

@@ -8,6 +8,7 @@ import {
   AnimatableBody2D,
   RigidBody2D,
   shapesCollide,
+  StaticBody2D,
   VineLink,
   type CollisionObject2D,
   type PhysicsBody2D,
@@ -631,12 +632,15 @@ export class BallLevel {
   // bit-identical to its recordings; "always": every anchored chain, the plan's
   // stage 3 in full, to be measured against the corpus before it is ever the
   // default; "never": stage 1 as it shipped, minus the guest row.
-  static readonly BALL_ROW_MODE: "tied" | "always" | "never" = "tied";
+  static readonly BALL_ROW_MODE: "tied" | "always" | "never" = "always";
 
   private syncBallRow(delta: number): void {
     this.untieBallRow();
     this.ballRowActive = null;
     this.world.ties.ballRow = null;
+    this.world.ties.hardBody = null;
+    this.world.ties.hardHolders = [];
+    this.world.ties.chainPress = null;
     const chain = this.ball.chain;
     if (
       !chain ||
@@ -701,6 +705,9 @@ export class BallLevel {
     // lease release, the per-frame books.
     chain.beginFrame(delta);
     this.world.ties.ballRow = row;
+    this.world.ties.hardBody = this.ball;
+    this.world.ties.hardHolders = row.bodies.filter((body) => body !== this.ball);
+    this.world.ties.chainPress = (normal) => row.pressInto(normal);
     this.ballRowActive = row;
   }
 
@@ -790,18 +797,81 @@ export class BallLevel {
     // frame's turn. The rest of the chain's over-length is the soft row's
     // stretch under load and is forgiven (see `BallChainRow.finishFrame`).
     const unrealised = row.finishFrame();
-    const forgive = Math.max(0, chain.overLength - unrealised);
+    // Forgiven up to the row's own stretch and no further: over-length the
+    // ball cannot take out, wedged against a face its anchor is across, is
+    // not stretch, and forgiven as though it were it stood over from frame to
+    // frame and grew - 42 to 101 mm through `session-187f` f140-151, the bias
+    // pulling the ball into the wall harder each frame - until the island
+    // kicked the ball at 19 m/s. A ring's over-length is its creep's (see
+    // `BallChainRow`) and keeps the whole forgiveness.
+    const againstScenery = this.world.frameContacts.some(
+      (c) => c.a === this.ball && c.b instanceof StaticBody2D && c.normalImpulse > 0,
+    );
+    const stretch =
+      !againstScenery || chain.end instanceof RopeVineClamp
+        ? Number.POSITIVE_INFINITY
+        : row.stretch();
+    const forgive = Math.max(0, Math.min(chain.overLength - unrealised, stretch));
     const rotationBeforeUnwind = this.ball.globalRotation;
     chain.unwindOverLength(this.ball, ballRotationAtFrameStart, delta, forgive);
     this.settleUnwindLatch(rotationBeforeUnwind, delta, braced);
     PhaseTrace.mark("unwind", this.world);
-    // A row never reports a block: the island's contact rows answered the
-    // geometry, and the lease only ever hands back what topology jumps
-    // borrowed (`Rope.leaseLength`).
-    chain.noteBlockedByGeometry(false);
+    // A STATIC the ball is left inside is a surface refusing the chain, and
+    // the row cannot hear it: the island's contact row is soft and recovers
+    // at a capped rate, the chain row pulls without bound, and between them
+    // the ball stays where the chain put it. A ball spawned 35 mm into the
+    // slope and hooked point-blank to it was held 30-35 mm in for frame
+    // after frame (`ball-slope-rest`), where the positional phase pushes it
+    // out first and leases the chain the length the surface refused. So the
+    // row frame does the same, after the island: the static push-out, and
+    // the lease measured against what those normals make unreachable
+    // (`Rope.absorbBlockedLength`). Statics only - a body the island owns is
+    // its own contact row's to answer, as a slat is.
+    const pushBefore = this.ball.globalPosition;
+    const pushed = this.world
+      .depenetrateRigid(this.ball, 2, (other) => other instanceof StaticBody2D)
+      .filter(BallLevel.realPush);
+    if (this.ball.glass) this.ballPushes.push(...pushed);
+    chain.noteGeometryPush(this.ball.globalPosition.distanceTo(pushBefore));
+    // The free holders on the path have hard rows against the scenery too
+    // (`TieSolver.hardHolders`), and a hard row stops a body sinking but never
+    // recovers it: a 294 kg anchor the island had let 37 mm into a static
+    // stood there for twenty frames (`session-726f` f189). The positional
+    // phase's settle pushes a chain's bodies out of the statics; so does this.
+    for (const holder of row.bodies) {
+      if (holder !== this.ball) this.world.depenetrateRigid(holder, 2, (other) => other instanceof StaticBody2D);
+    }
+    // A body ON THE PATH the ball rests against refuses the chain as the
+    // positional phase's pair separation reads it (`pathBlocked`, the
+    // `separateBallFromPathBodies` normals): the ball cannot be drawn any
+    // closer to the holder it is touching, and the over-length that stands is
+    // the chain squeezing the pair through their contact. Not leased, the
+    // squeeze held: `session-1195f` f278-307, the ball resting on the 430 kg
+    // block it is chained to with no input at all, the length row at 16-40
+    // kN, its stretch the 7 mm the chain stood over, and the two soft
+    // corrections pumping 15-39 J a frame into the pair. The scenery is not
+    // named here: leased against a face, a ball whirled wound tight to a
+    // ceiling ratcheted its chain 5.4 cm (`ball-wind-up`).
+    const path = chain.path();
+    const holders: Vec2[] = [];
+    for (const c of this.world.frameContacts) {
+      if (c.normalImpulse <= 0 || !(c.b instanceof RigidBody2D)) continue;
+      if (c.a === this.ball && path.some((n) => n.contact.obj === c.b)) holders.push(c.normal);
+      else if (c.b === this.ball && path.some((n) => n.contact.obj === c.a)) holders.push(c.normal.neg());
+    }
+    if (holders.length > 0) chain.noteGeometryPush(chain.overLength);
+    const normals = [...pushed.map((p) => p.normal), ...holders];
+    const refused =
+      normals.length > 0 ? chain.absorbBlockedLength([{ body: this.ball, normals }]) : 0;
+    PhaseTrace.mark("push-out", this.world);
+    chain.noteBlockedByGeometry(normals.length > 0 && refused > 0);
     this.chainStallFrames = 0;
+    // A lease geometry is still refusing is held, not owed: the positional
+    // phase's count (see `stall-lease`).
     this.chainLeaseHeldFrames =
-      chain.blockedSlack > BallLevel.LEASE_EPSILON ? this.chainLeaseHeldFrames + 1 : 0;
+      chain.blockedSlack > BallLevel.LEASE_EPSILON && !chain.blockedByGeometry
+        ? this.chainLeaseHeldFrames + 1
+        : 0;
     this.chainCreditVelocity = Vec2.ZERO;
     this.chainSolveSpeedGain = 0;
     this.anchorKickSpeedGain = anchoredThisFrame ? 0 : null;

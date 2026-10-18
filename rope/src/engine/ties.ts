@@ -139,8 +139,7 @@ export interface IslandRow {
 // The thing that sleeps and wakes, and whose bodies the island integrates.
 export interface IslandUnit {
   // The dynamic bodies this unit holds and the island integrates: free rigid
-  // bodies, never a pivot or a spring body (those keep `World.integrate`'s own
-  // step and take a row's impulses as velocity only).
+  // bodies, pivots and spring bodies (`islandOwns`).
   readonly bodies: readonly RigidBody2D[];
   readonly rows: readonly IslandRow[];
   readonly substeps: number;
@@ -403,12 +402,19 @@ export function applyAt(body: PhysicsBody2D, impulse: Vec2, r: Vec2): void {
   body.angularVelocity += r.cross(impulse) * invInertiaOf(body);
 }
 
-// Is this body one an island integrates, if a unit holds it: a free rigid
-// body. A pivot turns on a bearing and a spring body hangs on its stem, both
-// stepped by `World.integrate` in ways the island does not reproduce, so a row
-// on one applies its impulse as velocity and leaves the step to the world.
+// Is this body one an island integrates, if a unit holds it: any rigid body.
+// A pivot turns on its bearing and a spring body hangs on its stem, and the
+// island steps both as `World.integrate` does, substep by substep. Left to the
+// world's once-a-frame step with the row's impulse handed over as velocity, a
+// pivot stood still through the substeps with its speed live in the row: the
+// ball whirled on a root 108 kg and 1.5 m long ended every frame 1-4 mm over a
+// chain that was 8-35 mm slack once the root took its step, and the unwind
+// charged that to the spin and refused the whole of every turn
+// (`session-97f-1` f50-62); and a sprung log the drum wound into a static went
+// 47 mm into it in three frames, its bearing's step unable to hear the
+// island's contact (`session-136f` f132-135).
 export function islandOwns(body: PhysicsBody2D): body is RigidBody2D {
-  return body instanceof RigidBody2D && !body.pivot && body.spring === null;
+  return body instanceof RigidBody2D;
 }
 
 // --- contact rows -----------------------------------------------------------
@@ -423,6 +429,8 @@ class ContactRow {
   readonly a: RigidBody2D;
   readonly b: PhysicsBody2D;
   readonly la: Vec2;
+  // `a`'s shape is a circle on its body's origin (see the constructor).
+  readonly aRound: boolean;
   readonly lb: Vec2;
   readonly normal: Vec2;
   readonly tangent: Vec2;
@@ -433,11 +441,33 @@ class ContactRow {
   // Relative normal velocity at collection, for restitution after the substeps.
   readonly vn0: number;
   readonly key: string;
+  // Solved without softness in the biased pass (see `TieSolver.hardBody`).
+  readonly hard: boolean;
+  // The coefficient that resists slip the kinematic spin is NOT driving -
+  // the haul of the ball's own chain along a face, a slide - where `friction`
+  // is the spin's drive traction. The same for every contact but the ball's
+  // hard rows (see `solveContact`).
+  readonly brake: number;
+  // The ball's chain's own press into this contact, which funds none of its
+  // friction (see `TieSolver.chainPress`), or null.
+  readonly press: ((normal: Vec2) => number) | null;
+  // `press` read once at the top of the substep and held through its passes:
+  // read live, the cone moved as the motor's impulse did inside the substep,
+  // the warm-started friction was clamped back out of a cone that had just
+  // shrunk, and the contact flipped the ball's speed along the face by
+  // 1.4 m/s inside every substep - a ball hauled up a face jerked away from
+  // it each time it touched (`session-165f` f74, 0.58 m/s along it in, 2.59
+  // out).
+  pressNow = 0;
   // The accumulated impulses: each substep's, warm started from the one
   // before, so after the last substep they are what that substep spent.
   n = 0;
   t = 0;
   maxN = 0;
+  // Whether the last friction solve ended at the cone, and whether any
+  // substep's did: the frame's statement (see the write-back).
+  limited = false;
+  limitedAny = false;
   // What the contact spent over the whole frame: every substep's `n` and `t`
   // as it ended (each substep re-applies its accumulated impulse from the warm
   // start up), and restitution's after them - Box2D v3's
@@ -445,11 +475,38 @@ class ContactRow {
   totalN = 0;
   totalT = 0;
 
-  constructor(c: ContactConstraint, friction: number) {
+  constructor(
+    c: ContactConstraint,
+    friction: number,
+    hard: boolean,
+    press: ((normal: Vec2) => number) | null,
+    // `a` is the ball itself, not a holder on its path (see `aRound`, `brake`).
+    ball: boolean,
+  ) {
     this.c = c;
+    this.hard = hard;
+    this.brake = hard && ball ? c.a.staticFriction * c.b.surfaceFriction : friction;
+    this.press = press;
     this.a = c.a;
     this.b = c.b;
-    this.la = c.point.sub(c.a.globalPosition).rotated(-c.a.globalRotation);
+    // A circle centred on its body meets a face at the same point however the
+    // body turns, so its anchor is held in the WORLD frame, not carried round
+    // with the body: carried, the ball's own spin swung the point round the
+    // rim and the contact read the chord as separation - R(1 - cos θ), 3.2 mm
+    // for the 0.23 rad a frame's kinematic turn makes inside the island
+    // before the unwind hands it back - and let the chain haul the ball that
+    // far into a face it is wound against, every frame, the push-out paying
+    // it back as lease (`session-187f` f134-185, 49 mm of lease to 617).
+    const shapeA = c.a.collisionShapes[c.shapeA];
+    this.aRound =
+      hard &&
+      ball &&
+      shapeA !== undefined &&
+      shapeA.shape.kind === "circle" &&
+      shapeA.localOffset.x === 0 &&
+      shapeA.localOffset.y === 0;
+    const offsetA = c.point.sub(c.a.globalPosition);
+    this.la = this.aRound ? offsetA : offsetA.rotated(-c.a.globalRotation);
     this.lb = c.point.sub(c.b.globalPosition).rotated(-c.b.globalRotation);
     this.normal = c.normal;
     this.tangent = new Vec2(-c.normal.y, c.normal.x);
@@ -492,6 +549,40 @@ export class TieSolver {
   // over a slat edge the guest was gone and the same loop spun a slat 32 rad/s
   // a frame and flung two others at 13 m/s (`session-394f` f237-241).
   ballRow: IslandUnit | null = null;
+  // The ball the ball's row holds, whose contacts with the SCENERY are solved
+  // hard: no softness and no push-out bias in the biased pass, so a contact
+  // only ever stops the ball's motion into a surface and never pushes it back
+  // out (the chain phase's static push-out does that, in position alone).
+  // Soft, the 30 Hz contact lost to the 60 Hz chain row whose drum reels
+  // without bound: the ball sank 4-9 cm a frame into a wall it was hauled
+  // along, the push-out bias that recovered it inflated the normal impulse
+  // to 9-14 kN·s a frame where the chain's pull into the wall asked for a
+  // fraction of that, and the friction cone it opened let the kinematic spin
+  // roll the ball UP the wall away from its anchor while the drum wound on
+  // (`session-1052f` f290-303). Against a contact that cannot be pushed into,
+  // the normal impulse is the chain's pull into the surface and nothing more.
+  // Only the scenery: a slat the ball rests on is a body of the island, and
+  // their contact stays the island's soft row.
+  hardBody: RigidBody2D | null = null;
+  // The free bodies on the ball's chain's path, whose contacts with the
+  // scenery are hard rows as the ball's are: the chain hauls them into a wall
+  // as it hauls the ball, and soft they sank the same way - a 294 kg anchor
+  // 53 mm into a static, recovering 6 mm a frame (`session-726f` f194).
+  hardHolders: readonly RigidBody2D[] = [];
+  // The impulse the ball's chain is pressing it into a face with, along that
+  // face's normal, this substep: friction is funded by the face's load LESS
+  // this. The haul of a winding chain slides the ball along whatever it is
+  // pressed against, as the positional phase's length projection always did
+  // - friction there acts on velocity and never on the correction - and
+  // what grips is what the ball's other loads press (its weight on a floor).
+  // Counted as load, the chain's own press bought grip against itself: the
+  // ball's drive traction of 3.8, or even its sliding 0.58, against a pull
+  // 0.90 into a face held it still while the drum wound on (`session-105f`,
+  // `session-187f`, `session-119f`). It once launched the ball (`session-85f`
+  // f51, 1000 J off a ceiling) when the drum was an unbounded rate that
+  // pulled through slack; the drum is a speculative motor now (see
+  // `BallChainRow.RATED_PULL`).
+  chainPress: ((normal: Vec2) => number) | null = null;
   // Last frame's accumulated contact impulses by contact key, looked up only.
   private contactCache = new Map<string, CachedImpulse>();
   // The islands this frame was solved in, kept for the sleep pass.
@@ -656,7 +747,27 @@ export class TieSolver {
     const contactRows: ContactRow[] = [];
     for (const c of contacts) {
       if (!inIsland.has(c.a) && !(c.b instanceof RigidBody2D && inIsland.has(c.b))) continue;
-      const row = new ContactRow(c, pairFriction(c));
+      // `b` is the scenery whenever it is not a rigid body (`a` always is).
+      const hard =
+        !(c.b instanceof RigidBody2D) &&
+        ((this.hardBody !== null && c.a === this.hardBody) || this.hardHolders.includes(c.a));
+      // The chain's press funds no grip on ANY face the ball is against, a
+      // holder on its path as much as the scenery: chained to a 430 kg block
+      // and resting on it, the ball was held still by the grip its own
+      // chain's squeeze bought, the length row reached 16-40 kN, and the two
+      // soft corrections pumped 15-39 J a frame into the pair with no input
+      // at all (`session-1195f` f278-307). The normal points out of `b`, so
+      // the face's outward normal at the ball is `-normal` when the ball is
+      // `b`.
+      const press =
+        this.hardBody === null || this.chainPress === null
+          ? null
+          : c.a === this.hardBody
+            ? this.chainPress
+            : c.b === this.hardBody
+              ? (normal: Vec2) => this.chainPress!(normal.neg())
+              : null;
+      const row = new ContactRow(c, pairFriction(c), hard, press, c.a === this.hardBody);
       const cached = this.contactCache.get(row.key);
       if (cached) {
         row.n = cached.n;
@@ -683,28 +794,60 @@ export class TieSolver {
     // over an array allocated an iterator result per element there - and the
     // integration is written in scalars, `v += gravity·(gravityScale·h)` and
     // `p += v·h` with the same operations and no vector to throw away.
+    // A pivot's mounting acceleration is summed over the substeps for the
+    // rope's credit bound, as `World.integrate` records its frame's.
+    for (const body of bodies) if (body.pivot) body.pivotFrameAccelDw = 0;
     for (let s = 0; s < k; s++) {
       for (let i = 0; i < bodies.length; i++) {
         const body = bodies[i]!;
+        if (body.pivot) {
+          // A pivot turns on its bearing and nothing translates it, stepped
+          // as `World.integrate` steps it (see there): the linear velocity an
+          // area wrote is cancelled, and the off-centre bearing's gravity
+          // torque and the torsion spring are taken substep by substep.
+          body.linearVelocity = Vec2.ZERO;
+          const alpha = body.pivotAcceleration(gravity);
+          if (alpha !== 0) body.angularVelocity += alpha * h;
+          body.pivotFrameAccelDw += alpha * h;
+          continue;
+        }
         const v = body.linearVelocity;
         const gs = body.gravityScale * h;
-        body.linearVelocity = new Vec2(v.x + gravity.x * gs, v.y + gravity.y * gs);
+        let dvx = gravity.x * gs;
+        let dvy = gravity.y * gs;
+        if (body.spring) {
+          // A spring body hangs on its stem and does not spin (see
+          // `RigidBody2D.spring`).
+          const a = body.springAcceleration();
+          dvx += a.x * h;
+          dvy += a.y * h;
+          body.angularVelocity = 0;
+        }
+        body.linearVelocity = new Vec2(v.x + dvx, v.y + dvy);
       }
       // A rope regenerates its wrap path against the bodies as they now stand.
       for (let i = 0; i < rows.length; i++) rows[i]!.prepare(h);
       // Warm start: last substep's answer, applied before the first iteration.
       for (let i = 0; i < rows.length; i++) rows[i]!.warmStart();
-      for (let i = 0; i < contactRows.length; i++) warmStartContact(contactRows[i]!);
+      for (let i = 0; i < contactRows.length; i++) {
+        const row = contactRows[i]!;
+        row.pressNow = row.press !== null ? row.press(row.normal) : 0;
+        warmStartContact(row);
+      }
       // Solve with bias. The rows alternate direction substep by substep, so
       // the order bias of one pass is the mirror of the next's.
       solveRows(rows, h, tieSoft, true, s % 2 === 1);
-      for (let i = 0; i < contactRows.length; i++) solveContact(contactRows[i]!, h, contactSoft, true);
+      for (let i = 0; i < contactRows.length; i++) {
+        const row = contactRows[i]!;
+        solveContact(row, h, row.hard ? RIGID : contactSoft, !row.hard);
+      }
       for (let i = 0; i < bodies.length; i++) {
         const body = bodies[i]!;
         const p = body.globalPosition;
         const v = body.linearVelocity;
         body.globalPosition = new Vec2(p.x + v.x * h, p.y + v.y * h);
         body.globalRotation += body.angularVelocity * h;
+        if (body.spring) body.pinSpringAxes();
       }
       // Relax: the same rows against the new positions, with no bias, which
       // takes back the velocity the bias put in.
@@ -734,6 +877,16 @@ export class TieSolver {
       // ball bounced whole off the bed (`session-198f` f129, 89.7 N·s pushed).
       row.c.normalImpulse = row.totalN;
       row.c.tangentImpulse = row.totalT;
+      // Whether the last substep's friction ended at its bound: a contact the
+      // island solved reported "not limited" whatever it did, so `roll-unfunded`
+      // read a ball hauled along a face its chain's press funds no grip on as
+      // one rolling without slip and charged the slip to nothing (`session-537f`).
+      // At the cone on ANY substep, since a contact that hit it slipped during
+      // the frame: the last substep alone read a ball hauled 0.17 m/s along
+      // the 280 kg body it rests on as rolling without slip, its cone moving
+      // substep by substep with the chain's press (`session-379f` f333-363,
+      // the frame's friction at 0.8-1.0 of the normal).
+      row.c.limited = row.limitedAny;
       row.c.maxNormalImpulse = Math.max(row.maxN, row.n);
     }
     for (const row of rows) row.measure();
@@ -787,9 +940,14 @@ function solveRows(
   }
 }
 
+// From `a`'s centre to the contact, as the body now stands.
+function armA(r: ContactRow): Vec2 {
+  return r.aRound ? r.la : r.la.rotated(r.a.globalRotation);
+}
+
 function warmStartContact(r: ContactRow): void {
   if (r.n === 0 && r.t === 0) return;
-  const pa = r.a.globalPosition.add(r.la.rotated(r.a.globalRotation));
+  const pa = r.a.globalPosition.add(armA(r));
   const pb = r.b.globalPosition.add(r.lb.rotated(r.b.globalRotation));
   const impulse = r.normal.mul(r.n).add(r.tangent.mul(r.t));
   applyAt(r.a, impulse, pa.sub(r.a.globalPosition));
@@ -804,7 +962,7 @@ function warmStartContact(r: ContactRow): void {
 function solveContact(r: ContactRow, h: number, soft: Softness, useBias: boolean): void {
   const A = r.a;
   const B = r.b;
-  const ra = r.la.rotated(A.globalRotation);
+  const ra = armA(r);
   const rb = r.lb.rotated(B.globalRotation);
   const pa = A.globalPosition.add(ra);
   const pb = B.globalPosition.add(rb);
@@ -832,8 +990,25 @@ function solveContact(r: ContactRow, h: number, soft: Softness, useBias: boolean
       let vt = A.velocityAtPoint(pa).sub(B.velocityAtPoint(pb)).dot(tg);
       vt -= spinSlipOf(A, ra, tg) * (1 - A.spinDriveShare);
       if (B instanceof RigidBody2D) vt += spinSlipOf(B, rb, tg) * (1 - B.spinDriveShare);
-      const cone = r.friction * r.n;
-      const total = Math.min(cone, Math.max(-cone, r.t - vt / invEffT));
+      // The cone is the spin's drive traction in the direction that cancels
+      // the slip the spin is driving, and the ball's own sliding friction the
+      // other way (`brake`, its `staticFriction`, the 30 degree breakaway):
+      // the world's split between friction that drives a steered ball and
+      // friction that brakes it (`BallPlayer.ROLL_FRICTION`). Without it, a
+      // ball its chain presses into a face and hauls along it met the 3.8 of
+      // its drive traction as stiction, three times the haul whatever the
+      // tension, and stood still while the drum wound on against it
+      // (`session-105f`, the pull 0.56 into the face and 0.83 along it); at
+      // 0.58 it slides along the face towards its anchor, braked, as the
+      // positional phase's length projection always let it.
+      const drive = -Math.sign(spinSlipOf(A, ra, tg) * A.spinDriveShare);
+      const load = Math.max(0, r.n - r.pressNow);
+      const conePos = (drive > 0 ? r.friction : r.brake) * load;
+      const coneNeg = (drive < 0 ? r.friction : r.brake) * load;
+      const total = Math.min(conePos, Math.max(-coneNeg, r.t - vt / invEffT));
+      // At the cone, as the world's solve reports it (`ContactConstraint.limited`).
+      r.limited = total >= conePos - 1e-12 || total <= -coneNeg + 1e-12;
+      if (r.limited) r.limitedAny = true;
       const applied = total - r.t;
       r.t = total;
       if (applied !== 0) {
@@ -877,7 +1052,7 @@ function applyRestitution(r: ContactRow): void {
   if (r.restitution === 0 || r.vn0 > -RESTITUTION_THRESHOLD || r.maxN === 0) return;
   const A = r.a;
   const B = r.b;
-  const ra = r.la.rotated(A.globalRotation);
+  const ra = armA(r);
   const rb = r.lb.rotated(B.globalRotation);
   const pa = A.globalPosition.add(ra);
   const pb = B.globalPosition.add(rb);

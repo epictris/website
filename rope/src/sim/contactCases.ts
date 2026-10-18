@@ -38,7 +38,8 @@ import { Mathf } from "../engine/mathf";
 import { PX } from "../engine/units";
 import { shapeContacts } from "../engine/manifold";
 import { circleShape, polyShapeCentred, rectShape, type Shape } from "../engine/shapes";
-import { CONTACT_SLOP, ContactAudit, World } from "../engine/world";
+import { CONTACT_SLOP, ContactAudit, GRAVITY, World } from "../engine/world";
+import { TieTuning } from "../engine/ties";
 import { MANACLE_HINGE, MANACLE_MOUTH, MANACLE_REACH, MANACLE_THICKNESS } from "../lib/manacle";
 import { MATERIALS, ShapeGeometry } from "../lib/shapeGeometry";
 import { BallPlayer } from "../classes/ballPlayer";
@@ -2094,9 +2095,18 @@ function caseSpawnHang(): ContactResult {
     `hang: attached=${attached} length=${bornLength.toFixed(4)} m, after 180f drift=${drift.toFixed(5)} m ` +
       `maxSpeed=${maxSpeed.toFixed(5)} m/s growth=${grew.toFixed(5)} m`,
   );
-  // A chain in the plumb of a flat ceiling holds the authored pose exactly:
-  // this is the spawn-at-rest statement, not a settling tolerance.
-  const hangs = attached && drift < 1e-9 && maxSpeed < 1e-9 && Math.abs(grew) < 1e-9;
+  // A chain in the plumb of a flat ceiling holds the authored pose: this is
+  // the spawn-at-rest statement, not a settling tolerance. Nothing moves and
+  // nothing grows; the one thing the pose gives is the chain's own stretch
+  // under the weight, since the chain is a row of the island, a soft
+  // constraint at `TieTuning.hertz`, and a soft constraint carrying a load
+  // stands `C = λ·w / (h·ω²)` over, which for `λ = m·g·h` is `g / ω²`
+  // whatever the damping ratio (69 µm at 60 Hz; the positional phase held
+  // it at zero).
+  const omega = 2 * Math.PI * TieTuning.hertz;
+  const stretch = GRAVITY.length() / (omega * omega);
+  const hangs = attached && drift < stretch * 1.001 && maxSpeed < 1e-9 && Math.abs(grew) < 1e-9;
+  details.push(`hang: the row's stretch under the weight, g/ω² = ${(stretch * 1e6).toFixed(2)} µm`);
 
   // --- the first press re-throws it ---------------------------------------
   //
@@ -3793,13 +3803,18 @@ function casePlankHaul(): ContactResult {
   let maxBallVAfter = 0;
   let anchoredAt = -1;
   for (let f = 0; f < 300; f++) {
+    const speedBefore = level.ball.linearVelocity.length();
     feed(true, anchor);
     const chain = level.ball.chain;
     const anchored =
       chain !== null && !(chain.end.contact.obj instanceof BallHook) && level.ball.chainAnchored;
     if (anchored && anchoredAt < 0) {
       anchoredAt = f;
-      speedAtAttach = level.ball.linearVelocity.length();
+      // The speed the ball ARRIVED at, the frame before the anchor: the
+      // ball's chain as a row of the island catches it in the frame it
+      // attaches (0.20 m/s left of 2.78 on that frame), where the positional
+      // phase re-took the birth length and caught it a frame later.
+      speedAtAttach = speedBefore;
     } else if (anchored) {
       maxBallVAfter = Math.max(maxBallVAfter, level.ball.linearVelocity.length());
     }
@@ -3965,13 +3980,15 @@ function casePlankAnchor(): ContactResult {
   let maxBallV = 0;
   let anchoredAt = -1;
   for (let f = 0; f < 300; f++) {
+    const speedBefore = level.ball.linearVelocity.length();
     feed(true, anchor);
     const chain = level.ball.chain;
     const anchored =
       chain !== null && !(chain.end.contact.obj instanceof BallHook) && level.ball.chainAnchored;
     if (anchored && anchoredAt < 0) {
       anchoredAt = f;
-      speedAtAttach = level.ball.linearVelocity.length();
+      // The speed it arrived at (see `plank-haul`).
+      speedAtAttach = speedBefore;
     }
     maxEmbed = Math.max(maxEmbed, embed());
     maxTilt = Math.max(maxTilt, Math.abs(wrapAngle(plank.globalRotation)));
@@ -4045,6 +4062,16 @@ function casePointBlankTurn(): ContactResult {
 
   // An 80 cm steel disc on a centre bearing; the ball spawns touching its
   // right-hand side, level with the axle.
+  //
+  // The bearing is SPRUNG (4 Hz, critically damped), and that is what makes
+  // the rig the recording's question rather than a different one: a 176 kg
+  // ball resting on the side of a free disc is 1587 N·m about its axle, and
+  // the ball's chain as a row of the island turns the disc under it as
+  // gravity says (its angular momentum followed the gravity torque within
+  // 7%), so the ball fell away round it and never rested against the face.
+  // The positional phase held the free disc nearly still - 13 N·m of the
+  // 1587 - which is the only reason the free-disc rig ever rested. Sprung, the
+  // disc gives 0.0025 rad under the ball and the face is still there.
   const level = new BallLevel({
     player: { x: 92, y: -300, radius: 12 },
     bodies: [
@@ -4055,6 +4082,8 @@ function casePointBlankTurn(): ContactResult {
         rot: 0,
         friction: 1,
         pivot: true,
+        pivotFreq: 4,
+        pivotDamping: 1,
         objects: [{ type: "collision", material: "steel", shape: { kind: "circle", r: 80 } }],
       },
     ],
@@ -4481,7 +4510,21 @@ function caseWhirlLap(): ContactResult {
         wrapAngle(rest.sub(ball.globalPosition).angle() - ball.loopDirection.angle()),
       );
       check(`${tag}: the ball closed the gap the same way round (${back} frames turned back)`, back === 0);
-      check(`${tag}: and settled on the aim (${(off / DEG).toFixed(2)} deg off, under 3)`, off < 3 * DEG);
+      // Or wound up to the anchor on the way: at 60 rad/s the lap asks for
+      // 7.3 rad more after the whirl, 0.88 m of a 1 m free span, and a chain
+      // that winds every radian it is asked for (the ball's row) brings the
+      // ball up against its own mounted cuff 8 degrees short, in the pocket
+      // `wound-tight` asserts. Wound tight is the one thing allowed to refuse
+      // the turn, so that is the steering working too; the positional phase
+      // only settled here because it had lost 2.3 cm of the whirl's winding.
+      const anchorBody = ball.chain?.end.contact.obj;
+      const woundTight = level.world.frameContacts.some(
+        (c) => (c.a === ball && c.b === anchorBody) || (c.b === ball && c.a === anchorBody),
+      );
+      check(
+        `${tag}: and settled on the aim, or wound tight against its anchor short of it (${(off / DEG).toFixed(2)} deg off, under 3; against the anchor: ${woundTight})`,
+        off < 3 * DEG || woundTight,
+      );
     }
   }
   return ok("whirl-lap - an aim circling faster than the spin cap winds the chain on", passed, details);
