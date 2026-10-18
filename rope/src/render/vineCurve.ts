@@ -24,13 +24,16 @@ export function vineTangent(path: readonly Vec2[], i: number, axis: "x" | "y"): 
 // Arc-weighted Hermite tangents join the physics links without adding bodies.
 // Duplicate links are skipped; reversals have zero tangent rather than forming
 // a loop. The supplied output storage is reused, and endpoints stay exact.
-export function sampleVineCurve(path: readonly Vec2[], out: VineCurvePoint[] = [], storage = out, restLength?: number): VineCurvePoint[] {
+// `step` is the longest sample interval, in metres.
+export function sampleVineCurve(
+  path: readonly Vec2[], out: VineCurvePoint[] = [], storage = out, restLength?: number, step = .012,
+): VineCurvePoint[] {
   let count = 0, distance = 0, lastX = 0, lastY = 0;
   const spacing = restLength === undefined ? 0 : restLength / Math.max(1, path.length - 1);
   for (let i = 0; i + 1 < path.length; i++) {
     const a = path[i]!, b = path[i + 1]!, len = a.distanceTo(b);
     if (len < 1e-6) continue;
-    const steps = Math.max(1, Math.ceil(len / .012));
+    const steps = Math.max(1, Math.ceil(len / step));
     const ax = vineTangent(path, i, "x"), ay = vineTangent(path, i, "y");
     const bx = vineTangent(path, i + 1, "x"), by = vineTangent(path, i + 1, "y");
     for (let j = count ? 1 : 0; j <= steps; j++) {

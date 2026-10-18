@@ -238,6 +238,8 @@ export const DEFAULT_VINE_STIFFNESS = 0;
 export interface VineCord {
   readonly color: string | null;
   readonly braidSeed: number | null;
+  // The braid drawn as laid rope instead of a leafy vine (`VineData.rope`).
+  readonly rope?: boolean;
   // Read-only material coordinates for renderers; no decorative state enters
   // the solver. Live links divide the built rest length into equal intervals.
   readonly restLength?: number;
@@ -485,6 +487,25 @@ function spanUnit(vine: Vine): boolean {
   return vine.anchor2Contact !== null && vine.stiffness > 0 && vine.struts.length > 0;
 }
 
+// Whether this vine is the island's while the ball's ring holds it, and only
+// then: a HANGING cord (2026-10-18). Free, it hangs where the sweep settles it
+// and has nothing to argue with. Held positionally, the ball's chain could
+// not close against it: the spin rollback took the ring link's share of every
+// correction back (a whirled ball's winding pins that share at 1), so a 52 kg
+// ball was whipped round the grab of a light rope that hardly moved
+// (`session-175f`: 430 mm solved onto the grab link over 131 frames, 332 of it
+// rolled back), and letting the link keep its share instead left the coupled
+// sweep unconverged - the light link took ~91% of each correction, the
+// vine's own constraints put it back, the chain ended every frame ~4 mm over
+// with the ball still falling, and the ring's creep read that as tension and
+// slid at seven times the law. As rows of one island with the chain, the
+// ball, the link and the cord share one velocity solve and nothing is
+// rolled back, as on a stiff span (`syncBallRow`). A berry vine's cord is
+// its plant unit's (`BallLevel.syncPlantUnit`), and a span is `spanUnit`'s.
+function ringUnit(vine: Vine): boolean {
+  return vine.anchor2Contact === null && vine.berries.length === 0;
+}
+
 // Keep every stiff span's island unit in step with who holds it.
 //
 // A unit while nothing does. While the rope ends on one of its links, a
@@ -514,10 +535,20 @@ export function syncSpanUnits(
 ): void {
   const end = rope ? rope.end.contact.obj : null;
   for (const vine of vines) {
-    if (!spanUnit(vine)) continue;
+    const span = spanUnit(vine);
+    if (!span && !ringUnit(vine)) continue;
     const held = end instanceof VineLink && vine.links.includes(end);
     const unit = vine.unit;
     const own = unit instanceof PlantUnit && unit.berry === null;
+    // A hanging cord is a unit only while the ring holds it as a row; any
+    // other moment it is the sweep's, with the velocities the island left.
+    if (!span && !(held && rowed)) {
+      if (own) {
+        world.ties.removeUnit(unit);
+        vine.unit = null;
+      }
+      continue;
+    }
     if (held && !rowed) {
       if (own) {
         world.ties.removeUnit(unit);
@@ -1034,6 +1065,7 @@ function buildOne(
 
   const color = v.color ?? null;
   const braidSeed = Number.isInteger(v.braidSeed) && v.braidSeed! >= 0 ? v.braidSeed! : null;
+  const rope = braidSeed !== null && v.rope === true;
   const chains: SceneConstraint[] = [];
   // A HANGING vine's joints run to the loose `VINE_TOLERANCE` and carry no
   // standing-stretch lease; a SPAN's run to the tight `CHAIN_TOLERANCE` and
@@ -1228,6 +1260,7 @@ function buildOne(
     spacing,
     color,
     braidSeed,
+    rope,
     restLength: spacing * (links.length + (anchor2Contact ? 1 : 0)),
     attachedAtBothEnds: anchor2Contact !== null,
     lra: null,

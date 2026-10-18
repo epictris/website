@@ -800,6 +800,8 @@ export interface EdChain {
 export interface EdVine {
   id: number;
   braidSeed: number | null;
+  // The braid drawn as laid rope rather than a leafy vine (`VineData.rope`).
+  rope: boolean;
   // Present = a berry vine (`VineData.starberry`), in metres like the rest of
   // the model.
   starberry?: StarberrySettings;
@@ -1860,6 +1862,7 @@ function lightItem(
       viscosity: v.viscosity ?? null,
       color: v.color ?? null,
       braidSeed: v.braidSeed ?? null,
+      rope: v.braidSeed !== undefined && v.rope === true,
       ...(v.starberry ? { starberry: structuredClone(v.starberry) } : {}),
     });
   }
@@ -2461,6 +2464,7 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
       ...(v.viscosity !== null ? { viscosity: v.viscosity } : {}),
       ...(v.color !== null ? { color: v.color } : {}),
       ...(v.braidSeed !== null ? { braidSeed: v.braidSeed } : {}),
+      ...(v.braidSeed !== null && v.rope ? { rope: true } : {}),
       ...(v.starberry ? { starberry: structuredClone(v.starberry) } : {}),
     });
   }

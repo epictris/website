@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>Moving vine material study</title>
 <style>body{margin:0;background:#1c3856;color:#cbccc6;font:12px monospace}canvas{display:block}nav{position:fixed;bottom:12px;left:12px;right:12px;display:flex;gap:8px;align-items:center}button{background:#243345;color:inherit;border:1px solid #65bddb;padding:6px 9px;font:inherit}span{opacity:.8}</style></head>
-<body><nav><button id="mode">Two-ended span</button><button id="pull" hidden>Pull</button><button id="reset" hidden>Reset span</button><button id="motion">Pause</button><button id="step">Step</button><button id="view">Close up</button><button id="light">Backlight</button><button id="ring">Ring</button><span id="status">Vine study · live physics</span></nav>
+<body><nav><button id="mode">Two-ended span</button><button id="pull" hidden>Pull</button><button id="reset" hidden>Reset span</button><button id="motion">Pause</button><button id="step">Step</button><button id="view">Close up</button><button id="light">Backlight</button><button id="ring">Ring</button><button id="look">Rope</button><span id="status">Vine study · live physics</span></nav>
 <script type="module">
 import * as THREE from 'three';
 import { VineLayer } from './src/render3d/vineVisual.ts';
@@ -31,12 +31,14 @@ const spanData={player:{x:200,y:-250,radius:12},bodies:[
  {kind:'static',x:0,y:-500,rot:0,objects:[{type:'collision',shape:{kind:'rect',w:600,h:40}},{type:'anchor',id:1,x:0,y:20}]},
  {kind:'static',x:400,y:-500,rot:0,objects:[{type:'collision',shape:{kind:'rect',w:200,h:40}},{type:'anchor',id:2,x:0,y:20}]}
 ],vines:[{anchor:1,anchor2:2,length:500,braidSeed:1798}]};
-let level = new Level(hanging), span=false,pulling=false,wasPulling=false,aim=null;
 // Ring: the ball's manacle threaded on the first vine, slid down it and back up
 // at 1 m/s, folding the leaves it passes (render3d/vineLeafFold.ts).
 // ?ring=1 starts it, ?seek=S plays S seconds and holds there, ?view=close
-// looks at the ring from close by.
+// looks at the ring from close by, ?rope=1 draws the vines as laid rope.
 const params=new URLSearchParams(location.search);
+let rope=params.get('rope')==='1';
+const looked=data=>({...data,vines:data.vines.map(v=>({...v,rope}))});
+let level = new Level(looked(hanging)), span=false,pulling=false,wasPulling=false,aim=null;
 let ringOn=params.get('ring')==='1',ringFrame=0;
 const cuff=new THREE.Mesh(new THREE.TorusGeometry(MANACLE_RADIUS,MANACLE_BAND/2,12,32),new THREE.MeshStandardMaterial({color:'#2a2c30',metalness:.8,roughness:.45}));
 cuff.castShadow=true;scene.add(cuff);
@@ -60,7 +62,7 @@ const anchorMaterial=new THREE.MeshStandardMaterial({color:'#8ca1b1',roughness:.
 const anchors=[0,1].map(()=>{const m=new THREE.Mesh(new THREE.SphereGeometry(.055,16,12),anchorMaterial);scene.add(m);return m;});
 const pullGeometry=new THREE.BufferGeometry().setAttribute('position',new THREE.Float32BufferAttribute(new Float32Array(6),3));
 const pullLine=new THREE.Line(pullGeometry,new THREE.LineBasicMaterial({color:'#b3a383'}));pullLine.frustumCulled=false;scene.add(pullLine);
-function reset(){level=new Level(span?spanData:hanging);frame=0;accumulator=0;pulling=wasPulling=false;vines.clear();
+function reset(){level=new Level(looked(span?spanData:hanging));frame=0;accumulator=0;pulling=wasPulling=false;vines.clear();
  if(span){for(let i=0;i<30;i++){level.physicsProcess(emptyFrameInput(),1/60);frame++;}aim=level.vines[0].links[Math.floor(level.vines[0].links.length/2)].globalPosition;paused=true;}
  document.querySelector('#pull').textContent='Pull';document.querySelector('#motion').textContent=paused?'Play':'Pause';pose();}
 function step(withRender=false){if(ringOn)ringFrame++;const input=emptyFrameInput();if(span){input.mouseWorldPosition=aim;input.fire={held:pulling,pressed:pulling&&!wasPulling,released:!pulling&&wasPulling};input.retract.held=pulling;wasPulling=pulling;}
@@ -77,9 +79,12 @@ document.querySelector('#step').onclick=()=>{
 };
 document.querySelector('#view').onclick=e=>{close=!close;e.target.textContent=close?'Whole vines':'Close up';pose();};
 document.querySelector('#ring').onclick=e=>{ringOn=!ringOn;ringFrame=0;e.target.textContent=ringOn?'No ring':'Ring';};
+document.querySelector('#look').onclick=e=>{rope=!rope;e.target.textContent=rope?'Vine':'Rope';reset();};
+if(rope)document.querySelector('#look').textContent='Vine';
 document.querySelector('#light').onclick=e=>{back.visible=!back.visible;e.target.textContent=back.visible?'Front light':'Backlight';sun.intensity=back.visible ? .75 : 3.4;};
 addEventListener('resize',resize); resize(); pose();
 if(ringOn)document.querySelector('#ring').textContent='No ring';
+const macro=params.get('view')==='macro',macroPath=[];
 if(params.get('view')==='close'){close=true;document.querySelector('#view').textContent='Whole vines';pose();}
 if(params.has('seek')){paused=true;document.querySelector('#motion').textContent='Play';for(let i=0;i<Math.round(+params.get('seek')*60);i++)step(true);}
 function draw(now){
@@ -89,6 +94,8 @@ function draw(now){
  const ring=ringAt(alpha);
  vines.sync(level.vines,alpha,Math.max(0,frame-1+alpha)/60,ring);placeCuff(ring);
  if(ring&&close){camera.position.set(cuff.position.x+.25,cuff.position.y+.05,.9);camera.lookAt(cuff.position);}
+ // ?view=macro: a hand's breadth from the first vine, a third of the way down.
+ if(macro&&!ring){level.vines[0].path(alpha,macroPath);const q=macroPath[Math.floor(macroPath.length/3)];camera.position.set(q.x+.04,-q.y+.02,.42);camera.lookAt(q.x,-q.y,0);}
  player.visible=span;pullLine.visible=span&&level.vines[0].lraLink!==null;
  const p=level.player.renderPosition(alpha);player.position.set(p.x,-p.y,0);
  if(pullLine.visible){const q=level.vines[0].lraLink.renderPosition(alpha),a=pullGeometry.getAttribute('position');a.setXYZ(0,p.x,-p.y,0);a.setXYZ(1,q.x,-q.y,0);a.needsUpdate=true;}

@@ -1482,6 +1482,9 @@ export function isLegacyChain(c: ChainData | LegacyChainData): c is LegacyChainD
 export interface VineData {
   // Render-only seed for the old three-strand braid; absent = plain cord.
   braidSeed?: number;
+  // Render-only: the braid is drawn as a laid three-strand rope rather than a
+  // leafy vine. Means nothing without a `braidSeed`; absent = vine.
+  rope?: boolean;
   // Anchor id. A vine naming an anchor that is not in the level, or one on a
   // body that builds nothing, is dropped at load - the same tolerance a chain
   // end gets.
@@ -3404,6 +3407,7 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
     ...(v.viscosity !== undefined ? { viscosity: v.viscosity } : {}),
     ...(v.color !== undefined ? { color: v.color } : {}),
     ...(v.braidSeed !== undefined ? { braidSeed: v.braidSeed } : {}),
+    ...(v.rope ? { rope: true } : {}),
     // Copied rather than shared, so a converted level never aliases the
     // file's arrays. A berry's root is a length along the vine; the retired
     // arc fractions (`positions`, and karin's default when a file names

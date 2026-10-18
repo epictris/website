@@ -6,6 +6,7 @@ import { Vec2 } from "../engine/vec2";
 import { PIXELS_PER_METER, PX } from "../engine/units";
 import { worldToScreen, type Camera } from "../render/camera";
 import { drawStarberry } from "../render/starberry";
+import { ROPE_COLOR } from "../render/ropeLay";
 import { restStarberries } from "../level/starberry";
 import { drawTrainingGrid } from "../render/trainingGrid";
 import { fillAnchor, fillFinish, fillForceArea, fillKillZone, fillWaterArea } from "../render/areaFill";
@@ -2412,7 +2413,8 @@ export function drawEditor(
         ctx.lineWidth = worldLine * 6;
         tracePath(path);
       }
-      const color = v.color ?? VINE_DEFAULT_COLOR;
+      const rope = v.braidSeed !== null && v.rope;
+      const color = v.color ?? (rope ? ROPE_COLOR : VINE_DEFAULT_COLOR);
       if (layers === "fill" && v.starberry) {
         // A berry vine is drawn as the canvas renderer draws it, berries and
         // all, at rest.
@@ -2430,8 +2432,9 @@ export function drawEditor(
         ctx.strokeStyle = color;
         ctx.lineWidth = worldLine * (v.braidSeed !== null ? 2 : 3);
         tracePath(path);
+        // Dashed down the middle: green for a braided vine, pale for a rope.
         if (v.braidSeed !== null) {
-          ctx.strokeStyle = "#8eaa68";
+          ctx.strokeStyle = rope ? "#ead3a4" : "#8eaa68";
           ctx.lineWidth = worldLine;
           ctx.setLineDash([worldLine * 3, worldLine * 3]);
           tracePath(path);

@@ -392,6 +392,7 @@ Neighbour-scale bends alone were measured first (the release peaked at 5.5 J wit
 The island solves floors and bends in one soft substepped velocity solve, where a row has no last word and nothing is paid out: every joint, floor and bend a row ([scene-chains](scene-chains.md#a-held-berry-plant-as-rows)), four substeps for a free span (`SPAN_SUBSTEPS`; the held plant's eight carry a ball, a span carries itself, and at four it rests a percent long), the vine's own damping and rest rule (`stepVines`; a link never satisfies the world's, so `PlantUnit.asleep` IS `Vine.asleep`), and the build settle steps it through the island (`World.stepTiesStandalone`) so the level and the editor's `restingSpanPath` open on the island's pose.
 **What it costs, against the committed tree's sweep** (bun, BALL's six spans, 2026-10-13): asleep, nothing either way; all six kicked awake at 3 m/s, 0.86-0.90 ms a frame over the first two seconds against 0.77-0.80 (the sweep's), 236-243 ms over ten seconds against 240-248 since the island's sleep sooner; held - the player's case - cheaper, the hold being the sweep's with far fewer sweeps now that floors and bends agree: `session-267`'s hold 0.75 ms a frame against 1.39 (p95 1.6 against 3.1), `session-294f`'s 0.69 against 1.57, `session-262f`'s 1.62 against 1.67 (its winding caps are the open item below). Two substeps would match the sweep awake (0.75) at 5% of stretch; eight cost 1.4 ms awake.
 **On the ball, the hold is the island's too** (since 2026-10-13): the ring on the cord (`RopeVineClamp`) is a row of the span's island - `BallLevel.syncBallRow` makes the chain a `BallChainRow` of it exactly as it does for a held berry plant, the span keeps its unit through the hold with the load ropes among its rows (rebuilt when a load rope is born, reborn as the ring crosses a link, or dropped: `PlantUnit.lra`, `syncSpanUnits` with `rowed`), and the ring's creep is solved inside the row's own velocity solve (`viscousRopeImpulse`: the row is a viscous slip whose tension lets the ball lengthen the path at the creep's relief, and `Rope.rowCreep` walks the ring by that tension a substep at a time; [vine-ring](vine-ring.md) has the design, the measurements and the five drafts it replaced).
+Since 2026-10-18 a HANGING cord the ring holds is the same: a unit of its own island for exactly as long as the ring is on it (`ringUnit`), because held positionally the spin rollback took the light link's share of every correction back and a whirled ball barely moved the rope (`session-175f`; [vine-ring](vine-ring.md) has the measurements and the two positional answers that were reverted).
 That ended the framerate dips: positional, the ball winding while hung from a span ran the coupled sweep to its 48-sweep cap frame after frame (`session-211f`: 37 frames in 211, `session-262f`: 35 in 262), each sweep regenerating the ball's wrap path, 11-14 ms of chain time in bun and 40 in the browser - the correction splitting by inverse mass so the 3.7 kg link took 93% of it and the load ropes put the link straight back, the ball climbing 7% a sweep. As a row there is no sweep: 0 capped frames on every bundle, `session-211f` at 0.8 ms a frame mean and 1.5 at p95 against 1.5 and 13.
 A held span is damped in `stepVines` as a free one is (the island cannot damp a link, `VineLink.canSleep` being false); a held berry plant stays undamped.
 What the row hold is NOT yet is as quiet as the sweep's: the sweep dissipated, the island conserves, so a ball caught on a span swings under it as a pendulum and the cord is jerked at each extreme (`session-133f`'s "still" hang carries 4.7 J in the cord, 21 peak, against 0.01 positional), and the row's winch hauls against the soft span (`session-267`'s rolling hold: 4.8 mm of link jitter a frame with the winch, 1.3 without, 0.5 positional). Both are the physics the sweep was hiding, and both are feel: the cord's damping is where to look after playing it (the winch had a tension bound too, removed 2026-10-15 because it made the drum take in half of every turn under a swinging ball; [scene-chains](scene-chains.md)).
@@ -554,6 +555,20 @@ Each vertex carries its station in link units and its offset in the centreline's
 `VineTube.frameAt` is that evaluation on the CPU, on the same float32 pose, for the leaf roots and for the braid test (`deformedGeometry`), so what the test measures is what the shader draws.
 Rebuilding the tube on the CPU every frame instead - a ring every 1.2 cm, three strands, a painted colour per vertex - cost 6.5 ms of a frame for BALL's six vines (`Trace-20261011T201625`, `session-1055f`, 2026-10-11); posing it costs 0.17 ms for all six.
 
+**With `rope` as well as a `braidSeed`, the braid is drawn as laid rope instead of a leafy vine** (2026-10-18, from a reference of a manila three-strand rope).
+`render/ropeLay.ts` lays three equal strands at a hard lay of 2.7 rope diameters a turn, right-handed, which stands them at about 49° to the axis on the crowns.
+Their centres sit 1.1 strand radii out, a little closer than the 1.155 of tangent circles: a laid rope's strands are pressed into each other, tangent circles leave a slot down every groove, and much closer fills the groove in.
+Nothing grows - no gauge or pitch drift, no nodes, no tapered tip, no leaves - so the seed only sets where the lay starts.
+In 3D it is the same `VineTube`, built in rope mode (`new VineTube(true)`; a vine that changes look is given a new tube): 16 sides a strand and a ring every 4 mm, since the braid's 1.2 cm faceted the silhouette at this lay.
+The fibres are a shared colour and normal map (`render3d/ropeFibres.ts`) in each strand's own coordinates, once round it and along its arc length: yarns at 9° to the strand, each a few fibres, blended by a soft max so the creases between them do not alias into dotted lines, with stray hairs over them.
+A strand's sides are measured from its crown, straight out from the rope's axis, so the fibres turn with the lay instead of drifting round the strand as the braid's transported frame would.
+They are a texture rather than a shader pattern for the mipmaps: a 2 mm fibre is under a pixel at the game's distance, where a procedural stripe would shimmer.
+The maps are built once, on the frame that first draws a rope (about 100 ms in bun), from a fixed seed.
+The vertex colour carries the tint and the groove: a point is shadowed by how near it is to the next strand's surface.
+The colour is the rope's own (`ROPE_COLOR`, manila, when the vine has none): the fibre map is a tone over it, warmed as it darkens.
+In 2D the rope is the cord in its groove shade with each strand's crown stroked wherever it passes in front.
+`vine-preview.html?rope=1` (or its **Rope** button) shows the study's vines as rope; `?view=macro` looks at the first one from a hand's breadth away.
+
 **A leaf folds under the ball's ring as the ring slides over it** (`render3d/vineLeafFold.ts`), render-only like the lag and on the same spring.
 The blade is a chord hinged at the stem's surface at an angle `θ` from the downstream tangent.
 In the plane of the fold, measured from the hinge, the ring's band is a solid rectangle: its width along the cord about the ring's centre, by the span from its bore to its rim; the blade may not cross it, so `θ` may not lie in the angular span of the part of that rectangle within the blade's reach (`forbiddenSpan`, exact from its corners and its edges' crossings of the reach circle).
@@ -604,9 +619,9 @@ switches to a real player load fixture; **Pull** deploys/retracts the player's
 hook, **Release** removes it and **Reset span** restores the initial pose. Its
 frame/load readout supports multi-frame checks. It is excluded from
 the production entry points.
-Select a gameplay vine and use **Braid selected vine** in its inspector to
-author the seed, or **Plain vine** to remove it. The seed is render-only and
-survives save/load and copy/undo without changing the physics.
+Select a gameplay vine and use **Render as vine** or **Render as rope** in its inspector to
+author the seed and the look, or **Plain vine** to remove both. The seed and the look are render-only and
+survive save/load and copy/undo without changing the physics.
 
 Drawn in the scene rather than painted flat over it, and that is the whole point
 of the 3D half existing: **the 2D overlay is dropped in every 3D-only view the
@@ -640,7 +655,7 @@ a rope, with what it reads as beside it) and the colour, and the vine is listed
 under `Vines (N)` beside the chains.
 A **span** is authored from a hanging vine: **Shift-drag its end handle onto a body** to attach a second anchor there (the panel gains a live `slack` readout), drag that end handle to re-anchor it as a chain end is re-anchored, and **Shift-drop it over empty space** to detach back to a hanging vine of the same length.
 The editor draws a span at its resting catenary, on the canvas and in the 3D scene both, through the same `catenaryPolyline` the builder spawns from.
-The panel's **Braid** section sets `braidSeed`: **Braid selected vine** braids it with the seed in the box (change the seed and press again to regrow it), **Plain vine** clears it, and both undo; the canvas marks a braided vine with a dashed stroke ([Drawing](#drawing)).
+The panel's **Look** section sets `braidSeed` and `rope`: **Render as vine** braids it into a leafy vine with the seed in the box (change the seed and press again to regrow it), **Render as rope** draws the same seed as laid rope, **Plain vine** clears both, and all three undo; the canvas marks a braided vine with a dashed stroke, green for a vine and pale for a rope ([Drawing](#drawing)).
 `TEST_VINES` is the worked level - two vines
 over a chasm to swing across, one long enough to pool on the far ledge, and a
 span with a metre of slack between the second and third branches.

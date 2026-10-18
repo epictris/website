@@ -3209,6 +3209,27 @@ export class Rope {
     return relieved;
   }
 
+  // A ring the last ROW frame's walk (`rowCreep`) drove off the cord's free
+  // end comes back as the dangling tip, at the speed it was being driven at,
+  // as the positional frame's does at its first look (`settleVineClamp`).
+  // A stiff span has no free end; a hanging cord the ring holds as a row of
+  // its island does (`syncSpanUnits`), and left unanswered the ring sat at
+  // the last link for ever. Called by the owner at the top of its frame,
+  // before anything reads the chain's end.
+  settleRowRunOff(): void {
+    const clamp = this.end;
+    if (!(clamp instanceof RopeVineClamp)) return;
+    const ran = clamp.takeRunOff();
+    if (!ran.ranOff) return;
+    const dt = this.frameDelta;
+    let velocity = dt > 0 ? clamp.slipped.div(dt) : Vec2.ZERO;
+    const t = clamp.tangent();
+    if (t !== null && dt > 0) velocity = velocity.add(t.mul(ran.overrun / dt));
+    clamp.slipped = Vec2.ZERO;
+    this.markPathChanged();
+    this.onVineRunOff?.(clamp, velocity);
+  }
+
   // The ring's walk on a frame the chain is a ROW of the island
   // (`BallChainRow`, a ring on a stiff span): the positional solve that walks
   // the ring along the cord (`slipVineClampedEnd`) never runs. The row solves

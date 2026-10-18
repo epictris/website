@@ -2,12 +2,19 @@ import * as THREE from "three";
 import { Vec2 } from "../engine/vec2";
 import { VINE_VISUAL_RADIUS } from "../level/vines";
 import { forEachBraidPoint } from "../render/vineBraid";
+import { forEachRopePoint } from "../render/ropeLay";
 import { sampleVineCurve, vineMaterial, vineTangent } from "../render/vineCurve";
 import { VineTwist } from "../render/vineTwist";
+import { ROPE_FIBRE_TILE, ropeFibreMaps } from "./ropeFibres";
 import type { VineLeafLag } from "./vineLeafLag";
 import type { VineLeafFold } from "./vineLeafFold";
 
-const SIDES = 12, RING = SIDES + 1;
+// Radial sides per strand. A rope's strands are its whole silhouette and are
+// lit across their full round, where the braid's are broken up by leaves.
+const BRAID_SIDES = 12, ROPE_SIDES = 16;
+// A rope's ring spacing along the cord, in metres: its hard lay turns a strand
+// 8.5° a ring here, where the braid's default 1.2 cm faceted the silhouette.
+const ROPE_RING_STEP = .004;
 const OLIVE = new THREE.Color("#637848"), BARK = new THREE.Color("#6d6243"), MOSS = new THREE.Color("#7e9155");
 function softBand(a: number, b: number, x: number): number {
   const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t);
@@ -133,24 +140,38 @@ export class VineTube {
   private roll = 0;
   private squeeze = 1;
   private readonly scratch = new THREE.Vector3();
+  private readonly sides: number;
 
-  constructor() {
+  // `rope` draws the braid as laid rope (`render/ropeLay.ts`): even strands at
+  // a fixed lay, their fibres in a shared texture rather than painted per
+  // vertex, and no leaves. Fixed for the tube's life; a vine that changes look
+  // gets a new tube.
+  constructor(readonly rope = false) {
+    this.sides = rope ? ROPE_SIDES : BRAID_SIDES;
     const pose = makePoseTexture(16);
     this.uniforms = { vinePose: { value: pose }, vineLast: { value: 1 } };
-    this.material = new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, roughness: .91 });
-    this.material.onBeforeCompile = shader => {
-      shader.fragmentShader = shader.fragmentShader.replace("#include <roughnessmap_fragment>", /* glsl */`
-        #include <roughnessmap_fragment>
-        roughnessFactor = clamp(roughnessFactor - .10 * smoothstep(.05, .22, vColor.g), .78, .94);
-      `);
-    };
-    patchStem(this.material, this.uniforms, "painted-vine-stem-v2", true);
+    if (rope) {
+      const fibres = ropeFibreMaps();
+      this.material = new THREE.MeshStandardMaterial({
+        color: 0xffffff, vertexColors: true, roughness: .88, map: fibres.color, normalMap: fibres.normal,
+      });
+      patchStem(this.material, this.uniforms, "laid-rope-stem-v1", true);
+    } else {
+      this.material = new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, roughness: .91 });
+      this.material.onBeforeCompile = shader => {
+        shader.fragmentShader = shader.fragmentShader.replace("#include <roughnessmap_fragment>", /* glsl */`
+          #include <roughnessmap_fragment>
+          roughnessFactor = clamp(roughnessFactor - .10 * smoothstep(.05, .22, vColor.g), .78, .94);
+        `);
+      };
+      patchStem(this.material, this.uniforms, "painted-vine-stem-v2", true);
+    }
     this.depthMaterial = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking });
     patchStem(this.depthMaterial, this.uniforms, "painted-vine-stem-depth-v2", false);
     this.distanceMaterial = new THREE.MeshDistanceMaterial();
     patchStem(this.distanceMaterial, this.uniforms, "painted-vine-stem-distance-v2", false);
     this.mesh = new THREE.Mesh(this.geometry, this.material);
-    this.mesh.name = "vine-braid-tube";
+    this.mesh.name = rope ? "vine-rope-tube" : "vine-braid-tube";
     this.mesh.userData.tube = this;
     this.mesh.castShadow = this.mesh.receiveShadow = true;
     this.mesh.customDepthMaterial = this.depthMaterial;
@@ -198,18 +219,30 @@ export class VineTube {
     // live vine had at rest, measured in the centreline's frame.
     const rest: Vec2[] = [];
     for (let i = 0; i < points; i++) rest.push(new Vec2(0, i * this.spacing));
-    const curve = sampleVineCurve(rest, [], [], restLength);
+    const curve = sampleVineCurve(rest, [], [], restLength, this.rope ? ROPE_RING_STEP : undefined);
     const rings = curve.length;
     this.rings = rings;
     const centres = new Float32Array(3 * rings * 4);
-    forEachBraidPoint(curve, seed, (i, x, y, z, strand, girth) => {
-      const k = (strand * rings + i) * 4;
-      centres[k] = x; centres[k + 1] = -y; centres[k + 2] = z;
-      centres[k + 3] = VINE_VISUAL_RADIUS * .52 * girth;
-    }, restLength, attachedAtBothEnds);
+    if (this.rope) {
+      forEachRopePoint(curve, seed, (i, x, y, z, strand, radius) => {
+        const k = (strand * rings + i) * 4;
+        centres[k] = x; centres[k + 1] = -y; centres[k + 2] = z;
+        centres[k + 3] = radius;
+      });
+    } else {
+      forEachBraidPoint(curve, seed, (i, x, y, z, strand, girth) => {
+        const k = (strand * rings + i) * 4;
+        centres[k] = x; centres[k + 1] = -y; centres[k + 2] = z;
+        centres[k + 3] = VINE_VISUAL_RADIUS * .52 * girth;
+      }, restLength, attachedAtBothEnds);
+    }
+    const SIDES = this.sides, RING = SIDES + 1;
     const stride = rings * RING + 2, vertexCount = 3 * stride;
     const position = new Float32Array(vertexCount * 3), normals = new Float32Array(vertexCount * 3);
     const colors = new Float32Array(vertexCount * 3), stations = new Float32Array(vertexCount);
+    // A rope strand's fibre map coordinates: once round the strand, and its
+    // own arc length along it in fibre tiles (`ropeFibres.ts`).
+    const uvs = this.rope ? new Float32Array(vertexCount * 2) : null;
     this.ringU = new Float64Array(rings);
     for (let i = 0; i < rings; i++) this.ringU[i] = vineMaterial(curve[i]!) / this.spacing;
 
@@ -230,17 +263,27 @@ export class VineTube {
       stations[v] = this.ringU[ring]!;
     };
     for (let s = 0; s < 3; s++) {
-      const shade = s === 0 ? 1.02 : s === 1 ? .97 : .94;
+      const shade = this.rope ? 1 : s === 0 ? 1.02 : s === 1 ? .97 : .94;
       const phase = seed * .71 + s * 1.9;
       normal.set(0, 0, 1);
+      let strandArc = 0;
       for (let i = 0; i < rings; i++) {
         const k = (s * rings + i) * 4;
         const before = (s * rings + Math.max(0, i - 1)) * 4;
         const after = (s * rings + Math.min(rings - 1, i + 1)) * 4;
+        if (i) {
+          const last = k - 4;
+          strandArc += Math.hypot(centres[k]! - centres[last]!, centres[k + 1]! - centres[last + 1]!, centres[k + 2]! - centres[last + 2]!);
+        }
         tangent.set(centres[after]! - centres[before]!, centres[after + 1]! - centres[before + 1]!, centres[after + 2]! - centres[before + 2]!);
         const length = tangent.length();
         if (length > 1e-8) tangent.multiplyScalar(1 / length); else tangent.set(0, -1, 0);
-        if (i) {
+        if (this.rope) {
+          // A rope strand's sides are measured from its crown - straight out
+          // from the rope's axis - so its fibre map turns with the lay rather
+          // than drifting round the strand as a transported frame would.
+          normal.set(centres[k]! - curve[i]!.x, centres[k + 1]! + curve[i]!.y, centres[k + 2]!);
+        } else if (i) {
           // Minimal rotation, unlike repeated projection which introduces
           // artificial roll on curved/helical strand centrelines.
           transport.setFromUnitVectors(previousTangent, tangent);
@@ -259,6 +302,28 @@ export class VineTube {
         for (let j = 0; j <= SIDES; j++) {
           const angle = (j % SIDES) * Math.PI * 2 / SIDES;
           radial.copy(normal).multiplyScalar(Math.cos(angle)).addScaledVector(binormal, Math.sin(angle));
+          if (this.rope) {
+            // Smooth strands: the fibres are the normal map's. What the
+            // vertex colour carries is the groove where two strands press
+            // together, shadowed by how near this point is to the next
+            // strand's surface, and the tint.
+            const v = s * stride + i * RING + j, radius = centres[k + 3]!;
+            const px = centres[k]! + radial.x * radius, py = centres[k + 1]! + radial.y * radius, pz = centres[k + 2]! + radial.z * radius;
+            put(v, i, px, py, pz, radial.x - tangent.x * slope, radial.y - tangent.y * slope, radial.z - tangent.z * slope);
+            uvs![v * 2] = j / SIDES;
+            uvs![v * 2 + 1] = strandArc / ROPE_FIBRE_TILE;
+            let gap = Infinity;
+            for (let o = 1; o < 3; o++) {
+              const q = (((s + o) % 3) * rings + i) * 4;
+              gap = Math.min(gap, Math.hypot(px - centres[q]!, py - centres[q + 1]!, pz - centres[q + 2]!) - centres[q + 3]!);
+            }
+            const open = Math.max(0, Math.min(1, gap / (radius * .8)));
+            const cavity = .18 + .82 * open * (2 - open);
+            colors[v * 3] = tint.r * cavity;
+            colors[v * 3 + 1] = tint.g * cavity;
+            colors[v * 3 + 2] = tint.b * cavity;
+            continue;
+          }
           const ridge = 1 + .018 * Math.cos(angle * 3 + phase) + .012 * Math.sin(angle * 4 + growth * .8);
           const ridgeSlope = -.054 * Math.sin(angle * 3 + phase) + .048 * Math.cos(angle * 4 + growth * .8);
           const v = s * stride + i * RING + j, radius = centres[k + 3]! * ridge;
@@ -279,9 +344,12 @@ export class VineTube {
         if (i === 0 || i === rings - 1) {
           const v = s * stride + rings * RING + (i === 0 ? 0 : 1), sign = i === 0 ? -1 : 1;
           put(v, i, centres[k]!, centres[k + 1]!, centres[k + 2]!, tangent.x * sign, tangent.y * sign, tangent.z * sign);
-          colors[v * 3] = OLIVE.r * tint.r * shade;
-          colors[v * 3 + 1] = OLIVE.g * tint.g * shade;
-          colors[v * 3 + 2] = OLIVE.b * tint.b * shade;
+          // A rope's cut end is its fibres end-on: darker than their sides.
+          const end = this.rope ? .6 : 1;
+          if (uvs) { uvs[v * 2] = .5; uvs[v * 2 + 1] = strandArc / ROPE_FIBRE_TILE; }
+          colors[v * 3] = (this.rope ? 1 : OLIVE.r) * tint.r * shade * end;
+          colors[v * 3 + 1] = (this.rope ? 1 : OLIVE.g) * tint.g * shade * end;
+          colors[v * 3 + 2] = (this.rope ? 1 : OLIVE.b) * tint.b * shade * end;
         }
       }
     }
@@ -306,6 +374,7 @@ export class VineTube {
     this.geometry.setAttribute("normal", new THREE.BufferAttribute(normals, 3));
     this.geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
     this.geometry.setAttribute("vineU", new THREE.BufferAttribute(stations, 1));
+    if (uvs) this.geometry.setAttribute("uv", new THREE.BufferAttribute(uvs, 2));
     this.geometry.setIndex(new THREE.BufferAttribute(indices, 1));
     this.mesh.geometry = this.geometry;
     this.local = position;
@@ -384,6 +453,7 @@ export class VineTube {
     const ua = this.ringU[ring]!, ub = this.ringU[ring + 1]!;
     const t = Math.max(0, Math.min(1, (target - ua) / (ub - ua)));
     this.frameAt(target);
+    const SIDES = this.sides, RING = SIDES + 1;
     const stride = this.rings * RING + 2, local = this.local, base = centre.dot(outward);
     let exposed = -Infinity;
     for (let s = 0; s < 3; s++) for (let j = 0; j < SIDES; j++) {

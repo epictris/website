@@ -1313,6 +1313,12 @@ export class BallLevel {
     // the arrival, and by the time `collectContactSparks` runs the solve has
     // already cancelled it (see there).
     const ballSpinBeforeContacts = this.ball.angularVelocity;
+    // A ring the island walked off a hanging cord's free end last frame comes
+    // back as the dangling tip before anything reads the chain's end (see
+    // `Rope.settleRowRunOff`). Only a ring on a link the island owns: a
+    // positional ring is answered at its own first look.
+    const ringEnd = this.ball.chain?.end;
+    if (ringEnd instanceof RopeVineClamp && ringEnd.link.tied) this.ball.chain!.settleRowRunOff();
     // A stiff span the hook has just threaded onto (the swept attach above)
     // leaves the island before the world steps: the hold is positional, and
     // the ring and the island may not both move its links (see

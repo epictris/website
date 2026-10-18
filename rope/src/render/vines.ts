@@ -15,6 +15,7 @@ import { PX } from "../engine/units";
 import { shade } from "./color";
 import { VINE_VISUAL_RADIUS, type Vine } from "../level/vines";
 import { braidLeafAttachment, forEachBraidSegment } from "./vineBraid";
+import { ROPE_COLOR, ROPE_STRAND_RADIUS, forEachRopePoint } from "./ropeLay";
 import { forEachVineLeaf } from "./vineLeaves";
 import { sampleVineCurve, vineMaterial } from "./vineCurve";
 import { VineTwist } from "./vineTwist";
@@ -45,10 +46,38 @@ export function drawVines(
     if (vine.links.length === 0) continue;
     const points: Vec2[] = [];
     vine.path(alpha, points);
-    const color = vine.color ?? VINE_COLOR;
+    const color = vine.color ?? (vine.rope ? ROPE_COLOR : VINE_COLOR);
     ctx.save();
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
+    if (vine.braidSeed !== null && vine.rope) {
+      // The cord in the grooves' shade, then each strand's crown wherever it
+      // passes in front: three strands at the lay, read flat, are the rope's
+      // diagonal ridges.
+      const curve = sampleVineCurve(points, [], [], vine.restLength);
+      let twist = twists.get(vine);
+      if (!twist) { twist = new VineTwist(); twists.set(vine, twist); }
+      twist.update(curve, time, vine.attachedAtBothEnds ?? false);
+      traceVine(ctx, points);
+      ctx.strokeStyle = shade(color, RIM_SHADE);
+      ctx.lineWidth = 2 * (ROPE_STRAND_RADIUS * 2.04);
+      ctx.stroke();
+      ctx.strokeStyle = color;
+      ctx.lineWidth = ROPE_STRAND_RADIUS * 1.5;
+      const previous = Array.from({ length: 3 }, () => [0, 0, 0]);
+      forEachRopePoint(curve, vine.braidSeed, (i, x, y, z, strand) => {
+        const p = previous[strand]!;
+        if (i && z > 0 && p[2]! > 0) {
+          ctx.beginPath();
+          ctx.moveTo(p[0]!, p[1]!);
+          ctx.lineTo(x, y);
+          ctx.stroke();
+        }
+        p[0] = x; p[1] = y; p[2] = z;
+      });
+      ctx.restore();
+      continue;
+    }
     if (vine.braidSeed !== null) {
       const curve = sampleVineCurve(points, [], [], vine.restLength);
       let twist = twists.get(vine);

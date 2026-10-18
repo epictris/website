@@ -19,6 +19,7 @@ import {
 } from "../render/cameraController";
 import { render, renderBall } from "../render/renderer";
 import { SparkSystem } from "../render/sparks";
+import { ROPE_COLOR } from "../render/ropeLay";
 import { DebrisSystem } from "../render/debris";
 import { Level } from "../level/level";
 import { BallLevel } from "../level/ballLevel";
@@ -350,6 +351,7 @@ import {
   writeRootWidths,
   writeViewSetting,
 } from "./prefs";
+import { editorViewHref, MAX_ZOOM, MIN_ZOOM, readEditorView, type EditorView } from "./viewUrl";
 
 type Tool =
   | "select"
@@ -1988,7 +1990,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // the level rather than chrome.
     const vinePaths = model.vines.flatMap((v) => {
       const points = vineRestPath(model, v);
-      return points ? [{ color: v.color, braidSeed: v.braidSeed, points,
+      return points ? [{ color: v.color, braidSeed: v.braidSeed, rope: v.rope, points,
         restLength: Math.max(v.length, points[0]!.distanceTo(points.at(-1)!)),
         attachedAtBothEnds: v.anchor2 !== null,
         ...(v.starberry ? { starberry: starberrySettings(v.starberry, v.length) } : {}) }] : [];
@@ -2017,9 +2019,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     for (const [object, id] of itemOfSceneObject) sceneObjectOfItem.set(id, object);
     sceneLevel = {
       world,
-      vines: vinePaths.map(({ color, braidSeed, points, restLength, attachedAtBothEnds, starberry }) => ({
+      vines: vinePaths.map(({ color, braidSeed, rope, points, restLength, attachedAtBothEnds, starberry }) => ({
         color,
         braidSeed,
+        rope,
         restLength,
         attachedAtBothEnds,
         ...(starberry ? { starberry } : {}),
@@ -6291,32 +6294,38 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // A berry vine draws its own single woody cord, so neither the braid nor
     // the colour has anything to say about one.
     if (!berried) {
-      g = section(group, "vine/Braid", "Braid");
+      // Keyed by its old name, so the open state a browser remembers for it
+      // carries over.
+      g = section(group, "vine/Braid", "Look");
       const braidSeed = document.createElement("input");
       braidSeed.type = "number";
       braidSeed.className = "ed-num";
       braidSeed.min = "0"; braidSeed.max = "2147483647"; braidSeed.step = "1";
       braidSeed.value = String(vines[0]!.braidSeed ?? 1701);
       braidSeed.setAttribute("aria-label", "Vine seed");
-      const braidRow = el("div", "ed-row");
-      braidRow.append(braidSeed, button("Braid selected vine", () => {
+      // Both looks are the braid with the seed in the box: a leafy vine, or
+      // the same three strands laid as rope.
+      const renderAs = (rope: boolean) => () => {
         if (!braidSeed.reportValidity()) return;
         beginAction();
-        for (const vine of vines) vine.braidSeed = Number(braidSeed.value);
+        for (const vine of vines) { vine.braidSeed = Number(braidSeed.value); vine.rope = rope; }
         markDirty(); rebuildInspector();
-      }));
+      };
+      const braidRow = el("div", "ed-row");
+      braidRow.append(braidSeed, button("Render as vine", renderAs(false)), button("Render as rope", renderAs(true)));
       g.appendChild(braidRow);
       const plainRow = el("div", "ed-row");
       plainRow.appendChild(button("Plain vine", () => {
         beginAction();
-        for (const vine of vines) vine.braidSeed = null;
+        for (const vine of vines) { vine.braidSeed = null; vine.rope = false; }
         markDirty(); rebuildInspector();
       }));
       g.appendChild(plainRow);
 
       g = section(group, "vine/Color", "Color");
       const cw = fieldRow("color");
-      const ci = colorInput(vines[0]!.color ?? VINE_DEFAULT_COLOR, beginAction, (hex) => {
+      const roped = vines[0]!.braidSeed !== null && vines[0]!.rope;
+      const ci = colorInput(vines[0]!.color ?? (roped ? ROPE_COLOR : VINE_DEFAULT_COLOR), beginAction, (hex) => {
         for (const v of vines) v.color = hex;
         markDirty();
       });
@@ -8227,6 +8236,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const vine: EdVine = {
       id: newBodyId(),
       braidSeed: null,
+      rope: false,
       anchor: a.id,
       anchor2: null,
       length,
@@ -11181,7 +11191,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     }
     const before = screenToWorld(camera, scr.x, scr.y);
     const factor = Math.exp(-e.deltaY * 0.001);
-    camera.zoom = Math.min(20, Math.max(0.2, camera.zoom * factor));
+    camera.zoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, camera.zoom * factor));
     // Keep the point under the cursor under the cursor - but only head on, where
     // the zoom is a scale about the screen. Orbited it is a DOLLY along the view
     // direction, so the correction would want the ray through the new camera,
@@ -11586,6 +11596,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         );
       }
     } else {
+      syncViewUrl(now);
       // The next ▶ Test's level, while nothing is moving.
       prebuildTest(now);
       // The tree tracks the model, and a drag changes the model every frame
@@ -11730,6 +11741,74 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     requestAnimationFrame(frame);
   }
 
+  // --- the view in the address bar (viewUrl.ts) ------------------------------
+  // What the address said the editor was looking at when the page loaded.
+  const urlView = readEditorView(location.search);
+  // Nothing is written until that view has been taken up (or found to be of
+  // another level): the first frames are of the empty model at its spawn, and
+  // writing them would overwrite the very view the reload is reopening.
+  let viewUrlLive = false;
+  // The view last written and when. `vis` holds the Visuals pose itself: it is
+  // replaced on every change and never mutated, so identity says it moved.
+  let viewWritten: EditorView | null = null;
+  let viewWrittenAt = -Infinity;
+  // At most twice a second, since a pan changes the view every frame and
+  // browsers throttle `replaceState` (Safari: 100 calls in 30 s). The first
+  // frame after a gesture's last half second writes where it ended.
+  const VIEW_URL_INTERVAL_MS = 500;
+
+  function viewMatches(w: EditorView): boolean {
+    return (
+      w.level === currentName &&
+      w.cam !== null &&
+      w.cam.x === camera.position.x &&
+      w.cam.y === camera.position.y &&
+      w.cam.zoom === camera.zoom &&
+      w.cam.yaw === orbit.yaw &&
+      w.cam.pitch === orbit.pitch &&
+      w.vis === (visuals?.view ?? null) &&
+      w.visualsActive === inVisuals() &&
+      w.ortho === (projection === "orthographic")
+    );
+  }
+
+  // Per edit-mode frame. Compared field by field first, so a view standing
+  // still costs no allocation; a ▶ Test is never written, since its camera is
+  // the player's and the editor's comes back when it stops.
+  function syncViewUrl(now: number): void {
+    if (!viewUrlLive || mode !== "edit" || now - viewWrittenAt < VIEW_URL_INTERVAL_MS) return;
+    if (viewWritten && viewMatches(viewWritten)) return;
+    const view: EditorView = {
+      level: currentName,
+      cam: { x: camera.position.x, y: camera.position.y, zoom: camera.zoom, yaw: orbit.yaw, pitch: orbit.pitch },
+      vis: visuals?.view ?? null,
+      visualsActive: inVisuals(),
+      ortho: projection === "orthographic",
+    };
+    const href = editorViewHref(location.href, view);
+    // `window.` because `history` in here is the undo stack.
+    if (href !== location.href) window.history.replaceState(window.history.state, "", href);
+    viewWritten = view;
+    viewWrittenAt = now;
+  }
+
+  function takeUpUrlView(): void {
+    const { cam, vis } = urlView;
+    if (cam) {
+      camera.position = new Vec2(cam.x, cam.y);
+      camera.zoom = cam.zoom;
+      orbit.yaw = cam.yaw;
+      orbit.pitch = Math.max(-MAX_ORBIT_PITCH, Math.min(MAX_ORBIT_PITCH, cam.pitch));
+    }
+    if (urlView.ortho) setProjection("orthographic");
+    // The field of view is the level's lens, which is why the address does
+    // not carry it.
+    if (vis && visuals) visuals.setView({ ...vis, fovYDeg: lensOf(model.camera).fovYDeg });
+    if (urlView.visualsActive) setWorkspace("visuals");
+    refreshOrbitBtn();
+    applyToolCursor();
+  }
+
   // --- boot -----------------------------------------------------------------
   camera.position = model.player.pos;
   setLayer("scene");
@@ -11739,13 +11818,24 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // says it is still on disk; a name that is gone is forgotten rather than
   // reported. Skipped if the empty model was edited, or a level loaded, while
   // the list was on its way: the author has already started on something.
+  //
+  // The address's level comes first (viewUrl.ts): it is this tab's, where the
+  // level last open is the browser's. Its view is taken up only over the level
+  // it was written for - or over the unnamed model, for an address naming none.
   const bootRev = modelRev;
-  void refreshLevelList().then((listed) => {
-    const last = readLastLevel();
-    if (!listed || last === null || modelRev !== bootRev || currentName !== null) return;
-    if ([...loadSel.options].some((o) => o.value === last)) void doLoad(last);
-    else writeLastLevel(null);
-  });
+  void refreshLevelList()
+    .then(async (listed) => {
+      const fresh = modelRev === bootRev && currentName === null;
+      const name = urlView.level ?? readLastLevel();
+      if (fresh && listed && name !== null) {
+        if ([...loadSel.options].some((o) => o.value === name)) await doLoad(name);
+        else if (urlView.level === null) writeLastLevel(null);
+      }
+      if (fresh && currentName === urlView.level) takeUpUrlView();
+    })
+    .finally(() => {
+      viewUrlLive = true;
+    });
   requestAnimationFrame(frame);
 }
 

@@ -240,6 +240,14 @@ export class VisualsWorkspace {
     this.apply();
   }
 
+  // Take up a pose from elsewhere - the address bar's, after a reload (see
+  // editor/viewUrl.ts). Drawn at once while the workspace is active, and
+  // otherwise the pose `enter` starts from in place of the head-on one.
+  setView(pose: ViewPose): void {
+    this.pose = pose;
+    this.apply();
+  }
+
   // Frame a box (three's frame) from the current direction: **F**.
   frameBox(box: Box3): void {
     if (!this.pose) return;

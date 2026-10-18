@@ -383,4 +383,44 @@ for (let frame = 0; frame < 120; frame++) {
     "braid relaxation never alters the released span's physics");
 }
 spanLayer.dispose();
-console.log(`PASS vine braid: material nodes under uneven strain, pinned-end damped torsion, irregular touching stems, zero buried blade vertices in straight/bent/swinging/pulled/released spans, botanical shadows, bounded lag, cleanup, save/load and identical physics (anchor motion ${anchorMotion.toFixed(3)} m, tip deformation ${tipLag.toFixed(3)}, loaded-span twist ${spanTwist.toFixed(5)} rad)`);
+
+// Rope: the braid's seed drawn as laid rope (`VineData.rope`). Render-only like
+// the seed: it survives save/load and scaling, means nothing without a seed,
+// can change under a live layer, grows no leaves and never reaches the sim.
+const ropeModel = modelFromDisk(ball);
+ropeModel.vines[0]!.braidSeed = 1701; ropeModel.vines[0]!.rope = true;
+ropeModel.vines[1]!.braidSeed = null; ropeModel.vines[1]!.rope = true;
+const ropeSaved = modelToDisk(ropeModel), ropeLoaded = modelFromDisk(ropeSaved);
+assert.equal(ropeLoaded.vines[0]!.rope, true, "a rope survives a save");
+assert.equal(ropeSaved.vines![1]!.rope, undefined, "a plain vine saves no rope look");
+assert.equal(ropeLoaded.vines[1]!.rope, false, "a plain vine loads as no rope");
+assert.deepEqual(scaleLevelData(ropeSaved, PX).vines?.map(v => v.rope), ropeSaved.vines?.map(v => v.rope), "the rope look is not a length");
+assert.equal(cloneVine(ropeLoaded.vines[0]!).rope, true, "copy and undo snapshots keep the rope look");
+
+const ropeScene = new THREE.Scene(), ropeLayer = new VineLayer(ropeScene);
+const looking = { ...cord, rope: true };
+ropeLayer.sync([looking], 1);
+const ropeMesh = ropeScene.getObjectByName("vine-rope-tube") as THREE.Mesh;
+assert.ok(ropeMesh?.visible, "a rope is drawn as its own tube");
+assert.equal(ropeScene.getObjectByName("vine-braid-tube"), undefined, "a rope is not also drawn as a braid");
+assert.equal((ropeScene.getObjectByName("vine-leaves") as THREE.InstancedMesh).count, 0, "a rope grows no leaves");
+const ropePosed = (ropeMesh.userData.tube as VineTube).deformedGeometry();
+assert.ok(Array.from(ropePosed.getAttribute("position").array).every(Number.isFinite) &&
+  Array.from(ropePosed.getAttribute("normal").array).every(Number.isFinite), "a posed rope is finite");
+assert.ok(ropeMesh.geometry.getAttribute("uv"), "a rope's strands carry fibre map coordinates");
+looking.rope = false;
+ropeLayer.sync([looking], 1);
+assert.equal(ropeScene.getObjectByName("vine-rope-tube"), undefined, "a vine that stops being rope drops its rope tube");
+assert.ok(ropeScene.getObjectByName("vine-braid-tube")?.visible, "and is drawn as a braid");
+assert.ok((ropeScene.getObjectByName("vine-leaves") as THREE.InstancedMesh).count > 0, "with its leaves back");
+ropeLayer.dispose();
+
+const plainRope = new Level(raw), roped = new Level({ ...raw, vines: [{ ...raw.vines![0]!, braidSeed: 1701, rope: true }] });
+assert.equal(roped.vines[0]!.rope, true, "a built vine carries its rope look to the renderers");
+for (let frame = 0; frame < 120; frame++) {
+  plainRope.physicsProcess(emptyFrameInput(), 1 / 60); roped.physicsProcess(emptyFrameInput(), 1 / 60);
+  assert.deepEqual(roped.vines[0]!.links.map(link => link.globalPosition), plainRope.vines[0]!.links.map(link => link.globalPosition),
+    "the rope look never changes the moving vine's simulation");
+}
+
+console.log(`PASS vine braid: material nodes under uneven strain, pinned-end damped torsion, irregular touching stems, zero buried blade vertices in straight/bent/swinging/pulled/released spans, botanical shadows, bounded lag, cleanup, save/load, the rope look and identical physics (anchor motion ${anchorMotion.toFixed(3)} m, tip deformation ${tipLag.toFixed(3)}, loaded-span twist ${spanTwist.toFixed(5)} rad)`);

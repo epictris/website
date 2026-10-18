@@ -95,7 +95,7 @@ The picked berry shows a square at its root, which slides the root along the vin
 
 The panel's **Berries** section has the vine's `new berry radius` (what a new berry starts at, 15 by default), berry sway, glow and vine seed (the cord's crooked line), `berry density kg/m³` (what the berries are made of, so each weighs its own size; blank is a fruit's 640) and `stem density kg/m` (what the stalks are made of, per metre like the cord, so a longer stalk's stem weighs more; blank is 8.3), neither a pixel length, like the cord's `density` in the Physics section, `stem stretch` (how far a stalk stretches on its spring before its ropes catch it, as a fraction of its length: the bounce; blank is 0.5, and 0 is a stalk that catches the ball dead), a button per berry to pick it, and for the picked berry its `x` and `y` in the level, its `radius` and the `weight` that gives it, its stem's `weight`, where its stalk leaves the vine (`stalk leaves at`, in pixels down the vine from its anchor) and Remove.
 A berry's root is a length down the vine, so changing the vine's length leaves every berry where it is, and neither the length field nor the length handle will make a berry vine shorter than its lowest berry's root.
-A berry vine's cord is its own woody brown, so the Braid and Color sections are not shown for one.
+A berry vine's cord is its own woody brown, so the Look and Color sections are not shown for one.
 At most eight berries a vine.
 
 ## Roots
@@ -364,6 +364,21 @@ Hidden scenery is not picked and not dropped onto: `Scene3D.hitsAt` skips any hi
 The toolbar's view boxes - **snap**, **edge clamp**, **all debug**, **reflections**, **shadows**, **water**, **roots** and **scene** - are remembered by the browser (`localStorage` key `rope.editor.view`, `editor/prefs.ts`), so the editor opens as it was last left; each box writes itself back when it changes.
 So is the level last open (`rope.editor.level`), which a fresh editor reopens: it is written by Load and Save As, and cleared by New and Delete File, so an editor last left on an unnamed model opens empty.
 The reopen waits for the level list and is skipped for a name no longer on disk (forgotten, without a dialog) and for a model already edited while the list was on its way.
+
+**The view is in the address bar**, the way a map keeps its centre and zoom, so a reload - the dev server's, after an edit to the editor itself - comes back looking at the same place instead of at the spawn (`editor/viewUrl.ts`):
+
+```
+/editor?level=ball&cam=12.5,-3.25,2,-0.6,0.3&vis=12.5,3.25,0,0.9,0.24,1.73&ws=visuals&lens=ortho
+```
+
+`level` is the level open, and wins over the remembered one, since it is this tab's where `rope.editor.level` is the browser's.
+`cam` is the Level workspace's view: the 2D camera's centre (sim metres, y down) and zoom, then the orbit's yaw and pitch (radians) when it is turned.
+`vis` is the Visuals workspace's pose once it has one - target (three's frame, y up), yaw, pitch, half height; the field of view is the level's lens, so it is not carried.
+`ws=visuals` and `lens=ortho` are the workspace and the lens when they are not the defaults.
+Each workspace keeps its own view, so both are written and each gets its own back.
+The view is taken up only over the level it was written for: a `level` no longer on disk opens the editor empty and the stale view is dropped.
+It is written with `replaceState` (no history entries) at most twice a second, never during ▶ Test, and not at all until the boot load has taken the address's view up, since the first frames are of the empty model and would overwrite it.
+Any other query parameter is left alone.
 
 `cli shot --probe --query "reflections=0&shadows=0&water=0&roots=0"` replays a bundle with the same four switches off, so its log lists what an editor test set up that way still compiles mid-run.
 

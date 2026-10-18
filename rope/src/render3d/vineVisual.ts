@@ -1,5 +1,5 @@
-// Plain cords use instanced capsules; braids use continuous dynamic tubes;
-// berry vines are drawn by their own layer (`StarberryLayer`).
+// Plain cords use instanced capsules; braids and ropes use continuous dynamic
+// tubes; berry vines are drawn by their own layer (`StarberryLayer`).
 // Each braid has one reusable mesh containing its three strands. Unlike a
 // scene chain's wrap nodes, a vine's path comes from its real physics links.
 //
@@ -29,6 +29,7 @@ import { LEAF_CHORD, RING_HALF_WIDTH, VineLeafFold, wrapRadius } from "./vineLea
 import { vineRandom } from "../render/vineGrowth";
 import { forEachVineLeaf } from "../render/vineLeaves";
 import { braidLeafAttachment } from "../render/vineBraid";
+import { ROPE_COLOR } from "../render/ropeLay";
 import { threeY } from "./space";
 import { StarberryLayer } from "./starberryVisual";
 
@@ -173,25 +174,30 @@ export class VineLayer {
     this.count = 0;
     this.leafCount = 0;
     for (const [vine, tube] of this.braids) {
-      if (!vines.includes(vine) || vine.braidSeed === null || vine.starberry) { tube.dispose(); this.braids.delete(vine); }
-      else tube.mesh.visible = false;
+      // A tube is a braid or a rope for its whole life, so a vine that has
+      // changed look is given a new one.
+      if (!vines.includes(vine) || vine.braidSeed === null || vine.starberry || tube.rope !== (vine.rope ?? false)) {
+        tube.dispose(); this.braids.delete(vine);
+      } else tube.mesh.visible = false;
     }
     for (const vine of vines) {
       // A berry vine is the berry layer's alone (`StarberryLayer`).
       if (vine.starberry) continue;
       vine.path(alpha, this.path);
       if (this.path.length < 2) continue;
-      this.tint.set(vine.color ?? DEFAULT_TINT);
+      // A rope's fibres carry its tone and the tint is its colour; a vine's
+      // tint multiplies its own painted green.
+      this.tint.set(vine.color ?? (vine.rope ? ROPE_COLOR : DEFAULT_TINT));
       if (vine.braidSeed === null) this.lay(this.path);
       else {
         let tube = this.braids.get(vine);
-        if (!tube) { tube = new VineTube(); this.braids.set(vine, tube); this.scene.add(tube.mesh); }
+        if (!tube) { tube = new VineTube(vine.rope ?? false); this.braids.set(vine, tube); this.scene.add(tube.mesh); }
         const restLength = vine.restLength ?? tube.restLengthFor(this.path);
         sampleVineCurve(this.path, this.curve, this.curveStorage, restLength);
         if (this.curve.length < 2) continue;
         tube.twist.update(this.curve, time, vine.attachedAtBothEnds ?? false);
         tube.sync(this.path, restLength, vine.braidSeed, this.tint, vine.attachedAtBothEnds);
-        this.layLeaves(this.path, vine.braidSeed, tube, time, ring !== null && ring.vine === vine ? ring.u : null);
+        if (!tube.rope) this.layLeaves(this.path, vine.braidSeed, tube, time, ring !== null && ring.vine === vine ? ring.u : null);
       }
     }
     // Grow only after the walk, then fill the fresh buffers before displaying
