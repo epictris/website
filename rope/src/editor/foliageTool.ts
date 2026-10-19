@@ -1,3 +1,4 @@
+import { DEFAULT_CRYSTAL_SETTINGS, crystalDimensions, generateCrystal, disposeCrystal, findCrystalSpots, type CrystalSettings, type CrystalRecipe } from "../render3d/foliage/crystal";
 import * as THREE from "three";
 import type { EdItem } from "./model";
 import { vineSurfaceSoup, exportHangingVine, glbBase64 } from "./hangingVineTool";
@@ -35,7 +36,7 @@ export interface FoliageContext {
   editable(): boolean;
   pick(screen: { x: number; y: number }): { host: EdItem; point: THREE.Vector3; normal: THREE.Vector3 } | null;
   commit(items: FoliageCommit[]): void;
-  activate(kind: "hangingVine" | "fern"): void;
+  activate(kind: "hangingVine" | "fern" | "crystal"): void;
 }
 
 export function createFoliageTool(ctx: FoliageContext) {
@@ -59,6 +60,8 @@ export function createFoliageTool(ctx: FoliageContext) {
   let previewRevision = -1;
   let results: { draft: Draft; group: THREE.Group; obstacles: VineObstacle[]; bounds: THREE.Box3 }[] = [];
   let vineSettings = { ...defaults }, fernSettings = { ...DEFAULT_FERN_SETTINGS };
+  let crystalSettings: CrystalSettings = structuredClone(DEFAULT_CRYSTAL_SETTINGS);
+  let selectedCrystal = 0;
   const library = new LeafLibrary(leafAtlas);
   let assets: Promise<{ fern: THREE.Texture; leaflet: THREE.Texture; sprig: THREE.Texture }> | undefined;
   async function loadAssets() {
@@ -81,7 +84,8 @@ export function createFoliageTool(ctx: FoliageContext) {
     for (const r of results) {
       preview.remove(r.group);
       disposeFoliageWind(r.group);
-      if (r.draft.kind === "fern") disposeFern(r.group);
+      if (r.draft.kind === "crystal") disposeCrystal(r.group);
+      else if (r.draft.kind === "fern") disposeFern(r.group);
       else if (r.draft.kind === "legacy-vine") disposeLegacy(r.group);
       else disposeHangingVine(r.group);
     }
@@ -130,7 +134,7 @@ export function createFoliageTool(ctx: FoliageContext) {
   btn("Edit selected plant", async () => {
     const item = ctx.selected();
     const id = item?.visual.mesh.match(/^(?:vine-v3|foliage-v1):([a-f0-9-]{36}):/)?.[1];
-    if (!item || !id) throw new Error("Select a generated vine or fern first.");
+    if (!item || !id) throw new Error("Select a generated vine, fern, or crystal patch first.");
     const ticket = ++epoch, revision = ctx.revision(); setBusy(true);
     try {
       const response = await fetch(`/api/foliage/${id}`); const saved = await response.json();
@@ -150,7 +154,15 @@ export function createFoliageTool(ctx: FoliageContext) {
       if (!Number.isFinite(scale) || scale <= 0) throw new Error("Invalid plant scale.");
       const transformPoint = (p: number[]) => new THREE.Vector3(...p).applyMatrix4(oldFrame).sub(origin).toArray() as [number, number, number];
       recipe.normal = new THREE.Vector3(...recipe.normal).applyMatrix3(new THREE.Matrix3().getNormalMatrix(oldFrame)).normalize().toArray();
-      if (kind === "fern") {
+      if (kind === "crystal") {
+        const r = recipe as CrystalRecipe; r.root = transformPoint(r.root);
+        r.settings.height *= scale; r.settings.radius *= scale;
+        for (const dimensions of Object.values(r.settings.crystals ?? {})) {
+          if (dimensions.height !== undefined) dimensions.height *= scale;
+          if (dimensions.width !== undefined) dimensions.width *= scale;
+        }
+        crystalSettings = structuredClone(r.settings);
+      } else if (kind === "fern") {
         const r = recipe as FernRecipe; r.root = transformPoint(r.root); r.open = new THREE.Vector3(...r.open).transformDirection(oldFrame).toArray();
         r.settings.length *= scale; fernSettings = { ...r.settings };
       } else {
@@ -159,20 +171,22 @@ export function createFoliageTool(ctx: FoliageContext) {
         vineSettings = { ...r.settings };
       }
       draft = { host, frame, recipe, kind, replace: item, ready: true };
-      ctx.activate(kind === "fern" ? "fern" : "hangingVine");
+      ctx.activate(kind === "crystal" ? "crystal" : kind === "fern" ? "fern" : "hangingVine");
       renderFields(); status.textContent = "Settings loaded. Preview, then Apply to replace this plant.";
     } finally { setBusy(false); }
   });
-  btn("New seed", () => { const s = active === "fern" ? fernSettings : vineSettings; s.seed = Math.floor(Math.random() * 2147483647); invalidate(); renderFields(); });
+  btn("New seed", () => { const s = active === "crystal" ? crystalSettings : active === "fern" ? fernSettings : vineSettings; s.seed = Math.floor(Math.random() * 2147483647); invalidate(); renderFields(); });
   btn("Reset", () => {
-    const seed = active === "fern" ? fernSettings.seed : vineSettings.seed;
-    if (active === "fern") fernSettings = { ...DEFAULT_FERN_SETTINGS, ...varietyDefaults(fernSettings.variety), seed };
+    const seed = active === "crystal" ? crystalSettings.seed : active === "fern" ? fernSettings.seed : vineSettings.seed;
+    if (active === "crystal") crystalSettings = { ...DEFAULT_CRYSTAL_SETTINGS, seed };
+    else if (active === "fern") fernSettings = { ...DEFAULT_FERN_SETTINGS, ...varietyDefaults(fernSettings.variety), seed };
     else { vineSettings = { ...defaults, seed }; if (draft?.kind === "legacy-vine") draft.kind = "vine"; }
     invalidate(); renderFields();
   });
   btn("Cancel", cancel);
-  btn("Re-aim", () => {
+  const reaim = btn("Re-aim", () => {
     if (!draft) throw new Error("Place or edit a plant first.");
+    if (draft.kind === "crystal") { status.textContent = "Crystals follow the surface normal. Use Re-place to move the patch."; return; }
     invalidate(); draft.ready = false;
     status.textContent = "Click a second point on the host to set the direction.";
   });
@@ -191,11 +205,11 @@ export function createFoliageTool(ctx: FoliageContext) {
     const input = document.createElement("input"); input.type = "checkbox"; input.checked = checked;
     input.onchange = () => { if (regenerates) invalidate(); update(input.checked); }; labelled(label, input, parent);
   }
-  function select(label: string, value: string, choices: [string, string][], update: (value: string) => void, parent = fields) {
+  function select(label: string, value: string, choices: [string, string][], update: (value: string) => void, parent = fields, regenerates = true) {
     const input = document.createElement("select"); input.className = "ed-select";
     for (const [id, text] of choices) { const option = new Option(text, id); input.append(option); }
     if (!choices.some(([id]) => id === value)) input.append(new Option("Custom selection", value));
-    input.value = value; input.onchange = () => { invalidate(); update(input.value); }; labelled(label, input, parent);
+    input.value = value; input.onchange = () => { if (regenerates) invalidate(); update(input.value); }; labelled(label, input, parent);
   }
   function renderLeaves() {
     leafGrid.replaceChildren();
@@ -219,7 +233,31 @@ export function createFoliageTool(ctx: FoliageContext) {
   }
   function renderFields() {
     fields.replaceChildren(); more.replaceChildren();
-    const fern = active === "fern"; scatterButton.style.display = fern ? "" : "none"; leafPicker.style.display = fern ? "none" : "";
+    const fern = active === "fern", crystal = active === "crystal";
+    scatterButton.style.display = fern || crystal ? "" : "none"; leafPicker.style.display = fern || crystal ? "none" : "";
+    reaim.style.display = crystal ? "none" : "";
+    if (crystal) {
+      generate.textContent = "Preview crystals";
+      const controls: [keyof CrystalSettings, string, number, number, number][] = [["shards", "Shards per patch", 1, 40, 1], ["height", "Patch height (m)", .05, 3, .05], ["width", "Shard width ×", .2, 3, .05], ["shapeVariation", "Shape variation", 0, 1, .05], ["radius", "Patch radius (m)", .03, 2, .01], ["glow", "Glow", 0, 3, .1], ["variation", "Size variation", 0, 1, .05], ["lean", "Outward lean", 0, 1, .05], ["seed", "Seed", 0, 2147483647, 1]];
+      for (const [key, label, min, max, step] of controls) numeric(label, (crystalSettings[key] ?? DEFAULT_CRYSTAL_SETTINGS[key]) as number, min, max, step, value => { (crystalSettings as unknown as Record<string, unknown>)[key] = value; renderFields(); }, key === "seed" || key === "lean" || key === "variation" ? more : fields);
+      select("Colour", crystalSettings.palette, [["azure", "Blue / violet"], ["violet", "Amethyst"], ["mint", "Mint / cyan"]], value => crystalSettings.palette = value as CrystalSettings["palette"]);
+      numeric("Scatter count", scatterCount, 1, 30, 1, value => scatterCount = value);
+      numeric("Patch spacing (m)", spacing, .05, 3, .05, value => spacing = value);
+      selectedCrystal = Math.min(selectedCrystal, crystalSettings.shards - 1);
+      const individual = document.createElement("details"); individual.open = true;
+      const heading = document.createElement("summary"); heading.textContent = "Individual crystals"; individual.append(heading);
+      const row = document.createElement("div"); row.className = "ed-row"; individual.append(row); fields.append(individual);
+      select("Crystal", String(selectedCrystal), Array.from({ length: crystalSettings.shards }, (_, i) => [String(i), i === 0 ? "1 · centre" : `${i + 1} · outward spiral`]), value => { selectedCrystal = Number(value); renderFields(); }, row, false);
+      const dimensions = crystalDimensions(crystalSettings, selectedCrystal);
+      for (const key of ["height", "width"] as const) numeric(key === "height" ? "This crystal height (m)" : "This crystal width (m)", Number(dimensions[key].toFixed(3)), .01, 3, .01, value => {
+        const overrides = { ...crystalSettings.crystals };
+        overrides[String(selectedCrystal)] = { ...overrides[String(selectedCrystal)], [key]: value };
+        crystalSettings = { ...crystalSettings, crystals: overrides };
+      }, row);
+      btn("Reset this crystal", () => { const overrides = { ...crystalSettings.crystals }; delete overrides[String(selectedCrystal)]; crystalSettings = { ...crystalSettings, crystals: overrides }; invalidate(); renderFields(); }, row);
+      const hint = document.createElement("span"); hint.textContent = "Individual dimensions override the patch settings; Preview shows changes."; fields.append(hint);
+      apply.disabled = !results.length; return;
+    }
     generate.textContent = fern ? "Preview fern" : "Preview vine";
     if (fern) {
       select("Variety", fernSettings.variety, [["painted", "Painted fronds"], ["leaflet", "Leaflets on stems"], ["sprig", "Leaf sprigs"]], value => {
@@ -281,6 +319,7 @@ export function createFoliageTool(ctx: FoliageContext) {
     apply.disabled = !results.length;
   }
   function readRecipe(d: Draft): FoliageRecipe {
+    if (d.kind === "crystal") return { ...(d.recipe as CrystalRecipe), settings: structuredClone(crystalSettings) };
     return d.kind === "fern" ? { ...(d.recipe as FernRecipe), settings: { ...fernSettings } } : { ...(d.recipe as HangingVineRecipe), settings: { ...vineSettings } };
   }
   async function grow(scatter = false) {
@@ -288,12 +327,14 @@ export function createFoliageTool(ctx: FoliageContext) {
     let d = draft;
     if (scatter) {
       const selected = ctx.selected(); const host = d?.host ?? (selected && !isGeneratedFoliage(selected.visual.mesh) ? selected : null);
-      if (!host || !ctx.meshes(host).length) throw new Error("Select a rock or click its surface before scattering ferns.");
+      if (!host || !ctx.meshes(host).length) throw new Error("Select a rock or click its surface before scattering patches.");
       const origin = new THREE.Vector3().setFromMatrixPosition(ctx.frame(host));
-      d = { host, frame: new THREE.Matrix4().makeTranslation(origin.x, origin.y, origin.z), kind: "fern", replace: null, ready: true,
+      if (active === "crystal") d = { host, frame: new THREE.Matrix4().makeTranslation(origin.x, origin.y, origin.z), kind: "crystal", replace: null, ready: true,
+        recipe: { version: 1, kind: "crystal", root: [0, 0, 0], normal: [0, 1, 0], settings: structuredClone(crystalSettings) } };
+      else d = { host, frame: new THREE.Matrix4().makeTranslation(origin.x, origin.y, origin.z), kind: "fern", replace: null, ready: true,
         recipe: { version: 1, kind: "fern", root: [0, 0, 0], normal: [0, 1, 0], open: [1, 0, 0], settings: { ...fernSettings } } };
     }
-    if (!d || !d.ready) throw new Error(active === "fern" ? "Click the host surface to place a fern." : "Click the root, then a second point on the same host for direction.");
+    if (!d || !d.ready) throw new Error(active === "crystal" ? "Click the host surface to place a crystal patch." : active === "fern" ? "Click the host surface to place a fern." : "Click the root, then a second point on the same host for direction.");
     const host = ctx.host(d.host.id);
     if (!host) throw new Error("The original host was removed. Re-place the plant.");
     d = { ...d, host };
@@ -301,9 +342,9 @@ export function createFoliageTool(ctx: FoliageContext) {
       const blades = fernSettings.fronds * (fernSettings.variety === "painted" ? 1 : fernSettings.pinnae * 2 * Math.max(1, fernSettings.leaflets * 2));
       if (blades * (scatter ? scatterCount : 1) > 10000) throw new Error("This preview would contain too many leaves. Reduce fronds, leaf pairs, tiny leaves, or scatter count.");
     }
-    invalidate(); const ticket = epoch, revision = ctx.revision(); setBusy(true); status.textContent = scatter ? "Finding fern spots…" : "Growing preview…";
+    invalidate(); const ticket = epoch, revision = ctx.revision(); setBusy(true); status.textContent = scatter ? "Finding surface spots…" : "Growing preview…";
     try {
-      const textures = await loadAssets();
+      const textures = d.kind === "crystal" ? null : await loadAssets();
       if (ticket !== epoch) return;
       const soup = vineSurfaceSoup(ctx.meshes(d.host), d.frame);
       const surface = new VineSurface(soup);
@@ -326,14 +367,18 @@ export function createFoliageTool(ctx: FoliageContext) {
           for (let i = 0; i < positions.count; i += stride) avoid.push({ centre: new THREE.Vector3().fromBufferAttribute(positions, i).applyMatrix4(transform), radius: .018 });
         }
       }
-      const drafts: Draft[] = scatter ? findFernSpots(surface, soup, fernSettings, existingRoots, scatterCount, spacing, fernSettings.seed).map((spot, i) => ({ ...d!,
+      const drafts: Draft[] = scatter && d.kind === "crystal" ? findCrystalSpots(soup, existingRoots, scatterCount, spacing, crystalSettings).map((spot, i) => ({ ...d!, recipe: { version: 1, kind: "crystal", root: spot.point.toArray(), normal: spot.normal.toArray(), settings: { ...structuredClone(crystalSettings), seed: (crystalSettings.seed + i * 97) % 2147483648 } } })) : scatter ? findFernSpots(surface, soup, fernSettings, existingRoots, scatterCount, spacing, fernSettings.seed).map((spot, i) => ({ ...d!,
         recipe: { version: 1, kind: "fern", root: spot.point.toArray(), normal: spot.normal.toArray(), open: spot.open.toArray(), settings: { ...fernSettings, seed: (fernSettings.seed + i * 97) % 2147483648 } } })) : [{ ...d, recipe: readRecipe(d) }];
       let vertices = 0;
       for (const input of drafts) {
         if (ticket !== epoch || revision !== ctx.revision()) throw new Error("The level changed. Preview again.");
         let group: THREE.Group, obstacles: VineObstacle[] = [];
-        if (input.kind === "fern") {
-          const result = generateFern(surface, input.recipe as FernRecipe, { texture: textures.fern, leafletTexture: textures.leaflet, sprigTexture: textures.sprig, avoid });
+        if (input.kind === "crystal") {
+          const result = generateCrystal(surface, input.recipe as CrystalRecipe, avoid);
+          if (!result.shardCount) { disposeCrystal(result.group); continue; }
+          group = result.group; obstacles = result.obstacles;
+        } else if (input.kind === "fern") {
+          const result = generateFern(surface, input.recipe as FernRecipe, { texture: textures!.fern, leafletTexture: textures!.leaflet, sprigTexture: textures!.sprig, avoid });
           group = result.group; obstacles = result.obstacles;
         } else if (input.kind === "legacy-vine") {
           const result = generateLegacy(soup, input.recipe as HangingVineRecipe); group = result.group;
@@ -360,7 +405,7 @@ export function createFoliageTool(ctx: FoliageContext) {
       }
       if (ticket !== epoch || revision !== ctx.revision()) throw new Error("The level changed. Preview again.");
       previewRevision = revision;
-      status.textContent = scatter ? `${results.length} of ${scatterCount} suitable fern placements. Apply saves the batch; Cancel discards it.` : "Preview ready. Apply saves this plant; Cancel discards it.";
+      status.textContent = !results.length ? "No suitable placements. Try a larger surface, smaller patch, or another seed." : scatter ? `${results.length} of ${scatterCount} suitable placements. Apply saves the batch; Cancel discards it.` : "Preview ready. Apply saves this patch; Cancel discards it.";
     } catch (error) { release(); throw error; }
     finally { setBusy(false); }
   }
@@ -369,7 +414,10 @@ export function createFoliageTool(ctx: FoliageContext) {
     const hit = ctx.pick(screen);
     if (!hit) { status.textContent = "Click a rock or another visible model surface."; return; }
     invalidate();
-    if (active === "fern") {
+    if (active === "crystal") {
+      draft = { host: hit.host, frame: new THREE.Matrix4().makeTranslation(...hit.point.toArray()), kind: "crystal", replace: null, ready: true, recipe: { version: 1, kind: "crystal", root: [0, 0, 0], normal: hit.normal.toArray(), settings: structuredClone(crystalSettings) } };
+      status.textContent = "Crystal patch placed. Preview crystals to check its shape.";
+    } else if (active === "fern") {
       if (draft?.kind === "fern" && draft.host.id === hit.host.id) {
         const r = draft.recipe as FernRecipe;
         const root = new THREE.Vector3(...r.root).applyMatrix4(draft.frame);
@@ -396,12 +444,13 @@ export function createFoliageTool(ctx: FoliageContext) {
     }
   }
   function refresh(tool: string, visible: boolean) {
-    const kind = tool === "fern" ? "fern" : tool === "hangingVine" ? "hangingVine" : "";
+    const kind = tool === "crystal" ? "crystal" : tool === "fern" ? "fern" : tool === "hangingVine" ? "hangingVine" : "";
     if (kind !== active) {
       // Editing deliberately activates the appropriate tool after loading a draft.
-      if (draft && ((draft.kind === "fern") !== (kind === "fern") || !kind)) cancel();
+      if (!draft && results.length) cancel();
+      if (draft && ((draft.kind === "fern") !== (kind === "fern") || (draft.kind === "crystal") !== (kind === "crystal") || !kind)) cancel();
       active = kind; renderFields();
-      if (!draft && !results.length && kind) status.textContent = kind === "fern"
+      if (!draft && !results.length && kind) status.textContent = kind === "crystal" ? "Click a surface for a crystal patch, or select a host and Preview scatter." : kind === "fern"
         ? "Click a surface for a fern, or select a host and Preview scatter."
         : "Click a root, then a crawl direction on the same host.";
     }
@@ -411,7 +460,7 @@ export function createFoliageTool(ctx: FoliageContext) {
       const r = draft.recipe;
       rootMarker.position.copy(new THREE.Vector3(...("root" in r ? r.root : r.start)).applyMatrix4(draft.frame));
       directionMarker.position.copy(rootMarker.position);
-      directionMarker.setDirection(new THREE.Vector3(...("open" in r ? r.open : r.direction)).normalize());
+      directionMarker.setDirection(new THREE.Vector3(...("open" in r ? r.open : "direction" in r ? r.direction : r.normal)).normalize());
       directionMarker.visible = draft.ready;
     }
     if (results.length && previewRevision !== ctx.revision() && !busy) { invalidate(); status.textContent = "The level changed. Preview again."; }

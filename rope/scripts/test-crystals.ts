@@ -1,0 +1,67 @@
+import assert from 'node:assert/strict';
+import * as THREE from 'three';
+import { generateCrystal, crystalDimensions, disposeCrystal, findCrystalSpots, validateCrystalRecipe, DEFAULT_CRYSTAL_SETTINGS, type CrystalRecipe } from '../src/render3d/foliage/crystal';
+import { VineSurface } from '../src/render3d/foliage/vine/hangingVine';
+import { validateSavedFoliage } from '../src/render3d/foliage/recipe';
+const soup = new Float32Array([-3,0,-3,-3,0,3,3,0,-3,3,0,-3,-3,0,3,3,0,3]);
+const surface = new VineSurface(soup);
+const recipe: CrystalRecipe = {version:1,kind:'crystal',root:[0,0,0],normal:[0,1,0],settings:{...DEFAULT_CRYSTAL_SETTINGS}};
+const a=generateCrystal(surface,recipe), b=generateCrystal(surface,recipe);
+assert.equal(a.shardCount,11);
+const mesh=a.group.children[0] as THREE.Mesh;
+assert.deepEqual(mesh.geometry.getAttribute('position').array,(b.group.children[0] as THREE.Mesh).geometry.getAttribute('position').array);
+assert.ok(mesh.geometry.getAttribute('position').count / 3 < 600);
+assert.ok(Array.from(mesh.geometry.getAttribute('position').array).every(Number.isFinite));
+assert.ok(!mesh.geometry.hasAttribute('sway'));
+const halo=a.group.getObjectByName('Crystal halo') as THREE.Mesh;
+assert.ok(halo);
+assert.equal(halo.geometry.getAttribute('position').count, a.shardCount * 18);
+assert.ok(new Set(Array.from(halo.geometry.getAttribute('color').array)).size > 3);
+assert.equal((halo.material as THREE.MeshBasicMaterial).depthWrite,false);
+assert.ok((halo.material as THREE.MeshBasicMaterial).transparent);
+const noGlow=generateCrystal(surface,{...recipe,settings:{...recipe.settings,glow:0}});
+assert.equal(noGlow.group.getObjectByName('Crystal halo'),undefined);
+disposeCrystal(noGlow.group);
+const changed=generateCrystal(surface,{...recipe,settings:{...recipe.settings,seed:72}});
+assert.notDeepEqual(mesh.geometry.getAttribute('position').array,(changed.group.children[0] as THREE.Mesh).geometry.getAttribute('position').array);
+const spots=findCrystalSpots(soup,[],12,.2,recipe.settings);
+assert.equal(spots.length,12);
+for(let i=0;i<spots.length;i++) for(let j=0;j<i;j++) assert.ok(spots[i].point.distanceTo(spots[j].point)>=recipe.settings.radius*2);
+assert.deepEqual(spots,findCrystalSpots(soup,[],12,.2,recipe.settings));
+const blocked=generateCrystal(surface,recipe,[{centre:new THREE.Vector3(0,.2,0),radius:10}]);assert.equal(blocked.shardCount,0);
+assert.throws(()=>validateCrystalRecipe({...recipe,normal:[0,0,0]}));
+assert.throws(()=>validateCrystalRecipe({...recipe,settings:{...recipe.settings,shards:1.5}}));
+assert.throws(()=>validateCrystalRecipe({...recipe,settings:{...recipe.settings,glow:NaN}}));
+validateSavedFoliage({version:2,kind:'crystal',recipe,hostId:1,hostMesh:'rock',hostIndex:0});
+for(const r of [a,b,changed,blocked])disposeCrystal(r.group);
+console.log('Crystal checks passed: deterministic geometry, triangle budget, spacing, obstacles, validation and saved recipes.');
+
+const custom = {...recipe, settings:{...recipe.settings, crystals:{'0':{height:1.1,width:.28}}}};
+assert.deepEqual(crystalDimensions(custom.settings,0),{height:1.1,width:.28});
+assert.deepEqual(crystalDimensions(custom.settings,1),crystalDimensions(recipe.settings,1));
+const original=generateCrystal(surface,recipe), edited=generateCrystal(surface,custom);
+const before=(original.group.children[0] as THREE.Mesh).geometry.getAttribute('position').array;
+const after=(edited.group.children[0] as THREE.Mesh).geometry.getAttribute('position').array;
+assert.equal(before.length,after.length);
+assert.notDeepEqual(before.slice(0,90),after.slice(0,90));
+assert.deepEqual(before.slice(-90),after.slice(-90));
+assert.equal(generateCrystal(surface,{...recipe,settings:{...recipe.settings,shards:3}}).shardCount,3);
+assert.throws(()=>validateCrystalRecipe({...recipe,settings:{...recipe.settings,crystals:{'40':{height:.5}}}}));
+assert.throws(()=>validateCrystalRecipe({...recipe,settings:{...recipe.settings,crystals:{'0':{width:-1}}}}));
+validateSavedFoliage({version:2,kind:'crystal',recipe:JSON.parse(JSON.stringify(custom)),hostId:1,hostMesh:'rock',hostIndex:0});
+disposeCrystal(original.group);disposeCrystal(edited.group);
+console.log('Individual edits passed: exact dimensions, independent neighbours, count and recipe validation.');
+
+// The long body faces must actually change plane, not just receive painted diagonals.
+const faceted=generateCrystal(surface,{...recipe,settings:{...recipe.settings,shapeVariation:1}});
+const facets=(faceted.group.children[0] as THREE.Mesh).geometry;
+const normals=facets.getAttribute('normal');
+const n0=new THREE.Vector3().fromBufferAttribute(normals,0), n1=new THREE.Vector3().fromBufferAttribute(normals,3);
+assert.ok(n0.dot(n1)<.9999,'Body triangles should form distinct uneven facets');
+const points=facets.getAttribute('position'), triangle=new THREE.Triangle();
+for(let i=0;i<points.count;i+=3){
+ triangle.a.fromBufferAttribute(points,i);triangle.b.fromBufferAttribute(points,i+1);triangle.c.fromBufferAttribute(points,i+2);
+ assert.ok(triangle.getArea()>1e-10,'Facet must not collapse');
+}
+disposeCrystal(faceted.group);
+console.log('Uneven body facets passed: distinct planes and non-degenerate triangles.');

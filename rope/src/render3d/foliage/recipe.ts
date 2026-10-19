@@ -1,11 +1,12 @@
+import { validateCrystalRecipe, type CrystalRecipe } from "./crystal";
 import { validateHangingVineRecipe, type HangingVineRecipe } from "./vine/hangingVine";
 import { validateFernRecipe, type FernRecipe } from "./vine/fern";
 import type { SavedLeaf } from "./leafLibrary";
 
-export type FoliageRecipe = HangingVineRecipe | FernRecipe;
+export type FoliageRecipe = HangingVineRecipe | FernRecipe | CrystalRecipe;
 export interface SavedFoliage {
   version: 2;
-  kind: "vine" | "fern" | "legacy-vine";
+  kind: "vine" | "fern" | "crystal" | "legacy-vine";
   recipe: FoliageRecipe;
   hostId: number;
   hostMesh: string;
@@ -16,7 +17,7 @@ export interface SavedFoliage {
 export function validateSavedFoliage(value: unknown): asserts value is SavedFoliage {
   if (!value || typeof value !== "object") throw new Error("Missing plant recipe.");
   const saved = value as SavedFoliage;
-  if (saved.version !== 2 || !["vine", "fern"].includes(saved.kind)) throw new Error("Unsupported plant recipe.");
+  if (saved.version !== 2 || !["vine", "fern", "crystal"].includes(saved.kind)) throw new Error("Unsupported plant recipe.");
   if (!Number.isSafeInteger(saved.hostId) || saved.hostId < 0 ||
       !Number.isSafeInteger(saved.hostIndex) || saved.hostIndex < 0 || saved.hostIndex > 10000 ||
       typeof saved.hostMesh !== "string" || saved.hostMesh.length > 300) throw new Error("Invalid host reference.");
@@ -28,6 +29,7 @@ export function validateSavedFoliage(value: unknown): asserts value is SavedFoli
     if (!Number.isInteger(r.settings.seed) || Math.hypot(...r.normal) < .1 || Math.hypot(...r.open) < .01)
       throw new Error("Choose a valid fern direction and an integer seed.");
   }
+  else if (saved.kind === "crystal") validateCrystalRecipe(recipe as CrystalRecipe);
   else validateHangingVineRecipe(recipe as HangingVineRecipe);
   if (saved.customLeaves !== undefined) {
     if (!Array.isArray(saved.customLeaves) || saved.customLeaves.length > 36) throw new Error("Too many custom leaves.");

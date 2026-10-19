@@ -373,7 +373,8 @@ type Tool =
   | "grass"
   | "plant"
   | "hangingVine"
-  | "fern";
+  | "fern"
+  | "crystal";
 
 const isSurfaceTool = (t: Tool): boolean => t === "mushroom" || t === "grass" || t === "plant";
 
@@ -403,6 +404,7 @@ const LAYER_TOOLS: Record<EdLayer, Tool[]> = {
     "plant",
     "hangingVine",
     "fern",
+    "crystal",
     "light",
     "glow",
     "fireflies",
@@ -448,6 +450,7 @@ const TOOL_WORKSPACES: Record<Tool, ToolWorkspace> = {
   plant: "visuals",
   hangingVine: "visuals",
   fern: "visuals",
+  crystal: "visuals",
 };
 
 // Kinds a chain may be tied to. An area is a region, not a body - nothing hangs
@@ -3052,7 +3055,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   surfaceSettingsRow.append(labelWrap("max slope°", mushroomSlope), mushroomStatus);
   bar.appendChild(surfaceSettingsRow);
   function refreshFoliageControls(): void {
-    const decorativePlant = tool === "hangingVine" || tool === "fern";
+    const decorativePlant = tool === "hangingVine" || tool === "fern" || tool === "crystal";
     bar.classList.toggle("ed-foliage-active", decorativePlant);
     for (const row of [rootsRow, boulderRow, dirtRow, vineRow]) row.style.display = decorativePlant ? "none" : "";
     mushroomRow.style.display = tool === "mushroom" ? "" : "none";
@@ -3083,6 +3086,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     plant: button("+ Plants", () => setTool("plant")),
     hangingVine: button("+ Hanging vine", () => setTool("hangingVine")),
     fern: button("+ Fern", () => setTool("fern")),
+    crystal: button("+ Crystals", () => setTool("crystal")),
     glow: button("+ Glow", () => setTool("glow")),
     fireflies: button("+ Fireflies", () => setTool("fireflies")),
     rock: button("+ Rock", () => setTool("rock")),
@@ -3099,6 +3103,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   toolBtns.plant.title =
     "Click an outline onto a model in Visuals, then Enter to close it; Generate plants grows the ticked cave plants (alocasia, bird's nest, ferns, creepers, hanging ivy) on the covered faces. With hanging ivy ticked the outline also takes the faces that look down.";
   toolBtns.hangingVine.title = "Click a root and crawl direction on one model. Preview grows the vine; Apply saves it. Edit selected plant restores its recipe.";
+  toolBtns.crystal.title = "Place a painted glowing crystal patch on a model, or select a model and Preview scatter. Apply saves the patches.";
   toolBtns.fern.title = "Click a fern crown on a model, or select a model and Preview scatter. Preview checks the shape; Apply saves the plants.";
   toolBtns.geometry.title =
     "Click to drop a geometry object; drag to size it. It is DRAWN and never simulated - nothing collides with it, the rope does not wrap it, no force reaches it. Give it a mesh or a texture on the panel; drop it on a selected body to have it ride that body.";
@@ -3170,6 +3175,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     toolBtns.plant,
     toolBtns.hangingVine,
     toolBtns.fern,
+    toolBtns.crystal,
     toolBtns.glow,
     toolBtns.fireflies,
     kindWrap,
@@ -3802,7 +3808,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // than a crosshair over a canvas that will not draw.
     // ...except the mushroom and grass outline, which is drawn IN the scene and
     // so draws at any orbit.
-    canvas.style.cursor = isSurfaceTool(tool) || tool === "hangingVine" || tool === "fern" ? "crosshair"
+    canvas.style.cursor = isSurfaceTool(tool) || tool === "hangingVine" || tool === "fern" || tool === "crystal" ? "crosshair"
       : orbited() || tool === "select" ? "default" : "crosshair";
   }
   // Does the current workspace offer this tool (`TOOL_WORKSPACES`)?
@@ -11030,7 +11036,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       surfaceClick(scr);
       return;
     }
-    if (tool === "hangingVine" || tool === "fern") {
+    if (tool === "hangingVine" || tool === "fern" || tool === "crystal") {
       foliageTool.click(scr);
       return;
     }
@@ -12327,7 +12333,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (e.code === "Escape") {
       if (mode === "test") stopTest();
       else if (surfaceDraft) cancelSurfaceDraft();
-      else if (foliageTool.hasDraft() && (tool === "hangingVine" || tool === "fern")) {
+      else if (foliageTool.hasDraft() && (tool === "hangingVine" || tool === "fern" || tool === "crystal")) {
         foliageTool.cancel();
       }
       else if (polyDraft) cancelPolyDraft();
@@ -12612,6 +12618,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         : "click a loop onto a drawn model's faces · Enter or the first point closes it";
     } else if (tool === "hangingVine") {
       what = "click root and direction · Preview vine · Apply saves it · Edit selected plant loads its recipe";
+    } else if (tool === "crystal") {
+      what = "click a crystal patch on a rock · Preview crystals or scatter · Apply saves the patches";
     } else if (tool === "fern") {
       what = "click a fern crown on a rock · Preview fern or scatter · Apply saves the plants";
     } else if (isSurfaceTool(tool)) {
