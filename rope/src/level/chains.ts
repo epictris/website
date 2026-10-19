@@ -859,7 +859,7 @@ export class BallChainRow implements IslandRow, IslandUnit {
   }
 
   // A RING ON A RAIL (`RopeClamp`, the chain's end clamped round a bar). The
-  // cuff is a two-hundredth of the ball, and solved as a light body of the row
+  // cuff is a thirty-first of the ball, and solved as a light body of the row
   // it was a stiff one: the row's impulse went into the ring and its friction
   // took it back, and a ring that should have trailed the ball at the kinetic
   // cone ran ahead of it to 6 m/s and stuck dead, over and over

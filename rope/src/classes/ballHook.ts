@@ -20,14 +20,21 @@ import {
   type PhysicsBody2D,
 } from "../engine/body";
 import { PX } from "../engine/units";
-import { circleShape, nearestSurfacePoint, shapeWorldVertices, type ShapeTransform } from "../engine/shapes";
+import { nearestSurfacePoint, shapeWorldVertices, type ShapeTransform } from "../engine/shapes";
 import { bodySweepConvex } from "../engine/collision";
 import { shapeContacts } from "../engine/manifold";
 import { CONTACT_SLOP, GRAVITY } from "../engine/world";
 import { Mathf } from "../engine/mathf";
 import { Density, ShapeGeometry } from "../lib/shapeGeometry";
 import { Vec2 } from "../engine/vec2";
-import { MANACLE_HINGE_LOCAL, MANACLE_REACH, manacleShape } from "../lib/manacle";
+import {
+  MANACLE_BAND,
+  MANACLE_HINGE_LOCAL,
+  MANACLE_RADIUS,
+  MANACLE_REACH,
+  MANACLE_WIDTH,
+  manacleShape,
+} from "../lib/manacle";
 
 // What the swept cuff met along a path: how far along it (`t`, in units of the
 // swept motion), the piece struck, the contact normal there and the point the
@@ -130,18 +137,17 @@ export class BallHook extends RigidBody2D {
     // for the steered ball - infinite rotational inertia, no torque arm - so
     // neither spends an impulse on a spin the next step overwrites.
     this.kinematicRotation = true;
-    // Steel, like the chain it ends: a 4 cm head is ~0.26 kg, a two-hundredth
-    // of the cast-iron ball throwing it. That ratio is what makes the throw a
-    // throw - the hook is what the ball flicks out and reels back, not a second
-    // weight the chain has to swing.
+    // Steel, like the chain it ends, and weighed as the ring it is: a band
+    // `MANACLE_BAND` thick and `MANACLE_WIDTH` wide round a circle of radius
+    // `MANACLE_RADIUS`, 2π·r·band·width of metal - 10.7 cm across, 4.4 cm
+    // high, 1.66 kg, a thirty-first of the cast-iron ball throwing it. Not the
+    // bar it collides as: the ring is mostly air. It was 0.26 kg until
+    // 2026-10-19, a solid 2 cm steel ball standing in for a "4 cm head".
     //
-    // Weighed as that head and not as the disc it collides as: a cuff is a ring
-    // of bar stock, mostly air, and a solid 15 cm steel disc would be 5 kg -
-    // twenty times the hook, and a wrecking ball on the end of its own chain.
-    this.mass = ShapeGeometry.computeMass(
-      { globalPosition: Vec2.ZERO, globalRotation: 0, shape: circleShape(2 * PX) },
-      Density.STEEL,
-    );
+    // Its mass is the hook's own business - how it flies, swings and lands -
+    // and never the ball's: a dangling tip reaches the ball through nothing
+    // (`BallChainRow.dangling`).
+    this.mass = Density.STEEL * 2 * Mathf.Pi * MANACLE_RADIUS * MANACLE_BAND * MANACLE_WIDTH;
     // The bar's own second moment. Nothing solves against it - the rotation is
     // driven (above) - but it is what the energy bookkeeping reads, and a real
     // figure keeps that honest.
