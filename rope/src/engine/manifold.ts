@@ -76,10 +76,14 @@ function closestOnSegment(p: Vec2, a: Vec2, b: Vec2): Vec2 {
 function maxSeparation(
   verts: readonly Vec2[],
   other: readonly Vec2[],
+  // Faces that may answer (all of them when omitted): a seam is never one a
+  // contact is made against (see `loopVsLoop`).
+  face?: (i: number) => boolean,
 ): { index: number; separation: number } {
   let index = 0;
   let separation = -Infinity;
   for (let i = 0; i < verts.length; i++) {
+    if (face && !face(i)) continue;
     const n = worldNormal(verts, i);
     if (n.x === 0 && n.y === 0) continue;
     let deepest = Infinity;
@@ -118,7 +122,34 @@ function clipToPlane(a: Vec2, b: Vec2, n: Vec2, o: Vec2): [Vec2, Vec2] | null {
   return da <= 0 ? [a, cut] : [cut, b];
 }
 
+// The faces of `t` a contact may be made against: all but the seams it shares
+// with its body's other pieces, unless it has nothing else.
+function surfaceFaces(t: ShapeTransform, verts: readonly Vec2[]): ((i: number) => boolean) | undefined {
+  const internal = t.isFaceInternal;
+  if (!internal) return undefined;
+  for (let i = 0; i < verts.length; i++) if (!internal.call(t, i)) return (k) => !internal.call(t, k);
+  return undefined;
+}
+
 // Manifold between two vertex shapes.
+//
+// Against the BODY's surface, not the piece's. A concave outline is cut into
+// convex pieces, and each piece has faces and corners the body does not: the
+// seams where it meets its siblings, and the outline's reflex corners, where
+// the floor bends up and the material round the vertex is more than half a
+// turn. Neither is anything a moving shape can strike. A flat face cannot
+// touch a reflex corner on its own (it would meet a face either side first),
+// and a seam is inside the body. Taken as the contact anyway, they are the
+// ghost collisions of a compound: a hook dragged along a floor towards the
+// ball met the floor's reflex corner with its own end face as the reference,
+// and was stopped dead by a normal pointing straight back along the pull,
+// where the floor rises at 10° and a frictionless bar rides up it - the
+// chain then wound 11 m of coil onto the ball while the hook sat still
+// (`session-599f` f116). So a seam is never a reference face, and a contact
+// whose deepest point is a corner the body does not have is made against the
+// body's own face instead. The separating-axis test still reads every face:
+// a seam is a real edge of the piece, and the two shapes are as apart along
+// it as they ever were.
 function loopVsLoop(a: ShapeTransform, b: ShapeTransform, slop: number): Contact[] {
   const va = worldVerts(a);
   const vb = worldVerts(b);
@@ -127,47 +158,94 @@ function loopVsLoop(a: ShapeTransform, b: ShapeTransform, slop: number): Contact
   const sa = maxSeparation(va, vb);
   const sb = maxSeparation(vb, va);
   if (sa.separation > slop || sb.separation > slop) return [];
+  const faceA = surfaceFaces(a, va);
+  const faceB = surfaceFaces(b, vb);
+  const ra = faceA ? maxSeparation(va, vb, faceA) : sa;
+  const rb = faceB ? maxSeparation(vb, va, faceB) : sb;
 
   // Reference face: the shallower penetration. The small bias toward `b` keeps
   // a resting box on a floor picking the *floor's* face frame for frame rather
   // than flickering between the two when the depths are all but equal — a flip
   // there swaps the manifold and the box jitters.
-  const useB = sb.separation > sa.separation + 1e-9;
+  const useB = rb.separation > ra.separation + 1e-9;
+  const first = clipManifold(a, b, va, vb, useB, useB ? rb.index : ra.index, slop);
+  if (first === null || !first.ghost) return first?.contacts ?? [];
+  // Struck at a corner the incident body does not have: against the other
+  // side's face, if it has one to give.
+  const other = clipManifold(a, b, va, vb, !useB, useB ? ra.index : rb.index, slop);
+  return other !== null && !other.ghost ? other.contacts : first.contacts;
+}
+
+// The clipped manifold against reference face `refIndex` of `a` (or of `b`,
+// `useB`), and whether its deepest point is a vertex of the incident shape that
+// is no corner of that shape's body (see `loopVsLoop`).
+function clipManifold(
+  a: ShapeTransform,
+  b: ShapeTransform,
+  va: readonly Vec2[],
+  vb: readonly Vec2[],
+  useB: boolean,
+  refIndex: number,
+  slop: number,
+): { contacts: Contact[]; ghost: boolean } | null {
   const [refVerts, incVerts] = useB ? [vb, va] : [va, vb];
-  const refIndex = useB ? sb.index : sa.index;
+  const incShape = useB ? a : b;
   const refNormal = worldNormal(refVerts, refIndex);
   const refA = refVerts[refIndex]!;
   const refB = refVerts[(refIndex + 1) % refVerts.length]!;
 
   const incIndex = incidentEdge(incVerts, refNormal);
-  let p0 = incVerts[incIndex]!;
-  let p1 = incVerts[(incIndex + 1) % incVerts.length]!;
+  const i0 = incVerts[incIndex]!;
+  const i1 = incVerts[(incIndex + 1) % incVerts.length]!;
+  let p0 = i0;
+  let p1 = i1;
 
   // Trim the incident edge to the reference face's extent.
   const tangent = refB.sub(refA);
   const len = tangent.length();
-  if (len < EPS) return [];
+  if (len < EPS) return null;
   const dir = tangent.div(len);
   let clipped = clipToPlane(p0, p1, dir.neg(), refA);
-  if (!clipped) return [];
+  if (!clipped) return null;
   clipped = clipToPlane(clipped[0], clipped[1], dir, refB);
-  if (!clipped) return [];
+  if (!clipped) return null;
   [p0, p1] = clipped;
 
   // The normal must point out of `b` toward `a`; the reference normal points out
   // of whichever shape owns the reference face.
   const normal = useB ? refNormal : refNormal.neg();
   const out: Contact[] = [];
+  let deepest: Vec2 | null = null;
+  let deepestDepth = -Infinity;
   [p0, p1].forEach((p, slot) => {
     // Negative depth is separation, and within the slop band it is still a
     // contact - see `shapeContacts`.
     const depth = -refNormal.dot(p.sub(refA));
     if (depth > -slop) {
       out.push({ normal, depth, point: p, featureId: featureId(useB, refIndex, incIndex, slot) });
+      if (depth > deepestDepth) {
+        deepestDepth = depth;
+        deepest = p;
+      }
     }
   });
-  return out;
+  // The deepest point is an end of the incident edge, a vertex of the incident
+  // shape: is it a corner of that shape's body at all? Asked by position, not
+  // identity: a reference face that meets the edge only at its end vertex
+  // clips the edge down to that point as a new one.
+  let ghost = false;
+  const exposed = incShape.isVertexExposed;
+  if (deepest !== null && exposed) {
+    const at = (v: Vec2): boolean => (deepest as Vec2).distanceSquaredTo(v) < VERTEX_EPS_SQ;
+    const k = at(i0) ? incIndex : at(i1) ? (incIndex + 1) % incVerts.length : -1;
+    ghost = k >= 0 && !exposed.call(incShape, k);
+  }
+  return { contacts: out, ghost };
 }
+
+// How close a contact point must stand to a vertex to be that vertex: well
+// under any authored feature, well over the float noise of a clip.
+const VERTEX_EPS_SQ = 1e-12;
 
 // Manifold between a vertex shape `a` and a circle `b`: one point, on the
 // polygon boundary nearest the circle's centre.

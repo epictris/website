@@ -219,7 +219,7 @@ The ball's chain row is one-way while the end is the tip: the ball's motion alon
 The drum takes in every turn the aim makes, up to the rim where the tip is stowed, with no jam on a touch and no refund to the spin, and the chain's pull on the tip buys it no grip on what it rests on (`tipPressInto`, as `chainPress` is for the ball): a pinned tip slides off toward the ball, and only its own weight grips, so a slack tip still rests on a slope.
 Two-way, a 0.26 kg tip pinned on a hook-proof ledge was the anchor a ball wound itself 31 cm up the wall below it by (`session-373f` f211-331); one-way, the tip slides off the ledge, drops toward the ball and is stowed, and the ball never leaves the floor.
 And a tip snagged under a box was a load the solve could not carry to the 52 kg ball through a 0.26 kg body, the chain standing 16 cm over while the ball fell on (`session-126f` f97, the 200:1 mass ratio against one sequential pass a substep).
-What is not yet handled: a tip WEDGED, its bar held by faces on both sides of the chain's pull (across a slot narrower than itself), cannot slide out, so the chain stands over its length while the ball moves on unaffected.
+What it cannot yet do is free a tip that is truly wedged (see [Open: a wedged tip](#open-a-wedged-tip)).
 
 A deploying chain
 that snags scene geometry mid-flight also converts to the dangling tip: while
@@ -231,6 +231,26 @@ freezes the deploy at the wrapped path length, so the chain wraps the corner
 and stops paying out - unless the solver blocked the hook against something it
 bites on that same frame, which anchors it instead (`session-613f`, under the
 blocking contact above).
+
+### Open: a wedged tip
+
+**Not yet handled** (2026-10-19, analysed, no fix in the tree and no rig yet): a tip whose bar is held by faces on every side of the chain's pull cannot follow the chain at all.
+Sliding is not enough there, since there is no face to slide along that leads anywhere.
+Because the one-way row refunds the spin nothing, the ball goes on turning and winding coil onto itself while the tip stays put, so the chain's measured length grows without bound - the runaway `session-599f` showed (1.34 m of chain measuring 12.6 m), though that one was the seam ghost ([contact-solver](contact-solver.md#a-compound-bodys-surface-not-its-pieces)) and not a real wedge.
+
+A real wedge comes in two kinds, against the bar's 10.7 cm length and 4.4 cm thickness:
+
+1. Across a gap narrower than its length and wider than its thickness - a bar lying across a slot. Partly self-inflicted: a tip resting on a surface lies flat along it (`BallHook.lieFlat`), and a taut chain only turns it end for end, never towards the pull, so it stays broadside to a gap it could pass end first.
+2. Into a gap narrower than its thickness, which the chain passes and the bar does not. Physically that is an anchor, and the rule that nothing the tip meets reaches the ball makes it a tip that must get through anyway.
+
+The intended fix, in order:
+
+- **Let the pull turn the bar.** A tip on a taut chain pulled off or past what it rests on aligns with the chain, hinge leading, as it already does in free air; lying flat is kept for a slack or lightly loaded tip. End first, the bar meets a gap with its 4.4 cm end, and the first kind resolves by geometry alone.
+- **The guarantee: pass through what still holds it.** After the island, if the end is the tip, the chain stands over its length by more than a tolerance, and a contact that pushed this frame faces against the pull steeply (pull·normal under about -0.5), that contact's piece joins a per-shape pass-through set on the hook, which the contact gather, the swept step and the bite tests all skip. A piece leaves the set once the bar no longer overlaps it. Only pieces the pull drives the tip INTO qualify: faces it is dragged along, the floor under it, stay solid, so it cannot fall through the ground. `hook-embedded` and `chain-clip` exempt the set's pieces, and a detector reports a tip that stays in it too long. The cost is a hook seen clipping through a lip for a few frames.
+
+Rejected: giving the winding back to the spin, which is what bounded the chain before the row was one-way. It makes the runaway impossible, but a wedged tip then refuses the ball's turn, which is the tip moving the ball. A drum that slips instead is no better, since the coil is real wrap geometry that follows the ball's rotation, and a chain that slips round the rim would be a mechanic of its own.
+
+Before either, the two rigs: a tip dragged across a slot narrower than its length, and one pulled into a gap narrower than its thickness, each measured growing the coil today. How the bar turns is a feel question and is played before it gets cases.
 
 ## A throw that is going nowhere is over
 

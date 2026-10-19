@@ -538,4 +538,10 @@ export interface ShapeTransform {
   // is a live shape's (see `CollisionShape2D.worldVertices`). Optional because
   // a transform can be a plain placement with no identity to cache on.
   worldVertices?(): readonly Vec2[];
+  // Whether vertex `i` is a corner of the whole body rather than a join a
+  // sibling piece swallows, and whether the face leaving vertex `i` is a seam
+  // two pieces of the body share (`CollisionShape2D`). A plain placement has
+  // no siblings and answers neither: every corner and face is its own.
+  isVertexExposed?(i: number): boolean;
+  isFaceInternal?(i: number): boolean;
 }

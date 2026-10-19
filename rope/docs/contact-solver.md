@@ -92,6 +92,18 @@ Vertex shapes have no such path left either: `applyStaticGrip` is all that remai
 The *velocity* half of stiction is gone, because it was always a Coulomb-capped tangential impulse solved at the contact points, which is exactly what the tangential constraint is; keeping a second copy would apply friction twice.
 What no velocity constraint can remove is gravity's per-frame integration *step*, since this engine integrates before it solves - so the pin stays, as the honest patch for that ordering rather than as a leftover.
 
+## A compound body's surface, not its pieces'
+
+A concave outline is cut into convex pieces at load, and each piece has faces and corners the body does not: the **seams** where it meets its siblings (`CollisionShape2D.isFaceInternal`), and the outline's **reflex corners**, where the surface bends inward and the material round the vertex is more than half a turn (`isVertexExposed` false).
+Neither is anything a moving shape can strike: a seam is inside the body, and a flat face cannot touch a reflex corner on its own, since it would meet a face either side of it first.
+Taken as the contact anyway they are the ghost collisions of a compound, the reason Box2D ships chain shapes for terrain.
+So the polygon manifold (`loopVsLoop`) never takes a seam as the reference face, and a contact whose deepest point is a corner the incident body does not have is made against the other side's face instead.
+The separating-axis test still reads every face: a seam is a real edge of its piece, and the two shapes are as far apart along it as they ever were.
+
+Found on a dangling hook (2026-10-19, `session-599f` f116): resting on a floor that bends up 10°, its bar's corner on the bend, it was made a contact against its own end face with the normal straight back along the floor, and the chain dragging it towards the ball held it there while the ball wound 11 m of coil onto itself.
+Against the floor's surface the contact is the slope's face, and the hook rides up it (`cli contacts` `seam-reflex-corner`).
+A circle needs none of this: its one contact is on the nearest feature of the piece, and at a reflex corner that is the bend itself, which a circle can genuinely rest in.
+
 ## Resting contacts
 
 A manifold's normal impulses are solved as **one system**: accumulated per point, iterated `NORMAL_SOLVER_ITERATIONS` times on the static path (`VELOCITY_ITERATIONS`, Box2D's 8, over the scene-wide constraint list), with each point's *running total* clamped at zero rather than each increment clamped on its own.

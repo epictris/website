@@ -41,6 +41,20 @@ export const MASK_SOLID = LAYER_SCENERY | LAYER_PLAYER | LAYER_HOOK;
 // authors nothing collides with everything exactly as it always has.
 export const MASK_ALL = MASK_SOLID | LAYER_ANCHOR | LAYER_ROPE;
 
+// Does the vertex loop `verts` have an edge from `p` to `q`, either way round?
+// Pieces cut from one outline share the cut's two vertices exactly, up to the
+// float noise of each piece's own re-centring.
+const SEAM_EPSILON = 1e-6;
+function sharesEdge(verts: readonly Vec2[], p: Vec2, q: Vec2): boolean {
+  const near = (u: Vec2, v: Vec2): boolean => Math.abs(u.x - v.x) < SEAM_EPSILON && Math.abs(u.y - v.y) < SEAM_EPSILON;
+  for (let k = 0; k < verts.length; k++) {
+    const u = verts[k]!;
+    const v = verts[(k + 1) % verts.length]!;
+    if ((near(u, q) && near(v, p)) || (near(u, p) && near(v, q))) return true;
+  }
+  return false;
+}
+
 // Live view of a body's collision shape (position/rotation track the body).
 // `localOffset` mounts the shape away from the body origin in the body's local
 // frame (rotates with the body); the default zero keeps single-shape bodies
@@ -316,6 +330,26 @@ export class CollisionShape2D implements ShapeTransform {
 
   private exposedVertices: boolean[] | null = null;
 
+  // Is the face leaving vertex `i` a SEAM - an edge this piece shares with a
+  // sibling, where a concave outline was cut into convex pieces - rather than
+  // part of the body's surface? Cached with the corners and for the same
+  // reason (see `isVertexExposed`). The contact manifold never takes a seam
+  // as the face a contact is made against (`loopVsLoop`).
+  isFaceInternal(i: number): boolean {
+    if (this.shape.kind === "circle") return false;
+    if (!this.internalFaces) {
+      const verts = this.worldVertices();
+      const siblings = this.owner.getShapes().filter((s) => s !== this && s.shape.kind !== "circle");
+      this.internalFaces = verts.map((p, k) => {
+        const q = verts[(k + 1) % verts.length]!;
+        return siblings.some((s) => sharesEdge(s.worldVertices(), p, q));
+      });
+    }
+    return this.internalFaces[i] ?? false;
+  }
+
+  private internalFaces: boolean[] | null = null;
+
   // Drop the cached world pose (`globalPosition`, `worldVertices`). Both are
   // keyed on the mount offset's identity but not on `localRotation`, so a
   // piece turned in place through `moveShape` has to say so.
@@ -326,6 +360,7 @@ export class CollisionShape2D implements ShapeTransform {
 
   invalidateExposure(): void {
     this.exposedVertices = null;
+    this.internalFaces = null;
   }
 }
 

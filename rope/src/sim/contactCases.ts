@@ -4531,6 +4531,54 @@ function caseWhirlLap(): ContactResult {
 }
 
 // ---------------------------------------------------------------------------
+// A shape meets a compound body's SURFACE, not its pieces' (`loopVsLoop`). A
+// floor cut into two convex pieces where it bends up 10°: the cut leaves the
+// rising piece a seam face and the bend a reflex corner, neither of which is
+// anything the floor has. A hook-sized bar with its corner on the bend was
+// made a contact against its own end face, its normal straight back along
+// the floor, and a hook dragged towards the ball was stopped dead there
+// while the chain wound 11 m of coil onto the ball (`session-599f` f116).
+// Against the floor's surface it is the slope's face.
+function caseSeamReflexCorner(): ContactResult {
+  const details: string[] = [];
+  let passed = true;
+  const check = (claim: string, got: boolean): void => {
+    if (!got) passed = false;
+    details.push(`${got ? "ok  " : "BAD "} ${claim}`);
+  };
+  const rise = Math.tan(10 * DEG);
+  const floorPieces = [
+    [new Vec2(0, 0), new Vec2(1, 0), new Vec2(1, 0.3), new Vec2(0, 0.3)],
+    [new Vec2(1, 0), new Vec2(2, -rise), new Vec2(2, 0.3), new Vec2(1, 0.3)],
+  ];
+  const slopeOut = new Vec2(-Math.sin(10 * DEG), -Math.cos(10 * DEG));
+  const floorIn = (sim: Sim): StaticBody2D => {
+    const floor = new StaticBody2D();
+    for (const piece of floorPieces) {
+      const made = polyShapeCentred(piece);
+      floor.addShape(made.shape, made.offset);
+    }
+    floor.surfaceFriction = 0;
+    sim.world.add(floor);
+    return floor;
+  };
+  const length = 2 * MANACLE_REACH;
+
+  // The manifold: the bar resting on the flat piece, its corner on the bend.
+  const sim = new Sim("seam-reflex-corner");
+  const floor = floorIn(sim);
+  const bar = sim.addRigid(rectShape(length, MANACLE_THICKNESS), new Vec2(1 - length / 2, -MANACLE_THICKNESS / 2));
+  const rising = floor.getShapes()[1]!;
+  const against = shapeContacts(bar.primaryShape(), rising, CONTACT_SLOP);
+  const worst = against.length > 0 ? Math.min(...against.map((c) => c.normal.dot(slopeOut))) : 1;
+  check(
+    `the rising piece meets the bar on its slope (${against.length} points, worst normal ${(Math.acos(Math.min(1, worst)) / DEG).toFixed(1)} deg off the slope's)`,
+    against.length > 0 && worst > Math.cos(5 * DEG),
+  );
+  return ok("seam-reflex-corner - a shape meets a compound body's surface, not its pieces' seams and reflex corners", passed, details);
+}
+
+// ---------------------------------------------------------------------------
 // A rect `obstacle` for `swingPast`, metres, its centre relative to where the
 // ball hangs. A rigid one is a 50 cm steel block standing on a floor of its
 // own, built with the level so it has settled by the time the ball hangs.
@@ -7450,6 +7498,7 @@ export function runContactCases(): ContactResult[] {
   results.push(caseWhirlLap());
   results.push(caseIslandCornerGraze());
   results.push(caseIslandThinPlank());
+  results.push(caseSeamReflexCorner());
   results.push(caseHookSeam());
   results.push(caseCollisionMask());
   results.push(casePassableBody());
