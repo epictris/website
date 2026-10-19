@@ -5,12 +5,10 @@
 import { dmath } from "../engine/dmath";
 import { Vec2 } from "../engine/vec2";
 import { button, emptyFrameInput, type ButtonInput, type FrameInput } from "../input/frameInput";
-import { Level, type LevelSpec } from "../level/level";
+import type { LevelSpec } from "../level/registry";
 import { LEVELS } from "../level/registry";
 import {
   checkBallInvariants,
-  checkInvariants,
-  digest,
   digestBall,
   EnergyMonitor,
   GripPinMonitor,
@@ -19,8 +17,6 @@ import {
   TunnelMonitor,
   kineticEnergy,
   serializeInput,
-  StuckDetector,
-  worldDigest,
   worldDigestBall,
   type Digest,
   type SerializedFrame,
@@ -258,12 +254,7 @@ export interface PlaytestResult {
 export function scriptSpec(script: PlaytestScript, specOverride?: LevelSpec): LevelSpec {
   const base: LevelSpec | undefined =
     specOverride ??
-    (script.data
-      ? // `LevelSpec.controller` spells the grapple case as absent rather than
-        // as "grapple", so a script saying "grapple" out loud lands on the same
-        // thing every registry entry does.
-        { data: script.data, controller: script.controller === "ball" ? ("ball" as const) : undefined }
-      : LEVELS[script.level]);
+    (script.data ? { data: script.data } : LEVELS[script.level]);
   if (!base) throw new Error(`Unknown level: ${script.level}`);
   // A named spawn is the level's own, so it is applied to the data the same way
   // the game applies it - by moving `player` before anything is built.
@@ -285,56 +276,14 @@ export function scriptSpec(script: PlaytestScript, specOverride?: LevelSpec): Le
   };
 }
 
-// `specOverride` runs the script on an ad-hoc level (the ledge matrix builds
-// its geometry programmatically); script.level is then only a label.
+// `specOverride` runs the script on an ad-hoc level; script.level is then only
+// a label. A script that embeds its level without naming the ball was written
+// for the grapple controller, which was retired on 2026-10-19.
 export function runScript(script: PlaytestScript, specOverride?: LevelSpec): PlaytestResult {
-  const spec = scriptSpec(script, specOverride);
-  if (spec.controller === "ball") return runBallScript(script, spec);
-  const level = new Level(spec.data, spec.init);
-  let resetFired = false;
-  level.onReset = () => {
-    resetFired = true;
-  };
-
-  const src = new ScriptedInput(script);
-  const digests: Digest[] = [];
-  const worldDigests: WorldDigest[] = [];
-  const serializedFrames: SerializedFrame[] = [];
-  const stats: FrameStat[] = [];
-  const violations: Violation[] = [];
-  const stuck = new StuckDetector();
-  const statesSeen = new Set<string>();
-  const stateFirstFrame = new Map<string, number>();
-
-  for (let f = 1; f <= script.frames && !resetFired; f++) {
-    const input = src.sample(f, level.player.globalPosition);
-    serializedFrames.push(serializeInput(input));
-    level.physicsProcess(input, 1 / 60);
-    const d = digest(level);
-    digests.push(d);
-    worldDigests.push(worldDigest(level));
-    stats.push(frameStat(level));
-    if (!statesSeen.has(d.state)) {
-      statesSeen.add(d.state);
-      stateFirstFrame.set(d.state, f);
-    }
-    violations.push(...checkInvariants(level));
-    const sv = stuck.push(level, input);
-    if (sv) violations.push(sv);
+  if (script.data && script.controller !== "ball") {
+    throw new Error(`${script.level}: written for the grapple controller, which was retired`);
   }
-
-  const assertResults = evaluateAsserts(script, digests, stateFirstFrame, stats);
-  const passed = violations.length === 0 && assertResults.every((r) => r.ok);
-  return {
-    level: script.level,
-    framesRun: digests.length,
-    violations,
-    assertResults,
-    digests,
-    worldDigests,
-    serializedFrames,
-    passed,
-  };
+  return runBallScript(script, scriptSpec(script, specOverride));
 }
 
 // Per-frame numbers the window asserts are evaluated against. Collected for both
@@ -351,13 +300,13 @@ interface FrameStat {
   embed: number;
 }
 
-function frameStat(level: Level | BallLevel): FrameStat {
-  const rope = level instanceof BallLevel ? level.ball.chain : level.player.rope;
-  const body = level instanceof BallLevel ? level.ball : level.player;
-  const velocity = level instanceof BallLevel ? level.ball.linearVelocity : level.player.velocity;
+function frameStat(level: BallLevel): FrameStat {
+  const rope = level.ball.chain;
+  const body = level.ball;
+  const velocity = level.ball.linearVelocity;
   // An anchored chain's far end is the anchor; while the hook is still flying
   // there is nothing to measure an approach against.
-  const anchored = level instanceof BallLevel ? level.ball.chainAnchored : rope !== null;
+  const anchored = level.ball.chainAnchored;
   const embed = deepestEmbedding(level.world, body);
   return {
     pos: body.globalPosition,
@@ -518,10 +467,7 @@ function evaluateAsserts(
   });
 }
 
-// The ball & chain driver. Deliberately its own loop rather than a branch inside
-// the grapple one: the two controllers share the input stream and nothing else,
-// and the ball has no state machine, no stuck detector (it has no locomotion
-// input to freeze) and its own invariants.
+// The ball & chain driver.
 function runBallScript(script: PlaytestScript, spec: LevelSpec): PlaytestResult {
   const level = new BallLevel(spec.data, { ball: script.ball === "glass" ? "glass" : "iron" });
   let resetFired = false;

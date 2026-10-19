@@ -25,11 +25,9 @@ import { shapeContacts } from "../engine/manifold";
 import { shapeVertices, type Shape } from "../engine/shapes";
 import type { World } from "../engine/world";
 import { RopeWrap } from "../lib/ropeContact";
-import { Hook } from "../classes/hook";
 import { BallHook } from "../classes/ballHook";
 import { WrapDirection } from "../lib/types";
 import { BallLevel } from "../level/ballLevel";
-import type { Level } from "../level/level";
 import type { Rope } from "../classes/rope";
 
 export interface ShapeView {
@@ -179,20 +177,13 @@ export function deepestEmbedding(world: World, body: PhysicsBody2D, skin = 0): E
 }
 
 // The chain phase's own decisions, which are the level driver's and not the
-// rope's; zeroed for a driver that makes none (see `ChainPhaseView`).
+// rope's.
 interface ChainPhaseView {
   aimSpin: number;
   unwindRefund: number;
   winchBudget: number;
   pushCredit: number;
 }
-
-const NO_CHAIN_PHASE: ChainPhaseView = {
-  aimSpin: 0,
-  unwindRefund: 0,
-  winchBudget: 0,
-  pushCredit: 0,
-};
 
 function chainView(
   rope: Rope | null,
@@ -239,7 +230,7 @@ function chainView(
 // flight — which is not a body in the scene this view describes.
 function anchorBodyOf(rope: Rope): number | null {
   const obj = rope.end.contact.obj;
-  return obj instanceof Hook || obj instanceof BallHook ? null : obj.buildIndex;
+  return obj instanceof BallHook ? null : obj.buildIndex;
 }
 
 function bodyViews(world: World): BodyView[] {
@@ -285,57 +276,35 @@ function bodyViews(world: World): BodyView[] {
   return out;
 }
 
-export function frameView(level: Level | BallLevel): FrameView {
-  if (level instanceof BallLevel) {
-    const b = level.ball;
-    return {
-      frame: level.frame,
-      avatar: {
-        px: b.globalPosition.x,
-        py: b.globalPosition.y,
-        rot: b.globalRotation,
-        vx: b.linearVelocity.x,
-        vy: b.linearVelocity.y,
-        // The one field no avatar digest ever carried, and the one the
-        // no-rolling regression moved (session-314f).
-        w: b.angularVelocity,
-        speed: b.linearVelocity.length(),
-        state: b.chainStowed
-          ? "BallStowed"
-          : b.chainAnchored
-            ? "BallAnchored"
-            : b.chain
-              ? "BallFiring"
-              : "Ball",
-        supportBody: supportOf(level.world, b),
-      },
-      chain: chainView(b.chain, b.chainAnchored, level.chainStallFrames, {
-        aimSpin: level.aimSpin,
-        unwindRefund: level.chainUnwindRefund,
-        winchBudget: level.chainWinchSpeedBudget,
-        pushCredit: level.chainPushOutCredit,
-      }),
-      bodies: bodyViews(level.world),
-    };
-  }
-  const p = level.player;
-  const state = p.state as { supportBody?: PhysicsBody2D | null };
+export function frameView(level: BallLevel): FrameView {
+  const b = level.ball;
   return {
     frame: level.frame,
     avatar: {
-      px: p.globalPosition.x,
-      py: p.globalPosition.y,
-      rot: p.globalRotation,
-      vx: p.velocity.x,
-      vy: p.velocity.y,
-      w: 0,
-      speed: p.velocity.length(),
-      state: p.state.constructor.name,
-      supportBody: state.supportBody
-        ? state.supportBody.name || state.supportBody.constructor.name
-        : null,
+      px: b.globalPosition.x,
+      py: b.globalPosition.y,
+      rot: b.globalRotation,
+      vx: b.linearVelocity.x,
+      vy: b.linearVelocity.y,
+      // The one field no avatar digest ever carried, and the one the
+      // no-rolling regression moved (session-314f).
+      w: b.angularVelocity,
+      speed: b.linearVelocity.length(),
+      state: b.chainStowed
+        ? "BallStowed"
+        : b.chainAnchored
+          ? "BallAnchored"
+          : b.chain
+            ? "BallFiring"
+            : "Ball",
+      supportBody: supportOf(level.world, b),
     },
-    chain: chainView(p.rope, p.rope !== null, 0, NO_CHAIN_PHASE),
+    chain: chainView(b.chain, b.chainAnchored, level.chainStallFrames, {
+      aimSpin: level.aimSpin,
+      unwindRefund: level.chainUnwindRefund,
+      winchBudget: level.chainWinchSpeedBudget,
+      pushCredit: level.chainPushOutCredit,
+    }),
     bodies: bodyViews(level.world),
   };
 }

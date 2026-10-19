@@ -9,6 +9,7 @@ import { Vec2 } from "./vec2";
 import { circleShape, shapeExtents, shapeWorldVertices } from "./shapes";
 import type { ShapeTransform } from "./shapes";
 import {
+  AnimatableBody2D,
   Area2D,
   CharacterBody2D,
   CollisionObject2D,
@@ -562,7 +563,10 @@ export class World {
   // The tied chains (`engine/ties.ts`) and their island solver. Empty on every
   // level without a `through` chain, and every branch below that reads it is
   // then the branch every recorded replay took.
-  readonly ties = new TieSolver();
+  readonly ties = new TieSolver(
+    (c, dt, out) => this.recollide(c, dt, out),
+    (body, h) => this.integrateContinuous(body, h),
+  );
 
   // Broadphase: one fat-box leaf per collision shape of every body in
   // `bodies` (areas are not proxied - nothing queries them spatially). The
@@ -1015,31 +1019,13 @@ export class World {
           // step, none of it ever moves the axle or leaks into
           // `velocityAtPoint`.
           body.linearVelocity = Vec2.ZERO;
-          // An OFF-CENTRE bearing feels gravity as torque - `r × F` with `r`
-          // the world offset from the hinge to the centre of mass - and a
-          // torsion spring pulls the body back toward its built angle (see
-          // `RigidBody2D.pivotComOffset` / `pivotSpring`). Both fold into the
-          // same semi-implicit Euler step gravity takes for a free body, and
-          // both are guarded so a plain centre-of-mass pivot adds literally
-          // nothing: every recorded pivot replay stays bit-identical.
-          // Summed into ONE acceleration and applied once, the way the linear
-          // spring folds into gravity's step: the damping term must read the
-          // frame's INCOMING angular velocity, not one with gravity's dt
-          // already in it - read mid-update it damps that increment as though
-          // it were motion, which shifts the settled angle off the closed form
-          // by a measurable 10%.
-          const off = body.pivotComOffset;
-          let alpha = 0;
-          if (off.x !== 0 || off.y !== 0) {
-            const r = off.rotated(body.globalRotation);
-            alpha += (r.cross(GRAVITY.mul(body.gravityScale)) * body.mass) / body.inertia;
-          }
-          if (body.pivotSpring) {
-            const s = body.pivotSpring;
-            alpha +=
-              -s.omega * s.omega * (body.globalRotation - s.restAngle) -
-              2 * s.zeta * s.omega * body.angularVelocity;
-          }
+          // An OFF-CENTRE bearing feels gravity as torque and a torsion spring
+          // pulls the body back toward its built angle
+          // (`RigidBody2D.pivotAcceleration`), folded into the same
+          // semi-implicit Euler step gravity takes for a free body; a plain
+          // centre-of-mass pivot adds literally nothing, so every recorded
+          // pivot replay stays bit-identical.
+          const alpha = body.pivotAcceleration(GRAVITY);
           if (alpha !== 0) body.angularVelocity += alpha * dt;
           // Recorded for the rope's credit bound (see
           // `RigidBody2D.pivotFrameAccelDw`); zero for a plain pivot, so the
@@ -1054,25 +1040,12 @@ export class World {
           // applied outside that window needs no pair bookkeeping, exactly
           // like gravity itself.
           let accel = GRAVITY.mul(body.gravityScale);
-          if (body.spring) accel = accel.add(springAcceleration(body, body.spring));
+          if (body.spring) accel = accel.add(body.springAcceleration());
           body.linearVelocity = body.linearVelocity.add(accel.mul(dt));
           if (body.continuous) this.integrateContinuous(body, dt);
           else body.globalPosition = body.globalPosition.add(body.linearVelocity.mul(dt));
-          // A locked axis (frequency 0) is pinned to the anchor rather than
-          // sprung to it: the useful degenerate case is a leaf that only bobs
-          // vertically. Snapped after the step and idempotent, so nothing the
-          // frame did - a contact, a current, the rope - can walk it off.
-          if (body.spring) {
-            const s = body.spring;
-            if (s.omegaX === 0) {
-              body.globalPosition = new Vec2(s.anchor.x, body.globalPosition.y);
-              body.linearVelocity = new Vec2(0, body.linearVelocity.y);
-            }
-            if (s.omegaY === 0) {
-              body.globalPosition = new Vec2(body.globalPosition.x, s.anchor.y);
-              body.linearVelocity = new Vec2(body.linearVelocity.x, 0);
-            }
-          }
+          // A locked axis is pinned, not sprung (`RigidBody2D.pinSpringAxes`).
+          body.pinSpringAxes();
         }
         // A spring body does not spin (see `RigidBody2D.inverseInertia`). The
         // velocity is ZEROED rather than trusted to stay zero, with the same
@@ -1101,9 +1074,20 @@ export class World {
   // contacts (see `TieSolver`). Called inside the contact phase with the
   // contacts the gather found for tied bodies, so the slats' positions and
   // velocities are final by the time anything after `integrate` reads them.
-  private stepTies(islandContacts: ContactConstraint[], dt: number): void {
-    this.ties.step(islandContacts, GRAVITY, dt);
+  private stepTies(islandContacts: ContactConstraint[], dt: number): ContactConstraint[] {
+    // The movers that moved this frame, for the island to carry through its
+    // substeps (see `TieSolver.driven`). A jump is not motion (`teleported`).
+    const driven: AnimatableBody2D[] = [];
+    for (const body of this.bodies) {
+      if (!(body instanceof AnimatableBody2D) || body.removed || body.jumped) continue;
+      if (body.linearVelocity.x !== 0 || body.linearVelocity.y !== 0 || body.angularVelocity !== 0) {
+        driven.push(body);
+      }
+    }
+    this.ties.driven = driven;
+    const solved = this.ties.step(islandContacts, GRAVITY, dt);
     PhaseTrace.mark("ties", this);
+    return solved;
   }
 
   // The frame a tied chain's build settle steps: no areas, no free bodies,
@@ -1112,10 +1096,31 @@ export class World {
   stepTiesStandalone(dt: number, only: ReadonlySet<IslandUnit>): void {
     const tied = new Set<RigidBody2D>();
     for (const chain of only) for (const body of chain.bodies) tied.add(body);
-    const contacts = this.collectContacts(tied).filter(TieSolver.ownsContact);
+    const contacts = this.collectContacts(tied, dt).filter(TieSolver.ownsContact);
     this.frameContacts = [];
-    this.ties.step(contacts, GRAVITY, dt, only);
-    this.frameContacts = contacts;
+    this.frameContacts = this.ties.step(contacts, GRAVITY, dt, only);
+  }
+
+  // One island contact's shape pair gathered again as the bodies now stand:
+  // the island's narrowphase, run every substep (see `TieSolver.solveIsland`).
+  // The pair's filters were settled by the frame's gather, which found it.
+  //
+  // Out to the reach the frame's gather used (`gatherReach`), except where
+  // the island sweeps: a `continuous` body's primary shape against the
+  // scenery is stopped on the face by its swept position step
+  // (`integrateContinuous`, as the world steps it when free), so its contacts
+  // there are the world's own - the slop and no further. A speculative row
+  // reads its separation along the normal it was gathered with, and further
+  // out than a substep's travel that is a prediction about a corner the body
+  // is passing: a ball swung past one with 17 mm to spare read its 4 cm of
+  // travel in the substep as closing on it and was stopped (`island-corner-graze`).
+  private recollide(c: ContactConstraint, dt: number, out: ContactConstraint[]): void {
+    const sa = c.a.getShapes()[c.shapeA];
+    const sb = c.b.getShapes()[c.shapeB];
+    if (sa === undefined || sb === undefined) return;
+    const swept = c.a.continuous && c.shapeA === 0 && c.b instanceof StaticBody2D;
+    const slop = swept ? CONTACT_SLOP : Math.max(this.gatherReach(c.a, dt), this.gatherReach(c.b, dt));
+    this.gatherShapePair(out, c.a, c.shapeA, sa, c.b, c.shapeB, sb, slop);
   }
 
   // The continuous position step (see RigidBody2D.continuous): advance the
@@ -1696,8 +1701,46 @@ export class World {
   // `only` narrows the gather to pairs one of these bodies leads: the tied
   // chains' build settle asks for the contacts of its own bodies and nothing
   // else (`stepTiesStandalone`).
-  collectContacts(only: ReadonlySet<RigidBody2D> | null = null): ContactConstraint[] {
+  // How far out a body's contacts are gathered: `CONTACT_SLOP`, and for a body
+  // an island integrates (`tied`) as far again as it can travel in the frame
+  // (`dt`) - SPECULATIVE CONTACTS, Box2D's continuous answer for a substepped
+  // solver. The world integrates a free body before it gathers, so the gather
+  // sees where the frame has taken it; an island body is gathered where the
+  // frame FOUND it and moved through the substeps afterwards, so a face more
+  // than the slop away had no row to stop it: a ball hauled up into a belt's
+  // run at 2.3 m/s went through the band, and the chain then wrapped the
+  // belt's far wheel, a 9.7 m path (`ride-wrap-sweep`). Gathered out to its
+  // reach, a contact that is still apart is a row that lets the pair close no
+  // faster than the gap (`solveContact`'s `s / h`), re-read every substep, so
+  // the body stops on the face at whatever substep it gets there. The reach is
+  // the centre's travel under its velocity and gravity, and the rim's under
+  // its spin for a body whose pieces are not all round on its centre.
+  private gatherReach(body: PhysicsBody2D, dt: number): number {
+    if (dt <= 0 || !(body instanceof RigidBody2D) || !body.tied) return CONTACT_SLOP;
+    let reach = body.linearVelocity.length() * dt + 0.5 * GRAVITY.length() * Math.abs(body.gravityScale) * dt * dt;
+    if (body.angularVelocity !== 0) {
+      let arm = 0;
+      for (const piece of body.getShapes()) {
+        const off = piece.globalPosition.distanceTo(body.globalPosition);
+        if (piece.shape.kind === "circle" && off < 1e-9) continue;
+        const e = piece.extents();
+        arm = Math.max(arm, off + Math.max(e.x, e.y));
+      }
+      reach += Math.abs(body.angularVelocity) * arm * dt;
+    }
+    return CONTACT_SLOP + reach;
+  }
+
+  collectContacts(only: ReadonlySet<RigidBody2D> | null = null, dt = 0): ContactConstraint[] {
     const out: ContactConstraint[] = [];
+    // The island bodies' reaches (see `gatherReach`); every other body gathers
+    // at `CONTACT_SLOP`, exactly as it always did.
+    const reach = new Map<PhysicsBody2D, number>();
+    if (dt > 0) {
+      for (const body of this.bodies) {
+        if (body instanceof RigidBody2D && body.tied) reach.set(body, this.gatherReach(body, dt));
+      }
+    }
     // Broadphase pair discovery. Every pair that can produce a constraint has
     // a rigid side that survives every rigid-side filter below (role `a` is
     // by definition rigid, awake, not passable and a solid target), so
@@ -1727,15 +1770,11 @@ export class World {
         maxY = Math.max(maxY, c.y + e.y);
       }
       // The narrowphase gathers speculative contacts down to -CONTACT_SLOP
-      // depth, so the query box carries the same slop the box test below does.
+      // depth, so the query box carries the same slop the box test below does,
+      // or the island body's reach (`gatherReach`).
       const cands: CollisionShape2D[] = [];
-      this.broadphase.query(
-        minX - CONTACT_SLOP,
-        minY - CONTACT_SLOP,
-        maxX + CONTACT_SLOP,
-        maxY + CONTACT_SLOP,
-        cands,
-      );
+      const slop = reach.get(a) ?? CONTACT_SLOP;
+      this.broadphase.query(minX - slop, minY - slop, maxX + slop, maxY + slop, cands);
       for (const s of cands) {
         const t = s.owner;
         if (t === a || !(t instanceof PhysicsBody2D) || t.removed) continue;
@@ -1748,7 +1787,8 @@ export class World {
     for (const key of orderedKeys) {
       const bi = this.bodies[Math.floor(key / 0x100000)]!;
       const bj = this.bodies[key % 0x100000]!;
-      this.collectPairContacts(bi, bj, out);
+      const slop = Math.max(reach.get(bi) ?? CONTACT_SLOP, reach.get(bj) ?? CONTACT_SLOP);
+      this.collectPairContacts(bi, bj, out, slop);
     }
     return out;
   }
@@ -1759,6 +1799,7 @@ export class World {
     bi: PhysicsBody2D,
     bj: PhysicsBody2D,
     out: ContactConstraint[],
+    slop = CONTACT_SLOP,
   ): void {
     {
       {
@@ -1829,10 +1870,10 @@ export class World {
             if (!shapesCollide(sa, sb)) continue;
             const eb = sb.extents();
             const dx = sa.globalPosition.x - sb.globalPosition.x;
-            if (Math.abs(dx) > ea.x + eb.x + CONTACT_SLOP) continue;
+            if (Math.abs(dx) > ea.x + eb.x + slop) continue;
             const dy = sa.globalPosition.y - sb.globalPosition.y;
-            if (Math.abs(dy) > ea.y + eb.y + CONTACT_SLOP) continue;
-            this.gatherShapePair(out, a, si, sa, b, sj, sb);
+            if (Math.abs(dy) > ea.y + eb.y + slop) continue;
+            this.gatherShapePair(out, a, si, sa, b, sj, sb, slop);
           }
         }
       }
@@ -1849,6 +1890,7 @@ export class World {
     b: PhysicsBody2D,
     shapeB: number,
     sb: ShapeTransform,
+    slop = CONTACT_SLOP,
   ): void {
     // EVERY contact comes here, circles against static geometry included. That
     // one was the last exclusion, and what it excluded was a load path: a rigid
@@ -1883,14 +1925,14 @@ export class World {
     if (sa.shape.kind !== "circle") {
       // `shapeContacts(x, y)` reports normals out of `y` toward `x`, which is
       // already the convention.
-      for (const c of shapeContacts(sa, sb, CONTACT_SLOP)) {
+      for (const c of shapeContacts(sa, sb, slop)) {
         push(c.normal, c.depth, c.point, c.featureId);
       }
       return;
     }
     if (sb.shape.kind !== "circle") {
       // The vertex shape has to lead, so the normals come out the other way.
-      for (const c of shapeContacts(sb, sa, CONTACT_SLOP)) {
+      for (const c of shapeContacts(sb, sa, slop)) {
         push(c.normal.neg(), c.depth, c.point, c.featureId);
       }
       return;
@@ -1902,7 +1944,7 @@ export class World {
     const delta = sa.globalPosition.sub(sb.globalPosition);
     const dist = delta.length();
     const depth = ra + sb.shape.radius - dist;
-    if (depth <= -CONTACT_SLOP) return;
+    if (depth <= -slop) return;
     const normal = dist > 1e-9 ? delta.div(dist) : Vec2.UP;
     // A circle's contact point is on its own rim, back along the normal.
     push(normal, depth, sa.globalPosition.sub(normal.mul(ra)), CIRCLE_PAIR_FEATURE);
@@ -2409,7 +2451,7 @@ export class World {
     // the same solver is a worthwhile follow-up once `cli contacts` has been
     // green across a few changes, and a valuable one: warm-started static
     // manifolds are where Box2D's resting-stack quality actually comes from.
-    let constraints = this.collectContacts();
+    let constraints = this.collectContacts(null, dt);
     // Every contact touching a tied body is a row of its island's solve
     // (`TieSolver`), not of this one - the scenery under a slat, another slat,
     // and the ball on it, solved there with its real mass so the two agree at
@@ -2436,8 +2478,14 @@ export class World {
     // the frame's contacts, since the ball's contacts with a slat are among
     // them and carry the impulses the island applied.
     if (islandContacts) {
-      this.stepTies(islandContacts, dt);
-      constraints = constraints.concat(islandContacts);
+      islandContacts = this.stepTies(islandContacts, dt);
+      // An island body's contacts past the slop are the island's own lookahead
+      // (`gatherReach`), not touches: only one the bodies closed - that pushed,
+      // or stands closed - is the frame's, so every reader of the contact set
+      // (the grips, the latch, the sparks, the digest) sees what it always saw.
+      for (const c of islandContacts) {
+        if (c.depth > -CONTACT_SLOP || c.normalImpulse > 0 || this.ties.engaged(c)) constraints.push(c);
+      }
     }
 
     // Which surfaces each body met this frame, and the grippiest of them.
@@ -3156,32 +3204,6 @@ export class World {
       area.notifyOverlaps(inside);
     }
   }
-}
-
-// The spring body's restoring acceleration (see `RigidBody2D.spring`): a damped
-// harmonic oscillator per axis about the anchor,
-//
-//   a = -w^2 * offset - 2*zeta*w * velocity
-//
-// written per axis so each has its own frequency and each damping term uses its
-// own axis's w. Mass does not appear: the stiffness is `k = m*w^2` by
-// construction, so the free oscillation and the SELF-WEIGHT droop `g/w^2` are
-// the same whatever the body is made of, while an external load `F` still adds
-// `F/(m*w^2)` - a heavy stiff plant barely notices the player and a light whippy
-// one plunges, which is the authorable half.
-//
-// Semi-implicit Euler is stable here for `w*dt < 2`, i.e. under ~19 Hz at the
-// fixed 1/60 step; authored frequencies are clamped to 8 Hz well inside that.
-function springAcceleration(
-  body: RigidBody2D,
-  s: { anchor: Vec2; omegaX: number; omegaY: number; zeta: number },
-): Vec2 {
-  const d = body.globalPosition.sub(s.anchor);
-  const v = body.linearVelocity;
-  return new Vec2(
-    -s.omegaX * s.omegaX * d.x - 2 * s.zeta * s.omegaX * v.x,
-    -s.omegaY * s.omegaY * d.y - 2 * s.zeta * s.omegaY * v.y,
-  );
 }
 
 function clamp(v: number, lo: number, hi: number): number {

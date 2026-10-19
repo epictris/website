@@ -2,8 +2,9 @@
 // pole (`VineData.stiffness`).
 //
 // The load-bearing decision, stated once: stiffness is a **three-point
-// curvature constraint with a COMPLIANCE, solved by XPBD in the same sweep as
-// the vine's pair chains**. Everything else here is a consequence of that.
+// curvature constraint with a COMPLIANCE**, solved as a spring row of the
+// vine's island unit (`SpringRow` in `level/plantRows.ts`) beside the vine's
+// joints. Everything else here is a consequence of that.
 //
 // Why a three-point constraint. A vine is a chain of links held at a spacing by
 // pair chains (`level/vines.ts`), and a spacing says nothing at all about
@@ -21,26 +22,20 @@
 // the gradient is one unit vector and the constraint is linear in what it
 // actually moves.
 //
-// Why compliance rather than a stiffness factor. The obvious PBD spelling of
-// "half stiff" is to apply half of each correction, and it is a trap here: the
-// stiffness that produces is a function of how many passes the solver happened
-// to take, and this sweep's pass count is neither fixed nor knowable in advance
-// - it runs to a residual and stops (see `sweepChains`), so a vine would be
-// stiffer on a frame that had a hard rig elsewhere in the level and softer on a
-// quiet one. XPBD exists to answer exactly that: the constraint carries a
-// compliance in metres per newton, accumulates its own multiplier across the
-// passes of a frame, and converges to the same physical stiffness whatever the
-// pass count is. `stiffness` therefore means a real bending rigidity rather
-// than a solver setting.
+// Why compliance rather than a stiffness factor. The constraint carries a
+// compliance in metres per newton, so `stiffness` means a real bending
+// rigidity rather than a solver setting: the row is a spring of that
+// compliance, whatever the substep count.
 //
 // Why there is a constraint on every SCALE and not only between neighbours.
 // A stiff vine is a stiff SERIAL chain, which is the one shape a Gauss-Seidel
-// sweep is worst at: a joint at the anchor can only learn what the tip is doing
+// solve is worst at: a joint at the anchor can only learn what the tip is doing
 // by the news being passed link by link, one link per pass, and the moment the
 // links resist bending that news is also what every pass is arguing about. It
-// does not converge in any pass count worth paying for - measured, on a 3 m
-// vine with a 70 kg player swinging onto its tip, with neighbour-only bends at
-// the stiffest setting there is:
+// does not converge in any pass count worth paying for - measured on the
+// positional sweep vines were solved by until 2026-10-19, on a 3 m vine with a
+// 70 kg player swinging onto its tip, with neighbour-only bends at the
+// stiffest setting there is:
 //
 //   sweeps    worst lean off vertical    worst kink at one joint    cost
 //       64            28 deg                     15 deg            6.1 ms
@@ -68,19 +63,10 @@
 // links and 5 for one of 20. That is absorbed into where the two ends of the
 // slider are set, below, and it is why they are set by measurement.
 //
-// Why it is swept WITH the pair chains rather than after them. They disagree by
-// construction: a bend correction that straightens the vine drags two links off
-// their spacing, and the pair solve that puts the spacing back bends the vine.
-// Run in separate phases each one's answer is the other's residual and neither
-// converges - which is the same statement `sweepChains` already makes about two
-// chains sharing a body, one order further out. So a bend is a
-// `SceneConstraint` and goes into that loop.
-
 import { dmath } from "../engine/dmath";
 import { Vec2 } from "../engine/vec2";
 import { RigidBody2D, VineLink } from "../engine/body";
 import { RopeContact } from "../lib/ropeContact";
-import { CHAIN_TOLERANCE, VINE_TOLERANCE, type SceneConstraint } from "./chains";
 
 // The bending rigidity EI, in newton-metres squared, that `stiffness` 0 and 1
 // stand for. A vine's compliance is interpolated GEOMETRICALLY between them, so
@@ -128,7 +114,7 @@ export function bendRigidity(stiffness: number): number {
   return BEND_EI_LIMP * dmath.pow(BEND_EI_POLE / BEND_EI_LIMP, s);
 }
 
-// The XPBD compliance of ONE joint of a vine of the given link spacing, in
+// The compliance of ONE joint of a vine of the given link spacing, in
 // metres per newton.
 //
 // It is derived rather than tuned, and the derivation is what makes `stiffness`
@@ -154,8 +140,8 @@ export function bendCompliance(stiffness: number, spacing: number): number {
 // here. A cantilever exerts a moment on whatever it is bolted to, so a stiff
 // vine on a swinging platform should heel it over - but that moment would have
 // to be applied at a point off the anchor body's centre of mass, through a
-// torque arm, and paid for in the phase's own velocity credit, all so that a
-// piece of scenery can lean on the thing it hangs from. The existing statement
+// torque arm, all so that a piece of scenery can lean on the thing it hangs
+// from. The existing statement
 // about vines and their anchors is the opposite one: a vine must not visibly
 // load what it is hung from, and where it is hung is an authoring question (see
 // `DEFAULT_VINE_DENSITY`). So the anchor holds the vine and the vine does not
@@ -182,10 +168,6 @@ export class BendEnd {
   get inverseMass(): number {
     return this.link ? 1 / this.link.mass : 0;
   }
-
-  move(delta: Vec2): void {
-    if (this.link) this.link.globalPosition = this.link.globalPosition.add(delta);
-  }
 }
 
 // The curvature at one link: how far it is from straight between its
@@ -196,36 +178,14 @@ export class BendEnd {
 // deliberately take it at its centre so they have no torque arm on it either
 // (see `buildOne`) - so a bend that spent part of its correction rotating links
 // would be spending it where nothing can see it.
-export class VineBend implements SceneConstraint {
-  // The XPBD multiplier for this constraint, in newtons, accumulated across the
-  // passes of ONE frame and reset by `beginFrame`. It is what makes the answer
-  // independent of how many passes the sweep takes: the multiplier remembers
-  // how much force the constraint has already asked for, so a second pass
-  // corrects the remainder rather than applying the whole thing again.
-  private lambda = 0;
-  // The compliance in the position solver's own units, `α / Δt²`, fixed for the
-  // frame by `beginFrame` so the residual below can be read at any point in the
-  // sweep without being handed a timestep.
-  private alphaTilde = 0;
-
+export class VineBend {
   constructor(
     private readonly a: BendEnd,
     private readonly b: BendEnd,
     private readonly c: BendEnd,
     // Metres per newton. Zero is a rigid joint.
     private readonly compliance: number,
-    // The exit bar the sweep holds this bend to: loose on a hanging vine,
-    // tight on a span, exactly as the pair chains split (see `buildOne`'s
-    // joint-tolerance note) - a span's bends argue with leased tight pairs,
-    // and left on the loose bar the mid-stiffness span rang at 0.63 m/s and
-    // never slept.
-    readonly tolerance: number = VINE_TOLERANCE,
   ) {}
-
-  beginFrame(delta: number): void {
-    this.lambda = 0;
-    this.alphaTilde = this.compliance / (delta * delta);
-  }
 
   // The triple and the spring, for the island's row of this bend
   // (`level/plantRows.ts`).
@@ -235,38 +195,6 @@ export class VineBend implements SceneConstraint {
 
   get springCompliance(): number {
     return this.compliance;
-  }
-
-  // How far this joint is from the shape its compliance says it should be in,
-  // in metres.
-  //
-  // NOT the curvature itself, which is the thing this differs from a chain's
-  // over-length on. A chain is satisfied at zero, but a compliant bend is
-  // satisfied BENT - it is a spring, and a spring at rest under a load is
-  // extended. What XPBD makes zero at convergence is `C + α̃·λ`, the constraint
-  // measured against the force the constraint has been paid, and that is the
-  // number the sweep's residual gate wants: a bend that has reached the shape
-  // its stiffness asks for stops asking for sweeps, however bent it is.
-  get residual(): number {
-    return Math.abs(this.curvature() + this.alphaTilde * this.lambda);
-  }
-
-
-  // How far the middle point is off the chord midpoint of its neighbours, in
-  // metres: zero when the triple is straight and evenly spaced, and read live
-  // rather than remembered, because what the sweep is asking is where the vine
-  // is NOW - a joint this pass satisfied exactly is bent again the moment the
-  // pair chains and the load rope have had their say.
-  private curvature(): number {
-    return this.b.position.sub(this.a.position.add(this.c.position).mul(0.5)).length();
-  }
-
-  // Every correction here is honest motion - a bend has no path and no topology
-  // to jump (see `Rope.topologyCreditScale`) - so a link is paid velocity for
-  // all of it. That payment is what makes a stiff vine spring BACK rather than
-  // merely being straightened where it stands.
-  get creditScale(): number {
-    return 1;
   }
 
   eachBody(fn: (body: RigidBody2D) => void): void {
@@ -279,33 +207,6 @@ export class VineBend implements SceneConstraint {
     return this.a.link === body || this.b.link === body || this.c.link === body;
   }
 
-  // Nothing to settle: a bend has no length to lease out and nothing to re-base
-  // when the geometry refuses it. A stiff vine held bent by a wall is a stiff
-  // vine held bent by a wall, and it straightens when the wall stops being
-  // there.
-  settle(): void {}
-
-  resolveHolding(): void {}
-
-  solve(): void {
-    const offset = this.b.position.sub(this.a.position.add(this.c.position).mul(0.5));
-    const c = offset.length();
-    // Dead straight: no gradient, and nothing to correct. The multiplier is
-    // left where it is rather than cleared, so a joint that passes through
-    // straight mid-frame does not forget what it has already been paid.
-    if (c < 1e-12) return;
-    const normal = offset.div(c);
-    // Σ w·|∇C|², with ∇C = +n at the middle point and -n/2 at each outer one.
-    const wSum = this.b.inverseMass + (this.a.inverseMass + this.c.inverseMass) * 0.25;
-    // Every end fixed: a one-link vine's clamp against an anchor that cannot
-    // move is the whole of this, and there is nothing for it to correct.
-    if (wSum <= 0) return;
-    const dLambda = (-c - this.alphaTilde * this.lambda) / (wSum + this.alphaTilde);
-    this.lambda += dLambda;
-    this.b.move(normal.mul(this.b.inverseMass * dLambda));
-    this.a.move(normal.mul(-0.5 * this.a.inverseMass * dLambda));
-    this.c.move(normal.mul(-0.5 * this.c.inverseMass * dLambda));
-  }
 }
 
 // The bend constraints of one vine: one per joint, plus the CLAMP at the
@@ -332,7 +233,7 @@ export class VineBend implements SceneConstraint {
 // is the mirror of the anchor-side triples at the second anchor, so the far
 // end is exactly as smooth as the near one. The triples cannot all be
 // satisfied - a span with slack can never be straight - and they do not have
-// to be: XPBD bends are springs, and the equilibrium is the force balance
+// to be: the bends are springs, and the equilibrium is the force balance
 // between them and the inextensible chains, which is the elastica a stiff rod
 // with excess length bows into between two pins. `stiffness` on a span
 // therefore reads as how hard the drape is pressed toward that bow: 0 the
@@ -352,9 +253,6 @@ export function buildVineBends(
   anchor2: RopeContact | null = null,
 ): VineBend[] {
   if (!(stiffness > 0) || links.length === 0) return [];
-  // The exit bar every bend of this vine takes: loose on a hanging vine,
-  // tight on a span (see `VineBend.tolerance`).
-  const tolerance = anchor2 ? CHAIN_TOLERANCE : VINE_TOLERANCE;
   const at = (i: number): BendEnd => new BendEnd(links[i]!, null);
   const fixed = (c: RopeContact): BendEnd => new BendEnd(null, c);
   // The scale-k ghost: k spacings back up the rest direction from the anchor.
@@ -394,15 +292,15 @@ export function buildVineBends(
     // The clamp at this scale: ghost - anchor - the link k spacings down.
     // Hanging vines only; a span's ends are pinned (see above).
     if (!anchor2 && k - 1 < n) {
-      bends.push(new VineBend(fixed(ghost(k)), fixed(anchor), at(k - 1), compliance, tolerance));
+      bends.push(new VineBend(fixed(ghost(k)), fixed(anchor), at(k - 1), compliance));
     }
     // The joint AT that link, whose upper neighbour is the anchor itself.
     if (2 * k - 1 < n) {
-      bends.push(new VineBend(fixed(anchor), at(k - 1), at(2 * k - 1), compliance, tolerance));
+      bends.push(new VineBend(fixed(anchor), at(k - 1), at(2 * k - 1), compliance));
     }
     // ...and every joint below it that has a neighbour k links either side.
     for (let i = k; i + k < n; i++) {
-      bends.push(new VineBend(at(i - k), at(i), at(i + k), compliance, tolerance));
+      bends.push(new VineBend(at(i - k), at(i), at(i + k), compliance));
     }
     // A span's far end, mirrored: the joint whose outer neighbour is the
     // second anchor itself. In the vine's positions - anchor at 0, link i at
@@ -412,9 +310,9 @@ export function buildVineBends(
     if (anchor2) {
       const upper = n + 1 - 2 * k;
       if (upper > 0) {
-        bends.push(new VineBend(at(upper - 1), at(n - k), fixed(anchor2), compliance, tolerance));
+        bends.push(new VineBend(at(upper - 1), at(n - k), fixed(anchor2), compliance));
       } else if (upper === 0) {
-        bends.push(new VineBend(fixed(anchor), at(n - k), fixed(anchor2), compliance, tolerance));
+        bends.push(new VineBend(fixed(anchor), at(n - k), fixed(anchor2), compliance));
       }
     }
   }
@@ -455,12 +353,7 @@ export function buildVineBends(
 // Compliance as a `VineBend` clamp of the same reach (`bendCompliance`), times
 // four: that clamp's `C` was the root's distance off the midpoint of ghost and
 // body, half the body's distance off its place, which is this `C`.
-export class StalkClamp implements SceneConstraint {
-  // The XPBD multiplier, newtons, accumulated over one frame's passes (see
-  // `VineBend.lambda`).
-  private lambda = 0;
-  private alphaTilde = 0;
-
+export class StalkClamp {
   constructor(
     private readonly a: BendEnd,
     private readonly b: BendEnd,
@@ -470,35 +363,13 @@ export class StalkClamp implements SceneConstraint {
     private k: Vec2,
     // Metres per newton.
     private readonly compliance: number,
-    readonly tolerance: number = VINE_TOLERANCE,
   ) {}
-
-  beginFrame(delta: number): void {
-    this.lambda = 0;
-    this.alphaTilde = this.compliance / (delta * delta);
-  }
-
-  get residual(): number {
-    return Math.abs(this.offset().length() + this.alphaTilde * this.lambda);
-  }
-
-  get creditScale(): number {
-    return 1;
-  }
 
   eachBody(fn: (body: RigidBody2D) => void): void {
     if (this.a.link) fn(this.a.link);
     if (this.b.link) fn(this.b.link);
     if (this.c.link) fn(this.c.link);
   }
-
-  holds(body: RigidBody2D): boolean {
-    return this.a.link === body || this.b.link === body || this.c.link === body;
-  }
-
-  settle(): void {}
-
-  resolveHolding(): void {}
 
   // The triple, the grown ratio and the spring, for the island's row of this
   // clamp (`level/plantRows.ts`).
@@ -523,32 +394,6 @@ export class StalkClamp implements SceneConstraint {
     this.k = this.k.add(new Vec2((shift.x * u.x + shift.y * u.y) / uu, (shift.y * u.x - shift.x * u.y) / uu));
   }
 
-  // Where `c` is, less where it belongs: `c - b - k⊗(b - a)`.
-  private offset(): Vec2 {
-    const u = this.b.position.sub(this.a.position);
-    const k = this.k;
-    return this.c.position.sub(this.b.position).sub(new Vec2(k.x * u.x - k.y * u.y, k.x * u.y + k.y * u.x));
-  }
-
-  solve(): void {
-    const offset = this.offset();
-    const c = offset.length();
-    // In place: no gradient, and the multiplier kept (see `VineBend.solve`).
-    if (c < 1e-12) return;
-    const n = offset.div(c);
-    const k = this.k;
-    // ∇c = n, ∇a = conj(k)⊗n, ∇b = -(n + conj(k)⊗n): the three sum to nothing.
-    const ga = new Vec2(k.x * n.x + k.y * n.y, k.x * n.y - k.y * n.x);
-    const gb = n.add(ga).mul(-1);
-    const wSum =
-      this.a.inverseMass * ga.lengthSquared() + this.b.inverseMass * gb.lengthSquared() + this.c.inverseMass;
-    if (wSum <= 0) return;
-    const dLambda = (-c - this.alphaTilde * this.lambda) / (wSum + this.alphaTilde);
-    this.lambda += dLambda;
-    this.a.move(ga.mul(this.a.inverseMass * dLambda));
-    this.b.move(gb.mul(this.b.inverseMass * dLambda));
-    this.c.move(n.mul(this.c.inverseMass * dLambda));
-  }
 }
 
 // A berry stalk's stiffness, the set a `VineBend` clamp gave it rebuilt on the
@@ -564,7 +409,7 @@ export function buildStalkBends(
   stalk: readonly [VineLink, VineLink],
   stiffness: number,
   step: number,
-): { readonly clamps: readonly [StalkClamp, StalkClamp]; readonly bends: readonly SceneConstraint[] } | null {
+): { readonly clamps: readonly [StalkClamp, StalkClamp]; readonly bends: readonly (StalkClamp | VineBend)[] } | null {
   if (!(stiffness > 0)) return null;
   const upper = above instanceof VineLink ? new BendEnd(above, null) : new BendEnd(null, above);
   const base = new BendEnd(root, null);

@@ -43,7 +43,7 @@ One counter for the system would read every hook arrival as a continuation of th
 The ramp and the fractional carry are per source for the same reason: a hook striking a wall must not inherit how long the ball has been grinding, nor spend the particle the ball's slide was owed.
 A source's track is forgotten after `CONTACT_TRACK_TTL` silent steps, which is well past `CONTACT_GAP_FRAMES` so it can never decide whether a touch is an arrival - it only stops the map growing across a session, which mints a fresh hook id on every throw.
 
-Three sources feed it, and each is the one funnel for its case:
+Two sources feed it, and each is the one funnel for its case:
 
 - `BallHook.bounce` fires `registerBounceCallback` with the contact point, the surface normal and the **pre-reflection** velocity, behind the same `vn < 0 && speed > BOUNCE_MIN_SPEED` guard the reflection itself sits behind.
   Every impermeable contact the ball's hook has ends there - the flight sweep's hook-proof branch and `probeContact`'s deflection both - so one callback covers all of them.
@@ -57,8 +57,8 @@ Three sources feed it, and each is the one funnel for its case:
   What is left is exactly the narrowphase's own answer, a pair inside `CONTACT_SLOP` of each other; on a 2 cm hook that band is 1 cm and those slide frames sit 2-3 mm out.
   How fast the two are rubbing is then the render side's question, and `SLIDE_MIN_SPEED` is where it is asked.
   Either side of the pair may be the hook and hook-proof is a per-SHAPE flag, so the surface may be a rigid body: reading `a` alone would answer for half the pairs, and the velocity is taken **relative to the surface** so a hook riding a moving platform is not sliding on it.
-- `Hook.onDestroyed` for the grapple hook, which is destroyed rather than deflected by a hook-proof surface, so it gets the burst and never the stream.
-  Its `velocity` is a per-frame displacement and is divided by the step on the way out, since every threshold downstream is in m/s.
+
+A third, `Hook.onDestroyed`, reported the grapple hook, destroyed rather than deflected by a hook-proof surface, until that controller was retired on 2026-10-19.
 
 **A slide throws its sparks ALONG the slide, not against it** (`slideSparkDirection`).
 A spark is a chip sheared off the steel and carried away by whatever sheared it, so it leaves at a fraction of the sliding speed in the sliding direction: an angle grinder throws its fan the way the rim is travelling at the contact, and a car scraping the road throws sparks that are moving forwards even though they fall behind the car.
@@ -82,7 +82,7 @@ Once a hook is down and sliding, further normal components are the WALL's shape 
 `CONTACT_GAP_FRAMES` (2) is the rule - a touch is an arrival when nothing reported contact for that many steps - which bridges the single-frame gaps a speculative contact leaves while staying well under the flight time of any skip worth seeing as two strikes.
 Across the whole corpus it removes exactly one burst, the one above; all 30 of `session-2504f`'s stay.
 Whether the hook is arriving is itself collision information - it was not touching anything, and now it is - so it lives on the render side with every other threshold.
-The counter is per SYSTEM rather than per hook, which is exact while at most one hook is in contact at a time (the ball's chain has a single tip, and the grapple hook is destroyed by the surface that would spark).
+The counter is per SYSTEM rather than per hook, which is exact while at most one hook is in contact at a time (the ball's chain has a single tip, and the grapple hook, while it existed, was destroyed by the surface that would spark).
 
 **Every event is asked BOTH questions, and each answers on its own threshold.**
 A head-on hit is all burst, a drag all stream, and a glancing skip is legitimately both; nothing in `render/sparks.ts` knows or cares which part of the sim reported the touch.

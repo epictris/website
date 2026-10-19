@@ -497,19 +497,19 @@ Chains stay on the 2D canvas there, and deliberately: the editor draws a chain *
 
 **The avatar stands at the spawn** (`spawnBall` in `editor.ts`, drawn by `BallVisual` like any other host's), because a level is authored against the thing that plays it.
 Every gap, ledge and shelf in the file is a decision about a 12 cm iron ball, and a ring on the overlay says where a run starts without saying how much room it takes - so a slot judged by eye was judged against nothing until it was played.
-It is built here from the model rather than borrowed from a `BallLevel`, at the radius it is actually PLAYED at (`BallLevel.BALL_RADIUS_SCALE` over the authored spawn radius, which is the grapple avatar's), and nothing steps it: with no chain thrown there is nothing else of the assembly to draw, so what stands in the scene is the sphere and its mounting loop in the pose a run opens in.
+It is built here from the model rather than borrowed from a `BallLevel`, at the radius it is actually PLAYED at (`BallLevel.BALL_RADIUS_SCALE` over the authored spawn radius, which was the grapple avatar's), and nothing steps it: with no chain thrown there is nothing else of the assembly to draw, so what stands in the scene is the sphere and its mounting loop in the pose a run opens in.
 The spawn marker on the overlay gained the same size as a second, fainter ring outside its own: the inner one is the marker - the thing dragged to move the spawn - and the outer one is the ball's footprint, which lands on the drawn sphere's silhouette in a 3D view and is the only thing that says the ball's size in the 2D one.
 
 **Retired 2026-09-29**: the panel fields and tools for how a level looks - geometry objects (primitive, mesh and image), `+ Geometry`, `+ Image`, the per-object lens, match collision, the rock taper, **Fit collision to rock** and the rock seed - went when the level's look moved to its Blender scene ([blender-scenes](blender-scenes.md)); the full text is at commit `bfa6597`.
 
 ## Testing a level
 
-`▶ Test Grapple` / `▶ Test Ball` build a real `Level`/`BallLevel` from
+`▶ Test` builds a real `BallLevel` from
 the current model and run it inline (with the real camera, so a camera region is felt exactly as it will play); **Esc** returns to editing.
 A test uses the real game render path, so it gets the 3D scene for free - drawn into the letterboxed frame rather than the whole canvas, since the bars are not part of the picture the player is shown.
 A test also plays in the game's own fixed 1920 × 1080 frame, fitted into the editor canvas and letterboxed (see [**The view**](camera.md#the-view)): the point of ▶ Test is that the framing is what the player gets, and an editor-window-shaped view showed a different slice of the level from the one it will be played on.
 **B** is the same ball test but spawned **at the cursor**, so a corner of the level can be spot-checked without walking the spawn marker over to it and back.
-Selecting a **checkpoint** and pressing either ▶ Test does the same thing from a place the level itself records (see [**Notes and checkpoints**](editor-model.md#notes-and-checkpoints)): the spot-check is the throwaway version of it and the checkpoint is the one worth keeping, since it is also what `?checkpoint=NAME` asks for in the game.
+Selecting a **checkpoint** and pressing ▶ Test does the same thing from a place the level itself records (see [**Notes and checkpoints**](editor-model.md#notes-and-checkpoints)): the spot-check is the throwaway version of it and the checkpoint is the one worth keeping, since it is also what `?checkpoint=NAME` asks for in the game.
 The override is baked into the `LevelData` the test level is built from rather than into the model, so it never edits the level, and a reset (and the exported P bundle) respawns at the same point.
 
 **A test never plays the level's rolling entry** (`roll` in the Player spawn group - see [**The rolling entry**](ball-rolling.md#the-rolling-entry)): the ball starts at the spawn, in the player's hands, on the first frame.

@@ -13,8 +13,8 @@ contact gather, and the ball is the only thing in the game that uses it: its
 silhouette turns with it, so it settles onto its own support profile there (see
 [**The loop ride**](ball-rolling.md#the-loop-ride)). The chain solve
 runs *after* `World.integrate` (see `BallLevel.physicsProcess`), and `Rope`
-writes its positional correction straight onto a rigid body — only the grapple
-avatar sweeps — so the ball frame ends with `World.depenetrateRigid(ball)`, a
+writes its positional correction straight onto a rigid body - only the grapple
+avatar, retired 2026-10-19, was swept - so the ball frame ends with `World.depenetrateRigid(ball)`, a
 position-only push-out of the solid geometry around it, followed by
 `Rope.absorbBlockedLength()`. Without the push-out a point-blank anchor on
 the far side of a surface hauls the ball a little deeper every frame until it is
@@ -290,7 +290,7 @@ The gate above asks whether this frame's push-out reported a normal, and the exi
 Past that gate `absorbBlockedLength` charged the whole over-length to the surface, and the whole over-length is what a looser constraint then buys: 3 cm of fresh path a frame, each frame's path measured as the next frame's block, until 1.69 m of chain was flying a 2.19 m path and the ball left at **30.1 m/s** (`whirl-anchor` sprung/tip, which the 53.5 mm manacle tipped over - the same rig at 20 mm banks 4 cm of lease and peaks at 5.5, so the hole was always there and the bigger cuff only found it).
 So `BallLevel` measures how far each of its three push-outs actually moved the ball and reports the sum (`Rope.noteGeometryPush`), and the lease may not stand higher than where the frame began plus that.
 The bound is exact rather than tuned: translating the ball by `d` can lengthen the path by at most `d`, the coil riding the body rather than paying out. A graze buys a graze's worth, the over-length simply stands, and next frame's solve corrects it like any other length error.
-A rope whose caller does not measure a push (every caller but `BallLevel` - the scene chains, the vines, the grapple rope) is left unbounded exactly as before.
+A rope whose caller does not measure a push (every caller but `BallLevel` - the scene chains, the vines, and the grapple rope until it was retired on 2026-10-19) is left unbounded exactly as before.
 Measured across the committed corpus this SHORTENS the stall: the longest run falls from 38 frames to 21 against the invariant's 60, `session-1426f`'s 66 cm lease runaway is gone, and `session-726f` - the legitimate point-blank block, held for hundreds of frames - still earns its 56 cm and drifts less than it did.
 
 **A sixth: the lease is measured against what the surfaces make UNREACHABLE, not against where one solve left the path.**

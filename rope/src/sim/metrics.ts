@@ -15,21 +15,17 @@
 // scored perfectly on a metric it cannot express. Hence `num()` below, which is
 // deliberately written against `unknown`.
 
-import { BallLevel } from "../level/ballLevel";
 import { RigidBody2D } from "../engine/body";
 import { BallHook } from "../classes/ballHook";
 import {
   checkBallInvariants,
-  checkInvariants,
   EnergyMonitor,
   GripPinMonitor,
   GripAnchorMonitor,
   recordingDeserializer,
   RollMonitor,
   TunnelMonitor,
-  StuckDetector,
   worldDigestBall,
-  worldDigest,
   worldDigestDeltas,
   type Recording,
 } from "./trace";
@@ -94,7 +90,6 @@ export function bundleMetrics(rec: Recording, name: string): BundleMetrics {
   const gripPin = new GripPinMonitor();
   const gripAnchor = new GripAnchorMonitor();
   const tunnel = new TunnelMonitor();
-  const stuck = new StuckDetector();
   // The recorded world digests by the frame they describe: a bundle need not
   // carry one per frame (see `Recording.digests`). Built here rather than
   // imported, as `num` is written, because older trees have no helper for it.
@@ -112,46 +107,40 @@ export function bundleMetrics(rec: Recording, name: string): BundleMetrics {
     const input = deserialize(rec.frames[i]!);
     level.physicsProcess(input, 1 / 60);
 
-    if (level instanceof BallLevel) {
-      violations += checkBallInvariants(level).length;
-      if (energy.push(level, input)) violations++;
-      if (roll.push(level)) violations++;
-      if (gripPin.push(level)) violations++;
-      if (gripAnchor.push(level)) violations++;
-      if (tunnel.push(level)) violations++;
-      const ball = level.ball;
-      peakV = keepMax(peakV, num(ball.linearVelocity.length()));
-      pushRun = keepMax(pushRun, num((level as { chainPushCreditFrames?: unknown }).chainPushCreditFrames));
-      const gain = num((level as { chainSolveSpeedGain?: unknown }).chainSolveSpeedGain);
-      const budget = num((level as { chainWinchSpeedBudget?: unknown }).chainWinchSpeedBudget);
-      if (gain !== null) maxSolveKick = keepMax(maxSolveKick, gain - (budget ?? 0));
-      const chain = ball.chain;
-      if (chain) {
-        maxLease = keepMax(maxLease, num((chain as { blockedSlack?: unknown }).blockedSlack));
-        const constraint = num((chain as { constraintLength?: unknown }).constraintLength);
-        // Only while ANCHORED: a chain still deploying is legitimately whatever
-        // length the hook has reached, and measuring it over is measuring the
-        // shot.
-        if (constraint !== null && ball.chainAnchored) {
-          worstOverLength = keepMax(worstOverLength, chain.getCurrentLength() - constraint);
-        }
-        // The body the chain ENDS on, and not the hook still flying towards it:
-        // `BallHook` is a RigidBody2D, so the shot itself would otherwise be
-        // measured as an anchor doing 12 m/s in every single bundle.
-        const anchor = chain.end.contact.obj;
-        if (anchor instanceof RigidBody2D && !(anchor instanceof BallHook)) {
-          peakAnchorV = keepMax(peakAnchorV, num(anchor.linearVelocity.length()));
-        }
+    violations += checkBallInvariants(level).length;
+    if (energy.push(level, input)) violations++;
+    if (roll.push(level)) violations++;
+    if (gripPin.push(level)) violations++;
+    if (gripAnchor.push(level)) violations++;
+    if (tunnel.push(level)) violations++;
+    const ball = level.ball;
+    peakV = keepMax(peakV, num(ball.linearVelocity.length()));
+    pushRun = keepMax(pushRun, num((level as { chainPushCreditFrames?: unknown }).chainPushCreditFrames));
+    const gain = num((level as { chainSolveSpeedGain?: unknown }).chainSolveSpeedGain);
+    const budget = num((level as { chainWinchSpeedBudget?: unknown }).chainWinchSpeedBudget);
+    if (gain !== null) maxSolveKick = keepMax(maxSolveKick, gain - (budget ?? 0));
+    const chain = ball.chain;
+    if (chain) {
+      maxLease = keepMax(maxLease, num((chain as { blockedSlack?: unknown }).blockedSlack));
+      const constraint = num((chain as { constraintLength?: unknown }).constraintLength);
+      // Only while ANCHORED: a chain still deploying is legitimately whatever
+      // length the hook has reached, and measuring it over is measuring the
+      // shot.
+      if (constraint !== null && ball.chainAnchored) {
+        worstOverLength = keepMax(worstOverLength, chain.getCurrentLength() - constraint);
       }
-    } else {
-      violations += checkInvariants(level).length;
-      if (stuck.push(level, input)) violations++;
-      peakV = keepMax(peakV, num(level.player.velocity.length()));
+      // The body the chain ENDS on, and not the hook still flying towards it:
+      // `BallHook` is a RigidBody2D, so the shot itself would otherwise be
+      // measured as an anchor doing 12 m/s in every single bundle.
+      const anchor = chain.end.contact.obj;
+      if (anchor instanceof RigidBody2D && !(anchor instanceof BallHook)) {
+        peakAnchorV = keepMax(peakAnchorV, num(anchor.linearVelocity.length()));
+      }
     }
 
     const expected = expectedWorld.get(i + 1);
     if (expected && divergedAt === 0) {
-      const wd = level instanceof BallLevel ? worldDigestBall(level) : worldDigest(level);
+      const wd = worldDigestBall(level);
       if (worldDigestDeltas(wd, expected, DIVERGENCE_TOLERANCE).length > 0) divergedAt = i + 1;
     }
   }

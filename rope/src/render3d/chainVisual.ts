@@ -23,7 +23,7 @@ import { Vec2 } from "../engine/vec2";
 import { BallPlayer } from "../classes/ballPlayer";
 import type { CollisionObject2D } from "../engine/body";
 import { PX } from "../engine/units";
-import { CHAIN_LINK_LEN, CHAIN_LINK_W, walkChain } from "../render/chainMetrics";
+import { CHAIN_LINK_BAR, CHAIN_LINK_LEN, CHAIN_LINK_W, walkChain } from "../render/chainMetrics";
 import type { ChainRetract } from "../render/chainRetract";
 import { MANACLE_BAND, MANACLE_HINGE, MANACLE_RADIUS, MANACLE_REACH, MANACLE_WIDTH } from "../lib/manacle";
 import { FORGED_SMALL, forgedMetal } from "./ballVisual";
@@ -34,7 +34,7 @@ import type { Scene3DLevel } from "./scene";
 
 // A link is an oval ring: a torus stretched along the path. The tube is the bar
 // stock it is forged from, and it is what a chain's weight reads as.
-const LINK_TUBE = CHAIN_LINK_W * 0.42;
+const LINK_TUBE = CHAIN_LINK_BAR;
 const LINK_HALF_LEN = CHAIN_LINK_LEN * 0.62; // overlap neighbours so links interlock
 
 // Fixed alternation, as in 2D: a broad link lies in the gameplay plane, the next

@@ -2,7 +2,7 @@
 
 ## Hook-proof surfaces
 
-**Impermeable** is a flag on the **shape** (`CollisionShape2D.impermeable`, authored as `LevelBodyData.impermeable` per level entry): the grapple hook is destroyed on that surface and the ball's is deflected, instead of either anchoring.
+**Impermeable** is a flag on the **shape** (`CollisionShape2D.impermeable`, authored as `LevelBodyData.impermeable` per level entry): the ball's hook is deflected by that surface instead of anchoring (the grapple hook, retired 2026-10-19, was destroyed on it).
 It is solid in every other respect - being hook-proof is about the rope and nothing else - so the avatar stands on it, bodies collide with it and the rope still wraps its corners.
 
 It was a body **kind** for as long as it could only ever be static scene geometry, and that cost the two things levels actually want.
@@ -11,7 +11,7 @@ And a compound body was hook-proof in whole or not at all, so a wall with a sing
 Per shape it is both, and the flag is where the rest of the project already says it should be: **`obj` identity answers "does this move as one rigid piece with that", `shape` identity answers "is this the same surface"**, and which surface the hook reached is the second question (see [**Shapes**](physics-foundations.md#shapes)).
 
 Every path that decides therefore names a **piece**, and each of the three had to be given one:
-`World.intersectRay`'s `RayResult` carries the `shape` it hit (the grapple `Hook` reads it), `bodySweepCircle` and `bodyOverlapCircle` return the piece of the earliest / deepest hit (`BallHook`'s sweep and probe), and `attachToBlockingContact` already had one, since a `ContactConstraint` names the shapes it formed on.
+`World.intersectRay`'s `RayResult` carries the `shape` it hit (the grapple `Hook` read it, until that controller was retired on 2026-10-19), `bodySweepCircle` and `bodyOverlapCircle` return the piece of the earliest / deepest hit (`BallHook`'s sweep and probe), and `attachToBlockingContact` already had one, since a `ContactConstraint` names the shapes it formed on.
 The remaining body-level reading was `BallPlayer`'s attach callback, which is a backstop behind `BallHook`'s own decision and now resolves the piece nearest the anchor point.
 
 Rendering is per piece for the same reason - a body that is hook-proof on one face and attachable on the next has to draw as the two things it is.
@@ -53,7 +53,7 @@ Four mechanisms keep it out of the sim, none of them a per-call-site special cas
 - It goes **further** than `isSolid` in the one place a vine deliberately does not: a vine link is blocked by statics, which is how a vine drapes over a ledge, while a `passable` body is blocked by nothing at all.
   `gatherDepenetration` answers with no overlaps for one and `collectContacts` drops its pairs against statics too, which is what stops the scenery a leaf hangs in front of shoving the leaf out of itself.
 - Setting it moves the body onto its own collision layer (`LAYER_ANCHOR`), which the setter does rather than the caller, so the two cannot disagree.
-  Every other raycast asks for `MASK_SOLID` - scenery, the avatar and the hook, everything in the way (see [collision-layers](collision-layers.md)) - so they all miss it; the grapple `Hook` is the one query that asks for `MASK_ALL`, which is exactly what makes it attachable.
+  Every other raycast asks for `MASK_SOLID` - scenery, the avatar and the hook, everything in the way (see [collision-layers](collision-layers.md)) - so they all miss it; the grapple `Hook` (retired 2026-10-19) was the one query that asked for `MASK_ALL`, which is exactly what made it attachable.
   `BallHook`'s swept and probe contacts test no `isSolid` at all, for the same reason.
 - `buildLevelBodies` adds it to the world but keeps it **out of the returned wrap list** (the list is exactly the solid bodies), so a passing span has nothing to catch on, and `Rope` itself refuses to wrap a body whose `isSolid` is false (the `isPassThrough` gate in `regeneratePath` *and* in both self-intersection resolvers).
   The second half is not redundant: the wrap list is only the *scan* list, whereas the self-intersection resolvers wrap whatever a rope node is **already attached to**, list or no list.

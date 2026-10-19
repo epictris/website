@@ -19,9 +19,9 @@ The touch controls are positioned inside the frame rather than the window for th
 
 `render/cameraController.ts` owns the view: a **sprung follow** of the avatar, reshaped by the level's **camera regions** and **camera paths**.
 It is deliberately render-side, driven by the wall-clock frame `dt` rather than the fixed timestep, so moving it can never change a recorded run.
-(The grapple controller un-projects the cursor through the camera, so the camera does reach the sim as *input* — but the trace records the resulting world point, so replays stay bit-identical.)
-`camera.zoom` is the controller's **output**; the base framing scale lives in the caller (`GRAPPLE_ZOOM`, or `BALL_ZOOM` for the ball).
-The default framing puts the avatar **dead centre** for both controllers — the ball's old 3/5-down shift is gone — so shifting the view is a camera region's `offsetX`/`offsetY` and nothing else, one authored mechanism rather than a per-controller rule.
+(The ball controller's cursor aim un-projects the pointer through the camera, so the camera does reach the sim as *input* - but the trace records the resulting world aim, so replays stay bit-identical.)
+`camera.zoom` is the controller's **output**; the base framing scale lives in the caller (`BALL_ZOOM`).
+The default framing puts the avatar **dead centre** — the ball's old 3/5-down shift is gone — so shifting the view is a camera region's `offsetX`/`offsetY` and nothing else, one authored mechanism rather than a per-controller rule.
 
 ## Three layers
 
@@ -286,7 +286,7 @@ An axis the override is not touching is returned **as it came in** rather than r
 Every part of it is load-bearing under ablation: `CAMERA_EDGE_SMOOTHING = 0` reddens two cases, dropping the headroom out of the rate five, and giving the window outright on the position reddens the floor case.
 
 The margin is a **fraction of the frame** rather than a distance, because what is being constrained is where the avatar is ON SCREEN: a region that zooms out shows more world, and a margin in metres would shrink to a sliver of the frame exactly where the frame got roomier.
-It is measured to the follow POINT, so it has to clear the avatar's own radius and leave something worth seeing - 77 cm either side and 43 cm above and below on the 9.6 x 5.4 m a 1080p frame shows at `GRAPPLE_ZOOM`.
+It is measured to the follow POINT, so it has to clear the avatar's own radius and leave something worth seeing - 77 cm either side and 43 cm above and below on the 9.6 x 5.4 m a 1080p frame shows at `BALL_ZOOM`.
 
 It is **inert while the camera can keep up**, which is what makes it safe to apply globally.
 The default camera centres the avatar, so the only thing that can put it near the edge under the plain follow is outrunning the camera - which now means two things rather than one: the spring's steady-state lag of `2 * speed / omega`, which takes a sustained ~18 m/s to bind, and CAMERA_MAX_ACCEL, past which the camera cannot turn with the avatar at all.

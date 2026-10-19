@@ -3,8 +3,8 @@
 ## Force areas and surface friction
 
 A **`force`** body is a `ForceArea` (`engine/body.ts`, an `Area2D`): a region that
-accelerates every velocity-carrying body inside it — the grapple avatar and hook
-(`CharacterBody2D`), the ball, its hook and loose debris (`RigidBody2D`). `World.integrate`
+accelerates every velocity-carrying body inside it - the ball, its hook and loose
+debris (`RigidBody2D`). `World.integrate`
 applies it before gravity, so a body entering is carried on its first frame inside. The
 direction is the area's **own rotation** (local +X, so `rot` 0 flows right) and `force` is a
 signed magnitude in px/s² on disk, m/s² in the sim — negative reverses the flow. It is

@@ -47,7 +47,7 @@ import {
   type Softness,
 } from "../engine/ties";
 import type { RopeContact } from "../lib/ropeContact";
-import { VinePair, VineStrut } from "./vinePair";
+import { VinePair } from "./vinePair";
 import { VineAnchor } from "./vineAnchor";
 import { StalkClamp, VineBend, type BendEnd } from "./vineBend";
 import { VINE_LRA_GIVE, wakeVine, type Vine } from "./vines";
@@ -478,10 +478,12 @@ const SPRING_SOFT: MutableSoftness = { biasRate: 0, massScale: 1, impulseScale: 
 export class PlantUnit implements IslandUnit {
   readonly bodies: readonly RigidBody2D[];
   readonly rows: readonly IslandRow[];
-  // A held plant takes the plant's eight (`PlantTuning`: 120 Hz rows under a
-  // 52 kg ball); a free span takes `SPAN_SUBSTEPS`.
+  // A plant with berries takes the plant's eight (`PlantTuning`: 120 Hz rows
+  // under a 52 kg ball), held or not - its stalks' springs are the same rows
+  // either way, and a free plant's on a span's four stretched its stalks to
+  // 0.94 m (`session-846f` f19); a cord takes `SPAN_SUBSTEPS`.
   get substeps(): number {
-    return this.berry ? PlantTuning.substeps : SPAN_SUBSTEPS;
+    return this.berry !== null || this.vine.berries.length > 0 ? PlantTuning.substeps : SPAN_SUBSTEPS;
   }
   // The vine's own rest rule is the unit's (`stepVines`: net displacement
   // over a window, the links' flags with it), because a link never satisfies
@@ -514,6 +516,11 @@ export class PlantUnit implements IslandUnit {
   // link and dropped when it lets go, and the rows are built once.
   readonly lra: VineAnchor | null;
 
+  // The vine's links when the rows were built: a plant grows its berries
+  // after its cord is built and settled (`buildVines`), and a unit built
+  // before them held neither the stalks nor their rows (`syncSpanUnits`).
+  readonly linkCount: number;
+
   constructor(
     readonly vine: Vine,
     // The fruit the ball's chain holds, or null for a stiff span (free, or
@@ -521,6 +528,7 @@ export class PlantUnit implements IslandUnit {
     readonly berry: VineLink | null,
   ) {
     this.lra = vine.lra;
+    this.linkCount = vine.allLinks.length;
     this.bodies = vine.allLinks.filter(islandOwns);
     const rows: IslandRow[] = [];
     const stalkBodies = new Set<VineLink>();
@@ -551,15 +559,10 @@ export class PlantUnit implements IslandUnit {
         // the long-range attachments, already on the drawn arc.
         const joint = !stalk && b.obj === vine.links[0];
         rows.push(new LengthRow(a, b, chain.constraintLength + (joint ? give : 0), false, stalk ? "stalk" : "anchor"));
-      } else {
-        throw new Error(`a plant's chain set holds a ${chain.constructor.name}, which has no row`);
       }
     }
-    // The joint floors, the mirror of the pairs' ceilings. A row has no order
-    // to care about, so where the sweep takes them (after the bends) is
-    // nothing to the island.
+    // The joint floors, the mirror of the pairs' ceilings.
     for (const strut of vine.struts) {
-      if (!(strut instanceof VineStrut)) throw new Error(`a plant's strut set holds a ${strut.constructor.name}, which has no row`);
       const [a, b] = strut.ends;
       rows.push(new LengthRow(a, b, strut.minLength, true, "strut"));
     }
@@ -569,10 +572,7 @@ export class PlantUnit implements IslandUnit {
     // of `session-846f`), stiffened to store a smooth bend's energy or not:
     // the coarse scales are what hold the cord's slow modes, and a neighbour
     // row stiff enough to stand in for them is past the island's spring cap.
-    for (const bend of vine.bends) {
-      if (bend instanceof VineBend || bend instanceof StalkClamp) rows.push(new SpringRow(bend));
-      else throw new Error(`a plant's bend set holds a ${bend.constructor.name}, which has no row`);
-    }
+    for (const bend of vine.bends) rows.push(new SpringRow(bend));
     for (const lra of [vine.lra, vine.lra2]) {
       if (!lra) continue;
       const [a, b] = lra.ends;

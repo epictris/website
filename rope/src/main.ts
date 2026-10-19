@@ -1,16 +1,14 @@
 // Entry point: fixed-timestep loop driving the level, live input and renderer.
 
 import { Vec2 } from "./engine/vec2";
-import { Level } from "./level/level";
 import { BallLevel, FINISH_LINGER_FRAMES, type BallKind } from "./level/ballLevel";
 import { SlackChain } from "./classes/slackChain";
-import { LiveInputSource } from "./input/liveInput";
 import { BallInputSource } from "./input/ballInput";
 import { BUTTON_BITS, InputTrace } from "./input/inputTrace";
-import { drawProbeOutline, render, renderBall } from "./render/renderer";
+import { drawProbeOutline, renderBall } from "./render/renderer";
 import { Scene3D } from "./render3d/scene";
 import { isDepthOfFieldLevel } from "./render/settings";
-import { BALL_ZOOM, GRAPPLE_ZOOM, type Camera } from "./render/camera";
+import { BALL_ZOOM, type Camera } from "./render/camera";
 import { clientToView, fitCanvas, VIEW_HEIGHT, VIEW_WIDTH, viewTransform } from "./render/viewport";
 import { CameraController } from "./render/cameraController";
 import { PerfProbe } from "./render/perfProbe";
@@ -26,11 +24,9 @@ import { glassOptionsFrom } from "./render3d/glassMaterial";
 import { DEFAULT_LEVEL, LEVELS, listedLevels } from "./level/registry";
 import { spawnAtCheckpoint } from "./level/levelFormat";
 import {
-  digest,
   digestBall,
   recordingDeserializer,
   serializeInput,
-  worldDigest,
   worldDigestBall,
   type Recording,
   type WorldDigest,
@@ -93,7 +89,7 @@ const ctx = canvas.getContext("2d")!;
 // how much world is inside it.
 const camera: Camera = {
   position: Vec2.ZERO,
-  zoom: GRAPPLE_ZOOM,
+  zoom: BALL_ZOOM,
   viewportWidth: VIEW_WIDTH,
   viewportHeight: VIEW_HEIGHT,
 };
@@ -135,8 +131,7 @@ const levelHash = levelHashes[levelId] ?? "";
 // What the feedback form calls this level. The registry id is a key; the title
 // is what the player has just played (see `LevelMetaData.title`).
 const levelTitle = levelSpec.data.meta?.title ?? levelId;
-const isBall = levelSpec.controller === "ball";
-const baseZoom = isBall ? BALL_ZOOM : GRAPPLE_ZOOM;
+const baseZoom = BALL_ZOOM;
 // THE MENU PAGE. A bare `/` (or a `?level=` nobody has) is the difficulty
 // select, and it is shown AFTER the level has loaded rather than before: this
 // page boots the intro level behind the loading bar - downloaded, warmed and
@@ -148,18 +143,15 @@ const choosing = window.__ropeChoose === true && params.get("replay") === null;
 // that breaks on the first solid thing it touches, and anything else is the
 // iron ball (see `BallLevelOptions`). Fixed for the page once the run starts,
 // like the level - on the menu page, by the pick.
-let ballKind: BallKind = isBall && params.get("ball") === "glass" ? "glass" : "iron";
+let ballKind: BallKind = params.get("ball") === "glass" ? "glass" : "iron";
 // Where this page's progress is kept, which is per difficulty: finishing Hard
 // is not finishing Normal (see `progressKey`).
 const progressId = (): string => progressKey(levelId, ballKind);
 
-// Render mode. The ball & chain plays in 3D; the grapple levels stay on the 2D
-// path, because the Player state-machine slice is 2D-only (its rig, its rope and
-// its ledge overlay are all drawn on the top canvas) and nothing has asked for
-// it in 3D yet. `?render=2d` forces the old path anywhere - it is the escape
-// hatch for a machine with no working WebGL, and the mode `shot.html` and
-// `cli shot` implicitly use.
-const wants3d = (params.get("render") ?? (isBall ? "3d" : "2d")) === "3d";
+// Render mode: the ball & chain plays in 3D. `?render=2d` forces the 2D path -
+// it is the escape hatch for a machine with no working WebGL, and the mode
+// `shot.html` and `cli shot` implicitly use.
+const wants3d = (params.get("render") ?? "3d") === "3d";
 
 // The alignment probe (`?probe3d=1`): a known world rect drawn as a box in the
 // 3D scene and as an outline on the 2D overlay. They must coincide exactly, at
@@ -292,12 +284,10 @@ const replayName = params.get("replay");
 // against the ball before the step.
 let replayAim: Vec2 | null = null;
 
-function recordedAim(l: Level | BallLevel, input: FrameInput): Vec2 | null {
+function recordedAim(l: BallLevel, input: FrameInput): Vec2 | null {
   const aim = input.mouseWorldPosition;
-  if (l instanceof BallLevel) {
-    const origin = l.ball.globalPosition;
-    if (aim.x === origin.x && aim.y === origin.y) return null;
-  }
+  const origin = l.ball.globalPosition;
+  if (aim.x === origin.x && aim.y === origin.y) return null;
   return aim;
 }
 
@@ -313,7 +303,7 @@ function recordedAim(l: Level | BallLevel, input: FrameInput): Vec2 | null {
 const checkpoint = params.get("checkpoint");
 const levelData = spawnAtCheckpoint(levelSpec.data, checkpoint);
 
-function makeLevel(): Level | BallLevel {
+function makeLevel(): BallLevel {
   // While a recording is being watched, every build in the session is the
   // recording's - the first one and every one a reset makes. Built from the URL
   // instead, a replay that crossed a kill zone carried on against the level the
@@ -321,7 +311,7 @@ function makeLevel(): Level | BallLevel {
   // a run played from a checkpoint is a different level entirely, and the frames
   // after the reset were then evidence about nothing.
   if (replayRec) return levelFromRecording(replayRec);
-  return isBall ? new BallLevel(levelData, { ball: ballKind }) : new Level(levelData, levelSpec.init);
+  return new BallLevel(levelData, { ball: ballKind });
 }
 
 let level = makeLevel();
@@ -405,11 +395,10 @@ buildScene();
 
 // The difficulty select is up (see `chooseDifficulty`).
 let menuUp = false;
-const ballInput = isBall
-  ? new BallInputSource(
+const ballInput = new BallInputSource(
       canvas,
       camera,
-      () => (level as BallLevel).ball.globalPosition,
+      () => level.ball.globalPosition,
       // Always the one driving, EXCEPT while a recording is being watched: the
       // aim on screen there is the recorded player's, this source steers
       // nothing, and a source that believes it is driving would take the
@@ -429,8 +418,7 @@ const ballInput = isBall
       // the arrow is still on screen there, and the aim has to stay under it -
       // and nor does a replay, which keeps the desktop cursor for the bar.
       replayName === null,
-    )
-  : null;
+    );
 // The ball controller draws its own aim reticle (clamped to the chain's reach),
 // so the OS cursor would be a second, misleading pointer — hide it. On the
 // CANVAS only: the rest of the page keeps the desktop cursor, because the
@@ -440,11 +428,8 @@ const ballInput = isBall
 // Never while a recording is being watched: the reticle there is the RECORDED
 // player's aim and the pointer is the hand on the transport bar, so taking the
 // cursor away would leave the scrub bar to be dragged blind.
-if (isBall && replayName === null) canvas.style.cursor = "none";
-const liveInput = isBall
-  ? null
-  : new LiveInputSource(canvas, camera, () => (level as Level).player.globalPosition);
-const input: IInputSource = (ballInput ?? liveInput)!;
+if (replayName === null) canvas.style.cursor = "none";
+const input: IInputSource = ballInput;
 
 // The raw DOM button story, downloaded beside the frames (see
 // input/inputTrace.ts): the frames say what the sim sampled, this says what
@@ -452,7 +437,7 @@ const input: IInputSource = (ballInput ?? liveInput)!;
 const inputTrace = new InputTrace(
   canvas,
   () => ({ run: resets, frame: level.frame }),
-  () => (isBall ? BUTTON_BITS.ball : BUTTON_BITS.grapple),
+  () => BUTTON_BITS.ball,
 );
 inputTrace.install();
 
@@ -471,8 +456,8 @@ const recording = new RunRecording();
 let lastHeld = 0;
 let recHeldAtStart = 0;
 
-function worldDigestOf(l: Level | BallLevel): WorldDigest {
-  return l instanceof BallLevel ? worldDigestBall(l) : worldDigest(l);
+function worldDigestOf(l: BallLevel): WorldDigest {
+  return worldDigestBall(l);
 }
 
 // Production playtest recording (see playtest/recorder.ts): on in a production
@@ -573,9 +558,9 @@ function downloadRecording(): void {
     level: replayRec?.level ?? levelId,
     // `data` AND `controller` together, because they are one statement: a
     // self-contained bundle builds from its embedded geometry and `controller`
-    // is what says which driver to build it with (see `Recording.controller`).
+    // is what says which driver it was played with (see `Recording.controller`).
     // Carrying the geometry without it re-exported a ball run as a grapple one,
-    // which diverges on frame 1 with no ball to steer and no line to cross.
+    // which can no longer be replayed at all.
     ...(replayRec?.data ? { data: replayRec.data } : {}),
     ...(replayRec?.controller ? { controller: replayRec.controller } : {}),
     // A bundle names its level rather than embedding it, so a run from a named
@@ -627,10 +612,9 @@ window.addEventListener("keydown", (e) => {
   // comment box used to download a bundle on every "p" in it.
   const t = e.target as HTMLElement | null;
   if (t && (t.tagName === "TEXTAREA" || t.tagName === "INPUT" || t.isContentEditable)) return;
-  // S is the settings panel, on the ball controller only: the grapple
-  // controller has S as extend (see `LiveInputSource`). Not over the
-  // completion panel, which has stopped the level and owns the screen.
-  if (e.code === "KeyS" && isBall && !frozen && !e.repeat && !e.ctrlKey && !e.metaKey && !e.altKey) {
+  // S is the settings panel. Not over the completion panel, which has stopped
+  // the level and owns the screen.
+  if (e.code === "KeyS" && !frozen && !e.repeat && !e.ctrlKey && !e.metaKey && !e.altKey) {
     e.preventDefault();
     settingsMenu.toggle();
   }
@@ -874,12 +858,12 @@ function stepLevel(frameInput: FrameInput, seeking: boolean): void {
   if (replay) replayAim = recordedAim(level, frameInput);
   const simT0 = performance.now();
   const stepped = level;
-  const attempt = level instanceof BallLevel ? level.attempt : 0;
+  const attempt = level.attempt;
   level.physicsProcess(frameInput, STEP);
   // A glass ball respawned at the start (see `BallLevel.respawn`): the camera
   // goes with it, as it does on a reset, rather than easing the length of the
   // level to catch up.
-  if (level === stepped && level instanceof BallLevel && level.attempt !== attempt) cameraCtl.snap();
+  if (level === stepped && level.attempt !== attempt) cameraCtl.snap();
   frameSimMs += performance.now() - simT0;
   frameSteps++;
   if (!seeking) {
@@ -890,10 +874,10 @@ function stepLevel(frameInput: FrameInput, seeking: boolean): void {
     // the only frame its event exists on (see `BallLevel.breakEvents`).
     debris.ingest(level.breakEvents);
     // ...and the glass ball breaking, which happens on one step only.
-    if (level instanceof BallLevel) shards.ingest(level.shatterEvents);
+    shards.ingest(level.shatterEvents);
     // Likewise per step, so a chain let go and re-thrown across two steps of
     // one render frame is seen as both rather than as nothing having changed.
-    chainRetract?.observe(level instanceof BallLevel ? level : null, STEP);
+    chainRetract?.observe(level, STEP);
   }
   // The bundle buffers are fed whether or not anyone is watching, so that they
   // hold exactly what has been simulated since the current build: a P download
@@ -913,7 +897,7 @@ function stepLevel(frameInput: FrameInput, seeking: boolean): void {
     recorder?.startRun(levelId, serialized.h);
   } else {
     const wd = worldDigestOf(level);
-    recording.push(serialized, level instanceof BallLevel ? digestBall(level) : digest(level), wd);
+    recording.push(serialized, digestBall(level), wd);
     recorder?.frame(serialized);
     if (level.frame % DIGEST_EVERY === 0) recorder?.digest(wd);
   }
@@ -945,7 +929,7 @@ let lingerUntil: number | null = null;
 // Returns true once stepping should stop for this frame.
 function checkCompletion(): boolean {
   if (frozen) return true;
-  if (!(level instanceof BallLevel) || level.completedFrame === null) return false;
+  if (level.completedFrame === null) return false;
   if (lingerUntil === null) lingerUntil = level.completedFrame + FINISH_LINGER_FRAMES;
   if (level.frame < lingerUntil) return false;
   frozen = true;
@@ -982,7 +966,7 @@ function retryLevel(): void {
   hidePointer();
   // The aim opens with the run, at the cursor where the hand left it, which is
   // the rule the first run follows too (see `boot`).
-  ballInput?.openRun();
+  ballInput.openRun();
 }
 
 function completeLevel(): void {
@@ -1166,7 +1150,7 @@ function frame(now: number): void {
   // fixed step entirely, like the camera ease.
   sparks.advance(dt);
   debris.advance(dt);
-  shards.advance(dt, level instanceof BallLevel ? level : null);
+  shards.advance(dt, level);
 
   // Camera: eased follow of the avatar, reshaped by the level's camera regions.
   // Driven by the render dt, so it is frame-rate independent and outside the
@@ -1195,37 +1179,22 @@ function frame(now: number): void {
   const draw3dMs = performance.now() - draw3dT0;
 
   const draw2dT0 = performance.now();
-  if (level instanceof BallLevel) {
-    renderBall(
-      ctx,
-      view,
-      level,
-      camera,
-      fps,
-      replay ? replayAim : ballInput!.aimPoint(),
-      alpha,
-      scene3d !== null,
-      sparks,
-      chainRetract,
-      debris,
-      shards,
-    );
-  } else {
-    render(
-      ctx,
-      view,
-      level,
-      camera,
-      fps,
-      showDebug,
-      replay ? replayAim : liveInput!.crosshairAim(),
-      alpha,
-      cameraCtl.held,
-      scene3d !== null,
-      sparks,
-      debris,
-    );
-  }
+  renderBall(
+    ctx,
+    view,
+    level,
+    camera,
+    fps,
+    replay ? replayAim : ballInput.aimPoint(),
+    alpha,
+    scene3d !== null,
+    sparks,
+    chainRetract,
+    debris,
+    shards,
+    showDebug,
+    cameraCtl.held,
+  );
   const draw2dMs = performance.now() - draw2dT0;
 
   // The screen a level that opens on a recorded arrival comes up out of (see
@@ -1233,7 +1202,7 @@ function frame(now: number): void {
   // which is on top - and under the instruments below, because a perf panel or
   // a transport bar is the page talking to whoever opened it rather than part
   // of the picture being faded in.
-  if (level instanceof BallLevel && level.opensOnArrival) {
+  if (level.opensOnArrival) {
     drawOpeningFade(ctx, view, openingFadeAlpha(level.frame + alpha));
   }
 
@@ -1366,12 +1335,9 @@ function enterFullscreen(): void {
 // drawn from the first mouse move, which is itself the aim the run opens on
 // (see `AimPointer.reveal`).
 //
-// The ball controller only: the grapple controller aims with the OS pointer
-// itself and draws no reticle, so hiding it there would leave nothing to aim
-// with.
 // A replay keeps its pointer for the same reason the canvas does (see there).
 function hidePointer(): void {
-  if (isBall && replayName === null) document.documentElement.style.cursor = "none";
+  if (replayName === null) document.documentElement.style.cursor = "none";
 }
 
 // Hand the game the screen and the cursor on the player's FIRST CLICK in it.
@@ -1399,7 +1365,7 @@ function armFirstClick(): void {
   canvas.addEventListener(
     "pointerdown",
     () => {
-      if (replayName === null) ballInput?.takePointerLock();
+      if (replayName === null) ballInput.takePointerLock();
       enterFullscreen();
       // What the click actually got. The two can come apart - a browser may
       // refuse either - and "the cursor is still sitting there" is
@@ -1435,9 +1401,8 @@ function armFirstClick(): void {
 // 0.7-0.8 s first frame after either pick (Tris, 2026-10-16: "the transition
 // should be seamless") - the whole scene thrown away and uploaded again.
 async function chooseDifficulty(): Promise<void> {
-  const ballLevel = level instanceof BallLevel ? level : null;
-  if (scene3d && ballLevel) {
-    ballLevel.setBallKind(ballKind === "glass" ? "iron" : "glass");
+  if (scene3d) {
+    level.setBallKind(ballKind === "glass" ? "iron" : "glass");
     warmFrame();
     await scene3d.prewarm(level, camera, shards);
   }
@@ -1450,8 +1415,8 @@ async function chooseDifficulty(): Promise<void> {
   });
   menuUp = false;
   window.__ropePick = undefined;
-  ballKind = isBall && picked === "glass" ? "glass" : "iron";
-  ballLevel?.setBallKind(ballKind);
+  ballKind = picked === "glass" ? "glass" : "iron";
+  level.setBallKind(ballKind);
   openSession();
 }
 
@@ -1486,7 +1451,7 @@ async function boot(): Promise<void> {
   warmFrame();
   // The glass ball's pieces and the engine that throws them, on either path,
   // and before the prewarm compiles them (see render/glassShards.ts `prepare`).
-  if (level instanceof BallLevel) await shards.prepare(level);
+  await shards.prepare(level);
   // Then everything the warm frame's camera cannot see (see `Scene3D.prewarm`).
   // Awaited under the screen: the frame loop, and the run, start after it.
   if (scene3d) {
@@ -1529,7 +1494,7 @@ async function boot(): Promise<void> {
   // The aim starts HERE, with the run, rather than when the input source was
   // built: the ball opens facing the cursor, wherever the hand left it (see
   // `BallInputSource.openRun`).
-  ballInput?.openRun();
+  ballInput.openRun();
   requestAnimationFrame(frame);
 }
 void boot();

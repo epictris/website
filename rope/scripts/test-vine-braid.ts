@@ -14,7 +14,7 @@ import type { VineTube } from "../src/render3d/vineTube";
 import { modelFromDisk, modelToDisk, cloneVine, ED_LAYERS } from "../src/editor/model";
 import { Guides } from "../src/editor/visuals/guides";
 import { scaleLevelData, type RawLevelData } from "../src/level/levelFormat";
-import { Level } from "../src/level/level";
+import { BallLevel } from "../src/level/ballLevel";
 import { emptyFrameInput } from "../src/input/frameInput";
 import ball from "../levels/ball.json";
 
@@ -312,7 +312,7 @@ const raw: RawLevelData = { player: { x: -100, y: 100, radius: 12 }, bodies: [
     { type: "collision", shape: { kind: "rect", w: 180, h: 20 } }, { type: "anchor", id: 1, x: 70, y: 10 }
   ] }
 ], vines: [{ anchor: 1, length: 300 }] };
-const plain = new Level(raw), braided = new Level({ ...raw, vines: [{ ...raw.vines![0]!, braidSeed: 1701 }] });
+const plain = new BallLevel(raw), braided = new BallLevel({ ...raw, vines: [{ ...raw.vines![0]!, braidSeed: 1701 }] });
 const movingScene = new THREE.Scene(), movingLayer = new VineLayer(movingScene);
 const movingPath: Vec2[] = []; braided.vines[0]!.path(1, movingPath);
 const firstRoot = movingPath[0]!; let anchorMotion = 0, tipLag = 0;
@@ -332,10 +332,12 @@ assert.ok(anchorMotion > .01, "the comparison exercises an actually moving ancho
 assert.ok(tipLag > .0001 && tipLag <= .18 + 1e-6, "actual swinging physics drives finite bounded tip deformation");
 movingLayer.dispose();
 
-// A real two-ended span grabbed by the player: both load paths are active,
-// while leaves and the braid remain purely visual through the loaded bend.
+// A real two-ended span hooked by the ball: both load paths are active, while
+// leaves and the braid remain purely visual through the loaded bend. The ball
+// stands on a ledge under the span so the throw reaches its middle.
 const spanRaw: RawLevelData = { player: { x: 200, y: -250, radius: 12 }, bodies: [
   { kind: "static", x: 0, y: 600, rot: 0, objects: [{ type: "collision", shape: { kind: "rect", w: 3000, h: 40 } }] },
+  { kind: "static", x: 200, y: -218, rot: 0, objects: [{ type: "collision", shape: { kind: "rect", w: 80, h: 40 } }] },
   { kind: "static", x: 0, y: -500, rot: 0, objects: [
     { type: "collision", shape: { kind: "rect", w: 600, h: 40 } }, { type: "anchor", id: 1, x: 0, y: 20 }
   ] },
@@ -343,7 +345,7 @@ const spanRaw: RawLevelData = { player: { x: 200, y: -250, radius: 12 }, bodies:
     { type: "collision", shape: { kind: "rect", w: 200, h: 40 } }, { type: "anchor", id: 2, x: 0, y: 20 }
   ] }
 ], vines: [{ anchor: 1, anchor2: 2, length: 500 }] };
-const plainSpan = new Level(spanRaw), braidedSpan = new Level({ ...spanRaw, vines: [{ ...spanRaw.vines![0]!, braidSeed: 1798 }] });
+const plainSpan = new BallLevel(spanRaw), braidedSpan = new BallLevel({ ...spanRaw, vines: [{ ...spanRaw.vines![0]!, braidSeed: 1798 }] });
 const spanScene = new THREE.Scene(), spanLayer = new VineLayer(spanScene);
 for (let frame = 0; frame < 30; frame++) {
   plainSpan.physicsProcess(emptyFrameInput(), 1 / 60); braidedSpan.physicsProcess(emptyFrameInput(), 1 / 60);
@@ -368,8 +370,8 @@ for (let frame = 0; frame < 180; frame++) {
   assert.deepEqual(spanVine.links.map(link => link.globalPosition), plainSpan.vines[0]!.links.map(link => link.globalPosition),
     "surface attachments never change a grabbed two-ended span's physics");
 }
-assert.ok(spanHeld, "the span test actually engages the player's load path to both anchors");
-assert.ok(spanTwist > .00001, "actual player loading drives a small strain-based twist, not a preset animation");
+assert.ok(spanHeld, "the span test actually engages the ball's load path to both anchors");
+assert.ok(spanTwist > .00001, "actual ball loading drives a small strain-based twist, not a preset animation");
 for (let frame = 0; frame < 120; frame++) {
   const input = emptyFrameInput(); input.fire.released = frame === 0;
   plainSpan.physicsProcess(input, 1 / 60); braidedSpan.physicsProcess(input, 1 / 60);
@@ -415,7 +417,7 @@ assert.ok(ropeScene.getObjectByName("vine-braid-tube")?.visible, "and is drawn a
 assert.ok((ropeScene.getObjectByName("vine-leaves") as THREE.InstancedMesh).count > 0, "with its leaves back");
 ropeLayer.dispose();
 
-const plainRope = new Level(raw), roped = new Level({ ...raw, vines: [{ ...raw.vines![0]!, braidSeed: 1701, rope: true }] });
+const plainRope = new BallLevel(raw), roped = new BallLevel({ ...raw, vines: [{ ...raw.vines![0]!, braidSeed: 1701, rope: true }] });
 assert.equal(roped.vines[0]!.rope, true, "a built vine carries its rope look to the renderers");
 for (let frame = 0; frame < 120; frame++) {
   plainRope.physicsProcess(emptyFrameInput(), 1 / 60); roped.physicsProcess(emptyFrameInput(), 1 / 60);

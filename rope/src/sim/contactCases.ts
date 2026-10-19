@@ -32,18 +32,17 @@ import {
   type CollisionObject2D,
   type CollisionShape2D,
 } from "../engine/body";
-import { LedgeDetection } from "../lib/ledgeDetection";
 import { circleOverlap } from "../engine/collision";
 import { Mathf } from "../engine/mathf";
-import { PX } from "../engine/units";
+import { PIXELS_PER_METER, PX } from "../engine/units";
 import { shapeContacts } from "../engine/manifold";
 import { circleShape, polyShapeCentred, rectShape, type Shape } from "../engine/shapes";
-import { CONTACT_SLOP, ContactAudit, World } from "../engine/world";
+import { CONTACT_SLOP, ContactAudit, GRAVITY, World } from "../engine/world";
+import { TieTuning } from "../engine/ties";
 import { MANACLE_HINGE, MANACLE_MOUTH, MANACLE_REACH, MANACLE_THICKNESS } from "../lib/manacle";
 import { MATERIALS, ShapeGeometry } from "../lib/shapeGeometry";
 import { BallPlayer } from "../classes/ballPlayer";
 import { BallHook } from "../classes/ballHook";
-import { Hook } from "../classes/hook";
 import { buildLevelBodies, RIGID_KINETIC_FRICTION, RIGID_STATIC_FRICTION } from "../level/buildBodies";
 import {
   isCollisionObject,
@@ -53,7 +52,7 @@ import {
   type RawLevelData,
   type ShapeData,
 } from "../level/levelFormat";
-import { CHAIN_TOLERANCE, SceneChain, buildSceneChains, stepSceneChains } from "../level/chains";
+import { CHAIN_TOLERANCE, SceneChain, buildSceneChains, syncSceneChains } from "../level/chains";
 // The editor's own round trip, for the spawn flag it would otherwise delete
 // (see `caseSpawnHang`).
 import { modelFromDisk, modelToDisk } from "../editor/model";
@@ -573,6 +572,7 @@ function casePivotChain(sims: Sim[]): ContactResult {
   const anchorFin = new Vec2(1.4, -2.875);
   const anchorWeight = new Vec2(1.4, -2.2);
   const chain = new SceneChain(
+    sim.world,
     RopeContact.at(fin, anchorFin),
     RopeContact.at(weight, anchorWeight),
     anchorFin.distanceTo(anchorWeight),
@@ -583,7 +583,7 @@ function casePivotChain(sims: Sim[]): ContactResult {
   let axleDrift = 0;
   let peakSpeed = 0;
   sim.step(600, () => {
-    stepSceneChains([chain], sim.world, DT);
+    syncSceneChains([chain], sim.world);
     maxTurn = Math.max(maxTurn, Math.abs(wrapAngle(fin.globalRotation)));
     axleDrift = Math.max(axleDrift, fin.globalPosition.sub(new Vec2(0, -3)).length());
     peakSpeed = Math.max(peakSpeed, weight.linearVelocity.length());
@@ -865,6 +865,7 @@ function caseSteeredHungHold(sims: Sim[]): ContactResult {
     const pa = new Vec2(ax, -3.9);
     const pb = new Vec2(bx, 0).rotated(th).add(new Vec2(0, -0.2).rotated(th));
     return new SceneChain(
+      sim.world,
       RopeContact.at(ceiling, pa),
       RopeContact.at(slab, pb),
       pa.distanceTo(pb),
@@ -889,7 +890,7 @@ function caseSteeredHungHold(sims: Sim[]): ContactResult {
   let start = offset();
   let worst = 0;
   sim.step(900, (n) => {
-    stepSceneChains(chains, sim.world, DT);
+    syncSceneChains(chains, sim.world);
     ball.kinematicRotation = true;
     ball.angularVelocity = 0;
     // Let the rig settle onto its chains before the measurement opens.
@@ -1627,7 +1628,6 @@ function caseHookBlockedAttaches(): ContactResult {
         // when it caught, and an attach re-wraps the same corners, so this says
         // the same thing whichever of the two answered.
         if (pushedAt === f) caught = ball.chain?.wraps.some((w) => w.contact.obj !== ball) ?? false;
-        if (ball.chainAnchored && ball.chain) ball.chain.physicsStep(world.bodies, DT);
         // The sweep anchors on the frame of contact, a spent throw on that same
         // frame's reach check, and the backstop on the frame after: one more
         // frame is all any of them may take.
@@ -1771,7 +1771,6 @@ function caseChainOut(): ContactResult {
         const span = ball.globalPosition.add(new Vec2(0, -0.12)).distanceTo(hook.hinge);
         if (span > maxSpan) maxSpan = span;
       }
-      if (ball.chainAnchored && ball.chain) ball.chain.physicsStep(world.bodies, DT);
     }
     const attached = ball.chain !== null && !(ball.chain.end.contact.obj instanceof BallHook);
     const hookGone = !world.bodies.some((b) => b instanceof BallHook);
@@ -2094,9 +2093,18 @@ function caseSpawnHang(): ContactResult {
     `hang: attached=${attached} length=${bornLength.toFixed(4)} m, after 180f drift=${drift.toFixed(5)} m ` +
       `maxSpeed=${maxSpeed.toFixed(5)} m/s growth=${grew.toFixed(5)} m`,
   );
-  // A chain in the plumb of a flat ceiling holds the authored pose exactly:
-  // this is the spawn-at-rest statement, not a settling tolerance.
-  const hangs = attached && drift < 1e-9 && maxSpeed < 1e-9 && Math.abs(grew) < 1e-9;
+  // A chain in the plumb of a flat ceiling holds the authored pose: this is
+  // the spawn-at-rest statement, not a settling tolerance. Nothing moves and
+  // nothing grows; the one thing the pose gives is the chain's own stretch
+  // under the weight, since the chain is a row of the island, a soft
+  // constraint at `TieTuning.hertz`, and a soft constraint carrying a load
+  // stands `C = λ·w / (h·ω²)` over, which for `λ = m·g·h` is `g / ω²`
+  // whatever the damping ratio (69 µm at 60 Hz; the positional phase held
+  // it at zero).
+  const omega = 2 * Math.PI * TieTuning.hertz;
+  const stretch = GRAVITY.length() / (omega * omega);
+  const hangs = attached && drift < stretch * 1.001 && maxSpeed < 1e-9 && Math.abs(grew) < 1e-9;
+  details.push(`hang: the row's stretch under the weight, g/ω² = ${(stretch * 1e6).toFixed(2)} µm`);
 
   // --- the first press re-throws it ---------------------------------------
   //
@@ -2321,7 +2329,6 @@ function caseChainOutVsSolver(): ContactResult {
           if (gap < minFaceGap) minFaceGap = gap;
         }
       }
-      if (ball.chainAnchored && ball.chain) ball.chain.physicsStep(world.bodies, DT);
     }
     const attached = ball.chain !== null && !(ball.chain.end.contact.obj instanceof BallHook);
     return { convSpeed, attached, convPos, minFaceGap, maxVx };
@@ -2471,7 +2478,6 @@ function caseDeploySpent(): ContactResult {
       }
       ball.checkChainReach(world.bodies);
       note();
-      if (ball.chainAnchored && ball.chain) ball.chain.physicsStep(world.bodies, DT);
     }
     out.attached = ball.chain !== null && !(ball.chain.end.contact.obj instanceof BallHook);
     return out;
@@ -2868,7 +2874,7 @@ function caseChainOrder(): ContactResult {
     const chain = (a: [PhysicsBody2D, number, number], b: [PhysicsBody2D, number, number]) => {
       const pa = new Vec2(a[1], a[2]);
       const pb = new Vec2(b[1], b[2]);
-      return new SceneChain(RopeContact.at(a[0], pa), RopeContact.at(b[0], pb), pa.distanceTo(pb), null);
+      return new SceneChain(sim.world, RopeContact.at(a[0], pa), RopeContact.at(b[0], pb), pa.distanceTo(pb), null);
     };
     const hanger = chain([ceiling, 0, -3.9], [link, 0, -2.5]);
     const left = chain([link, -0.1, -2.1], [weight, -1, -1.85]);
@@ -2879,7 +2885,7 @@ function caseChainOrder(): ContactResult {
     let tilt = 0;
     let stretch = 0;
     sim.step(FRAMES, (n) => {
-      stepSceneChains(chains, sim.world, DT);
+      syncSceneChains(chains, sim.world);
       if (n <= FRAMES - 300) return;
       lean = Math.max(lean, Math.abs(weight.globalPosition.x));
       tilt = Math.max(tilt, Math.abs(wrapAngle(link.globalRotation)));
@@ -3020,7 +3026,7 @@ function caseChainWrapPoint(): ContactResult {
     const data = scaleLevelData(level(rimWrappable, via), PX);
     const world = new World();
     const built = buildLevelBodies(world, data, () => {});
-    const chains = buildSceneChains(data, built);
+    const chains = buildSceneChains(data, built, world);
     return {
       world,
       chain: chains[0]!,
@@ -3058,7 +3064,7 @@ function caseChainWrapPoint(): ContactResult {
       rig.wheel.angularVelocity = spin;
       rig.world.integrate(DT);
       rig.wheel.angularVelocity = spin;
-      stepSceneChains([rig.chain], rig.world, DT);
+      syncSceneChains([rig.chain], rig.world);
       const path = pathOf();
       if (path.some((n) => n.body === rig.wheel && n.shape === 0)) onRim = true;
       if (!path.some((n) => n.body !== rig.wheel && n.body !== rig.box)) offBeam = true;
@@ -3089,9 +3095,8 @@ function caseChainWrapPoint(): ContactResult {
     w.world.add(post);
     const a = new Vec2(-2.9, 0.5);
     const b = new Vec2(3.2, 0.7);
-    const chain = new SceneChain(RopeContact.at(post, a), RopeContact.at(w.box, b), 8, null, [w.wheel]);
-    chain.beginFrame(DT);
-    chain.solve(DT);
+    const chain = new SceneChain(w.world, RopeContact.at(post, a), RopeContact.at(w.box, b), 8, null, [w.wheel]);
+    chain.rope.syncWraps(chain.wrapBodies);
     return !chain.rope.path().some((n) => n.contact.obj === w.wheel && n.contact.shapeIndex === 0);
   };
   const ignored = through(false);
@@ -3123,7 +3128,7 @@ function caseChainWrapPoint(): ContactResult {
   const pulleyData = scaleLevelData(pulleyLevel, PX);
   const pulleyWorld = new World();
   const pulleyBuilt = buildLevelBodies(pulleyWorld, pulleyData, () => {});
-  const pulleyChain = buildSceneChains(pulleyData, pulleyBuilt)[0]!;
+  const pulleyChain = buildSceneChains(pulleyData, pulleyBuilt, pulleyWorld)[0]!;
   const pulley = pulleyBuilt.bodies[1]!.body!;
   const onPulley = pulleyChain.rope.path().filter((n) => n.contact.obj === pulley);
   const ringed =
@@ -3254,11 +3259,15 @@ function caseChainPostCatch(): ContactResult {
   const probe = buildSceneChains(
     { ...data, chains: [{ a: 1, b: 2, via: [3] }] },
     built,
+    world,
   )[0]!;
+  // Built only to measure the seeded route: not a chain of the rig.
+  world.ties.removeUnit(probe.row);
   const authored = probe.rope.maxRopeLength + slack;
   const chain = buildSceneChains(
     { ...data, chains: [{ a: 1, b: 2, via: [3], length: authored }] },
     built,
+    world,
   )[0]!;
   const post = built.bodies[1]!.body as StaticBody2D;
   const weight = built.bodies[3]!.body as RigidBody2D;
@@ -3276,7 +3285,7 @@ function caseChainPostCatch(): ContactResult {
   const TAUT_FROM = 120;
   for (let f = 1; f <= 600; f++) {
     world.integrate(DT);
-    stepSceneChains([chain], world, DT);
+    syncSceneChains([chain], world);
     const caught = onPost();
     if (caught && caughtAt === null) caughtAt = f;
     if (!caught && caughtAt !== null) lostAfterCatch = true;
@@ -3793,13 +3802,18 @@ function casePlankHaul(): ContactResult {
   let maxBallVAfter = 0;
   let anchoredAt = -1;
   for (let f = 0; f < 300; f++) {
+    const speedBefore = level.ball.linearVelocity.length();
     feed(true, anchor);
     const chain = level.ball.chain;
     const anchored =
       chain !== null && !(chain.end.contact.obj instanceof BallHook) && level.ball.chainAnchored;
     if (anchored && anchoredAt < 0) {
       anchoredAt = f;
-      speedAtAttach = level.ball.linearVelocity.length();
+      // The speed the ball ARRIVED at, the frame before the anchor: the
+      // ball's chain as a row of the island catches it in the frame it
+      // attaches (0.20 m/s left of 2.78 on that frame), where the positional
+      // phase re-took the birth length and caught it a frame later.
+      speedAtAttach = speedBefore;
     } else if (anchored) {
       maxBallVAfter = Math.max(maxBallVAfter, level.ball.linearVelocity.length());
     }
@@ -3965,13 +3979,15 @@ function casePlankAnchor(): ContactResult {
   let maxBallV = 0;
   let anchoredAt = -1;
   for (let f = 0; f < 300; f++) {
+    const speedBefore = level.ball.linearVelocity.length();
     feed(true, anchor);
     const chain = level.ball.chain;
     const anchored =
       chain !== null && !(chain.end.contact.obj instanceof BallHook) && level.ball.chainAnchored;
     if (anchored && anchoredAt < 0) {
       anchoredAt = f;
-      speedAtAttach = level.ball.linearVelocity.length();
+      // The speed it arrived at (see `plank-haul`).
+      speedAtAttach = speedBefore;
     }
     maxEmbed = Math.max(maxEmbed, embed());
     maxTilt = Math.max(maxTilt, Math.abs(wrapAngle(plank.globalRotation)));
@@ -4045,6 +4061,16 @@ function casePointBlankTurn(): ContactResult {
 
   // An 80 cm steel disc on a centre bearing; the ball spawns touching its
   // right-hand side, level with the axle.
+  //
+  // The bearing is SPRUNG (4 Hz, critically damped), and that is what makes
+  // the rig the recording's question rather than a different one: a 176 kg
+  // ball resting on the side of a free disc is 1587 N·m about its axle, and
+  // the ball's chain as a row of the island turns the disc under it as
+  // gravity says (its angular momentum followed the gravity torque within
+  // 7%), so the ball fell away round it and never rested against the face.
+  // The positional phase held the free disc nearly still - 13 N·m of the
+  // 1587 - which is the only reason the free-disc rig ever rested. Sprung, the
+  // disc gives 0.0025 rad under the ball and the face is still there.
   const level = new BallLevel({
     player: { x: 92, y: -300, radius: 12 },
     bodies: [
@@ -4055,6 +4081,8 @@ function casePointBlankTurn(): ContactResult {
         rot: 0,
         friction: 1,
         pivot: true,
+        pivotFreq: 4,
+        pivotDamping: 1,
         objects: [{ type: "collision", material: "steel", shape: { kind: "circle", r: 80 } }],
       },
     ],
@@ -4481,10 +4509,192 @@ function caseWhirlLap(): ContactResult {
         wrapAngle(rest.sub(ball.globalPosition).angle() - ball.loopDirection.angle()),
       );
       check(`${tag}: the ball closed the gap the same way round (${back} frames turned back)`, back === 0);
-      check(`${tag}: and settled on the aim (${(off / DEG).toFixed(2)} deg off, under 3)`, off < 3 * DEG);
+      // Or wound up to the anchor on the way: at 60 rad/s the lap asks for
+      // 7.3 rad more after the whirl, 0.88 m of a 1 m free span, and a chain
+      // that winds every radian it is asked for (the ball's row) brings the
+      // ball up against its own mounted cuff 8 degrees short, in the pocket
+      // `wound-tight` asserts. Wound tight is the one thing allowed to refuse
+      // the turn, so that is the steering working too; the positional phase
+      // only settled here because it had lost 2.3 cm of the whirl's winding.
+      const anchorBody = ball.chain?.end.contact.obj;
+      const againstAnchor = level.world.frameContacts.some(
+        (c) => (c.a === ball && c.b === anchorBody) || (c.b === ball && c.a === anchorBody),
+      );
+      const free = ball.chain?.leavingSpanLength(ball) ?? null;
+      check(
+        `${tag}: and settled on the aim, or wound tight against its anchor short of it (${(off / DEG).toFixed(2)} deg off, under 3; against the anchor: ${againstAnchor}, free span ${free === null ? "-" : (free * 1000).toFixed(1)} mm)`,
+        off < 3 * DEG || againstAnchor,
+      );
     }
   }
   return ok("whirl-lap - an aim circling faster than the spin cap winds the chain on", passed, details);
+}
+
+// ---------------------------------------------------------------------------
+// A rect `obstacle` for `swingPast`, metres, its centre relative to where the
+// ball hangs. A rigid one is a 50 cm steel block standing on a floor of its
+// own, built with the level so it has settled by the time the ball hangs.
+interface SwingObstacle {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  rigid?: boolean;
+}
+
+// The ball hung 1.7 m under a ceiling and given `speed` along +x at the bottom
+// of its swing past `obstacle`, the static one placed once the ball hangs
+// still, so the hang is the same with it and without. The ball's path
+// relative to the hang, frame by frame, and how far the obstacle moved.
+function swingPast(
+  speed: number,
+  obstacle: SwingObstacle | null,
+  frames: number,
+  hangAt: Vec2 | null = null,
+): { path: Vec2[]; hang: Vec2; moved: number } {
+  const bodies: LevelBodyData[] = [
+    {
+      kind: "static",
+      x: 1300,
+      y: -2130,
+      rot: 0,
+      friction: 1,
+      objects: [{ type: "collision", shape: { kind: "rect", w: 400, h: 20 } }],
+    },
+  ];
+  if (obstacle?.rigid && hangAt) {
+    const at = hangAt.add(new Vec2(obstacle.x, obstacle.y)).mul(PIXELS_PER_METER);
+    const w = obstacle.w * PIXELS_PER_METER;
+    const h = obstacle.h * PIXELS_PER_METER;
+    bodies.push(
+      {
+        kind: "static",
+        x: at.x,
+        y: at.y + h / 2 + 10,
+        rot: 0,
+        friction: 1,
+        objects: [{ type: "collision", shape: { kind: "rect", w: 4 * w, h: 20 } }],
+      },
+      {
+        kind: "rigid",
+        x: at.x,
+        y: at.y,
+        rot: 0,
+        friction: 1,
+        objects: [{ type: "collision", material: "steel", shape: { kind: "rect", w, h } }],
+      },
+    );
+  }
+  const level = new BallLevel({ player: { x: 1300, y: -1950, radius: 8 }, bodies } as RawLevelData);
+  const ball = level.ball;
+  let prev = emptyFrameInput();
+  const feed = (): void => {
+    const input: FrameInput = {
+      ...emptyFrameInput(),
+      fire: button(true, prev.fire),
+      mouseWorldPosition: ball.globalPosition.add(new Vec2(0, -2)),
+    };
+    prev = input;
+    level.physicsProcess(input, DT);
+  };
+  for (let f = 0; f < 90; f++) feed();
+  const hang = ball.globalPosition;
+  let body: PhysicsBody2D | null = null;
+  if (obstacle?.rigid) {
+    body = level.bodies.find((b) => b instanceof RigidBody2D && b !== ball) ?? null;
+  } else if (obstacle) {
+    body = new StaticBody2D();
+    body.globalPosition = hang.add(new Vec2(obstacle.x, obstacle.y));
+    body.setShape(rectShape(obstacle.w, obstacle.h));
+    level.world.add(body);
+  }
+  const start = body?.globalPosition ?? Vec2.ZERO;
+  ball.linearVelocity = new Vec2(speed, 0);
+  const path: Vec2[] = [];
+  for (let f = 0; f < frames; f++) {
+    feed();
+    path.push(ball.globalPosition.sub(hang));
+  }
+  return { path, hang, moved: body ? body.globalPosition.distanceTo(start) : 0 };
+}
+
+// A chained ball swung past the top corner of a box it clears is not touched
+// by it. The island gathers its contacts out to a frame's travel, and with
+// the normal and separation read once a frame, a ball swung at 20 m/s past a
+// static corner it cleared by 46 mm read its travel along the frame-start
+// normal as closing on the corner and left the frame at (3.4, -10.6) m/s
+// where the same swing without the box leaves at (6.6, -18.2); past a steel
+// block standing on a floor it shoved the block 0.23 m without touching it.
+// Gathered each substep, and again before the relax (see
+// `TieSolver.solveIsland`), with the swept step under the ball against the
+// scenery (`World.recollide`), the box changes nothing; raised into the path,
+// the same box is hit, so the case can see it. Up to 30 m/s, three times the
+// drum's fling at its rating: at 45 the block still takes a 1 mm nudge, the
+// row being a prediction one substep (9 cm) ahead against a body the island
+// does not sweep, as Box2D's are for any pair that is not a bullet.
+function caseIslandCornerGraze(): ContactResult {
+  const details: string[] = [];
+  let passed = true;
+  const check = (claim: string, got: boolean): void => {
+    if (!got) passed = false;
+    details.push(`${got ? "ok  " : "BAD "} ${claim}`);
+  };
+  const R = 0.12;
+  const FRAMES = 20;
+  // The box's left face 15 cm ahead of the ball's rim, its top `gap` under
+  // the ball's lowest point; the swing rises away from it.
+  const box = (gap: number, rigid: boolean): SwingObstacle => ({
+    x: R + 0.15 + 0.25,
+    y: R + gap + 0.25,
+    w: 0.5,
+    h: 0.5,
+    rigid,
+  });
+  const worst = (a: Vec2[], b: Vec2[]): number => Math.max(...a.map((p, i) => p.distanceTo(b[i]!)));
+  const hang = swingPast(0, null, 1).hang;
+  for (const rigid of [false, true]) {
+    const kind = rigid ? "steel block" : "static box";
+    for (const speed of [10, 20, 30]) {
+      const free = swingPast(speed, null, FRAMES);
+      for (const gap of [0.005, 0.03]) {
+        const past = swingPast(speed, box(gap, rigid), FRAMES, hang);
+        const off = worst(past.path, free.path);
+        check(
+          `${kind}, ${speed} m/s past its corner ${gap * 1000} mm under the rim: the box-free path (worst ${(off * 1000).toFixed(3)} mm off over ${FRAMES} frames, the box moved ${(past.moved * 1000).toFixed(3)} mm, hung ${(past.hang.distanceTo(free.hang) * 1000).toFixed(3)} mm apart)`,
+          off < 1e-6 && past.moved < 1e-6 && past.hang.distanceTo(free.hang) < 1e-9,
+        );
+      }
+      const hit = worst(swingPast(speed, box(-0.03, rigid), FRAMES, hang).path, free.path);
+      check(`${kind}, ${speed} m/s with it 30 mm into the path: it is hit (path ${(hit * 1000).toFixed(0)} mm off)`, hit > 0.05);
+    }
+  }
+  return ok("island-corner-graze - a chained ball swung past a corner it clears is not touched by it", passed, details);
+}
+
+// A chained ball swung into a 1 cm static plank at up to 45 m/s, 9 cm of
+// travel a substep, stops on its near side: the island's swept position step
+// (`TieSolver.sweep`) is what a contact gathered at the slop cannot be.
+function caseIslandThinPlank(): ContactResult {
+  const details: string[] = [];
+  let passed = true;
+  const check = (claim: string, got: boolean): void => {
+    if (!got) passed = false;
+    details.push(`${got ? "ok  " : "BAD "} ${claim}`);
+  };
+  const R = 0.12;
+  const PLANK = { x: 0.4, y: 0, w: 0.01, h: 0.6 };
+  for (const speed of [10, 20, 30, 45]) {
+    const path = swingPast(speed, PLANK, 30).path;
+    // The plank's near face is 0.395 m out, so the ball's centre never passes
+    // 0.395 - R while it is level with the plank.
+    const level = path.filter((p) => Math.abs(p.y - PLANK.y) < PLANK.h / 2 + R);
+    const furthest = Math.max(...level.map((p) => p.x));
+    check(
+      `${speed} m/s: the ball's centre comes no nearer the plank than its radius (furthest ${(furthest * 1000).toFixed(1)} mm, face at ${((PLANK.x - PLANK.w / 2 - R) * 1000).toFixed(1)})`,
+      furthest <= PLANK.x - PLANK.w / 2 - R + MAX_PENETRATION,
+    );
+  }
+  return ok("island-thin-plank - a chained ball swung into a thin plank stops on its near side", passed, details);
 }
 
 // ---------------------------------------------------------------------------
@@ -4502,7 +4712,7 @@ function caseChainHungJam(sims: Sim[]): ContactResult {
   // Anchors sit ON the surfaces they are bolted to, and an authored chain with
   // no length is taut between them - both of which `buildSceneChains` does.
   const chain = (a: Vec2, b: Vec2) =>
-    new SceneChain(RopeContact.at(ledge, a), RopeContact.at(plank, b), a.distanceTo(b), null);
+    new SceneChain(sim.world, RopeContact.at(ledge, a), RopeContact.at(plank, b), a.distanceTo(b), null);
   const chains = [
     chain(new Vec2(-0.65, -0.05), new Vec2(-1.3398, 0.7385)),
     chain(new Vec2(-0.3931, 0.05), new Vec2(-0.396, 0.9914)),
@@ -4523,7 +4733,7 @@ function caseChainHungJam(sims: Sim[]): ContactResult {
   let worstAbove = 0;
   let peakSpeed = 0;
   sim.step(900, () => {
-    stepSceneChains(chains, sim.world, DT);
+    syncSceneChains(chains, sim.world);
     // How far the plank's lowest corner has got ABOVE the ledge's top face -
     // zero for a plank hanging under it, and metres for one that has gone
     // through and swung away.
@@ -5323,8 +5533,8 @@ function caseBallSparks(): ContactResult {
 }
 
 // ---------------------------------------------------------------------------
-// impermeable-shape — hook-proof is a property of the SURFACE, and both hooks
-// ask the piece they reached.
+// impermeable-shape — hook-proof is a property of the SURFACE, and the hook
+// asks the piece it reached.
 //
 // It used to be a body KIND, which could say neither of the two things a level
 // wants. A kind is one per body, so nothing could be `rigid` and hook-proof at
@@ -5332,11 +5542,8 @@ function caseBallSparks(): ContactResult {
 // expressible - and a compound wall was hook-proof in whole or not at all, so a
 // single attachable ledge among hook-proof faces could not be authored either.
 //
-// Both hooks are checked because they reach a surface by different means: the
-// grapple hook raycasts and is destroyed, the ball's sweeps/probes and is
-// deflected. Each has its own answer to "which piece did I hit", and a fix
-// applied to one of them alone is exactly the class of bug the shape/body rule
-// exists to stop.
+// The ball's hook sweeps and probes and is deflected; its answer to "which
+// piece did I hit" is the one the shape/body rule exists to keep honest.
 //
 // The legacy kind is checked in the same breath: every level on disk still
 // carries `kind: "impermeable"`, and the fold-in happens in one place
@@ -5401,27 +5608,6 @@ function caseImpermeableShape(): ContactResult {
     return attached;
   };
 
-  // The grapple hook is a raycast and is DESTROYED rather than deflected, so
-  // its two outcomes are "attached" and "destroyed" rather than "attached" and
-  // "still flying".
-  const grappleAttaches = (x: number): boolean => {
-    const { world } = build();
-    const hook = new Hook();
-    hook.globalPosition = new Vec2(x, 0);
-    hook.velocity = new Vec2(0, 0.2);
-    let attached = false;
-    let destroyed = false;
-    hook.registerAttachmentCallback(() => {
-      attached = true;
-    });
-    hook.onDestroyed(() => {
-      destroyed = true;
-    });
-    world.add(hook);
-    for (let f = 0; f < 30 && !attached && !destroyed; f++) hook.physicsStep();
-    return attached;
-  };
-
   const { built, data } = build();
   // The two grouped walls migrate to ONE body, so the four authored entries are
   // three bodies and the retired-kind wall is the last of them. That renumbering
@@ -5443,19 +5629,15 @@ function caseImpermeableShape(): ContactResult {
   const ballProof = !ballAttaches(-0.5);
   const ballLedge = ballAttaches(0.5);
   const ballRigid = !ballAttaches(3);
-  const grappleProof = !grappleAttaches(-0.5);
-  const grappleLedge = grappleAttaches(0.5);
 
   const passed =
-    perShape && legacyFolded && ballProof && ballLedge && ballRigid && grappleProof && grappleLedge;
-  return ok("impermeable-shape — hook-proof is per surface, and both hooks ask the piece they hit", passed, [
+    perShape && legacyFolded && ballProof && ballLedge && ballRigid;
+  return ok("impermeable-shape — hook-proof is per surface, and the hook asks the piece it hit", passed, [
     `${perShape ? "ok  " : "BAD "} one compound body, two pieces, only the first hook-proof`,
     `${legacyFolded ? "ok  " : "BAD "} the retired \`kind: "impermeable"\` loads as a static with a hook-proof shape`,
     `${ballProof ? "ok  " : "BAD "} ball hook into the hook-proof piece: ${ballProof ? "deflected" : "ANCHORED"}`,
     `${ballLedge ? "ok  " : "BAD "} ball hook into its attachable sibling: ${ballLedge ? "anchored" : "TURNED AWAY"}`,
     `${ballRigid ? "ok  " : "BAD "} ball hook into a hook-proof RIGID body: ${ballRigid ? "deflected" : "ANCHORED"}`,
-    `${grappleProof ? "ok  " : "BAD "} grapple hook into the hook-proof piece: ${grappleProof ? "destroyed" : "ANCHORED"}`,
-    `${grappleLedge ? "ok  " : "BAD "} grapple hook into its attachable sibling: ${grappleLedge ? "anchored" : "TURNED AWAY"}`,
   ]);
 }
 
@@ -5474,9 +5656,7 @@ function caseImpermeableShape(): ContactResult {
 // asks them all: each is written separately, and a mask honoured by four paths
 // out of six is a leg the avatar walks through and is then shoved out of. The
 // character sweep, the character's own depenetration, the contact gather, the
-// rigid depenetration sweep, the continuous sweep and the raycast - plus ledge
-// detection, since a corner you cannot be stopped by is not a corner you can
-// hang off.
+// rigid depenetration sweep, the continuous sweep and the raycast.
 //
 // The SEAT is the control in all of it. A case that reported "passed through"
 // for both pieces would be asserting that the stool had been deleted.
@@ -5631,19 +5811,7 @@ function caseCollisionMask(): ContactResult {
   const rayOk =
     ray(undefined) === rayWorld.stoolBody && ray(LAYER_PLAYER) === null && ray(LAYER_HOOK) === null;
 
-  // 8. Ledge detection: the leg's corners are not ledges. Its top corners are
-  // buried in the seat in any case, so the query is aimed at the BOTTOM pair,
-  // which are exposed and which the avatar would otherwise be able to hang off
-  // in mid-air. The seat's own corner is the control.
-  const grabAt = (y: number): boolean =>
-    LedgeDetection.findGrab([rayWorld.floorBody, rayWorld.stoolBody], {
-      path: [new Vec2(0.4, y), new Vec2(0.2, y)],
-      reach: 0.3,
-      wallNormalXSign: 1,
-    }) !== null;
-  const ledgeOk = !grabAt(0.47) && grabAt(0.03);
-
-  // 9. The ball's hook, which reaches a surface by neither of the paths above:
+  // 8. The ball's hook, which reaches a surface by neither of the paths above:
   // a swept bar and a resting probe. Thrown level at the leg it flies past;
   // thrown level at the seat it catches.
   const thrownAt = (y: number): boolean => {
@@ -5739,7 +5907,6 @@ function caseCollisionMask(): ContactResult {
     depenOk &&
     ccdOk &&
     rayOk &&
-    ledgeOk &&
     hookOk &&
     separationOk &&
     standOk;
@@ -5751,7 +5918,6 @@ function caseCollisionMask(): ContactResult {
     `${depenOk ? "ok  " : "BAD "} depenetration leaves the ball in the leg and pushes it out of the seat`,
     `${ccdOk ? "ok  " : "BAD "} the continuous sweep flies the ball through the leg and stops it on the seat`,
     `${rayOk ? "ok  " : "BAD "} an unlayered ray finds the leg; the avatar's and the hook's miss it`,
-    `${ledgeOk ? "ok  " : "BAD "} the leg's bottom corner is no ledge; the seat's corner still is`,
     `${hookOk ? "ok  " : "BAD "} the ball's hook flies past the leg and catches on the seat`,
     `${separationOk ? "ok  " : "BAD "} a ball anchored to the seat is not separated out of the leg (${(worstX * 1000).toFixed(2)} mm, anchored=${chainLevel.ball.chainAnchored})`,
     `${standOk ? "ok  " : "BAD "} the stool stands on the leg it is not in the way with (${(sank * 1000).toFixed(1)} mm in 2 s)`,
@@ -5881,18 +6047,7 @@ function casePassableBody(): ContactResult {
   const hookRay = rayWorld.world.intersectRay(from, to, { collisionMask: MASK_ALL });
   const rayOk = playerRay === null && hookRay?.collider === rayTarget;
 
-  // 6. ...and the point of all of it: both hooks still catch on it. The grapple
-  // hook raycasts, the ball's sweeps, so each is asked its own way.
-  const grapple = new Hook();
-  grapple.globalPosition = new Vec2(0, 0);
-  grapple.velocity = new Vec2(0, 0.2);
-  let grappleAttached = false;
-  grapple.registerAttachmentCallback(() => {
-    grappleAttached = true;
-  });
-  world.add(grapple);
-  for (let f = 0; f < 60 && !grappleAttached; f++) grapple.physicsStep();
-
+  // 6. ...and the point of all of it: the hook still catches on it.
   const ballWorld = build().world;
   const ballHook = new BallHook();
   ballHook.globalPosition = new Vec2(0, 0);
@@ -5929,7 +6084,6 @@ function casePassableBody(): ContactResult {
     contactOk &&
     depenOk &&
     rayOk &&
-    grappleAttached &&
     ballAttached &&
     fallOk;
   return ok("passable-body — hook-only is a flag, and only the hook may find it", passed, [
@@ -5940,7 +6094,6 @@ function casePassableBody(): ContactResult {
     `${contactOk ? "ok  " : "BAD "} no contact pair, crate-vs-slab or leaf-vs-floor`,
     `${depenOk ? "ok  " : "BAD "} depenetration moves neither: blocked by nothing, statics included`,
     `${rayOk ? "ok  " : "BAD "} a mask-1 ray misses it, the hook's two-layer ray finds it`,
-    `${grappleAttached ? "ok  " : "BAD "} the grapple hook anchors to it`,
     `${ballAttached ? "ok  " : "BAD "} the ball's hook anchors to it`,
     `${fallOk ? "ok  " : "BAD "} the hook-only rigid body still falls (${fell.toFixed(2)} m through the floor)`,
   ]);
@@ -6471,7 +6624,12 @@ function caseChainSweepSlideOff(): ContactResult {
   // floor, the hanging hook is hauled 71 cm in one frame to pay for it, and
   // the chain is lost the frame after (measured with the rule switched off:
   // jump 0.705 m and 2.13 m of path at f39). With it the hook comes in at the
-  // winding's own pace and the path never lengthens while the hook hangs.
+  // winding's own pace, and the path never lengthens by more than its ends
+  // moved: a path from the rim to a tip can only grow by the tip's
+  // displacement plus the rim exit's (the ball's travel and its turn at the
+  // rim). The hanging hook is a slack tip falling past the wedge, so its path
+  // does lengthen as it wraps the corner, by centimetres a frame, all of it
+  // the tip's own fall.
   const rig = {
     player: { x: 0, y: -12, radius: 8 },
     bodies: [
@@ -6512,6 +6670,8 @@ function caseChainSweepSlideOff(): ContactResult {
   let hungAt: number | null = null;
   let lastTip: Vec2 | null = null;
   let lastLen: number | null = null;
+  let lastBall: Vec2 | null = null;
+  let lastTurn = 0;
   let jump = 0;
   let jumpAt: number | null = null;
   let lengthened = 0;
@@ -6545,19 +6705,27 @@ function caseChainSweepSlideOff(): ContactResult {
           jumpAt = f;
         }
       }
-      if (lastLen !== null && len - lastLen > lengthened) {
-        lengthened = len - lastLen;
-        lengthenedAt = f;
+      if (lastLen !== null && lastTip !== null && lastBall !== null) {
+        const ends =
+          tip.globalPosition.distanceTo(lastTip) +
+          ball.globalPosition.distanceTo(lastBall) +
+          Math.abs(ball.globalRotation - lastTurn) * ball.radius;
+        if (len - lastLen - ends > lengthened) {
+          lengthened = len - lastLen - ends;
+          lengthenedAt = f;
+        }
       }
       lastTip = tip.globalPosition;
       lastLen = len;
+      lastBall = ball.globalPosition;
+      lastTurn = ball.globalRotation;
     }
   }
   check(`wind-in: the hook hangs at full length from f${hungAt} and is wound in`, hungAt !== null && hungAt < 30);
   check(`wind-in: ...never hauled more than 15 cm in a frame (max ${(jump * 100).toFixed(1)} cm @f${jumpAt})`, jump < 0.15);
   check(
-    `wind-in: ...and the path never lengthens by more than 2 cm while it hangs (max ${(lengthened * 100).toFixed(1)} cm @f${lengthenedAt})`,
-    lengthened < 0.02,
+    `wind-in: ...and the path never lengthens by more than its ends moved (most past them ${(lengthened * 1000).toFixed(1)} mm @f${lengthenedAt})`,
+    lengthened < 0.001,
   );
   check(`wind-in: the chain is not lost (lost @f${lostAt ?? "never"})`, lostAt === null);
   return ok(
@@ -7061,11 +7229,15 @@ function caseChainFaceRelease(): ContactResult {
 // of commitment: still reported, counter-clockwise, at the corner, so a rule
 // that silenced the sweep fails here. The second half is the scene end to
 // end: the ball seeded with the recording's state at the shot and steered by
-// the recording's own cursor path for the 84 frames that follow. The beam is
-// never on the chain's path, the ball never moves more than 10 cm in a frame
-// (18.3 cm without the rule) and the path never lengthens by more than 5 cm
-// in one (11.3 cm without it) - while the chain does bend over the shared
-// corner, which is what makes the run the scenario rather than a miss.
+// the recording's own cursor path for the 84 frames that follow. The ball
+// never moves more than 10 cm in a frame (18.3 cm without the rule) and the
+// path never lengthens by more than 5 cm in one (11.3 cm without it) - while
+// the chain does bend over the shared corner, which is what makes the run the
+// scenario rather than a miss. The run once also asked that the beam never be
+// on the path at all; it may be, honestly, once the steering takes the ball in
+// under the beam's lower corner (the chain wraps it, as it should, on the
+// island's trajectory since pin friction), so what the phantom costs - the
+// jump and the lengthening - is what is held.
 function caseChainSharedCorner(): ContactResult {
   const details: string[] = [];
   let passed = true;
@@ -7166,7 +7338,6 @@ function caseChainSharedCorner(): ContactResult {
   ];
   const level = new BallLevel(scene());
   const ball = level.ball;
-  const beamBody = level.world.bodies[2]!;
   ball.linearVelocity = new Vec2(-1.907345339545607, 1.4927585059797137);
   ball.globalRotation = -12.810341354933586;
   ball.angularVelocity = 1.7910888729818364;
@@ -7174,7 +7345,6 @@ function caseChainSharedCorner(): ContactResult {
   let lastPos: Vec2 | null = null;
   let lastLen: number | null = null;
   let overCornerAt: number | null = null;
-  let onBeamAt: number | null = null;
   let jump = 0;
   let jumpAt: number | null = null;
   let lengthened = 0;
@@ -7226,7 +7396,6 @@ function caseChainSharedCorner(): ContactResult {
     if (overCornerAt === null && path.some((n) => n instanceof RopeWrap && n.contact.globalPosition.distanceTo(sharedCorner) < 1e-6)) {
       overCornerAt = f;
     }
-    if (onBeamAt === null && path.some((n) => n.contact.obj === beamBody)) onBeamAt = f;
     const len = chain.getCurrentLength();
     if (lastLen !== null && len - lastLen > lengthened) {
       lengthened = len - lastLen;
@@ -7235,7 +7404,6 @@ function caseChainSharedCorner(): ContactResult {
     lastLen = len;
   }
   check(`the chain bends over the shared corner (from f${overCornerAt})`, overCornerAt !== null && overCornerAt < 70);
-  check(`...and the beam is never on its path (first @f${onBeamAt ?? "never"})`, onBeamAt === null);
   check(`the ball never moves more than 10 cm in a frame (max ${(jump * 100).toFixed(1)} cm @f${jumpAt})`, jump < 0.1);
   check(
     `the path never lengthens by more than 5 cm in a frame (max ${(lengthened * 100).toFixed(1)} cm @f${lengthenedAt})`,
@@ -7280,6 +7448,8 @@ export function runContactCases(): ContactResult[] {
   results.push(caseWoundTight());
   results.push(caseConvergedAimHang());
   results.push(caseWhirlLap());
+  results.push(caseIslandCornerGraze());
+  results.push(caseIslandThinPlank());
   results.push(caseHookSeam());
   results.push(caseCollisionMask());
   results.push(casePassableBody());

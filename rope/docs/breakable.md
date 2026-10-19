@@ -40,8 +40,8 @@ Three things fall out of that, and they are the three things the feature is judg
 - **A body sliding along it is not hitting it at all.** A drag carries the weight and nothing more, so nothing new crosses the bar.
 - **A body that leaves and comes back is a fresh hit every time.** The cooling runs on the frames a pair is NOT in contact as well as the frames it is pressing gently, which is the whole of what makes a bouncing ball wear a floor down; a tracker that only cooled while touching stayed hot through the airborne half of the bounce and counted the second landing for nothing.
 
-**The grapple avatar cannot break anything**, and that is the engine's answer rather than a rule stated here: a `CharacterBody2D` is swept rather than solved, so it appears in no contact constraint at all.
-What breaks geometry on a grapple level is the rigid scenery.
+**The grapple avatar could not break anything** (that controller was retired on 2026-10-19), and that was the engine's answer rather than a rule stated here: a `CharacterBody2D` is swept rather than solved, so it appears in no contact constraint at all.
+What broke geometry on a grapple level was the rigid scenery.
 **Rope tension is not a hit either**: the rope moves bodies, it does not press on them, so hanging from a rotten plank does nothing to it.
 That is the one thing in `docs/ideas.md` this does not yet do, and it needs the rope's node tension surfaced as a load first.
 

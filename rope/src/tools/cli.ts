@@ -60,13 +60,13 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { LEVELS } from "../level/registry";
 import { createHash } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { Level } from "../level/level";
 import { PhysTrace } from "../engine/physTrace";
 // Type-only, and that matters: the VALUE import below is dynamic because `cli
 // compare` copies this tooling into a worktree of an OLD revision whose engine
@@ -80,6 +80,7 @@ import {
   DIVERGENCE_TOLERANCE,
   divergenceSummary,
   levelFromRecording,
+  recordedOnGrapple,
   replayRecording,
 } from "../sim/replay";
 import { frameView, type BodyView, type FrameView } from "../sim/query";
@@ -106,8 +107,6 @@ import type { ViewCapture } from "../render3d/viewCapture";
 import {
   ACTIONS,
   checkBallInvariants,
-  checkInvariants,
-  digest,
   digestBall,
   digestsByFrame,
   EnergyMonitor,
@@ -115,7 +114,6 @@ import {
   TunnelMonitor,
   recordingDeserializer,
   kineticEnergy,
-  StuckDetector,
   type ChainDigest,
   type Digest,
   type DigestFieldDelta,
@@ -203,13 +201,12 @@ function chainPhaseLine(c: {
   unwindRefund: number;
   geometryPush: number;
   winchBudget: number;
-  pushCredit: number;
   anchorBody: number | null;
 }): string {
   return (
     `aimSpin=${c.aimSpin.toFixed(3).padStart(8)} refund=${c.unwindRefund.toFixed(4).padStart(7)} ` +
     `push=${(c.geometryPush * 1000).toFixed(2).padStart(7)}mm ` +
-    `winch=${c.winchBudget.toFixed(3).padStart(7)} credit=${c.pushCredit.toFixed(3).padStart(7)} ` +
+    `winch=${c.winchBudget.toFixed(3).padStart(7)} ` +
     `anchor=${c.anchorBody === null ? "hook" : `body#${c.anchorBody}`}`
   );
 }
@@ -353,7 +350,6 @@ function chainDigestLine(c: ChainDigest): string {
       unwindRefund: c.unwindRefund ?? 0,
       geometryPush: c.geometryPush ?? 0,
       winchBudget: c.winchBudget ?? 0,
-      pushCredit: c.pushCredit ?? 0,
       anchorBody: c.anchorBody ?? null,
     }) +
     // Recorded since 2026-09-16; a bundle from before has no opinion about it.
@@ -540,11 +536,9 @@ function cmdContinue(file: string, o: Record<string, string>): void {
   const whirl = o.whirl === undefined ? 0 : Number(o.whirl);
   if (o.whirl !== undefined && (!Number.isFinite(whirl) || whirl === 0)) fail("--whirl takes frames per revolution, non-zero");
 
-  const level = levelFromRecording(rec);
-  const ball = level instanceof BallLevel ? level : null;
-  if (whirl && !ball) fail("--whirl drives the ball controller's aim; this is a grapple recording");
+  const ball = levelFromRecording(rec);
+  const level = ball;
   const de = recordingDeserializer(rec);
-  const stuck = new StuckDetector();
   const energy = new EnergyMonitor();
   const roll = new RollMonitor();
   const tunnel = new TunnelMonitor();
@@ -555,10 +549,6 @@ function cmdContinue(file: string, o: Record<string, string>): void {
   if (o.trace) {
     PhysTrace.reset();
     PhysTrace.enabled = true;
-    if (!ball) {
-      (level as Level).player.stateChanged = (s) =>
-        PhysTrace.emit({ t: "transition", to: s.constructor.name });
-    }
   }
 
   console.log(
@@ -566,9 +556,9 @@ function cmdContinue(file: string, o: Record<string, string>): void {
       `${whirl ? ` whirl=${whirl}f/rev` : ""} frames=${frames}`,
   );
   printTreeStamp(rec);
-  const whirlFrom = whirl ? ball!.ball.loopDirection.angle() : 0;
+  const whirlFrom = whirl ? ball.ball.loopDirection.angle() : 0;
   for (let i = 0; i < frames; i++) {
-    const pos = ball ? ball.ball.globalPosition : (level as Level).player.globalPosition;
+    const pos = ball.ball.globalPosition;
     const bearing = whirlFrom + (2 * Math.PI * i) / whirl;
     const aimAt = whirl
       ? pos.add(new Vec2(Math.cos(bearing), Math.sin(bearing)).mul(5))
@@ -577,34 +567,14 @@ function cmdContinue(file: string, o: Record<string, string>): void {
         : pos;
     const input = de({ h: heldBits, mx: aimAt.x, my: aimAt.y });
     level.physicsProcess(input, 1 / 60);
-    const d = ball ? digestBall(ball) : digest(level as Level);
-    if (ball) {
-      violations.push(...checkBallInvariants(ball));
-      const ev = energy.push(ball, input);
-      if (ev) violations.push(ev);
-      const rv = roll.push(ball);
-      if (rv) violations.push(rv);
-      const tv = tunnel.push(ball);
-      if (tv) violations.push(tv);
-    } else {
-      violations.push(...checkInvariants(level as Level));
-      const sv = stuck.push(level as Level, input);
-      if (sv) violations.push(sv);
-    }
-    if (PhysTrace.enabled && !ball) {
-      const s = (level as Level).player.state as {
-        supportBody?: { name?: string; constructor: { name: string } } | null;
-      };
-      PhysTrace.emit({
-        t: "frame",
-        state: d.state,
-        px: Number(d.px.toFixed(2)),
-        py: Number(d.py.toFixed(2)),
-        vx: Number(d.vx.toFixed(2)),
-        vy: Number(d.vy.toFixed(2)),
-        sup: s.supportBody ? s.supportBody.name || s.supportBody.constructor.name : null,
-      });
-    }
+    const d = digestBall(ball);
+    violations.push(...checkBallInvariants(ball));
+    const ev = energy.push(ball, input);
+    if (ev) violations.push(ev);
+    const rv = roll.push(ball);
+    if (rv) violations.push(rv);
+    const tv = tunnel.push(ball);
+    if (tv) violations.push(tv);
     if (i % every === 0) console.log("  " + digestRow(d, heldActions(heldBits)));
   }
 
@@ -634,23 +604,17 @@ function cmdRender(file: string, o: Record<string, string>): void {
   process.exit(0);
 }
 
-// Compact one-line state of the avatar+chain at the current frame, for the A/B
-// fork trace. Ball: deploy phase (HOOK flying / tip dangling / anch anchored) +
-// chain end body + path length + ball speed. Grapple: player state + rope length.
-function forkStateLine(level: Level | BallLevel): string {
-  if (level instanceof BallLevel) {
-    const b = level.ball;
-    const c = b.chain;
-    const phase = b.hookInFlight ? "HOOK" : b.chainTip ? "tip " : c ? "anch" : "----";
-    const end = c ? c.end.contact.obj.constructor.name.replace("Body2D", "") : "-";
-    const len = c ? (c.getCurrentLength() * PIXELS_PER_METER).toFixed(0) : "-";
-    const spd = (b.linearVelocity.length() * PIXELS_PER_METER).toFixed(0);
-    return `${phase} end=${end.padEnd(8)} len=${len.padStart(4)} ballSpd=${spd.padStart(5)}px/s`;
-  }
-  const p = level.player;
-  const rope = p.rope ? (p.rope.getCurrentLength() * PIXELS_PER_METER).toFixed(0) : "-";
-  const spd = (p.velocity.length() * PIXELS_PER_METER).toFixed(0);
-  return `${p.state.constructor.name.padEnd(16)} rope=${rope.padStart(4)} spd=${spd.padStart(5)}px/s`;
+// Compact one-line state of the ball and its chain at the current frame, for
+// the A/B fork trace: deploy phase (HOOK flying / tip dangling / anch
+// anchored), chain end body, path length and ball speed.
+function forkStateLine(level: BallLevel): string {
+  const b = level.ball;
+  const c = b.chain;
+  const phase = b.hookInFlight ? "HOOK" : b.chainTip ? "tip " : c ? "anch" : "----";
+  const end = c ? c.end.contact.obj.constructor.name.replace("Body2D", "") : "-";
+  const len = c ? (c.getCurrentLength() * PIXELS_PER_METER).toFixed(0) : "-";
+  const spd = (b.linearVelocity.length() * PIXELS_PER_METER).toFixed(0);
+  return `${phase} end=${end.padEnd(8)} len=${len.padStart(4)} ballSpd=${spd.padStart(5)}px/s`;
 }
 
 // A/B fork: re-simulate a bundle to --frame (the frame just before an issue),
@@ -748,7 +712,7 @@ function printFrameView(view: FrameView, bodies: BodyView[]): void {
       `        chain nodes=${c.nodes.length} len=${c.currentLength.toFixed(4)} ` +
         `max=${c.maxRopeLength.toFixed(4)} constraint=${c.constraintLength.toFixed(4)} ` +
         `slack=${c.blockedSlack.toFixed(4)} stalled=${c.stalledLength.toFixed(4)} ` +
-        `stallRun=${c.stallRun} ${c.anchored ? "anchored" : "deploying"}`,
+        `${c.anchored ? "anchored" : "deploying"}`,
     );
     // What the chain PHASE decided, on its own line: the commanded spin and the
     // refund that hides it are the pair no other view carries (see ChainDigest).
@@ -1413,7 +1377,7 @@ function cmdRig(file: string, o: Record<string, string>): void {
     const every = Number(o.every ?? 10);
     console.log(
       `  ${"frame".padStart(6)} ${"ballV".padStart(8)} ${"anchorV".padStart(8)} ` +
-        `${"lease".padStart(8)} ${"overLen".padStart(8)} ${"credit".padStart(8)} ` +
+        `${"lease".padStart(8)} ${"overLen".padStart(8)} ` +
         `${"aimSpin".padStart(8)} ${"nodes".padStart(6)}`,
     );
     for (const s of r.series) {
@@ -1421,7 +1385,7 @@ function cmdRig(file: string, o: Record<string, string>): void {
       console.log(
         `  ${String(s.frame).padStart(6)} ${s.ballSpeed.toFixed(3).padStart(8)} ` +
           `${(s.anchorSpeed?.toFixed(3) ?? "-").padStart(8)} ${s.lease.toFixed(4).padStart(8)} ` +
-          `${s.overLength.toFixed(4).padStart(8)} ${s.pushCredit.toFixed(3).padStart(8)} ` +
+          `${s.overLength.toFixed(4).padStart(8)} ` +
           `${s.aimSpin.toFixed(2).padStart(8)} ${String(s.nodes).padStart(6)}`,
       );
     }
@@ -1678,12 +1642,10 @@ function cmdSettle(file: string, o: Record<string, string>): void {
   for (let i = 0; i < frames; i++) {
     // Aim at the avatar itself, which is what "not aiming" is encoded as; aiming
     // at the world origin would steer the ball for the whole window.
-    const at =
-      level instanceof BallLevel ? level.ball.globalPosition : (level as Level).player.globalPosition;
+    const at = level.ball.globalPosition;
     const input = de({ h: 0, mx: at.x, my: at.y });
     level.physicsProcess(input, 1 / 60);
-    if (level instanceof BallLevel) violations.push(...checkBallInvariants(level));
-    else violations.push(...checkInvariants(level));
+    violations.push(...checkBallInvariants(level));
     const ke = kineticEnergy(world);
     let maxV = 0;
     let maxW = 0;
@@ -1839,7 +1801,7 @@ function cmdChainpath(file: string, o: Record<string, string>): void {
     level.physicsProcess(de(rec.frames[i]!), 1 / 60);
     const n = i + 1;
     if (n < from || n > to || (n - from) % every !== 0) continue;
-    const rope = level instanceof BallLevel ? level.ball.chain : (level as Level).player.rope;
+    const rope = level.ball.chain;
     if (!rope) continue;
     const pts = rope
       .path()
@@ -1891,6 +1853,20 @@ function cmdBundles(dirs: string[]): void {
         `FAIL ${file} — no level embedded: a committed regression must carry its own level, ` +
           `or editing ${rec.level} changes what it asserts`,
       );
+      failed++;
+      continue;
+    }
+    // A bundle that names a level the registry no longer has (`CAVE`,
+    // deregistered with the river made the intro) cannot be replayed at all,
+    // and thrown from the replay it took every bundle after it down with it.
+    // It is reported as what it is and the run goes on.
+    if (recordedOnGrapple(rec)) {
+      console.log(`FAIL ${file} — recorded on the grapple controller, which was retired: it cannot be replayed`);
+      failed++;
+      continue;
+    }
+    if (!rec.data && !LEVELS[rec.level]) {
+      console.log(`FAIL ${file} — names level ${rec.level}, which is no longer registered, and embeds none: it cannot be replayed`);
       failed++;
       continue;
     }
@@ -2017,58 +1993,12 @@ function cmdRestamp(dirs: string[], write: boolean): void {
 // Determinism + replay round-trip self-test: run a scripted session, replay its
 // captured inputs+digests, and confirm bit-for-bit reproduction.
 function cmdSelftest(): void {
-  const script: PlaytestScript = {
-    // The grapple arena, pinned rather than DEFAULT_LEVEL: this script holds
-    // fire/retract/move/jump, which is the grapple controller's vocabulary. The
-    // ball controller gets its own round trip below.
-    level: "LEVEL_2",
-    frames: 300,
-    holds: [
-      // Two loose circles, so the determinism check has rigid bodies in it at
-      // all: without them the whole scene is the avatar and its hook, which is
-      // precisely the blind spot full-world digests exist to close. They are
-      // spawned at the mouse aim point, land on the arena and settle.
-      { action: "spawn_large", from: 4, to: 5 },
-      { action: "spawn_small", from: 12, to: 13 },
-      { action: "fire", from: 40, to: 300 },
-      { action: "retract", from: 80, to: 200 },
-      { action: "move_right", from: 120, to: 220 },
-      { action: "jump", from: 210, to: 214 },
-    ],
-    mouse: [{ from: 1, to: 300, x: 220, y: -220, relative: true }],
-  };
-
-  const a = runScript(script);
-  const rec: Recording = {
-    level: script.level,
-    frames: a.serializedFrames,
-    digests: a.digests,
-    // The whole scene, not the avatar alone: determinism is a claim about the
-    // simulation, and it was only ever checked on one body.
-    worldDigests: a.worldDigests,
-  };
-  const b = replayRecording(rec);
-
-  // Same-engine round-trip: demand bit-exact reproduction, not just low drift,
-  // and demand it of every body and of the rope path, not only of the avatar.
-  const ok =
-    b.bitDivergedAtFrame === null && b.worldBitDivergedAtFrame === null && b.violations.length === 0;
-  console.log(`[selftest] ran ${a.framesRun} frames, replayed ${b.framesRun}`);
-  console.log(`  avatar diverged: ${b.bitDivergedAtFrame ?? "no"}  violations: ${b.violations.length}`);
-  console.log(
-    `  world  diverged: ${b.worldBitDivergedAtFrame ?? "no"}` +
-      (b.worldBitDivergedAtFrame !== null && b.worldMaxDriftName
-        ? ` (worst: ${b.worldMaxDriftName})`
-        : "") +
-      `  bodies: ${a.worldDigests[a.worldDigests.length - 1]?.bodies.length ?? 0}`,
-  );
-  if (b.violations[0]) console.log(`  first: f${b.violations[0].frame} ${b.violations[0].kind}`);
-
   // The ball controller, through the RECORDING path rather than through
   // `runScript` directly: a bundle written headlessly has to replay bit-for-bit,
   // or every scenario recorded that way is evidence about a run nobody can
-  // reproduce. It also puts the chain, the coil and the ball's spin inside the
-  // determinism check, none of which the grapple script above touches.
+  // reproduce. It puts the chain, the coil, the ball's spin and two loose
+  // bodies inside the determinism check, and demands it of every body and of
+  // the rope path, not only of the avatar.
   const ballRun = recordScript(BALL_SELFTEST_SCRIPT);
   const c = replayRecording(ballRun.recording);
   const ballOk =
@@ -2111,7 +2041,7 @@ function cmdSelftest(): void {
 
   const windowOk = selftestRunRecording();
 
-  const allOk = ok && ballOk && selfReplayOk && windowOk;
+  const allOk = ballOk && selfReplayOk && windowOk;
   console.log(allOk ? "RESULT: DETERMINISTIC" : "RESULT: NON-DETERMINISTIC / UNHEALTHY");
   process.exit(allOk ? 0 : 1);
 }
@@ -2182,9 +2112,15 @@ const BALL_SELFTEST_SCRIPT: PlaytestScript = {
     player: { x: 0, y: 0, radius: 8 },
     // A block 1.8 m above the ball (bottom face at -1.8 m, just inside the
     // chain's reach) and a floor to settle on.
+    // Two loose circles, so the determinism check has free rigid bodies in it
+    // at all - without them the scene is the ball, its hook and its chain,
+    // which is precisely the blind spot full-world digests exist to close.
+    // They fall onto the floor and settle.
     bodies: [
       { kind: "static", x: 0, y: -200, rot: 0, shape: { kind: "rect", w: 200, h: 40 } },
       { kind: "static", x: 0, y: 150, rot: 0, shape: { kind: "rect", w: 4000, h: 100 } },
+      { kind: "rigid", x: 150, y: 0, rot: 0, shape: { kind: "circle", r: 12 } },
+      { kind: "rigid", x: -170, y: -40, rot: 0, shape: { kind: "circle", r: 20 } },
     ],
   },
   holds: [{ action: "deploy", from: 5, to: 240 }],
@@ -2308,8 +2244,6 @@ switch (cmd) {
     if (!arg) fail("usage: cli clicks bundle.json [--all] [--evdev log] [--wayland log]");
     void cmdClicks(arg, rest.includes("--all"), opts(rest).evdev, opts(rest).wayland);
     break;
-  case "ledges":
-    void cmdLedges();
     break;
   case "corners":
     void cmdCorners();
@@ -2383,7 +2317,7 @@ switch (cmd) {
     break;
   default:
     fail(
-      "usage: cli <play|record|replay|dump|query|scan|trace|settle|compare|continue|render|shot|chainpath|fork|bundles|pull|playtest|restamp|selftest|latch|transport|clicks|ledges|corners|tangents|decompose|dmath|contacts|spring|movers|vines|rails|belts|viscous|breaks|render3d|camera|assets|levels|finish|entry> [file] [options]",
+      "usage: cli <play|record|replay|dump|query|scan|trace|settle|compare|continue|render|shot|chainpath|fork|bundles|pull|playtest|restamp|selftest|latch|transport|clicks|corners|tangents|decompose|dmath|contacts|spring|movers|vines|rails|belts|viscous|breaks|render3d|camera|assets|levels|finish|entry> [file] [options]",
     );
 }
 
@@ -3207,18 +3141,4 @@ async function cmdCameraRide(file: string, o: Record<string, string>): Promise<v
         `  range ${f.range.toFixed(2)}  slide ${f.slide.toFixed(2)} m/s`,
     );
   }
-}
-
-// Generated grab-scenario sweep (src/sim/ledgeMatrix.ts).
-async function cmdLedges(): Promise<void> {
-  const { runLedgeMatrix } = await import("../sim/ledgeMatrix");
-  const results = runLedgeMatrix();
-  let failed = 0;
-  for (const r of results) {
-    console.log(`  ${r.passed ? "PASS" : "FAIL"}  ${r.name}`);
-    for (const d of r.details) console.log(`        ${d}`);
-    if (!r.passed) failed++;
-  }
-  console.log(`[ledges] ${results.length - failed}/${results.length} cases passed`);
-  process.exit(failed > 0 ? 1 : 0);
 }

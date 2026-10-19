@@ -148,9 +148,9 @@ The editor writes `path` only on a swarm, and `fireflyPaths` only when there is 
 The canonical, hand-editable schema now lives in `src/level/levelFormat.ts` (superset of
 the generated one — adds the `rigid` and `force` kinds, the `cameraRegions` and
 `chains` lists, and bodies made of scene objects); `levelData.ts` stays
-auto-generated and is structurally assignable to it. Both level drivers construct geometry
+auto-generated and is structurally assignable to it. `BallLevel` constructs geometry
 through the shared `src/level/buildBodies.ts` (statics, killzones, force areas,
-water, finish lines and rigid bodies), so the grapple and ball controllers load identical scenes.
+water, finish lines and rigid bodies); it was shared so the grapple and ball controllers loaded identical scenes, until the grapple was retired on 2026-10-19.
 `rigid` bodies get mass/inertia from `ShapeGeometry` and fall under gravity.
 
 ## Regenerating level geometry

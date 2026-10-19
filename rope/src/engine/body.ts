@@ -787,6 +787,16 @@ export class AnimatableBody2D extends StaticBody2D {
   private prevPosition: Vec2 = Vec2.ZERO;
   private prevRotation = 0;
 
+  // The pose the frame's move started from (`beginMove`, or the landing
+  // point of a jump): what the island carries the mover from through its
+  // substeps (`TieSolver.driven`).
+  get framePosition(): Vec2 {
+    return this.prevPosition;
+  }
+  get frameRotation(): number {
+    return this.prevRotation;
+  }
+
   override get isMobile(): boolean {
     return true;
   }
@@ -1288,6 +1298,73 @@ export class RigidBody2D extends PhysicsBody2D {
   // the combination. Null for every ordinary body; recorded replays predate
   // the field.
   spring: { anchor: Vec2; omegaX: number; omegaY: number; zeta: number } | null = null;
+
+  // A pivot's own angular acceleration about its bearing, rad/s²: an
+  // off-centre bearing's gravity torque (`r × F`, `r` the world offset from
+  // the hinge to the centre of mass) and the torsion spring, summed into one
+  // so the damping reads the step's INCOMING angular velocity. Read mid-step
+  // it damps gravity's increment as though it were motion, which shifts the
+  // settled angle off the closed form by a measurable 10%. Both terms are
+  // guarded, so a plain centre-of-mass pivot gets literally nothing. Stepped
+  // by `World.integrate`, or by the island while a unit holds the body.
+  pivotAcceleration(gravity: Vec2): number {
+    const off = this.pivotComOffset;
+    let alpha = 0;
+    if (off.x !== 0 || off.y !== 0) {
+      const r = off.rotated(this.globalRotation);
+      alpha += (r.cross(gravity.mul(this.gravityScale)) * this.mass) / this.inertia;
+    }
+    if (this.pivotSpring) {
+      const s = this.pivotSpring;
+      alpha +=
+        -s.omega * s.omega * (this.globalRotation - s.restAngle) -
+        2 * s.zeta * s.omega * this.angularVelocity;
+    }
+    return alpha;
+  }
+
+  // A spring body's restoring acceleration (see `spring`): a damped harmonic
+  // oscillator per axis about the anchor,
+  //
+  //   a = -w^2 * offset - 2*zeta*w * velocity
+  //
+  // written per axis so each has its own frequency and each damping term uses
+  // its own axis's w. Mass does not appear: the stiffness is `k = m*w^2` by
+  // construction, so the free oscillation and the SELF-WEIGHT droop `g/w^2`
+  // are the same whatever the body is made of, while an external load `F`
+  // still adds `F/(m*w^2)` - a heavy stiff plant barely notices the player and
+  // a light whippy one plunges, which is the authorable half.
+  //
+  // Semi-implicit Euler is stable here for `w*dt < 2`, i.e. under ~19 Hz at
+  // the fixed 1/60 step; authored frequencies are clamped to 8 Hz well inside
+  // that.
+  springAcceleration(): Vec2 {
+    const s = this.spring;
+    if (!s) return Vec2.ZERO;
+    const d = this.globalPosition.sub(s.anchor);
+    const v = this.linearVelocity;
+    return new Vec2(
+      -s.omegaX * s.omegaX * d.x - 2 * s.zeta * s.omegaX * v.x,
+      -s.omegaY * s.omegaY * d.y - 2 * s.zeta * s.omegaY * v.y,
+    );
+  }
+
+  // A locked spring axis (frequency 0) is pinned to the anchor rather than
+  // sprung to it: the useful degenerate case is a leaf that only bobs
+  // vertically. Snapped after a position step and idempotent, so nothing the
+  // frame did - a contact, a current, the rope - can walk it off.
+  pinSpringAxes(): void {
+    const s = this.spring;
+    if (!s) return;
+    if (s.omegaX === 0) {
+      this.globalPosition = new Vec2(s.anchor.x, this.globalPosition.y);
+      this.linearVelocity = new Vec2(0, this.linearVelocity.y);
+    }
+    if (s.omegaY === 0) {
+      this.globalPosition = new Vec2(this.globalPosition.x, s.anchor.y);
+      this.linearVelocity = new Vec2(this.linearVelocity.x, 0);
+    }
+  }
 
   get inverseMass(): number {
     if (this.pivot) return 0;

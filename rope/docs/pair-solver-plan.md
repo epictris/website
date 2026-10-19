@@ -262,7 +262,7 @@ Recorded here so nobody later "fixes" them into Box2D orthodoxy without noticing
 
 ## Verification at each phase
 
-`cli contacts` (new), `cli bundles`, `replay selftest`, all playtests, `cli ledges`, `cli corners`, `tsc --noEmit`.
+`cli contacts` (new), `cli bundles`, `replay selftest`, all playtests, `cli corners`, `tsc --noEmit`.
 
 Phases 0 and 1 must be bit-identical: `cli bundles` should report `maxDrift` around 0 px for faithful bundles.
 Phases 2 onward will diverge recorded bundles, which is informational; the invariants are the pass/fail signal.

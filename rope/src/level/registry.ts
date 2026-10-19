@@ -1,22 +1,31 @@
 // Named level registry — the entry point for replay/playtest tooling and the
 // live app to resolve a level id to its spec (static data + optional movers).
 
-import { Vec2 } from "../engine/vec2";
 import { LEVEL_2 } from "./levelData";
-import { addSlidingPlatform, addWindmill } from "./movers";
 import {
   TEST_BRANCH,
   TEST_LIFT,
   TEST_SPIN,
   TEST_SWING,
-  TEST_MOVERS,
   TEST_SPRING,
   TEST_TRAMPOLINE,
   TEST_VINES,
-  TEST_WINDMILL,
 } from "./testLevel";
-import type { LevelSpec } from "./level";
 import type { RawLevelData } from "./levelFormat";
+
+// A registry entry: the level's data, and the `levels/<file>.json` it was
+// bundled from for the levels that are a file the editor owns rather than
+// hand-written TS. `data` is the file as it stood when the app was compiled;
+// `file` names the file itself, so a dev-time reader can go back to disk for
+// what the editor has saved since (see the preload list in vite.config.ts).
+// Every level is played with the ball & chain (`BallLevel`): the grapple
+// controller, and the `init` hooks its hand-written levels added scripted
+// movers through, were retired on 2026-10-19 - a mover is authored in the
+// data now (`LevelBodyData.swingAmp`, routes).
+export interface LevelSpec {
+  data: RawLevelData;
+  file?: string;
+}
 // The hand-authored ball arena, bundled straight from the editor's on-disk
 // store so the level has one source of truth. The dev-only /api/levels route
 // serves the same file to the editor; importing it here compiles it into the
@@ -72,23 +81,6 @@ import berryTestJson from "../../levels/berry-test.json";
 import ropeBridgeJson from "../../levels/rope-bridge.json";
 
 export const LEVELS: Record<string, LevelSpec> = {
-  LEVEL_2: {
-    data: LEVEL_2,
-    init: (level) => {
-      // Shuttle crossing the arena above the big circle: sweeps x [-3.25, -1.35]
-      // (edges [-3.85, -0.75]), clear of the leaning wall (right face ≈ -4.17),
-      // the circle (top -0.53), the small walls (top -0.46) and the centre
-      // pillar (left face -0.72). Peak speed 0.95 * 0.7 ≈ 0.011 m/frame.
-      addSlidingPlatform(level, new Vec2(-2.3, -0.7), 0.95, 0.7);
-      // Slow windmill in the upper-right pocket between the ceiling's right
-      // edge (corner (1.56,-2.78), 1.33 m away), the 30° slope (face 1.28 m
-      // away) and the right wall. Blade radius 1.1 clears all three; tip
-      // speed 1.1 * 0.3 = 0.33 m/s ≈ 0.0055 m/frame.
-      addWindmill(level, new Vec2(2.8, -2.3), 0.3);
-    },
-  },
-  TEST_MOVERS,
-  TEST_WINDMILL,
   // A spring body to hang off, dive from and hook into (see `TEST_SPRING`).
   TEST_SPRING,
   // A branch on a sprung bearing to swing down and be sprung back by
@@ -109,33 +101,34 @@ export const LEVELS: Record<string, LevelSpec> = {
   // Ball & chain controller in its own authored arena. Any mover in it is one
   // the FILE authored - a swinging body (see `LevelBodyData.swingAmp`) - since
   // the ball driver takes no `init` hook.
-  BALL: { data: ballLevelJson as RawLevelData, controller: "ball", file: "ball" },
+  BALL: { data: ballLevelJson as RawLevelData, file: "ball" },
   // The rails descent (see the import): listed, so it carries a finish line and
   // a title of its own and `cli levels` holds it to both.
-  RAILS: { data: railsJson as RawLevelData, controller: "ball", file: "rails" },
+  RAILS: { data: railsJson as RawLevelData, file: "rails" },
   // Rails to clamp and slide along, driven with the ball (see `lib/rail.ts`).
-  RAIL_TEST: { data: railTestJson as RawLevelData, controller: "ball", file: "rail-test" },
+  RAIL_TEST: { data: railTestJson as RawLevelData, file: "rail-test" },
   // Mud to bite into and creep through, driven with the ball (see `lib/viscous.ts`).
-  MUD_TEST: { data: mudTestJson as RawLevelData, controller: "ball", file: "mud-test" },
+  MUD_TEST: { data: mudTestJson as RawLevelData, file: "mud-test" },
   // Conveyor belts to ride, drop crates on and hook, driven with the ball (see
   // `lib/belt.ts`). Unlisted, like every sandbox.
-  TEST_BELT: { data: beltTestJson as RawLevelData, controller: "ball", file: "belt-test" },
+  TEST_BELT: { data: beltTestJson as RawLevelData, file: "belt-test" },
   // A rope bridge to roll across and hang from (see `docs/scene-chains.md`,
   // "Tied chains"). Unlisted, like every sandbox.
-  ROPE_BRIDGE: { data: ropeBridgeJson as RawLevelData, controller: "ball", file: "rope-bridge" },
+  ROPE_BRIDGE: { data: ropeBridgeJson as RawLevelData, file: "rope-bridge" },
   // Geometry that gives way: swing off the ceiling and drop through it (see
   // `docs/breakable.md`). The three ledges are 2.5 kN, 5 kN, and 4 kN three
   // times over; the L at the end is one body of two pieces, so it goes as one.
-  BREAK_TEST: { data: breakTestJson as RawLevelData, controller: "ball", file: "break-test" },
+  BREAK_TEST: { data: breakTestJson as RawLevelData, file: "break-test" },
   // Camera regions that blend, and a priority island that does not (see
   // `docs/camera.md`). Nothing to grapple: roll right and watch the framing.
-  CAMERA_TEST: { data: cameraTestJson as RawLevelData, controller: "ball", file: "camera-test" },
+  CAMERA_TEST: { data: cameraTestJson as RawLevelData, file: "camera-test" },
   // The finish gantry on its own, to swing through and to roll into (see
   // `docs/levels.md`). Unlisted like every other sandbox.
-  FINISH_TEST: { data: finishTestJson as RawLevelData, controller: "ball", file: "finish-test" },
-  BERRY_TEST: { data: berryTestJson as RawLevelData, controller: "ball", file: "berry-test" },
-  // The ball & chain controller in the grapple arena, kept for A/B comparison.
-  BALL_LEVEL_2: { data: LEVEL_2, controller: "ball" },
+  FINISH_TEST: { data: finishTestJson as RawLevelData, file: "finish-test" },
+  BERRY_TEST: { data: berryTestJson as RawLevelData, file: "berry-test" },
+  // The arena the retired grapple controller was built around, played with the
+  // ball (see `levelData.ts`).
+  BALL_LEVEL_2: { data: LEVEL_2 },
 };
 
 export const DEFAULT_LEVEL = "BALL";
@@ -156,11 +149,10 @@ export interface ListedLevel {
 // The levels `/` offers, in the order it offers them: the introduction first,
 // then the rest by title, case-insensitively.
 //
-// FILE-BACKED BALL LEVELS ONLY, and both halves of that are deliberate. The
-// hand-written `TEST_*` specs in `testLevel.ts` are rigs with no geometry an
-// author owns, no finish line to cross and no file to hash; the grapple levels
-// are a different controller the completion flow has never been through. Both
-// stay reachable by `?level=`, which is what `unlisted` says for a level file.
+// FILE-BACKED LEVELS ONLY: the hand-written `TEST_*` specs in `testLevel.ts`
+// are rigs with no geometry an author owns, no finish line to cross and no
+// file to hash. They stay reachable by `?level=`, which is what `unlisted`
+// says for a level file.
 //
 // Derived rather than a second list, so a level added to `LEVELS` is on the
 // menu by existing. What an author writes is `meta` in the file itself (see
@@ -169,7 +161,7 @@ export interface ListedLevel {
 export function listedLevels(): ListedLevel[] {
   const rows: ListedLevel[] = [];
   for (const [id, spec] of Object.entries(LEVELS)) {
-    if (spec.controller !== "ball" || !spec.file) continue;
+    if (!spec.file) continue;
     const meta = spec.data.meta;
     if (meta?.unlisted) continue;
     rows.push({ id, title: meta?.title ?? id, intro: meta?.intro === true, file: spec.file });

@@ -404,6 +404,8 @@ export class BallHook extends RigidBody2D {
   // its tip held by geometry, fed the winch stall a blocked correction every one
   // of those frames and grew from 64 cm to 3.58 m.
   physicsStep(dt: number): void {
+    // Before the turn: the tip as the last frame left it (see `biteWhereStruck`).
+    if (this.biteWhereStruck()) return;
     this.alignToChain(dt);
     if (!this.armed || !this.world) return;
     if (this.attachToBlockingContact()) return;
@@ -670,9 +672,8 @@ export class BallHook extends RigidBody2D {
   // reports while the hook is still millimetres clear buys the chain that much
   // extra path, and the chain going from taut to slack in one frame drops the
   // ball it had been braking - a 0.7 m/s gain on the anchoring frame, which is
-  // `rope-anchor-kick` (`session-576f` f60). A tip drifts into its surface
-  // slowly and `probeContact` catches it on real contact, which is what keeps
-  // the anchored length honest; nothing is missed by leaving it to that.
+  // `rope-anchor-kick` (`session-576f` f60). A tip bites on real contact, by
+  // `biteWhereStruck` and `probeContact`.
   //
   // Public because the frame after is not always available. The same contact
   // that blocks the hook can also END the throw - a shot stopped dead is a
@@ -706,6 +707,41 @@ export class BallHook extends RigidBody2D {
       // here too.
       if (s && !this.bites(s)) continue;
       this.attach(other, s ? nearestSurfacePoint(s, c.point) : c.point, s ?? null);
+      return true;
+    }
+    return false;
+  }
+
+  // A DANGLING tip bites a piece the solver says it struck last frame (a
+  // contact that pushed at any substep, `maxNormalImpulse`) if the bar is
+  // still on it now - inside the probe's touch tolerance, read at the pose
+  // the frame left it in - and at the point it touches now. Asked before
+  // `alignToChain`, because the probe asks after it: a tip swung round a
+  // box's corner on its chain struck the underside inside the island's
+  // substeps (where nothing asks about a bite), ended the frame pressed flat
+  // on it, and was turned 1.1 rad off the face, 10 mm clear of the probe; the
+  // falling ball stretched the unbitten chain from 1.80 to 2.10 m, and the
+  // bite the frame after found it past the snap and dropped it with the
+  // button held (`session-126f` f97-99). Not the contact's own point: the
+  // solver's report is the frame's, and the tip that brushed the box's side
+  // and crossed its top at 13 m/s in one frame was handed a point 8 cm under
+  // it, on the side, with the chain cut through the box to reach it.
+  private biteWhereStruck(): boolean {
+    if (!this.armed || this.flying || !this.world) return false;
+    const bar = this.primaryShape();
+    for (const c of this.world.frameContacts) {
+      if (c.maxNormalImpulse <= 0) continue;
+      const other = c.a === this ? c.b : c.b === this ? c.a : null;
+      if (!other || other.removed || this.exceptions.has(other.id)) continue;
+      if (!(other instanceof StaticBody2D || other instanceof RigidBody2D)) continue;
+      const s = other.getShapes()[c.a === this ? c.shapeB : c.shapeA];
+      if (!s || !this.bites(s)) continue;
+      let deepest: { point: Vec2; depth: number } | null = null;
+      for (const touch of shapeContacts(bar, s, BallHook.PROBE_MARGIN)) {
+        if (!deepest || touch.depth > deepest.depth) deepest = touch;
+      }
+      if (!deepest) continue;
+      this.attach(other, nearestSurfacePoint(s, deepest.point), s);
       return true;
     }
     return false;

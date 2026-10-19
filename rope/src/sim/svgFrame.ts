@@ -3,7 +3,6 @@
 // glitch like the chain clipping through a wall is obvious at a glance instead
 // of reconstructed from coordinates. Pure string output, no browser/canvas.
 
-import { Level } from "../level/level";
 import { BallLevel } from "../level/ballLevel";
 import {
   ForceArea,
@@ -116,17 +115,15 @@ function bodyColor(b: PhysicsBody2D, piece: CollisionShape2D): { fill: string; s
   return { fill, stroke };
 }
 
-function ropeOf(level: Level | BallLevel): Rope | null {
-  return level instanceof BallLevel ? level.ball.chain : level.player.rope;
+function ropeOf(level: BallLevel): Rope | null {
+  return level.ball.chain;
 }
 
-function avatar(level: Level | BallLevel): { pos: Vec2; r: number } {
-  const b = level instanceof BallLevel ? level.ball : level.player;
-  const r = (b as { radius?: number }).radius ?? 0.12;
-  return { pos: b.globalPosition, r };
+function avatar(level: BallLevel): { pos: Vec2; r: number } {
+  return { pos: level.ball.globalPosition, r: level.ball.radius };
 }
 
-export function renderFrameSVG(level: Level | BallLevel): string {
+export function renderFrameSVG(level: BallLevel): string {
   const bodies = level.world.bodies.filter(
     (b) => (b instanceof StaticBody2D || b instanceof RigidBody2D) && b.hasShape(),
   );
@@ -323,7 +320,7 @@ export function renderFrameSVG(level: Level | BallLevel): string {
   // The slack chain's visual drape (ball level only), in green over the wrap
   // path's amber: the two coincide when taut, and the drape hanging below the
   // straight spans is exactly what a snapshot is opened to check.
-  if (level instanceof BallLevel && level.ball.chainSlack) {
+  if (level.ball.chainSlack) {
     const nodes = level.ball.chainSlack.nodePositions();
     if (nodes.length >= 2) {
       for (const n of nodes) grow(box, n.x * M, n.y * M, 4);

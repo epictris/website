@@ -14,6 +14,7 @@ import { BallLevel } from "../src/level/ballLevel";
 import { BallHook } from "../src/classes/ballHook";
 import { Vec2 } from "../src/engine/vec2";
 import { LAYER_HOOK, LAYER_PLAYER, LAYER_ROPE, VineLink } from "../src/engine/body";
+import { PlantUnit, SpringRow } from "../src/level/plantRows";
 import { button, emptyFrameInput } from "../src/input/frameInput";
 import { cloneVine, modelFromDisk, modelToDisk, vineRestPath } from "../src/editor/model";
 import { scaleLevelData, type RawLevelData } from "../src/level/levelFormat";
@@ -302,10 +303,10 @@ console.log("PASS each berry is built where it was placed");
 // cord the other way: session-97f, the ball hooked a berry standing out right
 // of the cord from below-left, and the plant and the ball gained 220 kg·m/s
 // rightward in ten frames, the whole vine swinging away from the pull. So: one
-// pass of the stalk's constraints from a dragged pose moves the plant's mass
-// (Σ m·x, the momentum a position solve pays out) by nothing, and turning the
-// whole plant rigidly about its anchor changes nothing they ask for - they
-// hold the stalk to the cord, not to the world.
+// solve of the stalk's spring rows from a dragged pose moves the plant's
+// momentum (Σ m·v) by nothing, and turning the whole plant rigidly about its
+// anchor changes nothing they ask for - they hold the stalk to the cord, not
+// to the world.
 {
   const level = new BallLevel(structuredClone(raw));
   const vine = level.vines[0]!;
@@ -317,19 +318,26 @@ console.log("PASS each berry is built where it was placed");
     });
   const bends = stalkBends(vine);
   assert(bends.length > 0, "a stalk has stiffness");
-  const mass = (): Vec2 => vine.allLinks.reduce((sum, link) => sum.add(link.globalPosition.mul(link.mass)), Vec2.ZERO);
+  const momentum = (): Vec2 => vine.allLinks.reduce((sum, link) => sum.add(link.linearVelocity.mul(link.mass)), Vec2.ZERO);
   const berry = vine.berries[1]!;
   berry.fruit.globalPosition = berry.fruit.globalPosition.add(new Vec2(-0.2, 0.1));
-  const before = mass();
-  for (const bend of bends) {
-    bend.beginFrame(1 / 60);
-    bend.solve(1 / 60);
-  }
-  const pushed = mass().sub(before);
-  assert(pushed.length() < 1e-9, `the stalk's stiffness moves the plant by ${pushed.length().toFixed(4)} kg·m`);
+  for (const link of vine.allLinks) link.linearVelocity = Vec2.ZERO;
+  const unbiased = { biasRate: 0, massScale: 1, impulseScale: 0 };
+  for (const bend of bends) new SpringRow(bend).solve(1 / 480, unbiased, true);
+  const pushed = momentum();
+  assert(
+    vine.allLinks.some((link) => link.linearVelocity.length() > 0),
+    "the dragged stalk's rows answer the drag",
+  );
+  assert(pushed.length() < 1e-9, `the stalk's stiffness moves the plant by ${pushed.length().toFixed(4)} kg·m/s`);
 
   const plant = new BallLevel(structuredClone(raw)).vines[0]!;
-  const asked = () => stalkBends(plant).map((bend) => (bend.beginFrame(1 / 60), bend.residual));
+  const asked = () =>
+    stalkBends(plant).map((bend) => {
+      const row = new SpringRow(bend);
+      row.measure();
+      return row.over;
+    });
   const upright = asked();
   const pivot = plant.anchorContact.globalPosition;
   for (const link of plant.allLinks) link.globalPosition = pivot.add(link.globalPosition.sub(pivot).rotated(0.4));
@@ -659,8 +667,8 @@ console.log("PASS a berry cannot be whipped into a slingshot, and never spins");
 // half-period: a 0.5 m drop onto a BALL berry returned 44% of its energy at
 // 60 Hz, 65% with the same solve at 120 and 83% at 240. So the plant the ball
 // hangs from is a unit of the island solver while it hangs (`PlantUnit`,
-// substepped with the ball's chain row), and back in the chain sweep the
-// frame the chain lets go. Measured 2026-10-12 on BALL's clear berries at
+// substepped with the ball's chain row), and the free plant's own unit again
+// the frame the chain lets go (`syncSpanUnits`). Measured 2026-10-12 on BALL's clear berries at
 // sway 0.5, berry 300 kg/m³, stem 1 kg/m, the aim following the berry: 68%
 // and 78% as undamped rows against 51% and 53% in the sweep, and 57% and 57%
 // with the rows damped enough for a hanging plant to settle
@@ -669,66 +677,58 @@ console.log("PASS a berry cannot be whipped into a slingshot, and never spins");
 // What the rows buy beside the return is the catch: a 3.5 m/s catch left the
 // sweep's cord 7 to 14 cm shorter for a second, and the rows' within 16 mm.
 {
-  const flags = BallLevel as unknown as { PLANT_ROWS: boolean };
-  const measure = (plant: number, which: number, rows: boolean): { back: number; unit: boolean; after: boolean } => {
-    const was = flags.PLANT_ROWS;
-    flags.PLANT_ROWS = rows;
-    try {
-      const data = structuredClone(ballJson) as RawLevelData;
-      for (const v of data.vines ?? []) {
-        if (!v.starberry) continue;
-        v.starberry.sway = 0.5;
-        v.starberry.berryDensity = 300;
-        v.starberry.stalkDensity = 1;
-      }
-      const level = new BallLevel(data);
-      const vine = level.vines.filter((v) => v.starberry)[plant]!;
-      const fruit = vine.berries[which]!.fruit;
-      level.ball.globalPosition = fruit.globalPosition.add(new Vec2(0, 0.95));
-      let prev = emptyFrameInput();
-      const feed = (fire: boolean): void => {
-        const input = { ...emptyFrameInput(), fire: button(fire, prev.fire), mouseWorldPosition: fruit.globalPosition };
-        prev = input;
-        level.physicsProcess(input, 1 / 60);
-      };
-      for (let f = 0; f < 300; f++) feed(true);
-      assert.equal(level.ball.chain?.end.contact.obj, fruit, `plant ${plant} berry ${which}: caught`);
-      const unit = vine.unit !== null;
-      // Lift the ball half a metre on a slack chain and let it fall.
-      level.ball.globalPosition = level.ball.globalPosition.add(new Vec2(0, -0.5));
-      level.ball.linearVelocity = Vec2.ZERO;
-      let down = 0;
-      let up = 0;
-      let caught = false;
-      for (let f = 0; f < 120; f++) {
-        feed(true);
-        const vy = level.ball.linearVelocity.y;
-        if (!caught) {
-          if (vy > down) down = vy;
-          else if (vy < down - 0.05) caught = true;
-        } else if (-vy > up) up = -vy;
-      }
-      assert(caught, `plant ${plant} berry ${which}: the chain catches the drop`);
-      // Let go: the plant is nobody's unit the frame after.
-      feed(false);
-      feed(false);
-      return { back: (up * up) / (down * down), unit, after: vine.unit !== null };
-    } finally {
-      flags.PLANT_ROWS = was;
+  const measure = (plant: number, which: number): { back: number; unit: boolean; after: boolean } => {
+    const data = structuredClone(ballJson) as RawLevelData;
+    for (const v of data.vines ?? []) {
+      if (!v.starberry) continue;
+      v.starberry.sway = 0.5;
+      v.starberry.berryDensity = 300;
+      v.starberry.stalkDensity = 1;
     }
+    const level = new BallLevel(data);
+    const vine = level.vines.filter((v) => v.starberry)[plant]!;
+    const fruit = vine.berries[which]!.fruit;
+    level.ball.globalPosition = fruit.globalPosition.add(new Vec2(0, 0.95));
+    let prev = emptyFrameInput();
+    const feed = (fire: boolean): void => {
+      const input = { ...emptyFrameInput(), fire: button(fire, prev.fire), mouseWorldPosition: fruit.globalPosition };
+      prev = input;
+      level.physicsProcess(input, 1 / 60);
+    };
+    for (let f = 0; f < 300; f++) feed(true);
+    assert.equal(level.ball.chain?.end.contact.obj, fruit, `plant ${plant} berry ${which}: caught`);
+    const unit = vine.unit instanceof PlantUnit && vine.unit.berry === fruit;
+    // Lift the ball half a metre on a slack chain and let it fall.
+    level.ball.globalPosition = level.ball.globalPosition.add(new Vec2(0, -0.5));
+    level.ball.linearVelocity = Vec2.ZERO;
+    let down = 0;
+    let up = 0;
+    let caught = false;
+    for (let f = 0; f < 120; f++) {
+      feed(true);
+      const vy = level.ball.linearVelocity.y;
+      if (!caught) {
+        if (vy > down) down = vy;
+        else if (vy < down - 0.05) caught = true;
+      } else if (-vy > up) up = -vy;
+    }
+    assert(caught, `plant ${plant} berry ${which}: the chain catches the drop`);
+    // Let go: the plant is its own free unit the frame after.
+    feed(false);
+    feed(false);
+    const after = vine.unit instanceof PlantUnit && vine.unit.berry === null;
+    return { back: (up * up) / (down * down), unit, after };
   };
   for (const [plant, which] of [[0, 1], [1, 0]] as const) {
-    const rows = measure(plant, which, true);
-    const sweep = measure(plant, which, false);
-    assert(rows.unit, `plant ${plant} berry ${which}: held, the plant is an island unit`);
-    assert(!rows.after, `plant ${plant} berry ${which}: let go, it is not`);
-    assert(!sweep.unit, `plant ${plant} berry ${which}: with the switch off it never is`);
+    const rows = measure(plant, which);
+    assert(rows.unit, `plant ${plant} berry ${which}: held, the plant is the held berry's island unit`);
+    assert(rows.after, `plant ${plant} berry ${which}: let go, it is the free plant's unit again`);
     // Measured here (this rig's aim follows the berry and its hang is shorter
-    // than the drop rig's): 50% as rows against 24% in the sweep on plant 0's
-    // second berry.
+    // than the drop rig's): 50% as rows against 24% in the retired sweep on
+    // plant 0's second berry.
     assert(
       rows.back > 0.4,
-      `plant ${plant} berry ${which}: as rows the drop returns ${(rows.back * 100).toFixed(0)}% (bar 40; the sweep ${(sweep.back * 100).toFixed(0)}%)`,
+      `plant ${plant} berry ${which}: as rows the drop returns ${(rows.back * 100).toFixed(0)}% (bar 40)`,
     );
   }
 }

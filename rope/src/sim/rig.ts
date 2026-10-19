@@ -175,7 +175,6 @@ export interface RigSample {
   anchorSpeed: number | null;
   lease: number;
   overLength: number;
-  pushCredit: number;
   aimSpin: number;
   nodes: number;
 }
@@ -208,7 +207,6 @@ function rigSeries(worldDigests: WorldDigest[]): RigSample[] {
       // Against the length the solver actually enforces, which is the rope's own
       // length plus the lease - the same quantity `worstOverLength` measures.
       overLength: chain ? chain.pathLen - (chain.maxRope + chain.blockedSlack) : 0,
-      pushCredit: chain?.pushCredit ?? 0,
       aimSpin: chain?.aimSpin ?? 0,
       nodes: chain?.nodes ?? 0,
     };

@@ -53,7 +53,7 @@ A level reached any other way - its own URL, a new tab, a reload - has no such p
 A run picked windowed off the menu gets no first-click grab: the player was offered the screen and left it.
 Until it lands that run is windowed and aims with the real pointer, which is a mode the game already has - the lock is never taken outside fullscreen whatever asks for it (see [**Ball controls and aim**](running.md#ball-controls-and-aim)).
 
-**The desktop cursor goes when the level starts**, rather than at a press: `hidePointer` takes it off the whole page (the ball controller only - the grapple controller aims with the OS pointer itself), on top of the `cursor: none` the canvas has carried since the level was chosen.
+**The desktop cursor goes when the level starts**, rather than at a press: `hidePointer` takes it off the whole page, on top of the `cursor: none` the canvas has carried since the level was chosen.
 The page rather than the canvas because the letterbox bars are page too, and a fullscreen window wider than 16:9 is mostly bars.
 The next cursor the player sees is the game's own, which does not appear until the mouse has actually moved (see [**Ball controls and aim**](running.md#ball-controls-and-aim)).
 

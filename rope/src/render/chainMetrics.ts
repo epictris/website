@@ -27,6 +27,10 @@ import { PX } from "../engine/units";
 // metres and get a chain of the right gauge for a 24 cm ball.
 export const CHAIN_LINK_LEN = 3.8 * PX;
 export const CHAIN_LINK_W = 1.8 * PX;
+// The bar stock a link is forged from, as a radius: what the 3D chain draws a
+// link's tube at, and the pin a link turns on where it hooks a body (the
+// physics' pin friction, `level/chains.ts`).
+export const CHAIN_LINK_BAR = CHAIN_LINK_W * 0.42;
 
 export interface ChainLink {
   // Centre of the link, in world metres.

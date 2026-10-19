@@ -19,13 +19,10 @@ import { PIXELS_PER_METER, PX } from "../engine/units";
 import type { SparkSystem } from "./sparks";
 import type { DebrisSystem } from "./debris";
 import type { GlassShards } from "./glassShards";
-import { Player } from "../classes/player";
 import { BallPlayer } from "../classes/ballPlayer";
 import { BallHook } from "../classes/ballHook";
-import { Hook } from "../classes/hook";
 import { KillZone } from "../classes/killZone";
 import { FinishLine } from "../classes/finishLine";
-import type { Level } from "../level/level";
 import type { BallLevel } from "../level/ballLevel";
 import type { SceneChain } from "../level/chains";
 import type { TieChain } from "../engine/ties";
@@ -49,17 +46,11 @@ import {
 } from "./shapePath";
 import { hexToRgba, shade } from "./color";
 import { drawDebugOverlay } from "./debugOverlay";
-import {
-  drawPlayerRigBack,
-  drawPlayerRigFront,
-  updatePlayerRig,
-} from "./playerRig";
 
 const GEOMETRY_FILL = "#2a2f3d";
 const GEOMETRY_STROKE = "#3c445c";
 const DYNAMIC_FILL = "#5c6a7a";
 const MOVER_FILL = "#3d4a45";
-const PLAYER = "#65bddb";
 const HOOK = "#f4a460";
 // Ball & chain palette: rusty black cast iron — warm near-black base, rust
 // browns for wear, matte throughout (no bright steel).
@@ -117,17 +108,11 @@ function drawBody(
 ): void {
   if (!body.hasShape()) return;
   const t = body.renderShape(alpha);
-  // The avatars are drawn from their primary shape alone and return below: the
+  // The avatar is drawn from its primary shape alone and returns below: the
   // ball's auxiliary rim circle is its mounting loop, drawn as a loop by
   // `renderBall` rather than as a second cannonball. Level geometry falls
   // through to the compound loop at the end, which draws every piece.
-  if (body instanceof Player) {
-    pathShape(ctx, t);
-    ctx.fillStyle = PLAYER;
-    ctx.fill();
-    return;
-  }
-  if (body instanceof Hook || body instanceof BallHook) {
+  if (body instanceof BallHook) {
     pathShape(ctx, t);
     ctx.fillStyle = HOOK;
     ctx.fill();
@@ -710,189 +695,6 @@ function arrowHead(ctx: CanvasRenderingContext2D, a: Vec2, b: Vec2, color: strin
   ctx.stroke();
 }
 
-// Small ring + four ticks, drawn in world space at the stick aim point.
-function drawCrosshair(ctx: CanvasRenderingContext2D, p: Vec2): void {
-  const r = 4 * PX;
-  const tick = 3 * PX;
-  ctx.strokeStyle = "#cbccc6";
-  ctx.lineWidth = PX;
-  ctx.beginPath();
-  ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
-  for (const [dx, dy] of [
-    [1, 0],
-    [-1, 0],
-    [0, 1],
-    [0, -1],
-  ] as const) {
-    ctx.moveTo(p.x + dx * r, p.y + dy * r);
-    ctx.lineTo(p.x + dx * (r + tick), p.y + dy * (r + tick));
-  }
-  ctx.stroke();
-}
-
-export function render(
-  ctx: CanvasRenderingContext2D,
-  // Where the fixed 16:9 frame lands on this canvas and how big — the scale
-  // carries the display's DPR with it (see render/viewport.ts).
-  view: ViewTransform,
-  level: Level,
-  camera: Camera,
-  fps: number,
-  showDebug = false,
-  // Where to draw the aim crosshair, or null when the OS cursor is showing aim by
-  // itself (see LiveInputSource.crosshairAim).
-  crosshairAim: Vec2 | null = null,
-  // Fraction of a physics step elapsed since the last one: every moving body is
-  // drawn between its previous and current sim transform. 1 = draw the sim
-  // state exactly (what a caller with no fixed-step accumulator wants).
-  alpha = 1,
-  // The camera state in force, for the debug overlay (see drawDebugOverlay).
-  heldCamera: HeldCamera | null = null,
-  // See `renderBall`: draw only the genuinely-2D layers, leaving the scene to
-  // the WebGL canvas underneath. The grapple avatar's rig and its rope STAY on
-  // this canvas even in overlay mode - the Player state-machine slice is 2D-only
-  // (see "Explicitly out of scope" in docs/3d-rendering-plan.md), so a 3D
-  // grapple level is a 3D world with a 2D avatar in it.
-  overlayOnly = false,
-  // The hook's sparks, drawn in world space over everything else (see
-  // `render/sparks.ts`). Deliberately NOT gated on `overlayOnly`: a spark is an
-  // emissive, screen-thin flat mark over the scene, which is exactly what this
-  // canvas keeps in 3D. Absent everywhere that has no spark system to hand.
-  sparks: SparkSystem | null = null,
-  // The chunks a breakable body came apart into (see `render/debris.ts`), drawn
-  // where the sparks are and for the same reason: a chunk is a flat mark on the
-  // gameplay plane, which is the plane both canvases agree on.
-  debris: DebrisSystem | null = null,
-): void {
-  const { width: viewWidth, height: viewHeight } = view;
-  // The sim instant this frame stands for, which carries every conveyor's tread.
-  const treadTime = beltRenderTime(level.frame, alpha);
-  ctx.setTransform(view.scale, 0, 0, view.scale, view.originX, view.originY);
-  if (overlayOnly) ctx.clearRect(0, 0, viewWidth, viewHeight);
-  else drawTrainingGrid(ctx, camera, viewWidth, viewHeight);
-
-  ctx.save();
-  ctx.translate(viewWidth / 2, viewHeight / 2);
-  // World is in metres; scale metres → screen pixels. camera.zoom is the view
-  // knob, PIXELS_PER_METER the unit conversion. Fixed-pixel decoration drawn in
-  // this space is expressed as a world length via PX (= 1 / PIXELS_PER_METER).
-  ctx.scale(camera.zoom * PIXELS_PER_METER, camera.zoom * PIXELS_PER_METER);
-  ctx.translate(-camera.position.x, -camera.position.y);
-
-  if (!overlayOnly) {
-    // Chains hang behind every solid thing - which is the same statement as
-    // their passing through it (see `SceneChain`).
-    drawSceneChains(ctx, level.sceneChains, level.tieChains, alpha);
-  }
-
-  // Hook-only scenery is background the player passes through, so it goes down
-  // first and solid geometry draws over it. 2D only, like the water it follows:
-  // in 3D the scene draws the body itself, set back behind the gameplay plane,
-  // and a grate lattice stamped over that fights the thing it is describing (see
-  // `renderBall`).
-  if (!overlayOnly) {
-    for (const body of level.world.bodies) {
-      // A vine link is passable too, but a vine is one cord, not its links'
-      // grab discs (`drawVines`).
-      if (body.passable && !(body instanceof VineLink)) drawBody(ctx, body, alpha, treadTime);
-    }
-  }
-  if (!overlayOnly) {
-    for (const body of level.world.bodies) {
-      if (body instanceof Player) continue; // drawn between the rig layers below
-      if (body.passable) continue; // already drawn, behind
-      // A vine link's collision circle is its GRAB radius, several times the
-      // gauge the vine is drawn at, and a vine is one cord rather than thirty
-      // discs - `drawVines` below draws the whole thing from the link centres.
-      if (body instanceof VineLink) continue;
-      drawBody(ctx, body, alpha, treadTime);
-    }
-  }
-  for (const area of level.world.areas) {
-    // Water is the exception to "areas stay 2D": it is a volume with a surface
-    // rather than a mark on a region, so in 3D (`overlayOnly`) the scene draws
-    // the real thing and a lattice of streaks over the top would only fight it.
-    if (overlayOnly && area instanceof WaterArea) continue;
-    drawBody(ctx, area, alpha, treadTime);
-  }
-
-  // Vines over the geometry and under the player: a vine is a thing the player
-  // grabs, so unlike a scene chain it may not be hidden behind the wall it hangs
-  // in front of - and unlike the player it is scenery, so it passes behind them.
-  //
-  // 2D only. In 3D the scene draws the vine itself (`render3d/vineVisual.ts`),
-  // where it has depth and takes the level's light; a flat cord over the top of
-  // that would be the same vine drawn twice, and the flat one would be the one
-  // in front.
-  if (!overlayOnly) drawVines(ctx, level.vines, alpha, treadTime);
-
-  // Rope spans, drawn exactly as simulated and BEHIND the player so the body
-  // covers the origin at its centre. The first span used to be redrawn from
-  // the right hand's centre, but the offset between the hand and the sim
-  // attach point bent the rendered path at every wrap node — a sub-pixel wrap
-  // read as the rope snagging on a corner. The rig's arm reaches toward the
-  // rope instead (playerRig), so the hand still tracks the rope visually.
-  const rope = level.player.rope;
-  if (rope) {
-    ctx.strokeStyle = HOOK;
-    ctx.lineWidth = PX;
-    ctx.beginPath();
-    // Drawn from the wrap NODES rather than the resolved spans: a node is a
-    // point in its body's local frame, so re-resolving it against the render
-    // transform keeps the rope attached to the drawn bodies at both ends.
-    for (const { from, to } of rope.getSpans()) {
-      const a = from.contact.renderGlobalPosition(alpha);
-      const b = to.contact.renderGlobalPosition(alpha);
-      ctx.moveTo(a.x, a.y);
-      ctx.lineTo(b.x, b.y);
-    }
-    ctx.stroke();
-  }
-
-  // Player sandwich over the rope: far-side limbs, body, near-side limbs.
-  updatePlayerRig(level, alpha);
-  drawPlayerRigBack(ctx);
-  drawBody(ctx, level.player, alpha);
-  drawPlayerRigFront(ctx);
-
-  // Under the sparks: a chunk is a piece of the level and an ember is light.
-  debris?.draw(ctx);
-  sparks?.draw(ctx);
-
-  // Aim crosshair — drawn only when nothing else on screen shows aim: the right
-  // stick owns it, or the mouse does under pointer lock, which hides the cursor.
-  if (crosshairAim) drawCrosshair(ctx, crosshairAim);
-
-  // Debug overlay (toggle: L): ledge-grab markers + player contact normals.
-  if (showDebug) drawDebugOverlay(ctx, level, heldCamera);
-
-  // Debug overlay.
-  for (const cmd of Debug.cmds) {
-    ctx.strokeStyle = cmd.color;
-    ctx.lineWidth = cmd.width * PX;
-    ctx.beginPath();
-    ctx.moveTo(cmd.a.x, cmd.a.y);
-    ctx.lineTo(cmd.b.x, cmd.b.y);
-    ctx.stroke();
-    if (cmd.kind === "arrow") arrowHead(ctx, cmd.a, cmd.b, cmd.color);
-  }
-
-  ctx.restore();
-
-  // Atmosphere, over the scene and under the instruments (see drawVignette).
-  if (overlayOnly) drawVignette(ctx, viewWidth, viewHeight);
-
-  // FPS counter (screen space, top-right). The rest of the instruments - frame
-  // time, CPU, GPU, memory and their five-second graphs - are the perf HUD's,
-  // drawn by the caller over this canvas (see render/perfHud.ts).
-  ctx.font = "14px monospace";
-  ctx.textAlign = "right";
-  ctx.textBaseline = "top";
-  ctx.fillStyle = "#5a6472";
-  ctx.fillText(`${Math.round(fps)} fps`, viewWidth - 8, 6);
-  ctx.textAlign = "left";
-}
-
 // Metal chain along a polyline: interlocking oval links of a FIXED world length,
 // alternately rotated 90° so it reads as forged loops.
 //
@@ -1129,13 +931,16 @@ function drawAimReticle(ctx: CanvasRenderingContext2D, at: Vec2): void {
 // drawAimReticle.
 export function renderBall(
   ctx: CanvasRenderingContext2D,
-  // See `render`: where the fixed 16:9 frame lands on this canvas.
+  // Where the fixed 16:9 frame lands on this canvas and how big - the scale
+  // carries the display's DPR with it (see render/viewport.ts).
   view: ViewTransform,
   level: BallLevel,
   camera: Camera,
   fps: number,
   aimWorld: Vec2 | null = null,
-  // See `render`: fraction of a physics step elapsed since the last one.
+  // Fraction of a physics step elapsed since the last one: every moving body is
+  // drawn between its previous and current sim transform. 1 = draw the sim
+  // state exactly (what a caller with no fixed-step accumulator wants).
   alpha = 1,
   // Draw ONLY what is genuinely 2D, leaving the scene to the WebGL canvas
   // underneath (see render3d/scene.ts). What stays is everything whose size is
@@ -1146,20 +951,27 @@ export function renderBall(
   //
   // Default false, so the 2D path, `shot.html` and `cli shot` are untouched.
   overlayOnly = false,
-  // See `render`: the hook's sparks, drawn in both render modes.
+  // The hook's sparks, drawn in world space over everything else (see
+  // `render/sparks.ts`), in both render modes: a spark is an emissive,
+  // screen-thin flat mark over the scene, which is what this canvas keeps in 3D.
   sparks: SparkSystem | null = null,
   // The chain reeling back in after a release (see render/chainRetract.ts):
   // drawn where the chain is, so with the chain it belongs to the 3D scene
   // under `overlayOnly`.
   retract: ChainRetract | null = null,
-  // See `render`: the chunks of a body that broke, drawn in both render modes.
+  // The chunks of a body that broke (see `render/debris.ts`), in both render
+  // modes.
   debris: DebrisSystem | null = null,
   // The glass ball's shards (see render/glassShards.ts): drawn here on the 2D
   // path only, since in 3D they are glass in the scene.
   shards: GlassShards | null = null,
+  // The debug overlay (toggle: L, see render/debugOverlay.ts), and the camera
+  // state in force for it.
+  showDebug = false,
+  heldCamera: HeldCamera | null = null,
 ): void {
   const { width: viewWidth, height: viewHeight } = view;
-  // See `render`: the sim instant that carries every conveyor's tread.
+  // The sim instant that carries every conveyor's tread (`beltRenderTime`).
   const treadTime = beltRenderTime(level.frame, alpha);
   ctx.setTransform(view.scale, 0, 0, view.scale, view.originX, view.originY);
   if (overlayOnly) ctx.clearRect(0, 0, viewWidth, viewHeight);
@@ -1278,6 +1090,8 @@ export function renderBall(
   // hidden OS pointer, and a cursor that vanishes while the ball rolls in is a
   // pointer the player has lost.
   if (aimWorld) drawAimReticle(ctx, aimWorld);
+
+  if (showDebug) drawDebugOverlay(ctx, level, heldCamera);
 
   ctx.restore();
 

@@ -219,15 +219,6 @@ export function railEndIsOpen(
   return true;
 }
 
-// What one frame of the ring's own motion along the bar came to (see
-// `RopeClamp.coast`): whether it stood somewhere new afterwards, whether the
-// chain had been pulling on it, and which end of the bar it ran off, if any.
-export interface CoastResult {
-  readonly moved: boolean;
-  readonly loaded: boolean;
-  readonly ranOff: -1 | 0 | 1;
-}
-
 // The chain's end clamped around a rail: an attachment whose contact can move.
 //
 // `s` is metres of arc length along the bar's curve to the point the ring's
@@ -272,10 +263,6 @@ export class RopeClamp extends RopeAttachment {
   // the bar, so `cos a_max = h/R`. Zero for a push fit, which never tilts.
   readonly tiltMax: number;
   readonly curve: RailCurve;
-  // Whether the length solve has pulled on the ring since it last coasted, and
-  // where the ring stood then - the two things an observed speed is made of.
-  private loaded = false;
-  private sAtCoast: number;
   // Which end of its range the last slide left the ring pressed against, or 0,
   // and how much further the pull wanted to run it: the speed a ring that
   // runs off an open end leaves with is the speed it was being driven at, not
@@ -288,7 +275,6 @@ export class RopeClamp extends RopeAttachment {
     this.curve = curve;
     this.tiltMax = curve.halfWidth >= BORE_RADIUS ? 0 : dmath.acos(curve.halfWidth / BORE_RADIUS);
     this.s = s;
-    this.sAtCoast = s;
     this.range = range;
   }
 
@@ -549,108 +535,6 @@ export class RopeClamp extends RopeAttachment {
     return true;
   }
 
-  // One frame of the ring's OWN motion along the bar, run once a frame before
-  // the length solve looks at it.
-  //
-  // While the chain is pulling on the ring the length solve says where it
-  // stands (see `slide`), and all this does is observe the speed that came to,
-  // so the ring is not stopped dead the moment the chain goes slack: a ring on
-  // a zipline keeps coasting. While nothing is pulling, the ring is a bead on
-  // a wire under its own weight - which cancels, so what it accelerates at is
-  // gravity's component along the bar, held by Coulomb friction on gravity's
-  // component across it, exactly as the loaded ring is held by the cone. That
-  // is what makes a ring threaded onto a vertical bar fall at `g` from the
-  // frame it is threaded, and a ring on a horizontal bar lie where it was put.
-  //
-  // A ring reaching an end of its range stops there - unless the end is OPEN
-  // (the bar ends in the air rather than in a lid or a post), in which case it
-  // runs off, which the result reports for the owner to turn the ring back
-  // into a dangling chain tip. An end the length solve has left it pressed
-  // against counts the same as one it ran into by itself.
-  //
-  // `blocked` is the direction along the bar a TAUT chain will not let the ring
-  // go (`Rope.clampHang`), or 0 for a chain that is not holding it. The rope's
-  // length is an inequality, so what it forbids is the motion that opens it
-  // further, and the ring's own weight may not make that motion: without the
-  // block, two friction models ran on the same ring in the same frame - this
-  // one against gravity as though nothing held it, and `slide` against the
-  // pull as though gravity were not there - so the ring crept down the bar for
-  // as long as the cone held it and was hauled back the moment the pull leaned
-  // out of the cone. At rest that is a permanent 3 mm sawtooth at a quarter of
-  // frame rate, in the chain's own anchor, which is the whole chain shivering
-  // (`session-153f`).
-  //
-  // A DIRECTION and not a flag, because taut is not held: a ring on a vertical
-  // bar with the ball standing on the floor below it has a chain at its full
-  // length and no tension in it at all, and it falls the length of the bar -
-  // falling SHORTENS that chain's path, so nothing about the length forbids
-  // it. Blocked outright, that ring hung where it was threaded (`cli rails`
-  // `rail-fall`).
-  coast(dt: number, mus: number, muk: number, gravity: Vec2, blocked: -1 | 0 | 1 = 0): CoastResult {
-    // The mark the NEXT observation is measured from: where the ring stood at
-    // the top of this frame, before either this step or the length solve has
-    // moved it. Both moves are the ring's motion and the speed it is observed
-    // at is the whole of it - see the `loaded` branch below.
-    const sAtFrameStart = this.s;
-    if (this.loaded) {
-      const pressed = this.pressing;
-      const ranOff = pressed !== 0 && this.openEnd(pressed) ? pressed : 0;
-      // What the ring actually did last frame, over the WHOLE frame: the step
-      // it coasted plus the correction the length solve then made to it.
-      // Measured from the post-coast mark instead - the solve's correction
-      // alone - a chain going taut reads as launching the ring backwards at
-      // the correction over `dt` rather than as arresting it: a 2 cm pull-back
-      // became 1.3 m/s up the bar, which carried the ring 6 cm past where the
-      // solve had put it, and it slid back down and was caught again, forever
-      // (`session-283f`, an 8 cm bounce every 16 frames on the lantern's
-      // handle). A constraint may only take motion out.
-      this.speed = (this.s - this.sAtCoast + (ranOff ? ranOff * this.overrun : 0)) / dt;
-      this.loaded = false;
-      this.sAtCoast = sAtFrameStart;
-      this.pressing = 0;
-      this.overrun = 0;
-      return { moved: false, loaded: true, ranOff };
-    }
-    this.pressing = 0;
-    this.overrun = 0;
-    this.sAtCoast = sAtFrameStart;
-    if (this.curve.total <= 0 || this.range.max <= this.range.min) {
-      this.speed = 0;
-      return { moved: false, loaded: false, ranOff: 0 };
-    }
-    const t = tangentAtArcLength(this.curve, this.s);
-    const g = gravity.rotated(-this.body.globalRotation);
-    const along = g.dot(t);
-    const across = Math.abs(g.cross(t));
-    if (this.speed === 0 && Math.abs(along) <= mus * across) {
-      return { moved: false, loaded: false, ranOff: 0 };
-    }
-    let v = this.speed + along * dt;
-    const brake = muk * across * dt;
-    v = v > 0 ? Math.max(0, v - brake) : Math.min(0, v + brake);
-    v = Mathf.clamp(v, -RAIL_MAX_SLIDE_SPEED, RAIL_MAX_SLIDE_SPEED);
-    // The taut chain will not pay out for this: the ring stops rather than
-    // going where the length solve would only have to haul it back from.
-    if (blocked !== 0 && v * blocked > 0) v = 0;
-    let s = this.s + v * dt;
-    let ranOff: -1 | 0 | 1 = 0;
-    const hi = this.restMax();
-    const lo = this.restMin();
-    if (s >= hi) {
-      s = hi;
-      if (v > 0 && this.openEnd(1)) ranOff = 1;
-      v = 0;
-    } else if (s <= lo) {
-      s = lo;
-      if (v < 0 && this.openEnd(-1)) ranOff = -1;
-      v = 0;
-    }
-    this.speed = v;
-    const moved = s !== this.s;
-    if (moved) this.setParam(s);
-    return { moved, loaded: false, ranOff };
-  }
-
   // Where a ring that has run off the end of the bar in `sign`'s direction is
   // loose, in the world: the manacle's disc just clear of the bar's end face,
   // on the line the bar ran along, so the tip the owner spawns there is not
@@ -662,10 +546,54 @@ export class RopeClamp extends RopeAttachment {
     return this.body.globalPosition.add(local.rotated(this.body.globalRotation));
   }
 
-  // Has the length solve moved this ring since it last coasted? Told by the
-  // solve, once per look (see `Rope.slideClampedEnd`).
-  noteLoaded(): void {
-    this.loaded = true;
+  // The ring's own motion over one substep of a frame the chain is a ROW of
+  // the island (`BallChainRow`'s ring row): `ds` along the bar, at the speed
+  // the row solved for it (`speed`), stopped by the range. A ring that reaches
+  // an end that ends in something stops there; one that reaches an OPEN end
+  // presses against it, and runs off at the frame's next settle
+  // (`takeRowRunOff`), at the speed it was driven at, as `coast` lets one off.
+  rowAdvance(ds: number): void {
+    if (ds === 0) return;
+    const hi = this.restMax();
+    const lo = this.restMin();
+    let s = this.s + ds;
+    if (s >= hi) {
+      if (this.openEnd(1)) {
+        this.pressing = 1;
+        this.overrun += s - hi;
+      } else this.speed = 0;
+      s = hi;
+    } else if (s <= lo) {
+      if (this.openEnd(-1)) {
+        this.pressing = -1;
+        this.overrun += lo - s;
+      } else this.speed = 0;
+      s = lo;
+    } else {
+      this.pressing = 0;
+      this.overrun = 0;
+    }
+    if (s !== this.s) this.setParam(s);
+  }
+
+  // Is the ring standing at the end of its range in `sign`'s direction where
+  // the bar ends in something - a lid, a post: it can go no further that way,
+  // whatever pulls it.
+  atClosedEnd(sign: number): boolean {
+    if (sign > 0) return !this.range.openMax && this.s >= this.restMax() - 1e-9;
+    if (sign < 0) return !this.range.openMin && this.s <= this.restMin() + 1e-9;
+    return false;
+  }
+
+  // The open end a row frame left the ring pressed against, if it is still
+  // being driven off it: the ring is then the dangling tip again (the owner's
+  // `onClampRunOff`). Cleared either way.
+  takeRowRunOff(): -1 | 0 | 1 {
+    const pressed = this.pressing;
+    this.pressing = 0;
+    this.overrun = 0;
+    if (pressed !== 0 && this.openEnd(pressed) && this.speed * pressed > 0) return pressed;
+    return 0;
   }
 
 

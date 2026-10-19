@@ -10,7 +10,7 @@ A shed piece is nothing to the sweep, the blocking contact or the probe, and the
 A hanging ball draws it slowly toward itself; a falling ball caught on it drags it a long way through the mud before it is slowed to a hang, and creeps from there; a ball swinging out from a wall draws it straight out of the face.
 Solid for everything else, and per shape for hook-proof's reason: a stone wall with one mud patch is one body.
 Hook-proof wins where both are set, and a rail wins over it - a rail is clamped around, not bitten.
-The grapple's hook ignores it (a viscous face is a face to that controller); scene chains tied to one are tied.
+The grapple's hook (retired 2026-10-19) ignored it, a viscous face being a face to that controller; scene chains tied to one are tied.
 The same law moves the ball's manacle along a VINE, locked to the cord rather than free in a face - see [**The ring on a vine**](vine-ring.md) under [**Vines**](vines.md).
 
 **The law is a power of the load** (`lib/viscous.ts`, `creepSpeed`): `VISCOUS_CREEP_SPEED` under `VISCOUS_CREEP_LOAD` times `(load / (viscosity · VISCOUS_CREEP_LOAD))^VISCOUS_EXPONENT`.

@@ -24,10 +24,8 @@
 //     digest (`static-equivalent`), which is the no-regression proof;
 //   - it CARRIES what rests on it through the ordinary contact path, a crate
 //     at belt speed and never pinned (`crate-carried`, `reverse`, `no-pin`), a
-//     free ball until it rides (`ball-rolls`) and the grapple avatar, who can
-//     walk against it at its own speed and stand still without the stuck
-//     detector calling that a freeze (`avatar-carried`), and on a three-wheel
-//     belt as on two (`carried-3`);
+//     free ball until it rides (`ball-rolls`), and on a three-wheel belt as on
+//     two (`carried-3`);
 //   - a running belt wakes what sleeps on it (`wakes`), nothing disturbs it
 //     (`undisturbable`), and the energy monitor reads the carry as the source
 //     it is rather than as the solver inventing energy (`energy-armed`).
@@ -35,7 +33,7 @@
 //   - a hook that bites a running belt RIDES it (`RopeRide`): where it stands
 //     is a pure function of the frame, so a replay lands it to the bit
 //     (`ride-pure`); a ball hanging from it is carried at belt speed
-//     (`ride-carried`, the grapple's hook too); it goes round a wheel with
+//     (`ride-carried`); it goes round a wheel with
 //     the chain bent round the wheel and the cuff turning with the surface
 //     (`ride-round-roller`, and `ride-3` round the large wheel of a
 //     three-wheel belt and on along two runs); the continuous sweep sees the
@@ -60,7 +58,6 @@ import { World } from "../engine/world";
 import { PX, PIXELS_PER_METER } from "../engine/units";
 import { buildLevelBodies } from "../level/buildBodies";
 import { BallLevel } from "../level/ballLevel";
-import { Level } from "../level/level";
 import {
   scaleLevelData,
   type CollisionObjectData,
@@ -90,7 +87,6 @@ import { button, emptyFrameInput, type ButtonInput, type FrameInput } from "../i
 import {
   checkBallInvariants,
   EnergyMonitor,
-  StuckDetector,
   TunnelMonitor,
   worldDigestBall,
   worldDigestsEqual,
@@ -1139,67 +1135,6 @@ function caseBallRolls(): BeltResult {
   return c.done("ball-rolls - a free ball is dragged into rolling without slip, and ends riding the belt");
 }
 
-// The grapple avatar, through `Level`: standing still on the belt it is carried
-// at belt speed; walking against a belt running at its own walking speed it
-// stands still - the treadmill - and the stuck detector, which arms only near
-// a MOBILE body, does not call that a freeze. The avatar is put beside the
-// belt body's own origin, which is exactly where the detector would arm if a
-// belt counted as mobile to it.
-function caseAvatarCarried(): BeltResult {
-  const c = new Checks();
-  const grapple = (speedPx: number, spawnX: number): RawLevelData => ({
-    player: { x: spawnX, y: -60, radius: 16 },
-    bodies: [
-      {
-        kind: "static",
-        x: 0,
-        y: 0,
-        rot: 0,
-        objects: [{ type: "collision", shape: twoWheels(1600, 0, 20, speedPx) }],
-      },
-    ],
-  });
-  const run = (level: Level, frames: number, hold: "none" | "right"): { v: number[]; x: number[]; violations: string[] } => {
-    const stuck = new StuckDetector();
-    let prev: ButtonInput = { held: false, pressed: false, released: false };
-    const v: number[] = [];
-    const x: number[] = [];
-    const violations: string[] = [];
-    for (let f = 1; f <= frames; f++) {
-      const held = hold === "right" && f > 30;
-      const btn: ButtonInput = { held, pressed: held && !prev.held, released: !held && prev.held };
-      prev = btn;
-      const input: FrameInput = { ...emptyFrameInput(), moveRight: btn };
-      const x0 = level.player.globalPosition.x;
-      level.physicsProcess(input, DT);
-      v.push((level.player.globalPosition.x - x0) / DT);
-      x.push(level.player.globalPosition.x);
-      const bad = stuck.push(level, input);
-      if (bad) violations.push(`${bad.kind} f${bad.frame}`);
-    }
-    return { v, x, violations };
-  };
-
-  const standing = run(new Level(grapple(200, 200)), 240, "none");
-  const ride = standing.v.slice(60, 240);
-  const worstRide = Math.max(...ride.map((v) => Math.abs(v - 2)));
-  c.check(`standing still, the avatar is carried at belt speed (worst ${(worstRide * 100).toFixed(3)} cm/s off 2 m/s)`, worstRide < 0.02);
-
-  // Its walking speed, measured on the same belt standing still.
-  const walking = run(new Level(grapple(0, 200)), 150, "right");
-  const walk = walking.v[149]!;
-  c.check(`walking on a still belt it reaches its walking speed (${walk.toFixed(4)} m/s)`, walk > 1);
-
-  const tread = run(new Level(grapple(-walk * PIXELS_PER_METER, 860)), 300, "right");
-  const drift = Math.abs(tread.x[299]! - tread.x[119]!);
-  c.check(`walking against a belt run at that speed it stands still (${(drift * 100).toFixed(3)} cm over 3 s)`, drift < 0.01);
-  c.check(
-    `...and the stuck detector does not call that a freeze (${tread.violations.join(", ") || "no violations"})`,
-    tread.violations.length === 0 && standing.violations.length === 0,
-  );
-  return c.done("avatar-carried - the grapple avatar rides a belt, and walks against one on the spot");
-}
-
 function caseWakes(): BeltResult {
   const c = new Checks();
   for (const speedPx of [200, 0]) {
@@ -1464,8 +1399,7 @@ function caseRidePure(): BeltResult {
 // A ball hanging from a running belt's bottom run is carried along it at belt
 // speed. The anchor runs at exactly belt speed; the ball, started from rest
 // under a support that starts moving, swings as a pendulum about it, so its
-// speed is measured over a whole swing. The grapple's hook rides a belt the
-// same way.
+// speed is measured over a whole swing.
 function caseRideCarried(): BeltResult {
   const c = new Checks();
   const speed = -1; // the bottom run at +100 px/s
@@ -1506,38 +1440,6 @@ function caseRideCarried(): BeltResult {
   );
   c.check(`no invariant fired (${rig.violationSummary()})`, rig.violations.length === 0);
 
-  // The grapple: its hook, a point with no cuff, rides too, and drags the
-  // avatar along under it.
-  const level = new Level({
-    player: { x: 0, y: 150, radius: 16 },
-    bodies: underBelt(100).bodies,
-  });
-  let prev: FrameInput = emptyFrameInput();
-  let rideFrames = 0;
-  let worstGrapple = 0;
-  const avatar0 = level.player.globalPosition.x;
-  for (let f = 0; f < 200; f++) {
-    const input: FrameInput = {
-      ...emptyFrameInput(),
-      fire: button(f >= 2, prev.fire),
-      mouseWorldPosition: new Vec2(level.player.globalPosition.x, -1),
-    };
-    prev = input;
-    const end0 = level.player.rope?.end;
-    const p0 = end0 instanceof RopeRide ? end0.contact.globalPosition.x : null;
-    level.physicsProcess(input, DT);
-    const end = level.player.rope?.end;
-    if (end instanceof RopeRide) {
-      rideFrames++;
-      if (p0 !== null) worstGrapple = Math.max(worstGrapple, Math.abs((end.contact.globalPosition.x - p0) / DT - speed));
-    }
-  }
-  const dragged = level.player.globalPosition.x - avatar0;
-  c.check(
-    `the grapple's hook rides the belt too (${rideFrames} frames, worst ${worstGrapple.toExponential(2)} m/s off belt speed)`,
-    rideFrames > 150 && worstGrapple < 1e-9,
-  );
-  c.check(`...and drags the avatar along under it (${dragged.toFixed(3)} m in 200 frames)`, dragged < -1.5);
   return c.done("ride-carried - a ball hanging from a running belt is carried at belt speed");
 }
 
@@ -1767,13 +1669,18 @@ function caseRide3(): BeltResult {
   return c.done("ride-3 - the anchor goes round the large wheel of a three-wheel belt and on along the next run");
 }
 
-// A fast belt carries the anchor 10 cm a frame past a 4 cm post hanging just
+// A fast belt carries the anchor 10 cm a frame past a 1 cm post hanging just
 // under the bottom run: the span between the ball and the anchor passes the
-// post within a frame. The continuous sweep sees the carry as the end's motion
-// and wraps the post on the side it came from; the same run with the sweep off
-// lands the sampled span inside the post, bends it round the wrong corner and
-// lets go of it on the far side - which the tunnel monitor reports, so the rig
-// is a detector rather than a script that happens to pass.
+// post within one of the island's substeps (1.25 cm of carry each, the chain
+// being a row regenerated every substep, `Rope.carryRidesWithin`). The
+// continuous sweep sees the carry as the end's motion and wraps the post on
+// the side it came from; the same run with the sweep off lands the sampled
+// span inside the post, bends it round the wrong corner and lets go of it on
+// the far side - which the tunnel monitor reports, so the rig is a detector
+// rather than a script that happens to pass. The post was 4 cm while the
+// chain was positional and regenerated once a frame; at a substep's carry a
+// 4 cm post is never crossed between samples, and the sweep-off leg caught it
+// too.
 function caseRideWrapSweep(): BeltResult {
   const c = new Checks();
   const post: LevelBodyData = {
@@ -1781,7 +1688,7 @@ function caseRideWrapSweep(): BeltResult {
     x: -60,
     y: 33,
     rot: 0,
-    objects: [{ type: "collision", shape: { kind: "rect", w: 4, h: 4 } }],
+    objects: [{ type: "collision", shape: { kind: "rect", w: 1, h: 1 } }],
   };
   const run = (sweep: boolean): { rig: RideRig; caught: Vec2 | null; heldFor: number } => {
     const rig = new RideRig(underBelt(600, [post]));
@@ -1805,7 +1712,7 @@ function caseRideWrapSweep(): BeltResult {
   );
   // The anchor comes from the right, so the chain meets the post's RIGHT
   // side, and the top corner is the one it bends round under the belt.
-  c.check("...on the corner it came from (the post's top right)", on.caught !== null && Math.abs(on.caught.x + 0.58) < 1e-6 && Math.abs(on.caught.y - 0.31) < 1e-6);
+  c.check("...on the corner it came from (the post's top right)", on.caught !== null && Math.abs(on.caught.x + 0.595) < 1e-6 && Math.abs(on.caught.y - 0.325) < 1e-6);
   c.check(`...and nothing went through anything (${on.rig.violationSummary()})`, on.rig.violations.length === 0);
   const off = run(false);
   const tunnel = off.rig.violations.find((v) => v.kind === "chain-tunnel");
@@ -1818,10 +1725,13 @@ function caseRideWrapSweep(): BeltResult {
 // bottom run, in free air, and standing on the top run with the anchor ahead
 // of it, where it is dragged along the running surface it rests on and the
 // stall lease, which only ever answers a surface, is live. The carry is the
-// anchor's own motion, made before the frame's chain phase and reported to the
-// rope as such (`RopeRide.velocity`), so none of it is read as a block: the
-// hanging length only shrinks, the stall lease never opens and the wind-stall
-// latch never closes, all the way in.
+// anchor's own motion, carried through the island's substeps and reported to
+// the row as such (`RopeRide.velocity`, `Rope.carryRidesWithin`), so none of
+// it is read as a block: the hanging length only shrinks, the geometry never
+// refuses the chain (`Rope.blockedByGeometry`) and the wind-stall latch never
+// closes, all the way in. A lease may still open as the winding's wraps
+// appear (`Rope.leaseLength`, the row's topology growth), and that is not a
+// block: it is reeled back as any lease is.
 function caseRideWinch(): BeltResult {
   const c = new Checks();
   const scenes: { name: string; raw: RawLevelData; throwAt: Vec2; whirl: number }[] = [
@@ -1838,6 +1748,7 @@ function caseRideWinch(): BeltResult {
     const from = rig.level.ball.loopDirection.angle();
     let rise = 0;
     let lease = 0;
+    let blocked = 0;
     let stalled = 0;
     let last = start;
     let frames = 0;
@@ -1854,6 +1765,7 @@ function caseRideWinch(): BeltResult {
       last = now;
       paidOut = Math.max(paidOut, chain.maxRopeLength - length);
       lease = Math.max(lease, chain.blockedSlack);
+      if (chain.blockedByGeometry) blocked++;
       if (rig.level.ball.windStall !== 0) stalled++;
     }
     c.check(`${scene.name}: still riding throughout`, rig.ride !== null && rig.level.ball.chain === chain);
@@ -1863,8 +1775,8 @@ function caseRideWinch(): BeltResult {
       paidOut === 0 && rise <= 1e-6,
     );
     c.check(
-      `${scene.name}: ...with the stall lease shut (largest ${(lease * 1000).toFixed(4)} mm) and the wind stall never latched (${stalled} frames)`,
-      lease === 0 && stalled === 0,
+      `${scene.name}: ...with the geometry never refusing the chain (${blocked} frames; largest lease ${(lease * 1000).toFixed(4)} mm, the wraps') and the wind stall never latched (${stalled} frames)`,
+      blocked === 0 && stalled === 0,
     );
     c.check(`${scene.name}: no invariant fired (${rig.violationSummary()})`, rig.violations.length === 0);
   }
@@ -1959,7 +1871,6 @@ export function runBeltCases(): BeltResult[] {
     caseReverse(),
     caseBallRolls(),
     caseCarried3(),
-    caseAvatarCarried(),
     caseWakes(),
     caseNoPin(),
     caseUndisturbable(),

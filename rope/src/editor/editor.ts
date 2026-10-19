@@ -6,7 +6,7 @@ import { Vec2 } from "../engine/vec2";
 import { ROOT_BARK_VARIANTS, ROOT_BARK_LABELS, rootBarkVariant } from "../level/rootAppearance";
 import { setRootBark } from "./rootEditing";
 import { PIXELS_PER_METER, PX } from "../engine/units";
-import { BALL_ZOOM, GRAPPLE_ZOOM, screenToWorld, worldToScreen, type Camera } from "../render/camera";
+import { BALL_ZOOM, screenToWorld, worldToScreen, type Camera } from "../render/camera";
 import { LETTERBOX_COLOR, VIEW_HEIGHT, VIEW_WIDTH, viewTransform } from "../render/viewport";
 import {
   CameraController,
@@ -17,17 +17,15 @@ import {
   type CameraRule,
   type PathKeyField,
 } from "../render/cameraController";
-import { render, renderBall } from "../render/renderer";
+import { renderBall } from "../render/renderer";
 import { SparkSystem } from "../render/sparks";
 import { ROPE_COLOR } from "../render/ropeLay";
 import { DebrisSystem } from "../render/debris";
-import { Level } from "../level/level";
 import { BallLevel } from "../level/ballLevel";
 // The ball's density, for the panel's "what speed breaks this" readout: the
 // number an author is choosing is a speed, and only the ball's own mass turns
 // a threshold in newtons into one (see `addBreakFields`).
 import { BallPlayer } from "../classes/ballPlayer";
-import { LiveInputSource } from "../input/liveInput";
 import { BallInputSource } from "../input/ballInput";
 import { BUTTON_BITS, InputTrace } from "../input/inputTrace";
 import type { FrameInput, IInputSource } from "../input/frameInput";
@@ -307,12 +305,9 @@ import {
   LIGHT_LINK_MASS,
   MIN_VINE_DENSITY,
 } from "../level/vines";
-import { Player } from "../classes/player";
 import {
-  digest,
   digestBall,
   serializeInput,
-  worldDigest,
   worldDigestBall,
   type Recording,
 } from "../sim/trace";
@@ -664,14 +659,9 @@ const MAX_STEPS = 2;
 const M2PX = PIXELS_PER_METER;
 
 
-// The way out of a test, per controller. Esc always works; Space is offered
-// only on the ball, whose input source binds no keyboard at all
-// (input/ballInput.ts), where the grapple controller jumps with it
-// (input/liveInput.ts) and a test that could not jump would not be a test.
-const TEST_BANNER: Record<"grapple" | "ball", string> = {
-  grapple: "TESTING - Esc to return to the editor",
-  ball: "TESTING - Space or Esc to return to the editor",
-};
+// The way out of a test: Esc, or Space, since the ball's input source binds no
+// keyboard at all (input/ballInput.ts).
+const TEST_BANNER = "TESTING - Space or Esc to return to the editor";
 
 // Angles are authored in degrees everywhere in the inspector (`rot°`), and
 // stored in radians everywhere else.
@@ -2090,10 +2080,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
 
   // --- mode: edit | test ----------------------------------------------------
   // (`mode` itself is declared above `resize`, which reads it.)
-  let testLevel: Level | BallLevel | null = null;
-  // The same object, typed as what the 3D renderer wants of it. Held separately
-  // so the render path does not have to re-narrow a union it has already
-  // narrowed for the 2D one.
+  let testLevel: BallLevel | null = null;
+  // The same object, typed as what the 3D renderer wants of it.
   let testLevel3d: Scene3DLevel | null = null;
   // The editor's own 3D scene while a test is drawn in its place (see
   // `startTest`), or null.
@@ -2106,7 +2094,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // same terms: a level whose breakable geometry is being authored has to be
   // seen breaking from inside the editor.
   const testDebris = new DebrisSystem();
-  let liveInput: LiveInputSource | null = null;
   let ballInput: BallInputSource | null = null;
   let savedCam: { pos: Vec2; zoom: number } | null = null;
   // The test run's camera (eased follow + camera regions). Separate from the
@@ -2120,7 +2107,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // Full-session recording of the current test run — press P to download a
   // self-contained replay bundle (embeds the tested geometry, since an
   // in-editor level isn't in the registry). Mirrors main.ts's P export.
-  let testController: "grapple" | "ball" = "grapple";
   // The game's debug overlay (L) inside ▶ Test. Off at the start of every test:
   // it is an instrument, and a test opens as the picture the player gets.
   let testShowDebug = false;
@@ -2148,9 +2134,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       run: mode === "test" ? testRuns : -1,
       frame: testLevel?.frame ?? 0,
     }),
-    // Read at export, so a bundle carries the map of the controller whose run
-    // it holds rather than of whichever test happened to start first.
-    () => (testController === "ball" ? BUTTON_BITS.ball : BUTTON_BITS.grapple),
+    () => BUTTON_BITS.ball,
   );
   inputTrace.install();
 
@@ -2158,7 +2142,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // only — the model is untouched, so a spot-check from the cursor never edits
   // the level. It is baked into the data the test level is built from, so a
   // reset (and the exported bundle) respawns at the same place.
-  function startTest(controller: "grapple" | "ball", spawn?: Vec2): void {
+  function startTest(spawn?: Vec2): void {
     if (mode === "test") stopTest();
     const asked = testDataFor(spawn);
     // The level built ahead (`prebuildTest`) when it is of exactly this data,
@@ -2167,16 +2151,15 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // built FIRST, before the camera and the recording are handed over to a
     // test that would never start, and the refusal said where the title says
     // it.
-    const ready = prebuilt?.key === testKeyOf(controller, asked) ? prebuilt : null;
+    const ready = prebuilt?.key === testKeyOf(asked) ? prebuilt : null;
     if (!ready) discardPrebuilt();
     prebuilt = null;
     // Asked for again once the editor is idle: this one is about to be played.
     prebuildAsked = null;
-    prebuildController = controller;
     const pixelData = ready?.data ?? asked;
-    let level: Level | BallLevel;
+    let level: BallLevel;
     try {
-      level = ready?.level ?? buildTestLevel(controller, pixelData);
+      level = ready?.level ?? buildTestLevel(pixelData);
     } catch (err) {
       noteBuildError(err);
       return;
@@ -2192,7 +2175,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // a test runs, exactly as they are in the game.
     camera.viewportWidth = VIEW_WIDTH;
     camera.viewportHeight = VIEW_HEIGHT;
-    testController = controller;
     testData = pixelData;
     testRuns++;
     recording.clear();
@@ -2202,30 +2184,19 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     testCameraCtl.edgeClamp = edgeClampOn;
     testCameraCtl.snap();
     testLevel = level;
-    if (controller === "ball") {
-      ballInput ??= new BallInputSource(
-        canvas,
-        camera,
-        () => (testLevel instanceof BallLevel ? testLevel.ball.globalPosition : Vec2.ZERO),
-        // The input sources outlive the test that made them, so their canvas
-        // listeners are still live in edit mode. Without this a click meant for a
-        // body or the toolbar takes pointer lock and the editor loses its cursor
-        // to a level nobody is playing (see input/aimPointer.ts).
-        () => mode === "test",
-      );
-    } else {
-      liveInput ??= new LiveInputSource(
-        canvas,
-        camera,
-        () => (testLevel instanceof Level ? testLevel.player.globalPosition : Vec2.ZERO),
-        () => mode === "test",
-      );
-    }
-    testLevel.onReset = () => startTest(controller, spawn);
+    ballInput ??= new BallInputSource(
+      canvas,
+      camera,
+      () => testLevel?.ball.globalPosition ?? Vec2.ZERO,
+      // The input source outlives the test that made it, so its canvas
+      // listeners are still live in edit mode. Without this a click meant for a
+      // body or the toolbar takes pointer lock and the editor loses its cursor
+      // to a level nobody is playing (see input/aimPointer.ts).
+      () => mode === "test",
+    );
+    testLevel.onReset = () => startTest(spawn);
     // A test uses the real game render path, so the 3D scene comes with it: the
-    // level IS a `Scene3DLevel`, since both drivers carry the `visualSource` the
-    // renderer reads. A grapple test keeps its avatar and rope on the 2D canvas
-    // (the Player slice is 2D-only), which is what `overlayOnly` leaves there.
+    // level IS a `Scene3DLevel`, carrying the `visualSource` the renderer reads.
     testLevel3d = testLevel;
     // The editor's own scene is PARKED for the length of the test rather than
     // thrown away (see render3d/levelScene.ts): built still, its materials
@@ -2255,11 +2226,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // selected, so the detach happens here, and `stopTest` asks again.
     syncGizmo();
     root.style.display = "none";
-    testBanner.textContent = TEST_BANNER[controller];
+    testBanner.textContent = TEST_BANNER;
     testBanner.style.display = "block";
     // The ball controller draws its own aim reticle, so the OS cursor would be
-    // a second pointer — hide it there (the grapple aims with the cursor).
-    canvas.style.cursor = controller === "ball" ? "none" : "crosshair";
+    // a second pointer — hide it.
+    canvas.style.cursor = "none";
   }
 
   function downloadTestRecording(): void {
@@ -2269,7 +2240,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       git: treeCommit,
       dirty: treeDirty,
       srcHash: treeSrcHash,
-      controller: testController,
+      controller: "ball",
       data: testData,
       ...recording.bundle(),
       inputTrace: inputTrace.bundle(),
@@ -2361,12 +2332,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     return pixelData;
   }
 
-  function testKeyOf(controller: "grapple" | "ball", data: LevelData): string {
-    return `${controller}|${JSON.stringify(data)}`;
+  function testKeyOf(data: LevelData): string {
+    return JSON.stringify(data);
   }
 
-  function buildTestLevel(controller: "grapple" | "ball", data: LevelData): Level | BallLevel {
-    return controller === "ball" ? new BallLevel(data) : new Level(data);
+  function buildTestLevel(data: LevelData): BallLevel {
+    return new BallLevel(data);
   }
 
   // ▶ TEST, BUILT AHEAD. A test's level is a real build of the level - its
@@ -2390,15 +2361,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // than a test of a stale level. `B` (from the cursor) has nowhere to be built
   // ahead for, and builds at the press as before.
   const PREBUILD_QUIET_MS = 1500;
-  let prebuilt: { key: string; data: LevelData; level: Level | BallLevel; scene: LevelScene | null } | null = null;
+  let prebuilt: { key: string; data: LevelData; level: BallLevel; scene: LevelScene | null } | null = null;
   // What the last prebuild was of - the revision, the controller, the start,
   // whether a scene was wanted - so each is built once rather than every idle
   // frame. Cleared by a test, whose level is played and so has to be built
   // again.
   let prebuildAsked: string | null = null;
-  // The controller the next test is guessed to be: the last one tested, and
-  // the ball controller before any.
-  let prebuildController: "grapple" | "ball" = "ball";
   // When the editor last stopped being still: an edit, a press, a wheel.
   let stillSince = 0;
   let stillRev = -1;
@@ -2433,13 +2401,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (!eager && (drag || buttonsHeld || now - stillSince < PREBUILD_QUIET_MS)) return;
     const spawn = testSpawn();
     const wantScene = sceneShown() && scene3d !== null;
-    const asked = `${modelRev}|${prebuildController}|${spawn ? `${spawn.x},${spawn.y}` : "spawn"}|${wantScene}`;
+    const asked = `${modelRev}|${spawn ? `${spawn.x},${spawn.y}` : "spawn"}|${wantScene}`;
     if (asked !== prebuildAsked) {
       prebuildAsked = asked;
       discardPrebuilt();
       const data = testDataFor(spawn);
       try {
-        prebuilt = { key: testKeyOf(prebuildController, data), data, level: buildTestLevel(prebuildController, data), scene: null };
+        prebuilt = { key: testKeyOf(data), data, level: buildTestLevel(data), scene: null };
       } catch {
         // Refused: the press will say so, where the title does.
       }
@@ -2456,7 +2424,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
 
   const testBanner = document.createElement("div");
   testBanner.className = "ed-test-banner";
-  testBanner.textContent = TEST_BANNER.grapple;
+  testBanner.textContent = TEST_BANNER;
   testBanner.style.display = "none";
   document.body.appendChild(testBanner);
 
@@ -2808,18 +2776,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const picked = selectedBodies().filter(isCheckpointNote);
     return picked.length === 1 ? picked[0]!.pos : undefined;
   }
-  const btnTestBall = button("▶ Test Ball", () => startTest("ball", testSpawn()));
+  const btnTestBall = button("▶ Test", () => startTest(testSpawn()));
   btnTestBall.title =
     "Test from the level's spawn, or from the selected checkpoint (B tests from the cursor)";
-  const btnTestGrapple = button("▶ Test Grapple", () => startTest("grapple", testSpawn()));
   // The click is on its way: build its level now (see `prebuildTest`).
-  for (const [btn, controller] of [[btnTestGrapple, "grapple"], [btnTestBall, "ball"]] as const) {
-    btn.addEventListener("pointerenter", () => {
-      prebuildController = controller;
-      prebuildTest(performance.now(), true);
-    });
-  }
-  testRow.append(btnTestGrapple, btnTestBall);
+  btnTestBall.addEventListener("pointerenter", () => prebuildTest(performance.now(), true));
+  testRow.append(btnTestBall);
   const snapChk = checkbox("snap 5cm", snapOn, (v) => {
     snapOn = v;
     writeViewSetting("snap", v);
@@ -4999,9 +4961,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         0,
       );
       if (kg <= 0) return "—";
-      return `+${(((Player.MASS * 9.8) / (kg * w * w)) * 100).toFixed(1)} cm`;
+      const ballKg = new BallPlayer(model.player.radius * BallLevel.BALL_RADIUS_SCALE).mass;
+      return `+${(((ballKg * 9.8) / (kg * w * w)) * 100).toFixed(1)} cm`;
     };
-    for (const [label, get] of [["droop", droop], ["+ a hanging player", hang]] as const) {
+    for (const [label, get] of [["droop", droop], ["+ the ball hanging", hang]] as const) {
       const row = fieldRow(label);
       const val = document.createElement("span");
       val.textContent = get();
@@ -11232,12 +11195,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       return;
     }
     if (mode === "test") {
-      // Space leaves the test on the ball controller, where the keyboard has no
-      // bindings at all (see input/ballInput.ts) and the hand is on the mouse:
-      // the way out should be under the thumb rather than across the board. The
-      // grapple controller jumps with Space (input/liveInput.ts), so there it
-      // stays a jump and Esc is the way out.
-      if (e.code === "Space" && testController === "ball") {
+      // Space leaves the test: the keyboard has no bindings at all in a test
+      // (see input/ballInput.ts) and the hand is on the mouse, so the way out
+      // should be under the thumb rather than across the board.
+      if (e.code === "Space") {
         e.preventDefault();
         stopTest();
         return;
@@ -11364,7 +11325,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     } else if (e.code === "KeyB") {
       // Spot-check a spot: test the ball from wherever the cursor is, without
       // moving the level's own spawn marker.
-      startTest("ball", pointerWorld());
+      startTest(pointerWorld());
     } else if (e.code === "KeyV") setTool("select");
     else if (e.code === "KeyR") setTool("rect");
     else if (e.code === "KeyC") setTool("circle");
@@ -11480,7 +11441,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       if (dt > 0.25) dt = 0.25;
       accumulator += dt;
       if (dt > 0) fps += (1 / dt - fps) * 0.1;
-      const src: IInputSource = (testLevel instanceof BallLevel ? ballInput : liveInput)!;
+      const src: IInputSource = ballInput!;
       let steps = 0;
       while (accumulator >= STEP && steps < MAX_STEPS) {
         const fi: FrameInput = src.sample();
@@ -11491,8 +11452,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         testDebris.ingest(testLevel.breakEvents);
         recording.push(
           serializeInput(fi),
-          testLevel instanceof BallLevel ? digestBall(testLevel) : digest(testLevel),
-          testLevel instanceof BallLevel ? worldDigestBall(testLevel) : worldDigest(testLevel),
+          digestBall(testLevel),
+          worldDigestBall(testLevel),
         );
         // The LINE WAS CROSSED. A test is an authoring instrument, so it says
         // so and carries on: what an author is judging here is where the line
@@ -11500,7 +11461,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         // for a star rating would be answering a question nobody in the editor
         // is asking. The game's own completion flow is in main.ts (see
         // `checkCompletion`).
-        if (testLevel instanceof BallLevel && testLevel.completedFrame !== null && !testFinished) {
+        if (testLevel.completedFrame !== null && !testFinished) {
           testFinished = true;
           showToast(`finished at frame ${testLevel.completedFrame}`, "ok");
         }
@@ -11523,12 +11484,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         dt,
         testLevel.cameraRenderPosition(alpha),
         testLevel.cameraRules,
-        testController === "ball" ? BALL_ZOOM : GRAPPLE_ZOOM,
+        BALL_ZOOM,
         testLevel.cameraHang,
       );
       // Render-rate refresh of stick aim (see LiveInputSource.pollAim).
       ballInput?.pollAim();
-      liveInput?.pollAim();
       // A test is played in the game's own fixed 16:9 frame, fitted into the
       // editor canvas — the point of ▶ Test is that framing is felt exactly as
       // it will play, and a window-shaped view would show a different slice of
@@ -11565,36 +11525,22 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         });
         scene3d!.render(testLevel3d!, camera, alpha);
       }
-      if (testLevel instanceof BallLevel) {
-        renderBall(
-          ctx,
-          view,
-          testLevel,
-          camera,
-          fps,
-          ballInput?.aimPoint() ?? null,
-          alpha,
-          testIn3d,
-          testSparks,
-          null,
-          testDebris,
-        );
-      } else {
-        render(
-          ctx,
-          view,
-          testLevel,
-          camera,
-          fps,
-          testShowDebug,
-          liveInput!.crosshairAim(),
-          alpha,
-          testCameraCtl.held,
-          testIn3d,
-          testSparks,
-          testDebris,
-        );
-      }
+      renderBall(
+        ctx,
+        view,
+        testLevel,
+        camera,
+        fps,
+        ballInput?.aimPoint() ?? null,
+        alpha,
+        testIn3d,
+        testSparks,
+        null,
+        testDebris,
+        null,
+        testShowDebug,
+        testCameraCtl.held,
+      );
     } else {
       syncViewUrl(now);
       // The next ▶ Test's level, while nothing is moving.

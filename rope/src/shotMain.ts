@@ -22,7 +22,7 @@
 //
 // `shot.html` is deliberately absent from the build's rollup inputs, so this
 // costs the shipped app nothing.
-import { render, renderBall } from "./render/renderer";
+import { renderBall } from "./render/renderer";
 import { SparkSystem } from "./render/sparks";
 import { DebrisSystem } from "./render/debris";
 import { GlassShards } from "./render/glassShards";
@@ -32,11 +32,9 @@ import { ChainRetract } from "./render/chainRetract";
 import { NO_ORBIT, type CameraOrbit } from "./render3d/space";
 import { Scene3D } from "./render3d/scene";
 import { assetsSettled, pendingAssets } from "./render3d/assets";
-import { BallLevel } from "./level/ballLevel";
-import type { Level } from "./level/level";
 import { levelFromRecording } from "./sim/replay";
 import { recordingDeserializer, type Recording } from "./sim/trace";
-import { BALL_ZOOM, GRAPPLE_ZOOM, type Camera } from "./render/camera";
+import { BALL_ZOOM, type Camera } from "./render/camera";
 import { fitCanvas, LETTERBOX_COLOR, VIEW_HEIGHT, VIEW_WIDTH } from "./render/viewport";
 import { DEPTH_OF_FIELD_LEVELS, type DepthOfFieldLevel } from "./render/settings";
 import { Vec2 } from "./engine/vec2";
@@ -112,7 +110,6 @@ if (frames.length === 0) {
   frames.push(clampFrame(Number(range![1])));
 }
 
-const isBall = level instanceof BallLevel;
 // `at=X,Y` pins the camera on a fixed world point (metres) instead of letting it
 // follow the avatar. The game's camera frames the avatar, which is exactly wrong
 // for photographing something the avatar is swinging AWAY from - an anchor two
@@ -143,7 +140,7 @@ const orbit = ((): CameraOrbit => {
 })();
 const camera: Camera = {
   position: pinned ?? level.cameraRenderPosition(1),
-  zoom: Number(q.get("zoom") ?? (isBall ? BALL_ZOOM : GRAPPLE_ZOOM)),
+  zoom: Number(q.get("zoom") ?? BALL_ZOOM),
   viewportWidth: VIEW_WIDTH,
   viewportHeight: VIEW_HEIGHT,
 };
@@ -155,7 +152,7 @@ const scene3d = use3d ? new Scene3D(sceneCanvas, { diagnostics: true }) : null;
 shards.useCollision(scene3d);
 // The glass ball's pieces and their engine, on either path, and before the
 // prewarm compiles them.
-if (level instanceof BallLevel) await shards.prepare(level);
+await shards.prepare(level);
 // The game's handle on its scene (main.ts), so a grab can be inspected live:
 // what a pixel shows, a material's maps.
 (window as unknown as { __scene3d: Scene3D | null }).__scene3d = scene3d;
@@ -347,9 +344,9 @@ const advanceTo = (target: number): void => {
     sparks.advance(1 / 60);
     debris.ingest(level.breakEvents);
     debris.advance(1 / 60);
-    if (level instanceof BallLevel) shards.ingest(level.shatterEvents);
-    shards.advance(1 / 60, level instanceof BallLevel ? level : null);
-    chainRetract?.observe(level instanceof BallLevel ? level : null, 1 / 60);
+    shards.ingest(level.shatterEvents);
+    shards.advance(1 / 60, level);
+    chainRetract?.observe(level, 1 / 60);
   }
 };
 
@@ -387,7 +384,6 @@ reportErrors();
 // flight if there is one, and every node of the wrap path with the body and
 // piece it sits on and its position in that body's frame. Metres, sim frame.
 function chainState(): Record<string, unknown> {
-  if (!(level instanceof BallLevel)) return {};
   const ball = level.ball;
   const node = (n: { contact: { obj: { buildIndex: number }; shapeIndex: number; position: Vec2; globalPosition: Vec2 } }) => ({
     kind: n.constructor.name,
@@ -442,7 +438,7 @@ function drawFrame(frame: number): void {
       // With the ball's own position and the way forward each swarm is using,
       // so "ahead" can be read off the numbers rather than the pictures.
       const swarms = scene3d.swarmStates();
-      const ballAt = level instanceof BallLevel ? level.ball.renderPosition(1) : null;
+      const ballAt = level.ball.renderPosition(1);
       const swarmField =
         swarms.length > 0
           ? {
@@ -450,7 +446,7 @@ function drawFrame(frame: number): void {
                 (s) =>
                   `${s.following ? "follow" : s.returning ? "return" : "home"}@${s.x.toFixed(2)},${s.y.toFixed(2)}`,
               ),
-              ...(ballAt ? { ball: `${ballAt.x.toFixed(2)},${ballAt.y.toFixed(2)}` } : {}),
+              ball: `${ballAt.x.toFixed(2)},${ballAt.y.toFixed(2)}`,
               route: swarms.map((s) => (s.ahead ? `${s.ahead.x.toFixed(2)},${s.ahead.y.toFixed(2)}` : null)),
             }
           : {};
@@ -468,37 +464,20 @@ function drawFrame(frame: number): void {
       );
     }
   }
-  if (isBall) {
-    renderBall(
-      ctx,
-      view,
-      level,
-      camera,
-      60,
-      null,
-      1,
-      scene3d !== null,
-      sparks,
-      chainRetract,
-      debris,
-      shards,
-    );
-  } else {
-    render(
-      ctx,
-      view,
-      level as Level,
-      camera,
-      60,
-      false,
-      null,
-      1,
-      null,
-      scene3d !== null,
-      sparks,
-      debris,
-    );
-  }
+  renderBall(
+    ctx,
+    view,
+    level,
+    camera,
+    60,
+    null,
+    1,
+    scene3d !== null,
+    sparks,
+    chainRetract,
+    debris,
+    shards,
+  );
 }
 
 // A run of frames as one image: one page load, one chromium session, and a

@@ -69,27 +69,23 @@ import {
 } from "./starberry";
 import { circleShape } from "../engine/shapes";
 import { bodyOverlapCircle } from "../engine/collision";
-import { GRAVITY, World } from "../engine/world";
+import { World } from "../engine/world";
 import type { Rope } from "../classes/rope";
 import { RopeContact } from "../lib/ropeContact";
 import { ShapeGeometry } from "../lib/shapeGeometry";
 import {
   CHAIN_TOLERANCE,
-  VINE_TOLERANCE,
   anchorWorldPoint,
   collectAnchorSites,
   snapToSurface,
-  stepSceneChains,
   type AnchorSite,
-  type SceneChain,
-  type SceneConstraint,
 } from "./chains";
 import { VineAnchor } from "./vineAnchor";
 import { STRUT_GIVE, VinePair, VineStrut } from "./vinePair";
-import { buildStalkBends, buildVineBends, type StalkClamp } from "./vineBend";
+import { buildStalkBends, buildVineBends, type StalkClamp, type VineBend } from "./vineBend";
 import { catenaryPoints } from "./catenary";
 import { PlantUnit } from "./plantRows";
-import { buildLevelBodies, worldPlacement, type BuiltBodies } from "./buildBodies";
+import { buildLevelBodies, type BuiltBodies } from "./buildBodies";
 import type { LevelData, VineData } from "./levelFormat";
 
 // Metres between links when a vine does not say.
@@ -306,22 +302,6 @@ const MOVING_DRIFT = 0.05;
 // short enough that a level's scenery is asleep almost all of the time.
 const SLEEP_FRAMES = 30;
 
-// The exit bar a SPAN's joints - the anchor joint, every pair and every
-// strut - are swept to, metres. The sweep only has a stiff span while the
-// rope holds it (free, it is the island's: `syncSpanUnits`), and the hold
-// hands the span back in whatever pose the sweep leaves it: at
-// `CHAIN_TOLERANCE` the sweep's pairs, each over by its bar with the lease
-// banking it, left BALL's 2.5 m span 2550 mm long under a swinging ball and
-// 2543 under a still one, against the island's 2503, and the island's pair
-// rows took that back as a 60 J twang on the release frame (`session-294f`
-// replayed on the neighbour-scale bends). At 2 mm the hold ends at 2525 and
-// 2519 and the releases carry 1.0 and 0.8 J; at 1 mm the hold itself capped
-// (six frames of `session-294f`'s) and paid out 33 J. The cost is the
-// hold's alone: 16-26 coupled sweeps a frame against 12-16. Under
-// `SLACK_RELEASE_RATE`'s 8.3 mm a frame still, so the span's lease hovers
-// rather than ratchets (see `VinePair.leased`).
-export const SPAN_JOINT_TOLERANCE = 0.002;
-
 const NO_BERRIES: ReadonlySet<VineLink> = new Set();
 
 // The berries (`VineLink.solid`) something is against this frame: either side
@@ -433,86 +413,24 @@ export function stepVines(vines: readonly Vine[], touched: ReadonlySet<VineLink>
   }
 }
 
-// The chain set to sweep this frame: the level's authored chains, every AWAKE
-// vine's pair chains, and the held vine's load ropes - one for a hanging vine,
-// two for a spanning one (see `updateVineLoads`).
+// Keep every vine's island unit in step with who holds it: every vine is a
+// unit of the island (2026-10-19) - a stiff span, a limp span, a hanging cord
+// and a berry plant nobody holds alike - so no vine is the positional sweep's.
+// The span had to be (a floor and a bend that cannot both be met, which the
+// sweep's last word never resolves, see `PlantUnit`), and so had the hanging
+// cord a ring holds: held positionally, the ball's chain could not close
+// against it - the spin rollback took the ring link's share of every
+// correction back, so a 52 kg ball was whipped round the grab of a light rope
+// that hardly moved (`session-175f`: 430 mm solved onto the grab link over 131
+// frames, 332 of it rolled back), and letting the link keep its share left the
+// coupled sweep unconverged, the chain ending every frame ~4 mm over. Every
+// other vine is one so that no vine is solved by two systems, a ball's chain
+// over a free cord and a berry's stalk included.
 //
-// Rebuilt into the caller's own array rather than returned fresh, because it is
-// per frame and a sleeping level must cost nothing at all - and handed back as
-// the authored list itself when there is nothing to add, so a level with no
-// vines makes exactly the calls it always did.
-export function vineChainSet(
-  authored: SceneChain[],
-  vines: readonly Vine[],
-  held: Vine | null,
-  into: SceneConstraint[],
-): readonly SceneConstraint[] {
-  // A plant the island solves this frame (`Vine.unit`) is nobody's to sweep:
-  // its joints, bends and load rope are rows there.
-  const swept = (vine: Vine): boolean => !vine.asleep && vine.unit === null;
-  const loadRopes = held?.lra && swept(held);
-  let extra = loadRopes ? (held!.lra2 ? 2 : 1) : 0;
-  for (const vine of vines) {
-    if (swept(vine)) extra += vine.chains.length + vine.bends.length + vine.struts.length;
-  }
-  if (extra === 0) return authored;
-  into.length = 0;
-  for (const chain of authored) into.push(chain);
-  for (const vine of vines) {
-    if (!swept(vine)) continue;
-    for (const chain of vine.chains) into.push(chain);
-    // After that vine's own pair chains, so a sweep in file order reaches a
-    // joint with the spacing either side of it already solved - and before the
-    // load ropes, which are the one thing in the set that has the last word.
-    for (const bend of vine.bends) into.push(bend);
-    // ...and the joint floors after the bends, so a forward pass ends with
-    // every joint ON its floor rather than one bend pass short of it, which is
-    // what lets the sweep leave on its bar instead of running to the cap (see
-    // the struts in `buildOne`).
-    for (const strut of vine.struts) into.push(strut);
-  }
-  if (loadRopes) {
-    into.push(held!.lra!);
-    if (held!.lra2) into.push(held!.lra2);
-  }
-  return into;
-}
-
-// Whether this vine is the island's whenever nothing holds it: a stiff span.
-// A limp span is a catenary the sweep settles on frame one, and a hanging
-// vine's bends agree with its straight rest pose at every scale; only the
-// stiff span has a floor and a bend that cannot both be met, which the
-// sweep's last word never resolves (see `PlantUnit`).
-function spanUnit(vine: Vine): boolean {
-  return vine.anchor2Contact !== null && vine.stiffness > 0 && vine.struts.length > 0;
-}
-
-// Whether this vine is the island's while the ball's ring holds it, and only
-// then: a HANGING cord (2026-10-18). Free, it hangs where the sweep settles it
-// and has nothing to argue with. Held positionally, the ball's chain could
-// not close against it: the spin rollback took the ring link's share of every
-// correction back (a whirled ball's winding pins that share at 1), so a 52 kg
-// ball was whipped round the grab of a light rope that hardly moved
-// (`session-175f`: 430 mm solved onto the grab link over 131 frames, 332 of it
-// rolled back), and letting the link keep its share instead left the coupled
-// sweep unconverged - the light link took ~91% of each correction, the
-// vine's own constraints put it back, the chain ended every frame ~4 mm over
-// with the ball still falling, and the ring's creep read that as tension and
-// slid at seven times the law. As rows of one island with the chain, the
-// ball, the link and the cord share one velocity solve and nothing is
-// rolled back, as on a stiff span (`syncBallRow`). A berry vine's cord is
-// its plant unit's (`BallLevel.syncPlantUnit`), and a span is `spanUnit`'s.
-function ringUnit(vine: Vine): boolean {
-  return vine.anchor2Contact === null && vine.berries.length === 0;
-}
-
-// Keep every stiff span's island unit in step with who holds it.
-//
-// A unit while nothing does. While the rope ends on one of its links, a
-// unit only where the driver makes that rope a row of the same island
-// (`rowed`: the ball level with its ring on the cord, `BallLevel.syncBallRow`),
-// because a rope solved positionally against links the island integrates
-// would be two solvers on one body: the grapple level's rope is the sweep's,
+// While a rope ends on one of its links, a unit only where the driver makes
+// that rope a row of the same island (`rowed`: the ball level with its ring on
+// the cord, `BallLevel.syncBallRow`), because a rope solved positionally
+// against links the island integrates would be two solvers on one body: the grapple level's rope is the sweep's,
 // so its hold is too, with the load ropes in the coupled sweep and the rope's
 // own books (the lease, the unwind's forgiveness) as they always were, and
 // the unit comes back the frame the hold ends with the velocities the sweep
@@ -535,20 +453,11 @@ export function syncSpanUnits(
 ): void {
   const end = rope ? rope.end.contact.obj : null;
   for (const vine of vines) {
-    const span = spanUnit(vine);
-    if (!span && !ringUnit(vine)) continue;
     const held = end instanceof VineLink && vine.links.includes(end);
     const unit = vine.unit;
     const own = unit instanceof PlantUnit && unit.berry === null;
-    // A hanging cord is a unit only while the ring holds it as a row; any
-    // other moment it is the sweep's, with the velocities the island left.
-    if (!span && !(held && rowed)) {
-      if (own) {
-        world.ties.removeUnit(unit);
-        vine.unit = null;
-      }
-      continue;
-    }
+    // A held berry plant's unit is the ball level's (`syncPlantUnit`).
+    if (unit !== null && !own) continue;
     if (held && !rowed) {
       if (own) {
         world.ties.removeUnit(unit);
@@ -557,7 +466,7 @@ export function syncSpanUnits(
       continue;
     }
     if (unit !== null) {
-      if (!own || unit.lra === vine.lra) continue;
+      if (!own || (unit.lra === vine.lra && unit.linkCount === vine.allLinks.length)) continue;
       world.ties.removeUnit(unit);
       vine.unit = null;
     }
@@ -639,30 +548,21 @@ export interface Vine extends VineCord {
   // The curvature constraints that make the vine hard to bend, one per joint
   // plus the clamp at the anchor - empty for a vine of no stiffness, which is
   // what makes such a vine cost exactly what it always did (see
-  // `level/vineBend.ts`). They are swept alongside the pair chains rather than
-  // after them, because the two disagree by construction. A berry vine's
-  // stalks add theirs (`buildStalkBends`).
-  readonly bends: SceneConstraint[];
+  // `level/vineBend.ts`). Spring rows of the vine's unit (`PlantUnit`). A
+  // berry vine's stalks add theirs (`buildStalkBends`).
+  readonly bends: (VineBend | StalkClamp)[];
   // 0 = a rope, 1 = a pole. As built, so already clamped to that range.
   readonly stiffness: number;
   // How viscous the cord is to a ring sliding along it (see
   // `DEFAULT_VINE_VISCOSITY`). As built: never negative.
   readonly viscosity: number;
-  // Anchor-to-first-link, then each adjacent pair. These go into the level's
-  // `sceneChains`, which is what buys the whole existing chain phase - the
-  // residual-gated alternating sweep, static depenetration with the funded
-  // velocity clamp, the credit scaling and the blocked-length lease - for free.
-  //
-  // The anchor one is a `SceneChain` and the pairs are `VinePair`s: a pair is
-  // degenerate in `Rope`'s terms and costs two orders more as one, while the
-  // anchor's start is snapped to the anchor body's surface and so is not (see
-  // `level/vinePair.ts`).
-  readonly chains: SceneConstraint[];
+  // Anchor-to-first-link, then each adjacent pair, and a berry's stalk ropes:
+  // distance ceilings, rows of the vine's unit (`PlantUnit`). The pairs are
+  // `VinePair`s, the anchor ones `VineAnchor`s (see `level/vinePair.ts`).
+  readonly chains: (VinePair | VineAnchor)[];
   // A stiff vine's joint floors (`VineStrut`), one per joint - empty on a limp
-  // vine. Their own list because of WHERE the sweep takes them: after the
-  // bends, so a forward pass ends with every joint on its floor rather than
-  // one bend pass short of it (see `vineChainSet`).
-  readonly struts: SceneConstraint[];
+  // vine.
+  readonly struts: VineStrut[];
   // Metres between adjacent links, as built.
   readonly spacing: number;
   // Authored fill; null = the renderer's own vine colours.
@@ -679,13 +579,11 @@ export interface Vine extends VineCord {
   lra2: VineAnchor | null;
   lraLink: VineLink | null;
   // The island unit this vine is solved as (`PlantUnit` in
-  // `level/plantRows.ts`), or null: a vine the island holds is out of the
-  // chain sweep entirely (`vineChainSet`), its every constraint a row of the
-  // island instead. Two vines have one: a berry plant while the ball hangs
-  // from one of its berries (set by `BallLevel`), and a stiff span while
-  // nothing holds it (`syncSpanUnits`).
+  // `level/plantRows.ts`): the free plant's own (`syncSpanUnits`), or a held
+  // berry's (set by `BallLevel`). Null only between a unit dropped and its
+  // replacement built.
   unit: IslandUnit | null;
-  // Settled, and costing nothing: out of the chain sweep entirely, and skipped
+  // Settled, and costing nothing: the island sleeps its unit, and skipped
   // by `World.integrate` and the contact gather (see `VineLink.asleep`). Two 3 m
   // vines in the ball arena are 3.9 ms a physics frame awake, which is a quarter
   // of the frame for scenery that is not doing anything.
@@ -737,6 +635,8 @@ export function buildVines(world: World, data: LevelData, built: BuiltBodies): V
       berried.push(vine);
     }
   }
+  // The grown stalks are the plants' units' too (`PlantUnit.linkCount`).
+  syncSpanUnits(world, vines, null);
   settleVinesAtBuild(world, berried);
   // ...and then aimed: each settled plant's stalks are grown into the shape
   // that, loaded, holds every berry where it was drawn (`aimBerries`).
@@ -866,7 +766,6 @@ function growBerries(world: World, vine: Vine, plan: readonly BerryPlan[]): void
           new RopeContact(j === 0 ? parent : branch[0]!, Vec2.ZERO),
           new RopeContact(body, Vec2.ZERO),
           cap / 2,
-          CHAIN_TOLERANCE,
         ),
       );
     }
@@ -888,7 +787,7 @@ function growBerries(world: World, vine: Vine, plan: readonly BerryPlan[]): void
     const stiffness = buildStalkBends(above, parent, [branch[0]!, branch[1]!], 0.5 - vine.starberry!.sway * 0.2, step);
     if (stiffness) vine.bends.push(...stiffness.bends);
     vine.chains.push(
-      new VineAnchor(source, new RopeContact(branch[1]!, Vec2.ZERO), cap + CHAIN_TOLERANCE, CHAIN_TOLERANCE),
+      new VineAnchor(source, new RopeContact(branch[1]!, Vec2.ZERO), cap + CHAIN_TOLERANCE),
     );
     vine.berries.push({ parentIndex, along, joint: branch[0]!, fruit: branch[1]!, reach, cap, radius, clamps: stiffness?.clamps ?? null });
   }
@@ -901,53 +800,30 @@ const SETTLE_AT_BUILD_CAP = 300;
 // Run the eligible vines' settle AT BUILD, to the same fixed point the
 // level's first live frames used to carry them to - the vine arrives already
 // asleep, in its genuinely settled pose, with the arc the settle gives it
-// (the pair chains' tolerance of give per segment, which is what the load
-// rope's birth length is measured over - a vine frozen at its spawn arc
-// instead reads ~5 mm over on every held frame).
+// (the joints' give per segment, which is what the load rope's birth length
+// is measured over - a vine frozen at its spawn arc instead reads ~5 mm over
+// on every held frame).
 //
-// It is the REAL per-frame step, not an approximation: gravity's own
-// semi-implicit Euler step on the links, then `stepVines` (damping and the
-// sleep bookkeeping), then `stepSceneChains` over the vine's own constraints -
-// exactly the slice of `physicsProcess` these links would get. That is exact
-// because eligibility (see `buildOne`) requires every link clear of scenery
-// and areas: nothing else in the frame - contacts, currents, water - could
-// have touched them. A vine that spawns against geometry, in water, or
-// clipped by the floor settles live exactly as it always did.
+// It is the REAL per-frame step, not an approximation: the island's frame for
+// each vine's unit - gravity, the substeps, its rows - exactly as
+// `World.integrate` would give it, then `stepVines` (damping and the sleep
+// bookkeeping). That is exact because eligibility (see `buildOne`) requires
+// every link clear of scenery and areas: nothing else in the frame -
+// contacts, currents, water - could have touched them. A vine that spawns
+// against geometry, in water, or clipped by the floor settles live exactly as
+// it always did.
 function settleVinesAtBuild(world: World, vines: Vine[]): void {
   const candidates = vines.filter((v) => v.settleAtBuild);
   if (candidates.length === 0) return;
   const dt = 1 / 60;
-  const chains: SceneConstraint[] = [];
   const units = new Set<IslandUnit>();
   for (let frame = 0; frame < SETTLE_AT_BUILD_CAP; frame++) {
     const awake = candidates.filter((v) => !v.asleep);
     if (awake.length === 0) break;
-    // A vine the island holds (a stiff span, `syncSpanUnits`) takes the
-    // island's own frame - gravity, the substeps, its rows - exactly as
-    // `World.integrate` would give it; the rest take the gravity step here
-    // and the sweep below.
     units.clear();
-    for (const vine of awake) {
-      if (vine.unit) {
-        units.add(vine.unit);
-        continue;
-      }
-      for (const link of vine.allLinks) {
-        link.linearVelocity = link.linearVelocity.add(GRAVITY.mul(link.gravityScale * dt));
-        link.globalPosition = link.globalPosition.add(link.linearVelocity.mul(dt));
-        link.globalRotation += link.angularVelocity * dt;
-      }
-    }
-    if (units.size > 0) world.stepTiesStandalone(dt, units);
+    for (const vine of awake) units.add(vine.unit!);
+    world.stepTiesStandalone(dt, units);
     stepVines(awake);
-    chains.length = 0;
-    for (const vine of awake) {
-      if (vine.asleep || vine.unit) continue;
-      for (const c of vine.chains) chains.push(c);
-      for (const b of vine.bends) chains.push(b);
-      for (const s of vine.struts) chains.push(s);
-    }
-    stepSceneChains(chains, world, dt);
   }
 }
 
@@ -1066,17 +942,7 @@ function buildOne(
   const color = v.color ?? null;
   const braidSeed = Number.isInteger(v.braidSeed) && v.braidSeed! >= 0 ? v.braidSeed! : null;
   const rope = braidSeed !== null && v.rope === true;
-  const chains: SceneConstraint[] = [];
-  // A HANGING vine's joints run to the loose `VINE_TOLERANCE` and carry no
-  // standing-stretch lease; a SPAN's run to the tight `CHAIN_TOLERANCE` and
-  // do. The pairing is load-bearing in both directions - see `VinePair`'s
-  // lease note: a taut span's joints sit permanently over under their own
-  // tension and must be allowed to accept that or the span rings for ever,
-  // while a loose-bar joint carrying a lease banks its allowed residual
-  // faster than the lease decays and pays the vine out for ever. A span's
-  // bar is tighter still, for the hold's handover (`SPAN_JOINT_TOLERANCE`).
-  const jointTolerance = anchor2Contact ? SPAN_JOINT_TOLERANCE : VINE_TOLERANCE;
-  const leased = anchor2Contact !== null;
+  const chains: (VinePair | VineAnchor)[] = [];
   // A HANGING vine's joints are `VINE_LRA_GIVE` short of the spacing, and its
   // long-range attachments (below) exactly on the drawn arc. The joints' give
   // inside their exit bar is what a settled vine rests on: it hangs against
@@ -1099,8 +965,6 @@ function buildOne(
       anchorContact,
       new RopeContact(links[0]!, Vec2.ZERO),
       jointLength,
-      jointTolerance,
-      leased,
     ),
   );
   for (let i = 1; i < links.length; i++) {
@@ -1109,8 +973,6 @@ function buildOne(
         new RopeContact(links[i - 1]!, Vec2.ZERO),
         new RopeContact(links[i]!, Vec2.ZERO),
         jointLength,
-        jointTolerance,
-        leased,
       ),
     );
   }
@@ -1122,8 +984,6 @@ function buildOne(
         anchor2Contact,
         new RopeContact(links[links.length - 1]!, Vec2.ZERO),
         spacing,
-        jointTolerance,
-        leased,
       ),
     );
   } else {
@@ -1169,13 +1029,13 @@ function buildOne(
   // damping never caught and the vine never slept from. Solved last, the
   // forward pass ends on the floors, the gate is met in 5-13 sweeps, and the
   // same span kicked at 3 m/s sleeps in 90 frames (`cli vines` `span-kick`).
-  const struts: SceneConstraint[] = [];
+  const struts: VineStrut[] = [];
   if (stiffness > 0) {
     const ends = [anchorContact, ...links.map((l) => new RopeContact(l, Vec2.ZERO))];
     if (anchor2Contact) ends.push(anchor2Contact);
     for (let i = 1; i < ends.length; i++) {
       const last = anchor2Contact !== null && i === ends.length - 1;
-      struts.push(new VineStrut(ends[i - 1]!, ends[i]!, (last ? spacing : jointLength) - STRUT_GIVE, jointTolerance));
+      struts.push(new VineStrut(ends[i - 1]!, ends[i]!, (last ? spacing : jointLength) - STRUT_GIVE));
     }
   }
 
@@ -1374,14 +1234,12 @@ export function updateVineLoads(vines: readonly Vine[], rope: Rope | null): Vine
         vine.anchorContact,
         new RopeContact(link, Vec2.ZERO),
         arcTo(vine, index),
-        CHAIN_TOLERANCE,
       );
       vine.lra2 = vine.anchor2Contact
         ? new VineAnchor(
             vine.anchor2Contact,
             new RopeContact(link, Vec2.ZERO),
             arcFrom2(vine, index),
-            CHAIN_TOLERANCE,
           )
         : null;
       vine.lraLink = link;
