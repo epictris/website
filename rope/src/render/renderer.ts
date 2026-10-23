@@ -31,6 +31,7 @@ import type { ViewTransform } from "./viewport";
 import type { HeldCamera } from "./cameraController";
 import { CHAIN_LINK_LEN, CHAIN_LINK_W, walkChain } from "./chainMetrics";
 import type { ChainRetract } from "./chainRetract";
+import type { ChainSnap } from "./chainSnap";
 import { MANACLE_HINGE, MANACLE_REACH, MANACLE_WIDTH } from "../lib/manacle";
 import { railPolyline } from "../lib/rail";
 import { beltBand, beltRenderTime, beltTreadPhase, beltTreadTicks } from "./beltTread";
@@ -969,6 +970,10 @@ export function renderBall(
   // state in force for it.
   showDebug = false,
   heldCamera: HeldCamera | null = null,
+  // The two halves of a chain that snapped (see render/chainSnap.ts): drawn
+  // where the chain is, so with the chain it belongs to the 3D scene under
+  // `overlayOnly`.
+  snap: ChainSnap | null = null,
 ): void {
   const { width: viewWidth, height: viewHeight } = view;
   // The sim instant that carries every conveyor's tread (`beltRenderTime`).
@@ -1068,6 +1073,14 @@ export function renderBall(
     drawChainPolyline(ctx, reeling.path);
     drawManacle(ctx, reeling.centre, reeling.dir, null);
   }
+  // A chain that snapped: the half left on the anchor with the cuff where it
+  // bit, and the half still shackled to the ball (see render/chainSnap.ts).
+  const snapped = overlayOnly ? null : snap?.resolve(alpha);
+  for (const half of snapped?.anchored ?? []) {
+    drawChainPolyline(ctx, half.path);
+    drawManacle(ctx, half.centre, half.dir, half.buriedUnder);
+  }
+  if (snapped?.onBall) drawChainPolyline(ctx, snapped.onBall);
   // A broken glass ball is nothing but its shards.
   if (!overlayOnly && !ball.shattered) {
     drawBody(ctx, ball, alpha);

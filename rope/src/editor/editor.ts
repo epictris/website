@@ -19,6 +19,7 @@ import {
 } from "../render/cameraController";
 import { renderBall } from "../render/renderer";
 import { SparkSystem } from "../render/sparks";
+import { ChainSnap } from "../render/chainSnap";
 import { ROPE_COLOR } from "../render/ropeLay";
 import { DebrisSystem } from "../render/debris";
 import { BallLevel } from "../level/ballLevel";
@@ -2094,6 +2095,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // same terms: a level whose breakable geometry is being authored has to be
   // seen breaking from inside the editor.
   const testDebris = new DebrisSystem();
+  // ...and a chain that snaps in it (see render/chainSnap.ts).
+  const testSnap = new ChainSnap();
   let ballInput: BallInputSource | null = null;
   let savedCam: { pos: Vec2; zoom: number } | null = null;
   // The test run's camera (eased follow + camera regions). Separate from the
@@ -2215,6 +2218,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     lastNow = -1;
     testSparks.reset();
     testDebris.reset();
+    testSnap.reset();
     mode = "test";
     // AFTER the mode flips, because that is the thing `gizmoSpec` asks about.
     // The gizmo lives in the SCENE rather than on the overlay, so it is still
@@ -11450,6 +11454,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         // runs several steps must not drop the caught-up steps' events.
         testSparks.ingest(testLevel.sparkEvents);
         testDebris.ingest(testLevel.breakEvents);
+        testSnap.observe(testLevel, STEP, testSparks);
         recording.push(
           serializeInput(fi),
           digestBall(testLevel),
@@ -11523,7 +11528,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           w,
           h,
         });
-        scene3d!.render(testLevel3d!, camera, alpha);
+        scene3d!.render(testLevel3d!, camera, alpha, NO_ORBIT, null, null, testSnap);
       }
       renderBall(
         ctx,
@@ -11540,6 +11545,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         null,
         testShowDebug,
         testCameraCtl.held,
+        testSnap,
       );
     } else {
       syncViewUrl(now);

@@ -1109,6 +1109,26 @@ export class RigidBody2D extends PhysicsBody2D {
   // ...and the work it did over the frame (J), each step's impulse times the
   // spin it left.
   spinMotorFrameWork = 0;
+  // A RATCHET on the motor, +1/-1 for the direction it lets the body turn and
+  // 0 for none: the pawl a winch has, so a load can never drive the drum the
+  // other way, however far it outweighs the motor's torque - the motor's
+  // rating says how hard and how fast the drum winds, and nothing pays it
+  // back out (`solveSpinMotor`). A one-sided constraint like a contact: its
+  // impulse only ever holds, and lets go the moment the motor pulls forward.
+  //
+  // The pawl holds the spin against the WORLD, the only frame a free ball has:
+  // a winch's pawl holds its drum against the winch, and a pawl held against
+  // anything else is a motor of its own. Held against the swing of the chain
+  // leaving the ball instead - so a ball the swing outpaces could not unwrap -
+  // it turned the stalled ball to keep up with the swing at whatever torque
+  // that took, unrated and unpaid: `session-224f`'s second swing gained
+  // 1777 J of the motor's 1384 (held against the world: 1200 of 1205). A chain
+  // swinging round a ball that cannot keep up does unwrap; that is the
+  // motor's rating at work.
+  spinMotorRatchet = 0;
+  // The pawl's accumulated impulse this step (N·m·s, in the ratchet's
+  // direction, never negative).
+  spinRatchetImpulse = 0;
   // How much of a kinematic spin's traction the contact solve may fund this
   // frame, 0..1. A steered ball's spin is written before the frame knows
   // whether the chain will refuse it, and the contact solve sells the whole
@@ -1688,6 +1708,7 @@ export class WaterArea extends Area2D {
 // body is turning; against that direction - braking - the torque alone.
 export function beginSpinMotorStep(body: RigidBody2D, h: number): void {
   const invI = body.inverseInertia;
+  body.spinRatchetImpulse = 0;
   if (!body.spinMotorActive || invI <= 0 || h <= 0) {
     body.spinMotorImpulse = body.spinMotorLow = body.spinMotorHigh = 0;
     body.spinMotorTorque = 0;
@@ -1703,7 +1724,9 @@ export function beginSpinMotorStep(body: RigidBody2D, h: number): void {
   body.angularVelocity += invI * warm;
 }
 
-// One iteration: drive the spin toward the target within the step's bounds.
+// One iteration: drive the spin toward the target within the step's bounds,
+// then the pawl: no spin against the ratchet's direction, by whatever impulse
+// that takes (`RigidBody2D.spinMotorRatchet`).
 export function solveSpinMotor(body: RigidBody2D): void {
   if (!body.spinMotorActive) return;
   const invI = body.inverseInertia;
@@ -1715,6 +1738,12 @@ export function solveSpinMotor(body: RigidBody2D): void {
   );
   body.spinMotorImpulse = next;
   body.angularVelocity += invI * (next - old);
+  const r = body.spinMotorRatchet;
+  if (r === 0) return;
+  const held = body.spinRatchetImpulse;
+  const pawl = Math.max(0, held - (body.angularVelocity * r) / invI);
+  body.spinRatchetImpulse = pawl;
+  body.angularVelocity += invI * r * (pawl - held);
 }
 
 // Close a step of length `h`: its torque warm starts the next, and its impulse
@@ -1722,6 +1751,7 @@ export function solveSpinMotor(body: RigidBody2D): void {
 export function endSpinMotorStep(body: RigidBody2D, h: number): void {
   if (!body.spinMotorActive || h <= 0) return;
   body.spinMotorTorque = body.spinMotorImpulse / h;
-  body.spinMotorFrameImpulse += body.spinMotorImpulse;
+  body.spinMotorFrameImpulse += body.spinMotorImpulse + body.spinMotorRatchet * body.spinRatchetImpulse;
+  // The pawl holds the spin at zero and does no work, so only the motor's.
   body.spinMotorFrameWork += body.spinMotorImpulse * body.angularVelocity;
 }

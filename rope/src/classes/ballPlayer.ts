@@ -73,6 +73,26 @@ export class BallPlayer extends RigidBody2D {
   // tolerance (~1 px over) — a deployed tip that finally lands attaches at
   // slightly over max and must NOT snap (found via session-1565f).
   static readonly ATTACH_SNAP_TOLERANCE = 0.2;
+  // The chain's strength (N): it snaps when its tension, averaged over
+  // `CHAIN_TENSION_TIME`, passes this (`BallLevel.settleChainStrain`). What
+  // bounds a whirl: holding a ball on its circle takes `m·v²/r`, so a chain
+  // rated `T` whirls the 52 kg ball no faster than `sqrt(T·r/m)`, about
+  // 10 m/s on a 0.74 m chain. Swept over the bundle corpus on the spin motor
+  // (2026-10-23), ordinary play peaks at 5.4 kN on the average and the
+  // runaway whirls (`session-646f`, `-1256f`) hold 40 kN for seconds; the one
+  // ordinary run past it, `session-160f`, is a belt hauling the chain off a
+  // ball wedged on a wall at 250-300 kN, which the ride tear already ends.
+  static readonly CHAIN_BREAK_TENSION = 8000;
+  // The averaging time of the chain's tension (s), a first-order filter. A
+  // catch is a blow, not a load: the chain catching a falling or flying ball
+  // spikes to 75-107 kN for a substep and 12-15 kN over that one frame, and
+  // judged unaveraged every catch would snap it. A soft catch lasts longer: a
+  // ball falling half a second onto a vine's tip is stopped over nine frames,
+  // its chain climbing from 1 to 21 kN, and a tenth of a second's average
+  // passed the strength on it (`stiffness`, the hanging rigs). A quarter of a
+  // second holds that catch under 8 kN and ordinary play under 3.1 kN over
+  // the corpus, and a whirl, which holds 40 kN for seconds, still fills it.
+  static readonly CHAIN_TENSION_TIME = 0.25;
   // Proportional gain steering the loop toward the aim direction (1/s).
   // Stable at 1/60 while gain*dt < 1.
   static readonly AIM_TURN_GAIN = 10;
@@ -96,11 +116,16 @@ export class BallPlayer extends RigidBody2D {
   static readonly AIM_POWER_RESET_LAG = 0.05;
   // The spin motor's rating (see `resolveInput`). N·m, Tris's (2026-10-23): the
   // drum's rated pull (4 kN, `BallChainRow.RATED_PULL`) on the ball's 0.12 m
-  // rim is 480, which felt too strong, half of it a bit weak, and 360 with
-  // 1.5 kW bad. It binds below the base speed `power / torque`: the start of a
-  // swing, a haul, the hanging aim (the ball's weight on the cuff's arm needs
-  // about 70 N·m).
-  static readonly SPIN_MOTOR_TORQUE = 300;
+  // rim is 480, which felt too strong, half of it a bit weak, 360 with 1.5 kW
+  // bad and 300 with 5 kW better. It binds below the base speed
+  // `power / torque`: the start of a swing, a haul, the hanging aim (the
+  // ball's weight on the cuff's arm needs about 70 N·m) - and the bottom of a
+  // swing being wound, where the chain pulls 2.8-3.6 kN on the rim. At 300 a
+  // fast wind stalled there and the swing unwrapped the coil off the stalled
+  // ball, so `session-224f`'s fast wind peaked 0.24 m under `session-260f`'s
+  // slow one; at 360 it peaks 0.28 m over it (2.82 against 3.10; 400 gives
+  // 2.40, 430 gives 2.15).
+  static readonly SPIN_MOTOR_TORQUE = 360;
   // W: the motor's power with the loop on the aim and a full `AIM_FULL_POWER_LAG`
   // behind it, the drum's ratings as Tris last set them (0 and 5 kW). It binds
   // above the base speed, so it is what sets how fast a sustained whirl gets:
@@ -971,6 +996,7 @@ export class BallPlayer extends RigidBody2D {
     // and the pin all torque it, and the motor's rating is what answers them.
     this.kinematicRotation = false;
     this.spinMotorActive = false;
+    this.spinMotorRatchet = 0;
     this.spinMotorFrameImpulse = 0;
     this.spinMotorFrameWork = 0;
     // Firing snaps the facing straight to the aim point. The steered turn is
@@ -1049,6 +1075,21 @@ export class BallPlayer extends RigidBody2D {
       this.spinMotorPower =
         BallPlayer.SPIN_MOTOR_POWER_MIN +
         (BallPlayer.SPIN_MOTOR_POWER_MAX - BallPlayer.SPIN_MOTOR_POWER_MIN) * this.aimPowerShare;
+      // The winch's pawl, while the aim is winding an anchored chain in: the
+      // chain may stall the motor but never unwind the coil. Without it a wind
+      // at the bottom of a swing, where the chain pulls 2.8 kN on the 0.12 m
+      // rim against the motor's 300 N·m, was turned backwards at 3 rad/s and
+      // paid 15 cm of chain out at the moment of highest tension, which is
+      // un-pumping the swing (`session-224f` f136-148: 0.48 m less height than
+      // `session-260f`'s slower wind; 0.24 m less with the pawl, the rest the
+      // chain unwrapping off a stalled ball as the swing carries it round,
+      // which the pawl may not refuse - see `RigidBody2D.spinMotorRatchet`).
+      // Winding is what the drum's spool rate says it is
+      // (`Rope.lengthPerRadian`, `reelRate`'s sign), floored as the stall was
+      // so a cuff with no coil on the rim counts as neither.
+      const spool = this.chain && this.chainAnchored ? this.chain.lengthPerRadian(this) : 0;
+      this.spinMotorRatchet =
+        Math.abs(spool) > BallPlayer.STALL_MIN_SPOOL && spool * demand > 0 ? Math.sign(demand) : 0;
     } else {
       this.spinMotorTorque = 0;
       this.aimError = null;

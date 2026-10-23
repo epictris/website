@@ -83,6 +83,15 @@ const IMPACT_TANGENT_SHARE = 0.14;
 // lifetime as sparks that hang in the air.
 const IMPACT_TTL_SCALE = 0.5;
 
+// A chain snapping (`snapBurst`): how many sparks, how fast (a uniform draw in
+// `[MIN, MIN + SPREAD]` m/s, in every direction), and how long they live
+// against the base range. By eye, to read as a link bursting rather than as a
+// hook's glancing strike - several of those at once.
+const SNAP_SPARKS = 14;
+const SNAP_SPEED_MIN = 1.5;
+const SNAP_SPEED_SPREAD = 3.5;
+const SNAP_TTL_SCALE = 0.8;
+
 // Below this along-surface speed the hook is not sliding, it is sitting there:
 // a seated tip's solver jitter stays under it and a real drag is well over.
 const SLIDE_MIN_SPEED = 0.3;
@@ -424,6 +433,19 @@ export class SparkSystem {
       const launch =
         (IMPACT_SPEED_MIN + this.rand() * IMPACT_SPEED_SPREAD) * vnOut + IMPACT_TANGENT_SHARE * vt;
       this.spawn(px, py, nx, ny, dx * launch, dy * launch, IMPACT_TTL_SCALE);
+    }
+  }
+
+  // A chain parting under its breaking strain (see render/chainSnap.ts): a
+  // burst in every direction from the broken link, thrown harder and denser
+  // than a hook's strike, since it is the stretch of a chain at eight
+  // kilonewtons let go at once rather than steel glancing off steel.
+  snapBurst(px: number, py: number): void {
+    this.bursts++;
+    for (let i = 0; i < SNAP_SPARKS; i++) {
+      const angle = this.rand() * 2 * Math.PI;
+      const speed = SNAP_SPEED_MIN + this.rand() * SNAP_SPEED_SPREAD;
+      this.spawn(px, py, 0, 0, Math.cos(angle) * speed, Math.sin(angle) * speed, SNAP_TTL_SCALE);
     }
   }
 

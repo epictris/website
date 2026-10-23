@@ -301,6 +301,10 @@ export interface WorldDigest {
   // N·m): the warm start it carries into the next frame, which no pose shows.
   // Under the rule `aimError` follows.
   spinMotorTorque?: number;
+  // The ball's chain's averaged tension (`BallLevel.chainTension`, N), which
+  // the chain snaps on and which carries from frame to frame. Under the rule
+  // `aimError` follows.
+  chainTension?: number;
 }
 
 // One scene chain at the end of a frame (see `WorldDigest.chains`), or one
@@ -481,6 +485,7 @@ export function worldDigestBall(level: BallLevel): WorldDigest {
   digest.aimError = level.ball.aimError;
   digest.aimPowerHeld = level.ball.aimPowerHeld;
   digest.spinMotorTorque = level.ball.spinMotorTorque;
+  digest.chainTension = level.chainTension;
   // Only for a glass ball, so an iron run digests exactly what it always did
   // (see `WorldDigest.shattered`).
   if (level.ball.glass) digest.shattered = level.shatteredFrame !== null;
@@ -705,6 +710,9 @@ export function worldDigestDeltas(
   }
   if (recorded.spinMotorTorque !== undefined && replayed.spinMotorTorque !== undefined) {
     compareNumber(out, "spinMotorTorque", recorded.spinMotorTorque, replayed.spinMotorTorque, tolerance);
+  }
+  if (recorded.chainTension !== undefined && replayed.chainTension !== undefined) {
+    compareNumber(out, "chainTension", recorded.chainTension, replayed.chainTension, tolerance);
   }
   if (recorded.ties && replayed.ties) {
     if (recorded.ties.length !== replayed.ties.length) {

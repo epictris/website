@@ -25,6 +25,7 @@ import type { CollisionObject2D } from "../engine/body";
 import { PX } from "../engine/units";
 import { CHAIN_LINK_BAR, CHAIN_LINK_LEN, CHAIN_LINK_W, walkChain } from "../render/chainMetrics";
 import type { ChainRetract } from "../render/chainRetract";
+import type { ChainSnap } from "../render/chainSnap";
 import { MANACLE_BAND, MANACLE_HINGE, MANACLE_RADIUS, MANACLE_REACH, MANACLE_WIDTH } from "../lib/manacle";
 import { FORGED_SMALL, forgedMetal } from "./ballVisual";
 import { solidGlassMaterial } from "./glassMaterial";
@@ -152,6 +153,10 @@ export class ChainLayer {
   private readonly manacle: THREE.Group;
   private readonly manacleMesh: THREE.Mesh;
   private readonly manacleGeometry: THREE.BufferGeometry[] = [];
+  // The cuffs of snapped chains' halves left on their anchors (see
+  // render/chainSnap.ts), one each: clones of `manacle` sharing its geometry,
+  // made as more are needed and hidden when not.
+  private readonly snapManacles: THREE.Group[] = [];
   private readonly ironManacle: THREE.Material;
   // The avatar's chain in glass, made the first time a glass ball is drawn and
   // kept for the page (one link material, one cuff material).
@@ -223,6 +228,8 @@ export class ChainLayer {
     alpha: number,
     retract: ChainRetract | null = null,
     depthOf: (body: CollisionObject2D) => number = () => 0,
+    // The two halves of a chain that snapped (see render/chainSnap.ts).
+    snap: ChainSnap | null = null,
   ): void {
     this.sceneLinks.count = 0;
     this.avatarLinks.count = 0;
@@ -311,6 +318,33 @@ export class ChainLayer {
       this.placeManacle(reeling.centre, reeling.dir);
     }
 
+    // Chains that snapped (see render/chainSnap.ts): every half left on its
+    // anchor, laid from the cuff's hinge with the cuff where it bit - at the
+    // depth of set-back scenery it bit, as the deployed chain's is - each with
+    // a cuff of its own, and the half still shackled to the ball.
+    const snapped = snap?.resolve(alpha);
+    let cuffs = 0;
+    if (snapped) {
+      this.tint.set(DEFAULT_CHAIN_COLOR);
+      for (const half of snapped.anchored) {
+        this.path.length = 0;
+        for (const p of half.path) this.path.push(p);
+        this.anchorDepth = half.body ? depthOf(half.body) : 0;
+        if (this.anchorDepth !== 0) {
+          this.anchorReach = Math.max(CHAIN_LINK_LEN, this.path[0]!.distanceTo(this.path[this.path.length - 1]!));
+        }
+        this.lay(this.path, this.anchorDepth !== 0);
+        this.placeSnapManacle(cuffs++, half.centre, half.dir, this.anchorDepth);
+      }
+      if (snapped.onBall) {
+        this.path.length = 0;
+        for (const p of snapped.onBall) this.path.push(p);
+        if (level.ball?.glass) stopAtLoop(this.path, level.ball.radius);
+        this.lay(this.path);
+      }
+    }
+    for (let i = cuffs; i < this.snapManacles.length; i++) this.snapManacles[i]!.visible = false;
+
     // A chain longer than the buffer truncates for one frame and the buffer is
     // resized for the next (see `LinkBuffer.finish`).
     this.sceneLinks.finish();
@@ -370,6 +404,25 @@ export class ChainLayer {
     this.manacle.visible = true;
   }
 
+  // The `i`th snapped half's cuff, placed as `placeManacle` places the ball's,
+  // in the cuff material the ball's chain is drawn in (iron or glass).
+  private placeSnapManacle(i: number, centre: Vec2, dir: Vec2, z: number): void {
+    let cuff = this.snapManacles[i];
+    if (cuff === undefined) {
+      cuff = this.manacle.clone();
+      this.snapManacles.push(cuff);
+      this.scene.add(cuff);
+    }
+    const mesh = cuff.children[0] as THREE.Mesh;
+    mesh.material = this.manacleMesh.material;
+    mesh.castShadow = this.manacleMesh.castShadow;
+    mesh.receiveShadow = this.manacleMesh.receiveShadow;
+    mesh.renderOrder = this.manacleMesh.renderOrder;
+    cuff.position.set(centre.x, threeY(centre.y), z);
+    cuff.rotation.set(Math.PI / 2, 0, Math.atan2(threeY(dir.y), dir.x), "ZXY");
+    cuff.visible = true;
+  }
+
   // What the glass chain sees through itself and reflects: the ball's probe
   // (see glassMaterial.ts `solidGlassMaterial`), or the room's sky with null.
   // The iron chain does not wear the probe and ignores this.
@@ -384,13 +437,16 @@ export class ChainLayer {
   withoutAvatar(draw: () => void): void {
     const links = this.avatarLinks.mesh.visible;
     const manacle = this.manacle.visible;
+    const cuffs = this.snapManacles.map((c) => c.visible);
     this.avatarLinks.mesh.visible = false;
     this.manacle.visible = false;
+    for (const c of this.snapManacles) c.visible = false;
     try {
       draw();
     } finally {
       this.avatarLinks.mesh.visible = links;
       this.manacle.visible = manacle;
+      this.snapManacles.forEach((c, i) => (c.visible = cuffs[i]!));
     }
   }
 
@@ -398,10 +454,13 @@ export class ChainLayer {
     this.sceneLinks.clear();
     this.avatarLinks.clear();
     this.manacle.visible = false;
+    for (const c of this.snapManacles) c.visible = false;
   }
 
   dispose(): void {
     this.scene.remove(this.manacle);
+    for (const c of this.snapManacles) this.scene.remove(c);
+    this.snapManacles.length = 0;
     this.sceneLinks.dispose();
     this.avatarLinks.dispose();
     this.geometry.dispose();

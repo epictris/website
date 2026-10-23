@@ -17,6 +17,7 @@ import { drawOpeningFade, openingFadeAlpha } from "./render/openingFade";
 import { SparkSystem } from "./render/sparks";
 import { DebrisSystem } from "./render/debris";
 import { ChainRetract } from "./render/chainRetract";
+import { ChainSnap } from "./render/chainSnap";
 import { NO_ORBIT } from "./render3d/space";
 import type { ViewCapture } from "./render3d/viewCapture";
 import { waterShimmer } from "./render3d/water";
@@ -336,6 +337,9 @@ shards.useCollision(scene3d);
 // Behind `?retract=1` while it is being judged: off, a released chain
 // vanishes as it always did.
 const chainRetract = params.get("retract") !== null ? new ChainRetract() : null;
+// A chain that snapped (see render/chainSnap.ts): the same shape again, and on
+// always.
+const chainSnap = new ChainSnap();
 
 // Runs this page has played: the input trace stamps its events with it, so a
 // click can be laid beside the frames of the run it landed in.
@@ -354,6 +358,7 @@ function buildRun(): void {
   debris.reset();
   shards.reset();
   chainRetract?.reset();
+  chainSnap.reset();
   level.onReset = reset;
   recording.clear();
   // A reset builds a new level, so it builds a new scene: every extrusion in it
@@ -677,6 +682,7 @@ const replayHost: ReplayHost = {
     debris.reset();
     shards.reset();
     chainRetract?.reset();
+    chainSnap.reset();
     if (sceneStale) {
       buildScene();
       sceneStale = false;
@@ -878,6 +884,8 @@ function stepLevel(frameInput: FrameInput, seeking: boolean): void {
     // Likewise per step, so a chain let go and re-thrown across two steps of
     // one render frame is seen as both rather than as nothing having changed.
     chainRetract?.observe(level, STEP);
+    // ...and a chain that snapped, which happens on one step only.
+    chainSnap.observe(level, STEP, sparks);
   }
   // The bundle buffers are fed whether or not anyone is watching, so that they
   // hold exactly what has been simulated since the current build: a P download
@@ -1175,7 +1183,7 @@ function frame(now: number): void {
   // interpolated state at the same `alpha` and the same camera, so they are one
   // picture rather than two that agree most of the time.
   const draw3dT0 = performance.now();
-  scene3d?.render(level, camera, alpha, NO_ORBIT, chainRetract, shards);
+  scene3d?.render(level, camera, alpha, NO_ORBIT, chainRetract, shards, chainSnap);
   const draw3dMs = performance.now() - draw3dT0;
 
   const draw2dT0 = performance.now();
@@ -1194,6 +1202,7 @@ function frame(now: number): void {
     shards,
     showDebug,
     cameraCtl.held,
+    chainSnap,
   );
   const draw2dMs = performance.now() - draw2dT0;
 

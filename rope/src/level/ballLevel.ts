@@ -4,6 +4,7 @@
 // recorded replays bit-for-bit.
 
 import { Vec2 } from "../engine/vec2";
+import { dmath } from "../engine/dmath";
 import {
   AnimatableBody2D,
   RigidBody2D,
@@ -415,6 +416,11 @@ export class BallLevel {
   // digest there was showed a ball sitting perfectly still (`session-154f`,
   // `session-477f`, `session-726f`).
   chainUnwindRefund = 0;
+  // The ball's chain's tension averaged over `BallPlayer.CHAIN_TENSION_TIME`
+  // (N), and whether it passed `CHAIN_BREAK_TENSION` and snapped this frame
+  // (see `settleChainStrain`). Zero while no anchored chain is a row.
+  chainTension = 0;
+  chainSnapped = false;
   // Whether the ball was BRACED this frame: carrying a load-bearing contact
   // against something off its chain's path, so the spin's reaction is the
   // world's rather than the anchor's (see `keepsHaul`). It is the gate on the
@@ -883,6 +889,40 @@ export class BallLevel {
       if (other !== null && !pathBodies.has(other)) return true;
     }
     return false;
+  }
+
+  // The chain's strength: its tension averaged over `CHAIN_TENSION_TIME` and,
+  // past `CHAIN_BREAK_TENSION`, the chain snaps - released as a let-go
+  // releases it, so the ball flies on with whatever it had. This is what
+  // bounds a whirl: the spin motor tows a whirled ball round through the
+  // cuff's lever at its full power, and with nothing taking that energy back
+  // the speed climbed until the spin cap stopped it (`session-646f`, 26 m/s
+  // on a 0.74 m chain held by 40 kN); the strength stops it at `sqrt(T·r/m)`.
+  //
+  // Judged only while nothing holds the ball: against a face, the row's pull
+  // is in part the solver closing an over-length the face refuses and the
+  // lease then grants, not a load the chain carries - a ball resting still on
+  // the slope it was spawned into read 26 kN six frames after hooking
+  // point-blank to it (`ball-slope-rest`). The average holds over such a
+  // frame rather than resetting, so a whirl that brushes a wall is still a
+  // whirl.
+  private settleChainStrain(delta: number): void {
+    this.chainSnapped = false;
+    const row = this.ballRowActive;
+    if (row === null || !this.ball.chain || !this.ball.chainAnchored) {
+      this.chainTension = 0;
+      return;
+    }
+    const held = this.world.frameContacts.some(
+      (c) => (c.a === this.ball || c.b === this.ball) && c.normalImpulse > 0,
+    );
+    if (held) return;
+    const share = 1 - dmath.exp(-delta / BallPlayer.CHAIN_TENSION_TIME);
+    this.chainTension += share * (row.frameTension() - this.chainTension);
+    if (this.chainTension <= BallPlayer.CHAIN_BREAK_TENSION) return;
+    this.ball.releaseChain();
+    this.chainTension = 0;
+    this.chainSnapped = true;
   }
 
   // After the unwind: what it refunded, and what that says about the steering
@@ -1471,6 +1511,7 @@ export class BallLevel {
       this.chainPushCreditFrames = 0;
     }
     this.endWasFixed = endFixed;
+    this.settleChainStrain(delta);
     // A dangling tip wound all the way onto the rim is stowed there (see
     // `BallPlayer.stowIfWoundIn`). After the phase, on its final length, and
     // before the drape reads a chain whose end has moved onto the ball.

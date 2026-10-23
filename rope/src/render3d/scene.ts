@@ -35,6 +35,7 @@ import { BallVisual } from "./ballVisual";
 import { ChainLayer } from "./chainVisual";
 import { LevelScene } from "./levelScene";
 import type { ChainRetract } from "../render/chainRetract";
+import type { ChainSnap } from "../render/chainSnap";
 import type { GlassShards } from "../render/glassShards";
 import { ShardLayer } from "./shardVisual";
 import { bakeGlassWear } from "./glassWear";
@@ -1311,6 +1312,9 @@ export class Scene3D {
     // The glass ball's shards, the host's like the sparks (see
     // render/glassShards.ts).
     shards: GlassShards | null = null,
+    // The two halves of a chain that snapped (see render/chainSnap.ts), the
+    // host's like the reel.
+    snap: ChainSnap | null = null,
   ): void {
     const rect = this.viewportRect;
     // The level's own visuals, built the first time it is drawn if nothing
@@ -1397,7 +1401,7 @@ export class Scene3D {
     for (const visual of slot.standing) visual.sync(alpha, treadTime);
 
     // The cuff is drawn at the depth of whatever it bit (`BodyVisual.depth`).
-    this.chains.sync(level, alpha, retract, this.depthOf);
+    this.chains.sync(level, alpha, retract, this.depthOf, snap);
     // The ball's ring, when it is threaded on a vine, folds the leaves it
     // slides over (render3d/vineLeafFold.ts).
     const end = level.ball?.chain?.end;

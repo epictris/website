@@ -1985,7 +1985,10 @@ export class World {
     }
     const closeMotors = (): void => {
       for (const body of motors) {
-        if (ContactAudit.enabled) ContactAudit.record(body, Vec2.ZERO, body.spinMotorImpulse);
+        if (ContactAudit.enabled) {
+          const pawl = body.spinMotorRatchet * body.spinRatchetImpulse;
+          ContactAudit.record(body, Vec2.ZERO, body.spinMotorImpulse + pawl);
+        }
         endSpinMotorStep(body, dt);
       }
     };

@@ -29,6 +29,7 @@ import { GlassShards } from "./render/glassShards";
 import { glassOptionsFrom } from "./render3d/glassMaterial";
 import { glassProbeFar, PROBE_FAR } from "./render3d/reflectionProbe";
 import { ChainRetract } from "./render/chainRetract";
+import { ChainSnap } from "./render/chainSnap";
 import { NO_ORBIT, type CameraOrbit } from "./render3d/space";
 import { Scene3D } from "./render3d/scene";
 import { assetsSettled, pendingAssets } from "./render3d/assets";
@@ -336,6 +337,8 @@ const debris = new DebrisSystem();
 // the fixed step for the same reason.
 // Behind `?retract=1` as it is in the game (`cli shot ... --retract`).
 const chainRetract = q.get("retract") !== null ? new ChainRetract() : null;
+// A chain that snapped (see render/chainSnap.ts), on the same clock.
+const chainSnap = new ChainSnap();
 let simFrame = 0;
 const advanceTo = (target: number): void => {
   for (; simFrame < target; simFrame++) {
@@ -347,6 +350,7 @@ const advanceTo = (target: number): void => {
     shards.ingest(level.shatterEvents);
     shards.advance(1 / 60, level);
     chainRetract?.observe(level, 1 / 60);
+    chainSnap.observe(level, 1 / 60, sparks);
   }
 };
 
@@ -424,7 +428,7 @@ function drawFrame(frame: number): void {
     // Measured from the first frame rather than from frame 0, so a single grab
     // pins it at exactly 0 as it always has and its PNG is unchanged.
     scene3d.pinClock((frame - frames[0]!) / 60);
-    scene3d.render(level, camera, 1, orbit, chainRetract, shards);
+    scene3d.render(level, camera, 1, orbit, chainRetract, shards, chainSnap);
     if (q.get("probe") !== null) {
       // The waking lights' levels too, where the level has any: a filmstrip of
       // a mushroom rising is otherwise a claim read off the pictures alone.
@@ -477,6 +481,9 @@ function drawFrame(frame: number): void {
     chainRetract,
     debris,
     shards,
+    false,
+    null,
+    chainSnap,
   );
 }
 

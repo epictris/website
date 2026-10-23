@@ -702,6 +702,7 @@ export class BallChainRow implements IslandRow, IslandUnit {
     this.dt = dt;
     this.substep = 0;
     this.driven = 0;
+    this.frameImpulse = 0;
     const path = this.rope.path();
     const onPath = new Set<CollisionObject2D>();
     for (const node of path) onPath.add(node.contact.obj);
@@ -1404,6 +1405,18 @@ export class BallChainRow implements IslandRow, IslandUnit {
     this.applyAll(terms, applied);
     this.pins.solve(this.rope, this.impulse + this.motorImpulse);
     if (useBias) this.walkImpulse = this.impulse + this.motorImpulse;
+    else this.frameImpulse += this.impulse + this.motorImpulse;
+  }
+
+  // The pull the substeps ended on, summed over the frame (see `frameTension`).
+  private frameImpulse = 0;
+
+  // The chain's mean tension over the frame (N): each substep's pull as its
+  // relax pass left it, over the frame. What the chain's strength is judged
+  // against (`BallLevel.settleChainStrain`). Zero while the end is the ball's
+  // own dangling hook: a tip on a string holds nothing.
+  frameTension(): number {
+    return this.dangling || this.dt <= 0 ? 0 : this.frameImpulse / this.dt;
   }
 
   // The friction where the chain hooks a body that turns (`PIN_FRICTION`).

@@ -73,20 +73,20 @@ import { Rope } from "./rope";
 // simply scales with the deployed length. 64 segments put a node every 2.8 cm
 // on a fully deployed 1.8 m chain — under one drawn link, so the polyline is
 // never the resolution bottleneck.
-const SEGMENTS = 64;
+export const SEGMENTS = 64;
 // Half the broad link's width: the chain's physical half-thickness, which is
 // the radius each node keeps clear of geometry. A chain lying on the floor
 // then rests ON the floor, and one bent over a corner clears it by exactly a
 // link's half-width, which is where a real chain's centreline sits.
-const NODE_RADIUS = 0.9 * PX;
+export const NODE_RADIUS = 0.9 * PX;
 // Per-frame velocity retention. Iron is heavy and air is not what stops it —
 // contact friction is — so the drag here is a whisper, just enough to bleed
 // the numerical hum out of a hanging catenary.
-const DAMPING = 0.995;
+export const DAMPING = 0.995;
 // Fraction of a node's tangential motion removed per contact resolution.
 // Metal on stone drags hard; this is what lets a thrown chain heap and stay
 // heaped instead of creeping downhill forever.
-const FRICTION = 0.7;
+export const FRICTION = 0.7;
 // Static friction, in position. Velocity friction alone cannot stop a chain
 // on a slope, for the reason the engine's position pin exists: the verlet step
 // takes gravity's displacement BEFORE anything resists it, the collision
@@ -122,7 +122,7 @@ const SEAM_ROUNDS = 3;
 // A node may not move faster than this, metres per step. Purely a safety
 // fence around the Verlet integration — the hook itself flies at 12 m/s, i.e.
 // 0.2 m per step, an order of magnitude inside it.
-const MAX_STEP = 0.5;
+export const MAX_STEP = 0.5;
 // How fast a let-go chain is reeled back in through the loop (see
 // `beginReel`): fast at first and slowing as the chain shortens, the speed
 // being REEL_RATE times the chain still out, in metres per second per metre,
@@ -827,5 +827,14 @@ export class SlackChain {
   // Step-time node positions, for the CLI's SVG frames and debug tooling.
   nodePositions(): readonly Vec2[] {
     return this.pos;
+  }
+
+  // The nodes and their Verlet history (`pos - velocity·dt`), loop → far
+  // end, as of the last step: what a chain that snaps is cut from, so its two
+  // halves carry on with the motion the drape had (render/chainSnap.ts). Null
+  // if the drape was never stepped.
+  nodeState(): { pos: readonly Vec2[]; prev: readonly Vec2[] } | null {
+    if (this.pos.length !== SEGMENTS + 1) return null;
+    return { pos: this.pos, prev: this.prev };
   }
 }
