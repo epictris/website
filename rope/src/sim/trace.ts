@@ -293,6 +293,10 @@ export interface WorldDigest {
   // the ball driver alone, and compared where both sides carry it, under the
   // rule `chains` follows.
   aimError?: number | null;
+  // The drum's power share the aim holds (`BallPlayer.aimPowerHeld`): the most
+  // the lag reached on the way to the aim, which the lag itself has forgotten.
+  // Under the rule `aimError` follows.
+  aimPowerHeld?: number;
 }
 
 // One scene chain at the end of a frame (see `WorldDigest.chains`), or one
@@ -471,6 +475,7 @@ export function worldDigestBall(level: BallLevel): WorldDigest {
     level.tieChains,
   );
   digest.aimError = level.ball.aimError;
+  digest.aimPowerHeld = level.ball.aimPowerHeld;
   // Only for a glass ball, so an iron run digests exactly what it always did
   // (see `WorldDigest.shattered`).
   if (level.ball.glass) digest.shattered = level.shatteredFrame !== null;
@@ -689,6 +694,9 @@ export function worldDigestDeltas(
     } else {
       compareNumber(out, "aimError", recorded.aimError, replayed.aimError, tolerance);
     }
+  }
+  if (recorded.aimPowerHeld !== undefined && replayed.aimPowerHeld !== undefined) {
+    compareNumber(out, "aimPowerHeld", recorded.aimPowerHeld, replayed.aimPowerHeld, tolerance);
   }
   if (recorded.ties && replayed.ties) {
     if (recorded.ties.length !== replayed.ties.length) {

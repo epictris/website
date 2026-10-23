@@ -637,6 +637,7 @@ export class BallLevel {
           const tip = this.ball.chainTip;
           return tip !== null && this.ball.chain?.end.contact.obj === tip ? tip : null;
         },
+        () => this.ball.aimPowerShare,
       );
       this.ballRow = row;
     }

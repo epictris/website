@@ -82,11 +82,45 @@ export class BallPlayer extends RigidBody2D {
   // winding the way it is circling (see `resolveInput`); this bounds the
   // backlog a ball left behind still turns through once the aim stops.
   static readonly AIM_MAX_LAG = Mathf.Tau;
+  // The lag (rad) at which the drum winds at `BallChainRow.RATED_POWER_MAX`:
+  // below it the power runs down to `RATED_POWER_MIN` at no lag (see
+  // `aimPowerShare`). A whole turn, the most the loop may trail by
+  // (`AIM_MAX_LAG`), so only a ball left a full turn behind winds at full
+  // power. A feel knob, Tris's (2026-10-23: half a turn first, then this).
+  static readonly AIM_FULL_POWER_LAG = Mathf.Tau;
+  // The lag (rad) under which the loop counts as having reached the aim, and
+  // the power the drum held on the way there is let go (see `aimPowerShare`).
+  // Three degrees: the steering closes the lag exponentially and never quite
+  // arrives, and an aim moving slower than `AIM_TURN_GAIN` times this
+  // (0.5 rad/s) is one the loop has caught.
+  static readonly AIM_POWER_RESET_LAG = 0.05;
   // The error the steering turned toward on the last frame it ran, unwrapped,
   // with the aim angle and the rotation it was measured against: what makes the
   // next frame's error continuous with this one. Null while not aiming, and
   // whenever the error is to be read the short way again.
   aimError: number | null = null;
+
+  // Where between its rated powers the drum winds this frame, 0 (the floor)
+  // to 1 (the ceiling): the loop's lag behind the aim over
+  // `AIM_FULL_POWER_LAG`. The steering's spin is kinematic and already
+  // proportional to the lag, but a kinematic turn asks the drum for no more
+  // than its speed, so an aim moved slowly round a swinging ball wound it in
+  // at the full 3.5 kW and flung it. Scaled, a drum
+  // the load bogs down hands the turn back, the loop falls further behind,
+  // and the power rises with it: a heavy wind has to be led, not stroked.
+  //
+  // The share is HELD at the most the lag has reached while the loop closes
+  // on the aim, and drops back to the lag's own only once the loop gets there
+  // (`AIM_POWER_RESET_LAG`) or the lag crosses to the other side: read off
+  // the lag alone, the power faded as the loop caught up, and the end of a
+  // swing felt like the ball running out of strength (Tris, 2026-10-23).
+  get aimPowerShare(): number {
+    return this.aimError === null ? 0 : this.aimPowerHeld;
+  }
+  // The share `aimPowerShare` holds, and the side of the aim (+1/-1) it was
+  // reached on; set with `aimError` in `resolveInput`.
+  aimPowerHeld = 0;
+  private aimPowerSide = 0;
   private aimErrorAim = 0;
   private aimErrorRotation = 0;
   // The direction (+1/-1, 0 for none) of a turn the chain refused in full on
@@ -969,6 +1003,15 @@ export class BallPlayer extends RigidBody2D {
       this.aimError = angleError;
       this.aimErrorAim = aimAngle;
       this.aimErrorRotation = this.globalRotation;
+      // The drum's power share, held on the way to the aim (`aimPowerShare`).
+      const share = Math.min(1, Math.abs(angleError) / BallPlayer.AIM_FULL_POWER_LAG);
+      const side = Math.sign(angleError);
+      if (Math.abs(angleError) <= BallPlayer.AIM_POWER_RESET_LAG || side !== this.aimPowerSide) {
+        this.aimPowerHeld = share;
+      } else {
+        this.aimPowerHeld = Math.max(this.aimPowerHeld, share);
+      }
+      this.aimPowerSide = side;
       // A lag past half a turn turns the ball no faster than half a turn does:
       // the cap is what it always was.
       const maxSpin = Mathf.Pi * BallPlayer.AIM_TURN_GAIN;
@@ -1010,6 +1053,8 @@ export class BallPlayer extends RigidBody2D {
       this.angularVelocity = allowed;
     } else {
       this.aimError = null;
+      this.aimPowerHeld = 0;
+      this.aimPowerSide = 0;
     }
 
     // Hold-to-keep: press shoots, release lets go (matches the grapple

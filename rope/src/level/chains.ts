@@ -662,6 +662,9 @@ export class BallChainRow implements IslandRow, IslandUnit {
     // The ball's own dangling hook when it is the chain's end
     // (`BallPlayer.chainTip`), or null (see `dangling`).
     private readonly tip: () => RigidBody2D | null = () => null,
+    // Where between `RATED_POWER_MIN` (0) and `RATED_POWER_MAX` (1) the drum
+    // runs this frame (`BallPlayer.aimPowerShare`).
+    private readonly powerShare: () => number = () => 1,
   ) {}
 
   // The chain's end is the ball's own dangling hook: a tip on a string, not a
@@ -1077,9 +1080,10 @@ export class BallChainRow implements IslandRow, IslandUnit {
   // the long swings are untouched. A catch it cannot take spills into the
   // length row, which has no bound. A constant of the source, not a setting:
   // a bundle records the tree it ran on, not the ratings.
-  static readonly RATED_PULL = 4000;
-  // Watts: the drum's rated POWER, a winch's motor curve - it pulls no harder
-  // than `RATED_POWER` over the speed the chain is actually coming in at, so
+  static readonly RATED_PULL = 6000;
+  // Watts: the drum's rated POWER at its strongest, a winch's motor curve - it
+  // pulls no harder than its power over the speed the chain is actually
+  // coming in at, so
   // a jammed drum heaves up to its rated pull and one keeping up delivers its
   // rated power however fast it is asked to turn. The feel knob, Tris's: 2 kW
   // (11, then 8, felt too strong on the curve against the ASKED-for speed,
@@ -1088,7 +1092,13 @@ export class BallChainRow implements IslandRow, IslandUnit {
   // integration loss left them at 8.4 / 6.4 / 9.0; unbounded the drum peaked
   // at 60-65 kW and flung 12.8 / 11.0 / 12.1. A constant of the source, as
   // `RATED_PULL` is.
-  static readonly RATED_POWER = 3500;
+  static readonly RATED_POWER_MAX = 5000;
+  // Watts: the drum's rated power with the loop on the aim. The power runs
+  // from this to `RATED_POWER_MAX` by how far the loop trails the aim
+  // (`BallPlayer.aimPowerShare`), so a wind stroked slowly round a swing
+  // pulls with the floor and one led hard with the ceiling. A feel knob,
+  // Tris's (2026-10-23, untried).
+  static readonly RATED_POWER_MIN = 0;
 
   // The motor's accumulated impulse, this substep.
   private motorImpulse = 0;
@@ -1347,8 +1357,12 @@ export class BallChainRow implements IslandRow, IslandUnit {
       // wind capped itself at 1.3 kN, could not haul the ball at that speed,
       // and delivered 0.1-2.7 kW of the 5 - a fast whirl put half the energy
       // of a slow one into the ball (`session-86f` 535 J against
-      // `session-130f`'s 1128).
-      const power = BallChainRow.RATED_POWER / Math.max(this.taking, 1e-6);
+      // `session-130f`'s 1128). Where between its ratings the drum runs is
+      // the aim's to say, by how far the loop trails it (`powerShare`).
+      const rated =
+        BallChainRow.RATED_POWER_MIN +
+        (BallChainRow.RATED_POWER_MAX - BallChainRow.RATED_POWER_MIN) * this.powerShare();
+      const power = rated / Math.max(this.taking, 1e-6);
       const max = Math.min(BallChainRow.RATED_PULL, power) * h;
       const ask = slackRate + Math.max(slack, 0) / h - this.reel;
       const next = Math.min(max, Math.max(0, this.motorImpulse - ask / w));
