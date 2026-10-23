@@ -419,3 +419,21 @@ And a ball wound out onto a vine link with momentum left swings under it with th
 Two things the pair statement uncovered are recorded on the tolerances it moved.
 A ball crushed against its own point-blank anchor (`477f`, `726f`, `1426f`, all against 300-430 kg slabs) escapes along the slab faster than a correction aimed mostly INTO it can haul it back, and the lease trails the escape by the push-out it is bounded to; those sessions sat under `rope-over-length`'s 5 cm only while the pump was dragging the slab toward the ball, and a STATIC slab in the same crush measures 14-17 cm on this tree with nothing else in the frame, so that bar is now 25 cm and says what it always meant, the launch class.
 And the energy monitor read the aim from the ball's angular velocity at the END of the frame, which a wound-tight chain's unwind sets to exactly zero while the winch has been fed the whole turn: a ball shoving its 294 kg anchor along the floor at a steady 1 m/s² under a held aim replayed as an unforced gain, so the monitor now also reads `BallLevel.aimSpin`, the spin the steering wrote.
+
+## The spin motor (branch `torque-spin`, 2026-10-23, unplayed)
+
+On this branch the steering never drives the spin kinematically.
+The ball's rotation stays a dynamic degree of freedom, and the aim drives it through a motor (`RigidBody2D.spinMotorActive`) solved as Box2D solves a revolute joint's motor against the ground: the steering's demand is the target, and each step's accumulated impulse is clamped to the motor's rating.
+The rating is a motor curve: `BallPlayer.SPIN_MOTOR_TORQUE` (300 N·m; the drum's 4 kN on the 0.12 m rim is 480, which felt too strong, 240 a bit weak, and 360 with 1.5 kW worse than either with 5 kW) at any speed, and while driving the spin the way it turns no more than the power over the speed, the power scaled by the lag between `SPIN_MOTOR_POWER_MIN` and `SPIN_MOTOR_POWER_MAX` as the drum's was (`aimPowerShare`); braking is bounded by the torque alone.
+It is solved in every place the ball's spin is solved: the world's velocity iterations, first in each and alone when the ball touches nothing (`World.solveContacts`), and the island's substeps, first in both passes (`TieSolver.solveIsland`), warm started from the torque of its last step (`spinMotorTorque`, digested).
+
+What the kinematic spin needed afterwards, the motor answers inside the solve.
+Winding is the coil's own geometry: the turn lengthens the arc on the rim, the length row pulls, and its torque arm (`Rope.calculateTorqueArm`, no longer zero for the ball) turns the ball back, so a winch that cannot out-pull its load simply stalls.
+So the drum books nothing (it only books a kinematic turn), the unwind does not run for a motor-driven ball (`closeBallRowFrame`), the wind stall never latches, and the energy monitor counts the motor's own work (`spinMotorFrameWork`) as the player's input.
+
+Why: the kinematic spin's refund was a pump.
+Each frame the steered turn outran the orbit, the cuff swung off the chain's line, the row pulled the ball in for the length that opened, and the unwind rotated the ball back and handed the length over for free: `session-1256f`, a cursor whirled for fifteen seconds, took the ball to 22 m/s on a 0.7 m chain with the drum delivering nothing (row work f440-560 +3.96 kJ against the ball's +3.92 kJ; spin held to the orbit rate, the same input decays from 14 to 4 m/s).
+On the motor the same input reaches 25 m/s, at the motor's 5 kW: the energy is the motor's work now, and the plateau is where that power meets the island's damping, so how fast a whirl can go is the power rating's to say.
+Torque and power bound different ends of the curve, which is why halving the torque did nothing for the whirl: below the base speed `power / torque` the torque binds (the start of a swing, a haul, the hanging aim), above it the power (a whirl at 28 rad/s ran at 5 kW / 28 = 180 N·m whatever the torque cap was).
+`session-646f` (a 0.74 m chain whirled for ten seconds), peak speed by rating: 5 kW 26.0 m/s, 2 kW 18.7, 1.5 kW with 360 N·m 16.8, 1 kW 13.9, 500 W 4.7 (too weak to start the whirl); halving `AIM_TURN_GAIN` instead, 15.0.
+The drum's 4 kN pull is no ceiling here, kinematic or motor: the whirl is towed round through the cuff's lever, not reeled in.

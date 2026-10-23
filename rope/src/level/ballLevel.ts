@@ -765,7 +765,15 @@ export class BallLevel {
         : row.stretch();
     const forgive = Math.max(0, Math.min(chain.overLength - unrealised, stretch));
     const rotationBeforeUnwind = this.ball.globalRotation;
-    chain.unwindOverLength(this.ball, ballRotationAtFrameStart, delta, forgive);
+    // A spin the motor drove is not refunded: the chain's pull on the rim met
+    // the motor's rating inside the island, so the turn the frame ended with
+    // is the turn the chain allowed. Refunded as well, the rotation back was
+    // length handed to the chain at no cost, and every frame the chain paid
+    // for the turn and the refund took it back for free, the ball whirled to
+    // 22 m/s on a 0.7 m chain with the drum doing nothing (`session-1256f`).
+    if (!this.ball.spinMotorActive) {
+      chain.unwindOverLength(this.ball, ballRotationAtFrameStart, delta, forgive);
+    }
     this.settleUnwindLatch(rotationBeforeUnwind, delta, braced);
     PhaseTrace.mark("unwind", this.world);
     // A STATIC the ball is left inside is a surface refusing the chain, and

@@ -1077,6 +1077,38 @@ export class RigidBody2D extends PhysicsBody2D {
   // the wasted impulse is what let a steered ball slide instead of braking.
   // Default false keeps every other body — and recorded replays — unchanged.
   kinematicRotation = false;
+  // A MOTOR on the body's spin, the alternative to `kinematicRotation`: the
+  // controller names a target spin and the motor drives toward it with a
+  // bounded torque, solved beside the contacts and the rows like any other
+  // velocity constraint (`solveSpinMotor`), so whatever resists the turn - a
+  // chain's pull on the rim, a floor's friction - is answered by the motor's
+  // rating rather than overruled. Box2D's revolute motor, against the world:
+  // the accumulated impulse is clamped every step to what the torque, and
+  // while driving the power, allow (`beginSpinMotorStep`).
+  spinMotorActive = false;
+  // rad/s the motor drives toward.
+  spinMotorTarget = 0;
+  // N·m: the most the motor can apply, at any speed.
+  spinMotorMaxTorque = 0;
+  // W: the most the motor can deliver while driving the spin the way it
+  // turns, so its torque falls as `power / |spin|` past its base speed.
+  // Braking is bounded by the torque alone.
+  spinMotorPower = 0;
+  // The torque the motor applied over its last step (N·m), which warm
+  // starts the next step at that step's own length: carried from frame to
+  // frame and between the world's step and the island's substeps alike.
+  spinMotorTorque = 0;
+  // The motor's accumulated impulse this step and its bounds (N·m·s).
+  spinMotorImpulse = 0;
+  spinMotorLow = 0;
+  spinMotorHigh = 0;
+  // The angular impulse the motor applied over the whole frame (N·m·s), for
+  // the energy monitor and the digest: a motor that pushed is the player's
+  // input, as a written spin was.
+  spinMotorFrameImpulse = 0;
+  // ...and the work it did over the frame (J), each step's impulse times the
+  // spin it left.
+  spinMotorFrameWork = 0;
   // How much of a kinematic spin's traction the contact solve may fund this
   // frame, 0..1. A steered ball's spin is written before the frame knows
   // whether the chain will refuse it, and the contact solve sells the whole
@@ -1637,4 +1669,59 @@ export class WaterArea extends Area2D {
   get flowVelocity(): Vec2 {
     return Vec2.RIGHT.rotated(this.globalRotation).mul(this.flow);
   }
+}
+
+// --- the spin motor ----------------------------------------------------------
+//
+// `RigidBody2D.spinMotorActive`, solved as Box2D solves a revolute joint's
+// motor against the ground: `Cdot = w - target`, an impulse `-Cdot·I` per
+// iteration, and the accumulated impulse clamped to the step's bounds. Shared
+// by the world's velocity iterations (`World.solveContacts`) and the island's
+// substeps (`TieSolver.solveIsland`), which is every place the body's spin is
+// solved.
+
+// Open a step of length `h`: the bounds from the spin as the step finds it
+// (read once, so the power bound does not chase its own answer, as the drum's
+// `closingRate` is read), and last step's torque applied as the warm start.
+// The motor curve: full torque at rest and up to the base speed
+// `power / maxTorque`, the power over the speed above it, in the direction the
+// body is turning; against that direction - braking - the torque alone.
+export function beginSpinMotorStep(body: RigidBody2D, h: number): void {
+  const invI = body.inverseInertia;
+  if (!body.spinMotorActive || invI <= 0 || h <= 0) {
+    body.spinMotorImpulse = body.spinMotorLow = body.spinMotorHigh = 0;
+    body.spinMotorTorque = 0;
+    return;
+  }
+  const w = body.angularVelocity;
+  const torque = body.spinMotorMaxTorque;
+  const drive = w === 0 ? torque : Math.min(torque, body.spinMotorPower / Math.abs(w));
+  body.spinMotorHigh = (w > 0 ? drive : torque) * h;
+  body.spinMotorLow = -(w < 0 ? drive : torque) * h;
+  const warm = Math.min(body.spinMotorHigh, Math.max(body.spinMotorLow, body.spinMotorTorque * h));
+  body.spinMotorImpulse = warm;
+  body.angularVelocity += invI * warm;
+}
+
+// One iteration: drive the spin toward the target within the step's bounds.
+export function solveSpinMotor(body: RigidBody2D): void {
+  if (!body.spinMotorActive) return;
+  const invI = body.inverseInertia;
+  if (invI <= 0) return;
+  const old = body.spinMotorImpulse;
+  const next = Math.min(
+    body.spinMotorHigh,
+    Math.max(body.spinMotorLow, old - (body.angularVelocity - body.spinMotorTarget) / invI),
+  );
+  body.spinMotorImpulse = next;
+  body.angularVelocity += invI * (next - old);
+}
+
+// Close a step of length `h`: its torque warm starts the next, and its impulse
+// joins the frame's.
+export function endSpinMotorStep(body: RigidBody2D, h: number): void {
+  if (!body.spinMotorActive || h <= 0) return;
+  body.spinMotorTorque = body.spinMotorImpulse / h;
+  body.spinMotorFrameImpulse += body.spinMotorImpulse;
+  body.spinMotorFrameWork += body.spinMotorImpulse * body.angularVelocity;
 }

@@ -11,7 +11,9 @@ import type { ShapeTransform } from "./shapes";
 import {
   AnimatableBody2D,
   Area2D,
+  beginSpinMotorStep,
   CharacterBody2D,
+  endSpinMotorStep,
   CollisionObject2D,
   CollisionShape2D,
   ForceArea,
@@ -19,6 +21,7 @@ import {
   PhysicsBody2D,
   RigidBody2D,
   shapesCollide,
+  solveSpinMotor,
   StaticBody2D,
   VineLink,
   WaterArea,
@@ -1969,8 +1972,30 @@ export class World {
     this.conveyedThisFrame = false;
     this.spinDriveOverspend = 0;
     this.spinDriveDetail = null;
+    // The spin motors of the bodies this solve steps (see
+    // `RigidBody2D.spinMotorActive`), solved in the same iterations as the
+    // contacts they push through - first in each, as a joint's motor is - and
+    // alone when nothing touches them, since a motor drives a spin in free air
+    // too. A tied body's motor is its island's.
+    const motors: RigidBody2D[] = [];
+    for (const body of this.bodies) {
+      if (!(body instanceof RigidBody2D) || !body.spinMotorActive || body.removed || body.tied) continue;
+      if (World.isAsleep(body)) continue;
+      motors.push(body);
+    }
+    const closeMotors = (): void => {
+      for (const body of motors) {
+        if (ContactAudit.enabled) ContactAudit.record(body, Vec2.ZERO, body.spinMotorImpulse);
+        endSpinMotorStep(body, dt);
+      }
+    };
     const prevLoads = this.pairLoad;
     if (constraints.length === 0) {
+      for (const body of motors) {
+        beginSpinMotorStep(body, dt);
+        solveSpinMotor(body);
+      }
+      closeMotors();
       // No contacts at all: every pair is absent, so its grace elapses here.
       const kept = new Map<string, SustainedPress[]>();
       for (const [key, prev] of prevLoads) {
@@ -1986,6 +2011,7 @@ export class World {
     // change it left is explained by an impulse the pair actually applied.
     const before = ContactAudit.enabled ? this.snapshotVelocities() : null;
     if (before) ContactAudit.applied.clear();
+    for (const body of motors) beginSpinMotorStep(body, dt);
 
     const solved: SolverContact[] = [];
     for (const c of constraints) {
@@ -2123,6 +2149,7 @@ export class World {
       );
     }
     for (let it = 0; it < VELOCITY_ITERATIONS; it++) {
+      for (const body of motors) solveSpinMotor(body);
       for (const s of solved) {
         // Tangent first, then normal - Box2D's ordering, so the non-penetration
         // solve gets the last word over anything friction has just done.
@@ -2130,6 +2157,7 @@ export class World {
         this.solveNormal(s);
       }
     }
+    closeMotors();
     // A running belt that ended the solve applying friction is doing work on
     // what it carries (see `conveyedThisFrame`).
     for (const s of solved) {

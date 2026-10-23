@@ -94,6 +94,21 @@ export class BallPlayer extends RigidBody2D {
   // arrives, and an aim moving slower than `AIM_TURN_GAIN` times this
   // (0.5 rad/s) is one the loop has caught.
   static readonly AIM_POWER_RESET_LAG = 0.05;
+  // The spin motor's rating (see `resolveInput`). N·m, Tris's (2026-10-23): the
+  // drum's rated pull (4 kN, `BallChainRow.RATED_PULL`) on the ball's 0.12 m
+  // rim is 480, which felt too strong, half of it a bit weak, and 360 with
+  // 1.5 kW bad. It binds below the base speed `power / torque`: the start of a
+  // swing, a haul, the hanging aim (the ball's weight on the cuff's arm needs
+  // about 70 N·m).
+  static readonly SPIN_MOTOR_TORQUE = 300;
+  // W: the motor's power with the loop on the aim and a full `AIM_FULL_POWER_LAG`
+  // behind it, the drum's ratings as Tris last set them (0 and 5 kW). It binds
+  // above the base speed, so it is what sets how fast a sustained whirl gets:
+  // a powered hammer throw speeds up until the power meets the island's
+  // damping, and `session-646f`'s whirl on a 0.74 m chain peaked at 26 m/s.
+  // The drum itself is idle under the motor: it only books a kinematic turn.
+  static readonly SPIN_MOTOR_POWER_MIN = 0;
+  static readonly SPIN_MOTOR_POWER_MAX = 5000;
   // The error the steering turned toward on the last frame it ran, unwrapped,
   // with the aim angle and the rotation it was measured against: what makes the
   // next frame's error continuous with this one. Null while not aiming, and
@@ -950,11 +965,14 @@ export class BallPlayer extends RigidBody2D {
       brake += (1 - brake) * (1 - this.spinDriveShare);
     }
     this.contactBrakeScale = brake;
-    // While aiming, the steering below drives rotation kinematically. Flag it so
-    // ground contacts stop pouring their friction impulse into angular velocity
-    // (which this line would overwrite anyway) and instead brake the linear
-    // slide — otherwise a ball balanced on its loop coasts sideways forever.
-    this.kinematicRotation = aiming;
+    // The steering drives the spin through a MOTOR (`RigidBody2D.spinMotorActive`,
+    // set below), never kinematically: the ball's rotation stays a dynamic
+    // degree of freedom, so the chain's pull on its rim, a floor's friction
+    // and the pin all torque it, and the motor's rating is what answers them.
+    this.kinematicRotation = false;
+    this.spinMotorActive = false;
+    this.spinMotorFrameImpulse = 0;
+    this.spinMotorFrameWork = 0;
     // Firing snaps the facing straight to the aim point. The steered turn is
     // rate-limited, so a release-and-quick-retarget would otherwise launch the
     // hook wherever the ball happens to be pointing mid-turn, not at the
@@ -1016,42 +1034,23 @@ export class BallPlayer extends RigidBody2D {
       // the cap is what it always was.
       const maxSpin = Mathf.Pi * BallPlayer.AIM_TURN_GAIN;
       const demand = Mathf.clamp(angleError * BallPlayer.AIM_TURN_GAIN, -maxSpin, maxSpin);
-      // Stalled: the chain refunded the whole of a turn in this direction and
-      // nothing has changed since (see `windStall`), so the loop may turn only
-      // as far as the chain's OWN length allows - the slack between the path
-      // and `maxRopeLength`, with no lease counted - which for a ball wound
-      // all the way up to its anchor is nothing at all. The steering is
-      // kinematic and knows nothing about the chain, and a chain wound tight
-      // refunds the whole turn every frame (`Rope.unwindOverLength`): the
-      // loop never reaches the aim, the error never shrinks, and the same
-      // 40 rad/s was written again next frame, forever. Every phase that runs
-      // BEFORE the refund saw that spin as real: the contact solve read the
-      // mounting loop, 14 cm out on the rim, as a hammer swinging at 5.5 m/s
-      // with infinite inertia behind it, and hit the 12.6 kg weight the ball
-      // rested against with 35-41 N·s a frame, 3 m/s per blow - the ball
-      // thrown off its anchor and hauled back by the chain, over and over
-      // (`session-154f` f77-82). A decaying memory of the refused spin was
-      // tried first and converges to demanding HALF the command every frame
-      // (m = D - m): the hammer at half strength. The stall clears the moment
-      // the player aims the other way, because paying chain out is always
-      // allowed, and the allowance grows by itself as the anchor recedes.
-      let allowed = demand;
-      if (
-        this.chain &&
-        this.windStall !== 0 &&
-        this.windStallHeld &&
-        Math.sign(demand) === this.windStall
-      ) {
-        const spool = Math.abs(this.chain.lengthPerRadian(this));
-        const slack = Math.max(0, this.chain.maxRopeLength - this.chain.getCurrentLength());
-        if (spool > BallPlayer.STALL_MIN_SPOOL) {
-          allowed = this.windStall * Math.min(Math.abs(demand), slack / spool / delta);
-        }
-      } else {
-        this.windStall = 0;
-      }
-      this.angularVelocity = allowed;
+      // The demand is the motor's target, and what the motor can do toward it
+      // is its rating: `SPIN_MOTOR_TORQUE` at any speed, and while driving no
+      // more than its power, which the lag scales between its floor and its
+      // ceiling as it scaled the drum's (`aimPowerShare`). Whatever resists
+      // the turn - a chain wound tight, a weight on the rim, the floor - is
+      // solved against that rating in the same iterations, so nothing has to
+      // refuse the turn afterwards: no stall, no unwind (the wind stall and
+      // the refund that read it were the kinematic spin's, `session-154f`).
+      this.windStall = 0;
+      this.spinMotorActive = true;
+      this.spinMotorTarget = demand;
+      this.spinMotorMaxTorque = BallPlayer.SPIN_MOTOR_TORQUE;
+      this.spinMotorPower =
+        BallPlayer.SPIN_MOTOR_POWER_MIN +
+        (BallPlayer.SPIN_MOTOR_POWER_MAX - BallPlayer.SPIN_MOTOR_POWER_MIN) * this.aimPowerShare;
     } else {
+      this.spinMotorTorque = 0;
       this.aimError = null;
       this.aimPowerHeld = 0;
       this.aimPowerSide = 0;

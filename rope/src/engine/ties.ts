@@ -48,7 +48,14 @@
 // `Vec2.rotated`, which goes through `dmath`.
 
 import { Vec2 } from "./vec2";
-import { AnimatableBody2D, PhysicsBody2D, RigidBody2D } from "./body";
+import {
+  AnimatableBody2D,
+  beginSpinMotorStep,
+  endSpinMotorStep,
+  PhysicsBody2D,
+  RigidBody2D,
+  solveSpinMotor,
+} from "./body";
 import type { ContactConstraint } from "./world";
 import { SolverStats } from "./solverStats";
 
@@ -974,6 +981,12 @@ export class TieSolver {
     };
 
     const h = dt / k;
+    // The island's spin motors (`RigidBody2D.spinMotorActive`): the steered
+    // ball's, solved substep by substep beside the rows that resist it - first
+    // in each pass, as a joint's motor is - so the chain's pull on the rim and
+    // the motor's rating meet in one solve.
+    const motors: RigidBody2D[] = [];
+    for (const body of bodies) if (body.spinMotorActive) motors.push(body);
     const tieSoft = softness(Math.min(TieTuning.hertz, 0.25 / h), TieTuning.damping, h);
     const contactSoft = softness(Math.min(CONTACT_HERTZ, 0.25 / h), CONTACT_DAMPING, h);
 
@@ -1039,6 +1052,7 @@ export class TieSolver {
       for (let i = 0; i < rows.length; i++) rows[i]!.prepare(h);
       // Warm start: last substep's answer, applied before the first iteration.
       for (let i = 0; i < rows.length; i++) rows[i]!.warmStart();
+      for (let i = 0; i < motors.length; i++) beginSpinMotorStep(motors[i]!, h);
       for (let i = 0; i < contactRows.length; i++) {
         const row = contactRows[i]!;
         if (!row.live) continue;
@@ -1047,6 +1061,7 @@ export class TieSolver {
       }
       // Solve with bias. The rows alternate direction substep by substep, so
       // the order bias of one pass is the mirror of the next's.
+      for (let i = 0; i < motors.length; i++) solveSpinMotor(motors[i]!);
       solveRows(rows, h, tieSoft, true, s % 2 === 1);
       for (let i = 0; i < contactRows.length; i++) {
         const row = contactRows[i]!;
@@ -1075,6 +1090,7 @@ export class TieSolver {
       // Relax: the same rows against the new positions, with no bias, which
       // takes back the velocity the bias put in.
       regather(false);
+      for (let i = 0; i < motors.length; i++) solveSpinMotor(motors[i]!);
       solveRows(rows, h, tieSoft, false, s % 2 === 1);
       for (let i = 0; i < contactRows.length; i++) {
         const row = contactRows[i]!;
@@ -1082,7 +1098,8 @@ export class TieSolver {
         solveContact(row, h, RIGID, false);
         row.totalN += row.n;
         row.totalT += row.t;
-      }      if (SolverStats.enabled) {
+      }
+      for (let i = 0; i < motors.length; i++) endSpinMotorStep(motors[i]!, h);      if (SolverStats.enabled) {
         SolverStats.sweeps += 2;
         SolverStats.solves += 2 * (rows.length + contactRows.length);
       }

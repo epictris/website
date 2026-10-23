@@ -297,6 +297,10 @@ export interface WorldDigest {
   // the lag reached on the way to the aim, which the lag itself has forgotten.
   // Under the rule `aimError` follows.
   aimPowerHeld?: number;
+  // The ball's spin motor's torque over its last step (`RigidBody2D.spinMotorTorque`,
+  // N·m): the warm start it carries into the next frame, which no pose shows.
+  // Under the rule `aimError` follows.
+  spinMotorTorque?: number;
 }
 
 // One scene chain at the end of a frame (see `WorldDigest.chains`), or one
@@ -476,6 +480,7 @@ export function worldDigestBall(level: BallLevel): WorldDigest {
   );
   digest.aimError = level.ball.aimError;
   digest.aimPowerHeld = level.ball.aimPowerHeld;
+  digest.spinMotorTorque = level.ball.spinMotorTorque;
   // Only for a glass ball, so an iron run digests exactly what it always did
   // (see `WorldDigest.shattered`).
   if (level.ball.glass) digest.shattered = level.shatteredFrame !== null;
@@ -697,6 +702,9 @@ export function worldDigestDeltas(
   }
   if (recorded.aimPowerHeld !== undefined && replayed.aimPowerHeld !== undefined) {
     compareNumber(out, "aimPowerHeld", recorded.aimPowerHeld, replayed.aimPowerHeld, tolerance);
+  }
+  if (recorded.spinMotorTorque !== undefined && replayed.spinMotorTorque !== undefined) {
+    compareNumber(out, "spinMotorTorque", recorded.spinMotorTorque, replayed.spinMotorTorque, tolerance);
   }
   if (recorded.ties && replayed.ties) {
     if (recorded.ties.length !== replayed.ties.length) {
@@ -927,6 +935,10 @@ const ENERGY_MIN_SPAN = 30;
 // (rad/s). The aim gain is 15/s, so this is a loop within a milliradian of where
 // the player is pointing.
 const STEERING_SPIN = 0.02;
+// Motor work below which the spin motor is not meaningfully driving anything
+// (J a frame): `STEERING_SPIN` at the torque that holds a hanging ball's aim
+// (70 N·m) does 0.02 J a frame, so this is a motor all but at rest.
+const MOTOR_WORK = 1e-3;
 
 // Along-surface speed the ball is carrying that neither its own spin nor the
 // chain paid for (m/s), and how long a run of it is a defect rather than a
@@ -1483,10 +1495,15 @@ export class EnergyMonitor {
     // the end alone, a ball shoving its 294 kg anchor along the floor at a
     // steady 1 m/s² under a held aim was an unforced gain (`session-726f`
     // f430-500).
+    //
+    // A spin MOTOR (`RigidBody2D.spinMotorActive`) is a source by the work it
+    // did, which it measures itself: one holding a still aim against a load
+    // pushes and does none.
     const steering =
-      level.ball.kinematicRotation &&
-      (Math.abs(level.ball.angularVelocity) > STEERING_SPIN ||
-        Math.abs(level.aimSpin) > STEERING_SPIN);
+      (level.ball.kinematicRotation &&
+        (Math.abs(level.ball.angularVelocity) > STEERING_SPIN ||
+          Math.abs(level.aimSpin) > STEERING_SPIN)) ||
+      (level.ball.spinMotorActive && Math.abs(level.ball.spinMotorFrameWork) > MOTOR_WORK);
     // A trampoline pays out of a spring nothing in the scene stores, so a frame
     // one fired is a frame energy legitimately entered the level - the same
     // statement `FORCED_ACTIONS` makes about the winch, and made by the sim
