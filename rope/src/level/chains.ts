@@ -1093,13 +1093,13 @@ export class BallChainRow implements IslandRow, IslandUnit {
   // integration loss left them at 8.4 / 6.4 / 9.0; unbounded the drum peaked
   // at 60-65 kW and flung 12.8 / 11.0 / 12.1. A constant of the source, as
   // `RATED_PULL` is.
-  static readonly RATED_POWER_MAX = 5000;
+  static readonly RATED_POWER_MAX = 4500;
   // Watts: the drum's rated power with the loop on the aim. The power runs
   // from this to `RATED_POWER_MAX` by how far the loop trails the aim
   // (`BallPlayer.aimPowerShare`), so a wind stroked slowly round a swing
   // pulls with the floor and one led hard with the ceiling. A feel knob,
-  // Tris's (2026-10-23, untried).
-  static readonly RATED_POWER_MIN = 0;
+  // Tris's (2026-10-25: 2 to 4.5 kW, after 0 to 5).
+  static readonly RATED_POWER_MIN = 2000;
 
   // The motor's accumulated impulse, this substep.
   private motorImpulse = 0;

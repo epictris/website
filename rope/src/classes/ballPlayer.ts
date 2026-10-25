@@ -127,13 +127,13 @@ export class BallPlayer extends RigidBody2D {
   // 2.40, 430 gives 2.15).
   static readonly SPIN_MOTOR_TORQUE = 360;
   // W: the motor's power with the loop on the aim and a full `AIM_FULL_POWER_LAG`
-  // behind it, the drum's ratings as Tris last set them (0 and 5 kW). It binds
+  // behind it, the drum's ratings as Tris last set them (2 and 4.5 kW). It binds
   // above the base speed, so it is what sets how fast a sustained whirl gets:
   // a powered hammer throw speeds up until the power meets the island's
   // damping, and `session-646f`'s whirl on a 0.74 m chain peaked at 26 m/s.
   // The drum itself is idle under the motor: it only books a kinematic turn.
-  static readonly SPIN_MOTOR_POWER_MIN = 0;
-  static readonly SPIN_MOTOR_POWER_MAX = 5000;
+  static readonly SPIN_MOTOR_POWER_MIN = 2000;
+  static readonly SPIN_MOTOR_POWER_MAX = 4500;
   // The error the steering turned toward on the last frame it ran, unwrapped,
   // with the aim angle and the rotation it was measured against: what makes the
   // next frame's error continuous with this one. Null while not aiming, and
