@@ -23,7 +23,7 @@ import type { RopeNode } from "../lib/ropeContact";
 import { RopeRide } from "../lib/belt";
 import { shapeCrossesSpan, spanMotionBox, type Pose, type SpanMotion } from "../lib/spanSweep";
 import { WrapDirection } from "../lib/types";
-import { CONTACT_SLOP, type ContactConstraint, type World } from "../engine/world";
+import { CONTACT_SLOP, GRAVITY, type ContactConstraint, type World } from "../engine/world";
 import type { BallLevel } from "../level/ballLevel";
 import type { BallPlayer } from "../classes/ballPlayer";
 import type { SceneChain } from "../level/chains";
@@ -293,7 +293,7 @@ export interface WorldDigest {
   // the ball driver alone, and compared where both sides carry it, under the
   // rule `chains` follows.
   aimError?: number | null;
-  // The drum's power share the aim holds (`BallPlayer.aimPowerHeld`): the most
+  // The spin motor's power share the aim holds (`BallPlayer.aimPowerHeld`): the most
   // the lag reached on the way to the aim, which the lag itself has forgotten.
   // Under the rule `aimError` follows.
   aimPowerHeld?: number;
@@ -1181,6 +1181,161 @@ export class GripAnchorMonitor {
         `the ball ended ${run} gripped frames running away from its grip anchor along ` +
         `the surface, worst ${(worst * 1000).toFixed(1)} mm - the chain phase moved it ` +
         `and the pin will teleport it straight back`,
+    };
+  }
+}
+
+// ---- contact-load-runaway ---------------------------------------------------
+// A body at rest may not carry a contact load that climbs frame on frame, far
+// past its own weight, with nothing moving.
+//
+// A body wedged between two faces with `mu > 1` can hold any amount of
+// internal stress: the floor's friction pushing it into the wall, the wall's
+// pushing it into the floor, every impulse balanced by another and none of
+// them visible as a velocity. The solve warm starts from that stress and
+// cannot see it to take it back, so something that FEEDS it - a positional
+// correction driving the body into one of the faces every frame - grows it
+// without bound, and the friction it funds holds anything the body does.
+// `session-197f` is the recording: the ball dropped into a floor-and-wall
+// corner with its loop against the wall, and the static grip's pin, anchored
+// along the floor, put it back 0.42 mm into the wall every frame. The two
+// contacts climbed 4 N·s a frame, to 531 N·s at f197 - sixty times the ball's
+// weight - and held the spin motor's full 360 N·m to a standstill for good,
+// replayed HEALTHY.
+//
+// It reads the symptom rather than the pin, so any positional feed into a
+// wedge is caught, not only that one: a body pressed by two STATIC faces at an
+// angle (`CONTACT_RUNAWAY_WEDGE`), the load summed over its static contacts
+// above `CONTACT_RUNAWAY_WEIGHTS` frames of its weight and rising on every
+// frame of a `CONTACT_RUNAWAY_FRAMES` run, the body under
+// `CONTACT_RUNAWAY_SPEED`. A stress an impact left behind DECAYS, and a real
+// load landing on the body arrives in a handful of frames and then holds; only
+// a feed climbs for half a second straight.
+//
+// Static faces only, and a wedge only, because a rising load is honest
+// wherever something moving supplies it, and this cannot weigh that something.
+// `session-1426f` has the ball under a 300 kg slab that is settling onto it,
+// and `session-1048f` has the ball wound into its own anchor on a ceiling, one
+// face, the chain hauling it in harder by the frame - both rising for longer
+// than this run, both a question about the chain or the slab rather than about
+// a wedge, and neither is what this reads.
+const CONTACT_RUNAWAY_WEIGHTS = 10;
+const CONTACT_RUNAWAY_FRAMES = 30;
+const CONTACT_RUNAWAY_SPEED = 0.05;
+// Cosine between two loaded static normals past which they are one face.
+const CONTACT_RUNAWAY_WEDGE = 0.9;
+
+export class ContactRunawayMonitor {
+  private prev = new Map<number, number>();
+  private run = new Map<number, number>();
+
+  push(level: BallLevel): Violation | null {
+    const loads = new Map<number, number>();
+    const faces = new Map<number, Vec2[]>();
+    const press = (body: PhysicsBody2D, n: Vec2, impulse: number): void => {
+      loads.set(body.id, (loads.get(body.id) ?? 0) + impulse);
+      const list = faces.get(body.id);
+      if (list) list.push(n);
+      else faces.set(body.id, [n]);
+    };
+    for (const c of level.world.frameContacts) {
+      if (c.normalImpulse <= 0 || !(c.b instanceof StaticBody2D)) continue;
+      press(c.a, c.normal, c.normalImpulse);
+    }
+    let found: Violation | null = null;
+    for (const body of level.world.bodies) {
+      if (!(body instanceof RigidBody2D) || body.removed) continue;
+      const load = loads.get(body.id) ?? 0;
+      const prev = this.prev.get(body.id) ?? 0;
+      this.prev.set(body.id, load);
+      const normals = faces.get(body.id) ?? [];
+      const wedged = normals.some((n) => normals.some((m) => n.dot(m) < CONTACT_RUNAWAY_WEDGE));
+      const weight = body.mass * GRAVITY.length() * body.gravityScale * (1 / 60);
+      const rising =
+        wedged &&
+        weight > 0 &&
+        load > CONTACT_RUNAWAY_WEIGHTS * weight &&
+        load > prev &&
+        body.linearVelocity.length() < CONTACT_RUNAWAY_SPEED;
+      const run = rising ? (this.run.get(body.id) ?? 0) + 1 : 0;
+      this.run.set(body.id, run);
+      if (run !== CONTACT_RUNAWAY_FRAMES || found) continue;
+      found = {
+        frame: level.frame,
+        kind: "contact-load-runaway",
+        detail:
+          `${body.name || body.constructor.name} wedged at rest carried ${load.toFixed(1)} N·s of static contact load ` +
+          `(${(load / weight).toFixed(0)}x its weight), rising on every one of ${run} frames`,
+      };
+    }
+    return found;
+  }
+}
+
+// ---- wall-climb ---------------------------------------------------------------
+// A free ball may not climb a wall on its own spin.
+//
+// What it gains through a wall is read as ENERGY, translational and potential,
+// summed over the frames on which a wall-like face (`WALL_CLIMB_FACE`) is all
+// that presses on it, since the last frame something floor-like did. A ball
+// thrown up along a wall loses energy to the wall; one whose spin the wall turns
+// into lift gains it, and the airborne frames between strikes conserve it, so a
+// hop-by-hop climb adds up. An attached chain is a force of its own and resets
+// it, as the drive cap's `tethered` stands aside for it, and so does anything
+// that can move or a surface that runs: only static faces are walls here.
+// `session-176f` is the recording: the ball in a floor-and-wall corner, the loop
+// striking the wall once a revolution with the spin motor behind it, 1.6 m/s
+// up per strike, 87 cm up the wall in a hundred frames, replayed HEALTHY -
+// `spin-overdrive` audits the drive cap and the motor-driven ball was outside
+// the cap altogether.
+// The bar is a quarter of a metre of the ball's own weight, a climb no bounce
+// off a wall at playing speed earns.
+const WALL_CLIMB_FACE = 0.5;
+const WALL_CLIMB_HEIGHT = 0.25;
+
+export class WallClimbMonitor {
+  private gained = 0;
+  private prev: number | null = null;
+  private reported = false;
+
+  push(level: BallLevel): Violation | null {
+    const ball = level.ball;
+    const g = GRAVITY.length() * ball.gravityScale;
+    const energy =
+      0.5 * ball.mass * ball.linearVelocity.lengthSquared() - ball.mass * g * ball.globalPosition.y;
+    const before = this.prev;
+    this.prev = energy;
+    let floor = false;
+    let wall = false;
+    let driven = false;
+    for (const c of level.world.frameContacts) {
+      if (c.normalImpulse <= 0) continue;
+      const n = c.a === ball ? c.normal : c.b === ball ? c.normal.neg() : null;
+      if (n === null) continue;
+      const other = c.a === ball ? c.b : c.a;
+      // A body that can move, or a surface that runs, hands the ball energy of
+      // its own: a mover striking it at 2.8 m/s is not a climb
+      // (`ring-square-322f` f21).
+      if (!(other instanceof StaticBody2D) || other.surfaceMoves) driven = true;
+      else if (n.y < -WALL_CLIMB_FACE) floor = true;
+      else if (Math.abs(n.y) <= WALL_CLIMB_FACE) wall = true;
+    }
+    if (floor || driven || ball.chainAttached) {
+      this.gained = 0;
+      this.reported = false;
+      return null;
+    }
+    if (!wall || before === null) return null;
+    this.gained += energy - before;
+    const bar = ball.mass * g * WALL_CLIMB_HEIGHT;
+    if (this.reported || this.gained <= bar) return null;
+    this.reported = true;
+    return {
+      frame: level.frame,
+      kind: "wall-climb",
+      detail:
+        `the free ball gained ${this.gained.toFixed(0)} J through wall contacts alone since it last stood ` +
+        `on anything (${(this.gained / (ball.mass * g) * 100).toFixed(0)} cm of its own weight)`,
     };
   }
 }

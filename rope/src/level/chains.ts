@@ -662,9 +662,6 @@ export class BallChainRow implements IslandRow, IslandUnit {
     // The ball's own dangling hook when it is the chain's end
     // (`BallPlayer.chainTip`), or null (see `dangling`).
     private readonly tip: () => RigidBody2D | null = () => null,
-    // Where between `RATED_POWER_MIN` (0) and `RATED_POWER_MAX` (1) the drum
-    // runs this frame (`BallPlayer.aimPowerShare`).
-    private readonly powerShare: () => number = () => 1,
   ) {}
 
   // The chain's end is the ball's own dangling hook: a tip on a string, not a
@@ -850,12 +847,10 @@ export class BallChainRow implements IslandRow, IslandUnit {
     this.rope.leaseLength(this.rope.takeTopologyGrowth());
     this.realiseTakeUp();
     this.reel = this.reelRate();
-    this.taking = this.reel > 0 ? this.closingRate() : 0;
   }
 
-  // How fast the chain is actually being taken in as the substep opens, m/s:
-  // the rate the bodies close the path along it (`slackRate`), read before
-  // the solve so the motor's power bound does not chase its own answer.
+  // How fast the chain is actually being taken in, m/s: the rate the bodies
+  // close the path along it (`slackRate`).
   private closingRate(): number {
     let rate = this.beadRate;
     for (const t of this.rope.rowTerms().terms) rate += this.termRate(t);
@@ -1011,9 +1006,6 @@ export class BallChainRow implements IslandRow, IslandUnit {
     for (const t of terms) if (t.body !== skip) applyTerm(t, j);
   }
 
-  // The chain's take-in speed this substep (see `closingRate`).
-  private taking = 0;
-
   // The rate the DRIVEN nodes on the path - the scenery's, a mover's, a
   // ride's - close it at, m/s: the share of `closingRate` nothing the island
   // solves can change, read off the terms' node velocities (`RopeRowTerm.vel`).
@@ -1082,24 +1074,6 @@ export class BallChainRow implements IslandRow, IslandUnit {
   // length row, which has no bound. A constant of the source, not a setting:
   // a bundle records the tree it ran on, not the ratings.
   static readonly RATED_PULL = 6000;
-  // Watts: the drum's rated POWER at its strongest, a winch's motor curve - it
-  // pulls no harder than its power over the speed the chain is actually
-  // coming in at, so
-  // a jammed drum heaves up to its rated pull and one keeping up delivers its
-  // rated power however fast it is asked to turn. The feel knob, Tris's: 2 kW
-  // (11, then 8, felt too strong on the curve against the ASKED-for speed,
-  // which starved a fast wind, and 5 and 4 on this one). At 5 kW it released
-  // `session-197f`, the 226f post and `session-185f` at 9.0 / 6.7 / 8.3 m/s, where the positional phase's
-  // integration loss left them at 8.4 / 6.4 / 9.0; unbounded the drum peaked
-  // at 60-65 kW and flung 12.8 / 11.0 / 12.1. A constant of the source, as
-  // `RATED_PULL` is.
-  static readonly RATED_POWER_MAX = 4500;
-  // Watts: the drum's rated power with the loop on the aim. The power runs
-  // from this to `RATED_POWER_MAX` by how far the loop trails the aim
-  // (`BallPlayer.aimPowerShare`), so a wind stroked slowly round a swing
-  // pulls with the floor and one led hard with the ceiling. A feel knob,
-  // Tris's (2026-10-25: 2 to 4.5 kW, after 0 to 5).
-  static readonly RATED_POWER_MIN = 2000;
 
   // The motor's accumulated impulse, this substep.
   private motorImpulse = 0;
@@ -1350,21 +1324,7 @@ export class BallChainRow implements IslandRow, IslandUnit {
       // Speculative, as a contact is: slack the chain still has absorbs the
       // reel before the motor pulls on anything, so a drum reeling a slack
       // chain takes up slack and hauls nothing.
-      //
-      // The power bound is the chain's ACTUAL take-in speed's, a motor's
-      // curve: a drum keeping up delivers its rated power however fast the
-      // aim asks it to turn, and one bogged down heaves harder, up to its
-      // rated pull. Bounded by the speed the aim ASKED for instead, a fast
-      // wind capped itself at 1.3 kN, could not haul the ball at that speed,
-      // and delivered 0.1-2.7 kW of the 5 - a fast whirl put half the energy
-      // of a slow one into the ball (`session-86f` 535 J against
-      // `session-130f`'s 1128). Where between its ratings the drum runs is
-      // the aim's to say, by how far the loop trails it (`powerShare`).
-      const rated =
-        BallChainRow.RATED_POWER_MIN +
-        (BallChainRow.RATED_POWER_MAX - BallChainRow.RATED_POWER_MIN) * this.powerShare();
-      const power = rated / Math.max(this.taking, 1e-6);
-      const max = Math.min(BallChainRow.RATED_PULL, power) * h;
+      const max = BallChainRow.RATED_PULL * h;
       const ask = slackRate + Math.max(slack, 0) / h - this.reel;
       const next = Math.min(max, Math.max(0, this.motorImpulse - ask / w));
       const driven = next - this.motorImpulse;

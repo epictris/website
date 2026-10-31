@@ -153,15 +153,16 @@ export const PlantTuning = {
   springDamping: 0.3,
 };
 
-// The substeps a FREE stiff span gets. Four, where the held plant takes
-// eight: a span carries nothing but itself, and at four (60 Hz length rows,
-// 30 Hz bends) BALL's six spans kicked at 3 m/s cost what the chain sweep
-// cost them on the committed tree (0.90 against 0.83 ms a frame over the
-// first two seconds, p95 1.76 against 1.99, 260 against 276 ms over ten) and
-// sleep sooner (269 frames against 445), against 1.41 ms, 3.17 and 376 at
-// eight. The 5 m span over 4 m settles at build at every stiffness either
-// way; at four it rests 1.2% long (5061 mm) and sags 1.375 m against 1.34.
-export const SPAN_SUBSTEPS = 4;
+// Every vine takes the plant's eight substeps, free or held. A free span took
+// four until 2026-10-31 (60 Hz length rows, 30 Hz bends: BALL's six spans
+// kicked at 3 m/s cost 0.90 ms a frame against 1.41 at eight), but the soft
+// rows' frequency is a quarter of the substep rate, and the island steps at
+// the most substeps any of its units asks for: the frame the ball's row
+// (eight) joined a free span, its rows went from 60 to 120 Hz, four times
+// as stiff, and the stretch the span rested on under its own weight was paid
+// out as motion. `ball.json`'s 14 m span over 2.7 m rested 21 cm longer at
+// four than eight hold it, and on the catch sprang 38 cm shorter in twelve
+// frames, 0 to 207 J (`session-105f`, `cli vines` `span-catch`).
 
 function plantSoftness(h: number): Softness {
   return softness(Math.min(PlantTuning.hertz, 0.25 / h), PlantTuning.damping, h);
@@ -478,13 +479,12 @@ const SPRING_SOFT: MutableSoftness = { biasRate: 0, massScale: 1, impulseScale: 
 export class PlantUnit implements IslandUnit {
   readonly bodies: readonly RigidBody2D[];
   readonly rows: readonly IslandRow[];
-  // A plant with berries takes the plant's eight (`PlantTuning`: 120 Hz rows
-  // under a 52 kg ball), held or not - its stalks' springs are the same rows
-  // either way, and a free plant's on a span's four stretched its stalks to
-  // 0.94 m (`session-846f` f19); a cord takes `SPAN_SUBSTEPS`.
-  get substeps(): number {
-    return this.berry !== null || this.vine.berries.length > 0 ? PlantTuning.substeps : SPAN_SUBSTEPS;
-  }
+  // The plant's eight (`PlantTuning`: 120 Hz rows under a 52 kg ball), held
+  // or not, for every vine: the rows are the same either way, and a unit
+  // that rests on fewer is re-stiffened by the ball's row the frame it
+  // joins (`PlantTuning` above). A free berry plant on four stretched its
+  // stalks to 0.94 m (`session-846f` f19).
+  readonly substeps = PlantTuning.substeps;
   // The vine's own rest rule is the unit's (`stepVines`: net displacement
   // over a window, the links' flags with it), because a link never satisfies
   // the world's (`VineLink.canSleep` is false) and the island's rest pass

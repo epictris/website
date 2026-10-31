@@ -1584,8 +1584,8 @@ function caseSpanStiffness(): VineResult {
   // The bow is the rod's geometry, not the slider's: a 5 m rod over 4 m
   // sags about what the catenary does at any stiffness, the floors holding
   // its arc (below), and what the slider moves is under the island's own
-  // softness - the free span rests a percent long on its 60 Hz rows
-  // (`SPAN_SUBSTEPS`), which is 2 cm of sag.
+  // softness - the span rests a little long on its 120 Hz rows
+  // (`PlantTuning`), which is a centimetre or two of sag.
   const sags = [cord.sag, branch.sag, pole.sag];
   check(
     `the bow is the rod's, not the slider's: sag ${rope.sag.toFixed(2)} m (rope), ${cord.sag.toFixed(2)} (0.25), ` +
@@ -1818,6 +1818,89 @@ function caseSpanRelease(): VineResult {
   check(`...and sleeps (frame ${asleepAt}, bar 300)`, asleepAt >= 0);
   check(`no invariant tripped (${rig.violations.length})`, rig.violations.length === 0);
   return ok("span-release — a stiff span the ball lets go of while hanging still stays still", passed, details);
+}
+
+// span-catch: the catch is the release's other end. A long span sleeps in the
+// pose its free island rests in; the frame the ring threads on, the ball's row
+// joins that island, and whatever the held solve disagrees with the free one
+// about is paid out as motion. `session-105f` (2026-10-31) is `ball.json`'s
+// 14 m span over a 2.7 m gap: free at four substeps it rested 21 cm longer
+// than the held island's eight would hold it, and on the catch it sprang 38 cm
+// shorter in twelve frames, its bottom rising 31 cm against the ball's pull
+// and the cord going from 0 to 207 J ("the vine suddenly jumps").
+function caseSpanCatch(): VineResult {
+  const c = ringClaims();
+  // The span alone first, to find where the bottom of its U rests.
+  const scene = (ballX: number, floorY: number): RawLevelData => ({
+    player: { x: ballX, y: floorY - 20, radius: 8 },
+    bodies: [
+      {
+        kind: "static",
+        x: 0,
+        y: -500,
+        rot: 0,
+        objects: [
+          { type: "collision", shape: { kind: "rect", w: 60, h: 40 } },
+          { type: "anchor", id: 1, x: 0, y: 20 },
+        ],
+      },
+      {
+        kind: "static",
+        x: 270,
+        y: -500,
+        rot: 0,
+        objects: [
+          { type: "collision", shape: { kind: "rect", w: 60, h: 40 } },
+          { type: "anchor", id: 2, x: 0, y: 20 },
+        ],
+      },
+      {
+        kind: "static",
+        x: 0,
+        y: floorY,
+        rot: 0,
+        objects: [{ type: "collision", shape: { kind: "rect", w: 3000, h: 40 } }],
+      },
+    ],
+    vines: [{ anchor: 1, anchor2: 2, length: 1400, stiffness: 0.3, viscosity: 0.2 }],
+  });
+  const probe = new BallLevel(scene(-300, 600)).vines[0]!;
+  let bottom = probe.links[0]!.globalPosition;
+  for (const link of probe.links) if (link.globalPosition.y > bottom.y) bottom = link.globalPosition;
+  // The ball on a floor 1.2 m under the bottom and 0.8 m to its left, as in
+  // the session: thrown up and across at the cord near its lowest point.
+  const rig = new RingRig(scene(bottom.x / PX - 80, bottom.y / PX + 140));
+  const vine = rig.vine;
+  const arcOf = (): number => {
+    const pts = [vine.anchorContact.globalPosition, ...vine.links.map((l) => l.globalPosition), vine.anchor2Contact!.globalPosition];
+    let arc = 0;
+    for (let k = 1; k < pts.length; k++) arc += pts[k]!.distanceTo(pts[k - 1]!);
+    return arc;
+  };
+  const keOf = (): number => {
+    let ke = 0;
+    for (const link of vine.allLinks) ke += 0.5 * link.mass * link.linearVelocity.lengthSquared();
+    return ke;
+  };
+  for (let f = 0; f < 30; f++) rig.step(rig.ball.globalPosition, false);
+  c.details.push(`     a ${(vine.spacing * (vine.links.length + 1)).toFixed(1)} m span over a 2.7 m gap, ${vine.asleep ? "asleep" : "awake"} before the throw`);
+  const slept = arcOf();
+  const on = rig.throwUntilRinged(new Vec2(0.8, -1.2), 60);
+  c.check(`the ring threads onto it (frame ${on})`, on >= 0);
+  if (on < 0) return ok("span-catch", false, c.details);
+  let shortest = Infinity;
+  let peak = 0;
+  rig.run(12, rig.ring!.contact.globalPosition.sub(rig.ball.globalPosition), () => {
+    shortest = Math.min(shortest, arcOf());
+    peak = Math.max(peak, keOf());
+  });
+  c.check(
+    `the catch does not shorten the span: ${(slept * 1000).toFixed(0)} mm before, ${(shortest * 1000).toFixed(0)} mm at the shortest after (bar 10 mm)`,
+    shortest > slept - 0.01,
+  );
+  c.check(`...and the cord carries at most ${peak.toFixed(1)} J over the twelve frames after (bar 20)`, peak <= 20);
+  withViolations(c, rig);
+  return ok("span-catch — a long span caught by the ring is not shortened by the hold", c.passed(), c.details);
 }
 
 // ---------------------------------------------------------------------------
@@ -2679,6 +2762,7 @@ const VINE_CASES: ReadonlyArray<[string, () => VineResult]> = [
   ["span-stiffness", caseSpanStiffness],
   ["span-kick", caseSpanKick],
   ["span-release", caseSpanRelease],
+  ["span-catch", caseSpanCatch],
   ["pass-through", casePassThrough],
   ["ball-vine", caseBallVine],
   ["ball-steer", caseBallSteer],

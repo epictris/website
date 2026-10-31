@@ -9,12 +9,14 @@ import type { LevelSpec } from "../level/registry";
 import { LEVELS } from "../level/registry";
 import {
   checkBallInvariants,
+  ContactRunawayMonitor,
   digestBall,
   EnergyMonitor,
   GripPinMonitor,
   GripAnchorMonitor,
   RollMonitor,
   TunnelMonitor,
+  WallClimbMonitor,
   kineticEnergy,
   serializeInput,
   worldDigestBall,
@@ -486,6 +488,8 @@ function runBallScript(script: PlaytestScript, spec: LevelSpec): PlaytestResult 
   const gripPin = new GripPinMonitor();
   const gripAnchor = new GripAnchorMonitor();
   const tunnel = new TunnelMonitor();
+  const runaway = new ContactRunawayMonitor();
+  const wallClimb = new WallClimbMonitor();
   const stateFirstFrame = new Map<string, number>();
 
   for (let f = 1; f <= script.frames && !resetFired; f++) {
@@ -508,6 +512,10 @@ function runBallScript(script: PlaytestScript, spec: LevelSpec): PlaytestResult 
     if (av) violations.push(av);
     const tv = tunnel.push(level);
     if (tv) violations.push(tv);
+    const cv = runaway.push(level);
+    if (cv) violations.push(cv);
+    const wv = wallClimb.push(level);
+    if (wv) violations.push(wv);
   }
 
   const assertResults = evaluateAsserts(script, digests, stateFirstFrame, stats, level.completedFrame);

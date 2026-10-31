@@ -7,12 +7,14 @@ import { LEVELS } from "../level/registry";
 import { spawnAtCheckpoint } from "../level/levelFormat";
 import {
   checkBallInvariants,
+  ContactRunawayMonitor,
   digestBall,
   EnergyMonitor,
   GripPinMonitor,
   GripAnchorMonitor,
   RollMonitor,
   TunnelMonitor,
+  WallClimbMonitor,
   digestsEqual,
   digestDrift,
   DRIFT_EPSILON,
@@ -156,6 +158,8 @@ export function replayRecording(rec: Recording, options: ReplayOptions = {}): Re
   const gripPin = new GripPinMonitor();
   const gripAnchor = new GripAnchorMonitor();
   const tunnel = new TunnelMonitor();
+  const runaway = new ContactRunawayMonitor();
+  const wallClimb = new WallClimbMonitor();
   let divergedAtFrame: number | null = null;
   let divergedByStateFork: boolean | null = null;
   let bitDivergedAtFrame: number | null = null;
@@ -185,6 +189,10 @@ export function replayRecording(rec: Recording, options: ReplayOptions = {}): Re
     if (av) violations.push(av);
     const tv = tunnel.push(level);
     if (tv) violations.push(tv);
+    const cv = runaway.push(level);
+    if (cv) violations.push(cv);
+    const wv = wallClimb.push(level);
+    if (wv) violations.push(wv);
     const expected = expectedDigestAt(i + 1);
     if (expected) {
       if (bitDivergedAtFrame === null && !digestsEqual(d, expected)) bitDivergedAtFrame = i + 1;

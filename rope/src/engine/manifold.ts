@@ -96,6 +96,26 @@ function maxSeparation(
   return { index, separation };
 }
 
+// Does `other` cross the plane of face `index` of `verts`, given it is
+// `separation` (negative: overlapping) past it - is some of it still on the
+// outside? Not if it reaches no further back than it is deep.
+function crossesFace(
+  verts: readonly Vec2[],
+  index: number,
+  other: readonly Vec2[],
+  separation: number,
+): boolean {
+  const n = worldNormal(verts, index);
+  let lo = Infinity;
+  let hi = -Infinity;
+  for (const v of other) {
+    const d = n.dot(v);
+    lo = Math.min(lo, d);
+    hi = Math.max(hi, d);
+  }
+  return -separation < hi - lo;
+}
+
 // The edge of `verts` facing most directly into `normal` — the face that
 // actually meets the reference face.
 function incidentEdge(verts: readonly Vec2[], normal: Vec2): number {
@@ -168,11 +188,36 @@ function loopVsLoop(a: ShapeTransform, b: ShapeTransform, slop: number): Contact
   // than flickering between the two when the depths are all but equal — a flip
   // there swaps the manifold and the box jitters.
   const useB = rb.separation > ra.separation + 1e-9;
+  // Kept off the seams, the reference may be a face the other shape does not
+  // even cross - it is inside this piece only by way of a seam, and the far
+  // side of a seam is the sibling's surface, which makes that contact. So a
+  // face chosen only because the seams were set aside, and not crossed, is no
+  // contact at all (see the fallback below for the same face reached another
+  // way; `session-325f` f239 reached the 5 m quad's bottom face here, the
+  // stool's own faces all lying deeper still).
+  const chosen = useB ? rb : ra;
+  if (
+    chosen.separation < Math.max(sa.separation, sb.separation) - 1e-9 &&
+    !crossesFace(useB ? vb : va, chosen.index, useB ? va : vb, chosen.separation)
+  ) {
+    return [];
+  }
   const first = clipManifold(a, b, va, vb, useB, useB ? rb.index : ra.index, slop);
   if (first === null || !first.ghost) return first?.contacts ?? [];
   // Struck at a corner the incident body does not have: against the other
-  // side's face, if it has one to give.
-  const other = clipManifold(a, b, va, vb, !useB, useB ? ra.index : rb.index, slop);
+  // side's face, if it has one to give - and a face the shape does not even
+  // cross is not one. Kept off its seams, a piece may have no face left but
+  // one the shape lies wholly beyond, and the shape is inside the piece only
+  // by way of a seam, whose far side is the sibling's surface. A stool resting
+  // 3 mm into a terrain's sloped skin had its seat's corner 3 cm across the
+  // seam into the 5 m quad beneath, every face of which but the bottom was a
+  // seam: the bottom answered, 4.92 m deep and straight down, and the chain
+  // phase's push-out sent the stool through the floor (`session-141f` f117).
+  // `session-599f`'s bar did cross the slope it was given, a few millimetres.
+  const refIndex = useB ? ra.index : rb.index;
+  const refSeparation = useB ? ra.separation : rb.separation;
+  if (!crossesFace(useB ? va : vb, refIndex, useB ? vb : va, refSeparation)) return first.contacts;
+  const other = clipManifold(a, b, va, vb, !useB, refIndex, slop);
   return other !== null && !other.ghost ? other.contacts : first.contacts;
 }
 

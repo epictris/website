@@ -102,6 +102,15 @@ The separating-axis test still reads every face: a seam is a real edge of its pi
 
 Found on a dangling hook (2026-10-19, `session-599f` f116): resting on a floor that bends up 10°, its bar's corner on the bend, it was made a contact against its own end face with the normal straight back along the floor, and the chain dragging it towards the ball held it there while the ball wound 11 m of coil onto itself.
 Against the floor's surface the contact is the slope's face, and the hook rides up it (`cli contacts` `seam-reflex-corner`).
+
+**The other side's face has to be one the shape crosses** (`crossesFace`, 2026-10-25).
+Kept off its seams, a piece walled in by siblings may have no face left but its far one, and a shape that pokes across a seam into it lies wholly short of that face: it is inside the piece only by way of the seam, whose far side is the sibling's surface.
+`session-141f` f117: a stool resting 3 mm into a terrain's sloped skin had its seat on a reflex corner, 1 mm into the 5 m quad beneath, and every face of that quad but the bottom was a seam.
+The bottom was taken, 4.92 m deep and straight down, and the chain phase's push-out (`depenetrateRigid` on the holders) sent the stool through the floor in one frame - the chain then measured 20.7 m against 0.06.
+So the fallback is taken only when the shape reaches back out past the face it would be given, and otherwise the first manifold stands; the hook of `session-599f` did cross the slope it was given, by a few millimetres, and still rides it.
+The same face is reachable without the fallback: when the shape's own faces all lie deeper still - a stool tipped so that each of its faces sees the 40 m quad's far corners - the quad's bottom is the reference outright (`session-325f` f239, 5.09 m).
+So a reference face that was chosen only because the seams were set aside, and that the shape does not cross, is no contact at all: the piece says nothing, and the sibling across the seam makes the contact.
+`cli contacts` `seam-fallback-crosses` is the case, one placing for each path: on the old manifold the box is pushed 5.32 m and 5.41 m through the block.
 A circle needs none of this: its one contact is on the nearest feature of the piece, and at a reflex corner that is the bend itself, which a circle can genuinely rest in.
 
 ## Resting contacts
@@ -161,6 +170,7 @@ A body resting on a rigid body had no pin at all, so it kept the whole of gravit
 Nothing accelerated the body into that motion and nothing ever takes it back, so it is a ratchet: slabs slid 53 cm and 66 cm across `255f` and `326f` while reporting velocities of 1e-8 m/s, which is to say invisibly to every check the suite had.
 `cli contacts` `rigid-ramp-hold` was the same thing written down as a case, and carried an `expectedFail` marker until this closed it.
 The steered ball reached the same gap from the other side and was fixed later, in `applySteeringGrip` rather than here (see [**The steered ball's grip**](ball-rolling.md#the-steered-balls-grip)): it is the one body `applyStaticGrip` declines, so closing the pin for every other body left it as the last one creeping.
+Declines while its spin is KINEMATIC: since the spin motor (2026-10-23, [ball-chain](ball-chain.md#the-spin-motor-branch-torque-spin-2026-10-23-unplayed)) the ball never is, so it holds this pin like any other body and `applySteeringGrip` does not run for it.
 
 Four things make a relative pin friction rather than a weld, and each of them was a red case first:
 
@@ -178,6 +188,20 @@ Four things make a relative pin friction rather than a weld, and each of them wa
 The anchor rides along with the **normal** part of what the depenetration sweep moves the body by, and with none of the tangential part.
 It has to follow the normal push or the two fight - the grip dragging the body back to an anchor the recovery had just found to be inside something, which buzzed a resting polygon 4 cm back and forth for as long as it sat there (`session-255f`).
 Along the surface it is the opposite: the anchor *is* the grip, and carrying it sideways is the same as not being pinned in the direction that moved.
+
+The same holds for **every other surface pressing on the body**, and for a long time the pin knew only its own.
+It holds the gap along one face, and a body in a corner is pressed by two: closing the floor's gap can mean driving the body straight back into the wall the contact solve has just pushed it out of.
+`session-197f` is the recording: the ball dropped into a floor-and-wall corner with its loop against the wall, the pin anchored along the floor, and every frame the solve pushed the ball out of the wall and the pin put it back, 0.42 mm a frame.
+A corner with `mu > 1` holds any internal stress - the floor's friction pressing the body into the wall and the wall's pressing it into the floor balance each other and show up as no velocity at all - and the warm-started solve cannot see that stress to take it back, so the push-out the pin re-earned every frame fed it.
+The two contacts climbed 4 N·s a frame, to 531 N·s at f197, sixty times the ball's weight, and friction at that load held the spin motor's full 360 N·m: the ball stuck in the corner, not turning, for as long as the aim pushed.
+So the gap the pin may close is taken out of every static surface pressing on the body this frame, and the anchor follows the part taken out, as it follows the depenetration sweep's normal push.
+A floor and a wall on one body are one `other` to the pin, so the surfaces are told apart by their normals (`pressing`), and the pin's own face is the one left out (`PIN_OWN_SURFACE`).
+Static surfaces only, because a static is the one surface that cannot give way: a body pressing from the other side is a load, and holding against a load's push is what stiction is for.
+Counting every pressing body was tried first and took the floor pin away from a rigid ramp whenever the ball on it leaned on it, so ramp and ball slid 6.7 m down the floor together (`steered-ramp-hold`), and the boxes of a pile let go of each other (`stack`).
+Should two pressing surfaces at an angle leave the gap nowhere to go, the pin lets the body be for that frame.
+`contact-load-runaway` is the detector (see [headless-tooling](headless-tooling.md)).
+What the fix does not change is the stress the corner was handed on the frame the ball landed in it: an impact's, which the corner holds as it held the pin's and lets go of only as it decays - `session-197f` still stands for 80 frames before the ball turns again.
+
 `PIN_RELAX` removes 0.15 of the remaining along-surface error per frame rather than all of it, because a pin at full strength fights the recovery hard enough to leave a settled four-box pile spinning at 0.02 rad/s; at 0.15 the pile reads 0.003 and the creep is gone.
 
 Across the corpus this takes settled drift from 529, 662 and 168 mm (`255f`, `326f`, `166f`) to 8, 8 and 16 mm, and what is left is bodies with a real velocity under the scan's threshold rather than bodies moving with none.

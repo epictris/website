@@ -4579,6 +4579,81 @@ function caseSeamReflexCorner(): ContactResult {
 }
 
 // ---------------------------------------------------------------------------
+// `seam-reflex-corner`'s fallback - a contact struck at a corner the body does
+// not have is made against the other side's face instead - may only take a
+// face the shape actually crosses. A piece walled in by siblings has no face
+// left but its far one, which a shape poking across a seam lies wholly short
+// of: a stool resting on a terrain's reflex corner, 1 mm into the 5 m quad
+// beneath, every face of which but the bottom was a seam, was given that
+// bottom - 4.92 m deep, straight down - and the chain phase's push-out sent it
+// through the floor (`session-141f` f117).
+function caseSeamFallbackCrosses(): ContactResult {
+  const details: string[] = [];
+  let passed = true;
+  const check = (claim: string, got: boolean): void => {
+    if (!got) passed = false;
+    details.push(`${got ? "ok  " : "BAD "} ${claim}`);
+  };
+  const sim = new Sim("seam-fallback-crosses");
+  const ground = new StaticBody2D();
+  // A block 5 m deep and 40 m wide, as the terrain's quad was, with a skin
+  // over it and a sibling either side, so its top and sides are seams and only
+  // its bottom is surface. The skin stops at the block's left edge, which
+  // leaves (-20, 0) a reflex corner: open above-left.
+  const pieces = [
+    [new Vec2(-20, 0), new Vec2(20, 0), new Vec2(20, 5), new Vec2(-20, 5)],
+    [new Vec2(-20, -0.3), new Vec2(20, -0.3), new Vec2(20, 0), new Vec2(-20, 0)],
+    [new Vec2(-23, 0), new Vec2(-20, 0), new Vec2(-20, 5), new Vec2(-23, 5)],
+    [new Vec2(20, 0), new Vec2(23, 0), new Vec2(23, 5), new Vec2(20, 5)],
+  ];
+  for (const piece of pieces) {
+    const made = polyShapeCentred(piece);
+    ground.addShape(made.shape, made.offset);
+  }
+  sim.world.add(ground);
+  const block = ground.getShapes()[0]!;
+  const seams = [0, 1, 2, 3].map((k) => block.isFaceInternal(k));
+  check(`the block's faces are seams but one (${seams.map((s) => (s ? "seam" : "surface")).join(", ")})`, seams.filter((s) => !s).length === 1);
+  // A 30 cm box tipped so its bottom face is deepest at the reflex corner,
+  // 1 mm into the block there.
+  const half = 0.15;
+  // Twice: tipped a little, its bottom face is the shallowest of all and the
+  // block is reached by the ghost-corner fallback (`session-141f`); tipped
+  // hard, every face of the box sees the block's far corners and lies deeper
+  // than the block's bottom, which is then the reference outright
+  // (`session-325f` f239).
+  const placings: { tag: string; tilt: number; at: (down: Vec2, tilt: number) => Vec2 }[] = [
+    { tag: "on the reflex corner", tilt: -0.2, at: (down) => new Vec2(-20, 0).sub(down.mul(half - 0.001)) },
+    {
+      tag: "tipped hard across the seam",
+      tilt: 0.8,
+      at: (_, tilt) => new Vec2(0, 0.01 - half * (Math.cos(tilt) + Math.sin(tilt))),
+    },
+  ];
+  for (const { tag, tilt, at } of placings) {
+    const down = new Vec2(-Math.sin(tilt), Math.cos(tilt));
+    const box = sim.addRigid(rectShape(2 * half, 2 * half), at(down, tilt));
+    box.globalRotation = tilt;
+    const inBlock = shapeContacts(box.primaryShape(), block, CONTACT_SLOP);
+    const deepest = inBlock.length > 0 ? Math.max(...inBlock.map((c) => c.depth)) : 0;
+    check(`${tag}: the block meets the box no deeper than it overlaps it (${(deepest * 100).toFixed(1)} cm, under 5)`, deepest < 0.05);
+    // Pushed out of the ground whole, it may move by as much as its own
+    // diagonal (it can be all but buried in the skin), and never by the
+    // block's depth.
+    const before = box.globalPosition;
+    sim.world.depenetrateRigid(box, 2);
+    const moved = box.globalPosition.distanceTo(before);
+    const bar = 2 * half * Math.SQRT2;
+    check(
+      `${tag}: pushed out of the ground it moves by its overlap, not through the block (${(moved * 100).toFixed(1)} cm, under ${(bar * 100).toFixed(0)})`,
+      moved < bar,
+    );
+    sim.world.remove(box);
+  }
+  return ok("seam-fallback-crosses - a face given only because the seams were set aside must be one the shape crosses", passed, details);
+}
+
+// ---------------------------------------------------------------------------
 // A rect `obstacle` for `swingPast`, metres, its centre relative to where the
 // ball hangs. A rigid one is a 50 cm steel block standing on a floor of its
 // own, built with the level so it has settled by the time the ball hangs.
@@ -7499,6 +7574,7 @@ export function runContactCases(): ContactResult[] {
   results.push(caseIslandCornerGraze());
   results.push(caseIslandThinPlank());
   results.push(caseSeamReflexCorner());
+  results.push(caseSeamFallbackCrosses());
   results.push(caseHookSeam());
   results.push(caseCollisionMask());
   results.push(casePassableBody());

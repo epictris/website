@@ -151,6 +151,17 @@ That was `session-251f`: a missed throw dangling on a hook-proof floor, the ball
 `spin-overdrive` is the invariant: it reads the applied tangential impulse against the same funding arithmetic the cap enforces, so it is zero by construction while the clamp holds and catches any future path that spends spin-funded impulse outside it.
 `ball-roll-wall` is the mechanic test - a ball driven 6 m into a vertical wall rises 26 cm at the old physics and under 5 cm now (`maxClimb`), while still reaching the wall at speed - and `session-773f` (the rolling launch), `session-422f-wall` (the grinding climb) and `session-373f` (the step climb) are the committed regressions.
 
+**A spin the motor drives is under the same cap** (`spunByDriver`, since 2026-10-25).
+The spin motor (2026-10-23, [ball-chain](ball-chain.md)) took `kinematicRotation` away from the ball for good, and every guard in this section was keyed on it, so for two days the free ball had none of them.
+The motor's spin is no infinite reservoir - the solve can despin it and what it spends is the motor's work - but the rule here was never only an energy statement, and a 360 N·m motor pays for a climb honestly.
+`session-176f` is what that looked like: the ball in a floor-and-wall corner, its loop striking the wall at 27 rad/s once a revolution with the motor holding it there, 1.6 m/s up per strike, 87 cm up a flat wall in a hundred frames, replayed HEALTHY.
+The slip that names the drive side is the spin as the frame's step finds it, the motor's warm start already in it.
+On the motor-driven ball's LOOP (`loopDriven`) the drive is funded by the weight press alone, never the pair's sustained load, and the loop's press is renewed into that store for no more than its weight share.
+Under a motor the loop's own press is real and it lasts: wedged into the same corner it held the wall at 30-40 N·s a frame for eighty frames (`session-197f`), the ramp matured that like any other load, and the moment the jam let go the wall funded the climb in full - the ball vaulted up it at 1.8 m/s; stored per pair and direction, the same press was then the RIM's to draw on, and it hopped 0.86 m/s up a wall the loop could no longer climb.
+On a floor the loop keeps its drive, which is the weight it bears.
+With both, the two recordings rise 6.6 and 10.6 cm against 87 and 27, and the ball in the corner keeps turning, its loop knocking the wall once a revolution, where it had stood stalled for 118 frames.
+`wall-climb` is the detector (see [headless-tooling](headless-tooling.md)): it reads the energy the free ball gains through wall contacts alone, so it sees a climb whatever funded it.
+
 `ball-step-ledge` and `ball-step-ledge-split` are the direction half, and they are a PAIR because neither says anything alone: the same 40 cm step, authored once as a concave outline in one body and once as two bodies tiling the same region, must behave the same.
 Direction-blind, the one-body rig climbs the step and rolls 19.7 m over the top while its two-body twin stops dead at the foot (2.0 m, 7 cm of bounce); per direction the two agree to a centimetre.
 A `maxClimb` bar alone would have been satisfiable by a ball that simply stopped rolling, and the control is what says the fix is about the pair key rather than about the drive.

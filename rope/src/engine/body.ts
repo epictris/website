@@ -1701,8 +1701,8 @@ export class WaterArea extends Area2D {
 // solved.
 
 // Open a step of length `h`: the bounds from the spin as the step finds it
-// (read once, so the power bound does not chase its own answer, as the drum's
-// `closingRate` is read), and last step's torque applied as the warm start.
+// (read once, so the power bound does not chase its own answer), and last
+// step's torque applied as the warm start.
 // The motor curve: full torque at rest and up to the base speed
 // `power / maxTorque`, the power over the speed above it, in the direction the
 // body is turning; against that direction - braking - the torque alone.

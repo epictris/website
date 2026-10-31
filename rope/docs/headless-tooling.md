@@ -229,6 +229,17 @@ The pin closes that gap at the top of every frame, so at the end of one it is wh
 For a long time the chain phase was not carried: a ball on the floor winding onto a taut chain to a static had its anchor walk off by the roll while the length solve hauled it back by the roll and the winding, two teleports growing by twice the rim speed a frame, and their normal parts summed to a lift no one-sided contact could cancel - the ball hovered off the floor 1.5 mm a frame until the contact let go and dropped 2 cm, every 12 to 33 frames, HEALTHY (`session-367f`; eleven more bundles in the corpus carried the same gap).
 It reads the state rather than the teleport because here the state is honest: the chain phase now carries the anchor with everything it did to the ball (`RigidBody2D.carryStickAnchor`), so the gap is zero by construction on every gripped frame.
 
+Every run also carries **`contact-load-runaway`** (`ContactRunawayMonitor`): a body wedged between two static faces at an angle may not carry a static contact load above ten frames of its own weight that rises on every one of 30 frames while the body is under 5 cm/s.
+A corner with `mu > 1` holds any internal stress, invisible as velocity and invisible to the warm-started solve, so anything that feeds it a little every frame grows it without bound, and the friction it funds holds whatever the body does.
+`session-197f` is what it was written for: the static pin, anchored along the floor, drove the ball 0.42 mm a frame back into the wall it had just been pushed out of, the two contacts climbed to sixty times the ball's weight, and the spin motor's full torque could not turn it - replayed HEALTHY (see [**The position pin**](contact-solver.md#the-position-pin)).
+It reads the symptom rather than the pin so that any positional feed into a wedge is caught.
+A stress an impact leaves behind decays and a real load arrives in a handful of frames and then holds, so neither trips it.
+It counts static faces only, and only a wedge, because a load something MOVING supplies can rise honestly for as long as it likes and this cannot weigh it: `session-1426f` (the ball under a settling 300 kg slab) and `session-1048f` (the ball wound into its own anchor on a ceiling, one face, the load climbing 72 to 222 N·s over 30 frames with the motor at full torque) both rise longer than the run and are outside what it reads.
+
+Ball runs also carry **`wall-climb`** (`WallClimbMonitor`): the free ball may not gain more than a quarter of a metre of its own weight in energy, translational plus potential, through frames on which only wall-like faces press on it, summed since anything floor-like last did.
+A ball thrown up along a wall loses energy to it, a spin the wall turns into lift gains it, and the airborne frames between strikes conserve it, so a hop-by-hop climb adds up where no single strike would; an attached chain resets it, being a force of its own.
+`spin-overdrive` audits the drive cap and cannot see a ball outside the cap, which is exactly where the motor-driven ball stood for two days: `session-176f` climbed 87 cm up a flat wall on its loop's strikes, 138 J by f84, replayed HEALTHY (see [ball-rolling](ball-rolling.md#spin-traction-on-a-fresh-contact)).
+
 Ball runs also carry the **energy invariant** (`energy-gained`): over any span
 with no forced input and no kinematic spin, total kinetic plus potential energy
 may not rise beyond a tolerance.

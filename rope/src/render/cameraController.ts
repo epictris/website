@@ -134,9 +134,9 @@ import { marginSides, uniformMargin } from "./shapePath";
 // The SPEED cap is a backstop rather than a knob: 12 m/s is faster than
 // anything the level's framing asks for and slower than a teleport, so what it
 // bounds is a hand-off across half a level.
-export const CAMERA_FREQ = 1.2;
-export const CAMERA_MAX_ACCEL = 8;
-export const CAMERA_MAX_SPEED = 12;
+export const CAMERA_FREQ = 1.5;
+export const CAMERA_MAX_ACCEL = 20;
+export const CAMERA_MAX_SPEED = 25;
 
 // The longest frame the spring will integrate, seconds. A hitched frame is a
 // frame the wall clock spent elsewhere, not a frame the camera was allowed to

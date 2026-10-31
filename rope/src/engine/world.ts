@@ -249,6 +249,11 @@ const STICK_RELEASE_FRAMES = 6;
 const SLIP_STICK = 0.5;
 // Fraction of the along-surface error a pin removes per frame.
 const PIN_RELAX = 0.15;
+// A pressing surface whose normal is within this cosine of the pin's own is the
+// pin's own surface - another point of the same face, or the same contact seen
+// from the other body - and is not one the pin can drive the body into: the gap
+// it closes has no component along it. 1 - 1e-9 is parallel to float noise.
+const PIN_OWN_SURFACE = 1 - 1e-9;
 
 export interface RayResult {
   collider: PhysicsBody2D;
@@ -469,6 +474,14 @@ interface SolverContact {
   // floor at 4.4 m/s straight up with its spin untouched (`session-773f`
   // f600).
   readonly spinCone: number;
+  // The load the drive side of the cone is funded from (N·s): the larger of
+  // `spinCone` and `sustained`, or `spinCone` alone on a motor-driven body's
+  // off-centre shape (see where it is built).
+  readonly driveLoad: number;
+  // Is this a motor-driven body's off-centre shape - a press its own spin
+  // makes on its own lever? Then neither the drive nor the pair's sustained
+  // store may count more of it than the weight press (`spinCone`).
+  readonly loopDriven: boolean;
   // Impulse the linear share of the entering slip justifies in the drive
   // direction (N·s, >= 0). Added to the spin's cap so real momentum sliding the
   // same way as the spin drives is still braked in full.
@@ -2065,14 +2078,28 @@ export class World {
       // gravity component into the surface - not the pair's relative gravity,
       // which is zero for two falling bodies and would starve the drive on a
       // rigid platform (`ball-roll-drive-rigid`).
+      //
+      // A spin a MOTOR drives (`spinMotorActive`) is under the same cap. It is
+      // no longer an infinite reservoir - the solve can despin it, and what it
+      // spends is the motor's work - but "a spinning ball cannot climb a
+      // wall" was never only an energy statement: a 360 N·m motor pays for a
+      // climb honestly, and with the guards keyed on `kinematicRotation`
+      // alone the motor-driven ball had none of them. `session-176f` is the
+      // recording: the ball in a floor-and-wall corner, its loop striking the
+      // wall at 27 rad/s once a revolution with the motor holding it there,
+      // 1.6 m/s up per strike, 90 cm up a flat wall in a hundred frames. The
+      // slip is the spin as this frame's step finds it (the motor's warm
+      // start already in it), and constant across the iterations as the
+      // kinematic one is, which is all the cap needs of it: its sign names
+      // the drive side.
       let spinSlip = 0;
-      if (c.a.kinematicRotation) spinSlip += c.a.angularVelocity * rA.cross(tangent);
-      if (bRigid && bRigid.kinematicRotation) spinSlip -= bRigid.angularVelocity * rB.cross(tangent);
+      if (spunByDriver(c.a)) spinSlip += c.a.angularVelocity * rA.cross(tangent);
+      if (bRigid && spunByDriver(bRigid)) spinSlip -= bRigid.angularVelocity * rB.cross(tangent);
       // The ramp guards the FREE spinning body only: anchored, the chain
       // machinery owns this regime and contact traction stays exactly legacy.
       const tethered =
-        (c.a.kinematicRotation && c.a.constraintTethered) ||
-        (bRigid !== null && bRigid.kinematicRotation && bRigid.constraintTethered);
+        (spunByDriver(c.a) && c.a.constraintTethered) ||
+        (bRigid !== null && spunByDriver(bRigid) && bRigid.constraintTethered);
       // The press is computed for every contact, not only spun ones, so the
       // sustained-load ramp below is already warm when the player starts
       // aiming mid-rest.
@@ -2090,6 +2117,27 @@ export class World {
         const driveSign = spinSlip > 0 ? -1 : 1;
         linearNeed = Math.max(0, (driveSign * -(vt0 - spinSlip)) / invEffT);
       }
+      const spinCone = (press * dt) / invEffN;
+      const sustained = sustainedAlong(prevLoads.get(`${c.a.id}:${c.b.id}`), c.normal);
+      // What may fund the drive: the weight press or the pair's sustained load
+      // along this face, whichever is more - except on a MOTOR-driven body's
+      // off-centre shape, where it is the weight press alone. The loop is a
+      // lever the spin presses into whatever it is against, and under a motor
+      // that press is real and it lasts: wedged into a corner the loop held
+      // the wall at 30-40 N·s a frame for eighty frames, the ramp matured that
+      // as a sustained load like any other, and the moment the jam let go the
+      // wall funded the climb in full - the ball vaulted up it at 1.8 m/s
+      // (`session-197f` f160). A press the spin built on its own lever is not
+      // a load the spin may then buy traction with (`spinFabricatedNormal`
+      // says the same of a kinematic spin's press, one frame at a time). The
+      // loop on a floor keeps its drive, which is the weight it bears.
+      const loopDriven =
+        (c.a.spinMotorActive && !c.a.kinematicRotation && spinsOffCentreShape(c.a, c.shapeA)) ||
+        (bRigid !== null &&
+          bRigid.spinMotorActive &&
+          !bRigid.kinematicRotation &&
+          spinsOffCentreShape(bRigid, c.shapeB));
+      const driveLoad = loopDriven ? spinCone : Math.max(spinCone, sustained);
 
       solved.push({
         c,
@@ -2108,14 +2156,16 @@ export class World {
         brakeNeg: brakeScale(c.a, bRigid, tangent.neg()),
         spinNormal: spinFabricatedNormal(c, bRigid, rA, rB, restitution, invEffN),
         spinSlip,
-        spinCone: (press * dt) / invEffN,
+        spinCone,
+        driveLoad,
+        loopDriven,
         linearNeed,
         rampBite:
           (GRAVITY.length() *
             Math.max(c.a.gravityScale, bRigid ? bRigid.gravityScale : 0) *
             dt) /
           invEffN,
-        sustained: sustainedAlong(prevLoads.get(`${c.a.id}:${c.b.id}`), c.normal),
+        sustained,
         tethered,
         spinKept: c.a.kinematicRotation
           ? c.a.spinDriveShare
@@ -2181,7 +2231,13 @@ export class World {
       const pairKey = `${s.c.a.id}:${s.c.b.id}`;
       let presses = loads.get(pairKey);
       if (presses === undefined) loads.set(pairKey, (presses = []));
-      const ceiling = Math.min(s.c.normalImpulse, s.sustained + s.rampBite);
+      // A motor-driven loop's press is stored for no more than its weight
+      // share: the store is per PAIR and direction, so a wall the loop held
+      // for frames was a matured press the ball's own rim then drew on the
+      // moment it met the same face - hopping 0.86 m/s up a wall the loop
+      // itself could no longer climb (`session-197f`, see `driveLoad`).
+      const renewed = s.loopDriven ? Math.min(s.c.normalImpulse, s.spinCone) : s.c.normalImpulse;
+      const ceiling = Math.min(renewed, s.sustained + s.rampBite);
       const at = pressIndex(presses, s.c.normal);
       // `loads` holds only what THIS frame renewed, so a press a contact renews
       // is written outright rather than compared against the frame before -
@@ -2226,7 +2282,7 @@ export class World {
         const applied = Math.max(0, driveSign * s.c.tangentImpulse);
         const funded =
           s.friction *
-            Math.max(0, Math.max(s.spinCone, s.sustained) - s.spinNormal) +
+            Math.max(0, s.driveLoad - s.spinNormal) +
           s.linearNeed;
         const over = applied - funded;
         if (over > this.spinDriveOverspend) {
@@ -2389,7 +2445,7 @@ export class World {
       const driveCap = Math.min(
         cone,
         s.friction *
-          Math.max(0, Math.max(s.spinCone, s.sustained) - s.spinNormal) +
+          Math.max(0, s.driveLoad - s.spinNormal) +
           s.linearNeed,
       );
       if (s.spinSlip > 0) coneNeg = driveCap;
@@ -2806,6 +2862,23 @@ export class World {
       }
     }
 
+    // Every STATIC surface pressing on each body this frame, as the normal
+    // pointing out of that surface toward the body: what the pin may not drive
+    // the body back into (see `blocked` below). A static only, because it is
+    // the one surface that cannot give way: a body pressing from the other
+    // side is a LOAD, and holding against a load's push is exactly what
+    // stiction is for - counted here, a ball resting on a rigid ramp took the
+    // ramp's floor pin away whenever it leaned on the ramp, and the two slid
+    // 6.7 m down the floor together (`steered-ramp-hold`), and the boxes of a
+    // pile let go of each other (`stack`).
+    const pressing = new Map<number, Vec2[]>();
+    for (const c of constraints) {
+      if (c.normalImpulse <= 0 || !(c.b instanceof StaticBody2D)) continue;
+      const list = pressing.get(c.a.id);
+      if (list) list.push(c.normal);
+      else pressing.set(c.a.id, [c.normal]);
+    }
+
     for (const { body, other, point, normal: n0, slipped, normalImpulse } of best.values()) {
       const otherRigid = other instanceof RigidBody2D ? other : null;
       // The same combination the kinetic path uses: the geometric mean of what
@@ -2880,8 +2953,55 @@ export class World {
         continue;
       }
       const held = body.globalPosition.add(body.stickLocal.rotated(body.globalRotation));
-      const d = held.sub(body.stickAnchorWorld()!);
-      let corr = d.sub(n0.mul(d.dot(n0))).mul(PIN_RELAX);
+      const anchor = body.stickAnchorWorld()!;
+      const gap = held.sub(anchor);
+      // The pin holds the gap along ITS surface, and it may not close it by
+      // driving the body into another surface that is pressing on it.
+      // Whatever part of the gap another contact pushed the body out by, the
+      // anchor follows, exactly as it follows the normal part of the
+      // depenetration sweep below and for the same reason (`session-255f`):
+      // the two constraints cannot both hold, and the contact's is the one with
+      // a surface behind it.
+      //
+      // Held to a floor alone, the pin has no answer to a wall. A body wedged
+      // into a floor-and-wall corner is pushed out of the wall by the contact
+      // solve and the pin, anchored along the floor, put it straight back -
+      // 0.42 mm a frame into the wall in `session-197f`, the ball's loop jammed
+      // against it. With `mu > 1` the corner holds any internal stress
+      // (`contact-load-runaway`), and the push-out the pin re-earned every
+      // frame fed it: the two contacts climbed 4 N·s a frame to sixty times the
+      // ball's weight and held the spin motor's full torque at a standstill for
+      // as long as the aim pushed. A floor and a wall on ONE body are one
+      // `other` here, so the surfaces are told apart by their normals, and the
+      // pin's own (`n0`, parallel by construction) is the one left out: the gap
+      // has no component along it.
+      // The body's own surfaces only: what presses on the OTHER body bounds
+      // only the other body's share of the move.
+      const blocked = pressing.get(body.id) ?? [];
+      let d = gap.sub(n0.mul(gap.dot(n0)));
+      let carried = false;
+      for (const m of blocked) {
+        if (m.dot(n0) > PIN_OWN_SURFACE) continue;
+        // The pin moves the body by `-d`: into `m` is `d.m > 0`.
+        const into = d.dot(m);
+        if (into > 0) {
+          d = d.sub(m.mul(into));
+          carried = true;
+        }
+      }
+      // Two pressing surfaces at an angle can hand a component back to each
+      // other; whatever still points into one after both are taken out means
+      // the body has nowhere to go, and the pin lets it be.
+      if (carried && blocked.some((m) => m.dot(n0) <= PIN_OWN_SURFACE && d.dot(m) > 1e-12)) {
+        d = Vec2.ZERO;
+      }
+      if (carried) {
+        // Re-seated on the body for the blocked part, so the pin does not keep
+        // a pull toward a place a surface put the body out of.
+        const normalPart = n0.mul(gap.dot(n0));
+        body.setStickAnchor(other, held.sub(d).sub(normalPart));
+      }
+      let corr = d.mul(PIN_RELAX);
       // Coulomb, on the position solve as on the velocity one: friction can hold
       // no more than mu times the normal impulse the contact actually carried
       // this frame, which as a displacement over one step is
@@ -3387,8 +3507,21 @@ function spinFabricatedNormal(
 // anything paying for the spin?
 function spinsOffCentre(body: RigidBody2D, shapeIndex: number): boolean {
   if (!body.kinematicRotation) return false;
+  return spinsOffCentreShape(body, shapeIndex);
+}
+
+// Is this shape mounted off the body's centre, so that turning the body drives
+// it into whatever it touches?
+function spinsOffCentreShape(body: RigidBody2D, shapeIndex: number): boolean {
   const shape = body.getShapes()[shapeIndex];
   return shape !== undefined && shape.localOffset.lengthSquared() > 0;
+}
+
+// Is the body's spin DRIVEN - written by the steering (`kinematicRotation`) or
+// pushed by its motor (`spinMotorActive`)? Either is a spin the contact solve
+// may not turn into a climb (see the drive cap in `solveTangent`).
+function spunByDriver(body: RigidBody2D): boolean {
+  return body.kinematicRotation || body.spinMotorActive;
 }
 
 // Symmetric overlap test between two shape transforms.

@@ -102,14 +102,14 @@ export class BallPlayer extends RigidBody2D {
   // winding the way it is circling (see `resolveInput`); this bounds the
   // backlog a ball left behind still turns through once the aim stops.
   static readonly AIM_MAX_LAG = Mathf.Tau;
-  // The lag (rad) at which the drum winds at `BallChainRow.RATED_POWER_MAX`:
-  // below it the power runs down to `RATED_POWER_MIN` at no lag (see
+  // The lag (rad) at which the spin motor drives at `SPIN_MOTOR_POWER_MAX`:
+  // below it the power runs down to `SPIN_MOTOR_POWER_MIN` at no lag (see
   // `aimPowerShare`). A whole turn, the most the loop may trail by
   // (`AIM_MAX_LAG`), so only a ball left a full turn behind winds at full
   // power. A feel knob, Tris's (2026-10-23: half a turn first, then this).
   static readonly AIM_FULL_POWER_LAG = Mathf.Tau;
   // The lag (rad) under which the loop counts as having reached the aim, and
-  // the power the drum held on the way there is let go (see `aimPowerShare`).
+  // the power the motor held on the way there is let go (see `aimPowerShare`).
   // Three degrees: the steering closes the lag exponentially and never quite
   // arrives, and an aim moving slower than `AIM_TURN_GAIN` times this
   // (0.5 rad/s) is one the loop has caught.
@@ -127,7 +127,7 @@ export class BallPlayer extends RigidBody2D {
   // 2.40, 430 gives 2.15).
   static readonly SPIN_MOTOR_TORQUE = 360;
   // W: the motor's power with the loop on the aim and a full `AIM_FULL_POWER_LAG`
-  // behind it, the drum's ratings as Tris last set them (2 and 4.5 kW). It binds
+  // behind it, Tris's (2026-10-25: 2 to 4.5 kW, after 0 to 5). It binds
   // above the base speed, so it is what sets how fast a sustained whirl gets:
   // a powered hammer throw speeds up until the power meets the island's
   // damping, and `session-646f`'s whirl on a 0.74 m chain peaked at 26 m/s.
@@ -140,14 +140,13 @@ export class BallPlayer extends RigidBody2D {
   // whenever the error is to be read the short way again.
   aimError: number | null = null;
 
-  // Where between its rated powers the drum winds this frame, 0 (the floor)
-  // to 1 (the ceiling): the loop's lag behind the aim over
-  // `AIM_FULL_POWER_LAG`. The steering's spin is kinematic and already
-  // proportional to the lag, but a kinematic turn asks the drum for no more
-  // than its speed, so an aim moved slowly round a swinging ball wound it in
-  // at the full 3.5 kW and flung it. Scaled, a drum
-  // the load bogs down hands the turn back, the loop falls further behind,
-  // and the power rises with it: a heavy wind has to be led, not stroked.
+  // Where between its rated powers the spin motor drives this frame, 0 (the
+  // floor) to 1 (the ceiling): the loop's lag behind the aim over
+  // `AIM_FULL_POWER_LAG`. The steering's demand is already proportional to
+  // the lag, but at a fixed rating an aim moved slowly round a swinging ball
+  // wound it in at full power and flung it (the drum's, when it reeled).
+  // Scaled, a motor the load bogs down falls further behind the aim, and the
+  // power rises with it: a heavy wind has to be led, not stroked.
   //
   // The share is HELD at the most the lag has reached while the loop closes
   // on the aim, and drops back to the lag's own only once the loop gets there
@@ -1047,7 +1046,7 @@ export class BallPlayer extends RigidBody2D {
       this.aimError = angleError;
       this.aimErrorAim = aimAngle;
       this.aimErrorRotation = this.globalRotation;
-      // The drum's power share, held on the way to the aim (`aimPowerShare`).
+      // The motor's power share, held on the way to the aim (`aimPowerShare`).
       const share = Math.min(1, Math.abs(angleError) / BallPlayer.AIM_FULL_POWER_LAG);
       const side = Math.sign(angleError);
       if (Math.abs(angleError) <= BallPlayer.AIM_POWER_RESET_LAG || side !== this.aimPowerSide) {
@@ -1063,7 +1062,7 @@ export class BallPlayer extends RigidBody2D {
       // The demand is the motor's target, and what the motor can do toward it
       // is its rating: `SPIN_MOTOR_TORQUE` at any speed, and while driving no
       // more than its power, which the lag scales between its floor and its
-      // ceiling as it scaled the drum's (`aimPowerShare`). Whatever resists
+      // ceiling (`aimPowerShare`). Whatever resists
       // the turn - a chain wound tight, a weight on the rim, the floor - is
       // solved against that rating in the same iterations, so nothing has to
       // refuse the turn afterwards: no stall, no unwind (the wind stall and

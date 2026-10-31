@@ -19,12 +19,14 @@ import { RigidBody2D } from "../engine/body";
 import { BallHook } from "../classes/ballHook";
 import {
   checkBallInvariants,
+  ContactRunawayMonitor,
   EnergyMonitor,
   GripPinMonitor,
   GripAnchorMonitor,
   recordingDeserializer,
   RollMonitor,
   TunnelMonitor,
+  WallClimbMonitor,
   worldDigestBall,
   worldDigestDeltas,
   type Recording,
@@ -90,6 +92,8 @@ export function bundleMetrics(rec: Recording, name: string): BundleMetrics {
   const gripPin = new GripPinMonitor();
   const gripAnchor = new GripAnchorMonitor();
   const tunnel = new TunnelMonitor();
+  const runaway = new ContactRunawayMonitor();
+  const wallClimb = new WallClimbMonitor();
   // The recorded world digests by the frame they describe: a bundle need not
   // carry one per frame (see `Recording.digests`). Built here rather than
   // imported, as `num` is written, because older trees have no helper for it.
@@ -113,6 +117,8 @@ export function bundleMetrics(rec: Recording, name: string): BundleMetrics {
     if (gripPin.push(level)) violations++;
     if (gripAnchor.push(level)) violations++;
     if (tunnel.push(level)) violations++;
+    if (runaway.push(level)) violations++;
+    if (wallClimb.push(level)) violations++;
     const ball = level.ball;
     peakV = keepMax(peakV, num(ball.linearVelocity.length()));
     pushRun = keepMax(pushRun, num((level as { chainPushCreditFrames?: unknown }).chainPushCreditFrames));
