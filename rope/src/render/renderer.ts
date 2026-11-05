@@ -485,7 +485,8 @@ function drawCompoundGeometry(
   for (let i = 0; i < shapes.length; i++) {
     const piece = pieces[i];
     const curve = piece?.rail;
-    if (!curve || !piece || drawn.has(curve)) continue;
+    // A root's branch is ridden as a rail but drawn as the root it is.
+    if (!curve || !piece || curve.root !== null || drawn.has(curve)) continue;
     drawn.add(curve);
     const pose = bodyPoseOf(shapes[i]!, piece);
     drawRailLine(ctx, curve, pose.pos, pose.rot);
@@ -534,7 +535,7 @@ function drawGeometryShape(
 
   // A rail: the body's ordinary fill and border, with the centreline the cuff
   // rides drawn down the bar (see `drawRailLine`).
-  if (piece?.rail) {
+  if (piece?.rail && piece.rail.root === null) {
     const style = geometryStyle(body, piece);
     pathShape(ctx, t);
     if (style.fill) {

@@ -1555,8 +1555,10 @@ export class World {
     // A `passable` body is blocked by nothing, statics included - the one place
     // it goes further than `isSolid`, which keeps a vine link resting on the
     // ground it drapes across. Answering with no overlaps is what stops the
-    // scenery a leaf hangs in front of shoving the leaf out of itself.
-    if (body.passable) return [null, null];
+    // scenery a leaf hangs in front of shoving the leaf out of itself. A
+    // moving root is the exception it opts into (`RigidBody2D.hitsStatics`):
+    // the rule below then leaves it the statics alone.
+    if (body.passable && !body.hitsStatics) return [null, null];
     const consider = (
       overlap: { normal: Vec2; depth: number; point: Vec2 },
       other: PhysicsBody2D,
@@ -1771,7 +1773,7 @@ export class World {
       if (!(a instanceof RigidBody2D)) continue;
       if (only && !only.has(a)) continue;
       if (a.removed || !a.hasShape() || !isSolidTarget(a)) continue;
-      if (a.passable) continue;
+      if (a.passable && !a.hitsStatics) continue;
       if (World.isAsleep(a)) continue;
       let minX = Infinity;
       let minY = Infinity;
@@ -1848,8 +1850,10 @@ export class World {
         if (!a.isSolid && !(b instanceof StaticBody2D)) return;
         // ...and a `passable` body keeps not even those: the hook is the only
         // thing in the sim that may find it, so it neither pushes a static nor
-        // is stopped by one (see `CollisionObject2D.passable`).
-        if (a.passable) return;
+        // is stopped by one (see `CollisionObject2D.passable`) - unless it is a
+        // moving root, which the statics still stop (`RigidBody2D.hitsStatics`;
+        // the line above has already left it nothing but statics).
+        if (a.passable && !a.hitsStatics) return;
         // A sleeping body has no contacts. It is not moving and nothing that
         // could move it reaches this loop, and the pair loop is the O(n²) half
         // of the frame - which is what a level full of vines pays (see

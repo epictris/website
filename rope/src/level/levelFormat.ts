@@ -584,6 +584,14 @@ export interface CollisionObjectData extends ObjectPlacement {
   // (`buildBodies.ts`), so each piece bringing its own material is what those
   // sums are for.
   material?: string;
+  // The piece's DENSITY, kg/m³, when it was typed rather than picked (Tris,
+  // 2026-11-01: a material "should just allow you to set a preconfigured
+  // density value"): a material is a preset density, and a density typed in
+  // the editor makes the piece's material `custom` (`CUSTOM_MATERIAL`) with
+  // the number here. Absent is the material's own (`pieceDensity`), so every
+  // level written before it weighs exactly what it did. A volumetric density
+  // in kg per cubic METRE, so `scaleLevelData` leaves it alone.
+  density?: number;
   // Metres in the sim, scene pixels on disk like every other length.
   thickness?: number;
   // DEBUG GEOMETRY: whether this piece is drawn in 3D, and how. A level's look
@@ -622,7 +630,31 @@ export interface RootBranchData {
   parent?: number;
   at?: number;
   bark?: import("./rootAppearance").RootBarkVariant;
+  // Where the branch BENDS (docs/roots.md, "Bending roots"): each a point
+  // along it, a fraction of its arc length as `at` is, where the stretch past
+  // it is a body of its own hinged to the stretch before on a torsion spring.
+  // A bend at 0 on a BRANCH hinges the whole branch where it grows out of its
+  // parent; at 0 on a trunk it means nothing (the root's `springs` is that).
+  // Absent or empty is a branch that is rigid along its whole length.
+  bends?: RootBendData[];
 }
+
+// One bend of a root branch (`RootBranchData.bends`): where along the branch
+// (0..1 of its arc length), how stiff its return spring is (`freq`, hertz;
+// absent is `ROOT_BEND_FREQ`), and how quickly it settles (`damping`, the
+// damping ratio, 0..1; absent is `ROOT_BEND_DAMPING`). A fraction and two
+// rates, none of them a length. (A `limit`, a stop either way, was tried
+// and removed 2026-11-01; a bend that still carries one ignores it.)
+export interface RootBendData {
+  at: number;
+  freq?: number;
+  damping?: number;
+}
+
+// A bend's spring when it names none: the root's own `ROOT_SPRING_FREQ` and a
+// light damping, guesses to be PLAYED.
+export const ROOT_BEND_FREQ = 2;
+export const ROOT_BEND_DAMPING = 0.2;
 
 // How a collision piece's debug geometry is drawn (`CollisionObjectData.debug`):
 // its outline extruded `depth` through z, centred on the piece's plane, in a
@@ -3157,6 +3189,7 @@ export function scaleObject(o: SceneObjectData, factor: number): SceneObjectData
       // A material is a name and scales by nothing; a thickness is a length in
       // z and scales exactly as the two lengths in the plane do.
       ...(o.material !== undefined ? { material: o.material } : {}),
+      ...(o.density !== undefined ? { density: o.density } : {}),
       ...(o.thickness !== undefined ? { thickness: o.thickness * factor } : {}),
       // A colour and an opacity scale by nothing; the depth is a length in z,
       // as `thickness` is.
@@ -3177,6 +3210,7 @@ export function scaleObject(o: SceneObjectData, factor: number): SceneObjectData
               ...(o.root.parent !== undefined ? { parent: o.root.parent } : {}),
               ...(o.root.at !== undefined ? { at: o.root.at } : {}),
               ...(o.root.bark !== undefined ? { bark: o.root.bark } : {}),
+              ...(o.root.bends !== undefined ? { bends: o.root.bends.map((k) => ({ ...k })) } : {}),
             },
           }
         : {}),

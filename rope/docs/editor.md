@@ -244,7 +244,7 @@ The route is shaped on the canvas rather than in the panel: an amber dashed poly
 Body fields read and write the body's **collision lead** - the object its record is written from -
 and `syncBodyProps` pushes the values to the rest.
 Every body that can be stood on carries a **surface friction** (0 = ice, 1 = rubber; see below).
-Everything that is a piece of stuff rather than a region of space - every kind but the three areas, hook-only bodies included - also carries a **material** and a **thickness**, the shape's depth through the z axis the 2D view cannot show, with a live **mass** readout under them (`area × thickness × density`).
+Everything that is a piece of stuff rather than a region of space - every kind but the three areas, hook-only bodies included - also carries a **material**, a **density** and a **thickness**, the shape's depth through the z axis the 2D view cannot show, with a live **mass** readout under them (`area × thickness × density`). The material is a PRESET density: picking one sets the **density** field (kg/m³) to its value, and typing a density makes the material **custom** (the picker shows so as it is typed; `custom` is never picked, there being no density for it to set).
 The readout is what makes either number authorable: an author is choosing a weight, and a density and a depth only become one once the shape's own size is in it. See [**Mass and materials**](physics-foundations.md#mass-and-materials); both are per shape, so a selection spanning a compound body edits its pieces individually.
 A
 `force` area carries a signed **force** magnitude aimed by its own `rot°` - so the rotate

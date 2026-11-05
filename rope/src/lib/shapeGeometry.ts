@@ -90,6 +90,16 @@ export function materialDensity(name: string | undefined): number {
   return (MATERIALS as Record<string, number | undefined>)[name] ?? DEFAULT_DENSITY;
 }
 
+// The material a piece is when its density was typed rather than picked
+// (`CollisionObjectData.density`): a material is only ever a preset density.
+export const CUSTOM_MATERIAL = "custom";
+
+// A piece's density, kg/m³: its own where it states one (a positive finite
+// number; `CollisionObjectData.density`), and otherwise its material's.
+export function pieceDensity(material: string | undefined, density: number | undefined): number {
+  return typeof density === "number" && Number.isFinite(density) && density > 0 ? density : materialDensity(material);
+}
+
 // The two volume rules, exposed for callers that hold a radius or an area rather
 // than a shape (the editor's group centre of mass), so there is one statement of
 // each in the project.

@@ -282,35 +282,72 @@ export function rootGeometry(
   return geometry;
 }
 
-// Round the authoring polyline in arc-length space. A compact kernel cannot
-// overshoot as an interpolating spline can. Endpoints stay fixed, and the
-// support is proportional to girth: thick wood bends broadly, fine tips curl.
-// This is dressing only; neither collision nor the editor's handles are edited.
+// The tightest the centreline may bend, as a radius in the wood's own radii:
+// a ring swept round a bend tighter than the wood is thick folds through
+// itself on the inside, and the wood is up to half as thick again as its
+// taper where the swell, the flutes and the relief all stand out together.
+const LEAST_BEND = 1.5;
+
+// Rounding a corner is diffusion, a sample at a time, so a sharp one takes a
+// few hundred passes to open out to `LEAST_BEND`; this only bounds the loop.
+const ROUNDING_PASSES = 4000;
+
+// The authored curve, ROUNDED only where it bends tighter than the wood can
+// follow (`roundTightBends`), and gently meandering within its girth. The
+// collision is the authored curve itself, which a ring threads on, so the
+// wood keeps to it everywhere else: it was rounded with a girth-wide moving
+// average once, six radii either side, which carried every stretch near a
+// corner up to three quarters of a half-width off the collision (2026-11-01,
+// Tris: "the rendered root geometry doesn't align well with the collision
+// geometry"). Endpoints stay fixed. This is dressing only; neither collision
+// nor the editor's handles are edited.
 export function rootCenterline(shape: RootShape, seed: number): Vec2[] {
   const raw = resample(flattenPath(pathNodesOf(shape.verts), RING_STEP / 2), RING_STEP);
   const count = raw.length;
   if (count < 3) return raw;
-  const wander = valueNoise1(seed * 9.3 + 4.7);
-  return raw.map((p, i) => {
+  const radiusAt = (i: number): number => {
     const f = i / (count - 1);
-    const radius = (shape.width + ((shape.tip ?? shape.width) - shape.width) * f) / 2;
-    const support = Math.max(2, radius * 6 / RING_STEP);
-    const reach = Math.ceil(support);
-    let x = 0, y = 0, weight = 0;
-    for (let j = -reach; j <= reach; j++) {
-      const w = Math.pow(Math.max(0, 1 - Math.abs(j) / (support + 1)), 2);
-      // Linear extension keeps the first and last tangent from pulling inward.
-      const k = i + j;
-      const q = k < 0 ? raw[0]!.add(raw[1]!.sub(raw[0]!).mul(k))
-        : k >= count ? raw[count - 1]!.add(raw[count - 1]!.sub(raw[count - 2]!).mul(k - count + 1)) : raw[k]!;
-      x += q.x * w; y += q.y * w; weight += w;
-    }
+    return (shape.width + ((shape.tip ?? shape.width) - shape.width) * f) / 2;
+  };
+  const line = roundTightBends(raw, (i) => radiusAt(i) * LEAST_BEND);
+  const wander = valueNoise1(seed * 9.3 + 4.7);
+  return line.map((p, i) => {
+    const radius = radiusAt(i);
+    // The meander's window, a girth either side: it fades in over one from
+    // each end and reads its direction across one.
+    const reach = Math.ceil(Math.max(2, radius * 6 / RING_STEP));
     const fade = Math.min(1, i / reach, (count - 1 - i) / reach);
-    const tangent = raw[Math.min(count - 1, i + reach)]!.sub(raw[Math.max(0, i - reach)]!).normalized();
+    const tangent = line[Math.min(count - 1, i + reach)]!.sub(line[Math.max(0, i - reach)]!).normalized();
     const wiggle = radius * 0.48 * (wander(i * RING_STEP / 0.24) * 2 - 1) * fade;
-    return new Vec2(p.x + (x / weight - p.x) * fade - tangent.y * wiggle,
-      p.y + (y / weight - p.y) * fade + tangent.x * wiggle);
+    return new Vec2(p.x - tangent.y * wiggle, p.y + tangent.x * wiggle);
   });
+}
+
+// A polyline with every bend tighter than `least(i)` opened out to it, and
+// every other sample where it was: each pass moves the samples that bend too
+// tightly halfway to their neighbours' midpoint, which spreads a corner into
+// an arc no wider than it needs to be. Endpoints stay fixed.
+function roundTightBends(points: readonly Vec2[], least: (i: number) => number): Vec2[] {
+  let line = points.slice();
+  for (let pass = 0; pass < ROUNDING_PASSES; pass++) {
+    let moved = false;
+    const next = line.slice();
+    for (let i = 1; i + 1 < line.length; i++) {
+      const a = line[i - 1]!;
+      const b = line[i]!;
+      const c = line[i + 1]!;
+      // Twice the triangle's area against the product of its sides: the
+      // circle through the three samples, without a square root to divide by.
+      const cross = Math.abs((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x));
+      const r = least(i);
+      if (cross * 2 * r <= a.distanceTo(b) * b.distanceTo(c) * c.distanceTo(a)) continue;
+      next[i] = b.lerp(a.add(c).mul(0.5), 0.5);
+      moved = true;
+    }
+    line = next;
+    if (!moved) break;
+  }
+  return line;
 }
 
 // A polyline resampled every `step` of arc length, both ends kept.

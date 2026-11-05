@@ -94,6 +94,61 @@ export function strokeCurve(nodes: readonly PathNode[], width: number, tip?: num
   }
 }
 
+// The stroke of a curve CUT at some points along it, for a root that bends
+// there (`RootBranchData.bends`): the same stroke `strokeCurve` makes, with a
+// vertex of the line standing on every cut so that no piece straddles one -
+// the pieces before a cut and after it go to two bodies hinged there. `cuts`
+// are fractions of the line's arc length, and `cutAt` is the line vertex each
+// one landed on, in the same order.
+//
+// The cuts go in AFTER the fold merge, into the line every curve without cuts
+// is built from, so a curve that bends nowhere is stroked exactly as before.
+// A cut inside a segment is a collinear vertex: its mitre is square to the
+// line, its two quads are the halves of the one they replace, and the taper
+// (linear in arc length) reads the same at every point. One within a
+// millimetre of an existing vertex takes that vertex; and should a split ever
+// fold the stroke, the cut takes the nearer of the segment's two ends instead.
+export function strokeCurveCut(
+  nodes: readonly PathNode[],
+  width: number,
+  tip: number | undefined,
+  cuts: readonly number[],
+): Stroke & { cutAt: number[] } {
+  const base = strokeCurve(nodes, width, tip);
+  if (cuts.length === 0) return { ...base, cutAt: [] };
+  const line = base.line.map((p) => p.clone());
+  const along = (pts: readonly Vec2[]): number[] => {
+    const out = [0];
+    for (let i = 1; i < pts.length; i++) out.push(out[i - 1]! + pts[i]!.distanceTo(pts[i - 1]!));
+    return out;
+  };
+  const total = along(line)[line.length - 1] ?? 0;
+  const stroked = (pts: readonly Vec2[]): Stroke =>
+    tip === undefined ? strokeLine(pts, Math.max(width, 0) * 0.5) : taperedStroke(pts, width, tip);
+  for (const f of [...cuts].sort((a, b) => a - b)) {
+    const s = Math.min(Math.max(f, 0), 1) * total;
+    const cum = along(line);
+    let i = 0;
+    while (i < line.length - 2 && cum[i + 1]! < s) i++;
+    if (Math.abs(cum[i]! - s) <= CUT_SNAP || Math.abs(cum[i + 1]! - s) <= CUT_SNAP) continue;
+    const t = (s - cum[i]!) / (cum[i + 1]! - cum[i]!);
+    const trial = [...line.slice(0, i + 1), line[i]!.lerp(line[i + 1]!, t), ...line.slice(i + 1)];
+    if (foldedSegment(stroked(trial)) < 0) line.splice(0, line.length, ...trial);
+  }
+  const stroke = stroked(line);
+  const cum = along(line);
+  const cutAt = cuts.map((f) => {
+    const s = Math.min(Math.max(f, 0), 1) * total;
+    let best = 0;
+    for (let i = 1; i < cum.length; i++) if (Math.abs(cum[i]! - s) < Math.abs(cum[best]! - s)) best = i;
+    return best;
+  });
+  return { ...stroke, cutAt };
+}
+
+// How near an existing vertex of the line a cut takes that vertex, metres.
+const CUT_SNAP = 1e-3;
+
 function taperedStroke(line: readonly Vec2[], width: number, tip: number): Stroke {
   const widths = taperedHalfWidths(line, width, tip);
   return strokeLine(line, widths[0] ?? 0, widths);

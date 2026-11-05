@@ -249,6 +249,8 @@ import {
   lightSwarms,
 } from "./render";
 import {
+  CUSTOM_MATERIAL,
+  DEFAULT_DENSITY,
   DEFAULT_MATERIAL,
   DEFAULT_THICKNESS,
   MATERIALS,
@@ -348,6 +350,8 @@ import {
   writeViewSetting,
 } from "./prefs";
 import { editorViewHref, MAX_ZOOM, MIN_ZOOM, readEditorView, type EditorView } from "./viewUrl";
+import { ROOT_BEND_DAMPING, ROOT_BEND_FREQ } from "../level/levelFormat";
+import type { EdRoot } from "./model";
 
 type Tool =
   | "select"
@@ -1924,7 +1928,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         ...body,
         objects: b.objects.map((o) => {
           if (o.type === "collision" && o.shape.kind !== "belt") {
-            const { shape: _s, x: _ox, y: _oy, rot: _or, thickness: _t, material: _m, debug: _d, ...kept } = o;
+            const { shape: _s, x: _ox, y: _oy, rot: _or, thickness: _t, material: _m, density: _dn, debug: _d, ...kept } = o;
             // Bark switches only rebuild this body's root visuals, not the
             // entire river scene and its lighting/shader warmup.
             if (o.root) {
@@ -3774,6 +3778,72 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         grow.appendChild(gval);
         g.appendChild(grow);
         readouts.push({ el: gval, get: grows });
+        // Where the branch BENDS (`RootBranchData.bends`): each a place along
+        // it with a return spring, the stretch past it a body of its own
+        // hinged there. One branch at a time, since bends are the branch's own.
+        if (items.length === 1) {
+          const item = items[0]!;
+          const bendsOf = (b: EdItem): NonNullable<EdRoot["bends"]> => b.root?.bends ?? [];
+          const setBends = (b: EdItem, bends: NonNullable<EdRoot["bends"]>): void => {
+            if (!b.root) return;
+            const { bends: _old, ...rest } = b.root;
+            b.root = bends.length > 0 ? { ...rest, bends } : rest;
+          };
+          const editBend = (k: number, patch: Partial<NonNullable<EdRoot["bends"]>[number]>) => (b: EdItem) => {
+            const bends = bendsOf(b).map((x, j) => (j === k ? { ...x, ...patch } : x));
+            setBends(b, bends);
+          };
+          bendsOf(item).forEach((_bend, k) => {
+            num(
+              `bend ${k + 1} at %`,
+              (b) => Math.round((bendsOf(b)[k]?.at ?? 0) * 1000) / 10,
+              (b, v) => editBend(k, { at: Math.min(1, Math.max(0, v / 100)) })(b),
+              1,
+            );
+            num(
+              `bend ${k + 1} Hz`,
+              (b) => bendsOf(b)[k]?.freq ?? ROOT_BEND_FREQ,
+              (b, v) => editBend(k, { freq: Math.max(0, v) })(b),
+              0.1,
+            );
+            num(
+              `bend ${k + 1} damp`,
+              (b) => bendsOf(b)[k]?.damping ?? ROOT_BEND_DAMPING,
+              (b, v) => editBend(k, { damping: Math.min(1, Math.max(0, v)) })(b),
+              0.05,
+            );
+            const row = fieldRow("");
+            row.appendChild(
+              button(`remove bend ${k + 1}`, () => {
+                beginAction();
+                setBends(item, bendsOf(item).filter((_, j) => j !== k));
+                markDirty();
+                rebuildInspector();
+              }),
+            );
+            g.appendChild(row);
+          });
+          const addRow = fieldRow("");
+          addRow.appendChild(
+            button("+ bend", () => {
+              beginAction();
+              // Halfway along the longest stretch the branch has unbent.
+              const ats = [0, ...bendsOf(item).map((x) => x.at).sort((a, b) => a - b), 1];
+              let at = 0.5;
+              let widest = -1;
+              for (let j = 0; j + 1 < ats.length; j++) {
+                if (ats[j + 1]! - ats[j]! > widest) {
+                  widest = ats[j + 1]! - ats[j]!;
+                  at = (ats[j]! + ats[j + 1]!) / 2;
+                }
+              }
+              setBends(item, [...bendsOf(item), { at }]);
+              markDirty();
+              rebuildInspector();
+            }),
+          );
+          g.appendChild(addRow);
+        }
       }
       // What the curve BUILDS as, for the reason a polygon reports its piece
       // count: the bar is stroked into the convex pieces that tile it at load
@@ -5009,39 +5079,53 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       o.textContent = "mixed";
       ms.appendChild(o);
     }
-    for (const name of MATERIAL_NAMES) {
+    for (const name of [...MATERIAL_NAMES, CUSTOM_MATERIAL]) {
       const o = document.createElement("option");
       o.value = name;
       // The name alone: the picker is as wide as the panel and no wider, and
-      // "aluminium · 2700 kg/m³" clips in it. The density it stands for gets a
-      // readout row of its own below, which cannot overflow.
+      // "aluminium · 2700 kg/m³" clips in it. The density it stands for is the
+      // field below it.
       o.textContent = name;
+      // `custom` is what a TYPED density makes the material, never a pick:
+      // there is no density for it to set.
+      if (name === CUSTOM_MATERIAL) o.disabled = true;
       ms.appendChild(o);
     }
     ms.value = sharedMaterial ?? "";
+    // A material is a PRESET density (`CollisionObjectData.density`): picking
+    // one sets the density to its own.
     ms.addEventListener("change", () => {
-      if (!ms.value) return;
+      if (!ms.value || ms.value === CUSTOM_MATERIAL) return;
       beginAction();
-      for (const b of items) b.material = ms.value as MaterialName;
+      const name = ms.value as MaterialName;
+      for (const b of items) {
+        b.material = name;
+        b.density = MATERIALS[name];
+      }
       markDirty();
       refreshFields();
     });
     mw.appendChild(ms);
     g.appendChild(mw);
 
-    // What the picked material is worth, since the picker itself has room for
-    // the name alone. Re-derived from the items rather than from the value the
-    // panel was built with, so picking a material updates it without a rebuild.
-    const density = () => {
-      const first = items[0]!.material;
-      return items.every((b) => b.material === first) ? `${MATERIALS[first]} kg/m³` : "mixed";
-    };
-    const drow = fieldRow("density");
-    const dval = document.createElement("span");
-    dval.textContent = density();
-    drow.appendChild(dval);
-    g.appendChild(drow);
-    readouts.push({ el: dval, get: density });
+    // ...and the density itself is editable: typing one makes the material
+    // `custom`, the picker showing so as it is typed rather than once the
+    // panel is next rebuilt.
+    numField(
+      g,
+      "density",
+      () => shared(items, (b) => b.density),
+      (v) => {
+        if (!(v > 0)) return;
+        for (const b of items) {
+          b.density = v;
+          b.material = CUSTOM_MATERIAL;
+        }
+        ms.value = CUSTOM_MATERIAL;
+      },
+      50,
+      items.length > 1,
+    );
 
     // Authored in pixels like every other length, since it is one: the z
     // dimension of the same prism the width and height are the other two of.
@@ -5068,7 +5152,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     g.appendChild(row);
     readouts.push({ el: val, get: mass });
     describe(g,
-      "Thickness is the shape's depth through z, the dimension the 2D view cannot show: mass is area × thickness × density. Both are per shape, so a compound body's pieces each carry their own. Only a rigid body has a mass, but the material also fixes where a body's centre of mass — the point it rotates about — sits.");
+      "A material is a preset density: picking one sets the density (kg/m³), and typing a density makes the material custom. Thickness is the shape's depth through z, the dimension the 2D view cannot show: mass is area × thickness × density. All three are per shape, so a compound body's pieces each carry their own. Only a rigid body has a mass, but the density also fixes where a body's centre of mass — the point it rotates about — sits.");
   }
 
   // Debug geometry (see `CollisionObjectData.debug`): whether the shape is drawn
@@ -8390,6 +8474,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // A fresh shape is 20 cm of oak, which is what every body authored before
       // materials existed is made of.
       material: DEFAULT_MATERIAL,
+      density: DEFAULT_DENSITY,
       thickness: DEFAULT_THICKNESS,
       // Seen in 3D by its debug geometry while the level has no Blender scene
       // to be seen by - a block-out is drawn in what it is blocked out of - and
@@ -8678,7 +8763,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     item.debug = NO_DEBUG();
     if (parent && isRootItem(parent) && draft.from) {
       item.bodyId = parent.bodyId;
-      item.root = { parent: parent.id, at: draft.from.at, bark: parent.root?.bark };
+      item.root = {
+        parent: parent.id,
+        at: draft.from.at,
+        bark: parent.root?.bark,
+      };
     } else {
       item.bodyId = newBodyId();
       item.kind = "static";

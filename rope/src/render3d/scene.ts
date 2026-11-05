@@ -473,6 +473,7 @@ export class Scene3D {
       slot.root.add(visual.root);
       if (built.body) slot.bodies.set(built.body, visual);
       else slot.standing.push(visual);
+      for (const segment of built.segments ?? []) slot.segments.set(segment, visual);
       slot.authored.push(visual);
       // What the level's Blender scene may dress: the body by name, its root
       // and the pose that root has at rest. A pick on the dressing answers with
@@ -1037,12 +1038,13 @@ export class Scene3D {
   // How far off the gameplay plane `body` is drawn (`BodyVisual.depth`): the
   // plane for anything this scene does not draw as a body (a vine link, the
   // avatar), which is drawn on it.
-  private readonly depthOf = (body: CollisionObject2D): number => this.current?.bodies.get(body)?.depth ?? 0;
+  private readonly depthOf = (body: CollisionObject2D): number =>
+    (this.current?.bodies.get(body) ?? this.current?.segments.get(body))?.depth ?? 0;
 
   private ensureBody(slot: LevelScene, body: CollisionObject2D): BodyVisual | null {
     const existing = slot.bodies.get(body);
     if (existing) return existing;
-    if (drawnElsewhere(body) || !body.hasShape()) return null;
+    if (drawnElsewhere(body) || slot.segments.has(body) || !body.hasShape()) return null;
     const visual = new BodyVisual(body, null, slot.lights);
     slot.bodies.set(body, visual);
     slot.root.add(visual.root);

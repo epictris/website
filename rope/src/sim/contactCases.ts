@@ -55,7 +55,7 @@ import {
 import { CHAIN_TOLERANCE, SceneChain, buildSceneChains, syncSceneChains } from "../level/chains";
 // The editor's own round trip, for the spawn flag it would otherwise delete
 // (see `caseSpawnHang`).
-import { modelFromDisk, modelToDisk } from "../editor/model";
+import { modelFromDisk, modelToDisk, shapeMass } from "../editor/model";
 import { Rope } from "../classes/rope";
 import { RopeAttachment, RopeContact, RopeWrap } from "../lib/ropeContact";
 import { RopeGeneration } from "../lib/ropeGeneration";
@@ -4949,8 +4949,60 @@ function caseMaterials(): ContactResult {
   const sumOk = near(piece!.mass, mWood + mLead);
   const centreOk = near(piece!.globalPosition.x, wantCentre);
 
-  const passed = plainOk && stoneOk && thickOk && wheelOk && sumOk && centreOk;
+  // A DENSITY typed rather than a material picked (`CollisionObjectData.density`,
+  // material `custom`): the piece weighs at it. And a stated density is what
+  // the piece weighs even beside a material name - the material is only ever
+  // a preset of one - while a density that is no density (zero, negative) is
+  // the material's own.
+  const slab = (objectExtra: Record<string, unknown>) => ({
+    kind: "rigid",
+    x: 0,
+    y: 0,
+    rot: 0,
+    objects: [{ type: "collision", shape: { kind: "rect", w: 2, h: 0.4 }, ...objectExtra }],
+  });
+  const world2 = new World();
+  const data2 = scaleLevelData(
+    { player: { x: 0, y: 0, radius: 0.08 }, bodies: [slab({ material: "custom", density: 5000 }), slab({ material: "stone", density: 1234 }), slab({ material: "stone", density: -1 })] } as unknown as RawLevelData,
+    1,
+  );
+  const [custom, stated, nonsense] = buildLevelBodies(world2, data2, () => {}).bodies.map((b) => b.body) as RigidBody2D[];
+  const customOk = near(custom!.mass, 2 * 0.4 * SLAB * 5000);
+  const statedOk = near(stated!.mass, 2 * 0.4 * SLAB * 1234);
+  const nonsenseOk = near(nonsense!.mass, wantStone);
+
+  // ...and the editor: a material is the preset, the density the value. A
+  // typed density round-trips as `custom` with its number, a preset as its
+  // name alone (no density restated, so every older level writes as it did),
+  // and the editor's mass readout is the built body's.
+  const disk = {
+    player: { x: 0, y: 0, radius: 8 },
+    // On disk lengths are pixels: the same 2 m x 0.4 m slab.
+    bodies: [{ material: "custom", density: 5000 }, { material: "stone" }].map((extra) => ({
+      kind: "rigid",
+      x: 0,
+      y: 0,
+      rot: 0,
+      objects: [{ type: "collision", shape: { kind: "rect", w: 200, h: 40 }, ...extra }],
+    })),
+  } as unknown as RawLevelData;
+  const model = modelFromDisk(disk);
+  const [edCustom, edStone] = model.items.filter((i) => i.object === "collision");
+  const back = modelToDisk(model).bodies.map((b) => (b.objects[0] as { material?: string; density?: number }));
+  const editorOk =
+    edCustom?.material === "custom" && edCustom.density === 5000 &&
+    edStone?.material === "stone" && edStone.density === MATERIALS.stone &&
+    back[0]?.material === "custom" && back[0]?.density === 5000 &&
+    back[1]?.material === "stone" && back[1]?.density === undefined;
+  const massOk = edCustom !== undefined && near(shapeMass(edCustom), 2 * 0.4 * SLAB * 5000);
+
+  const passed = plainOk && stoneOk && thickOk && wheelOk && sumOk && centreOk && customOk && statedOk && nonsenseOk && editorOk && massOk;
   return ok("materials — an authored shape weighs its area × thickness × density, per shape", passed, [
+    `${customOk ? "ok  " : "BAD "} custom at 5000 kg/m³: ${custom!.mass.toFixed(4)} kg (want ${(2 * 0.4 * SLAB * 5000).toFixed(4)})`,
+    `${statedOk ? "ok  " : "BAD "} a stated density beside a material weighs at the density: ${stated!.mass.toFixed(4)} kg (want ${(2 * 0.4 * SLAB * 1234).toFixed(4)})`,
+    `${nonsenseOk ? "ok  " : "BAD "} a density of -1 is the material's: ${nonsense!.mass.toFixed(4)} kg (want ${wantStone.toFixed(4)})`,
+    `${editorOk ? "ok  " : "BAD "} the editor holds custom/5000 and stone/${MATERIALS.stone}, and writes custom with its density and stone without one (${JSON.stringify(back)})`,
+    `${massOk ? "ok  " : "BAD "} the editor's mass readout at the typed density: ${edCustom ? shapeMass(edCustom).toFixed(4) : "-"} kg (want ${(2 * 0.4 * SLAB * 5000).toFixed(4)})`,
     `${plainOk ? "ok  " : "BAD "} no material named: ${plain!.mass.toFixed(4)} kg (want ${wantPlain.toFixed(4)}, 20cm of oak)`,
     `${stoneOk ? "ok  " : "BAD "} same slab in stone: ${stone!.mass.toFixed(4)} kg (want ${wantStone.toFixed(4)})`,
     `${thickOk ? "ok  " : "BAD "} twice as thick: ${thick!.mass.toFixed(4)} kg (want ${(2 * wantStone).toFixed(4)})`,

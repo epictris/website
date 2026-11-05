@@ -40,6 +40,11 @@ export class LevelScene {
   // frame, because bodies come and go at runtime (the hook is destroyed and
   // rebuilt on every throw, the sandbox spawns rocks).
   readonly bodies = new Map<CollisionObject2D, BodyVisual>();
+  // A bending root's SEGMENTS (`BuiltBody.segments`), each keyed to the visual
+  // of the root it is part of: the root's visual draws them, skinned
+  // (`rootSkin.ts`), so the reconciliation must not build a second visual
+  // for one, and a cuff on one is drawn at the root's depth.
+  readonly segments = new Map<CollisionObject2D, BodyVisual>();
   // Authored bodies that built no engine object - decoration, a light with no
   // fitting. They are not in the world, so they can neither be found by the
   // reconciliation nor go stale: they live exactly as long as the level does.

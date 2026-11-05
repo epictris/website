@@ -48,7 +48,8 @@ import {
   isRouteKeyed,
   routePolyline,
 } from "./model";
-import { cubicAt } from "../lib/path";
+import { cubicAt, pointAtArcLength, tangentAtArcLength } from "../lib/path";
+import { isRootItem, rootIndex, rootWidthAt } from "./rootEditing";
 import { curveLine, strokeCurve } from "../lib/stroke";
 import { pathNodesOf } from "../lib/path";
 import {
@@ -120,6 +121,8 @@ const BREAK_EDGE = "#c96a6a";
 const BREAK_DASH = [3 * PX, 5 * PX];
 const BREAK_HALO = 3;
 export const SELECT = "#f4a460";
+// A root branch's bend (`RootBranchData.bends`), where its branch is not selected.
+const BEND_MARK = "#cbccc6";
 const MARQUEE_FILL = "rgba(244,164,96,0.10)";
 const CAMERA_LOCK = "#e6c07b"; // camera-lock guides: warm, distinct from the region violet
 export const HANDLE = "#f4a460";
@@ -2652,6 +2655,33 @@ export function drawEditor(
       ctx.beginPath();
       ctx.arc(v[0]!.x, v[0]!.y, worldLine * 6, 0, Math.PI * 2);
       ctx.stroke();
+    }
+  }
+
+  // Every BEND of a root branch (`RootBranchData.bends`): a bar across the
+  // branch at the hinge, a little wider than the branch is there, and a dot
+  // on its centreline - the place the stretch past it turns about.
+  if (visibleLayers.has("scene")) {
+    for (const item of model.items) {
+      if (!isRootItem(item) || !item.root?.bends?.length) continue;
+      const ix = rootIndex(item);
+      if (ix.total <= 0) continue;
+      ctx.strokeStyle = selectedIds.has(item.id) ? SELECT : BEND_MARK;
+      ctx.fillStyle = ctx.strokeStyle;
+      ctx.lineWidth = worldLine * 2;
+      for (const bend of item.root.bends) {
+        const at = Math.min(1, Math.max(0, bend.at));
+        const p = pointAtArcLength(ix, at * ix.total);
+        const t = tangentAtArcLength(ix, at * ix.total);
+        const n = new Vec2(-t.y, t.x).mul(rootWidthAt(item, at) * 0.5 + worldLine * 4);
+        ctx.beginPath();
+        ctx.moveTo(p.x - n.x, p.y - n.y);
+        ctx.lineTo(p.x + n.x, p.y + n.y);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, worldLine * 3, 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
   }
 

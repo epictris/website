@@ -3,6 +3,7 @@
 // same inputs from the same level reproduces it exactly. Digests let a replay
 // assert bit-for-bit reproduction; invariants catch physical nonsense.
 
+import { RootBendUnit } from "../level/rootBends";
 import { Vec2 } from "../engine/vec2";
 import {
   AnimatableBody2D,
@@ -1611,6 +1612,11 @@ export function mechanicalEnergy(world: World): number {
       total += 0.5 * body.inertia * s.omega * s.omega * d * d;
     }
   }
+  // A bending root's hinges store energy in their springs as a pivot's
+  // torsion spring does (`RootHinge.energy`).
+  for (const unit of world.ties.units) {
+    if (unit instanceof RootBendUnit) for (const h of unit.hinges) total += h.energy;
+  }
   return total;
 }
 
@@ -2137,6 +2143,7 @@ export function checkBallInvariants(level: BallLevel): Violation[] {
   }
   out.push(...checkSceneChains(frame, level.sceneChains));
   out.push(...checkTieChains(frame, level.tieChains));
+  out.push(...checkRootBends(frame, level.world));
   out.push(...checkSleepers(frame, level.world));
   return out;
 }
@@ -2240,6 +2247,30 @@ function chainBodies(chain: SceneChain): string {
   for (const node of chain.rope.path()) ids.push(node.contact.obj.buildIndex);
   return ids.join("-");
 }
+
+// A bending root's hinges (`RootHinge`, level/rootBends.ts): the two anchors
+// of a hinge further apart at the end of a frame than `ROOT_HINGE_OPEN_LIMIT`
+// is the joint having come apart - the soft point constraint holds them to a
+// couple of millimetres under the ball's whole weight, so a centimetre is the
+// solver having let go, not its softness.
+export function checkRootBends(frame: number, world: World): Violation[] {
+  const out: Violation[] = [];
+  for (const unit of world.ties.units) {
+    if (!(unit instanceof RootBendUnit)) continue;
+    unit.hinges.forEach((h, j) => {
+      if (h.over > ROOT_HINGE_OPEN_LIMIT) {
+        out.push({
+          frame,
+          kind: "root-hinge-open",
+          detail: `hinge ${j} (body#${h.a.buildIndex}-body#${h.b.buildIndex}) ${(h.over * 1000).toFixed(1)}mm apart`,
+        });
+      }
+    });
+  }
+  return out;
+}
+
+const ROOT_HINGE_OPEN_LIMIT = 0.01;
 
 // The same three questions of the tied chains (`engine/ties.ts`), per
 // segment: a segment over `SCENE_CHAIN_OVER_LIMIT` at the end of a frame, a

@@ -904,7 +904,9 @@ export class BallChainRow implements IslandRow, IslandUnit {
     this.ring = null;
     this.beadRate = 0;
     const clamp = this.rope.end;
-    if (!(clamp instanceof RopeClamp)) return 0;
+    // A ring on a root is held where it threaded on (`RootRail`): it has no
+    // cone to set up, and the row holds it rigidly.
+    if (!(clamp instanceof RopeClamp) || clamp.curve.root !== null) return 0;
     const t = clamp.tangent();
     const nodes = this.rope.path();
     const prevNode = nodes[nodes.length - 2];
@@ -1828,6 +1830,21 @@ export function settleTiesAtBuild(world: World, units: readonly IslandUnit[]): v
       if (changed) break;
     }
   }
+  settleUnitsAtBuild(world, clear);
+}
+
+// A BENDING root's hinges (`RootBendUnit`), settled at build with no
+// clearance rule: a root's segments meet only the static scenery
+// (`RigidBody2D.hitsStatics`), whose contacts the island solves itself, so
+// nothing beside them - the ball's spawn, a sprung root body - is a body the
+// settle would be solving them against without stepping. Asked of the general
+// rule, a branch next to the spawn was left unsettled and fell 38° under its
+// own weight in the first half second of play (`session-79f`).
+export function settleRootBendsAtBuild(world: World, units: readonly IslandUnit[]): void {
+  settleUnitsAtBuild(world, new Set(units));
+}
+
+function settleUnitsAtBuild(world: World, clear: Set<IslandUnit>): void {
   if (clear.size === 0) return;
   const dt = 1 / 60;
   const bodies: RigidBody2D[] = [];

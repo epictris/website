@@ -58,6 +58,25 @@ export interface RailCurve {
   // `pieceAt[i]` is the mount index of the piece covering centreline segment
   // `i`, so where the cuff stands answers which shape its contact names.
   readonly pieceAt: readonly number[];
+  // A ROOT's branch rather than an authored rail (docs/roots.md), or null.
+  readonly root: RootRail | null;
+}
+
+// What a root's branch adds to the curve the ring rides on it.
+//
+// The ring stands SQUARE on a branch, on its centreline, its axis along the
+// branch, and is HELD where it threads on: it never slides (Tris, 2026-11-01).
+// It threads on clear of every FORK: `blocked` holds the stretches of the
+// centreline where the ring would stand inside ANOTHER branch of the same root
+// (the one growing out of this branch there, or the one this branch grows out
+// of), in increasing arc length, and a hook that strikes inside one threads on
+// at its nearer edge. A constant of the body, measured once at build.
+export interface RootRail {
+  readonly blocked: readonly { readonly min: number; readonly max: number }[];
+  // The branch's half-width at each vertex of the curve (`verts`), its taper:
+  // how thick the branch is where the ring stands, which the drawn cuff opens
+  // its jaws round when it is thicker than the bore (`RopeClamp.cuffOpening`).
+  readonly halfWidths: readonly number[];
 }
 
 // A CONVEYOR BELT's loop: a band of `thickness` wrapped round the OUTSIDE of N

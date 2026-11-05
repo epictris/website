@@ -51,6 +51,7 @@ import {
   buildSceneChains,
   buildTieChains,
   settleTiesAtBuild,
+  settleRootBendsAtBuild,
   RopeRow,
   type SceneChain,
 } from "./chains";
@@ -538,6 +539,9 @@ export class BallLevel {
     // the ball's island hauled a lantern the sweep then put back after it, and
     // a ball on the lantern's bail ended every frame with its chain over its
     // length (`session-77f`).
+    // A bending root's segments sag onto their springs before play, as a
+    // sprung root spawns at its settled angle (`RootBendUnit`, docs/roots.md).
+    settleRootBendsAtBuild(this.world, built.rootUnits);
     this.sceneChains = buildSceneChains(data, built, this.world);
     // Before the vines, so a vine hung from a lantern is built from where the
     // lantern comes to rest.

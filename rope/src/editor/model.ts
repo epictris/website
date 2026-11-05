@@ -47,9 +47,12 @@ import { World } from "../engine/world";
 import { wrapAngle } from "../engine/mathf";
 import { MASK_ALL, RigidBody2D } from "../engine/body";
 import {
+  CUSTOM_MATERIAL,
+  DEFAULT_DENSITY,
   DEFAULT_MATERIAL,
   DEFAULT_THICKNESS,
   MATERIALS,
+  pieceDensity,
   prismMass,
   type MaterialName,
 } from "../lib/shapeGeometry";
@@ -242,6 +245,9 @@ export interface EdRoot {
   readonly parent: number | null;
   readonly at: number;
   bark?: RootBranchData["bark"];
+  // Where the branch bends (`RootBranchData.bends`), fractions of its arc
+  // length with their springs.
+  bends?: RootBranchData["bends"];
 }
 
 // What a curve drawn in the editor starts out as: a bar the manacle's own ring
@@ -469,9 +475,24 @@ export function debugData(d: EdDebug): DebugDrawData | undefined {
 // A root branch's on-disk form (`RootBranchData`), its parent's item id turned
 // into the index that item is written at among `run`, the body's members in
 // the order `toLevelData` writes them.
+// A bend's own fields and nothing else, read from disk: a bend that still
+// carries a retired one (`limit`, a stop removed 2026-11-01) loses it with
+// the next save.
+function bendFields(k: NonNullable<RootBranchData["bends"]>[number]): NonNullable<RootBranchData["bends"]>[number] {
+  return {
+    at: k.at,
+    ...(k.freq !== undefined ? { freq: k.freq } : {}),
+    ...(k.damping !== undefined ? { damping: k.damping } : {}),
+  };
+}
+
 function rootData(r: EdRoot, run: readonly EdItem[]): RootBranchData {
   const parent = r.parent === null ? -1 : run.findIndex((m) => m.id === r.parent);
-  return { ...(parent < 0 ? {} : { parent, at: r.at }), ...(r.bark ? { bark: r.bark } : {}) };
+  return {
+    ...(parent < 0 ? {} : { parent, at: r.at }),
+    ...(r.bark ? { bark: r.bark } : {}),
+    ...(r.bends !== undefined && r.bends.length > 0 ? { bends: r.bends.map((k) => ({ ...k })) } : {}),
+  };
 }
 
 export interface EdItem {
@@ -574,7 +595,12 @@ export interface EdItem {
   // SHAPE, so they are the one geometry property `syncBodyProps` leaves alone:
   // a compound body's mass, centre of mass and inertia are sums over its
   // pieces, and a piece brings its own material to them.
-  material: MaterialName;
+  //
+  // The material is a PRESET density: `density` is what the piece weighs per
+  // cubic metre, picking a material sets it to that material's, and typing a
+  // density makes the material `custom` (`CollisionObjectData.density`).
+  material: MaterialName | typeof CUSTOM_MATERIAL;
+  density: number; // kg/m³
   thickness: number; // metres
   // Whether this piece is drawn in 3D, and how (see `CollisionObjectData.debug`).
   // Per SHAPE like the two above. Replaced whole on an edit rather than
@@ -1230,6 +1256,17 @@ function materialName(name: string | undefined): MaterialName {
   return name !== undefined && name in MATERIALS ? (name as MaterialName) : DEFAULT_MATERIAL;
 }
 
+// A piece's material and density as the editor holds them: `custom` and its
+// own number wherever the file states a density, whatever material it also
+// names (a stated density is what the piece weighs, `pieceDensity`), and the
+// named preset at its own density otherwise.
+function materialOf(o: { material?: string; density?: number }): Pick<EdItem, "material" | "density"> {
+  const density = pieceDensity(o.material, o.density);
+  if (o.density !== undefined && density === o.density) return { material: CUSTOM_MATERIAL, density };
+  const material = materialName(o.material);
+  return { material, density: MATERIALS[material] };
+}
+
 // Metre-space LevelData → editor model.
 function fromLevelData(data: LevelData): EdModel {
   // ONE ITEM PER SCENE OBJECT, and the objects of one body share a group id.
@@ -1381,7 +1418,7 @@ function fromLevelData(data: LevelData): EdModel {
           mask: maskFromPasses(o.passes),
           rail: o.rail === true,
           viscosity: typeof o.viscosity === "number" && o.viscosity > 0 ? o.viscosity : 0,
-          material: materialName(o.material),
+          ...materialOf(o),
           thickness: o.thickness ?? DEFAULT_THICKNESS,
           debug: edDebug(o.debug),
           // Filled in below, once every object of the body has its item: a
@@ -1405,6 +1442,7 @@ function fromLevelData(data: LevelData): EdModel {
           rail: false,
           viscosity: 0,
           material: DEFAULT_MATERIAL,
+          density: DEFAULT_DENSITY,
           thickness: DEFAULT_THICKNESS,
           debug: NO_DEBUG(),
           root: null,
@@ -1429,6 +1467,7 @@ function fromLevelData(data: LevelData): EdModel {
         parent: parent && parent !== item ? parent.id : null,
         at: o.root.at ?? 0,
         ...(o.root.bark ? { bark: o.root.bark } : {}),
+        ...(o.root.bends !== undefined && o.root.bends.length > 0 ? { bends: o.root.bends.map(bendFields) } : {}),
       };
     });
   }
@@ -1455,6 +1494,7 @@ function fromLevelData(data: LevelData): EdModel {
     rail: false,
     viscosity: 0,
     material: DEFAULT_MATERIAL,
+    density: DEFAULT_DENSITY,
     thickness: DEFAULT_THICKNESS,
     debug: NO_DEBUG(),
     root: null,
@@ -1555,6 +1595,7 @@ function fromLevelData(data: LevelData): EdModel {
     rail: false,
     viscosity: 0,
     material: DEFAULT_MATERIAL,
+    density: DEFAULT_DENSITY,
     thickness: DEFAULT_THICKNESS,
     debug: NO_DEBUG(),
     root: null,
@@ -1665,6 +1706,7 @@ function lightItem(
     rail: false,
     viscosity: 0,
     material: DEFAULT_MATERIAL,
+    density: DEFAULT_DENSITY,
     thickness: DEFAULT_THICKNESS,
     debug: NO_DEBUG(),
     root: null,
@@ -1747,6 +1789,7 @@ function lightItem(
     rail: false,
     viscosity: 0,
     material: DEFAULT_MATERIAL,
+    density: DEFAULT_DENSITY,
     thickness: DEFAULT_THICKNESS,
     debug: NO_DEBUG(),
     root: null,
@@ -2239,6 +2282,8 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
         // a thing is made of is a fact about the shape rather than about the
         // model drawn over it.
         ...(i.material !== DEFAULT_MATERIAL ? { material: i.material } : {}),
+        // A typed density, and only then: a preset's is its material's.
+        ...(i.material === CUSTOM_MATERIAL ? { density: i.density } : {}),
         ...(i.thickness !== DEFAULT_THICKNESS ? { thickness: i.thickness } : {}),
         // Written only for a piece that is on or configured (`debugData`). A
         // belt draws its own band and has no debug geometry to configure.
@@ -3485,7 +3530,7 @@ function beltPieces(s: EdBelt): { area: number; at: Vec2 }[] {
 // polygon a slab of `SCENE_DEPTH`, so the two stopped being proportional the
 // moment masses became physical.
 export function shapeMass(item: EdItem): number {
-  return prismMass(shapeArea(item), item.thickness, MATERIALS[item.material]);
+  return prismMass(shapeArea(item), item.thickness, item.density);
 }
 
 // Where one item's own mass sits, in world metres - the point the piece (or
@@ -4323,6 +4368,7 @@ export function emptyModel(): EdModel {
         rail: false,
         viscosity: 0,
         material: DEFAULT_MATERIAL,
+    density: DEFAULT_DENSITY,
         thickness: DEFAULT_THICKNESS,
         // A fresh level names no scene, so its ground is seen by its debug
         // geometry, as every piece a new level is blocked out in is.

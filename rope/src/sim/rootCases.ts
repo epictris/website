@@ -27,7 +27,7 @@ import { LAYER_HOOK, MASK_ALL, MASK_SOLID, RigidBody2D, type PhysicsBody2D } fro
 import { circleShape, isConvexLoop, polyArea, polyShapeCentred } from "../engine/shapes";
 import { World } from "../engine/world";
 import { buildLevelBodies } from "../level/buildBodies";
-import { DEFAULT_ROOT_COLOR, isCollisionObject, scaleLevelData, type LevelBodyData, type RawLevelData } from "../level/levelFormat";
+import { DEFAULT_ROOT_COLOR, isCollisionObject, scaleLevelData, type LevelBodyData, type RawLevelData, type RootBendData } from "../level/levelFormat";
 import { rootProblems } from "../level/roots";
 import { curveLine, strokeCurve } from "../lib/stroke";
 import { cubicAt, pathNodesOf } from "../lib/path";
@@ -57,7 +57,10 @@ import { readFileSync } from "node:fs";
 import * as THREE from "three";
 import type { CollisionObject2D } from "../engine/body";
 import { BallLevel } from "../level/ballLevel";
-import { ScriptedInput, scriptSpec, type PlaytestScript } from "./playtest";
+import { runScript, ScriptedInput, scriptSpec, type PlaytestScript } from "./playtest";
+import { RopeClamp } from "../lib/rail";
+import { ROOT_CREASE_EASE, skinRootGeometry } from "../render3d/rootSkin";
+import { MANACLE_BORE, MANACLE_RADIUS } from "../lib/manacle";
 import { BodyVisual } from "../render3d/bodyVisuals";
 import { AVATAR_CHAIN_MESH, ChainLayer } from "../render3d/chainVisual";
 import { Scene3D } from "../render3d/scene";
@@ -352,6 +355,19 @@ function caseFormat(): RootResult {
     .filter(isCollisionObject).filter(o => o.root).every(o => o.root!.bark === "broad"));
   const problems = rootProblems(metres.bodies[0]!);
   c.check(`the lint finds every branch on its junction (${problems.join("; ") || "none"})`, problems.length === 0);
+  // A bend's retired `limit` (a stop, removed 2026-11-01) does not survive
+  // the editor: loaded and saved, the bend keeps its own fields alone.
+  const retired = structuredClone(disk);
+  const branchOnDisk = retired.bodies[0]!.objects[branchAt]!;
+  if (isCollisionObject(branchOnDisk) && branchOnDisk.root) {
+    branchOnDisk.root.bends = [{ at: 0.4, freq: 2, damping: 0.1, limit: 50 } as RootBendData];
+  }
+  const resaved = modelToDisk(modelFromDisk(retired)).bodies[0]!.objects[branchAt];
+  const bend = resaved && isCollisionObject(resaved) ? resaved.root?.bends?.[0] : undefined;
+  c.check(
+    `a bend carrying a retired limit saves back without it (${JSON.stringify(bend)})`,
+    bend !== undefined && !("limit" in bend) && bend.at === 0.4 && bend.freq === 2 && bend.damping === 0.1,
+  );
   return { name: "root-format - the taper and the tree survive the scale and the editor", passed: c.passed(), details: c.details };
 }
 
@@ -367,7 +383,14 @@ function caseHookOnly(): RootResult {
   const body = built.bodies[0]!.body as PhysicsBody2D;
   c.check(`the root builds one hook-only body (passable ${body.passable}, solid ${body.isSolid})`, body.passable && !body.isSolid);
   c.check("...that is not in the wrap list, so no chain bends round it", !built.wrapBodies.includes(body));
-  c.check("...and that no tapered piece is a rail", body.getShapes().every((s) => s.rail === null));
+  // Every piece rides as its branch's curve, so the hook threads a ring onto
+  // the branch it strikes (docs/roots.md, "The ring on a root").
+  const curves = new Set(body.getShapes().map((s) => s.rail));
+  const branches = model.items.filter(isRootItem).length;
+  c.check(
+    `...whose every piece names its branch's root curve (${curves.size} curves for ${branches} branches)`,
+    body.getShapes().every((s) => s.rail !== null && s.rail.root !== null) && curves.size === branches,
+  );
   // A ray down through the trunk's middle: the solid mask misses it, the
   // grapple hook's (`MASK_ALL`, see docs/hook-surfaces.md) finds it.
   const mid = rootPointAt(model.items.find(isRootItem)!, 0.3);
@@ -639,6 +662,255 @@ function caseBark(): RootResult {
 }
 
 // ---------------------------------------------------------------------------
+// ring - the cuff threads onto a branch as a ring, square to it, and is held
+// where it threads on; a strike inside a fork or a wall threads on at its edge.
+// ---------------------------------------------------------------------------
+
+// A trunk at 49° - steep enough that a hanging ball would ride a ring that
+// could slip all the way down it - base low on the right, a branch growing
+// up-right out of its middle; and optionally a static rock the base is buried
+// in. The ball hangs in the air under it and throws at it.
+function ringScript(
+  spawn: { x: number; y: number },
+  aim: { x: number; y: number },
+  branch: boolean,
+  rock: boolean,
+): PlaytestScript {
+  const objects: unknown[] = [
+    { type: "collision", shape: { kind: "curve", width: 12, tip: 3, verts: [{ x: 150, y: 60 }, { x: -150, y: -280 }] }, root: {} },
+  ];
+  if (branch) {
+    objects.push({
+      type: "collision",
+      shape: { kind: "curve", width: 7, tip: 2, verts: [{ x: 0, y: -110 }, { x: 60, y: -200 }] },
+      root: { parent: 0, at: 0.5 },
+    });
+  }
+  const bodies: unknown[] = [{ kind: "static", passable: true, x: 0, y: -150, rot: 0, color: "#7a5a40", objects }];
+  if (rock) {
+    bodies.push({ kind: "static", x: 200, y: -60, rot: 0, color: "#555555", objects: [{ type: "collision", shape: { kind: "rect", w: 160, h: 120 } }] });
+  }
+  return {
+    level: "root-ring",
+    controller: "ball",
+    frames: 420,
+    spawn,
+    holds: [{ action: "deploy", from: 5, to: 420 }],
+    aim: [{ from: 1, to: 10, x: aim.x, y: aim.y, relative: true }],
+    data: { player: { x: 0, y: 0, radius: 8 }, bodies },
+  } as unknown as PlaytestScript;
+}
+
+// Run a ring script: the ring it threaded, where along the branch it threaded
+// on, how far it ever stood from there, whether it ever stood inside one of
+// its stops, and whether it stood square on the centreline every frame.
+function runRing(script: PlaytestScript): {
+  clamp: RopeClamp | null;
+  first: number;
+  moved: number;
+  inside: boolean;
+  square: boolean;
+} {
+  const level = new BallLevel(scriptSpec(script).data);
+  const input = new ScriptedInput(script);
+  let clamp: RopeClamp | null = null;
+  let first = NaN;
+  let moved = 0;
+  let inside = false;
+  let square = true;
+  for (let f = 1; f <= (script.frames ?? 240); f++) {
+    level.physicsProcess(input.sample(f, level.ball.globalPosition), DT);
+    const end = level.ball.chain?.end;
+    if (!(end instanceof RopeClamp)) continue;
+    if (clamp === null) {
+      clamp = end;
+      first = end.s;
+    }
+    if (end !== clamp) moved = Infinity;
+    else moved = Math.max(moved, Math.abs(end.s - first));
+    if (end.stops.some((r) => end.s > r.min + 1e-3 && end.s < r.max - 1e-3)) inside = true;
+    // The cuff's axis along the branch, its centre on the centreline.
+    const t = end.tangent()!;
+    const axis = end.cuffAxisLocal().rotated(end.body.globalRotation);
+    const onLine = end.contact.globalPosition.distanceTo(end.worldAt(end.s));
+    if (Math.abs(axis.dot(t) - 1) > 1e-9 || onLine > 1e-9) square = false;
+  }
+  return { clamp, first, moved, inside, square };
+}
+
+function caseRing(): RootResult {
+  const c = claims();
+  // Hung under the 49° trunk: the ring threads on square and stays put.
+  const trunk = runRing(ringScript({ x: -0.8, y: -2.3 }, { x: 0, y: -1 }, true, false));
+  c.check(`the hook threads a ring onto the trunk (${trunk.clamp?.curve.root ? "root curve" : "none"})`, trunk.clamp?.curve.root != null);
+  c.check("...square to it and on its centreline, every frame", trunk.square);
+  c.check(`...and held where it threaded on, under a hang 49° off square, for 7 s (moved ${fmt(trunk.moved * 1000, 3)} mm)`, trunk.moved === 0);
+  // Struck where the branch leaves the trunk: threads on at the fork's edge.
+  const fork = runRing(ringScript({ x: -0.06, y: -1.5 }, { x: 0, y: -1 }, true, false));
+  const stop = fork.clamp?.stops.find((r) => Math.abs(fork.first - r.min) < 1e-9 || Math.abs(fork.first - r.max) < 1e-9);
+  c.check(
+    `struck at the fork, it threads on at the fork's edge (${fmt(fork.first, 3)} m, fork ${stop ? `${fmt(stop.min, 3)}..${fmt(stop.max, 3)}` : "none"})`,
+    stop !== undefined && !fork.inside && fork.moved === 0,
+  );
+  // Struck beside the rock the base is buried in: threads on at the rock's face.
+  const wall = runRing(ringScript({ x: 1.12, y: -0.4 }, { x: 0, y: -1 }, false, true));
+  const face = wall.clamp?.stops[0];
+  c.check(
+    `struck beside the rock, it threads on clear of it (${fmt(wall.first, 3)} m, rock ${face ? `${fmt(face.min, 3)}..${fmt(face.max, 3)}` : "none"})`,
+    face !== undefined && face.min === 0 && wall.first >= face.max - 1e-9 && !wall.inside && wall.moved === 0,
+  );
+  return { name: "root-ring - the cuff threads onto a branch as a square ring, held where it threads on", passed: c.passed(), details: c.details };
+}
+
+// ---------------------------------------------------------------------------
+// collide - a moving root is stopped by the static scenery, and not by the
+// rock it is rooted in.
+// ---------------------------------------------------------------------------
+
+// A root sprung at the face of a rock wall, its first node buried in the rock,
+// sticking out over a ledge; the ball hangs from it and bends it down.
+function sagScript(ledge: boolean): PlaytestScript {
+  const bodies: unknown[] = [
+    { kind: "static", x: -100, y: -200, rot: 0, color: "#555555", objects: [{ type: "collision", shape: { kind: "rect", w: 200, h: 200 } }] },
+    {
+      kind: "rigid", passable: true, pivot: true, pivotX: 0, pivotY: 0, pivotFreq: 1.5, pivotDamping: 0.1,
+      x: 0, y: -200, rot: 0, color: "#7a5a40",
+      objects: [{ type: "collision", shape: { kind: "curve", width: 10, tip: 3, verts: [{ x: -50, y: 0 }, { x: 250, y: 0 }] }, root: {} }],
+    },
+  ];
+  if (ledge) bodies.push({ kind: "static", x: 200, y: -120, rot: 0, color: "#555555", objects: [{ type: "collision", shape: { kind: "rect", w: 120, h: 40 } }] });
+  return {
+    level: "root-sag",
+    controller: "ball",
+    frames: 240,
+    spawn: { x: 0.9, y: -0.9 },
+    holds: [{ action: "deploy", from: 5, to: 240 }],
+    aim: [{ from: 1, to: 10, x: 0, y: -1, relative: true }],
+    data: { player: { x: 0, y: 0, radius: 8 }, bodies },
+  } as unknown as PlaytestScript;
+}
+
+function runSag(script: PlaytestScript): { root: RigidBody2D; maxRot: number; worst: number; hooked: boolean } {
+  const level = new BallLevel(scriptSpec(script).data);
+  const root = level.visualSource.built.bodies[1]!.body as RigidBody2D;
+  const input = new ScriptedInput(script);
+  let maxRot = 0;
+  let worst = 0;
+  let hooked = false;
+  for (let f = 1; f <= (script.frames ?? 240); f++) {
+    level.physicsProcess(input.sample(f, level.ball.globalPosition), DT);
+    maxRot = Math.max(maxRot, root.globalRotation);
+    if (level.ball.chain?.end instanceof RopeClamp) hooked = true;
+    for (const k of level.world.frameContacts) if (k.a === root || k.b === root) worst = Math.max(worst, k.depth);
+  }
+  return { root, maxRot: (maxRot * 180) / Math.PI, worst, hooked };
+}
+
+function caseCollide(): RootResult {
+  const c = claims();
+  const on = runSag(sagScript(true));
+  c.check(`a sprung root is stopped by statics (hitsStatics ${on.root.hitsStatics}) and stays hook-only (passable ${on.root.passable})`, on.root.hitsStatics && on.root.passable);
+  c.check(`...excepting the one rock its first node is buried in (${on.root.exceptions.size})`, on.root.exceptions.size === 1);
+  c.check("the ball hooks it and hangs from it", on.hooked);
+  const off = runSag(sagScript(false));
+  c.check(
+    `bent down by the ball, it comes to rest on the ledge below it (${fmt(on.maxRot, 1)}° against ${fmt(off.maxRot, 1)}° with no ledge)`,
+    on.maxRot < off.maxRot - 4,
+  );
+  c.check(`...and never more than a centimetre into it (worst ${fmt(on.worst * 1000, 1)} mm)`, on.worst < 0.01);
+  return { name: "root-collide - a moving root rests on the scenery, rooted in its rock", passed: c.passed(), details: c.details };
+}
+
+// ---------------------------------------------------------------------------
+// bend - one root that bends at two places along its trunk: built as its own
+// body and two hinged segments, settled at build, held together under the
+// ball, stopped by a ledge, and the ring runs on across a bend.
+// ---------------------------------------------------------------------------
+
+// A static trunk out of a rock wall bending at 40% and 70%, optionally with a
+// ledge under its tip; the ball hangs in the air below it and throws up.
+function bendScript(spawn: { x: number; y: number }, ledge: boolean, frames = 360): PlaytestScript {
+  const bodies: unknown[] = [
+    { kind: "static", x: -100, y: -200, rot: 0, color: "#555555", objects: [{ type: "collision", shape: { kind: "rect", w: 200, h: 200 } }] },
+    {
+      kind: "static", passable: true, x: 0, y: -200, rot: 0, color: "#7a5a40",
+      objects: [{
+        type: "collision",
+        shape: { kind: "curve", width: 12, tip: 4, verts: [{ x: -50, y: 0 }, { x: 300, y: 0 }] },
+        root: {
+          bends: [{ at: 0.4, freq: 1.2, damping: 0.3 }, { at: 0.7, freq: 1.2, damping: 0.3 }],
+        },
+      }],
+    },
+  ];
+  if (ledge) bodies.push({ kind: "static", x: 330, y: -110, rot: 0, color: "#555555", objects: [{ type: "collision", shape: { kind: "rect", w: 120, h: 40 } }] });
+  return {
+    level: "root-bend",
+    controller: "ball",
+    frames,
+    spawn,
+    holds: [{ action: "deploy", from: 5, to: frames }],
+    aim: [{ from: 1, to: 10, x: 0, y: -1, relative: true }],
+    data: { player: { x: 0, y: 0, radius: 8 }, bodies },
+  } as unknown as PlaytestScript;
+}
+
+function caseBend(): RootResult {
+  const c = claims();
+  // The build: the root's own body, a segment per stretch past a bend, a
+  // hinge per bend standing exactly where it was cut.
+  const script = bendScript({ x: 2.4, y: -1.0 }, true);
+  const world = new World();
+  const built = buildLevelBodies(world, scaleLevelData(script.data as unknown as RawLevelData, PX), () => {});
+  const root = built.bodies[1]!;
+  const segments = root.segments ?? [];
+  const unit = built.rootUnits[0];
+  c.check(
+    `a root bending twice builds its own body and 2 segments with 2 hinges (${segments.length} segments, ${unit?.hinges.length ?? 0} hinges)`,
+    segments.length === 2 && unit?.hinges.length === 2 && world.ties.units.includes(unit!),
+  );
+  c.check(
+    `...each segment hook-only and stopped by statics (${segments.map((s) => `${s.passable}/${s.hitsStatics}`).join(", ")})`,
+    segments.every((s) => s.passable && s.hitsStatics),
+  );
+  c.check(
+    `...each hinge's two anchors on one point as built (${unit?.hinges.map((h) => fmt(h.anchorA().distanceTo(h.anchorB()) * 1e6, 2)).join(", ")} um)`,
+    unit !== undefined && unit.hinges.every((h) => h.anchorA().distanceTo(h.anchorB()) < 1e-9),
+  );
+  const bare = buildLevelBodies(new World(), scaleLevelData(ringScript({ x: 0, y: 0 }, { x: 0, y: -1 }, false, false).data as unknown as RawLevelData, PX), () => {});
+  c.check("a root that bends nowhere builds no segments", bare.bodies[0]!.segments === undefined && bare.rootUnits.length === 0);
+  // Played: settled at build, hung from, resting on the ledge, every
+  // invariant of the real runner clean (the hinge's included).
+  const played = runScript(script);
+  const kinds = [...new Set(played.violations.map((v) => v.kind))];
+  c.check(`hung from and resting on its ledge, the run is clean (${played.violations.length} violations${kinds.length ? `: ${kinds.join(", ")}` : ""})`, played.violations.length === 0);
+  const sag = (ledge: boolean): { bends: number[]; worst: number; on: boolean } => {
+    const level = new BallLevel(scriptSpec(bendScript({ x: 2.4, y: -1.0 }, ledge)).data);
+    const input = new ScriptedInput(bendScript({ x: 2.4, y: -1.0 }, ledge));
+    const segs = level.visualSource.built.bodies[1]!.segments!;
+    const u = level.visualSource.built.rootUnits[0]!;
+    let worst = 0;
+    let on = false;
+    for (let f = 1; f <= 360; f++) {
+      level.physicsProcess(input.sample(f, level.ball.globalPosition), DT);
+      for (const k of level.world.frameContacts) if (segs.includes(k.a as RigidBody2D)) worst = Math.max(worst, k.depth);
+      const end = level.ball.chain?.end;
+      if (end instanceof RopeClamp && segs.includes(end.body as RigidBody2D)) on = true;
+    }
+    return { bends: u.hinges.map((h) => (h.bend * 180) / Math.PI), worst, on };
+  };
+  const onLedge = sag(true);
+  const inAir = sag(false);
+  c.check(`the ball's ring is on a segment (${onLedge.on})`, onLedge.on);
+  c.check(
+    `the tip rests on the ledge: the outer bend turns back against it (${onLedge.bends.map((b) => fmt(b, 1)).join(", ")}°) where in the air it droops (${inAir.bends.map((b) => fmt(b, 1)).join(", ")}°)`,
+    onLedge.bends[1]! < inAir.bends[1]! - 10,
+  );
+  c.check(`...never more than a centimetre into it (worst ${fmt(onLedge.worst * 1000, 1)} mm)`, onLedge.worst < 0.01);
+  return { name: "root-bend - a root bending in two places: segments, hinges, settled, the ledge", passed: c.passed(), details: c.details };
+}
+
+// ---------------------------------------------------------------------------
 // cuff - bitten into a root, the cuff is drawn in the root, and the chain runs
 // from there to the ball on the plane.
 // ---------------------------------------------------------------------------
@@ -710,9 +982,318 @@ function withCanvasStub<T>(make: () => T): T {
   }
 }
 
+// ---------------------------------------------------------------------------
+// bend-draw - a bending root's debug geometry turns with its segments: every
+// stretch on a segment is drawn where that segment's motion puts it, the
+// root's own stretch where it always was.
+// ---------------------------------------------------------------------------
+function caseBendDraw(): RootResult {
+  const c = claims();
+  const script = bendScript({ x: 2.4, y: -1.0 }, false);
+  const built = buildLevelBodies(new World(), scaleLevelData(script.data as unknown as RawLevelData, PX), () => {});
+  const root = built.bodies[1]!;
+  const segments = root.segments!;
+  // Debug forced on, roots not grown: the geometry checked is the collision's.
+  const visual = new BodyVisual(root.body, root, undefined, true, false);
+  // Turn the segments by hand, the way a bend would.
+  const rest = segments.map((s) => ({ pos: s.globalPosition, rot: s.globalRotation }));
+  segments.forEach((s, j) => {
+    s.globalRotation = s.globalRotation + 0.3 * (j + 1);
+    s.globalPosition = s.globalPosition.add(new Vec2(0.05 * (j + 1), 0.2 * (j + 1)));
+  });
+  visual.sync(1);
+  visual.root.updateMatrixWorld(true);
+  const meshes: THREE.Mesh[] = [];
+  visual.root.traverse((o) => {
+    if (o instanceof THREE.Mesh) meshes.push(o);
+  });
+  const skinned = meshes.filter((m): m is THREE.SkinnedMesh => m instanceof THREE.SkinnedMesh);
+  c.check(
+    `the trunk's debug geometry is drawn stretch by stretch, the two on segments skinned (${meshes.length} meshes, ${skinned.length} skinned)`,
+    meshes.length === 3 && skinned.length === 2,
+  );
+  // Every vertex of a skinned stretch, through its bone, against the
+  // segment's own motion applied to where the vertex was authored.
+  let worst = 0;
+  for (const mesh of skinned) {
+    mesh.skeleton.update();
+    const bone = (mesh.geometry.getAttribute("skinIndex") as THREE.BufferAttribute).getX(0) - 1;
+    const from = rest[bone]!;
+    const now = segments[bone]!;
+    const position = mesh.geometry.getAttribute("position");
+    const v = new THREE.Vector3();
+    for (let i = 0; i < position.count; i++) {
+      v.fromBufferAttribute(position, i);
+      const authored = new Vec2(v.x, -v.y);
+      const want = authored.sub(from.pos).rotated(-from.rot).rotated(now.globalRotation).add(now.globalPosition);
+      mesh.applyBoneTransform(i, v);
+      v.applyMatrix4(mesh.matrixWorld);
+      worst = Math.max(worst, Math.hypot(v.x - want.x, -v.y - want.y));
+    }
+  }
+  c.check(`...each vertex where its segment's motion puts it (worst ${fmt(worst * 1e6, 2)} um)`, skinned.length === 2 && worst < 1e-6);
+  visual.dispose();
+  return { name: "root-bend-draw - a bending root's debug geometry turns with its segments", passed: c.passed(), details: c.details };
+}
+
+// ---------------------------------------------------------------------------
+// bend-crease - a branch bending near where it grows keeps its side of the
+// fused crease with its parent: the surface the two share does not tear. And
+// only the crease: hinged where it grows, the branch turns whole from a
+// half-width clear of it.
+// ---------------------------------------------------------------------------
+async function caseBendCrease(): Promise<RootResult> {
+  const name = "root-bend-crease - a branch bending at its crease does not tear it, and turns whole past it";
+  const c = claims();
+  // Bending 5% along - inside the crease, as `session-82f`'s did - and at
+  // the fork itself, as `session-52f`'s did.
+  for (const bendAt of [0.05, 0]) {
+    if (!(await bendCrease(c, bendAt))) return { name, passed: false, details: c.details };
+  }
+  return { name, passed: c.passed(), details: c.details };
+}
+
+async function bendCrease(c: ReturnType<typeof claims>, bendAt: number): Promise<boolean> {
+  const tag = bendAt === 0 ? "hinged at the fork" : `bending ${fmt(bendAt * 100, 0)}% along`;
+  // A trunk and a branch out of its middle.
+  const data = {
+    player: { x: 0, y: 0, radius: 8 },
+    bodies: [{
+      kind: "static", passable: true, x: 0, y: -200, rot: 0, color: "#7a5a40",
+      objects: [
+        { type: "collision", shape: { kind: "curve", width: 10, tip: 10, verts: [{ x: -150, y: 0 }, { x: 150, y: 0 }] }, root: {} },
+        { type: "collision", shape: { kind: "curve", width: 10, tip: 2.5, verts: [{ x: 0, y: 0 }, { x: 60, y: 60 }, { x: 100, y: 80 }] }, root: { parent: 0, at: 0.5, bends: [{ at: bendAt, freq: 3 }] } },
+      ],
+    }],
+  } as unknown as RawLevelData;
+  const built = buildLevelBodies(new World(), scaleLevelData(data, PX), () => {});
+  const root = built.bodies[0]!;
+  const seg = root.segments?.[0];
+  const hinge = built.rootUnits[0]?.hinges[0];
+  if (!seg || !hinge) {
+    c.check(`${tag}: the branch builds a segment and a hinge`, false);
+    return false;
+  }
+  const visual = new BodyVisual(root.body, root, undefined, false, true);
+  for (let i = 0; i < 50 && visual.root.getObjectsByProperty("type", "SkinnedMesh").length === 0; i++) await new Promise((r) => setTimeout(r, 20));
+  // Bend it 35° about the hinge, by hand.
+  const turn = 0.6;
+  const at = hinge.anchorA();
+  seg.globalPosition = at.add(seg.globalPosition.sub(at).rotated(turn));
+  seg.globalRotation = seg.globalRotation + turn;
+  visual.sync(1);
+  visual.root.updateMatrixWorld(true);
+  let trunk: THREE.Mesh | null = null;
+  let branch: THREE.SkinnedMesh | null = null;
+  visual.root.traverse((o) => {
+    if (o instanceof THREE.SkinnedMesh) branch = o;
+    else if (o instanceof THREE.Mesh) trunk = o;
+  });
+  c.check(`${tag}: the trunk is drawn rigid and the branch skinned (${trunk !== null}, ${branch !== null})`, trunk !== null && branch !== null);
+  if (!trunk || !branch) return false;
+  const t = trunk as THREE.Mesh;
+  const b = branch as THREE.SkinnedMesh;
+  b.skeleton.update();
+  // The crease: the branch's vertices standing where one of the trunk's does.
+  const key = (v: THREE.Vector3): string => `${v.x.toFixed(5)},${v.y.toFixed(5)},${v.z.toFixed(5)}`;
+  const shared = new Set<string>();
+  const tp = t.geometry.getAttribute("position");
+  const v = new THREE.Vector3();
+  for (let i = 0; i < tp.count; i++) shared.add(key(v.fromBufferAttribute(tp, i).applyMatrix4(t.matrixWorld)));
+  const bp = b.geometry.getAttribute("position");
+  const seam: THREE.Vector3[] = [];
+  for (let i = 0; i < bp.count; i++) {
+    const rest = v.fromBufferAttribute(bp, i).clone().applyMatrix4(b.matrixWorld);
+    if (shared.has(key(rest))) seam.push(rest);
+  }
+  // Where the segment's own motion puts a vertex: its bone (segment 0's is
+  // bone 1, the root's own body's bone 0), wholly.
+  const segmentBone = b.skeleton.bones[1]!;
+  const clear = 0.05 * ROOT_CREASE_EASE; // the branch's base half-width, times the ease
+  let worst = 0;
+  let moved = 0;
+  let past = 0;
+  let worstPast = 0;
+  for (let i = 0; i < bp.count; i++) {
+    v.fromBufferAttribute(bp, i);
+    const rest = v.clone().applyMatrix4(b.matrixWorld);
+    const rigid = v.clone().applyMatrix4(segmentBone.matrixWorld).applyMatrix4(b.matrixWorld);
+    b.applyBoneTransform(i, v);
+    v.applyMatrix4(b.matrixWorld);
+    moved = Math.max(moved, v.distanceTo(rest));
+    const fromSeam = Math.min(...seam.map((q) => q.distanceTo(rest)));
+    if (fromSeam === 0) worst = Math.max(worst, v.distanceTo(rest));
+    else if (bendAt === 0 && fromSeam >= clear) {
+      past++;
+      worstPast = Math.max(worstPast, v.distanceTo(rigid));
+    }
+  }
+  c.check(`${tag}: the branch bends (its tip moved ${fmt(moved * 100, 1)} cm)`, moved > 0.1);
+  c.check(`...and every one of the ${seam.length} vertices it shares with the trunk at the crease stays put (worst ${fmt(worst * 1000, 4)} mm)`, seam.length > 0 && worst < 1e-6);
+  // Held to the trunk any further out, a stub of branch stands straight out
+  // of it past the hinge while the rest swings (`session-52f`, Tris: "it's
+  // like there's a 'knub' that never gets bent").
+  if (bendAt === 0) c.check(`...and the ${past} ${ROOT_CREASE_EASE} base half-widths or more clear of the crease turn whole with the segment (worst ${fmt(worstPast * 1000, 4)} mm off)`, past > 0 && worstPast < 1e-6);
+  visual.dispose();
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// cuff-open - a cuff on a root thicker than its bore opens its jaws until
+// their tips rest on the bark; on one the bore takes, it stays shut.
+// ---------------------------------------------------------------------------
+function cuffOnRoot(width: number, tip: number): { level: BallLevel; clamp: RopeClamp | null } {
+  const script = {
+    level: "root-cuff-open",
+    controller: "ball",
+    frames: 60,
+    spawn: { x: 0, y: -0.9 },
+    holds: [{ action: "deploy", from: 5, to: 60 }],
+    aim: [{ from: 1, to: 10, x: 0, y: -1, relative: true }],
+    data: {
+      player: { x: 0, y: 0, radius: 8 },
+      bodies: [{
+        kind: "static", passable: true, x: 0, y: -200, rot: 0, color: "#7a5a40",
+        objects: [{ type: "collision", shape: { kind: "curve", width, tip, verts: [{ x: -150, y: 0 }, { x: 150, y: 0 }] }, root: {} }],
+      }],
+    },
+  } as unknown as PlaytestScript;
+  const level = new BallLevel(scriptSpec(script).data);
+  const input = new ScriptedInput(script);
+  for (let f = 1; f <= 60; f++) level.physicsProcess(input.sample(f, level.ball.globalPosition), DT);
+  const end = level.ball.chain?.end;
+  return { level, clamp: end instanceof RopeClamp ? end : null };
+}
+
+function caseCuffOpen(): RootResult {
+  const c = claims();
+  const thick = cuffOnRoot(16, 12);
+  const thin = cuffOnRoot(5, 4);
+  const open = thick.clamp?.cuffOpening();
+  const shut = thin.clamp?.cuffOpening();
+  c.check(`on a 5 cm root the bore takes, the cuff is shut and centred (${fmt(shut?.angle ?? NaN, 3)} rad, ${fmt((shut?.offset ?? NaN) * 1000, 1)} mm)`, shut?.angle === 0 && shut.offset === 0);
+  const rho = thick.clamp?.girth() ?? 0;
+  c.check(`on a ${fmt(rho * 200, 1)} cm root it opens (${fmt(((open?.angle ?? 0) * 180) / Math.PI, 1)}° each jaw)`, open !== undefined && open.angle > 0);
+  // In the cuff's own frame: the hinge pin at R, the root's centre at
+  // R - (offset + R) along the axis, a jaw tip (R + b from the pin) turned
+  // by the angle about the pin - on the root's surface.
+  const R = MANACLE_RADIUS;
+  const b = MANACLE_BORE / 2;
+  const centre = -(open?.offset ?? 0);
+  const a = open?.angle ?? 0;
+  const tip = new Vec2(R - (R + b) * Math.cos(a), (R + b) * Math.sin(a));
+  c.check(
+    `...the jaw tips resting on its surface (${fmt(tip.distanceTo(new Vec2(centre, 0)) * 1000, 3)} mm from its centre, radius ${fmt(rho * 1000, 3)} mm)`,
+    Math.abs(tip.distanceTo(new Vec2(centre, 0)) - rho) < 1e-9,
+  );
+  c.check(
+    `...and the bore at the hinge resting on the bark (${fmt((b - centre) * 1000, 3)} mm from its centre)`,
+    Math.abs(b - centre - rho) < 1e-9,
+  );
+  const pose = thick.level.ball.manaclePose(1);
+  const thinPose = thin.level.ball.manaclePose(1);
+  c.check(
+    `the drawn cuff carries it: open ${fmt(pose?.open ?? NaN, 3)} rad, standing ${fmt((pose && thick.clamp ? pose.centre.distanceTo(thick.clamp.contact.globalPosition) : NaN) * 1000, 1)} mm out; shut on the thin root (${fmt(thinPose?.open ?? NaN, 3)})`,
+    pose !== null && Math.abs(pose.open - a) < 1e-12 && Math.abs(pose.centre.distanceTo(thick.clamp!.contact.globalPosition) - (open?.offset ?? 0)) < 1e-9 && thinPose?.open === 0,
+  );
+  return { name: "root-cuff-open - on a root thicker than its bore the cuff opens round it", passed: c.passed(), details: c.details };
+}
+
+// ---------------------------------------------------------------------------
+// on-collision - the drawn wood keeps to the curve it collides as: through a
+// fork and round a sharp corner, its silhouette stays centred on the
+// collision's centreline but for the meander it is drawn with.
+// ---------------------------------------------------------------------------
+// How far off its collision's centreline the drawn wood may centre, in its
+// collision half-widths: the meander (`rootCenterline`) is up to 0.48 of the
+// radius, and a sharp corner is opened out to a bend the wood can follow.
+const ON_COLLISION = 0.7;
+
+function caseOnCollision(): RootResult {
+  const name = "root-on-collision - the drawn wood keeps to the curve it collides as";
+  const c = claims();
+  // Round a right-angle corner, whatever the meander's seed: the centreline
+  // opens the corner out only as far as the wood needs. (A girth-wide moving
+  // average once carried it 0.93 of a half-width off.)
+  const corner = { width: 0.1, tip: 0.1, verts: [{ x: -1, y: 0 }, { x: 0, y: 0 }, { x: 0, y: 1 }] };
+  const cornerLine = [new Vec2(-1, 0), new Vec2(0, 0), new Vec2(0, 1)];
+  let worstCorner = 0;
+  for (let seed = 0; seed < 4; seed++) {
+    for (const p of rootCenterline(corner, seed)) {
+      let best = Infinity;
+      for (let k = 0; k + 1 < cornerLine.length; k++) {
+        const a = cornerLine[k]!;
+        const ab = cornerLine[k + 1]!.sub(a);
+        best = Math.min(best, p.distanceTo(a.add(ab.mul(Math.max(0, Math.min(1, p.sub(a).dot(ab) / ab.lengthSquared()))))));
+      }
+      worstCorner = Math.max(worstCorner, best / (corner.width / 2));
+    }
+  }
+  c.check(`round a right-angle corner the centreline keeps within ${ON_COLLISION} of the half-width, seeds 0-3 (worst ${fmt(worstCorner, 2)})`, worstCorner <= ON_COLLISION);
+  // A trunk and a branch leaving it at 75°. (Swept along its parent before
+  // it turned away, as every lateral leaving at under a right angle once
+  // was, this one was drawn a whole half-width off its collision.)
+  const data = scaleLevelData({
+    player: { x: 0, y: 0, radius: 8 },
+    bodies: [{
+      kind: "static", passable: true, x: 0, y: 0, rot: 0, color: "#7a5a40",
+      objects: [
+        { type: "collision", shape: { kind: "curve", width: 10, tip: 8, verts: [{ x: -150, y: 0 }, { x: 150, y: 0 }] }, root: {} },
+        { type: "collision", shape: { kind: "curve", width: 8, tip: 3, verts: [{ x: -50, y: 0 }, { x: -24.12, y: 96.59 }] }, root: { parent: 0, at: 1 / 3 } },
+      ],
+    }],
+  } as unknown as RawLevelData, PX);
+  const body = data.bodies[0]!;
+  const meshes = buildRootMeshes(body);
+  for (const [i, geometry] of meshes) {
+    const o = body.objects[i]!;
+    if (!isCollisionObject(o) || o.shape.kind !== "curve") continue;
+    const line = curveLine(pathNodesOf(o.shape.verts), o.shape.width, o.shape.tip);
+    const cum = [0];
+    for (let k = 1; k < line.length; k++) cum.push(cum[k - 1]! + line[k]!.distanceTo(line[k - 1]!));
+    const total = cum.at(-1)!;
+    // The silhouette's extent either side of the line, per tenth of its length.
+    const lo = new Array<number>(10).fill(Infinity);
+    const hi = new Array<number>(10).fill(-Infinity);
+    const position = geometry.getAttribute("position");
+    for (let v = 0; v < position.count; v++) {
+      const p = new Vec2(position.getX(v), -position.getY(v));
+      let best = Infinity;
+      let at = 0;
+      let side = 0;
+      for (let k = 0; k + 1 < line.length; k++) {
+        const a = line[k]!;
+        const ab = line[k + 1]!.sub(a);
+        const t = Math.max(0, Math.min(1, p.sub(a).dot(ab) / ab.lengthSquared()));
+        const d = p.distanceTo(a.add(ab.mul(t)));
+        if (d < best) {
+          best = d;
+          at = cum[k]! + t * ab.length();
+          side = ab.cross(p.sub(a)) < 0 ? -1 : 1;
+        }
+      }
+      const bin = Math.min(9, Math.floor((at / total) * 10));
+      lo[bin] = Math.min(lo[bin]!, side * best);
+      hi[bin] = Math.max(hi[bin]!, side * best);
+    }
+    // Not the first and last tenths: a branch's base is buried in its parent
+    // and every tip draws down to a point.
+    let worst = 0;
+    for (let bin = 1; bin < 9; bin++) {
+      const half = (o.shape.width + ((o.shape.tip ?? o.shape.width) - o.shape.width) * ((bin + 0.5) / 10)) / 2;
+      worst = Math.max(worst, Math.abs((lo[bin]! + hi[bin]!) / 2) / half);
+    }
+    const what = o.root?.parent === undefined ? "the trunk" : "the branch, out of the fork,";
+    c.check(`${what} is drawn centred on its collision within ${ON_COLLISION} of its half-width (worst ${fmt(worst, 2)})`, worst <= ON_COLLISION);
+    geometry.dispose();
+  }
+  c.check("both pieces are drawn", meshes.size === 2);
+  return { name, passed: c.passed(), details: c.details };
+}
+
 export async function runRootCases(): Promise<RootResult[]> {
   await rootBuildReady;
-  return [caseStroke(), caseFold(), caseFormat(), caseHookOnly(), caseSpring(), caseTree(), caseLint(), caseMesh(), caseBark(), caseOrganicFork(), caseCuffDepth(), caseBarkHighlight(),
+  return [caseStroke(), caseFold(), caseFormat(), caseHookOnly(), caseSpring(), caseTree(), caseLint(), caseMesh(), caseBark(), caseOrganicFork(), caseOnCollision(), caseRing(), caseCollide(), caseBend(), caseBendDraw(), await caseBendCrease(), caseCuffOpen(), caseCuffDepth(), caseBarkHighlight(),
     caseSimplify(), caseKey(), await caseBake(), caseRestyle(), caseHidden()];
 }
 
@@ -985,6 +1566,29 @@ async function caseBake(): Promise<RootResult> {
   c.check(`bark coordinates exact (worst ${worstUv})`, worstUv < 1e-6);
   const ages = [...set.values()].every((p) => p.geometry.getAttribute("rootAge") && p.geometry.getAttribute("rootJoin"));
   c.check("the bark's own attributes arrive under the names its shader reads", ages);
+  // A bending root skins the baked mesh (`skinRootGeometry`): the copy it
+  // skins is the baked mesh where the bake draws it, quantized attributes and
+  // all. Written back into the bake's 16-bit positions, the matrix put bark
+  // up to 22 m from where it was baked (`session-79f`, Tris: "the rendered
+  // collision outline doesn't seem to match up with the actual location of
+  // the root").
+  let worstSkin = 0;
+  for (const [i, piece] of set) {
+    const object = body.objects[i];
+    if (!object || !isCollisionObject(object) || object.shape.kind !== "curve") continue;
+    const line = curveLine(pathNodesOf(object.shape.verts), object.shape.width, object.shape.tip);
+    const skinned = skinRootGeometry(piece.geometry, piece.matrix, { line, cuts: [], bodies: [-1] });
+    const from = piece.geometry.getAttribute("position");
+    const to = skinned.getAttribute("position");
+    const a = new THREE.Vector3();
+    const b = new THREE.Vector3();
+    for (let k = 0; k < from.count; k++) {
+      a.fromBufferAttribute(from, k).applyMatrix4(piece.matrix ?? new THREE.Matrix4());
+      worstSkin = Math.max(worstSkin, a.distanceTo(b.fromBufferAttribute(to, k)));
+    }
+    skinned.dispose();
+  }
+  c.check(`a skinned copy of the baked mesh stands where the bake draws it (worst ${fmt(worstSkin * 1000, 4)} mm)`, worstSkin < 1e-5);
   return { name: "root-bake - a bake read back is the build it was made from", passed: c.passed(), details: c.details };
 }
 
@@ -1050,8 +1654,12 @@ function caseOrganicFork(): RootResult {
         const length = Math.hypot(p.getX(ia) - p.getX(ib), p.getY(ia) - p.getY(ib), p.getZ(ia) - p.getZ(ib));
         // Away from the crotch, that is: since the fork became a crease
         // (2026-10-18) the two branches' grain meets in the fold, as two
-        // roots' bark does, and the join attribute marks the fold.
-        const inCrease = join.getX(ia) > 0.5 || join.getX(ib) > 0.5;
+        // roots' bark does, and the join attribute marks the fold. Since a
+        // lateral leaves at its authored angle (2026-11-01, no longer swept
+        // along its parent first) the grains meet across the fold at that
+        // angle, and the fold's shoulder reaches out to a join of 0.4: one
+        // 14 mm edge there turned 5 cm of grain.
+        const inCrease = join.getX(ia) > 0.35 || join.getX(ib) > 0.35;
         if (!inCrease && length < 0.015 && Math.abs(uv.getY(ia) - uv.getY(ib)) > 0.06) grainJumps++;
         const a = vertices[k]!, b = vertices[(k + 1) % 3]!;
         const key = a < b ? `${a}/${b}` : `${b}/${a}`;

@@ -80,12 +80,19 @@ export function fuseRootForks(inputs: Map<number, THREE.BufferGeometry>, parents
         const reach = radius * 4 + parentRadius;
         const side = direction.clone().addScaledVector(tangent, -direction.dot(tangent)).normalize();
         junctions.set(child, { parent, base: attach, side, radius });
+        // The base is brought onto the parent's axis, and nothing more. The
+        // lateral used to be SWEPT as well, its centreline pulled toward the
+        // parent's tangent over most of its length so it left at a shallower
+        // angle than drawn - which the collision does not, and a ring threads
+        // on the collision: ball.json's body 22 drew a branch 4 cm off its
+        // outline at the base (2026-11-01, Tris: "the rendered root geometry
+        // doesn't align well with the collision geometry"). The crease the
+        // smooth union leaves is the fork's whole look now.
         const total = Math.max(0.001, (rings[rings.length - 6]!.s - baseV) * 0.65);
         for (const ring of rings) {
           const s = Math.max(0, (ring.s - baseV) * 0.65);
           const fade = Math.exp(-s / reach) * Math.pow(Math.max(0, 1 - s / total), 2);
-          ring.c.addScaledVector(attach.clone().sub(oldBase), fade)
-            .addScaledVector(tangent.clone().multiplyScalar(sign).sub(direction), s * fade);
+          ring.c.addScaledVector(attach.clone().sub(oldBase), fade);
         }
         for (const seg of segments) if (seg.branch === child) {
           seg.s = parentV + (seg.s - baseV) * sign;

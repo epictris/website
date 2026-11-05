@@ -59,6 +59,7 @@ import { DEFAULT_LIGHT_Z, LightRig, type DrivenEmission, type MountedLight } fro
 import { isWaking } from "./glow";
 import { BeltRing, BeltTread } from "./beltTread";
 import { rootBarkMaterial } from "./rootMesh";
+import { RootSkeleton, skinRootGeometry, skinToBone } from "./rootSkin";
 import { acquireRootMeshes, releaseRootMeshes, type RootMeshSet } from "./rootBake";
 import { rootMeshKey } from "./rootKey";
 import { beltLoopOf } from "../render/beltTread";
@@ -296,6 +297,10 @@ export class BodyVisual {
   private rootKey = "";
   private rootMount = 0;
   private rootData: LevelBodyData | null = null;
+  // A bending root's bones and the skinned copies of its geometry, which are
+  // this visual's own rather than the cache's (`rootSkin.ts`).
+  private rootSkeleton: RootSkeleton | null = null;
+  private readonly skinned: THREE.BufferGeometry[] = [];
 
   // `body` is what moves and is null for an authored body that built nothing;
   // `built` is the authored side and is null for a body the sim spawned at
@@ -453,6 +458,13 @@ export class BodyVisual {
   // `tag` is what a raycast onto anything inside it answers with (see
   // `pickTagOf`); a body the sim spawned has no authored object to name and
   // passes none, which is what keeps a rock or a hook out of an editor pick.
+  // A bending root's bones, made the first time something skins to them (its
+  // root meshes or its debug geometry, whichever mounts first).
+  private skeleton(segments: number): RootSkeleton {
+    this.rootSkeleton ??= new RootSkeleton(segments);
+    return this.rootSkeleton;
+  }
+
   private piece(x: number, y: number, rot: number, tag?: unknown): THREE.Group {
     const piece = new THREE.Group();
     piece.position.set(x, threeY(y), 0);
@@ -479,6 +491,36 @@ export class BodyVisual {
       if (!isCollisionObject(o)) return;
       const look = debugLookOf(data, o, this.debugForced);
       if (!look) return;
+      // A BENDING branch is drawn stretch by stretch, each stretch's outline
+      // on the body that collides as it (`RootBending.stretches`): the
+      // root's own stretches as they always were, a segment's skinned wholly
+      // to that segment's bone, so the debug geometry turns at every hinge
+      // exactly as the collision does.
+      const branch = this.built?.bending?.branches.get(i);
+      if (branch && this.built?.segments) {
+        const origin = Vec2.ZERO.sub(built.origin).rotated(-built.rotation);
+        for (const stretch of branch.stretches) {
+          const piece = this.piece(origin.x, origin.y, -built.rotation, built.data.objects[i] ?? o);
+          const geometry = solidOf({ kind: "poly", verts: stretch.outline }, look.depth);
+          const material = debugMaterialOf(look.color, look.opacity);
+          let mesh: THREE.Mesh;
+          if (stretch.body < 0) mesh = new THREE.Mesh(geometry, material);
+          else {
+            const skinned = new THREE.SkinnedMesh(skinToBone(geometry, stretch.body + 1), material);
+            skinned.bindMode = THREE.DetachedBindMode;
+            skinned.bind(this.skeleton(this.built.segments.length).skeleton, new THREE.Matrix4());
+            skinned.frustumCulled = false;
+            mesh = skinned;
+          }
+          mesh.castShadow = look.opacity >= 1;
+          mesh.receiveShadow = false;
+          mesh.position.z = z;
+          mesh.visible = this.debugShown;
+          piece.add(mesh);
+          this.debugPieces.push({ piece, geometry, mesh });
+        }
+        return;
+      }
       const world = worldPlacement(data, o);
       const pos = world.pos.sub(built.origin).rotated(-built.rotation);
       const piece = this.piece(pos.x, pos.y, world.rot - built.rotation, built.data.objects[i] ?? o);
@@ -564,10 +606,33 @@ export class BodyVisual {
     // The world's origin in the built frame: a piece there, unrotated against
     // the world, holds a mesh in world coordinates.
     const origin = Vec2.ZERO.sub(built.origin).rotated(-built.rotation);
+    // A BENDING root's branches are skinned to the bodies holding their
+    // stretches (`rootSkin.ts`), and drawn bending with them.
+    const bending = built.segments && built.bending ? built.bending : null;
+    if (bending) this.skeleton(built.segments!.length);
     for (const [i, { geometry, matrix }] of meshes) {
       const object = data.objects[i]!;
       const material = rootBarkMaterial(data.color ?? DEFAULT_ROOT_COLOR, isCollisionObject(object) ? object.root?.bark : undefined);
       const piece = this.piece(origin.x, origin.y, -built.rotation, built.data.objects[i] ?? object);
+      const branch = bending?.branches.get(i);
+      if (branch && this.rootSkeleton && branch.bodies.some((b) => b >= 0)) {
+        const parentIndex = isCollisionObject(object) ? object.root?.parent : undefined;
+        const parent = parentIndex !== undefined ? meshes.get(parentIndex) : undefined;
+        const geo = skinRootGeometry(geometry, matrix ?? null, branch, parent ? { geometry: parent.geometry, matrix: parent.matrix ?? null } : null);
+        this.skinned.push(geo);
+        const mesh = new THREE.SkinnedMesh(geo, material);
+        mesh.bindMode = THREE.DetachedBindMode;
+        mesh.bind(this.rootSkeleton.skeleton, new THREE.Matrix4());
+        // The bounds the cache grew are the authored pose's; a bent root
+        // swings out of them.
+        mesh.frustumCulled = false;
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        mesh.position.z += z;
+        piece.add(mesh);
+        this.rootPieces.push(piece);
+        continue;
+      }
       const mesh = new THREE.Mesh(geometry, material);
       if (matrix) mesh.applyMatrix4(matrix);
       mesh.castShadow = true;
@@ -581,6 +646,8 @@ export class BodyVisual {
   private disposeRoots(): void {
     for (const piece of this.rootPieces) piece.removeFromParent();
     this.rootPieces.length = 0;
+    for (const g of this.skinned) g.dispose();
+    this.skinned.length = 0;
     if (this.rootKey) releaseRootMeshes(this.rootKey);
     this.rootKey = "";
     this.rootMount++;
@@ -655,8 +722,19 @@ export class BodyVisual {
     for (const t of this.treads) t.sync(time);
     for (const r of this.rings) r.sync(time);
     if (!this.body) return;
-    placeAt(this.root, this.body.renderPosition(alpha));
-    orientTo(this.root, this.body.renderRotation(alpha));
+    const pos = this.body.renderPosition(alpha);
+    const rot = this.body.renderRotation(alpha);
+    placeAt(this.root, pos);
+    orientTo(this.root, rot);
+    const built = this.built;
+    if (this.rootSkeleton && built?.segments && built.bending) {
+      this.rootSkeleton.update(
+        { pos: built.origin, rot: built.rotation },
+        { pos, rot },
+        built.bending,
+        built.segments.map((s) => ({ pos: s.renderPosition(alpha), rot: s.renderRotation(alpha) })),
+      );
+    }
   }
 
   dispose(): void {

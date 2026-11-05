@@ -60,14 +60,15 @@
 import { Vec2 } from "../engine/vec2";
 import { Mathf } from "../engine/mathf";
 import { dmath } from "../engine/dmath";
-import { bumpTransformEpoch, type CollisionObject2D } from "../engine/body";
+import { bumpTransformEpoch, PhysicsBody2D, type CollisionObject2D } from "../engine/body";
 import { bodyContainsPoint, circleOverlap, sweepCircle } from "../engine/collision";
-import type { RailCurve, ShapeTransform } from "../engine/shapes";
+import { rectShape, type RailCurve, type RootRail, type ShapeTransform } from "../engine/shapes";
+import { shapeContacts } from "../engine/manifold";
 import { buildPolylineIndex, pointAtArcLength, projectOntoPolyline, tangentAtArcLength } from "./path";
 import { RopeAttachment, RopeContact } from "./ropeContact";
 import { Intersections } from "./intersections";
 import { IntersectionStatus } from "./types";
-import { MANACLE_BORE, MANACLE_REACH, MANACLE_RADIUS } from "./manacle";
+import { MANACLE_BORE, MANACLE_LENGTH, MANACLE_REACH, MANACLE_RADIUS, MANACLE_THICKNESS } from "./manacle";
 
 // Rubber on steel, which is what `friction: 1` means everywhere else in the
 // level format (0 = ice, 1 = rubber). The cone test is a pure direction, so
@@ -91,6 +92,13 @@ import { MANACLE_BORE, MANACLE_REACH, MANACLE_RADIUS } from "./manacle";
 // them rather than pinning them.
 export const RAIL_STATIC_FRICTION = 1.5;
 export const RAIL_KINETIC_FRICTION = 1.4;
+
+// The step a branch's centreline is walked at to find where another branch is
+// in the ring's way (`rootBlocked`), and the precision its edges are then
+// bisected to, metres. A branch is never thinner than `MIN_TAPER_TIP` and the
+// ring is wider than that, so nothing the walk could step over exists.
+const ROOT_BLOCK_STEP = 0.005;
+const ROOT_BLOCK_PRECISION = 1e-4;
 
 // How fast the cuff may run along the bar, m/s. The massless idealisation above
 // moves the ring to force balance INSTANTLY, which for a ball swung wide past
@@ -118,8 +126,70 @@ export function buildRailCurve(
   verts: readonly Vec2[],
   halfWidth: number,
   pieceAt: readonly number[],
+  root: RootRail | null = null,
 ): RailCurve {
-  return { ...buildPolylineIndex(verts), halfWidth, pieceAt };
+  return { ...buildPolylineIndex(verts), halfWidth, pieceAt, root };
+}
+
+// The ring's silhouette standing square on a branch at a point of its
+// centreline: the cuff seen edge-on, its band's width along the branch and its
+// whole length across it (`MANACLE_THICKNESS` by `MANACLE_LENGTH`).
+const RING_SQUARE = rectShape(MANACLE_THICKNESS, MANACLE_LENGTH);
+
+// Where along a root branch's centreline the ring cannot stand because
+// ANOTHER branch of the same root is in its way: the forks (`RootRail`).
+//
+// `line` is the branch's centreline in the WORLD as built, `others` the pieces
+// of every other branch of the body, and the answer is in arc length along
+// `line`, the frame the clamp reads it in. Walked at `ROOT_BLOCK_STEP` with the
+// ring's square silhouette, each stretch's edges bisected to
+// `ROOT_BLOCK_PRECISION`. The geometry decides and not the tree: the branch
+// growing out of this one blocks the ring where it leaves, the branch this one
+// grows out of blocks its first stretch (which is inside it), and so does any
+// branch of the same root that merely crosses this one, since the ring cannot
+// pass it either. A constant of the body, so measured once.
+export function rootBlocked(
+  line: readonly Vec2[],
+  others: readonly ShapeTransform[],
+): { min: number; max: number }[] {
+  const index = buildPolylineIndex(line);
+  if (index.total <= 0 || others.length === 0) return [];
+  const hit = (s: number): boolean => {
+    const t = tangentAtArcLength(index, s);
+    const ring: ShapeTransform = {
+      globalPosition: pointAtArcLength(index, s),
+      globalRotation: dmath.atan2(t.y, t.x),
+      shape: RING_SQUARE,
+    };
+    return others.some((piece) => shapeContacts(ring, piece).length > 0);
+  };
+  // The edge between `free` and `blocked` arc lengths, to the precision.
+  const edge = (free: number, blocked: number): number => {
+    let a = free;
+    let b = blocked;
+    while (Math.abs(b - a) > ROOT_BLOCK_PRECISION) {
+      const m = (a + b) * 0.5;
+      if (hit(m)) b = m;
+      else a = m;
+    }
+    return b;
+  };
+  const steps = Math.max(1, Math.ceil(index.total / ROOT_BLOCK_STEP));
+  const out: { min: number; max: number }[] = [];
+  let start: number | null = hit(0) ? 0 : null;
+  let prev = 0;
+  for (let i = 1; i <= steps; i++) {
+    const s = i === steps ? index.total : (index.total * i) / steps;
+    const blocked = hit(s);
+    if (blocked && start === null) start = edge(prev, s);
+    else if (!blocked && start !== null) {
+      out.push({ min: start, max: edge(s, prev) });
+      start = null;
+    }
+    prev = s;
+  }
+  if (start !== null) out.push({ min: start, max: index.total });
+  return out;
 }
 
 // The span of the curve the cuff may occupy, metres of arc length from its
@@ -154,6 +224,12 @@ function endInset(curve: RailCurve): { lo: number; hi: number } {
 // The ring's inner radius: how far the cuff's centre stands from the point of
 // the bar its inside is resting on, and so the arm it swings on.
 const BORE_RADIUS = MANACLE_BORE * 0.5;
+
+// A shut cuff (`RopeClamp.cuffOpening`), and the widest its jaws open, each,
+// about the hinge pin: 75°, as far as a forged hinge's leaves let them before
+// they meet behind the pin.
+const SHUT = { offset: 0, angle: 0 } as const;
+const CUFF_OPEN_COS_MAX = 0.2588190451025208;
 
 // How fast the ring may TILT on the point it rests on, rad/s. A real ring is
 // massless to the pull and would follow it instantly; the bound is there so
@@ -269,11 +345,26 @@ export class RopeClamp extends RopeAttachment {
   // the speed the end let it have.
   private pressing: -1 | 0 | 1 = 0;
   private overrun = 0;
+  // A root branch's STOPS, in increasing arc length: its forks (measured at
+  // build, `RootRail.blocked`) and the stretches where the ring would stand
+  // inside a solid static body - the rock wall a root grows out of (measured
+  // when the hook threads on, `rootWalls`). Empty for an authored rail.
+  readonly stops: readonly { readonly min: number; readonly max: number }[];
 
-  private constructor(contact: RopeContact, curve: RailCurve, s: number, range: ClampRange) {
+  private constructor(
+    contact: RopeContact,
+    curve: RailCurve,
+    s: number,
+    range: ClampRange,
+    stops: readonly { readonly min: number; readonly max: number }[],
+  ) {
     super(contact);
     this.curve = curve;
-    this.tiltMax = curve.halfWidth >= BORE_RADIUS ? 0 : dmath.acos(curve.halfWidth / BORE_RADIUS);
+    this.stops = stops;
+    // A root's ring stands square on the branch whatever its width (see
+    // `RootRail`): a push fit, which never tilts.
+    this.tiltMax =
+      curve.root !== null || curve.halfWidth >= BORE_RADIUS ? 0 : dmath.acos(curve.halfWidth / BORE_RADIUS);
     this.s = s;
     this.range = range;
   }
@@ -292,9 +383,10 @@ export class RopeClamp extends RopeAttachment {
   ): RopeClamp {
     const local = world.sub(body.globalPosition).rotated(-body.globalRotation);
     const { lo, hi } = endInset(curve);
-    const s = Mathf.clamp(projectOntoPolyline(curve, local).s, lo, hi);
+    const stops = curve.root === null ? [] : unionStretches(curve.root.blocked, rootWalls(body, curve, ignore));
+    const s = clearOf(curve, stops, Mathf.clamp(projectOntoPolyline(curve, local).s, lo, hi));
     const contact = RopeContact.restore(body, pointAtArcLength(curve, s), pieceAt(curve, s));
-    const clamp = new RopeClamp(contact, curve, s, { min: lo, max: hi, openMin: false, openMax: false });
+    const clamp = new RopeClamp(contact, curve, s, { min: lo, max: hi, openMin: false, openMax: false }, stops);
     const bite = local.sub(pointAtArcLength(curve, s)).dot(leftNormal(tangentAtArcLength(curve, s)));
     clamp.side = bite >= 0 ? -1 : 1;
     clamp.setParam(s);
@@ -411,7 +503,46 @@ export class RopeClamp extends RopeAttachment {
   }
 
   rimPoint(): Vec2 {
-    return this.contact.globalPosition.add(this.rimLocal().rotated(this.body.globalRotation).mul(MANACLE_RADIUS));
+    const out = MANACLE_RADIUS + this.cuffOpening().offset;
+    return this.contact.globalPosition.add(this.rimLocal().rotated(this.body.globalRotation).mul(out));
+  }
+
+  // The branch's half-width where the ring stands, for a root (`RootRail`):
+  // its taper, read along the curve. Zero for an authored rail.
+  girth(): number {
+    const widths = this.curve.root?.halfWidths;
+    if (!widths || widths.length === 0) return 0;
+    const cum = this.curve.cum;
+    for (let i = 0; i + 1 < cum.length; i++) {
+      if (this.s > cum[i + 1]!) continue;
+      const span = cum[i + 1]! - cum[i]!;
+      const t = span > 0 ? (this.s - cum[i]!) / span : 0;
+      return widths[i]! + (widths[i + 1]! - widths[i]!) * t;
+    }
+    return widths[widths.length - 1]!;
+  }
+
+  // How the cuff threaded onto a root THICKER THAN ITS BORE is drawn: its
+  // jaws open about the hinge pin, each by `angle`, until their tips rest on
+  // the branch, and the cuff stands `offset` out from the centreline along its
+  // hang so that its band at the hinge rests on the bark (Tris, 2026-11-01:
+  // "the manacles open slightly to accommodate the root's girth"). Shut and
+  // centred on anything the bore takes. Render-side: the sim's anchor is the
+  // centreline either way.
+  //
+  // In the cuff's own frame, the hinge pin at `R` (the band's mean radius)
+  // along its long axis and the root, radius `rho`, centred at `b - rho` so it
+  // touches the bore (radius `b`) at the hinge: a jaw turned by `a` about the
+  // pin carries its tip (`R + b` from the pin) to the root's surface when
+  // `|tip - centre| = rho`, which is `cos a = (A² + L² - rho²) / (2AL)` with
+  // `A = R - (b - rho)` and `L = R + b`.
+  cuffOpening(): { offset: number; angle: number } {
+    const rho = this.curve.root !== null ? this.girth() : 0;
+    if (rho <= BORE_RADIUS) return SHUT;
+    const L = MANACLE_RADIUS + BORE_RADIUS;
+    const A = MANACLE_RADIUS + rho - BORE_RADIUS;
+    const cos = (A * A + L * L - rho * rho) / (2 * A * L);
+    return { offset: rho - BORE_RADIUS, angle: dmath.acos(Mathf.clamp(cos, CUFF_OPEN_COS_MAX, 1)) };
   }
 
   // That direction in the world, against the body's render transform: the way
@@ -421,9 +552,10 @@ export class RopeClamp extends RopeAttachment {
   }
 
   renderRimPoint(alpha: number): Vec2 {
+    const out = MANACLE_RADIUS + this.cuffOpening().offset;
     return this.contact
       .renderGlobalPosition(alpha)
-      .add(this.rimLocal().rotated(this.body.renderRotation(alpha)).mul(MANACLE_RADIUS));
+      .add(this.rimLocal().rotated(this.body.renderRotation(alpha)).mul(out));
   }
 
   // The point of the bar the ring's inside is resting on, in the world: on the
@@ -495,7 +627,13 @@ export class RopeClamp extends RopeAttachment {
   // stand-in for a slack chain (straight down). The ring hangs toward either;
   // only a real pull may move the chain to the other end of the ring.
   seat(toward: Vec2, dt: number, pulling = true): boolean {
-    if (this.tiltMax <= 0 || this.curve.total <= 0) return false;
+    if (this.curve.total <= 0) return false;
+    // A push fit has no hang to swing, but it is still a ring the chain leaves
+    // over one end of - a root's ring with the ball swung over the branch to
+    // its other side - so the rim is decided for every ring, and only the tilt
+    // waits on there being room to tilt in. An authored rail only ever was a
+    // push fit at a bar as wide as the bore.
+    if (this.tiltMax <= 0 && this.curve.root === null) return false;
     const pull = toward.sub(this.contact.globalPosition);
     const len = pull.length();
     if (len < SEAT_EPSILON) return false;
@@ -512,6 +650,7 @@ export class RopeClamp extends RopeAttachment {
       const lean = this.hangLocal().dot(p);
       if (lean * this.rimSign < -RIM_FLIP_LEAN) this.rimSign = -this.rimSign as 1 | -1;
     }
+    if (this.tiltMax <= 0) return false;
     let target: number;
     if (away >= 0) target = Mathf.clamp(dmath.atan2(along, away), -this.tiltMax, this.tiltMax);
     else if (along !== 0) target = along > 0 ? this.tiltMax : -this.tiltMax;
@@ -690,6 +829,7 @@ export class RopeClamp extends RopeAttachment {
   // the posts, whatever bodies they are.
   private measureRange(ignore: readonly CollisionObject2D[]): ClampRange {
     const { lo, hi } = endInset(this.curve);
+    if (this.curve.root !== null) return this.rootRange(lo, hi, ignore);
     // A peg's range is its middle whatever its ends are; its ends are still
     // asked, because a ring on a peg in the air may lean out over them and a
     // ring against a closed end may not (see `restMax`).
@@ -710,6 +850,28 @@ export class RopeClamp extends RopeAttachment {
     const min = this.sweepBound(-1, minEnd, others);
     const max = this.sweepBound(1, maxEnd, others);
     return { min: min.s, max: max.s, openMin: openMin && !min.hit, openMax: openMax && !max.hit };
+  }
+
+  // A root branch's range (see `RootRail`): from a half-width in from its first
+  // node, which is closed whatever is there - the root grows from it - to its
+  // tip, and stopped either way at the nearest FORK or WALL (`stops`). The
+  // ring is held where it threads on and never slides (`RootRail`), so the
+  // range is only ever asked where it may thread on: outside every stop
+  // (`clearOf`).
+  private rootRange(lo: number, hi: number, ignore: readonly CollisionObject2D[]): ClampRange {
+    const peg = hi <= lo;
+    const tipOpen = railEndIsOpen(this.curve, this.body, this.curve.total, ignore);
+    let min = lo;
+    let max = tipOpen && !peg ? this.curve.total : hi;
+    let openMax = tipOpen;
+    for (const fork of this.stops) {
+      if (fork.max <= this.s) min = Math.max(min, fork.max);
+      else if (fork.min >= this.s && fork.min < max) {
+        max = fork.min;
+        openMax = false;
+      }
+    }
+    return { min, max: Math.max(min, max), openMin: false, openMax };
   }
 
   // How far the cuff's disc travels from where it stands toward `limit` before
@@ -743,6 +905,79 @@ export class RopeClamp extends RopeAttachment {
       pointAtArcLength(this.curve, s).rotated(this.body.globalRotation),
     );
   }
+}
+
+// `s` moved out of any stop of a root branch it falls inside (`RopeClamp.stops`),
+// to the nearer edge of it - a hook that strikes a branch where another leaves
+// it threads on in the crotch, against the fork, and holds there until a pull
+// takes it away. An authored rail has no stops and keeps `s`.
+function clearOf(curve: RailCurve, stops: readonly { min: number; max: number }[], s: number): number {
+  for (const stop of stops) {
+    if (s <= stop.min || s >= stop.max) continue;
+    // A stop reaching the branch's first node (the branch it grows out of, the
+    // wall it grows from) is left at its far edge, and one reaching the tip at
+    // its near edge.
+    if (stop.min <= 0) return stop.max;
+    if (stop.max >= curve.total) return stop.min;
+    return s - stop.min <= stop.max - s ? stop.min : stop.max;
+  }
+  return s;
+}
+
+// Two sorted lists of stretches as one, overlapping ones merged.
+function unionStretches(
+  a: readonly { min: number; max: number }[],
+  b: readonly { min: number; max: number }[],
+): { min: number; max: number }[] {
+  const all = [...a, ...b].sort((x, y) => x.min - y.min);
+  const out: { min: number; max: number }[] = [];
+  for (const r of all) {
+    const last = out[out.length - 1];
+    if (last && r.min <= last.max) last.max = Math.max(last.max, r.max);
+    else out.push({ min: r.min, max: r.max });
+  }
+  return out;
+}
+
+// Where along a root branch the ring would stand inside a SOLID STATIC body:
+// the rock wall the root grows out of, a boulder it runs under. The ring may
+// not slide into one, so these are stops as the forks are (`RopeClamp.stops`).
+//
+// Static bodies only, measured once, when the hook threads on: a static does
+// not move, so the stretches hold for as long as the ring is on a static
+// root. A sprung root turns under the ring, and the stretches are where the
+// wall stood across it when the ring threaded on - a few degrees of spring
+// is millimetres at the wall. A body that moves (a crate, a mover) is not
+// asked, since the stretch it covered would be stale the moment it left.
+// Hook-only bodies (another root, a grate) are not in the ring's way, and
+// neither is anything the owner names (the ball, its hook).
+export function rootWalls(
+  body: CollisionObject2D,
+  curve: RailCurve,
+  ignore: readonly CollisionObject2D[],
+): { min: number; max: number }[] {
+  const world = body.world;
+  if (world === null || world === undefined || curve.total <= 0) return [];
+  const line = curve.verts.map((v) => body.globalPosition.add(v.rotated(body.globalRotation)));
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const p of line) {
+    minX = Math.min(minX, p.x);
+    minY = Math.min(minY, p.y);
+    maxX = Math.max(maxX, p.x);
+    maxY = Math.max(maxY, p.y);
+  }
+  const pad = MANACLE_REACH;
+  const walls = world
+    .queryShapes(minX - pad, minY - pad, maxX + pad, maxY + pad)
+    .filter((shape) => {
+      const owner = shape.owner;
+      if (owner === body || owner.removed || ignore.includes(owner)) return false;
+      return owner instanceof PhysicsBody2D && owner.isSolid && !owner.isMobile;
+    });
+  return rootBlocked(line, walls);
 }
 
 // Which piece of the body covers arc length `s`.

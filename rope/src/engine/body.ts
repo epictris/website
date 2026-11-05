@@ -1336,6 +1336,17 @@ export class RigidBody2D extends PhysicsBody2D {
   // hangs where it was authored. Default false keeps every other body - and
   // recorded replays - unchanged.
   pivot = false;
+  // A `passable` body the STATIC scenery still stops: a moving root (a sprung
+  // root, a bending root's segment, docs/roots.md) is hook-only to the ball,
+  // the chain and every rigid body, and yet does not swing into the rock wall
+  // it grows out of. The world's contact gather and depenetration keep a
+  // passable body's pairs with solid statics when this is set, and only those
+  // - the pair `VineLink`'s doc describes for a non-solid body. The static it
+  // is built overlapping (the rock its base is buried in) is a collision
+  // exception, so it is not shoved out of the rock it is rooted in
+  // (`stopRootsAtStatics`, level/buildBodies.ts). Default false: every other
+  // passable body, and every recorded replay of one, is untouched.
+  hitsStatics = false;
   // Where the centre of mass sits relative to the bearing, in the body's own
   // frame. ZERO for a plain pivot body, whose origin IS the centre of mass
   // (above). An authored pivot POINT (`LevelBodyData.pivotX`) re-origins the

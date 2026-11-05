@@ -20,13 +20,13 @@ import {
   StaticBody2D,
   WaterArea,
 } from "../engine/body";
-import { rectShape, circleShape, polyShapeCentred, type Shape } from "../engine/shapes";
+import { rectShape, circleShape, polyShapeCentred, type RootRail, type Shape, type ShapeTransform } from "../engine/shapes";
 import { decomposeConvex } from "../lib/polygon";
 import { GRAVITY, World } from "../engine/world";
 import { wrapAngle } from "../engine/mathf";
 import {
   DEFAULT_THICKNESS,
-  materialDensity,
+  pieceDensity,
   prismMass,
   ShapeGeometry,
 } from "../lib/shapeGeometry";
@@ -54,12 +54,18 @@ import {
   type ObjectPlacement,
   type CurveVertData,
   type ShapeData,
+  type RootBendData,
+  type SceneObjectData,
+  ROOT_BEND_DAMPING,
+  ROOT_BEND_FREQ,
 } from "./levelFormat";
+import { RootBendUnit, RootHinge } from "./rootBends";
 import { buildMoveRoute, moverScript, type MoverScript } from "./movers";
-import { strokeCurve } from "../lib/stroke";
+import { strokeCurve, strokeCurveCut, strokeLine } from "../lib/stroke";
 import { pathNodesOf } from "../lib/path";
-import { buildRailCurve } from "../lib/rail";
+import { buildRailCurve, rootBlocked } from "../lib/rail";
 import { beltRunQuads, buildBeltLoop, ConveyorBody } from "../lib/belt";
+import { bodyContainsPoint } from "../engine/collision";
 import type { CollisionObject2D } from "../engine/body";
 
 // An authored shape as the ENGINE primitives it is made of, each with the
@@ -238,6 +244,42 @@ export interface BuiltBody {
   // for chain anchors.
   readonly origin: Vec2;
   readonly rotation: number;
+  // A BENDING root's segments (`RootBranchData.bends`): the bodies that hold
+  // the stretches past its bends, hinged back to `body` and to one another
+  // (`level/rootBends.ts`). Absent for every other body.
+  readonly segments?: readonly RigidBody2D[];
+  // How a bending root's branches are dealt to `body` and `segments`, for the
+  // renderer that bends the grown root with them (`RootBending`).
+  readonly bending?: RootBending;
+}
+
+// A bending root, as the renderer needs it: which body holds each stretch of
+// each branch, where along the branch each stretch ends, and the pose every
+// segment was BUILT at - the authored pose the root's meshes are grown in, so
+// a segment's motion is its pose now against that one.
+export interface RootBending {
+  // Per root branch (its index in `objects`): its centreline in the world as
+  // authored, the arc lengths along it its bends cut it at, and per stretch
+  // the body holding it, `-1` the root's own and otherwise a segment index.
+  readonly branches: ReadonlyMap<
+    number,
+    {
+      readonly line: readonly Vec2[];
+      readonly cuts: readonly number[];
+      readonly bodies: readonly number[];
+      // Each stretch's outline in the world as authored - the union of the
+      // pieces it collides as, square across at a bend - and the body holding
+      // it: what the branch's debug geometry is drawn as, stretch by stretch.
+      readonly stretches: readonly { readonly outline: readonly Vec2[]; readonly body: number }[];
+      // Whether it is hinged where it grows (then `cuts[0]` is 0 and
+      // `bodies[0]` the parent's stretch), and its half-width there: the
+      // drawn branch eases from the crease it shares with its parent into
+      // its own bend over that much (`skinRootGeometry`).
+      readonly hingedAtBase: boolean;
+      readonly baseHalfWidth: number;
+    }
+  >;
+  readonly segmentRest: readonly { readonly pos: Vec2; readonly rot: number }[];
 }
 
 // Where one of a body's objects sits in the frame that actually moves - the
@@ -275,6 +317,10 @@ export interface BuiltBodies {
   // rests on it every frame (`World.wakeTouching`), and that loop is the level
   // driver's.
   belts: ConveyorBody[];
+  // Every bending root's hinges, one island unit per root, already in the
+  // world's island solver. Handed back so the level can settle them at build
+  // (`settleTiesAtBuild`) before anything is hung on them.
+  rootUnits: RootBendUnit[];
 }
 
 // The level as built, from the renderers' point of view: the metre-scaled data
@@ -331,6 +377,14 @@ interface RailBuild {
   line: Vec2[];
   halfWidth: number;
   pieceAt: number[];
+  // A root's branch (`RootRail`) rather than an authored rail.
+  root: boolean;
+  // The half-width at each point of `line`, for a tapered curve; null for a
+  // bar of one width.
+  halfWidths: number[] | null;
+  // Which object of the body the curve is (its index in `objects`): a root
+  // branch's stretches are one branch, and never forks to one another.
+  branch: number;
 }
 
 // One collision object as the pieces it builds: one for every kind but a
@@ -341,22 +395,28 @@ interface RailBuild {
 // is the same arithmetic as weighing each piece on its own: the cut is a
 // partition, so the piece areas sum to the outline's area and the pieces' masses
 // to its mass, with the combined centre of mass landing on its centroid.
-function makePieces(body: LevelBodyData, o: CollisionObjectData): Piece[] {
+function makePieces(body: LevelBodyData, o: CollisionObjectData, index: number): Piece[] {
   const world = worldPlacement(body, o);
   if (o.shape.kind === "curve") {
     // A CURVE builds the several pieces its stroke tiles it with, and - where
     // it is a rail - one record shared by all of them (see `Piece.rail`). The
     // centreline is placed in the world here, with the pieces, because the
     // body's own origin is not known until they are all mounted.
-    const { pieces, line, halfWidth, pieceAt } = strokePieces(o.shape);
-    // A TAPERED curve is never a rail: the cuff rides a constant half-width
-    // (`RailCurve`), and a root is bitten, not clamped round.
+    const { pieces, line, halfWidth, halfWidths, pieceAt } = strokePieces(o.shape);
+    // A ROOT's branch is always one: the ring threads onto it square and
+    // slips along it to the next fork (`RootRail`, docs/roots.md). Any other
+    // TAPERED curve never is: the cuff of an authored rail tilts in a bore
+    // across a constant half-width (`RailCurve`).
+    const root = o.root !== undefined;
     const rail: RailBuild | null =
-      o.rail === true && o.impermeable !== true && o.shape.tip === undefined
+      o.impermeable !== true && (root || (o.rail === true && o.shape.tip === undefined))
         ? {
             line: line.map((v) => world.pos.add(v.rotated(world.rot))),
             halfWidth,
             pieceAt,
+            root,
+            halfWidths,
+            branch: index,
           }
         : null;
     return pieces.map((made) => ({ ...makePiece(o, made, world), rail }));
@@ -427,6 +487,7 @@ function strokePieces(shape: { verts: CurveVertData[]; width: number; tip?: numb
   pieces: { shape: Shape; offset: Vec2 }[];
   line: Vec2[];
   halfWidth: number;
+  halfWidths: number[] | null;
   pieceAt: number[];
 } {
   const stroke = strokeCurve(pathNodesOf(shape.verts), shape.width, shape.tip);
@@ -437,6 +498,7 @@ function strokePieces(shape: { verts: CurveVertData[]; width: number; tip?: numb
     pieces: stroke.pieces.map((verts) => polyShapeCentred(verts)),
     line: stroke.line,
     halfWidth: stroke.halfWidth,
+    halfWidths: stroke.halfWidths,
     pieceAt: [...stroke.pieceAt],
   };
 }
@@ -475,7 +537,7 @@ function makePiece(
     mass: prismMass(
       ShapeGeometry.area(made.shape),
       o.thickness ?? DEFAULT_THICKNESS,
-      materialDensity(o.material),
+      pieceDensity(o.material, o.density),
     ),
   };
 }
@@ -525,7 +587,14 @@ function mountPieces(body: CollisionObject2D, pieces: Piece[]): void {
 // `mountPieces` mounts the pieces in order, so piece `i` is mount `i`, and the
 // pieces of one curve arrive in the order the stroke produced them - which is
 // what `pieceAt` indexes.
-function attachRails(body: CollisionObject2D, pieces: Piece[]): void {
+function attachRails(
+  body: CollisionObject2D,
+  pieces: Piece[],
+  // The pieces of the same ROOT that other bodies hold - a bending root's
+  // other segments (`buildBentRoot`) - with the branch each is part of: they
+  // are forks to this body's branches as much as its own pieces are.
+  outside: readonly { shape: ShapeTransform; branch: number }[] = [],
+): void {
   const mounts = new Map<RailBuild, number[]>();
   for (let i = 0; i < pieces.length; i++) {
     const rail = pieces[i]!.rail;
@@ -539,10 +608,26 @@ function attachRails(body: CollisionObject2D, pieces: Piece[]): void {
     const local = rail.line.map((p) =>
       p.sub(body.globalPosition).rotated(-body.globalRotation),
     );
+    // A root branch's forks are where the pieces of the root's OTHER branches
+    // stand in the ring's way, measured in the frame the body is built in. Not
+    // the branch's own other stretches, which a bend leaves it running
+    // straight on into.
+    let root: RootRail | null = null;
+    if (rail.root) {
+      const others: ShapeTransform[] = [];
+      for (const [other, its] of mounts) {
+        if (other === rail || !other.root || other.branch === rail.branch) continue;
+        for (const i of its) if (shapes[i]) others.push(shapes[i]!);
+      }
+      for (const o of outside) if (o.branch !== rail.branch) others.push(o.shape);
+      const world = local.map((p) => body.globalPosition.add(p.rotated(body.globalRotation)));
+      root = { blocked: rootBlocked(world, others), halfWidths: rail.halfWidths ?? rail.line.map(() => rail.halfWidth) };
+    }
     const curve = buildRailCurve(
       local,
       rail.halfWidth,
       rail.pieceAt.map((i) => mounted[i] ?? mounted[0] ?? 0),
+      root,
     );
     for (const i of mounted) {
       const shape = shapes[i];
@@ -783,6 +868,7 @@ export function buildLevelBodies(
   const bodies: BuiltBody[] = [];
   const movers: BuiltBodies["movers"] = [];
   const belts: ConveyorBody[] = [];
+  const rootUnits: RootBendUnit[] = [];
 
   for (const b of data.bodies) {
     if (!collides(b)) {
@@ -793,7 +879,10 @@ export function buildLevelBodies(
       bodies.push({ data: b, body: null, origin: new Vec2(b.x, b.y), rotation: b.rot });
       continue;
     }
-    const pieces = b.objects.filter(isCollisionObject).flatMap((o) => makePieces(b, o));
+    // A root that BENDS builds its own body from what comes before its first
+    // bend and a segment body for every stretch past one (`planBentRoot`).
+    const bent = planBentRoot(b);
+    const pieces = bent?.base ?? b.objects.flatMap((o, i) => (isCollisionObject(o) ? makePieces(b, o, i) : []));
     // A belt's geometry never moves - only its surface does - so it may only
     // be built on a body whose geometry never moves either: a plain static.
     // On a rigid body or a mover it would need a surface velocity composed
@@ -808,7 +897,9 @@ export function buildLevelBodies(
       );
     }
     const built = buildOne(world, b, pieces, onReset, onFinish);
-    attachRails(built, pieces);
+    const made = bent ? buildBentRoot(world, b, built, bent, rootUnits) : null;
+    const segments = made?.segments ?? [];
+    if (!bent) attachRails(built, pieces);
     attachBelts(built, pieces);
     if (built instanceof ConveyorBody) belts.push(built);
     bodies.push({
@@ -816,13 +907,20 @@ export function buildLevelBodies(
       body: built,
       origin: built.globalPosition,
       rotation: built.globalRotation,
+      ...(made && segments.length > 0 ? { segments, bending: made.bending } : {}),
     });
     // The rest-pose displacement comes AFTER the frame above is captured - the
     // local placements every geometry object, decoration and chain anchor
     // resolve through must be measured in the authored frame, so they ride the
     // settled body rather than standing where it was drawn (see
     // `applyRestPose`).
-    if (built instanceof RigidBody2D) applyRestPose(built);
+    // A bending root's segments ride the displacement with it, rigidly, so its
+    // hinges stand where they were built (`carrySegments`).
+    if (built instanceof RigidBody2D) {
+      const before = { pos: built.globalPosition, rot: built.globalRotation };
+      applyRestPose(built);
+      carrySegments(segments, before, built);
+    }
     // A pendulum's script and its FRAME-ZERO POSE, for the same reason and in
     // the same place: the phase offset turns the body before anything looks at
     // it, so a vine hung on it, a chain bolted to it and the editor's own scene
@@ -846,7 +944,310 @@ export function buildLevelBodies(
     if (built instanceof PhysicsBody2D && built.isSolid) wrapBodies.push(built);
   }
 
-  return { wrapBodies, bodies, movers, belts };
+  stopRootsAtStatics(bodies);
+  return { wrapBodies, bodies, movers, belts, rootUnits };
+}
+
+// --- bending roots -----------------------------------------------------------
+//
+// A root whose branches BEND (`RootBranchData.bends`, docs/roots.md "Bending
+// roots") is one authored body built as several engine bodies: the root's own
+// body holds everything before the first bend of each branch (and every
+// branch growing from that), and every stretch past a bend is a SEGMENT of
+// its own - a hook-only rigid body the statics still stop - hinged to the
+// stretch before it on a torsion spring (`RootHinge`). A branch with a bend at
+// 0 is a segment from its first node, hinged where it grows out of its
+// parent; a branch growing out of a stretch moves with that stretch.
+//
+// The branch is stroked once, with a vertex standing on every bend
+// (`strokeCurveCut`), and its pieces dealt to the stretches either side of
+// each, so a branch that bends is exactly the bar it was before, cut; and the
+// ring's curve on each stretch is that stretch of the one line, joined across
+// the bend to the next (`RootRail.startJoin`/`endJoin`).
+
+interface BentRoot {
+  // What the root's own body is built from: the pieces of every stretch before
+  // a bend, and every other collision object of the body.
+  base: Piece[];
+  // Each segment's pieces.
+  segments: Piece[][];
+  // Each hinge: the stretch before (`-1` the root's own body, else a segment),
+  // the segment after, the world point it turns about and its spring.
+  hinges: { from: number; to: number; at: Vec2; freq: number; damping: number }[];
+  // Per root branch: its line, its cuts and each stretch's body (`RootBending`).
+  branches: Map<number, { line: Vec2[]; cuts: number[]; bodies: number[]; stretches: { outline: Vec2[]; body: number }[]; hingedAtBase: boolean; baseHalfWidth: number }>;
+}
+
+// The bends of a root piece that cut it (strictly inside it, in order), and
+// the one at its first node if it is a branch that hinges where it grows.
+function bendsOf(o: CollisionObjectData): { cuts: RootBendData[]; start: RootBendData | null } {
+  const bends = o.root?.bends ?? [];
+  const cuts = bends
+    .filter((k) => k.at > BEND_EDGE && k.at < 1 - BEND_EDGE)
+    .sort((x, y) => x.at - y.at);
+  const start = o.root?.parent !== undefined ? (bends.find((k) => k.at <= BEND_EDGE) ?? null) : null;
+  return { cuts, start };
+}
+
+// How near a branch's ends a bend is AT them, as a fraction: a bend at the
+// first node of a branch hinges it where it grows; one at the tip bends
+// nothing.
+const BEND_EDGE = 1e-6;
+
+// The plan of a root body that bends, or null for every other body.
+function planBentRoot(b: LevelBodyData): BentRoot | null {
+  const isRoot = (o: SceneObjectData | undefined): o is CollisionObjectData & { shape: { kind: "curve" } } =>
+    o !== undefined && isCollisionObject(o) && o.root !== undefined && o.shape.kind === "curve" && o.impermeable !== true;
+  const bends = b.objects.map((o) => (isRoot(o) ? bendsOf(o) : { cuts: [], start: null }));
+  if (!bends.some((k) => k.cuts.length > 0 || k.start !== null)) return null;
+  const base: Piece[] = [];
+  // Per root object: its stretches' pieces, rail records and the world point
+  // of each cut (the hinge between stretch k and k+1).
+  const stretchesOf = new Map<
+    number,
+    { pieces: Piece[][]; rails: RailBuild[]; cutPoints: Vec2[]; cuts: RootBendData[]; first: Vec2; outlines: Vec2[][] }
+  >();
+  b.objects.forEach((o, i) => {
+    if (!isCollisionObject(o)) return;
+    if (!isRoot(o)) {
+      base.push(...makePieces(b, o, i));
+      return;
+    }
+    const world = worldPlacement(b, o);
+    const asked = bends[i]!.cuts;
+    const stroke = strokeCurveCut(pathNodesOf(o.shape.verts), o.shape.width, o.shape.tip, asked.map((k) => k.at));
+    const last = stroke.line.length - 1;
+    // The cuts that landed on distinct interior vertices, with their bends.
+    const cuts: { vertex: number; bend: RootBendData }[] = [];
+    stroke.cutAt.forEach((v, k) => {
+      if (v <= 0 || v >= last || cuts.some((c) => c.vertex === v)) return;
+      cuts.push({ vertex: v, bend: asked[k]! });
+    });
+    cuts.sort((x, y) => x.vertex - y.vertex);
+    const made = stroke.pieces.map((verts) => polyShapeCentred(verts));
+    const line = stroke.line.map((v) => world.pos.add(v.rotated(world.rot)));
+    const bounds = [0, ...cuts.map((c) => c.vertex), last];
+    const pieces: Piece[][] = [];
+    const rails: RailBuild[] = [];
+    const outlines: Vec2[][] = [];
+    for (let k = 0; k + 1 < bounds.length; k++) {
+      const from = bounds[k]!;
+      const to = bounds[k + 1]!;
+      // The stretch's own outline: its slice of the one line, stroked at the
+      // half-widths the whole branch has there, so it is exactly the union of
+      // the pieces it was dealt.
+      const part = strokeLine(
+        stroke.line.slice(from, to + 1),
+        stroke.halfWidths?.[from] ?? stroke.halfWidth,
+        stroke.halfWidths?.slice(from, to + 1) ?? null,
+      );
+      outlines.push(part.outline.map((v) => world.pos.add(v.rotated(world.rot))));
+      const firstPiece = stroke.pieceAt[from] ?? 0;
+      const endPiece = to < stroke.pieceAt.length ? stroke.pieceAt[to]! : stroke.pieces.length;
+      const rail: RailBuild = {
+        line: line.slice(from, to + 1),
+        halfWidth: stroke.halfWidths?.[from] ?? stroke.halfWidth,
+        pieceAt: stroke.pieceAt.slice(from, to).map((p) => p - firstPiece),
+        root: true,
+        halfWidths: stroke.halfWidths?.slice(from, to + 1) ?? null,
+        branch: i,
+      };
+      rails.push(rail);
+      pieces.push(made.slice(firstPiece, endPiece).map((m) => ({ ...makePiece(o, m, world), rail })));
+    }
+    stretchesOf.set(i, {
+      pieces,
+      rails,
+      cutPoints: cuts.map((c) => line[c.vertex]!),
+      cuts: cuts.map((c) => c.bend),
+      first: line[0]!,
+      outlines,
+    });
+  });
+  // Which body each stretch is on: -1 the root's own, else a segment. A
+  // stretch past a bend is a segment of its own; a branch's first stretch is
+  // one if it hinges where it grows, and otherwise moves with the stretch of
+  // its parent it grows out of. Settled parents first, by recursion.
+  const segments: Piece[][] = [];
+  const hinges: BentRoot["hinges"] = [];
+  const memo = new Map<string, number>();
+  const stretchOfParent = (i: number): { parent: number; k: number } | null => {
+    const o = b.objects[i];
+    const parent = o && isCollisionObject(o) ? o.root?.parent : undefined;
+    if (parent === undefined || parent === i || !stretchesOf.has(parent)) return null;
+    const at = (o as CollisionObjectData).root?.at ?? 0;
+    const k = stretchesOf.get(parent)!.cuts.filter((c) => c.at <= at).length;
+    return { parent, k };
+  };
+  const segOf = (i: number, k: number, depth = 0): number => {
+    const key = `${i}:${k}`;
+    const known = memo.get(key);
+    if (known !== undefined) return known;
+    const own = stretchesOf.get(i)!;
+    let seg: number;
+    const fresh = (from: number, at: Vec2, bend: RootBendData): number => {
+      segments.push(own.pieces[k]!);
+      const id = segments.length - 1;
+      hinges.push({
+        from,
+        to: id,
+        at,
+        freq: Math.max(0, bend.freq ?? ROOT_BEND_FREQ),
+        damping: Math.min(1, Math.max(0, bend.damping ?? ROOT_BEND_DAMPING)),
+      });
+      return id;
+    };
+    if (depth > b.objects.length) seg = -1;
+    else if (k > 0) seg = fresh(segOf(i, k - 1, depth + 1), own.cutPoints[k - 1]!, own.cuts[k - 1]!);
+    else {
+      const up = stretchOfParent(i);
+      const start = bends[i]!.start;
+      const parentSeg = up ? segOf(up.parent, up.k, depth + 1) : -1;
+      seg = start !== null && up ? fresh(parentSeg, own.first, start) : parentSeg;
+    }
+    memo.set(key, seg);
+    return seg;
+  };
+  for (const [i, own] of stretchesOf) {
+    for (let k = 0; k < own.pieces.length; k++) if (segOf(i, k) < 0) base.push(...own.pieces[k]!);
+  }
+  // A root with nothing left on its own body (every branch hinged away) has
+  // no body to hinge to: built rigid instead, as authored.
+  if (base.length === 0) return null;
+  const branches = new Map<number, { line: Vec2[]; cuts: number[]; bodies: number[]; stretches: { outline: Vec2[]; body: number }[]; hingedAtBase: boolean; baseHalfWidth: number }>();
+  for (const [i, own] of stretchesOf) {
+    const line = own.rails.flatMap((r, k) => (k === 0 ? r.line : r.line.slice(1)));
+    const cuts: number[] = [];
+    let along = 0;
+    own.rails.forEach((r, k) => {
+      for (let j = 1; j < r.line.length; j++) along += r.line[j]!.distanceTo(r.line[j - 1]!);
+      if (k + 1 < own.rails.length) cuts.push(along);
+    });
+    const bodies = own.pieces.map((_, k) => segOf(i, k));
+    // A branch hinged where it grows bends at its own first node: the part
+    // of it buried in its parent is drawn with the parent's stretch.
+    const up = stretchOfParent(i);
+    const hingedAtBase = bends[i]!.start !== null && up !== null;
+    if (hingedAtBase) {
+      cuts.unshift(0);
+      bodies.unshift(segOf(up!.parent, up!.k));
+    }
+    const stretches = own.outlines.map((outline, k) => ({ outline, body: segOf(i, k) }));
+    const baseHalfWidth = own.rails[0]?.halfWidths?.[0] ?? own.rails[0]?.halfWidth ?? 0;
+    branches.set(i, { line, cuts, bodies, stretches, hingedAtBase, baseHalfWidth });
+  }
+  return { base, segments, hinges, branches };
+}
+
+// Build a bent root's segments and hinges beside its own body (`built`): each
+// segment a hook-only rigid body the statics stop, the ring's curves across
+// the whole root with its forks measured across every body, the joins across
+// every bend, and the hinges as one island unit. Returns the segments.
+function buildBentRoot(
+  world: World,
+  b: LevelBodyData,
+  built: CollisionObject2D,
+  plan: BentRoot,
+  units: RootBendUnit[],
+): { segments: RigidBody2D[]; bending: RootBending } {
+  const segments = plan.segments.map((pieces) => {
+    const rb = new RigidBody2D();
+    mountPieces(rb, pieces);
+    setCompoundInertia(rb, pieces);
+    applyStyle(rb, b);
+    rb.contactFriction = RIGID_KINETIC_FRICTION * rb.surfaceFriction;
+    rb.staticFriction = RIGID_STATIC_FRICTION * rb.surfaceFriction;
+    rb.passable = true;
+    world.add(rb);
+    return rb;
+  });
+  const bending: RootBending = {
+    branches: plan.branches,
+    segmentRest: segments.map((rb) => ({ pos: rb.globalPosition, rot: rb.globalRotation })),
+  };
+  const members = [
+    { body: built, pieces: plan.base },
+    ...segments.map((body, i) => ({ body: body as CollisionObject2D, pieces: plan.segments[i]! })),
+  ];
+  const rootShapes = (m: (typeof members)[number]): { shape: ShapeTransform; branch: number }[] => {
+    const shapes = m.body.getShapes();
+    const out: { shape: ShapeTransform; branch: number }[] = [];
+    m.pieces.forEach((p, i) => {
+      if (p.rail?.root && shapes[i]) out.push({ shape: shapes[i]!, branch: p.rail.branch });
+    });
+    return out;
+  };
+  for (const m of members) {
+    const outside = members.filter((n) => n !== m).flatMap(rootShapes);
+    attachRails(m.body, m.pieces, outside);
+  }
+  if (!(built instanceof PhysicsBody2D)) return { segments, bending };
+  // Each hinge's spring is rated on everything outboard of it (`RootHinge`):
+  // the segment past it and every segment hinged on beyond that, about the
+  // hinge point, as built.
+  const outboard = (seg: number): number[] => [
+    seg,
+    ...plan.hinges.filter((h) => h.from === seg).flatMap((h) => outboard(h.to)),
+  ];
+  const hinges = plan.hinges.map((h) => {
+    const inertia = outboard(h.to).reduce((sum, j) => {
+      const s = segments[j]!;
+      return sum + s.inertia + s.mass * s.globalPosition.sub(h.at).lengthSquared();
+    }, 0);
+    return new RootHinge(h.from < 0 ? built : segments[h.from]!, segments[h.to]!, h.at, h.freq, h.damping, inertia);
+  });
+  const unit = new RootBendUnit(hinges);
+  world.ties.addUnit(unit);
+  units.push(unit);
+  return { segments, bending };
+}
+
+// A sprung root's own body spawns turned to its settled angle
+// (`applyRestPose`); its segments are carried by the same rigid motion, so
+// every hinge stands where it was built.
+function carrySegments(
+  segments: readonly RigidBody2D[],
+  before: { pos: Vec2; rot: number },
+  body: RigidBody2D,
+): void {
+  const turn = body.globalRotation - before.rot;
+  if (segments.length === 0 || (turn === 0 && body.globalPosition.equals(before.pos))) return;
+  for (const s of segments) {
+    s.globalPosition = body.globalPosition.add(s.globalPosition.sub(before.pos).rotated(turn));
+    s.globalRotation = s.globalRotation + turn;
+  }
+}
+
+// Every MOVING root - a sprung root, a bending root's segment - is stopped by
+// the static scenery while staying hook-only to everything else
+// (`RigidBody2D.hitsStatics`), so it bends against the rock it grows out of
+// rather than through it. A static holding the first node of one of its
+// branches is the rock the root is ROOTED in, and the pair is excepted
+// (`addCollisionExceptionWith`), or the first contact would shove the root out
+// of its own rock. The body and not the piece, because a straight root is one
+// piece from inside the rock to its tip; and the first node rather than
+// whatever the root overlaps, because a sprung root spawns at its settled
+// pose (`applyRestPose`), which knows nothing of contacts, and a soft one
+// drooped onto a ledge below it would except the ledge. After every body is
+// built, since the rock may come later in the file than the root.
+function stopRootsAtStatics(bodies: readonly BuiltBody[]): void {
+  const statics = bodies
+    .map((b) => b.body)
+    .filter((b): b is StaticBody2D => b instanceof StaticBody2D && b.isSolid);
+  for (const body of bodies.flatMap((b) => [b.body, ...(b.segments ?? [])])) {
+    if (!(body instanceof RigidBody2D) || !body.passable) continue;
+    const curves = new Set(body.getShapes().map((s) => s.rail).filter((r) => r?.root != null));
+    if (curves.size === 0) continue;
+    body.hitsStatics = true;
+    for (const curve of curves) {
+      const first = curve!.verts[0];
+      if (!first) continue;
+      const base = body.globalPosition.add(first.rotated(body.globalRotation));
+      for (const rock of statics) {
+        if (!body.exceptions.has(rock.id) && bodyContainsPoint(rock, base)) body.addCollisionExceptionWith(rock);
+      }
+    }
+  }
 }
 
 function buildOne(

@@ -151,7 +151,7 @@ export class ChainLayer {
   private target: LinkBuffer;
   private readonly geometry: THREE.BufferGeometry;
   private readonly manacle: THREE.Group;
-  private readonly manacleMesh: THREE.Mesh;
+  private readonly manacleMeshes: THREE.Mesh[];
   private readonly manacleGeometry: THREE.BufferGeometry[] = [];
   // The cuffs of snapped chains' halves left on their anchors (see
   // render/chainSnap.ts), one each: clones of `manacle` sharing its geometry,
@@ -191,8 +191,8 @@ export class ChainLayer {
     this.target = this.sceneLinks;
 
     this.manacle = buildManacle(this.manacleGeometry);
-    this.manacleMesh = this.manacle.children[0] as THREE.Mesh;
-    this.ironManacle = this.manacleMesh.material as THREE.Material;
+    this.manacleMeshes = manacleMeshes(this.manacle);
+    this.ironManacle = this.manacleMeshes[0]!.material as THREE.Material;
     this.manacle.visible = false;
     scene.add(this.manacle);
   }
@@ -209,13 +209,15 @@ export class ChainLayer {
       this.glassManacle ??= solidGlassMaterial(MANACLE_BAND / 2);
     }
     this.avatarLinks.setMaterial(glass ? this.glassLinks! : forgedMetal(FORGED_SMALL), !glass);
-    this.manacleMesh.material = glass ? this.glassManacle! : this.ironManacle;
-    this.manacleMesh.castShadow = !glass;
-    // The glass cuff's lens reads its lights' shadows (see `setMaterial`).
-    this.manacleMesh.receiveShadow = glass;
-    // Glass is drawn over what is behind it, after the opaque scene.
+    for (const mesh of this.manacleMeshes) {
+      mesh.material = glass ? this.glassManacle! : this.ironManacle;
+      mesh.castShadow = !glass;
+      // The glass cuff's lens reads its lights' shadows (see `setMaterial`).
+      mesh.receiveShadow = glass;
+      // Glass is drawn over what is behind it, after the opaque scene.
+      mesh.renderOrder = glass ? 1 : 0;
+    }
     this.avatarLinks.mesh.renderOrder = glass ? 1 : 0;
-    this.manacleMesh.renderOrder = glass ? 1 : 0;
   }
 
   // Every chain on the level, laid this frame. `retract` is the released chain
@@ -300,7 +302,7 @@ export class ChainLayer {
         // The manacle at the far end - the flying hook, the dangling tip, or the
         // anchor - wherever the sim says it is (`BallPlayer.manaclePose`).
         const pose = ball.manaclePose(alpha);
-        if (pose) this.placeManacle(pose.centre, pose.dir, this.anchorDepth);
+        if (pose) this.placeManacle(pose.centre, pose.dir, this.anchorDepth, pose.open);
       }
     }
 
@@ -398,9 +400,13 @@ export class ChainLayer {
   //
   // `z` is the depth it is drawn at: the depth of the set-back scenery it bit
   // (a root's centre), and the plane otherwise.
-  private placeManacle(centre: Vec2, dir: Vec2, z = 0): void {
+  //
+  // `open` swings its jaws open about the hinge pin, each by that many
+  // radians: a cuff round a root thicker than its bore (`ManaclePose.open`).
+  private placeManacle(centre: Vec2, dir: Vec2, z = 0, open = 0): void {
     this.manacle.position.set(centre.x, threeY(centre.y), z);
     this.manacle.rotation.set(Math.PI / 2, 0, Math.atan2(threeY(dir.y), dir.x), "ZXY");
+    setManacleOpen(this.manacle, open);
     this.manacle.visible = true;
   }
 
@@ -413,11 +419,14 @@ export class ChainLayer {
       this.snapManacles.push(cuff);
       this.scene.add(cuff);
     }
-    const mesh = cuff.children[0] as THREE.Mesh;
-    mesh.material = this.manacleMesh.material;
-    mesh.castShadow = this.manacleMesh.castShadow;
-    mesh.receiveShadow = this.manacleMesh.receiveShadow;
-    mesh.renderOrder = this.manacleMesh.renderOrder;
+    const like = this.manacleMeshes[0]!;
+    for (const mesh of manacleMeshes(cuff)) {
+      mesh.material = like.material;
+      mesh.castShadow = like.castShadow;
+      mesh.receiveShadow = like.receiveShadow;
+      mesh.renderOrder = like.renderOrder;
+    }
+    setManacleOpen(cuff, 0);
     cuff.position.set(centre.x, threeY(centre.y), z);
     cuff.rotation.set(Math.PI / 2, 0, Math.atan2(threeY(dir.y), dir.x), "ZXY");
     cuff.visible = true;
@@ -517,7 +526,6 @@ function buildManacle(owned: THREE.BufferGeometry[]): THREE.Group {
   const BORE = MANACLE_RADIUS - MANACLE_BAND / 2;
   const PROUD = 0.3 * PX; // how far the fittings stand off the band's face
   const FACE = MANACLE_REACH - PROUD;
-  const parts: THREE.BufferGeometry[] = [];
 
   // The band: its cross-section - bore to face, edge to edge, the four corners
   // rounded so it reads as forged strap rather than cut tube - turned about the
@@ -544,10 +552,33 @@ function buildManacle(owned: THREE.BufferGeometry[]): THREE.Group {
     }
   }
   section.push(new THREE.Vector2(BORE, 0));
-  const band = new THREE.LatheGeometry(section, 64);
-  band.rotateX(Math.PI / 2); // the lathe's axis is y; the ring's is z
-  parts.push(band.toNonIndexed());
-  band.dispose();
+
+  // The cuff is two JAWS on one hinge pin, so that it can open round a root
+  // thicker than its bore (`RopeClamp.cuffOpening`, `setManacleOpen`): each
+  // jaw half the band - the half above its long axis and the half below,
+  // split at the hinge and at the mouth - with its half of the lock plate and
+  // its rivets, built about the pin so that turning it is turning its group;
+  // the knuckles are the pin and stay put. Shut, the two halves are the one
+  // band they were cut from.
+  const hingeParts: THREE.BufferGeometry[] = [];
+  const jawParts: [THREE.BufferGeometry[], THREE.BufferGeometry[]] = [[], []];
+  const jawOf = (y: number): THREE.BufferGeometry[] => jawParts[y >= 0 ? 0 : 1];
+  // The band: its lathe's angle `phi` puts a section at y = -r·cos(phi) once
+  // the lathe stands on the ring's axis, so (π/2, 3π/2) is the half above.
+  for (const [jaw, start] of [[0, Math.PI / 2], [1, (3 * Math.PI) / 2]] as const) {
+    const half = new THREE.LatheGeometry(section, 32, start, Math.PI);
+    half.rotateX(Math.PI / 2); // the lathe's axis is y; the ring's is z
+    jawParts[jaw].push(half.toNonIndexed());
+    half.dispose();
+    // Its cut face at the mouth, seen when the jaws are open: the band's
+    // section, stood at x = -r in the plane of the cut, facing out of the jaw.
+    const cap = new THREE.ShapeGeometry(new THREE.Shape(section.slice(0, -1)));
+    const sign = jaw === 0 ? -1 : 1;
+    cap.applyMatrix4(new THREE.Matrix4().set(-1, 0, 0, 0, 0, 0, sign, 0, 0, sign, 0, 0, 0, 0, 0, 1));
+    (cap.getAttribute("uv") as THREE.BufferAttribute).applyMatrix3(new THREE.Matrix3().makeScale(0.3, 0.3));
+    jawParts[jaw].push(cap.toNonIndexed());
+    cap.dispose();
+  }
 
   // Hinge: three knuckles on one pin, the middle one the other jaw's, centred
   // on the pin the chain is measured to and as thick as the band, so they
@@ -560,20 +591,23 @@ function buildManacle(owned: THREE.BufferGeometry[]): THREE.Group {
     const knuckle = new THREE.CylinderGeometry(KNUCKLE_R, KNUCKLE_R, knuckleLen, 16);
     knuckle.rotateX(Math.PI / 2);
     knuckle.translate(MANACLE_HINGE, 0, i * (knuckleLen + GAP));
-    parts.push(knuckle.toNonIndexed());
+    hingeParts.push(knuckle.toNonIndexed());
     knuckle.dispose();
   }
 
   // Lock plate over the mouth, where the jaw tips meet: a block standing off
-  // the band's face to the end of the bar, a little narrower than the band.
+  // the band's face to the end of the bar, a little narrower than the band,
+  // in two halves, one on each jaw's tip.
   const PLATE = 3 * PX; // round the band
-  const lock = new THREE.BoxGeometry(PROUD + 0.4 * PX, PLATE, W - 0.5 * PX);
-  lock.translate(-MANACLE_REACH + (PROUD + 0.4 * PX) / 2, 0, 0);
-  // A box spans the whole texture on every face, which on a 3 cm plate blows
-  // the forged strokes up into rock; this puts them at the band's scale.
-  (lock.getAttribute("uv") as THREE.BufferAttribute).applyMatrix3(new THREE.Matrix3().makeScale(0.3, 0.3));
-  parts.push(lock.toNonIndexed());
-  lock.dispose();
+  for (const side of [1, -1]) {
+    const lock = new THREE.BoxGeometry(PROUD + 0.4 * PX, PLATE / 2, W - 0.5 * PX);
+    lock.translate(-MANACLE_REACH + (PROUD + 0.4 * PX) / 2, (side * PLATE) / 4, 0);
+    // A box spans the whole texture on every face, which on a 3 cm plate blows
+    // the forged strokes up into rock; this puts them at the band's scale.
+    (lock.getAttribute("uv") as THREE.BufferAttribute).applyMatrix3(new THREE.Matrix3().makeScale(0.3, 0.3));
+    jawOf(side).push(lock.toNonIndexed());
+    lock.dispose();
+  }
 
   // Rivets holding the hinge leaves and the lock plate's straps to the band,
   // a pair each side of both: domes on the face, their crowns at the reach.
@@ -585,20 +619,58 @@ function buildManacle(owned: THREE.BufferGeometry[]): THREE.Group {
         const rivet = new THREE.SphereGeometry(RIVET, 10, 5, 0, Math.PI * 2, 0, Math.PI / 2);
         rivet.rotateZ(a - Math.PI / 2); // its crown (+y) onto the radial
         rivet.translate(FACE * Math.cos(a), FACE * Math.sin(a), z);
-        parts.push(rivet.toNonIndexed());
+        jawOf(Math.sin(a)).push(rivet.toNonIndexed());
         rivet.dispose();
       }
     }
   }
 
-  const cuff = mergeGeometries(parts);
-  for (const p of parts) p.dispose();
-  if (!cuff) throw new Error("manacle: the cuff's parts did not merge");
-  owned.push(cuff);
-  const mesh = new THREE.Mesh(cuff, iron);
-  mesh.castShadow = true;
-  g.add(mesh);
+  const merged = (parts: THREE.BufferGeometry[], name: string): THREE.Mesh => {
+    const geometry = mergeGeometries(parts);
+    for (const p of parts) p.dispose();
+    if (!geometry) throw new Error(`manacle: the ${name}'s parts did not merge`);
+    owned.push(geometry);
+    const mesh = new THREE.Mesh(geometry, iron);
+    mesh.castShadow = true;
+    mesh.name = name;
+    return mesh;
+  };
+  g.add(merged(hingeParts, "hinge"));
+  // Each jaw in a group standing on the pin, its geometry moved so the pin is
+  // its origin: the group's turn about z is the jaw swinging on the hinge.
+  for (const [jaw, name] of [[0, MANACLE_JAW_NAMES[0]], [1, MANACLE_JAW_NAMES[1]]] as const) {
+    const pivot = new THREE.Group();
+    pivot.name = name;
+    pivot.position.set(MANACLE_HINGE, 0, 0);
+    for (const part of jawParts[jaw]) part.translate(-MANACLE_HINGE, 0, 0);
+    pivot.add(merged(jawParts[jaw], `${name} mesh`));
+    g.add(pivot);
+  }
   return g;
+}
+
+// The jaw groups of a cuff (`buildManacle`): the one above the long axis and
+// the one below.
+const MANACLE_JAW_NAMES = ["jaw+", "jaw-"] as const;
+
+// Every mesh of a cuff, hinge and jaws: what a material is set on.
+function manacleMeshes(cuff: THREE.Object3D): THREE.Mesh[] {
+  const out: THREE.Mesh[] = [];
+  cuff.traverse((o) => {
+    if (o instanceof THREE.Mesh) out.push(o);
+  });
+  return out;
+}
+
+// Swing a cuff's jaws open about the hinge pin by `open` radians each, 0 shut
+// (`ManaclePose.open`): the jaw above the axis turns its mouth up, the one
+// below turns it down, which once the cuff stands edge-on in the plane is
+// the two jaw tips parting in depth, round the root they hold.
+function setManacleOpen(cuff: THREE.Object3D, open: number): void {
+  const upper = cuff.getObjectByName(MANACLE_JAW_NAMES[0]);
+  const lower = cuff.getObjectByName(MANACLE_JAW_NAMES[1]);
+  if (upper) upper.rotation.z = -open;
+  if (lower) lower.rotation.z = open;
 }
 
 // Re-exported so a caller can size a scene against the chain's reach without

@@ -44,6 +44,10 @@ export interface ManaclePose {
   // Everything on the far side of that plane is inside the geometry. Null for
   // a free cuff and around a rail.
   buriedUnder: Vec2 | null;
+  // How far each jaw is swung open about the hinge pin, radians: a cuff on a
+  // root thicker than its bore (`RopeClamp.cuffOpening`). Zero, shut,
+  // everywhere else.
+  open: number;
 }
 
 export class BallPlayer extends RigidBody2D {
@@ -858,6 +862,7 @@ export class BallPlayer extends RigidBody2D {
         clamped: false,
         onRail: false,
         buriedUnder: null,
+        open: 0,
       };
     }
     // Stowed: the cuff rides the rim at the coil's end, hinge on the chain's
@@ -873,13 +878,24 @@ export class BallPlayer extends RigidBody2D {
         clamped: false,
         onRail: false,
         buriedUnder: null,
+        open: 0,
       };
     }
     const dir = this.manacleFacing(alpha);
     if (dir === null) return null;
     const ring = this.ringClamp;
     if (ring !== null) {
-      return { centre: ring.contact.renderGlobalPosition(alpha), dir, clamped: true, onRail: true, buriedUnder: null };
+      // Around a root thicker than the bore, the jaws open round it and the
+      // cuff stands out along its facing until its band rests on the bark.
+      const opening = ring instanceof RopeClamp ? ring.cuffOpening() : { offset: 0, angle: 0 };
+      return {
+        centre: ring.contact.renderGlobalPosition(alpha).add(dir.mul(opening.offset)),
+        dir,
+        clamped: true,
+        onRail: true,
+        buriedUnder: null,
+        open: opening.angle,
+      };
     }
     const hinge = chain.end.contact.renderGlobalPosition(alpha);
     const body = this.anchorBody;
@@ -896,6 +912,7 @@ export class BallPlayer extends RigidBody2D {
           : body === null
             ? normal
             : normal.rotated(body.renderRotation(alpha)),
+      open: 0,
     };
   }
 
