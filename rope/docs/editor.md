@@ -384,7 +384,7 @@ Any other query parameter is left alone.
 
 ## Sounds
 
-The **Sounds** button beside the file controls opens the menu that assigns sound files to the game's events - rolling and landing per surface, the cuff attaching and bouncing, links winding on, the whoosh, splash and wade - with upload, preview and each file's credit.
+The **Sounds** button beside the file controls opens the menu that assigns sound files to the game's events - rolling and landing per surface, the cuff attaching and bouncing, links winding on, the whoosh, splash and wade - with upload, preview and each file's credit, and a clip editor per file (its waveform, cropped by dragging, with its own volume and pitch).
 It is not part of any level: what it writes is `src/audio/soundBank.json` and the sound library, and a change is heard straight away in ▶ Test and in a game open in another tab.
 See [sound](sound.md#the-sounds-menu).
 

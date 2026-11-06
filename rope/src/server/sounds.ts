@@ -2,7 +2,7 @@
 //
 //   GET    /api/sounds                 -> { assets, bank }
 //   POST   /api/sounds?name=<file>     <- the file's bytes; -> { key, asset }
-//   PUT    /api/sounds/bank            <- the bank
+//   PUT    /api/sounds/bank            <- the bank (slots and clip edits)
 //   PATCH  /api/sounds/assets/<key>    <- { source, author, license }
 //   DELETE /api/sounds/assets/<key>    (refused while an event plays it)
 //   GET    /sounds/<key>.ogg           the file itself
@@ -33,7 +33,7 @@ import { dirname, join } from "node:path";
 import type { Plugin, ViteDevServer } from "vite";
 import { CREDITS_PATH, renderCredits } from "../../scripts/credits";
 import { SOUNDS_DIR, soundFile, type SoundAsset } from "../audio/library";
-import { allSlotKeys, assignedSounds, type SoundBank } from "../audio/slots";
+import { allSlotKeys, assignedSounds, cleanClip, type SoundBank } from "../audio/slots";
 
 export const SOUND_ASSETS_PATH = "src/audio/soundAssets.json";
 export const SOUND_BANK_PATH = "src/audio/soundBank.json";
@@ -115,6 +115,13 @@ export function soundService(): Plugin {
               }
               delete assets[key];
               writeAssets(server, root, assets);
+              // Its clip edit goes with it: it was how this file played.
+              const bank = readBank(root);
+              if (bank.clips?.[key]) {
+                delete bank.clips[key];
+                if (!Object.keys(bank.clips).length) delete bank.clips;
+                writeJson(server, join(root, SOUND_BANK_PATH), bank);
+              }
               rmSync(join(root, "public", asset.file.replace(/^\//, "")), { force: true });
               return send(res, 200, { ok: true });
             }
@@ -176,11 +183,21 @@ function validBank(raw: unknown, assets: Record<string, SoundAsset>): SoundBank 
     for (const k of sounds) if (!assets[k]) throw new Error(`"${key}" names "${k}", which is not in the library`);
     const slot: SoundBank["slots"][string] = {};
     if (sounds.length) slot.sounds = sounds;
-    for (const field of ["volume", "refSpeed", "pitchJitter", "pitchFollow"] as const) {
+    for (const field of ["volume", "refSpeed", "pitchJitter", "pitchFollow", "paceFollow"] as const) {
       const v = s[field];
       if (typeof v === "number" && Number.isFinite(v)) slot[field] = v;
     }
     if (Object.keys(slot).length) out.slots[key] = slot;
+  }
+  // Clip edits, held to the library and to the file's length; one that
+  // changes nothing is dropped.
+  const clips = (raw as SoundBank).clips ?? {};
+  if (typeof clips !== "object") throw new Error("expected clips: { ... }");
+  for (const key of Object.keys(clips).sort()) {
+    const asset = assets[key];
+    if (!asset) throw new Error(`a clip edit names "${key}", which is not in the library`);
+    const clip = cleanClip(clips[key]!, asset.seconds);
+    if (clip) (out.clips ??= {})[key] = clip;
   }
   return out;
 }

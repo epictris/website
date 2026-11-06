@@ -9,6 +9,11 @@
 // dropped onto it, dragged from the library or picked from its list, and has
 // the event's volume, reference speed and pitch.
 //
+// A library file's Edit opens its CLIP EDITOR (editor/clipEditor.ts): its
+// waveform, cropped by dragging, and its own volume and pitch - how the game
+// plays that file wherever it is assigned, kept in the bank's `clips`. The
+// file itself is never changed.
+//
 // Every change is heard at once - in this editor's ▶ Test, which shares the
 // menu's copy, and in a game open in another tab, which is told over a
 // BroadcastChannel - and saved to `src/audio/soundBank.json` a moment later
@@ -17,17 +22,22 @@
 
 import type { SoundAsset } from "../audio/library";
 import { SOUND_ASSETS } from "../audio/library";
+import type { Audition } from "../audio/audioOut";
 import {
   FAMILIES,
   SOUND_BANK,
+  cleanClip,
+  clipPlay,
   slotKey,
   slotParams,
+  type ClipEdit,
   type FamilySpec,
   type SlotParams,
   type SoundBank,
 } from "../audio/slots";
 import { SURFACE_LABELS, type SurfaceKind } from "../audio/surfaces";
 import { broadcastSounds, type SoundSystem } from "../audio/soundSystem";
+import { ClipEditor } from "./clipEditor";
 
 const API = "/api/sounds";
 const OPEN_KEY = "rope.editor.soundFamilies";
@@ -50,6 +60,12 @@ export class SoundMenu {
   private readonly openFamilies: Set<string> = readOpen();
   // Where an Upload… press puts what it uploads: a slot, or just the library.
   private uploadTarget: string | null = null;
+  // The library file whose clip editor is open, and that editor; rebuilt with
+  // the menu, so the audition playing is held here (the decoded file is the
+  // sound system's, decoded once).
+  private editing: string | null = null;
+  private clipEditor: ClipEditor | null = null;
+  private audition: { key: string; a: Audition } | null = null;
   // Told when the menu opens or closes, however it was closed (the toolbar
   // button keeps its lit state by it).
   onOpenChange: ((open: boolean) => void) | null = null;
@@ -152,6 +168,8 @@ export class SoundMenu {
   hide(): void {
     this.open = false;
     this.root.hidden = true;
+    this.system.stopPreview();
+    this.audition = null;
     this.onOpenChange?.(false);
   }
 
@@ -248,6 +266,9 @@ export class SoundMenu {
       const out = await res.json();
       if (!res.ok) throw new Error(out.error ?? res.statusText);
       delete this.assets[key];
+      // The server dropped its clip edit with it.
+      if (this.bank.clips) delete this.bank.clips[key];
+      if (this.editing === key) this.editing = null;
       this.say(`Removed ${key}.`);
       this.libraryChanged();
     } catch (e) {
@@ -266,6 +287,45 @@ export class SoundMenu {
     if (notify) this.changed();
   }
 
+  // A clip edit committed: heard at once, in the game too.
+  private setClip(key: string, edit: ClipEdit, audition: boolean): void {
+    const asset = this.assets[key];
+    if (!asset) return;
+    let clip: ClipEdit | null;
+    try {
+      clip = cleanClip(edit, asset.seconds);
+    } catch (e) {
+      this.say(String(e instanceof Error ? e.message : e), true);
+      this.render();
+      return;
+    }
+    const clips = (this.bank.clips ??= {});
+    if (clip) clips[key] = clip;
+    else delete clips[key];
+    if (!Object.keys(clips).length) delete this.bank.clips;
+    this.changed();
+    if (audition) void this.play(key);
+  }
+
+  // Audition a file as the game plays it; `volume` is the event's, when it is
+  // played from one.
+  private async play(key: string, volume = 0): Promise<void> {
+    const a = await this.system.preview(key, volume);
+    this.audition = a ? { key, a } : null;
+  }
+
+  // The audition playing `key`, until it has played out.
+  private auditionOf(key: string): Audition | null {
+    const held = this.audition;
+    if (!held || held.key !== key) return null;
+    const elapsed = ((performance.now() - held.a.startedAt) / 1000) * held.a.rate;
+    if (elapsed > held.a.end - held.a.start + 0.05) {
+      this.audition = null;
+      return null;
+    }
+    return held.a;
+  }
+
   private unassign(slot: string, sound: string): void {
     const s = this.slot(slot);
     s.sounds = (s.sounds ?? []).filter((k) => k !== sound);
@@ -278,6 +338,8 @@ export class SoundMenu {
 
   private render(): void {
     const scroll = this.body.scrollTop;
+    this.clipEditor?.dispose();
+    this.clipEditor = null;
     this.body.innerHTML = "";
     this.body.append(this.renderLibrary(), this.renderEvents());
     this.body.scrollTop = scroll;
@@ -309,13 +371,27 @@ export class SoundMenu {
       row.draggable = true;
       row.addEventListener("dragstart", (e) => e.dataTransfer?.setData(DRAG_TYPE, key));
       const top = div("snd-lib-top");
-      const play = button("▶", () => void this.system.preview(key));
-      play.title = "Play";
+      const play = button("▶", () => void this.play(key));
+      play.title = "Play, as the game plays it";
       const name = div("snd-lib-name");
       name.textContent = a.name;
       name.title = `${key}\n${(a.bytes / 1024).toFixed(0)} KB`;
-      const len = div("snd-muted");
-      len.textContent = `${a.seconds.toFixed(2)} s`;
+      // How long it plays: the file's length, or - lit - what its clip edit
+      // plays of it, with the edit in full on hover.
+      const clip = this.bank.clips?.[key];
+      const len = div(clip ? "snd-muted snd-clip-tag" : "snd-muted");
+      const played = clip ? clipPlay(this.bank, key, a.seconds) : null;
+      len.textContent = `${(played ? (played.end - played.start) / played.rate : a.seconds).toFixed(2)} s`;
+      len.title = clip
+        ? `Edited: plays ${clipSummary(clip, a.seconds)} of the ${a.seconds.toFixed(2)} s file (the file itself is unchanged)`
+        : "Its length";
+      const isEditing = this.editing === key;
+      const edit = button(isEditing ? "Done" : "Edit", () => {
+        this.editing = isEditing ? null : key;
+        this.render();
+      });
+      edit.classList.toggle("active", isEditing);
+      edit.title = "Crop what plays, and set this file's own volume and pitch - the file is not changed";
       const slots = used.get(key) ?? [];
       const where = div(slots.length ? "snd-muted" : "snd-warn");
       where.textContent = slots.length ? slots.map(slotLabel).join(", ") : "not played by anything";
@@ -325,8 +401,23 @@ export class SoundMenu {
       const del = button("Remove", () => void this.remove(key));
       del.disabled = slots.length > 0;
       del.title = slots.length ? "Unassign it from every event first" : "Delete this sound from the library";
-      top.append(play, name, len, where, del);
+      top.append(play, name, len, where, edit, del);
       row.appendChild(top);
+      if (isEditing) {
+        // Not a drag source while it is being edited: a drag on the waveform
+        // is a crop, not an assignment.
+        row.draggable = false;
+        row.classList.add("editing");
+        this.clipEditor = new ClipEditor({
+          asset: a,
+          edit: clip ?? {},
+          buffer: this.system.decoded(key),
+          onCommit: (next, audition) => this.setClip(key, next, audition),
+          onPlay: () => void this.play(key),
+          audition: () => this.auditionOf(key),
+        });
+        row.appendChild(this.clipEditor.el);
+      }
       const credit = div("snd-credit");
       for (const field of ["source", "author", "license"] as const) {
         const input = document.createElement("input");
@@ -429,7 +520,7 @@ export class SoundMenu {
       play.className = "snd-chip-name";
       play.textContent = a?.name ?? `${sound} (missing)`;
       play.title = "Play";
-      play.addEventListener("click", () => void this.system.preview(sound, params.volume));
+      play.addEventListener("click", () => void this.play(sound, params.volume));
       const x = document.createElement("span");
       x.className = "snd-chip-x";
       x.textContent = "×";
@@ -468,10 +559,11 @@ export class SoundMenu {
       const opts = div("snd-opts");
       opts.appendChild(this.num(key, "volume", "volume", params.volume, "dB", -40, 12, 1, "Volume at the reference speed"));
       opts.appendChild(
-        this.num(key, "refSpeed", "at", params.refSpeed, "m/s", 0.1, 40, 0.1, `The ${f.speedIs} this sound is right at: ${f.loop ? "played at its own pitch and at the volume set, quieter and lower slower" : "played at the volume set; quieter slower, louder faster"}`),
+        this.num(key, "refSpeed", "at", params.refSpeed, "m/s", 0.1, 40, 0.1, `The ${f.speedIs} this sound is right at: ${f.loop ? "played at its own pitch and pace and at the volume set" : "played at the volume set; quieter slower, louder faster"}`),
       );
       if (f.loop) {
         opts.appendChild(this.num(key, "pitchFollow", "pitch follows", params.pitchFollow, "", 0, 1, 0.05, "How far the pitch follows the speed: 0 never changes, 1 is an octave up at twice the reference speed"));
+        opts.appendChild(this.num(key, "paceFollow", "pace follows", params.paceFollow, "", 0, 1, 0.05, "How far the recording's pace follows the speed, apart from its pitch: 0 never changes, 1 plays its texture twice as quick at twice the reference speed. Equal to pitch follows is a tape played faster"));
       } else {
         opts.appendChild(this.num(key, "pitchJitter", "pitch ±", params.pitchJitter, "st", 0, 12, 0.5, "Each play is detuned at random by up to this many semitones (st) either way, so a repeated sound does not sound like one recording"));
       }
@@ -482,7 +574,7 @@ export class SoundMenu {
 
   private num(
     key: string,
-    field: "volume" | "refSpeed" | "pitchJitter" | "pitchFollow",
+    field: "volume" | "refSpeed" | "pitchJitter" | "pitchFollow" | "paceFollow",
     label: string,
     value: number,
     unit: string,
@@ -536,6 +628,17 @@ function familySummary(f: FamilySpec, bank: SoundBank): string {
   return [hasDefault ? "default set" : "no default", overrides ? `${overrides} surface${overrides === 1 ? "" : "s"}` : ""]
     .filter(Boolean)
     .join(", ");
+}
+
+// "0.120-0.480 s, -3 dB, +2 st": what a clip edit changes, in short.
+function clipSummary(c: ClipEdit, seconds: number): string {
+  const parts: string[] = [];
+  if (c.start !== undefined || c.end !== undefined) {
+    parts.push(`${(c.start ?? 0).toFixed(2)}-${(c.end ?? seconds).toFixed(2)} s`);
+  }
+  if (c.volume) parts.push(`${c.volume > 0 ? "+" : ""}${c.volume} dB`);
+  if (c.pitch) parts.push(`${c.pitch > 0 ? "+" : ""}${c.pitch} st`);
+  return parts.join(", ");
 }
 
 function slotLabel(key: string): string {
@@ -614,6 +717,17 @@ function injectStyles(): void {
     white-space: nowrap; }
   .snd-lib-top > .snd-muted, .snd-lib-top > .snd-warn { flex: 1 1 auto; min-width: 0;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .snd-lib.editing { cursor: default; border-color: #3c445c; }
+  .snd-lib-top > .snd-clip-tag { color: #65bddb; }
+  .snd-clip { display: flex; flex-direction: column; gap: 2px; padding: 2px 0 4px; }
+  .snd-wave { border: 1px solid #313244; }
+  /* The page lays its own two canvases over the window (editor.html); this
+     one sits in the row. */
+  .snd-wave-canvas { position: static; display: block; width: 100%; height: 72px; touch-action: none; }
+  .snd-wave-axis { display: flex; justify-content: space-between; }
+  .snd-clip-line { display: flex; gap: 4px 16px; align-items: center; flex-wrap: wrap; }
+  .snd-clip-line .snd-num .ed-num.time { width: 9ch; }
+  .snd-clip-status { margin-left: auto; white-space: nowrap; }
   .snd-credit { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 4px; }
   .snd-credit-in { min-width: 0; }
   .snd-credit-in.missing { border-color: #e0af68; }

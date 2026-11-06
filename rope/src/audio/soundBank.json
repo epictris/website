@@ -1,3 +1,45 @@
 {
-  "slots": {}
+  "slots": {
+    "attach": {
+      "volume": 0,
+      "refSpeed": 12,
+      "pitchJitter": 1
+    },
+    "bounce": {
+      "volume": -3,
+      "refSpeed": 8,
+      "pitchJitter": 1
+    },
+    "land": {
+      "volume": 0,
+      "refSpeed": 5,
+      "pitchJitter": 1
+    },
+    "roll": {
+      "volume": 0,
+      "refSpeed": 3,
+      "pitchFollow": 0,
+      "paceFollow": 1
+    },
+    "splash": {
+      "volume": 0,
+      "refSpeed": 4,
+      "pitchJitter": 1
+    },
+    "wade": {
+      "volume": -3,
+      "refSpeed": 2,
+      "pitchFollow": 0.3
+    },
+    "whoosh": {
+      "volume": -6,
+      "refSpeed": 12,
+      "pitchFollow": 0.3
+    },
+    "wind": {
+      "volume": -6,
+      "refSpeed": 3,
+      "pitchJitter": 2
+    }
+  }
 }

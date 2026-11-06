@@ -298,18 +298,21 @@ export function runAssetChecks(): AssetCheck[] {
   // manifests hold what something draws: a sound tried in the Sounds menu and
   // then replaced is still published and fetched by every build until it is
   // removed there. And the bank may name only what the library holds, or that
-  // event is silent in a build that never had the file.
+  // event is silent in a build that never had the file; likewise a clip edit
+  // (the menu's crop, volume and pitch) is of a file the library holds.
   const played = assignedSounds(SOUND_BANK);
   const unplayed = Object.keys(SOUND_ASSETS).filter((key) => !played.has(key));
   const unknown = [...played].filter((key) => !SOUND_ASSETS[key]);
+  const strayClips = Object.keys(SOUND_BANK.clips ?? {}).filter((key) => !SOUND_ASSETS[key]);
   checks.push({
     name: "assets: every sound is played by an event, and every event's sounds exist",
-    pass: unplayed.length === 0 && unknown.length === 0,
+    pass: unplayed.length === 0 && unknown.length === 0 && strayClips.length === 0,
     detail:
-      unplayed.length || unknown.length
+      unplayed.length || unknown.length || strayClips.length
         ? [
             unplayed.length ? `played by no event - remove it in the editor's Sounds menu: ${unplayed.join(", ")}` : "",
             unknown.length ? `assigned but not in the library: ${unknown.join(", ")}` : "",
+            strayClips.length ? `clip edits of sounds not in the library: ${strayClips.join(", ")}` : "",
           ]
             .filter(Boolean)
             .join("; ")

@@ -13,19 +13,35 @@
 // step earlier. Played as they arrived instead, a frame's worth of steps would
 // land in a lump, and a fast wind's links would be a 60 Hz buzz.
 //
-// SILENCE. A frame that ran no steps - a paused replay, the settings panel,
-// the finish linger's end - fades every loop out, so a ball that stops being
-// simulated stops being heard.
+// SILENCE. Once the sim stops stepping - a paused replay, the settings panel,
+// the finish linger's end - every loop fades out, so a ball that stops being
+// simulated stops being heard. "Stops" is a step OVERDUE, not a frame that ran
+// none: on a display faster than 60 Hz most frames run none, and fading on
+// each of them pulled every loop's level down between steps, a flutter at the
+// frame rate. A fade cancels what the steps had scheduled ahead (up to `LEAD`),
+// or the last step's level, scheduled after it, would take the loop back up
+// and hold it there.
+//
+// LOOPS. A loop voice is a `grain-loop` AudioWorkletNode (audio/grainWorklet.ts)
+// rather than a looping buffer source, so its PACE (how fast the file's time
+// runs) and its PITCH follow the speed apart (docs/sound.md#pace-and-pitch): a
+// roll's texture quickens with the ball while its ring stays where it was.
 //
 // LIVE. The bank and the library are read afresh on every step, so an
 // assignment changed in the editor's Sounds menu is heard on the next one: a
 // loop whose file is no longer assigned is stopped and its new one started.
+//
+// CLIPS. A file's clip edit (`SoundBank.clips`, audio/slots.ts) is applied at
+// playing, never to the file: a one-shot plays only its window, a loop loops
+// within it, and its gain and rate multiply the slot's. A running loop takes a
+// changed window, gain and rate on its next step.
 
 import type { SoundLevel } from "../render/settings";
 import { SOUND_ASSETS } from "./library";
-import { SOUND_BANK, resolveSlot, type SlotParams, type SoundFamily } from "./slots";
+import { SOUND_BANK, clipPlay, resolveSlot, type ClipPlay, type SlotParams, type SoundFamily } from "./slots";
 import type { SoundStep } from "./soundObserver";
 import { SURFACE_KINDS, type SurfaceKind } from "./surfaces";
+import grainWorkletUrl from "./grainWorklet.ts?worker&url";
 
 export type SoundVolume = SoundLevel;
 // Off, and three steps of about 5 dB.
@@ -50,9 +66,15 @@ const MAX_ONESHOTS = 48;
 const ONESHOT_MAX_GAIN = 2;
 const LOOP_MAX_GAIN = 1.5;
 // A loop's pitch is held inside two octaves either way, so a speed far off its
-// reference does not turn a roll into a squeal or a growl.
+// reference does not turn a roll into a squeal or a growl. Its pace is held
+// only by what the worklet takes: a quicker or slower texture is not a sound
+// the ear hears as wrong the way a squeal is.
 const RATE_MIN = 0.25;
 const RATE_MAX = 4;
+const PACE_MAX = 16;
+// How long after a loop's fade starts its voice stops working (`run` 0), s:
+// nine time constants of a step's fade (-78 dB), so it never cuts off audibly.
+const REST_AFTER = 9 * FOLLOW;
 
 // A loop's level against its reference speed, by family: a roll and a wade
 // grow in proportion to the speed; the air goes as its SQUARE (the pressure of
@@ -69,9 +91,16 @@ interface LoopVoice {
   // What it is playing: the slot it was resolved to, and which of its files.
   slot: string;
   sound: string;
-  src: AudioBufferSourceNode;
+  node: AudioWorkletNode;
   gain: GainNode;
   pan: StereoPannerNode;
+  // The file's length, s, and the window last sent to the worklet, samples.
+  seconds: number;
+  window: { start: number; end: number };
+  // Faded out with its `run` param set to drop (see `REST_AFTER`); false
+  // while it is heard, and on its first step, which sets its params outright.
+  resting: boolean;
+  fresh: boolean;
 }
 
 export class AudioOut {
@@ -90,9 +119,20 @@ export class AudioOut {
   // running when it has a choice.
   private readonly lastPick = new Map<string, string>();
   private live = 0;
+  // The game's one-shots still sounding (not the menu's audition), by their
+  // gain, so leaving ▶ Test can fade them too.
+  private readonly shots = new Set<GainNode>();
+  // The audio-clock time the last step was scheduled at, and whether the
+  // loops have been faded since (so a pause fades them once, not per frame).
+  private lastStepAt = -Infinity;
+  private quiet = true;
+  // The menu's audition, so a new one stops the last rather than piling on.
+  private auditioning: AudioBufferSourceNode | null = null;
   // Instruments, for `window.__sound` (see `stats`).
   private readonly counts = { oneShots: 0, dropped: 0, missing: 0 };
   private analyser: AnalyserNode | null = null;
+  // The loop voices' processor, registered once per context; loops wait for it.
+  private workletReady = false;
   private capture: { node: ScriptProcessorNode; chunks: Float32Array[] } | null = null;
 
   constructor(volume: SoundVolume) {
@@ -151,31 +191,84 @@ export class AudioOut {
     };
     const n = this.queue.length;
     if (n === 0) {
-      this.silence();
+      // The next step is due a step after the last; a frame between the two
+      // (most frames, above 60 Hz) is not the sim stopping.
+      if (!this.quiet && now > this.lastStepAt + STEP) this.silence();
       return;
     }
     for (let i = 0; i < n; i++) {
-      this.playStep(this.queue[i]!, Math.max(now, now + LEAD - (n - 1 - i) * STEP), pan);
+      const t = Math.max(now, now + LEAD - (n - 1 - i) * STEP);
+      this.playStep(this.queue[i]!, t, pan);
+      this.lastStepAt = t;
     }
+    this.quiet = false;
     this.queue.length = 0;
   }
 
-  // Fade every loop out: no step is coming (a frame that ran none, or a page
-  // that has stopped stepping altogether - the editor leaving ▶ Test).
-  silence(): void {
+  // Fade every loop out: no step is coming (the sim has stopped stepping, or
+  // the page has - the editor leaving ▶ Test). With `oneShots`, the one-shots
+  // still ringing go too: a test that is over is over, where a pause lets a
+  // landing finish.
+  silence(oneShots = false): void {
     if (!this.ctx) return;
     this.queue.length = 0;
-    for (const v of this.loops.values()) v.gain.gain.setTargetAtTime(0, this.ctx.currentTime, 0.05);
+    this.quiet = true;
+    const t = this.ctx.currentTime;
+    const fade = (param: AudioParam): void => {
+      // Everything scheduled from now on goes: the steps schedule up to `LEAD`
+      // ahead, and an event after the fade would undo it.
+      param.cancelScheduledValues(t);
+      param.setTargetAtTime(0, t, 0.05);
+    };
+    for (const v of this.loops.values()) {
+      fade(v.gain.gain);
+      // Ten of this fade's time constants, -87 dB. Whether or not it was
+      // resting already: a rest the last step set was timed for that step's
+      // own fade, which this one replaces.
+      v.node.parameters.get("run")!.setValueAtTime(0, t + 0.5);
+      v.resting = true;
+    }
+    if (oneShots) for (const g of this.shots) fade(g.gain);
   }
 
-  // Play one library file now, at `volume` dB, centred - the menu's audition.
-  // Starts the context if it has to (a preview is a press).
-  async preview(key: string, volume = 0, rate = 1): Promise<boolean> {
+  // Play one library file now, at `volume` dB, centred, as its clip edit says
+  // - the menu's audition. Starts the context if it has to (a preview is a
+  // press), and stops the audition before it. Answers what is playing - the
+  // window of the file and the rate it is played at - and when it started on
+  // `performance.now()`'s clock, for a playhead; null if it cannot play.
+  async preview(key: string, volume = 0): Promise<Audition | null> {
     this.unlock();
     const buffer = await this.load(key);
-    if (!buffer || !this.ctx) return false;
-    this.oneShot(buffer, dbToGain(volume), 0, rate, this.ctx.currentTime);
-    return true;
+    const ctx = this.ctx;
+    if (!buffer || !ctx) return null;
+    this.stopPreview();
+    const clip = clipPlay(SOUND_BANK, key, buffer.duration);
+    const src = this.oneShot(buffer, dbToGain(volume) * clip.gain, 0, clip.rate, ctx.currentTime, clip, true);
+    if (!src) return null;
+    this.auditioning = src;
+    src.addEventListener("ended", () => {
+      if (this.auditioning === src) this.auditioning = null;
+    });
+    // `outputLatency` is what the context says lies between scheduling and
+    // the speaker; without it the playhead runs ahead of what is heard.
+    const latency = (ctx.outputLatency || 0) + (ctx.baseLatency || 0);
+    return { ...clip, startedAt: performance.now() + latency * 1000 };
+  }
+
+  stopPreview(): void {
+    try {
+      this.auditioning?.stop();
+    } catch {
+      // Already ended.
+    }
+    this.auditioning = null;
+  }
+
+  // A library file decoded, for drawing it (the menu's waveform). Starts the
+  // context if it has to, which the menu's opening press allows.
+  decoded(key: string): Promise<AudioBuffer | null> {
+    if (this.ctx === null) this.start();
+    return this.load(key);
   }
 
   // ---------------------------------------------------------------------------
@@ -202,6 +295,15 @@ export class AudioOut {
     this.analyser.fftSize = 2048;
     limiter.connect(this.analyser);
     this.bus = this.master;
+    ctx.audioWorklet.addModule(grainWorkletUrl).then(
+      () => {
+        this.workletReady = true;
+      },
+      (err: unknown) => {
+        this.counts.missing++;
+        console.warn(`[sound] loop player (${grainWorkletUrl}): ${String(err)}`);
+      },
+    );
     this.preloadAssigned();
   }
 
@@ -272,8 +374,7 @@ export class AudioOut {
     let voice = this.loops.get(channel);
     // Unassigned, or assigned something else since it started: stop it.
     if (voice && (!resolved || voice.slot !== resolved.key || !resolved.params.sounds.includes(voice.sound))) {
-      voice.gain.gain.setTargetAtTime(0, t, 0.03);
-      voice.src.stop(t + 0.2);
+      this.stopLoop(voice, t);
       this.loops.delete(channel);
       voice = undefined;
     }
@@ -281,37 +382,94 @@ export class AudioOut {
     const params = resolved.params;
     const active = pan !== null && speed > 0;
     if (!voice) {
-      if (!active) return;
+      if (!active || !this.workletReady) return;
       const key = this.pick(resolved.key, params);
       const buffer = key ? this.now(key) : null;
       if (!key || !buffer) return;
-      voice = this.startLoop(resolved.key, key, buffer, t);
+      voice = this.startLoop(resolved.key, key, buffer);
       this.loops.set(channel, voice);
     }
-    const ratio = speed / Math.max(params.refSpeed, 1e-3);
-    const gain = active ? dbToGain(params.volume) * loopLevel(family, ratio) : 0;
-    voice.gain.gain.setTargetAtTime(gain, t, FOLLOW);
-    if (active) {
-      const rate = Math.min(RATE_MAX, Math.max(RATE_MIN, Math.pow(Math.max(ratio, 1e-3), params.pitchFollow)));
-      voice.src.playbackRate.setTargetAtTime(rate, t, FOLLOW);
-      voice.pan.pan.setTargetAtTime(pan, t, FOLLOW);
+    // Read every step, so an edit in the menu is heard on a loop already
+    // running: the window is the worklet's to change at any time.
+    const clip = clipPlay(SOUND_BANK, voice.sound, voice.seconds);
+    const rate = this.ctx!.sampleRate;
+    const window = { start: Math.round(clip.start * rate), end: Math.round(clip.end * rate) };
+    if (window.start !== voice.window.start || window.end !== voice.window.end) {
+      voice.window = window;
+      voice.node.port.postMessage({ type: "window", ...window });
     }
+    const ratio = speed / Math.max(params.refSpeed, 1e-3);
+    const gain = active ? dbToGain(params.volume) * clip.gain * loopLevel(family, ratio) : 0;
+    voice.gain.gain.setTargetAtTime(gain, t, FOLLOW);
+    if (!active) {
+      this.rest(voice, t + REST_AFTER);
+      return;
+    }
+    if (voice.resting) {
+      // Back before its rest fell, or after: either way it runs from now.
+      const run = voice.node.parameters.get("run")!;
+      run.cancelScheduledValues(t);
+      run.setValueAtTime(1, t);
+      voice.resting = false;
+    }
+    // The clip's pitch is the file's own, as a faster tape: higher AND
+    // quicker, so it scales both, outside the speed's two-octave hold.
+    const scaled = Math.max(ratio, 1e-3);
+    const pitch = clip.rate * Math.min(RATE_MAX, Math.max(RATE_MIN, Math.pow(scaled, params.pitchFollow)));
+    const pace = Math.min(PACE_MAX, clip.rate * Math.pow(scaled, params.paceFollow));
+    const fresh = voice.fresh;
+    const set = (param: AudioParam, value: number): void => {
+      if (fresh) param.setValueAtTime(value, t);
+      else param.setTargetAtTime(value, t, FOLLOW);
+    };
+    set(voice.node.parameters.get("pitch")!, pitch);
+    set(voice.node.parameters.get("pace")!, pace);
+    set(voice.pan.pan, pan);
+    voice.fresh = false;
   }
 
-  private startLoop(slot: string, sound: string, buffer: AudioBuffer, t: number): LoopVoice {
+  // A loop voice for `sound`, silent until its first step sets its gain. It
+  // starts at a random point in its window, so a roll that stops and starts
+  // does not restart the same bar of it every time.
+  private startLoop(slot: string, sound: string, buffer: AudioBuffer): LoopVoice {
     const ctx = this.ctx!;
-    const src = ctx.createBufferSource();
-    src.buffer = buffer;
-    src.loop = true;
+    const node = new AudioWorkletNode(ctx, "grain-loop", {
+      numberOfInputs: 0,
+      numberOfOutputs: 1,
+      outputChannelCount: [buffer.numberOfChannels],
+    });
+    const clip = clipPlay(SOUND_BANK, sound, buffer.duration);
+    const rate = ctx.sampleRate;
+    const window = { start: Math.round(clip.start * rate), end: Math.round(clip.end * rate) };
+    const channels: Float32Array[] = [];
+    for (let c = 0; c < buffer.numberOfChannels; c++) channels.push(buffer.getChannelData(c));
+    const at = window.start + Math.random() * (window.end - window.start);
+    // Copied into the worklet (a transfer would empty the decoded buffer the
+    // next voice on this file reads).
+    node.port.postMessage({ type: "init", channels, ...window, at });
     const gain = ctx.createGain();
     gain.gain.value = 0;
     const pan = ctx.createStereoPanner();
-    src.connect(gain).connect(pan).connect(this.bus!);
-    // From a random point in the file, so a roll that stops and starts does
-    // not restart the same bar of it every time.
-    src.start(t, Math.random() * buffer.duration);
-    src.onended = () => pan.disconnect();
-    return { slot, sound, src, gain, pan };
+    node.connect(gain).connect(pan).connect(this.bus!);
+    return { slot, sound, node, gain, pan, seconds: buffer.duration, window, resting: false, fresh: true };
+  }
+
+  // A voice that has faded stops working at `at` (see `REST_AFTER`). Once per
+  // fade: a step that finds it already resting leaves the time it fell.
+  private rest(voice: LoopVoice, at: number): void {
+    if (voice.resting) return;
+    voice.node.parameters.get("run")!.setValueAtTime(0, at);
+    voice.resting = true;
+  }
+
+  private stopLoop(voice: LoopVoice, t: number): void {
+    voice.gain.gain.setTargetAtTime(0, t, 0.03);
+    this.rest(voice, t + 0.3);
+    // The node ends itself on "stop"; until then its fade plays out.
+    setTimeout(() => {
+      voice.node.port.postMessage({ type: "stop" });
+      voice.pan.disconnect();
+    }, 400);
   }
 
   // A one-shot for `family` on `surface`, at `speed`.
@@ -322,9 +480,11 @@ export class AudioOut {
     const key = this.pick(resolved.key, params);
     const buffer = key ? this.now(key) : null;
     if (!buffer) return;
-    const gain = dbToGain(params.volume) * Math.min(ONESHOT_MAX_GAIN, speed / Math.max(params.refSpeed, 1e-3));
-    const rate = Math.pow(2, ((Math.random() * 2 - 1) * params.pitchJitter) / 12);
-    this.oneShot(buffer, gain, pan, rate, t);
+    const clip = clipPlay(SOUND_BANK, key!, buffer.duration);
+    const gain =
+      dbToGain(params.volume) * clip.gain * Math.min(ONESHOT_MAX_GAIN, speed / Math.max(params.refSpeed, 1e-3));
+    const rate = clip.rate * Math.pow(2, ((Math.random() * 2 - 1) * params.pitchJitter) / 12);
+    this.oneShot(buffer, gain, pan, rate, t, clip);
   }
 
   // One of the slot's files at random, never the one it played last when it
@@ -339,12 +499,22 @@ export class AudioOut {
     return key;
   }
 
-  private oneShot(buffer: AudioBuffer, gain: number, pan: number, rate: number, at: number): void {
+  // `clip` is the window of the file played, seconds of the file. An
+  // audition is played however quiet and however busy the game is.
+  private oneShot(
+    buffer: AudioBuffer,
+    gain: number,
+    pan: number,
+    rate: number,
+    at: number,
+    clip: Pick<ClipPlay, "start" | "end">,
+    audition = false,
+  ): AudioBufferSourceNode | null {
     const ctx = this.ctx!;
-    if (gain <= 1e-4) return;
-    if (this.live >= MAX_ONESHOTS) {
+    if (!audition && gain <= 1e-4) return null;
+    if (!audition && this.live >= MAX_ONESHOTS) {
       this.counts.dropped++;
-      return;
+      return null;
     }
     this.counts.oneShots++;
     const src = ctx.createBufferSource();
@@ -356,11 +526,15 @@ export class AudioOut {
     p.pan.value = pan;
     src.connect(g).connect(p).connect(this.bus!);
     this.live++;
+    if (!audition) this.shots.add(g);
     src.onended = () => {
       this.live--;
+      this.shots.delete(g);
       p.disconnect();
     };
-    src.start(Math.max(ctx.currentTime, at));
+    // Offset and duration are in the buffer's own seconds, whatever the rate.
+    src.start(Math.max(ctx.currentTime, at), clip.start, clip.end - clip.start);
+    return src;
   }
 
   // ---------------------------------------------------------------------------
@@ -438,6 +612,12 @@ export class AudioOut {
       peakDb,
     };
   }
+}
+
+// An audition under way: the window of the file (seconds of the file) and the
+// rate it plays at, and when it started on `performance.now()`'s clock.
+export interface Audition extends ClipPlay {
+  startedAt: number;
 }
 
 export function dbToGain(db: number): number {

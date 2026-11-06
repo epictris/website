@@ -14,7 +14,7 @@
 import type { Camera } from "../render/camera";
 import type { BallLevel } from "../level/ballLevel";
 import { PIXELS_PER_METER } from "../engine/units";
-import { AudioOut, type SoundVolume } from "./audioOut";
+import { AudioOut, type Audition, type SoundVolume } from "./audioOut";
 import { replaceSoundAssets, type SoundAsset } from "./library";
 import { replaceSoundBank, type SoundBank } from "./slots";
 import { SoundObserver } from "./soundObserver";
@@ -63,18 +63,28 @@ export class SoundSystem {
     this.out.flush(camera.position.x, halfWidth);
   }
 
-  // Nothing more will be stepped for now (the editor leaving ▶ Test).
+  // Nothing more will be stepped for now (the editor leaving ▶ Test): the
+  // loops and whatever one-shots are still ringing fade out.
   silence(): void {
-    this.out.silence();
+    this.out.silence(true);
   }
 
   setVolume(volume: SoundVolume): void {
     this.out.setVolume(volume);
   }
 
-  // Play one library file now: the menu's audition.
-  preview(key: string, volume = 0, rate = 1): Promise<boolean> {
-    return this.out.preview(key, volume, rate);
+  // Play one library file now, as its clip edit says: the menu's audition.
+  preview(key: string, volume = 0): Promise<Audition | null> {
+    return this.out.preview(key, volume);
+  }
+
+  stopPreview(): void {
+    this.out.stopPreview();
+  }
+
+  // A library file decoded, for the menu's waveform.
+  decoded(key: string): Promise<AudioBuffer | null> {
+    return this.out.decoded(key);
   }
 
   // `window.__sound.stats()`: what the output is doing (`AudioOut.stats`).
