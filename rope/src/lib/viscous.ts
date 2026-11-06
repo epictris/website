@@ -71,8 +71,19 @@ const SLIP_BISECTIONS = 40;
 // reference mud (1) creeps at the quoted speed under the quoted load and mud
 // twice as viscous needs twice the pull for the same creep (see
 // `CollisionShape2D.viscosity`).
-export function creepSpeed(load: number, viscosity = 1): number {
-  if (!(load > 0) || !(viscosity > 0)) return 0;
+//
+// `floor` is the SLIP FLOOR (`CollisionShape2D.slipFloor`, newtons): the mud
+// holds the cuff dead still under any load up to it, as static friction holds
+// a block, and above it creeps at the law's speed for the WHOLE load, the
+// floor taking nothing off it - the floor decides whether the mud gives, the
+// viscosity how fast, and neither knob moves the other. So the law jumps at
+// the floor, from nothing to `creepSpeed(floor)`, and a solve that lands on
+// the jump has the tension held at the floor and the cuff giving at whatever
+// speed in between makes the two agree - a block sliding under exactly its
+// friction (`viscousRopeImpulse`). Zero, every face authored before the floor
+// existed, is the law as it always was.
+export function creepSpeed(load: number, viscosity = 1, floor = 0): number {
+  if (!(load > floor) || !(load > 0) || !(viscosity > 0)) return 0;
   return VISCOUS_CREEP_SPEED * dmath.pow(load / (viscosity * VISCOUS_CREEP_LOAD), VISCOUS_EXPONENT);
 }
 
@@ -123,7 +134,7 @@ export function slipDistance(
 // (and how viscous), a solid piece of the same body that holds it fast, or
 // nothing at all - in which case nothing is holding the cuff.
 export type EmbedHold =
-  | { readonly kind: "viscous"; readonly viscosity: number }
+  | { readonly kind: "viscous"; readonly viscosity: number; readonly slipFloor: number }
   | { readonly kind: "solid" }
   | { readonly kind: "nothing" };
 
@@ -207,7 +218,7 @@ export class RopeEmbed extends RopeAttachment {
       if (piece === this.cuff) continue;
       if (Intersections.intersectsSegment(piece, axis) === IntersectionStatus.Separate) continue;
       if (!piece.viscous) return { kind: "solid" };
-      viscous ??= { kind: "viscous", viscosity: piece.viscosity };
+      viscous ??= { kind: "viscous", viscosity: piece.viscosity, slipFloor: piece.slipFloor };
     }
     return viscous ?? { kind: "nothing" };
   }

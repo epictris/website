@@ -1,0 +1,36 @@
+{
+  "level": "ball-trampoline-hang",
+  "controller": "ball",
+  "frames": 120,
+  "data": {
+    "player": { "x": 0, "y": 0, "radius": 8, "hang": true },
+    "bodies": [
+      {
+        "kind": "static",
+        "x": 0,
+        "y": -185,
+        "rot": 0,
+        "friction": 1.0,
+        "objects": [
+          { "type": "collision", "x": 0, "y": 0, "rot": 0, "shape": { "kind": "rect", "w": 200, "h": 40 } }
+        ]
+      },
+      {
+        "kind": "static",
+        "x": 58,
+        "y": 0,
+        "rot": 0,
+        "friction": 1.0,
+        "launch": 900,
+        "objects": [
+          { "type": "collision", "x": 0, "y": 0, "rot": 0, "shape": { "kind": "rect", "w": 100, "h": 60 } }
+        ]
+      }
+    ]
+  },
+  "asserts": [
+    { "frame": 1, "hasRope": true },
+    { "frame": 10, "maxX": -0.5 },
+    { "window": { "from": 1, "to": 120 }, "maxSpeed": 10.0 }
+  ]
+}

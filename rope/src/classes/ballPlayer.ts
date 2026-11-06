@@ -25,7 +25,7 @@ import { ringEnd, RopeVineClamp, type VineLine } from "../lib/vineClamp";
 import type { FrameInput } from "../input/frameInput";
 import { Rope } from "./rope";
 import { SlackChain } from "./slackChain";
-import { BallHook } from "./ballHook";
+import { BallHook, hookDeflects } from "./ballHook";
 import { chainEndFacing, MANACLE_HINGE, MANACLE_REACH, manacleShape } from "../lib/manacle";
 
 // The manacle as the renderers draw it: see `BallPlayer.manaclePose`.
@@ -1373,7 +1373,9 @@ export class BallPlayer extends RigidBody2D {
     const struckIndex = struck ? shapes.indexOf(struck) : -1;
     const pieceIndex = struckIndex >= 0 ? struckIndex : nearestShapeIndex(shapes, point);
     const piece = shapes[pieceIndex];
-    if (piece?.impermeable) {
+    // The same of a launch surface, which the hook glances off for the same
+    // reason (`hookDeflects`).
+    if (piece && hookDeflects(piece)) {
       this.releaseChain();
       return;
     }

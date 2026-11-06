@@ -185,6 +185,11 @@ export class CollisionShape2D implements ShapeTransform {
   // a shape. Hook-proof wins where both are set, as it does over a rail, and
   // a rail wins over this - a rail is clamped around rather than bitten.
   viscosity = 0;
+  // The SLIP FLOOR of a viscous face, newtons (`creepSpeed`'s `floor`): the
+  // mud holds the cuff dead still under any pull up to it and creeps by the
+  // law above it - static friction for mud. Zero creeps under any pull at
+  // all, the law as it was. Meaningless on a face that is not viscous.
+  slipFloor = 0;
 
   get viscous(): boolean {
     return this.viscosity > 0;
@@ -572,8 +577,9 @@ export abstract class CollisionObject2D {
   // It is a FLOOR under the outgoing normal speed, so a ball that has dropped
   // 20 cm leaves at the same speed as one that has fallen the height of the
   // level, which is the whole of what makes a pad a launcher rather than a
-  // bouncy floor. See `contactBounce` for how the two combine and for why the
-  // floor fades out at low approach speeds instead of applying at any touch.
+  // bouncy floor. It is paid at ANY touch, so nothing can rest on a pad - the
+  // ball on its chain and the hook included (`hookDeflects`). See
+  // `contactBounce` (engine/bounce.ts) for how the two combine.
   restitution = 0;
   launchSpeed = 0;
 

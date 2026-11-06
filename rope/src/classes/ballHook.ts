@@ -3,7 +3,7 @@
 // the deploy (`gravityScale = 0`) and switched back on the moment the throw
 // ends, so the shot goes exactly where it was aimed and only then starts to
 // fall. Anything that stops the flight counts: the hook contacting a surface
-// (attach, or a bounce off an impermeable), the chain snagging scene geometry,
+// (attach, or a bounce off a hook-proof or launch surface), the chain snagging scene geometry,
 // or the chain running out of length - the last two are BallPlayer's calls,
 // which is why `endFlight` is public.
 //
@@ -23,7 +23,7 @@ import { PX } from "../engine/units";
 import { nearestSurfacePoint, shapeWorldVertices, type ShapeTransform } from "../engine/shapes";
 import { bodySweepConvex } from "../engine/collision";
 import { shapeContacts } from "../engine/manifold";
-import { CONTACT_SLOP, GRAVITY } from "../engine/world";
+import { CONTACT_SLOP, GRAVITY, contactBounce } from "../engine/world";
 import { Mathf } from "../engine/mathf";
 import { Density, ShapeGeometry } from "../lib/shapeGeometry";
 import { Vec2 } from "../engine/vec2";
@@ -46,6 +46,15 @@ type SweepHit = {
   collider: PhysicsBody2D;
   shape: CollisionShape2D;
 };
+
+// Does the hook glance off this piece rather than bite it? A hook-proof piece,
+// or any piece of a LAUNCH surface: nothing may rest on a trampoline (see
+// `contactBounce`), and a cuff biting one would be the chain resting on it -
+// so the hook is thrown away from it like everything else that touches it,
+// and every attach path declines it as it declines a hook-proof face.
+export function hookDeflects(piece: CollisionShape2D): boolean {
+  return piece.impermeable || piece.owner.launchSpeed > 0;
+}
 
 export class BallHook extends RigidBody2D {
   // Never scenery: a hook in flight is the fastest thing in the level, a
@@ -301,10 +310,10 @@ export class BallHook extends RigidBody2D {
     return (piece.mask & LAYER_HOOK) !== 0;
   }
 
-  // Attachable to this hook: in its way, not hook-proof, and not a face it has
-  // shed.
+  // Attachable to this hook: in its way, not a piece it glances off (hook-proof
+  // or a launch surface, `hookDeflects`), and not a face it has shed.
   private bites(piece: CollisionShape2D): boolean {
-    return this.reaches(piece) && !piece.impermeable && !this.shed.has(piece);
+    return this.reaches(piece) && !hookDeflects(piece) && !this.shed.has(piece);
   }
 
   // The throw is over — the hook falls from here on. Idempotent, and safe to
@@ -535,7 +544,7 @@ export class BallHook extends RigidBody2D {
         body,
         bar,
         motion,
-        (s) => s.impermeable === true && this.reaches(s),
+        (s) => hookDeflects(s) && this.reaches(s),
       );
       if (off && off.t <= 1 && (!proof || off.t < proof.t)) {
         proof = { t: off.t, normal: off.normal, point: off.point, collider: body, shape: off.shape };
@@ -808,9 +817,9 @@ export class BallHook extends RigidBody2D {
         }
       }
       if (!deepest) continue;
-      if (deepest.shape.impermeable) {
-        // Remember the deepest hook-proof surface and keep looking: it only
-        // deflects if nothing here anchors.
+      if (hookDeflects(deepest.shape)) {
+        // Remember the deepest surface the hook glances off and keep looking:
+        // it only deflects if nothing here anchors.
         if (!proof || deepest.depth > proof.depth) proof = deepest;
         continue;
       }
@@ -838,7 +847,10 @@ export class BallHook extends RigidBody2D {
     // A manifold depth is measured from touching (negative inside the margin
     // band), so the seat is a margin clear of the surface, as the probe's own
     // reach is.
-    if (proof && speed > BallHook.PROBE_DEFLECT_MIN_SPEED) {
+    //
+    // A launch surface has no such floor: a tip resting on it is exactly what
+    // it exists to prevent, so the probe throws it off however slowly it came.
+    if (proof && (speed > BallHook.PROBE_DEFLECT_MIN_SPEED || proof.shape.owner.launchSpeed > 0)) {
       this.bounce(proof.normal, from.add(proof.normal.mul(proof.depth + margin)), proof.shape);
     }
   }
@@ -857,6 +869,12 @@ export class BallHook extends RigidBody2D {
   // has |n × d| = 1 and passes through untouched, with everything in between
   // scaling smoothly. The reflection about the normal happens first, so the
   // surviving speed points away from the wall.
+  //
+  // A LAUNCH surface is the other rule: it throws the hook as the contact solve
+  // throws everything else, its normal speed out set to the pad's launch (or
+  // the elastic answer, if that is more) by the same `contactBounce`, and its
+  // tangential speed kept. However the hook arrived - head on, glancing, or
+  // lying on it with nothing - it leaves at the pad's speed.
   private bounce(normal: Vec2, seatPos: Vec2, piece: CollisionShape2D): void {
     // Read before `endFlight` clears it: this is the one place that can tell a
     // throw ending on a wall from a deflection off a surface the hook was
@@ -866,13 +884,20 @@ export class BallHook extends RigidBody2D {
     this.endFlight();
     const speed = this.linearVelocity.length();
     const vn = this.linearVelocity.dot(normal);
+    const launch = piece.owner.launchSpeed;
     if (vn < 0 && speed > BallHook.BOUNCE_MIN_SPEED) {
       // Before the reflection: the velocity the hook arrived with is what the
       // hit looked like (see registerBounceCallback).
       for (const cb of this.bounceCallbacks) cb(seatPos, normal, this.linearVelocity, fromFlight, piece);
-      const glance = Math.abs(normal.cross(this.linearVelocity.mul(1 / speed)));
-      const reflected = this.linearVelocity.sub(normal.mul((1 + this.restitution) * vn));
-      this.linearVelocity = reflected.mul(glance);
+      if (launch <= 0) {
+        const glance = Math.abs(normal.cross(this.linearVelocity.mul(1 / speed)));
+        const reflected = this.linearVelocity.sub(normal.mul((1 + this.restitution) * vn));
+        this.linearVelocity = reflected.mul(glance);
+      }
+    }
+    if (launch > 0) {
+      const out = contactBounce(-vn, Math.max(this.restitution, piece.owner.restitution), launch);
+      if (vn < out) this.linearVelocity = this.linearVelocity.add(normal.mul(out - vn));
     }
     this.globalPosition = seatPos;
   }

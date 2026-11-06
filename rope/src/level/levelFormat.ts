@@ -562,6 +562,15 @@ export interface CollisionObjectData extends ObjectPlacement {
   // patch is one body. Hook-proof wins where both are set, and so does a rail
   // - a rail is clamped around, not bitten.
   viscosity?: number;
+  // The SLIP FLOOR of a viscous piece, newtons: the mud holds the cuff dead
+  // still under any pull up to it - static friction for mud - and above it
+  // creeps by the viscosity's law for the whole pull, the floor taking
+  // nothing off it (`creepSpeed`). A floor above the hanging ball's weight
+  // (about 510 N) is mud you can hang from for ever that a hard catch still
+  // drags the cuff through; below it the hang creeps exactly as without one.
+  // Absent or 0 creeps under any pull at all. Read only where `viscosity` is
+  // set.
+  slipFloor?: number;
   // What this piece is made of and how thick it is through z - the dimension the
   // 2D view cannot show. Together they are the piece's mass: its area times
   // `thickness` times the material's density (`MATERIALS` in
@@ -952,8 +961,9 @@ export interface LevelBodyData {
   // `bounce` is the coefficient of restitution, 0 (dead) .. 1 (perfect), and it
   // is proportional - a body that arrives gently leaves gently. `launch` is a
   // FLOOR under the outgoing speed in pixels/s, which is what makes a pad a
-  // launcher: the spring is stored in the pad, so a ball that has dropped 20 cm
-  // onto it leaves as fast as one that fell the height of the level. Both are
+  // launcher: the spring is stored in the pad, so a ball that has dropped 2 mm
+  // onto it leaves as fast as one that fell the height of the level, and
+  // nothing - the ball on its chain, the hook - can rest on it. Both are
   // read off both sides of a contact and the larger wins, so a pad states its
   // throw once and everything that meets it is thrown.
   //
@@ -3186,6 +3196,8 @@ export function scaleObject(o: SceneObjectData, factor: number): SceneObjectData
       ...(o.rail !== undefined ? { rail: o.rail } : {}),
       // A viscosity is a ratio and scales by nothing.
       ...(o.viscosity !== undefined ? { viscosity: o.viscosity } : {}),
+      // A slip floor is a force, and the level's scaling is of lengths alone.
+      ...(o.slipFloor !== undefined ? { slipFloor: o.slipFloor } : {}),
       // A material is a name and scales by nothing; a thickness is a length in
       // z and scales exactly as the two lengths in the plane do.
       ...(o.material !== undefined ? { material: o.material } : {}),

@@ -355,6 +355,8 @@ interface Piece {
   // Viscosity (`CollisionObjectData.viscosity`, 0 = solid), per piece for the
   // same reason once more: a stone wall with one mud patch is one body.
   viscosity: number;
+  // Its slip floor (`CollisionObjectData.slipFloor`, newtons, 0 = none).
+  slipFloor: number;
   // The authored material's NAME (`CollisionObjectData.material`), or null where
   // the piece names none - kept for the mounted shape's `material`, which only
   // the sound of the surface reads. Its density has gone into `mass`.
@@ -528,6 +530,8 @@ function makePiece(
     // A viscosity that is not a positive number - absent, zero, a hand-edited
     // file's nonsense - is a solid face.
     viscosity: typeof o.viscosity === "number" && o.viscosity > 0 ? o.viscosity : 0,
+    // Likewise a floor that is not a positive number is no floor.
+    slipFloor: typeof o.slipFloor === "number" && o.slipFloor > 0 ? o.slipFloor : 0,
     material: typeof o.material === "string" && o.material !== "" ? o.material : null,
     // The piece's own material and thickness, not the body's: they are the one
     // authored property a body does not have just one of, and every sum below -
@@ -567,6 +571,7 @@ function mountPieces(body: CollisionObject2D, pieces: Piece[]): void {
     shape.impermeable = only.impermeable;
     shape.mask = only.mask;
     shape.viscosity = only.viscosity;
+    shape.slipFloor = only.slipFloor;
     shape.material = only.material;
     return;
   }
@@ -578,6 +583,7 @@ function mountPieces(body: CollisionObject2D, pieces: Piece[]): void {
     shape.impermeable = p.impermeable;
     shape.mask = p.mask;
     shape.viscosity = p.viscosity;
+    shape.slipFloor = p.slipFloor;
     shape.material = p.material;
   }
 }

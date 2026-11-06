@@ -5,6 +5,9 @@
 **Impermeable** is a flag on the **shape** (`CollisionShape2D.impermeable`, authored as `LevelBodyData.impermeable` per level entry): the ball's hook is deflected by that surface instead of anchoring (the grapple hook, retired 2026-10-19, was destroyed on it).
 It is solid in every other respect - being hook-proof is about the rope and nothing else - so the avatar stands on it, bodies collide with it and the rope still wraps its corners.
 
+A **launch surface** is glanced off the same way (`hookDeflects`: hook-proof, or any piece of a body with a `launchSpeed`), because nothing may rest on a trampoline and a bitten cuff would be the chain resting on it.
+Every attach path below declines it by the same test; only the deflection differs, throwing the hook at the pad's launch speed (see [contact-solver](contact-solver.md#trampolines-bounce-and-launch)).
+
 It was a body **kind** for as long as it could only ever be static scene geometry, and that cost the two things levels actually want.
 A kind is one per body, so nothing could be `rigid` *and* hook-proof: a crate that falls, is hauled about by a chain and still refuses the hook was not expressible at all.
 And a compound body was hook-proof in whole or not at all, so a wall with a single attachable ledge among hook-proof faces - the shape of most deliberate level geometry - could not be authored either.

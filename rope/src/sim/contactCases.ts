@@ -2732,12 +2732,16 @@ function caseWaterCurrent(): ContactResult {
 // the two drops leave at the same speed, which is what makes a pad a launcher an
 // author can place a jump against rather than a floor that happens to be lively.
 //
-// The fourth assertion is the one the mechanic would be unshippable without. A
-// floor under the outgoing speed is by construction a floor the body keeps
-// landing back on top of, so a pad that pays it at any touch pays it for ever:
-// a ball that has come to rest on the pad hums at the launch speed, and nothing
-// on the level can ever settle on a trampoline. `contactBounce`'s dead zone is
-// what stops it, and this is what holds the dead zone in place.
+// And nothing may REST on a pad: whatever touches it is thrown at the full
+// launch, however gently it arrived. The launch used to fade in between 1 and 2
+// m/s of approach so that a body could settle on a pad, and a ball dropping 8
+// cm onto one left at 1.7 m/s where a 25 cm drop left at 10 (`session-188f`
+// f42 against f135). So a ball set down on the pad from 2 mm, and one dropped
+// the 8 cm of that session, are thrown as high as the 2 m drop.
+//
+// The HOOK too: it glances off a pad instead of biting it (`hookDeflects`) and
+// leaves at the pad's speed, thrown in at full speed or set down on it barely
+// moving.
 // ---------------------------------------------------------------------------
 function caseTrampoline(): ContactResult {
   // The apex a ball reaches after being dropped `drop` metres onto a pad, in
@@ -2788,8 +2792,7 @@ function caseTrampoline(): ContactResult {
   const proportional = ratio > 0.5 && ratio < E * E + 0.02;
 
   // A launch gives back a fixed SPEED, so both drops reach v²/2g = 4.13 m
-  // whatever they arrived with. The short drop is 20 cm, which is where the
-  // fade-in is already at full strength (see `contactBounce`).
+  // whatever they arrived with.
   const LAUNCH = 9;
   const IDEAL = (LAUNCH * LAUNCH) / (2 * 9.8);
   const shallow = bounced(0.2, 0, LAUNCH);
@@ -2799,18 +2802,56 @@ function caseTrampoline(): ContactResult {
   // them a factor of ten apart.
   const independent = Math.abs(shallow.apex - deep.apex) < 0.25;
 
-  // ...and a ball that has come to rest on the pad is left alone: dropped from
-  // 2 mm, which is under the dead zone at every frame of the fall, it never
-  // leaves the surface and is not still moving at the end.
-  const resting = bounced(0.002, 0, LAUNCH);
-  const settles = resting.apex < 0.01;
+  // ...and nothing rests on it: set down from 2 mm, or dropped the 8 cm of
+  // `session-188f`, the ball is thrown as high as from 2 m.
+  const setDown = bounced(0.002, 0, LAUNCH);
+  const hop = bounced(0.08, 0, LAUNCH);
+  const noRest =
+    Math.abs(setDown.apex - deep.apex) < 0.25 && Math.abs(hop.apex - deep.apex) < 0.25;
 
-  const passed = proportional && thrown && independent && settles;
+  // The hook against the same pad: does it bite, and how fast does it leave
+  // along the pad's normal (up, -y)? Thrown straight down from 30 cm at the
+  // throw speed, or set down 1 cm over it falling at 0.1 m/s with its throw
+  // already over.
+  const hookOnPad = (height: number, speed: number, thrown: boolean): { bit: boolean; up: number } => {
+    const world = new World();
+    const pad = new StaticBody2D();
+    pad.globalPosition = new Vec2(0, PAD_TOP + 0.5);
+    pad.setShape(rectShape(40, 1));
+    pad.launchSpeed = LAUNCH;
+    world.add(pad);
+    const hook = new BallHook();
+    hook.globalPosition = new Vec2(0, PAD_TOP - MANACLE_REACH - height);
+    hook.linearVelocity = new Vec2(0, speed);
+    if (!thrown) hook.endFlight();
+    let bit = false;
+    hook.registerAttachmentCallback(() => {
+      bit = true;
+    });
+    world.add(hook);
+    let up = 0;
+    for (let f = 0; f < 30 && !bit; f++) {
+      hook.physicsStep(DT);
+      if (bit) break;
+      world.integrate(DT);
+      up = Math.max(up, -hook.linearVelocity.y);
+    }
+    return { bit, up };
+  };
+  const hookThrown = hookOnPad(0.3, BallPlayer.HOOK_SPEED, true);
+  const hookSet = hookOnPad(0.01, 0.1, false);
+  const hookOk = (h: { bit: boolean; up: number }): boolean => !h.bit && h.up > LAUNCH * 0.95;
+
+  const passed = proportional && thrown && independent && noRest && hookOk(hookThrown) && hookOk(hookSet);
+  const hookLine = (h: { bit: boolean; up: number }, what: string): string =>
+    `${hookOk(h) ? "ok  " : "BAD "} the hook ${what}: ${h.bit ? "BIT IT" : `glanced off`} and left at ${h.up.toFixed(2)} m/s up (want no bite, > ${(LAUNCH * 0.95).toFixed(2)})`;
   return ok("trampoline - a bounce returns a fraction, a launch returns a speed", passed, [
     `${proportional ? "ok  " : "BAD "} bounce ${E} off a ${DROP} m drop returns ${(ratio * 100).toFixed(1)}% of it (want 50%..${((E * E + 0.02) * 100).toFixed(0)}%)`,
     `${thrown ? "ok  " : "BAD "} launch ${LAUNCH} m/s off a 20 cm drop throws ${shallow.apex.toFixed(2)} m (want ${(IDEAL * 0.9).toFixed(2)}..${(IDEAL * 1.05).toFixed(2)})`,
     `${independent ? "ok  " : "BAD "} the same pad off a 2 m drop throws ${deep.apex.toFixed(2)} m: ${Math.abs(shallow.apex - deep.apex).toFixed(3)} m apart (want < 0.25)`,
-    `${settles ? "ok  " : "BAD "} a ball at rest on the pad does not hum: apex ${(resting.apex * 1000).toFixed(2)} mm (want < 10)`,
+    `${noRest ? "ok  " : "BAD "} nothing rests on it: set down from 2 mm throws ${setDown.apex.toFixed(2)} m, an 8 cm drop ${hop.apex.toFixed(2)} m (want within 0.25 of ${deep.apex.toFixed(2)})`,
+    hookLine(hookThrown, "thrown into it"),
+    hookLine(hookSet, "set down on it"),
   ]);
 }
 

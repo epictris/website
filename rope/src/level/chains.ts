@@ -650,6 +650,12 @@ export class BallChainRow implements IslandRow, IslandUnit {
   // relief, whatever is driving it - weight, a swing's centripetal load, the
   // winch, or momentum.
   private walkImpulse = 0;
+  // Where the biased pass's tension sat on the end's slip floor, the speed it
+  // solved the end giving at (`viscousRopeImpulse`'s `heldCreep`), which the
+  // walk takes in place of the law's - the law has no speed at the floor's
+  // jump. Null everywhere else, and the walk reads the law.
+  heldCreep: number | null = null;
+  private walkHeld: number | null = null;
 
   constructor(
     readonly ball: RigidBody2D,
@@ -814,6 +820,7 @@ export class BallChainRow implements IslandRow, IslandUnit {
       this.impulse = 0;
       this.motorImpulse = 0;
       this.walkImpulse = 0;
+      this.walkHeld = null;
       this.endKey = endKey;
     }
     this.coilGrowth = 0;
@@ -1142,11 +1149,12 @@ export class BallChainRow implements IslandRow, IslandUnit {
     this.walkRelief = 0;
     if (this.walkImpulse > 0 && this.h > 0) {
       const before = this.rope.rowTerms().length;
-      if (this.rope.rowCreep(this.h, this.walkImpulse / this.h) !== 0) {
+      if (this.rope.rowCreep(this.h, this.walkImpulse / this.h, this.walkHeld) !== 0) {
         this.walkRelief = Math.max(0, before - this.rope.rowTerms().length);
       }
     }
     this.walkImpulse = 0;
+    this.walkHeld = null;
   }
 
   // The path the ring's last walk took out of the chain, metres: chain the
@@ -1360,13 +1368,18 @@ export class BallChainRow implements IslandRow, IslandUnit {
         Math.abs(law.along),
         law.viscosity,
         this.motorImpulse,
+        law.slipFloor,
       );
     } else {
+      this.heldCreep = null;
       applied = ropeImpulse(this, slack, rate, w, h, soft, useBias);
     }
     this.applyAll(terms, applied);
     this.pins.solve(this.rope, this.impulse + this.motorImpulse);
-    if (useBias) this.walkImpulse = this.impulse + this.motorImpulse;
+    if (useBias) {
+      this.walkImpulse = this.impulse + this.motorImpulse;
+      this.walkHeld = this.heldCreep;
+    }
     else this.frameImpulse += this.impulse + this.motorImpulse;
   }
 
@@ -1409,10 +1422,26 @@ export class BallChainRow implements IslandRow, IslandUnit {
 // within a millionth of a newton-second, past anything the sim can measure.
 // Bisection rather than Newton because the square law's slope is zero at no
 // tension, where Newton's first step is undefined.
+//
+// A SLIP FLOOR (`floor`, newtons, `creepSpeed`'s) makes the relief jump at the
+// impulse whose load is the floor, λ_f: nothing below it, the law's full
+// `creepSpeed(floor)` and up above. The right side still falls as λ rises, so
+// the bisection still finds one answer, but it may be the jump itself - the
+// rigid row would pull harder than the floor, the law's relief at the floor
+// would let the bodies open the path faster than they are, and the answer is
+// the tension held AT the floor with the end giving at the speed in between
+// that makes the two agree. That is Coulomb friction's sliding case, a block
+// dragged under exactly its friction until it stops: the tail of every catch
+// on mud with a floor above the ball's weight, the ball slowed by the floor
+// while the cuff gives with it, then held dead. The law cannot say that speed
+// (it has none at the jump), so the row reads it back off its own answer -
+// the relief `r` the impulse was solved against, from the equation above -
+// and hands it to the walk (`row.heldCreep`, the end's speed along its line,
+// null where the answer is not on the jump and the law says the speed).
 const VISCOUS_ROW_BISECTIONS = 40;
 
 export function viscousRopeImpulse(
-  row: { impulse: number },
+  row: { impulse: number; heldCreep: number | null },
   slack: number,
   slackRate: number,
   w: number,
@@ -1424,6 +1453,8 @@ export function viscousRopeImpulse(
   // Impulse another row is pulling the ring with this substep (the drum's
   // motor), which the creep feels as much as this row's own.
   pull = 0,
+  // The slip floor, newtons (see above). Zero is the law without one.
+  floor = 0,
 ): number {
   let bias = 0;
   let massScale = 1;
@@ -1436,12 +1467,14 @@ export function viscousRopeImpulse(
     impulseScale = soft.impulseScale;
   }
   const start = row.impulse;
+  const load = (lambda: number): number => (along * (lambda + pull)) / h;
   const target = (lambda: number): number => {
-    const relief = along * creepSpeed((along * (lambda + pull)) / h, viscosity);
+    const relief = along * creepSpeed(load(lambda), viscosity, floor);
     return Math.max(start - (massScale * (slackRate + relief + bias)) / w - impulseScale * start, 0);
   };
   let hi = target(0);
   let next = 0;
+  row.heldCreep = null;
   if (hi > 0) {
     let lo = 0;
     for (let k = 0; k < VISCOUS_ROW_BISECTIONS; k++) {
@@ -1450,6 +1483,15 @@ export function viscousRopeImpulse(
       else hi = mid;
     }
     next = 0.5 * (lo + hi);
+    // The bracket closed on the floor's jump - held below it, giving above -
+    // so the answer is the tension on the floor and the relief it was solved
+    // against is what the equation leaves for it, bounded by the law's two
+    // sides of the jump.
+    const giveAbove = creepSpeed(load(hi), viscosity, floor);
+    if (floor > 0 && creepSpeed(load(lo), viscosity, floor) === 0 && giveAbove > 0) {
+      const relief = (((1 - impulseScale) * start - next) * w) / massScale - slackRate - bias;
+      row.heldCreep = Math.min(Math.max(relief / along, 0), giveAbove);
+    }
   }
   const applied = next - start;
   row.impulse = next;

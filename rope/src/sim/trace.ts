@@ -1316,8 +1316,10 @@ export class WallClimbMonitor {
       const other = c.a === ball ? c.b : c.a;
       // A body that can move, or a surface that runs, hands the ball energy of
       // its own: a mover striking it at 2.8 m/s is not a climb
-      // (`ring-square-322f` f21).
-      if (!(other instanceof StaticBody2D) || other.surfaceMoves) driven = true;
+      // (`ring-square-322f` f21). Nor is a launch surface's throw, which is
+      // what a pad is for: a pad stood on its side is a wall by its normal,
+      // and its 5 m/s throw read as 363 J of climb (`session-238f` f238).
+      if (!(other instanceof StaticBody2D) || other.surfaceMoves || other.launchSpeed > 0) driven = true;
       else if (n.y < -WALL_CLIMB_FACE) floor = true;
       else if (Math.abs(n.y) <= WALL_CLIMB_FACE) wall = true;
     }

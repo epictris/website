@@ -38,6 +38,8 @@ import { PX } from "../engine/units";
 import { modelFromDisk, modelToDisk } from "../editor/model";
 import { isCollisionObject } from "../level/levelFormat";
 import { checkBallInvariants, TunnelMonitor, type Violation } from "./trace";
+import { viscousRopeImpulse } from "../level/chains";
+import { RIGID, DEFAULT_TIE_SUBSTEPS } from "../engine/ties";
 
 const DT = 1 / 60;
 const G = GRAVITY.y;
@@ -225,7 +227,116 @@ function caseLaw(): ViscousResult {
     "...and pulled along it, exactly the mud's",
     slipDistance(catchError, mass, DT, 1, 1) === catchSlip && slipDistance(hangError, mass, DT, 1, 1) === hangSlip,
   );
+  // The SLIP FLOOR: no creep at all up to it, and above it the law for the
+  // whole load, the floor taking nothing off - so the jump at the floor is the
+  // law's whole speed there.
+  const F = 600;
+  c.check(
+    `under a ${F} N floor, no creep up to the floor and the plain law above it`,
+    creepSpeed(F * 0.999, 1, F) === 0 &&
+      creepSpeed(F, 1, F) === 0 &&
+      creepSpeed(F * 1.001, 1, F) === creepSpeed(F * 1.001) &&
+      creepSpeed(3 * F, 2, F) === creepSpeed(3 * F, 2),
+  );
+  c.check("...and a floor of 0 is the law without one", creepSpeed(VISCOUS_CREEP_LOAD, 1, 0) === creepSpeed(VISCOUS_CREEP_LOAD));
+  // The row's solve against a floor, for a ball of `mass` opening the path at
+  // `u` m/s over one substep from a cold start, rigid softness and no bias, so
+  // the rigid answer is `mass·u` and the load it is read at is that over `h`.
+  const h = DT / DEFAULT_TIE_SUBSTEPS;
+  const solve = (u: number, floor: number) => {
+    const row = { impulse: 0, heldCreep: null as number | null };
+    viscousRopeImpulse(row, 0, -u, 1 / mass, h, RIGID, false, 1, 1, 0, floor);
+    return { load: row.impulse / h, held: row.heldCreep };
+  };
+  // Rigid below the floor: held dead, the whole rigid tension and no give.
+  const below = solve(0.02, F);
+  c.check(
+    `a pull the rigid row answers under the floor is held rigidly (${below.load.toFixed(1)} N, rigid ${(mass * 0.02 / h).toFixed(1)})`,
+    below.held === null && Math.abs(below.load - (mass * 0.02) / h) < 1e-6,
+  );
+  // On the jump: rigid it would pull past the floor, and the law's give at
+  // the floor would open the path faster than the ball - so the tension sits
+  // ON the floor and the cuff gives at the ball's speed once the floor's
+  // impulse has slowed it, `u − F·h/m`.
+  const on = solve(0.03, F);
+  const ballAfter = 0.03 - (F * h) / mass;
+  c.check(
+    `a pull past the floor that the floor's own give outruns sits on it (${on.load.toFixed(3)} N), giving at the ball's speed after it (${on.held === null ? "-" : (on.held * 100).toFixed(4)} cm/s of ${(ballAfter * 100).toFixed(4)})`,
+    on.held !== null && Math.abs(on.load - F) < 1e-6 && Math.abs(on.held - ballAfter) < 1e-9 && on.held < creepSpeed(F * 1.000001),
+  );
+  // Well past it: the law's own root, bit for bit the floorless solve's.
+  const past = solve(0.2, F);
+  const free = solve(0.2, 0);
+  c.check(
+    `a pull well past the floor solves exactly as with none (${past.load.toFixed(1)} N)`,
+    past.held === null && past.load === free.load && past.load > F,
+  );
   return ok("viscous-law — the creep is a power of the load, and a hang creeps at the quoted speed", c.passed(), c.details);
+}
+
+// ---------------------------------------------------------------------------
+// floor - mud with a slip floor holds the cuff dead still under a pull that
+// does not reach it, creeps exactly as without one under a pull that does,
+// and a catch that goes past it drags the cuff and then lets it stop.
+// ---------------------------------------------------------------------------
+function mudWithFloor(x: number, y: number, w: number, h: number, slipFloor: number): LevelBodyData {
+  const body = mud(x, y, w, h);
+  return { ...body, objects: [{ ...body.objects[0]!, slipFloor }] } as LevelBodyData;
+}
+
+function caseFloor(): ViscousResult {
+  const c = claims();
+  const up = new Vec2(0, -1.2);
+  // The hang of `viscous-hang`, under floors either side of the ball's weight.
+  const hang = (floor: number) => {
+    const rig = new Rig([mudWithFloor(0, -150, 400, 60, floor)]);
+    const bit = rig.throwUntilEmbedded(up);
+    const embed = rig.embed;
+    if (bit < 0 || !embed) return null;
+    rig.run(45, up);
+    const pin = embed.contact.globalPosition;
+    rig.run(60, up);
+    return { crept: embed.contact.globalPosition.sub(pin).length(), still: rig.embed === embed, violations: rig.violations.length };
+  };
+  const weight = new Rig([]).ball.mass * G;
+  const none = hang(0);
+  const under = hang(weight * 0.8);
+  const over = hang(weight * 1.2);
+  c.check(`each hang bites (weight ${weight.toFixed(0)} N)`, none !== null && under !== null && over !== null);
+  if (!none || !under || !over) return ok("viscous-floor", false, c.details);
+  c.check(
+    `a floor above the weight holds the hang dead still (${(over.crept * 1000).toFixed(4)} mm in a second)`,
+    over.still && over.crept === 0,
+  );
+  // The same creep and not the same bits: the tension rises through the floor
+  // at the bite, and the substeps under it hold where the floorless mud gave.
+  c.check(
+    `a floor under the weight creeps as none does (${(under.crept * 1000).toFixed(3)} mm, ${(none.crept * 1000).toFixed(3)} without, Δ ${(under.crept - none.crept).toExponential(2)} m)`,
+    under.still && Math.abs(under.crept - none.crept) < 1e-9 && none.crept > 0,
+  );
+  // A catch on a mud wall whose floor is above the hang but far under the
+  // catch: the cuff is dragged, then the ball is slowed to a hang and the cuff
+  // stops. What is pinned is that it gives and that it stops, not how far.
+  const rig = new Rig([mudWithFloor(130, 0, 200, 2000, 1500)]);
+  rig.ball.linearVelocity = new Vec2(0, 6);
+  const right = new Vec2(0.4, 0);
+  const bit = rig.throwUntilEmbedded(right, 30);
+  const embed = rig.embed;
+  c.check(`the catch bites the wall (frame ${bit})`, bit >= 0 && embed !== null);
+  if (!embed) return ok("viscous-floor", false, c.details);
+  const pin0 = embed.contact.globalPosition;
+  rig.run(90, right);
+  const dragged = embed.contact.globalPosition.sub(pin0).length();
+  const pin1 = embed.contact.globalPosition;
+  rig.run(120, right);
+  const after = embed.contact.globalPosition.sub(pin1).length();
+  c.check(
+    `a catch past the floor drags the cuff (${(dragged * 100).toFixed(1)} cm) and it then stops (${(after * 1000).toFixed(4)} mm in the next two seconds)`,
+    rig.embed === embed && dragged > 0.01 && after < 1e-4,
+  );
+  const violations = none.violations + under.violations + over.violations + rig.violations.length;
+  c.check(`no invariant fired (${violations})`, violations === 0);
+  return ok("viscous-floor — a slip floor holds the cuff still under it and creeps by the law over it", c.passed(), c.details);
 }
 
 // ---------------------------------------------------------------------------
@@ -539,7 +650,7 @@ function caseFormat(): ViscousResult {
         y: 0,
         rot: 0,
         objects: [
-          { type: "collision", x: 0, y: 0, shape: { kind: "rect", w: 40, h: 40 }, viscosity: 2.5 },
+          { type: "collision", x: 0, y: 0, shape: { kind: "rect", w: 40, h: 40 }, viscosity: 2.5, slipFloor: 750 },
           { type: "collision", x: 100, y: 0, shape: { kind: "rect", w: 40, h: 40 } },
           { type: "collision", x: 200, y: 0, shape: { kind: "rect", w: 40, h: 40 }, viscosity: 1, impermeable: true },
         ],
@@ -552,12 +663,20 @@ function caseFormat(): ViscousResult {
     "scaleLevelData carries `viscosity` through px -> m, unscaled",
     objs[0]!.viscosity === 2.5 && objs[1]!.viscosity === undefined && objs[2]!.viscosity === 1,
   );
+  c.check(
+    "...and `slipFloor`, a force, unscaled too",
+    objs[0]!.slipFloor === 750 && objs[1]!.slipFloor === undefined && objs[2]!.slipFloor === undefined,
+  );
   const world = new World();
   const built = buildLevelBodies(world, data, () => {});
   const shapes = built.bodies[0]!.body!.getShapes();
   c.check(
     "the build sets it on the pieces that authored it and no other",
     shapes[0]!.viscosity === 2.5 && shapes[1]!.viscosity === 0 && !shapes[1]!.viscous && shapes[2]!.viscous,
+  );
+  c.check(
+    "...and the slip floor likewise",
+    shapes[0]!.slipFloor === 750 && shapes[1]!.slipFloor === 0 && shapes[2]!.slipFloor === 0,
   );
   // Hook-proof wins: a hook thrown at the third piece is deflected, never embedded.
   const hook = new BallHook();
@@ -581,9 +700,20 @@ function caseFormat(): ViscousResult {
     "the editor's modelFromDisk/modelToDisk keeps the number, and writes it only where it is set",
     rtObjs[0]!.viscosity === 2.5 && rtObjs[1]!.viscosity === undefined,
   );
+  c.check(
+    "...and the slip floor, written only on mud that has one",
+    rtObjs[0]!.slipFloor === 750 && rtObjs[1]!.slipFloor === undefined && rtObjs[2]!.slipFloor === undefined,
+  );
+  // A floor left on a face that is no longer mud means nothing and is not
+  // written: the editor's model keeps it, the file does not.
+  const unmud = modelFromDisk(raw);
+  const first = unmud.items.find((i) => i.viscosity === 2.5)!;
+  first.viscosity = 0;
+  const unmudObjs = modelToDisk(unmud).bodies[0]!.objects.filter(isCollisionObject);
+  c.check("...and not on a face that is no longer mud", unmudObjs[0]!.slipFloor === undefined);
   return ok("viscous-format — the flag survives the format, the build and the editor, and hook-proof wins", c.passed(), c.details);
 }
 
 export function runViscousCases(): ViscousResult[] {
-  return [caseLaw(), caseHang(), caseCatch(), caseCorner(), caseDrop(), caseFormat()];
+  return [caseLaw(), caseHang(), caseCatch(), caseFloor(), caseCorner(), caseDrop(), caseFormat()];
 }

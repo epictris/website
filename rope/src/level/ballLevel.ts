@@ -991,7 +991,9 @@ export class BallLevel {
     // and the controller has no business knowing there is a renderer.
     if (body instanceof BallHook) {
       body.registerBounceCallback((point, normal, vel, fromFlight, piece) => {
-        this.reportSpark(body, { source: body.id, point, normal, vel }, fromFlight);
+        // Sparks are hook-proof steel's; a launch surface throws the hook too
+        // (`hookDeflects`) but is no steel, so it is heard and not lit.
+        if (piece.impermeable) this.reportSpark(body, { source: body.id, point, normal, vel }, fromFlight);
         // Every piece the hook can be deflected by is on a static or rigid body
         // (the sweep and the probe ask nothing else).
         const struck = piece.owner;

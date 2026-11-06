@@ -590,6 +590,10 @@ export interface EdItem {
   // mutually exclusive with `impermeable` in the inspector - a hook-proof mud
   // face is a face the hook never bites.
   viscosity: number;
+  // The viscous face's slip floor (see `CollisionObjectData.slipFloor`),
+  // newtons: 0 creeps under any pull, above it the mud holds still until the
+  // pull exceeds it. Meaningless while `viscosity` is 0, and not written then.
+  slipFloor: number;
   // What the shape is made of, and how thick it is through z - the dimension
   // the 2D view cannot show (see `LevelBodyData.material` / `thickness`). Per
   // SHAPE, so they are the one geometry property `syncBodyProps` leaves alone:
@@ -1418,6 +1422,7 @@ function fromLevelData(data: LevelData): EdModel {
           mask: maskFromPasses(o.passes),
           rail: o.rail === true,
           viscosity: typeof o.viscosity === "number" && o.viscosity > 0 ? o.viscosity : 0,
+          slipFloor: typeof o.slipFloor === "number" && o.slipFloor > 0 ? o.slipFloor : 0,
           ...materialOf(o),
           thickness: o.thickness ?? DEFAULT_THICKNESS,
           debug: edDebug(o.debug),
@@ -1441,6 +1446,7 @@ function fromLevelData(data: LevelData): EdModel {
           mask: MASK_ALL,
           rail: false,
           viscosity: 0,
+          slipFloor: 0,
           material: DEFAULT_MATERIAL,
           density: DEFAULT_DENSITY,
           thickness: DEFAULT_THICKNESS,
@@ -1493,6 +1499,7 @@ function fromLevelData(data: LevelData): EdModel {
     mask: MASK_ALL,
     rail: false,
     viscosity: 0,
+    slipFloor: 0,
     material: DEFAULT_MATERIAL,
     density: DEFAULT_DENSITY,
     thickness: DEFAULT_THICKNESS,
@@ -1594,6 +1601,7 @@ function fromLevelData(data: LevelData): EdModel {
     mask: MASK_ALL,
     rail: false,
     viscosity: 0,
+    slipFloor: 0,
     material: DEFAULT_MATERIAL,
     density: DEFAULT_DENSITY,
     thickness: DEFAULT_THICKNESS,
@@ -1705,6 +1713,7 @@ function lightItem(
     mask: MASK_ALL,
     rail: false,
     viscosity: 0,
+    slipFloor: 0,
     material: DEFAULT_MATERIAL,
     density: DEFAULT_DENSITY,
     thickness: DEFAULT_THICKNESS,
@@ -1788,6 +1797,7 @@ function lightItem(
     mask: MASK_ALL,
     rail: false,
     viscosity: 0,
+    slipFloor: 0,
     material: DEFAULT_MATERIAL,
     density: DEFAULT_DENSITY,
     thickness: DEFAULT_THICKNESS,
@@ -2275,6 +2285,8 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
         ...(i.rail && i.shape.kind === "path" ? { rail: true } : {}),
         // Absent means a face that holds the cuff still, so only mud says so.
         ...(i.viscosity > 0 ? { viscosity: i.viscosity } : {}),
+        // ...and only mud with a floor says it has one.
+        ...(i.viscosity > 0 && i.slipFloor > 0 ? { slipFloor: i.slipFloor } : {}),
         // Written only when the piece is something other than the default
         // 20 cm of oak, so every level authored before materials stays
         // byte-identical. Per COLLISION OBJECT and nowhere else: a body's
@@ -4367,6 +4379,7 @@ export function emptyModel(): EdModel {
         mask: MASK_ALL,
         rail: false,
         viscosity: 0,
+        slipFloor: 0,
         material: DEFAULT_MATERIAL,
     density: DEFAULT_DENSITY,
         thickness: DEFAULT_THICKNESS,
@@ -4381,7 +4394,7 @@ export function emptyModel(): EdModel {
         waterZ: 0,
         waterDepth: null,
         passable: false,
-        pivot: false,
+            pivot: false,
         pivotAt: null,
         pivotFreq: 0,
         pivotDamping: DEFAULT_SPRING_DAMPING,

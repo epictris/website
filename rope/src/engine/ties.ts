@@ -58,6 +58,7 @@ import {
 } from "./body";
 import type { ContactConstraint } from "./world";
 import { SolverStats } from "./solverStats";
+import { contactBounce, RESTITUTION_THRESHOLD } from "./bounce";
 
 // --- softness ---------------------------------------------------------------
 // Catto's soft constraint (GDC 2011; Box2D's `b2MakeSoft`): a row driven as a
@@ -108,8 +109,6 @@ export const TieTuning = {
 const CONTACT_HERTZ = 30;
 const CONTACT_DAMPING = 10;
 const MAX_PUSH_VELOCITY = 3;
-// Below this closing speed a contact does not bounce (`World`'s own bar).
-const RESTITUTION_THRESHOLD = 1;
 // Per-frame velocity retention of a held body, the chain phase's own
 // (`CHAIN_BODY_DAMPING`): a bridge in free air touches nothing that would ever
 // stop it swinging, and the rest rule needs it to stop. A body the ball's chain
@@ -447,6 +446,9 @@ class ContactRow {
   s0: number;
   readonly friction: number;
   readonly restitution: number;
+  // The pair's launch (`CollisionObject2D.launchSpeed`, the larger side's),
+  // paid after the substeps by any row that carried load (`applyRestitution`).
+  readonly launch: number;
   // Relative normal velocity when the row was first gathered, for restitution
   // after the substeps.
   readonly vn0: number;
@@ -541,6 +543,7 @@ class ContactRow {
       shapeA.localOffset.y === 0;
     this.friction = friction;
     this.restitution = Math.max(c.a.restitution, c.b.restitution);
+    this.launch = Math.max(c.a.launchSpeed, c.b.launchSpeed);
     this.vn0 = c.a.velocityAtPoint(c.point).sub(c.b.velocityAtPoint(c.point)).dot(c.normal);
     const bRigid = c.b instanceof RigidBody2D ? c.b : null;
     this.freeA = c.a.kinematicRotation && !c.a.constraintTethered;
@@ -597,6 +600,9 @@ export class TieSolver {
   readonly chains: TieChain[] = [];
   // ...and every unit, chains included: what the islands are built over.
   readonly units: IslandUnit[] = [];
+  // Did this frame's `step` pay a launch (`applyRestitution`)? Read by the
+  // world into `World.launchedThisFrame`, which the energy monitor needs.
+  launched = false;
   // The ball's chain as a unit of its own (`BallChainRow` in
   // `level/chains.ts`, the plan's third stage): set by the level before each
   // `World.integrate` on the frames the chain is a row, null otherwise. Its
@@ -761,6 +767,7 @@ export class TieSolver {
     only: ReadonlySet<IslandUnit> | null = null,
   ): ContactConstraint[] {
     const t0 = SolverStats.now();
+    this.launched = false;
     const all = this.ballRow ? [...this.units, this.ballRow] : this.units;
     const units = only ? all.filter((u) => only.has(u)) : all;
     // Top of the frame: a sleeping unit gets up if anything woke one of its
@@ -1109,7 +1116,7 @@ export class TieSolver {
       driven[i]!.globalPosition = drivenEnd[i]!.position;
       driven[i]!.globalRotation = drivenEnd[i]!.rotation;
     }
-    for (const row of contactRows) if (row.live) applyRestitution(row);
+    for (const row of contactRows) if (row.live && applyRestitution(row)) this.launched = true;
     for (const row of contactRows) {
       // The last substep's impulses warm start the next frame's first...
       this.contactCache.set(row.key, { n: row.n, t: row.t });
@@ -1307,8 +1314,20 @@ function separationOf(r: ContactRow): number {
 
 // After the substeps, as Box2D applies it: a contact that closed faster than
 // the threshold and carried load gets its share of the closing speed back.
-function applyRestitution(r: ContactRow): void {
-  if (r.restitution === 0 || r.vn0 > -RESTITUTION_THRESHOLD || r.maxN === 0) return;
+//
+// A LAUNCH surface is paid by any row that carried load at all, however it
+// arrived: nothing rests on a pad, the ball on its anchored chain included
+// (`contactBounce`). Carrying load is the island's "touched": a row the
+// substeps never had to push is a speculative one that never closed. The
+// ball swung into a pad on its chain was solved here, where only restitution
+// was known, and came to rest against it (`session-68f` f56-68, 2.8 N·s a
+// frame and no throw).
+//
+// Answers whether it paid a launch, for the energy monitor.
+function applyRestitution(r: ContactRow): boolean {
+  if (r.maxN === 0) return false;
+  const launching = r.launch > 0;
+  if (!launching && (r.restitution === 0 || r.vn0 > -RESTITUTION_THRESHOLD)) return false;
   const A = r.a;
   const B = r.b;
   const ra = armA(r);
@@ -1320,15 +1339,18 @@ function applyRestitution(r: ContactRow): void {
   const rbxn = rb.cross(n);
   const invEffN =
     invMassOf(A) + invMassOf(B) + raxn * raxn * invInertiaOf(A) + rbxn * rbxn * invInertiaOf(B);
-  if (invEffN <= 1e-9) return;
+  if (invEffN <= 1e-9) return false;
   const vn = A.velocityAtPoint(pa).sub(B.velocityAtPoint(pb)).dot(n);
-  const inc = -(vn + r.restitution * r.vn0) / invEffN;
+  const inc = launching
+    ? (contactBounce(-r.vn0, r.restitution, r.launch) - vn) / invEffN
+    : -(vn + r.restitution * r.vn0) / invEffN;
   const total = Math.max(r.n + inc, 0);
   const applied = total - r.n;
   r.n = total;
   r.totalN += applied;
-  if (applied === 0) return;
+  if (applied === 0) return false;
   const impulse = n.mul(applied);
   applyAt(A, impulse, ra);
   applyAt(B, impulse.neg(), rb);
+  return launching;
 }

@@ -2345,8 +2345,13 @@ export class Rope {
   // that reaches that node has crept up to a corner the chain bends round, and
   // the corner is rounded off (`roundEndNode`) so the next substep pulls it on
   // toward the node before (`session-332f`).
-  rowCreep(h: number, force: number): number {
-    if (this.end instanceof RopeEmbed) return this.rowCreepEmbed(h, force);
+  //
+  // `held` is the speed the row solved the end giving at where its tension
+  // sat on a slip floor (`viscousRopeImpulse`'s `heldCreep`): the law has no
+  // speed at the floor's jump, so the walk takes the solve's. Null - every
+  // other substep, and every end without a floor - and the law says it.
+  rowCreep(h: number, force: number, held: number | null = null): number {
+    if (this.end instanceof RopeEmbed) return this.rowCreepEmbed(h, force, held);
     const clamp = this.end;
     if (!(clamp instanceof RopeVineClamp)) return 0;
     const law = this.rowCreepLaw();
@@ -2358,7 +2363,7 @@ export class Rope {
       clamp.seat(toward, true);
     }
     if (force <= 0 || along === 0 || h <= 0) return 0;
-    const step = h * creepSpeed(Math.abs(along) * force, clamp.vine.viscosity);
+    const step = h * (held ?? creepSpeed(Math.abs(along) * force, clamp.vine.viscosity, law.slipFloor));
     if (step <= 0) return 0;
     const before = this.calculateRopePathLength();
     const state = clamp.snapshot();
@@ -2375,13 +2380,13 @@ export class Rope {
     return moved;
   }
 
-  private rowCreepEmbed(h: number, force: number): number {
+  private rowCreepEmbed(h: number, force: number, held: number | null): number {
     const embed = this.end;
     if (!(embed instanceof RopeEmbed)) return 0;
     const law = this.rowCreepLaw();
     if (law === null || force <= 0 || h <= 0) return 0;
     const reach = law.toward.distanceTo(embed.contact.globalPosition);
-    const step = Mathf.min(h * creepSpeed(force, law.viscosity), reach);
+    const step = Mathf.min(h * (held ?? creepSpeed(force, law.viscosity, law.slipFloor)), reach);
     if (step <= 0) return 0;
     embed.slip(law.tangent.mul(step));
     if (step >= reach) this.roundEndNode();
@@ -2398,10 +2403,10 @@ export class Rope {
   //
   // For a cuff embedded in mud the creep runs with the pull itself (`along`
   // 1, `tangent` the last span's direction toward the node it is pulled to),
-  // at the piece's viscosity; a cuff held fast by a solid piece, or by
-  // nothing, has no law, and the row holds it rigidly or the frame's first
-  // look drops it (`settleRowEnd`).
-  rowCreepLaw(): { along: number; tangent: Vec2; viscosity: number; toward: Vec2 } | null {
+  // at the piece's viscosity and slip floor; a cuff held fast by a solid
+  // piece, or by nothing, has no law, and the row holds it rigidly or the
+  // frame's first look drops it (`settleRowEnd`). A cord has no slip floor.
+  rowCreepLaw(): { along: number; tangent: Vec2; viscosity: number; slipFloor: number; toward: Vec2 } | null {
     const end = this.end;
     if (end instanceof RopeEmbed) {
       const held = end.holding();
@@ -2412,7 +2417,7 @@ export class Rope {
       const pull = toward.sub(end.contact.globalPosition);
       const reach = pull.length();
       if (reach < Rope.EMBED_NODE_EPSILON) return null;
-      return { along: 1, tangent: pull.div(reach), viscosity: held.viscosity, toward };
+      return { along: 1, tangent: pull.div(reach), viscosity: held.viscosity, slipFloor: held.slipFloor, toward };
     }
     const clamp = end;
     if (!(clamp instanceof RopeVineClamp)) return null;
@@ -2425,7 +2430,7 @@ export class Rope {
     const pull = toward.sub(clamp.contact.globalPosition);
     const reach = pull.length();
     if (reach < Rope.EMBED_NODE_EPSILON) return null;
-    return { along: pull.dot(tangent) / reach, tangent, viscosity: clamp.vine.viscosity, toward };
+    return { along: pull.dot(tangent) / reach, tangent, viscosity: clamp.vine.viscosity, slipFloor: 0, toward };
   }
 
   // Where a clamped end hangs, and whether the chain is what is hanging it:

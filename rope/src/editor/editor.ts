@@ -3998,6 +3998,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         if (box.checked) {
           b.rail = false;
           b.viscosity = 0;
+          b.slipFloor = 0;
         }
       }
       markDirty();
@@ -4101,6 +4102,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       beginAction();
       for (const b of items) {
         b.viscosity = box.checked ? 1 : 0;
+        // A face that is not mud has no floor, and one left on it would come
+        // back with the tick in this session but not after a reload, since
+        // only mud writes it.
+        if (!box.checked) b.slipFloor = 0;
         if (box.checked) b.impermeable = false;
       }
       markDirty();
@@ -4120,6 +4125,18 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         0.1,
         items.length > 1,
       );
+      const floor = numField(
+        g,
+        "slip floor",
+        () => shared(items, (b) => b.slipFloor),
+        (v) => {
+          for (const b of items) b.slipFloor = Math.max(0, v);
+        },
+        50,
+        items.length > 1,
+      );
+      describe(floor.parentElement!,
+        "Newtons of pull the mud holds the cuff dead still under - static friction for mud. Above it the cuff creeps exactly as the viscosity says, as if there were no floor. 0 creeps under any pull. The hanging ball weighs about 510 N, so a floor above that is mud you can hang from for ever that a falling catch still drags the cuff through, and stops once the ball has been slowed to a hang.");
     }
     describe(wrap,
       "Mud: the ball's manacle bites this face and then creeps through it in the direction the chain pulls, faster the harder it pulls - a hanging ball draws it slowly toward itself, a falling ball caught on it drags it a long way before it is slowed to a hang - and it drops out once its mouth has crept clear of the geometry. The viscosity is how stiff the mud is: 1 is the reference mud, 2 needs twice the pull for the same creep, 0.5 half. Drawn with a dash-dot ochre edge. Solid for everything else: you can stand on it and the rope still wraps its corners.");
@@ -4158,7 +4175,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     g.appendChild(row);
     readouts.push({ el: val, get: height });
     describe(g,
-      "A trampoline. Bounce is the fraction of an impact given back, so what lands gently leaves gently (0 is a dead surface, 1 a perfect bounce). Launch is the spring stored in the pad itself: a floor under the speed anything leaves at, whatever speed it arrived with, so a short drop onto it throws as far as a long one. It fades out on the gentlest touches, so a body that has come to rest on the pad stays put instead of humming. Both are read off both surfaces meeting and the bouncier wins.");
+      "A trampoline. Bounce is the fraction of an impact given back, so what lands gently leaves gently (0 is a dead surface, 1 a perfect bounce). Launch is the spring stored in the pad itself: a floor under the speed anything leaves at, whatever speed it arrived with, so a short drop onto it throws as far as a long one. Nothing can rest on a pad: anything that touches it, the ball on its chain and the hook included, is thrown at the full launch, and the hook never bites one. Both are read off both surfaces meeting and the bouncier wins.");
   }
 
   // Breakable geometry (see `LevelBodyData.breakForce`): what it takes to
@@ -8489,6 +8506,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // shape kind a rail can be at all (see `CollisionObjectData.rail`).
       rail: t === "path" && activeLayer === "scene",
       viscosity: 0,
+      slipFloor: 0,
       // A fresh shape is 20 cm of oak, which is what every body authored before
       // materials existed is made of.
       material: DEFAULT_MATERIAL,

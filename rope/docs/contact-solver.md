@@ -113,6 +113,34 @@ So a reference face that was chosen only because the seams were set aside, and t
 `cli contacts` `seam-fallback-crosses` is the case, one placing for each path: on the old manifold the box is pushed 5.32 m and 5.41 m through the block.
 A circle needs none of this: its one contact is on the nearest feature of the piece, and at a reflex corner that is the bend itself, which a circle can genuinely rest in.
 
+## Trampolines: bounce and launch
+
+A surface states how it throws back what meets it with two body properties, `restitution` and `launchSpeed` (authored as `bounce` and `launch`), read off both sides of a contact with the larger winning.
+`contactBounce` (`engine/bounce.ts`) turns them into the outgoing normal speed a contact is solved to, and every solver that meets a launch surface asks it: the world's one-pass solve (`World.solveContacts`), the tied-chain island (`TieSolver`, `applyRestitution`), the ball's loop cap and the hook's deflection.
+
+**Restitution is a ratio** and has the usual dead zone: below `RESTITUTION_THRESHOLD` (1 m/s of approach) it gives nothing back, so a body resting on a lively floor does not hum on the velocity gravity re-adds each frame.
+
+**A launch is a speed, and nothing may rest on it.**
+Any contact that touches a launch surface leaves at the full launch, however it arrived - dropped 2 mm or 2 m, resting, already leaving slowly, or hanging on the ball's chain.
+There is no dead zone and no ramp.
+Until 2026-11-06 the launch faded in between 1 and 2 m/s of approach so a body could settle on a pad, and the ball dropping 8 cm onto one left at 1.7 m/s where a 25 cm drop left at 10 (`session-188f` f42 against f135).
+
+"Touches" is each solver's own question:
+
+- The world solve pays a contact that is touching (depth >= 0) or a speculative one closing its gap within the step, and solves it to the launch itself without the gap taken off.
+  With the gap subtracted, the throw depended on where in the step the body met the pad: `session-188f` f42 left 0.54 m/s short off a 9 mm gap.
+  A speculative contact that will not close is not paid, or a body would be thrown off a surface up to `CONTACT_SLOP` away.
+- The island pays any contact row that carried load in its substeps (`maxN > 0`), after them, as Box2D applies restitution.
+  The ball's contacts are the island's whenever its chain is anchored, and before the island knew of launches a ball swung into a pad on its chain came to rest against it (`session-68f` f56-68).
+
+**The hook glances off a launch surface** as it does off a hook-proof one (`hookDeflects`, see [hook-surfaces](hook-surfaces.md)): every attach path declines it, and its deflection sets the normal speed to the launch and keeps the tangential, where a hook-proof face scales the reflection by how glancing the hit was.
+A dangling tip lying on a pad is thrown by the probe however slowly it is moving.
+The strike is heard (the bounce sound event) but strikes no sparks, which are hook-proof steel's.
+
+A launch does work out of a spring the sim does not model, so a frame that pays one sets `World.launchedThisFrame` (the island through `TieSolver.launched`) and the energy invariant stands down for it.
+Every path is gated on `launchSpeed > 0`, so a level without a launch replays bit-identically.
+`cli contacts` `trampoline` holds the ratio, the speed, the 2 mm and 8 cm drops and the hook; `playtests/ball-trampoline-no-rest.json` and `ball-trampoline-hang.json` hold a ball set on a pad and a ball hanging against one.
+
 ## Resting contacts
 
 A manifold's normal impulses are solved as **one system**: accumulated per point, iterated `NORMAL_SOLVER_ITERATIONS` times on the static path (`VELOCITY_ITERATIONS`, Box2D's 8, over the scene-wide constraint list), with each point's *running total* clamped at zero rather than each increment clamped on its own.

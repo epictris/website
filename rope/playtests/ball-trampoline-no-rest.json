@@ -1,0 +1,57 @@
+{
+  "level": "ball-trampoline-no-rest",
+  "controller": "ball",
+  "frames": 420,
+  "spawn": {
+    "x": 0,
+    "y": 0.42
+  },
+  "data": {
+    "player": {
+      "x": 0,
+      "y": 0,
+      "radius": 8
+    },
+    "bodies": [
+      {
+        "kind": "static",
+        "x": 0,
+        "y": 100,
+        "rot": 0,
+        "friction": 1.0,
+        "launch": 900,
+        "objects": [
+          {
+            "type": "collision",
+            "x": 0,
+            "y": 0,
+            "rot": 0,
+            "shape": {
+              "kind": "rect",
+              "w": 4000,
+              "h": 100
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "asserts": [
+    {
+      "frame": 55,
+      "maxY": -3.2
+    },
+    {
+      "frame": 164,
+      "maxY": -3.2
+    },
+    {
+      "frame": 273,
+      "maxY": -3.2
+    },
+    {
+      "frame": 382,
+      "maxY": -3.2
+    }
+  ]
+}

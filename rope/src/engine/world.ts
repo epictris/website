@@ -40,6 +40,7 @@ import { AABBTree } from "./aabbTree";
 import { PhaseTrace } from "./phaseTrace";
 import { PhysTrace } from "./physTrace";
 import { TieSolver, type IslandUnit } from "./ties";
+import { contactBounce } from "./bounce";
 
 // Broadphase candidate order: the owner's position in `World.bodies`, then the
 // shape's mount order within the owner. This is exactly the order the full
@@ -179,53 +180,9 @@ interface Depenetration {
   readonly other: PhysicsBody2D;
   readonly point: Vec2;
 }
-// Approach speed (m/s) below which a contact earns no bounce at all.
-//
-// Without it, any restitution above zero makes resting contacts micro-bounce for
-// ever on the velocity gravity re-adds each frame - the contact reflects it, the
-// next frame's gravity puts it back, and a body that should be asleep hums.
-// Every engine gates restitution this way. Default restitution is 0 and
-// rigid-rigid contacts have never had any, so with the shipped defaults this
-// costs nothing; it is here so that turning restitution on is not a trap.
-const RESTITUTION_THRESHOLD = 1;
-
-// The outgoing normal speed a contact is solved toward: the elastic bounce the
-// pair's restitution earns, or the surface's own launch, whichever is larger.
-// `approach` is the closing speed at the point (positive when the two are
-// coming together).
-//
-// One function, called by the solver and by `BallPlayer.applyLoopCap`, because
-// the cap's whole job is to hold a loop landing to what the ball's own arrival
-// was worth - and it can only do that if it computes "what was that worth" the
-// same way the solve does.
-//
-// THE DEAD ZONE is `RESTITUTION_THRESHOLD` and it is the same one restitution
-// has always had: below it a contact earns nothing at all, so a body resting on
-// a surface does not re-bounce for ever on the velocity gravity re-adds each
-// frame. A launch needs it more than a restitution does, not less - a floor
-// under the outgoing speed is by construction a floor a body keeps landing back
-// on top of, so without the gate a pad would hum at its own launch speed under
-// a body that had come to rest on it.
-//
-// THE RAMP is what the launch adds. A restitution is proportional to the
-// approach and so already fades to nothing as a body settles; a floor does not,
-// and applied flat it would step from nothing to the full launch across the
-// threshold - a touch at 0.99 m/s doing nothing and one at 1.01 m/s throwing the
-// body six metres up. So the launch fades in across a band as wide as the dead
-// zone: nothing at the threshold, full at twice it (2 m/s, a 20 cm drop). Every
-// real landing on a pad is far past that, and what the band buys is that the
-// gentle ones approach it continuously rather than off a cliff.
-//
-// `launch <= 0` returns the elastic answer by the same arithmetic the solver
-// used before this existed, which is what keeps every recorded replay - none of
-// which authors a launch - bit-identical.
-export function contactBounce(approach: number, restitution: number, launch: number): number {
-  if (approach <= RESTITUTION_THRESHOLD) return 0;
-  const elastic = restitution * approach;
-  if (launch <= 0) return elastic;
-  const ramp = Math.min(1, (approach - RESTITUTION_THRESHOLD) / RESTITUTION_THRESHOLD);
-  return Math.max(elastic, launch * ramp);
-}
+// The bounce rule both contact solves share (see `engine/bounce.ts`),
+// re-exported for the callers that have always asked the world for it.
+export { contactBounce } from "./bounce";
 // Sweeps of the scene-wide positional recovery per physics step. Each sweep gives
 // every rigid body one depenetration pass, so a pile settles together instead of
 // whichever body the loop reached last winning its overlap outright.
@@ -1102,6 +1059,10 @@ export class World {
     }
     this.ties.driven = driven;
     const solved = this.ties.step(islandContacts, GRAVITY, dt);
+    // The island pays a launch too (the ball's contacts are its own whenever
+    // the chain is anchored), and the energy monitor has to hear of it as it
+    // hears of the world solve's.
+    if (this.ties.launched) this.launchedThisFrame = true;
     PhaseTrace.mark("ties", this);
     return solved;
   }
@@ -2067,7 +2028,22 @@ export class World {
       // a STATIC body, so reading `b`'s only when it is rigid is what would
       // leave a pad unable to state that it throws anything at all.
       const restitution = Math.max(c.a.restitution, c.b.restitution);
-      const launch = Math.max(c.a.launchSpeed, c.b.launchSpeed);
+      // A launch is paid by every contact that TOUCHES this step: one already
+      // touching, or a speculative one closing its gap within the step. A
+      // speculative contact that will not close does not touch, and paying it
+      // would throw a body off a surface up to `CONTACT_SLOP` away.
+      //
+      // A touching one is paid whatever it is doing - arriving, resting, or
+      // already leaving slower than the pad throws - because nothing may rest
+      // on a launch surface (see `contactBounce`). And it is solved to the
+      // launch itself, without the speculative gap taken off: a closing
+      // contact's gap is what it may still approach by, and subtracting it
+      // from a throw made the pad's answer depend on where in the step the
+      // body met it (`session-188f` f42 left 0.54 m/s short off a 9 mm gap).
+      const gap = Math.max(0, -c.depth);
+      const launching =
+        Math.max(c.a.launchSpeed, c.b.launchSpeed) > 0 && (gap === 0 || -vn * dt >= gap);
+      const launch = launching ? Math.max(c.a.launchSpeed, c.b.launchSpeed) : 0;
       const bounce = contactBounce(-vn, restitution, launch);
       // Only when the pad's own throw is what the contact will be solved to.
       // A body that arrives faster than the pad throws is bouncing off it
@@ -2154,7 +2130,7 @@ export class World {
         invEffN,
         invEffT,
         bounce,
-        approach: Math.max(0, -c.depth) / dt,
+        approach: launching ? 0 : gap / dt,
         friction: combinedFriction(c.a, c.b, bRigid),
         brakePos: brakeScale(c.a, bRigid, tangent),
         brakeNeg: brakeScale(c.a, bRigid, tangent.neg()),
