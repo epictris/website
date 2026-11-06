@@ -2709,6 +2709,7 @@ async function cmdPerf(file: string, o: Record<string, string>): Promise<void> {
     solves: number;
     regens: number;
     capped: number;
+    ring: number;
   }
   const rows: Row[] = [];
   SolverStats.enabled = true;
@@ -2720,7 +2721,7 @@ async function cmdPerf(file: string, o: Record<string, string>): Promise<void> {
       level.physicsProcess(input, 1 / 60);
       const ms = performance.now() - t0;
       const s = SolverStats.snapshot();
-      rows.push({ ms, chainMs: s.chainMs, sweeps: s.sweeps, solves: s.solves, regens: s.pathRegens, capped: s.capped });
+      rows.push({ ms, chainMs: s.chainMs, sweeps: s.sweeps, solves: s.solves, regens: s.pathRegens, capped: s.capped, ring: s.ringTests });
     }
   } finally {
     SolverStats.enabled = false;
@@ -2744,16 +2745,17 @@ async function cmdPerf(file: string, o: Record<string, string>): Promise<void> {
   line("sweeps", rows.map((r) => r.sweeps), int);
   line("solves", rows.map((r) => r.solves), int);
   line("path regens", rows.map((r) => r.regens), int);
+  line("ring tests", rows.map((r) => r.ring), int);
   const cappedFrames = rows.filter((r) => r.capped > 0).length;
   const total = rows.reduce((a, r) => a + r.ms, 0);
   console.log(`  frames with a sweep on the cap: ${cappedFrames}/${rows.length}; total ${total.toFixed(0)} ms`);
   if (from > 0 || to > 0) {
     const last = to > 0 ? Math.min(to, rows.length) : rows.length;
-    console.log("  frame      ms  chainMs  sweeps  solves  regens  capped");
+    console.log("  frame      ms  chainMs  sweeps  solves  regens  capped    ring");
     for (let i = from - 1; i < last; i += every) {
       const r = rows[i]!;
       console.log(
-        `  ${String(i + 1).padStart(5)} ${r.ms.toFixed(2).padStart(7)} ${r.chainMs.toFixed(2).padStart(8)} ${String(r.sweeps).padStart(7)} ${String(r.solves).padStart(7)} ${String(r.regens).padStart(7)} ${String(r.capped).padStart(7)}`,
+        `  ${String(i + 1).padStart(5)} ${r.ms.toFixed(2).padStart(7)} ${r.chainMs.toFixed(2).padStart(8)} ${String(r.sweeps).padStart(7)} ${String(r.solves).padStart(7)} ${String(r.regens).padStart(7)} ${String(r.capped).padStart(7)} ${String(r.ring).padStart(7)}`,
       );
     }
   }

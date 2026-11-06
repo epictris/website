@@ -10,7 +10,7 @@ bun run src/tools/cli.ts dmath                # the deterministic libm: bit-exac
 bun run dmath:crosscheck                      # how far THIS engine's own Math is from it (an instrument, not a test)
 bun run src/tools/cli.ts contacts             # rigid-body contact cases (settle/stack/ramps/impact/momentum/loop-cap/loop-ride)
 bun run src/tools/cli.ts bridges              # rope-bridge cases on the tied-chain island solver (the build settle, hangs, taut, uneven, the ball across, under and wound tight to a slat with the aim turning, the mass ratio, the cost of sixty slats; see docs/scene-chains.md "Tied chains" and plans/rope-bridge.md)
-bun run src/tools/cli.ts perf session.json    # what a bundle's frames COST: ms, the chain phase's share, sweeps, solves, path regenerations, frames on the cap
+bun run src/tools/cli.ts perf session.json    # what a bundle's frames COST: ms, the chain phase's share, sweeps, solves, path regenerations, frames on the cap, root ring tests
 bun run src/tools/cli.ts spring               # spring-body cases (droop, load and release, per-axis periods, the locks)
 bun run src/tools/cli.ts movers               # scripted-mover cases (the arc, the route, the ease, the rider, the speed bar)
 bun run src/tools/cli.ts vines                # vine cases (the pass-through guards, drape, grab, winch, the load rope, the ring); --only NAME runs one

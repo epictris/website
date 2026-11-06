@@ -30,6 +30,11 @@ export const SolverStats = {
   pathRegens: 0,
   // Sets that left their sweep on the cap rather than on the tolerance.
   capped: 0,
+  // Manifolds a root's ring silhouette asked while it was walked along a
+  // branch (`rootBlocked`): at build for the forks, and when the hook threads
+  // a ring on for the walls. Asked of every piece in the branch's box, a 17 m
+  // branch beside a rock was 45,000 of them on the frame the hook struck it.
+  ringTests: 0,
   // Milliseconds inside `stepSceneChains` and the coupled sweep this frame, by
   // the platform clock. Reported, never asserted on.
   chainMs: 0,
@@ -39,6 +44,7 @@ export const SolverStats = {
     this.solves = 0;
     this.pathRegens = 0;
     this.capped = 0;
+    this.ringTests = 0;
     this.chainMs = 0;
   },
 
@@ -48,6 +54,7 @@ export const SolverStats = {
       solves: this.solves,
       pathRegens: this.pathRegens,
       capped: this.capped,
+      ringTests: this.ringTests,
       chainMs: this.chainMs,
     };
   },
@@ -62,5 +69,6 @@ export interface SolverFrameStats {
   solves: number;
   pathRegens: number;
   capped: number;
+  ringTests: number;
   chainMs: number;
 }

@@ -24,13 +24,13 @@
 
 import { Vec2 } from "../engine/vec2";
 import { LAYER_HOOK, MASK_ALL, MASK_SOLID, RigidBody2D, type PhysicsBody2D } from "../engine/body";
-import { circleShape, isConvexLoop, polyArea, polyShapeCentred } from "../engine/shapes";
+import { circleShape, isConvexLoop, polyArea, polyShapeCentred, rectShape, type ShapeTransform } from "../engine/shapes";
 import { World } from "../engine/world";
 import { buildLevelBodies } from "../level/buildBodies";
 import { DEFAULT_ROOT_COLOR, isCollisionObject, scaleLevelData, type LevelBodyData, type RawLevelData, type RootBendData } from "../level/levelFormat";
 import { rootProblems } from "../level/roots";
 import { curveLine, strokeCurve } from "../lib/stroke";
-import { cubicAt, pathNodesOf } from "../lib/path";
+import { buildPolylineIndex, cubicAt, pathNodesOf, pointAtArcLength, tangentAtArcLength } from "../lib/path";
 import { PX } from "../engine/units";
 import { BallHook } from "../classes/ballHook";
 import { BallPlayer } from "../classes/ballPlayer";
@@ -58,9 +58,12 @@ import * as THREE from "three";
 import type { CollisionObject2D } from "../engine/body";
 import { BallLevel } from "../level/ballLevel";
 import { runScript, ScriptedInput, scriptSpec, type PlaytestScript } from "./playtest";
-import { RopeClamp } from "../lib/rail";
+import { RopeClamp, rootBlocked } from "../lib/rail";
+import { shapeContacts } from "../engine/manifold";
+import { dmath } from "../engine/dmath";
+import { SolverStats } from "../engine/solverStats";
 import { ROOT_CREASE_EASE, skinRootGeometry } from "../render3d/rootSkin";
-import { MANACLE_BORE, MANACLE_RADIUS } from "../lib/manacle";
+import { MANACLE_BORE, MANACLE_LENGTH, MANACLE_RADIUS, MANACLE_THICKNESS } from "../lib/manacle";
 import { BodyVisual } from "../render3d/bodyVisuals";
 import { AVATAR_CHAIN_MESH, ChainLayer } from "../render3d/chainVisual";
 import { Scene3D } from "../render3d/scene";
@@ -738,6 +741,131 @@ function runRing(script: PlaytestScript): {
   return { clamp, first, moved, inside, square };
 }
 
+// ---------------------------------------------------------------------------
+// walls-culled - the ring's walk along a branch asks only the pieces near it,
+// and finds exactly what asking every piece found.
+// ---------------------------------------------------------------------------
+
+// The walk as it was before the culling: every step asks every piece. Kept
+// here as the reference the culled walk must reproduce bit for bit.
+function rootBlockedEveryPiece(
+  line: readonly Vec2[],
+  others: readonly ShapeTransform[],
+): { stops: { min: number; max: number }[]; tests: number } {
+  const ring = rectShape(MANACLE_THICKNESS, MANACLE_LENGTH);
+  const index = buildPolylineIndex(line);
+  let tests = 0;
+  const hit = (s: number): boolean => {
+    const t = tangentAtArcLength(index, s);
+    const at: ShapeTransform = { globalPosition: pointAtArcLength(index, s), globalRotation: dmath.atan2(t.y, t.x), shape: ring };
+    return others.some((piece) => {
+      tests++;
+      return shapeContacts(at, piece).length > 0;
+    });
+  };
+  const edge = (free: number, blocked: number): number => {
+    let a = free;
+    let b = blocked;
+    while (Math.abs(b - a) > 1e-4) {
+      const m = (a + b) * 0.5;
+      if (hit(m)) b = m;
+      else a = m;
+    }
+    return b;
+  };
+  const steps = Math.max(1, Math.ceil(index.total / 0.005));
+  const stops: { min: number; max: number }[] = [];
+  let start: number | null = hit(0) ? 0 : null;
+  let prev = 0;
+  for (let i = 1; i <= steps; i++) {
+    const s = i === steps ? index.total : (index.total * i) / steps;
+    const blocked = hit(s);
+    if (blocked && start === null) start = edge(prev, s);
+    else if (!blocked && start !== null) {
+      stops.push({ min: start, max: edge(s, prev) });
+      start = null;
+    }
+    prev = s;
+  }
+  if (start !== null) stops.push({ min: start, max: index.total });
+  return { stops, tests };
+}
+
+function caseWallsCulled(): RootResult {
+  const c = claims();
+  // A 17 m branch bowing gently across a cave, as `session-235f`'s did, with
+  // a rock of a dozen pieces round its tip and a few things along the way.
+  const line: Vec2[] = [];
+  for (let i = 0; i <= 40; i++) {
+    const u = i / 40;
+    line.push(new Vec2(17 * u, 1.5 * dmath.sin(Math.PI * u)));
+  }
+  const place = (verts: Vec2[], rot = 0): ShapeTransform => {
+    const { shape, offset } = polyShapeCentred(verts);
+    return { globalPosition: offset, globalRotation: rot, shape };
+  };
+  const box = (x: number, y: number, w: number, h: number, rot = 0): ShapeTransform => ({
+    globalPosition: new Vec2(x, y),
+    globalRotation: rot,
+    shape: rectShape(w, h),
+  });
+  const tip = line[line.length - 1]!;
+  const rock: ShapeTransform[] = [];
+  for (let i = 0; i < 12; i++) {
+    const a = (i / 12) * 2 * Math.PI;
+    rock.push(box(tip.x + 0.6 + 0.5 * dmath.cos(a), tip.y + 0.5 * dmath.sin(a), 0.5, 0.35, a));
+  }
+  // A near miss: a small wedge whose face stands 2 mm clear of the ring's
+  // edge, which is inside the culling's reach and so is asked, and found clear.
+  const at = line[28]!;
+  const along = line[29]!.sub(line[27]!).normalized();
+  const out = new Vec2(-along.y, along.x);
+  const face = at.add(out.mul(MANACLE_LENGTH / 2 + 0.002));
+  const nearMiss = place([
+    face.add(along.mul(-0.003)),
+    face.add(along.mul(0.003)),
+    face.add(out.mul(0.004)),
+  ]);
+  const others: ShapeTransform[] = [
+    ...rock,
+    // A boulder the branch runs under, crossing the centreline mid-way.
+    { globalPosition: new Vec2(8.5, 1.5), globalRotation: 0, shape: circleShape(0.12) },
+    // A thin bar laid diagonally across the branch.
+    box(4.2, 1.05, 1.4, 0.02, Math.PI / 4),
+    nearMiss,
+    // Rock nowhere near it.
+    box(3, -4, 2, 1),
+    box(14, 6, 1, 1),
+  ];
+  const culled = (pieces: ShapeTransform[]): { stops: { min: number; max: number }[]; tests: number } => {
+    SolverStats.enabled = true;
+    SolverStats.reset();
+    try {
+      return { stops: rootBlocked(line, pieces), tests: SolverStats.ringTests };
+    } finally {
+      SolverStats.enabled = false;
+    }
+  };
+  const reference = rootBlockedEveryPiece(line, others);
+  const { stops, tests: asked } = culled(others);
+  const miss = culled([nearMiss]);
+  const same =
+    stops.length === reference.stops.length &&
+    stops.every((r, i) => r.min === reference.stops[i]!.min && r.max === reference.stops[i]!.max);
+  const shown = (rs: { min: number; max: number }[]): string => rs.map((r) => `${fmt(r.min, 3)}..${fmt(r.max, 3)}`).join(", ");
+  c.check(`the walk finds the bar, the boulder and the rock (${stops.length} stops: ${shown(stops)})`, stops.length === 3);
+  c.check(`...exactly the stops asking every piece finds (${shown(reference.stops)})`, same);
+  c.check(
+    `...asking a twentieth of the manifolds or fewer (${asked} against ${reference.tests})`,
+    asked * 20 <= reference.tests,
+  );
+  c.check(
+    `a wedge 2 mm clear of the ring is asked and found clear (${miss.tests} asked, ${miss.stops.length} stops)`,
+    miss.tests > 0 && miss.stops.length === 0,
+  );
+  return { name: "root-walls-culled - the ring's walk along a branch asks only the pieces near it", passed: c.passed(), details: c.details };
+}
+
 function caseRing(): RootResult {
   const c = claims();
   // Hung under the 49° trunk: the ring threads on square and stays put.
@@ -1293,7 +1421,7 @@ function caseOnCollision(): RootResult {
 
 export async function runRootCases(): Promise<RootResult[]> {
   await rootBuildReady;
-  return [caseStroke(), caseFold(), caseFormat(), caseHookOnly(), caseSpring(), caseTree(), caseLint(), caseMesh(), caseBark(), caseOrganicFork(), caseOnCollision(), caseRing(), caseCollide(), caseBend(), caseBendDraw(), await caseBendCrease(), caseCuffOpen(), caseCuffDepth(), caseBarkHighlight(),
+  return [caseStroke(), caseFold(), caseFormat(), caseHookOnly(), caseSpring(), caseTree(), caseLint(), caseMesh(), caseBark(), caseOrganicFork(), caseOnCollision(), caseWallsCulled(), caseRing(),caseCollide(), caseBend(), caseBendDraw(), await caseBendCrease(), caseCuffOpen(), caseCuffDepth(), caseBarkHighlight(),
     caseSimplify(), caseKey(), await caseBake(), caseRestyle(), caseHidden()];
 }
 

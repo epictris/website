@@ -62,8 +62,9 @@ import { Mathf } from "../engine/mathf";
 import { dmath } from "../engine/dmath";
 import { bumpTransformEpoch, PhysicsBody2D, type CollisionObject2D } from "../engine/body";
 import { bodyContainsPoint, circleOverlap, sweepCircle } from "../engine/collision";
-import { rectShape, type RailCurve, type RootRail, type ShapeTransform } from "../engine/shapes";
+import { rectShape, shapeWorldVertices, type RailCurve, type RootRail, type ShapeTransform } from "../engine/shapes";
 import { shapeContacts } from "../engine/manifold";
+import { SolverStats } from "../engine/solverStats";
 import { buildPolylineIndex, pointAtArcLength, projectOntoPolyline, tangentAtArcLength } from "./path";
 import { RopeAttachment, RopeContact } from "./ropeContact";
 import { Intersections } from "./intersections";
@@ -136,6 +137,32 @@ export function buildRailCurve(
 // whole length across it (`MANACLE_THICKNESS` by `MANACLE_LENGTH`).
 const RING_SQUARE = rectShape(MANACLE_THICKNESS, MANACLE_LENGTH);
 
+// How far any part of `RING_SQUARE` reaches from its centre at any rotation
+// (its half-diagonal), padded by a millimetre so a piece whose box only just
+// meets the ring's is always asked rather than ruled out on a rounding.
+const RING_SQUARE_REACH =
+  0.5 * Math.sqrt(MANACLE_THICKNESS * MANACLE_THICKNESS + MANACLE_LENGTH * MANACLE_LENGTH) + 0.001;
+
+// A placed shape's axis-aligned bounds in the world.
+function shapeBounds(t: ShapeTransform): { minX: number; minY: number; maxX: number; maxY: number } {
+  if (t.shape.kind === "circle") {
+    const r = t.shape.radius;
+    const c = t.globalPosition;
+    return { minX: c.x - r, minY: c.y - r, maxX: c.x + r, maxY: c.y + r };
+  }
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const v of shapeWorldVertices(t)) {
+    minX = Math.min(minX, v.x);
+    minY = Math.min(minY, v.y);
+    maxX = Math.max(maxX, v.x);
+    maxY = Math.max(maxY, v.y);
+  }
+  return { minX, minY, maxX, maxY };
+}
+
 // Where along a root branch's centreline the ring cannot stand because
 // ANOTHER branch of the same root is in its way: the forks (`RootRail`).
 //
@@ -148,20 +175,49 @@ const RING_SQUARE = rectShape(MANACLE_THICKNESS, MANACLE_LENGTH);
 // grows out of blocks its first stretch (which is inside it), and so does any
 // branch of the same root that merely crosses this one, since the ring cannot
 // pass it either. A constant of the body, so measured once.
+//
+// Each step asks only the pieces whose bounding box comes within the ring's
+// reach of where it stands (`RING_SQUARE_REACH`). A piece clear of that box is
+// clear of the ring, and `shapeContacts` at no slop reports nothing for a pair
+// with a gap between them, so the answer is the one asking every piece gives,
+// bit for bit. Asking every piece was the whole cost of a ring threading on:
+// a 17.3 m branch is 3460 steps, and against the 13 pieces of rock round it
+// that was 45,000 manifolds and 25-40 ms of one frame in V8, every time the
+// hook struck it (`session-235f`, Tris: "why does my screen jitter every time
+// i connect to the root").
 export function rootBlocked(
   line: readonly Vec2[],
   others: readonly ShapeTransform[],
 ): { min: number; max: number }[] {
   const index = buildPolylineIndex(line);
   if (index.total <= 0 || others.length === 0) return [];
+  const boxes = others.map(shapeBounds);
+  const near: ShapeTransform[] = [];
   const hit = (s: number): boolean => {
+    const at = pointAtArcLength(index, s);
+    near.length = 0;
+    for (let i = 0; i < others.length; i++) {
+      const b = boxes[i]!;
+      if (
+        at.x + RING_SQUARE_REACH >= b.minX &&
+        at.x - RING_SQUARE_REACH <= b.maxX &&
+        at.y + RING_SQUARE_REACH >= b.minY &&
+        at.y - RING_SQUARE_REACH <= b.maxY
+      ) {
+        near.push(others[i]!);
+      }
+    }
+    if (near.length === 0) return false;
     const t = tangentAtArcLength(index, s);
     const ring: ShapeTransform = {
-      globalPosition: pointAtArcLength(index, s),
+      globalPosition: at,
       globalRotation: dmath.atan2(t.y, t.x),
       shape: RING_SQUARE,
     };
-    return others.some((piece) => shapeContacts(ring, piece).length > 0);
+    return near.some((piece) => {
+      if (SolverStats.enabled) SolverStats.ringTests++;
+      return shapeContacts(ring, piece).length > 0;
+    });
   };
   // The edge between `free` and `blocked` arc lengths, to the precision.
   const edge = (free: number, blocked: number): number => {
