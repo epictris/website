@@ -11,7 +11,7 @@ import {
   StaticBody2D,
   VineLink,
   type CollisionObject2D,
-  type PhysicsBody2D,
+  PhysicsBody2D,
 } from "../engine/body";
 import { Debug } from "../engine/debug";
 import { PhaseTrace } from "../engine/phaseTrace";
@@ -58,6 +58,7 @@ import {
 import { PlantUnit } from "./plantRows";
 import { buildCameraRules, type CameraHang, type CameraRule } from "../render/cameraController";
 import type { SparkEvent } from "./sparkEvents";
+import type { HookSoundEvent } from "./soundEvents";
 import {
   BreakTracker,
   guardBreakables,
@@ -186,6 +187,10 @@ export class BallLevel {
   // The BALL's spark event for this frame, pending the spin term the frame turns
   // out to have realised (see `settleBallSparkSpin`). Cleared with `sparkEvents`.
   private ballSparkSpin: { at: number; lever: Vec2; commanded: number } | null = null;
+  // Render-only, the sparks' rule again: this frame's hook attaches and
+  // bounces, for the sound system (see `level/soundEvents.ts`). Cleared at the
+  // top of every `physicsProcess`; nothing in the sim reads it.
+  soundEvents: HookSoundEvent[] = [];
   // Render-only, and the same rule as the sparks above: the bodies that came
   // apart this frame, for the debris system to throw chunks from (see
   // `level/breakable.ts`). Cleared at the top of every `physicsProcess`, so a
@@ -985,9 +990,38 @@ export class BallLevel {
     // `BallPlayer`, because the sim-to-visual boundary is the level's to hold
     // and the controller has no business knowing there is a renderer.
     if (body instanceof BallHook) {
-      body.registerBounceCallback((point, normal, vel, fromFlight) =>
-        this.reportSpark(body, { source: body.id, point, normal, vel }, fromFlight),
-      );
+      body.registerBounceCallback((point, normal, vel, fromFlight, piece) => {
+        this.reportSpark(body, { source: body.id, point, normal, vel }, fromFlight);
+        // Every piece the hook can be deflected by is on a static or rigid body
+        // (the sweep and the probe ask nothing else).
+        const struck = piece.owner;
+        if (!(struck instanceof PhysicsBody2D)) return;
+        this.soundEvents.push({
+          kind: "bounce",
+          source: body.id,
+          body: struck,
+          piece,
+          point,
+          normal,
+          vel: vel.sub(struck.velocityAtPoint(point)),
+          fromFlight,
+        });
+      });
+      // Registered after the controller's own attach callback (`BallPlayer`
+      // wires that before handing the hook here), which assigns the hook no
+      // velocity: what is read here is still the speed it arrived at.
+      body.registerAttachmentCallback((struck, point, piece) => {
+        this.soundEvents.push({
+          kind: "attach",
+          source: body.id,
+          body: struck,
+          piece,
+          point,
+          normal: null,
+          vel: body.linearVelocity.sub(struck.velocityAtPoint(point)),
+          fromFlight: true,
+        });
+      });
     }
     this.world.add(body);
     this.bodies.push(body);
@@ -1287,6 +1321,7 @@ export class BallLevel {
     const ballArrival = this.ball.linearVelocity;
     this.sparkEvents.length = 0;
     this.sparkEventIndex.clear();
+    this.soundEvents.length = 0;
     this.breakEvents.length = 0;
     this.shatterEvents.length = 0;
     this.ballPushes.length = 0;

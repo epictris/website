@@ -18,6 +18,7 @@ import type { RawLevelData } from "./src/level/levelFormat";
 import { levelSceneName, levelStoredFiles } from "./src/render3d/levelAssets";
 import { SCENE_MESH_FILE, SCENES_DIR } from "./src/render3d/scenes";
 import { sceneService } from "./src/server/scenes";
+import { soundService } from "./src/server/sounds";
 
 // The identity of the SOURCE this server is serving, exposed to the app as
 // `virtual:tree-stamp` and stamped into every exported bundle.
@@ -525,6 +526,14 @@ export default defineConfig({
         // `assets:publish-scenes` writes the manifest).
         "**/public/scenes/**",
         "**/src/render3d/sceneAssets.json",
+        // The editor's Sounds menu writes these while it is open
+        // (src/server/sounds.ts): a watched write would reload the editor (and
+        // restart the server, the manifests being config dependencies through
+        // the service). Open pages hear of a change over a BroadcastChannel;
+        // the service invalidates the module graph for the next load.
+        "**/public/sounds/**",
+        "**/src/audio/soundAssets.json",
+        "**/src/audio/soundBank.json",
       ],
     },
     // The playtest store lives in serve.ts, not in Vite. With `bun run serve.ts`
@@ -562,6 +571,7 @@ export default defineConfig({
     prodReplays(),
     editorRoute(),
     sceneService(),
+    soundService(),
     scenesInBuild(),
   ],
 });

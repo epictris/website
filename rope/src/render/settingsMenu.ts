@@ -15,13 +15,16 @@
 
 import {
   DEPTH_OF_FIELD_LEVELS,
+  SOUND_LEVELS,
   availableResolutions,
   depthOfFieldLabel,
   readSettings,
   resolutionLabel,
+  soundLabel,
   writeSettings,
   type Resolution,
   type Settings,
+  type SoundLevel,
 } from "./settings";
 
 export interface SettingsMenuHost {
@@ -69,7 +72,14 @@ export class SettingsMenu {
       isChosen: (level, s) => s.depthOfField === level,
       with: (level, s) => ({ ...s, depthOfField: level }),
     };
-    this.groups = [resolution, depthOfField] as Group<unknown>[];
+    const sound: Group<SoundLevel> = {
+      list: document.getElementById("settings-sound"),
+      options: () => SOUND_LEVELS,
+      label: soundLabel,
+      isChosen: (level, s) => s.sound === level,
+      with: (level, s) => ({ ...s, sound: level }),
+    };
+    this.groups = [resolution, depthOfField, sound] as Group<unknown>[];
     // Capture, so a focused option does not swallow the keys that close it.
     document.addEventListener("keydown", (e) => this.onKey(e), true);
   }

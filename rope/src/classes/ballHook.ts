@@ -73,7 +73,7 @@ export class BallHook extends RigidBody2D {
   > = [];
   private chainOutCallbacks: Array<() => void> = [];
   private bounceCallbacks: Array<
-    (point: Vec2, normal: Vec2, vel: Vec2, fromFlight: boolean) => void
+    (point: Vec2, normal: Vec2, vel: Vec2, fromFlight: boolean, piece: CollisionShape2D) => void
   > = [];
   // While the chain is still paying out, its owner budgets the flight: the
   // wrapped path's last fixed point and how much straight span is left between
@@ -351,8 +351,12 @@ export class BallHook extends RigidBody2D {
   // it is there so a caller holding several reports of one touch knows which of
   // them is the ARRIVAL, and therefore which velocity is the one the hook came
   // in at (see `BallLevel.reportSpark`).
+  //
+  // `piece` is the hook-proof shape struck, for the sound of the strike
+  // (`audio/surfaces.ts`): stone and steel ring differently, and that is a
+  // question about the surface rather than about the hit.
   registerBounceCallback(
-    onBounce: (point: Vec2, normal: Vec2, vel: Vec2, fromFlight: boolean) => void,
+    onBounce: (point: Vec2, normal: Vec2, vel: Vec2, fromFlight: boolean, piece: CollisionShape2D) => void,
   ): void {
     this.bounceCallbacks.push(onBounce);
   }
@@ -475,7 +479,7 @@ export class BallHook extends RigidBody2D {
     // blocks that attach without bouncing if the chain runs out first — it is
     // the chain and not the surface that ends the flight.
     if (off) {
-      this.bounce(off.normal, from.add(motion.mul(off.t)));
+      this.bounce(off.normal, from.add(motion.mul(off.t)), off.shape);
       // A bounce does not end the deploy, and the chain does not stretch for
       // it: the deflected remainder of the frame is flown by World.integrate
       // at the bounced velocity, so the chain-out question has to be asked
@@ -778,7 +782,7 @@ export class BallHook extends RigidBody2D {
     const speed = this.linearVelocity.length();
     const margin = BallHook.PROBE_MARGIN;
     const bar = this.primaryShape();
-    let proof: { normal: Vec2; depth: number } | null = null;
+    let proof: { shape: CollisionShape2D; normal: Vec2; depth: number } | null = null;
     // Candidates by the cuff's bounding circle; what decides is the bar.
     for (const body of this.world.intersectCircle(from, MANACLE_REACH + margin)) {
       if (body === this || body.name === "Player") continue;
@@ -835,7 +839,7 @@ export class BallHook extends RigidBody2D {
     // band), so the seat is a margin clear of the surface, as the probe's own
     // reach is.
     if (proof && speed > BallHook.PROBE_DEFLECT_MIN_SPEED) {
-      this.bounce(proof.normal, from.add(proof.normal.mul(proof.depth + margin)));
+      this.bounce(proof.normal, from.add(proof.normal.mul(proof.depth + margin)), proof.shape);
     }
   }
 
@@ -853,7 +857,7 @@ export class BallHook extends RigidBody2D {
   // has |n × d| = 1 and passes through untouched, with everything in between
   // scaling smoothly. The reflection about the normal happens first, so the
   // surviving speed points away from the wall.
-  private bounce(normal: Vec2, seatPos: Vec2): void {
+  private bounce(normal: Vec2, seatPos: Vec2, piece: CollisionShape2D): void {
     // Read before `endFlight` clears it: this is the one place that can tell a
     // throw ending on a wall from a deflection off a surface the hook was
     // already riding, and the two want opposite answers about which report of
@@ -865,7 +869,7 @@ export class BallHook extends RigidBody2D {
     if (vn < 0 && speed > BallHook.BOUNCE_MIN_SPEED) {
       // Before the reflection: the velocity the hook arrived with is what the
       // hit looked like (see registerBounceCallback).
-      for (const cb of this.bounceCallbacks) cb(seatPos, normal, this.linearVelocity, fromFlight);
+      for (const cb of this.bounceCallbacks) cb(seatPos, normal, this.linearVelocity, fromFlight, piece);
       const glance = Math.abs(normal.cross(this.linearVelocity.mul(1 / speed)));
       const reflected = this.linearVelocity.sub(normal.mul((1 + this.restitution) * vn));
       this.linearVelocity = reflected.mul(glance);

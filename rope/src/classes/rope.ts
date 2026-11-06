@@ -360,6 +360,18 @@ export class Rope {
   private coilWindAngle: number | null = null;
   private coilWrapDir: WrapDirection | null = null;
 
+  // How much rope is wound onto the start body as of the last coil sync,
+  // metres: the coil's angle times the radius it lies on, 0 with no coil.
+  //
+  // Observation only. The sound of the links landing on the ball as it winds
+  // (`audio/soundObserver.ts`) counts them off this, and nothing in the sim
+  // reads it.
+  get coiledLength(): number {
+    const shape = this.start.contact.shape;
+    if (this.coilWindAngle === null || shape.shape.kind !== "circle") return 0;
+    return this.coilWindAngle * shape.shape.radius;
+  }
+
   constructor(
     start: RopeContact,
     end: RopeContact,

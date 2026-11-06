@@ -1,7 +1,7 @@
 // THE PLAYER'S SETTINGS: what this browser has chosen about how the game is
 // drawn, kept between visits (see `settingsMenu.ts` for the panel that edits it).
 //
-// It holds two things:
+// It holds three things:
 //
 // - The RENDER RESOLUTION - the most pixels the frame is drawn with (see
 //   `fitCanvas`). The frame is always 1920x1080 view pixels, so this changes
@@ -11,9 +11,11 @@
 //   plane is drawn (see `render3d/depthOfField.ts`). The plane itself is sharp
 //   at every level. High by default (Tris, 2026-10-18): it costs ~0.5 ms of
 //   GPU a frame at 4K, and Off is one press away in the panel.
+// - The SOUND - how loud the game is (see `audio/`, docs/sound.md). Medium by
+//   default, which leaves the player's own volume room above it.
 //
 // Each is read on its own, so a stored value one version no longer offers
-// resets that setting alone, not the other.
+// resets that setting alone, not the others.
 //
 // EVERY ACCESS IS GUARDED, for the reasons `progress.ts` gives: `localStorage`
 // throws in some privacy modes and comes back empty after site data is cleared,
@@ -39,9 +41,24 @@ export function depthOfFieldLabel(level: DepthOfFieldLevel): string {
   return level[0]!.toUpperCase() + level.slice(1);
 }
 
+// How loud the game's sound is (see `audio/`). Kept here for the reason the
+// depth of field is: the settings and their panel name the levels without
+// importing the audio.
+export type SoundLevel = "off" | "low" | "medium" | "high";
+export const SOUND_LEVELS: readonly SoundLevel[] = ["off", "low", "medium", "high"];
+
+export function isSoundLevel(value: unknown): value is SoundLevel {
+  return SOUND_LEVELS.includes(value as SoundLevel);
+}
+
+export function soundLabel(level: SoundLevel): string {
+  return level[0]!.toUpperCase() + level.slice(1);
+}
+
 export interface Settings {
   resolution: Resolution;
   depthOfField: DepthOfFieldLevel;
+  sound: SoundLevel;
 }
 
 export const SETTINGS_KEY = "rope.settings";
@@ -82,7 +99,7 @@ function isOffered(r: Resolution): boolean {
   return RESOLUTIONS.some((o) => o.width === r.width && o.height === r.height);
 }
 
-export const DEFAULT_SETTINGS: Settings = { resolution: DEFAULT_RESOLUTION, depthOfField: "high" };
+export const DEFAULT_SETTINGS: Settings = { resolution: DEFAULT_RESOLUTION, depthOfField: "high", sound: "medium" };
 
 export function readSettings(): Settings {
   let parsed: Partial<Settings> | null = null;
@@ -101,6 +118,8 @@ export function readSettings(): Settings {
   }
   const dof = parsed?.depthOfField;
   if (isDepthOfFieldLevel(dof)) settings.depthOfField = dof;
+  const sound = parsed?.sound;
+  if (isSoundLevel(sound)) settings.sound = sound;
   return settings;
 }
 

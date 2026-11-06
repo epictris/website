@@ -19,6 +19,9 @@ public/images/
 # Blender scenes (`just scene <level>`), published like generated meshes; see
 # docs/blender-scenes.md.
 public/scenes/
+# The sound library, uploaded through the editor's Sounds menu and published
+# like every other stored file; see docs/sound.md.
+public/sounds/
 # Each level's roots, grown ahead of time (`bun run roots:bake`) and published
 # like a scene; see docs/roots.md.
 public/roots/

@@ -352,6 +352,8 @@ import {
 import { editorViewHref, MAX_ZOOM, MIN_ZOOM, readEditorView, type EditorView } from "./viewUrl";
 import { ROOT_BEND_DAMPING, ROOT_BEND_FREQ } from "../level/levelFormat";
 import type { EdRoot } from "./model";
+import { SoundSystem } from "../audio/soundSystem";
+import { SoundMenu } from "./soundMenu";
 
 type Tool =
   | "select"
@@ -2101,6 +2103,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   const testDebris = new DebrisSystem();
   // ...and a chain that snaps in it (see render/chainSnap.ts).
   const testSnap = new ChainSnap();
+  // ...and what it sounds like (see audio/soundSystem.ts), played with the
+  // Sounds menu's own copy of the assignments, so a file assigned there is
+  // heard on the next step of a test. At the game's default volume, so what
+  // is judged here is what a player hears; it does not listen for broadcasts,
+  // being the page that sends them.
+  const testSound = new SoundSystem("medium", { listen: false });
   let ballInput: BallInputSource | null = null;
   let savedCam: { pos: Vec2; zoom: number } | null = null;
   // The test run's camera (eased follow + camera regions). Separate from the
@@ -2281,6 +2289,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     mode = "edit";
     testLevel = null;
     testLevel3d = null;
+    // The test's loops (a roll, the whoosh) fade rather than hang on at the
+    // level the last step left them.
+    testSound.silence();
     // The edit-mode scene, parked by `startTest`, goes back up and the test's
     // goes. The model cannot change during a test, so the parked scene is of
     // the model as it stands. With none parked (a test started without the
@@ -2501,6 +2512,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     updateTitle();
   });
   fileRow.append(btnNew, loadSel, btnSave, btnSaveAs, btnDelete);
+  // The game's sounds (see soundMenu.ts): not part of any level, so beside the
+  // files rather than in the inspector, and heard in ▶ Test as they change.
+  const soundMenu = new SoundMenu(root, testSound);
+  const btnSounds = button("Sounds", () => soundMenu.toggle());
+  soundMenu.onOpenChange = (open) => btnSounds.classList.toggle("active", open);
+  btnSounds.title = "Assign sound files to the game's events: rolling, attaching, bouncing, winding, the whoosh";
+  fileRow.append(btnSounds);
 
   const toolRow = el("div", "ed-row");
   bar.appendChild(toolRow);
@@ -11544,6 +11562,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         testSparks.ingest(testLevel.sparkEvents);
         testDebris.ingest(testLevel.breakEvents);
         testSnap.observe(testLevel, STEP, testSparks);
+        testSound.observe(testLevel, STEP);
         recording.push(
           serializeInput(fi),
           digestBall(testLevel),
@@ -11581,6 +11600,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         BALL_ZOOM,
         testLevel.cameraHang,
       );
+      testSound.flush(camera);
       // Render-rate refresh of stick aim (see LiveInputSource.pollAim).
       ballInput?.pollAim();
       // A test is played in the game's own fixed 16:9 frame, fitted into the

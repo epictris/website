@@ -30,6 +30,7 @@ import {
 import { levelSceneName } from "../src/render3d/levelAssets";
 import { SCENE_ASSETS, sceneFile, sceneReleaseName } from "../src/render3d/scenes";
 import ROOT_BAKES from "../src/render3d/rootBakes.json";
+import { SOUND_ASSETS } from "../src/audio/library";
 import { LEVELS } from "../src/level/registry";
 
 // Overridable so a fork, or a private mirror, does not have to patch source.
@@ -121,6 +122,11 @@ export function storedAssets(): StoredAsset[] {
   // is, as a scene's does.
   for (const [level, bake] of Object.entries(ROOT_BAKES)) {
     out.push({ key: `roots:${level}`, file: bake.file, sha256: bake.sha256, bytes: bake.bytes, name: `roots-${level}.glb` });
+  }
+  // The sound library, uploaded through the editor's Sounds menu
+  // (src/server/sounds.ts). One file per entry, keyed by its bytes' hash.
+  for (const [key, asset] of Object.entries(SOUND_ASSETS)) {
+    out.push({ key: `sound:${key}`, file: asset.file, sha256: asset.sha256, bytes: asset.bytes });
   }
   return out;
 }

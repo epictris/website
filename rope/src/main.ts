@@ -57,6 +57,7 @@ import { GlassShards } from "./render/glassShards";
 import { submitFeedback } from "./playtest/feedback";
 import { LoadingScreen } from "./render/loadingScreen";
 import { SettingsMenu } from "./render/settingsMenu";
+import { SoundSystem } from "./audio/soundSystem";
 // The tree this page was served from, not the commit the dev server booted at
 // (see src/sim/treeStamp.ts).
 import { commit, dirty, srcHash } from "virtual:tree-stamp";
@@ -216,6 +217,7 @@ const settingsMenu = new SettingsMenu({
   apply: (settings) => {
     resize();
     scene3d?.setDepthOfField(settings.depthOfField);
+    sound.setVolume(settings.sound);
   },
   drawnSize: () => ({ width: canvas.width, height: canvas.height }),
   opened: () => {
@@ -340,6 +342,9 @@ const chainRetract = params.get("retract") !== null ? new ChainRetract() : null;
 // A chain that snapped (see render/chainSnap.ts): the same shape again, and on
 // always.
 const chainSnap = new ChainSnap();
+// The sound (see audio/soundSystem.ts, docs/sound.md): the sparks' shape too -
+// it watches each step and is scheduled once a rendered frame.
+const sound = new SoundSystem(settingsMenu.current.sound);
 
 // Runs this page has played: the input trace stamps its events with it, so a
 // click can be laid beside the frames of the run it landed in.
@@ -800,6 +805,9 @@ let fps = 0;
 // sort a second - and only the HUD is opt-in.
 const perf = new PerfProbe();
 (window as unknown as { __perf: typeof perf.snapshot }).__perf = perf.snapshot;
+// ...and one on the sound, so a script can read what it played and how loud
+// the output is (`AudioOut.stats`) - headless, where nothing can listen.
+(window as unknown as { __sound: SoundSystem }).__sound = sound;
 // A live handle on the level being played, the way `__perf` is one on the probe
 // and `__replay` is one on the transport: a script driving the page - a grab, a
 // headless check of the completion flow - can read where the sim has got to and
@@ -886,6 +894,9 @@ function stepLevel(frameInput: FrameInput, seeking: boolean): void {
     chainRetract?.observe(level, STEP);
     // ...and a chain that snapped, which happens on one step only.
     chainSnap.observe(level, STEP, sparks);
+    // Per step for the reason the sparks are: each step's sounds are placed
+    // on that step's own moment (see `AudioOut.flush`).
+    sound.observe(level, STEP);
   }
   // The bundle buffers are fed whether or not anyone is watching, so that they
   // hold exactly what has been simulated since the current build: a P download
@@ -1173,6 +1184,10 @@ function frame(now: number): void {
     baseZoom,
     level.cameraHang,
   );
+
+  // The frame's steps' sounds, heard from where the camera now is. A frame
+  // that ran no steps - paused, frozen, the panel open - fades them out.
+  sound.flush(camera);
 
   // Poll-based aim (gamepad sticks) refreshes per rendered frame, not per
   // physics step, so the reticle/crosshair moves at display rate on a monitor

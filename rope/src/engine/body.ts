@@ -190,6 +190,14 @@ export class CollisionShape2D implements ShapeTransform {
     return this.viscosity > 0;
   }
 
+  // The MATERIAL the level authored for this piece (`CollisionObjectData.material`),
+  // or null where it named none. The sim never reads it: what a material means
+  // to the sim is a density, and that has already been spent on the body's mass
+  // at build. It is carried for what the surface SOUNDS like
+  // (`audio/surfaces.ts`), per shape for the reason `impermeable` is - a stone
+  // head on a wooden shaft is one body with two surfaces.
+  material: string | null = null;
+
   constructor(
     public owner: CollisionObject2D,
     public shape: Shape,

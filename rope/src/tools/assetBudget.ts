@@ -59,6 +59,8 @@ import { rootMeshKey } from "../render3d/rootKey";
 import ROOT_BAKES from "../render3d/rootBakes.json";
 import { assetName, levelsSceneNames, storedAssets } from "../../scripts/assetStore";
 import { CREDITS_PATH, renderCredits } from "../../scripts/credits";
+import { SOUND_ASSETS } from "../audio/library";
+import { SOUND_BANK, assignedSounds } from "../audio/slots";
 
 const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 const PUBLIC_DIR = join(ROOT, "public");
@@ -72,6 +74,8 @@ const ASSET_DIRS = [
   join(PUBLIC_DIR, "hdri"),
   // The levels' baked roots (`roots:bake`).
   join(PUBLIC_DIR, "roots"),
+  // The sound library (the editor's Sounds menu).
+  join(PUBLIC_DIR, "sounds"),
 ];
 
 // The store itself imposes nothing worth budgeting against - a GitHub Release
@@ -290,6 +294,28 @@ export function runAssetChecks(): AssetCheck[] {
       : `${Object.keys(MESH_ASSETS).length + Object.keys(TEXTURE_ASSETS).length} entr(ies) drawn`,
   });
 
+  // The sound library holds what some event plays, as the prop and texture
+  // manifests hold what something draws: a sound tried in the Sounds menu and
+  // then replaced is still published and fetched by every build until it is
+  // removed there. And the bank may name only what the library holds, or that
+  // event is silent in a build that never had the file.
+  const played = assignedSounds(SOUND_BANK);
+  const unplayed = Object.keys(SOUND_ASSETS).filter((key) => !played.has(key));
+  const unknown = [...played].filter((key) => !SOUND_ASSETS[key]);
+  checks.push({
+    name: "assets: every sound is played by an event, and every event's sounds exist",
+    pass: unplayed.length === 0 && unknown.length === 0,
+    detail:
+      unplayed.length || unknown.length
+        ? [
+            unplayed.length ? `played by no event - remove it in the editor's Sounds menu: ${unplayed.join(", ")}` : "",
+            unknown.length ? `assigned but not in the library: ${unknown.join(", ")}` : "",
+          ]
+            .filter(Boolean)
+            .join("; ")
+        : `${Object.keys(SOUND_ASSETS).length} sound(s), all played`,
+  });
+
   const orphans = files.filter((f) => !referenced.has(f));
   checks.push({
     name: "assets: no unreferenced files",
@@ -306,6 +332,9 @@ export function runAssetChecks(): AssetCheck[] {
     ...Object.entries(TEXTURE_ASSETS),
     ...Object.entries(RAW_ASSETS),
     ...Object.entries(HDRI_ASSETS),
+    // Uploaded with all three blank (src/server/sounds.ts): the menu asks for
+    // them, and this is what holds it to the asking.
+    ...Object.entries(SOUND_ASSETS).map(([key, a]) => [`sound:${key}`, a] as [string, typeof a]),
   ];
   const unsourced = provenance
     .filter(([, a]) => !a.source?.trim() || !a.license?.trim() || !a.author?.trim())

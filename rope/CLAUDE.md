@@ -108,6 +108,7 @@ The ball and chain
 - [chain-retract](docs/chain-retract.md) - the released chain reeling back in: the drape carrying on, render-side, deleted by the next throw.
 - [wrap-detection](docs/wrap-detection.md) - the continuous span sweep and its three exclusions, and how a corner two bodies share lets go.
 - [sparks](docs/sparks.md) - hook and ball sparks on hook-proof steel, render-side by construction.
+- [sound](docs/sound.md) - recorded files assigned to the game's sound events in the editor's Sounds menu: what is heard (rolling, landing, attaching, bouncing, winding, the whoosh, water), surfaces, slots and their fallback, the library in the asset store.
 
 Rope geometry and surfaces
 
