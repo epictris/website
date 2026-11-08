@@ -4,6 +4,11 @@
   "type": "module",
   "description": "2D grappling-hook character controller — TS port of the C#/Godot prototype",
   "scripts": {
+    "audio:render": "tools/audio/.venv/bin/python tools/audio/audio.py render",
+    "audio:sources": "tools/audio/.venv/bin/python tools/audio/audio.py fetch-sources",
+    "audio:setup": "python3 -m venv tools/audio/.venv && tools/audio/.venv/bin/python -m pip install -r tools/audio/requirements.txt",
+    "audio:analyze": "tools/audio/.venv/bin/python tools/audio/audio.py analyze",
+    "audio:reaper": "bash tools/audio/reaper.sh",
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",

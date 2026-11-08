@@ -10,6 +10,8 @@ Its output is uploaded through the menu like any other file, and whether it soun
 
 ## The boundary
 
+For offline creation and feedback, see [the audio workstation](../tools/audio/README.md): editable stems and REAPER projects, repeatable recipes, source provenance, technical analysis, and `/sound-lab.html` for matched-level A/B comparisons and exportable listening notes. It is linked from **Sounds → Compare sounds ↗**. Candidates stay outside the game's library until uploaded and assigned.
+
 **Sound never touches the sim**, the sparks' rule ([sparks](sparks.md)) held the same way.
 `audio/soundObserver.ts` reads a `BallLevel` after every step and writes nothing back; it is fed by `stepLevel` in `main.ts` beside the sparks, the debris and the reeling chain, skipped where they are (a replay seeking), and by the editor's ▶ Test loop.
 

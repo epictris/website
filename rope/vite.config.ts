@@ -549,6 +549,7 @@ export default defineConfig({
       input: {
         main: join(import.meta.dirname, "index.html"),
         editor: join(import.meta.dirname, "editor.html"),
+        soundLab: join(import.meta.dirname, "sound-lab.html"),
       },
       output: {
         // Rollup names a shared chunk after one arbitrary module inside it, and

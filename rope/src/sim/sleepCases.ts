@@ -330,6 +330,68 @@ function caseLead(): SleepResult {
 }
 
 // ---------------------------------------------------------------------------
+// strike: a free ball hitting a sleeping chain-hung body is answered on the
+// frame it touches.
+//
+// A contact with a tied body is a row of its island's solve, and an island
+// whose units are all asleep is skipped. The contact woke the BODY, but only
+// after the frame had decided which units to wake, so the unit stayed asleep,
+// the island was skipped, and nothing answered the contact that frame: the
+// ball kept its whole speed, depenetration alone pushed it back, and it drove
+// in again the next frame. On `ball.json`'s lanterns that was the ball's rim
+// loop carried past a 3 cm handle in the second frame, hooking the ball onto
+// the lantern for good (`session-338f` f172-173).
+// ---------------------------------------------------------------------------
+function caseStrike(): SleepResult {
+  const c = new Checks();
+  // Thrown at the speed the ball struck in `session-338f`, 11 cm a frame, from
+  // five starts spread over one frame's travel. Whether the frame before the
+  // touch lands within a speculative contact's reach of the lantern - which
+  // wakes it a frame early and hides the hole - is the phase of the throw, so
+  // one start can pass by luck; across a frame's travel some start lands the
+  // first gathered contact already deep.
+  const speed = 6.7;
+  const travel = (speed / 60) * 100;
+  for (let k = 0; k < 5; k++) {
+    const { bodies, extra } = lanternRig(0, 150);
+    const startX = -100 + (travel * k) / 5;
+    const rig = new Rig(bodies, startX, 150, extra);
+    const lantern = rig.rigid(0);
+    const chain = rig.chain();
+    const ball = rig.level.ball;
+    const at = `from x=${startX.toFixed(1)}`;
+    if (k === 0) c.check(`the lantern is held by its chain's island (tied)`, lantern.tied);
+    c.check(`${at}: asleep before the throw`, lantern.asleep && chain.asleep);
+    ball.linearVelocity = new Vec2(speed, 0);
+    let touched = -1;
+    let lanternSpeed = 0;
+    let ballSpeed = speed;
+    let deepest = 0;
+    rig.step(20, {}, (f) => {
+      for (const contact of rig.level.world.frameContacts) {
+        const other = contact.a === ball ? contact.b : contact.b === ball ? contact.a : null;
+        if (other !== lantern) continue;
+        deepest = Math.max(deepest, contact.depth);
+        // The first frame the pair overlaps or pushes. Answered, the island's
+        // speculative row stops the ball on the face (depth <= 0, impulse > 0);
+        // unanswered, the ball is already inside with no impulse at all.
+        if (touched < 0 && (contact.depth > 0 || contact.normalImpulse > 0)) {
+          touched = f;
+          lanternSpeed = lantern.linearVelocity.length();
+          ballSpeed = ball.linearVelocity.x;
+        }
+      }
+    });
+    c.check(
+      `${at}: the frame it touches (${touched}), the lantern is pushed (${lanternSpeed.toFixed(3)} m/s) and the ball slowed (${ballSpeed.toFixed(3)} of ${speed} m/s)`,
+      touched > 0 && lanternSpeed > 0.1 && ballSpeed < speed - 0.5,
+    );
+    c.check(`${at}: it never drives more than 3 cm into the lantern (${(deepest * 1000).toFixed(1)} mm)`, deepest < 0.03);
+  }
+  return c.done("strike — a ball thrown at a sleeping lantern is answered on the frame it touches");
+}
+
+// ---------------------------------------------------------------------------
 // stack: two crates stacked both sleep, and stay stacked.
 // ---------------------------------------------------------------------------
 function caseStack(): SleepResult {
@@ -386,6 +448,7 @@ export function runSleepCases(): SleepResult[] {
     casePlatform(),
     caseImpulse(),
     caseLead(),
+    caseStrike(),
     caseStack(),
     caseArena(),
   ];

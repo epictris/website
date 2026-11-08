@@ -83,7 +83,13 @@ export class SoundMenu {
     title.textContent = "SOUNDS";
     const close = button("×", () => this.hide());
     close.title = "Close (Esc)";
-    head.append(title, close);
+    const lab = document.createElement("a");
+    lab.href = "./sound-lab.html";
+    lab.target = "_blank";
+    lab.rel = "noopener";
+    lab.textContent = "Compare sounds ↗";
+    lab.style.color = "#65bddb";
+    head.append(title, lab, close);
     this.status = div("snd-status");
     this.body = div("snd-body");
     this.root.append(head, this.status, this.body);

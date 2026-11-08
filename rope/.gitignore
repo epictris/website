@@ -45,3 +45,8 @@ tools/blender/cave-sheet-study/out/
 # The scene export's bake cache (tools/blender/bake_cache.py), rebuilt by any
 # export; `just scene <level> --no-cache` ignores it.
 .cache/
+# Local audio workstation, downloaded sources, and reproducible audition renders.
+tools/audio/.venv/
+tools/audio/.local/
+tools/audio/out/
+tools/audio/sources/

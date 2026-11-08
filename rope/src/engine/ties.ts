@@ -770,8 +770,18 @@ export class TieSolver {
     this.launched = false;
     const all = this.ballRow ? [...this.units, this.ballRow] : this.units;
     const units = only ? all.filter((u) => only.has(u)) : all;
+    // A contact wakes the held body it pushes, as the world's own solve wakes
+    // the body on the far side of a contact. FIRST, so the unit pass below sees
+    // it: woken after that pass, the body was awake but its unit was not, the
+    // island was skipped as asleep, and the contact had no row that frame - a
+    // free ball striking a sleeping lantern kept its whole speed into a second
+    // frame and carried its rim loop past the 3 cm handle (`session-338f`
+    // f172-173, `cli sleep` `strike`).
+    for (const c of contacts) {
+      if (c.b instanceof RigidBody2D && c.b.asleep) c.b.wake();
+    }
     // Top of the frame: a sleeping unit gets up if anything woke one of its
-    // bodies (the ball's contact, an impulse, the avatar's chain reaching it)
+    // bodies (the contact above, an impulse, the avatar's chain reaching it)
     // or moved one of its static knots. An awake unit keeps its bodies awake.
     for (const unit of units) {
       if (unit.asleep) {
@@ -781,11 +791,6 @@ export class TieSolver {
         unit.asleep = false;
       }
       for (const body of unit.bodies) body.wake();
-    }
-    // A contact wakes the held body it pushes, as the world's own solve wakes
-    // the body on the far side of a contact.
-    for (const c of contacts) {
-      if (c.b instanceof RigidBody2D && c.b.asleep) c.b.wake();
     }
     const islands = this.islands(units, contacts);
     this.frameIslands = islands;

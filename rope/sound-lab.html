@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Ball &amp; chain · Sound lab</title>
+  <style>
+    :root { color-scheme: dark; --font-family: monospace; --font-size: 14px; }
+    body { margin: 0 auto; max-width: 100ch; padding: 2lh 3ch; background: #1f2430; color: #cbccc6;
+      font-family: var(--font-family); font-size: var(--font-size); line-height: 1.5; }
+    h1, h2 { font: inherit; color: #65bddb; }
+    a { color: #65bddb; } button, select, input, textarea { font: inherit; color: inherit; background: #282e3c;
+      border: 1px solid #444c60; padding: .35lh 1ch; border-radius: 0; }
+    button { cursor: pointer; } button:hover, button:focus-visible { border-color: #65bddb; }
+    button[aria-pressed="true"] { border-color: #65bddb; background: #344358; }
+    button:disabled { opacity: .45; cursor: default; } label { display: inline-flex; align-items: center; gap: 1ch; }
+    .bar { display: flex; flex-wrap: wrap; gap: 1ch; margin: 1lh 0; align-items: center; }
+    .hint, .metrics { color: #9aa0ac; } #status { min-height: 1.5lh; color: #e0af68; }
+    #drop { padding: 1lh 2ch; border: 1px dashed #65bddb; }
+    #drop > label { display: flex; flex-direction: column; align-items: flex-start; }
+    #files { width: 100%; min-width: 0; box-sizing: border-box; }
+    .bar > * { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+    #candidates { display: grid; gap: 1lh; } article { padding: 1lh 2ch; border: 1px solid #444c60; }
+    article.playing { border-color: #65bddb; } .name { overflow-wrap: anywhere; }
+    canvas { width: 100%; height: 5lh; display: block; background: #191e28; }
+    textarea { box-sizing: border-box; width: 100%; min-height: 3lh; resize: vertical; }
+    .metrics { overflow-wrap: anywhere; } #level { width: 10ch; }
+    @media (max-width: 600px) { body { padding: 1lh 1ch; } article { padding: 1lh 1ch; } }
+  </style>
+</head>
+<body>
+  <h1>BALL &amp; CHAIN / SOUND LAB</h1>
+  <p>Compare candidates, keep favorites, and record what to change. <a href="./editor.html">Open game editor</a></p>
+  <div id="drop">
+    <label>Add WAVs, recordings, or stems <input id="files" type="file" accept="audio/*,.wav,.ogg,.flac,.mp3,.aiff,.aif" multiple /></label>
+    <p class="hint">Or drop files here. Files stay in this browser. Notes are saved locally; export them to share feedback.</p>
+    <button id="starter">Load rendered candidates</button>
+    <button id="library">Load game library</button>
+  </div>
+  <div class="bar">
+    <label><input id="match" type="checkbox" checked /> Match active RMS</label>
+    <label>Output <input id="level" type="range" min="-36" max="0" value="-12" /><output id="level-value">−12 dB</output></label>
+    <label>Strength <select id="strength"><option value="0.35">Light</option><option value="0.65">Medium</option><option value="1" selected>Heavy</option></select></label>
+    <label>Playback <select id="mode"><option value="once">Once</option><option value="repeat">6 impacts / second</option><option value="loop">Loop</option></select></label>
+    <button id="stop">Stop</button>
+  </div>
+  <p class="hint">Matching uses a relative −40 dB gate and a common peak ceiling. It approximates level, not perceived loudness. Strength changes gain only; test physics response in the editor.</p>
+  <div class="bar">
+    <button id="play-a" disabled>Play A</button><button id="play-b" disabled>Play B</button>
+    <button id="export">Export feedback</button>
+  </div>
+  <p id="status" role="status" aria-live="polite">Add candidates to begin.</p>
+  <div id="candidates"></div>
+  <script type="module" src="/src/tools/soundLab.ts"></script>
+</body>
+</html>
